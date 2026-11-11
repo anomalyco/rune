@@ -269,6 +269,10 @@ pub(crate) fn shutdown() {
     native::shutdown();
 }
 
+/// The clipboard couldn't be read just now. It carries no error text: nothing reads it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Unreadable;
+
 trait Backend {
     fn write(&mut self, copy: &ClipboardWrite) -> Result<(), String>;
     fn text(&mut self) -> Option<Zeroizing<String>>;
@@ -278,7 +282,7 @@ trait Backend {
     fn revision(&self) -> Option<u64>;
     fn clear(&mut self) -> Result<(), String>;
     /// The text, telling a clipboard that can't be read just now (`Err`) from one without text.
-    fn read_text(&mut self) -> Result<Option<Zeroizing<String>>, String> { Ok(self.text()) }
+    fn read_text(&mut self) -> Result<Option<Zeroizing<String>>, Unreadable> { Ok(self.text()) }
 }
 /// How often the worker checks that a held secret is still on the clipboard. Where there is no
 /// change count (Linux) it compares the text's fingerprint, so it checks less often.
@@ -386,10 +390,10 @@ impl Core {
         let mut answer = None;
         for effect in step_hold(&mut self.seq, &mut self.hold, event) {
             match effect {
-                HoldEffect::Wipe { last } => {
+                HoldEffect::Wipe => {
                     let ok = cb.clear().is_ok();
-                    if ok || last { self.own_pills = None; }
-                    answer = Some(HoldEvent::Swept { ok, last });
+                    self.own_pills = None;
+                    answer = Some(HoldEvent::Swept { ok });
                 }
                 HoldEffect::Release(slot, state) => slot.released(state),
                 HoldEffect::Notify(notify) => notify.send(),
@@ -443,12 +447,23 @@ impl Core {
                 return self.apply(cb, HoldEvent::Due { attempt: alarm.attempt, owner });
             }
         }
+        if self.hold.undecided() {
+            let owner = self.owner(cb);
+            return self.apply(cb, HoldEvent::Clear { owner });
+        }
         let Hold::Holding { revision, .. } = &self.hold else { return };
         let changed = match *revision {
             Some(revision) => cb.revision() != Some(revision),
             None => !self.unchanged(cb),
         };
         if changed { self.apply(cb, HoldEvent::Lost); }
+    }
+
+    /// The worker is exiting: settle the hold for good, so no handle is left `Holding`.
+    fn close<B: Backend>(&mut self, cb: &mut B) {
+        if self.hold.is_free() { return; }
+        let owner = self.owner(cb);
+        self.apply(cb, HoldEvent::Close { owner });
     }
 }
 

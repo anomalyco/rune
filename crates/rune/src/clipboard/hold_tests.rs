@@ -203,8 +203,8 @@ fn a_timer_from_an_earlier_hold_changes_nothing() {
     assert!(!hold.is_free());
     let attempt = seq.current();
     let effects: Vec<_> = step_hold(&mut seq, &mut hold, HoldEvent::Due { attempt, owner: Owner::Ours }).into_iter().collect();
-    assert!(matches!(effects[..], [HoldEffect::Wipe { last: true }]));
-    drop(step_hold(&mut seq, &mut hold, HoldEvent::Swept { ok: true, last: true }));
+    assert!(matches!(effects[..], [HoldEffect::Wipe]));
+    drop(step_hold(&mut seq, &mut hold, HoldEvent::Swept { ok: true }));
     assert!(hold.is_free());
 }
 
@@ -220,56 +220,148 @@ fn no_clipboard_reports_a_failed_write_and_wakes() {
     worker.stop();
 }
 
-// r128 and r129: before the delay runs out, a clipboard that couldn't be wiped or read keeps the
-// hold, and the delay tries again.
+fn board() -> Fake {
+    Fake { id: 0, content: None, count: 0, counted: true, landed: None, others: false, fail: None, unreadable: false, wipe: WipeMode::Works, log: Log::default(), during_write: None }
+}
+fn woke(rig: &Rig<Core>) -> usize { lock(&rig.log).iter().filter(|e| matches!(e, Logged::Woke(0, ..))).count() }
+fn refused() -> SecretState { SecretState::Failed(REFUSED.into()) }
+
+// r208: a wipe the clipboard refuses is final.
 
 #[test]
-fn a_refused_wipe_before_the_delay_keeps_the_hold_for_the_delay() {
-    let rig = run(&[WriteSA, CycleWipeA, CancelS, Pump]);
+fn a_refused_wipe_is_final_and_reported_as_failed() {
+    for counted in [true, false] {
+        for clear in [&[CancelS, Pump][..], &[Timeout, ReadA]] {
+            let rig = run_on([counted; 2], &[&[WriteSA, CycleWipeA][..], clear].concat());
+            assert_eq!((text_of(&rig.boards[0]), rig.s.state()), (Some(SECRET), refused()), "{counted} {clear:?}");
+            assert!(!rig.engines[0].watching());
+            assert_eq!(woke(&rig), 2, "once for the write, once for the refusal");
+            let later = run_on([counted; 2], &[&[WriteSA, CycleWipeA][..], clear, &[CycleWipeA, CycleWipeA, CycleWipeA, Timeout, ReadA, CancelS, Pump]].concat());
+            assert_eq!((text_of(&later.boards[0]), wipes(&later, 0), woke(&later)), (Some(SECRET), 0, 2), "never tried again");
+        }
+    }
+}
+
+// r129: a clipboard that can't be read is asked again on the next check, until the delay.
+
+#[test]
+fn an_unreadable_clipboard_is_asked_again_on_the_next_check() {
+    let rig = run(&[WriteSA, ToggleUnreadableA, CancelS, Pump]);
     assert_eq!((text_of(&rig.boards[0]), rig.s.state()), (Some(SECRET), SecretState::Holding));
-    assert!(rig.engines[0].watching());
-    let rig = run(&[WriteSA, CycleWipeA, CancelS, Pump, CycleWipeA, CycleWipeA, CycleWipeA, Timeout, ReadA]);
+    let rig = run(&[WriteSA, ToggleUnreadableA, CancelS, Pump, ToggleUnreadableA, ReadA]);
     assert_eq!((text_of(&rig.boards[0]), rig.s.state(), wipes(&rig, 0)), (None, SecretState::Cleared, 1));
 }
 
 #[test]
-fn an_unreadable_clipboard_before_the_delay_keeps_the_hold_for_the_delay() {
-    let rig = run(&[WriteSA, ToggleUnreadableA, CancelS, Pump]);
-    assert_eq!((text_of(&rig.boards[0]), rig.s.state()), (Some(SECRET), SecretState::Holding));
-    let rig = run(&[WriteSA, ToggleUnreadableA, CancelS, Pump, ToggleUnreadableA, Timeout, ReadA]);
-    assert_eq!((text_of(&rig.boards[0]), rig.s.state()), (None, SecretState::Cleared));
-}
-
-/// The delay's try is the last: a clipboard that still refuses is given up on, as before, so
-/// nothing keeps retrying or waking.
-#[test]
-fn the_delay_s_try_is_the_last() {
-    let rig = run(&[WriteSA, CycleWipeA, CancelS, Pump, Timeout, ReadA]);
-    assert_eq!((text_of(&rig.boards[0]), rig.s.state()), (Some(SECRET), SecretState::Cleared));
-    assert!(!rig.engines[0].watching());
-    let rig = run(&[WriteSA, ToggleUnreadableA, Timeout, ReadA]);
-    assert_eq!(rig.s.state(), SecretState::Replaced);
-    assert!(!rig.engines[0].watching());
-}
-
-/// The delay's try checks the change count first, so a copy made after the failed wipe is
-/// never taken.
-#[test]
-fn the_delay_s_try_spares_a_copy_made_after_the_failed_wipe() {
+fn asking_again_spares_a_copy_made_since() {
     for copy in [OtherA, OtherSameText] {
-        let rig = run(&[WriteSA, CycleWipeA, CancelS, Pump, CycleWipeA, CycleWipeA, CycleWipeA, copy, Timeout, ReadA]);
+        let rig = run(&[WriteSA, ToggleUnreadableA, CancelS, Pump, ToggleUnreadableA, copy, ReadA]);
         assert_eq!((rig.s.state(), wipes(&rig, 0)), (SecretState::Replaced, 0), "{copy:?}");
         assert!(rig.boards[0].others);
     }
 }
 
-/// Without a change count a later copy of the same text can't be told apart, so the first
-/// failure gives up, as before.
 #[test]
-fn without_a_change_count_the_first_failure_gives_up_as_before() {
-    let rig = run_on([false, false], &[WriteSA, CycleWipeA, CancelS, Pump]);
-    assert_eq!((text_of(&rig.boards[0]), rig.s.state()), (Some(SECRET), SecretState::Cleared));
+fn a_clipboard_still_unreadable_at_the_delay_is_given_up_as_before() {
+    let rig = run(&[WriteSA, ToggleUnreadableA, CancelS, Pump, Timeout, ReadA]);
+    assert_eq!((rig.s.state(), wipes(&rig, 0)), (SecretState::Replaced, 0));
     assert!(!rig.engines[0].watching());
+}
+
+#[test]
+fn without_a_change_count_an_unreadable_clipboard_is_given_up_as_before() {
     let rig = run_on([false, false], &[WriteSA, ToggleUnreadableA, CancelS, Pump]);
     assert_eq!(rig.s.state(), SecretState::Replaced);
+    assert!(!rig.engines[0].watching());
+}
+
+// r212: nothing is scheduled past the secret's own delay.
+
+#[test]
+fn a_failed_clear_schedules_nothing_past_the_delay() {
+    let start = Instant::now();
+    // No deadline: an unreadable clipboard gives up at once, and nothing polls.
+    let mut cb = board();
+    let mut core = Core::default();
+    let (write, forever) = ClipboardWrite::secret(SECRET.into(), Duration::MAX);
+    core.write(&mut cb, write, None, &RealTime);
+    cb.unreadable = true;
+    core.clear(&mut cb, None);
+    assert_eq!((forever.state(), core.next_check()), (SecretState::Replaced, None));
+    // A refused wipe ends the hold too.
+    let mut cb = board();
+    let mut core = Core::default();
+    let (write, refusing) = ClipboardWrite::secret(SECRET.into(), LONG);
+    core.write(&mut cb, write, None, &RealTime);
+    cb.wipe = WipeMode::Refused;
+    core.clear(&mut cb, None);
+    assert_eq!((refusing.state(), core.next_check()), (refused(), None));
+    // With a deadline, an unreadable clipboard is asked until it, then given up.
+    let mut cb = board();
+    let mut core = Core::default();
+    let (write, waiting) = ClipboardWrite::secret(SECRET.into(), LONG);
+    core.write(&mut cb, write, None, &RealTime);
+    cb.unreadable = true;
+    core.clear(&mut cb, None);
+    assert!(core.next_check().is_some_and(|at| at <= Instant::now() + WATCH));
+    core.tick_at(&mut cb, start + LONG + LONG);
+    assert_eq!((waiting.state(), core.next_check()), (SecretState::Replaced, None));
+}
+
+// r210: the worker's exit settles the hold.
+
+/// A clipboard that can be made unreadable, or that refuses wipes.
+struct Stuck { text: String, revision: u64, unreadable: Arc<AtomicBool>, refuse: bool }
+impl Backend for Stuck {
+    fn write(&mut self, copy: &ClipboardWrite) -> Result<(), String> {
+        self.text = copy.content.text().to_string();
+        self.revision += 1;
+        Ok(())
+    }
+    fn text(&mut self) -> Option<Zeroizing<String>> {
+        (!self.unreadable.load(Ordering::SeqCst)).then(|| Zeroizing::new(self.text.clone()))
+    }
+    fn read_text(&mut self) -> Result<Option<Zeroizing<String>>, Unreadable> { self.text().map(Some).ok_or(Unreadable) }
+    fn revision(&self) -> Option<u64> { Some(self.revision) }
+    fn clear(&mut self) -> Result<(), String> {
+        if self.refuse { return Err("refused".into()); }
+        self.text.clear();
+        self.revision += 1;
+        Ok(())
+    }
+}
+
+#[test]
+fn the_worker_s_exit_leaves_no_handle_holding() {
+    for (unreadable, refuse, clear_first, expected) in [
+        (true, false, false, SecretState::Replaced),
+        (true, false, true, SecretState::Replaced),
+        (false, true, false, refused()),
+    ] {
+        let lock_it = Arc::new(AtomicBool::new(false));
+        let shared = lock_it.clone();
+        let worker = native::Worker::spawn(move || Some(Stuck { text: String::new(), revision: 0, unreadable: shared.clone(), refuse }));
+        let (woke, wakes) = mpsc::channel();
+        let notify = Notify { changed: Arc::default(), wake: Arc::new(move || { let _ = woke.send(()); }) };
+        let (write, handle) = ClipboardWrite::secret(SECRET.into(), LONG);
+        write.bind(Route::System(worker.sender.clone()));
+        worker.sender.send(Request::Write(write, Some(notify))).unwrap();
+        wakes.recv_timeout(Duration::from_secs(1)).unwrap();
+        lock_it.store(unreadable, Ordering::SeqCst);
+        if clear_first { handle.clear_now(); }
+        worker.stop();
+        assert_eq!(handle.state(), expected, "unreadable {unreadable}, refuse {refuse}, clear first {clear_first}");
+        wakes.recv_timeout(Duration::from_secs(1)).expect("the app hears of it");
+        assert!(wakes.recv_timeout(Duration::from_millis(50)).is_err(), "once");
+    }
+}
+
+// r211: the watch's read error is a unit, so nothing formats or allocates it.
+
+#[test]
+fn an_unreadable_clipboard_carries_no_error_text() {
+    assert_eq!(std::mem::size_of::<Unreadable>(), 0);
+    let mut cb = board();
+    cb.unreadable = true;
+    assert_eq!(cb.read_text(), Err(Unreadable));
 }

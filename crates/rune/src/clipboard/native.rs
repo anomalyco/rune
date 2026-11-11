@@ -62,12 +62,12 @@ pub(super) fn shutdown() {
 impl Backend for arboard::Clipboard {
     fn write(&mut self, copy: &ClipboardWrite) -> Result<(), String> { write(self, copy) }
     fn text(&mut self) -> Option<Zeroizing<String>> { self.get_text().ok().map(Zeroizing::new) }
-    fn read_text(&mut self) -> Result<Option<Zeroizing<String>>, String> {
+    fn read_text(&mut self) -> Result<Option<Zeroizing<String>>, Unreadable> {
         match self.get_text() {
             Ok(text) => Ok(Some(Zeroizing::new(text))),
             // Empty, or not text: either way not the secret.
             Err(arboard::Error::ContentNotAvailable | arboard::Error::ConversionFailure) => Ok(None),
-            Err(error) => Err(error.to_string()),
+            Err(_) => Err(Unreadable),
         }
     }
     #[cfg(target_os = "macos")]
@@ -125,7 +125,7 @@ fn run_worker<B: Backend>(recv: mpsc::Receiver<Request>, mut open: impl FnMut() 
         };
         core.handle(cb, request);
     }
-    if let Some(cb) = clipboard.as_mut() { core.clear(cb, None); }
+    if let Some(cb) = clipboard.as_mut() { core.close(cb); }
     drop(clipboard);
 }
 

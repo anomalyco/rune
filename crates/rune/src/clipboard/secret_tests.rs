@@ -4,7 +4,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::atomic::AtomicUsize;
 use crate::machine::Effects;
-use super::secret::{Secret, SecretEffect, SecretEvent, step};
+use super::secret::{REFUSED, Secret, SecretEffect, SecretEvent, step};
 use super::*;
 
 #[path = "hold_tests.rs"]
@@ -72,6 +72,8 @@ mod flags {
         deadline: Option<Instant>,
         revision: Option<u64>,
         print: u64,
+        // differs from dev: a clear that found the clipboard unreadable, to decide again (r129).
+        undecided: bool,
     }
 
     struct OwnPills {
@@ -147,6 +149,7 @@ mod flags {
                         steps.hashing();
                         self.keys.hash_one(copy.content.text())
                     },
+                    undecided: false,
                 });
                 if let Some(n) = &notify { n.send(); }
                 if cancelled(&slot) { self.clear(cb, slot.as_ref()); }
@@ -170,8 +173,8 @@ mod flags {
 
         pub fn clear(&mut self, cb: &mut Fake, which: Option<&Arc<Slot>>) { self.clear_at(cb, which, false); }
 
-        /// A clear; `delay` when the secret's delay asked for it.
-        fn clear_at(&mut self, cb: &mut Fake, which: Option<&Arc<Slot>>, delay: bool) {
+        /// A clear; `last` when it's the delay's, or the one at exit.
+        fn clear_at(&mut self, cb: &mut Fake, which: Option<&Arc<Slot>>, last: bool) {
             let Some(held) = &self.held else { return };
             if which.is_some_and(|w| !held.slot.as_ref().is_some_and(|s| Arc::ptr_eq(s, w))) { return; }
             // differs from dev: dev sent no clear for a failed replay. This one keeps the hold and
@@ -184,22 +187,29 @@ mod flags {
                 self.own_pills = None;
                 return self.release(SecretState::Cleared);
             }
-            // differs from dev: before the delay runs out, a clipboard with a change count that
-            // can't be read (r129) or wiped (r128) keeps the hold, for the delay to try again; a
-            // change since shows in the count. The delay's try, and every try on a clipboard
-            // without a count, gives up as dev did: Replaced if unread, Cleared if the wipe failed.
-            let keep_trying = !delay && held.revision.is_some();
+            // differs from dev: a clipboard with a change count and a deadline that can't be read
+            // (r129) keeps the hold, and the next check decides the clear again. The delay's clear,
+            // the last one at exit, and any on a clipboard without a count or a deadline (r212) give
+            // up as dev did, as Replaced.
+            let wait = !last && held.revision.is_some() && held.deadline.is_some();
             let read = if held.revision == cb.revision() { Some(cb.read_text()) } else { None };
             match read {
                 Some(Ok(Some(text))) if self.keys.hash_one(text.as_str()) == held.print => {
-                    if cb.clear().is_err() && keep_trying { return; }
+                    // differs from dev: a wipe the clipboard refuses is final and reported as
+                    // Failed (r208); dev reported Cleared.
+                    let refused = cb.clear().is_err();
                     self.own_pills = None;
-                    self.release(SecretState::Cleared);
+                    self.release(if refused { SecretState::Failed(REFUSED.into()) } else { SecretState::Cleared });
                 }
-                Some(Err(_)) if keep_trying => {}
+                Some(Err(_)) if wait => if let Some(held) = &mut self.held { held.undecided = true; },
                 _ => self.release(SecretState::Replaced),
             }
         }
+
+        /// The worker is exiting.
+        // differs from dev: dev's exit clear is its delay's clear here, so a clipboard it can't
+        // read is given up on rather than left Holding (r210).
+        pub fn close(&mut self, cb: &mut Fake) { self.clear_at(cb, None, true); }
 
         pub fn tick(&mut self, cb: &mut Fake, now: Instant) {
             if let Some(own) = &self.own_pills
@@ -210,6 +220,8 @@ mod flags {
             }
             let Some(held) = &self.held else { return };
             if held.deadline.is_some_and(|d| now >= d) { return self.clear_at(cb, None, true); }
+            // differs from dev: a clear left undecided is decided again (r129).
+            if held.undecided { return self.clear_at(cb, None, false); }
             let changed = match held.revision {
                 Some(revision) => cb.revision() != Some(revision),
                 None => !self.unchanged(cb),
@@ -294,8 +306,8 @@ impl Backend for Fake {
         if self.unreadable { return None; }
         self.content.as_ref().filter(|c| c.has_plain()).map(|c| c.text.clone())
     }
-    fn read_text(&mut self) -> Result<Option<Zeroizing<String>>, String> {
-        if self.unreadable { return Err("locked".into()); }
+    fn read_text(&mut self) -> Result<Option<Zeroizing<String>>, Unreadable> {
+        if self.unreadable { return Err(Unreadable); }
         Ok(self.text())
     }
     fn content(&mut self, all: bool) -> Option<ClipboardContent> {
@@ -336,6 +348,7 @@ trait Engine: Default {
     fn tick(&mut self, cb: &mut Fake, now: Instant);
     fn read(&mut self, cb: &mut Fake) -> Option<Reply>;
     fn clear_held(&mut self, cb: &mut Fake);
+    fn close(&mut self, cb: &mut Fake);
     fn run(&mut self, cb: &mut Fake, queued: Self::Queued);
     fn watching(&self) -> bool;
 }
@@ -354,6 +367,7 @@ impl Engine for Core {
     fn tick(&mut self, cb: &mut Fake, now: Instant) { self.tick_at(cb, now); }
     fn read(&mut self, cb: &mut Fake) -> Option<Reply> { self.answer(cb, Purpose::Read(1)) }
     fn clear_held(&mut self, cb: &mut Fake) { self.clear(cb, None); }
+    fn close(&mut self, cb: &mut Fake) { Core::close(self, cb); }
     fn run(&mut self, cb: &mut Fake, queued: Request) { self.handle(cb, queued); }
     fn watching(&self) -> bool { !self.hold.is_free() }
 }
@@ -380,6 +394,7 @@ impl Engine for flags::Core {
     fn tick(&mut self, cb: &mut Fake, now: Instant) { flags::Core::tick(self, cb, now); }
     fn read(&mut self, cb: &mut Fake) -> Option<Reply> { self.answer(cb, Purpose::Read(1)) }
     fn clear_held(&mut self, cb: &mut Fake) { self.clear(cb, None); }
+    fn close(&mut self, cb: &mut Fake) { flags::Core::close(self, cb); }
     fn run(&mut self, cb: &mut Fake, queued: Arc<flags::Slot>) { self.clear(cb, Some(&queued)); }
     fn watching(&self) -> bool { flags::Core::watching(self) }
 }
@@ -596,7 +611,7 @@ impl<E: Engine> Rig<E> {
             },
             ClearHeldA => if self.turn(0) { self.engines[0].clear_held(&mut self.boards[0]); },
             ShutdownA => if self.turn(0) {
-                self.engines[0].clear_held(&mut self.boards[0]);
+                self.engines[0].close(&mut self.boards[0]);
                 self.alive[0] = false;
             },
             Pump => for b in 0..2 {
