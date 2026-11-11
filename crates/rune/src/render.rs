@@ -769,6 +769,8 @@ pub struct Renderer {
     /// Which lazily built pipelines the device took (`breaker`).
     breakers: breaker::Breakers,
     uploads: upload::Uploads,
+    /// Atlas fills `prepare` staged, recorded into the frame's encoder with the uploads.
+    fills: std::sync::Mutex<Option<fill::PendingFills>>,
     /// Unique to this renderer, so to the device it was made on (`Frame::device_key`).
     device_key: crate::compose::DeviceKey,
 }

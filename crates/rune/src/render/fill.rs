@@ -68,21 +68,28 @@ impl FillPass {
         self.bind = Self::bind(device, &bindings, &self.projection);
     }
 
-    /// Draws `fills` into `page`, ahead of anything submitted after.
-    pub(super) fn run(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, pages: &[(&wgpu::Texture, Vec<QueuedFill>)]) {
+    /// Writes the instances of `pages`' fills through `staging`, for [`FillPass::encode`]: the
+    /// instance range each page draws.
+    fn stage(&mut self, device: &wgpu::Device, staging: &rune_staging::Staging, pages: &[(usize, Vec<QueuedFill>)]) -> Vec<(usize, std::ops::Range<u32>)> {
         let count: usize = pages.iter().map(|(_, f)| f.len()).sum();
-        if count == 0 {
-            return;
-        }
         if count > self.capacity {
             self.capacity = count.next_power_of_two();
             self.instances = Renderer::instance_buffer(device, self.capacity);
         }
         let instances: Vec<Instance> = pages.iter().flat_map(|(_, fills)| fills.iter().map(instance)).collect();
-        queue.write_buffer(&self.instances, 0, bytemuck::cast_slice(&instances));
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("atlas fill") });
+        staging.write_buffer(&self.instances, 0, bytemuck::cast_slice(&instances));
         let mut first = 0u32;
-        for (texture, fills) in pages {
+        pages.iter().map(|(page, fills)| {
+            let last = first + fills.len() as u32;
+            let range = first..last;
+            first = last;
+            (*page, range)
+        }).collect()
+    }
+
+    /// Records the fills `stage` wrote into `encoder`: one pass a page, each drawing into it.
+    fn encode(&self, encoder: &mut wgpu::CommandEncoder, pages: &[(&wgpu::Texture, std::ops::Range<u32>)]) {
+        for (texture, range) in pages {
             let view = texture.create_view(&Default::default());
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("atlas fill"),
@@ -100,14 +107,20 @@ impl FillPass {
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.bind, &[]);
             pass.set_vertex_buffer(0, self.instances.slice(..));
-            let last = first + fills.len() as u32;
-            pass.draw(0..4, first..last);
-            first = last;
+            pass.draw(0..4, range.clone());
         }
-        queue.submit([encoder.finish()]);
     }
 }
 
+/// Fills staged by `prepare` and not yet recorded: recorded into the frame's encoder where it
+/// first records the renderer's uploads (`flush_uploads`), so a frame that places new glyphs
+/// submits once, as any frame does; or submitted on their own ahead of a caller's pass
+/// (`submit_uploads`). The device and queue are for that.
+pub(super) struct PendingFills {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    pages: Vec<(usize, std::ops::Range<u32>)>,
+}
 /// A queued fill as the Windfoil glyph instance that draws it, over its mask and one-texel border
 /// (which comes out clear), at zoom 1 with no clip.
 fn instance(q: &QueuedFill) -> Instance {
@@ -143,28 +156,51 @@ impl Renderer {
         })
     }
 
-    /// Runs the atlas's queued fills (after this frame's row uploads, which they draw over).
+    /// Stages the atlas's queued fills (after this frame's row uploads, which they draw over), to
+    /// be recorded into the frame's encoder after those uploads (`encode_fills`).
     pub(super) fn fill_atlas(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, staging: &rune_staging::Staging, atlas: &mut Atlas) {
-        let variant::Uber::Windfoil { fill, .. } = &mut self.uber else { return };
+        if !matches!(self.uber, variant::Uber::Windfoil { .. }) { return; }
         let fills = atlas.take_fills();
         if cfg!(debug_assertions) && std::env::var_os("RUNE_FILL_STATS").is_some() && fills.iter().any(|(_, f)| !f.is_empty()) {
             let masks: usize = fills.iter().map(|(_, f)| f.len()).sum();
             let texels: u64 = fills.iter().flat_map(|(_, f)| f.iter().map(|q| u64::from(q.rect[2] * q.rect[3]))).sum();
             eprintln!("rune: fill stats: {masks} masks, {texels} texels this frame");
         }
+        let fills: Vec<(usize, Vec<QueuedFill>)> = fills.into_iter().filter(|(page, f)| !f.is_empty() && *page <= self.atlas_pages.len()).collect();
         if fills.is_empty() {
             return;
         }
-        // Rows first: a fill draws over the zeros a row upload brings.
-        staging.submit();
-        let pages: Vec<(&wgpu::Texture, Vec<QueuedFill>)> = fills.into_iter().filter_map(|(page, f)| {
-            let texture = if page == 0 { Some(&self.atlas) } else { self.atlas_pages.get(page - 1).map(|p| &p.0) };
-            texture.map(|t| (t, f))
+        // A prepare whose fills no draw recorded: they go now, before their instances are
+        // written over.
+        self.submit_fills();
+        let variant::Uber::Windfoil { fill, .. } = &mut self.uber else { return };
+        let pages = fill.stage(device, staging, &fills);
+        *self.fills.lock().unwrap_or_else(|e| e.into_inner()) = Some(PendingFills { device: device.clone(), queue: queue.clone(), pages });
+    }
+
+    /// Records the fills `prepare` staged into `encoder`, after the uploads already recorded there.
+    pub(super) fn encode_fills(&self, encoder: &mut wgpu::CommandEncoder) {
+        let Some(pending) = self.fills.lock().unwrap_or_else(|e| e.into_inner()).take() else { return };
+        let variant::Uber::Windfoil { fill, .. } = &self.uber else { return };
+        let pages: Vec<(&wgpu::Texture, std::ops::Range<u32>)> = pending.pages.iter().filter_map(|(page, range)| {
+            let texture = if *page == 0 { Some(&self.atlas) } else { self.atlas_pages.get(page - 1).map(|p| &p.0) };
+            texture.map(|t| (t, range.clone()))
         }).collect();
-        fill.run(device, queue, &pages);
+        fill.encode(encoder, &pages);
+    }
+
+    /// Submits the fills `prepare` staged on their own, the uploads ahead of them, for a draw
+    /// into a pass its caller opened (`draw_range`), or a prepare no draw followed.
+    pub(super) fn submit_fills(&self) {
+        let (device, queue) = match &*self.fills.lock().unwrap_or_else(|e| e.into_inner()) {
+            Some(p) => (p.device.clone(), p.queue.clone()),
+            None => return,
+        };
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("atlas fill") });
+        self.flush_uploads(&mut encoder);
+        queue.submit([encoder.finish()]);
     }
 }
-
 /// How far the GPU's atlas fills are from the CPU's (`Renderer::fill_drift`): texels compared,
 /// and how many differ by 1, 2, and 3 or more.
 #[doc(hidden)]
@@ -182,6 +218,7 @@ impl Renderer {
     #[doc(hidden)]
     #[cfg(not(target_arch = "wasm32"))]
     pub fn fill_drift(&self, device: &wgpu::Device, queue: &wgpu::Queue, atlas: &crate::text::Atlas) -> FillDrift {
+        self.submit_uploads();
         let pages: Vec<&wgpu::Texture> = std::iter::once(&self.atlas).chain(self.atlas_pages.iter().map(|(t, _)| t)).collect();
         let read = |texture: &wgpu::Texture| -> Vec<u8> {
             let buffer = device.create_buffer(&wgpu::BufferDescriptor { label: Some("fill drift"), size: u64::from(ATLAS_SIZE * ATLAS_SIZE), usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });

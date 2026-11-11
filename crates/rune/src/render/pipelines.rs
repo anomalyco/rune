@@ -88,6 +88,7 @@ impl Renderer {
             backdrop_blur: None,
             breakers: Default::default(),
             uploads: Default::default(),
+            fills: Default::default(),
             device_key: crate::compose::DeviceKey::next(),
         }
     }
