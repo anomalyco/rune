@@ -250,14 +250,20 @@ pub fn icon_coverage_at(icon: &Icon, px: u32, size: f32) -> Vec<u8> {
         let fill = get("fill").map_or(!stroke, |v| v != "none");
         let whole = opacity(attr(el, "opacity"));
         let into = layers.last_mut().map_or(&mut acc, |l| &mut l.0);
-        let mut paint = |style: swash::zeno::Style<'_>, alpha: f32| {
-            buf.iter_mut().for_each(|b| *b = 0);
-            Mask::new(d.as_slice()).style(style).transform(Some(ctm)).size(px, px).render_into(&mut buf, None);
+        // `hair`: a stroke this many device pixels wide, at most one, drawn as Chromium draws it.
+        let mut paint = |style: swash::zeno::Style<'_>, alpha: f32, hair: Option<f32>| {
+            match hair {
+                Some(width) => super::hairline::render(d.as_slice(), ctm, width, px, &mut buf),
+                None => {
+                    buf.iter_mut().for_each(|b| *b = 0);
+                    Mask::new(d.as_slice()).style(style).transform(Some(ctm)).size(px, px).render_into(&mut buf, None);
+                }
+            }
             union(into, &buf, alpha);
         };
         if fill {
             let rule = if get("fill-rule") == Some("evenodd") { Fill::EvenOdd } else { Fill::NonZero };
-            paint(rule.into(), whole * opacity(get("fill-opacity")));
+            paint(rule.into(), whole * opacity(get("fill-opacity")), None);
         }
         if stroke {
             let w = get("stroke-width").and_then(|v| v.trim_end_matches("px").parse().ok()).unwrap_or(1.0f32);
@@ -273,7 +279,10 @@ pub fn icon_coverage_at(icon: &Icon, px: u32, size: f32) -> Vec<u8> {
                 Some("bevel") => Join::Bevel,
                 _ => Join::Miter,
             });
-            paint(st.into(), whole * opacity(get("stroke-opacity")));
+            // No wider than a device pixel, Chromium (Skia) draws a stroke as a hairline.
+            let device = w * (ctm.xx * ctm.yy - ctm.xy * ctm.yx).abs().sqrt();
+            let hair = (device <= 1.0 + 1.0 / 256.0).then_some(device);
+            paint(st.into(), whole * opacity(get("stroke-opacity")), hair);
         }
     }
     // A group left open still ends at the body's end.

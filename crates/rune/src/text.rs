@@ -54,6 +54,7 @@ mod glyph_emit;
 mod hash;
 mod hidden_axes;
 mod inline_fit;
+mod hairline;
 pub(crate) mod icon;
 mod layout_cache;
 mod macos;
