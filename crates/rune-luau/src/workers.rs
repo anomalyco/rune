@@ -121,8 +121,9 @@ pub fn spawn_blocking(job: impl FnOnce() + Send + 'static) {
     }
 }
 
-/// Runs `job` off the UI thread (natively) or after the current frame's work (on the web).
+/// Runs `job` off the UI thread (natively) or as `rune::task` work (on the web), where a job that
+/// waits on the network doesn't hold the page.
 #[cfg(target_arch = "wasm32")]
 pub fn spawn_blocking(job: impl FnOnce() + Send + 'static) {
-    wasm_bindgen_futures::spawn_local(async move { job() });
+    let _ = rune::task::spawn("rune-luau-worker", job);
 }

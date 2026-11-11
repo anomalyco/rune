@@ -26,8 +26,8 @@ use pool::Pool;
 /// most four, which exit after ten idle seconds), not a thread per request. A request that
 /// hasn't started when a newer one comes in never runs; one already running finishes, and its
 /// answer is dropped. Only the closure runs off the main thread: the answer reaches the state
-/// in `poll`, on the UI thread. On the web, which has no threads, the work runs on the main
-/// thread from a `spawn_local` task, after the debounce.
+/// in `poll`, on the UI thread. On the web, which has no threads, the work runs as
+/// [`task::spawn`](crate::task::spawn) work after the debounce, where it can wait on the network.
 ///
 /// Dropping a `Latest` cancels it: nothing it asked for lands or wakes the window afterwards.
 /// State outlives a closed window (see [`App`](crate::App)), so an app that wants a close to stop
@@ -314,9 +314,12 @@ impl<T: Send + 'static> Latest<T> {
                 if !debounce.is_zero() {
                     sleep(debounce).await;
                 }
-                if inner.slot.lock().unwrap().runs(attempt) {
-                    inner.land(attempt, Ok(work()));
-                }
+                // On the task fibers, where work that waits on the network doesn't hold the page.
+                let _ = crate::task::spawn("latest", move || {
+                    if inner.slot.lock().unwrap().runs(attempt) {
+                        inner.land(attempt, Ok(work()));
+                    }
+                });
             });
         }
     }
