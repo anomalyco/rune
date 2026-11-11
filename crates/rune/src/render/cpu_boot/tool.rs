@@ -19,11 +19,11 @@ pub(crate) struct Tool {
     dir: PathBuf,
     painter: CpuPainter,
     threads: usize,
-    /// The retained buffer, B, G, R, A, and its size.
+    /// The retained buffer, B, G, R, A, rows `stride` bytes apart, as large as the largest frame
+    /// so far, as a window keeps its bitmap across a live resize; and the frame's size in it.
     buf: Vec<u8>,
+    stride: usize,
     size: (u32, u32),
-    /// The window's size in points last frame: a window that resizes gets a new buffer.
-    window: (f32, f32),
     log: Option<std::io::BufWriter<std::fs::File>>,
     /// The snapshot frame and what the run said about it, until the GPU's arrives.
     painted: Option<(Vec<u8>, serde_json::Value)>,
@@ -33,7 +33,7 @@ impl Tool {
     pub(crate) fn new(dir: PathBuf, threads: usize) -> Tool {
         let _ = std::fs::create_dir_all(&dir);
         let log = std::fs::File::create(dir.join("frames.jsonl")).ok().map(std::io::BufWriter::new);
-        Tool { dir, painter: CpuPainter::new(threads), threads: threads.max(1), buf: Vec::new(), size: (0, 0), window: (0.0, 0.0), log, painted: None }
+        Tool { dir, painter: CpuPainter::new(threads), threads: threads.max(1), buf: Vec::new(), stride: 0, size: (0, 0), log, painted: None }
     }
 
     /// Before the renderer prepares frame `k`, which `rt` laid out in `update_ns`: fills its
@@ -45,17 +45,15 @@ impl Tool {
             .srgb_blend(rt.srgb_blend())
             .native_surfaces(!rt.surfaces.is_empty())
             .font_smoothing(rt.font_smoothing());
-        if self.size != size {
-            self.buf = vec![0u8; size.0 as usize * size.1 as usize * 4];
-            self.size = size;
+        // Outgrown, the bitmap is made again at the new size: every pixel paints.
+        if size.0 as usize * 4 > self.stride || self.buf.len() < self.stride * size.1 as usize {
+            let rows = if self.stride == 0 { 0 } else { self.buf.len() / self.stride };
+            self.stride = self.stride.max(size.0 as usize * 4);
+            self.buf = vec![0u8; self.stride * rows.max(size.1 as usize)];
             self.painter.forget();
         }
-        // A live resize reallocates the window's bitmap: every pixel paints again.
-        if rt.window_viewport() != self.window {
-            self.window = rt.window_viewport();
-            self.painter.forget();
-        }
-        let painted = self.painter.paint(&scene, &mut Target::new(&mut self.buf, size.0, size.1));
+        self.size = size;
+        let painted = self.painter.paint(&scene, &mut Target::with_stride(&mut self.buf, size.0, size.1, self.stride));
         let total = super::ns(started.elapsed());
         let mut out = json!({ "k": k, "update_ns": update_ns, "cpu_ns": total, "instances": rt.instances.len(), "threads": self.threads,
             "fill": { "masks": fills.masks, "texels": fills.texels, "cover_ns": fills.cover_ns, "copy_ns": fills.copy_ns } });
@@ -73,9 +71,11 @@ impl Tool {
         for i in &rt.instances { kinds[(i.params[1].max(0.0) as usize).min(15)] += 1; }
         out["kinds"] = json!(kinds);
         let _ = std::fs::write(self.dir.join("draw.bin"), super::record::encode(&scene));
-        let rgba: Vec<u8> = self.buf.chunks_exact(4).flat_map(|p| [p[2], p[1], p[0], p[3]]).collect();
+        // The frame's rows, tightly packed.
+        let bgra: Vec<u8> = self.buf.chunks(self.stride).take(size.1 as usize).flat_map(|row| &row[..size.0 as usize * 4]).copied().collect();
+        let rgba: Vec<u8> = bgra.chunks_exact(4).flat_map(|p| [p[2], p[1], p[0], p[3]]).collect();
         let _ = crate::render::write_png(&self.dir.join("cpu.png"), size.0, size.1, &rgba);
-        self.painted = Some((self.buf.clone(), out));
+        self.painted = Some((bgra, out));
     }
 
     /// The GPU's snapshot frame, R, G, B, A, tightly packed.

@@ -26,6 +26,8 @@ pub struct CpuPainter {
     next: Vec<u64>,
     each: Vec<u64>,
     size: (u32, u32),
+    /// The buffer's row pitch last frame, in bytes.
+    stride: usize,
     dirty: Vec<u32>,
     /// The last frame's instances and bins, for telling a scroll (`scroll.rs`).
     prev: Option<scroll::Prev>,
@@ -45,7 +47,7 @@ pub struct Painted {
     pub scrolled: Option<([u32; 4], i32)>,
     /// Hashing tiles, on the calling thread, with telling a scroll and moving its rows.
     pub hash_ns: u64,
-    /// Of that, telling whether the frame scrolled (scroll.rs), and moving the rows.
+    /// Of that, telling whether the frame scrolled (`scroll.rs`), and moving the rows.
     pub plan_ns: u64,
     pub move_ns: u64,
 }
@@ -54,11 +56,12 @@ impl CpuPainter {
     /// A painter running on `threads` threads, the caller among them (the others are made now,
     /// and park between frames).
     pub fn new(threads: usize) -> CpuPainter {
-        CpuPainter { pool: Pool::new(threads), hashes: Vec::new(), next: Vec::new(), each: Vec::new(), size: (0, 0), dirty: Vec::new(), prev: None }
+        CpuPainter { pool: Pool::new(threads), hashes: Vec::new(), next: Vec::new(), each: Vec::new(), size: (0, 0), stride: 0, dirty: Vec::new(), prev: None }
     }
 
-    /// The buffer's pixels are no longer the last frame's (a new or resized buffer): the next
-    /// frame paints every tile.
+    /// The buffer's pixels are no longer the last frame's (a new buffer): the next frame paints
+    /// every tile. A buffer that keeps its row pitch when the window resizes needn't: tiles
+    /// whole in both sizes keep what they held, and only those that changed paint.
     pub fn forget(&mut self) {
         self.hashes.clear();
         self.prev = None;
@@ -78,23 +81,37 @@ impl CpuPainter {
         let bins = Bins::of(scene);
         let binned = Instant::now();
         damage::hashes(scene, &bins, &mut self.each, &mut self.next);
-        if self.size != scene.size { self.hashes.clear(); }
+        // Pixels stay where they were only in rows as far apart as before.
+        if self.stride != target.stride { self.hashes.clear(); }
         self.dirty.clear();
-        let all = self.hashes.len() != self.next.len();
+        let all = self.hashes.is_empty();
+        let resized = self.size != scene.size;
+        // A tile's hash last frame. After a resize, a tile keeps its place (the buffer's rows
+        // don't move), so one whole in both sizes compares with itself; one cut by either
+        // edge holds pixels that were never painted.
+        let (old, ocols) = (self.size, self.size.0.div_ceil(super::bin::TILE_W));
+        let whole = |tx: u32, ty: u32, (w, h): (u32, u32)| (tx + 1) * super::bin::TILE_W <= w && (ty + 1) * super::bin::TILE_H <= h;
+        let before = |t: usize| -> Option<u64> {
+            if all { return None; }
+            if !resized { return Some(self.hashes[t]); }
+            let (tx, ty) = (t as u32 % bins.cols, t as u32 / bins.cols);
+            (whole(tx, ty, old) && whole(tx, ty, scene.size)).then(|| self.hashes[(ty * ocols + tx) as usize])
+        };
+        let hash_changed = |t: usize| before(t) != Some(self.next[t]);
         // A backdrop blur reads every pixel of its region: when any tile there changed, the
         // whole region paints again (what's under the blur first, then the blur).
         let mut redo = vec![false; self.next.len()];
         for (_, rec) in &bins.blurs {
-            if all || super::bin::region_tiles(rec.region, bins.cols, bins.rows).any(|t| self.hashes[t] != self.next[t]) {
+            if all || super::bin::region_tiles(rec.region, bins.cols, bins.rows).any(hash_changed) {
                 for t in super::bin::region_tiles(rec.region, bins.cols, bins.rows) { redo[t] = true; }
             }
         }
-        let changed = |t: usize| all || redo[t] || self.hashes[t] != self.next[t];
+        let changed = |t: usize| redo[t] || hash_changed(t);
         let by_hash = (0..self.next.len()).filter(|&t| changed(t)).count();
         // Only a frame that changed many tiles can be a scroll; and a move is kept only when it
         // leaves fewer tiles to paint than the hashes alone do.
         let planning = Instant::now();
-        let shift = if all || by_hash < MIN_SCROLL_TILES { None } else { self.prev.as_ref().and_then(|p| scroll::plan(p, scene, &bins, &Threads { pool: &self.pool, extra: self.pool.threads() - 1 })) };
+        let shift = if all || resized || by_hash < MIN_SCROLL_TILES { None } else { self.prev.as_ref().and_then(|p| scroll::plan(p, scene, &bins, &Threads { pool: &self.pool, extra: self.pool.threads() - 1 })) };
         let touched = |s: &scroll::Shift, t: usize| {
             let (tx, ty) = (t as u32 % bins.cols, t as u32 / bins.cols);
             tx * super::bin::TILE_W < s.rect[2] && (tx + 1) * super::bin::TILE_W > s.rect[0] && ty * super::bin::TILE_H < s.rect[3] && (ty + 1) * super::bin::TILE_H > s.rect[1]
@@ -114,6 +131,7 @@ impl CpuPainter {
         self.dirty.extend((0..self.next.len() as u32).filter(|&t| dirty(shift.as_ref(), t as usize)));
         std::mem::swap(&mut self.hashes, &mut self.next);
         self.size = scene.size;
+        self.stride = target.stride;
         let hashed = Instant::now();
         let extra = (self.dirty.len() / TILES_PER_THREAD).min(self.pool.threads() - 1);
         let mut report = raster::run(scene, &bins, target, &self.dirty, &Threads { pool: &self.pool, extra });
