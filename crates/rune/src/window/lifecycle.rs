@@ -382,7 +382,7 @@ impl<S: 'static> Host<S> {
             self.native_handle.native.number.store(0, Ordering::Release);
         } else if let Some(w) = self.win.as_mut() {
             w.stop_pacing();
-            w.retry = None;
+            w.backoff_step(BackoffEvent::Lapsed);
             w.presented = None;
             // Its hidden frame delivers the focus loss.
             if launcher { w.request_redraw(); }

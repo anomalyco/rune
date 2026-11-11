@@ -112,39 +112,55 @@ pub(crate) fn timer_wants_frame<S>(rt: &Runtime<S>, next_frame: Option<Instant>)
 /// re-check.
 pub(crate) const TIMER_FRAME_STALL: Duration = OCCLUDED_RETRY;
 
-/// The frame a due timer asked a shown window for, until it draws it. An overdue timer whose
-/// frame never comes would otherwise keep turning the loop (`new_events` asks again, no frame
-/// arrives, and `wake_deadline` returns the past timer), so after `TIMER_FRAME_STALL` the timer
-/// runs covered instead and the next ask starts over.
+/// The frame a due timer asked a shown window for, until it draws it, and whether only that timer
+/// asked for it. An overdue timer whose frame never comes would otherwise keep turning the loop
+/// (`new_events` asks again, no frame arrives, and `wake_deadline` returns the past timer), so
+/// after `TIMER_FRAME_STALL` the timer runs covered instead and the next ask starts over.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum TimerFrame {
-    /// No timer waits on a frame.
-    #[default]
-    Idle,
-    /// A due timer asked for a frame at `asked`, which the window hasn't drawn yet.
-    Owed { asked: Instant },
+pub(crate) struct TimerFrame {
+    /// When a due timer asked for a frame the window hasn't drawn yet.
+    owed: Option<Instant>,
+    /// Only a timer asked for it, so the frame may draw what is already on screen instead of
+    /// taking a drawable. A window event, or any wake but the display tick, says otherwise. It
+    /// outlives `drawn`: a draw that returns before its decision leaves the frame for a later one.
+    quiet: bool,
 }
 
 impl TimerFrame {
-    /// A due timer asked for a frame, if none is owed already.
-    pub(crate) fn asked(&mut self, now: Instant) {
-        if *self == TimerFrame::Idle { *self = TimerFrame::Owed { asked: now }; }
+    /// A due timer asked for a frame: only it did, if nothing else has since the last frame.
+    pub(crate) fn asked_quiet(&mut self, now: Instant) {
+        self.owed.get_or_insert(now);
+        self.quiet = true;
     }
 
+    /// The frame asked for at the stall bound ran covered in its place, and the next is asked for
+    /// from `now`; only a timer asking still holds.
+    pub(crate) fn stalled_again(&mut self, now: Instant) { self.owed = Some(now); }
+
     /// The frame came, or ran covered in its place: nothing waits for it now.
-    pub(crate) fn drawn(&mut self) { *self = TimerFrame::Idle; }
+    pub(crate) fn drawn(&mut self) { self.owed = None; }
+
+    /// Something other than a timer asked for a frame: the one that follows draws in full.
+    pub(crate) fn no_longer_quiet(&mut self) { self.quiet = false; }
+
+    /// Only a timer asked for the frame that is next to draw.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub(crate) fn quiet(&self) -> bool { self.quiet }
+
+    /// The frame reaches its draw decision: whether only a timer asked for it.
+    pub(crate) fn take_quiet(&mut self) -> bool { std::mem::take(&mut self.quiet) }
 
     /// Whether the frame asked for is still outstanding after the stall bound.
     pub(crate) fn stalled(&self, now: Instant) -> bool {
-        matches!(*self, TimerFrame::Owed { asked } if now >= asked + TIMER_FRAME_STALL)
+        self.owed.is_some_and(|asked| now >= asked + TIMER_FRAME_STALL)
     }
 
     /// The runtime's next timer as the host waits for it: one already due while its frame is
     /// outstanding waits out the stall instead, so the loop sleeps rather than waking at once
     /// for a frame that can't come.
     pub(crate) fn wait(&self, due: Option<Instant>, now: Instant) -> Option<Instant> {
-        match (due, *self) {
-            (Some(due), TimerFrame::Owed { asked }) if due <= now => Some(asked + TIMER_FRAME_STALL),
+        match (due, self.owed) {
+            (Some(due), Some(asked)) if due <= now => Some(asked + TIMER_FRAME_STALL),
             (due, _) => due,
         }
     }
@@ -188,8 +204,8 @@ impl Missed {
     /// event (a display tick, a notification, input or a timer). There is no `ControlFlow::Poll`
     /// here: retrying at once is what spins a core while a window is occluded or its displays
     /// sleep. A display link that is still running retries a timeout on its next tick.
-    /// `occluded_wait` is the caller's backoff, held to `OCCLUDED_RETRY..=OCCLUDED_MAX`; an
-    /// occluded miss waits it out, then doubles it.
+    /// `occluded_wait` is the caller's backoff (`Backoff`), held to
+    /// `OCCLUDED_RETRY..=OCCLUDED_MAX`; an occluded miss waits it out, then doubles it.
     pub(crate) fn retry(self, paced: bool, now: Instant, occluded_wait: &mut Duration) -> Option<Instant> {
         match self {
             Missed::Occluded => {

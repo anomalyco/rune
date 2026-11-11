@@ -9,9 +9,9 @@ static FIRST_ENCODED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicB
 
 impl<S: 'static> Host<S> {
     /// A shown frame with no drawable. Asking for a redraw here would turn the loop at once, for
-    /// as long as the window is occluded or its displays sleep, so it waits for `retry`, with
-    /// its display link stopped so no tick redraws sooner. `stepped` when this frame already
-    /// ran the runtime.
+    /// as long as the window is occluded or its displays sleep, so it waits out a backoff
+    /// (`Backoff`), with its display link stopped so no tick redraws sooner. `stepped` when this
+    /// frame already ran the runtime.
     pub(super) fn missed_frame(&mut self, missed: Missed, stepped: bool) {
         let Some(l) = self.win.as_mut() else { return };
         l.timer_frame.drawn();
@@ -19,7 +19,7 @@ impl<S: 'static> Host<S> {
         let now = Instant::now();
         if missed == Missed::Occluded {
             // Covered or asleep with no notification yet: rest as if one came, and look
-            // again on `retry`.
+            // again when the backoff is up.
             self.life.cover(Cover::Surface, true);
             l.first_frame.skipped(now);
             #[cfg(target_os = "macos")]
@@ -28,8 +28,8 @@ impl<S: 'static> Host<S> {
             self.secure_input.set(false);
             self.idle = true;
         }
-        l.retry = missed.retry(l.paced(), now, &mut l.occluded_wait);
-        if l.retry.is_some() { l.stop_pacing(); }
+        let paced = l.paced();
+        l.backoff_step(BackoffEvent::Missed { missed, paced, now });
         self.meter.set_pacing(l.pacing_state(missed != Missed::Occluded));
         // What this frame would have run still runs, without drawing (`covered_step`). Misses
         // come at the retry's pace, not the display's.
@@ -95,7 +95,7 @@ impl<S: 'static> Host<S> {
         // Only a timer woke the resting window, so its frame may draw what's on screen. It
         // decides that before starting the display link, which would draw it at once anyway.
         #[cfg(target_os = "macos")]
-        let deferred = l.quiet && !hidden && !resizing && !l.native.prime.presumes()
+        let deferred = l.timer_frame.quiet() && !hidden && !resizing && !l.native.prime.presumes()
             && l.native.pacing.as_ref().is_some_and(|p| p.defers_start(Instant::now()));
         #[cfg(not(target_os = "macos"))]
         let deferred = false;
@@ -139,7 +139,7 @@ impl<S: 'static> Host<S> {
         #[cfg(target_os = "macos")]
         l.set_live_resize(resizing && live_resize);
         // Acquire before latching live values so a drawable wait cannot age the input.
-        l.retry = None;
+        l.backoff_step(BackoffEvent::Lapsed);
         if renderer.srgb_blend() != self.rt.srgb_blend() {
             let Some(surface) = l.surface.as_ref() else { return };
             if !reblend(surface, gpu, &mut l.config, renderer, &mut l.alpha, &mut self.rt) {
@@ -153,7 +153,7 @@ impl<S: 'static> Host<S> {
         if self.frame_reports.wanted() { self.frame_reports.set_refresh(display_hz(l)); }
         // Only a timer woke the resting window: build the frame first, and take no drawable
         // when it draws what's on screen.
-        let quiet = std::mem::take(&mut l.quiet) && !hidden && !live_resize && l.presented.is_some() && self.comp.is_none()
+        let quiet = l.timer_frame.take_quiet() && !hidden && !live_resize && l.presented.is_some() && self.comp.is_none()
             && self.trace.is_none() && self.args.trace.is_none() && self.rt.live_visible()
             && self.rt.window_frame.is_none() && self.frame_move.is_none();
         #[cfg(target_os = "macos")]
@@ -191,7 +191,7 @@ impl<S: 'static> Host<S> {
                 l.surface_ok = false;
                 return self.missed_frame(Missed::Unconfigured, built.is_some());
             }
-            Err(_) if hidden => { l.retry = l.first_frame.missed(Instant::now(), &mut l.hidden_wait); self.frame_reports.skipped(); return; }
+            Err(_) if hidden => { l.first_frame.missed(); l.backoff_step(BackoffEvent::HiddenMissed { preparing: l.first_frame.deadline().is_some(), now: Instant::now() }); self.frame_reports.skipped(); return; }
             Err(missed) => return self.missed_frame(missed, built.is_some()),
         };
         if !hidden && !self.rt.live_visible() && { let size = l.window.inner_size(); size.width > 0 && size.height > 0 } {
@@ -248,7 +248,7 @@ impl<S: 'static> Host<S> {
                     return self.missed_frame(Missed::Unconfigured, true);
                 }
                 // Retrying at once is what spins while occluded; wait like any missed frame.
-                Err(_) if hidden => { l.retry = l.first_frame.missed(Instant::now(), &mut l.hidden_wait); self.frame_reports.skipped(); return; }
+                Err(_) if hidden => { l.first_frame.missed(); l.backoff_step(BackoffEvent::HiddenMissed { preparing: l.first_frame.deadline().is_some(), now: Instant::now() }); self.frame_reports.skipped(); return; }
                 Err(missed) => return self.missed_frame(missed, true),
             };
             drawable = l.native.present.as_ref().and(self.present_log.as_ref()).and_then(|log| log.acquired());
@@ -268,7 +268,7 @@ impl<S: 'static> Host<S> {
                     l.surface_ok = false;
                     return self.missed_frame(Missed::Unconfigured, true);
                 }
-                Err(_) if hidden => { l.retry = l.first_frame.missed(Instant::now(), &mut l.hidden_wait); self.frame_reports.skipped(); return; }
+                Err(_) if hidden => { l.first_frame.missed(); l.backoff_step(BackoffEvent::HiddenMissed { preparing: l.first_frame.deadline().is_some(), now: Instant::now() }); self.frame_reports.skipped(); return; }
                 Err(missed) => return self.missed_frame(missed, true),
             };
             #[cfg(target_os = "macos")]
@@ -277,8 +277,7 @@ impl<S: 'static> Host<S> {
         } else { frame };
         #[cfg(target_os = "macos")]
         drop(shown);
-        l.occluded_wait = OCCLUDED_RETRY;
-        l.hidden_wait = TIMEOUT_RETRY;
+        l.backoff_step(BackoffEvent::Presented);
         if hidden { l.hidden_pace.rendered(now); }
         let update_ms = now.elapsed().as_secs_f64() * 1000.0;
         sync_platform(l, rt, &mut self.secure_input, &mut self.ime_allowed, &self.clipboard);
@@ -397,7 +396,7 @@ impl<S: 'static> Host<S> {
             // Without a running display link, macOS hands out drawables faster than the
             // display shows them, so a timer paces the next frame instead of the loop.
             #[cfg(target_os = "macos")]
-            if !l.native.pacing.as_mut().is_some_and(|p| p.start()) { l.retry = Some(now + TIMER_FRAME); }
+            if !l.native.pacing.as_mut().is_some_and(|p| p.start()) { l.backoff_step(BackoffEvent::At(now + TIMER_FRAME)); }
             #[cfg(not(target_os = "macos"))]
             l.request_redraw();
             self.meter.set_pacing(l.pacing_state(true));

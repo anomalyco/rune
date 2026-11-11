@@ -80,6 +80,8 @@ pub(crate) use pacing::{
 pub(crate) use pacing::{HIDDEN_REFRESH, TIMER_FRAME_STALL};
 #[cfg(test)]
 use pacing::wall_wake_deadline;
+mod backoff;
+pub(crate) use backoff::{Backoff, BackoffEvent, BackoffEffect};
 mod stepping;
 pub mod spec;
 pub(crate) mod titlebar;
@@ -96,6 +98,8 @@ mod covered;
 mod occluded_surface;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod backoff_tests;
 
 pub(crate) enum WakeEvent {
     DisplayTick(usize),

@@ -37,7 +37,7 @@ impl<S: 'static> AnyHost for Host<S> {
             .chain(win.and_then(|w| w.first_frame.deadline().map(|(retry, _)| retry)))
             .chain(win.and_then(|w| w.first_frame.ready_deadline()))
             .chain(win.and_then(Win::cloak_deadline))
-            .chain(win.and_then(|w| w.retry))
+            .chain(win.and_then(|w| w.backoff.deadline()))
             .chain(win.filter(|_| shown.is_none()).and_then(|w| w.hidden_pace.deadline()))
             .chain(self.files.pointer.as_ref().filter(|_| shown.is_some()).map(|_| now + DROP_SAMPLE))
             .chain(shown.and_then(|w| w.cursor.reassert_at(now)))
@@ -176,8 +176,8 @@ impl<S: 'static> Host<S> {
             }
         }
         let launcher = self.launcher();
-        if let Some(w) = &mut self.win && w.retry.is_some_and(|retry| retry <= Instant::now()) {
-            w.retry = None;
+        if let Some(w) = &mut self.win && w.backoff.deadline().is_some_and(|at| at <= Instant::now()) {
+            w.backoff_step(BackoffEvent::Lapsed);
             // A missed frame marked it occluded; look at the surface again.
             self.life.cover(Cover::Surface, false);
             if launcher || self.life.shown() { w.request_redraw(); }
@@ -206,8 +206,7 @@ impl<S: 'static> Host<S> {
                 // the next frame it asks for the stall bound afresh.
                 if self.win.as_ref().is_some_and(|w| w.timer_frame.stalled(now)) {
                     if let Some(w) = &mut self.win {
-                        w.timer_frame.drawn();
-                        w.timer_frame.asked(now);
+                        w.timer_frame.stalled_again(now);
                     }
                     covered_step(&mut self.rt);
                     self.clipboard.flush(&mut self.rt);
@@ -227,8 +226,7 @@ impl<S: 'static> Host<S> {
                         None => true,
                     };
                     if frame && let Some(w) = &mut self.win {
-                        w.quiet = true;
-                        w.timer_frame.asked(now);
+                        w.timer_frame.asked_quiet(now);
                         w.request_redraw();
                     }
                 }

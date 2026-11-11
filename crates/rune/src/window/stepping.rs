@@ -23,7 +23,7 @@ impl<S: 'static> Host<S> {
         let visible = self.life.shown();
         let Some(w) = &mut self.win else { return };
         w.hidden_pace.reset();
-        if !w.first_frame.request_reveal(stale, visible) {
+        if !w.first_frame.request_reveal(stale, visible, Instant::now()) {
             w.request_redraw();
             return;
         }

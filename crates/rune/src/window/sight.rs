@@ -55,9 +55,8 @@ impl<S: 'static> Host<S> {
         #[cfg(target_os = "macos")]
         { l.native.prime.stop(); }
         let was = self.life.cover(cover, on);
-        l.retry = None;
+        l.backoff_step(BackoffEvent::Uncovered);
         l.presented = None;
-        l.occluded_wait = OCCLUDED_RETRY;
         self.rt.set_live_visible(self.life.uncovered() && !l.minimized());
         if self.life.covered() {
             self.secure_input.set(false);

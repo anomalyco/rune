@@ -71,13 +71,12 @@ pub(super) enum FirstFrameEvent {
     Prepare { now: Instant },
     /// The host brings the next try forward to `retry` while the frame prepares.
     Retry { retry: Instant },
-    /// A reveal: the state changed since the cached frame (`stale`), and whether it shows already.
-    RequestReveal { stale: bool, visible: bool },
+    /// A reveal: the state changed since the cached frame (`stale`), and whether it shows
+    /// already.
+    RequestReveal { stale: bool, visible: bool, now: Instant },
     Hide,
     /// The preparation's give-up time passed.
     Expire,
-    /// A hidden frame got no drawable at `now`; `wait` is the host's backoff.
-    Missed { now: Instant, wait: Duration },
     /// The GPU finished a frame.
     GpuDone,
     /// The host lands the finished frame.
@@ -94,8 +93,6 @@ pub(super) enum FirstFrameEvent {
 pub(super) enum FirstFrameEffect {
     /// Show the frame now (the cached one, or the one just landed).
     Show,
-    /// Try the hidden frame again at this time.
-    RetryAt(Instant),
     /// Run `on_ready`.
     RunOnReady,
 }
@@ -126,11 +123,11 @@ impl FirstFrame {
                 Effects::none()
             }
             FirstFrameEvent::RequestReveal { visible: true, .. } => Effects::one(Show),
-            FirstFrameEvent::RequestReveal { stale, visible: false } => {
+            FirstFrameEvent::RequestReveal { stale, visible: false, now } => {
                 if stale { self.unready(); }
                 if self.ready() { return Effects::one(Show); }
                 self.reveal = Reveal::Wanted;
-                if self.deadline().is_none() { self.step(FirstFrameEvent::Prepare { now: Instant::now() }); }
+                if self.deadline().is_none() { self.step(FirstFrameEvent::Prepare { now }); }
                 Effects::none()
             }
             FirstFrameEvent::Hide => {
@@ -150,13 +147,6 @@ impl FirstFrame {
                 if self.notice == Notice::Owed { return Effects::none(); }
                 self.frame = Frame::Drawn { preparing: None };
                 self.take_reveal()
-            }
-            FirstFrameEvent::Missed { now, wait } => {
-                // The cached frame no longer counts; unless the preparation retries it, the next
-                // try waits `wait`.
-                self.unready();
-                if self.deadline().is_some() { return Effects::none(); }
-                Effects::one(RetryAt(now + wait))
             }
             FirstFrameEvent::GpuDone => {
                 self.frame = match self.frame {
@@ -235,25 +225,19 @@ impl FirstFrame {
     pub(super) fn take_ready(&mut self) -> bool { !self.step(FirstFrameEvent::TakeReady).is_empty() }
     /// Whether to show the cached frame now. One already on screen shows at once; its next
     /// frame (or retry) draws a stale state, with no first-frame deadline.
-    pub(super) fn request_reveal(&mut self, stale: bool, visible: bool) -> bool {
-        Self::shows(self.step(FirstFrameEvent::RequestReveal { stale, visible }))
+    pub(super) fn request_reveal(&mut self, stale: bool, visible: bool, now: Instant) -> bool {
+        Self::shows(self.step(FirstFrameEvent::RequestReveal { stale, visible, now }))
     }
     /// After readiness, a canceled refresh keeps the cached frame and stops retrying.
     pub(super) fn hide(&mut self) { self.step(FirstFrameEvent::Hide); }
     /// The drawable deadline passed. The first frame stays hidden (the host reports it); a
     /// refresh returns whether to reveal the cached frame rather than nothing.
     pub(super) fn expire(&mut self) -> bool { Self::shows(self.step(FirstFrameEvent::Expire)) }
-    /// A hidden frame that got no drawable leaves the cached one stale. Unless the deadline
-    /// retries it, the next try waits `wait`, which doubles up to `OCCLUDED_MAX`.
-    pub(super) fn missed(&mut self, now: Instant, wait: &mut Duration) -> Option<Instant> {
-        let retry = self.step(FirstFrameEvent::Missed { now, wait: *wait }).into_iter().find_map(|e| match e {
-            FirstFrameEffect::RetryAt(at) => Some(at),
-            _ => None,
-        })?;
-        *wait = (*wait * 2).min(OCCLUDED_MAX);
-        Some(retry)
-    }
-    pub(super) fn prepare(&mut self) { self.step(FirstFrameEvent::Prepare { now: Instant::now() }); }
+    /// A hidden frame that got no drawable leaves the cached one stale. A preparation's deadline
+    /// retries it; otherwise the host waits, and backs off (`Backoff`).
+    pub(super) fn missed(&mut self) { self.unready(); }
+    /// A hidden frame is prepared from `now`.
+    pub(super) fn prepare(&mut self, now: Instant) { self.step(FirstFrameEvent::Prepare { now }); }
     /// The host brings the next try forward while the frame prepares.
     pub(super) fn retry_at(&mut self, retry: Instant) { self.step(FirstFrameEvent::Retry { retry }); }
     /// The GPU finished the frame it presents.

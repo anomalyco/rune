@@ -105,7 +105,7 @@ impl<S: 'static> Host<S> {
     pub(super) fn handle_user_event(&mut self, event_loop: &ActiveEventLoop, event: WakeEvent) {
         if !self.started { return; }
         // The display tick a timer's frame waits for draws that frame.
-        if !matches!(event, WakeEvent::DisplayTick(_)) && let Some(w) = &mut self.win { w.quiet = false; }
+        if !matches!(event, WakeEvent::DisplayTick(_)) && let Some(w) = &mut self.win { w.timer_frame.no_longer_quiet(); }
         match event {
             WakeEvent::App(_) => {
                 self.drain(event_loop, true);
@@ -177,7 +177,7 @@ impl<S: 'static> Host<S> {
             return;
         }
         self.a11y_window_event(&event);
-        if !matches!(event, WindowEvent::RedrawRequested) && let Some(w) = &mut self.win { w.quiet = false; }
+        if !matches!(event, WindowEvent::RedrawRequested) && let Some(w) = &mut self.win { w.timer_frame.no_longer_quiet(); }
         #[cfg(target_os = "macos")]
         if matches!(event, WindowEvent::Moved(_) | WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } | WindowEvent::Occluded(_))
             && let Some(w) = &mut self.win && let Some(pacing) = &mut w.native.pacing {

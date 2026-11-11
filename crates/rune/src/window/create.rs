@@ -233,20 +233,17 @@ impl<S: 'static> Host<S> {
             surface_ok: true,
             surface_retries: SurfaceRetries::default(),
             window,
-            retry: None,
-            occluded_wait: OCCLUDED_RETRY,
-            hidden_wait: TIMEOUT_RETRY,
+            backoff: Backoff::default(),
             hidden_pace: HiddenPace::default(),
             cursor: crate::cursor::os::OsCursor::new(event_loop),
             alpha,
-            quiet: false,
             timer_frame: TimerFrame::default(),
             presented: None,
             #[cfg(target_os = "windows")]
             steady: Steady::Rest,
             redraw: std::cell::Cell::new(Redraw::Idle),
         });
-        if launcher { self.win.as_mut().unwrap().first_frame.prepare(); }
+        if launcher { self.win.as_mut().unwrap().first_frame.prepare(Instant::now()); }
         self.apply_placement(event_loop);
         #[cfg(target_os = "macos")]
         if visible && let Some(w) = &self.win && w.native.panel.is_some() { w.show(focus); }
@@ -372,7 +369,7 @@ impl<S: 'static> Host<S> {
         }
         match self.reattach() {
             Ok(()) => {
-                if let Some(w) = self.win.as_mut() { w.retry = None; }
+                if let Some(w) = self.win.as_mut() { w.backoff_step(BackoffEvent::Lapsed); }
                 true
             }
             Err(error) => match self.win.as_ref().and_then(|w| w.surface_retries.retry(now)) {
@@ -380,7 +377,7 @@ impl<S: 'static> Host<S> {
                     eprintln!("rune: could not replace the window's GPU surface, trying again: {error}");
                     if let Some(w) = self.win.as_mut() {
                         w.surface_ok = false;
-                        w.retry = Some(at);
+                        w.backoff_step(BackoffEvent::At(at));
                     }
                     false
                 }

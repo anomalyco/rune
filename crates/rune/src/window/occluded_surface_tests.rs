@@ -45,11 +45,12 @@ fn an_occluded_surface_never_asks_wgpu_and_draws_once_visible() {
     assert!(unsafe { crate::platform::macos::layer_occluded(&layer) });
     let mut meter = SurfaceMeter::new("occluded", Arc::default());
     let start = Instant::now();
-    let (mut at, mut wait, mut checks) = (start, OCCLUDED_RETRY, 0u64);
+    let (mut at, mut backoff, mut checks) = (start, Backoff::default(), 0u64);
     while at < start + Duration::from_secs(3600) {
         if let Ok(_frame) = acquire(&surface, &gpu, &config, true, 1, &mut meter) { panic!("an occluded surface got a drawable"); }
         checks += 1;
-        at = Missed::Occluded.retry(false, at, &mut wait).expect("occlusion re-checks on a deadline");
+        backoff.step(BackoffEvent::Missed { missed: Missed::Occluded, paced: false, now: at });
+        at = backoff.deadline().expect("occlusion re-checks on a deadline");
     }
     let totals = meter.totals();
     assert_eq!(totals.failed(), 0, "wgpu was asked for drawables it refuses as occluded");

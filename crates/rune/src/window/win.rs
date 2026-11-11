@@ -74,19 +74,14 @@ pub(super) struct Win {
     pub(super) surface_retries: SurfaceRetries,
     pub(super) window: Arc<Window>,
     /// When to redraw after a frame that had no drawable, or the next frame of motion when no
-    /// display link paces it (macOS).
-    pub(super) retry: Option<Instant>,
-    /// The next occluded re-check's wait, backing off while the surface stays occluded.
-    pub(super) occluded_wait: Duration,
-    /// A hidden launcher's next try after a refresh got no drawable, backing off likewise.
-    pub(super) hidden_wait: Duration,
+    /// display link paces it (macOS) (`Backoff`).
+    pub(super) backoff: Backoff,
     /// When a hidden launcher renders the changes it hasn't yet.
     pub(super) hidden_pace: HiddenPace,
     pub(super) cursor: crate::cursor::os::OsCursor,
     pub(super) alpha: Option<crate::render::surface_alpha::AlphaSurface>,
-    /// Only a due timer asked for the next frame, which may then draw nothing new.
-    pub(super) quiet: bool,
-    /// The frame a due timer asked for, until the window draws it (`TimerFrame`).
+    /// The frame a due timer asked for, until the window draws it, and whether only it asked
+    /// (`TimerFrame`).
     pub(super) timer_frame: TimerFrame,
     /// The last frame presented, while the window rests.
     pub(super) presented: Option<Presented>,
@@ -131,46 +126,48 @@ impl Win {
 
 #[test]
 fn launcher_first_frame_holds_reveal_and_hide_cancels_late_completion() {
+    let now = Instant::now();
     let mut frame = FirstFrame::default();
-    frame.prepare();
-    assert!(!frame.request_reveal(false, false));
+    frame.prepare(now);
+    assert!(!frame.request_reveal(false, false, now));
     assert!(!frame.ready());
     assert!(frame.complete());
     assert!(frame.ready() && frame.deadline().is_none());
     assert!(!frame.complete(), "a second callback must not reopen a hidden panel");
     let mut canceled = FirstFrame::default();
-    canceled.prepare();
-    assert!(!canceled.request_reveal(false, false));
+    canceled.prepare(now);
+    assert!(!canceled.request_reveal(false, false, now));
     canceled.hide();
     assert!(!canceled.complete(), "hide before readiness cancels the pending show");
     assert!(canceled.ready());
-    assert!(canceled.request_reveal(false, false), "the prepared frame can be revealed without another preparation");
+    assert!(canceled.request_reveal(false, false, now), "the prepared frame can be revealed without another preparation");
     assert!(canceled.deadline().is_none());
 }
 
 #[test]
 fn launcher_stale_reveal_waits_for_an_unsettled_hidden_frame() {
+    let now = Instant::now();
     let mut frame = FirstFrame::drawn_notified();
     assert!(!frame.complete());
-    assert!(frame.request_reveal(false, false), "unchanged state reveals the cached frame at once");
+    assert!(frame.request_reveal(false, false, now), "unchanged state reveals the cached frame at once");
     assert!(!frame.pending() && frame.settles());
-    assert!(!frame.request_reveal(true, false), "changed state renders hidden first");
+    assert!(!frame.request_reveal(true, false, now), "changed state renders hidden first");
     assert!(frame.deadline().is_some() && !frame.settles(), "the refresh keeps its new motion");
     frame.gpu_done(); // The hidden frame's fence completed.
     assert!(frame.pending() && frame.complete());
     assert!(!frame.pending() && frame.settles());
-    assert!(!frame.request_reveal(true, false));
+    assert!(!frame.request_reveal(true, false, now));
     frame.hide();
     assert!(frame.settles(), "a canceled refresh is an ordinary hidden frame");
     assert!(frame.ready() && frame.deadline().is_none(), "hide stops the refresh retries");
     assert!(!frame.pending() && !frame.complete(), "a late frame does not reveal");
 
-    assert!(!frame.request_reveal(true, false));
+    assert!(!frame.request_reveal(true, false, now));
     assert!(frame.expire(), "a refresh with no drawable reveals the cached frame");
     assert!(frame.ready() && !frame.pending() && frame.deadline().is_none());
     let mut first = FirstFrame::default();
-    first.prepare();
-    assert!(!first.request_reveal(true, false));
+    first.prepare(now);
+    assert!(!first.request_reveal(true, false, now));
     assert!(!first.expire() && !first.ready(), "the first frame stays hidden and reports instead");
     first.gpu_done();
     assert!(first.pending() && first.complete(), "a late first frame still reveals");
@@ -180,19 +177,24 @@ fn launcher_stale_reveal_waits_for_an_unsettled_hidden_frame() {
 fn launcher_refresh_with_no_drawable_retries_and_never_reveals_stale_pixels() {
     let now = Instant::now();
     let mut frame = FirstFrame::drawn_notified();
-    let mut wait = TIMEOUT_RETRY;
-    assert_eq!(frame.missed(now, &mut wait), Some(now + TIMEOUT_RETRY), "a hidden refresh that got no drawable tries again");
+    let mut backoff = Backoff::default();
+    let missed = |frame: &mut FirstFrame, backoff: &mut Backoff| {
+        frame.missed();
+        backoff.step(BackoffEvent::HiddenMissed { preparing: frame.deadline().is_some(), now });
+        backoff.deadline()
+    };
+    assert_eq!(missed(&mut frame, &mut backoff), Some(now + TIMEOUT_RETRY), "a hidden refresh that got no drawable tries again");
     assert!(!frame.ready(), "its cached frame no longer counts as ready");
-    assert_eq!(frame.missed(now, &mut wait), Some(now + TIMEOUT_RETRY * 2), "and backs off");
-    for _ in 0..10 { frame.missed(now, &mut wait); }
-    assert_eq!(wait, OCCLUDED_MAX);
-    assert!(!frame.request_reveal(false, false), "a reveal waits for the refresh even with nothing new to commit");
+    assert_eq!(missed(&mut frame, &mut backoff), Some(now + TIMEOUT_RETRY * 2), "and backs off");
+    for _ in 0..10 { missed(&mut frame, &mut backoff); }
+    assert_eq!(backoff.deadline(), Some(now + OCCLUDED_MAX), "up to a re-check every two seconds");
+    assert!(!frame.request_reveal(false, false, now), "a reveal waits for the refresh even with nothing new to commit");
     assert!(frame.deadline().is_some());
-    assert_eq!(frame.missed(now, &mut wait), None, "the first-frame deadline owns its retries");
+    assert_eq!(missed(&mut frame, &mut backoff), None, "the first-frame deadline owns its retries");
 
     // One already on screen shows at once and redraws, rather than retrying a first frame.
     let mut shown = FirstFrame::drawn_notified();
-    assert!(shown.request_reveal(true, true));
+    assert!(shown.request_reveal(true, true, now));
     assert!(shown.deadline().is_none() && shown.ready());
 }
 
@@ -266,10 +268,19 @@ impl Win {
     /// macOS, the present queue's vsync elsewhere.
     pub(super) fn paced_for_stats(&self) -> bool { !cfg!(target_os = "macos") || self.paced() }
 
+    /// Steps the window's wait after a frame it couldn't draw, and carries out what that asks: a
+    /// display link that would draw sooner than the wait stops.
+    pub(super) fn backoff_step(&mut self, event: BackoffEvent) {
+        for effect in self.backoff.step(event) {
+            match effect { BackoffEffect::StopPacing => self.stop_pacing() }
+        }
+    }
+
     /// Waiting for a missed frame's retry, or for the timer pacing unpaced motion. A hidden
-    /// launcher's first-frame deadline owns its own retries.
+    /// launcher's first-frame deadline owns its own retries, so a wait it leaves behind doesn't
+    /// hold the frame back.
     pub(super) fn backing_off(&self, now: Instant) -> bool {
-        self.retry.is_some_and(|retry| retry > now) && self.first_frame.deadline().is_none()
+        self.backoff.waiting(now) && self.first_frame.deadline().is_none()
     }
 
     /// What paces the window's frames, for its stats.

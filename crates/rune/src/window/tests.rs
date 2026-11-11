@@ -420,8 +420,10 @@ fn missed_frames_never_poll() {
         let missed = Missed::of(status).err().expect("a miss");
         for paced in [false, true] {
             for wait in [Duration::ZERO, OCCLUDED_RETRY, Duration::from_secs(60)] {
+                let mut backoff = Backoff::seeded(wait, TIMEOUT_RETRY);
+                backoff.step(BackoffEvent::Missed { missed, paced, now });
                 // A retry deadline at or before now would spin like a poll.
-                let flow = match missed.retry(paced, now, &mut { wait }) {
+                let flow = match backoff.deadline() {
                     Some(at) => { assert!(at > now, "{missed:?} retries later, not now"); ControlFlow::WaitUntil(at) }
                     None => ControlFlow::Wait,
                 };
@@ -429,17 +431,24 @@ fn missed_frames_never_poll() {
             }
         }
     }
-    let occluded = |mut wait| Missed::Occluded.retry(true, now, &mut wait);
+    let occluded = |wait| {
+        let mut backoff = Backoff::seeded(wait, TIMEOUT_RETRY);
+        backoff.step(BackoffEvent::Missed { missed: Missed::Occluded, paced: true, now });
+        backoff.deadline()
+    };
     assert_eq!(occluded(Duration::ZERO), Some(now + OCCLUDED_RETRY), "the safety net is slow");
     assert_eq!(occluded(Duration::from_secs(60)), Some(now + OCCLUDED_MAX));
-    let mut zero = Duration::ZERO;
-    assert_eq!(Missed::Timeout.retry(true, now, &mut zero), None, "a running display link retries on its tick");
-    assert_eq!(Missed::Timeout.retry(false, now, &mut zero), Some(now + TIMEOUT_RETRY));
-    let mut wait = OCCLUDED_RETRY;
-    Missed::Occluded.retry(true, now, &mut wait);
-    assert_eq!(wait, OCCLUDED_RETRY * 2, "an occluded miss backs off");
-    Missed::Outdated.retry(true, now, &mut wait);
-    assert_eq!(wait, OCCLUDED_RETRY * 2, "other misses leave the backoff");
+    let miss = |backoff: &mut Backoff, missed| {
+        backoff.step(BackoffEvent::Missed { missed, paced: true, now });
+        backoff.deadline()
+    };
+    let mut backoff = Backoff::default();
+    assert_eq!(miss(&mut backoff, Missed::Timeout), None, "a running display link retries on its tick");
+    assert_eq!(miss(&mut backoff, Missed::Outdated), Some(now + OCCLUDED_RETRY));
+    assert_eq!(miss(&mut backoff, Missed::Occluded), Some(now + OCCLUDED_RETRY), "an occluded miss waits its backoff");
+    assert_eq!(miss(&mut backoff, Missed::Occluded), Some(now + OCCLUDED_RETRY * 2), "and backs off");
+    assert_eq!(miss(&mut backoff, Missed::Outdated), Some(now + OCCLUDED_RETRY), "other misses leave the backoff");
+    assert_eq!(miss(&mut backoff, Missed::Occluded), Some(now + OCCLUDED_RETRY * 4), "which carries on");
 }
 
 /// A shown window's due timer asks for a frame. On Wayland a surface that is covered before its
@@ -469,7 +478,7 @@ fn a_timer_frame_that_never_comes_runs_its_timer_covered_instead_of_spinning() {
     assert!(timer_deadline(&rt).expect("armed") <= now, "the timer is due: this is what turned the loop");
 
     let mut frame = TimerFrame::default();
-    frame.asked(now);
+    frame.asked_quiet(now);
     assert_eq!(frame.wait(timer_deadline(&rt), now), Some(now + TIMER_FRAME_STALL),
         "the frame the timer asked for keeps the loop asleep until the bound");
     assert!(!frame.stalled(now + TIMER_FRAME_STALL - Duration::from_millis(1)));
@@ -482,7 +491,7 @@ fn a_timer_frame_that_never_comes_runs_its_timer_covered_instead_of_spinning() {
     assert!(next > Instant::now(), "the next timer is ahead: {next:?}");
     // The covered step takes the frame's place, and a timer still ahead keeps its own time.
     frame.drawn();
-    frame.asked(Instant::now());
+    frame.asked_quiet(Instant::now());
     assert_eq!(frame.wait(timer_deadline(&rt), Instant::now()), Some(next), "the loop sleeps until its next timer");
     frame.drawn();
     assert!(!frame.stalled(now + TIMER_FRAME_STALL), "a frame that comes clears it");
