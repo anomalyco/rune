@@ -66,7 +66,7 @@ impl<S: 'static> Runtime<S> {
             for l in &t.cold.links { (l.start, l.end, &l.id, l.role, &l.label).hash(&mut h); }
         }
         // A text's lines come from its layout and where it scrolled.
-        n.text_layout.as_ref().map(|l| std::rc::Rc::as_ptr(l) as usize).hash(&mut h);
+        n.text_layout.as_ref().map(crate::text::TextLayout::address).hash(&mut h);
         n.elided.map(|e| (e.head, e.tail)).hash(&mut h);
         if let Some(input) = n.input.as_deref() {
             let e = &input.edit;

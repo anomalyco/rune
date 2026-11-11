@@ -40,7 +40,7 @@ impl<S: 'static> Runtime<S> {
         }
         let e = access(states!(self));
         e.set_single_line(single);
-        if let (Some((x, y)), Some(l)) = (local, layout.as_deref())
+        if let (Some((x, y)), Some(l)) = (local, layout.as_ref().map(TextLayout::view))
             && e.preedit().is_none()
         {
             let caret = hit(e, l, x + scroll, y, s, single).caret;
@@ -56,7 +56,7 @@ impl<S: 'static> Runtime<S> {
         }
         let (a, b) = e.range();
         let word = spell
-            .then(|| crate::spell::misspelled(&e.text))
+            .then(|| crate::spell::misspelled(&e.text, None))
             .filter(|found| found.contains(&(a, b)))
             .map(|_| (a, b, e.text[a..b].to_owned()));
         let suggestions = word.as_ref().map(|w| crate::spell::suggest(&w.2)).unwrap_or_default();
@@ -127,7 +127,7 @@ impl<S: 'static> Runtime<S> {
                     _ => 'a',
                 });
                 let layout = self.focused_layout();
-                self.with_focused(|e| e.key(&ev, layout.as_deref()), one);
+                self.with_focused(|e| e.key_in(&ev, layout.as_ref().map(TextLayout::view)), one);
             }
             "paste" => one.request_paste(),
             "learn-spelling" => {

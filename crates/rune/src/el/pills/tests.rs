@@ -97,7 +97,7 @@ mod live {
     /// Each line's byte range in the text's layout.
     fn lines(rt: &Runtime<S>) -> Vec<Range<usize>> {
         let n = rt.nodes.iter().find(|n| n.key.as_deref() == Some("t")).unwrap();
-        n.text_layout.as_ref().unwrap().lines().map(|l| l.text_range()).collect()
+        n.text_layout.as_ref().and_then(crate::text::TextLayout::single).unwrap().lines().map(|l| l.text_range()).collect()
     }
 
     fn drag(rt: &mut Runtime<S>, from: (f32, f32), to: (f32, f32)) {

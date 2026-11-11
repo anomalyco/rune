@@ -8,7 +8,7 @@ fn resize_view(s: &bool, _: &mut Cx<bool>) -> El {
 }
 
 fn layout_of<'a>(rt: &'a Runtime<bool>, key: &str) -> &'a Rc<Layout<Ink>> {
-    rt.nodes.iter().find(|n| n.key.as_deref() == Some(key)).and_then(|n| n.text_layout.as_ref()).unwrap()
+    rt.nodes.iter().find(|n| n.key.as_deref() == Some(key)).and_then(|n| n.text_layout.as_ref()?.single()).unwrap()
 }
 
 /// A commit lets go of the last commit's text layouts before measuring, so on a resize each

@@ -133,7 +133,7 @@ impl<S: 'static> Runtime<S> {
     /// Node `i`'s link line boxes in window points (x0, y0, x1, y1) for border box `rect`.
     pub(super) fn link_boxes(&self, i: usize, rect: [f32; 4]) -> Vec<(usize, [f32; 4])> {
         let n = &self.nodes[i];
-        let (Some(spec), Some(layout)) = (&n.text, &n.text_layout) else { return Vec::new() };
+        let (Some(spec), Some(layout)) = (&n.text, n.text_layout.as_ref().and_then(TextLayout::single)) else { return Vec::new() };
         let s = self.env.scale;
         let z = self.drawn_scale.get(i).copied().unwrap_or(1.0);
         let [ox, oy] = origin(n, spec, layout, rect, s, z);
@@ -368,7 +368,7 @@ impl<S: 'static> Runtime<S> {
 
     pub(super) fn highlight_boxes_in(&self, nodes: &[Node], i: usize, rect: [f32; 4], z: f32) -> Vec<(usize, [f32; 4])> {
         let n = &nodes[i];
-        let (Some(spec), Some(layout)) = (&n.text, &n.text_layout) else { return Vec::new() };
+        let (Some(spec), Some(layout)) = (&n.text, n.text_layout.as_ref().and_then(TextLayout::single)) else { return Vec::new() };
         if spec.cold.highlights.is_empty() { return Vec::new(); }
         let s = self.env.scale;
         let [ox, oy] = origin(n, spec, layout, rect, s, z);

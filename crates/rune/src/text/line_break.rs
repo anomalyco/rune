@@ -2,6 +2,17 @@
 
 use super::*;
 
+/// Breaks a shaped `layout` at `max_width` again and aligns its lines, as
+/// [`TextSystem::layout_keyed`] breaks the layouts it shapes.
+pub(super) fn rebreak(layout: &mut Layout<Ink>, blocks: &[crate::edit::Block], font_size: f32, scale: f32, max_width: Option<f32>, align: Alignment) {
+    if blocks.iter().any(|&b| b != crate::edit::Block::Paragraph) || layout.inline_boxes().next().is_some() {
+        break_lines_with_blocks(layout, blocks, font_size, scale, max_width);
+    } else {
+        layout.break_all_lines(max_width);
+    }
+    layout.align(align, parley::AlignmentOptions::default());
+}
+
 /// Breaks `layout` into lines, each paragraph indented by its block. A pill's chip that would
 /// end a line apart from its label, or run past the line's end, moves to the next line.
 pub(super) fn break_lines_with_blocks(

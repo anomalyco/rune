@@ -151,9 +151,9 @@ pub(super) fn push_selection(out: &mut Vec<Instance>, layout: &Layout<Ink>, a: u
 
 /// A text field's selection: one layout, so no runs to join, and a field's own fill behind it
 /// is the field, not a chip the highlight should stretch to.
-pub(super) fn push_field_selection(out: &mut Vec<Instance>, layout: &Layout<Ink>, a: usize, b: usize, origin: [f32; 2], k: f32,
+pub(super) fn push_field_selection(out: &mut Vec<Instance>, layout: TextFlow<'_>, a: usize, b: usize, origin: [f32; 2], k: f32,
     fill: [f32; 4], s: f32, clip: [f32; 4], fade: [f32; 4]) {
-    for (bb, _) in crate::text::range_boxes(layout, a, b, true) {
+    for (bb, _) in layout.range_boxes(a, b, true) {
         let rect = [origin[0] + bb.x0 as f32 * k, origin[1] + bb.y0 as f32 * k, (bb.x1 - bb.x0) as f32 * k, (bb.y1 - bb.y0) as f32 * k];
         out.push(rect_inst(rect, fill, 2.0 * s * k, clip, fade));
     }
@@ -554,7 +554,7 @@ impl<S: 'static> Runtime<S> {
     /// Byte offset of node `i`'s text under window point (x, y), where it was drawn this frame.
     fn text_index_at(&self, i: usize, x: f32, y: f32) -> Option<usize> {
         let n = &self.nodes[i];
-        let (spec, layout) = (n.text.as_ref()?, n.text_layout.as_ref()?);
+        let (spec, layout) = (n.text.as_ref()?, n.text_layout.as_ref()?.single()?);
         let s = self.env.scale;
         let z = self.drawn_scale.get(i).copied().unwrap_or(1.0).max(1e-4);
         let (rect, x, y) = self.unturned_box_and_point(i, x, y);

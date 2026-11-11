@@ -87,7 +87,7 @@ impl<S: 'static> Runtime<S> {
                 if let Some(text) = live.read(seen) && spec.source_text() != &*text {
                     spec.replace_content(text.to_string());
                     spec.apply_case();
-                    node.text_layout = Some(self.text.layout_live(&spec.content, spec.style, self.env.scale));
+                    node.text_layout = Some(TextLayout::Single(self.text.layout_live(&spec.content, spec.style, self.env.scale)));
                 }
             }
             let Some(cold) = node.cold.get_mut_if_some() else { continue };

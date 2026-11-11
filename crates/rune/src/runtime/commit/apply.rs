@@ -218,7 +218,7 @@ impl<S: 'static> Runtime<S> {
                     let mut end = j + 1;
                     while end < nodes.len() && nodes[end].parent.is_some_and(|p| p >= j) { end += 1; }
                     if let Some(n) = nodes[j..end].iter().rev().find(|n| n.text.as_ref().is_some_and(|t| t.wrap && t.reveal >= 0.0))
-                        && let Some(l) = &n.text_layout
+                        && let Some(l) = n.text_layout.as_ref().and_then(TextLayout::single)
                     {
                         let width = (n.target[2] - n.target[0] - n.inset[0] - n.inset[2]) * scale;
                         h = (h - crate::text::stream_height_lag(l, width, scale)).max(0.0);
@@ -781,7 +781,7 @@ impl<S: 'static> Runtime<S> {
                         let scale = self.env.scale;
                         let w = (old.local.w - old.inset[0] - old.inset[2]).max(0.0);
                         let wrap = spec.wrap.then_some(w * scale);
-                        old.text_layout = Some(self.text.layout_for_spec(spec, scale, wrap, line_alignment(spec)));
+                        old.text_layout = Some(TextLayout::Single(self.text.layout_for_spec(spec, scale, wrap, line_alignment(spec))));
                         old.elided = None;
                     }
                 } else if let Some(spec) = &mut old.text
@@ -798,7 +798,7 @@ impl<S: 'static> Runtime<S> {
                         let (cut, e) = truncated(&mut self.text, spec, scale, w * scale);
                         (layout, elided) = (cut, Some(e));
                     }
-                    old.text_layout = Some(layout);
+                    old.text_layout = Some(TextLayout::Single(layout));
                     old.elided = elided;
                 }
                 // A resize that laid the tree out again took the text layouts before the view ran.

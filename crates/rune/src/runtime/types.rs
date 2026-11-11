@@ -94,7 +94,7 @@ pub(crate) struct Node {
     pub parent: Option<usize>,
     pub(super) taffy: SlotId,
     pub text: Option<crate::cold::SharedBox<TextSpec>>,
-    pub text_layout: Option<Rc<Layout<Ink>>>,
+    pub text_layout: Option<crate::text::TextLayout>,
     /// Where `text_layout` cut the text for `El::truncate` and its kin.
     pub(crate) elided: Option<Elision>,
     pub(super) input: Option<Box<InputSpec>>,

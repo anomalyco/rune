@@ -476,7 +476,7 @@ impl<S: 'static> Measurement<'_, S> {
             self.memo.path_scratch = path_buf;
             (pending, reused, taken_paths, root_id)
         };
-        if self.committing { release_kept_layouts(self.nodes, &nodes, &taffy, self.text, &reused); }
+        if self.committing { release_kept_layouts(self.nodes, &mut nodes, &taffy, self.text, &reused); }
         taffy.finish_flatten();
         let (taffy, nodes) = self.solve(taffy, root_id, nodes);
         (taffy, nodes, pending, reused, taken_paths)

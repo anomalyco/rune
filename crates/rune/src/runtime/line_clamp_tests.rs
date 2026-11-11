@@ -38,7 +38,7 @@ fn drawn(rt: &Runtime<S>) -> (String, Option<Elision>, usize, f32) {
         Some(e) => [&content[..e.head], "…", &content[e.tail..]].concat(),
         None => content.clone(),
     };
-    (shown, n.elided, n.text_layout.as_ref().unwrap().len(), n.target[3] - n.target[1])
+    (shown, n.elided, n.text_layout.as_ref().and_then(crate::text::TextLayout::single).unwrap().len(), n.target[3] - n.target[1])
 }
 
 #[test]
@@ -139,7 +139,7 @@ const TOKEN: &str = "line_clamp_measures_the_whole_identifier_before_it_decides_
 /// The drawn last line's width and the element's, in points.
 fn widths(rt: &Runtime<S>) -> (f32, f32) {
     let n = node(rt);
-    (last_line_width(n.text_layout.as_ref().unwrap(), n.text.as_ref().unwrap().max_lines.max(1)) / 2.0, n.target[2] - n.target[0])
+    (last_line_width(n.text_layout.as_ref().and_then(crate::text::TextLayout::single).unwrap(), n.text.as_ref().unwrap().max_lines.max(1)) / 2.0, n.target[2] - n.target[0])
 }
 
 #[test]
@@ -177,7 +177,7 @@ fn a_wrapped_word_fills_the_last_line() {
     rt.frame(0.0);
     let n = rt.nodes.iter().find(|n| n.key.as_deref() == Some("t")).unwrap();
     let e = n.elided.expect("the token wraps past two lines at 200 pt");
-    let l = n.text_layout.as_ref().unwrap();
+    let l = n.text_layout.as_ref().and_then(crate::text::TextLayout::single).unwrap();
     assert_eq!(l.len(), 2, "wraps onto two lines before cutting");
     assert!(e.head > 40 && l.full_width() <= 400.5, "both lines fill the 200 pt box: head={}, width={}", e.head, l.full_width());
 }

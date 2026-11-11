@@ -3,6 +3,9 @@
 use objc2_app_kit::NSSpellChecker;
 use objc2_foundation::{NSRange, NSString};
 
+/// AppKit's checker runs in this process: lines are checked where they're asked for.
+pub(super) const OFF_THREAD: bool = false;
+
 /// `NSNotFound`, the location of a range that found nothing.
 const NOT_FOUND: usize = isize::MAX as usize;
 

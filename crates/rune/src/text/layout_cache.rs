@@ -9,6 +9,19 @@ use super::{Ink, Layout, TextStyle, TextSystem, shape_key};
 /// Shaped text by hash.
 pub(super) type Cache<T> = HashMap<u64, Entry<T>>;
 
+/// Where a layout [`TextSystem::layout_keyed`] makes is kept.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Keep {
+    /// In the shared cache, by its text's key, for every text that shows it.
+    Cached,
+    /// Only by the caller: a by-paragraph field's paragraph, which its
+    /// [`ParagraphLayout`](super::ParagraphLayout) keeps across edits.
+    Owned,
+    /// Only by the caller, shaped in a context of its own that keeps none of its characters:
+    /// secure text.
+    Secret,
+}
+
 #[derive(Clone)]
 pub(crate) struct CachedElision {
     pub(crate) layout: Rc<Layout<Ink>>,
@@ -87,9 +100,12 @@ impl TextSystem {
             let gone = &self.superseded;
             self.layouts.retain(|_, e| e.used == g || !gone.contains(&e.shape));
             self.elisions.retain(|_, e| e.used == g || !gone.contains(&e.shape));
+            self.paragraphs.retain(|_, e| e.used == g || !gone.contains(&e.shape));
             self.superseded.clear();
         }
         evict(&mut self.layouts, g);
+        evict(&mut self.paragraphs, g);
+        self.last_paragraphs = None;
         let layouts = &self.layouts;
         self.shapes.retain(|_, key| layouts.contains_key(key));
         evict(&mut self.elisions, g);
