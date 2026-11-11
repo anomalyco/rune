@@ -155,6 +155,32 @@ pub(super) fn margins(b: &Block, s: &MarkdownStyle) -> (f32, f32) {
     }
 }
 
+/// Block `b`'s (margin-top, margin-bottom) as CSS collapses them, `i` its place among its
+/// siblings and `in_item` whether they're a list item's: a list item's first paragraph has
+/// none, a later one 8 above and 12 below, a nested list 4 each way. A quote or a list has no
+/// vertical padding or border, so its first child's top margin and its last child's bottom
+/// margin pass through it, and a list item's 8 through the list: a quote that ends a list item
+/// spaces the list 16 from what follows, as it would standing alone.
+pub(super) fn collapsed(b: &Block, s: &MarkdownStyle, i: usize, in_item: bool) -> (f32, f32) {
+    let (mt, mb) = match b {
+        Block::Para(_) if in_item => (if i == 0 { 0.0 } else { 8.0 }, if i == 0 { 0.0 } else { 12.0 }),
+        Block::List { .. } if in_item => (4.0, 4.0),
+        _ => margins(b, s),
+    };
+    let (first, last) = match b {
+        Block::Quote(inner) => (
+            inner.first().map(|f| collapsed(f, s, 0, false).0),
+            inner.last().map(|l| collapsed(l, s, inner.len() - 1, false).1),
+        ),
+        Block::List { items, .. } => (
+            items.first().and_then(|item| item.first()).map(|f| collapsed(f, s, 0, true).0),
+            items.last().map(|item| item.last().map_or(0.0, |l| collapsed(l, s, item.len() - 1, true).1).max(s.list_gap)),
+        ),
+        _ => (None, None),
+    };
+    (first.map_or(mt, |f| f.max(mt)), last.map_or(mb, |l| l.max(mb)))
+}
+
 thread_local! {
     static PAD_SIZES: RefCell<std::collections::HashMap<u64, f32>> = RefCell::new(std::collections::HashMap::new());
 }
@@ -365,11 +391,7 @@ impl Renderer {
                     continue;
                 }
             }
-            let (mt, mb) = match b {
-                Block::Para(_) if in_item => (if i == 0 { 0.0 } else { 8.0 }, if i == 0 { 0.0 } else { 12.0 }),
-                Block::List { .. } if in_item => (4.0, 4.0),
-                _ => margins(b, &self.s),
-            };
+            let (mt, mb) = collapsed(b, &self.s, i, in_item);
             let top = match b {
                 _ if i == 0 => 0.0,
                 // An image keeps its own 24 under a heading: the page zeroes the top margin of
@@ -594,8 +616,16 @@ impl Renderer {
                 };
                 // Outside markers end a space's width before the text, as a browser sets "1. ".
                 let space = if s.list_outside { rune::text::measure("x x", &[], s.body, None).0 - rune::text::measure("xx", &[], s.body, None).0 } else { 0.0 };
-                let mut c = col().role("list").w_full().gap(s.list_gap);
+                let mut c = col().role("list").w_full();
                 let n = items.len();
+                // Between items, their 8 collapsed with the margins passing out of the blocks
+                // either side (`collapsed`): an item ending in a quote keeps its 16 below.
+                let edge = |item: &[Block], last: bool| match (last, item) {
+                    (true, [.., l]) => collapsed(l, s, item.len() - 1, true).1,
+                    (false, [f, ..]) => collapsed(f, s, 0, true).0,
+                    _ => 0.0,
+                };
+                let gap = |k: usize| if k == 0 { 0.0 } else { s.list_gap.max(edge(&items[k - 1], true)).max(edge(&items[k], false)) };
                 for (k, item) in items.iter().enumerate() {
                     let imap = item_maps.get(k).map_or(&[][..], Vec::as_slice);
                     let task_idx = self.next_task.get();
@@ -608,7 +638,7 @@ impl Renderer {
                     };
                     self.flow.set(Flow { lists: flow.lists + 1, inset: flow.inset + indent, cols: flow.cols + lead.width(), lead: Some((flow.cols, lead, if k == 0 && flow.lists == 0 { 2 } else { 1 })), ..flow });
                     if let Some((checked, marker_offset)) = task {
-                        c = c.child(self.task_item((k, n), indent, item, imap, marker_offset, checked));
+                        c = c.child(self.task_item((k, n), indent, item, imap, marker_offset, checked).mt(gap(k)));
                         continue;
                     }
                     let marker = match start {
@@ -624,6 +654,7 @@ impl Renderer {
                             .role("listitem")
                             .position_in_set(k + 1, n)
                             .w_full()
+                            .mt(gap(k))
                             .child(self.with_reveal(marker).a11y_hidden())
                             .child(self.blocks_in(item, imap, &[], false, true).grow(1.0).shrink()),
                     );
