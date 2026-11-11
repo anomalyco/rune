@@ -1,5 +1,5 @@
-//! Poster answers that arrive too late to count: after the clip failed, or after a native player
-//! took over from the request. Each runs the real [`step`] and turn on the scripted player.
+//! Poster answers that arrive too late to count: after the clip failed, or after a newer request
+//! or a native player took over from the request. Each runs the real [`step`] and turn on the scripted player.
 
 use super::*;
 
@@ -19,11 +19,14 @@ fn posters_shown(new: &New) -> usize {
 fn a_poster_after_a_failed_one_leaves_the_placeholder() {
     let mut new = clip(false, &[Pull(Script::LOADING), Seek(0.3), Pull(Script::LOADING), Land(Done::Err), Pull(Script::LOADING)]);
     assert_eq!(new.fake.log.iter().filter(|cmd| matches!(cmd, Cmd::Ask(_))).count(), 2, "two decodes queued");
+    assert!(!new.c.failed(), "the first decode was for a time the handle left");
+    new.run(Land(Done::Err));
+    new.run(Pull(Script::LOADING));
     assert_eq!(new.c.run, Run::Failed { error: "load failed".into(), drawn: true });
     assert!(new.fake.log.contains(&Cmd::Placeholder));
     let frame_id = new.c.frame_id;
 
-    new.run(Land(Done::Frame));
+    new.fake.done = Some((new.fake.asked, Done::Frame));
     new.run(Pull(Script::LOADING));
 
     assert_eq!(posters_shown(&new), 0, "nothing would redraw the placeholder it covered");
@@ -59,6 +62,26 @@ fn a_request_from_before_a_player_does_not_answer_the_one_after_it() {
     assert!(new.c.meta.is_some(), "its facts still count");
 
     new.fake.done = Some((current, Done::Frame));
+    new.run(Pull(Script::LOADING));
+    assert_eq!(posters_shown(&new), 1);
+}
+
+#[test]
+fn a_poster_for_an_older_paused_seek_neither_shows_nor_fails() {
+    let mut new = clip(false, &[Pull(Script::LOADING), Seek(0.3), Pull(Script::LOADING)]);
+    assert_eq!(new.fake.log.iter().filter(|cmd| matches!(cmd, Cmd::Ask(_))).count(), 2, "a decode at 0, then at 0.3");
+    let (older, newer) = (new.fake.pending[0], new.fake.asked);
+    assert_ne!(older, newer);
+
+    new.fake.done = Some((older, Done::Frame));
+    new.run(Pull(Script::LOADING));
+    assert_eq!(posters_shown(&new), 0, "frame 0 isn't the picture at 0.3");
+    assert!(new.c.meta.is_some(), "its facts still count");
+    new.fake.done = Some((older, Done::Err));
+    new.run(Pull(Script::LOADING));
+    assert!(!new.c.failed(), "0.3 may still decode");
+
+    new.fake.done = Some((newer, Done::Frame));
     new.run(Pull(Script::LOADING));
     assert_eq!(posters_shown(&new), 1);
 }
@@ -105,15 +128,27 @@ fn an_audio_load_failure_fails_the_clip() {
 }
 
 #[test]
-fn an_audio_load_failure_counts_even_after_a_player_is_made() {
+fn an_audio_load_error_after_another_open_changes_nothing() {
     let mut new = clip(true, &[LoadAudio, Open, Play, Pull(Script::READY)]);
-    assert!(new.c.stage.has_player());
+    assert!(new.c.stage.ready());
+    let generation = new.c.generation;
 
     new.run(Land(Done::Err));
     new.run(Pull(Script::READY));
 
+    assert_eq!(new.c.state(), PlayerState::Playing);
+    assert!(!new.fake.log.contains(&Cmd::Drop));
+    assert_eq!(new.c.generation, generation);
+}
+
+#[test]
+fn an_audio_load_error_before_another_open_fails_the_clip() {
+    let mut new = clip(true, &[LoadAudio, Play, Land(Done::Err), Pull(Script::READY)]);
     assert_eq!(new.c.state(), PlayerState::Failed("load failed".into()));
-    assert!(new.fake.log.contains(&Cmd::Drop));
+    new.run(Open);
+    new.run(Pull(Script::READY));
+    assert_eq!(new.c.state(), PlayerState::Failed("load failed".into()));
+    assert!(!new.fake.log.contains(&Cmd::Make));
 }
 
 /// A request before a player and one after it, both owed: each answer carries its own request.
@@ -122,6 +157,16 @@ fn overlapping_requests_either_side_of_a_player_answer_for_themselves() {
     walk(
         &[Preload, Play, Pull(Script::LOADING), Pause, Park, Pull(Script::LOADING)],
         &[Play, Pause, Seek(0.3), Land(Done::Err), Land(Done::Frame), Land(Done::Facts), Park, Pull(Script::LOADING), Pull(Script::FRAME)],
+        6,
+    );
+}
+
+/// Two paused seeks' requests, both owed, and what lands for each in any order.
+#[test]
+fn paused_seeks_answer_for_their_own_requests() {
+    walk(
+        &[Pull(Script::LOADING), Seek(0.3), Pull(Script::LOADING)],
+        &[Seek(0.6), Land(Done::Err), Land(Done::Frame), Land(Done::FrameFails), Open, Play, Pull(Script::LOADING), Pull(Script::FRAME)],
         6,
     );
 }

@@ -827,13 +827,26 @@ fn park(shared: &Arc<Shared>) {
 /// Parks `shared` and returns the clips to release: the oldest past `PARKED_PLAYERS`. A clip
 /// that plays again (before its next pull unparks it) leaves the list and is never released.
 pub(super) fn parked_with(shared: &Arc<Shared>) -> Vec<Arc<Shared>> {
-    // A clip being edited on another thread right now counts as playing.
-    let playing = |clip: &Shared| clip.ctl.try_lock().map_or(true, |c| c.playing());
+    // None while the clip is being edited on another thread: it stays parked, but only a later
+    // park that can see it's paused releases it.
+    let playing = |clip: &Shared| clip.ctl.try_lock().ok().map(|c| c.playing());
     let mut parked = PARKED.lock().unwrap();
-    parked.retain(|w| w.upgrade().is_some_and(|clip| Arc::ptr_eq(&clip, shared) || !playing(&clip)));
+    parked.retain(|w| w.upgrade().is_some_and(|clip| Arc::ptr_eq(&clip, shared) || playing(&clip) != Some(true)));
     if !parked.iter().any(|w| std::ptr::eq(w.as_ptr(), Arc::as_ptr(shared))) {
         parked.push(Arc::downgrade(shared));
     }
-    let excess = parked.len().saturating_sub(PARKED_PLAYERS);
-    parked.drain(..excess).filter_map(|w| w.upgrade()).collect()
+    let mut excess = parked.len().saturating_sub(PARKED_PLAYERS);
+    let mut released = Vec::new();
+    let mut i = 0;
+    while excess > 0 && i < parked.len() {
+        let clip = parked[i].upgrade();
+        if clip.as_ref().is_none_or(|clip| Arc::ptr_eq(clip, shared) || playing(clip) == Some(false)) {
+            parked.remove(i);
+            released.extend(clip);
+            excess -= 1;
+        } else {
+            i += 1;
+        }
+    }
+    released
 }

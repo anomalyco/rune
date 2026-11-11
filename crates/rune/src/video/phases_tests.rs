@@ -100,13 +100,13 @@ struct Old {
     anchor: Option<(f64, f64)>,
     player: Option<OldPlayer>,
     poster: OldPoster,
-    // differs from dev: a finished poster answers the request that asked for it.
+    // A finished poster answers the request that asked for it.
     done: Option<(u32, Done)>,
-    // differs from dev: each video player fences the poster requests made before it.
+    // Each video player fences the poster requests made before it.
     fence: u32,
-    // differs from dev: the fence the newest request was made under.
+    // The fence the newest request was made under.
     asked: u32,
-    // differs from dev: the requests the worker still owes, oldest (in flight) first.
+    // The requests the worker still owes, oldest (in flight) first.
     pending: Vec<u32>,
     now: Instant,
     log: Vec<Cmd>,
@@ -265,22 +265,27 @@ impl Old {
     }
     fn request_poster(&mut self, at: f64) {
         self.poster = if !self.audio { OldPoster::Due } else { OldPoster::Withheld };
-        // differs from dev: the request remembers the fence it was made under.
+        // differs from dev: a video request fences the ones before it.
+        if !self.audio {
+            self.fence += 1;
+        }
+        // The request remembers the fence it was made under.
         self.asked = self.fence;
         queue(&mut self.pending, self.fence);
         self.log.push(Cmd::Ask(at));
     }
     fn take_poster(&mut self, surface: bool) {
         let Some((asked, done)) = self.done.take() else { return };
-        // differs from dev: a failed clip ignores the answer.
+        // A failed clip ignores the answer.
         if self.failed.is_some() {
             return;
         }
-        // differs from dev: a request a player fenced brings facts, but no error or frame.
+        // A request a player fenced brings facts, but no error or frame.
         let current = asked == self.fence;
         match done {
             Done::Err => {
-                if current {
+                // differs from dev: an audio load error after the clip opened is ignored.
+                if current && (!self.audio || !self.opened()) {
                     self.fail("load failed".into());
                 }
             }
@@ -346,7 +351,7 @@ impl Old {
             self.seek = Some(self.time);
         }
         self.player = Some(OldPlayer { rate: 0.0, muted: false, ready: false, created: now, settle: OldSettle::Still, shown: None });
-        // differs from dev: a video player fences the poster requests before it.
+        // A video player fences the poster requests before it.
         if !self.audio {
             self.fence += 1;
         }

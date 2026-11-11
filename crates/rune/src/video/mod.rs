@@ -571,6 +571,9 @@ impl Shared {
             }
             return Pulled { active: false, generation: self.ctl.lock().unwrap().generation, due: None };
         }
+        // Frames land with this clip's locks held: the surface's waker and the release of the
+        // frame each replaces wait until they're released.
+        let held = crate::native_surface::Held::new();
         let (active, due) = match clock {
             Clock::Virtual(now) => (self.pull_virtual(surface, now), None),
             Clock::Display(target) => (backend::pull(self, surface, target), backend::due(self)),
@@ -584,6 +587,7 @@ impl Shared {
             }
             Pulled { active: active && !c.failed(), generation: c.generation, due }
         };
+        drop(held);
         self.settle(false);
         pulled
     }
@@ -642,7 +646,7 @@ pub(crate) struct Control {
     pub meta: Option<Meta>,
     run: Run,
     stage: Stage,
-    /// Fences poster requests: a native player taking over moves it on.
+    /// Fences poster requests: a newer request or a native player taking over moves it on.
     posters: Seq,
     generation: u64,
     frame_id: u64,

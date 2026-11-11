@@ -157,8 +157,14 @@ fn main() {
             assert!(wakes.load(Ordering::Relaxed) >= 2, "the waker heard the load and the end");
             assert_eq!(clip.surface().counts(), draws, "audio drew nothing");
 
-            let ogg = Player::audio("https://example.com/clip.ogg");
-            assert!(matches!(ogg.state(), PlayerState::Failed(e) if e.contains(".ogg")), "{:?}", ogg.state());
+            // AVFoundation reads no Ogg video, whatever the features.
+            let ogv = Player::audio("https://example.com/clip.ogv");
+            assert!(matches!(ogv.state(), PlayerState::Failed(e) if e.contains(".ogv")), "{:?}", ogv.state());
+            #[cfg(feature = "ogg-audio")]
+            {
+                let ogg = Player::audio(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/sine-vorbis.ogg"));
+                wait_for("ogg audio opens", secs(5), || ogg.state() == PlayerState::Ready);
+            }
             println!("video_gui: audio played {duration:.2} s to the end, muted");
         });
         *out.lock().unwrap() = Some(run.is_ok());

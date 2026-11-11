@@ -5,6 +5,7 @@
 #[cfg(test)]
 #[path = "tests.rs"]
 mod gpu_tests;
+mod held;
 #[cfg(test)]
 mod place_tests;
 #[cfg(target_os = "macos")]
@@ -13,6 +14,7 @@ mod pipeline;
 pub(crate) mod place;
 #[cfg(target_os = "windows")]
 pub mod windows;
+pub(crate) use held::Held;
 pub use pipeline::SurfaceRenderer;
 use std::sync::{Arc, Mutex};
 use crate::time::Instant;
@@ -304,6 +306,8 @@ impl NativeSurface {
             let mut s = self.0.lock().unwrap();
             (s.latest.replace(Arc::new(frame)), s.waker.clone())
         };
+        // A player pushing with its locks held releases the old frame and wakes after them.
+        let Some((old, wake)) = held::defer(old, wake) else { return };
         drop(old); // CoreVideo release never runs under the mailbox lock.
         if let Some(wake) = wake {
             wake();

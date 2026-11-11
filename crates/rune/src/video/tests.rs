@@ -66,9 +66,24 @@ fn webm_video_fails_at_once() {
     assert!(!a.is_playing(), "a failed clip doesn't play");
 }
 
+/// An audio clip no backend has seen, so nothing has changed before the test starts.
+fn quiet_audio() -> Player {
+    let shared = Arc::new(Shared {
+        source: MediaSource::from("missing.m4a"),
+        headers: Vec::new(),
+        kind: Kind::Audio,
+        ctl: Mutex::new(Control { muted: false, kind: Kind::Audio, ..Control::default() }),
+        wakes: Mutex::new(Vec::new()),
+        waker: WakerSlot::default(),
+        notified: AtomicU64::new(0),
+        native: Mutex::new(backend::Native::default()),
+    });
+    Player { surface: NativeSurface::with_video(shared.clone()), shared }
+}
+
 #[test]
 fn the_waker_hears_each_state_change_once() {
-    let a = Player::audio("missing.m4a");
+    let a = quiet_audio();
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let seen = calls.clone();
     a.set_waker(Arc::new(move || {
@@ -102,6 +117,45 @@ fn a_waker_set_after_a_failure_hears_it_once() {
     assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1);
 }
 
+/// A surface's waker runs app code that may read the player, so it never runs while a pull
+/// holds the player's locks, nor does the frame a push replaces drop there.
+#[test]
+fn a_surface_waker_runs_after_the_pull_releases_the_player() {
+    let v = Video::file("/nonexistent/clip.mp4");
+    let clip = Arc::downgrade(&v.shared);
+    let wakes = Arc::new(Mutex::new(Vec::new()));
+    let heard = wakes.clone();
+    v.surface().set_waker(Arc::new(move || {
+        // try_lock, so a wake under the locks fails the test rather than hanging it.
+        let clip = clip.upgrade().unwrap();
+        let free = clip.ctl.try_lock().is_ok() && clip.native.try_lock().is_ok();
+        heard.lock().unwrap().push(free);
+    }));
+    let mut rt = crate::Runtime::new(v.clone(), view, (32.0, 18.0), crate::Env::new(true, 2.0));
+    rt.frame(0.0);
+    assert!(matches!(v.state(), PlayerState::Failed(_)));
+    assert!(v.surface().latest().is_some(), "placeholder drawn");
+    #[cfg(target_os = "macos")]
+    {
+        let ok = Video::file(fixture());
+        let clip = Arc::downgrade(&ok.shared);
+        let heard = wakes.clone();
+        ok.surface().set_waker(Arc::new(move || {
+            let clip = clip.upgrade().unwrap();
+            let free = clip.ctl.try_lock().is_ok() && clip.native.try_lock().is_ok();
+            heard.lock().unwrap().push(free);
+        }));
+        let mut rt = crate::Runtime::new(ok.clone(), view, (32.0, 18.0), crate::Env::new(true, 2.0));
+        rt.frame(0.0);
+        ok.seek(0.3);
+        rt.frame(0.0);
+        assert!(wakes.lock().unwrap().len() >= 3, "the placeholder and two decoded frames");
+    }
+    let wakes = wakes.lock().unwrap();
+    assert!(!wakes.is_empty());
+    assert!(wakes.iter().all(|free| *free), "{wakes:?}");
+}
+
 #[test]
 fn a_seek_before_the_clip_opens_is_clamped_when_it_does() {
     let v = Video::file("missing.mp4");
@@ -114,9 +168,14 @@ fn a_seek_before_the_clip_opens_is_clamped_when_it_does() {
 
 /// `play()` on a parked clip only unparks it on its next pull or edit on the main thread;
 /// until then, parking others must not release it.
+/// Parking tests share the process's one list of parked clips.
+#[cfg(target_os = "macos")]
+static PARKING: Mutex<()> = Mutex::new(());
+
 #[cfg(target_os = "macos")]
 #[test]
 fn parking_never_releases_a_playing_clip() {
+    let _parking = PARKING.lock().unwrap_or_else(|e| e.into_inner());
     let clips: Vec<Video> = (0..6).map(|_| Video::file(fixture())).collect();
     let mut released = Vec::new();
     released.extend(backend::parked_with(&clips[0].shared));
@@ -127,6 +186,38 @@ fn parking_never_releases_a_playing_clip() {
     assert!(!released.iter().any(|r| Arc::ptr_eq(r, &clips[0].shared)), "the playing clip stays");
     assert_eq!(released.len(), 1, "four of the five paused clips stay parked");
     assert!(Arc::ptr_eq(&released[0], &clips[1].shared), "the oldest paused clip goes");
+}
+
+/// A clip whose control is busy on another thread when another parks can't be checked: it stays
+/// parked, and a later park releases it once it can see the clip is paused.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_busy_paused_clip_stays_parked_until_it_can_be_released() {
+    let _parking = PARKING.lock().unwrap_or_else(|e| e.into_inner());
+    let clips: Vec<Video> = (0..5).map(|_| Video::file(fixture())).collect();
+    let mut released = Vec::new();
+    released.extend(backend::parked_with(&clips[0].shared));
+    {
+        let reading = clips[0].shared.ctl.lock().unwrap();
+        std::thread::scope(|s| s.spawn(|| released.extend(backend::parked_with(&clips[1].shared))).join().unwrap());
+        drop(reading);
+    }
+    for clip in &clips[2..] {
+        released.extend(backend::parked_with(&clip.shared));
+    }
+    assert_eq!(released.len(), 1, "five paused clips, four kept");
+    assert!(Arc::ptr_eq(&released[0], &clips[0].shared), "the oldest, once it can be checked");
+}
+
+/// Only formats that no build reads fail at once; with `ogg-audio`, Ogg audio opens later.
+#[cfg(target_os = "macos")]
+#[test]
+fn only_formats_no_build_reads_fail_at_once() {
+    let ogv = Player::audio("https://example.com/clip.ogv");
+    assert!(matches!(ogv.shared.snapshot().state, PlayerState::Failed(e) if e.contains(".ogv")));
+    let ogg = Player::audio("https://example.com/clip.ogg");
+    let failed = matches!(ogg.shared.snapshot().state, PlayerState::Failed(_));
+    assert_eq!(failed, !cfg!(feature = "ogg-audio"), "{:?}", ogg.shared.snapshot().state);
 }
 
 #[test]

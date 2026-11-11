@@ -253,8 +253,9 @@ pub(super) fn step(c: &mut Control, event: Event) -> Effects<Effect> {
             if c.failed() {
                 return Effects::none();
             }
-            // A request a player took over from still brings the clip's facts (its true frame
-            // timing), but its frame and its errors are for a surface the player now owns.
+            // A request a player or a newer request took over from still brings the clip's facts
+            // (its true frame timing), but its frame and its errors are for a time or a surface
+            // that has moved on.
             let current = attempt == c.posters.current();
             match result {
                 Ok(meta) => {
@@ -266,7 +267,8 @@ pub(super) fn step(c: &mut Control, event: Event) -> Effects<Effect> {
                         return Effects::one(Effect::ShowPoster);
                     }
                 }
-                Err(error) if current => failed(c, error),
+                // Audio's load only opens it: once another open did, its error is old news.
+                Err(error) if current && (c.kind == Kind::Video || !c.opened()) => failed(c, error),
                 Err(_) => {}
             }
         }
@@ -358,8 +360,12 @@ fn advance(c: &mut Control, now: f64) {
     }
 }
 
-/// Audio has no poster, so its worker only opens it. Called only while no player runs.
+/// Audio has no poster, so its worker only opens it. Called only while no player runs. A video's
+/// request supersedes the ones before it, which may still be decoding an older time.
 fn ask_poster(c: &mut Control, at: f64) -> Effects<Effect> {
+    if c.kind == Kind::Video {
+        c.posters.next();
+    }
     c.stage = if c.kind == Kind::Video { Stage::Poster } else { Stage::Bare };
     Effects::one(Effect::AskPoster(at, c.posters.current()))
 }
