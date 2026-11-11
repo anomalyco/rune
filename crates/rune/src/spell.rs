@@ -46,7 +46,13 @@ static GENERATION: AtomicU64 = AtomicU64::new(0);
 thread_local! {
     /// Each checked text's misspelled words, by the text's hash, for one generation.
     static CHECKED: RefCell<(u64, HashMap<u64, Ranges>)> = RefCell::new((0, HashMap::new()));
+    /// Each checked word's misspelled parts, as byte ranges in the word, for one generation: a
+    /// key typed into a long draft checks the one word it changed, not the draft.
+    static WORDS: RefCell<(u64, HashMap<Box<str>, Box<[(u32, u32)]>>)> = RefCell::new((0, HashMap::new()));
 }
+
+/// The most words [`WORDS`] keeps before it starts over.
+const MAX_WORDS: usize = 8192;
 
 /// The dictionaries a field's Spellcheck Languages menu offers, as language tags (`en-US`).
 /// Empty where the platform finds each text's language itself (macOS) or has no checker.
@@ -172,9 +178,39 @@ pub(crate) fn misspelled(text: &str) -> Ranges {
         if checked.len() > 256 {
             checked.clear();
         }
-        let found = Rc::new(platform::misspelled(text));
+        // macOS finds each text's language from the text, so it checks the whole of it.
+        let found = Rc::new(if cfg!(target_os = "windows") { by_words(text) } else { platform::misspelled(text) });
         checked.insert(key, found.clone());
         found
+    })
+}
+
+/// `text`'s misspelled words, from each word's cached answer; the words not yet checked go to the
+/// platform together, one per line. Words are what whitespace separates: the checker marks
+/// nothing across it, and repeated words, its only check that reads neighbours, go unmarked.
+fn by_words(text: &str) -> Vec<(usize, usize)> {
+    let words: Vec<(usize, &str)> = text.split_whitespace().map(|w| (w.as_ptr() as usize - text.as_ptr() as usize, w)).collect();
+    WORDS.with_borrow_mut(|(generation, known)| {
+        if *generation != self::generation() {
+            *generation = self::generation();
+            known.clear();
+        }
+        let mut fresh: Vec<&str> = words.iter().map(|(_, w)| *w).filter(|w| !known.contains_key(*w)).collect();
+        fresh.sort_unstable();
+        fresh.dedup();
+        if !fresh.is_empty() {
+            if known.len() + fresh.len() > MAX_WORDS { known.clear(); }
+            let batch = fresh.join("\n");
+            let found = platform::misspelled(&batch);
+            let mut start = 0;
+            for word in fresh {
+                let end = start + word.len();
+                let parts: Box<[(u32, u32)]> = found.iter().filter(|&&(a, b)| a >= start && b <= end).map(|&(a, b)| ((a - start) as u32, (b - start) as u32)).collect();
+                known.insert(word.into(), parts);
+                start = end + 1;
+            }
+        }
+        words.iter().flat_map(|(at, w)| known.get(*w).into_iter().flatten().map(move |&(a, b)| (at + a as usize, at + b as usize))).collect()
     })
 }
 
@@ -195,4 +231,5 @@ pub(crate) fn suggest(word: &str) -> Vec<String> {
 pub(crate) fn learn(word: &str) {
     platform::learn(word);
     CHECKED.with_borrow_mut(|(_, checked)| checked.clear());
+    WORDS.with_borrow_mut(|(_, known)| known.clear());
 }
