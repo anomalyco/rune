@@ -1,0 +1,1 @@
+- `SecretCopy::clear_now` now clears a secret still on the clipboard after a later write of it failed. It used to report `Failed` and leave the secret there until its timeout.

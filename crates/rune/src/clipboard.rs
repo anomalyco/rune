@@ -370,7 +370,7 @@ impl Core {
             })
             .filter(|o| !o.pills.is_empty());
         if let (Some(delay), Some(slot)) = (copy.clear_after, slot) {
-            slot.set(SecretState::Holding);
+            slot.held();
             let due = steps.now().checked_add(delay);
             steps.hashing();
             let print = self.keys.hash_one(copy.content.text());
@@ -387,7 +387,7 @@ impl Core {
                     cb.clear();
                     self.own_pills = None;
                 }
-                HoldEffect::Report(slot, state) => slot.set(state),
+                HoldEffect::Release(slot, state) => slot.released(state),
                 HoldEffect::Notify(notify) => notify.send(),
                 HoldEffect::Arm(alarm) => self.alarm = alarm,
             }
