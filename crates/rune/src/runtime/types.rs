@@ -355,21 +355,6 @@ impl Default for Inh {
     }
 }
 
-/// What moves a scroll viewport's vertical offset: one mode at a time, so a viewport can't
-/// follow its bottom while it glides, or coast while a glide carries it.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub(super) enum ScrollMode {
-    /// At rest where a hand, an app or a glide left it.
-    #[default]
-    Rest,
-    /// A stick-to-bottom viewport following its content's end.
-    Pinned,
-    /// Coasting from a fling, keys or wheel momentum at `v` points a second, decaying.
-    Momentum { v: f32 },
-    /// Gliding on a spring (`ScrollState::glide_spring`) at `v` points a second.
-    Glide { v: f32, to: GlideTo },
-}
-
 /// Where a glide goes.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum GlideTo {
@@ -395,19 +380,9 @@ impl GlideTo {
 #[derive(Clone, Debug, Default)]
 pub(super) struct ScrollState {
     pub(super) offset: f64,
+    /// What moves it, with the hand's latches for this frame (`runtime/scroll/mode.rs`).
     pub(super) mode: ScrollMode,
     pub(super) max: f64,
-    /// A hand moved the offset since the last scroll step (an input latch the step clears).
-    pub(super) direct: bool,
-    /// A hand or its momentum moved it in the last scroll step (derived there).
-    pub(super) scrolling: bool,
-    /// A hand (the wheel, keys, a drag, their momentum) or an app's instant jump moved it since
-    /// `El::on_scroll_offset` was last told; not following its bottom, a glide or an anchor.
-    pub(super) by_hand: bool,
-    /// A hand scrolled while the growth stack moved: no shrink glide until it settles.
-    pub(super) shrink_cut: bool,
-    /// The growth stack's layout end while its rows still move (see `ease_to_shrunk_end`).
-    pub(super) laid: Option<f64>,
     /// At-bottom state last sent to `El::on_at_bottom`.
     pub(super) at_bottom: Option<bool>,
     /// State last sent to `El::on_far_from_bottom`.
@@ -422,12 +397,9 @@ pub(super) struct ScrollState {
     pub(super) slack: scroll_bottom::Slack,
     /// The horizontal axis of `El::scroll_x` and `El::scroll_xy`; all zero on a vertical one.
     pub(super) x: AxisScroll,
-    /// What `El::on_scroll_offset` was last told (`runtime/scroll/watch.rs`).
-    pub(super) told: Option<crate::ScrollPos>,
-    /// The `El::on_scroll_offset` handler that was told: a rebuilt view's new handler hears
-    /// where the viewport stands, though it didn't move. Held weakly, which keeps its
-    /// allocation, so a later handler can't be built at its address and pass for it.
-    pub(super) told_by: Option<std::rc::Weak<dyn Fn(crate::ScrollPos)>>,
+    /// What `El::on_scroll_offset` has been told, and which handler heard it
+    /// (`runtime/scroll/watch.rs`).
+    pub(super) watch: super::scroll_watch::Watch,
     /// The spring `Tx::scroll_to_with` gave the running glide, on both axes; `GLIDE` when none.
     pub(super) spring: Option<rune_motion::Spring>,
     /// An app's instant scroll (`Tx::scroll_to_instant` and the like) landed less than

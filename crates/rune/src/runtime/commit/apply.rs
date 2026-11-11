@@ -674,14 +674,14 @@ impl<S: 'static> Runtime<S> {
         // Scroll viewports: a new sticky viewport opens at the end.
         for (i, n) in nodes.iter().enumerate() {
             if let Some(sp) = n.cold.get().and_then(|c| c.scroll) {
-                let e = self.scrolls.entry(n.id).or_insert(ScrollState { mode: if sp.stick_bottom { ScrollMode::Pinned } else { ScrollMode::Rest }, ..ScrollState::default() });
+                let e = self.scrolls.entry(n.id).or_insert(ScrollState { mode: if sp.stick_bottom { ScrollMode::following() } else { ScrollMode::rest() }, ..ScrollState::default() });
                 e.x.flow = n.flow;
                 if concealed.get(i).copied().unwrap_or(false) {
                     e.offset = 0.0;
                     e.halt();
                     e.max = 0.0;
                     e.held = false;
-                    e.scrolling = false;
+                    e.still();
                     e.slack = scroll_bottom::Slack::landed(self.viewport);
                     e.x = AxisScroll::default();
                 }

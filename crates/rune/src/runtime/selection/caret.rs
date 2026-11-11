@@ -81,7 +81,7 @@ impl<S: 'static> Runtime<S> {
                 st.land(stick);
                 scrolled = true;
             }
-            st.direct = true;
+            st.moved();
         }
         if scrolled && self.virtual_window_changed() {
             self.commit(&Tx::default());

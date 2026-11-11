@@ -476,7 +476,7 @@ impl<S: 'static> Runtime<S> {
         if let Some(st) = self.scrolls.get_mut(&id) {
             let before = st.offset;
             st.offset = (st.offset - f64::from(dy)).clamp(0.0, st.max);
-            st.direct = true;
+            st.moved();
             st.land(stick);
             log_event!(self, "wheel {dy:.1}");
             if st.offset != before { self.scroll_cancels_press(id); }
@@ -491,7 +491,7 @@ impl<S: 'static> Runtime<S> {
         self.dismiss_help();
         let Some(id) = self.scroll_at(x, y) else { return };
         if let Some(st) = self.scrolls.get_mut(&id) {
-            st.mode = ScrollMode::Momentum { v: -velocity };
+            st.mode = st.mode.to_momentum(-velocity);
             log_event!(self, "fling {velocity:.0}");
             if velocity != 0.0 { self.scroll_cancels_press(id); }
         }

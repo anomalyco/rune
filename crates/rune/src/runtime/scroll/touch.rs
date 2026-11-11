@@ -3,6 +3,7 @@
 //! turns touches into presses, drags and these pans).
 use super::*;
 use crate::machine::Effects;
+use crate::runtime::scroll_mode::{self as mode, Event as ModeEvent};
 
 /// What a touch holds: the viewport its finger went down on, one it pans, or one it let go
 /// that is still settling.
@@ -220,7 +221,7 @@ impl<S: 'static> Runtime<S> {
                 TouchEffect::Fling { id, horizontal, velocity } => {
                     let Some(st) = self.scrolls.get_mut(&id) else { continue };
                     let v = f64::from(velocity.clamp(-8000.0, 8000.0));
-                    if horizontal { st.x.v = st.x.toward(v) as f32 } else { st.mode = ScrollMode::Momentum { v: -v as f32 } }
+                    if horizontal { st.x.v = st.x.toward(v) as f32 } else { st.mode = st.mode.to_momentum(-v as f32) }
                 }
                 TouchEffect::Pan { id, origin, horizontal, d } => {
                     let Some(st) = self.scrolls.get_mut(&id) else { continue };
@@ -230,15 +231,14 @@ impl<S: 'static> Runtime<S> {
                     let edge = to.clamp(0.0, max);
                     let over = to - edge;
                     *offset = edge + over * 0.55 / (1.0 + over.abs() * 0.55 / 300.0);
-                    if !horizontal { st.mode = ScrollMode::Rest; }
-                    st.direct = true;
+                    if !horizontal { st.mode = st.mode.to_rest(); }
+                    st.moved();
                     self.scroll_cancels_press(id);
                 }
                 TouchEffect::Hold { id, horizontal, overflow } => {
                     let Some(st) = self.scrolls.get_mut(&id) else { continue };
                     if horizontal { st.x.max = overflow.max(0.0); } else { st.max = overflow.max(0.0); }
-                    st.scrolling = true;
-                    st.by_hand = true;
+                    let _ = mode::step(&mut st.mode, ModeEvent::Hold);
                     active = Some(false);
                 }
                 TouchEffect::Coast { id, horizontal, overflow, dt } => {
@@ -246,9 +246,7 @@ impl<S: 'static> Runtime<S> {
                         let Some(st) = self.scrolls.get_mut(&id) else { continue };
                         if horizontal { st.x.max = overflow.max(0.0); } else { st.max = overflow.max(0.0); }
                         let mut v = if horizontal { st.x.v } else { st.coast() };
-                        st.scrolling = v.abs() > 1.0;
-                        st.by_hand |= st.scrolling;
-                        st.direct = false;
+                        let _ = mode::step(&mut st.mode, ModeEvent::Coast { moving: v.abs() > 1.0 });
                         let (offset, max) = st.axis(horizontal);
                         let edge = offset.clamp(0.0, max);
                         if *offset != edge {
@@ -260,7 +258,7 @@ impl<S: 'static> Runtime<S> {
                             v *= decay;
                         }
                         let moving = v.abs() > 1.0 || *offset < 0.0 || *offset > max;
-                        if horizontal { st.x.v = v; } else if v != 0.0 { st.mode = ScrollMode::Momentum { v }; } else { st.halt(); }
+                        if horizontal { st.x.v = v; } else if v != 0.0 { st.mode = st.mode.to_momentum(v); } else { st.halt(); }
                         moving
                     };
                     self.step_touch(TouchEvent::Settled { moving });

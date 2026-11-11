@@ -3,6 +3,8 @@
 //! the same frame. `El::on_drawn_layout` hears of a move a frame later, and not at all while a
 //! glide runs, which is too late for something that rides the scroll.
 use super::*;
+use crate::machine::Effects;
+use crate::runtime::scroll_mode::{self, Event as ModeEvent};
 
 thread_local! {
     static SCROLL_WATCH_STATE: std::cell::Cell<(bool, bool, f64)> = const { std::cell::Cell::new((false, false, 0.0)) };
@@ -25,7 +27,9 @@ impl<S: 'static> Runtime<S> {
         let now = self.t;
         let mut calls = Vec::new();
         for n in &self.nodes {
-            let Some(f) = n.handlers.get().and_then(|h| h.on_scroll_offset.as_ref()) else { continue };
+            let Some(h) = n.handlers.get() else { continue };
+            let Some(f) = h.on_scroll_offset.as_ref() else { continue };
+            let handler = Some(h.scroll_offset_attempt);
             let Some(st) = self.scrolls.get_mut(&n.id) else { continue };
             let viewport = [n.local.w, n.local.h];
             // The presented rect is snapped to the pixel grid; only a spring moves it further.
@@ -36,13 +40,9 @@ impl<S: 'static> Runtime<S> {
             let direction = match n.flow { crate::el::Flow::Ltr => crate::Direction::Ltr, crate::el::Flow::Rtl => crate::Direction::Rtl };
             let at = crate::ScrollPos { offset: [st.x.offset as f32, st.offset as f32 + st.slack.height()], max: [st.x.max as f32, st.max as f32],
                 viewport, drawn, direction };
-            let by_hand = std::mem::take(&mut st.by_hand);
-            let prev = st.told.replace(at);
-            let changed = prev != Some(at);
-            let new_handler = !st.told_by.as_ref().is_some_and(|by| std::ptr::addr_eq(by.as_ptr(), Rc::as_ptr(f)));
-            if new_handler { st.told_by = Some(Rc::downgrade(f)); }
-            if changed || new_handler {
-                let scrolled = by_hand && prev.is_some_and(|old| (old.offset[0] - at.offset[0]).abs() > 0.01 || (old.offset[1] - at.offset[1]).abs() > 0.01);
+            let by_hand = !scroll_mode::step(&mut st.mode, ModeEvent::Take).is_empty();
+            for effect in step(&mut st.watch, Event::Seen { at, handler, by_hand }) {
+                let Effect::Tell { at, scrolled } = effect;
                 calls.push((f.clone(), at, scrolled));
             }
         }
@@ -55,9 +55,52 @@ impl<S: 'static> Runtime<S> {
     }
 }
 
+/// What a viewport's `El::on_scroll_offset` has been told, and which of its handlers heard it:
+/// the handler's attempt tells a rebuilt view's new handler that it is new, so it hears where
+/// the viewport stands though nothing moved.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(super) struct Watch {
+    /// Where the viewport stood when the handler was last told.
+    told: Option<crate::ScrollPos>,
+    /// The handler last told (`El::on_scroll_offset`'s attempt).
+    handler: Option<crate::machine::Attempt>,
+}
+
+pub(super) enum Event {
+    /// The viewport stands at `at`, its handler is `handler` (None when it has none), and a
+    /// hand or an app's instant jump moved it since the last tell (`by_hand`).
+    Seen { at: crate::ScrollPos, handler: Option<crate::machine::Attempt>, by_hand: bool },
+}
+
+#[derive(Debug, PartialEq)]
+pub(super) enum Effect {
+    /// Call the handler with `at`; `scrolled` says a hand moved it since the last tell.
+    Tell { at: crate::ScrollPos, scrolled: bool },
+}
+
+/// Calls the handler when where the viewport stands changed, or when it is a new one that has
+/// not heard it: the effect says what to tell it.
+pub(super) fn step(watch: &mut Watch, event: Event) -> Effects<Effect> {
+    let Event::Seen { at, handler, by_hand } = event;
+    let Some(handler) = handler else { return Effects::none() };
+    let prev = watch.told.replace(at);
+    let changed = prev != Some(at);
+    let new_handler = watch.handler != Some(handler);
+    watch.handler = Some(handler);
+    if !changed && !new_handler {
+        return Effects::none();
+    }
+    let scrolled = by_hand && prev.is_some_and(|old| {
+        (old.offset[0] - at.offset[0]).abs() > 0.01 || (old.offset[1] - at.offset[1]).abs() > 0.01
+    });
+    Effects::one(Effect::Tell { at, scrolled })
+}
+
 #[cfg(test)]
 mod tests {
     use crate::*;
+    use crate::machine::Attempt;
+    use super::{step, Effect, Event, Watch};
 
     thread_local! { static TOLD: std::cell::Cell<ScrollPos> = std::cell::Cell::new(ScrollPos::default()); }
 
@@ -208,5 +251,86 @@ mod tests {
             if seen.last() != Some(&lead.scrolled[1]) { seen.push(lead.scrolled[1]); }
         }
         assert!(seen.len() > 5, "the end followed over several frames: {seen:?}");
+    }
+
+    /// origin/dev's watcher, transcribed from `runtime/scroll/watch.rs`: it kept where it last
+    /// told (`told`) and the handler that heard it (`told_by`), and called when where the
+    /// viewport stood changed, or the handler was new.
+    ///
+    /// differs from dev: the handler is known by the attempt `El::on_scroll_offset` set it
+    /// with, not a weak reference to its allocation. The rule is the same: a handler set again
+    /// is new, and one told before is not.
+    #[derive(Default)]
+    struct Dev {
+        told: Option<ScrollPos>,
+        told_by: Option<u32>,
+    }
+
+    impl Dev {
+        fn seen(&mut self, y: f32, handler: Option<u32>, by_hand: bool) -> Option<(ScrollPos, bool)> {
+            let handler = handler?;
+            let at = pos(y);
+            let prev = self.told.replace(at);
+            let changed = prev != Some(at);
+            let new_handler = self.told_by != Some(handler);
+            self.told_by = Some(handler);
+            if !changed && !new_handler {
+                return None;
+            }
+            let scrolled = by_hand && prev.is_some_and(|old| {
+                (old.offset[0] - at.offset[0]).abs() > 0.01 || (old.offset[1] - at.offset[1]).abs() > 0.01
+            });
+            Some((at, scrolled))
+        }
+    }
+
+    fn pos(y: f32) -> ScrollPos {
+        ScrollPos { offset: [0.0, y], max: [0.0, 800.0], viewport: [300.0, 200.0], drawn: [300.0, 200.0], direction: Direction::Ltr }
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    struct Act {
+        y: f32,
+        /// 0: the viewport has no handler.
+        handler: u32,
+        by_hand: bool,
+    }
+
+    /// Drives every sequence through the watcher and through dev's, one event at a time, and
+    /// compares what each does after every event.
+    fn walk(acts: &[Act]) {
+        let (mut watch, mut dev) = (Watch::default(), Dev::default());
+        for (i, act) in acts.iter().enumerate() {
+            let handler = (act.handler != 0).then_some(Attempt(act.handler));
+            let effects: Vec<Effect> = step(&mut watch, Event::Seen { at: pos(act.y), handler, by_hand: act.by_hand }).into_iter().collect();
+            let expected = dev.seen(act.y, handler.map(|a| a.0), act.by_hand);
+            match expected {
+                Some((at, scrolled)) => assert_eq!(effects, [Effect::Tell { at, scrolled }], "{acts:?}, event {i}"),
+                None => assert!(effects.is_empty(), "{acts:?}, event {i}: told though nothing changed"),
+            }
+            assert_eq!((watch.told, watch.handler), (dev.told, dev.told_by.map(Attempt)), "{acts:?}, event {i}");
+        }
+    }
+
+    #[test]
+    fn the_watcher_matches_devs_told_offset_and_handler_over_every_order() {
+        let acts: Vec<Act> = [0.0, 12.0].into_iter().flat_map(|y| [0, 1, 2].into_iter().flat_map(move |handler| {
+            [false, true].into_iter().map(move |by_hand| Act { y, handler, by_hand })
+        })).collect();
+        for len in 0..=5 {
+            for_each_walk(&acts, len, &mut Vec::new());
+        }
+    }
+
+    fn for_each_walk(acts: &[Act], len: usize, prefix: &mut Vec<Act>) {
+        if prefix.len() == len {
+            walk(prefix);
+            return;
+        }
+        for &act in acts {
+            prefix.push(act);
+            for_each_walk(acts, len, prefix);
+            prefix.pop();
+        }
     }
 }

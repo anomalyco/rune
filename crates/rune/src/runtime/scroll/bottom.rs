@@ -90,20 +90,20 @@ impl Slack {
 /// Steps a glide toward the current bottom, or the offset `Tx::scroll_to` asked for while the
 /// content reaches it. Returns whether it is still moving.
 pub(super) fn glide(st: &mut ScrollState, dt: f32) -> bool {
-    let ScrollMode::Glide { v, to: aim } = st.mode else { return false };
+    let ScrollMode::Glide { v, to: aim, .. } = st.mode else { return false };
     let to = aim.offset().map_or(st.max, |to| to.min(st.max));
     // Content shrinking past the glide's end lands it there, rather than its speed carrying
     // it past and springing back.
     if st.offset >= st.max && to >= st.max {
         st.offset = st.max;
-        st.mode = ScrollMode::Rest;
+        st.mode = st.mode.to_rest();
         return false;
     }
     let mut glide = Some(v);
     let moving = scroll_offset::glide_axis(st.glide_spring(), &mut st.offset, &mut glide, to, dt);
     st.mode = match glide {
-        Some(v) => ScrollMode::Glide { v, to: aim },
-        None => ScrollMode::Rest,
+        Some(v) => st.mode.to_glide(v, aim),
+        None => st.mode.to_rest(),
     };
     moving
 }
@@ -146,11 +146,11 @@ impl<S: 'static> Runtime<S> {
             // A settled frame (a window showing or uncovering) lands at the end.
             if animated && !self.reduced_motion && !self.settled && st.max - start > 0.5 {
                 st.offset = start.max(st.max - GLIDE_REACH * view_h);
-                st.mode = ScrollMode::Glide { v: glide.unwrap_or(0.0), to: GlideTo::Bottom };
+                st.mode = st.mode.to_glide(glide.unwrap_or(0.0), GlideTo::Bottom);
                 st.spring = None;
             } else {
                 st.offset = st.max;
-                if sticky { st.pin() } else { st.mode = ScrollMode::Rest }
+                if sticky { st.pin() } else { st.mode = st.mode.to_rest() }
             }
         }
         if self.virtual_window_changed() {
@@ -198,7 +198,7 @@ impl<S: 'static> Runtime<S> {
             .reduce(f32::max)?;
         let short = f64::from(n.target[3] - content_bottom);
         // Stuck on a shrinking stack's end: the rows' last fraction collapses under it (see `step_scroll`).
-        let end = st.laid.filter(|&end| st.offset <= end + 1e-6).unwrap_or(f64::INFINITY);
+        let end = st.laid().filter(|&end| st.offset <= end + 1e-6).unwrap_or(f64::INFINITY);
         if st.held && (short <= 0.5 || lag - short >= -0.5) {
             Some(self.scroll_overflow(i).min(end) + lag)
         } else if st.max > 0.0 {
@@ -317,7 +317,7 @@ impl<S: 'static> Runtime<S> {
                         .max_by_key(|m| m.path.len()).map(|m| m.local.h)
                 }).unwrap_or(n.local.h);
                 // Rows collapsing measure from the end they head for, glide or not.
-                let end = st.laid.map_or(st.max, |end| end.min(st.max));
+                let end = st.laid().map_or(st.max, |end| end.min(st.max));
                 let far = end - st.offset > f64::from(min.max(tall));
                 if st.far_from_bottom != Some(far) {
                     st.far_from_bottom = Some(far);

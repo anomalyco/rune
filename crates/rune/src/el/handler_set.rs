@@ -45,6 +45,9 @@ pub(crate) struct Handlers {
     /// `El::drawn_rect_into`: where each frame draws the element.
     pub drawn_rect: Option<crate::Live<[f32; 4]>>,
     pub on_scroll_offset: Option<ScrollOffsetFn>,
+    /// The attempt `on_scroll_offset` was set with: the viewport's watcher knows a rebuilt
+    /// handler by it, so the new one hears where the viewport stands though nothing moved.
+    pub scroll_offset_attempt: crate::machine::Attempt,
     pub selection_copy: Option<SelectionCopy>,
     pub on_selection_change: Option<SelectionChangeFn>,
     pub cursor: Option<Cursor>,
@@ -125,6 +128,7 @@ impl Empty for Handlers {
         on_visible: None,
         drawn_rect: None,
         on_scroll_offset: None,
+        scroll_offset_attempt: crate::machine::Attempt(0),
         selection_copy: None,
         on_selection_change: None,
         cursor: None,

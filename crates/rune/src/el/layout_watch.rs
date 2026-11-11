@@ -147,6 +147,7 @@ impl El {
     /// ```
     pub fn on_scroll_offset(mut self, f: impl Fn(ScrollPos) + 'static) -> Self {
         self.handlers.on_scroll_offset = Some(Rc::new(f));
+        self.handlers.scroll_offset_attempt = scroll_offset_attempt();
         self
     }
 
@@ -159,6 +160,16 @@ impl El {
             }),
             None => Rc::new(f),
         });
+        self.handlers.scroll_offset_attempt = scroll_offset_attempt();
         self
     }
+}
+
+/// The attempt a handler set just now is: one a viewport's watcher has never told, so a rebuilt
+/// view's handler hears where the viewport stands though it didn't move. Unique for the
+/// process, so an earlier handler's attempt can't pass for a later one's.
+fn scroll_offset_attempt() -> crate::machine::Attempt {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static NEXT: AtomicU32 = AtomicU32::new(1);
+    crate::machine::Attempt(NEXT.fetch_add(1, Ordering::Relaxed))
 }

@@ -55,9 +55,9 @@ impl<S: 'static> Runtime<S> {
             let end = st.offset;
             let reach = scroll_bottom::GLIDE_REACH * viewport;
             st.offset = start.clamp(end - reach, end + reach);
-            st.mode = ScrollMode::Glide { v: scroll_offset::retarget_v(motion::GLIDE, st.offset, v.unwrap_or(0.0), end), to: GlideTo::Offset(end) };
+            st.mode = st.mode.to_glide(scroll_offset::retarget_v(motion::GLIDE, st.offset, v.unwrap_or(0.0), end), GlideTo::Offset(end));
             st.spring = None;
-            st.direct = true;
+            st.moved();
             if self.virtual_window_changed() {
                 self.commit(&Tx { instant: true, ..Tx::default() });
             }
@@ -151,11 +151,11 @@ impl<S: 'static> Runtime<S> {
         match effect {
             requests::Effect::Move(to) => {
                 scroll.offset = to;
-                scroll.mode = ScrollMode::Rest;
-                scroll.direct = true;
+                scroll.mode = scroll.mode.to_rest();
+                scroll.moved();
             }
             requests::Effect::Rest => {
-                scroll.mode = ScrollMode::Rest;
+                scroll.mode = scroll.mode.to_rest();
                 return (false, was);
             }
         }
@@ -168,7 +168,7 @@ impl<S: 'static> Runtime<S> {
                 let max = self.scroll_overflow(i).max(0.0);
                 if let Some(scroll) = self.scrolls.get_mut(&id) {
                     scroll.max = max;
-                    scroll.mode = ScrollMode::Rest;
+                    scroll.mode = scroll.mode.to_rest();
                 }
             }
         }

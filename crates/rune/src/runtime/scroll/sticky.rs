@@ -577,7 +577,7 @@ impl<S: 'static> Runtime<S> {
                 let stick = self.nodes[s].scroll.is_some_and(|sc| sc.stick_bottom);
                 let id = self.nodes[s].id;
                 let Some(st) = self.scrolls.get_mut(&id) else { continue };
-                st.direct = true;
+                st.moved();
                 let to = (laid - f64::from(k.was)).clamp(0.0, st.max);
                 if pass > 0 && (to - st.offset).abs() < 0.5 { continue; }
                 st.offset = to;
@@ -609,7 +609,7 @@ impl<S: 'static> Runtime<S> {
             if (to - st.offset).abs() < 1e-5 { continue; }
             st.offset = to;
             st.land(stick && delta >= 0.0);
-            st.direct = true;
+            st.moved();
             moved = true;
         }
         for r in self.requests.reveals() {
@@ -638,10 +638,10 @@ impl<S: 'static> Runtime<S> {
             let top = st.offset + rel_top;
             let to = reveal::place(r.center, st.offset, top, height, viewport, margin).clamp(0.0, st.max);
             // A `Tx::scroll_center` glide follows its target once the target moves.
-            if let ScrollMode::Glide { v, to: aim } = st.mode {
+            if let ScrollMode::Glide { v, to: aim, .. } = st.mode {
                 if aim.offset().is_none_or(|g| (to - g).abs() >= 1.0 / 64.0) {
                     let aim = if let GlideTo::ShrunkEnd(_) = aim { GlideTo::ShrunkEnd(to) } else { GlideTo::Offset(to) };
-                    st.mode = ScrollMode::Glide { v: scroll_offset::retarget_v(st.glide_spring(), st.offset, v, to), to: aim };
+                    st.mode = st.mode.to_glide(scroll_offset::retarget_v(st.glide_spring(), st.offset, v, to), aim);
                 }
                 continue;
             }
@@ -651,7 +651,7 @@ impl<S: 'static> Runtime<S> {
             }
             st.offset = to;
             st.land(stick && !growing);
-            st.direct = true;
+            st.moved();
             moved = true;
         }
         // Once the content end prevents holding the anchor, let stick-bottom own the
