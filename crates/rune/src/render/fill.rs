@@ -118,7 +118,7 @@ fn instance(q: &QueuedFill) -> Instance {
         radii: [x + f.pen[0], y + f.pen[1], f.scale, 1.0],
         fill: [1.0; 4],
         border: [f.record as f32, f.hint as f32, f.radius, f.coverage as f32],
-        // A negative exponent marks a fill: the shader rounds the coverage as fill_texel does.
+        // A negative exponent marks a fill: the shader rounds the coverage as fill_mask does.
         params: [0.0, KIND_GLYPH, 0.0, -1.0],
         uv: [0.0; 4],
         clip: NO_CLIP,
@@ -178,7 +178,7 @@ pub struct FillDrift {
 
 impl Renderer {
     /// Reads every atlas page back and compares each mask the GPU filled with what
-    /// `text::outline::fill_texel` gives for it, byte for byte. A diagnostic: it blocks on the GPU.
+    /// `text::outline::fill_mask` gives for it, byte for byte. A diagnostic: it blocks on the GPU.
     #[doc(hidden)]
     #[cfg(not(target_arch = "wasm32"))]
     pub fn fill_drift(&self, device: &wgpu::Device, queue: &wgpu::Queue, atlas: &crate::text::Atlas) -> FillDrift {
