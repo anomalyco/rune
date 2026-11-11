@@ -10,7 +10,8 @@
 //! - **Pieces:** each straight segment is its own piece, and a run of curves is one; where pieces
 //!   overlap (a corner) their coverage adds as two translucent strokes do, `a + b - ab`. A
 //!   closed run of curves (a circle) has no ends.
-//! - **Width:** a stroke under a pixel wide draws at its width's share of that coverage.
+//! - **Width:** a stroke under a pixel wide draws each piece at its width's share of that
+//!   coverage before the pieces combine, so a corner of a 0.8 px box is `1 - (1 - 0.8a)(1 - 0.8b)`.
 //!
 //! So a 1 pt diagonal at 1x is two pixels at 65% where its outline's area gives one at 70% and
 //! one at 5%, and an icon reads lighter, as Chromium's do.
@@ -35,13 +36,15 @@ pub(super) fn render(path: &[Command], ctm: Transform, width: f32, px: u32, out:
     let pieces = pieces(path, ctm);
     let n = px as usize;
     let mut acc = vec![0f32; n * n];
+    // Each piece draws at the width's share of its coverage, then over the others.
+    let w = width.clamp(0.0, 1.0);
     for piece in &pieces {
         let (lo, hi) = bounds(&piece.pts);
         let (x0, y0) = ((lo.x - 1.5).floor().max(0.0) as usize, (lo.y - 1.5).floor().max(0.0) as usize);
         let (x1, y1) = (((hi.x + 1.5).ceil().max(0.0) as usize).min(n), ((hi.y + 1.5).ceil().max(0.0) as usize).min(n));
         for y in y0..y1 {
             for x in x0..x1 {
-                let c = coverage(piece, Point::new(x as f32 + 0.5, y as f32 + 0.5));
+                let c = w * coverage(piece, Point::new(x as f32 + 0.5, y as f32 + 0.5));
                 if c > 0.0 {
                     let a = &mut acc[y * n + x];
                     *a = *a + c - *a * c;
@@ -49,10 +52,43 @@ pub(super) fn render(path: &[Command], ctm: Transform, width: f32, px: u32, out:
             }
         }
     }
-    let w = width.clamp(0.0, 1.0);
     for (o, a) in out.iter_mut().zip(acc) {
-        *o = (a * w * 255.0).round().clamp(0.0, 255.0) as u8;
+        *o = (a * 255.0).round().clamp(0.0, 255.0) as u8;
     }
+}
+
+/// Whether Chromium draws `path` under `ctm` as a rectangle rather than as a path: one closed
+/// subpath of three or four axis-aligned lines round a box, under a transform that keeps it
+/// axis-aligned (`SkPath::isRect`, which Skia's GPU device turns into `drawRect`). Stroked, a
+/// rectangle covers its stroke's exact area, mitred corners and all, however thin: Desktop's
+/// `outline-dots` (three 1 × 1 squares stroked 1 wide) are three solid 2 × 2 pixel dots at 1x,
+/// where a hairline leaves their corners at 75%.
+pub(super) fn draws_as_rect(path: &[Command], ctm: Transform) -> bool {
+    if ctm.xy != 0.0 || ctm.yx != 0.0 {
+        return false;
+    }
+    let [Command::MoveTo(start), lines @ .., Command::Close] = path else { return false };
+    let mut pts = vec![*start];
+    for cmd in lines {
+        let Command::LineTo(p) = cmd else { return false };
+        pts.push(*p);
+    }
+    if pts.len() == 5 && pts[4] == pts[0] {
+        pts.pop();
+    }
+    if pts.len() != 4 {
+        return false;
+    }
+    // Each side vertical (`Some(true)`) or horizontal, and the four alternating.
+    let axis: Vec<_> = (0..4)
+        .map(|i| (pts[i], pts[(i + 1) % 4]))
+        .map(|(a, b)| match (a.x == b.x, a.y == b.y) {
+            (true, false) => Some(true),
+            (false, true) => Some(false),
+            _ => None,
+        })
+        .collect();
+    axis.iter().all(Option::is_some) && (0..4).all(|i| axis[i] != axis[(i + 1) % 4])
 }
 
 fn bounds(pts: &[Point]) -> (Point, Point) {

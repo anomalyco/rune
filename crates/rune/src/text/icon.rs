@@ -279,9 +279,10 @@ pub fn icon_coverage_at(icon: &Icon, px: u32, size: f32) -> Vec<u8> {
                 Some("bevel") => Join::Bevel,
                 _ => Join::Miter,
             });
-            // No wider than a device pixel, Chromium (Skia) draws a stroke as a hairline.
+            // No wider than a device pixel, Chromium (Skia) draws a stroke as a hairline, unless
+            // the path is a rectangle, which it draws as one.
             let device = w * (ctm.xx * ctm.yy - ctm.xy * ctm.yx).abs().sqrt();
-            let hair = (device <= 1.0 + 1.0 / 256.0).then_some(device);
+            let hair = (device <= 1.0 + 1.0 / 256.0 && !super::hairline::draws_as_rect(d.as_slice(), ctm)).then_some(device);
             paint(st.into(), whole * opacity(get("stroke-opacity")), hair);
         }
     }
