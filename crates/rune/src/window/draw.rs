@@ -400,7 +400,7 @@ impl<S: 'static> Host<S> {
             // A frame the run alone asked for changes nothing unless it draws something new.
             let changed = !l.steady.held_frame() || (!composed(self.comp.as_deref()) && !l.presented.as_ref().is_some_and(|p| p.same(rt, &l.config)));
             #[cfg(feature = "frame-profile")]
-            { fp_steady = u16::from(l.steady.held_frame()) << 8 | u16::from(changed) << 9; }
+            { fp_steady |= u16::from(l.steady.held_frame()) << 8 | u16::from(changed) << 9; }
             let event = if hidden { SteadyEvent::Ends } else { SteadyEvent::Drew { changed, focused: rt.has_window_focus(), now } };
             l.steady = l.steady.step(event).0;
         }
@@ -425,7 +425,7 @@ impl<S: 'static> Host<S> {
             l.steady = steady;
             if again { l.request_redraw(); }
             #[cfg(feature = "frame-profile")]
-            if again { fp_steady = 1 << 10; }
+            if again { fp_steady |= 1 << 10; }
         }
         #[cfg(feature = "frame-profile")]
         if let Some(mut f) = fp_frame {

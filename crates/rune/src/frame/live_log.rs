@@ -113,7 +113,7 @@ pub(crate) fn frame(f: Frame) {
         "view": ns(p[0]), "commit": ns(p[1]), "layout": ns(p[2]), "text": ns(p[3]), "paint": ns(p[4]), "apply": ns(p[5]),
         "upload": d(f.built, f.uploaded), "encode": d(f.uploaded, f.encoded), "submit": d(f.encoded, f.submitted),
         "present": d(f.submitted, f.presented), "total": d(f.entry, f.presented),
-        "cpu": f.presented.cpu.saturating_sub(f.entry.cpu), "build_cpu": f.built.cpu.saturating_sub(f.acquired.cpu),
+        "cpu": f.presented.cpu.saturating_sub(f.entry.cpu), "build_cpu": f.built.cpu.saturating_sub(f.acquired.cpu), "acquire_cpu": f.acquired.cpu.saturating_sub(f.start.cpu), "encode_cpu": f.encoded.cpu.saturating_sub(f.uploaded.cpu), "submit_cpu": f.submitted.cpu.saturating_sub(f.encoded.cpu), "present_cpu": f.presented.cpu.saturating_sub(f.submitted.cpu),
         "nodes": f.nodes, "shaped": f.shaped, "instances": f.instances, "animating": f.animating,
         "why": crate::runtime::CommitWhy::names(f.why),
         "next": next, "poll_due": f.poll_due, "loop_due": f.loop_due, "loops": f.loops,

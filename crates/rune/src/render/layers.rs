@@ -8,6 +8,8 @@ use std::ops::Range;
 pub(super) const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 /// Default offscreen texture budget for [`El::cache`](crate::El::cache) subtrees (64 MiB).
 pub const DEFAULT_CACHE_BUDGET: u64 = 64 * 1024 * 1024;
+/// What spare layer targets may hold (Layers::spare): a full-window layer at 2880x1800 or two menus' worth.
+const SPARE_BYTES: u64 = 32 * 1024 * 1024;
 /// Maximum width or height of a cached subtree's offscreen texture in device pixels.
 const MAX_CACHE_DIM: u32 = 4096;
 
@@ -34,6 +36,9 @@ pub(super) struct Layers {
     plan: Vec<Layer>,
     pub targets: Vec<Option<Target>>,
     retained: Vec<Target>,
+    /// Targets no layer drew into this frame (a menu closed, a layer's place in the plan moved),
+    /// kept for the next layer of their size: opening a menu or a popover again makes no texture.
+    spare: Vec<Target>,
     stack: Vec<usize>,
     pipelines: Vec<(wgpu::TextureFormat, wgpu::RenderPipeline)>,
     pub additive: Option<(wgpu::RenderPipeline, wgpu::RenderPipeline)>,
@@ -57,9 +62,35 @@ impl Layers {
         }
     }
 
+    /// Keeps `t` for a later layer of its size, within `SPARE_BYTES`; the least recently used go.
+    fn park(&mut self, mut t: Target) {
+        t.cache = None;
+        self.spare.push(t);
+        let mut bytes: u64 = self.spare.iter().map(Renderer::target_bytes).sum();
+        while bytes > SPARE_BYTES {
+            let oldest = self.spare.iter().enumerate().min_by_key(|(_, t)| t.last_used).unwrap().0;
+            bytes -= Renderer::target_bytes(&self.spare.swap_remove(oldest));
+        }
+    }
+
+    /// Parks slot `index`'s target, if it has one.
+    fn release(&mut self, index: usize) {
+        if let Some(t) = self.targets[index].take() { self.park(t); }
+    }
+
+    /// A spare target that fits a `width` x `height` layer without wasting over half of itself.
+    fn take_spare(&mut self, width: u32, height: u32) -> Option<Target> {
+        let fits = |t: &Target| {
+            let size = (t.texture.width(), t.texture.height());
+            size.0 >= width && size.1 >= height && u64::from(size.0) * u64::from(size.1) <= 2 * u64::from(width.max(64)) * u64::from(height.max(64))
+        };
+        let at = self.spare.iter().position(fits)?;
+        Some(self.spare.swap_remove(at))
+    }
+
     /// Makes every blurred layer write its blur uniforms again on its next prepare.
     pub(super) fn forget_blur_uniforms(&mut self) {
-        let targets = self.targets.iter_mut().flatten().chain(&mut self.retained);
+        let targets = self.targets.iter_mut().flatten().chain(&mut self.retained).chain(&mut self.spare);
         for blur in targets.filter_map(|t| t.blur.as_mut()) { blur.forget_uniforms(); }
     }
 }
@@ -70,6 +101,7 @@ impl Default for Layers {
             plan: Vec::new(),
             targets: Vec::new(),
             retained: Vec::new(),
+            spare: Vec::new(),
             stack: Vec::new(),
             pipelines: Vec::new(),
             additive: None,
@@ -360,6 +392,9 @@ impl Renderer {
         }
         assert!(self.layers.stack.is_empty(), "unclosed layer scope");
         let isolate = self.check_layer_features(device);
+        while self.layers.targets.len() > self.layers.plan.len() {
+            if let Some(t) = self.layers.targets.pop().flatten() { self.layers.park(t); }
+        }
         self.layers.targets.resize_with(self.layers.plan.len(), || None);
         if !self.layers.plan.is_empty() || !self.layers.retained.is_empty() {
             self.layers.frame_stamp += 1;
@@ -418,13 +453,13 @@ impl Renderer {
             match self.layers.plan[index].show {
                 Show::Inline => {}
                 Show::Cached | Show::Render => continue,
-                Show::Hidden | Show::Covered => { self.layers.targets[index] = None; continue; }
+                Show::Hidden | Show::Covered => { self.layers.release(index); continue; }
             }
             let additive_parent = self.layers.plan[index].parent.is_some_and(|p| self.layers.plan[p].blend == Blend::PlusLighter);
             let l = &mut self.layers.plan[index];
             // Without isolation (`breaker`), every group draws straight into its parent.
             if !isolate {
-                self.layers.targets[index] = None;
+                self.layers.release(index);
                 continue;
             }
             let mut bounds = l.rect;
@@ -438,6 +473,7 @@ impl Renderer {
                     active_cache_bytes += needed_bytes;
                     cache_target = Some((node_id, sig));
                     if let Some(pos) = previous {
+                        self.layers.release(index);
                         self.layers.targets[index] = Some(self.layers.retained.swap_remove(pos));
                     } else {
                         self.layers.trim_retained(active_cache_bytes);
@@ -457,7 +493,7 @@ impl Renderer {
             let l = &self.layers.plan[index];
             if cache_target.is_none() && l.opacity == 1.0 && l.blend == Blend::SourceOver && !additive_parent
                 && l.blur == 0.0 && l.fade[3] == 0 && l.clip == NO_CLIP && l.turn.is_none() && l.hole[3] == 0.0 {
-                self.layers.targets[index] = None;
+                self.layers.release(index);
                 continue;
             }
             self.layers.plan[index].show = Show::Render;
@@ -467,7 +503,10 @@ impl Renderer {
                 // same bucket every frame when rounding alone exceeds the 2x area limit.
                 size.0 < width || size.1 < height || (size != bucket
                     && u64::from(size.0) * u64::from(size.1) > 2 * u64::from(width) * u64::from(height))
-            }) {
+            }) && let Some(spare) = { self.layers.release(index); self.layers.take_spare(width, height) } {
+                self.layers.targets[index] = Some(spare);
+            }
+            if self.layers.targets[index].is_none() {
                 let (width, height) = bucket;
                 let texture = device.create_texture(&wgpu::TextureDescriptor {
                     label: Some("isolated group"), size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
@@ -579,13 +618,14 @@ impl Renderer {
         if targets {
             self.layers.targets.clear();
             self.layers.retained.clear();
+            self.layers.spare.clear();
         }
     }
 
     /// Drops the layer blur's pipelines and every target's blur scratch (`breaker`).
     pub(super) fn drop_layer_blur(&mut self) {
         self.layers.blur = None;
-        for t in self.layers.targets.iter_mut().flatten().chain(&mut self.layers.retained) { t.blur = None; }
+        for t in self.layers.targets.iter_mut().flatten().chain(&mut self.layers.retained).chain(&mut self.layers.spare) { t.blur = None; }
     }
 
     pub(super) fn add_layer_format(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat) {
