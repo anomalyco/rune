@@ -102,12 +102,20 @@ impl TextSystem {
     /// `origin` (device px). Only that grapheme's glyphs are visited. `_scale` is unused (the
     /// run holds its scale); it stays for source compatibility.
     pub fn glyphs_in(&mut self, run: &RunLayout, at: usize, _scale: f32, origin: [f32; 2], out: &mut Vec<GlyphQuad>) {
+        self.glyphs_in_scaled(run, at, origin, 1.0, out);
+    }
+
+    /// [`Self::glyphs_in`] with the run magnified `k` times about `origin`: pen positions scale
+    /// and each glyph rasterizes at `k` times its size, as [`Self::glyphs_in_band`] does for a
+    /// paragraph, so a cell under a zoom draws as crisply as the words beside it.
+    pub(crate) fn glyphs_in_scaled(&mut self, run: &RunLayout, at: usize, origin: [f32; 2], k: f32, out: &mut Vec<GlyphQuad>) {
         let Some(i) = run.grapheme(at) else { return };
         let glyphs = run.graphemes[i].2 as usize..run.graphemes[i + 1].2 as usize;
         for g in &run.glyphs[glyphs] {
             let face = &run.faces[g.face as usize];
-            let baseline = (origin[1] + face.face.baseline).round();
-            self.push_glyph(&face.face, &face.coords, g.id, [origin[0] + g.x, baseline + g.y], 1.0, at as u32, out);
+            let baseline = (origin[1] + face.face.baseline * k).round();
+            let pen = if k == 1.0 { [origin[0] + g.x, baseline + g.y] } else { [origin[0] + g.x * k, baseline + g.y * k] };
+            self.push_glyph(&face.face, &face.coords, g.id, pen, k, at as u32, out);
         }
     }
 

@@ -506,6 +506,13 @@ impl TextSystem {
         self.begin_frame_pinned(0);
     }
 
+    /// Forgets every text's raster path and cached glyph runs, so the next paint places every
+    /// glyph as a text seen for the first time would (`RUNE_RASTER_CHECK`).
+    pub(crate) fn forget_raster_state(&mut self) {
+        self.paths = Default::default();
+        self.glyph_cache = Default::default();
+    }
+
     pub(crate) fn begin_frame_pinned(&mut self, pinned_mask: u32) {
         // A subpixel mode draws grayscale until the renderer can blend by channel, and after it
         // says it can't.

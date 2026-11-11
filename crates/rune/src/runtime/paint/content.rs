@@ -179,6 +179,11 @@ impl<S: 'static> Runtime<S> {
             // and the same outline on the frame it lands as the atlas mask it rests as.
             let place_masks = self.text.begin_text(node_id.0, cover.is_none() && scale_motion != ScaleMotion::Still)
                 .into_iter().any(|e| e == crate::text::outline::PathEffect::PlaceMasks);
+            // The frame it lands draws outlines while its masks are placed; one more frame draws
+            // the masks, so text never rests on its landing frame.
+            if place_masks {
+                self.static_scale_settling = true;
+            }
             let direct = self.text.emit() == crate::text::outline::Emit::Outline;
             let ins = n.inset.map(|v| v * zk * s);
             let (x0, x1) = (zr[0] + ins[0], zr[2] - ins[2]);
@@ -440,12 +445,21 @@ impl<S: 'static> Runtime<S> {
             self.text.set_glide(glide);
             let r_origin = if scale_motion == ScaleMotion::Still { origin } else { [0.0, 0.0] };
             let has_hl_fg = spec.cold.highlights.iter().any(|h| h.fg.is_some());
-            // A cell of a longer run draws its slice of the run's glyphs, shaped in context.
+            // A cell of a longer run draws its slice of the run's glyphs, shaped in context, at the
+            // same raster factor as a paragraph: under a zoom its masks are made at the zoomed size
+            // rather than magnified, and the frame it comes to rest places them.
             let zoom = if let (Some(r), Some((_, at))) = (&n.run_layout, &spec.cold.advance_in)
                 && let Some(x) = r.x(*at)
             {
-                self.text.glyphs_in(r, *at, s, [r_origin[0] - x, r_origin[1]], &mut self.glyph_scratch);
-                tk
+                let cell = [r_origin[0] - x * raster, r_origin[1]];
+                self.text.glyphs_in_scaled(r, *at, cell, raster, &mut self.glyph_scratch);
+                if place_masks {
+                    let mut masks = Vec::new();
+                    self.text.set_emit(crate::text::outline::Emit::Atlas);
+                    self.text.glyphs_in_scaled(r, *at, cell, raster, &mut masks);
+                    self.text.set_emit(crate::text::outline::Emit::Outline);
+                }
+                tk / raster
             } else {
                 // Only the lines the clip shows, with two ems either side for ink past
                 // the line box; the per-glyph test below still decides what draws.
