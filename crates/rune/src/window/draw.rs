@@ -153,7 +153,9 @@ impl<S: 'static> Host<S> {
         if self.frame_reports.wanted() { self.frame_reports.set_refresh(display_hz(l)); }
         // Only a timer woke the resting window: build the frame first, and take no drawable
         // when it draws what's on screen.
-        let quiet = l.timer_frame.take_quiet() && !hidden && !live_resize && l.presented.is_some() && self.comp.is_none()
+        #[cfg(feature = "frame-profile")]
+        let fp_entry = crate::frame::live_log::on().then(crate::frame::live_log::Stamp::now);
+        let quiet = l.timer_frame.take_quiet() && !hidden && !live_resize && l.presented.is_some() && !composed(self.comp.as_deref())
             && self.trace.is_none() && self.args.trace.is_none() && self.rt.live_visible()
             && self.rt.window_frame.is_none() && self.frame_move.is_none();
         #[cfg(target_os = "macos")]
@@ -335,7 +337,7 @@ impl<S: 'static> Host<S> {
         #[cfg(feature = "frame-profile")]
         let fp_frame = match (fp_start, fp_acquired, fp_built, fp_uploaded, fp_encoded, fp_submitted) {
             (Some(start), Some(acquired), Some(built), Some(uploaded), Some(encoded), Some(submitted)) => Some(crate::frame::live_log::Frame {
-                start, acquired, built, uploaded, encoded, submitted, presented: crate::frame::live_log::Stamp::now(),
+                entry: fp_entry.unwrap_or(start), start, acquired, built, uploaded, encoded, submitted, presented: crate::frame::live_log::Stamp::now(),
                 phases: crate::frame::profile::take(), nodes: rt.nodes.len(), shaped: rt.stats.shaped, instances: rt.instances.len(),
                 animating, why: std::mem::take(&mut rt.commit_why), next: 0, poll_due: None, loop_due: None, loops: Vec::new(),
             }),
@@ -396,13 +398,13 @@ impl<S: 'static> Host<S> {
         #[cfg(target_os = "windows")]
         {
             // A frame the run alone asked for changes nothing unless it draws something new.
-            let changed = !l.steady.held_frame() || (self.comp.is_none() && !l.presented.as_ref().is_some_and(|p| p.same(rt, &l.config)));
+            let changed = !l.steady.held_frame() || (!composed(self.comp.as_deref()) && !l.presented.as_ref().is_some_and(|p| p.same(rt, &l.config)));
             #[cfg(feature = "frame-profile")]
             { fp_steady = u16::from(l.steady.held_frame()) << 8 | u16::from(changed) << 9; }
             let event = if hidden { SteadyEvent::Ends } else { SteadyEvent::Drew { changed, focused: rt.has_window_focus(), now } };
             l.steady = l.steady.step(event).0;
         }
-        self.idle = Presented::settle(&mut l.presented, rt, &l.config, animating || self.frame_move.is_some(), next_tick, rests, self.comp.is_some());
+        self.idle = Presented::settle(&mut l.presented, rt, &l.config, animating || self.frame_move.is_some(), next_tick, rests, composed(self.comp.as_deref()));
         // Why the window draws again: each bit is one of `Presented::settle`'s reasons.
         #[cfg(feature = "frame-profile")]
         let fp_next = [animating, self.frame_move.is_some(), rt.needs_commit(), rt.stale() && !rt.needs_commit(), rt.has_pending_input(), rt.live_pending(),

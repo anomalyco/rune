@@ -47,7 +47,7 @@ use redraw::{Redraw, RedrawEffect, RedrawEvent};
 use redraw::{Steady, SteadyEvent};
 mod presented;
 pub(crate) use presented::Presented;
-use presented::composing;
+use presented::{composed, composing};
 mod platform_sync;
 use platform_sync::sync_platform;
 mod shell_requests;
