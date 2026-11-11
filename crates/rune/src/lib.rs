@@ -192,7 +192,7 @@ pub use latest::Latest;
 pub use live::Live;
 pub use live::LiveText;
 pub use live::Tween;
-pub use memo::{memo, region};
+pub use memo::{memo, region, region_with};
 pub use tracked::Tracked;
 pub use native_menu::MenuError;
 pub use native_menu::MenuItem;

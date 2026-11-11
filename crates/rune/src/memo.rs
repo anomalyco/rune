@@ -745,11 +745,19 @@ const REGION: u64 = 0x7265_6769_6f6e_0001;
 /// reused region again and print the first element that differs, naming the region.
 #[cfg_attr(debug_assertions, track_caller)]
 pub fn region(id: impl Into<String>, build: impl FnOnce() -> El) -> El {
+    region_with(id, (), build)
+}
+
+/// [`region`] that also rebuilds when `inputs` change: values the closure uses that aren't
+/// [`Tracked`](crate::Tracked) or read inside it, such as a palette or a size computed by the
+/// caller. Debug builds check its reuse as `region`'s.
+#[cfg_attr(debug_assertions, track_caller)]
+pub fn region_with(id: impl Into<String>, inputs: impl Hash, build: impl FnOnce() -> El) -> El {
     let key = id.into();
     #[cfg(debug_assertions)]
     let check = key.clone();
     let build = std::cell::Cell::new(Some(build));
-    let el = memo_with_hash(key, REGION, || build.take().expect("a region builds once")());
+    let el = memo_with_hash(key, hash_of(&(REGION, inputs)), || build.take().expect("a region builds once")());
     // Reused: debug builds build it again to show it was right to.
     #[cfg(debug_assertions)]
     if let Some(build) = build.take() {
