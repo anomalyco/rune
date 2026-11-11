@@ -264,9 +264,10 @@ impl TabDragState {
             self.hovered = None;
         }
     }
-    pub(super) fn leave(&mut self) {
+    /// The pointer left the strip: whether that let go of a width lock, which moves the tabs.
+    pub(super) fn leave(&mut self) -> bool {
         self.hovered = None;
-        self.width_lock = None;
+        self.width_lock.take().is_some()
     }
     pub(super) fn report_rect(&mut self, rect: [f32; 4]) {
         if let Gesture::Dragging { mode: TabDragMode::TearOut { .. }, lifted, .. } = &mut self.gesture { lifted.rect = Some(rect); }

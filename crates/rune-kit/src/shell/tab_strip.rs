@@ -459,7 +459,9 @@ impl<'a, S: 'static> TabStrip<'a, S> {
         self.handlers.double = Some(Rc::new(f));
         self
     }
-    /// The pointer entering (`true`) and leaving a tab.
+    /// The pointer entering (`true`) and leaving a tab. The strip draws its hover by hover
+    /// groups, so a handler that changes nothing the view draws says `tx.live_only()`, and the
+    /// hover runs no view; without a handler it never does.
     pub fn on_hover(mut self, f: impl Fn(&mut S, &str, bool, &mut Tx) + 'static) -> Self {
         self.handlers.hover = Some(Rc::new(f));
         self
@@ -544,9 +546,9 @@ impl<'a, S: 'static> TabStrip<'a, S> {
             drag,
         };
         let active = self.active;
-        let hovered = st.drag.hovered().map(str::to_owned);
         let ids: Vec<String> = self.items.iter().map(|t| t.id.clone().into_owned()).collect();
-        let quiet = |i: usize| active == Some(ids[i].as_str()) || hovered.as_deref() == Some(ids[i].as_str());
+        // A hover hides its tab's separators by hover groups (`tab::build`); the active tab has none.
+        let quiet = |i: usize| active == Some(ids[i].as_str());
         let tear = self.tear.filter(|t| count > 1 || t.lone);
         let mut tabs: Vec<El> = self
             .items
@@ -564,7 +566,7 @@ impl<'a, S: 'static> TabStrip<'a, S> {
                     active: active == Some(ids[i].as_str()),
                     separator: !vertical && i > 0 && !quiet(i) && !quiet(i - 1),
                 };
-                let (tab, ghost) = tab::build(item, at, &st, k);
+                let (tab, ghost) = tab::build(item, at, (i > 0).then(|| ids[i - 1].as_str()), &st, k);
                 if let (Some(layer), Some(ghost)) = (layer.as_deref_mut(), ghost) {
                     layer.push(ghost);
                 }
@@ -600,9 +602,10 @@ impl<'a, S: 'static> TabStrip<'a, S> {
             row().key(self.key).grow(1.0).shrink().min_w(0.0).gap(gap).center_y().child(scroll).children(self.trailing)
         };
         if let Some(access) = access {
-            root = root.on_hover_change(move |s: &mut S, inside, _: &mut Tx| {
-                if !inside {
-                    access(s).leave();
+            root = root.on_hover_change(move |s: &mut S, inside, tx: &mut Tx| {
+                // Only letting go of the width lock a close left changes what the strip draws.
+                if inside || !access(s).leave() {
+                    tx.live_only();
                 }
             });
         }
