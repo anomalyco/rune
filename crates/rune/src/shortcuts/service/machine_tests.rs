@@ -621,6 +621,8 @@ struct Stage<E> {
     inside: Option<Handle<E>>,
     /// A call parked on the engine's lock, holding the routing lock.
     waiting: Option<(Handle<E>, Waiter)>,
+    /// A host whose engine is in the slot but whose attach waits for that routing lock.
+    pending: Option<usize>,
     next: u32,
     latest: Option<u32>,
     broken: Vec<&'static str>,
@@ -628,7 +630,7 @@ struct Stage<E> {
 
 impl<E: OverlapEngine> Stage<E> {
     fn new() -> Self {
-        Self { attached: false, open: [false; 2], slot: None, handlers: BTreeSet::new(), in_wake: false, held: None, inside: None, waiting: None, next: OVERLAP_ID, latest: None, broken: vec![] }
+        Self { attached: false, open: [false; 2], slot: None, handlers: BTreeSet::new(), in_wake: false, held: None, inside: None, waiting: None, pending: None, next: OVERLAP_ID, latest: None, broken: vec![] }
     }
 
     fn slot_held(&self) -> Vec<u32> { self.slot.as_ref().map_or_else(Vec::new, |engine| engine.borrow().held()) }
@@ -686,11 +688,20 @@ impl<E: OverlapEngine> Stage<E> {
         self.call(Waiter::Unregister(id))
     }
 
+    /// The engine goes in the slot under the slot's own lock; the attach then waits for routing.
     fn attach(&mut self, host: usize) -> Seen {
-        self.open[host] = true;
         self.slot = Some(Rc::new(RefCell::new(E::fresh())));
-        self.attached = true;
+        if self.waiting.is_some() {
+            self.pending = Some(host);
+            return Seen::Parked;
+        }
+        self.finish_attach(host);
         Seen::Done
+    }
+
+    fn finish_attach(&mut self, host: usize) {
+        self.open[host] = true;
+        self.attached = true;
     }
 
     fn close(&mut self, host: usize) -> Seen {
@@ -701,12 +712,14 @@ impl<E: OverlapEngine> Stage<E> {
         Seen::Done
     }
 
+    /// The call inside leaves. A call parked behind it takes the engine and lets go of routing,
+    /// and only then can an attach waiting for routing finish.
     fn leave(&mut self) -> Seen {
         self.inside = None;
-        match self.waiting.take() {
-            Some((engine, waiter)) => self.finish(engine, waiter),
-            None => Seen::Done,
-        }
+        let Some((engine, waiter)) = self.waiting.take() else { return Seen::Done };
+        let seen = self.finish(engine, waiter);
+        if let Some(host) = self.pending.take() { self.finish_attach(host); }
+        seen
     }
 }
 
@@ -753,7 +766,7 @@ fn overlap_play(world: &mut impl Overlap, letter: usize) -> Seen {
     let stage = world.stage();
     let reachable = stage.attached && stage.slot.is_some();
     match letter {
-        0 | 1 if stage.open[letter] => Seen::Skipped,
+        0 | 1 if stage.open[letter] || stage.pending.is_some() => Seen::Skipped,
         0 | 1 => stage.attach(letter),
         2 | 3 if !stage.open[letter - 2] || stage.inside.is_some() || stage.waiting.is_some() => Seen::Skipped,
         2 | 3 => stage.close(letter - 2),
@@ -849,6 +862,26 @@ fn overlap_walk(sequence: &mut Vec<usize>, depth: usize, found: &mut BTreeSet<&'
         if overlap_replay(sequence, found, fired) && sequence.len() < depth { overlap_walk(sequence, depth, found, fired); }
         sequence.pop();
     }
+}
+
+#[test]
+fn an_attach_waits_for_a_call_parked_on_routing() {
+    let mut dev = Reference { stage: Stage::new(), departures: false };
+    let mut new = NewOverlap(Stage::new());
+    // Attach A, a call stops inside A's engine, a registration parks behind it, B attaches, the
+    // call inside leaves.
+    let script = [(0, Seen::Done), (8, Seen::Done), (4, Seen::Parked), (1, Seen::Parked), (9, Seen::Answer(Ok(())))];
+    for (n, (letter, expected)) in script.into_iter().enumerate() {
+        assert_eq!(overlap_play(&mut dev, letter), expected, "dev, event {n}");
+        assert_eq!(overlap_play(&mut new, letter), expected, "new, event {n}");
+        let hosts = (dev.stage.attached, dev.stage.open);
+        assert_eq!((new.0.attached, new.0.open), hosts, "event {n}");
+        if n == 3 { assert_eq!(hosts, (true, [true, false]), "B's attach can't finish while the parked call holds routing"); }
+    }
+    assert_eq!((dev.stage.attached, dev.stage.open), (true, [true, true]), "B attaches once the call lets go of routing");
+    drop(dev);
+    drop(new);
+    clear_notes();
 }
 
 #[test]
