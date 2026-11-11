@@ -2,7 +2,7 @@
 //! of its write: what it reports, and whether `clear_now` ran. A [`Hold`] is one clipboard's
 //! record of the secret it wrote last, so a clone written to two clipboards is cleaned up on each
 //! and neither's report can disarm the other.
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use crate::machine::{Attempt, Effects, Seq};
 use crate::time::Instant;
 use super::{Notify, Request, Route, lock};
@@ -195,7 +195,9 @@ pub(super) enum Hold {
     /// The clipboard may still hold this secret.
     Holding {
         attempt: Attempt,
-        slot: Arc<Slot>,
+        /// The slot owns the first clipboard's route. A hold must wipe even if nobody
+        /// is left to receive its report, but must not keep that clipboard alive.
+        slot: Weak<Slot>,
         notify: Option<Notify>,
         /// `None` only when the delay is too long for the clock to represent.
         due: Option<Instant>,
@@ -211,7 +213,7 @@ impl Hold {
     pub(super) fn answers(&self, which: Option<&Arc<Slot>>) -> bool {
         match self {
             Self::Free => false,
-            Self::Holding { slot, .. } => which.is_none_or(|w| Arc::ptr_eq(slot, w)),
+            Self::Holding { slot, .. } => which.is_none_or(|w| std::ptr::eq(slot.as_ptr(), Arc::as_ptr(w))),
         }
     }
     pub(super) fn armed(&self, alarm: Attempt) -> bool {
@@ -252,7 +254,7 @@ pub(super) fn step_hold(seq: &mut Seq, hold: &mut Hold, event: HoldEvent) -> Eff
         HoldEvent::Written { slot, notify, due, revision, print } => {
             let mut effects = release(hold, said(SecretState::Replaced));
             let attempt = seq.next();
-            *hold = Hold::Holding { attempt, slot, notify: notify.clone(), due, revision, print };
+            *hold = Hold::Holding { attempt, slot: Arc::downgrade(&slot), notify: notify.clone(), due, revision, print };
             effects.push(HoldEffect::Arm(due.map(|due| Alarm { attempt, due })));
             if let Some(notify) = notify { effects.push(HoldEffect::Notify(notify)); }
             effects
@@ -278,7 +280,8 @@ fn said(state: SecretState) -> Report { Report::Said(state) }
 
 fn release(hold: &mut Hold, report: Report) -> Effects<HoldEffect> {
     let Hold::Holding { slot, notify, .. } = std::mem::take(hold) else { return Effects::none() };
-    let mut effects = Effects::one(HoldEffect::Release(slot, report));
+    let mut effects = Effects::none();
+    if let Some(slot) = slot.upgrade() { effects.push(HoldEffect::Release(slot, report)); }
     if let Some(notify) = notify { effects.push(HoldEffect::Notify(notify)); }
     effects
 }

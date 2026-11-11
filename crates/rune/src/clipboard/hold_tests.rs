@@ -1,6 +1,36 @@
 //! Named sequences through the hold, each checked against the reference on the way.
 use super::*;
 
+fn write_memory(clipboard: &MemoryClipboard, delay: Duration) -> SecretCopy {
+    let (write, handle) = ClipboardWrite::secret(SECRET.into(), delay);
+    write.bind(Route::Memory(clipboard.clone()));
+    clipboard.handle(Request::Write(write, None));
+    handle
+}
+
+#[test]
+fn a_held_secret_does_not_leak_its_memory_clipboard() {
+    let clipboard = memory();
+    let weak = Arc::downgrade(&clipboard.0);
+    let handle = write_memory(&clipboard, LONG);
+    assert!(handle.holds());
+    drop(clipboard);
+    drop(handle);
+    assert!(weak.upgrade().is_none());
+}
+
+#[test]
+fn either_surviving_handle_still_drives_expiry() {
+    let clipboard = memory();
+    let handle = write_memory(&clipboard, Duration::ZERO);
+    drop(clipboard);
+    assert_eq!(handle.state(), SecretState::Cleared);
+
+    let clipboard = memory();
+    drop(write_memory(&clipboard, Duration::ZERO));
+    assert!(clipboard.text().is_none());
+}
+
 /// Runs `sequence` through the machines, checked against the reference, and hands back the rig
 /// to look at.
 fn run_on(counted: [bool; 2], sequence: &[Ev]) -> Rig<Core> {
