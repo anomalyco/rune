@@ -1,5 +1,5 @@
-//! How a layer draws (`Show`) when the frame finds out more about its parent than the planning
-//! walk knew at the layer's start.
+//! How a layer draws (`Disposition`) when the frame finds out more about its parent than the
+//! planning walk knew at the layer's start.
 use super::*;
 use super::tests::{near, pixels, rgba};
 
@@ -30,14 +30,15 @@ fn a_layer_inside_a_cache_that_misses_its_budget_still_draws() {
     let at = (8 * 32 + 16) * 4;
     renderer.prepare(&gpu.device, &gpu.queue, &mut atlas, &instances, (32, 16));
     near(&pixels(&gpu, &renderer, &target)[at..at + 4], rgba([0.5; 4]));
-    assert_eq!(renderer.layers.plan[1].show, Show::Render);
+    assert!(matches!(renderer.layers.dispositions[1], Disposition::Render { .. }));
 
     renderer.prepare(&gpu.device, &gpu.queue, &mut atlas, &instances, (32, 16));
-    assert_eq!((renderer.layers.plan[0].show, renderer.layers.plan[1].show), (Show::Cached, Show::Covered));
+    assert!(matches!(renderer.layers.dispositions[0], Disposition::Cached { .. }));
+    assert_eq!(renderer.layers.dispositions[1], Disposition::Skip);
 
     // The kept texture no longer fits, but stays in the pool for this frame's walk to find.
     renderer.layers.cache_budget = 1;
     renderer.prepare(&gpu.device, &gpu.queue, &mut atlas, &instances, (32, 16));
     near(&pixels(&gpu, &renderer, &target)[at..at + 4], rgba([0.5; 4]));
-    assert_eq!(renderer.layers.plan[1].show, Show::Render);
+    assert!(matches!(renderer.layers.dispositions[1], Disposition::Render { .. }));
 }
