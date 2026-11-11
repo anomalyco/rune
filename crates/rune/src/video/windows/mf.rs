@@ -167,6 +167,8 @@ pub(super) struct Opened {
     /// The audio stream's index; the stream is selected only while sound plays.
     pub audio: Option<u32>,
     pub sound: Option<Sound>,
+    /// The clip has an audio stream, decodable when it was set up (`audio`).
+    pub has_sound: bool,
     pub duration: f64,
 }
 
@@ -208,17 +210,21 @@ pub(super) fn open(lib: &Library, source: &IMFMediaSource, kind: Kind, decode: D
             None if kind == Kind::Video => return Err("no playable video track".into()),
             None => (None, None),
         };
+        let mut has_sound = audio_index.is_some();
         let (audio, sound) = match audio_index.filter(|_| audio || kind == Kind::Audio) {
             Some(index) => match sound(lib, &reader, index) {
                 Ok(sound) => (Some(index), Some(sound)),
                 Err(e) if kind == Kind::Audio => return Err(e),
-                Err(_) => (None, None),
+                Err(_) => {
+                    has_sound = false;
+                    (None, None)
+                }
             },
             None if kind == Kind::Audio => return Err("no playable audio track".into()),
             None => (None, None),
         };
         let duration = duration(&reader);
-        Ok(Opened { reader, video, picture, audio, sound, duration })
+        Ok(Opened { reader, video, picture, audio, sound, has_sound, duration })
     }
 }
 

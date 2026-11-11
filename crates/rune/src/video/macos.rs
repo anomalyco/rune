@@ -294,7 +294,7 @@ fn meta(asset: &AVURLAsset, kind: Kind) -> Result<Meta, String> {
         if unsafe { asset.tracksWithMediaType(audio) }.firstObject().is_none() {
             return Err("no playable audio track (unreachable, or a format AVFoundation can't read)".into());
         }
-        return Ok(Meta { duration: duration(), size: None, frame: 1.0 / 30.0 });
+        return Ok(Meta { duration: duration(), size: None, frame: 1.0 / 30.0, sound: true });
     }
     let video = unsafe { AVMediaTypeVideo }.ok_or("AVMediaTypeVideo unavailable")?;
     let tracks = unsafe { asset.tracksWithMediaType(video) };
@@ -311,7 +311,13 @@ fn meta(asset: &AVURLAsset, kind: Kind) -> Result<Meta, String> {
     if w < 1.0 || h < 1.0 {
         return Err("video track has no size".into());
     }
-    Ok(Meta { duration: duration(), size: Some((w as u32, h as u32)), frame })
+    Ok(Meta { duration: duration(), size: Some((w as u32, h as u32)), frame, sound: has_sound(asset) })
+}
+
+/// Whether the asset has a sound track. Blocks until its tracks load.
+#[allow(deprecated)] // As `meta`: the synchronous loader.
+fn has_sound(asset: &AVAsset) -> bool {
+    unsafe { AVMediaTypeAudio }.is_some_and(|audio| unsafe { asset.tracksWithMediaType(audio) }.firstObject().is_some())
 }
 
 /// How the first video track's buffers turn upright. Blocks until tracks load; free once an
@@ -647,7 +653,7 @@ impl Port for Av<'_> {
         let size = unsafe { item.presentationSize() };
         let duration = seconds(unsafe { item.duration() });
         let size = (size.width >= 1.0 && size.height >= 1.0).then(|| (size.width.round() as u32, size.height.round() as u32));
-        Meta { duration, size, frame: 1.0 / 30.0 }
+        Meta { duration, size, frame: 1.0 / 30.0, sound: has_sound(&*unsafe { item.asset() }) }
     }
 
     fn alive(&self) -> bool {
