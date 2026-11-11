@@ -1,7 +1,8 @@
 //! `RUNE_RASTER_CHECK=1` (debug builds): on every frame that comes to rest, checks that each
-//! glyph draws as a text painted for the first time would, and that none draws an atlas mask
-//! magnified. A mask made for another scale (a cell rasterized before a zoom, a run of text that
-//! never left its moving path) shows soft or blocky beside its neighbours; this names it on stderr.
+//! glyph and icon draws as one painted for the first time would, and that none draws its atlas
+//! mask magnified or shrunk. A mask made for another scale (a cell rasterized before a zoom, a run
+//! of text that never left its moving path, an icon rasterized at whole pixels and stretched to a
+//! zoom's fractional size) shows soft or blocky beside its neighbours; this names it on stderr.
 
 use super::*;
 
@@ -19,14 +20,14 @@ impl<S: 'static> Runtime<S> {
         let fresh = glyphs(&self.instances);
         let differ: Vec<_> = settled.iter().zip(&fresh).filter(|(a, b)| a != b).collect();
         if !differ.is_empty() || settled.len() != fresh.len() {
-            eprintln!("rune: raster check at {:.3} s: {} of {} resting glyphs draw unlike a fresh paint, first:", self.clock, differ.len(), settled.len());
+            eprintln!("rune: raster check at {:.3} s: {} of {} resting glyphs and icons draw unlike a fresh paint, first:", self.clock, differ.len(), settled.len());
             for (a, b) in differ.iter().take(3) {
                 eprintln!("  resting {a:?}\n  fresh   {b:?}");
             }
         }
         let magnified: Vec<_> = self.instances.iter().filter(|i| magnifies(i)).map(|i| (i.rect, i.uv)).collect();
         if !magnified.is_empty() {
-            eprintln!("rune: raster check at {:.3} s: {} resting glyphs draw a mask magnified, first {:?}", self.clock, magnified.len(), &magnified[..magnified.len().min(3)]);
+            eprintln!("rune: raster check at {:.3} s: {} resting glyphs or icons draw a mask stretched, first (rect, atlas uv) {:?}", self.clock, magnified.len(), &magnified[..magnified.len().min(3)]);
         }
     }
 }
@@ -38,9 +39,10 @@ fn glyphs(instances: &[Instance]) -> Vec<Glyph> {
     instances.iter().filter(|i| i.params[1] == KIND_GLYPH).map(|i| (i.rect, i.radii, i.border, i.params, [i.uv[2], i.uv[3]])).collect()
 }
 
-/// An unturned glyph drawn more than 3% larger or smaller than its mask. Icons, rasterized at
-/// whole pixels, differ by under that.
+/// An unturned glyph or icon drawn larger or smaller than its mask, by more than a 256th: at rest
+/// both draw their masks 1:1, so even the 1.5% an icon at whole pixels is stretched to at 110%
+/// zoom shows here.
 fn magnifies(i: &Instance) -> bool {
     let texels = if i.radii[0] > 0.5 { 3.0 } else { 1.0 };
-    i.params[1] == KIND_GLYPH && i.params[0] == 0.0 && i.uv[2] > 0.0 && (i.rect[2] * texels / i.uv[2] - 1.0).abs() > 0.03
+    i.params[1] == KIND_GLYPH && i.params[0] == 0.0 && i.uv[2] > 0.0 && (i.rect[2] * texels / i.uv[2] - 1.0).abs() > 1.0 / 256.0
 }

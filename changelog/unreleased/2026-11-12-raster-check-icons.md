@@ -1,0 +1,1 @@
+- **`RUNE_RASTER_CHECK=1` reports icons, and any stretch over a 256th.** At rest glyphs and icons draw their masks 1:1, so the check now names any that draws its mask more than 1/256 larger or smaller (it allowed 3%, which hid the 1.5% an icon rasterized at whole pixels was stretched to at 110% zoom), and its messages say glyphs and icons.
