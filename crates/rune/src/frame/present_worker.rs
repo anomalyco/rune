@@ -8,13 +8,56 @@
 use std::sync::mpsc;
 use std::thread::JoinHandle;
 
+use crate::machine::Effects;
+
 type Job = Box<dyn FnOnce() + Send>;
 
 pub(crate) struct PresentWorker {
-    jobs: Option<mpsc::Sender<Job>>,
+    state: State,
     done: mpsc::Receiver<std::thread::Result<()>>,
-    in_flight: bool,
     thread: Option<JoinHandle<()>>,
+}
+
+/// Where jobs run.
+enum State {
+    /// On the thread, which has finished the job before.
+    Idle(mpsc::Sender<Job>),
+    /// On the thread, which may still be running the last job sent.
+    Busy(mpsc::Sender<Job>),
+    /// On the owner's thread: a job panicked, or the worker is closing.
+    Inline,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Event {
+    /// The owner waits for the job in flight.
+    Wait,
+    /// The thread took a job.
+    Sent,
+    /// The job waited for panicked.
+    Panicked,
+    /// The worker drops.
+    Close,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Effect {
+    /// Block for the job in flight's result.
+    Recv,
+}
+
+fn step(state: &mut State, event: Event) -> Effects<Effect> {
+    let mut effects = Effects::none();
+    *state = match (std::mem::replace(state, State::Inline), event) {
+        (State::Busy(jobs), Event::Wait) => {
+            effects.push(Effect::Recv);
+            State::Idle(jobs)
+        }
+        (State::Idle(jobs), Event::Sent) => State::Busy(jobs),
+        (_, Event::Panicked | Event::Close) => State::Inline,
+        (state, _) => state,
+    };
+    effects
 }
 
 impl PresentWorker {
@@ -30,15 +73,15 @@ impl PresentWorker {
                 if finished.send(result).is_err() { break; }
             }
         }).ok()?;
-        Some(PresentWorker { jobs: Some(jobs), done, in_flight: false, thread: Some(thread) })
+        Some(PresentWorker { state: State::Idle(jobs), done, thread: Some(thread) })
     }
 
     /// Runs `job` on the thread once the job before it has finished.
     pub(crate) fn run(&mut self, job: impl FnOnce() + Send + 'static) {
         self.wait();
-        let Some(jobs) = &self.jobs else { return job() };
+        let State::Idle(jobs) = &self.state else { return job() };
         match jobs.send(Box::new(job)) {
-            Ok(()) => self.in_flight = true,
+            Ok(()) => { step(&mut self.state, Event::Sent); }
             Err(mpsc::SendError(job)) => job(),
         }
     }
@@ -46,18 +89,19 @@ impl PresentWorker {
     /// Blocks until the job in flight, if any, has finished. A job that panicked panics here,
     /// on the owner's thread, as it would have without the worker.
     pub(crate) fn wait(&mut self) {
-        if !std::mem::take(&mut self.in_flight) { return; }
-        if let Ok(Err(panic)) = self.done.recv() {
-            self.jobs = None;
-            std::panic::resume_unwind(panic);
+        for Effect::Recv in step(&mut self.state, Event::Wait) {
+            if let Ok(Err(panic)) = self.done.recv() {
+                step(&mut self.state, Event::Panicked);
+                std::panic::resume_unwind(panic);
+            }
         }
     }
 }
 
 impl Drop for PresentWorker {
     fn drop(&mut self) {
-        if self.in_flight && !std::thread::panicking() { self.wait(); }
-        self.jobs = None;
+        if matches!(self.state, State::Busy(_)) && !std::thread::panicking() { self.wait(); }
+        step(&mut self.state, Event::Close);
         if let Some(thread) = self.thread.take() { let _ = thread.join(); }
     }
 }

@@ -12,6 +12,7 @@ use std::collections::VecDeque;
 use std::fmt::Write as _;
 use std::sync::Arc;
 use std::time::Duration;
+use crate::machine::Effects;
 use crate::time::Instant;
 
 /// A drawable's sequence number and when it reached the screen, or `None` when the system
@@ -33,20 +34,92 @@ pub(crate) struct Presents {
     source: Arc<dyn Source>,
     start: Instant,
     pending: VecDeque<Pending>,
-    last_present: Option<f64>,
+    cadence: Cadence,
     scratch: Vec<Presented>,
 }
 
 struct Pending {
     /// The line without its closing brace.
     line: String,
-    seq: Option<u64>,
-    /// `Some(None)`: Metal skipped the drawable.
-    present: Option<Option<f64>>,
+    present: Present,
     /// The previous traced frame asked for this one right away, so the gap between their
     /// presents is cadence, not idle time.
     continuous: bool,
     age: u32,
+}
+
+/// Where a queued frame stands with its present time.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Present {
+    /// The frame presented no drawable the source tracks.
+    NoDrawable,
+    /// Drawable `seq` hasn't reported yet.
+    Waiting { seq: u64 },
+    /// Drawable `seq` reached the screen `at` ms after the trace's start.
+    Landed { seq: u64, at: f64 },
+    /// Metal skipped drawable `seq`.
+    Skipped { seq: u64 },
+}
+
+impl Present {
+    fn new(seq: Option<u64>) -> Present {
+        seq.map_or(Present::NoDrawable, |seq| Present::Waiting { seq })
+    }
+
+    fn seq(self) -> Option<u64> {
+        match self {
+            Present::NoDrawable => None,
+            Present::Waiting { seq } | Present::Landed { seq, .. } | Present::Skipped { seq } => Some(seq),
+        }
+    }
+}
+
+/// Whether the next written line's present starts an interval.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Cadence {
+    /// The last written frame didn't reach the screen, or none was written.
+    Broken,
+    /// The last written frame reached the screen `at` ms in.
+    After(f64),
+}
+
+/// A line leaves the queue: its frame's present, and whether it was drawn right after the frame
+/// before.
+#[derive(Clone, Copy, Debug)]
+struct Written {
+    present: Present,
+    continuous: bool,
+}
+
+/// What a written line carries.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Field {
+    /// `present_ms`, and `present_dt_ms` when the frame before was presented back to back.
+    At { at: f64, dt: Option<f64> },
+    /// `present_ms: null`: Metal skipped the drawable.
+    Null,
+}
+
+/// An interval spans only frames drawn back to back that both reached the screen.
+fn step(cadence: &mut Cadence, event: Written) -> Effects<Field> {
+    let last = match *cadence {
+        Cadence::After(last) if event.continuous => Some(last),
+        _ => None,
+    };
+    match event.present {
+        Present::Landed { at, .. } => {
+            *cadence = Cadence::After(at);
+            Effects::one(Field::At { at, dt: last.map(|last| r3(at - last)) })
+        }
+        Present::Skipped { .. } => {
+            *cadence = Cadence::Broken;
+            Effects::one(Field::Null)
+        }
+        Present::NoDrawable | Present::Waiting { .. } => {
+            *cadence = Cadence::Broken;
+            Effects::none()
+        }
+    }
 }
 
 /// Milliseconds from `start`, rounded like the trace's `t`, negative before it.
@@ -64,14 +137,14 @@ fn r3(v: f64) -> f64 {
 
 impl Presents {
     pub(crate) fn new(source: Arc<dyn Source>, start: Instant) -> Self {
-        Self { source, start, pending: VecDeque::new(), last_present: None, scratch: Vec::new() }
+        Self { source, start, pending: VecDeque::new(), cadence: Cadence::Broken, scratch: Vec::new() }
     }
 
     /// Queues a frame's line (without its closing brace) and writes every line now complete.
     /// `seq`: the drawable the frame presented, if the source tracks it.
     pub(crate) fn push(&mut self, line: String, seq: Option<u64>, continuous: bool, out: &mut impl std::io::Write) {
         for p in &mut self.pending { p.age += 1; }
-        self.pending.push_back(Pending { line, seq, present: None, continuous, age: 0 });
+        self.pending.push_back(Pending { line, present: Present::new(seq), continuous, age: 0 });
         self.poll();
         self.write_ready(out, false);
     }
@@ -79,7 +152,7 @@ impl Presents {
     /// Whether any line still waits for its present time.
     pub(crate) fn waiting(&mut self) -> bool {
         self.poll();
-        self.pending.iter().any(|p| p.seq.is_some() && p.present.is_none())
+        self.pending.iter().any(|p| matches!(p.present, Present::Waiting { .. }))
     }
 
     /// Writes every queued line, with or without its present time.
@@ -91,15 +164,18 @@ impl Presents {
     fn poll(&mut self) {
         self.source.take(&mut self.scratch);
         for (seq, at) in self.scratch.drain(..) {
-            if let Some(p) = self.pending.iter_mut().find(|p| p.seq == Some(seq)) {
-                p.present = Some(at.map(|at| ms_since(self.start, at)));
+            if let Some(p) = self.pending.iter_mut().find(|p| p.present.seq() == Some(seq)) {
+                p.present = match at {
+                    Some(at) => Present::Landed { seq, at: ms_since(self.start, at) },
+                    None => Present::Skipped { seq },
+                };
             }
         }
     }
 
     fn write_ready(&mut self, out: &mut impl std::io::Write, all: bool) {
         while let Some(p) = self.pending.front() {
-            if !(all || p.seq.is_none() || p.present.is_some() || p.age >= WAIT_FRAMES) { break; }
+            if !(all || !matches!(p.present, Present::Waiting { .. }) || p.age >= WAIT_FRAMES) { break; }
             let p = self.pending.pop_front().unwrap();
             let line = self.finish(p);
             let _ = writeln!(out, "{line}");
@@ -108,21 +184,14 @@ impl Presents {
 
     fn finish(&mut self, p: Pending) -> String {
         let mut line = p.line;
-        // An interval spans only frames drawn back to back that both reached the screen.
-        if !p.continuous { self.last_present = None; }
-        match (p.seq, p.present) {
-            (Some(_), Some(Some(at))) => {
-                let _ = write!(line, r#","present_ms":{at}"#);
-                if let Some(last) = self.last_present {
-                    let _ = write!(line, r#","present_dt_ms":{}"#, r3(at - last));
+        for field in step(&mut self.cadence, Written { present: p.present, continuous: p.continuous }) {
+            match field {
+                Field::At { at, dt } => {
+                    let _ = write!(line, r#","present_ms":{at}"#);
+                    if let Some(dt) = dt { let _ = write!(line, r#","present_dt_ms":{dt}"#); }
                 }
-                self.last_present = Some(at);
+                Field::Null => line.push_str(r#","present_ms":null"#),
             }
-            (Some(_), Some(None)) => {
-                line.push_str(r#","present_ms":null"#);
-                self.last_present = None;
-            }
-            _ => self.last_present = None,
         }
         line.push('}');
         line
@@ -570,3 +639,7 @@ mod tests {
         assert_eq!(Spread::of(Vec::new()), None);
     }
 }
+
+#[cfg(test)]
+#[path = "present_time_walk_tests.rs"]
+mod walk_tests;

@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use crate::time::Instant;
 
+use crate::machine::Effects;
 use crate::window::Missed;
 
 /// Counts of one surface's frame work.
@@ -140,10 +141,47 @@ pub(crate) struct SurfaceMeter {
     pacing: Pacing,
     /// A timer or event came since the last redraw.
     waited: bool,
-    /// Seconds in a row over `SPIN_RATE`.
-    hot: u32,
-    warned: bool,
+    spin: Spin,
     shared: Arc<Mutex<SurfaceStats>>,
+}
+
+/// Whether the surface is spinning, by whole one-second windows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Spin {
+    /// The last window was under `SPIN_RATE`, or none has rolled.
+    Calm,
+    /// `seconds` windows in a row over `SPIN_RATE`, fewer than `SPIN_SECONDS`.
+    Hot { seconds: u32 },
+    /// The meter said so; it never says so again.
+    Warned,
+}
+
+/// A one-second window rolled over, `spinning` when its rates were over `SPIN_RATE`.
+#[derive(Clone, Copy, Debug)]
+struct Rolled {
+    spinning: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SpinEffect {
+    /// Say the surface has spun for `seconds`.
+    Warn { seconds: u32 },
+}
+
+fn step(spin: &mut Spin, event: Rolled) -> Effects<SpinEffect> {
+    let seconds = match *spin {
+        Spin::Warned => return Effects::none(),
+        Spin::Calm => 0,
+        Spin::Hot { seconds } => seconds,
+    };
+    // A long quiet window averages low, which also ends a hot streak.
+    let seconds = if event.spinning { seconds + 1 } else { 0 };
+    if seconds >= SPIN_SECONDS {
+        *spin = Spin::Warned;
+        return Effects::one(SpinEffect::Warn { seconds });
+    }
+    *spin = if seconds == 0 { Spin::Calm } else { Spin::Hot { seconds } };
+    Effects::none()
 }
 
 impl SurfaceMeter {
@@ -151,7 +189,7 @@ impl SurfaceMeter {
         shared.lock().unwrap().name = name.to_owned();
         Self {
             totals: SurfaceCounts::default(), base: SurfaceCounts::default(), started: Instant::now(), pacing: Pacing::Idle,
-            waited: false, hot: 0, warned: false, shared,
+            waited: false, spin: Spin::Calm, shared,
         }
     }
 
@@ -209,23 +247,26 @@ impl SurfaceMeter {
     /// warning, if this roll is it.
     fn tick(&mut self, now: Instant) -> Option<String> {
         let elapsed = now.saturating_duration_since(self.started);
-        let summary = {
+        let (summary, effects) = {
             let mut stats = self.shared.lock().unwrap();
             stats.totals = self.totals;
             if elapsed < WINDOW { return None; }
             stats.per_second = self.totals.since(&self.base).per(elapsed.as_secs_f64());
             stats.published = Some(now);
-            // A long quiet window averages low, which also ends a hot streak.
             let rates = stats.per_second;
-            self.hot = if rates.failed() > SPIN_RATE || rates.unpaced > SPIN_RATE { self.hot + 1 } else { 0 };
-            stats.summary()
+            let effects = step(&mut self.spin, Rolled { spinning: rates.failed() > SPIN_RATE || rates.unpaced > SPIN_RATE });
+            (stats.summary(), effects)
         };
         self.base = self.totals;
         self.started = now;
-        if self.hot < SPIN_SECONDS || std::mem::replace(&mut self.warned, true) { return None; }
-        let warning = format!("rune: surface has spun for {} s, a bug in Rune: {summary}", self.hot);
-        eprintln!("{warning}");
-        Some(warning)
+        let mut warned = None;
+        for effect in effects {
+            let SpinEffect::Warn { seconds } = effect;
+            let warning = format!("rune: surface has spun for {seconds} s, a bug in Rune: {summary}");
+            eprintln!("{warning}");
+            warned = Some(warning);
+        }
+        warned
     }
 }
 
@@ -355,3 +396,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "surface_stats_walk_tests.rs"]
+mod walk_tests;
