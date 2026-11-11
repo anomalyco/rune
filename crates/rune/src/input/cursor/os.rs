@@ -47,7 +47,7 @@ impl OsCursor {
     /// the pointer.
     pub(crate) fn apply(&mut self, window: &Arc<Window>, want: Cursor, active: bool) {
         let scale = image_scale(window);
-        let rescaled = active && matches!(want, Cursor::Image(_)) && std::mem::replace(&mut self.scale, scale) != scale;
+        let rescaled = active && os_image(want).is_some() && std::mem::replace(&mut self.scale, scale) != scale;
         let Some(next) = next(&mut self.applied, want, active).or(rescaled.then_some(want)) else {
             self.reassert();
             return;
@@ -60,6 +60,8 @@ impl OsCursor {
             Cursor::Hidden => window.set_cursor(self.transparent.clone()),
             #[cfg(not(target_os = "macos"))]
             Cursor::Image(image) => images::set(window, image, scale),
+            #[cfg(windows)]
+            Cursor::Cell => images::set(window, crate::cursor::CELL, scale),
             other => window.set_cursor(icon(other)),
         }
     }
@@ -91,6 +93,16 @@ fn transparent(event_loop: &ActiveEventLoop) -> CustomCursor {
     }
     #[cfg(not(target_arch = "wasm32"))]
     make()
+}
+
+/// The image the OS cursor for `c` is made from, if it's one: an app's, or one the OS lacks.
+fn os_image(c: Cursor) -> Option<crate::cursor::CursorImage> {
+    match c {
+        Cursor::Image(image) => Some(image),
+        #[cfg(windows)]
+        Cursor::Cell => Some(crate::cursor::CELL),
+        _ => None,
+    }
 }
 
 fn holds_image(applied: (bool, Cursor)) -> bool {
@@ -181,6 +193,7 @@ fn icon(c: Cursor) -> CursorIcon {
         Cursor::ResizeColumn => CursorIcon::ColResize,
         Cursor::ResizeRow => CursorIcon::RowResize,
         Cursor::Crosshair => CursorIcon::Crosshair,
+        Cursor::Cell => CursorIcon::Cell,
         Cursor::ZoomIn => CursorIcon::ZoomIn,
         Cursor::ZoomOut => CursorIcon::ZoomOut,
     }

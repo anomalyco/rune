@@ -56,7 +56,11 @@ pub(crate) fn decode(image: CursorImage, scale: f32) -> Result<Decoded, String> 
     let scale = if scale.is_finite() && scale > 0.0 { scale } else { SOURCE_SCALE };
     let k = scale / SOURCE_SCALE;
     let (width, height) = (((w as f32 * k).round() as u32).max(1), ((h as f32 * k).round() as u32).max(1));
-    let rgba = if (width, height) == (w, h) { src.into_raw() } else { resample(src, width, height) };
+    let rgba = match ((width, height) == (w, h), image.crisp()) {
+        (true, _) => src.into_raw(),
+        (false, true) => ::image::imageops::resize(&src, width, height, ::image::imageops::FilterType::Nearest).into_raw(),
+        (false, false) => resample(src, width, height),
+    };
     let hot = [(image.hot()[0], width), (image.hot()[1], height)].map(|(p, side)| ((p * scale).floor().max(0.0) as u32).min(side - 1));
     Ok(Decoded { rgba, width, height, hot, scale })
 }
