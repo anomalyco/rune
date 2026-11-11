@@ -36,6 +36,37 @@ pub(super) struct ActiveCache {
     pub(super) elided: bool,
 }
 
+impl NodeCache {
+    #[inline]
+    pub(super) fn open(&self, eff_scale: f32, s: f32, settled: bool, now: f64, commit_gen: u64,
+        is_resident: bool, scale_motion: ScaleMotion, paint_hash: u64, check: impl FnOnce() -> bool,
+        another_frame: &mut bool) -> (f32, f32, f64, bool, usize) {
+        let env_same = (s - self.env_scale).abs() <= 1e-4 && !settled;
+        let (seen_scale, scale_changed_at) = if !env_same {
+            (eff_scale, f64::NEG_INFINITY)
+        } else if (eff_scale - self.seen_scale).abs() > 1e-4 {
+            (eff_scale, now)
+        } else {
+            (self.seen_scale, self.scale_changed_at)
+        };
+        let scale_diff = (eff_scale - self.raster_scale).abs() > 1e-4;
+        let same_commit = commit_gen == self.commit_gen;
+        let scale_settling = same_commit && scale_diff && env_same && is_resident && !self.was_live
+            && (now - scale_changed_at < STATIC_SCALE_SETTLE || scale_motion == ScaleMotion::Moving);
+        *another_frame |= scale_settling;
+        // A commit can change any paint property. Never use a partial
+        // model hash to skip checking the actual emitted draw output.
+        let content_same = same_commit && (!scale_diff || scale_settling);
+        let can_elide = is_resident
+            && !self.was_live
+            && content_same
+            && paint_hash == self.paint_state_hash
+            && !check();
+        let raster_scale = if can_elide && scale_settling { self.raster_scale } else { eff_scale };
+        (raster_scale, seen_scale, scale_changed_at, can_elide, self.glyphs)
+    }
+}
+
 impl<S: 'static> Runtime<S> {
     pub(super) fn prepare_cache_layers(&mut self, sel_ranges: &[(usize, usize, usize)], mark_ranges: &[(usize, usize, usize)]) -> u64 {
         let (s, n_nodes) = (self.env.scale, self.nodes.len());

@@ -751,29 +751,8 @@ impl<S: 'static> Runtime<S> {
                     let (raster_scale, seen_scale, scale_changed_at, elided, cached_glyphs) =
                         if let Some(entry) = self.node_caches.get(&n.id) {
                             let is_resident = self.text.atlas.resident_caches.get(&n.id.0) == Some(&entry.signature);
-                            let env_same = (s - entry.env_scale).abs() <= 1e-4 && !self.settled;
-                            let (seen_scale, scale_changed_at) = if !env_same {
-                                (eff_scale, f64::NEG_INFINITY)
-                            } else if (eff_scale - entry.seen_scale).abs() > 1e-4 {
-                                (eff_scale, now)
-                            } else {
-                                (entry.seen_scale, entry.scale_changed_at)
-                            };
-                            let scale_diff = (eff_scale - entry.raster_scale).abs() > 1e-4;
-                            let same_commit = self.commit_gen == entry.commit_gen;
-                            let scale_settling = same_commit && scale_diff && env_same && is_resident && !entry.was_live
-                                && (now - scale_changed_at < STATIC_SCALE_SETTLE || scale_motion == ScaleMotion::Moving);
-                            self.static_scale_settling |= scale_settling;
-                            // A commit can change any paint property. Never use a partial
-                            // model hash to skip checking the actual emitted draw output.
-                            let content_same = same_commit && (!scale_diff || scale_settling);
-                            let can_elide = is_resident
-                                && !entry.was_live
-                                && content_same
-                                && paint_hash == entry.paint_state_hash
-                                && !self.cache_check_scratch[i];
-                            let raster_scale = if can_elide && scale_settling { entry.raster_scale } else { eff_scale };
-                            (raster_scale, seen_scale, scale_changed_at, can_elide, entry.glyphs)
+                            entry.open(eff_scale, s, self.settled, now, self.commit_gen, is_resident,
+                                scale_motion, paint_hash, || self.cache_check_scratch[i], &mut self.static_scale_settling)
                         } else {
                             (eff_scale, eff_scale, f64::NEG_INFINITY, false, 0)
                         };
