@@ -12,7 +12,7 @@
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use super::Scene;
-use super::bin::{Bins, Show, Solid, TILE_H, TILE_W, clip_span, interior, intersect};
+use super::bin::{Bins, Show, Solid, TILE_H, TILE_W, covers, interior};
 use super::shade::{Clip, has_sides};
 use crate::render::{Instance, KIND_LAYER, KIND_LAYER_END};
 
@@ -213,14 +213,4 @@ fn clip_rows_alike(c: &Clip, r: [f32; 4]) -> bool {
 /// Whether a box in place paints one colour over all of `r`.
 fn flat_over(i: &Instance, r: [f32; 4]) -> bool {
     i.params[1] == crate::render::KIND_RECT && interior(i).is_some_and(|s| covers(Some(&s), &Clip::of(i), r))
-}
-
-/// Whether every pixel centre of `r` is inside `solid` (if given) where `clip` is whole: true at
-/// its first and last rows means true between (both regions are convex).
-fn covers(solid: Option<&Solid>, clip: &Clip, r: [f32; 4]) -> bool {
-    let (x0, x1) = (r[0] + 0.5, r[2] - 0.5);
-    [r[1] + 0.5, r[3] - 0.5].iter().all(|&y| {
-        let span = solid.map_or(clip_span(clip, y), |s| intersect(s.span(y), clip_span(clip, y)));
-        span.0 <= x0 && span.1 >= x1
-    })
 }

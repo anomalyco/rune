@@ -447,7 +447,7 @@ pub(super) fn radial(i: &Instance, p: [f32; 2], inside: bool) -> [f32; 4] {
         let (dx, dy) = ((p[0] - i.rect[0] - i.uv[0]) / i.uv[2], (p[1] - i.rect[1] - i.uv[1]) / i.uv[3]);
         (dx * dx + dy * dy).sqrt()
     } else {
-        0.5 + q[0] * i.uv[0] + q[1] * i.uv[1]
+        0.5 + (q[0] * i.uv[0] + q[1] * i.uv[1])
     };
     // Outside its stops a segment draws nothing, whatever its coverage: decided first.
     if (lower_open && t < t0) || (upper_open && t >= t1) { return [0.0; 4]; }
@@ -462,7 +462,7 @@ pub(super) fn radial(i: &Instance, p: [f32; 2], inside: bool) -> [f32; 4] {
 pub(super) fn linear_row_outside(i: &Instance, py: f32, x0: f32, x1: f32) -> bool {
     if i.uv[2] > 0.0 { return false; }
     let (cx, cy) = (i.rect[0] + i.rect[2] * 0.5, i.rect[1] + i.rect[3] * 0.5);
-    let t = |px: f32| 0.5 + (px - cx) * i.uv[0] + (py - cy) * i.uv[1];
+    let t = |px: f32| 0.5 + ((px - cx) * i.uv[0] + (py - cy) * i.uv[1]);
     let (ta, tb) = (t(x0), t(x1));
     let (t0_raw, t1_raw) = (i.params[0], i.params[3]);
     (t0_raw >= 1.5 && ta < t0_raw - 2.0 && tb < t0_raw - 2.0) || (t1_raw >= 1.5 && ta >= t1_raw - 2.0 && tb >= t1_raw - 2.0)

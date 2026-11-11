@@ -347,3 +347,13 @@ pub(super) fn interior(i: &Instance) -> Option<Solid> {
     }
     Some(Solid { edges, radii: i.radii, inset: soft + bw })
 }
+
+/// Whether every pixel centre of `r` is inside `solid` (if given) where `clip` is whole: true at
+/// its first and last rows means true between (both regions are convex).
+pub(super) fn covers(solid: Option<&Solid>, clip: &Clip, r: [f32; 4]) -> bool {
+    let (x0, x1) = (r[0] + 0.5, r[2] - 0.5);
+    [r[1] + 0.5, r[3] - 0.5].iter().all(|&y| {
+        let span = solid.map_or(clip_span(clip, y), |s| intersect(s.span(y), clip_span(clip, y)));
+        span.0 <= x0 && span.1 >= x1
+    })
+}

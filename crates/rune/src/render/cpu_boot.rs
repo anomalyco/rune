@@ -207,6 +207,8 @@ pub struct Report {
     pub glyph_px: u64,
     /// The longest one tile took: no thread count paints faster.
     pub slowest_tile_ns: u64,
+    /// Taking backdrop blurs, on the calling thread between phases.
+    pub blur_ns: u64,
 }
 
 /// Paints `scene` into `target` on `threads` threads (the calling one among them), or says why

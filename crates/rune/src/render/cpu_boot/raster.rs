@@ -83,10 +83,12 @@ pub(super) fn run(scene: &Scene<'_>, bins: &Bins, target: &mut Target<'_>, tiles
                 let (tx, ty) = (t % bins.cols, t / bins.cols);
                 ((tx * TILE_W) as i32) < b[2] && (((tx + 1) * TILE_W) as i32) > b[0] && ((ty * TILE_H) as i32) < b[3] && (((ty + 1) * TILE_H) as i32) > b[1]
             });
+            let began = std::time::Instant::now();
             blurred.push(shown.then(|| backdrop::blur(rec, scene.size, |x, y| {
                 let at = y as usize * stride + x as usize * 4;
                 [px[at + 2] as f32 / 255.0, px[at + 1] as f32 / 255.0, px[at] as f32 / 255.0, px[at + 3] as f32 / 255.0]
             })));
+            report.blur_ns += super::ns(began.elapsed());
         }
         from = until;
     }

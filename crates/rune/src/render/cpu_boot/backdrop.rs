@@ -79,6 +79,29 @@ impl Level {
     }
 }
 
+/// One axis of a linear-filtered sample at `u` (0..=1) over `n` texels, clamped to the edge:
+/// the two texels and the weight of the second, as `bilinear` takes them.
+#[derive(Clone, Copy)]
+struct Axis {
+    i0: u32,
+    i1: u32,
+    f: f32,
+}
+
+fn axis(u: f32, n: u32) -> Axis {
+    let x = u * n as f32 - 0.5;
+    let x0 = x.floor();
+    let i = |v: f32| (v as i32).clamp(0, n as i32 - 1) as u32;
+    Axis { i0: i(x0), i1: i(x0 + 1.0), f: x - x0 }
+}
+
+/// `bilinear` from its two axes.
+#[inline]
+fn tap(x: &Axis, y: &Axis, texel: impl Fn(u32, u32) -> [f32; 4]) -> [f32; 4] {
+    let mix = |a: [f32; 4], b: [f32; 4], t: f32| -> [f32; 4] { std::array::from_fn(|c| a[c] * (1.0 - t) + b[c] * t) };
+    mix(mix(texel(x.i0, y.i0), texel(x.i1, y.i0), x.f), mix(texel(x.i0, y.i1), texel(x.i1, y.i1), x.f), y.f)
+}
+
 fn bilinear(uv: [f32; 2], w: u32, h: u32, texel: impl Fn(u32, u32) -> [f32; 4]) -> [f32; 4] {
     let (x, y) = (uv[0] * w as f32 - 0.5, uv[1] * h as f32 - 0.5);
     let (fx0, fy0) = (x.floor(), y.floor());
@@ -124,27 +147,46 @@ pub(super) fn blur(rec: &Record, viewport: (u32, u32), window: impl Fn(u32, u32)
     let cw = cx1 - cx0;
     let cache: Vec<[f32; 4]> = (cy0..cy1).flat_map(|y| (cx0..cx1).map(move |x| (x, y))).map(|(x, y)| window(x, y)).collect();
     let window = |x: u32, y: u32| if x >= cx0 && x < cx1 && y >= cy0 && y < cy1 { cache[((y - cy0) * cw + (x - cx0)) as usize] } else { window(x, y) };
+    // Every tap's place along x depends on the texel's x alone, and along y on its y: each
+    // pass takes them once a column and once a row (the same expressions as a tap would), then
+    // filters with them.
     let mut down: Vec<Level> = Vec::with_capacity(rec.n + 1);
     for m in 0..=rec.n {
         let (w, h) = dims(m);
         let mut out = Level::new(w, h);
         let (sx0, sy0, sx1, sy1) = scissor(m);
-        for ty in sy0..sy1 {
-            for tx in sx0..sx1 {
-                let uv = [(tx as f32 + 0.5) / w as f32, (ty as f32 + 0.5) / h as f32];
-                out.px[(ty * w + tx) as usize] = if m == 0 {
-                    let s = |o: [f32; 2]| {
-                        let t = [1.0 / v[0], 1.0 / v[1]];
-                        let at = [uv[0] * window_map[0] + window_map[2] + t[0] * o[0], uv[1] * window_map[1] + window_map[3] + t[1] * o[1]];
-                        let at = [at[0].clamp(window_region[0], window_region[2]), at[1].clamp(window_region[1], window_region[3])];
-                        bilinear(at, viewport.0, viewport.1, &window)
-                    };
-                    down13(s)
-                } else {
-                    let src = &down[m - 1];
-                    let t = [1.0 / src.w as f32, 1.0 / src.h as f32];
-                    down13(|o: [f32; 2]| src.sample(clamped([uv[0] + t[0] * o[0], uv[1] + t[1] * o[1]], inside)))
-                }.map(f16);
+        let offsets = [-2.0f32, -1.0, 0.0, 1.0, 2.0];
+        if m == 0 {
+            let t = [1.0 / v[0], 1.0 / v[1]];
+            let xs: Vec<[Axis; 5]> = (sx0..sx1).map(|tx| {
+                let u = (tx as f32 + 0.5) / w as f32;
+                offsets.map(|o| axis((u * window_map[0] + window_map[2] + t[0] * o).clamp(window_region[0], window_region[2]), viewport.0))
+            }).collect();
+            let ys: Vec<[Axis; 5]> = (sy0..sy1).map(|ty| {
+                let u = (ty as f32 + 0.5) / h as f32;
+                offsets.map(|o| axis((u * window_map[1] + window_map[3] + t[1] * o).clamp(window_region[1], window_region[3]), viewport.1))
+            }).collect();
+            for (ty, ay) in (sy0..sy1).zip(&ys) {
+                for (tx, ax) in (sx0..sx1).zip(&xs) {
+                    out.px[(ty * w + tx) as usize] = down13(|o| tap(&ax[(o[0] + 2.0) as usize], &ay[(o[1] + 2.0) as usize], &window)).map(f16);
+                }
+            }
+        } else {
+            let src = &down[m - 1];
+            let t = [1.0 / src.w as f32, 1.0 / src.h as f32];
+            let xs: Vec<[Axis; 5]> = (sx0..sx1).map(|tx| {
+                let u = (tx as f32 + 0.5) / w as f32;
+                offsets.map(|o| axis((u + t[0] * o).clamp(inside[0], inside[2]), src.w))
+            }).collect();
+            let ys: Vec<[Axis; 5]> = (sy0..sy1).map(|ty| {
+                let u = (ty as f32 + 0.5) / h as f32;
+                offsets.map(|o| axis((u + t[1] * o).clamp(inside[1], inside[3]), src.h))
+            }).collect();
+            let texel = |x: u32, y: u32| src.px[(y * src.w + x) as usize];
+            for (ty, ay) in (sy0..sy1).zip(&ys) {
+                for (tx, ax) in (sx0..sx1).zip(&xs) {
+                    out.px[(ty * w + tx) as usize] = down13(|o| tap(&ax[(o[0] + 2.0) as usize], &ay[(o[1] + 2.0) as usize], &texel)).map(f16);
+                }
             }
         }
         down.push(out);
@@ -158,28 +200,34 @@ pub(super) fn blur(rec: &Record, viewport: (u32, u32), window: impl Fn(u32, u32)
         let weight = if m + 1 == rec.n { rec.share } else { 1.0 };
         let t = [1.0 / src.w as f32, 1.0 / src.h as f32];
         let (sx0, sy0, sx1, sy1) = scissor(m);
-        for ty in sy0..sy1 {
-            for tx in sx0..sx1 {
-                let uv = [(tx as f32 + 0.5) / w as f32, (ty as f32 + 0.5) / h as f32];
-                let s = |o: [f32; 2]| src.sample(clamped([uv[0] + o[0], uv[1] + o[1]], inside));
+        // Per column: the coarse level's three taps (−t, 0, +t) and the fine level's one.
+        let xs: Vec<([Axis; 3], Axis)> = (sx0..sx1).map(|tx| {
+            let u = (tx as f32 + 0.5) / w as f32;
+            ([-t[0], 0.0, t[0]].map(|o| axis((u + o).clamp(inside[0], inside[2]), src.w)), axis(u.clamp(inside[0], inside[2]), fine.w))
+        }).collect();
+        let ys: Vec<([Axis; 3], Axis)> = (sy0..sy1).map(|ty| {
+            let u = (ty as f32 + 0.5) / h as f32;
+            ([-t[1], 0.0, t[1]].map(|o| axis((u + o).clamp(inside[1], inside[3]), src.h)), axis(u.clamp(inside[1], inside[3]), fine.h))
+        }).collect();
+        let coarse_texel = |x: u32, y: u32| src.px[(y * src.w + x) as usize];
+        let fine_texel = |x: u32, y: u32| fine.px[(y * fine.w + x) as usize];
+        for (ty, ay) in (sy0..sy1).zip(&ys) {
+            for (tx, ax) in (sx0..sx1).zip(&xs) {
+                // `s(dx, dy)`: the coarse level at offset (dx, dy) texels, each −1, 0 or 1.
+                let s = |dx: usize, dy: usize| tap(&ax.0[dx], &ay.0[dy], &coarse_texel);
                 let add = |a: [f32; 4], b: [f32; 4]| -> [f32; 4] { std::array::from_fn(|c| a[c] + b[c]) };
                 let scale = |a: [f32; 4], k: f32| a.map(|v| v * k);
                 // `fs_up`'s sums, in its order.
-                let mut c = scale(s([0.0, 0.0]), 4.0);
-                c = add(c, scale(add(add(add(s([t[0], 0.0]), s([-t[0], 0.0])), s([0.0, t[1]])), s([0.0, -t[1]])), 2.0));
-                c = add(c, add(add(add(s([t[0], t[1]]), s([-t[0], -t[1]])), s([t[0], -t[1]])), s([-t[0], t[1]])));
+                let mut c = scale(s(1, 1), 4.0);
+                c = add(c, scale(add(add(add(s(2, 1), s(0, 1)), s(1, 2)), s(1, 0)), 2.0));
+                c = add(c, add(add(add(s(2, 2), s(0, 0)), s(2, 0)), s(0, 2)));
                 let c = c.map(|v| v / 16.0);
-                let f = fine.sample(clamped(uv, inside));
+                let f = tap(&ax.1, &ay.1, &fine_texel);
                 out.px[(ty * w + tx) as usize] = std::array::from_fn(|ch| f16(f[ch] * (1.0 - weight) + c[ch] * weight));
             }
         }
         coarse = Some(out);
-    }
-    Blurred { up: coarse.unwrap_or_else(|| down.swap_remove(0)), place: [rec.origin[0], rec.origin[1], extent[0], extent[1]] }
-}
-
-fn clamped(uv: [f32; 2], r: [f32; 4]) -> [f32; 2] {
-    [uv[0].clamp(r[0], r[2]), uv[1].clamp(r[1], r[3])]
+    }    Blurred { up: coarse.unwrap_or_else(|| down.swap_remove(0)), place: [rec.origin[0], rec.origin[1], extent[0], extent[1]] }
 }
 
 /// `fs_down`'s 13 taps, `s` sampling at a texel offset, summed in its order.
