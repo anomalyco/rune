@@ -156,6 +156,21 @@ mod dxgi {
         DXGI_GPU_PREFERENCE_MINIMUM_POWER, IDXGIAdapter1, IDXGIFactory1, IDXGIFactory6,
     };
     use windows::core::Interface;
+    // Unused when the vendored wgpu-hal's inherent `expose_adapter` takes the call.
+    #[allow(unused_imports)]
+    use without_patch::ExposeAdapter as _;
+
+    /// An app whose workspace doesn't patch wgpu-hal with Rune's copy (`[patch.crates-io]`, see
+    /// `vendor/wgpu-hal`) gets wgpu-hal as published, which has no `expose_adapter`: the call then
+    /// lands here (an inherent method wins over a trait's), and the pick falls back to wgpu's list.
+    mod without_patch {
+        pub(super) trait ExposeAdapter {
+            unsafe fn expose_adapter(&self, _: &windows::Win32::Graphics::Dxgi::IDXGIAdapter1) -> Option<wgpu::hal::ExposedAdapter<wgpu::hal::api::Dx12>> {
+                None
+            }
+        }
+        impl ExposeAdapter for wgpu::hal::dx12::Instance {}
+    }
 
     /// The pick and how many hardware adapters DXGI lists; None when the instance isn't DX12's,
     /// or the adapter chosen can't run D3D12 or present to `surface` (the caller then asks wgpu).
