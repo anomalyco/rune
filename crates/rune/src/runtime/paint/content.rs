@@ -182,7 +182,7 @@ impl<S: 'static> Runtime<S> {
             // The frame it lands draws outlines while its masks are placed; one more frame draws
             // the masks, so text never rests on its landing frame.
             if place_masks {
-                self.static_scale_settling = true;
+                self.scale_frame = Some(AnotherFrame);
             }
             let direct = self.text.emit() == crate::text::outline::Emit::Outline;
             let ins = n.inset.map(|v| v * zk * s);
