@@ -147,6 +147,11 @@ impl Renderer {
     pub(super) fn fill_atlas(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, staging: &rune_staging::Staging, atlas: &mut Atlas) {
         let variant::Uber::Windfoil { fill, .. } = &mut self.uber else { return };
         let fills = atlas.take_fills();
+        if cfg!(debug_assertions) && std::env::var_os("RUNE_FILL_STATS").is_some() && fills.iter().any(|(_, f)| !f.is_empty()) {
+            let masks: usize = fills.iter().map(|(_, f)| f.len()).sum();
+            let texels: u64 = fills.iter().flat_map(|(_, f)| f.iter().map(|q| u64::from(q.rect[2] * q.rect[3]))).sum();
+            eprintln!("rune: fill stats: {masks} masks, {texels} texels this frame");
+        }
         if fills.is_empty() {
             return;
         }
