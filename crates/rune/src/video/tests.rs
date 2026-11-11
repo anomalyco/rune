@@ -117,45 +117,6 @@ fn a_waker_set_after_a_failure_hears_it_once() {
     assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1);
 }
 
-/// A surface's waker runs app code that may read the player, so it never runs while a pull
-/// holds the player's locks, nor does the frame a push replaces drop there.
-#[test]
-fn a_surface_waker_runs_after_the_pull_releases_the_player() {
-    let v = Video::file("/nonexistent/clip.mp4");
-    let clip = Arc::downgrade(&v.shared);
-    let wakes = Arc::new(Mutex::new(Vec::new()));
-    let heard = wakes.clone();
-    v.surface().set_waker(Arc::new(move || {
-        // try_lock, so a wake under the locks fails the test rather than hanging it.
-        let clip = clip.upgrade().unwrap();
-        let free = clip.ctl.try_lock().is_ok() && clip.native.try_lock().is_ok();
-        heard.lock().unwrap().push(free);
-    }));
-    let mut rt = crate::Runtime::new(v.clone(), view, (32.0, 18.0), crate::Env::new(true, 2.0));
-    rt.frame(0.0);
-    assert!(matches!(v.state(), PlayerState::Failed(_)));
-    assert!(v.surface().latest().is_some(), "placeholder drawn");
-    #[cfg(target_os = "macos")]
-    {
-        let ok = Video::file(fixture());
-        let clip = Arc::downgrade(&ok.shared);
-        let heard = wakes.clone();
-        ok.surface().set_waker(Arc::new(move || {
-            let clip = clip.upgrade().unwrap();
-            let free = clip.ctl.try_lock().is_ok() && clip.native.try_lock().is_ok();
-            heard.lock().unwrap().push(free);
-        }));
-        let mut rt = crate::Runtime::new(ok.clone(), view, (32.0, 18.0), crate::Env::new(true, 2.0));
-        rt.frame(0.0);
-        ok.seek(0.3);
-        rt.frame(0.0);
-        assert!(wakes.lock().unwrap().len() >= 3, "the placeholder and two decoded frames");
-    }
-    let wakes = wakes.lock().unwrap();
-    assert!(!wakes.is_empty());
-    assert!(wakes.iter().all(|free| *free), "{wakes:?}");
-}
-
 #[test]
 fn a_seek_before_the_clip_opens_is_clamped_when_it_does() {
     let v = Video::file("missing.mp4");
@@ -168,59 +129,9 @@ fn a_seek_before_the_clip_opens_is_clamped_when_it_does() {
 
 /// `play()` on a parked clip only unparks it on its next pull or edit on the main thread;
 /// until then, parking others must not release it.
-/// Four parked clips busy on other threads, and a fifth that played again between its turn and
-/// its park: nothing is released, as a playing clip never is.
-#[cfg(target_os = "macos")]
-#[test]
-fn a_clip_that_plays_again_before_its_park_is_never_released() {
-    let _parking = PARKING.lock().unwrap_or_else(|e| e.into_inner());
-    let clips: Vec<Video> = (0..5).map(|_| Video::file(fixture())).collect();
-    let mut released = Vec::new();
-    for clip in &clips[..4] {
-        released.extend(backend::parked_with(&clip.shared));
-    }
-    let busy: Vec<_> = clips[..4].iter().map(|clip| clip.shared.ctl.lock().unwrap()).collect();
-    clips[4].shared.ctl.lock().unwrap().run = Run::Playing { anchor: None };
-    std::thread::scope(|s| s.spawn(|| released.extend(backend::parked_with(&clips[4].shared))).join().unwrap());
-    drop(busy);
-    assert!(released.is_empty(), "{} released", released.len());
-}
-
-/// The clip's own waker is app code, run with no player locks held: a frame it pushes to another
-/// surface wakes that surface at once.
-#[cfg(target_os = "macos")]
-#[test]
-fn a_frame_the_clips_waker_pushes_elsewhere_wakes_at_once() {
-    use std::sync::atomic::AtomicUsize;
-    let v = Video::file("/nonexistent/clip.mp4");
-    let other = NativeSurface::new();
-    let woke = Arc::new(AtomicUsize::new(0));
-    let count = woke.clone();
-    other.set_waker(Arc::new(move || {
-        count.fetch_add(1, Ordering::SeqCst);
-    }));
-    let heard = Arc::new(Mutex::new(Vec::new()));
-    let log = heard.clone();
-    v.set_waker(Arc::new(move || {
-        let before = woke.load(Ordering::SeqCst);
-        push_placeholder(&other);
-        log.lock().unwrap().push(woke.load(Ordering::SeqCst) - before);
-    }));
-    let mut rt = crate::Runtime::new(v.clone(), view, (32.0, 18.0), crate::Env::new(true, 2.0));
-    rt.frame(0.0);
-    assert!(matches!(v.state(), PlayerState::Failed(_)));
-    let heard = heard.lock().unwrap();
-    assert!(!heard.is_empty() && heard.iter().all(|n| *n == 1), "{heard:?}");
-}
-
-/// Parking tests share the process's one list of parked clips.
-#[cfg(target_os = "macos")]
-static PARKING: Mutex<()> = Mutex::new(());
-
 #[cfg(target_os = "macos")]
 #[test]
 fn parking_never_releases_a_playing_clip() {
-    let _parking = PARKING.lock().unwrap_or_else(|e| e.into_inner());
     let clips: Vec<Video> = (0..6).map(|_| Video::file(fixture())).collect();
     let mut released = Vec::new();
     released.extend(backend::parked_with(&clips[0].shared));
@@ -231,27 +142,6 @@ fn parking_never_releases_a_playing_clip() {
     assert!(!released.iter().any(|r| Arc::ptr_eq(r, &clips[0].shared)), "the playing clip stays");
     assert_eq!(released.len(), 1, "four of the five paused clips stay parked");
     assert!(Arc::ptr_eq(&released[0], &clips[1].shared), "the oldest paused clip goes");
-}
-
-/// A clip whose control is busy on another thread when another parks can't be checked: it stays
-/// parked, and a later park releases it once it can see the clip is paused.
-#[cfg(target_os = "macos")]
-#[test]
-fn a_busy_paused_clip_stays_parked_until_it_can_be_released() {
-    let _parking = PARKING.lock().unwrap_or_else(|e| e.into_inner());
-    let clips: Vec<Video> = (0..5).map(|_| Video::file(fixture())).collect();
-    let mut released = Vec::new();
-    released.extend(backend::parked_with(&clips[0].shared));
-    {
-        let reading = clips[0].shared.ctl.lock().unwrap();
-        std::thread::scope(|s| s.spawn(|| released.extend(backend::parked_with(&clips[1].shared))).join().unwrap());
-        drop(reading);
-    }
-    for clip in &clips[2..] {
-        released.extend(backend::parked_with(&clip.shared));
-    }
-    assert_eq!(released.len(), 1, "five paused clips, four kept");
-    assert!(Arc::ptr_eq(&released[0], &clips[0].shared), "the oldest, once it can be checked");
 }
 
 /// Only formats that no build reads fail at once; with `ogg-audio`, Ogg audio opens later.

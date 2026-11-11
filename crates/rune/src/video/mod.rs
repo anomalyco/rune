@@ -571,18 +571,11 @@ impl Shared {
             }
             return Pulled { active: false, generation: self.ctl.lock().unwrap().generation, due: None };
         }
-        // Frames land with this clip's locks held: the surface's waker and the release of the
-        // frame each replaces wait until they're released. Only around those writes, so app
-        // code (the clip's own waker) pushes to other surfaces as usual.
         let (active, due) = match clock {
             Clock::Virtual(now) => (self.pull_virtual(surface, now), None),
-            Clock::Display(target) => {
-                let _held = crate::native_surface::Held::new();
-                (backend::pull(self, surface, target), backend::due(self))
-            }
+            Clock::Display(target) => (backend::pull(self, surface, target), backend::due(self)),
         };
         let pulled = {
-            let _held = crate::native_surface::Held::new();
             let mut c = self.ctl.lock().unwrap();
             for effect in step(&mut c, Event::Drawn) {
                 if effect == Effect::Placeholder {
@@ -598,7 +591,6 @@ impl Shared {
     /// Headless: decode the frame at the virtual playback time, synchronously.
     fn pull_virtual(&self, surface: &NativeSurface, now: f64) -> bool {
         self.open_now();
-        let _held = crate::native_surface::Held::new();
         let mut native = self.native.lock().unwrap();
         let (meta, frame, shown) = {
             let mut c = self.ctl.lock().unwrap();
