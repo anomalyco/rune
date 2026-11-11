@@ -24,6 +24,8 @@ pub(crate) struct ElCold {
     pub(crate) motion: Option<Spring>,
     pub(crate) opacity_motion: Option<Box<Anim>>,
     pub(crate) lead: Option<(Spring, Spring)>,
+    /// `El::animated_changes`: an ancestor's `El::instant_changes` stops here.
+    pub(crate) animated_changes: bool,
     pub(crate) transition: Option<Box<Transition>>,
     pub(crate) matched: Option<Rc<str>>,
     pub(crate) scroll: Option<ScrollSpec>,
@@ -68,6 +70,7 @@ impl Empty for ElCold {
         motion: None,
         opacity_motion: None,
         lead: None,
+        animated_changes: false,
         transition: None,
         matched: None,
         scroll: None,

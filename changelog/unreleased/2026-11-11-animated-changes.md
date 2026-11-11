@@ -1,0 +1,1 @@
+- **`El::animated_changes` stops an ancestor's `El::instant_changes`.** The element and what it holds enter, exit and change on their own motion again, so a favicon can fade in as it loads inside a panel whose contents land at once. Before, an `instant_changes` ancestor landed every entrance under it, however deep.

@@ -357,8 +357,9 @@ impl<S: 'static> Runtime<S> {
             let spring_tc = if spring_c == Spring::NONE { spring_c } else { Spring::new((spring_c.duration * 0.5).max(0.1), spring_c.bounce) };
             let row_like = nodes[i].in_row == RowLayout::Snaps || nodes[i].parent.is_some_and(|p| nodes[p].growth.is_some());
             // An `El::instant_changes` element lands its changes, and those of what it holds;
-            // its own entrance and exit, and colours, stay with the commit.
-            let enters_at_once = instant || nodes[i].parent.is_some_and(|p| nodes[p].instant_changes);
+            // its own entrance and exit, and colours, stay with the commit, as do the entrances of
+            // an `El::animated_changes` subtree inside it.
+            let enters_at_once = instant || (nodes[i].parent.is_some_and(|p| nodes[p].instant_changes) && nodes[i].instant_changes);
             let lands = instant || nodes[i].instant_changes;
             let layout_instant = lands || row_like || tx.relayout || is_virtual
                 || (!self.aspect_snap.is_empty() && self.aspect_snap.contains(&id));
@@ -749,7 +750,7 @@ impl<S: 'static> Runtime<S> {
                 let parent_remained_present =
                     old_parent_id.is_none_or(|pid| self.node_index.get(&pid).is_some_and(|&i| i < present_len));
                 if parent_remained_present {
-                    let instant = instant || old_parent_id.and_then(|pid| self.node_index.get(&pid)).is_some_and(|&p| nodes[p].instant_changes);
+                    let instant = instant || (old.instant_changes && old_parent_id.and_then(|pid| self.node_index.get(&pid)).is_some_and(|&p| nodes[p].instant_changes));
                     if tx.settle || (instant && !self.is_exiting(old.id)) || drew_nothing.get(oi).copied().unwrap_or(false) {
                         self.scene.unmount(old.id);
                     } else {

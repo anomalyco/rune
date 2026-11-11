@@ -182,6 +182,13 @@ impl El {
         self.flags.set(ElFlags::INSTANT_CHANGES, true);
         self
     }
+    /// Stop an ancestor's [`Self::instant_changes`] at this element: it and what it holds enter,
+    /// exit and change on their own motion again. A favicon that fades in as it loads, inside a
+    /// panel whose contents land at once.
+    pub fn animated_changes(mut self) -> Self {
+        self.cold_mut().animated_changes = true;
+        self
+    }
     /// How this element enters and exits when mounted or removed after the first frame
     /// (default: [`Transition::opacity()`] — a 0.2 s enter and 0.15 s exit fade). Because
     /// every element has this default fade, removing an element in an animated commit

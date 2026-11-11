@@ -429,7 +429,7 @@ fn flatten_owned(
     } else {
         in_row
     };
-    let instant_changes = flags.has(ElFlags::INSTANT_CHANGES) || parent.is_some_and(|p| nodes[p].instant_changes);
+    let instant_changes = flags.has(ElFlags::INSTANT_CHANGES) || (parent.is_some_and(|p| nodes[p].instant_changes) && !el.cold.animated_changes);
     let trace_namespace = el.cold.trace_namespace.or_else(|| parent.and_then(|p| nodes[p].trace_namespace));
     let role = el.role_name();
     let parent_flow = parent.map_or(crate::el::Flow::Ltr, |p| nodes[p].flow);
@@ -632,7 +632,7 @@ fn flatten_ref(
     } else {
         in_row
     };
-    let instant_changes = flags.has(ElFlags::INSTANT_CHANGES) || parent.is_some_and(|p| nodes[p].instant_changes);
+    let instant_changes = flags.has(ElFlags::INSTANT_CHANGES) || (parent.is_some_and(|p| nodes[p].instant_changes) && !el.cold.animated_changes);
     let trace_namespace = el.cold.trace_namespace.or_else(|| parent.and_then(|p| nodes[p].trace_namespace));
     let mut style: Cow<'_, CompactStyle> = Cow::Borrowed(&el.style);
     if let Some(sx) = parent_sx {
