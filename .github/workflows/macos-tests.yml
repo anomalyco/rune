@@ -49,7 +49,7 @@ jobs:
   test:
     needs: changes
     if: needs.changes.outputs.test == 'true'
-    runs-on: macos-latest
+    runs-on: blacksmith-6vcpu-macos-latest
     timeout-minutes: 90
     env:
       # One job per core: serial builds ran past the timeout with no cache, so no cache was ever saved.
