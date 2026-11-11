@@ -285,7 +285,7 @@ impl<S: 'static> Host<S> {
         #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
         let mut drew = false;
         #[cfg(target_os = "macos")]
-        if visible && !self.rt.minimize_request && !self.life.finished() && !event_loop.exiting()
+        if visible && !self.rt.minimize.latched() && !self.life.finished() && !event_loop.exiting()
             && self.win.as_ref().is_some_and(|w| w.native.panel.is_none() && w.window.is_minimized() != Some(true))
         {
             let presents = self.meter.totals().presents;

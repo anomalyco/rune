@@ -15,7 +15,8 @@ fn updates_that_change_nothing_ask_no_window_for_a_frame() {
         for f in std::mem::take(&mut requests.updates) { updated |= rt.update_if(f); }
         let quiet = !updated && requests.only_updates() && !rt.patch_pending() && !rt.needs_commit();
         for (launcher, visible) in [(false, true), (true, true), (true, false), (false, false)] {
-            assert!(!drain_frame(launcher, visible, visible, updated, quiet), "launcher {launcher} visible {visible}");
+            let work = WakeWork::of(WakeFacts { window: true, launcher, visible, was_shown: visible, changed: updated, quiet, ..WakeFacts::default() }, || false);
+            assert_eq!(work, WakeWork::Nothing, "launcher {launcher} visible {visible}");
         }
     }
     handle.update_if(|_, _| false);
@@ -24,7 +25,8 @@ fn updates_that_change_nothing_ask_no_window_for_a_frame() {
     handle.update_if(|_, _| false);
     setup_waker(&shared)();
     assert!(!shared.take().only_updates(), "so does `setup`'s waker");
-    assert!(drain_frame(false, true, true, false, false) && drain_frame(true, false, false, true, false));
+    assert_eq!(WakeWork::of(WakeFacts { window: true, visible: true, was_shown: true, ..WakeFacts::default() }, || false), WakeWork::Paint);
+    assert_eq!(WakeWork::of(WakeFacts { window: true, launcher: true, changed: true, ..WakeFacts::default() }, || false), WakeWork::HiddenFrame);
 }
 
 /// A stream of updates that change nothing, faster than a frame, on a host that neither polls

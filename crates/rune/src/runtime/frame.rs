@@ -168,7 +168,9 @@ impl<S: 'static> Runtime<S> {
 
     /// Takes a `Tx::minimize` that `what` can't carry out, saying so in debug builds.
     pub(crate) fn ignore_minimize(&mut self, what: &str) {
-        if std::mem::take(&mut self.minimize_request) && cfg!(debug_assertions) {
+        let latched = self.minimize.latched();
+        self.minimize_step(crate::window::MinimizeEvent::Lost);
+        if latched && cfg!(debug_assertions) {
             eprintln!("rune: minimize ignored: {what} can't minimize");
         }
     }
@@ -179,7 +181,7 @@ impl<S: 'static> Runtime<S> {
     pub(super) fn latch_requests(&mut self, tx: &mut Tx) {
         self.run_pick_reads(tx);
         self.shell_request = self.shell_request.max(tx.shell.take());
-        self.minimize_request |= std::mem::take(&mut tx.minimize);
+        if std::mem::take(&mut tx.minimize) { self.minimize_step(crate::window::MinimizeEvent::Asked); }
         self.titlebar.toggle_maximized |= std::mem::take(&mut tx.toggle_maximized);
         self.titlebar.toggle_full_screen |= std::mem::take(&mut tx.toggle_full_screen);
         for ev in std::mem::take(&mut tx.keys) { self.key(ev); }

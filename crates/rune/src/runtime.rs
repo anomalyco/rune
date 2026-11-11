@@ -725,8 +725,9 @@ pub struct Runtime<S: 'static> {
     pub(crate) clipboard: Option<crate::clipboard::MemoryClipboard>,
     /// A handler or `update` asked to close the window or quit (the shell takes it).
     pub shell_request: Option<Shell>,
-    /// A handler or `update` asked to minimize the window (`Tx::minimize`); the shell takes it.
-    pub(crate) minimize_request: bool,
+    /// A handler or `update` asked to minimize the window (`Tx::minimize`); the shell takes it,
+    /// after a show the same turn asked for (`window::Minimize`).
+    pub(crate) minimize: crate::window::Minimize,
     /// Links handlers asked to open that this runtime left unopened (`Runtime::take_url_requests`).
     pub(crate) url_requests: Vec<String>,
     /// True when attached to a live window, overlay or web canvas, not a headless or scripted run.
@@ -1031,7 +1032,7 @@ impl<S: 'static> Runtime<S> {
             clear_secret_request: false,
             clipboard: None,
             shell_request: None,
-            minimize_request: false,
+            minimize: Default::default(),
             url_requests: Vec::new(),
             open_urls_natively: false,
             popups: Default::default(),

@@ -274,7 +274,7 @@ impl<S: 'static> Member for Window<S> {
         if let Some(p) = requests.position { self.move_to(desktop.to_points(p)); }
         if let Some(place) = &requests.place { self.place(desktop, place, t); }
         if let Some(request) = requests.window { self.request(request, &mut changes); }
-        if requests.focus && self.life.shown() { changes.front = true; changes.keys = true; }
+        if requests.activation == Some(crate::app::Activation::Focus) && self.life.shown() { changes.front = true; changes.keys = true; }
         // `quit` ends a native app; a recording runs to the end of its timeline.
         let queued = self.handle.as_ref().map(WindowHandle::take_headless).unwrap_or_default();
         for event in queued {
@@ -287,8 +287,8 @@ impl<S: 'static> Member for Window<S> {
             }
         }
         for _ in 0..8 {
-            // A headless desktop draws no Dock to minimize into (`requests.minimize` too).
-            self.rt.minimize_request = false;
+            // A headless desktop draws no Dock to minimize into (`Activation::Minimize` too).
+            self.rt.minimize_step(crate::window::MinimizeEvent::Lost);
             match self.rt.shell_request.take() {
                 Some(Shell::Close) => self.close(),
                 Some(Shell::Quit | Shell::Relaunch) | None => {}

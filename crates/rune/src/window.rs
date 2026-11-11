@@ -14,7 +14,7 @@ use winit::keyboard::ModifiersState;
 use winit::window::{Theme, Window, WindowId, WindowLevel};
 use winit::raw_window_handle::HasWindowHandle;
 
-use crate::app::{Shared, WindowRequest};
+use crate::app::{Activation, Shared, WindowRequest};
 use crate::compose::{Compositor, Frame};
 use crate::frame::clock::FrameClock;
 use crate::edit::Ime;
@@ -38,6 +38,8 @@ mod create;
 mod cpu_frame;
 mod native;
 use native::Native;
+mod wake;
+use wake::{WakeFacts, WakeWork};
 mod win;
 use win::{SurfaceRetries, SurfaceStep, SURFACE_TRIES, Win};
 mod first_frame;
@@ -69,6 +71,8 @@ pub(crate) use life::Life;
 mod sight;
 pub(crate) use sight::{Cover, Sight};
 mod lifecycle;
+mod minimize;
+pub(crate) use minimize::{Minimize, MinimizeEvent};
 mod reveal;
 use reveal::{Found, Reveal, RevealEffect};
 #[cfg(target_os = "macos")]
@@ -100,6 +104,8 @@ mod covered;
 mod occluded_surface;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod wake_tests;
 #[cfg(test)]
 mod backoff_tests;
 
@@ -652,15 +658,6 @@ fn setup_waker<S: 'static>(shared: &Arc<crate::app::Shared<S>>) -> Waker {
 /// Uncovering settles first, so that frame builds once and paints motion where it would have
 /// ended, as Core Animation's time-based motion has by the time a covered window shows again.
 pub(crate) fn covered_step<S: 'static>(rt: &mut Runtime<S>) { rt.hidden_wake(); }
-
-/// Whether a drain of other threads' requests asks the window for a frame. A hidden launcher
-/// renders a change into its cached frame (paced); a shown launcher redraws for a change or
-/// as it shows; any other shown window redraws, unless only updates that changed nothing
-/// (`quiet`) woke it.
-fn drain_frame(launcher: bool, visible: bool, was_shown: bool, changed: bool, quiet: bool) -> bool {
-    if launcher && !visible { return changed; }
-    !quiet && if launcher { changed || was_shown && visible } else { visible }
-}
 
 /// A vsynced sRGB (or non-sRGB when `srgb_blend` is set) configuration for the surface, and the
 /// first alpha mode it supports that composites translucent pixels.

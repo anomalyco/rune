@@ -5,6 +5,11 @@ use super::*;
 
 impl<S: 'static> Host<S> {
     pub(super) fn window_request(&mut self, event_loop: &ActiveEventLoop, request: WindowRequest) {
+        // A minimize asked in the same turn as a show waits for it (`Minimize`): the shell
+        // after the show takes it.
+        if matches!(request, WindowRequest::Show | WindowRequest::Open(_)) {
+            self.rt.minimize_step(MinimizeEvent::Shown);
+        }
         match request {
             WindowRequest::Open(token) => self.open(event_loop, token),
             WindowRequest::Show => self.show(event_loop),
@@ -207,9 +212,9 @@ impl<S: 'static> Host<S> {
         if let Some(position) = requests.position { self.set_position(event_loop, position); }
         if let Some(place) = requests.place { self.place(event_loop, place); }
         if let Some(request) = requests.window { self.window_request(event_loop, request); }
-        if requests.focus { self.focus(event_loop); }
+        if requests.activation == Some(Activation::Focus) { self.focus(event_loop); }
         // After the show it may follow; `focus` and `minimize` are last-wins (`AppHandle`).
-        self.rt.minimize_request |= requests.minimize;
+        if requests.activation == Some(Activation::Minimize) { self.rt.minimize_step(MinimizeEvent::Asked); }
         self.shell(event_loop);
         // A pop-up or file dialog a quiet update asked for may have been answered at once.
         let answered = quiet && ((!stale_before && self.rt.needs_commit()) || self.rt.has_pending_input());
@@ -218,17 +223,30 @@ impl<S: 'static> Host<S> {
         // A launcher's cached reveal draws nothing; a hidden one renders its changes hidden,
         // paced (`refresh_hidden`). A covered or minimised one runs them without asking for a
         // frame it wouldn't draw.
-        let launcher = self.launcher();
-        let visible = self.life.shown();
-        let framed = match self.win.as_ref().filter(|_| drain_frame(launcher, visible, shown, changed, quiet)) {
-            None => false,
-            Some(_) if launcher && !visible => self.refresh_hidden(),
-            Some(w) if (!launcher && self.life.covered()) || w.minimized() => {
+        let work = WakeWork::of(
+            WakeFacts {
+                window: self.win.is_some(),
+                launcher: self.launcher(),
+                visible: self.life.shown(),
+                was_shown: shown,
+                changed,
+                quiet,
+                covered: self.life.covered(),
+            },
+            || self.win.as_ref().is_some_and(Win::minimized),
+        );
+        let framed = match work {
+            WakeWork::Nothing => false,
+            WakeWork::HiddenFrame => self.refresh_hidden(),
+            WakeWork::CoveredFrame => {
                 self.covered_frame();
                 self.shell(event_loop);
                 true
             }
-            Some(w) => { w.request_redraw(); true }
+            WakeWork::Paint => {
+                if let Some(w) = &self.win { w.request_redraw(); }
+                true
+            }
         };
         // Neither a poll nor a frame comes to schedule the updates' `wake_after`s.
         if !polled && !framed { self.rt.schedule_pending_wakes(); }
@@ -237,14 +255,15 @@ impl<S: 'static> Host<S> {
     /// A hidden, keep-running or windowless window still reads its inbox when woken: `poll` runs
     /// with no drawable, present or animation, and its changes render when the window is next
     /// shown. A hidden launcher renders poll's changes hidden, paced, keeping its cached frame
-    /// fresh. A minimize waits for a show in the same turn (`shows`). Returns whether it polled.
+    /// fresh. A minimize waits for a show in the same turn (`Minimize`). Returns whether it
+    /// polled.
     pub(super) fn poll_hidden(&mut self, event_loop: &ActiveEventLoop, shows: bool) -> bool {
         if event_loop.exiting() || self.shown_win().is_some() { return false; }
         let changed = self.rt.poll_hidden();
         self.clipboard.flush(&mut self.rt);
-        let minimize = shows && std::mem::take(&mut self.rt.minimize_request);
+        // A show this turn minimizes after it: this poll's shell leaves the request.
+        if shows { self.rt.minimize_step(MinimizeEvent::HeldForShow); }
         self.shell(event_loop);
-        self.rt.minimize_request |= minimize;
         if changed && self.launcher() { self.refresh_hidden(); }
         true
     }
@@ -288,7 +307,7 @@ impl<S: 'static> Host<S> {
             if self.rt.stale() { w.request_redraw(); }
         }
         for _ in 0..8 {
-            let minimize = std::mem::take(&mut self.rt.minimize_request);
+            let minimize = self.rt.minimize_step(MinimizeEvent::Taken);
             match self.rt.shell_request.take() {
                 Some(shell @ (Shell::Quit | Shell::Relaunch)) => {
                     let after = shell.after().unwrap_or(crate::quit::After::Exit);
@@ -317,12 +336,12 @@ impl<S: 'static> Host<S> {
             if self.file_dialog.open(&mut self.rt, window.map(|w| &**w)) && let Some(w) = shown { w.request_redraw(); }
             // A callback that ran (a menu that couldn't open) may have asked to close, quit or
             // minimize.
-            if self.rt.shell_request.is_none() && !self.rt.minimize_request { return; }
+            if self.rt.shell_request.is_none() && !self.rt.minimize.asked() { return; }
         }
     }
 
     pub(super) fn close(&mut self, event_loop: &ActiveEventLoop) {
-        self.rt.minimize_request = false;
+        self.rt.minimize_step(MinimizeEvent::Lost);
         if let Some(w) = &mut self.win {
             w.first_frame.hide();
             #[cfg(target_os = "macos")]
@@ -399,7 +418,7 @@ impl<S: 'static> Host<S> {
     /// (`Host::replace_lost_surface`).
     pub(super) fn stop_showing(&mut self) {
         self.life.hide(crate::platform::reopen::stamp);
-        self.rt.minimize_request = false;
+        self.rt.minimize_step(MinimizeEvent::Lost);
         self.land_frame();
         // Before the window can go: a hide need not report a blur. `about_to_wait` delivers it,
         // after any Fn change the monitor saw first.
