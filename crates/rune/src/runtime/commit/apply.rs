@@ -347,7 +347,10 @@ impl<S: 'static> Runtime<S> {
             }
             let is_virtual = has_virtuals && self.virtuals.contains_key(&nodes[i].path);
             let parent_id = nodes[i].parent.map(|p| nodes[p].id);
-            let (spring_l, anim_l) = tx.motion.map_or((nodes[i].motion, nodes[i].motion.into()), |m| (m.spring(), m.anim()));
+            let (spring_l, anim_l) = tx.motion.map_or_else(
+                || { let spring = nodes[i].motion; (spring, spring.into()) },
+                |m| (m.spring(), m.anim()),
+            );
             let spring_c = tx.color_motion.unwrap_or(nodes[i].motion);
             // Text leads its background so theme crossfades never dip through zero contrast; a
             // colour change asked to land at once lands at once on text too.

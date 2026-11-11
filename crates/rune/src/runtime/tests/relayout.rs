@@ -419,7 +419,7 @@ fn a_resize_moves_nodes_keeps_inputs_and_restores_on_virtual_window_fallback() {
 fn a_commit_picks_its_kind_once_from_what_changed() {
     use crate::runtime::relayout::CommitKind;
     let mut rt = scrolled_transcript(false);
-    let (tx, settle) = (Tx::default(), Tx { commit: Commit::Settle, ..Tx::default() });
+    let (tx, settle) = (Tx::default(), Tx { commit: Commit::SettleAnimated, ..Tx::default() });
     rt.state_unchanged = true;
     assert_eq!(rt.commit_kind(&tx), CommitKind::Remount);
     rt.relayout = true;
