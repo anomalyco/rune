@@ -111,6 +111,7 @@ pub(crate) fn set_ns_cursor(cursor: Cursor) {
     thread_local! {
         static TRANSPARENT: Option<Retained<NSObject>> = image_cursor(None);
         static MOVE: Option<Retained<NSObject>> = image_cursor(Some("move"));
+        static CELL: Option<Retained<NSObject>> = image_cursor(Some("cell"));
     }
     let Some(class) = objc2::runtime::AnyClass::get("NSCursor") else { return };
     #[cfg(feature = "macos-background-cursor")]
@@ -120,6 +121,7 @@ pub(crate) fn set_ns_cursor(cursor: Cursor) {
         let image = match cursor {
             C::Hidden => TRANSPARENT.with(Clone::clone),
             C::Move => MOVE.with(Clone::clone),
+            C::Cell => CELL.with(Clone::clone),
             C::Image(image) => native(image),
             _ => None,
         };

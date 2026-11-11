@@ -25,6 +25,9 @@ pub enum Cursor {
     ResizeRow,
     /// A precise-selection cross (CSS `crosshair`), for picking a point or dragging out a rect.
     Crosshair,
+    /// A thick white plus (CSS `cell`), over a spreadsheet's cells. Windows has no such system
+    /// cursor, so there it draws Chromium's.
+    Cell,
     /// The system's magnifier with a plus (CSS `zoom-in`), at the size of every other system
     /// cursor: over a picture that opens larger.
     ZoomIn,
@@ -58,12 +61,19 @@ pub enum Cursor {
 pub struct CursorImage {
     bytes: &'static [u8],
     hot: [f32; 2],
+    /// Resampled to the OS cursor's scale pixel for pixel, for a 1-bit cursor drawn on a grid.
+    crisp: bool,
 }
+
+/// [`Cursor::Cell`] where the OS has none: Chromium's Windows `cell` cursor, each pixel of its
+/// 32 px bitmap doubled.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) const CELL: CursorImage = CursorImage { bytes: include_bytes!("cursor/cell.png"), hot: [7.0, 7.0], crisp: true };
 
 impl CursorImage {
     /// A PNG drawn at 2x, with its hot spot in points from the top-left.
     pub const fn png(bytes: &'static [u8], hot: [f32; 2]) -> Self {
-        CursorImage { bytes, hot }
+        CursorImage { bytes, hot, crisp: false }
     }
 
     pub(crate) fn bytes(&self) -> &'static [u8] {
@@ -74,11 +84,17 @@ impl CursorImage {
         self.hot
     }
 
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(crate) fn crisp(&self) -> bool {
+        self.crisp
+    }
+
 }
 
 impl PartialEq for CursorImage {
     fn eq(&self, other: &Self) -> bool {
         self.hot.map(f32::to_bits) == other.hot.map(f32::to_bits)
+            && self.crisp == other.crisp
             && (std::ptr::eq(self.bytes, other.bytes) || self.bytes == other.bytes)
     }
 }
