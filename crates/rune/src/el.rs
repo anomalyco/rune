@@ -287,6 +287,16 @@ pub fn spacer() -> El {
     base(FlexDirection::Row).grow(1.0)
 }
 
+/// A horizontal rule as a CSS `border-top: <width>px` on an empty box draws and lays out: its
+/// width snapped to device pixels as a border's is (one whole pixel under a pixel), and that
+/// many pixels of room in its column. So `rule(0.5, c)` between two rows takes 1 point at 1x,
+/// 0.8 at 1.25x and 0.667 at 1.5x, where `el().h(0.5)` takes 0.5 at every scale, and a list of
+/// rows split by Desktop's `border-bottom: 0.5px` ends where Chromium's does. It stretches
+/// across its column; give it `w_full` or margins as a `<div>` takes them.
+pub fn rule(width: f32, c: Color) -> El {
+    base(FlexDirection::Row).border_sides([width, 0.0, 0.0, 0.0], c).border_layout()
+}
+
 /// Text with styled byte ranges; wraps at its width.
 pub fn rich(content: impl Into<String>, spans: Vec<Span>) -> El {
     let mut e = text(content);

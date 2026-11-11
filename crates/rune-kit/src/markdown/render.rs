@@ -426,7 +426,8 @@ impl Renderer {
         };
         let spans = if shell.is_some() { Vec::new() } else { self.syntax_spans(code, source) };
         let body = self.with_reveal(tabbed(code, spans, highlights, s.code_block).font(s.code_block).color(ink)).copy_breaks(2, 2);
-        let frame = col().role("code").w_full().radius(6.0).fill(fill).border(0.5, border);
+        // `.highlights`' `border: 0.5px` takes its device pixel each side, inside which the padding sits.
+        let frame = col().role("code").w_full().radius(6.0).fill(fill).border(0.5, border).border_layout();
         if self.scroll_wide {
             // The text sizes to its longest line inside the viewport, which scrolls under the
             // padding so lines run to the frame's edge.
@@ -454,7 +455,7 @@ impl Renderer {
     pub(super) fn diff(&self, src: &str, map: Option<&SpanMap>) -> El {
         let s = &self.s;
         let all_hl = self.text_highlights_for(src, map);
-        let mut c = col().role("code").w_full().py(s.code_block_pad[1]).radius(6.0).fill(s.code_block_fill).border(0.5, s.code_block_border);
+        let mut c = col().role("code").w_full().py(s.code_block_pad[1]).radius(6.0).fill(s.code_block_fill).border(0.5, s.code_block_border).border_layout();
         let mut line_start = 0usize;
         let last = src.split('\n').count() - 1;
         for (n, line) in src.split('\n').enumerate() {

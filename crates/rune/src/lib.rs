@@ -135,6 +135,7 @@ pub use el::layout_watch::ScrollPos;
 pub use el::motion::MotionIntent;
 pub use el::rich;
 pub use el::row;
+pub use el::rule;
 pub use el::spacer;
 pub use el::text;
 pub use el::text_input;
