@@ -295,6 +295,7 @@ impl<S: 'static> Host<S> {
             ..Default::default()
         });
         renderer.upload_images(&gpu.device, &gpu.queue, &mut rt.images);
+        renderer.build_surfaces(&gpu.device, &rt.surfaces, rt.live_notifier());
         renderer.prepare_surfaces(&gpu.device, &gpu.queue, &rt.surfaces, (l.config.width, l.config.height));
         #[cfg(feature = "frame-profile")]
         let fp_uploaded = fp_start.map(|_| crate::frame::live_log::Stamp::now());

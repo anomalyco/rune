@@ -20,6 +20,15 @@ struct Uniforms {
     // `Orient`: centred upright to centred buffer coordinates.
     orient: [f32; 4],
 }
+/// A renderer whose pipeline compiles on a thread of its own (`SurfaceRenderer::build`).
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+pub(crate) struct Building {
+    format: wgpu::TextureFormat,
+    layout: wgpu::BindGroupLayout,
+    /// The compiled pipeline, once sent; None when the thread couldn't start.
+    built: Option<std::sync::mpsc::Receiver<wgpu::RenderPipeline>>,
+}
+
 pub(crate) struct Imported {
     frame: Arc<Frame>,
     textures: [wgpu::Texture; 2],
@@ -91,9 +100,50 @@ impl SurfaceRenderer {
     pub fn new(_: &wgpu::Device, _: wgpu::TextureFormat) -> Self {
         panic!("native surfaces are unsupported on web")
     }
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn build(_: &wgpu::Device, _: wgpu::TextureFormat, _: Box<dyn FnOnce() + Send>) -> Building {
+        panic!("native surfaces are unsupported on web")
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn finish(_: &wgpu::Device, _: &Building) -> Option<Self> {
+        None
+    }
 
     #[cfg(not(target_arch = "wasm32"))]
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+        let layout = Self::bind_layout(device);
+        let pipeline = Self::pipeline(device, &layout, format, Blend::SourceOver);
+        Self::with_pipeline(device, format, layout, pipeline)
+    }
+
+    /// Starts compiling the renderer's pipeline on a thread of its own, and runs `done` once
+    /// it's ready. The shader compiler takes hundreds of milliseconds (FXC on Windows), which
+    /// on the UI thread froze a window's input and held the first picture back.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn build(device: &wgpu::Device, format: wgpu::TextureFormat, done: Box<dyn FnOnce() + Send>) -> Building {
+        let layout = Self::bind_layout(device);
+        let (sender, built) = std::sync::mpsc::sync_channel(1);
+        let (device_for, layout_for) = (device.clone(), layout.clone());
+        let spawned = std::thread::Builder::new().name("rune-video-pipeline".into()).spawn(move || {
+            let _ = sender.send(Self::pipeline(&device_for, &layout_for, format, Blend::SourceOver));
+            done();
+        });
+        Building { format, layout, built: spawned.is_ok().then_some(built) }
+    }
+
+    /// The renderer `building` made, once its pipeline is ready; a build whose thread couldn't
+    /// start compiles here.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn finish(device: &wgpu::Device, building: &Building) -> Option<Self> {
+        let pipeline = match &building.built {
+            Some(built) => built.try_recv().ok()?,
+            None => Self::pipeline(device, &building.layout, building.format, Blend::SourceOver),
+        };
+        Some(Self::with_pipeline(device, building.format, building.layout.clone(), pipeline))
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn with_pipeline(device: &wgpu::Device, format: wgpu::TextureFormat, layout: wgpu::BindGroupLayout, pipeline: wgpu::RenderPipeline) -> Self {
         let timing_pool = device.features().contains(wgpu::Features::TIMESTAMP_QUERY).then(|| {
             Arc::new(TimingPool {
                 queries: device.create_query_set(&wgpu::QuerySetDescriptor {
@@ -123,36 +173,12 @@ impl SurfaceRenderer {
                 }
             })
             .expect("video completion thread");
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("video"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                texture_entry(1),
-                texture_entry(2),
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("video linear"),
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
-        let pipeline = Self::pipeline(device, &layout, format, Blend::SourceOver);
         Self {
             device: device.clone(),
             timing_pool,
@@ -174,6 +200,33 @@ impl SurfaceRenderer {
             #[cfg(target_os = "windows")]
             shared: None,
         }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn bind_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("video"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                texture_entry(1),
+                texture_entry(2),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        })
     }
 
     pub fn set_srgb_blend(&mut self, enabled: bool) {

@@ -738,6 +738,8 @@ enum BatchBind {
 
 pub struct Renderer {
     surfaces: Option<crate::native_surface::SurfaceRenderer>,
+    /// The native surface renderer while its pipeline compiles (`build_surfaces`).
+    surfaces_building: Option<crate::native_surface::Building>,
     pipeline: wgpu::RenderPipeline,
     format: wgpu::TextureFormat,
     shader: dxbc::Shaders,

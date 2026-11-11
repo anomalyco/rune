@@ -23,6 +23,11 @@ impl<S: 'static> Runtime<S> {
             self.update(|s, tx| f(s, visible, tx));
         }
     }
+    /// What asks for this runtime's next frame as a live value does, from any thread.
+    pub(crate) fn live_notifier(&self) -> impl FnOnce() + Send + 'static {
+        let wake = self.live_wake.clone();
+        move || wake.notify()
+    }
     pub(crate) fn live_visible(&self) -> bool { self.surface_visible }
     pub fn live_pending(&self) -> bool {
         self.surface_visible && (self.live_dirty || self.live_wake.pending.load(std::sync::atomic::Ordering::Acquire))

@@ -179,6 +179,7 @@ pub(super) fn claim(opportunity: Option<crate::platform::display_link::Opportuni
 /// Both native surface frames and offscreen prewarming use the same compositor path.
 pub(super) fn render_frame<T: 'static>(f: &mut Frame<'_, T>, compositor: &mut Option<Box<dyn Compositor<T>>>) -> bool {
     f.ui.upload_images(f.device, f.queue, &mut f.rt.images);
+    f.ui.build_surfaces(f.device, &f.rt.surfaces, f.rt.live_notifier());
     f.ui.prepare_surfaces(f.device, f.queue, &f.rt.surfaces, f.size);
     if let Some(c) = compositor {
         c.render(f);

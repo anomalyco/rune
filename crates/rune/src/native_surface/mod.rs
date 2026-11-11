@@ -14,6 +14,7 @@ pub(crate) mod place;
 #[cfg(target_os = "windows")]
 pub mod windows;
 pub use pipeline::SurfaceRenderer;
+pub(crate) use pipeline::Building;
 use std::sync::{Arc, Mutex};
 use crate::time::Instant;
 

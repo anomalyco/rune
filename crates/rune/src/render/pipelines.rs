@@ -58,6 +58,7 @@ impl Renderer {
         let springs = properties.map(|(nodes, ids)| crate::gpu::springs::Bindings::new(device, spring_layout.as_ref().unwrap(), nodes, ids));
         Renderer {
             surfaces: None,
+            surfaces_building: None,
             pipeline,
             format,
             shader,
