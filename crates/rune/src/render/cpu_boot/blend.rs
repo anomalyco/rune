@@ -94,6 +94,25 @@ pub(super) fn over_rgba(p: &mut [u8], c: [f32; 4]) {
     over(p, &Src::new(c));
 }
 
+/// The B, G, R, A bytes an opaque premultiplied RGBA `c` (`c[3] == 1`) writes over any pixel.
+#[inline]
+pub(super) fn opaque(c: [f32; 4]) -> [u8; 4] {
+    [q(c[2] * 255.0), q(c[1] * 255.0), q(c[0] * 255.0), q(c[3] * 255.0)]
+}
+
+/// A layer's row composited whole (opacity 1, inside its clip, no hole) over B, G, R, A pixels:
+/// `over_rgba` per texel, with the opaque ones written and the clear ones skipped.
+#[inline]
+pub(super) fn composite_row(row: &mut [u8], src: &[[f32; 4]]) {
+    for (p, s) in row.chunks_exact_mut(4).zip(src) {
+        if s[3] == 1.0 {
+            p.copy_from_slice(&opaque(*s));
+        } else if *s != [0.0; 4] && s[0].max(s[1]).max(s[2]).max(s[3]) * 255.0 > 0.5 {
+            over_rgba(p, *s);
+        }
+    }
+}
+
 /// Blends `s` over every pixel of `row`.
 #[inline]
 pub(super) fn over_row(row: &mut [u8], s: &Src) {

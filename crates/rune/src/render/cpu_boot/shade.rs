@@ -428,25 +428,44 @@ pub(super) fn boxes(i: &Instance, kind: u32, p: [f32; 2]) -> [f32; 4] {
             let (s, total) = ring_arc([p[0] - i.rect[0], p[1] - i.rect[1]], [i.rect[2], i.rect[3]], i.radii, bw);
             scale4(mix4(i.fill, i.border, t_y()), ring * dash_cov(s, total, [i.uv[0], i.uv[1], i.uv[2]]))
         }
-        11 => {
-            let d = sd_rounded(q, half, i.radii);
-            let cov = clamp01(0.5 - d / (soft * 2.0));
-            let (t0_raw, t1_raw) = (i.params[0], i.params[3]);
-            let (lower_open, upper_open) = (t0_raw >= 1.5, t1_raw >= 1.5);
-            let t0 = if lower_open { t0_raw - 2.0 } else { t0_raw };
-            let t1 = if upper_open { t1_raw - 2.0 } else { t1_raw };
-            let t = if i.uv[2] > 0.0 {
-                let (dx, dy) = ((p[0] - i.rect[0] - i.uv[0]) / i.uv[2], (p[1] - i.rect[1] - i.uv[1]) / i.uv[3]);
-                (dx * dx + dy * dy).sqrt()
-            } else {
-                0.5 + q[0] * i.uv[0] + q[1] * i.uv[1]
-            };
-            if (lower_open && t < t0) || (upper_open && t >= t1) { return [0.0; 4]; }
-            let u = if t1 <= t0 + 1e-6 { if t >= t0 { 1.0 } else { 0.0 } } else { clamp01((t - t0) / (t1 - t0)) };
-            scale4(mix4(i.fill, i.border, u), cov)
-        }
+        11 => radial(i, p, false),
         _ => [0.0; 4],
     }
+}
+
+/// `KIND_RADIAL` at `p`: a radial or angled linear stop segment. `inside` says `p` is where the
+/// rounded rect covers the pixel whole, so its distance needn't be taken (its coverage is 1).
+pub(super) fn radial(i: &Instance, p: [f32; 2], inside: bool) -> [f32; 4] {
+    let half = [i.rect[2] * 0.5, i.rect[3] * 0.5];
+    let q = [p[0] - (i.rect[0] + half[0]), p[1] - (i.rect[1] + half[1])];
+    let soft = i.params[2].max(0.5);
+    let (t0_raw, t1_raw) = (i.params[0], i.params[3]);
+    let (lower_open, upper_open) = (t0_raw >= 1.5, t1_raw >= 1.5);
+    let t0 = if lower_open { t0_raw - 2.0 } else { t0_raw };
+    let t1 = if upper_open { t1_raw - 2.0 } else { t1_raw };
+    let t = if i.uv[2] > 0.0 {
+        let (dx, dy) = ((p[0] - i.rect[0] - i.uv[0]) / i.uv[2], (p[1] - i.rect[1] - i.uv[1]) / i.uv[3]);
+        (dx * dx + dy * dy).sqrt()
+    } else {
+        0.5 + q[0] * i.uv[0] + q[1] * i.uv[1]
+    };
+    // Outside its stops a segment draws nothing, whatever its coverage: decided first.
+    if (lower_open && t < t0) || (upper_open && t >= t1) { return [0.0; 4]; }
+    let cov = if inside { 1.0 } else { clamp01(0.5 - sd_rounded(q, half, i.radii) / (soft * 2.0)) };
+    let u = if t1 <= t0 + 1e-6 { if t >= t0 { 1.0 } else { 0.0 } } else { clamp01((t - t0) / (t1 - t0)) };
+    scale4(mix4(i.fill, i.border, u), cov)
+}
+
+/// Whether row `py`, from pixel centre `x0` to `x1`, is all outside a linear `KIND_RADIAL`
+/// segment's open stops: `t` is linear along the row, so both ends on one side means every
+/// pixel between is.
+pub(super) fn linear_row_outside(i: &Instance, py: f32, x0: f32, x1: f32) -> bool {
+    if i.uv[2] > 0.0 { return false; }
+    let (cx, cy) = (i.rect[0] + i.rect[2] * 0.5, i.rect[1] + i.rect[3] * 0.5);
+    let t = |px: f32| 0.5 + (px - cx) * i.uv[0] + (py - cy) * i.uv[1];
+    let (ta, tb) = (t(x0), t(x1));
+    let (t0_raw, t1_raw) = (i.params[0], i.params[3]);
+    (t0_raw >= 1.5 && ta < t0_raw - 2.0 && tb < t0_raw - 2.0) || (t1_raw >= 1.5 && ta >= t1_raw - 2.0 && tb >= t1_raw - 2.0)
 }
 
 /// `image_texel` in an sRGB-blending frame: one texel of an `Rgba8UnormSrgb` image page,

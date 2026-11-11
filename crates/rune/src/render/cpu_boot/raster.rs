@@ -102,9 +102,21 @@ impl Exec for Spawn {
     }
 }
 
-/// What an `Rgba16Float` texel keeps of `v`.
+/// What an `Rgba16Float` texel keeps of `v`: rounded to half precision, ties to even, as the
+/// target stores it (`half::f16` does the same, through a runtime-dispatched instruction a
+/// call). Colours here stay far below half's largest value.
 #[inline]
-fn f16(v: f32) -> f32 { half::f16::from_f32(v).to_f32() }
+pub(super) fn f16(v: f32) -> f32 {
+    if v.abs() >= 6.103_515_6e-5 {
+        // 10 of f32's 23 mantissa bits stay: add half of what goes (and one more when what
+        // stays is odd), then cut.
+        let b = v.to_bits();
+        return f32::from_bits((b + 0x0fff + ((b >> 13) & 1)) & 0xffff_e000);
+    }
+    // Subnormal halves are whole multiples of 2^-24.
+    const M: f32 = 16_777_216.0;
+    ((v * M + 12_582_912.0) - 12_582_912.0) / M
+}
 
 /// `pow(cov / 255, e)` for each coverage byte, per exponent: Skia's text gamma keys a handful of
 /// exponents by the text's luminance, and a frame's text alternates between them (syntax colours),
@@ -214,6 +226,8 @@ struct Painter<'p, 's> {
 #[derive(Clone, Copy)]
 struct Occluder {
     n: u32,
+    /// The layer it draws into (`Bins::within`): it stands in only for what's under it there.
+    within: u32,
     solid: Solid,
     clip: Clip,
     r: [u32; 4],
@@ -299,12 +313,11 @@ impl Painter<'_, '_> {
         self.occ.clear();
         if self.bins.quiet[t] { return; }
         for &n in self.bins.tile(t) {
-            if !self.bins.on_top[n as usize] { continue; }
             let i = &self.scene.instances[n as usize];
             let Some(solid) = super::bin::opaque_box(i) else { continue };
             let (b, tile) = (self.bins.bounds[n as usize], self.tile);
             let r = [(b[0] as u32).max(tile[0]), (b[1] as u32).max(tile[1]), (b[2] as u32).min(tile[2]), (b[3] as u32).min(tile[3])];
-            if r[2] > r[0] && r[3] > r[1] { self.occ.push(Occluder { n, solid, clip: Clip::of(i), r }); }
+            if r[2] > r[0] && r[3] > r[1] { self.occ.push(Occluder { n, within: self.bins.within[n as usize], solid, clip: Clip::of(i), r }); }
         }
     }
 
@@ -321,9 +334,8 @@ impl Painter<'_, '_> {
         clip_breaks(clip, &mut breaks);
         // Occluders are in painter order: only those after this instance count.
         let later = self.occ.partition_point(|o| o.n <= self.n);
-        let occluded = self.depth == 0 && self.bins.on_top[self.n as usize];
-        let occ = if occluded { &self.occ[later..] } else { &[] };
-        let occ: Vec<&Occluder> = occ.iter().filter(|o| o.r[1] < r[3] && o.r[3] > r[1] && o.r[0] < r[2] && o.r[2] > r[0]).collect();
+        let within = self.bins.within[self.n as usize];
+        let occ: Vec<&Occluder> = self.occ[later..].iter().filter(|o| o.within == within && o.r[1] < r[3] && o.r[3] > r[1] && o.r[0] < r[2] && o.r[2] > r[0]).collect();
         for o in &occ {
             breaks.extend([o.r[1], o.r[3]]);
             solid_breaks(&o.solid, &mut breaks);
@@ -376,7 +388,14 @@ impl Painter<'_, '_> {
         if x1 <= x0 { return; }
         self.stats.span_px += u64::from(x1 - x0);
         if self.depth == 0 { return self.surface.span(x0, x1, y, c); }
-        for x in x0..x1 { self.put(x, y, c); }
+        let c16 = c.map(f16);
+        let top = &mut self.layers[self.depth - 1];
+        let (row, x0t) = (((y - self.tile[1]) * TILE_W) as usize, self.tile[0]);
+        let px = &mut top.px[row + (x0 - x0t) as usize..row + (x1 - x0t) as usize];
+        // Opaque over anything is itself: `c + d × 0`.
+        if c16[3] == 1.0 && !top.additive { return px.fill(c16); }
+        let k = if top.additive { 1.0 } else { 1.0 - c16[3] };
+        for d in px { *d = std::array::from_fn(|ch| f16(c16[ch] + d[ch] * k)); }
     }
 
     /// Draws instance `n` over pixels `r` (inside its bounds and this tile).
@@ -391,7 +410,8 @@ impl Painter<'_, '_> {
             7 => self.image(i, r, &clip),
             kind @ (0 | 4) => self.shaded(i, kind, r, &clip, interior(i)),
             1 => self.shadow(i, r, &clip),
-            kind @ (3 | 5 | 6 | 10 | 11) => self.shaded(i, kind, r, &clip, None),
+            11 => self.shaded(i, 11, r, &clip, Some(Solid { edges: [i.rect[0], i.rect[1], i.rect[0] + i.rect[2], i.rect[1] + i.rect[3]], radii: i.radii, inset: i.params[2].max(0.5) })),
+            kind @ (3 | 5 | 6 | 10) => self.shaded(i, kind, r, &clip, None),
             13 => self.backdrop(i, r, &clip),
             _ => {}
         }
@@ -427,14 +447,30 @@ impl Painter<'_, '_> {
             let py = y as f32 + 0.5;
             while segs[k].y1 <= y { k += 1; }
             let (whole, vis) = (segs[k].whole, segs[k].vis);
-            for x in vis.iter().flat_map(|(a, b)| a..b) {
+            // Where the composite is the texel itself over the window, a row at a time.
+            let (fa, fb) = if self.depth == 0 && opacity == 1.0 && !l.additive && l.hole[3] <= 0.0 { centres(whole, r[0], r[2]) } else { (r[2], r[2]) };
+            for (va, vb) in vis.iter() {
+                let (a, b) = (fa.max(va), fb.min(vb));
+                if b > a {
+                    let at = self.slot(a, y);
+                    let src = &self.layers[self.depth].px[at..at + (b - a) as usize];
+                    blend::composite_row(self.surface.row(a, y, b - a), src);
+                }
+            }
+            for x in vis.iter().flat_map(|(a, b)| a..b).filter(|&x| x < fa || x >= fb) {
                 let s = self.layers[self.depth].px[self.slot(x, y)];
                 if s == [0.0; 4] { continue; }
                 let px = x as f32 + 0.5;
                 let s = if l.additive { s.map(|v| v.clamp(0.0, 1.0)) } else { s };
                 let a = if px >= whole.0 && px <= whole.1 { 1.0 } else { clip.alpha([px, py]) };
-                let w = opacity * a * hole_alpha([px, py], l.hole);
-                if w > 0.0 { self.put(x, y, s.map(|v| v * w)); }
+                let h = hole_alpha([px, py], l.hole);
+                // Whole and opaque over the window: the texel itself, in 8-bit steps.
+                if self.depth == 0 && s[3] == 1.0 && opacity == 1.0 && a == 1.0 && h == 1.0 {
+                    self.surface.row(x, y, 1).copy_from_slice(&blend::opaque(s));
+                    continue;
+                }
+                let c = s.map(|v| v * opacity * a * h);
+                if c != [0.0; 4] { self.put(x, y, c); }
             }
         }
         self.segs = segs;
@@ -454,9 +490,18 @@ impl Painter<'_, '_> {
                 let t = ((py - i.rect[1]) / i.rect[3].max(1.0)).clamp(0.0, 1.0);
                 std::array::from_fn(|ch| i.fill[ch] * (1.0 - t) + i.uv[ch] * t)
             } else { i.fill };
+            if kind == 11 && shade::linear_row_outside(i, py, r[0] as f32 + 0.5, r[2] as f32 - 0.5) { continue; }
             for (va, vb) in segs[k].vis.iter() {
                 for x in va..ia.clamp(va, vb) { self.pixel(i, kind, clip, whole, x, y); }
-                self.put_span(ia.max(va), ib.min(vb), y, c);
+                if kind == 11 {
+                    // A gradient's colour moves along the span; only its coverage is whole there.
+                    for x in ia.max(va)..ib.min(vb) {
+                        let c = shade::radial(i, [x as f32 + 0.5, py], true);
+                        if c != [0.0; 4] { self.put(x, y, c); }
+                    }
+                } else {
+                    self.put_span(ia.max(va), ib.min(vb), y, c);
+                }
                 for x in ib.clamp(va, vb)..vb { self.pixel(i, kind, clip, whole, x, y); }
             }
         }
@@ -547,6 +592,22 @@ impl Painter<'_, '_> {
             while segs[k].y1 <= y { k += 1; }
             let (whole, vis) = (segs[k].whole, segs[k].vis);
             let ty = i.uv[1] as i32 + (py - i.rect[1]).floor() as i32;
+            if !lcd && !filtered {
+                // A mask at rest: one texel a pixel, a row of them per row.
+                if ty < 0 || ty >= side { continue; }
+                let row = &mask[(ty * side) as usize..((ty + 1) * side) as usize];
+                let t0 = i.uv[0] as i32 + (r[0] as f32 + 0.5 - i.rect[0]).floor() as i32 - r[0] as i32;
+                for x in vis.iter().flat_map(|(a, b)| a..b) {
+                    let Some(&v) = row.get((t0 + x as i32).max(0) as usize).filter(|_| t0 + x as i32 >= 0) else { continue };
+                    if v == 0 { continue; }
+                    count += 1;
+                    let px = x as f32 + 0.5;
+                    let a = if px >= whole.0 && px <= whole.1 { 1.0 } else { clip.alpha([px, py]) };
+                    let cov = self.pow.tables[table].1[v as usize];
+                    self.put(x, y, i.fill.map(|f| f * cov * a));
+                }
+                continue;
+            }
             for x in vis.iter().flat_map(|(a, b)| a..b) {
                 let px = x as f32 + 0.5;
                 let alpha = || if px >= whole.0 && px <= whole.1 { 1.0 } else { clip.alpha([px, py]) };

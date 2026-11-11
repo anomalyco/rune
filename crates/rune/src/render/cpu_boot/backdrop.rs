@@ -5,6 +5,7 @@
 //! `Rgba16Float` holds it, then the composite (backdrop_composite.wgsl) inside the record's rounded
 //! rect and clip. Only the record's region is blurred, as on the GPU.
 
+use super::raster::f16;
 use super::shade::{Clip, sd_rounded};
 use crate::render::Instance;
 
@@ -88,8 +89,6 @@ fn bilinear(uv: [f32; 2], w: u32, h: u32, texel: impl Fn(u32, u32) -> [f32; 4]) 
     let mix = |a: [f32; 4], b: [f32; 4], t: f32| -> [f32; 4] { std::array::from_fn(|c| a[c] * (1.0 - t) + b[c] * t) };
     mix(mix(texel(x0, y0), texel(x1, y0), fx), mix(texel(x0, y1), texel(x1, y1), fx), fy)
 }
-
-fn f16(v: f32) -> f32 { half::f16::from_f32(v).to_f32() }
 
 /// A record's blurred result, level 0 of the up chain, and where it sits.
 pub(super) struct Blurred {

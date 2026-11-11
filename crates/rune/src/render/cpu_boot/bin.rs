@@ -9,6 +9,8 @@ use super::shade::{Clip, has_sides, sides_inner};
 use crate::render::{Instance, KIND_BACKDROP_BLUR, KIND_DASHED, KIND_EFFECT, KIND_GLYPH, KIND_GRADIENT, KIND_LAYER, KIND_LAYER_END, KIND_RADIAL, KIND_RECT, KIND_SHADOW, NO_CLIP, corner_extent};
 
 pub(super) const TILE_W: u32 = 64;
+/// `Bins::within` for an instance that draws straight into the window.
+pub(super) const TOP: u32 = u32::MAX;
 pub(super) const TILE_H: u32 = 32;
 
 /// Instances by tile: tile `t`'s are `index[start[t]..start[t + 1]]`.
@@ -21,8 +23,9 @@ pub(super) struct Bins {
     pub bounds: Vec<[i32; 4]>,
     /// Per tile, whether it begins under an opaque instance (no clear needed).
     pub covered: Vec<bool>,
-    /// Whether each instance draws straight into the window's pixels (in no layer of its own).
-    pub on_top: Vec<bool>,
+    /// The layer each instance draws into: the plan of the innermost layer with a target of its
+    /// own around it, or `TOP` for the window's pixels.
+    pub within: Vec<u32>,
     /// The frame's backdrop blurs (all outside layers, `Scene::needs_gpu`), in painter order:
     /// each must see everything before it painted in its region first.
     pub blurs: Vec<(u32, super::backdrop::Record)>,
@@ -129,12 +132,12 @@ impl Bins {
         let (layers, scope) = plan_layers(scene.instances, (w, h));
         // Within a layer drawn to its own target, nothing reaches past the layer's bounds, and
         // nothing there can stand in for what's under the layer.
-        let mut on_top = vec![true; scene.instances.len()];
-        let mut stack: Vec<[i32; 4]> = Vec::new();
+        let mut within = vec![TOP; scene.instances.len()];
+        let mut stack: Vec<([i32; 4], u32)> = Vec::new();
         let mut n = 0;
         while n < scene.instances.len() {
-            let inside = stack.last().copied();
-            on_top[n] = inside.is_none();
+            let inside = stack.last().map(|s| s.0);
+            within[n] = stack.last().map_or(TOP, |s| s.1);
             if let Some(&p) = scope.get(&(n as u32)) {
                 let l = &layers[p as usize];
                 if scene.instances[n].params[1] == KIND_LAYER {
@@ -147,12 +150,12 @@ impl Bins {
                         Show::Flat => bounds[n] = [0; 4],
                         Show::Render => {
                             bounds[n] = inside.map_or(l.bounds, |o| cut(l.bounds, o));
-                            stack.push(bounds[n]);
+                            stack.push((bounds[n], p));
                         }
                     }
                 } else if l.show == Show::Render {
-                    bounds[n] = stack.pop().unwrap_or([0; 4]);
-                    on_top[n] = stack.is_empty();
+                    bounds[n] = stack.pop().map_or([0; 4], |s| s.0);
+                    within[n] = stack.last().map_or(TOP, |s| s.1);
                 } else {
                     bounds[n] = [0; 4];
                 }
@@ -176,7 +179,7 @@ impl Bins {
         let mut first = vec![0u32; tiles];
         for (n, i) in scene.instances.iter().enumerate() {
             let b = bounds[n];
-            if b[2] <= b[0] || b[3] <= b[1] || !on_top[n] { continue; }
+            if b[2] <= b[0] || b[3] <= b[1] || within[n] != TOP { continue; }
             if let Some(solid) = opaque_box(i) {
                 let clip = Clip::of(i);
                 let (tx0, ty0) = ((b[0] as u32).div_ceil(TILE_W), (b[1] as u32).div_ceil(TILE_H));
@@ -217,7 +220,7 @@ impl Bins {
                 at[t] += 1;
             });
         }
-        Bins { cols, rows, start: count, index, bounds, covered: first.iter().map(|&f| f > 0).collect(), culled, layers, scope, on_top, blurs, quiet }
+        Bins { cols, rows, start: count, index, bounds, covered: first.iter().map(|&f| f > 0).collect(), culled, layers, scope, within, blurs, quiet }
     }
 
     pub(super) fn tile(&self, t: usize) -> &[u32] {
