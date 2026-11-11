@@ -44,6 +44,9 @@ App-side rules live in "Launching fast" in `crates/rune/README.md` and the "Laun
 - Bound every cache in entries and in bytes, counting decoded pixels, not encoded size.
 - Take numbers from `--profile perf`. Compare paired, alternating runs by median, keep outliers, and say what a headless number leaves out (GPU upload, presentation).
 - A motion change passes `scripts/motion-audit` with its scenario added. Fix a finding in Rune rather than allowing it.
+- No file I/O in the frame loop: never read, stat, write, sync or rename a file on the UI thread during frames, input or animation. On Windows each open and `MoveFileExW` rename runs antivirus filter callbacks and can fail with a sharing violation.
+- No background rewrite churn: diagnostics and logs (`rune-perf`, traces) keep one open handle and write a summary on an incident or at shutdown, never on a repeating timer while idle.
+- Keep persistence APIs free of `std::fs` and `PathBuf` so `wasm32` targets can back them with browser storage.
 
 ## This repo is public
 

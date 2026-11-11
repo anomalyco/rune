@@ -6,7 +6,9 @@ use crate::{Config, LARGE_BYTES, SLOW_MS, Sample, incident::{Detector, Finding},
 
 const LOG_BYTES: u64 = 4 << 20;
 const INCIDENT_BYTES: usize = 256 << 10;
-const SNAPSHOT_EVERY: Duration = Duration::from_secs(2);
+/// How often process memory is checked for incidents. Nothing is written on this tick: `perf.json`
+/// is written when an incident is recorded and at shutdown, so an idle app touches no file.
+const CHECK_EVERY: Duration = Duration::from_secs(2);
 
 pub(crate) fn run(config: Config, rx: Receiver<Sample>, start: Instant, health: &Health) -> io::Result<()> {
     std::fs::create_dir_all(&config.directory)?;
@@ -18,12 +20,12 @@ pub(crate) fn run(config: Config, rx: Receiver<Sample>, start: Instant, health: 
     loop {
         match rx.recv_timeout(next.saturating_duration_since(Instant::now())) {
             Ok(s) => writer.accept(s),
-            Err(RecvTimeoutError::Disconnected) => { writer.snapshot(); break; }
+            Err(RecvTimeoutError::Disconnected) => { writer.check(); writer.snapshot(); break; }
             Err(RecvTimeoutError::Timeout) => {}
         }
         if Instant::now() >= next {
-            writer.snapshot();
-            next = Instant::now() + SNAPSHOT_EVERY;
+            writer.check();
+            next = Instant::now() + CHECK_EVERY;
         }
     }
     Ok(())
@@ -60,7 +62,7 @@ impl<'a> Writer<'a> {
         let started_at = now_ms().saturating_sub(start.elapsed().as_millis() as u64);
         Self { config, health, start, launch: format!("{}-{started_at}", std::process::id()), started_at,
             stats: Stats::default(), detector: Detector::default(), memory_at: 0, incidents: 0, hook_dropped: 0,
-            log: Log { dir: &config.directory, size: std::fs::metadata(config.directory.join("perf.log")).map_or(0, |m| m.len()), limit: LOG_BYTES } }
+            log: Log { dir: &config.directory, file: None, size: 0, limit: LOG_BYTES } }
     }
 
     fn accept(&mut self, s: Sample) {
@@ -82,6 +84,7 @@ impl<'a> Writer<'a> {
         match atomic_json(&self.config.directory, &name, &value, INCIDENT_BYTES) {
             Ok(()) => {
                 self.incidents += 1;
+                self.snapshot();
                 if let Some(hook) = &self.config.incidents
                     && hook.try_send(self.config.directory.join(name)).is_err() { self.hook_dropped += 1; }
             }
@@ -89,11 +92,24 @@ impl<'a> Writer<'a> {
         }
     }
 
-    fn snapshot(&mut self) {
+    /// The periodic check: process memory against the incident rules, and a memory line in the
+    /// log every 30 s. No snapshot.
+    fn check(&mut self) {
         let now = self.start.elapsed().as_millis() as u64;
         self.stats.prune(now);
         let memory = procwatch::usage();
         for f in self.detector.process(now, memory) { self.incident(now, f); }
+        if now >= self.memory_at {
+            let result = self.log.append(&json!({"kind": "memory", "at_ms": now, "launch": self.launch, "memory": usage_json(memory)}));
+            self.error(result);
+            self.memory_at = now + 30_000;
+        }
+    }
+
+    /// Writes `perf.json`: beside each incident and at shutdown.
+    fn snapshot(&mut self) {
+        let now = self.start.elapsed().as_millis() as u64;
+        let memory = procwatch::usage();
         let frames = self.stats.json();
         let snapshot = json!({"schema": 1, "recorder_version": env!("CARGO_PKG_VERSION"),
             "app": self.config.app, "version": self.config.build, "launch": self.launch,
@@ -108,11 +124,6 @@ impl<'a> Writer<'a> {
             "incidents": self.incidents, "incidents_suppressed": self.detector.suppressed,
             "incident_notifications_dropped": self.hook_dropped, "frames": frames});
         self.error(atomic_json(&self.config.directory, "perf.json", &snapshot, INCIDENT_BYTES));
-        if now >= self.memory_at {
-            let result = self.log.append(&json!({"kind": "memory", "at_ms": now, "launch": self.launch, "memory": usage_json(memory)}));
-            self.error(result);
-            self.memory_at = now + 30_000;
-        }
     }
 
     fn error(&self, result: io::Result<()>) {
@@ -134,31 +145,35 @@ fn atomic_json(dir: &Path, name: &str, value: &Value, limit: usize) -> io::Resul
     std::fs::rename(tmp, dir.join(name))
 }
 
-struct Log<'a> { dir: &'a Path, size: u64, limit: u64 }
+/// `perf.log`, kept open for appending: a line costs one write, not an open, a stat and a close.
+struct Log<'a> { dir: &'a Path, file: Option<File>, size: u64, limit: u64 }
 impl Log<'_> {
     fn append(&mut self, value: &Value) -> io::Result<()> {
         let mut line = serde_json::to_vec(value)?;
         line.push(b'\n');
         if line.len() as u64 > self.limit { return Err(io::Error::other("performance record exceeds log limit")); }
         let path = self.dir.join("perf.log");
-        // A previous write_all may have failed after a partial write (for example disk full).
-        // Re-read the actual size so retries cannot exceed the cap with stale accounting.
-        self.size = match std::fs::metadata(&path) {
-            Ok(m) => m.len(),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => 0,
-            Err(e) => return Err(e),
-        };
+        if self.file.is_none() {
+            let file = OpenOptions::new().create(true).append(true).open(&path)?;
+            self.size = file.metadata()?.len();
+            self.file = Some(file);
+        }
         if self.size + line.len() as u64 > self.limit {
+            self.file = None;
             std::fs::rename(&path, self.dir.join("perf.log.1"))?;
+            self.file = Some(OpenOptions::new().create(true).append(true).open(&path)?);
             self.size = 0;
         }
-        let mut file = OpenOptions::new().create(true).append(true).open(path)?;
-        file.write_all(&line)?;
-        self.size = file.metadata()?.len();
+        let Some(file) = self.file.as_mut() else { return Ok(()) };
+        if let Err(e) = file.write_all(&line) {
+            // A partial write (a full disk): the next line reopens and reads the real size.
+            self.file = None;
+            return Err(e);
+        }
+        self.size += line.len() as u64;
         Ok(())
     }
 }
-
 fn now_ms() -> u64 { SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64 }
 
 #[cfg(test)]

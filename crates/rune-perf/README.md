@@ -73,8 +73,8 @@ other threads, native and GPU allocation, and does not mean retained heap.
 | --- | --- |
 | Pending samples | 256 fixed-size records |
 | Rolling history | 60 seconds and 600 reports |
-| Snapshot | Atomic `perf.json`, every 2 seconds including idle, 256 KiB max |
-| Anomaly logs | `perf.log` + `perf.log.1`, 4 MiB each; ten frame lines/second |
+| Snapshot | Atomic `perf.json`, with each incident and at shutdown (nothing written while idle), 256 KiB max |
+| Anomaly logs | `perf.log` + `perf.log.1`, 4 MiB each, kept open for appending; ten frame lines/second |
 | Process log | Every 30 seconds |
 | Incidents | 16 reusable `perf-incident-NN.json` slots, 256 KiB each |
 | Dedup keys | 64 recent rule/window/source keys; scoped to this app/build/launch |
@@ -88,7 +88,7 @@ data in the current window, not a permanent backend promise. Process counters
 come from `procwatch::usage()`, which reads memory and descriptors without walking
 threads. macOS supplies resident/physical/lifetime-peak footprint and fds; other
 platforms currently report those unavailable. Failed reads also return unknown.
-The snapshot timestamp allows readers to mark stale processes without waking UI.
+Memory is checked against the incident rules every 2 seconds without writing; the snapshot's timestamp says when it was written.
 
 An incident preserves the bounded recent history and dropped-sample count. Slot
 paths are reused: consumers should copy a file promptly if they need durable
