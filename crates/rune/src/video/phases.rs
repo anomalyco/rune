@@ -248,21 +248,25 @@ pub(super) fn step(c: &mut Control, event: Event) -> Effects<Effect> {
             }
         }
         Event::PosterDone { attempt, result } => {
-            // A failed clip keeps its placeholder, and a player that took over reports for itself.
-            if c.failed() || attempt != c.posters.current() {
+            // A failed clip keeps its placeholder.
+            if c.failed() {
                 return Effects::none();
             }
+            // A request a player took over from still brings the clip's facts (its true frame
+            // timing), but its frame and its errors are for a surface the player now owns.
+            let current = attempt == c.posters.current();
             match result {
                 Ok(meta) => {
                     if !c.opened() {
                         opened(c, meta);
                     }
                     // A late poster never covers a frame a player made.
-                    if c.stage == Stage::Poster {
+                    if current && c.stage == Stage::Poster {
                         return Effects::one(Effect::ShowPoster);
                     }
                 }
-                Err(error) => failed(c, error),
+                Err(error) if current => failed(c, error),
+                Err(_) => {}
             }
         }
         Event::Pull => return pull(c),

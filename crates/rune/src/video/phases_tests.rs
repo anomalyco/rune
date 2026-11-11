@@ -106,6 +106,8 @@ struct Old {
     fence: u32,
     // differs from dev: the fence the newest request was made under.
     asked: u32,
+    // differs from dev: the requests the worker still owes, oldest (in flight) first.
+    pending: Vec<u32>,
     now: Instant,
     log: Vec<Cmd>,
 }
@@ -134,6 +136,7 @@ impl Old {
             done: None,
             fence: 0,
             asked: 0,
+            pending: Vec::new(),
             now,
             log: Vec::new(),
         }
@@ -264,21 +267,28 @@ impl Old {
         self.poster = if !self.audio { OldPoster::Due } else { OldPoster::Withheld };
         // differs from dev: the request remembers the fence it was made under.
         self.asked = self.fence;
+        queue(&mut self.pending, self.fence);
         self.log.push(Cmd::Ask(at));
     }
     fn take_poster(&mut self, surface: bool) {
         let Some((asked, done)) = self.done.take() else { return };
-        // differs from dev: a failed clip, or a request a player fenced, ignores the answer.
-        if self.failed.is_some() || asked != self.fence {
+        // differs from dev: a failed clip ignores the answer.
+        if self.failed.is_some() {
             return;
         }
+        // differs from dev: a request a player fenced brings facts, but no error or frame.
+        let current = asked == self.fence;
         match done {
-            Done::Err => self.fail("load failed".into()),
+            Done::Err => {
+                if current {
+                    self.fail("load failed".into());
+                }
+            }
             Done::Facts | Done::Frame | Done::FrameFails => {
                 if !self.opened() {
                     self.open(Ok(old_meta()));
                 }
-                if done != Done::Facts && surface && self.player.is_none() && self.poster == OldPoster::Due {
+                if current && done != Done::Facts && surface && self.player.is_none() && self.poster == OldPoster::Due {
                     let id = self.next_frame_id();
                     if done == Done::FrameFails {
                         self.fail("poster push failed".into());
@@ -530,7 +540,7 @@ impl Old {
             Sym::Clock(t) => self.advance_virtual(t),
             Sym::Preload => self.preload(),
             Sym::LoadAudio => self.load_audio(),
-            Sym::Done(done) => self.done = Some((self.asked, done)),
+            Sym::Done(done) => self.done = Some((answer(&mut self.pending, self.asked), done)),
             Sym::Wait(s) => self.now += Duration::from_secs(s),
             Sym::Park => self.park(),
             Sym::Apply => self.apply(&Script::READY),
@@ -726,6 +736,8 @@ struct Fake {
     kept: Option<Done>,
     /// The attempt of the newest poster request.
     asked: Attempt,
+    /// The requests the worker still owes, oldest (in flight) first.
+    pending: Vec<Attempt>,
     player: bool,
     now: Instant,
     log: Vec<Cmd>,
@@ -763,6 +775,7 @@ impl Port for Fake {
     }
     fn ask_poster(&mut self, at: f64, attempt: Attempt) {
         self.asked = attempt;
+        queue(&mut self.pending, attempt);
         self.log.push(Cmd::Ask(at));
     }
     fn make_player(&mut self) -> Result<Instant, String> {
@@ -843,7 +856,7 @@ impl New {
         let kind = if audio { Kind::Audio } else { Kind::Video };
         Self {
             c: Control { muted: !audio, kind, ..Control::default() },
-            fake: Fake { script: Script::READY, checked: false, surface: !audio, done: None, kept: None, asked: Attempt::default(), player: false, now, log: Vec::new() },
+            fake: Fake { script: Script::READY, checked: false, surface: !audio, done: None, kept: None, asked: Attempt::default(), pending: Vec::new(), player: false, now, log: Vec::new() },
         }
     }
 
@@ -924,7 +937,7 @@ impl New {
             Sym::Clock(t) => self.c.advance_virtual(t),
             Sym::Preload => self.send(Event::Preload),
             Sym::LoadAudio => self.send(Event::LoadAudio),
-            Sym::Done(done) => self.fake.done = Some((self.fake.asked, done)),
+            Sym::Done(done) => self.fake.done = Some((answer(&mut self.fake.pending, self.fake.asked), done)),
             Sym::Wait(s) => self.fake.now += Duration::from_secs(s),
             Sym::Park => {
                 step(&mut self.c, Event::Parked);
@@ -980,6 +993,21 @@ impl New {
             log: self.fake.log.clone(),
         }
     }
+}
+
+/// The poster worker's queue: the request in flight, then the newest one waiting, which a
+/// later request replaces.
+fn queue<T>(pending: &mut Vec<T>, request: T) {
+    if pending.len() == 2 {
+        pending.pop();
+    }
+    pending.push(request);
+}
+
+/// The request a finished load answers: the one in flight, else (a load the script made up) the
+/// newest.
+fn answer<T: Copy>(pending: &mut Vec<T>, newest: T) -> T {
+    if pending.is_empty() { newest } else { pending.remove(0) }
 }
 
 /// Walks every sequence up to `depth` from `(new, old)`, comparing after every symbol.

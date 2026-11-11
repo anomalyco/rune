@@ -56,12 +56,47 @@ fn a_request_from_before_a_player_does_not_answer_the_one_after_it() {
     new.fake.done = Some((stale, Done::Frame));
     new.run(Pull(Script::LOADING));
     assert_eq!(posters_shown(&new), 0, "the stale frame is for an older position");
-    assert_eq!(new.c.meta, None);
+    assert!(new.c.meta.is_some(), "its facts still count");
 
     new.fake.done = Some((current, Done::Frame));
     new.run(Pull(Script::LOADING));
     assert_eq!(posters_shown(&new), 1);
 }
+
+#[test]
+fn a_superseded_poster_keeps_the_clips_frame_timing() {
+    let mut c = Control::default();
+    let AskPoster(0.0, stale) = only(step(&mut c, Event::Preload)) else { panic!("asks for a poster") };
+    step(&mut c, Event::Play);
+    step(&mut c, Event::PlayerMade { created: Instant::now() });
+    // The poster lands after the player took over, before its item is ready.
+    let sixty = Meta { duration: 1.0, size: Some((64, 36)), frame: 1.0 / 60.0 };
+    assert!(step(&mut c, Event::PosterDone { attempt: stale, result: Ok(sixty) }).is_empty());
+    let now = Instant::now();
+    for effect in step(&mut c, Event::Item { item: Item::Ready, now }) {
+        if effect == Effect::ReadFacts {
+            // What a ready item reports, which has no frame timing of its own.
+            c.open(Ok(Meta { duration: 1.0, size: Some((64, 36)), frame: 1.0 / 30.0 }));
+        }
+    }
+    step(&mut c, Event::Framed { shown: 0.0 });
+    step(&mut c, Event::Pause);
+    step(&mut c, Event::Seek(0.02));
+    step(&mut c, Event::Reconcile { now });
+
+    assert_eq!(c.meta.map(|m| m.frame), Some(1.0 / 60.0));
+    let Stage::Ready { settle, .. } = c.stage else { panic!("ready") };
+    assert!(settle.waiting(), "20 ms is the next frame at 60 fps, so the pull waits for it");
+}
+
+fn only(effects: Effects<Effect>) -> Effect {
+    let mut effects = effects.into_iter();
+    let effect = effects.next().unwrap();
+    assert!(effects.next().is_none());
+    effect
+}
+
+use Effect::AskPoster;
 
 #[test]
 fn an_audio_load_failure_fails_the_clip() {
@@ -79,6 +114,16 @@ fn an_audio_load_failure_counts_even_after_a_player_is_made() {
 
     assert_eq!(new.c.state(), PlayerState::Failed("load failed".into()));
     assert!(new.fake.log.contains(&Cmd::Drop));
+}
+
+/// A request before a player and one after it, both owed: each answer carries its own request.
+#[test]
+fn overlapping_requests_either_side_of_a_player_answer_for_themselves() {
+    walk(
+        &[Preload, Play, Pull(Script::LOADING), Pause, Park, Pull(Script::LOADING)],
+        &[Play, Pause, Seek(0.3), Land(Done::Err), Land(Done::Frame), Land(Done::Facts), Park, Pull(Script::LOADING), Pull(Script::FRAME)],
+        6,
+    );
 }
 
 /// Every order of two requests either side of a player, with answers that fail or land.
