@@ -54,7 +54,7 @@ members = [
     "examples/site-scenes",
     "examples/luau-panel",
 ]
-exclude = ["tools/rune-dev-guard", "vendor/wgpu-hal"]
+exclude = ["tools/rune-dev-guard", "vendor/wgpu-hal", "vendor/winit"]
 
 # wgpu-hal as published plus `vendor/wgpu-hal.patch`: `dx12::Instance::expose_adapter` (a `wgpu::Adapter` for the
 # one adapter Rune picks through DXGI, with no device made on the others, `gpu/pick.rs`) and FXC loaded on
@@ -63,6 +63,11 @@ exclude = ["tools/rune-dev-guard", "vendor/wgpu-hal"]
 # a dependency's `[patch]` doesn't apply to the workspace that depends on it.
 [patch.crates-io]
 wgpu-hal = { path = "vendor/wgpu-hal" }
+# winit as published plus `vendor/winit.patch`: on Windows a new window isn't added again to the
+# taskbar it's already on (that took CoInitializeEx and a TaskbarList COM object, about 7,800 µs
+# and nine shell DLLs, before every window's first frame). Re-made by `scripts/vendor-winit.sh
+# <version>` when winit is bumped; apps that build Rune patch it too.
+winit = { path = "vendor/winit" }
 
 [workspace.package]
 edition = "2024"

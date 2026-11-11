@@ -1,0 +1,18 @@
+diff --git a/src/platform_impl/windows/window.rs b/src/platform_impl/windows/window.rs
+index 228c6f0..3776541 100644
+--- a/src/platform_impl/windows/window.rs
++++ b/src/platform_impl/windows/window.rs
+@@ -1246,7 +1246,12 @@ impl InitData<'_> {
+             unsafe { DeleteObject(region) };
+         }
+ 
+-        win.set_skip_taskbar(self.attributes.platform_specific.skip_taskbar);
++        // A new window is on the taskbar already: only taking it off needs the TaskbarList COM
++        // object (CoInitializeEx and CoCreateInstance on this thread, about 7,800 us and nine
++        // shell DLLs before the window's first frame).
++        if self.attributes.platform_specific.skip_taskbar {
++            win.set_skip_taskbar(true);
++        }
+         win.set_window_icon(self.attributes.window_icon.clone());
+         win.set_taskbar_icon(self.attributes.platform_specific.taskbar_icon.clone());
+ 
