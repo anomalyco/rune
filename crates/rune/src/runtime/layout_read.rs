@@ -581,7 +581,8 @@ impl<S: 'static> Runtime<S> {
     /// it queued any.
     fn report_rects(&mut self, quiet: bool, screen: bool) -> bool {
         let last = std::mem::take(if screen { &mut self.screen_fired } else { &mut self.layout_fired });
-        let (ox, oy) = if screen { self.window_origin } else { (0.0, 0.0) };
+        // On screen, the view's points are the window's over its zoom.
+        let ((ox, oy), k) = if screen { (self.window_origin, self.zoom()) } else { ((0.0, 0.0), 1.0) };
         let mut fired = HashMap::with_capacity_and_hasher(last.len(), Default::default());
         let mut queued = false;
         for i in 0..self.nodes.len() {
@@ -589,7 +590,7 @@ impl<S: 'static> Runtime<S> {
             if n.handlers.get().is_none_or(|h| if screen { h.on_screen_layout.is_none() } else { h.on_layout.is_none() }) || self.subtree_exiting(i) { continue; }
             let id = n.id;
             let [x, y, w, h] = self.laid_out(&self.nodes, i);
-            let r = [x + ox, y + oy, w, h];
+            let r = [x * k + ox, y * k + oy, w * k, h * k];
             if !quiet && moved(last.get(&id).copied(), Some(r)) {
                 let path = self.nodes[i].path.clone();
                 queued = true;

@@ -109,6 +109,11 @@ impl ChromeInsets {
         Self { leading, trailing, height }
     }
 
+    /// The insets, in window points, in the points of a view zoomed `k` times (`Cx::zoom`).
+    pub(crate) fn zoomed(self, k: f32) -> Self {
+        Self { leading: self.leading / k, trailing: self.trailing / k, height: self.height / k }
+    }
+
     /// The bits a memo scope hashes, so memos rebuild when the insets change.
     pub(crate) fn bits(&self) -> [u32; 3] {
         [self.leading, self.trailing, self.height].map(f32::to_bits)

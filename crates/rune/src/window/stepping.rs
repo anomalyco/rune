@@ -75,13 +75,13 @@ impl<S: 'static> Host<S> {
         #[cfg(target_os = "macos")]
         {
             let _ = request.pointer;
-            crate::platform::macos::place_window(&w.window, self.rt.viewport, request);
+            crate::platform::macos::place_window(&w.window, self.rt.window_viewport(), request);
         }
         #[cfg(not(target_os = "macos"))]
         if let Some(monitor) = crate::overlay::monitor_at(event_loop, &request.display, request.pointer) {
             let scale = monitor.scale_factor();
             let area = monitor.size();
-            let rect = crate::overlay::options::local_rect(crate::windows::PlaceRequest::at(self.rt.viewport), Some(request.placement),
+            let rect = crate::overlay::options::local_rect(crate::windows::PlaceRequest::at(self.rt.window_viewport()), Some(request.placement),
                 (area.width as f32 / scale as f32, area.height as f32 / scale as f32));
             let origin = monitor.position();
             chrome::request_inner_size(&w.window, (rect[2], rect[3]));

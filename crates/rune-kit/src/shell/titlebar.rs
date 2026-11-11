@@ -10,7 +10,7 @@ const HEIGHT: f32 = 44.0;
 /// A titlebar the app draws: leading controls, a [`TabStrip`](super::TabStrip), and trailing
 /// controls, in a `.window_drag()` band that keeps clear of the traffic lights on macOS and
 /// the caption buttons on Windows.
-/// `WindowTitlebar::from_insets(cx.chrome_insets(), zoom).leading(menu).tabs(strip).build(&kit)`.
+/// `WindowTitlebar::from_insets(cx.chrome_insets()).leading(menu).tabs(strip).build(&kit)`.
 ///
 /// Its buttons and tabs take their presses; the gaps between tabs, the bands above and below
 /// them and the empty stretch after the strip move the window, double-click to zoom it and, on
@@ -32,16 +32,15 @@ pub struct WindowTitlebar {
 }
 
 impl WindowTitlebar {
-    /// Sized from the window's insets at UI zoom `zoom` (1 unscaled): the band is as tall as
-    /// the window's titlebar and reserves `insets.leading / zoom` and `insets.trailing / zoom`.
-    pub fn from_insets(insets: ChromeInsets, zoom: f32) -> Self {
-        let z = if zoom > 0.0 { zoom } else { 1.0 };
+    /// Sized from the window's insets (`Cx::chrome_insets`, in the view's points at any
+    /// `Cx::zoom`): the band is as tall as the window's titlebar and reserves its controls.
+    pub fn from_insets(insets: ChromeInsets) -> Self {
         WindowTitlebar {
             key: "titlebar".into(),
-            height: if insets.height > 0.0 { insets.height / z } else { HEIGHT },
+            height: if insets.height > 0.0 { insets.height } else { HEIGHT },
             top_pad: 0.0,
-            leading_inset: insets.leading / z,
-            trailing_inset: insets.trailing / z,
+            leading_inset: insets.leading,
+            trailing_inset: insets.trailing,
             leading_pad: 14.0,
             trailing_pad: 12.0,
             gap: 6.0,

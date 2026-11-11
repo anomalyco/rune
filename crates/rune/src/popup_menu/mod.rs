@@ -400,7 +400,8 @@ impl Presenter {
             eprintln!("rune: {error}");
             let _ = rt.resolve_popup(None);
         }
-        if let Some((x, y)) = pointer && rt.pointer().is_none() { rt.pointer_move(x, y); }
+        // In window points; the view's are over its zoom.
+        if let Some((x, y)) = pointer && rt.pointer().is_none() { rt.pointer_move(x / rt.zoom(), y / rt.zoom()); }
         true
     }
 

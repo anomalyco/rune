@@ -30,10 +30,12 @@ pub(super) fn size(height: f32, scale: f32) -> (f32, f32) {
 /// buttons sit at the window's top-right corner whatever the root's border, clip or transform,
 /// and stay in reach of the pointer and assistive technology while the view holds a modal
 /// (`Runtime::refresh_modal_index`). `symbol` is the glyph colour (`Cx::caption_color`). A
-/// full-screen window keeps the frame with no buttons in it, so the view's paths stay.
-pub(crate) fn frame(root: El, caption: &Caption, symbol: Color, scale: f32, fit_height: bool) -> El {
+/// full-screen window keeps the frame with no buttons in it, so the view's paths stay. `scale`
+/// is the view's (device pixels per view point) and `zoom` its `Cx::zoom`: the buttons keep the
+/// window's size at every zoom, as Electron's `titleBarOverlay` does.
+pub(crate) fn frame(root: El, caption: &Caption, symbol: Color, (scale, zoom): (f32, f32), fit_height: bool) -> El {
     let root = if fit_height { root.w_full() } else { root.w_full().h_full() };
-    el().key(FRAME_KEY).child(root).children((!caption.hidden).then(|| buttons(caption, symbol, scale)))
+    el().key(FRAME_KEY).child(root).children((!caption.hidden).then(|| buttons(caption, symbol, scale, zoom)))
 }
 
 /// The frame `frame` puts around the view's root.
@@ -42,13 +44,16 @@ pub(crate) const FRAME_KEY: &str = "rune-frame";
 pub(crate) const BUTTONS_KEY: &str = "rune-caption";
 
 /// The buttons pinned to the frame's top-right corner, over everything the view drew.
-fn buttons(caption: &Caption, symbol: Color, scale: f32) -> El {
-    let (w, h) = size(caption.height, scale);
+fn buttons(caption: &Caption, symbol: Color, scale: f32, zoom: f32) -> El {
+    // Sized in window points at the window's scale, then drawn in the view's points.
+    let window = scale / zoom;
+    let (w, h) = size(caption.height, window);
+    let (w, h) = (w / zoom, h / zoom);
     row().key(BUTTONS_KEY).pin(None, Some(0.0), Some(0.0), None)
-        .children(caption.buttons().iter().map(|&button| caption_button(caption, button, symbol, (w, h), scale)))
+        .children(caption.buttons().iter().map(|&button| caption_button(caption, button, symbol, (w, h), (scale, window))))
 }
 
-fn caption_button(caption: &Caption, button: CaptionButton, symbol: Color, (w, h): (f32, f32), scale: f32) -> El {
+fn caption_button(caption: &Caption, button: CaptionButton, symbol: Color, (w, h): (f32, f32), scales: (f32, f32)) -> El {
     let enabled = caption.enabled(button);
     let (hovered, pressed) = match caption.state {
         CaptionState::Pressed { button: b, over: true } if b == button => (true, true),
@@ -70,7 +75,7 @@ fn caption_button(caption: &Caption, button: CaptionButton, symbol: Color, (w, h
         CaptionButton::Close => ("rune-caption-close", "Close"),
     };
     let mut e = el().key(key).role("button").label(label).focusable(false).disabled(!enabled).size(w, h).fill(fill)
-        .child(symbol_el(button, caption.maximized, ink, (w, h), scale));
+        .child(symbol_el(button, caption.maximized, ink, (w, h), scales));
     // The mouse presses them through the window procedure; assistive technology invokes these.
     // A dimmed button has nothing to invoke.
     if enabled {
@@ -83,10 +88,11 @@ fn caption_button(caption: &Caption, button: CaptionButton, symbol: Color, (w, h
     e
 }
 
-/// The symbol, laid out in device pixels so its strokes land on whole pixels.
-fn symbol_el(button: CaptionButton, maximized: bool, ink: Color, (w, h): (f32, f32), scale: f32) -> El {
-    let g = (10.0 * scale).round();
-    let s = scale.round().max(1.0);
+/// The symbol, laid out in device pixels so its strokes land on whole pixels: `scale` is device
+/// pixels per view point, `window` per window point, which sizes the glyph.
+fn symbol_el(button: CaptionButton, maximized: bool, ink: Color, (w, h): (f32, f32), (scale, window): (f32, f32)) -> El {
+    let g = (10.0 * window).round();
+    let s = window.round().max(1.0);
     let (bw, bh) = ((w * scale).round(), (h * scale).round());
     let (x, y) = (((bw - g) / 2.0).floor(), ((bh - g) / 2.0).floor());
     let pt = 1.0 / scale;
@@ -95,9 +101,9 @@ fn symbol_el(button: CaptionButton, maximized: bool, ink: Color, (w, h): (f32, f
             let top = (g / 2.0).floor();
             Shape::new().fill(quad(0.0, top, g, s, pt), ink)
         }
-        CaptionButton::Maximize if maximized => restore(g, s, scale, ink),
+        CaptionButton::Maximize if maximized => restore(g, s, (scale, window), ink),
         CaptionButton::Maximize => {
-            let r = (1.5 * scale).floor();
+            let r = (1.5 * window).floor();
             Shape::new().stroke_with(rounded([s / 2.0, s / 2.0, g - s / 2.0, g - s / 2.0], [r; 4], pt), true, s * pt, LineCap::Round, ink)
         }
         CaptionButton::Close => {
@@ -112,10 +118,10 @@ fn symbol_el(button: CaptionButton, maximized: bool, ink: Color, (w, h): (f32, f
 
 /// Two rounded squares: the front one at the bottom left, and the top and right edges of the
 /// one behind it.
-fn restore(g: f32, s: f32, scale: f32, ink: Color) -> Shape {
+fn restore(g: f32, s: f32, (scale, window): (f32, f32), ink: Color) -> Shape {
     let pt = 1.0 / scale;
-    let sep = 2.0 * scale;
-    let r = (1.5 * scale).floor();
+    let sep = 2.0 * window;
+    let r = (1.5 * window).floor();
     let half = s / 2.0;
     let front = [half, sep + half, g - sep - half, g - half];
     let behind = [front[0] + sep, front[1] - sep, front[2] + sep, front[3] - sep];

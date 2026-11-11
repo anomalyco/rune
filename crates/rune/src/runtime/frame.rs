@@ -8,7 +8,11 @@ impl<S: 'static> Runtime<S> {
         self.wall_start.map_or(self.clock, |t| t.elapsed().as_secs_f64())
     }
 
+    /// The window's size in its points and its scale. The view lays out in them over its zoom
+    /// ([`Cx::zoom`]), at the scale times the zoom.
     pub fn set_viewport(&mut self, viewport: (f32, f32), scale: f32) {
+        (self.zoom.window, self.zoom.window_scale) = (viewport, scale);
+        let (viewport, scale) = self.zoom.view();
         if self.fit_resized(viewport.1) {
             self.relayout = true;
             self.viewport_stepped = false;
@@ -20,6 +24,8 @@ impl<S: 'static> Runtime<S> {
     /// user's resize it doesn't land running motion: content at rest follows the window and
     /// springs keep going.
     pub(crate) fn step_viewport(&mut self, viewport: (f32, f32), scale: f32) {
+        (self.zoom.window, self.zoom.window_scale) = (viewport, scale);
+        let (viewport, scale) = self.zoom.view();
         let fresh = !self.relayout;
         if self.change_viewport(viewport, scale) && fresh { self.viewport_stepped = true; }
     }

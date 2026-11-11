@@ -259,7 +259,6 @@ struct Strip<S> {
     two_line_height: f32,
     link_inset: f32,
     count: usize,
-    zoom: f32,
     spring: Spring,
     select_on_drag_start: bool,
     /// A pointer close locks the remaining tabs' width (horizontal strips).
@@ -303,7 +302,6 @@ pub struct TabStrip<'a, S: 'static> {
     items: Vec<TabItem<'a, S>>,
     active: Option<&'a str>,
     viewport: Option<f32>,
-    zoom: f32,
     overflow: Option<TabOverflow>,
     gap: Option<f32>,
     row_height: f32,
@@ -330,7 +328,6 @@ impl<'a, S: 'static> TabStrip<'a, S> {
             items: Vec::new(),
             active: None,
             viewport: None,
-            zoom: 1.0,
             overflow: None,
             gap: None,
             row_height: 28.0,
@@ -363,11 +360,6 @@ impl<'a, S: 'static> TabStrip<'a, S> {
     /// width and density; without it they take their widest.
     pub fn viewport_width(mut self, width: Option<f32>) -> Self {
         self.viewport = width;
-        self
-    }
-    /// The UI zoom the strip draws at (default 1), so drags convert from window points.
-    pub fn zoom(mut self, zoom: f32) -> Self {
-        self.zoom = if zoom > 0.0 { zoom } else { 1.0 };
         self
     }
     /// The overflow policy (default [`TabOverflow::HORIZONTAL_DEFAULT`] or
@@ -525,7 +517,7 @@ impl<'a, S: 'static> TabStrip<'a, S> {
         let pitches: Vec<f32> = self.items.iter().map(|t| pitch(t.pinned, t.subtitle.is_some())).collect();
         let auto = auto_scroll::view(&format!("{}-scroll", self.key));
         if let Some(point) = drag.incoming() {
-            let slot = landing_slot(&pitches, pinned, point, &auto, vertical, self.zoom);
+            let slot = landing_slot(&pitches, pinned, point, &auto, vertical);
             drag.open_gap(slot, pitch(false, false));
         }
         let st = Strip {
@@ -538,7 +530,6 @@ impl<'a, S: 'static> TabStrip<'a, S> {
             two_line_height,
             link_inset: 8.0,
             count,
-            zoom: self.zoom,
             spring: self.spring,
             select_on_drag_start: self.select_on_drag_start.unwrap_or(!vertical),
             horizontal_lock: !vertical,
@@ -619,12 +610,12 @@ impl<'a, S: 'static> TabStrip<'a, S> {
     }
 }
 
-/// The slot a tab dragged in from another strip lands in at `point` (window points): after each
+/// The slot a tab dragged in from another strip lands in at `point` (view points): after each
 /// unpinned tab whose middle the point has passed, measured with each tab's own length (`pitches`)
 /// from where the strip's viewport drew and how far it has scrolled.
-fn landing_slot(pitches: &[f32], pinned: usize, point: [f32; 2], auto: &auto_scroll::View, vertical: bool, zoom: f32) -> usize {
+fn landing_slot(pitches: &[f32], pinned: usize, point: [f32; 2], auto: &auto_scroll::View, vertical: bool) -> usize {
     let a = usize::from(vertical);
-    let along = (point[a] - auto_scroll::rect(auto)[a]) / zoom + auto_scroll::offset(auto, vertical);
+    let along = point[a] - auto_scroll::rect(auto)[a] + auto_scroll::offset(auto, vertical);
     let mut start = 0.0;
     for (i, pitch) in pitches.iter().enumerate() {
         if i >= pinned && along < start + pitch / 2.0 {

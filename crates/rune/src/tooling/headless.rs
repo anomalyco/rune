@@ -219,7 +219,7 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
     let mut early_place = None;
     // `Tx::resize_window` moves the viewport on the virtual clock; the canvas keeps its size.
     let mut frame_anim = None;
-    let mut resize_from = rt.viewport;
+    let mut resize_from = rt.window_viewport();
     // As on macOS, a frame change asked for while nothing moves waits a frame to start.
     let mut idle = true;
     if script.iter().find(|e| !matches!(e.kind, Kind::Mark(_))).is_some_and(|e| e.t <= 1e-9) {
@@ -249,7 +249,8 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
             next_ev += 1;
             if let Some(g) = gate.as_mut() && !matches!(e.kind, Kind::Mark(_)) { g.input("script"); }
             let (x, y) = match &e.pos {
-                Pos::Xy(x, y) => (*x, *y),
+                // A script's points are the window's; the view's are over its zoom.
+                Pos::Xy(x, y) => (*x / rt.zoom(), *y / rt.zoom()),
                 Pos::Key(key) => rt.find(key).unwrap_or_else(|| die(&format!("script: no element with key {key:?}"))),
                 Pos::Rel(_, _) if e.kind.at_pointer() => rt.pointer().unwrap_or((0.0, 0.0)),
                 Pos::Rel(dx, dy) => (last_down.0 + dx, last_down.1 + dy),
@@ -281,8 +282,9 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
                 Kind::Key(k, true) => rt.repeat_key(k.clone()),
                 Kind::Physical(event) => rt.physical_input(*event),
                 Kind::Paste(content) => rt.paste_content(content.clone()),
-                Kind::Wheel(dx, dy) => wheel(&mut rt, (x, y), *dx, *dy),
-                Kind::Fling(vx, vy) => fling(&mut rt, (x, y), *vx, *vy),
+                // A wheel turns as far on screen at any zoom, as Chromium's does.
+                Kind::Wheel(dx, dy) => { let z = rt.zoom(); wheel(&mut rt, (x, y), *dx / z, *dy / z) }
+                Kind::Fling(vx, vy) => { let z = rt.zoom(); fling(&mut rt, (x, y), *vx / z, *vy / z) }
                 Kind::Files(step) => file_input(&mut rt, step, (x, y)),
                 &Kind::Resize(dw, dh) => eased_input::step_resize(&mut rt, &mut resize_from, (dw, dh), scale),
                 kind => {
@@ -499,7 +501,7 @@ fn take_window_frame<S>(rt: &mut Runtime<S>, anim: &mut Option<crate::window::fr
     let Some(request) = rt.window_frame.take() else { return };
     let Some(size) = request.size else { return };
     let (w, h) = clamp_size(size, min, max);
-    let from = [0.0, 0.0, rt.viewport.0, rt.viewport.1];
+    let from = [0.0, 0.0, rt.window_viewport().0, rt.window_viewport().1];
     *anim = Some(FrameAnim::retarget(anim.as_ref(), request.spring, start, from, [0.0, 0.0, w, h]));
 }
 
