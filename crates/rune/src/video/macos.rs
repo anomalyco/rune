@@ -543,8 +543,9 @@ pub(super) fn apply(shared: &Arc<Shared>) {
 }
 
 /// Audio, on the main thread: what a live player (`Control::live`) reports now, while it plays.
-pub(super) fn live_time(shared: &Shared) -> Option<f64> {
-    if shared.kind != Kind::Audio || MainThreadMarker::new().is_none() {
+/// `live`: the player's own position is the one to read (`Control::live`).
+pub(super) fn live_time(shared: &Shared, live: bool) -> Option<f64> {
+    if !live || shared.kind != Kind::Audio || MainThreadMarker::new().is_none() {
         return None;
     }
     let native = shared.native.try_lock().ok()?;

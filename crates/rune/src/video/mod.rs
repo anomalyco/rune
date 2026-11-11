@@ -358,7 +358,7 @@ impl Player {
             let c = self.read();
             (c.time, c.live())
         };
-        if live { backend::live_time(&self.shared).unwrap_or(time) } else { time }
+        backend::live_time(&self.shared, live).unwrap_or(time)
     }
     /// Length in seconds, once loaded.
     pub fn duration(&self) -> Option<f64> {

@@ -146,8 +146,9 @@ pub(super) fn preload(shared: &Arc<Shared>) {
     }
 }
 
-/// Audio: where the clock has it now.
-pub(super) fn live_time(shared: &Shared) -> Option<f64> {
+/// Audio: where the clock has it now. The clock runs only while the sound does, so it's always
+/// the one to read.
+pub(super) fn live_time(shared: &Shared, _: bool) -> Option<f64> {
     if shared.kind != Kind::Audio {
         return None;
     }
