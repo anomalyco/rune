@@ -35,20 +35,30 @@ pub fn set_app_icon(bytes: impl Into<Vec<u8>>) -> Result<(), String> {
     {
         let image = image::load_from_memory(&bytes.into()).map_err(|e| format!("set_app_icon: {e}"))?.into_rgba8();
         let size = |px: u32| image::imageops::resize(&image, px, px, image::imageops::FilterType::Lanczos3).into_raw();
-        *WINDOWS.lock().unwrap_or_else(|e| e.into_inner()) = Some(WindowsIcon { small: size(SMALL), big: size(BIG) });
+        *WINDOWS.lock().unwrap_or_else(|e| e.into_inner()) = Some(WindowsIcon::Pixels { small: size(SMALL), big: size(BIG) });
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let _ = bytes;
     Ok(())
 }
 
-/// Windows: the icon's pixels at the two sizes a window shows, so each new window makes its own
-/// `HICON`s. The small one draws in the title bar and the taskbar's small mode; the big one on
-/// the taskbar and in Alt+Tab, where Windows scales it to the display's DPI.
+/// Windows: the app's icon from the executable's own icon resource `id` (the one Explorer shows),
+/// in place of `set_app_icon`'s bytes: each window loads it at the size it shows with
+/// `LoadImageW`, so nothing is decoded or resized at launch. Call it before `run`.
 #[cfg(target_os = "windows")]
-struct WindowsIcon {
-    small: Vec<u8>,
-    big: Vec<u8>,
+pub fn set_app_icon_resource(id: u16) {
+    *WINDOWS.lock().unwrap_or_else(|e| e.into_inner()) = Some(WindowsIcon::Resource(id));
+}
+
+/// Windows: where each new window's `HICON`s come from. The small one draws in the title bar and
+/// the taskbar's small mode; the big one on the taskbar and in Alt+Tab, where Windows scales it to
+/// the display's DPI.
+#[cfg(target_os = "windows")]
+enum WindowsIcon {
+    /// Pixels at the two sizes, from `set_app_icon`.
+    Pixels { small: Vec<u8>, big: Vec<u8> },
+    /// The executable's icon resource, from `set_app_icon_resource`.
+    Resource(u16),
 }
 
 #[cfg(target_os = "windows")]
@@ -61,12 +71,17 @@ const BIG: u32 = 256;
 /// Windows: `attrs` with the app's icon, once `set_app_icon` has one.
 #[cfg(target_os = "windows")]
 pub(crate) fn with_icon(attrs: winit::window::WindowAttributes) -> winit::window::WindowAttributes {
-    use winit::platform::windows::WindowAttributesExtWindows;
+    use winit::platform::windows::{IconExtWindows, WindowAttributesExtWindows};
     use winit::window::Icon;
     let icon = WINDOWS.lock().unwrap_or_else(|e| e.into_inner());
-    let Some(icon) = icon.as_ref() else { return attrs };
-    let small = Icon::from_rgba(icon.small.clone(), SMALL, SMALL).ok();
-    let big = Icon::from_rgba(icon.big.clone(), BIG, BIG).ok();
+    let (small, big) = match icon.as_ref() {
+        None => return attrs,
+        Some(WindowsIcon::Pixels { small, big }) => (Icon::from_rgba(small.clone(), SMALL, SMALL).ok(), Icon::from_rgba(big.clone(), BIG, BIG).ok()),
+        Some(WindowsIcon::Resource(id)) => {
+            let at = |px: u32| Icon::from_resource(*id, Some(winit::dpi::PhysicalSize::new(px, px))).ok();
+            (at(SMALL), at(BIG))
+        }
+    };
     attrs.with_window_icon(small).with_taskbar_icon(big)
 }
 

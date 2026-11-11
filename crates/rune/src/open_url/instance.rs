@@ -77,7 +77,6 @@ mod windows {
     };
     use windows_sys::Win32::System::RemoteDesktop::ProcessIdToSessionId;
     use windows_sys::Win32::System::Threading::GetCurrentProcessId;
-    use windows_sys::Win32::System::WindowsProgramming::GetUserNameW;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         AllowSetForegroundWindow, EnumWindows, GW_OWNER, GWL_EXSTYLE, GetWindow, GetWindowLongW, GetWindowThreadProcessId, IsIconic,
         IsWindowVisible, SW_RESTORE, SetForegroundWindow, ShowWindow, WS_EX_TOOLWINDOW,
@@ -128,18 +127,31 @@ mod windows {
         let mut session = 0;
         // SAFETY: writes the session id into `session`.
         unsafe { ProcessIdToSessionId(GetCurrentProcessId(), &mut session) };
-        let mut buf = [0u16; 257];
-        let mut len = buf.len() as u32;
-        // SAFETY: `len` is the buffer's length in characters; it comes back as the name's,
-        // counting the terminating NUL.
-        let user = if unsafe { GetUserNameW(buf.as_mut_ptr(), &mut len) } != 0 {
-            String::from_utf16_lossy(&buf[..(len as usize).saturating_sub(1)])
-        } else {
-            String::new()
-        };
+        let user = user_sid();
         let clean = |s: &str| s.chars().map(|c| if c == '\\' || c.is_control() { '-' } else { c }).collect::<String>();
         let name = format!(r"\\.\pipe\rune-instance-{session}-{}-{}", clean(&user), clean(id));
         name.chars().take(256).collect()
+    }
+
+    /// The user's SID from this process's token, as hex: what names the account without asking the
+    /// LSA (`GetUserNameW` loads SspiCli.dll and calls into the LSA before the first frame).
+    fn user_sid() -> String {
+        use windows_sys::Win32::Security::{GetLengthSid, GetTokenInformation, TOKEN_QUERY, TOKEN_USER, TokenUser};
+        use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+        let mut token = std::ptr::null_mut();
+        let mut buf = [0u64; 64];
+        let mut len = 0u32;
+        // SAFETY: this process's token, queried into a buffer of `size_of_val(&buf)` bytes (8-aligned,
+        // as TOKEN_USER needs), closed after; the SID it points at lives in that buffer.
+        unsafe {
+            if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == 0 { return String::new(); }
+            let ok = GetTokenInformation(token, TokenUser, buf.as_mut_ptr().cast(), std::mem::size_of_val(&buf) as u32, &mut len) != 0;
+            CloseHandle(token);
+            if !ok { return String::new(); }
+            let sid = (*(buf.as_ptr() as *const TOKEN_USER)).User.Sid;
+            let bytes = std::slice::from_raw_parts(sid as *const u8, GetLengthSid(sid) as usize);
+            bytes.iter().map(|b| format!("{b:02x}")).collect()
+        }
     }
 
     fn wide(s: &str) -> Vec<u16> {
