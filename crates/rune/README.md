@@ -1921,6 +1921,9 @@ and push retained immutable CoreVideo buffers from a decoder thread. macOS uses
 CVMetalTextureCache and wgpu-hal Metal texture import without CPU pixel copies.
 BGRA and NV12 420v/420f are supported with BT.601/709 matrices and sRGB/709 transfer
 attachments. Pixel-matched video uses exact texel loads at Retina scale.
+A window's or overlay's first drawn surface compiles the surface pipeline on a thread of its
+own; the surface draws from the frame after it's ready, which the window's live wake asks for.
+Headless runs compile it in place.
 
 Per-draw notifications carry source frame ID, CPU submit time, completion-observed time,
 and optional GPU render-pass timestamp queries, read only while a drawn surface has an observer
