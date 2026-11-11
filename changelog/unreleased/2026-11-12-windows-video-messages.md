@@ -1,0 +1,1 @@
+- **Windows video: plain failure messages for a refused connection and a cut-short clip.** A clip whose server refuses the connection now fails with "the clip's server couldn't be reached", and an mp4 cut off before its index with "the clip is incomplete or damaged", instead of Media Foundation's raw codes. `RUNE_VIDEO_LOG` lines all count microseconds from the first line.
