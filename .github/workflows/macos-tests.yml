@@ -4,29 +4,32 @@ on:
   push:
     branches: [dev]
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, closed]
 
 permissions:
   contents: read
 
-# One run at a time per branch, and a newer push replaces any run still waiting (an hour-long Mac
-# job per push queued six deep). On dev a running job finishes, so a busy branch still gets results;
-# a PR update cancels its running job.
+# One run at a time per branch or PR, and a newer push replaces any run still waiting (an hour-long
+# Mac job per push queued six deep). On dev a running job finishes, so a busy branch still gets
+# results; a PR update cancels its running job. Closing or merging a PR cancels its run too: PRs
+# often merge seconds after opening, and the dev push run tests the merged code. PR groups use the
+# PR number because a merged PR's closed event can carry the base branch ref, which would cancel dev.
 concurrency:
-  group: macos-tests-${{ github.ref }}
+  group: macos-tests-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   size:
+    if: github.event.action != 'closed'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - run: bash scripts/file-size.sh
 
   # Mac runners are scarce and shared across the organisation, and this job takes over an hour, so
-  # draft PRs skip it; marking a PR ready for review starts it.
+  # draft PRs skip it; marking a PR ready for review starts it. A closed PR's run only cancels.
   test:
-    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    if: github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.event.action != 'closed')
     runs-on: macos-latest
     timeout-minutes: 90
     env:
