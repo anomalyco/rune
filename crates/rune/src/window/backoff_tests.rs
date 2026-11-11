@@ -118,15 +118,31 @@ struct Apart {
     owed: Option<Instant>,
 }
 
+/// The retry rule as the window had it before this machine, copied here literally: the reference
+/// must not call the production code it checks, or a change to the doubling would move both sides.
+fn retry(missed: Missed, paced: bool, now: Instant, occluded_wait: &mut Duration) -> Option<Instant> {
+    match missed {
+        Missed::Occluded => {
+            let at = now + (*occluded_wait).clamp(OCCLUDED_RETRY, OCCLUDED_MAX);
+            *occluded_wait = (*occluded_wait * 2).min(OCCLUDED_MAX);
+            Some(at)
+        }
+        Missed::Timeout if paced => None,
+        Missed::Timeout => Some(now + TIMEOUT_RETRY),
+        Missed::Outdated | Missed::Unconfigured => Some(now + OCCLUDED_RETRY),
+    }
+}
+
 impl Apart {
     fn new() -> Self { Apart { retry: None, occluded: OCCLUDED_RETRY, hidden: TIMEOUT_RETRY, quiet: false, owed: None } }
 
     fn step(&mut self, step: Step, now: Instant) {
         match step {
-            Step::Occluded => self.retry = Missed::Occluded.retry(false, now, &mut self.occluded),
-            Step::Timeout => self.retry = Missed::Timeout.retry(false, now, &mut self.occluded),
-            Step::PacedTimeout => self.retry = Missed::Timeout.retry(true, now, &mut self.occluded),
-            Step::Outdated => self.retry = Missed::Outdated.retry(false, now, &mut self.occluded),
+            Step::Occluded => self.retry = retry(Missed::Occluded, false, now, &mut self.occluded),
+            Step::Timeout => self.retry = retry(Missed::Timeout, false, now, &mut self.occluded),
+            Step::PacedTimeout => self.retry = retry(Missed::Timeout, true, now, &mut self.occluded),
+            Step::Outdated => self.retry = retry(Missed::Outdated, false, now, &mut self.occluded),
+            Step::Unconfigured => self.retry = retry(Missed::Unconfigured, false, now, &mut self.occluded),
             Step::Hidden => {
                 self.retry = Some(now + self.hidden);
                 self.hidden = (self.hidden * 2).min(OCCLUDED_MAX);
@@ -163,6 +179,7 @@ enum Step {
     Timeout,
     PacedTimeout,
     Outdated,
+    Unconfigured,
     Hidden,
     HiddenPreparing,
     At,
@@ -199,6 +216,7 @@ fn holds_up(seq: &[Step]) {
             Step::Timeout => { backoff.step(BackoffEvent::Missed { missed: Missed::Timeout, paced: false, now }); }
             Step::PacedTimeout => { backoff.step(BackoffEvent::Missed { missed: Missed::Timeout, paced: true, now }); }
             Step::Outdated => { backoff.step(BackoffEvent::Missed { missed: Missed::Outdated, paced: false, now }); }
+            Step::Unconfigured => { backoff.step(BackoffEvent::Missed { missed: Missed::Unconfigured, paced: false, now }); }
             Step::Hidden => { backoff.step(BackoffEvent::HiddenMissed { preparing: false, now }); }
             Step::HiddenPreparing => { backoff.step(BackoffEvent::HiddenMissed { preparing: true, now }); }
             Step::At => { backoff.step(BackoffEvent::At(now + TIMER_FRAME)); }
@@ -221,7 +239,7 @@ fn holds_up(seq: &[Step]) {
         let mut missed = backoff;
         missed.step(BackoffEvent::Missed { missed: Missed::Occluded, paced: false, now });
         let mut wait = apart.occluded;
-        assert_eq!(missed.deadline(), Missed::Occluded.retry(false, now, &mut wait), "the occluded wait after {seq:?} at {k}");
+        assert_eq!(missed.deadline(), retry(Missed::Occluded, false, now, &mut wait), "the occluded wait after {seq:?} at {k}");
         let mut hidden = backoff;
         hidden.step(BackoffEvent::HiddenMissed { preparing: false, now });
         assert_eq!(hidden.deadline(), Some(now + apart.hidden), "the hidden wait after {seq:?} at {k}");
@@ -234,9 +252,10 @@ fn holds_up(seq: &[Step]) {
 
 #[test]
 fn every_order_of_events_leaves_the_same_deadline_and_waits() {
-    let all = [Step::Occluded, Step::Timeout, Step::PacedTimeout, Step::Outdated, Step::Hidden, Step::HiddenPreparing, Step::At,
+    let all = [Step::Occluded, Step::Timeout, Step::PacedTimeout, Step::Outdated, Step::Unconfigured, Step::Hidden, Step::HiddenPreparing, Step::At,
         Step::Lapsed, Step::Uncovered, Step::Present, Step::TimerAsk, Step::TimerStallAgain, Step::TimerDrawn, Step::QuietCleared, Step::TakeQuiet];
     every_sequence(&all, 3, holds_up);
-    let common = [Step::Occluded, Step::Hidden, Step::Present, Step::Uncovered, Step::TimerAsk, Step::TimerStallAgain, Step::QuietCleared, Step::TakeQuiet];
+    let common = [Step::Occluded, Step::Unconfigured, Step::Hidden, Step::Present, Step::Uncovered, Step::TimerAsk, Step::TimerStallAgain,
+        Step::QuietCleared, Step::TakeQuiet];
     every_sequence(&common, 6, holds_up);
 }
