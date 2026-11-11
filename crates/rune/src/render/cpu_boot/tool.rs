@@ -61,7 +61,7 @@ impl Tool {
             "fill": { "masks": fills.masks, "texels": fills.texels, "cover_ns": fills.cover_ns, "copy_ns": fills.copy_ns } });
         match &painted {
             Ok(p) => out["paint"] = json!({
-                "bin_ns": p.report.bin_ns, "hash_ns": p.hash_ns, "raster_ns": p.report.raster_ns, "total_ns": p.report.total_ns, "threads": p.report.threads,
+                "bin_ns": p.report.bin_ns, "hash_ns": p.hash_ns, "plan_ns": p.plan_ns, "move_ns": p.move_ns, "scrolled": p.scrolled, "slowest_tile_ns": p.report.slowest_tile_ns, "raster_ns": p.report.raster_ns, "total_ns": p.report.total_ns, "threads": p.report.threads,
                 "dirty_tiles": p.dirty_tiles, "tiles": p.tiles, "rects": p.rects, "span_px": p.report.span_px, "shaded_px": p.report.shaded_px, "glyph_px": p.report.glyph_px,
                 "dirty_px": p.rects.iter().map(|r| u64::from(r[2] - r[0]) * u64::from(r[3] - r[1])).sum::<u64>(),
             }),
