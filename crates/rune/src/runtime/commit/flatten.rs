@@ -43,6 +43,41 @@ pub(super) fn pixel_ratio(pixels: &crate::Pixels) -> f32 {
     if w > 0 && h > 0 { w as f32 / h as f32 } else { 0.0 }
 }
 
+/// How a picture that takes one side from its image's ratio gets the other. Taffy carries an
+/// aspect ratio over from the preferred size before min and max clamp it (`w_full().max_w(176.0)`
+/// at 4.4:1 in a 696-point column came out 176 wide yet reserved 158 tall), so a side in points
+/// is clamped here first. A percentage under a min or max can't be: that picture measures
+/// instead (`Picture::Measured`), its other side from the side it gets, as a browser sizes an
+/// image.
+fn picture_side(style: &mut CompactStyle) -> Picture {
+    use taffy::util::MaybeResolve;
+    let size = style.size();
+    let tall = size.height.is_auto();
+    let (min, max) = (style.min_size(), style.max_size());
+    let (set, min, max) = if tall { (size.width, min.width, max.width) } else { (size.height, min.height, max.height) };
+    if min.is_auto() && max.is_auto() { return Picture::Styled; }
+    let points = |l: LengthPercentageAuto| l.maybe_resolve(None, |_, _| 0.0);
+    let limits_in_points = (min.is_auto() || points(min).is_some()) && (max.is_auto() || points(max).is_some());
+    let Some(v) = set.maybe_resolve(None, |_, _| 0.0).filter(|_| limits_in_points) else { return Picture::Measured };
+    let v = points(max).map_or(v, |m| v.min(m));
+    let v = points(min).map_or(v, |m| v.max(m));
+    let side = taffy::Dimension::length(v);
+    style.set_size(if tall { Size { width: side, height: size.height } } else { Size { width: size.width, height: side } });
+    Picture::Styled
+}
+
+/// How a picture's ratio reaches layout.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Picture {
+    /// As the style's aspect ratio.
+    Styled,
+    /// As its leaf's measure (`text_layout::compute_layout`), keyed by the ratio.
+    Measured,
+}
+
+/// A measured picture's measure key: its ratio, so a new one measures again.
+fn picture_key(ratio: f32) -> u64 { 0x7069_6300_0000_0000 | u64::from(ratio.to_bits()) }
+
 // Build the owned path directly, without cloning a key or formatting an index into a
 // temporary segment first. Measurement and flattening must use the same identity rule.
 /// Whether `path` lies inside an element keyed `scope` (always, without one).
@@ -421,9 +456,9 @@ fn flatten_owned(
             style.aspect_ratio().is_none() && sz.width.is_auto() != sz.height.is_auto()
         })
         .map(pixel_ratio);
-    if let Some(ratio) = pixel_aspect.filter(|&r| r > 0.0) {
-        style.set_aspect_ratio(Some(ratio));
-    }
+    let picture = pixel_aspect.filter(|&r| r > 0.0).map(|ratio| (ratio, picture_side(&mut style)));
+    if let Some((ratio, Picture::Styled)) = picture { style.set_aspect_ratio(Some(ratio)); }
+    let measure = measure.or(picture.filter(|p| p.1 == Picture::Measured).map(|p| picture_key(p.0)));
     let aspect_fit = (cold.aspect_fit > 0.0).then(|| {
         let room = fit_room(&style, parent_row);
         Box::new((cold.aspect_fit, std::mem::replace(&mut style, room)))
@@ -620,9 +655,9 @@ fn flatten_ref(
             style.aspect_ratio().is_none() && sz.width.is_auto() != sz.height.is_auto()
         })
         .map(pixel_ratio);
-    if let Some(ratio) = pixel_aspect.filter(|&r| r > 0.0) {
-        style.to_mut().set_aspect_ratio(Some(ratio));
-    }
+    let picture = pixel_aspect.filter(|&r| r > 0.0).map(|ratio| (ratio, picture_side(style.to_mut())));
+    if let Some((ratio, Picture::Styled)) = picture { style.to_mut().set_aspect_ratio(Some(ratio)); }
+    let measure = measure.or(picture.filter(|p| p.1 == Picture::Measured).map(|p| picture_key(p.0)));
     let aspect_fit = if c.aspect_fit > 0.0 {
         let room = fit_room(&style, parent_row);
         let orig = std::mem::replace(&mut style, Cow::Owned(room)).into_owned();

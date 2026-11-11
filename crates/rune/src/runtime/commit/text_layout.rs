@@ -332,7 +332,9 @@ pub(super) fn compute_layout(taffy: &mut LayoutEngine, root: SlotId, room: Size<
     taffy.compute_layout(root, room, |inputs, ctx, style| {
         taffy::compute_leaf_layout(inputs, style, |_, _| 0.0, |known, avail| {
             let Some(i) = ctx else { return Size::ZERO };
-            let spec = nodes[i].text.as_ref().unwrap();
+            let Some(spec) = nodes[i].text.as_ref() else {
+                return picture_size(known, avail, nodes[i].cold.get().and_then(|c| c.pixel_aspect).unwrap_or(0.0));
+            };
             // `known` is the border box; `avail` is already the content box (known or styled
             // size, clamped, less padding and border), which is what `lay_out_text` wraps at.
             let w = if spec.wrap {
@@ -367,6 +369,18 @@ pub(super) fn compute_layout(taffy: &mut LayoutEngine, root: SlotId, room: Size<
             }
         })
     });
+}
+
+/// A measured picture's size (`flatten::Picture::Measured`): the side it's given, and the other
+/// from its image's `ratio`; with neither given, as wide as its room.
+fn picture_size(known: Size<Option<f32>>, avail: Size<AvailableSpace>, ratio: f32) -> Size<f32> {
+    if ratio <= 0.0 { return Size { width: known.width.unwrap_or(0.0), height: known.height.unwrap_or(0.0) }; }
+    let room = match avail.width {
+        AvailableSpace::Definite(w) => Some(w.max(0.0)),
+        _ => None,
+    };
+    let width = known.width.or(known.height.map(|h| h * ratio)).or(room).unwrap_or(0.0);
+    Size { width, height: known.height.unwrap_or(width / ratio) }
 }
 
 /// The height (device px) of `l` as `spec` shows it: its first `max_lines` lines when set.
