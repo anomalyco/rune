@@ -168,8 +168,18 @@ mod flags {
         pub fn clear(&mut self, cb: &mut Fake, which: Option<&Arc<Slot>>) {
             let Some(held) = &self.held else { return };
             if which.is_some_and(|w| !held.slot.as_ref().is_some_and(|s| Arc::ptr_eq(s, w))) { return; }
+            // differs from dev: dev sent no clear for a failed replay. This one keeps the hold and
+            // its deadline unless the wipe is confirmed, so the timeout still clears the secret.
+            if which.is_some_and(|w| matches!(*lock(&w.state), SecretState::Failed(_))) {
+                // differs from dev: a copy arriving between this check and the wipe is erased here,
+                // where dev sent no clear. It's the same race as dev's clear_now; r130 fixes it for
+                // every wipe.
+                if !self.unchanged(cb) || cb.clear().is_err() || self.unchanged(cb) { return; }
+                self.own_pills = None;
+                return self.release(SecretState::Cleared);
+            }
             if self.unchanged(cb) {
-                cb.clear();
+                let _ = cb.clear();
                 self.own_pills = None;
                 self.release(SecretState::Cleared);
             } else {
@@ -208,6 +218,17 @@ enum Logged {
 }
 type Log = Arc<Mutex<Vec<Logged>>>;
 
+/// How a clipboard responds to being wiped.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WipeMode {
+    Works,
+    Refused,
+    /// Says it worked, and changes nothing.
+    NoEffect,
+    /// Refused, and the clipboard is locked for reading from then on.
+    RefusedAndLocks,
+}
+
 /// A clipboard with a scripted interruption during its next write.
 struct Fake {
     id: usize,
@@ -219,6 +240,8 @@ struct Fake {
     /// The last change was another app's.
     others: bool,
     fail: Option<String>,
+    unreadable: bool,
+    wipe: WipeMode,
     log: Log,
     during_write: Option<Box<dyn FnOnce(&mut Fake)>>,
 }
@@ -243,6 +266,7 @@ impl Fake {
         self.count += 1;
         self.others = true;
     }
+    fn failing(&self) -> bool { self.unreadable || self.wipe != WipeMode::Works }
     /// Still exactly the secret Rune wrote.
     fn ours(&self) -> bool { self.landed == Some(self.count) }
     /// Another app's copy Rune can tell from its own.
@@ -253,17 +277,29 @@ impl Fake {
 impl Backend for Fake {
     fn write(&mut self, copy: &ClipboardWrite) -> Result<(), String> { self.land(&copy.content) }
     fn text(&mut self) -> Option<Zeroizing<String>> {
+        if self.unreadable { return None; }
         self.content.as_ref().filter(|c| c.has_plain()).map(|c| c.text.clone())
     }
     fn content(&mut self, all: bool) -> Option<ClipboardContent> {
+        if self.unreadable { return None; }
         self.content.clone().and_then(|c| if all { Some(c) } else { c.text_forms() })
     }
     fn revision(&self) -> Option<u64> { self.counted.then_some(self.count) }
-    fn clear(&mut self) {
+    fn clear(&mut self) -> Result<(), String> {
+        match self.wipe {
+            WipeMode::Works => {}
+            WipeMode::Refused => return Err("locked".into()),
+            WipeMode::NoEffect => return Ok(()),
+            WipeMode::RefusedAndLocks => {
+                self.unreadable = true;
+                return Err("locked".into());
+            }
+        }
         self.content = None;
         self.count += 1;
         self.others = false;
         lock(&self.log).push(Logged::Wiped(self.id));
+        Ok(())
     }
 }
 
@@ -363,6 +399,10 @@ enum Ev {
     OtherSameText,
     /// A's writes start or stop failing, with a new error each time.
     ToggleFailA,
+    /// A's reads start or stop failing.
+    ToggleUnreadableA,
+    /// A's wipes move on to their next way of failing, or back to working.
+    CycleWipeA,
     ClearHeldA,
     ShutdownA,
     /// The workers reach the clears `clear_now` queued. Until then, reads are ahead of them.
@@ -420,7 +460,7 @@ impl<E: Engine> Rig<E> {
         let (t_write, t) = E::secret("fixture-other", LONG);
         let (forever_write, forever) = E::secret("fixture-forever", Duration::MAX);
         let cancel_on_wake = Arc::new(AtomicBool::new(false));
-        let board = |id| Fake { id, content: None, count: 0, counted: counted[id], landed: None, others: false, fail: None, log: log.clone(), during_write: None };
+        let board = |id| Fake { id, content: None, count: 0, counted: counted[id], landed: None, others: false, fail: None, unreadable: false, wipe: WipeMode::Works, log: log.clone(), during_write: None };
         let notify = |id: usize| {
             let (log, s, t, arm) = (log.clone(), s.clone(), t.clone(), cancel_on_wake.clone());
             Notify {
@@ -529,6 +569,13 @@ impl<E: Engine> Rig<E> {
                 self.fails += 1;
                 self.boards[0].fail = self.boards[0].fail.is_none().then(|| format!("denied {}", self.fails));
             }
+            ToggleUnreadableA => self.boards[0].unreadable = !self.boards[0].unreadable,
+            CycleWipeA => self.boards[0].wipe = match self.boards[0].wipe {
+                WipeMode::Works => WipeMode::Refused,
+                WipeMode::Refused => WipeMode::NoEffect,
+                WipeMode::NoEffect => WipeMode::RefusedAndLocks,
+                WipeMode::RefusedAndLocks => WipeMode::Works,
+            },
             ClearHeldA => if self.turn(0) { self.engines[0].clear_held(&mut self.boards[0]); },
             ShutdownA => if self.turn(0) {
                 self.engines[0].clear_held(&mut self.boards[0]);
@@ -585,7 +632,7 @@ fn check(sequence: &[Ev], counted: [bool; 2], start: Instant) -> Result<(), Stri
 fn keeps_clear_nows_promise(machines: &mut Rig<Core>, reference: &mut Rig<flags::Core>) -> Result<(), String> {
     let reached = machines.first.filter(|&b| machines.alive[b]);
     let reachable = matches!(machines.s.state(), SecretState::Holding | SecretState::Failed(_));
-    let ours = reachable && reached.is_some_and(|b| machines.boards[b].ours());
+    let ours = reachable && reached.is_some_and(|b| machines.boards[b].ours() && machines.engines[b].watching() && !machines.boards[b].failing());
     let others = [0, 1].map(|b| machines.boards[b].others_copy().cloned());
     let before = [0, 1].map(|b| machines.boards[b].content.clone());
     for ev in [CancelS, Pump] {
@@ -651,6 +698,8 @@ const BOARDS: &[Ev] = &[WriteSA, WriteSB, WriteTA, ReadA, ReadB, CancelS, Pump, 
 /// Interruptions during a write, against what follows them on the same board.
 const IN_FLIGHT: &[Ev] = &[WriteSA, WriteSASlow, WriteSASlowHash, WriteSACancelInWrite, WriteSAOtherInWrite, WriteSACancelOtherInWrite, WriteSACancelInWake, ReadA, CancelS, Pump, OtherA, ToggleFailA, Timeout];
 /// How a copy's life ends: shutdown, dropped writes, pills, a look-alike from another app.
+/// A failed replay against clipboards that won't read or wipe.
+const FAILURES: &[Ev] = &[WriteSA, WriteSB, ToggleFailA, ToggleUnreadableA, CycleWipeA, CancelS, Pump, Timeout, ReadA, OtherA, ClearHeldA];
 const ENDINGS: &[Ev] = &[WriteSA, WriteSB, WriteTA, WriteForeverA, WritePillsA, ReadA, CancelS, Pump, Timeout, OtherSameText, ShutdownA, DropWrites];
 
 #[test]
@@ -664,6 +713,11 @@ fn every_six_events_around_a_write_match_the_flags() {
 }
 
 #[test]
+fn every_six_events_with_a_failing_clipboard_match_the_flags() {
+    exhaust_all(FAILURES);
+}
+
+#[test]
 fn every_six_events_ending_a_copy_match_the_flags() {
     exhaust_all(ENDINGS);
 }
@@ -671,7 +725,7 @@ fn every_six_events_ending_a_copy_match_the_flags() {
 /// The whole alphabet at once; too long for the normal run. Run with `--ignored`, one test per job.
 const ALL: &[Ev] = &[
     WriteSA, WriteSB, WriteTA, WriteForeverA, WritePillsA, WriteSASlow, WriteSASlowHash, WriteSACancelInWrite, WriteSAOtherInWrite, WriteSACancelOtherInWrite, WriteSACancelInWake,
-    ReadA, ReadB, CancelS, Timeout, OtherA, OtherB, OtherSameText, ToggleFailA, ClearHeldA, ShutdownA, Pump, DropWrites,
+    ReadA, ReadB, CancelS, Timeout, OtherA, OtherB, OtherSameText, ToggleFailA, ToggleUnreadableA, CycleWipeA, ClearHeldA, ShutdownA, Pump, DropWrites,
 ];
 
 fn exhaust_whole_alphabet(counted: [bool; 2]) {
@@ -794,6 +848,39 @@ fn clear_now_spares_another_apps_copy_after_a_failed_replay() {
     assert_eq!((text_of(&rig.boards[0]), wipes(&rig, 0)), (Some("theirs"), 0));
 }
 
+/// A failed replay, a `clear_now` that can't finish, then the secret's own timeout.
+fn keeps_its_timeout(break_it: &[Ev], mend_it: &[Ev]) {
+    let start = [WriteSA, ToggleFailA, WriteSA];
+    let during: Vec<Ev> = start.iter().chain(break_it).chain(&[CancelS, Pump]).copied().collect();
+    let rig = run(&during);
+    assert_eq!(rig.boards[0].ours(), true, "the clear couldn't finish");
+    assert!(rig.engines[0].watching(), "the hold stays");
+    assert_eq!(rig.s.state(), SecretState::Failed("denied 1".into()));
+    let after: Vec<Ev> = during.iter().chain(mend_it).chain(&[Timeout, ReadA]).copied().collect();
+    let rig = run(&after);
+    assert_eq!((text_of(&rig.boards[0]), rig.s.state(), wipes(&rig, 0)), (None, SecretState::Cleared, 1));
+}
+
+#[test]
+fn a_failed_replay_keeps_its_timeout_when_the_read_fails() {
+    keeps_its_timeout(&[ToggleUnreadableA], &[ToggleUnreadableA]);
+}
+
+#[test]
+fn a_failed_replay_keeps_its_timeout_when_the_wipe_is_refused() {
+    keeps_its_timeout(&[CycleWipeA], &[CycleWipeA, CycleWipeA, CycleWipeA]);
+}
+
+#[test]
+fn a_failed_replay_keeps_its_timeout_when_the_wipe_does_nothing() {
+    keeps_its_timeout(&[CycleWipeA, CycleWipeA], &[CycleWipeA, CycleWipeA]);
+}
+
+#[test]
+fn a_failed_replay_keeps_its_timeout_when_a_refused_wipe_locks_the_clipboard() {
+    keeps_its_timeout(&[CycleWipeA, CycleWipeA, CycleWipeA], &[CycleWipeA, ToggleUnreadableA]);
+}
+
 #[test]
 fn clear_now_still_reaches_only_the_first_board() {
     let rig = run(&[WriteSA, WriteSB, CancelS, Pump]);
@@ -832,7 +919,7 @@ fn a_write_reports_holding_then_starts_the_delay_then_hashes() {
 
 #[test]
 fn a_hold_with_no_deadline_keeps_no_earlier_alarm() {
-    let mut cb = Fake { id: 0, content: None, count: 0, counted: true, landed: None, others: false, fail: None, log: Log::default(), during_write: None };
+    let mut cb = Fake { id: 0, content: None, count: 0, counted: true, landed: None, others: false, fail: None, unreadable: false, wipe: WipeMode::Works, log: Log::default(), during_write: None };
     let mut core = Core::default();
     core.write(&mut cb, ClipboardWrite::secret("first".into(), LONG).0, None, &RealTime);
     assert!(core.alarm.is_some());

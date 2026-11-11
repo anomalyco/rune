@@ -260,7 +260,7 @@ impl Backend for Board {
         self.content.clone().and_then(|c| if all { Some(c) } else { c.text_forms() })
     }
     fn revision(&self) -> Option<u64> { Some(self.revision) }
-    fn clear(&mut self) { self.content = None; self.revision += 1; }
+    fn clear(&mut self) -> Result<(), String> { self.content = None; self.revision += 1; Ok(()) }
 }
 
 /// Called by the shared event-loop exit path, including overlay-only applications.
@@ -276,7 +276,7 @@ trait Backend {
     /// decoding an image can take a while.
     fn content(&mut self, _all: bool) -> Option<ClipboardContent> { self.text().map(ClipboardContent::from) }
     fn revision(&self) -> Option<u64>;
-    fn clear(&mut self);
+    fn clear(&mut self) -> Result<(), String>;
 }
 /// How often the worker checks that a held secret is still on the clipboard. Where there is no
 /// change count (Linux) it compares the text's fingerprint, so it checks less often.
@@ -384,7 +384,7 @@ impl Core {
         for effect in step_hold(&mut self.seq, &mut self.hold, event) {
             match effect {
                 HoldEffect::Wipe => {
-                    cb.clear();
+                    let _ = cb.clear();
                     self.own_pills = None;
                 }
                 HoldEffect::Release(slot, state) => slot.released(state),
@@ -401,8 +401,17 @@ impl Core {
 
     fn clear<B: Backend>(&mut self, cb: &mut B, which: Option<&Arc<Slot>>) {
         if !self.hold.answers(which) { return; }
+        if which.is_some_and(|s| s.failed()) { return self.recover(cb); }
         let ours = self.unchanged(cb);
         self.apply(cb, HoldEvent::Clear { ours });
+    }
+
+    /// Clears what a failed replay left held. Anything short of a confirmed wipe keeps the hold,
+    /// so its delay still clears the secret.
+    fn recover<B: Backend>(&mut self, cb: &mut B) {
+        if !self.unchanged(cb) || cb.clear().is_err() || self.unchanged(cb) { return; }
+        self.own_pills = None;
+        self.apply(cb, HoldEvent::Wiped);
     }
 
     /// Expire the held secret, or let it go if the clipboard changed under it.
@@ -447,7 +456,7 @@ mod tests {
         }
         fn text(&mut self) -> Option<Zeroizing<String>> { Some(Zeroizing::new(self.state.lock().unwrap().text.clone())) }
         fn revision(&self) -> Option<u64> { Some(self.state.lock().unwrap().revision) }
-        fn clear(&mut self) { let mut s = self.state.lock().unwrap(); s.text.clear(); s.clears += 1; }
+        fn clear(&mut self) -> Result<(), String> { let mut s = self.state.lock().unwrap(); s.text.clear(); s.clears += 1; Ok(()) }
     }
     impl Drop for Fake {
         fn drop(&mut self) {

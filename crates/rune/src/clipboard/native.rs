@@ -89,7 +89,7 @@ impl Backend for arboard::Clipboard {
         Some(content)
     }
     fn revision(&self) -> Option<u64> { revision() }
-    fn clear(&mut self) { let _ = arboard::Clipboard::clear(self); }
+    fn clear(&mut self) -> Result<(), String> { arboard::Clipboard::clear(self).map_err(|e| e.to_string()) }
 }
 
 fn run_worker<B: Backend>(recv: mpsc::Receiver<Request>, mut open: impl FnMut() -> Option<B>) {

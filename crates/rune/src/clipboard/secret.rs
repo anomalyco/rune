@@ -108,6 +108,7 @@ pub(super) struct Slot {
 impl Slot {
     fn step(&self, event: SecretEvent) -> Effects<SecretEffect> { step(&mut lock(&self.secret), event) }
     pub(super) fn set(&self, state: SecretState) { self.step(SecretEvent::Report(state)); }
+    pub(super) fn failed(&self) -> bool { matches!(lock(&self.secret).report(), SecretState::Failed(_)) }
     pub(super) fn held(&self) { self.step(SecretEvent::Held); }
     pub(super) fn released(&self, state: SecretState) { self.step(SecretEvent::Released(state)); }
     pub(super) fn cancelled(&self) -> bool { matches!(*lock(&self.secret), Secret::Cancelled { .. }) }
@@ -206,6 +207,8 @@ pub(super) enum HoldEvent {
     Lost,
     /// A clear was asked for; `ours` says whether the clipboard still has what Rune wrote.
     Clear { ours: bool },
+    /// The caller wiped the clipboard itself and confirmed it.
+    Wiped,
     /// An alarm came due.
     Due { attempt: Attempt, ours: bool },
 }
@@ -231,6 +234,7 @@ pub(super) fn step_hold(seq: &mut Seq, hold: &mut Hold, event: HoldEvent) -> Eff
         }
         HoldEvent::Lost => release(hold, SecretState::Replaced),
         HoldEvent::Clear { ours } => settle(hold, ours),
+        HoldEvent::Wiped => release(hold, SecretState::Cleared),
         HoldEvent::Due { attempt, ours } if hold.armed(attempt) => settle(hold, ours),
         HoldEvent::Due { .. } => Effects::none(),
     }
