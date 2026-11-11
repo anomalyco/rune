@@ -143,12 +143,14 @@ impl Control {
         #[cfg(target_os = "linux")]
         {
             let Some(AttachEffect::Run { wake }) = effect else { return Err(ShortcutError::NotRunning) };
-            let engine = self.engine.lock().unwrap().clone().ok_or(ShortcutError::NotRunning)?;
+            let shared = self.engine.lock().unwrap().clone().ok_or(ShortcutError::NotRunning)?;
             // Acquire the engine before releasing routing, so shutdown cannot race a new call.
-            let mut engine = engine.lock().unwrap();
+            let mut engine = shared.lock().unwrap();
             drop(route);
             let result = f(&mut engine);
             drop(engine);
+            // A finished call must not keep a replaced engine, and its backend's grabs, alive.
+            drop(shared);
             wake();
             result
         }

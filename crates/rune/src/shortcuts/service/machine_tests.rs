@@ -3,7 +3,7 @@
 //! teardown keeps running until the sequence says it finished.
 
 use super::*;
-use std::{cell::RefCell, sync::LazyLock, thread::ThreadId};
+use std::{cell::RefCell, collections::BTreeSet, rc::Rc, sync::LazyLock, thread::ThreadId};
 
 fn other_thread() -> ThreadId { std::thread::spawn(|| std::thread::current().id()).join().unwrap() }
 
@@ -551,4 +551,312 @@ fn the_last_unregistration_disclaims_before_closing_and_release_closes_first() {
     let effects: Vec<_> = step_bindings(&mut state, BindEvent::Release).into_iter().collect();
     assert!(matches!(effects.as_slice(), [BindEffect::Disconnect(()), BindEffect::DisclaimAll(_)]));
     assert!(matches!(state, Bindings::Disconnected));
+}
+
+// Two hosts overlapping, and calls stopped partway through an engine. Three sides play each
+// sequence: the code as it was, that code with the marked departure, and the new code. The new
+// code must match the marked reference at every event, and the reference must match the old
+// code up to the event where the departure first shows.
+static OVERLAP_CHORD: LazyLock<Shortcut> = LazyLock::new(|| chord("ctrl+alt+shift+f18"));
+const OVERLAP_ID: u32 = 0x5000_0000;
+
+const STALE_CLAIM: &str = "a replaced engine nobody is using kept its claim";
+const STALE_CONFLICT: &str = "a conflict came from an engine nobody is using";
+const GRAB_WITHOUT_OWNER: &str = "a live engine holds a chord with no owner on record";
+const OWNER_WITHOUT_GRAB: &str = "an owner is on record for a chord no live engine holds";
+const WAKE_LETS_GO: &str = "a call in its wake no longer keeps the engine's claims";
+
+fn overlap_claims(native: &Mutex<Vec<(ShortcutId, Shortcut, &'static str)>>) -> Vec<u32> {
+    let mut claims: Vec<_> = native.lock().unwrap().iter().filter(|(_, s, _)| *s == *OVERLAP_CHORD).map(|(id, ..)| id.0).collect();
+    claims.sort();
+    claims
+}
+
+trait OverlapEngine {
+    fn fresh() -> Self;
+    fn add(&mut self, id: u32) -> Result<(), ShortcutError>;
+    fn remove(&mut self, id: u32) -> Result<(), ShortcutError>;
+    fn held(&self) -> Vec<u32>;
+    fn close(&mut self);
+}
+
+impl OverlapEngine for OldEngine {
+    fn fresh() -> Self { old_engine("Overlap", Start::NoBackend) }
+    fn add(&mut self, id: u32) -> Result<(), ShortcutError> { self.register(ShortcutId(id), OVERLAP_CHORD.clone()) }
+    fn remove(&mut self, id: u32) -> Result<(), ShortcutError> { self.unregister(ShortcutId(id)) }
+    fn held(&self) -> Vec<u32> { self.registrations.keys().map(|id| id.0).collect() }
+    fn close(&mut self) { self.release(); }
+}
+
+impl OverlapEngine for Engine {
+    fn fresh() -> Self { new_engine("Overlap", Start::NoBackend) }
+    fn add(&mut self, id: u32) -> Result<(), ShortcutError> { self.register(ShortcutId(id), OVERLAP_CHORD.clone()) }
+    fn remove(&mut self, id: u32) -> Result<(), ShortcutError> { self.unregister(ShortcutId(id)) }
+    fn held(&self) -> Vec<u32> {
+        let (Bindings::Virtual(registrations) | Bindings::Connected { registrations, .. }) = &self.bindings else { return vec![] };
+        registrations.keys().map(|id| id.0).collect()
+    }
+    fn close(&mut self) { self.release(); }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum Seen { Skipped, Done, Parked, Answer(Result<(), ShortcutError>) }
+
+type Handle<E> = Rc<RefCell<E>>;
+
+#[derive(Clone, Copy)]
+enum Waiter { Register(u32), Unregister(u32) }
+
+/// What every side shares: the hosts, the slot, the handlers and the stopped calls.
+struct Stage<E> {
+    attached: bool,
+    open: [bool; 2],
+    slot: Option<Handle<E>>,
+    handlers: BTreeSet<u32>,
+    /// A call is stopped in its wake, past the engine.
+    in_wake: bool,
+    /// What that call still holds.
+    held: Option<Handle<E>>,
+    /// A call stopped inside the engine, holding its lock.
+    inside: Option<Handle<E>>,
+    /// A call parked on the engine's lock, holding the routing lock.
+    waiting: Option<(Handle<E>, Waiter)>,
+    next: u32,
+    latest: Option<u32>,
+    broken: Vec<&'static str>,
+}
+
+impl<E: OverlapEngine> Stage<E> {
+    fn new() -> Self {
+        Self { attached: false, open: [false; 2], slot: None, handlers: BTreeSet::new(), in_wake: false, held: None, inside: None, waiting: None, next: OVERLAP_ID, latest: None, broken: vec![] }
+    }
+
+    fn slot_held(&self) -> Vec<u32> { self.slot.as_ref().map_or_else(Vec::new, |engine| engine.borrow().held()) }
+
+    fn slot_is_inside(&self) -> bool {
+        matches!((&self.slot, &self.inside), (Some(slot), Some(inside)) if Rc::ptr_eq(slot, inside))
+    }
+
+    /// Every engine something still keeps alive.
+    fn alive(&self) -> Vec<&Handle<E>> {
+        self.slot.iter().chain(&self.held).chain(&self.inside).chain(self.waiting.iter().map(|(engine, _)| engine)).collect()
+    }
+
+    /// A call reaches `engine`, and the caller lets go of it.
+    fn finish(&mut self, engine: Handle<E>, waiter: Waiter) -> Seen {
+        let on_slot = self.slot.as_ref().is_some_and(|slot| Rc::ptr_eq(slot, &engine));
+        let answer = match waiter {
+            Waiter::Register(id) => engine.borrow_mut().add(id),
+            Waiter::Unregister(id) => engine.borrow_mut().remove(id),
+        };
+        drop(engine);
+        match (waiter, &answer) {
+            (Waiter::Register(id), Ok(())) => self.latest = Some(id),
+            (Waiter::Register(id), Err(error)) => {
+                self.handlers.remove(&id);
+                if *error == ShortcutError::Conflict && on_slot && self.slot_held().is_empty() && self.inside.is_none() { self.broken.push(STALE_CONFLICT); }
+            }
+            (Waiter::Unregister(id), Ok(())) => { self.handlers.remove(&id); }
+            (Waiter::Unregister(_), Err(_)) => {}
+        }
+        Seen::Answer(answer)
+    }
+
+    fn call(&mut self, waiter: Waiter) -> Seen {
+        let Some(engine) = self.slot.clone().filter(|_| self.attached) else {
+            if let Waiter::Register(id) = waiter { self.handlers.remove(&id); }
+            return Seen::Answer(Err(ShortcutError::NotRunning));
+        };
+        if self.slot_is_inside() {
+            self.waiting = Some((engine, waiter));
+            return Seen::Parked;
+        }
+        self.finish(engine, waiter)
+    }
+
+    fn register(&mut self) -> Seen {
+        if self.waiting.is_some() { return Seen::Skipped; }
+        self.next += 1;
+        self.handlers.insert(self.next);
+        self.call(Waiter::Register(self.next))
+    }
+
+    fn unregister(&mut self) -> Seen {
+        let (Some(id), None) = (self.latest, &self.waiting) else { return Seen::Skipped };
+        self.call(Waiter::Unregister(id))
+    }
+
+    fn attach(&mut self, host: usize) -> Seen {
+        self.open[host] = true;
+        self.slot = Some(Rc::new(RefCell::new(E::fresh())));
+        self.attached = true;
+        Seen::Done
+    }
+
+    fn close(&mut self, host: usize) -> Seen {
+        self.open[host] = false;
+        self.attached = false;
+        if let Some(engine) = self.slot.take() { engine.borrow_mut().close(); }
+        self.handlers.clear();
+        Seen::Done
+    }
+
+    fn leave(&mut self) -> Seen {
+        self.inside = None;
+        match self.waiting.take() {
+            Some((engine, waiter)) => self.finish(engine, waiter),
+            None => Seen::Done,
+        }
+    }
+}
+
+trait Overlap {
+    type E: OverlapEngine;
+    fn stage(&mut self) -> &mut Stage<Self::E>;
+    fn stage_ref(&self) -> &Stage<Self::E>;
+    fn stop_in_wake(&mut self);
+    fn claims(&self) -> Vec<u32>;
+}
+
+/// The code as it was, or with `departures` the same code plus the marked change.
+struct Reference { stage: Stage<OldEngine>, departures: bool }
+
+impl Overlap for Reference {
+    type E = OldEngine;
+    fn stage(&mut self) -> &mut Stage<OldEngine> { &mut self.stage }
+    fn stage_ref(&self) -> &Stage<OldEngine> { &self.stage }
+
+    fn stop_in_wake(&mut self) {
+        // differs from dev: a call lets go of the engine before its wake.
+        if self.departures { return; }
+        self.stage.held = self.stage.slot.clone();
+    }
+
+    fn claims(&self) -> Vec<u32> { overlap_claims(&OLD_NATIVE) }
+}
+
+/// The new code around the real engine: a call holds nothing during its wake.
+struct NewOverlap(Stage<Engine>);
+
+impl Overlap for NewOverlap {
+    type E = Engine;
+    fn stage(&mut self) -> &mut Stage<Engine> { &mut self.0 }
+    fn stage_ref(&self) -> &Stage<Engine> { &self.0 }
+    fn stop_in_wake(&mut self) {}
+    fn claims(&self) -> Vec<u32> { overlap_claims(&NATIVE) }
+}
+
+/// Letters: 0, 1 attach a host; 2, 3 close one; 4 register the chord; 5 unregister the latest;
+/// 6, 7 a call stops in its wake and goes; 8 a call stops inside the engine; 9 it leaves;
+/// 10 it leaves and the backend then refuses what was waiting.
+fn overlap_play(world: &mut impl Overlap, letter: usize) -> Seen {
+    let stage = world.stage();
+    let reachable = stage.attached && stage.slot.is_some();
+    match letter {
+        0 | 1 if stage.open[letter] => Seen::Skipped,
+        0 | 1 => stage.attach(letter),
+        2 | 3 if !stage.open[letter - 2] || stage.inside.is_some() || stage.waiting.is_some() => Seen::Skipped,
+        2 | 3 => stage.close(letter - 2),
+        4 => stage.register(),
+        5 => stage.unregister(),
+        6 if stage.in_wake || !reachable || stage.slot_is_inside() || stage.waiting.is_some() => Seen::Skipped,
+        6 => { stage.in_wake = true; world.stop_in_wake(); Seen::Done }
+        7 if !stage.in_wake => Seen::Skipped,
+        7 => { stage.in_wake = false; stage.held = None; Seen::Done }
+        8 if stage.inside.is_some() || !reachable || stage.waiting.is_some() => Seen::Skipped,
+        8 => { stage.inside = stage.slot.clone(); Seen::Done }
+        9 if stage.inside.is_none() => Seen::Skipped,
+        9 => stage.leave(),
+        _ if stage.inside.is_none() || stage.waiting.is_none() => Seen::Skipped,
+        _ => {
+            let broken = || Err(ShortcutError::Backend("refused".into()));
+            scripted(Ok(()), broken(), broken(), || stage.leave())
+        }
+    }
+}
+
+fn overlap_check(world: &mut impl Overlap) {
+    let claims = world.claims();
+    let stage = world.stage();
+    let live = stage.slot_held();
+    let alive: Vec<u32> = stage.alive().iter().flat_map(|engine| engine.borrow().held()).collect();
+    if stage.inside.is_none() && stage.waiting.is_none() && claims.iter().any(|id| !live.contains(id)) { stage.broken.push(STALE_CLAIM); }
+    if alive.iter().any(|id| !claims.contains(id)) { stage.broken.push(GRAB_WITHOUT_OWNER); }
+    if claims.iter().any(|id| !alive.contains(id)) { stage.broken.push(OWNER_WITHOUT_GRAB); }
+}
+
+type OverlapView = (Seen, bool, [bool; 2], Vec<u32>, Vec<u32>, Vec<u32>);
+
+fn overlap_view(world: &impl Overlap, seen: Seen) -> OverlapView {
+    let stage = world.stage_ref();
+    let mut live = stage.slot_held();
+    live.sort();
+    (seen, stage.attached, stage.open, stage.handlers.iter().copied().collect(), world.claims(), live)
+}
+
+fn clear_notes() { RIG.with(|rig| { let mut rig = rig.borrow_mut(); rig.new.clear(); rig.old.clear(); }); }
+
+/// What the code as it was does with `sequence`, and which invariants it broke.
+fn overlap_dev_trace(sequence: &[usize], found: &mut BTreeSet<&'static str>) -> Vec<OverlapView> {
+    let mut dev = Reference { stage: Stage::new(), departures: false };
+    let mut trace = vec![];
+    for letter in sequence {
+        let seen = overlap_play(&mut dev, *letter);
+        overlap_check(&mut dev);
+        trace.push(overlap_view(&dev, seen));
+    }
+    found.extend(dev.stage.broken.iter());
+    drop(dev);
+    assert!(overlap_claims(&OLD_NATIVE).is_empty(), "{sequence:?}");
+    trace
+}
+
+/// Replays `sequence`. Returns whether its last letter did anything.
+fn overlap_replay(sequence: &[usize], found: &mut BTreeSet<&'static str>, fired: &mut BTreeSet<&'static str>) -> bool {
+    let dev = overlap_dev_trace(sequence, found);
+    let mut reference = Reference { stage: Stage::new(), departures: true };
+    let mut new = NewOverlap(Stage::new());
+    let (mut moved, mut departed) = (false, false);
+    for (n, letter) in sequence.iter().enumerate() {
+        let expected = overlap_play(&mut reference, *letter);
+        let actual = overlap_play(&mut new, *letter);
+        moved = actual != Seen::Skipped;
+        overlap_check(&mut new);
+        assert!(new.0.broken.is_empty(), "{:?}: {sequence:?} at {n}", new.0.broken);
+        let want = overlap_view(&reference, expected);
+        assert_eq!(overlap_view(&new, actual), want, "{sequence:?} at {n}");
+        if !departed && want != dev[n] {
+            // differs from dev: the first difference is only ever dev keeping claims for an
+            // engine that nothing but a call in its wake holds.
+            let (seen, attached, open, handlers, claims, live) = &dev[n];
+            assert_eq!((seen, attached, open, handlers, live), (&want.0, &want.1, &want.2, &want.3, &want.5), "{sequence:?} at {n}");
+            assert!(want.4.iter().all(|id| claims.contains(id)) && claims.len() > want.4.len(), "{sequence:?} at {n}");
+            assert!(sequence[..=n].contains(&6), "{sequence:?} at {n}");
+            departed = true;
+            fired.insert(WAKE_LETS_GO);
+        }
+    }
+    drop(reference);
+    drop(new);
+    assert!(overlap_claims(&NATIVE).is_empty() && overlap_claims(&OLD_NATIVE).is_empty(), "{sequence:?}");
+    clear_notes();
+    moved
+}
+
+fn overlap_walk(sequence: &mut Vec<usize>, depth: usize, found: &mut BTreeSet<&'static str>, fired: &mut BTreeSet<&'static str>) {
+    for letter in 0..11 {
+        sequence.push(letter);
+        if overlap_replay(sequence, found, fired) && sequence.len() < depth { overlap_walk(sequence, depth, found, fired); }
+        sequence.pop();
+    }
+}
+
+#[test]
+fn every_overlap_sequence_differs_from_dev_only_at_its_marked_departure() {
+    let (mut found, mut fired) = (BTreeSet::new(), BTreeSet::new());
+    overlap_walk(&mut vec![], 7, &mut found, &mut fired);
+    for invariant in [STALE_CLAIM, STALE_CONFLICT] {
+        assert!(found.contains(invariant), "the walk never saw the old code break this, so it proves nothing: {invariant}");
+    }
+    assert!(fired.contains(WAKE_LETS_GO), "the departure never took effect");
 }
