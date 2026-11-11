@@ -109,9 +109,10 @@ mod mac {
             }
         }
 
-        /// Samples the thread if `still()` holds once it's stopped, calling `caught` before
-        /// resuming it: `None` when it doesn't hold, or the thread can't be stopped or read.
-        pub(crate) fn sample(&self, still: impl Fn() -> bool, caught: impl Fn()) -> Option<Raw> {
+        /// Samples the thread if `still()` holds once it's stopped, handing the sample to
+        /// `caught` before resuming it: `None` when it doesn't hold, or the thread can't be
+        /// stopped or read.
+        pub(crate) fn sample(&self, still: impl Fn() -> bool, caught: impl Fn(&Raw)) -> Option<Raw> {
             let mut info = BasicInfo::default();
             let mut count = THREAD_BASIC_INFO_COUNT;
             // SAFETY: `info` is a live buffer of `count` 32-bit words, as the flavor needs.
@@ -122,7 +123,7 @@ mod mac {
             // samples only the UI thread from its own thread). It's resumed below on every path.
             if unsafe { thread_suspend(self.port) } != 0 { return None; }
             let walked = still() && self.walk(&mut raw);
-            if walked { caught(); }
+            if walked { caught(&raw); }
             // SAFETY: resumes the suspension above.
             unsafe { thread_resume(self.port) };
             walked.then_some(raw)
@@ -198,6 +199,19 @@ mod mac {
         Frame { name: name.into(), app }
     }
 }
+
+/// A sample's frames, innermost first, from this thread's memory of names.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+pub(crate) fn frames(raw: &Raw) -> Vec<Frame> {
+    thread_local! {
+        static SYMBOLS: std::cell::RefCell<Symbols> = std::cell::RefCell::default();
+    }
+    SYMBOLS.with_borrow_mut(|symbols| raw.pcs[..raw.len].iter().enumerate().map(|(i, &pc)| symbols.frame(pc, i == 0)).collect())
+}
+
+/// Without a sampler there are no samples to name.
+#[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+pub(crate) fn frames(_: &Raw) -> Vec<Frame> { Vec::new() }
 
 /// `symbol` demangled, without its hash, cut to 160 characters.
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]

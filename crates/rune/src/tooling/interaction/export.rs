@@ -148,10 +148,11 @@ pub(crate) fn frame_span(f: &SlowFrame) -> Value {
 fn stack_attrs(s: &Stacks, attrs: &mut Vec<Value>) {
     attrs.push(kv("rune.samples", u64::from(s.taken).into()));
     attrs.push(kv("rune.samples_waiting", u64::from(s.waiting).into()));
-    for (i, (name, n)) in s.hot.iter().enumerate().take(3) {
+    let names = s.names(super::stack::frames);
+    for (i, (name, n)) in names.hot.iter().enumerate().take(3) {
         attrs.push(kv(["rune.hot.0", "rune.hot.1", "rune.hot.2"][i], format!("{name} ({n}/{})", s.taken).into()));
     }
-    if !s.stack.is_empty() { attrs.push(kv("rune.stack", s.stack.join("\n").into())); }
+    if !names.stack.is_empty() { attrs.push(kv("rune.stack", names.stack.join("\n").into())); }
 }
 
 pub(crate) fn roll_span(r: &Roll, from: Instant, to: Instant) -> Value {

@@ -1,31 +1,32 @@
-use std::sync::Arc;
-
 use super::cause::{Cause, cause};
-use super::stack::Frame;
+use super::stack::{DEPTH, Frame, Raw};
 use super::watchdog::{Sampled, Stacks};
 
 fn frame(name: &str, app: bool) -> Frame { Frame { name: name.into(), app } }
 
-fn sampled(frames: &[(&str, bool)], waiting: bool, cpu_us: u64, at_ms: u64) -> Sampled {
-    Sampled { frames: frames.iter().map(|&(n, a)| frame(n, a)).collect(), waiting, cpu_us, at_ns: at_ms * 1_000_000 }
+fn sampled(id: usize, waiting: bool, cpu_us: u64, at_ms: u64) -> Sampled {
+    let mut pcs = [0; DEPTH];
+    pcs[0] = id;
+    Sampled { raw: Raw { pcs, len: 1, waiting, cpu_us }, at_ns: at_ms * 1_000_000 }
 }
 
 #[test]
 fn stacks_name_the_innermost_app_frame_most_samples_were_in() {
     let sleep = [("__semwait_signal (libsystem_kernel)", false), ("std::thread::sleep", false), ("app::save", true), ("app::main", true)];
     let layout = [("taffy::compute", true), ("app::view", true)];
-    let s = Stacks::of(&[sampled(&sleep, true, 0, 0), sampled(&layout, false, 1000, 4), sampled(&sleep, true, 1000, 8), sampled(&sleep, true, 2000, 12)]).unwrap();
+    let s = Stacks::of(vec![sampled(0, true, 0, 0), sampled(1, false, 1000, 4), sampled(0, true, 1000, 8), sampled(0, true, 2000, 12)]).unwrap();
     assert_eq!((s.taken, s.waiting), (4, 3));
-    let hot: Vec<(&str, u32)> = s.hot.iter().map(|(n, c)| (&**n, *c)).collect();
+    let names = s.names(|raw| if raw.pcs[0] == 0 { sleep.iter().map(|&(n, a)| frame(n, a)).collect() } else { layout.iter().map(|&(n, a)| frame(n, a)).collect() });
+    let hot: Vec<(&str, u32)> = names.hot.iter().map(|(n, c)| (&**n, *c)).collect();
     assert_eq!(hot, [("app::save", 3), ("taffy::compute", 1)]);
-    assert_eq!(s.stack.first().map(|f| &**f), Some("__semwait_signal (libsystem_kernel)"), "the hottest sample's stack, innermost first");
+    assert_eq!(names.stack.first().map(|f| &**f), Some("__semwait_signal (libsystem_kernel)"), "the hottest sample's stack, innermost first");
     assert!((s.cpu_share.unwrap() - 2.0 / 12.0).abs() < 1e-9);
-    assert!(Stacks::of(&[]).is_none());
-    assert_eq!(Stacks::of(&[sampled(&layout, false, 0, 0)]).unwrap().cpu_share, None, "one sample has no stretch");
+    assert!(Stacks::of(Vec::new()).is_none());
+    assert_eq!(Stacks::of(vec![sampled(1, false, 0, 0)]).unwrap().cpu_share, None, "one sample has no stretch");
 }
 
 fn stacks(taken: u32, waiting: u32, cpu_share: Option<f64>) -> Stacks {
-    Stacks { taken, waiting, cpu_share, hot: Vec::<(Arc<str>, u32)>::new(), stack: Vec::new() }
+    Stacks { taken, waiting, cpu_share, raw: Vec::new() }
 }
 
 #[test]
@@ -47,7 +48,7 @@ mod mac {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, mpsc};
 
-    use super::super::stack::{Raw, Symbols, Target, demangled, library};
+    use super::super::stack::{Raw, Target, demangled, frames, library};
 
     #[inline(never)]
     fn spin_here_for_the_sampler(stop: &AtomicBool) {
@@ -66,12 +67,11 @@ mod mac {
         });
         let target: Target = target.recv().unwrap();
         std::thread::sleep(std::time::Duration::from_millis(30));
-        let raw = target.sample(|| true, || {}).expect("sampled");
+        let raw = target.sample(|| true, |_| {}).expect("sampled");
         stop.store(true, Ordering::Relaxed);
         let _ = release.send(());
         worker.join().unwrap();
-        let mut symbols = Symbols::default();
-        let frames: Vec<_> = raw.pcs[..raw.len].iter().enumerate().map(|(i, &pc)| symbols.frame(pc, i == 0)).collect();
+        let frames = frames(&raw);
         let names = frames.iter().map(|f| f.name.to_string()).collect();
         let app = frames.iter().map(|f| f.app).collect();
         (raw, names, app)
@@ -104,7 +104,7 @@ mod mac {
         });
         let target = got.recv().unwrap();
         let caught = std::cell::Cell::new(false);
-        assert!(target.sample(|| false, || caught.set(true)).is_none());
+        assert!(target.sample(|| false, |_| caught.set(true)).is_none());
         assert!(!caught.get(), "nothing was caught");
         stop.store(true, Ordering::Relaxed);
         worker.join().unwrap();
@@ -126,7 +126,7 @@ mod mac {
         let target: Target = got.recv().unwrap();
         while count.load(Ordering::Relaxed) == 0 { std::hint::spin_loop(); }
         let frozen = std::cell::Cell::new(false);
-        target.sample(|| true, || {
+        target.sample(|| true, |_| {
             let before = count.load(Ordering::Relaxed);
             let until = Instant::now() + Duration::from_millis(2);
             while Instant::now() < until { std::hint::spin_loop(); }

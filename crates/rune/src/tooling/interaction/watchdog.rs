@@ -9,17 +9,18 @@
 //! never and the UI thread unparks it only for the first frame after a rest.
 //!
 //! The thread decodes what it reads once (`look`), and its decisions are one machine ([`Watch`],
-//! [`step`]). The atomics are only how a frame gets across.
+//! [`step`]). The atomics are only how a frame gets across. A sample stays raw addresses until
+//! the report is written, on the exporter's thread, so `disarm` never waits for names.
 //!
 //! Started by the first armed frame, on the thread that armed it; frames on other threads (a
 //! second runtime on a worker) aren't watched. Apple Silicon Macs only (`stack`).
 #![cfg_attr(not(all(target_os = "macos", target_arch = "aarch64", not(test))), allow(dead_code))]
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
-use super::stack::{Frame, Raw};
+use super::stack::{DEPTH, Frame, Raw};
 use crate::machine::Effects;
 
 /// A frame this old is sampled.
@@ -146,6 +147,12 @@ pub(crate) struct Stacks {
     /// The thread's CPU time over the sampled stretch as a share of its wall time, from two or
     /// more samples.
     pub cpu_share: Option<f64>,
+    /// The samples' addresses, for [`Stacks::names`].
+    pub raw: Vec<Raw>,
+}
+
+/// What a slow frame's samples say once named.
+pub(crate) struct Names {
     /// The functions samples were in, by count: each sample's innermost app frame, else its
     /// innermost frame.
     pub hot: Vec<(Arc<str>, u32)>,
@@ -153,20 +160,32 @@ pub(crate) struct Stacks {
     pub stack: Vec<Arc<str>>,
 }
 
-/// One sample, named.
+/// One sample.
 pub(crate) struct Sampled {
-    pub frames: Vec<Frame>,
-    pub waiting: bool,
-    pub cpu_us: u64,
+    pub raw: Raw,
     pub at_ns: u64,
 }
 
 impl Stacks {
-    pub(crate) fn of(samples: &[Sampled]) -> Option<Self> {
+    pub(crate) fn of(samples: Vec<Sampled>) -> Option<Self> {
         let first = samples.first()?;
-        let spot = |s: &Sampled| s.frames.iter().find(|f| f.app).or(s.frames.first()).map(|f| f.name.clone());
+        let last = samples.last()?;
+        let wall_us = last.at_ns.saturating_sub(first.at_ns) / 1000;
+        let cpu_share = (samples.len() >= 2 && wall_us > 0).then(|| last.raw.cpu_us.saturating_sub(first.raw.cpu_us) as f64 / wall_us as f64);
+        Some(Stacks {
+            taken: samples.len() as u32,
+            waiting: samples.iter().filter(|s| s.raw.waiting).count() as u32,
+            cpu_share,
+            raw: samples.into_iter().map(|s| s.raw).collect(),
+        })
+    }
+
+    /// Names the samples with `frames`. Slow: never on the UI thread.
+    pub(crate) fn names(&self, frames: impl FnMut(&Raw) -> Vec<Frame>) -> Names {
+        let named: Vec<Vec<Frame>> = self.raw.iter().map(frames).collect();
+        let spot = |s: &Vec<Frame>| s.iter().find(|f| f.app).or(s.first()).map(|f| f.name.clone());
         let mut hot: Vec<(Arc<str>, u32)> = Vec::new();
-        for name in samples.iter().filter_map(spot) {
+        for name in named.iter().filter_map(spot) {
             match hot.iter_mut().find(|(n, _)| *n == name) {
                 Some((_, count)) => *count += 1,
                 None => hot.push((name, 1)),
@@ -174,17 +193,9 @@ impl Stacks {
         }
         hot.sort_by_key(|h| std::cmp::Reverse(h.1));
         let top = hot.first().map(|h| h.0.clone());
-        let stack = samples.iter().find(|s| spot(s) == top).map(|s| s.frames.iter().take(16).map(|f| f.name.clone()).collect()).unwrap_or_default();
+        let stack = named.iter().find(|s| spot(s) == top).map(|s| s.iter().take(16).map(|f| f.name.clone()).collect()).unwrap_or_default();
         hot.truncate(3);
-        let last = samples.last()?;
-        let wall_us = last.at_ns.saturating_sub(first.at_ns) / 1000;
-        Some(Stacks {
-            taken: samples.len() as u32,
-            waiting: samples.iter().filter(|s| s.waiting).count() as u32,
-            cpu_share: (samples.len() >= 2 && wall_us > 0).then(|| last.cpu_us.saturating_sub(first.cpu_us) as f64 / wall_us as f64),
-            hot,
-            stack,
-        })
+        Names { hot, stack }
     }
 }
 
@@ -213,28 +224,68 @@ fn begin(frames: &impl Frames, now: impl FnOnce() -> u64) {
     frames.set_start(now());
 }
 
-/// Tries one sample of frame `seq`. `stop` calls its argument while the thread is stopped, once
-/// it has the stack: `taken` is then set before the thread can reach `disarm`, and `samples`
-/// stays locked until the sample is in, so `disarm` waits for it rather than missing it. The
-/// lock comes before the stop, because nothing may take one while the thread is stopped.
-fn capture(samples: &Mutex<Vec<(u64, Sampled)>>, taken: &AtomicBool, seq: u64, stop: impl FnOnce(&dyn Fn()) -> Option<Raw>, name: impl FnOnce(Raw) -> Sampled) {
-    let mut all = samples.lock();
-    let Some(raw) = stop(&|| taken.store(true, Ordering::Release)) else { return };
-    let sampled = name(raw);
-    if let Ok(all) = &mut all {
-        // A frame nobody disarmed leaves its samples; keep the buffer bounded.
-        if all.len() >= 4 * MOST { all.clear(); }
-        all.push((seq, sampled));
-    }
-}
-
 /// Whether a sample was caught since the last call.
 fn was_taken(taken: &AtomicBool) -> bool { taken.swap(false, Ordering::Acquire) }
 
-/// Frame `seq`'s samples, summarized; the rest are dropped.
-fn collect(samples: &Mutex<Vec<(u64, Sampled)>>, seq: u64) -> Option<Stacks> {
-    let samples: Vec<Sampled> = samples.lock().ok()?.drain(..).filter(|(s, _)| *s == seq).map(|(_, s)| s).collect();
-    Stacks::of(&samples)
+/// One stored sample.
+struct Slot {
+    pcs: [AtomicUsize; DEPTH],
+    len: AtomicUsize,
+    waiting: AtomicBool,
+    cpu_us: AtomicU64,
+    at_ns: AtomicU64,
+}
+
+impl Slot {
+    const fn new() -> Self {
+        Self { pcs: [const { AtomicUsize::new(0) }; DEPTH], len: AtomicUsize::new(0), waiting: AtomicBool::new(false), cpu_us: AtomicU64::new(0), at_ns: AtomicU64::new(0) }
+    }
+
+    fn write(&self, raw: &Raw, at: u64) {
+        for (slot, &pc) in self.pcs.iter().zip(&raw.pcs[..raw.len]) { slot.store(pc, Ordering::Relaxed); }
+        self.len.store(raw.len, Ordering::Relaxed);
+        self.waiting.store(raw.waiting, Ordering::Relaxed);
+        self.cpu_us.store(raw.cpu_us, Ordering::Relaxed);
+        self.at_ns.store(at, Ordering::Relaxed);
+    }
+
+    fn read(&self) -> Sampled {
+        let len = self.len.load(Ordering::Relaxed);
+        let mut pcs = [0; DEPTH];
+        for (pc, slot) in pcs.iter_mut().zip(&self.pcs[..len]) { *pc = slot.load(Ordering::Relaxed); }
+        Sampled { raw: Raw { pcs, len, waiting: self.waiting.load(Ordering::Relaxed), cpu_us: self.cpu_us.load(Ordering::Relaxed) }, at_ns: self.at_ns.load(Ordering::Relaxed) }
+    }
+}
+
+/// One frame's samples, in storage made ahead of time. `publish` runs only while the UI thread
+/// is stopped inside its frame and `collect` only on that thread after it has ended the frame,
+/// so the two never overlap and neither takes a lock. A new frame's first sample replaces the
+/// last frame's.
+struct Caught {
+    seq: AtomicU64,
+    count: AtomicUsize,
+    slots: [Slot; MOST],
+}
+
+impl Caught {
+    const fn new() -> Self { Self { seq: AtomicU64::new(0), count: AtomicUsize::new(0), slots: [const { Slot::new() }; MOST] } }
+
+    /// Stores a sample of frame `seq` and says one was caught, before the thread resumes: a
+    /// `disarm` right after must find it. No lock or allocation.
+    fn publish(&self, taken: &AtomicBool, seq: u64, at: u64, raw: &Raw) {
+        let count = if self.seq.load(Ordering::Relaxed) == seq { self.count.load(Ordering::Relaxed) } else { 0 };
+        let Some(slot) = self.slots.get(count) else { return };
+        slot.write(raw, at);
+        self.seq.store(seq, Ordering::Relaxed);
+        self.count.store(count + 1, Ordering::Relaxed);
+        taken.store(true, Ordering::Release);
+    }
+
+    /// Frame `seq`'s samples, summarized. Other frames' are left behind.
+    fn collect(&self, seq: u64) -> Option<Stacks> {
+        if self.seq.load(Ordering::Relaxed) != seq { return None; }
+        Stacks::of(self.slots[..self.count.load(Ordering::Relaxed)].iter().map(Slot::read).collect())
+    }
 }
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64", not(test)))]
@@ -254,12 +305,12 @@ pub(crate) use none::{arm, disarm, hurry};
 mod mac {
     use std::cell::Cell;
     use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
-    use std::sync::{Mutex, OnceLock};
+    use std::sync::OnceLock;
     use std::thread::{Thread, ThreadId};
     use std::time::Instant;
 
-    use super::super::stack::{Symbols, Target};
-    use super::{AFTER_MS, Effect, Event, Frames, HURRY_MS, Sampled, Stacks, Watch, begin, capture, collect, look, step, was_taken};
+    use super::super::stack::Target;
+    use super::{AFTER_MS, Caught, Effect, Event, Frames, HURRY_MS, Stacks, Watch, begin, look, step, was_taken};
 
     /// Bumped by each frame, so a sample can tell its frame is the one still running.
     static SEQ: AtomicU64 = AtomicU64::new(0);
@@ -268,7 +319,7 @@ mod mac {
     static AFTER_US: AtomicU32 = AtomicU32::new(AFTER_MS * 1000);
     static PARKED: AtomicBool = AtomicBool::new(false);
     static TAKEN: AtomicBool = AtomicBool::new(false);
-    static SAMPLES: Mutex<Vec<(u64, Sampled)>> = Mutex::new(Vec::new());
+    static SAMPLES: Caught = Caught::new();
 
     /// The statics, as [`Frames`].
     struct Statics;
@@ -350,11 +401,10 @@ mod mac {
         if WATCHED.get() != Watched::Yes { return None; }
         START.store(0, Ordering::SeqCst);
         if !was_taken(&TAKEN) { return None; }
-        collect(&SAMPLES, SEQ.load(Ordering::Relaxed))
+        SAMPLES.collect(SEQ.load(Ordering::Relaxed))
     }
 
     fn run(target: Target) {
-        let mut symbols = Symbols::default();
         let mut watch = Watch::Unarmed;
         loop {
             for effect in step(&mut watch, Event::Look { frame: look(&Statics), now: now_ns() }) {
@@ -367,10 +417,7 @@ mod mac {
                     }
                     Effect::Sample { seq, start, at } => {
                         let still = || SEQ.load(Ordering::SeqCst) == seq && START.load(Ordering::SeqCst) == start;
-                        capture(&SAMPLES, &TAKEN, seq, |caught| target.sample(still, caught), |raw| {
-                            let frames = raw.pcs[..raw.len].iter().enumerate().map(|(i, &pc)| symbols.frame(pc, i == 0)).collect();
-                            Sampled { frames, waiting: raw.waiting, cpu_us: raw.cpu_us, at_ns: at }
-                        });
+                        target.sample(still, |raw| SAMPLES.publish(&TAKEN, seq, at, raw));
                         step(&mut watch, Event::Taken { seq, now: now_ns() });
                     }
                 }
