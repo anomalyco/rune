@@ -861,12 +861,16 @@ impl<S: 'static> Runtime<S> {
                 };
                 // `El::focus_within_flat`: focus inside drops its own shadows and hover fill.
                 let focus_flat = n.focus.flat_within && self.focus_within(i);
-                let solid = !n.vis.shadows.is_empty() && native_material.is_none() && blur_hole.is_none() && n.material.is_none()
-                    && self.color(n.id, P_FILL, n.vis.fill).a >= 1.0;
+                let casts = !n.vis.shadows.is_empty() && native_material.is_none() && blur_hole.is_none() && n.material.is_none();
+                let fill_a = if casts { self.color(n.id, P_FILL, n.vis.fill).a } else { 0.0 };
+                let solid = casts && fill_a >= 1.0;
                 // A box that paints itself solid hides the middle of its shadows (bands.rs). Dimmed
-                // (`El::dim`), it leaves that middle clear, as CSS clips box-shadow to outside the box.
+                // (`El::dim`), or filled with a translucent colour, it leaves that middle clear, as
+                // CSS clips box-shadow to outside the box: a 6% white button shows the surface
+                // under it, not its own shadows.
                 let opaque = solid && o >= 1.0 && n.vis.gradient.is_none() && n.vis.radial.is_none() && n.vis.surface.is_none();
-                let dim_hole = (solid && o < 1.0).then(|| crate::system_material::clamp_radius(radii, w, h) * if n.vis_flags.continuous_corners() { -1.0 } else { 1.0 });
+                let see_through = casts && fill_a > 0.0 && fill_a < 1.0;
+                let dim_hole = ((solid && o < 1.0) || see_through).then(|| crate::system_material::clamp_radius(radii, w, h) * if n.vis_flags.continuous_corners() { -1.0 } else { 1.0 });
                 let cast = shadow_paint::Caster {
                     rect: [r[0], r[1], w, h], radii, shape: if n.vis_flags.continuous_corners() { radii.map(|v| -v) } else { radii },
                     k_px, scale: s, opacity: o, srgb, clip, fade, hole: native_material.or(blur_hole).or(dim_hole), opaque,
