@@ -152,13 +152,17 @@ fn log_level() -> u8 {
 
 /// A `RUNE_VIDEO_LOG` line, stamped with microseconds since the first.
 macro_rules! log {
-    ($($arg:tt)*) => {{
-        static T0: std::sync::OnceLock<crate::time::Instant> = std::sync::OnceLock::new();
-        let t0 = *T0.get_or_init(crate::time::Instant::now);
-        eprintln!("rune video {:>10} us: {}", t0.elapsed().as_micros(), format!($($arg)*));
-    }};
+    ($($arg:tt)*) => {
+        eprintln!("rune video {:>10} us: {}", $crate::video::windows::decoder::log_clock(), format!($($arg)*))
+    };
 }
 pub(super) use log;
+
+/// Microseconds since the first `log!` line: one clock for every line, wherever it's written.
+pub(super) fn log_clock() -> u128 {
+    static T0: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    T0.get_or_init(Instant::now).elapsed().as_micros()
+}
 
 /// Microseconds from `t0` to now.
 pub(super) fn us(t0: Instant) -> u128 {

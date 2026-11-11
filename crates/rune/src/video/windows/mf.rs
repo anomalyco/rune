@@ -128,7 +128,10 @@ fn open_error(e: windows::core::Error) -> String {
         0xC00D_36C4 => "Media Foundation can't read this format".into(),
         0x8007_0002 | 0x8007_0003 | 0xC00D_001A => "the clip wasn't found".into(),
         0x8007_0005 => "access to the clip was denied".into(),
-        0x8007_2EE7 | 0x8007_2EFD | 0x8007_2EFE | 0xC00D_2EE7 => "the clip's server couldn't be reached".into(),
+        // NS_E_SERVER_NOT_FOUND is what the network source answers for a refused connection.
+        0x8007_2EE7 | 0x8007_2EFD | 0x8007_2EFE | 0xC00D_2EE7 | 0xC00D_0035 => "the clip's server couldn't be reached".into(),
+        // MF_E_INVALIDREQUEST from the byte stream: an mp4 cut short, its index never reached.
+        0xC00D_36E5 => "the clip is incomplete or damaged".into(),
         _ => format!("Media Foundation couldn't open the clip: {} ({:#010x})", e.message(), e.code().0),
     }
 }
