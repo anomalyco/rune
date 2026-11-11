@@ -5,7 +5,8 @@
 //!   post asks the person for permission, and posts are dropped until they allow it.
 //! - **Windows:** toast notifications (`Windows.UI.Notifications`) under the app's
 //!   `AppUserModelID`. `register` gives the process that identity, with a name and icon for its
-//!   toasts; nothing posts before it. With an activation scheme (`Identity::activation`) a click
+//!   toasts, or `adopt` takes one an installer registered without writing anything; nothing
+//!   posts before either. With an activation scheme (`Identity::activation`) a click
 //!   opens a link on that scheme, which reaches the app whether it runs or not, as long as the
 //!   toast is in the notification center; `click_from_url` turns the link back into the click.
 //! - **Elsewhere:** `available` is false and every call does nothing.
@@ -109,6 +110,23 @@ pub fn register(identity: &Identity) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         windows::register(identity)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = identity;
+        Ok(())
+    }
+}
+
+/// Gives this process the app's identity without writing anything, for an app whose installer
+/// registered it (the `AppUserModelId\<id>` key and the activation scheme): toasts post under
+/// `identity.id` and, with an activation scheme, open links on it. Its name and icon are ignored;
+/// the registration names the toasts. Call it where `register` would go; calling it again with
+/// the same id only changes the activation scheme. Windows only; elsewhere it does nothing.
+pub fn adopt(identity: &Identity) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        windows::adopt(identity)
     }
     #[cfg(not(target_os = "windows"))]
     {
