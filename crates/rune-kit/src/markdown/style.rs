@@ -62,6 +62,8 @@ pub struct MarkdownStyle {
     pub(super) table_full_width: bool,
     /// Space above and below a table (collapsed with its neighbours' like CSS margins).
     pub(super) table_margin: [f32; 2],
+    /// Space above and below a code block, a diff and a diagram (collapsed like `table_margin`).
+    pub(super) code_margin: [f32; 2],
     /// A wide table's scroll bar thumb, at rest and under the pointer (`None`: no bar).
     pub(super) table_bar: Option<[Color; 2]>,
     /// The text column's width, when the app knows it (see [`MarkdownStyle::text_width`]).
@@ -210,6 +212,7 @@ impl MarkdownStyle {
             table_head_pad: None,
             table_full_width: false,
             table_margin: [12.0, 16.0],
+            code_margin: [12.0, 24.0],
             table_bar: None,
             text_width: None,
             wide_fade: 12.0,
@@ -425,6 +428,13 @@ impl MarkdownStyle {
         self.wide_fade = if points.is_finite() { points.max(0.0) } else { 0.0 };
         self
     }
+    /// The space above and below a code block, a diff and a diagram (12 and 24 points by
+    /// default). Like the other blocks' margins, it collapses with the space a neighbour wants,
+    /// taking the larger.
+    pub fn code_margin(mut self, top: f32, bottom: f32) -> Self {
+        self.code_margin = [super::table::pts(top), super::table::pts(bottom)];
+        self
+    }
     /// The tints behind a diff's added and removed lines (full width).
     pub fn diff(mut self, added: Color, removed: Color) -> Self {
         self.diff_add = added;
@@ -605,6 +615,7 @@ impl std::hash::Hash for MarkdownStyle {
             table_head_pad,
             table_full_width,
             table_margin,
+            code_margin,
             table_bar,
             text_width,
             wide_fade,
@@ -634,7 +645,7 @@ impl std::hash::Hash for MarkdownStyle {
             .map(f32_bits)
             .hash(state);
         (table_outline, table_rule, table_head_fill, table_head_text, table_head_rule, table_head_weight.map(f32_bits), table_tabular, table_font).hash(state);
-        ([f32_bits(table_pad[0]), f32_bits(table_pad[1])], table_flush_left, table_head_pad.map(|p| p.map(f32_bits)), table_full_width, table_margin.map(f32_bits)).hash(state);
+        ([f32_bits(table_pad[0]), f32_bits(table_pad[1])], table_flush_left, table_head_pad.map(|p| p.map(f32_bits)), table_full_width, table_margin.map(f32_bits), code_margin.map(f32_bits)).hash(state);
         table_frame.map(|TableFrame { fill, ring, pad }| (fill, ring, f32_bits(pad))).hash(state);
         (table_bar, text_width.map(f32_bits), f32_bits(wide_fade), link_icon.map(|l| l.map(f32_bits))).hash(state);
         match table_body {

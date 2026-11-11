@@ -146,7 +146,7 @@ pub(super) fn margins(b: &Block, s: &MarkdownStyle) -> (f32, f32) {
         Block::Heading(1, _) => (28.0, 12.0),
         Block::Heading(2, _) => (24.0, 10.0),
         Block::Heading(..) => (20.0, 8.0),
-        Block::Code { .. } | Block::Diff(_) | Block::Mermaid(_) => (12.0, 24.0),
+        Block::Code { .. } | Block::Diff(_) | Block::Mermaid(_) => (s.code_margin[0], s.code_margin[1]),
         Block::List { .. } => (8.0, 12.0),
         Block::Quote(_) => (16.0, 16.0),
         Block::Rule => (32.0, 32.0),
