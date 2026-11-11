@@ -1,8 +1,11 @@
 name: www
 
 # The public page in www/ is the Rune app in www/app. CI builds it to wasm, has the native build write its static
-# HTML (`--html`), and deploys: dev to https://dev.anoma.ly/rune, production to https://anoma.ly/rune. Pull requests
-# build the dev page and deploy nothing. Rune itself is the page, so a change under crates/ triggers it too.
+# HTML (`--html`), and deploys: dev to https://dev.anoma.ly/rune, production to https://anoma.ly/rune. Rune itself is
+# the page, so a push that changes crates/ deploys it too. Pull requests build the dev page and deploy nothing, and
+# only for a change to the page's own files: a change to crates/ merges straight after its pull request, and the
+# push to dev builds it then, so building it twice told nothing. A newer push to dev replaces a dev deploy still
+# running; production always finishes.
 on:
   push:
     branches: [dev, production]
@@ -17,16 +20,13 @@ on:
   pull_request:
     paths:
       - "www/**"
-      - "crates/**"
       - "scripts/web-build.sh"
-      - "Cargo.toml"
-      - "Cargo.lock"
       - "rust-toolchain.toml"
       - ".github/workflows/www.yml"
 
 concurrency:
   group: www-${{ github.head_ref || github.ref_name }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: ${{ github.ref_name != 'production' }}
 
 permissions:
   contents: read
@@ -88,9 +88,26 @@ jobs:
       - run: echo "$HOME/.binaryen/bin" >> "$GITHUB_PATH"
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
-      # The native app (tests and the `--html` export) links winit's keyboard library.
+      # The native app (tests and the `--html` export) links winit's keyboard library. Its packages are cached, so a
+      # run doesn't need the Ubuntu mirrors (on 2026-11-11 the runners couldn't resolve them for over an hour, and
+      # every run failed here); a run that must fetch them retries.
+      - uses: actions/cache@v4
+        id: debs
+        with:
+          path: ~/.debs
+          key: debs-libxkbcommon-${{ runner.os }}-${{ runner.arch }}-${{ env.ImageOS }}
       - name: Native libraries
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libxkbcommon-dev
+        run: |
+          if [ "${{ steps.debs.outputs.cache-hit }}" != true ]; then
+            mkdir -p ~/.debs
+            for attempt in 1 2 3; do
+              sudo apt-get -o Acquire::Retries=3 update &&
+                (cd ~/.debs && apt-get -o Acquire::Retries=3 download libxkbcommon-dev libxkbcommon0) && break
+              [ "$attempt" = 3 ] && exit 1
+              sleep $((attempt * 20))
+            done
+          fi
+          sudo dpkg -i ~/.debs/*.deb
       - name: Test the page
         working-directory: .
         run: cargo test -p rune-www
