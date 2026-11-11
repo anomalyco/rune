@@ -379,21 +379,29 @@ pub(super) fn nv12_bytes(sample: &IMFSample, picture: &Picture) -> Result<ByteFr
     // SAFETY: the buffer is locked for the copy and unlocked after it.
     unsafe {
         let buffer = sample.ConvertToContiguousBuffer().map_err(|e| e.message())?;
-        let (mut base, mut pitch) = (std::ptr::null_mut(), 0i32);
-        let two_d = buffer.cast::<IMF2DBuffer>().ok();
+        let (mut base, mut pitch, mut len) = (std::ptr::null_mut(), 0i32, 0u32);
+        let two_d = buffer.cast::<IMF2DBuffer2>().ok();
         let locked = match &two_d {
-            Some(b) => b.Lock2D(&mut base, &mut pitch).is_ok(),
+            Some(b) => {
+                let mut start = std::ptr::null_mut();
+                b.Lock2DSize(MF2DBuffer_LockFlags_Read, &mut base, &mut pitch, &mut start, &mut len).is_ok()
+            }
             None => false,
         };
         if !locked {
-            let mut len = 0u32;
             buffer.Lock(&mut base, None, Some(&mut len)).map_err(|e| e.message())?;
             pitch = picture.coded.0 as i32;
         }
         let pitch = pitch.unsigned_abs() as usize;
         let (x, y, w, h) = picture.crop;
         let (w, h, x, y) = (w as usize, h as usize, x as usize, y as usize);
-        let rows = picture.coded.1 as usize;
+        // The luma plane's height from the buffer itself (NV12 is 1.5 planes of luma): the media
+        // type's coded height can differ from what the decoder wrote (1088 against 1080 rows), and
+        // reading chroma from there leaves the top rows without colour, a green band.
+        let rows = match len as usize * 2 / (3 * pitch.max(1)) {
+            0 => picture.coded.1 as usize,
+            rows => rows.max(y + h),
+        };
         let mut luma = Vec::with_capacity(w * h);
         let mut chroma = Vec::with_capacity(w * h / 2);
         for row in y..y + h {
