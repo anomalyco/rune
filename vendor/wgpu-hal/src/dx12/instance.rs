@@ -187,3 +187,37 @@ impl crate::Instance for super::Instance {
             .collect()
     }
 }
+
+impl super::Instance {
+    /// Exposes one adapter the caller found through DXGI, as `enumerate_adapters` exposes each
+    /// one it lists, without creating a device on any other adapter or loading another adapter's
+    /// driver. `None` when the adapter is one `enumerate_adapters` skips or can't run D3D12.
+    ///
+    /// # Safety
+    ///
+    /// `adapter` must come from a DXGI factory in this process.
+    pub unsafe fn expose_adapter(
+        &self,
+        adapter: &Dxgi::IDXGIAdapter1,
+    ) -> Option<crate::ExposedAdapter<super::Api>> {
+        use windows::core::Interface as _;
+        if !auxil::dxgi::factory::should_keep_adapter(adapter) {
+            return None;
+        }
+        let raw = match adapter.cast::<Dxgi::IDXGIAdapter4>() {
+            Ok(adapter4) => auxil::dxgi::factory::DxgiAdapter::Adapter4(adapter4),
+            Err(_) => auxil::dxgi::factory::DxgiAdapter::Adapter3(adapter.cast().ok()?),
+        };
+        super::Adapter::expose(
+            raw,
+            &self.library,
+            &self.device_factory,
+            &self.dcomp_lib,
+            self.flags,
+            self.memory_budget_thresholds,
+            self.compiler_container.clone(),
+            self.options.clone(),
+            self.telemetry,
+        )
+    }
+}

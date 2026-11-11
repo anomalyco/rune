@@ -54,7 +54,14 @@ members = [
     "examples/site-scenes",
     "examples/luau-panel",
 ]
-exclude = ["tools/rune-dev-guard"]
+exclude = ["tools/rune-dev-guard", "vendor/wgpu-hal"]
+
+# wgpu-hal as published plus one function, `dx12::Instance::expose_adapter`: a `wgpu::Adapter` for the
+# one adapter Rune picks through DXGI, with no device made on the others (`gpu/pick.rs`). Re-made by
+# `scripts/vendor-wgpu-hal.sh <version>` when wgpu is bumped. An app that builds Rune patches it too:
+# a dependency's `[patch]` doesn't apply to the workspace that depends on it.
+[patch.crates-io]
+wgpu-hal = { path = "vendor/wgpu-hal" }
 
 [workspace.package]
 edition = "2024"

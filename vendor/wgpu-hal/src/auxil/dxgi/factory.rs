@@ -9,7 +9,7 @@ use super::result::HResult as _;
 
 // We can rely on the presence of DXGI 1.4 since D3D12 requires WDDM 2.0, Windows 10 (1507), and so does DXGI 1.4.
 
-fn should_keep_adapter(adapter: &Dxgi::IDXGIAdapter1) -> bool {
+pub(crate) fn should_keep_adapter(adapter: &Dxgi::IDXGIAdapter1) -> bool {
     let desc = unsafe { adapter.GetDesc1() }.unwrap();
 
     // The Intel Haswell family of iGPUs had support for the D3D12 API but it was later

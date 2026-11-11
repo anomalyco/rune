@@ -75,6 +75,11 @@ fn shows(compositor: Option<&str>, pci: &str) -> bool {
 /// The adapter for `surface` (or for offscreen work without one, unless it's for a surface not
 /// made yet: `presented`), by the order in the module docs.
 pub(crate) fn pick(instance: &wgpu::Instance, surface: Option<&wgpu::Surface<'_>>, presented: bool) -> Result<Pick, String> {
+    // DX12: the same order through DXGI's adapter list, and only the chosen adapter goes to wgpu.
+    #[cfg(target_os = "windows")]
+    if let Some((pick, adapters)) = dxgi::pick(instance, surface, presented) {
+        return Ok(log(pick, Some(adapters)));
+    }
     let usable = |adapter: &wgpu::Adapter| surface.is_none_or(|s| adapter.is_surface_supported(s));
     let compositor = compositor_pci();
     let mut enumerated = None;
@@ -136,6 +141,70 @@ fn by_name(name: &str, adapters: &[(wgpu::AdapterInfo, bool)]) -> Option<usize> 
 fn by_pci(pci: &str, adapters: &[(wgpu::AdapterInfo, bool)]) -> Option<usize> {
     let on = |(info, usable): &(wgpu::AdapterInfo, bool)| *usable && same_pci(pci, &info.device_pci_bus_id);
     adapters.iter().position(|a| on(a) && a.0.backend == wgpu::Backend::Vulkan).or_else(|| adapters.iter().position(on))
+}
+
+/// Windows: the pick made from DXGI's adapter list, which makes no device and loads no driver;
+/// wgpu then gets the one adapter chosen (`wgpu_hal::dx12::Instance::expose_adapter`, from the
+/// vendored wgpu-hal). wgpu's own `enumerate_adapters` and `request_adapter` make a device on every
+/// adapter to describe it, the discrete GPU and WARP included: 1,050,000–1,110,000 µs on a
+/// two-GPU laptop, waking a discrete GPU the window never uses.
+#[cfg(target_os = "windows")]
+mod dxgi {
+    use super::{Pick, Reason};
+    use windows::Win32::Graphics::Dxgi::{
+        CreateDXGIFactory1, DXGI_ADAPTER_DESC1, DXGI_ADAPTER_FLAG_SOFTWARE, DXGI_GPU_PREFERENCE, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE,
+        DXGI_GPU_PREFERENCE_MINIMUM_POWER, IDXGIAdapter1, IDXGIFactory1, IDXGIFactory6,
+    };
+    use windows::core::Interface;
+
+    /// The pick and how many hardware adapters DXGI lists; None when the instance isn't DX12's,
+    /// or the adapter chosen can't run D3D12 or present to `surface` (the caller then asks wgpu).
+    pub(super) fn pick(instance: &wgpu::Instance, surface: Option<&wgpu::Surface<'_>>, presented: bool) -> Option<(Pick, usize)> {
+        // SAFETY: wgpu's DX12 instance, borrowed for this call.
+        let hal = unsafe { instance.as_hal::<wgpu::hal::api::Dx12>() }?;
+        // SAFETY: a DXGI factory and its adapters, asked for their descriptions.
+        let factory = unsafe { CreateDXGIFactory1::<IDXGIFactory1>() }.ok()?;
+        let hardware: Vec<(IDXGIAdapter1, DXGI_ADAPTER_DESC1)> = (0..)
+            .map_while(|i| unsafe { factory.EnumAdapters1(i) }.ok())
+            .filter_map(|a| unsafe { a.GetDesc1() }.ok().map(|d| (a, d)))
+            .filter(|(_, d)| d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 == 0)
+            .collect();
+        let count = hardware.len();
+        let by_preference = |preference: DXGI_GPU_PREFERENCE| -> Option<IDXGIAdapter1> {
+            let factory6 = factory.cast::<IDXGIFactory6>().ok()?;
+            // SAFETY: as above; the first hardware adapter in DXGI's order for `preference`.
+            (0..).map_while(|i| unsafe { factory6.EnumAdapterByGpuPreference::<IDXGIAdapter1>(i, preference) }.ok())
+                .find(|a| unsafe { a.GetDesc1() }.is_ok_and(|d| d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 == 0))
+        };
+        let name = |d: &DXGI_ADAPTER_DESC1| {
+            let len = d.Description.iter().position(|&c| c == 0).unwrap_or(d.Description.len());
+            String::from_utf16_lossy(&d.Description[..len]).to_lowercase()
+        };
+        let (adapter, reason) = if let Some(wanted) = std::env::var("WGPU_ADAPTER_NAME").ok().map(|n| n.to_lowercase()) {
+            let found = hardware.iter().find(|(_, d)| name(d).contains(&wanted))?;
+            (found.0.clone(), Reason::EnvName)
+        } else if let Some(power) = wgpu::PowerPreference::from_env() {
+            let preference = if power == wgpu::PowerPreference::HighPerformance { DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE } else { DXGI_GPU_PREFERENCE_MINIMUM_POWER };
+            (by_preference(preference)?, Reason::EnvPower)
+        } else if let Some(found) = (surface.is_some() || presented)
+            .then(super::display_devices)
+            .unwrap_or_default()
+            .iter()
+            .find_map(|ids| hardware.iter().find(|(_, d)| (d.VendorId, d.DeviceId) == *ids))
+        {
+            (found.0.clone(), Reason::Display)
+        } else {
+            (by_preference(DXGI_GPU_PREFERENCE_MINIMUM_POWER).or_else(|| hardware.first().map(|h| h.0.clone()))?, Reason::LowPower)
+        };
+        // SAFETY: `adapter` comes from a DXGI factory in this process, as `expose_adapter` asks;
+        // the exposed adapter is handed to the instance it was exposed from.
+        let exposed = unsafe { hal.expose_adapter(&adapter) }?;
+        let adapter = unsafe { instance.create_adapter_from_hal(exposed) };
+        if surface.is_some_and(|s| !adapter.is_surface_supported(s)) {
+            return None;
+        }
+        Some((Pick { adapter, reason, compositor: None }, count))
+    }
 }
 
 /// The usable hardware adapter for the first of `displays` (PCI vendor and device IDs, the
