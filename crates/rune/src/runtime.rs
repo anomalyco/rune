@@ -156,6 +156,8 @@ mod scroll_x;
 mod scroll_offset;
 #[path = "runtime/scroll/reveal.rs"]
 mod reveal;
+#[path = "runtime/scroll/requests.rs"]
+mod requests;
 #[path = "runtime/scroll/anchor.rs"]
 mod scroll_anchor;
 #[path = "runtime/scroll/sticky.rs"]
@@ -543,9 +545,7 @@ pub struct Runtime<S: 'static> {
     /// with the paint clip top the header keeps.
     sticky_bands: Vec<(usize, f32)>,
     /// `Tx::keep_on_screen` across the commit underway.
-    keeps: Vec<sticky::Keep>,
-    /// `Tx::scroll_into_view` requests that follow their target while growth/layout springs run.
-    scroll_reveals: Vec<sticky::Reveal>,
+    requests: requests::Requests,
     /// Some element is `El::raise`d: paint order isn't tree order.
     has_raise: bool,
     /// Some element sets `El::paint_order`: its siblings paint out of tree order.
@@ -923,8 +923,7 @@ impl<S: 'static> Runtime<S> {
             stuck: Vec::new(),
             sticky_frame: Vec::new(),
             sticky_bands: Vec::new(),
-            keeps: Vec::new(),
-            scroll_reveals: Vec::new(),
+            requests: Default::default(),
             has_raise: false,
             has_paint_order: false,
             key_releases: Default::default(),

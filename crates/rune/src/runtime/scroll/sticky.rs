@@ -15,12 +15,11 @@ pub(super) const UNBOUNDED: [f32; 8] = [f32::NEG_INFINITY, f32::INFINITY, f32::N
 pub(super) const SHADOW_RAMP: f32 = 8.0;
 
 /// One `Tx::keep_on_screen` anchor captured before a commit.
+#[derive(Clone)]
 pub(super) struct Keep {
     pub path: String,
     pub viewport: String,
     pub was: f32,
-    /// When the element lives inside a virtual row: `(virtual_list_path, row_key, y_in_row)`.
-    pub virtual_row: Option<(String, String, f32)>,
     /// The element, or the header it's in, was stuck to the top: it stays there for the commit.
     pub hold: Option<Hold>,
 }
@@ -29,6 +28,7 @@ pub(super) struct Keep {
 /// settles it sticks `inset` points below its viewport's top whether or not it's still sticky,
 /// bounded by the bottom of the growth row it's drawn in rather than its parent's new layout, so
 /// the rows under it fold up to it before the scroll moves, on the same frame.
+#[derive(Clone)]
 pub(super) struct Hold {
     pub path: String,
     pub inset: f32,
@@ -36,6 +36,7 @@ pub(super) struct Hold {
 
 /// One `Tx::scroll_into_view` or `Tx::scroll_center` request that follows its target while the
 /// viewport's subtree moves.
+#[derive(Clone)]
 pub(super) struct Reveal {
     pub scope: Option<String>,
     pub key: String,
@@ -88,7 +89,7 @@ mod tests {
             let mut rt = following(keep);
             if !keep { assert!(!scroll(&rt).pinned()); }
             for _ in 0..240 { rt.frame(1.0 / 120.0); }
-            assert!(rt.keeps.is_empty() && rt.scroll_reveals.is_empty());
+            assert!(rt.requests.is_empty());
             assert!(!rt.animating);
             assert!(scroll(&rt).pinned(), "the completed hold returns the end to stick_bottom");
             rt.update(|s, _| { s.height = 230.0; s.streaming = true; });
@@ -104,7 +105,7 @@ mod tests {
     fn all_scroll_input_and_later_destinations_cancel_a_reveal() {
         for input in 0..5 {
             let mut rt = following(false);
-            assert!(!rt.scroll_reveals.is_empty());
+            assert!(rt.requests.reveals().next().is_some());
             match input {
                 0 => rt.wheel_xy(100.0, 100.0, 0.0, 50.0),
                 1 => { let i = rt.node_index[&rt.node("scroll").unwrap().id]; rt.page_to(i, |_, _, _| 0.0); }
@@ -112,9 +113,9 @@ mod tests {
                 3 => rt.fling(100.0, 100.0, 100.0),
                 _ => rt.update(|_, tx| { tx.scroll_into_view("tail"); tx.scroll_to_y("scroll", 0.0); }),
             }
-            if input != 4 { assert!(rt.scroll_reveals.is_empty(), "input {input} cancels at arrival, even before wheel dispatch"); }
+            if input != 4 { assert!(rt.requests.reveals().next().is_none(), "input {input} cancels at arrival, even before wheel dispatch"); }
             rt.frame(1.0 / 120.0);
-            assert!(rt.scroll_reveals.is_empty(), "input {input} cancels the reveal");
+            assert!(rt.requests.reveals().next().is_none(), "input {input} cancels the reveal");
             let offset = scroll(&rt).offset;
             if input != 3 {
                 for _ in 0..60 { rt.frame(1.0 / 120.0); }
@@ -129,7 +130,7 @@ mod tests {
             let mut rt = following(false);
             rt.update(move |s, _| { s.removed = true; s.hidden = hidden; s.height = 300.0; });
             rt.frame(1.0 / 120.0);
-            assert!(rt.scroll_reveals.is_empty(), "missing targets must not wait for unrelated growth");
+            assert!(rt.requests.reveals().next().is_none(), "missing targets must not wait for unrelated growth");
             for _ in 0..240 { rt.frame(1.0 / 120.0); }
             assert!(!rt.animating);
         }
@@ -435,8 +436,6 @@ impl<S: 'static> Runtime<S> {
                 path: self.nodes[h].path.clone(),
                 inset: (self.drawn[h][1] - self.drawn[s][1]) / self.drawn_scale[s].max(1e-4),
             });
-            self.keeps.retain(|k| k.viewport != self.nodes[s].path);
-            self.scroll_reveals.retain(|r| r.viewport != self.nodes[s].path);
             let virtual_row = std::iter::successors(Some(i), |&p| self.nodes[p].parent)
                 .take_while(|&p| p != s)
                 .find_map(|r| {
@@ -447,13 +446,12 @@ impl<S: 'static> Runtime<S> {
                         self.nodes[i].target[1] - self.nodes[r].target[1],
                     ))
                 });
-            self.keeps.push(Keep {
+            self.requests.step(requests::Event::Capture(Keep {
                 path: self.nodes[i].path.clone(),
                 viewport: self.nodes[s].path.clone(),
                 was: self.drawn[i][1] - self.drawn[s][1],
-                virtual_row,
                 hold,
-            });
+            }, virtual_row));
         }
     }
 
@@ -467,13 +465,13 @@ impl<S: 'static> Runtime<S> {
 
     /// Whether a `Tx::keep_on_screen` holds a stuck header (`Hold`).
     pub(super) fn holding(&self) -> bool {
-        self.keeps.iter().any(|k| k.hold.is_some())
+        self.requests.keeps().any(|k| k.hold.is_some())
     }
 
     fn hold_of(&self, i: usize) -> Option<&Hold> {
-        if self.keeps.is_empty() { return None; }
+        if !self.requests.has_keeps() { return None; }
         let path = &self.nodes[i].path;
-        self.keeps.iter().find_map(|k| k.hold.as_ref().filter(|h| h.path == *path))
+        self.requests.keeps().find_map(|k| k.hold.as_ref().filter(|h| h.path == *path))
     }
 
     /// Node `i`'s sticky edge, inset and whether the inset counts from its bottom: a `Hold`'s,
@@ -541,15 +539,13 @@ impl<S: 'static> Runtime<S> {
     /// the commit, clamped to the content, re-pinning a `stick_bottom` end, and remounting any
     /// virtual rows the jump brings into view.
     pub(super) fn apply_keeps(&mut self) {
-        if self.keeps.is_empty() { return; }
-        let mut keeps = std::mem::take(&mut self.keeps);
+        if !self.requests.has_keeps() { return; }
         for pass in 0..4 {
             // Step with the keeps in place: they own their viewports (`ease_to_shrunk_end`).
-            self.keeps = keeps;
             self.step_scroll(0.0);
-            keeps = std::mem::take(&mut self.keeps);
+            let mut requests = std::mem::take(&mut self.requests);
             let mut moved = false;
-            for k in &keeps {
+            for (k, virtual_row) in requests.anchors() {
                 let Some(s) = self.nodes.iter().position(|n| n.path == k.viewport && n.scroll.is_some() && n.scroll_axes.y()) else { continue };
                 let laid = if let Some(i) = self.nodes.iter().position(|n| n.path == k.path) {
                     if self.viewport_of(i) != Some(s) { continue; }
@@ -560,7 +556,7 @@ impl<S: 'static> Runtime<S> {
                     }
                     // Mounted anchors follow drawn geometry after the motion step.
                     continue;
-                } else if let Some((v_path, row_key, in_row)) = &k.virtual_row
+                } else if let Some((v_path, row_key, in_row)) = virtual_row
                     && let Some(v) = self.virtuals.get(v_path)
                     && let Some(idx) = v.index_of(row_key)
                 {
@@ -578,18 +574,21 @@ impl<S: 'static> Runtime<S> {
                 st.land(stick);
                 moved = true;
             }
-            if !moved || !self.virtual_window_changed() { break; }
+            if !moved || !self.virtual_window_changed() { self.requests = requests; break; }
+            self.requests = requests.take_reveals();
             self.commit(&Tx::default());
+            requests.restore_reveals(std::mem::take(&mut self.requests));
+            self.requests = requests;
         }
-        self.keeps = keeps;
     }
 
     /// Compensate this frame's drawn displacement, in viewport coordinates. Sticky
     /// clamping may absorb part of a correction; the caller permits a bounded repaint.
     pub(super) fn follow_keeps(&mut self) -> bool {
+        if self.requests.is_empty() { return false; }
         self.end_takes_over();
         let mut moved = false;
-        for k in &self.keeps {
+        for k in self.requests.keeps() {
             let Some(i) = self.nodes.iter().enumerate().position(|(i, n)| n.path == k.path && !self.subtree_exiting(i)) else { continue };
             let Some(s) = self.viewport_of(i).filter(|&s| self.nodes[s].path == k.viewport) else { continue };
             let scale = self.drawn_scale[s];
@@ -605,7 +604,7 @@ impl<S: 'static> Runtime<S> {
             st.direct = true;
             moved = true;
         }
-        for r in &self.scroll_reveals {
+        for r in self.requests.reveals() {
             let target = (0..self.nodes.len()).find(|&i| self.reveal_names(r, i))
                 .map(|i| (i, self.drawn[i][1], self.drawn[i][3]))
                 .or_else(|| {
@@ -649,28 +648,27 @@ impl<S: 'static> Runtime<S> {
         }
         // Once the content end prevents holding the anchor, let stick-bottom own the
         // viewport again, including growth committed while the collapse is still settling.
-        let mut keeps = std::mem::take(&mut self.keeps);
-        keeps.retain(|k| {
+        if !self.requests.has_keeps() { return moved; }
+        let mut requests = std::mem::take(&mut self.requests);
+        requests.step(requests::Event::RetainKeeps(&|k| {
             let Some(i) = self.nodes.iter().position(|n| n.path == k.path) else { return true };
             let Some(s) = self.viewport_of(i) else { return false };
             !(self.scrolls.get(&self.nodes[s].id).is_some_and(|st| st.pinned())
                 && self.drawn[i][1] - self.drawn[s][1] > k.was + 0.5)
-        });
-        self.keeps = keeps;
+        }));
+        self.requests = requests;
         moved
     }
 
     /// A user or explicit scroll ends the holds and reveals that would pull the view back.
     pub(super) fn drop_scroll_holds(&mut self) {
-        self.keeps.clear();
-        self.scroll_reveals.clear();
+        self.requests.step(requests::Event::Cancel);
     }
 
     /// Colour, hover or decorative motion must not extend the anchor's lifetime.
     pub(super) fn finish_keeps(&mut self) {
-        if self.keeps.is_empty() && self.scroll_reveals.is_empty() { return; }
-        let mut keeps = std::mem::take(&mut self.keeps);
-        let mut reveals = std::mem::take(&mut self.scroll_reveals);
+        if self.requests.is_empty() { return; }
+        let mut requests = std::mem::take(&mut self.requests);
         let animating = |viewport: &str| self.nodes.iter().any(|n| {
             let within = n.path == viewport || (n.path.starts_with(viewport)
                 && n.path.as_bytes().get(viewport.len()) == Some(&b'/'));
@@ -682,12 +680,9 @@ impl<S: 'static> Runtime<S> {
         let gliding = |viewport: &str| self.path_ids.get(viewport)
             .and_then(|id| self.scrolls.get(id))
             .is_some_and(|st| st.glide().is_some());
-        keeps.retain(|k| animating(&k.viewport));
-        // A glide keeps its reveal until it lands; otherwise a reveal lasts while its viewport's
-        // subtree moves with its target in it.
-        reveals.retain(|r| gliding(&r.viewport) || (animating(&r.viewport) && self.reveal_mounted(r)));
-        self.keeps = keeps;
-        self.scroll_reveals = reveals;
+        requests.step(requests::Event::Finish { animating: &animating, gliding: &gliding,
+            mounted: &|r| self.reveal_mounted(r) });
+        self.requests = requests;
     }
 
     /// Whether node `i` is reveal `r`'s target element.

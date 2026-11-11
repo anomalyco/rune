@@ -16,10 +16,10 @@ impl<S: 'static> Runtime<S> {
     /// sit above the header held stuck in it, and that header's path, when it keeps no more
     /// than that header shows.
     pub(super) fn fold_hidden_above(&self, nodes: &[Node], j: usize, to: f32) -> Option<(f32, String)> {
-        if self.keeps.is_empty() || !self.built || self.stuck.len() != self.nodes.len() { return None; }
+        if !self.requests.has_keeps() || !self.built || self.stuck.len() != self.nodes.len() { return None; }
         let row = &nodes[j].path;
         let within = |path: &str| path.starts_with(row.as_str()) && path.as_bytes().get(row.len()) == Some(&b'/');
-        let hold = self.keeps.iter().filter_map(|k| k.hold.as_ref()).find(|h| within(&h.path))?;
+        let hold = self.requests.keeps().filter_map(|k| k.hold.as_ref()).find(|h| within(&h.path))?;
         let mut end = j + 1;
         while end < nodes.len() && nodes[end].parent.is_some_and(|p| p >= j) { end += 1; }
         let header = (j + 1..end).find(|&i| nodes[i].path == hold.path)?;
@@ -65,7 +65,7 @@ impl<S: 'static> Runtime<S> {
     /// further times its share: the hold on its header expects it that much lower.
     pub(super) fn lower_hold(&mut self, row: NodeId, d: f32) {
         let Some(header) = self.fold_headers.get(&row) else { return };
-        for k in self.keeps.iter_mut().filter(|k| k.hold.as_ref().is_some_and(|h| h.path == *header)) {
+        for k in self.requests.keeps_mut().filter(|k| k.hold.as_ref().is_some_and(|h| h.path == *header)) {
             let scale = self.nodes.iter().position(|n| n.path == k.viewport).and_then(|s| self.drawn_scale.get(s).copied()).unwrap_or(1.0);
             k.was += d * scale;
         }
@@ -76,15 +76,15 @@ impl<S: 'static> Runtime<S> {
     /// Short of that, a frame that shuts more than the end has left clamps the viewport at its
     /// end before the hold moves it back; the hold stays.
     pub(super) fn end_takes_over(&mut self) {
-        if self.fold_headers.is_empty() || self.keeps.is_empty() { return; }
+        if self.fold_headers.is_empty() || !self.requests.has_keeps() { return; }
         let giving: Vec<&String> = self.fold_headers.iter()
             .filter(|(id, _)| self.grows.get(id).is_some_and(|g| g.give.is_some_and(|share| (g.h - g.target) * (1.0 - share) < 0.5)))
             .map(|(_, p)| p).collect();
         if giving.is_empty() { return; }
         let pinned = |viewport: &str| self.path_ids.get(viewport).and_then(|id| self.scrolls.get(id)).is_some_and(|st| st.pinned());
-        let drop: Vec<usize> = self.keeps.iter().enumerate()
-            .filter(|(_, k)| k.hold.as_ref().is_some_and(|h| giving.contains(&&h.path)) && pinned(&k.viewport)).map(|(i, _)| i).collect();
-        for i in drop.into_iter().rev() { self.keeps.remove(i); }
+        self.requests.step(requests::Event::RetainKeeps(&|k| {
+            !(k.hold.as_ref().is_some_and(|h| giving.contains(&&h.path)) && pinned(&k.viewport))
+        }));
     }
 
     /// Row `j` of the commit's `nodes`, a fold opening from rest or again while its contents
@@ -100,20 +100,18 @@ impl<S: 'static> Runtime<S> {
         let mut end = j + 1;
         while end < nodes.len() && nodes[end].parent.is_some_and(|p| p >= j) { end += 1; }
         let viewport = &nodes[s].path;
-        self.keeps.retain(|k| k.viewport != *viewport || nodes.iter().position(|n| n.path == k.path).is_none_or(|i| i >= end));
+        self.requests.step(requests::Event::RetainKeeps(&|k| k.viewport != *viewport || nodes.iter().position(|n| n.path == k.path).is_none_or(|i| i >= end)));
         if !pinned && self.drawn.len() == self.nodes.len()
             && let Some(below) = nodes.get(end).filter(|n| n.path.starts_with(viewport.as_str()))
             && let Some(i) = self.nodes.iter().position(|n| n.id == below.id)
             && let Some(v) = self.nodes.iter().position(|n| n.id == nodes[s].id)
         {
-            self.keeps.retain(|k| k.viewport != *viewport);
-            self.keeps.push(crate::runtime::sticky::Keep {
+            self.requests.step(requests::Event::FoldAnchor(sticky::Keep {
                 path: below.path.clone(),
                 viewport: viewport.clone(),
                 was: self.drawn[i][1] - self.drawn[v][1],
-                virtual_row: None,
                 hold: None,
-            });
+            }));
         }
         // How far below the viewport's top the fold's top showed: its header rises that far.
         let shown = (self.drawn.len() == self.nodes.len()).then(|| {
@@ -140,7 +138,7 @@ impl<S: 'static> Runtime<S> {
         st.offset += f64::from(r);
         st.max = st.max.max(st.offset);
         let Some(&ri) = self.node_index.get(&row) else { return };
-        for k in self.keeps.iter_mut().filter(|k| k.viewport == path) {
+        for k in self.requests.keeps_mut().filter(|k| k.viewport == path) {
             if self.nodes.iter().position(|n| n.path == k.path).is_some_and(|i| i <= ri) { k.was -= r * scale; }
         }
     }

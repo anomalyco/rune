@@ -190,7 +190,7 @@ fn keep_on_screen_holds_a_stuck_header_while_its_fold_shuts() {
     let shown: Vec<f32> = after.iter().copied().skip_while(|&a| a >= 200.0).collect();
     assert!(shown.windows(2).all(|w| w[1] <= w[0] + 0.5), "the row below only rises once it shows: {after:?}");
     assert!(after[36] < 28.5, "it reaches the header on the fold's own spring: {after:?}");
-    assert!(*after.last().unwrap() == 28.0 && rt.keeps.is_empty() && !rt.animating, "{after:?}");
+    assert!(*after.last().unwrap() == 28.0 && !rt.requests.has_keeps() && !rt.animating, "{after:?}");
 }
 
 /// A fold shutting from 600 pt feathers its moving bottom edge to its `fold_feather` depth,
@@ -248,7 +248,7 @@ fn shut_from_stuck(after: f32, offset: f32) -> Vec<HashMap<String, f32>> {
             (["hdr", "before", "after"].contains(&k.as_str()) || (k.starts_with("step-") && shows)).then_some((k, e.rect[1]))
         }).collect()
     }).collect();
-    assert!(!rt.animating && rt.keeps.is_empty());
+    assert!(!rt.animating && !rt.requests.has_keeps());
     frames
 }
 

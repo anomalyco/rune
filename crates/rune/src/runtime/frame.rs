@@ -617,7 +617,7 @@ impl<S: 'static> Runtime<S> {
         if !scroll_pages.is_empty() { self.scroll_pages(scroll_pages); }
         if !scroll_offsets.is_empty() { self.scroll_to_offsets(scroll_offsets); }
         // Explicit destinations processed after a reveal win for its entire lifetime.
-        if destination { self.scroll_reveals.clear(); }
+        if destination { self.requests.step(requests::Event::Destination); }
         // Those scrolls moved the caret after the commit a view placed from it saw.
         if self.caret_watch && self.caret_moved(None) { self.commit(&Tx { instant: true, ..Tx::default() }); }
         if let Some(request) = tx.select.take() {

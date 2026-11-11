@@ -177,9 +177,9 @@ impl<S: 'static> Runtime<S> {
                 moving |= active;
                 continue;
             }
-            let held = (!self.keeps.is_empty() || !self.scroll_reveals.is_empty()) && {
+            let held = !self.requests.is_empty() && {
                 let path = &self.nodes[i].path;
-                (self.keeps.iter().any(|k| k.viewport == *path) || self.scroll_reveals.iter().any(|r| r.viewport == *path))
+                self.requests.owns(path)
                     && self.scroll_stack(i).and_then(|c| self.stacks.get(&self.nodes[c].id)).is_some_and(|s| s.growing)
             };
             let laid = if axes.y() { self.ease_to_shrunk_end(i, overflow) } else { None };

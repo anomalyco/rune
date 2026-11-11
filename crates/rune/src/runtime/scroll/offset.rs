@@ -143,7 +143,7 @@ impl<S: 'static> Runtime<S> {
         let stack = self.stacks.get(&self.nodes[c].id)?;
         let moving = stack.moving || !stack.closing.is_empty();
         let path = &self.nodes[i].path;
-        let owned = self.keeps.iter().any(|k| k.viewport == *path) || self.scroll_reveals.iter().any(|r| r.viewport == *path);
+        let owned = self.requests.owns(path);
         let bottom = self.scroll_children(i).map(|k| self.nodes[k].target[3]).reduce(f32::max).unwrap_or(self.nodes[c].target[3]);
         let end = f64::from(bottom - self.nodes[i].target[3]).max(0.0);
         let held = self.reduced_motion || owned;

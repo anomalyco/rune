@@ -107,7 +107,7 @@ impl<S: 'static> Runtime<S> {
             // So does a reveal in this commit for rows new to the stack: rows inserted above an
             // anchored first row and revealed at once land whole instead of growing from zero.
             let revealing = self.virtuals.get(&nodes[c].path)
-                .is_some_and(|v| self.scroll_reveals.iter().any(|r| r.viewport == v.scroll_path));
+                .is_some_and(|v| self.requests.reveals().any(|r| r.viewport == v.scroll_path));
             let revealed_now = self.virtuals.get(&nodes[c].path).is_some_and(|v| {
                 tx.scroll_to.iter().any(|r| {
                     nodes.iter().enumerate().find(|(_, n)| n.named(&r.key)
@@ -120,7 +120,7 @@ impl<S: 'static> Runtime<S> {
                 })
             });
             let reader = self.virtuals.get(&nodes[c].path)
-                .filter(|v| !self.keeps.iter().any(|k| k.viewport == v.scroll_path))
+                .filter(|v| !self.requests.keeps().any(|k| k.viewport == v.scroll_path))
                 .and_then(|v| self.path_ids.get(&v.scroll_path))
                 .and_then(|id| self.scrolls.get(id)).is_some_and(|s| !s.pinned());
             let reading = reader && !revealed_now;
@@ -268,10 +268,8 @@ impl<S: 'static> Runtime<S> {
                 && !self.scene.contains(nodes[last].id)
                 && let Some(s) = std::iter::successors(nodes[c].parent, |&p| nodes[p].parent)
                     .find(|&p| nodes[p].scroll.is_some() && nodes[p].scroll_axes.y())
-                && let Some(r) = self.scroll_reveals.iter_mut().find(|r| r.viewport == nodes[s].path && r.at_end)
             {
-                r.scope = None;
-                r.key = nodes[last].path.clone();
+                self.requests.step(requests::Event::NewTail { viewport: &nodes[s].path, key: &nodes[last].path });
             }
             stack.growing = !stack.pending_heights.is_empty()
                 || order.iter().any(|r| self.grows.get(r).is_some_and(|g| g.target > g.h + 1.0 / 128.0));

@@ -131,7 +131,7 @@ impl<S: 'static> Runtime<S> {
         COMMITS.set(COMMITS.get() + 1);
         self.last_commit_clock = self.clock;
         self.memo_since = self.memo.next_pass();
-        for r in &self.scroll_reveals {
+        for r in self.requests.reveals() {
             if r.at_end && let Some(&id) = self.path_ids.get(&r.viewport)
                 && let Some(scroll) = self.scrolls.get_mut(&id)
             {

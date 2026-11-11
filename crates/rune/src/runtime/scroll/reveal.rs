@@ -145,25 +145,20 @@ impl<S: 'static> Runtime<S> {
         let laid_max = (laid_end - viewport).max(0.0);
         let laid_to = place(center, scroll.offset, laid_top, laid_h, viewport, margin).clamp(0.0, laid_max);
         let at_end = stick && (scroll.pinned() || offset >= scroll.max - 0.5) && laid_to >= laid_max - 0.5;
-        if first {
-            self.scroll_reveals.retain(|r| r.viewport != path);
-            self.scroll_reveals.push(sticky::Reveal {
-                scope: scope.map(str::to_owned),
-                key: key.to_owned(),
-                viewport: path.clone(),
-                center,
-                at_end,
-            });
-        } else if let Some(r) = self.scroll_reveals.iter_mut().find(|r| r.viewport == path) {
-            r.at_end |= at_end;
+        let effects = self.requests.step(requests::Event::Place { first, scope, key, viewport: &path,
+            center, at_end, from: scroll.offset, to: offset });
+        let Some(effect) = effects.into_iter().next() else { return (false, was) };
+        match effect {
+            requests::Effect::Move(to) => {
+                scroll.offset = to;
+                scroll.mode = ScrollMode::Rest;
+                scroll.direct = true;
+            }
+            requests::Effect::Rest => {
+                scroll.mode = ScrollMode::Rest;
+                return (false, was);
+            }
         }
-        if (offset - scroll.offset).abs() < 0.5 {
-            if first { scroll.mode = ScrollMode::Rest; }
-            return (false, was);
-        }
-        scroll.offset = offset;
-        scroll.mode = ScrollMode::Rest;
-        scroll.direct = true;
         let window = self.virtual_window_changed();
         if window {
             self.commit(&Tx { instant, ..Tx::default() });
