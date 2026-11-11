@@ -78,11 +78,18 @@ impl<T> std::ops::DerefMut for Tracked<T> {
     }
 }
 
-/// A value swapped out of its place (`mem::replace`) or dropped counts as a write, so a region
-/// that read it builds again. There's no `Default`, so `mem::take` can't swap one out unseen.
+/// A value swapped out of its place (`mem::replace`, `mem::take`) counts as a write when it's
+/// dropped, so a region that read it builds again; a swapped-out value kept alive doesn't, so
+/// assign through it (`*field = value`) instead.
 impl<T> Drop for Tracked<T> {
     fn drop(&mut self) {
         bump(self.id);
+    }
+}
+
+impl<T: Default> Default for Tracked<T> {
+    fn default() -> Self {
+        Tracked::new(T::default())
     }
 }
 
