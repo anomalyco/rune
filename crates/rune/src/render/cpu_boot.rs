@@ -268,7 +268,7 @@ pub fn paint(scene: &Scene<'_>, target: &mut Target<'_>, threads: usize) -> Resu
     let bins = bin::Bins::of(scene);
     let binned = Instant::now();
     let tiles: Vec<u32> = (0..bins.tile_count() as u32).collect();
-    let mut report = raster::run(scene, &bins, target, &tiles, &raster::Spawn(threads.max(1)));
+    let mut report = raster::run(scene, &bins, target, &tiles, &raster::Spawn(threads.max(1)), &raster::Spawn(threads.max(1)));
     let done = Instant::now();
     report.bin_ns = ns(binned - start);
     report.raster_ns = ns(done - binned);

@@ -5,7 +5,9 @@
 //! `Rgba16Float` holds it, then the composite (backdrop_composite.wgsl) inside the record's rounded
 //! rect and clip. Only the record's region is blurred, as on the GPU.
 
-use super::raster::f16;
+use std::sync::atomic::{AtomicU32, Ordering};
+
+use super::raster::{Exec, f16};
 use super::shade::{Clip, sd_rounded};
 use crate::render::Instance;
 
@@ -113,6 +115,23 @@ fn bilinear(uv: [f32; 2], w: u32, h: u32, texel: impl Fn(u32, u32) -> [f32; 4]) 
     mix(mix(texel(x0, y0), texel(x1, y0), fx), mix(texel(x0, y1), texel(x1, y1), fx), fy)
 }
 
+/// Runs `row(y, texels)` for rows `y0..y1` of `out`, a row at a time on `exec`'s threads.
+fn rows(exec: &dyn Exec, out: &mut Level, y0: u32, y1: u32, row: &(dyn Fn(u32, &mut [[f32; 4]]) + Sync)) {
+    struct Rows(*mut [f32; 4]);
+    // SAFETY: each row goes to one thread (the counter hands each out once), and rows don't
+    // overlap; `out` outlives the run, which joins before returning.
+    unsafe impl Sync for Rows {}
+    let (base, w) = (&Rows(out.px.as_mut_ptr()), out.w as usize);
+    let next = AtomicU32::new(y0);
+    exec.run(&|| loop {
+        let y = next.fetch_add(1, Ordering::Relaxed);
+        if y >= y1 { break; }
+        // SAFETY: row `y` is inside `out` (y < y1 <= h) and only this thread has it.
+        let texels = unsafe { std::slice::from_raw_parts_mut(base.0.add(y as usize * w), w) };
+        row(y, texels);
+    });
+}
+
 /// A record's blurred result, level 0 of the up chain, and where it sits.
 pub(super) struct Blurred {
     up: Level,
@@ -121,7 +140,7 @@ pub(super) struct Blurred {
 
 /// Blurs the window's pixels under `rec`: `window(x, y)` reads pixel `(x, y)` as the target
 /// holds it, R, G, B, A in 0..=1.
-pub(super) fn blur(rec: &Record, viewport: (u32, u32), half: super::HalfRounding, window: impl Fn(u32, u32) -> [f32; 4]) -> Blurred {
+pub(super) fn blur(rec: &Record, viewport: (u32, u32), half: super::HalfRounding, exec: &dyn Exec, window: impl Fn(u32, u32) -> [f32; 4] + Sync) -> Blurred {
     let [pw, ph] = rec.size;
     let extent = [pw as f32 * 2.0, ph as f32 * 2.0];
     let v = [viewport.0 as f32, viewport.1 as f32];
@@ -166,11 +185,12 @@ pub(super) fn blur(rec: &Record, viewport: (u32, u32), half: super::HalfRounding
                 let u = (ty as f32 + 0.5) / h as f32;
                 offsets.map(|o| axis((u * window_map[1] + window_map[3] + t[1] * o).clamp(window_region[1], window_region[3]), viewport.1))
             }).collect();
-            for (ty, ay) in (sy0..sy1).zip(&ys) {
+            rows(exec, &mut out, sy0, sy1, &|ty, row| {
+                let ay = &ys[(ty - sy0) as usize];
                 for (tx, ax) in (sx0..sx1).zip(&xs) {
-                    out.px[(ty * w + tx) as usize] = down13(|o| tap(&ax[(o[0] + 2.0) as usize], &ay[(o[1] + 2.0) as usize], &window)).map(|v| f16(v, half));
+                    row[tx as usize] = down13(|o| tap(&ax[(o[0] + 2.0) as usize], &ay[(o[1] + 2.0) as usize], &window)).map(|v| f16(v, half));
                 }
-            }
+            });
         } else {
             let src = &down[m - 1];
             let t = [1.0 / src.w as f32, 1.0 / src.h as f32];
@@ -183,11 +203,12 @@ pub(super) fn blur(rec: &Record, viewport: (u32, u32), half: super::HalfRounding
                 offsets.map(|o| axis((u + t[1] * o).clamp(inside[1], inside[3]), src.h))
             }).collect();
             let texel = |x: u32, y: u32| src.px[(y * src.w + x) as usize];
-            for (ty, ay) in (sy0..sy1).zip(&ys) {
+            rows(exec, &mut out, sy0, sy1, &|ty, row| {
+                let ay = &ys[(ty - sy0) as usize];
                 for (tx, ax) in (sx0..sx1).zip(&xs) {
-                    out.px[(ty * w + tx) as usize] = down13(|o| tap(&ax[(o[0] + 2.0) as usize], &ay[(o[1] + 2.0) as usize], &texel)).map(|v| f16(v, half));
+                    row[tx as usize] = down13(|o| tap(&ax[(o[0] + 2.0) as usize], &ay[(o[1] + 2.0) as usize], &texel)).map(|v| f16(v, half));
                 }
-            }
+            });
         }
         down.push(out);
     }
@@ -211,7 +232,8 @@ pub(super) fn blur(rec: &Record, viewport: (u32, u32), half: super::HalfRounding
         }).collect();
         let coarse_texel = |x: u32, y: u32| src.px[(y * src.w + x) as usize];
         let fine_texel = |x: u32, y: u32| fine.px[(y * fine.w + x) as usize];
-        for (ty, ay) in (sy0..sy1).zip(&ys) {
+        rows(exec, &mut out, sy0, sy1, &|ty, row| {
+            let ay = &ys[(ty - sy0) as usize];
             for (tx, ax) in (sx0..sx1).zip(&xs) {
                 // `s(dx, dy)`: the coarse level at offset (dx, dy) texels, each −1, 0 or 1.
                 let s = |dx: usize, dy: usize| tap(&ax.0[dx], &ay.0[dy], &coarse_texel);
@@ -223,9 +245,9 @@ pub(super) fn blur(rec: &Record, viewport: (u32, u32), half: super::HalfRounding
                 c = add(c, add(add(add(s(2, 2), s(0, 0)), s(2, 0)), s(0, 2)));
                 let c = c.map(|v| v / 16.0);
                 let f = tap(&ax.1, &ay.1, &fine_texel);
-                out.px[(ty * w + tx) as usize] = std::array::from_fn(|ch| f16(f[ch] * (1.0 - weight) + c[ch] * weight, half));
+                row[tx as usize] = std::array::from_fn(|ch| f16(f[ch] * (1.0 - weight) + c[ch] * weight, half));
             }
-        }
+        });
         coarse = Some(out);
     }    Blurred { up: coarse.unwrap_or_else(|| down.swap_remove(0)), place: [rec.origin[0], rec.origin[1], extent[0], extent[1]] }
 }

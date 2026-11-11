@@ -16,7 +16,8 @@ use crate::render::{Instance, KIND_LAYER, KIND_LAYER_END};
 
 const TILE_PX: usize = (TILE_W * TILE_H) as usize;
 
-pub(super) fn run(scene: &Scene<'_>, bins: &Bins, target: &mut Target<'_>, tiles: &[u32], exec: &dyn Exec) -> Report {
+/// Paints 	iles on xec's threads; backdrop blurs, taken between phases, go on wide's.
+pub(super) fn run(scene: &Scene<'_>, bins: &Bins, target: &mut Target<'_>, tiles: &[u32], exec: &dyn Exec, wide: &dyn Exec) -> Report {
     let surface = Surface { base: target.pixels.as_mut_ptr(), len: target.pixels.len(), stride: target.stride };
     let clear = scene.clear.map(|c| c.clamp(0.0, 1.0) * 255.0);
     let clear = [q(clear[2]), q(clear[1]), q(clear[0]), q(clear[3])];
@@ -38,9 +39,15 @@ pub(super) fn run(scene: &Scene<'_>, bins: &Bins, target: &mut Target<'_>, tiles
             let mut occ: Vec<Occluder> = Vec::new();
             let mut painter = Painter { scene, bins, surface, stats: &mut stats, pow: &mut pow, layers: &mut layers, depth: 0, tile: [0; 4],
                 occ: &mut occ, n: 0, breaks: Vec::new(), segs: Vec::new(), blurred: done };
+            // A big frame goes out a page-wide run of tiles at a time (16 tiles: 1,024 pixels of
+            // each row, about a page), so threads fault in pages of their own rather than all
+            // queuing on the same ones (a fresh buffer: 12,969 to 9,992 µs); a small one tile at
+            // a time, so a thread that drew cheap tiles takes more.
+            let chunk = if tiles.len() > 512 { 16 } else { 1 };
             loop {
-                // One tile at a time, so a thread that drew cheap tiles takes more.
-                let Some(&t) = tiles.get(next.fetch_add(1, Ordering::Relaxed)) else { break };
+                let at = next.fetch_add(chunk, Ordering::Relaxed);
+                if at >= tiles.len() { break; }
+                for &t in &tiles[at..(at + chunk).min(tiles.len())] {
                 let t = t as usize;
                 let began = std::time::Instant::now();
                 painter.tile = painter.tile_rect(t as u32 % bins.cols, t as u32 / bins.cols);
@@ -59,6 +66,7 @@ pub(super) fn run(scene: &Scene<'_>, bins: &Bins, target: &mut Target<'_>, tiles
                 }
                 painter.depth = 0;
                 painter.stats.slowest_tile_ns = painter.stats.slowest_tile_ns.max(super::ns(began.elapsed()));
+                }
             }
             drop(painter);
             let mut s = sums.lock().unwrap_or_else(|e| e.into_inner());
@@ -84,7 +92,7 @@ pub(super) fn run(scene: &Scene<'_>, bins: &Bins, target: &mut Target<'_>, tiles
                 ((tx * TILE_W) as i32) < b[2] && (((tx + 1) * TILE_W) as i32) > b[0] && ((ty * TILE_H) as i32) < b[3] && (((ty + 1) * TILE_H) as i32) > b[1]
             });
             let began = std::time::Instant::now();
-            blurred.push(shown.then(|| backdrop::blur(rec, scene.size, scene.half, |x, y| {
+            blurred.push(shown.then(|| backdrop::blur(rec, scene.size, scene.half, wide, |x, y| {
                 let at = y as usize * stride + x as usize * 4;
                 [px[at + 2] as f32 / 255.0, px[at + 1] as f32 / 255.0, px[at] as f32 / 255.0, px[at + 3] as f32 / 255.0]
             })));
