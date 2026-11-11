@@ -1,32 +1,54 @@
 name: macOS tests
 
+# On a schedule and on request, never per pull request or per push (the owner's decision,
+# 2026-11-12): the test job takes over an hour on a Mac runner, Mac runners are scarce and shared
+# across the organisation, and changes merge straight after their pull request, so a run per
+# change (twice: the pull request, then the push to dev) was mostly cancelled or ignored. Every six
+# hours, `changes` (a Linux job) starts the Mac job only when dev is on a commit no run has tested
+# to the end yet; workflow_dispatch always tests. The Rust file-size check that also ran here
+# runs per pull request in file-size.yml.
 on:
-  push:
-    branches: [dev]
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+  schedule:
+    - cron: "41 */6 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
+  actions: read
 
-# One run at a time per branch, and a newer push replaces any run still waiting (an hour-long Mac
-# job per push queued six deep). On dev a running job finishes, so a busy branch still gets results;
-# a PR update cancels its running job.
+# One run at a time: a newer run cancels an older one still testing.
 concurrency:
-  group: macos-tests-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: macos-tests
+  cancel-in-progress: true
 
 jobs:
-  size:
+  changes:
     runs-on: ubuntu-latest
+    outputs:
+      test: ${{ steps.check.outputs.test }}
     steps:
-      - uses: actions/checkout@v5
-      - run: bash scripts/file-size.sh
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          # The commit the last run that finished its tests (green or red) tested: rerunning the
+          # same commit tells nothing new. A cancelled run doesn't count.
+          last=$(gh api "repos/$REPO/actions/workflows/macos-tests.yml/runs?branch=dev&per_page=50" \
+            --jq "[.workflow_runs[] | select(.id != $RUN_ID and (.conclusion == \"success\" or .conclusion == \"failure\"))][0].head_sha // empty" || true)
+          if [ "$EVENT" = schedule ] && [ "$last" = "$SHA" ]; then
+            echo "test=false" >> "$GITHUB_OUTPUT"
+            echo "dev is still at ${SHA:0:9}, which the last run tested." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "test=true" >> "$GITHUB_OUTPUT"
+          fi
 
-  # Mac runners are scarce and shared across the organisation, and this job takes over an hour, so
-  # draft PRs skip it; marking a PR ready for review starts it.
   test:
-    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    needs: changes
+    if: needs.changes.outputs.test == 'true'
     runs-on: macos-latest
     timeout-minutes: 90
     env:
