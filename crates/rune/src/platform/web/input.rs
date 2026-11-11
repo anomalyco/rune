@@ -256,7 +256,7 @@ impl<S: 'static> Running<S> {
             // On a canvas as tall as its content the browser takes vertical pans and cancels the
             // touch; taps and horizontal drags stay Rune's.
             WindowEvent::Touch(touch) => {
-                crate::window::touch(&mut self.rt, touch, scale);
+                crate::window::touch(&mut self.rt, touch);
                 // A tap is a user activation: links, the clipboard and focus act before the handler
                 // returns. In a page only a tap that left something focused needs it; anything else
                 // would focus the canvas and drop the reader's selection.

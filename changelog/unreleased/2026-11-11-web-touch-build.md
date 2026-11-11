@@ -1,0 +1,1 @@
+- **Web: the wasm build compiles again** after view zoom moved touch scaling into the runtime (`window::touch` takes the runtime's input scale).
