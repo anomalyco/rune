@@ -50,12 +50,41 @@ pub struct TextSpec {
     /// See [`El::exact_lines`](crate::El::exact_lines): the height is its lines' own, unrounded,
     /// unless [`El::rounded_lines`](crate::El::rounded_lines) rounds it to device pixels.
     pub(crate) exact_lines: bool,
-    /// Lays out with a right-to-left paragraph direction: the element's resolved `El::dir`,
-    /// set when it's flattened.
-    pub(crate) flow: Option<crate::el::Flow>,
-    /// See [`El::dir_by_paragraph`](crate::El::dir_by_paragraph): the text lays out in the
-    /// direction of its own first strong character, whatever `flow` is.
-    pub(crate) plaintext: bool,
+    /// The paragraph direction it lays out in (see [`TextDir`]).
+    pub(crate) dir: TextDir,
+}
+
+/// How a text's paragraph direction (bidi base level) resolves.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum TextDir {
+    /// From the first strong character of the whole text: no `El::dir` above it.
+    #[default]
+    Auto,
+    /// The element's resolved `El::dir`, set when it's flattened.
+    Fixed(crate::el::Flow),
+    /// [`El::dir_by_paragraph`](crate::El::dir_by_paragraph) (CSS `unicode-bidi: plaintext`):
+    /// each paragraph in the direction of its own first strong character, whatever the
+    /// element's is.
+    Plaintext,
+}
+
+/// What moves a text's [`TextDir`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TextDirEvent {
+    /// `El::dir_by_paragraph`.
+    ByParagraph,
+    /// Flattening resolved the element's direction: `None` when nothing above it sets one.
+    Flatten(Option<crate::el::Flow>),
+}
+
+/// One step of a text's [`TextDir`]: by-paragraph text keeps its own directions whatever
+/// direction the element resolves to.
+pub(crate) fn step_text_dir(state: TextDir, event: TextDirEvent) -> TextDir {
+    match (state, event) {
+        (_, TextDirEvent::ByParagraph) | (TextDir::Plaintext, TextDirEvent::Flatten(_)) => TextDir::Plaintext,
+        (_, TextDirEvent::Flatten(Some(flow))) => TextDir::Fixed(flow),
+        (_, TextDirEvent::Flatten(None)) => TextDir::Auto,
+    }
 }
 
 /// What few texts set: written through `TextSpec::cold`, which allocates it on the first write.
@@ -153,8 +182,7 @@ impl TextSpec {
             redacted: false,
             wrap_anywhere: false,
             exact_lines: true,
-            flow: None,
-            plaintext: false,
+            dir: TextDir::Auto,
         }
     }
 
@@ -214,12 +242,20 @@ impl TextSpec {
         crate::text::directed(key, self.base())
     }
 
-    /// The paragraph direction it lays out in.
+    /// The paragraph direction it lays out in as one layout.
     pub(crate) fn base(&self) -> parley::BaseDirection {
-        if self.plaintext {
-            return parley::BaseDirection::Auto;
+        match self.dir {
+            TextDir::Fixed(flow) => flow.base(),
+            TextDir::Auto | TextDir::Plaintext => parley::BaseDirection::Auto,
         }
-        self.flow.map_or(parley::BaseDirection::Auto, crate::el::Flow::base)
+    }
+
+    /// Whether it lays out one paragraph at a time, each in its own direction
+    /// ([`crate::text::ParagraphLayout`]): a wrapped, uncut field's by-paragraph text. Others
+    /// stay one layout (a static text splits into one text per paragraph instead).
+    pub(crate) fn by_paragraph(&self, input: bool) -> bool {
+        self.dir == TextDir::Plaintext && input && self.wrap && !self.redacted && !self.truncate && !self.truncate_fade
+            && self.max_lines == 0 && self.cold.live.is_none() && self.cold.advance_in.is_none()
     }
 
     /// Zeroizes the shown string and shows `content` instead.

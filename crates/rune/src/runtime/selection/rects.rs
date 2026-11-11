@@ -66,7 +66,7 @@ impl<S: 'static> Runtime<S> {
     /// Pushes the line boxes of bytes `a..b` of node `j`'s text onto `out`.
     fn text_boxes(&self, nodes: &[Node], j: usize, a: usize, b: usize, out: &mut Vec<[f32; 4]>) {
         let n = &nodes[j];
-        let (Some(spec), Some(layout)) = (&n.text, &n.text_layout) else { return };
+        let (Some(spec), Some(layout)) = (&n.text, n.text_layout.as_ref().and_then(TextLayout::single)) else { return };
         let len = spec.content.len();
         let (a, b) = (a.min(len), b.min(len));
         if a >= b { return; }

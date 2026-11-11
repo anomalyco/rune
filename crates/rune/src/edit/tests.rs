@@ -93,7 +93,8 @@ fn secure_revealed_uses_plain_display_and_words_while_keeping_protections() {
     e.key(&alt_left, None);
     assert_eq!(e.focus, 0);
     e.key(&alt_right, None);
-    assert_eq!(e.focus, 7);
+    // Off macOS a word forward lands past the space, at the next word's start.
+    assert_eq!(e.focus, if cfg!(target_os = "macos") { 7 } else { 8 });
 
     // Copy, cut, undo, redo and IME remain blocked when revealed.
     e.set_selection(1, 7);

@@ -34,20 +34,20 @@ impl<S: 'static> Runtime<S> {
     /// scrolling and sticky shifts, if it is a focused text field.
     pub(super) fn caret_rect(&self, nodes: &[Node], i: usize) -> Option<[f32; 4]> {
         let n = &nodes[i];
-        let (inp, spec, layout) = (n.input.as_ref()?, n.text.as_ref()?, n.text_layout.as_ref()?);
+        let (inp, spec, laid) = (n.input.as_ref()?, n.text.as_ref()?, n.text_layout.as_ref()?);
         if !inp.edit.focused { return None; }
+        let layout = laid.view();
         let s = self.env.scale;
         let t = sticky::anchored_target(nodes, &self.scrolls, i, self.viewport);
         let y = t[1] + self.stack_row_dy(nodes, i);
         let tw = layout.full_width().ceil() / s;
         let (x0, x1) = (t[0] + n.inset[0], t[2] - n.inset[2]);
-        let mut x = text_x(spec, x0, x1, tw, crate::el::Flow::of_layout(layout));
-        if inp.single_line {
+        let mut x = text_x(spec, x0, x1, tw, layout.flow());
+        if inp.single_line && let Some(l) = laid.single() {
             let prev = self.input_scroll.get(&n.path).copied().unwrap_or(0.0);
-            x -= single_line_offset(prev, inp, &spec.content, layout, s, (x1 - x0) * s) / s;
+            x -= single_line_offset(prev, inp, &spec.content, l, s, (x1 - x0) * s) / s;
         }
-        let cur = Cursor::from_byte_index(layout, caret_index(&inp.edit, &spec.content), Affinity::Downstream);
-        let bb = crate::text::cursor_geometry(&cur, layout, 1.5 * s);
+        let bb = layout.caret(caret_index(&inp.edit, &spec.content), inp.edit.affinity, 1.5 * s);
         let h = if bb.y1 > bb.y0 { (bb.y1 - bb.y0) as f32 / s } else { spec.style.line_px() };
         Some([x + bb.x0 as f32 / s, y + n.inset[1] + bb.y0 as f32 / s, 1.5, h])
     }

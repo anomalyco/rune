@@ -62,6 +62,8 @@ pub(crate) struct Watch {
     range: (usize, usize),
     pause: Pause,
     pub(crate) wake: Option<f64>,
+    /// The checker thread's deliveries it has drawn (`super::arrivals`).
+    seen: u64,
 }
 
 /// Steps the focused field `path`'s machine by what changed since the last paint, and returns
@@ -70,13 +72,13 @@ pub(crate) struct Watch {
 pub(crate) fn observe(watch: &mut Option<Watch>, path: &str, text: &str, range: (usize, usize), now: f64) -> Option<usize> {
     let hash = {
         use std::hash::{Hash, Hasher};
-        let mut h = std::collections::hash_map::DefaultHasher::new();
+        let mut h = rustc_hash::FxHasher::default();
         text.hash(&mut h);
         h.finish()
     };
     let w = match watch {
         Some(w) if w.path == path => w,
-        _ => watch.insert(Watch { path: path.to_owned(), text: hash, range, pause: Pause::Settled, wake: None }),
+        _ => watch.insert(Watch { path: path.to_owned(), text: hash, range, pause: Pause::Settled, wake: None, seen: super::arrivals() }),
     };
     let event = if w.text != hash {
         Some(Event::Typed { caret: range.1, now })
@@ -97,11 +99,13 @@ pub(crate) fn observe(watch: &mut Option<Watch>, path: &str, text: &str, range: 
 }
 
 /// The frame's turn: hands over the wake the paint asked for, and ends a pause that's due.
-/// Returns whether the field must draw again.
+/// Returns whether the field must draw again: also when the checker thread brought words back.
 pub(crate) fn tick(watch: &mut Option<Watch>, now: f64) -> (Option<f64>, bool) {
     let Some(w) = watch else { return (None, false) };
     let wake = w.wake.take();
     let (next, effect) = step(w.pause, Event::Tick { now });
     w.pause = next;
-    (wake, effect == Some(Effect::Redraw))
+    let arrived = super::arrivals();
+    let fresh = std::mem::replace(&mut w.seen, arrived) != arrived;
+    (wake, effect == Some(Effect::Redraw) || fresh)
 }

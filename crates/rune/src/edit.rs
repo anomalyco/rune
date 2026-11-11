@@ -15,6 +15,7 @@ use crate::color::Color;
 use crate::text::Link;
 
 mod caret_motion;
+use caret_motion::Column;
 mod display;
 mod history;
 mod html;
@@ -65,6 +66,12 @@ pub struct TextEdit {
     allowed_blocks: Option<u8>,
     /// Whether a user has edited the value since `replace_text`.
     edited_tag: EditedTag,
+    /// The column a run of Up and Down keeps.
+    column: Column,
+    /// Which side of `focus` the caret is drawn on where two runs of different direction meet:
+    /// a byte there has a place at the end of one run and at the start of the other. Arrows
+    /// and presses set it; anything else puts it before the byte that follows.
+    pub(crate) affinity: parley::Affinity,
 }
 
 impl std::fmt::Debug for TextEdit {
@@ -163,6 +170,8 @@ impl TextEdit {
             allowed_marks: None,
             allowed_blocks: None,
             edited_tag: EditedTag::default(),
+            column: Column::Free,
+            affinity: parley::Affinity::Downstream,
         }
     }
 
@@ -461,6 +470,8 @@ impl TextEdit {
         self.focus = b;
         self.snap_to_pills();
         self.typing = Typing::Inherited;
+        self.column = Column::Free;
+        self.affinity = parley::Affinity::Downstream;
     }
 
     /// Set the selection `anchor` and `focus` byte indices (clamped to character boundaries of
@@ -471,6 +482,8 @@ impl TextEdit {
         self.focus = Self::clamp_char_boundary(&self.text, focus);
         self.snap_to_pills();
         self.typing = Typing::Inherited;
+        self.column = Column::Free;
+        self.affinity = parley::Affinity::Downstream;
     }
 
     /// The [`Mark::Pill`]s in `self.text`, in order, with their byte ranges and ids.
@@ -491,56 +504,6 @@ impl TextEdit {
     /// The end of the pill that starts at or contains `j`, when `j` is before its end.
     fn pill_after(&self, j: usize) -> Option<usize> {
         self.marks.iter().find(|m| m.mark.is_pill() && m.start <= j && j < m.end).map(|m| m.end)
-    }
-
-    fn prev_word(&self, i: usize) -> usize {
-        if self.is_masked() {
-            return 0;
-        }
-        let s = &self.text;
-        let b = s.as_bytes();
-        let mut j = i.min(b.len());
-        loop {
-            if let Some(start) = self.pill_before(j) {
-                return start;
-            }
-            if j == 0 || !b[j - 1].is_ascii_whitespace() {
-                break;
-            }
-            j -= 1;
-        }
-        while j > 0 && !b[j - 1].is_ascii_whitespace() {
-            if self.marks.iter().any(|m| m.mark.is_pill() && m.end == j) {
-                break;
-            }
-            j = prev_char(s, j);
-        }
-        j
-    }
-
-    fn next_word(&self, i: usize) -> usize {
-        if self.is_masked() {
-            return self.text.len();
-        }
-        let s = &self.text;
-        let b = s.as_bytes();
-        let mut j = i.min(b.len());
-        loop {
-            if let Some(end) = self.pill_after(j) {
-                return end;
-            }
-            if j >= b.len() || !b[j].is_ascii_whitespace() {
-                break;
-            }
-            j += 1;
-        }
-        while j < b.len() && !b[j].is_ascii_whitespace() {
-            if self.marks.iter().any(|m| m.mark.is_pill() && m.start == j) {
-                break;
-            }
-            j = next_char(s, j);
-        }
-        j
     }
 
     /// Replace the selection with `label` as one [`Mark::Pill`] carrying `id`, and put the
@@ -692,6 +655,8 @@ impl TextEdit {
         mark_new_lines_soft: bool,
     ) {
         // Callers sync first; a second whole-text pass here would show on every keystroke.
+        self.column = Column::Free;
+        self.affinity = parley::Affinity::Downstream;
         let del_len = b - a;
         let ins_len = s.len();
         if self.marks.is_empty()

@@ -45,7 +45,7 @@ impl<S: 'static> Runtime<S> {
             })
         {
             let layout = self.focused_layout();
-            if self.with_focused(|e| e.key(ev, layout.as_deref()), one) {
+            if self.with_focused(|e| e.key_in(ev, layout.as_ref().map(TextLayout::view)), one) {
                 return true;
             }
         }
@@ -72,7 +72,7 @@ impl<S: 'static> Runtime<S> {
                 if copies && e.is_rich() && !e.is_secure() {
                     html = Some(e.selected_html()).filter(|h| !h.is_empty());
                 }
-                e.key(ev, layout.as_deref())
+                e.key_in(ev, layout.as_ref().map(TextLayout::view))
             }, one);
             if let Some(html) = html
                 && let Some(text) = one.copy.as_ref().filter(|w| !w.is_secret()).map(|w| w.content().text().to_owned())
@@ -152,13 +152,18 @@ impl<S: 'static> Runtime<S> {
         true
     }
 
-    pub(super) fn focused_layout(&mut self) -> Option<Rc<Layout<Ink>>> {
+    pub(super) fn focused_layout(&mut self) -> Option<TextLayout> {
         let path = self.focus.owned()?;
         let s = self.env.scale;
         let n = self.node(&path)?;
+        // The field shows its edit's display text: the layout it drew is that text's. A secret
+        // draws its mask, so the keys move through a layout of what it holds.
+        if let Some(l) = n.text_layout.clone().filter(|_| n.text.as_ref().is_some_and(|t| !t.redacted)) {
+            return Some(l);
+        }
         let (mut spec, w) = (n.text.clone()?, n.target[2] - n.target[0] - n.inset[0] - n.inset[2]);
         spec.replace_content(n.input.as_ref()?.edit.display().0);
-        Some(self.text.layout_for_spec(&spec, s, spec.wrap.then_some(w * s), line_alignment(&spec)))
+        Some(TextLayout::Single(self.text.layout_for_spec(&spec, s, spec.wrap.then_some(w * s), line_alignment(&spec))))
     }
 
     pub(super) fn with_focused(&mut self, f: impl FnOnce(&mut crate::edit::TextEdit) -> EditOutcome, tx: &mut Tx) -> bool {

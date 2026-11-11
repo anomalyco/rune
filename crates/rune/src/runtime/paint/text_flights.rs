@@ -17,10 +17,10 @@ impl<S: 'static> Runtime<S> {
         let mut done = Vec::new();
         for (fi, f) in self.flights.iter_mut().enumerate() {
             let Some((i, n)) = nodes.iter().enumerate().find(|(_, n)| f.lands(&n.path, n.key.as_deref())) else { continue };
-            let (Some(spec), Some(layout)) = (&n.text, &n.text_layout) else { done.push(fi); continue };
+            let (Some(spec), Some(layout)) = (&n.text, n.text_layout.as_ref().and_then(TextLayout::single)) else { done.push(fi); continue };
             // Both ends are measured by their laid-out text, so a destination box wider than its
             // text (a body stretched across a column) doesn't scale the flight.
-            let (target, origin) = text_extent(n, spec, layout, self.drawn[i], s);
+            let (target, origin) = text_extent(n, spec, TextFlow::Single(layout), self.drawn[i], s);
             if f.measure(target, now, reduced) { done.push(fi); }
             // Land sub-quantum size residuals before snapping both edges. Otherwise a settled
             // height can alternate by one quantum while its still-moving top crosses the grid.

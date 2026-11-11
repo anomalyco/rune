@@ -17,7 +17,7 @@ fn secure_input_masks_layout_inspector_and_unicode_pointer_indices() {
     let n = rt.nodes.iter().find(|n| n.key.as_deref() == Some("secret")).unwrap();
     assert_eq!(n.text.as_ref().unwrap().content, "•••");
     let path = n.path.clone();
-    let layout = rt.focused_layout().unwrap();
+    let layout = rt.focused_layout().and_then(|l| l.single().cloned()).unwrap();
     let caret = Cursor::from_byte_index(&layout, 6, Affinity::Downstream).geometry(&layout, 1.0);
     rt.queue.push(Action::Focus(path, caret.x0 as f32 + 0.1, ((caret.y0 + caret.y1) * 0.5) as f32));
     rt.frame(0.0);
@@ -109,7 +109,7 @@ fn secure_revealed_display_does_not_survive_in_layout_or_raster_caches() {
     assert!(!rt.is_selectable(i), "selectable cannot opt secure input into text selection");
     assert_eq!(n.text.as_ref().unwrap().content, "sensitive fixture");
     assert!(n.text.as_ref().unwrap().source.is_none(), "case conversion is ignored on inputs");
-    assert_eq!(Rc::strong_count(n.text_layout.as_ref().unwrap()), 1, "only the node owns the shaped run");
+    assert_eq!(Rc::strong_count(n.text_layout.as_ref().and_then(crate::text::TextLayout::single).unwrap()), 1, "only the node owns the shaped run");
     assert_eq!(rt.text.cached_layout_count(), cached, "measurement and paint leave no cached run");
     assert!(rt.node_caches.is_empty(), "an unfocused secret also disables ancestor raster caches");
     assert!(rt.text.atlas.resident_caches.is_empty());
@@ -117,7 +117,7 @@ fn secure_revealed_display_does_not_survive_in_layout_or_raster_caches() {
     assert!(!rt.selection_menu(&path, 10.0, 10.0), "no context-menu copy");
     rt.set_focus(Some(path), true);
     rt.frame(0.0);
-    let layout = rt.focused_layout().unwrap();
+    let layout = rt.focused_layout().and_then(|l| l.single().cloned()).unwrap();
     assert_eq!(Rc::strong_count(&layout), 1, "input hit testing also bypasses the layout cache");
     drop(layout);
     let mut tx = Tx::default();
@@ -175,8 +175,8 @@ fn revealed_secure_input_matches_plain_layout_and_keeps_protections() {
     assert_eq!(ns.text.as_ref().unwrap().content, "hé🙂 world");
     assert!(!format!("{:?}", ns.input).contains("hé🙂"));
     assert!(!format!("{:?}", ns.text).contains("hé🙂"));
-    let lp = np.text_layout.as_ref().unwrap().clone();
-    let ls = ns.text_layout.as_ref().unwrap().clone();
+    let lp = np.text_layout.as_ref().and_then(crate::text::TextLayout::single).unwrap().clone();
+    let ls = ns.text_layout.as_ref().and_then(crate::text::TextLayout::single).unwrap().clone();
     assert_eq!(lp.full_width(), ls.full_width(), "revealed layout width matches plain text");
     let secret_caret = secret_el.caret.expect("focused revealed field has caret");
     let secret_sel: Vec<[f32; 4]> = rt.instances.iter()
@@ -218,13 +218,13 @@ fn revealed_secure_input_matches_plain_layout_and_keeps_protections() {
     rt.frame(0.0);
     assert_eq!(rt.state.secret.text, "hX world", "no undo on revealed field");
 
-    let revealed_w = rt.nodes.iter().find(|n| n.key.as_deref() == Some("secret")).unwrap().text_layout.as_ref().unwrap().full_width();
+    let revealed_w = rt.nodes.iter().find(|n| n.key.as_deref() == Some("secret")).unwrap().text_layout.as_ref().and_then(crate::text::TextLayout::single).unwrap().full_width();
     rt.update(|s, _| { s.secret.set_selection(1, 4); s.secret.set_revealed(false); });
     rt.frame(0.0);
     assert_eq!(rt.state.secret.range(), (1, 4), "toggling revealed keeps selection");
     let ns = rt.nodes.iter().find(|n| n.key.as_deref() == Some("secret")).unwrap();
     assert_eq!(ns.text.as_ref().unwrap().content, "••••••••");
-    let hidden_w = ns.text_layout.as_ref().unwrap().full_width();
+    let hidden_w = ns.text_layout.as_ref().and_then(crate::text::TextLayout::single).unwrap().full_width();
     assert_ne!(revealed_w, hidden_w, "toggling revealed re-layouts the text");
 }
 
@@ -276,8 +276,8 @@ fn multiline_secure_input_hides_length_and_lines_wraps_anywhere_and_conceals_on_
     let n_long = rt_long.nodes.iter().find(|n| n.key.as_deref() == Some("secret")).unwrap();
     assert_eq!(n_short.text.as_ref().unwrap().content, crate::edit::MULTILINE_SECURE_MASK);
     assert_eq!(n_long.text.as_ref().unwrap().content, crate::edit::MULTILINE_SECURE_MASK);
-    let l_short = n_short.text_layout.as_ref().unwrap();
-    let l_long = n_long.text_layout.as_ref().unwrap();
+    let l_short = n_short.text_layout.as_ref().and_then(crate::text::TextLayout::single).unwrap();
+    let l_long = n_long.text_layout.as_ref().and_then(crate::text::TextLayout::single).unwrap();
     assert_eq!(l_short.len(), 1);
     assert_eq!(l_long.len(), 1);
     assert_eq!(l_short.full_width(), l_long.full_width());
@@ -296,7 +296,7 @@ fn multiline_secure_input_hides_length_and_lines_wraps_anywhere_and_conceals_on_
     rt_long.update(|s, _| s.secret.set_revealed(true));
     rt_long.frame(0.0);
     let n_rev = rt_long.nodes.iter().find(|n| n.key.as_deref() == Some("secret")).unwrap();
-    let l_rev = n_rev.text_layout.as_ref().unwrap();
+    let l_rev = n_rev.text_layout.as_ref().and_then(crate::text::TextLayout::single).unwrap();
     assert!(l_rev.len() > 100, "50 long unbroken lines must wrap into >100 visual lines");
     assert!(l_rev.full_width() <= 180.5, "wrapped unbroken lines must fit within field width (got {})", l_rev.full_width());
 
@@ -308,7 +308,7 @@ fn multiline_secure_input_hides_length_and_lines_wraps_anywhere_and_conceals_on_
     assert!(!exit_edit.is_revealed());
     assert_eq!(exit_edit.text, crate::edit::MULTILINE_SECURE_MASK);
     assert_eq!(exiting.text.as_ref().unwrap().content, crate::edit::MULTILINE_SECURE_MASK);
-    assert_eq!(exiting.text_layout.as_ref().unwrap().len(), 1);
+    assert_eq!(exiting.text_layout.as_ref().and_then(crate::text::TextLayout::single).unwrap().len(), 1);
     assert!(!format!("{:?}", exiting.input).contains("FAKEPEMLINE"));
     assert!(!format!("{:?}", exiting.text).contains("FAKEPEMLINE"));
 }
@@ -339,8 +339,8 @@ fn secure_multiline_conceal_snaps_geometry_scroll_and_bypasses_caches() {
         assert_eq!(e.rect[3], e.target[3], "concealed height must not spring: {}", e.path);
     }
     let secret = rt.nodes.iter().find(|n| n.key.as_deref() == Some("secret")).unwrap();
-    assert_eq!(secret.text_layout.as_ref().unwrap().len(), 1);
-    assert_eq!(Rc::strong_count(secret.text_layout.as_ref().unwrap()), 1);
+    assert_eq!(secret.text_layout.as_ref().and_then(crate::text::TextLayout::single).unwrap().len(), 1);
+    assert_eq!(Rc::strong_count(secret.text_layout.as_ref().and_then(crate::text::TextLayout::single).unwrap()), 1);
     assert_eq!(rt.text.cached_layout_count(), 0);
     assert!(rt.ime_area.is_none());
     let info = elements.iter().find(|e| e.key.as_deref() == Some("secret")).unwrap();
@@ -352,7 +352,7 @@ fn secure_multiline_conceal_snaps_geometry_scroll_and_bypasses_caches() {
     }
     let mut narrow = Runtime::new(rt.state.clone(), narrow, (50.0, 100.0), Env::new(true, 1.0));
     narrow.frame(0.0);
-    assert_eq!(narrow.nodes[0].text_layout.as_ref().unwrap().len(), 1);
+    assert_eq!(narrow.nodes[0].text_layout.as_ref().and_then(crate::text::TextLayout::single).unwrap().len(), 1);
 }
 
 #[test]
@@ -388,14 +388,14 @@ fn wrap_anywhere_wraps_unbroken_tokens_keeps_word_breaks_and_lowers_min_content_
     let el = |k: &str| rt.elements().into_iter().find(|e| e.key.as_deref() == Some(k)).unwrap();
 
     // Default .wrap() does not break inside an unbroken token and keeps its full min-content width.
-    let def_layout = node("default_wrap").text_layout.as_ref().unwrap();
+    let def_layout = node("default_wrap").text_layout.as_ref().and_then(crate::text::TextLayout::single).unwrap();
     assert_eq!(def_layout.len(), 1, "default wrap leaves unbroken base64 on 1 line");
     assert!(def_layout.full_width() > 400.0, "default wrap keeps full unbroken token width");
 
     // .wrap_anywhere() wraps inside the 160pt box and shrinks inside a 160pt flex row with no glyph past the right edge.
     let any_el = el("anywhere_wrap");
     let any_node = node("anywhere_wrap");
-    let any_layout = any_node.text_layout.as_ref().unwrap();
+    let any_layout = any_node.text_layout.as_ref().and_then(crate::text::TextLayout::single).unwrap();
     assert!(any_el.rect[2] <= 160.5, "wrap_anywhere fits 160pt box (got {})", any_el.rect[2]);
     assert!(el("row_anywhere").rect[2] <= 160.5, "wrap_anywhere shrinks inside 160pt flex row (got {})", el("row_anywhere").rect[2]);
     assert!(any_layout.len() >= 4, "long base64 wraps across multiple lines (got {})", any_layout.len());
@@ -415,14 +415,14 @@ fn wrap_anywhere_wraps_unbroken_tokens_keeps_word_breaks_and_lowers_min_content_
     assert!(min_any.full_width() < 20.0, "wrap_anywhere min-content width is a single grapheme (got {})", min_any.full_width());
 
     // Normal words that fit on a line still break at spaces identically to .wrap().
-    let w_def = node("words_default").text_layout.as_ref().unwrap();
-    let w_any = node("words_anywhere").text_layout.as_ref().unwrap();
+    let w_def = node("words_default").text_layout.as_ref().and_then(crate::text::TextLayout::single).unwrap();
+    let w_any = node("words_anywhere").text_layout.as_ref().and_then(crate::text::TextLayout::single).unwrap();
     let ranges_def: Vec<_> = w_def.lines().map(|l| l.text_range()).collect();
     let ranges_any: Vec<_> = w_any.lines().map(|l| l.text_range()).collect();
     assert_eq!(ranges_def, ranges_any, "normal words break at spaces identically under wrap_anywhere");
 
     // Rich text also supports wrap_anywhere.
-    let rich_layout = node("rich_anywhere").text_layout.as_ref().unwrap();
+    let rich_layout = node("rich_anywhere").text_layout.as_ref().and_then(crate::text::TextLayout::single).unwrap();
     assert!(rich_layout.len() >= 4 && rich_layout.full_width() <= 160.5);
 }
 
@@ -506,7 +506,7 @@ fn secure_label_masks_reveals_conceals_and_never_leaks_plaintext() {
         for key in ["single", "trunc", "multi", "clamped"] {
             let i = rt.nodes.iter().position(|n| n.key.as_deref() == Some(key)).unwrap();
             let path = rt.nodes[i].path.clone();
-            assert_eq!(Rc::strong_count(rt.nodes[i].text_layout.as_ref().unwrap()), 1, "{key} layout owned only by node");
+            assert_eq!(Rc::strong_count(rt.nodes[i].text_layout.as_ref().and_then(crate::text::TextLayout::single).unwrap()), 1, "{key} layout owned only by node");
             assert!(!rt.is_selectable(i), "{key} must not be selectable");
             assert!(!rt.selection_menu(&path, 5.0, 5.0), "{key} must not offer Copy menu");
             let info = rt.elements().into_iter().find(|e| e.key.as_deref() == Some(key)).unwrap();
@@ -523,10 +523,10 @@ fn secure_label_masks_reveals_conceals_and_never_leaks_plaintext() {
     assert_eq!(n_single.text.as_ref().unwrap().content, crate::edit::MULTILINE_SECURE_MASK);
     let n_multi = rt.nodes.iter().find(|n| n.key.as_deref() == Some("multi")).unwrap();
     assert_eq!(n_multi.text.as_ref().unwrap().content, crate::edit::MULTILINE_SECURE_MASK);
-    assert_eq!(n_multi.text_layout.as_ref().unwrap().len(), 1);
+    assert_eq!(n_multi.text_layout.as_ref().and_then(crate::text::TextLayout::single).unwrap().len(), 1);
     let n_clamped = rt.nodes.iter().find(|n| n.key.as_deref() == Some("clamped")).unwrap();
     assert_eq!(n_clamped.text.as_ref().unwrap().content, crate::edit::MULTILINE_SECURE_MASK);
-    assert_eq!(n_clamped.text_layout.as_ref().unwrap().len(), 1);
+    assert_eq!(n_clamped.text_layout.as_ref().and_then(crate::text::TextLayout::single).unwrap().len(), 1);
 
     // Try selecting and copying via pointer + Cmd+C while hidden.
     let single_rect = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("single")).unwrap().rect;
@@ -546,9 +546,9 @@ fn secure_label_masks_reveals_conceals_and_never_leaks_plaintext() {
     let n_trunc = rt.nodes.iter().find(|n| n.key.as_deref() == Some("trunc")).unwrap();
     assert!(n_trunc.elided.is_some(), "truncate elides overflowing revealed label");
     let n_multi = rt.nodes.iter().find(|n| n.key.as_deref() == Some("multi")).unwrap();
-    assert!(n_multi.text_layout.as_ref().unwrap().len() >= 4, "wrap_anywhere wraps revealed multi-line label");
+    assert!(n_multi.text_layout.as_ref().and_then(crate::text::TextLayout::single).unwrap().len() >= 4, "wrap_anywhere wraps revealed multi-line label");
     let n_clamped = rt.nodes.iter().find(|n| n.key.as_deref() == Some("clamped")).unwrap();
-    assert_eq!(n_clamped.text_layout.as_ref().unwrap().len(), 2, "max_lines(2) clamps revealed multi-line label");
+    assert_eq!(n_clamped.text_layout.as_ref().and_then(crate::text::TextLayout::single).unwrap().len(), 2, "max_lines(2) clamps revealed multi-line label");
     assert!(n_clamped.elided.is_some());
 
     // Try selecting and copying while revealed: still blocked.

@@ -88,7 +88,7 @@ fn pill_edge(layout: &Layout<Ink>, at: usize, y: f32) -> Option<f32> {
     Some(lead.x)
 }
 
-fn line_for_offset(layout: &Layout<Ink>, offset: f32) -> Option<(usize, parley::Line<'_, Ink>)> {
+pub(super) fn line_for_offset(layout: &Layout<Ink>, offset: f32) -> Option<(usize, parley::Line<'_, Ink>)> {
     if offset < 0.0 {
         return Some((0, layout.get(0)?));
     }
@@ -133,8 +133,10 @@ pub(crate) fn cursor_from_point(layout: &Layout<Ink>, x: f32, y: f32) -> parley:
     };
     let m = line.metrics();
     let r = line.text_range();
+    // Left of a right-to-left line is its end, and right of it its start.
+    let rtl = layout.is_rtl();
     if x <= m.inline_min_coord + m.offset {
-        return Cursor::from_byte_index(layout, r.start, Affinity::Downstream);
+        return if rtl { Cursor::from_byte_index(layout, r.end, Affinity::Upstream) } else { Cursor::from_byte_index(layout, r.start, Affinity::Downstream) };
     }
     for item in line.items() {
         if let PositionedLayoutItem::InlineBox(b) = item
@@ -174,7 +176,7 @@ pub(crate) fn cursor_from_point(layout: &Layout<Ink>, x: f32, y: f32) -> parley:
             return Cursor::from_byte_index(layout, cl.text_range().start, Affinity::Downstream);
         }
     }
-    Cursor::from_byte_index(layout, r.end, Affinity::Upstream)
+    if rtl { Cursor::from_byte_index(layout, r.start, Affinity::Downstream) } else { Cursor::from_byte_index(layout, r.end, Affinity::Upstream) }
 }
 
 /// Start (`!end`) or end (`end`) byte of the visual line containing `byte`.
@@ -200,27 +202,29 @@ pub(crate) fn line_edge(layout: &Layout<Ink>, byte: usize, end: bool) -> usize {
     }
 }
 
-/// Byte index on the previous (`!down`) or next (`down`) visual line at `byte`'s x coordinate,
-/// or `None` when already on the last line moving down.
-pub(crate) fn move_line(layout: &Layout<Ink>, byte: usize, down: bool) -> Option<usize> {
+/// Byte index on the previous (`!down`) or next (`down`) visual line at `goal`'s x (the column
+/// a run of Up and Down keeps), else `byte`'s, and that x; the start on the first line moving
+/// up, `None` on the last moving down.
+pub(crate) fn move_line(layout: &Layout<Ink>, byte: usize, down: bool, goal: Option<f32>) -> Option<(usize, f32)> {
     use parley::{editing::Cursor, layout::Affinity};
     if layout.len() == 0 {
         return None;
     }
     let cur = Cursor::from_byte_index(layout, byte, Affinity::Downstream);
     let bb = cursor_geometry(&cur, layout, 0.0);
+    let x = goal.unwrap_or(bb.x0 as f32);
     let y = ((bb.y0 + bb.y1) * 0.5) as f32;
     let limit = layout.len() - 1;
     let idx = line_for_offset(layout, y).map_or(limit, |(ix, _)| ix);
     if !down && idx == 0 {
-        return Some(0);
+        return Some((0, x));
     }
     if down && idx >= limit {
         return None;
     }
     let line = layout.get(if down { idx + 1 } else { idx - 1 })?;
     let m = line.metrics();
-    Some(cursor_from_point(layout, bb.x0 as f32, (m.block_min_coord + m.block_max_coord) * 0.5).index())
+    Some((cursor_from_point(layout, x, (m.block_min_coord + m.block_max_coord) * 0.5).index(), x))
 }
 
 /// Line boxes (`(BoundingBox, line_idx)`) covering bytes `a..b` of `layout`. When `pill_boxes`

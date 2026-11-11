@@ -6,6 +6,7 @@ use accesskit::{Action as Ak, Node as AkNode, NodeId as AkId, Rect as AkRect, Ro
 
 use super::*;
 use super::a11y_tree::{line_id, link_id, round};
+use crate::text::TextFlow;
 
 /// Text longer than this gets no per-character runs (a reader still gets its whole value).
 const RUN_MAX_BYTES: usize = 64 * 1024;
@@ -20,12 +21,31 @@ pub(crate) struct Line {
     pub word_starts: Vec<u8>,
 }
 
-/// `content`'s lines from `layout` (device px at `s`), placed from `origin` in points.
-pub(crate) fn lines(layout: &Layout<Ink>, content: &str, s: f32, origin: [f32; 2]) -> Vec<Line> {
+/// `content`'s lines from `layout` (device px at `s`), placed from `origin` in points. A
+/// by-paragraph field's newline is the last character of the line it ends, as in one layout.
+pub(crate) fn lines(layout: TextFlow<'_>, content: &str, s: f32, origin: [f32; 2]) -> Vec<Line> {
     let mut out = Vec::new();
-    for line in layout.lines() {
+    for p in layout.pieces() {
+        let first = out.len();
+        piece_lines(p, content, s, origin, &mut out);
+        if p.is_whole() { continue; }
+        if out.len() == first {
+            out.push(Line { range: p.start..p.start, rect: [origin[0], origin[1] + p.y / s, 0.0, p.height / s], lengths: Vec::new(), positions: Vec::new(), widths: Vec::new(), word_starts: Vec::new() });
+        }
+        if content.as_bytes().get(p.end) == Some(&b'\n') && let Some(l) = out.last_mut() {
+            l.range.end += 1;
+            l.lengths.push(1);
+            l.positions.push(l.rect[2]);
+            l.widths.push(0.0);
+        }
+    }
+    out
+}
+
+fn piece_lines(p: crate::text::Piece<'_>, content: &str, s: f32, origin: [f32; 2], out: &mut Vec<Line>) {
+    for line in p.layout.lines() {
         let m = line.metrics();
-        let range = line.text_range();
+        let range = p.content(line.text_range().start)..p.content(line.text_range().end);
         if range.end > content.len() { break; }
         let (mut lengths, mut positions, mut widths, mut word_starts) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
         let mut x = m.offset;
@@ -33,6 +53,8 @@ pub(crate) fn lines(layout: &Layout<Ink>, content: &str, s: f32, origin: [f32; 2
         for run in line.runs() {
             for cluster in run.clusters() {
                 let r = cluster.text_range();
+                // A pill's isolate marks hold no content bytes.
+                let r = p.content(r.start)..p.content(r.end);
                 if r.start < at || r.end > range.end || r.is_empty() { continue; }
                 // Bytes a cluster skipped (an ignorable) join the character before.
                 if r.start > at && let Some(last) = lengths.last_mut() { *last = (*last as usize + r.start - at).min(255) as u8; }
@@ -53,12 +75,11 @@ pub(crate) fn lines(layout: &Layout<Ink>, content: &str, s: f32, origin: [f32; 2
         }
         // AccessKit indexes word starts by u8: a line past 255 characters keeps the first ones.
         word_starts.retain(|&w| (w as usize) < lengths.len());
-        let top = m.block_min_coord / s;
+        let top = (p.y + m.block_min_coord) / s;
         let height = (m.block_max_coord - m.block_min_coord) / s;
         let rect = [origin[0] + m.offset / s, origin[1] + top, (x - m.offset) / s, height];
         out.push(Line { range, rect, lengths, positions, widths, word_starts });
     }
-    out
 }
 
 /// The line and character index of drawn byte `byte`.
@@ -151,14 +172,14 @@ impl<S: 'static> Runtime<S> {
     /// walk's shift).
     pub(super) fn a11y_lines(&self, i: usize) -> Option<Vec<Line>> {
         let n = &self.nodes[i];
-        let (spec, layout) = (n.text.as_deref()?, n.text_layout.as_deref()?);
+        let (spec, layout) = (n.text.as_deref()?, n.text_layout.as_ref()?.view());
         if n.elided.is_some() { return None; }
         let content = self.a11y_drawn_text(i)?;
         if content.len() > RUN_MAX_BYTES { return None; }
         let s = self.env.scale;
         let r = self.drawn[i];
         let (x0, x1) = (r[0] + n.inset[0], r[0] + r[2] - n.inset[2]);
-        let mut x = text_x(spec, x0, x1, layout.full_width() / s, crate::el::Flow::of_layout(layout));
+        let mut x = text_x(spec, x0, x1, layout.full_width() / s, layout.flow());
         if let Some(input) = n.input.as_deref() && input.single_line {
             x -= self.input_scroll.get(&n.path).copied().unwrap_or(0.0);
         }

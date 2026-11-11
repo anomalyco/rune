@@ -12,15 +12,23 @@ impl El {
     /// Call it last, after the text's spans, links, pills, highlights and copy settings. A text
     /// whose paragraphs all take one direction stays one text. One whose paragraphs differ
     /// becomes a column of one text per paragraph, which a selection crosses as one inside a
-    /// [`El::selection_group`] and copies joined by newlines. An editable, secure, live,
-    /// truncated or line-clamped text stays one text in its first paragraph's direction.
+    /// [`El::selection_group`] and copies joined by newlines. A multi-line text field stays one
+    /// field and lays each paragraph out in its own direction as it's edited, its mention pills
+    /// isolated (`@src/app.ts` stays left to right on an Arabic line), as a `contenteditable`
+    /// with `unicode-bidi: plaintext` does; its own direction (`El::dir(Direction::Auto)`)
+    /// comes from its text outside its pills, and left to right while it's empty, its
+    /// placeholder laid out in the placeholder's own. A secure, live, truncated or
+    /// line-clamped text, or a one-line field, stays one text in its first paragraph's direction.
     pub fn dir_by_paragraph(mut self) -> El {
         let Some(t) = self.text.as_mut() else { return self };
-        t.plaintext = true;
+        t.dir = step_text_dir(t.dir, TextDirEvent::ByParagraph);
         t.shape = None;
+        if self.cold.input.is_some() {
+            return self;
+        }
         let paragraphs = paragraphs(&t.content);
         let dirs: Vec<Direction> = paragraphs.iter().map(|&(a, b)| Direction::of(&t.content[a..b]).unwrap_or(Direction::Ltr)).collect();
-        let whole = self.cold.input.is_some() || t.redacted || t.cold.live.is_some() || t.cold.advance_in.is_some() || t.truncate || t.truncate_fade || t.max_lines > 0;
+        let whole = t.redacted || t.cold.live.is_some() || t.cold.advance_in.is_some() || t.truncate || t.truncate_fade || t.max_lines > 0;
         if whole || dirs.iter().all(|&d| d == dirs[0]) {
             return self;
         }

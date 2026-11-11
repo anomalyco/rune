@@ -131,8 +131,9 @@ impl<S: 'static> Measurement<'_, S> {
         for slot in self.nodes.iter_mut() {
             if slot.input.is_some() || slot.is_secure() {
                 // The new nodes lay their text out again; the cache then holds the only reference.
-                slot.text_layout = None;
-                let mut copy = Node { elided: None, virtual_mount: false, ..slot.clone() };
+                // A by-paragraph field's goes with it, to re-break its paragraphs from.
+                let kept = slot.text_layout.take().filter(|l| matches!(l, TextLayout::Paragraphs(_)));
+                let mut copy = Node { elided: None, virtual_mount: false, text_layout: kept, ..slot.clone() };
                 copy.clear_run_layout();
                 nodes.push(copy);
             } else {
@@ -351,12 +352,20 @@ pub(super) fn lay_out_text(text: &mut TextSystem, n: &mut Node, w: f32, scale: f
     // A cell of a run draws from the run's layout (and keeps it cached) instead of its own.
     let run = spec.cold.advance_in.as_ref().map(|(run, at)| (text.run_layout(run, spec.style, scale), *at));
     if let Some((r, _)) = run.filter(|(r, at)| r.x(*at).is_some()) {
-        n.text_layout = Some(r.layout.clone());
+        n.text_layout = Some(TextLayout::Single(r.layout.clone()));
         n.cold_mut().run_layout = Some(r);
         return;
     }
     let wrap = spec.wrap.then_some(w * scale);
-    let mut layout = text.layout_for_spec(spec, scale, wrap, line_alignment(spec));
+    // A by-paragraph field keeps what its last layout (still on it) shares with this one.
+    let mut layout = match text.layout_text(spec, n.input.is_some(), scale, wrap, line_alignment(spec), n.text_layout.as_ref()) {
+        TextLayout::Single(l) => l,
+        paragraphs => {
+            n.text_layout = Some(paragraphs);
+            n.elided = None;
+            return;
+        }
+    };
     let mut elided = None;
     if spec.truncate && layout.full_width() > w * scale + 0.5 {
         let (cut, e) = truncated(text, spec, scale, w * scale);
@@ -364,6 +373,6 @@ pub(super) fn lay_out_text(text: &mut TextSystem, n: &mut Node, w: f32, scale: f
     } else if let Some((cut, e)) = clamped(text, spec, scale, w * scale, &layout) {
         (layout, elided) = (cut, Some(e));
     }
-    n.text_layout = Some(layout);
+    n.text_layout = Some(TextLayout::Single(layout));
     n.elided = elided;
 }

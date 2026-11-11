@@ -9,6 +9,9 @@ use windows::Win32::Globalization::{
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx, CoTaskMemFree, IEnumString};
 use windows::core::{HSTRING, PCWSTR, PWSTR};
 
+/// Each check is a cross-process call per misspelled word: lines go to the checker thread.
+pub(super) const OFF_THREAD: bool = true;
+
 /// A thread's checkers, for the generation they were made in.
 struct Checkers {
     generation: u64,

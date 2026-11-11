@@ -79,7 +79,7 @@ fn single_line_input_scrolls_to_the_caret_instead_of_wrapping() {
     rt.frame(0.0);
     let n = rt.nodes.iter().find(|n| n.key.as_deref() == Some("search")).unwrap();
     let path = n.path.clone();
-    assert_eq!(n.text_layout.as_ref().unwrap().lines().count(), 1);
+    assert_eq!(n.text_layout.as_ref().and_then(crate::text::TextLayout::single).unwrap().lines().count(), 1);
     let scroll = rt.input_scroll[&path];
     assert!(scroll > 100.0, "the end of the text is in view: {scroll}");
     let caret_x = rt.ime_area.unwrap()[0];

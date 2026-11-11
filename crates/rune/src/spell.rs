@@ -22,6 +22,7 @@ mod platform;
 mod platform;
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 mod platform {
+    pub(super) const OFF_THREAD: bool = false;
     pub(super) fn misspelled(_: &str) -> Vec<(usize, usize)> { Vec::new() }
     pub(super) fn suggest(_: &str) -> Vec<String> { Vec::new() }
     pub(super) fn learn(_: &str) {}
@@ -46,9 +47,9 @@ static GENERATION: AtomicU64 = AtomicU64::new(0);
 thread_local! {
     /// Each checked text's misspelled words, by the text's hash, for one generation.
     static CHECKED: RefCell<(u64, HashMap<u64, Ranges>)> = RefCell::new((0, HashMap::new()));
-    /// Each checked word's misspelled parts, as byte ranges in the word, for one generation: a
-    /// key typed into a long draft checks the one word it changed, not the draft.
-    static WORDS: RefCell<(u64, HashMap<Box<str>, Box<[(u32, u32)]>>)> = RefCell::new((0, HashMap::new()));
+    /// Each checked word's misspelled parts, for one generation (`Words`): a key typed into a
+    /// long draft checks the one word it changed, not the draft.
+    static WORDS: RefCell<Words> = RefCell::new(Words::default());
 }
 
 /// The most words [`WORDS`] keeps before it starts over.
@@ -155,8 +156,11 @@ fn default_languages(available: &[String], preferred: &[String]) -> Vec<String> 
 /// The current generation, for a thread's checkers to know when to start over.
 pub(crate) fn generation() -> u64 { GENERATION.load(Ordering::Relaxed) }
 
-/// The byte ranges of `text`'s misspelled words, checked once per text.
-pub(crate) fn misspelled(text: &str) -> Ranges {
+/// The byte ranges of `text`'s misspelled words. Where the platform's checker is slow to call
+/// (Windows' answers from another process, a cross-process call per misspelled word), the words
+/// it hasn't seen go to a thread of its own and show marked once they're back: the frame never
+/// waits on it. `wake` is the window to draw again then.
+pub(crate) fn misspelled(text: &str, wake: Option<&std::sync::Arc<crate::live::Wake>>) -> Ranges {
     if text.trim().is_empty() {
         return Rc::default();
     }
@@ -179,46 +183,175 @@ pub(crate) fn misspelled(text: &str) -> Ranges {
             checked.clear();
         }
         // macOS finds each text's language from the text, so it checks the whole of it.
-        let found = Rc::new(if cfg!(target_os = "windows") { by_words(text) } else { platform::misspelled(text) });
-        checked.insert(key, found.clone());
+        let (found, whole) = if cfg!(target_os = "windows") { by_words(text, wake) } else { (platform::misspelled(text), true) };
+        let found = Rc::new(found);
+        // A text with words still on the checker thread is put together again when they're back.
+        if whole {
+            checked.insert(key, found.clone());
+        }
         found
     })
 }
 
-/// `text`'s misspelled words, from each word's cached answer; the words not yet checked go to the
-/// platform together, one per line. Words are what whitespace separates: the checker marks
-/// nothing across it, and repeated words, its only check that reads neighbours, go unmarked.
-fn by_words(text: &str) -> Vec<(usize, usize)> {
-    let words: Vec<(usize, &str)> = text.split_whitespace().map(|w| (w.as_ptr() as usize - text.as_ptr() as usize, w)).collect();
-    WORDS.with_borrow_mut(|(generation, known)| {
-        if *generation != self::generation() {
-            *generation = self::generation();
-            known.clear();
+/// `text`'s misspelled words, from each line's and word's cached answers, and whether every word
+/// had one. The words not yet checked go to the platform together, one per line (on the checker
+/// thread where it's slow to call). Words are what whitespace separates: the checker marks
+/// nothing across it, and repeated words, its only check that reads neighbours, go unmarked. A
+/// line's answer is kept once all its words have one, so a key in a long draft looks up the
+/// lines it didn't change, not their words.
+fn by_words(text: &str, wake: Option<&std::sync::Arc<crate::live::Wake>>) -> (Vec<(usize, usize)>, bool) {
+    use std::hash::{Hash, Hasher};
+    let line_key = |line: &str| {
+        let mut h = rustc_hash::FxHasher::default();
+        line.hash(&mut h);
+        h.finish()
+    };
+    WORDS.with_borrow_mut(|w| {
+        if w.generation != self::generation() {
+            *w = Words { generation: self::generation(), ..Words::default() };
         }
-        let mut fresh: Vec<&str> = words.iter().map(|(_, w)| *w).filter(|w| !known.contains_key(*w)).collect();
+        w.take_done();
+        if w.lines.len() > MAX_WORDS { w.lines.clear(); }
+        // The lines without a kept answer, and their words.
+        let mut open: Vec<(usize, &str, u64)> = Vec::new();
+        let mut at = 0;
+        for line in text.split('\n') {
+            let k = line_key(line);
+            if !w.lines.contains_key(&k) { open.push((at, line, k)); }
+            at += line.len() + 1;
+        }
+        let mut fresh: Vec<&str> = open.iter().flat_map(|&(_, l, _)| words(l).map(|(_, s)| s)).filter(|s| !w.known.contains_key(*s) && !w.asked.contains(*s)).collect();
         fresh.sort_unstable();
         fresh.dedup();
         if !fresh.is_empty() {
-            if known.len() + fresh.len() > MAX_WORDS { known.clear(); }
-            let batch = fresh.join("\n");
-            let found = platform::misspelled(&batch);
-            let mut start = 0;
-            for word in fresh {
-                let end = start + word.len();
-                let parts: Box<[(u32, u32)]> = found.iter().filter(|&&(a, b)| a >= start && b <= end).map(|&(a, b)| ((a - start) as u32, (b - start) as u32)).collect();
-                known.insert(word.into(), parts);
-                start = end + 1;
+            if w.known.len() + fresh.len() > MAX_WORDS { w.known.clear(); }
+            if platform::OFF_THREAD {
+                w.asked.extend(fresh.iter().map(|&s| Box::<str>::from(s)));
+                worker::ask(w.generation, fresh.iter().map(|&s| s.to_owned()).collect(), wake);
+            } else {
+                w.known.extend(check_words(&fresh));
             }
         }
-        words.iter().flat_map(|(at, w)| known.get(*w).into_iter().flatten().map(move |&(a, b)| (at + a as usize, at + b as usize))).collect()
+        let mut whole = true;
+        for &(_, line, k) in &open {
+            if words(line).all(|(_, s)| w.known.contains_key(s)) {
+                let parts: Box<[(u32, u32)]> = words(line).flat_map(|(o, s)| w.known.get(s).into_iter().flatten().map(move |&(a, b)| (o as u32 + a, o as u32 + b))).collect();
+                w.lines.insert(k, parts);
+            } else {
+                whole = false;
+            }
+        }
+        let mut found = Vec::new();
+        let mut at = 0;
+        for line in text.split('\n') {
+            match w.lines.get(&line_key(line)) {
+                Some(parts) => found.extend(parts.iter().map(|&(a, b)| (at + a as usize, at + b as usize))),
+                None => found.extend(words(line).flat_map(|(o, s)| w.known.get(s).into_iter().flatten().map(move |&(a, b)| (at + o + a as usize, at + o + b as usize)))),
+            }
+            at += line.len() + 1;
+        }
+        (found, whole)
     })
 }
-
-/// The misspelled word of `text` at byte `at` (in it or at its end).
-pub(crate) fn misspelled_at(text: &str, at: usize) -> Option<(usize, usize)> {
-    misspelled(text).iter().copied().find(|&(a, b)| a <= at && at <= b)
+/// `line`'s words and where each starts in it.
+fn words(line: &str) -> impl Iterator<Item = (usize, &str)> + '_ {
+    line.split_whitespace().map(move |s| (s.as_ptr() as usize - line.as_ptr() as usize, s))
 }
 
+/// `words`' misspelled parts, as byte ranges in each word, from one call to the checker: each
+/// call costs about the same whatever it's given.
+fn check_words<S: AsRef<str>>(words: &[S]) -> Vec<(Box<str>, Box<[(u32, u32)]>)> {
+    let batch = words.iter().map(AsRef::as_ref).collect::<Vec<_>>().join("\n");
+    let found = platform::misspelled(&batch);
+    let mut start = 0;
+    words.iter().map(|word| {
+        let word = word.as_ref();
+        let end = start + word.len();
+        let parts = found.iter().filter(|&&(a, b)| a >= start && b <= end).map(|&(a, b)| ((a - start) as u32, (b - start) as u32)).collect();
+        start = end + 1;
+        (word.into(), parts)
+    }).collect()
+}
+
+/// A thread's checked words, for one generation of the chosen dictionaries.
+#[derive(Default)]
+struct Words {
+    generation: u64,
+    /// Each checked word's misspelled parts, as byte ranges in the word.
+    known: HashMap<Box<str>, Box<[(u32, u32)]>>,
+    /// Each line's misspelled words once all its words are checked, by the line's hash.
+    lines: HashMap<u64, Box<[(u32, u32)]>>,
+    /// Words on the checker thread.
+    asked: std::collections::HashSet<Box<str>>,
+}
+
+impl Words {
+    /// Takes in what the checker thread brought back for this generation.
+    fn take_done(&mut self) {
+        let done = std::mem::take(&mut *worker::DONE.lock().unwrap_or_else(|e| e.into_inner()));
+        for (generation, word, parts) in done {
+            self.asked.remove(&word);
+            if generation == self.generation {
+                self.known.insert(word, parts);
+            }
+        }
+    }
+}
+
+/// How many times the checker thread has brought words back, for a window to draw them.
+pub(crate) fn arrivals() -> u64 { worker::ARRIVED.load(Ordering::Acquire) }
+
+/// The checker thread, where the platform's checker is slow to call.
+mod worker {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{Arc, Mutex, OnceLock, Weak, mpsc};
+
+    /// Words to check: the generation they're for, and the window to wake.
+    pub(super) struct Job {
+        generation: u64,
+        words: Vec<String>,
+        wake: Option<Weak<crate::live::Wake>>,
+    }
+
+    /// Words checked and not taken in yet: generation, word, its misspelled parts.
+    pub(super) static DONE: Mutex<Vec<(u64, Box<str>, Box<[(u32, u32)]>)>> = Mutex::new(Vec::new());
+    pub(super) static ARRIVED: AtomicU64 = AtomicU64::new(0);
+    static JOBS: OnceLock<Option<mpsc::Sender<Job>>> = OnceLock::new();
+
+    pub(super) fn ask(generation: u64, words: Vec<String>, wake: Option<&Arc<crate::live::Wake>>) {
+        let jobs = JOBS.get_or_init(|| {
+            let (send, take) = mpsc::channel::<Job>();
+            std::thread::Builder::new().name("rune-spell".into()).spawn(move || run(take)).ok().map(|_| send)
+        });
+        if let Some(send) = jobs {
+            let _ = send.send(Job { generation, words, wake: wake.map(Arc::downgrade) });
+        }
+    }
+
+    fn run(take: mpsc::Receiver<Job>) {
+        while let Ok(first) = take.recv() {
+            // A burst of keys asks for each word they made: check what's waiting in one call.
+            let mut jobs = vec![first];
+            jobs.extend(take.try_iter());
+            let generation = super::generation();
+            jobs.retain(|j| j.generation == generation);
+            let words: Vec<&str> = jobs.iter().flat_map(|j| j.words.iter().map(String::as_str)).collect();
+            if !words.is_empty() {
+                let found = super::check_words(&words);
+                DONE.lock().unwrap_or_else(|e| e.into_inner()).extend(found.into_iter().map(|(w, p)| (generation, w, p)));
+                ARRIVED.fetch_add(1, Ordering::AcqRel);
+            }
+            for wake in jobs.iter().filter_map(|j| j.wake.as_ref()?.upgrade()) {
+                wake.notify();
+            }
+        }
+    }
+}
+
+/// The misspelled word of `text` at byte `at` (in it or at its end), once its words are checked.
+pub(crate) fn misspelled_at(text: &str, at: usize) -> Option<(usize, usize)> {
+    misspelled(text, None).iter().copied().find(|&(a, b)| a <= at && at <= b)
+}
 /// The checker's suggestions for misspelled `word`, best first.
 pub(crate) fn suggest(word: &str) -> Vec<String> {
     let mut found = platform::suggest(word);
@@ -231,5 +364,5 @@ pub(crate) fn suggest(word: &str) -> Vec<String> {
 pub(crate) fn learn(word: &str) {
     platform::learn(word);
     CHECKED.with_borrow_mut(|(_, checked)| checked.clear());
-    WORDS.with_borrow_mut(|(_, known)| known.clear());
+    WORDS.with_borrow_mut(|w| *w = Words::default());
 }

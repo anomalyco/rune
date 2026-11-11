@@ -40,6 +40,7 @@ mod language;
 pub use language::set_language;
 mod line_break;
 pub mod mask_cache;
+mod paragraphs;
 mod span;
 mod system_fonts;
 mod system_weight;
@@ -97,11 +98,14 @@ use fallback::Route;
 use glyph_emit::Face;
 use hidden_axes::hidden_axes;
 use layout_cache::{Cache, Entry};
+pub(crate) use layout_cache::Keep;
+pub(crate) use paragraphs::{ParagraphLayout, Piece, TextFlow, TextLayout};
 #[cfg(test)]
 use layout_cache::STALE_BYTES;
 pub use icon::{Icon, icon_coverage, set_icon_swap, set_icon_swap_size};
 pub(crate) use icon::Facing;
 use icon::rasterize_icon;
+use rich_layout::mono_tab_stops;
 use trak::{Trak, Traks, font_trak};
 
 pub use atlas::{ATLAS_SIZE, Atlas, AtlasPage, GlyphQuad};
@@ -157,6 +161,10 @@ pub struct TextSystem {
     /// Shapings whose text was edited this commit (see [`Self::supersede`]).
     superseded: FxHashSet<u64>,
     elisions: Cache<CachedElision>,
+    /// By-paragraph field layouts ([`ParagraphLayout`]), by their text's break key.
+    paragraphs: Cache<Rc<ParagraphLayout>>,
+    /// The last by-paragraph layout made this commit, which its text at another width breaks from.
+    last_paragraphs: Option<Rc<ParagraphLayout>>,
     runs: Cache<Rc<RunLayout>>,
     generation: u32,
     /// The slots' families as named; `sans` and `mono` are the lists text asks for.
@@ -247,43 +255,6 @@ fn variations(style: TextStyle, size: f32) -> Vec<parley::FontVariation> {
     settings
 }
 
-/// The byte of each tab in monospace text (mono spans, or all of it in a mono style) with the
-/// columns it fills to reach the next 4-column stop. Columns count from the start of the line
-/// or of the monospace run, whichever is later.
-fn mono_tab_stops(text: &str, spans: &[Span], mono_style: bool) -> Vec<(usize, u32)> {
-    let mut regions: Vec<(usize, usize)> = if mono_style {
-        vec![(0, text.len())]
-    } else {
-        let mut r: Vec<_> = spans.iter().filter(|s| s.mono && s.start < s.end).map(|s| (s.start as usize, (s.end as usize).min(text.len()))).collect();
-        r.sort_unstable();
-        r
-    };
-    regions.dedup_by(|next, prev| {
-        let joined = next.0 <= prev.1;
-        if joined {
-            prev.1 = prev.1.max(next.1);
-        }
-        joined
-    });
-    let mut out = Vec::new();
-    for (start, end) in regions {
-        let Some(run) = text.get(start..end) else { continue };
-        let mut column = 0u32;
-        for (i, ch) in run.char_indices() {
-            match ch {
-                '\n' => column = 0,
-                '\t' => {
-                    let fill = 4 - column % 4;
-                    out.push((start + i, fill));
-                    column += fill;
-                }
-                _ => column += 1,
-            }
-        }
-    }
-    out
-}
-
 impl TextSystem {
     /// `fonts` replaces the built-in Inter faces when non-empty on native. Web keeps its
     /// bundled sans and mono fallbacks, since there are no system fonts to discover.
@@ -324,6 +295,8 @@ impl TextSystem {
             shapes: Default::default(),
             superseded: Default::default(),
             elisions: Default::default(),
+            paragraphs: Default::default(),
+            last_paragraphs: None,
             runs: Default::default(),
             generation: 0,
             families: (families.0.to_owned(), families.1.to_owned()),
@@ -570,11 +543,12 @@ impl TextSystem {
         max_width: Option<f32>,
         align: Alignment,
         wrap_anywhere: bool,
-        cache: bool,
+        keep: Keep,
         base: parley::BaseDirection,
     ) -> Rc<Layout<Ink>> {
         self.follow_language();
-        let shared = (!cache).then(|| std::mem::replace(&mut self.layout_cx, LayoutContext::new()));
+        let cache = keep == Keep::Cached;
+        let shared = (keep == Keep::Secret).then(|| std::mem::replace(&mut self.layout_cx, LayoutContext::new()));
         let has_indented_blocks = blocks.iter().any(|&b| b != crate::edit::Block::Paragraph);
         // Shaping depends on the text, spans, style, scale, overflow-wrap and pills; line
         // breaking adds the width, alignment and block indents. A layout cached at one width
@@ -927,54 +901,6 @@ impl TextSystem {
             self.layout_cx = shared;
         }
         l
-    }
-
-    fn mono_tab_widening(
-        &mut self,
-        tabs: &[(usize, u32)],
-        spans: &[Span],
-        style: TextStyle,
-        scale: f32,
-    ) -> Vec<(std::ops::Range<usize>, f32)> {
-        let mono_style = matches!(style.family, Family::Mono | Family::SystemMono);
-        let default_family = if mono_style { style.family } else { Family::Mono };
-        let mut last_probe: Option<((u32, u32, bool), f32)> = None;
-        let mut widen: Vec<(std::ops::Range<usize>, f32)> = Vec::new();
-        for &(at, columns) in tabs {
-            if columns <= 1 {
-                continue;
-            }
-            let (mut sz, mut wt, mut it) = (style.size, style.weight, style.italic);
-            for s in spans {
-                if (s.start as usize) <= at && at < s.end as usize {
-                    if let Some(v) = s.size { sz = v; }
-                    if let Some(v) = s.weight { wt = v; }
-                    if s.italic { it = true; }
-                }
-            }
-            let probe_key = (sz.to_bits(), wt.to_bits(), it);
-            let col_pt = match last_probe {
-                Some((k, v)) if k == probe_key => v,
-                _ => {
-                    let probe = TextStyle { family: default_family, size: sz, weight: wt, italic: it, ..style };
-                    let shaped = self.shaped;
-                    let l = self.layout_rich(" ", &[], probe, scale, None);
-                    self.shaped = shaped;
-                    let adv = parley::Cluster::from_byte_index(&l, 0).map_or(0.0, |c| c.advance() / scale);
-                    last_probe = Some((probe_key, adv));
-                    adv
-                }
-            };
-            if col_pt <= 0.0 {
-                continue;
-            }
-            let add = (columns - 1) as f32 * col_pt;
-            match widen.last_mut() {
-                Some((r, last_add)) if r.end == at && (*last_add - add).abs() < 1e-4 => r.end = at + 1,
-                _ => widen.push((at..at + 1, add)),
-            }
-        }
-        widen
     }
 
     /// Size in points, rounded up to whole device pixels so layout stays on the pixel grid.

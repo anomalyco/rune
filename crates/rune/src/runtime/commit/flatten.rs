@@ -219,8 +219,11 @@ fn prepare_text(
     scale: f32,
     flow: Option<crate::el::Flow>,
 ) -> (Option<u64>, bool) {
-    if let Some(t) = text && t.flow != flow {
-        t.flow = flow;
+    if let Some(t) = text
+        && let dir = crate::el::step_text_dir(t.dir, crate::el::TextDirEvent::Flatten(flow))
+        && t.dir != dir
+    {
+        t.dir = dir;
         t.shape = None;
     }
     if let Some(t) = text && t.redacted {

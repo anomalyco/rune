@@ -358,10 +358,10 @@ impl<S: 'static> Runtime<S> {
 
     pub(super) fn capture_text_flight(&mut self, source: String, target: String) {
         let Some((i, n)) = self.nodes.iter().enumerate().find(|(_, n)| crate::flight::selects(&source, &n.path, n.key.as_deref())) else { return };
-        let (Some(spec), Some(layout), Some(r)) = (&n.text, &n.text_layout, self.drawn.get(i)) else { return };
+        let (Some(spec), Some(laid), Some(r)) = (&n.text, &n.text_layout, self.drawn.get(i)) else { return };
         if spec.redacted || spec.content.is_empty() { return; }
         let scale = self.env.scale;
-        let (rect, origin) = text_extent(n, spec, layout, *r, scale);
+        let (rect, origin) = text_extent(n, spec, laid.view(), *r, scale);
         let clip = self.screen_clip_of_parent(n.parent).map(|v| v / scale);
         let clip = [rect.x.max(clip[0]).max(0.0), rect.y.max(clip[1]).max(0.0),
             (rect.x + rect.w).min(clip[2]).min(self.viewport.0), (rect.y + rect.h).min(clip[3]).min(self.viewport.1)];
@@ -370,7 +370,9 @@ impl<S: 'static> Runtime<S> {
         self.text.set_glyph_inks(spec.color, &[]);
         // From outlines where text draws them, which a flight's zoom magnifies without blurring.
         self.text.set_emit(self.text.moving_emit());
-        self.text.glyphs_for_layout(layout, scale, [origin[0] * scale, origin[1] * scale], false, &mut self.glyph_scratch);
+        for p in laid.view().pieces() {
+            self.text.glyphs_for_layout(p.layout, scale, [origin[0] * scale, origin[1] * scale + p.y], false, &mut self.glyph_scratch);
+        }
         self.text.set_emit(crate::text::outline::Emit::Atlas);
         let color = spec.color;
         let srgb = self.srgb_blend;
@@ -383,8 +385,8 @@ impl<S: 'static> Runtime<S> {
     /// `Tx::launch`, before the commit: where the source's text starts on screen.
     pub(super) fn capture_launch(&mut self, source: String, target: String) {
         let Some((i, n)) = self.nodes.iter().enumerate().find(|(_, n)| crate::flight::selects(&source, &n.path, n.key.as_deref())) else { return };
-        let (Some(spec), Some(layout), Some(r)) = (&n.text, &n.text_layout, self.drawn.get(i)) else { return };
-        let (_, origin) = text_extent(n, spec, layout, *r, self.env.scale);
+        let (Some(spec), Some(laid), Some(r)) = (&n.text, &n.text_layout, self.drawn.get(i)) else { return };
+        let (_, origin) = text_extent(n, spec, laid.view(), *r, self.env.scale);
         self.launches.wait(target, origin);
     }
 
@@ -420,9 +422,9 @@ impl<S: 'static> Runtime<S> {
             // Its first text, or its own top-left.
             let t = nodes[i].target;
             let rel = (i..nodes.len()).take_while(|&j| j == i || within(j)).find_map(|j| {
-                let (Some(spec), Some(layout)) = (&nodes[j].text, &nodes[j].text_layout) else { return None };
+                let (Some(spec), Some(laid)) = (&nodes[j].text, &nodes[j].text_layout) else { return None };
                 let r = nodes[j].target;
-                let (_, origin) = text_extent(&nodes[j], spec, layout, [r[0], r[1], r[2] - r[0], r[3] - r[1]], scale);
+                let (_, origin) = text_extent(&nodes[j], spec, laid.view(), [r[0], r[1], r[2] - r[0], r[3] - r[1]], scale);
                 Some([origin[0] - t[0], origin[1] - t[1]])
             }).unwrap_or([0.0; 2]);
             // Scroll offsets live outside the scene: subtract the destination's. Under a still

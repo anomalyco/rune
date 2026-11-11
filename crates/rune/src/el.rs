@@ -72,7 +72,7 @@ pub use scroll::ScrollSpec;
 pub(crate) use scroll::{AtBottomFn, ScrollAxes, ScrollEdges, VisibleRowsFn};
 pub use selection_style::SelectionStyle;
 pub(crate) use sticky::{Sticky, StickyEdge};
-pub(crate) use text_spec::Elide;
+pub(crate) use text_spec::{Elide, TextDir, TextDirEvent, step_text_dir};
 pub use text_spec::TextSpec;
 pub(crate) use tx::{Commit, FocusAsk, MotionSource, SelectRequest, TraceCalls};
 pub use tx::{Shell, Tx};

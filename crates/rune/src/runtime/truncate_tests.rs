@@ -49,7 +49,7 @@ fn drawn(rt: &Runtime<S>) -> (String, Option<Elision>) {
 fn fits(rt: &Runtime<S>) -> bool {
     let n = node(rt);
     let w = (n.target[2] - n.target[0]) * 2.0;
-    n.text_layout.as_ref().unwrap().full_width() <= w + 0.5
+    n.text_layout.as_ref().and_then(crate::text::TextLayout::single).unwrap().full_width() <= w + 0.5
 }
 
 #[test]
