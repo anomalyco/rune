@@ -10,6 +10,8 @@
 
 use std::sync::Arc;
 
+use rustc_hash::FxHashMap;
+
 /// Return addresses kept per sample, innermost first.
 pub(crate) const DEPTH: usize = 32;
 
@@ -21,6 +23,8 @@ pub(crate) struct Raw {
     pub waiting: bool,
     /// The thread's CPU time so far, in µs.
     pub cpu_us: u64,
+    /// How many images had been unloaded just before the sample, for naming it later.
+    pub images: u64,
 }
 
 /// A named frame: the function, and whether it's the app's own code (in the main executable,
@@ -31,14 +35,47 @@ pub(crate) struct Frame {
     pub app: bool,
 }
 
+/// Function names for return addresses, remembered for as long as no image is unloaded.
+#[derive(Default)]
+pub(crate) struct Symbols {
+    generation: u64,
+    known: FxHashMap<usize, Frame>,
+}
+
+impl Symbols {
+    /// `raw`'s frames, innermost first, `lookup` naming each address not yet known (the innermost
+    /// is the instruction itself rather than a return address after a call). `generation` counts
+    /// unloaded images: once it has moved since the sample, an address may hold another image's
+    /// code, so the sample stays bare addresses rather than risk a wrong name.
+    pub(crate) fn frames(&mut self, raw: &Raw, generation: impl Fn() -> u64, mut lookup: impl FnMut(usize) -> Frame) -> Vec<Frame> {
+        let now = generation();
+        if now != self.generation {
+            self.known.clear();
+            self.generation = now;
+        }
+        if now != raw.images { return unresolved(raw); }
+        let frames = raw.pcs[..raw.len].iter().enumerate().map(|(i, &pc)| {
+            let at = if i == 0 { pc } else { pc.saturating_sub(1) };
+            self.known.entry(at).or_insert_with(|| lookup(at)).clone()
+        }).collect();
+        // An unload during the lookups could have named the wrong image; the next call forgets them.
+        if generation() != now { return unresolved(raw); }
+        frames
+    }
+}
+
+fn unresolved(raw: &Raw) -> Vec<Frame> {
+    raw.pcs[..raw.len].iter().map(|pc| Frame { name: format!("{pc:#x}").into(), app: false }).collect()
+}
+
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-pub(crate) use mac::{Symbols, Target};
+#[cfg_attr(test, allow(unused_imports))]
+pub(crate) use mac::{Target, watch_unloads};
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod mac {
     use std::ffi::{CStr, c_void};
-
-    use rustc_hash::FxHashMap;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::{DEPTH, Frame, Raw};
 
@@ -86,7 +123,23 @@ mod mac {
         fn pthread_get_stackaddr_np(thread: libc::pthread_t) -> *mut c_void;
         fn pthread_get_stacksize_np(thread: libc::pthread_t) -> usize;
         fn _dyld_get_image_header(index: u32) -> *const c_void;
+        fn _dyld_register_func_for_remove_image(callback: extern "C" fn(*const c_void, isize));
     }
+
+    /// Images unloaded since [`watch_unloads`]. dyld reports an unload before unmapping it.
+    static UNLOADS: AtomicU64 = AtomicU64::new(0);
+
+    #[cfg_attr(test, allow(dead_code))]
+    extern "C" fn unloaded(_: *const c_void, _: isize) { UNLOADS.fetch_add(1, Ordering::SeqCst); }
+
+    /// Starts counting unloaded images, for the life of the process. Call once, before sampling.
+    #[cfg_attr(test, allow(dead_code))]
+    pub(crate) fn watch_unloads() {
+        // SAFETY: `unloaded` lives for the process and touches only an atomic.
+        unsafe { _dyld_register_func_for_remove_image(unloaded) };
+    }
+
+    pub(super) fn generation() -> u64 { UNLOADS.load(Ordering::SeqCst) }
 
     /// A thread that can be sampled from another: its Mach port and stack range.
     #[derive(Clone, Copy)]
@@ -118,7 +171,7 @@ mod mac {
             // SAFETY: `info` is a live buffer of `count` 32-bit words, as the flavor needs.
             if unsafe { thread_info(self.port, THREAD_BASIC_INFO, (&raw mut info).cast(), &mut count) } != 0 { return None; }
             let cpu_us = [info.user, info.system].iter().map(|t| t[0] as u64 * 1_000_000 + t[1] as u64).sum();
-            let mut raw = Raw { pcs: [0; DEPTH], len: 0, waiting: info.run_state != TH_STATE_RUNNING, cpu_us };
+            let mut raw = Raw { pcs: [0; DEPTH], len: 0, waiting: info.run_state != TH_STATE_RUNNING, cpu_us, images: generation() };
             // SAFETY: suspending a thread of this process that isn't the caller (`watchdog`
             // samples only the UI thread from its own thread). It's resumed below on every path.
             if unsafe { thread_suspend(self.port) } != 0 { return None; }
@@ -161,23 +214,9 @@ mod mac {
         }
     }
 
-    /// Function names for return addresses, remembered: `dladdr` over the loaded images'
-    /// symbol tables, Rust names demangled without their hashes.
-    #[derive(Default)]
-    pub(crate) struct Symbols {
-        known: FxHashMap<usize, Frame>,
-    }
-
-    impl Symbols {
-        /// The function holding `pc`; `inner` for the sample's innermost frame, which is the
-        /// instruction itself rather than a return address after a call.
-        pub(crate) fn frame(&mut self, pc: usize, inner: bool) -> Frame {
-            let at = if inner { pc } else { pc.saturating_sub(1) };
-            self.known.entry(at).or_insert_with(|| name(at)).clone()
-        }
-    }
-
-    fn name(at: usize) -> Frame {
+    /// The function at `at`: `dladdr` over the loaded images' symbol tables, Rust names demangled
+    /// without their hashes.
+    pub(super) fn name(at: usize) -> Frame {
         // SAFETY: `Dl_info` is plain pointers, for which all zeroes is valid (null).
         let mut info: libc::Dl_info = unsafe { std::mem::zeroed() };
         // SAFETY: `info` is a live, writable `Dl_info`; dladdr only reads loaded images.
@@ -206,7 +245,7 @@ pub(crate) fn frames(raw: &Raw) -> Vec<Frame> {
     thread_local! {
         static SYMBOLS: std::cell::RefCell<Symbols> = std::cell::RefCell::default();
     }
-    SYMBOLS.with_borrow_mut(|symbols| raw.pcs[..raw.len].iter().enumerate().map(|(i, &pc)| symbols.frame(pc, i == 0)).collect())
+    SYMBOLS.with_borrow_mut(|symbols| symbols.frames(raw, mac::generation, mac::name))
 }
 
 /// Without a sampler there are no samples to name.

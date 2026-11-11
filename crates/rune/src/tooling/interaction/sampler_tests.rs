@@ -7,7 +7,7 @@ fn frame(name: &str, app: bool) -> Frame { Frame { name: name.into(), app } }
 fn sampled(id: usize, waiting: bool, cpu_us: u64, at_ms: u64) -> Sampled {
     let mut pcs = [0; DEPTH];
     pcs[0] = id;
-    Sampled { raw: Raw { pcs, len: 1, waiting, cpu_us }, at_ns: at_ms * 1_000_000 }
+    Sampled { raw: Raw { pcs, len: 1, waiting, cpu_us, images: 0 }, at_ns: at_ms * 1_000_000 }
 }
 
 #[test]

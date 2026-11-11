@@ -1,7 +1,7 @@
 use std::cell::{Cell, RefCell};
 use std::sync::mpsc;
 
-use super::super::stack::DEPTH;
+use super::super::stack::{DEPTH, Symbols};
 use super::*;
 
 const MS: u64 = 1_000_000;
@@ -492,21 +492,60 @@ fn every_write_landing_between_a_looks_reads_matches_the_old_reads() {
 fn raw(id: u64) -> Raw {
     let mut pcs = [0; DEPTH];
     pcs[0] = id as usize;
-    Raw { pcs, len: 1, waiting: false, cpu_us: id }
+    Raw { pcs, len: 1, waiting: false, cpu_us: id, images: 0 }
 }
 
 fn ids(stacks: &Stacks) -> Vec<u64> { stacks.raw.iter().map(|r| r.cpu_us).collect() }
 
-/// The frame's end on the UI thread, after `START` is cleared.
-fn disarmed(caught: &Caught, taken: &AtomicBool, seq: u64) -> Option<Stacks> { if was_taken(taken) { caught.collect(seq) } else { None } }
+fn was_taken(taken: &AtomicBool) -> bool { taken.load(Ordering::Acquire) }
+
+/// The real capture path, over a stop that finds `sample`.
+fn captured(caught: &Caught, taken: &AtomicBool, seq: u64, at: u64, sample: Raw) {
+    capture(caught, taken, seq, at, |stopped| {
+        stopped(&sample);
+        Some(sample)
+    });
+}
 
 #[test]
-fn a_disarm_right_after_a_capture_finds_the_stack_of_its_frame() {
+fn a_disarm_at_the_resume_boundary_finds_the_stack_of_its_frame() {
     let (caught, taken) = (Caught::new(), AtomicBool::new(false));
-    caught.publish(&taken, 7, 1, &raw(42));
-    let stacks = disarmed(&caught, &taken, 7).expect("the sample was published before the thread resumed");
-    assert_eq!(ids(&stacks), [42]);
-    assert!(!was_taken(&taken), "nothing is left over for the next frame");
+    let mut found = None;
+    capture(&caught, &taken, 7, 1, |stopped| {
+        let sample = raw(42);
+        stopped(&sample);
+        // The thread has resumed and ends its frame before the watchdog runs another line.
+        found = collected(&caught, &taken, || 7);
+        Some(sample)
+    });
+    assert_eq!(found.as_ref().map(ids), Some(vec![42]), "the frame gets its one sample");
+    assert!(collected(&caught, &taken, || 9).is_none(), "the next frame gets none");
+}
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[test]
+fn a_real_thread_ending_its_frame_as_it_resumes_finds_the_stack() {
+    use super::super::stack::Target;
+    let (caught, taken, end) = (Caught::new(), AtomicBool::new(false), AtomicBool::new(false));
+    let (caught, taken, end) = (&caught, &taken, &end);
+    let (ready, got) = mpsc::channel();
+    let (finished, on_finished) = mpsc::channel();
+    std::thread::scope(|scope| {
+        scope.spawn(move || {
+            ready.send(Target::current().unwrap()).unwrap();
+            while !end.load(Ordering::Acquire) { std::hint::spin_loop(); }
+            finished.send(collected(caught, taken, || 7).as_ref().map(ids)).unwrap();
+        });
+        let target: Target = got.recv().unwrap();
+        let mut found = None;
+        capture(caught, taken, 7, 1, |stopped| {
+            // `end` is set while the thread is stopped, so it ends the frame the moment it resumes.
+            let sample = target.sample(|| { end.store(true, Ordering::Release); true }, stopped);
+            found = Some(on_finished.recv_timeout(Duration::from_secs(30)).expect("the thread ended its frame"));
+            sample
+        });
+        assert_eq!(found.flatten().map(|samples| samples.len()), Some(1), "the frame gets its one sample");
+    });
 }
 
 #[test]
@@ -515,8 +554,8 @@ fn a_disarm_finishes_while_naming_is_paused() {
     // the watchdog before storing the sample, so a `disarm` during naming lost it.
     let (caught, taken) = (Caught::new(), AtomicBool::new(false));
     let (caught, taken) = (&caught, &taken);
-    caught.publish(taken, 1, 1, &raw(11));
-    let earlier = disarmed(caught, taken, 1).expect("frame 1's stack");
+    captured(caught, taken, 1, 1, raw(11));
+    let earlier = collected(caught, taken, || 1).expect("frame 1's stack");
     let (entered, on_entered) = mpsc::channel();
     let (release, on_release) = mpsc::channel::<()>();
     let (done, on_done) = mpsc::channel();
@@ -530,8 +569,8 @@ fn a_disarm_finishes_while_naming_is_paused() {
         });
         on_entered.recv().unwrap();
         scope.spawn(move || {
-            caught.publish(taken, 3, 2, &raw(33));
-            done.send(disarmed(caught, taken, 3).map(|s| ids(&s))).unwrap();
+            captured(caught, taken, 3, 2, raw(33));
+            done.send(collected(caught, taken, || 3).map(|s| ids(&s))).unwrap();
         });
         let finished = on_done.recv_timeout(Duration::from_secs(30));
         // Released before any assert, so a failure fails rather than hangs.
@@ -542,12 +581,53 @@ fn a_disarm_finishes_while_naming_is_paused() {
     });
 }
 
+fn frame_named(name: &str) -> Frame { Frame { name: name.into(), app: true } }
+
+fn names_of(frames: &[Frame]) -> Vec<&str> { frames.iter().map(|f| &*f.name).collect() }
+
+#[test]
+fn a_sample_is_named_while_its_images_are_still_loaded() {
+    let mut symbols = Symbols::default();
+    let mut lookups = 0;
+    let frames = symbols.frames(&raw(0x40), || 0, |_| { lookups += 1; frame_named("app::work") });
+    assert_eq!(names_of(&frames), ["app::work"]);
+    let frames = symbols.frames(&raw(0x40), || 0, |_| { lookups += 1; frame_named("app::work") });
+    assert_eq!((names_of(&frames), lookups), (vec!["app::work"], 1), "remembered");
+}
+
+#[test]
+fn an_address_whose_image_was_unloaded_since_the_sample_stays_unresolved() {
+    // differs from dev: dev named a sample straight after taking it. Named at export, an address
+    // can by then hold another image's code, so it stays bare once any image has been unloaded.
+    let mut symbols = Symbols::default();
+    let frames = symbols.frames(&raw(0x40), || 1, |_| panic!("no lookup for a sample older than the images"));
+    assert_eq!(names_of(&frames), ["0x40"]);
+    assert!(!frames[0].app);
+}
+
+#[test]
+fn an_unload_during_the_lookups_leaves_the_sample_unresolved() {
+    let (mut symbols, generation) = (Symbols::default(), Cell::new(0));
+    let frames = symbols.frames(&raw(0x40), || generation.get(), |_| { generation.set(1); frame_named("app::replaced") });
+    assert_eq!(names_of(&frames), ["0x40"]);
+}
+
+#[test]
+fn an_unload_forgets_remembered_names() {
+    let mut symbols = Symbols::default();
+    symbols.frames(&raw(0x40), || 0, |_| frame_named("app::old"));
+    let mut newer = raw(0x40);
+    newer.images = 1;
+    let frames = symbols.frames(&newer, || 1, |_| frame_named("app::new"));
+    assert_eq!(names_of(&frames), ["app::new"], "the old image's name isn't reused for the address");
+}
+
 #[test]
 fn a_frame_keeps_every_sample_up_to_the_cap_and_a_new_frame_replaces_them() {
     let (caught, taken) = (Caught::new(), AtomicBool::new(false));
-    for id in 0..MOST as u64 + 1 { caught.publish(&taken, 1, id, &raw(id)); }
+    for id in 0..MOST as u64 + 1 { captured(&caught, &taken, 1, id, raw(id)); }
     assert_eq!(ids(&caught.collect(1).unwrap()), (0..MOST as u64).collect::<Vec<_>>());
-    caught.publish(&taken, 2, 9, &raw(9));
+    captured(&caught, &taken, 2, 9, raw(9));
     assert_eq!(ids(&caught.collect(2).unwrap()), [9]);
     assert!(caught.collect(1).is_none(), "the older frame's are gone");
 }
@@ -557,11 +637,12 @@ fn a_sample_round_trips_through_the_store() {
     let (caught, taken) = (Caught::new(), AtomicBool::new(false));
     let mut pcs = [0; DEPTH];
     pcs[..3].copy_from_slice(&[10, 20, 30]);
-    caught.publish(&taken, 1, 77, &Raw { pcs, len: 3, waiting: true, cpu_us: 5 });
+    captured(&caught, &taken, 1, 77, Raw { pcs, len: 3, waiting: true, cpu_us: 5, images: 4 });
     let stacks = caught.collect(1).unwrap();
-    assert_eq!((stacks.raw[0].pcs, stacks.raw[0].len, stacks.raw[0].waiting, stacks.raw[0].cpu_us), (pcs, 3, true, 5));
-    caught.publish(&taken, 1, 90_077, &raw(6));
+    assert_eq!((stacks.raw[0].pcs, stacks.raw[0].len, stacks.raw[0].waiting, stacks.raw[0].cpu_us, stacks.raw[0].images), (pcs, 3, true, 5, 4));
+    captured(&caught, &taken, 1, 90_077, raw(6));
     assert_eq!(caught.collect(1).unwrap().cpu_share, Some(1.0 / 90.0), "stamped with each look's clock");
+    assert!(was_taken(&taken));
 }
 
 /// `SAMPLES` and `TAKEN` on dev, one capture at a time.
@@ -604,13 +685,13 @@ fn every_short_run_of_frames_collects_what_the_old_store_did() {
                     // A stopped thread between frames fails `still`: nothing is stored.
                     Move::Capture if running => {
                         id += 1;
-                        caught.publish(&taken, seq, id, &raw(id));
+                        captured(&caught, &taken, seq, id, raw(id));
                         dev.captured(seq, id);
                     }
                     Move::Capture => {}
                     Move::Disarm => {
                         running = false;
-                        let got = disarmed(&caught, &taken, seq).map(|s| ids(&s));
+                        let got = collected(&caught, &taken, || seq).map(|s| ids(&s));
                         kept |= got.is_some();
                         empty |= got.is_none() && id > 0;
                         assert_eq!(got, dev.disarm(seq), "after {path:?}");

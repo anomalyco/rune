@@ -224,8 +224,17 @@ fn begin(frames: &impl Frames, now: impl FnOnce() -> u64) {
     frames.set_start(now());
 }
 
-/// Whether a sample was caught since the last call.
-fn was_taken(taken: &AtomicBool) -> bool { taken.swap(false, Ordering::Acquire) }
+/// Tries one sample of frame `seq`. `sample` stops the thread, calls its argument with the
+/// sample while it's stopped, and resumes it: a `disarm` right after must find the sample.
+fn capture(samples: &Caught, taken: &AtomicBool, seq: u64, at: u64, sample: impl FnOnce(&dyn Fn(&Raw)) -> Option<Raw>) {
+    sample(&|raw| samples.publish(taken, seq, at, raw));
+}
+
+/// What was caught of the frame that just ended; `seq` reads its number if anything was.
+fn collected(samples: &Caught, taken: &AtomicBool, seq: impl FnOnce() -> u64) -> Option<Stacks> {
+    if !taken.swap(false, Ordering::Acquire) { return None; }
+    samples.collect(seq())
+}
 
 /// One stored sample.
 struct Slot {
@@ -234,11 +243,12 @@ struct Slot {
     waiting: AtomicBool,
     cpu_us: AtomicU64,
     at_ns: AtomicU64,
+    images: AtomicU64,
 }
 
 impl Slot {
     const fn new() -> Self {
-        Self { pcs: [const { AtomicUsize::new(0) }; DEPTH], len: AtomicUsize::new(0), waiting: AtomicBool::new(false), cpu_us: AtomicU64::new(0), at_ns: AtomicU64::new(0) }
+        Self { pcs: [const { AtomicUsize::new(0) }; DEPTH], len: AtomicUsize::new(0), waiting: AtomicBool::new(false), cpu_us: AtomicU64::new(0), at_ns: AtomicU64::new(0), images: AtomicU64::new(0) }
     }
 
     fn write(&self, raw: &Raw, at: u64) {
@@ -247,13 +257,14 @@ impl Slot {
         self.waiting.store(raw.waiting, Ordering::Relaxed);
         self.cpu_us.store(raw.cpu_us, Ordering::Relaxed);
         self.at_ns.store(at, Ordering::Relaxed);
+        self.images.store(raw.images, Ordering::Relaxed);
     }
 
     fn read(&self) -> Sampled {
         let len = self.len.load(Ordering::Relaxed);
         let mut pcs = [0; DEPTH];
         for (pc, slot) in pcs.iter_mut().zip(&self.pcs[..len]) { *pc = slot.load(Ordering::Relaxed); }
-        Sampled { raw: Raw { pcs, len, waiting: self.waiting.load(Ordering::Relaxed), cpu_us: self.cpu_us.load(Ordering::Relaxed) }, at_ns: self.at_ns.load(Ordering::Relaxed) }
+        Sampled { raw: Raw { pcs, len, waiting: self.waiting.load(Ordering::Relaxed), cpu_us: self.cpu_us.load(Ordering::Relaxed), images: self.images.load(Ordering::Relaxed) }, at_ns: self.at_ns.load(Ordering::Relaxed) }
     }
 }
 
@@ -309,8 +320,8 @@ mod mac {
     use std::thread::{Thread, ThreadId};
     use std::time::Instant;
 
-    use super::super::stack::Target;
-    use super::{AFTER_MS, Caught, Effect, Event, Frames, HURRY_MS, Stacks, Watch, begin, look, step, was_taken};
+    use super::super::stack::{Target, watch_unloads};
+    use super::{AFTER_MS, Caught, Effect, Event, Frames, HURRY_MS, Stacks, Watch, begin, capture, collected, look, step};
 
     /// Bumped by each frame, so a sample can tell its frame is the one still running.
     static SEQ: AtomicU64 = AtomicU64::new(0);
@@ -400,11 +411,11 @@ mod mac {
     pub(crate) fn disarm() -> Option<Stacks> {
         if WATCHED.get() != Watched::Yes { return None; }
         START.store(0, Ordering::SeqCst);
-        if !was_taken(&TAKEN) { return None; }
-        SAMPLES.collect(SEQ.load(Ordering::Relaxed))
+        collected(&SAMPLES, &TAKEN, || SEQ.load(Ordering::Relaxed))
     }
 
     fn run(target: Target) {
+        watch_unloads();
         let mut watch = Watch::Unarmed;
         loop {
             for effect in step(&mut watch, Event::Look { frame: look(&Statics), now: now_ns() }) {
@@ -417,7 +428,7 @@ mod mac {
                     }
                     Effect::Sample { seq, start, at } => {
                         let still = || SEQ.load(Ordering::SeqCst) == seq && START.load(Ordering::SeqCst) == start;
-                        target.sample(still, |raw| SAMPLES.publish(&TAKEN, seq, at, raw));
+                        capture(&SAMPLES, &TAKEN, seq, at, |caught| target.sample(still, caught));
                         step(&mut watch, Event::Taken { seq, now: now_ns() });
                     }
                 }
