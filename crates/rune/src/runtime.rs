@@ -90,6 +90,8 @@ mod interaction_timing;
 mod drag_out_host;
 #[path = "runtime/paint/exit_mask.rs"]
 mod exit_mask;
+#[path = "runtime/paint/raster_check.rs"]
+mod raster_check;
 #[path = "runtime/font_families.rs"]
 mod font_families;
 #[path = "runtime/key_index.rs"]

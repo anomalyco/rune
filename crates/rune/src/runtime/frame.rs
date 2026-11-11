@@ -754,6 +754,9 @@ impl<S: 'static> Runtime<S> {
         animating |= source(self.static_scale_settling || self.pixel_snap.easing(), AnimSource::SCALE_SETTLE);
         animating |= source(self.videos_active, AnimSource::VIDEO);
         animating |= source(self.draw_text_flights(), AnimSource::TEXT_FLIGHT);
+        if !animating && raster_check::on() {
+            self.check_resting_raster();
+        }
         if let Some(at) = waits { self.wake_for_motion(at); }
         self.images.end_frame();
         if self.track_marks {
