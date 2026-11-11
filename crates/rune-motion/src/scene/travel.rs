@@ -112,6 +112,9 @@ impl Scene {
         let px = axis_progress_velocity(start[0], start[2], end[0], end[2], vel[0], vel[2]);
         let py = axis_progress_velocity(start[1], start[3], end[1], end[3], vel[1], vel[3]);
         self.nodes[i].path = Some(Path { start: Rect::from_edges(start[0], start[1], start[2], start[3]), end_local, origin: po });
+        if !self.travelling.contains(&(i as u32)) {
+            self.travelling.push(i as u32);
+        }
         self.track_set(i, prop::TRAVEL, Vec2::ZERO);
         let t = self.nodes[i].tracks[prop::TRAVEL.id.0 as usize].unwrap().index_usize();
         self.store.animate_raw(t, &[1.0, 0.0], anim.x, Some(&[px, 0.0]));
@@ -124,6 +127,7 @@ impl Scene {
 
     pub(super) fn end_path(&mut self, i: usize) {
         self.nodes[i].path = None;
+        self.travelling.retain(|&x| x as usize != i);
         let id = self.nodes[i].id;
         self.store.remove(id, prop::TRAVEL);
         self.nodes[i].tracks[prop::TRAVEL.id.0 as usize] = None;

@@ -248,16 +248,10 @@ impl Dev {
         (self.fx_a, self.fx_b)
     }
 
-    /// Gone, reported by the scene's own frame.
-    fn gone(&mut self) {
-        self.alive = false;
-        self.pending_exit = false;
-    }
-
-    /// One frame's worth of dev's `Scene::frame`: presence settles. Returns whether it reports the
-    /// node in `exited`. The other way an exit retires — its presence fading below one 8-bit step
-    /// — is checked on that frame by the walk, which has the value the scene presented.
-    fn frame(&mut self, settled: bool) -> bool {
+    /// One frame's worth of dev's `Scene::frame`: presence settles, then an exit whose presence
+    /// faded below one 8-bit step retires. `p` is the presence the frame's tick had, which is the
+    /// value dev read from the store. Returns whether it reports the node in `exited`.
+    fn frame(&mut self, settled: bool, p: f32) -> bool {
         let mut retired = false;
         if settled {
             match self.phase {
@@ -267,6 +261,12 @@ impl Dev {
                     retired = true;
                 }
                 _ => {}
+            }
+        }
+        if self.alive && matches!(self.phase, DevPhase::Exiting { .. }) {
+            if self.fx_a[0] + (self.fx_b[0] - self.fx_a[0]) * p < 1.0 / 255.0 {
+                self.retire();
+                retired = true;
             }
         }
         let reported = retired || self.pending_exit;
@@ -332,43 +332,8 @@ fn run(cfg: Cfg, steps: &[Step]) {
                 dev.unmount();
             }
             Step::Tick => {
-                for k in 0..24 {
-                    t += DT;
-                    let (settled, exited, changed) = {
-                        let out = scene.frame_at(t);
-                        let settled = out.events.iter().any(|e| {
-                            matches!(*e, MotionEvent::Settled { node, prop: p, .. } if node == ID && p == prop::PRESENCE.id)
-                        });
-                        let changed = out.changed.iter().find(|p| p.node == ID).copied();
-                        (settled, out.exited.contains(&ID), changed)
-                    };
-                    let reported = dev.frame(settled);
-                    assert!(
-                        !reported || exited,
-                        "an exit the scene didn't report, frame {k} after {steps:?}"
-                    );
-                    if exited && !reported {
-                        // The scene unmounted it this frame: dev retires an exit once its
-                        // presence fades below one 8-bit step, and the scene presents that value.
-                        assert!(
-                            matches!(dev.phase, DevPhase::Exiting { .. }),
-                            "unmounted while {:?}, frame {k} after {steps:?}",
-                            dev.phase
-                        );
-                        if !settled && let Some(shown) = changed {
-                            assert!(
-                                shown.opacity < 1.0 / 255.0,
-                                "unmounted at opacity {}, frame {k} after {steps:?}",
-                                shown.opacity
-                            );
-                        }
-                        dev.gone();
-                    }
-                    // The frame a node is unmounted in is the one frame whose presence value the
-                    // scene no longer has to compare the look against.
-                    if let (Some(p), false) = (changed, exited) {
-                        check_presented(&p, &dev, presence(&scene, ID), scene_frame(), steps);
-                    }
+                for _ in 0..24 {
+                    tick(&mut scene, &mut dev, ID, scene_frame(), &mut t, true, steps);
                 }
             }
         }
@@ -553,21 +518,70 @@ fn matched_geometry_onto_an_exit_keeps_the_look_it_was_leaving_from() {
     );
 }
 
+/// One frame of `node`: time moves, the scene frames at it, and the reference alone says whether
+/// dev would report the node as exited this frame.
+///
+/// Its presence value is sampled at the frame's clock before the tick. An exit's presence track
+/// is a plain spring (`Anim::from(springs.exit)`, no delay), so that sample is exactly the value
+/// the tick writes — the value dev read with `values_of` — including on the frame the scene
+/// unmounts the node and the store no longer has it to ask.
+fn tick(scene: &mut Scene, dev: &mut Dev, node: NodeId, frame: Rect, t: &mut f64, compare: bool, steps: &[Step]) {
+    *t += DT;
+    scene.set_time(*t);
+    let p = presence(scene, node);
+    let (settled, exited, changed) = {
+        let out = scene.frame();
+        let settled = out.events.iter().any(|e| {
+            matches!(*e, MotionEvent::Settled { node: n, prop: q, .. } if n == node && q == prop::PRESENCE.id)
+        });
+        (settled, out.exited.contains(&node), out.changed.iter().find(|p| p.node == node).copied())
+    };
+    let reported = dev.frame(settled, p);
+    assert_eq!(exited, reported, "exited on this frame after {steps:?}");
+    if compare && let Some(shown) = changed {
+        // A delayed start only gets its layer on the tick that starts it, so a node still in the
+        // scene is asked again after the frame; one that was unmounted keeps the value above.
+        let shown_at = if scene.contains(node) { presence(scene, node) } else { p };
+        check_presented(&shown, dev, shown_at, frame, steps);
+    }
+}
+
 /// Runs `frames` frames of `node`, comparing what it presents against `dev` unless a screen path
 /// places it.
 fn advance(scene: &mut Scene, dev: &mut Dev, node: NodeId, frame: Rect, t: &mut f64, frames: usize, compare: bool) {
     for _ in 0..frames {
-        *t += DT;
-        let (settled, changed) = {
-            let out = scene.frame_at(*t);
-            let settled = out.events.iter().any(|e| {
-                matches!(*e, MotionEvent::Settled { node: n, prop: p, .. } if n == node && p == prop::PRESENCE.id)
-            });
-            (settled, out.changed.iter().find(|p| p.node == node).copied())
-        };
-        dev.frame(settled);
-        if compare && let Some(p) = changed {
-            check_presented(&p, dev, presence(scene, node), frame, &[]);
+        tick(scene, dev, node, frame, t, compare, &[]);
+    }
+}
+
+
+/// A child whose path started before its parent's is checked first, as dev's travelling list
+/// checked it: its arrival waits on the parent's own frame animation, which landing the parent
+/// ends, so it lands the frame after the parent. Scanning the tree would land the parent first
+/// and let the child land on that same frame, one early.
+#[test]
+fn a_child_that_started_travelling_first_lands_the_frame_after_its_parent() {
+    let (p, c) = (NodeId(10), NodeId(11));
+    let child_frame = Rect::new(10.0, 10.0, 50.0, 50.0);
+    let mut s = Scene::new();
+    s.insert(p, NodeSpec::new(Rect::new(0.0, 0.0, 400.0, 400.0)), Mount::Initial);
+    s.insert(c, NodeSpec::new(child_frame).parent(p), Mount::Initial);
+    s.frame_at(0.0);
+    let travel = LayoutAnim::new(Spring::new(0.3, 0.0));
+    s.launch(c, Rect::new(300.0, 300.0, 50.0, 50.0), travel);
+    s.launch(p, Rect::new(100.0, 100.0, 400.0, 400.0), travel);
+    // The parent keeps animating its own frame while it travels, so its travel track arriving is
+    // not what stops a child from landing on it.
+    s.animate(p, prop::FRAME, Rect::new(20.0, 20.0, 400.0, 400.0), Spring::new(2.0, 0.0));
+    let (mut parent, mut child) = (None, None);
+    for k in 1..600 {
+        s.frame_at(k as f64 / 120.0);
+        parent = parent.or_else(|| s.is_resting_at(p, Rect::new(0.0, 0.0, 400.0, 400.0)).then_some(k));
+        child = child.or_else(|| s.is_resting_at(c, child_frame).then_some(k));
+        if parent.is_some() && child.is_some() {
+            break;
         }
     }
+    let (parent, child) = (parent.expect("the parent lands"), child.expect("the child lands"));
+    assert_eq!(child, parent + 1, "parent landed on {parent}, child on {child}");
 }

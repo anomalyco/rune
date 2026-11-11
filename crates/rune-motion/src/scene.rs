@@ -319,6 +319,9 @@ pub struct Scene {
     late: Vec<Presented>,
     exited: Carry<NodeId>,
     to_remove: Vec<u32>,
+    /// Who is on a screen path, in the order the paths started. It only says who travels and in
+    /// what order; the path itself is the node's.
+    travelling: Vec<u32>,
     trace: Option<MotionTrace>,
     intents: Vec<(NodeId, u32, f32)>,
     /// `keep_flights`: landings leave motion already on its way to the same value.
@@ -347,6 +350,7 @@ impl Scene {
             late: Vec::new(),
             exited: Carry::new(),
             to_remove: Vec::new(),
+            travelling: Vec::new(),
             trace: None,
             intents: Vec::new(),
             keep: false,
@@ -711,7 +715,7 @@ impl Scene {
                 continue;
             }
             let Some(&i) = self.index.get(&node.0) else { continue };
-            if retire.contains(&i) {
+            if !self.nodes[i as usize].presence.exiting() || retire.contains(&i) {
                 continue;
             }
             let Some(&[presence, ..]) = self.store.values_of(t) else { continue };
@@ -733,24 +737,28 @@ impl Scene {
                 }
             }
         }
-        if self.order_dirty {
-            self.rebuild_order();
-        }
         // Screen travel ends once it has arrived and no ancestor is still moving or transitioning.
-        for k in 0..self.order.len() {
-            let i = self.order[k] as usize;
-            let Some(path) = self.nodes[i].path else { continue };
+        // `travelling` is the order the paths started in, not the tree's: a child whose path
+        // started first is checked before its parent, as dev checked it.
+        let mut k = 0;
+        while k < self.travelling.len() {
+            let i = self.travelling[k] as usize;
             let travel = self.nodes[i].tracks[prop::TRAVEL.id.0 as usize];
             let arrived = travel.is_none_or(|t| !self.store.is_active(t));
             if arrived && !self.ancestor_moving(i) {
+                let end_local = self.nodes[i].path.map(|p| p.end_local).unwrap_or(self.nodes[i].frame);
                 self.end_path(i);
-                self.track_set(i, prop::FRAME, path.end_local);
+                self.track_set(i, prop::FRAME, end_local);
                 continue;
             }
             let po = self.parent_target_origin(i);
             if let Some(path) = &mut self.nodes[i].path {
                 path.origin = po;
             }
+            k += 1;
+        }
+        if self.order_dirty {
+            self.rebuild_order();
         }
         self.out.clear();
         // Written first, so this frame's own values for the same nodes win.
@@ -1012,6 +1020,7 @@ impl Scene {
         } else {
             self.nodes[next as usize].prev_sibling = prev;
         }
+        self.travelling.retain(|&x| x as usize != i);
         self.store.remove_node(id);
         self.index.remove(&id.0);
         let n = &mut self.nodes[i];
