@@ -158,7 +158,7 @@ pub(super) fn rests<T: 'static>(rt: &Runtime<T>, runtime_idle: bool, dirty: bool
 /// `step` for a runtime that `rests`: its clocks (`clock`, `t`) move to the frame as a step
 /// would move them, so a compositor reading them animates the same, and nothing runs or builds.
 pub(super) fn rest<T: 'static>(rt: &mut Runtime<T>, clock: &mut FrameClock, compositor: &Option<Box<dyn Compositor<T>>>, frame_time: Instant) -> (bool, f64) {
-    let elapsed = clock.step(frame_time, compositor.as_ref().is_some_and(|c| c.animating())).total();
+    let elapsed = clock.frame_step(frame_time, compositor.as_ref().is_some_and(|c| c.animating())).total();
     rt.frame_target = Some(frame_time);
     rt.clock = rt.wall_start.map_or(rt.clock + elapsed, |t0| t0.elapsed().as_secs_f64());
     rt.t += elapsed * rt.time_scale as f64;

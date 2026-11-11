@@ -12,7 +12,9 @@
 //! Core Animation starts what a transaction adds when the transaction commits: the next frame
 //! moves it one frame on rather than charging it the overrun ([`FrameClock::presented`]).
 
+use crate::machine::Effects;
 use crate::time::Instant;
+use rune_motion::TrackId;
 use crate::runtime::Runtime;
 
 /// The most a frame steps motion it starts. Its first frame shows one 120 Hz frame of movement,
@@ -64,44 +66,99 @@ pub(crate) fn advance_by<S: 'static>(rt: &mut Runtime<S>, gap: f64) -> bool {
 
 #[derive(Debug)]
 pub(crate) struct FrameClock {
-    last: Instant,
-    /// The motion the last frame showed first, until it presents.
-    starts: Vec<rune_motion::TrackId>,
+    phase: Phase,
+    /// Recycle the allocation between frames. Only Stepped owns pending starts.
+    spare: Vec<TrackId>,
+}
+
+#[derive(Debug)]
+enum Phase {
+    Idle { last: Instant },
+    Stepped { last: Instant, starts: Vec<TrackId> },
+    Presented { last: Instant },
+}
+
+enum Event {
+    Hold(Instant),
+    Advance { at: Instant, running: bool },
+    Present(Instant),
+}
+
+enum Effect<'a> {
+    Frame(Step, &'a mut Vec<TrackId>),
+    Delay(f64, &'a mut [TrackId]),
 }
 
 impl FrameClock {
     pub(crate) fn new(now: Instant) -> Self {
-        Self { last: now, starts: Vec::new() }
+        Self { phase: Phase::Idle { last: now }, spare: Vec::new() }
     }
 
     /// The target time of the last frame the clock stepped to.
     pub(crate) fn last(&self) -> Instant {
-        self.last
+        match self.phase {
+            Phase::Idle { last } | Phase::Stepped { last, .. } | Phase::Presented { last } => last,
+        }
+    }
+
+    #[inline]
+    fn step(&mut self, event: Event) -> Effects<Effect<'_>> {
+        let last = self.last();
+        match event {
+            Event::Hold(at) => {
+                if let Phase::Stepped { starts, .. } = &mut self.phase {
+                    self.spare = std::mem::take(starts);
+                }
+                self.phase = Phase::Idle { last: last.max(at) };
+                Effects::none()
+            }
+            Event::Advance { at, running } => {
+                let gap = at.saturating_duration_since(last).as_secs_f64();
+                let last = last.max(at);
+                if let Phase::Stepped { last: target, .. } = &mut self.phase {
+                    *target = last;
+                } else {
+                    self.phase = Phase::Stepped { last, starts: std::mem::take(&mut self.spare) };
+                }
+                let Phase::Stepped { starts, .. } = &mut self.phase else { unreachable!() };
+                starts.clear();
+                Effects::one(Effect::Frame(split(gap, running), starts))
+            }
+            Event::Present(done) => {
+                let Phase::Stepped { starts, .. } = &mut self.phase else { return Effects::none() };
+                self.spare = std::mem::take(starts);
+                self.phase = Phase::Presented { last };
+                if self.spare.is_empty() { return Effects::none(); }
+                let late = done.saturating_duration_since(last).as_secs_f64().min(MAX_GAP);
+                if late > 0.0 { Effects::one(Effect::Delay(late, &mut self.spare)) } else { Effects::none() }
+            }
+        }
     }
 
     /// A frame at `at` that steps no time (prewarm, hidden), or one that caught motion up to
     /// `at`. Display-link targets run ahead of `Instant::now()`, so the clock never goes back.
     pub(crate) fn hold(&mut self, at: Instant) {
-        self.last = self.last.max(at);
-        self.starts.clear();
+        self.step(Event::Hold(at));
     }
 
     /// The step for a frame presented at `at`. See [`split`].
-    pub(crate) fn step(&mut self, at: Instant, running: bool) -> Step {
-        let gap = at.saturating_duration_since(self.last).as_secs_f64();
-        self.hold(at);
-        split(gap, running)
+    fn begin(&mut self, at: Instant, running: bool) -> (Step, &mut Vec<TrackId>) {
+        let Effects::One(Effect::Frame(step, starts)) = self.step(Event::Advance { at, running }) else { unreachable!() };
+        (step, starts)
+    }
+
+    pub(crate) fn frame_step(&mut self, at: Instant, running: bool) -> Step {
+        self.begin(at, running).0
     }
 
     /// Steps `rt` to the frame presented at `at`, in one runtime pass. `compositing`: a
     /// compositor's own animation was still running after the previous frame. Returns whether
     /// anything still animates and the seconds stepped.
     pub(crate) fn advance<S: 'static>(&mut self, rt: &mut Runtime<S>, at: Instant, compositing: bool) -> (bool, f64) {
-        let step = self.step(at, rt.animating || compositing);
+        let (step, starts) = self.begin(at, rt.animating || compositing);
         rt.frame_target = Some(at);
         let animating = rt.frame_split(step.catch_up, step.dt);
-        self.starts.clear();
-        self.starts.extend_from_slice(rt.scene.store().started());
+        starts.extend_from_slice(rt.scene.store().started());
         (animating, step.total())
     }
 
@@ -109,13 +166,15 @@ impl FrameClock {
     /// started holds its first pose for the overrun, so the next frame moves it about a frame
     /// rather than by how late this one was. Motion already running keeps real time.
     pub(crate) fn presented<S: 'static>(&mut self, rt: &mut Runtime<S>, done: Instant) {
-        let late = done.saturating_duration_since(self.last).as_secs_f64().min(MAX_GAP);
-        if late > 0.0 && !self.starts.is_empty() {
-            rt.scene.store_mut().delay(&mut self.starts, late * f64::from(rt.time_scale));
+        if let Effects::One(Effect::Delay(late, starts)) = self.step(Event::Present(done)) {
+            rt.scene.store_mut().delay(starts, late * f64::from(rt.time_scale));
         }
-        self.starts.clear();
     }
 }
+
+#[cfg(test)]
+#[path = "clock_walk_tests.rs"]
+mod walk_tests;
 
 #[cfg(test)]
 mod tests {
@@ -131,21 +190,21 @@ mod tests {
         let ms = |n: u64| Duration::from_millis(n);
         let mut clock = FrameClock::new(start);
         let fresh = Step { catch_up: 0.0, dt: RESUME_STEP };
-        assert_eq!(clock.step(start + ms(5), false), fresh, "first frame");
-        assert_eq!(clock.step(start + ms(2005), false), fresh, "after idle, however long");
-        let late = clock.step(start + ms(2054), true);
+        assert_eq!(clock.frame_step(start + ms(5), false), fresh, "first frame");
+        assert_eq!(clock.frame_step(start + ms(2005), false), fresh, "after idle, however long");
+        let late = clock.frame_step(start + ms(2054), true);
         assert!((late.total() - 0.049).abs() < 1e-9 && late.dt == RESUME_STEP, "a late running frame keeps its time: {late:?}");
-        let short = clock.step(start + ms(2058), true);
+        let short = clock.frame_step(start + ms(2058), true);
         assert!((short.dt - 0.004).abs() < 1e-9 && short.catch_up == 0.0, "a short frame steps its gap: {short:?}");
-        let suspended = clock.step(start + ms(5058), true);
+        let suspended = clock.frame_step(start + ms(5058), true);
         assert!((suspended.total() - MAX_GAP).abs() < 1e-9 && suspended.dt == RESUME_STEP,
             "a suspension moves running motion at most MAX_GAP: {suspended:?}");
         clock.hold(start + ms(6000));
-        assert_eq!(clock.step(start + ms(6000), true), Step { catch_up: 0.0, dt: 0.0 });
+        assert_eq!(clock.frame_step(start + ms(6000), true), Step { catch_up: 0.0, dt: 0.0 });
         // A display-link target ran ahead; a later `now` before it must not rewind the clock.
         clock.hold(start + ms(6010));
         clock.hold(start + ms(6002));
-        let next = clock.step(start + ms(6018), true);
+        let next = clock.frame_step(start + ms(6018), true);
         assert!((next.total() - 0.008).abs() < 1e-9, "the gap counts from the latest target: {next:?}");
     }
 
