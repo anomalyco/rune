@@ -37,14 +37,16 @@ impl El {
         {
             t.content = content.into();
             t.spans.clear();
-            t.links.clear();
-            t.uncopied.clear();
-            t.strikes.clear();
-            t.highlights.clear();
-            t.pills.clear();
-            t.rings.clear();
-            t.blocks.clear();
-            t.soft_breaks.clear();
+            if let Some(cold) = t.cold.get_mut_if_some() {
+                cold.links.clear();
+                cold.uncopied.clear();
+                cold.strikes.clear();
+                cold.highlights.clear();
+                cold.pills.clear();
+                cold.rings.clear();
+                cold.blocks.clear();
+                cold.soft_breaks.clear();
+            }
             t.source = None;
         }
         self
@@ -70,7 +72,7 @@ impl El {
             inp.decorations = spans;
             self.sync_input_rich();
         } else if let Some(t) = &mut self.text {
-            t.spans = crate::el::pills::with_pill_colors(&spans, &t.pills);
+            t.spans = crate::el::pills::with_pill_colors(&spans, &t.cold.pills);
         }
         self
     }
@@ -88,7 +90,7 @@ impl El {
     /// on each line; selection is painted over the chip and below the glyphs.
     pub fn span_ring(mut self, start: usize, end: usize, color: Color, width: f32) -> Self {
         if let Some(t) = &mut self.text && start < end && width > 0.0 && width.is_finite() {
-            t.rings.push((start as u32, end as u32, color, width));
+            t.cold.rings.push((start as u32, end as u32, color, width));
         }
         self
     }
@@ -97,7 +99,7 @@ impl El {
     /// at 3, say, while inline code keeps 4.
     pub fn span_radius(mut self, radius: f32) -> Self {
         if let Some(t) = &mut self.text && radius.is_finite() {
-            t.span_radius = radius.max(0.0);
+            t.cold.span_radius = radius.max(0.0);
         }
         self
     }
@@ -112,7 +114,7 @@ impl El {
     /// colour). Wrapped lines each get their own segment.
     pub fn strike(mut self, start: usize, end: usize, color: Option<Color>) -> Self {
         if let Some(t) = &mut self.text && start < end {
-            t.strikes.push((start as u32, end as u32, color));
+            t.cold.strikes.push((start as u32, end as u32, color));
         }
         self
     }
@@ -129,7 +131,7 @@ impl El {
     /// clearing highlights never reshapes text or shifts line breaks.
     pub fn text_highlight(mut self, highlight: crate::text::TextHighlight) -> Self {
         if let Some(t) = &mut self.text && highlight.start < highlight.end {
-            t.highlights.push(highlight);
+            t.cold.highlights.push(highlight);
         }
         self
     }
@@ -147,7 +149,7 @@ impl El {
             inp.rich_style = style;
             self.sync_input_rich();
         } else if let Some(t) = &mut self.text {
-            t.rich_style = style;
+            t.cold.rich_style = Some(style);
         }
         self
     }
@@ -156,7 +158,7 @@ impl El {
     /// colour at 20% opacity.
     pub fn pill_colors(mut self, bg: Color, fg: Option<Color>) -> Self {
         if let Some(t) = &mut self.text {
-            t.pill_colors = Some((bg, fg));
+            t.cold.pill_colors = Some((bg, fg));
         }
         if self.cold.input.is_some() {
             self.sync_input_rich();
@@ -203,10 +205,10 @@ impl El {
     pub(super) fn sync_input_pills(&mut self) {
         let (Some(inp), Some(t)) = (&self.cold.input, &mut self.text) else { return };
         if inp.edit.is_plain() {
-            t.pills.clear();
+            t.cold.pills.clear();
             return;
         }
-        t.pills = inp
+        t.cold.pills = inp
             .edit
             .display_pills()
             .into_iter()
@@ -219,14 +221,14 @@ impl El {
     }
     pub(crate) fn sync_input_rich(&mut self) {
         let (Some(inp), Some(t)) = (&self.cold.input, &mut self.text) else { return };
-        t.rich_style = inp.rich_style;
+        t.cold.rich_style = Some(inp.rich_style);
         if inp.edit.is_plain() && inp.decorations.is_empty() {
             // A plain field lays out and draws exactly as before rich editing existed.
             t.spans.clear();
-            t.strikes.clear();
-            t.blocks.clear();
-            t.soft_breaks.clear();
-            t.pills.clear();
+            t.cold.strikes.clear();
+            t.cold.blocks.clear();
+            t.cold.soft_breaks.clear();
+            t.cold.pills.clear();
             return;
         }
         let (mut base_spans, strikes, rich_links, blocks) =
@@ -239,8 +241,8 @@ impl El {
                 base_spans.push(sp);
             }
         }
-        let pill_fg = t.pill_colors.and_then(|(_, fg)| fg);
-        base_spans.extend(t.pills.iter().filter_map(|p| {
+        let pill_fg = t.cold.pill_colors.and_then(|(_, fg)| fg);
+        base_spans.extend(t.cold.pills.iter().filter_map(|p| {
             Some(Span { start: p.start, end: p.end, color: Some(p.fg.or(pill_fg)?), ..Span::default() })
         }));
         let mut flat = crate::text::flatten_spans(&base_spans);
@@ -250,11 +252,11 @@ impl El {
             }
         }
         t.spans = flat;
-        t.strikes = strikes;
-        t.blocks = blocks;
-        t.soft_breaks = inp.edit.soft_breaks.clone();
+        t.cold.strikes = strikes;
+        t.cold.blocks = blocks;
+        t.cold.soft_breaks = inp.edit.soft_breaks.clone();
         // Replace links generated from `Mark::Link` while keeping any explicit `.link(...)` calls.
-        t.links = rich_links;
+        t.cold.links = rich_links;
     }
     /// Wrap text at the element's width.
     #[inline]
@@ -394,7 +396,7 @@ impl El {
     /// transparent to input. Each link is a Tab stop that Enter or Space presses.
     pub fn link(mut self, link: Link) -> Self {
         if let Some(t) = &mut self.text {
-            t.links.push(link);
+            t.cold.links.push(link);
             self.cold_mut().focus.enabled = true;
             if self.handlers.cursor.is_none() {
                 self.handlers.cursor = Some(Cursor::Pointer);
@@ -406,7 +408,7 @@ impl El {
     /// focused.
     pub fn on_link<S: 'static>(mut self, f: impl Fn(&mut S, &str, &mut Tx) + 'static) -> Self {
         if let Some(t) = &mut self.text {
-            t.on_link = Some(LinkFn(Rc::new(move |s, id, tx| f(downcast::<S>(s), id, tx))));
+            t.cold.on_link = Some(LinkFn(Rc::new(move |s, id, tx| f(downcast::<S>(s), id, tx))));
         }
         self
     }
@@ -416,7 +418,7 @@ impl El {
     /// it; elsewhere in the text they still do.
     pub fn on_link_secondary<S: 'static>(mut self, f: impl Fn(&mut S, &str, PointerPress, &mut Tx) + 'static) -> Self {
         if let Some(t) = &mut self.text {
-            t.on_link_secondary = Some(LinkSecondaryFn(Rc::new(move |s, id, p, tx| f(downcast::<S>(s), id, p, tx))));
+            t.cold.on_link_secondary = Some(LinkSecondaryFn(Rc::new(move |s, id, p, tx| f(downcast::<S>(s), id, p, tx))));
         }
         self
     }
@@ -467,7 +469,7 @@ impl El {
         if let Some(t) = &mut self.text {
             if self.cold.input.is_some() || t.redacted { return self; }
             t.selectable = on;
-            if on && (self.handlers.cursor.is_none() || (!t.links.is_empty() && self.handlers.cursor == Some(Cursor::Pointer))) {
+            if on && (self.handlers.cursor.is_none() || (!t.cold.links.is_empty() && self.handlers.cursor == Some(Cursor::Pointer))) {
                 self.handlers.cursor = Some(Cursor::Text);
             }
         }
@@ -538,8 +540,8 @@ impl El {
     /// characters Markdown pads inline code with. A double-click's word stops at them.
     pub fn uncopied(mut self, range: std::ops::Range<usize>) -> Self {
         if let Some(t) = &mut self.text && range.start < range.end {
-            let at = t.uncopied.partition_point(|r| (r.0 as usize) < range.start);
-            t.uncopied.insert(at, (range.start as u32, range.end as u32));
+            let at = t.cold.uncopied.partition_point(|r| (r.0 as usize) < range.start);
+            t.cold.uncopied.insert(at, (range.start as u32, range.end as u32));
         }
         self
     }
@@ -552,14 +554,14 @@ impl El {
     /// text(para).selectable(true).copy_breaks(2, 2) // "first para\n\nsecond para"
     /// ```
     pub fn copy_breaks(mut self, before: u8, after: u8) -> Self {
-        if let Some(t) = &mut self.text { t.copy_breaks = [before, after]; }
+        if let Some(t) = &mut self.text { t.cold.copy_breaks = [before, after]; }
         self
     }
     /// Text copying puts before this [`El::selectable`] text when a selection takes it from its
     /// start along with other texts, without drawing it: a list item's `"- "` or `"1. "`, whose
     /// drawn marker isn't selectable. A copy of this text alone leaves it out.
     pub fn copy_prefix(mut self, prefix: impl Into<std::rc::Rc<str>>) -> Self {
-        if let Some(t) = &mut self.text { t.copy_prefix = Some(prefix.into()); }
+        if let Some(t) = &mut self.text { t.cold.copy_prefix = Some(prefix.into()); }
         self
     }
     /// A selection as a browser paints `::selection`, in a text field or [`El::selectable`]
@@ -569,13 +571,13 @@ impl El {
     /// highlight.
     pub fn selection_style(mut self, style: crate::SelectionStyle) -> Self {
         if let Some(i) = self.cold.get_mut_if_some().and_then(|c| c.input.as_deref_mut()) { i.selection_style = Some(style); }
-        if let Some(t) = &mut self.text { t.selection_style = Some(style); }
+        if let Some(t) = &mut self.text { t.cold.selection_style = Some(style); }
         self
     }
     /// The selection highlight of [`El::selectable`] text or a text field, drawn alike for both.
     pub fn selection_color(mut self, color: Color) -> Self {
         if let Some(i) = self.cold.get_mut_if_some().and_then(|c| c.input.as_deref_mut()) { i.selection = color; }
-        if let Some(t) = &mut self.text { t.selection = color; }
+        if let Some(t) = &mut self.text { t.cold.selection = color; }
         self
     }
     /// Binds the field to a `TextEdit` in app state. `f` may capture (a row index, say); wrap
@@ -610,7 +612,7 @@ impl El {
     pub fn live_text(mut self, value: &crate::LiveText) -> Self {
         assert!(self.cold.input.is_none(), "live_text cannot bind a text editor");
         let spec = self.text.as_mut().expect("live_text requires a text element");
-        spec.live = Some(value.clone());
+        spec.cold.live = Some(value.clone());
         self
     }
     #[inline]
@@ -672,7 +674,7 @@ impl El {
     /// the run's own glyphs for its grapheme (contextual forms included).
     pub fn advance_in(mut self, run: &crate::text::Run, at: usize) -> Self {
         if let Some(t) = &mut self.text {
-            t.advance_in = Some((run.clone(), at));
+            t.cold.advance_in = Some((run.clone(), at));
         }
         self
     }

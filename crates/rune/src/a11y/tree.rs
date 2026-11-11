@@ -253,7 +253,7 @@ impl<S: 'static> Runtime<S> {
     fn a11y_focus_now(&self) -> AkId {
         let Some(i) = self.focused_index() else { return ROOT };
         let n = &self.nodes[i];
-        let id = self.link_focus().filter(|&k| n.text.as_ref().is_some_and(|t| k < t.links.len()))
+        let id = self.link_focus().filter(|&k| n.text.as_ref().is_some_and(|t| k < t.cold.links.len()))
             .map_or(element_id(n.id), |k| link_id(n.id, k));
         let sent = self.a11y.as_ref().is_some_and(|t| t.sent.contains_key(&id.0));
         if sent { id } else { ROOT }
@@ -340,7 +340,7 @@ impl<S: 'static> Runtime<S> {
                 if let Some((_, size)) = n.a11y.more.as_ref().and_then(|m| m.set) { slots[w.slot].set_size = Some(size); }
                 kids.push((w.slot, id));
                 if focused == Some(i) {
-                    focus = self.link_focus().filter(|&k| n.text.as_ref().is_some_and(|t| k < t.links.len()))
+                    focus = self.link_focus().filter(|&k| n.text.as_ref().is_some_and(|t| k < t.cold.links.len()))
                         .map_or(id, |k| link_id(n.id, k));
                 }
                 slots.push(Slot { id, element: Some(i), walk: w, role, print, set_size: None });

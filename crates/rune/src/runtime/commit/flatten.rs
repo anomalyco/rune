@@ -227,16 +227,18 @@ fn prepare_text(
         // Rich links carry URLs and can expose them through hover, copy and tree children.
         use zeroize::Zeroize;
         let t: &mut TextSpec = t;
-        for link in &mut t.links {
-            link.id.zeroize();
-            if let Some(label) = &mut link.label { label.zeroize(); }
-            if let Some(help) = &mut link.help { help.zeroize(); }
-        }
-        t.links.clear();
-        t.rings.clear();
         t.selectable = false;
-        t.advance_in = None;
-        t.live = None;
+        if let Some(cold) = t.cold.get_mut_if_some() {
+            for link in &mut cold.links {
+                link.id.zeroize();
+                if let Some(label) = &mut link.label { label.zeroize(); }
+                if let Some(help) = &mut link.help { help.zeroize(); }
+            }
+            cold.links.clear();
+            cold.rings.clear();
+            cold.advance_in = None;
+            cold.live = None;
+        }
     }
     if input.is_some_and(|i| i.edit.is_hidden_multiline()) && let Some(t) = text {
         // The fixed mask stays one line even in a field narrower than twelve bullets.
@@ -246,16 +248,16 @@ fn prepare_text(
         && t.redacted
     {
         t.case = None;
-        if !t.secure_revealed {
+        if !t.cold.secure_revealed {
             t.conceal();
         }
     }
-    if let Some(t) = text && t.live.is_some() {
+    if let Some(t) = text && t.cold.live.is_some() {
         assert!(input.is_none() && !t.redacted && !t.wrap && t.spans.is_empty() && t.reveal < 0.0 && !t.truncate,
             "live_text requires plain single-line text; use truncate_fade for overflow");
     }
     if input.is_none()
-        && text.as_ref().is_some_and(|t| t.redacted || t.case.is_some() || !t.rings.is_empty())
+        && text.as_ref().is_some_and(|t| t.redacted || t.case.is_some() || !t.cold.rings.is_empty())
         && let Some(t) = text
     {
         t.apply_case();
@@ -267,9 +269,9 @@ fn prepare_text(
     }
     let measure = text.as_ref().map(|t| t.shape.map_or(0, |s| s.1) ^ u64::from(t.wrap) ^ (u64::from(t.truncate || t.truncate_fade) << 1)
         ^ ((t.max_lines as u64) << 2)
-        ^ (u64::from(input.is_some_and(|i| i.edit.is_revealed()) || t.secure_revealed) << 3)
+        ^ (u64::from(input.is_some_and(|i| i.edit.is_revealed()) || t.cold.secure_revealed) << 3)
         ^ (u64::from(t.wrap_anywhere) << 4)
-        ^ t.advance_in.as_ref().map_or(0, |(run, at)| run.hash.rotate_left(3) ^ (*at as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15)));
+        ^ t.cold.advance_in.as_ref().map_or(0, |(run, at)| run.hash.rotate_left(3) ^ (*at as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15)));
     // Secure leaves remeasure without retaining a content-derived dictionary oracle.
     let secure_measure = text.as_ref().is_some_and(|t| t.redacted);
     let measure = if secure_measure { Some(0) } else { measure };

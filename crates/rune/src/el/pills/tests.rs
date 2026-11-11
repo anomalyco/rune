@@ -22,7 +22,7 @@ fn pills_record_sorted_chips_and_skip_bad_ranges() {
         (0..body.len() + 1, PillStyle::new()),
     ]);
     let t = e.text.as_ref().unwrap();
-    let got: Vec<(u32, u32, Option<Color>, Option<Color>)> = t.pills.iter().map(|p| (p.start, p.end, p.bg, p.fg)).collect();
+    let got: Vec<(u32, u32, Option<Color>, Option<Color>)> = t.cold.pills.iter().map(|p| (p.start, p.end, p.bg, p.fg)).collect();
     assert_eq!(got, [(agent.start as u32, agent.end as u32, None, Some(INK)), (file.start as u32, file.end as u32, Some(CHIP), None)]);
 }
 
@@ -39,7 +39,7 @@ fn a_pill_colours_its_label_and_keeps_it_through_later_spans() {
 #[test]
 fn a_field_ignores_static_pills() {
     let e = text_input(&TextEdit::new("ask @reviewer"), TextStyle::new(14.0, 400.0)).pill(4..13, PillStyle::new().fg(INK));
-    assert!(e.text.as_ref().unwrap().pills.is_empty());
+    assert!(e.text.as_ref().unwrap().cold.pills.is_empty());
 }
 
 #[test]
@@ -142,7 +142,7 @@ mod live {
         let mut rt = runtime("ask @reviewer", &[4..13], 400.0);
         let pilled = |rt: &Runtime<S>| {
             let n = rt.nodes.iter().find(|n| n.key.as_deref() == Some("t")).unwrap();
-            n.text.as_ref().unwrap().pills.iter().map(|p| p.start..p.end).collect::<Vec<_>>()
+            n.text.as_ref().unwrap().cold.pills.iter().map(|p| p.start..p.end).collect::<Vec<_>>()
         };
         let mut w = rect(&rt)[2];
         for more in [" to", " look at", " the é diff"] {

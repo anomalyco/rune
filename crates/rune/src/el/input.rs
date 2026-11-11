@@ -181,7 +181,7 @@ impl El {
             self.sync_input_pills();
             self.sync_input_rich();
         } else if let Some(text) = &mut self.text {
-            text.secure_revealed = revealed;
+            text.cold.secure_revealed = revealed;
         }
         self
     }

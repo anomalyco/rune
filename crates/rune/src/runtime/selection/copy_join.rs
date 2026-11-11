@@ -31,18 +31,18 @@ impl CopyJoin {
             if beside {
                 lead.push('\t');
             } else {
-                let want = usize::from(self.after.max(spec.copy_breaks[0]).max(1));
+                let want = usize::from(self.after.max(spec.cold.copy_breaks[0]).max(1));
                 let have = self.out.bytes().rev().take_while(|&b| b == b'\n').count();
                 lead.extend(std::iter::repeat_n('\n', want.saturating_sub(have)));
             }
         }
-        let prefix = spec.copy_prefix.as_deref().filter(|_| from_start(spec, &range)).unwrap_or("");
+        let prefix = spec.cold.copy_prefix.as_deref().filter(|_| from_start(spec, &range)).unwrap_or("");
         if self.pieces == 0 {
             self.first_prefix = prefix.len();
         }
         lead.push_str(prefix);
         self.pieces += 1;
-        self.after = spec.copy_breaks[1];
+        self.after = spec.cold.copy_breaks[1];
         if self.out.len() + lead.len() > cap {
             return true;
         }
@@ -68,6 +68,6 @@ impl CopyJoin {
 /// `range` takes `spec` from its first copied byte.
 fn from_start(spec: &TextSpec, range: &Range<usize>) -> bool {
     let len = spec.content.len();
-    let first = if spec.uncopied.is_empty() { 0 } else { trim_uncopied(&spec.uncopied, (0, len)).0 };
+    let first = if spec.cold.uncopied.is_empty() { 0 } else { trim_uncopied(&spec.cold.uncopied, (0, len)).0 };
     !range.is_empty() && range.start <= first
 }

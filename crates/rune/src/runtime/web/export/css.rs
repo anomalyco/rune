@@ -261,7 +261,7 @@ pub(super) fn text_html(spec: &TextSpec) -> String {
     let content = &spec.content;
     let mut cuts: Vec<usize> = vec![0, content.len()];
     for s in &spec.spans { cuts.extend([s.start as usize, s.end as usize]); }
-    for l in &spec.links { cuts.extend([l.start as usize, l.end as usize]); }
+    for l in &spec.cold.links { cuts.extend([l.start as usize, l.end as usize]); }
     cuts.retain(|&c| c <= content.len() && content.is_char_boundary(c));
     cuts.sort_unstable();
     cuts.dedup();
@@ -269,10 +269,10 @@ pub(super) fn text_html(spec: &TextSpec) -> String {
     let mut open_link: Option<usize> = None;
     for w in cuts.windows(2) {
         let (a, b) = (w[0], w[1]);
-        let link = spec.links.iter().position(|l| (l.start as usize) <= a && b <= l.end as usize);
+        let link = spec.cold.links.iter().position(|l| (l.start as usize) <= a && b <= l.end as usize);
         if link != open_link {
             if open_link.is_some() { out.push_str("</a>"); }
-            if let Some(k) = link { let _ = write!(out, "<a href=\"{}\">", escape(&spec.links[k].id)); }
+            if let Some(k) = link { let _ = write!(out, "<a href=\"{}\">", escape(&spec.cold.links[k].id)); }
             open_link = link;
         }
         let piece = escape(&content[a..b]);

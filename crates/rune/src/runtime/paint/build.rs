@@ -711,7 +711,7 @@ impl<S: 'static> Runtime<S> {
             let glyphs_clear = rounded.is_some_and(|(mask, radii)| {
                 self.text_clip(i, (r, r_exact), sc, clip).is_some_and(|(text, ..)| inside_rounded(text, mask, radii))
             });
-            isolate |= open_cache || (rounded.is_some() && (n.text.as_ref().is_some_and(|t| (t.truncate_fade || t.live.is_some()) && !glyphs_clear)
+            isolate |= open_cache || (rounded.is_some() && (n.text.as_ref().is_some_and(|t| (t.truncate_fade || t.cold.live.is_some()) && !glyphs_clear)
                 || n.input.as_ref().is_some_and(|i| i.single_line)));
             // A soft clip fades each primitive on its own, so where one paints over another (an
             // image over its placeholder fill, a label over its bubble) the one beneath shows

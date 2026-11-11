@@ -165,12 +165,12 @@ fn round1(v: f32) -> f32 { (v * 10.0).round() / 10.0 }
 pub(crate) fn clean_slice(spec: &crate::el::TextSpec, a: usize, b: usize) -> String {
     let a = a.min(spec.content.len());
     let b = b.min(spec.content.len()).max(a);
-    if spec.uncopied.is_empty() {
+    if spec.cold.uncopied.is_empty() {
         return spec.content[a..b].to_owned();
     }
     let mut out = String::with_capacity(b - a);
     let mut cur = a;
-    for &(ua, ub) in &spec.uncopied {
+    for &(ua, ub) in &spec.cold.uncopied {
         let (ua, ub) = (ua as usize, ub as usize);
         if ub <= cur || ua >= b { continue; }
         let stop = ua.max(cur).min(b);
@@ -182,13 +182,13 @@ pub(crate) fn clean_slice(spec: &crate::el::TextSpec, a: usize, b: usize) -> Str
 }
 
 fn text_runs(path: &str, spec: &crate::el::TextSpec) -> Vec<A11yRun> {
-    if spec.links.is_empty() {
+    if spec.cold.links.is_empty() {
         let t = clean_slice(spec, 0, spec.content.len());
         return if t.is_empty() { Vec::new() } else { vec![A11yRun { text: t, href: None, path: None, link: None }] };
     }
     let mut out = Vec::new();
     let mut at = 0usize;
-    for (idx, link) in spec.links.iter().enumerate() {
+    for (idx, link) in spec.cold.links.iter().enumerate() {
         let (la, lb) = ((link.start as usize).min(spec.content.len()), (link.end as usize).min(spec.content.len()));
         if la > at {
             let before = clean_slice(spec, at, la);
@@ -532,7 +532,7 @@ impl<S: 'static> Runtime<S> {
             Some("a11y_link") => {
                 let Some(k) = event["link"].as_u64().and_then(|n| usize::try_from(n).ok()) else { return false };
                 let Some(i) = self.live(path) else { return false };
-                if self.nodes[i].text.as_ref().is_none_or(|t| k >= t.links.len()) { return false; }
+                if self.nodes[i].text.as_ref().is_none_or(|t| k >= t.cold.links.len()) { return false; }
                 self.queue.push(Action::Link(path.to_owned(), k));
                 true
             }

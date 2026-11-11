@@ -1,49 +1,73 @@
 //! [`TextSpec`]: what a text element shows and how it lays out.
+use crate::cold::{Cold, Empty};
 use crate::color::Color;
 use crate::el::{Align, LinkFn, LinkSecondaryFn};
 use crate::text::{Link, Span};
 use crate::tok::TextStyle;
 
+/// A text element's record. What most texts set stays inline; what few set (links, rings,
+/// pills, copy rules, a run to measure in, live text) waits behind `cold`, allocated on the
+/// first write, so building a plain text allocates one small block.
 #[derive(Clone)]
 pub struct TextSpec {
     pub content: String,
     pub style: TextStyle,
     pub color: Color,
-    /// `color` came from [`El::color`](crate::El::color); without it the text takes the
-    /// window's foreground ([`Cx::foreground`](crate::Cx::foreground)) when the view sets one.
-    pub(crate) inked: bool,
-    pub align: Align,
     pub spans: Vec<Span>,
-    /// Wrap at the element's width (its height follows the text).
-    pub wrap: bool,
+    /// Wrapped lines shown before "…" ends the last (see [`El::max_lines`](crate::El::max_lines)); 0 for all.
+    pub(crate) max_lines: usize,
+    /// The scale's bits and [`crate::text::shape_key`] at it, once the content is final (see
+    /// [`TextSpec::key_shape`]).
+    pub(crate) shape: Option<(u32, u64)>,
+    /// The authored string once `case` has replaced `content` with the drawn one.
+    pub(crate) source: Option<Box<crate::text::CaseSource>>,
+    pub(crate) cold: Cold<TextCold>,
     /// Streaming word reveal: words that arrive after mount fade in over this many seconds
     /// (negative: no reveal tracking).
     pub reveal: f32,
+    /// The `truncate_fade` edge's width in ems (see [`El::truncate_fade_width`](crate::El::truncate_fade_width)).
+    pub(crate) fade_em: f32,
+    pub align: Align,
+    /// `color` came from [`El::color`](crate::El::color); without it the text takes the
+    /// window's foreground ([`Cx::foreground`](crate::Cx::foreground)) when the view sets one.
+    pub(crate) inked: bool,
+    /// Wrap at the element's width (its height follows the text).
+    pub wrap: bool,
     /// One line, cut with an ellipsis when wider than the element.
     pub truncate: bool,
     /// Which part `truncate` cuts (see [`El::truncate_middle`](crate::El::truncate_middle)).
     pub(crate) elide: Elide,
-    /// Wrapped lines shown before "…" ends the last (see [`El::max_lines`](crate::El::max_lines)); 0 for all.
-    pub(crate) max_lines: usize,
     /// Fade the overflowing trailing edge rather than replacing text with an ellipsis.
     pub truncate_fade: bool,
-    /// The `truncate_fade` edge's width in ems (see [`El::truncate_fade_width`](crate::El::truncate_fade_width)).
-    pub(crate) fade_em: f32,
     /// Spread wrapped lines to fill the width (see [`El::justify`](crate::El::justify)).
     pub justify: bool,
+    /// See [`El::text_case`](crate::El::text_case); applied when the element is laid out.
+    pub(crate) case: Option<crate::TextCase>,
+    /// See [`El::selectable`](crate::El::selectable).
+    pub(crate) selectable: bool,
+    pub(crate) redacted: bool,
+    pub(crate) wrap_anywhere: bool,
+    /// See [`El::exact_lines`](crate::El::exact_lines): the height is its lines' own, unrounded,
+    /// unless [`El::rounded_lines`](crate::El::rounded_lines) rounds it to device pixels.
+    pub(crate) exact_lines: bool,
+    /// Lays out with a right-to-left paragraph direction: the element's resolved `El::dir`,
+    /// set when it's flattened.
+    pub(crate) flow: Option<crate::el::Flow>,
+    /// See [`El::dir_by_paragraph`](crate::El::dir_by_paragraph): the text lays out in the
+    /// direction of its own first strong character, whatever `flow` is.
+    pub(crate) plaintext: bool,
+}
+
+/// What few texts set: written through `TextSpec::cold`, which allocates it on the first write.
+#[derive(Clone)]
+pub(crate) struct TextCold {
     /// Plain live run. Layout is measured from the authored placeholder before latching it.
-    pub live: Option<crate::LiveText>,
+    pub(crate) live: Option<crate::LiveText>,
     pub(crate) links: Vec<Link>,
     pub(crate) on_link: Option<LinkFn>,
     pub(crate) on_link_secondary: Option<LinkSecondaryFn>,
     /// Measured as its slice at this byte of the run (see [`El::advance_in`](crate::El::advance_in)).
-    pub advance_in: Option<(crate::text::Run, usize)>,
-    /// See [`El::text_case`](crate::El::text_case); applied when the element is laid out.
-    pub(crate) case: Option<crate::TextCase>,
-    /// The authored string once `case` has replaced `content` with the drawn one.
-    pub(crate) source: Option<Box<crate::text::CaseSource>>,
-    /// See [`El::selectable`](crate::El::selectable).
-    pub(crate) selectable: bool,
+    pub(crate) advance_in: Option<(crate::text::Run, usize)>,
     /// See [`El::selection_color`](crate::El::selection_color).
     pub(crate) selection: Color,
     /// See [`El::selection_style`](crate::El::selection_style): it takes over `selection`.
@@ -66,29 +90,79 @@ pub struct TextSpec {
     pub(crate) blocks: Vec<crate::edit::Block>,
     /// Line indices (`> 0`) created by `Shift+Return` (`<br>`).
     pub(crate) soft_breaks: Vec<u32>,
-    /// Visual palette for rich block and inline decorations.
     /// [`Mark::Pill`](crate::Mark::Pill) chips in `content`, sorted.
     pub(crate) pills: Vec<crate::text::PillChip>,
     /// See [`El::pill_colors`](crate::El::pill_colors).
     pub(crate) pill_colors: Option<(Color, Option<Color>)>,
-    pub(crate) rich_style: crate::edit::RichStyle,
-    pub(crate) redacted: bool,
+    /// Visual palette for rich block and inline decorations; the default's when unset.
+    pub(crate) rich_style: Option<crate::edit::RichStyle>,
     pub(crate) secure_revealed: bool,
-    pub(crate) wrap_anywhere: bool,
-    /// See [`El::exact_lines`](crate::El::exact_lines): the height is its lines' own, unrounded,
-    /// unless [`El::rounded_lines`](crate::El::rounded_lines) rounds it to device pixels.
-    pub(crate) exact_lines: bool,
-    /// Lays out with a right-to-left paragraph direction: the element's resolved `El::dir`,
-    /// set when it's flattened.
-    pub(crate) flow: Option<crate::el::Flow>,
-    /// See [`El::dir_by_paragraph`](crate::El::dir_by_paragraph): the text lays out in the
-    /// direction of its own first strong character, whatever `flow` is.
-    pub(crate) plaintext: bool,
-    /// The scale's bits and [`crate::text::shape_key`] at it, once the content is final (see
-    /// [`TextSpec::key_shape`]).
-    pub(crate) shape: Option<(u32, u64)>,
 }
 
+impl Empty for TextCold {
+    const EMPTY: &'static Self = &TextCold {
+        live: None,
+        links: Vec::new(),
+        on_link: None,
+        on_link_secondary: None,
+        advance_in: None,
+        selection: crate::el::DEFAULT_SELECTION,
+        selection_style: None,
+        uncopied: Vec::new(),
+        copy_breaks: [1, 1],
+        copy_prefix: None,
+        rings: Vec::new(),
+        span_radius: crate::text::SPAN_RADIUS,
+        strikes: Vec::new(),
+        highlights: Vec::new(),
+        blocks: Vec::new(),
+        soft_breaks: Vec::new(),
+        pills: Vec::new(),
+        pill_colors: None,
+        rich_style: None,
+        secure_revealed: false,
+    };
+}
+
+#[cfg(target_pointer_width = "64")]
+const _: () = assert!(std::mem::size_of::<TextSpec>() == 224);
+
+impl TextSpec {
+    /// A plain text showing `content`, in the body style.
+    pub(crate) fn new(content: String) -> TextSpec {
+        TextSpec {
+            content,
+            style: crate::tok::type_::BODY,
+            color: Color::WHITE,
+            spans: Vec::new(),
+            max_lines: 0,
+            shape: None,
+            source: None,
+            cold: Cold::NONE,
+            reveal: -1.0,
+            fade_em: crate::el::TRUNCATE_FADE_EM,
+            align: Align::Start,
+            inked: false,
+            wrap: false,
+            truncate: false,
+            elide: Elide::End,
+            truncate_fade: false,
+            justify: false,
+            case: None,
+            selectable: false,
+            redacted: false,
+            wrap_anywhere: false,
+            exact_lines: true,
+            flow: None,
+            plaintext: false,
+        }
+    }
+
+    /// The palette its rich decorations draw in.
+    pub(crate) fn rich_style(&self) -> crate::edit::RichStyle {
+        self.cold.rich_style.unwrap_or_default()
+    }
+}
 impl std::fmt::Debug for TextSpec {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TextSpec")
@@ -136,7 +210,7 @@ impl TextSpec {
 
     /// [`crate::text::shape_key`] of this text in its direction.
     pub(crate) fn fresh_shape_key(&self, scale: f32) -> u64 {
-        let key = crate::text::shape_key(&self.content, &self.spans, self.style, scale, self.wrap_anywhere, &self.pills);
+        let key = crate::text::shape_key(&self.content, &self.spans, self.style, scale, self.wrap_anywhere, &self.cold.pills);
         crate::text::directed(key, self.base())
     }
 
@@ -177,7 +251,7 @@ impl TextSpec {
         }
         let mut out = String::new();
         let mut at = start;
-        for &(a, b) in self.uncopied.iter().filter(|r| r.1 > start && r.0 < end) {
+        for &(a, b) in self.cold.uncopied.iter().filter(|r| r.1 > start && r.0 < end) {
             if a > at { out.push_str(self.source_slice(at, a)?); }
             at = at.max(b);
         }
@@ -191,7 +265,7 @@ impl TextSpec {
         if !self.redacted {
             return;
         }
-        self.secure_revealed = false;
+
         self.shape = None;
         let mask = if self.content.is_empty() {
             String::new()
@@ -206,13 +280,16 @@ impl TextSpec {
         }
         self.case = None;
         self.spans.clear();
-        self.links.clear();
-        self.rings.clear();
-        self.strikes.clear();
-        self.blocks.clear();
-        self.soft_breaks.clear();
-        self.pills.clear();
-        self.uncopied.clear();
+        if let Some(cold) = self.cold.get_mut_if_some() {
+            cold.secure_revealed = false;
+            cold.links.clear();
+            cold.rings.clear();
+            cold.strikes.clear();
+            cold.blocks.clear();
+            cold.soft_breaks.clear();
+            cold.pills.clear();
+            cold.uncopied.clear();
+        }
         self.wrap = false;
         self.wrap_anywhere = false;
         self.max_lines = 0;
@@ -228,11 +305,11 @@ impl TextSpec {
         }
         // Ring boundaries need distinct brushes even when the surrounding styles match.
         // Do this once before shaping, not once per glyph run at paint time.
-        if !self.rings.is_empty() {
+        if !self.cold.rings.is_empty() {
             let mut spans = Vec::new();
             for span in &self.spans {
                 let mut bounds = vec![span.start, span.end];
-                for &(a, b, _, _) in &self.rings {
+                for &(a, b, _, _) in &self.cold.rings {
                     bounds.extend([a, b].into_iter().filter(|&p| span.start < p && p < span.end));
                 }
                 bounds.sort_unstable();
@@ -246,20 +323,22 @@ impl TextSpec {
         for span in &mut self.spans {
             (span.start, span.end) = (source.shown(span.start, false), source.shown(span.end, true));
         }
-        for link in &mut self.links {
-            (link.start, link.end) = (source.shown(link.start, false), source.shown(link.end, true));
-        }
-        for r in &mut self.uncopied {
-            *r = (source.shown(r.0, false), source.shown(r.1, true));
-        }
-        for r in &mut self.rings {
-            (r.0, r.1) = (source.shown(r.0, false), source.shown(r.1, true));
-        }
-        for r in &mut self.strikes {
-            (r.0, r.1) = (source.shown(r.0, false), source.shown(r.1, true));
-        }
-        for h in &mut self.highlights {
-            (h.start, h.end) = (source.shown(h.start, false), source.shown(h.end, true));
+        if let Some(cold) = self.cold.get_mut_if_some() {
+            for link in &mut cold.links {
+                (link.start, link.end) = (source.shown(link.start, false), source.shown(link.end, true));
+            }
+            for r in &mut cold.uncopied {
+                *r = (source.shown(r.0, false), source.shown(r.1, true));
+            }
+            for r in &mut cold.rings {
+                (r.0, r.1) = (source.shown(r.0, false), source.shown(r.1, true));
+            }
+            for r in &mut cold.strikes {
+                (r.0, r.1) = (source.shown(r.0, false), source.shown(r.1, true));
+            }
+            for h in &mut cold.highlights {
+                (h.start, h.end) = (source.shown(h.start, false), source.shown(h.end, true));
+            }
         }
         self.content = shown;
         self.source = Some(Box::new(source));

@@ -270,7 +270,7 @@ impl<S: 'static> Runtime<S> {
     pub(super) fn unit_in(&self, i: usize, at: usize, unit: Unit) -> (usize, usize) {
         let r = unit_at(self.content_of(i), at, unit);
         match (unit, &self.nodes[i].text) {
-            (Unit::Word, Some(t)) if !t.uncopied.is_empty() => trim_uncopied(&t.uncopied, r),
+            (Unit::Word, Some(t)) if !t.cold.uncopied.is_empty() => trim_uncopied(&t.cold.uncopied, r),
             _ => r,
         }
     }
@@ -482,8 +482,8 @@ impl<S: 'static> Runtime<S> {
             None => n.path.clone(),
         };
         let len = self.content_of(i).len();
-        let (full_a, full_b) = n.text.as_ref().filter(|t| !t.uncopied.is_empty())
-            .map_or((0, len), |t| trim_uncopied(&t.uncopied, (0, len)));
+        let (full_a, full_b) = n.text.as_ref().filter(|t| !t.cold.uncopied.is_empty())
+            .map_or((0, len), |t| trim_uncopied(&t.cold.uncopied, (0, len)));
         let whole = !range.is_empty() && len > 0 && range.start <= full_a && range.end >= full_b;
         let text = n.text.as_ref().and_then(|t| t.copy_slice(range.start as u32, range.end as u32)).unwrap_or_default();
         let content = self.content_of(i).get(range.clone()).unwrap_or_default().to_owned();

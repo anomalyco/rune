@@ -348,7 +348,7 @@ pub(super) fn lay_out_text_in_place(text: &mut TextSystem, n: &mut Node, scale: 
 pub(super) fn lay_out_text(text: &mut TextSystem, n: &mut Node, w: f32, scale: f32) {
     let Some(spec) = &n.text else { return };
     // A cell of a run draws from the run's layout (and keeps it cached) instead of its own.
-    let run = spec.advance_in.as_ref().map(|(run, at)| (text.run_layout(run, spec.style, scale), *at));
+    let run = spec.cold.advance_in.as_ref().map(|(run, at)| (text.run_layout(run, spec.style, scale), *at));
     if let Some((r, _)) = run.filter(|(r, at)| r.x(*at).is_some()) {
         n.text_layout = Some(r.layout.clone());
         n.cold_mut().run_layout = Some(r);

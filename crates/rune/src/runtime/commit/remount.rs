@@ -47,7 +47,7 @@ impl<S: 'static> Runtime<S> {
             return false;
         }
         if !self.nodes.iter().all(|n| {
-            relayout::reusable(n) && n.text.as_ref().is_none_or(|t| !t.redacted && t.live.is_none())
+            relayout::reusable(n) && n.text.as_ref().is_none_or(|t| !t.redacted && t.cold.live.is_none())
         }) {
             return false;
         }

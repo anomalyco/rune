@@ -200,7 +200,7 @@ impl<S: 'static> Runtime<S> {
             }
             let rest_origin = [origin[0] - off[0], origin[1] - off[1]];
             // Paragraph block backgrounds, quote bars and list markers.
-            if spec.blocks.iter().any(|&b| b != crate::edit::Block::Paragraph) {
+            if spec.cold.blocks.iter().any(|&b| b != crate::edit::Block::Paragraph) {
                 emit_block_decorations(
                     &mut self.instances,
                     &mut self.text,
@@ -231,7 +231,7 @@ impl<S: 'static> Runtime<S> {
                 let departing = self.flights.iter().any(|f| f.departs(&n.path, n.key.as_deref())
                     && f.alphas(f.destination, now, self.reduced_motion).0 > 0.0);
                 if e.text.is_empty() && e.preedit().is_none() && !inp.placeholder.is_empty() && !departing {
-                    let pl_indent = spec.blocks.first().map_or(0.0, |b| (b.indent_pt(spec.style.size) * s).round() * tk);
+                    let pl_indent = spec.cold.blocks.first().map_or(0.0, |b| (b.indent_pt(spec.style.size) * s).round() * tk);
                     // A one-line field's placeholder stays on its line, cut by the field's clip, as its
                     // text does; a multi-line field's wraps at its width.
                     let wrap = (!inp.single_line).then(|| (w - pl_indent).max(1.0) / tk.max(1e-4));
@@ -303,28 +303,28 @@ impl<S: 'static> Runtime<S> {
                 }
             }
             // Span backgrounds (inline code), strikethroughs, a selection over them, then glyphs.
-            let reveal = self.reveals.get(&n.id).filter(|st| !st.words.is_empty() && spec.advance_in.is_none());
+            let reveal = self.reveals.get(&n.id).filter(|st| !st.words.is_empty() && spec.cold.advance_in.is_none());
             self.deco_scratch.clear();
             let mut pill_icons = Vec::new();
-            let pill_bg = spec.pill_colors.map_or(spec.rich_style.link.alpha(0.2), |(bg, _)| bg);
+            let pill_bg = spec.cold.pill_colors.map_or(spec.rich_style().link.alpha(0.2), |(bg, _)| bg);
             let d_origin = if scale_motion == ScaleMotion::Still && tk == 1.0 { rest_origin } else { [0.0, 0.0] };
-            crate::text::pill_chips(layout, &spec.pills, spec.style.size, s, d_origin, pill_bg, &mut self.deco_scratch, &mut pill_icons);
+            crate::text::pill_chips(layout, &spec.cold.pills, spec.style.size, s, d_origin, pill_bg, &mut self.deco_scratch, &mut pill_icons);
             // Elided text draws its decorations over the drawn string's offsets.
             let drawn_spans = n.elided.map(|e| e.spans(&spec.spans));
             let spans = drawn_spans.as_deref().unwrap_or(&spec.spans);
-            let drawn_rings = n.elided.map(|e| e.rings(&spec.rings));
-            self.text.decorations_with_rings(layout, spans, drawn_rings.as_deref().unwrap_or(&spec.rings), spec.span_radius, s, d_origin, &mut self.deco_scratch);
+            let drawn_rings = n.elided.map(|e| e.rings(&spec.cold.rings));
+            self.text.decorations_with_rings(layout, spans, drawn_rings.as_deref().unwrap_or(&spec.cold.rings), spec.cold.span_radius, s, d_origin, &mut self.deco_scratch);
             let drawn_len = n.elided.map_or(spec.content.len(), |e| e.drawn_len(spec.content.len()));
-            if !spec.highlights.is_empty() {
-                let drawn = n.elided.map(|e| e.highlights(&spec.highlights));
-                self.text.highlight_decorations(layout, drawn.as_deref().unwrap_or(&spec.highlights), drawn_len, s, d_origin, &mut self.deco_scratch);
+            if !spec.cold.highlights.is_empty() {
+                let drawn = n.elided.map(|e| e.highlights(&spec.cold.highlights));
+                self.text.highlight_decorations(layout, drawn.as_deref().unwrap_or(&spec.cold.highlights), drawn_len, s, d_origin, &mut self.deco_scratch);
             }
-            if !spec.strikes.is_empty() {
-                let drawn = n.elided.map(|e| e.strikes(&spec.strikes));
-                self.text.strike_decorations(layout, spans, drawn.as_deref().unwrap_or(&spec.strikes), color, s, d_origin, &mut self.deco_scratch);
+            if !spec.cold.strikes.is_empty() {
+                let drawn = n.elided.map(|e| e.strikes(&spec.cold.strikes));
+                self.text.strike_decorations(layout, spans, drawn.as_deref().unwrap_or(&spec.cold.strikes), color, s, d_origin, &mut self.deco_scratch);
             }
             link_fx.decos(layout, drawn_len, s, d_origin, &mut self.deco_scratch);
-            if !spec.rings.is_empty() || spec.highlights.iter().any(|h| h.ring.is_some()) {
+            if !spec.cold.rings.is_empty() || spec.cold.highlights.iter().any(|h| h.ring.is_some()) {
                 // Adjacent backgrounds overlap by bg_pad. Paint ringed chips after
                 // plain fills so a neighboring fill cannot erase an inset edge;
                 // keep underlines above both. No sorting on the ringless path.
@@ -359,7 +359,7 @@ impl<S: 'static> Runtime<S> {
                 }
                 self.instances.push(inst);
             }
-            let pill_fg = spec.pill_colors.and_then(|(_, fg)| fg).unwrap_or(color);
+            let pill_fg = spec.cold.pill_colors.and_then(|(_, fg)| fg).unwrap_or(color);
             for (icon, px, at, fg) in pill_icons {
                 let pill_fg = fg.unwrap_or(pill_fg);
                 let at = [
@@ -375,9 +375,9 @@ impl<S: 'static> Runtime<S> {
                 }
             }
             let mut bare = Vec::new();
-            crate::text::bare_icons(layout, &spec.pills, s, d_origin, &mut bare);
+            crate::text::bare_icons(layout, &spec.cold.pills, s, d_origin, &mut bare);
             for (k, at, px) in bare {
-                let pill = &spec.pills[k];
+                let pill = &spec.cold.pills[k];
                 let Some(b) = pill.bare.as_deref() else { continue };
                 let at = [
                     rest_origin[0] + (at[0] - d_origin[0]) * tk + glide[0],
@@ -418,7 +418,7 @@ impl<S: 'static> Runtime<S> {
             if spec.selectable {
                 // A mark keeps the active selection's highlight, whatever the window's focus, and
                 // the glyphs their own ink, as a custom highlight's background does.
-                let highlight = spec.selection_style.map_or(spec.selection, |st| st.pick(true).0);
+                let highlight = spec.cold.selection_style.map_or(spec.cold.selection, |st| st.pick(true).0);
                 let fill = premul(highlight, o, srgb);
                 for &(_, a, b) in mark_ranges.iter().filter(|m| m.0 == i) {
                     let laid = |a, b| n.elided.map_or((a, b), |e| e.range(a, b));
@@ -428,7 +428,7 @@ impl<S: 'static> Runtime<S> {
             if spec.selectable && let Some((a, b)) = selectable::range_in(sel_ranges, i) {
                 let (a, b) = n.elided.map_or((a, b), |e| e.range(a, b));
                 // `::selection` with a colour recolours the selected glyphs, as a field's does.
-                let (highlight, ink) = spec.selection_style.map_or((spec.selection, None), |st| st.pick(self.window_focused != Some(false)));
+                let (highlight, ink) = spec.cold.selection_style.map_or((spec.cold.selection, None), |st| st.pick(self.window_focused != Some(false)));
                 selectable::push_selection(&mut self.instances, layout, a, b, origin, tk, premul(highlight, o, srgb), s, clip, fade);
                 if let Some(c) = ink {
                     selected_ink = Some((a, b, premul(c, o, srgb)));
@@ -439,9 +439,9 @@ impl<S: 'static> Runtime<S> {
             let origin = rest_origin;
             self.text.set_glide(glide);
             let r_origin = if scale_motion == ScaleMotion::Still { origin } else { [0.0, 0.0] };
-            let has_hl_fg = spec.highlights.iter().any(|h| h.fg.is_some());
+            let has_hl_fg = spec.cold.highlights.iter().any(|h| h.fg.is_some());
             // A cell of a longer run draws its slice of the run's glyphs, shaped in context.
-            let zoom = if let (Some(r), Some((_, at))) = (&n.run_layout, &spec.advance_in)
+            let zoom = if let (Some(r), Some((_, at))) = (&n.run_layout, &spec.cold.advance_in)
                 && let Some(x) = r.x(*at)
             {
                 self.text.glyphs_in(r, *at, s, [r_origin[0] - x, r_origin[1]], &mut self.glyph_scratch);
@@ -498,7 +498,7 @@ impl<S: 'static> Runtime<S> {
                     f = c;
                 }
                 if has_hl_fg
-                    && let Some(c) = spec.highlights.iter().rev().find_map(|h| {
+                    && let Some(c) = spec.cold.highlights.iter().rev().find_map(|h| {
                         let (a, b) = n.elided.map_or((h.start as usize, h.end as usize), |e| e.mark(h.start as usize, h.end as usize, false));
                         ((q.byte as usize) >= a && (q.byte as usize) < b).then_some(h.fg).flatten()
                     })
@@ -537,7 +537,7 @@ impl<S: 'static> Runtime<S> {
         let s = self.env.scale;
         let n = &self.nodes[i];
         let (Some(spec), Some(layout)) = (&n.text, &n.text_layout) else { return None };
-        if !(spec.truncate_fade || spec.live.is_some()) { return None; }
+        if !(spec.truncate_fade || spec.cold.live.is_some()) { return None; }
         let ins = n.inset.map(|v| v * sc * s);
         let mut bounds = [r[0] + ins[0], r[1] + ins[1], r[2] - ins[2], r[3] - ins[3]];
         // Layout width already includes display scale `s`; bounds also include the

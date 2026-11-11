@@ -23,10 +23,10 @@ fn texts_carry_one_shape_key_that_names_their_cached_layout() {
         let s = spec(&rt, key).clone();
         let (bits, shape) = s.shape.unwrap_or_else(|| panic!("{key} has no shape key"));
         assert_eq!(bits, 2f32.to_bits());
-        assert_eq!(shape, crate::text::shape_key(&s.content, &s.spans, s.style, 2.0, s.wrap_anywhere, &s.pills));
+        assert_eq!(shape, crate::text::shape_key(&s.content, &s.spans, s.style, 2.0, s.wrap_anywhere, &s.cold.pills));
         assert_eq!(s.shape_key(1.0), None, "a key at another scale isn't reused");
         let keyed = rt.text.layout_for_spec(&s, 2.0, Some(300.0), parley::Alignment::Start);
-        let unkeyed = rt.text.layout_blocks_inner(&s.content, &s.spans, &s.blocks, &s.pills, s.style, 2.0, Some(300.0), parley::Alignment::Start, s.wrap_anywhere, true);
+        let unkeyed = rt.text.layout_blocks_inner(&s.content, &s.spans, &s.cold.blocks, &s.cold.pills, s.style, 2.0, Some(300.0), parley::Alignment::Start, s.wrap_anywhere, true);
         assert!(Rc::ptr_eq(&keyed, &unkeyed), "{key}");
     }
     assert_eq!(spec(&rt, "cased").content, "CASED");

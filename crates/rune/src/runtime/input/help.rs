@@ -266,10 +266,10 @@ impl<S: 'static> Runtime<S> {
     /// `rect` and clipped to `clip` (points, x0 y0 x1 y1), after the first `seq` hits.
     pub(super) fn push_link_help_hits(&mut self, i: usize, rect: [f32; 4], clip: [f32; 4], seq: usize) {
         let Some(t) = self.nodes[i].text.as_ref() else { return };
-        if !t.links.iter().any(|l| l.help.is_some()) { return; }
+        if !t.cold.links.iter().any(|l| l.help.is_some()) { return; }
         let id = self.nodes[i].id;
         for (k, r) in self.link_boxes(i, rect) {
-            if self.nodes[i].text.as_ref().and_then(|t| t.links.get(k)).is_none_or(|l| l.help.is_none()) { continue; }
+            if self.nodes[i].text.as_ref().and_then(|t| t.cold.links.get(k)).is_none_or(|l| l.help.is_none()) { continue; }
             let c = [r[0].max(clip[0]), r[1].max(clip[1]), r[2].min(clip[2]), r[3].min(clip[3])];
             if c[2] > c[0] && c[3] > c[1] { self.help.hits.push((id, c, seq, Some(k))); }
         }
@@ -278,7 +278,7 @@ impl<S: 'static> Runtime<S> {
     /// The help text of node `i`, or of its link `link`.
     fn help_text(&self, i: usize, link: Option<usize>) -> Option<&String> {
         match link {
-            Some(k) => self.nodes[i].text.as_ref()?.links.get(k)?.help.as_ref(),
+            Some(k) => self.nodes[i].text.as_ref()?.cold.links.get(k)?.help.as_ref(),
             None => self.nodes[i].help.as_ref(),
         }
     }

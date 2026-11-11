@@ -42,7 +42,7 @@ fn plain_field_leaves_format_chords_to_the_app() {
     // A field with no formatting lays out as plain text: no spans, blocks or soft breaks.
     let n = rt.nodes.iter().find(|n| n.key.as_deref() == Some("f")).unwrap();
     let t = n.text.as_ref().unwrap();
-    assert!(t.spans.is_empty() && t.blocks.is_empty() && t.soft_breaks.is_empty() && t.strikes.is_empty());
+    assert!(t.spans.is_empty() && t.cold.blocks.is_empty() && t.cold.soft_breaks.is_empty() && t.cold.strikes.is_empty());
 }
 
 #[test]

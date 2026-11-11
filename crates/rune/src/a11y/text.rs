@@ -107,9 +107,9 @@ impl<S: 'static> Runtime<S> {
             }
             if let Some(sel) = self.a11y_selection(i, &lines) { out[me].1.set_text_selection(sel); }
         }
-        if spec.links.is_empty() || spec.redacted { return; }
+        if spec.cold.links.is_empty() || spec.redacted { return; }
         let boxes = self.link_boxes(i, self.drawn_box(i));
-        for (k, l) in spec.links.iter().enumerate() {
+        for (k, l) in spec.cold.links.iter().enumerate() {
             let Some(r) = boxes.iter().filter(|(j, _)| *j == k).fold(None, |u: Option<[f32; 4]>, (_, r)| {
                 Some(u.map_or(*r, |u| [u[0].min(r[0]), u[1].min(r[1]), u[2].max(r[2]), u[3].max(r[3])]))
             }) else { continue };
@@ -127,9 +127,9 @@ impl<S: 'static> Runtime<S> {
                 x1: round(r[2] + w.shift[0]), y1: round(r[3] + w.shift[1]),
             });
             if self.allowed(i) {
-                if spec.on_link.is_some() { link.add_action(Ak::Click); }
+                if spec.cold.on_link.is_some() { link.add_action(Ak::Click); }
                 if self.can_focus(i) { link.add_action(Ak::Focus); }
-                if spec.on_link_secondary.is_some() { link.add_action(Ak::ShowContextMenu); }
+                if spec.cold.on_link_secondary.is_some() { link.add_action(Ak::ShowContextMenu); }
             }
             let id = link_id(n.id, k);
             out[me].1.push_child(id);
