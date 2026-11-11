@@ -213,7 +213,7 @@ impl Win {
         // What it presented before it was hidden is gone, or never was: cloaked until it draws.
         #[cfg(target_os = "windows")]
         {
-            self.native.cloak.hold(&self.window, Instant::now() + READY_FALLBACK);
+            self.native.cloak.hold(&self.window, Instant::now() + READY_FALLBACK, false);
             self.request_redraw();
         }
         self.window.set_visible(true);
@@ -238,7 +238,7 @@ impl Win {
         self.window.set_visible(false);
         // Hidden before its frame: the next show cloaks it again.
         #[cfg(target_os = "windows")]
-        self.native.cloak.lift(&self.window);
+        self.native.cloak.hidden(&self.window);
     }
 
     /// Its last frame is on screen and nothing has asked for another since.
