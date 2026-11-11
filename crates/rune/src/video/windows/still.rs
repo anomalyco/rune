@@ -23,7 +23,7 @@ pub(super) fn open(source: &MediaSource, kind: Kind) -> Result<(Option<Still>, M
     let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
     let lib = mf::library()?;
     let opened = mf::open(lib, &lib.resolve(source)?, kind, Decode::Cpu, false)?;
-    let meta = Meta { duration: opened.duration, size: opened.picture.map(|p| p.natural), frame: opened.picture.map_or(1.0 / 30.0, |p| p.frame) };
+    let meta = Meta { duration: opened.duration, size: opened.picture.map(|p| p.natural), frame: opened.picture.map_or(1.0 / 30.0, |p| p.frame), sound: opened.has_sound };
     let still = match (opened.video, opened.picture) {
         (Some(video), Some(picture)) => Some(Still { reader: opened.reader, video, picture, current: None, next: None }),
         _ => None,

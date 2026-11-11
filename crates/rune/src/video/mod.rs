@@ -365,6 +365,11 @@ impl Player {
         self.read().duration
     }
     /// Display size in pixels (rotation applied), once a video loads. None for audio.
+    /// Whether the clip has a sound track it can play (a page's media controls grey the mute
+    /// button for one without); None until the clip's facts are read.
+    pub fn has_sound(&self) -> Option<bool> {
+        self.shared.ctl.lock().unwrap().meta.map(|m| m.sound)
+    }
     pub fn natural_size(&self) -> Option<(u32, u32)> {
         self.shared.ctl.lock().unwrap().size
     }
@@ -480,6 +485,8 @@ pub(crate) struct Meta {
     pub size: Option<(u32, u32)>,
     /// Seconds per frame, for snapping virtual time to whole frames.
     pub frame: f64,
+    /// The clip has a sound track the player can play.
+    pub sound: bool,
 }
 
 pub(crate) struct Shared {

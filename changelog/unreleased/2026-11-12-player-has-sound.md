@@ -1,0 +1,1 @@
+- **`Player::has_sound()` says whether a clip has a sound track it can play.** It's `None` until the clip's facts are read. Windows reads it from the Media Foundation reader's streams (an audio stream the reader can decode), macOS from the asset's audio tracks. A page's media controls grey their mute button for a clip without sound; an app can now do the same.

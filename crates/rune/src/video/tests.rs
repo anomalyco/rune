@@ -1,7 +1,7 @@
 use super::*;
 
 fn meta() -> Meta {
-    Meta { duration: 1.0, size: Some((64, 36)), frame: 0.25 }
+    Meta { duration: 1.0, size: Some((64, 36)), frame: 0.25, sound: false }
 }
 
 #[test]
@@ -91,7 +91,7 @@ fn the_waker_hears_each_state_change_once() {
     }));
     a.shared.settle(false);
     assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 0, "nothing changed yet");
-    a.shared.ctl.lock().unwrap().open(Ok(Meta { duration: 2.0, size: None, frame: 1.0 / 30.0 }));
+    a.shared.ctl.lock().unwrap().open(Ok(Meta { duration: 2.0, size: None, frame: 1.0 / 30.0, sound: false }));
     a.shared.settle(false);
     a.shared.settle(false);
     assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1);

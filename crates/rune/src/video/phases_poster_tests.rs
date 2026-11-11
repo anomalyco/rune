@@ -91,7 +91,7 @@ fn a_poster_for_an_older_paused_seek_neither_shows_nor_fails() {
 #[test]
 fn posters_for_repeated_seeks_to_one_time_all_show() {
     let mut c = Control::default();
-    let meta = Meta { duration: 1.0, size: Some((64, 36)), frame: 0.25 };
+    let meta = Meta { duration: 1.0, size: Some((64, 36)), frame: 0.25, sound: false };
     let (mut owed, mut shown) = (None, 0);
     for _ in 0..30 {
         step(&mut c, Event::Seek(0.3));
@@ -112,13 +112,13 @@ fn a_superseded_poster_keeps_the_clips_frame_timing() {
     step(&mut c, Event::Play);
     step(&mut c, Event::PlayerMade { created: Instant::now() });
     // The poster lands after the player took over, before its item is ready.
-    let sixty = Meta { duration: 1.0, size: Some((64, 36)), frame: 1.0 / 60.0 };
+    let sixty = Meta { duration: 1.0, size: Some((64, 36)), frame: 1.0 / 60.0, sound: false };
     assert!(step(&mut c, Event::PosterDone { attempt: stale, result: Ok(sixty) }).is_empty());
     let now = Instant::now();
     for effect in step(&mut c, Event::Item { item: Item::Ready, now }) {
         if effect == Effect::ReadFacts {
             // What a ready item reports, which has no frame timing of its own.
-            c.open(Ok(Meta { duration: 1.0, size: Some((64, 36)), frame: 1.0 / 30.0 }));
+            c.open(Ok(Meta { duration: 1.0, size: Some((64, 36)), frame: 1.0 / 30.0, sound: false }));
         }
     }
     step(&mut c, Event::Framed { shown: 0.0 });

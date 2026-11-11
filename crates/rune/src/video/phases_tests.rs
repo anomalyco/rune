@@ -768,7 +768,7 @@ impl Port for Fake {
             return Some((attempt, Err("load failed".into())));
         }
         self.kept = Some(done);
-        Some((attempt, Ok(Meta { duration: 1.0, size: Some((64, 36)), frame: 0.25 })))
+        Some((attempt, Ok(Meta { duration: 1.0, size: Some((64, 36)), frame: 0.25, sound: false })))
     }
     fn show_poster(&mut self, next_id: &mut dyn FnMut() -> u64) -> Result<(), String> {
         match (self.kept.take(), self.surface) {
@@ -815,7 +815,7 @@ impl Port for Fake {
         self.log.push(Cmd::Orient);
     }
     fn item_facts(&self) -> Meta {
-        Meta { duration: 2.0, size: Some((32, 18)), frame: 1.0 / 30.0 }
+        Meta { duration: 2.0, size: Some((32, 18)), frame: 1.0 / 30.0, sound: false }
     }
     fn alive(&self) -> bool {
         self.player
@@ -943,7 +943,7 @@ impl New {
             Sym::Rate(r) => self.send(Event::Rate(r)),
             Sym::Looping(l) => self.c.looping = l,
             Sym::Muted(m) => self.c.muted = m,
-            Sym::Open => self.c.open(Ok(Meta { duration: 1.0, size: Some((64, 36)), frame: 0.25 })),
+            Sym::Open => self.c.open(Ok(Meta { duration: 1.0, size: Some((64, 36)), frame: 0.25, sound: false })),
             Sym::OpenFails => self.c.open(Err("open failed".into())),
             Sym::Fail => self.c.fail("failed".into()),
             Sym::Clock(t) => self.c.advance_virtual(t),
