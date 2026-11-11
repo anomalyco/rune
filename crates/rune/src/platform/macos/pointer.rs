@@ -13,6 +13,9 @@ pub(crate) struct PointerState {
     regions: RefCell<Vec<[f32; 4]>>,
     pending: Cell<Option<(f32, f32)>>,
     hold: RefCell<Hold>,
+    /// The last press winit dispatched was one the hold had queued, so what the hold knows about
+    /// the button is about the press the runtime holds.
+    matched: Cell<bool>,
     last: Cell<Option<(f32, f32)>>,
     inside: Cell<bool>,
     display: Cell<Option<u32>>,
@@ -72,6 +75,7 @@ impl PointerState {
     /// winit dispatched a press or release: a lost release to land before it, and its point.
     pub(crate) fn take_edge(&self, down: bool) -> (Option<Point>, Option<Point>) {
         let point = self.step(Event::Dispatched { down });
+        if down { self.matched.set(point.is_some()); }
         (self.recovered_release.take(), point)
     }
     /// A lost release to land before a position winit or a sample is about to report.
@@ -92,8 +96,9 @@ impl PointerState {
         true
     }
     pub(crate) fn released(&self) { self.step(Event::Released); }
-    /// Whether the button is known to be up for the press the runtime holds.
-    pub(crate) fn button_up(&self) -> bool { self.hold.borrow().button_up() }
+    /// Whether the button is known to be up for the press the runtime holds. Not for a press the
+    /// hold didn't match: a stale Up ahead of it in the queue belongs to an earlier press.
+    pub(crate) fn button_up(&self) -> bool { self.matched.get() && self.hold.borrow().button_up() }
     fn observe_release(&self, buttons: usize, now: Instant, at: (f32, f32)) {
         self.step(Event::Sampled { button_down: buttons & 1 != 0, now, at });
     }
