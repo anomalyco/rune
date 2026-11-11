@@ -94,11 +94,15 @@ pub(super) struct Win {
 
 impl Win {
     /// Asks for a frame: now, or at the turn's end while the window paints (`Redraw`).
+    #[cfg_attr(feature = "frame-profile", track_caller)]
     pub(super) fn request_redraw(&self) { self.redraw_step(RedrawEvent::Ask(Instant::now())); }
 
+    #[cfg_attr(feature = "frame-profile", track_caller)]
     pub(super) fn redraw_step(&self, event: RedrawEvent) {
         let (next, effect) = self.redraw.get().step(event);
         self.redraw.set(next);
+        #[cfg(feature = "frame-profile")]
+        if matches!(event, RedrawEvent::Ask(_)) || effect != RedrawEffect::None { crate::frame::live_log::asked(std::panic::Location::caller()); }
         if effect == RedrawEffect::Request { self.window.request_redraw(); }
     }
 

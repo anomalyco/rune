@@ -182,6 +182,8 @@ impl<S: 'static> Host<S> {
         // It draws: the link starts, and still says draw at once.
         #[cfg(target_os = "macos")]
         if deferred && let Some(pacing) = &mut l.native.pacing { let _ = pacing.next_frame(); }
+        #[cfg(feature = "frame-profile")]
+        let fp_start = crate::frame::live_log::on().then(crate::frame::live_log::Stamp::now);
         let Some(surface) = l.surface.as_ref() else { return };
         let frame = match acquire(surface, gpu, &l.config, l.surface_ok, 1, &mut self.meter) {
             Ok(frame) => frame,
@@ -194,6 +196,8 @@ impl<S: 'static> Host<S> {
             Err(_) if hidden => { l.first_frame.missed(); l.backoff_step(BackoffEvent::HiddenMissed { preparing: l.first_frame.deadline().is_some(), now: Instant::now() }); self.frame_reports.skipped(); return; }
             Err(missed) => return self.missed_frame(missed, built.is_some()),
         };
+        #[cfg(feature = "frame-profile")]
+        let fp_acquired = fp_start.map(|_| crate::frame::live_log::Stamp::now());
         if !hidden && !self.rt.live_visible() && { let size = l.window.inner_size(); size.width > 0 && size.height > 0 } {
             // Uncovered after a missed frame said it was occluded.
             self.rt.set_live_visible(true);
@@ -280,6 +284,8 @@ impl<S: 'static> Host<S> {
         l.backoff_step(BackoffEvent::Presented);
         if hidden { l.hidden_pace.rendered(now); }
         let update_ms = now.elapsed().as_secs_f64() * 1000.0;
+        #[cfg(feature = "frame-profile")]
+        let fp_built = fp_start.map(|_| crate::frame::live_log::Stamp::now());
         sync_platform(l, rt, &mut self.secure_input, &mut self.ime_allowed, &self.clipboard);
         let target_format = if rt.srgb_blend() { l.config.format.remove_srgb_suffix() } else { l.config.format };
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
@@ -288,6 +294,8 @@ impl<S: 'static> Host<S> {
         });
         renderer.upload_images(&gpu.device, &gpu.queue, &mut rt.images);
         renderer.prepare_surfaces(&gpu.device, &gpu.queue, &rt.surfaces, (l.config.width, l.config.height));
+        #[cfg(feature = "frame-profile")]
+        let fp_uploaded = fp_start.map(|_| crate::frame::live_log::Stamp::now());
         let mut enc = gpu.device.create_command_encoder(&Default::default());
         let target = l.alpha.as_ref().map_or(&view, |a| &a.view);
         if let Some(c) = self.comp.as_mut() {
@@ -310,7 +318,11 @@ impl<S: 'static> Host<S> {
             renderer.draw(&mut enc, target, rt.clear_color());
         }
         if let Some(alpha) = &l.alpha { alpha.draw(&mut enc, &view); }
+        #[cfg(feature = "frame-profile")]
+        let fp_encoded = fp_start.map(|_| crate::frame::live_log::Stamp::now());
         renderer.submit(&gpu.queue, enc);
+        #[cfg(feature = "frame-profile")]
+        let fp_submitted = fp_start.map(|_| crate::frame::live_log::Stamp::now());
         crate::marks::mark_once(&FIRST_ENCODED, "frame.first.encoded");
         let encoded = self.frame_reports.stamp();
         l.window.pre_present_notify();
@@ -320,6 +332,15 @@ impl<S: 'static> Host<S> {
         gpu.queue.present(frame);
         crate::marks::presented();
         crate::render::gpu_events::presented();
+        #[cfg(feature = "frame-profile")]
+        let fp_frame = match (fp_start, fp_acquired, fp_built, fp_uploaded, fp_encoded, fp_submitted) {
+            (Some(start), Some(acquired), Some(built), Some(uploaded), Some(encoded), Some(submitted)) => Some(crate::frame::live_log::Frame {
+                start, acquired, built, uploaded, encoded, submitted, presented: crate::frame::live_log::Stamp::now(),
+                phases: crate::frame::profile::take(), nodes: rt.nodes.len(), shaped: rt.stats.shaped, instances: rt.instances.len(),
+                animating, why: std::mem::take(&mut rt.commit_why), next: 0, poll_due: None, loop_due: None, loops: Vec::new(),
+            }),
+            _ => None,
+        };
         // The frame reached the screen: a surface replaced by `replace_lost_surface` works, and
         // the next loss starts its retries over.
         l.surface_retries.worked();
@@ -369,14 +390,24 @@ impl<S: 'static> Host<S> {
         // link going; without one its timer waits a frame in `wake_deadline`.
         let next_tick = l.next_tick(now).filter(|_| !hidden);
         let rests = !hidden && !(self.trace.is_some() && self.args.frames.is_some());
+        #[cfg(feature = "frame-profile")]
+        #[allow(unused_mut)]
+        let mut fp_steady = 0u16;
         #[cfg(target_os = "windows")]
         {
             // A frame the run alone asked for changes nothing unless it draws something new.
             let changed = !l.steady.held_frame() || (self.comp.is_none() && !l.presented.as_ref().is_some_and(|p| p.same(rt, &l.config)));
+            #[cfg(feature = "frame-profile")]
+            { fp_steady = u16::from(l.steady.held_frame()) << 8 | u16::from(changed) << 9; }
             let event = if hidden { SteadyEvent::Ends } else { SteadyEvent::Drew { changed, focused: rt.has_window_focus(), now } };
             l.steady = l.steady.step(event).0;
         }
         self.idle = Presented::settle(&mut l.presented, rt, &l.config, animating || self.frame_move.is_some(), next_tick, rests, self.comp.is_some());
+        // Why the window draws again: each bit is one of `Presented::settle`'s reasons.
+        #[cfg(feature = "frame-profile")]
+        let fp_next = [animating, self.frame_move.is_some(), rt.needs_commit(), rt.stale() && !rt.needs_commit(), rt.has_pending_input(), rt.live_pending(),
+            rt.window_frame.is_some(), super::timer_wants_frame(rt, next_tick)]
+            .iter().enumerate().fold(fp_steady, |bits, (i, on)| bits | (u16::from(*on) << i));
         #[cfg(target_os = "macos")]
         if !hidden && let Some(latency) = l.native.launch_drawables.settle(self.idle, now) {
             l.config.desired_maximum_frame_latency = latency;
@@ -391,6 +422,16 @@ impl<S: 'static> Host<S> {
             let (steady, again) = l.steady.step(SteadyEvent::Rests { now });
             l.steady = steady;
             if again { l.request_redraw(); }
+            #[cfg(feature = "frame-profile")]
+            if again { fp_steady = 1 << 10; }
+        }
+        #[cfg(feature = "frame-profile")]
+        if let Some(mut f) = fp_frame {
+            f.next = fp_next | fp_steady & (1 << 10);
+            f.poll_due = rt.poll_wake_deadline().map(|d| d - rt.polled_at());
+            f.loop_due = rt.motion_wake_deadline().map(|d| d - rt.polled_at());
+            if f.loop_due.is_some() { f.loops = rt.fp_loops(); }
+            crate::frame::live_log::frame(f);
         }
         if !hidden && (!self.idle || (self.trace.is_some() && self.args.frames.is_some())) {
             // Without a running display link, macOS hands out drawables faster than the
