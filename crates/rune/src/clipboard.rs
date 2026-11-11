@@ -293,6 +293,17 @@ struct OwnPills {
     pills: Vec<(std::ops::Range<usize>, String)>,
 }
 
+/// The outside moments of a secret's write, in the order it reaches them: its delay starts, then
+/// its text is hashed, which takes a while for a large secret. Tests slow each one down.
+trait WriteSteps {
+    fn now(&self) -> Instant;
+    fn hashing(&self) {}
+}
+struct RealTime;
+impl WriteSteps for RealTime {
+    fn now(&self) -> Instant { Instant::now() }
+}
+
 /// The clipboard owner's bookkeeping, shared by the OS worker and the memory clipboard.
 #[derive(Default)]
 struct Core { keys: RandomState, seq: Seq, hold: Hold, alarm: Option<Alarm>, own_pills: Option<OwnPills> }
@@ -303,7 +314,7 @@ impl Core {
 
     fn handle<B: Backend>(&mut self, cb: &mut B, request: Request) {
         match request {
-            Request::Write(copy, notify) => self.write(cb, copy, notify, Instant::now),
+            Request::Write(copy, notify) => self.write(cb, copy, notify, &RealTime),
             Request::Clear(which) => self.clear(cb, which.as_ref()),
             Request::Read { purpose, reply, wake } => {
                 if let Some(answer) = self.answer(cb, purpose) && reply.send(answer).is_ok() { wake(); }
@@ -332,7 +343,7 @@ impl Core {
         Some(reply)
     }
 
-    fn write<B: Backend>(&mut self, cb: &mut B, copy: ClipboardWrite, notify: Option<Notify>, now: impl FnOnce() -> Instant) {
+    fn write<B: Backend>(&mut self, cb: &mut B, copy: ClipboardWrite, notify: Option<Notify>, steps: &dyn WriteSteps) {
         let slot = copy.slot().cloned();
         let notify = notify.filter(|_| slot.is_some());
         if slot.as_ref().is_some_and(|s| s.cancelled()) { return; } // `Unwritten` settles it as cleared.
@@ -359,8 +370,11 @@ impl Core {
             })
             .filter(|o| !o.pills.is_empty());
         if let (Some(delay), Some(slot)) = (copy.clear_after, slot) {
+            slot.set(SecretState::Holding);
+            let due = steps.now().checked_add(delay);
+            steps.hashing();
             let print = self.keys.hash_one(copy.content.text());
-            self.apply(cb, HoldEvent::Written { slot: slot.clone(), notify, due: now().checked_add(delay), revision: rev, print });
+            self.apply(cb, HoldEvent::Written { slot: slot.clone(), notify, due, revision: rev, print });
             if slot.cancelled() { self.clear(cb, Some(&slot)); }
         }
     }

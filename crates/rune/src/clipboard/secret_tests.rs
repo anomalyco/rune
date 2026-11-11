@@ -98,7 +98,7 @@ mod flags {
             Some(reply)
         }
 
-        pub fn write(&mut self, cb: &mut Fake, copy: Write, notify: Option<Notify>, now: &dyn Fn() -> Instant) {
+        pub fn write(&mut self, cb: &mut Fake, copy: Write, notify: Option<Notify>, steps: &dyn WriteSteps) {
             let slot = copy.slot().cloned();
             let notify = notify.filter(|_| slot.is_some());
             let cancelled = |slot: &Option<Arc<Slot>>| slot.as_ref().is_some_and(|s| s.cancel.load(Ordering::SeqCst));
@@ -130,9 +130,12 @@ mod flags {
                 self.held = Some(Held {
                     slot: slot.clone(),
                     notify: notify.clone(),
-                    deadline: now().checked_add(delay),
+                    deadline: steps.now().checked_add(delay),
                     revision: rev,
-                    print: self.keys.hash_one(copy.content.text()),
+                    print: {
+                        steps.hashing();
+                        self.keys.hash_one(copy.content.text())
+                    },
                 });
                 if let Some(n) = &notify { n.send(); }
                 if cancelled(&slot) { self.clear(cb, slot.as_ref()); }
@@ -186,6 +189,10 @@ enum Logged {
     Wrote(usize),
     Wiped(usize),
     Woke(usize, SecretState, SecretState),
+    /// A write read the clock, with what `S` and `T` reported then.
+    ReadClock(SecretState, SecretState),
+    /// A write began hashing its secret.
+    Hashing(SecretState, SecretState),
 }
 type Log = Arc<Mutex<Vec<Logged>>>;
 
@@ -245,7 +252,7 @@ trait Engine: Default {
     fn clear_now(copy: &Self::Copy);
     fn state(copy: &Self::Copy) -> SecretState;
     fn cancelled(copy: &Self::Copy) -> bool;
-    fn write(&mut self, cb: &mut Fake, write: Self::Write, notify: Notify, now: &dyn Fn() -> Instant);
+    fn write(&mut self, cb: &mut Fake, write: Self::Write, notify: Notify, steps: &dyn WriteSteps);
     fn tick(&mut self, cb: &mut Fake, now: Instant);
     fn read(&mut self, cb: &mut Fake) -> Option<Reply>;
     fn clear_held(&mut self, cb: &mut Fake);
@@ -263,7 +270,7 @@ impl Engine for Core {
     fn clear_now(copy: &SecretCopy) { copy.clear_now(); }
     fn state(copy: &SecretCopy) -> SecretState { copy.state() }
     fn cancelled(copy: &SecretCopy) -> bool { copy.0.cancelled() }
-    fn write(&mut self, cb: &mut Fake, write: ClipboardWrite, notify: Notify, now: &dyn Fn() -> Instant) { Core::write(self, cb, write, Some(notify), now); }
+    fn write(&mut self, cb: &mut Fake, write: ClipboardWrite, notify: Notify, steps: &dyn WriteSteps) { Core::write(self, cb, write, Some(notify), steps); }
     fn tick(&mut self, cb: &mut Fake, now: Instant) { self.tick_at(cb, now); }
     fn read(&mut self, cb: &mut Fake) -> Option<Reply> { self.answer(cb, Purpose::Read(1)) }
     fn clear_held(&mut self, cb: &mut Fake) { self.clear(cb, None); }
@@ -289,7 +296,7 @@ impl Engine for flags::Core {
     fn clear_now(copy: &flags::Copy) { copy.clear_now(); }
     fn state(copy: &flags::Copy) -> SecretState { lock(&copy.0.state).clone() }
     fn cancelled(copy: &flags::Copy) -> bool { copy.0.cancel.load(Ordering::SeqCst) }
-    fn write(&mut self, cb: &mut Fake, write: flags::Write, notify: Notify, now: &dyn Fn() -> Instant) { flags::Core::write(self, cb, write, Some(notify), now); }
+    fn write(&mut self, cb: &mut Fake, write: flags::Write, notify: Notify, steps: &dyn WriteSteps) { flags::Core::write(self, cb, write, Some(notify), steps); }
     fn tick(&mut self, cb: &mut Fake, now: Instant) { flags::Core::tick(self, cb, now); }
     fn read(&mut self, cb: &mut Fake) -> Option<Reply> { self.answer(cb, Purpose::Read(1)) }
     fn clear_held(&mut self, cb: &mut Fake) { self.clear(cb, None); }
@@ -309,6 +316,8 @@ enum Ev {
     WritePillsA,
     /// `S` to A, with the backend taking longer than the secret's delay.
     WriteSASlow,
+    /// `S` to A, with hashing it taking longer than its delay.
+    WriteSASlowHash,
     /// `S` to A, with `clear_now` landing during the backend write.
     WriteSACancelInWrite,
     /// `S` to A, with another app's copy landing right after the backend write.
@@ -336,6 +345,25 @@ enum Ev {
     DropWrites,
 }
 use Ev::*;
+
+/// The rig's clock, as a write sees it.
+struct Steps<'a, E: Engine> {
+    clock: &'a Cell<Instant>,
+    slow_hash: bool,
+    log: &'a Log,
+    s: &'a E::Copy,
+    t: &'a E::Copy,
+}
+impl<E: Engine> WriteSteps for Steps<'_, E> {
+    fn now(&self) -> Instant {
+        lock(self.log).push(Logged::ReadClock(E::state(self.s), E::state(self.t)));
+        self.clock.get()
+    }
+    fn hashing(&self) {
+        lock(self.log).push(Logged::Hashing(E::state(self.s), E::state(self.t)));
+        if self.slow_hash { self.clock.set(self.clock.get() + PAST_LONG); }
+    }
+}
 
 struct Rig<E: Engine> {
     boards: [Fake; 2],
@@ -401,12 +429,14 @@ impl<E: Engine> Rig<E> {
         self.alive[b]
     }
 
-    fn write(&mut self, b: usize, write: Option<E::Write>) {
+    fn write(&mut self, b: usize, write: Option<E::Write>) { self.write_with(b, write, false); }
+
+    fn write_with(&mut self, b: usize, write: Option<E::Write>, slow_hash: bool) {
         let Some(write) = write else { return };
         E::bind(&write, &self.queues[b].0);
         if !self.turn(b) { return; }
-        let clock = self.clock.clone();
-        self.engines[b].write(&mut self.boards[b], write, self.notify[b].clone(), &move || clock.get());
+        let steps = Steps::<E> { clock: &self.clock, slow_hash, log: &self.log, s: &self.s, t: &self.t };
+        self.engines[b].write(&mut self.boards[b], write, self.notify[b].clone(), &steps);
     }
 
     fn read(&mut self, b: usize) {
@@ -430,6 +460,7 @@ impl<E: Engine> Rig<E> {
                 self.write(0, self.s_write.clone());
                 self.boards[0].during_write = None;
             }
+            WriteSASlowHash => self.write_with(0, self.s_write.clone(), true),
             WriteSACancelInWrite => {
                 let s = self.s.clone();
                 self.boards[0].during_write = Some(Box::new(move |_| E::clear_now(&s)));
@@ -554,7 +585,7 @@ const COUNTS: [[bool; 2]; 2] = [[true, false], [false, true]];
 /// Writes and replays across boards against everything that can end a hold.
 const BOARDS: &[Ev] = &[WriteSA, WriteSB, WriteTA, ReadA, ReadB, CancelS, Timeout, OtherA, OtherB, ClearHeldA, ToggleFailA];
 /// Interruptions during a write, against what follows them on the same board.
-const IN_FLIGHT: &[Ev] = &[WriteSA, WriteSASlow, WriteSACancelInWrite, WriteSAOtherInWrite, WriteSACancelOtherInWrite, WriteSACancelInWake, ReadA, CancelS, Pump, OtherA, ToggleFailA, Timeout];
+const IN_FLIGHT: &[Ev] = &[WriteSA, WriteSASlow, WriteSASlowHash, WriteSACancelInWrite, WriteSAOtherInWrite, WriteSACancelOtherInWrite, WriteSACancelInWake, ReadA, CancelS, Pump, OtherA, ToggleFailA, Timeout];
 /// How a copy's life ends: shutdown, dropped writes, pills, a look-alike from another app.
 const ENDINGS: &[Ev] = &[WriteSA, WriteSB, WriteTA, WriteForeverA, WritePillsA, ReadA, CancelS, Pump, Timeout, OtherSameText, ShutdownA, DropWrites];
 
@@ -578,7 +609,7 @@ fn every_six_events_ending_a_copy_match_the_flags() {
 #[ignore]
 fn every_six_events_from_the_whole_alphabet_match_the_flags() {
     const ALL: &[Ev] = &[
-        WriteSA, WriteSB, WriteTA, WriteForeverA, WritePillsA, WriteSASlow, WriteSACancelInWrite, WriteSAOtherInWrite, WriteSACancelOtherInWrite, WriteSACancelInWake,
+        WriteSA, WriteSB, WriteTA, WriteForeverA, WritePillsA, WriteSASlow, WriteSASlowHash, WriteSACancelInWrite, WriteSAOtherInWrite, WriteSACancelOtherInWrite, WriteSACancelInWake,
         ReadA, ReadB, CancelS, Timeout, OtherA, OtherB, OtherSameText, ToggleFailA, ClearHeldA, ShutdownA, Pump, DropWrites,
     ];
     for counted in COUNTS { assert_eq!(exhaust(ALL, 6, counted), ALL.len().pow(6)); }
@@ -678,12 +709,31 @@ fn the_delay_starts_once_a_slow_write_is_done() {
 }
 
 #[test]
+fn the_delay_runs_while_the_secret_is_hashed() {
+    let rig = run(&[WriteSASlowHash, ReadA]);
+    assert_eq!(rig.reads[0].as_ref().map(|r| r.0.text()), Some(""));
+    assert_eq!((text_of(&rig.boards[0]), rig.s.state(), wipes(&rig, 0)), (None, SecretState::Cleared, 1));
+}
+
+#[test]
+fn a_write_reports_holding_then_starts_the_delay_then_hashes() {
+    let rig = run(&[WriteSA]);
+    let (holding, pending) = (SecretState::Holding, SecretState::Pending);
+    assert_eq!(*lock(&rig.log), [
+        Logged::Wrote(0),
+        Logged::ReadClock(holding.clone(), pending.clone()),
+        Logged::Hashing(holding.clone(), pending.clone()),
+        Logged::Woke(0, holding, pending),
+    ]);
+}
+
+#[test]
 fn a_hold_with_no_deadline_keeps_no_earlier_alarm() {
     let mut cb = Fake { id: 0, content: None, count: 0, counted: true, fail: None, log: Log::default(), during_write: None };
     let mut core = Core::default();
-    core.write(&mut cb, ClipboardWrite::secret("first".into(), LONG).0, None, Instant::now);
+    core.write(&mut cb, ClipboardWrite::secret("first".into(), LONG).0, None, &RealTime);
     assert!(core.alarm.is_some());
-    core.write(&mut cb, ClipboardWrite::secret("second".into(), Duration::MAX).0, None, Instant::now);
+    core.write(&mut cb, ClipboardWrite::secret("second".into(), Duration::MAX).0, None, &RealTime);
     assert!(core.alarm.is_none(), "a wrapped attempt could otherwise match it");
 }
 

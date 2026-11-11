@@ -180,7 +180,7 @@ impl Hold {
 }
 
 pub(super) enum HoldEvent {
-    /// A secret reached the clipboard.
+    /// A secret reached the clipboard and has been reported as holding it.
     Written { slot: Arc<Slot>, notify: Option<Notify>, due: Option<Instant>, revision: Option<u64>, print: u64 },
     /// A later write took its place, or the clipboard changed under it.
     Lost,
@@ -204,8 +204,7 @@ pub(super) fn step_hold(seq: &mut Seq, hold: &mut Hold, event: HoldEvent) -> Eff
         HoldEvent::Written { slot, notify, due, revision, print } => {
             let mut effects = release(hold, SecretState::Replaced);
             let attempt = seq.next();
-            *hold = Hold::Holding { attempt, slot: slot.clone(), notify: notify.clone(), due, revision, print };
-            effects.push(HoldEffect::Report(slot, SecretState::Holding));
+            *hold = Hold::Holding { attempt, slot, notify: notify.clone(), due, revision, print };
             effects.push(HoldEffect::Arm(due.map(|due| Alarm { attempt, due })));
             if let Some(notify) = notify { effects.push(HoldEffect::Notify(notify)); }
             effects
