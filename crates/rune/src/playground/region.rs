@@ -29,23 +29,9 @@ impl Region {
         }
     }
 
-    /// The column this region is, without the side column's slot.
-    pub(crate) fn column(self) -> Column {
-        match self {
-            Region::List => Column::List,
-            Region::Stage => Column::Stage,
-            Region::Side { .. } => Column::Side,
-        }
-    }
-
     /// Whether focus is on the side column's slot, whose view marks what its keys move.
     pub(crate) fn slot_focused(self) -> bool {
         matches!(self, Region::Side { slot_focused: true })
-    }
-
-    /// The side column's slot gives its keys back to the column.
-    fn release_slot(&mut self) {
-        if let Region::Side { slot_focused } = self { *slot_focused = false; }
     }
 }
 
@@ -67,13 +53,12 @@ pub(crate) enum Moved {
     /// it, so the focus it last saw stays as it was.
     Hold(Region),
     /// The route is over: `region` takes the keyboard again, and `back` is the focus it puts
-    /// back. `None` when the key left focus where its handler chose: the column keeps the
-    /// keyboard but not its slot, and the next look at focus gives it the column it landed in.
+    /// back. `None` when the key left focus where its handler chose: the next look at focus
+    /// gives the keyboard to the column it landed in.
     Resume { region: Region, back: Option<String> },
-    /// Focus moved to `focus`: into `column` (none when it left every column), onto the side
-    /// column's slot when `slot_focused`. `hover` when only a hover moved it, which takes no
-    /// keys.
-    Focus { focus: Option<String>, column: Option<Column>, slot_focused: bool, hover: bool },
+    /// Focus moved to `focus`: into `column`, onto the side column's slot when `slot_focused`.
+    /// `column` is none when it left every column or only a hover moved it, which takes no keys.
+    Focus { focus: Option<String>, column: Option<Column>, slot_focused: bool },
     /// Focus moved onto the side column's slot (`true`) or off it.
     Slot(bool),
     /// The playground closed: the list has the keyboard.
@@ -93,6 +78,11 @@ impl Keyboard {
         self.region
     }
 
+    /// Whether `focus` is the focus it last took, so a look at it has nothing to do.
+    pub(crate) fn saw(&self, focus: Option<&str>) -> bool {
+        self.seen.as_deref() == focus
+    }
+
     /// Applies `moved`; true when the region changed.
     pub(crate) fn step(&mut self, moved: Moved) -> bool {
         let before = self.region;
@@ -103,33 +93,22 @@ impl Keyboard {
             }
             Moved::Hold(region) => self.region = region,
             Moved::Resume { region, back } => {
-                self.region = match back {
-                    Some(back) => {
-                        self.seen = Some(back);
-                        region
-                    }
-                    // Focus wasn't put back, so nothing says the slot has it.
-                    None => Region::of(region.column(), false),
-                };
+                self.region = region;
+                if back.is_some() { self.seen = back; }
             }
             // Focus leaving every column keeps the one that has the keyboard, and a hover takes
-            // no keys: neither moves a column. Either way the side column's slot gives its keys
-            // back.
-            Moved::Focus { focus, column, slot_focused, hover } if self.seen != focus => {
+            // no keys: neither moves a column.
+            Moved::Focus { focus, column, slot_focused } if self.seen != focus => {
                 self.seen = focus;
-                match column {
-                    Some(column) if !hover => self.region = Region::of(column, slot_focused),
-                    _ => self.region.release_slot(),
-                }
+                if let Some(column) = column { self.region = Region::of(column, slot_focused); }
             }
+            Moved::Focus { .. } => {}
             // Only the side column's own slot takes its keys: a slot that comes into focus
             // while another column has them leaves that column alone.
-            Moved::Slot(true) => {
-                if let Region::Side { slot_focused } = &mut self.region { *slot_focused = true; }
+            Moved::Slot(slot) => {
+                if let Region::Side { slot_focused } = &mut self.region { *slot_focused = slot; }
             }
-            Moved::Slot(false) => self.region.release_slot(),
             Moved::Closed => self.region = Region::List,
-            Moved::Focus { .. } => {}
         }
         self.region != before
     }
@@ -143,6 +122,11 @@ impl<S: 'static> Live<S> {
     /// Whether the keyboard is on the side column's slot, whose view marks what its keys move.
     pub(super) fn side_active(&self) -> bool {
         self.keyboard.region().slot_focused()
+    }
+
+    /// Whether `focus` is the focus the keyboard last took.
+    pub(crate) fn saw_focus(&self, focus: Option<&str>) -> bool {
+        self.keyboard.saw(focus)
     }
 
     /// Moves the keyboard; true when the column changed, which redraws the columns' focus.
