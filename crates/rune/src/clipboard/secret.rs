@@ -195,7 +195,8 @@ pub(super) enum HoldEffect {
     Wipe,
     Report(Arc<Slot>, SecretState),
     Notify(Notify),
-    Arm(Alarm),
+    /// Replace the alarm being waited on: a new hold never inherits the last one's.
+    Arm(Option<Alarm>),
 }
 
 pub(super) fn step_hold(seq: &mut Seq, hold: &mut Hold, event: HoldEvent) -> Effects<HoldEffect> {
@@ -205,7 +206,7 @@ pub(super) fn step_hold(seq: &mut Seq, hold: &mut Hold, event: HoldEvent) -> Eff
             let attempt = seq.next();
             *hold = Hold::Holding { attempt, slot: slot.clone(), notify: notify.clone(), due, revision, print };
             effects.push(HoldEffect::Report(slot, SecretState::Holding));
-            if let Some(due) = due { effects.push(HoldEffect::Arm(Alarm { attempt, due })); }
+            effects.push(HoldEffect::Arm(due.map(|due| Alarm { attempt, due })));
             if let Some(notify) = notify { effects.push(HoldEffect::Notify(notify)); }
             effects
         }

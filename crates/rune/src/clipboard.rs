@@ -303,7 +303,7 @@ impl Core {
 
     fn handle<B: Backend>(&mut self, cb: &mut B, request: Request) {
         match request {
-            Request::Write(copy, notify) => self.write(cb, copy, notify, Instant::now()),
+            Request::Write(copy, notify) => self.write(cb, copy, notify, Instant::now),
             Request::Clear(which) => self.clear(cb, which.as_ref()),
             Request::Read { purpose, reply, wake } => {
                 if let Some(answer) = self.answer(cb, purpose) && reply.send(answer).is_ok() { wake(); }
@@ -332,7 +332,7 @@ impl Core {
         Some(reply)
     }
 
-    fn write<B: Backend>(&mut self, cb: &mut B, copy: ClipboardWrite, notify: Option<Notify>, now: Instant) {
+    fn write<B: Backend>(&mut self, cb: &mut B, copy: ClipboardWrite, notify: Option<Notify>, now: impl FnOnce() -> Instant) {
         let slot = copy.slot().cloned();
         let notify = notify.filter(|_| slot.is_some());
         if slot.as_ref().is_some_and(|s| s.cancelled()) { return; } // `Unwritten` settles it as cleared.
@@ -360,7 +360,7 @@ impl Core {
             .filter(|o| !o.pills.is_empty());
         if let (Some(delay), Some(slot)) = (copy.clear_after, slot) {
             let print = self.keys.hash_one(copy.content.text());
-            self.apply(cb, HoldEvent::Written { slot: slot.clone(), notify, due: now.checked_add(delay), revision: rev, print });
+            self.apply(cb, HoldEvent::Written { slot: slot.clone(), notify, due: now().checked_add(delay), revision: rev, print });
             if slot.cancelled() { self.clear(cb, Some(&slot)); }
         }
     }
@@ -375,7 +375,7 @@ impl Core {
                 }
                 HoldEffect::Report(slot, state) => slot.set(state),
                 HoldEffect::Notify(notify) => notify.send(),
-                HoldEffect::Arm(alarm) => self.alarm = Some(alarm),
+                HoldEffect::Arm(alarm) => self.alarm = alarm,
             }
         }
     }

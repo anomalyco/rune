@@ -1,11 +1,14 @@
 //! Every order of clipboard events, through the machines and through a transcription of the
 //! flags they replaced. The two have to agree on everything an app or another app can see.
+use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::atomic::AtomicUsize;
 use crate::machine::Effects;
 use super::secret::{Secret, SecretEffect, SecretEvent, step};
 use super::*;
 
 const LONG: Duration = Duration::from_secs(3600);
+const PAST_LONG: Duration = Duration::from_secs(3601);
 const SECRET: &str = "fixture-secret";
 const PILLS: &str = "a <span data-pill=\"agent:x\">@x</span> b";
 
@@ -95,7 +98,7 @@ mod flags {
             Some(reply)
         }
 
-        pub fn write(&mut self, cb: &mut Fake, copy: Write, notify: Option<Notify>, now: Instant) {
+        pub fn write(&mut self, cb: &mut Fake, copy: Write, notify: Option<Notify>, now: &dyn Fn() -> Instant) {
             let slot = copy.slot().cloned();
             let notify = notify.filter(|_| slot.is_some());
             let cancelled = |slot: &Option<Arc<Slot>>| slot.as_ref().is_some_and(|s| s.cancel.load(Ordering::SeqCst));
@@ -127,7 +130,7 @@ mod flags {
                 self.held = Some(Held {
                     slot: slot.clone(),
                     notify: notify.clone(),
-                    deadline: now.checked_add(delay),
+                    deadline: now().checked_add(delay),
                     revision: rev,
                     print: self.keys.hash_one(copy.content.text()),
                 });
@@ -236,13 +239,13 @@ trait Engine: Default {
     type Write: Clone;
     type Copy: Clone + 'static;
     type Queued;
-    fn secret(text: &str) -> (Self::Write, Self::Copy);
+    fn secret(text: &str, after: Duration) -> (Self::Write, Self::Copy);
     fn pills() -> Self::Write;
     fn bind(write: &Self::Write, queue: &mpsc::Sender<Self::Queued>);
     fn clear_now(copy: &Self::Copy);
     fn state(copy: &Self::Copy) -> SecretState;
     fn cancelled(copy: &Self::Copy) -> bool;
-    fn write(&mut self, cb: &mut Fake, write: Self::Write, notify: Notify, now: Instant);
+    fn write(&mut self, cb: &mut Fake, write: Self::Write, notify: Notify, now: &dyn Fn() -> Instant);
     fn tick(&mut self, cb: &mut Fake, now: Instant);
     fn read(&mut self, cb: &mut Fake) -> Option<Reply>;
     fn clear_held(&mut self, cb: &mut Fake);
@@ -254,13 +257,13 @@ impl Engine for Core {
     type Write = ClipboardWrite;
     type Copy = SecretCopy;
     type Queued = Request;
-    fn secret(text: &str) -> (ClipboardWrite, SecretCopy) { ClipboardWrite::secret(text.into(), LONG) }
+    fn secret(text: &str, after: Duration) -> (ClipboardWrite, SecretCopy) { ClipboardWrite::secret(text.into(), after) }
     fn pills() -> ClipboardWrite { ClipboardWrite::new(ClipboardContent::new("a @x b").with_html(PILLS)) }
     fn bind(write: &ClipboardWrite, queue: &mpsc::Sender<Request>) { write.bind(Route::System(queue.clone())); }
     fn clear_now(copy: &SecretCopy) { copy.clear_now(); }
     fn state(copy: &SecretCopy) -> SecretState { copy.state() }
     fn cancelled(copy: &SecretCopy) -> bool { copy.0.cancelled() }
-    fn write(&mut self, cb: &mut Fake, write: ClipboardWrite, notify: Notify, now: Instant) { Core::write(self, cb, write, Some(notify), now); }
+    fn write(&mut self, cb: &mut Fake, write: ClipboardWrite, notify: Notify, now: &dyn Fn() -> Instant) { Core::write(self, cb, write, Some(notify), now); }
     fn tick(&mut self, cb: &mut Fake, now: Instant) { self.tick_at(cb, now); }
     fn read(&mut self, cb: &mut Fake) -> Option<Reply> { self.answer(cb, Purpose::Read(1)) }
     fn clear_held(&mut self, cb: &mut Fake) { self.clear(cb, None); }
@@ -272,9 +275,9 @@ impl Engine for flags::Core {
     type Write = flags::Write;
     type Copy = flags::Copy;
     type Queued = Arc<flags::Slot>;
-    fn secret(text: &str) -> (flags::Write, flags::Copy) {
+    fn secret(text: &str, after: Duration) -> (flags::Write, flags::Copy) {
         let slot = Arc::new(flags::Slot::default());
-        let write = flags::Write { content: ClipboardContent::new(text), clear_after: Some(LONG), secret: Some(Arc::new(flags::Unwritten(slot.clone()))) };
+        let write = flags::Write { content: ClipboardContent::new(text), clear_after: Some(after), secret: Some(Arc::new(flags::Unwritten(slot.clone()))) };
         (write, flags::Copy(slot))
     }
     fn pills() -> flags::Write {
@@ -286,7 +289,7 @@ impl Engine for flags::Core {
     fn clear_now(copy: &flags::Copy) { copy.clear_now(); }
     fn state(copy: &flags::Copy) -> SecretState { lock(&copy.0.state).clone() }
     fn cancelled(copy: &flags::Copy) -> bool { copy.0.cancel.load(Ordering::SeqCst) }
-    fn write(&mut self, cb: &mut Fake, write: flags::Write, notify: Notify, now: Instant) { flags::Core::write(self, cb, write, Some(notify), now); }
+    fn write(&mut self, cb: &mut Fake, write: flags::Write, notify: Notify, now: &dyn Fn() -> Instant) { flags::Core::write(self, cb, write, Some(notify), now); }
     fn tick(&mut self, cb: &mut Fake, now: Instant) { flags::Core::tick(self, cb, now); }
     fn read(&mut self, cb: &mut Fake) -> Option<Reply> { self.answer(cb, Purpose::Read(1)) }
     fn clear_held(&mut self, cb: &mut Fake) { self.clear(cb, None); }
@@ -301,7 +304,11 @@ enum Ev {
     WriteSA,
     WriteSB,
     WriteTA,
+    /// A secret whose delay is too long for the clock, so it has no deadline.
+    WriteForeverA,
     WritePillsA,
+    /// `S` to A, with the backend taking longer than the secret's delay.
+    WriteSASlow,
     /// `S` to A, with `clear_now` landing during the backend write.
     WriteSACancelInWrite,
     /// `S` to A, with another app's copy landing right after the backend write.
@@ -338,12 +345,14 @@ struct Rig<E: Engine> {
     notify: [Notify; 2],
     s: E::Copy,
     t: E::Copy,
+    forever: E::Copy,
     s_write: Option<E::Write>,
     t_write: Option<E::Write>,
+    forever_write: Option<E::Write>,
     cancel_on_wake: Arc<AtomicBool>,
     log: Log,
     reads: [Option<(ClipboardContent, bool)>; 2],
-    now: Instant,
+    clock: Rc<Cell<Instant>>,
     fails: usize,
 }
 
@@ -351,8 +360,9 @@ impl<E: Engine> Rig<E> {
     fn new(counted: [bool; 2], start: Instant) -> Self
     where E::Copy: Send + Sync {
         let log = Log::default();
-        let (s_write, s) = E::secret(SECRET);
-        let (t_write, t) = E::secret("fixture-other");
+        let (s_write, s) = E::secret(SECRET, LONG);
+        let (t_write, t) = E::secret("fixture-other", LONG);
+        let (forever_write, forever) = E::secret("fixture-forever", Duration::MAX);
         let cancel_on_wake = Arc::new(AtomicBool::new(false));
         let board = |id| Fake { id, content: None, count: 0, counted: counted[id], fail: None, log: log.clone(), during_write: None };
         let notify = |id: usize| {
@@ -373,19 +383,21 @@ impl<E: Engine> Rig<E> {
             notify: [notify(0), notify(1)],
             s_write: Some(s_write),
             t_write: Some(t_write),
+            forever_write: Some(forever_write),
             s,
             t,
+            forever,
             cancel_on_wake,
             log,
             reads: [None, None],
-            now: start,
+            clock: Rc::new(Cell::new(start)),
             fails: 0,
         }
     }
 
     /// The worker's turn on board `b`: it looks at the clipboard before every request.
     fn turn(&mut self, b: usize) -> bool {
-        if self.alive[b] { self.engines[b].tick(&mut self.boards[b], self.now); }
+        if self.alive[b] { self.engines[b].tick(&mut self.boards[b], self.clock.get()); }
         self.alive[b]
     }
 
@@ -393,7 +405,8 @@ impl<E: Engine> Rig<E> {
         let Some(write) = write else { return };
         E::bind(&write, &self.queues[b].0);
         if !self.turn(b) { return; }
-        self.engines[b].write(&mut self.boards[b], write, self.notify[b].clone(), self.now);
+        let clock = self.clock.clone();
+        self.engines[b].write(&mut self.boards[b], write, self.notify[b].clone(), &move || clock.get());
     }
 
     fn read(&mut self, b: usize) {
@@ -409,7 +422,14 @@ impl<E: Engine> Rig<E> {
             WriteSA => self.write(0, self.s_write.clone()),
             WriteSB => self.write(1, self.s_write.clone()),
             WriteTA => self.write(0, self.t_write.clone()),
+            WriteForeverA => self.write(0, self.forever_write.clone()),
             WritePillsA => self.write(0, Some(E::pills())),
+            WriteSASlow => {
+                let clock = self.clock.clone();
+                self.boards[0].during_write = Some(Box::new(move |_| clock.set(clock.get() + PAST_LONG)));
+                self.write(0, self.s_write.clone());
+                self.boards[0].during_write = None;
+            }
             WriteSACancelInWrite => {
                 let s = self.s.clone();
                 self.boards[0].during_write = Some(Box::new(move |_| E::clear_now(&s)));
@@ -435,7 +455,7 @@ impl<E: Engine> Rig<E> {
             ReadA => self.read(0),
             ReadB => self.read(1),
             CancelS => E::clear_now(&self.s),
-            Timeout => self.now += LONG + Duration::from_secs(1),
+            Timeout => self.clock.set(self.clock.get() + PAST_LONG),
             OtherA => self.boards[0].other_app("theirs"),
             OtherB => self.boards[1].other_app("theirs"),
             OtherSameText => for board in &mut self.boards { board.other_app(SECRET); },
@@ -454,7 +474,7 @@ impl<E: Engine> Rig<E> {
                     if self.turn(b) { self.engines[b].run(&mut self.boards[b], request); }
                 }
             },
-            DropWrites => { self.s_write = None; self.t_write = None; }
+            DropWrites => { self.s_write = None; self.t_write = None; self.forever_write = None; }
         }
     }
 }
@@ -472,6 +492,8 @@ fn same(a: &Rig<Core>, b: &Rig<flags::Core>) -> Result<(), String> {
     if sa != sb { return differ("S reported", &sa, &sb); }
     let (ta, tb) = (Core::state(&a.t), <flags::Core as Engine>::state(&b.t));
     if ta != tb { return differ("T reported", &ta, &tb); }
+    let (fa, fb) = (Core::state(&a.forever), <flags::Core as Engine>::state(&b.forever));
+    if fa != fb { return differ("forever reported", &fa, &fb); }
     let (ca, cb) = (Core::cancelled(&a.s), <flags::Core as Engine>::cancelled(&b.s));
     if ca != cb { return differ("S cancelled", &ca, &cb); }
     let (la, lb) = (lock(&a.log), lock(&b.log));
@@ -532,9 +554,9 @@ const COUNTS: [[bool; 2]; 2] = [[true, false], [false, true]];
 /// Writes and replays across boards against everything that can end a hold.
 const BOARDS: &[Ev] = &[WriteSA, WriteSB, WriteTA, ReadA, ReadB, CancelS, Timeout, OtherA, OtherB, ClearHeldA, ToggleFailA];
 /// Interruptions during a write, against what follows them on the same board.
-const IN_FLIGHT: &[Ev] = &[WriteSA, WriteSACancelInWrite, WriteSAOtherInWrite, WriteSACancelOtherInWrite, WriteSACancelInWake, ReadA, CancelS, Pump, OtherA, ToggleFailA, Timeout];
+const IN_FLIGHT: &[Ev] = &[WriteSA, WriteSASlow, WriteSACancelInWrite, WriteSAOtherInWrite, WriteSACancelOtherInWrite, WriteSACancelInWake, ReadA, CancelS, Pump, OtherA, ToggleFailA, Timeout];
 /// How a copy's life ends: shutdown, dropped writes, pills, a look-alike from another app.
-const ENDINGS: &[Ev] = &[WriteSA, WriteSB, WriteTA, WritePillsA, ReadA, CancelS, Pump, Timeout, OtherSameText, ShutdownA, DropWrites];
+const ENDINGS: &[Ev] = &[WriteSA, WriteSB, WriteTA, WriteForeverA, WritePillsA, ReadA, CancelS, Pump, Timeout, OtherSameText, ShutdownA, DropWrites];
 
 #[test]
 fn every_six_events_across_boards_match_the_flags() {
@@ -556,7 +578,7 @@ fn every_six_events_ending_a_copy_match_the_flags() {
 #[ignore]
 fn every_six_events_from_the_whole_alphabet_match_the_flags() {
     const ALL: &[Ev] = &[
-        WriteSA, WriteSB, WriteTA, WritePillsA, WriteSACancelInWrite, WriteSAOtherInWrite, WriteSACancelOtherInWrite, WriteSACancelInWake,
+        WriteSA, WriteSB, WriteTA, WriteForeverA, WritePillsA, WriteSASlow, WriteSACancelInWrite, WriteSAOtherInWrite, WriteSACancelOtherInWrite, WriteSACancelInWake,
         ReadA, ReadB, CancelS, Timeout, OtherA, OtherB, OtherSameText, ToggleFailA, ClearHeldA, ShutdownA, Pump, DropWrites,
     ];
     for counted in COUNTS { assert_eq!(exhaust(ALL, 6, counted), ALL.len().pow(6)); }
@@ -644,6 +666,25 @@ fn cancel_latches_in_every_report_and_asks_for_a_clear_only_while_holding() {
             assert_eq!(effects, expected);
         }
     }
+}
+
+#[test]
+fn the_delay_starts_once_a_slow_write_is_done() {
+    let rig = run(&[WriteSASlow, ReadA]);
+    assert_eq!(rig.reads[0].as_ref().map(|r| r.0.text()), Some(SECRET));
+    assert_eq!(rig.s.state(), SecretState::Holding);
+    let rig = run(&[WriteSASlow, Timeout, ReadA]);
+    assert_eq!((text_of(&rig.boards[0]), rig.s.state()), (None, SecretState::Cleared));
+}
+
+#[test]
+fn a_hold_with_no_deadline_keeps_no_earlier_alarm() {
+    let mut cb = Fake { id: 0, content: None, count: 0, counted: true, fail: None, log: Log::default(), during_write: None };
+    let mut core = Core::default();
+    core.write(&mut cb, ClipboardWrite::secret("first".into(), LONG).0, None, Instant::now);
+    assert!(core.alarm.is_some());
+    core.write(&mut cb, ClipboardWrite::secret("second".into(), Duration::MAX).0, None, Instant::now);
+    assert!(core.alarm.is_none(), "a wrapped attempt could otherwise match it");
 }
 
 #[test]
