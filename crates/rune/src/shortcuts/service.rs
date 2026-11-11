@@ -279,6 +279,9 @@ impl Drop for Guard {
 }
 
 #[cfg(test)]
+mod lifecycle_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::{App, AppSpec, el};
