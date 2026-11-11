@@ -11,7 +11,7 @@ use windows::Win32::Media::MediaFoundation::*;
 use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW};
 use windows::Win32::System::Variant::VT_I8;
-use windows::core::{GUID, HRESULT, HSTRING, Interface, PCSTR, PCWSTR};
+use windows::core::{GUID, HRESULT, HSTRING, Interface, PCSTR};
 
 /// `MF_VERSION`: `MF_SDK_VERSION << 16 | MF_API_VERSION`.
 const MF_VERSION: u32 = 0x0002_0070;
@@ -22,14 +22,16 @@ type Startup = unsafe extern "system" fn(u32, u32) -> HRESULT;
 type CreateAttributes = unsafe extern "system" fn(*mut *mut core::ffi::c_void, u32) -> HRESULT;
 type CreateMediaType = unsafe extern "system" fn(*mut *mut core::ffi::c_void) -> HRESULT;
 type CreateDeviceManager = unsafe extern "system" fn(*mut u32, *mut *mut core::ffi::c_void) -> HRESULT;
-type CreateReaderFromUrl = unsafe extern "system" fn(PCWSTR, *mut core::ffi::c_void, *mut *mut core::ffi::c_void) -> HRESULT;
+type CreateResolver = unsafe extern "system" fn(*mut *mut core::ffi::c_void) -> HRESULT;
+type CreateReaderFromSource = unsafe extern "system" fn(*mut core::ffi::c_void, *mut core::ffi::c_void, *mut *mut core::ffi::c_void) -> HRESULT;
 
 /// The few flat Media Foundation entry points; everything else is COM.
 pub(super) struct Library {
     create_attributes: CreateAttributes,
     create_media_type: CreateMediaType,
     create_device_manager: CreateDeviceManager,
-    create_reader: CreateReaderFromUrl,
+    create_resolver: CreateResolver,
+    create_reader: CreateReaderFromSource,
 }
 
 static LIBRARY: OnceLock<Result<Library, String>> = OnceLock::new();
@@ -50,7 +52,8 @@ fn load() -> Result<Library, String> {
             create_attributes: symbol(plat, c"MFCreateAttributes").ok_or_else(missing)?,
             create_media_type: symbol(plat, c"MFCreateMediaType").ok_or_else(missing)?,
             create_device_manager: symbol(plat, c"MFCreateDXGIDeviceManager").ok_or_else(missing)?,
-            create_reader: symbol(rw, c"MFCreateSourceReaderFromURL").ok_or_else(missing)?,
+            create_resolver: symbol(plat, c"MFCreateSourceResolver").ok_or_else(missing)?,
+            create_reader: symbol(rw, c"MFCreateSourceReaderFromMediaSource").ok_or_else(missing)?,
         };
         // MFSTARTUP_FULL: the network source needs sockets.
         startup(MF_VERSION, 0).ok().map_err(|e| format!("Media Foundation didn't start: {}", e.message()))?;
@@ -95,10 +98,27 @@ impl Library {
         unsafe { (self.create_device_manager)(&mut token, &mut raw).ok().map_err(|e| e.message())?; Ok((IMFDXGIDeviceManager::from_raw(raw), token)) }
     }
 
-    fn reader(&self, url: &HSTRING, attributes: &IMFAttributes) -> Result<IMFSourceReader, String> {
+    /// Opens `source` as a media source: the file, or the first bytes of the URL, which say what
+    /// it holds. It needs no GPU, so it runs while the decoders' device comes up.
+    pub(super) fn resolve(&self, source: &MediaSource) -> Result<IMFMediaSource, String> {
+        let url = url(source)?;
         let mut raw = std::ptr::null_mut();
-        // SAFETY: as `attributes`; the reader takes its own references to the attributes.
-        unsafe { (self.create_reader)(PCWSTR(url.as_ptr()), attributes.as_raw(), &mut raw).ok().map_err(open_error)?; Ok(IMFSourceReader::from_raw(raw)) }
+        // SAFETY: as `attributes`; then a blocking resolve of the URL into an owned object.
+        unsafe {
+            (self.create_resolver)(&mut raw).ok().map_err(|e| e.message())?;
+            let resolver = IMFSourceResolver::from_raw(raw);
+            let flags = (MF_RESOLUTION_MEDIASOURCE | MF_RESOLUTION_CONTENT_DOES_NOT_HAVE_TO_MATCH_EXTENSION_OR_MIME_TYPE).0 as u32;
+            let (mut kind, mut object) = (MF_OBJECT_INVALID, None);
+            resolver.CreateObjectFromURL(&url, flags, None, &mut kind, &mut object).map_err(open_error)?;
+            object.ok_or("no media source")?.cast::<IMFMediaSource>().map_err(|e| e.message())
+        }
+    }
+
+    fn reader(&self, source: &IMFMediaSource, attributes: &IMFAttributes) -> Result<IMFSourceReader, String> {
+        let mut raw = std::ptr::null_mut();
+        // SAFETY: as `attributes`; the reader takes its own references to the source and the
+        // attributes, and shuts the source down when it goes.
+        unsafe { (self.create_reader)(source.as_raw(), attributes.as_raw(), &mut raw).ok().map_err(open_error)?; Ok(IMFSourceReader::from_raw(raw)) }
     }
 }
 
@@ -155,10 +175,9 @@ pub(super) enum Decode<'a> {
     Cpu,
 }
 
-/// Opens `source` and sets up the streams `kind` plays: for video the first video stream as
+/// Reads `source` and sets up the streams `kind` plays: for video the first video stream as
 /// NV12 and, when `audio`, the first audio stream as float; for audio only the audio stream.
-pub(super) fn open(lib: &Library, source: &MediaSource, kind: Kind, decode: Decode<'_>, audio: bool) -> Result<Opened, String> {
-    let url = url(source)?;
+pub(super) fn open(lib: &Library, source: &IMFMediaSource, kind: Kind, decode: Decode<'_>, audio: bool) -> Result<Opened, String> {
     let attributes = lib.attributes(4)?;
     // SAFETY: plain attribute writes on an object this thread owns.
     unsafe {
@@ -169,7 +188,7 @@ pub(super) fn open(lib: &Library, source: &MediaSource, kind: Kind, decode: Deco
         // Converts a decoder's other output (P010, YUY2, interlaced) to progressive NV12.
         attributes.SetUINT32(&MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING, 1).map_err(|e| e.message())?;
     }
-    let reader = lib.reader(&url, &attributes)?;
+    let reader = lib.reader(source, &attributes)?;
     // SAFETY: stream selection and type negotiation on the reader this thread made.
     unsafe {
         let _ = reader.SetStreamSelection(MF_SOURCE_READER_ALL_STREAMS.0 as u32, false);

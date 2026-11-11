@@ -31,7 +31,13 @@ struct Prepared {
     uniform: wgpu::Buffer,
     imported: Arc<Imported>,
     surface: NativeSurface,
+    /// Bind groups this draw made for other textures, newest last: a decoder cycles a few, so
+    /// a new picture in one it drew before binds with no allocation.
+    binds: Vec<([wgpu::Texture; 2], wgpu::BindGroup)>,
 }
+
+/// Bind groups a draw keeps for textures it may show again (a video decoder's ring).
+const KEPT_BINDS: usize = 8;
 
 // Metal has a small limit on live counter sample buffers. Keep one query set and lease
 // disjoint pairs until their deferred resolve/readback completes, rather than allocating
@@ -239,7 +245,8 @@ impl SurfaceRenderer {
         // Release an unsubmitted preparation before acquiring its replacement. Submitted
         // slots stay leased by their completion callbacks, including the deferred resolve.
         self.queries = None;
-        if !draws.is_empty() {
+        // GPU times only for a surface someone watches: resolving them costs a submission a frame.
+        if draws.iter().any(|d| d.surface.observed()) {
             self.queries = self.timing_pool.as_ref().and_then(TimingPool::take);
         }
         self.cache.retain(|key, _| draws.iter().any(|d| d.surface.key() == *key));
@@ -296,12 +303,25 @@ impl SurfaceRenderer {
                 sampling: [if exact { 1.0 } else { 0.0 }, f.size[0] as f32, f.size[1] as f32, if mirrored { 1.0 } else { 0.0 }],
                 orient: f.orient.0.map(f32::from),
             };
-            if let Some(p) = self.draws.get_mut(count).filter(|p| Arc::ptr_eq(&p.imported, &imported)) {
+            // The same draw with a new picture keeps its uniform buffer, and its bind group too
+            // when the picture is in textures it bound before.
+            if let Some(p) = self.draws.get_mut(count).filter(|p| p.surface.key() == d.surface.key() || Arc::ptr_eq(&p.imported, &imported)) {
                 *p.drawn.get_mut() = false;
                 match &self.staging {
                     Some(s) => s.write_buffer(&p.uniform, 0, bytemuck::bytes_of(&u)),
                     None => queue.write_buffer(&p.uniform, 0, bytemuck::bytes_of(&u)),
                 }
+                if !Arc::ptr_eq(&p.imported, &imported) && p.imported.textures != imported.textures {
+                    let old = std::mem::replace(&mut p.bind, match p.binds.iter().position(|(t, _)| *t == imported.textures) {
+                        Some(i) => p.binds.remove(i).1,
+                        None => bind_group(device, &self.layout, &self.sampler, &p.uniform, &imported.textures),
+                    });
+                    p.binds.push((p.imported.textures.clone(), old));
+                    if p.binds.len() > KEPT_BINDS {
+                        p.binds.remove(0);
+                    }
+                }
+                p.imported = imported;
                 p.before = d.before_instance;
                 p.surface = d.surface.clone();
             } else {
@@ -310,17 +330,7 @@ impl SurfaceRenderer {
                     contents: bytemuck::bytes_of(&u),
                     usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 });
-                let views = imported.textures.each_ref().map(|t| t.create_view(&Default::default()));
-                let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("video frame"),
-                    layout: &self.layout,
-                    entries: &[
-                        wgpu::BindGroupEntry { binding: 0, resource: uniform.as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&views[0]) },
-                        wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&views[1]) },
-                        wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&self.sampler) },
-                    ],
-                });
+                let bind = bind_group(device, &self.layout, &self.sampler, &uniform, &imported.textures);
                 let p = Prepared {
                     drawn: std::sync::atomic::AtomicBool::new(false),
                     before: d.before_instance,
@@ -328,6 +338,7 @@ impl SurfaceRenderer {
                     uniform,
                     imported,
                     surface: d.surface.clone(),
+                    binds: Vec::new(),
                 };
                 if count < self.draws.len() {
                     self.draws[count] = p;
@@ -614,6 +625,19 @@ fn upload(
         desc.size,
     );
     texture
+}
+fn bind_group(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, sampler: &wgpu::Sampler, uniform: &wgpu::Buffer, textures: &[wgpu::Texture; 2]) -> wgpu::BindGroup {
+    let views = textures.each_ref().map(|t| t.create_view(&Default::default()));
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("video frame"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry { binding: 0, resource: uniform.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&views[0]) },
+            wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&views[1]) },
+            wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(sampler) },
+        ],
+    })
 }
 fn texture_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {

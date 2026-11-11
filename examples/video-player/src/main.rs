@@ -3,7 +3,7 @@
 //! bar and waits for a tap, since audio is audible. With no argument it plays the four-frame
 //! test clip. `-- --snap out.png --at 0.6` renders the frame at 0.6 s headless.
 //!
-//! Keys: space plays or pauses, m mutes, l loops, left and right seek 5 s, 0 goes to the start,
+//! Keys: space plays or pauses, m mutes, v turns the volume to 0 and back, l loops, left and right seek 5 s, 0 goes to the start,
 //! h hides the clip (it stops drawing, as when scrolled away) and shows it again.
 
 use rune::tok::{self, type_};
@@ -55,6 +55,7 @@ fn on_key(s: &mut Viewer, event: &KeyEvent, _: &mut Tx) -> bool {
     match &event.key {
         Key::Text(t) if t == " " => toggle(s),
         Key::Text(t) if t == "m" => clip.set_muted(!clip.muted()),
+        Key::Text(t) if t == "v" => clip.set_volume(if clip.volume() > 0.0 { 0.0 } else { 1.0 }),
         Key::Text(t) if t == "l" => clip.set_looping(!clip.looping()),
         Key::Text(t) if t == "0" => clip.seek(0.0),
         Key::Text(t) if t == "h" => s.hidden = !s.hidden,

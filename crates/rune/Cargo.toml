@@ -176,7 +176,7 @@ xkbcommon = "0.9"
 # D3D12 shared textures for `NativeSurface` (`native_surface::windows`), on wgpu-hal's version.
 # Media Foundation, D3D11 and WASAPI for video playback (`video::windows`): COM interfaces only;
 # their DLLs load on the first clip, through `GetProcAddress`, so the import table gains nothing.
-windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Globalization", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D11", "Win32_Graphics_Direct3D12", "Win32_Graphics_DirectWrite", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_Graphics_Gdi", "Win32_Media_Audio", "Win32_Media_MediaFoundation", "Win32_Security", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_LibraryLoader", "Win32_System_Ole", "Win32_System_SystemServices", "Win32_System_Threading", "Win32_System_Variant"] }
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Globalization", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D11", "Win32_Graphics_Direct3D12", "Win32_Graphics_DirectWrite", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_Graphics_Gdi", "Win32_Media_Audio", "Win32_Media_MediaFoundation", "Win32_Security", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_LibraryLoader", "Win32_System_Ole", "Win32_System_SystemServices", "Win32_System_Threading", "Win32_System_Variant", "Win32_UI_Shell_PropertiesSystem"] }
 # `#[windows::core::implement]` (the OLE drop target, `platform::win32::drop_target`) names this crate.
 windows-core = "0.62"
 accesskit_windows = { version = "0.35.2", optional = true }

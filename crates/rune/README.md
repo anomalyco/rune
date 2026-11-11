@@ -1923,7 +1923,8 @@ BGRA and NV12 420v/420f are supported with BT.601/709 matrices and sRGB/709 tran
 attachments. Pixel-matched video uses exact texel loads at Retina scale.
 
 Per-draw notifications carry source frame ID, CPU submit time, completion-observed time,
-and optional GPU render-pass timestamp queries. These are **not presented-frame timestamps**:
+and optional GPU render-pass timestamp queries, read only while a drawn surface has an observer
+(`set_observer`): resolving them costs a submission a frame. These are **not presented-frame timestamps**:
 true presentation feedback needs the planned own Mac shell with CAMetalLayer /
 CAMetalDisplayLink. wgpu-hal 30 does not expose its acquired drawable, and wgpu 30
 forbids mixing normal encoding with the raw command-buffer completed-handler escape
@@ -1994,8 +1995,10 @@ tap.play();
   `duration`, `size`, `rate`, `looping`, `muted`, `error`) to video elements.
 - **Windows**: Media Foundation's source reader decodes each clip on a thread of its own, with
   the GPU's decoder (DXVA, through a D3D11 device on the adapter Rune draws with) where it has
-  one and in software otherwise. Each picture is copied on the GPU into a small ring of shared
-  NV12 textures that Rune's D3D12 device samples in place, ordered by fences: no CPU copy, and
+  one and in software otherwise. The source resolves while that device comes up. Each picture
+  is copied on the GPU into a small ring of shared NV12 textures, made as pictures need them (a
+  paused clip makes one), that Rune's D3D12 device samples in place, ordered by fences, with the
+  draw's bind group kept per texture: no CPU copy, and
   the UI thread only swaps the picture for the refresh the frame presents at (read from DWM's
   timing). A playing clip asks for the next frame when its next picture is due, not every
   refresh. A clip nobody draws stops decoding (its queue fills); a muted one picks up at its

@@ -131,7 +131,7 @@ pub(super) fn start(job: Job) -> Arc<Pipe> {
     pipe
 }
 
-/// RUNE_VIDEO_LOG=1 prints each open's steps in microseconds.
+/// `RUNE_VIDEO_LOG=1` prints each open's steps in microseconds.
 pub(super) fn logging() -> bool {
     log_level() > 0
 }
@@ -150,7 +150,17 @@ fn log_level() -> u8 {
     })
 }
 
-/// Microseconds from 	0 to now.
+/// A `RUNE_VIDEO_LOG` line, stamped with microseconds since the first.
+macro_rules! log {
+    ($($arg:tt)*) => {{
+        static T0: std::sync::OnceLock<crate::time::Instant> = std::sync::OnceLock::new();
+        let t0 = *T0.get_or_init(crate::time::Instant::now);
+        eprintln!("rune video {:>10} us: {}", t0.elapsed().as_micros(), format!($($arg)*));
+    }};
+}
+pub(super) use log;
+
+/// Microseconds from `t0` to now.
 pub(super) fn us(t0: Instant) -> u128 {
     t0.elapsed().as_micros()
 }
@@ -184,7 +194,7 @@ struct Decoder {
     /// Selected streams not at their end yet.
     video_open: bool,
     audio_open: bool,
-    /// For RUNE_VIDEO_LOG: microseconds to open, and each step's.
+    /// For `RUNE_VIDEO_LOG`: microseconds to open, and each step's.
     opened_us: u128,
     steps: String,
 }
@@ -196,13 +206,21 @@ impl Decoder {
         let t_mf = us(t0);
         crate::marks::mark("video.mf");
         let software = std::env::var_os("RUNE_VIDEO_DECODE").is_some_and(|v| v == "software");
-        let device = if job.kind == Kind::Video { gpu::device().ok() } else { None };
-        let t_device = us(t0);
+        // The decoders' D3D11 device (made once per process) comes up on a thread of its own
+        // while this one resolves the source: the two don't depend on each other.
+        let (device, source, t_device) = std::thread::scope(|s| {
+            let device = (job.kind == Kind::Video).then(|| s.spawn(|| (gpu::device().ok(), us(t0))));
+            let source = lib.resolve(&job.source);
+            let (device, t_device) = device.and_then(|d| d.join().ok()).unwrap_or((None, 0));
+            (device, source, t_device)
+        });
+        let source = source?;
+        let t_source = us(t0);
         crate::marks::mark("video.device");
         // Software decoding still uploads its pictures from this thread, not the UI's.
         let manager = device.as_ref().filter(|_| !software).map(|d| d.manager(lib)).transpose()?;
         let decode = manager.as_ref().map_or(Decode::Cpu, Decode::Gpu);
-        let opened = mf::open(lib, &job.source, job.kind, decode, true)?;
+        let opened = mf::open(lib, &source, job.kind, decode, true)?;
         let t_reader = us(t0);
         let duration = opened.duration;
         let picture = opened.picture;
@@ -217,7 +235,7 @@ impl Decoder {
         let meta = Meta { duration, size: picture.map(|p| p.natural), frame: picture.map_or(1.0 / 30.0, |p| p.frame) };
         let facts = Facts { meta, picture, sound: opened.sound, hardware, gpu: ring.is_some() };
         let opened_us = us(t0);
-        let steps = format!("Media Foundation at {t_mf}, D3D11 at {t_device}, reader at {t_reader}, ring at {opened_us}");
+        let steps = format!("Media Foundation at {t_mf}, D3D11 at {t_device}, source at {t_source}, reader at {t_reader}, ring at {opened_us}");
         let mut d = Self { reader: opened.reader, facts, ring, output: None, video: opened.video, audio: opened.audio, video_open: picture.is_some(), audio_open: false, opened_us, steps };
         d.select_sound(job.sound.is_some() || job.kind == Kind::Audio, &job.clock);
         Ok(d)
@@ -284,7 +302,7 @@ impl Decoder {
                     }
                     let ended = s.ended == Some(generation);
                     let room = s.frames.len() < AHEAD || !self.video_open;
-                    let texture = self.ring.as_ref().is_none_or(|r| r.free().is_some());
+                    let texture = self.ring.as_ref().is_none_or(Ring::free);
                     let sound_full = self.output.as_ref().is_some_and(Output::full);
                     if !ended && room && texture && !(sound_full && !self.video_open) {
                         break;
@@ -334,8 +352,8 @@ impl Decoder {
                             crate::marks::note("video.pictures", if self.facts.gpu { "gpu" } else { "cpu" });
                             if logging() {
                                 let f = &self.facts;
-                                eprintln!(
-                                    "rune video: {:?} opened in {} us ({}), first picture decoded at {} us; {} decoder, {} pictures",
+                                log!(
+                                    "{:?} opened in {} us ({}), first picture decoded at {} us; {} decoder, {} pictures",
                                     job.source, self.opened_us, self.steps, us(job.started), if f.hardware { "hardware" } else { "software" }, if f.gpu { "GPU" } else { "CPU" }
                                 );
                             }
@@ -390,7 +408,7 @@ impl Decoder {
         let Some(ring) = &mut self.ring else {
             return mf::nv12_bytes(sample, &picture).map(Pic::Cpu);
         };
-        let slot = ring.free().ok_or("no free video texture")?;
+        let slot = ring.take()?.ok_or("no free video texture")?;
         let (planes, value) = match texture {
             Some((texture, index)) => {
                 // DXVA decoders write into textures bound for decoding.

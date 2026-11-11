@@ -120,8 +120,8 @@ impl Orient {
 /// Submit is a CPU monotonic timestamp. Completion is callback-observed CPU time;
 /// GPU start/end are render-pass timestamp-query seconds on the GPU clock, not `Instant`
 /// or display time. Their difference is GPU duration; the epoch is backend-specific.
-/// GPU times are absent when unsupported, overridden by caller timing, or all timing
-/// slots are in flight. CPU submission/completion notifications are still delivered.
+/// GPU times are absent when unsupported, overridden by caller timing, all timing slots are
+/// in flight, or no drawn surface has an observer (`set_observer`). CPU submission/completion notifications are still delivered.
 #[derive(Clone, Debug)]
 pub struct FrameTiming {
     pub frame_id: u64,
@@ -181,6 +181,10 @@ impl NativeSurface {
     }
     pub fn set_observer(&self, observer: FrameObserver) {
         self.0.lock().unwrap().observer = Some(observer);
+    }
+    /// Whether an observer listens: only then does a draw read GPU times.
+    pub(crate) fn observed(&self) -> bool {
+        self.0.lock().unwrap().observer.is_some()
     }
     pub fn timing(&self) -> Option<FrameTiming> {
         self.0.lock().unwrap().timing.clone()

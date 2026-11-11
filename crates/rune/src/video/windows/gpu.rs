@@ -133,16 +133,33 @@ impl Ring {
             opened.map_err(|e| format!("open fence: {}", e.message()))?;
             (Arc::new(VideoFences { ready: ready12, release }), ready.ok_or("open fence")?)
         };
-        let (_, _, w, h) = picture.crop;
-        let slots = (0..RING).map(|_| slot(&device, &fences, w, h)).collect::<Result<Vec<_>, _>>()?;
-        Ok(Self { device, slots, fences, ready, value: 0, crop: picture.crop })
+        Ok(Self { device, slots: Vec::with_capacity(RING), fences, ready, value: 0, crop: picture.crop })
+    }
+
+    /// Whether a picture could be written now: a slot is free, or there's room for another.
+    pub(super) fn free(&self) -> bool {
+        self.slots.len() < RING || self.reusable().is_some()
     }
 
     /// A slot no picture on screen, in a queue or in flight on the GPU uses.
-    pub(super) fn free(&self) -> Option<usize> {
+    fn reusable(&self) -> Option<usize> {
         // SAFETY: a plain read of the fence's value.
         let released = unsafe { self.fences.release.GetCompletedValue() };
         self.slots.iter().position(|s| Arc::strong_count(&s.planes) == 1 && (s.value == 0 || released >= s.value))
+    }
+
+    /// A free slot, made when every made one is busy and the ring isn't full: a clip that shows
+    /// one picture (a paused clip, a poster) makes one texture, not the whole ring.
+    pub(super) fn take(&mut self) -> Result<Option<usize>, String> {
+        if let Some(i) = self.reusable() {
+            return Ok(Some(i));
+        }
+        if self.slots.len() == RING {
+            return Ok(None);
+        }
+        let (_, _, w, h) = self.crop;
+        self.slots.push(slot(&self.device, &self.fences, w, h)?);
+        Ok(Some(self.slots.len() - 1))
     }
 
     /// Copies a decoder texture (array slice `index`) into slot `i` on the GPU.

@@ -49,7 +49,7 @@ pub(crate) struct Native {
     /// Headless pictures.
     still: Option<still::Still>,
     /// When the decoder was last started, until its first picture reached the surface
-    /// (RUNE_VIDEO_LOG).
+    /// (`RUNE_VIDEO_LOG`).
     opened: Option<Instant>,
 }
 
@@ -193,7 +193,7 @@ pub(super) fn pull(shared: &Arc<Shared>, surface: &NativeSurface, target: Instan
     if decoder::logging_frames() {
         let new = native.shown.filter(|s| shown != Some(*s)).map_or(String::new(), |s| format!(" picture {s:.4}"));
         let at = |t: Instant| t.saturating_duration_since(now).as_micros();
-        eprintln!("rune video: pull {cost} ns, target +{} us{new}, due +{:?} us", at(target), due.map(at));
+        decoder::log!("pull {cost} ns, target +{} us{new}, due +{:?} us", at(target), due.map(at));
     }
     active
 }
@@ -204,7 +204,7 @@ impl Native {
         let before = self.phase;
         let effects = machine::step(&mut self.phase, event);
         if decoder::logging() && std::mem::discriminant(&before) != std::mem::discriminant(&self.phase) {
-            eprintln!("rune video: {:?} -> {:?}", before, self.phase);
+            decoder::log!("{:?} -> {:?}", before, self.phase);
         }
         for effect in effects {
             match effect {
@@ -227,7 +227,8 @@ impl Native {
         let job = Job {
             source: shared.source.clone(),
             kind: shared.kind,
-            start: at,
+            // Picture times count on through loops; the clip starts at its own time.
+            start: c.duration.filter(|d| *d > 0.0).map_or(at, |d| at.rem_euclid(d)),
             generation: self.seeks.current().0,
             looping: c.looping,
             sound: (!c.muted).then_some(c.volume),
@@ -263,6 +264,9 @@ impl Native {
                     self.event(shared, c, Event::Opened);
                 }
                 News::Failed(e) => {
+                    if decoder::logging() {
+                        decoder::log!("failed: {e}");
+                    }
                     c.fail(e);
                     self.pipe = None;
                     self.event(shared, c, Event::Failed);
@@ -418,7 +422,7 @@ impl Native {
         if let Some(opened) = self.opened.take() {
             crate::marks::mark("video.first_frame.shown");
             if decoder::logging() {
-                eprintln!("rune video: first picture on the surface at {} us", decoder::us(opened));
+                decoder::log!("first picture on the surface at {} us", decoder::us(opened));
             }
         }
     }

@@ -12,10 +12,13 @@ pub(crate) fn wall_wake_deadline<S>(rt: &Runtime<S>) -> Option<Instant> {
 /// covered, faded out or unpaced. A timer due within a frame interval of the last poll
 /// (`Tx::wake_after(Duration::ZERO)` asks for the next frame) waits for that interval, so a
 /// poll that keeps asking steps at most once per `TIMER_FRAME` and never spins the loop.
+/// Motion's own frames (a loop's step, a video's next picture) come when due: held a frame
+/// after each poll, they'd drift later every frame and drop one every half second.
 pub(crate) fn timer_deadline<S>(rt: &Runtime<S>) -> Option<Instant> {
-    let due = wall_wake_deadline(rt)?;
-    let polled = rt.wall_start.and_then(|t0| t0.checked_add(Duration::try_from_secs_f64(rt.polled_at()).ok()?));
-    Some(polled.map_or(due, |polled| due.max(polled + TIMER_FRAME)))
+    let wall = |t: f64| rt.wall_start?.checked_add(Duration::try_from_secs_f64(t).ok()?);
+    let polled = wall(rt.polled_at());
+    let timer = rt.poll_wake_deadline().and_then(wall).map(|due| polled.map_or(due, |polled| due.max(polled + TIMER_FRAME)));
+    timer.into_iter().chain(rt.motion_wake_deadline().and_then(wall)).min()
 }
 
 /// Paces the frame a hidden host keeps ready to show (a launcher's cached pixels, a retained
