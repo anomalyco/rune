@@ -157,7 +157,7 @@ impl Panel {
     pub fn pointer_released(&self) {
         self.pointer.released();
         self.refresh_monitors();
-        if self.visible.get() { self.pointer.observe(&self.panel, self.wake.as_ref()); }
+        if self.presence.get().visible() { self.pointer.observe(&self.panel, self.wake.as_ref()); }
     }
     pub fn pointer_deadline(&self, occluded: bool) -> Option<Instant> { self.pointer.deadline(self.pointer_poll.get(), occluded) }
     /// Samples the pointer if its poll is due; true if it did.
@@ -174,12 +174,12 @@ impl Panel {
     /// samples the pointer, through the timed poll when it is due and `poll` allows it.
     pub fn observe_pointer(&self, now: Instant, poll: bool) {
         self.keep_view();
-        if self.visible.get() && self.pointer.wanted() && !(poll && self.poll_pointer(now)) { self.pointer.observe(&self.panel, None); }
+        if self.presence.get().visible() && self.pointer.wanted() && !(poll && self.poll_pointer(now)) { self.pointer.observe(&self.panel, None); }
     }
     pub fn set_input(&self, input: OverlayInput) {
         self.pointer.input.set(input);
         self.refresh_monitors();
-        if self.visible.get() { self.pointer.observe(&self.panel, self.wake.as_ref()); }
+        if self.presence.get().visible() { self.pointer.observe(&self.panel, self.wake.as_ref()); }
     }
     /// AppKit applies cursor rects (winit's cursor) only in the key window, and an overlay is
     /// rarely key. While the pointer is over its hit area (`Some`), set the cursor directly and
@@ -195,7 +195,7 @@ impl Panel {
     }
     pub fn set_follow_pointer(&self, follow: bool) { self.follow_pointer.set(follow); self.pointer.follow.set(follow); self.refresh_monitors(); }
     pub(super) fn refresh_monitors(&self) {
-        if !self.visible.get() { return; }
+        if !self.presence.get().visible() { return; }
         if self.pointer.input.get() == OverlayInput::Regions {
             if self.pointer_poll.get().is_none() { self.pointer_poll.set(Some(Instant::now())); }
         } else { self.pointer_poll.set(None); }
@@ -206,7 +206,7 @@ impl Panel {
         if self.pointer.regions.borrow().as_slice() == regions { return; }
         *self.pointer.regions.borrow_mut() = regions.to_vec();
         self.pointer.trace(&self.panel, "regions", None);
-        if self.visible.get() { self.pointer.observe(&self.panel, None); }
+        if self.presence.get().visible() { self.pointer.observe(&self.panel, None); }
     }
 
     fn needs_monitors(&self) -> bool {

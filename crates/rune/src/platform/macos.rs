@@ -145,7 +145,6 @@ pub(crate) struct Panel {
     pointer: Rc<PointerState>,
     options: OverlayOptions,
     follow_pointer: Cell<bool>,
-    visible: Visible,
     pointer_poll: Cell<Option<Instant>>,
     /// Prewarmed, shown or fading, under one fence, and the requested capture exclusion,
     /// applied only while shown. While a fade runs the panel reads as visible, so a fading-out
@@ -155,13 +154,6 @@ pub(crate) struct Panel {
     panel: objc2::rc::Retained<objc2_app_kit::NSPanel>,
     window: objc2::rc::Retained<objc2_app_kit::NSWindow>,
     view: objc2::rc::Retained<objc2_app_kit::NSView>,
-}
-
-/// Whether the app wants the panel seen, read from its presence.
-struct Visible(Rc<Cell<Presence>>);
-
-impl Visible {
-    fn get(&self) -> bool { self.0.get().visible() }
 }
 
 impl Panel {
@@ -246,7 +238,7 @@ impl Panel {
             return None;
         }
         panel.setDelegate(unsafe { ns_window.delegate() }.as_deref());
-        Some(Panel { bridge, monitors: RefCell::new(None), pointer, options: options.clone(), follow_pointer: Cell::new(options.follow_pointer), visible: Visible(presence.clone()), pointer_poll: Cell::new(None), presence, wake, panel, window: ns_window, view })
+        Some(Panel { bridge, monitors: RefCell::new(None), pointer, options: options.clone(), follow_pointer: Cell::new(options.follow_pointer), pointer_poll: Cell::new(None), presence, wake, panel, window: ns_window, view })
     }
 
     /// On the primary screen (the one with the menu bar), in AppKit's bottom-left coordinates.
@@ -255,7 +247,7 @@ impl Panel {
         if self.panel.frame() != rect {
             self.window.setFrame_display(rect, false);
             self.panel.setFrame_display(rect, true);
-            if self.visible.get() { self.pointer.observe(&self.panel, self.wake.as_ref()); }
+            if self.presence.get().visible() { self.pointer.observe(&self.panel, self.wake.as_ref()); }
         }
     }
 
