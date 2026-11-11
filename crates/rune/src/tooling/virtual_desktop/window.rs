@@ -157,7 +157,7 @@ impl<S: 'static> Window<S> {
             position: options.position,
             physical: options.physical_size,
             frame: [0.0, 0.0, size.0, size.1],
-            life: if visible { Life::Shown { covered: false } } else { Life::Unopened },
+            life: if visible { Life::Shown { sight: crate::window::Sight::Seen } } else { Life::Unopened },
             placed: None,
         }
     }

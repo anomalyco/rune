@@ -76,6 +76,8 @@ pub(super) struct Native {
     pub(super) cloak: crate::platform::win32::Cloak,
     /// The frame without a title bar a window with `App::titlebar` has.
     pub(super) frame: Option<crate::platform::win32::CustomFrame>,
+    /// Hears other windows cover it whole (`WakeEvent::Covered`).
+    pub(super) _occlusion: Option<crate::platform::win32::occlusion::Tracked>,
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows", all(unix, not(target_os = "ios"), not(target_os = "android")))))]

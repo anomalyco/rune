@@ -64,6 +64,8 @@ pub use handle::WindowHandle;
 use handle::native_window_number;
 mod life;
 pub(crate) use life::Life;
+mod sight;
+pub(crate) use sight::{Cover, Sight};
 mod lifecycle;
 mod reveal;
 use reveal::{Found, Reveal, RevealEffect};
@@ -101,6 +103,9 @@ pub(crate) enum WakeEvent {
     Position(usize, (i32, i32)), Level(usize, bool),
     Place(usize, crate::windows::PlaceRequest),
     Frame(usize, crate::window::frame::FrameRequest),
+    /// Windows: other windows started or stopped covering the window (platform::win32::occlusion).
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    Covered(usize, bool),
     /// The app was reopened (macOS: its Dock icon clicked; Windows: launched again while it
     /// runs, see `single_instance`); for `Windows`, not one host.
     #[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
@@ -319,7 +324,7 @@ impl ApplicationHandler<WakeEvent> for Windows {
         let slot = match &event {
             WakeEvent::DisplayTick(i) | WakeEvent::App(i) | WakeEvent::Live(i) | WakeEvent::Window(i, _) | WakeEvent::Focus(i)
                 | WakeEvent::Position(i, _) | WakeEvent::Level(i, _) | WakeEvent::Place(i, _) | WakeEvent::Frame(i, _)
-                | WakeEvent::A11y(i) => *i,
+                | WakeEvent::A11y(i) | WakeEvent::Covered(i, _) => *i,
             WakeEvent::Reopen => {
                 self.reopen(event_loop);
                 self.cleanup(event_loop);

@@ -179,7 +179,7 @@ impl<S: 'static> Host<S> {
         if let Some(w) = &mut self.win && w.retry.is_some_and(|retry| retry <= Instant::now()) {
             w.retry = None;
             // A missed frame marked it occluded; look at the surface again.
-            self.life.cover(false);
+            self.life.cover(Cover::Surface, false);
             if launcher || self.life.shown() { w.request_redraw(); }
         }
         if let Some(w) = &mut self.win && !self.life.shown() && w.hidden_pace.take_due(Instant::now()) {

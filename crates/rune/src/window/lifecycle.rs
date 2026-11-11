@@ -50,7 +50,7 @@ impl<S: 'static> Host<S> {
         let Some(w) = &self.win else { return Found::Missing };
         let minimized = w.window.is_minimized() == Some(true);
         match self.life {
-            Life::Shown { covered } => Found::Shown { covered, minimized },
+            Life::Shown { sight } => Found::Shown { covered: sight.covered(), minimized },
             _ => Found::Hidden { minimized },
         }
     }

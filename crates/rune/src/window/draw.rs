@@ -16,7 +16,7 @@ impl<S: 'static> Host<S> {
         if missed == Missed::Occluded {
             // Covered or asleep with no notification yet: rest as if one came, and look
             // again on `retry`.
-            self.life.cover(true);
+            self.life.cover(Cover::Surface, true);
             l.first_frame.skipped(now);
             #[cfg(target_os = "macos")]
             l.set_live_resize(false);

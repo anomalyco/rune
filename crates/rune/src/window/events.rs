@@ -136,6 +136,10 @@ impl<S: 'static> Host<S> {
                 self.shell(event_loop);
             }
             WakeEvent::A11y(_) => self.a11y_receive(),
+            WakeEvent::Covered(_, covered) => {
+                if covered { self.land_frame(); }
+                self.set_cover(Cover::Windows, covered);
+            }
             WakeEvent::Reopen | WakeEvent::Turn | WakeEvent::Quit(_) => {}
         }
     }
@@ -222,6 +226,12 @@ impl<S: 'static> Host<S> {
             _ => false,
         };
         if stops { self.land_frame(); }
+        if let WindowEvent::Occluded(occluded) = event {
+            // Alpha-zero launcher panels remain renderable on explicit invalidation.
+            // Their native occlusion transitions must not settle or redraw a reveal.
+            if !(self.macos_window.launcher && cfg!(target_os = "macos")) { self.set_cover(Cover::System, occluded); }
+            return;
+        }
         if matches!(event, WindowEvent::Moved(_) | WindowEvent::ScaleFactorChanged { .. }) { self.sync_origin(); }
         let (Some(l), Some((gpu, ..))) = (self.win.as_mut(), self.gpu.as_ref()) else { return };
         let rt = &mut self.rt;
@@ -310,35 +320,6 @@ impl<S: 'static> Host<S> {
                         sync_chrome(rt, l, chrome, titlebar);
                         l.request_redraw();
                     }
-                }
-            }
-            WindowEvent::Occluded(occluded) => {
-                // Alpha-zero launcher panels remain renderable on explicit invalidation.
-                // Their native occlusion transitions must not settle or redraw a reveal.
-                if self.macos_window.launcher && cfg!(target_os = "macos") { return; }
-                #[cfg(target_os = "macos")]
-                { l.native.prime.stop(); }
-                let was_occluded = self.life.cover(occluded);
-                l.retry = None;
-                l.presented = None;
-                l.occluded_wait = OCCLUDED_RETRY;
-                rt.set_live_visible(self.life.uncovered() && !l.minimized());
-                if occluded {
-                    self.secure_input.set(false);
-                    l.stop_pacing();
-                    rt.cancel_timer_frame();
-                    self.idle = true; return;
-                }
-                sync_chrome(rt, l, chrome, titlebar);
-                // A window opened while the displays slept has no display link yet.
-                #[cfg(target_os = "macos")]
-                if l.native.pacing.is_none() { l.native.pacing = crate::platform::display_link::DisplayLink::new(&l.window, self.frame_wake.clone()); }
-                if was_occluded {
-                    // Coming back paints the settled state in the first frame (guarantee 8).
-                    rt.settle_all();
-                    l.request_redraw();
-                } else if rt.stale() {
-                    l.request_redraw();
                 }
             }
             WindowEvent::ThemeChanged(theme) => {
