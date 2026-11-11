@@ -191,7 +191,7 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
     let mut frames_written = 0usize;
     let has_video = writer.has_video();
     let snap_crop = std::cell::Cell::new(None::<[u32; 4]>);
-    let cpu_boot = std::cell::RefCell::new(args.cpu_boot.clone().map(|dir| crate::render::cpu_boot::tool::Tool::new(dir, args.cpu_boot_threads)));
+    let cpu_boot = std::cell::RefCell::new(args.cpu_boot.clone().map(|dir| crate::render::cpu_boot::tool::Tool::new(dir, args.cpu_boot_threads, gpu.adapter.get_info().vendor)));
     // Finished readbacks, in frame order.
     let mut deliver = |shot: Shot, mut px: Vec<u8>| {
         if shot.snap && let Some(tool) = cpu_boot.borrow_mut().as_mut() { tool.gpu(&px, (wp, hp)); }

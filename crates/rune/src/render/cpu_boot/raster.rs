@@ -11,12 +11,13 @@ use super::bin::{Bins, EMPTY, Show, Solid, TILE_H, TILE_W, clip_span, interior, 
 use super::backdrop;
 use super::blend::{self, Src, q};
 use super::shade::{self, Clip};
-use super::{Report, Scene, Target};
+use super::{HalfRounding, Report, Scene, Target};
 use crate::render::{Instance, KIND_LAYER, KIND_LAYER_END};
 
 const TILE_PX: usize = (TILE_W * TILE_H) as usize;
 
-pub(super) fn run(scene: &Scene<'_>, bins: &Bins, target: &mut Target<'_>, tiles: &[u32], exec: &dyn Exec) -> Report {
+/// Paints 	iles on xec's threads; backdrop blurs, taken between phases, go on wide's.
+pub(super) fn run(scene: &Scene<'_>, bins: &Bins, target: &mut Target<'_>, tiles: &[u32], exec: &dyn Exec, wide: &dyn Exec) -> Report {
     let surface = Surface { base: target.pixels.as_mut_ptr(), len: target.pixels.len(), stride: target.stride };
     let clear = scene.clear.map(|c| c.clamp(0.0, 1.0) * 255.0);
     let clear = [q(clear[2]), q(clear[1]), q(clear[0]), q(clear[3])];
@@ -38,9 +39,15 @@ pub(super) fn run(scene: &Scene<'_>, bins: &Bins, target: &mut Target<'_>, tiles
             let mut occ: Vec<Occluder> = Vec::new();
             let mut painter = Painter { scene, bins, surface, stats: &mut stats, pow: &mut pow, layers: &mut layers, depth: 0, tile: [0; 4],
                 occ: &mut occ, n: 0, breaks: Vec::new(), segs: Vec::new(), blurred: done };
+            // A big frame goes out a page-wide run of tiles at a time (16 tiles: 1,024 pixels of
+            // each row, about a page), so threads fault in pages of their own rather than all
+            // queuing on the same ones (a fresh buffer: 12,969 to 9,992 µs); a small one tile at
+            // a time, so a thread that drew cheap tiles takes more.
+            let chunk = if tiles.len() > 512 { 16 } else { 1 };
             loop {
-                // One tile at a time, so a thread that drew cheap tiles takes more.
-                let Some(&t) = tiles.get(next.fetch_add(1, Ordering::Relaxed)) else { break };
+                let at = next.fetch_add(chunk, Ordering::Relaxed);
+                if at >= tiles.len() { break; }
+                for &t in &tiles[at..(at + chunk).min(tiles.len())] {
                 let t = t as usize;
                 let began = std::time::Instant::now();
                 painter.tile = painter.tile_rect(t as u32 % bins.cols, t as u32 / bins.cols);
@@ -59,6 +66,7 @@ pub(super) fn run(scene: &Scene<'_>, bins: &Bins, target: &mut Target<'_>, tiles
                 }
                 painter.depth = 0;
                 painter.stats.slowest_tile_ns = painter.stats.slowest_tile_ns.max(super::ns(began.elapsed()));
+                }
             }
             drop(painter);
             let mut s = sums.lock().unwrap_or_else(|e| e.into_inner());
@@ -84,7 +92,7 @@ pub(super) fn run(scene: &Scene<'_>, bins: &Bins, target: &mut Target<'_>, tiles
                 ((tx * TILE_W) as i32) < b[2] && (((tx + 1) * TILE_W) as i32) > b[0] && ((ty * TILE_H) as i32) < b[3] && (((ty + 1) * TILE_H) as i32) > b[1]
             });
             let began = std::time::Instant::now();
-            blurred.push(shown.then(|| backdrop::blur(rec, scene.size, |x, y| {
+            blurred.push(shown.then(|| backdrop::blur(rec, scene.size, scene.half, wide, |x, y| {
                 let at = y as usize * stride + x as usize * 4;
                 [px[at + 2] as f32 / 255.0, px[at + 1] as f32 / 255.0, px[at] as f32 / 255.0, px[at + 3] as f32 / 255.0]
             })));
@@ -115,40 +123,48 @@ impl Exec for Spawn {
     }
 }
 
-/// What an `Rgba16Float` texel keeps of `v`: rounded to half precision toward zero, as Intel's
-/// GPUs store it (the default adapter, whose frame takes over from this one; matching that took
-/// a mid-animation layer from 9% of its pixels a step off to 0.13%). Colours here stay far below
-/// half's largest value.
+/// What an `Rgba16Float` texel keeps of `v` on the GPU that takes over (`HalfRounding`). Colours
+/// here stay far below half's largest value.
 #[inline]
-pub(super) fn f16(v: f32) -> f32 {
+pub(super) fn f16(v: f32, r: HalfRounding) -> f32 {
+    let b = v.to_bits();
     if v.abs() >= 6.103_515_6e-5 {
-        // 10 of f32's 23 mantissa bits stay.
-        return f32::from_bits(v.to_bits() & 0xffff_e000);
+        // 10 of f32's 23 mantissa bits stay; to nearest, add half of what goes (and one more
+        // when what stays is odd) first.
+        let up = match r { HalfRounding::TowardZero => 0, HalfRounding::NearestEven => 0x0fff + ((b >> 13) & 1) };
+        return f32::from_bits((b + up) & 0xffff_e000);
     }
     // Subnormal halves are whole multiples of 2^-24.
     const M: f32 = 16_777_216.0;
-    (v * M).trunc() / M
+    match r {
+        HalfRounding::TowardZero => (v * M).trunc() / M,
+        HalfRounding::NearestEven => ((v * M + 12_582_912.0) - 12_582_912.0) / M,
+    }
 }
 
-/// `f16` on four values at once: F16C's conversion, rounding toward zero, where the CPU has it.
+/// `f16` on four values at once: F16C's conversion where the CPU has it.
 #[inline]
-pub(super) fn f16x4(v: [f32; 4]) -> [f32; 4] {
+pub(super) fn f16x4(v: [f32; 4], r: HalfRounding) -> [f32; 4] {
     #[cfg(target_arch = "x86_64")]
     if std::arch::is_x86_feature_detected!("f16c") {
         // SAFETY: the CPU has F16C (checked).
-        return unsafe { f16x4_f16c(v) };
+        return unsafe { f16x4_f16c(v, r) };
     }
-    v.map(f16)
+    v.map(|x| f16(x, r))
 }
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "f16c")]
-unsafe fn f16x4_f16c(v: [f32; 4]) -> [f32; 4] {
+unsafe fn f16x4_f16c(v: [f32; 4], r: HalfRounding) -> [f32; 4] {
     use std::arch::x86_64::*;
     let mut out = [0.0f32; 4];
     // SAFETY: both arrays hold four floats.
     unsafe {
-        let h = _mm_cvtps_ph::<_MM_FROUND_TO_ZERO>(_mm_loadu_ps(v.as_ptr()));
+        let x = _mm_loadu_ps(v.as_ptr());
+        let h = match r {
+            HalfRounding::TowardZero => _mm_cvtps_ph::<_MM_FROUND_TO_ZERO>(x),
+            HalfRounding::NearestEven => _mm_cvtps_ph::<_MM_FROUND_TO_NEAREST_INT>(x),
+        };
         _mm_storeu_ps(out.as_mut_ptr(), _mm_cvtph_ps(h));
     }
     out
@@ -415,23 +431,25 @@ impl Painter<'_, '_> {
         let s = self.slot(x, y);
         let top = &mut self.layers[self.depth - 1];
         let d = &mut top.px[s];
-        let c = f16x4(c);
+        let half = self.scene.half;
+        let c = f16x4(c, half);
         let k = if top.additive { 1.0 } else { 1.0 - c[3] };
-        *d = f16x4(std::array::from_fn(|ch| c[ch] + d[ch] * k));
+        *d = f16x4(std::array::from_fn(|ch| c[ch] + d[ch] * k), half);
     }
 
     fn put_span(&mut self, x0: u32, x1: u32, y: u32, c: [f32; 4]) {
         if x1 <= x0 { return; }
         self.stats.span_px += u64::from(x1 - x0);
         if self.depth == 0 { return self.surface.span(x0, x1, y, c); }
-        let c16 = f16x4(c);
+        let half = self.scene.half;
+        let c16 = f16x4(c, half);
         let top = &mut self.layers[self.depth - 1];
         let (row, x0t) = (((y - self.tile[1]) * TILE_W) as usize, self.tile[0]);
         let px = &mut top.px[row + (x0 - x0t) as usize..row + (x1 - x0t) as usize];
         // Opaque over anything is itself: `c + d × 0`.
         if c16[3] == 1.0 && !top.additive { return px.fill(c16); }
         let k = if top.additive { 1.0 } else { 1.0 - c16[3] };
-        for d in px { *d = f16x4(std::array::from_fn(|ch| c16[ch] + d[ch] * k)); }
+        for d in px { *d = f16x4(std::array::from_fn(|ch| c16[ch] + d[ch] * k), half); }
     }
 
     /// Draws instance `n` over pixels `r` (inside its bounds and this tile).
@@ -504,9 +522,9 @@ impl Painter<'_, '_> {
                     // Opaque over anything is itself (a texel is already in half precision).
                     if c[3] == 1.0 && !parent.additive && opacity == 1.0 { *d = c; continue; }
                     if c == [0.0; 4] { continue; }
-                    let c = f16x4(c);
+                    let c = f16x4(c, self.scene.half);
                     let k = if parent.additive { 1.0 } else { 1.0 - c[3] };
-                    *d = f16x4(std::array::from_fn(|ch| c[ch] + d[ch] * k));
+                    *d = f16x4(std::array::from_fn(|ch| c[ch] + d[ch] * k), self.scene.half);
                 }
             }
             for x in vis.iter().flat_map(|(a, b)| a..b).filter(|&x| x < fa || x >= fb) {

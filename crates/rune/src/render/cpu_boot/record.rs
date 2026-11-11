@@ -66,7 +66,7 @@ impl Recording {
             instances: &self.instances,
             glyph_pages: self.glyph_pages.iter().map(Vec::as_slice).collect(),
             outlines: None,
-            images: self.images.iter().map(|(width, data)| Image { width: *width, data }).collect(),
+            images: self.images.iter().map(|(width, data)| Image { width: *width, data, dirty: None }).collect(),
             size: self.size,
             clear: self.clear,
             lcd: self.lcd,
@@ -75,6 +75,7 @@ impl Recording {
             compositor: false,
             smoothing: None,
             atlas_resets: 0,
+            half: super::HalfRounding::default(),
         }
     }
 

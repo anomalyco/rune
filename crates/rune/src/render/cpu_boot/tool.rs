@@ -24,16 +24,18 @@ pub(crate) struct Tool {
     buf: Vec<u8>,
     stride: usize,
     size: (u32, u32),
+    vendor: u32,
     log: Option<std::io::BufWriter<std::fs::File>>,
     /// The snapshot frame and what the run said about it, until the GPU's arrives.
     painted: Option<(Vec<u8>, serde_json::Value)>,
 }
 
 impl Tool {
-    pub(crate) fn new(dir: PathBuf, threads: usize) -> Tool {
+    /// A run whose GPU has PCI vendor ID endor, the one whose rounding the CPU follows.
+    pub(crate) fn new(dir: PathBuf, threads: usize, vendor: u32) -> Tool {
         let _ = std::fs::create_dir_all(&dir);
         let log = std::fs::File::create(dir.join("frames.jsonl")).ok().map(std::io::BufWriter::new);
-        Tool { dir, painter: CpuPainter::new(threads), threads: threads.max(1), buf: Vec::new(), stride: 0, size: (0, 0), log, painted: None }
+        Tool { dir, painter: CpuPainter::new(threads), threads: threads.max(1), buf: Vec::new(), stride: 0, size: (0, 0), vendor, log, painted: None }
     }
 
     /// Before the renderer prepares frame `k`, which `rt` laid out in `update_ns`: fills its
@@ -44,7 +46,8 @@ impl Tool {
         let scene = Scene::new(&rt.instances, &rt.text.atlas, &rt.images, size, rt.clear_color())
             .srgb_blend(rt.srgb_blend())
             .native_surfaces(!rt.surfaces.is_empty())
-            .font_smoothing(rt.font_smoothing());
+            .font_smoothing(rt.font_smoothing())
+            .half_rounding(super::HalfRounding::of_vendor(self.vendor));
         // Outgrown, the bitmap is made again at the new size: every pixel paints.
         if size.0 as usize * 4 > self.stride || self.buf.len() < self.stride * size.1 as usize {
             let rows = if self.stride == 0 { 0 } else { self.buf.len() / self.stride };
@@ -55,7 +58,7 @@ impl Tool {
         self.size = size;
         let painted = self.painter.paint(&scene, &mut Target::with_stride(&mut self.buf, size.0, size.1, self.stride));
         let total = super::ns(started.elapsed());
-        let mut out = json!({ "k": k, "update_ns": update_ns, "cpu_ns": total, "instances": rt.instances.len(), "threads": self.threads,
+        let mut out = json!({ "k": k, "vendor": self.vendor, "update_ns": update_ns, "cpu_ns": total, "instances": rt.instances.len(), "threads": self.threads,
             "fill": { "masks": fills.masks, "texels": fills.texels, "cover_ns": fills.cover_ns, "copy_ns": fills.copy_ns } });
         match &painted {
             Ok(p) => out["paint"] = json!({

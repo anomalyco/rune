@@ -16,64 +16,105 @@ fn mix(h: u64, w: u64) -> u64 { (h.rotate_left(5) ^ w).wrapping_mul(0x517c_c1b7_
 /// Each tile's hash into `out`, from each instance's hash, made once into `each`.
 pub(super) fn hashes(scene: &Scene<'_>, bins: &Bins, each: &mut Vec<u64>, out: &mut Vec<u64>) {
     each.clear();
-    each.extend(scene.instances.iter().enumerate().map(|(n, i)| {
-        let words: &[u32; 32] = bytemuck::cast_ref(i);
-        let mut h = 0;
-        for w in words.chunks_exact(2) { h = mix(h, u64::from(w[0]) | u64::from(w[1]) << 32); }
-        let kind = i.params[1];
-        if kind == KIND_LAYER || kind == KIND_LAYER_END {
-            if let Some(&p) = bins.scope.get(&(n as u32)) {
-                let l = &bins.layers[p as usize];
-                let b = l.bounds;
-                h = mix(mix(h, (b[0] as u32 as u64) | (b[1] as u32 as u64) << 32), (b[2] as u32 as u64) | (b[3] as u32 as u64) << 32);
-                h = mix(h, l.show as u64);
-            }
-        } else if kind == KIND_GLYPH {
-            h = mix(h, scene.atlas_resets);
-        } else if kind == KIND_IMAGE {
-            h = image(scene, i, h);
-        }
-        h
-    }));
-    // A box whose one colour fills a whole tile draws only that colour there, wherever its
-    // edges are: a tile it fills takes its colour, not its bytes, so a panel that grows or a
-    // window card that resizes leaves the tiles inside it clean. Boxes big enough to fill a tile.
-    // Each with the rect its corners and its clip's edges can't reach: a tile inside that is
-    // filled without asking.
-    let flat: Vec<(u32, Solid, Clip, u64, [f32; 4])> = scene.instances.iter().enumerate()
-        .filter(|(_, i)| i.params[1] == KIND_RECT && i.rect[2] >= TILE_W as f32 && i.rect[3] >= TILE_H as f32)
-        .filter_map(|(n, i)| {
-            let solid = interior(i)?;
-            let clip = Clip::of(i);
-            let fill: &[u32; 4] = bytemuck::cast_ref(&i.fill);
-            let m = solid.radii.iter().fold(0.0f32, |a, r| a.max(r.abs())) + solid.inset + 1.0;
-            let e = solid.edges;
-            let inset = clip.inset();
-            let cm = clip.radii.map_or(0.0, |r| r.iter().fold(0.0f32, |a, v| a.max(v.abs()))) + 1.0;
-            let c = clip.rect;
-            let sure = [(e[0] + m).max(c[0] + inset[0] + cm), (e[1] + m).max(c[1] + inset[1] + cm), (e[2] - m).min(c[2] - inset[2] - cm), (e[3] - m).min(c[3] - inset[3] - cm)];
-            Some((n as u32, solid, clip, mix(mix(0x5a5a, u64::from(fill[0]) | u64::from(fill[1]) << 32), u64::from(fill[2]) | u64::from(fill[3]) << 32), sure))
-        }).collect();
+    each.extend((0..scene.instances.len()).map(|n| instance(scene, bins, n)));
+    let flat: Vec<(u32, Flat)> = (0..scene.instances.len()).filter_map(|n| flat(&scene.instances[n]).map(|f| (n as u32, f))).collect();
     out.clear();
+    out.extend((0..bins.tile_count()).map(|t| tile(scene, bins, each, t, |n| flat.binary_search_by_key(&n, |f| f.0).ok().map(|k| &flat[k].1))));
+}
+
+/// Tile `t`'s hash again, after instances in it changed (`each` already holds theirs).
+pub(super) fn rehash(scene: &Scene<'_>, bins: &Bins, each: &[u64], t: usize) -> u64 {
+    let flats: Vec<(u32, Flat)> = bins.tile(t).iter().filter_map(|&n| flat(&scene.instances[n as usize]).map(|f| (n, f))).collect();
+    tile(scene, bins, each, t, |n| flats.iter().find(|f| f.0 == n).map(|f| &f.1))
+}
+
+/// One instance's inputs: its bytes, and what they stand for elsewhere (a layer's plan, the
+/// atlas's evictions for a glyph, an image's texels).
+pub(super) fn instance(scene: &Scene<'_>, bins: &Bins, n: usize) -> u64 {
+    let i = &scene.instances[n];
+    let words: &[u32; 32] = bytemuck::cast_ref(i);
+    let mut h = 0;
+    for w in words.chunks_exact(2) { h = mix(h, u64::from(w[0]) | u64::from(w[1]) << 32); }
+    let kind = i.params[1];
+    if kind == KIND_LAYER || kind == KIND_LAYER_END {
+        if let Some(&p) = bins.scope.get(&(n as u32)) {
+            let l = &bins.layers[p as usize];
+            let b = l.bounds;
+            h = mix(mix(h, (b[0] as u32 as u64) | (b[1] as u32 as u64) << 32), (b[2] as u32 as u64) | (b[3] as u32 as u64) << 32);
+            h = mix(h, l.show as u64);
+        }
+    } else if kind == KIND_GLYPH {
+        h = mix(h, scene.atlas_resets);
+    } else if kind == KIND_IMAGE {
+        h = image(scene, i, h);
+    }
+    h
+}
+
+/// A box whose one colour fills a whole tile draws only that colour there, wherever its edges
+/// are: a tile it fills takes its colour, not its bytes, so a panel that grows or a window card
+/// that resizes leaves the tiles inside it clean. Boxes big enough to fill a tile; each with the
+/// rect its corners and its clip's edges can't reach (a tile inside that is filled without
+/// asking).
+pub(super) struct Flat {
+    solid: Solid,
+    clip: Clip,
+    token: u64,
+    sure: [f32; 4],
+}
+
+fn flat(i: &crate::render::Instance) -> Option<Flat> {
+    if i.params[1] != KIND_RECT || i.rect[2] < TILE_W as f32 || i.rect[3] < TILE_H as f32 { return None; }
+    let solid = interior(i)?;
+    let clip = Clip::of(i);
+    let fill: &[u32; 4] = bytemuck::cast_ref(&i.fill);
+    let m = solid.radii.iter().fold(0.0f32, |a, r| a.max(r.abs())) + solid.inset + 1.0;
+    let e = solid.edges;
+    let inset = clip.inset();
+    let cm = clip.radii.map_or(0.0, |r| r.iter().fold(0.0f32, |a, v| a.max(v.abs()))) + 1.0;
+    let c = clip.rect;
+    let sure = [(e[0] + m).max(c[0] + inset[0] + cm), (e[1] + m).max(c[1] + inset[1] + cm), (e[2] - m).min(c[2] - inset[2] - cm), (e[3] - m).min(c[3] - inset[3] - cm)];
+    let token = mix(mix(0x5a5a, u64::from(fill[0]) | u64::from(fill[1]) << 32), u64::from(fill[2]) | u64::from(fill[3]) << 32);
+    Some(Flat { solid, clip, token, sure })
+}
+
+/// Tile `t`'s hash: how it starts, then each instance it draws, by its colour where it fills the
+/// tile (`flat_of`), else by its inputs.
+fn tile<'f>(scene: &Scene<'_>, bins: &Bins, each: &[u64], t: usize, flat_of: impl Fn(u32) -> Option<&'f Flat>) -> u64 {
     let clear = scene.clear.map(f32::to_bits);
     let base = mix(mix(0, u64::from(clear[0]) | u64::from(clear[1]) << 32), u64::from(clear[2]) | u64::from(clear[3]) << 32);
     let (w, h) = scene.size;
-    for t in 0..bins.tile_count() {
-        let mut hash = mix(mix(base, u64::from(bins.covered[t])), u64::from(bins.quiet[t]));
-        let (tx, ty) = (t as u32 % bins.cols, t as u32 / bins.cols);
-        let r = [(tx * TILE_W) as f32, (ty * TILE_H) as f32, ((tx + 1) * TILE_W).min(w) as f32, ((ty + 1) * TILE_H).min(h) as f32];
-        for &n in bins.tile(t) {
-            let token = match flat.binary_search_by_key(&n, |f| f.0) {
-                Ok(k) if inside(r, flat[k].4) || covers(Some(&flat[k].1), &flat[k].2, r) => flat[k].3,
-                _ => each[n as usize],
-            };
-            hash = mix(hash, token);
+    let mut hash = mix(mix(base, u64::from(bins.covered[t])), u64::from(bins.quiet[t]));
+    let (tx, ty) = (t as u32 % bins.cols, t as u32 / bins.cols);
+    let r = [(tx * TILE_W) as f32, (ty * TILE_H) as f32, ((tx + 1) * TILE_W).min(w) as f32, ((ty + 1) * TILE_H).min(h) as f32];
+    for &n in bins.tile(t) {
+        let token = match flat_of(n) {
+            Some(f) if inside(r, f.sure) || covers(Some(&f.solid), &f.clip, r) => f.token,
+            _ => each[n as usize],
+        };
+        hash = mix(hash, token);
+    }
+    hash
+}
+
+/// Whether tile `t` paints all in `bgra`: it starts cleared to it and draws nothing, or it draws
+/// one opaque box of that colour that fills it, straight into the window.
+pub(super) fn solid(scene: &Scene<'_>, bins: &Bins, t: usize, bgra: [u8; 4]) -> bool {
+    let (w, h) = scene.size;
+    let (tx, ty) = (t as u32 % bins.cols, t as u32 / bins.cols);
+    let r = [(tx * TILE_W) as f32, (ty * TILE_H) as f32, ((tx + 1) * TILE_W).min(w) as f32, ((ty + 1) * TILE_H).min(h) as f32];
+    match bins.tile(t) {
+        [] => !bins.covered[t] && super::blend::opaque([scene.clear[0], scene.clear[1], scene.clear[2], scene.clear[3]].map(|v| v.clamp(0.0, 1.0))) == bgra,
+        &[n] => {
+            let i = &scene.instances[n as usize];
+            bins.within[n as usize] == super::bin::TOP && i.fill[3] == 1.0 && super::blend::opaque(i.fill) == bgra
+                && flat(i).is_some_and(|f| inside(r, f.sure) || covers(Some(&f.solid), &f.clip, r))
         }
-        out.push(hash);
+        _ => false,
     }
 }
-fn inside(r: [f32; 4], o: [f32; 4]) -> bool { r[0] >= o[0] && r[1] >= o[1] && r[2] <= o[2] && r[3] <= o[3] }
 
+fn inside(r: [f32; 4], o: [f32; 4]) -> bool { r[0] >= o[0] && r[1] >= o[1] && r[2] <= o[2] && r[3] <= o[3] }
 /// The texels an image instance samples, hashed: an animated image writes its next frame into
 /// the same place.
 fn image(scene: &Scene<'_>, i: &crate::render::Instance, mut h: u64) -> u64 {
