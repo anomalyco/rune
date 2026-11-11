@@ -38,6 +38,8 @@ pub(super) const MATH_FAMILIES: &[&str] = &["Noto Sans Math", "STIX Two Math", "
 pub(super) struct ScriptFonts {
     pub script: &'static [u8; 4],
     pub blocks: &'static [(u32, u32)],
+    /// Windows asks DirectWrite instead (`system_fonts::direct_write`).
+    #[cfg_attr(all(windows, not(test)), allow(dead_code))]
     pub files: &'static [&'static str],
 }
 

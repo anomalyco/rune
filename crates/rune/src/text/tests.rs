@@ -292,6 +292,7 @@ fn system_fonts_include_fontconfig_files() {
 fn plex_keyboard_symbols_use_real_glyphs() {
     const PLEX: &[u8] = include_bytes!("../../../../themes/opencode/assets/fonts/IBMPlexMono-Regular.ttf");
     let mut ts = TextSystem::new(&[PLEX], ("IBM Plex Mono", "IBM Plex Mono"));
+    ts.load_symbol_fonts();
     if ts.symbol_families.is_empty() {
         eprintln!("skipping: no symbol font installed");
         return;
@@ -388,6 +389,7 @@ fn routes_merge_math_and_emoji_presentation() {
 #[test]
 fn emoji_presentation_selector_draws_in_colour() {
     let mut ts = TextSystem::default();
+    ts.load_symbol_fonts();
     if ts.emoji.is_none() {
         eprintln!("skipping: no colour emoji font installed");
         return;
@@ -453,6 +455,7 @@ fn keyboard_symbol_fallbacks_match_cap_height() {
 #[test]
 fn emoji_draw_as_colour_images_beside_text() {
     let mut ts = TextSystem::default();
+    ts.load_symbol_fonts();
     if ts.emoji.is_none() {
         eprintln!("skipping: no colour emoji font installed");
         return;

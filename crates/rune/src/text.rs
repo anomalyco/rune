@@ -115,10 +115,7 @@ use atlas::{MAX_OVERFLOW_PAGES, MAX_STEADY_PAGES};
 pub(crate) use glyph_emit::GLIDE_PHASES;
 use line_break::break_lines_with_blocks;
 use span::PILL_BOX;
-use system_fonts::{
-    LoadedFiles, SYMBOL_FAMILIES, SYMBOL_FONT_FILES, family_list, load_families, load_installed, load_system_mono, named_list, names_system_mono,
-    register_cjk_fallbacks, register_script_fallbacks,
-};
+use system_fonts::{LoadedFiles, family_list, load_installed, load_system_mono, named_list, names_system_mono, register_cjk_fallbacks};
 #[cfg(any(test, not(target_arch = "wasm32")))]
 use system_fonts::system_font_files;
 #[cfg(test)]
@@ -181,6 +178,8 @@ pub struct TextSystem {
     /// Bit `i` is set once `fallback::SCRIPT_FONTS[i]` has been looked up.
     scripts: u64,
     font_files: LoadedFiles,
+    /// The system fonts looked up so far, and the app's own (`load_fallbacks`).
+    fallbacks: system_fonts::Fallbacks,
     /// The loaded system faces' families, for the face DirectWrite picks (`system_weight`).
     system_faces: system_weight::Faces,
     /// Installed families looked up by name (`load_installed`), lowercase.
@@ -299,10 +298,8 @@ impl TextSystem {
             added.sort_unstable();
             registered.extend(added);
         }
-        let mut font_files = LoadedFiles::new();
-        register_cjk_fallbacks(&mut collection, &mut font_files, &registered, families);
-        let symbol_families = load_families(&mut collection, SYMBOL_FONT_FILES, SYMBOL_FAMILIES);
-        let emoji = symbol_families.iter().copied().find(|f| f.contains("Emoji"));
+        // No system font loads here: each comes the first time a text needs it (`load_fallbacks`).
+        register_cjk_fallbacks(&mut collection, &registered, families);
         #[cfg(target_arch = "wasm32")]
         let families = if fonts.is_empty() { ("Inter", "IBM Plex Mono") } else { families };
         let (sans, mono) = families::slots(families.0, families.1);
@@ -322,13 +319,14 @@ impl TextSystem {
             language_epoch: 0,
             full_faces: false,
             sans, mono,
-            symbol_families,
-            emoji,
+            symbol_families: Vec::new(),
+            emoji: None,
             math: None,
             system_mono: None,
             slot_system_mono: names_system_mono(families.0) || names_system_mono(families.1),
             scripts: 0,
-            font_files,
+            font_files: LoadedFiles::new(),
+            fallbacks: system_fonts::Fallbacks::new(list),
             system_faces: Default::default(),
             installed: Default::default(),
             atlas: Atlas::new(),
@@ -632,26 +630,7 @@ impl TextSystem {
             text
         };
         let routes = fallback::routes(text);
-        if !text.is_ascii() {
-            let (mut scripts, mut symbols) = (0u64, false);
-            for ch in text.chars() {
-                for (i, fonts) in fallback::SCRIPT_FONTS.iter().enumerate() {
-                    if (self.scripts | scripts) & (1 << i) == 0 && fonts.covers(ch) {
-                        scripts |= 1 << i;
-                    }
-                }
-                symbols |= self.math.is_none() && fallback::needs_symbols(ch);
-            }
-            for (i, fonts) in fallback::SCRIPT_FONTS.iter().enumerate() {
-                if scripts & (1 << i) != 0 {
-                    self.scripts |= 1 << i;
-                    register_script_fallbacks(&mut self.font_cx.collection, &mut self.font_files, fonts);
-                }
-            }
-            if symbols {
-                self.math = Some(load_families(&mut self.font_cx.collection, fallback::MATH_FONT_FILES, fallback::MATH_FAMILIES));
-            }
-        }
+        self.load_fallbacks(text);
         // `trak` tracking at the point size (see `trak.rs`), on top of `style.tracking`. An
         // explicit optical size `o` picks the entry instead, as Core Text tracks `o`-point text
         // scaled to the set size; spans scale the lookup with their size. Each style range gets
