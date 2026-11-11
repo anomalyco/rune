@@ -4,7 +4,7 @@ use super::*;
 use std::ops::Range;
 
 mod plan;
-use plan::{Disposition, Held, Kept, Layer, Move, Planned};
+use plan::{Describe, Disposition, Held, Kept, Layer, Move, Planned, Planner, Pools};
 
 // Linear premultiplied intermediates preserve HDR colours and avoid accumulating 8-bit
 // quantization through nested layers. The destination format is applied only at composition.
@@ -40,14 +40,8 @@ mod show_tests;
 
 pub(super) struct Layers {
     plan: Vec<Layer>,
-    /// What each layer does this frame, one per `plan` entry: `decide` fills it, and only its two
-    /// targetted variants carry the place their target draws.
-    dispositions: Vec<Disposition>,
-    /// The pools as `decide` reads them, and the moves it asks for, rebuilt every frame.
-    kept: Vec<Held>,
-    parked: Vec<Held>,
-    slots: Vec<Option<Held>>,
-    moves: Vec<Move>,
+    /// What each layer does this frame, and the moves the target pools take to get there.
+    planner: Planner,
     pub targets: Vec<Option<Target>>,
     retained: Vec<Target>,
     /// Targets no layer drew into this frame (a menu closed, a layer's place in the plan moved),
@@ -90,31 +84,6 @@ impl Layers {
         }
     }
 
-    /// Copies the pools into the plain [`Held`]s `decide` reads, so the plan runs without a device.
-    fn gather(&mut self) {
-        self.kept.clear();
-        self.parked.clear();
-        self.slots.clear();
-        self.kept.extend(self.retained.iter().map(Target::held));
-        self.parked.extend(self.spare.iter().map(Target::held));
-        self.slots.extend(self.targets.iter().map(|slot| slot.as_ref().map(Target::held)));
-    }
-
-    /// Forgets what the last plan asked of the pools. A frame with no layers reads none of it, and
-    /// a burst of layers must not leave its scratch behind for every later frame to hold.
-    fn forget_plan(&mut self) {
-        self.dispositions.clear();
-        self.moves.clear();
-        self.kept.clear();
-        self.parked.clear();
-        self.slots.clear();
-        self.dispositions.shrink_to_fit();
-        self.moves.shrink_to_fit();
-        self.kept.shrink_to_fit();
-        self.parked.shrink_to_fit();
-        self.slots.shrink_to_fit();
-    }
-
     /// Test-only: notes the peak of the bytes this frame holds live, targets and blur scratches
     /// alike, so a test can pin it against the peak dev held.
     #[cfg(test)]
@@ -139,11 +108,7 @@ impl Default for Layers {
     fn default() -> Self {
         Self {
             plan: Vec::new(),
-            dispositions: Vec::new(),
-            kept: Vec::new(),
-            parked: Vec::new(),
-            slots: Vec::new(),
-            moves: Vec::new(),
+            planner: Planner::default(),
             targets: Vec::new(),
             retained: Vec::new(),
             spare: Vec::new(),
@@ -193,7 +158,7 @@ pub(super) struct Target {
     content_size: [f32; 2],
 }
 
-impl Target {
+impl Describe for Target {
     /// What the plan reads about it: its size, what it keeps and what it costs, with no handle.
     fn held(&self) -> Held {
         Held {
@@ -260,7 +225,7 @@ impl Renderer {
             let Some(t) = t else { continue };
             stats.targets += 1;
             stats.bytes += Self::target_bytes(t);
-            if matches!(self.layers.dispositions.get(index), Some(Disposition::Render { .. })) {
+            if matches!(self.layers.planner.dispositions.get(index), Some(Disposition::Render { .. })) {
                 stats.extra_passes += 1 + t.blur.as_ref().map_or(0, layer_blur::Scratch::passes);
             }
         }
@@ -276,7 +241,7 @@ impl Renderer {
         self.layers.viewport = viewport;
         #[cfg(test)]
         { self.layers.peak = 0; }
-        let had_layers = !self.layers.plan.is_empty();
+        let before = self.layers.plan.len();
         for slot in &mut self.layers.targets {
             if slot.as_ref().is_some_and(|t| t.cache.is_some()) {
                 self.layers.retained.push(slot.take().unwrap());
@@ -417,16 +382,19 @@ impl Renderer {
         if self.layers.plan.is_empty() {
             // No layers to plan: what closed at the last frame's end is all this frame keeps or
             // drops, exactly as dev trimmed the pool. Nothing here reads a target's size.
-            self.layers.forget_plan();
             self.layers.trim_retained(0);
         } else {
             // One disposition per layer, and every change to the target pools it needs, decided on
             // the pools as they are: `commit` then carries the moves out and `paint_layers` draws them.
-            self.layers.gather();
-            self.layers.decide(isolate, max_dim);
+            let layers = &mut self.layers;
+            let pools = Pools { slots: &layers.targets, retained: &layers.retained, spare: &layers.spare };
+            layers.planner.decide(&layers.plan, &pools, layers.cache_budget, isolate, max_dim);
             self.commit(device);
             self.paint_layers(device, &staging);
         }
+        // A frame whose layers fell gives back what a burst grew the plan's scratch to; a frame
+        // that keeps its layers, or stays empty, leaves it alone.
+        if self.layers.plan.len() < before { self.layers.planner.settle(self.layers.plan.len()); }
         // Rebind child composites to their nearest materialized parent (opaque scopes flatten).
         for index in 0..self.layers.plan.len() {
             if self.layers.targets[index].is_none() { continue; }
@@ -448,17 +416,17 @@ impl Renderer {
         if self.layers.plan.iter().any(|l| l.blend == Blend::PlusLighter) && let Some(s) = &mut self.surfaces {
             s.add_plus_lighter(device, FORMAT);
         }
-        debug_assert!(self.layers.dispositions.iter().zip(&self.layers.targets)
+        debug_assert!(self.layers.planner.dispositions.iter().zip(&self.layers.targets)
             .all(|(d, t)| t.is_some() == matches!(d, Disposition::Render { .. } | Disposition::Cached { .. })),
             "only Render and Cached layers hold a target");
         self.refresh_layer_bindings(device);
-        if had_layers || !self.layers.plan.is_empty() { self.position_layer_surfaces(queue); }
+        if before > 0 || !self.layers.plan.is_empty() { self.position_layer_surfaces(queue); }
     }
 
     /// Carries out the moves the plan decided, in its order: the one place a target changes pool.
     fn commit(&mut self, device: &wgpu::Device) {
-        for i in 0..self.layers.moves.len() {
-            match self.layers.moves[i] {
+        for i in 0..self.layers.planner.moves.len() {
+            match self.layers.planner.moves[i] {
                 Move::Park(slot) => {
                     // The plan's `Drop`s trim the spares; nothing trims here.
                     if let Some(mut t) = self.layers.targets[slot].take() { t.cache = None; self.layers.spare.push(t); }
@@ -511,7 +479,7 @@ impl Renderer {
         let stamp = self.layers.frame_stamp;
         for index in 0..self.layers.plan.len() {
             let l = self.layers.plan[index];
-            match self.layers.dispositions[index] {
+            match self.layers.planner.dispositions[index] {
                 Disposition::Skip | Disposition::Inline => {}
                 Disposition::Cached { rect, cache } => {
                     let t = self.layers.targets[index].as_mut().expect("a claimed cache has its target");
@@ -658,7 +626,7 @@ impl Renderer {
             let layer = self.layers.plan.iter().rposition(|l| before > l.begin && before <= l.end);
             let bounds = self.layer_target(layer).map_or(
                 [0.0, 0.0, self.layers.viewport.0 as f32, self.layers.viewport.1 as f32],
-                |p| self.layers.dispositions.get(p).map_or([0.0; 4], |d| d.rect()));
+                |p| self.layers.planner.dispositions.get(p).map_or([0.0; 4], |d| d.rect()));
             // prepare_surfaces may precede prepare on the first frame.
             if bounds[2] > 0.0 && bounds[3] > 0.0 { s.target(queue, index, bounds); }
         }
@@ -693,7 +661,7 @@ impl Renderer {
     pub(super) fn target_frame(&self, target: Option<usize>) -> ([f32; 2], [u32; 2]) {
         match target {
             Some(index) => {
-                let b = self.layers.dispositions.get(index).map_or([0.0; 4], |d| d.rect());
+                let b = self.layers.planner.dispositions.get(index).map_or([0.0; 4], |d| d.rect());
                 ([b[0], b[1]], [b[2] as u32, b[3] as u32])
             }
             None => ([0.0, 0.0], [self.layers.viewport.0, self.layers.viewport.1]),
@@ -704,7 +672,7 @@ impl Renderer {
         self.flush_uploads(encoder);
         let mut first = true;
         for (index, l) in self.layers.plan.iter().enumerate().rev() {
-            let disposition = self.layers.dispositions.get(index).copied().unwrap_or(Disposition::Skip);
+            let disposition = self.layers.planner.dispositions.get(index).copied().unwrap_or(Disposition::Skip);
             if !matches!(disposition, Disposition::Render { .. }) { continue; }
             let Some(target) = &self.layers.targets[index] else { continue };
             let rect = disposition.rect();
@@ -737,7 +705,7 @@ impl Renderer {
             if l.begin < cursor || l.begin >= range.end { continue; }
             assert!(l.end < range.end, "draw_range must not split a layer scope");
             self.draw_plain(pass, format, cursor..l.begin, target, true, hook);
-            let disposition = self.layers.dispositions.get(index).copied().unwrap_or(Disposition::Skip);
+            let disposition = self.layers.planner.dispositions.get(index).copied().unwrap_or(Disposition::Skip);
             if let (Disposition::Render { .. } | Disposition::Cached { .. }, Some(t)) = (disposition, &self.layers.targets[index]) {
                 let pipeline = if self.layer_blend(target) == Blend::PlusLighter {
                     &self.layers.additive.as_ref().expect("prepared dissolve").1

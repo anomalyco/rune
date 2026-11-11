@@ -4,7 +4,7 @@
 //! The reference is dev's code as it was, not a cleaned-up version of it: the claim pass, the settle
 //! pass and the allocate pass, each with the pools it reads and rewrites in the order it rewrote
 //! them, its target writes where it made them, and what a blur scratch costs. The side under test
-//! is the real `Layers::decide`, whose moves are carried out by `apply` (a transcription of
+//! is the real `Planner::decide`, whose moves are carried out by `apply` (a transcription of
 //! `commit`) and whose target descriptors are written by `finish` (a transcription of
 //! `paint_layers`), so a move in the wrong order, at the wrong index, or with a disposition changed,
 //! fails the walk.
@@ -199,6 +199,11 @@ impl From<&OldHeld> for Held {
     }
 }
 
+/// The plan reads a walk's targets where they are, as it reads a frame's.
+impl Describe for OldHeld {
+    fn held(&self) -> Held { Held::from(self) }
+}
+
 /// Dev's target pools, and the three passes that read them.
 #[derive(Clone, Default, Debug, PartialEq)]
 struct Old { retained: Vec<OldHeld>, spare: Vec<OldHeld>, slots: Vec<Option<OldHeld>> }
@@ -391,10 +396,12 @@ fn finish(pools: &mut Old, plan: &[Layer], dispositions: &[Disposition], stamp: 
 }
 
 /// One frame: the plan decides from the pools as they are, both sides, and every verdict and every
-/// pool is compared. Returns what the frame decided for each layer.
-fn frame(pools: &Old, old_pools: &mut Old, scene: &[Spec], isolate: bool, budget: u64, stamp: u64) -> Vec<Disposition> {
+/// pool is compared. `planner` is the same one frame after frame, warm with what the last left in
+/// it. Returns what the frame decided for each layer.
+fn frame(planner: &mut Planner, pools: &Old, old_pools: &mut Old, scene: &[Spec], isolate: bool, budget: u64, stamp: u64) -> Vec<Disposition> {
     // `prepare_layers`' prelude, in its order: a slot that still keeps a cache gives it back to the
     // pool first, then the slots a shorter plan no longer has are parked, then the slots shrink.
+    let previous = pools.slots.len();
     let mut before = pools.clone();
     for slot in &mut before.slots {
         if slot.as_ref().is_some_and(|t| t.cache.is_some()) { before.retained.push(slot.take().unwrap()); }
@@ -404,26 +411,20 @@ fn frame(pools: &Old, old_pools: &mut Old, scene: &[Spec], isolate: bool, budget
     }
     before.slots.resize(scene.len(), None);
 
-    let mut layers = Layers::default();
-    layers.cache_budget = budget;
-    layers.plan = plan_of(scene, &before.retained.iter().map(Held::from).collect::<Vec<_>>());
-    layers.kept = before.retained.iter().map(Held::from).collect();
-    layers.parked = before.spare.iter().map(Held::from).collect();
-    layers.slots = before.slots.iter().map(|t| t.as_ref().map(Held::from)).collect();
-
+    let layers = plan_of(scene, &before.retained.iter().map(Held::from).collect::<Vec<_>>());
     old_pools.clone_from(&before);
-    let mut plan: Vec<OldLayer> = old_layers(scene, &layers.plan);
+    let mut plan: Vec<OldLayer> = old_layers(scene, &layers);
     old_pools.passes(&mut plan, isolate, 4096, budget, stamp);
 
-    let mut moved = before;
     let mut decisions = Vec::new();
     if scene.is_empty() {
         // A layerless frame plans nothing: dev's only work is the trim its passes end with.
-        moved.trim_retained(0, budget);
+        before.trim_retained(0, budget);
     } else {
-        layers.decide(isolate, 4096);
+        let pools = Pools { slots: &before.slots, retained: &before.retained, spare: &before.spare };
+        planner.decide(&layers, &pools, budget, isolate, 4096);
         for (index, old) in plan.iter().enumerate() {
-            let got = layers.dispositions[index];
+            let got = planner.dispositions[index];
             match (old.show, got) {
                 (OldShow::Hidden | OldShow::Covered, Disposition::Skip)
                     | (OldShow::Inline, Disposition::Inline) => {}
@@ -434,11 +435,13 @@ fn frame(pools: &Old, old_pools: &mut Old, scene: &[Spec], isolate: bool, budget
                 (show, got) => panic!("layer {index} at {stamp}: dev says {show:?}, the plan says {got:?}"),
             }
         }
-        apply(&mut moved, &layers.moves);
-        finish(&mut moved, &layers.plan, &layers.dispositions, stamp);
-        decisions = layers.dispositions.clone();
+        apply(&mut before, &planner.moves);
+        finish(&mut before, &layers, &planner.dispositions, stamp);
+        decisions = planner.dispositions.clone();
     }
-    assert_eq!(moved, *old_pools, "the pools at {stamp}, from {:?}: {:?}", layers.moves, layers.dispositions);
+    assert_eq!(before, *old_pools, "the pools at {stamp}, from {:?}: {:?}", planner.moves, planner.dispositions);
+    // `prepare_layers`' tail: a frame whose layers fell gives the plan's scratch back.
+    if scene.len() < previous { planner.settle(scene.len()); }
     decisions
 }
 
@@ -453,13 +456,13 @@ fn every_frame_walk_matches_dev() {
         (6, tight, true), (4, DEFAULT_CACHE_BUDGET, true), (5, DEFAULT_CACHE_BUDGET, true),
         (0, tight, true), (1, DEFAULT_CACHE_BUDGET, false),
     ];
-    fn walk(scenes: &[Vec<Spec>], events: &[(usize, u64, bool)], pools: &Old, stamp: u64, depth: u32) {
+    fn walk(scenes: &[Vec<Spec>], events: &[(usize, u64, bool)], pools: &Old, planner: &Planner, stamp: u64, depth: u32) {
         if depth == 0 { return; }
         for &(scene, budget, isolate) in events {
-            let mut after = Old::default();
+            let (mut after, mut planner) = (Old::default(), planner.clone());
             let next = stamp + 1;
-            frame(pools, &mut after, &scenes[scene], isolate, budget, next);
-            walk(scenes, events, &after, next, depth - 1);
+            frame(&mut planner, pools, &mut after, &scenes[scene], isolate, budget, next);
+            walk(scenes, events, &after, &planner, next, depth - 1);
             // Nothing is left for a later frame to find: every scene closes what it opened.
             assert!(after.slots.len() <= scenes[scene].len());
         }
@@ -469,7 +472,7 @@ fn every_frame_walk_matches_dev() {
     let mut scenes = scenes;
     scenes.push(Vec::new());
     let events: Vec<(usize, u64, bool)> = events.into_iter().chain([(empty, DEFAULT_CACHE_BUDGET, true)]).collect();
-    walk(&scenes, &events, &Old::default(), 0, 5);
+    walk(&scenes, &events, &Old::default(), &Planner::default(), 0, 5);
 }
 
 /// What dev's `target_bytes` counts for a kept target: its own texture, plus the blur scratch's
@@ -489,12 +492,39 @@ fn a_kept_target_costs_its_texture_and_its_blur() {
 #[test]
 fn a_closed_cache_is_still_kept_when_its_layers_come_back() {
     let scenes = scenes();
-    let (mut pools, mut after) = (Old::default(), Old::default());
-    frame(&pools, &mut after, &scenes[0], true, DEFAULT_CACHE_BUDGET, 1);
+    let (mut pools, mut after, mut planner) = (Old::default(), Old::default(), Planner::default());
+    frame(&mut planner, &pools, &mut after, &scenes[0], true, DEFAULT_CACHE_BUDGET, 1);
     std::mem::swap(&mut pools, &mut after);
-    frame(&pools, &mut after, &[], true, DEFAULT_CACHE_BUDGET, 2);
+    frame(&mut planner, &pools, &mut after, &[], true, DEFAULT_CACHE_BUDGET, 2);
     std::mem::swap(&mut pools, &mut after);
     assert!(pools.retained.iter().any(|t| t.cache == Some((7, 1))), "a closed cache is kept for its node");
-    let decisions = frame(&pools, &mut after, &scenes[0], true, DEFAULT_CACHE_BUDGET, 3);
+    let decisions = frame(&mut planner, &pools, &mut after, &scenes[0], true, DEFAULT_CACHE_BUDGET, 3);
     assert!(matches!(decisions[0], Disposition::Cached { .. }), "the frame that closes and opens again hits it");
+}
+
+/// The plan reads a pool in place until it first moves a target, and after that through its own
+/// order: every sequence of parks and takes, from pools of every small size, leaves the places
+/// where `Vec::push` and `Vec::swap_remove` would, which is what `commit` replays on the pool.
+#[test]
+fn a_pool_view_moves_its_targets_as_a_vec_does() {
+    fn walk(view: &View, model: &[Source], fresh: usize, depth: u32) {
+        assert_eq!(view.len, model.len());
+        for (place, &source) in model.iter().enumerate() { assert_eq!(view.source(place), source, "{model:?}"); }
+        if depth == 0 { return; }
+        let (mut parked, mut pushed) = (view.clone(), model.to_vec());
+        parked.push(Source::Slot(fresh));
+        pushed.push(Source::Slot(fresh));
+        walk(&parked, &pushed, fresh + 1, depth - 1);
+        for at in 0..model.len() {
+            let (mut view, mut model) = (view.clone(), model.to_vec());
+            assert_eq!(view.swap_remove(at), model.swap_remove(at));
+            walk(&view, &model, fresh + 1, depth - 1);
+        }
+    }
+    for len in 0..4 {
+        let mut view = View::new(Source::Spare);
+        view.reset(len);
+        let model: Vec<Source> = (0..len).map(Source::Spare).collect();
+        walk(&view, &model, 0, 6);
+    }
 }
