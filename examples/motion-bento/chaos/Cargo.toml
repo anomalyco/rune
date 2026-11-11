@@ -7,8 +7,13 @@ publish = false
 description = "The motion bento's shared parts: the seeded chaos schedule, the tiles' logical state, the springs and colours, and the frame meter. No UI framework."
 
 [dependencies]
-libc = "0.2"
 procwatch = { path = "../../../crates/procwatch" }
+
+[target.'cfg(not(windows))'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Threading"] }
 
 [lints]
 workspace = true

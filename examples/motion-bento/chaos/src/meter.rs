@@ -84,6 +84,22 @@ fn cpu_seconds() -> f64 {
 }
 
 /// This thread's CPU seconds, and the process's (user and system), cheaply enough for every frame.
+#[cfg(windows)]
+fn cpu_now() -> (f64, f64) {
+    use windows_sys::Win32::Foundation::FILETIME;
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetCurrentThread, GetProcessTimes, GetThreadTimes};
+    let zero = || FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 };
+    let secs = |f: FILETIME| ((f.dwHighDateTime as u64) << 32 | f.dwLowDateTime as u64) as f64 * 1e-7;
+    let (mut created, mut exited, mut kernel, mut user) = (zero(), zero(), zero(), zero());
+    // SAFETY: the pseudo-handles need no closing; each call only writes the structs it's given.
+    let thread = if unsafe { GetThreadTimes(GetCurrentThread(), &mut created, &mut exited, &mut kernel, &mut user) } != 0 { secs(kernel) + secs(user) } else { f64::NAN };
+    // SAFETY: as above.
+    let process = if unsafe { GetProcessTimes(GetCurrentProcess(), &mut created, &mut exited, &mut kernel, &mut user) } != 0 { secs(kernel) + secs(user) } else { f64::NAN };
+    (thread, process)
+}
+
+/// This thread's CPU seconds, and the process's (user and system), cheaply enough for every frame.
+#[cfg(not(windows))]
 fn cpu_now() -> (f64, f64) {
     let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
     // SAFETY: both calls only write the struct they're given.
