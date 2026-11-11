@@ -127,6 +127,7 @@ impl Requests {
 }
 
 impl Transition for Event<'_> {
+    #[inline(always)]
     fn apply(self, requests: &mut Requests) -> Effects<Effect> {
         match self {
             Event::Arrive(request) => requests.arrive(request),
