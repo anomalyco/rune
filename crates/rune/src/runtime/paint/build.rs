@@ -528,7 +528,7 @@ impl<S: 'static> Runtime<S> {
                         && sh[3] > oc[1].max(vp[1] - filter_margin) && sh[1] < oc[3].min(vp[3] + filter_margin)
                 }
             };
-            if self.surface_visible && base_opacity >= 1.0 / 255.0 && !self.reduced_motion
+            if self.live.visible() && base_opacity >= 1.0 / 255.0 && !self.reduced_motion
                 && loop_vis
                 && let Some(track) = self.loops.get(&n.id)
             {
@@ -1025,7 +1025,7 @@ impl<S: 'static> Runtime<S> {
                         }
                     }
                     if let Some((surface, fit)) = &n.vis.surface {
-                        if let Some(pulled) = surface.pull_video(video_clock, &self.live_wake) {
+                        if let Some(pulled) = surface.pull_video(video_clock, self.live.waker()) {
                             // A clip whose next picture isn't due for a while wakes the window
                             // then, instead of drawing every refresh in between.
                             let wait = pulled.due.map(|due| due.saturating_duration_since(crate::time::Instant::now()).as_secs_f64());

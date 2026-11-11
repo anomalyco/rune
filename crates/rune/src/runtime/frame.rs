@@ -654,7 +654,8 @@ impl<S: 'static> Runtime<S> {
         if let Some(publish) = tests::MID_FRAME.with(|hook| hook.borrow_mut().take()) { publish(); }
         // Poll and input can publish after the initial wake read without committing. Sample
         // those values now, but retain the wake: a picture may still need next frame's layout.
-        let live_animating = self.latch_live(live_woke || self.live_pending());
+        let live_pending = live_woke || self.live_pending();
+        let live_animating = self.latch_live(live_pending);
         if let Some(trace) = tx.trace.take() {
             for event in trace.events { self.trace_event(event); }
             for (name, kind, value) in trace.channels { self.trace_channel(name, kind, value); }
@@ -678,7 +679,7 @@ impl<S: 'static> Runtime<S> {
     /// frame then runs at exactly that time, however long the host slept. A hidden window
     /// sleeps through it; showing it settles.
     fn wake_for_motion(&mut self, at: f64) {
-        if !self.surface_visible || self.time_scale <= 0.0 { return; }
+        if !self.live.visible() || self.time_scale <= 0.0 { return; }
         let wake = self.clock + (at - self.t).max(0.0) / self.time_scale as f64;
         if self.loop_wake.is_none_or(|w| wake < w.0) { self.loop_wake = Some((wake, at)); }
     }
@@ -756,7 +757,8 @@ impl<S: 'static> Runtime<S> {
         animating |= source(self.reveals_active(), AnimSource::REVEAL);
         // Values set from `on_scroll_offset` show in the frame that scrolled.
         if self.tell_scroll_offsets(instant_scroll) {
-            let live = self.latch_live(self.take_live_wake());
+            let took = self.take_live_wake();
+            let live = self.latch_live(took);
             if live { sources |= AnimSource::LIVE; }
             let running = self.scene.store().running();
             waits = running.then(|| self.scene.store().waiting_until()).flatten();

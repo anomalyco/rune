@@ -91,7 +91,7 @@ impl<S: 'static> Runtime<S> {
         merge(&mut self.pending, tx);
         if consumed && live_only {
             self.live_only_skips += 1;
-            self.live_dirty = true;
+            self.live.set();
         } else {
             self.dirty |= consumed;
         }

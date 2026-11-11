@@ -96,7 +96,7 @@ impl<S: 'static> Runtime<S> {
             let placed = self.images.place_at(pixels, [rect[2] / span[0], rect[3] / span[1]], Some(now));
             // An animated image wakes the window for its next frame only while drawn in a shown
             // window: off screen it isn't painted, so it asks for nothing.
-            if let Some((_, Some(at))) = placed && self.surface_visible && self.time_scale > 0.0 {
+            if let Some((_, Some(at))) = placed && self.live.visible() && self.time_scale > 0.0 {
                 let wake = self.clock + (at - now).max(0.0) / self.time_scale as f64;
                 if self.loop_wake.is_none_or(|w| wake < w.0) { self.loop_wake = Some((wake, at)); }
             }

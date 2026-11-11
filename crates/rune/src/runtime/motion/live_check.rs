@@ -40,12 +40,12 @@ impl<S: 'static> Runtime<S> {
         if self.live_only_check && self.clock - self.last_commit_clock >= LIVE_ONLY_CHECK {
             if self.live_check.is_none() { self.live_check = Some((label.to_string(), self.view_print())); }
             self.live_checks += 1;
-            self.live_dirty = true;
+            self.live.set();
             return true;
         }
         let _ = label;
         self.live_only_skips += 1;
-        self.live_dirty = true;
+        self.live.set();
         false
     }
 

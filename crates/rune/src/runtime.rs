@@ -656,7 +656,6 @@ pub struct Runtime<S: 'static> {
     time_scaled: bool,
     /// Shared host deadline: unscaled wake time and corresponding animation time.
     loop_wake: Option<(f64, f64)>,
-    surface_visible: bool,
     hovered: Option<String>,
     /// Elements with `on_hover_change` that the pointer is inside.
     hover_within: Vec<String>,
@@ -775,7 +774,7 @@ pub struct Runtime<S: 'static> {
     pub(crate) trace_channels: Option<HashMap<&'static str, (&'static str, f32)>>,
     /// Counters for perf gates.
     pub stats: FrameStats,
-    live_wake: Arc<crate::live::Wake>,
+    live: live_latch::LiveLane,
     live_clock: Arc<()>,
     window_focused: Option<bool>,
     /// The focused spellchecked field's word at the caret (`spell::pause`).
@@ -783,7 +782,6 @@ pub struct Runtime<S: 'static> {
     /// `keys_lost` queued its `FocusLost` since the window last had focus.
     keys_lost: bool,
     live_subscriptions: Vec<Arc<crate::live::Subscription>>,
-    live_dirty: bool,
     /// Events whose handler said `Tx::live_only`, and so didn't commit.
     live_only_skips: u64,
     /// The clock at the last commit.
@@ -994,7 +992,6 @@ impl<S: 'static> Runtime<S> {
             scale_frame: None,
             time_scaled: false,
             loop_wake: None,
-            surface_visible: true,
             hovered: None,
             hover_within: Vec::new(),
             hover_gone: Vec::new(),
@@ -1056,7 +1053,7 @@ impl<S: 'static> Runtime<S> {
             record_events: true,
             trace_channels: None,
             stats: FrameStats::default(),
-            live_wake: crate::live::Wake::new(Arc::new(|| {})),
+            live: live_latch::LiveLane::new(Arc::new(|| {})),
             live_clock: Arc::new(()),
             frame_target: None,
             videos_active: false,
@@ -1070,7 +1067,6 @@ impl<S: 'static> Runtime<S> {
             on_visibility: None,
             app_ime: Default::default(),
             live_subscriptions: Vec::new(),
-            live_dirty: false,
             live_only_skips: 0,
             last_commit_clock: f64::NEG_INFINITY,
             #[cfg(debug_assertions)]
