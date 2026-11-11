@@ -1,5 +1,5 @@
-//! Every built-in glyph rasterises like a reference SVG renderer (resvg) at the sizes
-//! components draw them. Set `RUNE_GLYPH_PROOF=<dir>` to also write enlarged contact sheets:
+//! Compare built-in glyphs with resvg at component sizes: coverage for outlines, ink placement
+//! for Chromium-style hairlines. Set `RUNE_GLYPH_PROOF=<dir>` to also write enlarged contact sheets:
 //! Rune's mask, resvg's, and their difference, per glyph and size.
 
 use resvg::{tiny_skia, usvg};
@@ -41,7 +41,7 @@ const ALL: [&Icon; 28] = [
 /// Glyph sizes in points (a password manager's 16–20 pt plus a large one) at 1× and 2×.
 const POINTS: [u32; 3] = [16, 20, 32];
 
-fn reference(icon: &Icon, px: u32) -> Vec<u8> {
+fn reference_tree(icon: &Icon) -> usvg::Tree {
     // Rune strokes without filling when an element names only a stroke, like icon sets that put
     // `fill="none"` on the root `<svg>`.
     let v = icon.view;
@@ -49,14 +49,30 @@ fn reference(icon: &Icon, px: u32) -> Vec<u8> {
         r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {v} {v}" fill="none" color="black">{}</svg>"#,
         icon.body
     );
-    let tree = usvg::Tree::from_str(&svg, &usvg::Options::default()).expect("glyph parses as SVG");
+    usvg::Tree::from_str(&svg, &usvg::Options::default()).expect("glyph parses as SVG")
+}
+
+fn has_hairline(group: &usvg::Group, scale: f32) -> bool {
+    group.children().iter().any(|node| match node {
+        usvg::Node::Group(g) => has_hairline(g, scale),
+        usvg::Node::Path(p) => p.stroke().is_some_and(|stroke| {
+            // text/icon.rs sends strokes this wide in device pixels to text/hairline.rs.
+            let t = p.abs_transform();
+            let device = stroke.width().get() * scale * (t.sx * t.sy - t.kx * t.ky).abs().sqrt();
+            device <= 1.0 + 1.0 / 256.0
+        }),
+        _ => false,
+    })
+}
+
+fn reference(tree: &usvg::Tree, px: u32, scale: f32) -> Vec<u8> {
     // tiny-skia quantises anti-aliased coverage to quarters vertically, so render 4× and
     // average each 4×4 block for exact area coverage.
     const SS: u32 = 4;
     let big = px * SS;
     let mut pixmap = tiny_skia::Pixmap::new(big, big).unwrap();
-    let s = big as f32 / v;
-    resvg::render(&tree, tiny_skia::Transform::from_scale(s, s), &mut pixmap.as_mut());
+    let s = scale * SS as f32;
+    resvg::render(tree, tiny_skia::Transform::from_scale(s, s), &mut pixmap.as_mut());
     let alpha = pixmap.pixels();
     (0..px * px)
         .map(|i| {
@@ -80,17 +96,23 @@ fn built_in_glyphs_match_a_reference_rasteriser() {
     let mut failures = Vec::new();
     let mut sheets = [Vec::new(), Vec::new()];
     for icon in ALL {
+        let tree = reference_tree(icon);
         let mut rows = [Vec::new(), Vec::new()];
         for pt in POINTS {
             for scale in [1, 2] {
                 let px = pt * scale;
-                let (ours, theirs) = (icon_coverage(icon, px), reference(icon, px));
-                let m = mismatch(&ours, &theirs);
-                println!("{:18} {pt:2}pt @{scale}x  mismatch {m:.3}", icon.name);
-                // Anti-aliasing differs between rasterisers by a few percent at these sizes; a
-                // wrong control point or a stray fill differs by far more.
-                if m > 0.12 {
-                    failures.push(format!("{} at {pt}pt @{scale}x: {m:.3}", icon.name));
+                let view_scale = px as f32 / icon.view;
+                let (ours, theirs) = (icon_coverage(icon, px), reference(&tree, px, view_scale));
+                if has_hairline(tree.root(), view_scale) {
+                    if !hairline_ink_in_place(&ours, &theirs, px) {
+                        failures.push(format!("{} at {pt}pt @{scale}x: missing or misplaced hairline ink", icon.name));
+                    }
+                } else {
+                    let m = mismatch(&ours, &theirs);
+                    println!("{:18} {pt:2}pt @{scale}x  mismatch {m:.3}", icon.name);
+                    if m > 0.12 {
+                        failures.push(format!("{} at {pt}pt @{scale}x: {m:.3}", icon.name));
+                    }
                 }
                 rows[scale as usize - 1].push((px, ours, theirs));
             }
@@ -113,6 +135,17 @@ fn built_in_glyphs_match_a_reference_rasteriser() {
 }
 
 type Row = (&'static str, Vec<(u32, Vec<u8>, Vec<u8>)>);
+
+/// Every covered pixel must be within one pixel of resvg ink, but needn't have the same alpha.
+fn hairline_ink_in_place(ours: &[u8], theirs: &[u8], px: u32) -> bool {
+    ours.iter().any(|&a| a != 0)
+        && (0..px * px).filter(|&i| ours[i as usize] != 0).all(|i| {
+            let (x, y) = (i % px, i / px);
+            (y.saturating_sub(1)..=(y + 1).min(px - 1)).any(|row| {
+                (x.saturating_sub(1)..=(x + 1).min(px - 1)).any(|col| theirs[(row * px + col) as usize] != 0)
+            })
+        })
+}
 
 /// One row per glyph; per size: Rune, resvg, then red where Rune has extra ink and blue where
 /// it lacks ink. Cells are enlarged 4× (nearest) on a white page.
