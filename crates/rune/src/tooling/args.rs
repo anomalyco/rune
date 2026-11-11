@@ -73,6 +73,10 @@ pub struct Args {
     /// harness's actions keep pace with its script. It stands in for a window, so `App::on_ready`
     /// runs after its first frame.
     pub(crate) realtime: bool,
+    /// `--cpu-boot DIR`: also paint the `--snap` frame on the CPU (`render::cpu_boot`), on
+    /// `--cpu-boot-threads N` threads (6 by default).
+    pub(crate) cpu_boot: Option<PathBuf>,
+    pub(crate) cpu_boot_threads: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -114,7 +118,7 @@ impl Args {
     fn parse_split(argv: Vec<String>) -> (Args, Vec<String>) {
         #[cfg(feature = "hot")]
         crate::hot::enable_from_env();
-        let mut a = Args { fps: 60.0, every: 1, cols: 10, ..Default::default() };
+        let mut a = Args { fps: 60.0, every: 1, cols: 10, cpu_boot_threads: 6, ..Default::default() };
         let mut extra = Vec::new();
         let mut i = 0;
         let val = |i: &mut usize| -> String {
@@ -197,6 +201,8 @@ impl Args {
                 "--window" => a.window = Some(val(&mut i)),
                 "--list-windows" => a.list_windows = true,
                 "--chrome" => a.chrome_overlay = true,
+                "--cpu-boot" => a.cpu_boot = Some(val(&mut i).into()),
+                "--cpu-boot-threads" => a.cpu_boot_threads = (num(&val(&mut i)) as usize).max(1),
                 "-h" | "--help" => {
                     eprintln!("{HELP}");
                     std::process::exit(0);
@@ -208,6 +214,7 @@ impl Args {
         if a.variant.is_some() && a.playground.is_none() { die("--variant needs --playground"); }
         if a.crop_key.is_some() && a.snap.is_none() { die("--crop KEY needs --snap"); }
         if a.whole_window && (a.playground.is_none() || a.snap.is_none()) { die("--whole-window needs --playground and --snap"); }
+        if a.cpu_boot.is_some() && a.snap.is_none() { die("--cpu-boot needs --snap"); }
         (a, extra)
     }
 
@@ -292,6 +299,9 @@ const HELP: &str = "usage: <app> [window]
   --window KEY         select a window for headless tools (run_windows, App::window)
   --list-windows       list window keys using a deterministic virtual display
   --chrome              draw where macOS puts the traffic lights; list elements overlapping them
+  --cpu-boot DIR        also paint the --snap frame on the CPU, as a window's first frame before
+                        its GPU: DIR gets draw.bin, cpu.png and gpu.png, and the run prints
+                        rune-cpu-boot {json} (stage times, drift); --cpu-boot-threads N (6)
   other arguments are passed to the app (rune::tooling::extra_args)";
 
 pub(crate) fn die(msg: &str) -> ! {

@@ -41,6 +41,9 @@ pub(super) enum ResidencyEvent {
     FillRan,
     /// The renderer uploaded rows `y0..y1` of `page` from the CPU copy.
     RowsUploaded { page: u16, rows: (u32, u32) },
+    /// The CPU filled it in the page's CPU copy (`render::cpu_boot::fill_masks`), as a renderer
+    /// would have: its texels now go up with their rows, and no renderer fills it again.
+    FilledOnCpu,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -52,6 +55,10 @@ pub(super) enum ResidencyEffect {
 impl Residency {
     pub(super) fn step(&mut self, event: ResidencyEvent) -> Effects<ResidencyEffect> {
         match (*self, event) {
+            (Residency::Pending(g, _), ResidencyEvent::FilledOnCpu) => {
+                *self = Residency::Uploaded(g);
+                Effects::none()
+            }
             (Residency::Pending(g, f), ResidencyEvent::FillRan) => {
                 *self = Residency::Filled(g, f);
                 Effects::none()
@@ -126,6 +133,16 @@ impl Atlas {
 
     /// Each page's queued fills, stepped as run: the renderer draws them before the frame.
     pub(crate) fn take_fills(&mut self) -> Vec<(usize, Vec<QueuedFill>)> {
+        self.take_fills_as(ResidencyEvent::FillRan)
+    }
+
+    /// Each page's queued fills for the CPU to fill in the pages' CPU copy: they become masks the
+    /// CPU drew, so the GPU's first frame samples exactly the texels the CPU's did.
+    pub(crate) fn take_cpu_fills(&mut self) -> Vec<(usize, Vec<QueuedFill>)> {
+        self.take_fills_as(ResidencyEvent::FilledOnCpu)
+    }
+
+    fn take_fills_as(&mut self, ran: ResidencyEvent) -> Vec<(usize, Vec<QueuedFill>)> {
         let mut out = Vec::new();
         for (page, keys) in std::mem::take(&mut self.fills).into_iter().enumerate() {
             let mut fills = Vec::with_capacity(keys.len());
@@ -134,7 +151,7 @@ impl Atlas {
                 let Some(entry) = self.map.get_mut(&key) else { continue };
                 if let Residency::Pending(g, fill) = *entry && g.page as usize == page {
                     fills.push(QueuedFill { rect: [g.x, g.y, g.w, g.h], fill });
-                    let _ = entry.step(ResidencyEvent::FillRan);
+                    let _ = entry.step(ran);
                 }
             }
             if !fills.is_empty() { out.push((page, fills)); }
