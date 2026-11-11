@@ -1,7 +1,7 @@
 [
 {"path":"#0","role":"group","rect":[0.00,0.00,720.00,900.00],"fill":"#00000000"},
-{"path":"#0/#0","role":"group","rect":[16.00,16.00,688.00,158.40],"fill":"#00000000"},
+{"path":"#0/#0","role":"group","rect":[16.00,16.00,688.00,159.40],"fill":"#00000000"},
 {"path":"#0/#0/b0","role":"text","rect":[16.00,16.00,688.00,22.40],"fill":"#00000000","key":"b0","text":"Here is the test:","color":"#fafafaff"},
-{"path":"#0/#0/b1","role":"code","rect":[16.00,50.40,688.00,124.00],"fill":"#242424ff","key":"b1"},
-{"path":"#0/#0/b1/#0","role":"text","rect":[28.00,62.40,664.00,100.00],"fill":"#00000000","text":"import { expect, test } from \"bun:test\"\n\ntest(\"flapping keeps backing off\", () => {\n  const clock = fakeClock()\n  const delays = [1, 2, 3].map(() => b.fail())","color":"#fafafaff"}
+{"path":"#0/#0/b1","role":"code","rect":[16.00,50.40,688.00,125.00],"fill":"#242424ff","key":"b1"},
+{"path":"#0/#0/b1/#0","role":"text","rect":[28.50,62.90,663.00,100.00],"fill":"#00000000","text":"import { expect, test } from \"bun:test\"\n\ntest(\"flapping keeps backing off\", () => {\n  const clock = fakeClock()\n  const delays = [1, 2, 3].map(() => b.fail())","color":"#fafafaff"}
 ]
