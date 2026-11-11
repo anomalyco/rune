@@ -210,7 +210,7 @@ impl<S: 'static> Host<S> {
             let hz = l.window.current_monitor().and_then(|m| m.refresh_rate_millihertz()).map_or(60.0, |hz| hz as f64 / 1000.0);
             #[cfg(target_os = "macos")]
             let hz = l.native.pacing.as_ref().map_or(hz, |pacing| pacing.refresh_hz());
-            let mut trace = crate::tooling::Trace::open_clock(path, self.rt.viewport, hz, l.window.scale_factor() as f32, "wall");
+            let mut trace = crate::tooling::Trace::open_clock(path, self.rt.viewport, hz, self.rt.env.scale, "wall");
             trace.all = self.args.trace_all;
             #[cfg(target_os = "macos")]
             if let Some(log) = self.present_log.clone() && l.native.present.is_some() { trace.record_presents(log, now); }

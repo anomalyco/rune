@@ -55,13 +55,15 @@ impl<S: 'static> Runtime<S> {
             viewport: self.viewport,
             fit_height: self.fit_height,
             system_reduced_motion: self.system_reduced_motion,
-            titlebar_inset: self.titlebar_inset,
-            chrome: self.titlebar.insets,
+            // The window's controls are in its points; the view's are over the zoom.
+            titlebar_inset: self.titlebar_inset / self.zoom.k,
+            chrome: self.titlebar.insets.zoomed(self.zoom.k),
             caption: self.titlebar.caption,
             system_accent: self.system_accent,
             system_scroll_bars: self.scroll_bars.state,
             reduced_motion: self.reduced_motion,
             time_scale: self.time_scale,
+            zoom: self.zoom.k,
             defaults: self.defaults.clone(),
             titlebar: self.titlebar_set(),
             caret: self.caret.clone(),
@@ -174,7 +176,7 @@ impl<S: 'static> Measurement<'_, S> {
         // The Windows caption buttons go over everything the view drew, in a frame around it.
         let Some(caption) = &self.caption else { return root };
         let symbol = cx.caption_color.unwrap_or(if self.env.system_dark { Color::WHITE } else { Color::BLACK });
-        crate::titlebar::frame(root, caption, symbol, self.env.scale, self.fit_height)
+        crate::titlebar::frame(root, caption, symbol, (self.env.scale, self.zoom), self.fit_height)
     }
 
     /// What a memo scope hashes of the window's controls (`Cx::titlebar_inset`,
@@ -215,6 +217,7 @@ impl<S: 'static> Measurement<'_, S> {
             nodes,
             reduced_motion: self.reduced_motion,
             time_scale: self.time_scale,
+            zoom: self.zoom,
             defaults: self.defaults.clone(),
             titlebar: self.titlebar,
             caret_read: self.caret_read,
@@ -379,6 +382,7 @@ impl<S: 'static> Measurement<'_, S> {
             system_reduced_motion: this.system_reduced_motion,
             reduced_motion: this.system_reduced_motion,
             time_scale: this.time_scale,
+            zoom: 1.0,
             defaults: Default::default(),
             caret: this.caret.clone(),
             caret_read: std::cell::Cell::new(false),
@@ -422,6 +426,7 @@ impl<S: 'static> Measurement<'_, S> {
         *self.memo = memo;
         self.reduced_motion = cx.reduced_motion;
         self.time_scale = cx.time_scale;
+        self.zoom = cx.zoom;
         self.defaults = cx.defaults;
         self.titlebar = cx.titlebar;
         // Reads made by memos this build reused count as made again.

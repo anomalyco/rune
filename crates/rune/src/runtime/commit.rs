@@ -63,6 +63,8 @@ pub(super) struct Measurement<'a, S: 'static> {
     pub(super) system_scroll_bars: crate::platform::scroll_bars::SystemScrollBars,
     pub(super) reduced_motion: bool,
     pub(super) time_scale: f32,
+    /// The window's zoom, then the one the view asked for (`Cx::zoom`) once it returns.
+    pub(super) zoom: f32,
     /// `Cx::foreground` and `Cx::focus_ring`: the last view's, then this one's once it returns.
     pub(super) defaults: cx::ViewDefaults,
     /// `Cx::set_titlebar` and `Cx::titlebar_height`, as the view sets them.
@@ -106,6 +108,7 @@ pub(super) struct Measured {
     pub(super) nodes: Vec<Node>,
     pub(super) reduced_motion: bool,
     pub(super) time_scale: f32,
+    pub(super) zoom: f32,
     pub(super) defaults: cx::ViewDefaults,
     pub(super) titlebar: crate::titlebar::TitlebarSet,
     pub(super) caret_read: bool,
@@ -137,6 +140,11 @@ impl<S: 'static> Runtime<S> {
         }
         self.note_drawn_rows();
         let mut measured = self.measure_commit(tx);
+        // A new zoom lays the view out again at the scale and size it gives, in this commit.
+        if self.apply_zoom(measured.zoom) {
+            self.discard_measured(measured);
+            measured = self.measure_commit(tx);
+        }
         self.focus_before_commit = self.focus.owned();
         // Settle layout reads first so a field that mounts once a rect is known is in `nodes`.
         measured = self.settle_layout_reads(measured, tx);

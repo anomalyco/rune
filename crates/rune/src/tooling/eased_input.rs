@@ -39,6 +39,6 @@ pub(super) fn resize(out: &mut Vec<Ev>, e: &Value, t: f64) {
 
 /// One step of a scripted resize: (0, 0) marks where it starts, and content follows at once.
 pub(super) fn step_resize<S: 'static>(rt: &mut Runtime<S>, from: &mut (f32, f32), (dw, dh): (f32, f32), scale: f32) {
-    if (dw, dh) == (0.0, 0.0) { *from = rt.viewport; }
+    if (dw, dh) == (0.0, 0.0) { *from = rt.window_viewport(); }
     rt.set_viewport(((from.0 + dw).max(1.0), (from.1 + dh).max(1.0)), scale);
 }

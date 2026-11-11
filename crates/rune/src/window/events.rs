@@ -73,14 +73,14 @@ impl<S: 'static> Host<S> {
             match step {
                 FileStep::Enter(paths) => {
                     let pointer = crate::input::drop_pointer::DropPointer::new();
-                    f.at = pointer.sample(&l.window).or_else(|| self.rt.pointer());
+                    f.at = pointer.sample(&l.window, self.rt.zoom()).or_else(|| self.rt.pointer());
                     f.pointer = Some(pointer);
                     self.rt.drag_files(paths, f.at);
                 }
                 FileStep::Drop(paths) => {
                     // A drop with no drag before it (Windows' WM_DROPFILES) samples too.
                     let pointer = f.pointer.take().unwrap_or_else(crate::input::drop_pointer::DropPointer::new);
-                    let at = pointer.sample(&l.window).or(f.at.take()).or_else(|| self.rt.pointer());
+                    let at = pointer.sample(&l.window, self.rt.zoom()).or(f.at.take()).or_else(|| self.rt.pointer());
                     self.rt.drop_files(paths, at);
                 }
                 FileStep::Leave => {
@@ -91,7 +91,7 @@ impl<S: 'static> Host<S> {
             }
         }
         // Sampled even when still, which also notices a target that unmounted under the drag.
-        if !queued && let Some(at) = f.pointer.as_ref().and_then(|p| p.sample(&l.window)) {
+        if !queued && let Some(at) = f.pointer.as_ref().and_then(|p| p.sample(&l.window, self.rt.zoom())) {
             f.at = Some(at);
             queued = self.rt.drag_files_to(Some(at));
         }
@@ -246,7 +246,7 @@ impl<S: 'static> Host<S> {
                 // winit queues `ScaleFactorChanged` in `kCFRunLoopDefaultMode`, which waits
                 // until a window drag ends; resize the surface now when a drag crosses displays
                 // so top-left gravity never shows the old scale's drawable at half or double size.
-                if (scale - rt.env.scale).abs() > f32::EPSILON {
+                if (scale - rt.window_scale()).abs() > f32::EPSILON {
                     let size = l.window.inner_size();
                     if size.width > 0 && size.height > 0 {
                         l.resize_surface(gpu, size);
@@ -275,7 +275,7 @@ impl<S: 'static> Host<S> {
                 // A frame Rune moved itself has its drawable and viewport already.
                 let resized = l.resize_surface(gpu, size);
                 let viewport = (size.width as f32 / scale, size.height as f32 / scale);
-                if !resized && viewport == rt.viewport && scale == rt.env.scale {
+                if !resized && viewport == rt.window_viewport() && scale == rt.window_scale() {
                     if restored || origin_moved { l.request_redraw(); }
                     return;
                 }
@@ -309,13 +309,13 @@ impl<S: 'static> Host<S> {
                 // Still the old scale's size: Windows resizes the window after this event.
                 #[cfg(target_os = "windows")]
                 let size = {
-                    let (width, height) = crate::window::frame::rescaled((size.width, size.height), f64::from(rt.env.scale), scale_factor);
+                    let (width, height) = crate::window::frame::rescaled((size.width, size.height), f64::from(rt.window_scale()), scale_factor);
                     winit::dpi::PhysicalSize::new(width, height)
                 };
                 if size.width > 0 && size.height > 0 {
                     let resized = l.resize_surface(gpu, size);
                     let viewport = (size.width as f32 / scale, size.height as f32 / scale);
-                    if resized || viewport != rt.viewport || scale != rt.env.scale {
+                    if resized || viewport != rt.window_viewport() || scale != rt.window_scale() {
                         rt.set_viewport(viewport, scale);
                         sync_chrome(rt, l, chrome, titlebar);
                         l.request_redraw();
@@ -355,7 +355,7 @@ impl<S: 'static> Host<S> {
                         l.window.set_ime_allowed(ime_allowed);
                         self.ime_allowed = ime_allowed;
                     }
-                    if let Some(a) = rt.ime_area {
+                    if let Some(a) = rt.ime_area.map(|a| rt.to_window(a)) {
                         l.window.set_ime_cursor_area(
                             LogicalPosition::new(a[0] as f64, a[1] as f64),
                             LogicalSize::new(a[2] as f64, a[3] as f64),
@@ -400,13 +400,15 @@ impl<S: 'static> Host<S> {
             }
             WindowEvent::MouseWheel { delta, phase, .. } => {
                 let shift = crate::runtime::SHIFT_TURNS_WHEEL && self.mods.shift_key();
+                // In window points: a wheel turns as far on screen at any zoom, as Chromium's does,
+                // and a pinch is the same gesture whatever the zoom.
                 let (dx, dy) = crate::runtime::wheel_delta(delta, scale, shift);
                 let precise = matches!(delta, winit::event::MouseScrollDelta::PixelDelta(_));
                 let phase = gesture_phase(phase);
                 match rt.pointer() {
                     // Off macOS a trackpad pinch is a Ctrl + wheel.
                     Some((x, y)) if !cfg!(target_os = "macos") && self.mods.control_key() && rt.pinch_wheel(x, y, dy) => {}
-                    Some((x, y)) => rt.wheel_event(crate::WheelEvent::new(dx, dy).at(x, y).mods(map_mods(self.mods))
+                    Some((x, y)) => rt.wheel_event(crate::WheelEvent::new(dx / rt.zoom(), dy / rt.zoom()).at(x, y).mods(map_mods(self.mods))
                         .phase(phase).precise(precise)),
                     None if phase == crate::GesturePhase::Began => rt.wheel_began(),
                     None if phase == crate::GesturePhase::Ended => rt.wheel_ended(),
@@ -433,7 +435,7 @@ impl<S: 'static> Host<S> {
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
-                rt.pointer_move(position.x as f32 / scale, position.y as f32 / scale);
+                rt.pointer_move(position.x as f32 / rt.input_scale(), position.y as f32 / rt.input_scale());
                 // AppKit needs the drag session started inside this mouse-dragged event.
                 if let Some(start) = rt.take_drag_out() {
                     let image = self.gpu.as_ref().filter(|_| start.item.drag_image().is_none()).and_then(|(gpu, renderer)|
@@ -453,7 +455,7 @@ impl<S: 'static> Host<S> {
                 l.request_redraw();
             }
             WindowEvent::Touch(touch) => {
-                crate::window::touch(rt, &touch, scale);
+                crate::window::touch(rt, &touch);
                 l.request_redraw();
             }
             WindowEvent::MouseInput { state, button: MouseButton::Left, .. } => {
@@ -491,7 +493,7 @@ impl<S: 'static> Host<S> {
                         ElementState::Released => {
                             rt.secondary_up(x, y);
                             // At the pointer, while it's still where the click was.
-                            if let Some(menu) = rt.take_window_menu() { chrome::window_menu(&l.window, menu, Some((x, y))); }
+                            if let Some(menu) = rt.take_window_menu() { chrome::window_menu(&l.window, menu, Some((x * rt.zoom(), y * rt.zoom()))); }
                         }
                     }
                 }
@@ -533,7 +535,7 @@ fn touch_promoted() -> bool { false }
 /// hover is back under it as the press lands.
 fn button_at<S: 'static>(rt: &mut Runtime<S>, window: &winit::window::Window) -> Option<(f32, f32)> {
     if let Some(at) = rt.pointer() { return Some(at); }
-    let (x, y) = crate::input::drop_pointer::DropPointer::new().sample(window)?;
+    let (x, y) = crate::input::drop_pointer::DropPointer::new().sample(window, rt.zoom())?;
     rt.pointer_move(x, y);
     Some((x, y))
 }

@@ -103,6 +103,8 @@ impl<S: 'static> Runtime<S> {
             PopupAnchor::Key(key) => self.anchor_rect(key).ok_or_else(|| format!("no element keyed {key:?} to anchor to")),
             &PopupAnchor::Point(x, y) => Ok([x, y, 0.0, 0.0]),
         };
+        // The host places it in window points: the view's times its zoom.
+        let rect = rect.map(|r| self.to_window(r));
         let request = self.popups.open_first()?;
         match request.validate().and(rect) {
             Ok(rect) => {

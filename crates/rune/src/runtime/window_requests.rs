@@ -132,13 +132,14 @@ impl<S: 'static> Runtime<S> {
         self.window_frame = Some(self.window_frame.unwrap_or_default().merge(request));
     }
 
-    /// The root's natural height at the current width, measured without committing, so a
-    /// window that fits its content can open at that height.
+    /// The root's natural height at the current width, in window points (the view's times its
+    /// zoom), measured without committing, so a window that fits its content can open at that
+    /// height.
     pub fn content_height(&mut self) -> f32 {
         let measured = self.measure_pass(&Tx::default(), false);
         let height = measured.nodes.first().map_or(self.viewport.1, |root| root.local.h);
         self.discard_measured(measured);
-        height.ceil_to(self.env.scale).max(1.0)
+        (height * self.zoom.k).ceil_to(self.zoom.window_scale).max(1.0)
     }
 
     /// Someone resized a window that fits its content (not a page's band) to `height`: it

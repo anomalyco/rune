@@ -96,6 +96,8 @@ mod font_families;
 mod key_index;
 #[path = "runtime/system_settings.rs"]
 mod system_settings;
+#[path = "runtime/zoom.rs"]
+mod zoom;
 #[path = "runtime/commit/prune.rs"]
 mod prune;
 pub(crate) use blend::{apron_key, glyph, icon_inst, premul};
@@ -410,8 +412,10 @@ pub struct Runtime<S: 'static> {
     pub images: crate::pixels::ImageAtlas,
     pub scene: Scene,
     pub env: Env,
-    /// Viewport in points.
+    /// Viewport in points: the view's, the window's over the zoom.
     pub viewport: (f32, f32),
+    /// The view's UI zoom and the window it applies to (`Cx::zoom`).
+    zoom: zoom::Zoom,
     /// Transparent native surfaces/headless exports clear to transparent black.
     pub transparent: bool,
     /// Opt-in gamma-space (sRGB) blending for translucent fills, shadows and blurs.
@@ -837,6 +841,7 @@ impl<S: 'static> Runtime<S> {
             scene,
             env,
             viewport,
+            zoom: zoom::Zoom { k: 1.0, window: viewport, window_scale: env.scale },
             transparent: false,
             srgb_blend: false,
             native_overlay: false,

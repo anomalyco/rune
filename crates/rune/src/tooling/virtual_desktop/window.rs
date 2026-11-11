@@ -233,7 +233,7 @@ impl<S: 'static> Window<S> {
 
     fn resize(&mut self, frame: [f32; 4]) {
         self.frame = frame;
-        let scale = self.rt.env.scale;
+        let scale = self.rt.window_scale();
         self.rt.set_viewport((frame[2], frame[3]), scale);
         self.rt.set_window_origin((frame[0], frame[1]));
     }

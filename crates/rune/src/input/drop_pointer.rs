@@ -26,9 +26,14 @@ impl DropPointer {
         Self::default()
     }
 
-    /// The pointer over `window`'s content, in points from its top-left, when the platform
-    /// can say.
-    pub(crate) fn sample(&self, window: &Window) -> Option<(f32, f32)> {
+    /// The pointer over `window`'s content, in the points of a view zoomed `zoom` times
+    /// (`Cx::zoom`) from its top-left, when the platform can say.
+    pub(crate) fn sample(&self, window: &Window, zoom: f32) -> Option<(f32, f32)> {
+        self.sample_window(window).map(|(x, y)| (x / zoom, y / zoom))
+    }
+
+    /// The pointer over `window`'s content, in window points.
+    fn sample_window(&self, window: &Window) -> Option<(f32, f32)> {
         #[cfg(target_os = "macos")]
         {
             let view = crate::platform::macos::content_view(window)?;

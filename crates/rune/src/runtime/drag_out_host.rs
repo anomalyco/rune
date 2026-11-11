@@ -5,8 +5,15 @@ use super::*;
 impl<S: 'static> Runtime<S> {
     /// A drag-out the pointer move just delivered asked for. The shell must start the OS
     /// session before returning from that move event.
+    /// The drag to start, its rects and press in window points (the view's times its zoom).
     pub(crate) fn take_drag_out(&mut self) -> Option<crate::drag_out::DragOutStart> {
-        self.drag_out_request.take()
+        let k = self.zoom();
+        self.drag_out_request.take().map(|s| crate::drag_out::DragOutStart {
+            rect: s.rect.map(|v| v * k),
+            bounds: s.bounds.map(|v| v * k),
+            press: (s.press.0 * k, s.press.1 * k),
+            ..s
+        })
     }
 
     /// Where the host reports how a drag-out ended; delivered to `on_drag_end` next frame.

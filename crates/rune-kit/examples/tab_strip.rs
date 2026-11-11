@@ -165,7 +165,7 @@ fn titlebar(s: &App, cx: &mut Cx<App>, k: &Kit, layer: &mut Vec<El>) -> El {
         .on_reorder(reorder)
         .on_tear_out(tear_out)
         .build_layered(k, layer);
-    WindowTitlebar::from_insets(cx.chrome_insets(), 1.0)
+    WindowTitlebar::from_insets(cx.chrome_insets())
         .leading(row().key("nav").gap(2.0).center_y().child(nav(&ic::GRID_PLUS, "Home")).child(nav(&ic::MAGNIFYING_GLASS, "Search sessions")))
         .tabs(strip)
         .build(k)
