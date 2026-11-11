@@ -3,8 +3,8 @@ use crate::text::{GlyphQuad, TextSystem};
 use crate::tok::TextStyle;
 
 #[test]
-fn the_default_is_on_on_macos_and_windfoil_elsewhere() {
-    let want = if cfg!(target_os = "macos") { FontSmoothing::On } else { FontSmoothing::Windfoil };
+fn the_default_is_on_on_macos_and_windfoil_with_chromiums_weight_elsewhere() {
+    let want = if cfg!(target_os = "macos") { FontSmoothing::On } else { FontSmoothing::WindfoilChromium };
     assert_eq!(FontSmoothing::default(), want);
     assert_eq!(TextSystem::default().smoothing, want);
     assert_eq!(TextSystem::default().apple_pipeline(), want.pipeline());

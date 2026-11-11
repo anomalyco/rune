@@ -116,7 +116,7 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
     place from Parley's bytes), pens sit on Skia's quarter pixels, and Skia's gamma tables
     (sRGB, contrast 1, eight luminance buckets) weigh each mask by its ink
     (`text/windows/`). Off Windows it draws as `Off`.
-  - `Windfoil`, the default everywhere but macOS and a Mac's browser: Rune's own text, the same
+  - `Windfoil`: Rune's own text with CoreText's weight, the same
     on every OS. Each glyph's exact pixel coverage from its outline, Windfoil's closed-form box filter over
     xy-monotone quadratics (DesLauriers 2026), with CoreText's dilation (times `TEXT_WEIGHT`,
     0.93, which puts its ink within 1% of CoreText's) and y autohint applied per pixel, pens on
@@ -131,8 +131,8 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
     start with the Windfoil shader everywhere but macOS, where the Classic shader keeps drawing
     until text asks for outlines; where it can't be built, the CPU fills the same masks
     (`text/outline/cover.rs`) and moving text draws from them.
-  - `WindfoilChromium`, `Slug`, `HintedGpu` and `Hinted`: the other ways to draw from the outline
-    store, for comparing renderers. Each takes Chromium's weight (no dilation, Skia's text gamma):
+  - `WindfoilChromium`, the default everywhere but macOS and a Mac's browser, then `Slug`,
+    `HintedGpu` and `Hinted`: the other ways to draw from the outline store. Each takes Chromium's weight (no dilation, Skia's text gamma):
     Windfoil's box coverage of the design outline, Slug's two-ray winding (`outline_slug` in
     `outline.wgsl`), the outline after skrifa's light autohint, and that autohinted outline on
     whole-pixel pens, which is Chromium's text on Linux. `FontSmoothing::ALL` lists every mode and
