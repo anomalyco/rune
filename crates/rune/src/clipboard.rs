@@ -36,7 +36,7 @@ pub use content::{ClipboardContent, ClipboardImage, MAX_IMAGE_BYTES};
 use content::valid_image_size;
 pub use html::sanitize_html;
 pub use secret::{SecretCopy, SecretState};
-use secret::{Alarm, Hold, HoldEffect, HoldEvent, Slot, Unwritten, step_hold};
+use secret::{Alarm, Hold, HoldEffect, HoldEvent, Owner, Slot, Unwritten, step_hold};
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> { m.lock().unwrap_or_else(|e| e.into_inner()) }
 
@@ -277,6 +277,8 @@ trait Backend {
     fn content(&mut self, _all: bool) -> Option<ClipboardContent> { self.text().map(ClipboardContent::from) }
     fn revision(&self) -> Option<u64>;
     fn clear(&mut self) -> Result<(), String>;
+    /// The text, telling a clipboard that can't be read just now (`Err`) from one without text.
+    fn read_text(&mut self) -> Result<Option<Zeroizing<String>>, String> { Ok(self.text()) }
 }
 /// How often the worker checks that a held secret is still on the clipboard. Where there is no
 /// change count (Linux) it compares the text's fingerprint, so it checks less often.
@@ -381,29 +383,39 @@ impl Core {
 
     /// Steps the hold and carries its effects out, in order.
     fn apply<B: Backend>(&mut self, cb: &mut B, event: HoldEvent) {
+        let mut answer = None;
         for effect in step_hold(&mut self.seq, &mut self.hold, event) {
             match effect {
-                HoldEffect::Wipe => {
-                    let _ = cb.clear();
-                    self.own_pills = None;
+                HoldEffect::Wipe { last } => {
+                    let ok = cb.clear().is_ok();
+                    if ok || last { self.own_pills = None; }
+                    answer = Some(HoldEvent::Swept { ok, last });
                 }
                 HoldEffect::Release(slot, state) => slot.released(state),
                 HoldEffect::Notify(notify) => notify.send(),
                 HoldEffect::Arm(alarm) => self.alarm = alarm,
             }
         }
+        if let Some(answer) = answer { self.apply(cb, answer); }
     }
 
-    fn unchanged<B: Backend>(&self, cb: &mut B) -> bool {
-        let Hold::Holding { revision, print, .. } = &self.hold else { return false };
-        *revision == cb.revision() && cb.text().is_some_and(|t| self.keys.hash_one(t.as_str()) == *print)
+    fn owner<B: Backend>(&self, cb: &mut B) -> Owner {
+        let Hold::Holding { revision, print, .. } = &self.hold else { return Owner::Theirs };
+        if *revision != cb.revision() { return Owner::Theirs; }
+        match cb.read_text() {
+            Ok(Some(text)) if self.keys.hash_one(text.as_str()) == *print => Owner::Ours,
+            Ok(_) => Owner::Theirs,
+            Err(_) => Owner::Unknown,
+        }
     }
+
+    fn unchanged<B: Backend>(&self, cb: &mut B) -> bool { self.owner(cb) == Owner::Ours }
 
     fn clear<B: Backend>(&mut self, cb: &mut B, which: Option<&Arc<Slot>>) {
         if !self.hold.answers(which) { return; }
         if which.is_some_and(|s| s.failed()) { return self.recover(cb); }
-        let ours = self.unchanged(cb);
-        self.apply(cb, HoldEvent::Clear { ours });
+        let owner = self.owner(cb);
+        self.apply(cb, HoldEvent::Clear { owner });
     }
 
     /// Clears what a failed replay left held. Anything short of a confirmed wipe keeps the hold,
@@ -427,8 +439,8 @@ impl Core {
         if let Some(alarm) = self.alarm.filter(|a| now >= a.due) {
             self.alarm = None;
             if self.hold.armed(alarm.attempt) {
-                let ours = self.unchanged(cb);
-                return self.apply(cb, HoldEvent::Due { attempt: alarm.attempt, ours });
+                let owner = self.owner(cb);
+                return self.apply(cb, HoldEvent::Due { attempt: alarm.attempt, owner });
             }
         }
         let Hold::Holding { revision, .. } = &self.hold else { return };

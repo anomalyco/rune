@@ -200,22 +200,34 @@ impl Hold {
     }
 }
 
+/// Whether a clipboard still holds the secret Rune wrote.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Owner {
+    Ours,
+    Theirs,
+    /// It couldn't be read just now.
+    Unknown,
+}
+
 pub(super) enum HoldEvent {
     /// A secret reached the clipboard and has been reported as holding it.
     Written { slot: Arc<Slot>, notify: Option<Notify>, due: Option<Instant>, revision: Option<u64>, print: u64 },
     /// A later write took its place, or the clipboard changed under it.
     Lost,
-    /// A clear was asked for; `ours` says whether the clipboard still has what Rune wrote.
-    Clear { ours: bool },
+    /// A clear was asked for; `owner` says whether the clipboard still has what Rune wrote.
+    Clear { owner: Owner },
     /// The caller wiped the clipboard itself and confirmed it.
     Wiped,
     /// An alarm came due.
-    Due { attempt: Attempt, ours: bool },
+    Due { attempt: Attempt, owner: Owner },
+    /// The answer to [`HoldEffect::Wipe`]: whether the clipboard took the wipe.
+    Swept { ok: bool, last: bool },
 }
 
 pub(super) enum HoldEffect {
-    /// Wipe the clipboard.
-    Wipe,
+    /// Wipe the clipboard, and answer with [`HoldEvent::Swept`]. A `last` wipe that fails gives
+    /// the hold up as if it had worked.
+    Wipe { last: bool },
     Release(Arc<Slot>, SecretState),
     Notify(Notify),
     /// Replace the alarm being waited on: a new hold never inherits the last one's.
@@ -233,19 +245,27 @@ pub(super) fn step_hold(seq: &mut Seq, hold: &mut Hold, event: HoldEvent) -> Eff
             effects
         }
         HoldEvent::Lost => release(hold, SecretState::Replaced),
-        HoldEvent::Clear { ours } => settle(hold, ours),
+        HoldEvent::Clear { owner } => settle(hold, owner, false),
         HoldEvent::Wiped => release(hold, SecretState::Cleared),
-        HoldEvent::Due { attempt, ours } if hold.armed(attempt) => settle(hold, ours),
+        HoldEvent::Due { attempt, owner } if hold.armed(attempt) => settle(hold, owner, true),
         HoldEvent::Due { .. } => Effects::none(),
+        HoldEvent::Swept { ok, last } if ok || last => release(hold, SecretState::Cleared),
+        HoldEvent::Swept { .. } => Effects::none(),
     }
 }
 
-/// Ends a hold on a clear: wipes only what is still ours.
-fn settle(hold: &mut Hold, ours: bool) -> Effects<HoldEffect> {
-    if hold.is_free() || !ours { return release(hold, SecretState::Replaced); }
-    let mut effects = Effects::one(HoldEffect::Wipe);
-    effects.extend(release(hold, SecretState::Cleared));
-    effects
+/// Ends a hold on a clear: wipes only what is still ours. Before the delay runs out, a clipboard
+/// with a change count that couldn't be read or wiped keeps the hold, and the delay tries again;
+/// a change since then shows in the count, so that try never takes another app's copy. The
+/// delay's own try is the last, and without a count every try is: they give up as before.
+fn settle(hold: &mut Hold, owner: Owner, delay: bool) -> Effects<HoldEffect> {
+    let Hold::Holding { revision, .. } = hold else { return Effects::none() };
+    let last = delay || revision.is_none();
+    match owner {
+        Owner::Ours => Effects::one(HoldEffect::Wipe { last }),
+        Owner::Unknown if !last => Effects::none(),
+        Owner::Theirs | Owner::Unknown => release(hold, SecretState::Replaced),
+    }
 }
 
 fn release(hold: &mut Hold, state: SecretState) -> Effects<HoldEffect> {

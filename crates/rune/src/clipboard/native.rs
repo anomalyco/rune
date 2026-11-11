@@ -62,6 +62,14 @@ pub(super) fn shutdown() {
 impl Backend for arboard::Clipboard {
     fn write(&mut self, copy: &ClipboardWrite) -> Result<(), String> { write(self, copy) }
     fn text(&mut self) -> Option<Zeroizing<String>> { self.get_text().ok().map(Zeroizing::new) }
+    fn read_text(&mut self) -> Result<Option<Zeroizing<String>>, String> {
+        match self.get_text() {
+            Ok(text) => Ok(Some(Zeroizing::new(text))),
+            // Empty, or not text: either way not the secret.
+            Err(arboard::Error::ContentNotAvailable | arboard::Error::ConversionFailure) => Ok(None),
+            Err(error) => Err(error.to_string()),
+        }
+    }
     #[cfg(target_os = "macos")]
     fn content(&mut self, all: bool) -> Option<ClipboardContent> {
         macos::read(&*unsafe { objc2_app_kit::NSPasteboard::generalPasteboard() }, all)

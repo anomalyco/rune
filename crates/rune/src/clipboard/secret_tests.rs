@@ -7,6 +7,9 @@ use crate::machine::Effects;
 use super::secret::{Secret, SecretEffect, SecretEvent, step};
 use super::*;
 
+#[path = "hold_tests.rs"]
+mod hold;
+
 const LONG: Duration = Duration::from_secs(3600);
 const PAST_LONG: Duration = Duration::from_secs(3601);
 const SECRET: &str = "fixture-secret";
@@ -165,7 +168,10 @@ mod flags {
             held.revision == cb.revision() && cb.text().is_some_and(|t| self.keys.hash_one(t.as_str()) == held.print)
         }
 
-        pub fn clear(&mut self, cb: &mut Fake, which: Option<&Arc<Slot>>) {
+        pub fn clear(&mut self, cb: &mut Fake, which: Option<&Arc<Slot>>) { self.clear_at(cb, which, false); }
+
+        /// A clear; `delay` when the secret's delay asked for it.
+        fn clear_at(&mut self, cb: &mut Fake, which: Option<&Arc<Slot>>, delay: bool) {
             let Some(held) = &self.held else { return };
             if which.is_some_and(|w| !held.slot.as_ref().is_some_and(|s| Arc::ptr_eq(s, w))) { return; }
             // differs from dev: dev sent no clear for a failed replay. This one keeps the hold and
@@ -178,12 +184,20 @@ mod flags {
                 self.own_pills = None;
                 return self.release(SecretState::Cleared);
             }
-            if self.unchanged(cb) {
-                let _ = cb.clear();
-                self.own_pills = None;
-                self.release(SecretState::Cleared);
-            } else {
-                self.release(SecretState::Replaced);
+            // differs from dev: before the delay runs out, a clipboard with a change count that
+            // can't be read (r129) or wiped (r128) keeps the hold, for the delay to try again; a
+            // change since shows in the count. The delay's try, and every try on a clipboard
+            // without a count, gives up as dev did: Replaced if unread, Cleared if the wipe failed.
+            let keep_trying = !delay && held.revision.is_some();
+            let read = if held.revision == cb.revision() { Some(cb.read_text()) } else { None };
+            match read {
+                Some(Ok(Some(text))) if self.keys.hash_one(text.as_str()) == held.print => {
+                    if cb.clear().is_err() && keep_trying { return; }
+                    self.own_pills = None;
+                    self.release(SecretState::Cleared);
+                }
+                Some(Err(_)) if keep_trying => {}
+                _ => self.release(SecretState::Replaced),
             }
         }
 
@@ -195,7 +209,7 @@ mod flags {
                 self.own_pills = None;
             }
             let Some(held) = &self.held else { return };
-            if held.deadline.is_some_and(|d| now >= d) { return self.clear(cb, None); }
+            if held.deadline.is_some_and(|d| now >= d) { return self.clear_at(cb, None, true); }
             let changed = match held.revision {
                 Some(revision) => cb.revision() != Some(revision),
                 None => !self.unchanged(cb),
@@ -279,6 +293,10 @@ impl Backend for Fake {
     fn text(&mut self) -> Option<Zeroizing<String>> {
         if self.unreadable { return None; }
         self.content.as_ref().filter(|c| c.has_plain()).map(|c| c.text.clone())
+    }
+    fn read_text(&mut self) -> Result<Option<Zeroizing<String>>, String> {
+        if self.unreadable { return Err("locked".into()); }
+        Ok(self.text())
     }
     fn content(&mut self, all: bool) -> Option<ClipboardContent> {
         if self.unreadable { return None; }
@@ -739,218 +757,3 @@ fn every_six_events_from_the_whole_alphabet_with_a_counted_first_board() { exhau
 #[test]
 #[ignore]
 fn every_six_events_from_the_whole_alphabet_with_a_counted_second_board() { exhaust_whole_alphabet(COUNTS[1]); }
-
-/// Runs `sequence` through the machines and hands back the rig to look at.
-fn run(sequence: &[Ev]) -> Rig<Core> {
-    let start = Instant::now();
-    check(sequence, [true, true], start).unwrap();
-    let mut rig = Rig::<Core>::new([true, true], start);
-    for &ev in sequence { rig.apply(ev); }
-    rig
-}
-fn wipes(rig: &Rig<Core>, board: usize) -> usize {
-    lock(&rig.log).iter().filter(|e| **e == Logged::Wiped(board)).count()
-}
-
-#[test]
-fn a_cancel_during_the_write_is_wiped_before_a_queued_read() {
-    let rig = run(&[WriteSACancelInWrite, ReadA]);
-    assert_eq!(text_of(&rig.boards[0]), None);
-    assert_eq!(rig.reads[0].as_ref().map(|r| r.0.text()), Some(""));
-    assert_eq!(rig.s.state(), SecretState::Cleared);
-}
-
-#[test]
-fn a_cancel_during_the_notification_is_wiped_before_a_queued_read() {
-    let rig = run(&[WriteSACancelInWake, ReadA]);
-    assert_eq!(rig.reads[0].as_ref().map(|r| r.0.text()), Some(""));
-    let woke = lock(&rig.log).iter().filter(|e| matches!(e, Logged::Woke(..))).count();
-    assert_eq!(woke, 2, "one for the hold, one for the clear");
-}
-
-#[test]
-fn a_cancel_in_flight_spares_another_apps_copy() {
-    let rig = run(&[WriteSACancelOtherInWrite]);
-    assert_eq!(text_of(&rig.boards[0]), Some("theirs"));
-    assert_eq!(wipes(&rig, 0), 0);
-    assert_eq!(rig.s.state(), SecretState::Replaced);
-}
-
-#[test]
-fn a_replay_after_clear_now_is_never_written() {
-    let rig = run(&[WriteSA, CancelS, Pump, WriteSA]);
-    assert_eq!(text_of(&rig.boards[0]), None);
-    assert_eq!(rig.s.state(), SecretState::Cleared);
-    let rig = run(&[WriteSA, Timeout, ReadA, WriteSA]);
-    assert_eq!(text_of(&rig.boards[0]), Some(SECRET), "expiry alone doesn't stop a replay");
-    assert_eq!(rig.s.state(), SecretState::Holding);
-}
-
-#[test]
-fn a_replay_while_holding_stays_covered_by_cleanup() {
-    let rig = run(&[WriteSA, WriteSA, Timeout, ReadA]);
-    assert_eq!((text_of(&rig.boards[0]), wipes(&rig, 0)), (None, 1));
-    let rig = run(&[WriteSA, WriteSA, ShutdownA]);
-    assert_eq!((text_of(&rig.boards[0]), wipes(&rig, 0)), (None, 1));
-}
-
-#[test]
-fn the_latest_failure_is_reported_and_keeps_earlier_cleanup() {
-    let rig = run(&[ToggleFailA, WriteSA, ToggleFailA, ToggleFailA, WriteSA]);
-    assert_eq!(rig.s.state(), SecretState::Failed("denied 3".into()));
-    let rig = run(&[WriteSA, ToggleFailA, WriteSA, Timeout, ReadA]);
-    assert_eq!(rig.s.state(), SecretState::Cleared);
-    assert_eq!((text_of(&rig.boards[0]), wipes(&rig, 0)), (None, 1));
-}
-
-#[test]
-fn a_clone_on_two_boards_is_cleaned_up_on_each() {
-    let rig = run(&[WriteSA, WriteSB, WriteTA, Timeout, ReadA, ReadB]);
-    assert_eq!(text_of(&rig.boards[1]), None, "A's later write doesn't disarm B");
-    assert_eq!(wipes(&rig, 1), 1);
-    let rig = run(&[WriteSA, WriteSB, OtherA, ReadA, Timeout, ReadB]);
-    assert_eq!((text_of(&rig.boards[0]), text_of(&rig.boards[1])), (Some("theirs"), None));
-}
-
-#[test]
-fn cancel_latches_in_every_report_and_asks_for_a_clear_only_when_it_may_be_held() {
-    for report in [SecretState::Pending, SecretState::Holding, SecretState::Cleared, SecretState::Replaced, SecretState::Failed("x".into())] {
-        for holds in [0, 1] {
-            for mut secret in [Secret::Live { report: report.clone(), holds }, Secret::Cancelled { report: report.clone(), holds }] {
-                let effects = step(&mut secret, SecretEvent::Cancel);
-                assert_eq!(secret, Secret::Cancelled { report: report.clone(), holds });
-                let held = report == SecretState::Holding || (matches!(report, SecretState::Failed(_)) && holds > 0);
-                assert_eq!(effects, if held { Effects::one(SecretEffect::Clear) } else { Effects::none() });
-            }
-        }
-    }
-}
-
-#[test]
-fn a_failure_after_the_hold_ended_asks_for_no_clear() {
-    let mut secret = Secret::default();
-    let failed = || SecretEvent::Report(SecretState::Failed("x".into()));
-    assert!(step(&mut secret, SecretEvent::Held).is_empty());
-    assert!(step(&mut secret, SecretEvent::Released(SecretState::Replaced)).is_empty());
-    assert!(step(&mut secret, failed()).is_empty());
-    assert!(step(&mut secret, SecretEvent::Cancel).is_empty());
-}
-
-#[test]
-fn clear_now_wipes_what_a_failed_replay_left_held() {
-    let rig = run(&[WriteSA, ToggleFailA, WriteSA, CancelS, Pump]);
-    assert_eq!((text_of(&rig.boards[0]), rig.s.state(), wipes(&rig, 0)), (None, SecretState::Cleared, 1));
-}
-
-#[test]
-fn clear_now_spares_another_apps_copy_after_a_failed_replay() {
-    let rig = run(&[WriteSA, ToggleFailA, WriteSA, OtherA, CancelS, Pump, ReadA]);
-    assert_eq!((text_of(&rig.boards[0]), wipes(&rig, 0)), (Some("theirs"), 0));
-}
-
-/// A failed replay, a `clear_now` that can't finish, then the secret's own timeout.
-fn keeps_its_timeout(break_it: &[Ev], mend_it: &[Ev]) {
-    let start = [WriteSA, ToggleFailA, WriteSA];
-    let during: Vec<Ev> = start.iter().chain(break_it).chain(&[CancelS, Pump]).copied().collect();
-    let rig = run(&during);
-    assert_eq!(rig.boards[0].ours(), true, "the clear couldn't finish");
-    assert!(rig.engines[0].watching(), "the hold stays");
-    assert_eq!(rig.s.state(), SecretState::Failed("denied 1".into()));
-    let after: Vec<Ev> = during.iter().chain(mend_it).chain(&[Timeout, ReadA]).copied().collect();
-    let rig = run(&after);
-    assert_eq!((text_of(&rig.boards[0]), rig.s.state(), wipes(&rig, 0)), (None, SecretState::Cleared, 1));
-}
-
-#[test]
-fn a_failed_replay_keeps_its_timeout_when_the_read_fails() {
-    keeps_its_timeout(&[ToggleUnreadableA], &[ToggleUnreadableA]);
-}
-
-#[test]
-fn a_failed_replay_keeps_its_timeout_when_the_wipe_is_refused() {
-    keeps_its_timeout(&[CycleWipeA], &[CycleWipeA, CycleWipeA, CycleWipeA]);
-}
-
-#[test]
-fn a_failed_replay_keeps_its_timeout_when_the_wipe_does_nothing() {
-    keeps_its_timeout(&[CycleWipeA, CycleWipeA], &[CycleWipeA, CycleWipeA]);
-}
-
-#[test]
-fn a_failed_replay_keeps_its_timeout_when_a_refused_wipe_locks_the_clipboard() {
-    keeps_its_timeout(&[CycleWipeA, CycleWipeA, CycleWipeA], &[CycleWipeA, ToggleUnreadableA]);
-}
-
-#[test]
-fn clear_now_still_reaches_only_the_first_board() {
-    let rig = run(&[WriteSA, WriteSB, CancelS, Pump]);
-    assert_eq!((text_of(&rig.boards[0]), text_of(&rig.boards[1])), (None, Some(SECRET)));
-    let rig = run(&[WriteSA, WriteSB, ToggleFailA, WriteSA, CancelS, Pump]);
-    assert_eq!((text_of(&rig.boards[0]), text_of(&rig.boards[1])), (None, Some(SECRET)));
-}
-
-#[test]
-fn the_delay_starts_once_a_slow_write_is_done() {
-    let rig = run(&[WriteSASlow, ReadA]);
-    assert_eq!(rig.reads[0].as_ref().map(|r| r.0.text()), Some(SECRET));
-    assert_eq!(rig.s.state(), SecretState::Holding);
-    let rig = run(&[WriteSASlow, Timeout, ReadA]);
-    assert_eq!((text_of(&rig.boards[0]), rig.s.state()), (None, SecretState::Cleared));
-}
-
-#[test]
-fn the_delay_runs_while_the_secret_is_hashed() {
-    let rig = run(&[WriteSASlowHash, ReadA]);
-    assert_eq!(rig.reads[0].as_ref().map(|r| r.0.text()), Some(""));
-    assert_eq!((text_of(&rig.boards[0]), rig.s.state(), wipes(&rig, 0)), (None, SecretState::Cleared, 1));
-}
-
-#[test]
-fn a_write_reports_holding_then_starts_the_delay_then_hashes() {
-    let rig = run(&[WriteSA]);
-    let (holding, pending) = (SecretState::Holding, SecretState::Pending);
-    assert_eq!(*lock(&rig.log), [
-        Logged::Wrote(0),
-        Logged::ReadClock(holding.clone(), pending.clone()),
-        Logged::Hashing(holding.clone(), pending.clone()),
-        Logged::Woke(0, holding, pending),
-    ]);
-}
-
-#[test]
-fn a_hold_with_no_deadline_keeps_no_earlier_alarm() {
-    let mut cb = Fake { id: 0, content: None, count: 0, counted: true, landed: None, others: false, fail: None, unreadable: false, wipe: WipeMode::Works, log: Log::default(), during_write: None };
-    let mut core = Core::default();
-    core.write(&mut cb, ClipboardWrite::secret("first".into(), LONG).0, None, &RealTime);
-    assert!(core.alarm.is_some());
-    core.write(&mut cb, ClipboardWrite::secret("second".into(), Duration::MAX).0, None, &RealTime);
-    assert!(core.alarm.is_none(), "a wrapped attempt could otherwise match it");
-}
-
-#[test]
-fn a_timer_from_an_earlier_hold_changes_nothing() {
-    let slot = Arc::new(Slot::default());
-    let (mut seq, mut hold) = (Seq::default(), Hold::default());
-    let due = Some(Instant::now());
-    let written = |slot: &Arc<Slot>| HoldEvent::Written { slot: slot.clone(), notify: None, due, revision: None, print: 0 };
-    drop(step_hold(&mut seq, &mut hold, written(&slot)));
-    let stale = seq.current();
-    drop(step_hold(&mut seq, &mut hold, written(&slot)));
-    assert!(step_hold(&mut seq, &mut hold, HoldEvent::Due { attempt: stale, ours: true }).is_empty());
-    assert!(!hold.is_free());
-    let attempt = seq.current();
-    assert!(!step_hold(&mut seq, &mut hold, HoldEvent::Due { attempt, ours: true }).is_empty());
-    assert!(hold.is_free());
-}
-
-#[test]
-fn no_clipboard_reports_a_failed_write_and_wakes() {
-    let worker = native::Worker::spawn(|| None::<Board>);
-    let (woke, wakes) = mpsc::channel();
-    let notify = Notify { changed: Arc::default(), wake: Arc::new(move || { let _ = woke.send(()); }) };
-    let (write, handle) = ClipboardWrite::secret("fixture".into(), LONG);
-    worker.sender.send(Request::Write(write, Some(notify))).unwrap();
-    wakes.recv_timeout(Duration::from_secs(1)).unwrap();
-    assert_eq!(handle.state(), SecretState::Failed("no clipboard".into()));
-    worker.stop();
-}
