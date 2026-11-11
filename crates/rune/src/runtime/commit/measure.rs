@@ -496,6 +496,9 @@ impl<S: 'static> Measurement<'_, S> {
         v.selection.scope = selectable::virtual_selection::Scope { group_path: list_group.clone(), inert };
         v.selection.texts.clear();
         v.selection.copy_providers.clear();
+        // Dev's order: the rows kept from the last commit go before any builder runs, so a row
+        // holding a resource doesn't keep it through building its replacement.
+        v.selection.stored.clear();
         if let Some(rows) = source {
             let quiet: Vec<bool> = v.range.clone().map(|i| v.mounts_quietly(i, self.commits)).collect();
             let key_warnings = &mut *self.key_warnings;
@@ -559,10 +562,7 @@ impl<S: 'static> Measurement<'_, S> {
                 .filter_map(|key| v.index_of(key))
                 .filter(|i| !v.range.contains(i))
                 .collect();
-            let mut stored = match std::mem::take(&mut v.selection.source) {
-                selectable::virtual_selection::Source::Stored(mut rows) => { rows.clear(); rows }
-                selectable::virtual_selection::Source::Rebuild(_) => std::collections::HashMap::default(),
-            };
+            v.selection.source = selectable::virtual_selection::Source::Stored;
             el.children = std::mem::take(&mut el.children).into_iter().enumerate().filter_map(|(i, mut child)| {
                 if !v.range.contains(&i) {
                     collect_virtual_inputs(&child, path, i, inert, self.virtual_inputs);
@@ -572,13 +572,12 @@ impl<S: 'static> Measurement<'_, S> {
                             &mut v.selection.texts, &mut v.selection.copy_providers,
                         );
                     }
-                    stored.insert(i, child);
+                    v.selection.stored.insert(i, child);
                     return None;
                 }
                 child.flags.set(ElFlags::VIRTUAL_MOUNT, v.mounts_quietly(i, self.commits));
                 Some(child)
             }).collect();
-            v.selection.source = selectable::virtual_selection::Source::Stored(stored);
         }
     }
 }

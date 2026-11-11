@@ -53,8 +53,8 @@ impl<S: 'static> Runtime<S> {
                 }
                 collect_virtual_row_selection(&row, list_path, key, r, group_path, inert, texts, providers);
             }
-            Source::Stored(rows) => {
-                if let Some(row) = rows.get(&r) {
+            Source::Stored => {
+                if let Some(row) = v.selection.stored.get(&r) {
                     collect_virtual_row_selection(row, list_path, key, r, group_path, inert, texts, providers);
                 }
             }

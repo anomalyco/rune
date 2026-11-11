@@ -286,6 +286,9 @@ mod live_only_tests;
 #[cfg(test)]
 #[path = "runtime/live_check_tests.rs"]
 mod live_check_tests;
+#[cfg(test)]
+#[path = "runtime/virtual_store_tests.rs"]
+mod virtual_store_tests;
 #[path = "runtime/selection/select_all.rs"]
 mod select_all;
 #[cfg(test)]

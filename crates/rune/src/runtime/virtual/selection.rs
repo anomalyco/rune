@@ -67,13 +67,14 @@ pub(crate) struct OffscreenText {
 pub(crate) enum Source {
     /// `El::virtual_rows`: a row is built when selection needs it.
     Rebuild(Rc<crate::el::virtual_rows::RowSource>),
-    /// Rows the view built; the ones outside the window are kept as they were written.
-    Stored(HashMap<usize, El>),
+    /// Rows the view built; the ones outside the window are kept in
+    /// [`PinnedSelection::stored`].
+    Stored,
 }
 
 impl Default for Source {
     fn default() -> Self {
-        Source::Stored(HashMap::default())
+        Source::Stored
     }
 }
 
@@ -82,7 +83,7 @@ impl Source {
     pub(crate) fn rebuild(&self) -> Option<&Rc<crate::el::virtual_rows::RowSource>> {
         match self {
             Source::Rebuild(rows) => Some(rows),
-            Source::Stored(_) => None,
+            Source::Stored => None,
         }
     }
 }
@@ -101,6 +102,9 @@ pub(crate) struct PinnedSelection {
     pub texts: Vec<OffscreenText>,
     pub copy_providers: Vec<(String, SelectionCopy)>,
     pub source: Source,
+    /// The rows the view built, by index, while `source` is [`Source::Stored`]. Cleared in place
+    /// at every commit, so its capacity carries over as dev's did.
+    pub stored: HashMap<usize, El>,
     pub scope: Scope,
 }
 
