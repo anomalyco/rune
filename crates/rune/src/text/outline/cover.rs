@@ -6,6 +6,8 @@ use super::store::OutlineStore;
 /// `outline_coverage`: how much of a pixel `2 * hw` rest px square at `local` (rest px from the
 /// pen, y up) the glyph of record `rec` covers, `scale` rest px a font unit, dilated by `r` rest
 /// px and hinted by record `hint` (0: none).
+// The CPU renderer's glyphs drawn straight from outlines use this (render/cpu_boot, IB-2).
+#[allow(dead_code)]
 pub(crate) fn coverage(store: &OutlineStore, rec: u32, hint: u32, local: [f32; 2], scale: f32, r: f32, hw: f32) -> f32 {
     let t = |i: u32| store.texel(i);
     let f = f32::from_bits;
@@ -60,6 +62,103 @@ pub(crate) fn coverage(store: &OutlineStore, rec: u32, hint: u32, local: [f32; 2
         }
     }
     (acc.abs() / (4.0 * hw * hw)).min(1.0)
+}
+
+/// The bytes the GPU's atlas fill (render/fill.rs) writes for a `w` x `h` mask whose top-left texel
+/// is `at` on its page, into `out`, row by row: the fill instance's arithmetic for each texel's
+/// position (its pen is `at + fill.pen` in f32, the fragment's centre `at + texel + 0.5`), the
+/// shader's per-piece integrals, and its rounding to the R8 target's levels, ties to even (the
+/// fill's shader rounds itself, `params.w < 0`, rather than leave it to the GPU's float-to-unorm
+/// conversion, which differs between vendors). A row's pieces are found and moved once; a piece
+/// wholly right of a texel adds a constant and one wholly left adds nothing, so each texel
+/// integrates only the few that cross it. Measured against both of blade's GPUs
+/// (`Renderer::fill_drift`): the same bytes except texels within about 1e-4 of a rounding boundary
+/// (0 to 0.006% of them, one level), where sums in another order, and the GPU's division, square
+/// root and fused multiply-adds, round differently. A subpixel mask (coverage 3) is three texels
+/// a pixel, each one subpixel's pixel-wide box.
+pub(crate) fn fill_mask(store: &OutlineStore, fill: &crate::text::atlas_fill::Fill, at: [u32; 2], w: u32, h: u32, out: &mut Vec<u8>) {
+    struct Piece { minx: f32, maxx: f32, p: [[f32; 2]; 3], lo: f32, hi: f32, wlo: f32, whi: f32, right: f32 }
+    let t = |i: u32| store.texel(i);
+    let f = f32::from_bits;
+    let (rec, scale, r, hw) = (fill.record, fill.scale, fill.radius, 0.5f32);
+    let across = if fill.coverage == 3 { 3.0 } else { 1.0 };
+    let pen = [at[0] as f32 + fill.pen[0], at[1] as f32 + fill.pen[1]];
+    let head = t(rec);
+    let (count, y0, inv_h) = (head[1], f(head[2]), f(head[3]));
+    let hint = (fill.hint != 0).then(|| [t(fill.hint), t(fill.hint + 1), t(fill.hint + 2)].map(|v| v.map(f)));
+    let hy = |y: f32| hint.map_or(y, |[a, b, c]| hint_y(y, a, b, c));
+    let reach = if hint.is_some() { super::HINT_REACH } else { 0.0 };
+    let mut pieces: Vec<Piece> = Vec::new();
+    let mut active: Vec<usize> = Vec::new();
+    let mut by_min: Vec<usize> = Vec::new();
+    let mut tail: Vec<f32> = Vec::new();
+    for row in 0..h {
+        let ly = pen[1] - ((at[1] + row) as f32 + 0.5);
+        let (b0, b1) = if count > 1 {
+            let last = (count - 1) as f32;
+            let band = |u: f32| ((u / scale - y0) * inv_h).floor().clamp(0.0, last) as u32;
+            (band(ly - hw - 2.0 * r - reach), band(ly + hw + reach))
+        } else {
+            (0, 0)
+        };
+        pieces.clear();
+        for band in b0..=b1 {
+            let (e0, e1) = if count > 1 { ((y0 + band as f32 / inv_h) * scale, (y0 + (band + 1) as f32 / inv_h) * scale) } else { (-3.0e38, 3.0e38) };
+            let entry = t(head[0] + band);
+            for k in 0..entry[1] {
+                let (t0, t1) = (t(entry[0] + 2 * k), t(entry[0] + 2 * k + 1));
+                let code = t1[2];
+                let (oa, ob) = (moved(code & 15, r), moved((code >> 4) & 15, r));
+                let at = |x: u32, y: u32, o: [f32; 2]| [f(x) * scale + o[0], f(y) * scale + o[1]];
+                let (mut p0, mut p1, mut p2) = (at(t0[0], t0[1], oa), at(t0[2], t0[3], oa), at(t1[0], t1[1], ob));
+                let (mut wlo, mut whi) = (-hw, hw);
+                let (be0, be1) = (hy(e0 + oa[1]), hy(e1 + oa[1]));
+                (p0[1], p1[1], p2[1]) = (hy(p0[1]), hy(p1[1]), hy(p2[1]));
+                if code & super::build::CONNECTOR != 0 {
+                    p1 = [(p0[0] + p2[0]) * 0.5, (p0[1] + p2[1]) * 0.5];
+                } else {
+                    wlo = wlo.max(be0 - ly);
+                    whi = whi.min(be1 - ly);
+                }
+                let (q1y, q3y) = (p0[1] - ly, p2[1] - ly);
+                let lo = wlo.max(q1y.min(q3y));
+                let hi = whi.min(q1y.max(q3y));
+                if hi <= lo { continue; }
+                let right = 2.0 * hw * (q3y.clamp(wlo, whi) - q1y.clamp(wlo, whi));
+                pieces.push(Piece { minx: p0[0].min(p2[0]), maxx: p0[0].max(p2[0]), p: [p0, p1, p2], lo, hi, wlo, whi, right });
+            }
+        }
+        // Pieces by their left edge; `tail[k]` sums the constants of those from `k` on, which are
+        // still wholly right of a texel whose box starts left of their left edge.
+        by_min.clear();
+        by_min.extend(0..pieces.len());
+        by_min.sort_by(|&a, &b| pieces[a].minx.total_cmp(&pieces[b].minx));
+        tail.clear();
+        tail.resize(pieces.len() + 1, 0.0);
+        for k in (0..pieces.len()).rev() { tail[k] = tail[k + 1] + pieces[by_min[k]].right; }
+        active.clear();
+        let mut next = 0;
+        for col in 0..w {
+            let lx = ((at[0] + col) as f32 + 0.5 - pen[0]) / across;
+            while next < by_min.len() && pieces[by_min[next]].minx - lx < hw {
+                active.push(by_min[next]);
+                next += 1;
+            }
+            active.retain(|&i| pieces[i].maxx - lx > -hw);
+            let mut acc = tail[next];
+            for &i in &active {
+                let pc = &pieces[i];
+                let rel = |p: [f32; 2]| [p[0] - lx, p[1] - ly];
+                let (q1, q2, q3) = (rel(pc.p[0]), rel(pc.p[1]), rel(pc.p[2]));
+                if q1[0].min(q3[0]) >= hw {
+                    acc += 2.0 * hw * (q3[1].clamp(pc.wlo, pc.whi) - q1[1].clamp(pc.wlo, pc.whi));
+                } else {
+                    acc += integrate(q1, q2, q3, pc.lo, pc.hi, hw);
+                }
+            }
+            out.push(((acc.abs() / (4.0 * hw * hw)).min(1.0) * 255.0).round_ties_even() as u8);
+        }
+    }
 }
 
 fn moved(code: u32, r: f32) -> [f32; 2] {

@@ -178,11 +178,10 @@ impl TextSystem {
                 None => Rasterized::Unplaced,
             });
         }
-        let coverage: Vec<u8> = (0..h as u32).flat_map(|row| (0..w as u32).map(move |col| (row, col))).map(|(row, col)| {
-            let local = [col as f32 + 0.5 - fill.pen[0], fill.pen[1] - (row as f32 + 0.5)];
-            // The CPU has Windfoil's box coverage only: a Slug mask filled here is Windfoil's.
-            (outline::coverage(&self.atlas.outlines, fill.record, fill.hint, local, fill.scale, fill.radius, 0.5) * 255.0).round() as u8
-        }).collect();
+        // The CPU has Windfoil's box coverage only: a Slug mask filled here is Windfoil's. With no
+        // renderer to match, it's filled as if at its page's origin.
+        let mut coverage = Vec::with_capacity((w * h) as usize);
+        outline::fill_mask(&self.atlas.outlines, &fill, [0, 0], w as u32, h as u32, &mut coverage);
         Some(match self.atlas.put(w as u32, h as u32, &coverage, (left + nudge) as i32, -top as i32) {
             Some(mask) => {
                 self.atlas.map.insert(key, Residency::Uploaded(mask));

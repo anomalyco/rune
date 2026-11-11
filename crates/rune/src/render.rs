@@ -11,6 +11,8 @@ mod backdrop_blur;
 mod breaker;
 mod dxbc;
 mod fill;
+#[doc(hidden)]
+pub use fill::FillDrift;
 mod first_use;
 pub(crate) mod gpu_events;
 mod gpu_loss;
