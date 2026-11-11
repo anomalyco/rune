@@ -343,14 +343,16 @@ impl<S: 'static> Host<S> {
         let transparent = self.options.transparent;
         // A window the CPU handed to the GPU keeps its DirectComposition target: the new swap
         // chain goes on the same visual, committed once it has presented (`SurfaceMode::rebind`).
+        // wgpu has the composition-visual target only on Windows.
         #[cfg(target_os = "windows")]
         let visual = w.native.mode.visual();
-        #[cfg(not(target_os = "windows"))]
-        let visual: Option<*mut std::ffi::c_void> = None;
-        let (gpu, surface, prewarmed) = Gpu::for_surface(features, transparent, |instance| match visual {
-            // SAFETY: the window keeps the visual's `Handover` as long as it keeps this surface.
-            Some(visual) => unsafe { instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::CompositionVisual(visual)) }.map_err(|e| e.to_string()),
-            None => instance.create_surface(window.clone()).map_err(|e| e.to_string()),
+        let (gpu, surface, prewarmed) = Gpu::for_surface(features, transparent, |instance| {
+            #[cfg(target_os = "windows")]
+            if let Some(visual) = visual {
+                // SAFETY: the window keeps the visual's `Handover` as long as it keeps this surface.
+                return unsafe { instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::CompositionVisual(visual)) }.map_err(|e| e.to_string());
+            }
+            instance.create_surface(window.clone()).map_err(|e| e.to_string())
         })?;
         let gpu = Arc::new(gpu);
         let size = window.inner_size();
