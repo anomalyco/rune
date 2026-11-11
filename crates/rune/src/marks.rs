@@ -13,7 +13,7 @@
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Instant;
+use crate::time::Instant;
 
 #[derive(Default)]
 struct Book {
