@@ -53,6 +53,7 @@ pub mod rewind;
 pub mod runtime;
 pub mod shape;
 pub mod spell;
+pub mod task;
 pub mod text;
 pub mod theme;
 pub mod time;

@@ -4,6 +4,12 @@
 pub use std::time::Instant;
 #[cfg(target_arch = "wasm32")]
 pub use page_clock::Instant;
+/// The wall clock: the system's natively, the page's `Date.now()` in a browser (where the
+/// standard library's has no clock and panics).
+#[cfg(not(target_arch = "wasm32"))]
+pub use std::time::{SystemTime, UNIX_EPOCH};
+#[cfg(target_arch = "wasm32")]
+pub use web_time::{SystemTime, UNIX_EPOCH};
 
 mod local;
 #[cfg(any(test, target_arch = "wasm32"))]

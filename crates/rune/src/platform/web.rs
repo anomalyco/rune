@@ -54,7 +54,7 @@ pub(crate) fn run<S: 'static>(app: App<S>) -> Result<(), String> {
     if !app.overlays.is_empty() || !app.windows.is_empty() {
         return Err("web supports one canvas; overlays and multiple windows are unsupported".into());
     }
-    if !app.open || app.on_window.is_some() || app.on_ready.is_some() {
+    if !app.open || app.on_window.is_some() {
         return Err("web does not support windowless apps or native window hooks".into());
     }
     console_error_panic_hook::set_once();
@@ -113,6 +113,8 @@ struct Running<S: 'static> {
     document: bool,
     /// The first frame is on screen.
     presented: bool,
+    /// `App::on_ready`, which runs once that first frame is presented, as a window's does.
+    on_ready: Option<crate::app::OnWindow>,
     /// Where the canvas was last put in the document (a page's band top), in points.
     band: Option<f32>,
     cursor: crate::cursor::os::OsCursor,
@@ -410,6 +412,7 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
             let (font_smoothing, fit_height) = (app.font_smoothing, app.fit_content_height);
             let tab_visits_controls = app.tab_visits_controls;
             let playground = app.playground.take();
+            let on_ready = app.on_ready.take();
             let (spec, state, shared) = app.into_parts(None);
             let scale = window.scale_factor() as f32;
             let document = self.document;
@@ -495,7 +498,7 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
                 input::Mode { embedded: self.embedded, fit_height, document });
             *self.running.borrow_mut() = Some(Running { gpu, surface, config, renderer, rt, shared, input, clipboard,
                 clock: crate::frame::clock::FrameClock::new(now), compositor, suspended: false, embedded: self.embedded,
-                document, presented: false, band: None,
+                document, presented: false, band: None, on_ready,
                 cursor, _menus: menus, shortcuts });
         }
         if let Some(r) = &mut *self.running.borrow_mut() {
@@ -578,6 +581,7 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
                 if !r.presented {
                     r.presented = true;
                     r.input.presented();
+                    if let Some(mut ready) = r.on_ready.take() { ready(&crate::WindowHandle::new("main")); }
                     #[cfg(feature = "embedded-fonts")]
                     {
                         let proxy = self.proxy.clone();
@@ -598,6 +602,8 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         crate::cursor::os::make_pending(event_loop);
+        // Channels the app serves with 	ask::serve get their turn after the handlers that fed them.
+        crate::task::pump();
         let Ok(running) = self.running.try_borrow() else { return };
         let Some(r) = &*running else { return };
         event_loop.set_control_flow(match r.rt.wake_deadline() {
