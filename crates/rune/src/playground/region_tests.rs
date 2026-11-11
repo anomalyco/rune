@@ -1,90 +1,148 @@
 use super::*;
 
-/// Every kind of event the keyboard is fed: a press in a column, focus moving (onto the side
-/// column's slot, another control there, the stage or the list, or nowhere), a hover, the
-/// slot's focus coming or going, and the playground closing.
+/// The two caches this replaced, transcribed from the old code: the column, a separate
+/// `side_active` flag beside it, and `region_seen`.
+#[derive(Clone, Debug)]
+struct Old {
+    region: Column,
+    side_active: bool,
+    seen: Option<String>,
+}
+
+impl Old {
+    fn new() -> Self {
+        Self { region: Column::List, side_active: false, seen: None }
+    }
+
+    /// `set_region`: the column takes the keyboard, and `side_active` is none of its business.
+    fn set_region(&mut self, region: Region) {
+        self.region = region.column();
+    }
+
+    /// `see_focus`: the focus the region last looked at.
+    fn see_focus(&mut self, focus: Option<String>) {
+        self.seen = focus;
+    }
+
+    /// `sync_region`: a move gives its column the keyboard, unless a hover moved it or focus
+    /// left every column.
+    fn sync_region(&mut self, focus: Option<&str>, column: Option<Column>, hover: bool) {
+        if self.seen.as_deref() == focus { return; }
+        self.seen = focus.map(str::to_owned);
+        if hover { return; }
+        if let Some(column) = column { self.region = column; }
+    }
+
+    /// `set_side_active`.
+    fn set_side_active(&mut self, active: bool) {
+        self.side_active = active;
+    }
+
+    /// `Live::close`.
+    fn close(&mut self) {
+        self.region = Column::List;
+    }
+}
+
+/// An event as the runtime feeds it, and what the old code did with the same event.
 #[derive(Clone, Copy, Debug)]
 enum Feed {
-    PressList,
-    PressStage,
-    PressSide,
-    FocusSlot,
-    FocusSide,
-    FocusStage,
-    FocusList,
-    HoverSide,
-    FocusAway,
+    /// A press in `column`, reading `slot` from focus: the side column's slot, or not.
+    Press { column: Column, slot: bool },
+    /// Focus moved to `focus`, into `column` (`None` when it left them), the side column's slot
+    /// focused when `slot`, and `hover` when only a hover moved it.
+    Focus { focus: Option<&'static str>, column: Option<Column>, slot: bool, hover: bool },
+    /// A focus change reports whether the side column's slot has it.
     Slot(bool),
+    /// The playground closed.
     Close,
 }
 
-const FEEDS: [Feed; 11] = [
-    Feed::PressList,
-    Feed::PressStage,
-    Feed::PressSide,
-    Feed::FocusSlot,
-    Feed::FocusSide,
-    Feed::FocusStage,
-    Feed::FocusList,
-    Feed::HoverSide,
-    Feed::FocusAway,
+const FEEDS: [Feed; 10] = [
+    Feed::Press { column: Column::List, slot: false },
+    Feed::Press { column: Column::Stage, slot: true },
+    Feed::Press { column: Column::Side, slot: true },
+    Feed::Focus { focus: Some("side/slot"), column: Some(Column::Side), slot: true, hover: false },
+    Feed::Focus { focus: Some("side/variant"), column: Some(Column::Side), slot: false, hover: false },
+    Feed::Focus { focus: Some("stage/field"), column: Some(Column::Stage), slot: false, hover: false },
+    Feed::Focus { focus: Some("side/hovered"), column: Some(Column::Side), slot: false, hover: true },
+    Feed::Focus { focus: None, column: None, slot: false, hover: false },
     Feed::Slot(true),
-    Feed::Close,
+    Feed::Slot(false),
 ];
 
+/// The focus a press in `column` is made with.
+fn focus_of(column: Column) -> Option<String> {
+    match column {
+        Column::List => Some("list/story".into()),
+        Column::Stage => None,
+        Column::Side => Some("side/control".into()),
+    }
+}
+
 impl Feed {
-    fn moved(self) -> Moved {
-        let path = |p: &str| Some(p.to_owned());
+    /// Feeds `self` to the keyboard and to the old caches; true when the keyboard's column
+    /// changed.
+    fn apply(self, keys: &mut Keyboard, old: &mut Old) -> bool {
         match self {
-            Feed::PressList => Moved::Give { region: Region::List, seen: path("list/story") },
-            Feed::PressStage => Moved::Give { region: Region::Stage, seen: None },
-            Feed::PressSide => Moved::Give { region: Region::Side { slot_focused: false }, seen: path("side/variant-1") },
-            Feed::FocusSlot => Moved::Focus { focus: path("side/slot"), column: Some(Column::Side), slot_focused: true, hover: false },
-            Feed::FocusSide => Moved::Focus { focus: path("side/variant-1"), column: Some(Column::Side), slot_focused: false, hover: false },
-            Feed::FocusStage => Moved::Focus { focus: path("stage/field"), column: Some(Column::Stage), slot_focused: false, hover: false },
-            Feed::FocusList => Moved::Focus { focus: path("list/story"), column: Some(Column::List), slot_focused: false, hover: false },
-            Feed::HoverSide => Moved::Focus { focus: path("side/hovered-row"), column: Some(Column::Side), slot_focused: false, hover: true },
-            Feed::FocusAway => Moved::Focus { focus: None, column: None, slot_focused: false, hover: false },
-            Feed::Slot(on) => Moved::Slot(on),
-            Feed::Close => Moved::Closed,
+            Feed::Press { column, slot } => {
+                let changed = keys.step(Moved::Give { region: Region::of(column, slot), seen: focus_of(column) });
+                // Both caches are fed the same press: the column from the press, and
+                // `side_active` from the focus it read.
+                old.set_region(Region::of(column, slot));
+                old.set_side_active(slot);
+                old.see_focus(focus_of(column));
+                changed
+            }
+            Feed::Focus { focus, column, slot, hover } => {
+                let changed = keys.step(Moved::Focus {
+                    focus: focus.map(str::to_owned),
+                    column,
+                    slot_focused: slot,
+                    hover,
+                });
+                // Every focus change reports the slot too, even one whose path didn't move.
+                let slot = slot && !hover;
+                let reported = keys.step(Moved::Slot(slot));
+                old.sync_region(focus, column, hover);
+                old.set_side_active(slot);
+                changed || reported
+            }
+            Feed::Slot(slot) => {
+                let changed = keys.step(Moved::Slot(slot));
+                old.set_side_active(slot);
+                changed
+            }
+            Feed::Close => {
+                let changed = keys.step(Moved::Closed);
+                old.close();
+                changed
+            }
         }
     }
 }
 
-/// Feeds every sequence of `FEEDS` up to `depth` long, checking at each step that the column
-/// changes only when an event asks for one, and that the same event twice is the same as once.
-fn walk(keys: &Keyboard, depth: usize, checked: &mut u64) {
+/// Feeds every sequence of `FEEDS` up to `depth` long. After each, the keyboard's column is the
+/// old `region`, and its slot takes keys only while that region is the side column and the old
+/// `side_active` says so: the old code's incoherent pair — the stage with `side_active` set —
+/// reads as the stage with no slot, never as a column change.
+fn walk(keys: &Keyboard, old: &Old, depth: usize, checked: &mut u64) {
     for feed in FEEDS {
-        let before = keys.region();
-        let mut next = keys.clone();
-        let changed = next.step(feed.moved());
+        let (mut next, mut next_old) = (keys.clone(), old.clone());
+        let before = next.region();
+        let changed = feed.apply(&mut next, &mut next_old);
         *checked += 1;
         assert_eq!(changed, before != next.region(), "{feed:?} says whether the column changed");
-        match feed {
-            Feed::PressList | Feed::PressStage | Feed::PressSide => {
-                let asked = match feed {
-                    Feed::PressList => Region::List,
-                    Feed::PressStage => Region::Stage,
-                    _ => Region::Side { slot_focused: false },
-                };
-                assert_eq!(next.region(), asked, "a press gives its column the keyboard");
-            }
-            Feed::Slot(false) => assert_eq!(next.region().column(), before.column(), "a slot coming or going never moves the column"),
-            Feed::HoverSide => assert_eq!(next.region().column(), before.column(), "a hover takes no keys, so it never moves the column"),
-            Feed::Close => assert_eq!(next.region(), Region::List, "closing gives the list the keyboard"),
-            _ => {}
-        }
-        let region = next.region();
-        assert!(!next.step(feed.moved()), "{feed:?} twice changes nothing");
-        assert_eq!(next.region(), region, "{feed:?} twice keeps its column");
-        if depth > 1 { walk(&next, depth - 1, checked); }
+        assert_eq!(next.region().column(), next_old.region, "{feed:?}: the column is the last one a press, a move or a route asked for");
+        assert_eq!(next.region().slot_focused(), next_old.side_active && next_old.region == Column::Side, "{feed:?}: the side column's slot takes keys only while it has them");
+        if depth > 1 { walk(&next, &next_old, depth - 1, checked); }
     }
 }
 
 #[test]
-fn any_order_of_keyboard_events_leaves_one_coherent_column() {
+fn any_order_of_keyboard_events_leaves_the_column_and_slot_the_old_caches_did() {
     let mut checked = 0;
-    walk(&Keyboard::default(), 5, &mut checked);
+    walk(&Keyboard::default(), &Old::new(), 5, &mut checked);
     let expected: u64 = (1..=5).map(|d| FEEDS.len().pow(d) as u64).sum();
     assert_eq!(checked, expected);
 }
@@ -96,13 +154,16 @@ fn a_clicked_column_keeps_the_keyboard_until_focus_moves() {
     // A frame's look at focus, which nothing has: the stage keeps the keyboard.
     keys.step(Moved::Focus { focus: None, column: None, slot_focused: false, hover: false });
     assert_eq!(keys.region(), Region::Stage);
-    // Focus moving away from the list's row gives the stage up to where focus went.
+    // A slot coming into focus in the side column doesn't take it: only the column a press or a
+    // move asks for does.
+    keys.step(Moved::Slot(true));
+    assert_eq!(keys.region(), Region::Stage, "a slot elsewhere leaves the stage its keys");
     keys.step(Moved::Focus { focus: Some("list/story".into()), column: Some(Column::List), slot_focused: false, hover: false });
     assert_eq!(keys.region(), Region::List);
 }
 
 #[test]
-fn only_the_slots_focus_takes_the_side_columns_keys() {
+fn only_the_side_columns_slot_takes_its_keys() {
     let mut keys = Keyboard::default();
     keys.step(Moved::Give { region: Region::Side { slot_focused: false }, seen: Some("side/variant-1".into()) });
     keys.step(Moved::Slot(true));
@@ -116,4 +177,30 @@ fn only_the_slots_focus_takes_the_side_columns_keys() {
     // A hover moves focus onto the slot's row without taking anything.
     keys.step(Moved::Focus { focus: Some("side/slot".into()), column: Some(Column::Side), slot_focused: false, hover: true });
     assert_eq!(keys.region(), Region::Side { slot_focused: false });
+}
+
+#[test]
+fn a_route_that_moves_focus_gives_the_column_it_landed_in_the_keyboard() {
+    let mut keys = Keyboard::default();
+    keys.step(Moved::Give { region: Region::List, seen: Some("list/story".into()) });
+    // A key a step pressed holds the stage, then gives the list back: focus was set aside, so
+    // nothing new is seen.
+    keys.step(Moved::Hold(Region::Stage));
+    keys.step(Moved::Resume { region: Region::List, back: None });
+    assert_eq!(keys.region(), Region::List);
+    // The stage's key focused a control in the side column: the next look at focus gives it the
+    // keyboard, because the route restored nothing.
+    keys.step(Moved::Focus { focus: Some("side/variant".into()), column: Some(Column::Side), slot_focused: false, hover: false });
+    assert_eq!(keys.region(), Region::Side { slot_focused: false }, "focus where the route left it takes the keyboard");
+}
+
+#[test]
+fn a_route_that_puts_focus_back_keeps_the_column_it_had() {
+    let mut keys = Keyboard::default();
+    keys.step(Moved::Give { region: Region::Stage, seen: Some("stage/field".into()) });
+    keys.step(Moved::Hold(Region::Stage));
+    keys.step(Moved::Resume { region: Region::Stage, back: Some("stage/field".into()) });
+    // The focus that came back is the one the keyboard saw, so it isn't a move.
+    keys.step(Moved::Focus { focus: Some("stage/field".into()), column: Some(Column::List), slot_focused: false, hover: false });
+    assert_eq!(keys.region(), Region::Stage);
 }

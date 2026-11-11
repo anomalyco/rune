@@ -223,6 +223,7 @@ impl<S: 'static> Runtime<S> {
     /// field focused in the stage, Tab into the side column. Focus a hover moved (a menu-like
     /// row under the pointer) is passed over, and so is focus leaving: the column keeps it.
     fn sync_region(&mut self) {
+        if self.playground.is_none() { return; }
         let (focus, hover) = (self.focus.owned(), self.focus.hovered());
         let column = self.focused_index().map(|i| {
             if self.under(i, |k| k == "playground-side") {
@@ -264,18 +265,20 @@ impl<S: 'static> Runtime<S> {
         let Some(region) = self.playground.as_ref().filter(|p| p.is_open()).map(|p| p.region()) else { return self.route_key(ev, false, one) };
         let aside = self.focused_index().filter(|&i| !self.under(i, crate::playground::is_stage)).and_then(|_| self.focus.set_aside());
         if let Some(p) = &mut self.playground {
-            p.moved(Moved::Give { region: Region::Stage, seen: None });
+            p.moved(Moved::Hold(Region::Stage));
             p.pressing = true;
         }
         let took = self.route_key(ev, false, one);
         if let Some(p) = &mut self.playground { p.pressing = false; }
+        // Focus goes back only if the key left it where it was: otherwise what it focused stays,
+        // and the next look at focus gives that column the keyboard.
         let back = aside.filter(|_| self.focus.path().is_none());
-        let seen = match &back {
-            Some(focus_machine::Focus::On { path, .. }) => Some(path.clone()),
-            _ => self.focus.owned(),
-        };
+        let path = back.as_ref().and_then(|aside| match aside {
+            focus_machine::Focus::On { path, .. } => Some(path.clone()),
+            _ => None,
+        });
         let Some(p) = &mut self.playground else { return took };
-        p.moved(Moved::Give { region, seen });
+        p.moved(Moved::Resume { region, back: path });
         if let Some(aside) = back { self.focus.put_back(aside); }
         took
     }
