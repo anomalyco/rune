@@ -11,7 +11,7 @@ use crate::time::Instant;
 
 /// What a clip's native side can read and do. Holds no phase of its own.
 pub(super) trait Port {
-    fn on_main(&self) -> bool;
+    fn on_main(&mut self) -> bool;
     /// A finished poster load, keeping its frame for [`show_poster`](Self::show_poster).
     fn take_poster(&mut self) -> Option<Result<Meta, String>>;
     /// Puts the kept frame on the surface, if there is one and a surface to take it.
@@ -32,8 +32,10 @@ pub(super) trait Port {
     fn restart(&mut self, rate: f32);
     /// The item time for this frame, and the new frame's item time if one reached the surface.
     fn frame(&mut self, next_id: &mut dyn FnMut() -> u64) -> (f64, Result<Option<f64>, String>);
-    /// The player's position and rate.
-    fn position(&self) -> (f64, f32);
+    /// The player's position.
+    fn current(&self) -> f64;
+    /// Whether the player has stopped. Asked only of one told to run.
+    fn stopped(&mut self) -> bool;
 }
 
 /// How a turn ended.
@@ -95,8 +97,9 @@ fn take_poster(c: &mut Control, port: &mut impl Port) {
 }
 
 fn follow(c: &mut Control, port: &mut impl Port, frame_time: Option<f64>, now: Instant) {
-    let (current, player_rate) = port.position();
-    send(c, port, Event::Follow { current, player_rate, frame_time, now });
+    let current = port.current();
+    let stopped = c.stage.running() && port.stopped();
+    send(c, port, Event::Follow { current, stopped, frame_time, now });
 }
 
 /// One pull of a video, or one tick of audio: take a finished load, make or update the player,

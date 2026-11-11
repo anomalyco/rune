@@ -350,7 +350,10 @@ impl Old {
         let mut p = self.player.unwrap();
         p.settle.observe(s.current, self.playing, frame_time.is_none());
         let seeking = p.settle.pending();
-        let stopped = p.rate > 0.0 && s.player_rate == 0.0;
+        let stopped = p.rate > 0.0 && {
+            self.log.push(Cmd::ReadRate);
+            s.player_rate == 0.0
+        };
         let at_end = !seeking && (self.duration.is_some_and(|d| s.current >= d - 1e-3) || stopped);
         let time = if seeking {
             self.time
@@ -384,6 +387,7 @@ impl Old {
             self.drop_player();
             return false;
         }
+        self.log.push(Cmd::OnMain);
         if !s.on_main {
             return false;
         }
@@ -427,6 +431,7 @@ impl Old {
         self.finish(now)
     }
     fn step_audio(&mut self, s: &Script) -> bool {
+        self.log.push(Cmd::OnMain);
         if !s.on_main {
             return false;
         }
@@ -549,6 +554,7 @@ impl Old {
                 OldSettle::Holding { to } => SettleView::Holding(to),
             }),
             shown: p.and_then(|p| p.shown),
+            live: p.is_some_and(|p| p.ready && p.rate > 0.0 && !p.settle.waiting()),
             log: self.log.clone(),
         }
     }
@@ -648,6 +654,10 @@ enum Cmd {
     Frame(u64),
     Placeholder,
     Returned(bool),
+    /// Checked for the main thread.
+    OnMain,
+    /// Read the player's rate.
+    ReadRate,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -680,6 +690,7 @@ struct View {
     player_rate: f32,
     settle: SettleView,
     shown: Option<f64>,
+    live: bool,
     log: Vec<Cmd>,
 }
 
@@ -688,6 +699,8 @@ struct View {
 #[derive(Clone)]
 struct Fake {
     script: Script,
+    /// The caller already checked for the main thread, as an audio tick does.
+    checked: bool,
     surface: bool,
     done: Option<Done>,
     kept: Option<Done>,
@@ -697,7 +710,11 @@ struct Fake {
 }
 
 impl Port for Fake {
-    fn on_main(&self) -> bool {
+    fn on_main(&mut self) -> bool {
+        if !self.checked {
+            self.checked = true;
+            self.log.push(Cmd::OnMain);
+        }
         self.script.on_main
     }
     fn take_poster(&mut self) -> Option<Result<Meta, String>> {
@@ -783,8 +800,12 @@ impl Port for Fake {
         };
         (self.script.item_time, landed)
     }
-    fn position(&self) -> (f64, f32) {
-        (self.script.current, self.script.player_rate)
+    fn current(&self) -> f64 {
+        self.script.current
+    }
+    fn stopped(&mut self) -> bool {
+        self.log.push(Cmd::ReadRate);
+        self.script.player_rate == 0.0
     }
 }
 
@@ -799,16 +820,21 @@ impl New {
         let kind = if audio { Kind::Audio } else { Kind::Video };
         Self {
             c: Control { muted: !audio, kind, ..Control::default() },
-            fake: Fake { script: Script::READY, surface: !audio, done: None, kept: None, player: false, now, log: Vec::new() },
+            fake: Fake { script: Script::READY, checked: false, surface: !audio, done: None, kept: None, player: false, now, log: Vec::new() },
         }
     }
 
     /// `macos::step_audio` and `macos::finish`, around the real turn.
     fn tick(&mut self, script: Script) -> bool {
-        if self.c.kind == Kind::Audio && !script.on_main {
-            return false;
+        let audio = self.c.kind == Kind::Audio;
+        if audio {
+            self.fake.log.push(Cmd::OnMain);
+            if !script.on_main {
+                return false;
+            }
         }
         self.fake.script = script;
+        self.fake.checked = audio;
         let now = self.fake.now;
         match turn(&mut self.c, &mut self.fake, now) {
             Turn::Idle => false,
@@ -926,6 +952,7 @@ impl New {
                 Settle::Holding { to } => SettleView::Holding(to),
             },
             shown,
+            live: c.live(),
             log: self.fake.log.clone(),
         }
     }

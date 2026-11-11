@@ -335,8 +335,11 @@ impl Player {
     /// Playback position in seconds. Video: as of the last drawn frame (or the last `seek`).
     /// Audio: read from the player when called on the main thread while it plays.
     pub fn time(&self) -> f64 {
-        let time = self.read().time;
-        backend::live_time(&self.shared).unwrap_or(time)
+        let (time, live) = {
+            let c = self.read();
+            (c.time, c.live())
+        };
+        if live { backend::live_time(&self.shared).unwrap_or(time) } else { time }
     }
     /// Length in seconds, once loaded.
     pub fn duration(&self) -> Option<f64> {

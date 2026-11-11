@@ -56,6 +56,11 @@ impl Stage {
     pub(super) fn ready(self) -> bool {
         matches!(self, Stage::Ready { .. })
     }
+
+    /// The player was last told to run.
+    pub(super) fn running(self) -> bool {
+        matches!(self, Stage::Ready { rate, .. } if rate > 0.0)
+    }
 }
 
 /// Where the player's last seek stands.
@@ -150,9 +155,9 @@ pub(super) enum Event {
     Reconcile { now: Instant },
     /// A new frame reached the surface, at this item time.
     Framed { shown: f64 },
-    /// The player reports its position and rate; `frame_time` is the frame's item time, for
-    /// video.
-    Follow { current: f64, player_rate: f32, frame_time: Option<f64>, now: Instant },
+    /// The player reports its position, and that it stopped though told to run; `frame_time`
+    /// is the frame's item time, for video.
+    Follow { current: f64, stopped: bool, frame_time: Option<f64>, now: Instant },
     /// The turn is over.
     Finish { now: Instant },
     /// The player goes because the clip failed.
@@ -267,7 +272,7 @@ pub(super) fn step(c: &mut Control, event: Event) -> Effects<Effect> {
                 settle.framed();
             }
         }
-        Event::Follow { current, player_rate, frame_time, now } => return follow(c, current, player_rate, frame_time, now),
+        Event::Follow { current, stopped, frame_time, now } => return follow(c, current, stopped, frame_time, now),
         Event::Finish { now } => {
             if let Stage::Ready { settle, .. } = &mut c.stage {
                 settle.expire(now);
@@ -419,14 +424,13 @@ fn reconcile(c: &mut Control, now: Instant) -> Effects<Effect> {
 }
 
 /// Folds the player's position into the state: seeks landing, the end, loops.
-fn follow(c: &mut Control, current: f64, player_rate: f32, frame_time: Option<f64>, now: Instant) -> Effects<Effect> {
+fn follow(c: &mut Control, current: f64, stopped: bool, frame_time: Option<f64>, now: Instant) -> Effects<Effect> {
     let playing = c.playing();
-    let Stage::Ready { rate, settle, .. } = &mut c.stage else { return Effects::none() };
+    let Stage::Ready { settle, .. } = &mut c.stage else { return Effects::none() };
     settle.observe(current, playing, frame_time.is_none());
     // Seeks land asynchronously: until then the player still reports the old position, which
     // may be the end.
     let seeking = settle.pending();
-    let stopped = *rate > 0.0 && player_rate == 0.0;
     let at_end = !seeking && (c.duration.is_some_and(|d| current >= d - 1e-3) || stopped);
     let time = if seeking {
         c.time
@@ -486,6 +490,11 @@ impl Control {
     pub(crate) fn next_frame_id(&mut self) -> u64 {
         self.frame_id += 1;
         self.frame_id
+    }
+
+    /// Whether the player's own position is the one to read: it runs, and no seek is under way.
+    pub(super) fn live(&self) -> bool {
+        matches!(self.stage, Stage::Ready { rate, settle, .. } if rate > 0.0 && !settle.waiting())
     }
 
     /// Whether the clip is playing, seeking or loading (a seek waits for it).

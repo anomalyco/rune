@@ -20,6 +20,7 @@ use objc2_video::rc::Retained;
 use objc2_video::runtime::AnyObject;
 use objc2_video::{AnyThread, MainThreadMarker};
 use super::phases::Item;
+use crate::machine::Effects;
 use super::turn::{self, Port, Turn};
 use std::time::Duration;
 
@@ -160,7 +161,8 @@ fn load_audio(shared: &Arc<Shared>) {
     let mut native = shared.native.lock().unwrap();
     let mut c = shared.ctl.lock().unwrap();
     let effects = step(&mut c, Event::LoadAudio);
-    turn::carry(&mut c, &mut Av::off_frame(shared, &mut native), effects);
+    drop(c);
+    ask_posters(shared, &mut native, effects);
 }
 
 fn url(source: &MediaSource) -> Result<Retained<NSURL>, String> {
@@ -404,7 +406,17 @@ pub(super) fn preload(shared: &Arc<Shared>) {
     let mut native = shared.native.lock().unwrap();
     let mut c = shared.ctl.lock().unwrap();
     let effects = step(&mut c, Event::Preload);
-    turn::carry(&mut c, &mut Av::off_frame(shared, &mut native), effects);
+    drop(c);
+    ask_posters(shared, &mut native, effects);
+}
+
+/// Starts the worker for a load `step` asked for. Call without the control lock.
+fn ask_posters(shared: &Arc<Shared>, native: &mut Native, effects: Effects<Effect>) {
+    for effect in effects {
+        if let Effect::AskPoster(at) = effect {
+            request_poster(shared, native, at);
+        }
+    }
 }
 
 /// One worker per clip opens it and decodes the newest requested poster (none for audio),
@@ -500,7 +512,7 @@ pub(super) fn apply(shared: &Arc<Shared>) {
     if !playback_enabled() || shared.ctl.lock().unwrap().failed() {
         return;
     }
-    if MainThreadMarker::new().is_none() {
+    let Some(mtm) = MainThreadMarker::new() else {
         let clip = Arc::downgrade(shared);
         on_main(move || {
             if let Some(clip) = clip.upgrade() {
@@ -508,7 +520,7 @@ pub(super) fn apply(shared: &Arc<Shared>) {
             }
         });
         return;
-    }
+    };
     if shared.kind == Kind::Audio {
         drive(shared);
         return;
@@ -520,7 +532,7 @@ pub(super) fn apply(shared: &Arc<Shared>) {
     }
     let playing = {
         let mut c = shared.ctl.lock().unwrap();
-        turn::reconcile(&mut c, &mut Av::off_frame(shared, &mut native), Instant::now());
+        turn::reconcile(&mut c, &mut Av::new(shared, &mut native, Some(mtm), None), Instant::now());
         c.playing()
     };
     drop(native);
@@ -530,18 +542,15 @@ pub(super) fn apply(shared: &Arc<Shared>) {
     }
 }
 
-/// Audio, on the main thread: what the player reports now, while it plays.
+/// Audio, on the main thread: what a live player (`Control::live`) reports now, while it plays.
 pub(super) fn live_time(shared: &Shared) -> Option<f64> {
     if shared.kind != Kind::Audio || MainThreadMarker::new().is_none() {
         return None;
     }
     let native = shared.native.try_lock().ok()?;
     let p = native.player.as_ref()?;
-    let c = shared.ctl.lock().unwrap();
-    if !matches!(c.stage, Stage::Ready { rate, settle, .. } if rate > 0.0 && !settle.waiting()) {
-        return None;
-    }
     let time = seconds(unsafe { p.objects.as_ref()?.player.currentTime() });
+    let c = shared.ctl.lock().unwrap();
     c.playing().then(|| c.duration.map_or(time, |d| time.clamp(0.0, d)))
 }
 
@@ -549,21 +558,19 @@ pub(super) fn live_time(shared: &Shared) -> Option<f64> {
 struct Av<'a> {
     shared: &'a Arc<Shared>,
     native: &'a mut Native,
+    /// Filled by the caller that already checked, or by the turn when it first needs to know.
     mtm: Option<MainThreadMarker>,
     /// Video, during a pull: the surface and the presentation time its frame is for.
     target: Option<(&'a NativeSurface, Instant)>,
     /// A finished poster load's frame.
     poster: Option<ByteFrame>,
+    /// A poster the turn asked for, started once the control lock is released.
+    asked: Option<f64>,
 }
 
 impl<'a> Av<'a> {
-    fn new(shared: &'a Arc<Shared>, native: &'a mut Native, target: Option<(&'a NativeSurface, Instant)>) -> Self {
-        Self { shared, native, mtm: MainThreadMarker::new(), target, poster: None }
-    }
-
-    /// For edits and loads, which pull no frame.
-    fn off_frame(shared: &'a Arc<Shared>, native: &'a mut Native) -> Self {
-        Self::new(shared, native, None)
+    fn new(shared: &'a Arc<Shared>, native: &'a mut Native, mtm: Option<MainThreadMarker>, target: Option<(&'a NativeSurface, Instant)>) -> Self {
+        Self { shared, native, mtm, target, poster: None, asked: None }
     }
 
     fn player(&mut self) -> &mut Player {
@@ -576,7 +583,8 @@ impl<'a> Av<'a> {
 }
 
 impl Port for Av<'_> {
-    fn on_main(&self) -> bool {
+    fn on_main(&mut self) -> bool {
+        self.mtm = self.mtm.or_else(MainThreadMarker::new);
         self.mtm.is_some()
     }
 
@@ -594,7 +602,7 @@ impl Port for Av<'_> {
     }
 
     fn ask_poster(&mut self, at: f64) {
-        request_poster(self.shared, self.native, at);
+        self.asked = Some(at);
     }
 
     fn make_player(&mut self) -> Result<Instant, String> {
@@ -685,9 +693,12 @@ impl Port for Av<'_> {
         (seconds(item_time), landed)
     }
 
-    fn position(&self) -> (f64, f32) {
-        let player = &self.objects().player;
-        (seconds(unsafe { player.currentTime() }), unsafe { player.rate() })
+    fn current(&self) -> f64 {
+        seconds(unsafe { self.objects().player.currentTime() })
+    }
+
+    fn stopped(&mut self) -> bool {
+        unsafe { self.objects().player.rate() == 0.0 }
     }
 }
 
@@ -695,15 +706,23 @@ pub(super) fn pull(shared: &Arc<Shared>, surface: &NativeSurface, target: Instan
     let now = Instant::now();
     let mut native = shared.native.lock().unwrap();
     let mut c = shared.ctl.lock().unwrap();
-    let turn = turn::turn(&mut c, &mut Av::new(shared, &mut native, Some((surface, target))), now);
-    finish(shared, native, c, turn)
+    let mut av = Av::new(shared, &mut native, None, Some((surface, target)));
+    let turn = turn::turn(&mut c, &mut av, now);
+    let asked = av.asked;
+    finish(shared, native, c, turn, asked)
 }
 
-/// Parking, shared by video pulls and audio drives. Returns whether the clip is playing,
-/// seeking or loading (a seek waits for it).
-fn finish(shared: &Arc<Shared>, native: MutexGuard<'_, Native>, c: MutexGuard<'_, Control>, turn: Turn) -> bool {
+/// Poster requests and parking, shared by video pulls and audio drives. Returns whether the
+/// clip is playing, seeking or loading (a seek waits for it).
+fn finish(shared: &Arc<Shared>, mut native: MutexGuard<'_, Native>, c: MutexGuard<'_, Control>, turn: Turn, asked: Option<f64>) -> bool {
     match turn {
-        Turn::Idle => false,
+        Turn::Idle => {
+            drop(c);
+            if let Some(at) = asked {
+                request_poster(shared, &mut native, at);
+            }
+            false
+        }
         Turn::Loading => true,
         Turn::Finished => {
             let (active, park) = (c.active(), c.parkable());
@@ -727,15 +746,15 @@ pub(super) fn drive(shared: &Arc<Shared>) {
 
 /// Returns whether the clip needs ticking.
 fn step_audio(shared: &Arc<Shared>) -> bool {
-    if MainThreadMarker::new().is_none() {
-        return false;
-    }
+    let Some(mtm) = MainThreadMarker::new() else { return false };
     let now = Instant::now();
     // Already being driven further up this stack (a waker that edits the clip).
     let Ok(mut native) = shared.native.try_lock() else { return true };
     let mut c = shared.ctl.lock().unwrap();
-    let turn = turn::turn(&mut c, &mut Av::off_frame(shared, &mut native), now);
-    finish(shared, native, c, turn)
+    let mut av = Av::new(shared, &mut native, Some(mtm), None);
+    let turn = turn::turn(&mut c, &mut av, now);
+    let asked = av.asked;
+    finish(shared, native, c, turn, asked)
 }
 
 /// Main thread: drive every audio clip that might be playing.
