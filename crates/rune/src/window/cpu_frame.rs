@@ -432,7 +432,7 @@ impl<S: 'static> Host<S> {
         let changed = !l.steady.held_frame() || !l.presented.as_ref().is_some_and(|p| p.same(rt, &l.config));
         let event = if hidden { SteadyEvent::Ends } else { SteadyEvent::Drew { changed, focused: rt.has_window_focus(), now } };
         l.steady = l.steady.step(event).0;
-        self.idle = Presented::settle(&mut l.presented, rt, &l.config, animating || self.frame_move.is_some(), next_tick, !hidden, false);
+        self.idle = Presented::settle(&mut l.presented, rt, &l.config, animating || stepping::FrameMove::moving(&self.frame_move), next_tick, !hidden, false);
         if self.idle && !hidden {
             let (steady, again) = l.steady.step(SteadyEvent::Rests { now });
             l.steady = steady;
