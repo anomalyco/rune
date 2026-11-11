@@ -1,0 +1,17 @@
+# Text Rune compiles in, hashes or runs is LF in every checkout, whatever core.autocrlf says: the
+# precompiled shaders are keyed to the WGSL's bytes (crates/rune/build.rs also reads CRLF as LF,
+# for checkouts made before this file), and a shell script with CRLF doesn't run.
+*.wgsl text eol=lf
+*.luau text eol=lf
+*.json text eol=lf
+*.jsonl text eol=lf
+*.mmd text eol=lf
+*.vert text eol=lf
+*.frag text eol=lf
+*.sh text eol=lf
+
+# Precompiled shaders and raw pixel data, never converted.
+*.dxbc binary
+*.metallib binary
+*.rgba binary
+*.bin binary

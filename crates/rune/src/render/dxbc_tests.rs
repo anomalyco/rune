@@ -1,5 +1,5 @@
 //! The precompiled uber shader is FXC's compile of the HLSL wgpu generates today. Run
-//! `cargo run -p rune --example regenerate_dxbc` (or `RUNE_REGENERATE_DXBC=1` with this test) on
+//! `cargo run -p rune --example regen_dxbc` (or `RUNE_REGENERATE_DXBC=1` with this test) on
 //! Windows to rewrite the bytecode and its hashes after the WGSL, the uber layout or wgpu changes.
 
 use std::sync::{Mutex, OnceLock};
@@ -91,22 +91,20 @@ fn hlsl_hash(vertex: &str, fragment: &str) -> String {
 fn uber_dxbc_is_fresh() {
     let (vertex, fragment) = wgpu_hlsl();
     let (vs, fs) = (fxc(&vertex, "vs", "vs_5_1"), fxc(&fragment, "fs", "ps_5_1"));
-    let wgsl = blake3::hash(super::super::metallib::uber_wgsl().as_bytes()).to_hex().to_string();
+    let (_, wgsl, abi) = crate::render::uber_shader_identity();
     let hlsl = hlsl_hash(&vertex, &fragment);
-    let abi = super::super::metallib::uber_abi_hash();
     if std::env::var_os("RUNE_REGENERATE_DXBC").is_some() {
         let root = env!("CARGO_MANIFEST_DIR");
         std::fs::write(format!("{root}/uber.vs.dxbc"), &vs).unwrap();
         std::fs::write(format!("{root}/uber.fs.dxbc"), &fs).unwrap();
         std::fs::write(format!("{root}/src/render/uber/dxbc_hash.rs"), format!(
-            "// Written by `cargo run -p rune --example regenerate_dxbc`, or by\n\
-             // `RUNE_REGENERATE_DXBC=1 cargo test -p rune --lib uber_dxbc_is_fresh`, on Windows.\n\
+            "// Written by `cargo run -p rune --example regen_dxbc` (or `RUNE_REGENERATE_DXBC=1 cargo test -p rune --lib uber_dxbc_is_fresh`) on Windows.\n\
              pub(super) const UBER_DXBC_WGSL_BLAKE3: &str = \"{wgsl}\";\n\
              pub(super) const UBER_DXBC_ABI_FNV64: u64 = {abi:#018x};\n\
              #[cfg(test)]\npub(super) const UBER_DXBC_HLSL_BLAKE3: &str = \"{hlsl}\";\n")).unwrap();
         return;
     }
-    let stale = "the uber shader's HLSL changed: run `cargo run -p rune --example regenerate_dxbc` on Windows";
+    let stale = "the uber shader's HLSL changed: run `cargo run -p rune --example regen_dxbc` on Windows";
     assert_eq!(wgsl, super::UBER_DXBC_WGSL_BLAKE3, "{stale}");
     assert_eq!(abi, super::UBER_DXBC_ABI_FNV64, "{stale}");
     assert_eq!(hlsl, super::UBER_DXBC_HLSL_BLAKE3, "{stale}");
@@ -118,9 +116,7 @@ fn uber_dxbc_is_fresh() {
 #[test]
 fn renderers_load_the_precompiled_uber_shader() {
     let gpu = crate::render::Gpu::headless();
-    let (wgsl, abi) = crate::render::uber_shader_identity();
-    assert!(super::uber(&gpu.device, &wgsl, abi, |_| ()).is_some(), "a DX12 device takes the bytecode");
-    assert!(super::uber(&gpu.device, "changed", abi, |_| ()).is_none(), "other WGSL compiles");
-    assert!(super::with_dxbc_enabled(false, || super::uber(&gpu.device, &wgsl, abi, |_| ())).is_none());
+    assert!(super::uber(&gpu.device, |_| ()).is_some(), "a DX12 device takes the bytecode");
+    assert!(super::with_dxbc_enabled(false, || super::uber(&gpu.device, |_| ())).is_none());
     drop(crate::render::Renderer::new(&gpu.device, wgpu::TextureFormat::Bgra8Unorm));
 }

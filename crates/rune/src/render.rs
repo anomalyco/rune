@@ -26,6 +26,7 @@ use pass::{ActivePass, Backdrop};
 mod pipelines;
 pub(crate) mod surface_alpha;
 pub(crate) mod translucency;
+mod uber_wgsl;
 mod upload;
 mod variant;
 #[cfg(target_os = "macos")]
@@ -133,12 +134,13 @@ impl Default for LayerSpec {
 /// to the shader source.
 pub const CLIP_WGSL: &str = include_str!("clip.wgsl");
 
-/// The uber shader's WGSL and the hash of its pipeline layout, as the precompiled DX12 bytecode
-/// records them; `examples/regen_dxbc.rs` regenerates that bytecode from them.
+/// The WGSL the precompiled DX12 bytecode is compiled from (Windfoil's, CRLF read as LF), its
+/// BLAKE3 and the hash of its pipeline layout, as the bytecode records them;
+/// `examples/regen_dxbc.rs` regenerates that bytecode from them.
 #[cfg(target_os = "windows")]
 #[doc(hidden)]
-pub fn uber_shader_identity() -> (String, u64) {
-    (variant::windfoil_wgsl().unwrap_or_else(metallib::uber_wgsl), variant::windfoil_abi_hash())
+pub fn uber_shader_identity() -> (&'static str, &'static str, u64) {
+    (variant::windfoil_wgsl(), uber_wgsl::WINDFOIL_BLAKE3, variant::windfoil_abi_hash())
 }
 
 /// Where a compositor is asked to draw an effect slot (`Renderer::draw_range_with`).

@@ -2,7 +2,7 @@
 #[cfg(any(test, target_os = "macos"))]
 pub(super) const UBER_WGSL_BLAKE3: &str = "f65915c6c9eb3eb73d776445fe1dbc19ae6079bc5a55c71f1604cf0462b25dca";
 #[cfg(any(test, target_os = "macos"))]
-pub(super) const UBER_ABI_FNV64: u64 = 0xb53b72e11574bdc1;
+pub(super) const UBER_ABI_FNV64: u64 = 0xb462b40a6abf4cf1;
 #[cfg(all(test, target_os = "macos"))]
 pub(super) const UBER_MSL_OPTIONS_FNV64: u64 = 0x0eaa2a2ef8dcd514;
 #[cfg(test)]

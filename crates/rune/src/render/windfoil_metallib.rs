@@ -10,9 +10,14 @@ const LIBRARY: &[u8] = include_bytes!("../uber_windfoil.metallib");
 #[cfg(feature = "metal-backend")]
 const NATIVE_LIBRARY: &[u8] = include_bytes!("../uber_windfoil_native.metallib");
 
+/// Whether the libraries were built from the WGSL this build joined (render/uber_wgsl.rs).
+const WGSL_MATCHES: bool = super::uber_wgsl::same(super::uber_wgsl::WINDFOIL_BLAKE3, WINDFOIL_WGSL_BLAKE3);
+/// Whether they were built for Windfoil's layout as this build has it.
+const ABI_MATCHES: bool = super::variant::windfoil_abi_hash() == WINDFOIL_ABI_FNV64;
+
 /// The Windfoil shader from the library for `device`'s backend and its pipeline, when the
-/// library matches `wgsl` and `abi` and the device takes it.
-pub(super) fn load<T>(device: &wgpu::Device, wgsl: &str, abi: u64, make_pipeline: impl FnOnce(&super::dxbc::Shaders) -> T) -> Option<(wgpu::ShaderModule, T)> {
+/// library matches Windfoil's WGSL and layout and the device takes it.
+pub(super) fn load<T>(device: &wgpu::Device, make_pipeline: impl FnOnce(&super::dxbc::Shaders) -> T) -> Option<(wgpu::ShaderModule, T)> {
     #[cfg(feature = "metal-backend")]
     let native = crate::gpu::metal::raw_device(device).is_some();
     #[cfg(not(feature = "metal-backend"))]
@@ -24,7 +29,7 @@ pub(super) fn load<T>(device: &wgpu::Device, wgsl: &str, abi: u64, make_pipeline
     if !super::metallib::metallib_enabled() {
         return None;
     }
-    if library.is_empty() || blake3::hash(wgsl.as_bytes()).to_hex().as_str() != WINDFOIL_WGSL_BLAKE3 || abi != WINDFOIL_ABI_FNV64 {
+    if library.is_empty() || !WGSL_MATCHES || !ABI_MATCHES {
         static STALE: std::sync::Once = std::sync::Once::new();
         STALE.call_once(|| eprintln!("rune: uber_windfoil.metallib is missing or stale, so Windfoil text compiles its shader from WGSL; \
             run scripts/precompile-metal-shaders.sh on a Mac to rebuild it"));
@@ -36,8 +41,8 @@ pub(super) fn load<T>(device: &wgpu::Device, wgsl: &str, abi: u64, make_pipeline
     }
     let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
     let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
-    // SAFETY: only the embedded library is loaded, built by the script from `wgsl` (checked by
-    // its hash) with the bindings `abi` hashes, as Classic's `uber.metallib` is.
+    // SAFETY: only the embedded library is loaded, built by the script from Windfoil's WGSL
+    // (checked by its hash) with the bindings its layout hash covers, as Classic's `uber.metallib` is.
     let shader = unsafe {
         device.create_shader_module_passthrough(wgpu::ShaderModuleDescriptorPassthrough {
             label: Some("uber"),

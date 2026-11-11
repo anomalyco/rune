@@ -53,11 +53,12 @@ std::thread_local! {
     static METALLIB_LOADS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-pub(super) fn uber_wgsl() -> String {
-    format!("{}\n{}", super::CLIP_WGSL, include_str!("../shader.wgsl"))
+/// clip.wgsl and shader.wgsl, joined when Rune builds (render/uber_wgsl.rs).
+pub(super) fn uber_wgsl() -> &'static str {
+    super::uber_wgsl::CLASSIC
 }
 
-#[cfg(any(test, target_os = "macos"))]
+#[cfg(test)]
 pub(super) fn uber_wgsl_hash(wgsl: &str) -> blake3::Hash {
     blake3::hash(wgsl.as_bytes())
 }
@@ -89,7 +90,7 @@ pub(super) fn uber_pipeline_layout<'a>(layouts: &'a [Option<&'a wgpu::BindGroupL
     }
 }
 
-pub(super) fn uber_vertex_layout() -> wgpu::VertexBufferLayout<'static> {
+pub(super) const fn uber_vertex_layout() -> wgpu::VertexBufferLayout<'static> {
     wgpu::VertexBufferLayout {
         array_stride: std::mem::size_of::<super::Instance>() as u64,
         step_mode: wgpu::VertexStepMode::Instance,
@@ -97,39 +98,96 @@ pub(super) fn uber_vertex_layout() -> wgpu::VertexBufferLayout<'static> {
     }
 }
 
-pub(super) fn uber_primitive() -> wgpu::PrimitiveState {
-    wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleStrip, ..Default::default() }
+pub(super) const fn uber_primitive() -> wgpu::PrimitiveState {
+    wgpu::PrimitiveState {
+        topology: wgpu::PrimitiveTopology::TriangleStrip,
+        strip_index_format: None,
+        front_face: wgpu::FrontFace::Ccw,
+        cull_mode: None,
+        unclipped_depth: false,
+        polygon_mode: wgpu::PolygonMode::Fill,
+        conservative: false,
+    }
 }
 
 // Descriptor values shared with Renderer::create, not their source spelling or labels.
 // WGSL, generated MSL, and the actual Naga options have separate fingerprints below.
-#[cfg(any(test, target_os = "macos", target_os = "windows"))]
-pub(super) fn uber_abi_hash() -> u64 {
+#[cfg(any(test, target_os = "macos"))]
+pub(super) const fn uber_abi_hash() -> u64 {
     layout_hash(&uber_bind_entries(), &uber_vertex_layout(), uber_primitive())
 }
 
 /// [`uber_abi_hash`] for another set of uber bindings (the Windfoil variant's).
 #[cfg(any(test, target_os = "macos", target_os = "windows"))]
-pub(super) fn abi_hash_of(entries: &[wgpu::BindGroupLayoutEntry]) -> u64 {
+pub(super) const fn abi_hash_of(entries: &[wgpu::BindGroupLayoutEntry]) -> u64 {
     layout_hash(entries, &uber_vertex_layout(), uber_primitive())
 }
 
 #[cfg(any(test, target_os = "macos", target_os = "windows"))]
-fn layout_hash(entries: &[wgpu::BindGroupLayoutEntry], vertex: &wgpu::VertexBufferLayout<'_>, primitive: wgpu::PrimitiveState) -> u64 {
-    // The normal uber pipeline has one group; use a placeholder instead of hashing opaque GPU
-    // handle IDs. The springs pipeline has a second group and never uses this library.
-    let groups = [None, None];
-    let layout = uber_pipeline_layout(&groups, false);
-    descriptor_hash(entries, vertex, primitive, &layout)
+const fn layout_hash(entries: &[wgpu::BindGroupLayoutEntry], vertex: &wgpu::VertexBufferLayout<'_>, primitive: wgpu::PrimitiveState) -> u64 {
+    // The normal uber pipeline has one group and no immediates; the springs pipeline has a
+    // second group and never uses the precompiled shaders.
+    descriptor_hash(entries, vertex, primitive, 1, 0)
 }
 
+/// FNV-1a of every value of the bindings, vertex layout, primitive state, group count and
+/// immediate size that decides what a precompiled uber shader binds. A `const fn`: the build
+/// knows the layout's hash, so a launch compares nothing. Destructured whole, so a field wgpu
+/// adds doesn't compile until it's hashed too.
 #[cfg(any(test, target_os = "macos", target_os = "windows"))]
-fn descriptor_hash(entries: &[wgpu::BindGroupLayoutEntry], vertex: &wgpu::VertexBufferLayout<'_>, primitive: wgpu::PrimitiveState, layout: &wgpu::PipelineLayoutDescriptor<'_>) -> u64 {
-    fnv1a64(format!("{entries:?}|{}|{}|{vertex:?}|{primitive:?}",
-        layout.bind_group_layouts.len(), layout.immediate_size).as_bytes())
+const fn descriptor_hash(entries: &[wgpu::BindGroupLayoutEntry], vertex: &wgpu::VertexBufferLayout<'_>, primitive: wgpu::PrimitiveState, groups: usize, immediate_size: u32) -> u64 {
+    let mut h = Fnv(0xcbf29ce484222325).word(entries.len() as u64);
+    let mut i = 0;
+    while i < entries.len() {
+        let wgpu::BindGroupLayoutEntry { binding, visibility, ty, count } = entries[i];
+        h = h.word(binding as u64).word(visibility.bits() as u64).word(match count { Some(n) => n.get() as u64, None => 0 });
+        h = match ty {
+            wgpu::BindingType::Buffer { ty, has_dynamic_offset, min_binding_size } => h.word(1)
+                .word(match ty { wgpu::BufferBindingType::Uniform => 0, wgpu::BufferBindingType::Storage { read_only } => 1 + read_only as u64 })
+                .word(has_dynamic_offset as u64).word(match min_binding_size { Some(n) => n.get(), None => 0 }),
+            wgpu::BindingType::Texture { sample_type, view_dimension, multisampled } => h.word(2)
+                .word(match sample_type {
+                    wgpu::TextureSampleType::Float { filterable } => filterable as u64,
+                    wgpu::TextureSampleType::Depth => 2,
+                    wgpu::TextureSampleType::Sint => 3,
+                    wgpu::TextureSampleType::Uint => 4,
+                })
+                .word(view_dimension as u64).word(multisampled as u64),
+            _ => panic!("audit a new uber binding type before precompiling a shader for it"),
+        };
+        i += 1;
+    }
+    let wgpu::VertexBufferLayout { array_stride, step_mode, attributes } = *vertex;
+    h = h.word(array_stride).word(step_mode as u64).word(attributes.len() as u64);
+    let mut i = 0;
+    while i < attributes.len() {
+        let wgpu::VertexAttribute { format, offset, shader_location } = attributes[i];
+        h = h.word(format as u64).word(offset).word(shader_location as u64);
+        i += 1;
+    }
+    let wgpu::PrimitiveState { topology, strip_index_format, front_face, cull_mode, unclipped_depth, polygon_mode, conservative } = primitive;
+    h.word(topology as u64).word(match strip_index_format { Some(f) => 1 + f as u64, None => 0 }).word(front_face as u64)
+        .word(match cull_mode { Some(f) => 1 + f as u64, None => 0 }).word(unclipped_depth as u64).word(polygon_mode as u64)
+        .word(conservative as u64).word(groups as u64).word(immediate_size as u64).0
 }
 
+/// FNV-1a, a word at a time, for constants.
 #[cfg(any(test, target_os = "macos", target_os = "windows"))]
+struct Fnv(u64);
+
+#[cfg(any(test, target_os = "macos", target_os = "windows"))]
+impl Fnv {
+    const fn word(self, value: u64) -> Fnv {
+        let (mut h, mut i) = (self.0, 0);
+        while i < 8 {
+            h = (h ^ ((value >> (8 * i)) & 0xff)).wrapping_mul(0x100000001b3);
+            i += 1;
+        }
+        Fnv(h)
+    }
+}
+
+#[cfg(test)]
 fn fnv1a64(bytes: &[u8]) -> u64 {
     let mut h = 0xcbf29ce484222325u64;
     for &b in bytes {
@@ -149,19 +207,15 @@ pub(super) fn uber_shader_and_pipeline(
     device: &wgpu::Device,
     mut make_pipeline: impl FnMut(&super::dxbc::Shaders) -> wgpu::RenderPipeline,
 ) -> (super::dxbc::Shaders, wgpu::RenderPipeline) {
-    let wgsl = uber_wgsl();
     #[cfg(target_os = "macos")]
     if metallib_enabled()
-        && let Some((shader, pipeline)) = try_uber_metallib(device, &wgsl, uber_metallib(device), UBER_WGSL_BLAKE3, |shader| make_pipeline(&super::dxbc::Shaders::one(shader.clone())))
+        && let Some((shader, pipeline)) = try_uber_metallib(device, uber_metallib(device), UBER_WGSL_BLAKE3, |shader| make_pipeline(&super::dxbc::Shaders::one(shader.clone())))
     {
         METALLIB_LOADS.with(|n| n.set(n.get() + 1));
         return (super::dxbc::Shaders::one(shader), pipeline);
     }
-    #[cfg(target_os = "windows")]
-    if let Some(result) = super::dxbc::uber(device, &wgsl, uber_abi_hash(), &mut make_pipeline) {
-        return result;
-    }
-    let shaders = super::dxbc::Shaders::one(wgsl_shader(device, &wgsl));
+    // Windows ships bytecode for Windfoil alone (render/dxbc.rs): Classic compiles its WGSL there.
+    let shaders = super::dxbc::Shaders::one(wgsl_shader(device, uber_wgsl()));
     let pipeline = make_pipeline(&shaders);
     (shaders, pipeline)
 }
@@ -201,10 +255,13 @@ fn uber_metallib(device: &wgpu::Device) -> &'static [u8] {
     UBER_METALLIB
 }
 
+/// Whether the libraries were built for this build's uber layout.
+#[cfg(target_os = "macos")]
+const ABI_MATCHES: bool = uber_abi_hash() == UBER_ABI_FNV64;
+
 #[cfg(target_os = "macos")]
 fn try_uber_metallib<T>(
     device: &wgpu::Device,
-    wgsl: &str,
     metallib: &[u8],
     expected_wgsl_hash: &str,
     make_pipeline: impl FnOnce(&wgpu::ShaderModule) -> T,
@@ -213,10 +270,11 @@ fn try_uber_metallib<T>(
     if !native(device) && !device.features().contains(wgpu::Features::PASSTHROUGH_SHADERS) {
         return None;
     }
-    if metallib != uber_metallib(device) || uber_abi_hash() != UBER_ABI_FNV64 {
+    if metallib != uber_metallib(device) || !ABI_MATCHES {
         return None;
     }
-    if uber_wgsl_hash(wgsl).to_hex().as_str() != expected_wgsl_hash {
+    // The build hashed the WGSL it joined (render/uber_wgsl.rs), so nothing is hashed here.
+    if !super::uber_wgsl::same(super::uber_wgsl::CLASSIC_BLAKE3, expected_wgsl_hash) {
         return None;
     }
     let validation_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
@@ -468,7 +526,7 @@ mod tests {
             println!("---BEGIN_NATIVE_FS_MSL---\n{}---END_NATIVE_FS_MSL---", native[1]);
         }
         // The Windfoil variant (render/variant.rs), for uber_windfoil{,_native}.metallib.
-        let windfoil = super::super::variant::windfoil_wgsl().expect("the Windfoil uber shader");
+        let windfoil = super::super::variant::windfoil_wgsl();
         let entries = super::super::variant::windfoil_bind_entries();
         let (vs_msl, fs_msl, _) = uber_msl_with(&windfoil, &entries, &UBER_VERTEX_ATTRS, std::mem::size_of::<super::super::Instance>() as u32);
         println!("---BEGIN_WINDFOIL_WGSL_BLAKE3---\n{}\n---END_WINDFOIL_WGSL_BLAKE3---", uber_wgsl_hash(&windfoil).to_hex());
@@ -522,7 +580,7 @@ pub(super) const UBER_MSL_OPTIONS_FNV64: u64 = 0x{options_hash:016x};\n\
 pub(super) const UBER_WGSL_BLAKE3: &str = \"{wgsl_hash}\";", uber_abi_hash());
 
             // Perturbing WGSL or vertex layout must change the hash so staleness cannot hide.
-            let mut altered_wgsl = wgsl.clone();
+            let mut altered_wgsl = wgsl.to_owned();
             altered_wgsl.push_str("\n// perturbed\n");
             assert_ne!(uber_wgsl_hash(&altered_wgsl).to_hex().as_str(), UBER_WGSL_BLAKE3);
 
@@ -578,9 +636,9 @@ pub(super) const UBER_WGSL_BLAKE3: &str = \"{wgsl_hash}\";", uber_abi_hash());
         let groups = [None, None];
         let mut layout = uber_pipeline_layout(&groups, false);
         layout.immediate_size = 16;
-        assert_ne!(descriptor_hash(&entries, &vertex, primitive, &layout), baseline);
+        assert_ne!(descriptor_hash(&entries, &vertex, primitive, layout.bind_group_layouts.len(), layout.immediate_size), baseline);
         let layout = uber_pipeline_layout(&groups, true);
-        assert_ne!(descriptor_hash(&entries, &vertex, primitive, &layout), baseline);
+        assert_ne!(descriptor_hash(&entries, &vertex, primitive, layout.bind_group_layouts.len(), layout.immediate_size), baseline);
         // Labels, comments, and unrelated Rust source are deliberately not inputs.
         assert_eq!(layout_hash(&entries, &vertex, primitive), baseline);
         #[cfg(target_os = "macos")]
@@ -613,17 +671,16 @@ pub(super) const UBER_WGSL_BLAKE3: &str = \"{wgsl_hash}\";", uber_abi_hash());
         let after_off = METALLIB_LOADS.with(std::cell::Cell::get);
         assert_eq!(after_off, after_on, "disabled metallib must fall back to WGSL");
 
-        let wgsl = uber_wgsl();
         assert!(
-            try_uber_metallib(&gpu.device, &wgsl, UBER_METALLIB, "stale-hash", |_| ()).is_none(),
+            try_uber_metallib(&gpu.device, UBER_METALLIB, "stale-hash", |_| ()).is_none(),
             "hash mismatch must fall back"
         );
         assert!(
-            try_uber_metallib(&gpu.device, &wgsl, b"not-mtlb", UBER_WGSL_BLAKE3, |_| ()).is_none(),
+            try_uber_metallib(&gpu.device, b"not-mtlb", UBER_WGSL_BLAKE3, |_| ()).is_none(),
             "missing MTLB magic must fall back"
         );
         assert!(
-            try_uber_metallib(&gpu.device, &wgsl, b"MTLBcorrupt-payload", UBER_WGSL_BLAKE3, |_| ()).is_none(),
+            try_uber_metallib(&gpu.device, b"MTLBcorrupt-payload", UBER_WGSL_BLAKE3, |_| ()).is_none(),
             "foreign or corrupt metallib must be rejected before passing bytes to the driver"
         );
 
@@ -640,7 +697,7 @@ pub(super) const UBER_WGSL_BLAKE3: &str = \"{wgsl_hash}\";", uber_abi_hash());
         ))
         .expect("device without passthrough");
         assert!(
-            try_uber_metallib(&no_pt_device, &wgsl, UBER_METALLIB, UBER_WGSL_BLAKE3, |_| ()).is_none(),
+            try_uber_metallib(&no_pt_device, UBER_METALLIB, UBER_WGSL_BLAKE3, |_| ()).is_none(),
             "device without PASSTHROUGH_SHADERS must fall back"
         );
         let _r_fallback = Renderer::new(&no_pt_device, OFFSCREEN_FORMAT);
@@ -656,8 +713,7 @@ pub(super) const UBER_WGSL_BLAKE3: &str = \"{wgsl_hash}\";", uber_abi_hash());
         let _on = with_metallib_enabled(true, || Renderer::new(&gpu.device, OFFSCREEN_FORMAT));
         assert_eq!(METALLIB_LOADS.with(std::cell::Cell::get), before + 1, "Renderer::new must load uber_native.metallib");
 
-        let wgsl = uber_wgsl();
-        assert!(try_uber_metallib(&gpu.device, &wgsl, UBER_METALLIB, UBER_WGSL_BLAKE3, |_| ()).is_none(),
+        assert!(try_uber_metallib(&gpu.device, UBER_METALLIB, UBER_WGSL_BLAKE3, |_| ()).is_none(),
             "wgpu-hal's vertex-pulling library must not load on Rune's backend");
         let module = |bytes: &'static [u8], names: &'static [&'static str]| {
             let entry_points: Vec<_> = names.iter()

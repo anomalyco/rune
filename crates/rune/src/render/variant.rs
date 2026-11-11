@@ -11,15 +11,10 @@
 use super::*;
 use crate::machine::Effects;
 
-const OUTLINE_WGSL: &str = include_str!("../outline.wgsl");
-/// shader.wgsl's atlas glyph branch, which Windfoil puts the outline branch before.
-const GLYPH_BRANCH: &str = "        if i.uv.z > 0.0 || rotated {";
-const OUTLINE_BRANCH: &str = "        if i.radii.w > 0.0 {\n            cov = outline_glyph(i, screen);\n        } else if i.radii.x > 0.5 && !(i.uv.z > 0.0 || rotated) {\n            cov = lcd_mask(i, screen);\n        } else if i.uv.z > 0.0 || rotated {";
-
-/// Windfoil's WGSL, or None if shader.wgsl's glyph branch no longer reads as `GLYPH_BRANCH`.
-pub(crate) fn windfoil_wgsl() -> Option<String> {
-    let classic = metallib::uber_wgsl();
-    (classic.matches(GLYPH_BRANCH).count() == 1).then(|| format!("{}\n{OUTLINE_WGSL}", classic.replacen(GLYPH_BRANCH, OUTLINE_BRANCH, 1)))
+/// Windfoil's WGSL: shader.wgsl with outline.wgsl's glyph branch, joined when Rune builds
+/// (`build.rs`, render/uber_wgsl.rs).
+pub(crate) fn windfoil_wgsl() -> &'static str {
+    super::uber_wgsl::WINDFOIL
 }
 
 /// Windfoil's fragment entry, which the subpixel variant renames for its own entry to call.
@@ -54,7 +49,7 @@ const SUBPIXEL_OFF: &str = "const OUTLINE_SUBPIXEL: bool = false;";
 /// The subpixel variant's WGSL: Windfoil's, with subpixel outline coverage and its fragment
 /// entry blending by a second output. Only this variant pays for the three coverages.
 fn dual_wgsl() -> Option<String> {
-    let windfoil = windfoil_wgsl()?;
+    let windfoil = windfoil_wgsl();
     let marked = windfoil.matches(FS_ENTRY).count() == 1 && windfoil.matches(SUBPIXEL_OFF).count() == 1;
     marked.then(|| {
         let body = windfoil.replacen(FS_ENTRY, "fn fs_premul(i: Out) -> vec4<f32> {", 1)
@@ -86,7 +81,7 @@ pub(crate) const fn windfoil_bind_entries() -> [wgpu::BindGroupLayoutEntry; 5] {
 
 /// Windfoil's pipeline ABI, as `metallib::uber_abi_hash` hashes Classic's.
 #[cfg(any(target_os = "macos", target_os = "windows"))]
-pub(crate) fn windfoil_abi_hash() -> u64 {
+pub(crate) const fn windfoil_abi_hash() -> u64 {
     metallib::abi_hash_of(&windfoil_bind_entries())
 }
 
@@ -249,19 +244,18 @@ impl Renderer {
         if vertex_entry != "vs" {
             return Err("GPU springs draw the classic shader".into());
         }
-        let wgsl = windfoil_wgsl().ok_or("shader.wgsl's glyph branch moved, so outline.wgsl can't join it")?;
         let bind_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &windfoil_bind_entries() });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &[Some(&bind_layout)], immediate_size: 0 });
         let make_pipeline = |shader: &dxbc::Shaders| Self::pipeline(device, &layout, shader, format, vertex_entry, Blend::SourceOver);
         #[cfg(target_os = "windows")]
-        if let Some((shader, pipeline)) = dxbc::uber(device, &wgsl, windfoil_abi_hash(), make_pipeline) {
+        if let Some((shader, pipeline)) = dxbc::uber(device, make_pipeline) {
             return Ok(Built { bind_layout, layout, shader, pipeline, source: Source::Precompiled });
         }
         #[cfg(target_os = "macos")]
-        if let Some((shader, pipeline)) = windfoil_metallib::load(device, &wgsl, windfoil_abi_hash(), make_pipeline) {
+        if let Some((shader, pipeline)) = windfoil_metallib::load(device, make_pipeline) {
             return Ok(Built { bind_layout, layout, shader: dxbc::Shaders::one(shader), pipeline, source: Source::Precompiled });
         }
-        let (shader, pipeline) = compile(device, &wgsl, make_pipeline)?;
+        let (shader, pipeline) = compile(device, windfoil_wgsl(), make_pipeline)?;
         Ok(Built { bind_layout, layout, shader, pipeline, source: Source::Compiled })
     }
 
