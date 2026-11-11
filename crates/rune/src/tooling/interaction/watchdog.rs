@@ -128,13 +128,28 @@ enum Read {
     Recheck(Running),
 }
 
+/// The next write of `arm`, one atomic each.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Arming {
+    /// A frame nobody ended takes a new number first. It stays odd, so a frame being replaced
+    /// never looks idle, and a look holding the old number finds it moved.
+    Renumber { version: u64, now: u64 },
+    After { version: u64, now: u64 },
+    Start { version: u64, now: u64 },
+    Publish { version: u64 },
+}
+
+impl Arming {
+    const fn first(version: u64, now: u64) -> Self { Self::Renumber { version, now } }
+}
+
 /// What the UI thread tells the watchdog. Only the watched thread writes a frame, and it keeps
 /// the last `version` itself, so it never reads this one back.
 struct Shared {
     /// Moved on by each frame's start and end: odd while one runs, when it names that frame.
     version: AtomicU64,
-    /// The running frame's start. Written only while `version` is even, so a look that reads
-    /// a newer one finds `version` has moved when it rechecks.
+    /// The running frame's start. Written only after `version` has moved off the frame before,
+    /// so a look that reads a newer one finds the change when it rechecks.
     start: AtomicU64,
     after_us: AtomicU32,
     parked: AtomicBool,
@@ -147,19 +162,42 @@ impl Shared {
 
     /// A frame starts at `now`, whether or not the last one ended: the new `version`.
     fn arm(&self, version: u64, now: u64) -> u64 {
-        let ended = self.disarm(version);
-        self.write(now);
-        self.publish(ended)
+        let mut at = Arming::first(version, now);
+        loop {
+            match self.arm_step(at) {
+                Ok(version) => return version,
+                Err(next) => at = next,
+            }
+        }
     }
 
-    fn write(&self, now: u64) {
-        self.after_us.store(AFTER_MS * 1000, Ordering::Release);
-        self.start.store(now, Ordering::Release);
-    }
-
-    fn publish(&self, ended: u64) -> u64 {
-        self.version.store(ended + 1, Ordering::SeqCst);
-        ended + 1
+    /// One write of `arm`: the new `version`, or the write to make next.
+    #[inline(always)]
+    fn arm_step(&self, at: Arming) -> Result<u64, Arming> {
+        match at {
+            Arming::Renumber { version, now } => {
+                let version = if version % 2 == 1 {
+                    self.version.store(version + 2, Ordering::SeqCst);
+                    version + 2
+                } else {
+                    version
+                };
+                Err(Arming::After { version, now })
+            }
+            Arming::After { version, now } => {
+                self.after_us.store(AFTER_MS * 1000, Ordering::Release);
+                Err(Arming::Start { version, now })
+            }
+            Arming::Start { version, now } => {
+                self.start.store(now, Ordering::Release);
+                Err(Arming::Publish { version })
+            }
+            Arming::Publish { version } => {
+                let version = (version + 1) | 1;
+                self.version.store(version, Ordering::SeqCst);
+                Ok(version)
+            }
+        }
     }
 
     fn hurry(&self) { self.after_us.fetch_min(HURRY_MS * 1000, Ordering::Relaxed); }

@@ -109,7 +109,7 @@ fn shared_says_which_frame_runs_with_no_reserved_start() {
     let version = shared.arm(ended, 7);
     assert_eq!(shared.look(), Some(Running { seq: 3, start: 7, after_us: AFTER_MS * 1000 }));
     shared.arm(version, 8);
-    assert_eq!(shared.look().map(|r| r.seq), Some(5), "a frame nobody ended is replaced by a new number");
+    assert_eq!(shared.look().map(|r| r.seq), Some(7), "a frame nobody ended is replaced by a new number");
     assert!(!shared.still(3));
 }
 
@@ -165,7 +165,7 @@ impl Old {
         if now < self.next || self.taken >= MOST {
             return Effect::Sleep(if self.taken >= MOST { IDLE_POLL } else { Duration::from_nanos(self.next - now) });
         }
-        Effect::Sample { seq: self.seq * 2 - 1, at: now }
+        Effect::Sample { seq: self.seq, at: now }
     }
 }
 
@@ -264,7 +264,11 @@ impl World {
     fn look(&mut self, path: &[Letter], reached: &mut Reached) {
         let frame = self.shared.look();
         let effect = look(&mut self.watch, frame, self.now);
-        assert_eq!(effect, self.old.look(self.now), "the old loop decided otherwise after {path:?}");
+        let expected = match self.old.look(self.now) {
+            Effect::Sample { at, .. } => Effect::Sample { seq: self.version, at },
+            other => other,
+        };
+        assert_eq!(effect, expected, "the old loop decided otherwise after {path:?}");
         match (frame, effect) {
             (Some(frame), Effect::Sample { seq, at }) => {
                 assert_eq!((seq, at), (frame.seq, self.now), "after {path:?}");
@@ -395,9 +399,12 @@ struct SplitReached {
 struct Split {
     shared: Shared,
     version: u64,
-    /// The next write of the frame being armed: 0 when none is underway.
-    arm_at: u8,
-    written: u64,
+    /// The next write of the frame being armed, by the production steps.
+    arming: Option<Arming>,
+    /// The clock when `arm` was entered.
+    armed_at: u64,
+    /// The old loop's next store of the same `arm`.
+    old_arm_at: u8,
     truth: Option<Truth>,
     watch: Watch,
     read: Read,
@@ -409,46 +416,52 @@ struct Split {
 
 impl Clone for Split {
     fn clone(&self) -> Self {
-        Self { shared: copied(&self.shared), version: self.version, arm_at: self.arm_at, written: self.written, truth: self.truth, watch: self.watch, read: self.read, in_flight: self.in_flight, old: self.old.clone(), old_at: self.old_at, now: self.now }
+        Self { shared: copied(&self.shared), version: self.version, arming: self.arming, armed_at: self.armed_at, old_arm_at: self.old_arm_at, truth: self.truth, watch: self.watch, read: self.read, in_flight: self.in_flight, old: self.old.clone(), old_at: self.old_at, now: self.now }
     }
 }
 
 impl Split {
     fn new() -> Self {
         let old = Old { seq: 0, start: 0, after_us: AFTER_MS * 1000, seen: 0, taken: 0, next: 0, quiet_since: None };
-        Self { shared: Shared::new(), version: 0, arm_at: 0, written: 0, truth: None, watch: Watch::Unarmed, read: Read::Version, in_flight: None, old, old_at: OldAt::Start, now: 1000 }
+        Self { shared: Shared::new(), version: 0, arming: None, armed_at: 0, old_arm_at: 0, truth: None, watch: Watch::Unarmed, read: Read::Version, in_flight: None, old, old_at: OldAt::Start, now: 1000 }
     }
 
     /// Frame 1 has run long and been sampled `taken` times, and both loops are about to look.
     fn sampled(taken: usize) -> Self {
         let mut split = Self::new();
-        for _ in 0..3 { split.write(); }
+        split.arm();
         split.now = 1000 * MS;
         split.watch = Watch::Sampling { seq: 1, taken, due: split.now };
         (split.old.seen, split.old.taken, split.old.next) = (1, taken, split.now);
         split
     }
 
-    /// One write of `arm`, in its order; the old loop's three stores beside them.
+    /// One atomic write of the real `arm`, with the old loop's next store beside it.
     fn write(&mut self) {
-        match self.arm_at {
-            0 => {
-                self.version = self.shared.disarm(self.version);
-                self.truth = None;
-                self.old.seq += 1;
+        let at = self.arming.take().unwrap_or_else(|| {
+            self.armed_at = self.now;
+            self.old_arm_at = 0;
+            Arming::first(self.version, self.now)
+        });
+        match self.shared.arm_step(at) {
+            Ok(version) => {
+                self.version = version;
+                self.truth = Some(Truth { seq: version, start: self.armed_at, after_us: AFTER_MS * 1000 });
             }
-            1 => {
-                self.shared.write(self.now);
-                self.written = self.now;
-                self.old.after_us = AFTER_MS * 1000;
-            }
-            _ => {
-                self.version = self.shared.publish(self.version);
-                self.truth = Some(Truth { seq: self.version, start: self.written, after_us: AFTER_MS * 1000 });
-                self.old.start = self.now;
-            }
+            Err(next) => self.arming = Some(next),
         }
-        self.arm_at = (self.arm_at + 1) % 3;
+        match self.old_arm_at {
+            0 => self.old.seq += 1,
+            1 => self.old.after_us = AFTER_MS * 1000,
+            2 => self.old.start = self.now,
+            _ => {}
+        }
+        self.old_arm_at += 1;
+    }
+
+    fn arm(&mut self) {
+        self.write();
+        while self.arming.is_some() { self.write(); }
     }
 
     fn disarm(&mut self) {
@@ -474,10 +487,16 @@ impl Split {
                 self.read = Read::Version;
                 if let Some(frame) = found {
                     let truth = self.truth.expect("a look found a frame while none ran");
-                    assert_eq!((frame.seq, frame.start), (truth.seq, truth.start), "a look mixed two frames");
-                    assert!(frame.after_us >= truth.after_us);
+                    if frame.seq == truth.seq {
+                        assert_eq!(frame.start, truth.start, "a look mixed two frames");
+                        assert!(frame.after_us >= truth.after_us);
+                    } else {
+                        // A number between two frames: it can't outlive the replacing `arm`, and a newer start never pairs with the older frame's age.
+                        assert!(self.arming.is_some(), "a look found a frame that isn't running");
+                        assert!(frame.start == truth.start || (frame.start == self.armed_at && frame.after_us == AFTER_MS * 1000), "a look mixed two frames");
+                    }
                 } else {
-                    assert!(self.truth.is_none(), "a look missed the running frame");
+                    assert!(self.truth.is_none(), "a look took a running or replaced frame for idle");
                 }
                 let effect = look(&mut self.watch, found, self.now);
                 if let Effect::Sample { seq, at } = effect { self.in_flight = Some((seq, at)); }
@@ -546,7 +565,7 @@ impl Split {
                     Turned::Retried => reached.retried = true,
                     Turned::Refused => reached.refused = true,
                     Turned::Sampled { seq, .. } => {
-                        assert_eq!(self.truth.map(|t| t.seq), Some(seq), "a sample of a frame not running after {path:?}");
+                        assert!(self.arming.is_some() || self.truth.map(|t| t.seq) == Some(seq), "a sample of a frame not running after {path:?}");
                         reached.sampled = true;
                     }
                     Turned::Decided(Effect::Sleep(IDLE_POLL)) if matches!(self.watch, Watch::Sampling { taken, .. } if taken >= MOST) => reached.capped = true,
@@ -568,7 +587,7 @@ impl Split {
 fn walk_split(world: &Split, depth: usize, path: &mut Vec<Letter>, reached: &mut SplitReached) {
     for letter in SPLIT_ALPHABET {
         // The UI thread is inside `arm`: it can't also end or hurry a frame.
-        if world.arm_at != 0 && matches!(letter, Letter::Disarm | Letter::Hurry) { continue; }
+        if world.arming.is_some() && matches!(letter, Letter::Disarm | Letter::Hurry) { continue; }
         path.push(letter);
         let mut next = world.clone();
         next.apply(letter, path, reached);
@@ -583,7 +602,7 @@ fn a_frame_change_between_a_looks_reads_is_sampled_at_its_own_age() {
     assert_eq!(split.turn(), Turned::Reading, "the capped frame's version is read");
     assert_eq!(split.old_turn(), Turned::Reading, "the capped frame's start is read");
     split.disarm();
-    for _ in 0..3 { split.write(); }
+    split.arm();
     let start = split.now;
     split.now += 13 * MS;
 
@@ -606,6 +625,34 @@ fn a_frame_change_between_a_looks_reads_is_sampled_at_its_own_age() {
 }
 
 #[test]
+fn a_replaced_frame_never_looks_idle_so_a_20_ms_stall_is_sampled_before_it_ends() {
+    let mut split = Split::sampled(3);
+    split.write();
+    assert_eq!(split.turn(), Turned::Reading, "mid-replacement the version still says a frame runs");
+    assert_eq!(split.old_turn(), Turned::Reading, "the old loop reads the replaced frame's start");
+    split.arm();
+    let start = split.now;
+    split.now += 13 * MS;
+
+    // Taking this for idle would sleep 8 ms, to 21 ms, past the stall's end at 20 ms.
+    assert_eq!(split.turn(), Turned::Reading);
+    assert_eq!(split.turn(), Turned::Retried, "the look finds the replacement landed");
+    assert_eq!(split.turn(), Turned::Reading);
+    assert_eq!(split.turn(), Turned::Reading);
+    assert_eq!(split.turn(), Turned::Decided(Effect::Sample { seq: 5, at: start + 13 * MS }));
+    assert_eq!(split.turn(), Turned::Sampled { seq: 5, at: start + 13 * MS });
+
+    // The old loop refused the mixed read at 13 ms and sampled at 17 ms.
+    assert_eq!(split.old_turn(), Turned::Reading);
+    assert_eq!(split.old_turn(), Turned::Reading);
+    assert_eq!(split.old_turn(), Turned::Refused);
+    split.now += EVERY_NS;
+    assert_eq!(split.old_turn(), Turned::Reading);
+    assert_eq!(split.old_turn(), Turned::Reading);
+    assert_eq!(split.old_turn(), Turned::Sampled { seq: 2, at: start + 17 * MS });
+}
+
+#[test]
 fn a_look_split_by_a_frame_change_never_mixes_frames_from_a_fresh_start() {
     let mut reached = SplitReached::default();
     walk_split(&Split::new(), 8, &mut Vec::new(), &mut reached);
@@ -615,13 +662,13 @@ fn a_look_split_by_a_frame_change_never_mixes_frames_from_a_fresh_start() {
 #[test]
 fn a_look_split_by_a_frame_change_never_mixes_frames_while_sampling() {
     let mut reached = SplitReached::default();
-    walk_split(&Split::sampled(3), 8, &mut Vec::new(), &mut reached);
+    walk_split(&Split::sampled(3), 9, &mut Vec::new(), &mut reached);
     assert!(reached.retried && reached.refused && reached.sampled && reached.old_refused);
 }
 
 #[test]
 fn a_look_split_by_a_frame_change_never_sleeps_on_an_older_cap() {
     let mut reached = SplitReached::default();
-    walk_split(&Split::sampled(MOST), 8, &mut Vec::new(), &mut reached);
+    walk_split(&Split::sampled(MOST), 9, &mut Vec::new(), &mut reached);
     assert!(reached.retried && reached.capped && reached.old_capped);
 }
