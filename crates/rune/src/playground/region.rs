@@ -33,6 +33,12 @@ impl Region {
     pub(crate) fn slot_focused(self) -> bool {
         matches!(self, Region::Side { slot_focused: true })
     }
+
+    /// Whether keys go to the side column's slot, focus being on it when `on_slot`: only while
+    /// this region marks it. A click elsewhere can leave focus there and take the keys away.
+    pub(crate) fn takes_side_keys(self, on_slot: bool) -> bool {
+        on_slot && self.slot_focused()
+    }
 }
 
 /// The column a press or a key asks for, before the side column's slot is looked at.

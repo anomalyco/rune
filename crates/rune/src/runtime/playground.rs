@@ -122,7 +122,7 @@ impl<S: 'static> Runtime<S> {
         if !self.playground.as_ref().is_some_and(|p| p.is_open()) { return false; }
         self.sync_region();
         if self.focused_input().is_some() { return self.filter_key(ev, one); }
-        if self.on_side_keys() {
+        if self.side_takes_keys() {
             if matches!(ev.key, crate::Key::Escape | crate::Key::Tab) {
                 self.to_list();
                 return true;
@@ -299,8 +299,15 @@ impl<S: 'static> Runtime<S> {
         self.playground.as_ref().is_some_and(|p| p.typing(&self.state))
     }
 
-    /// The keyboard is on the open story's side controls that take keys (`Story::side_keys`),
-    /// whose slot is focusable only then.
+    /// Keys go to the open story's side controls: focus is on them and their column has the
+    /// keyboard, which is what their view marks.
+    fn side_takes_keys(&self) -> bool {
+        let on_slot = self.on_side_keys();
+        self.playground.as_ref().is_some_and(|p| p.region().takes_side_keys(on_slot))
+    }
+
+    /// Focus is on the open story's side controls that take keys (`Story::side_keys`), whose
+    /// slot is focusable only then.
     fn on_side_keys(&self) -> bool {
         !self.focus.hovered() && self.focused_index().is_some_and(|i| self.is_side_slot(i))
     }

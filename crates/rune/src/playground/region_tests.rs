@@ -256,6 +256,30 @@ impl Sim {
         let flag = if self.old_flag_stale { self.on_slot() } else { self.old.side_active };
         assert_eq!(slot, flag && self.old.region == OldRegion::Side, "{trail:?}: the slot");
         assert!(self.keys.saw(self.old.region_seen), "{trail:?}: the focus last taken, {:?}", self.old.region_seen);
+        self.check_a_key(trail);
+    }
+
+    /// What a key would meet now, after the look at focus `playground_nav` starts with. What
+    /// receives it and what looks active are judged apart. The old dispatch read focus alone, so
+    /// a click elsewhere that kept the slot's focus left it the keys and the mark; both now go
+    /// with the column.
+    fn check_a_key(&self, trail: &[Feed]) {
+        let looked;
+        let at_key = if self.keys.saw(self.path()) {
+            self
+        } else {
+            let mut sim = self.clone();
+            sim.feed(Feed::Look, &mut Reached::default());
+            looked = sim;
+            &looked
+        };
+        let region = at_key.keys.region();
+        let (receives, looks) = (region.takes_side_keys(at_key.on_slot()), region.slot_focused());
+        let in_side = at_key.old.region == OldRegion::Side;
+        let flag = if at_key.old_flag_stale { at_key.on_slot() } else { at_key.old.side_active };
+        assert_eq!(receives, at_key.on_slot() && in_side, "{trail:?}: what receives keys");
+        assert_eq!(looks, flag && in_side, "{trail:?}: what looks active");
+        assert_eq!(receives, looks, "{trail:?}: what receives keys is what looks active");
     }
 }
 
@@ -326,6 +350,7 @@ fn a_stage_click_that_keeps_the_slots_focus_keeps_the_stage() {
     keys.step(Moved::Give { region: Region::Stage, seen: Some("side/slot".into()) });
     keys.step(Moved::Focus { focus: Some("side/slot".into()), column: Some(Column::Side), slot_focused: true });
     assert_eq!(keys.region(), Region::Stage, "focus didn't move, so the click stands");
+    assert!(!keys.region().takes_side_keys(true), "and the slot it kept focused takes no keys");
 }
 
 #[test]

@@ -1,1 +1,1 @@
-- A playground story's `side_keys` view marks its keys only while the side column has the keyboard and focus is on its slot: clicking the stage with the slot still focused clears the mark, and a step's key that blurs the slot and puts it back no longer does.
+- A playground story's `side_keys` hook gets keys, and its view marks them, only while the side column has the keyboard and focus is on its slot: clicking a stage link with the slot still focused gives the stage its keys and clears the mark, and a step's key that blurs the slot and puts it back no longer clears it.

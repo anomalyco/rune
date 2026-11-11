@@ -1,6 +1,6 @@
 //! A story's side controls that take keys (`Story::side_keys`, `Playground::side_keys`): the
 //! keyboard goes onto them from the list, their hook gets keys first, and Esc or Tab leave.
-use rune::{App, AppSpec, Cx, El, Env, Key, KeyEvent, Mods, Playground, Runtime, Story, Tx, text};
+use rune::{App, AppSpec, Cx, El, Env, Key, KeyEvent, Link, Mods, Playground, Runtime, Story, Tx, rich, text};
 
 #[derive(Default)]
 struct Real {
@@ -17,10 +17,16 @@ static SCENES: &[(&str, fn(&mut Real))] = &[("Meter/High", |s| s.level = 50)];
 struct Dial {
     value: i32,
     failed: bool,
+    opened: bool,
 }
 
 fn dial(d: &Dial, _: &mut Cx<Dial>) -> El {
     text(format!("dial {}", d.value)).key("dial")
+}
+
+/// A stage whose link, like any link, leaves focus where it is when clicked.
+fn linked(_: &Dial, _: &mut Cx<Dial>) -> El {
+    rich("open the docs", Vec::new()).key("stage-link").w(200.0).link(Link::new(0..13, "docs")).on_link(|d: &mut Dial, _, _| d.opened = true)
 }
 
 /// ↑ and ↓ turn the dial; everything else it leaves.
@@ -41,6 +47,7 @@ fn runtime() -> Runtime<Real> {
                 .trigger('f', "Fail", |d, _| d.failed = true),
         )
         .story(Story::new("Dials/Plain", Dial::default, dial).side(|d, _| text(format!("plain {}", d.value)).key("plain-side")))
+        .story(Story::new("Dials/Linked", Dial::default, linked).side_keys(|d, active, _| text(format!("{} {}", if active { "active" } else { "idle" }, d.value)).key("linked-side"), dial_key))
         .side_keys(
             "Meter/High",
             |s, active, _| text(format!("{} {}", if active { "active" } else { "idle" }, s.level)).key("meter-side"),
@@ -96,6 +103,28 @@ fn its_hook_gets_keys_first_and_left_no_longer_leaves() {
     // The step it queued runs on the frame after.
     rt.frame(1.0 / 60.0);
     assert_eq!(dial_state(&rt), (1, true), "a key it leaves runs the trigger it's on");
+}
+
+#[test]
+fn a_stage_link_that_keeps_the_slots_focus_takes_its_keys_and_its_mark() {
+    let mut rt = runtime();
+    rt.open_playground("Dials/Linked", None);
+    press(&mut rt, Key::Right);
+    assert_eq!(says(&rt, "linked-side"), "active 0", "→ puts the keyboard on the dial");
+    let link = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("docs")).expect("the stage's link");
+    let (x, y) = (link.rect[0] + link.rect[2] / 2.0, link.rect[1] + link.rect[3] / 2.0);
+    rt.pointer_move(x, y);
+    rt.frame(1.0 / 60.0);
+    rt.pointer_down(x, y);
+    rt.pointer_up(x, y);
+    rt.frame(1.0 / 60.0);
+    assert!(rt.playground_state::<Dial>().is_some_and(|d| d.opened), "the click lands on the link");
+    let focused = rt.elements().into_iter().find(|e| e.focused).and_then(|e| e.key);
+    assert!(focused.is_some_and(|k| k.starts_with("playground-slot-")), "and focus stays on the slot");
+    assert_eq!(says(&rt, "linked-side"), "idle 0", "the stage has the keyboard, so the dial looks inactive");
+    press(&mut rt, Key::Up);
+    assert_eq!(dial_state(&rt).0, 0, "and doesn't turn");
+    assert_eq!(says(&rt, "linked-side"), "idle 0");
 }
 
 #[test]
