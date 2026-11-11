@@ -55,6 +55,40 @@ pub(super) fn render(path: &[Command], ctm: Transform, width: f32, px: u32, out:
     }
 }
 
+/// Whether Chromium draws `path` under `ctm` as a rectangle rather than as a path: one closed
+/// subpath of three or four axis-aligned lines round a box, under a transform that keeps it
+/// axis-aligned (`SkPath::isRect`, which Skia's GPU device turns into `drawRect`). Stroked, a
+/// rectangle covers its stroke's exact area, mitred corners and all, however thin: Desktop's
+/// `outline-dots` (three 1 × 1 squares stroked 1 wide) are three solid 2 × 2 pixel dots at 1x,
+/// where a hairline leaves their corners at 75%.
+pub(super) fn draws_as_rect(path: &[Command], ctm: Transform) -> bool {
+    if ctm.xy != 0.0 || ctm.yx != 0.0 {
+        return false;
+    }
+    let [Command::MoveTo(start), lines @ .., Command::Close] = path else { return false };
+    let mut pts = vec![*start];
+    for cmd in lines {
+        let Command::LineTo(p) = cmd else { return false };
+        pts.push(*p);
+    }
+    if pts.len() == 5 && pts[4] == pts[0] {
+        pts.pop();
+    }
+    if pts.len() != 4 {
+        return false;
+    }
+    // Each side vertical (`Some(true)`) or horizontal, and the four alternating.
+    let axis: Vec<_> = (0..4)
+        .map(|i| (pts[i], pts[(i + 1) % 4]))
+        .map(|(a, b)| match (a.x == b.x, a.y == b.y) {
+            (true, false) => Some(true),
+            (false, true) => Some(false),
+            _ => None,
+        })
+        .collect();
+    axis.iter().all(Option::is_some) && (0..4).all(|i| axis[i] != axis[(i + 1) % 4])
+}
+
 fn bounds(pts: &[Point]) -> (Point, Point) {
     pts.iter().fold((Point::new(f32::MAX, f32::MAX), Point::new(f32::MIN, f32::MIN)), |(lo, hi), p| {
         (Point::new(lo.x.min(p.x), lo.y.min(p.y)), Point::new(hi.x.max(p.x), hi.y.max(p.y)))
