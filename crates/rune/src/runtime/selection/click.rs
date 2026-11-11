@@ -229,7 +229,7 @@ impl<S: 'static> Runtime<S> {
                 e.clear_typing_style();
                 if e.preedit().is_some() {
                     self.input_click.clear();
-                    one.instant = true;
+                    one.commit = one.commit.instant();
                     return true;
                 }
                 if let Some(l) = layout {
@@ -251,7 +251,7 @@ impl<S: 'static> Runtime<S> {
                         e.set_selection(origin.0, origin.1);
                     }
                 }
-                one.instant = true;
+                one.commit = one.commit.instant();
                 true
             }
             Step::Drag => {
@@ -275,7 +275,7 @@ impl<S: 'static> Runtime<S> {
                     return false;
                 }
                 e.break_history_group();
-                one.instant = true;
+                one.commit = one.commit.instant();
                 true
             }
             Step::Cancelled => false,

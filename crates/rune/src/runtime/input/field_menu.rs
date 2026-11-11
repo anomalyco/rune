@@ -102,7 +102,7 @@ impl<S: 'static> Runtime<S> {
                 languages = Some((current, keep));
             }
         }
-        one.instant = true;
+        one.commit = one.commit.instant();
         log_event!(self, "field menu {path}");
         self.popups.push_back(Request {
             menu,

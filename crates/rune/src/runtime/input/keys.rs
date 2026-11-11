@@ -186,7 +186,7 @@ impl<S: 'static> Runtime<S> {
         // Submit and Escape's blur act once per press; held keys still type, move and delete.
         if tx.key_repeat { out.submit = false; out.blur = false; }
         // Typing is the user's own hand: no animation.
-        tx.instant = !animate_layout;
+        tx.commit = tx.commit.snap(!animate_layout);
         self.caret_follow = true;
         if let Some(change) = change
             && before.as_ref().map(|s| s.as_str()) != Some(access(states!(self)).text.as_str())
@@ -204,7 +204,7 @@ impl<S: 'static> Runtime<S> {
             && let Some(sub) = submit
         {
             log_event!(self, "submit {path}");
-            tx.instant = false;
+            tx.commit = tx.commit.animated();
             sub(states!(self), tx);
         } else if out.submit {
             // A field with nothing to submit passes Return to the default button, as in a sheet.

@@ -47,7 +47,7 @@ impl<S: 'static> Runtime<S> {
         let requests = std::mem::take(&mut tx.playground);
         if requests.is_empty() { return; }
         // The playground swaps whole views: no fades between them.
-        tx.instant = true;
+        tx.commit = tx.commit.instant();
         let Some(playground) = &mut self.playground else { return };
         playground.request(requests);
         self.dirty = true;

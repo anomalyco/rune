@@ -58,7 +58,7 @@ impl<S: 'static> Runtime<S> {
     /// Which way this commit measures. Both shortcuts need everything the view reads to be as
     /// the last commit built it, checked here once for both.
     pub(super) fn commit_kind(&self, tx: &Tx) -> CommitKind {
-        let unchanged = self.state_unchanged && !tx.settle && !self.reuse.read_moved
+        let unchanged = self.state_unchanged && !tx.commit.lands() && !self.reuse.read_moved
             && self.reuse.scale == self.env.scale && self.reuse.srgb == Some(self.srgb_blend)
             && self.playground.is_none() && !self.patch_pending()
             // Exiting nodes left the layout tree.

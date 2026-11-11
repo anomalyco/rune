@@ -122,12 +122,12 @@ impl<S: 'static> Runtime<S> {
     pub(super) fn fit_window(&mut self, height: f32, tx: &Tx, first: bool) {
         let height = height.ceil_to(self.env.scale).max(1.0);
         if !self.fit.ask(height, self.viewport.1) { return; }
-        let jump = first || tx.instant || tx.relayout || self.reduced_motion;
+        let jump = first || tx.commit.snaps() || tx.relayout || self.reduced_motion;
         // Only a macOS window and headless runs move the frame on a spring.
         if !jump && self.window_resting && (cfg!(target_os = "macos") || self.wall_start.is_none()) { self.fit.hold = FitHold::Asked; }
         let request = crate::window::frame::FrameRequest {
             size: Some((self.viewport.0, height)), animate: !jump,
-            spring: (!jump).then(|| tx.motion.unwrap_or(motion::DEFAULT)), center: false,
+            spring: (!jump).then(|| tx.motion.map_or(motion::DEFAULT, MotionSource::spring)), center: false,
         };
         self.window_frame = Some(self.window_frame.unwrap_or_default().merge(request));
     }

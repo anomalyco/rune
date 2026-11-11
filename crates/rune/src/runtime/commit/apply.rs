@@ -17,7 +17,7 @@ impl<S: 'static> Runtime<S> {
             self.scene.set_reduced_motion(reduced_motion);
         }
         self.time_scale = time_scale;
-        if tx.settle { self.flights.clear(); }
+        if tx.commit.lands() { self.flights.clear(); }
         let scale = self.env.scale;
         // Culling is not a model removal. Retire offscreen scene/growth state immediately;
         // re-entering historical rows mount settled and don't replay streaming words.
@@ -76,10 +76,10 @@ impl<S: 'static> Runtime<S> {
         } else {
             false
         };
-        let instant = tx.instant || first || concealing;
-        if tx.instant && !first { self.commit_why |= crate::runtime::CommitWhy::INSTANT; }
+        let instant = tx.commit.snaps() || first || concealing;
+        if tx.commit.snaps() && !first { self.commit_why |= crate::runtime::CommitWhy::INSTANT; }
         // An instant change lands what it changes; motion an earlier change set going keeps on.
-        let keeps_flights = tx.instant && !tx.settle && !first && !concealing;
+        let keeps_flights = tx.commit.snaps() && !tx.commit.lands() && !first && !concealing;
         self.scene.keep_flights(keeps_flights);
         let now = self.t;
         if self.fit_height && let Some(root) = nodes.first() { self.fit_window(root.local.h, tx, first); }
@@ -127,7 +127,7 @@ impl<S: 'static> Runtime<S> {
             scratch.rows.clear();
             scratch.rows.extend((c + 1..nodes.len()).filter(|&j| nodes[j].parent == Some(c)));
             let rows = &scratch.rows;
-            let existed = self.stacks.contains_key(&cid) && !tx.settle;
+            let existed = self.stacks.contains_key(&cid) && !tx.commit.lands();
             let mut stack = self.stacks.remove(&cid).unwrap_or_default();
             scratch.new_ids.clear();
             scratch.new_ids.extend(rows.iter().map(|&j| nodes[j].id));
@@ -188,7 +188,7 @@ impl<S: 'static> Runtime<S> {
             // landing width (`El::hold_landing_width`) lands its rewrapped rows the same way.
             let resized = existed && (stack.window != self.viewport || held.get(c).copied().unwrap_or(false));
             stack.window = self.viewport;
-            if first || !existed || tx.settle || self.reduced_motion || (reading && !revealing_moving) {
+            if first || !existed || tx.commit.lands() || self.reduced_motion || (reading && !revealing_moving) {
                 stack.width_hold = WidthHold::Off;
                 stack.pending_heights.clear();
             } else if (width - stack.width).abs() > 0.25 {
@@ -212,7 +212,7 @@ impl<S: 'static> Runtime<S> {
                 let g_moving = self.grows.get(&id).is_some_and(|g| g.moving()) || stack.pending_heights.contains_key(&id);
                 let entering = revealed_now && reader && !self.grows.contains_key(&id);
                 let row_reading = (reading && !(revealing && g_moving)) || entering;
-                if streaming && existed && !tx.settle && !first && !self.reduced_motion && !row_reading {
+                if streaming && existed && !tx.commit.lands() && !first && !self.reduced_motion && !row_reading {
                     // Measure the final wrapped text before mutating the growth track. Targets
                     // retain full layout height; only the presented stack extent lags the fill.
                     let mut end = j + 1;
@@ -224,7 +224,7 @@ impl<S: 'static> Runtime<S> {
                         h = (h - crate::text::stream_height_lag(l, width, scale)).max(0.0);
                     }
                 }
-                let (duration, glide) = (tx.motion.map_or(0.0, |m| m.duration * 1.15), nodes[j].glide.map(|s| (s, self.fold_limit(id))));
+                let (duration, glide) = (tx.motion.map_or(0.0, |m| m.spring().duration * 1.15), nodes[j].glide.map(|s| (s, self.fold_limit(id))));
                 let hidden = if glide.is_some() { self.fold_hidden_above(&nodes, j, h) } else { None };
                 if existed && !instant && !nodes[j].virtual_mount && nodes[j].glide.is_some() && !self.grows.contains_key(&id) { opened.push(id); }
                 let g = self.grows.entry(id).or_insert_with(|| {
@@ -232,7 +232,7 @@ impl<S: 'static> Runtime<S> {
                 });
                 g.set_kind(streaming, whole, glide);
                 let snap_change = (instant || resized) && !streaming && (h - g.target).abs() > 1e-4;
-                if tx.settle || !existed || first || self.reduced_motion || snap_change || row_reading {
+                if tx.commit.lands() || !existed || first || self.reduced_motion || snap_change || row_reading {
                     *g = g.restarted(h);
                     stack.pending_heights.remove(&id);
                     stack.slides.land(id);
@@ -260,7 +260,7 @@ impl<S: 'static> Runtime<S> {
                     }
                 }
             }
-            if !tx.settle && !first && !self.reduced_motion { self.link_growth_runs(&mut stack, &order, &opened, &shut); } else { stack.runs.clear(); }
+            if !tx.commit.lands() && !first && !self.reduced_motion { self.link_growth_runs(&mut stack, &order, &opened, &shut); } else { stack.runs.clear(); }
             if hidden_cut > 0.0 { self.scroll_by_cut(&nodes, c, hidden_cut); }
             if !held.is_empty() { self.give_way(&nodes, c, &std::mem::take(&mut held)); }
             for (j, giving) in reopened.drain(..) { self.ride_from_end(&nodes, c, j, giving); }
@@ -289,7 +289,7 @@ impl<S: 'static> Runtime<S> {
         time_scales.clear();
         if time_scaled { self.sync_time_scales(&nodes, &mut time_scales, false); }
 
-        let can_skip_apply = !first && !tx.settle && !concealing && reduced_motion_unchanged && !self.scene.tracing();
+        let can_skip_apply = !first && !tx.commit.lands() && !concealing && reduced_motion_unchanged && !self.scene.tracing();
         let mut skip_spans = std::mem::take(&mut self.memo.skip_scratch);
         self.clean_apply_spans(&nodes, &memo_reused, can_skip_apply, &mut skip_spans);
         let unseen = self.unseen_before_and_after(&nodes, &skip_spans);
@@ -347,8 +347,7 @@ impl<S: 'static> Runtime<S> {
             }
             let is_virtual = has_virtuals && self.virtuals.contains_key(&nodes[i].path);
             let parent_id = nodes[i].parent.map(|p| nodes[p].id);
-            let spring_l = tx.motion.unwrap_or(nodes[i].motion);
-            let anim_l: Anim = tx.motion_curve.unwrap_or_else(|| spring_l.into());
+            let (spring_l, anim_l) = tx.motion.map_or((nodes[i].motion, nodes[i].motion.into()), |m| (m.spring(), m.anim()));
             let spring_c = tx.color_motion.unwrap_or(nodes[i].motion);
             // Text leads its background so theme crossfades never dip through zero contrast; a
             // colour change asked to land at once lands at once on text too.
@@ -398,7 +397,7 @@ impl<S: 'static> Runtime<S> {
                     && !self.reduced_motion;
                 let mount = if enters_at_once || nodes[i].virtual_mount || quiet_row || self.enters_unseen(&nodes, &unseen, i) { Mount::Initial } else { Mount::Animated };
                 self.scene.insert_delayed(id, spec, mount, nodes[i].vis.enter_delay);
-            } else if tx.settle { self.scene.land_waiting(id); }
+            } else if tx.commit.lands() { self.scene.land_waiting(id); }
             self.scene.set_ride_trailing(id, nodes[i].vis_flags.ride_trailing());
             // How far a growth or virtual row's place jumps in this commit (drawn minus new).
             let (mut row_jump, mut reorder_jump) = (0.0, 0.0);
@@ -685,13 +684,13 @@ impl<S: 'static> Runtime<S> {
                     e.slack = scroll_bottom::Slack::landed(self.viewport);
                     e.x = AxisScroll::default();
                 }
-                if tx.settle && sp.stick_bottom {
+                if tx.commit.lands() && sp.stick_bottom {
                     e.pin();
                 }
                 // A window resize, a settle or an instant change lands the slack: the rows go
                 // straight to the bottom, not on a glide a moment later.
-                if tx.settle || tx.instant || e.slack.window != self.viewport { e.slack = scroll_bottom::Slack::landed(self.viewport); }
-                if tx.follow_edge && sp.stick_bottom && !tx.instant { e.slack.follow = true; }
+                if tx.commit.lands() || tx.commit.snaps() || e.slack.window != self.viewport { e.slack = scroll_bottom::Slack::landed(self.viewport); }
+                if tx.follow_edge && sp.stick_bottom && !tx.commit.snaps() { e.slack.follow = true; }
             }
         }
 
@@ -705,7 +704,7 @@ impl<S: 'static> Runtime<S> {
                 if let Some(cold) = nodes[i].cold.get_mut_if_some() {
                     for bound in &mut cold.live {
                         if let Some(previous) = old.live.iter().find(|b| b.property == bound.property && Arc::ptr_eq(&b.source, &bound.source)) {
-                            bound.seen = if tx.settle { None } else { previous.seen };
+                            bound.seen = if tx.commit.lands() { None } else { previous.seen };
                             kept.add(bound.property);
                         }
                     }
@@ -749,7 +748,7 @@ impl<S: 'static> Runtime<S> {
                     old_parent_id.is_none_or(|pid| self.node_index.get(&pid).is_some_and(|&i| i < present_len));
                 if parent_remained_present {
                     let instant = instant || (old.instant_changes && old_parent_id.and_then(|pid| self.node_index.get(&pid)).is_some_and(|&p| nodes[p].instant_changes));
-                    if tx.settle || (instant && !self.is_exiting(old.id)) || drew_nothing.get(oi).copied().unwrap_or(false) {
+                    if tx.commit.lands() || (instant && !self.is_exiting(old.id)) || drew_nothing.get(oi).copied().unwrap_or(false) {
                         self.scene.unmount(old.id);
                     } else {
                         if let Some(t) = old_parent_id.and_then(|pid| self.node_index.get(&pid)).and_then(|&p| nodes[p].vis.child_exit.as_deref().copied()) {
@@ -757,7 +756,7 @@ impl<S: 'static> Runtime<S> {
                         }
                         self.scene.remove(old.id);
                     }
-                } else if !tx.settle && self.flying.iter().any(|f| f.0 == old.id) {
+                } else if !tx.commit.lands() && self.flying.iter().any(|f| f.0 == old.id) {
                     // A flight paints outside its ancestors, so it can't fade with an exiting one.
                     self.scene.remove(old.id);
                 }
@@ -882,7 +881,7 @@ impl<S: 'static> Runtime<S> {
                     let start = self.loop_start(n.id, t);
                     let track = self.loops.entry(n.id).and_modify(|l| { l.retime(spec, t); l.enabled(true, t); })
                         .or_insert_with(|| rune_motion::LoopTrack::new(spec, start));
-                    if tx.settle || self.reduced_motion { track.finish(); }
+                    if tx.commit.lands() || self.reduced_motion { track.finish(); }
                 } else if let Some(l) = self.loops.get_mut(&n.id) {
                     l.enabled(false, t);
                 }

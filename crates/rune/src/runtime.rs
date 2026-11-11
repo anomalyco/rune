@@ -25,7 +25,7 @@ use rune_taffy::prelude::*;
 
 use crate::color::{Color, over, srgb_encode};
 use crate::edit::{EditOutcome, Ime, KeyEvent};
-use crate::el::{Align, Drag, El, GrowthSpec, InputSpec, Phase, PointerEvent, ScrollSpec, Shell, TextSpec, Tx, Visual};
+use crate::el::{Align, Commit, Drag, El, GrowthSpec, InputSpec, MotionSource, Phase, PointerEvent, ScrollSpec, Shell, TextSpec, Tx, Visual};
 use crate::growth::{GrowTrack, SUBSTEP};
 // Half-open, like overlays, NSPointInRect and PtInRect: a shared edge belongs to one side.
 use crate::overlay::options::contains;
@@ -233,7 +233,7 @@ mod window_requests;
 #[path = "runtime/paint/tracks.rs"]
 mod paint_tracks;
 #[path = "runtime/input/action.rs"]
-mod action;
+pub(crate) mod action;
 use action::*;
 #[path = "runtime/paint/bands.rs"]
 mod bands;

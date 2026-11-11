@@ -204,7 +204,7 @@ impl<S: 'static> Measurement<'_, S> {
             // Degenerate zero-height runs fall back to a full measurement instead of
             // an unbounded retry loop. Normal transcripts need one pass.
             let (layout, mut nodes, pending, mut reused, mut taken) = self.measure_view(tx, self.pass.forced());
-            if !self.measure_virtuals(&nodes, tx.settle) { break (layout, nodes, pending, reused, taken); }
+            if !self.measure_virtuals(&nodes, tx.commit.lands()) { break (layout, nodes, pending, reused, taken); }
             memo_reuse::restore_moved_nodes(self.nodes, &mut nodes, &reused, &taken);
             nodes.clear();
             *self.spare_nodes = nodes;
@@ -257,7 +257,7 @@ impl<S: 'static> Measurement<'_, S> {
             assert!(el.cold.growth.is_some(), "`.virtualize(..)` at {path:?} needs `.growth(GrowthSpec)` on the same element");
             let (scroll_path, sticky, scroll_bound) = scroll.expect("virtual stack must be inside a scroll viewport");
             let old_scroll = self.path_ids.get(scroll_path).and_then(|id| self.scrolls.get(id));
-            let pinned = (tx.settle && sticky) || old_scroll.map_or(sticky, |s| s.pinned());
+            let pinned = (tx.commit.lands() && sticky) || old_scroll.map_or(sticky, |s| s.pinned());
             let mut offset = old_scroll.map_or(0.0, |s| s.offset as f32);
             // A new viewport has no height yet: its bound from the tree, else the window's.
             let first = if scroll_bound.is_finite() { scroll_bound } else { self.viewport.1 };
@@ -324,7 +324,7 @@ impl<S: 'static> Measurement<'_, S> {
                 // (`row_reorder.rs`). Anchoring to the formerly first row as it changes slots
                 // would scroll the entire list a second time. Inserts/removals still preserve
                 // the reader's anchor, and so does a reorder that lands at once.
-                let slides = !tx.instant && !tx.settle && !tx.relayout && !self.reduced_motion;
+                let slides = !tx.commit.snaps() && !tx.commit.lands() && !tx.relayout && !self.reduced_motion;
                 let reorder = keys.len() == v.keys.len() && keys.iter().all(|key| v.has(key))
                     && (slides || list.is_some_and(|list| self.nodes.iter().any(|n| n.vis.offset != [0.0; 2] && n.parent == Some(list))));
                 v.set_keys(keys, self.commits, (!pinned && !reorder).then_some(offset))
@@ -338,7 +338,7 @@ impl<S: 'static> Measurement<'_, S> {
             // Rows new since the last commit spread over frames, unless this pass is a retry to
             // fill the viewport or a settle. A list's first showing is all new rows: it mounts
             // its viewport and a budget of overscan, and the rest fills over the next frames.
-            let budget = v.indexed && self.pass.spreads_rows() && !tx.settle;
+            let budget = v.indexed && self.pass.spreads_rows() && !tx.commit.lands();
             let shown = std::mem::take(&mut v.shown);
             // A live-only check's commit keeps the rows mounted now while they still cover the
             // viewport, as skipping the commit would: re-picking the overscan for a viewport that

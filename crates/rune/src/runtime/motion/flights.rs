@@ -310,7 +310,7 @@ impl<S: 'static> Runtime<S> {
         let old = std::mem::replace(&mut self.matched, current);
         // Under Reduce Motion the old one exits and the new one enters, each by its own
         // transition (a crossfade in place) and with the parents it leaves or enters with.
-        if instant || tx.settle || self.reduced_motion { return; }
+        if instant || tx.commit.lands() || self.reduced_motion { return; }
         let mut old_index: Option<HashMap<NodeId, usize>> = None;
         let mut built_index: Option<HashMap<NodeId, usize>> = None;
         // Descendants first: matching an element unmounts its old subtree, matched ones included.
@@ -331,7 +331,7 @@ impl<S: 'static> Runtime<S> {
             let dest = std::iter::successors(nodes[i].parent, |&p| nodes[p].parent)
                 .map(|p| nodes[p].id).find(|id| built.contains_key(id)).map_or([0.0; 2], shift);
             let offset = rune_motion::Vec2::new(source[0] - dest[0], source[1] + row - dest[1]);
-            let spring = tx.motion.or(nodes[i].matched.as_ref().and_then(|m| m.1)).unwrap_or(motion::REFLOW);
+            let spring = tx.motion.map(MotionSource::spring).or(nodes[i].matched.as_ref().and_then(|m| m.1)).unwrap_or(motion::REFLOW);
             let fill = self.color(from, P_FILL, self.nodes[from_i].vis.fill);
             let opacity = self.scene.get(from, prop::OPACITY);
             self.scene.match_geometry_offset(from, to, offset, LayoutAnim::new(spring).screen());
@@ -392,7 +392,7 @@ impl<S: 'static> Runtime<S> {
     /// text where its source's text was seen, at its own size, and flies to its place unclipped.
     pub(super) fn launch_elements(&mut self, nodes: &[Node], tx: &Tx, instant: bool) {
         let mounts = self.launches.commit();
-        if instant || tx.settle || self.reduced_motion {
+        if instant || tx.commit.lands() || self.reduced_motion {
             for LaunchEffect::Mount { attempt, .. } in mounts { self.launches.miss(attempt); }
             return;
         }
@@ -440,7 +440,7 @@ impl<S: 'static> Runtime<S> {
             let at = |axis: usize| anchor[axis] + (from[axis] - anchor_to[axis]) / k - rel[axis] - shift[axis];
             let (w, h) = (t[2] - t[0], t[3] - t[1]);
             let start = MRect::new(at(0), at(1), w, h);
-            let spring = tx.motion.unwrap_or(motion::REFLOW);
+            let spring = tx.motion.map_or(motion::REFLOW, MotionSource::spring);
             self.scene.launch(to, start, LayoutAnim::new(spring).screen());
             self.flying.retain(|f| f.0 != to);
             self.flying.push((to, nodes[i].local));

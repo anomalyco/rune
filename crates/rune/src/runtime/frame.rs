@@ -234,7 +234,7 @@ impl<S: 'static> Runtime<S> {
         }
         if let Some(title) = tx.title.take() { self.window_title.set(title); }
         if let Some(mut request) = tx.window_frame.take() {
-            request.spring = (request.animate && !tx.instant && !self.reduced_motion).then(|| tx.motion.unwrap_or(motion::DEFAULT));
+            request.spring = (request.animate && !tx.commit.snaps() && !self.reduced_motion).then(|| tx.motion.map_or(motion::DEFAULT, MotionSource::spring));
             self.window_frame = Some(self.window_frame.unwrap_or_default().merge(request));
         }
         crate::clipboard::flush_memory(self);
@@ -511,7 +511,7 @@ impl<S: 'static> Runtime<S> {
                 if ran || self.dirty {
                     self.capture_flights(&mut tx);
                     if self.settle { tx.settle(); }
-                    self.settled |= tx.settle;
+                    self.settled |= tx.commit.lands();
                     #[cfg(debug_assertions)]
                     if ran_other || self.dirty || ran_layout { self.live_check = None; }
                     self.capture_keeps(&mut tx);
@@ -524,7 +524,7 @@ impl<S: 'static> Runtime<S> {
                 if !tx.scroll_to.is_empty() {
                     self.drop_scroll_holds();
                     for r in std::mem::take(&mut tx.scroll_to) {
-                        self.reveal_row(&r, tx.instant);
+                        self.reveal_row(&r, tx.commit.snaps());
                     }
                 }
             }
@@ -587,10 +587,9 @@ impl<S: 'static> Runtime<S> {
                 if self.viewport_stepped { tx.window_step = true } else { tx.relayout = true }
             }
             if self.settle {
-                tx.instant = true;
-                tx.settle = true;
+                tx.commit = Commit::Settle;
             }
-            self.settled = tx.settle;
+            self.settled = tx.commit.lands();
             self.state_unchanged = !ran && !self.dirty && !ran_layout && !self.settle && self.commits > 0;
             #[cfg(debug_assertions)]
             if ran_other || besides || ran_layout || read_moved { self.live_check = None; }
@@ -618,7 +617,7 @@ impl<S: 'static> Runtime<S> {
         let mut scroll_bottom = std::mem::take(&mut tx.scroll_bottom);
         let scroll_pages = std::mem::take(&mut tx.scroll_pages);
         let mut scroll_offsets = std::mem::take(&mut tx.scroll_offsets);
-        if tx.instant {
+        if tx.commit.snaps() {
             for (_, animated) in &mut scroll_bottom { *animated = false; }
             for r in &mut scroll_offsets { r.glide = None; }
         }
@@ -629,7 +628,7 @@ impl<S: 'static> Runtime<S> {
         if !scroll_to.is_empty() || destination || follow {
             self.drop_scroll_holds();
         }
-        for r in &scroll_to { self.reveal_row(r, tx.instant); }
+        for r in &scroll_to { self.reveal_row(r, tx.commit.snaps()); }
         if destination || follow {
             self.step_scroll(0.0);
         }
@@ -640,7 +639,7 @@ impl<S: 'static> Runtime<S> {
         // Explicit destinations processed after a reveal win for its entire lifetime.
         if destination { self.requests.step(requests::Event::Destination); }
         // Those scrolls moved the caret after the commit a view placed from it saw.
-        if self.caret_watch && self.caret_moved(None) { self.commit(&Tx { instant: true, ..Tx::default() }); }
+        if self.caret_watch && self.caret_moved(None) { self.commit(&Tx { commit: Commit::Instant, ..Tx::default() }); }
         if let Some(request) = tx.select.take() {
             let from_change = std::mem::take(&mut tx.select_from_change);
             self.apply_select_request(request, from_change);
@@ -659,7 +658,7 @@ impl<S: 'static> Runtime<S> {
             for (name, kind, value) in trace.channels { self.trace_channel(name, kind, value); }
         }
         let dt = if self.fit_frame_holds() { 0.0 } else { dt };
-        let instant_scroll = tx.instant || self.settled;
+        let instant_scroll = tx.commit.snaps() || self.settled;
         let animating = self.step_motion(dt, instant_scroll) || live_animating;
         self.stats.shaped = self.text.shaped - shaped0;
         let filling = self.virtual_filling();

@@ -59,7 +59,7 @@ impl<S: 'static> Runtime<S> {
             st.spring = None;
             st.moved();
             if self.virtual_window_changed() {
-                self.commit(&Tx { instant: true, ..Tx::default() });
+                self.commit(&Tx { commit: Commit::Instant, ..Tx::default() });
             }
         }
         self.reveal_row_x(scope, key);
@@ -161,7 +161,7 @@ impl<S: 'static> Runtime<S> {
         }
         let window = self.virtual_window_changed();
         if window {
-            self.commit(&Tx { instant, ..Tx::default() });
+            self.commit(&Tx { commit: if instant { Commit::Instant } else { Commit::Animate }, ..Tx::default() });
             // The commit measured rows that were estimates: the next placement clamps to the end
             // they make.
             if let Some(i) = self.nodes.iter().position(|n| n.id == id) {

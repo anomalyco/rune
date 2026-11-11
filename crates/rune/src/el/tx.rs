@@ -10,6 +10,9 @@ mod keys;
 mod press;
 mod scroll;
 
+#[cfg(test)]
+mod tests;
+
 /// What a handler may say about the commit it causes.
 #[derive(Clone, Debug, Default)]
 pub struct Tx {
@@ -24,14 +27,13 @@ pub struct Tx {
     pub(crate) physical_key: Option<crate::PhysicalKeyCode>,
     pub(crate) key_base: Option<char>,
     pub(crate) focused: Option<String>,
-    pub(crate) instant: bool,
-    pub(crate) motion: Option<Spring>,
-    /// The layout curve from [`Tx::motion_curve`]; `motion` holds its spring stand-in.
-    pub(crate) motion_curve: Option<Anim>,
+    /// What this change does with motion ([`Tx::instant`], [`Tx::animated`], [`Tx::settle`]).
+    pub(crate) commit: Commit,
+    /// The motion this change's layout moves on ([`Tx::motion`], [`Tx::motion_curve`]).
+    pub(crate) motion: Option<MotionSource>,
     /// `Tx::follow_edge`.
     pub(crate) follow_edge: bool,
     pub(crate) color_motion: Option<Spring>,
-    pub(crate) settle: bool,
     pub(crate) relayout: bool,
     /// The viewport moved only because the window's own resize animation stepped it.
     pub(crate) window_step: bool,
@@ -118,6 +120,106 @@ pub(crate) enum SelectRequest {
     Range(String, std::ops::Range<usize>),
     All(String),
     Clear,
+}
+
+/// What a change does with motion, from `Tx::instant`, `Tx::animated` and `Tx::settle`, where
+/// the last call in a handler wins. Two facts live in it so neither can disagree with the
+/// other: whether this change's own layout applies at once, and whether it lands every running
+/// track. `settle` then `animated` keeps the second without the first.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Commit {
+    /// Animate this change; motion an earlier change set going keeps running.
+    #[default]
+    Animate,
+    /// Apply this change at once; motion an earlier change set going keeps running.
+    Instant,
+    /// Apply this change at once and land every running track.
+    Settle,
+    /// Land every running track, and still animate this change's own layout: `settle` then
+    /// `animated`.
+    SettleAnimated,
+}
+
+impl Commit {
+    /// The two facts as one intent.
+    pub(crate) fn new(snaps: bool, lands: bool) -> Commit {
+        match (snaps, lands) {
+            (false, false) => Commit::Animate,
+            (true, false) => Commit::Instant,
+            (true, true) => Commit::Settle,
+            (false, true) => Commit::SettleAnimated,
+        }
+    }
+
+    /// This change's own layout applies at once instead of moving on its spring.
+    pub(crate) fn snaps(self) -> bool {
+        matches!(self, Commit::Instant | Commit::Settle)
+    }
+
+    /// This change lands every running track: growth, reveals and follow-the-end.
+    pub(crate) fn lands(self) -> bool {
+        matches!(self, Commit::Settle | Commit::SettleAnimated)
+    }
+
+    /// Set or clear the snap, keeping whether running tracks land.
+    pub(crate) fn snap(self, snaps: bool) -> Commit {
+        Commit::new(snaps, self.lands())
+    }
+
+    /// `Tx::instant`: this change applies at once.
+    pub(crate) fn instant(self) -> Commit {
+        self.snap(true)
+    }
+
+    /// `Tx::animated`: this change animates, while running tracks still land if they were asked
+    /// to, and a later `instant` in the same change wins.
+    pub(crate) fn animated(self) -> Commit {
+        self.snap(false)
+    }
+
+    /// Two handlers' asks for one commit: either may snap or land it.
+    pub(crate) fn merge(self, one: Commit) -> Commit {
+        Commit::new(self.snaps() || one.snaps(), self.lands() || one.lands())
+    }
+}
+
+/// The motion a change's layout moves on: `Tx::motion`'s spring, or a whole curve from
+/// `Tx::motion_curve`. Read as one source, so the curve and the spring stand-in that only
+/// spring-taking motion uses can never disagree.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum MotionSource {
+    /// A spring, as Rune's layout springs normally are.
+    Spring(Spring),
+    /// A curve, with the zero-bounce spring of its duration for what only takes a spring
+    /// (scroll requests, matched flights).
+    Curve { anim: Anim, spring: Spring },
+}
+
+impl MotionSource {
+    /// `Tx::motion_curve`'s source: the curve, and its stand-in spring.
+    pub(crate) fn curve(anim: Anim) -> MotionSource {
+        let spring = match anim.curve {
+            rune_motion::Curve::Spring(s) => s,
+            c => Spring::new(c.logical_duration().max(0.01), 0.0),
+        };
+        MotionSource::Curve { anim, spring }
+    }
+
+    /// The spring this change's layout moves on.
+    pub(crate) fn spring(self) -> Spring {
+        match self {
+            MotionSource::Spring(spring) | MotionSource::Curve { spring, .. } => spring,
+        }
+    }
+
+    /// The curve this change's layout moves on, for what draws progress rather than stepping a
+    /// spring.
+    pub(crate) fn anim(self) -> Anim {
+        match self {
+            MotionSource::Spring(spring) => spring.into(),
+            MotionSource::Curve { anim, .. } => anim,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -517,22 +619,21 @@ impl Tx {
     /// An already-running scroll glide is not settled unless this commit replaces it;
     /// use [`Tx::settle`] to land running tracks.
     pub fn instant(&mut self) {
-        self.instant = true;
+        self.commit = self.commit.instant();
     }
     /// Animate this change even where the runtime would apply it at once, as it does a drag's
     /// moves: the rows a dragged row passes step aside on their springs, while the dragged row
     /// follows the pointer exactly with `El::offset_motion(Anim::INSTANT)`.
-    /// This clears only this handler's instant flag; another handler's `instant()` in the
-    /// same frame still wins. It neither requests a commit after `live_only()` nor overrides
-    /// `settle()`. `motion()` still chooses the layout spring. The last call to `instant()`
-    /// or `animated()` in this handler wins.
+    /// This clears this handler's snap; another handler's `instant()` in the same frame still
+    /// wins. A `settle()` in the same change keeps its landing of running tracks. It neither
+    /// requests a commit after `live_only()`. `motion()` still chooses the layout spring. The
+    /// last call to `instant()` or `animated()` in this handler wins.
     pub fn animated(&mut self) {
-        self.instant = false;
+        self.commit = self.commit.animated();
     }
     /// Animate this change's layout with `spring` instead of each element's own.
     pub fn motion(&mut self, spring: Spring) {
-        self.motion = Some(spring);
-        self.motion_curve = None;
+        self.motion = Some(MotionSource::Spring(spring));
     }
     /// Animate this change's layout on `anim` instead of each element's own spring: a spring,
     /// or a fixed-duration eased tween to compare against one
@@ -540,12 +641,7 @@ impl Tx {
     /// moves with the layout but only takes a spring (scroll requests, matched flights) uses a
     /// zero-bounce spring of the curve's duration. The last `motion` or `motion_curve` wins.
     pub fn motion_curve(&mut self, anim: impl Into<Anim>) {
-        let anim = anim.into();
-        self.motion = Some(match anim.curve {
-            rune_motion::Curve::Spring(s) => s,
-            c => Spring::new(c.logical_duration().max(0.01), 0.0),
-        });
-        self.motion_curve = Some(anim);
+        self.motion = Some(MotionSource::curve(anim.into()));
     }
     /// Rows pinned to a stick-to-bottom viewport's bottom ride its edge through this change:
     /// room the edge frees (a question dock folding back into a composer under a chat) carries
@@ -557,8 +653,7 @@ impl Tx {
     /// Apply this change with no animation and land every running track: growth, reveals and
     /// follow-the-end (opening or returning to a session, guarantee 8).
     pub fn settle(&mut self) {
-        self.instant = true;
-        self.settle = true;
+        self.commit = Commit::Settle;
     }
     /// Animate this change's colours with `spring` (a theme change uses `tok::motion::CALM`).
     pub fn color_motion(&mut self, spring: Spring) {
