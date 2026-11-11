@@ -258,8 +258,7 @@ impl ScrollState {
     /// A hand or an app put the offset where it is: momentum and any glide stop, and a
     /// stick-to-bottom viewport (`stick`) follows its end only if it sits there.
     pub(super) fn land(&mut self, stick: bool) {
-        let at_end = self.offset >= self.max - 0.5;
-        let _ = mode::step(&mut self.mode, mode::Event::Land { stick, at_end });
+        if stick && self.offset >= self.max - 0.5 { self.pin() } else { let _ = mode::step(&mut self.mode, mode::Event::Rest); }
     }
 
     /// An app's instant scroll landed less than `scroll_nudge::NUDGE_HOLD` ago: content moved

@@ -74,9 +74,18 @@ enum WheelPhase {
     /// The momentum of a phased gesture that ended, last moving at `at`. One that begins as
     /// momentum ends is a new touch (a finger caught the coasting content), not more momentum.
     Momentum { at: f64 },
-    /// The platform ended it at `at`. `momentum` says it ended as momentum, whose own momentum
-    /// never begins: a gesture that starts within `MOMENTUM_GAP` is a new touch.
-    Ended { at: f64, momentum: bool },
+    /// The platform ended it at `at`. `from` is the phase it had then: a gesture that started
+    /// unphased still picks its axis afresh, and one that ended as momentum never begins its
+    /// own momentum.
+    Ended { at: f64, from: GestureKind },
+}
+
+/// The phase a gesture had when the platform ended it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum GestureKind {
+    Unphased,
+    Phased,
+    Momentum,
 }
 
 impl Default for WheelPhase {
@@ -86,11 +95,13 @@ impl Default for WheelPhase {
 impl WheelPhase {
     /// The gesture is the momentum of one that ended, or ended as momentum.
     fn momentum(self) -> bool {
-        matches!(self, WheelPhase::Momentum { .. } | WheelPhase::Ended { momentum: true, .. })
+        matches!(self, WheelPhase::Momentum { .. } | WheelPhase::Ended { from: GestureKind::Momentum, .. })
     }
 
-    /// Whether the platform reports its phases (it has begun it, or ended it).
-    fn phased(self) -> bool { !matches!(self, WheelPhase::Unphased { .. }) }
+    /// Whether the platform reports its phases: it has begun it, or it ended one that had.
+    fn phased(self) -> bool {
+        !matches!(self, WheelPhase::Unphased { .. } | WheelPhase::Ended { from: GestureKind::Unphased, .. })
+    }
 
     /// When its last delta came.
     fn at(self) -> Option<f64> {
@@ -142,6 +153,21 @@ impl WheelLock {
         }
     }
 
+    /// The axis the gesture's owner keeps for a delta (dx, dy): horizontal (`true`) or
+    /// vertical, or `None` when it picks afresh. Without phases, a delta wholly on the other
+    /// axis is another wheel turning (Shift let go, a tilt, a second device).
+    fn keeps_axis(&self, dx: f32, dy: f32) -> Option<bool> {
+        let h = self.owner.horizontal()?;
+        (self.phase.phased() || if h { dx != 0.0 } else { dy != 0.0 }).then_some(h)
+    }
+
+    /// A delta picked afresh: the horizontal viewport under it (`across`), else vertical.
+    /// Returns whether it scrolls horizontally.
+    fn repick(&mut self, across: Option<NodeId>) -> bool {
+        self.owner = across.map_or(WheelOwner::Vertical, WheelOwner::Horizontal);
+        across.is_some()
+    }
+
     /// A delta arrived at `now`, on (dx, dy) points: a gesture idle too long, ended, or wholly
     /// on the other axis (Shift let go, a tilt, a second wheel), is over, and this delta starts
     /// the next.
@@ -162,10 +188,15 @@ impl WheelLock {
         self.phase = if momentum { WheelPhase::Momentum { at: now } } else { WheelPhase::Phased { at: now } };
     }
 
-    /// The platform ended the gesture at `now`.
+    /// The platform ended the gesture at `now`, keeping the phase it had.
     fn ended_at(&mut self, now: f64) {
-        let momentum = self.phase.momentum();
-        self.phase = WheelPhase::Ended { at: now, momentum };
+        let from = match self.phase {
+            WheelPhase::Unphased { .. } => GestureKind::Unphased,
+            WheelPhase::Phased { .. } => GestureKind::Phased,
+            WheelPhase::Momentum { .. } => GestureKind::Momentum,
+            WheelPhase::Ended { from, .. } => from,
+        };
+        self.phase = WheelPhase::Ended { at: now, from };
     }
 
     /// The window lost the pointer or focus: a gesture in progress won't report its end here.
@@ -228,15 +259,13 @@ impl<S: 'static> Runtime<S> {
     pub(super) fn wheel_scroll_for(&mut self, gesture: Attempt, x: f32, y: f32, dx: f32, dy: f32) {
         if dx == 0.0 && dy == 0.0 { return; }
         self.wheel_lock.sync_gesture(gesture);
-        let l = &self.wheel_lock;
-        let horizontal = match l.owner.horizontal() {
-            // Without phases, a delta wholly on the other axis is another wheel turning (Shift
-            // let go, a tilt, a second device), so it picks afresh rather than being dropped.
-            Some(h) if l.phase.phased() || if h { dx != 0.0 } else { dy != 0.0 } => h,
-            _ => {
+        // Without phases, a delta wholly on the other axis is another wheel turning (Shift let
+        // go, a tilt, a second device), so it picks afresh rather than being dropped.
+        let horizontal = match self.wheel_lock.keeps_axis(dx, dy) {
+            Some(h) => h,
+            None => {
                 let scroller = (dx.abs() > dy.abs()).then(|| self.scroll_at_axis(x, y, true)).flatten();
-                self.wheel_lock.owner = scroller.map_or(WheelOwner::Vertical, WheelOwner::Horizontal);
-                scroller.is_some()
+                self.wheel_lock.repick(scroller)
             }
         };
         if horizontal { if dx != 0.0 { self.wheel_x(x, y, dx); } } else if dy != 0.0 { self.wheel(x, y, dy); }
@@ -425,7 +454,7 @@ mod tests {
         assert_eq!(lock.phase, WheelPhase::Unphased { at: Some(1.05 + WHEEL_IDLE + 0.01) }, "timed from the new delta");
         lock.owner = WheelOwner::Vertical;
         lock.ended_at(2.0);
-        assert_eq!(lock.phase, WheelPhase::Ended { at: 2.0, momentum: false });
+        assert_eq!(lock.phase, WheelPhase::Ended { at: 2.0, from: GestureKind::Unphased }, "an unphased end keeps its phase");
         let ended = lock.gesture;
         lock.delta(2.001, 0.0, -10.0, false);
         assert_ne!(lock.gesture, ended, "a delta after the end starts another gesture at once");
@@ -446,7 +475,7 @@ mod tests {
         assert_eq!(lock.gesture, gesture, "keeping the gesture");
         assert!(lock.momentum());
         lock.ended_at(2.0);
-        assert_eq!(lock.phase, WheelPhase::Ended { at: 2.0, momentum: true });
+        assert_eq!(lock.phase, WheelPhase::Ended { at: 2.0, from: GestureKind::Momentum });
         lock.began(2.0 + MOMENTUM_GAP * 0.5, true, false, false);
         assert!(matches!(lock.phase, WheelPhase::Phased { .. }), "one that ended as momentum is a new touch");
         assert!(!lock.momentum());
@@ -458,6 +487,215 @@ mod tests {
         let gesture = lock.gesture;
         lock.began(1.0 + MOMENTUM_GAP + 0.01, true, false, false);
         assert_ne!(lock.gesture, gesture, "after the gap it is its own gesture");
+    }
+
+    /// The queued deltas of an unphased gesture that ended before the frame drained them still
+    /// pick each axis as they arrive: the end doesn't make the gesture phased.
+    #[test]
+    fn a_queued_cross_axis_delta_after_an_unphased_end_picks_its_axis() {
+        fn view(_: &(), _: &mut Cx<()>) -> El {
+            crate::col().size(200.0, 200.0)
+                .child(crate::col().key("xy").size(200.0, 200.0).scroll_xy()
+                    .on_wheel(|_: &mut (), _: crate::WheelEvent, _: &mut Tx| false)
+                    .child(crate::el().key("content").w(1000.0).h(1000.0)))
+        }
+        use crate::WheelEvent;
+        let mut rt = Runtime::new((), view, (200.0, 200.0), Env::default());
+        rt.frame(0.0);
+        rt.frame(1.0 / 60.0);
+        rt.wheel_event(WheelEvent::new(-10.0, 0.0).at(100.0, 100.0));
+        rt.wheel_event(WheelEvent::new(0.0, -20.0).at(100.0, 100.0));
+        rt.wheel_ended();
+        rt.frame(1.0 / 60.0);
+        let id = rt.nodes.iter().find(|n| n.key.as_deref() == Some("xy")).unwrap().id;
+        assert_eq!((rt.scrolls[&id].x.offset, rt.scrolls[&id].offset), (10.0, 20.0), "each queued delta scrolls the axis it picks");
+    }
+
+    /// origin/dev's wheel lock, transcribed from this file: when its last delta came (`at`),
+    /// whether the gesture was phased and momentum, and when the platform ended it (`ended`),
+    /// beside the owner, in place of the phase that carries them.
+    #[derive(Default)]
+    struct DevLock {
+        gesture: u32,
+        run_gesture: u32,
+        owner: DevOwner,
+        at: Option<f64>,
+        phased: bool,
+        momentum: bool,
+        ended: Option<f64>,
+    }
+
+    #[derive(Clone, Copy, Default, PartialEq, Debug)]
+    enum DevOwner {
+        #[default]
+        Unpicked,
+        Vertical,
+        Horizontal,
+    }
+
+    impl DevLock {
+        fn restart(&mut self, queued: bool) {
+            self.gesture += 1;
+            self.phased = false;
+            self.momentum = false;
+            self.ended = None;
+            if !queued {
+                self.run_gesture = self.gesture;
+                self.owner = DevOwner::Unpicked;
+            }
+        }
+
+        fn delta(&mut self, now: f64, dx: f32, dy: f32, queued: bool) {
+            let idle = if self.phased { PHASED_IDLE } else { WHEEL_IDLE };
+            let flipped = !self.phased && self.run_gesture == self.gesture && match self.owner {
+                DevOwner::Horizontal => dx == 0.0,
+                DevOwner::Vertical => dy == 0.0,
+                DevOwner::Unpicked => false,
+            };
+            let stale = self.ended.is_some() || self.at.is_none_or(|a| now - a > idle) || flipped;
+            if stale { self.restart(queued); }
+            self.at = Some(now);
+        }
+
+        fn began(&mut self, now: f64, active: bool, queued: bool, any_queued: bool) {
+            let momentum = !self.momentum && (active || queued) && self.ended.is_some_and(|e| now - e <= MOMENTUM_GAP);
+            if !momentum { self.restart(any_queued); }
+            self.phased = true;
+            self.momentum = momentum;
+            self.ended = None;
+            self.at = Some(now);
+        }
+
+        fn lost(&mut self, queued: bool) {
+            self.restart(queued);
+            self.at = None;
+        }
+
+        fn horizontal(&self) -> Option<bool> {
+            match self.owner {
+                DevOwner::Unpicked => None,
+                DevOwner::Vertical => Some(false),
+                DevOwner::Horizontal => Some(true),
+            }
+        }
+
+        fn scroll(&mut self, dx: f32, dy: f32, across: bool) -> bool {
+            match self.horizontal() {
+                Some(h) if self.phased || if h { dx != 0.0 } else { dy != 0.0 } => h,
+                _ => {
+                    self.owner = if across { DevOwner::Horizontal } else { DevOwner::Vertical };
+                    across
+                }
+            }
+        }
+    }
+
+    fn owner_kind(owner: &WheelOwner) -> Option<DevOwner> {
+        match owner {
+            WheelOwner::Unpicked => Some(DevOwner::Unpicked),
+            WheelOwner::Vertical => Some(DevOwner::Vertical),
+            WheelOwner::Horizontal(_) => Some(DevOwner::Horizontal),
+            // A handler owns the gesture only after `run_wheel` took a delta, which this walk
+            // never drives.
+            WheelOwner::Handler(_) => None,
+        }
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum WAct {
+        Delta { dx: f32, dy: f32, gap: f64, queued: bool },
+        Began { gap: f64, queued: bool },
+        Ended { gap: f64 },
+        Lost { queued: bool },
+        Scroll { dx: f32, dy: f32, across: bool },
+    }
+
+    /// Drives every sequence through the lock and through dev's fields, one event at a time,
+    /// comparing the phase's facts, the owner and the axis each delta scrolls after every event.
+    fn wheel_walk(acts: &[WAct]) {
+        let (mut lock, mut dev, mut now) = (WheelLock::default(), DevLock::default(), 0.0);
+        for (i, act) in acts.iter().enumerate() {
+            let before = lock.gesture;
+            let dev_before = dev.gesture;
+            match act {
+                WAct::Delta { dx, dy, gap, queued } => {
+                    now += gap;
+                    lock.delta(now, *dx, *dy, *queued);
+                    dev.delta(now, *dx, *dy, *queued);
+                }
+                WAct::Began { gap, queued } => {
+                    now += gap;
+                    let active = lock.run_gesture == lock.gesture && lock.owner != WheelOwner::Unpicked;
+                    lock.began(now, active, *queued, *queued);
+                    let dev_active = dev.run_gesture == dev.gesture && dev.owner != DevOwner::Unpicked;
+                    dev.began(now, dev_active, *queued, *queued);
+                }
+                WAct::Ended { gap } => {
+                    now += gap;
+                    lock.ended_at(now);
+                    dev.ended = Some(now);
+                }
+                WAct::Lost { queued } => {
+                    lock.lost(*queued);
+                    dev.lost(*queued);
+                }
+                WAct::Scroll { dx, dy, across } => {
+                    let h = match lock.keeps_axis(*dx, *dy) {
+                        Some(h) => h,
+                        None => lock.repick(across.then_some(NodeId(1))),
+                    };
+                    assert_eq!(h, dev.scroll(*dx, *dy, *across), "{acts:?}, event {i}: axis");
+                }
+            }
+            let at = format!("{acts:?}, event {i} ({act:?})");
+            assert_eq!((lock.gesture != before), (dev.gesture != dev_before), "gesture: {at}");
+            assert_eq!(lock.phase.phased(), dev.phased, "phased: {at}");
+            assert_eq!(lock.phase.momentum(), dev.momentum, "momentum: {at}");
+            // An ended phase keeps its end time where dev kept a separate `ended`: the last
+            // delta's time is no longer read, so only a live phase's is compared.
+            if dev.ended.is_none() {
+                assert_eq!(lock.phase.at(), dev.at, "at: {at}");
+            }
+            assert_eq!(lock.phase.ended(), dev.ended, "ended: {at}");
+            assert_eq!(owner_kind(&lock.owner), Some(dev.owner), "owner: {at}");
+        }
+    }
+
+    /// Every order of deltas, platform phases, losses and the deltas that later scroll, up to
+    /// five long, including an unphased gesture that ends with a cross-axis delta queued.
+    #[test]
+    fn the_phase_matches_devs_fields_over_every_order() {
+        let acts = [
+            WAct::Delta { dx: -10.0, dy: 0.0, gap: 0.0, queued: false },
+            WAct::Delta { dx: -10.0, dy: 0.0, gap: 0.0, queued: true },
+            WAct::Delta { dx: 0.0, dy: -20.0, gap: 0.0, queued: false },
+            WAct::Delta { dx: 0.0, dy: -20.0, gap: 0.0, queued: true },
+            WAct::Delta { dx: -10.0, dy: 0.0, gap: 0.2, queued: false },
+            WAct::Ended { gap: 0.0 },
+            WAct::Ended { gap: 0.2 },
+            WAct::Began { gap: 0.02, queued: false },
+            WAct::Began { gap: 0.02, queued: true },
+            WAct::Lost { queued: false },
+            WAct::Lost { queued: true },
+            WAct::Scroll { dx: -10.0, dy: 0.0, across: true },
+            WAct::Scroll { dx: 0.0, dy: -20.0, across: true },
+            WAct::Scroll { dx: 0.0, dy: -20.0, across: false },
+        ];
+        for len in 0..=5 {
+            wheel_walk_all(&acts, len, &mut Vec::new());
+        }
+    }
+
+    fn wheel_walk_all(acts: &[WAct], len: usize, prefix: &mut Vec<WAct>) {
+        if prefix.len() == len {
+            wheel_walk(prefix);
+            return;
+        }
+        for &act in acts {
+            prefix.push(act);
+            wheel_walk_all(acts, len, prefix);
+            prefix.pop();
+        }
     }
 
     #[test]

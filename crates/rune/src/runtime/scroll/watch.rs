@@ -29,7 +29,6 @@ impl<S: 'static> Runtime<S> {
         for n in &self.nodes {
             let Some(h) = n.handlers.get() else { continue };
             let Some(f) = h.on_scroll_offset.as_ref() else { continue };
-            let handler = Some(h.scroll_offset_attempt);
             let Some(st) = self.scrolls.get_mut(&n.id) else { continue };
             let viewport = [n.local.w, n.local.h];
             // The presented rect is snapped to the pixel grid; only a spring moves it further.
@@ -41,7 +40,7 @@ impl<S: 'static> Runtime<S> {
             let at = crate::ScrollPos { offset: [st.x.offset as f32, st.offset as f32 + st.slack.height()], max: [st.x.max as f32, st.max as f32],
                 viewport, drawn, direction };
             let by_hand = !scroll_mode::step(&mut st.mode, ModeEvent::Take).is_empty();
-            for effect in step(&mut st.watch, Event::Seen { at, handler, by_hand }) {
+            for effect in step(&mut st.watch, Event::Seen { at, handler: Some(f), by_hand }) {
                 let Effect::Tell { at, scrolled } = effect;
                 calls.push((f.clone(), at, scrolled));
             }
@@ -55,21 +54,21 @@ impl<S: 'static> Runtime<S> {
     }
 }
 
-/// What a viewport's `El::on_scroll_offset` has been told, and which of its handlers heard it:
-/// the handler's attempt tells a rebuilt view's new handler that it is new, so it hears where
-/// the viewport stands though nothing moved.
-#[derive(Clone, Debug, Default, PartialEq)]
+/// What a viewport's `El::on_scroll_offset` has been told, and which of its handlers heard it.
+#[derive(Clone, Debug, Default)]
 pub(super) struct Watch {
     /// Where the viewport stood when the handler was last told.
     told: Option<crate::ScrollPos>,
-    /// The handler last told (`El::on_scroll_offset`'s attempt).
-    handler: Option<crate::machine::Attempt>,
+    /// The handler that was told, held weakly: a rebuilt view's new handler hears where the
+    /// viewport stands, though it didn't move. A weak reference keeps the old handler's
+    /// allocation alive, so a later handler can't be built at its address and pass for it.
+    handler: Option<std::rc::Weak<dyn Fn(crate::ScrollPos)>>,
 }
 
-pub(super) enum Event {
+pub(super) enum Event<'a> {
     /// The viewport stands at `at`, its handler is `handler` (None when it has none), and a
     /// hand or an app's instant jump moved it since the last tell (`by_hand`).
-    Seen { at: crate::ScrollPos, handler: Option<crate::machine::Attempt>, by_hand: bool },
+    Seen { at: crate::ScrollPos, handler: Option<&'a std::rc::Rc<dyn Fn(crate::ScrollPos)>>, by_hand: bool },
 }
 
 #[derive(Debug, PartialEq)]
@@ -80,13 +79,15 @@ pub(super) enum Effect {
 
 /// Calls the handler when where the viewport stands changed, or when it is a new one that has
 /// not heard it: the effect says what to tell it.
-pub(super) fn step(watch: &mut Watch, event: Event) -> Effects<Effect> {
+pub(super) fn step(watch: &mut Watch, event: Event<'_>) -> Effects<Effect> {
     let Event::Seen { at, handler, by_hand } = event;
-    let Some(handler) = handler else { return Effects::none() };
+    let Some(f) = handler else { return Effects::none() };
     let prev = watch.told.replace(at);
     let changed = prev != Some(at);
-    let new_handler = watch.handler != Some(handler);
-    watch.handler = Some(handler);
+    let new_handler = !watch.handler.as_ref().is_some_and(|by| std::ptr::addr_eq(by.as_ptr(), std::rc::Rc::as_ptr(f)));
+    if new_handler {
+        watch.handler = Some(std::rc::Rc::downgrade(f));
+    }
     if !changed && !new_handler {
         return Effects::none();
     }
@@ -99,7 +100,7 @@ pub(super) fn step(watch: &mut Watch, event: Event) -> Effects<Effect> {
 #[cfg(test)]
 mod tests {
     use crate::*;
-    use crate::machine::Attempt;
+    use std::rc::{Rc, Weak};
     use super::{step, Effect, Event, Watch};
 
     thread_local! { static TOLD: std::cell::Cell<ScrollPos> = std::cell::Cell::new(ScrollPos::default()); }
@@ -254,26 +255,24 @@ mod tests {
     }
 
     /// origin/dev's watcher, transcribed from `runtime/scroll/watch.rs`: it kept where it last
-    /// told (`told`) and the handler that heard it (`told_by`), and called when where the
-    /// viewport stood changed, or the handler was new.
-    ///
-    /// differs from dev: the handler is known by the attempt `El::on_scroll_offset` set it
-    /// with, not a weak reference to its allocation. The rule is the same: a handler set again
-    /// is new, and one told before is not.
+    /// told (`told`) and a weak reference to the handler that heard it (`told_by`), and called
+    /// when where the viewport stood changed, or the handler was new.
     #[derive(Default)]
     struct Dev {
         told: Option<ScrollPos>,
-        told_by: Option<u32>,
+        told_by: Option<Weak<dyn Fn(ScrollPos)>>,
     }
 
     impl Dev {
-        fn seen(&mut self, y: f32, handler: Option<u32>, by_hand: bool) -> Option<(ScrollPos, bool)> {
-            let handler = handler?;
+        fn seen(&mut self, y: f32, handler: Option<&Rc<dyn Fn(ScrollPos)>>, by_hand: bool) -> Option<(ScrollPos, bool)> {
+            let f = handler?;
             let at = pos(y);
             let prev = self.told.replace(at);
             let changed = prev != Some(at);
-            let new_handler = self.told_by != Some(handler);
-            self.told_by = Some(handler);
+            let new_handler = !self.told_by.as_ref().is_some_and(|by| std::ptr::addr_eq(by.as_ptr(), Rc::as_ptr(f)));
+            if new_handler {
+                self.told_by = Some(Rc::downgrade(f));
+            }
             if !changed && !new_handler {
                 return None;
             }
@@ -288,11 +287,24 @@ mod tests {
         ScrollPos { offset: [0.0, y], max: [0.0, 800.0], viewport: [300.0, 200.0], drawn: [300.0, 200.0], direction: Direction::Ltr }
     }
 
+    /// Two handlers built separately, whose allocations stay alive for the walk.
+    fn handlers() -> Vec<Rc<dyn Fn(ScrollPos)>> {
+        (0..2).map(|_| Rc::new(|_: ScrollPos| {}) as Rc<dyn Fn(ScrollPos)>).collect()
+    }
+
+    fn same_handler(a: &Option<Weak<dyn Fn(ScrollPos)>>, b: &Option<Weak<dyn Fn(ScrollPos)>>) -> bool {
+        match (a, b) {
+            (None, None) => true,
+            (Some(a), Some(b)) => Weak::ptr_eq(a, b),
+            _ => false,
+        }
+    }
+
     #[derive(Clone, Copy, Debug)]
     struct Act {
         y: f32,
-        /// 0: the viewport has no handler.
-        handler: u32,
+        /// 0: the viewport has no handler; otherwise one of the walk's handlers.
+        handler: usize,
         by_hand: bool,
     }
 
@@ -300,16 +312,34 @@ mod tests {
     /// compares what each does after every event.
     fn walk(acts: &[Act]) {
         let (mut watch, mut dev) = (Watch::default(), Dev::default());
+        let handlers = handlers();
         for (i, act) in acts.iter().enumerate() {
-            let handler = (act.handler != 0).then_some(Attempt(act.handler));
+            let handler = (act.handler != 0).then(|| &handlers[act.handler - 1]);
             let effects: Vec<Effect> = step(&mut watch, Event::Seen { at: pos(act.y), handler, by_hand: act.by_hand }).into_iter().collect();
-            let expected = dev.seen(act.y, handler.map(|a| a.0), act.by_hand);
+            let expected = dev.seen(act.y, handler, act.by_hand);
             match expected {
                 Some((at, scrolled)) => assert_eq!(effects, [Effect::Tell { at, scrolled }], "{acts:?}, event {i}"),
                 None => assert!(effects.is_empty(), "{acts:?}, event {i}: told though nothing changed"),
             }
-            assert_eq!((watch.told, watch.handler), (dev.told, dev.told_by.map(Attempt)), "{acts:?}, event {i}");
+            assert_eq!(watch.told, dev.told, "{acts:?}, event {i}");
+            assert!(same_handler(&watch.handler, &dev.told_by), "{acts:?}, event {i}: the handler told");
         }
+    }
+
+    /// Two handlers built separately are two handlers, even at the same offset: the weak
+    /// reference tells them apart, where an attempt that wrapped would not.
+    #[test]
+    fn two_handlers_at_the_same_offset_each_hear_the_first_time() {
+        let handlers = handlers();
+        let (first, second) = (&handlers[0], &handlers[1]);
+        let mut watch = Watch::default();
+        let at = pos(0.0);
+        let told = |watch: &mut Watch, handler: &Rc<dyn Fn(ScrollPos)>| {
+            step(watch, Event::Seen { at, handler: Some(handler), by_hand: false }).into_iter().collect::<Vec<_>>()
+        };
+        assert_eq!(told(&mut watch, first), [Effect::Tell { at, scrolled: false }]);
+        assert_eq!(told(&mut watch, first), [], "the same handler hears it once");
+        assert_eq!(told(&mut watch, second), [Effect::Tell { at, scrolled: false }], "a second handler is new, even with the same value");
     }
 
     #[test]

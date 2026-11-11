@@ -354,7 +354,6 @@ fn same_handlers(
         on_visible,
         drawn_rect,
         on_scroll_offset,
-        scroll_offset_attempt: _,
         selection_copy,
         on_selection_change,
         cursor,
