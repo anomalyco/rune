@@ -39,6 +39,7 @@ pub(crate) mod full_faces;
 mod language;
 pub use language::set_language;
 mod line_break;
+pub mod mask_cache;
 mod span;
 mod system_fonts;
 mod system_weight;
@@ -222,6 +223,8 @@ pub struct TextSystem {
     paths: outline::Paths,
     /// What each face (font, index) is, for drawing it from outlines.
     face_kinds: FxHashMap<(u64, u32), windfoil::FaceKind>,
+    /// Masks kept across launches (`mask_cache`).
+    masks: mask_cache::Masks,
 }
 
 impl Default for TextSystem {
@@ -352,6 +355,7 @@ impl TextSystem {
             glide: [0.0; 2],
             emit: outline::Emit::Atlas,
             paths: Default::default(),
+            masks: Default::default(),
             face_kinds: Default::default(),
         };
         text.load_installed(families.0);
@@ -522,6 +526,7 @@ impl TextSystem {
             self.set_font_smoothing(self.requested);
         }
         self.atlas.begin_frame(pinned_mask);
+        self.mask_cache_frame();
         self.paths.begin_frame();
         self.glyph_cache.begin_frame();
         if self.color_bytes > COLOR_GLYPH_BUDGET {

@@ -165,6 +165,18 @@ impl TextSystem {
                     out.push(c.quad(gx, gy, glide, ink, byte));
                     return Placed::Other;
                 }
+                let landed = |placed: Rasterized, out: &mut Vec<GlyphQuad>| match placed {
+                    Rasterized::Placed(a) => {
+                        out.push(atlas_quad(a, fx, fy, ink, byte));
+                        Placed::Atlas(a, [subpx, subpy])
+                    }
+                    Rasterized::Empty => Placed::Empty([subpx, subpy]),
+                    Rasterized::Unplaced => { crate::marks::text_missed(); Placed::Other }
+                };
+                // A mask an earlier launch saved: no colour check, outline or fill.
+                if windfoil && let Some(placed) = self.cached_mask(&key, face) {
+                    return landed(placed, out);
+                }
                 let Some(font_ref) = FontRef::from_index(font.data.as_ref(), font.index as usize) else {
                     return Placed::Other;
                 };
@@ -185,15 +197,11 @@ impl TextSystem {
                     return Placed::Other;
                 }
                 // Windfoil masks place their own entries (GPU-filled ones are queued, not uploaded).
-                if windfoil && let Some(placed) = self.windfoil_mask(key, face, coords, font_size, [subpx, subpy]) {
-                    return match placed {
-                        Rasterized::Placed(a) => {
-                            out.push(atlas_quad(a, fx, fy, ink, byte));
-                            Placed::Atlas(a, [subpx, subpy])
-                        }
-                        Rasterized::Empty => Placed::Empty([subpx, subpy]),
-                        Rasterized::Unplaced => { crate::marks::text_missed(); Placed::Other }
-                    };
+                if windfoil {
+                    self.note_mask_font(face);
+                    if let Some(placed) = self.windfoil_mask(key, face, coords, font_size, [subpx, subpy]) {
+                        return landed(placed, out);
+                    }
                 }
                 let (phase_x, shift_y) = (subpx as f32 / coretext_match::PHASES, subpy as f32 / GLIDE_PHASES as f32);
                 #[cfg(target_os = "windows")]
