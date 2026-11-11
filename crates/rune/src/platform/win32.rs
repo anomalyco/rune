@@ -16,6 +16,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 mod cloak;
 pub(crate) mod dark_mode;
 mod dpi_drag;
+pub(crate) mod drop_target;
 mod frame;
 pub(crate) mod occlusion;
 mod pointer;

@@ -51,6 +51,8 @@ impl<S: 'static> Host<S> {
     pub(super) fn flush_files(&mut self, event_loop: &ActiveEventLoop) {
         #[cfg(target_os = "macos")]
         let appkit = self.win.as_ref().map(|l| crate::platform::macos::drop::take(&l.window)).unwrap_or_default();
+        #[cfg(target_os = "windows")]
+        let ole = self.win.as_ref().map(|l| crate::platform::win32::drop_target::take(&l.window)).unwrap_or_default();
         let Some(l) = self.win.as_ref().filter(|_| self.life.shown()) else {
             self.files = FileDrop::default();
             return;
@@ -65,6 +67,20 @@ impl<S: 'static> Host<S> {
                 Step::Enter(paths, at) => { self.rt.drag_files(paths, Some(at)); true }
                 Step::Move(at) => self.rt.drag_files_to(Some(at)),
                 Step::Drop(paths, at) => { self.rt.drop_files(paths, Some(at)); true }
+                Step::Leave => { self.rt.drag_files_leave(); true }
+            };
+        }
+        // Rune's OLE target says where each step is too (`platform::win32::drop_target`).
+        #[cfg(target_os = "windows")]
+        for step in ole {
+            use crate::platform::win32::drop_target::Step;
+            // Window points, as the pointer's samples are, in the zoomed app's points.
+            let z = self.rt.zoom();
+            let at = |(x, y): (f32, f32)| Some((x / z, y / z));
+            queued |= match step {
+                Step::Enter(paths, p) => { self.rt.drag_files(paths, at(p)); true }
+                Step::Move(p) => self.rt.drag_files_to(at(p)),
+                Step::Drop(paths, p) => { self.rt.drop_files(paths, at(p)); true }
                 Step::Leave => { self.rt.drag_files_leave(); true }
             };
         }
