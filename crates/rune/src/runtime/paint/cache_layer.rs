@@ -25,18 +25,21 @@ impl ScaleSettle {
             Self::Still(seen) => (seen, f64::NEG_INFINITY),
             Self::Settling { scale, since } => (scale, since),
         };
-        // Unchanged and past the window: read the timestamp only. No write, no frame.
-        if !reset && (scale - seen).abs() <= epsilon && now - since >= STATIC_SCALE_SETTLE {
-            return Effects::None;
-        }
-        if reset {
+        // A real change is a strict comparison, as dev's was: a NaN or infinite scale
+        // equals neither, so it never restarts the window.
+        let changed = !reset && (scale - seen).abs() > epsilon;
+        let since = if reset {
             *self = Self::Still(scale);
-            return Effects::None;
-        }
-        if (scale - seen).abs() > epsilon {
+            f64::NEG_INFINITY
+        } else if changed {
             *self = Self::Settling { scale, since: now };
-        }
-        if poll { Effects::One(AnotherFrame) } else { Effects::None }
+            now
+        } else {
+            since
+        };
+        // Frames follow elapsed time since that change, so nothing compared per frame can
+        // extend the window past `STATIC_SCALE_SETTLE`.
+        if poll && now - since < STATIC_SCALE_SETTLE { Effects::One(AnotherFrame) } else { Effects::None }
     }
 }
 

@@ -1,7 +1,7 @@
 use super::*;
 
 #[derive(Clone, Copy, Debug)]
-enum Event { Paint, Zoom, CommitZoom, Wait, LoseRaster, Settle }
+enum Event { Paint, Zoom, CommitZoom, Wait, LoseRaster, Settle, Overflow, Nan }
 
 #[derive(Clone, Copy)]
 struct OldEntry {
@@ -40,7 +40,10 @@ impl Old {
                 static_scale_settling = true;
             }
         }
-        if !committed_scale_moving {
+        // Dev only opens a cache whose estimated bounds fit in 4096 px; this 32 px box
+        // estimates at `32 * scale`, so an infinite, NaN or enormous scale opens none, and
+        // the entry stays as it was.
+        if !committed_scale_moving && (32.0 * eff_scale).ceil() <= 4096.0 {
             let (raster_scale, seen_scale, scale_changed_at, elided, _) = if let Some(entry) = self.entry {
                 let env_same = (1.0 - entry.env_scale).abs() <= 1e-4 && !settled;
                 let (seen_scale, scale_changed_at) = if !env_same {
@@ -78,6 +81,11 @@ fn fields(scale: ScaleSettle) -> (f32, f64) {
     }
 }
 
+/// Bit patterns, so an infinite or NaN observation compares equal to itself.
+fn bits((scale, since): (f32, f64)) -> (u32, u64) {
+    (scale.to_bits(), since.to_bits())
+}
+
 #[test]
 fn every_paint_cache_walk_matches_dev() {
     let mut rt = Runtime::new((), |_, _| crate::el().key("cache").size(32.0, 32.0).cache().fill(Color::WHITE),
@@ -91,13 +99,24 @@ fn every_paint_cache_walk_matches_dev() {
         if depth == 5 { return; }
         let saved = rt.node_caches.clone();
         let tracked = rt.static_scales.clone();
-        for event in [Event::Paint, Event::Zoom, Event::CommitZoom, Event::Wait, Event::LoseRaster, Event::Settle] {
+        for event in [Event::Paint, Event::Zoom, Event::CommitZoom, Event::Wait, Event::LoseRaster, Event::Settle, Event::Overflow, Event::Nan] {
             rt.node_caches.clone_from(&saved);
             rt.static_scales.clone_from(&tracked);
             let mut old = old;
-            let scale = if matches!(event, Event::Zoom | Event::CommitZoom) { 3.0 - scale } else { scale };
+            // An overflowing commit reaches the cache at an infinite scale; the paints after
+            // it return to a size the raster path can open at, so the reference's always-opens
+            // model stays the one dev had.
+            let commit = matches!(event, Event::CommitZoom | Event::Overflow | Event::Nan);
+            let finite = if (-4.0..=4.0).contains(&scale) { scale } else { 1.5 };
+            let scale = match event {
+                Event::Zoom => 3.0 - finite,
+                Event::CommitZoom => 3.0 - finite,
+                Event::Overflow => f32::MAX,
+                Event::Nan => f32::NAN,
+                _ => finite,
+            };
             let now = now + if matches!(event, Event::Wait) { 0.1 } else { 0.03125 };
-            let generation = generation + matches!(event, Event::CommitZoom) as u64;
+            let generation = generation + commit as u64;
             let settled = matches!(event, Event::Settle);
             let resident = !matches!(event, Event::LoseRaster);
             // A nonzero cached glyph count makes reuse distinguishable from repainting this rect.
@@ -113,14 +132,51 @@ fn every_paint_cache_walk_matches_dev() {
             rt.commit_gen = generation;
             rt.build();
             let expected_frame = old.paint(scale, now, generation, settled, resident);
-            let e = old.entry.unwrap();
-            let a = &rt.node_caches[&id];
             assert_eq!(rt.scale_frame.is_some(), expected_frame, "{event:?} at {now}");
-            assert_eq!(rt.static_scales.get(&id).copied().map(fields), old.static_scale);
-            assert_eq!((a.raster_scale, fields(a.scale), a.env_scale, matches!(a.phase, RasterPhase::Live), a.glyphs, a.commit_gen),
-                (e.raster_scale, (e.seen_scale, e.scale_changed_at), e.env_scale, e.was_live, e.glyphs, e.commit_gen));
+            assert_eq!(rt.static_scales.get(&id).copied().map(fields).map(bits), old.static_scale.map(bits));
+            match (old.entry, rt.node_caches.get(&id)) {
+                (Some(e), Some(a)) => assert_eq!(
+                    (a.raster_scale.to_bits(), bits(fields(a.scale)), a.env_scale.to_bits(), matches!(a.phase, RasterPhase::Live), a.glyphs, a.commit_gen),
+                    (e.raster_scale.to_bits(), bits((e.seen_scale, e.scale_changed_at)), e.env_scale.to_bits(), e.was_live, e.glyphs, e.commit_gen),
+                    "{event:?} at {now}"),
+                (None, None) => {},
+                (e, a) => panic!("{event:?} at {now}: a cache entry survived on one side only: {} / {}", e.is_some(), a.is_some()),
+            }
             walk(rt, i, id, old, scale, now, generation, depth + 1);
         }
     }
     walk(&mut rt, i, id, Old::default(), 1.0, 0.0, 1, 0);
+}
+
+#[test]
+fn a_scale_that_overflows_at_two_x_stops_asking_for_frames() {
+    fn view(_: &(), _: &mut Cx<()>) -> El {
+        crate::el().key("cache").size(32.0, 32.0).cache().fill(Color::WHITE)
+    }
+    // Committing `f32::MAX` on a 2× display overflows the scale the cache sees to infinity,
+    // so an unchanged paint compares `∞ - ∞`, which is NaN.
+    let mut rt = Runtime::new((), view, (64.0, 64.0), Env::new(true, 2.0));
+    rt.frame(0.0);
+    let i = rt.nodes.iter().position(|n| n.key.as_deref() == Some("cache")).unwrap();
+    let id = rt.nodes[i].id;
+    assert!(rt.node_caches.contains_key(&id), "a cached raster to reuse");
+    rt.nodes[i].static_scale = f32::MAX;
+    let (mut now, mut generation, mut frames) = (1.0, rt.commit_gen, 0);
+    // A drag commits every frame.
+    while now < 1.5 {
+        now += 1.0 / 60.0;
+        generation += 1;
+        (rt.t, rt.commit_gen) = (now, generation);
+        rt.build();
+        if rt.scale_frame.is_none() { break; }
+        frames += 1;
+    }
+    assert!(frames < 12, "frames stop after the settle window, not every frame: {frames}");
+    for _ in 0..5 {
+        now += 1.0 / 60.0;
+        generation += 1;
+        (rt.t, rt.commit_gen) = (now, generation);
+        rt.build();
+        assert!(rt.scale_frame.is_none(), "and stay stopped");
+    }
 }
