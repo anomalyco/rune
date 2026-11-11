@@ -335,6 +335,12 @@ impl ApplicationHandler<WakeEvent> for Windows {
             WakeEvent::Reopen => {
                 self.reopen(event_loop);
                 self.cleanup(event_loop);
+                // Windows: the launch reached an app that goes on. One that came as the app
+                // ended waits for `single_instance` to start it again once this process exits.
+                #[cfg(target_os = "windows")]
+                if !event_loop.exiting() {
+                    crate::open_url::instance::reopened();
+                }
                 return;
             }
             // A session query (`ending: false`) can still be cancelled: the windows stay up.
@@ -397,6 +403,8 @@ impl ApplicationHandler<WakeEvent> for Windows {
         if crate::quit::send(crate::quit::Event::Exited).contains(&crate::quit::Effect::Relaunch) {
             crate::relaunch::spawn();
         }
+        #[cfg(target_os = "windows")]
+        crate::open_url::instance::exited();
     }
 }
 
