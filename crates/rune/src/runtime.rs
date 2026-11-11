@@ -450,6 +450,8 @@ pub struct Runtime<S: 'static> {
     watch: crate::tooling::perf_warn::Watch,
     /// Windowed runs read the clock from the wall instead of summing frame steps.
     pub wall_start: Option<crate::time::Instant>,
+    #[cfg(test)]
+    pub(crate) test_clock: Option<crate::Clock>,
     /// Called for keys unhandled by the focused control; return true to consume it.
     pub on_key: Option<fn(&mut S, &KeyEvent, &mut Tx) -> bool>,
     pub(crate) nodes: Vec<Node>,
@@ -864,6 +866,8 @@ impl<S: 'static> Runtime<S> {
             idle_meter: Default::default(),
             watch: Default::default(),
             wall_start: None,
+            #[cfg(test)]
+            test_clock: None,
             on_key: None,
             nodes: Vec::new(),
             spare_nodes: Vec::new(),

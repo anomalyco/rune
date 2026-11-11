@@ -190,8 +190,7 @@ fn launch_frames_hold_two_drawables_until_the_window_rests() {
     assert_eq!(launch.settle(true, t0), None);
 }
 
-/// The poll's timer: long enough that a stalled test machine never finds a timer due that the
-/// test didn't move the clock to.
+/// The poll's timer on the runtime's logical clock.
 const COMP_PERIOD: Duration = Duration::from_secs(5);
 
 fn still(polls: &mut u32, _: f64, tx: &mut Tx) -> bool { *polls += 1; tx.wake_after(COMP_PERIOD); false }
@@ -225,7 +224,7 @@ impl CompHost {
     fn new(comp: Option<bool>, poll: fn(&mut u32, f64, &mut Tx) -> bool) -> Self {
         fn view(_: &u32, _: &mut crate::Cx<u32>) -> crate::El { crate::el().key("box").size(20.0, 20.0).fill(crate::Color::WHITE) }
         let mut rt = Runtime::new(0u32, view, (20.0, 20.0), crate::Env::default());
-        rt.wall_start = Some(Instant::now());
+        rt.test_clock = Some(crate::Clock::manual(1.0 / crate::frame::clock::RESUME_STEP));
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: wgpu::TextureFormat::Bgra8UnormSrgb,
@@ -250,6 +249,7 @@ impl CompHost {
     /// nothing, unless a compositor draws it. Returns whether it presented.
     fn frame(&mut self, quiet: bool) -> bool {
         let started = Instant::now();
+        self.rt.test_clock.as_mut().unwrap().step();
         let animating = self.rt.frame(crate::frame::clock::RESUME_STEP);
         let update_ms = started.elapsed().as_secs_f64() * 1000.0;
         if quiet && self.comp.is_none() && self.presented.as_ref().is_some_and(|p| p.unchanged(&self.rt, &self.config, animating, None)) {
@@ -268,8 +268,9 @@ impl CompHost {
     /// when that poll changed something. Returns whether it presented.
     fn timer_wake(&mut self) -> bool {
         let due = self.rt.wake_deadline().expect("a timer is armed");
-        let now = self.rt.wall_start.unwrap().elapsed().as_secs_f64();
-        self.rt.wall_start = self.rt.wall_start.map(|t| t - Duration::from_secs_f64((due - now).max(0.0) + 1e-4));
+        // Advance host time, not rt.clock: rests() still examines the last poll's time.
+        let clock = self.rt.test_clock.as_mut().unwrap();
+        clock.seek(clock.now().max(due));
         let rests = self.idle && !composing(self.comp.as_deref()) && self.presented.is_some();
         let frame = match rests.then(|| self.rt.resting_wake()).flatten() {
             Some(stale) => {

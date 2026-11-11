@@ -234,6 +234,8 @@ impl<S: 'static> Runtime<S> {
 
     /// Host time on the logical clock.
     pub(super) fn wall_clock(&self) -> Option<f64> {
+        #[cfg(test)]
+        if let Some(clock) = &self.test_clock { return Some(clock.now()); }
         self.wall_start.map(|t0| t0.elapsed().as_secs_f64())
     }
 
