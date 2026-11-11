@@ -144,6 +144,8 @@ pub(crate) trait AnyHost {
     fn terminate(&mut self) {}
     /// The app starts to quit: runs `App::on_quit`, unless the window already closed.
     fn quit_hook(&mut self) {}
+    /// The app quits: off the screen now, before any hook runs.
+    fn vanish(&mut self) {}
     /// Ends a tracking pop-up menu and answers waiting ones `None`, before the host drops or
     /// the loop exits.
     fn cancel_menus(&mut self) {}
@@ -235,7 +237,7 @@ impl Windows {
             // button would, once the quit's hooks ran. A quit already asked to exit and skips
             // their close hooks.
             if !event_loop.exiting() {
-                self.quit(event_loop, false);
+                self.quit(event_loop, false, true);
                 for host in self.hosts.iter_mut().flatten() { host.terminate(); }
             }
             event_loop.exit();
@@ -335,8 +337,9 @@ impl ApplicationHandler<WakeEvent> for Windows {
                 self.cleanup(event_loop);
                 return;
             }
+            // A session query (`ending: false`) can still be cancelled: the windows stay up.
             WakeEvent::Quit(ending) => {
-                self.quit(event_loop, *ending);
+                self.quit(event_loop, *ending, *ending);
                 self.cleanup(event_loop);
                 return;
             }
@@ -378,13 +381,15 @@ impl ApplicationHandler<WakeEvent> for Windows {
         crate::marks::mark("loop.exiting");
         // Every quit ends here, so the windows still open run `App::on_quit` first, unless the
         // quit's hooks already ran (a Windows logoff, the last window closing).
-        self.quit(event_loop, false);
+        self.quit(event_loop, false, true);
         // Rune didn't ask to exit, so the OS is ending the app: macOS Quit, Cmd-Q, the Dock's
         // Quit, logout. Windows close as their close button would, before the clipboard stops.
         if !event_loop.exiting() {
             for host in self.hosts.iter_mut().flatten() { host.terminate(); }
         }
         for host in self.hosts.iter_mut().flatten() { host.cancel_menus(); }
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(last) = crate::quit::fast_exit_hook() { crate::quit::end_fast(last); }
         // Surfaces go while winit's display connection is still open (layer surfaces live on it).
         self.hosts.clear();
         crate::marks::mark("windows.dropped");

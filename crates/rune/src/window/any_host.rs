@@ -49,6 +49,9 @@ impl<S: 'static> AnyHost for Host<S> {
     // What reaches the app's state runs in its turn scope (`App::turn_scope`).
     fn terminate(&mut self) { self.in_turn(Self::terminate_in_turn) }
     fn quit_hook(&mut self) { self.in_turn(Self::quit_hook_in_turn) }
+    fn vanish(&mut self) {
+        if let Some(w) = self.shown_win() { w.hide(); }
+    }
     fn cancel_menus(&mut self) { self.in_turn(Self::cancel_menus_in_turn) }
     fn reopen_hook(&mut self, event_loop: &ActiveEventLoop, has_visible_windows: bool) -> bool {
         self.in_turn(|h| h.reopen_hook_in_turn(event_loop, has_visible_windows))

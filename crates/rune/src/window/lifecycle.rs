@@ -331,6 +331,9 @@ impl<S: 'static> Host<S> {
         self.secure_input.set(false);
         if !self.closes() { return; }
         crate::marks::mark("window.close");
+        // Off the screen first: the close looks done at once and `on_close` runs unseen.
+        if let Some(w) = self.shown_win() { w.hide(); }
+        crate::marks::mark("window.close.hidden");
         self.close_hook();
         crate::marks::mark("window.close.hooked");
         self.rt.set_live_visible(false);
