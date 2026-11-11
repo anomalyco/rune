@@ -17,7 +17,8 @@ pub(super) enum CompilerContainer {
 }
 
 pub(super) struct CompilerFxc {
-    fxc: FxcLib,
+    /// Loaded on the first compile: an app whose shaders all come precompiled never loads it.
+    fxc: std::sync::OnceLock<Result<FxcLib, String>>,
 }
 
 pub(super) struct CompilerDynamicDxc {
@@ -43,7 +44,7 @@ pub(super) enum GetContainerError {
 
 impl CompilerContainer {
     pub(super) fn new_fxc() -> Result<Self, GetContainerError> {
-        FxcLib::new_dynamic().map(|fxc| Self::Fxc(CompilerFxc { fxc }))
+        Ok(Self::Fxc(CompilerFxc { fxc: std::sync::OnceLock::new() }))
     }
 
     pub(super) fn new_dynamic_dxc(dxc_path: PathBuf) -> Result<Self, GetContainerError> {
@@ -121,7 +122,9 @@ impl CompilerContainer {
                 raw_ep,
                 stage_bit,
                 full_stage,
-                fxc,
+                fxc.get_or_init(|| FxcLib::new_dynamic().map_err(|e| format!("{e}")))
+                    .as_ref()
+                    .map_err(|e| crate::PipelineError::Linkage(stage_bit, e.clone()))?,
             ),
             CompilerContainer::DynamicDxc(CompilerDynamicDxc { compiler, .. })
             | CompilerContainer::StaticDxc(CompilerStaticDxc { compiler, .. }) => compile_dxc(
