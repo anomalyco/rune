@@ -217,7 +217,11 @@ impl<S: 'static> Host<S> {
         #[cfg(target_os = "windows")]
         cloak.extend(Instant::now() + win::READY_FALLBACK);
         #[cfg(target_os = "windows")]
-        let native = Native { cloak, frame };
+        let native = {
+            let handle = self.native_handle.clone();
+            let report = Arc::new(move |covered| handle.send(move |slot| WakeEvent::Covered(slot, covered)));
+            Native { cloak, frame, _occlusion: crate::platform::win32::occlusion::Tracked::new(&window, report) }
+        };
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         let native = Native::default();
         self.win = Some(Win {

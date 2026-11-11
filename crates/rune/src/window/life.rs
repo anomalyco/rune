@@ -3,15 +3,16 @@
 //! same in both. The native host's `Win` holds the window's resources while it has them: a
 //! hidden window may have let them go (`App::release_gpu_when_hidden`, Wayland's unmapping).
 
+use super::sight::{Cover, Sight};
+
 /// A window's life.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum Life {
     /// Not shown yet: created hidden, not created, or its creation failed.
     #[default]
     Unopened,
-    /// On screen, possibly minimised. `covered`: an occlusion event, or a drawable refused as
-    /// occluded, says none of it shows.
-    Shown { covered: bool },
+    /// On screen, possibly minimised, and whether anything says none of it shows (`Sight`).
+    Shown { sight: Sight },
     /// Hidden after it showed, `at` in `reopen::stamp` order.
     Hidden { at: u64 },
     /// Closed without `keep_running`, or its `--frames` trace ended: it never shows again.
@@ -22,9 +23,9 @@ impl Life {
     pub(crate) fn shown(self) -> bool { matches!(self, Life::Shown { .. }) }
 
     /// Shown, and on screen as far as anything says.
-    pub(crate) fn uncovered(self) -> bool { self == Life::Shown { covered: false } }
+    pub(crate) fn uncovered(self) -> bool { self == Life::Shown { sight: Sight::Seen } }
 
-    pub(crate) fn covered(self) -> bool { self == Life::Shown { covered: true } }
+    pub(crate) fn covered(self) -> bool { matches!(self, Life::Shown { sight: Sight::Covered(_) }) }
 
     pub(crate) fn finished(self) -> bool { self == Life::Finished }
 
@@ -39,7 +40,7 @@ impl Life {
     /// Comes on screen, uncovered. False for a window closed for good, which stays closed.
     pub(crate) fn show(&mut self) -> bool {
         if self.finished() { return false; }
-        *self = Life::Shown { covered: false };
+        *self = Life::Shown { sight: Sight::Seen };
         true
     }
 
@@ -48,11 +49,13 @@ impl Life {
         if self.shown() { *self = Life::Hidden { at: stamp() }; }
     }
 
-    /// A shown window's occlusion changed. Returns whether it was covered. A window off screen
-    /// has nothing to cover: showing uncovers it.
-    pub(crate) fn cover(&mut self, covered: bool) -> bool {
-        let Life::Shown { covered: was } = self else { return false };
-        std::mem::replace(was, covered)
+    /// `cover` starts or stops saying a shown window can't be seen. Returns whether it was
+    /// covered. A window off screen has nothing to cover: showing uncovers it.
+    pub(crate) fn cover(&mut self, cover: Cover, on: bool) -> bool {
+        let Life::Shown { sight } = self else { return false };
+        let was = sight.covered();
+        *sight = sight.step(cover, on);
+        was
     }
 
     pub(crate) fn finish(&mut self) { *self = Life::Finished; }

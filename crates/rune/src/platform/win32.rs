@@ -17,6 +17,7 @@ mod cloak;
 pub(crate) mod dark_mode;
 mod dpi_drag;
 mod frame;
+pub(crate) mod occlusion;
 mod pointer;
 
 pub(crate) use cloak::Cloak;
