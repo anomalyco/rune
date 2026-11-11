@@ -3,7 +3,7 @@ use super::{Shortcut, ShortcutError, ShortcutId, Sink, NativeBackend};
 use super::Backend;
 use crate::{Tx, app::Shared, runtime::Waker};
 use machine::{AttachEffect, AttachEvent, Attachment, BindEffect, BindEvent, Bindings, step_attachment, step_bindings};
-use std::{collections::HashMap, rc::Rc, sync::{Arc, Mutex, OnceLock, atomic::{AtomicBool, AtomicU32, Ordering}}};
+use std::{collections::HashMap, rc::Rc, sync::{Arc, Mutex, OnceLock, atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering}}};
 #[cfg(not(target_os = "linux"))]
 use std::cell::RefCell;
 #[cfg(not(target_os = "linux"))]
@@ -14,6 +14,8 @@ use std::sync::mpsc;
 mod machine;
 
 type Handler<S> = Arc<dyn Fn(&mut S, &mut Tx) + Send + Sync>;
+/// The host routing handed a registration to (0 until then), so a close clears only the hosts it ends.
+type Stamp = Arc<AtomicU64>;
 type Pending<S> = (Result<Shortcut, ShortcutError>, Handler<S>);
 #[cfg(not(target_os = "linux"))]
 type Job = Box<dyn FnOnce(&mut Engine) + Send>;
@@ -33,12 +35,14 @@ struct Control {
     attachment: Mutex<Attachment<Job>>,
     #[cfg(target_os = "linux")]
     engine: Mutex<Option<Arc<Mutex<Engine>>>>,
+    /// How many hosts have attached; changed and read under the routing lock.
+    hosts: AtomicU64,
 }
 
 pub(crate) struct Hub<S> {
     control: Arc<Control>,
     pending: Mutex<Vec<Pending<S>>>,
-    handlers: Arc<Mutex<HashMap<ShortcutId, Handler<S>>>>,
+    handlers: Arc<Mutex<HashMap<ShortcutId, (Stamp, Handler<S>)>>>,
     errors: Mutex<Vec<ShortcutError>>,
     title: OnceLock<&'static str>,
     unmodified: AtomicBool,
@@ -53,6 +57,7 @@ impl<S> Default for Hub<S> {
                 attachment: Mutex::new(Attachment::Detached),
                 #[cfg(target_os = "linux")]
                 engine: Mutex::default(),
+                hosts: AtomicU64::new(0),
             }),
             pending: Mutex::default(), handlers: Arc::default(), errors: Mutex::default(), title: OnceLock::new(), unmodified: AtomicBool::new(false),
         }
@@ -137,9 +142,15 @@ impl Drop for Engine {
 
 impl Control {
     fn invoke<T: Send + 'static>(&self, f: impl FnOnce(&mut Engine) -> Result<T, ShortcutError> + Send + 'static) -> Result<T, ShortcutError> {
+        self.invoke_stamped(None, f)
+    }
+
+    /// Runs a call, stamping it with the latest host while routing can't change.
+    fn invoke_stamped<T: Send + 'static>(&self, stamp: Option<Stamp>, f: impl FnOnce(&mut Engine) -> Result<T, ShortcutError> + Send + 'static) -> Result<T, ShortcutError> {
         let mut route = self.attachment.lock().unwrap();
         let call = AttachEvent::Call { from: std::thread::current().id(), shared: cfg!(target_os = "linux") };
         let effect = step_attachment(&mut route, call).into_iter().next();
+        if let Some(stamp) = stamp { stamp.store(self.hosts.load(Ordering::Relaxed), Ordering::Relaxed); }
         #[cfg(target_os = "linux")]
         {
             let Some(AttachEffect::Run { wake }) = effect else { return Err(ShortcutError::NotRunning) };
@@ -184,8 +195,9 @@ impl<S: 'static> Hub<S> {
         if !self.unmodified.load(Ordering::Relaxed) { shortcut.require_modifier()?; }
         let id = NEXT_ID.try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
             .map(ShortcutId).map_err(|_| ShortcutError::Backend("shortcut id space exhausted".into()))?;
-        self.handlers.lock().unwrap().insert(id, handler);
-        if let Err(e) = self.control.invoke(move |engine| engine.register(id, shortcut)) {
+        let stamp = Stamp::default();
+        self.handlers.lock().unwrap().insert(id, (stamp.clone(), handler));
+        if let Err(e) = self.control.invoke_stamped(Some(stamp), move |engine| engine.register(id, shortcut)) {
             self.handlers.lock().unwrap().remove(&id);
             return Err(e);
         }
@@ -225,7 +237,8 @@ impl<S: 'static> Hub<S> {
 /// Owned by the host, not AppHandle: closing/dropping the app releases native registrations.
 pub(crate) struct Guard {
     control: Arc<Control>,
-    cleanup: Option<Box<dyn FnOnce()>>,
+    /// Told the last host the close ends.
+    cleanup: Option<Box<dyn FnOnce(u64)>>,
     // The guard must be destroyed on the owning event-loop thread.
     _thread: std::marker::PhantomData<Rc<()>>,
 }
@@ -241,7 +254,7 @@ impl Guard {
             if let Some(shared) = weak.upgrade() {
                 let weak = Arc::downgrade(&shared);
                 crate::AppHandle { shared }.update(move |state, tx| {
-                    let handler = weak.upgrade().and_then(|s| s.shortcuts.handlers.lock().unwrap().get(&id).cloned());
+                    let handler = weak.upgrade().and_then(|s| s.shortcuts.handlers.lock().unwrap().get(&id).map(|(_, handler)| handler.clone()));
                     if let Some(handler) = handler {
                         tx.shortcut_activation_token = token;
                         handler(state, tx);
@@ -259,9 +272,15 @@ impl Guard {
         // A replaced engine closes with the slot locked, so callers wait until its chords are free.
         #[cfg(target_os = "linux")]
         { *control.engine.lock().unwrap() = Some(Arc::new(Mutex::new(engine))); }
-        step_attachment(&mut control.attachment.lock().unwrap(), AttachEvent::Attach { owner: std::thread::current().id(), wake });
+        {
+            let mut route = control.attachment.lock().unwrap();
+            control.hosts.fetch_add(1, Ordering::Relaxed);
+            step_attachment(&mut route, AttachEvent::Attach { owner: std::thread::current().id(), wake });
+        }
         let handlers = shared.shortcuts.handlers.clone();
-        let guard = Self { control, cleanup: Some(Box::new(move || handlers.lock().unwrap().clear())), _thread: std::marker::PhantomData };
+        // A host that attached after the close took routing keeps its handlers.
+        let cleanup = move |ended: u64| handlers.lock().unwrap().retain(|_, (stamp, _)| stamp.load(Ordering::Relaxed) > ended);
+        let guard = Self { control, cleanup: Some(Box::new(cleanup)), _thread: std::marker::PhantomData };
         for (shortcut, handler) in std::mem::take(&mut *shared.shortcuts.pending.lock().unwrap()) {
             if let Err(error) = shortcut.and_then(|s| shared.shortcuts.register(s, handler)) {
                 eprintln!("rune: {error}");
@@ -284,7 +303,11 @@ impl Guard {
 
 impl Drop for Guard {
     fn drop(&mut self) {
-        let closed = step_attachment(&mut self.control.attachment.lock().unwrap(), AttachEvent::Close);
+        let mut route = self.control.attachment.lock().unwrap();
+        let closed = step_attachment(&mut route, AttachEvent::Close);
+        #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
+        let mut ended = self.control.hosts.load(Ordering::Relaxed);
+        drop(route);
         // Dropping queued reply senders releases waiting callers with NotRunning.
         for effect in closed { if let AttachEffect::Release(jobs) = effect { drop(jobs); } }
         #[cfg(not(target_os = "linux"))]
@@ -293,9 +316,11 @@ impl Drop for Guard {
         // backend still holds its chords.
         #[cfg(target_os = "linux")]
         if let Some(engine) = self.control.engine.lock().unwrap().take() {
+            // A host that attached since installed this engine first, so it ends with this close.
+            ended = self.control.hosts.load(Ordering::Relaxed);
             engine.lock().unwrap().release();
         }
-        if let Some(cleanup) = self.cleanup.take() { cleanup(); }
+        if let Some(cleanup) = self.cleanup.take() { cleanup(ended); }
     }
 }
 
@@ -303,6 +328,8 @@ impl Drop for Guard {
 mod lifecycle_tests;
 #[cfg(test)]
 mod machine_tests;
+#[cfg(test)]
+mod host_handler_tests;
 #[cfg(all(test, target_os = "linux"))]
 mod teardown_tests;
 
