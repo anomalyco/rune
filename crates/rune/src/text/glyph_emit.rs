@@ -138,6 +138,9 @@ impl TextSystem {
             skew,
             bold: face.bold,
         };
+        let miss = crate::marks::counting() && !self.atlas.map.contains_key(&key);
+        if miss { crate::marks::add("text.glyphs", 1); }
+        let _raster = crate::marks::Timed::start("text.raster_ns", miss);
         let entry = match self.atlas.map.get(&key) {
             Some(e) => {
                 let mask = e.mask();
@@ -181,7 +184,7 @@ impl TextSystem {
                             Placed::Atlas(a, [subpx, subpy])
                         }
                         Rasterized::Empty => Placed::Empty([subpx, subpy]),
-                        Rasterized::Unplaced => Placed::Other,
+                        Rasterized::Unplaced => { crate::marks::text_missed(); Placed::Other }
                     };
                 }
                 let (phase_x, shift_y) = (subpx as f32 / coretext_match::PHASES, subpy as f32 / GLIDE_PHASES as f32);
@@ -225,7 +228,7 @@ impl TextSystem {
                         self.atlas.map.insert(key, Residency::Blank);
                         None
                     }
-                    Rasterized::Unplaced => return Placed::Other,
+                    Rasterized::Unplaced => { crate::marks::text_missed(); return Placed::Other }
                 }
             }
         };

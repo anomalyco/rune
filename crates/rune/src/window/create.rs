@@ -7,6 +7,7 @@ impl<S: 'static> Host<S> {
     #[cfg_attr(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))), allow(unused_variables))]
     pub(super) fn try_create(&mut self, event_loop: &ActiveEventLoop, token: Option<String>, focus: bool) -> Result<(), String> {
         // A released window reopens at the height its content reached while it was gone.
+        crate::marks::mark("window.create");
         let built = self.shown && self.build_for_show();
         let size = self.args.size.unwrap_or(self.spec.size);
         let launcher = self.launcher();
@@ -42,6 +43,7 @@ impl<S: 'static> Host<S> {
         #[cfg(target_os = "windows")]
         let attrs = crate::platform::app_icon::with_icon(attrs.with_visible(false));
         let window = Arc::new(event_loop.create_window(attrs).map_err(|e| e.to_string())?);
+        crate::marks::mark("window.native");
         #[cfg(target_os = "windows")]
         crate::platform::win32::follow_suggested_rect(&window);
         // Before it shows, so the title bar never appears.
@@ -94,6 +96,7 @@ impl<S: 'static> Host<S> {
             self.rt.help_delay = self.rt.double_click_interval;
         }
         let mut prewarmed = None;
+        crate::marks::mark("gpu.begin");
         // A device that died while this window was closed draws nothing: make another.
         let (gpu, surface) = match self.gpu.take().filter(|(gpu, _)| !gpu.is_lost()) {
             Some((gpu, renderer)) => {
@@ -137,7 +140,10 @@ impl<S: 'static> Host<S> {
         }
         let target_format = if self.rt.srgb_blend() { config.format.remove_srgb_suffix() } else { config.format };
         if let Some(gpu) = gpu {
+            crate::marks::mark("renderer.begin");
             let mut renderer = prewarmed.unwrap_or_else(|| Renderer::new(&gpu.device, target_format));
+            crate::marks::note("uber", renderer.uber_shader());
+            crate::marks::mark("renderer.ready");
             renderer.set_srgb_blend(self.rt.srgb_blend());
             self.gpu = Some((gpu, renderer));
         }
@@ -153,6 +159,7 @@ impl<S: 'static> Host<S> {
             }
             return Err(format!("the window's GPU surface refused its configuration: {error}"));
         }
+        crate::marks::mark("gpu.surface");
         #[cfg(target_os = "macos")]
         crate::platform::macos::pin_contents_top_left(&surface);
         #[cfg(target_os = "macos")]
@@ -239,6 +246,7 @@ impl<S: 'static> Host<S> {
         self.apply_placement(event_loop);
         #[cfg(target_os = "macos")]
         if visible && let Some(w) = &self.win && w.native.panel.is_some() { w.show(focus); }
+        crate::marks::mark("window.created");
         if let Some(created) = self.on_created.take() { created(self.native_handle.clone()); }
         if let Some(on_window) = self.on_window.as_mut() { on_window(&self.native_handle); }
         if let (Some(w), Some((gpu, ..))) = (self.win.as_mut(), self.gpu.as_ref()) {

@@ -439,12 +439,15 @@ impl Gpu {
     fn try_picked(instance: wgpu::Instance, surface: Option<&wgpu::Surface<'_>>, wanted: wgpu::Features, translucent: bool, presented: bool) -> Result<Gpu, String> {
         let _serial = GPU_INIT.lock().unwrap_or_else(|e| e.into_inner());
         let pick = crate::gpu::pick::pick(&instance, surface, presented)?;
+        crate::marks::mark("gpu.adapter");
+        if !crate::marks::noted("adapter") { crate::marks::note("adapter", Box::leak(pick.adapter.get_info().name.into_boxed_str())); }
         let adapter = match surface {
             Some(s) if translucent && !pick.from_env() => crate::render::translucency::prefer(&instance, s, &pick),
             _ => pick.adapter,
         };
         match Self::device_on(&adapter, wanted) {
             Ok((device, queue)) => {
+                crate::marks::mark("gpu.device");
                 crate::native_surface::note_device(&device, surface.is_some() || presented);
                 Ok(Gpu::made(instance, adapter, device, queue, surface.is_some() || presented))
             }
@@ -564,9 +567,12 @@ impl Gpu {
         let dx12 = *DX12.get_or_init(|| {
             let found = !pollster::block_on(Self::wgpu_instance_on(wgpu::Backends::DX12).enumerate_adapters(wgpu::Backends::DX12)).is_empty();
             if !found { eprintln!("rune: no DX12 adapter; drawing with Vulkan"); }
+            crate::marks::mark("gpu.dx12_probe");
             found
         });
-        Self::wgpu_instance_on(if dx12 { wgpu::Backends::DX12 } else { wgpu::Backends::VULKAN })
+        let instance = Self::wgpu_instance_on(if dx12 { wgpu::Backends::DX12 } else { wgpu::Backends::VULKAN });
+        crate::marks::mark("gpu.instance");
+        instance
     }
 
     /// wgpu's own backends, whatever `RUNE_GPU_BACKEND` says.
