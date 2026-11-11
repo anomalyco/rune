@@ -121,7 +121,7 @@ impl<S: 'static> Runtime<S> {
                 arrived: timed.arrived, frame_start: timed.frame_start, built, submitted, present,
                 handler_ms: timed.handler_ms, phases, why: timed.why, commits: timed.commits, shaped,
                 nodes: self.nodes.len(), reused, rebuilt,
-                cpu_ms: timed.cpu.1, cause: cause.unwrap_or(interaction::Cause::Queued), stacks: timed.stacks,
+                cpu_ms: f.cpu_ms, cause: cause.unwrap_or(interaction::Cause::Queued), stacks: f.stacks,
             });
         }
         self.watch.interaction.reused.clear();

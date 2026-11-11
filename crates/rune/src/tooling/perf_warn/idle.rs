@@ -44,11 +44,63 @@ struct Meter {
     /// The last quiet frame's instances and key; none after a frame with input or motion.
     last: Option<(Vec<u8>, u64)>,
     poll_streak: u32,
-    idle_from: f64,
-    idle_frames: u32,
-    /// What woke the idle frames: a timer, a live value, a `poll` that returned true.
-    woken: [bool; 3],
+    idle: Streak,
 }
+
+#[cfg(debug_assertions)]
+#[derive(Clone, Copy)]
+enum Woke { Live { polled: bool }, Timer, TimerLive, TimerPoll }
+
+#[cfg(debug_assertions)]
+impl Woke {
+    fn label(self) -> &'static str {
+        match self {
+            Self::TimerPoll => "a `wake_after` loop whose `poll` returns true",
+            Self::Timer => "a `wake_after` loop",
+            Self::TimerLive => "a `wake_after` loop and a live value",
+            Self::Live { .. } => "a live value",
+        }
+    }
+}
+
+#[cfg(debug_assertions)]
+#[derive(Clone, Copy, Default)]
+enum Streak { #[default] Watching, Counting { from: f64, frames: u32, woke: Woke } }
+
+#[cfg(debug_assertions)]
+#[derive(Clone, Copy)]
+struct Reading { clock: f64, quiet: bool, animating: bool, same: Option<bool>, timer: bool, live: bool, polled: bool }
+
+#[cfg(debug_assertions)]
+#[inline]
+fn step(streak: &mut Streak, r: Reading) -> crate::machine::Effects<(Woke, f64)> {
+    use crate::machine::Effects;
+    if !r.quiet || r.animating || r.same == Some(false) {
+        *streak = Streak::Watching;
+        return Effects::none();
+    }
+    if r.same.is_none() || !(r.timer || r.live) { return Effects::none(); }
+    let (from, frames, previous) = match *streak {
+        Streak::Counting { from, frames, woke } if !(r.clock - from > IDLE_SECS) => (from, frames, Some(woke)),
+        _ => (r.clock, 0, None),
+    };
+    let timer = r.timer || matches!(previous, Some(Woke::Timer | Woke::TimerLive | Woke::TimerPoll));
+    let live = r.live || matches!(previous, Some(Woke::Live { .. } | Woke::TimerLive));
+    let polled = r.polled || matches!(previous, Some(Woke::Live { polled: true } | Woke::TimerPoll));
+    let woke = match (timer, live, polled) {
+        (true, _, true) => Woke::TimerPoll,
+        (true, false, false) => Woke::Timer,
+        (true, true, false) => Woke::TimerLive,
+        (false, ..) => Woke::Live { polled },
+    };
+    let frames = frames + 1;
+    *streak = Streak::Counting { from, frames, woke };
+    if frames == IDLE_FRAMES { Effects::one((woke, r.clock - from)) } else { Effects::none() }
+}
+
+#[cfg(all(test, debug_assertions))]
+#[path = "idle_tests.rs"]
+mod tests;
 
 impl IdleMeter {
     /// Passes `changed`, `poll`'s answer, through.
@@ -96,25 +148,10 @@ impl IdleMeter {
                 ));
             }
         }
-        if !quiet || animating || same == Some(false) {
-            m.idle_frames = 0;
-            return;
-        }
-        if same.is_none() || !(start.timer || start.live) { return }
-        if m.idle_frames == 0 || clock - m.idle_from > IDLE_SECS {
-            (m.idle_from, m.idle_frames, m.woken) = (clock, 0, [false; 3]);
-        }
-        m.idle_frames += 1;
-        for (woke, by) in m.woken.iter_mut().zip([start.timer, start.live, polled]) { *woke |= by; }
-        if m.idle_frames == IDLE_FRAMES {
+        let reading = Reading { clock, quiet, animating, same, timer: start.timer, live: start.live, polled };
+        if let crate::machine::Effects::One((woke, secs)) = step(&mut m.idle, reading) {
             let window = site();
-            let by = match m.woken {
-                [true, _, true] => "a `wake_after` loop whose `poll` returns true",
-                [true, false, false] => "a `wake_after` loop",
-                [true, true, false] => "a `wake_after` loop and a live value",
-                [false, ..] => "a live value",
-            };
-            let secs = clock - m.idle_from;
+            let by = woke.label();
             super::warn_once(format!("idle-draw{window}"), || format!(
                 "idle window{window} still drawing: check `wake_after` loops ({IDLE_FRAMES} frames in {secs:.1} s \
                  with no input, motion or visible change, woken by {by})"

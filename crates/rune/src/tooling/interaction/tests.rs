@@ -192,7 +192,7 @@ fn off_nothing_is_timed() {
     click(&mut rt, "save-42");
     assert!(SENT.take().is_empty());
     let tracker = rt.interaction_tracker();
-    assert!(tracker.rollup.is_empty() && tracker.timed.is_none());
+    assert!(tracker.rollup.is_empty() && matches!(tracker.frame, Frame::Idle));
 }
 
 #[test]

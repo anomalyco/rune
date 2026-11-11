@@ -22,6 +22,7 @@
 
 mod cause;
 mod export;
+mod frame;
 pub(crate) mod gate;
 mod names;
 mod rollup;
@@ -34,6 +35,8 @@ use std::time::Duration;
 
 use crate::frame::profile::{PHASES, Phase};
 use crate::time::Instant;
+use crate::machine::Effects;
+use frame::{Built, Effect, Event, Frame, step};
 
 pub(crate) use cause::Cause;
 pub(crate) use names::{Name, Names};
@@ -127,10 +130,6 @@ pub(crate) struct Timed {
     pub note: Note,
     pub why: u16,
     pub commits: u32,
-    pub built: Option<(Instant, [f64; PHASES], u32)>,
-    /// The thread's CPU clock when the frame started, and the CPU the frame took once built.
-    pub cpu: (Option<f64>, Option<f64>),
-    pub stacks: Option<Stacks>,
 }
 
 /// A window's interaction timing. Lives in the runtime's `perf_warn::Watch`.
@@ -139,15 +138,9 @@ pub(crate) struct Tracker {
     pub names: Names,
     rollup: Rollup,
     rolled_since: Option<Instant>,
-    /// When the frame underway started, if input was queued for it.
-    frame_start: Option<Instant>,
-    /// When the frame underway started, and the thread's CPU clock then if input was queued.
-    began: Option<(Instant, Option<f64>)>,
+    frame: Frame,
     /// Signatures that were slow by the app's doing this session: the watchdog samples them sooner.
     breached: rustc_hash::FxHashSet<u64>,
-    /// Why the frame underway committed, as `CommitWhy` bits.
-    frame_why: u16,
-    pub timed: Option<Timed>,
     /// The last commit's memo-reused node ranges (start, len), while a frame is timed.
     pub reused: Vec<(usize, usize)>,
     sent: (Option<Instant>, u32),
@@ -157,6 +150,8 @@ pub(crate) struct Tracker {
 /// What finishing a timed frame decided.
 pub(crate) struct Finished {
     pub timed: Timed,
+    pub cpu_ms: Option<f64>,
+    pub stacks: Option<Stacks>,
     pub built: Instant,
     pub phases: [f64; PHASES],
     pub shaped: u32,
@@ -172,12 +167,17 @@ impl Tracker {
     /// A frame starts; `queued` when input waits for it. A built frame no host presented
     /// (a bare `Runtime`, a window that skipped drawing) ends at its build.
     pub(crate) fn frame_begins(&mut self, queued: bool) -> Option<Finished> {
-        let left = self.timed.as_ref().and_then(|t| t.built).map(|(built, ..)| built);
-        let finished = left.and_then(|built| self.finish(built, None));
-        let now = Instant::now();
-        self.frame_start = queued.then_some(now);
-        self.began = Some((now, if queued { crate::frame::profile::cpu_ms() } else { None }));
-        self.frame_why = 0;
+        self.begin_with(queued, Instant::now, crate::frame::profile::cpu_ms)
+    }
+
+    fn begin_with(&mut self, queued: bool, now: impl FnOnce() -> Instant, cpu: impl FnOnce() -> Option<f64>) -> Option<Finished> {
+        let finished = match &self.frame {
+            Frame::Built(b) => self.finish(b.at, None),
+            _ => None,
+        };
+        let now = now();
+        let cpu = if queued { cpu() } else { None };
+        step(&mut self.frame, Event::Begin { at: now, queued, cpu });
         watchdog::arm();
         finished
     }
@@ -190,71 +190,54 @@ impl Tracker {
     /// An input action ran its handlers: `at` is when its input arrived, `handler` how long
     /// they took from `started`.
     pub(crate) fn noted(&mut self, note: Note, at: Option<Instant>, started: Instant, handler: Duration) {
-        let frame_start = *self.frame_start.get_or_insert(started);
-        let arrived = at.unwrap_or(frame_start).min(frame_start);
-        match &mut self.timed {
-            Some(t) if t.built.is_none() => {
-                t.arrived = t.arrived.min(arrived);
-                t.handler_ms += handler.as_secs_f64() * 1000.0;
-                if note.rank > t.note.rank { t.note = note; }
-            }
-            _ => {
-                let cpu = (self.began.and_then(|b| b.1), None);
-                self.timed = Some(Timed { arrived, frame_start, handler_ms: handler.as_secs_f64() * 1000.0, note, why: 0, commits: 0, built: None, cpu, stacks: None });
-                TIMES.set([0.0; PHASES]);
-                ACTIVE.set(true);
-            }
+        if let Effects::One(Effect::StartPhases) = step(&mut self.frame, Event::Note { note, at, started, handler }) {
+            TIMES.set([0.0; PHASES]);
+            ACTIVE.set(true);
         }
     }
 
     /// A commit ran, for `why` (`CommitWhy` bits).
     pub(crate) fn committed(&mut self, why: u16) {
-        self.frame_why |= why;
-        if let Some(t) = self.timed.as_mut().filter(|t| t.built.is_none()) {
-            t.why |= why;
-            t.commits += 1;
-        }
+        step(&mut self.frame, Event::Commit(why));
     }
 
     /// The frame, of `nodes` nodes, is built; `shaped` text runs it shaped. A slow frame no
     /// input caused comes back to send.
     pub(crate) fn built(&mut self, shaped: u32, nodes: usize) -> Option<SlowFrame> {
-        let why = self.frame_why;
-        self.frame_start = None;
-        let stacks = watchdog::disarm();
-        let began = self.began.take();
-        let Some(t) = self.timed.as_mut().filter(|t| t.built.is_none()) else {
-            let (start, stacks) = (began?.0, stacks?);
-            let built = Instant::now();
+        self.build_with(shaped, nodes, watchdog::disarm(), Instant::now, crate::frame::profile::cpu_ms)
+    }
+
+    fn build_with(&mut self, shaped: u32, nodes: usize, stacks: Option<Stacks>, now: impl FnOnce() -> Instant, cpu: impl FnOnce() -> Option<f64>) -> Option<SlowFrame> {
+        if !matches!(self.frame, Frame::Open { .. }) {
+            let Effects::One(Effect::CheckFrame { start, why }) = step(&mut self.frame, Event::BuildUntimed) else { return None };
+            let stacks = stacks?;
+            let built = now();
             let work = built.saturating_duration_since(start).as_secs_f64() * 1000.0;
             let cause = cause::cause(work, slow_ms(), None, Some(&stacks), overloaded());
             return (work > slow_ms()).then_some(SlowFrame { start, built, why, nodes, cause, stacks });
-        };
-        t.built = Some((Instant::now(), TIMES.replace([0.0; PHASES]), shaped));
-        t.cpu.1 = t.cpu.0.zip(crate::frame::profile::cpu_ms()).map(|(from, to)| to - from);
-        t.stacks = stacks;
-        ACTIVE.set(false);
+        }
+        let event = Event::BuildTimed { at: now(), phases: TIMES.replace([0.0; PHASES]), shaped, cpu: cpu(), stacks };
+        if let Effects::One(Effect::StopPhases) = step(&mut self.frame, event) { ACTIVE.set(false); }
         None
     }
 
     /// The built frame was submitted at `submitted`, to show at `presents_at` when a display
     /// link paced it. Counts it, and says whether to send it as slow.
     pub(crate) fn finish(&mut self, submitted: Instant, presents_at: Option<Instant>) -> Option<Finished> {
-        let timed = self.timed.take_if(|t| t.built.is_some())?;
-        let (built, phases, shaped) = timed.built?;
+        let Effects::One(Effect::Count(Built { timed, at: built, phases, shaped, cpu_ms, stacks })) = step(&mut self.frame, Event::Finish) else { return None };
         let submitted = submitted.max(built);
         let present = presents_at.map_or(submitted, |p| p.max(submitted));
         let total = present.saturating_duration_since(timed.arrived).as_secs_f64() * 1000.0;
         let work = submitted.saturating_duration_since(timed.frame_start).as_secs_f64() * 1000.0;
         let over = total > slow_ms() || work > slow_ms();
-        let cause = over.then(|| cause::cause(work, slow_ms(), timed.cpu.1, timed.stacks.as_ref(), overloaded()));
+        let cause = over.then(|| cause::cause(work, slow_ms(), cpu_ms, stacks.as_ref(), overloaded()));
         let contended = cause == Some(Cause::SchedulerWait);
         let note = &timed.note;
         self.rollup.add(&note.route, &note.control, note.action, total, over && !contended, contended);
         if over && !contended { self.breached.insert(rollup::signature(&note.route, &note.control, note.action)); }
         let slow = over && self.allow(present);
         self.rolled_since.get_or_insert(timed.arrived);
-        Some(Finished { timed, built, phases, shaped, submitted, present, cause, slow })
+        Some(Finished { timed, built, phases, shaped, submitted, present, cause, slow, cpu_ms, stacks })
     }
 
     fn allow(&mut self, now: Instant) -> bool {
@@ -327,3 +310,7 @@ mod tests;
 #[cfg(test)]
 #[path = "interaction/sampler_tests.rs"]
 mod sampler_tests;
+
+#[cfg(test)]
+#[path = "interaction/frame_tests.rs"]
+mod frame_tests;
