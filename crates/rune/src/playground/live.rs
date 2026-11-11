@@ -45,12 +45,8 @@ pub(crate) struct Live<S: 'static> {
     pub(super) folds: Folds,
     /// [`Playground::widths`].
     pub(super) widths: Widths,
-    /// The keyboard is on the open story's side controls, which take keys.
-    pub(super) side_active: bool,
     /// The column that has the keyboard.
-    pub(super) region: Region,
-    /// The focused element's path when the region last looked (see [`Live::see_focus`]).
-    pub(super) region_seen: Option<String>,
+    pub(super) keyboard: Keyboard,
     /// Whether the playground shows, and on a scene, that scene's stage.
     pub(super) showing: Showing<S>,
     pub(super) owned: Vec<Option<Box<dyn Any>>>,
@@ -106,9 +102,7 @@ impl<S: 'static> Live<S> {
             folded: Vec::new(),
             folds,
             widths,
-            side_active: false,
-            region: Region::List,
-            region_seen: None,
+            keyboard: Keyboard::default(),
             showing: Showing::Closed,
             controls,
             dark: None,
@@ -320,7 +314,7 @@ impl<S: 'static> Live<S> {
         self.keep(real);
         self.showing = Showing::Closed;
         self.header = None;
-        self.region = Region::List;
+        self.moved(Moved::Closed);
         self.controls.filter = crate::TextEdit::default();
         self.variant.iter_mut().for_each(|v| *v = 0);
         self.owned.iter_mut().for_each(|o| *o = None);

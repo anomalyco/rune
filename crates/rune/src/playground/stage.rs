@@ -206,7 +206,7 @@ impl<S: 'static> Live<S> {
     /// the keyboard, unless [`Playground::typing`] asks for every key: in the list, a letter may
     /// be J, K or a trigger's.
     pub(crate) fn stage_hears(&self, app: &S) -> bool {
-        !self.is_open() || self.region == Region::Stage || self.typing(app)
+        !self.is_open() || self.region() == Region::Stage || self.typing(app)
     }
 
     /// The state `AppSpec::on_key` gets: the stage's when it's an app state, none on a story

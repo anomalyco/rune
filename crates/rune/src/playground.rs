@@ -48,7 +48,7 @@ use live::Showing;
 use folds::Folds;
 use widths::Widths;
 pub use open::slug;
-pub(crate) use region::Region;
+pub(crate) use region::{Column, Keyboard, Moved, Region};
 pub(crate) use stage::call;
 pub use stage::{Play, Stage, Step};
 use stage::{SCROLL_MARGIN, Staged, Trigger, View, trigger, trigger_tx};

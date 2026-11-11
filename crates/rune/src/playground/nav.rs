@@ -14,7 +14,7 @@ impl<S: 'static> Live<S> {
             Key::Text(t) if !m.cmd => t.chars().next().filter(|_| t.chars().count() == 1).map(|c| c.to_ascii_lowercase()),
             _ => None,
         };
-        let in_side = region == Region::Side;
+        let in_side = matches!(region, Region::Side { .. });
         if in_side {
             match ev.key {
                 Key::Tab | Key::Escape | Key::Left => return Nav::OutOfSide,
@@ -122,12 +122,6 @@ impl<S: 'static> Live<S> {
             }
         };
         took || ev.key == Key::Left
-    }
-
-    /// Notes whether the keyboard is on the open story's side controls, which their view
-    /// shows; true when that changed.
-    pub(crate) fn set_side_active(&mut self, active: bool) -> bool {
-        std::mem::replace(&mut self.side_active, active) != active
     }
 
     /// What the open story's trigger on `c` asks for, as its letter does: R replays.

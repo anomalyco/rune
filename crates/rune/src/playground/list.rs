@@ -21,7 +21,7 @@ impl<S: 'static> Live<S> {
         let header = row().w(sidebar_w).h(HEADER).pl(8.0).center_y().child(back);
         let drag = (band > 0.0).then(|| el().w(sidebar_w).h(band).window_drag());
         // The list's selection takes the accent while the list has the keyboard.
-        let on_fill = if self.region == Region::List { focused(accent) } else { selected(t, dark) };
+        let on_fill = if self.region() == Region::List { focused(accent) } else { selected(t, dark) };
         // A scroll measures its first child, so the rows go in one content column.
         let mut list = col().key("playground-rows").w_full();
         let rows = self.rows();

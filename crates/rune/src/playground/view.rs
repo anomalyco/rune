@@ -19,7 +19,7 @@ impl<S: 'static> Live<S> {
         let (sidebar_w, side_w) = self.widths(viewport.0);
         let stage_w = (viewport.0 - sidebar_w - side_w - 2.0).max(0.0);
         let stage = self.stage(app, view, cx, (stage_w, viewport.1), t, dark);
-        let stage = match self.region {
+        let stage = match self.region() {
             // The stage has no selection to colour, so a ring inside its edge shows it has the
             // keyboard. It takes no input, so presses reach the story under it.
             Region::Stage => stage.child(el().key("playground-stage-ring").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).border(2.0, cx.focus_color())),
@@ -156,7 +156,7 @@ impl<S: 'static> Live<S> {
     /// The keys of the column that has the keyboard, under the side column.
     fn hint(&self, variants: usize, controls: bool) -> String {
         let variants = match variants.min(9) { 0 => None, 1 => Some("1\u{a0}variant".into()), n => Some(format!("1–{n}\u{a0}variants")) };
-        let parts: Vec<Option<String>> = match self.region {
+        let parts: Vec<Option<String>> = match self.region() {
             Region::List => vec![
                 Some("↑↓\u{a0}stories".into()),
                 Some("←→\u{a0}groups".into()),
@@ -164,7 +164,7 @@ impl<S: 'static> Live<S> {
                 controls.then(|| "Tab\u{a0}controls".into()),
                 Some("Esc\u{a0}back".into()),
             ],
-            Region::Side => vec![Some("↑↓\u{a0}controls".into()), variants, Some("Esc\u{a0}stories".into())],
+            Region::Side { .. } => vec![Some("↑↓\u{a0}controls".into()), variants, Some("Esc\u{a0}stories".into())],
             Region::Stage => vec![Some("Keys go to the story".into()), Some("Esc\u{a0}stories".into())],
         };
         // No-break spaces keep each part whole when the hint wraps.
@@ -180,14 +180,14 @@ impl<S: 'static> Live<S> {
             let root = match view {
                 Side::Stage(view) => view(&scene.state, &mut stage),
                 Side::Real(view) => view(&scene.state, app, &mut stage),
-                Side::Keys(view, _) => view(&scene.state, self.side_active, &mut stage),
+                Side::Keys(view, _) => view(&scene.state, self.side_active(), &mut stage),
             };
             cx.absorb(stage);
             return Some(root);
         }
         let (own, stage) = self.own()?;
         let mut unit = cx.retype::<()>();
-        let root = own.side(stage, self.side_active, &mut unit);
+        let root = own.side(stage, self.side_active(), &mut unit);
         cx.absorb(unit);
         root
     }
