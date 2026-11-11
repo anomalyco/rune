@@ -44,7 +44,8 @@ pub fn set_app_icon(bytes: impl Into<Vec<u8>>) -> Result<(), String> {
 
 /// Windows: the app's icon from the executable's own icon resource `id` (the one Explorer shows),
 /// in place of `set_app_icon`'s bytes: each window loads it at the size it shows with
-/// `LoadImageW`, so nothing is decoded or resized at launch. Call it before `run`.
+/// `LoadImageW`, so nothing is decoded or resized at launch. Give the resource bitmap images up to
+/// 128 px (a PNG-compressed image larger than that is never asked for). Call it before `run`.
 #[cfg(target_os = "windows")]
 pub fn set_app_icon_resource(id: u16) {
     *WINDOWS.lock().unwrap_or_else(|e| e.into_inner()) = Some(WindowsIcon::Resource(id));
@@ -67,6 +68,12 @@ static WINDOWS: Mutex<Option<WindowsIcon>> = Mutex::new(None);
 const SMALL: u32 = 32;
 #[cfg(target_os = "windows")]
 const BIG: u32 = 256;
+/// The big icon taken from the exe's resources: the largest size an icon resource keeps as a
+/// bitmap. Its 256 px image is a PNG, which `LoadImageW` decodes through WIC (`WindowsCodecs.dll`
+/// and `IconCodecService.dll` loaded on the UI thread before the first frame); 128 px still
+/// covers the taskbar and Alt+Tab at 400%.
+#[cfg(target_os = "windows")]
+const BIG_RESOURCE: u32 = 128;
 
 /// Windows: `attrs` with the app's icon, once `set_app_icon` has one.
 #[cfg(target_os = "windows")]
@@ -79,7 +86,7 @@ pub(crate) fn with_icon(attrs: winit::window::WindowAttributes) -> winit::window
         Some(WindowsIcon::Pixels { small, big }) => (Icon::from_rgba(small.clone(), SMALL, SMALL).ok(), Icon::from_rgba(big.clone(), BIG, BIG).ok()),
         Some(WindowsIcon::Resource(id)) => {
             let at = |px: u32| Icon::from_resource(*id, Some(winit::dpi::PhysicalSize::new(px, px))).ok();
-            (at(SMALL), at(BIG))
+            (at(SMALL), at(BIG_RESOURCE))
         }
     };
     attrs.with_window_icon(small).with_taskbar_icon(big)
