@@ -62,11 +62,16 @@ impl<S: 'static> Runtime<S> {
         let n = &self.nodes[i];
         let text_tint = |c: Color| paint_tracks::group_tint(n, c, group);
         if let Some(shape) = &n.vis.shape {
-            // When pixel snapping adjusts `r`'s width or height from `r_exact`, keep a point-sized
-            // shape centred in `r` so it shares `r`'s centre with fills, borders and icons.
+            // At rest a shape draws from its exact box's origin rounded to the device grid, at its
+            // exact scale, as Chromium draws a canvas or an inline SVG: what it holds keeps its
+            // geometry against the grid, so a sheet's 1 px header line covers the same device rows
+            // (one whole and half the next at 1.5x) wherever the sheet sits. Moving, it follows its
+            // snapped box. A view-boxed shape stretches to the box.
+            let still = cover.is_none() && scale_motion == ScaleMotion::Still && !gliding && (sc - 1.0).abs() < 1e-5;
+            let at = if still { [(r_exact[0] + 0.5).floor(), (r_exact[1] + 0.5).floor()] } else { [r[0], r[1]] };
             let (origin, k) = match shape.view_box {
                 Some([vw, vh]) => ([r[0], r[1]], [w / vw, h / vh]),
-                None => ([r[0] + (w - w_exact) * 0.5, r[1] + (h - h_exact) * 0.5], [k_px, k_px]),
+                None => (at, [k_px, k_px]),
             };
             if let Some(t) = self.scene.get(node_id, P_TRIM) {
                 // A presence draw traces the trimmed span on from its start.
