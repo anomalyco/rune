@@ -1,0 +1,7 @@
+# Large test binaries can overflow Apple's compact-unwind writer's 24-bit
+# function offsets and DWARF offsets. Rust's bundled LLD splits unwind pages
+# and falls back to a DWARF search for oversized offsets, preserving panics.
+# Do not use -no_compact_unwind: Rust's panic runtime needs its compact entries.
+# This workspace config is not inherited by applications depending on Rune.
+[target.'cfg(target_os = "macos")']
+rustflags = ["-C", "linker-flavor=ld64.lld"]

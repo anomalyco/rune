@@ -1,0 +1,1 @@
+- macOS workspace builds use Rust's bundled LLD linker so large test binaries link without Apple's compact-unwind overflow warnings or assertions. Panic unwinding stays enabled; applications depending on Rune keep their own linker configuration.
