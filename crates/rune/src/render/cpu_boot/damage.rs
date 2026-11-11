@@ -61,6 +61,12 @@ fn image(scene: &Scene<'_>, i: &crate::render::Instance, mut h: u64) -> u64 {
     h
 }
 
+/// Adds `r` to `rects`, merging the closest pair while there are more than `max`.
+pub(super) fn add(rects: &mut Vec<[u32; 4]>, r: [u32; 4], max: usize) {
+    rects.push(r);
+    merge(rects, max);
+}
+
 /// Dirty tiles as at most `max` rectangles of pixels `[x0, y0, x1, y1)`: runs along each tile row,
 /// stacked where consecutive rows have the same run, then merged into their bounding boxes
 /// pairwise (the closest first) until few enough.
@@ -78,6 +84,13 @@ pub(super) fn rects(dirty: &[u32], cols: u32, size: (u32, u32), max: usize) -> V
             None => runs.push(r),
         }
     }
+    merge(&mut runs, max);
+    runs
+}
+
+/// Merges rectangles into their bounding boxes pairwise, the pair that wastes least first, until
+/// at most `max` are left.
+fn merge(runs: &mut Vec<[u32; 4]>, max: usize) {
     while runs.len() > max {
         let area = |r: &[u32; 4]| u64::from(r[2] - r[0]) * u64::from(r[3] - r[1]);
         let union = |a: &[u32; 4], b: &[u32; 4]| [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])];
@@ -91,5 +104,4 @@ pub(super) fn rects(dirty: &[u32], cols: u32, size: (u32, u32), max: usize) -> V
         let b = runs.swap_remove(best.1);
         runs[best.0] = union(&runs[best.0], &b);
     }
-    runs
 }

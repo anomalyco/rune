@@ -37,6 +37,7 @@ mod fill;
 mod painter;
 mod pool;
 mod raster;
+mod scroll;
 #[doc(hidden)]
 pub mod record;
 mod shade;
