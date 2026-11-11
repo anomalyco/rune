@@ -5,6 +5,7 @@
 
 use super::super::turn::{Port, Turn, reconcile, turn};
 use super::*;
+use crate::machine::Attempt;
 
 // The old code.
 
@@ -99,7 +100,12 @@ struct Old {
     anchor: Option<(f64, f64)>,
     player: Option<OldPlayer>,
     poster: OldPoster,
-    done: Option<Done>,
+    // differs from dev: a finished poster answers the request that asked for it.
+    done: Option<(u32, Done)>,
+    // differs from dev: each video player fences the poster requests made before it.
+    fence: u32,
+    // differs from dev: the fence the newest request was made under.
+    asked: u32,
     now: Instant,
     log: Vec<Cmd>,
 }
@@ -126,6 +132,8 @@ impl Old {
             player: None,
             poster: OldPoster::Unasked,
             done: None,
+            fence: 0,
+            asked: 0,
             now,
             log: Vec::new(),
         }
@@ -254,10 +262,16 @@ impl Old {
     }
     fn request_poster(&mut self, at: f64) {
         self.poster = if !self.audio { OldPoster::Due } else { OldPoster::Withheld };
+        // differs from dev: the request remembers the fence it was made under.
+        self.asked = self.fence;
         self.log.push(Cmd::Ask(at));
     }
     fn take_poster(&mut self, surface: bool) {
-        let Some(done) = self.done.take() else { return };
+        let Some((asked, done)) = self.done.take() else { return };
+        // differs from dev: a failed clip, or a request a player fenced, ignores the answer.
+        if self.failed.is_some() || asked != self.fence {
+            return;
+        }
         match done {
             Done::Err => self.fail("load failed".into()),
             Done::Facts | Done::Frame | Done::FrameFails => {
@@ -322,6 +336,10 @@ impl Old {
             self.seek = Some(self.time);
         }
         self.player = Some(OldPlayer { rate: 0.0, muted: false, ready: false, created: now, settle: OldSettle::Still, shown: None });
+        // differs from dev: a video player fences the poster requests before it.
+        if !self.audio {
+            self.fence += 1;
+        }
         self.poster = OldPoster::Withheld;
         true
     }
@@ -512,7 +530,7 @@ impl Old {
             Sym::Clock(t) => self.advance_virtual(t),
             Sym::Preload => self.preload(),
             Sym::LoadAudio => self.load_audio(),
-            Sym::Done(done) => self.done = Some(done),
+            Sym::Done(done) => self.done = Some((self.asked, done)),
             Sym::Wait(s) => self.now += Duration::from_secs(s),
             Sym::Park => self.park(),
             Sym::Apply => self.apply(&Script::READY),
@@ -543,6 +561,7 @@ impl Old {
                 OldPoster::Due => 1,
                 OldPoster::Withheld => 2,
             },
+            fence: self.fence,
             player: p.is_some(),
             ready: p.is_some_and(|p| p.ready),
             created: p.map(|p| p.created),
@@ -683,6 +702,7 @@ struct View {
     generation: u64,
     frame_id: u64,
     poster: u8,
+    fence: u32,
     player: bool,
     ready: bool,
     created: Option<Instant>,
@@ -702,8 +722,10 @@ struct Fake {
     /// The caller already checked for the main thread, as an audio tick does.
     checked: bool,
     surface: bool,
-    done: Option<Done>,
+    done: Option<(Attempt, Done)>,
     kept: Option<Done>,
+    /// The attempt of the newest poster request.
+    asked: Attempt,
     player: bool,
     now: Instant,
     log: Vec<Cmd>,
@@ -717,13 +739,13 @@ impl Port for Fake {
         }
         self.script.on_main
     }
-    fn take_poster(&mut self) -> Option<Result<Meta, String>> {
-        let done = self.done.take()?;
+    fn take_poster(&mut self) -> Option<(Attempt, Result<Meta, String>)> {
+        let (attempt, done) = self.done.take()?;
         if done == Done::Err {
-            return Some(Err("load failed".into()));
+            return Some((attempt, Err("load failed".into())));
         }
         self.kept = Some(done);
-        Some(Ok(Meta { duration: 1.0, size: Some((64, 36)), frame: 0.25 }))
+        Some((attempt, Ok(Meta { duration: 1.0, size: Some((64, 36)), frame: 0.25 })))
     }
     fn show_poster(&mut self, next_id: &mut dyn FnMut() -> u64) -> Result<(), String> {
         match (self.kept.take(), self.surface) {
@@ -739,7 +761,8 @@ impl Port for Fake {
             _ => Ok(()),
         }
     }
-    fn ask_poster(&mut self, at: f64) {
+    fn ask_poster(&mut self, at: f64, attempt: Attempt) {
+        self.asked = attempt;
         self.log.push(Cmd::Ask(at));
     }
     fn make_player(&mut self) -> Result<Instant, String> {
@@ -820,7 +843,7 @@ impl New {
         let kind = if audio { Kind::Audio } else { Kind::Video };
         Self {
             c: Control { muted: !audio, kind, ..Control::default() },
-            fake: Fake { script: Script::READY, checked: false, surface: !audio, done: None, kept: None, player: false, now, log: Vec::new() },
+            fake: Fake { script: Script::READY, checked: false, surface: !audio, done: None, kept: None, asked: Attempt::default(), player: false, now, log: Vec::new() },
         }
     }
 
@@ -901,7 +924,7 @@ impl New {
             Sym::Clock(t) => self.c.advance_virtual(t),
             Sym::Preload => self.send(Event::Preload),
             Sym::LoadAudio => self.send(Event::LoadAudio),
-            Sym::Done(done) => self.fake.done = Some(done),
+            Sym::Done(done) => self.fake.done = Some((self.fake.asked, done)),
             Sym::Wait(s) => self.fake.now += Duration::from_secs(s),
             Sym::Park => {
                 step(&mut self.c, Event::Parked);
@@ -941,6 +964,7 @@ impl New {
                 Stage::Poster => 1,
                 _ => 2,
             },
+            fence: c.posters.current().0,
             player: c.stage.has_player(),
             ready: c.stage.ready(),
             created,
@@ -1070,6 +1094,9 @@ fn a_ready_player_seeks_ends_and_parks_like_the_old_flags() {
 fn a_loading_player_times_out_like_the_old_flags() {
     walk(&[Play, Land(Done::Facts), Pull(Script::LOADING)], &[Seek(0.3), Muted(false), Pause, Wait(31), Wait(3), Apply, Pull(Script::LOADING), Pull(Script::READY), Park], 5);
 }
+
+#[path = "phases_poster_tests.rs"]
+mod poster;
 
 #[test]
 fn the_newest_seek_replaces_an_earlier_one() {

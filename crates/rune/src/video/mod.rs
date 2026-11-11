@@ -47,6 +47,7 @@ mod waker;
 use phases::{Effect, Event, Run, Stage, step};
 pub(crate) use waker::WakerSlot;
 
+use crate::machine::Seq;
 use crate::native_surface::{ByteFrame, ColorInfo, Format, NativeSurface};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -616,6 +617,8 @@ pub(crate) struct Control {
     pub meta: Option<Meta>,
     run: Run,
     stage: Stage,
+    /// Fences poster requests: a native player taking over moves it on.
+    posters: Seq,
     generation: u64,
     frame_id: u64,
     /// Headless: the frame index on the surface.
@@ -636,6 +639,7 @@ impl Default for Control {
             meta: None,
             run: Run::default(),
             stage: Stage::default(),
+            posters: Seq::default(),
             generation: 0,
             frame_id: 0,
             shown: None,

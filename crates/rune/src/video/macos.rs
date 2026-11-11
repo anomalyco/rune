@@ -20,7 +20,7 @@ use objc2_video::rc::Retained;
 use objc2_video::runtime::AnyObject;
 use objc2_video::{AnyThread, MainThreadMarker};
 use super::phases::Item;
-use crate::machine::Effects;
+use crate::machine::{Attempt, Effects};
 use super::turn::{self, Port, Turn};
 use std::time::Duration;
 
@@ -53,10 +53,10 @@ unsafe impl Send for Native {}
 
 #[derive(Default)]
 struct Posters {
-    want: Option<f64>,
+    want: Option<(f64, Attempt)>,
     busy: bool,
-    /// A video poster and its clip's facts, or (no frame) an audio clip's facts.
-    done: Option<Result<(Option<ByteFrame>, Meta), String>>,
+    /// The asking attempt, and a video poster and its facts, or (no frame) an audio clip's facts.
+    done: Option<(Attempt, Result<(Option<ByteFrame>, Meta), String>)>,
 }
 
 struct Player {
@@ -397,7 +397,7 @@ pub(crate) fn test_frames(source: &MediaSource, at: f64) -> Result<(ByteFrame, B
 pub(crate) fn test_poster(shared: &Shared) -> Option<bool> {
     let native = shared.native.lock().unwrap();
     let posters = native.posters.lock().unwrap();
-    posters.done.as_ref().map(|d| matches!(d, Ok((Some(_), _))))
+    posters.done.as_ref().map(|(_, d)| matches!(d, Ok((Some(_), _))))
 }
 
 /// An app warming the page it shows next: decode the clip's first frame now, so the first frame
@@ -413,8 +413,8 @@ pub(super) fn preload(shared: &Arc<Shared>) {
 /// Starts the worker for a load `step` asked for. Call without the control lock.
 fn ask_posters(shared: &Arc<Shared>, native: &mut Native, effects: Effects<Effect>) {
     for effect in effects {
-        if let Effect::AskPoster(at) = effect {
-            request_poster(shared, native, at);
+        if let Effect::AskPoster(at, attempt) = effect {
+            request_poster(shared, native, at, attempt);
         }
     }
 }
@@ -422,9 +422,9 @@ fn ask_posters(shared: &Arc<Shared>, native: &mut Native, effects: Effects<Effec
 /// One worker per clip opens it and decodes the newest requested poster (none for audio),
 /// then wakes its windows, or for audio drives it on the main queue. Called only while no
 /// player runs, so a video's poster may land.
-fn request_poster(shared: &Arc<Shared>, native: &mut Native, at: f64) {
+fn request_poster(shared: &Arc<Shared>, native: &mut Native, at: f64, attempt: Attempt) {
     let mut slot = native.posters.lock().unwrap();
-    slot.want = Some(at);
+    slot.want = Some((at, attempt));
     if slot.busy {
         return;
     }
@@ -437,7 +437,7 @@ fn request_poster(shared: &Arc<Shared>, native: &mut Native, at: f64) {
         .spawn(move || {
             let mut opened: Option<(Option<Retained<AVAssetImageGenerator>>, Meta)> = None;
             loop {
-                let Some(at) = ({
+                let Some((at, attempt)) = ({
                     let mut slot = posters.lock().unwrap();
                     let want = slot.want.take();
                     if want.is_none() {
@@ -463,7 +463,7 @@ fn request_poster(shared: &Arc<Shared>, native: &mut Native, at: f64) {
                     };
                     Ok((frame, *meta))
                 });
-                posters.lock().unwrap().done = Some(result);
+                posters.lock().unwrap().done = Some((attempt, result));
                 let Some(clip) = clip.upgrade() else { return };
                 match kind {
                     Kind::Video => clip.wake_windows(),
@@ -565,7 +565,7 @@ struct Av<'a> {
     /// A finished poster load's frame.
     poster: Option<ByteFrame>,
     /// A poster the turn asked for, started once the control lock is released.
-    asked: Option<f64>,
+    asked: Option<(f64, Attempt)>,
 }
 
 impl<'a> Av<'a> {
@@ -588,12 +588,12 @@ impl Port for Av<'_> {
         self.mtm.is_some()
     }
 
-    fn take_poster(&mut self) -> Option<Result<Meta, String>> {
-        let done = self.native.posters.lock().unwrap().done.take()?;
-        Some(done.map(|(bytes, meta)| {
+    fn take_poster(&mut self) -> Option<(Attempt, Result<Meta, String>)> {
+        let (attempt, done) = self.native.posters.lock().unwrap().done.take()?;
+        Some((attempt, done.map(|(bytes, meta)| {
             self.poster = bytes;
             meta
-        }))
+        })))
     }
 
     fn show_poster(&mut self, next_id: &mut dyn FnMut() -> u64) -> Result<(), String> {
@@ -601,8 +601,8 @@ impl Port for Av<'_> {
         surface.push_bytes(bytes, next_id())
     }
 
-    fn ask_poster(&mut self, at: f64) {
-        self.asked = Some(at);
+    fn ask_poster(&mut self, at: f64, attempt: Attempt) {
+        self.asked = Some((at, attempt));
     }
 
     fn make_player(&mut self) -> Result<Instant, String> {
@@ -714,12 +714,12 @@ pub(super) fn pull(shared: &Arc<Shared>, surface: &NativeSurface, target: Instan
 
 /// Poster requests and parking, shared by video pulls and audio drives. Returns whether the
 /// clip is playing, seeking or loading (a seek waits for it).
-fn finish(shared: &Arc<Shared>, mut native: MutexGuard<'_, Native>, c: MutexGuard<'_, Control>, turn: Turn, asked: Option<f64>) -> bool {
+fn finish(shared: &Arc<Shared>, mut native: MutexGuard<'_, Native>, c: MutexGuard<'_, Control>, turn: Turn, asked: Option<(f64, Attempt)>) -> bool {
     match turn {
         Turn::Idle => {
             drop(c);
-            if let Some(at) = asked {
-                request_poster(shared, &mut native, at);
+            if let Some((at, attempt)) = asked {
+                request_poster(shared, &mut native, at, attempt);
             }
             false
         }

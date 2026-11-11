@@ -6,17 +6,18 @@ use super::Control;
 use super::Kind;
 use super::Meta;
 use super::phases::{Effect, Event, Item, step};
-use crate::machine::Effects;
+use crate::machine::{Attempt, Effects};
 use crate::time::Instant;
 
 /// What a clip's native side can read and do. Holds no phase of its own.
 pub(super) trait Port {
     fn on_main(&mut self) -> bool;
-    /// A finished poster load, keeping its frame for [`show_poster`](Self::show_poster).
-    fn take_poster(&mut self) -> Option<Result<Meta, String>>;
+    /// A finished poster load and the attempt it answers, keeping its frame for
+    /// [`show_poster`](Self::show_poster).
+    fn take_poster(&mut self) -> Option<(Attempt, Result<Meta, String>)>;
     /// Puts the kept frame on the surface, if there is one and a surface to take it.
     fn show_poster(&mut self, next_id: &mut dyn FnMut() -> u64) -> Result<(), String>;
-    fn ask_poster(&mut self, at: f64);
+    fn ask_poster(&mut self, at: f64, attempt: Attempt);
     /// Returns when the player was made.
     fn make_player(&mut self) -> Result<Instant, String>;
     fn drop_player(&mut self);
@@ -54,7 +55,7 @@ pub(super) fn carry(c: &mut Control, port: &mut impl Port, effects: Effects<Effe
     for effect in effects {
         match effect {
             Effect::Placeholder => {}
-            Effect::AskPoster(at) => port.ask_poster(at),
+            Effect::AskPoster(at, attempt) => port.ask_poster(at, attempt),
             Effect::ShowPoster => {
                 if let Err(e) = port.show_poster(&mut || c.next_frame_id()) {
                     c.fail(e);
@@ -91,8 +92,8 @@ pub(super) fn reconcile(c: &mut Control, port: &mut impl Port, now: Instant) {
 
 /// Takes a finished poster load: the clip's facts and, for video, its poster frame.
 fn take_poster(c: &mut Control, port: &mut impl Port) {
-    if let Some(done) = port.take_poster() {
-        send(c, port, Event::PosterDone(done));
+    if let Some((attempt, result)) = port.take_poster() {
+        send(c, port, Event::PosterDone { attempt, result });
     }
 }
 

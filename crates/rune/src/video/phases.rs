@@ -5,7 +5,7 @@
 //! back as [`Effect`]s, carried out by `turn` or the caller.
 
 use super::{Control, Kind, Meta, PlayerState};
-use crate::machine::Effects;
+use crate::machine::{Attempt, Effects};
 use crate::time::Instant;
 use std::time::Duration;
 
@@ -145,8 +145,9 @@ pub(super) enum Event {
     Preload,
     /// The window loop can load an audio clip.
     LoadAudio,
-    /// The poster worker finished: the clip's facts, or why it couldn't open.
-    PosterDone(Result<Meta, String>),
+    /// The poster worker finished the request made under `attempt`: the clip's facts, or why it
+    /// couldn't open.
+    PosterDone { attempt: Attempt, result: Result<Meta, String> },
     /// A pull or tick reached a clip that hasn't failed, on the main thread.
     Pull,
     PlayerMade { created: Instant },
@@ -170,8 +171,8 @@ pub(super) enum Event {
 pub(super) enum Effect {
     /// Draw the neutral placeholder.
     Placeholder,
-    /// Have the worker open the clip and decode this time.
-    AskPoster(f64),
+    /// Have the worker open the clip and decode this time, answering under this attempt.
+    AskPoster(f64, Attempt),
     /// A finished poster may land on the surface.
     ShowPoster,
     MakePlayer,
@@ -246,21 +247,34 @@ pub(super) fn step(c: &mut Control, event: Event) -> Effects<Effect> {
                 return ask_poster(c, 0.0);
             }
         }
-        Event::PosterDone(Ok(meta)) => {
-            if !c.opened() {
-                opened(c, meta);
+        Event::PosterDone { attempt, result } => {
+            // A failed clip keeps its placeholder, and a player that took over reports for itself.
+            if c.failed() || attempt != c.posters.current() {
+                return Effects::none();
             }
-            // A late poster never covers a frame a player made.
-            if c.stage == Stage::Poster {
-                return Effects::one(Effect::ShowPoster);
+            match result {
+                Ok(meta) => {
+                    if !c.opened() {
+                        opened(c, meta);
+                    }
+                    // A late poster never covers a frame a player made.
+                    if c.stage == Stage::Poster {
+                        return Effects::one(Effect::ShowPoster);
+                    }
+                }
+                Err(error) => failed(c, error),
             }
         }
-        Event::PosterDone(Err(error)) => failed(c, error),
         Event::Pull => return pull(c),
         Event::PlayerMade { created } => {
             // A fresh player starts at the handle's position.
             if c.time > 0.0 && c.seek.is_none() {
                 c.seek = Some(c.time);
+            }
+            // Posters still in flight are for a surface the player now owns. Audio's load has
+            // no surface to lose, so its answer always counts.
+            if c.kind == Kind::Video {
+                c.posters.next();
             }
             c.stage = Stage::Loading { created, muted: false };
         }
@@ -342,7 +356,7 @@ fn advance(c: &mut Control, now: f64) {
 /// Audio has no poster, so its worker only opens it. Called only while no player runs.
 fn ask_poster(c: &mut Control, at: f64) -> Effects<Effect> {
     c.stage = if c.kind == Kind::Video { Stage::Poster } else { Stage::Bare };
-    Effects::one(Effect::AskPoster(at))
+    Effects::one(Effect::AskPoster(at, c.posters.current()))
 }
 
 /// Nothing to do with a player already there. Without one, a paused video shows a poster, with

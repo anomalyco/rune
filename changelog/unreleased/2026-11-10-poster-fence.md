@@ -1,0 +1,1 @@
+- macOS video posters that finish too late no longer change the clip: a failed clip keeps its placeholder, and a poster request that a native player took over from can't fail that player or supply its facts. Audio load failures still fail the clip.
