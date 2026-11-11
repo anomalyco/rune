@@ -1,0 +1,1 @@
+- **Only `region`s record `Tracked` reads; a `memo` trusts its version again, as before `Tracked`.** A memo whose closure read a value that moves every frame (a clock) rebuilt every frame. Regions inside a memo still record theirs, and a memo they're in rebuilds when they would.

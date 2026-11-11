@@ -199,6 +199,16 @@ pub(crate) fn begin() {
     READS.with_borrow_mut(|r| r.push(Vec::new()));
 }
 
+/// A memo that isn't a region starts building: reads inside it record nothing (until a region
+/// inside it begins). Returns what `resume` restores.
+pub(crate) fn pause() -> u32 {
+    RECORDING.replace(0)
+}
+
+pub(crate) fn resume(recording: u32) {
+    RECORDING.set(recording);
+}
+
 /// The region that `begin` started finished: the cells it read, each once, with their versions.
 pub(crate) fn end() -> Vec<(u32, u64)> {
     RECORDING.set(RECORDING.get().saturating_sub(1));

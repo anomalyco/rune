@@ -632,6 +632,14 @@ pub fn memo(id: impl Into<String>, version: impl Hash, build: impl FnOnce() -> E
 /// still joins it, as it does `memo`'s.
 #[cfg_attr(debug_assertions, track_caller)]
 pub fn memo_with_hash(id: impl Into<String>, version: u64, build: impl FnOnce() -> El) -> El {
+    memo_inner(id, version, false, build)
+}
+
+/// A memo, or with `region` a [`region`]: a region's reads of [`Tracked`](crate::Tracked)
+/// values join its reads. A memo's don't: its version says when it builds again, as it always
+/// has, so a cell that moves every frame (a clock) it reads doesn't rebuild it.
+#[cfg_attr(debug_assertions, track_caller)]
+fn memo_inner(id: impl Into<String>, version: u64, region: bool, build: impl FnOnce() -> El) -> El {
     let key = id.into();
     enum Step {
         Reuse(Rc<Built>),
@@ -703,10 +711,18 @@ pub fn memo_with_hash(id: impl Into<String>, version: u64, build: impl FnOnce() 
         Step::Plain => return keyed(build(), key),
         Step::Build { id, version, store } => (id, version, store),
     };
-    // The `Tracked` cells the closure reads join its reads.
-    crate::tracked::begin();
-    let el = keyed(build(), key);
-    let states = crate::tracked::end();
+    // A region's `Tracked` reads join its reads; a memo's closure records none of its own (a
+    // region inside it still does, and they reach it as any nested read does).
+    let (el, states) = if region {
+        crate::tracked::begin();
+        let el = keyed(build(), key);
+        (el, crate::tracked::end())
+    } else {
+        let paused = crate::tracked::pause();
+        let el = keyed(build(), key);
+        crate::tracked::resume(paused);
+        (el, Vec::new())
+    };
     SCOPES.with_borrow_mut(|scopes| {
         let Some(s) = scopes.last_mut() else { return el };
         s.path.pop();
@@ -757,7 +773,7 @@ pub fn region_with(id: impl Into<String>, inputs: impl Hash, build: impl FnOnce(
     #[cfg(debug_assertions)]
     let check = key.clone();
     let build = std::cell::Cell::new(Some(build));
-    let el = memo_with_hash(key, hash_of(&(REGION, inputs)), || build.take().expect("a region builds once")());
+    let el = memo_inner(key, hash_of(&(REGION, inputs)), true, || build.take().expect("a region builds once")());
     // Reused: debug builds build it again to show it was right to.
     #[cfg(debug_assertions)]
     if let Some(build) = build.take() {
