@@ -6,6 +6,7 @@ Windows. Off those, `available()` is false and every call does nothing. Notifica
 | Call | What it does |
 | --- | --- |
 | `register(&Identity::new(id, name).icon(path))` | Windows: gives the process its `AppUserModelID` (which also groups its windows on the taskbar) and registers the name and icon its toasts show, under `HKEY_CURRENT_USER\Software\Classes\AppUserModelId\<id>`. Call it first thing in `main`, before a window opens. macOS reads both from the bundle. |
+| `adopt(&Identity)` | Windows: the same identity in the process, written nowhere, for an app whose installer registered the `AppUserModelId\<id>` key and the activation scheme: toasts post under that id and open that scheme. A second call with the same id only changes the scheme, so an app can add it once it knows its install. |
 | `available()` | Whether the app can post: a bundled app on macOS, a registered one on Windows. |
 | `post(&Notification)`, `remove(ids)` | Posts a notification with an id, title, body and string user info, or takes it back out of the system's list. On macOS the first post asks for permission. |
 | `on_click(f)` | Calls `f` with the clicked notification's id and user info, from any thread. Install it at launch. On Windows a click reaches the process that posted the toast while it runs. |

@@ -56,11 +56,7 @@ pub(super) fn registered() -> bool {
 }
 
 pub(super) fn register(identity: &Identity) -> Result<(), String> {
-    if identity.id.is_empty() || identity.id.contains('\\') {
-        return Err(format!("not an app id: {:?}", identity.id));
-    }
-    // SAFETY: the HSTRING outlives the call, which copies it.
-    unsafe { SetCurrentProcessExplicitAppUserModelID(&HSTRING::from(&identity.id)) }.map_err(|e| format!("SetCurrentProcessExplicitAppUserModelID: {e}"))?;
+    check_id(&identity.id)?;
     let key = windows_registry::CURRENT_USER
         .create(format!("Software\\Classes\\AppUserModelId\\{}", identity.id))
         .map_err(|e| format!("AppUserModelId key: {e}"))?;
@@ -72,24 +68,47 @@ pub(super) fn register(identity: &Identity) -> Result<(), String> {
             _ = key.remove_value("IconUri");
         }
     }
-    let scheme = match &identity.scheme {
-        Some(scheme) => Some(register_scheme(scheme, name)?),
-        None => None,
-    };
+    if let Some(scheme) = &identity.scheme {
+        register_scheme(scheme, name)?;
+    }
+    adopt(identity)
+}
+
+/// Takes the identity in this process only: the `AppUserModelID` (set once per id, so a second
+/// call with the same id leaves the taskbar alone) and the activation scheme.
+pub(super) fn adopt(identity: &Identity) -> Result<(), String> {
+    check_id(&identity.id)?;
+    let scheme = identity.scheme.as_deref().map(valid_scheme).transpose()?;
+    if app_id().as_deref() != Some(identity.id.as_str()) {
+        // SAFETY: the HSTRING outlives the call, which copies it.
+        unsafe { SetCurrentProcessExplicitAppUserModelID(&HSTRING::from(&identity.id)) }.map_err(|e| format!("SetCurrentProcessExplicitAppUserModelID: {e}"))?;
+    }
     *SCHEME.lock().unwrap_or_else(|e| e.into_inner()) = scheme;
     *APP_ID.lock().unwrap_or_else(|e| e.into_inner()) = Some(identity.id.clone());
     Ok(())
 }
 
-/// Points `scheme` at this executable for the user: what the shell runs when a toast's link opens.
-fn register_scheme(scheme: &str, name: &str) -> Result<String, String> {
+fn check_id(id: &str) -> Result<(), String> {
+    if id.is_empty() || id.contains('\\') {
+        return Err(format!("not an app id: {id:?}"));
+    }
+    Ok(())
+}
+
+/// `scheme` lowercased, when it's a URL scheme.
+fn valid_scheme(scheme: &str) -> Result<String, String> {
     let valid = scheme.len() >= 2
         && scheme.starts_with(|c: char| c.is_ascii_alphabetic())
         && scheme.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));
     if !valid {
         return Err(format!("not a URL scheme: {scheme:?}"));
     }
-    let scheme = scheme.to_ascii_lowercase();
+    Ok(scheme.to_ascii_lowercase())
+}
+
+/// Points `scheme` at this executable for the user: what the shell runs when a toast's link opens.
+fn register_scheme(scheme: &str, name: &str) -> Result<(), String> {
+    let scheme = valid_scheme(scheme)?;
     let exe = std::env::current_exe().map_err(|e| format!("current exe: {e}"))?;
     let exe = exe.to_string_lossy();
     let classes = windows_registry::CURRENT_USER.create(format!("Software\\Classes\\{scheme}")).map_err(|e| format!("{scheme} key: {e}"))?;
@@ -100,7 +119,7 @@ fn register_scheme(scheme: &str, name: &str) -> Result<String, String> {
     };
     set("DefaultIcon", format!("\"{exe}\",0"))?;
     set("shell\\open\\command", format!("\"{exe}\" \"%1\""))?;
-    Ok(scheme)
+    Ok(())
 }
 
 /// The scheme's link for `n`: its id in the path, its user info in the query.
