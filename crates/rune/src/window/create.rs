@@ -46,6 +46,8 @@ impl<S: 'static> Host<S> {
         crate::marks::mark("window.native");
         #[cfg(target_os = "windows")]
         crate::platform::win32::follow_suggested_rect(&window);
+        #[cfg(target_os = "windows")]
+        crate::platform::win32::press_point::install(&window);
         // Before it shows, so the title bar never appears.
         #[cfg(target_os = "windows")]
         let frame = self.titlebar.and_then(|t| crate::platform::win32::CustomFrame::install(&window, t.height()));

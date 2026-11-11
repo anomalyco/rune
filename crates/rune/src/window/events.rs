@@ -544,12 +544,19 @@ fn touch_promoted() -> bool {
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 fn touch_promoted() -> bool { false }
 
-/// Where a mouse button acts: where the runtime last saw the pointer, else where the system
-/// says it is. A menu that took the mouse (`release_pointer_for_popup`) leaves the runtime no
-/// pointer, and winit reports no move for a cursor that hasn't moved since, so a click at the
-/// same spot after the menu closes would otherwise be lost. The pointer moves there first, so
-/// hover is back under it as the press lands.
+/// Where a mouse button acts. On Windows, the point its message carries
+/// (`platform::win32::press_point`). Elsewhere, where the runtime last saw the pointer, else
+/// where the system says it is: a menu that took the mouse (`release_pointer_for_popup`) leaves
+/// the runtime no pointer, and winit reports no move for a cursor that hasn't moved since, so a
+/// click at the same spot after the menu closes would otherwise be lost. The pointer moves
+/// there first, so hover is under it as the press lands.
 fn button_at<S: 'static>(rt: &mut Runtime<S>, window: &winit::window::Window) -> Option<(f32, f32)> {
+    #[cfg(target_os = "windows")]
+    if let Some((x, y)) = crate::platform::win32::press_point::current(window) {
+        let at = (x as f32 / rt.input_scale(), y as f32 / rt.input_scale());
+        if rt.pointer() != Some(at) { rt.pointer_move(at.0, at.1); }
+        return Some(at);
+    }
     if let Some(at) = rt.pointer() { return Some(at); }
     let (x, y) = crate::input::drop_pointer::DropPointer::new().sample(window, rt.zoom())?;
     rt.pointer_move(x, y);

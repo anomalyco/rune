@@ -19,6 +19,7 @@ mod dpi_drag;
 pub(crate) mod drop_target;
 mod frame;
 pub(crate) mod occlusion;
+pub(crate) mod press_point;
 mod pointer;
 
 pub(crate) use cloak::Cloak;
