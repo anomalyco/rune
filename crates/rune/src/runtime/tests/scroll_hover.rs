@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime::scroll_nudge::NUDGE_HOLD;
 
 /// Forty 20-point rows in a 200-point viewport, each revealing an action on hover.
 fn view(_: &(), _: &mut Cx<()>) -> El {
@@ -189,6 +190,60 @@ fn a_row_leaving_the_tree_under_a_held_glide_hears_the_pointer_leave() {
     }
     assert!(rt.state.contains(&(5, false)), "the row heard the leave before it was pruned: {:?}", rt.state);
     assert!(rt.hover_hold.held(), "while the glide still holds hover");
+}
+
+/// An instant scroll holds hover for the same time whether frames come at 30 or 240 a second:
+/// dev counted two frames, so a slow display held twice as long as a fast one.
+#[test]
+fn an_instant_scroll_holds_hover_for_a_time_not_a_frame_count() {
+    for rate in [30.0, 60.0, 120.0, 240.0] {
+        let mut rt = hovering();
+        let start = rt.clock;
+        rt.update(|_, tx| tx.scroll_to_instant("scroll", 0.0, 400.0));
+        let mut freed = None;
+        for _ in 0..60 {
+            rt.frame(1.0 / rate);
+            if rt.scrolls.values().all(|s| !s.hold_at(rt.clock)) { freed = Some(rt.clock - start); break; }
+        }
+        let held = freed.unwrap_or_else(|| panic!("{rate} fps: the hold ends"));
+        assert!(held >= NUDGE_HOLD && held <= NUDGE_HOLD + 2.0 / rate, "{rate} fps: held {held} seconds");
+    }
+}
+
+/// A held nudge draws nothing while it waits: the frame the jump lands in holds hover and asks
+/// for no next frame, and the wake it armed brings the one frame that resolves hover.
+#[test]
+fn a_held_nudge_draws_no_frames_until_its_wake() {
+    let mut rt = hovering();
+    rt.update(|_, tx| tx.scroll_to_instant("scroll", 0.0, 400.0));
+    rt.frame(1.0 / 120.0);
+    assert!(!rt.animating, "the landing frame asks for no next frame");
+    assert_eq!(shown(&rt), ["a5"], "and hover holds under it");
+    let due = rt.wake_deadline().expect("the hold wakes a frame");
+    assert!((due - rt.clock - NUDGE_HOLD).abs() < 1e-6, "due one hold after the land: {due} at {}", rt.clock);
+    rt.frame(0.0);
+    assert!(!rt.animating, "a frame while it waits still asks for none");
+    assert_eq!(shown(&rt), ["a5"]);
+    assert_eq!(rt.wake_deadline(), Some(due), "and the wake still stands");
+    rt.frame(due - rt.clock);
+    assert_eq!(shown(&rt), ["a25"], "the wake's frame resolves hover once, at the pointer");
+    assert!(!rt.hover_hold.held());
+}
+
+/// A second instant scroll before the hold's due moves the wake to its own due: nothing is
+/// left holding hover past it waiting for some other frame to come.
+#[test]
+fn a_scroll_again_before_the_hold_ends_still_wakes_at_its_own_due() {
+    let mut rt = hovering();
+    rt.update(|_, tx| tx.scroll_to_instant("scroll", 0.0, 200.0));
+    rt.frame(1.0 / 120.0);
+    rt.update(|_, tx| tx.scroll_to_instant("scroll", 0.0, 400.0));
+    rt.frame(1.0 / 120.0);
+    assert_eq!(shown(&rt), ["a5"], "both holds keep hover where it was");
+    let due = rt.wake_deadline().expect("the second hold wakes a frame");
+    assert!((due - rt.clock - NUDGE_HOLD).abs() < 1e-6, "due one hold after the second scroll, not the first: {due} at {}", rt.clock);
+    rt.frame(due - rt.clock);
+    assert_eq!(shown(&rt), ["a25"], "its frame resolves hover once, at the pointer");
 }
 
 /// Forty 20-point rows, each revealing an action on hover and recording its `on_hover_change`.

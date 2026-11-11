@@ -243,6 +243,8 @@ fn live_only_keeps_clipboard_scroll_and_wake_requests() {
     assert_eq!(rt.copy_request.as_ref().unwrap().content().text(), "copied");
     let id = rt.nodes.iter().find(|n| n.key.as_deref() == Some("scroll")).unwrap().id;
     assert_eq!(rt.scrolls[&id].offset, 300.0);
+    // The scroll armed a 33 ms hover hold whose wake comes first; the 1 s request stands after it.
+    rt.frame(1.0 / 20.0);
     assert_eq!(rt.wake_deadline(), Some(1.0));
 }
 

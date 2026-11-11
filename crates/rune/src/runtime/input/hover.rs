@@ -59,10 +59,10 @@ struct Flip { i: usize, id: NodeId, on: bool, anim: Anim, changed: bool, now: bo
 /// and those of them entering.
 type Within = (Vec<String>, Vec<usize>);
 
-/// Viewport `s` moves content under a still pointer on its own: a glide, an app's instant
-/// scrolls frame after frame (a glide it steps itself), or slack letting rows down.
-fn scroll_carries(s: &ScrollState) -> bool {
-    s.glide().is_some() || s.x.glide.is_some() || s.nudged > 0 || s.slack.moving()
+/// Viewport `s` moves content under a still pointer on its own at `now`: a glide, an app's
+/// instant scrolls frame after frame (a glide it steps itself), or slack letting rows down.
+fn scroll_carries(s: &ScrollState, now: f64) -> bool {
+    s.glide().is_some() || s.x.glide.is_some() || s.hold_at(now) || s.slack.moving()
 }
 
 /// `inner` is `outer` or inside it.
@@ -221,7 +221,7 @@ impl<S: 'static> Runtime<S> {
             let id = self.nodes[k].id;
             if store.is_animating(id, prop::FRAME) || store.is_animating(id, prop::OFFSET) || store.is_animating(id, prop::TRAVEL)
                 || self.stacks.get(&id).is_some_and(|s| s.moving) || self.grows.get(&id).is_some_and(|g| g.moving())
-                || self.scrolls.get(&id).is_some_and(scroll_carries)
+                || self.scrolls.get(&id).is_some_and(|s| scroll_carries(s, self.clock))
             {
                 return true;
             }
@@ -238,7 +238,7 @@ impl<S: 'static> Runtime<S> {
         !self.flying.is_empty()
             || self.stacks.values().any(|s| s.moving)
             || self.grows.values().any(|g| g.moving())
-            || self.scrolls.values().any(scroll_carries)
+            || self.scrolls.values().any(|s| scroll_carries(s, self.clock))
             || self.scene.store().active().any(|(_, p)| layout.contains(&p))
     }
 

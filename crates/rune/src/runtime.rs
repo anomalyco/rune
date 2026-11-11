@@ -180,6 +180,8 @@ mod rewind_record;
 #[path = "runtime/scroll/drawn.rs"]
 mod scroll_drawn;
 use scroll_drawn::PixelHold;
+#[path = "runtime/scroll/nudge.rs"]
+mod scroll_nudge;
 #[path = "runtime/scroll/watch.rs"]
 mod scroll_watch;
 #[doc(hidden)]

@@ -674,6 +674,14 @@ impl<S: 'static> Runtime<S> {
         if self.loop_wake.is_none_or(|w| wake < w.0) { self.loop_wake = Some((wake, at)); }
     }
 
+    /// Wakes for one frame at clock time `due` and draws nothing before it, as a delayed start
+    /// does: an instant scroll's hover hold asks for the frame it lets go on this way, so a
+    /// resting window draws no frame while the hold waits.
+    pub(super) fn wake_for_clock(&mut self, due: f64) {
+        let at = self.t + (due - self.clock).max(0.0) * self.time_scale as f64;
+        self.wake_for_motion(at);
+    }
+
     pub(super) fn catch_up_motion(&mut self, dt: f64) {
         let step = dt * self.time_scale as f64;
         self.t += step;
@@ -733,7 +741,8 @@ impl<S: 'static> Runtime<S> {
         let mut source = |on: bool, bit: u16| { if on { sources |= bit; } on };
         animating |= source(self.step_growth(step as f32), AnimSource::GROWTH);
         animating |= source(self.step_scroll(step as f32), AnimSource::SCROLL);
-        animating |= source(self.step_nudges(), AnimSource::SCROLL);
+        // A hold draws nothing while it waits: its wake asks for the one frame that ends it.
+        let hold_wake = self.step_nudges();
         for stack in self.stacks.values_mut() { stack.grown = 0.0; }
         animating |= source(self.reveals_active(), AnimSource::REVEAL);
         // Values set from `on_scroll_offset` show in the frame that scrolled.
@@ -771,6 +780,9 @@ impl<S: 'static> Runtime<S> {
             self.check_resting_raster();
         }
         if let Some(at) = waits { self.wake_for_motion(at); }
+        // An instant scroll's hold draws nothing until it ends: wake for the one frame that
+        // resolves hover then, taken from the state each frame so a re-arm moves it on.
+        if let Some(due) = hold_wake { self.wake_for_clock(due); }
         self.images.end_frame();
         if self.track_marks {
             self.marks.resize(self.instances.len(), 0);

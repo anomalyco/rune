@@ -631,6 +631,8 @@ fn run_reveal_growth(init: RevealGrowth) {
         } else {
             assert!(r3[1] >= -0.05 && (r3[1] + r3[3] - 200.0).abs() < 0.05, "instant reveal lands in one frame: {init:?} {r3:?}");
         }
+        // An instant scroll holds hover for two frames at 60 Hz, as dev's countdown did, without
+        // drawing anything: the hold asks for one frame when it ends.
         assert!(!rt.animating, "instant leaves nothing animating: {init:?}");
         return;
     }

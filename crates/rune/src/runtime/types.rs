@@ -430,10 +430,11 @@ pub(super) struct ScrollState {
     pub(super) told_by: Option<std::rc::Weak<dyn Fn(crate::ScrollPos)>>,
     /// The spring `Tx::scroll_to_with` gave the running glide, on both axes; `GLIDE` when none.
     pub(super) spring: Option<rune_motion::Spring>,
-    /// Frames left in which an app's instant scroll (`Tx::scroll_to_instant` and the like)
-    /// counts as layout moving, so hover under a still pointer holds while an app steps its
-    /// own glide frame by frame (`runtime/input/hover.rs`).
-    pub(super) nudged: u8,
+    /// An app's instant scroll (`Tx::scroll_to_instant` and the like) landed less than
+    /// `scroll_nudge::NUDGE_HOLD` ago, so content moved under a still pointer and hover waits
+    /// for it to pass while the app steps its own glide frame by frame
+    /// (`runtime/input/hover.rs`).
+    pub(super) nudge: scroll_nudge::Nudge,
 }
 
 /// A scroll viewport's horizontal offset, momentum velocity and limit (points).

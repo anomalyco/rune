@@ -85,6 +85,7 @@ impl<S: 'static> Runtime<S> {
     }
 
     fn apply_jumps(&mut self, jumps: &[(NodeId, bool, f64)]) {
+        let now = self.clock;
         for &(id, horizontal, to) in jumps {
             let stick = self.nodes.iter().find(|n| n.id == id).and_then(|n| n.scroll).is_some_and(|s| s.stick_bottom);
             let Some(st) = self.scrolls.get_mut(&id) else { continue };
@@ -98,7 +99,11 @@ impl<S: 'static> Runtime<S> {
                 // request in the same transaction to glide from the new offset.
                 if st.glide().is_none() { st.land(stick); }
             }
-            if (if horizontal { st.x.offset } else { st.offset } - was).abs() > 1e-3 { st.nudged = NUDGE_FRAMES; }
+            if (if horizontal { st.x.offset } else { st.offset } - was).abs() > 1e-3 {
+                // The arm's due is taken back from the state each frame (`step_nudges`), so a
+                // later arm in the same frame wins and nothing here has to keep it.
+                let _ = st.nudge.arm(now);
+            }
         }
     }
 
@@ -192,11 +197,6 @@ pub(super) fn glide_axis(spring: Spring, offset: &mut f64, glide: &mut Option<f3
     true
 }
 
-/// Frames an app's instant scroll holds hover for: the frame it lands and the next, so an app
-/// stepping its own glide each frame holds hover throughout, and hover resolves once at the
-/// pointer the frame after its last step.
-const NUDGE_FRAMES: u8 = 2;
-
 impl ScrollState {
     /// The spring the running glide steps on.
     pub(super) fn glide_spring(&self) -> Spring {
@@ -259,17 +259,23 @@ impl ScrollState {
     pub(super) fn land(&mut self, stick: bool) {
         if stick && self.offset >= self.max - 0.5 { self.pin() } else { self.mode = ScrollMode::Rest; }
     }
+
+    /// An app's instant scroll landed less than `scroll_nudge::NUDGE_HOLD` ago: content moved
+    /// under a still pointer, so hover waits as it does for a glide it stepped itself.
+    pub(super) fn hold_at(&self, now: f64) -> bool { self.nudge.hold_at(now) }
 }
 
 impl<S: 'static> Runtime<S> {
-    /// Counts down, once a frame, the frames an app's instant scrolls hold hover for. Returns
-    /// whether one still holds, which asks for the frame that lets go.
-    pub(super) fn step_nudges(&mut self) -> bool {
-        let mut held = false;
+    /// Steps the holds an app's instant scrolls armed, and returns the earliest due one still
+    /// pending: the frame that carries it resolves hover at the pointer. A held nudge asks for
+    /// no frame itself, so the frame's end wakes for that one, however often the app re-armed it.
+    pub(super) fn step_nudges(&mut self) -> Option<f64> {
+        let now = self.clock;
+        let mut due: Option<f64> = None;
         for st in self.scrolls.values_mut() {
-            st.nudged = st.nudged.saturating_sub(1);
-            held |= st.nudged > 0;
+            st.nudge.tick(now);
+            if let Some(at) = st.nudge.due() { due = Some(due.map_or(at, |d: f64| d.min(at))); }
         }
-        held
+        due
     }
 }
