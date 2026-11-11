@@ -4,7 +4,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::atomic::AtomicUsize;
 use crate::machine::Effects;
-use super::secret::{REFUSED, Secret, SecretEffect, SecretEvent, step};
+use super::secret::{REFUSED, Report, Secret, SecretEffect, SecretEvent, step};
 use super::*;
 
 #[path = "hold_tests.rs"]
@@ -54,6 +54,9 @@ mod flags {
         pub fn slot(&self) -> Option<&Arc<Slot>> { self.secret.as_ref().map(|u| &u.0) }
     }
 
+    // differs from dev: a refused wipe reports Failed too (r128), and isn't a failed write.
+    fn failed_write(state: &SecretState) -> bool { matches!(state, SecretState::Failed(e) if e != REFUSED) }
+
     #[derive(Clone)]
     pub struct Copy(pub Arc<Slot>);
     impl Copy {
@@ -61,7 +64,7 @@ mod flags {
             self.0.cancel.store(true, Ordering::SeqCst);
             let holding = *lock(&self.0.state) == SecretState::Holding;
             // differs from dev: a failed replay leaves its earlier write held, and is cleared too.
-            let holding = holding || (matches!(*lock(&self.0.state), SecretState::Failed(_)) && self.0.holders.load(Ordering::SeqCst) > 0);
+            let holding = holding || (failed_write(&lock(&self.0.state)) && self.0.holders.load(Ordering::SeqCst) > 0);
             if holding && let Some(route) = self.0.route.get() { let _ = route.send(self.0.clone()); }
         }
     }
@@ -72,8 +75,6 @@ mod flags {
         deadline: Option<Instant>,
         revision: Option<u64>,
         print: u64,
-        // differs from dev: a clear that found the clipboard unreadable, to decide again (r129).
-        undecided: bool,
     }
 
     struct OwnPills {
@@ -149,7 +150,6 @@ mod flags {
                         steps.hashing();
                         self.keys.hash_one(copy.content.text())
                     },
-                    undecided: false,
                 });
                 if let Some(n) = &notify { n.send(); }
                 if cancelled(&slot) { self.clear(cb, slot.as_ref()); }
@@ -171,15 +171,12 @@ mod flags {
             held.revision == cb.revision() && cb.text().is_some_and(|t| self.keys.hash_one(t.as_str()) == held.print)
         }
 
-        pub fn clear(&mut self, cb: &mut Fake, which: Option<&Arc<Slot>>) { self.clear_at(cb, which, false); }
-
-        /// A clear; `last` when it's the delay's, or the one at exit.
-        fn clear_at(&mut self, cb: &mut Fake, which: Option<&Arc<Slot>>, last: bool) {
+        pub fn clear(&mut self, cb: &mut Fake, which: Option<&Arc<Slot>>) {
             let Some(held) = &self.held else { return };
             if which.is_some_and(|w| !held.slot.as_ref().is_some_and(|s| Arc::ptr_eq(s, w))) { return; }
             // differs from dev: dev sent no clear for a failed replay. This one keeps the hold and
             // its deadline unless the wipe is confirmed, so the timeout still clears the secret.
-            if which.is_some_and(|w| matches!(*lock(&w.state), SecretState::Failed(_))) {
+            if which.is_some_and(|w| failed_write(&lock(&w.state))) {
                 // differs from dev: a copy arriving between this check and the wipe is erased here,
                 // where dev sent no clear. It's the same race as dev's clear_now; r130 fixes it for
                 // every wipe.
@@ -187,29 +184,16 @@ mod flags {
                 self.own_pills = None;
                 return self.release(SecretState::Cleared);
             }
-            // differs from dev: a clipboard with a change count and a deadline that can't be read
-            // (r129) keeps the hold, and the next check decides the clear again. The delay's clear,
-            // the last one at exit, and any on a clipboard without a count or a deadline (r212) give
-            // up as dev did, as Replaced.
-            let wait = !last && held.revision.is_some() && held.deadline.is_some();
-            let read = if held.revision == cb.revision() { Some(cb.read_text()) } else { None };
-            match read {
-                Some(Ok(Some(text))) if self.keys.hash_one(text.as_str()) == held.print => {
-                    // differs from dev: a wipe the clipboard refuses is final and reported as
-                    // Failed (r208); dev reported Cleared.
-                    let refused = cb.clear().is_err();
-                    self.own_pills = None;
-                    self.release(if refused { SecretState::Failed(REFUSED.into()) } else { SecretState::Cleared });
-                }
-                Some(Err(_)) if wait => if let Some(held) = &mut self.held { held.undecided = true; },
-                _ => self.release(SecretState::Replaced),
+            if self.unchanged(cb) {
+                // differs from dev: a wipe the clipboard refuses is final and reported as Failed
+                // (r128); dev reported Cleared.
+                let refused = cb.clear().is_err();
+                self.own_pills = None;
+                self.release(if refused { SecretState::Failed(REFUSED.into()) } else { SecretState::Cleared });
+            } else {
+                self.release(SecretState::Replaced);
             }
         }
-
-        /// The worker is exiting.
-        // differs from dev: dev's exit clear is its delay's clear here, so a clipboard it can't
-        // read is given up on rather than left Holding (r210).
-        pub fn close(&mut self, cb: &mut Fake) { self.clear_at(cb, None, true); }
 
         pub fn tick(&mut self, cb: &mut Fake, now: Instant) {
             if let Some(own) = &self.own_pills
@@ -219,9 +203,7 @@ mod flags {
                 self.own_pills = None;
             }
             let Some(held) = &self.held else { return };
-            if held.deadline.is_some_and(|d| now >= d) { return self.clear_at(cb, None, true); }
-            // differs from dev: a clear left undecided is decided again (r129).
-            if held.undecided { return self.clear_at(cb, None, false); }
+            if held.deadline.is_some_and(|d| now >= d) { return self.clear(cb, None); }
             let changed = match held.revision {
                 Some(revision) => cb.revision() != Some(revision),
                 None => !self.unchanged(cb),
@@ -306,10 +288,6 @@ impl Backend for Fake {
         if self.unreadable { return None; }
         self.content.as_ref().filter(|c| c.has_plain()).map(|c| c.text.clone())
     }
-    fn read_text(&mut self) -> Result<Option<Zeroizing<String>>, Unreadable> {
-        if self.unreadable { return Err(Unreadable); }
-        Ok(self.text())
-    }
     fn content(&mut self, all: bool) -> Option<ClipboardContent> {
         if self.unreadable { return None; }
         self.content.clone().and_then(|c| if all { Some(c) } else { c.text_forms() })
@@ -348,7 +326,6 @@ trait Engine: Default {
     fn tick(&mut self, cb: &mut Fake, now: Instant);
     fn read(&mut self, cb: &mut Fake) -> Option<Reply>;
     fn clear_held(&mut self, cb: &mut Fake);
-    fn close(&mut self, cb: &mut Fake);
     fn run(&mut self, cb: &mut Fake, queued: Self::Queued);
     fn watching(&self) -> bool;
 }
@@ -367,7 +344,6 @@ impl Engine for Core {
     fn tick(&mut self, cb: &mut Fake, now: Instant) { self.tick_at(cb, now); }
     fn read(&mut self, cb: &mut Fake) -> Option<Reply> { self.answer(cb, Purpose::Read(1)) }
     fn clear_held(&mut self, cb: &mut Fake) { self.clear(cb, None); }
-    fn close(&mut self, cb: &mut Fake) { Core::close(self, cb); }
     fn run(&mut self, cb: &mut Fake, queued: Request) { self.handle(cb, queued); }
     fn watching(&self) -> bool { !self.hold.is_free() }
 }
@@ -394,7 +370,6 @@ impl Engine for flags::Core {
     fn tick(&mut self, cb: &mut Fake, now: Instant) { flags::Core::tick(self, cb, now); }
     fn read(&mut self, cb: &mut Fake) -> Option<Reply> { self.answer(cb, Purpose::Read(1)) }
     fn clear_held(&mut self, cb: &mut Fake) { self.clear(cb, None); }
-    fn close(&mut self, cb: &mut Fake) { flags::Core::close(self, cb); }
     fn run(&mut self, cb: &mut Fake, queued: Arc<flags::Slot>) { self.clear(cb, Some(&queued)); }
     fn watching(&self) -> bool { flags::Core::watching(self) }
 }
@@ -611,7 +586,7 @@ impl<E: Engine> Rig<E> {
             },
             ClearHeldA => if self.turn(0) { self.engines[0].clear_held(&mut self.boards[0]); },
             ShutdownA => if self.turn(0) {
-                self.engines[0].close(&mut self.boards[0]);
+                self.engines[0].clear_held(&mut self.boards[0]);
                 self.alive[0] = false;
             },
             Pump => for b in 0..2 {
@@ -664,7 +639,11 @@ fn check(sequence: &[Ev], counted: [bool; 2], start: Instant) -> Result<(), Stri
 /// the copy reports `Holding` or `Failed`, takes no other app's copy, and leaves other boards be.
 fn keeps_clear_nows_promise(machines: &mut Rig<Core>, reference: &mut Rig<flags::Core>) -> Result<(), String> {
     let reached = machines.first.filter(|&b| machines.alive[b]);
-    let reachable = matches!(machines.s.state(), SecretState::Holding | SecretState::Failed(_));
+    let reachable = match machines.s.state() {
+        SecretState::Holding => true,
+        SecretState::Failed(e) => e != REFUSED,
+        _ => false,
+    };
     let ours = reachable && reached.is_some_and(|b| machines.boards[b].ours() && machines.engines[b].watching() && !machines.boards[b].failing());
     let others = [0, 1].map(|b| machines.boards[b].others_copy().cloned());
     let before = [0, 1].map(|b| machines.boards[b].content.clone());

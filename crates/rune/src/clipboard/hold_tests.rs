@@ -77,12 +77,13 @@ fn a_clone_on_two_boards_is_cleaned_up_on_each() {
 
 #[test]
 fn cancel_latches_in_every_report_and_asks_for_a_clear_only_when_it_may_be_held() {
-    for report in [SecretState::Pending, SecretState::Holding, SecretState::Cleared, SecretState::Replaced, SecretState::Failed("x".into())] {
+    let states = [SecretState::Pending, SecretState::Holding, SecretState::Cleared, SecretState::Replaced, SecretState::Failed("x".into())];
+    for report in states.into_iter().map(Report::Said).chain([Report::Refused]) {
         for holds in [0, 1] {
             for mut secret in [Secret::Live { report: report.clone(), holds }, Secret::Cancelled { report: report.clone(), holds }] {
                 let effects = step(&mut secret, SecretEvent::Cancel);
                 assert_eq!(secret, Secret::Cancelled { report: report.clone(), holds });
-                let held = report == SecretState::Holding || (matches!(report, SecretState::Failed(_)) && holds > 0);
+                let held = report == Report::Said(SecretState::Holding) || (matches!(report, Report::Said(SecretState::Failed(_))) && holds > 0);
                 assert_eq!(effects, if held { Effects::one(SecretEffect::Clear) } else { Effects::none() });
             }
         }
@@ -94,7 +95,7 @@ fn a_failure_after_the_hold_ended_asks_for_no_clear() {
     let mut secret = Secret::default();
     let failed = || SecretEvent::Report(SecretState::Failed("x".into()));
     assert!(step(&mut secret, SecretEvent::Held).is_empty());
-    assert!(step(&mut secret, SecretEvent::Released(SecretState::Replaced)).is_empty());
+    assert!(step(&mut secret, SecretEvent::Released(Report::Said(SecretState::Replaced))).is_empty());
     assert!(step(&mut secret, failed()).is_empty());
     assert!(step(&mut secret, SecretEvent::Cancel).is_empty());
 }
@@ -199,10 +200,10 @@ fn a_timer_from_an_earlier_hold_changes_nothing() {
     drop(step_hold(&mut seq, &mut hold, written(&slot)));
     let stale = seq.current();
     drop(step_hold(&mut seq, &mut hold, written(&slot)));
-    assert!(step_hold(&mut seq, &mut hold, HoldEvent::Due { attempt: stale, owner: Owner::Ours }).is_empty());
+    assert!(step_hold(&mut seq, &mut hold, HoldEvent::Due { attempt: stale, ours: true }).is_empty());
     assert!(!hold.is_free());
     let attempt = seq.current();
-    let effects: Vec<_> = step_hold(&mut seq, &mut hold, HoldEvent::Due { attempt, owner: Owner::Ours }).into_iter().collect();
+    let effects: Vec<_> = step_hold(&mut seq, &mut hold, HoldEvent::Due { attempt, ours: true }).into_iter().collect();
     assert!(matches!(effects[..], [HoldEffect::Wipe]));
     drop(step_hold(&mut seq, &mut hold, HoldEvent::Swept { ok: true }));
     assert!(hold.is_free());
@@ -226,7 +227,7 @@ fn board() -> Fake {
 fn woke(rig: &Rig<Core>) -> usize { lock(&rig.log).iter().filter(|e| matches!(e, Logged::Woke(0, ..))).count() }
 fn refused() -> SecretState { SecretState::Failed(REFUSED.into()) }
 
-// r208: a wipe the clipboard refuses is final.
+// r128 (r208): a wipe the clipboard refuses is final.
 
 #[test]
 fn a_refused_wipe_is_final_and_reported_as_failed() {
@@ -242,44 +243,39 @@ fn a_refused_wipe_is_final_and_reported_as_failed() {
     }
 }
 
-// r129: a clipboard that can't be read is asked again on the next check, until the delay.
-
+/// A refused wipe's `Failed` is no failed write: `clear_now` doesn't send r86's recovery to a
+/// board a clone also reached, as dev (which reported `Cleared`) didn't.
 #[test]
-fn an_unreadable_clipboard_is_asked_again_on_the_next_check() {
-    let rig = run(&[WriteSA, ToggleUnreadableA, CancelS, Pump]);
-    assert_eq!((text_of(&rig.boards[0]), rig.s.state()), (Some(SECRET), SecretState::Holding));
-    let rig = run(&[WriteSA, ToggleUnreadableA, CancelS, Pump, ToggleUnreadableA, ReadA]);
-    assert_eq!((text_of(&rig.boards[0]), rig.s.state(), wipes(&rig, 0)), (None, SecretState::Cleared, 1));
+fn a_refused_wipe_starts_no_failed_replay_recovery() {
+    let rig = run(&[WriteSB, WriteSA, CycleWipeA, ClearHeldA, CancelS, Pump]);
+    assert_eq!((text_of(&rig.boards[1]), rig.s.state(), wipes(&rig, 1)), (Some(SECRET), refused(), 0));
 }
 
+// r219: a read error ends the clear as dev's does; nothing decides it again later.
+
 #[test]
-fn asking_again_spares_a_copy_made_since() {
+fn a_read_error_ends_the_clear_as_before() {
+    let rig = run(&[WriteSA, ToggleUnreadableA, CancelS, Pump]);
+    assert_eq!((text_of(&rig.boards[0]), rig.s.state()), (Some(SECRET), SecretState::Replaced));
+    assert!(!rig.engines[0].watching());
     for copy in [OtherA, OtherSameText] {
-        let rig = run(&[WriteSA, ToggleUnreadableA, CancelS, Pump, ToggleUnreadableA, copy, ReadA]);
-        assert_eq!((rig.s.state(), wipes(&rig, 0)), (SecretState::Replaced, 0), "{copy:?}");
-        assert!(rig.boards[0].others);
+        let rig = run(&[WriteSA, ToggleUnreadableA, CancelS, Pump, ToggleUnreadableA, copy, ReadA, Timeout, ReadA]);
+        assert_eq!((wipes(&rig, 0), rig.boards[0].others), (0, true), "{copy:?}");
     }
 }
 
-#[test]
-fn a_clipboard_still_unreadable_at_the_delay_is_given_up_as_before() {
-    let rig = run(&[WriteSA, ToggleUnreadableA, CancelS, Pump, Timeout, ReadA]);
-    assert_eq!((rig.s.state(), wipes(&rig, 0)), (SecretState::Replaced, 0));
-    assert!(!rig.engines[0].watching());
-}
+// r220: with no deferred release, a newer clone's Holding stays, and clear_now reaches it.
 
 #[test]
-fn without_a_change_count_an_unreadable_clipboard_is_given_up_as_before() {
-    let rig = run_on([false, false], &[WriteSA, ToggleUnreadableA, CancelS, Pump]);
-    assert_eq!(rig.s.state(), SecretState::Replaced);
-    assert!(!rig.engines[0].watching());
+fn a_newer_clone_s_holding_is_never_overwritten_by_an_older_board() {
+    let rig = run(&[WriteSB, WriteSA, ToggleUnreadableA, ClearHeldA, WriteSB, OtherA, ReadA, CancelS, Pump]);
+    assert_eq!((text_of(&rig.boards[1]), rig.s.state()), (None, SecretState::Cleared));
 }
 
 // r212: nothing is scheduled past the secret's own delay.
 
 #[test]
 fn a_failed_clear_schedules_nothing_past_the_delay() {
-    let start = Instant::now();
     // No deadline: an unreadable clipboard gives up at once, and nothing polls.
     let mut cb = board();
     let mut core = Core::default();
@@ -296,15 +292,13 @@ fn a_failed_clear_schedules_nothing_past_the_delay() {
     cb.wipe = WipeMode::Refused;
     core.clear(&mut cb, None);
     assert_eq!((refusing.state(), core.next_check()), (refused(), None));
-    // With a deadline, an unreadable clipboard is asked until it, then given up.
+    // A deadline makes no difference: an unreadable clipboard gives up at once.
     let mut cb = board();
     let mut core = Core::default();
     let (write, waiting) = ClipboardWrite::secret(SECRET.into(), LONG);
     core.write(&mut cb, write, None, &RealTime);
     cb.unreadable = true;
     core.clear(&mut cb, None);
-    assert!(core.next_check().is_some_and(|at| at <= Instant::now() + WATCH));
-    core.tick_at(&mut cb, start + LONG + LONG);
     assert_eq!((waiting.state(), core.next_check()), (SecretState::Replaced, None));
 }
 
@@ -321,7 +315,6 @@ impl Backend for Stuck {
     fn text(&mut self) -> Option<Zeroizing<String>> {
         (!self.unreadable.load(Ordering::SeqCst)).then(|| Zeroizing::new(self.text.clone()))
     }
-    fn read_text(&mut self) -> Result<Option<Zeroizing<String>>, Unreadable> { self.text().map(Some).ok_or(Unreadable) }
     fn revision(&self) -> Option<u64> { Some(self.revision) }
     fn clear(&mut self) -> Result<(), String> {
         if self.refuse { return Err("refused".into()); }
@@ -356,12 +349,10 @@ fn the_worker_s_exit_leaves_no_handle_holding() {
     }
 }
 
-// r211: the watch's read error is a unit, so nothing formats or allocates it.
+// r211: the watch reads the clipboard's text as dev's does, formatting no error.
 
 #[test]
-fn an_unreadable_clipboard_carries_no_error_text() {
-    assert_eq!(std::mem::size_of::<Unreadable>(), 0);
-    let mut cb = board();
-    cb.unreadable = true;
-    assert_eq!(cb.read_text(), Err(Unreadable));
+fn the_watch_reads_an_unreadable_clipboard_as_before() {
+    let rig = run_on([false, false], &[WriteSA, ToggleUnreadableA, ReadA]);
+    assert_eq!(rig.s.state(), SecretState::Replaced);
 }

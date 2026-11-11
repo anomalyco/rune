@@ -1,1 +1,1 @@
-- A wipe the clipboard refuses now reports `SecretState::Failed` on the secret copy, rather than `Cleared`, and isn't tried again. A clear that finds the clipboard unreadable for a moment asks again on the next check while the copy's delay lasts (on clipboards with a change count: macOS, Windows), rather than reporting `Replaced` and leaving the secret there. A copy still held when the app exits is settled, so its handle never stays `Holding`.
+- A wipe the clipboard refuses now reports `SecretState::Failed` on the secret copy, rather than `Cleared`, and isn't tried again.

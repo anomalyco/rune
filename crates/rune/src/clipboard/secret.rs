@@ -30,19 +30,40 @@ pub enum SecretState {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Secret {
     /// `clear_now` hasn't run: a clone of its write can still be written, even after it expired.
-    Live { report: SecretState, holds: u32 },
+    Live { report: Report, holds: u32 },
     /// `clear_now` ran: no clone of its write is written again, whatever it last reported.
-    Cancelled { report: SecretState, holds: u32 },
+    Cancelled { report: Report, holds: u32 },
 }
 impl Default for Secret {
-    fn default() -> Self { Self::Live { report: SecretState::Pending, holds: 0 } }
+    fn default() -> Self { Self::Live { report: Report::Said(SecretState::Pending), holds: 0 } }
 }
 impl Secret {
-    fn report(&self) -> &SecretState {
+    fn report(&self) -> &Report {
         let (Self::Live { report, .. } | Self::Cancelled { report, .. }) = self;
         report
     }
 }
+
+/// What a secret copy last reported.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum Report {
+    Said(SecretState),
+    /// The clipboard refused Rune's wipe. Its handle says `Failed`, but this is no failed write:
+    /// nothing is left for `clear_now` to recover.
+    Refused,
+}
+impl Report {
+    fn shown(&self) -> SecretState {
+        match self {
+            Self::Said(state) => state.clone(),
+            Self::Refused => SecretState::Failed(REFUSED.into()),
+        }
+    }
+    fn failed_write(&self) -> bool { matches!(self, Self::Said(SecretState::Failed(_))) }
+}
+
+/// What a secret reports when the clipboard refused Rune's wipe.
+pub(super) const REFUSED: &str = "the clipboard refused the wipe";
 
 #[derive(Debug)]
 pub(super) enum SecretEvent {
@@ -51,7 +72,7 @@ pub(super) enum SecretEvent {
     /// A clipboard took a hold on this copy.
     Held,
     /// A clipboard's hold ended, with this outcome.
-    Released(SecretState),
+    Released(Report),
     /// A write of this copy failed; the latest report stands.
     Report(SecretState),
     /// The last clone of its write was dropped.
@@ -69,13 +90,13 @@ pub(super) fn step(secret: &mut Secret, event: SecretEvent) -> Effects<SecretEff
         SecretEvent::Cancel => {
             let (Secret::Live { report, holds } | Secret::Cancelled { report, holds }) = std::mem::take(secret);
             // A failed replay reports `Failed` while its earlier write is still on the clipboard.
-            let held = report == SecretState::Holding || (matches!(report, SecretState::Failed(_)) && holds > 0);
+            let held = report == Report::Said(SecretState::Holding) || (report.failed_write() && holds > 0);
             *secret = Secret::Cancelled { report, holds };
             if held { Effects::one(SecretEffect::Clear) } else { Effects::none() }
         }
         SecretEvent::Held => {
             let (Secret::Live { report, holds } | Secret::Cancelled { report, holds }) = secret;
-            *report = SecretState::Holding;
+            *report = Report::Said(SecretState::Holding);
             *holds += 1;
             Effects::none()
         }
@@ -87,13 +108,13 @@ pub(super) fn step(secret: &mut Secret, event: SecretEvent) -> Effects<SecretEff
         }
         SecretEvent::Report(next) => {
             let (Secret::Live { report, .. } | Secret::Cancelled { report, .. }) = secret;
-            *report = next;
+            *report = Report::Said(next);
             Effects::none()
         }
         SecretEvent::Dropped => {
             match secret {
-                Secret::Live { report: report @ SecretState::Pending, .. } => *report = SecretState::Replaced,
-                Secret::Cancelled { report: report @ SecretState::Pending, .. } => *report = SecretState::Cleared,
+                Secret::Live { report: report @ Report::Said(SecretState::Pending), .. } => *report = Report::Said(SecretState::Replaced),
+                Secret::Cancelled { report: report @ Report::Said(SecretState::Pending), .. } => *report = Report::Said(SecretState::Cleared),
                 _ => {}
             }
             Effects::none()
@@ -109,11 +130,12 @@ pub(super) struct Slot {
 impl Slot {
     fn step(&self, event: SecretEvent) -> Effects<SecretEffect> { step(&mut lock(&self.secret), event) }
     pub(super) fn set(&self, state: SecretState) { self.step(SecretEvent::Report(state)); }
-    pub(super) fn failed(&self) -> bool { matches!(lock(&self.secret).report(), SecretState::Failed(_)) }
+    /// A write of it failed: a refused wipe isn't one.
+    pub(super) fn failed(&self) -> bool { lock(&self.secret).report().failed_write() }
     pub(super) fn held(&self) { self.step(SecretEvent::Held); }
-    pub(super) fn released(&self, state: SecretState) { self.step(SecretEvent::Released(state)); }
+    pub(super) fn released(&self, report: Report) { self.step(SecretEvent::Released(report)); }
     pub(super) fn cancelled(&self) -> bool { matches!(*lock(&self.secret), Secret::Cancelled { .. }) }
-    fn state(&self) -> SecretState { lock(&self.secret).report().clone() }
+    fn state(&self) -> SecretState { lock(&self.secret).report().shown() }
 }
 
 /// Settles a secret write that was dropped before reaching a clipboard (replaced in its
@@ -181,21 +203,8 @@ pub(super) enum Hold {
         revision: Option<u64>,
         /// A keyed hash of the text, so the text needn't stay in memory until the clear.
         print: u64,
-        phase: Phase,
     },
 }
-
-/// Whether a held secret has a clear still to decide.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(super) enum Phase {
-    #[default]
-    Watching,
-    /// A clear found the clipboard unreadable; the next check decides it again.
-    Undecided,
-}
-
-/// What a secret reports when the clipboard refused Rune's wipe.
-pub(super) const REFUSED: &str = "the clipboard refused the wipe";
 impl Hold {
     pub(super) fn is_free(&self) -> bool { matches!(self, Self::Free) }
     /// Whether a clear of `which`, or of whichever secret is held, applies here.
@@ -205,7 +214,6 @@ impl Hold {
             Self::Holding { slot, .. } => which.is_none_or(|w| Arc::ptr_eq(slot, w)),
         }
     }
-    pub(super) fn undecided(&self) -> bool { matches!(self, Self::Holding { phase: Phase::Undecided, .. }) }
     pub(super) fn armed(&self, alarm: Attempt) -> bool {
         matches!(self, Self::Holding { attempt, .. } if *attempt == alarm)
     }
@@ -215,36 +223,25 @@ impl Hold {
     }
 }
 
-/// Whether a clipboard still holds the secret Rune wrote.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Owner {
-    Ours,
-    Theirs,
-    /// It couldn't be read just now.
-    Unknown,
-}
-
 pub(super) enum HoldEvent {
     /// A secret reached the clipboard and has been reported as holding it.
     Written { slot: Arc<Slot>, notify: Option<Notify>, due: Option<Instant>, revision: Option<u64>, print: u64 },
     /// A later write took its place, or the clipboard changed under it.
     Lost,
-    /// A clear was asked for; `owner` says whether the clipboard still has what Rune wrote.
-    Clear { owner: Owner },
+    /// A clear was asked for; `ours` says whether the clipboard still has what Rune wrote.
+    Clear { ours: bool },
     /// The caller wiped the clipboard itself and confirmed it.
     Wiped,
     /// An alarm came due.
-    Due { attempt: Attempt, owner: Owner },
-    /// The worker is exiting: the last clear this hold gets.
-    Close { owner: Owner },
-    /// The answer to [`HoldEffect::Wipe`]: whether the clipboard took the wipe.
+    Due { attempt: Attempt, ours: bool },
+    /// The answer to [`HoldEffect::Wipe`]: whether the clipboard took it.
     Swept { ok: bool },
 }
 
 pub(super) enum HoldEffect {
     /// Wipe the clipboard, and answer with [`HoldEvent::Swept`].
     Wipe,
-    Release(Arc<Slot>, SecretState),
+    Release(Arc<Slot>, Report),
     Notify(Notify),
     /// Replace the alarm being waited on: a new hold never inherits the last one's.
     Arm(Option<Alarm>),
@@ -253,43 +250,35 @@ pub(super) enum HoldEffect {
 pub(super) fn step_hold(seq: &mut Seq, hold: &mut Hold, event: HoldEvent) -> Effects<HoldEffect> {
     match event {
         HoldEvent::Written { slot, notify, due, revision, print } => {
-            let mut effects = release(hold, SecretState::Replaced);
+            let mut effects = release(hold, said(SecretState::Replaced));
             let attempt = seq.next();
-            *hold = Hold::Holding { attempt, slot, notify: notify.clone(), due, revision, print, phase: Phase::Watching };
+            *hold = Hold::Holding { attempt, slot, notify: notify.clone(), due, revision, print };
             effects.push(HoldEffect::Arm(due.map(|due| Alarm { attempt, due })));
             if let Some(notify) = notify { effects.push(HoldEffect::Notify(notify)); }
             effects
         }
-        HoldEvent::Lost => release(hold, SecretState::Replaced),
-        HoldEvent::Clear { owner } => settle(hold, owner, false),
-        HoldEvent::Wiped => release(hold, SecretState::Cleared),
-        HoldEvent::Due { attempt, owner } if hold.armed(attempt) => settle(hold, owner, true),
+        HoldEvent::Lost => release(hold, said(SecretState::Replaced)),
+        HoldEvent::Clear { ours } => settle(hold, ours),
+        HoldEvent::Wiped => release(hold, said(SecretState::Cleared)),
+        HoldEvent::Due { attempt, ours } if hold.armed(attempt) => settle(hold, ours),
         HoldEvent::Due { .. } => Effects::none(),
-        HoldEvent::Close { owner } => settle(hold, owner, true),
-        HoldEvent::Swept { ok: true } => release(hold, SecretState::Cleared),
+        HoldEvent::Swept { ok: true } => release(hold, said(SecretState::Cleared)),
         // Final: trying again could erase a copy another app made after the check.
-        HoldEvent::Swept { ok: false } => release(hold, SecretState::Failed(REFUSED.into())),
+        HoldEvent::Swept { ok: false } => release(hold, Report::Refused),
     }
 }
 
-/// Ends a hold on a clear: wipes only what is still ours. A clipboard that can't be read is
-/// asked again on the next check, as long as it has a change count (so a copy made since shows)
-/// and a delay (which ends the wait). The delay's own clear, and the last one at exit, give up.
-fn settle(hold: &mut Hold, owner: Owner, last: bool) -> Effects<HoldEffect> {
-    let Hold::Holding { revision, due, phase, .. } = hold else { return Effects::none() };
-    match owner {
-        Owner::Ours => Effects::one(HoldEffect::Wipe),
-        Owner::Unknown if !last && revision.is_some() && due.is_some() => {
-            *phase = Phase::Undecided;
-            Effects::none()
-        }
-        Owner::Theirs | Owner::Unknown => release(hold, SecretState::Replaced),
-    }
+/// Ends a hold on a clear: wipes only what is still ours.
+fn settle(hold: &mut Hold, ours: bool) -> Effects<HoldEffect> {
+    if hold.is_free() || !ours { return release(hold, said(SecretState::Replaced)); }
+    Effects::one(HoldEffect::Wipe)
 }
 
-fn release(hold: &mut Hold, state: SecretState) -> Effects<HoldEffect> {
+fn said(state: SecretState) -> Report { Report::Said(state) }
+
+fn release(hold: &mut Hold, report: Report) -> Effects<HoldEffect> {
     let Hold::Holding { slot, notify, .. } = std::mem::take(hold) else { return Effects::none() };
-    let mut effects = Effects::one(HoldEffect::Release(slot, state));
+    let mut effects = Effects::one(HoldEffect::Release(slot, report));
     if let Some(notify) = notify { effects.push(HoldEffect::Notify(notify)); }
     effects
 }
