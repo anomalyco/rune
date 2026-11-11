@@ -5,7 +5,7 @@
 //! place (`native_surface::windows::DecodedPlanes`). Pictures never pass through the CPU.
 
 use super::mf::{self, Picture};
-use crate::native_surface::windows::{DecodedPlanes, VideoFences, presenting_device};
+use crate::native_surface::windows::{DecodedPlanes, VideoFences, device_generation, presenting_device};
 use std::sync::{Arc, Mutex};
 use windows::Win32::Foundation::{CloseHandle, GENERIC_ALL, HMODULE, LUID};
 use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_UNKNOWN, D3D_FEATURE_LEVEL, D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_11_1};
@@ -42,6 +42,9 @@ pub(super) struct Device {
     /// Rune's device, which opens the ring's textures and owns the fences.
     pub d3d12: ID3D12Device,
     luid: LUID,
+    /// `device_generation` when `d3d12` was Rune's device: a ring made on an older one is
+    /// checked against the current device (`Ring::stale`).
+    generation: u64,
 }
 
 static DEVICE: Mutex<Option<Arc<Device>>> = Mutex::new(None);
@@ -49,19 +52,37 @@ static DEVICE: Mutex<Option<Arc<Device>>> = Mutex::new(None);
 /// The decoders' D3D11 device, made on first use and kept; None when Rune draws without D3D12
 /// or the adapter can't make one (decoding then runs on the CPU).
 pub(super) fn device() -> Result<Arc<Device>, String> {
+    // The generation first: a device made after this read makes the result stale at once.
+    let generation = device_generation();
     let d3d12 = presenting_device().ok_or("no D3D12 device draws a window")?;
     // SAFETY: a plain query on a live device.
     let luid = unsafe { d3d12.GetAdapterLuid() };
     let mut slot = DEVICE.lock().unwrap();
     if let Some(device) = slot.as_ref().filter(|d| d.luid.LowPart == luid.LowPart && d.luid.HighPart == luid.HighPart) {
-        return Ok(device.clone());
+        if device.d3d12.as_raw() == d3d12.as_raw() && device.generation == generation {
+            return Ok(device.clone());
+        }
+        if device.d3d12.as_raw() == d3d12.as_raw() {
+            // Only the count moved (another window noted the same device).
+            let current = Arc::new(Device { device: device.device.clone(), context: device.context.clone(), device5: device.device5.clone(), d3d12, luid, generation });
+            *slot = Some(current.clone());
+            return Ok(current);
+        }
+        // Rune replaced a lost device. Whatever lost it (a removed device, a driver update, a
+        // TDR) leaves the decoders' D3D11 device unusable too, so everything is made again.
     }
-    let device = Arc::new(make(d3d12, luid)?);
+    let device = Arc::new(make(d3d12, luid, generation)?);
     *slot = Some(device.clone());
     Ok(device)
 }
 
-fn make(d3d12: ID3D12Device, luid: LUID) -> Result<Device, String> {
+/// Rune's device was replaced since `generation`, or the one it presents with is removed.
+pub(super) fn lost_since(generation: u64) -> bool {
+    // SAFETY: a plain query on a live device.
+    device_generation() != generation || presenting_device().is_some_and(|d| unsafe { d.GetDeviceRemovedReason() }.is_err())
+}
+
+fn make(d3d12: ID3D12Device, luid: LUID, generation: u64) -> Result<Device, String> {
     let d3d11 = mf::system_library("d3d11.dll").ok_or("d3d11.dll is missing")?;
     let dxgi = mf::system_library("dxgi.dll").ok_or("dxgi.dll is missing")?;
     // SAFETY: documented entry points cast to their documented signatures; the out pointers are
@@ -87,7 +108,7 @@ fn make(d3d12: ID3D12Device, luid: LUID) -> Result<Device, String> {
         }
         let device5 = device.cast::<ID3D11Device5>().map_err(|_| "D3D11 fences need Windows 10 1703")?;
         let context = context.cast::<ID3D11DeviceContext4>().map_err(|_| "D3D11 fences need Windows 10 1703")?;
-        Ok(Device { device, context, device5, d3d12, luid })
+        Ok(Device { device, context, device5, d3d12, luid, generation })
     }
 }
 
@@ -120,6 +141,21 @@ pub(super) struct Ring {
 }
 
 impl Ring {
+    /// Rune made a new device since this ring opened its textures and fences on the old one.
+    pub(super) fn stale(&self) -> bool {
+        self.device.generation != device_generation()
+    }
+
+    /// Takes `device` when it's the device this ring opened its textures on (only the count
+    /// moved); false when the ring must be made again.
+    pub(super) fn adopt(&mut self, device: &Arc<Device>) -> bool {
+        let same = device.d3d12.as_raw() == self.device.d3d12.as_raw();
+        if same {
+            self.device = device.clone();
+        }
+        same
+    }
+
     pub(super) fn new(device: Arc<Device>, picture: &Picture) -> Result<Self, String> {
         // SAFETY: fences made on Rune's device and opened on the D3D11 one through a shared
         // handle, closed once both hold the object.
