@@ -113,22 +113,44 @@ impl Exec for Spawn {
     }
 }
 
-/// What an `Rgba16Float` texel keeps of `v`: rounded to half precision, ties to even, as the
-/// target stores it (`half::f16` does the same, through a runtime-dispatched instruction a
-/// call). Colours here stay far below half's largest value.
+/// What an `Rgba16Float` texel keeps of `v`: rounded to half precision toward zero, as Intel's
+/// GPUs store it (the default adapter, whose frame takes over from this one; matching that took
+/// a mid-animation layer from 9% of its pixels a step off to 0.13%). Colours here stay far below
+/// half's largest value.
 #[inline]
 pub(super) fn f16(v: f32) -> f32 {
     if v.abs() >= 6.103_515_6e-5 {
-        // 10 of f32's 23 mantissa bits stay: add half of what goes (and one more when what
-        // stays is odd), then cut.
-        let b = v.to_bits();
-        return f32::from_bits((b + 0x0fff + ((b >> 13) & 1)) & 0xffff_e000);
+        // 10 of f32's 23 mantissa bits stay.
+        return f32::from_bits(v.to_bits() & 0xffff_e000);
     }
     // Subnormal halves are whole multiples of 2^-24.
     const M: f32 = 16_777_216.0;
-    ((v * M + 12_582_912.0) - 12_582_912.0) / M
+    (v * M).trunc() / M
 }
 
+/// `f16` on four values at once: F16C's conversion, rounding toward zero, where the CPU has it.
+#[inline]
+pub(super) fn f16x4(v: [f32; 4]) -> [f32; 4] {
+    #[cfg(target_arch = "x86_64")]
+    if std::arch::is_x86_feature_detected!("f16c") {
+        // SAFETY: the CPU has F16C (checked).
+        return unsafe { f16x4_f16c(v) };
+    }
+    v.map(f16)
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "f16c")]
+unsafe fn f16x4_f16c(v: [f32; 4]) -> [f32; 4] {
+    use std::arch::x86_64::*;
+    let mut out = [0.0f32; 4];
+    // SAFETY: both arrays hold four floats.
+    unsafe {
+        let h = _mm_cvtps_ph::<_MM_FROUND_TO_ZERO>(_mm_loadu_ps(v.as_ptr()));
+        _mm_storeu_ps(out.as_mut_ptr(), _mm_cvtph_ps(h));
+    }
+    out
+}
 /// `pow(cov / 255, e)` for each coverage byte, per exponent: Skia's text gamma keys a handful of
 /// exponents by the text's luminance, and a frame's text alternates between them (syntax colours),
 /// so the last `POW_TABLES` stay.
@@ -391,23 +413,23 @@ impl Painter<'_, '_> {
         let s = self.slot(x, y);
         let top = &mut self.layers[self.depth - 1];
         let d = &mut top.px[s];
-        let c = c.map(f16);
+        let c = f16x4(c);
         let k = if top.additive { 1.0 } else { 1.0 - c[3] };
-        *d = std::array::from_fn(|ch| f16(c[ch] + d[ch] * k));
+        *d = f16x4(std::array::from_fn(|ch| c[ch] + d[ch] * k));
     }
 
     fn put_span(&mut self, x0: u32, x1: u32, y: u32, c: [f32; 4]) {
         if x1 <= x0 { return; }
         self.stats.span_px += u64::from(x1 - x0);
         if self.depth == 0 { return self.surface.span(x0, x1, y, c); }
-        let c16 = c.map(f16);
+        let c16 = f16x4(c);
         let top = &mut self.layers[self.depth - 1];
         let (row, x0t) = (((y - self.tile[1]) * TILE_W) as usize, self.tile[0]);
         let px = &mut top.px[row + (x0 - x0t) as usize..row + (x1 - x0t) as usize];
         // Opaque over anything is itself: `c + d × 0`.
         if c16[3] == 1.0 && !top.additive { return px.fill(c16); }
         let k = if top.additive { 1.0 } else { 1.0 - c16[3] };
-        for d in px { *d = std::array::from_fn(|ch| f16(c16[ch] + d[ch] * k)); }
+        for d in px { *d = f16x4(std::array::from_fn(|ch| c16[ch] + d[ch] * k)); }
     }
 
     /// Draws instance `n` over pixels `r` (inside its bounds and this tile).
@@ -459,14 +481,30 @@ impl Painter<'_, '_> {
             let py = y as f32 + 0.5;
             while segs[k].y1 <= y { k += 1; }
             let (whole, vis) = (segs[k].whole, segs[k].vis);
-            // Where the composite is the texel itself over the window, a row at a time.
-            let (fa, fb) = if self.depth == 0 && opacity == 1.0 && !l.additive && l.hole[3] <= 0.0 { centres(whole, r[0], r[2]) } else { (r[2], r[2]) };
+            // Where the clip is whole and there's no hole, the composite is each texel by the
+            // opacity: a row at a time, into the window or the parent layer.
+            let (fa, fb) = if !l.additive && l.hole[3] <= 0.0 { centres(whole, r[0], r[2]) } else { (r[2], r[2]) };
             for (va, vb) in vis.iter() {
                 let (a, b) = (fa.max(va), fb.min(vb));
-                if b > a {
-                    let at = self.slot(a, y);
-                    let src = &self.layers[self.depth].px[at..at + (b - a) as usize];
-                    blend::composite_row(self.surface.row(a, y, b - a), src);
+                if b <= a { continue; }
+                let at = self.slot(a, y);
+                let n = (b - a) as usize;
+                if self.depth == 0 {
+                    let src = &self.layers[0].px[at..at + n];
+                    if opacity == 1.0 { blend::composite_row(self.surface.row(a, y, b - a), src) } else { blend::composite_row_by(self.surface.row(a, y, b - a), src, opacity) }
+                    continue;
+                }
+                let (outer, inner) = self.layers.split_at_mut(self.depth);
+                let parent = &mut outer[self.depth - 1];
+                for (d, s) in parent.px[at..at + n].iter_mut().zip(&inner[0].px[at..at + n]) {
+                    if *s == [0.0; 4] { continue; }
+                    let c = if opacity == 1.0 { *s } else { s.map(|v| v * opacity) };
+                    // Opaque over anything is itself (a texel is already in half precision).
+                    if c[3] == 1.0 && !parent.additive && opacity == 1.0 { *d = c; continue; }
+                    if c == [0.0; 4] { continue; }
+                    let c = f16x4(c);
+                    let k = if parent.additive { 1.0 } else { 1.0 - c[3] };
+                    *d = f16x4(std::array::from_fn(|ch| c[ch] + d[ch] * k));
                 }
             }
             for x in vis.iter().flat_map(|(a, b)| a..b).filter(|&x| x < fa || x >= fb) {

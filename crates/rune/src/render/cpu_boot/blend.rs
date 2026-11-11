@@ -100,19 +100,62 @@ pub(super) fn opaque(c: [f32; 4]) -> [u8; 4] {
     [q(c[2] * 255.0), q(c[1] * 255.0), q(c[0] * 255.0), q(c[3] * 255.0)]
 }
 
-/// A layer's row composited whole (opacity 1, inside its clip, no hole) over B, G, R, A pixels:
-/// `over_rgba` per texel, with the opaque ones written and the clear ones skipped.
+/// A layer's row composited whole (inside its clip, no hole) over B, G, R, A pixels: each texel
+/// by `opacity`, then `over_rgba`. An opaque texel at opacity 1 comes out as `opaque`, a clear
+/// one leaves the pixel, so neither needs its own case.
 #[inline]
 pub(super) fn composite_row(row: &mut [u8], src: &[[f32; 4]]) {
-    for (p, s) in row.chunks_exact_mut(4).zip(src) {
-        if s[3] == 1.0 {
-            p.copy_from_slice(&opaque(*s));
-        } else if *s != [0.0; 4] && s[0].max(s[1]).max(s[2]).max(s[3]) * 255.0 > 0.5 {
-            over_rgba(p, *s);
-        }
+    composite_row_by(row, src, 1.0)
+}
+
+/// `composite_row` for a layer of any opacity. On x86-64 four pixels go at once, a channel to a
+/// register, through `over_rgba`'s operations in its order, so the bytes are the same.
+#[inline]
+pub(super) fn composite_row_by(row: &mut [u8], src: &[[f32; 4]], opacity: f32) {
+    let n = (row.len() / 4).min(src.len());
+    #[cfg(target_arch = "x86_64")]
+    let done = {
+        let quads = n / 4;
+        // SAFETY: SSE2 is part of x86-64; `quads * 4` pixels and texels are in bounds.
+        unsafe { over4(&mut row[..quads * 16], &src[..quads * 4], opacity) };
+        quads * 4
+    };
+    #[cfg(not(target_arch = "x86_64"))]
+    let done = 0;
+    for (p, s) in row[done * 4..n * 4].chunks_exact_mut(4).zip(&src[done..n]) {
+        over_rgba(p, s.map(|v| v * opacity));
     }
 }
 
+/// Four texels at a time over four B, G, R, A pixels: `over_rgba` on each, by lanes.
+#[cfg(target_arch = "x86_64")]
+unsafe fn over4(row: &mut [u8], src: &[[f32; 4]], opacity: f32) {
+    use std::arch::x86_64::*;
+    // SAFETY (whole body): SSE2 is baseline on x86-64; every load and store is inside `row`
+    // (16 bytes a step) and `src` (four texels a step).
+    unsafe {
+        let (lo, hi, magic, one) = (_mm_setzero_ps(), _mm_set1_ps(255.0), _mm_set1_ps(MAGIC), _mm_set1_ps(1.0));
+        let k = _mm_set1_ps(opacity);
+        let byte = _mm_set1_epi32(0xff);
+        for (p, s) in row.chunks_exact_mut(16).zip(src.chunks_exact(4)) {
+            let mut t0 = _mm_mul_ps(_mm_loadu_ps(s[0].as_ptr()), k);
+            let mut t1 = _mm_mul_ps(_mm_loadu_ps(s[1].as_ptr()), k);
+            let mut t2 = _mm_mul_ps(_mm_loadu_ps(s[2].as_ptr()), k);
+            let mut t3 = _mm_mul_ps(_mm_loadu_ps(s[3].as_ptr()), k);
+            _MM_TRANSPOSE4_PS(&mut t0, &mut t1, &mut t2, &mut t3);
+            // t0..t3: R, G, B, A of the four texels. `steps`: × 255, clamped, rounded.
+            let steps = |v: __m128| _mm_sub_ps(_mm_add_ps(_mm_min_ps(_mm_max_ps(_mm_mul_ps(v, hi), lo), hi), magic), magic);
+            let (r, g, b, a) = (steps(t0), steps(t1), steps(t2), steps(t3));
+            let keep = _mm_sub_ps(one, _mm_div_ps(a, hi));
+            let px = _mm_loadu_si128(p.as_ptr() as *const __m128i);
+            let ch = |shift: i32| _mm_cvtepi32_ps(_mm_and_si128(_mm_srl_epi32(px, _mm_cvtsi32_si128(shift)), byte));
+            let out = |s: __m128, d: __m128| _mm_and_si128(_mm_castps_si128(_mm_add_ps(_mm_min_ps(_mm_max_ps(_mm_add_ps(s, _mm_mul_ps(d, keep)), lo), hi), magic)), byte);
+            let (ob, og, or, oa) = (out(b, ch(0)), out(g, ch(8)), out(r, ch(16)), out(a, ch(24)));
+            let packed = _mm_or_si128(_mm_or_si128(ob, _mm_slli_epi32::<8>(og)), _mm_or_si128(_mm_slli_epi32::<16>(or), _mm_slli_epi32::<24>(oa)));
+            _mm_storeu_si128(p.as_mut_ptr() as *mut __m128i, packed);
+        }
+    }
+}
 /// Blends `s` over every pixel of `row`.
 #[inline]
 pub(super) fn over_row(row: &mut [u8], s: &Src) {
