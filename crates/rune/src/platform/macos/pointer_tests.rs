@@ -38,7 +38,7 @@ fn a_click_through_overlay_that_follows_nothing_never_samples_the_pointer() {
     pointer.follow.set(true);
     assert!(pointer.wanted(), "following the pointer reads it");
     pointer.follow.set(false);
-    pointer.step(Event::Seen { down: true, at: (0.0, 0.0), over: true, last: None });
+    pointer.step(Event::Seen { down: true, at: (0.0, 0.0), over: true });
     assert!(pointer.wanted(), "a press it holds still needs its release");
     pointer.step(Event::Stopped);
     for input in [OverlayInput::Regions, OverlayInput::All] {
@@ -104,8 +104,8 @@ fn overlay_undelivered_click_releases_capture_after_stall() {
 fn overlay_lost_view_releases_capture_where_the_pointer_was() {
     let pointer = PointerState { input: Cell::new(OverlayInput::Regions), ..Default::default() };
     pointer.regions.borrow_mut().push([10.0, 10.0, 30.0, 30.0]);
-    pointer.last.set(Some((25.0, 15.0)));
     pointer.record_click(true, 20.0, 20.0);
+    pointer.read(1, Instant::now(), (25.0, 15.0), true, false);
     pointer.view_lost();
     assert!(!pointer.captured());
     assert!(queued(&pointer).is_empty());
@@ -172,4 +172,28 @@ fn a_sample_beating_the_next_press_cancels_the_old_drag_where_the_button_rose() 
     rt.pointer_release_lost(x, y);
     rt.frame(0.0);
     assert_eq!(rt.state.last(), Some(&(crate::Phase::Up, true, 50.0)));
+}
+
+#[test]
+fn a_press_lost_before_any_sample_cancels_at_its_own_down_and_keeps_the_run() {
+    type State = Vec<(crate::Phase, bool, f32, u32)>;
+    fn view(_: &State, _: &mut crate::Cx<State>) -> crate::El {
+        crate::el().size(100.0, 100.0).on_drag(|s: &mut State, d, _| s.push((d.phase, d.cancelled(), d.x, d.clicks)))
+    }
+    let mut rt = crate::Runtime::new(Vec::new(), view, (100.0, 100.0), crate::Env::default());
+    rt.frame(0.0);
+    let pointer = PointerState { input: Cell::new(OverlayInput::All), ..Default::default() };
+    pointer.read(0, Instant::now(), (5.0, 5.0), true, false); // a hover older than the press
+    pointer.record_click(true, 50.0, 10.0);
+    let (_, down) = pointer.take_edge(true);
+    let (x, y) = down.unwrap();
+    rt.pointer_down(x, y);
+    pointer.record_click(true, 51.0, 10.0);
+    let (lost, down) = pointer.take_edge(true);
+    let (x, y) = lost.expect("the first press lost its release");
+    rt.pointer_release_lost(x, y);
+    let (x, y) = down.unwrap();
+    rt.pointer_down(x, y);
+    rt.frame(0.0);
+    assert_eq!(rt.state, [(crate::Phase::Down, false, 50.0, 1), (crate::Phase::Up, true, 50.0, 1), (crate::Phase::Down, false, 51.0, 2)]);
 }

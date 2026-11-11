@@ -1,7 +1,7 @@
 use super::*;
 
-const DOWN: Event = Event::Seen { down: true, at: (20.0, 20.0), over: true, last: None };
-const UP: Event = Event::Seen { down: false, at: (100.0, 100.0), over: true, last: None };
+const DOWN: Event = Event::Seen { down: true, at: (20.0, 20.0), over: true };
+const UP: Event = Event::Seen { down: false, at: (100.0, 100.0), over: true };
 
 fn sample(button_down: bool, now: Instant, at: Point) -> Event { Event::Sampled { button_down, now, at } }
 
@@ -120,11 +120,23 @@ fn acknowledging_an_older_up_keeps_the_queued_presss_release() {
 fn a_position_ends_the_press_before_the_front_click_without_taking_it() {
     let mut hold = Hold::default();
     step(&mut hold, DOWN);
-    step(&mut hold, Event::Seen { down: true, at: (30.0, 30.0), over: true, last: Some((15.0, 15.0)) });
+    step(&mut hold, Event::Seen { down: true, at: (30.0, 30.0), over: true });
     assert!(step(&mut hold, Event::Positioning).is_empty(), "the front press is the first: nothing before it to end");
     assert_eq!(effects(&mut hold, Event::Dispatched { down: true }), [Effect::Deliver((20.0, 20.0))]);
-    assert_eq!(effects(&mut hold, Event::Positioning), [Effect::ReleaseLost((15.0, 15.0))], "never the new press's point");
+    assert_eq!(effects(&mut hold, Event::Positioning), [Effect::ReleaseLost((20.0, 20.0))], "its own Down, never the new press's point");
     assert_eq!(effects(&mut hold, Event::Dispatched { down: true }), [Effect::Deliver((30.0, 30.0))], "landed once");
+}
+
+#[test]
+fn with_no_rise_read_a_press_ends_where_it_was_last_read_down() {
+    let mut hold = Hold::default();
+    let now = Instant::now();
+    step(&mut hold, sample(false, now, (5.0, 5.0))); // a hover older than the press
+    step(&mut hold, DOWN);
+    step(&mut hold, Event::Dispatched { down: true });
+    step(&mut hold, sample(true, now, (25.0, 25.0)));
+    step(&mut hold, Event::Seen { down: true, at: (30.0, 30.0), over: true });
+    assert_eq!(effects(&mut hold, Event::Dispatched { down: true }), [Effect::ReleaseLost((25.0, 25.0)), Effect::Deliver((30.0, 30.0))]);
 }
 
 #[test]
@@ -164,7 +176,9 @@ fn an_up_with_no_seen_press_stays_free_and_still_dispatches() {
 fn losing_the_view_gives_up_where_the_pointer_was_and_hiding_stays_silent() {
     let mut hold = Hold::default();
     step(&mut hold, DOWN);
-    assert_eq!(effects(&mut hold, Event::ViewLost { last: Some((25.0, 15.0)) }), [Effect::ReleaseLost((25.0, 15.0))]);
+    step(&mut hold, sample(true, Instant::now(), (25.0, 15.0)));
+    assert_eq!(effects(&mut hold, Event::ViewLost { last: Some((5.0, 5.0)) }), [Effect::ReleaseLost((25.0, 15.0))], "not a reading older than the press");
+    assert_eq!(effects(&mut hold, Event::ViewLost { last: Some((25.0, 15.0)) }), [Effect::ReleaseLost((25.0, 15.0))], "no press seen: the last reading");
     assert_eq!(hold, Hold::default());
     step(&mut hold, DOWN);
     assert!(step(&mut hold, Event::Stopped).is_empty());

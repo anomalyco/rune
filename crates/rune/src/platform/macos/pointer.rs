@@ -67,7 +67,7 @@ impl PointerState {
     }
     pub(crate) fn hit(&self, x: f32, y: f32) -> bool { self.captured() || self.over(x, y) }
     pub(crate) fn record_click(&self, down: bool, x: f32, y: f32) {
-        self.step(Event::Seen { down, at: (x, y), over: self.over(x, y), last: self.last.get() });
+        self.step(Event::Seen { down, at: (x, y), over: self.over(x, y) });
     }
     /// winit dispatched a press or release: a lost release to land before it, and its point.
     pub(crate) fn take_edge(&self, down: bool) -> (Option<Point>, Option<Point>) {

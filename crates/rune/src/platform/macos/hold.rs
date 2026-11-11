@@ -34,8 +34,9 @@ impl Click {
 pub(super) enum Hold {
     /// No press is held. `ups` are releases still to dispatch, of presses the monitor never saw.
     Free { ups: VecDeque<Point> },
-    /// A press is held, the button down or its Up still on the way.
-    Pressed { clicks: VecDeque<Click> },
+    /// A press is held, the button down or its Up still on the way. `at` is the newest press's
+    /// Down, then where the button was last read down.
+    Pressed { clicks: VecDeque<Click>, at: Point },
     /// The button read up at `at` and `since`, and the runtime hasn't had the Up.
     Releasing { clicks: VecDeque<Click>, since: Instant, at: Point },
     /// The button read up at `at`, then down again before any click was seen: the next Down's
@@ -61,14 +62,14 @@ impl Hold {
     pub(super) fn into_clicks(self) -> VecDeque<Click> {
         match self {
             Self::Free { ups } => ups.into_iter().map(Click::up).collect(),
-            Self::Pressed { clicks } | Self::Releasing { clicks, .. } | Self::Rebound { clicks, .. } => clicks,
+            Self::Pressed { clicks, .. } | Self::Releasing { clicks, .. } | Self::Rebound { clicks, .. } => clicks,
         }
     }
 
     fn queued_down(&self) -> bool {
         match self {
             Self::Free { .. } => false,
-            Self::Pressed { clicks } | Self::Releasing { clicks, .. } | Self::Rebound { clicks, .. } => clicks.iter().any(|click| click.down),
+            Self::Pressed { clicks, .. } | Self::Releasing { clicks, .. } | Self::Rebound { clicks, .. } => clicks.iter().any(|click| click.down),
         }
     }
 
@@ -78,7 +79,7 @@ impl Hold {
         match self {
             Self::Free { .. } => false,
             Self::Releasing { .. } | Self::Rebound { .. } => true,
-            Self::Pressed { clicks } => !clicks.is_empty(),
+            Self::Pressed { clicks, .. } => !clicks.is_empty(),
         }
     }
 
@@ -87,19 +88,16 @@ impl Hold {
     fn lost_point(&self) -> Option<Point> {
         let (clicks, rose) = match self {
             Self::Free { .. } => return None,
-            Self::Pressed { clicks } => (clicks, None),
-            Self::Releasing { clicks, at, .. } | Self::Rebound { clicks, at } => (clicks, Some(*at)),
+            Self::Pressed { clicks, at } | Self::Releasing { clicks, at, .. } | Self::Rebound { clicks, at } => (clicks, *at),
         };
-        clicks.front().and_then(|click| if click.down { click.ends } else { Some(click.at) }).or(rose)
+        clicks.front().and_then(|click| if click.down { click.ends } else { Some(click.at) }).or(Some(rose))
     }
 
     /// Where the press before a new Down lost its release, if no Up is queued between them.
-    /// With no sample of the button rising, `last` is the last it could have known.
-    fn lost_before(&self, last: Point) -> Option<Point> {
+    fn lost_before(&self) -> Option<Point> {
         let (clicks, rose) = match self {
             Self::Free { .. } => return None,
-            Self::Pressed { clicks } => (clicks, last),
-            Self::Releasing { clicks, at, .. } | Self::Rebound { clicks, at } => (clicks, *at),
+            Self::Pressed { clicks, at } | Self::Releasing { clicks, at, .. } | Self::Rebound { clicks, at } => (clicks, *at),
         };
         clicks.back().is_none_or(|click| click.down).then_some(rose)
     }
@@ -107,9 +105,8 @@ impl Hold {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum Event {
-    /// The local monitor saw a click; `over` is whether it fell on the hit area, and `last` the
-    /// pointer's last sampled position.
-    Seen { down: bool, at: Point, over: bool, last: Option<Point> },
+    /// The local monitor saw a click; `over` is whether it fell on the hit area.
+    Seen { down: bool, at: Point, over: bool },
     /// winit dispatched a press (`down`) or a release.
     Dispatched { down: bool },
     /// winit is about to report a position, which belongs to the click at the front of the queue.
@@ -134,16 +131,16 @@ pub(super) enum Effect {
 
 pub(super) fn step(hold: &mut Hold, event: Event) -> Effects<Effect> {
     match event {
-        Event::Seen { down, at, over, last } => {
+        Event::Seen { down, at, over } => {
             match hold {
                 Hold::Free { .. } if !over => {}
                 Hold::Free { ups } if !down => ups.push_back(at),
-                Hold::Pressed { clicks } | Hold::Releasing { clicks, .. } | Hold::Rebound { clicks, .. } if !down => clicks.push_back(Click::up(at)),
+                Hold::Pressed { clicks, .. } | Hold::Releasing { clicks, .. } | Hold::Rebound { clicks, .. } if !down => clicks.push_back(Click::up(at)),
                 _ => {
-                    let ends = hold.lost_before(last.unwrap_or(at));
+                    let ends = hold.lost_before();
                     let mut clicks = std::mem::take(hold).into_clicks();
                     clicks.push_back(Click { down: true, at, ends });
-                    *hold = Hold::Pressed { clicks };
+                    *hold = Hold::Pressed { clicks, at };
                 }
             }
             Effects::none()
@@ -151,7 +148,7 @@ pub(super) fn step(hold: &mut Hold, event: Event) -> Effects<Effect> {
         Event::Dispatched { down } => {
             let click = match hold {
                 Hold::Free { ups } if !down => ups.pop_front().map(Click::up),
-                Hold::Pressed { clicks } | Hold::Releasing { clicks, .. } | Hold::Rebound { clicks, .. } if clicks.front().is_some_and(|click| click.down == down) =>
+                Hold::Pressed { clicks, .. } | Hold::Releasing { clicks, .. } | Hold::Rebound { clicks, .. } if clicks.front().is_some_and(|click| click.down == down) =>
                     clicks.pop_front(),
                 _ => None,
             };
@@ -164,7 +161,7 @@ pub(super) fn step(hold: &mut Hold, event: Event) -> Effects<Effect> {
         Event::Positioning => {
             let ends = match hold {
                 Hold::Free { .. } => None,
-                Hold::Pressed { clicks } | Hold::Releasing { clicks, .. } | Hold::Rebound { clicks, .. } =>
+                Hold::Pressed { clicks, .. } | Hold::Releasing { clicks, .. } | Hold::Rebound { clicks, .. } =>
                     clicks.front_mut().and_then(|click| click.ends.take()),
             };
             ends.map_or(Effects::none(), |at| Effects::one(Effect::ReleaseLost(at)))
@@ -195,8 +192,12 @@ fn sampled(hold: &mut Hold, button_down: bool, now: Instant, point: Point) -> Ef
     let due = hold.deadline();
     match hold {
         Hold::Free { .. } => Effects::none(),
-        Hold::Pressed { .. } | Hold::Rebound { .. } if button_down => Effects::none(),
-        Hold::Pressed { clicks } => {
+        Hold::Pressed { at, .. } if button_down => {
+            *at = point;
+            Effects::none()
+        }
+        Hold::Rebound { .. } if button_down => Effects::none(),
+        Hold::Pressed { clicks, .. } => {
             *hold = Hold::Releasing { clicks: std::mem::take(clicks), since: now, at: point };
             Effects::none()
         }
