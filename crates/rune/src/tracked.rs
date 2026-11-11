@@ -112,6 +112,45 @@ impl<T: PartialEq> PartialEq for Tracked<T> {
     }
 }
 
+/// `tracked == value`: compares the value, recording a read.
+impl<T: PartialEq> PartialEq<T> for Tracked<T> {
+    fn eq(&self, other: &T) -> bool {
+        **self == *other
+    }
+}
+
+impl<T: Eq> Eq for Tracked<T> {}
+
+impl<T: std::hash::Hash> std::hash::Hash for Tracked<T> {
+    fn hash<H: std::hash::Hasher>(&self, h: &mut H) {
+        (**self).hash(h)
+    }
+}
+
+impl<A, T: FromIterator<A>> FromIterator<A> for Tracked<T> {
+    fn from_iter<I: IntoIterator<Item = A>>(iter: I) -> Self {
+        Tracked::new(iter.into_iter().collect())
+    }
+}
+
+/// `for x in &tracked`: iterates the value, recording a read.
+impl<'a, T> IntoIterator for &'a Tracked<T> where &'a T: IntoIterator {
+    type Item = <&'a T as IntoIterator>::Item;
+    type IntoIter = <&'a T as IntoIterator>::IntoIter;
+    fn into_iter(self) -> Self::IntoIter {
+        (**self).into_iter()
+    }
+}
+
+/// `for x in &mut tracked`: iterates the value, counting as a write.
+impl<'a, T> IntoIterator for &'a mut Tracked<T> where &'a mut T: IntoIterator {
+    type Item = <&'a mut T as IntoIterator>::Item;
+    type IntoIter = <&'a mut T as IntoIterator>::IntoIter;
+    fn into_iter(self) -> Self::IntoIter {
+        (**self).into_iter()
+    }
+}
+
 impl<T> From<T> for Tracked<T> {
     fn from(value: T) -> Self {
         Tracked::new(value)
