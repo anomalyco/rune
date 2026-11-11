@@ -1,8 +1,12 @@
 //! Work off the UI thread, the same code on every target: natively each piece runs on its own
 //! named thread; on the web, which has no threads, the main thread runs it from a task after the
-//! current event (as [`Latest`](crate::Latest) does there), so it never runs inside a frame. Work
-//! that blocks (a synchronous request) still blocks the page while it runs: keep it short, or
-//! give the web its own asynchronous path.
+//! current event, so it never runs inside a frame.
+//!
+//! On the web the work can wait without blocking the page: after [`start_runners`] (called from
+//! a `#[wasm_bindgen(jspi)]` export), it runs on a few JS Promise Integration fibers, and
+//! [`wait`] suspends the fiber on a promise (a `fetch`, a timer) while frames and input carry on.
+//! So blocking code written for a thread (a request, a [`sleep`]) runs unchanged and costs the
+//! page nothing while it waits.
 
 use std::ops::ControlFlow;
 use std::sync::mpsc::Receiver;
@@ -80,6 +84,31 @@ pub fn serve<T: Send + 'static>(
         }));
         Ok(())
     }
+}
+
+/// Sleeps `wait`: the thread natively; on the web, the task's fiber (the page carries on), or
+/// not at all outside task work, where a page can't wait.
+pub fn sleep(wait: Duration) {
+    #[cfg(not(target_arch = "wasm32"))]
+    std::thread::sleep(wait);
+    #[cfg(target_arch = "wasm32")]
+    web::sleep(wait);
+}
+
+/// Starts the web's task fibers: from here on, task work runs where [`wait`] can suspend it.
+/// Call it from a `#[wasm_bindgen(jspi)]` export (an app's entry), before the app runs; outside
+/// one, nothing changes and the work runs as before, unable to wait.
+#[cfg(target_arch = "wasm32")]
+pub fn start_runners() {
+    web::start_runners();
+}
+
+/// Waits for `promise` from task work without blocking the page: the work's fiber suspends
+/// until it settles. `None` where nothing can wait (no runners, or not in task work): the caller
+/// does it the blocking way.
+#[cfg(target_arch = "wasm32")]
+pub fn wait(promise: &js_sys::Promise) -> Option<Result<wasm_bindgen::JsValue, wasm_bindgen::JsValue>> {
+    web::wait(promise)
 }
 
 /// Runs what's waiting: the platform layer calls this after each batch of events on the web.
