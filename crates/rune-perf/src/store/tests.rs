@@ -39,7 +39,7 @@ fn writer_publishes_snapshot_and_bounded_incidents_even_when_hook_is_full() {
 #[test]
 fn logs_rotate_and_failed_writes_are_visible() {
     let dir = tempfile::tempdir().unwrap();
-    let mut log = Log { dir: dir.path(), size: 0, limit: 128 };
+    let mut log = Log { dir: dir.path(), file: None, size: 0, limit: 128 };
     for n in 0..50 { log.append(&json!({"seq": n})).unwrap(); }
     for name in ["perf.log", "perf.log.1"] {
         let text = std::fs::read_to_string(dir.path().join(name)).unwrap();
@@ -49,6 +49,7 @@ fn logs_rotate_and_failed_writes_are_visible() {
     // Simulate a prior partial write with stale in-memory size accounting.
     std::fs::write(dir.path().join("perf.log"), vec![b' '; 125]).unwrap();
     log.size = 0;
+    log.file = None;
     log.append(&json!({"seq": 51})).unwrap();
     assert!(std::fs::metadata(dir.path().join("perf.log")).unwrap().len() <= 128);
     assert_eq!(std::fs::metadata(dir.path().join("perf.log.1")).unwrap().len(), 125);
