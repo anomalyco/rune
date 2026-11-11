@@ -656,13 +656,12 @@ impl<S: 'static> Runtime<S> {
         }
         // Once the content end prevents holding the anchor, let stick-bottom own the
         // viewport again, including growth committed while the collapse is still settling.
-        if !self.requests.has_keeps() { return moved; }
-        self.requests.step(requests::Event::RetainKeeps(&|k| {
-            let Some(i) = self.nodes.iter().position(|n| n.path == k.path) else { return true };
-            let Some(s) = vertical_viewport(&self.nodes, i) else { return false };
-            !(self.scrolls.get(&self.nodes[s].id).is_some_and(|st| st.pinned())
-                && self.drawn[i][1] - self.drawn[s][1] > k.was + 0.5)
-        }));
+        self.requests.step(requests::EndClamps { shown: |k: &Keep| {
+            let Some(i) = self.nodes.iter().position(|n| n.path == k.path) else { return requests::Shown::Unmounted };
+            let Some(s) = vertical_viewport(&self.nodes, i) else { return requests::Shown::Loose };
+            if !self.scrolls.get(&self.nodes[s].id).is_some_and(|st| st.pinned()) { return requests::Shown::Free; }
+            requests::Shown::Pinned(self.drawn[i][1] - self.drawn[s][1])
+        } });
         moved
     }
 
@@ -686,8 +685,9 @@ impl<S: 'static> Runtime<S> {
         let gliding = |viewport: &str| self.path_ids.get(viewport)
             .and_then(|id| self.scrolls.get(id))
             .is_some_and(|st| st.glide().is_some());
-        requests.step(requests::Event::Finish { animating: &animating, gliding: &gliding,
-            mounted: &|r| self.reveal_mounted(r) });
+        // A glide keeps its reveal until it lands; otherwise a reveal lasts while its viewport's
+        // subtree moves with its target in it.
+        requests.step(requests::Finish { animating, gliding, mounted: |r: &Reveal| self.reveal_mounted(r) });
         self.requests = requests;
     }
 

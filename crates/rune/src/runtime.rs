@@ -544,7 +544,8 @@ pub struct Runtime<S: 'static> {
     /// Sections whose rows fade under their stuck header this frame (`ScrollFade::below_sticky`),
     /// with the paint clip top the header keeps.
     sticky_bands: Vec<(usize, f32)>,
-    /// `Tx::keep_on_screen` across the commit underway.
+    /// `Tx::keep_on_screen` across the commit underway, and `Tx::scroll_into_view` requests that
+    /// follow their target while growth/layout springs run.
     requests: requests::Requests,
     /// Some element is `El::raise`d: paint order isn't tree order.
     has_raise: bool,

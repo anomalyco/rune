@@ -6,6 +6,9 @@
 //! They are stored in two lanes because they are consumed apart: the paint pass reads only
 //! keeps, and the nested commit that remounts virtual rows lifts only the keeps out, leaving
 //! the reveals' buffer where it is.
+//!
+//! Events that test every request on every frame are types of their own, generic over what
+//! they measure, so a caller's measurements compile into the loop with no indirect call.
 use super::sticky::{Keep, Reveal};
 use crate::machine::Effects;
 
@@ -35,11 +38,6 @@ pub(super) enum Event<'a> {
     /// A virtual list's last row left the view: an end-pinned reveal follows the row that took
     /// its place.
     NewTail { viewport: &'a str, key: &'a str },
-    RetainKeeps(&'a dyn Fn(&Keep) -> bool),
-    /// A frame ended: keeps last while their viewport's subtree moves, reveals while their
-    /// viewport glides or moves with their target mounted in it.
-    Finish { gliding: &'a dyn Fn(&str) -> bool, animating: &'a dyn Fn(&str) -> bool,
-        mounted: &'a dyn Fn(&Reveal) -> bool },
     /// A user or explicit scroll ends every request that would pull the view back.
     Cancel,
     /// An explicit destination wins over a reveal for its whole lifetime; holds stay.
@@ -49,6 +47,39 @@ pub(super) enum Event<'a> {
 /// What placing a reveal asks of its viewport.
 #[derive(Debug, PartialEq)]
 pub(super) enum Effect { Rest, Move(f64) }
+
+/// A fold starts opening: the keeps on its viewport above its end give way. `index` is a path's
+/// position in the commit's nodes.
+pub(super) struct FoldOpens<'a, I> { pub viewport: &'a str, pub end: usize, pub index: I }
+
+/// Folds nearly shut have left their viewports' ends to take over: a keep holding one of the
+/// `giving` headers on a `pinned` viewport gives way.
+pub(super) struct EndTakesOver<'a, P> { pub giving: &'a [&'a String], pub pinned: P }
+
+/// Where a keep's element shows, for [`EndClamps`].
+pub(super) enum Shown {
+    /// Not in the tree: the keep waits for it.
+    Unmounted,
+    /// In the tree with no vertical viewport around it.
+    Loose,
+    /// In a viewport that isn't pinned to its end.
+    Free,
+    /// This far below the top of a viewport pinned to its end.
+    Pinned(f32),
+}
+
+/// A frame followed its keeps: one the content's end pushed down, or that lost its viewport,
+/// gives way to stick-bottom.
+pub(super) struct EndClamps<F> { pub shown: F }
+
+/// A frame ended: keeps last while their viewport's subtree moves, reveals while their viewport
+/// glides or moves with their target mounted in it.
+pub(super) struct Finish<G, A, M> { pub gliding: G, pub animating: A, pub mounted: M }
+
+/// Anything [`Requests::step`] takes.
+pub(super) trait Transition {
+    fn apply(self, requests: &mut Requests) -> Effects<Effect>;
+}
 
 impl Requests {
     pub fn is_empty(&self) -> bool { self.keeps.is_empty() && self.reveals.is_empty() }
@@ -90,14 +121,20 @@ impl Requests {
         }
     }
 
-    pub fn step(&mut self, event: Event) -> Effects<Effect> {
-        match event {
-            Event::Arrive(request) => self.arrive(request),
+    pub fn step(&mut self, event: impl Transition) -> Effects<Effect> {
+        event.apply(self)
+    }
+}
+
+impl Transition for Event<'_> {
+    fn apply(self, requests: &mut Requests) -> Effects<Effect> {
+        match self {
+            Event::Arrive(request) => requests.arrive(request),
             Event::Place { first, scope, key, viewport, center, at_end, from, to } => {
                 if first {
-                    self.arrive(Request::Reveal(Reveal { scope: scope.map(str::to_owned),
+                    requests.arrive(Request::Reveal(Reveal { scope: scope.map(str::to_owned),
                         key: key.to_owned(), viewport: viewport.to_owned(), center, at_end }));
-                } else if let Some(r) = self.reveals.iter_mut().find(|r| r.viewport == viewport) {
+                } else if let Some(r) = requests.reveals.iter_mut().find(|r| r.viewport == viewport) {
                     r.at_end |= at_end;
                 }
                 if (to - from).abs() < 0.5 {
@@ -105,21 +142,51 @@ impl Requests {
                 } else { return Effects::one(Effect::Move(to)); }
             }
             Event::NewTail { viewport, key } => {
-                if let Some(r) = self.reveals.iter_mut().find(|r| r.viewport == viewport && r.at_end) {
+                if let Some(r) = requests.reveals.iter_mut().find(|r| r.viewport == viewport && r.at_end) {
                     r.scope = None;
                     r.key = key.to_owned();
                 }
             }
-            Event::RetainKeeps(keep) => {
-                if self.has_keeps() { self.keeps.retain(keep); }
-            }
-            Event::Finish { gliding, animating, mounted } => {
-                self.keeps.retain(|k| animating(&k.viewport));
-                self.reveals.retain(|r| gliding(&r.viewport) || (animating(&r.viewport) && mounted(r)));
-            }
-            Event::Cancel => { self.keeps.clear(); self.reveals.clear(); }
-            Event::Destination => self.reveals.clear(),
+            Event::Cancel => { requests.keeps.clear(); requests.reveals.clear(); }
+            Event::Destination => requests.reveals.clear(),
         }
+        Effects::none()
+    }
+}
+
+impl<I: Fn(&str) -> Option<usize>> Transition for FoldOpens<'_, I> {
+    fn apply(self, requests: &mut Requests) -> Effects<Effect> {
+        let Self { viewport, end, index } = self;
+        requests.keeps.retain(|k| k.viewport != viewport || index(&k.path).is_none_or(|i| i >= end));
+        Effects::none()
+    }
+}
+
+impl<P: Fn(&str) -> bool> Transition for EndTakesOver<'_, P> {
+    fn apply(self, requests: &mut Requests) -> Effects<Effect> {
+        let Self { giving, pinned } = self;
+        requests.keeps.retain(|k| !(k.hold.as_ref().is_some_and(|h| giving.contains(&&h.path)) && pinned(&k.viewport)));
+        Effects::none()
+    }
+}
+
+impl<F: Fn(&Keep) -> Shown> Transition for EndClamps<F> {
+    fn apply(self, requests: &mut Requests) -> Effects<Effect> {
+        requests.keeps.retain(|k| match (self.shown)(k) {
+            Shown::Loose => false,
+            Shown::Pinned(top) if top > k.was + 0.5 => false,
+            _ => true,
+        });
+        Effects::none()
+    }
+}
+
+impl<G, A, M> Transition for Finish<G, A, M>
+where G: Fn(&str) -> bool, A: Fn(&str) -> bool, M: Fn(&Reveal) -> bool {
+    fn apply(self, requests: &mut Requests) -> Effects<Effect> {
+        let Self { gliding, animating, mounted } = self;
+        requests.keeps.retain(|k| animating(&k.viewport));
+        requests.reveals.retain(|r| gliding(&r.viewport) || (animating(&r.viewport) && mounted(r)));
         Effects::none()
     }
 }

@@ -82,9 +82,7 @@ impl<S: 'static> Runtime<S> {
             .map(|(_, p)| p).collect();
         if giving.is_empty() { return; }
         let pinned = |viewport: &str| self.path_ids.get(viewport).and_then(|id| self.scrolls.get(id)).is_some_and(|st| st.pinned());
-        self.requests.step(requests::Event::RetainKeeps(&|k| {
-            !(k.hold.as_ref().is_some_and(|h| giving.contains(&&h.path)) && pinned(&k.viewport))
-        }));
+        self.requests.step(requests::EndTakesOver { giving: &giving, pinned });
     }
 
     /// Row `j` of the commit's `nodes`, a fold opening from rest or again while its contents
@@ -100,7 +98,7 @@ impl<S: 'static> Runtime<S> {
         let mut end = j + 1;
         while end < nodes.len() && nodes[end].parent.is_some_and(|p| p >= j) { end += 1; }
         let viewport = &nodes[s].path;
-        self.requests.step(requests::Event::RetainKeeps(&|k| k.viewport != *viewport || nodes.iter().position(|n| n.path == k.path).is_none_or(|i| i >= end)));
+        self.requests.step(requests::FoldOpens { viewport, end, index: |path: &str| nodes.iter().position(|n| n.path == path) });
         if !pinned && self.drawn.len() == self.nodes.len()
             && let Some(below) = nodes.get(end).filter(|n| n.path.starts_with(viewport.as_str()))
             && let Some(i) = self.nodes.iter().position(|n| n.id == below.id)
