@@ -8,7 +8,7 @@ use super::style::{TableBody, TableFrame};
 const WIDTHS_BYTES: usize = 1 << 20;
 
 /// A setter's points: zero when negative, NaN or infinite, so a width never goes non-finite.
-fn pts(x: f32) -> f32 {
+pub(super) fn pts(x: f32) -> f32 {
     if x.is_finite() { x.max(0.0) } else { 0.0 }
 }
 
