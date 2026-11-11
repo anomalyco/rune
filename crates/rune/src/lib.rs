@@ -58,6 +58,7 @@ pub mod text;
 pub mod theme;
 pub mod time;
 pub mod tok;
+pub mod tracked;
 pub mod tooling;
 pub mod tray;
 
@@ -191,7 +192,8 @@ pub use latest::Latest;
 pub use live::Live;
 pub use live::LiveText;
 pub use live::Tween;
-pub use memo::memo;
+pub use memo::{memo, region};
+pub use tracked::Tracked;
 pub use native_menu::MenuError;
 pub use native_menu::MenuItem;
 pub use native_surface::NativeSurface;
