@@ -7,7 +7,9 @@
 
 use super::{Gpu, Renderer};
 use std::sync::{Arc, Condvar, Mutex, Weak};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use crate::time::Instant;
 
 /// How long a warmed device waits for a surface, from the last `warm_gpu`.
 pub(super) const LINGER: Duration = Duration::from_secs(30);

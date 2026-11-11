@@ -2,7 +2,7 @@
 //! for rune-light's `shader_first_use` example and `builtin_shaders` test, which between them
 //! build every pipeline Rune and its effect crates ship.
 
-use std::time::Instant;
+use crate::time::Instant;
 
 use super::{Renderer, backdrop_blur::BackdropBlur, layer_blur, surface_alpha::AlphaSurface};
 

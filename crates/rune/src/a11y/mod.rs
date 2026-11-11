@@ -142,7 +142,7 @@ impl AccessibilityLink {
 
     fn update<S: 'static>(&mut self, rt: &mut Runtime<S>) -> Option<TreeUpdate> {
         self.adopt(rt);
-        let started = log().then(std::time::Instant::now);
+        let started = log().then(crate::time::Instant::now);
         let update = rt.a11y_update()?;
         if let Some(t) = started { eprintln!("rune: a11y update: {} nodes in {:.0} us", update.nodes.len(), t.elapsed().as_secs_f64() * 1e6); }
         Some(update)
