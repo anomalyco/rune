@@ -1,5 +1,6 @@
 //! The platform's spell checker for text fields that ask for it (`El::spellcheck`): Windows'
-//! spell checking API (`ISpellChecker`), AppKit's `NSSpellChecker` on macOS, none elsewhere.
+//! spell checking API (`ISpellChecker`), AppKit's `NSSpellChecker` on macOS, Hunspell
+//! dictionaries a page fetches in a browser (`spell/web.rs`), none elsewhere.
 //! A field's misspelled words get a red marker under them and their suggestions in its menu.
 //!
 //! Where the platform checks one language at a time (Windows), an app picks the dictionaries:
@@ -20,7 +21,10 @@ mod platform;
 #[cfg(target_os = "macos")]
 #[path = "spell/macos.rs"]
 mod platform;
-#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+#[cfg(target_arch = "wasm32")]
+#[path = "spell/web.rs"]
+mod platform;
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_arch = "wasm32")))]
 mod platform {
     pub(super) const OFF_THREAD: bool = false;
     pub(super) fn misspelled(_: &str) -> Vec<(usize, usize)> { Vec::new() }
@@ -74,6 +78,14 @@ pub fn languages() -> Vec<String> {
         return chosen;
     }
     default_languages(&available, &platform::preferred())
+}
+
+/// In a browser, the Hunspell dictionaries the page has beside it, as `spell/<tag>.aff` and
+/// `spell/<tag>.dic` (`en-US`): each is fetched the first time a field checks text in it.
+#[cfg(target_arch = "wasm32")]
+pub fn set_web_dictionaries(tags: &[&str]) {
+    platform::set_tags(tags.iter().map(|t| (*t).to_owned()).collect());
+    GENERATION.fetch_add(1, Ordering::Relaxed);
 }
 
 /// Check with these dictionaries. None, or none the platform has, follows the system languages.
@@ -183,7 +195,14 @@ pub(crate) fn misspelled(text: &str, wake: Option<&std::sync::Arc<crate::live::W
             checked.clear();
         }
         // macOS finds each text's language from the text, so it checks the whole of it.
-        let (found, whole) = if cfg!(target_os = "windows") { by_words(text, wake) } else { (platform::misspelled(text), true) };
+        // A page fetches its dictionaries the first time it checks: until they're in, nothing is
+        // marked and nothing kept, and the window asking is woken when they arrive.
+        #[cfg(target_arch = "wasm32")]
+        let ready = platform::prepare(wake);
+        #[cfg(not(target_arch = "wasm32"))]
+        let ready = true;
+        let (found, whole) = if cfg!(any(target_os = "windows", target_arch = "wasm32")) { by_words(text, wake) } else { (platform::misspelled(text), true) };
+        let whole = whole && ready;
         let found = Rc::new(found);
         // A text with words still on the checker thread is put together again when they're back.
         if whole {

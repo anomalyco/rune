@@ -158,6 +158,21 @@ export function viewport(canvas, callback, embedded) {
     };
     const motion = matchMedia('(prefers-reduced-motion: reduce)');
     const reduced = () => callback(JSON.stringify({ kind: 'motion', reduced: motion.matches }));
+    // A contrast theme (Windows' Contrast themes): `forced-colors`, and its system colours read
+    // off a probe, as sRGB bytes, for `Cx::system_contrast`.
+    const forced = matchMedia('(forced-colors: active)');
+    const contrast = () => {
+        if (!forced.matches) { callback(JSON.stringify({ kind: 'contrast', colors: null })); return; }
+        const swatch = document.createElement('span');
+        swatch.style.cssText = 'position:fixed;visibility:hidden;forced-color-adjust:none';
+        document.body.append(swatch);
+        const colors = ['Canvas', 'CanvasText', 'Highlight', 'HighlightText', 'GrayText', 'ButtonFace', 'ButtonText', 'LinkText'].map((name) => {
+            swatch.style.color = name;
+            return (getComputedStyle(swatch).color.match(/\d+(\.\d+)?/g) ?? ['0', '0', '0']).slice(0, 3).map(Number);
+        });
+        swatch.remove();
+        callback(JSON.stringify({ kind: 'contrast', colors }));
+    };
     const focus = () => callback(JSON.stringify({ kind: 'focus', focused: document.hasFocus() }));
     const visibility = () => callback(JSON.stringify({ kind: 'visibility', visible: !document.hidden }));
     let dprMedia = null;
@@ -175,17 +190,19 @@ export function viewport(canvas, callback, embedded) {
     window.visualViewport?.addEventListener('scroll', update);
     window.addEventListener('resize', update);
     motion.addEventListener('change', reduced);
+    forced.addEventListener('change', contrast);
     window.addEventListener('focus', focus);
     window.addEventListener('blur', focus);
     document.addEventListener('visibilitychange', visibility);
     // Mount is called while Rust is installing the shell; enter it only after installation.
-    queueMicrotask(() => { update(); reduced(); focus(); visibility(); });
+    queueMicrotask(() => { update(); reduced(); contrast(); focus(); visibility(); });
     return () => {
         dprMedia?.removeEventListener('change', onDpr);
         window.visualViewport?.removeEventListener('resize', update);
         window.visualViewport?.removeEventListener('scroll', update);
         window.removeEventListener('resize', update);
         motion.removeEventListener('change', reduced);
+        forced.removeEventListener('change', contrast);
         window.removeEventListener('focus', focus);
         window.removeEventListener('blur', focus);
         document.removeEventListener('visibilitychange', visibility);

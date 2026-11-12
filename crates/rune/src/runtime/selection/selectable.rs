@@ -21,6 +21,8 @@ use std::ops::Range;
 /// Chromium on Windows and Linux doesn't.
 const SECONDARY_SELECTS_WORD: bool = cfg!(target_os = "macos");
 
+#[path = "copy_html.rs"]
+mod copy_html;
 #[path = "copy_join.rs"]
 mod copy_join;
 #[path = "edge_scroll.rs"]
@@ -695,7 +697,11 @@ impl<S: 'static> Runtime<S> {
         let path = self.end_path(h).to_owned();
         let Some(text) = self.copy_text() else { return false };
         log_event!(self, "copy {path}");
-        tx.copy(text);
+        // Its formatting too, as a browser copies a page's selection.
+        match self.copy_html() {
+            Some(html) => tx.copy_rich(crate::ClipboardContent::new(text).with_html(html)),
+            None => tx.copy(text),
+        }
         true
     }
 
@@ -716,6 +722,7 @@ impl<S: 'static> Runtime<S> {
             self.select_step(phase::Event::Select(phase::Selection::new(path.to_owned(), content, (a, b), (a, b))));
         }
         let text = self.copy_text();
+        let html = text.as_ref().and_then(|_| self.copy_html());
         let mut copy = crate::PopupItem::new("copy", crate::labels::label(crate::Label::Copy)).enabled(text.is_some());
         // The primary modifier, as the copy key handler takes it: ⌘C on macOS, Ctrl+C elsewhere.
         if let Ok(shortcut) = "mod+c".parse::<crate::Shortcut>() { copy = copy.key_equivalent(shortcut); }
@@ -724,7 +731,12 @@ impl<S: 'static> Runtime<S> {
             menu: crate::PopupMenu::new().item(copy),
             anchor: crate::PopupAnchor::Point(x, y),
             on_pick: Box::new(move |_, picked, tx| {
-                if picked == Some("copy") && let Some(text) = text { tx.copy(text); }
+                if picked == Some("copy") && let Some(text) = text {
+                    match html {
+                        Some(html) => tx.copy_rich(crate::ClipboardContent::new(text).with_html(html)),
+                        None => tx.copy(text),
+                    }
+                }
             }),
             field: None,
         });
