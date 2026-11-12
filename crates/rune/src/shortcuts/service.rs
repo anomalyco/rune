@@ -29,12 +29,20 @@ static NEXT_ID: AtomicU32 = AtomicU32::new(1);
 /// between two Apps can name its owner. Headless registrations stay out of it.
 static NATIVE: Mutex<Vec<(ShortcutId, Shortcut, &'static str)>> = Mutex::new(Vec::new());
 
+/// The Linux engine and the host that installed it. The wake travels with the engine, so a call
+/// that reaches the engine a newer host installed wakes that host, not the one it captured.
+#[cfg(target_os = "linux")]
+struct Slot {
+    engine: Arc<Mutex<Engine>>,
+    wake: Waker,
+}
+
 struct Control {
     #[cfg(not(target_os = "linux"))]
     key: usize,
     attachment: Mutex<Attachment<Job>>,
     #[cfg(target_os = "linux")]
-    engine: Mutex<Option<Arc<Mutex<Engine>>>>,
+    engine: Mutex<Option<Slot>>,
     /// How many hosts have attached; changed and read under the routing lock.
     hosts: AtomicU64,
 }
@@ -153,8 +161,15 @@ impl Control {
         if let Some(stamp) = stamp { stamp.store(self.hosts.load(Ordering::Relaxed), Ordering::Relaxed); }
         #[cfg(target_os = "linux")]
         {
-            let Some(AttachEffect::Run { wake }) = effect else { return Err(ShortcutError::NotRunning) };
-            let shared = self.engine.lock().unwrap().clone().ok_or(ShortcutError::NotRunning)?;
+            let Some(AttachEffect::Run { .. }) = effect else { return Err(ShortcutError::NotRunning) };
+            // differs from dev: the wake belongs to the engine's slot, not to routing. A host
+            // can install its engine before it takes routing, so the caller below may reach a
+            // newer engine than the one routing still names.
+            let (shared, wake) = {
+                let slot = self.engine.lock().unwrap();
+                let slot = slot.as_ref().ok_or(ShortcutError::NotRunning)?;
+                (slot.engine.clone(), slot.wake.clone())
+            };
             // Acquire the engine before releasing routing, so shutdown cannot race a new call.
             let mut engine = shared.lock().unwrap();
             drop(route);
@@ -271,7 +286,7 @@ impl Guard {
         ENGINES.with(|engines| engines.borrow_mut().insert(control.key, Rc::new(RefCell::new(engine))));
         // A replaced engine closes with the slot locked, so callers wait until its chords are free.
         #[cfg(target_os = "linux")]
-        { *control.engine.lock().unwrap() = Some(Arc::new(Mutex::new(engine))); }
+        { *control.engine.lock().unwrap() = Some(Slot { engine: Arc::new(Mutex::new(engine)), wake: wake.clone() }); }
         {
             let mut route = control.attachment.lock().unwrap();
             control.hosts.fetch_add(1, Ordering::Relaxed);
@@ -315,10 +330,10 @@ impl Drop for Guard {
         // The slot stays locked through the release, so a new host can't start while this one's
         // backend still holds its chords.
         #[cfg(target_os = "linux")]
-        if let Some(engine) = self.control.engine.lock().unwrap().take() {
+        if let Some(slot) = self.control.engine.lock().unwrap().take() {
             // A host that attached since installed this engine first, so it ends with this close.
             ended = self.control.hosts.load(Ordering::Relaxed);
-            engine.lock().unwrap().release();
+            slot.engine.lock().unwrap().release();
         }
         if let Some(cleanup) = self.cleanup.take() { cleanup(ended); }
     }
@@ -468,5 +483,39 @@ mod tests {
         drop(app);
         drop(guard);
         assert!(weak.upgrade().is_none(), "handler captures must be released at host shutdown");
+    }
+
+    /// Whether a backend saw its chord still claimed as it was dropped.
+    static RETIRED_WITH_CLAIM: Mutex<Vec<bool>> = Mutex::new(Vec::new());
+    const GRAB_CHORD: &str = "ctrl+alt+shift+f11";
+
+    struct Grab;
+
+    impl Backend for Grab {
+        fn register(&mut self, _: ShortcutId, _: &Shortcut) -> Result<(), ShortcutError> { Ok(()) }
+        fn unregister(&mut self, _: ShortcutId) -> Result<(), ShortcutError> { Ok(()) }
+    }
+
+    // A desktop grab stands until the backend is gone, so the claim that names it must stand too.
+    impl Drop for Grab {
+        fn drop(&mut self) {
+            let held = NATIVE.lock().unwrap().iter().any(|(.., s, _)| *s == GRAB_CHORD.parse::<Shortcut>().unwrap());
+            RETIRED_WITH_CLAIM.lock().unwrap().push(held);
+        }
+    }
+
+    fn grab(_: bool, _: Sink) -> Result<NativeBackend, ShortcutError> { Ok(Box::new(Grab)) }
+
+    #[test]
+    fn a_backend_retires_before_its_chord_stops_naming_an_owner() {
+        RETIRED_WITH_CLAIM.lock().unwrap().clear();
+        let shortcut = GRAB_CHORD.parse::<Shortcut>().unwrap();
+        let mut engine = Engine { title: "Grab", wayland: false, sink: Arc::new(|_, _| {}), connect: grab, bindings: Bindings::Disconnected };
+        let id = ShortcutId(0x7000_0001);
+        engine.register(id, shortcut.clone()).unwrap();
+        engine.unregister(id).unwrap();
+        assert!(engine.bindings.find(&shortcut).is_none(), "the registration went");
+        assert!(!NATIVE.lock().unwrap().iter().any(|(.., s, _)| *s == shortcut), "the claim went with the registration");
+        assert_eq!(*RETIRED_WITH_CLAIM.lock().unwrap(), vec![true], "the backend saw its chord still claimed while it was alive");
     }
 }

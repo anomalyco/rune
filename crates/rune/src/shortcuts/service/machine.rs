@@ -171,8 +171,11 @@ pub(super) fn step_bindings<N>(state: &mut Bindings<N>, event: BindEvent<N>) -> 
         BindEvent::Unbound(id) => {
             let Bindings::Connected { registrations, .. } = state else { return Effects::none() };
             registrations.remove(&id);
-            let mut effects = Effects::one(BindEffect::Disclaim(id));
+            // differs from dev: the backend retires before its claim goes, so no App can take the
+            // chord while this one's native grab is still live.
+            let mut effects = Effects::none();
             effects.extend(disconnect_if_empty(state));
+            effects.push(BindEffect::Disclaim(id));
             effects
         }
         BindEvent::Release => match state {

@@ -290,6 +290,38 @@ fn wait_until(ready: impl Fn() -> bool) {
 }
 
 #[test]
+fn a_call_that_reaches_the_new_engine_wakes_its_host() {
+    use std::sync::atomic::AtomicUsize;
+    static FIRST_WAKES: AtomicUsize = AtomicUsize::new(0);
+    static SECOND_WAKES: AtomicUsize = AtomicUsize::new(0);
+    let app = app("Rerouted");
+    let handle = app.handle();
+    let chord: Shortcut = "ctrl+alt+shift+f12".parse().unwrap();
+    let control = app.shared.shortcuts.control.clone();
+    let guard = Guard::attach_with(&app.shared, Arc::new(|| { FIRST_WAKES.fetch_add(1, Ordering::Relaxed); }), false, false, connect_exclusive);
+
+    // A second host installs its engine, as `attach` does before it takes routing, and its own
+    // wake. Routing still names the first host until that attach finishes.
+    let engine = Engine { title: "Rerouted", wayland: false, sink: Arc::new(|_, _| {}), connect: connect_exclusive, bindings: Bindings::Disconnected };
+    let second = Arc::new(Mutex::new(engine));
+    *control.engine.lock().unwrap() = Some(Slot { engine: second.clone(), wake: Arc::new(|| { SECOND_WAKES.fetch_add(1, Ordering::Relaxed); }) });
+    let wakes_before = FIRST_WAKES.load(Ordering::Relaxed);
+
+    // The call parks on the new engine, so the test knows it reached it before it wakes anyone.
+    let locked = second.lock().unwrap();
+    let caller = { let handle = handle.clone(); std::thread::spawn(move || handle.register_shortcut(chord, |_, _| {})) };
+    wait_until(|| Arc::strong_count(&second) == 3);
+    drop(locked);
+    let answer = caller.join().unwrap();
+
+    assert!(answer.is_ok(), "{answer:?}");
+    assert_eq!(FIRST_WAKES.load(Ordering::Relaxed), wakes_before, "the host whose routing the call captured is not woken");
+    assert_eq!(SECOND_WAKES.load(Ordering::Relaxed), 1, "the host whose engine ran the call is woken");
+    drop(guard);
+    drop(second);
+}
+
+#[test]
 fn a_call_parked_on_a_replaced_engine_still_runs_on_it_and_wakes_its_host() {
     use std::sync::atomic::AtomicUsize;
     static FIRST_WAKES: AtomicUsize = AtomicUsize::new(0);
@@ -303,7 +335,7 @@ fn a_call_parked_on_a_replaced_engine_still_runs_on_it_and_wakes_its_host() {
     let control = app.shared.shortcuts.control.clone();
 
     // Holding the engine's lock parks the call on it. Its own clone of the Arc shows it got there.
-    let old = control.engine.lock().unwrap().clone().unwrap();
+    let old = control.engine.lock().unwrap().as_ref().map(|slot| slot.engine.clone()).unwrap();
     let locked = old.lock().unwrap();
     let caller = { let handle = handle.clone(); std::thread::spawn(move || handle.unregister_shortcut(id)) };
     wait_until(|| Arc::strong_count(&old) == 3);
@@ -317,7 +349,7 @@ fn a_call_parked_on_a_replaced_engine_still_runs_on_it_and_wakes_its_host() {
             drop(guard);
         })
     };
-    wait_until(|| control.engine.try_lock().is_ok_and(|slot| slot.as_ref().is_some_and(|current| !Arc::ptr_eq(current, &old))));
+    wait_until(|| control.engine.try_lock().is_ok_and(|slot| slot.as_ref().is_some_and(|current| !Arc::ptr_eq(&current.engine, &old))));
     drop(locked);
 
     let answer = caller.join().unwrap();

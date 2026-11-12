@@ -381,8 +381,8 @@ enum Note {
     Connect { wayland: bool },
     Register(u32),
     Unregister(u32),
-    /// A backend closed while this many claims stood.
-    Closed(usize),
+    /// A backend closed while these claims stood.
+    Closed(Vec<u32>),
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -411,7 +411,8 @@ impl Backend for Scripted {
 
 impl Drop for Scripted {
     fn drop(&mut self) {
-        let standing = claims(if self.0 == Side::Old { &OLD_NATIVE } else { &NATIVE }).len();
+        let mut standing: Vec<u32> = claims(if self.0 == Side::Old { &OLD_NATIVE } else { &NATIVE }).into_iter().map(|(id, _)| id).collect();
+        standing.sort();
         RIG.with(|rig| rig.borrow_mut().note(self.0, Note::Closed(standing)));
     }
 }
@@ -461,6 +462,24 @@ fn new_view(engine: &Engine) -> EngineView {
     }
 }
 
+/// The backend notes in order. The one approved difference: a native now closes before its last
+/// claim goes. Returns whether the departure was seen.
+fn assert_notes(old: &[Note], new: &[Note], at: &str) -> bool {
+    assert_eq!(new.len(), old.len(), "{at}");
+    let mut departed = false;
+    for (n, (new, old)) in new.iter().zip(old).enumerate() {
+        // differs from dev: a closing backend still holds the claim of the chord it retired for.
+        if let (Note::Closed(new), Note::Closed(old)) = (new, old) {
+            assert!(new == old || (new.len() == old.len() + 1 && old.iter().all(|id| new.contains(id))),
+                "{at} note {n}: expected dev's claims, or exactly one more for the retired chord: {new:?} vs {old:?}");
+            departed |= new != old;
+            continue;
+        }
+        assert_eq!(new, old, "{at} note {n}");
+    }
+    departed
+}
+
 /// Runs `body` against both engines' results with one script, then clears the script.
 fn scripted<T>(connect: Result<(), ShortcutError>, register: Result<(), ShortcutError>, unregister: Result<(), ShortcutError>, body: impl FnOnce() -> T) -> T {
     RIG.with(|rig| { let mut rig = rig.borrow_mut(); rig.connect = connect; rig.register = register; rig.unregister = unregister; });
@@ -471,13 +490,14 @@ fn scripted<T>(connect: Result<(), ShortcutError>, register: Result<(), Shortcut
 
 const BASE_ID: u32 = 0x4000_0000;
 
-fn run_engines(start: Start, sequence: &[usize]) {
+fn run_engines(start: Start, sequence: &[usize]) -> bool {
     let (mut old, mut new) = (old_engine("Subject", start), new_engine("Subject", start));
     let (mut old_other, mut new_other) = (old_engine("Other", Start::NoBackend), new_engine("Other", Start::NoBackend));
     let [x, y] = &*CHORDS;
     let (mut next, mut held_x, mut held_y) = (BASE_ID, ShortcutId(BASE_ID - 1), ShortcutId(BASE_ID - 2));
     let denied = || Err(ShortcutError::PermissionDenied);
     let broken = || Err(ShortcutError::Backend("refused".into()));
+    let mut departed = false;
     for (n, letter) in sequence.iter().enumerate() {
         next += 1;
         let id = ShortcutId(next);
@@ -506,23 +526,26 @@ fn run_engines(start: Start, sequence: &[usize]) {
             assert_eq!(new.owner(chord), old.owner(chord), "{}", at());
             assert_eq!(new.bindings.find(chord).is_some(), old.registrations.values().any(|s| s == chord), "{}", at());
         }
-        RIG.with(|rig| { let rig = rig.borrow(); assert_eq!(rig.new, rig.old, "{}", at()); });
+        RIG.with(|rig| { let rig = rig.borrow(); departed |= assert_notes(&rig.old, &rig.new, &at()); });
     }
     drop(old); drop(new); drop(old_other); drop(new_other);
     assert!(claims(&NATIVE).is_empty() && claims(&OLD_NATIVE).is_empty(), "{start:?} {sequence:?}");
     RIG.with(|rig| {
         let mut rig = rig.borrow_mut();
-        assert_eq!(rig.new, rig.old, "teardown of {start:?} {sequence:?}");
+        departed |= assert_notes(&rig.old, &rig.new, &format!("teardown of {start:?} {sequence:?}"));
         rig.new.clear();
         rig.old.clear();
     });
+    departed
 }
 
 #[test]
 fn every_engine_sequence_matches_the_old_engine() {
+    let mut departed = false;
     for start in [Start::Headless, Start::NoBackend, Start::EmptyBackend] {
-        every_sequence(10, 5, |sequence| run_engines(start, sequence));
+        every_sequence(10, 5, |sequence| departed |= run_engines(start, sequence));
     }
+    assert!(departed, "the walk never saw the backend retire before its claim went");
 }
 
 #[test]
@@ -541,11 +564,12 @@ fn no_backend_connects_while_an_empty_backend_binds() {
 }
 
 #[test]
-fn the_last_unregistration_disclaims_before_closing_and_release_closes_first() {
+fn the_last_unregistration_closes_before_disclaiming_and_release_closes_first() {
     let (id, shortcut) = (ShortcutId(1), chord("ctrl+alt+shift+f22"));
     let mut state = Bindings::Connected { native: (), registrations: HashMap::from([(id, shortcut.clone())]) };
     let effects: Vec<_> = step_bindings(&mut state, BindEvent::Unbound(id)).into_iter().collect();
-    assert!(matches!(effects.as_slice(), [BindEffect::Disclaim(_), BindEffect::Disconnect(())]));
+    // differs from dev: the native goes first, so the claim outlives the grab it describes.
+    assert!(matches!(effects.as_slice(), [BindEffect::Disconnect(()), BindEffect::Disclaim(_)]));
 
     let mut state = Bindings::Connected { native: (), registrations: HashMap::from([(id, shortcut)]) };
     let effects: Vec<_> = step_bindings(&mut state, BindEvent::Release).into_iter().collect();
@@ -625,12 +649,14 @@ struct Stage<E> {
     pending: Option<usize>,
     next: u32,
     latest: Option<u32>,
+    /// The first registration this host made, which a successor never sees again.
+    first: Option<u32>,
     broken: Vec<&'static str>,
 }
 
 impl<E: OverlapEngine> Stage<E> {
     fn new() -> Self {
-        Self { attached: false, open: [false; 2], slot: None, handlers: BTreeSet::new(), in_wake: false, held: None, inside: None, waiting: None, pending: None, next: OVERLAP_ID, latest: None, broken: vec![] }
+        Self { attached: false, open: [false; 2], slot: None, handlers: BTreeSet::new(), in_wake: false, held: None, inside: None, waiting: None, pending: None, next: OVERLAP_ID, latest: None, first: None, broken: vec![] }
     }
 
     fn slot_held(&self) -> Vec<u32> { self.slot.as_ref().map_or_else(Vec::new, |engine| engine.borrow().held()) }
@@ -653,7 +679,7 @@ impl<E: OverlapEngine> Stage<E> {
         };
         drop(engine);
         match (waiter, &answer) {
-            (Waiter::Register(id), Ok(())) => self.latest = Some(id),
+            (Waiter::Register(id), Ok(())) => { self.latest = Some(id); self.first.get_or_insert(id); }
             (Waiter::Register(id), Err(error)) => {
                 self.handlers.remove(&id);
                 if *error == ShortcutError::Conflict && on_slot && self.slot_held().is_empty() && self.inside.is_none() { self.broken.push(STALE_CONFLICT); }
@@ -685,6 +711,12 @@ impl<E: OverlapEngine> Stage<E> {
 
     fn unregister(&mut self) -> Seen {
         let (Some(id), None) = (self.latest, &self.waiting) else { return Seen::Skipped };
+        self.call(Waiter::Unregister(id))
+    }
+
+    /// Unregisters the first chord this host registered, which the successor no longer has.
+    fn unregister_first(&mut self) -> Seen {
+        let (Some(id), None) = (self.first, &self.waiting) else { return Seen::Skipped };
         self.call(Waiter::Unregister(id))
     }
 
@@ -761,7 +793,7 @@ impl Overlap for NewOverlap {
 
 /// Letters: 0, 1 attach a host; 2, 3 close one; 4 register the chord; 5 unregister the latest;
 /// 6, 7 a call stops in its wake and goes; 8 a call stops inside the engine; 9 it leaves;
-/// 10 it leaves and the backend then refuses what was waiting.
+/// 10 it leaves and the backend then refuses what was waiting; 11 unregister the first chord.
 fn overlap_play(world: &mut impl Overlap, letter: usize) -> Seen {
     let stage = world.stage();
     let reachable = stage.attached && stage.slot.is_some();
@@ -780,11 +812,12 @@ fn overlap_play(world: &mut impl Overlap, letter: usize) -> Seen {
         8 => { stage.inside = stage.slot.clone(); Seen::Done }
         9 if stage.inside.is_none() => Seen::Skipped,
         9 => stage.leave(),
-        _ if stage.inside.is_none() || stage.waiting.is_none() => Seen::Skipped,
-        _ => {
+        10 if stage.inside.is_none() || stage.waiting.is_none() => Seen::Skipped,
+        10 => {
             let broken = || Err(ShortcutError::Backend("refused".into()));
             scripted(Ok(()), broken(), broken(), || stage.leave())
         }
+        _ => stage.unregister_first(),
     }
 }
 
@@ -798,13 +831,16 @@ fn overlap_check(world: &mut impl Overlap) {
     if claims.iter().any(|id| !alive.contains(id)) { stage.broken.push(OWNER_WITHOUT_GRAB); }
 }
 
-type OverlapView = (Seen, bool, [bool; 2], Vec<u32>, Vec<u32>, Vec<u32>);
+type OverlapView = (Seen, bool, [bool; 2], Vec<u32>, Vec<u32>, Vec<u32>, Vec<u32>);
 
 fn overlap_view(world: &impl Overlap, seen: Seen) -> OverlapView {
     let stage = world.stage_ref();
     let mut live = stage.slot_held();
     live.sort();
-    (seen, stage.attached, stage.open, stage.handlers.iter().copied().collect(), world.claims(), live)
+    // Claims only an engine that a call in its wake alone keeps still holds.
+    let mut wake: Vec<u32> = stage.held.iter().filter(|held| !stage.slot.as_ref().is_some_and(|slot| Rc::ptr_eq(slot, held))).flat_map(|held| held.borrow().held()).collect();
+    wake.sort();
+    (seen, stage.attached, stage.open, stage.handlers.iter().copied().collect(), world.claims(), live, wake)
 }
 
 fn clear_notes() { RIG.with(|rig| { let mut rig = rig.borrow_mut(); rig.new.clear(); rig.old.clear(); }); }
@@ -824,13 +860,64 @@ fn overlap_dev_trace(sequence: &[usize], found: &mut BTreeSet<&'static str>) -> 
     trace
 }
 
+/// The departure the marked reference shows against dev, or None when they agree. Every event is
+/// checked, so a later event that differs for another reason still fails the walk. differs from
+/// dev: a call lets go of its engine before its wake, so dev alone still holds the claims of an
+/// engine nothing but that call keeps, and every registration those claims refused.
+fn approved_difference(dev: &OverlapView, want: &OverlapView, target: Option<u32>, departed: &mut BTreeSet<u32>, sequence: &[usize], n: usize) -> Option<&'static str> {
+    if dev == want { return None; }
+    let at = format!("{sequence:?} at {n}\ndev {dev:?}\nwant {want:?}");
+    assert_eq!((want.1, want.2), (dev.1, dev.2), "the hosts agree: {at}");
+    let answer = |view: &OverlapView| match &view.0 { Seen::Answer(answer) => Some(answer.clone()), _ => None };
+    let (before, after) = (answer(dev), answer(want));
+    let mut allowed: BTreeSet<u32> = departed.iter().copied().chain(dev.6.iter().copied()).collect();
+    if before != after {
+        let succeeded = matches!((&before, &after), (Some(Err(ShortcutError::Conflict | ShortcutError::UnknownId)), Some(Ok(()))));
+        let backend = matches!((&before, &after), (Some(Err(ShortcutError::Conflict)), Some(Err(ShortcutError::Backend(_)))));
+        // differs from dev: the chord dev refused while its replaced engine still held it is
+        // registered here, so the successor's own duplicate check refuses the one dev took.
+        let occupied = matches!((&before, &after), (Some(Ok(())), Some(Err(ShortcutError::Conflict))));
+        if occupied {
+            let gained: Vec<u32> = want.5.iter().copied().filter(|id| !dev.5.contains(id)).collect();
+            assert!(!gained.is_empty() && gained.iter().all(|id| departed.contains(id)),
+                "a registration was refused with no approved registration holding the chord in {at}");
+            if let Some(id) = target { allowed.insert(id); }
+        }
+        assert!(succeeded || backend || occupied, "an answer changed for another reason: {before:?} -> {after:?} in {at}");
+        if succeeded {
+            departed.insert(target.expect("a call that succeeded where dev refused has an id"));
+        }
+    }
+    let aside = |dev: &[u32], want: &[u32]| {
+        let lost: Vec<u32> = dev.iter().copied().filter(|id| !want.contains(id)).collect();
+        let gained: Vec<u32> = want.iter().copied().filter(|id| !dev.contains(id)).collect();
+        (lost, gained)
+    };
+    let (lost, gained) = aside(&dev.4, &want.4);
+    assert!(lost.iter().all(|id| allowed.contains(id)), "a claim went for another reason in {at}");
+    assert!(gained.iter().all(|id| departed.contains(id)), "a claim appeared for another reason in {at}");
+    for (lost, gained) in [aside(&dev.3, &want.3), aside(&dev.5, &want.5)] {
+        assert!(lost.iter().all(|id| allowed.contains(id)), "a handler or engine entry went for another reason in {at}");
+        assert!(gained.iter().all(|id| departed.contains(id)), "a handler or engine entry appeared for another reason in {at}");
+    }
+    Some(WAKE_LETS_GO)
+}
+
 /// Replays `sequence`. Returns whether its last letter did anything.
 fn overlap_replay(sequence: &[usize], found: &mut BTreeSet<&'static str>, fired: &mut BTreeSet<&'static str>) -> bool {
     let dev = overlap_dev_trace(sequence, found);
     let mut reference = Reference { stage: Stage::new(), departures: true };
     let mut new = NewOverlap(Stage::new());
-    let (mut moved, mut departed) = (false, false);
+    let (mut moved, mut departed) = (false, BTreeSet::new());
     for (n, letter) in sequence.iter().enumerate() {
+        assert_eq!(new.0.next, reference.stage.next, "{sequence:?} at {n}");
+        let target = match letter {
+            4 => Some(new.0.next + 1),
+            5 => new.0.latest,
+            9 | 10 => new.0.waiting.as_ref().map(|(_, waiter)| match waiter { Waiter::Register(id) | Waiter::Unregister(id) => *id }),
+            11 => new.0.first,
+            _ => None,
+        };
         let expected = overlap_play(&mut reference, *letter);
         let actual = overlap_play(&mut new, *letter);
         moved = actual != Seen::Skipped;
@@ -838,15 +925,8 @@ fn overlap_replay(sequence: &[usize], found: &mut BTreeSet<&'static str>, fired:
         assert!(new.0.broken.is_empty(), "{:?}: {sequence:?} at {n}", new.0.broken);
         let want = overlap_view(&reference, expected);
         assert_eq!(overlap_view(&new, actual), want, "{sequence:?} at {n}");
-        if !departed && want != dev[n] {
-            // differs from dev: the first difference is only ever dev keeping claims for an
-            // engine that nothing but a call in its wake holds.
-            let (seen, attached, open, handlers, claims, live) = &dev[n];
-            assert_eq!((seen, attached, open, handlers, live), (&want.0, &want.1, &want.2, &want.3, &want.5), "{sequence:?} at {n}");
-            assert!(want.4.iter().all(|id| claims.contains(id)) && claims.len() > want.4.len(), "{sequence:?} at {n}");
-            assert!(sequence[..=n].contains(&6), "{sequence:?} at {n}");
-            departed = true;
-            fired.insert(WAKE_LETS_GO);
+        if let Some(departure) = approved_difference(&dev[n], &want, target, &mut departed, sequence, n) {
+            fired.insert(departure);
         }
     }
     drop(reference);
@@ -857,28 +937,51 @@ fn overlap_replay(sequence: &[usize], found: &mut BTreeSet<&'static str>, fired:
 }
 
 fn overlap_walk(sequence: &mut Vec<usize>, depth: usize, found: &mut BTreeSet<&'static str>, fired: &mut BTreeSet<&'static str>) {
-    for letter in 0..11 {
+    for letter in 0..12 {
         sequence.push(letter);
         if overlap_replay(sequence, found, fired) && sequence.len() < depth { overlap_walk(sequence, depth, found, fired); }
         sequence.pop();
     }
 }
 
+/// The walks and their focused scripts share the process claim lists and the ids they use.
+static CLAIMS: Mutex<()> = Mutex::new(());
+
 #[test]
 fn an_attach_waits_for_a_call_parked_on_routing() {
+    let _claims = CLAIMS.lock().unwrap_or_else(|error| error.into_inner());
     let mut dev = Reference { stage: Stage::new(), departures: false };
     let mut new = NewOverlap(Stage::new());
     // Attach A, a call stops inside A's engine, a registration parks behind it, B attaches, the
     // call inside leaves.
     let script = [(0, Seen::Done), (8, Seen::Done), (4, Seen::Parked), (1, Seen::Parked), (9, Seen::Answer(Ok(())))];
     for (n, (letter, expected)) in script.into_iter().enumerate() {
-        assert_eq!(overlap_play(&mut dev, letter), expected, "dev, event {n}");
-        assert_eq!(overlap_play(&mut new, letter), expected, "new, event {n}");
-        let hosts = (dev.stage.attached, dev.stage.open);
-        assert_eq!((new.0.attached, new.0.open), hosts, "event {n}");
-        if n == 3 { assert_eq!(hosts, (true, [true, false]), "B's attach can't finish while the parked call holds routing"); }
+        let (dev_seen, new_seen) = (overlap_play(&mut dev, letter), overlap_play(&mut new, letter));
+        assert_eq!((&dev_seen, &new_seen), (&expected, &expected), "event {n}");
+        assert_eq!(overlap_view(&new, new_seen), overlap_view(&dev, dev_seen), "event {n}");
+        if n == 3 { assert_eq!((dev.stage.attached, dev.stage.open), (true, [true, false]), "B waits while the parked call holds routing"); }
     }
-    assert_eq!((dev.stage.attached, dev.stage.open), (true, [true, true]), "B attaches once the call lets go of routing");
+    // The parked call ran on A's engine, which still holds the chord, and then B took over.
+    assert_eq!((dev.stage.attached, dev.stage.open), (true, [true, true]), "B takes over once the call lets go of routing");
+    drop(dev);
+    drop(new);
+    clear_notes();
+}
+
+#[test]
+fn a_parked_unregister_finishes_on_the_engine_it_captured_and_the_successor_forgets_it() {
+    let _claims = CLAIMS.lock().unwrap_or_else(|error| error.into_inner());
+    let mut dev = Reference { stage: Stage::new(), departures: false };
+    let mut new = NewOverlap(Stage::new());
+    // The parked unregister answers Ok on the engine that captured the chord; B never had it.
+    let script = [(0, Seen::Done), (4, Seen::Answer(Ok(()))), (8, Seen::Done), (5, Seen::Parked), (1, Seen::Parked), (9, Seen::Answer(Ok(()))), (11, Seen::Answer(Err(ShortcutError::UnknownId)))];
+    for (n, (letter, expected)) in script.into_iter().enumerate() {
+        let (dev_seen, new_seen) = (overlap_play(&mut dev, letter), overlap_play(&mut new, letter));
+        assert_eq!((&dev_seen, &new_seen), (&expected, &expected), "event {n}");
+        assert_eq!(overlap_view(&new, new_seen), overlap_view(&dev, dev_seen), "event {n}");
+    }
+    assert_eq!(new.0.open, [true, true], "B attaches once the parked call lets go of routing");
+    assert!(new.0.handlers.is_empty(), "both hosts forgot the chord");
     drop(dev);
     drop(new);
     clear_notes();
@@ -886,6 +989,7 @@ fn an_attach_waits_for_a_call_parked_on_routing() {
 
 #[test]
 fn every_overlap_sequence_differs_from_dev_only_at_its_marked_departure() {
+    let _claims = CLAIMS.lock().unwrap_or_else(|error| error.into_inner());
     let (mut found, mut fired) = (BTreeSet::new(), BTreeSet::new());
     overlap_walk(&mut vec![], 7, &mut found, &mut fired);
     for invariant in [STALE_CLAIM, STALE_CONFLICT] {
