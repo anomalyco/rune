@@ -1,5 +1,88 @@
+diff --git a/src/analysis.rs b/src/analysis.rs
+index 7d871af..f67e709 100644
+--- a/src/analysis.rs
++++ b/src/analysis.rs
+@@ -150,6 +150,33 @@ impl AnalysisDataSources {
+     }
+ }
+ 
++/// The segmenters an [`Analyzer`] has made, kept for its next texts (Rune:
++/// vendor/parley_engine.patch). Making one looks up its rule data and, with `complex-scripts`,
++/// loads the dictionaries; they're `'static` and `Copy`, so a kept one is the same value a new
++/// one would be.
++#[derive(Default)]
++pub(crate) struct Segmenters {
++    line: Vec<(SegmenterKey, LineSegmenterBorrowed<'static>)>,
++    word: Option<WordSegmenterBorrowed<'static>>,
++}
++
++impl Segmenters {
++    fn line(&mut self, key: SegmenterKey) -> LineSegmenterBorrowed<'static> {
++        if let Some((_, segmenter)) = self.line.iter().find(|(k, _)| *k == key) {
++            return *segmenter;
++        }
++        let segmenter = AnalysisDataSources::new().line_segmenter(key);
++        self.line.push((key, segmenter));
++        segmenter
++    }
++
++    fn word(&mut self) -> WordSegmenterBorrowed<'static> {
++        *self
++            .word
++            .get_or_insert_with(|| AnalysisDataSources::new().word_segmenter())
++    }
++}
++
+ #[cfg(feature = "complex-scripts")]
+ #[inline(always)]
+ fn line_segmenter_impl(opt: LineBreakOptions<'_>) -> LineSegmenterBorrowed<'static> {
+@@ -558,8 +585,9 @@ pub(crate) fn analyze_text(
+     for (substring_index, (substring, segmenter_key, last)) in contiguous_substrings.enumerate() {
+         // Fast path for text with a single segmenter configuration.
+         if substring_index == 0 && last {
+-            let mut lb_iter = data_sources
+-                .line_segmenter(segmenter_key)
++            let mut lb_iter = analyzer
++                .segmenters
++                .line(segmenter_key)
+                 .segment_str(substring);
+ 
+             let _first = lb_iter.next();
+@@ -580,8 +608,9 @@ pub(crate) fn analyze_text(
+             break;
+         }
+ 
+-        let line_boundaries_iter = data_sources
+-            .line_segmenter(segmenter_key)
++        let line_boundaries_iter = analyzer
++            .segmenters
++            .line(segmenter_key)
+             .segment_str(substring);
+ 
+         let mut substring_chars = substring.chars();
+@@ -614,7 +643,7 @@ pub(crate) fn analyze_text(
+     }
+ 
+     // Collect boundary byte positions compactly
+-    let mut wb_iter = data_sources.word_segmenter().segment_str(text).peekable();
++    let mut wb_iter = analyzer.segmenters.word().segment_str(text).peekable();
+     let mut gb_iter = data_sources
+         .grapheme_segmenter()
+         .segment_str(text)
+diff --git a/src/analyzer.rs b/src/analyzer.rs
+index b9ae430..647dd76 100644
+--- a/src/analyzer.rs
++++ b/src/analyzer.rs
+@@ -15,6 +15,7 @@ use crate::analysis::{Analysis, analyze_text};
+ #[derive(Default)]
+ pub struct Analyzer {
+     pub(crate) bidi: BidiResolver,
++    pub(crate) segmenters: crate::analysis::Segmenters,
+ }
+ 
+ impl core::fmt::Debug for Analyzer {
 diff --git a/src/bidi.rs b/src/bidi.rs
-index 25aa622a..fd44780a 100644
+index 25aa622..fd44780 100644
 --- a/src/bidi.rs
 +++ b/src/bidi.rs
 @@ -142,7 +142,9 @@ impl BidiResolver {
@@ -13,3 +96,202 @@ index 25aa622a..fd44780a 100644
              } else {
                  break;
              }
+diff --git a/src/shape/cache.rs b/src/shape/cache.rs
+index cb8d3c5..530b919 100644
+--- a/src/shape/cache.rs
++++ b/src/shape/cache.rs
+@@ -92,6 +92,43 @@ impl<'a> From<ShapeInstanceKey<'a>> for ShapeInstanceId {
+     }
+ }
+ 
++/// A shaped run's font metrics: its font instance at a size (Rune: vendor/parley_engine.patch).
++pub(crate) struct RunMetricsId {
++    instance: ShapeInstanceId,
++    font_size: u32,
++}
++
++pub(crate) struct RunMetricsKey<'a> {
++    instance: ShapeInstanceKey<'a>,
++    font_size: f32,
++}
++
++impl<'a> RunMetricsKey<'a> {
++    pub(crate) const fn new(instance: ShapeInstanceKey<'a>, font_size: f32) -> Self {
++        Self {
++            instance,
++            font_size,
++        }
++    }
++}
++
++impl<'a> Equivalent<RunMetricsId> for RunMetricsKey<'a> {
++    #[inline(always)]
++    fn equivalent(&self, key: &RunMetricsId) -> bool {
++        self.font_size.to_bits() == key.font_size && self.instance.equivalent(&key.instance)
++    }
++}
++
++impl<'a> From<RunMetricsKey<'a>> for RunMetricsId {
++    #[inline(always)]
++    fn from(key: RunMetricsKey<'a>) -> Self {
++        Self {
++            instance: key.instance.into(),
++            font_size: key.font_size.to_bits(),
++        }
++    }
++}
++
+ pub(crate) struct ShapePlanId {
+     /// The font collection's blob ID.
+     font_blob_id: u64,
+diff --git a/src/shape/shaped_text.rs b/src/shape/shaped_text.rs
+index 63afadd..d73a222 100644
+--- a/src/shape/shaped_text.rs
++++ b/src/shape/shaped_text.rs
+@@ -78,6 +78,40 @@ impl FontMetrics {
+         font: &FontInstance,
+         font_size: f32,
+         variations: &[parlance::FontVariation],
++    ) -> Option<Self> {
++        // A style's metrics depend on its font instance, size and variations alone; a style
++        // table asks for the same few again in every layout (Rune: vendor/parley_engine.patch).
++        #[cfg(feature = "std")]
++        {
++            type Memo = Vec<(u64, u32, fontique::Synthesis, u32, Vec<parlance::FontVariation>, Option<FontMetrics>)>;
++            std::thread_local! {
++                static MEMO: core::cell::RefCell<Memo> = const { core::cell::RefCell::new(Vec::new()) };
++            }
++            let (id, index, size) = (font.font.data.id(), font.font.index, font_size.to_bits());
++            let found = MEMO.with_borrow(|memo| {
++                memo.iter()
++                    .find(|m| m.0 == id && m.1 == index && m.2 == font.synthesis && m.3 == size && m.4 == variations)
++                    .map(|m| m.5)
++            });
++            if let Some(metrics) = found {
++                return metrics;
++            }
++            let metrics = Self::compute_from_font_instance(font, font_size, variations);
++            MEMO.with_borrow_mut(|memo| {
++                if memo.len() >= 64 {
++                    memo.remove(0);
++                }
++                memo.push((id, index, font.synthesis, size, variations.to_vec(), metrics));
++            });
++            return metrics;
++        }
++        Self::compute_from_font_instance(font, font_size, variations)
++    }
++
++    fn compute_from_font_instance(
++        font: &FontInstance,
++        font_size: f32,
++        variations: &[parlance::FontVariation],
+     ) -> Option<Self> {
+         let font_ref =
+             skrifa::FontRef::from_index(font.font.data.as_ref(), font.font.index).ok()?;
+@@ -102,7 +136,7 @@ impl FontMetrics {
+         ))
+     }
+ 
+-    fn from_skrifa_metrics(metrics: &skrifa::metrics::Metrics, font_size: f32) -> Self {
++    pub(crate) fn from_skrifa_metrics(metrics: &skrifa::metrics::Metrics, font_size: f32) -> Self {
+         // Default values from HarfBuzz: https://github.com/harfbuzz/harfbuzz/blob/12ee77ee00514c442bcd28f9aa9d56b708c37382/src/hb-ot-metrics.cc#L355-L372
+         let fallback_decoration_size = font_size / 18.0;
+ 
+@@ -273,6 +307,7 @@ impl ShapedText {
+         font: &FontInstance,
+         glyph_buffer: &harfrust::GlyphBuffer,
+         normalized_coords: &[harfrust::NormalizedCoord],
++        (font_metrics, units_per_em): (FontMetrics, f32),
+     ) {
+         debug_assert_eq!(
+             range.char_range.len(),
+@@ -302,19 +337,6 @@ impl ShapedText {
+                 index
+             });
+ 
+-        let metrics = {
+-            let font = &self.fonts[font_index];
+-            let font_ref =
+-                skrifa::FontRef::from_index(font.font.data.as_ref(), font.font.index).unwrap();
+-            skrifa::metrics::Metrics::new(
+-                &font_ref,
+-                skrifa::prelude::Size::new(options.font_size),
+-                normalized_coords,
+-            )
+-        };
+-        let units_per_em = metrics.units_per_em as f32;
+-        let font_metrics = FontMetrics::from_skrifa_metrics(&metrics, options.font_size);
+-
+         // `HarfRust` returns glyphs in visual order, so we need to process them as such while
+         // maintaining logical ordering of clusters.
+ 
+diff --git a/src/shape/shaper.rs b/src/shape/shaper.rs
+index f1ad855..187bea4 100644
+--- a/src/shape/shaper.rs
++++ b/src/shape/shaper.rs
+@@ -9,6 +9,7 @@ use harfrust::ShapeOptions as HarfShapeOptions;
+ use linebender_resource_handle::{Blob, FontData};
+ use parlance::{FontFeature, FontVariation, Language};
+ 
++use crate::shape::shaped_text::FontMetrics;
+ use crate::{
+     Analysis, CharInfo, ShapedText,
+     itemize::{Item, Segment, TextRange},
+@@ -88,6 +89,8 @@ pub struct Shaper {
+     shape_data_cache: LruCache<cache::ShapeDataKey, harfrust::ShaperData>,
+     shape_instance_cache: LruCache<cache::ShapeInstanceId, harfrust::ShaperInstance>,
+     shape_plan_cache: LruCache<cache::ShapePlanId, harfrust::ShapePlan>,
++    /// Each run's font metrics and units per em (Rune: vendor/parley_engine.patch).
++    run_metrics_cache: LruCache<cache::RunMetricsId, (FontMetrics, f32)>,
+     unicode_buffer: Option<harfrust::UnicodeBuffer>,
+     features: Vec<harfrust::Feature>,
+     char_cluster: CharCluster,
+@@ -100,6 +103,7 @@ impl Default for Shaper {
+             shape_data_cache: LruCache::new(MAX_ENTRIES),
+             shape_instance_cache: LruCache::new(MAX_ENTRIES),
+             shape_plan_cache: LruCache::new(MAX_ENTRIES),
++            run_metrics_cache: LruCache::new(MAX_ENTRIES),
+             unicode_buffer: Some(harfrust::UnicodeBuffer::new()),
+             features: Vec::new(),
+             char_cluster: CharCluster::default(),
+@@ -360,6 +364,31 @@ fn shape_segment(
+                 .point_size(Some(options.font_size)),
+         );
+ 
++        // A run's metrics depend on its font instance and size alone: made once for each.
++        let metrics = *scx.run_metrics_cache.entry(
++            cache::RunMetricsKey::new(
++                cache::ShapeInstanceKey::new(
++                    font.font.data.id(),
++                    font.font.index,
++                    &font.synthesis,
++                    Some(options.variations),
++                ),
++                options.font_size,
++            ),
++            || {
++                let font_ref =
++                    skrifa::FontRef::from_index(font.font.data.as_ref(), font.font.index).unwrap();
++                let metrics = skrifa::metrics::Metrics::new(
++                    &font_ref,
++                    skrifa::prelude::Size::new(options.font_size),
++                    harf_shaper.coords(),
++                );
++                (
++                    FontMetrics::from_skrifa_metrics(&metrics, options.font_size),
++                    metrics.units_per_em as f32,
++                )
++            },
++        );
+         shaped_text.push_run(
+             text,
+             range,
+@@ -370,6 +399,7 @@ fn shape_segment(
+             font,
+             &glyph_buffer,
+             harf_shaper.coords(),
++            metrics,
+         );
+ 
+         // Replace buffer to reuse allocation in the next run.

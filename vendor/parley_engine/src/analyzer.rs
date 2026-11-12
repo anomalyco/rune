@@ -15,6 +15,7 @@ use crate::analysis::{Analysis, analyze_text};
 #[derive(Default)]
 pub struct Analyzer {
     pub(crate) bidi: BidiResolver,
+    pub(crate) segmenters: crate::analysis::Segmenters,
 }
 
 impl core::fmt::Debug for Analyzer {

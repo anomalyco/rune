@@ -92,6 +92,43 @@ impl<'a> From<ShapeInstanceKey<'a>> for ShapeInstanceId {
     }
 }
 
+/// A shaped run's font metrics: its font instance at a size (Rune: vendor/parley_engine.patch).
+pub(crate) struct RunMetricsId {
+    instance: ShapeInstanceId,
+    font_size: u32,
+}
+
+pub(crate) struct RunMetricsKey<'a> {
+    instance: ShapeInstanceKey<'a>,
+    font_size: f32,
+}
+
+impl<'a> RunMetricsKey<'a> {
+    pub(crate) const fn new(instance: ShapeInstanceKey<'a>, font_size: f32) -> Self {
+        Self {
+            instance,
+            font_size,
+        }
+    }
+}
+
+impl<'a> Equivalent<RunMetricsId> for RunMetricsKey<'a> {
+    #[inline(always)]
+    fn equivalent(&self, key: &RunMetricsId) -> bool {
+        self.font_size.to_bits() == key.font_size && self.instance.equivalent(&key.instance)
+    }
+}
+
+impl<'a> From<RunMetricsKey<'a>> for RunMetricsId {
+    #[inline(always)]
+    fn from(key: RunMetricsKey<'a>) -> Self {
+        Self {
+            instance: key.instance.into(),
+            font_size: key.font_size.to_bits(),
+        }
+    }
+}
+
 pub(crate) struct ShapePlanId {
     /// The font collection's blob ID.
     font_blob_id: u64,
