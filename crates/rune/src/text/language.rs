@@ -30,6 +30,16 @@ pub fn set_language(tag: Option<&str>) {
     }
 }
 
+/// The interface language's tag (`set_language`), if one is set.
+pub(super) fn chosen_tag() -> Option<String> {
+    CHOSEN.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|l| l.to_string())
+}
+
+/// Changes with every new interface language.
+pub(super) fn epoch() -> u64 {
+    EPOCH.load(Ordering::Relaxed)
+}
+
 /// The language `text` shapes and falls back in: Japanese when it has kana, Korean when it has
 /// Hangul, Traditional Chinese when it has Bopomofo (each a script only that language writes),
 /// so its Han characters take that language's forms and font whatever the interface language,
