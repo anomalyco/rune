@@ -291,6 +291,9 @@ pub(crate) fn start<S: 'static>(mut spec: WindowSpec<S>, handle: Option<WindowHa
         inherited.frames = None;
     }
     let args = spec.app.resolve_args(inherited);
+    #[cfg(not(any(feature = "tooling", debug_assertions)))]
+    if args.headless() { crate::tooling::die(crate::tooling::WITHOUT_TOOLING); }
+    #[cfg(any(feature = "tooling", debug_assertions))]
     if args.headless() {
         if let Some((w, h)) = spec.options.physical_size {
             let scale = args.scale.unwrap_or(2.0);

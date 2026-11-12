@@ -85,6 +85,7 @@ impl TextSystem {
     }
 
     /// Whether families were chosen since this text system last followed them.
+    #[cfg_attr(not(any(feature = "tooling", debug_assertions)), allow(dead_code))]
     pub(crate) fn families_behind(&self) -> bool {
         CHOSEN.with_borrow(|(n, _)| *n != self.chosen)
     }

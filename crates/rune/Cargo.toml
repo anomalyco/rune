@@ -12,8 +12,14 @@ default = ["accessibility", "dbus", "embedded-fonts", "metal-backend", "ogg-audi
 embedded-fonts = []
 # Fall back to WebGL2 on wasm32 when WebGPU is unavailable.
 webgl = ["wgpu/webgl"]
+# Agent tooling in release builds: `--snap`, `--tree`, `--script`, `--trace`, `--strip`, `--video`,
+# `--html`, `--desktop` and the other headless runs `run` takes from the command line (README, "Agent
+# tooling"). Debug builds always have it. Off, a release app links only its window (examples/hello:
+# 3,480,576 B less), and a headless argument makes `run` fail saying so; `rune::tooling::headless_run`
+# and the test helpers work either way.
+tooling = []
 # Headless benchmark instrumentation; ordinary builds contain no phase clocks.
-frame-profile = ["dep:procwatch"]
+frame-profile = ["tooling", "dep:procwatch"]
 # A measuring build's heap dumps (procwatch's `alloc-sites`) also list the GPU device's allocations.
 alloc-sites = ["dep:procwatch", "procwatch/alloc-sites", "wgpu/counters"]
 # Native Open, Save and folder dialogs: rfd on macOS and Windows, the XDG desktop portal over zbus on Linux.

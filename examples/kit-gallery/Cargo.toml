@@ -6,7 +6,7 @@ license.workspace = true
 publish = false
 
 [dependencies]
-rune = { path = "../../crates/rune" }
+rune = { path = "../../crates/rune", features = ["tooling"] }
 rune-kit = { path = "../../crates/rune-kit", features = ["markdown", "mermaid"] }
 rune-theme-opencode = { path = "../../themes/opencode" }
 

@@ -17,7 +17,7 @@ name = "luau-bench"
 path = "src/bin/bench.rs"
 
 [dependencies]
-rune = { path = "../../crates/rune" }
+rune = { path = "../../crates/rune", features = ["tooling"] }
 serde = { version = "1", features = ["derive"] }
 rune-luau = { path = "../../crates/rune-luau", features = ["serde"] }
 

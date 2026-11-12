@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-rune = { path = "../../crates/rune" }
+rune = { path = "../../crates/rune", features = ["tooling"] }
 wgpu = { version = "30", default-features = false, features = ["std", "metal", "wgsl"] }
 serde_json = "1"
 

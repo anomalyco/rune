@@ -14,7 +14,8 @@ bytemuck = { version = "1.25", features = ["derive"] }
 wgpu = { version = "30", default-features = false, features = ["vulkan", "dx12"] }
 
 [dev-dependencies]
-rune = { path = "../rune" }
+# The examples' headless runs (`--snap`, `--trace`, ...) in release builds.
+rune = { path = "../rune", features = ["tooling"] }
 rune-fx = { path = "../rune-fx" }
 pollster = "1"
 # Live object counts for the bind group tests.

@@ -454,6 +454,14 @@ impl<S: 'static> ErasedWindow for Erased<S> {
     fn key(&self) -> &str { &self.spec.key }
     fn take_windows(&mut self) -> Vec<AnyWindowSpec> { std::mem::take(&mut self.spec.app.windows) }
     fn resolve_args(&mut self, inherited: crate::tooling::Args) -> crate::tooling::Args { self.spec.app.resolve_args(inherited) }
+    // A trait object's methods are all linked with it: without the `tooling` feature these
+    // bodies (never called then: `run` refuses a headless run first) keep headless rendering
+    // out of a release app.
+    #[cfg(not(any(feature = "tooling", debug_assertions)))]
+    fn headless(self: Box<Self>, _: crate::tooling::Args, _: f32) { unreachable!("{}", crate::tooling::WITHOUT_TOOLING) }
+    #[cfg(not(any(feature = "tooling", debug_assertions)))]
+    fn desktop(self: Box<Self>, _: &crate::tooling::Args, _: bool, _: f32) -> Box<dyn crate::desktop::Member> { unreachable!("{}", crate::tooling::WITHOUT_TOOLING) }
+    #[cfg(any(feature = "tooling", debug_assertions))]
     fn headless(self: Box<Self>, args: crate::tooling::Args, scale: f32) {
         let WindowSpec { mut app, options, .. } = self.spec;
         if let Some((w, h)) = options.physical_size { app.spec.size = (w as f32 / scale, h as f32 / scale); }
@@ -461,6 +469,7 @@ impl<S: 'static> ErasedWindow for Erased<S> {
         app.window_options = options;
         crate::tooling::headless_configured(app, args, transparent);
     }
+    #[cfg(any(feature = "tooling", debug_assertions))]
     fn desktop(self: Box<Self>, args: &crate::tooling::Args, selected: bool, scale: f32) -> Box<dyn crate::desktop::Member> {
         let Erased { spec, handle, secondary } = *self;
         Box::new(crate::desktop::Window::new(spec, handle, args, selected, !secondary, scale))
