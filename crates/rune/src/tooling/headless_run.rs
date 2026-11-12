@@ -113,6 +113,9 @@ pub enum ScriptEvent {
     /// `{"type": "key-up"}`: a logical key's release.
     KeyUp(KeyEvent),
     Paste(String),
+    /// `{"type": "ime", "preedit": ., "cursor": [a, b]}` or `{"type": "ime", "commit": .}`: what an input
+    /// method composes or commits, as the platform's IME hands it over.
+    Ime(crate::Ime),
     /// A paste with HTML or RTF beside the text (`{"paste": {"text": …, "html": …}}`).
     PasteContent(crate::ClipboardContent),
     /// A registered global shortcut chord. Only its handler runs; it never reaches `on_key`.

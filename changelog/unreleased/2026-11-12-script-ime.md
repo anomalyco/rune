@@ -1,0 +1,1 @@
+- **Scripts can type through an input method:** `{"type": "ime", "preedit": "にほ", "cursor": [6, 6]}` composes and `{"type": "ime", "commit": "日本"}` commits, as the platform's IME hands text to the focused field or `El::ime_cursor` caret, so headless runs can prove CJK, dead-key and dictation input without changing the machine's keyboard layout.
