@@ -63,6 +63,8 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         field.inputMode = coarse() ? 'none' : 'text';
         document.body.append(field);
     }
+    // The mirror's text is transparent over the canvas. `forced-color-adjust:none` keeps it so in
+    // Windows' contrast themes, which would otherwise paint it, on backplates, over what Rune drew.
     const a11y = document.createElement('div');
     a11y.setAttribute('data-rune-a11y', '');
     a11y.setAttribute('role', 'document');
@@ -76,17 +78,17 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         band.style.cssText = 'position:absolute;left:0;top:0;width:100%;height:0;overflow:hidden;overflow:clip;pointer-events:none;';
         canvas.replaceWith(band);
         band.append(canvas);
-        a11y.style.cssText = 'position:absolute;left:0;top:0;width:100%;height:0;overflow-x:clip;pointer-events:none;z-index:1;color:transparent;touch-action:pan-y pinch-zoom;';
+        a11y.style.cssText = 'position:absolute;left:0;top:0;width:100%;height:0;overflow-x:clip;pointer-events:none;z-index:1;color:transparent;forced-color-adjust:none;touch-action:pan-y pinch-zoom;';
         const style = document.createElement('style');
         style.textContent = PAGE_CSS;
         a11y.append(style);
         document.body.append(a11y);
     } else if (embedded && canvas.parentElement) {
         if (getComputedStyle(canvas.parentElement).position === 'static') canvas.parentElement.style.position = 'relative';
-        a11y.style.cssText = 'position:absolute;inset:0;overflow:hidden;pointer-events:none;z-index:1;color:transparent;';
+        a11y.style.cssText = 'position:absolute;inset:0;overflow:hidden;pointer-events:none;z-index:1;color:transparent;forced-color-adjust:none;';
         canvas.after(a11y);
     } else {
-        a11y.style.cssText = 'position:fixed;inset:0;overflow:hidden;pointer-events:none;z-index:1;color:transparent;';
+        a11y.style.cssText = 'position:fixed;inset:0;overflow:hidden;pointer-events:none;z-index:1;color:transparent;forced-color-adjust:none;';
         document.body.append(a11y);
     }
     const h = { canvas, textarea, password, a11y, a11yNodes: new Map(), field: textarea, key: '', base: 0, value: '',
@@ -186,6 +188,26 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
             event.clipboardData.setData('text/plain', h.copyText);
         }
     });
+    // A file dropped while a Rune field has the keyboard is pasted into it, as a page's field
+    // takes a drop: an image as a pasted image, text as text. Elsewhere a drop does nothing (the
+    // browser would open the file in place of the app).
+    listen(canvas, 'dragover', event => {
+        if (!event.dataTransfer?.types.includes('Files')) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = h.key ? 'copy' : 'none';
+    });
+    listen(canvas, 'drop', async event => {
+        const file = event.dataTransfer?.files?.[0];
+        if (!file) return;
+        event.preventDefault();
+        if (!h.key) return;
+        if (file.type === 'image/png') {
+            h.image = file;
+            send({ kind: 'paste', text: '', html: '', image: true });
+            return;
+        }
+        if (file.type.startsWith('text/') || file.size < 1048576 && !file.type) send({ kind: 'paste', text: await file.text(), html: '', image: false });
+    });
     listen(canvas, 'pointerdown', event => event.preventDefault(), { capture: true });
     listen(canvas, 'keydown', event => {
         if (page && !h.focused && SCROLL_KEYS.includes(event.key) && !event.metaKey && !event.ctrlKey) return;
@@ -216,6 +238,18 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         }, { passive: false });
         listen(document, 'gesturestart', event => event.preventDefault(), { passive: false });
     }
+    if (!page && !embedded) {
+        // Printing prints what's on screen (the canvas, and the mirror's text over it, which the
+        // PDF keeps selectable), fitted to the paper's width rather than cut off at its edge.
+        const style = document.createElement('style');
+        style.textContent = '@media print{canvas,[data-rune-a11y]{transform:scale(var(--rune-print-scale,1));transform-origin:0 0}}';
+        document.head.append(style);
+        listen(window, 'beforeprint', () => {
+            // An A4 or Letter page's printable width at the browser's default margins, in CSS pixels.
+            document.documentElement.style.setProperty('--rune-print-scale', String(Math.min(1, 718 / innerWidth)));
+        });
+        h.listeners.push(() => style.remove());
+    }
     if (!page) {
         // A web link takes the pointer while it's over it, as a page's would: the status bar
         // shows where it goes, and middle-click, Ctrl+click and its own menu open it.
@@ -231,11 +265,12 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
     }
     // Right-click: Rune draws an element's own menu; anywhere else the browser opens its own over
     // what a page would have there (the selection, a link, text, a text field), never the
-    // canvas's image menu. Armed before the menu's event, which on Windows and Linux follows the
-    // release; macOS's follows the press, which Rune has just heard (`syncSecondary`).
+    // canvas's image menu; Shift+right-click always opens the browser's. Armed before the menu's
+    // event, which on Windows and Linux follows the release; macOS's follows the press, which
+    // Rune has just heard (`syncSecondary`).
     const armAt = event => {
         if (event.button !== 2 || event.pointerType !== 'mouse' || event.target !== canvas) return;
-        if (armMenu(h, event.clientX, event.clientY)) send({ kind: 'secondary_browser' });
+        if (armMenu(h, event.clientX, event.clientY, event.shiftKey)) send({ kind: 'secondary_browser' });
     };
     if (/Mac|iP/.test(navigator.platform)) listen(canvas, 'pointerdown', armAt);
     else listen(window, 'pointerup', armAt, { capture: true });
@@ -336,9 +371,9 @@ function disarmLink(h) {
 
 // Readies the browser's own menu for a right-click at (x, y), unless Rune's takes it. True when
 // the browser's will open.
-function armMenu(h, x, y) {
+function armMenu(h, x, y, browser) {
     disarmMenu(h);
-    const claim = h.secondary;
+    const claim = h.secondary === 'app' && browser ? 'text' : h.secondary;
     h.secondary = '';
     if (claim === 'app') { h.menu = 'rune'; return false; }
     h.menu = 'browser';
@@ -362,7 +397,7 @@ function armMenu(h, x, y) {
             document.body.append(h.pick);
         }
         h.pick.textContent = h.copyText;
-        h.pick.style.cssText = `position:fixed;left:${x - 4}px;top:${y - 4}px;width:8px;height:8px;overflow:hidden;white-space:pre;color:transparent;z-index:2;user-select:text;-webkit-user-select:text;`;
+        h.pick.style.cssText = `position:fixed;left:${x - 4}px;top:${y - 4}px;width:8px;height:8px;overflow:hidden;white-space:pre;color:transparent;forced-color-adjust:none;z-index:2;user-select:text;-webkit-user-select:text;`;
         const range = document.createRange();
         range.selectNodeContents(h.pick);
         const selection = getSelection();
