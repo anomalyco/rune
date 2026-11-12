@@ -1,0 +1,58 @@
+diff --git a/src/node.rs b/src/node.rs
+index f4a97e30..a63a2772 100644
+--- a/src/node.rs
++++ b/src/node.rs
+@@ -732,6 +732,41 @@ impl NodeWrapper<'_> {
+         self.node.is_dialog()
+     }
+ 
++    // Rune (vendor/accesskit_windows.patch): headings and landmarks as UIA reports them, which
++    // Narrator's and NVDA's heading and landmark navigation read, as Chromium maps ARIA's.
++    fn heading_level(&self) -> Option<i32> {
++        if self.node.role() != Role::Heading {
++            return None;
++        }
++        // ARIA's default heading level is 2.
++        let level = self.node.level().map_or(2, |l| l + 1).clamp(1, 9) as i32;
++        Some(HeadingLevel1.0 + level - 1)
++    }
++
++    fn landmark_type(&self) -> Option<i32> {
++        let id = match self.node.role() {
++            Role::Main => UIA_MainLandmarkTypeId,
++            Role::Navigation => UIA_NavigationLandmarkTypeId,
++            Role::Search => UIA_SearchLandmarkTypeId,
++            Role::Form if self.node.label().is_some() => UIA_FormLandmarkTypeId,
++            Role::Banner | Role::Header | Role::Complementary | Role::ContentInfo | Role::Footer => UIA_CustomLandmarkTypeId,
++            Role::Region if self.node.label().is_some() => UIA_CustomLandmarkTypeId,
++            _ => return None,
++        };
++        Some(id.0)
++    }
++
++    fn localized_landmark_type(&mut self) -> Option<StrWrapper<'_>> {
++        let name = match self.node.role() {
++            Role::Banner | Role::Header => "banner",
++            Role::Complementary => "complementary",
++            Role::ContentInfo | Role::Footer => "content information",
++            Role::Region if self.node.label().is_some() => "region",
++            _ => return None,
++        };
++        Some(StrWrapper::new(name, self.string_buffer))
++    }
++
+     fn is_window_pattern_supported(&self) -> bool {
+         self.node.is_dialog()
+     }
+@@ -1326,7 +1361,10 @@ properties! {
+     (UIA_PositionInSetPropertyId, position_in_set),
+     (UIA_SizeOfSetPropertyId, size_of_set),
+     (UIA_AriaPropertiesPropertyId, aria_properties),
+-    (UIA_IsDialogPropertyId, is_dialog)
++    (UIA_IsDialogPropertyId, is_dialog),
++    (UIA_HeadingLevelPropertyId, heading_level),
++    (UIA_LandmarkTypePropertyId, landmark_type),
++    (UIA_LocalizedLandmarkTypePropertyId, localized_landmark_type)
+ }
+ 
+ patterns! {

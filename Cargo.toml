@@ -54,7 +54,7 @@ members = [
     "examples/site-scenes",
     "examples/luau-panel",
 ]
-exclude = ["tools/rune-dev-guard", "vendor/parley_engine", "vendor/wgpu-hal", "vendor/winit"]
+exclude = ["tools/rune-dev-guard", "vendor/accesskit_windows", "vendor/parley_engine", "vendor/wgpu-hal", "vendor/winit"]
 
 # wgpu-hal as published plus `vendor/wgpu-hal.patch`: `dx12::Instance::expose_adapter` (a `wgpu::Adapter` for the
 # one adapter Rune picks through DXGI, with no device made on the others, `gpu/pick.rs`) and FXC loaded on
@@ -74,6 +74,11 @@ winit = { path = "vendor/winit" }
 # Re-made by `scripts/vendor-parley-engine.sh <version>` when parley is bumped; apps that build
 # Rune patch it too.
 parley_engine = { path = "vendor/parley_engine" }
+# accesskit_windows as published plus `vendor/accesskit_windows.patch`: headings and landmarks reach
+# UI Automation (HeadingLevel, LandmarkType, LocalizedLandmarkType), which Narrator's and NVDA's
+# heading and landmark navigation read. Re-made by `scripts/vendor-accesskit-windows.sh <version>`
+# when AccessKit is bumped; apps that build Rune patch it too.
+accesskit_windows = { path = "vendor/accesskit_windows" }
 
 [workspace.package]
 edition = "2024"
