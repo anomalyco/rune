@@ -7,7 +7,7 @@
 use std::path::PathBuf;
 
 use objc2_core_foundation::{CFDictionary, CFRange, CFRetained, CFString, CFType, CFURL, CFURLPathStyle};
-use objc2_core_text::{CTFont, CTFontDescriptor, CTFontUIFontType, kCTFontFamilyNameAttribute, kCTFontURLAttribute};
+use objc2_core_text::{CTFont, CTFontDescriptor, CTFontManagerCreateFontDescriptorsFromURL, CTFontUIFontType, kCTFontFamilyNameAttribute, kCTFontURLAttribute};
 
 /// The file behind a CoreText attribute holder's `kCTFontURLAttribute`.
 fn path_of(url: Option<CFRetained<CFType>>) -> Option<PathBuf> {
@@ -89,6 +89,10 @@ pub(super) fn fallback_family_files(chars: &[char], locale: Option<&str>) -> Vec
                 }
                 continue;
             }
+            // A hidden family (`.Hiragino Kaku Gothic Interface`, CoreText's Japanese fallback)
+            // matches no descriptors, so its weights would never load: take the family of its
+            // file's first public face instead (Hiragino Sans, W0-W9).
+            let family = if family.starts_with('.') { public_family(&font).unwrap_or(family) } else { family };
             // The system font itself: it had the character, nothing to add.
             if family == base_name || families.contains(&family) { continue; }
             if let Some(path) = path_of(font.attribute(kCTFontURLAttribute))
@@ -103,4 +107,19 @@ pub(super) fn fallback_family_files(chars: &[char], locale: Option<&str>) -> Vec
         }
     }
     out
+}
+
+/// The family of the first face in `font`'s file whose family isn't hidden (`.`-prefixed).
+fn public_family(font: &CTFont) -> Option<String> {
+    // SAFETY: CoreText's descriptors for the file, read for their family names only.
+    unsafe {
+        let url = font.attribute(kCTFontURLAttribute)?.downcast::<CFURL>().ok()?;
+        let faces = CTFontManagerCreateFontDescriptorsFromURL(&url)?;
+        // An array of font descriptors, as CoreText documents it.
+        let faces: CFRetained<objc2_core_foundation::CFArray<CTFontDescriptor>> = CFRetained::cast_unchecked(faces);
+        (0..faces.len()).filter_map(|i| faces.get(i)).find_map(|d| {
+            let name = d.attribute(kCTFontFamilyNameAttribute)?.downcast::<CFString>().ok()?.to_string();
+            (!name.starts_with('.')).then_some(name)
+        })
+    }
 }
