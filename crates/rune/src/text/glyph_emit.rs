@@ -180,6 +180,12 @@ impl TextSystem {
                 let Some(font_ref) = FontRef::from_index(font.data.as_ref(), font.index as usize) else {
                     return Placed::Other;
                 };
+                // A colour glyph an earlier launch saved: no paint.
+                let color_font = [*b"COLR", *b"CBDT", *b"sbix"].iter().any(|t| font_ref.table(swash::tag_from_bytes(t)).is_some());
+                if color_font && let Some((pixels, at)) = self.cached_color(&color_key, face) {
+                    out.push(self.add_color_glyph(color_key, face, pixels, at).quad(gx, gy, glide, ink, byte));
+                    return Placed::Other;
+                }
                 let mut scaler = self
                     .scale_cx
                     .builder(font_ref)
@@ -190,12 +196,7 @@ impl TextSystem {
                 // COLR v1 first (Windows 11's emoji, COLR v1 Noto Color Emoji), then swash's COLR v0 and bitmaps.
                 let v1 = if scaler.has_color_outlines() { super::colr::rasterize(font.data.as_ref(), font.index, glyph, font_size, coords) } else { None };
                 if let Some((pixels, at)) = v1.or_else(|| rasterize_color(&mut scaler, glyph as u16)) {
-                    self.color_bytes = self.color_bytes.saturating_add((at.width as usize) * (at.height as usize) * 4);
-                    self.color_pixels.push(pixels);
-                    let index = self.color_pixels.len() as u32;
-                    let c = ColorGlyph { index, used: true, left: at.left, top: at.top, w: at.width, h: at.height };
-                    self.color_glyphs.insert(color_key, c);
-                    out.push(c.quad(gx, gy, glide, ink, byte));
+                    out.push(self.add_color_glyph(color_key, face, pixels, at).quad(gx, gy, glide, ink, byte));
                     return Placed::Other;
                 }
                 // Windfoil masks place their own entries (GPU-filled ones are queued, not uploaded).
@@ -257,6 +258,18 @@ impl TextSystem {
             }
             None => Placed::Empty([subpx, subpy]),
         }
+    }
+
+    /// Keeps colour glyph `key`'s image, painted now or saved by an earlier launch, and notes its
+    /// font so the cross-launch cache can name it by its bytes.
+    fn add_color_glyph(&mut self, key: GlyphKey, face: &Face, pixels: crate::pixels::Pixels, at: swash::zeno::Placement) -> ColorGlyph {
+        self.note_mask_font(face);
+        self.color_bytes = self.color_bytes.saturating_add((at.width as usize) * (at.height as usize) * 4);
+        self.color_pixels.push(pixels);
+        let index = self.color_pixels.len() as u32;
+        let c = ColorGlyph { index, used: true, left: at.left, top: at.top, w: at.width, h: at.height };
+        self.color_glyphs.insert(key, c);
+        c
     }
 
     /// Moves the glyphs placed from here on by `glide` device px (`[x, y]`, each within half a

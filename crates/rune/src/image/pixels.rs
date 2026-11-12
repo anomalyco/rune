@@ -122,7 +122,7 @@ impl Pixels {
         (self.id, frame.generation)
     }
 
-    #[cfg(test)]
+    /// The image's RGBA bytes as [`Pixels::set`] gave them (empty for a decoded image's mips).
     pub(crate) fn rgba(&self) -> Vec<u8> {
         self.frame.lock().unwrap().rgba.clone()
     }
