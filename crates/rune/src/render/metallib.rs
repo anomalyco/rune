@@ -789,6 +789,7 @@ pub(super) const UBER_WGSL_BLAKE3: &str = \"{wgsl_hash}\";", uber_abi_hash());
                 renderer.set_srgb_blend(srgb_blend);
 
                 let mut text = TextSystem::default();
+                text.atlas.data.resize((ATLAS_SIZE * ATLAS_SIZE) as usize, 0);
                 for y in 0..16u32 {
                     for x in 0..16u32 {
                         text.atlas.data[(y * ATLAS_SIZE + x) as usize] =

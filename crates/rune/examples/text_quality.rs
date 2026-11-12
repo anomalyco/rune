@@ -19,6 +19,7 @@ fn experimental(
     cursor: &mut [u32; 3],
     out: &mut Vec<rune::text::GlyphQuad>,
 ) {
+    atlas.data.resize((ATLAS_SIZE * ATLAS_SIZE) as usize, 0);
     use swash::scale::{Render, ScaleContext, Source};
     use swash::zeno::{Format, Vector};
     let mut cx = ScaleContext::new();
