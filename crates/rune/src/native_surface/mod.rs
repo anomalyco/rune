@@ -310,7 +310,7 @@ impl NativeSurface {
             wake();
         }
     }
-    #[cfg(test)]
+    #[cfg(any(test, target_os = "windows"))]
     pub(crate) fn latest(&self) -> Option<Arc<Frame>> {
         self.0.lock().unwrap().latest.clone()
     }

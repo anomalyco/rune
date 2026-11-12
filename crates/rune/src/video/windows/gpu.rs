@@ -37,7 +37,7 @@ type CreateFactory = unsafe extern "system" fn(*const GUID, *mut *mut core::ffi:
 /// The D3D11 device decoders share, on the adapter of Rune's D3D12 device.
 pub(super) struct Device {
     pub device: ID3D11Device,
-    context: ID3D11DeviceContext4,
+    pub context: ID3D11DeviceContext4,
     device5: ID3D11Device5,
     /// Rune's device, which opens the ring's textures and owns the fences.
     pub d3d12: ID3D12Device,
@@ -141,6 +141,11 @@ pub(super) struct Ring {
 }
 
 impl Ring {
+    /// The decoders' device this ring's textures are on.
+    pub(super) fn device(&self) -> Arc<Device> {
+        self.device.clone()
+    }
+
     /// Rune made a new device since this ring opened its textures and fences on the old one.
     pub(super) fn stale(&self) -> bool {
         self.device.generation != device_generation()

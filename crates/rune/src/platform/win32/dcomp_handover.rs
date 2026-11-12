@@ -15,6 +15,9 @@ use windows::core::{GUID, HRESULT, Interface};
 pub(crate) struct Handover {
     device: IDCompositionDevice,
     _target: IDCompositionTarget,
+    /// The target's root: no content of its own; the UI's visual and, under it, any clip's layer.
+    root: IDCompositionVisual,
+    /// The UI's visual, which the wgpu surface goes on.
     visual: IDCompositionVisual,
 }
 
@@ -23,15 +26,18 @@ pub(crate) struct Handover {
 unsafe impl Send for Handover {}
 
 impl Handover {
-    /// A device, a target for `hwnd` below its child windows, and a root visual, uncommitted.
+    /// A device, a target for `hwnd` below its child windows, and a root visual holding the UI's,
+    /// uncommitted.
     pub(crate) fn new(hwnd: isize) -> Result<Handover, String> {
         let device = create_device()?;
         // SAFETY: COM calls on objects made here, for a window of this process.
         unsafe {
             let target = device.CreateTargetForHwnd(windows::Win32::Foundation::HWND(hwnd as *mut _), false).map_err(|e| format!("CreateTargetForHwnd: {e}"))?;
+            let root = device.CreateVisual().map_err(|e| format!("CreateVisual: {e}"))?;
             let visual = device.CreateVisual().map_err(|e| format!("CreateVisual: {e}"))?;
-            target.SetRoot(&visual).map_err(|e| format!("SetRoot: {e}"))?;
-            Ok(Handover { device, _target: target, visual })
+            root.AddVisual(&visual, true, None).map_err(|e| format!("AddVisual: {e}"))?;
+            target.SetRoot(&root).map_err(|e| format!("SetRoot: {e}"))?;
+            Ok(Handover { device, _target: target, root, visual })
         }
     }
 
@@ -43,6 +49,34 @@ impl Handover {
     pub(crate) fn commit(&self) -> Result<(), String> {
         // SAFETY: a COM call on our device.
         unsafe { self.device.Commit() }.map_err(|e| format!("IDCompositionDevice::Commit: {e}"))
+    }
+
+    /// A visual under the UI's that shows the DirectComposition surface `handle` (a playing clip's
+    /// own layer, `video::windows::layer`), uncommitted.
+    pub(crate) fn add_under(&self, handle: usize) -> Result<IDCompositionVisual, String> {
+        // SAFETY: COM calls on our device and visuals; the handle is a live composition surface
+        // handle its owner keeps open while the visual shows it.
+        unsafe {
+            let surface = self.device.CreateSurfaceFromHandle(windows::Win32::Foundation::HANDLE(handle as *mut _)).map_err(|e| format!("CreateSurfaceFromHandle: {e}"))?;
+            let visual = self.device.CreateVisual().map_err(|e| format!("CreateVisual: {e}"))?;
+            visual.SetContent(&surface).map_err(|e| format!("SetContent: {e}"))?;
+            self.root.AddVisual(&visual, false, &self.visual).map_err(|e| format!("AddVisual: {e}"))?;
+            Ok(visual)
+        }
+    }
+
+    /// Takes a visual `add_under` made out of the tree, uncommitted.
+    pub(crate) fn remove(&self, visual: &IDCompositionVisual) {
+        // SAFETY: a COM call on our root visual.
+        let _ = unsafe { self.root.RemoveVisual(visual) };
+    }
+
+    /// Commits, and returns once DWM has taken the commit: a frame presented after this shows
+    /// over what it committed.
+    pub(crate) fn commit_and_wait(&self) -> Result<(), String> {
+        self.commit()?;
+        // SAFETY: a COM call on our device.
+        unsafe { self.device.WaitForCommitCompletion() }.map_err(|e| format!("IDCompositionDevice::WaitForCommitCompletion: {e}"))
     }
 
 }

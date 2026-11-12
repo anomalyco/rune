@@ -238,7 +238,7 @@ impl<S: 'static> Host<S> {
         let native = {
             let handle = self.native_handle.clone();
             let report = Arc::new(move |covered| handle.send(move |slot| WakeEvent::Covered(slot, covered)));
-            Native { cloak, frame, _occlusion: crate::platform::win32::occlusion::Tracked::new(&window, report), mode: Default::default(), a11y_start }
+            Native { cloak, frame, _occlusion: crate::platform::win32::occlusion::Tracked::new(&window, report), mode: Default::default(), a11y_start, video_layers: Default::default() }
         };
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         let native = Native::default();
@@ -397,6 +397,42 @@ impl<S: 'static> Host<S> {
         crate::render::surface_gpu(&gpu);
         self.gpu = Some((gpu, renderer));
         Ok(())
+    }
+
+    /// Makes a handed-over window's swap chain again with premultiplied alpha (a playing clip's
+    /// own layer shows under the UI, `video_layer`) or opaque (none does): a new surface on the
+    /// same visual, committed once its first frame has presented (`SurfaceMode::rebind`), as for
+    /// a lost device. Premultiplied costs DWM a blend of every region the UI presents, so it lasts
+    /// only while a layer shows. Ok(false) when there's nothing to do.
+    #[cfg(target_os = "windows")]
+    pub(super) fn rebind_alpha(&mut self, premultiplied: bool) -> Result<bool, String> {
+        let Some((gpu, _)) = self.gpu.as_ref() else { return Ok(false) };
+        let Some(w) = self.win.as_mut() else { return Ok(false) };
+        let Some(visual) = w.native.mode.visual() else { return Ok(false) };
+        if self.options.transparent || matches!(w.native.mode, super::cpu_frame::SurfaceMode::Rebinding { .. }) {
+            return Ok(false);
+        }
+        let alpha = if premultiplied { wgpu::CompositeAlphaMode::PreMultiplied } else { wgpu::CompositeAlphaMode::Opaque };
+        if w.config.alpha_mode == alpha {
+            return Ok(false);
+        }
+        if premultiplied && w.surface.as_ref().is_none_or(|s| crate::render::translucency::mode(s, &gpu.adapter) != Some(alpha)) {
+            return Err("this adapter can't composite a premultiplied swap chain".into());
+        }
+        // The old surface goes first: a DX12 surface takes the visual's content, and the
+        // committed tree keeps showing its last frame until the new one commits.
+        drop(w.surface.take());
+        // SAFETY: the window keeps the visual's `Handover` as long as it keeps this surface.
+        let surface = unsafe { gpu.instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::CompositionVisual(visual)) }.map_err(|e| e.to_string())?;
+        let mut config = w.config.clone();
+        config.alpha_mode = alpha;
+        configure(&surface, gpu, &config)?;
+        w.surface = Some(surface);
+        w.config = config;
+        w.surface_ok = true;
+        w.presented = None;
+        w.native.mode.rebind();
+        Ok(true)
     }
 
     /// Replaces the window's surface and device when either can't draw a frame: a device that is

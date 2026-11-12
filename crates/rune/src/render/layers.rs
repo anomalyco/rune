@@ -724,10 +724,14 @@ impl Renderer {
                 if l.clip != NO_CLIP {
                     let (origin, size) = self.target_frame(target);
                     let edge = |v: f32, o: f32, max: u32| (v - o).clamp(0.0, max as f32) as u32;
-                    let (x0, y0) = (edge(l.clip[0].floor(), origin[0], size[0]), edge(l.clip[1].floor(), origin[1], size[1]));
-                    let (x1, y1) = (edge(l.clip[2].ceil(), origin[0], size[0]), edge(l.clip[3].ceil(), origin[1], size[1]));
+                    let (mut x0, mut y0) = (edge(l.clip[0].floor(), origin[0], size[0]), edge(l.clip[1].floor(), origin[1], size[1]));
+                    let (mut x1, mut y1) = (edge(l.clip[2].ceil(), origin[0], size[0]), edge(l.clip[3].ceil(), origin[1], size[1]));
+                    // Inside an enclosing inline clip: both apply.
+                    let outer = pass.scissor();
+                    if let Some([ox, oy, ow, oh]) = outer {
+                        (x0, y0, x1, y1) = (x0.max(ox), y0.max(oy), x1.min(ox + ow), y1.min(oy + oh));
+                    }
                     if x1 > x0 && y1 > y0 {
-                        let outer = pass.scissor();
                         pass.set_scissor(Some([x0, y0, x1 - x0, y1 - y0]), size);
                         self.draw_layer_range(pass, format, l.begin + 1..l.end, target, hook);
                         pass.set_scissor(outer, size);
@@ -756,7 +760,11 @@ impl Renderer {
                 let before = s.before_instance(index);
                 if before < range.start || before > range.end || (before == range.end && !include_end) { continue; }
                 self.draw_with_effects(pass, format, cursor..before, target, hook);
-                s.draw_blended(pass, index, format, self.layer_blend(target));
+                // Only the window's own pass can punch a video's place out for its layer.
+                match target {
+                    None => s.draw_main(pass, index, format, self.layer_blend(target)),
+                    Some(_) => s.draw_isolated(pass, index, format, self.layer_blend(target)),
+                }
                 cursor = before;
             }
         }

@@ -280,6 +280,26 @@ impl Renderer {
         self.surfaces_building = Some(crate::native_surface::SurfaceRenderer::build(device, self.format, Box::new(done)));
     }
 
+    /// Punches these native surfaces' places out of the window's pixels from the next
+    /// `prepare_surfaces` on, for clips shown on their own layer underneath (Windows).
+    #[cfg(target_os = "windows")]
+    pub(crate) fn set_punched_surfaces(&mut self, keys: Vec<usize>) {
+        if let Some(s) = &mut self.surfaces { s.set_punched(keys); }
+    }
+
+    /// The punch pipeline has compiled (`set_punched_surfaces`).
+    #[cfg(target_os = "windows")]
+    pub(crate) fn surface_punch_ready(&mut self) -> bool {
+        self.surfaces.as_mut().is_some_and(crate::native_surface::SurfaceRenderer::punch_ready)
+    }
+
+    /// Whether the last frame drew surface `key` inside an isolated layer; None when it didn't
+    /// draw it.
+    #[cfg(target_os = "windows")]
+    pub(crate) fn surface_drew_isolated(&self, key: usize) -> Option<bool> {
+        self.surfaces.as_ref().and_then(|s| s.drew_isolated(key))
+    }
+
     pub fn prepare_surfaces(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, draws: &[crate::native_surface::SurfaceDraw], viewport: (u32,u32)) {
         let built = match &self.surfaces_building {
             Some(building) => crate::native_surface::SurfaceRenderer::finish(device, building),

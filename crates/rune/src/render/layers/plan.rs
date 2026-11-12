@@ -362,8 +362,12 @@ impl Planner {
                 }
             }
             let additive_parent = layer.parent.is_some_and(|p| plan[p].blend == Blend::PlusLighter);
+            // A clip of whole pixels with square corners and no fade is a scissor, exactly: such a
+            // group draws straight into its parent too (`Renderer::draw_layer_range`). That keeps a
+            // clipped pane's video in the window's own pass, where its own layer can show it.
+            let scissor_clip = layer.clip == NO_CLIP || (layer.fade == [0; 4] && layer.clip.iter().all(|v| (v - v.round()).abs() < 1e-3));
             if cache.is_none() && layer.opacity == 1.0 && layer.blend == Blend::SourceOver && !additive_parent
-                && layer.blur == 0.0 && layer.fade[3] == 0 && layer.clip == NO_CLIP
+                && layer.blur == 0.0 && layer.fade[3] == 0 && scissor_clip
                 && layer.turn.is_none() && layer.hole[3] == 0.0 {
                 self.dispositions[index] = Disposition::Inline;
                 self.park_slot(index, pools);

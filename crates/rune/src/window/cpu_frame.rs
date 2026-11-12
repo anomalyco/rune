@@ -157,6 +157,15 @@ impl SurfaceMode {
         }
     }
 
+    /// The DirectComposition tree of a handed-over window, for a playing clip's own layer
+    /// (`video_layer`).
+    pub(super) fn handover(&self) -> Option<&Handover> {
+        match self {
+            SurfaceMode::Handed { handover } | SurfaceMode::Rebinding { handover } => Some(handover),
+            SurfaceMode::Gpu | SurfaceMode::Cpu { .. } | SurfaceMode::HandingOver { .. } => None,
+        }
+    }
+
     /// A new swap chain went on the handed-over window's visual (`Host::reattach`).
     pub(super) fn rebind(&mut self) {
         if let SurfaceMode::Handed { .. } = self {
@@ -253,7 +262,7 @@ impl<S: 'static> Host<S> {
             let handle = self.native_handle.clone();
             let report = Arc::new(move |covered| handle.send(move |slot| WakeEvent::Covered(slot, covered)));
             let mode = SurfaceMode::Cpu { cpu: Cpu { buffer: Buffer::Touching(prefault, capacity), painter, half, shown: Shown::Nothing, show: Some(focus) }, job: GpuJob::Waiting };
-            Native { cloak, frame, _occlusion: crate::platform::win32::occlusion::Tracked::new(&window, report), mode, a11y_start }
+            Native { cloak, frame, _occlusion: crate::platform::win32::occlusion::Tracked::new(&window, report), mode, a11y_start, video_layers: Default::default() }
         };
         self.win = Some(Win {
             a11y,

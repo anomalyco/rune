@@ -15,6 +15,7 @@
 mod audio;
 mod decoder;
 mod gpu;
+mod layer;
 mod machine;
 mod mf;
 mod still;
@@ -51,6 +52,44 @@ pub(crate) struct Native {
     /// When the decoder was last started, until its first picture reached the surface
     /// (`RUNE_VIDEO_LOG`).
     opened: Option<Instant>,
+    /// The clip's layer shows its pictures (`layer`): frames don't pull them one by one.
+    layered: bool,
+}
+
+/// The window's side of a clip's layer (`layer`): what the decoder has made of its ask.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct LayerStatus {
+    /// The layer's DirectComposition surface handle, once made.
+    pub handle: Option<usize>,
+    /// A picture of the current seek is on the layer at the asked size, and the clock runs.
+    pub showing: bool,
+    /// The clock runs: only then does the layer take the pictures.
+    pub running: bool,
+    /// The clip can't have a layer; the window draws it.
+    pub refused: bool,
+}
+
+/// The window asks for the clip's layer at `ask` device pixels (None: it draws the pictures),
+/// and hears what the decoder has done.
+pub(crate) fn layer(shared: &Arc<Shared>, ask: Option<(u32, u32)>) -> LayerStatus {
+    let mut native = shared.native.lock().unwrap();
+    let running = matches!(native.phase, Phase::Playing { .. });
+    let generation = native.seeks.current().0;
+    let Some(pipe) = native.pipe.clone() else {
+        native.layered = false;
+        return LayerStatus { running, ..LayerStatus::default() };
+    };
+    let mut s = pipe.lock();
+    let changed = s.layer != ask;
+    s.layer = ask;
+    let showing = running && ask.is_some_and(|size| s.layer_shown == Some((size, generation)));
+    let status = LayerStatus { handle: s.layer_handle, showing, running, refused: s.layer_refused };
+    drop(s);
+    if changed {
+        pipe.poke();
+    }
+    native.layered = showing;
+    status
 }
 
 // The reader in `still` stays on the headless thread that made it, under the Shared mutex.
@@ -146,13 +185,23 @@ pub(super) fn preload(shared: &Arc<Shared>) {
     }
 }
 
-/// Audio: where the clock has it now. The clock runs only while the sound does, so it's always
-/// the one to read.
+/// The window takes the pictures back from the clip's layer: the picture for now goes on the
+/// surface at once, so the frame that draws it isn't one from before the layer showed.
+pub(crate) fn unlayer(shared: &Arc<Shared>, surface: &NativeSurface) {
+    let mut native = shared.native.lock().unwrap();
+    let mut c = shared.ctl.lock().unwrap();
+    native.layered = false;
+    let lead = vsync::period().as_secs_f64() / 2.0;
+    native.show(shared, &mut c, surface, vsync::snap(Instant::now()), lead);
+}
+
+/// Audio, and video on its layer: where the clock has it now. The clock runs only while the sound
+/// does (or the layer shows the pictures), so it's always the one to read.
 pub(super) fn live_time(shared: &Shared, _: bool) -> Option<f64> {
-    if shared.kind != Kind::Audio {
+    let native = shared.native.try_lock().ok()?;
+    if shared.kind != Kind::Audio && !native.layered {
         return None;
     }
-    let native = shared.native.try_lock().ok()?;
     let clock = native.clock.get()?;
     let duration = native.facts.map(|f| f.meta.duration).filter(|d| *d > 0.0)?;
     Some(clock.position(Instant::now()).rem_euclid(duration))
@@ -179,9 +228,11 @@ pub(super) fn pull(shared: &Arc<Shared>, surface: &NativeSurface, target: Instan
         return false;
     }
     let lead = vsync::period().as_secs_f64() / 2.0;
+    // A clip on its layer played on between pulls, as the window saw it.
     if let (Phase::Playing { .. }, Some(gap), Some(at)) = (native.phase, gap, native.shown)
         && gap > RESUME_GAP
         && !native.sounding(&c)
+        && !native.layered
     {
         native.event(shared, &c, Event::Resumed { target, at, lead });
     }
@@ -332,6 +383,26 @@ impl Native {
     fn show(&mut self, shared: &Arc<Shared>, c: &mut Control, surface: &NativeSurface, target: Instant, lead: f64) {
         let Some(pipe) = self.pipe.clone() else { return };
         let generation = self.seeks.current().0;
+        // The layer shows the pictures: the surface keeps the one it has, so the window has
+        // nothing to draw, and playback stands at the newest picture presented.
+        if self.layered {
+            let (newest, ended) = {
+                let inbox = pipe.lock();
+                (inbox.frames.back().filter(|f| f.generation == generation).map(|f| f.pts), inbox.ended == Some(generation))
+            };
+            if let Some(pts) = newest {
+                self.shown = Some(pts);
+            }
+            if let (true, Phase::Playing { clock }, Some(shown)) = (ended, self.phase, self.shown) {
+                let frame = self.facts.map_or(1.0 / 30.0, |f| f.meta.frame);
+                let duration = c.duration.unwrap_or(0.0);
+                let end = if duration > 0.0 { (shown / duration).floor() * duration + duration } else { shown + frame };
+                if clock.position(target) >= end.max(shown + frame) {
+                    self.end(shared, c, shown, duration);
+                }
+            }
+            return;
+        }
         let picked = {
             let mut inbox = pipe.lock();
             while inbox.frames.front().is_some_and(|f| f.generation != generation) {
@@ -431,8 +502,14 @@ impl Native {
     fn next(&self, c: &Control, now: Instant) -> (bool, Option<Instant>) {
         let Phase::Playing { clock } = self.phase else { return (false, None) };
         let frame = self.facts.map_or(1.0 / 30.0, |f| f.meta.frame);
-        let next = self.pipe.as_ref().and_then(|p| p.lock().frames.front().map(|f| f.pts));
         let shown = self.shown.unwrap_or(clock.pos);
+        // The layer shows the pictures: a frame is due only to hear that the clip ended.
+        if self.layered {
+            let generation = self.seeks.current().0;
+            let ended = self.pipe.as_ref().is_some_and(|p| p.lock().ended == Some(generation));
+            return if ended { (true, Some(clock.when(shown + frame).max(now))) } else { (false, None) };
+        }
+        let next = self.pipe.as_ref().and_then(|p| p.lock().frames.front().map(|f| f.pts));
         let pos = next.unwrap_or(shown + frame);
         let _ = c;
         (true, Some(clock.when(pos).max(now)))

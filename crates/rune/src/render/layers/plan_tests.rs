@@ -58,11 +58,13 @@ fn scenes() -> Vec<Vec<Spec>> {
         vec![Spec::cached([2.0, 1.0, 28.0, 14.0], window, (21, 2)),
             Spec { parent: Some(0), ..Spec::cached([4.0, 2.0, 12.0, 8.0], window, (22, 5)) },
             Spec { opacity: 0.75, ..Spec::child(1, [6.0, 3.0, 8.0, 4.0], window) }],
-        // Something that flattens, a clip that isolates, a blur and a dissolve.
+        // Something that flattens, a clip off whole pixels that isolates, a blur, a dissolve, and a
+        // clip of whole pixels that's a scissor and flattens.
         vec![Spec::plain([0.0, 0.0, 8.0, 8.0], window),
-            Spec { clip: [4.0, 2.0, 20.0, 10.0], ..Spec::child(0, [4.0, 2.0, 16.0, 8.0], window) },
+            Spec { clip: [4.5, 2.0, 20.0, 10.0], ..Spec::child(0, [4.0, 2.0, 16.0, 8.0], window) },
             Spec { blur: 2.0, ..Spec::plain([8.0, 0.0, 16.0, 8.0], window) },
-            Spec { blend: Blend::PlusLighter, ..Spec::plain([12.0, 4.0, 8.0, 8.0], window) }],
+            Spec { blend: Blend::PlusLighter, ..Spec::plain([12.0, 4.0, 8.0, 8.0], window) },
+            Spec { clip: [8.0, 4.0, 24.0, 12.0], ..Spec::child(0, [8.0, 4.0, 16.0, 8.0], window) }],
         // The cached card grown, so the target it kept no longer fits its bucket.
         vec![Spec::cached([4.0, 2.0, 26.0, 13.0], window, (7, 1)),
             Spec { opacity: 0.5, ..Spec::child(0, [8.0, 4.0, 18.0, 7.0], window) }],
@@ -324,7 +326,8 @@ impl Old {
             }
             let l = &mut plan[index];
             if cache_target.is_none() && l.opacity == 1.0 && l.blend == Blend::SourceOver && !additive_parent
-                && l.blur == 0.0 && l.fade[3] == 0 && l.clip == NO_CLIP && l.turn.is_none() && l.hole[3] == 0.0 {
+                && l.blur == 0.0 && l.fade[3] == 0 && l.turn.is_none() && l.hole[3] == 0.0
+                && (l.clip == NO_CLIP || (l.fade == [0; 4] && l.clip.iter().all(|v| (v - v.round()).abs() < 1e-3))) {
                 self.release(index);
                 continue;
             }
