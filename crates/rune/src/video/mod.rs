@@ -49,6 +49,8 @@ use unsupported as backend;
 mod windows;
 #[cfg(target_os = "windows")]
 use self::windows as backend;
+#[cfg(target_os = "windows")]
+pub(crate) use self::windows::{layer, unlayer};
 mod waker;
 
 use phases::{Effect, Event, Run, Stage, step};

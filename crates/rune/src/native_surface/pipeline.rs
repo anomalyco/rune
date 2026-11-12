@@ -27,6 +27,9 @@ pub(crate) struct Building {
     layout: wgpu::BindGroupLayout,
     /// The compiled pipeline, once sent; None when the thread couldn't start.
     built: Option<std::sync::mpsc::Receiver<wgpu::RenderPipeline>>,
+    /// The punch pipeline (`SurfaceRenderer::set_punched`), compiled next on the same thread;
+    /// the renderer takes the receiver.
+    punch: std::sync::Mutex<Option<std::sync::mpsc::Receiver<wgpu::RenderPipeline>>>,
 }
 
 pub(crate) struct Imported {
@@ -43,7 +46,18 @@ struct Prepared {
     /// Bind groups this draw made for other textures, newest last: a decoder cycles a few, so
     /// a new picture in one it drew before binds with no allocation.
     binds: Vec<([wgpu::Texture; 2], wgpu::BindGroup)>,
+    /// Its place is punched out of the window's pixels, for the clip's own layer underneath.
+    punch: bool,
+    /// It was drawn inside an isolated layer, where a punch can't reach the window.
+    isolated: std::sync::atomic::AtomicBool,
 }
+
+/// Clears a video's place by its coverage, colour and alpha alike: the window's pixels there go
+/// transparent and the clip's own layer underneath shows (`video::windows::layer`).
+#[cfg(target_os = "windows")]
+const PUNCH: wgpu::BlendState = wgpu::BlendState { color: CLEAR, alpha: CLEAR };
+#[cfg(target_os = "windows")]
+const CLEAR: wgpu::BlendComponent = wgpu::BlendComponent { src_factor: wgpu::BlendFactor::Zero, dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha, operation: wgpu::BlendOperation::Add };
 
 /// Bind groups a draw keeps for textures it may show again (a video decoder's ring).
 const KEPT_BINDS: usize = 8;
@@ -87,6 +101,11 @@ pub struct SurfaceRenderer {
     sampler: wgpu::Sampler,
     cache: HashMap<usize, Arc<Imported>>,
     draws: Vec<Prepared>,
+    /// Surfaces whose place is punched out (by key), and the pipeline that does it: the video's
+    /// coverage, opacity and clip, writing `dst * (1 - coverage)` to colour and alpha alike.
+    punched: Vec<usize>,
+    punch: Option<wgpu::RenderPipeline>,
+    punch_building: Option<std::sync::mpsc::Receiver<wgpu::RenderPipeline>>,
     srgb_blend: bool,
     /// The owning `Renderer`'s uploads, when it has one; queue writes otherwise.
     staging: Option<rune_staging::Staging>,
@@ -123,12 +142,19 @@ impl SurfaceRenderer {
     pub(crate) fn build(device: &wgpu::Device, format: wgpu::TextureFormat, done: Box<dyn FnOnce() + Send>) -> Building {
         let layout = Self::bind_layout(device);
         let (sender, built) = std::sync::mpsc::sync_channel(1);
+        let (punch_sender, punch) = std::sync::mpsc::sync_channel(1);
         let (device_for, layout_for) = (device.clone(), layout.clone());
         let spawned = std::thread::Builder::new().name("rune-video-pipeline".into()).spawn(move || {
             let _ = sender.send(Self::pipeline(&device_for, &layout_for, format, Blend::SourceOver));
             done();
+            // A clip's layer (Windows) needs the punch; it compiles once the pictures can show.
+            #[cfg(target_os = "windows")]
+            let _ = punch_sender.send(Self::pipeline_with(&device_for, &layout_for, format, PUNCH));
+            #[cfg(not(target_os = "windows"))]
+            drop(punch_sender);
         });
-        Building { format, layout, built: spawned.is_ok().then_some(built) }
+        let ok = spawned.is_ok();
+        Building { format, layout, built: ok.then_some(built), punch: std::sync::Mutex::new(ok.then_some(punch)) }
     }
 
     /// The renderer `building` made, once its pipeline is ready; a build whose thread couldn't
@@ -139,7 +165,10 @@ impl SurfaceRenderer {
             Some(built) => built.try_recv().ok()?,
             None => Self::pipeline(device, &building.layout, building.format, Blend::SourceOver),
         };
-        Some(Self::with_pipeline(device, building.format, building.layout.clone(), pipeline))
+        let mut renderer = Self::with_pipeline(device, building.format, building.layout.clone(), pipeline);
+        // The punch arrives on this later.
+        renderer.punch_building = building.punch.lock().unwrap().take();
+        Some(renderer)
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -193,6 +222,9 @@ impl SurfaceRenderer {
             sampler,
             cache: HashMap::new(),
             draws: Vec::new(),
+            punched: Vec::new(),
+            punch: None,
+            punch_building: None,
             srgb_blend: false,
             staging: None,
             #[cfg(target_os = "macos")]
@@ -245,6 +277,10 @@ impl SurfaceRenderer {
     }
 
     fn pipeline(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, format: wgpu::TextureFormat, blend: Blend) -> wgpu::RenderPipeline {
+        Self::pipeline_with(device, layout, format, blend.state())
+    }
+
+    fn pipeline_with(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, format: wgpu::TextureFormat, blend: wgpu::BlendState) -> wgpu::RenderPipeline {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("video"),
             source: wgpu::ShaderSource::Wgsl(include_str!("video.wgsl").into()),
@@ -272,7 +308,7 @@ impl SurfaceRenderer {
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
-                    blend: Some(blend.state()),
+                    blend: Some(blend),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
@@ -392,6 +428,8 @@ impl SurfaceRenderer {
                     imported,
                     surface: d.surface.clone(),
                     binds: Vec::new(),
+                    punch: false,
+                    isolated: std::sync::atomic::AtomicBool::new(false),
                 };
                 if count < self.draws.len() {
                     self.draws[count] = p;
@@ -399,6 +437,9 @@ impl SurfaceRenderer {
                     self.draws.push(p);
                 }
             }
+            let p = &mut self.draws[count];
+            p.punch = self.punch.is_some() && self.punched.contains(&key);
+            *p.isolated.get_mut() = false;
             count += 1;
         }
         self.draws.truncate(count);
@@ -495,6 +536,64 @@ impl SurfaceRenderer {
             }
         })
     }
+    #[cfg(target_os = "windows")]
+    /// Punches these surfaces' places out of the window's pixels from the next `prepare` on,
+    /// once the punch pipeline has compiled (`punch_ready`).
+    pub(crate) fn set_punched(&mut self, keys: Vec<usize>) {
+        self.punched = keys;
+    }
+
+    /// The punch pipeline has compiled. A renderer made without `build` starts compiling it here,
+    /// on a thread of its own as `build` does.
+    #[cfg(target_os = "windows")]
+    pub(crate) fn punch_ready(&mut self) -> bool {
+        if self.punch.is_some() {
+            return true;
+        }
+        if self.punch_building.is_none() {
+            let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+            let (device, layout, format) = (self.device.clone(), self.layout.clone(), self.format);
+            let spawned = std::thread::Builder::new()
+                .name("rune-video-punch".into())
+                .spawn(move || drop(sender.send(Self::pipeline_with(&device, &layout, format, PUNCH))));
+            if spawned.is_err() {
+                return false;
+            }
+            self.punch_building = Some(receiver);
+        }
+        if let Some(p) = self.punch_building.as_ref().and_then(|b| b.try_recv().ok()) {
+            self.punch = Some(p);
+            self.punch_building = None;
+        }
+        self.punch.is_some()
+    }
+
+    #[cfg(target_os = "windows")]
+    /// Whether the last frame drew surface `key` inside an isolated layer, where a punch
+    /// can't reach the window; None when it didn't draw it.
+    pub(crate) fn drew_isolated(&self, key: usize) -> Option<bool> {
+        self.draws.iter().find(|d| d.surface.key() == key).map(|d| d.isolated.load(std::sync::atomic::Ordering::Relaxed))
+    }
+
+    /// Draws `index` in the window's own pass: punched out when asked, else as any other.
+    pub(crate) fn draw_main(&self, pass: &mut wgpu::RenderPass<'_>, index: usize, format: wgpu::TextureFormat, blend: Blend) {
+        match (&self.punch, self.draws[index].punch) {
+            (Some(punch), true) => {
+                self.draws[index].drawn.store(true, std::sync::atomic::Ordering::Relaxed);
+                pass.set_pipeline(punch);
+                pass.set_bind_group(0, &self.draws[index].bind, &[]);
+                pass.draw(0..4, 0..1);
+            }
+            _ => self.draw_blended(pass, index, format, blend),
+        }
+    }
+
+    /// Draws `index` inside an isolated layer.
+    pub(crate) fn draw_isolated(&self, pass: &mut wgpu::RenderPass<'_>, index: usize, format: wgpu::TextureFormat, blend: Blend) {
+        self.draws[index].isolated.store(true, std::sync::atomic::Ordering::Relaxed);
+        self.draw_blended(pass, index, format, blend);
+    }
+
     pub fn before_instance(&self, index: usize) -> u32 {
         self.draws[index].before
     }

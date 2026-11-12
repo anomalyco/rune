@@ -82,6 +82,8 @@ pub(super) struct Native {
     pub(super) mode: super::cpu_frame::SurfaceMode,
     /// Whether its accessibility adapter waits for the first frame (`Host::a11y_after_frame`).
     pub(super) a11y_start: A11yStart,
+    /// Playing clips shown on their own layer under the UI (`video_layer`).
+    pub(super) video_layers: super::video_layer::VideoLayers,
 }
 
 /// When a window's UI Automation adapter is made: with the window (a screen reader is running),
