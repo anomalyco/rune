@@ -133,6 +133,7 @@ fn before(g: (f32, f32)) -> (f32, f32) {
     (g.0 - 3.0, g.1)
 }
 
+
 #[test]
 fn cmd_a_and_select_all_text_over_55_virtual_rows_copy_every_row() {
     let mut rt = timeline(ROWS);
@@ -386,6 +387,148 @@ fn offscreen_collection_is_bounded_in_rows_and_bytes() {
         "byte cap stopped building early after {} rows",
         BUILT_ROWS.get()
     );
+}
+
+/// A row that keeps its own source string for copying on even rows, and draws it otherwise.
+fn copy_row(_: &Timeline, i: usize) -> El {
+    let style = TextStyle::new(14.0, 400.0).lh(20.0);
+    let body = text(format!("Message body {i:02} with words to select."))
+        .key("body")
+        .font(style)
+        .w_full()
+        .selectable(true);
+    let row = col().w_full().h(ROW_H).padding(6.0).child(body);
+    if i % 2 == 0 {
+        row.selection_copy(move |_| Some(format!("source of row {i:02}")))
+    } else {
+        row
+    }
+}
+
+fn copy_timeline_view(s: &Timeline, _: &mut Cx<Timeline>) -> El {
+    col().w_full().h_full().child(
+        col().key("scroll").w_full().grow(1.0).scroll(ScrollSpec { stick_bottom: false }).child(
+            col()
+                .key("timeline")
+                .w_full()
+                .growth(GrowthSpec::default())
+                .selection_group(true)
+                .virtual_rows(s.count, ROW_H, |_: &Timeline, i| format!("r{i}").into(), copy_row),
+        ),
+    )
+}
+
+fn copy_timeline(count: usize) -> Runtime<Timeline> {
+    let mut rt = Runtime::new(Timeline::new(count), copy_timeline_view, (1280.0, 420.0), Env::new(true, 2.0));
+    rt.frame(0.0);
+    while rt.frame(1.0 / 120.0) {}
+    rt
+}
+
+/// Selects "Message body" in row `row`'s first text by dragging over it.
+fn drag_select_body<S: 'static>(rt: &mut Runtime<S>, row: &str) {
+    let g = glyphs_at(rt, &format!("{row}/body"));
+    let p0 = before(g[0]);
+    let p1 = (g[10].0 + 3.0, g[10].1);
+    rt.pointer_move(p0.0, p0.1);
+    rt.pointer_down(p0.0, p0.1);
+    tick(rt);
+    rt.pointer_move(p1.0, p1.1);
+    tick(rt);
+    rt.pointer_up(p1.0, p1.1);
+    tick(rt);
+}
+
+/// Scrolls a copy fixture until `row` is out of the mounted window and `kept` is in the viewport.
+fn scroll_away<S: 'static>(rt: &mut Runtime<S>, row: usize, kept: usize) {
+    let suffix = format!("/r{kept}");
+    for _ in 0..20 {
+        let range = rt.virtuals["#0/scroll/timeline"].range.clone();
+        let visible = rt
+            .elements()
+            .iter()
+            .any(|e| e.path.ends_with(&suffix) && e.rect[1] >= 0.0 && e.rect[1] + e.rect[3] <= 420.0);
+        if !range.contains(&row) && visible {
+            break;
+        }
+        rt.wheel(640.0, 210.0, -180.0);
+        tick(rt);
+    }
+    settle(rt);
+}
+
+#[test]
+fn an_offscreen_rows_copy_override_still_answers_after_scrolling_it_out() {
+    let mut rt = copy_timeline(ROWS);
+    let clipboard = crate::clipboard::memory();
+    rt.use_clipboard(&clipboard);
+
+    drag_select_body(&mut rt, "r0");
+    assert_eq!(rt.selected_text().as_deref(), Some("Message body"));
+    command(&mut rt, 'c');
+    assert_eq!(clipboard.text().as_deref().map(String::as_str), Some("source of row 00"), "mounted row's handler answers");
+
+    // Scroll row 0 out of the window; the list keeps its texts and its handler.
+    scroll_away(&mut rt, 0, 40);
+    assert!(!rt.elements().iter().any(|e| e.path.ends_with("r0/body")), "r0 is unmounted");
+    assert_eq!(rt.selected_text().as_deref(), Some("Message body"), "selection survives offscreen");
+
+    // differs from dev: an offscreen end used to resolve to the list node, so the row's own
+    // `selection_copy` was skipped and the drawn text was copied.
+    command(&mut rt, 'c');
+    assert_eq!(clipboard.text().as_deref().map(String::as_str), Some("source of row 00"), "the pinned row's handler still answers");
+}
+
+#[test]
+fn an_offscreen_row_without_a_copy_override_copies_the_drawn_text() {
+    let mut rt = copy_timeline(ROWS);
+    let clipboard = crate::clipboard::memory();
+    rt.use_clipboard(&clipboard);
+
+    drag_select_body(&mut rt, "r1");
+    scroll_away(&mut rt, 1, 40);
+    assert!(!rt.elements().iter().any(|e| e.path.ends_with("r1/body")), "r1 is unmounted");
+
+    command(&mut rt, 'c');
+    assert_eq!(clipboard.text().as_deref().map(String::as_str), Some("Message body"));
+}
+
+#[test]
+fn a_selection_spanning_mounted_and_offscreen_rows_ignores_a_row_override() {
+    let mut rt = copy_timeline(ROWS);
+    let clipboard = crate::clipboard::memory();
+    rt.use_clipboard(&clipboard);
+
+    // Select all of the override row 2, then scroll it off and shift-click the start of row 39
+    // (no override), which is mounted and inside the viewport.
+    let g2 = glyphs_at(&rt, "r2/body");
+    let start = before(g2[0]);
+    let last = (g2.last().unwrap().0 + 4.0, g2.last().unwrap().1);
+    rt.pointer_move(start.0, start.1);
+    rt.pointer_down(start.0, start.1);
+    tick(&mut rt);
+    rt.pointer_move(last.0, last.1);
+    tick(&mut rt);
+    rt.pointer_up(last.0, last.1);
+    tick(&mut rt);
+    assert_eq!(rt.selected_text().as_deref(), Some("Message body 02 with words to select."));
+
+    scroll_away(&mut rt, 2, 39);
+    let g39 = glyphs_at(&rt, "r39/body");
+    let end = before(g39[0]);
+    rt.physical_input(PhysicalInput::Modifiers(Mods { shift: true, ..Mods::default() }));
+    rt.pointer_move(end.0, end.1);
+    rt.pointer_down(end.0, end.1);
+    rt.pointer_up(end.0, end.1);
+    rt.physical_input(PhysicalInput::Modifiers(Mods::default()));
+    tick(&mut rt);
+
+    let expected = (2..39).map(|i| format!("Message body {i:02} with words to select.")).collect::<Vec<_>>().join("\n");
+    assert_eq!(rt.selected_text().as_deref(), Some(expected.as_str()));
+
+    // No handler surrounds both ends, so the override on row 2 doesn't answer for the span.
+    command(&mut rt, 'c');
+    assert_eq!(clipboard.text().as_deref().map(String::as_str), Some(expected.as_str()));
 }
 
 fn header_timeline_view(s: &Timeline, _: &mut Cx<Timeline>) -> El {

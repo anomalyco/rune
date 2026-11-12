@@ -9,28 +9,95 @@ use crate::runtime::selectable::phase::{self, Selection};
 use crate::runtime::selectable::{CopyJoin, SelectedText, TextSelection, floor_boundary};
 use crate::runtime::{Node, Runtime, playground_host};
 
+/// Whether `path` is `base` or inside it.
+fn covers(base: &str, path: &str) -> bool {
+    path == base || path.strip_prefix(base).is_some_and(|rest| rest.starts_with('/'))
+}
+
+/// A `selection_copy` handler around a selection end: a mounted node, or a provider the list kept
+/// for the offscreen row the end is in, with the path its texts are relative to.
+enum CopyProvider {
+    Mounted(usize),
+    Kept { path: String, copy: SelectionCopy },
+}
+
 impl<S: 'static> Runtime<S> {
     pub(crate) fn copy_virtual_text(&self) -> Option<String> {
         let h = self.selection_holder_end()?;
         let f = self.focus_holder_end(h)?;
-        let node_for = |e: EndRef| match e {
-            EndRef::Mounted(i) => Some(i),
-            EndRef::Offscreen(vi, ti) => self.live(&self.offscreen_text(vi, ti).list_path),
-        };
-        let (n0, n1) = (node_for(h)?, node_for(f)?);
-        let around = |a: usize, j: usize| std::iter::successors(Some(j), |&p| self.nodes[p].parent).any(|p| p == a);
-        let provider = std::iter::successors(Some(n0), |&p| self.nodes[p].parent)
-            .find(|&p| self.nodes[p].handlers.selection_copy.is_some() && around(p, n1));
-        if let Some(p) = provider
-            && let Some(copy_fn) = self.nodes[p].handlers.selection_copy.clone()
-        {
-            let sel = self.collect_virtual_selection(Some(p))?;
+        if let Some((base, copy_fn)) = self.copy_provider(h, f) {
+            let sel = self.collect_virtual_selection(Some(&base))?;
             if let Some(text) = copy_fn(&sel) {
                 return Some(text);
             }
             return Some(sel.text);
         }
         self.collect_virtual_selection(None).map(|s| s.text)
+    }
+
+    /// The nearest `selection_copy` handler around both ends of the selection, and the path its
+    /// texts are relative to. An offscreen end offers the providers the list kept for its row,
+    /// nearest first, then the mounted list node and its ancestors; a mounted end offers its node
+    /// and ancestors. A handler answers only when it also surrounds the other end.
+    fn copy_provider(&self, h: EndRef, f: EndRef) -> Option<(String, SelectionCopy)> {
+        for p in self.copy_chain(h) {
+            if !self.provider_around(&p, f) {
+                continue;
+            }
+            match p {
+                CopyProvider::Mounted(i) => {
+                    if let Some(copy) = self.nodes[i].handlers.selection_copy.clone() {
+                        return Some((self.nodes[i].path.clone(), copy));
+                    }
+                }
+                CopyProvider::Kept { path, copy } => return Some((path, copy)),
+            }
+        }
+        None
+    }
+
+    /// The providers around `end`, nearest first.
+    fn copy_chain(&self, end: EndRef) -> Vec<CopyProvider> {
+        let mut chain = Vec::new();
+        // differs from dev: an offscreen end used to resolve to its list node, dropping the copy
+        // handlers the list keeps beside the row's texts.
+        if let EndRef::Offscreen(vi, ti) = end {
+            let t = self.offscreen_text(vi, ti);
+            if let Some((_, v)) = self.virtuals.iter().nth(vi) {
+                let mut kept: Vec<(usize, &(String, SelectionCopy))> = v.selection.pins.providers().iter()
+                    .enumerate()
+                    .filter(|(_, (path, _))| covers(path, &t.path))
+                    .collect();
+                kept.sort_by_key(|(i, (path, _))| (std::cmp::Reverse(path.len()), *i));
+                chain.extend(kept.into_iter().map(|(_, (path, copy))| CopyProvider::Kept {
+                    path: path.clone(),
+                    copy: copy.clone(),
+                }));
+            }
+        }
+        let start = match end {
+            EndRef::Mounted(i) => Some(i),
+            EndRef::Offscreen(vi, ti) => self.live(&self.offscreen_text(vi, ti).list_path),
+        };
+        if let Some(start) = start {
+            chain.extend(std::iter::successors(Some(start), |&p| self.nodes[p].parent).map(CopyProvider::Mounted));
+        }
+        chain
+    }
+
+    /// Whether `p` surrounds `end`. An offscreen text is under mounted `p` when `p` is the list
+    /// node or above it; a kept provider talks paths.
+    fn provider_around(&self, p: &CopyProvider, end: EndRef) -> bool {
+        match p {
+            CopyProvider::Kept { path, .. } => covers(path, self.end_path(end)),
+            CopyProvider::Mounted(a) => {
+                let node = match end {
+                    EndRef::Mounted(i) => Some(i),
+                    EndRef::Offscreen(vi, ti) => self.live(&self.offscreen_text(vi, ti).list_path),
+                };
+                node.is_some_and(|j| std::iter::successors(Some(j), |&p| self.nodes[p].parent).any(|p| p == *a))
+            }
+        }
     }
 
     /// Builds an unmounted row `r` of `list_path` on demand (view only, no layout/mount/GPU) and
@@ -84,11 +151,10 @@ impl<S: 'static> Runtime<S> {
 
     /// Collects the full [`TextSelection`] when the selection touches offscreen or unbuilt rows,
     /// bounded by [`MAX_VIRTUAL_COPY_ROWS`] and [`MAX_VIRTUAL_COPY_BYTES`].
-    pub(crate) fn collect_virtual_selection(&self, base: Option<usize>) -> Option<TextSelection> {
+    pub(crate) fn collect_virtual_selection(&self, base: Option<&str>) -> Option<TextSelection> {
         let h = self.selection_holder_end()?;
         let f = self.focus_holder_end(h)?;
         let sel = self.selectable.phase.selection()?;
-        let base_path = base.map(|b| self.nodes[b].path.as_str());
 
         if h == f {
             let (a, b) = (sel.anchor.min(sel.focus), sel.anchor.max(sel.focus));
@@ -102,7 +168,7 @@ impl<S: 'static> Runtime<S> {
                 EndRef::Offscreen(vi, ti) => {
                     let t = self.offscreen_text(vi, ti);
                     if a >= b || b > t.spec.content.len() { return None; }
-                    let piece = offscreen_piece(t, a..b, base_path);
+                    let piece = offscreen_piece(t, a..b, base);
                     let text = piece.text().to_owned();
                     Some(TextSelection { texts: vec![piece], text, backward: self.selection_backward() })
                 }
@@ -135,7 +201,7 @@ impl<S: 'static> Runtime<S> {
                     let a = if end_ref == first_end { first_byte.min(len) } else { 0 };
                     let b = if end_ref == last_end { last_byte.min(len) } else { len };
                     if a >= b { continue; }
-                    let piece = offscreen_piece(t, a..b, base_path);
+                    let piece = offscreen_piece(t, a..b, base);
                     let hit_cap = out.push(&t.spec, a..b, piece.text(), t.tab_before, MAX_VIRTUAL_COPY_BYTES);
                     texts.push(piece);
                     if hit_cap { break; }
@@ -242,7 +308,7 @@ impl<S: 'static> Runtime<S> {
                         let a = if ord == first_ord { first_byte.min(len) } else { 0 };
                         let b = if ord == last_ord { last_byte.min(len) } else { len };
                         if a >= b { continue; }
-                        let piece = offscreen_piece(t, a..b, base_path);
+                        let piece = offscreen_piece(t, a..b, base);
                         let capped = out.push(&t.spec, a..b, piece.text(), !first_in_row && t.tab_before, MAX_VIRTUAL_COPY_BYTES);
                         texts.push(piece);
                         first_in_row = false;

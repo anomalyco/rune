@@ -141,6 +141,14 @@ impl Pins {
         }
     }
 
+    /// The `selection_copy` providers found beside the kept texts, as `(path, handler)`.
+    pub(crate) fn providers(&self) -> &[(String, SelectionCopy)] {
+        match self {
+            Pins::None => &[],
+            Pins::Pinned { providers, .. } => providers,
+        }
+    }
+
     /// Whether row `key`'s texts are already kept.
     pub(crate) fn has_text_row(&self, key: &str) -> bool {
         self.texts().iter().any(|t| t.row_key == key)
