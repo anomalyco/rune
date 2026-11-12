@@ -92,6 +92,11 @@ pub(crate) fn map_key_event(event: &winit::event::KeyEvent, m: ModifiersState) -
 fn unidentified(event: &winit::event::KeyEvent, m: ModifiersState) -> Option<KeyEvent> {
     let WKey::Unidentified(_) = event.logical_key else { return None };
     let mods = map_mods(m);
+    // Ctrl+Pause is Break, which Windows names `VK_CANCEL` and winit leaves unnamed: it arrives as
+    // Ctrl+Pause, so a terminal can send Ctrl+Break.
+    if event.physical_key == winit::keyboard::PhysicalKey::Code(winit::keyboard::KeyCode::Pause) {
+        return Some(KeyEvent { key: Key::Pause, mods });
+    }
     if !(mods.cmd || mods.ctrl) { return None; }
     let c = key_base(event).filter(|c| !c.is_control() && *c != ' ')?;
     let key = if mods.cmd { Key::Command(c.to_ascii_lowercase()) } else { Key::Text(c.to_string()) };

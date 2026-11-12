@@ -1,0 +1,1 @@
+- **Windows: Ctrl+Break reaches key handlers.** Windows names it `VK_CANCEL` and winit leaves it unnamed, so it was dropped; it now arrives as `Key::Pause` with Ctrl, as on the keyboard, so a terminal can send it.
