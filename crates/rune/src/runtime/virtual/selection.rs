@@ -14,7 +14,7 @@ use crate::runtime::Runtime;
 
 #[path = "pins.rs"]
 pub(crate) mod pins;
-pub(crate) use pins::{OffscreenText, PinnedSelection, PinsEvent, Scope, Source};
+pub(crate) use pins::{OffscreenText, PinnedSelection, Pins, PinsEvent, Scope, Source};
 
 /// Maximum number of unbuilt virtual rows built on demand when copying or reading a selection.
 /// Past this cap, collection stops building further unbuilt rows and returns the prefix collected
@@ -72,6 +72,25 @@ pub(crate) fn collect_virtual_row_selection(
         row_el, list_path, row_key, row_index, &row_path, "",
         list_group, list_inert, &mut order_in_row, texts, copy_providers,
     );
+}
+
+/// Collects one built row's selectable texts into `pins`. A row builder that panics before this
+/// leaves everything collected before it in the state, as dev wrote straight into its list did.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn collect_row_into_pins(
+    pins: &mut Pins,
+    row_el: &El,
+    list_path: &str,
+    row_key: &str,
+    row_index: usize,
+    list_group: Option<&str>,
+    list_inert: bool,
+) {
+    if let Some((texts, providers)) = pins.text_buffers() {
+        collect_virtual_row_selection(
+            row_el, list_path, row_key, row_index, list_group, list_inert, texts, providers,
+        );
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

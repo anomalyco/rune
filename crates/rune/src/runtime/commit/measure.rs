@@ -494,10 +494,9 @@ impl<S: 'static> Measurement<'_, S> {
         let v = self.virtuals.get_mut(path).unwrap();
         let list_group = if el.flags.has(ElFlags::SELECTION_GROUP) { Some(path.to_owned()) } else { group.map(str::to_owned) };
         v.selection.scope = selectable::virtual_selection::Scope { group_path: list_group.clone(), inert };
-        // Refill the kept rows' texts in place, so the vectors' allocations carry over.
-        let (mut texts, mut providers) = v.selection.pins.take_texts();
-        texts.clear();
-        providers.clear();
+        // Refill the kept rows' texts in place, so the vectors' allocations carry over and a
+        // builder that panics partway leaves what it already collected.
+        v.selection.pins.clear_texts();
         // Dev's order: the rows kept from the last commit go before any builder runs, so a row
         // holding a resource doesn't keep it through building its replacement.
         v.selection.stored.clear();
@@ -530,18 +529,16 @@ impl<S: 'static> Measurement<'_, S> {
                 let row = build(i);
                 collect_virtual_inputs(&row, path, i, inert, self.virtual_inputs);
                 if pinned.contains(&i) {
-                    selectable::virtual_selection::collect_virtual_row_selection(
-                        &row, path, &v.keys[i], i, list_group.as_deref(), inert,
-                        &mut texts, &mut providers,
+                    selectable::virtual_selection::collect_row_into_pins(
+                        &mut v.selection.pins, &row, path, &v.keys[i], i, list_group.as_deref(), inert,
                     );
                 }
             }
             for i in pinned {
                 if Some(i) == focused { continue; }
                 let row = build(i);
-                selectable::virtual_selection::collect_virtual_row_selection(
-                    &row, path, &v.keys[i], i, list_group.as_deref(), inert,
-                    &mut texts, &mut providers,
+                selectable::virtual_selection::collect_row_into_pins(
+                    &mut v.selection.pins, &row, path, &v.keys[i], i, list_group.as_deref(), inert,
                 );
             }
             el.children = v.range.clone().zip(quiet).map(|(i, quiet)| {
@@ -549,11 +546,7 @@ impl<S: 'static> Measurement<'_, S> {
                 row.flags.set(ElFlags::VIRTUAL_MOUNT, quiet);
                 row
             }).collect();
-            v.selection.pins.sync(selectable::virtual_selection::PinsEvent::Commit {
-                source: Some(selectable::virtual_selection::Source::Rebuild(rows)),
-                texts,
-                providers,
-            });
+            v.selection.pins.set_source(selectable::virtual_selection::Source::Rebuild(rows));
         } else {
             if self.pass.reveals() && el.cold.focus.reveal_selected {
                 let selected = el.children.iter().find(|c| c.cold.focus.selected).and_then(|c| c.key.clone());
@@ -568,13 +561,15 @@ impl<S: 'static> Measurement<'_, S> {
                 .filter_map(|key| v.index_of(key))
                 .filter(|i| !v.range.contains(i))
                 .collect();
+            // Dev installs the stored source before the children loop, releasing the old indexed
+            // builder before the kept rows and copied texts it would overlap with.
+            v.selection.pins.set_source(selectable::virtual_selection::Source::Stored);
             el.children = std::mem::take(&mut el.children).into_iter().enumerate().filter_map(|(i, mut child)| {
                 if !v.range.contains(&i) {
                     collect_virtual_inputs(&child, path, i, inert, self.virtual_inputs);
                     if pinned.contains(&i) {
-                        selectable::virtual_selection::collect_virtual_row_selection(
-                            &child, path, &v.keys[i], i, list_group.as_deref(), inert,
-                            &mut texts, &mut providers,
+                        selectable::virtual_selection::collect_row_into_pins(
+                            &mut v.selection.pins, &child, path, &v.keys[i], i, list_group.as_deref(), inert,
                         );
                     }
                     v.selection.stored.insert(i, child);
@@ -583,11 +578,6 @@ impl<S: 'static> Measurement<'_, S> {
                 child.flags.set(ElFlags::VIRTUAL_MOUNT, v.mounts_quietly(i, self.commits));
                 Some(child)
             }).collect();
-            v.selection.pins.sync(selectable::virtual_selection::PinsEvent::Commit {
-                source: Some(selectable::virtual_selection::Source::Stored),
-                texts,
-                providers,
-            });
         }
     }
 }

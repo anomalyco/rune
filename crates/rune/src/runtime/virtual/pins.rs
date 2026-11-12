@@ -111,13 +111,6 @@ pub(crate) enum PinsEvent<'a> {
         anchor: Option<&'a str>,
         focus: Option<&'a str>,
     },
-    /// A commit rebuilt the pinned rows' texts. `source` replaces the list's source; `None` keeps
-    /// it, as a remount does.
-    Commit {
-        source: Option<Source>,
-        texts: Vec<OffscreenText>,
-        providers: Vec<(String, SelectionCopy)>,
-    },
     /// A selection request pinned `key` and built the texts for it.
     Pin {
         key: String,
@@ -153,12 +146,38 @@ impl Pins {
         self.texts().iter().any(|t| t.row_key == key)
     }
 
-    /// The texts and copy providers, moved out for a commit to refill in place so their
-    /// allocations carry over. [`PinsEvent::Commit`] installs them back.
-    pub(crate) fn take_texts(&mut self) -> (Vec<OffscreenText>, Vec<(String, SelectionCopy)>) {
+    /// Clears the kept texts and providers in place at the start of a commit. The vectors keep
+    /// their allocations, and a builder that panics partway leaves what it already collected.
+    pub(crate) fn clear_texts(&mut self) {
+        if let Pins::Pinned { texts, providers, .. } = self {
+            texts.clear();
+            providers.clear();
+        }
+    }
+
+    /// The vectors a commit collects a built row's texts into, borrowed from the state so a
+    /// panic, an early return or a fallback keeps what came before.
+    pub(crate) fn text_buffers(
+        &mut self,
+    ) -> Option<(&mut Vec<OffscreenText>, &mut Vec<(String, SelectionCopy)>)> {
         match self {
-            Pins::None => (Vec::new(), Vec::new()),
-            Pins::Pinned { texts, providers, .. } => (std::mem::take(texts), std::mem::take(providers)),
+            Pins::None => None,
+            Pins::Pinned { texts, providers, .. } => Some((texts, providers)),
+        }
+    }
+
+    /// Installs the commit's row source, keeping the kept rows, texts and providers.
+    pub(crate) fn set_source(&mut self, source: Source) {
+        match self {
+            Pins::None => {
+                *self = Pins::Pinned {
+                    rows: Vec::new(),
+                    texts: Vec::new(),
+                    providers: Vec::new(),
+                    source,
+                };
+            }
+            Pins::Pinned { source: current, .. } => *current = source,
         }
     }
 
@@ -174,7 +193,7 @@ impl Pins {
                 }
             }
             PinsEvent::Select { anchor, focus } => {
-                let (rows, texts, _, _) = self.fields(None);
+                let (rows, texts, _, _) = self.fields();
                 rows.clear();
                 if let Some(key) = anchor {
                     rows.push(key.to_owned());
@@ -188,13 +207,8 @@ impl Pins {
                 // cleared selection drop them.
                 texts.retain(|t| rows.iter().any(|r| r == &t.row_key));
             }
-            PinsEvent::Commit { source, texts, providers } => {
-                let (_, current, current_providers, _) = self.fields(source);
-                *current = texts;
-                *current_providers = providers;
-            }
             PinsEvent::Pin { key, texts, providers } => {
-                let (rows, current, current_providers, _) = self.fields(None);
+                let (rows, current, current_providers, _) = self.fields();
                 if !rows.iter().any(|r| r == &key) {
                     rows.push(key);
                 }
@@ -204,11 +218,10 @@ impl Pins {
         }
     }
 
-    /// The mutable parts, turning `None` into a pinned state with `install` (or a default source)
-    /// when a selection or commit needs one.
+    /// The mutable parts, turning `None` into a pinned state with a default source when a
+    /// selection needs one.
     fn fields(
         &mut self,
-        install: Option<Source>,
     ) -> (
         &mut Vec<String>,
         &mut Vec<OffscreenText>,
@@ -224,9 +237,6 @@ impl Pins {
             };
         }
         let Pins::Pinned { rows, texts, providers, source } = self else { unreachable!() };
-        if let Some(install) = install {
-            *source = install;
-        }
         (rows, texts, providers, source)
     }
 }

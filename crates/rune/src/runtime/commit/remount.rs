@@ -30,8 +30,6 @@ struct ListPlan {
     rows: Rc<crate::el::virtual_rows::RowSource>,
     list_group: Option<String>,
     inert: bool,
-    texts: Vec<selectable::virtual_selection::OffscreenText>,
-    providers: Vec<(String, crate::el::SelectionCopy)>,
     quiet: Vec<bool>,
     built_rows: Vec<(usize, El)>,
 }
@@ -203,9 +201,8 @@ impl<S: 'static> Measurement<'_, S> {
 
             let list_group = v.selection.scope.group_path.clone();
             let inert = v.selection.scope.inert;
-            let (mut texts, mut providers) = v.selection.pins.take_texts();
-            texts.clear();
-            providers.clear();
+            // Cleared in place: a later plan that falls back keeps this list's buffers too.
+            v.selection.pins.clear_texts();
             let rows = v.selection.pins.source().and_then(|s| s.rebuild())
                 .expect("an index-built list keeps its row builder").clone();
 
@@ -238,8 +235,6 @@ impl<S: 'static> Measurement<'_, S> {
                 rows,
                 list_group,
                 inert,
-                texts,
-                providers,
                 quiet: Vec::new(),
                 built_rows: Vec::new(),
             });
@@ -277,15 +272,14 @@ impl<S: 'static> Measurement<'_, S> {
                 let row = build_indexed_row(&plan.rows, state, &plan.path, &v.keys[i], i, self.key_warnings);
                 measure::collect_virtual_inputs(&row, &plan.path, i, plan.inert, self.virtual_inputs);
                 if plan.pinned.contains(&i) {
-                    selectable::virtual_selection::collect_virtual_row_selection(
+                    selectable::virtual_selection::collect_row_into_pins(
+                        &mut v.selection.pins,
                         &row,
                         &plan.path,
                         &v.keys[i],
                         i,
                         plan.list_group.as_deref(),
                         plan.inert,
-                        &mut plan.texts,
-                        &mut plan.providers,
                     );
                 }
             }
@@ -294,22 +288,16 @@ impl<S: 'static> Measurement<'_, S> {
                     continue;
                 }
                 let row = build_indexed_row(&plan.rows, state, &plan.path, &v.keys[i], i, self.key_warnings);
-                selectable::virtual_selection::collect_virtual_row_selection(
+                selectable::virtual_selection::collect_row_into_pins(
+                    &mut v.selection.pins,
                     &row,
                     &plan.path,
                     &v.keys[i],
                     i,
                     plan.list_group.as_deref(),
                     plan.inert,
-                    &mut plan.texts,
-                    &mut plan.providers,
                 );
             }
-            v.selection.pins.sync(selectable::virtual_selection::PinsEvent::Commit {
-                source: None,
-                texts: std::mem::take(&mut plan.texts),
-                providers: std::mem::take(&mut plan.providers),
-            });
             for (pos, row_i) in plan.range.clone().enumerate() {
                 let key = &v.keys[row_i];
                 if !plan.mounted_rows.contains_key(key) {
