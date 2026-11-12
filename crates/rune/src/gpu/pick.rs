@@ -242,9 +242,19 @@ pub(crate) fn power_rank(device: wgpu::DeviceType) -> u8 {
 }
 
 /// The PCI vendor of the GPU driving the primary display, which `pick` chooses for a window:
-/// known before any GPU is made, for the CPU renderer that draws until then.
+/// known before any GPU is made, for the CPU renderer that draws until then. Read once, at
+/// launch (`find_display_vendor_soon`): enumerating the display devices takes ~1,500 µs.
 pub(crate) fn display_vendor() -> Option<u32> {
-    display_devices().first().map(|ids| ids.0)
+    *DISPLAY_VENDOR.get_or_init(|| display_devices().first().map(|ids| ids.0))
+}
+
+static DISPLAY_VENDOR: std::sync::OnceLock<Option<u32>> = std::sync::OnceLock::new();
+
+/// Starts reading [`display_vendor`] on a thread of its own, so the first window needn't wait
+/// for it; a window that asks sooner waits for that thread.
+#[cfg(target_os = "windows")]
+pub(crate) fn find_display_vendor_soon() {
+    let _ = std::thread::Builder::new().name("rune-display-vendor".into()).spawn(display_vendor);
 }
 
 /// The PCI vendor and device IDs of the GPUs driving a display on the desktop, the primary

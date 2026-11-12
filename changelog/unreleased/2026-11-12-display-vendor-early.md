@@ -1,0 +1,1 @@
+- **Windows: the first window no longer waits ~1,500 µs to enumerate the display devices.** The primary display's GPU vendor (the CPU renderer's rounding) is read on a thread of its own while winit makes its event loop, once per launch.
