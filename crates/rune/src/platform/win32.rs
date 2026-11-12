@@ -20,6 +20,7 @@ pub(crate) mod dib;
 mod dpi_drag;
 pub(crate) mod drop_target;
 mod frame;
+pub(crate) mod jump_list;
 pub(crate) mod occlusion;
 mod placement;
 pub(crate) mod press_point;
