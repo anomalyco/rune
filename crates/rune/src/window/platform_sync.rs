@@ -10,7 +10,11 @@ pub(super) fn sync_platform<S: 'static>(l: &mut Win, rt: &mut Runtime<S>, secure
     let focused = l.window.has_focus();
     secure_input.set(rt.has_secure_focus() && focused);
     let ime_allowed = rt.ime_area.is_some() && !rt.has_secure_focus() && focused;
-    if std::mem::take(&mut rt.ime_reset) || ime_allowed != *ime {
+    let reset = std::mem::take(&mut rt.ime_reset);
+    // Rune ended a composition itself (a blur, a click, a finished field): the input method
+    // drops its copy, so it doesn't come back in the next field.
+    if reset { crate::platform::ime::cancel(&l.window); }
+    if reset || ime_allowed != *ime {
         l.window.set_ime_allowed(false);
         l.window.set_ime_allowed(ime_allowed);
         *ime = ime_allowed;

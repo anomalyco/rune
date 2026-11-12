@@ -327,15 +327,14 @@ fn timing_slop_and_target_changes_reset_multiclick_count_and_preedit_ignores_it(
     click(&mut rt, pt);
     assert_eq!(rt.state.single.anchor, rt.state.single.focus, "pressing another input resets the click count");
 
-    // 4. Active IME composition ignores multi-click and keeps preedit intact.
+    // 4. A press mid-composition writes the composition into the text, as a browser's field
+    // does, and puts the caret where it landed.
     rt.frame(1.0);
     rt.ime(Ime::Preedit("かん".into(), Some((0, 6))));
     rt.frame(1.0 / 60.0);
-    let before = (rt.state.single.anchor, rt.state.single.focus);
     click(&mut rt, pt);
-    click(&mut rt, pt);
-    assert!(rt.state.single.preedit().is_some());
-    assert_eq!((rt.state.single.anchor, rt.state.single.focus), before);
+    assert!(rt.state.single.preedit().is_none());
+    assert!(rt.state.single.text.contains("かん"));
 }
 
 #[test]

@@ -235,6 +235,14 @@ impl<S: 'static> Runtime<S> {
     pub(super) fn set_focus(&mut self, path: Option<String>, keyboard: bool) -> bool {
         self.input_click.on_focus_change(path.as_deref());
         let moved = self.focus.path() != path.as_deref();
+        // A field left mid-composition keeps what it showed, as a browser's does (Tab the input
+        // method let through, a click on another control, `Tx::focus`).
+        if moved && self.focused_input().is_some() && self.composing() {
+            let mut tx = self.transaction();
+            self.finish_field_composition(&mut tx);
+            self.latch_requests(&mut tx);
+            merge(&mut self.pending, tx);
+        }
         // Tabbing away or into a field takes the selection's keyboard; a hovered row doesn't.
         if moved
             && let Some(p) = path.as_deref()
@@ -695,7 +703,7 @@ mod tests {
     }
 
     #[test]
-    fn window_blur_cancels_preedit_without_losing_committed_text_or_focus() {
+    fn window_blur_keeps_the_composition_as_text_and_focus() {
         fn view(s: &crate::TextEdit, _: &mut Cx<crate::TextEdit>) -> El {
             crate::text_input(s, crate::TextStyle::new(14.0, 400.0)).key("field").size(200.0, 40.0)
                 .on_edit(|s: &mut crate::TextEdit| s)
@@ -705,9 +713,9 @@ mod tests {
         rt.frame(0.0);
         rt.ime(crate::Ime::Preedit("pending".into(), None)); rt.frame(0.0);
         rt.ime_reset = false;
-        rt.cancel_composition(); rt.frame(0.0);
+        rt.finish_composition(); rt.frame(0.0);
         assert!(rt.state.preedit().is_none() && rt.state.focused && rt.ime_reset);
-        assert_eq!(rt.state.text, "committed");
+        assert_eq!(rt.state.text, "committedpending");
     }
 
     #[test]
@@ -741,7 +749,7 @@ mod tests {
     }
 
     #[test]
-    fn input_handover_cancels_composition_and_keys_bubble_after_the_field() {
+    fn input_handover_keeps_the_composition_and_keys_bubble_after_the_field() {
         use crate::{text_input, TextEdit, TextStyle};
         struct Form { first: TextEdit, search: TextEdit, open: bool, app_keys: usize }
         fn view(s: &Form, _: &mut Cx<Form>) -> El {
@@ -769,7 +777,7 @@ mod tests {
         assert!(!rt.focus.keyboard());
         rt.key(KeyEvent { key: Key::Text("query".into()), mods: Mods::default() }); rt.frame(0.0);
         assert_eq!(rt.state.search.text, "query");
-        assert_eq!(rt.state.first.text, "hello");
+        assert_eq!(rt.state.first.text, "hellopending");
         assert_eq!(rt.state.app_keys, 0);
         rt.key(KeyEvent { key: Key::Function(5), mods: Mods::default() }); rt.frame(0.0);
         assert_eq!(rt.state.app_keys, 1);

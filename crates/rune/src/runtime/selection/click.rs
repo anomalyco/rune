@@ -218,6 +218,10 @@ impl<S: 'static> Runtime<S> {
         match step {
             Step::Down { clicks, shift } => {
                 self.set_focus(Some(path), false);
+                // A press mid-composition writes it into the text first, as a browser's field
+                // does, then puts the caret where it landed: the layout it hits already shows
+                // the composition in place.
+                self.finish_field_composition(one);
                 let e = access(states!(self));
                 e.set_single_line(single);
                 e.break_history_group();

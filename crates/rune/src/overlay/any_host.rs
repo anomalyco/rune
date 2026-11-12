@@ -125,10 +125,9 @@ impl<T: 'static> AnyHost for Overlay<T> {
                 self.mods = m.state();
                 self.dirty |= self.rt.physical_observation(crate::PhysicalInput::Modifiers(crate::window::map_mods(self.mods)));
             }
-            WindowEvent::Focused(focused) => {
+            WindowEvent::Focused(_) => {
                 self.rt.set_system_reduced_motion(crate::platform::preferences::reduced_motion());
                 self.scroll_bars_changed(crate::platform::scroll_bars::reread());
-                if !focused { self.rt.cancel_composition(); }
                 self.dirty = true;
             }
             WindowEvent::KeyboardInput { event, .. } if self.options.keys == KeyPolicy::OnDemand => {

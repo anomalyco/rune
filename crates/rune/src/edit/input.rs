@@ -388,17 +388,22 @@ impl TextEdit {
     pub fn ime(&mut self, ev: &Ime) -> EditOutcome {
         if self.secure { self.cancel_composition(); return EditOutcome::default(); }
         self.sync_invariants();
-        self.break_history_group();
-        for effect in ime::step(&mut self.composition, ev) {
-            match effect {
-                ime::Effect::Commit(mut s) => {
-                    let clean = self.sanitize(&s);
-                    s.zeroize();
-                    self.insert(&clean);
-                }
-            }
+        for effect in ime::step(&mut self.composition, ime::Event::Ime(ev)) {
+            let ime::Effect::Commit(mut s) = effect;
+            self.commit_composed(&s);
+            s.zeroize();
         }
         EditOutcome::default()
+    }
+
+    /// Writes a composition's text over the selection as typing: it joins the open undo step,
+    /// as each Hangul syllable or kana phrase a person commits is part of what they type, the
+    /// way a browser's field groups them.
+    pub(super) fn commit_composed(&mut self, s: &str) {
+        let clean = self.sanitize(s);
+        if clean.is_empty() { return; }
+        let kind = if clean.contains(['\r', '\n']) { EditKind::LineBreak } else { EditKind::Text };
+        self.replace(self.range(), &clean, kind);
     }
 
     pub fn paste(&mut self, s: &str) -> EditOutcome {
