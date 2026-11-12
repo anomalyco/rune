@@ -39,6 +39,15 @@ pub fn mark(name: &'static str) {
     }
 }
 
+/// IB-3 experiment: winit's own marks, at their times.
+#[cfg(target_os = "windows")]
+pub(crate) fn winit_marks() {
+    let mut book = book();
+    for (name, at) in winit::IB3_MARKS.lock().unwrap().drain(..) {
+        if !book.marks.iter().any(|(n, _)| *n == name) { book.marks.push((name, at)); }
+    }
+}
+
 /// [`mark`] behind a flag of the call site's own, for a step that runs every frame.
 pub(crate) fn mark_once(flag: &AtomicBool, name: &'static str) {
     if !flag.swap(true, Ordering::Relaxed) {

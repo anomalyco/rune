@@ -215,3 +215,8 @@ mod utils;
 pub mod window;
 
 pub mod platform;
+
+#[doc(hidden)]
+pub static IB3_MARKS: std::sync::Mutex<Vec<(&'static str, std::time::Instant)>> = std::sync::Mutex::new(Vec::new());
+#[doc(hidden)]
+pub fn ib3_mark(name: &'static str) { IB3_MARKS.lock().unwrap().push((name, std::time::Instant::now())); }

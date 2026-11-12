@@ -51,6 +51,8 @@ impl<S: 'static> Host<S> {
         let window = Arc::new(event_loop.create_window(attrs).map_err(|e| e.to_string())?);
         crate::marks::mark("window.native");
         #[cfg(target_os = "windows")]
+        crate::marks::winit_marks();
+        #[cfg(target_os = "windows")]
         crate::platform::win32::follow_suggested_rect(&window);
         #[cfg(target_os = "windows")]
         crate::marks::mark("x.suggested");

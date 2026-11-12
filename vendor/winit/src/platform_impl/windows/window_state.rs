@@ -388,12 +388,14 @@ impl WindowFlags {
 
             unsafe {
                 EnableMenuItem(GetSystemMenu(window, 0), SC_CLOSE, flags);
+                crate::ib3_mark("d.menu");
             }
         }
 
         if !new.contains(WindowFlags::VISIBLE) {
             unsafe {
                 ShowWindow(window, SW_HIDE);
+                crate::ib3_mark("d.hide");
             }
         }
 
@@ -427,7 +429,9 @@ impl WindowFlags {
                 }
 
                 // Refresh the window frame
+                crate::ib3_mark("d.styles");
                 SetWindowPos(window, 0, 0, 0, 0, 0, flags);
+                crate::ib3_mark("d.framechanged");
                 SendMessageW(window, event_loop::SET_RETAIN_STATE_ON_SIZE_MSG_ID.get(), 0, 0);
             }
         }
