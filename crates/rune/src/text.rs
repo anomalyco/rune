@@ -215,6 +215,9 @@ pub struct TextSystem {
     color_glyphs: GlyphMap<ColorGlyph>,
     color_pixels: Vec<crate::pixels::Pixels>,
     color_bytes: usize,
+    /// Colour glyphs placed so far, painted or from the mask cache: with the atlas's count, a
+    /// change the cache's next write must carry.
+    color_placed: u64,
     color_icons: color_icon::ColorIcons,
     /// Layouts shaped, a running count (shaping work counter for perf gates).
     pub shaped: u32,
@@ -335,6 +338,7 @@ impl TextSystem {
             color_glyphs: GlyphMap::default(),
             color_pixels: Vec::new(),
             color_bytes: 0,
+            color_placed: 0,
             color_icons: color_icon::ColorIcons::default(),
             shaped: 0,
             rebroken: 0,

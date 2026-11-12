@@ -1,7 +1,7 @@
 //! Windfoil's atlas masks kept across launches: a glyph whose mask an earlier launch of this
 //! build made is placed from those bytes, with no outline built and no fill, so a first screen
 //! of text seen before costs a copy. It's a cache of computed inputs, not a picture: every mask
-//! is keyed by what decides its texels (the font by a hash of its bytes, never this run's id;
+//! is keyed by what decides its texels (the font by its identity, ont_identity, never this run's id;
 //! the glyph, size, variation, x and y phase, dilation, look, slant and synthetic bold), and the
 //! whole cache by this build's link stamp, so any other build, font or setting misses and fills
 //! as before. It's read before the first frame wherever the app reads it from ([`offer`]), and
@@ -19,7 +19,7 @@ use crate::machine::Effects;
 use crate::time::Instant;
 
 /// The encoding's version: bump it whenever what's stored changes shape.
-const FORMAT: u32 = 1;
+const FORMAT: u32 = 2;
 const MAGIC: [u8; 8] = *b"RUNEMSK1";
 /// Mask bytes a cache keeps: the masks in use when it's written, then earlier ones, most recent
 /// first. A session's first screen at 2880x1800 is about 112 KB.
@@ -29,7 +29,7 @@ pub const BUDGET: usize = 1 << 20;
 const SETTLE: f64 = 3.0;
 const BETWEEN: f64 = 30.0;
 
-/// A mask's key with the font named by the hash of its bytes.
+/// A mask's key with the font named by its identity (ont_identity).
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct StableKey {
     font: u64,
@@ -43,6 +43,8 @@ struct StableKey {
     apple: u8,
     skew: u8,
     bold: bool,
+    /// A colour glyph's RGBA image (`color_glyphs`), not an alpha or LCD mask.
+    color: bool,
 }
 
 const KEY_BYTES: usize = 40;
@@ -50,33 +52,45 @@ const ENTRY_BYTES: usize = KEY_BYTES + 16;
 
 impl StableKey {
     fn of(key: &GlyphKey, font: u64) -> StableKey {
-        StableKey { font, index: key.index, glyph: key.glyph, size: key.size, coords: key.coords, dilation: key.dilation, subpx: key.subpx, subpy: key.subpy, apple: key.apple, skew: key.skew, bold: key.bold }
+        StableKey { font, index: key.index, glyph: key.glyph, size: key.size, coords: key.coords, dilation: key.dilation, subpx: key.subpx, subpy: key.subpy, apple: key.apple, skew: key.skew, bold: key.bold, color: false }
+    }
+
+    /// Colour glyph `key`'s (its `color_key`).
+    fn color(key: &GlyphKey, font: u64) -> StableKey {
+        StableKey { color: true, ..StableKey::of(key, font) }
     }
 
     fn put(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(&self.font.to_le_bytes());
         out.extend_from_slice(&self.coords.to_le_bytes());
         for v in [self.index, self.glyph, self.size, self.dilation] { out.extend_from_slice(&v.to_le_bytes()); }
-        out.extend_from_slice(&[self.subpx, self.subpy, self.apple, self.skew, u8::from(self.bold), 0, 0, 0]);
+        out.extend_from_slice(&[self.subpx, self.subpy, self.apple, self.skew, u8::from(self.bold), u8::from(self.color), 0, 0]);
     }
 
     fn read(b: &[u8]) -> StableKey {
         let u64_at = |i: usize| u64::from_le_bytes(b[i..i + 8].try_into().unwrap_or_default());
         let u32_at = |i: usize| u32::from_le_bytes(b[i..i + 4].try_into().unwrap_or_default());
-        StableKey { font: u64_at(0), coords: u64_at(8), index: u32_at(16), glyph: u32_at(20), size: u32_at(24), dilation: u32_at(28), subpx: b[32], subpy: b[33], apple: b[34], skew: b[35], bold: b[36] != 0 }
+        StableKey { font: u64_at(0), coords: u64_at(8), index: u32_at(16), glyph: u32_at(20), size: u32_at(24), dilation: u32_at(28), subpx: b[32], subpy: b[33], apple: b[34], skew: b[35], bold: b[36] != 0, color: b[37] != 0 }
     }
 }
 
-/// A stored mask: texels `w` x `h` (three a pixel when `lcd`), its offset from the pen, and
-/// where its bytes start in the cache's data. A glyph that draws nothing is 0 x 0.
+/// A stored mask: texels `w` x `h` (three a pixel when `lcd`, four RGBA bytes when `color`),
+/// its offset from the pen, and where its bytes start in the cache's data. A glyph that draws
+/// nothing is 0 x 0.
 #[derive(Clone, Copy)]
-struct Entry { w: u32, h: u32, left: i32, top: i32, lcd: bool, at: usize }
+struct Entry { w: u32, h: u32, left: i32, top: i32, lcd: bool, color: bool, at: usize }
+
+impl Entry {
+    fn len(&self) -> usize { (self.w * self.h) as usize * if self.color { 4 } else { 1 } }
+}
 
 /// Masks an earlier launch of this build saved, decoded.
 #[derive(Default)]
 pub struct MaskCache {
     entries: HashMap<StableKey, Entry, std::hash::BuildHasherDefault<rune_motion::Fx>>,
     data: Vec<u8>,
+    /// It holds colour glyphs, so a colour font's lookups are worth naming it.
+    color: bool,
 }
 
 impl MaskCache {
@@ -105,8 +119,8 @@ fn decode(bytes: &[u8], stamp: Option<u64>) -> Option<MaskCache> {
     for e in table {
         let at = |i: usize| u32_at(e, KEY_BYTES + i).unwrap_or_default();
         let (wl, h, left, top) = (at(0), at(4), at(8) as i32, at(12) as i32);
-        let (w, lcd) = (wl & 0x7fff_ffff, wl >> 31 != 0);
-        let entry = Entry { w, h, left, top, lcd, at: 0 };
+        let (w, lcd, color) = (wl & 0x3fff_ffff, wl >> 31 != 0, wl >> 30 & 1 != 0);
+        let entry = Entry { w, h, left, top, lcd, color, at: 0 };
         entries.insert(StableKey::read(&e[..KEY_BYTES]), entry);
     }
     // Bytes follow in the table's order.
@@ -114,9 +128,10 @@ fn decode(bytes: &[u8], stamp: Option<u64>) -> Option<MaskCache> {
     for e in table {
         let Some(entry) = entries.get_mut(&StableKey::read(&e[..KEY_BYTES])) else { continue };
         entry.at = at;
-        at += (entry.w * entry.h) as usize;
+        at += entry.len();
     }
-    (at == data.len()).then_some(MaskCache { entries, data })
+    let color = entries.values().any(|e| e.color);
+    (at == data.len()).then_some(MaskCache { entries, data, color })
 }
 
 /// The masks offered for the text systems made from now on, and those already running.
@@ -220,7 +235,7 @@ impl Saving {
 #[derive(Default)]
 pub(crate) struct Masks {
     offered: Option<Arc<MaskCache>>,
-    /// Each font's (blob id's) bytes and their hash, once worked out.
+    /// Each font's (blob id's) bytes and their identity, once worked out.
     fonts: FxHashMap<u64, (parley::fontique::Blob<u8>, Option<u64>)>,
     saving: Saving,
 }
@@ -238,11 +253,24 @@ impl TextSystem {
             self.atlas.map.insert(*key, Residency::Blank);
             return Some(Rasterized::Empty);
         }
-        let bytes = &cache.data[entry.at..entry.at + (entry.w * entry.h) as usize];
+        let bytes = &cache.data[entry.at..entry.at + entry.len()];
         let mut mask = self.atlas.put(entry.w, entry.h, bytes, entry.left, entry.top)?;
         mask.lcd = entry.lcd;
         self.atlas.map.insert(*key, Residency::Uploaded(mask));
         Some(Rasterized::Placed(mask))
+    }
+
+    /// The colour glyph an earlier launch saved for `key` (its `color_key`), as a fresh paint
+    /// gives it: the image and its placement. None when there's no cache or it lacks the glyph.
+    pub(super) fn cached_color(&mut self, key: &GlyphKey, face: &Face) -> Option<(crate::pixels::Pixels, swash::zeno::Placement)> {
+        let cache = self.masks.offered.clone()?;
+        if !cache.color { return None; }
+        let font = self.font_hash(face);
+        let entry = *cache.entries.get(&StableKey::color(key, font))?;
+        if crate::marks::counting() { crate::marks::add("text.mask_cache_hits", 1); }
+        let pixels = crate::pixels::Pixels::new();
+        pixels.set(entry.w, entry.h, cache.data[entry.at..entry.at + entry.len()].to_vec());
+        Some((pixels, swash::zeno::Placement { left: entry.left, top: entry.top, width: entry.w, height: entry.h }))
     }
 
     /// Notes the font of a Windfoil mask, so a write can name it by its bytes.
@@ -250,10 +278,10 @@ impl TextSystem {
         self.masks.fonts.entry(face.font.data.id()).or_insert_with(|| (face.font.data.clone(), None));
     }
 
-    /// The hash of `face`'s font's bytes, worked out once.
+    /// `face`'s font's identity, worked out once.
     fn font_hash(&mut self, face: &Face) -> u64 {
         let entry = self.masks.fonts.entry(face.font.data.id()).or_insert_with(|| (face.font.data.clone(), None));
-        *entry.1.get_or_insert_with(|| hash_bytes(face.font.data.as_ref()))
+        *entry.1.get_or_insert_with(|| font_identity(face.font.data.as_ref()))
     }
 
     /// Each frame (and each timer poll, `frame` false): takes the masks offered, and starts a
@@ -263,7 +291,7 @@ impl TextSystem {
             self.masks.offered = OFFERED.lock().unwrap_or_else(|e| e.into_inner()).clone();
         }
         let &sink = SINK.get()?;
-        let placed = self.atlas.rasterized;
+        let placed = self.atlas.rasterized + self.color_placed;
         let now = Instant::now();
         let event = if frame { SavingEvent::Frame { now, placed } } else { SavingEvent::Poll { now, placed } };
         let mut write = false;
@@ -303,13 +331,21 @@ impl TextSystem {
                         let at = ((g.y + row) * ATLAS_SIZE + g.x) as usize;
                         page[at..at + g.w as usize].iter().copied()
                     }).collect();
-                    items.push((*key, Item::Bytes(Mask { w: g.w, h: g.h, left: g.left, top: g.top, lcd: g.lcd }, bytes)));
+                    items.push((*key, Item::Bytes(Mask { w: g.w, h: g.h, left: g.left, top: g.top, lcd: g.lcd, color: false }, bytes)));
                 }
                 Residency::Pending(g, fill) | Residency::Filled(g, fill) => {
-                    items.push((*key, Item::Fill(Mask { w: g.w, h: g.h, left: g.left, top: g.top, lcd: g.lcd }, fills.len())));
+                    items.push((*key, Item::Fill(Mask { w: g.w, h: g.h, left: g.left, top: g.top, lcd: g.lcd, color: false }, fills.len())));
                     fills.push(QueuedFill { rect: [g.x, g.y, g.w, g.h], fill });
                 }
             }
+        }
+        // Colour glyphs after the masks, each its RGBA image under its `color_key`.
+        for (key, glyph) in self.color_glyphs.iter() {
+            if !self.masks.fonts.contains_key(&key.font) { continue; }
+            let Some(pixels) = self.color_pixels.get(glyph.index as usize - 1) else { continue };
+            let bytes = pixels.rgba();
+            if bytes.len() != (glyph.w * glyph.h * 4) as usize { continue; }
+            items.push((*key, Item::Bytes(Mask { w: glyph.w, h: glyph.h, left: glyph.left, top: glyph.top, lcd: false, color: true }, bytes)));
         }
         let store = (!fills.is_empty()).then(|| outline::OutlineStore::from_texels(self.atlas.outlines.used_texels().to_vec()));
         let fonts = self.masks.fonts.iter().map(|(&id, (blob, hash))| (id, (blob.clone(), *hash))).collect();
@@ -319,7 +355,7 @@ impl TextSystem {
 
 /// A mask's place relative to its pen.
 #[derive(Clone, Copy)]
-struct Mask { w: u32, h: u32, left: i32, top: i32, lcd: bool }
+struct Mask { w: u32, h: u32, left: i32, top: i32, lcd: bool, color: bool }
 
 enum Item {
     Blank,
@@ -350,7 +386,7 @@ impl Snapshot {
                 for (&i, bytes) in group.iter().zip(outs) { filled[i as usize] = bytes; }
             }
         }
-        let font = |id: u64| self.fonts.get(&id).map(|(blob, hash)| hash.unwrap_or_else(|| hash_bytes(blob.as_ref())));
+        let font = |id: u64| self.fonts.get(&id).map(|(blob, hash)| hash.unwrap_or_else(|| font_identity(blob.as_ref())));
         let mut sums: FxHashMap<u64, u64> = FxHashMap::default();
         let mut table = Vec::new();
         let mut data = Vec::new();
@@ -358,14 +394,17 @@ impl Snapshot {
         let mut add = |key: StableKey, m: Option<Mask>, bytes: &[u8], table: &mut Vec<u8>, data: &mut Vec<u8>| {
             if data.len() + bytes.len() > BUDGET || !seen.insert(key) { return; }
             key.put(table);
-            let m = m.unwrap_or(Mask { w: 0, h: 0, left: 0, top: 0, lcd: false });
-            for v in [m.w | (u32::from(m.lcd) << 31), m.h, m.left as u32, m.top as u32] { table.extend_from_slice(&v.to_le_bytes()); }
+            let m = m.unwrap_or(Mask { w: 0, h: 0, left: 0, top: 0, lcd: false, color: false });
+            for v in [m.w | (u32::from(m.lcd) << 31) | (u32::from(m.color) << 30), m.h, m.left as u32, m.top as u32] { table.extend_from_slice(&v.to_le_bytes()); }
             data.extend_from_slice(bytes);
         };
         for (key, item) in &self.items {
             let Some(hash) = sums.get(&key.font).copied().or_else(|| font(key.font)) else { continue };
             sums.insert(key.font, hash);
-            let stable = StableKey::of(key, hash);
+            let stable = match item {
+                Item::Bytes(m, _) if m.color => StableKey::color(key, hash),
+                _ => StableKey::of(key, hash),
+            };
             match item {
                 Item::Blank => add(stable, None, &[], &mut table, &mut data),
                 Item::Bytes(m, bytes) => add(stable, Some(*m), bytes, &mut table, &mut data),
@@ -374,8 +413,8 @@ impl Snapshot {
         }
         if let Some(earlier) = &self.earlier {
             for (key, e) in &earlier.entries {
-                let bytes = &earlier.data[e.at..e.at + (e.w * e.h) as usize];
-                add(*key, Some(Mask { w: e.w, h: e.h, left: e.left, top: e.top, lcd: e.lcd }), bytes, &mut table, &mut data);
+                let bytes = &earlier.data[e.at..e.at + e.len()];
+                add(*key, Some(Mask { w: e.w, h: e.h, left: e.left, top: e.top, lcd: e.lcd, color: e.color }), bytes, &mut table, &mut data);
             }
         }
         let count = (table.len() / ENTRY_BYTES) as u32;
@@ -390,11 +429,17 @@ impl Snapshot {
     }
 }
 
-/// A font's identity across launches: its bytes, hashed.
-fn hash_bytes(bytes: &[u8]) -> u64 {
+/// A font's identity across launches, cheap enough for a 100 MB emoji file at its first lookup:
+/// its length, its first and last 64 KiB (the table directory, and the tables at the end), and
+/// its first face's `head` table, whose `checkSumAdjustment` sums the whole file and whose
+/// `modified` dates it.
+fn font_identity(bytes: &[u8]) -> u64 {
     use std::hash::Hasher;
+    const EDGE: usize = 64 * 1024;
     let mut h = rustc_hash::FxHasher::default();
-    h.write(bytes);
     h.write_usize(bytes.len());
+    h.write(&bytes[..bytes.len().min(EDGE)]);
+    h.write(&bytes[bytes.len().saturating_sub(EDGE)..]);
+    if let Some(head) = swash::FontRef::from_index(bytes, 0).and_then(|f| f.table(swash::tag_from_bytes(b"head"))) { h.write(head); }
     h.finish()
 }
