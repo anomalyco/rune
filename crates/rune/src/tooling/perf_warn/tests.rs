@@ -114,6 +114,24 @@ fn a_poll_that_always_says_changed_but_changes_nothing_warns_after_30_frames() {
 }
 
 #[test]
+fn a_frame_whose_poll_does_not_say_changed_breaks_the_run() {
+    take_log();
+    // 29 quiet identical frames whose `poll` returns true, one whose `poll` returns false, one
+    // more that returns true: the false frame ends the run, so 30 in a row never happened.
+    let mut rt = titled(0u32, still, "poll-gap", |n, _, _| { *n += 1; *n != 31 });
+    for _ in 0..32 { rt.frame(1.0 / 60.0); }
+    assert_eq!(take_log(), Vec::<String>::new(), "a frame whose `poll` returned false breaks the run");
+    // The run starts over on the other side of the gap: 29 more true frames stay quiet, the
+    // 30th warns as before.
+    for _ in 0..28 { rt.frame(1.0 / 60.0); }
+    assert_eq!(take_log(), Vec::<String>::new(), "not before 30 frames in a row after the gap");
+    rt.frame(1.0 / 60.0);
+    let log = take_log();
+    assert_eq!(log.len(), 1, "{log:?}");
+    assert!(log[0].contains("returned true but nothing changed (30 frames in a row)"), "{}", log[0]);
+}
+
+#[test]
 fn a_poll_that_changes_what_shows_stays_quiet() {
     take_log();
     fn view(n: &u32, _: &mut Cx<u32>) -> El {

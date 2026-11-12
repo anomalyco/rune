@@ -138,15 +138,15 @@ impl IdleMeter {
         }
         let same = same.map(|same| same && !animating);
         let site = || name().map_or_else(String::new, |name| format!(" {name:?}"));
-        if polled && let Some(same) = same {
-            m.poll_streak = if same { m.poll_streak + 1 } else { 0 };
-            if m.poll_streak == POLL_FRAMES {
-                let window = site();
-                super::warn_once(format!("idle-poll{window}"), || format!(
-                    "`poll`{} returned true but nothing changed ({POLL_FRAMES} frames in a row); return \
-                     true only when visible state changed", if window.is_empty() { String::new() } else { format!(" of window{window}") }
-                ));
-            }
+        // Frames in a row: a frame that doesn't say it changed something, or that changed what
+        // shows, breaks the run.
+        m.poll_streak = if polled && same == Some(true) { m.poll_streak + 1 } else { 0 };
+        if m.poll_streak == POLL_FRAMES {
+            let window = site();
+            super::warn_once(format!("idle-poll{window}"), || format!(
+                "`poll`{} returned true but nothing changed ({POLL_FRAMES} frames in a row); return \
+                 true only when visible state changed", if window.is_empty() { String::new() } else { format!(" of window{window}") }
+            ));
         }
         let reading = Reading { clock, quiet, animating, same, timer: start.timer, live: start.live, polled };
         if let crate::machine::Effects::One((woke, secs)) = step(&mut m.idle, reading) {
