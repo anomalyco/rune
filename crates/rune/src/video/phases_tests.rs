@@ -286,13 +286,10 @@ impl Old {
         }
         // A request a player fenced brings facts, but no error or frame.
         let current = asked == self.fence;
-        // differs from dev: a seek made since the request names another time, so its answer is
-        // for a time the clip has left even before the next pull asks for the new one.
-        let overtaken = self.fence_at.is_some_and(|asked| self.seek.is_some_and(|target| target != asked));
         match done {
             Done::Err => {
                 // differs from dev: an audio load error after the clip opened is ignored.
-                if current && !overtaken && (!self.audio || !self.opened()) {
+                if current && !self.overtaken() && (!self.audio || !self.opened()) {
                     self.fail("load failed".into());
                 }
             }
@@ -300,7 +297,7 @@ impl Old {
                 if !self.opened() {
                     self.open(Ok(old_meta()));
                 }
-                if current && !overtaken && done != Done::Facts && surface && self.player.is_none() && self.poster == OldPoster::Due {
+                if current && !self.overtaken() && done != Done::Facts && surface && self.player.is_none() && self.poster == OldPoster::Due {
                     let id = self.next_frame_id();
                     if done == Done::FrameFails {
                         self.fail("poster push failed".into());
@@ -310,6 +307,13 @@ impl Old {
                 }
             }
         }
+    }
+    /// differs from dev: a seek made since the request names another time, so its answer is for
+    /// a time the clip has left even before the next pull asks for the new one. Both clamp to
+    /// the clip's length, so a seek past the end is the poster's own time.
+    fn overtaken(&self) -> bool {
+        let clamp = |t: f64| self.duration.map_or(t, |d| t.min(d));
+        self.fence_at.is_some_and(|asked| self.seek.is_some_and(|target| clamp(target) != clamp(asked)))
     }
     fn drop_player(&mut self) {
         if self.player.take().is_some() {

@@ -124,6 +124,20 @@ fn a_poster_frame_overtaken_by_a_seek_does_not_show_before_the_new_time() {
     assert_eq!(posters_shown(&new), 1);
 }
 
+/// A seek past the end that the clip's own length clamps back onto the poster's time is the same
+/// picture, so the finished poster shows rather than waiting for a redundant decode of the end.
+/// // differs from dev: dev compared the raw times, which left the surface blank.
+#[test]
+fn a_seek_past_the_end_still_shows_the_poster_its_length_clamps_to() {
+    let mut new = clip(false, &[Seek(1.0), Pull(Script::LOADING), Seek(2.0)]);
+    let stale = new.fake.asked;
+    new.fake.done = Some((stale, Done::Frame));
+    new.run(Pull(Script::LOADING));
+
+    assert_eq!(new.c.duration, Some(1.0), "the answer opened the clip");
+    assert_eq!(posters_shown(&new), 1, "the poster at the end is the picture the seek asks for");
+}
+
 /// A slow worker, each answer one request behind, while the app seeks to the same time again
 /// and again: every answer is for the time asked for, so each shows.
 #[test]
