@@ -540,6 +540,11 @@ pub(super) fn try_reuse_memo(
     if !old_slice.iter().all(|old| !old.is_moved_stub() && !old.path.is_empty() && taffy.can_reuse(old.id.0, old.taffy)) {
         return None;
     }
+    // A picture that takes a side from its image's ratio keeps its layout only while the image
+    // keeps that ratio: one still loading when it was flattened gets its size later.
+    if !old_slice.iter().all(|old| old.cold.get().and_then(|c| c.pixel_aspect).is_none_or(|r| old.vis.pixels.as_ref().is_some_and(|p| super::flatten::pixel_ratio(p) == r))) {
+        return None;
+    }
 
     let old_root_path = old_slice[0].path.as_str();
     let same_path = path_matches(old_root_path, parent_path, el.key.as_deref(), index);
