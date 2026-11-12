@@ -17,6 +17,7 @@ pub(crate) mod health;
 mod input;
 mod page;
 pub(crate) mod platform;
+pub(crate) mod segmenter;
 
 thread_local! {
     static INSETS: std::cell::Cell<[f32; 4]> = const { std::cell::Cell::new([0.0; 4]) };
@@ -91,7 +92,22 @@ pub(crate) fn run<S: 'static>(app: App<S>) -> Result<(), String> {
         return Err("web does not support windowless apps or native window hooks".into());
     }
     console_error_panic_hook::set_once();
+    segmenter::install();
+    text_probe();
     page::start(quitting(&app.shared), Box::new(move || spawn(app)))
+}
+
+/// For a measuring harness that sets `globalThis.__runeTextProbe` before the module runs:
+/// `globalThis.__runeLines(text, size, weight, width)` gives the UTF-16 offsets where Rune starts
+/// each line of `text` in the sans family (points), to compare with the browser's own lines.
+fn text_probe() {
+    let global = js_sys::global();
+    if !js_sys::Reflect::get(&global, &"__runeTextProbe".into()).is_ok_and(|v| v.is_truthy()) { return; }
+    let lines = wasm_bindgen::closure::Closure::<dyn Fn(String, f32, f32, f32) -> Vec<u32>>::new(|text: String, size: f32, weight: f32, width: f32| {
+        crate::text::line_starts(&text, size, weight, width).into_iter().map(|b| text[..b].encode_utf16().count() as u32).collect::<Vec<u32>>()
+    });
+    let _ = js_sys::Reflect::set(&global, &"__runeLines".into(), lines.as_ref());
+    lines.forget();
 }
 
 fn quitting<S: 'static>(shared: &Arc<crate::app::Shared<S>>) -> Box<dyn Fn() -> bool> {

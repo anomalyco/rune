@@ -642,6 +642,16 @@ pub(crate) fn analyze_text(
         }
     }
 
+    // Words, and in Thai, Lao, Khmer and Burmese line breaks, that the host's dictionary finds
+    // (`dictionary`; Rune: vendor/parley_engine.patch).
+    let mut dictionary = crate::dictionary::Words::of(text, |c| data_sources.properties(c));
+    let before = line_boundary_positions.len();
+    line_boundary_positions.extend(dictionary.line_breaks());
+    if line_boundary_positions.len() > before {
+        line_boundary_positions.sort_unstable();
+        line_boundary_positions.dedup();
+    }
+
     // Collect boundary byte positions compactly
     let mut wb_iter = analyzer.segmenters.word().segment_str(text).peekable();
     let mut gb_iter = data_sources
@@ -708,8 +718,11 @@ pub(crate) fn analyze_text(
         let properties = data_sources.properties(ch);
 
         // For characters requiring a dictionary for deciding word boundaries, apply
-        // UAX #29 Rule WB999 in case there's no dictionary (because ICU4X does not).
-        if !is_word
+        // UAX #29 Rule WB999 in case there's no dictionary (because ICU4X does not); inside a run
+        // the host's dictionary segmented, its boundaries decide.
+        if let Some(bound) = dictionary.word_at(byte_pos) {
+            is_word = bound;
+        } else if !is_word
             && is_grapheme_start
             && properties.needs_dictionary_word_break()
             && !has_word_dictionary(properties.script())

@@ -73,10 +73,9 @@ wgpu = { version = "~30.0.1", default-features = false, features = ["std", "park
 # Keep Wayland client-side frames/buttons without the title font's ab_glyph/ttf-parser.
 winit = { version = "0.30.13", default-features = false, features = ["rwh_06", "x11", "wayland", "wayland-dlopen", "wayland-csd-adwaita-notitle"] }
 taffy = { version = "0.15", default-features = false, features = ["std", "taffy_tree", "flexbox", "grid", "block_layout", "content_size"] }
-# `complex-scripts`: ICU4X's word and line dictionaries, as a browser's ICU has them. Chinese and
-# Japanese words (2.0 MB) and Thai, Lao, Khmer and Burmese words and line breaks (1.8 MB); without
-# them a Thai phrase never wraps and every CJK line logs a missing segmentation model.
-parley = { version = "0.12", default-features = false, features = ["std", "complex-scripts"] }
+# Natively with `complex-scripts` (below): ICU4X's word and line dictionaries, as a browser's ICU
+# has them.
+parley = { version = "0.12", default-features = false, features = ["std"] }
 swash = "0.2.10"
 skrifa = "0.44"
 bytemuck = { version = "1.25", features = ["derive"] }
@@ -92,7 +91,7 @@ half = "2"
 unicode-segmentation = "1.13"
 # Bidi classes for `Direction::Auto` (Parley already builds it, with its data).
 icu_properties = { version = "2.3", default-features = false, features = ["compiled_data"] }
-# Words for a double-click, with the dictionaries Parley's `complex-scripts` links.
+# Words for a double-click, natively with the dictionaries Parley's `complex-scripts` links.
 icu_segmenter = { version = "2.3", default-features = false, features = ["compiled_data"] }
 resvg = { version = "0.45", default-features = false, optional = true }
 
@@ -101,6 +100,11 @@ resvg = { version = "0.45", default-features = false, optional = true }
 libc = "0.2"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# `complex-scripts`: Chinese and Japanese words (2.0 MB) and Thai, Lao, Khmer and Burmese words and
+# line breaks (1.8 MB); without them a Thai phrase never wraps and every CJK line logs a missing
+# segmentation model. A browser has its own (`Intl.Segmenter`), which the page gives Parley
+# (`platform/web/segmenter.rs`), and links none.
+parley = { version = "0.12", default-features = false, features = ["std", "complex-scripts"] }
 pollster = "1"
 # JPEG, GIF, WebP, BMP and ICO decoding; a web build hands them to the browser's codecs instead.
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "ico"] }
@@ -118,6 +122,8 @@ arboard = { version = "3.6", default-features = false, features = ["wayland-data
 arboard = { version = "3.6", default-features = false, features = ["wayland-data-control", "image-data"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+# `dictionary::set_dictionary_segmenter` (vendor/parley_engine), for `Intl.Segmenter`'s words.
+parley_engine = { version = "0.12", default-features = false }
 web-time = "1"
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"

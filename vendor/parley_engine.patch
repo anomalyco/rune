@@ -1,5 +1,5 @@
 diff --git a/src/analysis.rs b/src/analysis.rs
-index 7d871af..f67e709 100644
+index 7d871af..d35c610 100644
 --- a/src/analysis.rs
 +++ b/src/analysis.rs
 @@ -150,6 +150,33 @@ impl AnalysisDataSources {
@@ -60,15 +60,40 @@ index 7d871af..f67e709 100644
              .segment_str(substring);
  
          let mut substring_chars = substring.chars();
-@@ -614,7 +643,7 @@ pub(crate) fn analyze_text(
+@@ -613,8 +642,18 @@ pub(crate) fn analyze_text(
+         }
      }
  
++    // Words, and in Thai, Lao, Khmer and Burmese line breaks, that the host's dictionary finds
++    // (`dictionary`; Rune: vendor/parley_engine.patch).
++    let mut dictionary = crate::dictionary::Words::of(text, |c| data_sources.properties(c));
++    let before = line_boundary_positions.len();
++    line_boundary_positions.extend(dictionary.line_breaks());
++    if line_boundary_positions.len() > before {
++        line_boundary_positions.sort_unstable();
++        line_boundary_positions.dedup();
++    }
++
      // Collect boundary byte positions compactly
 -    let mut wb_iter = data_sources.word_segmenter().segment_str(text).peekable();
 +    let mut wb_iter = analyzer.segmenters.word().segment_str(text).peekable();
      let mut gb_iter = data_sources
          .grapheme_segmenter()
          .segment_str(text)
+@@ -679,8 +718,11 @@ pub(crate) fn analyze_text(
+         let properties = data_sources.properties(ch);
+ 
+         // For characters requiring a dictionary for deciding word boundaries, apply
+-        // UAX #29 Rule WB999 in case there's no dictionary (because ICU4X does not).
+-        if !is_word
++        // UAX #29 Rule WB999 in case there's no dictionary (because ICU4X does not); inside a run
++        // the host's dictionary segmented, its boundaries decide.
++        if let Some(bound) = dictionary.word_at(byte_pos) {
++            is_word = bound;
++        } else if !is_word
+             && is_grapheme_start
+             && properties.needs_dictionary_word_break()
+             && !has_word_dictionary(properties.script())
 diff --git a/src/analyzer.rs b/src/analyzer.rs
 index b9ae430..647dd76 100644
 --- a/src/analyzer.rs
@@ -96,6 +121,234 @@ index 25aa622..fd44780 100644
              } else {
                  break;
              }
+diff --git a/src/dictionary.rs b/src/dictionary.rs
+new file mode 100644
+index 0000000..a65c7da
+--- /dev/null
++++ b/src/dictionary.rs
+@@ -0,0 +1,133 @@
++// Copyright 2026 the Parley Authors
++// SPDX-License-Identifier: Apache-2.0 OR MIT
++
++//! Word boundaries for the scripts whose words need a dictionary (Thai, Lao, Khmer, Burmese,
++//! Chinese and Japanese), from outside Parley (Rune: vendor/parley_engine.patch). A build without
++//! `complex-scripts` links none of ICU's dictionaries; a host that has its own (a browser's
++//! `Intl.Segmenter`) gives them here. Its boundaries are the words inside each such run and, in
++//! Thai, Lao, Khmer and Burmese, the run's line break opportunities too, as ICU's dictionary
++//! line segmenter makes them (UAX #14 breaks class SA at word boundaries).
++
++use alloc::vec::Vec;
++
++use icu_properties::props::{GeneralCategory, Script};
++use parley_data::Properties;
++
++/// Appends to `out` the word boundaries strictly inside `text`, as ascending byte offsets, for a
++/// `text` all in one dictionary language: `language` is `th`, `lo`, `km`, `my` or `ja` (Han,
++/// hiragana and katakana, whose dictionary Chinese and Japanese share).
++pub type DictionarySegmenter = fn(text: &str, language: &str, out: &mut Vec<usize>);
++
++#[cfg(feature = "std")]
++static SEGMENTER: std::sync::OnceLock<DictionarySegmenter> = std::sync::OnceLock::new();
++
++/// Gives Parley the host's dictionary word boundaries, once (a second call changes nothing).
++/// Without `complex-scripts` and without this, a Thai phrase has no break opportunity and a
++/// Chinese sentence's words are its characters. Needs `std`.
++pub fn set_dictionary_segmenter(segmenter: DictionarySegmenter) {
++    #[cfg(feature = "std")]
++    let _ = SEGMENTER.set(segmenter);
++    #[cfg(not(feature = "std"))]
++    let _ = segmenter;
++}
++
++fn segmenter() -> Option<DictionarySegmenter> {
++    #[cfg(all(feature = "std", not(feature = "complex-scripts")))]
++    return SEGMENTER.get().copied();
++    #[cfg(not(all(feature = "std", not(feature = "complex-scripts"))))]
++    None
++}
++
++/// The dictionary language a character's script asks for, and whether its words are its line
++/// break opportunities (class SA).
++fn language(script: Script) -> Option<(&'static str, bool)> {
++    Some(match script {
++        Script::Thai => ("th", true),
++        Script::Lao => ("lo", true),
++        Script::Khmer => ("km", true),
++        Script::Myanmar => ("my", true),
++        Script::Han | Script::Hiragana | Script::Katakana => ("ja", false),
++        _ => return None,
++    })
++}
++
++/// A mark, a joiner or a length mark (ー) carries on the run before it.
++fn continues(properties: Properties, ch: char) -> bool {
++    matches!(properties.script(), Script::Inherited)
++        || matches!(
++            properties.general_category(),
++            GeneralCategory::NonspacingMark | GeneralCategory::SpacingMark | GeneralCategory::EnclosingMark
++        )
++        || matches!(ch, '\u{200C}' | '\u{200D}' | '\u{30FC}')
++}
++
++/// The text's dictionary runs and the host's word boundaries inside them.
++#[derive(Default)]
++pub(crate) struct Words {
++    /// `(start, end, sa)` byte ranges, ascending.
++    runs: Vec<(usize, usize, bool)>,
++    /// Boundaries strictly inside the runs, ascending.
++    bounds: Vec<usize>,
++    run: usize,
++    bound: usize,
++}
++
++impl Words {
++    pub(crate) fn of(text: &str, properties: impl Fn(char) -> Properties) -> Self {
++        let Some(segment) = segmenter() else { return Self::default() };
++        let mut words = Self::default();
++        let mut open: Option<(usize, &'static str, bool)> = None;
++        let close = |words: &mut Self, start: usize, end: usize, lang: &'static str, sa: bool| {
++            let run = &text[start..end];
++            // A single character has no boundary inside it.
++            if run.chars().nth(1).is_none() {
++                return;
++            }
++            let mut found = Vec::new();
++            segment(run, lang, &mut found);
++            words.bounds.extend(found.into_iter().filter(|&b| b > 0 && b < run.len() && run.is_char_boundary(b)).map(|b| b + start));
++            words.runs.push((start, end, sa));
++        };
++        for (at, ch) in text.char_indices() {
++            let props = properties(ch);
++            if let Some((start, lang, sa)) = open {
++                if continues(props, ch) || language(props.script()).is_some_and(|(l, _)| l == lang) {
++                    continue;
++                }
++                close(&mut words, start, at, lang, sa);
++            }
++            open = language(props.script()).map(|(lang, sa)| (at, lang, sa));
++        }
++        if let Some((start, lang, sa)) = open {
++            close(&mut words, start, text.len(), lang, sa);
++        }
++        words
++    }
++
++    /// The boundaries inside Thai, Lao, Khmer and Burmese runs: their line break opportunities.
++    pub(crate) fn line_breaks(&self) -> impl Iterator<Item = usize> + '_ {
++        let mut run = 0;
++        self.bounds.iter().copied().filter(move |&b| {
++            while self.runs.get(run).is_some_and(|r| r.1 <= b) {
++                run += 1;
++            }
++            self.runs.get(run).is_some_and(|r| r.0 < b && r.2)
++        })
++    }
++
++    /// Inside a run (past its first character), whether `at` is a word boundary; `None` outside
++    /// one, where the rule-based segmenter decides. Asked in ascending order.
++    pub(crate) fn word_at(&mut self, at: usize) -> Option<bool> {
++        while self.runs.get(self.run).is_some_and(|r| r.1 <= at) {
++            self.run += 1;
++        }
++        let run = self.runs.get(self.run)?;
++        if at <= run.0 {
++            return None;
++        }
++        while self.bounds.get(self.bound).is_some_and(|&b| b < at) {
++            self.bound += 1;
++        }
++        Some(self.bounds.get(self.bound) == Some(&at))
++    }
++}
+diff --git a/src/lib.rs b/src/lib.rs
+index 647f360..ea7d79b 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -110,6 +110,8 @@ mod analysis;
+ mod analyzer;
+ mod bidi;
+ pub mod break_overrides;
++pub mod dictionary;
++pub mod platform;
+ mod glyph;
+ pub mod itemize;
+ mod lru_cache;
+diff --git a/src/platform.rs b/src/platform.rs
+new file mode 100644
+index 0000000..041b9b9
+--- /dev/null
++++ b/src/platform.rs
+@@ -0,0 +1,70 @@
++// Copyright 2026 the Parley Authors
++// SPDX-License-Identifier: Apache-2.0 OR MIT
++
++//! A face of last resort that the platform draws (Rune: vendor/parley_engine.patch). A host that
++//! can shape and draw text itself (a browser's canvas, with the system's fonts, shaping and
++//! colour emoji) registers a font that covers every character and gives its runs a shaper here.
++//! A run in that font isn't shaped by HarfRust: the host gives one glyph per grapheme, its
++//! advance measured as the platform lays the run out, and the glyph ids are the host's own, for
++//! it to draw them.
++
++use alloc::vec::Vec;
++
++/// A run in the platform's face, for its shaper.
++#[derive(Debug)]
++pub struct PlatformText<'a> {
++    /// The run's text.
++    pub text: &'a str,
++    /// Byte offsets into `text` where each grapheme starts, ascending, the first 0.
++    pub graphemes: &'a [u32],
++    /// Byte offsets where each unit the platform draws whole starts (at grapheme starts, between
++    /// break opportunities), ascending, the first 0. A line never breaks inside one.
++    pub units: &'a [u32],
++    /// The font size, in the layout's units.
++    pub size: f32,
++    /// The weight asked for (`wght`, 100 to 900).
++    pub weight: f32,
++    /// Italic asked for.
++    pub italic: bool,
++    /// The run is right to left.
++    pub rtl: bool,
++    /// The run's language tag, if it has one.
++    pub language: Option<&'a str>,
++}
++
++/// One glyph per grapheme of a [`PlatformText`], in logical order.
++#[derive(Clone, Copy, Debug, Default)]
++pub struct PlatformGlyph {
++    /// The host's id for what this glyph draws.
++    pub id: u32,
++    /// The grapheme's advance, in the layout's units.
++    pub advance: f32,
++    /// How far right of its pen the glyph draws, in the layout's units.
++    pub x_offset: f32,
++}
++
++/// Fills `out` with one glyph per grapheme of the run, in logical order.
++pub type PlatformShaper = fn(run: &PlatformText<'_>, out: &mut Vec<PlatformGlyph>);
++
++#[cfg(feature = "std")]
++static PLATFORM: std::sync::OnceLock<(u64, PlatformShaper)> = std::sync::OnceLock::new();
++
++/// Makes the font whose data has id `font` (`Blob::id`) the platform's face, shaped by `shaper`,
++/// once (a second call changes nothing). Needs `std`.
++pub fn set_platform_face(font: u64, shaper: PlatformShaper) {
++    #[cfg(feature = "std")]
++    let _ = PLATFORM.set((font, shaper));
++    #[cfg(not(feature = "std"))]
++    let _ = (font, shaper);
++}
++
++/// The shaper for the font with data id `font`, if it's the platform's face.
++pub(crate) fn shaper(font: u64) -> Option<PlatformShaper> {
++    #[cfg(feature = "std")]
++    return PLATFORM.get().filter(|(id, _)| *id == font).map(|(_, shaper)| *shaper);
++    #[cfg(not(feature = "std"))]
++    {
++        let _ = font;
++        None
++    }
++}
 diff --git a/src/shape/cache.rs b/src/shape/cache.rs
 index cb8d3c5..530b919 100644
 --- a/src/shape/cache.rs
@@ -145,7 +398,7 @@ index cb8d3c5..530b919 100644
      /// The font collection's blob ID.
      font_blob_id: u64,
 diff --git a/src/shape/shaped_text.rs b/src/shape/shaped_text.rs
-index 63afadd..d73a222 100644
+index 63afadd..1ec9ddc 100644
 --- a/src/shape/shaped_text.rs
 +++ b/src/shape/shaped_text.rs
 @@ -78,6 +78,40 @@ impl FontMetrics {
@@ -198,15 +451,28 @@ index 63afadd..d73a222 100644
          // Default values from HarfBuzz: https://github.com/harfbuzz/harfbuzz/blob/12ee77ee00514c442bcd28f9aa9d56b708c37382/src/hb-ot-metrics.cc#L355-L372
          let fallback_decoration_size = font_size / 18.0;
  
-@@ -273,6 +307,7 @@ impl ShapedText {
+@@ -271,8 +305,10 @@ impl ShapedText {
+         char_info: &[CharInfo],
+         char_style_indices: &[u16],
          font: &FontInstance,
-         glyph_buffer: &harfrust::GlyphBuffer,
+-        glyph_buffer: &harfrust::GlyphBuffer,
++        glyph_infos: &[harfrust::GlyphInfo],
++        glyph_positions: &[harfrust::GlyphPosition],
          normalized_coords: &[harfrust::NormalizedCoord],
 +        (font_metrics, units_per_em): (FontMetrics, f32),
      ) {
          debug_assert_eq!(
              range.char_range.len(),
-@@ -302,19 +337,6 @@ impl ShapedText {
+@@ -280,8 +316,6 @@ impl ShapedText {
+             "The claimed character range and the text's covered byte range should agree"
+         );
+ 
+-        let glyph_infos = glyph_buffer.glyph_infos();
+-
+         let normalized_coords_range = {
+             let start = self.normalized_coords.len();
+             self.normalized_coords.extend(
+@@ -302,23 +336,9 @@ impl ShapedText {
                  index
              });
  
@@ -226,8 +492,12 @@ index 63afadd..d73a222 100644
          // `HarfRust` returns glyphs in visual order, so we need to process them as such while
          // maintaining logical ordering of clusters.
  
+-        let glyph_positions = glyph_buffer.glyph_positions();
+         let scale_factor = options.font_size / units_per_em;
+         let shaped_clusters_start = self.shaped_clusters.len();
+ 
 diff --git a/src/shape/shaper.rs b/src/shape/shaper.rs
-index f1ad855..187bea4 100644
+index f1ad855..42594db 100644
 --- a/src/shape/shaper.rs
 +++ b/src/shape/shaper.rs
 @@ -9,6 +9,7 @@ use harfrust::ShapeOptions as HarfShapeOptions;
@@ -255,7 +525,19 @@ index f1ad855..187bea4 100644
              unicode_buffer: Some(harfrust::UnicodeBuffer::new()),
              features: Vec::new(),
              char_cluster: CharCluster::default(),
-@@ -360,6 +364,31 @@ fn shape_segment(
+@@ -273,6 +277,11 @@ fn shape_segment(
+ 
+     // Shape a run of the segment with a single font, appending it to `shaped_text`.
+     let mut shape_run = |font: &FontInstance, range: TextRange| {
++        // The platform's face: its host measures the run and draws it (`platform`).
++        if let Some(platform) = crate::platform::shaper(font.font.data.id()) {
++            shape_platform_run(platform, text, range, segment, options, char_info, char_style_indices, font, shaped_text);
++            return;
++        }
+         // TODO: How do we want to handle errors like this?
+         let font_ref =
+             harfrust::FontRef::from_index(font.font.data.as_ref(), font.font.index).unwrap();
+@@ -360,6 +369,31 @@ fn shape_segment(
                  .point_size(Some(options.font_size)),
          );
  
@@ -287,11 +569,115 @@ index f1ad855..187bea4 100644
          shaped_text.push_run(
              text,
              range,
-@@ -370,6 +399,7 @@ fn shape_segment(
+@@ -368,8 +402,10 @@ fn shape_segment(
+             char_info,
+             char_style_indices,
              font,
-             &glyph_buffer,
+-            &glyph_buffer,
++            glyph_buffer.glyph_infos(),
++            glyph_buffer.glyph_positions(),
              harf_shaper.coords(),
 +            metrics,
          );
  
          // Replace buffer to reuse allocation in the next run.
+@@ -447,6 +483,99 @@ fn variations_iter<'a>(
+         }))
+ }
+ 
++/// A run in the platform's face (`platform`), appended to `shaped_text`: its host gives a glyph
++/// per grapheme, with units it draws whole between the run's break opportunities.
++#[expect(clippy::too_many_arguments, reason = "the shape_run closure's inputs")]
++fn shape_platform_run(
++    shaper: crate::platform::PlatformShaper,
++    text: &str,
++    range: TextRange,
++    segment: &Segment,
++    options: &ShapeOptions<'_>,
++    char_info: &[CharInfo],
++    char_style_indices: &[u16],
++    font: &FontInstance,
++    shaped_text: &mut ShapedText,
++) {
++    let run_text = &text[range.byte_range.clone()];
++    let (mut graphemes, mut units, mut clusters) = (Vec::new(), Vec::new(), Vec::new());
++    let mut after_newline = false;
++    for (i, ((at, ch), info)) in run_text.char_indices().zip(&char_info[range.char_range.clone()]).enumerate() {
++        let newline = matches!(ch, '\n' | '\r' | '\u{0B}' | '\u{0C}' | '\u{85}' | '\u{2028}' | '\u{2029}');
++        let grapheme = i == 0 || info.is_grapheme_start() || newline || after_newline;
++        if grapheme {
++            #[expect(clippy::cast_possible_truncation, reason = "a run is under 4 GiB")]
++            {
++                if i == 0 || info.is_soft_wrap_opportunity() || newline || after_newline {
++                    units.push(at as u32);
++                }
++                graphemes.push(at as u32);
++                clusters.push(i as u32);
++            }
++        }
++        after_newline = newline;
++    }
++    let wght = harfrust::Tag::new(b"wght");
++    let weight = variations_iter(&font.synthesis, options.variations)
++        .filter(|v| v.tag == wght)
++        .last()
++        .map_or(if font.synthesis.embolden() { 700. } else { 400. }, |v| v.value);
++    let rtl = segment.bidi_level.is_rtl();
++    let mut glyphs = Vec::with_capacity(graphemes.len());
++    shaper(
++        &crate::platform::PlatformText {
++            text: run_text,
++            graphemes: &graphemes,
++            units: &units,
++            size: options.font_size,
++            weight,
++            italic: font.synthesis.skew().is_some(),
++            rtl,
++            language: options.language.as_ref().map(|l| l.as_str()),
++        },
++        &mut glyphs,
++    );
++    glyphs.resize(graphemes.len(), crate::platform::PlatformGlyph::default());
++    let font_ref = skrifa::FontRef::from_index(font.font.data.as_ref(), font.font.index).unwrap();
++    let metrics = skrifa::metrics::Metrics::new(
++        &font_ref,
++        skrifa::prelude::Size::new(options.font_size),
++        skrifa::instance::LocationRef::default(),
++    );
++    let upem = metrics.units_per_em as f32;
++    let units_of = |px: f32| (px * upem / options.font_size.max(1e-3)).round() as i32;
++    let mut infos: Vec<harfrust::GlyphInfo> = Vec::with_capacity(glyphs.len());
++    let mut positions: Vec<harfrust::GlyphPosition> = Vec::with_capacity(glyphs.len());
++    for (glyph, &cluster) in glyphs.iter().zip(&clusters) {
++        let mut info = harfrust::GlyphInfo::default();
++        info.glyph_id = glyph.id;
++        info.cluster = cluster;
++        infos.push(info);
++        let mut position = harfrust::GlyphPosition::default();
++        position.x_advance = units_of(glyph.advance);
++        position.x_offset = units_of(glyph.x_offset);
++        positions.push(position);
++    }
++    // In visual order, as HarfRust gives them.
++    if rtl {
++        infos.reverse();
++        positions.reverse();
++    }
++    shaped_text.push_run(
++        text,
++        range,
++        segment,
++        options,
++        char_info,
++        char_style_indices,
++        font,
++        &infos,
++        &positions,
++        &[],
++        (FontMetrics::from_skrifa_metrics(&metrics, options.font_size), upem),
++    );
++}
++
+ pub(crate) fn script_to_harfrust(script: fontique::Script) -> harfrust::Script {
+     harfrust::Script::from_iso15924_tag(harfrust::Tag::new(&script.to_bytes()))
+         .unwrap_or(harfrust::script::UNKNOWN)

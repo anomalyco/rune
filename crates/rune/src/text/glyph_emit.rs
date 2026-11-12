@@ -122,6 +122,10 @@ impl TextSystem {
     /// Rasterizes (once) and appends one glyph at device position `at`, `k` times its size.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn push_glyph(&mut self, face: &Face, coords: &[i16], glyph: u32, at: [f32; 2], k: f32, byte: u32, out: &mut Vec<GlyphQuad>) -> Placed {
+        #[cfg(target_arch = "wasm32")]
+        if super::platform_face::is(&face.font) {
+            return self.push_platform_glyph(face, glyph, at, k, byte, out);
+        }
         if self.emit == outline::Emit::Outline && let Some(placed) = self.push_outline(face, coords, glyph, at, k, byte, out) {
             return placed;
         }
@@ -271,6 +275,55 @@ impl TextSystem {
         let c = ColorGlyph { index, used: true, left: at.left, top: at.top, w: at.width, h: at.height };
         self.color_glyphs.insert(key, c);
         c
+    }
+
+    /// A glyph of the browser's face (`platform_face`): the unit it carries drawn on the page's
+    /// canvas once per size and quarter-pixel phase, into the atlas (text) or as a colour image
+    /// (emoji). Asked for again each frame, as the glyph cache's phases are CoreGraphics'.
+    #[cfg(target_arch = "wasm32")]
+    fn push_platform_glyph(&mut self, face: &Face, glyph: u32, at: [f32; 2], k: f32, byte: u32, out: &mut Vec<GlyphQuad>) -> Placed {
+        let size = face.size * k;
+        let quarters = (at[0] * 4.0).round();
+        let fx = (quarters / 4.0).floor();
+        let phase = (quarters - fx * 4.0) as u8;
+        let fy = at[1].round();
+        let key = GlyphKey { font: face.font.data.id(), index: face.font.index, glyph, size: size.to_bits(), coords: 0,
+            subpx: phase, subpy: 0, dilation: 0, apple: 0, skew: 0, bold: false };
+        if let Some(c) = self.color_glyphs.get_mut(&key) {
+            c.used = true;
+            out.push(c.quad(fx, fy, self.glide, face.ink, byte));
+            return Placed::Other;
+        }
+        if let Some(entry) = self.atlas.map.get(&key) {
+            if let Some(a) = entry.mask() {
+                self.atlas.touch(a.page, a.w * a.h);
+                out.push(atlas_quad(a, fx, fy, face.ink, byte));
+            }
+            return Placed::Other;
+        }
+        let Some(image) = super::platform_face::image(glyph, size, f32::from(phase) / 4.0) else {
+            self.atlas.map.insert(key, Residency::Blank);
+            return Placed::Other;
+        };
+        if image.color {
+            self.color_bytes = self.color_bytes.saturating_add(image.data.len());
+            let pixels = crate::pixels::Pixels::new();
+            pixels.set(image.w, image.h, image.data);
+            self.color_pixels.push(pixels);
+            self.color_placed += 1;
+            let c = ColorGlyph { index: self.color_pixels.len() as u32, used: true, left: image.left, top: image.top, w: image.w, h: image.h };
+            self.color_glyphs.insert(key, c);
+            out.push(c.quad(fx, fy, self.glide, face.ink, byte));
+            return Placed::Other;
+        }
+        match self.atlas.put(image.w, image.h, &image.data, image.left, image.top) {
+            Some(a) => {
+                self.atlas.map.insert(key, Residency::Uploaded(a));
+                out.push(atlas_quad(a, fx, fy, face.ink, byte));
+            }
+            None => crate::marks::text_missed(),
+        }
+        Placed::Other
     }
 
     /// Moves the glyphs placed from here on by `glide` device px (`[x, y]`, each within half a

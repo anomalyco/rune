@@ -305,7 +305,8 @@ impl ShapedText {
         char_info: &[CharInfo],
         char_style_indices: &[u16],
         font: &FontInstance,
-        glyph_buffer: &harfrust::GlyphBuffer,
+        glyph_infos: &[harfrust::GlyphInfo],
+        glyph_positions: &[harfrust::GlyphPosition],
         normalized_coords: &[harfrust::NormalizedCoord],
         (font_metrics, units_per_em): (FontMetrics, f32),
     ) {
@@ -314,8 +315,6 @@ impl ShapedText {
             text[range.byte_range.clone()].chars().count(),
             "The claimed character range and the text's covered byte range should agree"
         );
-
-        let glyph_infos = glyph_buffer.glyph_infos();
 
         let normalized_coords_range = {
             let start = self.normalized_coords.len();
@@ -340,7 +339,6 @@ impl ShapedText {
         // `HarfRust` returns glyphs in visual order, so we need to process them as such while
         // maintaining logical ordering of clusters.
 
-        let glyph_positions = glyph_buffer.glyph_positions();
         let scale_factor = options.font_size / units_per_em;
         let shaped_clusters_start = self.shaped_clusters.len();
 
