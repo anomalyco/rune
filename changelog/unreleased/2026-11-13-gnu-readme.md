@@ -1,0 +1,1 @@
+- **The README says what the Windows GNU toolchain needs.** `windows-link`'s `raw-dylib` imports (under `parking_lot`, `windows-core` and `windows-sys`) make rustc run `dlltool` on `x86_64-pc-windows-gnu`, and rustup's copy can't run without MinGW-w64's `as`; the build stopped at `windows-result` with `program not found` and no hint.
