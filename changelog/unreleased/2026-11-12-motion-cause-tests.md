@@ -1,0 +1,1 @@
+- The unit tests #750 added for motion's cause are gone again: Rune takes no new tests. A workspace harness that drives a real window checks the rule instead.
