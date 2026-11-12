@@ -399,6 +399,7 @@ impl<S: 'static> Measurement<'_, S> {
         #[cfg(feature = "hot")]
         let emptied = self.memo.emptied();
         let memo = crate::memo::enter(std::mem::take(self.memo), self.env, self.system_accent, self.system_reduced_motion, crate::theme::blends_srgb(), self.chrome_bits(), cx.caret.clone(), cx.layout.clone());
+        crate::marks::mark("c.view");
         let view_time = crate::frame::profile::Scope::new(crate::frame::profile::Phase::View);
         #[cfg(not(feature = "hot"))]
         let mut root = { let root = self.root_view(&mut cx); self.build_tree(root, tx, force_all) };
