@@ -468,6 +468,15 @@ fn windows_10() -> bool {
     })
 }
 
+/// What the window's frame adds around its client area while it is restored, at `dpi`, each
+/// edge as a positive width: a custom frame keeps the standard frame's sides and bottom, and at
+/// the top only Windows 10's non-client row.
+pub(super) fn restored_borders(hwnd: HWND, dpi: u32) -> RECT {
+    let b = borders(hwnd, dpi);
+    if !installed(hwnd) || !framed(hwnd) { return b; }
+    RECT { top: i32::from(windows_10()), ..b }
+}
+
 /// What a standard frame adds around the client area at `dpi`, each edge as a positive width.
 fn borders(hwnd: HWND, dpi: u32) -> RECT {
     let mut r = RECT { left: 0, top: 0, right: 0, bottom: 0 };

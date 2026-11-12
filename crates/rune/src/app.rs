@@ -98,8 +98,8 @@ pub struct App<S: 'static> {
     pub(crate) float_on_open: bool,
     /// `App::open_inactive`: the first open leaves focus where it is.
     pub(crate) open_inactive: bool,
-    /// `App::maximized`: the window opens maximized.
-    pub(crate) maximized: bool,
+    /// `App::maximized`, `App::full_screen`: how the window's first open shows it.
+    pub(crate) open_as: crate::windows::OpenAs,
     pub(crate) modifier_keys: bool,
     pub(crate) tab_visits_controls: bool,
     pub(crate) srgb_blend: bool,
@@ -153,7 +153,7 @@ impl<S: 'static> App<S> {
             late_font_urls: Vec::new(),
             float_on_open: false,
             open_inactive: false,
-            maximized: false,
+            open_as: crate::windows::OpenAs::Normal,
             modifier_keys: false,
             tab_visits_controls: false,
             srgb_blend: true,
@@ -232,7 +232,15 @@ impl<S: 'static> App<S> {
     /// Open the window maximized, as a window saved maximized reopens. The size it opens at
     /// stays what restoring it returns to.
     pub fn maximized(mut self, maximized: bool) -> Self {
-        self.maximized = maximized;
+        self.open_as = self.open_as.maximized(maximized);
+        self
+    }
+
+    /// Open the window full screen, as a window saved full screen reopens (Electron's
+    /// `setFullScreen(true)`): borderless over the display it opens on, on Windows and Linux.
+    /// Leaving full screen returns to the frame it opened at, maximized if `maximized` is on too.
+    pub fn full_screen(mut self, full_screen: bool) -> Self {
+        self.open_as = self.open_as.full_screen(full_screen);
         self
     }
 

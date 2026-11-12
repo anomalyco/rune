@@ -215,12 +215,12 @@ impl<S: 'static> Host<S> {
     /// (`focus`); a first frame only the GPU can draw shows cloaked until the GPU has drawn it.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn open_on_cpu(&mut self, event_loop: &ActiveEventLoop, window: Arc<Window>, a11y: Option<crate::a11y::Adapter>, a11y_start: native::A11yStart,
-        frame: Option<crate::platform::win32::CustomFrame>, cloak: crate::platform::win32::Cloak, focus: bool, maximize: bool, built: bool) -> Result<(), String> {
-        // Maximizing shows a window: cloaked, so it shows only with its frame.
-        if maximize {
+        frame: Option<crate::platform::win32::CustomFrame>, cloak: crate::platform::win32::Cloak, focus: bool, open_as: crate::windows::OpenAs, built: bool) -> Result<(), String> {
+        // Maximizing (or full screen) shows a window: cloaked, so it shows only with its frame.
+        if open_as != crate::windows::OpenAs::Normal {
             cloak.hold(&window, Instant::now() + win::READY_FALLBACK, focus);
             window.set_visible(true);
-            window.set_maximized(true);
+            chrome::open_as(&window, open_as);
         }
         let phys = window.inner_size();
         let size = (phys.width.max(1), phys.height.max(1));

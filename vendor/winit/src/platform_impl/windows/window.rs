@@ -1365,6 +1365,18 @@ unsafe fn init(
     let menu = attributes.platform_specific.menu;
     let fullscreen = attributes.fullscreen.clone();
     let maximized = attributes.maximized;
+    // A window with a physical position is made there, at its size, so it is born on its
+    // display at that display's scale. Made at the default place (the primary display) and moved
+    // there afterwards, it would cross to the other display's scale (WM_DPICHANGED) and be
+    // resized to keep its logical size: a window saved on a 150 % display beside a 100 % primary
+    // would reopen half as large again.
+    let (x, y, width, height) = match (attributes.position, attributes.inner_size) {
+        (Some(Position::Physical(p)), Some(Size::Physical(s))) => {
+            (p.x, p.y, s.width as i32, s.height as i32)
+        },
+        (Some(Position::Physical(p)), _) => (p.x, p.y, CW_USEDEFAULT, CW_USEDEFAULT),
+        _ => (CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT),
+    };
     let mut initdata = InitData { event_loop, attributes, window_flags, window: None };
 
     let (style, ex_style) = window_flags.to_window_styles();
@@ -1374,10 +1386,10 @@ unsafe fn init(
             class_name.as_ptr(),
             title.as_ptr(),
             style,
-            CW_USEDEFAULT,
-            CW_USEDEFAULT,
-            CW_USEDEFAULT,
-            CW_USEDEFAULT,
+            x,
+            y,
+            width,
+            height,
             parent.unwrap_or(0),
             menu.unwrap_or(0),
             util::get_instance_handle(),

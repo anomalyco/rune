@@ -1,5 +1,5 @@
 diff --git a/src/platform_impl/windows/window.rs b/src/platform_impl/windows/window.rs
-index 228c6f0..3776541 100644
+index 228c6f0..c5770b8 100644
 --- a/src/platform_impl/windows/window.rs
 +++ b/src/platform_impl/windows/window.rs
 @@ -1246,7 +1246,12 @@ impl InitData<'_> {
@@ -16,3 +16,37 @@ index 228c6f0..3776541 100644
          win.set_window_icon(self.attributes.window_icon.clone());
          win.set_taskbar_icon(self.attributes.platform_specific.taskbar_icon.clone());
  
+@@ -1360,6 +1365,18 @@ unsafe fn init(
+     let menu = attributes.platform_specific.menu;
+     let fullscreen = attributes.fullscreen.clone();
+     let maximized = attributes.maximized;
++    // A window with a physical position is made there, at its size, so it is born on its
++    // display at that display's scale. Made at the default place (the primary display) and moved
++    // there afterwards, it would cross to the other display's scale (WM_DPICHANGED) and be
++    // resized to keep its logical size: a window saved on a 150 % display beside a 100 % primary
++    // would reopen half as large again.
++    let (x, y, width, height) = match (attributes.position, attributes.inner_size) {
++        (Some(Position::Physical(p)), Some(Size::Physical(s))) => {
++            (p.x, p.y, s.width as i32, s.height as i32)
++        },
++        (Some(Position::Physical(p)), _) => (p.x, p.y, CW_USEDEFAULT, CW_USEDEFAULT),
++        _ => (CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT),
++    };
+     let mut initdata = InitData { event_loop, attributes, window_flags, window: None };
+ 
+     let (style, ex_style) = window_flags.to_window_styles();
+@@ -1369,10 +1386,10 @@ unsafe fn init(
+             class_name.as_ptr(),
+             title.as_ptr(),
+             style,
+-            CW_USEDEFAULT,
+-            CW_USEDEFAULT,
+-            CW_USEDEFAULT,
+-            CW_USEDEFAULT,
++            x,
++            y,
++            width,
++            height,
+             parent.unwrap_or(0),
+             menu.unwrap_or(0),
+             util::get_instance_handle(),

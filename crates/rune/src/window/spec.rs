@@ -311,6 +311,8 @@ impl<S: 'static> WindowSpec<S> {
     pub fn inactive(mut self) -> Self { self.app = self.app.open_inactive(); self }
     /// Open this window maximized, like `App::maximized`.
     pub fn maximized(mut self, maximized: bool) -> Self { self.app = self.app.maximized(maximized); self }
+    /// Open this window full screen, like `App::full_screen`.
+    pub fn full_screen(mut self, full_screen: bool) -> Self { self.app = self.app.full_screen(full_screen); self }
 }
 
 thread_local! {
@@ -353,6 +355,52 @@ pub struct WindowPlacement {
     pub maximized: bool,
     pub minimized: bool,
     pub full_screen: bool,
+    /// While the window is maximized or minimized, the frame restoring it returns to, as
+    /// `position` and `content_size` give a frame: the system's own record on Windows
+    /// (`GetWindowPlacement`), which follows the window to another display (Win+Shift+Arrow).
+    /// None otherwise, and where the system keeps no such record (macOS, Linux).
+    pub restore: Option<((i32, i32), (u32, u32))>,
+    /// The display the window is on (the one with the most of it): its position and size, as
+    /// `Display::position` and `Display::size` give them.
+    pub display: Option<((i32, i32), (u32, u32))>,
+}
+
+/// How a window's first open shows it (`App::maximized`, `App::full_screen`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum OpenAs {
+    #[default]
+    Normal,
+    Maximized,
+    /// Full screen; leaving it returns to the frame, `maximized` or not.
+    FullScreen { maximized: bool },
+}
+
+impl OpenAs {
+    pub(crate) fn maximized(self, on: bool) -> OpenAs {
+        match (self, on) {
+            (OpenAs::FullScreen { .. }, maximized) => OpenAs::FullScreen { maximized },
+            (_, true) => OpenAs::Maximized,
+            (_, false) => OpenAs::Normal,
+        }
+    }
+
+    pub(crate) fn full_screen(self, on: bool) -> OpenAs {
+        match (self, on) {
+            (OpenAs::FullScreen { maximized: true }, false) => OpenAs::Maximized,
+            (OpenAs::FullScreen { maximized: false }, false) => OpenAs::Normal,
+            (OpenAs::Normal, true) => OpenAs::FullScreen { maximized: false },
+            (OpenAs::Maximized, true) => OpenAs::FullScreen { maximized: true },
+            (state, _) => state,
+        }
+    }
+
+    pub(crate) fn maximizes(self) -> bool {
+        matches!(self, OpenAs::Maximized | OpenAs::FullScreen { maximized: true })
+    }
+
+    pub(crate) fn full_screens(self) -> bool {
+        matches!(self, OpenAs::FullScreen { .. })
+    }
 }
 
 /// A `WindowSpec` of any state type, for factories that mix them:

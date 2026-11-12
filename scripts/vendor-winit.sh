@@ -2,7 +2,8 @@
 # Re-makes vendor/winit: the winit crate exactly as published on crates.io at <version>, plus
 # vendor/winit.patch (Windows: a new window isn't added to the taskbar list it is already on, which
 # cost every window CoInitializeEx and a TaskbarList COM object, about 7,800 µs and nine shell
-# DLLs on its UI thread before its first frame). Run it when winit is bumped, then build: a patch
+# DLLs on its UI thread before its first frame; and a window given a position is made there, at
+# its display's scale, not moved there and resized). Run it when winit is bumped, then build: a patch
 # that no longer applies fails here, and the change goes back in by hand. If upstream winit takes
 # the change, delete vendor/winit and its `[patch.crates-io]` entry instead.
 # Usage: scripts/vendor-winit.sh <version>     e.g. scripts/vendor-winit.sh 0.30.13

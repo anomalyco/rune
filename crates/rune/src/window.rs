@@ -464,8 +464,8 @@ struct Host<S: 'static> {
     float_on_open: bool,
     /// `App::open_inactive`: the first open leaves focus where it is.
     open_inactive: bool,
-    /// `App::maximized`.
-    open_maximized: bool,
+    /// `App::maximized`, `App::full_screen`.
+    open_as: crate::windows::OpenAs,
     shared: Arc<Shared<S>>,
     shortcuts: crate::shortcuts::Guard,
     menus: crate::native_menu::Guard<S>,
@@ -536,7 +536,7 @@ impl<S: 'static> Host<S> {
         let tab_visits_controls = app.tab_visits_controls;
         let fit_height = app.fit_content_height;
         let float_on_open = app.float_on_open;
-        let (open_inactive, open_maximized) = (app.open_inactive, app.maximized);
+        let (open_inactive, open_as) = (app.open_inactive, app.open_as);
         let app_stats = app.dev_stats;
         let playground = app.playground.take();
         let (mut spec, state, shared) = app.into_parts(args.scene.as_deref());
@@ -613,7 +613,7 @@ impl<S: 'static> Host<S> {
             open_at_start: open,
             float_on_open,
             open_inactive,
-            open_maximized,
+            open_as,
             shared,
             shortcuts,
             menus,
