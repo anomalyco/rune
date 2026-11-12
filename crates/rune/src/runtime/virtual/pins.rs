@@ -40,6 +40,9 @@ pub(crate) struct OffscreenText {
     pub row_index: usize,
     pub order_in_row: usize,
     pub rel_path: String,
+    /// The keys from the row's root to this text, one per nesting level. Ancestry is decided on
+    /// these, never on `path`: a key may itself contain a `/`.
+    pub rel: Vec<String>,
     pub path: String,
     pub key: Option<String>,
     pub group_path: Option<String>,
@@ -47,6 +50,24 @@ pub(crate) struct OffscreenText {
     /// True when this text and the previous selectable text in the same row share a horizontal
     /// (`FlexDirection::Row | FlexDirection::RowReverse`) lowest common ancestor (table cells).
     pub tab_before: bool,
+}
+
+/// A `selection_copy` handler the list kept beside an offscreen row's texts.
+#[derive(Clone)]
+pub(crate) struct OffscreenProvider {
+    pub list_path: String,
+    pub row_key: String,
+    pub path: String,
+    /// The keys from the row's root to the handler's element, as [`OffscreenText::rel`] is.
+    pub rel: Vec<String>,
+    pub copy: SelectionCopy,
+}
+
+impl OffscreenProvider {
+    /// Whether this handler is at or above `text`, by nesting rather than by its path string.
+    pub(crate) fn covers(&self, text: &OffscreenText) -> bool {
+        self.row_key == text.row_key && text.rel.starts_with(&self.rel)
+    }
 }
 
 /// What the last commit collected offscreen rows under: the selection group they belong to and
@@ -96,7 +117,7 @@ pub(crate) enum Pins {
         /// Selectable texts of `rows` that were offscreen when the commit built them.
         texts: Vec<OffscreenText>,
         /// `selection_copy` providers found beside `texts`.
-        providers: Vec<(String, SelectionCopy)>,
+        providers: Vec<OffscreenProvider>,
         source: Source,
     },
 }
@@ -115,7 +136,7 @@ pub(crate) enum PinsEvent<'a> {
     Pin {
         key: String,
         texts: Vec<OffscreenText>,
-        providers: Vec<(String, SelectionCopy)>,
+        providers: Vec<OffscreenProvider>,
     },
 }
 
@@ -141,8 +162,8 @@ impl Pins {
         }
     }
 
-    /// The `selection_copy` providers found beside the kept texts, as `(path, handler)`.
-    pub(crate) fn providers(&self) -> &[(String, SelectionCopy)] {
+    /// The `selection_copy` providers found beside the kept texts.
+    pub(crate) fn providers(&self) -> &[OffscreenProvider] {
         match self {
             Pins::None => &[],
             Pins::Pinned { providers, .. } => providers,
@@ -167,7 +188,7 @@ impl Pins {
     /// panic, an early return or a fallback keeps what came before.
     pub(crate) fn text_buffers(
         &mut self,
-    ) -> Option<(&mut Vec<OffscreenText>, &mut Vec<(String, SelectionCopy)>)> {
+    ) -> Option<(&mut Vec<OffscreenText>, &mut Vec<OffscreenProvider>)> {
         match self {
             Pins::None => None,
             Pins::Pinned { texts, providers, .. } => Some((texts, providers)),
@@ -218,10 +239,19 @@ impl Pins {
             PinsEvent::Pin { key, texts, providers } => {
                 let (rows, current, current_providers, _) = self.fields();
                 if !rows.iter().any(|r| r == &key) {
-                    rows.push(key);
+                    rows.push(key.clone());
                 }
-                current.extend(texts);
-                current_providers.extend(providers);
+                // differs from dev: re-pinning a row replaces what the list kept for it, so a
+                // handler from an older build of the row can't outlive it. Dev appended, and a
+                // kept handler whose texts a selection change dropped stayed beside the new ones.
+                let at = current.iter().position(|t| t.row_key == key).unwrap_or(current.len());
+                current.retain(|t| t.row_key != key);
+                let at = at.min(current.len());
+                current.splice(at..at, texts);
+                let at = current_providers.iter().position(|p| p.row_key == key).unwrap_or(current_providers.len());
+                current_providers.retain(|p| p.row_key != key);
+                let at = at.min(current_providers.len());
+                current_providers.splice(at..at, providers);
             }
         }
     }
@@ -233,7 +263,7 @@ impl Pins {
     ) -> (
         &mut Vec<String>,
         &mut Vec<OffscreenText>,
-        &mut Vec<(String, SelectionCopy)>,
+        &mut Vec<OffscreenProvider>,
         &mut Source,
     ) {
         if let Pins::None = self {

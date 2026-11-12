@@ -1,1 +1,1 @@
-- Copying a selection inside a virtual list row that has its own `selection_copy` now puts that handler's text on the clipboard after the row scrolls out of the window, instead of the text as drawn.
+- Copying a selection inside a virtual list row that has its own `selection_copy` now puts that handler's text on the clipboard after the row scrolls out of the window, instead of the text as drawn; the handler sees the row's unselected texts as unselected, and a re-pinned row answers with its newest handler.

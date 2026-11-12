@@ -448,11 +448,11 @@ impl<S: 'static> Runtime<S> {
     }
 
     /// Node `i` as a [`SelectedText`] with `range` selected, its path relative to `base`'s.
-    pub(super) fn selected_piece(&self, i: usize, range: Range<usize>, base: Option<&str>) -> SelectedText {
+    pub(super) fn selected_piece(&self, i: usize, range: Range<usize>, base: Option<usize>) -> SelectedText {
         let n = &self.nodes[i];
         let path = match base {
-            Some(b) if b == n.path => String::new(),
-            Some(b) => n.path.strip_prefix(b).and_then(|p| p.strip_prefix('/')).unwrap_or(&n.path).to_owned(),
+            Some(b) if b == i => String::new(),
+            Some(b) => n.path.strip_prefix(&self.nodes[b].path).and_then(|p| p.strip_prefix('/')).unwrap_or(&n.path).to_owned(),
             None => n.path.clone(),
         };
         let len = self.content_of(i).len();
@@ -482,7 +482,7 @@ impl<S: 'static> Runtime<S> {
                 .take_while(|&j| around(p, j))
                 .filter(|&j| self.is_selectable(j) && !self.subtree_exiting(j) && self.allowed(j))
                 .filter(|&j| match g { Some(g) => self.group_of(j) == Some(g), None => j == first })
-                .map(|j| self.selected_piece(j, range_in(&ranges, j).map_or(0..0, |(a, b)| a..b), Some(&self.nodes[p].path)))
+                .map(|j| self.selected_piece(j, range_in(&ranges, j).map_or(0..0, |(a, b)| a..b), Some(p)))
                 .collect();
             if let Some(text) = f(&TextSelection { texts, text: drawn.clone(), backward: self.selection_backward() }) { return Some(text); }
         }

@@ -9,12 +9,12 @@ use taffy::style::{Display, FlexDirection};
 
 use super::phase::{self, Far, Selection};
 use super::{SelectedText, kept, same_keyed_path, trim_uncopied};
-use crate::el::{El, SelectionCopy, TextSpec};
+use crate::el::{El, TextSpec};
 use crate::runtime::Runtime;
 
 #[path = "pins.rs"]
 pub(crate) mod pins;
-pub(crate) use pins::{OffscreenText, PinnedSelection, Pins, PinsEvent, Scope, Source};
+pub(crate) use pins::{OffscreenProvider, OffscreenText, PinnedSelection, Pins, PinsEvent, Scope, Source};
 
 /// Maximum number of unbuilt virtual rows built on demand when copying or reading a selection.
 /// Past this cap, collection stops building further unbuilt rows and returns the prefix collected
@@ -64,12 +64,13 @@ pub(crate) fn collect_virtual_row_selection(
     list_group: Option<&str>,
     list_inert: bool,
     texts: &mut Vec<OffscreenText>,
-    copy_providers: &mut Vec<(String, SelectionCopy)>,
+    copy_providers: &mut Vec<OffscreenProvider>,
 ) {
     let mut order_in_row = 0usize;
+    let mut segments = Vec::new();
     let row_path = format!("{list_path}/{row_key}");
     walk_row_el(
-        row_el, list_path, row_key, row_index, &row_path, "",
+        row_el, list_path, row_key, row_index, &row_path, "", &mut segments,
         list_group, list_inert, &mut order_in_row, texts, copy_providers,
     );
 }
@@ -101,16 +102,23 @@ fn walk_row_el<'a>(
     row_index: usize,
     path: &'a str,
     rel_path: &str,
+    segments: &mut Vec<String>,
     parent_group: Option<&'a str>,
     parent_inert: bool,
     order_in_row: &mut usize,
     texts: &mut Vec<OffscreenText>,
-    copy_providers: &mut Vec<(String, SelectionCopy)>,
+    copy_providers: &mut Vec<OffscreenProvider>,
 ) {
     let inert = parent_inert || el.flags.has(crate::el::ElFlags::INERT);
     let group = if el.flags.has(crate::el::ElFlags::SELECTION_GROUP) { Some(path) } else { parent_group };
     if !inert && let Some(f) = el.handlers.get().and_then(|h| h.selection_copy.as_ref()) {
-        copy_providers.push((path.to_owned(), f.clone()));
+        copy_providers.push(OffscreenProvider {
+            list_path: list_path.to_owned(),
+            row_key: row_key.to_owned(),
+            path: path.to_owned(),
+            rel: segments.clone(),
+            copy: f.clone(),
+        });
     }
     let is_row = el.style.display() == Display::Flex
         && matches!(el.style.flex_direction(), FlexDirection::Row | FlexDirection::RowReverse);
@@ -125,6 +133,7 @@ fn walk_row_el<'a>(
             row_index,
             order_in_row: *order_in_row,
             rel_path: rel_path.to_owned(),
+            rel: segments.clone(),
             path: path.to_owned(),
             key: el.key.clone(),
             group_path: group.map(str::to_owned),
@@ -138,10 +147,12 @@ fn walk_row_el<'a>(
         let child_path = crate::runtime::flatten::node_path(path, child.key.as_deref(), i);
         let child_rel = crate::runtime::flatten::node_path(rel_path, child.key.as_deref(), i);
         let before_len = texts.len();
+        segments.push(crate::runtime::flatten::node_path("", child.key.as_deref(), i));
         walk_row_el(
-            child, list_path, row_key, row_index, &child_path, &child_rel,
+            child, list_path, row_key, row_index, &child_path, &child_rel, segments,
             group, inert, order_in_row, texts, copy_providers,
         );
+        segments.pop();
         if texts.len() > before_len {
             if had_child_text {
                 texts[before_len].tab_before = is_row;

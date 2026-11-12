@@ -612,3 +612,192 @@ fn header_before_virtual_list_keeps_pinned_selection_and_copies_across_unbuilt_r
     let full_expected = full_parts.join("\n");
     assert_eq!(rt.selected_text().as_deref(), Some(full_expected.as_str()));
 }
+
+/// A row of two selectable paragraphs, whose handler copies its source only when every text it
+/// can reach is selected whole, as a Markdown source copy does.
+fn paragraph_row(_: &Timeline, i: usize) -> El {
+    let style = TextStyle::new(14.0, 400.0).lh(20.0);
+    col()
+        .w_full()
+        .h(ROW_H * 2.0)
+        .padding(6.0)
+        .gap(2.0)
+        .selection_copy(move |sel| sel.texts().iter().all(|t| t.is_whole()).then(|| format!("source of row {i:02}")))
+        .children([
+            text(format!("First paragraph {i:02}")).key("p0").font(style).w_full().selectable(true),
+            text(format!("Second paragraph {i:02}")).key("p1").font(style).w_full().selectable(true),
+        ])
+}
+
+fn paragraph_timeline(count: usize) -> Runtime<Timeline> {
+    let view = |s: &Timeline, _: &mut Cx<Timeline>| {
+        col().w_full().h_full().child(
+            col().key("scroll").w_full().grow(1.0).scroll(ScrollSpec { stick_bottom: false }).child(
+                col()
+                    .key("timeline")
+                    .w_full()
+                    .growth(GrowthSpec::default())
+                    .selection_group(true)
+                    .virtual_rows(s.count, ROW_H * 2.0, |_: &Timeline, i| format!("r{i}").into(), paragraph_row),
+            ),
+        )
+    };
+    let mut rt = Runtime::new(Timeline::new(count), view, (1280.0, 420.0), Env::new(true, 2.0));
+    rt.frame(0.0);
+    while rt.frame(1.0 / 120.0) {}
+    rt
+}
+
+/// Drags over a whole text from its first glyph to beyond its last.
+fn drag_whole_text<S: 'static>(rt: &mut Runtime<S>, suffix: &str) {
+    let g = glyphs_at(rt, suffix);
+    let start = before(g[0]);
+    let end = (g.last().unwrap().0 + 4.0, g.last().unwrap().1);
+    rt.pointer_move(start.0, start.1);
+    rt.pointer_down(start.0, start.1);
+    tick(rt);
+    rt.pointer_move(end.0, end.1);
+    tick(rt);
+    rt.pointer_up(end.0, end.1);
+    tick(rt);
+}
+
+/// Scrolls until the virtual list no longer mounts row 0.
+fn scroll_row_0_away<S: 'static>(rt: &mut Runtime<S>) {
+    for _ in 0..20 {
+        let range = rt.virtuals["#0/scroll/timeline"].range.clone();
+        if !range.contains(&0) {
+            break;
+        }
+        rt.wheel(640.0, 210.0, -200.0);
+        tick(rt);
+    }
+    settle(rt);
+    assert!(!rt.virtuals["#0/scroll/timeline"].range.contains(&0), "row 0 scrolled away");
+}
+
+#[test]
+fn an_offscreen_handlers_selection_keeps_unselected_siblings_at_zero() {
+    let mut rt = paragraph_timeline(ROWS);
+    let clipboard = crate::clipboard::memory();
+    rt.use_clipboard(&clipboard);
+
+    drag_whole_text(&mut rt, "r0/p0");
+    assert_eq!(rt.selected_text().as_deref(), Some("First paragraph 00"));
+    command(&mut rt, 'c');
+    assert_eq!(clipboard.text().as_deref().map(String::as_str), Some("First paragraph 00"), "mounted");
+
+    scroll_row_0_away(&mut rt);
+    assert!(!rt.elements().iter().any(|e| e.path.ends_with("r0/p0")), "r0 is unmounted");
+    assert_eq!(rt.selected_text().as_deref(), Some("First paragraph 00"), "selection survives offscreen");
+
+    // differs from dev: the kept handler sees its row's other paragraph at 0..0, so its
+    // all-whole check says no and only the selected paragraph is copied.
+    command(&mut rt, 'c');
+    assert_eq!(
+        clipboard.text().as_deref().map(String::as_str),
+        Some("First paragraph 00"),
+        "the unselected sibling keeps the handler from claiming the whole row"
+    );
+}
+
+/// A row with a handler on a container keyed `a`, beside a selectable text keyed `a/b`.
+fn slash_key_row(_: &Timeline, i: usize) -> El {
+    let style = TextStyle::new(14.0, 400.0).lh(20.0);
+    col().w_full().h(ROW_H).padding(6.0).children([
+        col().key("a").w(10.0).selection_copy(|_| Some("WRONG".to_owned())),
+        text(format!("Sibling text {i:02}")).key("a/b").font(style).w_full().selectable(true),
+    ])
+}
+
+#[test]
+fn a_slash_in_a_sibling_key_is_not_ancestry() {
+    let view = |s: &Timeline, _: &mut Cx<Timeline>| {
+        col().w_full().h_full().child(
+            col().key("scroll").w_full().grow(1.0).scroll(ScrollSpec { stick_bottom: false }).child(
+                col()
+                    .key("timeline")
+                    .w_full()
+                    .growth(GrowthSpec::default())
+                    .selection_group(true)
+                    .virtual_rows(s.count, ROW_H, |_: &Timeline, i| format!("r{i}").into(), slash_key_row),
+            ),
+        )
+    };
+    let mut rt = Runtime::new(Timeline::new(ROWS), view, (1280.0, 420.0), Env::new(true, 2.0));
+    rt.frame(0.0);
+    while rt.frame(1.0 / 120.0) {}
+    let clipboard = crate::clipboard::memory();
+    rt.use_clipboard(&clipboard);
+
+    drag_whole_text(&mut rt, "r0/a/b");
+    command(&mut rt, 'c');
+    assert_eq!(clipboard.text().as_deref().map(String::as_str), Some("Sibling text 00"), "mounted");
+
+    scroll_row_0_away(&mut rt);
+    // The handler's path ends with the text's own path, but it is a sibling, not an ancestor.
+    command(&mut rt, 'c');
+    assert_eq!(clipboard.text().as_deref().map(String::as_str), Some("Sibling text 00"));
+}
+
+/// Rows whose handler depends on state that can change without a commit.
+#[derive(Default)]
+struct Repin {
+    count: usize,
+    handler: u8,
+}
+
+fn repin_row(s: &Repin, i: usize) -> El {
+    let style = TextStyle::new(14.0, 400.0).lh(20.0);
+    let row = col().w_full().h(ROW_H).padding(6.0).child(
+        text(format!("Message body {i:02} with words to select.")).key("body").font(style).w_full().selectable(true),
+    );
+    match s.handler {
+        0 => row.selection_copy(move |_| Some(format!("first source of row {i:02}"))),
+        1 => row.selection_copy(move |_| Some(format!("second source of row {i:02}"))),
+        _ => row,
+    }
+}
+
+#[test]
+fn repinning_a_row_takes_the_handler_its_latest_build_gave_it() {
+    let view = |s: &Repin, _: &mut Cx<Repin>| {
+        col().w_full().h_full().child(
+            col().key("scroll").w_full().grow(1.0).scroll(ScrollSpec { stick_bottom: false }).child(
+                col()
+                    .key("timeline")
+                    .w_full()
+                    .growth(GrowthSpec::default())
+                    .selection_group(true)
+                    .virtual_rows(s.count, ROW_H, |_: &Repin, i| format!("r{i}").into(), repin_row),
+            ),
+        )
+    };
+    let mut rt = Runtime::new(Repin { count: ROWS, handler: 0 }, view, (1280.0, 420.0), Env::new(true, 2.0));
+    rt.frame(0.0);
+    while rt.frame(1.0 / 120.0) {}
+    let clipboard = crate::clipboard::memory();
+    rt.use_clipboard(&clipboard);
+    // Selection-only steps: no commit runs between a state change and the next pin, so the
+    // handler a pin collects is the one built just then.
+    let select = |rt: &mut Runtime<Repin>, path: &'static str| {
+        rt.update_if(|_, tx| { tx.select_text(path, 0..12); false });
+    };
+
+    select(&mut rt, "r45/body");
+    select(&mut rt, "r46/body");
+    rt.update_if(|s, _| { s.handler = 1; false });
+    select(&mut rt, "r45/body");
+    command(&mut rt, 'c');
+    assert_eq!(clipboard.text().as_deref().map(String::as_str), Some("second source of row 45"));
+
+    select(&mut rt, "r46/body");
+    rt.update_if(|s, _| { s.handler = 2; false });
+    select(&mut rt, "r45/body");
+    command(&mut rt, 'c');
+    assert_eq!(
+        clipboard.text().as_deref().map(String::as_str),
+        Some("Message body"),
+        "the row's handler is gone, so the drawn text is copied"
+    );
+}

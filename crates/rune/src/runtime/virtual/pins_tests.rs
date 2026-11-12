@@ -172,15 +172,12 @@ fn apply(pins: &mut Pins, event: Ev) {
         Ev::Clear => pins.sync(PinsEvent::Clear),
         Ev::Select(anchor, focus) => pins.sync(PinsEvent::Select { anchor, focus }),
         Ev::Pin(key) => {
-            let (texts, providers) = if pins.has_text_row(key) {
-                (Vec::new(), Vec::new())
-            } else {
-                let (mut texts, mut providers) = (Vec::new(), Vec::new());
-                collect_virtual_row_selection(
-                    &row_el(key), "/list", key, index_of(key), None, false, &mut texts, &mut providers,
-                );
-                (texts, providers)
-            };
+            // The pin replaces the row's kept texts and handlers, so the real write path is
+            // driven every time.
+            let (mut texts, mut providers) = (Vec::new(), Vec::new());
+            collect_virtual_row_selection(
+                &row_el(key), "/list", key, index_of(key), None, false, &mut texts, &mut providers,
+            );
             pins.sync(PinsEvent::Pin { key: key.to_owned(), texts, providers });
         }
         Ev::Commit(kind, focused) => commit(pins, kind, focused, None),
@@ -203,7 +200,8 @@ struct Dev {
     pinned_rows: Vec<String>,
     /// Each kept text as `(row key, path)`, which is all dev's state decides for a walk.
     texts: Vec<(String, String)>,
-    providers: Vec<String>,
+    /// Each kept handler as `(row key, path)`.
+    providers: Vec<(String, String)>,
     source: Option<&'static str>,
 }
 
@@ -211,7 +209,20 @@ impl Dev {
     fn push(&mut self, key: &str) {
         let (texts, providers) = collected(key);
         self.texts.extend(texts);
-        self.providers.extend(providers);
+        self.providers.extend(providers.into_iter().map(|path| (key.to_owned(), path)));
+    }
+
+    /// Puts `key`'s freshly collected texts and handlers where the row sat.
+    fn replace(&mut self, key: &str) {
+        let (texts, providers) = collected(key);
+        let at = self.texts.iter().position(|(row, _)| row == key).unwrap_or(self.texts.len());
+        self.texts.retain(|(row, _)| row != key);
+        let at = at.min(self.texts.len());
+        self.texts.splice(at..at, texts);
+        let at = self.providers.iter().position(|(row, _)| row == key).unwrap_or(self.providers.len());
+        self.providers.retain(|(row, _)| row != key);
+        let at = at.min(self.providers.len());
+        self.providers.splice(at..at, providers.into_iter().map(|path| (key.to_owned(), path)));
     }
 
     fn pinned_indices(&self) -> Vec<usize> {
@@ -246,7 +257,11 @@ impl Dev {
                     self.pinned_rows.push(key.to_owned());
                 }
                 if !already {
-                    self.push(key);
+                    // differs from dev: a pin replaces what the row kept instead of appending
+                    // beside the handlers a selection change left behind, so a handler from an
+                    // older build of the row can never answer (r347). Replaced where the row
+                    // was, so other rows keep their order.
+                    self.replace(key);
                 }
             }
             Ev::Commit(kind, focused) => self.commit(kind, focused, None),
@@ -325,7 +340,7 @@ impl Dev {
     }
 
     fn view(&self) -> (Vec<String>, Vec<(String, String)>, Vec<String>, Option<&'static str>) {
-        (self.pinned_rows.clone(), self.texts.clone(), self.providers.clone(), self.source)
+        (self.pinned_rows.clone(), self.texts.clone(), self.providers.iter().map(|(_, path)| path.clone()).collect(), self.source)
     }
 }
 
@@ -334,7 +349,7 @@ fn view(pins: &Pins) -> (Vec<String>, Vec<(String, String)>, Vec<String>, Option
     let texts = pins.texts().iter().map(|t| (t.row_key.clone(), t.path.clone())).collect();
     let providers = match pins {
         Pins::None => Vec::new(),
-        Pins::Pinned { providers, .. } => providers.iter().map(|(path, _)| path.clone()).collect(),
+        Pins::Pinned { providers, .. } => providers.iter().map(|p| p.path.clone()).collect(),
     };
     (rows, texts, providers, pins.source().map(source_name))
 }
@@ -551,7 +566,7 @@ fn kept(pins: &Pins) -> Kept {
 
 fn dev_kept(dev: &Dev) -> Kept {
     let row = |path: &String| path.rsplit('/').next().unwrap_or_default().to_owned();
-    (dev.pinned_rows.clone(), dev.texts.iter().map(|(key, _)| key.clone()).collect(), dev.providers.iter().map(row).collect())
+    (dev.pinned_rows.clone(), dev.texts.iter().map(|(key, _)| key.clone()).collect(), dev.providers.iter().map(|(_, p)| row(p)).collect())
 }
 
 /// The real remount, falling back in the list whose pins it is collecting, keeps what dev's
