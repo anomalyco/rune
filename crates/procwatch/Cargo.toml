@@ -10,6 +10,9 @@ description = "A native app's own memory and CPU, watched from inside: footprint
 # Count `Gauge` bytes in builds without debug assertions too. Off by default, so a release
 # build's gauges compile to nothing.
 release-gauges = []
+# Live heap by allocation site, sampled, written out on request (`alloc::sites`): for measuring
+# builds only. Windows.
+alloc-sites = []
 
 [dependencies]
 libc = "0.2"
