@@ -1,0 +1,1 @@
+- Focus: the unmount fallback can land on a node built again in the same commit (not yet laid out), judged by the size it had.
