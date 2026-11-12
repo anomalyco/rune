@@ -133,6 +133,12 @@ use system_fonts::system_font_files;
 #[cfg(test)]
 use system_fonts::CJK_FONT_FILES;
 
+/// How strictly Japanese and Chinese lines break, one switch. `Strict` (JIS X 4051, UAX #14's
+/// default) never starts a line with a small kana (ぁ ッ ャ), ー or 々. `Normal` is Chromium's
+/// `line-break: auto`, which lets them start one. Native Japanese readers decide which reads
+/// better; this is the one place to change.
+const LINE_BREAK: parley::LineBreak = parley::LineBreak::Strict;
+
 /// Lean of a synthetic oblique, in degrees, for faces with no italic.
 const SYNTHETIC_OBLIQUE: u8 = 12;
 
@@ -773,6 +779,7 @@ impl TextSystem {
                 b.push_default(parley::FontVariations::List(std::borrow::Cow::Owned(settings)));
             }
             b.push_default(LineHeight::Absolute(style.line_px()));
+            b.push_default(StyleProperty::LineBreak(LINE_BREAK));
             if wrap_anywhere {
                 b.push_default(StyleProperty::OverflowWrap(parley::OverflowWrap::Anywhere));
             }
