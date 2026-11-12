@@ -57,7 +57,7 @@ impl Bar {
             return;
         }
         let a = t.along();
-        let (top, h) = thumb_along(at, len, t.min_thumb, a);
+        let (top, h) = thumb_along(at, len, t.min_thumb, a, t.pixels);
         // Down a vertical bar, or along a horizontal one from its start, its right edge right to
         // left.
         let y = match (t.x, self.rtl()) {
@@ -110,7 +110,7 @@ impl Bar {
                 return;
             }
         };
-        let to = offset_along(at, len, y - grab, t.min_thumb, a);
+        let to = offset_along(at, len, y - grab, t.min_thumb, a, t.pixels);
         if t.x {
             tx.scroll_to_instant(target, to, at.offset[1]);
         } else {
