@@ -80,6 +80,64 @@ fn a_warm_menu_opens_and_closes_without_allocating() {
     }
 }
 
+/// A list's cached rows (`El::cache`, one node a row), 64×16 each, the first `count` of them.
+fn rows(count: u64) -> Vec<Instance> {
+    (0..count).flat_map(|row| {
+        let bounds = [0.0, row as f32 * 16.0, 64.0, 16.0];
+        let mut scope = Instance::begin_layer(bounds, NO_CLIP, LayerSpec::default());
+        scope.params[3] = 1.0;
+        scope.radii = pack_u64_f32(row);
+        scope.uv = pack_u64_f32(1);
+        [scope, rect(bounds, [1.0; 4]), Instance::end_layer()]
+    }).collect()
+}
+
+/// A list of 160 cached rows, 13 and then 12 of them showing by turns: the pool keeps every row,
+/// so the plan's copy of the pool's order stays at the pool's size, as dev reused its pool.
+#[test]
+fn a_list_showing_twelve_and_thirteen_cached_rows_by_turns_allocates_nothing() {
+    let gpu = Gpu::headless();
+    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    let mut atlas = crate::text::TextSystem::default().atlas;
+    let (all, twelve, thirteen) = (rows(160), rows(12), rows(13));
+    for instances in [&all, &thirteen, &twelve, &thirteen, &twelve] {
+        renderer.prepare(&gpu.device, &gpu.queue, &mut atlas, instances, (64, 2560));
+    }
+    assert_eq!(renderer.layers.retained.len(), 148, "every row the list doesn't show is kept");
+    let (warm, allocations) = (renderer.layers.planner.capacities(), renderer.layer_stats().allocations);
+    for turn in 0..4 {
+        renderer.prepare(&gpu.device, &gpu.queue, &mut atlas, &thirteen, (64, 2560));
+        assert!(matches!(renderer.layers.planner.dispositions[12], Disposition::Cached { .. }), "the thirteenth row is a hit");
+        assert_eq!(renderer.layers.planner.capacities(), warm, "thirteen rows, turn {turn}");
+        renderer.prepare(&gpu.device, &gpu.queue, &mut atlas, &twelve, (64, 2560));
+        assert_eq!(renderer.layers.planner.capacities(), warm, "twelve rows, turn {turn}");
+        assert_eq!(renderer.layer_stats().allocations, allocations, "turn {turn} made a target");
+    }
+}
+
+/// After a burst parks 1,024 targets, a menu that opens takes one back and copies the spare pool's
+/// order to do it: closing again must not give that copy back while the pool is still that large.
+#[test]
+fn a_menu_after_a_burst_opens_and_closes_without_allocating() {
+    let gpu = Gpu::headless();
+    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    let mut atlas = crate::text::TextSystem::default().atlas;
+    let burst = burst();
+    let menu = &burst[..3];
+    for instances in [&burst[..], &[], menu, &[], menu] {
+        renderer.prepare(&gpu.device, &gpu.queue, &mut atlas, instances, (256, 256));
+    }
+    let (warm, allocations) = (renderer.layers.planner.capacities(), renderer.layer_stats().allocations);
+    for toggle in 0..4 {
+        renderer.prepare(&gpu.device, &gpu.queue, &mut atlas, &[], (256, 256));
+        assert_eq!(renderer.layers.spare.len(), 1024, "the burst's targets are all parked");
+        assert_eq!(renderer.layers.planner.capacities(), warm, "closing {toggle}");
+        renderer.prepare(&gpu.device, &gpu.queue, &mut atlas, menu, (256, 256));
+        assert_eq!(renderer.layers.planner.capacities(), warm, "opening {toggle}");
+        assert_eq!(renderer.layer_stats().allocations, allocations, "opening {toggle} made a target");
+    }
+}
+
 /// The frame a menu closes on forgets its plan; the empty frames after it have nothing to forget.
 #[test]
 fn an_empty_frame_after_an_empty_frame_does_nothing() {

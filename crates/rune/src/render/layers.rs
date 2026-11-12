@@ -394,7 +394,10 @@ impl Renderer {
         }
         // A frame whose layers fell gives back what a burst grew the plan's scratch to; a frame
         // that keeps its layers, or stays empty, leaves it alone.
-        if self.layers.plan.len() < before { self.layers.planner.settle(self.layers.plan.len()); }
+        if self.layers.plan.len() < before {
+            let layers = &mut self.layers;
+            layers.planner.settle(layers.plan.len(), layers.retained.len(), layers.spare.len());
+        }
         // Rebind child composites to their nearest materialized parent (opaque scopes flatten).
         for index in 0..self.layers.plan.len() {
             if self.layers.targets[index].is_none() { continue; }

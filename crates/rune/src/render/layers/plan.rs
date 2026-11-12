@@ -402,9 +402,11 @@ impl Planner {
     }
 
     /// After a frame whose layers fell to `len`: forgets the plan when no layer is left, and gives
-    /// back what a burst of layers grew the scratch to. A frame that keeps its layers, or stays
-    /// empty, never comes here, so it touches nothing.
-    pub(super) fn settle(&mut self, len: usize) {
+    /// back what a burst grew the scratch to. The per-layer buffers keep what `len` layers need; a
+    /// pool's order keeps what the `retained` or `spare` targets left in that pool need, since the
+    /// next frame to move one copies the whole pool's order. A frame that keeps its layers, or
+    /// stays empty, never comes here, so it touches nothing.
+    pub(super) fn settle(&mut self, len: usize, retained: usize, spare: usize) {
         #[cfg(test)]
         { self.settles += 1; }
         // The moves are carried out and the views read; only the dispositions outlive the frame.
@@ -417,8 +419,8 @@ impl Planner {
         shrink(&mut self.dispositions, keep);
         shrink(&mut self.moves, keep);
         shrink(&mut self.slots, keep);
-        shrink(&mut self.kept.order, keep);
-        shrink(&mut self.parked.order, keep);
+        shrink(&mut self.kept.order, retained.max(WARM));
+        shrink(&mut self.parked.order, spare.max(WARM));
     }
 
     /// Test-only: the scratch's capacities, which a warm frame never changes.

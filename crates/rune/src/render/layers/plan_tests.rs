@@ -441,7 +441,7 @@ fn frame(planner: &mut Planner, pools: &Old, old_pools: &mut Old, scene: &[Spec]
     }
     assert_eq!(before, *old_pools, "the pools at {stamp}, from {:?}: {:?}", planner.moves, planner.dispositions);
     // `prepare_layers`' tail: a frame whose layers fell gives the plan's scratch back.
-    if scene.len() < previous { planner.settle(scene.len()); }
+    if scene.len() < previous { planner.settle(scene.len(), before.retained.len(), before.spare.len()); }
     decisions
 }
 
