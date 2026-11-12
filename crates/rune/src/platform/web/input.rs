@@ -31,6 +31,8 @@ extern "C" {
     fn sync_caret(handle: &JsValue, x: f32, y: f32, w: f32, h: f32);
     #[wasm_bindgen(js_name = syncFamilies)]
     fn sync_families(handle: &JsValue, sans: &str, mono: &str);
+    #[wasm_bindgen(js_name = showMenu)]
+    fn show_menu(handle: &JsValue, json: &str, x: f32, y: f32, min_width: f32, dark: bool);
 }
 
 /// How the canvas sits in the page.
@@ -92,6 +94,11 @@ impl Bridge {
 
     /// The first frame is on screen: a page swaps its static export for the live mirror.
     pub(super) fn presented(&self) { presented_js(&self.handle); }
+
+    /// Opens `show` as the page's own menu, its top-left at its window point.
+    pub(super) fn show_menu(&self, show: &crate::popup_menu::Show, dark: bool) {
+        show_menu(&self.handle, &show.menu.to_json().to_string(), show.at.0, show.at.1, show.min_width, dark);
+    }
 }
 impl Drop for Bridge {
     fn drop(&mut self) {
@@ -173,6 +180,18 @@ impl<S: 'static> Running<S> {
                 self.resize_surface(window, size, scale);
             }
             Some("motion") => self.rt.set_system_reduced_motion(event["reduced"].as_bool().unwrap_or(false)),
+            // The browser's `forced-colors` (a contrast theme) and its system colours, as sRGB bytes:
+            // Canvas, CanvasText, Highlight, HighlightText, GrayText, ButtonFace, ButtonText, LinkText.
+            Some("contrast") => {
+                let colors: Option<Vec<crate::Color>> = event["colors"].as_array().map(|list| list.iter().map(|c| {
+                    let d = |i: usize| crate::color::srgb_decode(c[i].as_f64().unwrap_or(0.0) as f32 / 255.0);
+                    crate::Color { r: d(0), g: d(1), b: d(2), a: 1.0 }
+                }).collect());
+                let contrast = colors.filter(|c| c.len() == 8).map(|c| crate::SystemContrast {
+                    window: c[0], text: c[1], highlight: c[2], highlight_text: c[3], disabled: c[4], button: c[5], button_text: c[6], link: c[7],
+                });
+                self.rt.set_system_contrast(contrast);
+            }
             Some("focus") => self.rt.window_focus(event["focused"].as_bool().unwrap_or(false)),
             Some("visibility") => {
                 self.shared.visible.store(event["visible"].as_bool().unwrap_or(false), Ordering::Release);
@@ -194,6 +213,10 @@ impl<S: 'static> Running<S> {
             }
             Some("key") => activate = self.rt.web_key(event),
             Some("a11y_press" | "a11y_link") => { let _ = self.rt.web_a11y_action(event); }
+            // The page's menu (`showMenu`) was picked from or dismissed.
+            Some("menu") => {
+                if self.rt.resolve_popup(event["id"].as_str()).is_err() { let _ = self.rt.resolve_popup(None); }
+            }
             // The browser's menu takes this right-click (bridge.js): its release opens none of Rune's.
             Some("secondary_browser") => { self.rt.secondary_abandon(); return false; }
             // The scroll throttle's last word: the mirror where the scroll stopped.

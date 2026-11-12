@@ -54,8 +54,23 @@ impl<S: 'static> Runtime<S> {
         let capture::Secondary::Held { path, link, .. } = &self.secondary else { return "" };
         let Some(n) = self.nodes.iter().find(|n| n.path == *path) else { return "" };
         if link.is_some() || n.handlers.on_secondary_press.is_some() { return "app"; }
-        if n.input.as_ref().is_some_and(|i| i.access.is_some()) { return "field"; }
+        // On a misspelled word, Rune's own field menu: it has the suggestions, the browser's
+        // can't (its checker never sees the field).
+        if n.input.as_ref().is_some_and(|i| i.access.is_some()) { return if self.on_misspelled_word(path) { "app" } else { "field" }; }
         "text"
+    }
+
+    /// The pointer is over a word field `path`'s spell checker marks.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    fn on_misspelled_word(&self, path: &str) -> bool {
+        let Some(i) = self.live(path) else { return false };
+        let n = &self.nodes[i];
+        let (Some(input), Some((x, y)), Some(layout)) = (n.input.as_deref(), self.pointer, n.text_layout.as_ref()) else { return false };
+        if !input.spellcheck || input.edit.is_secure() { return false; }
+        let [lx, ly] = self.to_local(i, x, y);
+        let scroll = self.input_scroll.get(path).copied().unwrap_or(0.0);
+        let caret = super::input_click::hit(&input.edit, layout.view(), lx - n.inset[0] + scroll, ly - n.inset[1], self.env.scale, input.single_line).caret;
+        crate::spell::misspelled_at(&input.edit.text, caret).is_some()
     }
 
     /// The secondary press went to the browser's own menu: its release opens none of Rune's.

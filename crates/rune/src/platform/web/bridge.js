@@ -330,6 +330,192 @@ export function syncFamilies(h, sans, mono) {
     h.a11y.style.setProperty('--rune-mono', css(mono, 'monospace'));
 }
 
+// A pop-up menu (`Tx::popup_menu`, a field's menu with its spelling suggestions, selected
+// text's Copy) as the page's own elements: `role="menu"` with keyboard, pointer and screen
+// reader use, top-left at window point (x, y) of the canvas, at least `minWidth` wide, light or
+// dark as the window draws. A pick or a dismissal is sent once: `{ kind: 'menu', id }`, `id`
+// null when dismissed.
+export function showMenu(h, json, x, y, minWidth, dark) {
+    closeMenu(h, false);
+    const spec = JSON.parse(json);
+    const box = h.canvas.getBoundingClientRect();
+    const colors = dark
+        ? { bg: '#2b2b2b', fg: '#f2f2f2', muted: '#8f8f8f', line: '#454545', hover: '#3d3d3d' }
+        : { bg: '#ffffff', fg: '#1a1a1a', muted: '#8c8c8c', line: '#e0e0e0', hover: '#ebebeb' };
+    const menus = [];
+    let answered = false;
+    const answer = (id) => {
+        if (answered) return;
+        answered = true;
+        closeMenu(h, true);
+        h.send({ kind: 'menu', id });
+    };
+    const open = (spec, left, top, min, parentItem) => {
+        const menu = document.createElement('div');
+        menu.setAttribute('data-rune-menu', '');
+        menu.setAttribute('role', 'menu');
+        menu.tabIndex = -1;
+        menu.style.cssText = `position:fixed;left:0;top:0;z-index:2147483647;box-sizing:border-box;min-width:${Math.max(min, 160)}px;max-height:calc(100vh - 8px);overflow-y:auto;padding:4px;margin:0;background:${colors.bg};color:${colors.fg};border:1px solid ${colors.line};border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.18);font:13px/18px system-ui,sans-serif;user-select:none;-webkit-user-select:none;outline:none`;
+        const rows = [];
+        for (const entry of spec.items) {
+            if (entry.separator) {
+                const sep = document.createElement('div');
+                sep.setAttribute('role', 'separator');
+                sep.style.cssText = `height:1px;margin:4px 0;background:${colors.line}`;
+                menu.append(sep);
+                continue;
+            }
+            const row = document.createElement('div');
+            const sub = entry.menu;
+            const enabled = entry.enabled !== false;
+            row.setAttribute('role', entry.checked ? 'menuitemcheckbox' : 'menuitem');
+            if (entry.checked !== undefined && !sub) row.setAttribute('aria-checked', String(!!entry.checked));
+            if (!enabled) row.setAttribute('aria-disabled', 'true');
+            if (sub) row.setAttribute('aria-haspopup', 'menu');
+            row.tabIndex = -1;
+            row.style.cssText = `display:flex;align-items:center;gap:16px;padding:4px 10px 4px 26px;border-radius:4px;position:relative;cursor:default;white-space:nowrap;color:${enabled ? colors.fg : colors.muted};outline:none`;
+            const title = document.createElement('span');
+            title.style.flex = '1';
+            title.textContent = sub ? entry.submenu : entry.title;
+            row.append(title);
+            if (entry.checked) {
+                const tick = document.createElement('span');
+                tick.textContent = '✓';
+                tick.setAttribute('aria-hidden', 'true');
+                tick.style.cssText = 'position:absolute;left:9px';
+                row.append(tick);
+            }
+            if (entry.keyEquivalent || sub) {
+                const hint = document.createElement('span');
+                hint.setAttribute('aria-hidden', 'true');
+                hint.textContent = sub ? '›' : entry.keyEquivalent.replace(/^mod\+/i, navigator.platform.startsWith('Mac') ? '⌘' : 'Ctrl+');
+                hint.style.color = colors.muted;
+                row.append(hint);
+            }
+            const item = { row, enabled, sub, id: entry.id };
+            rows.push(item);
+            row.addEventListener('pointerenter', () => focusRow(item, true));
+            row.addEventListener('click', (event) => {
+                event.preventDefault();
+                if (!enabled) return;
+                if (sub) { openSub(item); return; }
+                answer(entry.id);
+            });
+            menu.append(row);
+        }
+        document.body.append(menu);
+        // Inside the viewport: flipped left of the parent item, or up, where it would overflow.
+        const r = menu.getBoundingClientRect();
+        let l = left, t = top;
+        if (l + r.width > innerWidth - 4) l = parentItem ? parentItem.row.getBoundingClientRect().left - r.width + 4 : innerWidth - 4 - r.width;
+        // A menu at a point opens upward from it where it would run off the bottom, as a context
+        // menu does; a submenu moves up.
+        if (t + r.height > innerHeight - 4) t = Math.max(4, parentItem || top - r.height < 4 ? innerHeight - 4 - r.height : top - r.height);
+        menu.style.left = `${Math.max(4, l)}px`;
+        menu.style.top = `${Math.max(4, t)}px`;
+        const level = { menu, rows, active: null, child: null, parentItem };
+        menus.push(level);
+        const focusRow = (item, fromPointer) => {
+            for (const m of menus) if (m.rows.includes(item)) {
+                if (m.active) m.active.row.style.background = '';
+                m.active = item;
+                if (item.enabled) item.row.style.background = colors.hover;
+                item.row.focus({ preventScroll: true });
+                // Leaving a submenu's item for another closes the submenu.
+                if (m.child && m.child.parentItem !== item) closeFrom(menus.indexOf(m) + 1);
+                if (fromPointer && item.sub && item.enabled) openSub(item);
+            }
+        };
+        level.focusRow = focusRow;
+        return level;
+    };
+    const closeFrom = (k) => {
+        while (menus.length > k) {
+            const m = menus.pop();
+            m.menu.remove();
+            if (menus.length) menus[menus.length - 1].child = null;
+        }
+    };
+    const openSub = (item) => {
+        const parent = menus.find(m => m.rows.includes(item));
+        if (!parent || parent.child?.parentItem === item) return parent?.child;
+        closeFrom(menus.indexOf(parent) + 1);
+        const r = item.row.getBoundingClientRect();
+        const child = open(item.sub, r.right - 4, r.top - 5, 0, item);
+        parent.child = child;
+        return child;
+    };
+    const top = open(spec, box.left + x, box.top + y, minWidth, null);
+    const selected = spec.selected && top.rows.find(r => r.id === spec.selected);
+    // A positioned menu puts its selected item over the point, as a pop-up button opens.
+    if (selected) {
+        const dy = selected.row.getBoundingClientRect().top - top.menu.getBoundingClientRect().top;
+        top.menu.style.top = `${Math.max(4, box.top + y - dy)}px`;
+    }
+    top.menu.focus({ preventScroll: true });
+    if (selected) top.focusRow(selected, false);
+    const step = (level, by) => {
+        const live = level.rows.filter(r => r.enabled);
+        if (!live.length) return;
+        const at = live.indexOf(level.active);
+        level.focusRow(live[(at + by + live.length) % live.length], false);
+    };
+    const onKey = (event) => {
+        const level = menus[menus.length - 1];
+        const k = event.key;
+        if (k === 'Escape' || k === 'Tab') {
+            if (menus.length > 1 && k === 'Escape') { closeFrom(menus.length - 1); menus[menus.length - 1].active?.row.focus(); }
+            else answer(null);
+        } else if (k === 'ArrowDown') step(level, 1);
+        else if (k === 'ArrowUp') step(level, -1);
+        else if (k === 'Home') { level.active = null; step(level, 1); }
+        else if (k === 'End') { level.active = null; step(level, -1); }
+        else if (k === 'ArrowRight' && level.active?.sub) { const child = openSub(level.active); if (child) step(child, 1); }
+        else if (k === 'ArrowLeft' && menus.length > 1) { closeFrom(menus.length - 1); menus[menus.length - 1].active?.row.focus(); }
+        else if ((k === 'Enter' || k === ' ') && level.active?.enabled) {
+            if (level.active.sub) { const child = openSub(level.active); if (child) step(child, 1); }
+            else answer(level.active.id);
+        } else if (k.length === 1 && /\S/.test(k)) {
+            const live = level.rows.filter(r => r.enabled);
+            const from = live.indexOf(level.active);
+            const hit = [...live.slice(from + 1), ...live.slice(0, from + 1)].find(r => r.row.textContent.trim().toLowerCase().startsWith(k.toLowerCase()));
+            if (hit) level.focusRow(hit, false);
+        } else return;
+        event.preventDefault();
+        event.stopPropagation();
+    };
+    const onDown = (event) => {
+        if (!menus.some(m => m.menu.contains(event.target))) answer(null);
+    };
+    const onBlur = () => answer(null);
+    document.addEventListener('keydown', onKey, true);
+    document.addEventListener('pointerdown', onDown, true);
+    window.addEventListener('blur', onBlur);
+    window.addEventListener('resize', onBlur);
+    h.menu = { menus, done: () => {
+        document.removeEventListener('keydown', onKey, true);
+        document.removeEventListener('pointerdown', onDown, true);
+        window.removeEventListener('blur', onBlur);
+        window.removeEventListener('resize', onBlur);
+        for (const m of menus) m.menu.remove();
+        menus.length = 0;
+    } };
+}
+
+// Takes the menu down; `refocus` gives the canvas its focus back, as a closing menu does.
+function closeMenu(h, refocus) {
+    if (!h.menu) return;
+    const menu = h.menu;
+    h.menu = null;
+    menu.done();
+    if (refocus) h.canvas.focus({ preventScroll: true });
+}
+
+// The app went away or the menu was answered by Rune itself: no answer is sent.
+export function hideMenu(h) {
+    closeMenu(h, false);
+}
+
 // Whether Rune pinched something with the Ctrl+wheel it just heard.
 export function syncWheel(h, used) {
     h.wheelUsed = used;
@@ -539,6 +725,10 @@ export function syncA11y(h, json) {
         const css = itemStyle(h, item, parent ? parent.r : [0, 0]);
         if (el._css !== css) { el._css = css; el.style.cssText = css; }
         if (item.i) el.id = item.i; else el.removeAttribute('id');
+        // A table's parts: the role says what the div is (`aria_role`).
+        if ((el.getAttribute('role') ?? undefined) !== item.o && item.k === 'group') {
+            if (item.o) el.setAttribute('role', item.o); else el.removeAttribute('role');
+        }
         if (tag === 'button') {
             if (item.x === true || item.x === false) el.setAttribute('aria-expanded', String(item.x));
             else el.removeAttribute('aria-expanded');
@@ -670,6 +860,7 @@ export async function pastedImage(h, max) {
 }
 
 export function destroy(h) {
+    closeMenu(h, false);
     h.disposed = true;
     h.image = undefined;
     clearTimeout(h.staticTimer);

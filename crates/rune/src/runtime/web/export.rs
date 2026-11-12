@@ -7,7 +7,7 @@
 use std::fmt::Write;
 
 use super::*;
-use crate::runtime::web_a11y::{anchor_id, container_tag};
+use crate::runtime::web_a11y::{anchor_id, aria_role, container_tag};
 
 #[path = "export/css.rs"]
 mod css;
@@ -115,6 +115,7 @@ impl<S: 'static> Runtime<S> {
         if matches!(tag, "a" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6") || container_tag(n.role).is_some() {
             if let Some(id) = anchor_id(n.key.as_deref()) { let _ = write!(attrs, " id=\"{id}\""); }
         }
+        if let Some(role) = aria_role(n.role) { let _ = write!(attrs, " role=\"{role}\""); }
         if let Some(h) = &href { let _ = write!(attrs, " href=\"{}\"", escape(h)); }
         if let Some(url) = pixels_url {
             let [x0, y0, x1, y1] = n.target;

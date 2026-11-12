@@ -827,9 +827,14 @@ impl<S: 'static> Browser<S> {
         let (animating, dt) = r.clock.advance(&mut r.rt, now, r.compositor.as_ref().is_some_and(|c| c.animating()));
         r.apply_frame_requests(window);
         r.clipboard.flush(&mut r.rt);
-        if r.rt.popup_menu().is_some() {
-            web_sys::console::warn_1(&"Native popup menus are unsupported on web.".into());
-            r.rt.cancel_popups();
+        // A menu asked for opens as the page's own elements (bridge.js `showMenu`), once the frame
+        // that asked has laid out what it anchors to.
+        if !r.rt.popup_waits_for_layout() {
+            match r.rt.take_popup() {
+                Some(Some(show)) => r.input.show_menu(&show, r.rt.backdrop_dark().unwrap_or(r.rt.env.system_dark)),
+                Some(None) => { let _ = r.rt.resolve_popup(None); }
+                None => {}
+            }
         }
         r.rt.refuse_file_dialog("native file dialogs are unsupported on web");
         r.sync_input(false);

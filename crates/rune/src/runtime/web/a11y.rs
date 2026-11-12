@@ -30,6 +30,8 @@ pub(crate) struct A11yItem {
     pub runs: Vec<A11yRun>,
     /// The HTML element a container stands for (`main`, `nav`, `section`, `ul`, ...).
     pub tag: Option<&'static str>,
+    /// The ARIA role it carries (a table's parts: `table`, `row`, `cell`, ...).
+    pub role: Option<&'static str>,
     /// The index of the container item it sits in.
     pub parent: Option<usize>,
     /// The element id an anchor link scrolls to (`#key`).
@@ -67,7 +69,7 @@ pub(crate) struct A11yRun {
 impl A11yItem {
     fn new(kind: &'static str, path: &str, rect: [f32; 4]) -> Self {
         A11yItem { kind, path: path.to_owned(), rect, font_size: 0.0, level: None, expanded: None, text: String::new(),
-            runs: Vec::new(), tag: None, parent: None, id: None, href: None, font: None, selectable: false }
+            runs: Vec::new(), tag: None, role: None, parent: None, id: None, href: None, font: None, selectable: false }
     }
 
     fn to_json(&self) -> Value {
@@ -80,6 +82,7 @@ impl A11yItem {
         if let Some(x) = self.expanded { obj.insert("x".into(), json!(x)); }
         if !self.text.is_empty() { obj.insert("t".into(), json!(self.text)); }
         if let Some(g) = self.tag { obj.insert("g".into(), json!(g)); }
+        if let Some(o) = self.role { obj.insert("o".into(), json!(o)); }
         if let Some(a) = self.parent { obj.insert("a".into(), json!(a)); }
         if let Some(id) = &self.id { obj.insert("i".into(), json!(id)); }
         if let Some(h) = &self.href { obj.insert("h".into(), json!(h)); }
@@ -116,6 +119,21 @@ pub(crate) fn container_tag(role: &str) -> Option<&'static str> {
         "list" => "ul",
         "listitem" => "li",
         "figure" => "figure",
+        // A table's parts are divs with their ARIA roles: the mirror places every element itself,
+        // and an HTML table's semantics follow its CSS display.
+        "table" | "row" | "cell" | "columnheader" | "rowheader" => "div",
+        _ => return None,
+    })
+}
+
+/// The ARIA role a container carries (`container_tag`'s divs for a table's parts).
+pub(crate) fn aria_role(role: &str) -> Option<&'static str> {
+    Some(match role {
+        "table" => "table",
+        "row" => "row",
+        "cell" => "cell",
+        "columnheader" => "columnheader",
+        "rowheader" => "rowheader",
         _ => return None,
     })
 }
@@ -358,6 +376,7 @@ impl<S: 'static> Runtime<S> {
             if let Some(tag) = container_tag(n.role) {
                 let mut item = A11yItem::new("group", &n.path, rect);
                 item.tag = Some(tag);
+                item.role = aria_role(n.role);
                 item.id = anchor_id(n.key.as_deref());
                 item.text = n.label.clone().filter(|s| !s.trim().is_empty()).unwrap_or_default();
                 push(&mut out, item);
