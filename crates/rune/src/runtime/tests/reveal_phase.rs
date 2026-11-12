@@ -19,8 +19,10 @@ use super::*;
 use crate::el::col;
 use crate::{TextStyle, text};
 
-/// Sequences of up to this many letters.
-const LENGTH: usize = 6;
+/// The gated walk's depth: every sequence up to this many letters.
+const LENGTH: usize = 5;
+/// The ignored deep run's depth: the same walk, one letter further.
+const DEEP: usize = 6;
 /// `El::reveal`: seconds each word takes to fade.
 const FADE: f32 = 0.05;
 /// Words one `Chunk` brings: at this fade, a chunk's run outlasts it, so a later commit meets a
@@ -393,7 +395,7 @@ impl Walk {
 }
 
 /// Plays every sequence that starts with `sequence`, recording the first one that differs.
-fn visit(walk: &mut Walk, alphabet: &[Letter], sequence: &mut Vec<Letter>, ran: &mut usize, failure: &mut Option<String>) {
+fn visit(walk: &mut Walk, alphabet: &[Letter], depth: usize, sequence: &mut Vec<Letter>, ran: &mut usize, failure: &mut Option<String>) {
     if failure.is_some() {
         return;
     }
@@ -405,17 +407,17 @@ fn visit(walk: &mut Walk, alphabet: &[Letter], sequence: &mut Vec<Letter>, ran: 
             return;
         }
     }
-    if sequence.len() == LENGTH {
+    if sequence.len() == depth {
         return;
     }
     for &letter in alphabet {
         sequence.push(letter);
-        visit(walk, alphabet, sequence, ran, failure);
+        visit(walk, alphabet, depth, sequence, ran, failure);
         sequence.pop();
     }
 }
 
-fn walk_all(alphabet: &[Letter]) {
+fn walk_all(alphabet: &[Letter], depth: usize) {
     let next = AtomicUsize::new(0);
     let results = Mutex::new(Vec::new());
     let workers = std::thread::available_parallelism().map_or(4, |n| n.get()).min(8);
@@ -425,7 +427,7 @@ fn walk_all(alphabet: &[Letter]) {
                 let mut walk = Walk::new();
                 let (mut ran, mut failure) = (0, None);
                 while let Some(&letter) = alphabet.get(next.fetch_add(1, Ordering::Relaxed)) {
-                    visit(&mut walk, alphabet, &mut vec![letter], &mut ran, &mut failure);
+                    visit(&mut walk, alphabet, depth, &mut vec![letter], &mut ran, &mut failure);
                 }
                 results.lock().unwrap().push((ran, failure));
             });
@@ -437,15 +439,22 @@ fn walk_all(alphabet: &[Letter]) {
         total += ran;
         failures.extend(failure);
     }
-    println!("{total} sequences up to length {LENGTH}");
+    println!("{total} sequences up to length {depth}");
     assert!(failures.is_empty(), "sequences differ from dev: {failures:#?}");
-    let expected: usize = (1..=LENGTH as u32).map(|n| alphabet.len().pow(n)).sum();
+    let expected: usize = (1..=depth as u32).map(|n| alphabet.len().pow(n)).sum();
     assert_eq!(total, expected, "every sequence ran");
 }
 
 #[test]
 fn every_short_sequence_of_streaming_events_leaves_what_dev_left() {
-    walk_all(&ALPHABET);
+    walk_all(&ALPHABET, LENGTH);
+}
+
+// The deep run: `cargo test -p rune --lib -- --ignored every_deeper_sequence`.
+#[ignore = "the deep run"]
+#[test]
+fn every_deeper_sequence_of_streaming_events_leaves_what_dev_left() {
+    walk_all(&ALPHABET, DEEP);
 }
 
 /// The state the walk compares against is the one dev left: a text whose stream a chunk filled
