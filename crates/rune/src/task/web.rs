@@ -131,6 +131,10 @@ pub(super) fn start_runners() {
     }
 }
 
+pub(super) fn can_wait() -> bool {
+    IN_WORK.get()
+}
+
 pub(super) fn wait(promise: &js_sys::Promise) -> Option<Result<JsValue, JsValue>> {
     if !IN_WORK.get() {
         return None;

@@ -1,6 +1,8 @@
 //! Fetches the faces a page adds once its first frame is up (see `text::full_faces`): the full
 //! Inter faces when the app sets text in the embedded Inter, and `App::font_url_later`'s fonts.
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 #[cfg(feature = "embedded-fonts")]
@@ -30,11 +32,50 @@ pub(super) fn fetch(late: Vec<String>, share: bool, wake: impl Fn() + Clone + 's
         let urls = crate::text::full_faces::FILES.iter().map(|file| super::platform::resolve_url(file, &base)).collect();
         load(urls, true, false, wake.clone());
     }
+    let wake: Rc<dyn Fn()> = Rc::new(wake);
+    let later = LATER.with_borrow_mut(|later| {
+        later.ready = Some((share, wake.clone()));
+        later.seen.extend(late.iter().cloned());
+        std::mem::take(&mut later.asked)
+    });
+    let late: Vec<String> = late.into_iter().chain(later).collect();
     if !late.is_empty() {
-        load(late, false, share, wake);
+        load(late, false, share, move || wake());
     }
 }
 
+/// [`now`]'s fonts, and, once the first frame is up, how [`fetch`] loads them.
+#[derive(Default)]
+struct Later {
+    /// Asked for before the first frame: they go with the app's late fonts.
+    asked: Vec<String>,
+    /// Every URL asked for, so each loads once.
+    seen: Vec<String>,
+    ready: Option<(bool, Rc<dyn Fn()>)>,
+}
+
+thread_local! {
+    static LATER: RefCell<Later> = RefCell::default();
+}
+
+/// Fetches `url`'s font now, as `App::font_url_later`'s fonts are fetched: added to the app's
+/// fonts when it arrives (every window takes it up on its next frame), reported and skipped if
+/// it fails. Asked before the first frame, it waits for it. Each URL loads once.
+pub(super) fn now(url: &str) {
+    let ready = LATER.with_borrow_mut(|later| {
+        if later.seen.iter().any(|u| u == url) {
+            return None;
+        }
+        later.seen.push(url.to_owned());
+        if later.ready.is_none() {
+            later.asked.push(url.to_owned());
+        }
+        later.ready.clone()
+    });
+    if let Some((share, wake)) = ready {
+        load(vec![url.to_owned()], false, share, move || wake());
+    }
+}
 fn load(urls: Vec<String>, all_or_none: bool, share: bool, wake: impl FnOnce() + 'static) {
     let files: Vec<_> = urls.into_iter().map(|url| {
         let bytes = super::platform::fetch_bytes(&url);

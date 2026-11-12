@@ -29,6 +29,14 @@ pub(crate) fn safe_area() -> [f32; 4] { INSETS.get() }
 /// The largest viewport's height in CSS points, or 0 before the browser has reported one.
 pub(crate) fn large_viewport() -> f32 { LARGE_VIEWPORT.get() }
 
+/// Fetches the font at `url` now, for something about to draw in it (a terminal's face, say),
+/// as `App::font_url_later` fetches its fonts after the first frame: every window takes it up
+/// on its next frame once it arrives; until then text in its family sets in the slot's fallback.
+/// Asked before the first frame, it waits for it. Each URL loads once.
+pub fn font_url_now(url: &str) {
+    full_faces::now(url);
+}
+
 /// Open an HTTP(S) or mail link in a new browser tab. Call from a user input handler;
 /// browser popup policy applies. The new page receives no opener or referrer.
 pub fn open_url(url: &str) -> Result<(), String> {

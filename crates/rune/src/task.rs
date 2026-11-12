@@ -105,7 +105,8 @@ pub fn start_runners() {
 
 /// Waits for `promise` from task work without blocking the page: the work's fiber suspends
 /// until it settles. `None` where nothing can wait (no runners, or not in task work): the caller
-/// does it the blocking way.
+/// does it the blocking way. Ask [`can_wait`] before starting what the promise stands for (a
+/// request), so code that can't wait doesn't start it and then do it again the blocking way.
 #[cfg(target_arch = "wasm32")]
 pub fn wait(promise: &js_sys::Promise) -> Option<Result<wasm_bindgen::JsValue, wasm_bindgen::JsValue>> {
     web::wait(promise)
@@ -115,4 +116,10 @@ pub fn wait(promise: &js_sys::Promise) -> Option<Result<wasm_bindgen::JsValue, w
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn pump() {
     web::pump();
+}
+
+/// Whether [`wait`] can suspend here: task work on a fiber.
+#[cfg(target_arch = "wasm32")]
+pub fn can_wait() -> bool {
+    web::can_wait()
 }

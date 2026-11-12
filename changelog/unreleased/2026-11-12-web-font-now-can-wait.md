@@ -1,0 +1,1 @@
+- Web: `rune::web::font_url_now(url)` fetches a font when something is about to draw in it (a terminal's face), as `App::font_url_later` does after the first frame, once per URL; `rune::task::can_wait()` says whether `wait` can suspend here, so a request isn't started and then made again the blocking way.
