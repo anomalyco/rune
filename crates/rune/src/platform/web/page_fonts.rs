@@ -14,14 +14,18 @@ extern "C" {
     fn add_font_face(family: &str, bytes: &[u8], weight: &str, style: &str);
 }
 
-/// [`share`] in a task of its own, so the frame just presented isn't followed by a long one.
+/// [`share`] one font file at a time in the page's idle time (1 s at the latest each), so the
+/// frames and reads that follow the first one aren't held behind it: shared at once, a page's
+/// fonts held its first reads' answers back 34 ms.
 pub(super) fn share_later(fonts: &'static [&'static [u8]]) {
     if fonts.is_empty() {
         return;
     }
     wasm_bindgen_futures::spawn_local(async move {
-        let _ = wasm_bindgen_futures::JsFuture::from(super::platform::next_task()).await;
-        share(fonts.iter().copied());
+        for &font in fonts {
+            let _ = wasm_bindgen_futures::JsFuture::from(super::platform::next_idle(1000)).await;
+            share([font]);
+        }
     });
 }
 
