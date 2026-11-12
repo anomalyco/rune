@@ -19,6 +19,19 @@ impl El {
         }
         self
     }
+    /// A press on a surface that isn't a control: a pane that clears a selection or takes
+    /// keyboard routing when clicked, a scrim that closes what it covers. It runs as
+    /// [`El::on_press`] does under the pointer, but the element stays what its role says (it
+    /// doesn't become a button), takes no keyboard focus and isn't a Tab stop; assistive
+    /// technology can still press it.
+    pub fn on_background_press<S: 'static>(self, f: impl Fn(&mut S) + 'static) -> Self {
+        self.on_background_press_tx(move |s: &mut S, _tx: &mut Tx| f(s))
+    }
+    /// [`El::on_background_press`] with the transaction.
+    pub fn on_background_press_tx<S: 'static>(mut self, f: impl Fn(&mut S, &mut Tx) + 'static) -> Self {
+        self.handlers.on_press = Some(Rc::new(move |s, tx| f(downcast::<S>(s), tx)));
+        self.focusable(false)
+    }
     /// Runs on the second of two presses on this element, as a double-click does: the second
     /// press lands within the system double-click interval of the first and within 4 pt of it,
     /// and releases inside. `on_press` still runs for each press, the first one right away, so a

@@ -51,6 +51,12 @@ pub(crate) struct A11yMore {
     pub sorted: Option<bool>,
     /// `El::href`: the URL this element links to.
     pub href: Option<String>,
+    /// `El::labelled_by`'s key.
+    pub labelled_by: Option<String>,
+    /// `El::described_by`'s key.
+    pub described_by: Option<String>,
+    /// `El::busy`.
+    pub busy: bool,
 }
 
 /// Accessibility state beyond role and label (`El::level`, `El::expanded`, `El::secure`, and
@@ -114,6 +120,25 @@ impl El {
     /// container or search field holds focus. `key` names it as `Cx::layout` does.
     pub fn active_descendant(mut self, key: impl Into<String>) -> Self {
         self.cold_mut().a11y.more().active = Some(key.into());
+        self
+    }
+    /// The element whose text names this one (ARIA `aria-labelledby`): a setting's title for
+    /// its switch, a dialog's heading for the dialog. `key` names it as `Cx::layout` does. A
+    /// label set with [`El::label`] wins.
+    pub fn labelled_by(mut self, key: impl Into<String>) -> Self {
+        self.cold_mut().a11y.more().labelled_by = Some(key.into());
+        self
+    }
+    /// The element whose text describes this one (ARIA `aria-describedby`): a setting's
+    /// explanation for its switch, a dialog's message for the dialog.
+    pub fn described_by(mut self, key: impl Into<String>) -> Self {
+        self.cold_mut().a11y.more().described_by = Some(key.into());
+        self
+    }
+    /// The element is still changing and a reader should wait for it to settle (ARIA
+    /// `aria-busy`): a turn while the reply streams, a tool call while it runs.
+    pub fn busy(mut self, busy: bool) -> Self {
+        if busy || self.cold.a11y.more.is_some() { self.cold_mut().a11y.more().busy = busy; }
         self
     }
     /// Whether the value entered here fails validation (ARIA `aria-invalid`).

@@ -742,6 +742,8 @@ pub struct Runtime<S: 'static> {
     pub(crate) window_frame: Option<crate::window::frame::FrameRequest>,
     /// The window's title (`Tx::set_title`), from `AppSpec`'s.
     pub(crate) window_title: window_requests::Title,
+    /// `Tx::announce`'s last words, for the accessibility tree's live region.
+    pub(crate) announcement: crate::a11y::Announcement,
     /// The window's height follows the root's natural height (`App::fit_content_height`).
     pub(crate) fit_height: bool,
     /// The height a window that fits its content last asked for, and the frame its move
@@ -1038,6 +1040,7 @@ impl<S: 'static> Runtime<S> {
             next_file_dialog: 0,
             window_frame: None,
             window_title: Default::default(),
+            announcement: Default::default(),
             fit_height: false,
             fit: Default::default(),
             page: None,

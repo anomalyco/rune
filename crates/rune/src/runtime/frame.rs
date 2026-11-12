@@ -235,6 +235,7 @@ impl<S: 'static> Runtime<S> {
             self.dirty = true;
         }
         if let Some(title) = tx.title.take() { self.window_title.set(title); }
+        if let Some((text, how)) = tx.announce.take() { self.announcement.say(text, how); }
         if let Some(mut request) = tx.window_frame.take() {
             request.spring = (request.animate && !tx.commit.snaps() && !self.reduced_motion).then(|| tx.motion.map_or(motion::DEFAULT, MotionSource::spring));
             self.window_frame = Some(self.window_frame.unwrap_or_default().merge(request));

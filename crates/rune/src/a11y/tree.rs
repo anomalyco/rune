@@ -16,6 +16,8 @@ use super::*;
 pub(crate) const ROOT: AkId = AkId(1);
 /// The help tooltip Rune draws, when one shows.
 const TOOLTIP: AkId = AkId(2);
+/// `Tx::announce`'s live region.
+const ANNOUNCER: AkId = AkId(3);
 /// Bits under an element's id for the nodes it owns: its text's lines and links.
 const SUB: u32 = 16;
 const LINK_BASE: u64 = 0x8000;
@@ -38,6 +40,7 @@ struct Stamp {
     viewport: (u32, u32, u32),
     name: u64,
     tooltip: u64,
+    announced: u32,
 }
 
 /// An activated tree: what the platform adapter holds, to diff the next update against.
@@ -292,6 +295,7 @@ impl<S: 'static> Runtime<S> {
             viewport: (self.viewport.0.to_bits(), self.viewport.1.to_bits(), self.env.scale.to_bits()),
             name: self.window_title.current().map_or(0, hash_str),
             tooltip: self.help_tooltip().map_or(0, |(t, r)| mix(hash_str(t), r[0].to_bits() as u64 ^ (r[1].to_bits() as u64) << 32)),
+            announced: self.announcement.said(),
         }
     }
 
@@ -351,7 +355,8 @@ impl<S: 'static> Runtime<S> {
         // The root: its title, size, scale and the tooltip showing.
         let tip = self.help_tooltip().map_or(0, |(t, r)| mix(hash_str(t), r.iter().fold(0, |h, v| mix(h, v.to_bits() as u64))));
         let title = self.window_title.current().map_or(0, hash_str);
-        slots[0].print = [self.viewport.0.to_bits() as u64, self.viewport.1.to_bits() as u64, self.env.scale.to_bits() as u64, tip, title]
+        let said = u64::from(self.announcement.said());
+        slots[0].print = [self.viewport.0.to_bits() as u64, self.viewport.1.to_bits() as u64, self.env.scale.to_bits() as u64, tip, title, said]
             .into_iter().fold(0, mix);
         // Each node's children and set size are part of what it shows.
         let mut kid_prints = vec![0u64; slots.len()];
@@ -386,6 +391,15 @@ impl<S: 'static> Runtime<S> {
                     kids.push(TOOLTIP);
                     out.push((TOOLTIP, node, s.print));
                 }
+                // Always there, so its first words are a change a reader announces, not a node
+                // that appeared.
+                let mut node = AkNode::new(Role::Status);
+                let (words, how) = self.announcement.words().unwrap_or_default();
+                if !words.is_empty() { node.set_label(words); }
+                node.set_live(if how == crate::LiveRegion::Assertive { accesskit::Live::Assertive } else { accesskit::Live::Polite });
+                node.set_bounds(AkRect { x0: 0.0, y0: 0.0, x1: 1.0, y1: 1.0 });
+                kids.push(ANNOUNCER);
+                out.push((ANNOUNCER, node, s.print));
                 if let Some(size) = s.set_size { root.set_size_of_set(size); }
                 root.set_children(kids);
                 out.push((ROOT, root, s.print));
