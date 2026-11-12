@@ -94,10 +94,16 @@ impl El {
 
     /// Copies in the children shared with a memo cache, so the element owns all of them.
     pub(crate) fn expand_memo(&mut self) {
+        let whole = !self.flags.has(ElFlags::MEMO_EXTENDED);
         self.flags.set(ElFlags::MEMO_EXTENDED, false);
         if let Some(built) = self.memo.take() {
             if built.children.has_virtual {
                 self.flags.set(ElFlags::HAS_VIRTUAL, true);
+                // Its virtual lists mount their rows into the copy: flattening records the copy
+                // as the memo's nodes, so a later commit whose windows match keeps them.
+                if whole && built.reusable {
+                    self.cold_mut().expanded_memo = Some(built.clone());
+                }
             }
             let shared = Rc::unwrap_or_clone(built.children.clone()).children;
             let own = std::mem::replace(&mut self.children, shared);
@@ -108,14 +114,16 @@ impl El {
 
 fn el_flatten_reusable(e: &El) -> bool {
     let c = &*e.cold;
-    c.virtual_estimate.is_none()
-        && c.growth.is_none()
+    // A list whose rows `virtual_rows` builds is reused with them while it mounts the same rows
+    // (`Measurement::keeps_windows`); one built from children isn't.
+    let indexed = c.virtual_rows.is_some();
+    (c.virtual_estimate.is_none() || indexed)
+        && (c.growth.is_none() || indexed)
         && c.aspect_fit <= 0.0
         && c.above.is_none()
         && c.input.is_none()
         && e.handlers.get().is_none_or(|h| h.modal.is_none())
         && e.text.as_ref().is_none_or(|t| !t.redacted && t.cold.live.is_none())
-
         && e.memo_children().is_none_or(|m| m.reusable && !m.duplicate_keys)
         && e.children.iter().all(el_flatten_reusable)
 }
@@ -150,6 +158,9 @@ pub(crate) fn has_focused_input(el: &El) -> bool {
 pub(crate) struct Built {
     pub(crate) id: u64,
     pub(crate) reusable: bool,
+    /// Built by a [`region`]: what it shows is what it read, so its virtual lists' rows can be
+    /// kept with it while their reads hold.
+    pub(crate) region: bool,
     pub(crate) root: El,
     pub(crate) children: Rc<Shared>,
 }
@@ -157,7 +168,7 @@ pub(crate) struct Built {
 static NEXT_BUILT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 impl Built {
-    fn new(mut el: El, scale: f32) -> (Rc<Built>, Option<String>) {
+    fn new(mut el: El, scale: f32, region: bool) -> (Rc<Built>, Option<String>) {
         let key = el.key.take();
         el.flags.set(ElFlags::MEMO_EXTENDED, false);
         let shared = if el.children.is_empty() && let Some(built) = el.memo.take() {
@@ -170,13 +181,13 @@ impl Built {
             let focused_input = children.iter().any(has_focused_input);
             let duplicate_keys = crate::input::key_diagnostics::memo_children_have_duplicates(&el, &children);
             let has_virtual = children.iter().any(|c| c.flags.has(ElFlags::HAS_VIRTUAL));
-            let reusable = !duplicate_keys && !has_virtual && children.iter().all(el_flatten_reusable);
+            let reusable = !duplicate_keys && children.iter().all(el_flatten_reusable);
             Rc::new(Shared { children, focused_input, duplicate_keys, has_virtual, reusable })
         };
         el.flags.set(ElFlags::HAS_VIRTUAL, el.cold.virtual_estimate.is_some());
         let reusable = shared.reusable && !shared.duplicate_keys && el_flatten_reusable(&el);
         let id = NEXT_BUILT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        (Rc::new(Built { id, reusable, root: el, children: shared }), key)
+        (Rc::new(Built { id, reusable, region, root: el, children: shared }), key)
     }
 
     /// The root, with its children shared rather than copied.
@@ -733,7 +744,7 @@ fn memo_inner(id: impl Into<String>, version: u64, region: bool, build: impl FnO
         if !store {
             return el;
         }
-        let (built, key) = Built::new(el, s.scale);
+        let (built, key) = Built::new(el, s.scale, region);
         let el = built.placeholder(key.clone());
         let pass = s.cache.pass;
         let virtual_row = s.virtual_row;
@@ -931,7 +942,7 @@ pub fn cached((h1, h2): (u64, u64), build: impl FnOnce() -> El) -> El {
         {
             s.cache.builds += 1;
         }
-        let (built, key) = Built::new(el, s.scale);
+        let (built, key) = Built::new(el, s.scale, false);
         let el = built.placeholder(key.clone());
         let pass = s.cache.pass;
         let virtual_row = s.virtual_row;
@@ -952,6 +963,78 @@ fn keep_nested_rows(cache: &mut MemoCache, ids: &mut Vec<(Rc<str>, u64)>, pass: 
             ids.extend(e.nested.iter().map(|nested| (nested.clone(), virtual_row)));
         }
     }
+}
+
+/// What a build read, as a region's reads: its [`Tracked`](crate::Tracked) values, layout rects
+/// and caret, and those of the memos it built or reused.
+#[derive(Default, Clone)]
+pub(crate) struct Reads(Vec<Read>);
+
+impl std::fmt::Debug for Reads {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Reads({})", self.0.len())
+    }
+}
+
+impl Reads {
+    /// Whether everything read still reads the same.
+    pub(crate) fn hold(&self) -> bool {
+        SCOPES.with_borrow(|scopes| scopes.last().is_none_or(|s| self.0.iter().all(|r| s.seen.holds(r))))
+    }
+
+    /// Counts the reads as made again, as a reused memo's are: what was built from them is
+    /// used again without being built.
+    pub(crate) fn replay(&self) {
+        SCOPES.with_borrow_mut(|scopes| {
+            let Some(s) = scopes.last_mut() else { return };
+            for read in &self.0 {
+                match read {
+                    Read::Caret(..) => s.replayed.caret = true,
+                    Read::Layout(k, _) => note_read(&mut s.replayed.layout, k, None),
+                    Read::LayoutWith(k, same, _) => note_read(&mut s.replayed.layout, k, Some(same.clone())),
+                    Read::Selection(_) => note_read(&mut s.replayed.layout, SELECTION, None),
+                    Read::State(..) => {}
+                }
+            }
+            s.note(&self.0);
+        });
+    }
+}
+
+/// Runs `f` recording what it reads, for a caller that reuses what `f` built while the reads hold.
+pub(crate) fn recording<R>(f: impl FnOnce() -> R) -> (R, Reads) {
+    let framed = SCOPES.with_borrow_mut(|scopes| scopes.last_mut().map(|s| s.reads.push(Vec::new())).is_some());
+    crate::tracked::begin();
+    let out = f();
+    let states = crate::tracked::end();
+    let mut reads = SCOPES.with_borrow_mut(|scopes| scopes.last_mut().filter(|_| framed).and_then(|s| s.reads.pop())).unwrap_or_default();
+    reads.extend(states.into_iter().map(|(id, version)| Read::State(id, version)));
+    dedup_states(&mut reads);
+    SCOPES.with_borrow_mut(|scopes| if let Some(s) = scopes.last_mut() { s.note(&reads) });
+    (out, Reads(reads))
+}
+
+/// Whether the memo built as `id` is in the last commit's nodes, so its subtree can be reused.
+pub(crate) fn flattened(id: u64) -> bool {
+    SCOPES.with_borrow(|scopes| scopes.last().is_some_and(|s| s.cache.flattened.contains_key(&id)))
+}
+
+/// Marks the memos `virtual_rows` rows tagged `tags` built as used this pass, with the memos
+/// built inside them: a list kept whole builds none of its rows, and they stay for when it does.
+pub(crate) fn keep_rows(tags: impl Iterator<Item = u64>) {
+    SCOPES.with_borrow_mut(|scopes| {
+        let Some(s) = scopes.last_mut() else { return };
+        let tags: crate::runtime::HashSet<u64> = tags.collect();
+        let pass = s.cache.pass;
+        let mut nested = std::mem::take(&mut s.cache.nested_scratch);
+        nested.clear();
+        for e in s.cache.entries.values_mut().filter(|e| tags.contains(&e.virtual_row)) {
+            e.pass = pass;
+            nested.extend(e.nested.iter().map(|id| (id.clone(), e.virtual_row)));
+        }
+        keep_nested_rows(&mut s.cache, &mut nested, pass);
+        s.cache.nested_scratch = nested;
+    });
 }
 
 #[cfg(test)]
