@@ -72,7 +72,7 @@ pub fn generate(dir: &Path, out_dir: &Path) -> io::Result<()> {
         // A right-to-left locale's missing message is the source's left-to-right one, isolated, so an
         // untranslated English sentence keeps its words and its full stop in order in an Arabic row.
         let isolate = (locale.rtl && !locales[0].rtl).then_some(source);
-        let (text, spans) = blob(&keys, map, isolate, &plurals);
+        let (text, spans) = blob(&keys, map, isolate);
         fs::write(blobs.join(format!("{}.txt", locale.id)), text)?;
         fs::write(blobs.join(format!("{}.spans", locale.id)), spans)?;
     }
@@ -106,14 +106,13 @@ fn locales(manifest: &Value) -> io::Result<Vec<Locale>> {
 
 /// The locale's messages for `keys` concatenated, and a `(start, len)` little-endian `u32` pair
 /// per key, `start = u32::MAX` for a key it lacks. With `isolate`, a key it lacks takes that
-/// locale's message between LRI and PDI instead; plural categories don't, so a missing one still
-/// falls back to the locale's own `other`.
-fn blob(keys: &[&str], map: &BTreeMap<String, String>, isolate: Option<&BTreeMap<String, String>>, plurals: &[&str]) -> (String, Vec<u8>) {
+/// locale's message between LRI and PDI instead: the message the lookup falls back to (a missing plural
+/// category included, which `I18n::plural_form` takes from the source before the locale's `other`).
+fn blob(keys: &[&str], map: &BTreeMap<String, String>, isolate: Option<&BTreeMap<String, String>>) -> (String, Vec<u8>) {
     let mut text = String::new();
     let mut spans = Vec::with_capacity(keys.len() * 8);
-    let plural = |key: &str| key.rsplit_once('.').is_some_and(|(base, _)| plurals.binary_search(&base).is_ok());
     for key in keys {
-        let isolated = isolate.filter(|_| !map.contains_key(*key) && !plural(key)).and_then(|source| source.get(*key)).map(|m| format!("\u{2066}{m}\u{2069}"));
+        let isolated = isolate.filter(|_| !map.contains_key(*key)).and_then(|source| source.get(*key)).map(|m| format!("\u{2066}{m}\u{2069}"));
         let (start, len) = match map.get(*key).or(isolated.as_ref()) {
             Some(message) => {
                 let start = text.len() as u32;
