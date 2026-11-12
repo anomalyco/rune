@@ -508,6 +508,40 @@ fn overlay_occluded_runs_due_timers_without_frames() {
     assert!(deadline > Instant::now() + Duration::from_secs(4), "{:?}", deadline - Instant::now());
 }
 
+/// Uncovering an overlay keeps the retry a missed frame already asked for: the wait was set for
+/// a frame nobody could draw, and being uncovered doesn't show that the surface can. Only the
+/// wait after it starts over.
+#[cfg(target_os = "macos")]
+#[test]
+fn uncovering_an_overlay_keeps_its_outstanding_retry() {
+    use crate::window::{Missed, OCCLUDED_RETRY};
+    #[derive(Default)]
+    struct State { polls: usize }
+    fn view(_: &State, _: &mut Cx<State>) -> El { crate::el() }
+    fn poll(_: &mut State, _: f64, _: &mut Tx) -> bool { false }
+    let app = AppSpec { poll: Some(poll), ..AppSpec::new("uncovered", (30.0, 20.0), State::default, view) };
+    let (mut overlay, _handle) = Overlay::new(OverlaySpec::new("uncovered", app.size, view), State::default(), &app);
+    overlay.presence = Presence::Shown { occluded: false };
+    overlay.rt.wall_start = None;
+    overlay.occluded(true);
+    // Two covered misses: the second waits longer than the first.
+    overlay.missed(Missed::Occluded, false, false);
+    let first = overlay.backoff.deadline().expect("a covered miss re-checks later");
+    overlay.missed(Missed::Occluded, false, false);
+    let retry = overlay.backoff.deadline().expect("so does the next");
+    assert!(retry > first, "the covered wait doubles while it stays covered");
+    assert_eq!(overlay.wake_deadline(), Some(retry), "frames wait for that re-check");
+    // Uncovered, the retry the missed frame set stands...
+    overlay.occluded(false);
+    assert_eq!(overlay.backoff.deadline(), Some(retry), "uncovering keeps the outstanding retry");
+    assert_eq!(overlay.wake_deadline(), Some(retry), "and the re-check it asks for is still due");
+    // ...and the wait after it starts over at the shortest occluded retry.
+    let now = Instant::now();
+    overlay.missed(Missed::Occluded, false, false);
+    let next = overlay.backoff.deadline().expect("a covered miss waits again");
+    assert!(next >= now + OCCLUDED_RETRY && next < now + OCCLUDED_RETRY * 2, "{:?}", next - now);
+}
+
 /// Any miss that sets a retry backs off: frames wait for it, a fading-out overlay's too,
 /// and a timer due meanwhile runs without asking for a frame that wouldn't come.
 #[test]
