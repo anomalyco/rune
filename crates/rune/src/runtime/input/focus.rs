@@ -392,8 +392,9 @@ impl<S: 'static> Runtime<S> {
     /// Where focus goes when the element holding it leaves the tree or can't hold it anymore (a
     /// deleted row, a closed tab, a decided prompt, a pane closed under it) and nothing else
     /// asked for it: the next control after it in the old tree that is still here, else the one
-    /// before it, looking first inside its nearest container that survived and then further
-    /// out, as a native list hands its selection to the neighbour. Focus otherwise fell to
+    /// before it, else that container itself, looking first inside its nearest container that
+    /// survived and then further out, as a native list hands its selection to the neighbour.
+    /// Elements out of the Tab order count (a roving list's other rows take focus by arrows). Focus otherwise fell to
     /// nothing: a screen reader went back to the window and Tab started over at its top. A
     /// modal's own focus is left to the modal machine, which returns it where it was.
     fn focus_fallback(&self, nodes: &[Node], shown: &dyn Fn(usize) -> bool) -> Option<String> {
@@ -402,7 +403,7 @@ impl<S: 'static> Runtime<S> {
         if self.active_modal().is_some_and(|m| at >= m && self.modal_member(at)) { return None; }
         let new: rustc_hash::FxHashMap<&str, usize> = nodes.iter().enumerate().map(|(j, n)| (n.path.as_str(), j)).collect();
         let survivor = |i: usize| new.get(self.nodes[i].path.as_str()).copied()
-            .filter(|&j| shown(j) && nodes[j].focus.order >= 0 && (self.takes_focus(&nodes[j]) || nodes[j].input.as_ref().is_some_and(|i| i.access.is_some())));
+            .filter(|&j| shown(j) && (self.takes_focus(&nodes[j]) || nodes[j].input.as_ref().is_some_and(|i| i.access.is_some())));
         let within = |j: usize, s: usize| {
             let (p, root) = (self.nodes[j].path.as_str(), self.nodes[s].path.as_str());
             root.is_empty() || (p.len() > root.len() && p.starts_with(root) && p.as_bytes()[root.len()] == b'/')
@@ -411,7 +412,9 @@ impl<S: 'static> Runtime<S> {
         while let Some(s) = scope {
             if new.contains_key(self.nodes[s].path.as_str()) {
                 let end = (s + 1..self.nodes.len()).find(|&j| !within(j, s)).unwrap_or(self.nodes.len());
-                if let Some(j) = (at + 1..end).find_map(survivor).or_else(|| (s + 1..at).rev().find_map(survivor)) {
+                // Then the container itself, when it takes focus (a list row whose comment box
+                // closed under it).
+                if let Some(j) = (at + 1..end).find_map(survivor).or_else(|| (s + 1..at).rev().find_map(survivor)).or_else(|| survivor(s)) {
                     return Some(nodes[j].path.clone());
                 }
             }
