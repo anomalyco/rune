@@ -7,19 +7,20 @@ use super::{Minimize, WakeFacts, WakeWork};
 use crate::Cx;
 use crate::runtime::Runtime;
 
-/// Every sequence of `alphabet` up to `len` long, prefixes first.
-fn walk<E: Copy>(alphabet: &[E], len: usize, mut run: impl FnMut(&[E])) {
+/// Every sequence of `alphabet` up to `len` long that `allowed` lets be extended, prefixes first.
+fn walk<E: Copy>(alphabet: &[E], len: usize, mut allowed: impl FnMut(&[E], E) -> bool, mut run: impl FnMut(&[E])) {
     let mut seq = Vec::new();
-    fn go<E: Copy>(alphabet: &[E], len: usize, seq: &mut Vec<E>, run: &mut impl FnMut(&[E])) {
+    fn go<E: Copy>(alphabet: &[E], len: usize, seq: &mut Vec<E>, allowed: &mut impl FnMut(&[E], E) -> bool, run: &mut impl FnMut(&[E])) {
         run(seq);
         if seq.len() == len { return; }
         for &e in alphabet {
+            if !allowed(seq, e) { continue; }
             seq.push(e);
-            go(alphabet, len, seq, run);
+            go(alphabet, len, seq, allowed, run);
             seq.pop();
         }
     }
-    go(alphabet, len, &mut seq, &mut run);
+    go(alphabet, len, &mut seq, &mut allowed, &mut run);
 }
 
 /// `drain_frame` and the `match` it filtered, as dev had them: a hidden launcher draws a change
@@ -127,8 +128,22 @@ fn apply_minimize(state: &mut Minimize, op: Op) -> bool {
 #[test]
 fn a_shell_minimizes_once_exactly_where_dev_did_for_every_sequence() {
     let alphabet = [Op::Asked, Op::PollEnter, Op::Taken, Op::PollReturn, Op::Lost];
+    // A poll's shell can't re-enter `Host::poll_hidden`, so no poll starts inside another's
+    // shell and none returns that never started. A sequence may end with a poll still open: the
+    // shell after the show runs it later, which is the case r274 is about.
+    let allowed = |seq: &[Op], op: Op| {
+        let mut dev = DevMinimize::default();
+        for &o in seq {
+            dev.apply(o);
+        }
+        match op {
+            Op::PollEnter => dev.saved.is_none(),
+            Op::PollReturn => dev.saved.is_some(),
+            _ => true,
+        }
+    };
     let mut cases = 0;
-    walk(&alphabet, 6, |seq| {
+    walk(&alphabet, 6, allowed, |seq| {
         cases += 1;
         let (mut dev, mut state) = (DevMinimize::default(), Minimize::None);
         for (i, &op) in seq.iter().enumerate() {
@@ -137,7 +152,8 @@ fn a_shell_minimizes_once_exactly_where_dev_did_for_every_sequence() {
             assert_eq!(state.field(), dev.field(), "{seq:?} at {i}");
         }
     });
-    assert_eq!(cases, (0..=6).map(|k| 5usize.pow(k)).sum::<usize>());
+    // Both a closed and an open poll allow four of the five ops to come next.
+    assert_eq!(cases, (0..=6).map(|k| 4usize.pow(k)).sum::<usize>());
 }
 
 #[test]
