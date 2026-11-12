@@ -251,7 +251,7 @@ impl<S: 'static> Runtime<S> {
             && memo_reuse::same_visual(&n.vis, &o.vis)
             && text_color(n) == text_color(o)
             && n.text.as_ref().is_none_or(|t| {
-                t.reveal < 0.0 || self.reveals.get(&n.id).is_some_and(|r| r.words.is_empty() && r.len == t.content.len())
+                t.reveal < 0.0 || self.reveals.get(&n.id).is_some_and(|r| r.caught_up(t.content.len()))
             })
             && self.scene.is_resting_at(n.id, scene_rect)
             && (self.stacks.is_empty()

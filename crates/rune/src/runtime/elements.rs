@@ -237,7 +237,7 @@ impl<S: 'static> Runtime<S> {
                 let (x0, y0) = (rect[0].max(clip[0] / s), rect[1].max(clip[1] / s));
                 let (x1, y1) = ((rect[0] + rect[2]).min(clip[2] / s), (rect[1] + rect[3]).min(clip[3] / s));
                 let visible = [x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0)];
-                let revealing = flight.is_some() || self.reveals.get(&n.id).is_some_and(|r| !r.words.is_empty());
+                let revealing = flight.is_some() || self.reveals.get(&n.id).is_some_and(|r| r.fading());
                 let mut in_growing_row = false;
                 let mut scrolling = false;
                 let mut scrolled = [0.0; 2];

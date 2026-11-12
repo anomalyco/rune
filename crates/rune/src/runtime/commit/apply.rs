@@ -621,50 +621,32 @@ impl<S: 'static> Runtime<S> {
             if let Some(spec) = &nodes[i].text
                 && spec.reveal >= 0.0
             {
-                let content = &spec.content;
+                let content = spec.content.as_str();
                 let now = if time_scaled { self.scene.store().node_time(id) } else { now };
                 let fade = if self.reduced_motion { 0.15 } else { spec.reveal };
-                let mounted_late = !was_present && !instant && !tx.unprompted && !nodes[i].virtual_mount;
-                let st = self.reveals.entry(id).or_insert_with(|| RevealState {
-                    len: if mounted_late { 0 } else { content.len() },
-                    words: Vec::new(),
-                    fade,
-                });
-                st.fade = fade;
-                if instant || (!was_present && nodes[i].virtual_mount) || content.len() < st.len || !content.is_char_boundary(st.len) {
-                    st.len = content.len();
-                    st.words.clear();
-                } else if content.len() > st.len && fade > 0.0 {
-                    let mut starts = Vec::new();
-                    word_starts(content, st.len, &mut starts);
-                    // A word continuing across the old end keeps its time. New words wait behind
-                    // every streaming text's newest word, taken in reading order, so one edge moves
-                    // down the page: a chunk spanning several paragraphs or list items fades them
-                    // one after another, never all at once. Only while the newest word is still
-                    // fading: texts mounting at once behind a long run (a remount, a restored
-                    // turn) fade together as before, never waiting through still frames.
-                    let own = st.words.last().map_or(now, |w| w.1.max(now));
-                    let chained = !time_scaled && self.reveal_chain - now <= f64::from(fade);
-                    let chain = if chained { self.reveal_chain.max(now) } else { now };
-                    let queued = ((chain - now) / 0.0055) as usize;
-                    let pending = st.words.iter().filter(|w| w.1 > now).count() + starts.len() + queued;
-                    let stagger = if self.reduced_motion {
-                        0.0
-                    } else {
-                        let k = (pending as f32 / 24.0).clamp(0.0, 1.0);
-                        (0.020 + (0.0055 - 0.020) * k) as f64
-                    };
-                    let mut tn = if chain > own { chain + stagger } else { own };
-                    for b in starts {
-                        st.words.push((b, tn));
-                        tn += stagger;
-                    }
-                    if !time_scaled && let Some(last) = st.words.last() {
-                        self.reveal_chain = self.reveal_chain.max(last.1);
-                    }
-                    st.len = content.len();
+                // A text that has never faded here starts level with its content: the arrival
+                // below decides what a new one does.
+                let st = self.reveals.entry(id).or_insert(RevealPhase::Idle { shown: content.len() });
+                let arrival = if !was_present {
+                    if instant || tx.unprompted || nodes[i].virtual_mount { Arrival::Landed } else { Arrival::Entering }
+                } else if instant || content.len() < st.shown() || !content.is_char_boundary(st.shown()) {
+                    Arrival::Replaced
                 } else {
-                    st.len = content.len();
+                    Arrival::Kept
+                };
+                let chain = if time_scaled { None } else { Some(&self.reveal_chain) };
+                let effects = st.step(RevealEvent::Commit {
+                    content,
+                    fade,
+                    arrival,
+                    chain,
+                    now,
+                    reduced_motion: self.reduced_motion,
+                });
+                for effect in effects {
+                    match effect {
+                        RevealEffect::Started(at) => self.reveal_chain.started(at),
+                    }
                 }
             }
         }

@@ -186,7 +186,7 @@ impl<S: 'static> Runtime<S> {
                     || (!self.reduced_motion && self.loops.get(&n.id).is_some_and(|l| l.active(store.node_time(n.id))))
                     || self.grows.get(&n.id).is_some_and(|g| g.moving())
                     || self.scrolls.get(&n.id).is_some_and(|st| st.slack.height() > 0.0)
-                    || self.reveals.get(&n.id).is_some_and(|r| !r.words.is_empty())
+                    || self.reveals.get(&n.id).is_some_and(|r| r.fading())
                     || self.subtree_exiting(i)
                     || (!self.flights.is_empty() && self.flights.iter().any(|f| f.departs(&n.path, n.key.as_deref()) || f.lands(&n.path, n.key.as_deref())))
                     || n.vis.effect.is_some()

@@ -5,22 +5,6 @@ use crate::runtime::scroll_mode::{self, Event as ModeEvent};
 /// Scroll momentum decay (iOS normal: 0.998 per ms).
 pub(super) const SCROLL_DECAY: f32 = 2.002;
 
-fn ease_out(x: f32) -> f32 {
-    let x = x.clamp(0.0, 1.0);
-    1.0 - (1.0 - x) * (1.0 - x) * (1.0 - x)
-}
-
-pub(super) fn word_starts(s: &str, from: usize, out: &mut Vec<u32>) {
-    let mut prev_space = true;
-    for (i, c) in s[from..].char_indices() {
-        let space = c.is_whitespace();
-        if !space && prev_space {
-            out.push((from + i) as u32);
-        }
-        prev_space = space;
-    }
-}
-
 /// The (x, y) scroll offsets of node `i`'s scroll viewports, innermost first.
 pub(super) fn scroll_offsets<'a>(scrolls: &'a HashMap<NodeId, ScrollState>, nodes: &'a [Node], i: usize) -> impl Iterator<Item = [f32; 2]> + 'a {
     std::iter::successors(Some(i), |&p| nodes[p].parent.filter(|_| nodes[p].above.is_none()))
@@ -224,26 +208,9 @@ impl<S: 'static> Runtime<S> {
         let mut any = false;
         for (id, st) in self.reveals.iter_mut() {
             let now = store.node_time(*id);
-            let fade = st.fade as f64;
-            // Words fully shown leave the list (only from the front, which keeps lookups valid).
-            let done = st.words.iter().take_while(|w| now - w.1 >= fade).count();
-            if done > 0 && done == st.words.len() {
-                st.words.clear();
-            }
-            any |= !st.words.is_empty() && store.node_time_scale(*id) > 0.0;
+            st.step(RevealEvent::Tick { now });
+            any |= st.fading() && store.node_time_scale(*id) > 0.0;
         }
         any
-    }
-
-    pub(super) fn reveal_alpha(st: &RevealState, byte: u32, now: f64) -> f32 {
-        let i = st.words.partition_point(|w| w.0 <= byte);
-        if i == 0 {
-            return 1.0;
-        }
-        let t0 = st.words[i - 1].1;
-        if st.fade <= 0.0 {
-            return if now >= t0 { 1.0 } else { 0.0 };
-        }
-        ease_out(((now - t0) / st.fade as f64) as f32)
     }
 }

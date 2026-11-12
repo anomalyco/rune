@@ -26,6 +26,7 @@ mod press_moving;
 mod relayout;
 mod remount;
 mod reveal_chain;
+mod reveal_phase;
 mod scroll_carried;
 mod scroll_children;
 mod scroll_growth;

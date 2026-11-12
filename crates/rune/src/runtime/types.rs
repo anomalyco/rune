@@ -438,14 +438,6 @@ impl AxisScroll {
 }
 
 #[derive(Clone, Debug, Default)]
-pub(super) struct RevealState {
-    pub(super) len: usize,
-    /// (word start byte, start time) for words still fading.
-    pub(super) words: Vec<(u32, f64)>,
-    pub(super) fade: f32,
-}
-
-#[derive(Clone, Debug, Default)]
 pub(super) struct Stack {
     /// Row ids in presented order, including rows still closing after removal.
     pub(super) order: Vec<NodeId>,

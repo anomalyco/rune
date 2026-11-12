@@ -74,7 +74,7 @@ impl<S: 'static> Runtime<S> {
             let shift = store.node_time(n.id) - before;
             if shift != 0.0 {
                 if let Some(st) = self.reveals.get_mut(&n.id) {
-                    for w in &mut st.words { w.1 += shift; }
+                    st.step(RevealEvent::Shift { shift });
                 }
                 if let Some(l) = self.loops.get_mut(&n.id) { l.shift(shift); }
             }

@@ -18,7 +18,7 @@ fn words(n: usize) -> String {
 /// Each paragraph's (first, last) word start time.
 fn times(rt: &Runtime<Doc>, key: &str) -> Option<(f64, f64)> {
     let id = rt.nodes.iter().find(|n| n.key.as_deref() == Some(key))?.id;
-    let w = &rt.reveals.get(&id)?.words;
+    let w = rt.reveals.get(&id)?.words();
     Some((w.first()?.1, w.last()?.1))
 }
 

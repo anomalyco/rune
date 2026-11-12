@@ -99,7 +99,7 @@ impl<S: 'static> Runtime<S> {
             if exiting { flags |= MotionElement::EXITING; }
             let Some(p) = self.scene.presented(node.id) else { continue };
             let flight = if self.flights.is_empty() { None } else { self.flights.iter().find(|f| f.lands(&node.path, node.key.as_deref())) };
-            if flight.is_some() || self.reveals.get(&node.id).is_some_and(|r| !r.words.is_empty()) { flags |= MotionElement::GROWING; }
+            if flight.is_some() || self.reveals.get(&node.id).is_some_and(|r| r.fading()) { flags |= MotionElement::GROWING; }
             if intent(node) || self.landing_holds.holds(node.id) { flags |= MotionElement::LIVE; }
             let drawn = self.drawn.get(i).copied().unwrap_or([p.rect.x, p.rect.y, p.rect.w, p.rect.h]);
             let rect = flight.map_or(drawn, |f| {

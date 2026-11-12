@@ -175,6 +175,9 @@ pub use motion_elements::MotionElement;
 mod live_latch;
 #[path = "runtime/motion/loop_clock.rs"]
 mod loop_clock;
+#[path = "runtime/motion/reveal_phase.rs"]
+mod reveal_phase;
+use reveal_phase::{Arrival, RevealChain, RevealEffect, RevealEvent, RevealPhase};
 #[path = "runtime/motion/rewind.rs"]
 mod rewind_record;
 #[path = "runtime/scroll/drawn.rs"]
@@ -399,10 +402,10 @@ pub(crate) use commit_why::CommitWhy;
 #[cfg(debug_assertions)]
 pub(crate) use layout_read::window_read_key;
 pub(crate) use types::{AnimSource, Node};
-use types::{AxisScroll, GlideTo, Inh, NodeCold, RevealState, RowLayout, ScaleMotion, ScrollState, Stack, WidthHold};
+use types::{AxisScroll, GlideTo, Inh, NodeCold, RowLayout, ScaleMotion, ScrollState, Stack, WidthHold};
 #[path = "runtime/motion/tracks.rs"]
 mod tracks;
-use tracks::{SCROLL_DECAY, mark_ancestors, scroll_offsets, word_starts};
+use tracks::{SCROLL_DECAY, mark_ancestors, scroll_offsets};
 mod commit;
 use commit::{Measured, Measurement, Pass, unwrapped_width};
 
@@ -597,9 +600,9 @@ pub struct Runtime<S: 'static> {
     pub(crate) virtual_culled: HashSet<String>,
     /// Fresh view accessors for focused text fields omitted by virtualization.
     virtual_inputs: HashMap<String, Box<InputSpec>>,
-    reveals: HashMap<NodeId, RevealState>,
-    /// When the newest streamed word of any text starts fading: the next text's words follow it.
-    reveal_chain: f64,
+    reveals: HashMap<NodeId, RevealPhase>,
+    /// The newest streamed word of any text, which the next text's words queue behind.
+    reveal_chain: RevealChain,
     flights: Vec<TextFlight>,
     /// Per node index this frame: presented row top dy, row height override, and bottom feather mask.
     row_dy: Vec<f32>,
@@ -966,7 +969,7 @@ impl<S: 'static> Runtime<S> {
             reuse: Default::default(),
             virtual_inputs: HashMap::default(),
             reveals: HashMap::default(),
-            reveal_chain: 0.0,
+            reveal_chain: RevealChain::default(),
             flights: Vec::new(),
             launches: Default::default(),
             pixel_snap: Default::default(),

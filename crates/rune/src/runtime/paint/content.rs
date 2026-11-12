@@ -366,7 +366,7 @@ impl<S: 'static> Runtime<S> {
                 let (origin, rest_origin) = ([origin[0], origin[1] + piece.y * tk], [rest_origin[0], rest_origin[1] + piece.y * tk]);
                 let (spans_here, pills, strikes) = (piece.spans(&spec.spans), piece.pills(&spec.cold.pills), piece.strikes(&spec.cold.strikes));
                 // Span backgrounds (inline code), strikethroughs, a selection over them, then glyphs.
-                let reveal = self.reveals.get(&n.id).filter(|st| !st.words.is_empty() && spec.cold.advance_in.is_none());
+                let reveal = self.reveals.get(&n.id).filter(|st| st.fading() && spec.cold.advance_in.is_none());
                 self.deco_scratch.clear();
                 let mut pill_icons = Vec::new();
                 let pill_bg = spec.cold.pill_colors.map_or(spec.rich_style().link.alpha(0.2), |(bg, _)| bg);
@@ -410,7 +410,7 @@ impl<S: 'static> Runtime<S> {
                 }
                 for d in &self.deco_scratch {
                     let alpha = if d.ring.is_some() {
-                        reveal.map_or(1.0, |st| Self::reveal_alpha(st, d.byte, self.scene.store().node_time(n.id)))
+                        reveal.map_or(1.0, |st| st.alpha(d.byte, self.scene.store().node_time(n.id)))
                     } else { 1.0 };
                     let c = premul(d.color, o * alpha, srgb);
                     let mut inst = rect_inst(d.rect, c, d.radius, clip, fade);
@@ -581,7 +581,7 @@ impl<S: 'static> Runtime<S> {
                         f = premul(c, o, srgb);
                     }
                     if let Some(st) = reveal {
-                        let a = Self::reveal_alpha(st, q.byte, self.scene.store().node_time(n.id));
+                        let a = st.alpha(q.byte, self.scene.store().node_time(n.id));
                         if a <= 0.0 {
                             continue;
                         }
