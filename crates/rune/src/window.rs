@@ -244,17 +244,23 @@ impl Windows {
 
     fn cleanup(&mut self, event_loop: &ActiveEventLoop) {
         if !event_loop.exiting() { self.open_requested(event_loop); }
+        // The last window closing ends a fast-exiting app: its host isn't dropped first, which
+        // tore down its window, swap chain and device (~37 ms) before the process ended anyway.
+        #[cfg(not(target_arch = "wasm32"))]
+        let ending = crate::quit::fast_exit_hook().is_some() && !self.hosts.iter().flatten().any(|h| !h.finished() && h.keeps_loop());
+        #[cfg(target_arch = "wasm32")]
+        let ending = false;
         for host in &mut self.hosts {
             if let Some(h) = host.as_mut().filter(|h| h.finished()) {
                 h.cancel_menus();
-                *host = None;
+                if !ending { *host = None; }
             }
         }
         // Another window's quit: a menu still tracking would hold the loop open.
         if event_loop.exiting() {
             for host in self.hosts.iter_mut().flatten() { host.cancel_menus(); }
         }
-        if !self.hosts.iter().flatten().any(|h| h.keeps_loop()) {
+        if !self.hosts.iter().flatten().any(|h| h.keeps_loop() && !h.finished()) {
             // The app ends with its last main window: windows still open close as their close
             // button would, once the quit's hooks ran. A quit already asked to exit and skips
             // their close hooks.
