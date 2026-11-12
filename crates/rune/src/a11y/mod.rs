@@ -21,6 +21,33 @@ mod unix;
 #[cfg(all(feature = "accessibility", target_os = "windows"))]
 mod windows;
 
+/// `Tx::announce`'s last words: the window's own live region, which draws nothing. `said`
+/// counts the calls, so the same words said again still change what a reader is told.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Announcement {
+    text: String,
+    how: crate::LiveRegion,
+    said: u32,
+}
+
+impl Announcement {
+    pub(crate) fn say(&mut self, text: String, how: crate::LiveRegion) {
+        self.text = text;
+        self.how = how;
+        self.said = self.said.wrapping_add(1);
+    }
+
+    pub(crate) fn said(&self) -> u32 { self.said }
+
+    /// The live region's name and politeness, if anything was said. Every other call ends in
+    /// a zero-width space, which readers don't speak, so a repeat still changes the name.
+    pub(crate) fn words(&self) -> Option<(String, crate::LiveRegion)> {
+        if self.text.trim().is_empty() { return None; }
+        let mark = if self.said % 2 == 0 { "\u{200B}" } else { "" };
+        Some((format!("{}{mark}", self.text), self.how))
+    }
+}
+
 /// What the adapter's handlers heard since the host last looked.
 #[derive(Default)]
 pub(crate) struct Inbox {

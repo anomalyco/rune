@@ -69,6 +69,8 @@ pub struct Tx {
     /// `Tx::drop_point`.
     pub(crate) drop_point: Option<PointerEvent>,
     pub(crate) title: Option<String>,
+    /// `Tx::announce`: what a screen reader says after this handler.
+    pub(crate) announce: Option<(String, crate::LiveRegion)>,
     pub(crate) open_urls: Vec<crate::open_url::Link>,
     pub(crate) trace: Option<TraceCalls>,
     pub(crate) popups: Vec<crate::popup_menu::Call>,
@@ -406,6 +408,16 @@ impl Tx {
     /// opened again. Headless `--tree` output shows it as `"title"`. An overlay has no title.
     pub fn set_title(&mut self, title: impl Into<String>) {
         self.title = Some(title.into());
+    }
+
+    /// Have a screen reader say `text` after this handler, without moving focus: a reply that
+    /// finished, a request that arrived, an item that moved. `Polite` waits for the reader to
+    /// finish what it's saying; `Assertive` interrupts it (errors and requests that block
+    /// work). Each window keeps one announcement, a live region of its own that draws nothing;
+    /// the last call in a frame wins, and saying the same words again says them again. With no
+    /// assistive technology listening it costs one string.
+    pub fn announce(&mut self, text: impl Into<String>, how: crate::LiveRegion) {
+        if how != crate::LiveRegion::Off { self.announce = Some((text.into(), how)); }
     }
 
     /// Open `url` in the system's default handler once this handler's frame is done: a browser
