@@ -87,6 +87,11 @@ impl Shelf {
         self.x > 1 || self.y > 1 || self.h > 0
     }
 
+    /// Rows `[0, y1)` holding every glyph placed since the last reset, with the gutter below.
+    fn used_rows(&self) -> Option<(u32, u32)> {
+        self.non_empty().then(|| (0, (self.y + self.h + 1).min(ATLAS_SIZE)))
+    }
+
     fn alloc(&mut self, w: u32, h: u32) -> Option<(u32, u32)> {
         if self.x + w + 1 > ATLAS_SIZE {
             self.y += self.h + 1;
@@ -217,14 +222,22 @@ pub struct Atlas {
 }
 
 impl Atlas {
-    /// Marks every row for upload (a new texture, e.g. after the window's format changed).
+    /// Marks every used row for upload (a new texture, e.g. after the window's format changed).
     pub fn invalidate(&mut self) {
-        self.dirty = Some((0, ATLAS_SIZE));
-        for page in &mut self.pages {
-            page.dirty = Some((0, ATLAS_SIZE));
-        }
+        self.resend_rows();
         self.resident_caches.clear();
         self.outlines.invalidate();
+    }
+
+    /// Marks the rows the shelves have placed glyphs in for upload, to a texture that's new or
+    /// lost its writes. Rows below them hold nothing a glyph samples and a new texture starts
+    /// zeroed, so the never-touched rest of each 4 MiB page is neither read (a page fault per
+    /// 4 KiB) nor copied.
+    pub(crate) fn resend_rows(&mut self) {
+        self.dirty = self.shelf.used_rows();
+        for page in &mut self.pages {
+            page.dirty = page.shelf.used_rows();
+        }
     }
 
     /// Number of allocated 2048×2048 shelf pages (at least 1).

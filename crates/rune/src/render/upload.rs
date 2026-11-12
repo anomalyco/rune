@@ -417,8 +417,7 @@ impl Renderer {
         self.uploads.forget_instances();
         self.uploads.viewport.store(u64::MAX, Ordering::Relaxed);
         self.uploads.srgb = None;
-        atlas.dirty = Some((0, ATLAS_SIZE));
-        for page in &mut atlas.pages { page.dirty = Some((0, ATLAS_SIZE)); }
+        atlas.resend_rows();
         atlas.outlines.invalidate();
         self.layers.forget_blur_uniforms();
     }
