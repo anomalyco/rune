@@ -63,7 +63,13 @@ pub(crate) enum FocusEffect {
 pub(crate) struct FocusState {
     pub(crate) focus: Focus,
     pub(crate) modality: Modality,
+    /// Per landmark (by path), the element focused last inside it, most recent first: where F6
+    /// lands when it comes back to that pane.
+    scopes: Vec<(String, String)>,
 }
+
+/// How many panes F6 remembers a focus for.
+const SCOPES: usize = 16;
 
 impl FocusState {
     pub(crate) fn path(&self) -> Option<&str> {
@@ -84,6 +90,19 @@ impl FocusState {
 
     /// Focus shows, by the keyboard or the pointer's light on a row.
     pub(crate) fn shown(&self) -> bool { self.keyboard() || self.hovered() }
+
+    /// Notes that `path` has focus inside landmark `scope`.
+    pub(crate) fn remember_scope(&mut self, scope: String, path: String) {
+        if self.scopes.first().is_some_and(|(s, p)| *s == scope && *p == path) { return; }
+        self.scopes.retain(|(s, _)| *s != scope);
+        self.scopes.insert(0, (scope, path));
+        self.scopes.truncate(SCOPES);
+    }
+
+    /// The element focused last inside landmark `scope`.
+    pub(crate) fn scope_memory(&self, scope: &str) -> Option<&str> {
+        self.scopes.iter().find(|(s, _)| s == scope).map(|(_, p)| p.as_str())
+    }
 
     /// Where Tab starts while nothing is focused.
     pub(crate) fn tab_start(&self) -> Option<&str> {

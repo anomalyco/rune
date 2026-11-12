@@ -16,6 +16,8 @@ const CLAMPED_ROLES: [&str; 3] = ["list", "tree", "grid"];
 /// Roles whose pressable elements are Tab stops under `Cx::web_focus`, as HTML's buttons,
 /// links and form controls are, and the items of trees and grids, which a reader moves through
 /// by arrows once their group has focus (`El::focus_group` keeps the group one Tab stop).
+/// Roles F6 cycles between, as a browser's and Windows' pane navigation does.
+const LANDMARK_ROLES: [&str; 6] = ["banner", "navigation", "main", "complementary", "form", "search"];
 const PRESSABLE_ROLES: [&str; 9] = ["button", "link", "tab", "checkbox", "switch", "radio", "combobox", "treeitem", "gridcell"];
 /// The innermost open modal and the nodes input may reach while it shows: its subtree, the
 /// popovers anchored inside it, and the window's caption buttons.
@@ -259,6 +261,10 @@ impl<S: 'static> Runtime<S> {
                 }
             }
         }
+        if let Some((mark, at)) = self.focused_index().and_then(|f| self.landmark_of(f).map(|m| (m, f))) {
+            let (mark, at) = (self.nodes[mark].path.clone(), self.nodes[at].path.clone());
+            self.focus.remember_scope(mark, at);
+        }
         self.sync_side_focus();
         // A hover group keyboard focus enters or leaves hovers or rests now (`El::hover_group`).
         if self.nodes.iter().any(|n| n.vis_flags.hover_group()) {
@@ -347,7 +353,8 @@ impl<S: 'static> Runtime<S> {
             .or_else(|| self.focus.owned().filter(|p| (0..nodes.len()).any(|j| &nodes[j].path == p && shown(j)
                 && (self.takes_focus(&nodes[j]) || nodes[j].input.as_ref().is_some_and(|i| i.edit.focused)))
                 || self.virtual_inputs.get(p).is_some_and(|i| i.edit.focused)))
-            .or_else(|| requested.into_iter().next().or_else(|| virtual_req().min_by_key(|&(p, _)| p)).map(|(p, _)| p.to_owned()));
+            .or_else(|| requested.into_iter().next().or_else(|| virtual_req().min_by_key(|&(p, _)| p)).map(|(p, _)| p.to_owned()))
+            .or_else(|| self.focus_fallback(nodes, &shown));
         // State may have deleted a row. Only the new view's accessors are valid now.
         // Use the same focus path as input events, then restore the old presentation
         // tree so apply can retain its exit visuals.
@@ -374,6 +381,36 @@ impl<S: 'static> Runtime<S> {
         });
         changed
     }
+    /// Where focus goes when the element holding it leaves the tree or can't hold it anymore (a
+    /// deleted row, a closed tab, a decided prompt, a pane closed under it) and nothing else
+    /// asked for it: the next control after it in the old tree that is still here, else the one
+    /// before it, looking first inside its nearest container that survived and then further
+    /// out, as a native list hands its selection to the neighbour. Focus otherwise fell to
+    /// nothing: a screen reader went back to the window and Tab started over at its top. A
+    /// modal's own focus is left to the modal machine, which returns it where it was.
+    fn focus_fallback(&self, nodes: &[Node], shown: &dyn Fn(usize) -> bool) -> Option<String> {
+        let gone = self.focus.path()?;
+        let at = self.nodes.iter().position(|n| n.path == gone)?;
+        if self.active_modal().is_some_and(|m| at >= m && self.modal_member(at)) { return None; }
+        let new: rustc_hash::FxHashMap<&str, usize> = nodes.iter().enumerate().map(|(j, n)| (n.path.as_str(), j)).collect();
+        let survivor = |i: usize| new.get(self.nodes[i].path.as_str()).copied()
+            .filter(|&j| shown(j) && nodes[j].focus.order >= 0 && (self.takes_focus(&nodes[j]) || nodes[j].input.as_ref().is_some_and(|i| i.access.is_some())));
+        let within = |j: usize, s: usize| {
+            let (p, root) = (self.nodes[j].path.as_str(), self.nodes[s].path.as_str());
+            root.is_empty() || (p.len() > root.len() && p.starts_with(root) && p.as_bytes()[root.len()] == b'/')
+        };
+        let mut scope = self.nodes[at].parent;
+        while let Some(s) = scope {
+            if new.contains_key(self.nodes[s].path.as_str()) {
+                let end = (s + 1..self.nodes.len()).find(|&j| !within(j, s)).unwrap_or(self.nodes.len());
+                if let Some(j) = (at + 1..end).find_map(survivor).or_else(|| (s + 1..at).rev().find_map(survivor)) {
+                    return Some(nodes[j].path.clone());
+                }
+            }
+            scope = self.nodes[s].parent;
+        }
+        None
+    }
     pub(super) fn tab_order(&self) -> Vec<usize> {
         let all: Vec<_> = (0..self.nodes.len()).filter(|&i| self.can_focus(i) && self.nodes[i].focus.order >= 0).collect();
         let mut order: Vec<_> = all.iter().copied().filter(|&i| {
@@ -386,6 +423,49 @@ impl<S: 'static> Runtime<S> {
         }).collect();
         order.sort_by_key(|&i| { let n = self.nodes[i].focus.order; (if n > 0 { n } else { i32::MAX }, i) });
         order
+    }
+    /// F6 (Shift+F6 back): focus moves to the next landmark (`banner`, `navigation`, `main`,
+    /// `complementary`, `form`, `search`, a labelled `region`) that has a Tab stop, onto the
+    /// control focused last inside it, else its first Tab stop, as browsers and Windows apps
+    /// cycle panes. Inside a modal it does nothing: the modal is the only pane.
+    fn cycle_landmark(&mut self, back: bool, tx: &mut Tx) -> bool {
+        if self.active_modal().is_some() { return false; }
+        let order = self.tab_order();
+        let marks: Vec<(usize, usize)> = (0..self.nodes.len())
+            .filter(|&i| self.is_landmark(i) && self.allowed(i) && !self.subtree_exiting(i) && self.nodes[i].local.w > 0.0 && self.nodes[i].local.h > 0.0)
+            .filter_map(|i| order.iter().copied().find(|&j| self.inside(j, i)).map(|first| (i, first)))
+            .collect();
+        if marks.is_empty() { return false; }
+        let here = self.focused_index().and_then(|f| marks.iter().rposition(|&(m, _)| self.inside(f, m)));
+        let next = match here {
+            Some(k) if back => (k + marks.len() - 1) % marks.len(),
+            Some(k) => (k + 1) % marks.len(),
+            None if back => marks.len() - 1,
+            None => 0,
+        };
+        let (mark, first) = marks[next];
+        let remembered = self.focus.scope_memory(&self.nodes[mark].path)
+            .and_then(|p| order.iter().copied().find(|&j| self.nodes[j].path == p));
+        let path = self.nodes[remembered.unwrap_or(first)].path.clone();
+        self.set_focus(Some(path.clone()), true);
+        tx.scroll_to.push(crate::runtime::ScrollReveal::into_view(None, path));
+        true
+    }
+    fn is_landmark(&self, i: usize) -> bool {
+        let n = &self.nodes[i];
+        LANDMARK_ROLES.contains(&n.role) || (n.role == "region" && n.label.as_deref().is_some_and(|l| !l.trim().is_empty()))
+    }
+    /// Node `j` is node `i` or inside it.
+    fn inside(&self, j: usize, i: usize) -> bool {
+        let (p, root) = (self.nodes[j].path.as_str(), self.nodes[i].path.as_str());
+        p == root || root.is_empty() || (p.len() > root.len() && p.starts_with(root) && p.as_bytes()[root.len()] == b'/')
+    }
+    /// The innermost landmark around node `i`, for F6 to come back to what had focus in it.
+    fn landmark_of(&self, mut i: usize) -> Option<usize> {
+        loop {
+            if self.is_landmark(i) { return Some(i); }
+            i = self.nodes[i].parent?;
+        }
     }
     /// Type-select: the typed prefix picks the first item whose label starts with it. A
     /// repeated letter cycles the items starting with it. The prefix resets after a pause.
@@ -411,6 +491,9 @@ impl<S: 'static> Runtime<S> {
             self.set_focus(None, self.focus.keyboard());
             f(states!(self), tx);
             return true;
+        }
+        if ev.key == Key::Function(6) {
+            return self.cycle_landmark(ev.mods.shift, tx);
         }
         if ev.key == Key::Tab {
             if self.link_tab(ev.mods.shift) { return true; }
