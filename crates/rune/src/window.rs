@@ -568,6 +568,7 @@ impl<S: 'static> Host<S> {
         rt.set_modifier_keys(modifier_keys);
         rt.set_srgb_blend(srgb_blend); rt.set_font_smoothing(font_smoothing);
         rt.set_system_reduced_motion(crate::platform::preferences::reduced_motion());
+        rt.set_system_contrast(crate::platform::preferences::contrast());
         rt.set_full_keyboard_access(crate::platform::preferences::full_keyboard_access());
         rt.set_tab_visits_controls(tab_visits_controls);
         crate::platform::accent::watch();
