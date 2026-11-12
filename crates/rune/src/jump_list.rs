@@ -39,6 +39,7 @@ impl JumpItem {
 pub struct JumpList {
     pub(crate) tasks: Vec<JumpItem>,
     pub(crate) categories: Vec<(String, Vec<JumpItem>)>,
+    pub(crate) lead: Option<String>,
 }
 
 impl JumpList {
@@ -46,6 +47,13 @@ impl JumpList {
 
     pub fn task(mut self, item: JumpItem) -> Self {
         self.tasks.push(item);
+        self
+    }
+
+    /// One argument every entry starts the app with before its own (Windows): a run's own data
+    /// folder, so a pick reaches that run and not the app's usual profile.
+    pub fn lead(mut self, argument: impl Into<String>) -> Self {
+        self.lead = Some(argument.into());
         self
     }
 
