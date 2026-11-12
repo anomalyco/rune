@@ -129,7 +129,7 @@ pub(crate) fn end_fast(last: fn()) -> ! {
     if send(Event::Exited).contains(&Effect::Relaunch) {
         relaunch::spawn();
     }
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     crate::open_url::instance::exited();
     crate::marks::mark("quit.last");
     last();

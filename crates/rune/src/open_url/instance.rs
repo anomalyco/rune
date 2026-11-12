@@ -9,12 +9,20 @@
 //! them go to `App::on_open_url` as a link the system opened with the app would, and a launch
 //! without links reopens the app, which brings its front window forward.
 //!
+//! Linux starts a new process for every launch too (a desktop entry, `xdg-open myapp://…`). The
+//! first process binds a Unix socket in the user's runtime folder
+//! (`$XDG_RUNTIME_DIR/rune-instance-<id>.sock`, which only the user can reach); a later one
+//! connects, sends the same message and waits for the same answer. A socket left by a process
+//! that died refuses the connection: the launch removes it and binds its own. One held by a
+//! process that doesn't answer is taken over the same way, as Windows passes over its name.
+//! Launches claim one at a time (a lock beside the socket), so two can't both take one over.
+//!
 //! The links of the launch that started the first process come from its arguments
 //! ([`launch_links`]), so `App::on_open_url` gets those too.
 //!
 //! macOS keeps one process per app itself and hands links to it, so there this only says yes.
 
-/// Makes this process the app's only running one, before it opens a window (Windows).
+/// Makes this process the app's only running one, before it opens a window (Windows, Linux).
 ///
 /// Returns false when another process of the app already runs: this launch's links went to
 /// its `App::on_open_url`, or, without links, it brought its front window forward, so return
@@ -33,26 +41,32 @@ pub fn single_instance(id: &str) -> bool {
     {
         windows::claim(id)
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "linux")]
+    {
+        linux::claim(id)
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     {
         let _ = id;
         true
     }
 }
 
-/// Lets go of the app's single-instance name before the process ends (Windows): call it once the
-/// app holds nothing a next process of it needs (its files closed). A launch that came while the
-/// app quit was handed on to a new process (`single_instance`), which claims the name as soon as
-/// this returns rather than when this process is gone. Without it the name goes with the process.
-/// Elsewhere it does nothing.
+/// Lets go of the app's single-instance name before the process ends (Windows, Linux): call it
+/// once the app holds nothing a next process of it needs (its files closed). A launch that came
+/// while the app quit was handed on to a new process (`single_instance`), which claims the name as
+/// soon as this returns rather than when this process is gone. Without it the name goes with the
+/// process. Elsewhere it does nothing.
 pub fn release_instance() {
     #[cfg(target_os = "windows")]
     windows::release();
+    #[cfg(target_os = "linux")]
+    linux::release();
 }
 
 /// Whether a launch argument is a link: `scheme://…`, with a scheme of at least two letters,
 /// digits, `+`, `-` or `.`, starting with a letter. A Windows path (`C:\…`) and a flag aren't.
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+#[cfg_attr(not(any(target_os = "windows", target_os = "linux")), allow(dead_code))]
 pub(crate) fn is_link(arg: &str) -> bool {
     let Some((scheme, _)) = arg.split_once("://") else { return false };
     scheme.len() >= 2
@@ -67,90 +81,55 @@ pub(crate) fn launch_links() -> Vec<String> {
     std::env::args().skip(1).filter(|a| is_link(a)).collect()
 }
 
-/// Windows: the loop's side of a later launch without links (`on_relaunch`), and the window it brings forward.
+/// The loop's side of a later launch without links (`on_relaunch`), and the window it brings
+/// forward (Windows).
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+pub(crate) use handoff::{exited, launches_waiting, on_relaunch, served};
 #[cfg(target_os = "windows")]
-pub(crate) use windows::{exited, launches_waiting, on_relaunch, raise_front, served};
+pub(crate) use windows::raise_front;
 
-#[cfg(target_os = "windows")]
-mod windows {
+/// What Windows' pipe and Linux's socket share: the message, its answers and their waits, and
+/// what the first process does with a launch it took.
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+mod handoff {
+    use std::sync::Mutex;
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::{Mutex, OnceLock};
     use std::time::{Duration, Instant};
-
-    use windows_sys::Win32::Foundation::{
-        CloseHandle, ERROR_ACCESS_DENIED, ERROR_BROKEN_PIPE, ERROR_FILE_NOT_FOUND, ERROR_IO_PENDING, ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED,
-        GENERIC_READ, GENERIC_WRITE, GetLastError, HANDLE, HWND, INVALID_HANDLE_VALUE, LPARAM, WAIT_OBJECT_0,
-    };
-    use windows_sys::Win32::Storage::FileSystem::{
-        CreateFileW, FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OVERLAPPED, FlushFileBuffers, OPEN_EXISTING, PIPE_ACCESS_DUPLEX, ReadFile,
-        WriteFile,
-    };
-    use windows_sys::Win32::System::IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED};
-    use windows_sys::Win32::System::Pipes::{
-        ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, GetNamedPipeServerProcessId, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS,
-        PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT, WaitNamedPipeW,
-    };
-    use windows_sys::Win32::System::RemoteDesktop::ProcessIdToSessionId;
-    use windows_sys::Win32::System::Threading::{CreateEventW, GetCurrentProcessId, WaitForSingleObject};
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        AllowSetForegroundWindow, EnumWindows, GW_OWNER, GWL_EXSTYLE, GetWindow, GetWindowLongW, GetWindowThreadProcessId, IsIconic,
-        IsWindowVisible, SW_RESTORE, SetForegroundWindow, ShowWindow, WS_EX_TOOLWINDOW,
-    };
 
     /// Opens every message, so a stray client's bytes aren't taken for arguments: a length and
     /// the arguments follow, and the sender waits for one byte back (`ACCEPTED`, `QUITTING`).
-    const MAGIC: &[u8] = b"rune-instance 2\0";
-    /// An older build's message: the arguments until the sender closes, and no answer.
-    const MAGIC_V1: &[u8] = b"rune-instance 1\0";
+    pub(super) const MAGIC: &[u8] = b"rune-instance 2\0";
     /// The running process took the launch.
-    const ACCEPTED: u8 = b'A';
+    pub(super) const ACCEPTED: u8 = b'A';
     /// The running process quits: the launch claims the instance once it lets go.
-    const QUITTING: u8 = b'Q';
+    pub(super) const QUITTING: u8 = b'Q';
     /// How long a launch waits for the running process to answer before it takes the name for
     /// held by nobody. A healthy process answers in 63-82 µs (p50-p95, Windows, release); this
     /// leaves room for one that waits for a busy CPU, and is what a launch pays while a killed
     /// process's pipe lingers and its pid can't be read.
-    const ANSWER_WITHIN: Duration = Duration::from_millis(50);
-    /// Names tried before a launch runs unclaimed (each held by a process that doesn't answer).
-    const GENERATIONS: u32 = 8;
+    pub(super) const ANSWER_WITHIN: Duration = Duration::from_millis(50);
     /// The most a launch's arguments may take.
-    const MAX_MESSAGE: usize = 1 << 20;
+    pub(super) const MAX_MESSAGE: usize = 1 << 20;
     /// How long a later launch keeps trying to reach the first process.
-    const REACH_FOR: Duration = Duration::from_secs(5);
+    pub(super) const REACH_FOR: Duration = Duration::from_secs(5);
     /// How long a launch handed on by a quitting process waits for it to let go of the name.
-    const HANDED_WAIT: Duration = Duration::from_secs(10);
+    pub(super) const HANDED_WAIT: Duration = Duration::from_secs(10);
 
-    /// The claimed name, and the listener's thread, for `release`.
-    static CLAIMED: OnceLock<Vec<u16>> = OnceLock::new();
-    static LISTENER: Mutex<Option<std::thread::JoinHandle<()>>> = Mutex::new(None);
-    /// `release` asked the listener to close the name.
-    static RELEASED: AtomicBool = AtomicBool::new(false);
-
-    /// Closes the name: the listener takes what's connected (a launch then is handed on, since
-    /// the app is quitting), closes its handle and ends; this returns once it has.
-    pub(super) fn release() {
-        let Some(name) = CLAIMED.get() else { return };
-        if RELEASED.swap(true, Ordering::AcqRel) {
-            return;
-        }
-        // An empty connection wakes the listener from ConnectNamedPipe; one that's busy with a
-        // launch sees the flag once it's done with it.
-        // SAFETY: `name` is NUL-terminated; the handle, when opened, is closed once.
-        let woken = unsafe {
-            let wake = CreateFileW(name.as_ptr(), GENERIC_WRITE, 0, std::ptr::null(), OPEN_EXISTING, 0, std::ptr::null_mut());
-            if wake != INVALID_HANDLE_VALUE {
-                CloseHandle(wake);
-                true
-            } else {
-                GetLastError() == ERROR_PIPE_BUSY
-            }
-        };
-        // A listener that can't be woken keeps the name until the process ends.
-        if let Some(listener) = LISTENER.lock().unwrap_or_else(|e| e.into_inner()).take().filter(|_| woken) {
-            listener.join().ok();
-        }
+    /// This launch's message: `MAGIC`, the body's length (u32, little-endian), and the body (the
+    /// arguments, NUL-separated).
+    pub(super) fn message() -> Vec<u8> {
+        let body = std::env::args().skip(1).collect::<Vec<_>>().join("\0").into_bytes();
+        let mut message = MAGIC.to_vec();
+        message.extend((body.len() as u32).to_le_bytes());
+        message.extend(body);
+        message
     }
 
+    /// A message's body as the launch's arguments; none when it isn't UTF-8.
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
+    pub(super) fn arguments(body: &[u8]) -> Option<Vec<String>> {
+        Some(std::str::from_utf8(body).ok()?.split('\0').filter(|a| !a.is_empty()).map(str::to_owned).collect())
+    }
     type Relaunch = Box<dyn Fn() -> bool + Send>;
 
     /// Sends a launch without links to the loop as a reopen; set once the loop runs.
@@ -200,6 +179,101 @@ mod windows {
     /// The loop runs: a launch without links calls `relaunch` from now on (`WakeEvent::Reopen`).
     pub(crate) fn on_relaunch(relaunch: impl Fn() -> bool + Send + 'static) {
         *RELAUNCH.lock().unwrap_or_else(|e| e.into_inner()) = Some(Box::new(relaunch));
+    }
+
+    /// A later launch's arguments: its links to `App::on_open_url`, or, without links, a reopen.
+    /// One that comes while the app quits, or that the loop hadn't taken when it ended, starts the
+    /// app again with them once this process has exited, as `Tx::relaunch` does: the windows it
+    /// would reach are closing, and the launch would be lost.
+    pub(super) fn relaunched(args: Vec<String>) {
+        if crate::quit::quitting() {
+            return crate::relaunch::spawn_with(args);
+        }
+        let links: Vec<String> = args.iter().filter(|a| super::is_link(a)).cloned().collect();
+        {
+            let mut waiting = WAITING.lock().unwrap_or_else(|e| e.into_inner());
+            if waiting.exited {
+                drop(waiting);
+                return crate::relaunch::spawn_with(args);
+            }
+            waiting.launches.push((Instant::now(), args));
+            PENDING.store(true, Ordering::Release);
+        }
+        if links.is_empty() {
+            let sent = RELAUNCH.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|relaunch| relaunch());
+            if !sent {
+                exited();
+            }
+            return;
+        }
+        for link in links {
+            super::super::incoming::receive(link);
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+mod windows {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Mutex, OnceLock};
+    use std::time::{Duration, Instant};
+
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, ERROR_ACCESS_DENIED, ERROR_BROKEN_PIPE, ERROR_FILE_NOT_FOUND, ERROR_IO_PENDING, ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED,
+        GENERIC_READ, GENERIC_WRITE, GetLastError, HANDLE, HWND, INVALID_HANDLE_VALUE, LPARAM, WAIT_OBJECT_0,
+    };
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateFileW, FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OVERLAPPED, FlushFileBuffers, OPEN_EXISTING, PIPE_ACCESS_DUPLEX, ReadFile,
+        WriteFile,
+    };
+    use windows_sys::Win32::System::IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED};
+    use windows_sys::Win32::System::Pipes::{
+        ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, GetNamedPipeServerProcessId, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS,
+        PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT, WaitNamedPipeW,
+    };
+    use windows_sys::Win32::System::RemoteDesktop::ProcessIdToSessionId;
+    use windows_sys::Win32::System::Threading::{CreateEventW, GetCurrentProcessId, WaitForSingleObject};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        AllowSetForegroundWindow, EnumWindows, GW_OWNER, GWL_EXSTYLE, GetWindow, GetWindowLongW, GetWindowThreadProcessId, IsIconic,
+        IsWindowVisible, SW_RESTORE, SetForegroundWindow, ShowWindow, WS_EX_TOOLWINDOW,
+    };
+
+    use super::handoff::{ACCEPTED, ANSWER_WITHIN, HANDED_WAIT, MAGIC, MAX_MESSAGE, QUITTING, REACH_FOR, relaunched};
+
+    /// An older build's message: the arguments until the sender closes, and no answer.
+    const MAGIC_V1: &[u8] = b"rune-instance 1\0";
+    /// Names tried before a launch runs unclaimed (each held by a process that doesn't answer).
+    const GENERATIONS: u32 = 8;
+
+    /// The claimed name, and the listener's thread, for `release`.
+    static CLAIMED: OnceLock<Vec<u16>> = OnceLock::new();
+    static LISTENER: Mutex<Option<std::thread::JoinHandle<()>>> = Mutex::new(None);
+    /// `release` asked the listener to close the name.
+    static RELEASED: AtomicBool = AtomicBool::new(false);
+
+    /// Closes the name: the listener takes what's connected (a launch then is handed on, since
+    /// the app is quitting), closes its handle and ends; this returns once it has.
+    pub(super) fn release() {
+        let Some(name) = CLAIMED.get() else { return };
+        if RELEASED.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        // An empty connection wakes the listener from ConnectNamedPipe; one that's busy with a
+        // launch sees the flag once it's done with it.
+        // SAFETY: `name` is NUL-terminated; the handle, when opened, is closed once.
+        let woken = unsafe {
+            let wake = CreateFileW(name.as_ptr(), GENERIC_WRITE, 0, std::ptr::null(), OPEN_EXISTING, 0, std::ptr::null_mut());
+            if wake != INVALID_HANDLE_VALUE {
+                CloseHandle(wake);
+                true
+            } else {
+                GetLastError() == ERROR_PIPE_BUSY
+            }
+        };
+        // A listener that can't be woken keeps the name until the process ends.
+        if let Some(listener) = LISTENER.lock().unwrap_or_else(|e| e.into_inner()).take().filter(|_| woken) {
+            listener.join().ok();
+        }
     }
 
     pub(super) fn claim(id: &str) -> bool {
@@ -418,36 +492,6 @@ mod windows {
         Some(Launch { args: text.split('\0').filter(|a| !a.is_empty()).map(str::to_owned).collect(), answers })
     }
 
-    /// A later launch's arguments: its links to `App::on_open_url`, or, without links, a reopen.
-    /// One that comes while the app quits, or that the loop hadn't taken when it ended, starts the
-    /// app again with them once this process has exited, as `Tx::relaunch` does: the windows it
-    /// would reach are closing, and the launch would be lost.
-    fn relaunched(args: Vec<String>) {
-        if crate::quit::quitting() {
-            return crate::relaunch::spawn_with(args);
-        }
-        let links: Vec<String> = args.iter().filter(|a| super::is_link(a)).cloned().collect();
-        {
-            let mut waiting = WAITING.lock().unwrap_or_else(|e| e.into_inner());
-            if waiting.exited {
-                drop(waiting);
-                return crate::relaunch::spawn_with(args);
-            }
-            waiting.launches.push((Instant::now(), args));
-            PENDING.store(true, Ordering::Release);
-        }
-        if links.is_empty() {
-            let sent = RELAUNCH.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|relaunch| relaunch());
-            if !sent {
-                exited();
-            }
-            return;
-        }
-        for link in links {
-            super::super::incoming::receive(link);
-        }
-    }
-
     enum Sent {
         /// The running process took the launch.
         Delivered,
@@ -498,11 +542,9 @@ mod windows {
             unsafe { CloseHandle(pipe) };
             return Sent::Nobody;
         }
-        let body = std::env::args().skip(1).collect::<Vec<_>>().join("\0").into_bytes();
-        let mut message = MAGIC.to_vec();
-        message.extend((body.len() as u32).to_le_bytes());
-        message.extend(body);
+        let message = super::handoff::message();
         let mut answer = [0u8; 1];
+
         let answered = io(pipe, deadline, |o| {
             // SAFETY: writes `message`, which outlives the wait in `io`, to the open pipe.
             unsafe { WriteFile(pipe, message.as_ptr(), message.len() as u32, std::ptr::null_mut(), o) }
@@ -581,5 +623,211 @@ mod windows {
             }
             SetForegroundWindow(found);
         }
+    }
+}
+
+#[cfg(target_os = "linux")]
+mod linux {
+    use std::io::{ErrorKind, Read, Write};
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+    use std::os::unix::net::{UnixListener, UnixStream};
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Mutex, OnceLock};
+    use std::time::{Duration, Instant};
+
+    use super::handoff::{ACCEPTED, ANSWER_WITHIN, HANDED_WAIT, MAGIC, MAX_MESSAGE, QUITTING, REACH_FOR, arguments, message, relaunched};
+
+    /// `sockaddr_un`'s path holds 108 bytes, its NUL included.
+    const PATH_MAX: usize = 107;
+
+    /// The claimed socket's path and inode (a launch that took it over binds its own there, which
+    /// `release` leaves alone), and the listener's thread.
+    static CLAIMED: OnceLock<(PathBuf, u64)> = OnceLock::new();
+    static LISTENER: Mutex<Option<std::thread::JoinHandle<()>>> = Mutex::new(None);
+    /// `release` asked the listener to stop.
+    static RELEASED: AtomicBool = AtomicBool::new(false);
+
+    pub(super) fn claim(id: &str) -> bool {
+        // No runtime folder of the user's own: run unclaimed rather than not at all.
+        let Some(path) = socket_path(id) else { return true };
+        let handed = crate::relaunch::handed_from().map(|pid| (pid, Instant::now() + HANDED_WAIT));
+        // One launch at a time decides: between finding the socket stale (or its process hung) and
+        // binding its own, no other launch looks. The kernel lets go of a killed holder's lock.
+        let Ok(lock) = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(path.with_extension("lock")) else { return true };
+        if lock.lock().is_err() {
+            return true;
+        }
+        let deadline = Instant::now() + REACH_FOR;
+        loop {
+            match UnixListener::bind(&path) {
+                Ok(listener) => return claimed(path, listener),
+                Err(e) if e.kind() == ErrorKind::AddrInUse => {}
+                Err(_) => return true,
+            }
+            // A launch a quitting process handed on waits for it to let go (`release_instance`).
+            if let Some((pid, until)) = handed
+                && Instant::now() < until
+                && crate::relaunch::alive(pid)
+            {
+                std::thread::sleep(Duration::from_millis(1));
+                continue;
+            }
+            match send(&path) {
+                Sent::Delivered => return false,
+                Sent::Quitting => wait_free(&path),
+                // Nobody listens there: the process that bound it is gone. Or one listens and
+                // doesn't answer (hung): the launches from now on are this process's.
+                Sent::Refused | Sent::Nobody => {
+                    std::fs::remove_file(&path).ok();
+                }
+                // Removed between the bind and the connect: bind again.
+                Sent::Gone if Instant::now() < deadline => {}
+                Sent::Gone => return true,
+            }
+        }
+    }
+
+    /// The socket's path: in `$XDG_RUNTIME_DIR` (the user's own, mode 0700), else in a folder of
+    /// the user's own under the temporary folder. None when neither can be had, or the path is
+    /// too long for a socket.
+    fn socket_path(id: &str) -> Option<PathBuf> {
+        let clean: String = id.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') { c } else { '-' }).collect();
+        let dir = match std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from).filter(|d| d.is_absolute() && d.is_dir()) {
+            Some(dir) => dir,
+            None => own_temp_dir()?,
+        };
+        let path = dir.join(format!("rune-instance-{clean}.sock"));
+        (path.as_os_str().len() <= PATH_MAX).then_some(path)
+    }
+
+    /// `<temp>/rune-<uid>`, made 0700; none when it's someone else's or others may write to it.
+    fn own_temp_dir() -> Option<PathBuf> {
+        // SAFETY: getuid has no preconditions and can't fail.
+        let uid = unsafe { libc::getuid() };
+        let dir = std::env::temp_dir().join(format!("rune-{uid}"));
+        match std::fs::DirBuilder::new().mode(0o700).create(&dir) {
+            Ok(()) => {}
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => {}
+            Err(_) => return None,
+        }
+        let meta = std::fs::symlink_metadata(&dir).ok()?;
+        (meta.is_dir() && meta.uid() == uid && meta.permissions().mode() & 0o077 == 0).then_some(dir)
+    }
+
+    fn claimed(path: PathBuf, listener: UnixListener) -> bool {
+        let inode = std::fs::metadata(&path).map_or(0, |m| m.ino());
+        CLAIMED.set((path, inode)).ok();
+        let spawned = std::thread::Builder::new().name("rune-instance".into()).spawn(move || {
+            for stream in listener.incoming() {
+                if RELEASED.load(Ordering::Acquire) {
+                    return;
+                }
+                let Ok(mut stream) = stream else { continue };
+                // A client that connects and sends nothing doesn't hold the next launch up for long.
+                stream.set_read_timeout(Some(Duration::from_secs(1))).ok();
+                let Some(args) = read(&mut stream) else { continue };
+                let quitting = crate::quit::quitting();
+                // A sender that stopped waiting (this process didn't answer in time, and the launch
+                // went on without it) has closed its end: the answer fails and the launch is its own.
+                let told = stream.write_all(&[if quitting { QUITTING } else { ACCEPTED }]).is_ok();
+                drop(stream);
+                // A launch told the app quits claims the instance itself.
+                if told && !quitting {
+                    relaunched(args);
+                }
+            }
+        });
+        if let Ok(listener) = spawned {
+            *LISTENER.lock().unwrap_or_else(|e| e.into_inner()) = Some(listener);
+        }
+        true
+    }
+
+    /// Stops listening: a launch from now on binds the name itself (the socket is removed if it's
+    /// still this process's), and one already connected is told the app quits. Returns once the
+    /// listener has ended.
+    pub(super) fn release() {
+        let Some((path, inode)) = CLAIMED.get() else { return };
+        if RELEASED.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        // A launch took the name over while this process didn't answer: the socket there is its,
+        // and this listener, which nothing reaches any more, goes with the process.
+        if !std::fs::metadata(path).is_ok_and(|m| m.ino() == *inode) {
+            return;
+        }
+        // An empty connection wakes the listener from `accept`; it's made before the socket goes.
+        let wake = UnixStream::connect(path).ok();
+        std::fs::remove_file(path).ok();
+        if let Some(listener) = LISTENER.lock().unwrap_or_else(|e| e.into_inner()).take().filter(|_| wake.is_some()) {
+            listener.join().ok();
+        }
+    }
+
+    /// One client's message (`MAGIC`, the body's length, the body); none for anything else.
+    fn read(stream: &mut UnixStream) -> Option<Vec<String>> {
+        let mut head = [0u8; MAGIC.len() + 4];
+        stream.read_exact(&mut head).ok()?;
+        let len = u32::from_le_bytes(head.strip_prefix(MAGIC)?.try_into().ok()?) as usize;
+        if len > MAX_MESSAGE {
+            return None;
+        }
+        let mut body = vec![0u8; len];
+        stream.read_exact(&mut body).ok()?;
+        arguments(&body)
+    }
+
+    enum Sent {
+        /// The running process took the launch.
+        Delivered,
+        /// The running process quits: it removes the socket once it has closed what it holds.
+        Quitting,
+        /// No socket there now.
+        Gone,
+        /// A socket and nobody listening: its process died without removing it.
+        Refused,
+        /// A process listens and doesn't answer within `ANSWER_WITHIN` (hung, or stopped).
+        Nobody,
+    }
+
+    /// Sends this launch's arguments to the process listening at `path` and waits, at most
+    /// `ANSWER_WITHIN`, for its answer.
+    fn send(path: &Path) -> Sent {
+        let deadline = Instant::now() + ANSWER_WITHIN;
+        let mut stream = match UnixStream::connect(path) {
+            Ok(stream) => stream,
+            Err(e) if e.kind() == ErrorKind::ConnectionRefused => return Sent::Refused,
+            Err(e) if e.kind() == ErrorKind::NotFound => return Sent::Gone,
+            Err(_) => return Sent::Nobody,
+        };
+        let left = || Some(deadline.saturating_duration_since(Instant::now()).max(Duration::from_millis(1)));
+        stream.set_write_timeout(left()).ok();
+        let mut answer = [0u8; 1];
+        let answered = stream.write_all(&message()).is_ok() && {
+            crate::marks::mark("instance.sent");
+            stream.set_read_timeout(left()).ok();
+            stream.read_exact(&mut answer).is_ok()
+        };
+        crate::marks::mark("instance.answered");
+        match (answered, answer[0]) {
+            (true, ACCEPTED) => Sent::Delivered,
+            (true, QUITTING) => Sent::Quitting,
+            _ => Sent::Nobody,
+        }
+    }
+
+    /// Waits, at most `HANDED_WAIT`, for a quitting process to remove its socket (or to die with
+    /// it); a socket still there then is taken over.
+    fn wait_free(path: &Path) {
+        let until = Instant::now() + HANDED_WAIT;
+        while Instant::now() < until {
+            match UnixStream::connect(path) {
+                Err(e) if e.kind() == ErrorKind::NotFound => return,
+                Err(e) if e.kind() == ErrorKind::ConnectionRefused => break,
+                _ => std::thread::sleep(Duration::from_millis(1)),
+            }
+        }
+        std::fs::remove_file(path).ok();
     }
 }
