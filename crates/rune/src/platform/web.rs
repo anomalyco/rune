@@ -76,7 +76,7 @@ fn spawn<S: 'static>(mut app: App<S>) -> Result<(), String> {
     shared.connect(Arc::new(move || { let _ = wake.send_event(Wake::App); }));
     page::occupy(quitting(&shared), app.same_tab_router.take());
     event_loop.spawn_app(Browser { app: Some(app), shared, proxy, window: None, embedded: false, document: false, owns_canvas: true,
-        borrowed: page::Borrowed::default(), pending: Rc::default(), running: Rc::default(), lost: Rc::default() });
+        borrowed: page::Borrowed::default(), pending: Rc::default(), running: Rc::default(), lost: Rc::default(), waiting: None });
     Ok(())
 }
 
@@ -97,6 +97,10 @@ struct Browser<S: 'static> {
     running: Rc<RefCell<Option<Running<S>>>>,
     /// Why the browser lost the GPU device, until the app ends for it.
     lost: Rc<RefCell<Option<String>>>,
+    /// The deadline the event loop was last told to wait for (`None`: none). winit schedules a
+    /// browser task for each new control flow and aborts the last one's, so the same deadline
+    /// isn't set again.
+    waiting: Option<u64>,
 }
 
 struct Running<S: 'static> {
@@ -608,18 +612,23 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         crate::cursor::os::make_pending(event_loop);
-        // Channels the app serves with 	ask::serve get their turn after the handlers that fed them.
+        // Channels the app serves with `task::serve` get their turn after the handlers that fed them.
         crate::task::pump();
         let Ok(running) = self.running.try_borrow() else { return };
         let Some(r) = &*running else { return };
-        event_loop.set_control_flow(match r.rt.wake_deadline() {
+        let (flow, waiting) = match r.rt.wake_deadline() {
             Some(deadline) if deadline <= r.rt.wall_start.unwrap().elapsed().as_secs_f64() => {
                 if let Some(window) = &self.window { window.request_redraw(); }
-                ControlFlow::Wait
+                (ControlFlow::Wait, None)
             }
-            Some(deadline) => ControlFlow::WaitUntil(crate::time::for_winit(r.rt.wall_start.unwrap() + Duration::from_secs_f64(deadline.max(0.0)))),
-            None => ControlFlow::Wait,
-        });
+            Some(deadline) => (ControlFlow::WaitUntil(crate::time::for_winit(r.rt.wall_start.unwrap() + Duration::from_secs_f64(deadline.max(0.0)))), Some(deadline.to_bits())),
+            None => (ControlFlow::Wait, None),
+        };
+        drop(running);
+        if self.waiting != waiting || waiting.is_none() && !matches!(event_loop.control_flow(), ControlFlow::Wait) {
+            self.waiting = waiting;
+            event_loop.set_control_flow(flow);
+        }
     }
 
     fn new_events(&mut self, _: &ActiveEventLoop, cause: winit::event::StartCause) {

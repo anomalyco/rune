@@ -503,6 +503,13 @@ impl<S: 'static> Runtime<S> {
     }
 
     /// Returns updated JSON only when layout commits, viewport or scroll positions changed.
+    /// Whether only scrolling moved the mirror since it was last built: nothing committed and the
+    /// viewport is the same.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    pub(crate) fn web_a11y_scrolled_only(&self, mirror: &A11yMirror) -> bool {
+        mirror.commits == self.commits && !mirror.json.is_empty() && mirror.scroll_digest != self.scroll_digest()
+    }
+
     pub(crate) fn web_a11y<'a>(&self, mirror: &'a mut A11yMirror) -> Option<&'a str> {
         let vp = (self.viewport.0.to_bits(), if self.page.is_some() { 0 } else { self.viewport.1.to_bits() });
         let sd = self.scroll_digest();
