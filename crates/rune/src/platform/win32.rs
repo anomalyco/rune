@@ -436,7 +436,7 @@ pub(crate) fn destroy_own_windows() {
             let t = std::time::Instant::now();
             SetWindowLongPtrW(hwnd, GWLP_WNDPROC, DefWindowProcW as usize as isize);
             let ok = DestroyWindow(hwnd);
-            if log { eprintln!("ib3 destroy {hwnd:?} ok {ok} err {} in {} us", windows_sys::Win32::Foundation::GetLastError(), t.elapsed().as_micros()); }
+            if log { eprintln!("ib3 destroy {hwnd:?} ok {ok} err {} in {} us at ft {}", windows_sys::Win32::Foundation::GetLastError(), t.elapsed().as_micros(), (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos() / 100 + 116_444_736_000_000_000)); }
         }
     }
 }

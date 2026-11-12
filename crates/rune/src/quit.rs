@@ -157,7 +157,7 @@ pub(crate) fn end_fast(last: fn()) -> ! {
     crate::open_url::instance::exited();
     crate::marks::mark("quit.last");
     last();
-    if std::env::var_os("IB3_QUIT_MARKS").is_some() { eprintln!("ib3 terminate"); }
+    if std::env::var_os("IB3_QUIT_MARKS").is_some() { eprintln!("ib3 terminate at ft {}", (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos() / 100 + 116_444_736_000_000_000)); }
     end_process()
 }
 
