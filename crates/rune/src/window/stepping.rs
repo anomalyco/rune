@@ -14,9 +14,9 @@ pub(super) enum FrameMove {
     Moving { anim: crate::window::frame::FrameAnim, origin: [f32; 2] },
     /// Elsewhere, a size a resize request jumps to: the coupon for the one `Resized` it causes,
     /// so that event lays out like a step of a resize animation rather than the user's drag. A
-    /// later request replaces it.
+    /// later request replaces it. `pixels` is the physical size the request asks the OS for.
     #[cfg_attr(target_os = "macos", allow(dead_code))]
-    Jumped { size: (f32, f32) },
+    Jumped { size: (f32, f32), pixels: (u32, u32) },
 }
 
 impl FrameMove {
@@ -26,20 +26,25 @@ impl FrameMove {
         FrameMove::Moving { anim, origin }
     }
 
-    /// The frame jumping to `size` at once (elsewhere), which its `Resized` announces.
+    /// The frame jumping to `size` at once (elsewhere), which its `Resized` announces at `pixels`.
     #[cfg_attr(target_os = "macos", allow(dead_code))]
-    pub(super) fn jumped(size: (f32, f32)) -> Self { FrameMove::Jumped { size } }
+    pub(super) fn jumped(size: (f32, f32), pixels: (u32, u32)) -> Self { FrameMove::Jumped { size, pixels } }
 
     // differs from dev: dev held a coupon for every request, including one for the size the
     // window already has, which no `Resized` answers and the user's next resize then spent.
-    /// The jump a request to `size` needs from a window reporting `reported` pixels: none when
-    /// the request asks for the pixels the window already has, since the host answers it itself
-    /// and no `Resized` comes to spend the coupon. The request is compared as the OS reports it,
-    /// rounded to physical pixels at `scale`, so one that really moves the window keeps its
-    /// coupon even when it is under a point.
+    /// Takes a request to `size` from a window whose content is `inner` pixels, at `scale`.
+    /// A request for other pixels holds the coupon for its `Resized`. One for the pixels the
+    /// window already has gets no `Resized`, so it holds none, but it still retires an earlier
+    /// jump to other pixels, as dev's coupon replaced it; one aimed at these pixels, whose reply
+    /// may still be queued, is replaced as dev did. A frame animating is left as it was.
     #[cfg_attr(target_os = "macos", allow(dead_code))]
-    pub(super) fn jump_to(reported: (u32, u32), size: (f32, f32), scale: f32) -> Option<Self> {
-        (reported != pixels(size, scale)).then(|| FrameMove::jumped(size))
+    pub(super) fn request_jump(slot: &mut Option<Self>, inner: (u32, u32), size: (f32, f32), scale: f64, wayland: bool) {
+        let pixels = requested_pixels(size, scale, wayland);
+        if pixels != inner {
+            *slot = Some(FrameMove::jumped(size, pixels));
+        } else if let Some(FrameMove::Jumped { pixels: pending, .. }) = *slot {
+            *slot = (pending == inner).then(|| FrameMove::jumped(size, pixels));
+        }
     }
 
     /// Whether the frame is animating to a new frame. A jump names the one `Resized` it causes,
@@ -52,7 +57,7 @@ impl FrameMove {
     /// or not it matches, so a later resize is the user's again. `true` when this window asked
     /// for the size.
     pub(super) fn take_jump(slot: &mut Option<Self>, viewport: (f32, f32)) -> bool {
-        let Some(FrameMove::Jumped { size }) = *slot else { return false };
+        let Some(FrameMove::Jumped { size, .. }) = *slot else { return false };
         *slot = None;
         (size.0 - viewport.0).abs() < 1.0 && (size.1 - viewport.1).abs() < 1.0
     }
@@ -61,9 +66,9 @@ impl FrameMove {
     // the coupon it answers, so that coupon stayed and the user's next resize spent it.
     /// Spends the jump a `Resized` that changed nothing answers, when the event reports the
     /// pixels the request asked for. An adjacent size is another event's, and leaves it.
-    pub(super) fn answer_jump(slot: &mut Option<Self>, reported: (u32, u32), scale: f32) -> bool {
-        let Some(FrameMove::Jumped { size }) = *slot else { return false };
-        if pixels(size, scale) != reported { return false; }
+    pub(super) fn answer_jump(slot: &mut Option<Self>, reported: (u32, u32)) -> bool {
+        let Some(FrameMove::Jumped { pixels, .. }) = *slot else { return false };
+        if pixels != reported { return false; }
         *slot = None;
         true
     }
@@ -77,9 +82,18 @@ impl FrameMove {
     }
 }
 
-/// A content size in the rounded physical pixels the OS reports it at, as winit rounds it.
-fn pixels(size: (f32, f32), scale: f32) -> (u32, u32) {
-    ((size.0 * scale).round().max(0.0) as u32, (size.1 * scale).round().max(0.0) as u32)
+/// The physical pixels a request for `size` points asks the OS for, converted as the backend
+/// converts it. winit (Win32, X11) and Rune's own Win32 frame widen the request to f64, multiply
+/// by the f64 scale and round, as `LogicalSize::to_physical` does; Wayland rounds the request to
+/// whole logical pixels first and scales those, as it reports its size.
+fn requested_pixels(size: (f32, f32), scale: f64, wayland: bool) -> (u32, u32) {
+    let size = winit::dpi::Size::from(LogicalSize::new(size.0, size.1));
+    let pixels: winit::dpi::PhysicalSize<u32> = if wayland {
+        size.to_logical::<u32>(scale).to_physical(scale)
+    } else {
+        size.to_physical(scale)
+    };
+    (pixels.width, pixels.height)
 }
 
 impl<S: 'static> Host<S> {
@@ -217,20 +231,18 @@ impl<S: 'static> Host<S> {
             let _ = (start, painting);
             let window = &w.window;
             // Read before the resize request, which may apply at once.
-            let scale = window.scale_factor() as f32;
-            let inner = window.inner_size();
-            let geometry = (window.current_monitor(), window.outer_position(), window.outer_size());
+            let geometry = (window.current_monitor(), window.outer_position(), window.outer_size(), window.inner_size());
             if let Some((width, height)) = request.size {
                 // differs from dev: a request for the size the window already has gets no
                 // `Resized` back, so dev's coupon would stay and claim the user's next resize.
-                if let Some(jump) = FrameMove::jump_to((inner.width, inner.height), (width, height), scale) {
-                    self.frame_move = Some(jump);
-                }
+                let inner = (geometry.3.width, geometry.3.height);
+                FrameMove::request_jump(&mut self.frame_move, inner, (width, height), window.scale_factor(), self.wayland);
                 chrome::request_inner_size(window, (width, height));
             }
             // Wayland windows can't see or set their position.
             if self.wayland { return; }
-            let (Some(monitor), Ok(position), outer) = geometry else { return };
+            let (Some(monitor), Ok(position), outer, inner) = geometry else { return };
+            let scale = window.scale_factor() as f32;
             let size = request.size.map(|(width, height)| (
                 width * scale + outer.width.saturating_sub(inner.width) as f32,
                 height * scale + outer.height.saturating_sub(inner.height) as f32,

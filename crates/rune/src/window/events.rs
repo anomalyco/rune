@@ -17,17 +17,16 @@ pub(super) enum ResizeReply {
 
 // differs from dev: the host returned on a reply that changed nothing without answering the jump
 // it carries, so that coupon stayed and the user's next resize spent it.
-/// The frame move and viewport a `Resized` leaves. `reported` is the event's physical size and
-/// `scale` the window's, so an unchanged reply answers only a jump for exactly those pixels.
+/// The frame move and viewport a `Resized` leaves. `reported` is the event's physical size, so an
+/// unchanged reply answers only a jump for exactly those pixels.
 pub(super) fn resize_reply(
     slot: &mut Option<stepping::FrameMove>,
     viewport: (f32, f32),
     reported: (u32, u32),
-    scale: f32,
     unchanged: bool,
 ) -> ResizeReply {
     if unchanged {
-        stepping::FrameMove::answer_jump(slot, reported, scale);
+        stepping::FrameMove::answer_jump(slot, reported);
         ResizeReply::Unchanged
     } else if stepping::FrameMove::take_jump(slot, viewport) {
         ResizeReply::Stepped
@@ -331,7 +330,7 @@ impl<S: 'static> Host<S> {
                 let resized = l.resize_surface(gpu, size);
                 let viewport = (size.width as f32 / scale, size.height as f32 / scale);
                 let unchanged = !resized && viewport == rt.window_viewport() && scale == rt.window_scale();
-                match resize_reply(&mut self.frame_move, viewport, (size.width, size.height), scale, unchanged) {
+                match resize_reply(&mut self.frame_move, viewport, (size.width, size.height), unchanged) {
                     ResizeReply::Unchanged => {
                         if restored || origin_moved { l.request_redraw(); }
                         return;
