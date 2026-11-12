@@ -187,8 +187,13 @@ impl<S: 'static> Runtime<S> {
                 .map(|c| c.min(255) as u8)
                 .collect();
             run.set_word_starts(starts);
-            run.set_value(text);
             let id = line_id(n.id, k);
+            // The cursor's cell is the caret, so a reader follows typing and output.
+            if let Some((col, _)) = g.caret.filter(|c| usize::from(c.1) == k) {
+                let at = TextPosition { node: id, character_index: crate::el::GridRow::char_at(&places, col) };
+                out[me].1.set_text_selection(TextSelection { anchor: at, focus: at });
+            }
+            run.set_value(text);
             out[me].1.push_child(id);
             out.push((id, run));
         }

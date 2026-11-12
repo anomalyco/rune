@@ -134,6 +134,8 @@ pub(crate) struct Grid {
     pub(crate) cols: u16,
     pub(crate) cell: [f32; 2],
     pub(crate) rows: Vec<Rc<GridRow>>,
+    /// The cursor's cell (column, row), as the accessibility tree's caret.
+    pub(crate) caret: Option<(u16, u16)>,
 }
 
 impl std::fmt::Debug for Grid {
@@ -148,7 +150,27 @@ impl std::fmt::Debug for Grid {
 /// text line per row.
 pub fn grid(cols: u16, cell_w: f32, cell_h: f32, rows: Vec<Rc<GridRow>>) -> El {
     let mut e = base(FlexDirection::Row);
-    e.vis.cold_mut().grid = Some(Rc::new(Grid { cols, cell: [cell_w, cell_h], rows }));
+    e.vis.cold_mut().grid = Some(Rc::new(Grid { cols, cell: [cell_w, cell_h], rows, caret: None }));
     e.set_role_name("terminal");
     e
+}
+
+impl El {
+    /// The cell (`col`, `row`) a [`grid`]'s cursor is on, which a screen reader follows as its
+    /// caret: it reads the character there and moves from it by character, word and line. It
+    /// draws nothing; leave it unset while the program hides its cursor.
+    pub fn grid_caret(mut self, col: u16, row: u16) -> Self {
+        if let Some(g) = self.vis.cold_mut().grid.as_mut().and_then(Rc::get_mut) {
+            g.caret = Some((col, row));
+        }
+        self
+    }
+}
+
+impl GridRow {
+    /// The index in [`Self::reading`]'s text of the character at column `col`: the one that
+    /// starts there or covers it, or the end of the text past it.
+    pub(crate) fn char_at(places: &[(u16, u16)], col: u16) -> usize {
+        places.iter().position(|&(c, w)| c + w.max(1) > col).unwrap_or(places.len())
+    }
 }

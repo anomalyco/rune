@@ -95,6 +95,7 @@ impl<S: 'static> Runtime<S> {
         // A grid's rows, each kept while unchanged.
         if let Some(g) = n.vis.grid.as_deref() {
             g.rows.iter().for_each(|row| (std::rc::Rc::as_ptr(row) as usize).hash(&mut h));
+            g.caret.hash(&mut h);
         }
         h.finish()
     }

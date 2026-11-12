@@ -214,7 +214,7 @@ fn same_visual_cold(a: &crate::el::VisualCold, b: &crate::el::VisualCold) -> boo
         // A grid built again from the same rows is the same grid.
         && match (&a.grid, grid) {
             (None, None) => true,
-            (Some(x), Some(y)) => Rc::ptr_eq(x, y) || (x.cols == y.cols && x.cell == y.cell && x.rows.len() == y.rows.len() && x.rows.iter().zip(&y.rows).all(|(p, q)| Rc::ptr_eq(p, q))),
+            (Some(x), Some(y)) => Rc::ptr_eq(x, y) || (x.cols == y.cols && x.cell == y.cell && x.caret == y.caret && x.rows.len() == y.rows.len() && x.rows.iter().zip(&y.rows).all(|(p, q)| Rc::ptr_eq(p, q))),
             _ => false,
         }
         && match (&a.pixels, pixels) {
