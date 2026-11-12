@@ -544,3 +544,12 @@ impl<S: 'static> Measurement<'_, S> {
         })
     }
 }
+
+#[cfg(test)]
+impl<S: 'static> Runtime<S> {
+    /// Runs one remount pass on its own and says whether it fell back, so a test can read what
+    /// the fallback left in the lists before the full rebuild that follows it fills them again.
+    pub(in crate::runtime) fn remount_falls_back(&mut self) -> bool {
+        matches!(self.measurement(true).remount_virtuals(), RemountOutcome::Fallback)
+    }
+}
