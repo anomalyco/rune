@@ -395,6 +395,12 @@ impl WindowFlags {
             }
         }
 
+        // A show or a hide alone: ShowWindow set WS_VISIBLE itself. Writing the styles again and
+        // refreshing the frame (SWP_FRAMECHANGED) cost a window's first show about 2,200 us.
+        if diff == WindowFlags::VISIBLE {
+            return;
+        }
+
         if diff != WindowFlags::empty() {
             let (style, style_ex) = new.to_window_styles();
 

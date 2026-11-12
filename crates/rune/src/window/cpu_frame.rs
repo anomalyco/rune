@@ -34,6 +34,8 @@ pub(super) struct Cpu {
     half: HalfRounding,
     /// What the window has of the buffer.
     shown: Shown,
+    /// Until the first frame is painted: the window shows with it, then, activating when `true`.
+    show: Option<bool>,
 }
 
 /// What a CPU window has of its buffer. GDI draws nothing into a hidden window, so the first
@@ -259,7 +261,7 @@ impl<S: 'static> Host<S> {
         let native = {
             let handle = self.native_handle.clone();
             let report = Arc::new(move |covered| handle.send(move |slot| WakeEvent::Covered(slot, covered)));
-            let mode = SurfaceMode::Cpu { cpu: Cpu { buffer: Buffer::Touching(prefault, capacity), painter, half, shown: Shown::Nothing }, job: GpuJob::Waiting };
+            let mode = SurfaceMode::Cpu { cpu: Cpu { buffer: Buffer::Touching(prefault, capacity), painter, half, shown: Shown::Nothing, show: Some(focus) }, job: GpuJob::Waiting };
             Native { cloak, frame, _occlusion: crate::platform::win32::occlusion::Tracked::new(&window, report), mode, a11y_start }
         };
         self.win = Some(Win {
@@ -299,26 +301,15 @@ impl<S: 'static> Host<S> {
         self.draw_cpu(false);
         crate::marks::mark("frame.first.done");
         let Some(w) = self.win.as_ref() else { return Ok(()) };
+        let Some(w) = self.win.as_mut() else { return Ok(()) };
         if !w.first_frame.ready() {
             // Only the GPU draws this frame (`start_gpu` began it): shown cloaked until it has.
+            if let SurfaceMode::Cpu { cpu, .. } = &mut w.native.mode { cpu.show = None; }
             w.native.cloak.hold(&w.window, Instant::now() + win::READY_FALLBACK, focus);
             w.window.set_visible(true);
             return Ok(());
         }
-        // GDI draws nothing into a hidden window, and DWM composes a window that just showed with
-        // whatever its surface holds (white): it shows cloaked, takes the frame, then comes on
-        // screen, activating as the cloak lifts.
-        if !w.native.cloak.held() {
-            w.native.cloak.hold(&w.window, Instant::now() + win::READY_FALLBACK, focus);
-            crate::marks::mark("window.cloaked");
-            w.window.set_visible(true);
-            crate::marks::mark("window.visible");
-        }
-        let Some(w) = self.win.as_mut() else { return Ok(()) };
-        let size = (w.config.width, w.config.height);
-        if let SurfaceMode::Cpu { cpu, .. } = &mut w.native.mode { copy_first(cpu, &w.window, size); }
-        w.native.cloak.lift(&w.window);
-        crate::marks::mark("window.shown");
+        // `draw_cpu` showed it with the frame.
         if w.window.has_focus() { self.rt.window_focus(true); }
         Ok(())
     }
@@ -413,9 +404,25 @@ impl<S: 'static> Host<S> {
                         Shown::Waiting { mut rects, .. } => { rects.extend_from_slice(&painted.rects); Shown::Waiting { rects, colour } }
                         Shown::Nothing => Shown::Waiting { rects: painted.rects, colour },
                     };
-                    // A window already on screen (shown cloaked, or a frame after the show) takes
-                    // the first frame now; a hidden one when it shows (`open_on_cpu`).
-                    if l.window.is_visible() == Some(true) { copy_first(cpu, &l.window, (width, height)); }
+                    if let Some(focus) = cpu.show.take() {
+                        // The window shows with its first frame, before the frame's hooks run
+                        // (`App::on_frame_drawn`). GDI draws nothing into a hidden window, and DWM
+                        // composes a window that just showed with whatever its surface holds (white):
+                        // it shows cloaked, takes the frame, then comes on screen, activating as the
+                        // cloak lifts.
+                        if !l.native.cloak.held() {
+                            l.native.cloak.hold(&l.window, Instant::now() + win::READY_FALLBACK, focus);
+                            crate::marks::mark("window.cloaked");
+                            l.window.set_visible(true);
+                            crate::marks::mark("window.visible");
+                        }
+                        copy_first(cpu, &l.window, (width, height));
+                        l.native.cloak.lift(&l.window);
+                        crate::marks::mark("window.shown");
+                    } else if l.window.is_visible() == Some(true) {
+                        // A frame after the show that came before the first copy.
+                        copy_first(cpu, &l.window, (width, height));
+                    }
                     Ok(())
                 }
                 Err(why) => Err(why),

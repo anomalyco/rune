@@ -50,3 +50,20 @@ index 228c6f0..c5770b8 100644
              parent.unwrap_or(0),
              menu.unwrap_or(0),
              util::get_instance_handle(),
+diff --git a/src/platform_impl/windows/window_state.rs b/src/platform_impl/windows/window_state.rs
+index 8e24a4f..88b9881 100644
+--- a/src/platform_impl/windows/window_state.rs
++++ b/src/platform_impl/windows/window_state.rs
+@@ -395,6 +395,12 @@ impl WindowFlags {
+             }
+         }
+ 
++        // A show or a hide alone: ShowWindow set WS_VISIBLE itself. Writing the styles again and
++        // refreshing the frame (SWP_FRAMECHANGED) cost a window's first show about 2,200 us.
++        if diff == WindowFlags::VISIBLE {
++            return;
++        }
++
+         if diff != WindowFlags::empty() {
+             let (style, style_ex) = new.to_window_styles();
+ 
