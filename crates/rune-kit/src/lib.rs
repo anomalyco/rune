@@ -48,6 +48,7 @@ mod popup_list;
 mod radio;
 mod rolling_text;
 mod scroll_bar;
+pub mod search;
 mod segmented;
 mod select;
 pub mod shell;
