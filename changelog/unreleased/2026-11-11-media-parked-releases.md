@@ -1,0 +1,1 @@
+ - **Media: trimming parked players no longer deadlocks.** Releasing the oldest parked clips now drops them after the parked list's lock is released. A waker capture running in a clip's destructor that plays another parked clip used to re-enter the list under that lock and hang the main thread.

@@ -67,8 +67,8 @@ fn webm_video_fails_at_once() {
 }
 
 /// An audio clip no backend has seen, so nothing has changed before the test starts.
-fn quiet_audio() -> Player {
-    let shared = Arc::new(Shared {
+fn bare_audio() -> Arc<Shared> {
+    Arc::new(Shared {
         source: MediaSource::from("missing.m4a"),
         headers: Vec::new(),
         kind: Kind::Audio,
@@ -77,7 +77,11 @@ fn quiet_audio() -> Player {
         waker: WakerSlot::default(),
         notified: AtomicU64::new(0),
         native: Mutex::new(backend::Native::default()),
-    });
+    })
+}
+
+fn quiet_audio() -> Player {
+    let shared = bare_audio();
     Player { surface: NativeSurface::with_video(shared.clone()), shared }
 }
 
@@ -127,11 +131,16 @@ fn a_seek_before_the_clip_opens_is_clamped_when_it_does() {
     assert_eq!((c.seek, c.time), (Some(1.0), 1.0));
 }
 
+/// The parked list is process-wide: these tests take turns so each sees only its own clips.
+#[cfg(target_os = "macos")]
+static PARKED_TESTS: Mutex<()> = Mutex::new(());
+
 /// `play()` on a parked clip only unparks it on its next pull or edit on the main thread;
 /// until then, parking others must not release it.
 #[cfg(target_os = "macos")]
 #[test]
 fn parking_never_releases_a_playing_clip() {
+    let _only = PARKED_TESTS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let clips: Vec<Video> = (0..6).map(|_| Video::file(fixture())).collect();
     let mut released = Vec::new();
     released.extend(backend::parked_with(&clips[0].shared));
@@ -142,6 +151,49 @@ fn parking_never_releases_a_playing_clip() {
     assert!(!released.iter().any(|r| Arc::ptr_eq(r, &clips[0].shared)), "the playing clip stays");
     assert_eq!(released.len(), 1, "four of the five paused clips stay parked");
     assert!(Arc::ptr_eq(&released[0], &clips[1].shared), "the oldest paused clip goes");
+}
+
+/// Records, on drop, whether the parking pass's lock was free: a destructor that takes it would
+/// deadlock in the app.
+#[cfg(target_os = "macos")]
+struct DroppedDuringParking;
+
+#[cfg(target_os = "macos")]
+thread_local! {
+    /// None until a clip's destructor runs: Some(free) for whether PARKED was free then.
+    static DROPPED: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for DroppedDuringParking {
+    fn drop(&mut self) {
+        DROPPED.with(|flag| flag.set(Some(macos::parked_free())));
+    }
+}
+
+/// A clip's last owner can go away while a parking pass holds PARKED. Its destructor runs app
+/// code (the waker captures), which may play another parked clip and re-enter `unpark`, so it
+/// must run after the lock is released. // differs from dev: dev dropped the upgrade in the pass.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_clip_dropped_during_a_parking_pass_is_destroyed_outside_the_lock() {
+    let _only = PARKED_TESTS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let target = bare_audio();
+    let probe = DroppedDuringParking;
+    target.waker.set(Arc::new(move || {
+        let _ = &probe;
+    }));
+    let other = bare_audio();
+    // Nothing to release: the list holds one paused clip.
+    assert!(backend::parked_with(&target).is_empty());
+    // The pass over `other` drops the target's last owner while it holds the target's upgrade.
+    macos::on_kept(move || drop(target));
+    assert!(backend::parked_with(&other).is_empty());
+    assert_eq!(
+        DROPPED.with(|flag| flag.take()),
+        Some(true),
+        "the clip's destructor ran while PARKED was held (it would deadlock here)"
+    );
 }
 
 /// Only formats that no build reads fail at once; with `ogg-audio`, Ogg audio opens later.
