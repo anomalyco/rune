@@ -107,7 +107,9 @@ pub(super) enum SurfaceMode {
     /// window that animates would otherwise replace it every frame and never hand over. The turn
     /// that finds it done commits. `readback` is that frame's pixels on their way back, to count
     /// how many differ from the CPU's.
-    HandingOver { cpu: Cpu, handover: Handover, done: Option<Arc<AtomicBool>>, readback: Option<Readback> },
+    /// `since`: when the GPU came; `nudged`: when a frame was last asked for, while none has been
+    /// drawn by both (`Host::watch_handover`); `done`'s instant: when that frame was submitted.
+    HandingOver { cpu: Cpu, handover: Handover, done: Option<(Arc<AtomicBool>, Instant)>, readback: Option<Readback>, since: Instant, nudged: Option<Instant>, tries: u8 },
     /// The GPU draws through the committed visual, which lives as long as the window's surface.
     Handed { handover: Handover },
     /// The GPU's swap chain was made again (a lost device) on the same visual: committed once its
@@ -122,15 +124,34 @@ pub(super) struct Readback {
     size: (u32, u32),
 }
 
-/// The GPU a CPU window is waiting for.
+/// The GPU a CPU window is waiting for. Every step has a deadline (`Host::watch_handover`), and
+/// every way it ends is logged: handed over (`gpu.window.handed`), or failed with a reason
+/// (`gpu.window.failed`, note `gpu.window.why`) and tried again after `RETRY_AFTER`, `TRIES`
+/// times in all, then the CPU for good.
 pub(super) enum GpuJob {
-    /// Not started: the first frame isn't out yet.
-    Waiting,
-    /// Being made on its thread; it reports through `slot`.
-    Building { slot: Arc<Mutex<Option<Result<Prepared, String>>>> },
-    /// It couldn't be made: the window stays on the CPU.
+    /// Not started: the first frame isn't out yet, or a failed try (`tries` so far) waits for
+    /// `retry_at`.
+    Waiting { tries: u8, retry_at: Option<Instant> },
+    /// Being made on `thread` since `since`; it reports through `slot`. `raised`: the thread runs
+    /// at normal priority now (`RAISE_AFTER`).
+    Building { slot: Arc<Mutex<Option<Result<Prepared, String>>>>, thread: std::thread::JoinHandle<()>, since: Instant, raised: bool, tries: u8 },
+    /// It failed `TRIES` times: the window stays on the CPU.
     Failed,
 }
+
+/// A GPU thread that hasn't made the GPU after this long runs at normal priority: below normal,
+/// a busy machine's other work can hold it off for seconds.
+const RAISE_AFTER: Duration = Duration::from_millis(500);
+/// Past this, a GPU thread still making the GPU is logged as slow (it can't be stopped).
+const BUILD_SLOW: Duration = Duration::from_secs(20);
+/// While no frame has been drawn by both renderers, one is asked for this often, in sight or not.
+const NUDGE_EVERY: Duration = Duration::from_millis(100);
+/// The longest the GPU may take to finish the frame both drew: then the hand-over fails.
+const FINISH_LIMIT: Duration = Duration::from_secs(5);
+/// A failed try is made again after this long.
+const RETRY_AFTER: Duration = Duration::from_secs(30);
+/// Tries in all before the window stays on the CPU.
+const TRIES: u8 = 3;
 
 /// What the GPU thread makes for a window.
 pub(super) struct Prepared {
@@ -261,7 +282,7 @@ impl<S: 'static> Host<S> {
         let native = {
             let handle = self.native_handle.clone();
             let report = Arc::new(move |covered| handle.send(move |slot| WakeEvent::Covered(slot, covered)));
-            let mode = SurfaceMode::Cpu { cpu: Cpu { buffer: Buffer::Touching(prefault, capacity), painter, half, shown: Shown::Nothing, show: Some(focus) }, job: GpuJob::Waiting };
+            let mode = SurfaceMode::Cpu { cpu: Cpu { buffer: Buffer::Touching(prefault, capacity), painter, half, shown: Shown::Nothing, show: Some(focus) }, job: GpuJob::Waiting { tries: 0, retry_at: None } };
             Native { cloak, frame, _occlusion: crate::platform::win32::occlusion::Tracked::new(&window, report), mode, a11y_start, video_layers: Default::default() }
         };
         self.win = Some(Win {
@@ -331,9 +352,12 @@ impl<S: 'static> Host<S> {
         let launcher = self.launcher();
         let Some(l) = self.win.as_ref() else { return };
         let hidden = launcher && !self.life.shown();
-        let covered = !owed && ((!launcher && !self.life.uncovered()) || l.minimized());
+        // The frame both renderers draw to hand over draws in sight or not: covered, the window
+        // would stay on the CPU until it showed again.
+        let handing = matches!(l.native.mode, SurfaceMode::HandingOver { done: None, .. });
+        let covered = !owed && !handing && ((!launcher && !self.life.uncovered()) || l.minimized());
         if covered { return self.covered_frame(); }
-        if !owed && !resizing && l.backing_off(Instant::now()) { return; }
+        if !owed && !handing && !resizing && l.backing_off(Instant::now()) { return; }
         let Some(l) = self.win.as_mut() else { return };
         l.timer_frame.drawn();
         if self.native_handle.native.number.load(Ordering::Relaxed) == 0 {
@@ -464,7 +488,8 @@ impl<S: 'static> Host<S> {
     /// (`RUNE_CPU_FIRST=only`: not until a frame needs it, for checking the CPU window alone).
     pub(super) fn cpu_idle(&mut self) {
         if std::env::var_os("RUNE_CPU_FIRST").is_some_and(|v| v == "only") { return; }
-        if self.win.as_ref().is_some_and(|w| matches!(w.native.mode, SurfaceMode::Cpu { job: GpuJob::Waiting, .. }) && w.first_frame.ready()) {
+        let now = Instant::now();
+        if self.win.as_ref().is_some_and(|w| matches!(w.native.mode, SurfaceMode::Cpu { job: GpuJob::Waiting { retry_at, .. }, .. } if retry_at.is_none_or(|at| at <= now)) && w.first_frame.ready()) {
             self.start_gpu(true);
         }
     }
@@ -474,7 +499,8 @@ impl<S: 'static> Host<S> {
     fn start_gpu(&mut self, below: bool) {
         let Some(w) = self.win.as_mut() else { return };
         let SurfaceMode::Cpu { job, .. } = &mut w.native.mode else { return };
-        let GpuJob::Waiting = job else { return };
+        let GpuJob::Waiting { tries, retry_at } = *job else { return };
+        if retry_at.is_some() { crate::marks::mark("gpu.window.retry"); }
         let Some(hwnd) = crate::platform::win32::hwnd(&w.window) else { *job = GpuJob::Failed; return };
         let slot = Arc::new(Mutex::new(None));
         let (out, handle, srgb, size) = (slot.clone(), self.native_handle.clone(), self.rt.srgb_blend(), (w.config.width, w.config.height));
@@ -486,10 +512,10 @@ impl<S: 'static> Host<S> {
             *out.lock().unwrap_or_else(|e| e.into_inner()) = Some(made);
             handle.send(WakeEvent::GpuReady);
         });
-        *job = match spawned {
-            Ok(_) => { crate::marks::mark("gpu.window.start"); GpuJob::Building { slot } }
-            Err(error) => { eprintln!("rune: could not start the window's GPU thread: {error}"); GpuJob::Failed }
-        };
+        match spawned {
+            Ok(thread) => { crate::marks::mark("gpu.window.start"); *job = GpuJob::Building { slot, thread, since: Instant::now(), raised: !below, tries: tries + 1 }; }
+            Err(error) => self.fail_gpu(format!("its thread couldn't start: {error}"), tries + 1),
+        }
     }
 
     /// The GPU thread finished: attach its device, renderer and surface and start handing over,
@@ -497,15 +523,12 @@ impl<S: 'static> Host<S> {
     pub(super) fn gpu_ready(&mut self) {
         if self.win.as_ref().is_some_and(|w| matches!(w.native.mode, SurfaceMode::HandingOver { .. })) { return self.hand_over_if_done(); }
         let Some(w) = self.win.as_mut() else { return };
-        let SurfaceMode::Cpu { job: GpuJob::Building { slot }, .. } = &w.native.mode else { return };
+        let SurfaceMode::Cpu { job: GpuJob::Building { slot, tries, .. }, .. } = &w.native.mode else { return };
+        let tries = *tries;
         let Some(made) = slot.lock().unwrap_or_else(|e| e.into_inner()).take() else { return };
         let prepared = match made {
             Ok(prepared) => prepared,
-            Err(error) => {
-                eprintln!("rune: the window stays on the CPU renderer: {error}");
-                if let SurfaceMode::Cpu { job, .. } = &mut w.native.mode { *job = GpuJob::Failed; }
-                return;
-            }
+            Err(error) => return self.fail_gpu(error, tries),
         };
         crate::marks::mark("gpu.window.ready");
         let Prepared { gpu, mut renderer, surface, config, handover } = prepared;
@@ -517,7 +540,10 @@ impl<S: 'static> Host<S> {
         let size = w.window.inner_size();
         let SurfaceMode::Cpu { mut cpu, .. } = std::mem::replace(&mut w.native.mode, SurfaceMode::Gpu) else { unreachable!() };
         cpu.half = HalfRounding::of_vendor(gpu.adapter.get_info().vendor);
-        w.native.mode = SurfaceMode::HandingOver { cpu, handover, done: None, readback: None };
+        w.native.mode = SurfaceMode::HandingOver { cpu, handover, done: None, readback: None, since: Instant::now(), nudged: None, tries };
+        // D3D12's idle-priority threads compile the first frame's shaders: on a busy machine they
+        // would hold the hand-over frame off.
+        crate::platform::win32::unidle_d3d_threads_soon();
         w.surface = Some(surface);
         w.config = config;
         w.surface_ok = true;
@@ -563,7 +589,7 @@ impl<S: 'static> Host<S> {
         let flag = Arc::new(AtomicBool::new(false));
         let set = flag.clone();
         gpu.queue.on_submitted_work_done(move || set.store(true, Ordering::Release));
-        *done = Some(flag);
+        *done = Some((flag, Instant::now()));
         // A thread waits for the GPU and wakes the loop, which commits (`hand_over_if_done`).
         let (waiting, handle) = (gpu.clone(), self.native_handle.clone());
         let spawned = std::thread::Builder::new().name("rune-gpu-wait".into()).spawn(move || {
@@ -582,21 +608,14 @@ impl<S: 'static> Host<S> {
     pub(super) fn hand_over_if_done(&mut self) {
         let (Some(w), Some((gpu, _))) = (self.win.as_mut(), self.gpu.as_ref()) else { return };
         match &mut w.native.mode {
-            SurfaceMode::HandingOver { done: Some(done), .. } => {
+            SurfaceMode::HandingOver { done: Some((done, _)), tries, .. } => {
+                let tries = *tries;
                 let _ = gpu.device.poll(wgpu::PollType::Poll);
                 let lost = gpu.is_lost();
                 if !lost && !done.load(Ordering::Acquire) { return; }
+                let committed = if lost { Err("its device was lost".to_owned()) } else if let SurfaceMode::HandingOver { handover, .. } = &w.native.mode { handover.commit() } else { unreachable!() };
+                if let Err(error) = committed { return self.fail_gpu(format!("the GPU couldn't take over the window: {error}"), tries); }
                 let SurfaceMode::HandingOver { cpu, handover, readback, .. } = std::mem::replace(&mut w.native.mode, SurfaceMode::Gpu) else { unreachable!() };
-                let committed = if lost { Err("its device was lost".to_owned()) } else { handover.commit() };
-                if let Err(error) = committed {
-                    // DWM kept the window's own content: the CPU goes on drawing it.
-                    eprintln!("rune: the GPU couldn't take over the window: {error}");
-                    w.request_redraw();
-                    w.native.mode = SurfaceMode::Cpu { cpu, job: GpuJob::Failed };
-                    w.surface = None;
-                    self.gpu = None;
-                    return;
-                }
                 crate::marks::mark("gpu.window.handed");
                 crate::platform::win32::unidle_d3d_threads_soon();
                 // A first frame only the GPU could draw showed cloaked: it comes on screen now.
@@ -617,6 +636,83 @@ impl<S: 'static> Host<S> {
             SurfaceMode::HandingOver { done: None, .. } | SurfaceMode::Gpu | SurfaceMode::Cpu { .. } | SurfaceMode::Handed { .. } | SurfaceMode::Rebinding { .. } => {}
         }
     }
+
+    /// The GPU couldn't take over (`why`), on its `tries`th try: the window goes on, or back, to
+    /// the CPU renderer, and tries again after `RETRY_AFTER`, or stays there after `TRIES` tries.
+    fn fail_gpu(&mut self, why: String, tries: u8) {
+        eprintln!("rune: the window stays on the CPU renderer for now (try {tries} of {TRIES}): {why}");
+        crate::marks::mark("gpu.window.failed");
+        if !crate::marks::noted("gpu.window.why") { crate::marks::note("gpu.window.why", Box::leak(why.into_boxed_str())); }
+        let Some(w) = self.win.as_mut() else { return };
+        let job = if tries < TRIES { GpuJob::Waiting { tries, retry_at: Some(Instant::now() + RETRY_AFTER) } } else { GpuJob::Failed };
+        let (SurfaceMode::Cpu { cpu, .. } | SurfaceMode::HandingOver { cpu, .. }) = std::mem::replace(&mut w.native.mode, SurfaceMode::Gpu) else { unreachable!("only a CPU window hands over") };
+        w.native.mode = SurfaceMode::Cpu { cpu, job };
+        // From a hand-over: its swap chain and GPU go. DWM kept the window's own content, which
+        // the CPU goes on drawing.
+        w.surface = None;
+        self.gpu = None;
+        w.request_redraw();
+    }
+
+    /// The hand-over's deadlines, at the start of a turn (`Win::handover_deadline` wakes the loop
+    /// for them): a GPU thread still making the GPU is raised to normal priority, then logged as
+    /// slow; a frame both renderers draw is asked for until one is, in sight or not; a GPU that
+    /// doesn't finish that frame fails; a failed try is made again.
+    pub(super) fn watch_handover(&mut self, now: Instant) {
+        let Some(w) = self.win.as_mut() else { return };
+        match &mut w.native.mode {
+            SurfaceMode::Cpu { job: GpuJob::Building { thread, since, raised, .. }, .. } => {
+                if !*raised && now >= *since + RAISE_AFTER {
+                    *raised = true;
+                    raise_priority(thread);
+                    crate::marks::mark("gpu.window.raised");
+                }
+                if now >= *since + BUILD_SLOW { crate::marks::mark("gpu.window.slow"); }
+            }
+            SurfaceMode::HandingOver { done: None, since, nudged, tries, .. } => {
+                if now >= *since + FINISH_LIMIT {
+                    let tries = *tries;
+                    return self.fail_gpu(format!("no frame could be drawn by both renderers in {} s", FINISH_LIMIT.as_secs()), tries);
+                }
+                if now < nudged.unwrap_or(*since) + NUDGE_EVERY { return; }
+                *nudged = Some(now);
+                crate::marks::mark("gpu.window.nudged");
+                w.request_redraw();
+            }
+            SurfaceMode::HandingOver { done: Some((_, at)), tries, .. } => {
+                if now < *at + FINISH_LIMIT { return; }
+                let tries = *tries;
+                self.fail_gpu(format!("the GPU didn't finish the hand-over frame in {} s", FINISH_LIMIT.as_secs()), tries);
+            }
+            SurfaceMode::Cpu { job: GpuJob::Waiting { retry_at: Some(at), .. }, .. } => {
+                if now >= *at && w.first_frame.ready() { self.start_gpu(true); }
+            }
+            SurfaceMode::Cpu { job: GpuJob::Waiting { retry_at: None, .. } | GpuJob::Failed, .. }
+            | SurfaceMode::Gpu | SurfaceMode::Handed { .. } | SurfaceMode::Rebinding { .. } => {}
+        }
+    }
+}
+
+impl Win {
+    /// When the hand-over next has something to do (`Host::watch_handover`).
+    pub(super) fn handover_deadline(&self, now: Instant) -> Option<Instant> {
+        match &self.native.mode {
+            SurfaceMode::Cpu { job: GpuJob::Building { since, raised: false, .. }, .. } => Some(*since + RAISE_AFTER),
+            SurfaceMode::Cpu { job: GpuJob::Building { since, .. }, .. } => Some(*since + BUILD_SLOW).filter(|&at| at > now),
+            SurfaceMode::HandingOver { done: None, since, nudged, .. } => Some(nudged.unwrap_or(*since) + NUDGE_EVERY),
+            SurfaceMode::HandingOver { done: Some((_, at)), .. } => Some(*at + FINISH_LIMIT),
+            SurfaceMode::Cpu { job: GpuJob::Waiting { retry_at, .. }, .. } => retry_at.filter(|&at| at > now),
+            SurfaceMode::Cpu { job: GpuJob::Failed, .. } | SurfaceMode::Gpu | SurfaceMode::Handed { .. } | SurfaceMode::Rebinding { .. } => None,
+        }
+    }
+}
+
+/// Runs the GPU thread at normal priority (`RAISE_AFTER`).
+fn raise_priority(thread: &std::thread::JoinHandle<()>) {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::System::Threading::{SetThreadPriority, THREAD_PRIORITY_NORMAL};
+    // SAFETY: the GPU thread's own handle, open as long as `thread` is.
+    unsafe { SetThreadPriority(thread.as_raw_handle(), THREAD_PRIORITY_NORMAL) };
 }
 
 static FIRST_CPU: AtomicBool = AtomicBool::new(false);

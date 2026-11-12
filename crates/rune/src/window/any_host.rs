@@ -33,7 +33,12 @@ impl<S: 'static> AnyHost for Host<S> {
         // come.
         let shown = self.shown_win();
         let runtime = shown.map_or(runtime, |w| w.timer_frame.wait(runtime, now));
+        #[cfg(target_os = "windows")]
+        let handover = win.and_then(|w| w.handover_deadline(now));
+        #[cfg(not(target_os = "windows"))]
+        let handover = None;
         runtime.into_iter()
+            .chain(handover)
             .chain(win.and_then(|w| w.first_frame.deadline().map(|(retry, _)| retry)))
             .chain(win.and_then(|w| w.first_frame.ready_deadline()))
             .chain(win.and_then(Win::cloak_deadline))
@@ -160,6 +165,8 @@ impl<S: 'static> Host<S> {
         if matches!(cause, StartCause::ResumeTimeReached { .. }) && let Some(w) = &self.win { w.cursor.reassert(); }
         #[cfg(target_os = "windows")]
         if let Some(w) = &self.win { w.native.cloak.lift_if_due(&w.window, Instant::now()); }
+        #[cfg(target_os = "windows")]
+        self.watch_handover(Instant::now());
         if let Some(w) = &mut self.win && let Some((retry, until)) = w.first_frame.deadline() && retry <= Instant::now() {
             if until <= Instant::now() {
                 let notified = w.first_frame.notified();
