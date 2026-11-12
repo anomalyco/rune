@@ -97,6 +97,7 @@ pub struct SystemContrast {
 /// themes). Read when a window opens and when Windows says its settings or colours changed.
 #[cfg(target_os = "windows")]
 pub(crate) fn contrast() -> Option<SystemContrast> {
+    if let Some(preset) = contrast_preset() { return Some(preset); }
     use windows_sys::Win32::Graphics::Gdi::GetSysColor;
     use windows_sys::Win32::UI::Accessibility::{HCF_HIGHCONTRASTON, HIGHCONTRASTW};
     use windows_sys::Win32::UI::WindowsAndMessaging::{SPI_GETHIGHCONTRAST, SystemParametersInfoW};
@@ -116,7 +117,22 @@ pub(crate) fn contrast() -> Option<SystemContrast> {
 }
 
 #[cfg(not(target_os = "windows"))]
-pub(crate) fn contrast() -> Option<SystemContrast> { None }
+pub(crate) fn contrast() -> Option<SystemContrast> { contrast_preset() }
+
+/// `RUNE_CONTRAST=aquatic|desert|dusk|night-sky`: Windows 11's contrast theme of that name, as
+/// its system colours are, without turning it on for the whole machine: for captures and checks
+/// of an app in each.
+fn contrast_preset() -> Option<SystemContrast> {
+    let name = std::env::var("RUNE_CONTRAST").ok()?;
+    let [window, text, highlight, highlight_text, disabled, link] = match name.to_ascii_lowercase().as_str() {
+        "aquatic" => ["#202020", "#ffffff", "#8ee3f0", "#263b50", "#a6a6a6", "#75e9fc"],
+        "desert" => ["#fffaef", "#3d3d3d", "#903909", "#fff5e3", "#6d6d6d", "#1c5e75"],
+        "dusk" => ["#2d3236", "#ffffff", "#a1bfde", "#212d3b", "#a6a6a6", "#70ebde"],
+        "night-sky" | "nightsky" => ["#000000", "#ffffff", "#d6b4fd", "#2b2b2b", "#a6a6a6", "#8080ff"],
+        _ => return None,
+    }.map(|h| crate::color::hex(h).unwrap_or(crate::Color::BLACK));
+    Some(SystemContrast { window, text, highlight, highlight_text, disabled, button: window, button_text: text, link })
+}
 /// The desktop's light or dark preference where winit reports none (Linux: the XDG desktop
 /// portal's `color-scheme`). None leaves the host's own default.
 #[cfg(all(target_os = "linux", feature = "dbus"))]

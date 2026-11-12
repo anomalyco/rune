@@ -1,0 +1,1 @@
+- `RUNE_CONTRAST=aquatic|desert|dusk|night-sky` gives a window Windows 11's contrast theme of that name through `Cx::system_contrast`, without turning it on for the machine: for captures and checks.
