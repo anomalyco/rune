@@ -196,6 +196,30 @@ fn a_clip_dropped_during_a_parking_pass_is_destroyed_outside_the_lock() {
     );
 }
 
+/// A redraw of a parked clip re-parks it every frame, where dev allocated nothing: the pass's
+/// upgraded owners keep their capacity across passes. // differs from dev: dev's temporary
+/// upgrades needed no buffer at all.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_warm_parking_pass_keeps_its_buffers_capacity() {
+    let _only = PARKED_TESTS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let clips: Vec<Video> = (0..4).map(|_| Video::file(fixture())).collect();
+    // Park all four, then pass over them until the buffer fits them.
+    for _ in 0..5 {
+        for clip in &clips {
+            assert!(backend::parked_with(&clip.shared).is_empty(), "four parked clips fit");
+        }
+    }
+    let warm = macos::held_capacity();
+    assert!(warm >= clips.len(), "the pass keeps every upgraded clip: {warm}");
+    for _ in 0..100 {
+        for clip in &clips {
+            assert!(backend::parked_with(&clip.shared).is_empty(), "nothing is evicted");
+        }
+    }
+    assert_eq!(macos::held_capacity(), warm, "a warm redraw of parked clips allocates nothing");
+}
+
 /// Only formats that no build reads fail at once; with `ogg-audio`, Ogg audio opens later.
 #[cfg(target_os = "macos")]
 #[test]
