@@ -15,6 +15,9 @@
 //! allocates nothing while other tests run in parallel. [`thread_allocated_bytes`] counts the
 //! bytes they asked for, for a per-frame allocation figure.
 
+#[cfg(feature = "alloc-sites")]
+pub mod sites;
+
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::sync::atomic::{AtomicI64, AtomicPtr, AtomicU64, AtomicUsize, Ordering::{Acquire, Relaxed, Release}};
@@ -123,6 +126,8 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for Counting<A> {
         if !p.is_null() {
             counted(layout.size());
             grew(layout.size());
+            #[cfg(feature = "alloc-sites")]
+            sites::allocated(p, layout.size());
         }
         p
     }
@@ -133,21 +138,29 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for Counting<A> {
         if !p.is_null() {
             counted(layout.size());
             grew(layout.size());
+            #[cfg(feature = "alloc-sites")]
+            sites::allocated(p, layout.size());
         }
         p
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        #[cfg(feature = "alloc-sites")]
+        sites::freed(ptr);
         unsafe { self.inner.dealloc(ptr, layout) };
         shrank(layout.size());
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        #[cfg(feature = "alloc-sites")]
+        sites::freed(ptr);
         let p = unsafe { self.inner.realloc(ptr, layout, new_size) };
         if !p.is_null() {
             counted(new_size);
             shrank(layout.size());
             grew(new_size);
+            #[cfg(feature = "alloc-sites")]
+            sites::allocated(p, new_size);
         }
         p
     }

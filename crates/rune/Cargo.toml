@@ -14,6 +14,8 @@ embedded-fonts = []
 webgl = ["wgpu/webgl"]
 # Headless benchmark instrumentation; ordinary builds contain no phase clocks.
 frame-profile = ["dep:procwatch"]
+# A measuring build's heap dumps (procwatch's `alloc-sites`) also list the GPU device's allocations.
+alloc-sites = ["dep:procwatch", "procwatch/alloc-sites"]
 # Native Open, Save and folder dialogs: rfd on macOS and Windows, the XDG desktop portal over zbus on Linux.
 native-file-dialog = ["dep:rfd", "dbus"]
 hot = ["dep:subsecond", "dep:dioxus-devtools"]
