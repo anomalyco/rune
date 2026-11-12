@@ -462,6 +462,7 @@ impl<S: 'static> Runtime<S> {
                 settled = true;
                 break;
             }
+            crate::marks::mark("c.settle_again");
             self.discard_measured(measured);
             measured = self.measure(tx);
         }

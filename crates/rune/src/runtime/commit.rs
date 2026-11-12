@@ -145,25 +145,32 @@ impl<S: 'static> Runtime<S> {
         }
         self.note_drawn_rows();
         let mut measured = self.measure_commit(tx);
+        crate::marks::mark("c.measured");
         // A new zoom lays the view out again at the scale and size it gives, in this commit.
         if self.apply_zoom(measured.zoom) {
             self.discard_measured(measured);
             measured = self.measure_commit(tx);
+            crate::marks::mark("c.zoom_again");
         }
         self.focus_before_commit = self.focus.owned();
         // Settle layout reads first so a field that mounts once a rect is known is in `nodes`.
         measured = self.settle_layout_reads(measured, tx);
+        crate::marks::mark("c.settled");
         if self.sync_requested_focus(&mut measured.nodes) {
             self.discard_measured(measured);
             measured = self.measure(tx);
             measured = self.settle_layout_reads(measured, tx);
+            crate::marks::mark("c.focus_again");
         }
         if measured.caret_read && self.caret_moved(Some(&measured.nodes)) {
             self.discard_measured(measured);
             measured = self.measure(tx);
             measured = self.settle_layout_reads(measured, tx);
+            crate::marks::mark("c.caret_again");
         }
+        crate::marks::mark("c.apply");
         self.apply(measured, tx);
+        crate::marks::mark("c.applied");
         self.scene.keep_flights(false);
         self.memo.keep_since(self.memo_since);
         self.track_focused_rows();
