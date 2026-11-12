@@ -37,6 +37,14 @@ struct Dest {
 thread_local! {
     /// By HWND: drop targets live on the UI thread that registered them, as OLE calls them there.
     static DESTS: RefCell<HashMap<isize, Dest>> = RefCell::new(HashMap::new());
+    /// A drag out of this app runs that its windows don't take (`DragItem::within_app` off).
+    static MUTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// While a drag out of the app runs, its windows refuse it, as they refuse it on macOS, so a
+/// drag let go over the app ends cancelled instead of handing the app its own files.
+pub(crate) fn mute(on: bool) {
+    MUTED.with(|m| m.set(on));
 }
 
 fn hwnd(window: &winit::window::Window) -> Option<HWND> {
@@ -112,9 +120,10 @@ impl Target {
     }
 }
 
-/// The paths `data` carries as a shell file list (`CF_HDROP`); none for any other drag.
+/// The paths `data` carries as a shell file list (`CF_HDROP`); none for any other drag, or
+/// while the app's own drag is muted.
 fn paths(data: Option<&IDataObject>) -> Vec<PathBuf> {
-    let Some(data) = data else { return Vec::new() };
+    let Some(data) = data.filter(|_| !MUTED.with(|m| m.get())) else { return Vec::new() };
     let format = FORMATETC { cfFormat: CF_HDROP.0, ptd: std::ptr::null_mut(), dwAspect: DVASPECT_CONTENT.0, lindex: -1, tymed: TYMED_HGLOBAL.0 as u32 };
     // SAFETY: a `CF_HDROP` medium holds an HDROP in its HGLOBAL, read and released here.
     unsafe {
