@@ -1,0 +1,1 @@
+- **Virtual lists: after a jump, the fill counts only the rows its overscan still lacks.** When the mounted rows sat wholly above or below the overscan, the unfilled count also took in every row between the two, so moving the overscan read as progress and reset the resume limit though none of its rows had mounted.

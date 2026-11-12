@@ -450,12 +450,15 @@ impl VirtualList {
 
     /// How many rows of the overscan around `offset` are still unmounted: zero when the window
     /// is filled. The fill measures this at its bound to tell a list that is still making
-    /// progress from one whose heights keep changing under it.
+    /// progress from one whose heights keep changing under it. Only the overscan's own rows
+    /// count: after a jump the mounted window may lie wholly above or below it, and the rows
+    /// between the two are wanted by neither.
     pub(crate) fn unfilled(&self, offset: f32, pinned: bool) -> usize {
         if self.keys.is_empty() { return 0; }
         if pinned { return self.keys.len().saturating_sub(self.range.end); }
         let (start, end) = self.overscan(offset.min(self.max_offset()));
-        self.range.start.saturating_sub(start) + end.saturating_sub(self.range.end)
+        let mounted = self.range.end.min(end).saturating_sub(self.range.start.max(start));
+        end.saturating_sub(start) - mounted
     }
 }
 
@@ -508,5 +511,29 @@ mod tests {
         assert_eq!(bounds.of(&children[0]), 70.0, "between its insets in the padding box");
         assert_eq!(bounds.of(&children[1]), f32::INFINITY, "free to grow past its parent");
         assert_eq!(bounds.of(&children[3]), 55.0, "in flow, what padding and the fixed sibling leave");
+    }
+
+    /// The unfilled count is the overscan's rows the window doesn't hold, wherever the window
+    /// sits: a window wholly above or below the overscan after a jump leaves exactly the
+    /// overscan to fill, not the rows between them, and no row counts twice.
+    #[test]
+    fn unfilled_counts_only_the_overscan_rows_the_window_lacks() {
+        let mut v = VirtualList::default();
+        v.set_estimate(20.0);
+        v.set_keys((0..100).map(|i| format!("r{i}")).collect(), 0, None);
+        v.viewport = 40.0;
+        // At 1080 the overscan runs from 1000 to 1200: rows 50 to 59.
+        let (offset, wanted) = (1080.0, 50..60);
+        for a in 0..=100 {
+            for b in a..=100 {
+                v.range = a..b;
+                let missing = wanted.clone().filter(|i| !(a..b).contains(i)).count();
+                assert_eq!(v.unfilled(offset, false), missing, "window {a}..{b}");
+            }
+        }
+        v.range = 0..10;
+        assert_eq!(v.unfilled(offset, false), 10, "a window above the overscan after a jump");
+        v.range = 90..100;
+        assert_eq!(v.unfilled(offset, false), 10, "a window below the overscan after a jump");
     }
 }
