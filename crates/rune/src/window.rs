@@ -51,6 +51,10 @@ mod redraw;
 use redraw::{Redraw, RedrawEffect, RedrawEvent};
 #[cfg(target_os = "windows")]
 use redraw::{Steady, SteadyEvent};
+#[cfg(target_os = "windows")]
+mod covered_draw;
+#[cfg(target_os = "windows")]
+use covered_draw::{CoveredDraw, CoveredDrawEvent};
 mod presented;
 pub(crate) use presented::Presented;
 use presented::{composed, composing};

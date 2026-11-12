@@ -37,8 +37,13 @@ impl<S: 'static> AnyHost for Host<S> {
         let handover = win.and_then(|w| w.handover_deadline(now));
         #[cfg(not(target_os = "windows"))]
         let handover = None;
+        #[cfg(target_os = "windows")]
+        let covered_draw = win.and_then(|w| w.covered_draw.deadline());
+        #[cfg(not(target_os = "windows"))]
+        let covered_draw = None;
         runtime.into_iter()
             .chain(handover)
+            .chain(covered_draw)
             .chain(win.and_then(|w| w.first_frame.deadline().map(|(retry, _)| retry)))
             .chain(win.and_then(|w| w.first_frame.ready_deadline()))
             .chain(win.and_then(Win::cloak_deadline))
@@ -167,6 +172,11 @@ impl<S: 'static> Host<S> {
         if let Some(w) = &self.win { w.native.cloak.lift_if_due(&w.window, Instant::now()); }
         #[cfg(target_os = "windows")]
         self.watch_handover(Instant::now());
+        #[cfg(target_os = "windows")]
+        if let Some(w) = &mut self.win && w.covered_draw.due(Instant::now()) {
+            w.covered_draw = w.covered_draw.step(CoveredDrawEvent::Due);
+            w.request_redraw();
+        }
         if let Some(w) = &mut self.win && let Some((retry, until)) = w.first_frame.deadline() && retry <= Instant::now() {
             if until <= Instant::now() {
                 let notified = w.first_frame.notified();

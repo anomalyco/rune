@@ -301,6 +301,7 @@ impl<S: 'static> Host<S> {
             timer_frame: TimerFrame::default(),
             presented: None,
             steady: Steady::Rest,
+            covered_draw: CoveredDraw::Current,
             redraw: std::cell::Cell::new(Redraw::Idle),
         });
         self.apply_placement(event_loop);
@@ -355,8 +356,15 @@ impl<S: 'static> Host<S> {
         // The frame both renderers draw to hand over draws in sight or not: covered, the window
         // would stay on the CPU until it showed again.
         let handing = matches!(l.native.mode, SurfaceMode::HandingOver { done: None, .. });
-        let covered = !owed && !handing && ((!launcher && !self.life.uncovered()) || l.minimized());
+        // A covered window's owed frame (`CoveredDraw`) draws, settled.
+        let cover_owed = !l.minimized() && l.covered_draw.drawing();
+        let covered = !owed && !handing && !cover_owed && ((!launcher && !self.life.uncovered()) || l.minimized());
         if covered { return self.covered_frame(); }
+        if cover_owed {
+            self.rt.settle_all();
+            if let Some(w) = self.win.as_mut() { w.covered_draw = w.covered_draw.step(CoveredDrawEvent::Drawn); }
+        }
+        let Some(l) = self.win.as_ref() else { return };
         if !owed && !handing && !resizing && l.backing_off(Instant::now()) { return; }
         let Some(l) = self.win.as_mut() else { return };
         l.timer_frame.drawn();
