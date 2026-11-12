@@ -1,0 +1,1 @@
+- **`FileTree` and `natural_cmp` sort by `rune::text::compare_names`:** a file tree's names follow the interface language's alphabet through the OS's collator (Swedish ä after z, `file2` before `file10`), instead of a code-point order with case folded. `natural_cmp` keeps its signature.
