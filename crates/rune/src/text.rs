@@ -497,7 +497,7 @@ impl TextSystem {
     /// Previously emitted quads must no longer be sampled after this call. Runtime
     /// calls this automatically; direct text/renderer users call it before shaping.
     pub fn begin_frame(&mut self) {
-        self.begin_frame_pinned(0);
+        let _ = self.begin_frame_pinned(0);
     }
 
     /// Forgets every text's raster path and cached glyph runs, so the next paint places every
@@ -507,14 +507,16 @@ impl TextSystem {
         self.glyph_cache = Default::default();
     }
 
-    pub(crate) fn begin_frame_pinned(&mut self, pinned_mask: u32) {
+    /// [`Self::begin_frame`] keeping the pages in `pinned_mask`. Returns when the window should
+    /// wake for the glyph mask cache's first write (`mask_cache`).
+    pub(crate) fn begin_frame_pinned(&mut self, pinned_mask: u32) -> Option<std::time::Duration> {
         // A subpixel mode draws grayscale until the renderer can blend by channel, and after it
         // says it can't.
         if self.requested.lcd() && self.requested.drawn(self.lcd_ok()) != self.smoothing {
             self.set_font_smoothing(self.requested);
         }
         self.atlas.begin_frame(pinned_mask);
-        self.mask_cache_frame();
+        let wake = self.mask_cache_frame(true);
         self.paths.begin_frame();
         self.glyph_cache.begin_frame();
         if self.color_bytes > COLOR_GLYPH_BUDGET {
@@ -535,6 +537,7 @@ impl TextSystem {
         }
         for c in self.color_glyphs.values_mut() { c.used = false; }
         self.color_icons.begin_frame();
+        wake
     }
 
     /// `shape` is [`shape_key`] of the same text when the caller already has it.
@@ -613,6 +616,8 @@ impl TextSystem {
             return l;
         }
         self.shaped += 1;
+        crate::marks::add("text.shaped", 1);
+        let _shape_ns = crate::marks::Timed::start("text.shape_ns", true);
         let _shape_time = crate::frame::profile::Scope::new(crate::frame::profile::Phase::Text);
         let mono_style = matches!(style.family, Family::Mono | Family::SystemMono);
         let tabs = if text.contains('\t') { mono_tab_stops(text, spans, mono_style) } else { Vec::new() };
