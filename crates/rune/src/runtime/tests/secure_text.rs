@@ -207,7 +207,7 @@ fn revealed_secure_input_matches_plain_layout_and_keeps_protections() {
         assert!(rt.copy_request.is_none(), "⌘{} on revealed field must never write to clipboard", ch.to_uppercase());
         assert_eq!(rt.state.secret.text, "hé🙂 world");
     }
-    rt.ime(Ime::Preedit("comp".into(), Some((0, 4))));
+    rt.ime(Ime::Preedit("comp".into(), Some((0, 4)), Vec::new()));
     rt.ime(Ime::Commit("commit".into()));
     rt.frame(0.0);
     assert_eq!(rt.state.secret.text, "hé🙂 world");

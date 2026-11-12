@@ -214,15 +214,26 @@ pub(crate) fn parse_script(list: Value) -> Vec<Ev> {
             }
             "paste" => out.push(Ev { t, kind: Kind::Paste(paste_content(&e)), pos: Pos::Rel(0.0, 0.0) }),
             // What an input method composes (`preedit`, its caret or selection as a byte range in
-            // `cursor`) or commits, as the platform's IME hands it to the focused field or caret.
+            // `cursor`), commits, or takes back to convert again (`select`, a byte range of the
+            // field's text), as the platform's IME hands it to the focused field or caret.
             "ime" => {
                 let ime = match (e["commit"].as_str(), e["preedit"].as_str()) {
+                    _ if e["select"].is_array() => {
+                        let at = |i: usize| e["select"][i].as_u64().unwrap_or(0) as usize;
+                        crate::Ime::Select(at(0)..at(1))
+                    }
                     (Some(text), _) => crate::Ime::Commit(text.to_owned()),
                     (None, Some(text)) => {
                         let at = |i: usize| e["cursor"][i].as_u64().map(|n| n as usize);
-                        crate::Ime::Preedit(text.to_owned(), at(0).zip(at(1)))
+                        // `clauses`: `[[start, end], [start, end, true]]`, byte ranges, `true` for the one being converted.
+                        let clauses = e["clauses"].as_array().into_iter().flatten().filter_map(|c| {
+                            let (a, b) = (c[0].as_u64()? as usize, c[1].as_u64()? as usize);
+                            let clause = crate::Clause::new(a..b);
+                            Some(if c[2].as_bool() == Some(true) { clause.target() } else { clause })
+                        }).collect();
+                        crate::Ime::Preedit(text.to_owned(), at(0).zip(at(1)), clauses)
                     }
-                    (None, None) => die("an ime event needs a \"commit\" or a \"preedit\" (\"\" ends a composition)"),
+                    (None, None) => die("an ime event needs a \"commit\", a \"preedit\" (\"\" ends a composition) or a \"select\""),
                 };
                 out.push(Ev { t, kind: Kind::Ime(ime), pos: Pos::Rel(0.0, 0.0) });
             }

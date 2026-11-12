@@ -330,7 +330,7 @@ fn timing_slop_and_target_changes_reset_multiclick_count_and_preedit_ignores_it(
     // 4. A press mid-composition writes the composition into the text, as a browser's field
     // does, and puts the caret where it landed.
     rt.frame(1.0);
-    rt.ime(Ime::Preedit("かん".into(), Some((0, 6))));
+    rt.ime(Ime::Preedit("かん".into(), Some((0, 6)), Vec::new()));
     rt.frame(1.0 / 60.0);
     click(&mut rt, pt);
     assert!(rt.state.single.preedit().is_none());

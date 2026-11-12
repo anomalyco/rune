@@ -61,9 +61,9 @@ fn caret_follows_typing_scrolling_and_composition() {
     assert!((scrolled[1] - (typed[1] - 40.0)).abs() < 0.01, "rides the scroll: {scrolled:?}");
 
     // Composing あい with the IME cursor after あ: the caret sits inside the composition.
-    rt.ime(Ime::Preedit("あい".into(), Some((3, 3))));
+    rt.ime(Ime::Preedit("あい".into(), Some((3, 3)), Vec::new()));
     let mid = popup_follows(&mut rt, "composition");
-    rt.ime(Ime::Preedit("あい".into(), Some((6, 6))));
+    rt.ime(Ime::Preedit("あい".into(), Some((6, 6)), Vec::new()));
     let end = popup_follows(&mut rt, "composition end");
     assert!(mid[0] > scrolled[0] + 5.0 && end[0] > mid[0] + 5.0, "{scrolled:?} {mid:?} {end:?}");
 

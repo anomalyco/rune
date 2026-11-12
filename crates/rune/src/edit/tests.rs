@@ -43,7 +43,7 @@ fn secure_unicode_editing_has_no_history_or_export() {
     }
     e.paste("界");
     assert_eq!((&*e.text, e.anchor, e.focus), ("h界x", 4, 4));
-    e.ime(&Ime::Preedit("composition".into(), None));
+    e.ime(&Ime::Preedit("composition".into(), None, Vec::new()));
     e.ime(&Ime::Commit("commit".into()));
     assert!(e.preedit().is_none());
     assert_eq!(e.text, "h界x");
@@ -109,7 +109,7 @@ fn secure_revealed_uses_plain_display_and_words_while_keeping_protections() {
     e.undo();
     e.redo();
     assert_eq!(e.text, "h! world");
-    e.ime(&Ime::Preedit("comp".into(), Some((0, 4))));
+    e.ime(&Ime::Preedit("comp".into(), Some((0, 4)), Vec::new()));
     e.ime(&Ime::Commit("commit".into()));
     assert!(e.preedit().is_none());
     assert_eq!(e.text, "h! world");
@@ -173,7 +173,7 @@ fn pristine_secure_backspace_at_start_and_ime_do_not_bypass_protection() {
     assert!(e.text.is_empty());
     assert!(!e.has_history());
     e.replace_text("fictional-secret");
-    e.ime(&Ime::Preedit("composition".into(), None));
+    e.ime(&Ime::Preedit("composition".into(), None, Vec::new()));
     assert!(e.preedit().is_none());
     assert!(e.is_pristine());
     e.ime(&Ime::Commit("commit".into()));
@@ -401,8 +401,8 @@ fn history_deletion_cut_and_ime_are_atomic() {
     assert_eq!(out.copy.as_deref(), Some("é"));
     undo(&mut e, false);
     assert_eq!((e.anchor, e.focus), (3, 1));
-    e.ime(&Ime::Preedit("に".into(), None));
-    e.ime(&Ime::Preedit("日本".into(), None));
+    e.ime(&Ime::Preedit("に".into(), None, Vec::new()));
+    e.ime(&Ime::Preedit("日本".into(), None, Vec::new()));
     e.ime(&Ime::Commit("日本".into()));
     assert_eq!(e.text, "h日本🙂");
     undo(&mut e, false);
@@ -410,7 +410,7 @@ fn history_deletion_cut_and_ime_are_atomic() {
     assert!(e.preedit().is_none());
     undo(&mut e, true);
     assert_eq!(e.text, "h日本🙂");
-    e.ime(&Ime::Preedit("x".into(), None));
+    e.ime(&Ime::Preedit("x".into(), None, Vec::new()));
     undo(&mut e, false);
     assert_eq!(e.text, "h日本🙂", "undo cancels preedit without undoing committed text");
     assert!(e.preedit().is_none());
@@ -549,7 +549,7 @@ fn typing_selection_and_submit() {
     assert_eq!(e.selected(), "o");
     e.key(&k(Key::Text("0".into())), None);
     assert_eq!(e.text, "héll0 ");
-    e.ime(&Ime::Preedit("に".into(), None));
+    e.ime(&Ime::Preedit("に".into(), None, Vec::new()));
     assert_eq!(e.display().0, "héll0に ");
     e.ime(&Ime::Commit("日".into()));
     assert_eq!(e.text, "héll0日 ");
@@ -793,7 +793,7 @@ fn undo_redo_and_ime_preserve_marks_blocks_and_spans() {
     e.toggle_mark(Mark::Italic);
     // Suppose caller supplies a syntax span covering "main" (3..7 in model).
     assert_eq!(e.map_range_to_display(3, 7), vec![(3, 7)]);
-    e.ime(&Ime::Preedit("日".into(), Some((0, 3))));
+    e.ime(&Ime::Preedit("日".into(), Some((0, 3)), Vec::new()));
     // During preedit ("fn 日main() {}"), "main" in display is shifted by 3 bytes to 6..10!
     assert_eq!(e.display().0, "fn 日main() {}");
     assert_eq!(e.map_range_to_display(3, 7), vec![(6, 10)]);
@@ -903,7 +903,7 @@ fn spans_on_text_input_hold_through_ime_and_undo() {
 
     // Start IME preedit at byte 0: display text becomes "あlet x = 1;", so caller's 0..3
     // span on `edit.text` shifts automatically to 3..6 in the rendered TextSpec!
-    rt.ime(Ime::Preedit("あ".into(), Some((0, 3))));
+    rt.ime(Ime::Preedit("あ".into(), Some((0, 3)), Vec::new()));
     rt.frame(0.0);
     let spec_spans = &rt.nodes.iter().find(|n| n.key.as_deref() == Some("ed")).unwrap().text.as_ref().unwrap().spans;
     assert_eq!(spec_spans.len(), 1);

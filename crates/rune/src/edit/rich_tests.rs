@@ -74,7 +74,7 @@ fn direct_text_assignment_never_panics() {
     }
     let mut e = fresh();
     stale(&mut e);
-    e.ime(&Ime::Preedit("に".into(), None));
+    e.ime(&Ime::Preedit("に".into(), None, Vec::new()));
     e.ime(&Ime::Commit("日".into()));
     assert_invariants(&e, "after IME");
     let mut e = fresh();
@@ -97,7 +97,7 @@ fn direct_text_assignment_never_panics() {
     rt.frame(0.0);
     rt.update(|s, _| stale(&mut s.e));
     rt.frame(0.0);
-    rt.ime(Ime::Preedit("あ".into(), None));
+    rt.ime(Ime::Preedit("あ".into(), None, Vec::new()));
     rt.frame(0.0);
     rt.key(k(Key::Right));
     rt.ime(Ime::Commit("あ".into()));
@@ -195,7 +195,7 @@ fn return_on_a_blank_last_line_leaves_a_code_block_in_one_undo_step() {
     // Composing on a blank code line and pressing Return to commit stays in the block.
     // IME commits join typing; give this composition its own undo boundary.
     e.break_history_group();
-    e.ime(&Ime::Preedit("に".into(), None));
+    e.ime(&Ime::Preedit("に".into(), None, Vec::new()));
     assert!(!e.key(&k(Key::Enter), None).submit);
     e.ime(&Ime::Commit("日".into()));
     assert_eq!((e.text.as_str(), e.blocks()), ("let x = 1;\n日", &[Block::Code; 2][..]));
@@ -261,7 +261,7 @@ fn down_or_right_at_the_end_of_a_trailing_code_block_or_quote_adds_a_paragraph()
         assert_eq!((e.text.as_str(), e.blocks()), ("x", &[Block::Code][..]), "selection ending at end");
 
         let mut e = TextEdit::from_parts("x", vec![], vec![Block::Code]);
-        e.ime(&Ime::Preedit("に".into(), None));
+        e.ime(&Ime::Preedit("に".into(), None, Vec::new()));
         e.key(&k(key.clone()), None);
         assert_eq!((e.text.as_str(), e.blocks()), ("x", &[Block::Code][..]), "during IME preedit");
 
@@ -547,7 +547,7 @@ fn random_edits_keep_ranges_blocks_and_soft_breaks_consistent() {
                 16 => { e.paste_html(&clip_html.clone(), &clip.clone()); }
                 17 => {
                     let p = PIECES[next(6) as usize];
-                    e.ime(&Ime::Preedit(p.into(), None));
+                    e.ime(&Ime::Preedit(p.into(), None, Vec::new()));
                     if next(2) == 0 { e.ime(&Ime::Commit(p.into())); }
                 }
                 18 => { let a = next(e.text.len() as u64 + 2) as usize; let f = next(e.text.len() as u64 + 2) as usize; e.set_selection(a, f); }
@@ -810,12 +810,12 @@ fn undo_group_is_unwind_safe_and_interacts_with_clear_history_paste_and_soft_bre
 fn an_undo_group_leaves_ime_composition_alone() {
     let mut e = TextEdit::new("x").rich();
     e.set_caret(1);
-    e.ime(&Ime::Preedit("に".into(), None));
+    e.ime(&Ime::Preedit("に".into(), None, Vec::new()));
     e.undo_group(|e| e.ime(&Ime::Commit("日本".into())));
     assert_eq!((e.text.as_str(), e.preedit().is_none()), ("x日本", true));
     undo(&mut e, false);
     assert_eq!(e.text, "x");
-    e.ime(&Ime::Preedit("a".into(), None));
+    e.ime(&Ime::Preedit("a".into(), None, Vec::new()));
     e.undo_group(|e| e.undo());
     assert!(e.preedit().is_some(), "undo inside a group does nothing");
 }
@@ -868,7 +868,7 @@ fn a_composition_never_splits_a_pill() {
     let mut e = with_pill();
     e.anchor = 4;
     e.focus = 4;
-    e.ime(&Ime::Preedit("に".into(), None));
+    e.ime(&Ime::Preedit("に".into(), None, Vec::new()));
     let (shown, pre) = e.display();
     let (pa, _) = pre.unwrap();
     assert!(pa <= 2 || pa >= 10, "preedit at {pa} in {shown:?}");
@@ -1010,7 +1010,7 @@ fn pill_edge_cases_words_lines_bidi_and_direct_text_mutation() {
     // IME preedit right after a pill does not bleed its underline box into the pill's chip.
     let mut ime_e = with_pill();
     ime_e.set_caret(10);
-    ime_e.ime(&Ime::Preedit("に".into(), None));
+    ime_e.ime(&Ime::Preedit("に".into(), None, Vec::new()));
     let (disp, pre) = ime_e.display();
     let (pa, pb) = pre.unwrap();
     let p_chips: Vec<crate::text::PillChip> = ime_e

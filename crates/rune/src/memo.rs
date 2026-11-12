@@ -1169,7 +1169,7 @@ mod tests {
         rt.frame(0.0);
         rt.key(KeyEvent { key: Key::Left, mods: Default::default() });
         rt.frame(1.0 / 60.0);
-        rt.ime(Ime::Preedit("X".into(), None));
+        rt.ime(Ime::Preedit("X".into(), None, Vec::new()));
         rt.frame(1.0 / 60.0);
         let shown = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("field")).and_then(|e| e.text);
         assert_eq!(shown.as_deref(), Some("aXb"), "the composition draws at the moved caret");

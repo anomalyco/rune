@@ -29,9 +29,9 @@ impl<S> AppIme<S> {
     /// Steps the composition with what the app is about to hear.
     fn step(&mut self, ev: &Ime) {
         match ev {
-            Ime::Preedit(s, _) => self.replace(if s.is_empty() { AppComposition::Idle } else { AppComposition::Composing(s.clone()) }),
+            Ime::Preedit(s, ..) => self.replace(if s.is_empty() { AppComposition::Idle } else { AppComposition::Composing(s.clone()) }),
             Ime::Commit(_) => self.replace(AppComposition::Idle),
-            Ime::Enabled | Ime::Disabled => {}
+            Ime::Select(_) | Ime::Enabled | Ime::Disabled => {}
         }
     }
 
@@ -52,7 +52,7 @@ impl<S: 'static> Runtime<S> {
     /// method turning on or off is only the app's to hear.
     pub(super) fn run_ime(&mut self, ev: Ime, one: &mut Tx) -> bool {
         let app = self.app_ime.composing() || matches!(ev, Ime::Enabled | Ime::Disabled) || self.focused_input().is_none();
-        let active = self.composing() || matches!(&ev, Ime::Preedit(s, _) | Ime::Commit(s) if !s.is_empty());
+        let active = self.composing() || matches!(&ev, Ime::Preedit(s, ..) | Ime::Commit(s) if !s.is_empty());
         let ran = if app { self.app_ime_event(&ev, one) } else { self.with_focused(|e| e.ime(&ev), one) };
         // The key that confirmed or cancelled a composition comes back up unheard.
         if ran && active { self.key_releases.ime_took_key(); }

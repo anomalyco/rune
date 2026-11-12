@@ -529,3 +529,25 @@ pub enum OptionAsAlt {
     #[default]
     None,
 }
+
+/// Rune: the focused field's text around its selection (the selection a byte range of it), which
+/// the input method reads through `selectedRange` and `attributedSubstringForProposedRange:` to
+/// convert committed text again; `None` when nothing takes text.
+pub fn set_ime_text(text: Option<(String, std::ops::Range<usize>)>) {
+    crate::platform_impl::ime_text::TEXT.with_borrow_mut(|t| *t = text);
+}
+
+/// Rune: the clauses `setMarkedText:` gave marked text `preedit` (byte ranges, whether each is
+/// the one being converted), if it's the last marked text.
+pub fn take_ime_clauses(preedit: &str) -> Vec<(std::ops::Range<usize>, bool)> {
+    crate::platform_impl::ime_text::CLAUSES.with_borrow_mut(|c| match c.take() {
+        Some((text, clauses)) if text == preedit => clauses,
+        _ => Vec::new(),
+    })
+}
+
+/// Rune: the byte range of the text given to [`set_ime_text`] that a reconversion's marked text
+/// replaces, once.
+pub fn take_ime_replacement() -> Option<std::ops::Range<usize>> {
+    crate::platform_impl::ime_text::REPLACEMENT.with_borrow_mut(|r| r.take())
+}

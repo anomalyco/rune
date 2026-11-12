@@ -413,8 +413,14 @@ impl<S: 'static> Host<S> {
                 if redraw { l.request_redraw(); }
             }
             WindowEvent::Ime(ime) => {
+                // A reconversion the input method confirmed comes first: the composition it
+                // starts replaces that range.
+                if let Some(range) = crate::platform::ime::take_select(&l.window) { rt.ime(Ime::Select(range)); }
                 match ime {
-                    WIme::Preedit(s, cur) => rt.ime(Ime::Preedit(s, cur)),
+                    WIme::Preedit(s, cur) => {
+                        let clauses = crate::platform::ime::take_clauses(&l.window, &s);
+                        rt.ime(Ime::Preedit(s, cur, clauses))
+                    }
                     WIme::Commit(s) => rt.ime(Ime::Commit(s)),
                     WIme::Enabled => rt.ime(Ime::Enabled),
                     WIme::Disabled => rt.ime(Ime::Disabled),
