@@ -167,6 +167,12 @@ impl SurfaceMode {
 
 /// Threads the CPU renderer paints on: the UI thread and up to five workers that park between
 /// frames.
+/// The last frame copied to the window, whole, again (`draw_cpu`).
+fn copy_last(cpu: &Cpu, window: &Window) {
+    let (Shown::Copied(size), Buffer::Ready(dib)) = (&cpu.shown, &cpu.buffer) else { return };
+    if let Some(hwnd) = crate::platform::win32::hwnd(window) { dib.present(hwnd, *size, Blit::All); }
+}
+
 /// The first frame, painted while the window was hidden, into the window that now shows: its own
 /// colour first if the painter left tiles to it, then the frame's rects, one by one (nothing
 /// composes the window before its cloak lifts).
@@ -321,14 +327,23 @@ impl<S: 'static> Host<S> {
     /// changed, and only those rectangles go to the window. While handing over, the GPU draws the
     /// same instances too.
     pub(super) fn draw_cpu(&mut self, resizing: bool) {
-        // Handing over, with the GPU's frame not finished yet: nothing new until it is.
-        if self.win.as_ref().is_some_and(|w| matches!(w.native.mode, SurfaceMode::HandingOver { done: Some(_), .. })) { return; }
+        // The system threw away what the window showed (it was covered whole, then came back) and
+        // asks for it again: the window is in sight, whatever the occlusion tracker said last, so
+        // this frame is drawn and copied whole. Skipped, the system would count it painted, and the
+        // window would show what's behind it until something changed.
+        let owed = self.win.as_ref().is_some_and(|w| crate::platform::win32::repaint_owed(&w.window));
+        // Handing over, with the GPU's frame not finished yet: nothing new until it is (a repaint
+        // the system asks for meanwhile gets the last frame).
+        if let Some(w) = self.win.as_mut() && let SurfaceMode::HandingOver { cpu, done: Some(_), .. } = &mut w.native.mode {
+            if owed { copy_last(cpu, &w.window); }
+            return;
+        }
         let launcher = self.launcher();
         let Some(l) = self.win.as_ref() else { return };
         let hidden = launcher && !self.life.shown();
-        let covered = (!launcher && !self.life.uncovered()) || l.minimized();
+        let covered = !owed && ((!launcher && !self.life.uncovered()) || l.minimized());
         if covered { return self.covered_frame(); }
-        if !resizing && l.backing_off(Instant::now()) { return; }
+        if !owed && !resizing && l.backing_off(Instant::now()) { return; }
         let Some(l) = self.win.as_mut() else { return };
         l.timer_frame.drawn();
         if self.native_handle.native.number.load(Ordering::Relaxed) == 0 {
@@ -391,7 +406,7 @@ impl<S: 'static> Host<S> {
                     crate::marks::mark_once(&FIRST_PAINT, "frame.first.painted");
                     *shown = match std::mem::replace(shown, Shown::Nothing) {
                         Shown::Copied(size) => {
-                            let blit = if size == (width, height) { Blit::Bounds(&painted.rects) } else { Blit::All };
+                            let blit = if size == (width, height) && !owed { Blit::Bounds(&painted.rects) } else { Blit::All };
                             if let Some(hwnd) = crate::platform::win32::hwnd(&l.window) { dib.present(hwnd, (width, height), blit); }
                             Shown::Copied((width, height))
                         }
