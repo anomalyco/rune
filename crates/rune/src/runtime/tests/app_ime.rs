@@ -57,7 +57,7 @@ fn the_app_hears_the_composition_and_typing_arrives_once() {
     rt.frame(0.0);
     press(&mut rt, Key::Enter);
     assert_eq!(rt.state.log, [
-        "key Text(\"a\")", "Enabled", "Preedit(\"か\", Some((0, 3)))", "Commit(\"家\")", "key Enter",
+        "key Text(\"a\")", "Enabled", "Preedit(\"か\", Some((0, 3)), [])", "Commit(\"家\")", "key Enter",
     ], "plain typing is a key; Return and Escape mid-composition are the input method's");
 }
 
@@ -74,7 +74,7 @@ fn a_focused_field_takes_the_input_method_but_the_apps_composition_ends_in_the_a
     rt.ime(Ime::Preedit("ね".into(), None, Vec::new()));
     rt.ime(Ime::Commit("猫".into()));
     rt.frame(0.0);
-    assert_eq!(rt.state.log, ["Preedit(\"か\", None)", "Preedit(\"\", None)", "Disabled"]);
+    assert_eq!(rt.state.log, ["Preedit(\"か\", None, [])", "Preedit(\"\", None, [])", "Disabled"]);
     assert_eq!(rt.state.field.text, "猫", "the field's own composition stays the field's");
 }
 
