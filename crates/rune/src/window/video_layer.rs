@@ -101,7 +101,9 @@ struct Entry {
     last: Option<Place>,
     /// The last frame drew it inside an isolated layer, where a punch can't reach the window.
     isolated: bool,
-    visual: Option<IDCompositionVisual>,
+    /// Its layer's visual, and the decoder's surface handle it shows: a decoder opened again (a
+    /// replaced GPU device) makes a new layer with a new handle.
+    visual: Option<(IDCompositionVisual, usize)>,
     /// What `RUNE_VIDEO_LOG` last printed about it.
     logged: Option<(bool, bool, bool, bool, bool, bool, bool, bool)>,
 }
@@ -255,10 +257,14 @@ impl VideoLayers {
 /// for DWM to take it, so the frame that punches lands over it.
 fn show(handover: Option<&Handover>, entry: &mut Entry, handle: Option<usize>, at: (i32, i32)) -> Result<(), String> {
     let handover = handover.ok_or("the window isn't on DirectComposition")?;
-    if entry.visual.is_none() {
-        entry.visual = Some(handover.add_under(handle.ok_or("the layer has no surface yet")?)?);
+    let handle = handle.ok_or("the layer has no surface yet")?;
+    if entry.visual.as_ref().is_none_or(|(_, shown)| *shown != handle) {
+        if let Some((old, _)) = entry.visual.take() {
+            handover.remove(&old);
+        }
+        entry.visual = Some((handover.add_under(handle)?, handle));
     }
-    let visual = entry.visual.as_ref().unwrap();
+    let (visual, _) = entry.visual.as_ref().unwrap();
     // SAFETY: COM calls on a visual of the window's DirectComposition device.
     unsafe {
         visual.SetOffsetX2(at.0 as f32).map_err(|e| format!("SetOffsetX: {e}"))?;
@@ -281,7 +287,7 @@ fn logging() -> bool {
 
 fn release(handover: Option<&Handover>, e: &Entry) {
     crate::video::layer(&e.video, None);
-    if let (Some(h), Some(v)) = (handover, &e.visual) {
+    if let (Some(h), Some((v, _))) = (handover, &e.visual) {
         h.remove(v);
     }
 }
