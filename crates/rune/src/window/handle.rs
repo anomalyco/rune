@@ -105,6 +105,24 @@ impl WindowHandle {
             display: window.current_monitor().map(|m| ((m.position().x, m.position().y), (m.size().width, m.size().height))),
         })
     }
+    /// Shows `state` on the window's taskbar button: a progress bar and a count badge (see
+    /// [`crate::Taskbar`]). Windows only for now. Call it on the UI thread.
+    pub fn set_taskbar(&self, state: crate::Taskbar) {
+        #[cfg(target_os = "windows")]
+        if let Ok(window) = self.window() { crate::platform::win32::taskbar::set(&window, state); }
+        #[cfg(not(target_os = "windows"))]
+        let _ = state;
+    }
+    /// Flashes the window's taskbar button twice and leaves it lit until the window comes to the
+    /// front, for something that needs the person; `false` stops it once that's handled. A
+    /// window in front, or Focus Assist holding notifications back, flashes nothing. Windows
+    /// only for now. Call it on the UI thread.
+    pub fn flash(&self, on: bool) {
+        #[cfg(target_os = "windows")]
+        if let Ok(window) = self.window() { crate::platform::win32::taskbar::flash(&window, on); }
+        #[cfg(not(target_os = "windows"))]
+        let _ = on;
+    }
     pub fn set_click_through(&self, click_through: bool) -> Result<(), String> {
         self.window()?.set_cursor_hittest(!click_through).map_err(|e| e.to_string())
     }
