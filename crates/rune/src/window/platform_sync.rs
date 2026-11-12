@@ -19,6 +19,16 @@ pub(super) fn sync_platform<S: 'static>(l: &mut Win, rt: &mut Runtime<S>, secure
         l.window.set_ime_allowed(ime_allowed);
         *ime = ime_allowed;
     }
+    // A terminal's caret asks for Option as Alt (`El::ime_option_as_alt`): AppKit then hands the key
+    // under Option over as itself, not the character the layout composes with it.
+    #[cfg(target_os = "macos")]
+    {
+        use winit::platform::macos::{OptionAsAlt, WindowExtMacOS};
+        let want = if ime_allowed && rt.ime_option_as_alt { OptionAsAlt::Both } else { OptionAsAlt::None };
+        if l.window.option_as_alt() != want {
+            l.window.set_option_as_alt(want);
+        }
+    }
     l.apply_cursor(rt, focused);
     #[cfg(target_os = "macos")]
     if rt.zoom() == 1.0 {
