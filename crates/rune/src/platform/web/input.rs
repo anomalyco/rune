@@ -21,6 +21,8 @@ extern "C" {
     fn destroy(handle: &JsValue);
     #[wasm_bindgen(js_name = pastedImage)]
     fn pasted_image(handle: &JsValue, max: u32) -> js_sys::Promise;
+    #[wasm_bindgen(js_name = scheduleA11y)]
+    fn schedule_a11y(handle: &JsValue);
     #[wasm_bindgen(js_name = syncSecondary)]
     fn sync_secondary(handle: &JsValue, claim: &str);
     #[wasm_bindgen(js_name = syncWheel)]
@@ -58,6 +60,8 @@ pub(super) struct Bridge {
     scroll_x: Vec<(String, f32)>,
     /// The IME area the page's text field was last put at.
     caret: Option<[f32; 4]>,
+    /// When the mirror was last rebuilt, for the scroll throttle (`sync_input`).
+    a11y_at: Option<crate::time::Instant>,
     /// The slot families the mirror's text was last set in.
     families: (String, String),
 }
@@ -83,7 +87,7 @@ impl Bridge {
         let handle = mount(canvas, callback.as_ref().unchecked_ref(), embedded, fit_height, document);
         Self { handle, _callback: callback, dispose_viewport, mods: ModifiersState::empty(),
             mirror: Default::default(), a11y: Default::default(),
-            copy_cache: String::new(), fit_height, document, page: None, scroll_x: Vec::new(), caret: None, families: Default::default() }
+            copy_cache: String::new(), fit_height, document, page: None, scroll_x: Vec::new(), caret: None, a11y_at: None, families: Default::default() }
     }
 
     /// The first frame is on screen: a page swaps its static export for the live mirror.
@@ -117,8 +121,17 @@ impl<S: 'static> Running<S> {
             self.input.families = (sans.to_owned(), mono.to_owned());
             sync_families(&self.input.handle, sans, mono);
         }
-        if let Some(json) = self.rt.web_a11y(&mut self.input.a11y) {
+        // While the app scrolls, the mirror follows at most every 150 ms (and once when it stops),
+        // not every frame: rebuilding and restyling every item each frame was most of a scroll
+        // frame's JavaScript. A page's mirror is in document coordinates and doesn't move.
+        let now = crate::time::Instant::now();
+        if !self.input.document && self.rt.web_a11y_scrolled_only(&self.input.a11y)
+            && self.input.a11y_at.is_some_and(|at| now.duration_since(at).as_secs_f64() < 0.15)
+        {
+            schedule_a11y(&self.input.handle);
+        } else if let Some(json) = self.rt.web_a11y(&mut self.input.a11y) {
             sync_a11y(&self.input.handle, json);
+            self.input.a11y_at = Some(now);
         }
         if self.input.document {
             let page = (self.rt.page_height().ceil(), self.rt.has_focus());
@@ -183,6 +196,12 @@ impl<S: 'static> Running<S> {
             Some("a11y_press" | "a11y_link") => { let _ = self.rt.web_a11y_action(event); }
             // The browser's menu takes this right-click (bridge.js): its release opens none of Rune's.
             Some("secondary_browser") => { self.rt.secondary_abandon(); return false; }
+            // The scroll throttle's last word: the mirror where the scroll stopped.
+            Some("a11y_due") => {
+                self.input.a11y_at = None;
+                self.sync_input(false);
+                return false;
+            }
             // The page scrolled: draw the band in view, and hover what is now under the pointer.
             // The redraw that follows the event draws it; nothing commits.
             Some("scroll") => {

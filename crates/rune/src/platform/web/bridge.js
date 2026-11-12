@@ -573,6 +573,12 @@ export function syncA11y(h, json) {
     }
 }
 
+// Rune skipped rebuilding the mirror while it scrolls: it asks again once the scroll has rested.
+export function scheduleA11y(h) {
+    clearTimeout(h.a11yTimer);
+    h.a11yTimer = setTimeout(() => { h.a11yTimer = 0; if (!h.disposed) h.send({ kind: 'a11y_due' }); }, 160);
+}
+
 // A page's height and whether a Rune control has the keyboard (scroll keys are the page's
 // when none has).
 export function syncPage(h, height, focused) {
@@ -667,6 +673,7 @@ export function destroy(h) {
     h.disposed = true;
     h.image = undefined;
     clearTimeout(h.staticTimer);
+    clearTimeout(h.a11yTimer);
     for (const remove of h.listeners) remove();
     h.password.value = ''; h.textarea.value = ''; h.copyText = '';
     h.a11yNodes.clear();

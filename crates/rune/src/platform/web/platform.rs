@@ -45,6 +45,10 @@ extern "C" {
 }
 
 /// The browser's platform name and its touch points, as `FontSmoothing`'s web default reads them.
+/// Read once: they don't change while the page lives, and frames ask.
 pub(crate) fn browser_platform() -> Option<(String, u32)> {
-    Some((browser_platform_name()?, touch_points()))
+    thread_local! {
+        static PLATFORM: Option<(String, u32)> = browser_platform_name().map(|name| (name, touch_points()));
+    }
+    PLATFORM.with(Clone::clone)
 }
