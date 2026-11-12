@@ -376,6 +376,8 @@ impl<S: 'static> Host<S> {
             && gpu.device.poll(wgpu::PollType::wait_indefinitely()).is_ok() {
             l.first_frame.gpu_done();
             crate::marks::mark("frame.first.gpu_done");
+            #[cfg(target_os = "windows")]
+            crate::platform::win32::unidle_d3d_threads_soon();
         }
         // The window shows once the GPU has finished the frame it presents.
         #[cfg(target_os = "windows")]

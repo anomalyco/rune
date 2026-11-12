@@ -75,6 +75,58 @@ pub(crate) fn repaint_owed(window: &winit::window::Window) -> bool {
     unsafe { GetUpdateRect(hwnd, std::ptr::null_mut(), 0) != 0 }
 }
 
+/// Raises D3D12's "D3D Background Thread"s, once, from idle priority to below normal, on a thread of
+/// its own. D3D12 starts them at idle priority (base 1) for the driver's shader work, and a thread
+/// has to run to end: on a busy machine they sat Ready, never scheduled, after the process was
+/// ended (a kill, the uninstaller closing running copies), keeping it alive for seconds, once
+/// 106 s. Called once a first GPU frame is done; a second pass 2 s later takes any D3D12 started
+/// since. Returns how many it raised.
+pub(crate) fn unidle_d3d_threads_soon() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| { let _ = std::thread::Builder::new().name("rune-unidle".into()).spawn(|| { unidle_d3d_threads(); std::thread::sleep(std::time::Duration::from_secs(2)); unidle_d3d_threads(); }); });
+}
+
+fn unidle_d3d_threads() -> usize {
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE, LocalFree};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next};
+    use windows_sys::Win32::System::Threading::{
+        GetCurrentProcessId, GetThreadDescription, GetThreadPriority, OpenThread, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL, THREAD_QUERY_LIMITED_INFORMATION,
+        THREAD_SET_INFORMATION,
+    };
+    // SAFETY: a thread snapshot read into a THREADENTRY32 this frame owns; each thread handle is
+    // this process's own and closed after use; a thread's description is freed with LocalFree.
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+        if snapshot == INVALID_HANDLE_VALUE { return 0; }
+        let mut raised = 0;
+        let pid = GetCurrentProcessId();
+        let mut entry: THREADENTRY32 = std::mem::zeroed();
+        entry.dwSize = size_of::<THREADENTRY32>() as u32;
+        let mut more = Thread32First(snapshot, &mut entry) != 0;
+        while more {
+            if entry.th32OwnerProcessID == pid {
+                let thread = OpenThread(THREAD_QUERY_LIMITED_INFORMATION | THREAD_SET_INFORMATION, 0, entry.th32ThreadID);
+                if !thread.is_null() {
+                    let mut desc = std::ptr::null_mut();
+                    if GetThreadDescription(thread, &mut desc) >= 0 && !desc.is_null() {
+                        let len = (0..).take_while(|&i| *desc.add(i) != 0).count();
+                        let name = String::from_utf16_lossy(std::slice::from_raw_parts(desc, len));
+                        LocalFree(desc.cast());
+                        if name.starts_with("D3D Background Thread") && GetThreadPriority(thread) < THREAD_PRIORITY_BELOW_NORMAL {
+                            SetThreadPriority(thread, THREAD_PRIORITY_BELOW_NORMAL);
+                            raised += 1;
+                        }
+                    }
+                    CloseHandle(thread);
+                }
+            }
+            more = Thread32Next(snapshot, &mut entry) != 0;
+        }
+        CloseHandle(snapshot);
+        raised
+    }
+}
+
 /// Drops the paint the system still owes `window`, which the loop just painted itself.
 pub(crate) fn drop_paint(window: &winit::window::Window) {
     use windows_sys::Win32::Graphics::Gdi::{RDW_NOINTERNALPAINT, RedrawWindow};
