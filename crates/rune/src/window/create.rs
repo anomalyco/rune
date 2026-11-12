@@ -259,6 +259,8 @@ impl<S: 'static> Host<S> {
             presented: None,
             #[cfg(target_os = "windows")]
             steady: Steady::Rest,
+            #[cfg(target_os = "windows")]
+            covered_draw: CoveredDraw::Current,
             redraw: std::cell::Cell::new(Redraw::Idle),
         });
         if launcher { self.win.as_mut().unwrap().first_frame.prepare(Instant::now()); }

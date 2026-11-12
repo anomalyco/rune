@@ -88,6 +88,9 @@ pub(super) struct Win {
     /// The window's steady run after a change (`STEADY`).
     #[cfg(target_os = "windows")]
     pub(super) steady: Steady,
+    /// A frame asked for while other windows covered it, still to draw (`CoveredDraw`).
+    #[cfg(target_os = "windows")]
+    pub(super) covered_draw: CoveredDraw,
     /// Its next frame (`redraw`).
     pub(super) redraw: std::cell::Cell<Redraw>,
 }

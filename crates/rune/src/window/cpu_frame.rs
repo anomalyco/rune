@@ -271,6 +271,7 @@ impl<S: 'static> Host<S> {
             timer_frame: TimerFrame::default(),
             presented: None,
             steady: Steady::Rest,
+            covered_draw: CoveredDraw::Current,
             redraw: std::cell::Cell::new(Redraw::Idle),
         });
         self.apply_placement(event_loop);
