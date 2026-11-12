@@ -20,6 +20,10 @@ pub(in crate::runtime) struct TextSel {
     /// Shift is held (from the host's modifier events), so a press extends the selection.
     pub(in crate::runtime) shift: bool,
     pub(in crate::runtime) pick: crate::runtime::select_all::Pick, // where Select All goes with no selection
+    /// Hashes of mounted rows strictly between the selection's anchor and focus in a virtual
+    /// list. It sits beside the phase so a new selection clears it in place and keeps its
+    /// buckets; with nothing selected it's empty.
+    pub(in crate::runtime) mounted_between: HashMap<String, u64>,
 }
 
 #[derive(Default)]
@@ -72,14 +76,12 @@ pub(in crate::runtime) struct Selection {
     /// content), taken when the selection changes, so a commit that rewrites, adds or removes
     /// one drops it.
     pub(in crate::runtime) between: u64,
-    /// Hashes of mounted rows strictly between anchor and focus in a virtual list.
-    pub(in crate::runtime) mounted_between: HashMap<String, u64>,
 }
 
 impl Selection {
     /// `anchor..focus` in text `path` reading `content`, made from the unit range `origin`.
     pub(in crate::runtime) fn new(path: String, content: String, (anchor, focus): (usize, usize), origin: (usize, usize)) -> Self {
-        Self { path, content, anchor, focus, origin, anchor_end: None, far: None, between: 0, mounted_between: HashMap::default() }
+        Self { path, content, anchor, focus, origin, anchor_end: None, far: None, between: 0 }
     }
 }
 

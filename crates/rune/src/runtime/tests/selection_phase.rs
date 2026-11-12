@@ -630,7 +630,7 @@ impl Walk {
                 let ours = (&sel.path, &sel.content, sel.anchor, sel.focus, sel.origin, &far, unit);
                 let theirs = (path, &dev.content, dev.anchor, dev.focus, dev.origin, &dev.far, dev.dragging.then_some(dev.unit));
                 if ours != theirs { return Err(format!("after {letter:?}: {ours:?}, dev {theirs:?}")); }
-                if sel.anchor_end.is_some() || sel.far.as_ref().is_some_and(|f| f.end.is_some()) || !sel.mounted_between.is_empty() {
+                if sel.anchor_end.is_some() || sel.far.as_ref().is_some_and(|f| f.end.is_some()) || !self.rt.selectable.mounted_between.is_empty() {
                     return Err(format!("after {letter:?}: virtual ends outside a virtual list"));
                 }
             }

@@ -392,6 +392,8 @@ impl<S: 'static> Runtime<S> {
     /// Updates the selection's `anchor_end` and far `end`, and each `VirtualList::pinned_rows`.
     pub(crate) fn sync_selection_pins(&mut self) {
         let Some(sel) = self.selectable.phase.selection() else {
+            // With nothing selected nothing lies between its ends.
+            self.selectable.mounted_between.clear();
             for v in self.virtuals.values_mut() {
                 v.pinned_rows.clear();
                 v.selection.texts.clear();
@@ -523,7 +525,7 @@ impl<S: 'static> Runtime<S> {
 
     pub(crate) fn seal_between(&mut self) {
         self.sync_selection_pins();
-        if let Some(sel) = self.selectable.phase.selection_mut() { sel.mounted_between.clear(); }
+        self.selectable.mounted_between.clear();
         let Some((h, f)) = self.selection_holder_end().and_then(|h| Some((h, self.focus_holder_end(h)?))) else {
             if let Some(sel) = self.selectable.phase.selection_mut() { sel.between = 0; }
             self.remember_pick();
@@ -541,10 +543,8 @@ impl<S: 'static> Runtime<S> {
                 .filter_map(|r| v.keys.get(r).cloned())
                 .collect();
             for key in keys {
-                if let Some(hash) = self.mounted_row_hash(&list_path, &key, &g_path)
-                    && let Some(sel) = self.selectable.phase.selection_mut()
-                {
-                    sel.mounted_between.insert(key, hash);
+                if let Some(hash) = self.mounted_row_hash(&list_path, &key, &g_path) {
+                    self.selectable.mounted_between.insert(key, hash);
                 }
             }
         }
@@ -568,15 +568,13 @@ impl<S: 'static> Runtime<S> {
                 .filter_map(|r| v.keys.get(r).cloned())
                 .collect();
             for key in keys {
-                if let Some(hash) = self.mounted_row_hash(&list_path, &key, &g_path)
-                    && let Some(sel) = self.selectable.phase.selection_mut()
-                {
-                    if let Some(&prev) = sel.mounted_between.get(&key) {
+                if let Some(hash) = self.mounted_row_hash(&list_path, &key, &g_path) {
+                    if let Some(&prev) = self.selectable.mounted_between.get(&key) {
                         if prev != hash {
                             return false;
                         }
                     } else {
-                        sel.mounted_between.insert(key, hash);
+                        self.selectable.mounted_between.insert(key, hash);
                     }
                 }
             }
