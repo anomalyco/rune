@@ -64,8 +64,8 @@ pub struct LoopTrack {
 enum Phase {
     /// Playing, with phase 0 landing on `since`. A delayed start is a `since` still ahead.
     Playing { since: f64 },
-    /// A finite sequence that played out: it holds its last pose until enabled again, which
-    /// restarts it after its delay.
+    /// A finite sequence that played out: it holds its last pose, and enabling it again leaves
+    /// it there. It does not replay.
     Done,
 }
 
@@ -108,12 +108,9 @@ impl LoopTrack {
         self.spec = spec;
     }
     /// Cool to rest without stopping or resetting phase. Reversal inherits envelope velocity.
+    /// A finite sequence that cooled mid-play carries on from where its phase had reached; one
+    /// that played out stays `Done` and does not replay.
     pub fn enabled(&mut self, enabled: bool, now: f64) {
-        if self.finite() {
-            if enabled && self.amplitude.target() == 0.0 {
-                self.phase = Phase::Playing { since: now + self.spec.delay };
-            } else if !enabled { self.phase = Phase::Done; }
-        }
         self.amplitude.animate_to(if enabled { 1.0 } else { 0.0 }, Spring::new(0.18, 0.0), now);
     }
     /// Moves the track onto a clock reading `delta` more, at the same place.
@@ -133,7 +130,11 @@ impl LoopTrack {
     pub fn active(&self, now: f64) -> bool {
         match self.phase {
             Phase::Done => false,
-            Phase::Playing { since } if self.finite() => now >= since && now < since + self.spec.period,
+            // A cooled sequence keeps its phase clock but draws nothing, so it asks for no
+            // frames.
+            Phase::Playing { since } if self.finite() => {
+                self.amplitude.target() > 0.0 && now >= since && now < since + self.spec.period
+            }
             Phase::Playing { since } => {
                 (self.amplitude.target() > 0.0 && now >= since) || !self.amplitude.is_settled(now)
             }
@@ -217,7 +218,7 @@ mod tests {
         assert_eq!(track.pose(4.35, false).unwrap().scale, 1.0);
     }
     #[test]
-    fn a_finished_sequence_rests_until_cooled_and_enabled_again() {
+    fn a_finished_sequence_stays_done_when_enabled_again() {
         const BEATS: &[Beat] = &[Beat::new(0.0).opacity(0.0), Beat::new(0.5).opacity(1.0)];
         let spec = LoopSpec::sequence(Sequence::new(BEATS).delay(0.2));
         let mut t = LoopTrack::new(spec, 0.0);
@@ -230,9 +231,75 @@ mod tests {
         t.enabled(false, 1.0);
         assert!(!t.active(10.0), "cooled to rest");
         t.enabled(true, 2.0);
-        assert_eq!(t.pending_start(2.0), Some(2.2), "enabling again restarts after the delay");
+        assert_eq!(t.pending_start(2.0), None, "enabling again doesn't wait on a delay");
+        assert!(!t.active(2.1), "and asks for no frames");
+        assert_eq!(t.pose(2.1, false).unwrap().opacity, 1.0, "holding its last pose");
+        assert_eq!(t.pose(0.3, false).unwrap().opacity, 1.0, "it never replays");
+    }
+    #[test]
+    fn a_sequence_that_ran_out_while_cooled_rests_instead_of_replaying() {
+        const BEATS: &[Beat] = &[Beat::new(0.0).opacity(0.0), Beat::new(0.5).opacity(1.0)];
+        let spec = LoopSpec::sequence(Sequence::new(BEATS).delay(0.2));
+        let mut t = LoopTrack::new(spec, 0.0);
+        assert!(t.active(0.5), "playing until 0.7");
+        t.enabled(false, 0.5);
+        assert!(!t.active(0.5), "cooled to rest");
+        t.enabled(true, 2.0);
+        assert_eq!(t.pending_start(2.0), None, "the delay is not paid again");
         assert!(!t.active(2.1));
-        assert_eq!(t.pose(2.1, false).unwrap().opacity, 0.0, "from its first pose");
+        assert_eq!(t.pose(2.1, false).unwrap().opacity, 1.0, "it rests where it ran out");
+    }
+    #[test]
+    fn enabling_a_cooled_sequence_carries_on_from_its_presented_phase() {
+        const BEATS: &[Beat] = &[
+            Beat::new(0.0).opacity(0.0).easing(Easing::LINEAR),
+            Beat::new(1.0).opacity(1.0).easing(Easing::LINEAR),
+        ];
+        let spec = LoopSpec::sequence(Sequence::new(BEATS).delay(0.2));
+        let mut t = LoopTrack::new(spec, 0.0);
+        let cooled = t.phase(0.7);
+        assert!((cooled - 0.5).abs() < 1e-9, "mid-run, half way");
+        t.enabled(false, 0.7);
+        assert!(!t.active(0.7), "cooled to rest");
+        t.enabled(true, 0.9);
+        assert!(t.active(0.9), "it warms back up and asks for frames");
+        assert_eq!(t.pending_start(0.9), None, "it does not wait out the delay again");
+        assert!((t.phase(0.9) - 0.7).abs() < 1e-9, "it carries on from where it had reached");
+        assert!(
+            (t.pose(0.9, false).unwrap().opacity - 0.7).abs() < 1e-5,
+            "presenting the pose its phase reached, not its first pose"
+        );
+        assert!(!t.active(1.3), "and still ends where its own clock does");
+        assert_eq!(t.pose(1.3, false).unwrap().opacity, 1.0);
+    }
+    #[test]
+    fn enabling_leaves_a_looping_tracks_phase_alone() {
+        let specs = [
+            LoopSpec::opacity(1.0, 0.0, 0.2, 0.8),
+            LoopSpec::rotation(0.9),
+            LoopSpec::slide(2.0, [-1.0, 0.0], [3.0, 0.0]),
+        ];
+        for spec in specs {
+            let mut cooled = LoopTrack::new(spec, 0.0);
+            let plain = LoopTrack::new(spec, 0.0);
+            cooled.enabled(false, 0.4);
+            assert!(cooled.active(0.41), "cooling keeps its settle frames");
+            cooled.enabled(true, 1.1);
+            for i in 0..50 {
+                let now = 1.1 + i as f64 * 0.037;
+                assert_eq!(cooled.phase(now), plain.phase(now), "{spec:?} keeps its phase");
+                assert_eq!(cooled.active(now), plain.active(now));
+                assert_eq!(cooled.pending_start(now), plain.pending_start(now));
+            }
+            assert!((cooled.sample(5.0, false) - plain.sample(5.0, false)).abs() < 1e-6);
+            match (cooled.offset(5.0, false), plain.offset(5.0, false)) {
+                (Some(warmed), Some(never)) => {
+                    assert!((warmed[0] - never[0]).abs() < 1e-6, "its amplitude warms back to full");
+                }
+                (None, None) => {}
+                _ => panic!("the same spec asks for the same offsets"),
+            }
+        }
     }
     #[test]
     fn a_delayed_loop_shifts_and_advances_its_start() {

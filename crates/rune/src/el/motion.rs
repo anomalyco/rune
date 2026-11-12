@@ -271,7 +271,8 @@ impl El {
         self
     }
     /// A finite opacity/scale sequence on the shared render clock. The final pose holds;
-    /// reduced motion and explicit settle land it immediately. A new key replays it.
+    /// reduced motion and explicit settle land it immediately. A new key replays it; dropping
+    /// the loop and putting it back carries on from where it was.
     pub fn sequence(self, frames: rune_motion::Sequence) -> Self {
         self.looping(rune_motion::LoopSpec::sequence(frames))
     }
