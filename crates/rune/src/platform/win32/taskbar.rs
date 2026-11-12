@@ -1,17 +1,21 @@
 //! The taskbar button's progress, overlay badge and flash (`crate::taskbar`), through the
-//! shell's `ITaskbarList3`, made the first time a window shows something there.
+//! shell's `ITaskbarList3`. The UI thread only compares and hands the state on: a thread of its
+//! own (made on the first state that shows something, asleep on its channel in between) makes
+//! the shell's object, which loads the shell's taskbar DLLs, draws the badges and makes the
+//! calls, which go to Explorer.
 //!
 //! The badge is an icon drawn here with GDI at the taskbar's small-icon size for the window's
 //! scale: a red disc with the count in white, anti-aliased, kept per count and size for the
 //! run. A button Explorer makes again (it restarted) announces itself with
-//! `TaskbarButtonCreated`; each window's subclass hears it and sets its state again.
+//! `TaskbarButtonCreated`; each window's subclass hears it and sends its state again.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::OnceLock;
+use std::sync::mpsc::{Receiver, Sender, channel};
 
 use windows::Win32::Foundation::HWND;
-use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
+use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx};
 use windows::Win32::UI::Shell::{ITaskbarList3, TBPF_ERROR, TBPF_INDETERMINATE, TBPF_NOPROGRESS, TBPF_PAUSED, TBPFLAG, TaskbarList};
 use windows::Win32::UI::WindowsAndMessaging::HICON;
 use windows::core::PCWSTR;
@@ -22,41 +26,56 @@ const SUBCLASS: usize = 0x5255_4e54;
 /// The badge's disc: Windows 11's critical red.
 const DISC: [u8; 3] = [0xC4, 0x2B, 0x1C];
 
-#[derive(Default)]
-struct Shell {
-    /// Made on the first call that shows something; none if the shell refused.
-    list: Option<ITaskbarList3>,
-    tried: bool,
-    /// What each window shows, to set again on a new button and to skip a call that changes nothing.
-    shown: HashMap<isize, Taskbar>,
-    icons: HashMap<(u32, i32), isize>,
+/// One state for the worker to show: the window, what it showed, what it shows now.
+struct Job {
+    hwnd: isize,
+    before: Taskbar,
+    state: Taskbar,
 }
 
 thread_local! {
-    static SHELL: RefCell<Shell> = RefCell::new(Shell::default());
+    /// What each window shows, to skip a call that changes nothing and to send again to a new button.
+    static SHOWN: RefCell<HashMap<isize, Taskbar>> = RefCell::new(HashMap::new());
+}
+
+fn worker() -> &'static std::sync::Mutex<Sender<Job>> {
+    static WORKER: OnceLock<std::sync::Mutex<Sender<Job>>> = OnceLock::new();
+    WORKER.get_or_init(|| {
+        let (to, from) = channel();
+        if let Err(e) = std::thread::Builder::new().name("rune-taskbar".into()).spawn(move || run(from)) { eprintln!("rune: taskbar: {e}"); }
+        std::sync::Mutex::new(to)
+    })
 }
 
 /// Shows `state` on `window`'s taskbar button. Call it on the UI thread.
 pub(crate) fn set(window: &winit::window::Window, state: Taskbar) {
     let Some(hwnd) = super::hwnd(window) else { return };
     let key = hwnd as isize;
-    SHELL.with_borrow_mut(|s| {
-        let before = s.shown.get(&key).cloned().unwrap_or_default();
-        if before == state { return; }
-        if !s.tried {
-            s.tried = true;
-            s.list = list();
-        }
-        let Some(list) = s.list.clone() else { return };
-        if !s.shown.contains_key(&key) {
-            // SAFETY: the subclass keeps no pointer and goes at WM_NCDESTROY.
-            unsafe { windows_sys::Win32::UI::Shell::SetWindowSubclass(hwnd, Some(procedure), SUBCLASS, 0); }
-        }
-        apply(&list, s, HWND(hwnd), &before, &state);
-        s.shown.insert(key, state);
-    });
+    let before = SHOWN.with_borrow(|s| s.get(&key).cloned());
+    if before.as_ref().unwrap_or(&Taskbar::default()) == &state { return; }
+    if before.is_none() {
+        // SAFETY: the subclass keeps no pointer and goes at WM_NCDESTROY.
+        unsafe { windows_sys::Win32::UI::Shell::SetWindowSubclass(hwnd, Some(procedure), SUBCLASS, 0); }
+    }
+    SHOWN.with_borrow_mut(|s| s.insert(key, state.clone()));
+    send(Job { hwnd: key, before: before.unwrap_or_default(), state });
 }
 
+fn send(job: Job) {
+    let _ = worker().lock().unwrap_or_else(|e| e.into_inner()).send(job);
+}
+
+fn run(from: Receiver<Job>) {
+    // SAFETY: this thread's own single-threaded apartment, for the shell's object.
+    if unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) }.is_err() { return; }
+    let started = std::time::Instant::now();
+    let Some(list) = list() else { return };
+    eprintln!("rune: taskbar: the shell's object in {} µs off the UI thread", started.elapsed().as_micros());
+    let mut icons = HashMap::new();
+    while let Ok(job) = from.recv() {
+        apply(&list, &mut icons, HWND(job.hwnd as *mut _), &job.before, &job.state);
+    }
+}
 /// Flashes `window`'s taskbar button twice and leaves it lit until the window comes forward,
 /// or stops it (`on` false). Nothing flashes while Focus Assist (Do not disturb) holds
 /// notifications back, or for a window in front.
@@ -81,18 +100,17 @@ fn accepts_notifications() -> bool {
 }
 
 fn list() -> Option<ITaskbarList3> {
-    // SAFETY: COM on the UI thread, which is an OLE apartment (again is a no-op), then the
-    // shell's taskbar object, initialised before use as its contract asks.
+    // SAFETY: the shell's taskbar object in this thread's apartment, initialised before use as
+    // its contract asks.
     unsafe {
-        let _ = windows::Win32::System::Ole::OleInitialize(None);
         let list: ITaskbarList3 = CoCreateInstance(&TaskbarList, None, CLSCTX_INPROC_SERVER).ok()?;
         list.HrInit().ok()?;
         Some(list)
     }
 }
 
-fn apply(list: &ITaskbarList3, s: &mut Shell, hwnd: HWND, before: &Taskbar, state: &Taskbar) {
-    // SAFETY: shell calls on a live window this thread owns.
+fn apply(list: &ITaskbarList3, icons: &mut HashMap<(u32, i32), isize>, hwnd: HWND, before: &Taskbar, state: &Taskbar) {
+    // SAFETY: shell calls about a window of this process (gone, they fail harmlessly).
     unsafe {
         if before.progress != state.progress {
             let flag: TBPFLAG = match state.progress {
@@ -107,7 +125,7 @@ fn apply(list: &ITaskbarList3, s: &mut Shell, hwnd: HWND, before: &Taskbar, stat
         }
         if before.badge != state.badge {
             let (count, description) = &state.badge;
-            let icon = if *count == 0 { HICON::default() } else { HICON(badge_icon(s, hwnd, *count) as *mut _) };
+            let icon = if *count == 0 { HICON::default() } else { HICON(badge_icon(icons, hwnd, *count) as *mut _) };
             let description: Vec<u16> = description.encode_utf16().chain([0]).collect();
             let _ = list.SetOverlayIcon(hwnd, icon, PCWSTR(description.as_ptr()));
         }
@@ -124,29 +142,27 @@ unsafe extern "system" fn procedure(hwnd: windows_sys::Win32::Foundation::HWND, 
     use windows_sys::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass};
     use windows_sys::Win32::UI::WindowsAndMessaging::WM_NCDESTROY;
     if msg == WM_NCDESTROY {
-        SHELL.with(|s| s.try_borrow_mut().map(|mut s| s.shown.remove(&(hwnd as isize))).ok());
+        SHOWN.with(|s| s.try_borrow_mut().map(|mut s| s.remove(&(hwnd as isize))).ok());
         // SAFETY: removes this subclass from the window it was set on.
         unsafe { RemoveWindowSubclass(hwnd, Some(procedure), SUBCLASS) };
     } else if msg == button_created() {
         // A new button (Explorer restarted): it shows nothing until told again.
-        SHELL.with(|s| {
-            let Ok(mut s) = s.try_borrow_mut() else { return };
-            let (Some(list), Some(state)) = (s.list.clone(), s.shown.get(&(hwnd as isize)).cloned()) else { return };
-            apply(&list, &mut s, HWND(hwnd), &Taskbar::default(), &state);
-        });
+        if let Some(state) = SHOWN.with(|s| s.try_borrow().ok().and_then(|s| s.get(&(hwnd as isize)).cloned())) {
+            send(Job { hwnd: hwnd as isize, before: Taskbar::default(), state });
+        }
     }
     // SAFETY: passes every message on.
     unsafe { DefSubclassProc(hwnd, msg, w, l) }
 }
 
 /// The overlay icon for `count` at the taskbar's small-icon size for `hwnd`'s scale.
-fn badge_icon(s: &mut Shell, hwnd: HWND, count: u32) -> isize {
+fn badge_icon(icons: &mut HashMap<(u32, i32), isize>, hwnd: HWND, count: u32) -> isize {
     use windows_sys::Win32::UI::HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi};
     use windows_sys::Win32::UI::WindowsAndMessaging::SM_CXSMICON;
     // SAFETY: reads the window's scale and a system metric.
     let size = unsafe { GetSystemMetricsForDpi(SM_CXSMICON, GetDpiForWindow(hwnd.0).max(96)) }.max(16);
     let count = count.min(10);
-    *s.icons.entry((count, size)).or_insert_with(|| draw_badge(count, size))
+    *icons.entry((count, size)).or_insert_with(|| draw_badge(count, size))
 }
 
 /// A `size` square icon: the disc, and `count` (10 reads "9+") in white, its glyphs' coverage

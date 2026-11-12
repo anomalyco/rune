@@ -100,7 +100,7 @@ fn session(p: &Pending) -> Option<DragOutcome> {
         let _ = OleInitialize(None);
         let data = data_object(item)?;
         if let Some(png) = item.png_data() { set(&data, png_format(), hglobal(png)?); }
-        let text = item.plain_text().map(str::to_owned).or_else(|| item.paths().first().map(|f| path_text(f)));
+        let text = item.plain_text().map(str::to_owned).or_else(|| item.paths().first().map(|f| native(f)));
         if let Some(text) = text {
             let units: Vec<u16> = text.encode_utf16().chain([0]).collect();
             set(&data, CF_UNICODETEXT.0, hglobal(std::slice::from_raw_parts(units.as_ptr().cast(), units.len() * 2))?);
@@ -129,7 +129,7 @@ fn session(p: &Pending) -> Option<DragOutcome> {
 unsafe fn data_object(item: &DragItem) -> Option<IDataObject> {
     // SAFETY: each ID list made here is freed before returning; the data object copies them.
     unsafe {
-        let full: Vec<*mut ITEMIDLIST> = item.paths().iter().map(|f| ILCreateFromPathW(PCWSTR(wide(&path_text(f)).as_ptr()))).collect();
+        let full: Vec<*mut ITEMIDLIST> = item.paths().iter().map(|f| ILCreateFromPathW(PCWSTR(wide(&native(f)).as_ptr()))).collect();
         let shell = if !full.is_empty() && full.iter().all(|p| !p.is_null()) {
             let parent = ILClone(full[0]);
             let ok = !parent.is_null() && ILRemoveLastID(Some(parent)).as_bool() && full.iter().all(|&f| ILIsParent(parent, f, true).as_bool());
@@ -148,7 +148,7 @@ unsafe fn data_object(item: &DragItem) -> Option<IDataObject> {
 
 /// A `CF_HDROP` medium: `DROPFILES` and the paths, each NUL-terminated, then one more NUL.
 fn drop_files(item: &DragItem) -> Option<HGLOBAL> {
-    let mut units: Vec<u16> = item.paths().iter().flat_map(|f| path_text(f).encode_utf16().chain([0]).collect::<Vec<_>>()).collect();
+    let mut units: Vec<u16> = item.paths().iter().flat_map(|f| native(f).encode_utf16().chain([0]).collect::<Vec<_>>()).collect();
     units.push(0);
     // DROPFILES: pFiles, pt, fNC, fWide.
     let header: [u32; 5] = [20, 0, 0, 0, 1];
@@ -226,6 +226,9 @@ fn outcome(effect: DROPEFFECT) -> DragOutcome {
 }
 
 fn wide(s: &str) -> Vec<u16> { s.encode_utf16().chain([0]).collect() }
+
+/// A path as the shell parses it: backslashes.
+fn native(path: &std::path::Path) -> String { path_text(path).replace('/', "\\") }
 
 /// Ends the drag when the left button comes up, cancels it on Escape; the system's cursors.
 #[implement(IDropSource)]
