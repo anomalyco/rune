@@ -200,6 +200,7 @@ impl VideoLayers {
             }
         }
         // Clips no longer drawn leave their layers.
+        let before = self.entries.len();
         self.entries.retain(|e| {
             let drawn = kept.contains(&e.key);
             if !drawn {
@@ -207,6 +208,11 @@ impl VideoLayers {
             }
             drawn
         });
+        if self.entries.len() != before
+            && let Some(h) = handover
+        {
+            let _ = h.commit();
+        }
         self.follow_alpha(wanted, premultiplied, handover.is_some());
         out
     }

@@ -203,6 +203,14 @@ impl Ring {
         Ok(Some(self.slots.len() - 1))
     }
 
+    /// A picture that never reached Rune (its layer showed it instead): its slot is free once the
+    /// last reference goes, with no read of Rune's to wait for.
+    pub(super) fn unread(&mut self, planes: &Arc<DecodedPlanes>) {
+        if let Some(slot) = self.slots.iter_mut().find(|s| Arc::ptr_eq(&s.planes, planes)) {
+            slot.value = 0;
+        }
+    }
+
     /// Copies a decoder texture (array slice `index`) into slot `i` on the GPU.
     pub(super) fn copy(&mut self, i: usize, source: &ID3D11Texture2D, index: u32) -> (Arc<DecodedPlanes>, u64) {
         let (x, y, w, h) = self.crop;

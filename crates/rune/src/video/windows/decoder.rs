@@ -9,6 +9,7 @@
 use super::audio::{self, Output};
 use super::gpu::{self, Ring};
 use super::layer::Layer;
+use super::machine::Anchor;
 use super::mf::{self, Decode, Picture, Sound};
 use super::super::{Kind, MediaSource, Meta};
 use crate::native_surface::ByteFrame;
@@ -402,7 +403,7 @@ impl Decoder {
                     waiting_since = waiting_since.max(touched);
                 }
             }
-            let read = mf::read(&self.reader, MF_SOURCE_READER_ANY_STREAM.0 as u32)?;
+            let mut read = mf::read(&self.reader, MF_SOURCE_READER_ANY_STREAM.0 as u32)?;
             if read.flags & MF_SOURCE_READERF_ERROR.0 != 0 {
                 return Err("the decoder stopped with an error".into());
             }
@@ -410,25 +411,40 @@ impl Decoder {
             if read.flags & MF_SOURCE_READERF_ENDOFSTREAM.0 != 0 {
                 if video { self.video_open = false } else { self.audio_open = false }
             }
-            if let Some(sample) = &read.sample {
+            if let Some(sample) = read.sample.take() {
                 if video {
                     if read.time + self.facts.meta.frame * 0.5 >= skip_before {
-                        let (picture, texture) = self.picture(sample)?;
+                        let (picture, texture) = self.picture(&sample)?;
                         let pts = epoch + read.time;
-                        let layered = self.present_on_layer(pipe, job, texture, pts, generation);
+                        let blitted = self.blit_on_layer(pipe, job, texture);
+                        // The decoder's surface goes back before the wait for the picture's time:
+                        // held through it, Media Foundation's decoder ran out of surfaces and spun
+                        // in the driver with the device's lock, and the next copy here never got it.
+                        drop(sample);
+                        let layered = blitted.is_some_and(|clock| self.present_when_due(pipe, job, clock, pts, generation));
                         let mut s = pipe.lock();
                         let was_empty = s.frames.is_empty();
                         s.frames.push_back(Decoded { generation, pts, picture });
+                        let mut unread = Vec::new();
                         if layered {
                             // The window takes no pictures while its layer shows them: only the
-                            // newest stays, for when it draws the clip itself again. Presenting
+                            // newest stays, for when it draws the clip itself again, and the
+                            // others' textures are free at once (Rune never read them). Presenting
                             // counts as being drawn, so the decoder doesn't park.
                             while s.frames.len() > 1 {
-                                s.frames.pop_front();
+                                if let Some(Decoded { picture: Pic::Gpu(planes, _), .. }) = s.frames.pop_front() {
+                                    unread.push(planes);
+                                }
                             }
                             s.touched = Some(Instant::now());
                         }
                         drop(s);
+                        if let Some(ring) = &mut self.ring {
+                            for planes in &unread {
+                                ring.unread(planes);
+                            }
+                        }
+                        drop(unread);
                         if first {
                             crate::marks::mark("video.first_frame");
                             crate::marks::note("video.decoder", if self.facts.hardware { "hardware" } else { "software" });
@@ -447,7 +463,7 @@ impl Decoder {
                         }
                     }
                 } else if let Some(o) = &self.output {
-                    o.push(sample, epoch + read.time, skip_before, generation);
+                    o.push(&sample, epoch + read.time, skip_before, generation);
                 }
             }
             if !self.video_open && !self.audio_open {
@@ -512,21 +528,27 @@ impl Decoder {
         Layer::new(device, picture, size)
     }
 
-    /// Shows a picture on the clip's layer at its time, when the window has the layer up and the
-    /// clock runs; false leaves it to the window. The wait ends early for a seek, a stop or the
-    /// window taking the pictures back.
-    fn present_on_layer(&mut self, pipe: &Pipe, job: &Job, texture: Option<(ID3D11Texture2D, u32)>, pts: f64, generation: u32) -> bool {
-        let (Some(layer), Some((texture, index)), Some(clock)) = (&mut self.layer, texture, job.clock.get()) else { return false };
+    /// Scales a picture into the clip's layer when the window has the layer up and the clock
+    /// runs, and returns that clock; None leaves the picture to the window.
+    fn blit_on_layer(&mut self, pipe: &Pipe, job: &Job, texture: Option<(ID3D11Texture2D, u32)>) -> Option<Anchor> {
+        let (Some(layer), Some((texture, index)), Some(clock)) = (&mut self.layer, texture, job.clock.get()) else { return None };
         if pipe.lock().layer.is_none() {
-            return false;
+            return None;
         }
         if let Err(e) = layer.blit(&texture, index) {
             if logging() {
                 log!("the layer couldn't take a picture: {e}; the window draws them");
             }
             pipe.lock().layer_refused = true;
-            return false;
+            return None;
         }
+        Some(clock)
+    }
+
+    /// Presents the picture `blit_on_layer` scaled at its time on `clock`; false leaves it to the
+    /// window. The wait ends early for a seek, a stop or the window taking the pictures back.
+    fn present_when_due(&mut self, pipe: &Pipe, job: &Job, clock: Anchor, pts: f64, generation: u32) -> bool {
+        let Some(layer) = &self.layer else { return false };
         let at = clock.when(pts).checked_sub(LAYER_LEAD).unwrap_or_else(|| clock.when(pts));
         let mut s = pipe.lock();
         loop {
@@ -554,7 +576,6 @@ impl Decoder {
         pipe.lock().layer_shown = Some((layer.size, generation));
         true
     }
-
     fn picture(&mut self, sample: &IMFSample) -> Result<(Pic, Option<(ID3D11Texture2D, u32)>), String> {
         let picture = self.facts.picture.ok_or("no video stream")?;
         // SAFETY: COM reads on a sample this thread owns.
