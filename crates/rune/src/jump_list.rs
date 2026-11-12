@@ -10,7 +10,9 @@
 //! asks. On Windows the list belongs to the process's AppUserModelID, so call it after the app
 //! took its identity.
 //!
-//! macOS's counterpart is the Dock menu and Linux's the launcher's actions; neither is built yet.
+//! macOS shows the same list as the Dock icon's menu (when the app's own menus put nothing in the
+//! Dock): a pick arrives as the link the app opens (`App::on_open_url`), in the running app.
+//! Linux's counterpart, the launcher's actions, are static in a `.desktop` file, not built here.
 
 /// One entry: a title, and the single argument the app starts with when it's picked.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -54,12 +56,14 @@ impl JumpList {
     }
 }
 
-/// Replaces the app's jump list with `list`, off the UI thread. Does nothing where the system
-/// has no jump list, and for headless runs.
+/// Replaces the app's jump list with `list`: on Windows off the UI thread, on macOS as the Dock
+/// menu (call it on the main thread). Does nothing elsewhere, and for headless runs.
 pub fn set_jump_list(list: JumpList) {
     if crate::is_headless() { return; }
     #[cfg(target_os = "windows")]
     crate::platform::win32::jump_list::set(list);
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
+    crate::native_menu::set_jump_menu(&list);
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     let _ = list;
 }

@@ -35,6 +35,8 @@ declare_class!(
 thread_local! {
     static OWNED: Cell<bool> = const { Cell::new(false) };
     static DOCK: RefCell<Option<Retained<NSMenu>>> = const { RefCell::new(None) };
+    /// The jump list's Dock menu (`set_jump_list`), shown when the app's menus put nothing there.
+    static JUMP: RefCell<Option<(Retained<NSMenu>, Vec<Retained<MenuTarget>>)>> = const { RefCell::new(None) };
     static HOOKED: Cell<*const AnyClass> = const { Cell::new(std::ptr::null()) };
 }
 unsafe extern "C" {
@@ -42,7 +44,41 @@ unsafe extern "C" {
 }
 extern "C" fn dock_menu(_: *mut AnyObject, _: Sel, _: *mut AnyObject) -> *mut AnyObject {
     DOCK.with(|slot| slot.try_borrow().ok().and_then(|s| s.as_ref().map(|m| &**m as *const NSMenu as *mut AnyObject)))
+        .or_else(|| JUMP.with(|slot| slot.try_borrow().ok().and_then(|s| s.as_ref().map(|(m, _)| &**m as *const NSMenu as *mut AnyObject))))
         .unwrap_or(std::ptr::null_mut())
+}
+
+/// The jump list as the Dock menu: its tasks, then each category under a disabled title. A pick
+/// arrives as a link the app opens (`App::on_open_url`), as a Windows jump list entry does.
+pub(crate) fn set_jump_menu(list: &crate::jump_list::JumpList) {
+    let Some(mtm) = MainThreadMarker::new() else { return };
+    let app = NSApplication::sharedApplication(mtm);
+    if install_dock_hook(&app).is_err() { return; }
+    let sink: Sink = Arc::new(|argument: &str| crate::open_url::incoming::receive(argument.to_owned()));
+    let menu = NSMenu::new(mtm);
+    let mut targets = Vec::new();
+    // SAFETY: AppKit calls on the main thread; each item's target is kept in JUMP for as long as
+    // the menu holds the item.
+    unsafe {
+        let mut add = |title: &str, argument: Option<&str>| {
+            let item = NSMenuItem::initWithTitle_action_keyEquivalent(mtm.alloc(), &NSString::from_str(title), argument.map(|_| sel!(runeMenuAction:)), &NSString::from_str(""));
+            if let Some(argument) = argument {
+                let target: Retained<MenuTarget> = msg_send_id![super(mtm.alloc().set_ivars(Action { id: argument.to_owned(), enabled: true, keys_first: false, sink: sink.clone() })), init];
+                item.setTarget(Some(&target));
+                targets.push(target);
+            } else {
+                item.setEnabled(false);
+            }
+            menu.addItem(&item);
+        };
+        for task in &list.tasks { add(&task.title, Some(&task.argument)); }
+        for (name, items) in &list.categories {
+            if menu.numberOfItems() > 0 { menu.addItem(&NSMenuItem::separatorItem(mtm)); }
+            add(name, None);
+            for item in items { add(&item.title, Some(&item.argument)); }
+        }
+    }
+    JUMP.with(|slot| *slot.borrow_mut() = Some((menu, targets)));
 }
 fn install_dock_hook(app: &NSApplication) -> Result<(), MenuError> {
     // SAFETY: AppKit calls and Objective-C runtime mutation occur only on the main thread.
