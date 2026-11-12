@@ -9,8 +9,9 @@
 //! the taskbar's COM object. Explorer restarting gives every window a new button; each gets
 //! its state again.
 //!
-//! macOS shows the badge on the Dock icon and Linux on the launcher entry (Unity's
-//! `LauncherEntry`), for the app as a whole; neither is built yet, so there the calls do nothing.
+//! macOS shows the badge on the Dock icon, for the app as a whole: the sum of its windows'
+//! counts (`NSDockTile.badgeLabel`); the Dock has no progress bar, so progress shows nothing there.
+//! Linux's counterpart, Unity's `LauncherEntry` over D-Bus, isn't built: the calls do nothing.
 
 /// The bar under a window's taskbar button.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

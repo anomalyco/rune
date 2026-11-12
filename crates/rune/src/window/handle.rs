@@ -106,11 +106,14 @@ impl WindowHandle {
         })
     }
     /// Shows `state` on the window's taskbar button: a progress bar and a count badge (see
-    /// [`crate::Taskbar`]). Windows only for now. Call it on the UI thread.
+    /// [`crate::Taskbar`]). macOS shows the count on the Dock icon, summed over the app's windows
+    /// (the Dock has no progress bar of its own). Call it on the UI thread.
     pub fn set_taskbar(&self, state: crate::Taskbar) {
         #[cfg(target_os = "windows")]
         if let Ok(window) = self.window() { crate::platform::win32::taskbar::set(&window, state); }
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(target_os = "macos")]
+        if let Ok(window) = self.window() { crate::platform::macos::dock_badge(&window, state.count()); }
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
         let _ = state;
     }
     /// Flashes the window's taskbar button twice and leaves it lit until the window comes to the

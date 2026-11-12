@@ -308,3 +308,27 @@ impl Drop for Panel {
         self.window.setContentView(Some(&self.view));
     }
 }
+
+thread_local! {
+    /// Each window's count (`WindowHandle::set_taskbar`); the Dock shows their sum.
+    static BADGES: std::cell::RefCell<std::collections::HashMap<u64, u32>> = std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// `window`'s count for the Dock icon's badge, which is the app's: the sum over its windows, none
+/// at 0. Main thread.
+pub(crate) fn dock_badge(window: &winit::window::Window, count: u32) {
+    let Some(mtm) = MainThreadMarker::new() else { return };
+    let total: u32 = BADGES.with_borrow_mut(|b| {
+        b.insert(u64::from(window.id()), count);
+        b.values().sum()
+    });
+    let app = NSApplication::sharedApplication(mtm);
+    // SAFETY: AppKit's Dock tile, on the main thread; nil clears the badge.
+    unsafe {
+        let tile: *mut objc2::runtime::AnyObject = msg_send![&app, dockTile];
+        if tile.is_null() { return; }
+        let label = (total > 0).then(|| objc2_foundation::NSString::from_str(&total.to_string()));
+        let label: *const objc2::runtime::AnyObject = label.as_deref().map_or(std::ptr::null(), |l| (l as *const objc2_foundation::NSString).cast());
+        let _: () = msg_send![tile, setBadgeLabel: label];
+    }
+}

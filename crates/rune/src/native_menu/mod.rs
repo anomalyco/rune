@@ -196,6 +196,12 @@ fn lookup<S>(state: &State<S>, selector: &str) -> Result<usize, MenuError> {
 
 /// The window host, for a key press it maps to `key`: what to do if no handler takes it, when
 /// a menu item (a standard ⌘W or ⌘M, or `MenuItem::keys_first`) is handing Rune that key.
+/// The jump list as the Dock menu (`set_jump_list` on macOS).
+#[cfg(target_os = "macos")]
+pub(crate) fn set_jump_menu(list: &crate::jump_list::JumpList) {
+    macos::set_jump_menu(list);
+}
+
 pub(crate) fn take_unhandled(key: Option<&crate::KeyEvent>) -> Option<crate::runtime::Unhandled> {
     #[cfg(target_os = "macos")]
     { key.and_then(standard_macos::take_unhandled) }

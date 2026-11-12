@@ -187,8 +187,9 @@ pub(crate) fn prepare() {
     INBOX.launched(super::instance::launch_links());
 }
 
-/// A link from a later launch of the app (Windows, `single_instance`).
-#[cfg(target_os = "windows")]
+/// A link from a later launch of the app (Windows, `single_instance`), or the Dock menu's jump
+/// list entry (macOS, `native_menu`).
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 pub(crate) fn receive(url: String) { INBOX.receive(url); }
 
 /// For a starting window: its app's links, while the guard lives.

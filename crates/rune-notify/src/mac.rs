@@ -1,8 +1,11 @@
 //! `UNUserNotificationCenter`. macOS only shows notifications for a bundled, signed app, so
 //! outside one (`cargo run`, tests) nothing posts. The first post asks the person for
-//! permission; until they allow it, posts are dropped.
+//! permission; until they allow it, posts are dropped. A notification's buttons and text box are a
+//! category of its own (one per set of actions, registered with the center before the post); a
+//! press comes back as the click, with the action and the words typed, without the app coming
+//! forward (the actions don't ask for the foreground).
 
-use super::{Click, Notification};
+use super::{Action, Click, Notification};
 use block2::{Block, RcBlock};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, AnyProtocol, Bool, ClassBuilder, Sel};
@@ -60,6 +63,9 @@ unsafe fn add(n: &Notification) {
         let _: () = msg_send![content, setTitle: ns(&n.title)];
         let _: () = msg_send![content, setBody: ns(&n.body)];
         let _: () = msg_send![content, setUserInfo: dictionary(&n.info)];
+        if let Some(category) = category(&n.actions) {
+            let _: () = msg_send![content, setCategoryIdentifier: ns(&category)];
+        }
         let request: *mut AnyObject = msg_send![
             class!(UNNotificationRequest),
             requestWithIdentifier: ns(&n.id),
@@ -68,6 +74,40 @@ unsafe fn add(n: &Notification) {
         ];
         let _: () = msg_send![center(), addNotificationRequest: request, withCompletionHandler: std::ptr::null::<Block<dyn Fn(*mut AnyObject)>>()];
     });
+}
+
+thread_local! {
+    /// The categories registered this run, by identifier: the center keeps one set, replaced whole.
+    static CATEGORIES: std::cell::RefCell<Vec<(String, Retained<AnyObject>)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The category for `actions` (made and registered the first time): None without actions.
+unsafe fn category(actions: &[Action]) -> Option<String> {
+    if actions.is_empty() {
+        return None;
+    }
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    format!("{actions:?}").hash(&mut h);
+    let id = format!("rune.{:016x}", h.finish());
+    if CATEGORIES.with_borrow(|c| c.iter().any(|(k, _)| *k == id)) {
+        return Some(id);
+    }
+    unsafe {
+        let made: Vec<*mut AnyObject> = actions.iter().take(10).map(|a| match a {
+            // Options 0: no foreground, no authentication, not destructive.
+            Action::Button { id, label } => msg_send![class!(UNNotificationAction), actionWithIdentifier: ns(id), title: ns(label), options: 0usize],
+            Action::Reply { id, placeholder, label } => msg_send![class!(UNTextInputNotificationAction), actionWithIdentifier: ns(id), title: ns(label), options: 0usize, textInputButtonTitle: ns(label), textInputPlaceholder: ns(placeholder)],
+        }).collect();
+        let array: *mut AnyObject = msg_send![class!(NSArray), arrayWithObjects: made.as_ptr(), count: made.len()];
+        let empty: *mut AnyObject = msg_send![class!(NSArray), array];
+        let category: Retained<AnyObject> = msg_send_id![class!(UNNotificationCategory), categoryWithIdentifier: ns(&id), actions: array, intentIdentifiers: empty, options: 0usize];
+        CATEGORIES.with_borrow_mut(|c| c.push((id.clone(), category)));
+        let all: Vec<*mut AnyObject> = CATEGORIES.with_borrow(|c| c.iter().map(|(_, k)| Retained::as_ptr(k).cast_mut()).collect());
+        let set: *mut AnyObject = msg_send![class!(NSSet), setWithObjects: all.as_ptr(), count: all.len()];
+        let _: () = msg_send![center(), setNotificationCategories: set];
+    }
+    Some(id)
 }
 
 pub(super) unsafe fn dictionary(info: &[(String, String)]) -> *mut AnyObject {
@@ -109,6 +149,16 @@ pub(super) unsafe fn click(response: *mut AnyObject) -> Click {
                 }
             }
             pairs.sort();
+        }
+        // A button: its identifier (not the notification's own default or dismiss action), and a
+        // text box's words.
+        let action = string(msg_send![response, actionIdentifier]).filter(|a| !a.starts_with("com.apple.UNNotification"));
+        if let Some(action) = action {
+            let typed: bool = msg_send![response, isKindOfClass: class!(UNTextInputNotificationResponse)];
+            if typed && let Some(text) = string(msg_send![response, userText]) {
+                pairs.push((format!("{}{action}", super::INPUT), text));
+            }
+            pairs.push((super::ACTION.to_owned(), action));
         }
         Click { id, info: pairs }
     }

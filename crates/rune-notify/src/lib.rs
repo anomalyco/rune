@@ -28,17 +28,20 @@ pub struct Notification {
     title: String,
     body: String,
     info: Vec<(String, String)>,
+    #[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
     actions: Vec<Action>,
 }
 
 /// A button on a notification, or a text box with its send button.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
 enum Action {
     Button { id: String, label: String },
     Reply { id: String, placeholder: String, label: String },
 }
 
 /// The user-info key a click on a button carries its id under (`Click::action`).
+#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
 const ACTION: &str = "rune.action";
 /// The prefix of the user-info keys a click carries a text box's words under (`Click::input`).
 const INPUT: &str = "rune.input.";
@@ -61,15 +64,15 @@ impl Notification {
     }
 
     /// A button: a click on it comes back with `Click::action` = `id`, without the app coming
-    /// forward (it acts where it is). Windows shows up to five, in order. Windows only for now;
-    /// elsewhere the notification posts without them.
+    /// forward (it acts where it is). Windows shows up to five, in order; macOS up to ten (its
+    /// banner shows two, the rest under Options). Elsewhere the notification posts without them.
     pub fn action(mut self, id: impl Into<String>, label: impl Into<String>) -> Self {
         self.actions.push(Action::Button { id: id.into(), label: label.into() });
         self
     }
 
     /// A text box with a send button `label`: sending comes back with `Click::action` = `id`
-    /// and the words in `Click::input(id)`. Windows only for now.
+    /// and the words in `Click::input(id)`. Windows and macOS.
     pub fn reply(mut self, id: impl Into<String>, placeholder: impl Into<String>, label: impl Into<String>) -> Self {
         self.actions.push(Action::Reply { id: id.into(), placeholder: placeholder.into(), label: label.into() });
         self
