@@ -206,8 +206,45 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         queueMicrotask(() => { if (!h.disposed) scrolled(); });
     }
     if (!fitHeight) {
-        listen(canvas, 'wheel', event => event.preventDefault(), { passive: false });
+        // Ctrl+wheel (a touchpad's pinch) is the browser's zoom unless Rune pinched something with
+        // it: Rune hears the wheel first (winit's listener is older) and says so (`syncWheel`).
+        listen(canvas, 'wheel', event => {
+            const used = h.wheelUsed;
+            h.wheelUsed = false;
+            if (event.ctrlKey && !used) return;
+            event.preventDefault();
+        }, { passive: false });
         listen(document, 'gesturestart', event => event.preventDefault(), { passive: false });
+    }
+    if (!page) {
+        // A web link takes the pointer while it's over it, as a page's would: the status bar
+        // shows where it goes, and middle-click, Ctrl+click and its own menu open it.
+        listen(canvas, 'pointermove', event => {
+            if (event.pointerType !== 'mouse' || event.buttons) return;
+            const a = linkAt(h, event.clientX, event.clientY);
+            if (a && a !== h.hoverLink) armLink(h, a);
+        }, { passive: true });
+        // The pointer over a link (or anything else of the mirror's that took it) still hovers Rune.
+        listen(a11y, 'pointermove', event => {
+            if (event.pointerType === 'mouse') send({ kind: 'hover', x: event.clientX, y: event.clientY });
+        }, { passive: true });
+    }
+    // Right-click: Rune draws an element's own menu; anywhere else the browser opens its own over
+    // what a page would have there (the selection, a link, text, a text field), never the
+    // canvas's image menu. Armed before the menu's event, which on Windows and Linux follows the
+    // release; macOS's follows the press, which Rune has just heard (`syncSecondary`).
+    const armAt = event => {
+        if (event.button !== 2 || event.pointerType !== 'mouse' || event.target !== canvas) return;
+        if (armMenu(h, event.clientX, event.clientY)) send({ kind: 'secondary_browser' });
+    };
+    if (/Mac|iP/.test(navigator.platform)) listen(canvas, 'pointerdown', armAt);
+    else listen(window, 'pointerup', armAt, { capture: true });
+    listen(document, 'contextmenu', event => {
+        if (h.menu === 'rune' || event.target === canvas) event.preventDefault();
+        if (h.menu === 'rune') h.menu = '';
+    }, { capture: true });
+    for (const name of ['pointerdown', 'keydown', 'wheel']) {
+        listen(window, name, event => { if (name !== 'pointerdown' || event.button !== 2) disarmMenu(h); }, { capture: true, passive: true });
     }
     queueMicrotask(() => {
         if (!h.disposed && !embedded && !page && document.activeElement === document.body) canvas.focus({ preventScroll: true });
@@ -243,6 +280,130 @@ export function sync(h, key, text, base, anchor, focus, secure) {
 
 export function syncCopy(h, text) {
     h.copyText = text;
+}
+
+// What the right-click Rune just heard is on: 'app' (an element's menu, which Rune draws),
+// 'field', 'text' or '' (`Runtime::secondary_claim`).
+export function syncSecondary(h, claim) {
+    h.secondary = claim;
+}
+
+// The sans and mono slots' families (CSS lists): the mirror's text sets in them (`family`).
+export function syncFamilies(h, sans, mono) {
+    const css = (list, generic) => list.split(',').map(n => n.trim()).filter(Boolean).map(n => `"${n.replace(/["\\]/g, '')}"`).concat(generic).join(',');
+    h.a11y.style.setProperty('--rune-sans', css(sans, 'sans-serif'));
+    h.a11y.style.setProperty('--rune-mono', css(mono, 'monospace'));
+}
+
+// Whether Rune pinched something with the Ctrl+wheel it just heard.
+export function syncWheel(h, used) {
+    h.wheelUsed = used;
+}
+
+// The focused field's IME area in window points: the page's own text field sits there, so an
+// input method's candidate window opens beside the caret, not in the page's corner.
+export function syncCaret(h, x, y, w, height) {
+    h.caret = [x, y, Math.max(1, w), Math.max(1, height)];
+    if (h.fieldArmed) return;
+    for (const field of [h.textarea, h.password]) placeField(field, h.caret);
+}
+
+function placeField(field, [x, y, w, height]) {
+    Object.assign(field.style, { left: `${x}px`, top: `${y}px`, width: `${w}px`, height: `${height}px`, pointerEvents: 'none' });
+}
+
+// The mirror's web link under (x, y), if any.
+function linkAt(h, x, y) {
+    for (const a of h.a11y.querySelectorAll('a[target="_blank"]')) {
+        for (const r of a.getClientRects()) if (x >= r.left && x < r.right && y >= r.top && y < r.bottom) return a;
+    }
+    return null;
+}
+
+function armLink(h, a) {
+    disarmLink(h);
+    h.hoverLink = a;
+    a.style.pointerEvents = 'auto';
+    a.style.cursor = 'pointer';
+    a.addEventListener('pointerleave', () => disarmLink(h), { once: true });
+}
+
+function disarmLink(h) {
+    if (!h.hoverLink) return;
+    h.hoverLink.style.pointerEvents = 'none';
+    h.hoverLink = null;
+}
+
+// Readies the browser's own menu for a right-click at (x, y), unless Rune's takes it. True when
+// the browser's will open.
+function armMenu(h, x, y) {
+    disarmMenu(h);
+    const claim = h.secondary;
+    h.secondary = '';
+    if (claim === 'app') { h.menu = 'rune'; return false; }
+    h.menu = 'browser';
+    if (claim === 'field' && h.key) {
+        // The page's field holds the Rune field's text and selection: its menu's Cut, Copy, Paste
+        // and Select all edit them, as a page's text field's would.
+        h.fieldArmed = true;
+        placeField(h.field, [x - 2, y - 2, 4, 4]);
+        h.field.style.pointerEvents = 'auto';
+        return true;
+    }
+    if (h.copyText) {
+        // The selection, as a page's: in a node under the pointer, selected, so the menu offers
+        // Copy and a search for it.
+        if (!h.pick) {
+            h.pick = document.createElement('div');
+            h.pick.setAttribute('data-rune-selection', '');
+            const style = document.createElement('style');
+            style.textContent = '[data-rune-selection]::selection{background:transparent;color:transparent}';
+            document.head.append(style);
+            document.body.append(h.pick);
+        }
+        h.pick.textContent = h.copyText;
+        h.pick.style.cssText = `position:fixed;left:${x - 4}px;top:${y - 4}px;width:8px;height:8px;overflow:hidden;white-space:pre;color:transparent;z-index:2;user-select:text;-webkit-user-select:text;`;
+        const range = document.createRange();
+        range.selectNodeContents(h.pick);
+        const selection = getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
+        return true;
+    }
+    // A link, the text under the pointer, or the page itself (Back, Reload, Print, Inspect).
+    const el = linkAt(h, x, y) ?? textAt(h, x, y) ?? h.a11y;
+    h.armed = [el, el.style.pointerEvents];
+    el.style.pointerEvents = 'auto';
+    return true;
+}
+
+function textAt(h, x, y) {
+    let hit = null;
+    for (const el of h.a11y.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6')) {
+        const r = el.getBoundingClientRect();
+        if (x >= r.left && x < r.right && y >= r.top && y < r.bottom) hit = el;
+    }
+    return hit;
+}
+
+function disarmMenu(h) {
+    if (h.armed) {
+        const [el, before] = h.armed;
+        el.style.pointerEvents = before;
+        h.armed = null;
+    }
+    if (h.pick?.textContent) {
+        const selection = getSelection();
+        if (selection.anchorNode && h.pick.contains(selection.anchorNode)) selection.removeAllRanges();
+        h.pick.textContent = '';
+        h.pick.style.left = '-10000px';
+    }
+    if (h.fieldArmed) {
+        h.fieldArmed = false;
+        if (h.caret) placeField(h.field, h.caret);
+        else Object.assign(h.field.style, { left: '0px', top: '0px', width: '1px', height: '1px', pointerEvents: 'none' });
+    }
+    if (h.menu === 'browser') h.menu = '';
 }
 
 function webLink(url) {

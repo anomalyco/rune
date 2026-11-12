@@ -46,6 +46,24 @@ impl<S: 'static> Runtime<S> {
         }
     }
 
+    /// What the secondary press being held is on, for a browser that shows its own context
+    /// menu: `"app"` when an element's menu or a link's takes it (Rune draws that), `"field"` on
+    /// a text field, `"text"` on selectable text alone, `""` on nothing of Rune's.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    pub(crate) fn secondary_claim(&self) -> &'static str {
+        let capture::Secondary::Held { path, link, .. } = &self.secondary else { return "" };
+        let Some(n) = self.nodes.iter().find(|n| n.path == *path) else { return "" };
+        if link.is_some() || n.handlers.on_secondary_press.is_some() { return "app"; }
+        if n.input.as_ref().is_some_and(|i| i.access.is_some()) { return "field"; }
+        "text"
+    }
+
+    /// The secondary press went to the browser's own menu: its release opens none of Rune's.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    pub(crate) fn secondary_abandon(&mut self) {
+        self.secondary = capture::Secondary::Up;
+    }
+
     pub fn secondary_up(&mut self, x: f32, y: f32) {
         self.pointer = Some((x, y));
         self.secondary_region_up(x, y);

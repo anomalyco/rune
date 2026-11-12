@@ -21,6 +21,14 @@ extern "C" {
     fn destroy(handle: &JsValue);
     #[wasm_bindgen(js_name = pastedImage)]
     fn pasted_image(handle: &JsValue, max: u32) -> js_sys::Promise;
+    #[wasm_bindgen(js_name = syncSecondary)]
+    fn sync_secondary(handle: &JsValue, claim: &str);
+    #[wasm_bindgen(js_name = syncWheel)]
+    fn sync_wheel(handle: &JsValue, used: bool);
+    #[wasm_bindgen(js_name = syncCaret)]
+    fn sync_caret(handle: &JsValue, x: f32, y: f32, w: f32, h: f32);
+    #[wasm_bindgen(js_name = syncFamilies)]
+    fn sync_families(handle: &JsValue, sans: &str, mono: &str);
 }
 
 /// How the canvas sits in the page.
@@ -48,6 +56,10 @@ pub(super) struct Bridge {
     page: Option<(f32, bool)>,
     /// The horizontal offsets the mirror's containers were last set to.
     scroll_x: Vec<(String, f32)>,
+    /// The IME area the page's text field was last put at.
+    caret: Option<[f32; 4]>,
+    /// The slot families the mirror's text was last set in.
+    families: (String, String),
 }
 
 impl Bridge {
@@ -71,7 +83,7 @@ impl Bridge {
         let handle = mount(canvas, callback.as_ref().unchecked_ref(), embedded, fit_height, document);
         Self { handle, _callback: callback, dispose_viewport, mods: ModifiersState::empty(),
             mirror: Default::default(), a11y: Default::default(),
-            copy_cache: String::new(), fit_height, document, page: None, scroll_x: Vec::new() }
+            copy_cache: String::new(), fit_height, document, page: None, scroll_x: Vec::new(), caret: None, families: Default::default() }
     }
 
     /// The first frame is on screen: a page swaps its static export for the live mirror.
@@ -94,6 +106,16 @@ impl<S: 'static> Running<S> {
         if self.input.copy_cache != next_copy {
             self.input.copy_cache = next_copy;
             sync_copy(&self.input.handle, &self.input.copy_cache);
+        }
+        // The page's text field sits at the caret, so an input method's candidates open beside it.
+        if self.input.caret != self.rt.ime_area {
+            self.input.caret = self.rt.ime_area;
+            if let Some([x, y, w, h]) = self.input.caret { sync_caret(&self.input.handle, x, y, w, h); }
+        }
+        let (sans, mono) = self.rt.font_families();
+        if !self.input.document && (self.input.families.0 != sans || self.input.families.1 != mono) {
+            self.input.families = (sans.to_owned(), mono.to_owned());
+            sync_families(&self.input.handle, sans, mono);
         }
         if let Some(json) = self.rt.web_a11y(&mut self.input.a11y) {
             sync_a11y(&self.input.handle, json);
@@ -159,6 +181,8 @@ impl<S: 'static> Running<S> {
             }
             Some("key") => activate = self.rt.web_key(event),
             Some("a11y_press" | "a11y_link") => { let _ = self.rt.web_a11y_action(event); }
+            // The browser's menu takes this right-click (bridge.js): its release opens none of Rune's.
+            Some("secondary_browser") => { self.rt.secondary_abandon(); return false; }
             // The page scrolled: draw the band in view, and hover what is now under the pointer.
             // The redraw that follows the event draws it; nothing commits.
             Some("scroll") => {
@@ -215,7 +239,11 @@ impl<S: 'static> Running<S> {
                 match (button, state) {
                     (MouseButton::Left, ElementState::Pressed) => { self.rt.pointer_down(x, y); activate = true; }
                     (MouseButton::Left, ElementState::Released) => self.rt.pointer_up(x, y),
-                    (MouseButton::Right, ElementState::Pressed) => self.rt.secondary_down(x, y),
+                    (MouseButton::Right, ElementState::Pressed) => {
+                        self.rt.secondary_down(x, y);
+                        // The browser's own menu opens where Rune's doesn't (bridge.js).
+                        sync_secondary(&self.input.handle, self.rt.secondary_claim());
+                    }
                     (MouseButton::Right, ElementState::Released) => self.rt.secondary_up(x, y),
                     (&button, ElementState::Pressed) => self.rt.button_down(x, y, crate::window::pointer_button(button)),
                     (&button, ElementState::Released) => self.rt.button_up(x, y, crate::window::pointer_button(button)),
@@ -225,7 +253,12 @@ impl<S: 'static> Running<S> {
                 let Some((x, y)) = self.rt.pointer() else { return false };
                 let (dx, dy) = crate::runtime::wheel_delta(*delta, scale, self.input.mods.shift_key());
                 // A page's pinch is the browser's zoom.
-                if self.input.mods.control_key() { return !self.input.document && self.rt.pinch_wheel(x, y, dy); }
+                // Where nothing of Rune's pinches, it's the browser's zoom (bridge.js).
+                if self.input.mods.control_key() {
+                    let used = !self.input.document && self.rt.pinch_wheel(x, y, dy);
+                    sync_wheel(&self.input.handle, used);
+                    return used;
+                }
                 // On a content-sized embedded canvas, vertical wheel belongs to the page unless
                 // a horizontal strip is being scrolled.
                 if self.input.fit_height && dx.abs() <= dy.abs() { return false; }

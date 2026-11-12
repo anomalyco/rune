@@ -36,7 +36,7 @@ pub(crate) struct A11yItem {
     pub id: Option<String>,
     /// A link's URL.
     pub href: Option<String>,
-    /// In a page, text's font, so the browser's selection and find highlights land on the
+    /// Text's font, so the browser's Find highlight (and, in a page, its selection) lands on the
     /// drawn glyphs.
     pub font: Option<A11yFont>,
     /// Text the browser selects and copies, in a page: `El::selectable` text, and text outside
@@ -429,7 +429,7 @@ impl<S: 'static> Runtime<S> {
                         i += 1;
                         continue;
                     }
-                    let text_rect = if self.page.is_some() { inset_rect(rect, n.inset) } else { rect };
+                    let text_rect = inset_rect(rect, n.inset);
                     if !is_heading && flow_group.is_none()
                         && let Some(prev) = inline.filter(|l| l.item + 1 == out.len() && l.parent == n.parent)
                         && let Some(gap) = prev.gap(n.target, spec.style, selectable)
@@ -451,17 +451,19 @@ impl<S: 'static> Runtime<S> {
                     item.text = plain;
                     item.runs = rich_runs;
                     item.id = if is_heading { anchor_id(n.key.as_deref()) } else { None };
+                    // Laid out in the drawn text's font, so the browser's Find highlight (and, in a
+                    // page, its selection) lands on the glyphs.
+                    item.rect = text_rect;
+                    let style = spec.style;
+                    item.font = Some(A11yFont {
+                        family: family_name(style.family),
+                        weight: style.weight,
+                        line_height: round1(if style.line_height > 0.0 { style.line_height } else { style.size * 1.25 }),
+                        tracking: style.tracking,
+                        italic: style.italic,
+                        align: align_name(spec.align),
+                    });
                     if self.page.is_some() {
-                        item.rect = text_rect;
-                        let style = spec.style;
-                        item.font = Some(A11yFont {
-                            family: family_name(style.family),
-                            weight: style.weight,
-                            line_height: round1(if style.line_height > 0.0 { style.line_height } else { style.size * 1.25 }),
-                            tracking: style.tracking,
-                            italic: style.italic,
-                            align: align_name(spec.align),
-                        });
                         item.selectable = selectable;
                     }
                     push(&mut out, item);

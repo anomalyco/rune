@@ -193,3 +193,10 @@ export function viewport(canvas, callback, embedded) {
         largest.remove();
     };
 }
+
+// One face of an app font as the page's own, so the semantic mirror's text sets in it.
+export function addFontFace(family, bytes, weight, style) {
+    const face = new FontFace(family, bytes.slice(), { weight, style });
+    document.fonts.add(face);
+    face.load().catch(() => {});
+}
