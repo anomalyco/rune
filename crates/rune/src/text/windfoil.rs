@@ -16,6 +16,8 @@ pub(super) enum FaceKind {
     Color,
     /// Its `OS/2` ranges claim Han, kana or Hangul.
     Cjk,
+    /// It carries TrueType hints (a font program, `fpgm`).
+    Hinted,
 }
 
 /// Rest ppem up to which CJK faces draw their TrueType-hinted outlines.
@@ -85,10 +87,13 @@ impl TextSystem {
         if kind == FaceKind::Color {
             return Found::Elsewhere;
         }
-        let hint = if self.smoothing.look().is_some_and(|l| l.hint == coretext_match::OutlineHint::Auto) {
+        let look = self.smoothing.look().map(|l| l.hint);
+        let hint = if look == Some(coretext_match::OutlineHint::Auto) {
             outline::Hinting::Auto(ppem)
         } else if kind == FaceKind::Cjk && ppem <= CJK_HINT_MAX {
             outline::Hinting::TrueType(ppem)
+        } else if cfg!(not(target_os = "macos")) && look == Some(coretext_match::OutlineHint::DirectWrite) && kind == FaceKind::Hinted && gasp_grid_fits(font_ref, ppem) {
+            outline::Hinting::Vertical(ppem)
         } else {
             outline::Hinting::None
         };
@@ -222,5 +227,16 @@ fn face_kind(font: FontRef<'_>) -> FaceKind {
     }
     // ulUnicodeRange2: Hiragana (bit 49), Hangul syllables (56), CJK unified ideographs (59).
     let range2 = font.table(u32::from_be_bytes(*b"OS/2")).and_then(|t| t.get(46..50)).map_or(0, |b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]));
-    if range2 & (1 << 17 | 1 << 24 | 1 << 27) != 0 { FaceKind::Cjk } else { FaceKind::Plain }
+    if range2 & (1 << 17 | 1 << 24 | 1 << 27) != 0 { return FaceKind::Cjk; }
+    if font.table(u32::from_be_bytes(*b"fpgm")).is_some() { FaceKind::Hinted } else { FaceKind::Plain }
+}
+
+/// Whether `font`'s `gasp` table asks for grid fitting at `ppem` (`GASP_GRIDFIT` or
+/// `GASP_SYMMETRIC_GRIDFIT`), as DirectWrite reads it; a face without one is grid fitted.
+fn gasp_grid_fits(font: FontRef<'_>, ppem: f32) -> bool {
+    let Some(gasp) = font.table(u32::from_be_bytes(*b"gasp")) else { return true };
+    let u16_at = |i: usize| gasp.get(i..i + 2).map(|b| u16::from_be_bytes([b[0], b[1]]));
+    let count = u16_at(2).unwrap_or(0) as usize;
+    let size = ppem.round() as u32;
+    (0..count).filter_map(|k| Some((u16_at(4 + 4 * k)?, u16_at(6 + 4 * k)?))).find(|&(max, _)| size <= u32::from(max)).is_none_or(|(_, flags)| flags & (0x0001 | 0x0004) != 0)
 }

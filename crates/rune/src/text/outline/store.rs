@@ -20,7 +20,7 @@ pub(crate) struct Key {
     pub glyph: u32,
     pub coords: u64,
     pub skew: u8,
-    pub hinted: u32,
+    pub hinted: u64,
 }
 
 /// Where a glyph's record starts, its ink box in font units (x0, y0, x1, y1, y up) and the

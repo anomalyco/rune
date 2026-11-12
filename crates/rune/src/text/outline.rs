@@ -54,15 +54,20 @@ pub(crate) enum Hinting {
     TrueType(f32),
     /// FreeType's light autohint (skrifa's): heights to the grid, widths kept.
     Auto(f32),
+    /// The font's own TrueType hints in the vertical direction only, as DirectWrite's natural
+    /// modes run them for Chromium (FreeType's v40 interpreter, which skips horizontal moves):
+    /// heights and horizontal stems on the grid, widths and advances as designed.
+    Vertical(f32),
 }
 
 impl Hinting {
-    /// The store key's part for it: 0, a ppem's bits, or those with the top bit for autohint.
-    pub(crate) fn key(self) -> u32 {
+    /// The store key's part for it: 0, or a ppem's bits tagged by the kind in the top half.
+    pub(crate) fn key(self) -> u64 {
         match self {
             Hinting::None => 0,
-            Hinting::TrueType(ppem) => ppem.to_bits(),
-            Hinting::Auto(ppem) => ppem.to_bits() | 1 << 31,
+            Hinting::TrueType(ppem) => u64::from(ppem.to_bits()),
+            Hinting::Auto(ppem) => 1 << 32 | u64::from(ppem.to_bits()),
+            Hinting::Vertical(ppem) => 2 << 32 | u64::from(ppem.to_bits()),
         }
     }
 }
@@ -99,10 +104,10 @@ pub(crate) fn extract(cx: &mut ScaleContext, font: FontRef<'_>, index: u32, coor
     let lean = if skew == 0 { 0.0 } else { (skew as f64).to_radians().tan() };
     let size = match hinting {
         Hinting::None => upem as f32,
-        Hinting::TrueType(ppem) | Hinting::Auto(ppem) => ppem,
+        Hinting::TrueType(ppem) | Hinting::Auto(ppem) | Hinting::Vertical(ppem) => ppem,
     };
-    let mut built = if let Hinting::Auto(ppem) = hinting {
-        let path = autohinted(font.data, index, coords, glyph, ppem)?;
+    let mut built = if let Hinting::Auto(ppem) | Hinting::Vertical(ppem) = hinting {
+        let path = skrifa_hinted(font.data, index, coords, glyph, ppem, matches!(hinting, Hinting::Vertical(_)))?;
         build::build(path.iter().copied(), upem as f64 / size as f64, lean)?
     } else {
         let mut scaler = cx.builder(font).size(size).hint(hinting != Hinting::None).normalized_coords(coords.iter().copied()).build();
@@ -114,16 +119,18 @@ pub(crate) fn extract(cx: &mut ScaleContext, font: FontRef<'_>, index: u32, coor
 }
 
 /// `glyph`'s outline at `ppem` px, y up, after FreeType's light autohint (skrifa's), as Chromium
-/// draws text on Linux with `hintslight`.
-fn autohinted(data: &[u8], index: u32, coords: &[i16], glyph: u16, ppem: f32) -> Option<Vec<swash::zeno::Command>> {
+/// draws text on Linux with `hintslight`; or, `vertical`, after the font's own TrueType hints run
+/// by the v40 interpreter, which applies them vertically only, as DirectWrite does on Windows.
+fn skrifa_hinted(data: &[u8], index: u32, coords: &[i16], glyph: u16, ppem: f32, vertical: bool) -> Option<Vec<swash::zeno::Command>> {
     use skrifa::MetadataProvider;
     use skrifa::outline::{DrawSettings, Engine, HintingInstance, HintingOptions, SmoothMode, Target};
     let font = skrifa::FontRef::from_index(data, index).ok()?;
     let outlines = font.outline_glyphs();
     let coords: Vec<skrifa::instance::NormalizedCoord> = coords.iter().map(|&c| skrifa::instance::NormalizedCoord::from_bits(c)).collect();
-    let options = HintingOptions {
-        engine: Engine::Auto(None),
-        target: Target::Smooth { mode: SmoothMode::Light, symmetric_rendering: true, preserve_linear_metrics: true },
+    let options = if vertical {
+        HintingOptions { engine: Engine::Interpreter, target: Target::Smooth { mode: SmoothMode::Normal, symmetric_rendering: true, preserve_linear_metrics: true } }
+    } else {
+        HintingOptions { engine: Engine::Auto(None), target: Target::Smooth { mode: SmoothMode::Light, symmetric_rendering: true, preserve_linear_metrics: true } }
     };
     let instance = HintingInstance::new(&outlines, skrifa::instance::Size::new(ppem), skrifa::instance::LocationRef::new(&coords), options).ok()?;
     let g = outlines.get(skrifa::GlyphId::new(glyph as u32))?;
