@@ -31,12 +31,11 @@ impl TextEdit {
     }
 
     /// Moves the caret to `i` (on `side` of it, from a visual step), or collapses a selection to
-    /// the side of travel.
-    fn move_h(&mut self, (i, side): (usize, parley::Affinity), extend: bool) {
+    /// the end the arrow points at (`right`).
+    fn move_h(&mut self, (i, side): (usize, parley::Affinity), extend: bool, right: bool, layout: Option<TextFlow<'_>>) {
         let (a, b) = self.range();
         if !extend && a != b {
-            // Collapse to the side of travel.
-            let to = if i < self.focus { a } else { b };
+            let to = self.collapse_to(layout, right);
             self.anchor = to;
             self.focus = to;
             self.affinity = parley::Affinity::Downstream;
@@ -45,6 +44,20 @@ impl TextEdit {
             if self.focus == i { self.affinity = side; }
         }
         self.typing = Typing::Inherited;
+    }
+
+    /// The end of the selection Left (`!right`) or Right collapses it to, as Notepad and Word do:
+    /// the end drawn further that way when both sit on one line, so Left in an Arabic line goes
+    /// to its logical end. Across lines, the end the arrow steps toward in the focus's paragraph.
+    fn collapse_to(&self, layout: Option<TextFlow<'_>>, right: bool) -> usize {
+        let (a, b) = self.range();
+        let Some(l) = layout.filter(|_| !self.is_masked()) else { return if right { b } else { a } };
+        let (ca, cb) = (l.caret(self.display_index(a), parley::Affinity::Downstream, 0.0), l.caret(self.display_index(b), parley::Affinity::Upstream, 0.0));
+        if (ca.y0 - cb.y0).abs() < 1.0 {
+            return if (ca.x0 <= cb.x0) != right { a } else { b };
+        }
+        let forward = right == (l.piece_at(self.display_index(self.focus)).flow == crate::el::Flow::Ltr);
+        if forward { b } else { a }
     }
 
     /// Applies one key. `layout` is the field's layout for the current text (device px).
@@ -218,17 +231,17 @@ impl TextEdit {
                     self.replace((a, to), "", if word { EditKind::DeleteRun } else { EditKind::Delete });
                 }
             }
-            Key::Left if !line && let Some(to) = self.visual_step(layout, false, word) => self.move_h(to, m.shift),
+            Key::Left if !line && let Some(to) = self.visual_step(layout, false, word) => self.move_h(to, m.shift, false, layout),
             Key::Left => {
                 let i = if line { self.line_edge(layout, false) } else if word { self.prev_word(self.focus) } else { prev_char(&self.text, self.focus) };
-                self.move_h((i, parley::Affinity::Downstream), m.shift);
+                self.move_h((i, parley::Affinity::Downstream), m.shift, false, layout);
             }
             Key::Right if !m.shift && !m.cmd && !m.alt && !m.ctrl && self.at_end_of_trailing_block() => self.leave_trailing_block(),
             Key::Down if !m.shift && !m.cmd && !m.alt && !m.ctrl && self.at_end_of_trailing_block() => self.leave_trailing_block(),
-            Key::Right if !line && let Some(to) = self.visual_step(layout, true, word) => self.move_h(to, m.shift),
+            Key::Right if !line && let Some(to) = self.visual_step(layout, true, word) => self.move_h(to, m.shift, true, layout),
             Key::Right => {
                 let i = if line { self.line_edge(layout, true) } else if word { self.next_word(self.focus) } else { next_char(&self.text, self.focus) };
-                self.move_h((i, parley::Affinity::Downstream), m.shift);
+                self.move_h((i, parley::Affinity::Downstream), m.shift, true, layout);
             }
             // Home and End go to the text's ends on macOS. Elsewhere they go to the line's
             // edge, and with Ctrl to the text's ends.

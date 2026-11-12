@@ -378,9 +378,18 @@ impl Renderer {
         let empty = Inline::default();
         let total: f32 = cols.natural.iter().sum();
         let mut r = row().role("row").w_full();
+        let table_dir = super::bidi::table_dir(t);
         for (j, (natural, min)) in cols.natural.iter().zip(&cols.min).enumerate() {
             let inl = cells.get(j).unwrap_or(&empty);
             let align = if self.s.table_align { t.align.get(j).copied().unwrap_or_default() } else { Align::Start };
+            // A cell's words read their own way, and its column keeps the table's alignment: a
+            // path in an Arabic table still starts at the column's right.
+            let dir = super::bidi::inline_dir(inl);
+            let align = match align {
+                Align::Start if dir.is_some() && dir != table_dir => Align::End,
+                Align::End if dir.is_some() && dir != table_dir => Align::Start,
+                a => a,
+            };
             let content = self
                 .with_reveal(
                     rich(inl.text.clone(), self.spans(inl, font))
@@ -389,6 +398,7 @@ impl Renderer {
                         .align(align),
                 )
                 .w_full();
+            let content = super::bidi::directed(super::bidi::isolated(content, inl), dir);
             // Full width: each column's share of the row is its share of the natural width, so
             // a wider row widens columns in proportion and a narrower one shrinks them as
             // without it. A table that scrolls never shrinks a column below its content.

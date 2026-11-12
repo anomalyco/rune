@@ -260,6 +260,12 @@ fn prepare_text(
             "live_text requires plain single-line text; use truncate_fade for overflow");
     }
     if input.is_none()
+        && text.as_ref().is_some_and(|t| !t.cold.isolates.is_empty() || !t.cold.pills.is_empty())
+        && let Some(t) = text
+    {
+        t.apply_isolates();
+    }
+    if input.is_none()
         && text.as_ref().is_some_and(|t| t.redacted || t.case.is_some() || !t.cold.rings.is_empty())
         && let Some(t) = text
     {

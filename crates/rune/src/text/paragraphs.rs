@@ -318,11 +318,22 @@ impl<'a> TextFlow<'a> {
         }
     }
 
+    /// Where an empty paragraph's caret, `size` px wide, starts: its right edge (the width it
+    /// wraps at) when it reads right to left, else 0.
+    fn blank_start(self, p: &Piece<'_>, size: f32) -> f32 {
+        match (p.flow, self) {
+            (Flow::Rtl, TextFlow::Paragraphs(pl)) => (pl.max_width.unwrap_or(pl.width) - size).max(0.0),
+            _ => 0.0,
+        }
+    }
+
     /// The caret's box at content byte `at`, on `side` of it, `size` px wide.
     pub(crate) fn caret(self, at: usize, side: parley::layout::Affinity, size: f32) -> parley::BoundingBox {
         let p = self.piece_at(at);
         if p.is_blank() {
-            return parley::BoundingBox::new(0.0, p.y as f64, size as f64, (p.y + p.height) as f64);
+            // An empty line's caret stands at its start: the right edge of a right-to-left one.
+            let x = self.blank_start(&p, size) as f64;
+            return parley::BoundingBox::new(x, p.y as f64, x + size as f64, (p.y + p.height) as f64);
         }
         let c = parley::editing::Cursor::from_byte_index(p.layout, p.shaped(at), side);
         let mut bb = cursor_geometry(&c, p.layout, size);
@@ -363,7 +374,7 @@ impl<'a> TextFlow<'a> {
         };
         let p = self.piece_at(at);
         let (x, line) = if p.is_blank() || p.layout.len() == 0 {
-            (0.0, 0)
+            (self.blank_start(&p, 0.0), 0)
         } else {
             let c = parley::editing::Cursor::from_byte_index(p.layout, p.shaped(at), parley::layout::Affinity::Downstream);
             let bb = cursor_geometry(&c, p.layout, 0.0);
@@ -415,7 +426,10 @@ impl<'a> TextFlow<'a> {
                         let x = m.inline_min_coord + m.offset;
                         (m.block_min_coord.min(m.content_block_min_coord), m.block_max_coord.max(m.content_block_max_coord), m.baseline, x, x + m.advance)
                     }
-                    None => (0.0, p.height, p.height * 0.8, 0.0, 0.0),
+                    None => {
+                        let x = self.blank_start(&p, 0.0);
+                        (0.0, p.height, p.height * 0.8, x, x)
+                    }
                 };
                 let (top, bottom) = (top as f64 + y, bottom as f64 + y);
                 let ws = pl.newline as f64;
@@ -479,12 +493,14 @@ impl TextSystem {
         }
         // One paragraph and no pills, as most drafts are: one layout in its own direction.
         if spec.cold.pills.is_empty() && !spec.content.contains('\n') {
-            let base = flow_of(&spec.content, &[]).base();
+            let base = flow_of(&spec.content, &[]).unwrap_or(spec.plaintext_flow()).base();
             let shape = spec.shape_key(scale).map(|k| hash::directed(k, base));
             let style = (&spec.content, &spec.spans, &spec.cold.blocks);
             return TextLayout::Single(self.layout_keyed(shape, style.0, style.1, style.2, &[], spec.style, scale, max_width, align, spec.wrap_anywhere, Keep::Cached, base));
         }
         let whole = spec.shape_key(scale).unwrap_or_else(|| spec.fresh_shape_key(scale));
+        // Lines with no strong character take the element's flow, so it keys the whole too.
+        let whole = if spec.plaintext_flow() == Flow::Rtl { whole ^ 0x3c6e_f372_fe94_f82b } else { whole };
         let blocks = &spec.cold.blocks;
         let indented = blocks.iter().any(|&b| b != Block::Paragraph).then_some(blocks.as_slice());
         let key = hash::break_key(whole ^ PARAGRAPHS, max_width, align, indented);
@@ -526,11 +542,14 @@ impl TextSystem {
         };
         let mut found: Vec<(usize, usize, Flow, u64, Box<[(u32, u32)]>)> = Vec::new();
         let mut start = 0;
+        // A paragraph with no strong character reads the way the one before it does.
+        let mut last = spec.plaintext_flow();
         for (k, words) in content.split('\n').enumerate() {
             let (a, b) = (start, start + words.len());
             start = b + 1;
             let isolates: Box<[(u32, u32)]> = spec.cold.pills.iter().filter(|p| inside(p, a, b)).map(|p| (p.start - a as u32, p.end - a as u32)).collect();
-            let flow = flow_of(words, &isolates);
+            let flow = flow_of(words, &isolates).unwrap_or(last);
+            last = flow;
             let mut h = hash::KeyHasher::default();
             (words, style_key, flow == Flow::Rtl, spec.cold.blocks.get(k).copied().unwrap_or(Block::Paragraph)).hash(&mut h);
             for s in spans_in(&spec.spans, a, b, &isolates) {
@@ -587,17 +606,16 @@ impl TextSystem {
     }
 }
 
-/// A paragraph's direction: its first strong character's outside its pills, left to right with
-/// none.
-fn flow_of(words: &str, isolates: &[(u32, u32)]) -> Flow {
+/// A paragraph's direction: its first strong character's outside its pills, or None with none.
+fn flow_of(words: &str, isolates: &[(u32, u32)]) -> Option<Flow> {
     let mut at = 0;
     for &(a, b) in isolates.iter().chain([&(words.len() as u32, words.len() as u32)]) {
         if let Some(d) = words.get(at..a as usize).and_then(Direction::of) {
-            return if d == Direction::Rtl { Flow::Rtl } else { Flow::Ltr };
+            return Some(if d == Direction::Rtl { Flow::Rtl } else { Flow::Ltr });
         }
         at = at.max(b as usize);
     }
-    Flow::Ltr
+    None
 }
 
 /// `words` with each isolated pill's label between FSI and PDI.

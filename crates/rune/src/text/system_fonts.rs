@@ -266,6 +266,9 @@ impl TextSystem {
         crate::marks::mark("text.fallback.begin");
         for (i, ch) in scripts {
             register_script_fallbacks(&mut self.font_cx.collection, &mut self.font_files, &fallback::SCRIPT_FONTS[i], ch, locale.as_deref());
+            if self.mono_scripts.is_none() && matches!(fallback::SCRIPT_FONTS[i].script, b"Arab" | b"Hebr") {
+                self.mono_scripts = Some(load_families(&mut self.font_cx.collection, fallback::MONO_SCRIPT_FILES, fallback::MONO_SCRIPT_FAMILIES));
+            }
         }
         if math {
             self.math = Some(load_families(&mut self.font_cx.collection, fallback::MATH_FONT_FILES, fallback::MATH_FAMILIES));
@@ -442,15 +445,21 @@ fn load_files(collection: &mut Collection, loaded: &mut LoadedFiles, paths: impl
 /// Appends the system fonts for `fonts.script` as that script's fallbacks.
 /// On Windows the font is the one Windows falls back to for `sample` in `locale`.
 fn register_script_fallbacks(collection: &mut Collection, loaded: &mut LoadedFiles, fonts: &fallback::ScriptFonts, sample: char, locale: Option<&str>) {
+    // The whole family, so a medium label takes its Semibold and a heading its Bold.
     #[cfg(windows)]
-    let files = direct_write::fallback_files(&[sample], locale);
+    let files = direct_write::fallback_family_files(&[sample], locale);
     #[cfg(not(windows))]
     let files = {
         let _ = (sample, locale);
         system_font_files(fonts.files)
     };
-    let added = load_files(collection, loaded, files.into_iter().take(4));
+    let added = load_files(collection, loaded, files.into_iter().take(16));
     if !added.is_empty() {
+        // The Arabic comma, semicolon and question mark (and Urdu's full stop) are Common
+        // characters: after Latin text they join its run, which looks only at Latin fallbacks.
+        if matches!(fonts.script, b"Arab" | b"Hebr") {
+            collection.append_fallbacks(FallbackKey::new(Script::from_bytes(*b"Latn"), None), added.iter().copied());
+        }
         collection.append_fallbacks(FallbackKey::new(Script::from_bytes(*fonts.script), None), added.into_iter());
     }
 }
