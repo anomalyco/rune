@@ -125,6 +125,11 @@ export function nextTask() {
     return globalThis.scheduler?.yield ? globalThis.scheduler.yield() : new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+// Resolves in the page's next idle time, or after `timeout` ms at the latest.
+export function nextIdle(timeout) {
+    return new Promise((resolve) => globalThis.requestIdleCallback ? requestIdleCallback(() => resolve(), { timeout }) : setTimeout(resolve, timeout));
+}
+
 export async function fetchBytes(url) {
     const response = await fetch(new URL(url, document.baseURI));
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
