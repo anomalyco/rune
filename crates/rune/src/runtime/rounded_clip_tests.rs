@@ -205,6 +205,7 @@ fn rounded_clip_preserves_every_primitive_lane_and_feathers() {
     let mut renderer = Renderer::new(&gpu.device, format);
     let target = Offscreen::with_format(&gpu.device, 64, 48, format);
     let mut atlas = crate::text::TextSystem::default().atlas;
+    atlas.data.resize(crate::text::ATLAS_SIZE.pow(2) as usize, 0);
     for y in 0..48 { atlas.data[y * crate::text::ATLAS_SIZE as usize..y * crate::text::ATLAS_SIZE as usize + 64].fill(128); }
     atlas.dirty = Some((0, 48));
     let mut images = crate::pixels::ImageAtlas::default();

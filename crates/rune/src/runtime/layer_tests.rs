@@ -441,6 +441,7 @@ fn isolated_layers_preserve_image_video_spring_and_list_order() {
     // A glyph, a vector and a page-1 image inside the nonzero-origin layer. Absolute spring
     // indices differ from local draw indices, so a shifted subrange would use the wrong node.
     let mut atlas = crate::text::TextSystem::default().atlas;
+    atlas.data.resize(crate::text::ATLAS_SIZE.pow(2) as usize, 0);
     atlas.data[0] = 255; atlas.dirty = Some((0, 1));
     content.insert(3, Instance { rect: [9.0, 6.0, 1.0, 1.0], fill: [1.0; 4], clip: NO_CLIP,
         params: [0.0, KIND_GLYPH, 0.0, 1.0], ..Instance::zeroed() });
