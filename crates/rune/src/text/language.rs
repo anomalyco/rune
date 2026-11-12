@@ -30,6 +30,43 @@ pub fn set_language(tag: Option<&str>) {
     }
 }
 
+/// The language `text` shapes and falls back in: Japanese when it has kana, Korean when it has
+/// Hangul, Traditional Chinese when it has Bopomofo (each a script only that language writes),
+/// so its Han characters take that language's forms and font whatever the interface language,
+/// and one Japanese sentence never mixes a Chinese font's 設定 with a Japanese one's を開く.
+/// Otherwise the interface language `chosen`; Han text under an interface that isn't Chinese,
+/// Japanese or Korean takes Simplified Chinese, as Chromium's Han default is. One scan, ASCII
+/// skipped at once.
+pub(super) fn of_text(text: &str, chosen: Option<Language>) -> Option<Language> {
+    if text.is_ascii() {
+        return chosen;
+    }
+    let mut han = false;
+    let tag = text.chars().find_map(|ch| match ch as u32 {
+        0x3041..=0x309F | 0x30A0..=0x30FF | 0x31F0..=0x31FF | 0xFF66..=0xFF9F => Some(b"ja" as &[u8]),
+        0x1100..=0x11FF | 0x3130..=0x318F | 0xA960..=0xA97F | 0xAC00..=0xD7AF | 0xD7B0..=0xD7FF => Some(b"ko"),
+        0x3100..=0x312F | 0x31A0..=0x31BF => Some(b"zh-TW"),
+        0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xF900..=0xFAFF | 0x20000..=0x3FFFF => { han = true; None }
+        _ => None,
+    });
+    let cjk = |l: &Language| matches!(l.language(), "ja" | "ko" | "zh");
+    let tag = match tag {
+        // The chosen language already writes that script (a `ja` interface for kana): its tag.
+        Some(tag) if chosen.is_some_and(|c| c.language().as_bytes() == &tag[..2]) => return chosen,
+        Some(tag) => tag,
+        None if han && !chosen.as_ref().is_some_and(cjk) => b"zh-CN",
+        None => return chosen,
+    };
+    static TAGS: std::sync::OnceLock<[Option<Language>; 4]> = std::sync::OnceLock::new();
+    let [ja, ko, tw, cn] = TAGS.get_or_init(|| ["ja", "ko", "zh-TW", "zh-CN"].map(|t| Language::parse(t).ok()));
+    match tag {
+        b"ja" => *ja,
+        b"ko" => *ko,
+        b"zh-TW" => *tw,
+        _ => *cn,
+    }
+}
+
 impl TextSystem {
     /// The language this text system shapes in.
     pub fn language(&self) -> Option<Language> {
@@ -111,7 +148,7 @@ fn order(names: &[Option<String>], writing: &Writing) -> Vec<usize> {
     out
 }
 
-/// Registers `fallbacks` (the CJK fonts in file order) for each CJK script, ordered for the
+/// Sets `fallbacks` (every CJK font, in load order) as each CJK script's, ordered for the
 /// writing each script and language implies: Han by language (Simplified Chinese when none),
 /// kana for Japanese, Hangul for Korean, Bopomofo for Traditional Chinese.
 pub(super) fn register(collection: &mut Collection, fallbacks: &[FamilyId]) {
@@ -119,7 +156,7 @@ pub(super) fn register(collection: &mut Collection, fallbacks: &[FamilyId]) {
     let ordered = |writing: &Writing| order(&names, writing).into_iter().map(|i| fallbacks[i]).collect::<Vec<_>>();
     let mut add = |script: &[u8; 4], locale: Option<&str>, writing: &Writing| {
         let locale = locale.and_then(|tag| Language::parse(tag).ok());
-        collection.append_fallbacks(FallbackKey::new(Script::from_bytes(*script), locale.as_ref()), ordered(writing).into_iter());
+        collection.set_fallbacks(FallbackKey::new(Script::from_bytes(*script), locale.as_ref()), ordered(writing).into_iter());
     };
     // `zh-CN` is Han's default key, the one text with no language uses.
     add(b"Hani", None, &SIMPLIFIED);
