@@ -115,7 +115,6 @@ fn el_flatten_reusable(e: &El) -> bool {
         && c.live.is_empty()
         && c.input.is_none()
         && e.handlers.get().is_none_or(|h| h.modal.is_none())
-        && !(c.scroll.is_some() && c.scroll_axes.x())
         && e.text.as_ref().is_none_or(|t| !t.redacted && t.cold.live.is_none())
         && e.vis.pixels.as_ref().is_none_or(|_| {
             let sz = e.style.size();
