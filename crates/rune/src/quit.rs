@@ -136,6 +136,12 @@ pub(crate) fn fast_exit_hook() -> Option<fn()> {
 /// `last`, then the process ends without dropping a window, a device or an allocation.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn end_fast(last: fn()) -> ! {
+    if std::env::var_os("IB3_QUIT_MARKS").is_some() {
+        let marks = crate::marks::marks();
+        let t0 = marks.iter().find(|(n, _)| *n == "quit.requested" || *n == "quit.hidden").map(|(_, t)| *t);
+        if let Some(t0) = t0 { for (n, t) in marks.iter().filter(|(_, t)| *t >= t0) { eprintln!("ib3 {n} {}", t.duration_since(t0).as_micros()); } }
+        eprintln!("ib3 end_fast {}", t0.map_or(0, |t0| t0.elapsed().as_micros()));
+    }
     // The windows go now, not when the process's threads are torn down (30 ms on blade).
     #[cfg(target_os = "windows")]
     crate::platform::win32::destroy_own_windows();
