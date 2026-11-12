@@ -1,0 +1,1 @@
+- Focus: Tab from an element outside the Tab order (`tab_index(-1)`, a region focused to read it) goes on from that element's place, as a browser's does; it went back to the window's first Tab stop.
