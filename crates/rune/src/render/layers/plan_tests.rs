@@ -53,7 +53,7 @@ fn scenes() -> Vec<Vec<Spec>> {
             Spec { opacity: 0.5, ..Spec::child(0, [8.0, 4.0, 16.0, 6.0], window) }],
         // Two sibling caches, so one budget can hold one and not the other.
         vec![Spec::cached([0.0, 0.0, 16.0, 8.0], window, (11, 1)),
-            Spec::cached([16.0, 8.0, 16.0, 8.0], window, (12, 3))],
+             Spec::cached([16.0, 8.0, 32.0, 16.0], window, (12, 3))],
         // A cache inside a cache, and a child of the inner one: the outer scope has contents.
         vec![Spec::cached([2.0, 1.0, 28.0, 14.0], window, (21, 2)),
             Spec { parent: Some(0), ..Spec::cached([4.0, 2.0, 12.0, 8.0], window, (22, 5)) },
@@ -454,32 +454,39 @@ fn frame(planner: &mut Planner, pools: &Old, old_pools: &mut Old, scene: &[Spec]
 #[test]
 fn every_frame_walk_matches_dev() {
     let scenes = scenes();
-    let tight = 40_000;
+    const TIGHT: u64 = 40_000;
     // Each event is a scene the next frame draws, the budget it has, and whether layers can isolate.
     let events: Vec<(usize, u64, bool)> = vec![
-        (0, DEFAULT_CACHE_BUDGET, true), (1, DEFAULT_CACHE_BUDGET, true), (1, tight, true),
+        (0, DEFAULT_CACHE_BUDGET, true), (1, DEFAULT_CACHE_BUDGET, true), (1, TIGHT, true),
         (0, 1, true), (2, DEFAULT_CACHE_BUDGET, true), (3, DEFAULT_CACHE_BUDGET, true),
-        (6, tight, true), (4, DEFAULT_CACHE_BUDGET, true), (5, DEFAULT_CACHE_BUDGET, true),
-        (0, tight, true), (1, DEFAULT_CACHE_BUDGET, false),
+        (6, TIGHT, true), (4, DEFAULT_CACHE_BUDGET, true), (5, DEFAULT_CACHE_BUDGET, true),
+        (0, TIGHT, true), (1, DEFAULT_CACHE_BUDGET, false),
         (7, DEFAULT_CACHE_BUDGET, true), (7, 1, true),
     ];
-    fn walk(scenes: &[Vec<Spec>], events: &[(usize, u64, bool)], pools: &Old, planner: &Planner, stamp: u64, depth: u32) {
-        if depth == 0 { return; }
+    fn walk(scenes: &[Vec<Spec>], events: &[(usize, u64, bool)], pools: &Old, planner: &Planner, stamp: u64, depth: u32) -> bool {
+        if depth == 0 { return false; }
+        let mut saw_split_budget = false;
         for &(scene, budget, isolate) in events {
             let (mut after, mut planner) = (Old::default(), planner.clone());
             let next = stamp + 1;
-            frame(&mut planner, pools, &mut after, &scenes[scene], isolate, budget, next);
-            walk(scenes, events, &after, &planner, next, depth - 1);
+            let decisions = frame(&mut planner, pools, &mut after, &scenes[scene], isolate, budget, next);
+            // Both siblings hit, but the budget keeps only the first for another frame.
+            saw_split_budget |= scene == 1 && budget == TIGHT && matches!(decisions.as_slice(), [
+                Disposition::Cached { cache: Some((11, 1)), .. }, Disposition::Cached { cache: None, .. },
+            ]);
+            saw_split_budget |= walk(scenes, events, &after, &planner, next, depth - 1);
             // Nothing is left for a later frame to find: every scene closes what it opened.
             assert!(after.slots.len() <= scenes[scene].len());
         }
+        saw_split_budget
     }
     // An empty scene closes the frame's layers and shows what a layerless frame does to the pools.
     let empty = scenes.len();
     let mut scenes = scenes;
     scenes.push(Vec::new());
     let events: Vec<(usize, u64, bool)> = events.into_iter().chain([(empty, DEFAULT_CACHE_BUDGET, true)]).collect();
-    walk(&scenes, &events, &Old::default(), &Planner::default(), 0, 5);
+    assert!(walk(&scenes, &events, &Old::default(), &Planner::default(), 0, 5),
+        "the tight budget never kept one sibling cache while borrowing the other");
 }
 
 /// What dev's `target_bytes` counts for a kept target: its own texture, plus the blur scratch's
