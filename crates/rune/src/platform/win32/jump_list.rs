@@ -65,14 +65,14 @@ unsafe fn commit(list: &JumpList, exe: &HSTRING) -> windows::core::Result<usize>
         let removed = removed_arguments(&removed);
         let mut n = 0;
         if !list.tasks.is_empty() {
-            let tasks = collection(&list.tasks, exe, &HashSet::new())?;
+            let tasks = collection(&list.tasks, list.lead.as_deref(), exe, &HashSet::new())?;
             dest.AddUserTasks(&tasks)?;
             n += list.tasks.len();
         }
         for (name, items) in &list.categories {
             let kept: Vec<&JumpItem> = items.iter().filter(|i| !removed.contains(&i.argument)).collect();
             if kept.is_empty() { continue; }
-            let entries = collection(items, exe, &removed)?;
+            let entries = collection(items, list.lead.as_deref(), exe, &removed)?;
             // A category the person removed entries from, or that policy hides, is skipped.
             if dest.AppendCategory(&HSTRING::from(name.as_str()), &entries).is_ok() { n += kept.len(); }
         }
@@ -91,19 +91,20 @@ unsafe fn removed_arguments(removed: &IObjectArray) -> HashSet<String> {
             let mut buf = [0u16; 2048];
             link.GetArguments(&mut buf).ok()?;
             let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
-            Some(unquote(&String::from_utf16_lossy(&buf[..len])))
+            Some(last_argument(&String::from_utf16_lossy(&buf[..len])))
         }).collect()
     }
 }
 
-unsafe fn collection(items: &[JumpItem], exe: &HSTRING, removed: &HashSet<String>) -> windows::core::Result<IObjectArray> {
+unsafe fn collection(items: &[JumpItem], lead: Option<&str>, exe: &HSTRING, removed: &HashSet<String>) -> windows::core::Result<IObjectArray> {
     // SAFETY: shell COM calls on objects made here.
     unsafe {
         let all: IObjectCollection = CoCreateInstance(&EnumerableObjectCollection, None, CLSCTX_INPROC_SERVER)?;
         for item in items.iter().filter(|i| !removed.contains(&i.argument)) {
             let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)?;
             link.SetPath(exe)?;
-            link.SetArguments(&HSTRING::from(format!("\"{}\"", item.argument)))?;
+            let arguments = match lead { Some(lead) => format!("\"{lead}\" \"{}\"", item.argument), None => format!("\"{}\"", item.argument) };
+            link.SetArguments(&HSTRING::from(arguments))?;
             link.SetIconLocation(exe, 0)?;
             if !item.description.is_empty() { link.SetDescription(&HSTRING::from(item.description.as_str()))?; }
             let props: IPropertyStore = link.cast()?;
@@ -115,6 +116,11 @@ unsafe fn collection(items: &[JumpItem], exe: &HSTRING, removed: &HashSet<String
     }
 }
 
-fn unquote(s: &str) -> String {
-    s.trim().trim_matches('"').to_owned()
+/// An entry's own argument: the last one on its link's command line, after any `lead`.
+fn last_argument(s: &str) -> String {
+    let s = s.trim();
+    match s.strip_suffix('"').and_then(|rest| rest.rfind('"').map(|at| &rest[at + 1..])) {
+        Some(quoted) => quoted.to_owned(),
+        None => s.rsplit(' ').next().unwrap_or_default().to_owned(),
+    }
 }
