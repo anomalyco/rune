@@ -284,6 +284,9 @@ pub(crate) struct Wake {
     // differs from dev: the writer that makes the state both visible and pending
     // owns the callback. Separate atomics let both writers see the other's change.
     flags: AtomicU8,
+    /// Wakes delivered so far, so a publisher can stand down when a show has already
+    /// delivered the wake for the work it published.
+    deliveries: AtomicU8,
     callback: Waker,
 }
 impl Wake {
@@ -291,24 +294,66 @@ impl Wake {
     const HIDDEN: u8 = 2;
 
     pub fn new(callback: Waker) -> Arc<Self> {
-        Arc::new(Self { flags: AtomicU8::new(0), callback })
+        Arc::new(Self { flags: AtomicU8::new(0), deliveries: AtomicU8::new(0), callback })
     }
     pub fn visible(&self, visible: bool) {
         self.change_visibility(visible, || {});
     }
     fn change_visibility(&self, visible: bool, after_write: impl FnOnce()) {
-        let old = if visible { self.flags.fetch_and(!Self::HIDDEN, Ordering::AcqRel) }
-            else { self.flags.fetch_or(Self::HIDDEN, Ordering::AcqRel) };
+        let stored = self.set_visible(visible);
         after_write();
-        if visible && old == (Self::HIDDEN | Self::PENDING) { (self.callback)(); }
+        self.wake_after_visibility(visible, stored);
     }
     pub(crate) fn notify(&self) {
         self.publish(|| {});
     }
     fn publish(&self, after_write: impl FnOnce()) {
-        let old = self.flags.fetch_or(Self::PENDING, Ordering::AcqRel);
+        let stored = self.set_pending();
         after_write();
-        if old == 0 { (self.callback)(); }
+        self.wake_after_publish(stored);
+    }
+
+    // The steps above, one at a time, so a test can interleave another writer between them.
+    /// A store's answers: the flags it replaced, and the wakes delivered before it began.
+    fn set_visible(&self, visible: bool) -> (u8, u8) {
+        let delivered = self.deliveries.load(Ordering::Acquire);
+        let old = if visible { self.flags.fetch_and(!Self::HIDDEN, Ordering::AcqRel) }
+        else { self.flags.fetch_or(Self::HIDDEN, Ordering::AcqRel) };
+        (old, delivered)
+    }
+    fn set_pending(&self) -> (u8, u8) {
+        let delivered = self.deliveries.load(Ordering::Acquire);
+        (self.flags.fetch_or(Self::PENDING, Ordering::AcqRel), delivered)
+    }
+    fn wake_after_visibility(&self, visible: bool, stored: (u8, u8)) {
+        let (old, delivered) = stored;
+        // differs from dev: only the writer that finds the work as its own store left it wakes;
+        // dev's two swaps let a show and a publisher both wake the host for the same work.
+        if visible && old == (Self::HIDDEN | Self::PENDING) && self.unclaimed(delivered) { self.deliver(); }
+    }
+    fn wake_after_publish(&self, stored: (u8, u8)) {
+        let (old, delivered) = stored;
+        // differs from dev: dev woke whenever it made the work pending and the window was
+        // visible by the time it looked, so a publisher that began while hidden woke the host
+        // after a show had already delivered that wake. Only a publisher that found an idle,
+        // visible window, with no wake delivered since, wakes; a hidden one leaves it to the
+        // show.
+        if old == 0
+            && self.flags.load(Ordering::Acquire) & Self::HIDDEN == 0
+            && self.unclaimed(delivered)
+        {
+            self.deliver();
+        }
+    }
+    /// Whether no wake has been delivered since `delivered` was read.
+    fn unclaimed(&self, delivered: u8) -> bool {
+        self.deliveries.load(Ordering::Acquire) == delivered
+    }
+    fn deliver(&self) {
+        // A publisher and the host can both get here; the count only has to change for the
+        // publisher holding it, so it may wrap.
+        self.deliveries.fetch_add(1, Ordering::AcqRel);
+        (self.callback)();
     }
 
     // Only the host changes visibility, and it checks visibility before taking a wake.
@@ -320,6 +365,12 @@ impl Wake {
     #[inline]
     pub(crate) fn visible_pending(&self) -> bool {
         self.flags.load(Ordering::Acquire) == Self::PENDING
+    }
+
+    #[cfg(test)]
+    fn probe(&self) -> (bool, bool) {
+        let flags = self.flags.load(Ordering::Acquire);
+        (flags & Self::HIDDEN == 0, flags & Self::PENDING != 0)
     }
 }
 
