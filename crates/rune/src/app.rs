@@ -609,8 +609,13 @@ impl<S: 'static> App<S> {
             None => Args::parse(),
         };
         if args.headless() {
-            crate::render::discard_prewarm();
-            crate::tooling::try_headless(self, args)
+            #[cfg(any(feature = "tooling", debug_assertions))]
+            {
+                crate::render::discard_prewarm();
+                crate::tooling::try_headless(self, args)
+            }
+            #[cfg(not(any(feature = "tooling", debug_assertions)))]
+            Err(crate::tooling::WITHOUT_TOOLING.into())
         } else {
             crate::window::run(self, args)
         }

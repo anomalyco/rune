@@ -222,6 +222,11 @@ pub fn try_run_windows_with_args<I: IntoIterator<Item: Into<crate::AnyWindowSpec
     run_window_factory(options, window_args(Some(args.into_iter().collect()), Args::parse), erase(factory))
 }
 
+/// What `run` says to a release build without the `tooling` feature asked for a headless run.
+#[cfg(not(any(feature = "tooling", debug_assertions)))]
+pub(crate) const WITHOUT_TOOLING: &str = "this build has no agent tooling (--snap, --tree, --script, --trace, --strip, --video, ...): \
+    a release build has it with Rune's `tooling` feature (rune = { ..., features = [\"tooling\"] }); debug builds always do";
+
 fn started(result: Result<(), String>) {
     if let Err(error) = result { panic!("{error}"); }
 }
@@ -238,9 +243,14 @@ pub(crate) fn window_args(args: Option<Vec<String>>, process: impl FnOnce() -> A
 
 fn run_window_factory(options: crate::RunOptions, args: Args, factory: Factory) -> Result<(), String> {
     if args.headless() {
-        crate::render::discard_prewarm();
-        let displays = desktop(&args, read_script(&args).as_ref()).displays();
-        headless_window(factory(&displays), &displays, args, options)
+        #[cfg(any(feature = "tooling", debug_assertions))]
+        {
+            crate::render::discard_prewarm();
+            let displays = desktop(&args, read_script(&args).as_ref()).displays();
+            headless_window(factory(&displays), &displays, args, options)
+        }
+        #[cfg(not(any(feature = "tooling", debug_assertions)))]
+        Err(WITHOUT_TOOLING.into())
     } else {
         crate::window::run_windows(factory, args, options)
     }
@@ -510,6 +520,8 @@ pub(crate) mod headless_run;
 pub(crate) mod interaction;
 pub(crate) mod perf_warn;
 pub(crate) mod record;
+// Only headless runs use it; a release build without `tooling` keeps the module but not its callers.
+#[cfg_attr(not(any(feature = "tooling", debug_assertions)), allow(dead_code, unused_imports))]
 pub(crate) mod virtual_desktop;
 #[cfg(test)]
 pub(crate) mod test_alloc;

@@ -2468,6 +2468,11 @@ it, and the app then runs under Xvfb. Headless `--snap` runs don't need a displa
 
 ## Agent tooling (headless, no window, same renderer, fixed virtual clock)
 
+Debug builds always take these arguments. A release build takes them with Rune's `tooling`
+feature (`rune = { ..., features = ["tooling"] }`; Rune's examples have it); without it the app
+links only its window, and a headless argument makes `run` fail saying so. `--native --trace` is
+the window's own and works either way.
+
 ```sh
 S=target/release/settings
 $S --snap out.png [--scene light] [--at 0.4] [--size 620x520] [--scale 2] [--theme dark|light]

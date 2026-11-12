@@ -41,6 +41,8 @@ name = "layout_text_cost"
 required-features = ["markdown", "frame-profile"]
 
 [dev-dependencies]
+# The examples' headless runs (`--snap`, `--trace`, ...) in release builds.
+rune = { path = "../rune", default-features = false, features = ["tooling"] }
 procwatch = { path = "../procwatch" }
 # The accessibility tree tests read and write `Runtime::accessibility_json` (tests/a11y).
 serde_json = "1"

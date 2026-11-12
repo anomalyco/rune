@@ -46,6 +46,7 @@ impl WindowHandle {
     }
 
     /// A headless run never binds a host; it takes the queued requests instead.
+    #[cfg_attr(not(any(feature = "tooling", debug_assertions)), allow(dead_code))]
     pub(crate) fn take_headless(&self) -> Vec<WakeEvent> {
         let queued = match &mut *self.native.route.lock().unwrap() {
             Route::Unbound { queued } => std::mem::take(queued),
@@ -54,6 +55,7 @@ impl WindowHandle {
         queued.into_iter().map(|request| request(0)).collect()
     }
 
+    #[cfg_attr(not(any(feature = "tooling", debug_assertions)), allow(dead_code))]
     pub(crate) fn headless_pending(&self) -> bool {
         matches!(&*self.native.route.lock().unwrap(), Route::Unbound { queued } if !queued.is_empty())
     }
