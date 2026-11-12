@@ -1,0 +1,1 @@
+- **Japanese and Chinese line breaking's strictness is one switch** (`text.rs`, `LINE_BREAK`). It stays `Strict`: no line starts with a small kana, ー or 々. `Normal` gives Chromium's `line-break: auto` if native readers prefer it.
