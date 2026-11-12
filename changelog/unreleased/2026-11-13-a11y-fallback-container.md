@@ -1,0 +1,1 @@
+- Focus: when the focused element leaves, focus may also go to an element out of the Tab order (a roving list's other rows) or to the surviving container itself when it takes focus (a line whose comment box closed), before looking further out.
