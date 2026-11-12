@@ -55,7 +55,7 @@ impl<S: 'static> Runtime<S> {
         n.a11y.live.hash(&mut h);
         if let Some(m) = n.a11y.more.as_deref() {
             (&m.description, &m.value, &m.set, &m.shortcut, m.invalid, m.read_only, m.sorted, m.busy).hash(&mut h);
-            [m.labelled_by.as_deref(), m.described_by.as_deref()].map(|k| k.and_then(|k| self.a11y_keyed(k)).map(|j| self.a11y_words(j))).hash(&mut h);
+            [m.labelled_by.as_deref(), m.described_by.as_deref()].map(|k| k.and_then(|k| self.a11y_keyed(i, k)).map(|j| self.a11y_words(j))).hash(&mut h);
             if let Some(r) = m.range { [r.value, r.min, r.max, r.step.unwrap_or(f64::NAN)].map(f64::to_bits).hash(&mut h); }
             self.a11y_active_descendant(i).map(|j| self.nodes[j].id.0).hash(&mut h);
         }
@@ -130,7 +130,7 @@ impl<S: 'static> Runtime<S> {
         let more = n.a11y.more.as_deref();
         // `El::labelled_by` and `El::described_by` read the words of the element they name, so
         // the relation holds wherever that element is, in or out of the tree sent.
-        let related = |k: Option<&str>| k.and_then(|k| self.a11y_keyed(k)).map(|j| self.a11y_words(j)).filter(|w| !w.is_empty());
+        let related = |k: Option<&str>| k.and_then(|k| self.a11y_keyed(i, k)).map(|j| self.a11y_words(j)).filter(|w| !w.is_empty());
         let labelled = related(more.and_then(|m| m.labelled_by.as_deref()));
         let label = n.label.as_deref().filter(|l| !l.trim().is_empty()).or(labelled.as_deref());
         if let Some(label) = label { node.set_label(label); }
@@ -253,10 +253,19 @@ impl<S: 'static> Runtime<S> {
         own.or_else(|| self.nodes.iter().position(|n| n.named(key))).filter(|&j| !self.subtree_exiting(j))
     }
 
-    /// The first element in the tree keyed `key` that isn't leaving: what `El::labelled_by` and
-    /// `El::described_by` point at.
-    fn a11y_keyed(&self, key: &str) -> Option<usize> {
-        self.nodes.iter().position(|n| n.named(key)).filter(|&j| !self.subtree_exiting(j))
+    /// The element keyed `key` nearest node `i`, which isn't leaving: the first inside its
+    /// parent, else inside its grandparent, and so on out, as a component's own `"title"` is
+    /// the one a control inside it means. What `El::labelled_by` and `El::described_by` name.
+    fn a11y_keyed(&self, i: usize, key: &str) -> Option<usize> {
+        let mut scope = self.nodes[i].parent;
+        while let Some(s) = scope {
+            let inside = |j: &usize| std::iter::successors(self.nodes[*j].parent, |&p| self.nodes[p].parent).any(|p| p == s);
+            if let Some(j) = (s + 1..self.nodes.len()).take_while(inside).find(|&j| j != i && self.nodes[j].named(key)) {
+                return (!self.subtree_exiting(j)).then_some(j);
+            }
+            scope = self.nodes[s].parent;
+        }
+        None
     }
 
     /// Node `j`'s words as a name: its label, else its text, else the text inside it.
