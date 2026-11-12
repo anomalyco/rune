@@ -1,0 +1,1 @@
+- **A right-to-left locale's missing plural form reads in order too.** `rune-i18n` isolates every message a right-to-left locale lacks, plural categories included (`I18n::plural_form` takes a missing category from the source before the locale's `other`), so an untranslated "1 file changed" no longer reads "file changed 1".
