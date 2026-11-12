@@ -332,9 +332,13 @@ pub(super) fn edited(was: &str, now: &str) -> bool {
 /// Lays out the flattened tree in `room`, measuring text leaves. Not generic over the app state,
 /// so Taffy's layout code is instantiated once, not once per `Runtime<S>`.
 pub(super) fn compute_layout(taffy: &mut LayoutEngine, root: SlotId, room: Size<AvailableSpace>, nodes: &[Node], text: &mut TextSystem, scale: f32) {
+    #[cfg(feature = "frame-profile")]
+    measure_counts::pass();
     taffy.compute_layout(root, room, |inputs, ctx, style| {
         taffy::compute_leaf_layout(inputs, style, |_, _| 0.0, |known, avail| {
             let Some(i) = ctx else { return Size::ZERO };
+            #[cfg(feature = "frame-profile")]
+            measure_counts::measured(i);
             let Some(spec) = nodes[i].text.as_ref() else {
                 return picture_size(known, avail, nodes[i].cold.get().and_then(|c| c.pixel_aspect).unwrap_or(0.0));
             };
@@ -476,4 +480,25 @@ pub(super) fn clamped(text: &mut TextSystem, spec: &TextSpec, scale: f32, max_w:
         );
     }
     Some((layout, e))
+}
+
+/// A measuring build's counts of layout passes and leaf measures, for the first view's profile
+/// (`window::cpu_frame`): how many passes ran, how many measures, and how many leaves were
+/// measured more than once.
+#[cfg(feature = "frame-profile")]
+pub(crate) mod measure_counts {
+    use std::cell::RefCell;
+    thread_local! {
+        static COUNTS: RefCell<(u64, u64, std::collections::HashMap<usize, u32>)> = RefCell::new((0, 0, std::collections::HashMap::new()));
+    }
+    pub(crate) fn pass() { COUNTS.with_borrow_mut(|c| c.0 += 1); }
+    pub(crate) fn measured(node: usize) { COUNTS.with_borrow_mut(|c| { c.1 += 1; *c.2.entry(node).or_default() += 1; }); }
+    /// (passes, measures, leaves measured, leaves measured more than once) since the last take.
+    pub(crate) fn take() -> (u64, u64, u64, u64) {
+        COUNTS.with_borrow_mut(|c| {
+            let out = (c.0, c.1, c.2.len() as u64, c.2.values().filter(|&&n| n > 1).count() as u64);
+            *c = (0, 0, std::collections::HashMap::new());
+            out
+        })
+    }
 }

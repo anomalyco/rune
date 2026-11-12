@@ -377,6 +377,9 @@ impl<S: 'static> Host<S> {
         let now = Instant::now();
         let rt = &mut self.rt;
         if hidden && l.first_frame.settles() { rt.settle_all(); }
+        // A measuring build profiles the first view: its phases, allocations, nodes and measures.
+        #[cfg(feature = "frame-profile")]
+        let first_view = (!FIRST_LAYOUT.load(Ordering::Relaxed)).then(first_view_start);
         let (animating, _dt) = if hidden {
             self.clock.hold(now);
             (rt.frame(0.0), 0.0)
@@ -385,6 +388,8 @@ impl<S: 'static> Host<S> {
         };
         if hidden { l.hidden_pace.rendered(now); }
         crate::marks::mark_once(&FIRST_LAYOUT, "frame.first.layout");
+        #[cfg(feature = "frame-profile")]
+        if let Some(start) = first_view { first_view_report(rt, start); }
         let update_ms = now.elapsed().as_secs_f64() * 1000.0;
         sync_platform(l, rt, &mut self.secure_input, &mut self.ime_allowed, &self.clipboard);
         let (width, height) = (l.config.width, l.config.height);
@@ -781,3 +786,35 @@ fn lower_priority() {
 /// presents, and nothing while it rests. A fixed-rate display (blade's Iris panel) needs nothing:
 /// its refresh doesn't depend on who presents.
 fn vrr_guard(vendor: u32) -> bool { vendor == 0x10DE }
+
+/// The first view's starting counts: this thread's allocations and allocated bytes.
+#[cfg(feature = "frame-profile")]
+fn first_view_start() -> (u64, Option<u64>) {
+    let _ = crate::frame::profile::take();
+    let _ = crate::runtime::measure_counts::take();
+    (procwatch::alloc::thread_allocations(), procwatch::alloc::thread_allocated_bytes())
+}
+
+/// The first view's profile, as launch-trace metrics (`first.*`): its phases in µs (view, commit,
+/// layout, text; nested, so not to be summed), allocations and bytes, nodes built and those
+/// inside the viewport, layout passes, leaf measures and leaves measured more than once, texts
+/// shaped.
+#[cfg(feature = "frame-profile")]
+fn first_view_report<S>(rt: &Runtime<S>, (allocs, bytes): (u64, Option<u64>)) {
+    let p = crate::frame::profile::take();
+    for (i, name) in ["first.view_us", "first.commit_us", "first.layout_us", "first.text_us"].into_iter().enumerate() {
+        crate::marks::add(name, (p[i] * 1000.0) as u64);
+    }
+    crate::marks::add("first.allocs", procwatch::alloc::thread_allocations().saturating_sub(allocs));
+    if let (Some(b0), Some(b1)) = (bytes, procwatch::alloc::thread_allocated_bytes()) { crate::marks::add("first.alloc_bytes", b1.saturating_sub(b0)); }
+    let (w, h) = rt.viewport;
+    let visible = rt.nodes.iter().filter(|n| { let [x0, y0, x1, y1] = n.target; x1 > x0 && y1 > y0 && x1 > 0.0 && y1 > 0.0 && x0 < w && y0 < h }).count();
+    crate::marks::add("first.nodes", rt.nodes.len() as u64);
+    crate::marks::add("first.visible_nodes", visible as u64);
+    let (passes, measures, measured, again) = crate::runtime::measure_counts::take();
+    crate::marks::add("first.layout_passes", passes);
+    crate::marks::add("first.measures", measures);
+    crate::marks::add("first.leaves_measured", measured);
+    crate::marks::add("first.leaves_measured_again", again);
+    crate::marks::add("first.shaped", u64::from(rt.stats.shaped));
+}
