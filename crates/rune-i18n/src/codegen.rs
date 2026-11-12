@@ -104,27 +104,9 @@ fn locales(manifest: &Value) -> io::Result<Vec<Locale>> {
         .collect()
 }
 
-/// The locale's messages for `keys` concatenated, and a `(start, len)` little-endian `u32` pair
-/// per key, `start = u32::MAX` for a key it lacks. With `isolate`, a key it lacks takes that
-/// locale's message between LRI and PDI instead: the message the lookup falls back to (a missing plural
-/// category included, which `I18n::plural_form` takes from the source before the locale's `other`).
-fn blob(keys: &[&str], map: &BTreeMap<String, String>, isolate: Option<&BTreeMap<String, String>>) -> (String, Vec<u8>) {
-    let mut text = String::new();
-    let mut spans = Vec::with_capacity(keys.len() * 8);
-    for key in keys {
-        let isolated = isolate.filter(|_| !map.contains_key(*key)).and_then(|source| source.get(*key)).map(|m| format!("\u{2066}{m}\u{2069}"));
-        let (start, len) = match map.get(*key).or(isolated.as_ref()) {
-            Some(message) => {
-                let start = text.len() as u32;
-                text.push_str(message);
-                (start, message.len() as u32)
-            }
-            None => (u32::MAX, 0),
-        };
-        spans.extend_from_slice(&start.to_le_bytes());
-        spans.extend_from_slice(&len.to_le_bytes());
-    }
-    (text, spans)
+fn blob<'a>(keys: &[&str], map: &BTreeMap<String, String>, isolate: Option<&'a BTreeMap<String, String>>) -> (String, Vec<u8>) {
+    let source = |key: &str| isolate.and_then(|source| source.get(key)).map(String::as_str);
+    crate::catalog::blob(keys, |key| map.get(key).map(String::as_str), isolate.map(|_| &source as &dyn Fn(&str) -> Option<&'a str>))
 }
 
 macro_rules! ln {
@@ -158,7 +140,14 @@ fn source_file(keys: &[&str], plurals: &[&str], locales: &[Locale]) -> String {
         );
     }
     out += &ln!("];\n\nstatic MESSAGES: [::rune_i18n::Messages; {}] = [", locales.len());
-    for locale in locales {
+    // A web build keeps the source locale's messages in its module and loads the one a page shows
+    // at run time (`Catalog::load_json`).
+    let web = std::env::var("CARGO_CFG_TARGET_ARCH").is_ok_and(|arch| arch == "wasm32");
+    for (i, locale) in locales.iter().enumerate() {
+        if web && i > 0 {
+            out += &ln!("    ::rune_i18n::Messages::later(),");
+            continue;
+        }
         out += &ln!("    ::rune_i18n::Messages::new(include_str!(concat!(env!(\"OUT_DIR\"), \"/i18n/{0}.txt\")), \
              include_bytes!(concat!(env!(\"OUT_DIR\"), \"/i18n/{0}.spans\"))),",
             locale.id
