@@ -40,10 +40,10 @@ impl<S: 'static> Runtime<S> {
     /// Queues `ev` for the `on_wheel` handlers it may go to; false leaves it to scrolling now.
     fn offer_wheel(&mut self, gesture: Attempt, ev: WheelEvent) -> bool {
         let lock = &self.wheel_lock;
-        let same_gesture = lock.run_gesture == gesture;
+        let same_gesture = lock.owner_is_arriving();
         // A delta queued this frame may yet be taken: later ones wait their turn behind it.
         let pending = self.wheel_queued(Some(gesture));
-        let (scrolls, handled) = match lock.owner {
+        let (scrolls, handled) = match lock.owner() {
             WheelOwner::Vertical | WheelOwner::Horizontal(_) => (same_gesture, false),
             WheelOwner::Handler(_) => (false, same_gesture),
             WheelOwner::Unpicked => (false, false),
@@ -56,17 +56,19 @@ impl<S: 'static> Runtime<S> {
     }
 
     /// A queued wheel delta: the handler holding the gesture hears it, else each handler
-    /// under the pointer until one takes it, else it scrolls.
+    /// under the pointer until one takes it, else it scrolls. Who holds the gesture only moves
+    /// on to the arriving one with its own first delta (`WheelLock::sync_gesture`), so deltas
+    /// queued before a newer gesture began still reach the owner the earlier one picked.
     pub(super) fn run_wheel(&mut self, gesture: Attempt, chain: Vec<String>, ev: WheelEvent, tx: &mut Tx) -> bool {
         self.wheel_lock.sync_gesture(gesture);
         let mut taken = None;
-        if let WheelOwner::Handler(path) = self.wheel_lock.owner.clone() {
+        if let WheelOwner::Handler(path) = self.wheel_lock.owner().clone() {
             taken = self.call_wheel(&path, ev, tx);
-            if taken.is_none() { self.wheel_lock.owner = WheelOwner::Unpicked; }
-        } else if self.wheel_lock.owner == WheelOwner::Unpicked {
+            if taken.is_none() { self.wheel_lock.set_owner(WheelOwner::Unpicked); }
+        } else if self.wheel_lock.owner() == &WheelOwner::Unpicked {
             for path in chain {
                 if self.call_wheel(&path, ev, tx) == Some(true) {
-                    self.wheel_lock.owner = WheelOwner::Handler(path);
+                    self.wheel_lock.set_owner(WheelOwner::Handler(path));
                     taken = Some(true);
                     break;
                 }
@@ -74,9 +76,6 @@ impl<S: 'static> Runtime<S> {
         }
         if taken.is_none() {
             self.wheel_scroll_for(gesture, ev.x, ev.y, ev.dx, ev.dy);
-        }
-        if self.wheel_lock.gesture != gesture && !self.wheel_queued(Some(gesture)) {
-            self.wheel_lock.sync_gesture(self.wheel_lock.gesture);
         }
         taken.unwrap_or(false)
     }
@@ -402,5 +401,33 @@ mod tests {
         rt.frame(0.0);
         assert_eq!(rt.state.zoom, [20.0 / PINCH_WHEEL]);
         assert!(!rt.pinch_wheel(500.0, 50.0, -20.0), "off the window nothing takes it");
+    }
+
+    #[derive(Default)]
+    struct Wheeled { heard: Vec<f32> }
+
+    fn wheeling(_: &Wheeled, _: &mut crate::Cx<Wheeled>) -> El {
+        el().w_full().h_full()
+            .child(el().key("list").w_full().h(300.0).scroll(crate::ScrollSpec { stick_bottom: false })
+                .child(el().w_full().h(1000.0)
+                    .child(el().key("takes").absolute(100.0, 40.0).size(40.0, 40.0)
+                        .on_wheel(|s: &mut Wheeled, e: crate::WheelEvent, _: &mut Tx| { s.heard.push(e.x); true }))))
+    }
+
+    /// Deltas queued before the platform began the next gesture finish with the owner the
+    /// gesture picked: the one outside the handler still reaches it, rather than scrolling the
+    /// viewport under the pointer.
+    #[test]
+    fn deltas_queued_before_a_new_gesture_began_finish_with_the_gesture_s_owner() {
+        let mut rt = Runtime::new(Wheeled::default(), wheeling, (300.0, 300.0), Env::default());
+        rt.frame(0.0);
+        rt.frame(1.0 / 60.0);
+        rt.wheel_event(crate::WheelEvent::new(0.0, -10.0).at(110.0, 50.0));
+        rt.wheel_event(crate::WheelEvent::new(0.0, -10.0).at(290.0, 50.0));
+        rt.wheel_began();
+        rt.frame(1.0 / 60.0);
+        assert_eq!(rt.state.heard, [10.0, 190.0], "both deltas in the handler's own points");
+        let id = rt.nodes.iter().find(|n| n.key.as_deref() == Some("list")).unwrap().id;
+        assert_eq!(rt.scrolls[&id].offset, 0.0, "the whole gesture stays with the handler");
     }
 }
