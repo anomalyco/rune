@@ -226,6 +226,7 @@ pub use pixels::Pixels;
 pub use platform::accent::SystemAccent;
 pub use platform::accent::system_accent;
 pub use platform::app_icon::set_app_icon;
+pub use platform::preferences::SystemContrast;
 /// Windows: raises this process's threads whose name passes the filter to a priority floor, walking
 /// only this process's threads.
 #[cfg(target_os = "windows")]

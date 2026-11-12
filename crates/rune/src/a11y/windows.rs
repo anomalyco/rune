@@ -6,7 +6,7 @@ use std::cell::RefCell;
 
 use accesskit_windows::{HWND, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
-use windows_sys::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, WM_GETOBJECT, WM_KILLFOCUS, WM_SETFOCUS};
+use windows_sys::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, WM_GETOBJECT, WM_KILLFOCUS, WM_SETFOCUS, WM_SETTINGCHANGE, WM_SYSCOLORCHANGE, WM_THEMECHANGED};
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 use super::{Actions, Activation};
@@ -36,6 +36,11 @@ unsafe extern "system" fn subclass(hwnd: windows_sys::Win32::Foundation::HWND, m
                 s.adapter.handle_wm_getobject(WPARAM(wparam), LPARAM(lparam), &mut s.activation).map(|r| -> LRESULT { r.into() })
             });
             if let Some(result) = result { return result.0; }
+        }
+        // Reduced motion, a contrast theme or the system colours changed: the runtime reads them
+        // again, without waiting for the window's next activation.
+        WM_SETTINGCHANGE | WM_SYSCOLORCHANGE | WM_THEMECHANGED => {
+            if let Ok(s) = state.try_borrow() { s.activation.0.push(|i| i.settings = true); }
         }
         WM_SETFOCUS | WM_KILLFOCUS => {
             let events = state.try_borrow_mut().ok().and_then(|mut s| s.adapter.update_window_focus_state(message == WM_SETFOCUS));

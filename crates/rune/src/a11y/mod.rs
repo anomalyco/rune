@@ -53,6 +53,9 @@ impl Announcement {
 pub(crate) struct Inbox {
     asked: Asked,
     actions: Vec<ActionRequest>,
+    /// The system's accessibility settings or colours changed (reduced motion, a contrast
+    /// theme): the runtime reads them again.
+    settings: bool,
 }
 
 /// What a client asked of the runtime's tree. The later call wins, so the two cannot disagree.
@@ -149,6 +152,10 @@ impl AccessibilityLink {
     fn receive<S: 'static>(&mut self, rt: &mut Runtime<S>, name: &str) -> bool {
         self.adopt(rt);
         let inbox = self.take();
+        if inbox.settings {
+            rt.set_system_reduced_motion(crate::platform::preferences::reduced_motion());
+            rt.set_system_contrast(crate::platform::preferences::contrast());
+        }
         match inbox.asked {
             Asked::Activate => rt.a11y_activate(name),
             Asked::Deactivate => rt.a11y_deactivate(),

@@ -448,6 +448,8 @@ pub struct Runtime<S: 'static> {
     system_reduced_motion: bool,
     titlebar_inset: f32,
     system_accent: crate::SystemAccent,
+    /// What [`Cx::system_contrast`] reports.
+    pub(crate) system_contrast: Option<crate::SystemContrast>,
     scroll_bars: system_settings::ScrollBarHost,
     pub time_scale: f32,
     /// The last view's `Cx::foreground` and `Cx::focus_ring`, for rows built after it and the
@@ -874,6 +876,7 @@ impl<S: 'static> Runtime<S> {
             system_reduced_motion: false,
             titlebar_inset: 0.0,
             system_accent: crate::SystemAccent::DEFAULT,
+            system_contrast: None,
             scroll_bars: Default::default(),
             time_scale: 1.0,
             defaults: Default::default(),

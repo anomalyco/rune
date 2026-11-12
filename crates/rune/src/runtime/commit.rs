@@ -60,6 +60,7 @@ pub(super) struct Measurement<'a, S: 'static> {
     /// Caption buttons drawn over the view's root.
     pub(super) caption: Option<crate::titlebar::Caption>,
     pub(super) system_accent: crate::SystemAccent,
+    pub(super) system_contrast: Option<crate::SystemContrast>,
     pub(super) system_scroll_bars: crate::platform::scroll_bars::SystemScrollBars,
     pub(super) reduced_motion: bool,
     pub(super) time_scale: f32,
