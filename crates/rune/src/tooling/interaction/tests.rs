@@ -90,6 +90,8 @@ fn view(s: &App, _: &mut Cx<App>) -> El {
 
 fn runtime(slow: bool) -> Runtime<App> {
     force_on();
+    // A fixed threshold: the slow-click tests never read `RUNE_PERF_SLOW_MS` from the environment.
+    super::force_slow_ms(SLOW_MS);
     SENT.take();
     let mut rt = Runtime::new(App { slow, ..App::default() }, view, (400.0, 300.0), Env::new(true, 1.0));
     rt.frame(0.0);

@@ -74,7 +74,21 @@ pub(crate) fn add(phase: Phase, ms: f64) {
     TIMES.set(row);
 }
 
+#[cfg(test)]
+thread_local! {
+    /// A fixed threshold for tests that drive the real runtime: a local `RUNE_PERF_SLOW_MS`
+    /// must not change what they measure. Per thread, so tests running in parallel can't see
+    /// each other's.
+    static SLOW_MS_OVERRIDE: Cell<Option<f64>> = const { Cell::new(None) };
+}
+
+/// Fix the slow threshold for the tests on this thread. Production reads the environment.
+#[cfg(test)]
+pub(super) fn force_slow_ms(ms: f64) { SLOW_MS_OVERRIDE.set(Some(ms)); }
+
 fn slow_ms() -> f64 {
+    #[cfg(test)]
+    if let Some(ms) = SLOW_MS_OVERRIDE.get() { return ms; }
     static MS: OnceLock<f64> = OnceLock::new();
     *MS.get_or_init(|| std::env::var("RUNE_PERF_SLOW_MS").ok().and_then(|v| v.trim().parse().ok()).filter(|ms: &f64| *ms > 0.0).unwrap_or(SLOW_MS))
 }
