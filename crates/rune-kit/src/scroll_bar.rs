@@ -106,6 +106,8 @@ struct Track {
     enter: Spring,
     leave: Spring,
     tint: Spring,
+    /// Device pixels per point the thumb is sized and placed in whole pixels of, or 0 for none.
+    pixels: f32,
 }
 
 const KIT_TRACK: Track = Track {
@@ -126,6 +128,7 @@ const KIT_TRACK: Track = Track {
     enter: ENTER,
     leave: LEAVE,
     tint: WIDEN,
+    pixels: 0.0,
 };
 
 /// `@opencode/ui` ScrollView (`scroll-view.css`, `scroll-view.tsx`): a 12 point strip with a 4
@@ -149,6 +152,7 @@ const SCROLL_VIEW_TRACK: Track = Track {
     enter: Spring::new(0.2, 0.0),
     leave: Spring::new(0.2, 0.0),
     tint: Spring::new(0.15, 0.0),
+    pixels: 0.0,
 };
 
 /// `@opencode/ui`'s `scrollbar.css`, which every plain `overflow: auto` container gets: an 8
@@ -174,6 +178,7 @@ const NATIVE_TRACK: Track = Track {
     enter: Spring::NONE,
     leave: Spring::NONE,
     tint: Spring::NONE,
+    pixels: 0.0,
 };
 
 /// `@opencode/ui`'s MenuScroll (`menu-scroll.tsx`, `menu-scroll.css`), a menu's or dialog list's
@@ -306,6 +311,15 @@ impl ScrollBarStyle {
         self
     }
 
+    /// Sizes and places the thumb in whole device pixels, `scale` of them to a point, as Chromium
+    /// does a native scroll bar's (its length rounded, its place truncated): for a look that copies
+    /// one ([`Self::native`]), so the thumb lands on the browser's pixels at every offset. 0, the
+    /// default, leaves both unrounded.
+    pub fn device_pixels(mut self, scale: f32) -> Self {
+        self.track.pixels = scale.max(0.0);
+        self
+    }
+
     /// The widest the thumb gets.
     fn widest(&self) -> f32 {
         self.width.max(self.hover_width)
@@ -387,12 +401,22 @@ fn thumb(at: ScrollPos, track: f32) -> (f32, f32) {
 /// [`thumb`] never shorter than `min`.
 #[cfg(test)]
 fn thumb_on(at: ScrollPos, track: f32, min: f32) -> (f32, f32) {
-    thumb_along(at, track, min, 1)
+    thumb_along(at, track, min, 1, 0.0)
 }
 
-/// [`thumb_on`] along axis `a` (0 sideways, 1 down).
-fn thumb_along(at: ScrollPos, track: f32, min: f32, a: usize) -> (f32, f32) {
+/// [`thumb_on`] along axis `a` (0 sideways, 1 down), in whole device pixels at `px` of them per
+/// point ([`ScrollBarStyle::device_pixels`]) when `px` isn't 0.
+fn thumb_along(at: ScrollPos, track: f32, min: f32, a: usize, px: f32) -> (f32, f32) {
     let (shown, max) = (at.viewport[a], at.max[a]);
+    // Chromium's (`ScrollbarTheme::ThumbLength`, `ThumbPosition`): the length rounded, the place
+    // truncated, and a thumb that has left the start by less than a pixel one pixel in.
+    if px > 0.0 {
+        let track = (track * px).round();
+        let len = (track * shown / (shown + max).max(1.0)).round().max((min * px).round()).min(track);
+        let pos = if max > 0.0 { (track - len) * (at.offset[a] / max).clamp(0.0, 1.0) } else { 0.0 };
+        let pos = if pos > 0.0 && pos < 1.0 { 1.0 } else { pos.trunc() };
+        return (pos / px, len / px);
+    }
     let len = (track * shown / (shown + max).max(1.0)).max(min).min(track);
     let top = if max > 0.0 { (track - len) * (at.offset[a] / max).clamp(0.0, 1.0) } else { 0.0 };
     (top, len)
@@ -407,12 +431,12 @@ fn offset_at(at: ScrollPos, track: f32, top: f32) -> f32 {
 /// [`offset_at`] for a thumb never shorter than `min`.
 #[cfg(test)]
 fn offset_on(at: ScrollPos, track: f32, top: f32, min: f32) -> f32 {
-    offset_along(at, track, top, min, 1)
+    offset_along(at, track, top, min, 1, 0.0)
 }
 
 /// [`offset_on`] along axis `a`.
-fn offset_along(at: ScrollPos, track: f32, top: f32, min: f32, a: usize) -> f32 {
-    let travel = track - thumb_along(at, track, min, a).1;
+fn offset_along(at: ScrollPos, track: f32, top: f32, min: f32, a: usize, px: f32) -> f32 {
+    let travel = track - thumb_along(at, track, min, a, px).1;
     if travel <= 0.0 {
         return at.offset[a];
     }
@@ -495,7 +519,7 @@ impl Bar {
         self.fill.snap(self.thumb_fill());
         let at = self.pos.get();
         let (len, shows) = track_len(at, &style.track);
-        let (top, h) = style.track.pill(thumb_along(at, len.max(0.0), style.track.min_thumb, style.track.along()));
+        let (top, h) = style.track.pill(thumb_along(at, len.max(0.0), style.track.min_thumb, style.track.along(), style.track.pixels));
         let h = if shows { h } else { 0.0 };
         self.track.snap(self.track_rect(at, if shows { len } else { 0.0 }));
         self.slot.snap(self.slot_rect(top, h));
@@ -576,7 +600,7 @@ impl Bar {
         // Measured from the viewport's start edge, its right when it runs right to left.
         let p = p.map(|p| (if self.rtl() { at.viewport[0] - p.x } else { p.x }, p.y));
         let p = p.map(|(x, y)| if t.x { (y, x) } else { (x, y) });
-        let (top, h) = thumb_along(at, len.max(0.0), t.min_thumb, a);
+        let (top, h) = thumb_along(at, len.max(0.0), t.min_thumb, a, t.pixels);
         let in_strip = |across: f32, along: f32| (bar_end - track..=bar_end).contains(&across) && (lo..=lo + len).contains(&along);
         let on_thumb = |(across, along): (f32, f32)| in_strip(across, along) && (!t.area_reveals || (lo + top..=lo + top + h).contains(&along));
         // A bar its hover target reveals shows here only under the pointer on its thumb, which
@@ -629,7 +653,7 @@ impl Bar {
         let (len, shows) = track_len(at, &t);
         let a = t.along();
         self.track.set(self.track_rect(at, if shows { len } else { 0.0 }));
-        let (top, h) = t.pill(thumb_along(at, len.max(0.0), style.track.min_thumb, a));
+        let (top, h) = t.pill(thumb_along(at, len.max(0.0), style.track.min_thumb, a, t.pixels));
         let h = if shows { h } else { 0.0 };
         let resized = (prev_at.viewport[a] - at.viewport[a]).abs() > 0.5;
         let lengthened = !resized && (prev_at.max[a] - at.max[a]).abs() > 0.5;
