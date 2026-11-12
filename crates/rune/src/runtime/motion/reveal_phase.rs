@@ -170,16 +170,33 @@ impl RevealPhase {
         }
     }
 
+    /// The fade it is in, for paint to carry over a piece's glyphs: taken once per piece, so no
+    /// glyph looks at the phase again.
+    pub(super) fn fade(&self) -> Option<Fade<'_>> {
+        match self {
+            RevealPhase::Fading { words, fade, .. } => Some(Fade { words, fade: *fade }),
+            RevealPhase::Idle { .. } => None,
+        }
+    }
+}
+
+/// The words still fading and how long each takes.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Fade<'a> {
+    words: &'a [(u32, f64)],
+    fade: f32,
+}
+
+impl Fade<'_> {
     /// The alpha of `byte`'s word, `now` on the text's clock: 1 anywhere no word fades.
-    pub(super) fn alpha(&self, byte: u32, now: f64) -> f32 {
-        let RevealPhase::Fading { words, fade, .. } = self else { return 1.0 };
-        let i = words.partition_point(|w| w.0 <= byte);
+    pub(super) fn alpha(self, byte: u32, now: f64) -> f32 {
+        let i = self.words.partition_point(|w| w.0 <= byte);
         if i == 0 { return 1.0; }
-        let t0 = words[i - 1].1;
-        if *fade <= 0.0 {
+        let t0 = self.words[i - 1].1;
+        if self.fade <= 0.0 {
             return if now >= t0 { 1.0 } else { 0.0 };
         }
-        ease_out(((now - t0) / *fade as f64) as f32)
+        ease_out(((now - t0) / self.fade as f64) as f32)
     }
 }
 

@@ -6,11 +6,12 @@
 //!
 //! The reference sees only what a letter says: the text's content, the fade, whether the text
 //! was in the scene at the last commit, whether the commit lands its changes, and the clock.
-//! The walk's window has no virtual list, no reduced motion and no `El::time_scale`, so those
-//! stay constants on both sides. A phase the walk compares by what shows: the shown bytes, the
-//! words still fading and their fade, the window's chain, and every byte's alpha at the text's
-//! clock. The fade an `Idle` state carried is the one thing not compared, because nothing reads
-//! it until a word fades.
+//! The sequence walk's window keeps every commit's motion, has no virtual list, doesn't reduce
+//! motion and runs every clock at 1×, so those stay constants on both sides; the directed walks
+//! below vary the window's facts instead. A phase is compared by what shows: the shown bytes,
+//! the words still fading and their fade, the window's chain, and every byte's alpha at the
+//! text's clock. The fade an `Idle` state carried is the one thing not compared, because nothing
+//! reads it until a word fades.
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -25,9 +26,21 @@ const FADE: f32 = 0.05;
 /// Words one `Chunk` brings: at this fade, a chunk's run outlasts it, so a later commit meets a
 /// chain longer than a fade.
 const CHUNK: usize = 6;
-/// The walk's text has no `El::time_scale`, and its window doesn't reduce motion.
-const TIME_SCALED: bool = false;
-const REDUCED_MOTION: bool = false;
+/// The window's facts the reveal reads, as dev read them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Facts {
+    /// `TextSpec::reveal >= 0`: the text tracks a reveal at all. A negative reveal skips the
+    /// whole block, words, length and fade alike.
+    reveal: bool,
+    /// The fade dev gives each word (`TextSpec::reveal`, or 0.15 under reduced motion).
+    fade: f32,
+    reduced_motion: bool,
+    /// Some node's clock is scaled (`El::time_scale`), which takes the text out of the chain.
+    time_scaled: bool,
+}
+
+/// The walk's window: the reveal tracks the text, nothing reduces motion, every clock runs 1×.
+const STEADY: Facts = Facts { reveal: true, fade: FADE, reduced_motion: false, time_scaled: false };
 
 /// What the letters that edit change.
 #[derive(Clone, Default, PartialEq)]
@@ -38,6 +51,9 @@ struct Doc {
     replaced: bool,
     /// The text's mount: every remount (and every reset) is a new node at a new path.
     mounts: u32,
+    /// The text's parent column is in the tree; without it the keyed text leaves, and comes back
+    /// under the same path when the parent returns.
+    parent: bool,
 }
 
 impl Doc {
@@ -55,13 +71,14 @@ impl Doc {
         s
     }
 
-    fn path(&self) -> String { format!("root/t{}", self.mounts) }
+    fn key(&self) -> String { format!("t{}", self.mounts) }
+
+    fn path(&self) -> String { format!("root/p/{}", self.key()) }
 }
 
 fn view(doc: &Doc, _: &mut Cx<Doc>) -> El {
-    col().key("root").w(200.0).child(
-        text(doc.content()).key(format!("t{}", doc.mounts)).w_full().wrap().font(TextStyle::new(14.0, 400.0)).reveal(FADE),
-    )
+    let text = text(doc.content()).key(doc.key()).w_full().wrap().font(TextStyle::new(14.0, 400.0)).reveal(FADE);
+    col().key("root").w(200.0).children(doc.parent.then(|| col().key("p").child(text)))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -76,12 +93,13 @@ enum Letter {
     MidChunk,
     /// The text is replaced with a shorter one.
     Replace,
-    /// An instant commit of the same text: what faded is gone.
-    Instant,
     /// The stream ends: a commit that changes no content.
     End,
-    /// The text remounts as a new node, still entering.
+    /// The text remounts as a new node under a new key, still entering.
     Remount,
+    /// Its parent unmounts instantly and returns: the keyed text comes back with the reveal state
+    /// it kept, under the same key.
+    Return,
 }
 
 const ALPHABET: [Letter; 8] = [
@@ -90,9 +108,9 @@ const ALPHABET: [Letter; 8] = [
     Letter::Fade,
     Letter::MidChunk,
     Letter::Replace,
-    Letter::Instant,
     Letter::End,
     Letter::Remount,
+    Letter::Return,
 ];
 
 /// `RevealState` and `reveal_chain` as `Runtime` held them before `RevealPhase`.
@@ -111,8 +129,13 @@ struct DevReveal {
 
 impl Dev {
     /// `commit/apply.rs`'s reveal block, as it was.
-    fn commit(&mut self, content: &str, was_present: bool, instant: bool, now: f64) {
-        let fade = if REDUCED_MOTION { 0.15 } else { FADE };
+    fn commit(&mut self, content: &str, was_present: bool, instant: bool, now: f64, facts: Facts) {
+        // Dev's `if spec.reveal >= 0.0`: a text with its reveal off keeps whatever it had, its
+        // length included, so bytes that arrived meanwhile fade in when it comes back.
+        if !facts.reveal {
+            return;
+        }
+        let fade = facts.fade;
         // The walk's window keeps every commit's motion, so no commit is unprompted.
         let mounted_late = !was_present && !instant;
         let st = self.state.get_or_insert_with(|| DevReveal {
@@ -128,11 +151,11 @@ impl Dev {
             let mut starts = Vec::new();
             word_starts(content, st.len, &mut starts);
             let own = st.words.last().map_or(now, |w| w.1.max(now));
-            let chained = !TIME_SCALED && self.chain - now <= f64::from(fade);
+            let chained = !facts.time_scaled && self.chain - now <= f64::from(fade);
             let chain = if chained { self.chain.max(now) } else { now };
             let queued = ((chain - now) / 0.0055) as usize;
             let pending = st.words.iter().filter(|w| w.1 > now).count() + starts.len() + queued;
-            let stagger = if REDUCED_MOTION {
+            let stagger = if facts.reduced_motion {
                 0.0
             } else {
                 let k = (pending as f32 / 24.0).clamp(0.0, 1.0);
@@ -143,7 +166,7 @@ impl Dev {
                 st.words.push((b, tn));
                 tn += stagger;
             }
-            if !TIME_SCALED && let Some(last) = st.words.last() {
+            if !facts.time_scaled && let Some(last) = st.words.last() {
                 self.chain = self.chain.max(last.1);
             }
             st.len = content.len();
@@ -159,6 +182,14 @@ impl Dev {
         let done = st.words.iter().take_while(|w| now - w.1 >= fade).count();
         if done > 0 && done == st.words.len() {
             st.words.clear();
+        }
+    }
+
+    /// `sync_time_scales`: its clock changed scale, so its word times move by `shift`.
+    fn shift(&mut self, shift: f64) {
+        let Some(st) = &mut self.state else { return };
+        for w in &mut st.words {
+            w.1 += shift;
         }
     }
 
@@ -204,6 +235,8 @@ struct Walk {
     dev: Dev,
     /// The text was in the scene at the last commit.
     present: bool,
+    /// The text's node, kept while it is out of the tree: its reveal state outlives the node.
+    id: Option<NodeId>,
 }
 
 impl Walk {
@@ -214,7 +247,7 @@ impl Walk {
         assert!(!rt.reduced_motion && !rt.system_reduced_motion, "the walk takes a window that doesn't reduce motion");
         assert!(!rt.motion_needs_cause, "the walk takes a window where every commit keeps its motion");
         assert!(!rt.time_scaled && rt.time_scale == 1.0, "the walk takes a text on the window's clock");
-        let mut walk = Self { rt, doc: Doc::default(), dev: Dev::default(), present: true };
+        let mut walk = Self { rt, doc: Doc::default(), dev: Dev::default(), present: true, id: None };
         walk.reset();
         walk
     }
@@ -222,7 +255,7 @@ impl Walk {
     /// A fresh text node with the stream at rest and the reveal as a new window's: every sequence
     /// starts from the same state on both sides.
     fn reset(&mut self) {
-        self.doc = Doc { mounts: self.doc.mounts + 1, ..Doc::default() };
+        self.doc = Doc { mounts: self.doc.mounts + 1, parent: true, ..Doc::default() };
         self.rt.reveals.clear();
         self.rt.reveal_chain = RevealChain::default();
         self.dev = Dev::default();
@@ -236,7 +269,13 @@ impl Walk {
 
     /// An edit and its frame: the commit at the frame's clock, then the frame's reveal step at
     /// the same time (a `dt` of zero).
-    fn commit(&mut self, instant: bool) -> Result<(), String> {
+    fn commit(&mut self, instant: bool) -> Result<(), String> { self.frame_commit(instant, true) }
+
+    /// `commit`, with the text out of the tree: its commit never reaches the reveal, while the
+    /// frame still ticks the state it kept.
+    fn commit_absent(&mut self, instant: bool) -> Result<(), String> { self.frame_commit(instant, false) }
+
+    fn frame_commit(&mut self, instant: bool, in_tree: bool) -> Result<(), String> {
         let now = self.rt.t;
         let doc = self.doc.clone();
         let content = doc.content();
@@ -252,9 +291,11 @@ impl Walk {
         if self.rt.stats.commits != commits + 1 {
             return Err(format!("an edit committed {} times", self.rt.stats.commits - commits));
         }
-        self.dev.commit(&content, was_present, instant, now);
+        if in_tree {
+            self.dev.commit(&content, was_present, instant, now, STEADY);
+            self.present = true;
+        }
         self.dev.tick(now);
-        self.present = true;
         self.compare()
     }
 
@@ -288,7 +329,6 @@ impl Walk {
                 self.doc.replaced = !self.doc.replaced;
                 self.commit(false)
             }
-            Letter::Instant => self.commit(true),
             Letter::End => self.commit(false),
             Letter::Remount => {
                 self.doc.mounts += 1;
@@ -296,15 +336,27 @@ impl Walk {
                 self.dev.left();
                 self.commit(false)
             }
+            Letter::Return => {
+                self.doc.parent = false;
+                self.commit_absent(true)?;
+                self.present = false;
+                self.doc.parent = true;
+                self.commit(false)
+            }
         }
     }
 
     /// The visible reveal and the fade state, against dev's.
-    fn compare(&self) -> Result<(), String> {
+    fn compare(&mut self) -> Result<(), String> {
         let path = self.doc.path();
-        let Some(id) = self.rt.nodes.iter().find(|n| n.path == path).map(|n| n.id) else {
+        let node = self.rt.nodes.iter().find(|n| n.path == path).map(|n| n.id);
+        if let Some(id) = node {
+            self.id = Some(id);
+        }
+        let id = self.id.ok_or_else(|| format!("no text at {path}, and none before it"))?;
+        if node.is_none() && self.doc.parent {
             return Err(format!("no text at {path}"));
-        };
+        }
         let ours = self.rt.reveals.get(&id);
         let theirs = self.dev.state.as_ref();
         match (ours, theirs) {
@@ -326,9 +378,11 @@ impl Walk {
         if self.rt.reveal_chain.until() != self.dev.chain {
             return Err(format!("chain {}, dev {}", self.rt.reveal_chain.until(), self.dev.chain));
         }
+        // Out of the tree, nothing draws: its state is all there is to compare.
+        let Some(_) = node else { return Ok(()) };
         let now = self.rt.scene.store().node_time(id);
         for byte in 0..=self.doc.content().len() as u32 {
-            let ours = ours.map_or(1.0, |phase| phase.alpha(byte, now));
+            let ours = ours.and_then(RevealPhase::fade).map_or(1.0, |fade| fade.alpha(byte, now));
             let theirs = self.dev.alpha(byte, now);
             if ours != theirs {
                 return Err(format!("alpha at byte {byte}: {ours}, dev {theirs}"));
@@ -422,6 +476,62 @@ fn a_remount_starts_its_words_from_none() {
     assert_eq!(words.first().unwrap().0, 0, "it starts at its first word");
 }
 
+/// A keyed child that comes back after its parent unmounted instantly keeps its words: the
+/// runtime kept its reveal state, so nothing fades again.
+#[test]
+fn a_returning_child_keeps_its_words_after_an_instant_parent_unmount() {
+    #[derive(Default)]
+    struct S {
+        parent: bool,
+    }
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        col().key("root").w(300.0).children(
+            s.parent.then(|| col().key("p").child(text("a b c").key("t").w_full().wrap().reveal(FADE))),
+        )
+    }
+    let mut rt = Runtime::new(S::default(), view, (300.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.update(|s, _| s.parent = true);
+    rt.frame(0.0);
+    rt.frame(0.1);
+    let id = rt.nodes.iter().find(|n| n.path == "root/p/t").unwrap().id;
+    assert!(rt.reveals.get(&id).is_some_and(|p| p.caught_up(5)), "the first words have shown");
+    rt.update(|s, tx| {
+        s.parent = false;
+        tx.instant();
+    });
+    rt.frame(0.0);
+    assert!(rt.reveals.contains_key(&id), "the unmounted child keeps its reveal state");
+    rt.update(|s, _| s.parent = true);
+    rt.frame(0.0);
+    let back = rt.nodes.iter().find(|n| n.path == "root/p/t").unwrap().id;
+    assert_eq!(back, id, "the same key returns under the same id");
+    let phase = rt.reveals.get(&id).unwrap();
+    assert!(phase.caught_up(5), "it comes back showing its words, not replaying them: {phase:?}");
+}
+
+/// An instant commit clears the words that were fading: dev's reset, whatever the content.
+#[test]
+fn an_instant_commit_clears_a_fade() {
+    #[derive(Default)]
+    struct S {
+        longer: bool,
+    }
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        let content = if s.longer { "a b c" } else { "a" };
+        col().key("root").w(300.0).child(text(content).key("t").w_full().wrap().reveal(FADE))
+    }
+    let mut rt = Runtime::new(S::default(), view, (300.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.update(|s, _| s.longer = true);
+    rt.frame(0.0);
+    let id = rt.nodes.iter().find(|n| n.path == "root/t").unwrap().id;
+    assert!(rt.reveals.get(&id).is_some_and(RevealPhase::fading), "the new words fade");
+    rt.update(|_, tx| tx.instant());
+    rt.frame(0.0);
+    assert!(rt.reveals.get(&id).is_some_and(|p| p.caught_up(5)), "the instant commit shows them at once");
+}
+
 /// A commit no input caused lands a new text whole: `Tx::unprompted` takes dev's reset, not the
 /// fade a prompted mount gets.
 #[test]
@@ -463,4 +573,215 @@ fn a_cut_through_a_character_shows_whole() {
     rt.update(|s, _| s.content = "aaaaaaaé".to_owned());
     rt.frame(0.0);
     assert!(rt.reveals.get(&id).is_some_and(|p| p.caught_up("aaaaaaaé".len())), "a moved boundary shows whole");
+}
+
+/// A directed walk's window: one streaming text whose reveal, clock and window can change between
+/// commits, stepped against the same transcription of dev.
+#[derive(Clone, Default, PartialEq)]
+struct Stream {
+    content: String,
+    /// `El::reveal`; negative leaves the text out of the reveal, as an app that stops streaming
+    /// its words does.
+    reveal: f32,
+    /// `El::time_scale(0)` on the text: its clock stops while the window's runs on.
+    paused: bool,
+    /// The window reduces motion (`Cx::reduced_motion`).
+    reduced: bool,
+}
+
+impl Stream {
+    fn facts(&self) -> Facts {
+        Facts {
+            reveal: self.reveal >= 0.0,
+            fade: if self.reduced { 0.15 } else { self.reveal },
+            reduced_motion: self.reduced,
+            time_scaled: self.paused,
+        }
+    }
+
+    fn streamed(content: &str) -> Self { Self { content: content.to_owned(), reveal: FADE, ..Self::default() } }
+}
+
+fn stream_view(s: &Stream, cx: &mut Cx<Stream>) -> El {
+    cx.reduced_motion(s.reduced);
+    let mut t = text(s.content.clone()).key("t").w_full().wrap();
+    if s.reveal >= 0.0 {
+        t = t.reveal(s.reveal);
+    }
+    if s.paused {
+        t = t.time_scale(0.0);
+    }
+    col().key("root").w(300.0).child(t)
+}
+
+struct Driven {
+    rt: Runtime<Stream>,
+    state: Stream,
+    dev: Dev,
+    present: bool,
+}
+
+impl Driven {
+    fn new(state: Stream) -> Self {
+        let mut rt = Runtime::new(state.clone(), stream_view, (300.0, 200.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        // The first commit is an instant one: the text lands whole.
+        let mut dev = Dev::default();
+        dev.commit(&state.content, false, true, 0.0, state.facts());
+        Self { rt, state, dev, present: true }
+    }
+
+    fn id(&self) -> Option<NodeId> {
+        self.rt.nodes.iter().find(|n| n.key.as_deref() == Some("t")).map(|n| n.id)
+    }
+
+    /// The text's clock, which a commit and the frame step both read.
+    fn now(&self) -> f64 { self.id().map_or(self.rt.t, |id| self.rt.scene.store().node_time(id)) }
+
+    /// Changes the text, commits, and checks against dev.
+    fn set(&mut self, f: impl FnOnce(&mut Stream)) -> Result<(), String> {
+        f(&mut self.state);
+        self.commit(false)
+    }
+
+    fn commit(&mut self, instant: bool) -> Result<(), String> {
+        let before = self.now();
+        let state = self.state.clone();
+        let was_present = self.present;
+        self.rt.update(|s, tx| {
+            *s = state.clone();
+            if instant {
+                tx.instant();
+            }
+        });
+        self.rt.frame(0.0);
+        let now = self.now();
+        // Its clock changed scale this commit, so its words move with it.
+        if now != before {
+            self.dev.shift(now - before);
+        }
+        self.dev.commit(&state.content, was_present, instant, now, state.facts());
+        self.dev.tick(now);
+        self.present = true;
+        self.check()
+    }
+
+    fn tick(&mut self, dt: f64) -> Result<(), String> {
+        self.rt.frame(dt);
+        let now = self.now();
+        self.dev.tick(now);
+        self.check()
+    }
+
+    /// Dev's state against the runtime's, every byte's alpha, and the wake the reveal keeps: a
+    /// phase fades exactly while dev has words, and only a fade on a running clock asks for frames.
+    fn check(&self) -> Result<(), String> {
+        let Some(id) = self.id() else { return Err("no text".to_owned()) };
+        let ours = self.rt.reveals.get(&id);
+        let theirs = self.dev.state.as_ref();
+        match (ours, theirs) {
+            (None, None) => {}
+            (Some(phase), Some(st)) => {
+                if phase.shown() != st.len {
+                    return Err(format!("shown {}, dev {}", phase.shown(), st.len));
+                }
+                if phase.words() != st.words.as_slice() {
+                    return Err(format!("words {:?}, dev {:?}", phase.words(), st.words));
+                }
+                if phase.fading() != !st.words.is_empty() {
+                    return Err(format!("fading {}, dev words {:?}", phase.fading(), st.words));
+                }
+                if let RevealPhase::Fading { fade, .. } = phase && *fade != st.fade {
+                    return Err(format!("fade {fade}, dev {}", st.fade));
+                }
+            }
+            (phase, st) => return Err(format!("reveal {phase:?}, dev {st:?}")),
+        }
+        if self.rt.reveal_chain.until() != self.dev.chain {
+            return Err(format!("chain {}, dev {}", self.rt.reveal_chain.until(), self.dev.chain));
+        }
+        let now = self.now();
+        for byte in 0..=self.state.content.len() as u32 {
+            let ours = ours.and_then(RevealPhase::fade).map_or(1.0, |fade| fade.alpha(byte, now));
+            let theirs = self.dev.alpha(byte, now);
+            if ours != theirs {
+                return Err(format!("alpha at byte {byte}: {ours}, dev {theirs}"));
+            }
+        }
+        let fading = theirs.is_some_and(|st| !st.words.is_empty());
+        let wakes = fading && !self.state.paused;
+        let source = self.rt.anim_sources & AnimSource::REVEAL != 0;
+        if source != wakes {
+            return Err(format!("REVEAL source {source}, dev fading {fading}, paused {}", self.state.paused));
+        }
+        Ok(())
+    }
+}
+
+/// A reveal turned off mid-fade stops tracking the text: the bytes that arrive meanwhile fade in
+/// from their start when it comes back, whitespace and half words included.
+#[test]
+fn a_reveal_turned_off_mid_fade_keeps_what_arrives_for_later() {
+    let mut w = Driven::new(Stream::streamed("a b"));
+    w.set(|s| s.content = "a b c d".to_owned()).unwrap();
+    w.set(|s| s.reveal = -1.0).unwrap();
+    w.set(|s| s.content = "a b c d  ".to_owned()).unwrap();
+    w.tick(1.0).unwrap();
+    w.set(|s| s.content = "a b c d  ef".to_owned()).unwrap();
+    w.set(|s| s.reveal = FADE).unwrap();
+    assert!(w.rt.reveals.values().any(|p| p.words().iter().any(|w| w.0 >= 8)), "the bytes that arrived while off fade in: {:?}", w.rt.reveals);
+    w.set(|s| s.content = "a b c d  efg".to_owned()).unwrap();
+    w.tick(0.3).unwrap();
+}
+
+/// A reveal of zero shows every word at once: a chunk's bytes are shown and no word waits.
+#[test]
+fn a_reveal_of_zero_shows_future_words_whole() {
+    let mut w = Driven::new(Stream::streamed("a b"));
+    w.set(|s| s.reveal = 0.0).unwrap();
+    w.set(|s| s.content = "a b c d".to_owned()).unwrap();
+    w.set(|s| s.content = "a b c d e".to_owned()).unwrap();
+    w.tick(0.1).unwrap();
+}
+
+/// Under reduced motion every word of a chunk starts together, over the one fade the window uses.
+#[test]
+fn reduced_motion_fades_every_word_together() {
+    let mut w = Driven::new(Stream::streamed("a b"));
+    w.set(|s| s.reduced = true).unwrap();
+    w.set(|s| s.content = "a b c d e f".to_owned()).unwrap();
+    let times: Vec<f64> = w.rt.reveals.values().flat_map(|p| p.words().iter().map(|w| w.1)).collect();
+    assert!(times.len() > 1, "the chunk's words fade: {times:?}");
+    assert!(times.windows(2).all(|p| p[0] == p[1]), "no stagger, so they start together: {times:?}");
+    w.tick(0.2).unwrap();
+    w.set(|s| s.reduced = false).unwrap();
+    w.set(|s| s.content = "a b c d e f g".to_owned()).unwrap();
+    w.tick(0.2).unwrap();
+}
+
+/// A clock paused on the text freezes its fade, and its resume moves every word time with the
+/// clock: nothing behind it waits, and the chain is left alone while the clock is scaled.
+#[test]
+fn a_paused_clock_freezes_the_fade_and_its_resume_shifts_the_words() {
+    let mut w = Driven::new(Stream::streamed("a b"));
+    w.set(|s| s.content = "a b c d".to_owned()).unwrap();
+    let before: Vec<f64> = w.rt.reveals.values().flat_map(|p| p.words().iter().map(|w| w.1)).collect();
+    let chain = w.rt.reveal_chain.until();
+    w.set(|s| s.paused = true).unwrap();
+    w.tick(0.2).unwrap();
+    assert_eq!(before, w.rt.reveals.values().flat_map(|p| p.words().iter().map(|w| w.1)).collect::<Vec<_>>(), "a frozen clock doesn't fade");
+    w.set(|s| s.content = "a b c d e".to_owned()).unwrap();
+    let frozen = w.now();
+    w.set(|s| s.content = "a b c d e f".to_owned()).unwrap();
+    let added: Vec<f64> = w.rt.reveals.values().flat_map(|p| p.words().iter().filter(|w| w.0 >= 9).map(|w| w.1)).collect();
+    assert!(added.iter().all(|t| *t >= frozen), "a chunk on a scaled clock starts at its own time: {added:?} from {frozen}");
+    assert_eq!(chain, w.rt.reveal_chain.until(), "a scaled clock never joins the chain");
+    w.set(|s| s.paused = false).unwrap();
+    let resumed = w.now();
+    assert!(resumed > frozen, "the clock jumped on resume: {resumed} from {frozen}");
+    let shifted: Vec<f64> = w.rt.reveals.values().flat_map(|p| p.words().iter().map(|w| w.1)).collect();
+    assert!(shifted.iter().zip(&before).all(|(a, b)| a - b >= resumed - frozen - 1e-9), "every word moved with the clock: {shifted:?} from {before:?}");
+    w.tick(0.2).unwrap();
+    w.set(|s| s.content = "a b c d e f g".to_owned()).unwrap();
+    w.tick(0.2).unwrap();
 }

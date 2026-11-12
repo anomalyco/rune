@@ -1,5 +1,7 @@
 //! Applying a completed measurement pass to `Scene`, growth stacks, reveals, scroll viewports,
 //! live bindings and retained exits.
+use std::collections::hash_map::Entry;
+
 use super::*;
 
 impl<S: 'static> Runtime<S> {
@@ -624,15 +626,25 @@ impl<S: 'static> Runtime<S> {
                 let content = spec.content.as_str();
                 let now = if time_scaled { self.scene.store().node_time(id) } else { now };
                 let fade = if self.reduced_motion { 0.15 } else { spec.reveal };
-                // A text that has never faded here starts level with its content: the arrival
-                // below decides what a new one does.
-                let st = self.reveals.entry(id).or_insert(RevealPhase::Idle { shown: content.len() });
-                let arrival = if !was_present {
-                    if instant || tx.unprompted || nodes[i].virtual_mount { Arrival::Landed } else { Arrival::Entering }
-                } else if instant || content.len() < st.shown() || !content.is_char_boundary(st.shown()) {
+                // A text that has never faded here starts level with its content, or at none when
+                // it is entering. A state that outlived its node (an instant parent unmount keeps
+                // the reveal, and its path, for the child's return) keeps its words.
+                let mounted_late = !was_present && !instant && !tx.unprompted && !nodes[i].virtual_mount;
+                let (st, vacant) = match self.reveals.entry(id) {
+                    Entry::Occupied(st) => (st.into_mut(), false),
+                    Entry::Vacant(st) => {
+                        let shown = if mounted_late { 0 } else { content.len() };
+                        (st.insert(RevealPhase::Idle { shown }), true)
+                    }
+                };
+                let arrival = if instant || (!was_present && nodes[i].virtual_mount) || content.len() < st.shown() || !content.is_char_boundary(st.shown()) {
                     Arrival::Replaced
-                } else {
+                } else if !vacant {
                     Arrival::Kept
+                } else if mounted_late {
+                    Arrival::Entering
+                } else {
+                    Arrival::Landed
                 };
                 let chain = if time_scaled { None } else { Some(&self.reveal_chain) };
                 let effects = st.step(RevealEvent::Commit {
