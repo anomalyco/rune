@@ -285,9 +285,12 @@ impl<S: 'static> Runtime<S> {
         self.queue.push(Action::Ime(ev));
     }
 
-    /// End native composition on window deactivation without discarding text or field focus.
-    pub fn cancel_composition(&mut self) {
-        self.ime(Ime::Preedit(String::new(), None));
+    /// The window went inactive mid-composition: what the composition shows becomes text, in
+    /// event order, as a browser keeps it, and the field keeps focus. The platform's input
+    /// method is told to drop its own copy (`ime_reset`), so it doesn't come back in the next
+    /// field.
+    pub fn finish_composition(&mut self) {
+        self.queue.push(Action::FinishIme);
         self.ime_reset = true;
     }
 
@@ -330,6 +333,11 @@ impl<S: 'static> Runtime<S> {
     }
     pub(crate) fn read_result(&mut self, id: u64, content: crate::ClipboardContent) {
         self.queue.push(Action::ClipboardRead(id, content));
+    }
+
+    /// The focused field's open composition and its cursor range, for a script's tree.
+    pub(crate) fn focused_preedit(&self) -> Option<(&str, Option<(usize, usize)>)> {
+        self.focused_input().filter(|i| !i.edit.is_secure()).and_then(|i| i.edit.preedit())
     }
 
     /// Whether the focused editor requires secure native keyboard input.

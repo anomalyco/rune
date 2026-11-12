@@ -211,7 +211,19 @@ pub(super) fn input_caret(n: &Node, r: [f32; 4], scale: f32, s: f32, gliding: bo
     } else {
         (cx, (1.5 * s * scale).max(1.0))
     };
-    Some(([caret_x, cy + h * 0.1, caret_w, h * 0.8], [cx / s, cy / s, 2.0 * scale, h / s]))
+    // The candidate window opens under the clause being converted, its left edge at the
+    // clause's start, as it does in a native field; else at the caret.
+    let area = match (e.preedit_target(), e.range().0) {
+        (Some((ta, tb)), at) => {
+            let len = spec.content.len();
+            let (a, b) = (layout.caret((at + ta).min(len), e.affinity, 0.0), layout.caret((at + tb).min(len), e.affinity, 0.0));
+            let (ax, ay) = (x + a.x0 as f32 * scale, r[1] + ins[1] + a.y0 as f32 * scale);
+            let w = if (b.y0 - a.y0).abs() < 0.5 && b.x0 > a.x0 { (b.x0 - a.x0) as f32 * scale } else { 2.0 * scale * s };
+            [ax / s, ay / s, w / s, h / s]
+        }
+        (None, _) => [cx / s, cy / s, 2.0 * scale, h / s],
+    };
+    Some(([caret_x, cy + h * 0.1, caret_w, h * 0.8], area))
 }
 
 /// Whether `looping`'s sampled value multiplies the element's opacity.

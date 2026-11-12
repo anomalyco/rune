@@ -363,7 +363,8 @@ impl<S: 'static> Host<S> {
                 self.secure_input.set(focused && self.life.uncovered() && rt.has_secure_focus());
                 sync_chrome(rt, l, chrome, titlebar);
                 if !focused {
-                    rt.cancel_composition();
+                    // `window_focus` wrote the composition into its field: the input method drops its copy.
+                    crate::platform::ime::cancel(&l.window);
                     l.window.set_ime_allowed(false);
                     self.ime_allowed = false;
                     // A minimized or occluded window skips redraw.

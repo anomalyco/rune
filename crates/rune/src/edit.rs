@@ -389,9 +389,32 @@ impl TextEdit {
         self.composition != ime::Composition::Idle
     }
 
-    /// Ends the input method's composition without committing it, as a blur does.
+    /// The clause the input method is converting, a byte range of the preedit, when it marks
+    /// one.
+    pub fn preedit_target(&self) -> Option<(usize, usize)> {
+        self.composition.target()
+    }
+
+    /// Ends the input method's composition without writing it, as an edit replacing the text
+    /// under it does.
     pub fn cancel_composition(&mut self) {
-        self.composition.cancel();
+        let _ = ime::step(&mut self.composition, ime::Event::Cancel);
+    }
+
+    /// Writes what the composition shows into the text and ends it, as a field that loses
+    /// focus or the window mid-composition keeps it (a browser's field and an `NSTextView`
+    /// do). True when there was one. The runtime tells the platform's input method to drop its
+    /// own copy.
+    pub fn finish_composition(&mut self) -> bool {
+        if self.secure { self.cancel_composition(); return false; }
+        let mut finished = false;
+        for effect in ime::step(&mut self.composition, ime::Event::Finish) {
+            let ime::Effect::Commit(mut s) = effect;
+            self.commit_composed(&s);
+            s.zeroize();
+            finished = true;
+        }
+        finished
     }
 
     pub(crate) fn clear_typing_style(&mut self) {

@@ -11,6 +11,9 @@ use crate::machine::Effects;
 pub enum Ime {
     /// The composition so far (marked text), drawn at the caret and not yet part of the text,
     /// with the byte range of its cursor or selection in it. Empty ends the composition.
+    /// A range that isn't empty is the clause being converted (Windows and Wayland report the
+    /// target clause there): it draws with a thick underline and the candidate window opens
+    /// under it.
     Preedit(String, Option<(usize, usize)>),
     /// Text to insert at the caret, replacing the preedit.
     Commit(String),
@@ -39,6 +42,18 @@ pub(super) enum Composition {
     Composing { text: String, cursor: Option<(usize, usize)> },
 }
 
+/// What steps a [`Composition`]: the input method, or the field ending it on its own.
+pub(super) enum Event<'a> {
+    Ime(&'a Ime),
+    /// The field let go of the composition while it showed (it blurred, the window went
+    /// inactive, a click moved the caret): what it shows becomes text, as a browser's field and
+    /// an `NSTextView` keep it, and the platform's input method is told to drop its copy.
+    Finish,
+    /// An edit or undo replaced the text under the composition, or the field turned secure:
+    /// the composition goes, unwritten.
+    Cancel,
+}
+
 /// What a composition step asks of its field.
 #[derive(Debug, PartialEq)]
 pub(super) enum Effect {
@@ -54,30 +69,44 @@ impl Composition {
         }
     }
 
-    /// Ends any composition, wiping its text: the field blurred, an edit or undo replaced the
-    /// text under it, or the app cancelled it.
-    pub(super) fn cancel(&mut self) {
-        if let Composition::Composing { text, .. } = self { text.zeroize(); }
-        *self = Composition::Idle;
+    /// The clause being converted, a byte range of the preedit, when the input method marks
+    /// one (a cursor range that isn't empty).
+    pub(super) fn target(&self) -> Option<(usize, usize)> {
+        match self {
+            Composition::Composing { text, cursor: Some((a, b)) } if a < b && *b <= text.len() => Some((*a, *b)),
+            _ => None,
+        }
     }
 }
 
-/// Steps `composition` with an input method event.
-pub(super) fn step(composition: &mut Composition, event: &Ime) -> Effects<Effect> {
-    match event {
-        Ime::Preedit(text, _) if text.is_empty() => {
-            composition.cancel();
+/// Steps `composition`.
+pub(super) fn step(composition: &mut Composition, event: Event<'_>) -> Effects<Effect> {
+    let previous = std::mem::take(composition);
+    match (previous, event) {
+        (mut old, Event::Ime(Ime::Preedit(text, cursor))) => {
+            wipe(&mut old);
+            if !text.is_empty() {
+                *composition = Composition::Composing { text: text.clone(), cursor: *cursor };
+            }
             Effects::none()
         }
-        Ime::Preedit(text, cursor) => {
-            composition.cancel();
-            *composition = Composition::Composing { text: text.clone(), cursor: *cursor };
-            Effects::none()
-        }
-        Ime::Commit(text) => {
-            composition.cancel();
+        (mut old, Event::Ime(Ime::Commit(text))) => {
+            wipe(&mut old);
             Effects::one(Effect::Commit(text.clone()))
         }
-        Ime::Enabled | Ime::Disabled => Effects::none(),
+        (old, Event::Ime(Ime::Enabled | Ime::Disabled)) => {
+            *composition = old;
+            Effects::none()
+        }
+        (Composition::Composing { text, .. }, Event::Finish) => Effects::one(Effect::Commit(text)),
+        (Composition::Idle, Event::Finish) => Effects::none(),
+        (mut old, Event::Cancel) => {
+            wipe(&mut old);
+            Effects::none()
+        }
     }
+}
+
+fn wipe(composition: &mut Composition) {
+    if let Composition::Composing { text, .. } = composition { text.zeroize(); }
 }

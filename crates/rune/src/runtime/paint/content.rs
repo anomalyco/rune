@@ -313,17 +313,27 @@ impl<S: 'static> Runtime<S> {
                     if a == b || e.is_composing() {
                         caret = input_caret;
                     }
-                    if e.is_composing()
-                        && let (_, Some((pa, pb))) = e.display()
-                    {
-                        for (bb, _) in flow.range_boxes(pa, pb, false) {
-                            self.instances.push(rect_inst(
-                                [origin[0] + bb.x0 as f32 * tk, origin[1] + bb.y1 as f32 * tk - s, (bb.x1 - bb.x0) as f32 * tk, s],
-                                premul(color, o, srgb),
-                                0.0,
-                                clip,
-                                fade,
-                            ));
+                    // The composition's underline: thin under what's composed, thick under the
+                    // clause being converted, each clause a point short at both ends so clauses
+                    // read apart, as Chromium draws them (`CompositionMarkerPainter`).
+                    if let Some((p, _)) = e.preedit() {
+                        let pa = e.range().0;
+                        let pb = pa + p.len();
+                        let (ta, tb) = e.preedit_target().map_or((pb, pb), |(a, b)| (pa + a, pa + b));
+                        for (a, b, thick) in [(pa, ta, 1.0), (ta, tb, 2.0), (tb, pb, 1.0)] {
+                            if a >= b { continue; }
+                            for (bb, _) in flow.range_boxes(a, b, false) {
+                                let (x0, x1) = (origin[0] + bb.x0 as f32 * tk, origin[0] + bb.x1 as f32 * tk);
+                                let inset = if x1 - x0 > 4.0 * s { s } else { 0.0 };
+                                let h = thick * s;
+                                self.instances.push(rect_inst(
+                                    [x0 + inset, origin[1] + bb.y1 as f32 * tk - h, x1 - x0 - 2.0 * inset, h],
+                                    premul(color, o, srgb),
+                                    0.0,
+                                    clip,
+                                    fade,
+                                ));
+                            }
                         }
                     }
                 }

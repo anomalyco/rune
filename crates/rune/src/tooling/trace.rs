@@ -379,6 +379,12 @@ pub(crate) fn tree_json<S>(rt: &Runtime<S>, real_t: f64) -> Value {
     });
     if let Some(menu) = rt.popup_json() { tree["popupMenu"] = menu; }
     if let Some(dialog) = rt.file_dialog_json() { tree["fileDialog"] = dialog; }
+    // Where the input method's candidate window opens: the window's IME area, in view points.
+    if let Some(area) = rt.ime_area { tree["imeArea"] = area.map(r2).to_vec().into(); }
+    // The focused field's open composition, not yet part of its text.
+    if let Some((text, cursor)) = rt.focused_preedit() {
+        tree["preedit"] = json!({ "text": text, "cursor": cursor.map(|(a, b)| [a, b]) });
+    }
     if let Some(title) = rt.window_title.current() { tree["title"] = title.into(); }
     if let Some((text, rect)) = rt.help_tooltip() { tree["tooltip"] = json!({ "text": text, "rect": rect.map(r2) }); }
     tree["accessibility"] = crate::a11y::dump::json(&rt.accessibility_tree(), false);
