@@ -30,6 +30,8 @@ struct ListPlan {
     rows: Rc<crate::el::virtual_rows::RowSource>,
     list_group: Option<String>,
     inert: bool,
+    texts: Vec<selectable::virtual_selection::OffscreenText>,
+    providers: Vec<(String, crate::el::SelectionCopy)>,
     quiet: Vec<bool>,
     built_rows: Vec<(usize, El)>,
 }
@@ -52,7 +54,7 @@ impl<S: 'static> Runtime<S> {
             return false;
         }
         for (path, v) in &self.virtuals {
-            if !v.indexed || !v.selection.source.rebuild().is_some_and(|s| s.count == v.keys.len()) {
+            if !v.indexed || !v.selection.pins.source().and_then(|s| s.rebuild()).is_some_and(|s| s.count == v.keys.len()) {
                 return false;
             }
             let Some(&list_id) = self.path_ids.get(path) else { return false };
@@ -201,9 +203,11 @@ impl<S: 'static> Measurement<'_, S> {
 
             let list_group = v.selection.scope.group_path.clone();
             let inert = v.selection.scope.inert;
-            v.selection.texts.clear();
-            v.selection.copy_providers.clear();
-            let rows = v.selection.source.rebuild().expect("an index-built list keeps its row builder").clone();
+            let (mut texts, mut providers) = v.selection.pins.take_texts();
+            texts.clear();
+            providers.clear();
+            let rows = v.selection.pins.source().and_then(|s| s.rebuild())
+                .expect("an index-built list keeps its row builder").clone();
 
             let under = |f: &str| f.strip_prefix(path.as_str()).is_some_and(|rest| rest.starts_with('/'));
             let focused = v
@@ -213,7 +217,9 @@ impl<S: 'static> Measurement<'_, S> {
                 .and_then(|key| v.index_of(key))
                 .filter(|i| !v.range.contains(i));
             let pinned_rows: Vec<usize> = v
-                .pinned_rows
+                .selection
+                .pins
+                .rows()
                 .iter()
                 .filter_map(|key| v.index_of(key))
                 .filter(|i| !v.range.contains(i))
@@ -232,6 +238,8 @@ impl<S: 'static> Measurement<'_, S> {
                 rows,
                 list_group,
                 inert,
+                texts,
+                providers,
                 quiet: Vec::new(),
                 built_rows: Vec::new(),
             });
@@ -276,8 +284,8 @@ impl<S: 'static> Measurement<'_, S> {
                         i,
                         plan.list_group.as_deref(),
                         plan.inert,
-                        &mut v.selection.texts,
-                        &mut v.selection.copy_providers,
+                        &mut plan.texts,
+                        &mut plan.providers,
                     );
                 }
             }
@@ -293,10 +301,15 @@ impl<S: 'static> Measurement<'_, S> {
                     i,
                     plan.list_group.as_deref(),
                     plan.inert,
-                    &mut v.selection.texts,
-                    &mut v.selection.copy_providers,
+                    &mut plan.texts,
+                    &mut plan.providers,
                 );
             }
+            v.selection.pins.sync(selectable::virtual_selection::PinsEvent::Commit {
+                source: None,
+                texts: std::mem::take(&mut plan.texts),
+                providers: std::mem::take(&mut plan.providers),
+            });
             for (pos, row_i) in plan.range.clone().enumerate() {
                 let key = &v.keys[row_i];
                 if !plan.mounted_rows.contains_key(key) {

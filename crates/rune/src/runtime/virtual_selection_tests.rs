@@ -163,7 +163,7 @@ fn cmd_a_and_select_all_text_over_55_virtual_rows_copy_every_row() {
     // Clearing the selection releases the pinned rows.
     rt.update(|_, tx| tx.clear_text_selection());
     tick(&mut rt);
-    assert!(rt.virtuals["#0/scroll/timeline"].pinned_rows.is_empty());
+    assert!(rt.virtuals["#0/scroll/timeline"].selection.pins.rows().is_empty());
 
     // 2. Scrolled to the middle (neither r0 nor r54 mounted), Tx::select_all_text("timeline")
     // pins both ends and copies all 55 rows.

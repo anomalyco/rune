@@ -2,10 +2,8 @@
 #[path = "selection_collect.rs"]
 mod collect;
 
-use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
-use std::rc::Rc;
 
 use taffy::style::{Display, FlexDirection};
 
@@ -13,6 +11,10 @@ use super::phase::{self, Far, Selection};
 use super::{SelectedText, kept, same_keyed_path, trim_uncopied};
 use crate::el::{El, SelectionCopy, TextSpec};
 use crate::runtime::Runtime;
+
+#[path = "pins.rs"]
+pub(crate) mod pins;
+pub(crate) use pins::{OffscreenText, PinnedSelection, PinsEvent, Scope, Source};
 
 /// Maximum number of unbuilt virtual rows built on demand when copying or reading a selection.
 /// Past this cap, collection stops building further unbuilt rows and returns the prefix collected
@@ -41,79 +43,6 @@ impl VirtualEnd {
         } else {
             format!("{}/{}/{}", self.list_path, self.row_key, self.rel_path)
         }
-    }
-}
-
-/// One selectable text inside an offscreen virtual row.
-#[derive(Clone, Debug)]
-pub(crate) struct OffscreenText {
-    pub list_path: String,
-    pub row_key: String,
-    pub row_index: usize,
-    pub order_in_row: usize,
-    pub rel_path: String,
-    pub path: String,
-    pub key: Option<String>,
-    pub group_path: Option<String>,
-    pub spec: TextSpec,
-    /// True when this text and the previous selectable text in the same row share a horizontal
-    /// (`FlexDirection::Row | FlexDirection::RowReverse`) lowest common ancestor (table cells).
-    pub tab_before: bool,
-}
-
-/// Where an offscreen row comes from: the view's row builder, or the row the view built itself
-/// and the list kept by index. One or the other, never both.
-pub(crate) enum Source {
-    /// `El::virtual_rows`: a row is built when selection needs it.
-    Rebuild(Rc<crate::el::virtual_rows::RowSource>),
-    /// Rows the view built; the ones outside the window are kept in
-    /// [`PinnedSelection::stored`].
-    Stored,
-}
-
-impl Default for Source {
-    fn default() -> Self {
-        Source::Stored
-    }
-}
-
-impl Source {
-    /// The row builder, when rows are built by index.
-    pub(crate) fn rebuild(&self) -> Option<&Rc<crate::el::virtual_rows::RowSource>> {
-        match self {
-            Source::Rebuild(rows) => Some(rows),
-            Source::Stored => None,
-        }
-    }
-}
-
-/// What the last commit collected offscreen rows under: the selection group they belong to and
-/// whether the list is inert. They are written together, so they always describe one commit.
-#[derive(Clone, Debug, Default)]
-pub(crate) struct Scope {
-    pub group_path: Option<String>,
-    pub inert: bool,
-}
-
-/// Offscreen selection state retained on a [`crate::el::virtual_list::VirtualList`].
-#[derive(Default)]
-pub(crate) struct PinnedSelection {
-    pub texts: Vec<OffscreenText>,
-    pub copy_providers: Vec<(String, SelectionCopy)>,
-    pub source: Source,
-    /// The rows the view built, by index, while `source` is [`Source::Stored`]. Cleared in place
-    /// at every commit, so its capacity carries over as dev's did.
-    pub stored: HashMap<usize, El>,
-    pub scope: Scope,
-}
-
-impl std::fmt::Debug for PinnedSelection {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PinnedSelection")
-            .field("texts", &self.texts.len())
-            .field("group_path", &self.scope.group_path)
-            .field("inert", &self.scope.inert)
-            .finish()
     }
 }
 
@@ -227,7 +156,7 @@ impl<S: 'static> Runtime<S> {
     }
 
     pub(crate) fn offscreen_text(&self, vi: usize, ti: usize) -> &OffscreenText {
-        &self.virtuals.iter().nth(vi).unwrap().1.selection.texts[ti]
+        &self.virtuals.iter().nth(vi).unwrap().1.selection.pins.texts()[ti]
     }
 
     pub(crate) fn end_path(&self, end: EndRef) -> &str {
@@ -337,7 +266,7 @@ impl<S: 'static> Runtime<S> {
             if !self.virtual_list_allowed(list_path) {
                 continue;
             }
-            for (ti, t) in v.selection.texts.iter().enumerate() {
+            for (ti, t) in v.selection.pins.texts().iter().enumerate() {
                 if t.path == path && v.index_of(&t.row_key).is_some_and(|r| !v.range.contains(&r)) {
                     return Some(EndRef::Offscreen(vi, ti));
                 }
@@ -356,7 +285,7 @@ impl<S: 'static> Runtime<S> {
                 let full = end.full_path();
                 return self.live(&full).filter(|&i| self.is_selectable(i)).map(EndRef::Mounted);
             }
-            for (ti, t) in v.selection.texts.iter().enumerate() {
+            for (ti, t) in v.selection.pins.texts().iter().enumerate() {
                 if t.row_key == end.row_key && t.rel_path == end.rel_path {
                     return Some(EndRef::Offscreen(vi, ti));
                 }
@@ -389,15 +318,13 @@ impl<S: 'static> Runtime<S> {
         (self.end_same_group(f, holder) && kept(&far.content, self.end_content(f), upto)).then_some(f)
     }
 
-    /// Updates the selection's `anchor_end` and far `end`, and each `VirtualList::pinned_rows`.
+    /// Updates the selection's `anchor_end` and far `end`, and each list's pins.
     pub(crate) fn sync_selection_pins(&mut self) {
         let Some(sel) = self.selectable.phase.selection() else {
             // With nothing selected nothing lies between its ends.
             self.selectable.mounted_between.clear();
             for v in self.virtuals.values_mut() {
-                v.pinned_rows.clear();
-                v.selection.texts.clear();
-                v.selection.copy_providers.clear();
+                v.selection.pins.sync(PinsEvent::Clear);
             }
             return;
         };
@@ -414,14 +341,9 @@ impl<S: 'static> Runtime<S> {
         let a_end = sel.anchor_end.clone();
         let f_end = sel.far.as_ref().and_then(|f| f.end.clone());
         for (list_path, v) in &mut self.virtuals {
-            v.pinned_rows.clear();
-            if let Some(a) = &a_end && &a.list_path == list_path {
-                v.pinned_rows.push(a.row_key.clone());
-            }
-            if let Some(f) = &f_end && &f.list_path == list_path && !v.pinned_rows.contains(&f.row_key) {
-                v.pinned_rows.push(f.row_key.clone());
-            }
-            v.selection.texts.retain(|t| v.pinned_rows.contains(&t.row_key));
+            let anchor = a_end.as_ref().filter(|a| &a.list_path == list_path).map(|a| a.row_key.as_str());
+            let focus = f_end.as_ref().filter(|f| &f.list_path == list_path).map(|f| f.row_key.as_str());
+            v.selection.pins.sync(PinsEvent::Select { anchor, focus });
         }
     }
 
@@ -510,9 +432,10 @@ impl<S: 'static> Runtime<S> {
             }
             (EndRef::Offscreen(vi0, ti0), EndRef::Offscreen(vi1, ti1)) if vi0 == vi1 => {
                 let (_, v) = self.virtuals.iter().nth(vi0).unwrap();
-                let row_key = &v.selection.texts[ti0].row_key;
-                let (o0, o1) = (v.selection.texts[ti0].order_in_row, v.selection.texts[ti1].order_in_row);
-                for t in &v.selection.texts {
+                let texts = v.selection.pins.texts();
+                let row_key = &texts[ti0].row_key;
+                let (o0, o1) = (texts[ti0].order_in_row, texts[ti1].order_in_row);
+                for t in texts {
                     if &t.row_key == row_key && t.order_in_row > o0 && t.order_in_row < o1 && t.group_path.as_deref() == Some(g_path) {
                         (&t.path, t.spec.content.as_str()).hash(&mut hasher);
                     }

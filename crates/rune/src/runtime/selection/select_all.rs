@@ -57,7 +57,7 @@ impl<S: 'static> Runtime<S> {
                     return true;
                 }
                 Some(gp) if self.live(&gp).is_none() => {
-                    let texts = &self.virtuals.iter().nth(vi).unwrap().1.selection.texts;
+                    let texts = self.virtuals.iter().nth(vi).unwrap().1.selection.pins.texts();
                     let mut members = texts.iter().enumerate()
                         .filter(|(_, t)| t.group_path.as_deref() == Some(gp.as_str()))
                         .map(|(ti, _)| selectable::virtual_selection::EndRef::Offscreen(vi, ti));
