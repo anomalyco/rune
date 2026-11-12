@@ -77,6 +77,9 @@ impl<S: 'static> Runtime<S> {
             false
         };
         let instant = tx.commit.snaps() || first || concealing;
+        // What this commit mounts or unmounts, and rows new to a growth stack, appear and go at
+        // once when no input caused it (`Tx::unprompted`); what stays keeps its motion.
+        let cut = instant || tx.unprompted;
         if tx.commit.snaps() && !first { self.commit_why |= crate::runtime::CommitWhy::INSTANT; }
         // An instant change lands what it changes; motion an earlier change set going keeps on.
         let keeps_flights = tx.commit.snaps() && !tx.commit.lands() && !first && !concealing;
@@ -99,6 +102,7 @@ impl<S: 'static> Runtime<S> {
             if nodes[c].cold.get().is_none_or(|nd| nd.growth.is_none()) { continue }
             let cid = nodes[c].id;
             let instant = instant || nodes[c].instant_changes;
+            let cut = cut || nodes[c].instant_changes;
             // A reader away from the tail is anchored using measured row heights. Land those
             // heights with the anchor correction, unless `keep_on_screen` or `scroll_into_view`
             // is driving this viewport across the commit. A reveal left from an earlier commit
@@ -159,7 +163,7 @@ impl<S: 'static> Runtime<S> {
                         order.push(old);
                     }
                     ni += 1;
-                } else if let Some(g) = self.grows.get(&old).filter(|g| g.h > 0.01) && existed && !instant && !replaced && !(is_virtual && unseen_ids.contains(&old)) {
+                } else if let Some(g) = self.grows.get(&old).filter(|g| g.h > 0.01) && existed && !cut && !replaced && !(is_virtual && unseen_ids.contains(&old)) {
                     // A row fades in place before its space closes, except a fold, which shuts
                     // at once on its own spring under its feather, as it would fold shut in place.
                     let hold = if g.glide().is_some() { 0.0 } else { 0.15 };
@@ -226,9 +230,9 @@ impl<S: 'static> Runtime<S> {
                 }
                 let (duration, glide) = (tx.motion.map_or(0.0, |m| m.spring().duration * 1.15), nodes[j].glide.map(|s| (s, self.fold_limit(id))));
                 let hidden = if glide.is_some() { self.fold_hidden_above(&nodes, j, h) } else { None };
-                if existed && !instant && !nodes[j].virtual_mount && nodes[j].glide.is_some() && !self.grows.contains_key(&id) { opened.push(id); }
+                if existed && !cut && !nodes[j].virtual_mount && nodes[j].glide.is_some() && !self.grows.contains_key(&id) { opened.push(id); }
                 let g = self.grows.entry(id).or_insert_with(|| {
-                    if existed && !instant && !nodes[j].virtual_mount { GrowTrack { duration, ..GrowTrack::settled(0.0) } } else { GrowTrack::settled(h) }
+                    if existed && !cut && !nodes[j].virtual_mount { GrowTrack { duration, ..GrowTrack::settled(0.0) } } else { GrowTrack::settled(h) }
                 });
                 g.set_kind(streaming, whole, glide);
                 let snap_change = (instant || resized) && !streaming && (h - g.target).abs() > 1e-4;
@@ -359,7 +363,7 @@ impl<S: 'static> Runtime<S> {
             // An `El::instant_changes` element lands its changes, and those of what it holds;
             // its own entrance and exit, and colours, stay with the commit, as do the entrances of
             // an `El::animated_changes` subtree inside it.
-            let enters_at_once = instant || (nodes[i].parent.is_some_and(|p| nodes[p].instant_changes) && nodes[i].instant_changes);
+            let enters_at_once = cut || (nodes[i].parent.is_some_and(|p| nodes[p].instant_changes) && nodes[i].instant_changes);
             let lands = instant || nodes[i].instant_changes;
             let layout_instant = lands || row_like || tx.relayout || is_virtual
                 || (!self.aspect_snap.is_empty() && self.aspect_snap.contains(&id));
@@ -620,7 +624,7 @@ impl<S: 'static> Runtime<S> {
                 let content = &spec.content;
                 let now = if time_scaled { self.scene.store().node_time(id) } else { now };
                 let fade = if self.reduced_motion { 0.15 } else { spec.reveal };
-                let mounted_late = !was_present && !instant && !nodes[i].virtual_mount;
+                let mounted_late = !was_present && !instant && !tx.unprompted && !nodes[i].virtual_mount;
                 let st = self.reveals.entry(id).or_insert_with(|| RevealState {
                     len: if mounted_late { 0 } else { content.len() },
                     words: Vec::new(),
@@ -751,7 +755,7 @@ impl<S: 'static> Runtime<S> {
                     old_parent_id.is_none_or(|pid| self.node_index.get(&pid).is_some_and(|&i| i < present_len));
                 if parent_remained_present {
                     let instant = instant || (old.instant_changes && old_parent_id.and_then(|pid| self.node_index.get(&pid)).is_some_and(|&p| nodes[p].instant_changes));
-                    if tx.commit.lands() || (instant && !self.is_exiting(old.id)) || drew_nothing.get(oi).copied().unwrap_or(false) {
+                    if tx.commit.lands() || ((instant || tx.unprompted) && !self.is_exiting(old.id)) || drew_nothing.get(oi).copied().unwrap_or(false) {
                         self.scene.unmount(old.id);
                     } else {
                         if let Some(t) = old_parent_id.and_then(|pid| self.node_index.get(&pid)).and_then(|&p| nodes[p].vis.child_exit.as_deref().copied()) {

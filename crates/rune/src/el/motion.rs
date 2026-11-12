@@ -200,6 +200,13 @@ impl El {
     /// open unless they set one, so `.transition(Transition::offset(0.0, 8.0).combined(Transition::opacity()))`
     /// on a row also slides and fades it in. Rows a virtual list remounts on scroll never replay it.
     /// [`enter_delay`](Self::enter_delay) holds the whole entrance, as a staggered list does.
+    ///
+    /// Motion has a cause, in every window an app opens: an entrance or exit plays only in a commit an input in this window
+    /// caused (a click, a key, a drag, a hover, a scroll). A commit nothing in the window's input
+    /// asked for (a poll, a wake, data a server brought, a launch's frames after the first)
+    /// mounts and unmounts at once, rows new to a growth stack land at their height, and text it
+    /// mounts shows whole; what was already on screen keeps its motion. A handler that means
+    /// the motion anyway calls [`Tx::animated`](crate::Tx::animated).
     pub fn transition(mut self, t: Transition) -> Self {
         self.cold_mut().transition = Some(Box::new(t));
         self

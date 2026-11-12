@@ -139,6 +139,7 @@ pub(crate) fn runtime_for<S: 'static>(spec: &AppSpec<S>, state: S, size: (f32, f
     let mut rt = Runtime::with_text(state, spec.view, size, env, text);
     rt.poll = spec.poll;
     rt.on_key = spec.on_key;
+    rt.motion_needs_cause = true;
     rt.window_title.start(spec.title);
     rt.set_live_waker(waker.clone());
     #[cfg(feature = "hot")]
