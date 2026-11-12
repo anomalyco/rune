@@ -27,6 +27,10 @@ impl Life {
 
     pub(crate) fn covered(self) -> bool { matches!(self, Life::Shown { sight: Sight::Covered(_) }) }
 
+    /// Shown, and `cover` says none of it shows.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    pub(crate) fn covered_by(self, cover: Cover) -> bool { matches!(self, Life::Shown { sight } if sight.has(cover)) }
+
     pub(crate) fn finished(self) -> bool { self == Life::Finished }
 
     /// When it last hid, for reopening.

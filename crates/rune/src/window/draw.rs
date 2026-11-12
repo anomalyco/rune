@@ -73,6 +73,7 @@ impl<S: 'static> Host<S> {
         // Windows: a window still on the CPU renderer draws there (`cpu_frame`).
         #[cfg(target_os = "windows")]
         {
+            self.look();
             self.hand_over_if_done();
             if self.win.as_ref().is_some_and(|w| w.native.mode.cpu_draws()) { return self.draw_cpu(resizing); }
         }
@@ -110,6 +111,15 @@ impl<S: 'static> Host<S> {
             && let Err(error) = self.rebind_alpha(premultiplied)
         {
             eprintln!("rune: the window's swap chain couldn't change its alpha for a clip's layer: {error}");
+        }
+        // The swap chain still holds a frame the compositor hasn't shown: this one draws when it
+        // has room, built from the input that came by then (`slot`).
+        #[cfg(target_os = "windows")]
+        if !hidden && let Some(l) = self.win.as_mut() {
+            // SAFETY: the object is the live swap chain's; `Slot` waits on its own copy.
+            let waitable = l.surface.as_ref().and_then(|s| unsafe { s.as_hal::<wgpu::hal::api::Dx12>().and_then(|h| h.waitable_handle()) });
+            let handle = self.native_handle.clone();
+            if l.native.slot.take(waitable.map(|h| h.0), move || handle.send(WakeEvent::FrameSlot)) == super::slot::Take::Later { return; }
         }
         let Some(l) = self.win.as_mut() else { return };
         #[cfg(target_os = "windows")]
@@ -382,6 +392,8 @@ impl<S: 'static> Host<S> {
         l.native.materials.present(&rt.materials, rt.env.scale, || gpu.queue.present(frame));
         #[cfg(not(target_os = "macos"))]
         gpu.queue.present(frame);
+        #[cfg(target_os = "windows")]
+        l.native.slot.presented();
         // A swap chain made again on a handed-over window's visual takes over now (`cpu_frame`).
         #[cfg(target_os = "windows")]
         if matches!(l.native.mode, super::cpu_frame::SurfaceMode::Rebinding { .. }) {
@@ -455,18 +467,6 @@ impl<S: 'static> Host<S> {
         // link going; without one its timer waits a frame in `wake_deadline`.
         let next_tick = l.next_tick(now).filter(|_| !hidden);
         let rests = !hidden && !(self.trace.is_some() && self.args.frames.is_some());
-        #[cfg(feature = "frame-profile")]
-        #[allow(unused_mut)]
-        let mut fp_steady = 0u16;
-        #[cfg(target_os = "windows")]
-        {
-            // A frame the run alone asked for changes nothing unless it draws something new.
-            let changed = !l.steady.held_frame() || (!composed(self.comp.as_deref()) && !l.presented.as_ref().is_some_and(|p| p.same(rt, &l.config)));
-            #[cfg(feature = "frame-profile")]
-            { fp_steady |= u16::from(l.steady.held_frame()) << 8 | u16::from(changed) << 9; }
-            let event = if hidden { SteadyEvent::Ends } else { SteadyEvent::Drew { changed, focused: rt.has_window_focus(), now } };
-            l.steady = l.steady.step(event).0;
-        }
         self.idle = Presented::settle(&mut l.presented, rt, &l.config, animating || FrameMove::moving(&self.frame_move), next_tick, rests, composed(self.comp.as_deref()));
         // A drawn frame asks for nothing: it only puts the rest off.
         if !hidden { let _ = rest::step(&mut self.rest, RestEvent::Drew { now, low: rest::low_memory() }); }
@@ -474,7 +474,7 @@ impl<S: 'static> Host<S> {
         #[cfg(feature = "frame-profile")]
         let fp_next = [animating, FrameMove::moving(&self.frame_move), rt.needs_commit(), rt.stale() && !rt.needs_commit(), rt.has_pending_input(), rt.live_pending(),
             rt.window_frame.is_some(), super::timer_wants_frame(rt, next_tick)]
-            .iter().enumerate().fold(fp_steady, |bits, (i, on)| bits | (u16::from(*on) << i));
+            .iter().enumerate().fold(0u16, |bits, (i, on)| bits | (u16::from(*on) << i));
         #[cfg(target_os = "macos")]
         if !hidden && let Some(latency) = l.native.launch_drawables.settle(self.idle, now) {
             l.config.desired_maximum_frame_latency = latency;
@@ -484,17 +484,9 @@ impl<S: 'static> Host<S> {
                 l.surface_ok = false;
             }
         }
-        #[cfg(target_os = "windows")]
-        if self.idle && !hidden {
-            let (steady, again) = l.steady.step(SteadyEvent::Rests { now });
-            l.steady = steady;
-            if again { l.request_redraw(); }
-            #[cfg(feature = "frame-profile")]
-            if again { fp_steady |= 1 << 10; }
-        }
         #[cfg(feature = "frame-profile")]
         if let Some(mut f) = fp_frame {
-            f.next = fp_next | fp_steady & (1 << 10);
+            f.next = fp_next;
             f.poll_due = rt.poll_wake_deadline().map(|d| d - rt.polled_at());
             f.loop_due = rt.motion_wake_deadline().map(|d| d - rt.polled_at());
             if f.loop_due.is_some() { f.loops = rt.fp_loops(); }

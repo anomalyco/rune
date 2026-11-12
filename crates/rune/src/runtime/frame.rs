@@ -10,6 +10,13 @@ impl<S: 'static> Runtime<S> {
             .map(|(_, n)| n.path.clone()).collect()
     }
 
+    /// Whether a drawn node's loop runs (a spinner): what a window shows would fall behind it
+    /// while the window draws nothing.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    pub(crate) fn loops_shown(&self) -> bool {
+        self.nodes.iter().enumerate().any(|(i, n)| n.looping.is_some() && self.seen.get(i).copied().unwrap_or(false) && self.loops.contains_key(&n.id))
+    }
+
     /// Clock seconds now: the wall clock in a window (input arrives between frames), the
     /// virtual clock headless.
     pub(super) fn now_clock(&self) -> f64 {
@@ -56,9 +63,6 @@ impl<S: 'static> Runtime<S> {
         }
         changed
     }
-
-    /// Whether the window has the keyboard focus, as its last focus event said.
-    pub(crate) fn has_window_focus(&self) -> bool { self.window_focused == Some(true) }
 
     /// Queue a native focus transition. Repeated notifications do not repeat the callback.
     /// Losing focus is also `keys_lost`.

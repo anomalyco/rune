@@ -48,13 +48,15 @@ mod first_frame;
 use first_frame::FirstFrame;
 mod draw;
 mod redraw;
-use redraw::{Redraw, RedrawEffect, RedrawEvent};
-#[cfg(target_os = "windows")]
-use redraw::{Steady, SteadyEvent};
 #[cfg(target_os = "windows")]
 mod covered_draw;
 #[cfg(target_os = "windows")]
 use covered_draw::{CoveredDraw, CoveredDrawEvent};
+#[cfg(target_os = "windows")]
+mod look;
+#[cfg(target_os = "windows")]
+mod slot;
+use redraw::{Redraw, RedrawEffect, RedrawEvent};
 mod presented;
 pub(crate) use presented::Presented;
 use presented::{composed, composing};
@@ -126,9 +128,9 @@ pub(crate) enum WakeEvent {
     Position(usize, (i32, i32)), Level(usize, bool),
     Place(usize, crate::windows::PlaceRequest),
     Frame(usize, crate::window::frame::FrameRequest),
-    /// Windows: other windows started or stopped covering the window (platform::win32::occlusion).
+    /// Windows: the window's swap chain can take the frame it waits for (`slot`).
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-    Covered(usize, bool),
+    FrameSlot(usize),
     /// The app was reopened (macOS: its Dock icon clicked; Windows: launched again while it
     /// runs, see `single_instance`); for `Windows`, not one host.
     #[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
@@ -362,7 +364,7 @@ impl ApplicationHandler<WakeEvent> for Windows {
         let slot = match &event {
             WakeEvent::DisplayTick(i) | WakeEvent::App(i) | WakeEvent::Live(i) | WakeEvent::Window(i, _) | WakeEvent::Focus(i)
                 | WakeEvent::Position(i, _) | WakeEvent::Level(i, _) | WakeEvent::Place(i, _) | WakeEvent::Frame(i, _)
-                | WakeEvent::A11y(i) | WakeEvent::Covered(i, _) | WakeEvent::GpuReady(i) => *i,
+                | WakeEvent::A11y(i) | WakeEvent::FrameSlot(i) | WakeEvent::GpuReady(i) => *i,
             WakeEvent::Reopen => {
                 self.reopen(event_loop);
                 self.cleanup(event_loop);
@@ -684,6 +686,11 @@ fn setup_waker<S: 'static>(shared: &Arc<crate::app::Shared<S>>) -> Waker {
 /// ended, as Core Animation's time-based motion has by the time a covered window shows again.
 pub(crate) fn covered_step<S: 'static>(rt: &mut Runtime<S>) { rt.hidden_wake(); }
 
+/// Frames a window's swap chain may hold that the compositor hasn't shown. Windows: one, so a
+/// frame shows at the first composition after it's done, and the window waits for room itself
+/// (`slot`) rather than in `acquire`. Elsewhere two.
+pub(crate) const FRAME_LATENCY: u32 = if cfg!(target_os = "windows") { 1 } else { 2 };
+
 /// A vsynced sRGB (or non-sRGB when `srgb_blend` is set) configuration for the surface, and the
 /// first alpha mode it supports that composites translucent pixels.
 pub(crate) fn surface_config(surface: &wgpu::Surface, adapter: &wgpu::Adapter, (width, height): (u32, u32), srgb_blend: bool)
@@ -707,7 +714,7 @@ pub(crate) fn surface_config(surface: &wgpu::Surface, adapter: &wgpu::Adapter, (
     // quietly fall back.
     config.usage |= caps.usages & wgpu::TextureUsages::COPY_SRC;
     config.present_mode = wgpu::PresentMode::AutoVsync;
-    config.desired_maximum_frame_latency = 2;
+    config.desired_maximum_frame_latency = FRAME_LATENCY;
     Some((config, crate::render::translucency::mode(surface, adapter)))
 }
 

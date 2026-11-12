@@ -76,8 +76,10 @@ pub(super) struct Native {
     pub(super) cloak: crate::platform::win32::Cloak,
     /// The frame without a title bar a window with `App::titlebar` has.
     pub(super) frame: Option<crate::platform::win32::CustomFrame>,
-    /// Hears other windows cover it whole (`WakeEvent::Covered`).
-    pub(super) _occlusion: Option<crate::platform::win32::occlusion::Tracked>,
+    /// Whether other windows cover it whole, as the last frame that looked found (`look`).
+    pub(super) look: super::look::Look,
+    /// Whether its swap chain can take the next frame (`slot`).
+    pub(super) slot: super::slot::Slot,
     /// Whether the CPU renderer or the GPU draws its frames (`cpu_frame`).
     pub(super) mode: super::cpu_frame::SurfaceMode,
     /// Whether its accessibility adapter waits for the first frame (`Host::a11y_after_frame`).

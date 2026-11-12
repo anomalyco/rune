@@ -125,6 +125,9 @@ pub(super) struct VideoLayers {
     pending_alpha: Option<bool>,
     /// Since when no clip has wanted a layer.
     unused_since: Option<Instant>,
+    /// The swap chain stays premultiplied whether a clip wants a layer or not: its display may
+    /// follow an opaque swap chain's presents with its refresh rate (`vrr_guard`).
+    hold: bool,
 }
 
 impl VideoLayers {
@@ -213,7 +216,7 @@ impl VideoLayers {
         {
             let _ = h.commit();
         }
-        self.follow_alpha(wanted, premultiplied, handover.is_some());
+        self.follow_alpha(wanted || self.hold, premultiplied, handover.is_some());
         out
     }
 
@@ -234,6 +237,9 @@ impl VideoLayers {
             let _ = h.commit();
         }
     }
+
+    /// Keeps the swap chain premultiplied (`hold`).
+    pub(super) fn hold_premultiplied(&mut self, on: bool) { self.hold = on; }
 
     /// The alpha the UI's swap chain should switch to before the next frame, once.
     pub(super) fn take_alpha(&mut self) -> Option<bool> {

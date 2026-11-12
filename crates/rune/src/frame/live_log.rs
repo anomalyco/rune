@@ -105,7 +105,7 @@ pub(crate) fn frame(f: Frame) {
     let d = |a: Stamp, b: Stamp| b.wall.saturating_sub(a.wall);
     let ns = |ms: f64| (ms * 1e6) as u64;
     let p = &f.phases;
-    let next: Vec<&str> = ["motion", "frame_move", "commit", "relayout_or_queue", "input", "live", "window_frame", "timer", "steady_frame", "changed", "steady_again"]
+    let next: Vec<&str> = ["motion", "frame_move", "commit", "relayout_or_queue", "input", "live", "window_frame", "timer"]
         .into_iter().enumerate().filter(|(i, _)| f.next & (1 << i) != 0).map(|(_, n)| n).collect();
     let line = serde_json::json!({
         "t": f.entry.wall, "inputs": inputs, "input": input_ns, "wakes": wakes, "wake": wake_ns, "asked": asked, "wakers": wakers,
