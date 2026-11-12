@@ -150,7 +150,7 @@ pub(crate) fn first_show() -> Option<FirstShow> {
 /// Commits the current Core Animation transaction to the window server now (`[CATransaction flush]`).
 pub(crate) fn flush_transaction() {
     use objc2::{msg_send, runtime::AnyClass};
-    if let Some(t) = AnyClass::get(c"CATransaction") {
+    if let Some(t) = AnyClass::get("CATransaction") {
         // SAFETY: a CATransaction class method, on the main thread.
         unsafe { let _: () = msg_send![t, flush]; }
     }
