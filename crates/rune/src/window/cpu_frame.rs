@@ -615,6 +615,7 @@ impl<S: 'static> Host<S> {
                     return;
                 }
                 crate::marks::mark("gpu.window.handed");
+                crate::platform::win32::unidle_d3d_threads_soon();
                 // A first frame only the GPU could draw showed cloaked: it comes on screen now.
                 if w.native.cloak.held() {
                     w.native.cloak.lift(&w.window);
