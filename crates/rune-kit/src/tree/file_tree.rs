@@ -46,9 +46,9 @@ pub fn file_icon(name: &str) -> &'static Icon {
 
 /// Builds a [`TreeModel`] of [`FileNode`]s from file paths (`/`-separated, relative to a root).
 ///
-/// By default folders sort before files, names sort naturally (`file2` before `file10`, case
-/// aside), and a chain of folders that each hold only one folder shows as one row named
-/// `a/b/c`, as an editor's compact folders do. Folders start closed; open them on the model.
+/// By default folders sort before files, names sort as the interface's language sorts them
+/// (`file2` before `file10`, case aside; [`natural_cmp`]), and a chain of folders that each
+/// hold only one folder shows as one row named `a/b/c`, as an editor's compact folders do. Folders start closed; open them on the model.
 pub struct FileTree {
     compact: bool,
     dirs_first: bool,
@@ -143,39 +143,9 @@ impl FileTree {
     }
 }
 
-/// Compares names as people sort them: case aside, and runs of digits by value (`file2` before
-/// `file10`). Ties fall back to the exact text so the order is total.
+/// Compares names as people sort them, in the interface's language: its alphabet, case aside,
+/// and runs of digits by value (`file2` before `file10`), by the OS's collator
+/// ([`rune::text::compare_names`]). Ties fall back to the exact text so the order is total.
 pub fn natural_cmp(a: &str, b: &str) -> Ordering {
-    let (mut x, mut y) = (a.chars().peekable(), b.chars().peekable());
-    loop {
-        match (x.peek().copied(), y.peek().copied()) {
-            (None, None) => return a.cmp(b),
-            (None, Some(_)) => return Ordering::Less,
-            (Some(_), None) => return Ordering::Greater,
-            (Some(p), Some(q)) if p.is_ascii_digit() && q.is_ascii_digit() => {
-                let take = |it: &mut std::iter::Peekable<std::str::Chars>| {
-                    let mut s = String::new();
-                    while let Some(&c) = it.peek().filter(|c| c.is_ascii_digit()) {
-                        s.push(c);
-                        it.next();
-                    }
-                    s
-                };
-                let (m, n) = (take(&mut x), take(&mut y));
-                let (mt, nt) = (m.trim_start_matches('0'), n.trim_start_matches('0'));
-                let o = mt.len().cmp(&nt.len()).then_with(|| mt.cmp(nt));
-                if o != Ordering::Equal {
-                    return o;
-                }
-            }
-            (Some(p), Some(q)) => {
-                let o = p.to_lowercase().cmp(q.to_lowercase());
-                if o != Ordering::Equal {
-                    return o;
-                }
-                x.next();
-                y.next();
-            }
-        }
-    }
+    rune::text::compare_names(a, b)
 }
