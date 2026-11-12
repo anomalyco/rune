@@ -1,0 +1,1 @@
+- **A field that blurs but stays on screen keeps focus where it went.** Since Escape-blurred fields hand focus to a neighbour when they close, a field that blurred while staying mounted (a filter whose Down key moves the keyboard into its list) also handed focus away, to the control after it. Now only a field that left the tree hands focus on.

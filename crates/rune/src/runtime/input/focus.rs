@@ -402,6 +402,7 @@ impl<S: 'static> Runtime<S> {
         // its exit ends) counts as focused: the keyboard was on it, and nothing took focus since.
         let gone = self.focus.path().or_else(|| self.focus.now_or_blurred().or(self.focus.tab_start()).filter(|_| self.focus.keyboard()))?;
         let at = self.nodes.iter().position(|n| n.path == gone)?;
+        if self.focus.path().is_none() && (self.nodes[at].input.is_none() || nodes.iter().any(|n| n.path == gone)) { return None; }
         if self.active_modal().is_some_and(|m| at >= m && self.modal_member(at)) { return None; }
         let new: rustc_hash::FxHashMap<&str, usize> = nodes.iter().enumerate().map(|(j, n)| (n.path.as_str(), j)).collect();
         // A node built again this commit has no layout yet: its size is the old node's.
