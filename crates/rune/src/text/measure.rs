@@ -218,6 +218,17 @@ pub fn advance(text: &str, style: TextStyle) -> f32 {
     with_text(|t| t.layout_rich(text, &[], style, 1.0, None).full_width())
 }
 
+/// Where each line of `text` starts (byte offsets), set in the sans family at `size` points and
+/// `weight` and wrapped at `width` points, as the runtime lays it out: for a page's harness to
+/// compare with the browser's own lines (`platform/web.rs`, `__runeLines`).
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn line_starts(text: &str, size: f32, weight: f32, width: f32) -> Vec<usize> {
+    with_text(|t| {
+        let l = t.layout_rich_with(text, &[], TextStyle::new(size, weight), 1.0, Some(width), RichLayoutOptions::default());
+        l.lines().map(|line| line.text_range().start).collect()
+    })
+}
+
 /// Runs `f` on this thread's text system, built from the fonts the app was given.
 pub(super) fn with_text<R>(f: impl FnOnce(&mut TextSystem) -> R) -> R {
     MEASURER.with_borrow_mut(|m| {

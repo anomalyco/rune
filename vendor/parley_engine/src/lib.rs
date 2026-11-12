@@ -110,6 +110,8 @@ mod analysis;
 mod analyzer;
 mod bidi;
 pub mod break_overrides;
+pub mod dictionary;
+pub mod platform;
 mod glyph;
 pub mod itemize;
 mod lru_cache;

@@ -46,6 +46,8 @@ mod ltr_units;
 pub use ltr_units::ltr_units;
 pub mod mask_cache;
 mod paragraphs;
+#[cfg(target_arch = "wasm32")]
+mod platform_face;
 mod span;
 mod system_fonts;
 mod system_weight;
@@ -93,6 +95,8 @@ pub use hash::text_hash;
 pub(crate) use hash::{directed, elide_key, shape_key};
 pub(crate) use families::choose_families;
 pub use measure::{FamiliesGuard, TextInk, advance, content_widths, font_epoch, ink, measure, measure_with, with_families};
+#[cfg(target_arch = "wasm32")]
+pub(crate) use measure::line_starts;
 pub use rich_layout::RichLayoutOptions;
 pub use run::{Run, RunLayout};
 pub(crate) use case::Source as CaseSource;
@@ -140,6 +144,12 @@ use system_fonts::CJK_FONT_FILES;
 /// `line-break: auto`, which lets them start one. Native Japanese readers decide which reads
 /// better; this is the one place to change.
 const LINE_BREAK: parley::LineBreak = parley::LineBreak::Strict;
+
+/// The family every stack ends in: in a browser, the face the page draws (`platform_face`).
+#[cfg(target_arch = "wasm32")]
+const PLATFORM_FAMILY: &[&str] = platform_face::FAMILY;
+#[cfg(not(target_arch = "wasm32"))]
+const PLATFORM_FAMILY: &[&str] = &[];
 
 /// Lean of a synthetic oblique, in degrees, for faces with no italic.
 const SYNTHETIC_OBLIQUE: u8 = 12;
@@ -300,6 +310,9 @@ impl TextSystem {
                 full_faces::note_embedded_inter();
             }
         }
+        // In a browser, the face the page draws what no other font has (`platform_face`).
+        #[cfg(target_arch = "wasm32")]
+        platform_face::register(&mut collection);
         // No system font loads here: each comes the first time a text needs it (`load_fallbacks`).
         let cjk = register_cjk_fallbacks(&mut collection, &registered, families);
         #[cfg(target_arch = "wasm32")]
@@ -729,7 +742,7 @@ impl TextSystem {
         let with_symbols = |primary, extra: &[&'static str]| {
             family_list(primary, system, self.sans.as_str())
                 .into_iter()
-                .chain(extra.iter().chain(self.symbol_families.iter()).chain(math).map(|name| FontFamilyName::named(name)))
+                .chain(extra.iter().chain(self.symbol_families.iter()).chain(math).chain(PLATFORM_FAMILY).map(|name| FontFamilyName::named(name)))
                 .collect::<Vec<_>>()
         };
         let sans = match style.family {

@@ -75,7 +75,6 @@ fn prev_boundary(text: &str, i: usize) -> usize { floor_boundary(text, i.saturat
 /// line (on its break, or past the end of the text) it takes the line's last word or paragraph,
 /// as AppKit does.
 pub(crate) fn unit_at(text: &str, i: usize, unit: Unit) -> (usize, usize) {
-    use icu_segmenter::{WordSegmenter, options::WordBreakInvariantOptions};
     let mut i = floor_boundary(text, i);
     if i > 0 && i == text.len() && unit != Unit::Char { i = prev_boundary(text, i); }
     match unit {
@@ -87,7 +86,7 @@ pub(crate) fn unit_at(text: &str, i: usize, unit: Unit) -> (usize, usize) {
             }
             let mut last = (i, i);
             let mut start = 0;
-            for end in WordSegmenter::new_dictionary(WordBreakInvariantOptions::default()).segment_str(text).filter(|&b| b > 0) {
+            for end in word_ends(text) {
                 last = (start, end);
                 if i < end { return last; }
                 start = end;
@@ -100,6 +99,18 @@ pub(crate) fn unit_at(text: &str, i: usize, unit: Unit) -> (usize, usize) {
             (start, end)
         }
     }
+}
+
+/// Where each of `text`'s words ends, in order, the last at `text.len()`: ICU4X's dictionaries
+/// natively, the browser's (`Intl.Segmenter`) in a page, which links none.
+fn word_ends(text: &str) -> impl Iterator<Item = usize> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use icu_segmenter::{WordSegmenter, options::WordBreakInvariantOptions};
+        WordSegmenter::new_dictionary(WordBreakInvariantOptions::default()).segment_str(text).filter(|&b| b > 0)
+    }
+    #[cfg(target_arch = "wasm32")]
+    crate::platform::web::segmenter::words(text).into_iter()
 }
 
 /// The selection a drag from unit range `origin` to unit range `at` makes: (anchor, focus).

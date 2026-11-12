@@ -277,6 +277,11 @@ fn shape_segment(
 
     // Shape a run of the segment with a single font, appending it to `shaped_text`.
     let mut shape_run = |font: &FontInstance, range: TextRange| {
+        // The platform's face: its host measures the run and draws it (`platform`).
+        if let Some(platform) = crate::platform::shaper(font.font.data.id()) {
+            shape_platform_run(platform, text, range, segment, options, char_info, char_style_indices, font, shaped_text);
+            return;
+        }
         // TODO: How do we want to handle errors like this?
         let font_ref =
             harfrust::FontRef::from_index(font.font.data.as_ref(), font.font.index).unwrap();
@@ -397,7 +402,8 @@ fn shape_segment(
             char_info,
             char_style_indices,
             font,
-            &glyph_buffer,
+            glyph_buffer.glyph_infos(),
+            glyph_buffer.glyph_positions(),
             harf_shaper.coords(),
             metrics,
         );
@@ -475,6 +481,99 @@ fn variations_iter<'a>(
             tag: harfrust::Tag::new(&variation.tag.to_bytes()),
             value: variation.value,
         }))
+}
+
+/// A run in the platform's face (`platform`), appended to `shaped_text`: its host gives a glyph
+/// per grapheme, with units it draws whole between the run's break opportunities.
+#[expect(clippy::too_many_arguments, reason = "the shape_run closure's inputs")]
+fn shape_platform_run(
+    shaper: crate::platform::PlatformShaper,
+    text: &str,
+    range: TextRange,
+    segment: &Segment,
+    options: &ShapeOptions<'_>,
+    char_info: &[CharInfo],
+    char_style_indices: &[u16],
+    font: &FontInstance,
+    shaped_text: &mut ShapedText,
+) {
+    let run_text = &text[range.byte_range.clone()];
+    let (mut graphemes, mut units, mut clusters) = (Vec::new(), Vec::new(), Vec::new());
+    let mut after_newline = false;
+    for (i, ((at, ch), info)) in run_text.char_indices().zip(&char_info[range.char_range.clone()]).enumerate() {
+        let newline = matches!(ch, '\n' | '\r' | '\u{0B}' | '\u{0C}' | '\u{85}' | '\u{2028}' | '\u{2029}');
+        let grapheme = i == 0 || info.is_grapheme_start() || newline || after_newline;
+        if grapheme {
+            #[expect(clippy::cast_possible_truncation, reason = "a run is under 4 GiB")]
+            {
+                if i == 0 || info.is_soft_wrap_opportunity() || newline || after_newline {
+                    units.push(at as u32);
+                }
+                graphemes.push(at as u32);
+                clusters.push(i as u32);
+            }
+        }
+        after_newline = newline;
+    }
+    let wght = harfrust::Tag::new(b"wght");
+    let weight = variations_iter(&font.synthesis, options.variations)
+        .filter(|v| v.tag == wght)
+        .last()
+        .map_or(if font.synthesis.embolden() { 700. } else { 400. }, |v| v.value);
+    let rtl = segment.bidi_level.is_rtl();
+    let mut glyphs = Vec::with_capacity(graphemes.len());
+    shaper(
+        &crate::platform::PlatformText {
+            text: run_text,
+            graphemes: &graphemes,
+            units: &units,
+            size: options.font_size,
+            weight,
+            italic: font.synthesis.skew().is_some(),
+            rtl,
+            language: options.language.as_ref().map(|l| l.as_str()),
+        },
+        &mut glyphs,
+    );
+    glyphs.resize(graphemes.len(), crate::platform::PlatformGlyph::default());
+    let font_ref = skrifa::FontRef::from_index(font.font.data.as_ref(), font.font.index).unwrap();
+    let metrics = skrifa::metrics::Metrics::new(
+        &font_ref,
+        skrifa::prelude::Size::new(options.font_size),
+        skrifa::instance::LocationRef::default(),
+    );
+    let upem = metrics.units_per_em as f32;
+    let units_of = |px: f32| (px * upem / options.font_size.max(1e-3)).round() as i32;
+    let mut infos: Vec<harfrust::GlyphInfo> = Vec::with_capacity(glyphs.len());
+    let mut positions: Vec<harfrust::GlyphPosition> = Vec::with_capacity(glyphs.len());
+    for (glyph, &cluster) in glyphs.iter().zip(&clusters) {
+        let mut info = harfrust::GlyphInfo::default();
+        info.glyph_id = glyph.id;
+        info.cluster = cluster;
+        infos.push(info);
+        let mut position = harfrust::GlyphPosition::default();
+        position.x_advance = units_of(glyph.advance);
+        position.x_offset = units_of(glyph.x_offset);
+        positions.push(position);
+    }
+    // In visual order, as HarfRust gives them.
+    if rtl {
+        infos.reverse();
+        positions.reverse();
+    }
+    shaped_text.push_run(
+        text,
+        range,
+        segment,
+        options,
+        char_info,
+        char_style_indices,
+        font,
+        &infos,
+        &positions,
+        &[],
+        (FontMetrics::from_skrifa_metrics(&metrics, options.font_size), upem),
+    );
 }
 
 pub(crate) fn script_to_harfrust(script: fontique::Script) -> harfrust::Script {
