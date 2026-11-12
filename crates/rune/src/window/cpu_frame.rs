@@ -101,10 +101,12 @@ pub(super) enum SurfaceMode {
     Gpu,
     /// The CPU renderer draws; `job` is the GPU being made for it.
     Cpu { cpu: Cpu, job: GpuJob },
-    /// The GPU's swap chain is on the window's visual, uncommitted; both renderers draw each
-    /// frame until a turn starts with `done` (the GPU's last frame finished). `readback` is
-    /// that frame's pixels on their way back, to count how many differ from the CPU's.
-    HandingOver { cpu: Cpu, handover: Handover, done: Arc<AtomicBool>, readback: Option<Readback> },
+    /// The GPU's swap chain is on the window's visual, uncommitted. The next frame is drawn by
+    /// both renderers, and then nothing is drawn until the GPU has finished it (`done`): a
+    /// window that animates would otherwise replace it every frame and never hand over. The turn
+    /// that finds it done commits. `readback` is that frame's pixels on their way back, to count
+    /// how many differ from the CPU's.
+    HandingOver { cpu: Cpu, handover: Handover, done: Option<Arc<AtomicBool>>, readback: Option<Readback> },
     /// The GPU draws through the committed visual, which lives as long as the window's surface.
     Handed { handover: Handover },
     /// The GPU's swap chain was made again (a lost device) on the same visual: committed once its
@@ -317,6 +319,8 @@ impl<S: 'static> Host<S> {
     /// changed, and only those rectangles go to the window. While handing over, the GPU draws the
     /// same instances too.
     pub(super) fn draw_cpu(&mut self, resizing: bool) {
+        // Handing over, with the GPU's frame not finished yet: nothing new until it is.
+        if self.win.as_ref().is_some_and(|w| matches!(w.native.mode, SurfaceMode::HandingOver { done: Some(_), .. })) { return; }
         let launcher = self.launcher();
         let Some(l) = self.win.as_ref() else { return };
         let hidden = launcher && !self.life.shown();
@@ -506,7 +510,7 @@ impl<S: 'static> Host<S> {
         let size = w.window.inner_size();
         let SurfaceMode::Cpu { mut cpu, .. } = std::mem::replace(&mut w.native.mode, SurfaceMode::Gpu) else { unreachable!() };
         cpu.half = HalfRounding::of_vendor(gpu.adapter.get_info().vendor);
-        w.native.mode = SurfaceMode::HandingOver { cpu, handover, done: Arc::new(AtomicBool::new(false)), readback: None };
+        w.native.mode = SurfaceMode::HandingOver { cpu, handover, done: None, readback: None };
         w.surface = Some(surface);
         w.config = config;
         w.surface_ok = true;
@@ -552,9 +556,8 @@ impl<S: 'static> Host<S> {
         let flag = Arc::new(AtomicBool::new(false));
         let set = flag.clone();
         gpu.queue.on_submitted_work_done(move || set.store(true, Ordering::Release));
-        *done = flag;
-        // A thread waits for the GPU and wakes the loop, which commits if this frame is still the
-        // latest (`hand_over_if_done`).
+        *done = Some(flag);
+        // A thread waits for the GPU and wakes the loop, which commits (`hand_over_if_done`).
         let (waiting, handle) = (gpu.clone(), self.native_handle.clone());
         let spawned = std::thread::Builder::new().name("rune-gpu-wait".into()).spawn(move || {
             let _ = waiting.device.poll(wgpu::PollType::wait_indefinitely());
@@ -572,13 +575,16 @@ impl<S: 'static> Host<S> {
     pub(super) fn hand_over_if_done(&mut self) {
         let (Some(w), Some((gpu, _))) = (self.win.as_mut(), self.gpu.as_ref()) else { return };
         match &mut w.native.mode {
-            SurfaceMode::HandingOver { done, .. } => {
+            SurfaceMode::HandingOver { done: Some(done), .. } => {
                 let _ = gpu.device.poll(wgpu::PollType::Poll);
-                if !done.load(Ordering::Acquire) { return; }
+                let lost = gpu.is_lost();
+                if !lost && !done.load(Ordering::Acquire) { return; }
                 let SurfaceMode::HandingOver { cpu, handover, readback, .. } = std::mem::replace(&mut w.native.mode, SurfaceMode::Gpu) else { unreachable!() };
-                if let Err(error) = handover.commit() {
+                let committed = if lost { Err("its device was lost".to_owned()) } else { handover.commit() };
+                if let Err(error) = committed {
                     // DWM kept the window's own content: the CPU goes on drawing it.
                     eprintln!("rune: the GPU couldn't take over the window: {error}");
+                    w.request_redraw();
                     w.native.mode = SurfaceMode::Cpu { cpu, job: GpuJob::Failed };
                     w.surface = None;
                     self.gpu = None;
@@ -597,8 +603,10 @@ impl<S: 'static> Host<S> {
                 }
                 w.native.mode = SurfaceMode::Handed { handover };
                 w.presented = None;
+                // What was asked for while the GPU finished its frame draws now, on the GPU.
+                w.request_redraw();
             }
-            SurfaceMode::Gpu | SurfaceMode::Cpu { .. } | SurfaceMode::Handed { .. } | SurfaceMode::Rebinding { .. } => {}
+            SurfaceMode::HandingOver { done: None, .. } | SurfaceMode::Gpu | SurfaceMode::Cpu { .. } | SurfaceMode::Handed { .. } | SurfaceMode::Rebinding { .. } => {}
         }
     }
 }
