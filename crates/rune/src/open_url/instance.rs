@@ -78,25 +78,41 @@ mod windows {
     use std::time::{Duration, Instant};
 
     use windows_sys::Win32::Foundation::{
-        CloseHandle, ERROR_ACCESS_DENIED, ERROR_BROKEN_PIPE, ERROR_FILE_NOT_FOUND, ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED, GENERIC_WRITE,
-        GetLastError, HANDLE, HWND, INVALID_HANDLE_VALUE, LPARAM,
+        CloseHandle, ERROR_ACCESS_DENIED, ERROR_BROKEN_PIPE, ERROR_FILE_NOT_FOUND, ERROR_IO_PENDING, ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED,
+        GENERIC_READ, GENERIC_WRITE, GetLastError, HANDLE, HWND, INVALID_HANDLE_VALUE, LPARAM, WAIT_OBJECT_0,
     };
     use windows_sys::Win32::Storage::FileSystem::{
-        CreateFileW, FILE_FLAG_FIRST_PIPE_INSTANCE, OPEN_EXISTING, PIPE_ACCESS_INBOUND, ReadFile, WriteFile,
+        CreateFileW, FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OVERLAPPED, FlushFileBuffers, OPEN_EXISTING, PIPE_ACCESS_DUPLEX, ReadFile,
+        WriteFile,
     };
+    use windows_sys::Win32::System::IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED};
     use windows_sys::Win32::System::Pipes::{
         ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, GetNamedPipeServerProcessId, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS,
         PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT, WaitNamedPipeW,
     };
     use windows_sys::Win32::System::RemoteDesktop::ProcessIdToSessionId;
-    use windows_sys::Win32::System::Threading::GetCurrentProcessId;
+    use windows_sys::Win32::System::Threading::{CreateEventW, GetCurrentProcessId, WaitForSingleObject};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         AllowSetForegroundWindow, EnumWindows, GW_OWNER, GWL_EXSTYLE, GetWindow, GetWindowLongW, GetWindowThreadProcessId, IsIconic,
         IsWindowVisible, SW_RESTORE, SetForegroundWindow, ShowWindow, WS_EX_TOOLWINDOW,
     };
 
-    /// Opens every message, so a stray client's bytes aren't taken for arguments.
-    const MAGIC: &[u8] = b"rune-instance 1\0";
+    /// Opens every message, so a stray client's bytes aren't taken for arguments: a length and
+    /// the arguments follow, and the sender waits for one byte back (`ACCEPTED`, `QUITTING`).
+    const MAGIC: &[u8] = b"rune-instance 2\0";
+    /// An older build's message: the arguments until the sender closes, and no answer.
+    const MAGIC_V1: &[u8] = b"rune-instance 1\0";
+    /// The running process took the launch.
+    const ACCEPTED: u8 = b'A';
+    /// The running process quits: the launch claims the instance once it lets go.
+    const QUITTING: u8 = b'Q';
+    /// How long a launch waits for the running process to answer before it takes the name for
+    /// held by nobody. A healthy process answers in 63-82 µs (p50-p95, Windows, release); this
+    /// leaves room for one that waits for a busy CPU, and is what a launch pays while a killed
+    /// process's pipe lingers and its pid can't be read.
+    const ANSWER_WITHIN: Duration = Duration::from_millis(50);
+    /// Names tried before a launch runs unclaimed (each held by a process that doesn't answer).
+    const GENERATIONS: u32 = 8;
     /// The most a launch's arguments may take.
     const MAX_MESSAGE: usize = 1 << 20;
     /// How long a later launch keeps trying to reach the first process.
@@ -187,47 +203,83 @@ mod windows {
     }
 
     pub(super) fn claim(id: &str) -> bool {
-        let name = wide(&pipe_name(id));
-        let deadline = Instant::now() + REACH_FOR;
         // A launch a quitting process handed on (`relaunch::spawn_with`) waits for that process to
         // let go of the name (`release_instance`, or its end): sending to it would only come back.
         let handed = crate::relaunch::handed_from().map(|pid| (pid, Instant::now() + HANDED_WAIT));
-        loop {
-            match create(&name) {
-                Ok(pipe) => {
-                    let _ = CLAIMED.set(name);
-                    listen(pipe);
-                    return true;
+        // A name held by a process that doesn't answer (killed, and still being torn down: its
+        // pipe stays until the last of its threads goes) is passed over for the next.
+        for generation in 0..GENERATIONS {
+            let name = wide(&pipe_name(id, generation));
+            let deadline = Instant::now() + REACH_FOR;
+            loop {
+                match create(&name) {
+                    Ok(pipe) => return claimed(name, pipe),
+                    Err(ERROR_ACCESS_DENIED) => {}
+                    // Not a pipe name this process may use: run unclaimed rather than not at all.
+                    Err(_) => return true,
                 }
-                Err(ERROR_ACCESS_DENIED) => {}
-                // Not a pipe name this process may use: run unclaimed rather than not at all.
-                Err(_) => return true,
-            }
-            if let Some((pid, until)) = handed
-                && Instant::now() < until
-                && crate::relaunch::alive(pid)
-            {
-                std::thread::sleep(Duration::from_millis(1));
-                continue;
-            }
-            match send(&name) {
-                Sent::Delivered => return false,
-                // The first process went between the two calls: claim the name again.
-                Sent::Gone if Instant::now() < deadline => continue,
-                Sent::Gone | Sent::Unreachable => return true,
+                if let Some((pid, until)) = handed
+                    && Instant::now() < until
+                    && crate::relaunch::alive(pid)
+                {
+                    std::thread::sleep(Duration::from_millis(1));
+                    continue;
+                }
+                match send(&name) {
+                    Sent::Delivered => return false,
+                    // It quits: the name is free once it has closed what it holds.
+                    Sent::Quitting(server) => match wait_free(&name, server) {
+                        Some(pipe) => return claimed(name, pipe),
+                        None => continue,
+                    },
+                    // The first process went between the two calls: claim the name again.
+                    Sent::Gone if Instant::now() < deadline => continue,
+                    Sent::Gone => return true,
+                    Sent::Nobody => break,
+                }
             }
         }
+        // Every name is held by a process that doesn't answer: run unclaimed rather than not at all.
+        true
+    }
+
+    fn claimed(name: Vec<u16>, pipe: HANDLE) -> bool {
+        CLAIMED.set(name).ok();
+        listen(pipe);
+        true
+    }
+
+    /// Claims `name` as soon as the quitting `server` lets go of it, for at most `HANDED_WAIT`;
+    /// none when it doesn't (then the name is asked again, and passed over if nobody answers).
+    fn wait_free(name: &[u16], server: u32) -> Option<HANDLE> {
+        let until = Instant::now() + HANDED_WAIT;
+        let mut gone_at = None;
+        while Instant::now() < until {
+            match create(name) {
+                Ok(pipe) => return Some(pipe),
+                Err(ERROR_ACCESS_DENIED) => {}
+                Err(_) => return None,
+            }
+            // Gone, yet its name is still held: not for long, or not by it.
+            if !crate::relaunch::alive(server) && gone_at.get_or_insert_with(Instant::now).elapsed() > ANSWER_WITHIN {
+                return None;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        None
     }
 
     /// Per user and session, so another account's app, or this account's in another session,
-    /// never takes this one's launches.
-    fn pipe_name(id: &str) -> String {
+    /// never takes this one's launches. Generation 0 is the name every build used; a later one is
+    /// tried when the names before it are held by processes that don't answer.
+    fn pipe_name(id: &str, generation: u32) -> String {
         let mut session = 0;
         // SAFETY: writes the session id into `session`.
         unsafe { ProcessIdToSessionId(GetCurrentProcessId(), &mut session) };
         let user = user_sid();
         let clean = |s: &str| s.chars().map(|c| if c == '\\' || c.is_control() { '-' } else { c }).collect::<String>();
-        let name = format!(r"\\.\pipe\rune-instance-{session}-{}-{}", clean(&user), clean(id));
+        let suffix = if generation == 0 { String::new() } else { format!("-{generation}") };
+        let name = format!(r"\\.\pipe\rune-instance-{session}-{}-{}{suffix}", clean(&user), clean(id));
         name.chars().take(256).collect()
     }
 
@@ -264,10 +316,10 @@ mod windows {
         let pipe = unsafe {
             CreateNamedPipeW(
                 name.as_ptr(),
-                PIPE_ACCESS_INBOUND | FILE_FLAG_FIRST_PIPE_INSTANCE,
+                PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,
                 PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
                 PIPE_UNLIMITED_INSTANCES,
-                0,
+                16,
                 64 * 1024,
                 0,
                 std::ptr::null(),
@@ -277,8 +329,10 @@ mod windows {
         if pipe == INVALID_HANDLE_VALUE { Err(unsafe { GetLastError() }) } else { Ok(pipe) }
     }
 
-    /// Reads one launch at a time from the pipe until `release` (or the process ends). The handle
-    /// stays open meanwhile, so the name stays this process's.
+    /// Reads one launch at a time from the pipe until `release` (or the process ends), and answers
+    /// each (`ACCEPTED`, or `QUITTING` while the app quits: the launch then claims the instance
+    /// itself once this process lets go). The handle stays open meanwhile, so the name stays this
+    /// process's.
     fn listen(pipe: HANDLE) {
         let pipe = pipe as usize;
         let spawned = std::thread::Builder::new().name("rune-instance".into()).spawn(move || {
@@ -287,8 +341,24 @@ mod windows {
                 // SAFETY: `pipe` is the open server handle; a client that connected before this
                 // call answers ERROR_PIPE_CONNECTED.
                 let connected = unsafe { ConnectNamedPipe(pipe, std::ptr::null_mut()) } != 0 || unsafe { GetLastError() } == ERROR_PIPE_CONNECTED;
-                if connected && let Some(args) = read(pipe) {
-                    relaunched(args);
+                if connected && let Some(launch) = read(pipe) {
+                    let quitting = crate::quit::quitting();
+                    if launch.answers {
+                        let answer = [if quitting { QUITTING } else { ACCEPTED }];
+                        let mut written = 0;
+                        // SAFETY: one byte from `answer` to the connected client; the flush waits
+                        // for the client to read it (or to close), so the disconnect below
+                        // doesn't discard it.
+                        unsafe {
+                            WriteFile(pipe, answer.as_ptr(), 1, &mut written, std::ptr::null_mut());
+                            FlushFileBuffers(pipe);
+                        }
+                    }
+                    // A launch told the app quits claims the instance itself; one that couldn't
+                    // be told (an older sender) is started again once this process exits.
+                    if !(quitting && launch.answers) {
+                        relaunched(launch.args);
+                    }
                 }
                 // SAFETY: ends this client's connection, so the next can connect.
                 unsafe { DisconnectNamedPipe(pipe) };
@@ -308,11 +378,27 @@ mod windows {
         }
     }
 
-    /// One client's message, until it closes its end: the arguments, or None for anything else.
-    fn read(pipe: HANDLE) -> Option<Vec<String>> {
+    /// A launch read from the pipe: its arguments, and whether its sender waits for an answer.
+    struct Launch {
+        args: Vec<String>,
+        answers: bool,
+    }
+
+    /// One client's message: `MAGIC`, the body's length (u32, little-endian) and the body, after
+    /// which the client waits for its answer; or, from an older sender, `MAGIC_V1` and the body
+    /// until it closes its end. None for anything else.
+    fn read(pipe: HANDLE) -> Option<Launch> {
         let mut message = Vec::new();
         let mut buf = [0u8; 4096];
-        loop {
+        let complete = |m: &[u8]| {
+            let len = m.strip_prefix(MAGIC)?.get(..4)?;
+            let len = u32::from_le_bytes(len.try_into().ok()?) as usize;
+            (m.len() >= MAGIC.len() + 4 + len).then_some(len)
+        };
+        let (body, answers) = loop {
+            if let Some(len) = complete(&message) {
+                break (message[MAGIC.len() + 4..MAGIC.len() + 4 + len].to_vec(), true);
+            }
             let mut got = 0;
             // SAFETY: reads at most `buf.len()` bytes into `buf`.
             let ok = unsafe { ReadFile(pipe, buf.as_mut_ptr(), buf.len() as u32, &mut got, std::ptr::null_mut()) } != 0;
@@ -322,15 +408,14 @@ mod windows {
             }
             // SAFETY: reads this thread's last error.
             if !ok && unsafe { GetLastError() } == ERROR_BROKEN_PIPE {
-                break;
+                break (message.strip_prefix(MAGIC_V1)?.to_vec(), false);
             }
             if !ok {
                 return None;
             }
-        }
-        let body = message.strip_prefix(MAGIC)?;
-        let text = std::str::from_utf8(body).ok()?;
-        Some(text.split('\0').filter(|a| !a.is_empty()).map(str::to_owned).collect())
+        };
+        let text = std::str::from_utf8(&body).ok()?;
+        Some(Launch { args: text.split('\0').filter(|a| !a.is_empty()).map(str::to_owned).collect(), answers })
     }
 
     /// A later launch's arguments: its links to `App::on_open_url`, or, without links, a reopen.
@@ -364,19 +449,26 @@ mod windows {
     }
 
     enum Sent {
+        /// The running process took the launch.
         Delivered,
+        /// The running process quits: it lets go of the name once it has closed what it holds.
+        Quitting(u32),
         /// No process has the name now.
         Gone,
-        /// It has, but didn't take the message in time.
-        Unreachable,
+        /// A process has the name and doesn't answer (killed and still being torn down, or hung):
+        /// nobody is there to take the launch.
+        Nobody,
     }
 
-    /// Sends this launch's arguments to the process that has the pipe.
+    /// Sends this launch's arguments to the process that has the pipe and waits, at most
+    /// `ANSWER_WITHIN`, for its answer.
     fn send(name: &[u16]) -> Sent {
-        let deadline = Instant::now() + REACH_FOR;
+        let deadline = Instant::now() + ANSWER_WITHIN;
+        let left = || u32::try_from(deadline.saturating_duration_since(Instant::now()).as_millis()).unwrap_or(u32::MAX);
         let pipe = loop {
-            // SAFETY: `name` is NUL-terminated; opens the pipe's client end for writing.
-            let pipe = unsafe { CreateFileW(name.as_ptr(), GENERIC_WRITE, 0, std::ptr::null(), OPEN_EXISTING, 0, std::ptr::null_mut()) };
+            // SAFETY: `name` is NUL-terminated; opens the pipe's client end, overlapped so the
+            // answer can be waited for with a deadline.
+            let pipe = unsafe { CreateFileW(name.as_ptr(), GENERIC_READ | GENERIC_WRITE, 0, std::ptr::null(), OPEN_EXISTING, FILE_FLAG_OVERLAPPED, std::ptr::null_mut()) };
             if pipe != INVALID_HANDLE_VALUE {
                 break pipe;
             }
@@ -385,10 +477,10 @@ mod windows {
                 ERROR_FILE_NOT_FOUND => return Sent::Gone,
                 // Another launch is talking to it: wait for the pipe to be free.
                 // SAFETY: `name` is NUL-terminated.
-                ERROR_PIPE_BUSY if Instant::now() < deadline => unsafe {
-                    WaitNamedPipeW(name.as_ptr(), 1000);
+                ERROR_PIPE_BUSY if left() > 0 => unsafe {
+                    WaitNamedPipeW(name.as_ptr(), left());
                 },
-                _ => return Sent::Unreachable,
+                _ => return Sent::Nobody,
             }
         };
         let mut server = 0;
@@ -399,16 +491,65 @@ mod windows {
                 AllowSetForegroundWindow(server);
             }
         }
+        // A killed process's pipe can outlast it (its kernel objects go after its exit): nobody
+        // reads it, so don't wait for an answer.
+        if server != 0 && !crate::relaunch::alive(server) {
+            // SAFETY: the client handle, closed once.
+            unsafe { CloseHandle(pipe) };
+            return Sent::Nobody;
+        }
+        let body = std::env::args().skip(1).collect::<Vec<_>>().join("\0").into_bytes();
         let mut message = MAGIC.to_vec();
-        message.extend(std::env::args().skip(1).collect::<Vec<_>>().join("\0").into_bytes());
-        let mut written = 0;
-        // SAFETY: writes `message` to the open pipe, then closes the handle once.
-        let ok = unsafe {
-            let ok = WriteFile(pipe, message.as_ptr(), message.len() as u32, &mut written, std::ptr::null_mut()) != 0;
-            CloseHandle(pipe);
-            ok
-        };
-        if ok && written as usize == message.len() { Sent::Delivered } else { Sent::Unreachable }
+        message.extend((body.len() as u32).to_le_bytes());
+        message.extend(body);
+        let mut answer = [0u8; 1];
+        let answered = io(pipe, deadline, |o| {
+            // SAFETY: writes `message`, which outlives the wait in `io`, to the open pipe.
+            unsafe { WriteFile(pipe, message.as_ptr(), message.len() as u32, std::ptr::null_mut(), o) }
+        })
+        .filter(|n| *n as usize == message.len())
+        .inspect(|_| crate::marks::mark("instance.sent"))
+        .and_then(|_| {
+            io(pipe, deadline, |o| {
+                // SAFETY: reads at most one byte into `answer`, which outlives the wait in `io`.
+                unsafe { ReadFile(pipe, answer.as_mut_ptr(), 1, std::ptr::null_mut(), o) }
+            })
+        });
+        // SAFETY: the client handle, closed once.
+        unsafe { CloseHandle(pipe) };
+        crate::marks::mark("instance.answered");
+        match (answered, answer[0]) {
+            (Some(1), ACCEPTED) => Sent::Delivered,
+            (Some(1), QUITTING) => Sent::Quitting(server),
+            _ => Sent::Nobody,
+        }
+    }
+
+    /// One overlapped read or write on `pipe`, waited for until `deadline`: the bytes it moved, or
+    /// none when it failed or didn't finish in time (then it's cancelled).
+    fn io(pipe: HANDLE, deadline: Instant, start: impl FnOnce(*mut OVERLAPPED) -> i32) -> Option<u32> {
+        // SAFETY: a manual-reset event, unnamed; closed once below.
+        let event = unsafe { CreateEventW(std::ptr::null(), 1, 0, std::ptr::null()) };
+        if event.is_null() {
+            return None;
+        }
+        // SAFETY: an all-zero OVERLAPPED is a valid start for an operation; it lives until the
+        // operation is done or cancelled and waited for.
+        let mut o: OVERLAPPED = unsafe { std::mem::zeroed() };
+        o.hEvent = event;
+        let left = u32::try_from(deadline.saturating_duration_since(Instant::now()).as_millis()).unwrap_or(u32::MAX);
+        // SAFETY: `o` outlives the operation: it's waited for, or cancelled and waited for, below.
+        unsafe {
+            let started = start(&mut o) != 0 || GetLastError() == ERROR_IO_PENDING;
+            let finished = started && WaitForSingleObject(event, left) == WAIT_OBJECT_0;
+            if started && !finished {
+                CancelIoEx(pipe, &o);
+            }
+            let mut n = 0;
+            let ok = started && GetOverlappedResult(pipe, &o, &mut n, 1) != 0;
+            CloseHandle(event);
+            (finished && ok).then_some(n)
+        }
     }
 
     /// Restores and activates this process's front app window: its topmost visible top-level
