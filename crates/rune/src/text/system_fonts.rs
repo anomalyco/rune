@@ -2,14 +2,31 @@
 //! directories they're found in.
 //!
 //! None is touched at launch: a system font loads the first time a text has a character the
-//! app's own fonts lack (`TextSystem::load_fallbacks`). On Windows the files come from
-//! DirectWrite (`direct_write`), so the Fonts folder is never listed; elsewhere from the
-//! platform's font directories, walked once, the first time one is needed.
+//! app's own fonts lack (`TextSystem::load_fallbacks`). The platform's own fallback names the
+//! font and its files, as browsers ask it: DirectWrite on Windows (`direct_write`), CoreText on
+//! Apple platforms (`core_text`), fontconfig in process elsewhere (`fontconfig`). No font
+//! folder is walked and no process is started.
 
 use super::*;
 
+#[cfg(target_vendor = "apple")]
+mod core_text;
 #[cfg(windows)]
 mod direct_write;
+#[cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))]
+mod fontconfig;
+#[cfg(target_vendor = "apple")]
+use core_text as platform;
+#[cfg(windows)]
+use direct_write as platform;
+#[cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))]
+use fontconfig as platform;
+/// Android and the web: no system fonts to ask.
+#[cfg(any(target_os = "android", target_arch = "wasm32"))]
+mod platform {
+    pub(super) fn family_files(_: &[&str]) -> Vec<std::path::PathBuf> { Vec::new() }
+    pub(super) fn fallback_family_files(_: &[char], _: Option<&str>) -> Vec<std::path::PathBuf> { Vec::new() }
+}
 
 // Common-script symbols can inherit the script of adjacent letters. Put these families at
 // the end of the requested family list, rather than registering only a Zyyy fallback.
@@ -49,24 +66,13 @@ const SYSTEM_MONO_FAMILIES: &[&str] = &["DejaVu Sans Mono", "Liberation Mono", "
 #[cfg(not(any(target_vendor = "apple", windows)))]
 const SYSTEM_MONO_FILES: &[&str] = &["dejavusansmono", "liberationmono", "notosansmono", "ubuntumono"];
 
-/// The family and file fontconfig resolves `monospace` to, asked once per process.
-#[cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))]
-fn fontconfig_monospace() -> Option<(String, std::path::PathBuf)> {
-    static ANSWER: std::sync::OnceLock<Option<(String, std::path::PathBuf)>> = std::sync::OnceLock::new();
-    ANSWER.get_or_init(|| {
-        let out = std::process::Command::new("fc-match").args(["--format=%{family[0]}\n%{file}", "monospace"]).output().ok()?;
-        let out = String::from_utf8(out.stdout).ok()?;
-        let (family, file) = out.split_once('\n')?;
-        (!family.is_empty() && !file.is_empty()).then(|| (family.to_owned(), file.trim().into()))
-    }).clone()
-}
-
 /// The installed `Family::SystemMono` families, most preferred first, loading their files.
 pub(super) fn load_system_mono(collection: &mut Collection, loaded: &mut LoadedFiles) -> Vec<String> {
     let mut names: Vec<String> = Vec::new();
+    // fontconfig's own `monospace`, asked in process.
     #[cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))]
-    if let Some((family, file)) = fontconfig_monospace() {
-        load_files(collection, loaded, [file]);
+    if let Some((family, files)) = fontconfig::monospace() {
+        load_files(collection, loaded, files);
         names.push(family);
     }
     load_files(collection, loaded, installed_files(SYSTEM_MONO_FAMILIES, SYSTEM_MONO_FILES).into_iter().take(12));
@@ -109,26 +115,18 @@ pub(super) fn load_families(collection: &mut Collection, files: &[&str], names: 
     names.iter().copied().filter(|name| collection.family_id(name).is_some()).collect()
 }
 
-/// The files of the installed families `names`: on Windows found by name through DirectWrite;
-/// elsewhere the font files whose names match `fragments`.
+/// The files of the installed families `names`, found by name through the platform's own list
+/// of fonts. `fragments` (their files' names) are what the tests check for what's installed.
 fn installed_files(names: &[&str], fragments: &[&str]) -> Vec<std::path::PathBuf> {
-    #[cfg(windows)]
-    {
-        let _ = fragments;
-        direct_write::family_files(names)
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = names;
-        system_font_files(fragments)
-    }
+    let _ = fragments;
+    platform::family_files(names)
 }
 
-/// File-name fragments (lowercase) of the CJK fonts desktops ship, most preferred first. Only
-/// these files are loaded, and only as fallbacks, so Latin text stays on the app's own fonts.
+/// File-name fragments (lowercase) of the CJK fonts desktops ship, most preferred first: what the
+/// tests check for what's installed (the platform's fallback finds the files the app loads).
 /// macOS names Hiragino Sans's files in Japanese (`ヒラギノ角ゴシック W3.ttc`), in either Unicode
 /// form.
-#[cfg_attr(all(windows, not(test)), allow(dead_code))]
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) const CJK_FONT_FILES: [&str; 30] = [
     "notosanscjk", "notosanssc", "notosansjp", "notosanstc", "notosanshk", "notosanskr", "sourcehansans",
     "notoserifcjk", "sourcehanserif", "pingfang", "hiragino",
@@ -220,7 +218,6 @@ fn needs_no_font(ch: char) -> bool {
 
 /// Interned family names: the symbol stack holds `&'static str`s, and the families a process
 /// can add are the system's few fallback fonts, each named once.
-#[cfg(windows)]
 fn intern(name: &str) -> &'static str {
     static NAMES: std::sync::Mutex<Vec<&'static str>> = std::sync::Mutex::new(Vec::new());
     let mut names = NAMES.lock().unwrap_or_else(|e| e.into_inner());
@@ -246,8 +243,7 @@ impl TextSystem {
         let covered = |ch: char| own.iter().any(|map| map.map(ch).is_some());
         let (mut math, mut emoji, mut scripts) = (false, false, Vec::new());
         let (mut cjk, mut cjk_more, mut missing): (Vec<char>, Vec<char>, Vec<char>) = (Vec::new(), Vec::new(), Vec::new());
-        let cjk_done = self.fallbacks.cjk.contains(&if cfg!(windows) { locale.clone() } else { None });
-        let generic = cfg!(windows) || !self.fallbacks.symbols;
+        let cjk_done = self.fallbacks.cjk.contains(&locale);
         for ch in text.chars() {
             if let Some(i) = fallback::SCRIPT_FONTS.iter().position(|fonts| fonts.covers(ch)) {
                 if self.scripts & (1 << i) == 0 {
@@ -261,9 +257,9 @@ impl TextSystem {
                 // The language's own CJK font, the first time a text in it has CJK.
                 if !cjk_done && !cjk.contains(&ch) && cjk.len() < 64 {
                     cjk.push(ch);
-                } else if cfg!(windows) && !self.fallbacks.asked.contains(&ch) && !cjk_more.contains(&ch) {
+                } else if !self.fallbacks.asked.contains(&ch) && !cjk_more.contains(&ch) {
                     // A character the CJK fonts loaded so far may lack (Simplified Chinese in a
-                    // Japanese font): Windows names a font that has it, once per character.
+                    // Japanese font): the platform names a font that has it, once per character.
                     cjk_more.push(ch);
                 }
                 continue;
@@ -272,7 +268,7 @@ impl TextSystem {
             math |= self.math.is_none() && if cfg!(windows) { fallback::is_math_alphanumeric(ch) } else { fallback::needs_symbols(ch) };
             // An emoji by default (✅ ⚡) wants the colour emoji family as `U+FE0F` does.
             emoji |= (ch == '\u{FE0F}' || fallback::is_emoji(ch.encode_utf8(&mut [0; 4]))) && self.emoji.is_none() && !self.fallbacks.asked.contains(&'\u{FE0F}');
-            if generic && !needs_no_font(ch) && !self.fallbacks.asked.contains(&ch) && !missing.contains(&ch) && !covered(ch) {
+            if !needs_no_font(ch) && !self.fallbacks.asked.contains(&ch) && !missing.contains(&ch) && !covered(ch) {
                 missing.push(ch);
             }
         }
@@ -291,15 +287,10 @@ impl TextSystem {
             self.math = Some(load_families(&mut self.font_cx.collection, fallback::MATH_FONT_FILES, fallback::MATH_FAMILIES));
         }
         if !cjk.is_empty() || !cjk_more.is_empty() {
-            #[cfg(windows)]
-            let files = {
-                self.fallbacks.asked.extend(cjk.iter().chain(&cjk_more).copied());
-                cjk.extend(cjk_more);
-                direct_write::fallback_family_files(&cjk, locale.as_deref())
-            };
-            #[cfg(not(windows))]
-            let files = system_font_files(&CJK_FONT_FILES);
-            if !cjk_done { self.fallbacks.cjk.push(if cfg!(windows) { locale.clone() } else { None }); }
+            self.fallbacks.asked.extend(cjk.iter().chain(&cjk_more).copied());
+            cjk.extend(cjk_more);
+            let files = platform::fallback_family_files(&cjk, locale.as_deref());
+            if !cjk_done { self.fallbacks.cjk.push(locale.clone()); }
             let families = (self.families.0.clone(), self.families.1.clone());
             register_system_cjk(&mut self.font_cx.collection, &mut self.font_files, files, (&families.0, &families.1), &mut self.fallbacks.cjk_families);
         }
@@ -323,8 +314,16 @@ impl TextSystem {
             }
         }
         #[cfg(not(windows))]
-        if emoji || !missing.is_empty() {
-            self.load_symbol_families();
+        {
+            if (emoji || !missing.is_empty()) && !self.fallbacks.symbols {
+                self.load_symbol_families();
+            }
+            // What the symbol families lack (Ethiopic, Khmer, Tibetan...): the platform's own
+            // fallback, once per character.
+            if !missing.is_empty() {
+                self.fallbacks.asked.extend(missing.iter().copied());
+                self.add_symbol_files(platform::fallback_family_files(&missing, locale.as_deref()));
+            }
         }
         crate::marks::mark("text.fallback.loaded");
     }
@@ -356,9 +355,8 @@ impl TextSystem {
         }
     }
 
-    /// Windows: the families in `files` at the end of every family stack, colour emoji last, so
-    /// a symbol with a text form keeps it.
-    #[cfg(windows)]
+    /// The families in `files` at the end of every family stack, colour emoji last, so a symbol
+    /// with a text form keeps it.
     fn add_symbol_files(&mut self, files: Vec<std::path::PathBuf>) {
         for id in load_files(&mut self.font_cx.collection, &mut self.font_files, files) {
             let Some(name) = self.font_cx.collection.family_name(id).map(intern) else { continue };
@@ -386,34 +384,9 @@ impl TextSystem {
 /// platform's own list of fonts: DirectWrite's system collection on Windows, CoreText on macOS
 /// and fontconfig on Linux. The lookup runs in a collection of its own, so the app's collection
 /// gains only the files of the families text asks for, and its own families still come first.
-#[cfg(windows)]
 pub(super) fn installed_family_files(name: &str) -> Vec<std::path::PathBuf> {
-    direct_write::family_files(&[name])
+    platform::family_files(&[name])
 }
-
-#[cfg(not(any(target_arch = "wasm32", windows)))]
-pub(super) fn installed_family_files(name: &str) -> Vec<std::path::PathBuf> {
-    use parley::fontique::{CollectionOptions, SourceKind};
-    thread_local! {
-        static SYSTEM: std::cell::RefCell<Option<Collection>> = const { std::cell::RefCell::new(None) };
-    }
-    SYSTEM.with_borrow_mut(|system| {
-        let system = system.get_or_insert_with(|| Collection::new(CollectionOptions { shared: false, system_fonts: true }));
-        let Some(family) = system.family_by_name(name) else { return Vec::new() };
-        let mut files: Vec<std::path::PathBuf> = Vec::new();
-        for font in family.fonts() {
-            if let SourceKind::Path(path) = &font.source().kind
-                && !files.iter().any(|f| f.as_path() == path.as_ref())
-            {
-                files.push(path.to_path_buf());
-            }
-        }
-        files
-    })
-}
-
-#[cfg(target_arch = "wasm32")]
-pub(super) fn installed_family_files(_: &str) -> Vec<std::path::PathBuf> { Vec::new() }
 
 /// Loads the installed families the CSS family list `list` names that the collection lacks,
 /// each looked up once (`tried`).
@@ -470,16 +443,10 @@ fn load_files(collection: &mut Collection, loaded: &mut LoadedFiles, paths: impl
 }
 
 /// Appends the system fonts for `fonts.script` as that script's fallbacks.
-/// On Windows the font is the one Windows falls back to for `sample` in `locale`.
+/// The font is the one the platform falls back to for `sample` in `locale`, its family whole.
 fn register_script_fallbacks(collection: &mut Collection, loaded: &mut LoadedFiles, fonts: &fallback::ScriptFonts, sample: char, locale: Option<&str>) {
     // The whole family, so a medium label takes its Semibold and a heading its Bold.
-    #[cfg(windows)]
-    let files = direct_write::fallback_family_files(&[sample], locale);
-    #[cfg(not(windows))]
-    let files = {
-        let _ = (sample, locale);
-        system_font_files(fonts.files)
-    };
+    let files = platform::fallback_family_files(&[sample], locale);
     let added = load_files(collection, loaded, files.into_iter().take(16));
     if !added.is_empty() {
         // The Arabic comma, semicolon and question mark (and Urdu's full stop) are Common
