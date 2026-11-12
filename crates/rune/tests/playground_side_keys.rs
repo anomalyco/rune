@@ -149,32 +149,245 @@ fn a_steps_key_that_blurs_the_slot_it_puts_back_keeps_the_mark() {
     assert_eq!(says(&rt, "linked-side"), "active 0", "and so did its mark");
 }
 
-/// Every sequence of real input up to `LENGTH`, through the real dispatch: ↑ turns the dial
-/// exactly when focus is on its slot, and the dial looks active exactly then, judged apart and
-/// whichever column has the keyboard.
+/// What has focus, by key.
+fn focused(rt: &Runtime<Real>) -> Option<String> {
+    rt.elements().into_iter().find(|e| e.focused).and_then(|e| e.key)
+}
+
+/// Every sequence of real input up to `LENGTH` on "Dials/Linked", through the real dispatch,
+/// checked after every event against [`dev`]: what has focus, the dial, the side's text, and
+/// whether the story is still the one shown.
 #[test]
-fn what_receives_keys_and_what_looks_active_follow_the_slots_focus() {
-    const LENGTH: u32 = 4;
-    const STEPS: [&str; 5] = ["right", "link", "up", "escape", "tab"];
+fn every_input_sequence_routes_as_dev_routes_it() {
+    use dev::Step;
+    const LENGTH: u32 = 5;
+    const STEPS: [Step; 5] = [Step::Right, Step::Link, Step::Up, Step::Escape, Step::Tab];
     for n in 0..STEPS.len().pow(LENGTH) {
+        let trail: Vec<Step> = (0..LENGTH).map(|at| STEPS[n / STEPS.len().pow(at) % STEPS.len()]).collect();
+        // A sequence that goes on after dev leaves the story repeats a shorter one: only the
+        // first of them runs, so each prefix that leaves is still checked.
+        let mut want = dev::Dev::new();
+        let left = trail.iter().position(|&step| {
+            want.step(step);
+            !want.open
+        });
+        if left.is_some_and(|at| trail[at + 1..].iter().any(|&s| s != STEPS[0])) { continue; }
         let mut rt = runtime();
         rt.open_playground("Dials/Linked", None);
-        let mut trail = Vec::new();
-        for at in 0..LENGTH {
-            let step = STEPS[n / STEPS.len().pow(at) % STEPS.len()];
-            trail.push(step);
-            let (before, had_slot) = (dial_state(&rt).0, on_slot(&rt));
+        let mut want = dev::Dev::new();
+        for (at, &step) in trail.iter().enumerate() {
+            let trail = &trail[..=at];
             match step {
-                "right" => press(&mut rt, Key::Right),
-                "up" => press(&mut rt, Key::Up),
-                "escape" => press(&mut rt, Key::Escape),
-                "tab" => press(&mut rt, Key::Tab),
-                _ => { click_link(&mut rt); }
+                Step::Right => press(&mut rt, Key::Right),
+                Step::Up => press(&mut rt, Key::Up),
+                Step::Escape => press(&mut rt, Key::Escape),
+                Step::Tab => press(&mut rt, Key::Tab),
+                Step::Link => assert!(click_link(&mut rt), "{trail:?}: the link is showing"),
             }
-            // A key in the list can leave this story, or the playground: the sequence ends.
-            if rt.playground_state::<Dial>().is_none() || says(&rt, "linked-side").is_empty() { break; }
-            if step == "up" { assert_eq!(dial_state(&rt).0 - before, i32::from(had_slot), "{trail:?}: what receives keys"); }
-            assert_eq!(says(&rt, "linked-side").starts_with("active"), on_slot(&rt), "{trail:?}: what looks active");
+            want.step(step);
+            let open = rt.playground_state::<Dial>().is_some() && !says(&rt, "linked-side").is_empty();
+            assert_eq!(open, want.open, "{trail:?}: whether the story is still shown");
+            if !open { break; }
+            assert_eq!(focused(&rt).as_deref(), want.focus.key(), "{trail:?}: what has focus");
+            assert_eq!(dial_state(&rt).0, want.dial, "{trail:?}: the dial");
+            assert_eq!(says(&rt, "linked-side"), want.side(), "{trail:?}: the side's text");
+        }
+    }
+}
+
+/// origin/dev's playground focus and key routing, transcribed for the input the walk sends to
+/// "Dials/Linked": `Runtime::route_key`, `playground_nav`, `filter_key`, `playground_key`,
+/// `to_list`, `give_region`, `sync_region`, `sync_side_focus` and `playground_pointer_down`,
+/// `Live::nav`, `Live::side_key` and `Keyboard::step`, and Tab along this playground's tab
+/// order. It calls nothing in Rune.
+mod dev {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum Step {
+        Right,
+        Link,
+        Up,
+        Escape,
+        Tab,
+    }
+
+    /// What has focus: nothing, the list's filter field, the stage's link, or the story's slot.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum Focus {
+        None,
+        Filter,
+        Docs,
+        Slot,
+    }
+
+    impl Focus {
+        pub fn key(self) -> Option<&'static str> {
+            match self {
+                Focus::None => None,
+                Focus::Filter => Some("playground-filter"),
+                Focus::Docs => Some("docs"),
+                Focus::Slot => Some("playground-slot-3"),
+            }
+        }
+
+        /// The column focus is in: `sync_region`'s `under` checks.
+        fn region(self) -> Option<Region> {
+            match self {
+                Focus::None => None,
+                Focus::Filter => Some(Region::List),
+                Focus::Docs => Some(Region::Stage),
+                Focus::Slot => Some(Region::Side),
+            }
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum Region {
+        List,
+        Stage,
+        Side,
+    }
+
+    /// `tab_order` with full keyboard access, the runtime's default: every focusable control in
+    /// tree order, from the filter field through the stage's link to the slot. The side's
+    /// controls after the slot never come up: the slot takes Tab itself.
+    const TAB_ORDER: [Focus; 3] = [Focus::Filter, Focus::Docs, Focus::Slot];
+
+    /// `Keyboard`'s fields, the runtime's focus, the dial, and whether the story is still shown.
+    pub struct Dev {
+        pub open: bool,
+        pub focus: Focus,
+        pub dial: i32,
+        region: Region,
+        slot_focused: bool,
+        seen: Focus,
+    }
+
+    impl Dev {
+        pub fn new() -> Self {
+            Dev { open: true, focus: Focus::None, dial: 0, region: Region::List, slot_focused: false, seen: Focus::None }
+        }
+
+        /// The side view: active while `Keyboard::slot_focused`.
+        pub fn side(&self) -> String {
+            format!("{} {}", if self.slot_focused { "active" } else { "idle" }, self.dial)
+        }
+
+        pub fn step(&mut self, step: Step) {
+            match step {
+                // `playground_pointer_down`: a press in the stage gives it the keyboard. The
+                // link's click leaves focus where it is.
+                Step::Link => self.give_region(Region::Stage),
+                key => self.route_key(key),
+            }
+            // The frame after: `apply_playground` looks at focus.
+            self.sync_region();
+        }
+
+        /// `route_key`: `playground_nav`, then `focus_key` (Tab along the tab order), the
+        /// focused field's editing (the filter keeps its arrows), then `playground_key`.
+        fn route_key(&mut self, key: Step) {
+            if self.playground_nav(key) { return; }
+            match key {
+                Step::Tab => self.tab(),
+                Step::Escape => self.playground_key(),
+                _ => {}
+            }
+        }
+
+        fn playground_nav(&mut self, key: Step) -> bool {
+            self.sync_region();
+            if self.focus == Focus::Filter { return self.filter_key(key); }
+            if self.on_side_keys() {
+                if matches!(key, Step::Escape | Step::Tab) {
+                    self.to_list();
+                    return true;
+                }
+                // `Live::side_key`: the story's hook takes ↑ (and ← stays).
+                if key == Step::Up {
+                    self.dial += 1;
+                    return true;
+                }
+            }
+            match (self.region, key) {
+                // The stage's keys are its own.
+                (Region::Stage, _) => false,
+                // `Nav::OutOfSide`.
+                (Region::Side, Step::Tab | Step::Escape) => {
+                    self.to_list();
+                    true
+                }
+                // Here the side column has the keyboard only with focus on the slot, whose hook
+                // took ↑ above.
+                (Region::Side, Step::Up) => unreachable!("Nav::SideStep off the slot"),
+                (Region::Side, _) => false,
+                // `Nav::IntoSide`: onto the side column's first control, the slot.
+                (Region::List, Step::Tab | Step::Right) => {
+                    self.set_focus(Focus::Slot);
+                    self.give_region(Region::Side);
+                    true
+                }
+                // `Request::Select` of the story above, "Dials/Plain".
+                (Region::List, Step::Up) => {
+                    self.open = false;
+                    true
+                }
+                // The list leaves Esc.
+                (Region::List, _) => false,
+            }
+        }
+
+        /// `filter_key` with the filter empty: Esc leaves the field for the list, selecting
+        /// nothing; it leaves every other key here.
+        fn filter_key(&mut self, key: Step) -> bool {
+            if key != Step::Escape { return false; }
+            self.set_focus(Focus::None);
+            true
+        }
+
+        /// `playground_key`: Esc nothing took gives the list the keyboard, or from the list
+        /// closes the playground.
+        fn playground_key(&mut self) {
+            self.sync_region();
+            if self.region != Region::List { self.to_list() } else { self.open = false }
+        }
+
+        /// `focus_key`'s Tab: the link text's one link is its last, so Tab leaves it.
+        fn tab(&mut self) {
+            let next = match TAB_ORDER.iter().position(|&f| f == self.focus) {
+                Some(i) if i + 1 < TAB_ORDER.len() => i + 1,
+                Some(_) => unreachable!("Tab along the tab order from the slot"),
+                None => 0,
+            };
+            self.set_focus(TAB_ORDER[next]);
+        }
+
+        fn on_side_keys(&self) -> bool {
+            self.focus == Focus::Slot
+        }
+
+        /// `set_focus`, which ends in `sync_side_focus`.
+        fn set_focus(&mut self, focus: Focus) {
+            self.focus = focus;
+            self.slot_focused = self.on_side_keys();
+        }
+
+        fn to_list(&mut self) {
+            self.set_focus(Focus::None);
+            self.give_region(Region::List);
+        }
+
+        /// `give_region`: `Moved::Give`.
+        fn give_region(&mut self, region: Region) {
+            self.region = region;
+            self.seen = self.focus;
+        }
+
+        /// `sync_region`: `Moved::Focus` when focus moved since the last look. Focus leaving
+        /// every column keeps the column.
+        fn sync_region(&mut self) {
+            if self.seen == self.focus { return; }
+            self.seen = self.focus;
+            if let Some(region) = self.focus.region() { self.region = region; }
         }
     }
 }
