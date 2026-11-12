@@ -40,7 +40,6 @@ pub(super) fn rasterize(data: &[u8], index: u32, glyph: u32, size: f32, coords: 
     // Font units, y up, to image pixels, y down.
     let base = Transform { xx: scale, yx: 0.0, xy: 0.0, yy: -scale, dx: -left as f32, dy: top as f32 };
     let mut painter = Painter {
-        font: &font,
         location,
         palette,
         w,
@@ -91,7 +90,6 @@ impl Palette<'_> {
 }
 
 struct Painter<'a> {
-    font: &'a skrifa::FontRef<'a>,
     location: LocationRef<'a>,
     palette: Palette<'a>,
     w: u32,
