@@ -51,11 +51,14 @@ fn corner_scale(springs: SpringPair) -> Transition {
     Transition::asymmetric(Transition::move_edge(Edge::Leading), removal).springs(springs)
 }
 
-/// The two transitions a walk inserts and retransitions with.
+/// The two transitions a walk inserts and retransitions with, and the springs they asked for.
 #[derive(Clone, Copy)]
 struct Cfg {
     mount: Transition,
     retarget: Transition,
+    /// The literal pair the transitions were built from. The reference runs its own presence on
+    /// it, so a scene that reads a different duration from the same transition fails the walk.
+    springs: SpringPair,
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -96,10 +99,18 @@ struct Dev {
     alive: bool,
     /// Removed, waiting for the next frame to report it in `exited`.
     pending_exit: bool,
+    /// The presence track dev's own writes drive, on the same clock as the scene: the expected
+    /// progress, settle and exit frames. A separate store, so a scene that runs the track on a
+    /// different spring or for a different duration fails here instead of agreeing with itself.
+    ref_store: AnimationStore,
+    /// The springs a walk configured, which the reference's entrance and exit run on.
+    springs: SpringPair,
 }
 
 impl Dev {
-    fn new(transition: Transition) -> Dev {
+    fn new(transition: Transition, springs: SpringPair) -> Dev {
+        let mut ref_store = AnimationStore::new();
+        ref_store.set(ID, prop::PRESENCE, 1.0);
         Dev {
             phase: DevPhase::Present,
             generation: 0,
@@ -110,11 +121,18 @@ impl Dev {
             transition,
             alive: false,
             pending_exit: false,
+            ref_store,
+            springs,
         }
     }
 
+    /// The presence the reference's own track holds at the scene's clock.
+    fn ref_presence(&self) -> f32 {
+        self.ref_store.sample(ID, prop::PRESENCE).unwrap_or(1.0)
+    }
+
     /// `insert_delayed`, with the node's frame unchanged: a new node, a revive, or a landing.
-    fn insert(&mut self, transition: Transition, mount: Mount, p: f32) {
+    fn insert(&mut self, transition: Transition, mount: Mount, delay: f32, p: f32) {
         self.transition = transition;
         if self.alive {
             let exiting = matches!(self.phase, DevPhase::Exiting { .. });
@@ -137,6 +155,12 @@ impl Dev {
         self.anchor = ins.anchor;
         self.reveal = ins.reveal;
         self.alive = true;
+        if animate {
+            self.land(0.0);
+            self.run(1.0, Anim { delay, ..Anim::from(self.springs.enter) });
+        } else {
+            self.land(1.0);
+        }
     }
 
     fn set_transition(&mut self, transition: Transition) {
@@ -178,6 +202,10 @@ impl Dev {
         if rem.reveal.is_some() {
             self.reveal = rem.reveal;
         }
+        if unplayed {
+            self.land(1.0);
+        }
+        self.run(0.0, Anim::from(self.springs.exit));
     }
 
     fn unmount(&mut self) {
@@ -199,8 +227,9 @@ impl Dev {
     }
 
     fn reenter(&mut self) {
-        if self.phase == DevPhase::Present {
+        if self.alive && self.phase == DevPhase::Present {
             // `reenter` lands presence at 0, then revives from there.
+            self.land(0.0);
             self.revive(0.0);
         }
     }
@@ -221,6 +250,8 @@ impl Dev {
             }
         }
         self.fx_b = IDENTITY;
+        // A revive runs the entrance with no delay, whatever the mount was held for.
+        self.run(1.0, Anim::from(self.springs.enter));
     }
 
     fn present_now(&mut self) {
@@ -231,6 +262,29 @@ impl Dev {
         self.fx_b = IDENTITY;
         self.anchor = ins.anchor;
         self.reveal = ins.reveal;
+        self.land(1.0);
+    }
+
+    /// The reference's `Land`: presence jumps, whatever it was doing.
+    fn land(&mut self, v: f32) {
+        self.ref_store.set(ID, prop::PRESENCE, v);
+    }
+
+    /// The reference's `Run`: presence animates from where the reference's own track is.
+    fn run(&mut self, target: f32, anim: Anim) {
+        self.ref_store.animate(ID, prop::PRESENCE, target, anim);
+    }
+
+    /// Moves the reference's store to `t` and samples it: the presence and the settle event the
+    /// walk expects the scene to have this frame.
+    fn reference_frame(&mut self, t: f64) -> (f32, bool) {
+        self.ref_store.set_time(t);
+        let p = self.ref_presence();
+        self.ref_store.tick();
+        let settled = self.ref_store.events().iter().any(|e| {
+            matches!(*e, MotionEvent::Settled { node: n, prop: q, .. } if n == ID && q == prop::PRESENCE.id)
+        });
+        (p, settled)
     }
 
     fn retire(&mut self) {
@@ -242,6 +296,7 @@ impl Dev {
     fn matched(&mut self) {
         self.phase = DevPhase::Present;
         self.fx_a = IDENTITY;
+        self.land(1.0);
     }
 
     fn looks(&self) -> ([f32; 9], [f32; 9]) {
@@ -292,7 +347,7 @@ enum Step {
 
 fn run(cfg: Cfg, steps: &[Step]) {
     let mut scene = Scene::new();
-    let mut dev = Dev::new(cfg.mount);
+    let mut dev = Dev::new(cfg.mount, cfg.springs);
     let mut t = 0.0;
     for step in steps {
         // The presence the store has shown so far, which is what dev read before changing
@@ -305,7 +360,7 @@ fn run(cfg: Cfg, steps: &[Step]) {
                 } else {
                     scene.insert(ID, spec(cfg.mount), mount);
                 }
-                dev.insert(cfg.mount, mount, p);
+                dev.insert(cfg.mount, mount, delay, p);
             }
             Step::Retransition => {
                 scene.set_transition(ID, cfg.retarget);
@@ -417,7 +472,7 @@ fn enumerate(cfg: Cfg, alphabet: &[Step], depth: usize, path: &mut Vec<Step>) {
 /// Mounts, landings, retransitions, exits and revivals, every sequence up to five long.
 #[test]
 fn walk_entrances_and_exits() {
-    let cfg = Cfg { mount: blur_reveal(slow()), retarget: push_draw(slow()) };
+    let cfg = Cfg { mount: blur_reveal(slow()), retarget: push_draw(slow()), springs: slow() };
     let alphabet = [
         Step::Insert { mount: Mount::Animated, delay: 0.0 },
         Step::Insert { mount: Mount::Initial, delay: 0.0 },
@@ -432,7 +487,7 @@ fn walk_entrances_and_exits() {
 /// A held entrance, landed either way, and the paths that unmount without an exit.
 #[test]
 fn walk_held_entrances() {
-    let cfg = Cfg { mount: blur_reveal(slow()), retarget: push_draw(slow()) };
+    let cfg = Cfg { mount: blur_reveal(slow()), retarget: push_draw(slow()), springs: slow() };
     let alphabet = [
         Step::Insert { mount: Mount::Animated, delay: 0.05 },
         Step::EnterNow,
@@ -448,7 +503,7 @@ fn walk_held_entrances() {
 /// of unmounting unseen. Its retarget pivots the exit somewhere else.
 #[test]
 fn walk_visible_entrances_that_never_played() {
-    let cfg = Cfg { mount: slide(slow()), retarget: corner_scale(slow()) };
+    let cfg = Cfg { mount: slide(slow()), retarget: corner_scale(slow()), springs: slow() };
     let alphabet = [
         Step::Insert { mount: Mount::Animated, delay: 0.0 },
         Step::Insert { mount: Mount::Initial, delay: 0.0 },
@@ -463,7 +518,7 @@ fn walk_visible_entrances_that_never_played() {
 /// Presence that lands at once, so an exit settles on the frame it starts.
 #[test]
 fn walk_instant_presence() {
-    let cfg = Cfg { mount: blur_reveal(SpringPair::NONE), retarget: push_draw(SpringPair::NONE) };
+    let cfg = Cfg { mount: blur_reveal(SpringPair::NONE), retarget: push_draw(SpringPair::NONE), springs: SpringPair::NONE };
     let alphabet = [
         Step::Insert { mount: Mount::Animated, delay: 0.0 },
         Step::Retransition,
@@ -484,10 +539,10 @@ fn matched_geometry_onto_an_exit_keeps_the_look_it_was_leaving_from() {
     let matched = |exit_first: bool| {
         let to_spec = NodeSpec::new(Rect::new(40.0, 20.0, 100.0, 40.0)).transition(transition);
         let mut scene = Scene::new();
-        let mut dev = Dev::new(transition);
+        let mut dev = Dev::new(transition, slow());
         scene.insert(from, NodeSpec::new(Rect::new(0.0, 0.0, 20.0, 20.0)), Mount::Initial);
         scene.insert(to, to_spec, Mount::Animated);
-        dev.insert(transition, Mount::Animated, 1.0);
+        dev.insert(transition, Mount::Animated, 0.0, 1.0);
         let mut t = 0.0;
         advance(&mut scene, &mut dev, to, to_spec.frame, &mut t, 4, true);
         if exit_first {
@@ -521,10 +576,9 @@ fn matched_geometry_onto_an_exit_keeps_the_look_it_was_leaving_from() {
 /// One frame of `node`: time moves, the scene frames at it, and the reference alone says whether
 /// dev would report the node as exited this frame.
 ///
-/// Its presence value is sampled at the frame's clock before the tick. An exit's presence track
-/// is a plain spring (`Anim::from(springs.exit)`, no delay), so that sample is exactly the value
-/// the tick writes — the value dev read with `values_of` — including on the frame the scene
-/// unmounts the node and the store no longer has it to ask.
+/// The reference's own presence track runs the walk's configured springs on the same clock, and
+/// the scene's presence is compared against it every frame, so a scene that runs an exit for a
+/// different duration than the transition asked for fails here rather than agreeing with itself.
 fn tick(scene: &mut Scene, dev: &mut Dev, node: NodeId, frame: Rect, t: &mut f64, compare: bool, steps: &[Step]) {
     *t += DT;
     scene.set_time(*t);
@@ -536,7 +590,12 @@ fn tick(scene: &mut Scene, dev: &mut Dev, node: NodeId, frame: Rect, t: &mut f64
         });
         (settled, out.exited.contains(&node), out.changed.iter().find(|p| p.node == node).copied())
     };
-    let reported = dev.frame(settled, p);
+    let (ref_p, ref_settled) = dev.reference_frame(*t);
+    if dev.alive {
+        assert!((p - ref_p).abs() <= 1e-6, "presence {p} vs {ref_p} after {steps:?}");
+        assert_eq!(settled, ref_settled, "presence settles after {steps:?}");
+    }
+    let reported = dev.frame(dev.alive && ref_settled, ref_p);
     assert_eq!(exited, reported, "exited on this frame after {steps:?}");
     if compare && let Some(shown) = changed {
         // A delayed start only gets its layer on the tick that starts it, so a node still in the
