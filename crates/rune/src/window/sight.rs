@@ -47,9 +47,10 @@ impl Sight {
 }
 
 impl<S: 'static> Host<S> {
-    /// `cover` starts or stops covering the window. Covered, it stops pacing and rests, and is
-    /// no longer live; uncovered, its first frame paints the settled state of what changed
-    /// meanwhile (guarantee 8).
+    /// `cover` starts or stops covering the window. Covered, it stops pacing and rests, drawing only
+    /// what it owes (`CoveredDraw`); its state stays live, and the app doesn't hear it hide: only
+    /// building and presenting frames stop. Uncovered, its first frame paints the settled state of
+    /// what changed meanwhile (guarantee 8).
     pub(super) fn set_cover(&mut self, cover: Cover, on: bool) {
         let Some(l) = self.win.as_mut() else { return };
         #[cfg(target_os = "macos")]
@@ -57,7 +58,7 @@ impl<S: 'static> Host<S> {
         let was = self.life.cover(cover, on);
         l.backoff_step(BackoffEvent::Uncovered);
         l.presented = None;
-        self.rt.set_live_visible(self.life.uncovered() && !l.minimized());
+        self.rt.set_live_visible(!l.minimized());
         if self.life.covered() {
             self.secure_input.set(false);
             l.stop_pacing();
