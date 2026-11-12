@@ -39,6 +39,7 @@ impl Default for ElementInfo {
             virtual_extent: false,
             live_intent: 0,
             caret: None,
+            edit_range: None,
             drag_out: false,
             help: None,
             selected: None,

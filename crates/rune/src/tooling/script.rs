@@ -51,6 +51,33 @@ pub(crate) fn parse_script(list: Value) -> Vec<Ev> {
             }
             continue;
         }
+        // `{"modifier": "ShiftRight", "down": true, "mods": "ctrl+shift"}`: one modifier key going
+        // down or up on its own, with the flags after it (Ctrl+Right Shift's direction chord).
+        if let Some(name) = e["modifier"].as_str() {
+            use crate::PhysicalKeyCode as Code;
+            let key = match name {
+                "ShiftLeft" => Code::ShiftLeft,
+                "ShiftRight" => Code::ShiftRight,
+                "ControlLeft" => Code::ControlLeft,
+                "ControlRight" => Code::ControlRight,
+                "AltLeft" => Code::AltLeft,
+                "AltRight" => Code::AltRight,
+                other => die(&format!("unknown modifier key {other:?}")),
+            };
+            let mut mods = Mods::default();
+            for part in e["mods"].as_str().unwrap_or("").split('+').filter(|p| !p.is_empty()) {
+                match part {
+                    "shift" => mods.shift = true,
+                    "ctrl" | "control" => { mods.ctrl = true; if !cfg!(target_os = "macos") { mods.cmd = true; } }
+                    "alt" => mods.alt = true,
+                    other => die(&format!("unknown modifier {other:?} in mods")),
+                }
+            }
+            let pressed = e["down"].as_bool().unwrap_or(true);
+            out.push(Ev { t, kind: Kind::Physical(crate::PhysicalInput::Key { key, mods, pressed, repeat: false }), pos: Pos::Rel(0.0, 0.0) });
+            out.push(Ev { t, kind: Kind::Physical(crate::PhysicalInput::Modifiers(mods)), pos: Pos::Rel(0.0, 0.0) });
+            continue;
+        }
         // `{"hold": "alt"}` holds modifiers down until `{"hold": ""}` lets them go, as the window
         // reports them (`App::on_modifiers`): an Alt-hold reveal.
         if let Some(held) = e["hold"].as_str() {

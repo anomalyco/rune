@@ -130,6 +130,10 @@ pub(crate) enum DirEvent<'a> {
 
 impl<'a> DirEvent<'a> {
     pub(crate) fn of(el: &'a El) -> DirEvent<'a> {
+        // A field Ctrl+Shift set lays out that way, its padding and placeholder with it.
+        if let Some(flow) = el.cold.input.as_ref().and_then(|i| i.edit.forced_dir()) {
+            return DirEvent::Set(flow);
+        }
         match el.flags.dir() {
             None => DirEvent::Inherit,
             Some(Direction::Ltr) => DirEvent::Set(Flow::Ltr),

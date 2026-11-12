@@ -504,10 +504,11 @@ impl<S: 'static> Runtime<S> {
         out.finish()
     }
 
-    /// Text `i` was drawn beside text `p`, to its right on the same line (a table row's cells).
+    /// Text `i` was drawn beside text `p` on the same line, past it on either side: a table row's
+    /// cells, which a right-to-left table draws from the right.
     pub(crate) fn beside(&self, p: usize, i: usize) -> bool {
         let (pb, nb) = (self.drawn_box(p), self.drawn_box(i));
-        nb[1] < pb[3] - 0.5 && nb[0] >= pb[2] - 0.5
+        nb[1] < pb[3] - 0.5 && (nb[0] >= pb[2] - 0.5 || nb[2] <= pb[0] + 0.5)
     }
 
     /// Selects from the start of text `first` to the end of text `last`, a later text of its

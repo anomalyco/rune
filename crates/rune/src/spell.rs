@@ -213,10 +213,11 @@ fn by_words(text: &str, wake: Option<&std::sync::Arc<crate::live::Wake>>) -> (Ve
         w.take_done();
         if w.lines.len() > MAX_WORDS { w.lines.clear(); }
         // The lines without a kept answer, and their words.
+        // Each line is hashed once: a key in a 2,000-line draft hashes its lines, not twice.
+        let keys: Vec<u64> = text.split('\n').map(line_key).collect();
         let mut open: Vec<(usize, &str, u64)> = Vec::new();
         let mut at = 0;
-        for line in text.split('\n') {
-            let k = line_key(line);
+        for (line, &k) in text.split('\n').zip(&keys) {
             if !w.lines.contains_key(&k) { open.push((at, line, k)); }
             at += line.len() + 1;
         }
@@ -243,8 +244,8 @@ fn by_words(text: &str, wake: Option<&std::sync::Arc<crate::live::Wake>>) -> (Ve
         }
         let mut found = Vec::new();
         let mut at = 0;
-        for line in text.split('\n') {
-            match w.lines.get(&line_key(line)) {
+        for (line, k) in text.split('\n').zip(&keys) {
+            match w.lines.get(k) {
                 Some(parts) => found.extend(parts.iter().map(|&(a, b)| (at + a as usize, at + b as usize))),
                 None => found.extend(words(line).flat_map(|(o, s)| w.known.get(s).into_iter().flatten().map(move |&(a, b)| (at + o + a as usize, at + o + b as usize)))),
             }

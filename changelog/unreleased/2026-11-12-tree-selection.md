@@ -1,0 +1,1 @@
+- **Tooling: a focused field's selection in `--tree`, and modifier keys in scripts.** `--tree` lists a focused field's `selection` (anchor and focus, UTF-8 bytes; none for a secure field) beside its `caret`. A script's `{"modifier": "ShiftRight", "down": true, "mods": "ctrl+shift"}` presses or releases one modifier key on its own.

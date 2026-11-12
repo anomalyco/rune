@@ -375,6 +375,7 @@ impl State {
             minimizable: style & WS_MINIMIZEBOX != 0,
             maximizable: style & WS_MAXIMIZEBOX != 0,
             hidden: !framed(hwnd),
+            mirrored: crate::labels::rtl(),
         }
     }
 }

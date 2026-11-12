@@ -211,7 +211,9 @@ unsafe fn build(state: *mut ffi::lua_State, base: Base, layers: Layers, children
             None => {
                 let slot = arena.alloc(match base {
                     Base::Box(f, _) => f(),
-                    Base::Text(s) => text(s),
+                    // A plugin's words read the way they're written (dir="auto"), an English
+                    // label in an Arabic window included, unless the node sets `dir`.
+                    Base::Text(s) => text(s).dir(rune::Direction::Auto),
                 })?;
                 let mut p = Props::new(env);
                 if template.is_some() {

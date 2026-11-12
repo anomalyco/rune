@@ -92,11 +92,12 @@ impl TitlebarSet {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 #[non_exhaustive]
 pub struct ChromeInsets {
-    /// From the window's leading edge to the end of the controls there: the macOS traffic
-    /// lights (`Cx::titlebar_inset`). 0 in full screen and elsewhere.
+    /// From the window's left edge to the end of the controls there: the macOS traffic lights
+    /// (`Cx::titlebar_inset`), or the Windows caption buttons when the app's language reads right
+    /// to left (`labels::set_direction`). 0 in full screen and elsewhere.
     pub leading: f32,
-    /// From the window's trailing edge to the start of the controls there: the Windows caption
-    /// buttons. 0 in full screen and elsewhere.
+    /// From the window's right edge to the start of the controls there: the Windows caption
+    /// buttons, unless they're mirrored to the left. 0 in full screen and elsewhere.
     pub trailing: f32,
     /// The titlebar's height as the window draws it: [`Titlebar::height`] where Rune replaced
     /// the native titlebar, 0 where the native frame stays (no `App::titlebar`, Linux, a
@@ -159,11 +160,15 @@ pub(crate) struct Caption {
     pub maximizable: bool,
     /// Full screen: the window draws no buttons, but keeps the frame that hosts them.
     pub hidden: bool,
+    /// The app's language reads right to left (`labels::set_direction`): the buttons sit at the
+    /// window's top-left, Close first, as Windows mirrors a right-to-left window's caption and
+    /// Chrome and Edge draw theirs in Arabic or Hebrew.
+    pub mirrored: bool,
 }
 
 impl Caption {
     pub(crate) fn new(height: f32) -> Self {
-        Self { height, state: CaptionState::Idle, maximized: false, minimizable: true, maximizable: true, hidden: false }
+        Self { height, state: CaptionState::Idle, maximized: false, minimizable: true, maximizable: true, hidden: false, mirrored: crate::labels::rtl() }
     }
 
     /// The buttons drawn, left to right. A window that can neither minimize nor maximize shows
@@ -185,13 +190,15 @@ impl Caption {
         }
     }
 
-    /// The buttons' rects, left to right, in points from the window's top-left for a window
-    /// `width` points wide at `scale`: each a whole number of pixels, flush with the right edge.
+    /// The buttons' rects, in [`Caption::buttons`]' order, in points from the window's top-left for
+    /// a window `width` points wide at `scale`: each a whole number of pixels, flush with the right
+    /// edge, or the left one mirrored (Close leftmost).
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub(crate) fn rects(&self, width: f32, scale: f32) -> impl Iterator<Item = (CaptionButton, [f32; 4])> + use<> {
         let (w, h) = caption::size(self.height, scale);
         let buttons = self.buttons();
-        buttons.iter().enumerate().map(move |(i, &b)| (b, [width - w * (buttons.len() - i) as f32, 0.0, w, h]))
+        let (n, mirrored) = (buttons.len(), self.mirrored);
+        buttons.iter().enumerate().map(move |(i, &b)| (b, [if mirrored { w * (n - 1 - i) as f32 } else { width - w * (n - i) as f32 }, 0.0, w, h]))
     }
 
     /// The enabled button at (x, y), in points from the window's top-left, in a window `width`
@@ -204,7 +211,7 @@ impl Caption {
             .filter(|&b| self.enabled(b))
     }
 
-    /// Points the buttons take from the trailing edge at `scale`.
+    /// Points the buttons take from their edge at `scale`: the right, or the left mirrored.
     pub(crate) fn width(&self, scale: f32) -> f32 {
         caption::size(self.height, scale).0 * self.buttons().len() as f32
     }

@@ -43,14 +43,18 @@ pub(crate) const FRAME_KEY: &str = "rune-frame";
 /// The row of caption buttons in it.
 pub(crate) const BUTTONS_KEY: &str = "rune-caption";
 
-/// The buttons pinned to the frame's top-right corner, over everything the view drew.
+/// The buttons pinned to the frame's top-right corner (top-left mirrored), over everything the
+/// view drew.
 fn buttons(caption: &Caption, symbol: Color, scale: f32, zoom: f32) -> El {
     // Sized in window points at the window's scale, then drawn in the view's points.
     let window = scale / zoom;
     let (w, h) = size(caption.height, window);
     let (w, h) = (w / zoom, h / zoom);
-    row().key(BUTTONS_KEY).pin(None, Some(0.0), Some(0.0), None)
-        .children(caption.buttons().iter().map(|&button| caption_button(caption, button, symbol, (w, h), (scale, window))))
+    // Mirrored, the row sits at the top-left with Close first (`Caption::rects`).
+    let (left, right) = if caption.mirrored { (Some(0.0), None) } else { (None, Some(0.0)) };
+    let buttons: Vec<El> = caption.buttons().iter().map(|&button| caption_button(caption, button, symbol, (w, h), (scale, window))).collect();
+    let buttons = if caption.mirrored { buttons.into_iter().rev().collect() } else { buttons };
+    row().key(BUTTONS_KEY).dir(crate::Direction::Ltr).pin(left, Some(0.0), right, None).children(buttons)
 }
 
 fn caption_button(caption: &Caption, button: CaptionButton, symbol: Color, (w, h): (f32, f32), scales: (f32, f32)) -> El {
