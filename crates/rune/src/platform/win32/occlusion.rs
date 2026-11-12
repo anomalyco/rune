@@ -7,7 +7,21 @@
 //!
 //! Only on the desktop the user sees. A window on another one (a capture harness's hidden
 //! desktop, which several apps share) is never covered, so it keeps drawing for whoever reads
-//! its pixels.
+//! its pixels, and the tracker hooks nothing there: other apps' window events can't change it.
+//!
+//! Other apps' window events wake the tracker's thread, hundreds a second on a busy desktop
+//! (cursors, carets, tooltips and menus show, hide and move in every app), so it hears them only
+//! while they can change an answer (`Mode`):
+//! - **Quiet:** every tracked window minimised, on another virtual desktop or hidden. Only its
+//!   own process's events can bring one back (a restore, an uncloak, a show).
+//! - **Front:** every tracked window on screen is the one in front. Only the foreground moving
+//!   can cover it, and its own process's events move it.
+//! - **Full:** one shows but isn't in front, or other windows cover it: every window's events.
+//!
+//! The one case Front misses is an always-on-top window that isn't in front sliding over the
+//! window in front, which leaves it drawing while covered until the next event: a cost, never a
+//! window that stops drawing while it can be seen. Windows announces no "another window now
+//! covers yours", so Full is the least that keeps the answer right, as Chromium's tracker found.
 
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -24,11 +38,11 @@ use windows_sys::Win32::System::StationsAndDesktops::{
     CloseDesktop, DESKTOP_READOBJECTS, GetThreadDesktop, GetUserObjectInformationW, HDESK, OpenInputDesktop, UOI_NAME,
 };
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
-use windows_sys::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook};
+use windows_sys::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CHILDID_SELF, EVENT_OBJECT_CLOAKED, EVENT_OBJECT_DESTROY, EVENT_OBJECT_LOCATIONCHANGE,
     EVENT_OBJECT_REORDER, EVENT_OBJECT_UNCLOAKED, EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_MINIMIZEEND,
-    EVENT_SYSTEM_MOVESIZEEND, EnumWindows, GA_ROOT, GWL_EXSTYLE, GWL_STYLE, GetAncestor, GetClassNameW,
+    EVENT_SYSTEM_MOVESIZEEND, EnumWindows, GA_ROOT, GWL_EXSTYLE, GWL_STYLE, GetAncestor, GetClassNameW, GetForegroundWindow,
     GetLayeredWindowAttributes, GetMessageW, GetWindowLongW, GetWindowPlacement, IsIconic, IsWindowVisible, KillTimer,
     LWA_ALPHA, LWA_COLORKEY, MSG, OBJID_WINDOW, PM_NOREMOVE, PeekMessageW, PostThreadMessageW, SW_MAXIMIZE, SetTimer,
     WINDOWPLACEMENT, WINEVENT_OUTOFCONTEXT, WM_APP, WM_TIMER, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
@@ -181,6 +195,58 @@ impl Pass {
 
 thread_local! {
     static PASS: std::cell::Cell<Pass> = const { std::cell::Cell::new(Pass::Idle) };
+    /// The hooks on now, and for which mode.
+    static HOOKS: std::cell::RefCell<(Option<Mode>, Vec<HWINEVENTHOOK>)> = const { std::cell::RefCell::new((None, Vec::new())) };
+}
+
+/// Which window events the tracker hears (see the module's docs).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Mode {
+    Quiet,
+    Front,
+    Full,
+}
+
+/// The events every mode hears, from `process` (0: every process).
+const EVENTS: [(u32, u32); 5] = [
+    (EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND),
+    (EVENT_SYSTEM_MOVESIZEEND, EVENT_SYSTEM_MINIMIZEEND),
+    (EVENT_OBJECT_DESTROY, EVENT_OBJECT_REORDER),
+    (EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE),
+    (EVENT_OBJECT_CLOAKED, EVENT_OBJECT_UNCLOAKED),
+];
+
+fn hook(min: u32, max: u32, process: u32) -> HWINEVENTHOOK {
+    // SAFETY: an out-of-context hook on `process`'s events (0: every process's), called on this
+    // thread while it waits for messages; `on_event` is a plain function.
+    unsafe { SetWinEventHook(min, max, std::ptr::null_mut(), Some(on_event), process, 0, WINEVENT_OUTOFCONTEXT) }
+}
+
+/// Hooks what `mode` hears, on the tracker's thread, if it isn't on already.
+fn listen(mode: Mode) {
+    HOOKS.with_borrow_mut(|(on, hooks)| {
+        if *on == Some(mode) { return; }
+        for h in hooks.drain(..) {
+            // SAFETY: a hook this thread set.
+            unsafe { UnhookWinEvent(h) };
+        }
+        // SAFETY: this process's id.
+        let own = unsafe { windows_sys::Win32::System::Threading::GetCurrentProcessId() };
+        for (min, max) in EVENTS {
+            // Its own process's object events are its caret and input method moving, showing
+            // and hiding many times a second: away from Full only its windows' system events
+            // (minimise, restore, move, cloak, foreground) count, and the owner says when one
+            // hides or shows (`Tracked`).
+            let object = min >= EVENT_OBJECT_DESTROY && min != EVENT_OBJECT_CLOAKED;
+            match mode {
+                Mode::Full => hooks.push(hook(min, max, 0)),
+                Mode::Front if min == EVENT_SYSTEM_FOREGROUND => hooks.push(hook(min, max, 0)),
+                _ if object => {}
+                _ => hooks.push(hook(min, max, own)),
+            }
+        }
+        *on = Some(mode);
+    });
 }
 
 /// The settle timer's id on the tracker's thread (`SetTimer` with no window picks it).
@@ -207,18 +273,12 @@ fn pass_event(event: PassEvent) {
 }
 
 fn run() {
-    let hook = |min: u32, max: u32| {
-        // SAFETY: an out-of-context hook on every process's events, called on this thread while
-        // it waits for messages; `on_event` is a plain function.
-        unsafe { SetWinEventHook(min, max, std::ptr::null_mut(), Some(on_event), 0, 0, WINEVENT_OUTOFCONTEXT) }
-    };
-    let _hooks = [
-        hook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND),
-        hook(EVENT_SYSTEM_MOVESIZEEND, EVENT_SYSTEM_MINIMIZEEND),
-        hook(EVENT_OBJECT_DESTROY, EVENT_OBJECT_REORDER),
-        hook(EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE),
-        hook(EVENT_OBJECT_CLOAKED, EVENT_OBJECT_UNCLOAKED),
-    ];
+    // Off the desktop the user sees, no window is ever covered: nothing to hear. A desktop whose
+    // input desktop can't be read (the session is locked) is the user's.
+    // Until the first pass, every event: it decides what's heard from then on.
+    if watched_desktop() {
+        listen(Mode::Full);
+    }
     let mut msg: MSG = unsafe { std::mem::zeroed() };
     // SAFETY: `msg` is a valid out pointer; out-of-context hooks run inside GetMessageW.
     while unsafe { GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) } > 0 {
@@ -246,7 +306,11 @@ fn run_pass() {
     let Some(tracker) = tracker() else { return };
     let tracked: Vec<usize> = tracker.windows.lock().unwrap().iter().map(|w| w.hwnd).collect();
     if tracked.is_empty() { return; }
-    let found = if on_input_desktop() { look(&tracked) } else { tracked.iter().map(|&h| (h, seen_or_hidden(h))).collect() };
+    let on_input = on_input_desktop();
+    let found = if on_input { look(&tracked) } else { tracked.iter().map(|&h| (h, seen_or_hidden(h))).collect() };
+    if on_input {
+        listen(mode(&found));
+    }
     let reports: Vec<(Report, bool)> = {
         let mut windows = tracker.windows.lock().unwrap();
         windows.iter_mut().filter_map(|w| {
@@ -258,6 +322,30 @@ fn run_pass() {
     };
     // Outside the lock: a report may track or untrack windows.
     for (report, covered) in reports { report(covered); }
+}
+
+/// What the tracker must hear after a pass that `found` these (see `Mode`).
+fn mode(found: &[(usize, Found)]) -> Mode {
+    // SAFETY: plain queries; they tolerate any handle.
+    let away = |h: usize| unsafe { IsIconic(h as HWND) != 0 || cloaked(h as HWND).is_some_and(|c| c & DWM_CLOAKED_SHELL != 0) };
+    // SAFETY: as above.
+    let front = unsafe { GetForegroundWindow() } as usize;
+    let on_screen: Vec<(usize, Found)> = found.iter().copied().filter(|&(h, f)| f != Found::Hidden && !(f == Found::Covered && away(h))).collect();
+    if on_screen.is_empty() { return Mode::Quiet; }
+    if on_screen.iter().all(|&(h, f)| f == Found::Seen && h == front) { return Mode::Front; }
+    Mode::Full
+}
+
+/// Whether this thread is on the desktop the user sees, or the one they'll see once the session
+/// unlocks (the input desktop can't be read while it's locked).
+fn watched_desktop() -> bool {
+    // SAFETY: the handle is closed if it opened.
+    let readable = unsafe {
+        let input = OpenInputDesktop(0, 0, DESKTOP_READOBJECTS);
+        if !input.is_null() { CloseDesktop(input); }
+        !input.is_null()
+    };
+    !readable || on_input_desktop()
 }
 
 fn seen_or_hidden(hwnd: usize) -> Found {
