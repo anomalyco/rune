@@ -9,6 +9,10 @@
 
 /// The variable that tells a relaunched process the pid it waits for.
 const AFTER: &str = "RUNE_RELAUNCH_AFTER";
+/// The variable that tells a launch handed on by a quitting process (`spawn_with`) that process's
+/// pid: it claims the instance once that one lets go of it, not once it has exited.
+#[cfg(target_os = "windows")]
+const HANDED: &str = "RUNE_INSTANCE_HANDED";
 /// The longest a relaunched process waits for the previous one.
 const WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 
@@ -16,32 +20,43 @@ const WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 /// is quitting either way.
 pub(crate) fn spawn() {
     #[cfg(not(target_arch = "wasm32"))]
-    if let Err(e) = start(std::env::args_os().skip(1).collect()) {
+    if let Err(e) = start(std::env::args_os().skip(1).collect(), AFTER) {
         eprintln!("rune: couldn't start the app again: {e}");
     }
 }
 
-/// Starts this app again with another launch's arguments, to go on once this process has
-/// exited: a launch that reached this process while it quits (`single_instance`).
+/// Starts this app with another launch's arguments: a launch that reached this process while it
+/// quits (`single_instance`). The new process claims the instance as soon as this one lets go of
+/// it (`release_instance`), and starts meanwhile.
 #[cfg(target_os = "windows")]
 pub(crate) fn spawn_with(args: Vec<String>) {
-    if let Err(e) = start(args.into_iter().map(Into::into).collect()) {
+    if let Err(e) = start(args.into_iter().map(Into::into).collect(), HANDED) {
         eprintln!("rune: couldn't start the app for a launch that came while it quit: {e}");
     }
 }
 
+/// The quitting process that handed this launch on (`spawn_with`), once.
+#[cfg(target_os = "windows")]
+pub(crate) fn handed_from() -> Option<u32> {
+    std::env::var_os(HANDED).and_then(|v| v.to_str().and_then(|v| v.parse::<u32>().ok())).filter(|pid| *pid != std::process::id())
+}
+
 #[cfg(not(target_arch = "wasm32"))]
-fn start(args: Vec<std::ffi::OsString>) -> std::io::Result<()> {
+fn start(args: Vec<std::ffi::OsString>, wait_var: &str) -> std::io::Result<()> {
     use std::process::{Command, Stdio};
     let exe = std::env::current_exe()?;
     let pid = std::process::id().to_string();
     #[cfg(target_os = "macos")]
     if let Some(bundle) = bundle_of(&exe) {
-        let status = Command::new("/usr/bin/open").arg("-n").arg(&bundle).arg("--env").arg(format!("{AFTER}={pid}")).arg("--args").args(&args).status()?;
+        let status = Command::new("/usr/bin/open").arg("-n").arg(&bundle).arg("--env").arg(format!("{wait_var}={pid}")).arg("--args").args(&args).status()?;
         return if status.success() { Ok(()) } else { Err(std::io::Error::other(format!("open -n exited with {status}"))) };
     }
     let mut cmd = Command::new(&exe);
-    cmd.args(&args).env(AFTER, &pid).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    // Only this launch's wait goes to the new process, not one this process was started with.
+    cmd.args(&args).env_remove(AFTER);
+    #[cfg(target_os = "windows")]
+    cmd.env_remove(HANDED);
+    cmd.env(wait_var, &pid).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
     if let Ok(dir) = std::env::current_dir() { cmd.current_dir(dir); }
     #[cfg(target_os = "windows")]
     {
@@ -87,6 +102,24 @@ fn wait(pid: u32) {
         if handle.is_null() { return; }
         WaitForSingleObject(handle, WAIT.as_millis() as u32);
         CloseHandle(handle);
+    }
+}
+
+/// Whether process `pid` still runs.
+#[cfg(target_os = "windows")]
+pub(crate) fn alive(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, WAIT_TIMEOUT};
+    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject};
+    // SAFETY: a plain handle request; a process that already exited answers null. The handle is
+    // closed once.
+    unsafe {
+        let handle = OpenProcess(PROCESS_SYNCHRONIZE, 0, pid);
+        if handle.is_null() {
+            return false;
+        }
+        let running = WaitForSingleObject(handle, 0) == WAIT_TIMEOUT;
+        CloseHandle(handle);
+        running
     }
 }
 
