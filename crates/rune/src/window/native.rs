@@ -29,6 +29,9 @@ pub(super) struct Native {
     /// The new window's first frames, which may draw before AppKit reports it on screen.
     pub(super) prime: Prime,
     pub(super) launch_drawables: super::LaunchDrawables,
+    /// Experiment (`RUNE_MAC_FIRST`): `after`: the window, made hidden, is ordered front once its
+    /// first drawable is presented; `flush`: the first present is flushed to the window server.
+    pub(super) first_show: Option<crate::platform::macos::FirstShow>,
     /// Forgets the window's traffic-light spot.
     pub(super) _spot: crate::platform::macos::traffic_lights::Spot,
 }

@@ -130,6 +130,32 @@ fn set_sharing(window: &NSWindow, exclude: bool) {
 }
 
 /// Orders a window front without making it key or activating the app.
+/// IB-3 experiment: how a launch's first frame reaches the screen (`RUNE_MAC_FIRST`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FirstShow {
+    /// The window is made hidden and ordered front right after its first present.
+    After,
+    /// The window shows as today; the first present is flushed to the window server at once.
+    Flush,
+}
+
+pub(crate) fn first_show() -> Option<FirstShow> {
+    match std::env::var("RUNE_MAC_FIRST").ok().as_deref() {
+        Some("after") => Some(FirstShow::After),
+        Some("flush") => Some(FirstShow::Flush),
+        _ => None,
+    }
+}
+
+/// Commits the current Core Animation transaction to the window server now (`[CATransaction flush]`).
+pub(crate) fn flush_transaction() {
+    use objc2::{msg_send, runtime::AnyClass};
+    if let Some(t) = AnyClass::get(c"CATransaction") {
+        // SAFETY: a CATransaction class method, on the main thread.
+        unsafe { let _: () = msg_send![t, flush]; }
+    }
+}
+
 pub(crate) fn show_without_focus(window: &winit::window::Window) {
     let Some(w) = ns_window(window) else { return };
     // SAFETY: an AppKit call on the main thread.

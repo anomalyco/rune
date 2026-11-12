@@ -342,6 +342,12 @@ impl<S: 'static> Host<S> {
         l.window.pre_present_notify();
         #[cfg(target_os = "macos")]
         l.native.materials.present(&rt.materials, rt.env.scale, || gpu.queue.present(frame));
+        #[cfg(target_os = "macos")]
+        if let Some(first) = l.native.first_show.take() {
+            if first == crate::platform::macos::FirstShow::After { l.window.set_visible(true); crate::marks::mark("window.ordered"); }
+            crate::platform::macos::flush_transaction();
+            crate::marks::mark("window.flushed");
+        }
         #[cfg(not(target_os = "macos"))]
         gpu.queue.present(frame);
         // A swap chain made again on a handed-over window's visual takes over now (`cpu_frame`).

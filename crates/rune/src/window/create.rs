@@ -16,6 +16,10 @@ impl<S: 'static> Host<S> {
         let mut attrs = self.options.attributes(self.rt.window_title.current().unwrap_or(self.spec.title), size, self.spec.min_size, visible).with_active(focus);
         #[cfg(target_os = "macos")]
         if self.macos_window.nonactivating_panel { attrs = attrs.with_visible(false).with_active(false); }
+        #[cfg(target_os = "macos")]
+        let first_show = crate::platform::macos::first_show().filter(|_| visible && !self.macos_window.nonactivating_panel);
+        #[cfg(target_os = "macos")]
+        if first_show == Some(crate::platform::macos::FirstShow::After) { attrs = attrs.with_visible(false); }
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         {
             if let Some(id) = crate::tooling::app_id() {
@@ -229,6 +233,7 @@ impl<S: 'static> Host<S> {
             fn_key,
             prime,
             launch_drawables,
+            first_show,
             _spot: crate::platform::macos::traffic_lights::Spot::new(&window),
         };
         // Making the GPU and surface took part of the cloak's wait; the frame gets all of it.
