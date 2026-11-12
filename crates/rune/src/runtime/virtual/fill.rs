@@ -2,7 +2,7 @@
 //! still wanted rows, and the wait that resumes a fill it couldn't finish in those frames. A
 //! frame that finds no list asking settles it; a list whose heights keep changing for longer
 //! than the bound waits, backs off and resumes, so it fills once they settle instead of going
-//! blank.
+//! blank. A wake whose attempt the fill no longer holds draws nothing and never starts it again.
 
 use crate::machine::{Attempt, Effects, Seq};
 
@@ -30,13 +30,20 @@ pub(super) enum State {
     Filling { frames: u16, best: usize, resumes: u8 },
     /// The bound stopped a fill that still had rows to mount: `attempt` resumes it at `due`.
     Waiting { attempt: Attempt, due: f64, best: usize, resumes: u8 },
+    /// Resumes without progress ran out. Only a frame that moves a viewport or finds nothing to
+    /// fill starts the fill again; other frames change nothing, so a redraw or an old deadline
+    /// can't put a starved list back to drawing forever.
+    Stalled,
 }
 
-/// The fill's state, and the attempts it hands out so an old wake never resumes a newer run.
+/// The fill's state and the attempts it hands out, plus the one deadline it armed.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct Fill {
     state: State,
     seq: Seq,
+    /// The deadline this fill armed: the attempt it resumes and when. A wake whose attempt the
+    /// state no longer holds is stale, so the fill draws nothing for it.
+    wake: Option<(Attempt, f64)>,
 }
 
 /// What a finished frame found.
@@ -45,8 +52,9 @@ pub(crate) enum FillEvent {
     /// A frame ended at `now`. `wanted` is whether an index-built list still wants its window
     /// moved; `missing` is how many of its rows are still unmounted, read only when the run
     /// reaches its bound ([`Fill::at_bound`]) so a fill that finishes inside the bound counts
-    /// nothing.
-    Frame { now: f64, wanted: bool, missing: usize },
+    /// nothing; `moved` is whether a scroll viewport moved this frame, which invalidates the
+    /// window the fill was chosen for.
+    Frame { now: f64, wanted: bool, missing: usize, moved: bool },
     /// The wake `attempt` asked for came due.
     Due { attempt: Attempt, now: f64 },
 }
@@ -60,23 +68,46 @@ pub(crate) enum FillEffect {
     WakeAt(f64),
 }
 
+/// A deadline that came due.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum Wake {
+    /// The state still holds its attempt: resume the fill.
+    Resume(Attempt),
+    /// Its attempt is gone: the deadline draws nothing, and starts nothing.
+    Stale,
+}
+
 impl Fill {
     /// Whether the next frame reaches this run's bound, so the caller reads `missing` for it.
     pub(super) fn at_bound(&self) -> bool {
         matches!(self.state, State::Filling { frames, .. } if frames >= FILL_FRAMES)
     }
 
-    /// The attempt to resume at `now`, when a wait has come due.
-    pub(super) fn due(&self, now: f64) -> Option<Attempt> {
-        match self.state {
-            State::Waiting { attempt, due, .. } if now >= due => Some(attempt),
-            _ => None,
-        }
+    /// Takes this fill's armed deadline when it has come due: `None` before it, or once it has
+    /// been taken. Whether its attempt still stands decides between resuming and nothing at all.
+    pub(super) fn wake(&mut self, now: f64) -> Option<Wake> {
+        let (attempt, due) = self.wake?;
+        if now < due { return None; }
+        self.wake = None;
+        Some(match self.state {
+            State::Waiting { attempt: held, .. } if held == attempt => Wake::Resume(attempt),
+            _ => Wake::Stale,
+        })
     }
 
-    /// Whether a wait is due at `now`, so a resting window draws the frame that resumes it.
+    /// Whether an armed deadline is due at `now` with an attempt the state still holds, so a
+    /// resting window draws the frame that resumes it.
     pub(super) fn resuming(&self, now: f64) -> bool {
-        self.due(now).is_some()
+        self.wake.is_some_and(|(attempt, due)| now >= due && self.holds(attempt))
+    }
+
+    fn holds(&self, attempt: Attempt) -> bool {
+        matches!(self.state, State::Waiting { attempt: held, .. } if held == attempt)
+    }
+
+    /// Arms this fill's deadline at `due` for `attempt`.
+    fn arm(&mut self, attempt: Attempt, due: f64) {
+        self.wake = Some((attempt, due));
     }
 
     pub(crate) fn step(&mut self, event: FillEvent) -> Effects<FillEffect> {
@@ -86,11 +117,17 @@ impl Fill {
                 self.state = State::Idle;
                 Effects::none()
             }
+            // // differs from dev: a viewport moved, so the window the fill was chosen for is
+            // gone; dev's spent count kept drawing nothing here. A fresh run draws from scratch.
+            (_, FillEvent::Frame { wanted: true, moved: true, .. }) => {
+                self.state = State::Filling { frames: 1, best: usize::MAX, resumes: 0 };
+                Effects::one(FillEffect::Draw)
+            }
             (State::Idle, FillEvent::Frame { wanted: true, .. }) => {
                 self.state = State::Filling { frames: 1, best: usize::MAX, resumes: 0 };
                 Effects::one(FillEffect::Draw)
             }
-            (State::Filling { frames, best, resumes }, FillEvent::Frame { now, wanted: true, missing }) => {
+            (State::Filling { frames, best, resumes }, FillEvent::Frame { now, wanted: true, missing, .. }) => {
                 let frames = frames.saturating_add(1).min(FILL_FRAMES + 1);
                 if frames <= FILL_FRAMES {
                     self.state = State::Filling { frames, best, resumes };
@@ -101,26 +138,29 @@ impl Fill {
                 // good, so a list whose heights kept changing went blank until something else
                 // asked for a frame.
                 let (best, resumes) = if missing < best { (missing, 0) } else { (best, resumes) };
-                if missing == 0 || resumes >= RESUME_LIMIT {
+                if missing == 0 {
                     self.state = State::Idle;
+                    return Effects::none();
+                }
+                if resumes >= RESUME_LIMIT {
+                    self.state = State::Stalled;
                     return Effects::none();
                 }
                 let attempt = self.seq.next();
                 let resumes = resumes + 1;
                 let due = now + RESUME_WAIT * f64::from(1u32 << (resumes - 1));
                 self.state = State::Waiting { attempt, due, best, resumes };
+                self.arm(attempt, due);
                 Effects::one(FillEffect::WakeAt(due))
             }
-            // // differs from dev: a frame drawn for another cause (a scroll, input, another
-            // timer) while the fill waits retires its wake and starts a fresh run, where dev
-            // kept its spent count. The frame is already drawn, so this costs no extra one.
-            (State::Waiting { .. }, FillEvent::Frame { wanted: true, .. }) => {
-                self.state = State::Filling { frames: 1, best: usize::MAX, resumes: 0 };
-                Effects::one(FillEffect::Draw)
-            }
+            // // differs from dev: a frame drawn for another cause while the fill waits changes
+            // nothing at all. It can't spend the run's budget or reset its no-progress count, so
+            // an old deadline or a plain redraw can't keep a starved fill drawing.
+            (State::Waiting { .. } | State::Stalled, FillEvent::Frame { wanted: true, .. }) => Effects::none(),
             (State::Waiting { attempt, due, best, resumes }, FillEvent::Due { attempt: a, now })
                 if attempt == a && now >= due =>
             {
+                self.wake = None;
                 self.state = State::Filling { frames: 1, best, resumes };
                 Effects::one(FillEffect::Draw)
             }

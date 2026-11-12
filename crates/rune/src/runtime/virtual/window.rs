@@ -1,7 +1,7 @@
 //! Virtual lists between commits: whether a window wants moving, and which rows show.
 
 use super::*;
-use super::virtual_fill::{FillEffect, FillEvent};
+use super::virtual_fill::{FillEffect, FillEvent, Wake};
 
 impl<S: 'static> Runtime<S> {
     pub(super) fn virtual_window_changed(&self) -> bool {
@@ -80,21 +80,28 @@ impl<S: 'static> Runtime<S> {
     /// the unfilled range stops shrinking.
     pub(super) fn virtual_filling(&mut self) -> bool {
         let now = self.clock;
-        // A wake that came due is this frame's own: it resumes the fill instead of counting as
-        // a frame drawn for something else.
-        if let Some(attempt) = self.virtual_fill.due(now) {
-            if !self.virtual_fill.step(FillEvent::Due { attempt, now }).is_empty() {
-                return true;
-            }
-        }
         let wanted = self.virtuals.iter().any(|(path, v)| v.indexed && self.wants_window(path, v));
+        // A wake must draw nothing for a list that finished, unmounted or stopped filling: it
+        // retires the wait, and the deadline it left draws no frame of its own.
+        if !wanted {
+            self.virtual_fill.step(FillEvent::Frame { now, wanted: false, missing: 0, moved: false });
+            return false;
+        }
+        // The fill's own deadline. Only an attempt it still holds resumes; any other is stale
+        // and draws nothing, rather than counting as a frame drawn for another cause.
+        match self.virtual_fill.wake(now) {
+            Some(Wake::Resume(attempt)) => return !self.virtual_fill.step(FillEvent::Due { attempt, now }).is_empty(),
+            Some(Wake::Stale) => return false,
+            None => {}
+        }
         // The count is only read at the bound, so a fill that finishes inside it costs none.
         let missing = if self.virtual_fill.at_bound() { self.virtual_unfilled() } else { 0 };
+        let moved = self.scrolling();
         let mut draw = false;
-        for effect in self.virtual_fill.step(FillEvent::Frame { now, wanted, missing }) {
+        for effect in self.virtual_fill.step(FillEvent::Frame { now, wanted, missing, moved }) {
             match effect {
                 FillEffect::Draw => draw = true,
-                FillEffect::WakeAt(due) => self.schedule_wakes_from(due, [std::time::Duration::ZERO]),
+                FillEffect::WakeAt(due) => self.wake_at(due),
             }
         }
         draw

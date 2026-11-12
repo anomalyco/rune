@@ -1,31 +1,44 @@
 //! A virtual list whose row heights keep changing for longer than the fill's bound still fills
 //! every visible row once they settle (r262). Dev stopped at the bound and left the rows it still
-//! wanted unmounted until something else asked for a frame.
+//! wanted unmounted until something else asked for a frame. A wake after the list fills or goes
+//! away draws nothing.
 
 use std::cell::Cell;
 use std::rc::Rc;
 
-use super::virtual_fill::FILL_FRAMES;
+use super::virtual_fill::{FILL_FRAMES, State};
 use super::*;
 use crate::{GrowthSpec, ScrollSpec, col, el};
 
 const ROWS: usize = 400;
 const VIEWPORT: f32 = 200.0;
 const ROW_H: f32 = 20.0;
+const THIN: f32 = 4.0;
 
 /// Rows that measure shorter the more of them the list builds: the fill's budget buys rows at the
 /// estimate, so each frame covers less of the overscan than it looks like it will. The first
 /// rows are full height and the rest thin, which is what a list with heights still settling does.
-struct Thinning(Rc<Cell<u32>>);
+struct Thinning {
+    builds: Rc<Cell<u32>>,
+    /// The list keeps only a few rows, so it fills at once.
+    short: bool,
+    /// The list is gone from the view.
+    gone: bool,
+}
 
-const THIN: f32 = 4.0;
+fn thinning() -> Runtime<Thinning> {
+    let state = Thinning { builds: Rc::new(Cell::new(0)), short: false, gone: false };
+    Runtime::new(state, thinning_view, (400.0, VIEWPORT), Env::new(true, 2.0))
+}
 
 fn thinning_view(s: &Thinning, _: &mut Cx<Thinning>) -> El {
-    let builds = s.0.clone();
+    if s.gone { return col().key("empty").w_full().h_full(); }
+    let builds = s.builds.clone();
+    let count = if s.short { 3 } else { ROWS };
     col().w_full().h_full().child(
         col().key("scroll").w_full().h(VIEWPORT).scroll(ScrollSpec { stick_bottom: false }).child(
             col().key("rows").w_full().growth(GrowthSpec::default()).virtual_rows(
-                ROWS,
+                count,
                 ROW_H,
                 |_: &Thinning, i| format!("r{i}").into(),
                 move |_: &Thinning, i| {
@@ -55,6 +68,23 @@ fn draw_while_asked<S: 'static>(rt: &mut Runtime<S>, mut drew: bool) -> usize {
     }
 }
 
+/// Draws like a host until the fill reaches its bound, returning the deadline it armed.
+fn draw_to_wait<S: 'static>(rt: &mut Runtime<S>) -> f64 {
+    let mut drew = true;
+    for _ in 0..400 {
+        if matches!(rt.virtual_fill.state(), State::Waiting { .. }) {
+            return rt.wake_deadline().expect("the wait armed a deadline");
+        }
+        if drew {
+            drew = rt.frame(1.0 / 120.0);
+            continue;
+        }
+        let Some(due) = rt.wake_deadline() else { panic!("the fill stopped before its bound: {:?}", rt.virtual_fill.state()) };
+        drew = rt.frame((due - rt.clock).max(1.0 / 120.0));
+    }
+    panic!("the fill never reached its bound");
+}
+
 fn list_path<S>(rt: &Runtime<S>) -> String {
     rt.virtuals.keys().next().expect("a virtual list").clone()
 }
@@ -68,8 +98,7 @@ fn offset<S>(rt: &Runtime<S>, path: &str) -> (f32, bool) {
 
 #[test]
 fn heights_that_keep_changing_still_fill_every_visible_row() {
-    let mut rt = Runtime::new(Thinning(Rc::new(Cell::new(0))), thinning_view, (400.0, VIEWPORT), Env::new(true, 2.0));
-    rt.frame(0.0);
+    let mut rt = thinning();
     let frames = draw_while_asked(&mut rt, true);
     let path = list_path(&rt);
     let (offset, pinned) = offset(&rt, &path);
@@ -104,4 +133,34 @@ fn an_idle_list_with_nothing_to_fill_draws_nothing() {
     let frames = draw_while_asked(&mut rt, true);
     assert_eq!(rt.wake_deadline(), None, "an idle list arms nothing, after {frames} frames");
     assert!(!rt.frame(1.0 / 120.0), "and nothing asks for another frame");
+}
+
+/// r367: the list unmounts while a fill wake waits, and that wake draws nothing when it comes due.
+#[test]
+fn a_wake_after_the_list_unmounts_draws_nothing() {
+    let mut rt = thinning();
+    let due = draw_to_wait(&mut rt);
+    rt.update(|s, _| s.gone = true);
+    // The frame that unmounts the list is also the one the wake comes due in.
+    let dt = (due - rt.clock).max(1.0 / 120.0);
+    rt.frame(dt);
+    assert!(rt.clock >= due - 1e-9, "the deadline came due");
+    assert_eq!(rt.virtual_fill.state(), State::Idle, "the unmounted list retires the wait, not resuming it");
+    assert_eq!(rt.anim_sources & AnimSource::VIRTUAL_FILL, 0, "and the fill adds no frame");
+    assert_eq!(rt.wake_deadline(), None, "nothing is left armed");
+}
+
+/// r367: the wake that was waiting comes due after the list finished filling, and draws nothing.
+#[test]
+fn a_wake_after_the_fill_completes_draws_nothing() {
+    let mut rt = thinning();
+    let due = draw_to_wait(&mut rt);
+    rt.update(|s, _| s.short = true);
+    // The frame that fills the last rows is also the one the wake comes due in.
+    let dt = (due - rt.clock).max(1.0 / 120.0);
+    rt.frame(dt);
+    assert!(rt.clock >= due - 1e-9, "the deadline came due");
+    assert_eq!(rt.virtual_fill.state(), State::Idle, "the filled list retires the wait, not resuming it");
+    assert_eq!(rt.anim_sources & AnimSource::VIRTUAL_FILL, 0, "and the fill adds no frame");
+    assert_eq!(rt.wake_deadline(), None, "nothing is left armed");
 }
