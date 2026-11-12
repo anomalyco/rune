@@ -44,6 +44,11 @@ impl TextEdit {
             }
             let Some((start, word)) = self.segment_before(j) else { return 0 };
             if !word {
+                // A pill is one word: stepping back over the punctuation before it stops at
+                // its end, and the step after that takes the pill whole.
+                if self.pill_before(start).is_some() {
+                    return start;
+                }
                 j = start;
                 continue;
             }
