@@ -14,6 +14,19 @@ pub(super) const UNBOUNDED: [f32; 8] = [f32::NEG_INFINITY, f32::INFINITY, f32::N
 /// Points of shift over which `El::stuck_shadow` fades in.
 pub(super) const SHADOW_RAMP: f32 = 8.0;
 
+/// Test builds count the tree scans a frame's end makes for reveals beyond the follow's own.
+#[cfg(test)]
+pub(super) mod scans {
+    use std::cell::Cell;
+
+    thread_local! { static COUNT: Cell<usize> = const { Cell::new(0) }; }
+
+    pub(in crate::runtime) fn note() { COUNT.with(|c| c.set(c.get() + 1)); }
+
+    /// The scans since the last call.
+    pub(in crate::runtime) fn take() -> usize { COUNT.with(|c| c.replace(0)) }
+}
+
 /// One `Tx::keep_on_screen` anchor captured before a commit.
 #[derive(Clone)]
 pub(super) struct Keep {
@@ -46,16 +59,22 @@ pub(super) struct Reveal {
     pub center: bool,
     /// Whether this reveal lands at the bottom of a `stick_bottom` viewport.
     pub at_end: bool,
-    /// Whether its glide found the target at the last frame's end.
+    /// What its glide has found of the target lately.
     pub target: Target,
+    /// The virtual row the target was mounted in when the reveal began, `(list path, row key)`:
+    /// while that row is in the list, the target can come back.
+    pub row: Option<(String, String)>,
 }
 
-/// What a gliding reveal found of its target at a frame's end (`requests::Finish`).
+/// What a gliding reveal found of its target: this frame's follow looks for it
+/// (`requests::Sightings`), and the frame's end counts what it didn't find (`requests::Finish`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum Target {
-    /// Mounted in the viewport, or a row of a virtual list there.
+    /// Mounted in the viewport, mid-exit included, or a row of a virtual list there.
     Seen,
-    /// Neither, once: a remount or a returning exit may bring it back by the next frame's end.
+    /// This frame's follow didn't find it mounted.
+    Lost,
+    /// Neither at the last frame's end: an unmount the next frame's commit may undo.
     Missed,
 }
 
@@ -454,16 +473,7 @@ impl<S: 'static> Runtime<S> {
                 path: self.nodes[h].path.clone(),
                 inset: (self.drawn[h][1] - self.drawn[s][1]) / self.drawn_scale[s].max(1e-4),
             });
-            let virtual_row = std::iter::successors(Some(i), |&p| self.nodes[p].parent)
-                .take_while(|&p| p != s)
-                .find_map(|r| {
-                    let c = self.nodes[r].parent?;
-                    self.virtuals.contains_key(&self.nodes[c].path).then(|| (
-                        self.nodes[c].path.clone(),
-                        self.nodes[r].key.clone().unwrap_or_default(),
-                        self.nodes[i].target[1] - self.nodes[r].target[1],
-                    ))
-                });
+            let virtual_row = self.virtual_row(i, s);
             self.requests.step(requests::Event::Arrive(requests::Request::Capture(Keep {
                 path: self.nodes[i].path.clone(),
                 viewport: self.nodes[s].path.clone(),
@@ -472,6 +482,20 @@ impl<S: 'static> Runtime<S> {
                 hold,
             })));
         }
+    }
+
+    /// The virtual row node `i` sits in, inside viewport `s`: `(list path, row key, y in row)`.
+    pub(super) fn virtual_row(&self, i: usize, s: usize) -> Option<(String, String, f32)> {
+        std::iter::successors(Some(i), |&p| self.nodes[p].parent)
+            .take_while(|&p| p != s)
+            .find_map(|r| {
+                let c = self.nodes[r].parent?;
+                self.virtuals.contains_key(&self.nodes[c].path).then(|| (
+                    self.nodes[c].path.clone(),
+                    self.nodes[r].key.clone().unwrap_or_default(),
+                    self.nodes[i].target[1] - self.nodes[r].target[1],
+                ))
+            })
     }
 
     /// Node `i`, or the header holding it, if it's drawn stuck to the top of viewport `s`.
@@ -623,18 +647,28 @@ impl<S: 'static> Runtime<S> {
             st.moved();
             moved = true;
         }
-        for r in self.requests.reveals() {
-            let target = (0..self.nodes.len()).find(|&i| self.reveal_names(r, i))
+        // Bit `n` says reveal `n`'s target is mounted in its viewport, mid-exit included: the
+        // scan that finds it to follow tells it, so a glide's frame scans the tree once.
+        let mut present = 0u64;
+        for (n, r) in self.requests.reveals().enumerate() {
+            // An exiting element can't be followed, but it's still there: its exit can be undone.
+            let mut leaving = None;
+            let target = (0..self.nodes.len()).find(|&i| {
+                let named = self.reveal_scoped(r, i);
+                if named && self.subtree_exiting(i) { leaving.get_or_insert(i); return false; }
+                named
+            })
                 .map(|i| (i, self.drawn[i][1], self.drawn[i][3]))
                 .or_else(|| {
                     let (i, [_, y0, _, y1]) = self.highlight_target_in(&self.nodes, r.scope.as_deref(), &r.key)?;
-                    if self.subtree_exiting(i) { return None; }
+                    if self.subtree_exiting(i) { leaving.get_or_insert(i); return None; }
                     let scale = self.drawn_scale.get(i).copied().unwrap_or(1.0);
                     let dy = (y0 - self.nodes[i].target[1]) * scale;
                     Some((i, self.drawn[i][1] + dy, (y1 - y0).max(0.0) * scale))
                 });
-            let Some((i, drawn_top, drawn_h)) = target else { continue };
-            let Some(s) = self.viewport_of(i).filter(|&s| self.nodes[s].path == r.viewport) else { continue };
+            let s = target.map(|t| t.0).or(leaving).and_then(|i| self.viewport_of(i).filter(|&s| self.nodes[s].path == r.viewport));
+            if s.is_some() && n < 64 { present |= 1 << n; }
+            let (Some((_, drawn_top, drawn_h)), Some(s)) = (target, s) else { continue };
             let scale = self.drawn_scale[s];
             if scale <= 1e-4 { continue; }
             let Some(cover) = self.stuck_cover(&r.viewport, &r.key) else { continue };
@@ -665,6 +699,7 @@ impl<S: 'static> Runtime<S> {
             st.moved();
             moved = true;
         }
+        self.requests.step(requests::Sightings { present });
         // Once the content end prevents holding the anchor, let stick-bottom own the
         // viewport again, including growth committed while the collapse is still settling.
         self.requests.step(requests::EndClamps { shown: |k: &Keep| {
@@ -711,23 +746,32 @@ impl<S: 'static> Runtime<S> {
 
     /// Whether node `i` is reveal `r`'s target element.
     fn reveal_names(&self, r: &Reveal, i: usize) -> bool {
+        self.reveal_scoped(r, i) && !self.subtree_exiting(i)
+    }
+
+    /// Whether node `i` is named as reveal `r`'s target, in its scope, leaving or not.
+    fn reveal_scoped(&self, r: &Reveal, i: usize) -> bool {
         let n = &self.nodes[i];
-        n.named(&r.key) && !self.subtree_exiting(i)
-            && n.parent.is_none_or(|p| super::in_scope(&self.nodes[p].path, r.scope.as_deref()))
+        n.named(&r.key) && n.parent.is_none_or(|p| super::in_scope(&self.nodes[p].path, r.scope.as_deref()))
     }
 
     /// Whether reveal `r`'s target element or highlight is mounted in its viewport.
     fn reveal_mounted(&self, r: &Reveal) -> bool {
+        #[cfg(test)]
+        scans::note();
         let in_viewport = |i: usize| self.viewport_of(i).is_some_and(|s| self.nodes[s].path == r.viewport);
         (0..self.nodes.len()).any(|i| self.reveal_names(r, i) && in_viewport(i))
             || self.highlight_target_in(&self.nodes, r.scope.as_deref(), &r.key)
                 .is_some_and(|(i, _)| !self.subtree_exiting(i) && in_viewport(i))
     }
 
-    /// Whether reveal `r`'s target is a row of a virtual list in its viewport, mounted or not:
-    /// one scrolled out of the window is still there to glide to.
+    /// Whether reveal `r`'s target is a row of a virtual list in its viewport, or inside the row
+    /// it was mounted in, mounted or not: a row scrolled out of the window is still there.
     fn reveal_listed(&self, r: &Reveal) -> bool {
-        self.virtuals.iter().any(|(path, v)| v.scroll_path == r.viewport && super::in_scope(path, r.scope.as_deref())
+        #[cfg(test)]
+        scans::note();
+        r.row.as_ref().is_some_and(|(list, key)| self.virtuals.get(list).is_some_and(|v| v.has(key)))
+            || self.virtuals.iter().any(|(path, v)| v.scroll_path == r.viewport && super::in_scope(path, r.scope.as_deref())
             && reveal::virtual_index(v, path, &r.key).is_some())
     }
 

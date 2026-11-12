@@ -143,6 +143,10 @@ impl<S: 'static> Runtime<S> {
         let Some(&s_idx) = self.node_index.get(&id) else { return (false, None) };
         let stick = self.nodes[s_idx].scroll.is_some_and(|s| s.stick_bottom);
         let max = self.scroll_overflow(s_idx).max(0.0);
+        // A mounted target inside a virtual row can come back with its row.
+        let row = target_node.filter(|_| first)
+            .and_then(|(i, ..)| self.virtual_row(i, self.viewport_of(i)?))
+            .map(|(list, row, _)| (list, row));
         let Some(scroll) = self.scrolls.get_mut(&id) else { return (false, None) };
         let was = first.then_some(Was { id, offset: scroll.offset, glide: scroll.glide(), viewport });
         scroll.max = max;
@@ -152,7 +156,7 @@ impl<S: 'static> Runtime<S> {
         let laid_to = place(center, scroll.offset, laid_top, laid_h, viewport, margin).clamp(0.0, laid_max);
         let at_end = stick && (scroll.pinned() || offset >= scroll.max - 0.5) && laid_to >= laid_max - 0.5;
         let effects = self.requests.step(requests::Event::Place { first, scope, key, viewport: &path,
-            center, at_end, from: scroll.offset, to: offset });
+            center, at_end, from: scroll.offset, to: offset, row });
         let Some(effect) = effects.into_iter().next() else { return (false, was) };
         match effect {
             requests::Effect::Move(to) => {

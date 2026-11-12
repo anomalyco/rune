@@ -12,7 +12,7 @@ enum Input {
     FoldOpen { viewport: &'static str, mounted: Option<&'static str>, end: usize },
     Place { viewport: &'static str, first: bool, to: f64, at_end: bool }, Tail,
     EndGives { header: &'static str, pinned: &'static str }, EndClamp(Scene),
-    Frame { glide: &'static str, moving: &'static str, mounted: bool, listed: bool }, InputScroll, Destination,
+    Look(bool), Frame { glide: &'static str, moving: &'static str, mounted: bool, listed: bool }, InputScroll, Destination,
 }
 use Input::*;
 
@@ -25,8 +25,9 @@ struct Old {
 struct OldKeep { path: String, viewport: String, was: f32, virtual_row: Option<(String, String, f32)>, hold: Option<(String, f32)> }
 #[derive(Clone, Debug, PartialEq)]
 struct OldReveal { viewport: String, scope: Option<String>, key: String, center: bool, at_end: bool,
-    // differs from dev: a gliding reveal remembers that its target was gone at the last frame's end.
-    missed: bool }
+    // differs from dev: what a gliding reveal found of its target, "seen", "lost" by this
+    // frame's follow, or "missed" at the last frame's end.
+    sighting: &'static str }
 
 #[derive(Debug, PartialEq)]
 enum Placement { None, Rest, Move(f64), Stops(Vec<String>) }
@@ -56,7 +57,7 @@ impl Old {
                 if first {
                     self.scroll_reveals.retain(|r| r.viewport != viewport);
                     self.scroll_reveals.push(OldReveal { viewport: viewport.into(), scope: Some("scope".into()),
-                        key: "mark".into(), center: viewport == "a", at_end, missed: false });
+                        key: "mark".into(), center: viewport == "a", at_end, sighting: "seen" });
                 } else if let Some(r) = self.scroll_reveals.iter_mut().find(|r| r.viewport == viewport) {
                     r.at_end |= at_end;
                 }
@@ -100,18 +101,22 @@ impl Old {
                 let gliding = |viewport: &str| viewport == glide;
                 self.keeps.retain(|k| animating(&k.viewport));
                 // differs from dev: a glide kept its reveal whatever became of the target. Now a
-                // target neither mounted nor a virtual list's row at two frame ends running is
-                // gone, and its glide stops.
+                // target the follow didn't find at two frame ends running, and that isn't a
+                // virtual list's row or inside one, is gone, and its glide stops.
                 let mut stops = Vec::new();
                 self.scroll_reveals.retain_mut(|r| {
                     if !gliding(&r.viewport) { return animating(&r.viewport) && mounted; }
-                    if mounted || listed { r.missed = false; return true; }
-                    if !r.missed { r.missed = true; return true; }
+                    if r.sighting == "seen" || listed { r.sighting = "seen"; return true; }
+                    if r.sighting == "lost" { r.sighting = "missed"; return true; }
                     stops.push(r.viewport.clone());
                     false
                 });
                 if !stops.is_empty() { return Placement::Stops(stops); }
             }
+            // differs from dev: the frame's follow records whether it found each target.
+            Look(present) => for r in &mut self.scroll_reveals {
+                if present { r.sighting = "seen"; } else if r.sighting == "seen" { r.sighting = "lost"; }
+            },
             InputScroll => { self.keeps.clear(); self.scroll_reveals.clear(); }
             Destination => self.scroll_reveals.clear(),
         }
@@ -129,7 +134,8 @@ fn drive(requests: &mut Requests, input: Input) -> Placement {
         FoldOpen { viewport, mounted, end } => requests.step(FoldOpens { viewport, end,
             index: |path: &str| (Some(path) == mounted).then_some(1) }),
         Place { viewport, first, to, at_end } => requests.step(Event::Place { viewport, scope: Some("scope"),
-            key: "mark", center: viewport == "a", first, at_end, from: 5.0, to }),
+            key: "mark", center: viewport == "a", first, at_end, from: 5.0, to, row: None }),
+        Look(present) => requests.step(Sightings { present: if present { u64::MAX } else { 0 } }),
         Tail => requests.step(Event::NewTail { viewport: "a", key: "new" }),
         EndGives { header, pinned } => requests.step(EndTakesOver { giving: &[&header.to_string()],
             pinned: |v: &str| v == pinned }),
@@ -163,7 +169,8 @@ fn walk(inputs: &[Input], old: &Old, real: &Requests, sequence: &mut Vec<Input>)
         let snapshot = Old { keeps: real.keeps().map(|k| OldKeep { path: k.path.clone(), viewport: k.viewport.clone(),
             was: k.was, virtual_row: k.virtual_row.clone(), hold: k.hold.as_ref().map(|h| (h.path.clone(), h.inset)) }).collect(),
             scroll_reveals: real.reveals().map(|r| OldReveal { viewport: r.viewport.clone(), scope: r.scope.clone(),
-                key: r.key.clone(), center: r.center, at_end: r.at_end, missed: r.target == Target::Missed }).collect() };
+                key: r.key.clone(), center: r.center, at_end: r.at_end,
+                sighting: match r.target { Target::Seen => "seen", Target::Lost => "lost", Target::Missed => "missed" } }).collect() };
         assert_eq!(snapshot, old, "{sequence:?}");
         walk(inputs, &old, &real, sequence);
         sequence.pop();
@@ -182,7 +189,7 @@ fn every_request_sequence_matches_the_separate_keep_and_reveal_lists() {
         EndGives { header: "header", pinned: "a" }, EndClamp(PINNED_PAST),
         Frame { glide: "b", moving: "", mounted: false, listed: false }, Frame { glide: "", moving: "a", mounted: false, listed: false },
         Frame { glide: "", moving: "a", mounted: true, listed: false }, Frame { glide: "a", moving: "b", mounted: true, listed: false },
-        Frame { glide: "b", moving: "", mounted: false, listed: true },
+        Frame { glide: "b", moving: "", mounted: false, listed: true }, Look(true), Look(false),
         InputScroll, Destination];
     walk(INPUTS, &Old::default(), &Requests::default(), &mut Vec::new());
 }

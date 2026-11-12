@@ -32,9 +32,10 @@ pub(super) struct Requests {
 pub(super) enum Event<'a> {
     Arrive(Request),
     /// A reveal placed its target: `from` and `to` are its viewport's offset before and after,
-    /// and `first` says whether this is the placement that created it.
+    /// and `first` says whether this is the placement that created it. `row` is the virtual row
+    /// a mounted target sits in, `(list path, row key)`.
     Place { first: bool, scope: Option<&'a str>, key: &'a str, viewport: &'a str,
-        center: bool, at_end: bool, from: f64, to: f64 },
+        center: bool, at_end: bool, from: f64, to: f64, row: Option<(String, String)> },
     /// A virtual list's last row left the view: an end-pinned reveal follows the row that took
     /// its place.
     NewTail { viewport: &'a str, key: &'a str },
@@ -77,10 +78,14 @@ pub(super) enum Shown {
 /// gives way to stick-bottom.
 pub(super) struct EndClamps<F> { pub shown: F }
 
+/// A frame followed its reveals: bit `n` of `present` says reveal `n`'s target is mounted in
+/// its viewport, mid-exit included. Reveals past the 64th count as present.
+pub(super) struct Sightings { pub present: u64 }
+
 /// A frame ended: keeps last while their viewport's subtree moves, reveals while their viewport
-/// glides or moves with their target mounted in it. A gliding reveal whose target is neither
-/// mounted nor `listed` among a virtual list's rows two frame ends running is gone: its glide
-/// stops. One frame's absence is a remount or an exit that comes back.
+/// glides or moves with their target mounted in it. A gliding reveal whose target was unmounted
+/// at two frame ends running, and isn't `listed` as a virtual list's row or inside one, is gone:
+/// its glide stops. One frame's absence is an unmount the next commit may undo.
 pub(super) struct Finish<G, A, M, L> { pub gliding: G, pub animating: A, pub mounted: M, pub listed: L }
 
 /// Anything [`Requests::step`] takes.
@@ -138,10 +143,10 @@ impl Transition for Event<'_> {
     fn apply(self, requests: &mut Requests) -> Effects<Effect> {
         match self {
             Event::Arrive(request) => requests.arrive(request),
-            Event::Place { first, scope, key, viewport, center, at_end, from, to } => {
+            Event::Place { first, scope, key, viewport, center, at_end, from, to, row } => {
                 if first {
                     requests.arrive(Request::Reveal(Reveal { scope: scope.map(str::to_owned),
-                        key: key.to_owned(), viewport: viewport.to_owned(), center, at_end, target: Target::Seen }));
+                        key: key.to_owned(), viewport: viewport.to_owned(), center, at_end, target: Target::Seen, row }));
                 } else if let Some(r) = requests.reveals.iter_mut().find(|r| r.viewport == viewport) {
                     r.at_end |= at_end;
                 }
@@ -189,6 +194,20 @@ impl<F: Fn(&Keep) -> Shown> Transition for EndClamps<F> {
     }
 }
 
+impl Transition for Sightings {
+    fn apply(self, requests: &mut Requests) -> Effects<Effect> {
+        for (n, r) in requests.reveals.iter_mut().enumerate() {
+            r.target = match r.target {
+                _ if n >= 64 || self.present >> n & 1 == 1 => Target::Seen,
+                Target::Seen => Target::Lost,
+                // Unseen again: what the last frame's end counted stands.
+                t => t,
+            };
+        }
+        Effects::none()
+    }
+}
+
 impl<G, A, M, L> Transition for Finish<G, A, M, L>
 where G: Fn(&str) -> bool, A: Fn(&str) -> bool, M: Fn(&Reveal) -> bool, L: Fn(&Reveal) -> bool {
     fn apply(self, requests: &mut Requests) -> Effects<Effect> {
@@ -198,8 +217,9 @@ where G: Fn(&str) -> bool, A: Fn(&str) -> bool, M: Fn(&Reveal) -> bool, L: Fn(&R
         requests.reveals.retain_mut(|r| {
             if !gliding(&r.viewport) { return animating(&r.viewport) && mounted(r); }
             r.target = match r.target {
-                _ if mounted(r) || listed(r) => Target::Seen,
-                Target::Seen => Target::Missed,
+                Target::Seen => Target::Seen,
+                _ if listed(r) => Target::Seen,
+                Target::Lost => Target::Missed,
                 Target::Missed => {
                     effects.push(Effect::Stop(r.viewport.clone()));
                     return false;
