@@ -5,289 +5,14 @@
 use super::*;
 use std::{cell::RefCell, collections::BTreeSet, rc::Rc, sync::LazyLock, thread::ThreadId};
 
-fn other_thread() -> ThreadId { std::thread::spawn(|| std::thread::current().id()).join().unwrap() }
-
-fn address(wake: &Waker) -> usize { Arc::as_ptr(wake) as *const () as usize }
 
 /// The sequences of `length` letters drawn from `0..letters`, each passed to `run`.
-fn every_sequence(letters: usize, length: u32, mut run: impl FnMut(&[usize])) {
+pub(super) fn every_sequence(letters: usize, length: u32, mut run: impl FnMut(&[usize])) {
     let mut sequence = vec![0; length as usize];
     for code in 0..letters.pow(length) {
         let mut rest = code;
         for letter in &mut sequence { *letter = rest % letters; rest /= letters; }
         run(&sequence);
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-enum Outcome {
-    Attached,
-    /// The attach replaced this engine, whose teardown is now running.
-    Replacing { engine: u32 },
-    Refused,
-    Ran { engine: u32, wake: usize },
-    Queued { wake: usize },
-    Drained { ran: Vec<u32>, dropped: Vec<u32> },
-    Closed { jobs: Vec<u32>, engine: Option<u32> },
-    /// Parked behind a running teardown, to finish when it does.
-    Blocked,
-    /// That thread is inside a teardown or parked, so it can't do anything else.
-    Skipped,
-}
-
-enum Op { Attach(Waker, u32), Call(u32), Drain, Close, ReleaseEngine }
-
-/// Teardowns still running, oldest first, each with the wake of the attach it holds up, and the
-/// operations parked behind them.
-#[derive(Default)]
-struct Schedule { teardowns: Vec<(ThreadId, Option<Waker>)>, parked: Vec<(ThreadId, Op)> }
-
-impl Schedule {
-    fn busy(&self, thread: ThreadId) -> bool {
-        self.teardowns.iter().any(|(t, _)| *t == thread) || self.parked.iter().any(|(t, _)| *t == thread)
-    }
-
-    fn view(&self) -> (Vec<ThreadId>, Vec<ThreadId>) {
-        (self.teardowns.iter().map(|(t, _)| *t).collect(), self.parked.iter().map(|(t, _)| *t).collect())
-    }
-}
-
-/// Who owns the service, its wake, its waiting jobs, the Linux engine and the per-thread ones.
-type RouteView = (Option<ThreadId>, Option<usize>, Vec<u32>, Option<u32>, Vec<(ThreadId, u32)>);
-
-fn sorted(engines: &HashMap<ThreadId, u32>) -> Vec<(ThreadId, u32)> {
-    let mut engines: Vec<_> = engines.iter().map(|(thread, engine)| (*thread, *engine)).collect();
-    engines.sort_by_key(|(_, engine)| *engine);
-    engines
-}
-
-/// One side of the comparison, split where the real code can block.
-trait Model {
-    fn schedule(&mut self) -> &mut Schedule;
-    fn attach(&mut self, thread: ThreadId, wake: Waker, engine: u32) -> Outcome;
-    /// The routing half of an attach, which runs once any replaced engine is gone.
-    fn finish_attach(&mut self, thread: ThreadId, wake: Waker);
-    fn call(&mut self, thread: ThreadId, job: u32) -> Outcome;
-    fn drain(&mut self, thread: ThreadId) -> Outcome;
-    fn close(&mut self, thread: ThreadId) -> Outcome;
-    /// The engine half of a close on Linux.
-    fn release_engine(&mut self, thread: ThreadId) -> Outcome;
-    fn view(&self) -> RouteView;
-}
-
-fn perform(model: &mut impl Model, thread: ThreadId, op: Op) -> Outcome {
-    match op {
-        Op::Attach(wake, engine) => model.attach(thread, wake, engine),
-        Op::Call(job) => model.call(thread, job),
-        Op::Drain => model.drain(thread),
-        Op::Close => model.close(thread),
-        Op::ReleaseEngine => model.release_engine(thread),
-    }
-}
-
-/// The oldest teardown ends. A parked caller holds the routing lock, so it runs before the
-/// attach that teardown held up can finish.
-fn finish_teardown(model: &mut impl Model) -> Vec<Outcome> {
-    let schedule = model.schedule();
-    if schedule.teardowns.is_empty() { return vec![Outcome::Skipped]; }
-    let (thread, attaching) = schedule.teardowns.remove(0);
-    let (calls, others): (Vec<_>, Vec<_>) = std::mem::take(&mut schedule.parked).into_iter().partition(|(_, op)| matches!(op, Op::Call(_)));
-    let mut outcomes: Vec<_> = calls.into_iter().map(|(thread, op)| perform(model, thread, op)).collect();
-    if let Some(wake) = attaching { model.finish_attach(thread, wake); }
-    outcomes.extend(others.into_iter().map(|(thread, op)| perform(model, thread, op)));
-    outcomes
-}
-
-// The routing as it was: Routing's fields, the Linux engine slot and the thread-local engines,
-// with the current thread passed in and a job as a number. A running teardown on Linux holds
-// the slot's lock.
-#[derive(Default)]
-struct OldRouting { owner: Option<ThreadId>, wake: Option<Waker>, jobs: Vec<u32> }
-
-#[derive(Default)]
-struct OldControl { routing: OldRouting, engine: Option<u32>, engines: HashMap<ThreadId, u32>, linux: bool, schedule: Schedule }
-
-impl OldControl {
-    fn slot_locked(&self) -> bool { self.linux && !self.schedule.teardowns.is_empty() }
-}
-
-impl Model for OldControl {
-    fn schedule(&mut self) -> &mut Schedule { &mut self.schedule }
-
-    fn attach(&mut self, thread: ThreadId, wake: Waker, engine: u32) -> Outcome {
-        if self.slot_locked() { self.schedule.parked.push((thread, Op::Attach(wake, engine))); return Outcome::Blocked; }
-        let replaced = if self.linux { self.engine.replace(engine) } else { self.engines.insert(thread, engine) };
-        if let Some(engine) = replaced {
-            self.schedule.teardowns.push((thread, Some(wake)));
-            return Outcome::Replacing { engine };
-        }
-        self.finish_attach(thread, wake);
-        Outcome::Attached
-    }
-
-    fn finish_attach(&mut self, thread: ThreadId, wake: Waker) {
-        self.routing.owner = Some(thread);
-        self.routing.wake = Some(wake);
-    }
-
-    fn call(&mut self, thread: ThreadId, job: u32) -> Outcome {
-        if self.linux {
-            if self.routing.owner.is_none() { return Outcome::Refused; }
-            if self.slot_locked() { self.schedule.parked.push((thread, Op::Call(job))); return Outcome::Blocked; }
-            let Some(engine) = self.engine else { return Outcome::Refused };
-            let wake = self.routing.wake.clone();
-            return Outcome::Ran { engine, wake: address(&wake.unwrap()) };
-        }
-        let route = &mut self.routing;
-        let Some(owner) = route.owner else { return Outcome::Refused };
-        if owner == thread {
-            let wake = route.wake.clone();
-            let Some(engine) = self.engines.get(&thread).copied() else { return Outcome::Refused };
-            return Outcome::Ran { engine, wake: address(&wake.unwrap()) };
-        }
-        route.jobs.push(job);
-        let wake = route.wake.clone();
-        Outcome::Queued { wake: address(&wake.unwrap()) }
-    }
-
-    fn drain(&mut self, thread: ThreadId) -> Outcome {
-        if self.linux { return Outcome::Drained { ran: vec![], dropped: vec![] }; }
-        let jobs = std::mem::take(&mut self.routing.jobs);
-        if self.engines.contains_key(&thread) { Outcome::Drained { ran: jobs, dropped: vec![] } } else { Outcome::Drained { ran: vec![], dropped: jobs } }
-    }
-
-    fn close(&mut self, thread: ThreadId) -> Outcome {
-        let route = std::mem::take(&mut self.routing);
-        if self.linux {
-            if self.slot_locked() { self.schedule.parked.push((thread, Op::ReleaseEngine)); return Outcome::Blocked; }
-            return self.release_engine(thread);
-        }
-        let engine = self.engines.remove(&thread);
-        if engine.is_some() { self.schedule.teardowns.push((thread, None)); }
-        Outcome::Closed { jobs: route.jobs, engine }
-    }
-
-    fn release_engine(&mut self, thread: ThreadId) -> Outcome {
-        if self.slot_locked() { self.schedule.parked.push((thread, Op::ReleaseEngine)); return Outcome::Blocked; }
-        let engine = self.engine.take();
-        if engine.is_some() { self.schedule.teardowns.push((thread, None)); }
-        Outcome::Closed { jobs: vec![], engine }
-    }
-
-    fn view(&self) -> RouteView {
-        (self.routing.owner, self.routing.wake.as_ref().map(address), self.routing.jobs.clone(), self.engine, sorted(&self.engines))
-    }
-}
-
-/// The machine with the glue `Guard` and `Control` wrap around it.
-struct NewControl { attachment: Attachment<u32>, engine: Option<u32>, engines: HashMap<ThreadId, u32>, linux: bool, schedule: Schedule }
-
-impl NewControl {
-    fn slot_locked(&self) -> bool { self.linux && !self.schedule.teardowns.is_empty() }
-}
-
-impl Model for NewControl {
-    fn schedule(&mut self) -> &mut Schedule { &mut self.schedule }
-
-    fn attach(&mut self, thread: ThreadId, wake: Waker, engine: u32) -> Outcome {
-        if self.slot_locked() { self.schedule.parked.push((thread, Op::Attach(wake, engine))); return Outcome::Blocked; }
-        let replaced = if self.linux { self.engine.replace(engine) } else { self.engines.insert(thread, engine) };
-        if let Some(engine) = replaced {
-            self.schedule.teardowns.push((thread, Some(wake)));
-            return Outcome::Replacing { engine };
-        }
-        self.finish_attach(thread, wake);
-        Outcome::Attached
-    }
-
-    fn finish_attach(&mut self, thread: ThreadId, wake: Waker) {
-        assert!(step_attachment(&mut self.attachment, AttachEvent::Attach { owner: thread, wake }).is_empty());
-    }
-
-    fn call(&mut self, thread: ThreadId, job: u32) -> Outcome {
-        match step_attachment(&mut self.attachment, AttachEvent::Call { from: thread, shared: self.linux }).into_iter().next() {
-            Some(AttachEffect::Run { wake }) => {
-                if self.slot_locked() { self.schedule.parked.push((thread, Op::Call(job))); return Outcome::Blocked; }
-                let engine = if self.linux { self.engine } else { self.engines.get(&thread).copied() };
-                engine.map_or(Outcome::Refused, |engine| Outcome::Ran { engine, wake: address(&wake) })
-            }
-            Some(AttachEffect::Wait) => match step_attachment(&mut self.attachment, AttachEvent::Post(job)).into_iter().next() {
-                Some(AttachEffect::Wake(wake)) => Outcome::Queued { wake: address(&wake) },
-                _ => panic!("a posted job wakes the owner"),
-            },
-            _ => Outcome::Refused,
-        }
-    }
-
-    fn drain(&mut self, thread: ThreadId) -> Outcome {
-        if self.linux { return Outcome::Drained { ran: vec![], dropped: vec![] }; }
-        let Some(AttachEffect::Jobs(jobs)) = step_attachment(&mut self.attachment, AttachEvent::Drain).into_iter().next() else {
-            return Outcome::Drained { ran: vec![], dropped: vec![] };
-        };
-        if self.engines.contains_key(&thread) { Outcome::Drained { ran: jobs, dropped: vec![] } } else { Outcome::Drained { ran: vec![], dropped: jobs } }
-    }
-
-    fn close(&mut self, thread: ThreadId) -> Outcome {
-        let mut released = vec![];
-        for effect in step_attachment(&mut self.attachment, AttachEvent::Close) {
-            if let AttachEffect::Release(jobs) = effect { released = jobs; }
-        }
-        if self.linux { return self.release_engine(thread); }
-        let engine = self.engines.remove(&thread);
-        if engine.is_some() { self.schedule.teardowns.push((thread, None)); }
-        Outcome::Closed { jobs: released, engine }
-    }
-
-    fn release_engine(&mut self, thread: ThreadId) -> Outcome {
-        if self.slot_locked() { self.schedule.parked.push((thread, Op::ReleaseEngine)); return Outcome::Blocked; }
-        let engine = self.engine.take();
-        if engine.is_some() { self.schedule.teardowns.push((thread, None)); }
-        Outcome::Closed { jobs: vec![], engine }
-    }
-
-    fn view(&self) -> RouteView {
-        let engines = sorted(&self.engines);
-        match &self.attachment {
-            Attachment::Attached { owner, wake, jobs } => (Some(*owner), Some(address(wake)), jobs.clone(), self.engine, engines),
-            Attachment::Detached | Attachment::Closed => (None, None, vec![], self.engine, engines),
-        }
-    }
-}
-
-/// Letters 0..8 are Attach, Call, Drain and Close from either thread; 8 ends the oldest teardown.
-fn play(model: &mut impl Model, letter: usize, threads: &[ThreadId; 2], wakes: &[Waker; 2], number: u32) -> Vec<Outcome> {
-    if letter == 8 { return finish_teardown(model); }
-    let thread = threads[letter % 2];
-    if model.schedule().busy(thread) { return vec![Outcome::Skipped]; }
-    let op = match letter / 2 {
-        0 => Op::Attach(wakes[letter % 2].clone(), number),
-        1 => Op::Call(number),
-        2 => Op::Drain,
-        _ => Op::Close,
-    };
-    vec![perform(model, thread, op)]
-}
-
-#[test]
-fn every_attachment_sequence_matches_the_old_routing() {
-    let threads = [std::thread::current().id(), other_thread()];
-    let wakes: [Waker; 2] = [Arc::new(|| {}), Arc::new(|| { let _ = 1; })];
-    for linux in [false, true] {
-        every_sequence(9, 6, |sequence| {
-            let mut old = OldControl { linux, ..OldControl::default() };
-            let mut new = NewControl { attachment: Attachment::Detached, engine: None, engines: HashMap::new(), linux, schedule: Schedule::default() };
-            for (n, letter) in sequence.iter().enumerate() {
-                let number = n as u32 + 1;
-                let expected = play(&mut old, *letter, &threads, &wakes, number);
-                let actual = play(&mut new, *letter, &threads, &wakes, number);
-                assert_eq!(actual, expected, "linux {linux}, {sequence:?} at {n}");
-                assert_eq!(new.view(), old.view(), "linux {linux}, {sequence:?} at {n}");
-                assert_eq!(new.schedule.view(), old.schedule.view(), "linux {linux}, {sequence:?} at {n}");
-                if linux && actual.iter().any(|outcome| matches!(outcome, Outcome::Ran { .. })) {
-                    assert!(new.schedule.teardowns.is_empty(), "a call reached an engine during a teardown: {sequence:?} at {n}");
-                }
-            }
-        });
     }
 }
 
@@ -463,15 +188,17 @@ fn new_view(engine: &Engine) -> EngineView {
 }
 
 /// The backend notes in order. The one approved difference: a native now closes before its last
-/// claim goes. Returns whether the departure was seen.
-fn assert_notes(old: &[Note], new: &[Note], at: &str) -> bool {
+/// claim goes, so a close reports dev's claims plus exactly the chord it just retired. Every other
+/// close matches dev exactly. Returns whether the departure was seen.
+fn assert_notes(old: &[Note], new: &[Note], at: &str, retiring: Option<u32>) -> bool {
     assert_eq!(new.len(), old.len(), "{at}");
     let mut departed = false;
     for (n, (new, old)) in new.iter().zip(old).enumerate() {
         // differs from dev: a closing backend still holds the claim of the chord it retired for.
         if let (Note::Closed(new), Note::Closed(old)) = (new, old) {
-            assert!(new == old || (new.len() == old.len() + 1 && old.iter().all(|id| new.contains(id))),
-                "{at} note {n}: expected dev's claims, or exactly one more for the retired chord: {new:?} vs {old:?}");
+            let mut expected = old.clone();
+            if let Some(id) = retiring { if !expected.contains(&id) { expected.push(id); expected.sort(); } }
+            assert_eq!(new, &expected, "{at} note {n}: a close must report dev's claims, plus only the chord it retired");
             departed |= new != old;
             continue;
         }
@@ -519,6 +246,9 @@ fn run_engines(start: Start, sequence: &[usize]) -> bool {
         };
         let at = || format!("{start:?} {sequence:?} at {n}");
         assert_eq!(actual, expected, "{}", at());
+        // The chord this event retired, if it did, so a close can only report that one extra claim.
+        let retiring = match letter { 4 | 6 => Some(held_x), 5 => Some(held_y), _ => None }
+            .filter(|_| expected.is_ok()).map(|id| id.0);
         assert_eq!(new_view(&new), old_view(&old), "{}", at());
         assert_eq!(new_view(&new_other), old_view(&old_other), "{}", at());
         assert_eq!(claims(&NATIVE), claims(&OLD_NATIVE), "{}", at());
@@ -526,13 +256,18 @@ fn run_engines(start: Start, sequence: &[usize]) -> bool {
             assert_eq!(new.owner(chord), old.owner(chord), "{}", at());
             assert_eq!(new.bindings.find(chord).is_some(), old.registrations.values().any(|s| s == chord), "{}", at());
         }
-        RIG.with(|rig| { let rig = rig.borrow(); departed |= assert_notes(&rig.old, &rig.new, &at()); });
+        RIG.with(|rig| {
+            let mut rig = rig.borrow_mut();
+            departed |= assert_notes(&rig.old, &rig.new, &at(), retiring);
+            rig.new.clear();
+            rig.old.clear();
+        });
     }
     drop(old); drop(new); drop(old_other); drop(new_other);
     assert!(claims(&NATIVE).is_empty() && claims(&OLD_NATIVE).is_empty(), "{start:?} {sequence:?}");
     RIG.with(|rig| {
         let mut rig = rig.borrow_mut();
-        departed |= assert_notes(&rig.old, &rig.new, &format!("teardown of {start:?} {sequence:?}"));
+        departed |= assert_notes(&rig.old, &rig.new, &format!("teardown of {start:?} {sequence:?}"), None);
         rig.new.clear();
         rig.old.clear();
     });
@@ -864,10 +599,18 @@ fn overlap_dev_trace(sequence: &[usize], found: &mut BTreeSet<&'static str>) -> 
 /// checked, so a later event that differs for another reason still fails the walk. differs from
 /// dev: a call lets go of its engine before its wake, so dev alone still holds the claims of an
 /// engine nothing but that call keeps, and every registration those claims refused.
-fn approved_difference(dev: &OverlapView, want: &OverlapView, target: Option<u32>, departed: &mut BTreeSet<u32>, sequence: &[usize], n: usize) -> Option<&'static str> {
+fn approved_difference(dev: &OverlapView, want: &OverlapView, target: Option<u32>, registering: bool, departed: &mut BTreeSet<u32>, sequence: &[usize], n: usize) -> Option<&'static str> {
     if dev == want { return None; }
     let at = format!("{sequence:?} at {n}\ndev {dev:?}\nwant {want:?}");
     assert_eq!((want.1, want.2), (dev.1, dev.2), "the hosts agree: {at}");
+    // An event that did nothing, stopped in its wake, or parked is not an answer, and must keep
+    // its exact kind: only the answers may move under the departure.
+    // An event that did nothing, stopped in its wake, or parked is not an answer, and must keep
+    // its exact kind: only the answers may move under the departure.
+    match (&dev.0, &want.0) {
+        (Seen::Answer(_), Seen::Answer(_)) => {}
+        (before, after) => assert_eq!(before, after, "an event kind changed for another reason: {at}"),
+    }
     let answer = |view: &OverlapView| match &view.0 { Seen::Answer(answer) => Some(answer.clone()), _ => None };
     let (before, after) = (answer(dev), answer(want));
     let mut allowed: BTreeSet<u32> = departed.iter().copied().chain(dev.6.iter().copied()).collect();
@@ -885,7 +628,16 @@ fn approved_difference(dev: &OverlapView, want: &OverlapView, target: Option<u32
         }
         assert!(succeeded || backend || occupied, "an answer changed for another reason: {before:?} -> {after:?} in {at}");
         if succeeded {
-            departed.insert(target.expect("a call that succeeded where dev refused has an id"));
+            let id = target.expect("a call that succeeded where dev refused has an id");
+            if registering {
+                // Only the claim a call still held in its wake can refuse dev's registration.
+                assert!(!dev.6.is_empty(), "a registration succeeded with no wake-held claim: {at}");
+                departed.insert(id);
+            } else {
+                // An unregister can only succeed where dev lacked the chord if the departure
+                // registered it on an earlier event.
+                assert!(departed.contains(&id), "an unregister succeeded where dev never had the chord: {at}");
+            }
         }
     }
     let aside = |dev: &[u32], want: &[u32]| {
@@ -911,12 +663,16 @@ fn overlap_replay(sequence: &[usize], found: &mut BTreeSet<&'static str>, fired:
     let (mut moved, mut departed) = (false, BTreeSet::new());
     for (n, letter) in sequence.iter().enumerate() {
         assert_eq!(new.0.next, reference.stage.next, "{sequence:?} at {n}");
-        let target = match letter {
-            4 => Some(new.0.next + 1),
-            5 => new.0.latest,
-            9 | 10 => new.0.waiting.as_ref().map(|(_, waiter)| match waiter { Waiter::Register(id) | Waiter::Unregister(id) => *id }),
-            11 => new.0.first,
-            _ => None,
+        let (target, registering) = match letter {
+            4 => (Some(new.0.next + 1), true),
+            5 => (new.0.latest, false),
+            9 | 10 => match new.0.waiting.as_ref().map(|(_, waiter)| *waiter) {
+                Some(Waiter::Register(id)) => (Some(id), true),
+                Some(Waiter::Unregister(id)) => (Some(id), false),
+                None => (None, false),
+            },
+            11 => (new.0.first, false),
+            _ => (None, false),
         };
         let expected = overlap_play(&mut reference, *letter);
         let actual = overlap_play(&mut new, *letter);
@@ -925,7 +681,7 @@ fn overlap_replay(sequence: &[usize], found: &mut BTreeSet<&'static str>, fired:
         assert!(new.0.broken.is_empty(), "{:?}: {sequence:?} at {n}", new.0.broken);
         let want = overlap_view(&reference, expected);
         assert_eq!(overlap_view(&new, actual), want, "{sequence:?} at {n}");
-        if let Some(departure) = approved_difference(&dev[n], &want, target, &mut departed, sequence, n) {
+        if let Some(departure) = approved_difference(&dev[n], &want, target, registering, &mut departed, sequence, n) {
             fired.insert(departure);
         }
     }
@@ -985,6 +741,15 @@ fn a_parked_unregister_finishes_on_the_engine_it_captured_and_the_successor_forg
     drop(dev);
     drop(new);
     clear_notes();
+}
+
+#[test]
+fn a_walk_difference_needs_the_marked_departure() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    let view = |seen| (seen, true, [false, false], vec![], vec![], vec![], vec![]);
+    let rejected = |dev: OverlapView, want: OverlapView, registering| catch_unwind(AssertUnwindSafe(|| approved_difference(&dev, &want, Some(7), registering, &mut BTreeSet::new(), &[], 0))).is_err();
+    assert!(rejected(view(Seen::Done), view(Seen::Parked), false), "a parked event is not a completed one");
+    assert!(rejected(view(Seen::Answer(Err(ShortcutError::Conflict))), view(Seen::Answer(Ok(()))), true), "a registration with no wake-held claim is not the departure");
 }
 
 #[test]

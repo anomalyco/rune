@@ -149,12 +149,12 @@ impl Drop for Engine {
 }
 
 impl Control {
-    fn invoke<T: Send + 'static>(&self, f: impl FnOnce(&mut Engine) -> Result<T, ShortcutError> + Send + 'static) -> Result<T, ShortcutError> {
-        self.invoke_stamped(None, f)
+    fn call<T: Send + 'static>(&self, f: impl FnOnce(&mut Engine) -> Result<T, ShortcutError> + Send + 'static) -> Result<T, ShortcutError> {
+        self.call_stamped(None, f)
     }
 
     /// Runs a call, stamping it with the latest host while routing can't change.
-    fn invoke_stamped<T: Send + 'static>(&self, stamp: Option<Stamp>, f: impl FnOnce(&mut Engine) -> Result<T, ShortcutError> + Send + 'static) -> Result<T, ShortcutError> {
+    fn call_stamped<T: Send + 'static>(&self, stamp: Option<Stamp>, f: impl FnOnce(&mut Engine) -> Result<T, ShortcutError> + Send + 'static) -> Result<T, ShortcutError> {
         let mut route = self.attachment.lock().unwrap();
         let call = AttachEvent::Call { from: std::thread::current().id(), shared: cfg!(target_os = "linux") };
         let effect = step_attachment(&mut route, call).into_iter().next();
@@ -162,9 +162,10 @@ impl Control {
         #[cfg(target_os = "linux")]
         {
             let Some(AttachEffect::Run { .. }) = effect else { return Err(ShortcutError::NotRunning) };
-            // differs from dev: the wake belongs to the engine's slot, not to routing. A host
-            // can install its engine before it takes routing, so the caller below may reach a
-            // newer engine than the one routing still names.
+            // differs from dev: the routing wake only gates the call; the slot's host is woken.
+            // Letting routing's copy go here means a host the call no longer reaches isn't kept
+            // alive through another host's callback.
+            drop(effect);
             let (shared, wake) = {
                 let slot = self.engine.lock().unwrap();
                 let slot = slot.as_ref().ok_or(ShortcutError::NotRunning)?;
@@ -212,7 +213,7 @@ impl<S: 'static> Hub<S> {
             .map(ShortcutId).map_err(|_| ShortcutError::Backend("shortcut id space exhausted".into()))?;
         let stamp = Stamp::default();
         self.handlers.lock().unwrap().insert(id, (stamp.clone(), handler));
-        if let Err(e) = self.control.invoke_stamped(Some(stamp), move |engine| engine.register(id, shortcut)) {
+        if let Err(e) = self.control.call_stamped(Some(stamp), move |engine| engine.register(id, shortcut)) {
             self.handlers.lock().unwrap().remove(&id);
             return Err(e);
         }
@@ -221,7 +222,7 @@ impl<S: 'static> Hub<S> {
 
     pub(super) fn unregister(&self, id: ShortcutId) -> Result<(), ShortcutError> {
         let handlers = self.handlers.clone();
-        self.control.invoke(move |engine| {
+        self.control.call(move |engine| {
             engine.unregister(id)?;
             handlers.lock().unwrap().remove(&id);
             Ok(())
@@ -236,12 +237,12 @@ impl<S: 'static> Hub<S> {
 
     pub(super) fn owner(&self, shortcut: &Shortcut) -> Option<String> {
         let shortcut = shortcut.clone();
-        self.control.invoke(move |engine| Ok(engine.owner(&shortcut))).ok().flatten()
+        self.control.call(move |engine| Ok(engine.owner(&shortcut))).ok().flatten()
     }
 
     pub(crate) fn fire(&self, shortcut: &Shortcut) -> Result<(), ShortcutError> {
         let shortcut = shortcut.clone();
-        self.control.invoke(move |engine| {
+        self.control.call(move |engine| {
             let id = engine.bindings.find(&shortcut).ok_or(ShortcutError::UnknownId)?;
             (engine.sink)(id, None);
             Ok(())
@@ -343,6 +344,8 @@ impl Drop for Guard {
 mod lifecycle_tests;
 #[cfg(test)]
 mod machine_tests;
+#[cfg(test)]
+mod routing_tests;
 #[cfg(test)]
 mod host_handler_tests;
 #[cfg(all(test, target_os = "linux"))]
@@ -470,7 +473,7 @@ mod tests {
             captured.activate(tx.activation_token().unwrap());
             *state = true;
         }).unwrap();
-        app.shared.shortcuts.control.invoke(move |engine| {
+        app.shared.shortcuts.control.call(move |engine| {
             (engine.sink)(id, Some("compositor-token".into()));
             Ok(())
         }).unwrap();
