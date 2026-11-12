@@ -205,7 +205,9 @@ impl<S: 'static> Host<S> {
     pub(super) fn cpu_side(&mut self, size: (u32, u32), display: (u32, u32)) -> Option<(Prefault, (u32, u32), CpuPainter)> {
         let capacity = (size.0.max(display.0), size.1.max(display.1));
         let dib = Dib::new(capacity.0, capacity.1)?;
+        crate::marks::mark("x.dib");
         crate::render::cpu_boot::attach_text(&mut self.rt.text.atlas);
+        crate::marks::mark("x.attach_text");
         Some((Prefault::start(dib, size.1), capacity, CpuPainter::new(painter_threads())))
     }
 
@@ -223,7 +225,9 @@ impl<S: 'static> Host<S> {
         }
         let phys = window.inner_size();
         let size = (phys.width.max(1), phys.height.max(1));
+        crate::marks::mark("x.inner_size");
         let display = window.current_monitor().map_or((0, 0), |m| (m.size().width, m.size().height));
+        crate::marks::mark("x.monitor");
         let Some((prefault, capacity, painter)) = self.cpu_side(size, display) else { return Err("no memory for the window's frame buffer".into()) };
         let half = HalfRounding::of_vendor(crate::gpu::pick::display_vendor().unwrap_or(0));
         crate::marks::mark("cpu.side");
@@ -240,8 +244,10 @@ impl<S: 'static> Host<S> {
         };
         let scale = window.scale_factor() as f32;
         self.rt.set_system_dark(crate::platform::preferences::window_dark(&window, self.args.theme.as_deref()));
+        crate::marks::mark("x.dark");
         self.rt.set_viewport((size.0 as f32 / scale, size.1 as f32 / scale), scale);
         // Reopening paints the settled state in the first frame (guarantee 8).
+        crate::marks::mark("x.viewport");
         if self.shown && !built { self.rt.settle_all(); }
         self.shown = true;
         self.life.show();
@@ -253,6 +259,7 @@ impl<S: 'static> Host<S> {
             let handle = self.native_handle.clone();
             let report = Arc::new(move |covered| handle.send(move |slot| WakeEvent::Covered(slot, covered)));
             let mode = SurfaceMode::Cpu { cpu: Cpu { buffer: Buffer::Touching(prefault, capacity), painter, half, shown: Shown::Nothing, show: Some(focus) }, job: GpuJob::Waiting };
+            crate::marks::mark("x.native_pre");
             Native { cloak, frame, _occlusion: crate::platform::win32::occlusion::Tracked::new(&window, report), mode, a11y_start }
         };
         self.win = Some(Win {
@@ -266,13 +273,14 @@ impl<S: 'static> Host<S> {
             window,
             backoff: Backoff::default(),
             hidden_pace: HiddenPace::default(),
-            cursor: crate::cursor::os::OsCursor::new(event_loop),
+            cursor: { crate::marks::mark("x.occlusion"); let c = crate::cursor::os::OsCursor::new(event_loop); crate::marks::mark("x.cursor"); c },
             alpha: None,
             timer_frame: TimerFrame::default(),
             presented: None,
             steady: Steady::Rest,
             redraw: std::cell::Cell::new(Redraw::Idle),
         });
+        crate::marks::mark("x.win");
         self.apply_placement(event_loop);
         crate::marks::mark("window.created");
         if let Some(created) = self.on_created.take() { created(self.native_handle.clone()); }

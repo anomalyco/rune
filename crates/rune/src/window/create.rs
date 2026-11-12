@@ -9,6 +9,7 @@ impl<S: 'static> Host<S> {
         // A released window reopens at the height its content reached while it was gone.
         crate::marks::mark("window.create");
         let built = self.shown && self.build_for_show();
+        crate::marks::mark("x.built");
         let size = self.args.size.unwrap_or(self.spec.size);
         let launcher = self.launcher();
         let visible = !launcher && (self.started || self.options.visible);
@@ -46,12 +47,16 @@ impl<S: 'static> Host<S> {
         // does as it lifts, so the text services' start-up follows the frame.
         #[cfg(target_os = "windows")]
         let attrs = crate::platform::app_icon::with_icon(winit::platform::windows::WindowAttributesExtWindows::with_drag_and_drop(attrs.with_visible(false).with_active(false), false));
+        crate::marks::mark("x.attrs");
         let window = Arc::new(event_loop.create_window(attrs).map_err(|e| e.to_string())?);
         crate::marks::mark("window.native");
         #[cfg(target_os = "windows")]
         crate::platform::win32::follow_suggested_rect(&window);
         #[cfg(target_os = "windows")]
+        crate::marks::mark("x.suggested");
+        #[cfg(target_os = "windows")]
         crate::platform::win32::press_point::install(&window);
+        crate::marks::mark("x.press_point");
         // Before it shows, so the title bar never appears.
         #[cfg(target_os = "windows")]
         let frame = self.titlebar.and_then(|t| crate::platform::win32::CustomFrame::install(&window, t.height()));

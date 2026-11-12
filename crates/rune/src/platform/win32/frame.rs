@@ -70,10 +70,12 @@ impl CustomFrame {
             return None;
         }
         FRAMED.with(|f| f.borrow_mut().push(hwnd as usize));
+        crate::marks::mark("x.subclassed");
         let before = client_size(hwnd);
         // SAFETY: Win32 calls on a live window this thread owns.
         unsafe {
             SetWindowPos(hwnd, std::ptr::null_mut(), 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+            crate::marks::mark("x.framechanged");
             let grown = client_size(hwnd).1 - before.1;
             let mut r = RECT { left: 0, top: 0, right: 0, bottom: 0 };
             if grown != 0 && IsZoomed(hwnd) == 0 && GetWindowRect(hwnd, &mut r) != 0 {
