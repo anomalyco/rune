@@ -79,6 +79,40 @@ impl FontMetrics {
         font_size: f32,
         variations: &[parlance::FontVariation],
     ) -> Option<Self> {
+        // A style's metrics depend on its font instance, size and variations alone; a style
+        // table asks for the same few again in every layout (Rune: vendor/parley_engine.patch).
+        #[cfg(feature = "std")]
+        {
+            type Memo = Vec<(u64, u32, fontique::Synthesis, u32, Vec<parlance::FontVariation>, Option<FontMetrics>)>;
+            std::thread_local! {
+                static MEMO: core::cell::RefCell<Memo> = const { core::cell::RefCell::new(Vec::new()) };
+            }
+            let (id, index, size) = (font.font.data.id(), font.font.index, font_size.to_bits());
+            let found = MEMO.with_borrow(|memo| {
+                memo.iter()
+                    .find(|m| m.0 == id && m.1 == index && m.2 == font.synthesis && m.3 == size && m.4 == variations)
+                    .map(|m| m.5)
+            });
+            if let Some(metrics) = found {
+                return metrics;
+            }
+            let metrics = Self::compute_from_font_instance(font, font_size, variations);
+            MEMO.with_borrow_mut(|memo| {
+                if memo.len() >= 64 {
+                    memo.remove(0);
+                }
+                memo.push((id, index, font.synthesis, size, variations.to_vec(), metrics));
+            });
+            return metrics;
+        }
+        Self::compute_from_font_instance(font, font_size, variations)
+    }
+
+    fn compute_from_font_instance(
+        font: &FontInstance,
+        font_size: f32,
+        variations: &[parlance::FontVariation],
+    ) -> Option<Self> {
         let font_ref =
             skrifa::FontRef::from_index(font.font.data.as_ref(), font.font.index).ok()?;
         let location = font_ref.axes().location(
@@ -102,7 +136,7 @@ impl FontMetrics {
         ))
     }
 
-    fn from_skrifa_metrics(metrics: &skrifa::metrics::Metrics, font_size: f32) -> Self {
+    pub(crate) fn from_skrifa_metrics(metrics: &skrifa::metrics::Metrics, font_size: f32) -> Self {
         // Default values from HarfBuzz: https://github.com/harfbuzz/harfbuzz/blob/12ee77ee00514c442bcd28f9aa9d56b708c37382/src/hb-ot-metrics.cc#L355-L372
         let fallback_decoration_size = font_size / 18.0;
 
@@ -273,6 +307,7 @@ impl ShapedText {
         font: &FontInstance,
         glyph_buffer: &harfrust::GlyphBuffer,
         normalized_coords: &[harfrust::NormalizedCoord],
+        (font_metrics, units_per_em): (FontMetrics, f32),
     ) {
         debug_assert_eq!(
             range.char_range.len(),
@@ -301,19 +336,6 @@ impl ShapedText {
                 self.fonts.push(font.clone());
                 index
             });
-
-        let metrics = {
-            let font = &self.fonts[font_index];
-            let font_ref =
-                skrifa::FontRef::from_index(font.font.data.as_ref(), font.font.index).unwrap();
-            skrifa::metrics::Metrics::new(
-                &font_ref,
-                skrifa::prelude::Size::new(options.font_size),
-                normalized_coords,
-            )
-        };
-        let units_per_em = metrics.units_per_em as f32;
-        let font_metrics = FontMetrics::from_skrifa_metrics(&metrics, options.font_size);
 
         // `HarfRust` returns glyphs in visual order, so we need to process them as such while
         // maintaining logical ordering of clusters.

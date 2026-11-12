@@ -70,8 +70,10 @@ wgpu-hal = { path = "vendor/wgpu-hal" }
 # `scripts/vendor-winit.sh <version>` when winit is bumped; apps that build Rune patch it too.
 winit = { path = "vendor/winit" }
 # parley_engine as published plus `vendor/parley_engine.patch`: UAX #9 rule L1 for a paragraph's
-# trailing whitespace and isolates (BidiTest.txt 770,241 of 770,241; 644,283 without it).
-# Re-made by `scripts/vendor-parley-engine.sh <version>` when parley is bumped; apps that build
+# trailing whitespace and isolates (BidiTest.txt 770,241 of 770,241; 644,283 without it), and
+# shaping that stops redoing work from the same inputs: an analyzer keeps the ICU segmenters it
+# made, and a run's or a style's font metrics are made once per font instance and size (14% off
+# a text's shaping, layouts identical). Re-made by `scripts/vendor-parley-engine.sh <version>` when parley is bumped; apps that build
 # Rune patch it too.
 parley_engine = { path = "vendor/parley_engine" }
 # accesskit_windows as published plus `vendor/accesskit_windows.patch`: headings and landmarks reach

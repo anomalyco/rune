@@ -9,6 +9,7 @@ use harfrust::ShapeOptions as HarfShapeOptions;
 use linebender_resource_handle::{Blob, FontData};
 use parlance::{FontFeature, FontVariation, Language};
 
+use crate::shape::shaped_text::FontMetrics;
 use crate::{
     Analysis, CharInfo, ShapedText,
     itemize::{Item, Segment, TextRange},
@@ -88,6 +89,8 @@ pub struct Shaper {
     shape_data_cache: LruCache<cache::ShapeDataKey, harfrust::ShaperData>,
     shape_instance_cache: LruCache<cache::ShapeInstanceId, harfrust::ShaperInstance>,
     shape_plan_cache: LruCache<cache::ShapePlanId, harfrust::ShapePlan>,
+    /// Each run's font metrics and units per em (Rune: vendor/parley_engine.patch).
+    run_metrics_cache: LruCache<cache::RunMetricsId, (FontMetrics, f32)>,
     unicode_buffer: Option<harfrust::UnicodeBuffer>,
     features: Vec<harfrust::Feature>,
     char_cluster: CharCluster,
@@ -100,6 +103,7 @@ impl Default for Shaper {
             shape_data_cache: LruCache::new(MAX_ENTRIES),
             shape_instance_cache: LruCache::new(MAX_ENTRIES),
             shape_plan_cache: LruCache::new(MAX_ENTRIES),
+            run_metrics_cache: LruCache::new(MAX_ENTRIES),
             unicode_buffer: Some(harfrust::UnicodeBuffer::new()),
             features: Vec::new(),
             char_cluster: CharCluster::default(),
@@ -360,6 +364,31 @@ fn shape_segment(
                 .point_size(Some(options.font_size)),
         );
 
+        // A run's metrics depend on its font instance and size alone: made once for each.
+        let metrics = *scx.run_metrics_cache.entry(
+            cache::RunMetricsKey::new(
+                cache::ShapeInstanceKey::new(
+                    font.font.data.id(),
+                    font.font.index,
+                    &font.synthesis,
+                    Some(options.variations),
+                ),
+                options.font_size,
+            ),
+            || {
+                let font_ref =
+                    skrifa::FontRef::from_index(font.font.data.as_ref(), font.font.index).unwrap();
+                let metrics = skrifa::metrics::Metrics::new(
+                    &font_ref,
+                    skrifa::prelude::Size::new(options.font_size),
+                    harf_shaper.coords(),
+                );
+                (
+                    FontMetrics::from_skrifa_metrics(&metrics, options.font_size),
+                    metrics.units_per_em as f32,
+                )
+            },
+        );
         shaped_text.push_run(
             text,
             range,
@@ -370,6 +399,7 @@ fn shape_segment(
             font,
             &glyph_buffer,
             harf_shaper.coords(),
+            metrics,
         );
 
         // Replace buffer to reuse allocation in the next run.

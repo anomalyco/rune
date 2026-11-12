@@ -2,7 +2,11 @@
 # Re-makes vendor/parley_engine: the parley_engine crate exactly as published on crates.io at
 # <version>, plus vendor/parley_engine.patch (UAX #9 rule L1 for a paragraph's trailing
 # whitespace, isolate initiators and PDIs, which parley_engine leaves at their resolved levels:
-# with it, Unicode's BidiTest.txt passes 770,241 of 770,241, without it 644,283). Run it when
+# with it, Unicode's BidiTest.txt passes 770,241 of 770,241, without it 644,283), and three caches
+# of work shaping redid from the same inputs: `Analyzer` keeps the line and word segmenters it made
+# (`analysis.rs` `Segmenters`; making one loads the ICU dictionaries), `Shaper` keeps each run's
+# font metrics per font instance and size (`run_metrics_cache`), and `FontMetrics::from_font_instance`
+# keeps a style's per thread (64 entries). Run it when
 # parley is bumped, then build: a patch that no longer applies fails here, and the change goes
 # back in by hand. If upstream parley takes the change, delete vendor/parley_engine and its
 # `[patch.crates-io]` entry instead.
