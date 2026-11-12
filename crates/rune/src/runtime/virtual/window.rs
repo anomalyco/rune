@@ -1,7 +1,7 @@
 //! Virtual lists between commits: whether a window wants moving, and which rows show.
 
 use super::*;
-use super::virtual_fill::FillEvent;
+use super::virtual_fill::{FillEffect, FillEvent};
 
 impl<S: 'static> Runtime<S> {
     pub(super) fn virtual_window_changed(&self) -> bool {
@@ -52,14 +52,51 @@ impl<S: 'static> Runtime<S> {
     pub(super) fn wants_window(&self, path: &str, v: &crate::el::virtual_list::VirtualList) -> bool {
         let Some(&i) = self.path_ids.get(path).and_then(|id| self.node_index.get(id)) else { return false };
         if self.subtree_exiting(i) { return false; }
+        let (offset, pinned) = self.window_offset(v);
+        v.needs_window(offset, pinned)
+    }
+
+    /// A list's scroll offset within its window, and whether that viewport is pinned to its end.
+    fn window_offset(&self, v: &crate::el::virtual_list::VirtualList) -> (f32, bool) {
         self.path_ids.get(&v.scroll_path).and_then(|id| self.scrolls.get(id))
-            .is_some_and(|s| v.needs_window((s.offset as f32 - v.top).max(0.0), s.pinned()))
+            .map_or((0.0, false), |s| ((s.offset as f32 - v.top).max(0.0), s.pinned()))
+    }
+
+    /// Rows an index-built list still has to mount across the lists that want a window moved;
+    /// zero when every one of them is filled.
+    fn virtual_unfilled(&self) -> usize {
+        let mut unfilled = 0;
+        for (path, v) in &self.virtuals {
+            if !v.indexed || !self.wants_window(path, v) { continue; }
+            let (offset, pinned) = self.window_offset(v);
+            unfilled += v.unfilled(offset, pinned);
+        }
+        unfilled
     }
 
     /// Whether an index-built list still mounts its overscan a little per frame, so the host
-    /// should draw another. Each such frame commits more rows; a few frames fill it.
+    /// should draw another. Each such frame commits more rows; a few frames fill it. A list
+    /// whose heights keep changing past those frames waits a few frames out and resumes, until
+    /// the unfilled range stops shrinking.
     pub(super) fn virtual_filling(&mut self) -> bool {
+        let now = self.clock;
+        // A wake that came due is this frame's own: it resumes the fill instead of counting as
+        // a frame drawn for something else.
+        if let Some(attempt) = self.virtual_fill.due(now) {
+            if !self.virtual_fill.step(FillEvent::Due { attempt, now }).is_empty() {
+                return true;
+            }
+        }
         let wanted = self.virtuals.iter().any(|(path, v)| v.indexed && self.wants_window(path, v));
-        !self.virtual_fill.step(FillEvent::Frame { wanted }).is_empty()
+        // The count is only read at the bound, so a fill that finishes inside it costs none.
+        let missing = if self.virtual_fill.at_bound() { self.virtual_unfilled() } else { 0 };
+        let mut draw = false;
+        for effect in self.virtual_fill.step(FillEvent::Frame { now, wanted, missing }) {
+            match effect {
+                FillEffect::Draw => draw = true,
+                FillEffect::WakeAt(due) => self.schedule_wakes_from(due, [std::time::Duration::ZERO]),
+            }
+        }
+        draw
     }
 }

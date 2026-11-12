@@ -427,6 +427,16 @@ impl VirtualList {
         (self.range.start > 0 && offset < top + edge)
             || (self.range.end < self.keys.len() && offset + self.viewport > bottom - edge)
     }
+
+    /// How many rows of the overscan around `offset` are still unmounted: zero when the window
+    /// is filled. The fill measures this at its bound to tell a list that is still making
+    /// progress from one whose heights keep changing under it.
+    pub(crate) fn unfilled(&self, offset: f32, pinned: bool) -> usize {
+        if self.keys.is_empty() { return 0; }
+        if pinned { return self.keys.len().saturating_sub(self.range.end); }
+        let (start, end) = self.overscan(offset.min(self.max_offset()));
+        self.range.start.saturating_sub(start) + end.saturating_sub(self.range.end)
+    }
 }
 
 #[cfg(test)]

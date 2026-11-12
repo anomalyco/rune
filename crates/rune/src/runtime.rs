@@ -295,6 +295,9 @@ mod live_check_tests;
 #[cfg(test)]
 #[path = "runtime/virtual_store_tests.rs"]
 mod virtual_store_tests;
+#[cfg(test)]
+#[path = "runtime/virtual/fill_resume_tests.rs"]
+mod fill_resume_tests;
 #[path = "runtime/selection/select_all.rs"]
 mod select_all;
 #[cfg(test)]

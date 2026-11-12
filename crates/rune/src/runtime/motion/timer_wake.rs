@@ -116,7 +116,8 @@ impl<S: 'static> Runtime<S> {
         if !self.rests() { return None; }
         let stale = self.poll_alone();
         let steps = self.pending.wakes.iter().any(|d| d.is_zero());
-        Some(stale || self.window_frame.is_some() || steps)
+        // A starved fill's wake draws the frame that resumes it; the poll alone never does.
+        Some(stale || self.window_frame.is_some() || steps || self.virtual_fill.resuming(self.clock))
     }
 
     /// Whether the host asked for a frame after `resting_wake`. That frame doesn't poll again
