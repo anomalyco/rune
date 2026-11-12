@@ -797,13 +797,16 @@ pub(crate) fn serialize_html(edit: &TextEdit, range: Range<usize>) -> String {
         }
     }
 
+    let dirs = block_dirs(edit, &paras);
     let mut out = String::new();
     let mut idx = 0;
     while idx < paras.len() {
         let (_, _, block, _) = paras[idx];
         match block {
             Block::Code => {
-                out.push_str("<pre><code>");
+                out.push_str("<pre");
+                out.push_str(dirs[idx]);
+                out.push_str("><code>");
                 let mut first = true;
                 while idx < paras.len() && paras[idx].2 == Block::Code {
                     if !first {
@@ -845,13 +848,14 @@ pub(crate) fn serialize_html(edit: &TextEdit, range: Range<usize>) -> String {
                         } else {
                             *open_lists.last().unwrap_or(&kind)
                         };
-                        match k {
-                            ListKind::Bullet => out.push_str("<ul>"),
-                            ListKind::Numbered => out.push_str("<ol>"),
-                        }
+                        out.push_str(if k == ListKind::Bullet { "<ul" } else { "<ol" });
+                        out.push_str(dirs[idx]);
+                        out.push('>');
                         open_lists.push(k);
                     }
-                    out.push_str("<li>");
+                    out.push_str("<li");
+                    out.push_str(dirs[idx]);
+                    out.push('>');
                     serialize_inline(edit, r.clone(), &mut out);
                     idx += 1;
                     while idx < paras.len() && paras[idx].3 && paras[idx].2 == blk {
@@ -869,7 +873,9 @@ pub(crate) fn serialize_html(edit: &TextEdit, range: Range<usize>) -> String {
                 }
             }
             Block::Quote => {
-                out.push_str("<blockquote>");
+                out.push_str("<blockquote");
+                out.push_str(dirs[idx]);
+                out.push('>');
                 serialize_inline(edit, paras[idx].1.clone(), &mut out);
                 idx += 1;
                 while idx < paras.len() && paras[idx].3 && paras[idx].2 == Block::Quote {
@@ -880,7 +886,9 @@ pub(crate) fn serialize_html(edit: &TextEdit, range: Range<usize>) -> String {
                 out.push_str("</blockquote>");
             }
             Block::Paragraph => {
-                out.push_str("<p>");
+                out.push_str("<p");
+                out.push_str(dirs[idx]);
+                out.push('>');
                 serialize_inline(edit, paras[idx].1.clone(), &mut out);
                 idx += 1;
                 while idx < paras.len() && paras[idx].3 && paras[idx].2 == Block::Paragraph {
@@ -893,6 +901,35 @@ pub(crate) fn serialize_html(edit: &TextEdit, range: Range<usize>) -> String {
         }
     }
     out
+}
+
+/// Each copied block's ` dir` attribute, by `paras` index: the direction the field showed it in
+/// (its first strong character's, else the paragraph before it's, or the one Ctrl+Shift set),
+/// and code left to right. Word, Mail and browsers then lay a right-to-left copy out as it was
+/// shown. A copy with no right-to-left block has none, so it is as it always was.
+fn block_dirs(edit: &TextEdit, paras: &[(usize, Range<usize>, Block, bool)]) -> Vec<&'static str> {
+    use crate::el::{Direction, Flow};
+    let forced = edit.forced_dir().map(|f| if f == Flow::Rtl { Direction::Rtl } else { Direction::Ltr });
+    let mut last = None;
+    let shown: Vec<Option<Direction>> = edit
+        .paragraphs()
+        .iter()
+        .map(|p| {
+            last = forced.or_else(|| Direction::of(&edit.text[p.range.clone()])).or(last);
+            last
+        })
+        .collect();
+    let at = |i: usize| shown.get(i).copied().flatten();
+    let rtl = paras.iter().any(|p| p.2 != Block::Code && at(p.0) == Some(Direction::Rtl));
+    paras
+        .iter()
+        .map(|p| match (p.2, at(p.0)) {
+            _ if !rtl => "",
+            (Block::Code, _) | (_, Some(Direction::Ltr)) => " dir=\"ltr\"",
+            (_, Some(Direction::Rtl)) => " dir=\"rtl\"",
+            _ => "",
+        })
+        .collect()
 }
 
 /// Serializes inline marks within `range` (a single line/paragraph slice) to HTML. A pill

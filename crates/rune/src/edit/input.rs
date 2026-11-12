@@ -348,11 +348,13 @@ impl TextEdit {
         let hidden = self.is_masked();
         let (landing, flow) = visual_in(l, self.display_index(self.focus), self.affinity, arrow, hidden)?;
         Some(match landing {
-            // Off macOS a word to the right goes on past the spaces after it where the text runs
-            // left to right, as Chromium's Ctrl+Right lands at the next word's start.
-            Landing::At(mut j, mut side) if arrow == Arrow::WordRight && !cfg!(target_os = "macos") => {
-                while super::caret_motion::space_right(l, j, side)
-                    && let Some((Landing::At(k, s), _)) = visual_in(l, j, side, Arrow::Right, hidden)
+            // Off macOS a word forward goes on past the spaces after it, as Chromium's lands at the
+            // next word's start: to the right where the text runs left to right (Ctrl+Right), to
+            // the left where it runs right to left (Ctrl+Left).
+            Landing::At(mut j, mut side) if word && !cfg!(target_os = "macos") => {
+                let step = if right { Arrow::Right } else { Arrow::Left };
+                while super::caret_motion::space_ahead(l, j, side, right)
+                    && let Some((Landing::At(k, s), _)) = visual_in(l, j, side, step, hidden)
                 {
                     (j, side) = (k, s);
                 }

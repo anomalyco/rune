@@ -68,6 +68,17 @@ pub(crate) struct ParagraphLayout {
     whole: u64,
     /// The width a selected line break highlights, as a selection across a newline shows.
     newline: f32,
+    /// What the next edit's keys start from (`Keys`): the text it laid out, when it had no
+    /// spans or pills, in the style and starting direction its keys were made in.
+    keyed: Option<Keyed>,
+}
+
+/// A plain text's content and the key inputs that aren't per paragraph, so an edit keys only the
+/// paragraphs it touched and takes the others' keys as they were.
+pub(crate) struct Keyed {
+    content: Rc<str>,
+    style_key: u64,
+    start_flow: Flow,
 }
 
 /// One paragraph: content bytes `start..end` (its newline left out), laid out at `y`.
@@ -76,6 +87,8 @@ pub(crate) struct Paragraph {
     pub(crate) end: usize,
     pub(crate) y: f32,
     pub(crate) height: f32,
+    /// Its layout's width and full width, so a later edit that keeps it reads neither from it.
+    widths: [f32; 2],
     pub(crate) flow: Flow,
     /// What its layout depends on but the width: its words, their shaping spans, its pills,
     /// block and direction, in the field's style.
@@ -540,25 +553,25 @@ impl TextSystem {
             (hash::text_hash("", &[], style, scale, None), spec.wrap_anywhere).hash(&mut h);
             h.finish()
         };
-        let mut found: Vec<(usize, usize, Flow, u64, Box<[(u32, u32)]>)> = Vec::new();
-        let mut start = 0;
-        // A paragraph with no strong character reads the way the one before it does.
-        let mut last = spec.plaintext_flow();
-        for (k, words) in content.split('\n').enumerate() {
-            let (a, b) = (start, start + words.len());
-            start = b + 1;
-            let isolates: Box<[(u32, u32)]> = spec.cold.pills.iter().filter(|p| inside(p, a, b)).map(|p| (p.start - a as u32, p.end - a as u32)).collect();
-            let flow = flow_of(words, &isolates).unwrap_or(last);
-            last = flow;
-            let mut h = hash::KeyHasher::default();
-            (words, style_key, flow == Flow::Rtl, spec.cold.blocks.get(k).copied().unwrap_or(Block::Paragraph)).hash(&mut h);
-            for s in spans_in(&spec.spans, a, b, &isolates) {
-                (s.start, s.end, s.mono, s.weight.map(f32::to_bits), s.size.map(f32::to_bits), s.italic).hash(&mut h);
+        // A plain text's edit keys only the paragraphs it touched: those before it and after it
+        // keep their keys (`reuse_keys`), so a keystroke costs its own paragraph, not the draft.
+        let plain = spec.spans.is_empty() && spec.cold.pills.is_empty() && spec.cold.blocks.iter().all(|&b| b == Block::Paragraph);
+        let start_flow = spec.plaintext_flow();
+        let reused = prev.filter(|_| plain).and_then(|p| reuse_keys(p, content, style_key, start_flow));
+        let (mut found, tail, entering) = reused.map_or((Vec::new(), Vec::new(), start_flow), |r| (r.head, r.tail, r.entering));
+        let at = found.last().map_or(0, |f| f.1 + 1);
+        match tail.first().map(|t| t.0) {
+            Some(t) => {
+                key_paragraphs(spec, style_key, at, t - 1, start_flow, &mut found);
+                // The paragraphs after the edit keep their keys if they start from the direction
+                // they were keyed in (a neutral one takes the one before it).
+                if found.last().map(|f| f.2) == Some(entering) {
+                    found.extend(tail);
+                } else {
+                    key_paragraphs(spec, style_key, t, content.len(), start_flow, &mut found);
+                }
             }
-            for p in pills_in(&spec.cold.pills, a, b, &isolates) {
-                (p.start, p.end, p.icon.is_some(), p.bare.as_ref().map(|b| (b.size.to_bits(), b.gap.to_bits()))).hash(&mut h);
-            }
-            found.push((a, b, flow, h.finish(), isolates));
+            None => key_paragraphs(spec, style_key, at, content.len(), start_flow, &mut found),
         }
         // What the edit left alone: the paragraphs before it, and those after it.
         let old = prev.map_or(&[][..], |p| p.paragraphs.as_slice());
@@ -595,15 +608,82 @@ impl TextSystem {
                     self.layout_keyed(Some(key), &text, &spans, blocks, &pills, style, scale, max_width, align, spec.wrap_anywhere, Keep::Owned, flow.base())
                 }
             };
-            let height = if a == b { layout.height().max(line) } else { layout.height() };
-            (width, full_width) = (width.max(layout.width()), full_width.max(layout.full_width()));
-            paragraphs.push(Paragraph { start: a, end: b, y: y.round() as f32, height, flow, key, isolates, layout });
+            // A paragraph kept as it was keeps its measures too: touching 2,000 layouts to read
+            // them again costs more than the edit.
+            let (height, widths) = match (kept, again) {
+                (Some(o), None) => (o.height, o.widths),
+                _ => (if a == b { layout.height().max(line) } else { layout.height() }, [layout.width(), layout.full_width()]),
+            };
+            (width, full_width) = (width.max(widths[0]), full_width.max(widths[1]));
+            paragraphs.push(Paragraph { start: a, end: b, y: y.round() as f32, height, widths, flow, key, isolates, layout });
             y += f64::from(height);
         }
         let (asc, desc) = self.primary_extents(style.family, style.weight, style.italic).unwrap_or((0.8, 0.2));
         let newline = 0.25 * (asc + desc.abs()) * style.size * scale;
-        (ParagraphLayout { paragraphs, width, full_width, height: y as f32, max_width, align, whole, newline }, fresh)
+        let keyed = plain.then(|| Keyed { content: Rc::from(content), style_key, start_flow });
+        (ParagraphLayout { paragraphs, width, full_width, height: y as f32, max_width, align, whole, newline, keyed }, fresh)
     }
+}
+
+/// A paragraph found in a field's text: its bytes, direction, key and isolated pills.
+type Found = (usize, usize, Flow, u64, Box<[(u32, u32)]>);
+
+/// Keys the paragraphs of `spec`'s content bytes `a..z` (a paragraph's start to a paragraph's
+/// end) onto `found`. A paragraph with no strong character reads the way the one before it
+/// does, the first `start_flow`.
+fn key_paragraphs(spec: &TextSpec, style_key: u64, a: usize, z: usize, start_flow: Flow, found: &mut Vec<Found>) {
+    let mut start = a;
+    for words in spec.content[a..z].split('\n') {
+        let (a, b, k) = (start, start + words.len(), found.len());
+        start = b + 1;
+        let isolates: Box<[(u32, u32)]> = spec.cold.pills.iter().filter(|p| inside(p, a, b)).map(|p| (p.start - a as u32, p.end - a as u32)).collect();
+        let flow = flow_of(words, &isolates).unwrap_or(found.last().map_or(start_flow, |f| f.2));
+        let mut h = hash::KeyHasher::default();
+        (words, style_key, flow == Flow::Rtl, spec.cold.blocks.get(k).copied().unwrap_or(Block::Paragraph)).hash(&mut h);
+        for s in spans_in(&spec.spans, a, b, &isolates) {
+            (s.start, s.end, s.mono, s.weight.map(f32::to_bits), s.size.map(f32::to_bits), s.italic).hash(&mut h);
+        }
+        for p in pills_in(&spec.cold.pills, a, b, &isolates) {
+            (p.start, p.end, p.icon.is_some(), p.bare.as_ref().map(|b| (b.size.to_bits(), b.gap.to_bits()))).hash(&mut h);
+        }
+        found.push((a, b, flow, h.finish(), isolates));
+    }
+}
+
+/// The paragraphs an edit left whole, with their keys: those before it (`head`) and after it
+/// (`tail`, moved to their new bytes), and the direction the paragraph before the tail had.
+struct Reuse {
+    head: Vec<Found>,
+    tail: Vec<Found>,
+    entering: Flow,
+}
+
+/// `prev`'s paragraphs that `content` keeps byte for byte, newline included, when `prev` was a
+/// plain text in the same style and starting direction. The edit is what lies between the
+/// texts' common start and common end.
+fn reuse_keys(prev: &ParagraphLayout, content: &str, style_key: u64, start_flow: Flow) -> Option<Reuse> {
+    let keyed = prev.keyed.as_ref().filter(|k| k.style_key == style_key && k.start_flow == start_flow)?;
+    let (old, new) = (keyed.content.as_bytes(), content.as_bytes());
+    let prefix = common(old.chunks_exact(16).zip(new.chunks_exact(16)), old.iter().zip(new));
+    let room = old.len().min(new.len()) - prefix;
+    let suffix = common(old.rchunks_exact(16).zip(new.rchunks_exact(16)), old.iter().rev().zip(new.iter().rev())).min(room);
+    let ps = &prev.paragraphs;
+    // Before the edit: its newline too. After it: the newline before it too.
+    let h = ps.partition_point(|p| p.end < prefix);
+    let t = ps.partition_point(|p| p.start + suffix <= old.len());
+    let moved = |at: usize| at + new.len() - old.len();
+    Some(Reuse {
+        head: ps[..h].iter().map(|p| (p.start, p.end, p.flow, p.key, Box::default())).collect(),
+        tail: ps[t..].iter().map(|p| (moved(p.start), moved(p.end), p.flow, p.key, Box::default())).collect(),
+        entering: t.checked_sub(1).map_or(start_flow, |i| ps[i].flow),
+    })
+}
+
+/// How many bytes two texts share from one end: compared 16 at a time (a draft's 120 KB in
+/// microseconds), then byte by byte inside the first block that differs.
+fn common<'a>(blocks: impl Iterator<Item = (&'a [u8], &'a [u8])>, bytes: impl Iterator<Item = (&'a u8, &'a u8)>) -> usize {
+    let same = blocks.take_while(|(a, b)| a == b).count() * 16;
+    same + bytes.skip(same).take_while(|(a, b)| a == b).count()
 }
 
 /// A paragraph's direction: its first strong character's outside its pills, or None with none.

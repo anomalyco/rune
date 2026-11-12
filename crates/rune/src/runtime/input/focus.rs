@@ -548,8 +548,11 @@ impl<S: 'static> Runtime<S> {
         if ev.mods.shift && !matches!(&ev.key, Key::Text(t) if !t.trim().is_empty()) { return false; }
         // A slider's keys come before its group's arrows.
         if let Some(step) = self.nodes[i].focus.step.clone() {
+            // A right-to-left slider runs from its right: Left raises it.
+            let rtl = self.nodes[i].flow == crate::el::Flow::Rtl;
             let delta = match ev.key {
-                Key::Left | Key::Down => Some(-1), Key::Right | Key::Up => Some(1),
+                Key::Left => Some(if rtl { 1 } else { -1 }), Key::Right => Some(if rtl { -1 } else { 1 }),
+                Key::Down => Some(-1), Key::Up => Some(1),
                 Key::PageDown => Some(-10), Key::PageUp => Some(10),
                 _ => None,
             };
@@ -563,8 +566,10 @@ impl<S: 'static> Runtime<S> {
         // A focused field inside a list row (an inline rename) keeps its letters and arrows.
         if self.nodes[i].input.is_none() && let Some(g) = self.group(i) {
             let vertical = VERTICAL_ROLES.contains(&self.nodes[g].role);
-            let backward = matches!(ev.key, Key::Up) || (!vertical && ev.key == Key::Left);
-            let forward = matches!(ev.key, Key::Down) || (!vertical && ev.key == Key::Right);
+            // A right-to-left row's first item is at its right: Left goes on to the next.
+            let (back, ahead) = if self.nodes[g].flow == crate::el::Flow::Rtl { (Key::Right, Key::Left) } else { (Key::Left, Key::Right) };
+            let backward = matches!(ev.key, Key::Up) || (!vertical && ev.key == back);
+            let forward = matches!(ev.key, Key::Down) || (!vertical && ev.key == ahead);
             let items: Vec<_> = (0..self.nodes.len()).filter(|&j| self.can_focus(j) && self.group(j) == Some(g)).collect();
             let pos = items.iter().position(|&j| j == i).unwrap();
             let page = matches!(ev.key, Key::PageUp | Key::PageDown) && PAGED_ROLES.contains(&self.nodes[g].role);

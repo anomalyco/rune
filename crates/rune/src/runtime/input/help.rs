@@ -513,12 +513,20 @@ impl<S: 'static> Runtime<S> {
             fade: crate::render::pack_fade([0.0; 4], NO_CLIP, NO_CLIP),
         });
         let mut top = full[1] + pad_y * s;
+        // In a right-to-left app a row reads from the right: its words, then its keycaps to their
+        // left, as the mirrored tooltip of a browser in Arabic or Hebrew does.
+        let rtl = crate::labels::rtl();
         for row in &rows {
             let mut at = full[0] + pad_x * s;
+            let words_at = if rtl { full[0] + full[2] - pad_x * s - row.tw * s } else { at };
             if row.words {
-                self.draw_tip_text(&row.layout, at_k([at, top + ((row.ch - row.th) * 0.5 * s).round()]), k, look.ink, alpha);
-                at += (row.tw + key.lead) * s;
+                // Right-to-left words align to the right of the width they broke at: back into the box.
+                let shift = if row.layout.is_rtl() { (wrap - row.keys_w).max(1.0) * s - row.layout.full_width() } else { 0.0 };
+                self.draw_tip_text(&row.layout, at_k([words_at - shift, top + ((row.ch - row.th) * 0.5 * s).round()]), k, look.ink, alpha);
+                if !rtl { at += (row.tw + key.lead) * s; }
             }
+            // Right to left, the keycaps end the lead short of the words (`keys_w` holds it).
+            if rtl { at = words_at - row.keys_w * s; }
             for (l, cw) in &row.caps {
                 let cap = [at, top + ((row.ch - key.height) * 0.5 * s).round(), cw * s, key.height * s].map(|v| v.round());
                 self.instances.push(Instance {

@@ -141,9 +141,13 @@ impl<S: 'static> Runtime<S> {
         let code = match event { PhysicalInput::Key { key, .. } => Some(key), _ => None };
         // Live-only when every handler that took the event said so (`Tx::live_only`).
         let mut live = None;
+        // Ctrl+Shift's direction chord sees every key, whoever takes it.
+        let chord = self.direction_chord(&event, tx);
+        // It changes the field, so the view builds again whatever else is live-only.
+        if chord { live = Some(false); }
         let consumed = self.offer_physical(&event, tx, &mut live);
         let modifier = self.modifier_dispatch(&event, consumed, tx, &mut live);
-        let ran = consumed || modifier | match fallback {
+        let ran = consumed || chord || modifier | match fallback {
             // A release's logical key, for `on_key_up`.
             Some(Fallback { key, base, .. }) if matches!(event, PhysicalInput::Key { pressed: false, .. }) => {
                 let mut one = Tx { physical_key: code, key_base: base, ..self.transaction() };

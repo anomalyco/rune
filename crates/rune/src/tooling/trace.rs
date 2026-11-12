@@ -359,6 +359,9 @@ pub(crate) fn tree_json<S>(rt: &Runtime<S>, real_t: f64) -> Value {
             if let Some(c) = e.caret {
                 v["caret"] = c.map(r2).to_vec().into();
             }
+            if let Some(r) = e.edit_range {
+                v["selection"] = r.to_vec().into();
+            }
             if let Some(video) = videos.get(&e.path) {
                 v["video"] = video_json(video);
             }

@@ -253,12 +253,12 @@ fn title(title: &str, editor: Option<El>, at: &Place, vertical: bool, emphasized
         return row().key("title").grow(1.0).shrink().min_w(0.0).child(hidden(label.truncate_fade_width(0.0).opacity(0.0)).instant_changes());
     }
     let wrap = row().key("title").grow(1.0).shrink().min_w(0.0);
-    // The fade ends 24 points before the link's end, clear of the slot. The title itself runs on
-    // under the slot, as Desktop's `flex-1` title runs under its mask: a title whose direction
-    // ends the other way (Latin in a right-to-left tab) starts there.
-    let faded = |label: El| label.truncate_fade_width(0.0).mr(-24.0);
+    // The fade ends 24 points before the link's end, clear of the slot, at the end of the title's
+    // own words: a Latin title in a right-to-left tab starts at its left and fades at its right,
+    // never hiding its first word under the slot (as Desktop's `flex-1` title does).
+    let faded = |label: El| label.truncate_fade_width(FADE / font.size);
     if emphasized {
-        return wrap.mr(24.0).clip_fade_linear(0.0, 0.0, FADE, 0.0).child(faded(label));
+        return wrap.mr(24.0).child(faded(label));
     }
     // At rest it fades only an overflowing title, 4 points from a horizontal tab's end. A compact
     // tab's hover hides it; a wider tab's hover shows it faded clear of the slot instead, in the
@@ -269,7 +269,7 @@ fn title(title: &str, editor: Option<El>, at: &Place, vertical: bool, emphasized
         return wrap.mr(end).child(hidden(rest.group_opacity(1.0, 0.0)));
     }
     let rest = row().key("rest").grow(1.0).shrink().min_w(0.0).mr(end).child(hidden(rest.group_opacity(1.0, 0.0)));
-    let hovered = hidden(row().key("hovered").pin(Some(0.0), Some(0.0), Some(24.0), Some(0.0)).clip_fade_linear(0.0, 0.0, FADE, 0.0)
+    let hovered = hidden(row().key("hovered").pin(Some(0.0), Some(0.0), Some(24.0), Some(0.0))
         .group_opacity(0.0, 1.0).child(faded(label)));
     wrap.child(rest).child(hovered)
 }

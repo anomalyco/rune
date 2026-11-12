@@ -9,6 +9,8 @@ impl<S: 'static> Runtime<S> {
         one.by_keys = true;
         one.focused = self.focused_key();
         if matches!(ev.key, crate::Key::Modifier { .. }) { return !repeat && self.route_modifier(ev, one); }
+        // Any other key while Ctrl and Shift are down makes them a shortcut, not a direction.
+        self.disarm_direction_chord();
         one.key_repeat = repeat;
         let shown = self.focus.keyboard() || self.focus.hovered();
         if focus::navigates(ev) { self.focus.step(focus_machine::FocusEvent::Navigated); }

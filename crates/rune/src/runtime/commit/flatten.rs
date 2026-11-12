@@ -221,6 +221,8 @@ fn prepare_text(
 ) -> (Option<u64>, bool) {
     if let Some(t) = text
         && let dir = crate::el::step_text_dir(t.dir, crate::el::TextDirEvent::Flatten(flow))
+        // A field Ctrl+Shift set reads that way, every line of it.
+        && let dir = input.and_then(|i| i.edit.forced_dir()).map_or(dir, crate::el::TextDir::Fixed)
         && t.dir != dir
     {
         t.dir = dir;

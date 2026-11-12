@@ -16,13 +16,14 @@ pub(crate) fn bare_icons(layout: &Layout<Ink>, pills: &[PillChip], scale: f32, o
             }
             let i = ((b.id & !PILL_BOX) >> 1) as usize;
             let Some((pill, bare)) = pills.get(i).and_then(|p| Some((p, p.bare.as_deref()?))) else { continue };
-            let (mut asc, mut desc) = (0.0f32, 0.0f32);
+            let (mut asc, mut desc, mut gr_x1) = (0.0f32, 0.0f32, f32::NEG_INFINITY);
             for it in line.items() {
                 if let PositionedLayoutItem::GlyphRun(gr) = it {
                     let r = gr.run().text_range();
                     if r.start < pill.end as usize && (pill.start as usize) < r.end {
                         let fm = gr.run().font_metrics();
                         (asc, desc) = (asc.max(fm.ascent), desc.max(fm.descent.abs()));
+                        gr_x1 = gr_x1.max(gr.offset() + gr.advance());
                     }
                 }
             }
@@ -31,7 +32,10 @@ pub(crate) fn bare_icons(layout: &Layout<Ink>, pills: &[PillChip], scale: f32, o
                 (asc, desc) = (px * 0.95, px * 0.25);
             }
             let y = origin[1] + m.baseline + (desc - asc) * 0.5 - px * 0.5;
-            out.push((i, [(origin[0] + b.x).round(), y.round()], px));
+            // In right-to-left text the icon's room comes after its word on screen, to its right:
+            // the icon takes that room's far side, so the gap stays between it and the word.
+            let x = if (b.x - gr_x1).abs() < 1.0 { b.x + b.width - px } else { b.x };
+            out.push((i, [(origin[0] + x).round(), y.round()], px));
         }
     }
 }

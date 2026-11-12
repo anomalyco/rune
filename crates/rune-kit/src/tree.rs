@@ -97,6 +97,8 @@ pub struct TreeModel<T> {
     /// The viewport's height in points, for Page Up and Page Down.
     viewport: f32,
     row_height: f32,
+    /// Its rows indent from the right (`Self::set_right_to_left`).
+    rtl: bool,
 }
 
 impl<T> Default for TreeModel<T> {
@@ -132,6 +134,7 @@ impl<T> TreeModel<T> {
             key: "tree".into(),
             viewport: 0.0,
             row_height: 24.0,
+            rtl: false,
         }
     }
 
@@ -147,6 +150,13 @@ impl<T> TreeModel<T> {
     pub fn multi_select(mut self, on: bool) -> Self {
         self.multi = on;
         self
+    }
+
+    /// The tree lies in a right-to-left window, its rows indenting from the right: Left opens a
+    /// folder and goes into it, Right closes it and goes to its parent, as Explorer and Finder
+    /// swap them.
+    pub fn set_right_to_left(&mut self, rtl: bool) {
+        self.rtl = rtl;
     }
 
     fn dirty(&mut self) {
@@ -585,7 +595,12 @@ impl<T> TreeModel<T> {
         }
         let at = self.cursor.map(|c| self.rows().row_of[c]).filter(|&r| r != usize::MAX);
         let page = ((self.viewport / self.row_height.max(1.0)).floor() as usize).saturating_sub(1).max(1);
-        let target = match &ev.key {
+        let key = match (&ev.key, self.rtl) {
+            (Key::Left, true) => Key::Right,
+            (Key::Right, true) => Key::Left,
+            (k, _) => k.clone(),
+        };
+        let target = match &key {
             Key::Up => Some(at.map_or(len - 1, |r| r.saturating_sub(1))),
             Key::Down => Some(at.map_or(0, |r| (r + 1).min(len - 1))),
             Key::Home => Some(0),

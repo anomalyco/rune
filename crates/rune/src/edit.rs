@@ -33,6 +33,9 @@ pub(crate) use secure::{MULTILINE_SECURE_MASK, Masking};
 use secure::LineMode;
 mod typing;
 use typing::Typing;
+mod direction_keys;
+use direction_keys::FieldDir;
+pub(crate) use direction_keys::{DirChord, step_dir_chord};
 pub(crate) use history::History;
 use history::{EditKind, EditedTag, Group};
 
@@ -73,6 +76,8 @@ pub struct TextEdit {
     /// a byte there has a place at the end of one run and at the start of the other. Arrows
     /// and presses set it; anything else puts it before the byte that follows.
     pub(crate) affinity: parley::Affinity,
+    /// The direction Ctrl+Left Shift or Ctrl+Right Shift set (`direction_keys`).
+    dir: FieldDir,
 }
 
 impl std::fmt::Debug for TextEdit {
@@ -117,6 +122,7 @@ impl std::hash::Hash for TextEdit {
         self.secure.hash(h);
         self.revealed.hash(h);
         self.is_single_line().hash(h);
+        self.dir.hash(h);
     }
 }
 
@@ -189,6 +195,7 @@ impl TextEdit {
             edited_tag: EditedTag::default(),
             column: Column::Free,
             affinity: parley::Affinity::Downstream,
+            dir: FieldDir::Natural,
         }
     }
 

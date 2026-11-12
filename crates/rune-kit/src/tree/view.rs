@@ -320,13 +320,14 @@ pub struct Tree<S, T> {
     on_open: Option<IdFn<S>>,
     style: Option<TreeStyle>,
     name: Option<String>,
+    rtl: bool,
 }
 
 impl<S: 'static, T: 'static> Tree<S, T> {
     /// `get` and `get_mut` find the model in the state; `label` names a node (rows show it, and
     /// typing jumps by it).
     pub fn new(get: fn(&S) -> &TreeModel<T>, get_mut: fn(&mut S) -> &mut TreeModel<T>, label: fn(&T) -> &str) -> Self {
-        Tree { get, get_mut, label, row: None, on_select: None, on_open: None, style: None, name: None }
+        Tree { get, get_mut, label, row: None, on_select: None, on_open: None, style: None, name: None, rtl: false }
     }
     /// What each row shows; by default its label alone.
     pub fn row(mut self, f: impl for<'a> Fn(&T, &TreeRow<'a>) -> TreeItem + 'static) -> Self {
@@ -352,10 +353,16 @@ impl<S: 'static, T: 'static> Tree<S, T> {
         self.name = Some(n.into());
         self
     }
+    /// It lies in a right-to-left window: Left opens a folder and Right closes it
+    /// ([`TreeModel::set_right_to_left`]).
+    pub fn right_to_left(mut self, on: bool) -> Self {
+        self.rtl = on;
+        self
+    }
 
     /// The tree, filling the height its parent gives it (set one with `.h(..)` or `.grow(..)`).
     pub fn build(self, s: &S, k: &Kit) -> El {
-        let Tree { get, get_mut, label, row, on_select, on_open, style, name } = self;
+        let Tree { get, get_mut, label, row, on_select, on_open, style, name, rtl } = self;
         let style = style.unwrap_or_else(|| TreeStyle::from_kit(k));
         let model = get(s);
         let count = model.visible_len();
@@ -436,6 +443,7 @@ impl<S: 'static, T: 'static> Tree<S, T> {
         root
             .on_key(move |s: &mut S, ev: &KeyEvent, tx: &mut Tx| {
                 let m = get_mut(s);
+                m.set_right_to_left(rtl);
                 let before = m.cursor;
                 let out = m.handle_key(ev, label, tx);
                 let after = m.cursor;
