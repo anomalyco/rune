@@ -68,14 +68,23 @@ fn place_in(win: &NSWindow, (x, y): (f64, f64)) {
     if PLACING.with(|p| p.replace(true)) {
         return;
     }
-    let pitch = mini.frame().origin.x - close.frame().origin.x;
+    // A right-to-left app's titlebar lays out from the right (`labels::set_direction`), as AppKit
+    // lays out a right-to-left localization's: `x` in from the right edge, Close outermost (on macOS
+    // 27 a native window's Close sits at 687-701 of 720 points, against 19-33 left to right). AppKit's
+    // own `windowTitlebarLayoutDirection` follows the localization and has no setter, so Rune places
+    // them, as it does the spot.
+    let rtl = crate::labels::rtl();
+    let pitch = (mini.frame().origin.x - close.frame().origin.x).abs();
     let mut frame = container.frame();
     frame.size.height = close.frame().size.height + 2.0 * y;
     frame.origin.y = win.frame().size.height - frame.size.height;
+    let width = parent.frame().size.width;
     unsafe {
         container.setFrame(frame);
         for (i, b) in [close, mini, zoom].iter().enumerate() {
-            b.setFrameOrigin(NSPoint::new(x + i as f64 * pitch, y));
+            let at = x + i as f64 * pitch;
+            let at = if rtl { width - at - b.frame().size.width } else { at };
+            b.setFrameOrigin(NSPoint::new(at, y));
         }
     }
     PLACING.with(|p| p.set(false));

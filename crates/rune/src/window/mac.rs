@@ -102,8 +102,20 @@ impl Drop for FullScreenWatch {
     }
 }
 
-/// The zoom button's trailing edge in window points, or 0 when the buttons don't sit over
-/// the content: full screen, a standard titlebar, or hidden buttons.
+/// Whether the traffic lights sit at the window's right: a right-to-left app's titlebar
+/// (`traffic_lights::place`).
+pub fn traffic_lights_right(window: &Window) -> bool {
+    let Some(win) = ns_window(window) else { return false };
+    let Some(close) = win.standardWindowButton(NSWindowButton::NSWindowCloseButton) else { return false };
+    // SAFETY: AppKit's own button, on the main thread.
+    let r = unsafe { close.convertRect_toView(close.bounds(), None) };
+    r.origin.x > win.frame().size.width * 0.5
+}
+
+/// How far in from their edge the traffic lights reach, in window points: the zoom button's
+/// trailing edge from the left, or its leading edge from the right where they sit at the right
+/// (`traffic_lights_right`); 0 when the buttons don't sit over the content: full screen, a
+/// standard titlebar, or hidden buttons.
 pub fn titlebar_inset(window: &Window) -> f32 {
     let Some(win) = ns_window(window) else { return 0.0 };
     let mask = win.styleMask();
@@ -116,6 +128,9 @@ pub fn titlebar_inset(window: &Window) -> f32 {
         if zoom.isHiddenOrHasHiddenAncestor() { return 0.0; }
         zoom.convertRect_toView(zoom.bounds(), None)
     };
+    if traffic_lights_right(window) {
+        return (win.frame().size.width - r.origin.x) as f32;
+    }
     (r.origin.x + r.size.width) as f32
 }
 
