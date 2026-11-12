@@ -755,6 +755,10 @@ pub struct Runtime<S: 'static> {
     pub(crate) window_resting: bool,
     /// What `update` asked of the next commit.
     pending: Tx,
+    /// Motion has a cause (`Tx::unprompted`): a commit no input in this window caused mounts and
+    /// unmounts at once. On for every window an app opens (`tooling::runtime_for`); a bare
+    /// `Runtime` keeps every commit's motion.
+    pub(crate) motion_needs_cause: bool,
     pub animating: bool,
     /// Why the last frame was animating, as [`AnimSource`] bits, for traces.
     pub(crate) anim_sources: u16,
@@ -1046,6 +1050,7 @@ impl<S: 'static> Runtime<S> {
             page: None,
             window_resting: false,
             pending: Tx::default(),
+            motion_needs_cause: false,
             animating: false,
             anim_sources: 0,
             commit_why: 0,
