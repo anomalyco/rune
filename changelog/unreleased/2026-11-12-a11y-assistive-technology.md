@@ -1,0 +1,1 @@
+- Accessibility: `Tx::assistive_technology()` says whether an assistive client is reading the window's tree, so work done only for one (what `Tx::announce` says) costs nothing without.
