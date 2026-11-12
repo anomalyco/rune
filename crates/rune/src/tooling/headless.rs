@@ -284,6 +284,7 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
                 Kind::Key(k, true) => rt.repeat_key(k.clone()),
                 Kind::Physical(event) => rt.physical_input(*event),
                 Kind::Paste(content) => rt.paste_content(content.clone()),
+                Kind::Ime(ime) => rt.ime(ime.clone()),
                 // A wheel turns as far on screen at any zoom, as Chromium's does.
                 Kind::Wheel(dx, dy) => { let z = rt.zoom(); wheel(&mut rt, (x, y), *dx / z, *dy / z) }
                 Kind::Fling(vx, vy) => { let z = rt.zoom(); fling(&mut rt, (x, y), *vx / z, *vy / z) }

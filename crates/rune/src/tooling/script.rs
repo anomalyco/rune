@@ -213,6 +213,19 @@ pub(crate) fn parse_script(list: Value) -> Vec<Ev> {
                 out.push(Ev { t, kind: Kind::SmartMagnify, pos });
             }
             "paste" => out.push(Ev { t, kind: Kind::Paste(paste_content(&e)), pos: Pos::Rel(0.0, 0.0) }),
+            // What an input method composes (`preedit`, its caret or selection as a byte range in
+            // `cursor`) or commits, as the platform's IME hands it to the focused field or caret.
+            "ime" => {
+                let ime = match (e["commit"].as_str(), e["preedit"].as_str()) {
+                    (Some(text), _) => crate::Ime::Commit(text.to_owned()),
+                    (None, Some(text)) => {
+                        let at = |i: usize| e["cursor"][i].as_u64().map(|n| n as usize);
+                        crate::Ime::Preedit(text.to_owned(), at(0).zip(at(1)))
+                    }
+                    (None, None) => die("an ime event needs a \"commit\" or a \"preedit\" (\"\" ends a composition)"),
+                };
+                out.push(Ev { t, kind: Kind::Ime(ime), pos: Pos::Rel(0.0, 0.0) });
+            }
             "scroll" => eased_input::swipe(&mut out, &e, t, pos),
             "resize" => eased_input::resize(&mut out, &e, t),
             "fling" => {

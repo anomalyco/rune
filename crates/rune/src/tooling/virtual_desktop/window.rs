@@ -325,6 +325,7 @@ impl<S: 'static> Member for Window<S> {
             Kind::Key(k, true) => rt.repeat_key(k.clone()),
             Kind::Physical(event) => rt.physical_input(*event),
             Kind::Paste(content) => rt.paste_content(content.clone()),
+            Kind::Ime(ime) => rt.ime(ime.clone()),
             Kind::Wheel(dx, dy) => crate::tooling::wheel(rt, (x, y), *dx, *dy),
             Kind::Fling(vx, vy) => crate::tooling::fling(rt, (x, y), *vx, *vy),
             Kind::Files(step) => crate::tooling::file_input(rt, step, (x, y)),

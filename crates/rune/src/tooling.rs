@@ -333,6 +333,8 @@ pub(crate) enum Kind {
     /// A key press with its physical code (`{"type": "key", "code": …}`), as a native host sends it.
     PhysicalKey(crate::PhysicalInput, KeyEvent, Option<char>),
     Paste(crate::ClipboardContent),
+    /// An input method's composition or commit.
+    Ime(crate::Ime),
     /// A wheel delta (dx, dy) in points.
     Wheel(f32, f32),
     /// A release velocity (vx, vy) in points per second.
@@ -443,6 +445,7 @@ impl Ev {
             },
             Kind::Paste(content) if content.is_rich() => ScriptEvent::PasteContent(content.clone()),
             Kind::Paste(content) => ScriptEvent::Paste(content.text().to_owned()),
+            Kind::Ime(ime) => ScriptEvent::Ime(ime.clone()),
             Kind::Wheel(0.0, dy) => pointer(PointerAction::Scroll(*dy)),
             Kind::Wheel(dx, dy) => pointer(PointerAction::ScrollXy(*dx, *dy)),
             Kind::Fling(0.0, v) => pointer(PointerAction::Fling(*v)),
