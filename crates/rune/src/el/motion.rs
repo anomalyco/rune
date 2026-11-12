@@ -204,9 +204,11 @@ impl El {
     /// Motion has a cause, in every window an app opens: an entrance or exit plays only in a commit an input in this window
     /// caused (a click, a key, a drag, a hover, a scroll). A commit nothing in the window's input
     /// asked for (a poll, a wake, data a server brought, a launch's frames after the first)
-    /// mounts and unmounts at once, rows new to a growth stack land at their height, and text it
-    /// mounts shows whole; what was already on screen keeps its motion. A handler that means
-    /// the motion anyway calls [`Tx::animated`](crate::Tx::animated).
+    /// applies as an instant one does: it mounts and unmounts at once, its layout lands (a
+    /// container that grows to fit what arrived doesn't ease), rows new to a growth stack land at
+    /// their height, and text it mounts shows whole. Motion already running keeps running, and
+    /// streaming growth and loops keep moving. A handler that means the motion anyway calls
+    /// [`Tx::animated`](crate::Tx::animated).
     pub fn transition(mut self, t: Transition) -> Self {
         self.cold_mut().transition = Some(Box::new(t));
         self
