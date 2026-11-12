@@ -793,6 +793,8 @@ impl<S: 'static> Runtime<S> {
         }
         self.finish_keeps();
         animating |= self.write_drawn_rects();
+        // A selection's edge scroll stepped: it follows the pointer over this layout, and shows.
+        if self.laid_edge_scroll() { animating |= self.build(); }
         self.report_at_bottom();
         animating |= self.report_visible_rows();
         self.report_layout();

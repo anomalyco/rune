@@ -2,9 +2,10 @@
 //! the list's top or bottom edge, as an AppKit text view autoscrolls on its periodic events: each
 //! step moves the list by an amount that grows with how far past the edge the pointer is. A step
 //! is a timer: [`step`] keeps its `Attempt` and asks for the next frame, which feeds it back as
-//! `Due`. Each step first extends the selection to the point under the pointer, over the frame
-//! that laid out the step before it, and the step that reaches the end is followed by one that
-//! only extends, so the rows the last scroll brought in are selected too. A pointer back inside,
+//! `Due`. The frame that takes a step scrolls, lays the list out, and only then extends the
+//! selection to the point under the pointer (`Laid`), painting it again if that changed it, so
+//! the selection always matches what that frame shows and nothing waits on a later step. A
+//! pointer back inside,
 //! the end of the list, a step that moved nothing (a list pinned to its bottom pulling it back),
 //! and the drag ending stop it. Each step lets go of a list stuck to its bottom before
 //! `step_scroll` can pull it back, so it leaves the bottom however small its steps are; once it
@@ -41,9 +42,9 @@ pub(in crate::runtime) enum State {
     /// Scrolling viewport `scroll`: it last stepped at `last` (clock seconds), from offset `from`
     /// when that step moved it, and steps again at `due` as attempt `attempt`.
     Running { attempt: Attempt, scroll: NodeId, last: f64, from: Option<f64>, due: f64 },
-    /// The last step reached `scroll`'s end; at `due`, once that's laid out, the selection
-    /// follows it there.
-    Landing { attempt: Attempt, scroll: NodeId, due: f64 },
+    /// This frame stepped `scroll` at `last`; once it's laid out the selection follows, and the
+    /// next step is attempt `next`, or none when this one reached the end.
+    Laying { next: Option<Attempt>, scroll: NodeId, last: f64, from: Option<f64> },
 }
 
 /// The held pointer at or past an edge of the viewport the selection is in.
@@ -67,14 +68,16 @@ pub(in crate::runtime) enum Event {
     Moved { now: f64, edge: Option<Edge> },
     /// A frame at `now` for the step asked for as `attempt`, with the pointer at `edge`.
     Due { attempt: Attempt, now: f64, edge: Option<Edge> },
+    /// The frame that stepped has laid the list out.
+    Laid,
     /// The drag ended.
     Stop,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(in crate::runtime) enum Effect {
-    /// Extend the selection to the pointer, then scroll `scroll` by `by` points.
-    Step { scroll: NodeId, by: f64 },
+    /// Scroll `scroll` by `by` points.
+    Scroll { scroll: NodeId, by: f64 },
     /// Extend the selection to the pointer.
     Extend,
     /// Wake at this clock time, when the next step is due.
@@ -97,10 +100,6 @@ pub(in crate::runtime) fn step(seq: &mut Seq, state: &mut State, event: Event) -
             }
         },
         Event::Due { attempt, now, edge } => match *state {
-            State::Landing { attempt: armed, due, .. } if armed == attempt && now >= due => {
-                *state = State::Idle;
-                Effects::one(Effect::Extend)
-            }
             State::Running { attempt: armed, scroll, last, from, due } if armed == attempt && now >= due => {
                 let Some(e) = edge.filter(|e| e.moves() && e.scroll == scroll) else {
                     *state = State::Idle;
@@ -112,19 +111,22 @@ pub(in crate::runtime) fn step(seq: &mut Seq, state: &mut State, event: Event) -
                     return Effects::none();
                 }
                 let by = f64::from(e.speed) * (now - last).clamp(0.0, MAX_STEP);
-                let attempt = seq.next();
                 // A step that reaches the end, or comes within a thousandth of a point of it,
-                // goes exactly there.
-                let (by, landing) = if e.room - by.abs() <= 1e-3 { (e.room.copysign(f64::from(e.speed)), true) } else { (by, false) };
-                *state = if landing {
-                    State::Landing { attempt, scroll, due: now }
-                } else {
-                    State::Running { attempt, scroll, last: now, from: (by != 0.0).then_some(e.offset), due: now }
-                };
-                Effects::two(Effect::Step { scroll, by }, Effect::WakeAt(now))
+                // goes exactly there, and is the last.
+                let (by, end) = if e.room - by.abs() <= 1e-3 { (e.room.copysign(f64::from(e.speed)), true) } else { (by, false) };
+                let next = (!end).then(|| seq.next());
+                *state = State::Laying { next, scroll, last: now, from: (by != 0.0).then_some(e.offset) };
+                let mut effects = Effects::one(Effect::Scroll { scroll, by });
+                if !end { effects.push(Effect::WakeAt(now)); }
+                effects
             }
             _ => Effects::none(),
         },
+        Event::Laid => {
+            let State::Laying { next, scroll, last, from } = *state else { return Effects::none() };
+            *state = next.map_or(State::Idle, |attempt| State::Running { attempt, scroll, last, from, due: last });
+            Effects::one(Effect::Extend)
+        }
         Event::Stop => {
             *state = State::Idle;
             Effects::none()
@@ -138,12 +140,13 @@ impl EdgeScroll {
     /// The attempt the next step carries, while one is asked for.
     fn attempt(&self) -> Option<Attempt> {
         match self.state {
-            State::Running { attempt, .. } | State::Landing { attempt, .. } => Some(attempt),
+            State::Running { attempt, .. } => Some(attempt),
+            State::Laying { next, .. } => next,
             State::Idle => None,
         }
     }
 
-    pub(in crate::runtime) fn running(&self) -> bool { self.attempt().is_some() }
+    pub(in crate::runtime) fn running(&self) -> bool { self.state != State::Idle }
 
 }
 
@@ -172,22 +175,31 @@ impl<S: 'static> Runtime<S> {
         self.carry_edge_scroll(effects);
     }
 
+    /// The frame that took a step has laid it out: the selection follows the pointer over that
+    /// layout, and what changed is heard. True when the selection changed, so the frame paints
+    /// again.
+    pub(in crate::runtime) fn laid_edge_scroll(&mut self) -> bool {
+        if !matches!(self.selectable.edge.state, State::Laying { .. }) { return false; }
+        let ends = |rt: &Self| rt.selectable.phase.selection().map(|s| (s.anchor, s.focus, s.far.as_ref().map(|f| f.path.clone())));
+        let before = ends(self);
+        let effects = self.selectable.edge.step(Event::Laid);
+        self.carry_edge_scroll(effects);
+        let changed = ends(self) != before;
+        if changed {
+            let heard = self.selection_changes();
+            self.queue.extend(heard);
+        }
+        changed
+    }
+
     fn carry_edge_scroll(&mut self, effects: Effects<Effect>) {
         for effect in effects {
             match effect {
-                Effect::Step { scroll, by } => {
-                    self.extend_to_pointer();
-                    self.edge_scroll_by(scroll, by);
-                }
-                Effect::Extend => self.extend_to_pointer(),
+                Effect::Scroll { scroll, by } => self.edge_scroll_by(scroll, by),
+                Effect::Extend => if let Some((x, y)) = self.pointer { self.selection_drag(x, y) },
                 Effect::WakeAt(due) => self.wake_at(due),
             }
         }
-    }
-
-    /// The selection follows the pointer over what the last frame laid out.
-    fn extend_to_pointer(&mut self) {
-        if let Some((x, y)) = self.pointer { self.selection_drag(x, y); }
     }
 
     /// Scrolls viewport `id` by `by` points, as the wheel does, except that a list stuck to its

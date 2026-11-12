@@ -218,6 +218,32 @@ fn the_last_row_a_scroll_brings_in_is_selected() {
     }
 }
 
+/// The frame whose step brings row 39 in selects it: blurring right after that frame, with no
+/// step left to take, leaves the selection at what shows.
+#[test]
+fn losing_focus_right_after_the_last_row_scrolls_in_keeps_it_selected() {
+    for (list, past) in [(VIRTUAL, 371.0), (PLAIN, 371.0), (VIRTUAL, 100.0)] {
+        let mut rt = hold_below_in(list, past);
+        let mut ticks = 0;
+        while offset(&rt) < max(&rt) {
+            rt.frame(1.0 / 60.0);
+            ticks += 1;
+            assert!(ticks < 2000, "reached the end");
+        }
+        rt.window_focus(true);
+        rt.window_focus(false);
+        assert!(!rt.selectable.edge.running() && !rt.selectable.phase.dragging());
+        assert_eq!(range(&rt), ((0, 0), (ROWS - 1, LEN)), "virtual {}, {past} past", list.virtual_rows);
+    }
+    // And midway: each frame's selection reaches the last row that frame shows.
+    let mut rt = hold_below(200.0);
+    for tick in 0..20 {
+        rt.frame(1.0 / 60.0);
+        let shown = ((offset(&rt) + f64::from(BOTTOM)) / f64::from(ROW_H)).ceil() as usize - 1;
+        assert_eq!(range(&rt).1, (shown, LEN), "tick {tick} at {}", offset(&rt));
+    }
+}
+
 #[test]
 fn at_the_end_of_the_list_it_stops_asking_for_frames() {
     let mut rt = hold_below(400.0);
@@ -307,7 +333,10 @@ fn a_stale_step_does_nothing() {
     assert_eq!(step(&mut seq, &mut state, Event::Due { attempt, now: 1.15, edge: e }), Effects::none(), "a frame before it's due");
     assert_eq!(state, held);
     let effects = step(&mut seq, &mut state, Event::Due { attempt, now: 1.25, edge: e });
-    assert_eq!(effects, Effects::two(Effect::Step { scroll: NodeId(7), by: 30.0 }, Effect::WakeAt(1.25)), "600 points a second for 50 ms");
+    assert_eq!(effects, Effects::two(Effect::Scroll { scroll: NodeId(7), by: 30.0 }, Effect::WakeAt(1.25)), "600 points a second for 50 ms");
+    assert_eq!(step(&mut seq, &mut state, Event::Due { attempt, now: 1.25, edge: e }), Effects::none(), "a step is taken once");
+    assert_eq!(step(&mut seq, &mut state, Event::Laid), Effects::one(Effect::Extend), "laid out, the selection follows");
+    assert_eq!(step(&mut seq, &mut state, Event::Laid), Effects::none());
 }
 
 #[test]
@@ -317,12 +346,12 @@ fn a_step_stops_at_the_room_left_and_a_late_frame_doesnt_jump() {
     let _ = step(&mut seq, &mut state, Event::Moved { now: 0.0, edge: up(100.0, 100.0) });
     let State::Running { attempt, .. } = state else { panic!() };
     let effects = step(&mut seq, &mut state, Event::Due { attempt, now: 1.0, edge: up(100.0, 100.0) });
-    assert_eq!(effects, Effects::two(Effect::Step { scroll: NodeId(7), by: -30.0 }, Effect::WakeAt(1.0)), "a second late steps 50 ms");
+    assert_eq!(effects, Effects::two(Effect::Scroll { scroll: NodeId(7), by: -30.0 }, Effect::WakeAt(1.0)), "a second late steps 50 ms");
+    let _ = step(&mut seq, &mut state, Event::Laid);
     let State::Running { attempt, .. } = state else { panic!() };
     let effects = step(&mut seq, &mut state, Event::Due { attempt, now: 1.05, edge: up(10.0, 10.0) });
-    assert_eq!(effects, Effects::two(Effect::Step { scroll: NodeId(7), by: -10.0 }, Effect::WakeAt(1.05)), "the last step");
-    let State::Landing { attempt, .. } = state else { panic!("{state:?}") };
-    assert_eq!(step(&mut seq, &mut state, Event::Due { attempt, now: 1.06, edge: up(0.0, 0.0) }), Effects::one(Effect::Extend), "the selection follows");
+    assert_eq!(effects, Effects::one(Effect::Scroll { scroll: NodeId(7), by: -10.0 }), "the last step asks for no other");
+    assert_eq!(step(&mut seq, &mut state, Event::Laid), Effects::one(Effect::Extend), "the selection follows it in the same frame");
     assert_eq!(state, State::Idle);
     let _ = step(&mut seq, &mut state, Event::Moved { now: 2.0, edge: up(0.0, 0.0) });
     assert_eq!(state, State::Idle, "nothing left to scroll");
@@ -337,8 +366,10 @@ fn a_step_that_moved_nothing_ends_it() {
     let _ = step(&mut seq, &mut state, Event::Moved { now: 0.0, edge: up(500.0) });
     let State::Running { attempt, .. } = state else { panic!() };
     assert_eq!(step(&mut seq, &mut state, Event::Due { attempt, now: 0.0, edge: up(500.0) }).into_iter().count(), 2, "no time: no move, and on");
+    let _ = step(&mut seq, &mut state, Event::Laid);
     let State::Running { attempt, .. } = state else { panic!() };
     let _ = step(&mut seq, &mut state, Event::Due { attempt, now: 0.01, edge: up(500.0) });
+    let _ = step(&mut seq, &mut state, Event::Laid);
     let State::Running { attempt, .. } = state else { panic!() };
     assert_eq!(step(&mut seq, &mut state, Event::Due { attempt, now: 0.02, edge: up(500.0) }), Effects::none(), "pulled back");
     assert_eq!(state, State::Idle);

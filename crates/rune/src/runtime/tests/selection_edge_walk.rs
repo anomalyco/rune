@@ -112,7 +112,7 @@ struct Run {
 
 /// differs from dev: the edge scroll, which dev doesn't have.
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum EdgeRef { Idle, Running, Landing }
+enum EdgeRef { Idle, Running }
 
 /// The selection as dev kept it (`selection_phase_virtual`'s `Dev`), the list's offset, and the
 /// edge scroll.
@@ -204,15 +204,11 @@ impl Dev {
         self.edge = if self.edge_at().is_some() { EdgeRef::Running } else { EdgeRef::Idle };
     }
 
-    /// differs from dev: a frame takes the step due, extending over the last frame's layout and
-    /// then scrolling, or after the step that reached the end, extending only.
+    /// differs from dev: a frame takes the step due, scrolling and then extending over the
+    /// list at its new offset; the step that reaches the end is the last.
     fn tick(&mut self) {
         match self.edge {
             EdgeRef::Idle => {}
-            EdgeRef::Landing => {
-                self.drag();
-                self.edge = EdgeRef::Idle;
-            }
             EdgeRef::Running => {
                 let Some((speed, room)) = self.edge_at() else {
                     self.edge = EdgeRef::Idle;
@@ -221,9 +217,9 @@ impl Dev {
                 let by = (f64::from(speed) * FRAME).clamp(-room, room);
                 let landing = room - by.abs() <= 1e-3;
                 let by = if landing { room.copysign(f64::from(speed)) } else { by };
-                self.drag();
                 self.offset = (self.offset + by).clamp(0.0, MAX);
-                self.edge = if landing { EdgeRef::Landing } else { EdgeRef::Running };
+                self.drag();
+                self.edge = if landing { EdgeRef::Idle } else { EdgeRef::Running };
             }
         }
     }
