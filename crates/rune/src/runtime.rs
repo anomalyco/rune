@@ -318,6 +318,8 @@ pub(crate) mod web_export;
 #[path = "runtime/commit/text_layout.rs"]
 mod text_layout;
 use text_layout::*;
+#[cfg(feature = "frame-profile")]
+pub(crate) use text_layout::measure_counts;
 #[path = "runtime/commit/flatten.rs"]
 mod flatten;
 use flatten::*;
