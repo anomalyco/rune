@@ -336,13 +336,20 @@ mod worker {
             let generation = super::generation();
             jobs.retain(|j| j.generation == generation);
             let words: Vec<&str> = jobs.iter().flat_map(|j| j.words.iter().map(String::as_str)).collect();
+            // A word still out draws unmarked, as a correct one does: only an answer that marks
+            // one changes what a window shows, so only that draws it again. The others are
+            // taken when the window next builds (`take_done`).
+            let mut marks = false;
             if !words.is_empty() {
                 let found = super::check_words(&words);
+                marks = found.iter().any(|(_, parts)| !parts.is_empty());
                 DONE.lock().unwrap_or_else(|e| e.into_inner()).extend(found.into_iter().map(|(w, p)| (generation, w, p)));
                 ARRIVED.fetch_add(1, Ordering::AcqRel);
             }
-            for wake in jobs.iter().filter_map(|j| j.wake.as_ref()?.upgrade()) {
-                wake.notify();
+            if marks {
+                for wake in jobs.iter().filter_map(|j| j.wake.as_ref()?.upgrade()) {
+                    wake.notify();
+                }
             }
         }
     }
