@@ -295,7 +295,7 @@ impl<T: 'static> Overlay<T> {
         crate::native_menu::adopt_standard_view();
         self.dark = window.theme().map_or_else(|| crate::platform::preferences::desktop_dark(&window).unwrap_or(true), |t| t == winit::window::Theme::Dark);
         self.rt.set_system_dark(self.dark);
-        if self.cursor.is_none() { self.cursor = Some(crate::cursor::os::OsCursor::new(event_loop)); }
+        if self.cursor.is_none() { self.cursor = Some(crate::cursor::os::OsCursor::new()); }
         // The surface first: on macOS it binds winit's view and its layer, which then move
         // into the panel.
         #[cfg(target_os = "macos")]

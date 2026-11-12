@@ -21,7 +21,7 @@ use std::time::Duration;
 use crate::time::Instant;
 
 use winit::event_loop::ActiveEventLoop;
-use winit::window::{CursorIcon, CustomCursor, Window};
+use winit::window::{CursorIcon, Window};
 
 use crate::el::Cursor;
 
@@ -33,12 +33,11 @@ pub(crate) struct OsCursor {
     /// The scale an image cursor was last made at: a window moving to a display with another
     /// scale makes it again.
     scale: f32,
-    transparent: CustomCursor,
 }
 
 impl OsCursor {
-    pub(crate) fn new(event_loop: &ActiveEventLoop) -> Self {
-        OsCursor { applied: (false, Cursor::Default), scale: 0.0, transparent: transparent(event_loop) }
+    pub(crate) fn new() -> Self {
+        OsCursor { applied: (false, Cursor::Default), scale: 0.0 }
     }
 
     /// Applies `want` while the host is `active` (the pointer is over its window or its hit
@@ -56,8 +55,9 @@ impl OsCursor {
         let Some(next) = crate::platform::macos::cursor::window_cursor(window, next) else { return };
         #[cfg(not(target_os = "macos"))]
         images::forget(window);
+        clear::forget(window);
         match next {
-            Cursor::Hidden => window.set_cursor(self.transparent.clone()),
+            Cursor::Hidden => clear::set(window),
             #[cfg(not(target_os = "macos"))]
             Cursor::Image(image) => images::set(window, image, scale),
             #[cfg(windows)]
@@ -78,21 +78,44 @@ impl OsCursor {
     }
 }
 
-/// A 1×1 clear cursor. On web it is made once per page and kept: winit makes a custom cursor
-/// asynchronously, and dropping one before it's ready leaves the browser calling a freed
+/// The 1×1 clear cursor `Cursor::Hidden` sets, one per thread, made the first time a window
+/// hides the cursor, before the loop sleeps (`make_pending`): making it takes ~1,000 µs, too
+/// long for every window's creation. On web it is kept for the page's life: winit makes a custom
+/// cursor asynchronously, and dropping one before it's ready leaves the browser calling a freed
 /// closure, as a web app unmounted just after it mounts would.
-fn transparent(event_loop: &ActiveEventLoop) -> CustomCursor {
-    let make = || {
-        let source = CustomCursor::from_rgba(vec![0u8; 4], 1, 1, 0, 0).expect("a 1x1 cursor image is valid");
-        event_loop.create_custom_cursor(source)
-    };
-    #[cfg(target_arch = "wasm32")]
-    {
-        thread_local! { static CLEAR: std::cell::OnceCell<CustomCursor> = const { std::cell::OnceCell::new() }; }
-        CLEAR.with(|clear| clear.get_or_init(make).clone())
+mod clear {
+    use std::cell::{OnceCell, RefCell};
+    use std::sync::{Arc, Weak};
+
+    use winit::event_loop::ActiveEventLoop;
+    use winit::window::{CustomCursor, Window};
+
+    thread_local! {
+        static CLEAR: OnceCell<CustomCursor> = const { OnceCell::new() };
+        static PENDING: RefCell<Vec<Weak<Window>>> = const { RefCell::new(Vec::new()) };
     }
-    #[cfg(not(target_arch = "wasm32"))]
-    make()
+
+    pub(super) fn set(window: &Arc<Window>) {
+        match CLEAR.with(|c| c.get().cloned()) {
+            Some(clear) => window.set_cursor(clear),
+            None => PENDING.with(|p| p.borrow_mut().push(Arc::downgrade(window))),
+        }
+    }
+
+    /// Drops a hide `window` asked for and no longer wants.
+    pub(super) fn forget(window: &Arc<Window>) {
+        PENDING.with(|p| p.borrow_mut().retain(|w| !std::ptr::eq(w.as_ptr(), Arc::as_ptr(window))));
+    }
+
+    pub(super) fn make_pending(event_loop: &ActiveEventLoop) {
+        let waiting = PENDING.with(|p| std::mem::take(&mut *p.borrow_mut()));
+        if waiting.is_empty() { return; }
+        let clear = CLEAR.with(|c| c.get_or_init(|| {
+            let source = CustomCursor::from_rgba(vec![0u8; 4], 1, 1, 0, 0).expect("a 1x1 cursor image is valid");
+            event_loop.create_custom_cursor(source)
+        }).clone());
+        for window in waiting.iter().filter_map(Weak::upgrade) { window.set_cursor(clear.clone()); }
+    }
 }
 
 /// The image the OS cursor for `c` is made from, if it's one: an app's, or one the OS lacks.
@@ -118,8 +141,7 @@ fn image_scale(window: &Window) -> f32 {
 pub(crate) fn make_pending(event_loop: &ActiveEventLoop) {
     #[cfg(not(target_os = "macos"))]
     images::make_pending(event_loop);
-    #[cfg(target_os = "macos")]
-    let _ = event_loop;
+    clear::make_pending(event_loop);
 }
 
 #[cfg(target_arch = "wasm32")]
