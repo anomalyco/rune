@@ -40,9 +40,12 @@ pub enum FontSmoothing {
     /// can't draw outlines, the CPU fills the same masks and moving text draws from them.
     Windfoil,
     /// Windfoil with Chromium's weight, and the default everywhere but macOS and a Mac's browser:
-    /// each glyph's exact box coverage of its design outline, with no dilation or hint, drawn
-    /// through Skia's text gamma (the luminance-keyed exponent `Off` takes off macOS), as
-    /// Chromium's grayscale text weighs. Pens on quarter pixels. At rest and in motion it draws as
+    /// each glyph's exact box coverage of its outline, with no dilation, drawn through Skia's
+    /// text gamma (the luminance-keyed exponent `Off` takes off macOS), as Chromium's grayscale
+    /// text weighs. Off macOS a face that carries TrueType hints (IBM Plex Mono, Segoe UI) runs
+    /// them vertically where its `gasp` asks, as DirectWrite does for Chromium; a face without
+    /// (Inter) draws its design outline. Pens on quarter pixels in x and whole pixels in y, as
+    /// Chromium places them. At rest and in motion it draws as
     /// `Windfoil` does (GPU-filled masks, outlines while its scale moves, the CPU's fill where the
     /// renderer has no outline shader).
     WindfoilChromium,
@@ -120,11 +123,11 @@ impl FontSmoothing {
         let chromium = |coverage, hint, whole_pens| Look { macos_weight: false, coverage, hint, whole_pens };
         Some(match self {
             FontSmoothing::Windfoil => Look { macos_weight: true, coverage: Coverage::Box, hint: OutlineHint::CoreGraphics, whole_pens: false },
-            FontSmoothing::WindfoilChromium => chromium(Coverage::Box, OutlineHint::None, false),
+            FontSmoothing::WindfoilChromium => chromium(Coverage::Box, OutlineHint::DirectWrite, false),
             FontSmoothing::Slug => chromium(Coverage::Slug, OutlineHint::None, false),
             FontSmoothing::HintedGpu => chromium(Coverage::Box, OutlineHint::Auto, false),
             FontSmoothing::Hinted => chromium(Coverage::Box, OutlineHint::Auto, true),
-            FontSmoothing::WindfoilRgb => chromium(Coverage::Rgb, OutlineHint::None, false),
+            FontSmoothing::WindfoilRgb => chromium(Coverage::Rgb, OutlineHint::DirectWrite, false),
             FontSmoothing::On | FontSmoothing::Off | FontSmoothing::DirectWrite | FontSmoothing::ClearType => return None,
         })
     }
@@ -189,6 +192,11 @@ pub(crate) enum OutlineHint {
     CoreGraphics,
     /// FreeType's light autohint (skrifa), baked into the glyph's record at its size.
     Auto,
+    /// What DirectWrite does for Chromium on Windows: a face with TrueType hints runs them
+    /// vertically where its `gasp` table asks for grid fitting, baked into the record at its
+    /// size; a face without hints draws its design outline. Off on macOS, where Chromium's text
+    /// (CoreText's) isn't hinted.
+    DirectWrite,
 }
 
 /// Glyph x phases are in sixtieths of a device pixel ([`PHASES`]), which hold every step
