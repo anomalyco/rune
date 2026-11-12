@@ -261,6 +261,7 @@ fn bench(gpu: &Gpu, timing: bool) {
         let mut cpu = Renderer::new(d, OFFSCREEN_FORMAT);
         let mut fast = Renderer::with_springs(d, OFFSCREEN_FORMAT, &nodes, &ids);
         let mut atlas = TextSystem::default().atlas;
+    atlas.data.resize((rune::text::ATLAS_SIZE * rune::text::ATLAS_SIZE) as usize, 0);
         fast.prepare(d, q, &mut atlas, &base, (512, 512));
         let mut results: [Vec<(f64, f64)>; 2] = [vec![], vec![]];
         for run in 0..if timing { 8 } else { 0 } {
@@ -393,6 +394,7 @@ fn primitive_pixels(gpu: &Gpu) {
     image_atlas.invalidate();
     fast.upload_images(d, q, &mut image_atlas);
     let mut atlas = TextSystem::default().atlas;
+    atlas.data.resize((rune::text::ATLAS_SIZE * rune::text::ATLAS_SIZE) as usize, 0);
     // A real opaque glyph footprint, independently uploaded to both renderers.
     atlas.data[0] = 255;
     atlas.data[1] = 192;

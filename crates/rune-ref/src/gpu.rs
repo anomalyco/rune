@@ -73,7 +73,8 @@ impl GpuRenderer {
     pub fn render(&mut self, scene: &Scene) -> Vec<u8> {
         scene.validate().expect("valid differential scene");
         let atlas = &mut self.text.atlas;
-        atlas.data.fill(0);
+        atlas.data.clear();
+        atlas.data.resize((ATLAS_SIZE * ATLAS_SIZE) as usize, 0);
         for y in 0..scene.atlas.height as usize {
             let n = scene.atlas.width as usize;
             atlas.data[y * ATLAS_SIZE as usize..y * ATLAS_SIZE as usize + n]

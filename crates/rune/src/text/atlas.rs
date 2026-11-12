@@ -199,6 +199,7 @@ impl ColorGlyph {
 }
 
 pub struct Atlas {
+    /// The first page's CPU copy: empty until its first mask (`alloc`), then 2048x2048.
     pub data: Vec<u8>,
     /// Rows `[y0, y1)` changed since the last upload.
     pub dirty: Option<(u32, u32)>,
@@ -269,7 +270,8 @@ impl Atlas {
 
     pub(super) fn new() -> Self {
         Atlas {
-            data: vec![0; (ATLAS_SIZE * ATLAS_SIZE) as usize],
+            // Made with the first mask (`alloc`).
+            data: Vec::new(),
             dirty: None,
             resident_caches: HashMap::new(),
             pages: Vec::new(),
@@ -359,7 +361,18 @@ impl Atlas {
         }
     }
 
+    /// Room for a `w`x`h` mask: its page and place. The first page's CPU copy is made here, at its
+    /// first mask, so a text system that only measures (`measure`'s, on each thread that calls it)
+    /// never holds its 4 MiB.
     pub(super) fn alloc(&mut self, w: u32, h: u32) -> Option<(usize, u32, u32)> {
+        let placed = self.place(w, h);
+        if placed.is_some_and(|(page, ..)| page == 0) && self.data.is_empty() {
+            self.data = vec![0; (ATLAS_SIZE * ATLAS_SIZE) as usize];
+        }
+        placed
+    }
+
+    fn place(&mut self, w: u32, h: u32) -> Option<(usize, u32, u32)> {
         if w == 0 || h == 0 || w + 2 > ATLAS_SIZE || h + 2 > ATLAS_SIZE {
             return None;
         }
