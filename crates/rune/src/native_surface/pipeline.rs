@@ -536,6 +536,7 @@ impl SurfaceRenderer {
             }
         })
     }
+    #[cfg(target_os = "windows")]
     /// Punches these surfaces' places out of the window's pixels from the next `prepare` on,
     /// once the punch pipeline has compiled (`punch_ready`).
     pub(crate) fn set_punched(&mut self, keys: Vec<usize>) {
@@ -567,6 +568,7 @@ impl SurfaceRenderer {
         self.punch.is_some()
     }
 
+    #[cfg(target_os = "windows")]
     /// Whether the last frame drew surface `key` inside an isolated layer, where a punch
     /// can't reach the window; None when it didn't draw it.
     pub(crate) fn drew_isolated(&self, key: usize) -> Option<bool> {
