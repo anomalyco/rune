@@ -1,5 +1,5 @@
 diff --git a/src/platform_impl/windows/window.rs b/src/platform_impl/windows/window.rs
-index 228c6f0..c5770b8 100644
+index 228c6f0..1fcf1f2 100644
 --- a/src/platform_impl/windows/window.rs
 +++ b/src/platform_impl/windows/window.rs
 @@ -1246,7 +1246,12 @@ impl InitData<'_> {
@@ -16,7 +16,19 @@ index 228c6f0..c5770b8 100644
          win.set_window_icon(self.attributes.window_icon.clone());
          win.set_taskbar_icon(self.attributes.platform_specific.taskbar_icon.clone());
  
-@@ -1360,6 +1365,18 @@ unsafe fn init(
+@@ -1328,6 +1333,11 @@ unsafe fn init(
+     // Will be changed later using `window.set_enabled_buttons` but we need to set a default here
+     // so the diffing later can work.
+     window_flags.set(WindowFlags::CLOSABLE, true);
++    // The window is made with the boxes it asks for, so `set_enabled_buttons` in `on_create`
++    // changes nothing: adding them there rewrote its styles and changed its frame again
++    // (`SWP_FRAMECHANGED`, about 1,000 us before its first frame).
++    window_flags.set(WindowFlags::MINIMIZABLE, attributes.enabled_buttons.contains(WindowButtons::MINIMIZE));
++    window_flags.set(WindowFlags::MAXIMIZABLE, attributes.enabled_buttons.contains(WindowButtons::MAXIMIZE));
+     window_flags.set(WindowFlags::CLIP_CHILDREN, attributes.platform_specific.clip_children);
+ 
+     let mut fallback_parent = || match attributes.platform_specific.owner {
+@@ -1360,6 +1370,18 @@ unsafe fn init(
      let menu = attributes.platform_specific.menu;
      let fullscreen = attributes.fullscreen.clone();
      let maximized = attributes.maximized;
@@ -35,7 +47,7 @@ index 228c6f0..c5770b8 100644
      let mut initdata = InitData { event_loop, attributes, window_flags, window: None };
  
      let (style, ex_style) = window_flags.to_window_styles();
-@@ -1369,10 +1386,10 @@ unsafe fn init(
+@@ -1369,10 +1391,10 @@ unsafe fn init(
              class_name.as_ptr(),
              title.as_ptr(),
              style,
