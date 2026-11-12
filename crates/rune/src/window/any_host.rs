@@ -27,7 +27,9 @@ impl<S: 'static> AnyHost for Host<S> {
         // running link, a timer due sooner than a frame waits a frame (`timer_deadline`).
         let now = Instant::now();
         let win = self.win.as_ref();
-        let runtime = timer_deadline(&self.rt).filter(|_| !win.is_some_and(Win::paced));
+        // Covered, motion doesn't wake it: its state stays live, but only polls run (`set_cover`).
+        let covered = self.life.shown() && self.life.covered();
+        let runtime = if covered { poll_deadline(&self.rt) } else { timer_deadline(&self.rt) }.filter(|_| !win.is_some_and(Win::paced));
         // A due timer whose frame is still on its way takes the frame's bound instead
         // (`TimerFrame`), so the loop sleeps rather than waking at once for a frame that can't
         // come.

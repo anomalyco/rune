@@ -136,6 +136,11 @@ impl<S: 'static> Host<S> {
                 if self.rt.live_pending() && let Some(w) = self.win.as_ref().filter(|_| self.life.uncovered()) {
                     w.request_redraw();
                 }
+                // Covered: what the value changed is drawn later, settled (`CoveredDraw`).
+                #[cfg(target_os = "windows")]
+                if self.rt.live_pending() && self.life.shown() && self.life.covered() && let Some(w) = self.win.as_mut().filter(|w| !w.minimized()) {
+                    w.covered_draw = w.covered_draw.step(CoveredDrawEvent::Asked(Instant::now()));
+                }
             }
             WakeEvent::Window(_, request) => {
                 self.window_request(event_loop, request);
@@ -281,7 +286,7 @@ impl<S: 'static> Host<S> {
             WindowEvent::Resized(size) => {
                 sync_chrome(rt, l, chrome, titlebar);
                 let was_live = rt.live_visible();
-                rt.set_live_visible(self.life.uncovered() && size.width > 0 && size.height > 0 && !l.minimized());
+                rt.set_live_visible(size.width > 0 && size.height > 0 && !l.minimized());
                 // Restored where no occlusion event says so (Windows): as uncovering does, the
                 // first frame paints the settled state of what changed meanwhile.
                 let restored = !was_live && rt.live_visible();
