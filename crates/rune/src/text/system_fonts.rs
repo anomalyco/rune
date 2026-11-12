@@ -144,7 +144,7 @@ pub(super) const CJK_FONT_FILES: [&str; 30] = [
 /// Makes text in scripts the app's fonts don't cover render instead of drawing tofu: the
 /// families the app registered beyond its sans and mono (`AppSpec::fonts`), already in memory.
 /// The system's CJK fonts follow them the first time a text has CJK (`register_system_cjk`).
-pub(super) fn register_cjk_fallbacks(collection: &mut Collection, registered: &[FamilyId], families: (&str, &str)) {
+pub(super) fn register_cjk_fallbacks(collection: &mut Collection, registered: &[FamilyId], families: (&str, &str)) -> Vec<FamilyId> {
     let primary = [collection.family_id(families.0), collection.family_id(families.1)];
     let mut fallbacks: Vec<FamilyId> = Vec::new();
     for id in registered {
@@ -155,20 +155,25 @@ pub(super) fn register_cjk_fallbacks(collection: &mut Collection, registered: &[
     if !fallbacks.is_empty() {
         super::language::register(collection, &fallbacks);
     }
+    fallbacks
 }
 
 /// The CJK fonts in `files` as fallbacks after the app's, memory-mapped, so a 20 MB CJK
-/// collection costs a mapping, not a read.
-fn register_system_cjk(collection: &mut Collection, loaded: &mut LoadedFiles, files: Vec<std::path::PathBuf>, families: (&str, &str)) {
+/// collection costs a mapping, not a read. Every CJK fallback so far (`all`) is ordered again
+/// for each language, so a Japanese font loaded after a Chinese one still comes first for
+/// Japanese text.
+fn register_system_cjk(collection: &mut Collection, loaded: &mut LoadedFiles, files: Vec<std::path::PathBuf>, families: (&str, &str), all: &mut Vec<FamilyId>) {
     let primary = [collection.family_id(families.0), collection.family_id(families.1)];
-    let mut fallbacks: Vec<FamilyId> = Vec::new();
-    for id in load_files(collection, loaded, files.into_iter().take(16)) {
-        if !primary.contains(&Some(id)) && !fallbacks.contains(&id) {
-            fallbacks.push(id);
+    let before = all.len();
+    // Only files new to the collection: one already loaded is a fallback already.
+    let new: Vec<std::path::PathBuf> = files.into_iter().filter(|f| !loaded.contains_key(f)).take(16).collect();
+    for id in load_files(collection, loaded, new) {
+        if !primary.contains(&Some(id)) && !all.contains(&id) {
+            all.push(id);
         }
     }
-    if !fallbacks.is_empty() {
-        super::language::register(collection, &fallbacks);
+    if all.len() > before {
+        super::language::register(collection, all);
     }
 }
 
@@ -184,11 +189,13 @@ pub(super) struct Fallbacks {
     cjk: Vec<Option<String>>,
     /// The symbol families were loaded (elsewhere than Windows, where each comes on its own).
     symbols: bool,
+    /// Every CJK fallback family, the app's then the system's in the order they loaded.
+    cjk_families: Vec<FamilyId>,
 }
 
 impl Fallbacks {
-    pub(super) fn new(own: &[&'static [u8]]) -> Self {
-        Fallbacks { own: own.to_vec(), ..Default::default() }
+    pub(super) fn new(own: &[&'static [u8]], cjk_families: Vec<FamilyId>) -> Self {
+        Fallbacks { own: own.to_vec(), cjk_families, ..Default::default() }
     }
 }
 
@@ -227,15 +234,15 @@ impl TextSystem {
     /// a script's fallback (`fallback::SCRIPT_FONTS`), CJK fonts, math fonts, the colour emoji
     /// family, and (Windows) the font Windows falls back to for any other character; elsewhere
     /// the symbol families. Latin text the app's fonts cover loads nothing.
-    pub(super) fn load_fallbacks(&mut self, text: &str) {
+    pub(super) fn load_fallbacks(&mut self, text: &str, language: Option<parley::fontique::Language>) {
         if text.is_ascii() {
             return;
         }
-        let locale = self.language.as_ref().map(|l| l.to_string());
+        let locale = language.as_ref().map(|l| l.to_string());
         let own: Vec<skrifa::charmap::Charmap<'static>> = self.fallbacks.own.iter().filter_map(|data| skrifa::FontRef::from_index(data, 0).ok()).map(|f| skrifa::MetadataProvider::charmap(&f)).collect();
         let covered = |ch: char| own.iter().any(|map| map.map(ch).is_some());
         let (mut math, mut emoji, mut scripts) = (false, false, Vec::new());
-        let (mut cjk, mut missing): (Vec<char>, Vec<char>) = (Vec::new(), Vec::new());
+        let (mut cjk, mut cjk_more, mut missing): (Vec<char>, Vec<char>, Vec<char>) = (Vec::new(), Vec::new(), Vec::new());
         let cjk_done = self.fallbacks.cjk.contains(&if cfg!(windows) { locale.clone() } else { None });
         let generic = cfg!(windows) || !self.fallbacks.symbols;
         for ch in text.chars() {
@@ -247,8 +254,14 @@ impl TextSystem {
                 continue;
             }
             if is_cjk(ch) {
-                if !cjk_done && !cjk.contains(&ch) && !covered(ch) && cjk.len() < 64 {
+                if covered(ch) { continue; }
+                // The language's own CJK font, the first time a text in it has CJK.
+                if !cjk_done && !cjk.contains(&ch) && cjk.len() < 64 {
                     cjk.push(ch);
+                } else if cfg!(windows) && !self.fallbacks.asked.contains(&ch) && !cjk_more.contains(&ch) {
+                    // A character the CJK fonts loaded so far may lack (Simplified Chinese in a
+                    // Japanese font): Windows names a font that has it, once per character.
+                    cjk_more.push(ch);
                 }
                 continue;
             }
@@ -259,7 +272,7 @@ impl TextSystem {
                 missing.push(ch);
             }
         }
-        if scripts.is_empty() && !math && cjk.is_empty() && !emoji && missing.is_empty() {
+        if scripts.is_empty() && !math && cjk.is_empty() && cjk_more.is_empty() && !emoji && missing.is_empty() {
             return;
         }
         // The first system font a launch loads, for its trace (`marks`).
@@ -273,14 +286,18 @@ impl TextSystem {
         if math {
             self.math = Some(load_families(&mut self.font_cx.collection, fallback::MATH_FONT_FILES, fallback::MATH_FAMILIES));
         }
-        if !cjk.is_empty() {
+        if !cjk.is_empty() || !cjk_more.is_empty() {
             #[cfg(windows)]
-            let files = direct_write::fallback_files(&cjk, locale.as_deref());
+            let files = {
+                self.fallbacks.asked.extend(cjk.iter().chain(&cjk_more).copied());
+                cjk.extend(cjk_more);
+                direct_write::fallback_family_files(&cjk, locale.as_deref())
+            };
             #[cfg(not(windows))]
             let files = system_font_files(&CJK_FONT_FILES);
-            self.fallbacks.cjk.push(if cfg!(windows) { locale.clone() } else { None });
+            if !cjk_done { self.fallbacks.cjk.push(if cfg!(windows) { locale.clone() } else { None }); }
             let families = (self.families.0.clone(), self.families.1.clone());
-            register_system_cjk(&mut self.font_cx.collection, &mut self.font_files, files, (&families.0, &families.1));
+            register_system_cjk(&mut self.font_cx.collection, &mut self.font_files, files, (&families.0, &families.1), &mut self.fallbacks.cjk_families);
         }
         if emoji {
             self.fallbacks.asked.insert('\u{FE0F}');
@@ -292,7 +309,7 @@ impl TextSystem {
             }
             if !missing.is_empty() {
                 self.fallbacks.asked.extend(missing.iter().copied());
-                self.add_symbol_files(direct_write::fallback_files(&missing, locale.as_deref()));
+                self.add_symbol_files(direct_write::fallback_family_files(&missing, locale.as_deref()));
             }
         }
         #[cfg(not(windows))]
@@ -351,7 +368,7 @@ impl TextSystem {
     /// Loads the symbol families now, as a text needing them would (tests check what's installed).
     #[cfg(test)]
     pub(super) fn load_symbol_fonts(&mut self) {
-        self.load_fallbacks("\u{2318}\u{2713}\u{FE0F}\u{1F600}");
+        self.load_fallbacks("\u{2318}\u{2713}\u{FE0F}\u{1F600}", None);
     }
 }
 

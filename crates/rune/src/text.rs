@@ -288,7 +288,7 @@ impl TextSystem {
             }
         }
         // No system font loads here: each comes the first time a text needs it (`load_fallbacks`).
-        register_cjk_fallbacks(&mut collection, &registered, families);
+        let cjk = register_cjk_fallbacks(&mut collection, &registered, families);
         #[cfg(target_arch = "wasm32")]
         let families = if fonts.is_empty() { ("Inter", "IBM Plex Mono") } else { families };
         let (sans, mono) = families::slots(families.0, families.1);
@@ -318,7 +318,7 @@ impl TextSystem {
             slot_system_mono: names_system_mono(families.0) || names_system_mono(families.1),
             scripts: 0,
             font_files: LoadedFiles::new(),
-            fallbacks: system_fonts::Fallbacks::new(list),
+            fallbacks: system_fonts::Fallbacks::new(list, cjk),
             system_faces: Default::default(),
             installed: Default::default(),
             atlas: Atlas::new(),
@@ -626,7 +626,8 @@ impl TextSystem {
             text
         };
         let routes = fallback::routes(text);
-        self.load_fallbacks(text);
+        let language = language::of_text(text, self.language);
+        self.load_fallbacks(text, language);
         // `trak` tracking at the point size (see `trak.rs`), on top of `style.tracking`. An
         // explicit optical size `o` picks the entry instead, as Core Text tracks `o`-point text
         // scaled to the set size; spans scale the lookup with their size. Each style range gets
@@ -709,7 +710,6 @@ impl TextSystem {
             }
         };
         let mono = with_symbols(self.mono.as_str(), mono_scripts);
-        let language = self.language;
         // Routed clusters try their fallback first, then the run's own stack (mono spans included).
         // Each of the four {math, emoji} × {sans, mono} stacks is built at most once.
         let mut stacks: [Option<Vec<FontFamilyName<'_>>>; 4] = Default::default();
