@@ -430,9 +430,13 @@ pub(crate) fn destroy_own_windows() {
     // SAFETY: this thread's own top-level windows; each is destroyed by the thread that made it.
     unsafe {
         EnumThreadWindows(GetCurrentThreadId(), Some(add), (&raw mut windows) as LPARAM);
+        let log = std::env::var_os("IB3_QUIT_MARKS").is_some();
+        if log { eprintln!("ib3 windows {}", windows.len()); }
         for hwnd in windows {
+            let t = std::time::Instant::now();
             SetWindowLongPtrW(hwnd, GWLP_WNDPROC, DefWindowProcW as usize as isize);
-            DestroyWindow(hwnd);
+            let ok = DestroyWindow(hwnd);
+            if log { eprintln!("ib3 destroy {hwnd:?} ok {ok} err {} in {} us", windows_sys::Win32::Foundation::GetLastError(), t.elapsed().as_micros()); }
         }
     }
 }
