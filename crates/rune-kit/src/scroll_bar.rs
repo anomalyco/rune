@@ -311,6 +311,29 @@ impl ScrollBarStyle {
         self
     }
 
+    /// The sizes a `::-webkit-scrollbar` look sets, for a [`Self::native`] bar that copies another
+    /// page's: the bar `size` wide (its `width`), the thumb drawn inside a clear `thumb_border`
+    /// all round (`border: Npx solid transparent; background-clip: content-box`), so as wide as
+    /// `size` less two borders, and the track `track_margin` in from each end
+    /// (`::-webkit-scrollbar-track { margin }`). [`Self::native`] is `(8.0, 2.0, 4.0)`.
+    pub fn webkit_parts(mut self, size: f32, thumb_border: f32, track_margin: f32) -> Self {
+        let (size, thumb_border) = (size.max(1.0), thumb_border.max(0.0));
+        let width = (size - 2.0 * thumb_border).max(1.0);
+        self.track.strip = size;
+        self.track.edge = thumb_border;
+        self.track.border = thumb_border;
+        self.track.inset = track_margin.max(0.0);
+        (self.width, self.hover_width) = (width, width);
+        self
+    }
+
+    /// The thumb is never shorter than `len` points, its clear border included (a browser's
+    /// least thumb length for the look).
+    pub fn min_thumb(mut self, len: f32) -> Self {
+        self.track.min_thumb = len.max(0.0);
+        self
+    }
+
     /// Sizes and places the thumb in whole device pixels, `scale` of them to a point, as Chromium
     /// does a native scroll bar's (its length rounded, its place truncated): for a look that copies
     /// one ([`Self::native`]), so the thumb lands on the browser's pixels at every offset. 0, the
