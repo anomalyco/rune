@@ -3,6 +3,7 @@ use crate::PointerPress;
 use crate::el::{col, el};
 
 mod app_ime;
+mod centre_gone;
 mod context_menu_key;
 mod draw_on;
 mod event_markers;

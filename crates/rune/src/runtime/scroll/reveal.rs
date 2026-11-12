@@ -23,6 +23,21 @@ impl ScrollReveal {
     }
 }
 
+/// The index in virtual list `v`, at `path`, of the row `key` names: the row's own key, a
+/// scoped `"scope/row"`, or `"row/mark"` for an element or highlight inside the row.
+pub(super) fn virtual_index(v: &crate::el::virtual_list::VirtualList, path: &str, key: &str) -> Option<usize> {
+    v.index_of(key).or_else(|| {
+        key.rmatch_indices('/').find_map(|(at, _)| {
+            let (scope, row_key) = (&key[..at], &key[at + 1..]);
+            let mut keyed = path.rsplit('/').filter(|seg| !seg.starts_with('#'));
+            scope.rsplit('/').all(|seg| keyed.next() == Some(seg)).then(|| v.index_of(row_key))?
+        })
+    }).or_else(|| {
+        // `"row/mark"` names an element or highlight inside unmounted row `row`.
+        key.match_indices('/').find_map(|(at, _)| v.index_of(&key[..at]))
+    })
+}
+
 /// The offset that centres `[top, top + height)` in the viewport, or that scrolls it into view
 /// from `offset`, before clamping.
 pub(super) fn place(center: bool, offset: f64, top: f64, height: f64, viewport: f64, margin: f64) -> f64 {
@@ -110,16 +125,7 @@ impl<S: 'static> Runtime<S> {
         }).or_else(|| {
             self.nodes.iter().filter(|n| in_scope(&n.path, scope)).filter_map(|n| {
                 let v = self.virtuals.get(&n.path)?;
-                let index = v.index_of(key).or_else(|| {
-                    key.rmatch_indices('/').find_map(|(at, _)| {
-                        let (scope, row_key) = (&key[..at], &key[at + 1..]);
-                        let mut keyed = n.path.rsplit('/').filter(|seg| !seg.starts_with('#'));
-                        scope.rsplit('/').all(|seg| keyed.next() == Some(seg)).then(|| v.index_of(row_key))?
-                    })
-                }).or_else(|| {
-                    // `"row/mark"` names an element or highlight inside unmounted row `row`.
-                    key.match_indices('/').find_map(|(at, _)| v.index_of(&key[..at]))
-                })?;
+                let index = virtual_index(v, &n.path, key)?;
                 let row_key = &v.keys[index];
                 let top = f64::from(v.top + v.pad_top + v.prefix(index));
                 let height = f64::from(v.height(row_key));
@@ -158,6 +164,8 @@ impl<S: 'static> Runtime<S> {
                 scroll.mode = scroll.mode.to_rest();
                 return (false, was);
             }
+            // Only a frame's end stops a glide (`requests::Finish`).
+            requests::Effect::Stop(_) => return (false, was),
         }
         let window = self.virtual_window_changed();
         if window {

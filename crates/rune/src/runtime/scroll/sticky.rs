@@ -46,6 +46,17 @@ pub(super) struct Reveal {
     pub center: bool,
     /// Whether this reveal lands at the bottom of a `stick_bottom` viewport.
     pub at_end: bool,
+    /// Whether its glide found the target at the last frame's end.
+    pub target: Target,
+}
+
+/// What a gliding reveal found of its target at a frame's end (`requests::Finish`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum Target {
+    /// Mounted in the viewport, or a row of a virtual list there.
+    Seen,
+    /// Neither, once: a remount or a returning exit may bring it back by the next frame's end.
+    Missed,
 }
 
 #[cfg(test)]
@@ -685,10 +696,17 @@ impl<S: 'static> Runtime<S> {
         let gliding = |viewport: &str| self.path_ids.get(viewport)
             .and_then(|id| self.scrolls.get(id))
             .is_some_and(|st| st.glide().is_some());
-        // A glide keeps its reveal until it lands; otherwise a reveal lasts while its viewport's
-        // subtree moves with its target in it.
-        requests.step(requests::Finish { animating, gliding, mounted: |r: &Reveal| self.reveal_mounted(r) });
+        // A glide keeps its reveal until it lands or its target is gone; otherwise a reveal
+        // lasts while its viewport's subtree moves with its target in it.
+        let stops = requests.step(requests::Finish { animating, gliding, mounted: |r: &Reveal| self.reveal_mounted(r),
+            listed: |r: &Reveal| self.reveal_listed(r) });
         self.requests = requests;
+        for stop in stops {
+            let requests::Effect::Stop(viewport) = stop else { continue };
+            let Some(st) = self.path_ids.get(&viewport).and_then(|id| self.scrolls.get_mut(id)) else { continue };
+            // Only the reveal's own glide: one to the bottom or a shrinking end isn't its to stop.
+            if let ScrollMode::Glide { to: GlideTo::Offset(_), .. } = st.mode { st.halt(); }
+        }
     }
 
     /// Whether node `i` is reveal `r`'s target element.
@@ -704,6 +722,13 @@ impl<S: 'static> Runtime<S> {
         (0..self.nodes.len()).any(|i| self.reveal_names(r, i) && in_viewport(i))
             || self.highlight_target_in(&self.nodes, r.scope.as_deref(), &r.key)
                 .is_some_and(|(i, _)| !self.subtree_exiting(i) && in_viewport(i))
+    }
+
+    /// Whether reveal `r`'s target is a row of a virtual list in its viewport, mounted or not:
+    /// one scrolled out of the window is still there to glide to.
+    fn reveal_listed(&self, r: &Reveal) -> bool {
+        self.virtuals.iter().any(|(path, v)| v.scroll_path == r.viewport && super::in_scope(path, r.scope.as_deref())
+            && reveal::virtual_index(v, path, &r.key).is_some())
     }
 
     /// What a reveal of row `key` in viewport `path` must leave to stuck headers: `None` when

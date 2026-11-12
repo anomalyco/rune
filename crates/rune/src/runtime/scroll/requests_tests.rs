@@ -1,4 +1,4 @@
-use super::super::sticky::{Hold, Keep};
+use super::super::sticky::{Hold, Keep, Target};
 use super::*;
 
 /// What a frame measured about the keeps' elements: the one element in the tree, whether a
@@ -12,7 +12,7 @@ enum Input {
     FoldOpen { viewport: &'static str, mounted: Option<&'static str>, end: usize },
     Place { viewport: &'static str, first: bool, to: f64, at_end: bool }, Tail,
     EndGives { header: &'static str, pinned: &'static str }, EndClamp(Scene),
-    Frame { glide: &'static str, moving: &'static str, mounted: bool }, InputScroll, Destination,
+    Frame { glide: &'static str, moving: &'static str, mounted: bool, listed: bool }, InputScroll, Destination,
 }
 use Input::*;
 
@@ -24,10 +24,12 @@ struct Old {
 #[derive(Clone, Debug, PartialEq)]
 struct OldKeep { path: String, viewport: String, was: f32, virtual_row: Option<(String, String, f32)>, hold: Option<(String, f32)> }
 #[derive(Clone, Debug, PartialEq)]
-struct OldReveal { viewport: String, scope: Option<String>, key: String, center: bool, at_end: bool }
+struct OldReveal { viewport: String, scope: Option<String>, key: String, center: bool, at_end: bool,
+    // differs from dev: a gliding reveal remembers that its target was gone at the last frame's end.
+    missed: bool }
 
 #[derive(Debug, PartialEq)]
-enum Placement { None, Rest, Move(f64) }
+enum Placement { None, Rest, Move(f64), Stops(Vec<String>) }
 
 // The old fields and mutations, independent of the request machine. The placement event
 // supplies the already measured offset, just as reveal_row_once did after clamping it.
@@ -54,7 +56,7 @@ impl Old {
                 if first {
                     self.scroll_reveals.retain(|r| r.viewport != viewport);
                     self.scroll_reveals.push(OldReveal { viewport: viewport.into(), scope: Some("scope".into()),
-                        key: "mark".into(), center: viewport == "a", at_end });
+                        key: "mark".into(), center: viewport == "a", at_end, missed: false });
                 } else if let Some(r) = self.scroll_reveals.iter_mut().find(|r| r.viewport == viewport) {
                     r.at_end |= at_end;
                 }
@@ -92,12 +94,23 @@ impl Old {
                 });
                 self.keeps = keeps;
             }
-            Frame { glide, moving, mounted } => {
+            Frame { glide, moving, mounted, listed } => {
                 if self.keeps.is_empty() && self.scroll_reveals.is_empty() { return Placement::None; }
                 let animating = |viewport: &str| viewport == moving;
                 let gliding = |viewport: &str| viewport == glide;
                 self.keeps.retain(|k| animating(&k.viewport));
-                self.scroll_reveals.retain(|r| gliding(&r.viewport) || (animating(&r.viewport) && mounted));
+                // differs from dev: a glide kept its reveal whatever became of the target. Now a
+                // target neither mounted nor a virtual list's row at two frame ends running is
+                // gone, and its glide stops.
+                let mut stops = Vec::new();
+                self.scroll_reveals.retain_mut(|r| {
+                    if !gliding(&r.viewport) { return animating(&r.viewport) && mounted; }
+                    if mounted || listed { r.missed = false; return true; }
+                    if !r.missed { r.missed = true; return true; }
+                    stops.push(r.viewport.clone());
+                    false
+                });
+                if !stops.is_empty() { return Placement::Stops(stops); }
             }
             InputScroll => { self.keeps.clear(); self.scroll_reveals.clear(); }
             Destination => self.scroll_reveals.clear(),
@@ -126,14 +139,18 @@ fn drive(requests: &mut Requests, input: Input) -> Placement {
             else if !pinned { Shown::Free }
             else { Shown::Pinned(top) }
         } }),
-        Frame { glide, moving, mounted } => requests.step(Finish { gliding: |v: &str| v == glide,
-            animating: |v: &str| v == moving, mounted: |_: &Reveal| mounted }),
+        Frame { glide, moving, mounted, listed } => requests.step(Finish { gliding: |v: &str| v == glide,
+            animating: |v: &str| v == moving, mounted: |_: &Reveal| mounted, listed: |_: &Reveal| listed }),
         InputScroll => requests.step(Event::Cancel),
         Destination => requests.step(Event::Destination),
     };
     match effects {
         Effects::None => Placement::None, Effects::One(Effect::Rest) => Placement::Rest,
-        Effects::One(Effect::Move(to)) => Placement::Move(to), _ => panic!("unexpected placements"),
+        Effects::One(Effect::Move(to)) => Placement::Move(to),
+        effects => Placement::Stops(effects.into_iter().map(|e| match e {
+            Effect::Stop(viewport) => viewport,
+            e => panic!("unexpected placement {e:?}"),
+        }).collect()),
     }
 }
 
@@ -146,7 +163,7 @@ fn walk(inputs: &[Input], old: &Old, real: &Requests, sequence: &mut Vec<Input>)
         let snapshot = Old { keeps: real.keeps().map(|k| OldKeep { path: k.path.clone(), viewport: k.viewport.clone(),
             was: k.was, virtual_row: k.virtual_row.clone(), hold: k.hold.as_ref().map(|h| (h.path.clone(), h.inset)) }).collect(),
             scroll_reveals: real.reveals().map(|r| OldReveal { viewport: r.viewport.clone(), scope: r.scope.clone(),
-                key: r.key.clone(), center: r.center, at_end: r.at_end }).collect() };
+                key: r.key.clone(), center: r.center, at_end: r.at_end, missed: r.target == Target::Missed }).collect() };
         assert_eq!(snapshot, old, "{sequence:?}");
         walk(inputs, &old, &real, sequence);
         sequence.pop();
@@ -163,8 +180,9 @@ fn every_request_sequence_matches_the_separate_keep_and_reveal_lists() {
         Place { viewport: "b", first: true, to: 5.25, at_end: true },
         Place { viewport: "a", first: false, to: 5.0, at_end: true }, Tail,
         EndGives { header: "header", pinned: "a" }, EndClamp(PINNED_PAST),
-        Frame { glide: "b", moving: "", mounted: false }, Frame { glide: "", moving: "a", mounted: false },
-        Frame { glide: "", moving: "a", mounted: true }, Frame { glide: "a", moving: "b", mounted: true },
+        Frame { glide: "b", moving: "", mounted: false, listed: false }, Frame { glide: "", moving: "a", mounted: false, listed: false },
+        Frame { glide: "", moving: "a", mounted: true, listed: false }, Frame { glide: "a", moving: "b", mounted: true, listed: false },
+        Frame { glide: "b", moving: "", mounted: false, listed: true },
         InputScroll, Destination];
     walk(INPUTS, &Old::default(), &Requests::default(), &mut Vec::new());
 }

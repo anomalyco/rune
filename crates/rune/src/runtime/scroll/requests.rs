@@ -9,7 +9,7 @@
 //!
 //! Events that test every request on every frame are types of their own, generic over what
 //! they measure, so a caller's measurements compile into the loop with no indirect call.
-use super::sticky::{Keep, Reveal};
+use super::sticky::{Keep, Reveal, Target};
 use crate::machine::Effects;
 
 /// One request outliving the commit that made it.
@@ -44,9 +44,14 @@ pub(super) enum Event<'a> {
     Destination,
 }
 
-/// What placing a reveal asks of its viewport.
+/// What placing a reveal, or a frame's end, asks of a viewport.
 #[derive(Debug, PartialEq)]
-pub(super) enum Effect { Rest, Move(f64) }
+pub(super) enum Effect {
+    Rest,
+    Move(f64),
+    /// The glide a reveal ran on viewport `0` stops where it is: its target is gone.
+    Stop(String),
+}
 
 /// A fold starts opening: the keeps on its viewport above its end give way. `index` is a path's
 /// position in the commit's nodes.
@@ -73,8 +78,10 @@ pub(super) enum Shown {
 pub(super) struct EndClamps<F> { pub shown: F }
 
 /// A frame ended: keeps last while their viewport's subtree moves, reveals while their viewport
-/// glides or moves with their target mounted in it.
-pub(super) struct Finish<G, A, M> { pub gliding: G, pub animating: A, pub mounted: M }
+/// glides or moves with their target mounted in it. A gliding reveal whose target is neither
+/// mounted nor `listed` among a virtual list's rows two frame ends running is gone: its glide
+/// stops. One frame's absence is a remount or an exit that comes back.
+pub(super) struct Finish<G, A, M, L> { pub gliding: G, pub animating: A, pub mounted: M, pub listed: L }
 
 /// Anything [`Requests::step`] takes.
 pub(super) trait Transition {
@@ -134,7 +141,7 @@ impl Transition for Event<'_> {
             Event::Place { first, scope, key, viewport, center, at_end, from, to } => {
                 if first {
                     requests.arrive(Request::Reveal(Reveal { scope: scope.map(str::to_owned),
-                        key: key.to_owned(), viewport: viewport.to_owned(), center, at_end }));
+                        key: key.to_owned(), viewport: viewport.to_owned(), center, at_end, target: Target::Seen }));
                 } else if let Some(r) = requests.reveals.iter_mut().find(|r| r.viewport == viewport) {
                     r.at_end |= at_end;
                 }
@@ -182,13 +189,25 @@ impl<F: Fn(&Keep) -> Shown> Transition for EndClamps<F> {
     }
 }
 
-impl<G, A, M> Transition for Finish<G, A, M>
-where G: Fn(&str) -> bool, A: Fn(&str) -> bool, M: Fn(&Reveal) -> bool {
+impl<G, A, M, L> Transition for Finish<G, A, M, L>
+where G: Fn(&str) -> bool, A: Fn(&str) -> bool, M: Fn(&Reveal) -> bool, L: Fn(&Reveal) -> bool {
     fn apply(self, requests: &mut Requests) -> Effects<Effect> {
-        let Self { gliding, animating, mounted } = self;
+        let Self { gliding, animating, mounted, listed } = self;
         requests.keeps.retain(|k| animating(&k.viewport));
-        requests.reveals.retain(|r| gliding(&r.viewport) || (animating(&r.viewport) && mounted(r)));
-        Effects::none()
+        let mut effects = Effects::none();
+        requests.reveals.retain_mut(|r| {
+            if !gliding(&r.viewport) { return animating(&r.viewport) && mounted(r); }
+            r.target = match r.target {
+                _ if mounted(r) || listed(r) => Target::Seen,
+                Target::Seen => Target::Missed,
+                Target::Missed => {
+                    effects.push(Effect::Stop(r.viewport.clone()));
+                    return false;
+                }
+            };
+            true
+        });
+        effects
     }
 }
 
