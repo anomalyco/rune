@@ -53,6 +53,9 @@ impl<S: 'static> Host<S> {
         l.stop_pacing();
         let shown = self.life.shown();
         l.first_frame.skipped(Instant::now());
+        // Covered by other windows, it still draws what changed, later (`CoveredDraw`).
+        #[cfg(target_os = "windows")]
+        if shown && self.life.covered() && !l.minimized() { l.covered_draw = l.covered_draw.step(CoveredDrawEvent::Asked(Instant::now())); }
         self.land_frame();
         if shown {
             self.rt.set_live_visible(false);
@@ -77,7 +80,11 @@ impl<S: 'static> Host<S> {
         let Some(l) = self.win.as_ref() else { return };
         let hidden = launcher && !self.life.shown();
         let covered = (!launcher && !self.life.uncovered()) || l.minimized();
-        if covered {
+        #[cfg(target_os = "windows")]
+        let owed = covered && !l.minimized() && l.covered_draw.drawing();
+        #[cfg(not(target_os = "windows"))]
+        let owed = false;
+        if covered && !owed {
             // A covered window's clips stop presenting on their layers, as they stop being pulled.
             #[cfg(target_os = "windows")]
             if let Some(w) = self.win.as_mut() {
@@ -86,6 +93,8 @@ impl<S: 'static> Host<S> {
             }
             return self.covered_frame();
         }
+        // A covered window's owed frame shows the settled state, as its first one uncovered does.
+        if owed { self.rt.settle_all(); }
         // A missed frame's retry, or the timer pacing unpaced motion: input waits for it, and
         // `new_events` runs due timers meanwhile.
         if !resizing && l.backing_off(Instant::now()) { return; }
@@ -103,6 +112,8 @@ impl<S: 'static> Host<S> {
             eprintln!("rune: the window's swap chain couldn't change its alpha for a clip's layer: {error}");
         }
         let Some(l) = self.win.as_mut() else { return };
+        #[cfg(target_os = "windows")]
+        if owed { l.covered_draw = l.covered_draw.step(CoveredDrawEvent::Drawn); }
         // The frame a due timer asked for is here, drawing or running covered below.
         l.timer_frame.drawn();
         // Starting the display link for a window that isn't on screen would wait for a tick that

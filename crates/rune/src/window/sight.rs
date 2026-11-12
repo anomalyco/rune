@@ -65,6 +65,9 @@ impl<S: 'static> Host<S> {
             self.idle = true;
             return;
         }
+        // Its first frame uncovered draws what a covered one owed.
+        #[cfg(target_os = "windows")]
+        { l.covered_draw = l.covered_draw.step(CoveredDrawEvent::Drawn); }
         sync_chrome(&mut self.rt, l, self.chrome, self.titlebar);
         // A window opened while the displays slept has no display link yet.
         #[cfg(target_os = "macos")]
