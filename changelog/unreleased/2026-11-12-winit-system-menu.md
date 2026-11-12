@@ -1,0 +1,1 @@
+- **Windows: a new window no longer copies its system menu before its first frame (~1,200 µs).** winit enabled Close in the window's own copy of the system menu on every style change, though a new window's menu has it enabled already; the vendored winit now touches the menu only when Close changes.

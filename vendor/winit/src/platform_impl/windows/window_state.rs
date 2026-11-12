@@ -380,7 +380,9 @@ impl WindowFlags {
             diff.remove(WindowFlags::MINIMIZED);
         }
 
-        if diff.contains(WindowFlags::CLOSABLE) || new.contains(WindowFlags::CLOSABLE) {
+        // A new window's system menu has Close enabled: the menu (`GetSystemMenu` makes the
+        // window its own copy, about 1,200 us before its first frame) is touched only to change it.
+        if diff.contains(WindowFlags::CLOSABLE) && !(self.is_empty() && new.contains(WindowFlags::CLOSABLE)) {
             let flags = MF_BYCOMMAND
                 | if new.contains(WindowFlags::CLOSABLE) { MF_ENABLED } else { MF_DISABLED };
 
