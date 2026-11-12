@@ -94,10 +94,12 @@ impl TitlebarSet {
 pub struct ChromeInsets {
     /// From the window's left edge to the end of the controls there: the macOS traffic lights
     /// (`Cx::titlebar_inset`), or the Windows caption buttons when the app's language reads right
-    /// to left (`labels::set_direction`). 0 in full screen and elsewhere.
+    /// to left (`labels::set_direction`), where the traffic lights move to the right instead. 0 in full
+    /// screen and elsewhere.
     pub leading: f32,
     /// From the window's right edge to the start of the controls there: the Windows caption
-    /// buttons, unless they're mirrored to the left. 0 in full screen and elsewhere.
+    /// buttons, unless they're mirrored to the left, or the macOS traffic lights in a right-to-left
+    /// app. 0 in full screen and elsewhere.
     pub trailing: f32,
     /// The titlebar's height as the window draws it: [`Titlebar::height`] where Rune replaced
     /// the native titlebar, 0 where the native frame stays (no `App::titlebar`, Linux, a

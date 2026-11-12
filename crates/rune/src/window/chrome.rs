@@ -42,9 +42,20 @@ pub(super) fn sync_chrome<S: 'static>(rt: &mut Runtime<S>, w: &Win, chrome: Chro
     let scale = w.window.scale_factor() as f32;
     let height = height.filter(|_| custom_frame(w)).unwrap_or(0.0);
     let buttons = caption.map_or(0.0, |c| c.width(scale));
-    let (left, right) = if caption.is_some_and(|c| c.mirrored) { (leading + buttons, 0.0) } else { (leading, buttons) };
+    // The traffic lights' room is on the right in a right-to-left app on macOS, as the caption
+    // buttons' is on the left on Windows.
+    let (left, right) = if lights_right(w) { (0.0, leading) } else { (leading, 0.0) };
+    let (left, right) = if caption.is_some_and(|c| c.mirrored) { (left + buttons, right) } else { (left, right + buttons) };
     rt.set_chrome_insets(crate::ChromeInsets::new(left, right, height));
     rt.set_caption(caption);
+}
+
+/// The traffic lights sit at the window's right: a right-to-left app on macOS.
+fn lights_right(w: &Win) -> bool {
+    #[cfg(target_os = "macos")]
+    return mac::traffic_lights_right(&w.window);
+    #[cfg(not(target_os = "macos"))]
+    { let _ = w; false }
 }
 
 /// Whether Rune replaced the native title bar: macOS draws the app's titlebar under its
