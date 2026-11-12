@@ -106,6 +106,9 @@ impl<S: 'static> Runtime<S> {
     /// links of any text, pushed after it as its children.
     pub(super) fn a11y_text_nodes(&self, i: usize, w: &a11y_tree::Walk, out: &mut Vec<(AkId, AkNode)>) {
         let n = &self.nodes[i];
+        if let Some(g) = n.vis.grid.as_deref() {
+            return self.a11y_grid_rows(i, g, w, out);
+        }
         let Some(spec) = n.text.as_deref() else { return };
         let me = out.len() - 1;
         let runs = n.input.is_some() || (spec.selectable && !n.is_secure());
@@ -155,6 +158,39 @@ impl<S: 'static> Runtime<S> {
             let id = link_id(n.id, k);
             out[me].1.push_child(id);
             out.push((id, link));
+        }
+    }
+
+    /// A terminal grid's rows as its text lines, top to bottom: each row's text (its pinned
+    /// cells in their columns) with every character's place on the cell grid, so a reader moves
+    /// through the screen by character, word and line.
+    fn a11y_grid_rows(&self, i: usize, g: &crate::el::grid::Grid, w: &a11y_tree::Walk, out: &mut Vec<(AkId, AkNode)>) {
+        let n = &self.nodes[i];
+        let me = out.len() - 1;
+        let r = self.drawn[i];
+        let [cw, ch] = g.cell;
+        for (k, row) in g.rows.iter().enumerate() {
+            let (text, places) = row.reading();
+            let y = r[1] + k as f32 * ch;
+            if y >= r[1] + r[3] { break; }
+            let mut run = AkNode::new(Role::TextRun);
+            run.set_bounds(AkRect {
+                x0: round(r[0] + w.shift[0]), y0: round(y + w.shift[1]),
+                x1: round(r[0] + f32::from(g.cols) * cw + w.shift[0]), y1: round(y + ch + w.shift[1]),
+            });
+            run.set_character_lengths(text.chars().map(|c| c.len_utf8() as u8).collect::<Vec<_>>());
+            run.set_character_positions(places.iter().map(|&(col, _)| f32::from(col) * cw).collect::<Vec<_>>());
+            run.set_character_widths(places.iter().map(|&(_, span)| f32::from(span) * cw).collect::<Vec<_>>());
+            let chars: Vec<char> = text.chars().collect();
+            let starts: Vec<u8> = (0..chars.len())
+                .filter(|&c| !chars[c].is_whitespace() && (c == 0 || chars[c - 1].is_whitespace()))
+                .map(|c| c.min(255) as u8)
+                .collect();
+            run.set_word_starts(starts);
+            run.set_value(text);
+            let id = line_id(n.id, k);
+            out[me].1.push_child(id);
+            out.push((id, run));
         }
     }
 

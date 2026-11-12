@@ -52,6 +52,8 @@ pub struct VisualCold {
     pub outline: Option<Outline>,
     /// Vector strokes and fills in the element's own points, over the fill.
     pub shape: Option<Rc<Shape>>,
+    /// A terminal's cell grid (`grid`), painted over the fill.
+    pub(crate) grid: Option<Rc<crate::el::grid::Grid>>,
     /// An RGBA image scaled into the element's rect, over the fill and shape.
     pub pixels: Option<crate::pixels::Pixels>,
     /// How `pixels` keeps its aspect ratio; `None` stretches it to the rect.
@@ -139,6 +141,7 @@ impl Empty for VisualCold {
         radial: None,
         outline: None,
         shape: None,
+        grid: None,
         pixels: None,
         pixels_fit: None,
         effect: None,

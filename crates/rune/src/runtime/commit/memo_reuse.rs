@@ -190,7 +190,7 @@ fn same_visual_cold(a: &crate::el::VisualCold, b: &crate::el::VisualCold) -> boo
     let crate::el::VisualCold {
         surface, surface_place, border_bottom, border_sides, border_layout, border_dash, border_dash_phase, shadows, blur_motion,
         clip, clip_radius, clip_corners, cutout, icon, icon_inked, icon_one_color, gradient, radial, outline, shape,
-        pixels, pixels_fit, effect, backdrop_blur, hover_motion, hover_within,
+        grid, pixels, pixels_fit, effect, backdrop_blur, hover_motion, hover_within,
         group_opacity, group_color, hover_alone, hover_share, icon_turn, cache_key, offset_motion, scale_motion,
         origin, rotate_motion, child_exit, enter_delay, motion_intent, instant_motion, clip_to_content, flight_crop,
         hold_landing, offset, paint_alpha, layer_opacity, blur, rotate, mark, mirror_rtl, paint_order,
@@ -211,6 +211,12 @@ fn same_visual_cold(a: &crate::el::VisualCold, b: &crate::el::VisualCold) -> boo
         && a.icon_inked == *icon_inked && a.icon_one_color == *icon_one_color
         && opt_box_eq(&a.gradient, gradient) && opt_box_eq(&a.radial, radial)
         && a.outline == *outline && opt_rc_eq(&a.shape, shape)
+        // A grid built again from the same rows is the same grid.
+        && match (&a.grid, grid) {
+            (None, None) => true,
+            (Some(x), Some(y)) => Rc::ptr_eq(x, y) || (x.cols == y.cols && x.cell == y.cell && x.rows.len() == y.rows.len() && x.rows.iter().zip(&y.rows).all(|(p, q)| Rc::ptr_eq(p, q))),
+            _ => false,
+        }
         && match (&a.pixels, pixels) {
             (None, None) => true,
             (Some(pa), Some(pb)) => Arc::ptr_eq(&pa.source, &pb.source),

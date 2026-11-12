@@ -240,6 +240,7 @@ pub(super) fn own_paints(n: &Node) -> usize {
         v.border_width() > 0.0 && (v.border().a > 0.0 || v.border_bottom.is_some()),
         v.gradient.is_some() || v.radial.is_some() || v.surface.is_some(),
         v.shape.is_some(),
+        v.grid.is_some(),
         v.pixels.is_some(),
         !v.shadows.is_empty(),
         n.text.is_some(),
