@@ -204,7 +204,7 @@ impl TextEdit {
                                 if a == 0 || line_range.is_empty() {
                                     self.set_block(Block::Paragraph);
                                 } else {
-                                    let from = prev_char(&self.text, a);
+                                    let from = prev_backspace(&self.text, a);
                                     self.replace((from, a), "", EditKind::Delete);
                                 }
                             }
@@ -216,7 +216,7 @@ impl TextEdit {
                         } else if word {
                             self.prev_word(a)
                         } else {
-                            prev_char(&self.text, a)
+                            prev_backspace(&self.text, a)
                         };
                         self.replace((from, a), "", if line || word { EditKind::DeleteRun } else { EditKind::Delete });
                     }

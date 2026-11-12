@@ -187,7 +187,9 @@ impl TextSystem {
                     .hint(false)
                     .normalized_coords(coords.iter().copied())
                     .build();
-                if let Some((pixels, at)) = rasterize_color(&mut scaler, glyph as u16) {
+                // COLR v1 first (Windows 11's emoji, COLR v1 Noto Color Emoji), then swash's COLR v0 and bitmaps.
+                let v1 = if scaler.has_color_outlines() { super::colr::rasterize(font.data.as_ref(), font.index, glyph, font_size, coords) } else { None };
+                if let Some((pixels, at)) = v1.or_else(|| rasterize_color(&mut scaler, glyph as u16)) {
                     self.color_bytes = self.color_bytes.saturating_add((at.width as usize) * (at.height as usize) * 4);
                     self.color_pixels.push(pixels);
                     let index = self.color_pixels.len() as u32;

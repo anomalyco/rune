@@ -191,6 +191,9 @@ pub(super) struct Fallbacks {
     symbols: bool,
     /// Every CJK fallback family, the app's then the system's in the order they loaded.
     cjk_families: Vec<FamilyId>,
+    /// Segoe UI Symbol is loaded, for symbols with a text form (Windows).
+    #[cfg_attr(not(windows), allow(dead_code))]
+    text_symbols: bool,
 }
 
 impl Fallbacks {
@@ -267,7 +270,8 @@ impl TextSystem {
             }
             // Windows' fallback covers symbol blocks; only math alphanumerics want one math font.
             math |= self.math.is_none() && if cfg!(windows) { fallback::is_math_alphanumeric(ch) } else { fallback::needs_symbols(ch) };
-            emoji |= ch == '\u{FE0F}' && self.emoji.is_none() && !self.fallbacks.asked.contains(&'\u{FE0F}');
+            // An emoji by default (✅ ⚡) wants the colour emoji family as `U+FE0F` does.
+            emoji |= (ch == '\u{FE0F}' || fallback::is_emoji(ch.encode_utf8(&mut [0; 4]))) && self.emoji.is_none() && !self.fallbacks.asked.contains(&'\u{FE0F}');
             if generic && !needs_no_font(ch) && !self.fallbacks.asked.contains(&ch) && !missing.contains(&ch) && !covered(ch) {
                 missing.push(ch);
             }
@@ -308,6 +312,12 @@ impl TextSystem {
                 self.add_symbol_files(direct_write::family_files(SYMBOL_FAMILIES));
             }
             if !missing.is_empty() {
+                // A symbol that isn't an emoji by default (☺ ✓ ♥) draws in Segoe UI Symbol's
+                // text form, as Chromium draws it, not in the colour emoji Windows maps it to.
+                if !self.fallbacks.text_symbols && missing.iter().any(|&c| fallback::needs_symbols(c) && !fallback::is_emoji(c.encode_utf8(&mut [0; 4]))) {
+                    self.fallbacks.text_symbols = true;
+                    self.add_symbol_files(direct_write::family_files(&["Segoe UI Symbol"]));
+                }
                 self.fallbacks.asked.extend(missing.iter().copied());
                 self.add_symbol_files(direct_write::fallback_family_files(&missing, locale.as_deref()));
             }
