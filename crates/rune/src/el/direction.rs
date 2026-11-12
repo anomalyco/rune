@@ -27,9 +27,9 @@ pub enum Direction {
     Rtl,
     /// From the first strong character of the element's text (or, on a container, of the text
     /// inside it, skipping subtrees that set their own direction), as `dir="auto"` and `<bdi>`
-    /// resolve it: right to left when that's Arabic or Hebrew, else left to right, and left to
-    /// right when there's none. An empty text field takes its placeholder's. For user strings
-    /// such as titles, names, messages and a prompt.
+    /// resolve it: right to left when that's Arabic or Hebrew, else left to right, and its
+    /// parent's direction when there's none (a number, a path alone). An empty text field takes
+    /// its placeholder's. For user strings such as titles, names, messages and a prompt.
     Auto,
 }
 
@@ -124,7 +124,7 @@ pub(crate) enum DirEvent<'a> {
     Inherit,
     /// `El::dir(Ltr)` or `El::dir(Rtl)`.
     Set(Flow),
-    /// `El::dir(Auto)`: its first strong character decides, left to right when none does.
+    /// `El::dir(Auto)`: its first strong character decides, its parent's flow when none does.
     Auto(&'a El),
 }
 
@@ -155,7 +155,13 @@ pub(crate) fn step(parent: Flow, event: DirEvent<'_>) -> (Flow, DirEffect) {
     let flow = match event {
         DirEvent::Inherit => parent,
         DirEvent::Set(flow) => flow,
-        DirEvent::Auto(el) => if first_strong(el) == Some(Direction::Rtl) { Flow::Rtl } else { Flow::Ltr },
+        // With no strong character (empty, digits, a path alone) it reads the way its parent
+        // does: an empty field in an Arabic window starts at the right.
+        DirEvent::Auto(el) => match first_strong(el) {
+            Some(Direction::Rtl) => Flow::Rtl,
+            Some(_) => Flow::Ltr,
+            None => parent,
+        },
     };
     let effect = match flow {
         Flow::Ltr => DirEffect::Keep,
@@ -192,7 +198,7 @@ fn first_strong(el: &El) -> Option<Direction> {
     // lines, each mention pill (a `dir="auto"` span) skipped, and none while it's empty (its
     // placeholder is another element).
     if let (Some(t), Some(_)) = (&el.text, el.cold.input.as_ref())
-        && t.dir == TextDir::Plaintext
+        && matches!(t.dir, TextDir::Plaintext(_))
     {
         let mut at = 0;
         for p in t.cold.pills.iter().map(|p| (p.start as usize, p.end as usize)).chain([(t.content.len(), t.content.len())]) {

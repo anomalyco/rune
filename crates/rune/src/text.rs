@@ -39,6 +39,8 @@ pub(crate) mod full_faces;
 mod language;
 pub use language::set_language;
 mod line_break;
+mod ltr_units;
+pub use ltr_units::ltr_units;
 pub mod mask_cache;
 mod paragraphs;
 mod span;
@@ -183,6 +185,9 @@ pub struct TextSystem {
     emoji: Option<&'static str>,
     /// The installed math families, once a text has needed them.
     math: Option<Vec<&'static str>>,
+    /// The installed monospace families with Arabic and Hebrew (`fallback::MONO_SCRIPT_FAMILIES`),
+    /// once a text has needed them: code keeps its columns in those scripts too.
+    mono_scripts: Option<Vec<&'static str>>,
     /// The installed `Family::SystemMono` families, once a text has needed them.
     system_mono: Option<Vec<String>>,
     /// The sans or mono slot names `ui-monospace` (see `family_list`).
@@ -308,6 +313,7 @@ impl TextSystem {
             symbol_families: Vec::new(),
             emoji: None,
             math: None,
+            mono_scripts: None,
             system_mono: None,
             slot_system_mono: names_system_mono(families.0) || names_system_mono(families.1),
             scripts: 0,
@@ -681,27 +687,28 @@ impl TextSystem {
         let math = self.math.as_deref().unwrap_or(&[]);
         let emoji = self.emoji.as_slice();
         let system = self.system_mono.as_deref().unwrap_or_default();
-        let with_symbols = |primary| {
+        let mono_scripts = self.mono_scripts.as_deref().unwrap_or(&[]);
+        let with_symbols = |primary, extra: &[&'static str]| {
             family_list(primary, system, self.sans.as_str())
                 .into_iter()
-                .chain(self.symbol_families.iter().chain(math).map(|name| FontFamilyName::named(name)))
+                .chain(extra.iter().chain(self.symbol_families.iter()).chain(math).map(|name| FontFamilyName::named(name)))
                 .collect::<Vec<_>>()
         };
         let sans = match style.family {
-            Family::Sans => with_symbols(self.sans.as_str()),
-            Family::Mono => with_symbols(self.mono.as_str()),
+            Family::Sans => with_symbols(self.sans.as_str(), &[]),
+            Family::Mono => with_symbols(self.mono.as_str(), mono_scripts),
             Family::Named(list) => {
-                let mut families = with_symbols(self.sans.as_str());
+                let mut families = with_symbols(self.sans.as_str(), &[]);
                 families.splice(0..0, named_list(list));
                 families
             }
             Family::SystemMono => {
-                let mut families = with_symbols(self.mono.as_str());
+                let mut families = with_symbols(self.mono.as_str(), mono_scripts);
                 families.splice(0..0, system.iter().map(|name| FontFamilyName::named(name)));
                 families
             }
         };
-        let mono = with_symbols(self.mono.as_str());
+        let mono = with_symbols(self.mono.as_str(), mono_scripts);
         let language = self.language;
         // Routed clusters try their fallback first, then the run's own stack (mono spans included).
         // Each of the four {math, emoji} × {sans, mono} stacks is built at most once.

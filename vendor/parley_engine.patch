@@ -1,0 +1,15 @@
+diff --git a/src/bidi.rs b/src/bidi.rs
+index 25aa622a..fd44780a 100644
+--- a/src/bidi.rs
++++ b/src/bidi.rs
+@@ -142,7 +142,9 @@ impl BidiResolver {
+                 || is_isolate_initiator(t)
+                 || t == BidiClass::PopDirectionalIsolate
+             {
+-                //self.levels[i] = self.base_level;
++                // UAX #9 L1: whitespace, isolate initiators and PDIs that end the paragraph take
++                // the paragraph's level (Rune: vendor/parley_engine.patch).
++                self.levels[i] = self.base_level;
+             } else {
+                 break;
+             }

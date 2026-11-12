@@ -50,6 +50,7 @@ use rune::{Align, Color, Cursor, El, Family, Link, LinkPaint, Span, TextHighligh
 use crate::Kit;
 
 mod autolink;
+mod bidi;
 mod cache;
 mod find;
 mod highlight;
@@ -201,6 +202,7 @@ pub struct Markdown {
     selectable: bool,
     copy_source: bool,
     scroll_wide: bool,
+    tentative: Option<rune::Direction>,
     highlighter: Highlighter,
     #[cfg(feature = "mermaid")]
     diagram_frame: Option<FrameWire>,
@@ -219,7 +221,7 @@ thread_local! {
 impl Markdown {
     pub fn new(src: impl Into<String>) -> Markdown {
         Markdown { src: src.into(), style: None, block_keys: Vec::new(), highlights: Vec::new(), autolink: true, reveal: -1.0, streaming: false, on_link: None, on_link_secondary: None, link_look: None, link_help: None, link_ring: None, code_link: None,
-            on_task: None, tasks_read_only: false, selectable: false, copy_source: false, scroll_wide: false, highlighter: Highlighter::builtin(),
+            on_task: None, tasks_read_only: false, selectable: false, copy_source: false, scroll_wide: false, tentative: None, highlighter: Highlighter::builtin(),
             #[cfg(feature = "mermaid")]
             diagram_frame: None, code_frame: None, quote_frame: None, link_favicon: None, images: None, on_image: None }
     }
@@ -341,6 +343,15 @@ impl Markdown {
         self
     }
 
+    /// The direction the document reads in until its first strong character arrives (and a block
+    /// with none in it, before any block has one): a reply's, the direction of the prompt it
+    /// answers. Each block then reads the way its own words do, a block with none the way the
+    /// block before it does. Code and diffs read left to right always. Without it that's the
+    /// direction around the document.
+    pub fn dir_tentative(mut self, dir: rune::Direction) -> Self {
+        self.tentative = Some(dir);
+        self
+    }
     /// Code blocks keep their lines whole and tables their columns' natural widths, each
     /// scrolling sideways in its own [`El::scroll_x`] viewport when wider than the text column,
     /// with soft left and right edges on code. Off (the default), code wraps and columns shrink.
@@ -441,6 +452,7 @@ impl Markdown {
                 self.tasks_read_only,
                 self.selectable,
                 self.scroll_wide,
+                self.tentative,
             ));
             return rune::memo::cached(h, || self.render_uncached(style));
         }
@@ -463,12 +475,13 @@ impl Markdown {
                 .map_or_else(String::new, |(_, key)| key.clone())).collect::<Vec<_>>()
         };
         let r = Renderer { s: style.clone(), highlights: self.highlights, reveal: self.reveal, streaming: self.streaming, on_link: self.on_link, on_link_secondary: self.on_link_secondary, link_look: self.link_look, link_help: self.link_help, link_ring: self.link_ring, code_link: self.code_link,
-            on_task: self.on_task, tasks_read_only: self.tasks_read_only, selectable: self.selectable, scroll_wide: self.scroll_wide,
+            on_task: self.on_task, tasks_read_only: self.tasks_read_only, selectable: self.selectable, scroll_wide: self.scroll_wide, tentative: self.tentative,
             highlighter: self.highlighter, sources, next_source: Cell::new(0), tasks, next_task: Cell::new(0),
             current_block_key: RefCell::new("b0".into()),
             #[cfg(feature = "mermaid")]
             diagram_frame: self.diagram_frame, code_frame: self.code_frame, quote_frame: self.quote_frame, link_favicon: self.link_favicon, images: self.images, on_image: self.on_image, flow: Cell::default() };
-        let root = r.blocks(&blocks, &maps, &keys, true).selection_group(self.selectable);
+        // The document reads the way its first words do; until any arrive, the way it was asked.
+        let root = bidi::directed(r.blocks(&blocks, &maps, &keys, true), bidi::blocks_dir(&blocks).or(self.tentative)).selection_group(self.selectable);
         if !(self.selectable && self.copy_source) { return root; }
         let names: Rc<[String]> = rendered_keys(blocks.len(), &keys).into();
         let src: Rc<str> = self.src.into();

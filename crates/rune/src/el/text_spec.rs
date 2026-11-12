@@ -64,8 +64,10 @@ pub(crate) enum TextDir {
     Fixed(crate::el::Flow),
     /// [`El::dir_by_paragraph`](crate::El::dir_by_paragraph) (CSS `unicode-bidi: plaintext`):
     /// each paragraph in the direction of its own first strong character, whatever the
-    /// element's is.
-    Plaintext,
+    /// element's is. A paragraph with none takes the direction of the paragraph before it, and
+    /// the first ones the element's (here once it's flattened), as a word processor does: an
+    /// empty line under an Arabic one starts at the right, an empty field in an Arabic window too.
+    Plaintext(Option<crate::el::Flow>),
 }
 
 /// What moves a text's [`TextDir`].
@@ -81,7 +83,9 @@ pub(crate) enum TextDirEvent {
 /// direction the element resolves to.
 pub(crate) fn step_text_dir(state: TextDir, event: TextDirEvent) -> TextDir {
     match (state, event) {
-        (_, TextDirEvent::ByParagraph) | (TextDir::Plaintext, TextDirEvent::Flatten(_)) => TextDir::Plaintext,
+        (TextDir::Plaintext(flow), TextDirEvent::ByParagraph) => TextDir::Plaintext(flow),
+        (_, TextDirEvent::ByParagraph) => TextDir::Plaintext(None),
+        (TextDir::Plaintext(_), TextDirEvent::Flatten(flow)) => TextDir::Plaintext(flow),
         (_, TextDirEvent::Flatten(Some(flow))) => TextDir::Fixed(flow),
         (_, TextDirEvent::Flatten(None)) => TextDir::Auto,
     }
@@ -121,6 +125,8 @@ pub(crate) struct TextCold {
     pub(crate) soft_breaks: Vec<u32>,
     /// [`Mark::Pill`](crate::Mark::Pill) chips in `content`, sorted.
     pub(crate) pills: Vec<crate::text::PillChip>,
+    /// See [`El::isolate`](crate::El::isolate): byte ranges of `content` still to mark, sorted.
+    pub(crate) isolates: Vec<(u32, u32, crate::Direction)>,
     /// See [`El::pill_colors`](crate::El::pill_colors).
     pub(crate) pill_colors: Option<(Color, Option<Color>)>,
     /// Visual palette for rich block and inline decorations; the default's when unset.
@@ -147,6 +153,7 @@ impl Empty for TextCold {
         blocks: Vec::new(),
         soft_breaks: Vec::new(),
         pills: Vec::new(),
+        isolates: Vec::new(),
         pill_colors: None,
         rich_style: None,
         secure_revealed: false,
@@ -236,6 +243,15 @@ impl TextSpec {
         Some(key)
     }
 
+    /// The flow a by-paragraph text's paragraphs with no strong character start from: the
+    /// element's, left to right when nothing sets one.
+    pub(crate) fn plaintext_flow(&self) -> crate::el::Flow {
+        match self.dir {
+            TextDir::Plaintext(flow) => flow.unwrap_or_default(),
+            _ => crate::el::Flow::Ltr,
+        }
+    }
+
     /// [`crate::text::shape_key`] of this text in its direction.
     pub(crate) fn fresh_shape_key(&self, scale: f32) -> u64 {
         let key = crate::text::shape_key(&self.content, &self.spans, self.style, scale, self.wrap_anywhere, &self.cold.pills);
@@ -246,7 +262,13 @@ impl TextSpec {
     pub(crate) fn base(&self) -> parley::BaseDirection {
         match self.dir {
             TextDir::Fixed(flow) => flow.base(),
-            TextDir::Auto | TextDir::Plaintext => parley::BaseDirection::Auto,
+            TextDir::Auto => parley::BaseDirection::Auto,
+            // A paragraph with no strong character reads the way the element does.
+            TextDir::Plaintext(flow) => match crate::Direction::of(&self.content) {
+                Some(crate::Direction::Rtl) => parley::BaseDirection::Rtl,
+                Some(_) => parley::BaseDirection::Ltr,
+                None => flow.unwrap_or_default().base(),
+            },
         }
     }
 
@@ -254,7 +276,7 @@ impl TextSpec {
     /// ([`crate::text::ParagraphLayout`]): a wrapped, uncut field's by-paragraph text. Others
     /// stay one layout (a static text splits into one text per paragraph instead).
     pub(crate) fn by_paragraph(&self, input: bool) -> bool {
-        self.dir == TextDir::Plaintext && input && self.wrap && !self.redacted && !self.truncate && !self.truncate_fade
+        matches!(self.dir, TextDir::Plaintext(_)) && input && self.wrap && !self.redacted && !self.truncate && !self.truncate_fade
             && self.max_lines == 0 && self.cold.live.is_none() && self.cold.advance_in.is_none()
     }
 

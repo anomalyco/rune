@@ -20,6 +20,8 @@ pub(super) struct Renderer {
     pub(super) selectable: bool,
     /// `Markdown::scroll_wide`.
     pub(super) scroll_wide: bool,
+    /// `Markdown::dir_tentative`.
+    pub(super) tentative: Option<rune::Direction>,
     pub(super) highlighter: Highlighter,
     pub(super) sources: Rc<[Source]>,
     /// The next of `sources`, advanced at each [`Block::Code`] in document order.
@@ -358,6 +360,7 @@ impl Renderer {
         // Lines keep their own 22.4 points, as a page's do, so a long list doesn't drift a
         // point per item.
         let e = self.with_reveal(rich(inl.text.clone(), self.spans(inl, style)).font(style).color(color).exact_lines()).w_full();
+        let e = bidi::directed(bidi::isolated(e, inl), bidi::inline_dir(inl));
         // A copy puts a blank line around a paragraph, one newline around a list item's first
         // with its marker before it.
         let e = match self.flow.get().lead {
@@ -381,6 +384,8 @@ impl Renderer {
         let mut after_heading = false;
         let names = rendered_keys(blocks.len(), keys);
         let empty = BlockMap::None;
+        // A block with no strong character of its own reads the way the one before it does.
+        let mut last = if top_level { self.tentative } else { None };
         for ((i, b), key) in blocks.iter().enumerate().zip(names) {
             // A fence still arriving with no lines yet (its language may be half written:
             // ```` ```mer ````) shows nothing until its first line, then mounts as what it is.
@@ -407,7 +412,14 @@ impl Renderer {
             if i > 0 {
                 self.flow.set(Flow { lead: None, ..self.flow.get() });
             }
-            c = c.child(self.block(b, maps.get(i).unwrap_or(&empty)).key(key).mt(top));
+            let own = bidi::blocks_dir(std::slice::from_ref(b));
+            let prose = !matches!(b, Block::Code(_) | Block::Diff(_) | Block::Mermaid(_) | Block::Image { .. } | Block::Rule);
+            let drawn = self.block(b, maps.get(i).unwrap_or(&empty));
+            let drawn = if prose { bidi::directed(drawn, own.or(last)) } else { drawn };
+            if own.is_some() {
+                last = own;
+            }
+            c = c.child(drawn.key(key).mt(top));
             prev_mb = mb;
             after_heading = matches!(b, Block::Heading(..));
         }
@@ -427,7 +439,8 @@ impl Renderer {
         let spans = if shell.is_some() { Vec::new() } else { self.syntax_spans(code, source) };
         let body = self.with_reveal(tabbed(code, spans, highlights, s.code_block).font(s.code_block).color(ink)).copy_breaks(2, 2);
         // `.highlights`' `border: 0.5px` takes its device pixel each side, inside which the padding sits.
-        let frame = col().role("code").w_full().radius(6.0).fill(fill).border(0.5, border).border_layout();
+        // Code reads left to right in any document, as `markdown.css` isolates it.
+        let frame = col().role("code").dir(rune::Direction::Ltr).w_full().radius(6.0).fill(fill).border(0.5, border).border_layout();
         if self.scroll_wide {
             // The text sizes to its longest line inside the viewport, which scrolls under the
             // padding so lines run to the frame's edge.
@@ -455,7 +468,7 @@ impl Renderer {
     pub(super) fn diff(&self, src: &str, map: Option<&SpanMap>) -> El {
         let s = &self.s;
         let all_hl = self.text_highlights_for(src, map);
-        let mut c = col().role("code").w_full().py(s.code_block_pad[1]).radius(6.0).fill(s.code_block_fill).border(0.5, s.code_block_border).border_layout();
+        let mut c = col().role("code").dir(rune::Direction::Ltr).w_full().py(s.code_block_pad[1]).radius(6.0).fill(s.code_block_fill).border(0.5, s.code_block_border).border_layout();
         let mut line_start = 0usize;
         let last = src.split('\n').count() - 1;
         for (n, line) in src.split('\n').enumerate() {
@@ -603,7 +616,8 @@ impl Renderer {
                     BlockMap::Table { head, rows } => (head.as_slice(), rows.as_slice()),
                     _ => (&[][..], &[][..]),
                 };
-                self.table(t, head_maps, row_maps)
+                // Its first column stands on the side its words start on.
+                bidi::directed(self.table(t, head_maps, row_maps), bidi::table_dir(t))
             }
             Block::List { start, items } => {
                 let item_maps = match map {
@@ -661,7 +675,9 @@ impl Renderer {
                     );
                 }
                 self.flow.set(flow);
-                c
+                // One direction for the whole list, its first item's with any, so every marker
+                // stands on one rail; each item's paragraphs still read their own way.
+                bidi::directed(c, items.iter().find_map(|item| bidi::blocks_dir(item)))
             }
             Block::Quote(inner) => {
                 let inner_maps = match map {
@@ -674,11 +690,15 @@ impl Renderer {
                 self.flow.set(Flow { ink: q.text.or(flow.ink), inset: flow.inset + q.width + q.pad, ..flow });
                 let drawn = self.blocks(inner, inner_maps, &[], false);
                 self.flow.set(flow);
-                let quote = row()
-                    .role("blockquote")
-                    .w_full()
-                    .child(el().w(q.width).h_full().radius((q.width / 2.0).min(1.0)).fill(s.quote_rule))
-                    .child(drawn.grow(1.0).shrink().pl(q.pad));
+                // The rule stands on the side the quote starts on.
+                let quote = bidi::directed(
+                    row()
+                        .role("blockquote")
+                        .w_full()
+                        .child(el().w(q.width).h_full().radius((q.width / 2.0).min(1.0)).fill(s.quote_rule))
+                        .child(drawn.grow(1.0).shrink().pl(q.pad)),
+                    bidi::blocks_dir(inner),
+                );
                 match &self.quote_frame {
                     Some(f) => f(quote, &QuoteFrame { text: &self.plain_text(inner, first_task, Flow { lead: None, ..flow }) }),
                     None => quote,

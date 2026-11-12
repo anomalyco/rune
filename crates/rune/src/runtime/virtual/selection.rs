@@ -117,6 +117,7 @@ fn walk_row_el<'a>(
     let mut had_child_text = false;
     if !inert && el.cold.input.is_none() && let Some(t) = &el.text && t.selectable && !t.redacted {
         let mut spec = TextSpec::clone(t);
+        spec.apply_isolates();
         spec.apply_case();
         texts.push(OffscreenText {
             list_path: list_path.to_owned(),

@@ -61,6 +61,17 @@ pub(super) fn family_files(names: &[&str]) -> Vec<PathBuf> {
 /// user's locale when None), each file once: usually one per script. Chars no installed font
 /// covers add nothing.
 pub(super) fn fallback_files(chars: &[char], locale: Option<&str>) -> Vec<PathBuf> {
+    mapped_files(chars, locale, false)
+}
+
+/// [`fallback_files`], each with every other face of its family: a script's fallback then
+/// draws a medium or bold label in the family's own Semibold or Bold (Segoe UI's for Arabic and
+/// Hebrew) rather than the Regular face, faked bold.
+pub(super) fn fallback_family_files(chars: &[char], locale: Option<&str>) -> Vec<PathBuf> {
+    mapped_files(chars, locale, true)
+}
+
+fn mapped_files(chars: &[char], locale: Option<&str>, whole_family: bool) -> Vec<PathBuf> {
     DW.with(|dw| {
         let Some(dw) = dw else { return Vec::new() };
         let text: Vec<u16> = chars.iter().collect::<String>().encode_utf16().collect();
@@ -91,11 +102,21 @@ pub(super) fn fallback_files(chars: &[char], locale: Option<&str>) -> Vec<PathBu
                 break;
             }
             // SAFETY: as above.
-            let path = font.and_then(|f| f.cast::<IDWriteFont3>().ok()).and_then(|f| unsafe { f.GetFontFaceReference() }.ok()).and_then(|r| unsafe { path_of(&r) });
+            let path = font.as_ref().and_then(|f| f.cast::<IDWriteFont3>().ok()).and_then(|f| unsafe { f.GetFontFaceReference() }.ok()).and_then(|r| unsafe { path_of(&r) });
             if let Some(path) = path
                 && !out.contains(&path)
             {
                 out.push(path);
+            }
+            // SAFETY: the mapped font's family and its face references, read only.
+            if whole_family && let Some(family) = font.and_then(|f| unsafe { f.GetFontFamily() }.ok()).and_then(|f| f.cast::<IDWriteFontFamily1>().ok()) {
+                for i in 0..unsafe { family.GetFontCount() } {
+                    if let Some(path) = unsafe { family.GetFontFaceReference(i) }.ok().and_then(|r| unsafe { path_of(&r) })
+                        && !out.contains(&path)
+                    {
+                        out.push(path);
+                    }
+                }
             }
             at += mapped;
         }

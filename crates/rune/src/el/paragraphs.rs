@@ -26,8 +26,18 @@ impl El {
         if self.cold.input.is_some() {
             return self;
         }
+        // Each paragraph's direction skips its isolates, and its piece takes their marks.
+        t.apply_isolates();
         let paragraphs = paragraphs(&t.content);
-        let dirs: Vec<Direction> = paragraphs.iter().map(|&(a, b)| Direction::of(&t.content[a..b]).unwrap_or(Direction::Ltr)).collect();
+        // A paragraph with no strong character reads the way the one before it does, and the
+        // first ones the way the element does (None here, as it isn't flattened yet).
+        let dirs: Vec<Option<Direction>> = paragraphs
+            .iter()
+            .scan(None, |last, &(a, b)| {
+                *last = Direction::of(&t.content[a..b]).or(*last);
+                Some(*last)
+            })
+            .collect();
         let whole = t.redacted || t.cold.live.is_some() || t.cold.advance_in.is_some() || t.truncate || t.truncate_fade || t.max_lines > 0;
         if whole || dirs.iter().all(|&d| d == dirs[0]) {
             return self;
@@ -37,6 +47,10 @@ impl El {
         let last = paragraphs.len() - 1;
         let pieces: Vec<El> = paragraphs.iter().enumerate().map(|(k, &range)| {
             let mut e = text(String::new()).key(format!("p{k}"));
+            // A line of digits or punctuation under an Arabic one reads right to left with it.
+            if let Some(d) = dirs[k].filter(|_| Direction::of(&t.content[range.0..range.1]).is_none()) {
+                e = e.dir(d);
+            }
             let links = paragraph(&t, k, range, k == last, &mut e);
             if let Some(c) = cursor { e = e.cursor(c); }
             if links { e.cold_mut().focus.enabled = true; }

@@ -28,6 +28,7 @@ mod handler_set;
 mod handlers;
 mod help;
 mod input;
+mod isolates;
 mod layout;
 pub(crate) mod layout_watch;
 mod live_colors;
