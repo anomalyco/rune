@@ -22,6 +22,7 @@ impl<S: 'static> Runtime<S> {
         let text = n.text.as_deref().filter(|_| input.is_none());
         let cx = RoleCtx {
             pressable: handlers.is_some_and(|h| h.has_primary()),
+            focusable: self.takes_focus(n),
             input: input.is_some(),
             multiline: input.is_some_and(|i| !i.single_line),
             secure: n.is_secure(),

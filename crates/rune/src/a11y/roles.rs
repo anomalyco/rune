@@ -5,6 +5,8 @@ use accesskit::Role;
 /// What an element's role string says, given what else the element is.
 pub(crate) struct RoleCtx {
     pub pressable: bool,
+    /// It takes keyboard focus (`El::focusable`, or a pressable control under `Cx::web_focus`).
+    pub focusable: bool,
     pub input: bool,
     pub multiline: bool,
     pub secure: bool,
@@ -100,17 +102,19 @@ pub(crate) fn map(role: &str, cx: &RoleCtx) -> Option<Role> {
         "textbox" | "searchbox" => if cx.keyed { Role::Group } else { return None },
         "none" | "presentation" => return None,
         "group" => return group(cx),
-        _ => return Some(if cx.pressable { Role::Button } else { group(cx).unwrap_or(Role::Group) }),
+        _ => return Some(if cx.pressable && cx.focusable { Role::Button } else { group(cx).unwrap_or(Role::Group) }),
     };
     Some(known)
 }
 
-/// A plain box: a dialog when modal, a scroll view when it scrolls, a button when pressable,
-/// a label when it holds text; kept as a group when an app keyed or labelled it, so drivers
-/// can find it by key; otherwise left out, its children joining its parent.
+/// A plain box: a dialog when modal, a scroll view when it scrolls, a button when the keyboard
+/// can press it, a label when it holds text; kept as a group when an app keyed or labelled it,
+/// so drivers can find it by key; otherwise left out, its children joining its parent. A box
+/// that only takes a pointer's press (a pane that clears a selection, a scrim that closes a
+/// popover) is no button, as a `<div onclick>` isn't: it keeps its press as an action.
 fn group(cx: &RoleCtx) -> Option<Role> {
     if cx.modal { return Some(Role::Dialog); }
-    if cx.pressable { return Some(if cx.default_button { Role::DefaultButton } else { Role::Button }); }
+    if cx.pressable && cx.focusable { return Some(if cx.default_button { Role::DefaultButton } else { Role::Button }); }
     if cx.scrolls { return Some(Role::ScrollView); }
     if cx.has_text { return Some(Role::Label); }
     if cx.image && (cx.keyed || cx.labelled) { return Some(Role::Image); }
@@ -157,7 +161,7 @@ mod tests {
     use super::*;
 
     fn cx() -> RoleCtx {
-        RoleCtx { pressable: false, input: false, multiline: false, secure: false, scrolls: false, modal: false,
+        RoleCtx { pressable: false, focusable: false, input: false, multiline: false, secure: false, scrolls: false, modal: false,
             default_button: false, labelled: false, keyed: false, has_text: false, image: false }
     }
 
@@ -185,11 +189,13 @@ mod tests {
         assert_eq!(map("group", &cx()), None);
         assert_eq!(map("group", &RoleCtx { keyed: true, ..cx() }), Some(Role::Group));
         assert_eq!(map("group", &RoleCtx { scrolls: true, ..cx() }), Some(Role::ScrollView));
-        assert_eq!(map("group", &RoleCtx { pressable: true, ..cx() }), Some(Role::Button));
+        assert_eq!(map("group", &RoleCtx { pressable: true, focusable: true, ..cx() }), Some(Role::Button));
+        assert_eq!(map("group", &RoleCtx { pressable: true, ..cx() }), None);
         assert_eq!(map("group", &RoleCtx { modal: true, ..cx() }), Some(Role::Dialog));
         assert_eq!(map("icon", &cx()), None);
         assert_eq!(map("icon", &RoleCtx { labelled: true, ..cx() }), Some(Role::Image));
-        assert_eq!(map("whatever", &RoleCtx { pressable: true, ..cx() }), Some(Role::Button));
+        assert_eq!(map("whatever", &RoleCtx { pressable: true, focusable: true, ..cx() }), Some(Role::Button));
+        assert_eq!(map("whatever", &RoleCtx { pressable: true, ..cx() }), Some(Role::Group));
     }
 
     #[test]

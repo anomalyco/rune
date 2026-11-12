@@ -491,7 +491,9 @@ impl El {
         self.set_clip([left, top, right, bottom].map(|w| -w.max(0.0)));
         self
     }
-    /// Track hover for descendants' `group_*` styles (see [`Visual::hover_group`]).
+    /// Track hover for descendants' `group_*` styles (see [`Visual::hover_group`]). Keyboard
+    /// focus on the group or inside it lights it too, as CSS `:is(:hover, :has(:focus-visible))`
+    /// does, so controls it reveals show when Tab reaches them.
     pub fn hover_group(mut self) -> Self {
         self.vis_flags.set(VisualFlags::HOVER_GROUP, true);
         self
@@ -504,13 +506,10 @@ impl El {
         self.vis.cold_mut().hover_share = Some(key.into());
         self
     }
-    /// [`Self::hover_group`] that also counts as hovered while keyboard focus is on it or
-    /// anywhere inside it, as CSS `:is(:hover, :has(:focus-visible))` does: a tab whose close
-    /// button and hover wash show when Tab reaches it, as under the pointer.
-    pub fn hover_group_focus(mut self) -> Self {
-        self.vis_flags.set(VisualFlags::HOVER_GROUP, true);
-        self.vis.cold_mut().hover_focus = true;
-        self
+    /// [`Self::hover_group`], which follows keyboard focus as well now.
+    #[doc(hidden)]
+    pub fn hover_group_focus(self) -> Self {
+        self.hover_group()
     }
     /// Curves for this element's hover track: `enter` when the pointer arrives, `exit` when it
     /// leaves (e.g. a delayed reveal).

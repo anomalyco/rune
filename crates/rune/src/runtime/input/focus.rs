@@ -14,8 +14,9 @@ const PAGED_ROLES: [&str; 2] = ["menu", "listbox"];
 /// Tables and outlines stop at their ends (NSTableView); menus, popups and segments wrap.
 const CLAMPED_ROLES: [&str; 3] = ["list", "tree", "grid"];
 /// Roles whose pressable elements are Tab stops under `Cx::web_focus`, as HTML's buttons,
-/// links and form controls are.
-const PRESSABLE_ROLES: [&str; 7] = ["button", "link", "tab", "checkbox", "switch", "radio", "combobox"];
+/// links and form controls are, and the items of trees and grids, which a reader moves through
+/// by arrows once their group has focus (`El::focus_group` keeps the group one Tab stop).
+const PRESSABLE_ROLES: [&str; 9] = ["button", "link", "tab", "checkbox", "switch", "radio", "combobox", "treeitem", "gridcell"];
 /// The innermost open modal and the nodes input may reach while it shows: its subtree, the
 /// popovers anchored inside it, and the window's caption buttons.
 pub(super) struct ModalScope {
@@ -259,8 +260,8 @@ impl<S: 'static> Runtime<S> {
             }
         }
         self.sync_side_focus();
-        // `El::hover_group_focus`: a group keyboard focus enters or leaves hovers or rests now.
-        if self.nodes.iter().any(|n| n.vis.hover_focus) {
+        // A hover group keyboard focus enters or leaves hovers or rests now (`El::hover_group`).
+        if self.nodes.iter().any(|n| n.vis_flags.hover_group()) {
             changed |= self.update_interaction(None);
         }
         changed

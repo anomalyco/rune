@@ -1254,7 +1254,7 @@ impl<S: 'static> Runtime<S> {
         self.ambient = ambient;
         // A live transform can change hover paint with no handler and no running spring.
         // Retarget from the new geometry and schedule the frame that samples that paint. A
-        // commit that moved the indices left keyboard focus hover (`El::hover_group_focus`) to
+        // commit that moved the indices left keyboard focus hover (`El::hover_group`) to
         // this pass too.
         let interaction = (self.pointer.is_some() || self.focus.keyboard()) && self.update_interaction(held);
         self.queue.len() > queued || interaction
