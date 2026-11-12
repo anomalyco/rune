@@ -168,7 +168,7 @@ pub struct Compiled {
 #[derive(Clone, Debug)]
 pub(crate) struct Module {
     pub(crate) code: Arc<[u8]>,
-    /// The file starts with `--!native`: compile it to native code where the platform allows.
+    /// The file starts with `--!native`: compile it to native code with the `native-code` feature.
     pub(crate) native: bool,
     /// What it was compiled from, so a later compile of the same text reuses it.
     source: Arc<str>,

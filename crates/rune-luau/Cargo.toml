@@ -6,6 +6,11 @@ license.workspace = true
 
 [features]
 default = ["wasi-allocator"]
+# Luau native code generation for modules that open with `--!native` (Windows and Linux, x86-64 and
+# arm64; enable it only for those targets). Off, they run in the interpreter. On, every VM makes
+# a code generator as it starts: a 4 MiB committed code block per VM, used or not (21 VMs in
+# OpenCode held 88 MB of commit this way with no native module among them).
+native-code = ["mlua/luau-jit"]
 # `Script::watch`: reload a script folder when a file in it is saved (notify; native only).
 watch = ["dep:notify"]
 # On wasm32-unknown-unknown, Rust allocates through WASI libc's malloc, which Luau's C++ uses,
@@ -21,14 +26,7 @@ rustc-hash = "2"
 serde = { version = "1", optional = true }
 serde_json = { version = "1", optional = true }
 
-# Native code generation where Luau has a backend (x86-64 and arm64) and the OS lets a process
-# map executable memory without an entitlement: Windows and Linux. macOS (whose hardened
-# runtime would need `allow-jit`), iOS and the web run Luau's interpreter.
 # mlua is pinned to a rev on main: wasm32-unknown-unknown support landed after 0.12.2.
-[target.'cfg(all(any(target_os = "windows", target_os = "linux"), any(target_arch = "x86_64", target_arch = "aarch64")))'.dependencies]
-mlua = { git = "https://github.com/mlua-rs/mlua", rev = "a0ad4535fc72ba89967a931c5be57b162b5f0f3f", features = ["luau-jit"] }
-
-[target.'cfg(not(all(any(target_os = "windows", target_os = "linux"), any(target_arch = "x86_64", target_arch = "aarch64"))))'.dependencies]
 mlua = { git = "https://github.com/mlua-rs/mlua", rev = "a0ad4535fc72ba89967a931c5be57b162b5f0f3f", features = ["luau"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

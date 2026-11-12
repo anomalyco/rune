@@ -141,7 +141,7 @@ impl Requirer {
 
 /// A function that runs module `path` once, refusing to start it again while it is still
 /// running (a `require` cycle). A module that opens with `--!native` compiles to native code
-/// where the platform allows it.
+/// with the `native-code` feature (Windows and Linux).
 pub(crate) fn module_loader(lua: &Lua, compiled: &Compiled, loading: &Loading, path: &str) -> mlua::Result<Function> {
     let module = compiled.module(path).ok_or_else(|| mlua::Error::runtime(format!("no module {path}")))?;
     #[cfg(luau_jit)]
