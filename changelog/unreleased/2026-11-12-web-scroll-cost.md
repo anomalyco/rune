@@ -1,0 +1,1 @@
+- A scrolling web app rebuilds its semantic mirror at most every 150 ms, and once where the scroll stops, instead of every frame; the event loop's wait isn't rescheduled when its deadline hasn't moved (winit queued and aborted a browser task for each); the browser's platform is read once.
