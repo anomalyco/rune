@@ -3,6 +3,39 @@
 
 use super::*;
 
+/// What a `Resized` does to the frame move: a reply that changed nothing lays nothing out, one
+/// that answers a jump steps the viewport, and any other size is the user's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ResizeReply {
+    /// Already laid out there: nothing to lay out, though it may answer a jump.
+    Unchanged,
+    /// This window asked for the size: step the viewport.
+    Stepped,
+    /// The user's resize: set the viewport.
+    Set,
+}
+
+// differs from dev: the host returned on a reply that changed nothing without answering the jump
+// it carries, so that coupon stayed and the user's next resize spent it.
+/// The frame move and viewport a `Resized` leaves. `reported` is the event's physical size and
+/// `scale` the window's, so an unchanged reply answers only a jump for exactly those pixels.
+pub(super) fn resize_reply(
+    slot: &mut Option<stepping::FrameMove>,
+    viewport: (f32, f32),
+    reported: (u32, u32),
+    scale: f32,
+    unchanged: bool,
+) -> ResizeReply {
+    if unchanged {
+        stepping::FrameMove::answer_jump(slot, reported, scale);
+        ResizeReply::Unchanged
+    } else if stepping::FrameMove::take_jump(slot, viewport) {
+        ResizeReply::Stepped
+    } else {
+        ResizeReply::Set
+    }
+}
+
 impl<S: 'static> Host<S> {
     pub(super) fn resume(&mut self, event_loop: &ActiveEventLoop) {
         if self.started {
@@ -297,12 +330,15 @@ impl<S: 'static> Host<S> {
                 // A frame Rune moved itself has its drawable and viewport already.
                 let resized = l.resize_surface(gpu, size);
                 let viewport = (size.width as f32 / scale, size.height as f32 / scale);
-                if !resized && viewport == rt.window_viewport() && scale == rt.window_scale() {
-                    if restored || origin_moved { l.request_redraw(); }
-                    return;
+                let unchanged = !resized && viewport == rt.window_viewport() && scale == rt.window_scale();
+                match resize_reply(&mut self.frame_move, viewport, (size.width, size.height), scale, unchanged) {
+                    ResizeReply::Unchanged => {
+                        if restored || origin_moved { l.request_redraw(); }
+                        return;
+                    }
+                    ResizeReply::Stepped => rt.step_viewport(viewport, scale),
+                    ResizeReply::Set => rt.set_viewport(viewport, scale),
                 }
-                let asked = stepping::FrameMove::take_jump(&mut self.frame_move, viewport);
-                if asked { rt.step_viewport(viewport, scale) } else { rt.set_viewport(viewport, scale) }
                 // The user is dragging the edge. AppKit commits the new size when this returns,
                 // and a frame drawn later would leave the old one stretched to it until then.
                 #[cfg(target_os = "macos")]
