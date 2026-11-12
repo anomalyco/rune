@@ -7,6 +7,8 @@ fn main() {}
 
 #[cfg(target_os = "macos")]
 fn main() {
+    // Work after `run` returns below: the process tears down in order rather than ending at once.
+    rune::orderly_exit();
     use std::{sync::{Arc, atomic::{AtomicBool, Ordering}}, time::Duration};
     use objc2::{msg_send, runtime::AnyObject};
     use objc2_foundation::NSString;

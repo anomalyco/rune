@@ -101,29 +101,44 @@ pub(crate) fn step(state: State, event: Event) -> (State, Vec<Effect>) {
 static STATE: Mutex<State> = Mutex::new(State::Running);
 static FAST_EXIT: std::sync::OnceLock<fn()> = std::sync::OnceLock::new();
 
-/// Ends the process without tearing anything down once the app has quit: every window hides as
-/// the quit starts, every window's `App::on_quit` runs, the clipboard hands over what it holds,
-/// tray icons leave the notification area, a relaunch starts, then `last` runs (the app's final
+/// How a quitting app ends: fast, unless it asked for an orderly exit (`orderly_exit`).
+static ORDERLY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// What a fast exit runs last: once the app has quit, every window has hidden (as the quit
+/// started) and run its `App::on_quit`, the clipboard has handed over what it holds, tray icons
+/// have left the notification area and a relaunch has started, `last` runs (the app's final
 /// durable write, a trace) and the process ends at once. Windows, GPU devices, threads and memory
-/// aren't dropped: the OS takes them back, which on Windows skips hundreds of milliseconds of
-/// destructors and graphics-driver `DllMain` detach. Nothing after the event loop returns runs,
-/// so whatever the app does there belongs in `last` or its quit hooks. Set it once, before the
-/// app runs; a later call does nothing. On the web the page's own lifetime applies instead.
+/// aren't dropped: the OS takes them back, which on Windows skips tens to hundreds of milliseconds
+/// of destructors and graphics-driver `DllMain` detach, and a window is gone the moment its quit
+/// is done. Every app ends this way unless it calls [`orderly_exit`]; `fast_exit` only adds
+/// `last`. Nothing after the event loop returns runs, so whatever the app does there belongs in
+/// `last` or its quit hooks. Set it once, before the app runs; a later call does nothing. On the
+/// web the page's own lifetime applies instead.
 pub fn fast_exit(last: fn()) {
     let _ = FAST_EXIT.set(last);
 }
 
-/// The app's last step before a fast exit, when it asked for one (`fast_exit`).
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn fast_exit_hook() -> Option<fn()> {
-    FAST_EXIT.get().copied()
+/// Tears the process down in order when the app quits instead of ending it at once (the default,
+/// [`fast_exit`]): windows, GPU devices and threads are dropped and `run` returns, for an app with
+/// work after `run` or destructors that must run. Call it before the app runs.
+pub fn orderly_exit() {
+    ORDERLY.store(true, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// The app's last step before a fast exit: its `fast_exit`, or nothing; none for an orderly exit.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn fast_exit_hook() -> Option<fn()> {
+    if ORDERLY.load(std::sync::atomic::Ordering::Relaxed) { return None; }
+    Some(FAST_EXIT.get().copied().unwrap_or(|| {}))
+}
 /// A fast exit, once the windows' hooks ran and the loop is ending: what must leave the system
 /// tidy goes in order (the clipboard's hand-over, tray icons, a relaunch), then the app's
 /// `last`, then the process ends without dropping a window, a device or an allocation.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn end_fast(last: fn()) -> ! {
+    // What the loop's end does for an orderly exit (`event_loop::run_configured`).
+    crate::tooling::interaction::flush();
+    crate::platform::ready_signal::clear();
     crate::clipboard::shutdown();
     crate::tray::remove_all();
     if send(Event::Exited).contains(&Effect::Relaunch) {
