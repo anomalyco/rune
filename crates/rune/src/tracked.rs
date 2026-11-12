@@ -60,6 +60,11 @@ impl<T> Tracked<T> {
         bump(this.id);
     }
 
+    /// The value's cell: what `RUNE_REGION_MISS` names a `Tracked` read by.
+    pub fn id(this: &Self) -> u32 {
+        this.id
+    }
+
     /// How many writes the value has seen. A region that keeps rebuilding read a value whose
     /// version moves every frame: compare versions to find which.
     pub fn version(this: &Self) -> u64 {

@@ -666,7 +666,7 @@ fn memo_inner(id: impl Into<String>, version: u64, region: bool, build: impl FnO
         if let Some(e) = s.cache.entries.get_mut(name) {
             if e.pass == pass {
                 store = false;
-            } else if e.version == version && e.reads.iter().all(|r| s.seen.holds(r)) {
+            } else if { report_miss(&key, e.version == version, &e.reads, &s.seen); e.version == version && e.reads.iter().all(|r| s.seen.holds(r)) } {
                 e.pass = pass;
                 e.virtual_row = s.virtual_row;
                 for read in &e.reads {
@@ -746,6 +746,24 @@ fn memo_inner(id: impl Into<String>, version: u64, region: bool, build: impl FnO
         s.cache.entries.insert(id, Entry { id: entry_id, version, built, key, reads, nested, pass, virtual_row });
         el
     })
+}
+
+/// With `RUNE_REGION_MISS` set, prints what made a memo or region build again: the first read
+/// that no longer holds (`state <cell> v<version>` for a [`Tracked`](crate::Tracked) value,
+/// `layout <key>`, `caret <key>`, `selection`), or `version` when its version changed. For
+/// finding what keeps a region rebuilding; `Tracked::id` names the cells.
+fn report_miss(key: &str, same_version: bool, reads: &[Read], seen: &Seen) {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if !*ON.get_or_init(|| std::env::var_os("RUNE_REGION_MISS").is_some()) { return; }
+    if !same_version { return eprintln!("rune-miss {key} version"); }
+    let Some(r) = reads.iter().find(|r| !seen.holds(r)) else { return };
+    let why = match r {
+        Read::State(id, v) => format!("state {id} v{v}"),
+        Read::Layout(k, _) | Read::LayoutWith(k, _, _) => format!("layout {k}"),
+        Read::Caret(k, _) => format!("caret {k}"),
+        Read::Selection(_) => "selection".into(),
+    };
+    eprintln!("rune-miss {key} {why}");
 }
 
 /// The version every [`region`] passes: a region's reads are its version.
