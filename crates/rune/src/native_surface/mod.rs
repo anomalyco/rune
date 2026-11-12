@@ -178,10 +178,14 @@ impl NativeSurface {
         Some(video.pull(self, clock, wake))
     }
     pub fn set_waker(&self, waker: crate::Waker) {
-        self.0.lock().unwrap().waker = Some(waker);
+        // The replaced waker's captures drop after the lock: one may read this surface's counts
+        // and would deadlock here.
+        let old = self.0.lock().unwrap().waker.replace(waker);
+        drop(old);
     }
     pub fn set_observer(&self, observer: FrameObserver) {
-        self.0.lock().unwrap().observer = Some(observer);
+        let old = self.0.lock().unwrap().observer.replace(observer);
+        drop(old);
     }
     /// Whether an observer listens: only then does a draw read GPU times.
     pub(crate) fn observed(&self) -> bool {

@@ -1,0 +1,1 @@
+ - **Media: replacing a surface or player callback no longer deadlocks.** The callback a `set_waker` or `set_observer` call displaces is dropped after the surface's or the player's lock is released, so its captures can read the surface (draw counts, errors) without re-entering a held lock.

@@ -11,7 +11,10 @@ pub(crate) struct WakerSlot(Mutex<Option<(crate::Waker, u64)>>);
 impl WakerSlot {
     /// Installs `waker`, which hears the next [`tell`](Self::tell) of any generation but 0.
     pub(crate) fn set(&self, waker: crate::Waker) {
-        *self.0.lock().unwrap() = Some((waker, 0));
+        // The replaced waker's captures drop after the lock: one may read this handle and would
+        // deadlock here.
+        let old = self.0.lock().unwrap().replace((waker, 0));
+        drop(old);
     }
 
     /// Calls the waker if `generation` is news to it. Call with no other locks held: the waker
@@ -27,5 +30,11 @@ impl WakerSlot {
         if let Some(waker) = waker {
             waker();
         }
+    }
+
+    /// Whether the slot's lock is free right now, without waiting for it.
+    #[cfg(test)]
+    pub(crate) fn free(&self) -> bool {
+        self.0.try_lock().is_ok()
     }
 }

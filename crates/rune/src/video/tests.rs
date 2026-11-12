@@ -684,6 +684,26 @@ fn headless_audio_time_follows_the_virtual_clock() {
     assert!(a.is_playing());
 }
 
+/// A replaced waker's captures drop after the slot's lock: one may read the clip's state and
+/// would deadlock there. // differs from dev: dev dropped the old waker under the lock.
+#[test]
+fn a_replaced_waker_is_dropped_outside_the_slots_lock() {
+    static FREED: Mutex<Option<bool>> = Mutex::new(None);
+    struct Probe(Arc<WakerSlot>);
+    impl Drop for Probe {
+        fn drop(&mut self) {
+            *FREED.lock().unwrap() = Some(self.0.free());
+        }
+    }
+    let slot = Arc::new(WakerSlot::default());
+    let first = Probe(slot.clone());
+    slot.set(Arc::new(move || {
+        let _ = &first;
+    }));
+    slot.set(Arc::new(|| {}));
+    assert_eq!(*FREED.lock().unwrap(), Some(true), "the replaced waker dropped while the slot's lock was held");
+}
+
 /// A new runtime's clock starts at 0, never where an earlier runtime on this thread left off.
 #[cfg(target_os = "macos")]
 #[test]

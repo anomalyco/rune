@@ -1,6 +1,38 @@
 use super::*;
 use crate::render::{Gpu, NO_CLIP, OFFSCREEN_FORMAT, Offscreen};
 
+/// Records, on drop, whether the surface's state lock was free: a callback that reads `counts`
+/// would deadlock if it weren't.
+struct CallbackProbe(NativeSurface, Arc<std::sync::Mutex<Vec<bool>>>);
+
+impl Drop for CallbackProbe {
+    fn drop(&mut self) {
+        self.1.lock().unwrap().push(self.0.0.try_lock().is_ok());
+    }
+}
+
+/// A replaced callback's captures drop after the surface's lock, so one reading `counts` or
+/// `last_error` can't deadlock there. // differs from dev: dev dropped it under the lock.
+#[test]
+fn a_replaced_callback_is_dropped_outside_the_surfaces_lock() {
+    let surface = NativeSurface::new();
+    let freed = Arc::new(std::sync::Mutex::new(Vec::new()));
+
+    let waker = CallbackProbe(surface.clone(), freed.clone());
+    surface.set_waker(Arc::new(move || {
+        let _ = &waker;
+    }));
+    surface.set_waker(Arc::new(|| {}));
+
+    let observer = CallbackProbe(surface.clone(), freed.clone());
+    surface.set_observer(Arc::new(move |_| {
+        let _ = &observer;
+    }));
+    surface.set_observer(Arc::new(|_| {}));
+
+    assert_eq!(*freed.lock().unwrap(), [true, true], "a callback dropped while the lock was held");
+}
+
 pub(super) fn draw(surface: &NativeSurface, rect: [f32; 4]) -> SurfaceDraw {
     SurfaceDraw {
         surface: surface.clone(),
