@@ -1,7 +1,7 @@
 //! Windfoil's atlas masks kept across launches: a glyph whose mask an earlier launch of this
 //! build made is placed from those bytes, with no outline built and no fill, so a first screen
 //! of text seen before costs a copy. It's a cache of computed inputs, not a picture: every mask
-//! is keyed by what decides its texels (the font by a hash of its bytes, never this run's id;
+//! is keyed by what decides its texels (the font by its identity, ont_identity, never this run's id;
 //! the glyph, size, variation, x and y phase, dilation, look, slant and synthetic bold), and the
 //! whole cache by this build's link stamp, so any other build, font or setting misses and fills
 //! as before. It's read before the first frame wherever the app reads it from ([`offer`]), and
@@ -29,7 +29,7 @@ pub const BUDGET: usize = 1 << 20;
 const SETTLE: f64 = 3.0;
 const BETWEEN: f64 = 30.0;
 
-/// A mask's key with the font named by the hash of its bytes.
+/// A mask's key with the font named by its identity (ont_identity).
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct StableKey {
     font: u64,
@@ -89,7 +89,7 @@ impl Entry {
 pub struct MaskCache {
     entries: HashMap<StableKey, Entry, std::hash::BuildHasherDefault<rune_motion::Fx>>,
     data: Vec<u8>,
-    /// It holds colour glyphs, so a colour font's lookups are worth its hash.
+    /// It holds colour glyphs, so a colour font's lookups are worth naming it.
     color: bool,
 }
 
@@ -235,7 +235,7 @@ impl Saving {
 #[derive(Default)]
 pub(crate) struct Masks {
     offered: Option<Arc<MaskCache>>,
-    /// Each font's (blob id's) bytes and their hash, once worked out.
+    /// Each font's (blob id's) bytes and their identity, once worked out.
     fonts: FxHashMap<u64, (parley::fontique::Blob<u8>, Option<u64>)>,
     saving: Saving,
 }
@@ -278,10 +278,10 @@ impl TextSystem {
         self.masks.fonts.entry(face.font.data.id()).or_insert_with(|| (face.font.data.clone(), None));
     }
 
-    /// The hash of `face`'s font's bytes, worked out once.
+    /// `face`'s font's identity, worked out once.
     fn font_hash(&mut self, face: &Face) -> u64 {
         let entry = self.masks.fonts.entry(face.font.data.id()).or_insert_with(|| (face.font.data.clone(), None));
-        *entry.1.get_or_insert_with(|| hash_bytes(face.font.data.as_ref()))
+        *entry.1.get_or_insert_with(|| font_identity(face.font.data.as_ref()))
     }
 
     /// Each frame (and each timer poll, `frame` false): takes the masks offered, and starts a
@@ -291,7 +291,7 @@ impl TextSystem {
             self.masks.offered = OFFERED.lock().unwrap_or_else(|e| e.into_inner()).clone();
         }
         let &sink = SINK.get()?;
-        let placed = self.atlas.rasterized;
+        let placed = self.atlas.rasterized + self.color_placed;
         let now = Instant::now();
         let event = if frame { SavingEvent::Frame { now, placed } } else { SavingEvent::Poll { now, placed } };
         let mut write = false;
@@ -386,7 +386,7 @@ impl Snapshot {
                 for (&i, bytes) in group.iter().zip(outs) { filled[i as usize] = bytes; }
             }
         }
-        let font = |id: u64| self.fonts.get(&id).map(|(blob, hash)| hash.unwrap_or_else(|| hash_bytes(blob.as_ref())));
+        let font = |id: u64| self.fonts.get(&id).map(|(blob, hash)| hash.unwrap_or_else(|| font_identity(blob.as_ref())));
         let mut sums: FxHashMap<u64, u64> = FxHashMap::default();
         let mut table = Vec::new();
         let mut data = Vec::new();
@@ -429,11 +429,17 @@ impl Snapshot {
     }
 }
 
-/// A font's identity across launches: its bytes, hashed.
-fn hash_bytes(bytes: &[u8]) -> u64 {
+/// A font's identity across launches, cheap enough for a 100 MB emoji file at its first lookup:
+/// its length, its first and last 64 KiB (the table directory, and the tables at the end), and
+/// its first face's `head` table, whose `checkSumAdjustment` sums the whole file and whose
+/// `modified` dates it.
+fn font_identity(bytes: &[u8]) -> u64 {
     use std::hash::Hasher;
+    const EDGE: usize = 64 * 1024;
     let mut h = rustc_hash::FxHasher::default();
-    h.write(bytes);
     h.write_usize(bytes.len());
+    h.write(&bytes[..bytes.len().min(EDGE)]);
+    h.write(&bytes[bytes.len().saturating_sub(EDGE)..]);
+    if let Some(head) = swash::FontRef::from_index(bytes, 0).and_then(|f| f.table(swash::tag_from_bytes(b"head"))) { h.write(head); }
     h.finish()
 }

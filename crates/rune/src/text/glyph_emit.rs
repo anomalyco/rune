@@ -266,6 +266,7 @@ impl TextSystem {
         self.note_mask_font(face);
         self.color_bytes = self.color_bytes.saturating_add((at.width as usize) * (at.height as usize) * 4);
         self.color_pixels.push(pixels);
+        self.color_placed += 1;
         let index = self.color_pixels.len() as u32;
         let c = ColorGlyph { index, used: true, left: at.left, top: at.top, w: at.width, h: at.height };
         self.color_glyphs.insert(key, c);
