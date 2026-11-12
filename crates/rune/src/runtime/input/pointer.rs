@@ -104,6 +104,8 @@ impl<S: 'static> Runtime<S> {
     }
 
     pub(crate) fn cancel_pointer(&mut self) {
+        // differs from dev: a cancelled press cannot pair with a click after refocusing.
+        self.titlebar.clear();
         self.cancel_drag();
         self.drop_drag_out_request();
         self.text_sel.dragging = false;

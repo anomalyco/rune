@@ -6,9 +6,9 @@ use std::sync::atomic::Ordering;
 /// Whether a window has live work, as one state: hidden or visible, whether a value waits for the
 /// next frame, and whether a frame is reading the sources.
 ///
-/// The shared [`crate::live::Wake`] is the other thread's half: a publisher sets its `pending`
-/// atomic and the host sets `visible`, in that protocol exactly as published values always have.
-/// [`LiveLane`] owns that wake beside this state, and reads `pending` only when a step asks
+/// The shared [`crate::live::Wake`] is the other thread's half: publication and visibility
+/// changes share an atomic so only one writer wakes the host. [`LiveLane`] owns that wake
+/// beside this state, and reads it only when a step asks
 /// (at the frame boundary), so the state never has to be written by another thread.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LiveWake {
@@ -116,8 +116,8 @@ impl LiveLane {
         match self.state {
             LiveWake::Hidden { .. } => false,
             LiveWake::Pending => true,
-            LiveWake::Idle => self.wake.pending.load(Ordering::Acquire),
-            LiveWake::Latching { dirty } => dirty || self.wake.pending.load(Ordering::Acquire),
+            LiveWake::Idle => self.wake.visible_pending(),
+            LiveWake::Latching { dirty } => dirty || self.wake.visible_pending(),
         }
     }
 
@@ -141,7 +141,7 @@ impl LiveLane {
     /// beyond dev's visibility test and swap.
     pub(crate) fn take(&mut self) -> bool {
         if !self.visible() { return false; }
-        self.wake.pending.swap(false, Ordering::AcqRel)
+        self.wake.take_visible()
     }
 
     /// Whether the frame should read its sources now. The hidden, source-less and clean cases

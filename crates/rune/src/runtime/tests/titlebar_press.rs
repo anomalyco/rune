@@ -95,6 +95,8 @@ impl Dev {
 
     fn clear(&mut self) {
         self.run = None;
+        // differs from dev: a replaced stage no longer owns a secondary press either.
+        self.secondary_on_region = false;
     }
 
     /// `PressRun::press("", ..) >= 2`, after which the next press starts a new pair.
@@ -247,6 +249,23 @@ impl Walk {
         if ours != reference { return Err(format!("after {letter:?}: press {ours:?}, dev {reference:?}")); }
         Ok(())
     }
+}
+
+#[test]
+fn focus_loss_cancels_titlebar_press() {
+    let mut rt = Walk::new(true).rt;
+    let (x, y) = REGION;
+    rt.pointer_down(x, y);
+    rt.secondary_down(x, y);
+    rt.window_focus(false);
+    rt.window_focus(true);
+    assert_eq!(rt.take_titlebar_action(), Some(TitlebarAction::Drag));
+    rt.secondary_up(x, y);
+    assert_eq!(rt.take_window_menu(), None);
+    rt.pointer_down(x, y);
+    assert_eq!(rt.take_titlebar_action(), Some(TitlebarAction::Drag));
+    rt.pointer_down(x, y);
+    assert_eq!(rt.take_titlebar_action(), Some(TitlebarAction::DoubleClick));
 }
 
 /// Plays every sequence that starts with `sequence`, recording the first one that differs.

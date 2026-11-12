@@ -1,7 +1,7 @@
 //! Latest-wins property values. Sources outlive views and may be shared by windows.
 use std::marker::PhantomData;
 use std::sync::{Arc, Weak, Mutex};
-use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU8, AtomicU64, Ordering};
 use portable_atomic::AtomicU128;
 use crate::{Color, Spring, Waker};
 
@@ -281,22 +281,45 @@ impl Bound {
 }
 
 pub(crate) struct Wake {
-    pub pending: AtomicBool,
-    visible: AtomicBool,
+    // differs from dev: the writer that makes the state both visible and pending
+    // owns the callback. Separate atomics let both writers see the other's change.
+    flags: AtomicU8,
     callback: Waker,
 }
 impl Wake {
+    const PENDING: u8 = 1;
+    const HIDDEN: u8 = 2;
+
     pub fn new(callback: Waker) -> Arc<Self> {
-        Arc::new(Self { pending: AtomicBool::new(false), visible: AtomicBool::new(true), callback })
+        Arc::new(Self { flags: AtomicU8::new(0), callback })
     }
     pub fn visible(&self, visible: bool) {
-        let was_visible = self.visible.swap(visible, Ordering::AcqRel);
-        if visible && !was_visible && self.pending.load(Ordering::Acquire) { (self.callback)(); }
+        self.change_visibility(visible, || {});
+    }
+    fn change_visibility(&self, visible: bool, after_write: impl FnOnce()) {
+        let old = if visible { self.flags.fetch_and(!Self::HIDDEN, Ordering::AcqRel) }
+            else { self.flags.fetch_or(Self::HIDDEN, Ordering::AcqRel) };
+        after_write();
+        if visible && old == (Self::HIDDEN | Self::PENDING) { (self.callback)(); }
     }
     pub(crate) fn notify(&self) {
-        if !self.pending.swap(true, Ordering::AcqRel) && self.visible.load(Ordering::Acquire) {
-            (self.callback)();
-        }
+        self.publish(|| {});
+    }
+    fn publish(&self, after_write: impl FnOnce()) {
+        let old = self.flags.fetch_or(Self::PENDING, Ordering::AcqRel);
+        after_write();
+        if old == 0 { (self.callback)(); }
+    }
+
+    // Only the host changes visibility, and it checks visibility before taking a wake.
+    #[inline]
+    pub(crate) fn take_visible(&self) -> bool {
+        self.flags.swap(0, Ordering::AcqRel) != 0
+    }
+
+    #[inline]
+    pub(crate) fn visible_pending(&self) -> bool {
+        self.flags.load(Ordering::Acquire) == Self::PENDING
     }
 }
 
@@ -390,6 +413,10 @@ impl Drop for Source {
 }
 
 #[cfg(test)]
+#[path = "live/wake_tests.rs"]
+mod wake_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicUsize;
@@ -425,16 +452,16 @@ mod tests {
         assert!(!live.set(0.0));
         for n in 1..100 { live.set(n as f32); }
         assert_eq!(count.load(Ordering::Relaxed), 1);
-        wake.pending.store(false, Ordering::Release);
+        wake.take_visible();
         wake.visible(false);
         live.set(100.0);
         assert_eq!(count.load(Ordering::Relaxed), 1);
         wake.visible(true);
         assert_eq!(count.load(Ordering::Relaxed), 2);
-        wake.pending.store(false, Ordering::Release);
+        wake.take_visible();
         subscription.active.store(false, Ordering::Release);
         live.set(101.0);
-        assert!(!wake.pending.load(Ordering::Acquire));
+        assert!(!wake.visible_pending());
         subscription.active.store(true, Ordering::Release);
         drop(wake);
         live.set(102.0);

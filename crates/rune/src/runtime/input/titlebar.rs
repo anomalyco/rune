@@ -91,7 +91,7 @@ pub(super) enum Event {
     SecondaryDown { region: bool },
     /// A secondary release; `region` when it is over a bare drag region now.
     SecondaryUp { region: bool },
-    /// The run of presses ends: a playground stage's elements go with its state.
+    /// Pointer cancellation or stage replacement ends both halves of any pending press.
     Clear,
 }
 
@@ -155,7 +155,8 @@ pub(super) fn step(state: &mut TitlebarPress, event: Event) -> Effects<Request> 
             if region { Effects::one(Request::Menu) } else { Effects::none() }
         }
         Event::Clear => {
-            *state = keep_secondary(state, None);
+            // differs from dev: a cancelled secondary down cannot open a menu on release.
+            *state = TitlebarPress::Rest;
             Effects::none()
         }
     }
