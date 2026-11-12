@@ -1333,6 +1333,11 @@ unsafe fn init(
     // Will be changed later using `window.set_enabled_buttons` but we need to set a default here
     // so the diffing later can work.
     window_flags.set(WindowFlags::CLOSABLE, true);
+    // The window is made with the boxes it asks for, so `set_enabled_buttons` in `on_create`
+    // changes nothing: adding them there rewrote its styles and changed its frame again
+    // (`SWP_FRAMECHANGED`, about 1,000 us before its first frame).
+    window_flags.set(WindowFlags::MINIMIZABLE, attributes.enabled_buttons.contains(WindowButtons::MINIMIZE));
+    window_flags.set(WindowFlags::MAXIMIZABLE, attributes.enabled_buttons.contains(WindowButtons::MAXIMIZE));
     window_flags.set(WindowFlags::CLIP_CHILDREN, attributes.platform_specific.clip_children);
 
     let mut fallback_parent = || match attributes.platform_specific.owner {
