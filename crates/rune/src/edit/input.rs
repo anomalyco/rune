@@ -389,9 +389,18 @@ impl TextEdit {
         if self.secure { self.cancel_composition(); return EditOutcome::default(); }
         self.sync_invariants();
         for effect in ime::step(&mut self.composition, ime::Event::Ime(ev)) {
-            let ime::Effect::Commit(mut s) = effect;
-            self.commit_composed(&s);
-            s.zeroize();
+            match effect {
+                ime::Effect::Commit(mut s) => {
+                    self.commit_composed(&s);
+                    s.zeroize();
+                }
+                // Reconversion: the composition that follows replaces the selection.
+                ime::Effect::Select(range) => {
+                    let (a, b) = (Self::clamp_char_boundary(&self.text, range.start), Self::clamp_char_boundary(&self.text, range.end));
+                    self.break_history_group();
+                    self.set_selection(a, b);
+                }
+            }
         }
         EditOutcome::default()
     }

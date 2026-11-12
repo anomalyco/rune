@@ -272,14 +272,14 @@ impl<S: 'static> Runtime<S> {
                 let Some((start, end)) = number("start").zip(number("end")) else { return EditOutcome::default() };
                 let Some((a, b)) = byte_at(expected, start).zip(byte_at(expected, end)) else { return EditOutcome::default() };
                 if a > b { return EditOutcome::default(); }
-                edit.ime(&Ime::Preedit(String::new(), None));
+                edit.ime(&Ime::Preedit(String::new(), None, Vec::new()));
                 let raw = (base + a, base + b);
                 edit.anchor = raw.0; edit.focus = raw.1;
                 edit.snap_to_pills();
                 let snapped = (edit.anchor, edit.focus) != raw;
                 let text = event["text"].as_str().unwrap_or_default();
                 if event["kind"] == "preedit" {
-                    edit.ime(&Ime::Preedit(text.to_owned(), Some((text.len(), text.len()))));
+                    edit.ime(&Ime::Preedit(text.to_owned(), Some((text.len(), text.len())), Vec::new()));
                     return EditOutcome::default();
                 }
                 edit.insert(text);

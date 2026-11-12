@@ -20,7 +20,8 @@ mod display;
 mod history;
 mod html;
 mod ime;
-pub use ime::Ime;
+pub use ime::{Clause, Ime};
+pub(crate) use ime::ImeText;
 mod input;
 mod keys;
 pub use keys::{Key, KeyEvent, KeySide, Modifier, Mods};
@@ -411,6 +412,26 @@ impl TextEdit {
         self.composition.target()
     }
 
+    /// The composition's clauses, each a byte range of the preedit, the one being converted
+    /// marked (one clause over the whole preedit when the input method gives none). Empty when
+    /// not composing.
+    pub fn preedit_clauses(&self) -> Vec<Clause> {
+        self.composition.clauses()
+    }
+
+    /// The text around the selection for the platform's input method to read (reconversion,
+    /// document feed); none for a secret or mid-composition.
+    pub(crate) fn ime_text(&self) -> Option<ImeText> {
+        if self.secure || self.is_composing() { return None; }
+        let (a, b) = self.range();
+        let t = &self.text;
+        let mut start = t[..a].rfind('\n').map_or(0, |i| i + 1).max(a.saturating_sub(1024));
+        while !t.is_char_boundary(start) { start += 1; }
+        let mut end = t[b..].find('\n').map_or(t.len(), |i| b + i).min(b + 1024);
+        while !t.is_char_boundary(end) { end -= 1; }
+        Some(ImeText { text: t[start..end].to_owned(), start, selection: a - start..b - start })
+    }
+
     /// Ends the input method's composition without writing it, as an edit replacing the text
     /// under it does.
     pub fn cancel_composition(&mut self) {
@@ -425,10 +446,11 @@ impl TextEdit {
         if self.secure { self.cancel_composition(); return false; }
         let mut finished = false;
         for effect in ime::step(&mut self.composition, ime::Event::Finish) {
-            let ime::Effect::Commit(mut s) = effect;
-            self.commit_composed(&s);
-            s.zeroize();
-            finished = true;
+            if let ime::Effect::Commit(mut s) = effect {
+                self.commit_composed(&s);
+                s.zeroize();
+                finished = true;
+            }
         }
         finished
     }

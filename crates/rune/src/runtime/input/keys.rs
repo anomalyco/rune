@@ -335,6 +335,11 @@ impl<S: 'static> Runtime<S> {
         self.queue.push(Action::ClipboardRead(id, content));
     }
 
+    /// The focused field's text around its selection, for the platform's input method.
+    pub(crate) fn ime_text(&self) -> Option<crate::edit::ImeText> {
+        self.focused_input().filter(|i| i.access.is_some()).and_then(|i| i.edit.ime_text())
+    }
+
     /// The focused field's open composition and its cursor range, for a script's tree.
     pub(crate) fn focused_preedit(&self) -> Option<(&str, Option<(usize, usize)>)> {
         self.focused_input().filter(|i| !i.edit.is_secure()).and_then(|i| i.edit.preedit())

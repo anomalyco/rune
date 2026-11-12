@@ -32,6 +32,8 @@ pub(super) fn sync_platform<S: 'static>(l: &mut Win, rt: &mut Runtime<S>, secure
     #[cfg(target_os = "windows")]
     if focused { crate::platform::win32::dark_mode::menus(rt.backdrop_dark().unwrap_or(rt.env.system_dark)); }
     clipboard.flush(rt);
+    // The focused field's text, for the input method to convert again or read around the caret.
+    crate::platform::ime::sync(&l.window, if ime_allowed { rt.ime_text() } else { None });
     if let Some(a) = rt.ime_area.map(|a| rt.to_window(a)) {
         l.window.set_ime_cursor_area(
             LogicalPosition::new(a[0] as f64, a[1] as f64),

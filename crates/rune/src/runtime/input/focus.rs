@@ -714,7 +714,7 @@ mod tests {
         let mut edit = crate::TextEdit::new("committed"); edit.focused = true;
         let mut rt = Runtime::new(edit, view, (200.0, 40.0), Env::new(true, 1.0));
         rt.frame(0.0);
-        rt.ime(crate::Ime::Preedit("pending".into(), None)); rt.frame(0.0);
+        rt.ime(crate::Ime::Preedit("pending".into(), None, Vec::new())); rt.frame(0.0);
         rt.ime_reset = false;
         rt.finish_composition(); rt.frame(0.0);
         assert!(rt.state.preedit().is_none() && rt.state.focused && rt.ime_reset);
@@ -771,7 +771,7 @@ mod tests {
             (300.0, 300.0), Env::new(true, 1.0));
         rt.on_key = Some(|s, _, _| { s.app_keys += 1; true });
         rt.frame(0.0);
-        rt.ime(crate::Ime::Preedit("pending".into(), None)); rt.frame(0.0);
+        rt.ime(crate::Ime::Preedit("pending".into(), None, Vec::new())); rt.frame(0.0);
         rt.state.open = true; rt.state.search.focused = true; rt.invalidate(); rt.frame(0.0);
         assert!(rt.state.search.focused);
         assert!(!rt.state.first.focused);
@@ -784,7 +784,7 @@ mod tests {
         assert_eq!(rt.state.app_keys, 0);
         rt.key(KeyEvent { key: Key::Function(5), mods: Mods::default() }); rt.frame(0.0);
         assert_eq!(rt.state.app_keys, 1);
-        rt.ime(crate::Ime::Preedit("pending".into(), None)); rt.frame(0.0);
+        rt.ime(crate::Ime::Preedit("pending".into(), None, Vec::new())); rt.frame(0.0);
         rt.pointer_down(290.0, 290.0); rt.pointer_up(290.0, 290.0); rt.frame(0.0);
         assert!(rt.focus.path().is_none());
         assert!(!rt.state.search.focused);
@@ -1299,7 +1299,7 @@ mod tests {
         for (field, after) in [("field", "continue"), ("named", "submit")] {
             for _ in 0..4 { if rt.elements().iter().any(|e| e.focused && e.key.as_deref() == Some(field)) { break; } press(&mut rt, Key::Tab); }
             assert_eq!(focused(&rt), field);
-            rt.ime(crate::Ime::Preedit("ka".into(), None)); rt.frame(0.0);
+            rt.ime(crate::Ime::Preedit("ka".into(), None, Vec::new())); rt.frame(0.0);
             press(&mut rt, Key::Enter);
             press(&mut rt, Key::Escape);
             assert!(rt.state.log.is_empty(), "{field}: the composition's Return and Escape: {:?}", rt.state.log);

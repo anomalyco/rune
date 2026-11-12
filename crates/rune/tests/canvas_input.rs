@@ -220,7 +220,7 @@ fn a_key_release_goes_to_the_focused_element_then_up_to_the_root() {
     rt.pointer_up(fx, fy);
     rt.frame(1.0 / 60.0);
     rt.state.ups.clear();
-    rt.ime(Ime::Preedit("ni".into(), Some((2, 2))));
+    rt.ime(Ime::Preedit("ni".into(), Some((2, 2)), Vec::new()));
     rt.key_up(KeyEvent { key: Key::Text("i".into()), mods: Mods::default() });
     rt.key(KeyEvent { key: Key::Enter, mods: Mods::default() });
     rt.ime(Ime::Commit("你".into()));

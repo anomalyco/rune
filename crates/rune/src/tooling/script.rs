@@ -220,7 +220,13 @@ pub(crate) fn parse_script(list: Value) -> Vec<Ev> {
                     (Some(text), _) => crate::Ime::Commit(text.to_owned()),
                     (None, Some(text)) => {
                         let at = |i: usize| e["cursor"][i].as_u64().map(|n| n as usize);
-                        crate::Ime::Preedit(text.to_owned(), at(0).zip(at(1)))
+                        // `clauses`: `[[start, end], [start, end, true]]`, byte ranges, `true` for the one being converted.
+                        let clauses = e["clauses"].as_array().into_iter().flatten().filter_map(|c| {
+                            let (a, b) = (c[0].as_u64()? as usize, c[1].as_u64()? as usize);
+                            let clause = crate::Clause::new(a..b);
+                            Some(if c[2].as_bool() == Some(true) { clause.target() } else { clause })
+                        }).collect();
+                        crate::Ime::Preedit(text.to_owned(), at(0).zip(at(1)), clauses)
                     }
                     (None, None) => die("an ime event needs a \"commit\" or a \"preedit\" (\"\" ends a composition)"),
                 };

@@ -90,6 +90,7 @@ pub use drag_out::DragItem;
 pub use drag_out::DragOperation;
 pub use drag_out::DragOutcome;
 pub use edit::Block;
+pub use edit::Clause;
 pub use edit::Ime;
 pub use edit::Key;
 pub use edit::KeyEvent;

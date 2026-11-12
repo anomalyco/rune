@@ -49,7 +49,7 @@ fn the_app_hears_the_composition_and_typing_arrives_once() {
     let mut rt = editor();
     press(&mut rt, Key::Text("a".into()));
     rt.ime(Ime::Enabled);
-    rt.ime(Ime::Preedit("か".into(), Some((0, 3))));
+    rt.ime(Ime::Preedit("か".into(), Some((0, 3)), Vec::new()));
     rt.frame(0.0);
     press(&mut rt, Key::Enter);
     press(&mut rt, Key::Escape);
@@ -64,14 +64,14 @@ fn the_app_hears_the_composition_and_typing_arrives_once() {
 #[test]
 fn a_focused_field_takes_the_input_method_but_the_apps_composition_ends_in_the_app() {
     let mut rt = editor();
-    rt.ime(Ime::Preedit("か".into(), None));
+    rt.ime(Ime::Preedit("か".into(), None, Vec::new()));
     rt.frame(0.0);
     rt.update(|s, _| s.field.focused = true);
     rt.frame(0.0);
     // Turning the input method over to the field ends the app's composition.
-    rt.ime(Ime::Preedit(String::new(), None));
+    rt.ime(Ime::Preedit(String::new(), None, Vec::new()));
     rt.ime(Ime::Disabled);
-    rt.ime(Ime::Preedit("ね".into(), None));
+    rt.ime(Ime::Preedit("ね".into(), None, Vec::new()));
     rt.ime(Ime::Commit("猫".into()));
     rt.frame(0.0);
     assert_eq!(rt.state.log, ["Preedit(\"か\", None)", "Preedit(\"\", None)", "Disabled"]);
@@ -82,7 +82,7 @@ fn a_focused_field_takes_the_input_method_but_the_apps_composition_ends_in_the_a
 fn without_on_ime_an_ime_cursor_hears_nothing() {
     let mut rt = editor();
     rt.app_ime.hook = None;
-    rt.ime(Ime::Preedit("か".into(), None));
+    rt.ime(Ime::Preedit("か".into(), None, Vec::new()));
     rt.frame(0.0);
     press(&mut rt, Key::Enter);
     assert_eq!(rt.state.log, ["key Enter"], "nothing composing holds Return back");

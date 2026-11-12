@@ -41,7 +41,7 @@ fn opening_takes_focus_and_reveals_the_offscreen_selection() {
     s.chosen = Some("item-199".into());
     let mut rt = Runtime::new(s, view, (400.0, 400.0), Env::new(true, 1.0));
     rt.frame(0.0);
-    rt.ime(Ime::Preedit("pending".into(), None)); rt.frame(0.0);
+    rt.ime(Ime::Preedit("pending".into(), None, Vec::new())); rt.frame(0.0);
     let trigger = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("models-value-trigger")).unwrap();
     let x = trigger.rect[0] + trigger.rect[2] / 2.0;
     let y = trigger.rect[1] + trigger.rect[3] / 2.0;
@@ -97,10 +97,10 @@ fn combobox_filters_from_scroll_end_preserves_editor_modifiers_and_ime() {
     assert_eq!(rt.state.combo.search().text, "099");
     key(&mut rt, Key::Down, Mods { alt: true, ..Mods::default() });
     assert!(rt.state.combo.active().is_none());
-    rt.ime(Ime::Preedit("x".into(), None)); rt.frame(0.0);
+    rt.ime(Ime::Preedit("x".into(), None, Vec::new())); rt.frame(0.0);
     key(&mut rt, Key::Enter, Mods::default());
     assert!(rt.state.combo.is_open() && rt.state.chosen.is_none());
-    rt.ime(Ime::Preedit(String::new(), None)); rt.frame(0.0);
+    rt.ime(Ime::Preedit(String::new(), None, Vec::new())); rt.frame(0.0);
     key(&mut rt, Key::Escape, Mods::default());
     assert!(!rt.state.combo.is_open());
 }
@@ -126,7 +126,7 @@ fn focused_combobox_handles_keys_before_app_and_returns_focus_on_close() {
     assert_eq!(rt.elements().into_iter().find(|e| e.focused).unwrap().key.as_deref(), Some("models-value-trigger"));
     key(&mut rt, Key::Text(" ".into()), Mods::default());
     for _ in 0..60 { rt.frame(1.0 / 60.0); }
-    rt.ime(Ime::Preedit("pending".into(), None)); rt.frame(0.0);
+    rt.ime(Ime::Preedit("pending".into(), None, Vec::new())); rt.frame(0.0);
     rt.pointer_down(390.0, 390.0); rt.pointer_up(390.0, 390.0); rt.frame(0.0);
     assert!(!rt.state.combo.is_open() && !rt.state.combo.search().focused);
     assert!(rt.state.combo.search().preedit().is_none());
@@ -154,7 +154,7 @@ fn repeats_after_an_ime_composition_neither_choose_nor_close() {
     for held in [Key::Enter, Key::Escape] {
         let mut rt = runtime();
         key(&mut rt, Key::Down, Mods::default());
-        rt.ime(Ime::Preedit("ka".into(), None)); rt.frame(0.0);
+        rt.ime(Ime::Preedit("ka".into(), None, Vec::new())); rt.frame(0.0);
         key(&mut rt, held.clone(), Mods::default());
         assert!(rt.state.combo.is_open(), "{held:?} during composition belongs to the IME");
         rt.ime(Ime::Commit("か".into())); rt.frame(0.0);

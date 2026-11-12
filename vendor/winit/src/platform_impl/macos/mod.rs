@@ -8,6 +8,7 @@ mod event;
 mod event_handler;
 mod event_loop;
 mod ffi;
+pub(crate) mod ime_text;
 mod menu;
 mod monitor;
 mod observer;
