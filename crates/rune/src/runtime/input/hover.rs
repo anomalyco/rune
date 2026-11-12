@@ -269,13 +269,20 @@ impl<S: 'static> Runtime<S> {
             .max_by_key(|&i| self.nodes[i].path.len())
     }
 
-    /// The `hover_group_shared` keys of the elements under the pointer.
+    /// Keyboard focus shows on node `i` or inside it (CSS `:has(:focus-visible)`): a hover group
+    /// lights for it as for the pointer, so the controls it reveals (a row's actions, a tab's
+    /// close button) show when Tab reaches them rather than taking focus unseen.
+    fn keyboard_within(&self, i: usize) -> bool {
+        self.focus.keyboard() && self.focus_within(i)
+    }
+
+    /// The `hover_group_shared` keys of the elements under the pointer or holding keyboard focus.
     fn shared_hovered(&self) -> Vec<Rc<str>> {
-        let Some((x, y)) = self.pointer else { return Vec::new() };
+        let (x, y) = self.pointer.unwrap_or((f32::NAN, f32::NAN));
         (0..self.nodes.len())
             .filter_map(|i| {
                 let key = self.nodes[i].vis.hover_share.as_ref()?;
-                (!self.is_exiting(self.nodes[i].id) && self.allowed(i) && self.node_contains(i, x, y)).then(|| key.clone())
+                (!self.is_exiting(self.nodes[i].id) && self.allowed(i) && (self.node_contains(i, x, y) || self.keyboard_within(i))).then(|| key.clone())
             })
             .collect()
     }
@@ -288,7 +295,7 @@ impl<S: 'static> Runtime<S> {
         if !(n.vis.hover().a > 0.0 || n.vis_flags.hover_group()) || self.is_exiting(n.id) { return None; }
         let inside = self.pointer.is_some_and(|(x, y)| self.node_contains(i, x, y))
             || n.vis.hover_share.as_ref().is_some_and(|k| shared.contains(k))
-            || (n.vis.hover_focus && self.focus.keyboard() && self.focus_within(i));
+            || (n.vis_flags.hover_group() && self.keyboard_within(i));
         let capture_inside = if self.secondary.is_held() { inside } else { self.press.inside() };
         let held = captured == Some(n.path.as_str()) && capture_inside;
         let allowed = self.allowed(i);

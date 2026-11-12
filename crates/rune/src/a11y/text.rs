@@ -135,7 +135,7 @@ impl<S: 'static> Runtime<S> {
                 Some(u.map_or(*r, |u| [u[0].min(r[0]), u[1].min(r[1]), u[2].max(r[2]), u[3].max(r[3])]))
             }) else { continue };
             let role = crate::a11y::roles::map(l.role, &crate::a11y::roles::RoleCtx {
-                pressable: true, input: false, multiline: false, secure: false, scrolls: false, modal: false,
+                pressable: true, focusable: true, input: false, multiline: false, secure: false, scrolls: false, modal: false,
                 default_button: false, labelled: true, keyed: true, has_text: true, image: false,
             }).unwrap_or(Role::Link);
             let mut link = AkNode::new(role);
