@@ -25,12 +25,14 @@ struct Spec {
     clip: [f32; 4],
     turn: Option<(f32, [f32; 2])>,
     hole: [f32; 4],
+    /// The ordinary draws its scope opens with, before any child layer's.
+    draws: u32,
 }
 
 impl Spec {
     fn plain(edges: [f32; 4], vis: [f32; 4]) -> Self {
         Self { parent: None, edges, vis, cache: None, opacity: 1.0, blend: Blend::SourceOver, blur: 0.0,
-            fade: 0, clip: NO_CLIP, turn: None, hole: [0.0; 4] }
+            fade: 0, clip: NO_CLIP, turn: None, hole: [0.0; 4], draws: 0 }
     }
 
     fn cached(edges: [f32; 4], vis: [f32; 4], cache: (u64, u64)) -> Self {
@@ -71,18 +73,22 @@ fn scenes() -> Vec<Vec<Spec>> {
         // 64×64 textures, more than the budget below will keep.
         vec![Spec { blur: 12.0, ..Spec::cached([4.0, 2.0, 68.0, 66.0], window, (41, 1)) },
             Spec { opacity: 0.5, ..Spec::child(0, [8.0, 4.0, 16.0, 6.0], window) }],
+        // Two cached leaves side by side: the first draws a rect, a cache with contents and no
+        // child layer; the second draws nothing at all.
+        vec![Spec { draws: 1, ..Spec::cached([0.0, 0.0, 16.0, 8.0], window, (11, 1)) },
+            Spec::cached([16.0, 8.0, 32.0, 16.0], window, (12, 3))],
     ]
 }
 
 /// Where each layer's scope opens and closes in the instance stream: a layer is a `KIND_LAYER` and a
-/// `KIND_LAYER_END`, with its contents between them, so a cache with contents has `begin + 1 < end`
-/// and one with none doesn't.
+/// `KIND_LAYER_END`, with its draws and then its child layers between them, so a cache with contents
+/// of either kind has `begin + 1 < end` and one with none doesn't.
 fn marks(scene: &[Spec]) -> (Vec<u32>, Vec<u32>) {
     let mut at = 0u32;
     let (mut begin, mut end) = (vec![0u32; scene.len()], vec![0u32; scene.len()]);
     fn visit(scene: &[Spec], index: usize, at: &mut u32, begin: &mut [u32], end: &mut [u32]) {
         begin[index] = *at;
-        *at += 1;
+        *at += 1 + scene[index].draws;
         for (child, spec) in scene.iter().enumerate() {
             if spec.parent == Some(index) { visit(scene, child, at, begin, end); }
         }
@@ -455,6 +461,7 @@ fn every_frame_walk_matches_dev() {
         (0, 1, true), (2, DEFAULT_CACHE_BUDGET, true), (3, DEFAULT_CACHE_BUDGET, true),
         (6, tight, true), (4, DEFAULT_CACHE_BUDGET, true), (5, DEFAULT_CACHE_BUDGET, true),
         (0, tight, true), (1, DEFAULT_CACHE_BUDGET, false),
+        (7, DEFAULT_CACHE_BUDGET, true), (7, 1, true),
     ];
     fn walk(scenes: &[Vec<Spec>], events: &[(usize, u64, bool)], pools: &Old, planner: &Planner, stamp: u64, depth: u32) {
         if depth == 0 { return; }
@@ -527,4 +534,20 @@ fn a_pool_view_moves_its_targets_as_a_vec_does() {
         let model: Vec<Source> = (0..len).map(Source::Spare).collect();
         walk(&view, &model, 0, 6);
     }
+}
+
+/// A cached leaf that draws something can't be made again cheaply, so over budget dev let its kept
+/// texture go rather than borrow it; a leaf that draws nothing borrows it. Neither has a child layer.
+#[test]
+fn a_cached_leaf_with_a_draw_keeps_its_place_under_the_budget() {
+    let scenes = scenes();
+    let (mut pools, mut after, mut planner) = (Old::default(), Old::default(), Planner::default());
+    frame(&mut planner, &pools, &mut after, &scenes[7], true, DEFAULT_CACHE_BUDGET, 1);
+    std::mem::swap(&mut pools, &mut after);
+    let (begin, end) = marks(&scenes[7]);
+    assert_eq!((end[0] - begin[0], end[1] - begin[1]), (2, 1), "the first leaf draws a rect, the second nothing");
+    let decisions = frame(&mut planner, &pools, &mut after, &scenes[7], true, 1, 2);
+    assert_eq!(decisions[0], Disposition::Inline, "the leaf with a draw draws again, straight into the window");
+    assert!(!after.retained.iter().chain(after.slots.iter().flatten()).any(|t| t.cache == Some((11, 1))), "and its texture goes");
+    assert!(matches!(decisions[1], Disposition::Cached { cache: None, .. }), "the empty leaf borrows its texture: {decisions:?}");
 }
