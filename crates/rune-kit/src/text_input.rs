@@ -163,6 +163,13 @@ impl TextInput {
         self.edits.handlers.push(Box::new(El::animate_edit_layout));
         self
     }
+    /// The value's direction (`El::dir`): `Direction::Auto` takes it from the text's first strong
+    /// character, as `dir="auto"` on an `input` does, so a name in Arabic starts at the right in
+    /// a left-to-right window. Defaults to the window's.
+    pub fn dir(mut self, dir: rune::Direction) -> Self {
+        self.edits.visual(move |e| e.dir(dir));
+        self
+    }
     pub fn on_change<S: 'static>(mut self, f: impl Fn(&mut S, &mut Tx) + 'static) -> Self {
         self.edits.change(f);
         self
