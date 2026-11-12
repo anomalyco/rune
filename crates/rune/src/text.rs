@@ -29,6 +29,7 @@ mod atlas;
 mod atlas_fill;
 pub(crate) use atlas_fill::QueuedFill;
 mod case;
+mod colr;
 mod color_icon;
 mod cursor;
 mod decorations;
@@ -97,6 +98,7 @@ pub(crate) use layout_cache::CachedElision;
 
 use default_fonts::DEFAULT_FONTS;
 use fallback::Route;
+pub(crate) use fallback::is_pictographic;
 use glyph_emit::Face;
 use hidden_axes::hidden_axes;
 use layout_cache::{Cache, Entry};
