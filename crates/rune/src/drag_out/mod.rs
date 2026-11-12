@@ -9,9 +9,10 @@
 //! own app's drags unless [`DragItem::within_app`] says so, so a drag let go over the app ends
 //! [`DragOutcome::Cancelled`] and the image slides back.
 //!
-//! macOS runs the session with `NSDraggingSource`. Other platforms don't start one yet: there
-//! `drag_out` is ignored and the element keeps its ordinary press and `on_drag` behaviour.
-//! Windows (`DoDragDrop`), Wayland and X11 backends slot in behind the same types.
+//! macOS runs the session with `NSDraggingSource`, Windows with OLE's `DoDragDrop` and the shell's
+//! drag image (`windows`). Wayland and X11 don't start one yet: there `drag_out` is ignored and the
+//! element keeps its ordinary press and `on_drag` behaviour; their backends slot in behind the
+//! same types.
 //!
 //! Windows start the session from the mouse-dragged event AppKit is delivering. Overlay panels
 //! track the pointer by polling, so there may be no such event; the overlay then builds a
@@ -24,9 +25,11 @@ use std::path::{Path, PathBuf};
 
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "windows")]
+mod windows;
 
 /// Whether this platform's windows start OS drag sessions.
-pub(crate) const SUPPORTED: bool = cfg!(target_os = "macos");
+pub(crate) const SUPPORTED: bool = cfg!(any(target_os = "macos", target_os = "windows"));
 
 /// Pointer travel (points, straight-line) from the press before a drag session starts.
 /// AppKit views commonly use 4; GTK's default is 8; Windows' `SM_CXDRAG` is 4 pixels.
@@ -237,7 +240,7 @@ impl DragImage {
     /// Where the drag image starts, x, y, w, h in window points: `bounds` is the element's
     /// unclipped rect, and `natural` the image's size in points when [`DragImage::size`]
     /// wasn't set.
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    #[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
     pub(crate) fn frame(&self, bounds: [f32; 4], press: (f32, f32), natural: (f32, f32)) -> [f32; 4] {
         let (w, h) = self.size.unwrap_or(natural);
         match self.placement {
@@ -252,7 +255,7 @@ impl DragImage {
 
     /// The image composited over an opaque `backing`, blended in linear light as the window
     /// blends. `None` if the PNG doesn't decode.
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    #[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
     pub(crate) fn over(&self, backing: Color) -> Option<Self> {
         let mut rgba = image::load_from_memory_with_format(&self.png, image::ImageFormat::Png).ok()?.to_rgba8();
         let bg = [backing.r, backing.g, backing.b];
@@ -293,10 +296,10 @@ pub(crate) struct DragOutStart {
     /// The element's visible drawn rect in window points: x, y, w, h.
     pub rect: [f32; 4],
     /// The element's whole drawn rect, before scroll clipping.
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    #[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
     pub bounds: [f32; 4],
     /// Where the pointer went down, in window points.
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    #[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
     pub press: (f32, f32),
 }
 
@@ -393,16 +396,18 @@ fn to_straight_rgba(pixels: &mut [u8], bgra: bool) {
 
 /// Starts the OS drag session for `start` from inside the pointer event that crossed the
 /// threshold. `done` runs once with how it ended (also when it couldn't start: `Cancelled`).
-#[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
+#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(unused_variables))]
 pub(crate) fn begin(window: &winit::window::Window, start: DragOutStart, snapshot: Option<DragImage>, done: Box<dyn FnOnce(DragOutcome)>) {
     #[cfg(target_os = "macos")]
     { let picture = picture(&start.item, snapshot); macos::begin(window, start, picture, done); }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    { let picture = picture(&start.item, snapshot); windows::begin(window, start, picture, done); }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     done(DragOutcome::Cancelled);
 }
 
 /// The item's own image, else the snapshot, over the item's backing colour if it has one.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
 fn picture(item: &DragItem, snapshot: Option<DragImage>) -> Option<DragImage> {
     let picture = item.drag_image().cloned().or(snapshot)?;
     match item.backing() {
@@ -412,7 +417,7 @@ fn picture(item: &DragItem, snapshot: Option<DragImage>) -> Option<DragImage> {
 }
 
 /// The path offered as text when a file drag has no text of its own.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
 fn path_text(path: &Path) -> String { path.to_string_lossy().into_owned() }
 
 #[cfg(test)]

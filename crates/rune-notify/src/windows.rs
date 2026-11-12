@@ -15,6 +15,8 @@ use windows::Data::Xml::Dom::XmlDocument;
 use windows::Foundation::TypedEventHandler;
 use windows::UI::Notifications::{ToastActivatedEventArgs, ToastNotification, ToastNotificationManager};
 use windows::Win32::Foundation::{HWND, LPARAM};
+use windows::Win32::System::Com::{CLSCTX_LOCAL_SERVER, COINIT_MULTITHREADED, CoInitializeEx, CoRegisterClassObject, IClassFactory, IClassFactory_Impl, REGCLS_MULTIPLEUSE};
+use windows::Win32::UI::Notifications::{INotificationActivationCallback, INotificationActivationCallback_Impl, NOTIFICATION_USER_INPUT_DATA};
 use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentProcessId, GetCurrentThreadId};
 use windows::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID;
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -37,6 +39,8 @@ static APP_ID: Mutex<Option<String>> = Mutex::new(None);
 static SCHEME: Mutex<Option<String>> = Mutex::new(None);
 /// The host of a notification link.
 const HOST: &str = "notification";
+/// The user-info key a button's arguments carry the notification's id under.
+const ID: &str = "rune.id";
 
 struct Posted {
     id: String,
@@ -162,20 +166,122 @@ fn show(app: &str, n: &Notification, tag: &str) -> windows::core::Result<ToastNo
     let toast = ToastNotification::CreateToastNotification(&doc)?;
     toast.SetTag(&HSTRING::from(tag))?;
     toast.SetGroup(&HSTRING::from(GROUP))?;
-    if scheme.is_some() {
-        // The click comes back as a link instead.
-        ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(app))?.Show(&toast)?;
-        return Ok(toast);
-    }
-    toast.Activated(&TypedEventHandler::new(|sender: Ref<ToastNotification>, args: Ref<IInspectable>| {
+    // With a scheme the body's click comes back as a link; a button's still comes here, unless
+    // the install's activator takes it (`serve`).
+    let links = scheme.is_some();
+    toast.Activated(&TypedEventHandler::new(move |sender: Ref<ToastNotification>, args: Ref<IInspectable>| {
         let tag = sender.ok()?.Tag()?.to_string_lossy();
-        let arguments = args.ok()?.cast::<ToastActivatedEventArgs>()?.Arguments()?.to_string_lossy();
+        let args = args.ok()?.cast::<ToastActivatedEventArgs>()?;
+        let mut info = decode(&args.Arguments()?.to_string_lossy());
+        if links && !info.iter().any(|(k, _)| k == super::ACTION) { return Ok(()); }
+        info.extend(typed(&args));
         let id = POSTED.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|p| p.tag == tag).map_or(tag, |p| p.id.clone());
-        super::deliver(Click { id, info: decode(&arguments) });
+        super::deliver(Click { id, info });
         Ok(())
     }))?;
     ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(app))?.Show(&toast)?;
     Ok(toast)
+}
+
+/// What the toast's text boxes held, under `rune.input.<id>`.
+fn typed(args: &ToastActivatedEventArgs) -> Vec<(String, String)> {
+    let Ok(set) = args.UserInput() else { return Vec::new() };
+    let Ok(all) = set.First() else { return Vec::new() };
+    let mut out = Vec::new();
+    while all.HasCurrent().unwrap_or(false) {
+        if let Ok(pair) = all.Current()
+            && let (Ok(key), Ok(value)) = (pair.Key(), pair.Value())
+            && let Ok(text) = value.cast::<windows::Foundation::IPropertyValue>().and_then(|v| v.GetString())
+        {
+            out.push((format!("{}{}", super::INPUT, key.to_string_lossy()), text.to_string_lossy()));
+        }
+        if !all.MoveNext().unwrap_or(false) { break; }
+    }
+    out
+}
+
+/// The toast activator the install registered for the app (`CustomActivator` under its
+/// `AppUserModelId` key), read once, on the first toast.
+fn activator() -> Option<String> {
+    static FOUND: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    FOUND.get_or_init(|| {
+        let app = app_id()?;
+        windows_registry::CURRENT_USER.open(format!("Software\\Classes\\AppUserModelId\\{app}")).ok()?.get_string("CustomActivator").ok().filter(|c| !c.is_empty())
+    }).clone()
+}
+
+/// The activator's class: each object it makes takes one toast activation.
+#[windows::core::implement(IClassFactory)]
+struct Factory {
+    /// Where a wait (`wait`) takes its one activation; none when they go to the handler.
+    once: Option<std::sync::mpsc::Sender<Click>>,
+}
+
+impl IClassFactory_Impl for Factory_Impl {
+    fn CreateInstance(&self, outer: Ref<windows::core::IUnknown>, iid: *const windows::core::GUID, out: *mut *mut std::ffi::c_void) -> windows::core::Result<()> {
+        if outer.is_some() { return Err(windows::Win32::Foundation::CLASS_E_NOAGGREGATION.into()); }
+        let callback: INotificationActivationCallback = Callback { once: self.once.clone() }.into();
+        // SAFETY: COM's out parameter for the interface `iid` names.
+        unsafe { callback.query(iid, out).ok() }
+    }
+
+    fn LockServer(&self, _: BOOL) -> windows::core::Result<()> { Ok(()) }
+}
+
+#[windows::core::implement(INotificationActivationCallback)]
+struct Callback {
+    once: Option<std::sync::mpsc::Sender<Click>>,
+}
+
+impl INotificationActivationCallback_Impl for Callback_Impl {
+    fn Activate(&self, _: &windows::core::PCWSTR, args: &windows::core::PCWSTR, data: *const NOTIFICATION_USER_INPUT_DATA, count: u32) -> windows::core::Result<()> {
+        // SAFETY: COM hands a NUL-terminated string and `count` key/value pairs, alive for the call.
+        let (args, inputs) = unsafe {
+            let args = if args.is_null() { String::new() } else { args.to_string().unwrap_or_default() };
+            let inputs: Vec<(String, String)> = if data.is_null() { Vec::new() } else {
+                std::slice::from_raw_parts(data, count as usize).iter()
+                    .map(|d| (format!("{}{}", super::INPUT, d.Key.to_string().unwrap_or_default()), d.Value.to_string().unwrap_or_default()))
+                    .collect()
+            };
+            (args, inputs)
+        };
+        let mut info = decode(&args);
+        info.extend(inputs);
+        let id = info.iter().find(|(k, _)| k == ID).map(|(_, v)| v.clone()).unwrap_or_default();
+        let click = Click { id, info };
+        match &self.once {
+            Some(once) => { let _ = once.send(click); }
+            None => super::deliver(click),
+        }
+        Ok(())
+    }
+}
+
+/// Registers the activator's class `clsid` on a thread of its own, in the multithreaded
+/// apartment, so its calls arrive on COM's threads and nothing has to pump messages for them.
+pub(super) fn serve(clsid: &str, once: Option<std::sync::mpsc::Sender<Click>>) -> Result<(), String> {
+    let clsid = windows::core::GUID::try_from(clsid.trim_matches(|c| c == '{' || c == '}')).map_err(|_| format!("not a CLSID: {clsid}"))?;
+    let (ready, done) = std::sync::mpsc::channel();
+    std::thread::Builder::new().name("rune-toast-activator".into()).spawn(move || {
+        // SAFETY: this thread joins the multithreaded apartment and registers a class object it
+        // keeps for the life of the process (or of the wait).
+        let registered = unsafe {
+            CoInitializeEx(None, COINIT_MULTITHREADED).ok().and_then(|()| {
+                let factory: IClassFactory = Factory { once }.into();
+                CoRegisterClassObject(&clsid, &factory, CLSCTX_LOCAL_SERVER, REGCLS_MULTIPLEUSE)
+            })
+        };
+        let _ = ready.send(registered.map(|_| ()).map_err(|e| e.to_string()));
+        // The registration lasts while this thread's apartment does: park it.
+        loop { std::thread::park(); }
+    }).map_err(|e| e.to_string())?;
+    done.recv().map_err(|e| e.to_string())?
+}
+
+pub(super) fn wait(clsid: &str, timeout: std::time::Duration) -> Option<Click> {
+    let (to, from) = std::sync::mpsc::channel();
+    serve(clsid, Some(to)).ok()?;
+    from.recv_timeout(timeout).ok()
 }
 
 pub(super) fn remove(ids: &[&str]) {
@@ -256,16 +362,37 @@ fn tag(id: &str) -> String {
     format!("{:016x}", h.finish())
 }
 
-/// The toast's XML: a generic toast with the title and body, and no sound. Its launch arguments
-/// are the user info, or with an activation scheme the link a click opens.
+/// The toast's XML: a generic toast with the title and body, its buttons and text boxes, and no
+/// sound. Its launch arguments are the user info, or with an activation scheme the link a click
+/// opens. A button's arguments are the user info with its action and the notification's id;
+/// it's a background activation when the install registered the app's activator (it reaches
+/// `serve`, or starts the app for `wait`), else a foreground one the toast's own event takes in
+/// the running app, which doesn't bring itself forward for it.
 pub(super) fn xml(n: &Notification, scheme: Option<&str>) -> String {
     let body = if n.body.is_empty() { String::new() } else { format!("<text>{}</text>", escape(&n.body)) };
     let launch = match scheme {
         Some(scheme) => format!("activationType=\"protocol\" launch=\"{}\"", escape(&link(scheme, n))),
         None => format!("launch=\"{}\"", escape(&encode(&n.info))),
     };
+    let activation = if activator().is_some() { "background" } else { "foreground" };
+    let arguments = |action: &str| {
+        let mut info = n.info.clone();
+        info.push((super::ACTION.to_owned(), action.to_owned()));
+        info.push((ID.to_owned(), n.id.clone()));
+        escape(&encode(&info))
+    };
+    let actions: String = n.actions.iter().take(5).map(|a| match a {
+        super::Action::Button { id, label } => format!("<action content=\"{}\" arguments=\"{}\" activationType=\"{activation}\"/>", escape(label), arguments(id)),
+        super::Action::Reply { id, placeholder, label } => format!(
+            "<input id=\"{0}\" type=\"text\" placeHolderContent=\"{1}\"/><action content=\"{2}\" arguments=\"{3}\" activationType=\"{activation}\" hint-inputId=\"{0}\"/>",
+            escape(id), escape(placeholder), escape(label), arguments(id),
+        ),
+    }).collect();
+    // Inputs come before buttons in the schema.
+    let (inputs, buttons): (Vec<&str>, Vec<&str>) = actions.split_inclusive("/>").partition(|part| part.starts_with("<input"));
+    let actions = if actions.is_empty() { String::new() } else { format!("<actions>{}{}</actions>", inputs.concat(), buttons.concat()) };
     format!(
-        "<toast {launch}><visual><binding template=\"ToastGeneric\"><text>{}</text>{body}</binding></visual><audio silent=\"true\"/></toast>",
+        "<toast {launch}><visual><binding template=\"ToastGeneric\"><text>{}</text>{body}</binding></visual>{actions}<audio silent=\"true\"/></toast>",
         escape(&n.title),
     )
 }
