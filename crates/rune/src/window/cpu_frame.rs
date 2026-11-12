@@ -583,8 +583,9 @@ impl<S: 'static> Host<S> {
             renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, (l.config.width, l.config.height));
             renderer.draw(&mut enc, &view, rt.clear_color());
         }
-        // A copy of the frame, for the drift count once it's the one the window commits to.
-        *readback = l.config.usage.contains(wgpu::TextureUsages::COPY_SRC).then(|| {
+        // A copy of the frame, for the drift count once it's the one the window commits to: only
+        // when it's asked for (`RUNE_CPU_BOOT_DRIFT`), as the count is a diagnostic.
+        *readback = (crate::render::cpu_boot::drift_wanted() && l.config.usage.contains(wgpu::TextureUsages::COPY_SRC)).then(|| {
             let (width, height) = (l.config.width, l.config.height);
             let row = (width * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
             let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor { label: Some("rune hand-over readback"), size: u64::from(row) * u64::from(height), usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });

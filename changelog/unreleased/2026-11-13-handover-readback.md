@@ -1,0 +1,1 @@
+- **Windows: the GPU hand-over no longer reads its first frame back unless asked.** Every launch copied the GPU's first frame into a frame-sized readback buffer (5.5 MB at 1440x960) and compared it with the CPU frame on a worker, printing the count, though the comparison is a diagnostic; it now runs only with `RUNE_CPU_BOOT_DRIFT=1`, as its documentation says.
