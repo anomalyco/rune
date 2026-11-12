@@ -34,6 +34,7 @@ impl<S: 'static> Runtime<S> {
             held.moved |= !press_run::within_slop(at, (x, y));
         }
         self.selection_drag(x, y);
+        self.edge_scroll_moved(y);
         if self.input_click.captured() {
             self.input_drag(x, y, drag_move);
             return;

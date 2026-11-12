@@ -23,6 +23,8 @@ const SECONDARY_SELECTS_WORD: bool = cfg!(target_os = "macos");
 
 #[path = "copy_join.rs"]
 mod copy_join;
+#[path = "edge_scroll.rs"]
+pub(crate) mod edge_scroll;
 #[path = "phase.rs"]
 pub(crate) mod phase;
 #[path = "toolbar.rs"]
@@ -526,6 +528,8 @@ impl<S: 'static> Runtime<S> {
 
     /// Steps the selection's phase and carries out what it asks for.
     pub(super) fn select_step(&mut self, event: phase::Event<'_>) {
+        // Only the held press's own drag keeps the list scrolling at its edge.
+        if !matches!(event, phase::Event::Drag { .. }) { self.stop_edge_scroll(); }
         let effects = phase::step(&mut self.selectable.phase, event);
         self.carry_select(effects);
     }

@@ -24,6 +24,8 @@ pub(in crate::runtime) struct TextSel {
     /// list. It sits beside the phase so a new selection clears it in place and keeps its
     /// buckets; with nothing selected it's empty.
     pub(in crate::runtime) mounted_between: HashMap<String, u64>,
+    /// The list scrolling while the held pointer stays at its edge.
+    pub(in crate::runtime) edge: super::edge_scroll::EdgeScroll,
 }
 
 #[derive(Default)]
