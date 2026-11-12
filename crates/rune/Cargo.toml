@@ -199,6 +199,10 @@ futures-util = { version = "0.3", optional = true }
 [target.'cfg(all(not(target_vendor = "apple"), not(target_arch = "wasm32"), not(target_os = "windows")))'.dependencies]
 wgpu = { version = "30", default-features = false, features = ["vulkan"] }
 
+# build.rs hashes the uber shader's WGSL; the portable code builds without a C compiler.
+[build-dependencies]
+blake3 = { version = "1", features = ["pure"] }
+
 [dev-dependencies]
 # The HLSL wgpu generates, for the precompiled uber shader (`render/dxbc_tests.rs`).
 log = "0.4"
