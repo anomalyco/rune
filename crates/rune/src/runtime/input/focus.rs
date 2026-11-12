@@ -398,7 +398,9 @@ impl<S: 'static> Runtime<S> {
     /// nothing: a screen reader went back to the window and Tab started over at its top. A
     /// modal's own focus is left to the modal machine, which returns it where it was.
     fn focus_fallback(&self, nodes: &[Node], shown: &dyn Fn(usize) -> bool) -> Option<String> {
-        let gone = self.focus.path()?;
+        // A field that Escape blurred as it closed (a comment box cancelled) counts as focused:
+        // the keyboard was on it, and nothing else asked for focus.
+        let gone = self.focus.path().or_else(|| self.focus.now_or_blurred().filter(|_| self.focus.keyboard()))?;
         let at = self.nodes.iter().position(|n| n.path == gone)?;
         if self.active_modal().is_some_and(|m| at >= m && self.modal_member(at)) { return None; }
         let new: rustc_hash::FxHashMap<&str, usize> = nodes.iter().enumerate().map(|(j, n)| (n.path.as_str(), j)).collect();

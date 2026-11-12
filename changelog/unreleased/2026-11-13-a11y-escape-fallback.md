@@ -1,0 +1,1 @@
+- Focus: a field that Escape blurred as it closed (a cancelled comment box) hands focus to its neighbour or container under keyboard use, as one that unmounts with focus does; focus fell to nothing.
