@@ -97,23 +97,6 @@ fn tile<'f>(scene: &Scene<'_>, bins: &Bins, each: &[u64], t: usize, flat_of: imp
     hash
 }
 
-/// Whether tile `t` paints all in `bgra`: it starts cleared to it and draws nothing, or it draws
-/// one opaque box of that colour that fills it, straight into the window.
-pub(super) fn solid(scene: &Scene<'_>, bins: &Bins, t: usize, bgra: [u8; 4]) -> bool {
-    let (w, h) = scene.size;
-    let (tx, ty) = (t as u32 % bins.cols, t as u32 / bins.cols);
-    let r = [(tx * TILE_W) as f32, (ty * TILE_H) as f32, ((tx + 1) * TILE_W).min(w) as f32, ((ty + 1) * TILE_H).min(h) as f32];
-    match bins.tile(t) {
-        [] => !bins.covered[t] && super::blend::opaque([scene.clear[0], scene.clear[1], scene.clear[2], scene.clear[3]].map(|v| v.clamp(0.0, 1.0))) == bgra,
-        &[n] => {
-            let i = &scene.instances[n as usize];
-            bins.within[n as usize] == super::bin::TOP && i.fill[3] == 1.0 && super::blend::opaque(i.fill) == bgra
-                && flat(i).is_some_and(|f| inside(r, f.sure) || covers(Some(&f.solid), &f.clip, r))
-        }
-        _ => false,
-    }
-}
-
 fn inside(r: [f32; 4], o: [f32; 4]) -> bool { r[0] >= o[0] && r[1] >= o[1] && r[2] <= o[2] && r[3] <= o[3] }
 /// The texels an image instance samples, hashed: an animated image writes its next frame into
 /// the same place.

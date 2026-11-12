@@ -37,13 +37,6 @@ pub struct CpuPainter {
     resets: u64,
     /// The last frame's scene-wide switches (`Scene::flags`), from a frame the CPU could draw.
     flags: Option<super::Flags>,
-    /// The colour the window shows where nothing has been copied to it yet (`window_shows`),
-    /// until the next frame paints; and the tiles left to it, whose pixels the buffer doesn't
-    /// hold (`fill_absent`).
-    shows: Option<[u8; 4]>,
-    absent: Vec<bool>,
-    /// The colour of the tiles in `absent`.
-    background: Option<[u8; 4]>,
     /// Scratch for `recoloured`: the instances that changed, and which tiles they mark.
     changed: Vec<u32>,
     marked: Vec<bool>,
@@ -75,7 +68,7 @@ impl CpuPainter {
     /// A painter running on `threads` threads, the caller among them (the others are made now,
     /// and park between frames).
     pub fn new(threads: usize) -> CpuPainter {
-        CpuPainter { pool: Pool::new(threads), hashes: Vec::new(), next: Vec::new(), each: Vec::new(), size: (0, 0), stride: 0, dirty: Vec::new(), prev: None, resets: 0, flags: None, shows: None, absent: Vec::new(), background: None, changed: Vec::new(), marked: Vec::new() }
+        CpuPainter { pool: Pool::new(threads), hashes: Vec::new(), next: Vec::new(), each: Vec::new(), size: (0, 0), stride: 0, dirty: Vec::new(), prev: None, resets: 0, flags: None, changed: Vec::new(), marked: Vec::new() }
     }
 
     /// The buffer's pixels are no longer the last frame's (a new buffer): the next frame paints
@@ -85,39 +78,6 @@ impl CpuPainter {
         self.hashes.clear();
         self.prev = None;
         self.flags = None;
-        self.absent.clear();
-    }
-
-    /// The window shows `bgra` everywhere now (its background brush, before the first frame is
-    /// copied in): the next frame leaves the tiles it would paint all in that colour to it,
-    /// neither writing them (a fresh buffer's pages stay untouched) nor naming them in its rects.
-    /// Their pixels come later, off the first frame's path (`fill_absent`).
-    pub fn window_shows(&mut self, bgra: [u8; 4]) {
-        // Whatever the window showed is gone: every tile is the next frame's to decide.
-        self.forget();
-        self.shows = Some(bgra);
-    }
-
-    /// Writes the pixels of the tiles left to the window's colour (`window_shows`) into
-    /// `target`, so the buffer holds the whole frame again (for a copy of all of it, or the
-    /// drift check); returns how many. The window needn't be told: it already shows them.
-    pub fn fill_absent(&mut self, target: &mut Target<'_>) -> usize {
-        let Some(bg) = self.background else { return 0 };
-        let (w, h) = self.size;
-        let cols = w.div_ceil(TILE_W);
-        let mut n = 0;
-        for t in 0..self.absent.len() {
-            if !self.absent[t] { continue; }
-            let (tx, ty) = (t as u32 % cols, t as u32 / cols);
-            let (x0, x1) = (tx * TILE_W, ((tx + 1) * TILE_W).min(w));
-            for y in ty * TILE_H..((ty + 1) * TILE_H).min(h) {
-                let at = y as usize * target.stride + x0 as usize * 4;
-                super::blend::fill_row(&mut target.pixels[at..at + (x1 - x0) as usize * 4], bg);
-            }
-            self.absent[t] = false;
-            n += 1;
-        }
-        n
     }
 
     /// Fills the masks the text system queued (`fill_masks`) on this painter's threads.
@@ -168,17 +128,6 @@ impl CpuPainter {
         // leaves fewer tiles to paint than the hashes alone do.
         let planning = Instant::now();
         let shift = if all || resized || by_hash < MIN_SCROLL_TILES { None } else { self.prev.as_ref().and_then(|p| scroll::plan(p, scene, &bins, &Threads { pool: &self.pool, extra: self.pool.threads() - 1 })) };
-        // A tile moves only from rows the buffer holds: not from tiles left to the window.
-        let mut shift = shift;
-        if let Some(s) = shift.as_mut().filter(|_| !self.absent.is_empty()) {
-            for t in 0..s.clean.len() {
-                if !s.clean[t] { continue; }
-                let (tx, ty) = (t as u32 % bins.cols, t as u32 / bins.cols);
-                let (y0, y1) = ((ty * TILE_H) as i64 - s.dy as i64, (((ty + 1) * TILE_H).min(scene.size.1) as i64) - 1 - s.dy as i64);
-                let from = (y0.max(0) as u32 / TILE_H)..=(y1.max(0) as u32 / TILE_H).min(bins.rows - 1);
-                if from.into_iter().any(|oty| self.absent[(oty * bins.cols + tx) as usize]) { s.clean[t] = false; }
-            }
-        }
         let touched = |s: &scroll::Shift, t: usize| {
             let (tx, ty) = (t as u32 % bins.cols, t as u32 / bins.cols);
             tx * super::bin::TILE_W < s.rect[2] && (tx + 1) * super::bin::TILE_W > s.rect[0] && ty * super::bin::TILE_H < s.rect[3] && (ty + 1) * super::bin::TILE_H > s.rect[1]
@@ -196,33 +145,6 @@ impl CpuPainter {
         }
         let moved = Instant::now();
         self.dirty.extend((0..self.next.len() as u32).filter(|&t| dirty(shift.as_ref(), t as usize)));
-        // Tiles the window shows in its own colour, and the buffer doesn't hold: after a resize
-        // they keep their place like the hashes; any that moved came from tiles it holds.
-        let absent: Vec<bool> = (0..self.next.len()).map(|t| {
-            if all || self.absent.is_empty() { return false; }
-            if shift.as_ref().is_some_and(|s| s.clean[t]) { return false; }
-            if !resized { return self.absent[t]; }
-            let (tx, ty) = (t as u32 % bins.cols, t as u32 / bins.cols);
-            whole(tx, ty, old) && whole(tx, ty, scene.size) && self.absent[(ty * ocols + tx) as usize]
-        }).collect();
-        // The first frame into a window showing its colour, or a tile it still shows: one that
-        // paints all in that colour is left to it.
-        let shows = self.shows.take();
-        let bg = shows.or(self.background);
-        if let Some(bg) = bg {
-            self.dirty.retain(|&t| {
-                let t = t as usize;
-                !((shows.is_some() || absent[t]) && !bins.quiet[t] && damage::solid(scene, &bins, t, bg))
-            });
-        }
-        // Shown by the window and not painted: still absent. Painted (or moved in): held.
-        let mut now_absent = absent;
-        if bg.is_some() {
-            if shows.is_some() { now_absent.iter_mut().for_each(|a| *a = true); }
-            for &t in &self.dirty { now_absent[t as usize] = false; }
-            self.background = bg;
-        }
-        self.absent = now_absent;
         std::mem::swap(&mut self.hashes, &mut self.next);
         self.size = scene.size;
         self.stride = target.stride;
@@ -297,7 +219,6 @@ impl CpuPainter {
         }
         for &t in &self.dirty {
             self.hashes[t as usize] = damage::rehash(scene, bins, &self.each, t as usize);
-            if let Some(a) = self.absent.get_mut(t as usize) { *a = false; }
         }
         let hashed = Instant::now();
         let extra = (self.dirty.len() / TILES_PER_THREAD).min(self.pool.threads() - 1);

@@ -47,12 +47,6 @@ pub use drift::{Drift, Pixels, drift, drift_wanted, last_drift};
 pub use fill::{FillReport, attach_text, fill_masks};
 pub use painter::{CpuPainter, Painted};
 
-/// The B, G, R, A bytes the painter writes for the opaque colour `c` (`Runtime::clear_color`, a
-/// fill): what a window's own colour must be for `CpuPainter::window_shows`.
-pub fn opaque_bgra(c: [f32; 4]) -> [u8; 4] {
-    blend::opaque(c.map(|v| v.clamp(0.0, 1.0)))
-}
-
 /// One frame's draw data, borrowed from the runtime that built it.
 pub struct Scene<'a> {
     instances: &'a [Instance],

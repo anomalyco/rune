@@ -1,0 +1,1 @@
+- **Windows: a CPU window's first frame is copied in whole.** The `RUNE_CPU_COLOUR` option (the window filled with its own colour first, and the painter skipping tiles all in that colour) is gone: on a session screen with ten tabs it was no faster (first frame in the window 100,455 µs p50 against 94,286 without it).

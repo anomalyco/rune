@@ -8,9 +8,9 @@
 //! it's made once at the largest size the window is likely to reach (its display's), with one row
 //! length: a resize then repaints only what moved and touches no new memory.
 
-use windows_sys::Win32::Foundation::{HWND, RECT};
+use windows_sys::Win32::Foundation::HWND;
 use windows_sys::Win32::Graphics::Gdi::{
-    BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BitBlt, CreateCompatibleDC, CreateDIBSection, CreateSolidBrush, FillRect, DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDC, HBITMAP,
+    BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BitBlt, CreateCompatibleDC, CreateDIBSection, DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDC, HBITMAP,
     HDC, HGDIOBJ, RGBQUAD, ReleaseDC, SRCCOPY, SelectObject,
 };
 
@@ -96,7 +96,6 @@ impl Dib {
         };
         let bounds = |rects: &[[u32; 4]]| rects.iter().fold([u32::MAX, u32::MAX, 0, 0], |u, r| [u[0].min(r[0]), u[1].min(r[1]), u[2].max(r[2]), u[3].max(r[3])]);
         let copies: Vec<_> = match blit {
-            Blit::Each(rects) => rects.iter().filter_map(clip).collect(),
             Blit::Bounds([]) => Vec::new(),
             Blit::Bounds(rects) => clip(&bounds(rects)).into_iter().collect(),
             Blit::All => clip(&[0, 0, width, height]).into_iter().collect(),
@@ -114,32 +113,12 @@ impl Dib {
 
 /// What a frame copies to the window (`Dib::present`).
 pub(crate) enum Blit<'a> {
-    /// Each rect (`[x0, y0, x1, y1)`, client pixels) on its own: only before the window shows,
-    /// where nothing composes between two copies, and what's outside them must stay as it is
-    /// (the window's own colour, `fill_window`).
-    Each(&'a [[u32; 4]]),
     /// The rects' bounding box, in one copy; nothing when there are none (an unchanged frame).
     /// DWM can compose between two `BitBlt`s: on the visible desktop one copy per rect showed
     /// 1-15 torn frames in 600, one per frame none.
     Bounds(&'a [[u32; 4]]),
     /// The whole client area: the window changed size, and its redirection surface with it.
     All,
-}
-
-/// Fills the window's client area of `client` pixels with `bgra`, before its first frame is
-/// copied in (`CpuPainter::window_shows`): GDI writes the colour's B, G, R bytes as the painter
-/// would.
-pub(crate) fn fill_window(hwnd: HWND, client: (u32, u32), bgra: [u8; 4]) {
-    let rect = RECT { left: 0, top: 0, right: client.0 as i32, bottom: client.1 as i32 };
-    // SAFETY: a window this thread owns; the brush and the DC go back before returning.
-    unsafe {
-        let window = GetDC(hwnd);
-        if window.is_null() { return; }
-        let brush = CreateSolidBrush(u32::from(bgra[2]) | u32::from(bgra[1]) << 8 | u32::from(bgra[0]) << 16);
-        FillRect(window, &rect, brush);
-        DeleteObject(brush);
-        ReleaseDC(hwnd, window);
-    }
 }
 
 impl Drop for Dib {
