@@ -92,84 +92,80 @@ pub(crate) fn unidle_d3d_threads_soon() {
 /// This process's threads by name and priority, counted (`name (priority) xN`, unnamed ones as
 /// `?`), for saying what a quit waits on.
 pub(crate) fn threads_summary() -> String {
-    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE, LocalFree};
-    use windows_sys::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next};
-    use windows_sys::Win32::System::Threading::{GetCurrentProcessId, GetThreadDescription, GetThreadPriority, OpenThread, THREAD_QUERY_LIMITED_INFORMATION};
     let mut seen: Vec<(String, i32, usize)> = Vec::new();
-    // SAFETY: as in `unidle_d3d_threads`: a snapshot read into a THREADENTRY32 this frame owns, this
-    // process's thread handles closed after use, descriptions freed with LocalFree.
-    unsafe {
-        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
-        if snapshot == INVALID_HANDLE_VALUE { return "unknown".into(); }
-        let pid = GetCurrentProcessId();
-        let mut entry: THREADENTRY32 = std::mem::zeroed();
-        entry.dwSize = size_of::<THREADENTRY32>() as u32;
-        let mut more = Thread32First(snapshot, &mut entry) != 0;
-        while more {
-            if entry.th32OwnerProcessID == pid {
-                let thread = OpenThread(THREAD_QUERY_LIMITED_INFORMATION, 0, entry.th32ThreadID);
-                if !thread.is_null() {
-                    let mut desc = std::ptr::null_mut();
-                    let name = if GetThreadDescription(thread, &mut desc) >= 0 && !desc.is_null() {
-                        let len = (0..).take_while(|&i| *desc.add(i) != 0).count();
-                        let name = String::from_utf16_lossy(std::slice::from_raw_parts(desc, len));
-                        LocalFree(desc.cast());
-                        name
-                    } else { String::new() };
-                    let name = if name.is_empty() { "?".to_owned() } else { name };
-                    let priority = GetThreadPriority(thread);
-                    match seen.iter_mut().find(|(n, p, _)| *n == name && *p == priority) {
-                        Some(s) => s.2 += 1,
-                        None => seen.push((name, priority, 1)),
-                    }
-                    CloseHandle(thread);
-                }
-            }
-            more = Thread32Next(snapshot, &mut entry) != 0;
+    for_each_own_thread(|thread| {
+        let name = thread_name(thread).filter(|n| !n.is_empty()).unwrap_or_else(|| "?".into());
+        // SAFETY: a thread handle `for_each_own_thread` opened for querying.
+        let priority = unsafe { windows_sys::Win32::System::Threading::GetThreadPriority(thread) };
+        match seen.iter_mut().find(|(n, p, _)| *n == name && *p == priority) {
+            Some(s) => s.2 += 1,
+            None => seen.push((name, priority, 1)),
         }
-        CloseHandle(snapshot);
-    }
+    });
     seen.iter().map(|(n, p, c)| if *c > 1 { format!("{n} ({p}) x{c}") } else { format!("{n} ({p})") }).collect::<Vec<_>>().join(", ")
 }
 
-fn unidle_d3d_threads() -> usize {
-    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE, LocalFree};
-    use windows_sys::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next};
-    use windows_sys::Win32::System::Threading::{
-        GetCurrentProcessId, GetThreadDescription, GetThreadPriority, OpenThread, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL, THREAD_QUERY_LIMITED_INFORMATION,
-        THREAD_SET_INFORMATION,
-    };
-    // SAFETY: a thread snapshot read into a THREADENTRY32 this frame owns; each thread handle is
-    // this process's own and closed after use; a thread's description is freed with LocalFree.
-    unsafe {
-        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
-        if snapshot == INVALID_HANDLE_VALUE { return 0; }
-        let mut raised = 0;
-        let pid = GetCurrentProcessId();
-        let mut entry: THREADENTRY32 = std::mem::zeroed();
-        entry.dwSize = size_of::<THREADENTRY32>() as u32;
-        let mut more = Thread32First(snapshot, &mut entry) != 0;
-        while more {
-            if entry.th32OwnerProcessID == pid {
-                let thread = OpenThread(THREAD_QUERY_LIMITED_INFORMATION | THREAD_SET_INFORMATION, 0, entry.th32ThreadID);
-                if !thread.is_null() {
-                    let mut desc = std::ptr::null_mut();
-                    if GetThreadDescription(thread, &mut desc) >= 0 && !desc.is_null() {
-                        let len = (0..).take_while(|&i| *desc.add(i) != 0).count();
-                        let name = String::from_utf16_lossy(std::slice::from_raw_parts(desc, len));
-                        LocalFree(desc.cast());
-                        if name.starts_with("D3D Background Thread") && GetThreadPriority(thread) < THREAD_PRIORITY_BELOW_NORMAL {
-                            SetThreadPriority(thread, THREAD_PRIORITY_BELOW_NORMAL);
-                            raised += 1;
-                        }
-                    }
-                    CloseHandle(thread);
-                }
+/// Raises this process's threads whose name passes `named` and whose priority is under `floor` to
+/// `floor` (a `THREAD_PRIORITY_*`); returns how many. Walks only this process's threads.
+pub fn raise_threads(named: impl Fn(&str) -> bool, floor: i32) -> usize {
+    use windows_sys::Win32::System::Threading::{GetThreadPriority, SetThreadPriority};
+    let mut raised = 0;
+    for_each_own_thread(|thread| {
+        // SAFETY: a thread handle `for_each_own_thread` opened for querying and setting.
+        unsafe {
+            if GetThreadPriority(thread) < floor && thread_name(thread).is_some_and(|n| named(&n)) && SetThreadPriority(thread, floor) != 0 {
+                raised += 1;
             }
-            more = Thread32Next(snapshot, &mut entry) != 0;
         }
-        CloseHandle(snapshot);
-        raised
+    });
+    raised
+}
+
+fn unidle_d3d_threads() -> usize {
+    raise_threads(|name| name.starts_with("D3D Background Thread"), windows_sys::Win32::System::Threading::THREAD_PRIORITY_BELOW_NORMAL)
+}
+
+/// Calls `f` with a handle to each of this process's threads, open for querying and setting its
+/// priority, walking this process's own thread list (`NtGetNextThread`). A Toolhelp snapshot lists
+/// every thread on the machine: 67-75 ms a walk on a busy one, twice per launch.
+fn for_each_own_thread(mut f: impl FnMut(windows_sys::Win32::Foundation::HANDLE)) {
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, THREAD_QUERY_LIMITED_INFORMATION, THREAD_SET_INFORMATION};
+    type NextThread = unsafe extern "system" fn(HANDLE, HANDLE, u32, u32, u32, *mut HANDLE) -> i32;
+    static NEXT: std::sync::OnceLock<Option<NextThread>> = std::sync::OnceLock::new();
+    // SAFETY: ntdll is loaded in every process; NtGetNextThread has this signature since Vista.
+    let next = *NEXT.get_or_init(|| unsafe {
+        let ntdll = GetModuleHandleW("ntdll.dll\0".encode_utf16().collect::<Vec<_>>().as_ptr());
+        if ntdll.is_null() { return None; }
+        GetProcAddress(ntdll, c"NtGetNextThread".as_ptr().cast()).map(|p| std::mem::transmute::<_, NextThread>(p))
+    });
+    let Some(next) = next else { return };
+    let mut prev: HANDLE = std::ptr::null_mut();
+    loop {
+        let mut thread: HANDLE = std::ptr::null_mut();
+        // SAFETY: this process's pseudo-handle and the last thread handle it returned (or none);
+        // each handle it returns is closed once the next is taken.
+        let status = unsafe { next(GetCurrentProcess(), prev, THREAD_QUERY_LIMITED_INFORMATION | THREAD_SET_INFORMATION, 0, 0, &mut thread) };
+        if !prev.is_null() { unsafe { CloseHandle(prev) }; }
+        if status < 0 || thread.is_null() { return; }
+        f(thread);
+        prev = thread;
+    }
+}
+
+/// A thread's description (`SetThreadDescription`), if it has one.
+fn thread_name(thread: windows_sys::Win32::Foundation::HANDLE) -> Option<String> {
+    use windows_sys::Win32::Foundation::LocalFree;
+    use windows_sys::Win32::System::Threading::GetThreadDescription;
+    let mut desc = std::ptr::null_mut();
+    // SAFETY: a live thread handle; the description is read to its NUL and freed with LocalFree.
+    unsafe {
+        if GetThreadDescription(thread, &mut desc) < 0 || desc.is_null() { return None; }
+        let len = (0..).take_while(|&i| *desc.add(i) != 0).count();
+        let name = String::from_utf16_lossy(std::slice::from_raw_parts(desc, len));
+        LocalFree(desc.cast());
+        Some(name)
     }
 }
 
