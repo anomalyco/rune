@@ -698,6 +698,13 @@ impl<S: 'static> Runtime<S> {
         // Removed nodes stay mounted in `Scene` until their exit transition settles at opacity 0.
         let present_len = nodes.len();
         let mut old_nodes = std::mem::take(&mut self.nodes);
+        // A node reused from the last commit keeps its bindings' latches, which a commit that
+        // lands drops as a rebuilt node's are (below).
+        if tx.commit.lands() {
+            for n in nodes.iter_mut().filter(|n| n.cold.get().is_some_and(|c| !c.live.is_empty())) {
+                if let Some(cold) = n.cold.get_mut_if_some() { cold.live.iter_mut().for_each(|b| b.seen = None); }
+            }
+        }
         for old in &old_nodes {
             if old.cold.get().is_none_or(|c| c.live.is_empty()) { continue; }
             if let Some(&i) = self.node_index.get(&old.id) {
