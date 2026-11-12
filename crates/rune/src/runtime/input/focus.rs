@@ -404,8 +404,12 @@ impl<S: 'static> Runtime<S> {
         let at = self.nodes.iter().position(|n| n.path == gone)?;
         if self.active_modal().is_some_and(|m| at >= m && self.modal_member(at)) { return None; }
         let new: rustc_hash::FxHashMap<&str, usize> = nodes.iter().enumerate().map(|(j, n)| (n.path.as_str(), j)).collect();
+        // A node built again this commit has no layout yet: its size is the old node's.
+        let sized = |i: usize| self.nodes[i].local.w > 0.0 && self.nodes[i].local.h > 0.0;
+        let visible = |j: usize| !nodes[j].inert && nodes[j].vis.opacity > 0.0
+            && std::iter::successors(nodes[j].parent, |&p| nodes[p].parent).all(|p| nodes[p].vis.opacity > 0.0);
         let survivor = |i: usize| new.get(self.nodes[i].path.as_str()).copied()
-            .filter(|&j| shown(j) && (self.takes_focus(&nodes[j]) || nodes[j].input.as_ref().is_some_and(|i| i.access.is_some())));
+            .filter(|&j| (shown(j) || (sized(i) && visible(j))) && (self.takes_focus(&nodes[j]) || nodes[j].input.as_ref().is_some_and(|i| i.access.is_some())));
         let within = |j: usize, s: usize| {
             let (p, root) = (self.nodes[j].path.as_str(), self.nodes[s].path.as_str());
             root.is_empty() || (p.len() > root.len() && p.starts_with(root) && p.as_bytes()[root.len()] == b'/')
