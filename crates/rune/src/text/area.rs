@@ -48,8 +48,12 @@ pub(super) struct Pen {
 pub(super) enum Op {
     /// A stroke at most a device pixel wide, this wide: `super::hairline`.
     Hairline(f32),
-    /// An axis-aligned rect, `[min, max]`: its ramp, less an inner one's for a mitred stroke.
+    /// An axis-aligned rect, `[min, max]`: its ramp.
     Rect { outer: [Point; 2], inner: Option<[Point; 2]> },
+    /// A rect stroked `2 hw` wide with mitred corners (`AAStrokeRectOp`): the stroke's outer
+    /// and inner rects (none where the stroke fills it), each with a pixel-wide ramp that the
+    /// stroke's own coverage tops (less than full for a stroke under a pixel).
+    StrokeRect { outside: [Point; 2], inside: Option<[Point; 2]>, hw: f32 },
     /// A turned straight stroke's outline: the ramp to its nearest edge.
     Quad([Point; 4]),
     /// A round rect's ramp, less a hole's for a stroke.
@@ -94,18 +98,15 @@ pub(super) fn op(shape: &Shape<'_>, ctm: Transform, pen: Option<&Pen>) -> Op {
             }
             let (a, b) = (ctm.transform_point(*lo), ctm.transform_point(*hi));
             let (lo, hi) = (Point::new(a.x.min(b.x), a.y.min(b.y)), Point::new(a.x.max(b.x), a.y.max(b.y)));
+            // Blink draws a `<rect>` as the rect it is, however its float sides add up.
+            if *r == 0.0 {
+                return rect(&[lo, hi], pen, hw, scale);
+            }
             ring(Round { lo, hi, r: r * scale }, pen.map(|_| hw))
         }
         Shape::Path(path) => {
             if let Some(r) = rect_corners(path, ctm) {
-                return match pen {
-                    None => Op::Rect { outer: r, inner: None },
-                    Some(p) if p.join == Join::Miter => {
-                        let hollow = r[1].x - r[0].x > 2.0 * hw && r[1].y - r[0].y > 2.0 * hw;
-                        Op::Rect { outer: grow(r, hw), inner: hollow.then(|| grow(r, -hw)) }
-                    }
-                    Some(_) => thin(pen, scale),
-                };
+                return rect(&r, pen, hw, scale);
             }
             match (pen, path) {
                 // `AALinearizingConvexPathRenderer` takes these, a device pixel wide to twenty.
@@ -138,6 +139,18 @@ pub(super) fn elements(shape: &Shape<'_>) -> Vec<super::convex::El> {
 fn is_similarity(ctm: Transform) -> bool {
     let (a, b, c, d) = (ctm.xx, ctm.xy, ctm.yx, ctm.yy);
     (a * a + b * b - (c * c + d * d)).abs() <= 1.0 / 4096.0 && (a * c + b * d).abs() <= 1.0 / 4096.0
+}
+
+/// A rect's op: filled, or stroked with mitred corners (`2 hw` wide).
+fn rect(r: &[Point; 2], pen: Option<&Pen>, hw: f32, scale: f32) -> Op {
+    match pen {
+        None => Op::Rect { outer: *r, inner: None },
+        Some(p) if p.join == Join::Miter => {
+            let hollow = r[1].x - r[0].x > 2.0 * hw && r[1].y - r[0].y > 2.0 * hw;
+            Op::StrokeRect { outside: grow(*r, hw), inside: hollow.then(|| grow(*r, -hw)), hw }
+        }
+        Some(_) => thin(pen, scale),
+    }
 }
 
 /// A path's op once nothing simpler takes it: a hairline for a stroke a device pixel wide or
@@ -195,6 +208,16 @@ impl Op {
                 let q = Point::new(x as f32 + 0.5, y as f32 + 0.5);
                 let c = match self {
                     Op::Rect { outer, inner } => ramp(inside_rect(outer, q)) - inner.as_ref().map_or(0.0, |r| ramp(inside_rect(r, q))),
+                    Op::StrokeRect { outside, inside, hw } => {
+                        // The four nested rects: the outer ramp from `outset` beyond the stroke to
+                        // `inset` in, the inner one likewise, each a pixel across.
+                        let inset = hw.min(0.5);
+                        let full = if inset < 0.5 { 2.0 * inset / (inset + 0.5) } else { 1.0 };
+                        let outset = 1.0 - inset;
+                        let a = (inside_rect(outside, q) + outset).clamp(0.0, 1.0);
+                        let b = inside.as_ref().map_or(1.0, |r| (outset - inside_rect(r, q)).clamp(0.0, 1.0));
+                        full * a.min(b)
+                    }
                     Op::Quad(quad) => ramp(inside_quad(quad, q)),
                     Op::Round { outer, inner } => ramp(outer.inside(q)) * inner.map_or(1.0, |r| ramp(-r.inside(q))),
                     Op::Hairline(_) | Op::Path | Op::ConvexStroke => 0.0,
@@ -307,10 +330,11 @@ pub(super) fn render_aaa(shape: &Shape<'_>, pen: Option<&Pen>, fill: Fill, ctm: 
     let (r, btm) = corners.iter().fold((f32::MIN, f32::MIN), |(r, b), p| (r.max(p.x), b.max(p.y)));
     let (dx, dy) = (l.floor(), t.floor());
     let (w, h) = ((r.ceil() - dx) as usize + 2, (btm.ceil() - dy) as usize + 2);
-    let Some(device) = outline.transform(frac.post_translate(1.0 - dx, 1.0 - dy)) else { return };
+    let pad = std::env::var("AAA_PAD").ok().and_then(|v| v.parse::<f32>().ok()).unwrap_or(1.0);
+    let Some(device) = outline.transform(frac.post_translate(pad - dx, pad - dy)) else { return };
     let mut mask = vec![0u8; w * h];
     super::aaa::fill(&device, rule, w, h, &mut mask);
-    let (ox, oy) = ((ctm.x.floor() + dx) as i64 - 1, (ctm.y.floor() + dy) as i64 - 1);
+    let (ox, oy) = ((ctm.x.floor() + dx - pad) as i64, (ctm.y.floor() + dy - pad) as i64);
     let n = px as i64;
     for y in 0..h as i64 {
         for x in 0..w as i64 {
@@ -363,6 +387,14 @@ fn skia_path(shape: &Shape<'_>, tolerance: f32) -> Option<tiny_skia_path::Path> 
 /// corner a quarter conic.
 fn push_round_rect(b: &mut tiny_skia_path::PathBuilder, lo: Point, hi: Point, r: f32) {
     let r = r.min((hi.x - lo.x) * 0.5).min((hi.y - lo.y) * 0.5);
+    if r <= 0.0 {
+        b.move_to(lo.x, lo.y);
+        b.line_to(hi.x, lo.y);
+        b.line_to(hi.x, hi.y);
+        b.line_to(lo.x, hi.y);
+        b.close();
+        return;
+    }
     let w = std::f32::consts::FRAC_1_SQRT_2;
     b.move_to(lo.x + r, lo.y);
     b.line_to(hi.x - r, lo.y);

@@ -134,7 +134,7 @@ fn element_path(el: &str) -> Option<String> {
 }
 
 /// An element Blink draws as the shape it is rather than as a path: a circle or ellipse
-/// (`drawOval`), or a rect with round corners (`addRRect`), in viewBox units.
+/// (`drawOval`), or a rect (`drawRect`, or `addRRect` with round corners), in viewBox units.
 fn element_shape(el: &str) -> Option<super::area::Shape<'static>> {
     let tag = el.trim_start_matches('<').split_whitespace().next()?;
     match tag {
@@ -144,7 +144,7 @@ fn element_shape(el: &str) -> Option<super::area::Shape<'static>> {
             let (x, y, w, h) = (num(el, "x"), num(el, "y"), num(el, "width"), num(el, "height"));
             let r = num(el, "rx").min(w / 2.0).min(h / 2.0);
             let ry = attr(el, "ry").map_or(r, |_| num(el, "ry").min(h / 2.0));
-            (r > 0.0 && ry == r).then(|| super::area::Shape::Rounded { lo: Point::new(x, y), hi: Point::new(x + w, y + h), r })
+            (r == 0.0 || ry == r).then(|| super::area::Shape::Rounded { lo: Point::new(x, y), hi: Point::new(x + w, y + h), r: r.max(0.0) })
         }
         _ => None,
     }
@@ -362,10 +362,13 @@ fn transform(list: &str) -> Transform {
             "translate" => Transform::translation(at(0), at(1)),
             "scale" => Transform::scale(at(0), a.get(1).copied().unwrap_or(at(0))),
             "rotate" => {
-                let (sin, cos) = at(0).to_radians().sin_cos();
-                let (cx, cy) = (at(1), at(2));
+                // In double, as Blink's `AffineTransform` is: a quarter turn's cosine is then 6e-17,
+                // not f32's -4e-8, which is enough to tip a flat edge onto the next quarter pixel.
+                let (sin, cos) = (at(0) as f64).to_radians().sin_cos();
+                let (cx, cy) = (at(1) as f64, at(2) as f64);
                 // translate(cx cy) rotate(a) translate(-cx -cy)
-                Transform::new(cos, sin, -sin, cos, cx - cos * cx + sin * cy, cy - sin * cx - cos * cy)
+                let (tx, ty) = (cx - cos * cx + sin * cy, cy - sin * cx - cos * cy);
+                Transform::new(cos as f32, sin as f32, -sin as f32, cos as f32, tx as f32, ty as f32)
             }
             "skewX" => Transform::new(1.0, 0.0, at(0).to_radians().tan(), 1.0, 0.0, 0.0),
             "skewY" => Transform::new(1.0, at(0).to_radians().tan(), 0.0, 1.0, 0.0, 0.0),
