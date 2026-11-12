@@ -614,6 +614,9 @@ impl<S: 'static> Runtime<S> {
             // Motion has a cause: the user, in this window. A commit nothing in this frame's
             // input asked for shows what it brings in its final state (`Tx::unprompted`).
             tx.unprompted = self.motion_needs_cause && why & CommitWhy::INPUT == 0 && !tx.asked_motion;
+            // Its layout lands too, as an instant change's does: a container that grows to fit what a
+            // server brought doesn't ease to its height (motion already running keeps on).
+            if tx.unprompted { tx.commit = tx.commit.instant(); }
             self.commit_for(&tx, why | flag(self.dirty, CommitWhy::DIRTY) | flag(self.relayout, CommitWhy::RELAYOUT) | flag(self.settle, CommitWhy::SETTLE)
                 | flag(shifted, CommitWhy::VIRTUAL) | flag(ran_layout, CommitWhy::LAYOUT) | flag(read_moved, CommitWhy::READ));
             #[cfg(debug_assertions)]
