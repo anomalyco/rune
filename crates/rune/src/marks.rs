@@ -53,8 +53,10 @@ pub fn marks() -> Vec<(&'static str, Instant)> {
 
 /// Totals for the steps before the first presented frame: `text.glyphs` (glyphs rasterised or
 /// queued for the GPU's fill), `text.gpu_fills` (of those, queued for the GPU's fill),
-/// `text.raster_ns` (the UI thread's time rasterising them, in nanoseconds) and
-/// `text.outline_ns` (building the outline records Windfoil's masks are filled from).
+/// `text.raster_ns` (the UI thread's time rasterising them, in nanoseconds),
+/// `text.outline_ns` (building the outline records Windfoil's masks are filled from),
+/// `text.shaped` (texts shaped and broken into lines: layout cache misses) and `text.shape_ns`
+/// (the UI thread's time doing it).
 pub fn metrics() -> Vec<(&'static str, u64)> {
     book().metrics.clone()
 }

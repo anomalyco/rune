@@ -175,16 +175,32 @@ pub(super) enum Saving {
     Written { at: Instant, placed: u64 },
 }
 
-pub(super) enum SavingEvent { Frame { now: Instant, placed: u64 } }
+pub(super) enum SavingEvent {
+    Frame { now: Instant, placed: u64 },
+    /// A timer's poll on a window that draws nothing new: it writes when due, but never starts
+    /// the settling (the first frame does).
+    Poll { now: Instant, placed: u64 },
+}
 
 #[derive(PartialEq, Eq)]
-pub(super) enum SavingEffect { Write }
+pub(super) enum SavingEffect {
+    Write,
+    /// Ask the window to wake when the first write is due, so one that draws nothing more
+    /// after launch still writes.
+    WakeIn(std::time::Duration),
+}
 
 impl Saving {
     pub(super) fn step(&mut self, event: SavingEvent) -> Effects<SavingEffect> {
-        let SavingEvent::Frame { now, placed } = event;
+        let (now, placed, frame) = match event {
+            SavingEvent::Frame { now, placed } => (now, placed, true),
+            SavingEvent::Poll { now, placed } => (now, placed, false),
+        };
         match self {
-            Saving::Unstarted => *self = Saving::Settling { since: now },
+            Saving::Unstarted if frame => {
+                *self = Saving::Settling { since: now };
+                return Effects::one(SavingEffect::WakeIn(std::time::Duration::from_secs_f64(SETTLE)));
+            }
             Saving::Settling { since } if now.duration_since(*since).as_secs_f64() >= SETTLE => return Effects::one(SavingEffect::Write),
             Saving::Writing { done, placed: p } if done.load(Ordering::Acquire) => *self = Saving::Written { at: now, placed: *p },
             Saving::Written { at, placed: p } if *p != placed && now.duration_since(*at).as_secs_f64() >= BETWEEN => return Effects::one(SavingEffect::Write),
@@ -240,16 +256,26 @@ impl TextSystem {
         *entry.1.get_or_insert_with(|| hash_bytes(face.font.data.as_ref()))
     }
 
-    /// Each frame: takes the masks offered, and starts a write when it's due.
-    pub(super) fn mask_cache_frame(&mut self) {
+    /// Each frame (and each timer poll, `frame` false): takes the masks offered, and starts a
+    /// write when it's due. Returns when the window should wake for the first write.
+    pub(crate) fn mask_cache_frame(&mut self, frame: bool) -> Option<std::time::Duration> {
         if self.masks.offered.is_none() {
             self.masks.offered = OFFERED.lock().unwrap_or_else(|e| e.into_inner()).clone();
         }
-        let Some(&sink) = SINK.get() else { return };
+        let &sink = SINK.get()?;
         let placed = self.atlas.rasterized;
-        let effects = self.masks.saving.step(SavingEvent::Frame { now: Instant::now(), placed });
-        if !effects.into_iter().any(|e| e == SavingEffect::Write) { return; }
-        let Some(stamp) = build_stamp() else { return };
+        let now = Instant::now();
+        let event = if frame { SavingEvent::Frame { now, placed } } else { SavingEvent::Poll { now, placed } };
+        let mut write = false;
+        let mut wake = None;
+        for effect in self.masks.saving.step(event) {
+            match effect {
+                SavingEffect::Write => write = true,
+                SavingEffect::WakeIn(after) => wake = Some(after),
+            }
+        }
+        if !write { return wake; }
+        let Some(stamp) = build_stamp() else { return wake };
         let snapshot = self.mask_snapshot(stamp);
         let done = Arc::new(AtomicBool::new(false));
         self.masks.saving.writing(done.clone(), placed);
@@ -258,6 +284,7 @@ impl TextSystem {
             done.store(true, Ordering::Release);
         });
         if spawned.is_err() { self.masks.saving = Saving::Written { at: Instant::now(), placed }; }
+        wake
     }
 
     /// What a write needs, copied: the Windfoil masks the atlas holds (their bytes, or their

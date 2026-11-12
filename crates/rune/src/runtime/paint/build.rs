@@ -15,7 +15,9 @@ impl<S: 'static> Runtime<S> {
                 }
             }
         }
-        self.text.begin_frame_pinned(pinned_pages);
+        if let Some(after) = self.text.begin_frame_pinned(pinned_pages) {
+            self.schedule_wakes([after]);
+        }
         self.marks.clear();
         self.icon_aprons.clear();
         self.surfaces.clear();
