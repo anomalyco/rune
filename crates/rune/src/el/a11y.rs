@@ -123,8 +123,10 @@ impl El {
         self
     }
     /// The element whose text names this one (ARIA `aria-labelledby`): a setting's title for
-    /// its switch, a dialog's heading for the dialog. `key` names it as `Cx::layout` does. A
-    /// label set with [`El::label`] wins.
+    /// its switch, a dialog's heading for the dialog. `key` names it as `Cx::layout` does, and the
+    /// nearest element with that key counts: the first inside this one's parent, else inside its
+    /// grandparent, and so on, so a component's controls can all name their own `"title"`. A label
+    /// set with [`El::label`] wins.
     pub fn labelled_by(mut self, key: impl Into<String>) -> Self {
         self.cold_mut().a11y.more().labelled_by = Some(key.into());
         self
