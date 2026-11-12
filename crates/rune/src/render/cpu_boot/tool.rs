@@ -8,7 +8,7 @@
 
 use std::io::Write;
 use std::path::PathBuf;
-use std::time::Instant;
+use crate::time::Instant;
 
 use serde_json::json;
 

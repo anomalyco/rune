@@ -124,7 +124,7 @@ wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
 console_error_panic_hook = "0.1"
 wgpu = { version = "30", default-features = false, features = ["webgpu"] }
-web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlElement", "HtmlCanvasElement", "CssStyleDeclaration", "MediaQueryList", "console"] }
+web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlElement", "HtmlCanvasElement", "CanvasRenderingContext2d", "ImageData", "CssStyleDeclaration", "MediaQueryList", "Node", "console"] }
 
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
 rfd = { version = "0.17", optional = true, default-features = false }

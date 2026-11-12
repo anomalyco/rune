@@ -3,7 +3,7 @@
 //! between frames, and says which rectangles of the buffer changed so the window copies only
 //! those to the screen.
 
-use std::time::Instant;
+use crate::time::Instant;
 
 use super::bin::{Bins, TILE_H, TILE_W};
 use crate::render::{Instance, KIND_BACKDROP_BLUR, KIND_EFFECT, KIND_IMAGE, KIND_LAYER, KIND_LAYER_END};

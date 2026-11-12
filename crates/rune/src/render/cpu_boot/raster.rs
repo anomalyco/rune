@@ -49,7 +49,7 @@ pub(super) fn run(scene: &Scene<'_>, bins: &Bins, target: &mut Target<'_>, tiles
                 if at >= tiles.len() { break; }
                 for &t in &tiles[at..(at + chunk).min(tiles.len())] {
                 let t = t as usize;
-                let began = std::time::Instant::now();
+                let began = crate::time::Instant::now();
                 painter.tile = painter.tile_rect(t as u32 % bins.cols, t as u32 / bins.cols);
                 if phase == 0 && !bins.covered[t] {
                     painter.surface.fill(painter.tile, clear);
@@ -91,7 +91,7 @@ pub(super) fn run(scene: &Scene<'_>, bins: &Bins, target: &mut Target<'_>, tiles
                 let (tx, ty) = (t % bins.cols, t / bins.cols);
                 ((tx * TILE_W) as i32) < b[2] && (((tx + 1) * TILE_W) as i32) > b[0] && ((ty * TILE_H) as i32) < b[3] && (((ty + 1) * TILE_H) as i32) > b[1]
             });
-            let began = std::time::Instant::now();
+            let began = crate::time::Instant::now();
             blurred.push(shown.then(|| backdrop::blur(rec, scene.size, scene.half, wide, |x, y| {
                 let at = y as usize * stride + x as usize * 4;
                 [px[at + 2] as f32 / 255.0, px[at + 1] as f32 / 255.0, px[at] as f32 / 255.0, px[at + 3] as f32 / 255.0]

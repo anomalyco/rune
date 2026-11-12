@@ -22,7 +22,7 @@
 //!
 //! Nothing here runs or allocates until it's called: no statics to initialise, no tables.
 
-use std::time::Instant;
+use crate::time::Instant;
 
 use super::{Instance, KIND_BACKDROP_BLUR, KIND_EFFECT, KIND_GLYPH, KIND_LAYER, KIND_LAYER_END};
 use crate::pixels::ImageAtlas;

@@ -161,6 +161,21 @@ impl Atlas {
         out
     }
 
+    /// Every mask the GPU filled goes back in its page's queue, for the CPU to fill
+    /// (`render::cpu_boot::fill_masks`): the GPU that held its texels is gone (a page whose
+    /// device was lost), and the page's CPU copy has zeros under it.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    pub(crate) fn refill_gpu_masks(&mut self) {
+        let mut queued = Vec::new();
+        for (key, entry) in self.map.iter_mut() {
+            if let Residency::Filled(g, fill) = *entry {
+                *entry = Residency::Pending(g, fill);
+                queued.push((g.page as usize, *key));
+            }
+        }
+        for (page, key) in queued { self.queue(page, key); }
+    }
+
     /// Drops every mask an outline record filled: the outline store started again, so their
     /// records are gone. Their texels stay until their shelves are reused.
     pub(super) fn forget_outline_masks(&mut self) {

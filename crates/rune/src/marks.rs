@@ -36,7 +36,18 @@ pub fn mark(name: &'static str) {
     let mut book = book();
     if !book.marks.iter().any(|(n, _)| *n == name) {
         book.marks.push((name, now));
+        // A page's marks are the browser's too: its performance timeline and DevTools show them.
+        #[cfg(target_arch = "wasm32")]
+        page_mark(name);
     }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn page_mark(name: &str) {
+    use wasm_bindgen::JsCast;
+    let Ok(performance) = js_sys::Reflect::get(&js_sys::global(), &"performance".into()) else { return };
+    let Ok(mark) = js_sys::Reflect::get(&performance, &"mark".into()) else { return };
+    if let Some(mark) = mark.dyn_ref::<js_sys::Function>() { let _ = mark.call1(&performance, &name.into()); }
 }
 
 /// [`mark`] behind a flag of the call site's own, for a step that runs every frame.
