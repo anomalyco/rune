@@ -54,6 +54,7 @@ impl<S: 'static> Host<S> {
         let Some(l) = self.win.as_mut() else { return };
         #[cfg(target_os = "macos")]
         { l.native.prime.stop(); }
+        if on { crate::marks::mark("x.cd.covered"); } else { crate::marks::mark("x.cd.uncovered"); }
         let was = self.life.cover(cover, on);
         l.backoff_step(BackoffEvent::Uncovered);
         l.presented = None;

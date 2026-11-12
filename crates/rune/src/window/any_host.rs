@@ -167,6 +167,7 @@ impl<S: 'static> Host<S> {
         if let Some(w) = &self.win { w.native.cloak.lift_if_due(&w.window, Instant::now()); }
         #[cfg(target_os = "windows")]
         if let Some(w) = &mut self.win && w.covered_draw.due(Instant::now()) {
+            crate::marks::mark("x.cd.due");
             w.covered_draw = w.covered_draw.step(CoveredDrawEvent::Due);
             w.request_redraw();
         }

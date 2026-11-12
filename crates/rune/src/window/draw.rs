@@ -55,7 +55,7 @@ impl<S: 'static> Host<S> {
         l.first_frame.skipped(Instant::now());
         // Covered by other windows, it still draws what changed, later (`CoveredDraw`).
         #[cfg(target_os = "windows")]
-        if shown && self.life.covered() && !l.minimized() { l.covered_draw = l.covered_draw.step(CoveredDrawEvent::Asked(Instant::now())); }
+        if shown && self.life.covered() && !l.minimized() { crate::marks::mark("x.cd.asked"); l.covered_draw = l.covered_draw.step(CoveredDrawEvent::Asked(Instant::now())); }
         self.land_frame();
         if shown {
             self.rt.set_live_visible(false);
@@ -86,10 +86,10 @@ impl<S: 'static> Host<S> {
         let owed = false;
         if covered && !owed { return self.covered_frame(); }
         // A covered window's owed frame shows the settled state, as its first one uncovered does.
-        if owed { self.rt.settle_all(); }
+        if owed { crate::marks::mark("x.cd.drawing"); self.rt.settle_all(); }
         // A missed frame's retry, or the timer pacing unpaced motion: input waits for it, and
         // `new_events` runs due timers meanwhile.
-        if !resizing && l.backing_off(Instant::now()) { return; }
+        if !resizing && l.backing_off(Instant::now()) { if owed { crate::marks::mark("x.cd.backoff"); } return; }
         // A device that died (a driver reset, a GPU removed, a resume from Modern Standby) and a
         // surface that refused its configuration can draw nothing: the window makes both again
         // before this frame, or waits out a retry of its own (`SurfaceRetries`) and then gives
