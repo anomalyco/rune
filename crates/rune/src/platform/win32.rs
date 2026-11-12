@@ -66,6 +66,15 @@ pub(crate) fn screen_reader() -> bool {
     unsafe { SystemParametersInfoW(SPI_GETSCREENREADER, 0, (&raw mut on).cast(), 0) != 0 && on != 0 }
 }
 
+/// Whether the system asks `window` to paint part of itself again (an update region): it threw
+/// away what the window showed, as when a window covered whole comes back.
+pub(crate) fn repaint_owed(window: &winit::window::Window) -> bool {
+    use windows_sys::Win32::Graphics::Gdi::GetUpdateRect;
+    let Some(hwnd) = hwnd(window) else { return false };
+    // SAFETY: a live window this thread owns; no rectangle asked for.
+    unsafe { GetUpdateRect(hwnd, std::ptr::null_mut(), 0) != 0 }
+}
+
 /// Drops the paint the system still owes `window`, which the loop just painted itself.
 pub(crate) fn drop_paint(window: &winit::window::Window) {
     use windows_sys::Win32::Graphics::Gdi::{RDW_NOINTERNALPAINT, RedrawWindow};
