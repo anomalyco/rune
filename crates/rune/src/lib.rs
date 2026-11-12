@@ -199,7 +199,7 @@ pub use native_menu::MenuItem;
 pub use native_surface::NativeSurface;
 pub use native_surface::SurfaceFit;
 pub use open_url::OpenUrlError;
-pub use open_url::instance::single_instance;
+pub use open_url::instance::{release_instance, single_instance};
 pub use overlay::Availability;
 pub use overlay::OverlayHandle;
 pub use overlay::OverlaySpec;

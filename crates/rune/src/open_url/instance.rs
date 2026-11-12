@@ -40,6 +40,16 @@ pub fn single_instance(id: &str) -> bool {
     }
 }
 
+/// Lets go of the app's single-instance name before the process ends (Windows): call it once the
+/// app holds nothing a next process of it needs (its files closed). A launch that came while the
+/// app quit was handed on to a new process (`single_instance`), which claims the name as soon as
+/// this returns rather than when this process is gone. Without it the name goes with the process.
+/// Elsewhere it does nothing.
+pub fn release_instance() {
+    #[cfg(target_os = "windows")]
+    windows::release();
+}
+
 /// Whether a launch argument is a link: `scheme://…`, with a scheme of at least two letters,
 /// digits, `+`, `-` or `.`, starting with a letter. A Windows path (`C:\…`) and a flag aren't.
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
@@ -59,11 +69,12 @@ pub(crate) fn launch_links() -> Vec<String> {
 
 /// Windows: the loop's side of a later launch without links (`on_relaunch`), and the window it brings forward.
 #[cfg(target_os = "windows")]
-pub(crate) use windows::{exited, on_relaunch, raise_front, reopened};
+pub(crate) use windows::{exited, launches_waiting, on_relaunch, raise_front, served};
 
 #[cfg(target_os = "windows")]
 mod windows {
-    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Mutex, OnceLock};
     use std::time::{Duration, Instant};
 
     use windows_sys::Win32::Foundation::{
@@ -90,37 +101,83 @@ mod windows {
     const MAX_MESSAGE: usize = 1 << 20;
     /// How long a later launch keeps trying to reach the first process.
     const REACH_FOR: Duration = Duration::from_secs(5);
+    /// How long a launch handed on by a quitting process waits for it to let go of the name.
+    const HANDED_WAIT: Duration = Duration::from_secs(10);
+
+    /// The claimed name, and the listener's thread, for `release`.
+    static CLAIMED: OnceLock<Vec<u16>> = OnceLock::new();
+    static LISTENER: Mutex<Option<std::thread::JoinHandle<()>>> = Mutex::new(None);
+    /// `release` asked the listener to close the name.
+    static RELEASED: AtomicBool = AtomicBool::new(false);
+
+    /// Closes the name: the listener takes what's connected (a launch then is handed on, since
+    /// the app is quitting), closes its handle and ends; this returns once it has.
+    pub(super) fn release() {
+        let Some(name) = CLAIMED.get() else { return };
+        if RELEASED.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        // An empty connection wakes the listener from ConnectNamedPipe; one that's busy with a
+        // launch sees the flag once it's done with it.
+        // SAFETY: `name` is NUL-terminated; the handle, when opened, is closed once.
+        let woken = unsafe {
+            let wake = CreateFileW(name.as_ptr(), GENERIC_WRITE, 0, std::ptr::null(), OPEN_EXISTING, 0, std::ptr::null_mut());
+            if wake != INVALID_HANDLE_VALUE {
+                CloseHandle(wake);
+                true
+            } else {
+                GetLastError() == ERROR_PIPE_BUSY
+            }
+        };
+        // A listener that can't be woken keeps the name until the process ends.
+        if let Some(listener) = LISTENER.lock().unwrap_or_else(|e| e.into_inner()).take().filter(|_| woken) {
+            listener.join().ok();
+        }
+    }
 
     type Relaunch = Box<dyn Fn() -> bool + Send>;
 
     /// Sends a launch without links to the loop as a reopen; set once the loop runs.
     static RELAUNCH: Mutex<Option<Relaunch>> = Mutex::new(None);
 
-    /// Launches without links sent to the loop as a reopen and not yet taken; once the loop has
-    /// ended (`exited`), a launch starts the app again instead.
+    /// Launches handed to the loop (a reopen, or links for `App::on_open_url`) that no shown
+    /// window has served yet; once the loop has ended (`exited`), a launch starts the app again
+    /// instead.
     struct Waiting {
-        reopens: Vec<Vec<String>>,
+        launches: Vec<(Instant, Vec<String>)>,
         exited: bool,
     }
 
-    static WAITING: Mutex<Waiting> = Mutex::new(Waiting { reopens: Vec::new(), exited: false });
+    static WAITING: Mutex<Waiting> = Mutex::new(Waiting { launches: Vec::new(), exited: false });
+    /// Whether `WAITING` holds a launch: the loop's per-turn check costs a load.
+    static PENDING: AtomicBool = AtomicBool::new(false);
+    /// A launch older than this when the loop ends was served by a window that went later (an app
+    /// that runs on without windows, then quits): it doesn't start the app again.
+    const UNSERVED_FOR: Duration = Duration::from_secs(5);
 
-    /// The loop took the reopens sent so far (it brought a window forward, or the app's
-    /// `on_reopen` did).
-    pub(crate) fn reopened() {
-        WAITING.lock().unwrap_or_else(|e| e.into_inner()).reopens.clear();
+    /// Whether a launch waits for a shown window to serve it.
+    pub(crate) fn launches_waiting() -> bool {
+        PENDING.load(Ordering::Acquire)
     }
 
-    /// The loop ended: each reopen it didn't take starts the app again once this process has
-    /// exited, as does every launch from now on.
+    /// The loop goes on with a window shown: the launches so far reached it.
+    pub(crate) fn served() {
+        WAITING.lock().unwrap_or_else(|e| e.into_inner()).launches.clear();
+        PENDING.store(false, Ordering::Release);
+    }
+
+    /// The loop ended: each launch no window served starts the app again once this process lets
+    /// go of the instance, as does every launch from now on.
     pub(crate) fn exited() {
-        let reopens = {
+        let launches = {
             let mut waiting = WAITING.lock().unwrap_or_else(|e| e.into_inner());
             waiting.exited = true;
-            std::mem::take(&mut waiting.reopens)
+            std::mem::take(&mut waiting.launches)
         };
-        for args in reopens {
-            crate::relaunch::spawn_with(args);
+        for (at, args) in launches {
+            if at.elapsed() < UNSERVED_FOR {
+                crate::relaunch::spawn_with(args);
+            }
         }
     }
 
@@ -132,15 +189,26 @@ mod windows {
     pub(super) fn claim(id: &str) -> bool {
         let name = wide(&pipe_name(id));
         let deadline = Instant::now() + REACH_FOR;
+        // A launch a quitting process handed on (`relaunch::spawn_with`) waits for that process to
+        // let go of the name (`release_instance`, or its end): sending to it would only come back.
+        let handed = crate::relaunch::handed_from().map(|pid| (pid, Instant::now() + HANDED_WAIT));
         loop {
             match create(&name) {
                 Ok(pipe) => {
+                    let _ = CLAIMED.set(name);
                     listen(pipe);
                     return true;
                 }
                 Err(ERROR_ACCESS_DENIED) => {}
                 // Not a pipe name this process may use: run unclaimed rather than not at all.
                 Err(_) => return true,
+            }
+            if let Some((pid, until)) = handed
+                && Instant::now() < until
+                && crate::relaunch::alive(pid)
+            {
+                std::thread::sleep(Duration::from_millis(1));
+                continue;
             }
             match send(&name) {
                 Sent::Delivered => return false,
@@ -209,8 +277,8 @@ mod windows {
         if pipe == INVALID_HANDLE_VALUE { Err(unsafe { GetLastError() }) } else { Ok(pipe) }
     }
 
-    /// Reads one launch at a time from the pipe for the rest of the process. The handle stays
-    /// open, so the name stays this process's.
+    /// Reads one launch at a time from the pipe until `release` (or the process ends). The handle
+    /// stays open meanwhile, so the name stays this process's.
     fn listen(pipe: HANDLE) {
         let pipe = pipe as usize;
         let spawned = std::thread::Builder::new().name("rune-instance".into()).spawn(move || {
@@ -224,11 +292,19 @@ mod windows {
                 }
                 // SAFETY: ends this client's connection, so the next can connect.
                 unsafe { DisconnectNamedPipe(pipe) };
+                if RELEASED.load(Ordering::Acquire) {
+                    // SAFETY: the server handle this thread owns, closed once: the name is free.
+                    unsafe { CloseHandle(pipe) };
+                    return;
+                }
             }
         });
-        if spawned.is_err() {
+        match spawned {
+            Ok(listener) => *LISTENER.lock().unwrap_or_else(|e| e.into_inner()) = Some(listener),
             // SAFETY: the handle no thread took.
-            unsafe { CloseHandle(pipe as HANDLE) };
+            Err(_) => unsafe {
+                CloseHandle(pipe as HANDLE);
+            },
         }
     }
 
@@ -266,15 +342,16 @@ mod windows {
             return crate::relaunch::spawn_with(args);
         }
         let links: Vec<String> = args.iter().filter(|a| super::is_link(a)).cloned().collect();
-        if links.is_empty() {
-            {
-                let mut waiting = WAITING.lock().unwrap_or_else(|e| e.into_inner());
-                if waiting.exited {
-                    drop(waiting);
-                    return crate::relaunch::spawn_with(args);
-                }
-                waiting.reopens.push(args);
+        {
+            let mut waiting = WAITING.lock().unwrap_or_else(|e| e.into_inner());
+            if waiting.exited {
+                drop(waiting);
+                return crate::relaunch::spawn_with(args);
             }
+            waiting.launches.push((Instant::now(), args));
+            PENDING.store(true, Ordering::Release);
+        }
+        if links.is_empty() {
             let sent = RELAUNCH.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|relaunch| relaunch());
             if !sent {
                 exited();
