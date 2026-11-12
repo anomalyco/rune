@@ -112,7 +112,6 @@ fn el_flatten_reusable(e: &El) -> bool {
         && c.growth.is_none()
         && c.aspect_fit <= 0.0
         && c.above.is_none()
-        && c.live.is_empty()
         && c.input.is_none()
         && e.handlers.get().is_none_or(|h| h.modal.is_none())
         && e.text.as_ref().is_none_or(|t| !t.redacted && t.cold.live.is_none())
