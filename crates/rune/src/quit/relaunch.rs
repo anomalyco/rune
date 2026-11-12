@@ -105,19 +105,22 @@ fn wait(pid: u32) {
     }
 }
 
-/// Whether process `pid` still runs.
+/// Whether process `pid` still runs: it hasn't exited, and it isn't ending (a process that was
+/// terminated has its exit code at once, while its last threads and kernel objects can linger
+/// for seconds).
 #[cfg(target_os = "windows")]
 pub(crate) fn alive(pid: u32) -> bool {
-    use windows_sys::Win32::Foundation::{CloseHandle, WAIT_TIMEOUT};
-    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject};
+    use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE, WAIT_TIMEOUT};
+    use windows_sys::Win32::System::Threading::{GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, WaitForSingleObject};
     // SAFETY: a plain handle request; a process that already exited answers null. The handle is
-    // closed once.
+    // closed once; the exit code is written into `code`.
     unsafe {
-        let handle = OpenProcess(PROCESS_SYNCHRONIZE, 0, pid);
+        let handle = OpenProcess(PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
         if handle.is_null() {
             return false;
         }
-        let running = WaitForSingleObject(handle, 0) == WAIT_TIMEOUT;
+        let mut code = 0;
+        let running = WaitForSingleObject(handle, 0) == WAIT_TIMEOUT && GetExitCodeProcess(handle, &mut code) != 0 && code == STILL_ACTIVE as u32;
         CloseHandle(handle);
         running
     }
