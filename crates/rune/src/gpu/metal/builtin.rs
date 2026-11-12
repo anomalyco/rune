@@ -3,7 +3,8 @@
 //! pipeline costs on a cold shader cache. On iOS that includes the uber shader, which macOS
 //! loads from `uber_native.metallib` instead.
 //!
-//! A pipeline's key hashes everything that decides the MSL naga writes for it: the WGSL, the
+//! A pipeline's key hashes everything that decides the MSL naga writes for it: the WGSL (each
+//! `\r\n` read as `\n`, so a CRLF checkout of the built-in sources finds them too), the
 //! stage and entry point, override constants, runtime checks, whether it draws points, and the
 //! slots its pipeline layout hands out. A key in the table names a function in the library,
 //! so a precompiled function always binds the slots the runtime path would have given it. Any
