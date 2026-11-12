@@ -86,6 +86,44 @@ fn a_poster_for_an_older_paused_seek_neither_shows_nor_fails() {
     assert_eq!(posters_shown(&new), 1);
 }
 
+/// The worker answers for a time the handle left before the next pull can ask for the seek's
+/// time: its error is for a poster nobody wants, and the seek still decodes. // differs from dev
+#[test]
+fn a_poster_error_overtaken_by_a_seek_waits_for_the_new_time() {
+    let mut new = clip(false, &[Pull(Script::LOADING), Seek(0.3)]);
+    let stale = new.fake.asked;
+    new.fake.done = Some((stale, Done::Err));
+    new.run(Pull(Script::LOADING));
+
+    assert!(!new.c.failed(), "the seek at 0.3 may still decode");
+    assert!(new.fake.log.contains(&Cmd::Ask(0.3)), "the same pull asked for the time the handle wants");
+    let current = new.fake.asked;
+    assert_ne!(current, stale);
+
+    new.fake.done = Some((current, Done::Frame));
+    new.run(Pull(Script::LOADING));
+    assert_eq!(posters_shown(&new), 1, "the poster at 0.3 shows");
+}
+
+/// A successful answer for a time the handle left brings the clip's facts but never its frame.
+/// // differs from dev: dev showed it until the new time decoded.
+#[test]
+fn a_poster_frame_overtaken_by_a_seek_does_not_show_before_the_new_time() {
+    let mut new = clip(false, &[Pull(Script::LOADING), Seek(0.3)]);
+    let stale = new.fake.asked;
+    new.fake.done = Some((stale, Done::Frame));
+    new.run(Pull(Script::LOADING));
+
+    assert_eq!(posters_shown(&new), 0, "frame 0 isn't the picture at 0.3");
+    assert!(new.c.meta.is_some(), "its facts still count");
+    let current = new.fake.asked;
+    assert_ne!(current, stale, "the pull asked for 0.3");
+
+    new.fake.done = Some((current, Done::Frame));
+    new.run(Pull(Script::LOADING));
+    assert_eq!(posters_shown(&new), 1);
+}
+
 /// A slow worker, each answer one request behind, while the app seeks to the same time again
 /// and again: every answer is for the time asked for, so each shows.
 #[test]

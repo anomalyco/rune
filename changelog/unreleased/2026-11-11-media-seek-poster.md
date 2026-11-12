@@ -1,0 +1,1 @@
+ - **Media: a poster answer overtaken by a seek no longer fails the clip.** When the app seeks a paused video after its poster request went out, an answer for the old time brings the clip's facts but neither its frame nor its error, and the seek's own time decodes instead.

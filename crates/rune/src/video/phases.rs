@@ -257,18 +257,22 @@ pub(super) fn step(c: &mut Control, event: Event) -> Effects<Effect> {
             // (its true frame timing), but its frame and its errors are for a time or a surface
             // that has moved on.
             let current = attempt == c.posters.current();
+            // A seek made since this request names another time, so its answer is for a time the
+            // clip has left even before the next pull asks for the new one. // differs from dev:
+            // dev failed the clip on the old answer and never asked for the seek's time.
+            let overtaken = c.poster_at.is_some_and(|asked| c.seek.is_some_and(|target| target != asked));
             match result {
                 Ok(meta) => {
                     if !c.opened() {
                         opened(c, meta);
                     }
-                    // A late poster never covers a frame a player made.
-                    if current && c.stage == Stage::Poster {
+                    // A late poster never covers a frame a player made, or one a seek moved past.
+                    if current && !overtaken && c.stage == Stage::Poster {
                         return Effects::one(Effect::ShowPoster);
                     }
                 }
                 // Audio's load only opens it: once another open did, its error is old news.
-                Err(error) if current && (c.kind == Kind::Video || !c.opened()) => failed(c, error),
+                Err(error) if current && !overtaken && (c.kind == Kind::Video || !c.opened()) => failed(c, error),
                 Err(_) => {}
             }
         }
