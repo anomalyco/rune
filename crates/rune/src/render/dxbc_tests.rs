@@ -69,18 +69,22 @@ fn fxc(source: &str, entry: &str, target: &str) -> Vec<u8> {
     }
 }
 
-/// The HLSL wgpu generates for the uber pipeline's vertex and fragment stages.
-fn wgpu_hlsl() -> (String, String) {
+/// The HLSL wgpu generates for the uber pipeline's vertex and fragment stages, then the subpixel
+/// variant's.
+fn wgpu_hlsl() -> [String; 4] {
     capture();
     let gpu = crate::render::Gpu::headless();
-    super::with_dxbc_enabled(false, || drop(crate::render::Renderer::new(&gpu.device, wgpu::TextureFormat::Bgra8Unorm)));
     let me = std::thread::current().id();
-    let logged: Vec<String> = HLSL.lock().unwrap().iter().filter(|(thread, _)| *thread == me).map(|(_, text)| text.clone()).collect();
-    let stage = |name: &str| {
+    let ours = || -> Vec<String> { HLSL.lock().unwrap().iter().filter(|(thread, _)| *thread == me).map(|(_, text)| text.clone()).collect() };
+    let mut renderer = super::with_dxbc_enabled(false, || crate::render::Renderer::new(&gpu.device, wgpu::TextureFormat::Bgra8Unorm));
+    let uber = ours();
+    renderer.compile_subpixel_now(&gpu.device).expect("the subpixel pipeline compiles");
+    let dual = ours().split_off(uber.len());
+    let stage = |logged: &[String], name: &str| {
         let text = logged.iter().rev().find(|text| text.starts_with(&format!("Naga generated shader for \"{name}\""))).unwrap_or_else(|| panic!("wgpu logged no HLSL for {name}: is the device DX12 with FXC?"));
         text.split_once(":\n").unwrap().1.to_owned()
     };
-    (stage("vs"), stage("fs"))
+    [stage(&uber, "vs"), stage(&uber, "fs"), stage(&dual, "vs"), stage(&dual, "fs")]
 }
 
 fn hlsl_hash(vertex: &str, fragment: &str) -> String {
@@ -89,26 +93,32 @@ fn hlsl_hash(vertex: &str, fragment: &str) -> String {
 
 #[test]
 fn uber_dxbc_is_fresh() {
-    let (vertex, fragment) = wgpu_hlsl();
+    let [vertex, fragment, dual_vertex, dual_fragment] = wgpu_hlsl();
     let (vs, fs) = (fxc(&vertex, "vs", "vs_5_1"), fxc(&fragment, "fs", "ps_5_1"));
+    let (vs_dual, fs_dual) = (fxc(&dual_vertex, "vs", "vs_5_1"), fxc(&dual_fragment, "fs", "ps_5_1"));
+    let dual = hlsl_hash(&dual_vertex, &dual_fragment);
     let (_, wgsl, abi) = crate::render::uber_shader_identity();
     let hlsl = hlsl_hash(&vertex, &fragment);
     if std::env::var_os("RUNE_REGENERATE_DXBC").is_some() {
         let root = env!("CARGO_MANIFEST_DIR");
         std::fs::write(format!("{root}/uber.vs.dxbc"), &vs).unwrap();
         std::fs::write(format!("{root}/uber.fs.dxbc"), &fs).unwrap();
+        std::fs::write(format!("{root}/uber.vs-dual.dxbc"), &vs_dual).unwrap();
+        std::fs::write(format!("{root}/uber.fs-dual.dxbc"), &fs_dual).unwrap();
         std::fs::write(format!("{root}/src/render/uber/dxbc_hash.rs"), format!(
             "// Written by `cargo run -p rune --example regen_dxbc` (or `RUNE_REGENERATE_DXBC=1 cargo test -p rune --lib uber_dxbc_is_fresh`) on Windows.\n\
              pub(super) const UBER_DXBC_WGSL_BLAKE3: &str = \"{wgsl}\";\n\
              pub(super) const UBER_DXBC_ABI_FNV64: u64 = {abi:#018x};\n\
-             #[cfg(test)]\npub(super) const UBER_DXBC_HLSL_BLAKE3: &str = \"{hlsl}\";\n")).unwrap();
+             #[cfg(test)]\npub(super) const UBER_DXBC_HLSL_BLAKE3: &str = \"{hlsl}\";\n\
+             #[cfg(test)]\npub(super) const UBER_DXBC_DUAL_HLSL_BLAKE3: &str = \"{dual}\";\n")).unwrap();
         return;
     }
     let stale = "the uber shader's HLSL changed: run `cargo run -p rune --example regen_dxbc` on Windows";
     assert_eq!(wgsl, super::UBER_DXBC_WGSL_BLAKE3, "{stale}");
     assert_eq!(abi, super::UBER_DXBC_ABI_FNV64, "{stale}");
     assert_eq!(hlsl, super::UBER_DXBC_HLSL_BLAKE3, "{stale}");
-    assert!(vs == super::VERTEX && fs == super::FRAGMENT, "{stale}");
+    assert_eq!(dual, super::UBER_DXBC_DUAL_HLSL_BLAKE3, "{stale}");
+    assert!(vs == super::VERTEX && fs == super::FRAGMENT && vs_dual == super::VERTEX_DUAL && fs_dual == super::FRAGMENT_DUAL, "{stale}");
 }
 
 /// A DX12 device makes the uber pipeline from the bytecode, and without the passthrough

@@ -752,6 +752,8 @@ pub struct Renderer {
     /// text draws subpixel masks.
     lcd: variant::Lcd,
     lcd_frame: bool,
+    /// The window's wake, for work a frame starts on another thread (set_frame_wake).
+    frame_wake: Option<std::sync::Arc<crate::live::Wake>>,
     /// The 1×1 image the base bind group holds until the first image page.
     stand_in: wgpu::Texture,
     /// Secondary glyph atlas pages (`1..`).

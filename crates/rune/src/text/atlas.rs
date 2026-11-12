@@ -214,6 +214,9 @@ pub struct Atlas {
     /// Text draws subpixel masks this frame: the renderer blends by channel
     /// (`FontSmoothing::lcd`).
     pub(crate) lcd: bool,
+    /// Text asks for subpixel masks (`FontSmoothing::lcd` of the mode asked for), though it may
+    /// draw grayscale until the renderer's subpixel pipeline is built: the renderer builds it then.
+    pub(crate) lcd_wanted: bool,
     /// Per page, the entries whose GPU fill is queued (`atlas_fill.rs`).
     pub(super) fills: Vec<Vec<GlyphKey>>,
     pub(super) icons: HashMap<(usize, u32), Option<AtlasGlyph>>,
@@ -276,6 +279,7 @@ impl Atlas {
             clock: 1,
             map: GlyphMap::default(),
             lcd: false,
+            lcd_wanted: false,
             fills: Vec::new(),
             icons: HashMap::new(),
             outlines: Default::default(),

@@ -210,7 +210,7 @@ impl Renderer {
             atlas.invalidate();
         }
         atlas.outlines.set_support(self.uber.support());
-        self.lcd_frame = atlas.lcd && self.lcd_ready(device);
+        self.lcd_frame = self.lcd_ready(device, atlas.lcd_wanted) && atlas.lcd;
         if let Some(rows) = atlas.dirty.take() {
             atlas.rows_uploaded(0, rows);
             Self::write_rows(&staging, &self.atlas, &atlas.data, rows);

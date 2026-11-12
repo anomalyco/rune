@@ -576,6 +576,7 @@ impl<S: 'static> Host<S> {
         let mut enc = gpu.device.create_command_encoder(&Default::default());
         // The app's compositor draws the same instances the CPU painted (the CPU frame drew none of
         // its effect slots, or it would have asked for the GPU).
+        renderer.set_frame_wake(rt.live_wake());
         if let Some(c) = self.comp.as_mut() {
             let size = (l.config.width, l.config.height);
             c.render(&mut Frame { device: &gpu.device, queue: &gpu.queue, encoder: &mut enc, target: &view, format: target_format, size, dt: 0.0, update_ms: 0.0, rt: &mut *rt, ui: &mut *renderer });

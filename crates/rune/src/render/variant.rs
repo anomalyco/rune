@@ -63,6 +63,9 @@ fn dual_wgsl() -> Option<String> {
 /// second output. Layers keep the plain pipeline, so text in them draws grayscale.
 pub(super) enum Lcd {
     Unbuilt,
+    /// No shipped bytecode takes it here, so its WGSL compiles on a thread of its own (FXC takes
+    /// about a minute for it on a Windows laptop) and subpixel text draws grayscale meanwhile.
+    Building(std::sync::mpsc::Receiver<Result<wgpu::RenderPipeline, String>>),
     Built(wgpu::RenderPipeline),
     /// It can't be built here: subpixel text draws grayscale from now on.
     Refused,
@@ -259,53 +262,91 @@ impl Renderer {
         Ok(Built { bind_layout, layout, shader, pipeline, source: Source::Compiled })
     }
 
-    /// Whether this frame's subpixel text can blend by channel, building the pipeline the first
-    /// time it's asked.
-    pub(super) fn lcd_ready(&mut self, device: &wgpu::Device) -> bool {
-        if matches!(self.lcd, Lcd::Unbuilt) && self.uber.outlines().is_some() {
-            self.lcd = match self.build_lcd(device) {
-                Ok(pipeline) => Lcd::Built(pipeline),
-                Err(why) => {
-                    eprintln!("rune: subpixel text can't blend by channel here ({why}); it draws grayscale");
-                    crate::text::note_dual_source(false);
-                    Lcd::Refused
-                }
+    /// Whether this frame's subpixel text can blend by channel, starting the pipeline the first
+    /// time it's asked: from the shipped bytecode at once where it matches, else compiled on a
+    /// thread, which `frame_wake` tells when it's done. Until then subpixel text draws grayscale.
+    /// `want`: this frame's text draws subpixel masks. A compile already running is collected
+    /// either way, since text draws grayscale while it runs.
+    pub(super) fn lcd_ready(&mut self, device: &wgpu::Device, want: bool) -> bool {
+        if want && matches!(self.lcd, Lcd::Unbuilt) && self.uber.outlines().is_some() {
+            self.lcd = match self.start_lcd(device) {
+                Ok(lcd) => lcd,
+                Err(why) => Self::refuse_lcd(&why),
             };
+            if matches!(self.lcd, Lcd::Built(_)) { self.lcd_built(); }
         }
-        matches!(self.lcd, Lcd::Built(_))
+        if let Lcd::Building(done) = &self.lcd {
+            match done.try_recv() {
+                Ok(Ok(pipeline)) => {
+                    self.lcd = Lcd::Built(pipeline);
+                    self.lcd_built();
+                }
+                Ok(Err(why)) => self.lcd = Self::refuse_lcd(&why),
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.lcd = Self::refuse_lcd("its compile ended without a pipeline"),
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+        }
+        want && matches!(self.lcd, Lcd::Built(_))
     }
 
-    fn build_lcd(&self, device: &wgpu::Device) -> Result<wgpu::RenderPipeline, String> {
+    /// Subpixel text can blend by channel from now on: it switches at its next frame, on the CPU
+    /// and the GPU together, which the window is asked for.
+    fn lcd_built(&self) {
+        crate::text::note_dual_source(true);
+        if let Some(wake) = &self.frame_wake { wake.notify(); }
+    }
+
+    fn refuse_lcd(why: &str) -> Lcd {
+        eprintln!("rune: subpixel text can't blend by channel here ({why}); it draws grayscale");
+        crate::text::note_dual_source(false);
+        Lcd::Refused
+    }
+
+    fn start_lcd(&self, device: &wgpu::Device) -> Result<Lcd, String> {
         if !device.features().contains(wgpu::Features::DUAL_SOURCE_BLENDING) {
             return Err("the device has no dual-source blending".into());
         }
         let wgsl = dual_wgsl().ok_or("shader.wgsl's fragment entry moved")?;
-        let blend = wgpu::BlendState {
-            color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::One, dst_factor: wgpu::BlendFactor::OneMinusSrc1, operation: wgpu::BlendOperation::Add },
-            alpha: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::One, dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha, operation: wgpu::BlendOperation::Add },
-        };
-        let make_pipeline = |shader: &dxbc::Shaders| device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("uber subpixel"),
-            layout: Some(&self.layout),
-            vertex: wgpu::VertexState {
-                module: &shader.vertex,
-                entry_point: Some(self.vertex_entry),
-                compilation_options: Default::default(),
-                buffers: &[Some(metallib::uber_vertex_layout())],
-            },
-            primitive: metallib::uber_primitive(),
-            depth_stencil: None,
-            multisample: Default::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &shader.fragment,
-                entry_point: Some("fs"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState { format: self.format, blend: Some(blend), write_mask: wgpu::ColorWrites::ALL })],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
-        compile(device, &wgsl, make_pipeline).map(|(_, pipeline)| pipeline)
+        let (layout, format, entry) = (self.layout.clone(), self.format, self.vertex_entry);
+        #[cfg(target_os = "windows")]
+        if let Some((_, pipeline)) = dxbc::uber_dual(device, |shader| lcd_pipeline(device, &layout, format, entry, shader)) {
+            return Ok(Lcd::Built(pipeline));
+        }
+        #[cfg(target_arch = "wasm32")]
+        return compile(device, &wgsl, |shader| lcd_pipeline(device, &layout, format, entry, shader)).map(|(_, pipeline)| Lcd::Built(pipeline));
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let (sent, done) = std::sync::mpsc::channel();
+            let (device, wake) = (device.clone(), self.frame_wake.clone());
+            std::thread::Builder::new()
+                .name("rune-subpixel-shader".into())
+                .spawn(move || {
+                    // A renderer dropped meanwhile has no receiver: nothing to tell.
+                    sent.send(compile(&device, &wgsl, |shader| lcd_pipeline(&device, &layout, format, entry, shader)).map(|(_, pipeline)| pipeline)).ok();
+                    if let Some(wake) = wake { wake.notify(); }
+                })
+                .map_err(|e| format!("no thread to compile it on: {e}"))?;
+            Ok(Lcd::Building(done))
+        }
+    }
+
+    /// The window's wake, which a subpixel pipeline compiled off this thread tells when it's
+    /// ready, so a window that rests meanwhile still draws its next frame with it.
+    pub(crate) fn set_frame_wake(&mut self, wake: &std::sync::Arc<crate::live::Wake>) {
+        if !self.frame_wake.as_ref().is_some_and(|w| std::sync::Arc::ptr_eq(w, wake)) {
+            self.frame_wake = Some(wake.clone());
+        }
+    }
+
+    /// The subpixel pipeline compiled from WGSL now, on this thread, for the tools that capture
+    /// its HLSL (`regen_dxbc`): it bypasses the shipped bytecode.
+    #[doc(hidden)]
+    pub fn compile_subpixel_now(&mut self, device: &wgpu::Device) -> Result<(), String> {
+        let wgsl = dual_wgsl().ok_or("shader.wgsl's fragment entry moved")?;
+        let (layout, format, entry) = (self.layout.clone(), self.format, self.vertex_entry);
+        let (_, pipeline) = compile(device, &wgsl, |shader| lcd_pipeline(device, &layout, format, entry, shader))?;
+        self.lcd = Lcd::Built(pipeline);
+        Ok(())
     }
 
     /// Takes `built` as the renderer's shader: every pipeline again from it. Bind groups follow
@@ -324,6 +365,36 @@ impl Renderer {
         self.backdrop_blur = None;
         self.lcd = Lcd::Unbuilt;
     }
+}
+
+/// The subpixel pipeline from `shader`'s stages: Windfoil's, blending each channel by the
+/// fragment's second output.
+fn lcd_pipeline(device: &wgpu::Device, layout: &wgpu::PipelineLayout, format: wgpu::TextureFormat, vertex_entry: &'static str, shader: &dxbc::Shaders) -> wgpu::RenderPipeline {
+    let blend = wgpu::BlendState {
+        color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::One, dst_factor: wgpu::BlendFactor::OneMinusSrc1, operation: wgpu::BlendOperation::Add },
+        alpha: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::One, dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha, operation: wgpu::BlendOperation::Add },
+    };
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("uber subpixel"),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: &shader.vertex,
+            entry_point: Some(vertex_entry),
+            compilation_options: Default::default(),
+            buffers: &[Some(metallib::uber_vertex_layout())],
+        },
+        primitive: metallib::uber_primitive(),
+        depth_stencil: None,
+        multisample: Default::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: &shader.fragment,
+            entry_point: Some("fs"),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState { format, blend: Some(blend), write_mask: wgpu::ColorWrites::ALL })],
+        }),
+        multiview_mask: None,
+        cache: None,
+    })
 }
 
 /// `wgsl`'s module and pipeline, compiled now, or the error the device reported.
