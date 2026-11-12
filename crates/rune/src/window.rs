@@ -79,6 +79,8 @@ pub(crate) use sight::{Cover, Sight};
 mod lifecycle;
 mod minimize;
 pub(crate) use minimize::{Minimize, MinimizeEvent};
+mod rest;
+use rest::{Rest, RestEvent};
 mod reveal;
 use reveal::{Found, Reveal, RevealEffect};
 #[cfg(target_os = "macos")]
@@ -492,6 +494,8 @@ struct Host<S: 'static> {
     started: bool,
     clock: FrameClock,
     idle: bool,
+    /// Whether the renderer holds what it gives back at rest (`rest`).
+    rest: Rest,
     mods: ModifiersState,
     control_click: bool,
     files: FileDrop,
@@ -634,6 +638,7 @@ impl<S: 'static> Host<S> {
             started: false,
             clock: FrameClock::new(Instant::now()),
             idle: true,
+            rest: Rest::default(),
             mods: ModifiersState::empty(),
             control_click: false,
             files: FileDrop::default(),

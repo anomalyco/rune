@@ -211,6 +211,13 @@ impl BackdropBlur {
     }
 
     /// Points the first down pass at the pooled backdrop of `format` (new or resized).
+    /// Drops the pyramid and the bindings of the pooled backdrops, which `Renderer::give_back`
+    /// drops; the next blurred frame makes them again.
+    pub(super) fn give_back(&mut self) {
+        self.pyramid = None;
+        self.first.clear();
+    }
+
     pub(super) fn bind_backdrop(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat, view: &wgpu::TextureView) {
         let bind = self.level_bind(device, view, &self.dummy);
         match self.first.iter_mut().find(|(f, _)| *f == format) {

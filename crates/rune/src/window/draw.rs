@@ -468,6 +468,8 @@ impl<S: 'static> Host<S> {
             l.steady = l.steady.step(event).0;
         }
         self.idle = Presented::settle(&mut l.presented, rt, &l.config, animating || FrameMove::moving(&self.frame_move), next_tick, rests, composed(self.comp.as_deref()));
+        // A drawn frame asks for nothing: it only puts the rest off.
+        if !hidden { let _ = rest::step(&mut self.rest, RestEvent::Drew { now, low: rest::low_memory() }); }
         // Why the window draws again: each bit is one of `Presented::settle`'s reasons.
         #[cfg(feature = "frame-profile")]
         let fp_next = [animating, FrameMove::moving(&self.frame_move), rt.needs_commit(), rt.stale() && !rt.needs_commit(), rt.has_pending_input(), rt.live_pending(),
