@@ -63,6 +63,8 @@ enum Wake {
     Start,
     /// The GPU came, or couldn't.
     Ready,
+    /// Time to see whether the page is quiet enough to start the GPU (`Browser::maybe_start_gpu`).
+    StartGpu,
     App,
 }
 
@@ -108,7 +110,7 @@ fn spawn<S: 'static>(mut app: App<S>) -> Result<(), String> {
     page::occupy(quitting(&shared), app.same_tab_router.take());
     event_loop.spawn_app(Browser { app: Some(app), shared, proxy, window: None, embedded: false, document: false, owns_canvas: true,
         borrowed: page::Borrowed::default(), start: Start::GpuFirst, fonts: Rc::default(), pending: Rc::default(), running: Rc::default(),
-        lost: Rc::default(), waiting: None });
+        lost: Rc::default(), waiting: None, first_at: None, drawn_at: None, gpu_asked: false });
     Ok(())
 }
 
@@ -136,6 +138,11 @@ struct Browser<S: 'static> {
     /// browser task for each new control flow and aborts the last one's, so the same deadline
     /// isn't set again.
     waiting: Option<u64>,
+    /// For a page that starts on the CPU: when its first frame was presented, when it last drew
+    /// one, and whether the GPU was asked for.
+    first_at: Option<Instant>,
+    drawn_at: Option<Instant>,
+    gpu_asked: bool,
 }
 
 /// The GPU's side of the page: its device, the canvas's surface and Rune's renderer.
@@ -391,6 +398,8 @@ fn gpu_side<S: 'static>(gpu: Gpu, surface: wgpu::Surface<'static>, size: (u32, u
     config.present_mode = wgpu::PresentMode::Fifo;
     let caps = surface.get_capabilities(&gpu.adapter);
     config.usage |= caps.usages & wgpu::TextureUsages::COPY_SRC;
+    // A canvas can always be copied from; the hand-over's drift count needs that.
+    if drift_wanted() { config.usage |= wgpu::TextureUsages::COPY_SRC; }
     let wanted = if rt.srgb_blend() { config.format.remove_srgb_suffix() } else { config.format.add_srgb_suffix() };
     let is_gl = gpu.adapter.get_info().backend == wgpu::Backend::Gl;
     let format = if wanted != config.format && !is_gl {
@@ -409,7 +418,7 @@ fn gpu_side<S: 'static>(gpu: Gpu, surface: wgpu::Surface<'static>, size: (u32, u
 
 /// A frame drawn on the GPU from the runtime's instances, presented; `Err` when the canvas gave
 /// no texture to draw into.
-fn gpu_frame<S: 'static>(side: &mut GpuSide, rt: &mut Runtime<S>, compositor: &mut Option<Box<dyn crate::Compositor<S>>>, now: Instant, dt: f64) -> Result<(), String> {
+fn gpu_frame<S: 'static>(side: &mut GpuSide, rt: &mut Runtime<S>, compositor: &mut Option<Box<dyn crate::Compositor<S>>>, now: Instant, dt: f64, readback: bool) -> Result<Option<Readback>, String> {
     if side.gpu.adapter.get_info().backend != wgpu::Backend::Gl && side.renderer.srgb_blend() != rt.srgb_blend() {
         let format = if rt.srgb_blend() { side.config.format.remove_srgb_suffix() } else { side.config.format.add_srgb_suffix() };
         if format != side.config.format && !side.config.view_formats.contains(&format) {
@@ -433,9 +442,73 @@ fn gpu_frame<S: 'static>(side: &mut GpuSide, rt: &mut Runtime<S>, compositor: &m
         side.renderer.prepare(&side.gpu.device, &side.gpu.queue, &mut rt.text.atlas, &rt.instances, (side.config.width, side.config.height));
         side.renderer.draw(&mut encoder, &target, rt.clear_color());
     }
+    // A copy of the frame for counting how many of its pixels the CPU's differ in (drift).
+    let copy = (readback && side.config.usage.contains(wgpu::TextureUsages::COPY_SRC)).then(|| {
+        let (width, height) = (side.config.width, side.config.height);
+        let row = (width * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let buffer = side.gpu.device.create_buffer(&wgpu::BufferDescriptor { label: Some("rune hand-over readback"), size: u64::from(row) * u64::from(height),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
+        encoder.copy_texture_to_buffer(frame.texture.as_image_copy(), wgpu::TexelCopyBufferInfo { buffer: &buffer, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(height) } },
+            wgpu::Extent3d { width, height, depth_or_array_layers: 1 });
+        Readback { buffer, row, size: (width, height), rgba: matches!(side.config.format, wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Rgba8UnormSrgb) }
+    });
     side.renderer.submit(&side.gpu.queue, encoder);
     side.gpu.queue.present(frame);
-    Ok(())
+    Ok(copy)
+}
+
+/// The GPU's hand-over frame, copied where the CPU can read it.
+struct Readback {
+    buffer: wgpu::Buffer,
+    row: u32,
+    size: (u32, u32),
+    /// The canvas's format is RGBA (the CPU paints BGRA).
+    rgba: bool,
+}
+
+impl Readback {
+    /// Counts the pixels of `cpu` (BGRA, `size.0 * 4` bytes a row) this frame drew otherwise, and
+    /// appends `[differing, of, max]` to `globalThis.__runeDrift` once the copy is mapped.
+    fn count(self, cpu: Vec<u8>) {
+        let Readback { buffer, row, size: (w, h), rgba } = self;
+        let buffer = Rc::new(buffer);
+        let mapped = buffer.clone();
+        buffer.slice(..).map_async(wgpu::MapMode::Read, move |result| {
+            if result.is_err() { return; }
+            let (mut differing, mut max) = (0u32, 0u8);
+            let mut bbox = [u32::MAX, u32::MAX, 0u32, 0u32];
+            let mut worst = [0u32; 8];
+            {
+                let Ok(gpu) = mapped.slice(..).get_mapped_range() else { return };
+                for y in 0..h as usize {
+                    let g = &gpu[y * row as usize..y * row as usize + w as usize * 4];
+                    let c = &cpu[y * w as usize * 4..(y + 1) * w as usize * 4];
+                    for (x, (p, q)) in c.chunks_exact(4).zip(g.chunks_exact(4)).enumerate() {
+                        let q = if rgba { [q[2], q[1], q[0]] } else { [q[0], q[1], q[2]] };
+                        let d = p[..3].iter().zip(&q).map(|(x, y)| x.abs_diff(*y)).max().unwrap_or(0);
+                        if d > 1 {
+                            let (x, y) = (x as u32, y as u32);
+                            bbox = [bbox[0].min(x), bbox[1].min(y), bbox[2].max(x + 1), bbox[3].max(y + 1)];
+                        }
+                        if d > max { worst = [x as u32, y as u32, u32::from(p[2]), u32::from(p[1]), u32::from(p[0]), u32::from(q[2]), u32::from(q[1]), u32::from(q[0])]; }
+                        if d > 0 { differing += 1; max = max.max(d); }
+                    }
+                }
+            }
+            mapped.unmap();
+            let Ok(list) = js_sys::Reflect::get(&js_sys::global(), &"__runeDrift".into()) else { return };
+            if !js_sys::Array::is_array(&list) { return; }
+            let list: js_sys::Array = list.unchecked_into();
+            let row = js_sys::Array::of3(&differing.into(), &(w * h).into(), &max.into());
+            for v in bbox.into_iter().chain(worst) { row.push(&v.into()); }
+            list.push(&row);
+        });
+    }
+}
+
+/// Whether the page asked for the hand-over's drift (`globalThis.__runeDrift`, an array).
+fn drift_wanted() -> bool {
+    js_sys::Reflect::get(&js_sys::global(), &"__runeDrift".into()).is_ok_and(|v| js_sys::Array::is_array(&v))
 }
 
 /// A flag the GPU's queue sets once the work submitted so far is done, waking the loop.
@@ -681,9 +754,50 @@ impl<S: 'static> Browser<S> {
         }
         if let Some(c) = &canvas { let _ = c.style().remove_property("opacity"); }
         cpu.remove();
+        // A harness checking the way back to the CPU (`globalThis.RUNE_LOSE_GPU_AFTER`, in ms)
+        // has the device count as lost that long after the hand-over, as the browser reports it.
+        if let Some(ms) = js_sys::Reflect::get(&js_sys::global(), &"RUNE_LOSE_GPU_AFTER".into()).ok().and_then(|v| v.as_f64()) {
+            let (lost, proxy) = (self.lost.clone(), self.proxy.clone());
+            after(Duration::from_millis(ms as u64), move || {
+                *lost.borrow_mut() = Some("RUNE_LOSE_GPU_AFTER".into());
+                let _ = proxy.send_event(Wake::App);
+            });
+        }
         r.draw = Draw::Gpu(side);
         crate::marks::mark("web.handover.done");
         if let Some(window) = &self.window { window.request_redraw(); }
+    }
+
+    /// Asks the browser for the GPU, once.
+    fn ask_gpu(&mut self) {
+        if self.gpu_asked || self.start == Start::CpuOnly { return; }
+        let Some(canvas) = self.window.as_ref().and_then(|w| w.canvas()) else { return };
+        self.gpu_asked = true;
+        crate::marks::mark("web.gpu.asked");
+        let features = self.app.as_ref().and_then(|a| a.compositor.as_ref()).map_or(wgpu::Features::empty(), |c| c.features());
+        let (pending, proxy) = (self.pending.clone(), self.proxy.clone());
+        wasm_bindgen_futures::spawn_local(async move {
+            let result = gpu(canvas, features).await;
+            // A loop that has closed was quit while the GPU started.
+            if proxy.send_event(Wake::Ready).is_err() {
+                if let Ok((gpu, _)) = result { gpu.device.destroy(); }
+                return;
+            }
+            crate::marks::mark("web.gpu.answered");
+            *pending.borrow_mut() = Some(result);
+        });
+    }
+
+    /// After the first frame of a page that starts on the CPU: the GPU is asked for once the page
+    /// has drawn nothing for `QUIET` (its first reads in and shown), or `QUIET_LIMIT` after that
+    /// frame at the latest; until then this looks again every `QUIET`.
+    fn maybe_start_gpu(&mut self) {
+        if self.gpu_asked || self.start != Start::CpuFirst { return; }
+        let Some(first) = self.first_at else { return };
+        let quiet = self.drawn_at.is_none_or(|at| at.elapsed() >= QUIET);
+        if quiet || first.elapsed() >= QUIET_LIMIT { return self.ask_gpu(); }
+        let proxy = self.proxy.clone();
+        after(QUIET, move || { let _ = proxy.send_event(Wake::StartGpu); });
     }
 
     /// Draws a frame: the runtime steps, then the CPU paints it, the GPU draws it, or both while
@@ -716,11 +830,17 @@ impl<S: 'static> Browser<S> {
             Draw::Cpu { cpu, .. } => Ok(cpu.paint(&mut r.rt, size).is_ok()),
             Draw::HandingOver { cpu, side, built, done, since } => {
                 let painted = cpu.paint(&mut r.rt, size).is_ok();
-                // Both renderers draw this frame, once the browser has compiled the GPU's
-                // pipelines and checked them; the GPU's canvas stays see-through until it's done.
-                if built.get() && !side.renderer.checking_gpu() {
-                    match gpu_frame(side, &mut r.rt, &mut r.compositor, now, dt) {
-                        Ok(()) => {
+                // Both renderers draw this frame once the browser has compiled the GPU's
+                // pipelines; the GPU's canvas stays see-through until its frame is done.
+                if built.get() {
+                    match gpu_frame(side, &mut r.rt, &mut r.compositor, now, dt, drift_wanted()) {
+                        // That frame made pipelines its draw needed and drew a fallback for each
+                        // while the browser checks it (the renderer hears the answers as it
+                        // draws): frames go on drawing into the see-through canvas, and the
+                        // first one drawn with every check answered is the hand-over frame.
+                        Ok(_) if side.renderer.checking_gpu() => crate::marks::mark("web.handover.warming"),
+                        Ok(copy) => {
+                            if let Some(copy) = copy { copy.count(cpu.pixels().to_vec()); }
                             *done = Some(when_done(&side.gpu.queue, &self.proxy));
                             *since = Instant::now();
                             let proxy = self.proxy.clone();
@@ -734,7 +854,7 @@ impl<S: 'static> Browser<S> {
             }
             Draw::Gpu(side) => {
                 window.pre_present_notify();
-                gpu_frame(side, &mut r.rt, &mut r.compositor, now, dt).map(|()| true)
+                gpu_frame(side, &mut r.rt, &mut r.compositor, now, dt, false).map(|_| true)
             }
             Draw::Moving => Ok(false),
         };
@@ -749,8 +869,12 @@ impl<S: 'static> Browser<S> {
         };
         // In the same commit as the frame: the canvas moves to where this frame drew it.
         r.sync_band(window);
+        if drawn { self.drawn_at = Some(now); }
         if drawn && !r.presented {
             r.presented = true;
+            self.first_at = Some(now);
+            let proxy = self.proxy.clone();
+            after(QUIET, move || { let _ = proxy.send_event(Wake::StartGpu); });
             crate::marks::mark("web.first.presented");
             r.input.presented();
             if let Some(mut ready) = r.on_ready.take() { ready(&crate::WindowHandle::new("main")); }
@@ -776,6 +900,11 @@ impl<S: 'static> Browser<S> {
         if presented && !handing { self.gpu_came(); }
     }
 }
+
+/// How long a page that starts on the CPU draws nothing before it asks for the GPU, and the
+/// longest after its first frame that it waits for that.
+const QUIET: Duration = Duration::from_millis(250);
+const QUIET_LIMIT: Duration = Duration::from_secs(3);
 
 impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
@@ -862,7 +991,6 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
             Start::CpuFirst
         };
         if self.start != Start::GpuFirst { let _ = canvas.style().set_property("opacity", "0"); }
-        let features = app.compositor.as_ref().map_or(wgpu::Features::empty(), |c| c.features());
         // The fonts download while the GPU starts; the CPU's first frame needs only them.
         let fonts: Vec<_> = app.font_urls.iter().map(|url| (url.clone(), platform::fetch_bytes(url))).collect();
         self.window = Some(window);
@@ -878,18 +1006,10 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
             *slot.borrow_mut() = Some(loaded);
             let _ = proxy.send_event(Wake::Start);
         });
-        if self.start == Start::CpuOnly { return; }
-        let (pending, proxy) = (self.pending.clone(), self.proxy.clone());
-        wasm_bindgen_futures::spawn_local(async move {
-            let result = gpu(canvas, features).await;
-            // A loop that has closed was quit while the GPU started.
-            if proxy.send_event(Wake::Ready).is_err() {
-                if let Ok((gpu, _)) = result { gpu.device.destroy(); }
-                return;
-            }
-            crate::marks::mark("web.gpu.answered");
-            *pending.borrow_mut() = Some(result);
-        });
+        // A page that starts on the CPU asks for the GPU once its first frames are up and it's
+        // quiet (`maybe_start_gpu`): asked at once, the browser's GPU process makes the adapter
+        // and compiles the renderer's pipelines while the first frame waits on it to show.
+        if self.start == Start::GpuFirst { self.ask_gpu(); }
     }
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: Wake) {
@@ -901,6 +1021,7 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
                 self.start_app(event_loop);
                 self.gpu_came();
             }
+            Wake::StartGpu => self.maybe_start_gpu(),
             Wake::App => self.hand_over_if_done(),
         }
         let Some(window) = self.window.as_ref() else { return };
