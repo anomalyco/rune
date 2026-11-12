@@ -414,3 +414,25 @@ pub(crate) fn work_area(monitor: &winit::monitor::MonitorHandle) -> Option<(i32,
     // SAFETY: GetMonitorInfoW fills `info`, whose cbSize says which struct it is.
     (unsafe { GetMonitorInfoW(monitor.hmonitor() as _, &mut info) } != 0).then_some((info.rcWork.top, info.rcWork.bottom))
 }
+
+/// Destroys this thread's windows at once, for a fast exit: each gets the default window procedure
+/// first, so neither winit's nor a subclass runs while the process is ending.
+pub(crate) fn destroy_own_windows() {
+    use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM, TRUE};
+    use windows_sys::Win32::System::Threading::GetCurrentThreadId;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{DefWindowProcW, DestroyWindow, EnumThreadWindows, GWLP_WNDPROC, SetWindowLongPtrW};
+    unsafe extern "system" fn add(hwnd: HWND, list: LPARAM) -> BOOL {
+        // SAFETY: `list` is the Vec `destroy_own_windows` passes, alive for the enumeration.
+        unsafe { (*(list as *mut Vec<HWND>)).push(hwnd) };
+        TRUE
+    }
+    let mut windows: Vec<HWND> = Vec::new();
+    // SAFETY: this thread's own top-level windows; each is destroyed by the thread that made it.
+    unsafe {
+        EnumThreadWindows(GetCurrentThreadId(), Some(add), (&raw mut windows) as LPARAM);
+        for hwnd in windows {
+            SetWindowLongPtrW(hwnd, GWLP_WNDPROC, DefWindowProcW as usize as isize);
+            DestroyWindow(hwnd);
+        }
+    }
+}

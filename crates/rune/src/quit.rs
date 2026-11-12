@@ -136,6 +136,9 @@ pub(crate) fn fast_exit_hook() -> Option<fn()> {
 /// `last`, then the process ends without dropping a window, a device or an allocation.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn end_fast(last: fn()) -> ! {
+    // The windows go now, not when the process's threads are torn down (30 ms on blade).
+    #[cfg(target_os = "windows")]
+    crate::platform::win32::destroy_own_windows();
     // What the loop's end does for an orderly exit (`event_loop::run_configured`).
     crate::tooling::interaction::flush();
     crate::platform::ready_signal::clear();
