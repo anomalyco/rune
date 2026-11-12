@@ -344,7 +344,11 @@ mod worker {
                 let found = super::check_words(&words);
                 marks = found.iter().any(|(_, parts)| !parts.is_empty());
                 DONE.lock().unwrap_or_else(|e| e.into_inner()).extend(found.into_iter().map(|(w, p)| (generation, w, p)));
-                ARRIVED.fetch_add(1, Ordering::AcqRel);
+                // The count a window's next frame compares to draw again (`pause::tick`): only
+                // what marks a word counts.
+                if marks {
+                    ARRIVED.fetch_add(1, Ordering::AcqRel);
+                }
             }
             if marks {
                 for wake in jobs.iter().filter_map(|j| j.wake.as_ref()?.upgrade()) {
