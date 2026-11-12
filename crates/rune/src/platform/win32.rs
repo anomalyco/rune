@@ -89,6 +89,49 @@ pub(crate) fn unidle_d3d_threads_soon() {
     ONCE.call_once(|| { let _ = std::thread::Builder::new().name("rune-unidle".into()).spawn(|| { unidle_d3d_threads(); std::thread::sleep(std::time::Duration::from_secs(2)); unidle_d3d_threads(); }); });
 }
 
+/// This process's threads by name and priority, counted (`name (priority) xN`, unnamed ones as
+/// `?`), for saying what a quit waits on.
+pub(crate) fn threads_summary() -> String {
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE, LocalFree};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next};
+    use windows_sys::Win32::System::Threading::{GetCurrentProcessId, GetThreadDescription, GetThreadPriority, OpenThread, THREAD_QUERY_LIMITED_INFORMATION};
+    let mut seen: Vec<(String, i32, usize)> = Vec::new();
+    // SAFETY: as in `unidle_d3d_threads`: a snapshot read into a THREADENTRY32 this frame owns, this
+    // process's thread handles closed after use, descriptions freed with LocalFree.
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+        if snapshot == INVALID_HANDLE_VALUE { return "unknown".into(); }
+        let pid = GetCurrentProcessId();
+        let mut entry: THREADENTRY32 = std::mem::zeroed();
+        entry.dwSize = size_of::<THREADENTRY32>() as u32;
+        let mut more = Thread32First(snapshot, &mut entry) != 0;
+        while more {
+            if entry.th32OwnerProcessID == pid {
+                let thread = OpenThread(THREAD_QUERY_LIMITED_INFORMATION, 0, entry.th32ThreadID);
+                if !thread.is_null() {
+                    let mut desc = std::ptr::null_mut();
+                    let name = if GetThreadDescription(thread, &mut desc) >= 0 && !desc.is_null() {
+                        let len = (0..).take_while(|&i| *desc.add(i) != 0).count();
+                        let name = String::from_utf16_lossy(std::slice::from_raw_parts(desc, len));
+                        LocalFree(desc.cast());
+                        name
+                    } else { String::new() };
+                    let name = if name.is_empty() { "?".to_owned() } else { name };
+                    let priority = GetThreadPriority(thread);
+                    match seen.iter_mut().find(|(n, p, _)| *n == name && *p == priority) {
+                        Some(s) => s.2 += 1,
+                        None => seen.push((name, priority, 1)),
+                    }
+                    CloseHandle(thread);
+                }
+            }
+            more = Thread32Next(snapshot, &mut entry) != 0;
+        }
+        CloseHandle(snapshot);
+    }
+    seen.iter().map(|(n, p, c)| if *c > 1 { format!("{n} ({p}) x{c}") } else { format!("{n} ({p})") }).collect::<Vec<_>>().join(", ")
+}
+
 fn unidle_d3d_threads() -> usize {
     use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE, LocalFree};
     use windows_sys::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next};
