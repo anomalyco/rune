@@ -1,0 +1,1 @@
+- Playground triggers keep their entrance and exit animations when their queued step runs on the next frame; the motion gate recognizes text streaming inside bidi isolates as growing words.

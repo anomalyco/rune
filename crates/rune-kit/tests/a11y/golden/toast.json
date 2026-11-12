@@ -52,6 +52,12 @@
       ],
       "key": "kit-root",
       "role": "group"
+    },
+    {
+      "role": "status",
+      "states": [
+        "live-polite"
+      ]
     }
   ],
   "role": "window"

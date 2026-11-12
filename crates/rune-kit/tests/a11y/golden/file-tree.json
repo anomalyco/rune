@@ -64,6 +64,12 @@
       "key": "files",
       "name": "Files",
       "role": "tree"
+    },
+    {
+      "role": "status",
+      "states": [
+        "live-polite"
+      ]
     }
   ],
   "role": "window"

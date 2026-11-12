@@ -1,7 +1,7 @@
 [
 {"path":"#0","role":"group","rect":[0.00,0.00,720.00,900.00],"fill":"#00000000"},
 {"path":"#0/#0","role":"group","rect":[16.00,16.00,688.00,200.39],"fill":"#00000000"},
-{"path":"#0/#0/b0","role":"text","rect":[16.00,16.00,688.00,22.40],"fill":"#00000000","key":"b0","text":"I'll add a test that drives the backoff with a fake clock.","color":"#161616ff"},
+{"path":"#0/#0/b0","role":"text","rect":[16.00,16.00,688.00,22.40],"fill":"#00000000","key":"b0","text":"\u{2066}I'll\u{2069} add a test that drives the backoff with a fake clock.","color":"#161616ff"},
 {"path":"#0/#0/b1","role":"list","rect":[16.00,50.40,688.00,48.80],"fill":"#00000000","key":"b1"},
 {"path":"#0/#0/b1/i0","role":"listitem","rect":[16.00,50.40,688.00,22.40],"fill":"#00000000","key":"i0"},
 {"path":"#0/#0/b1/i0/#0","role":"text","rect":[16.00,50.40,32.00,22.40],"fill":"#00000000","text":"•","color":"#5c5c5cff"},

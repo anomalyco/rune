@@ -193,6 +193,8 @@ fn return_on_a_blank_last_line_leaves_a_code_block_in_one_undo_step() {
     e.key(&k(Key::Enter), None);
     assert_eq!((e.text.as_str(), e.blocks()), ("let x = 1;\n", &[Block::Code; 2][..]));
     // Composing on a blank code line and pressing Return to commit stays in the block.
+    // IME commits join typing; give this composition its own undo boundary.
+    e.break_history_group();
     e.ime(&Ime::Preedit("に".into(), None));
     assert!(!e.key(&k(Key::Enter), None).submit);
     e.ime(&Ime::Commit("日".into()));

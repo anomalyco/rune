@@ -40,6 +40,12 @@
       "key": "card",
       "name": "Build failed",
       "role": "group"
+    },
+    {
+      "role": "status",
+      "states": [
+        "live-polite"
+      ]
     }
   ],
   "role": "window"

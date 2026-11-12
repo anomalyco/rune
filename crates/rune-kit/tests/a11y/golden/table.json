@@ -248,6 +248,12 @@
       "key": "table",
       "name": "Files",
       "role": "grid"
+    },
+    {
+      "role": "status",
+      "states": [
+        "live-polite"
+      ]
     }
   ],
   "role": "window"

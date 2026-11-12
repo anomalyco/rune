@@ -132,7 +132,12 @@ mod live {
         let rt = runtime(body, &pills, 260.0);
         let ls = lines(&rt);
         assert!(ls.len() >= 2, "narrow enough to wrap: {ls:?}");
-        for p in &pills {
+        let n = rt.nodes.iter().find(|n| n.key.as_deref() == Some("t")).unwrap();
+        let t = n.text.as_ref().unwrap();
+        for (authored, chip) in pills.iter().zip(&t.cold.pills) {
+            // Layout ranges include each pill's bidi isolate marks.
+            let p = chip.start as usize..chip.end as usize;
+            assert_eq!(&t.content[p.clone()], &body[authored.clone()]);
             assert!(!ls.iter().any(|l| l.start > p.start && l.start < p.end), "{p:?} splits across {ls:?}");
         }
     }
@@ -142,13 +147,14 @@ mod live {
         let mut rt = runtime("ask @reviewer", &[4..13], 400.0);
         let pilled = |rt: &Runtime<S>| {
             let n = rt.nodes.iter().find(|n| n.key.as_deref() == Some("t")).unwrap();
-            n.text.as_ref().unwrap().cold.pills.iter().map(|p| p.start..p.end).collect::<Vec<_>>()
+            let t = n.text.as_ref().unwrap();
+            t.cold.pills.iter().map(|p| (p.start..p.end, t.content[p.start as usize..p.end as usize].to_owned())).collect::<Vec<_>>()
         };
         let mut w = rect(&rt)[2];
         for more in [" to", " look at", " the é diff"] {
             rt.update(|s, _| s.body.push_str(more));
             rt.frame(1.0 / 60.0);
-            assert_eq!(pilled(&rt), [4..13 as u32], "after {more:?}");
+            assert_eq!(pilled(&rt), [(7..16, "@reviewer".into())], "after {more:?}");
             assert!(rect(&rt)[2] >= w);
             w = rect(&rt)[2];
         }
@@ -156,7 +162,7 @@ mod live {
         let e = rt.state.body.find('é').unwrap();
         rt.update(|s, _| s.pills = vec![4..13, e + 1..e + 2, 30..400, 20..20]);
         rt.frame(2.0 / 60.0);
-        assert_eq!(pilled(&rt), [4..13 as u32]);
+        assert_eq!(pilled(&rt), [(7..16, "@reviewer".into())]);
         rt.update(|s, _| s.body.truncate(8));
         rt.frame(3.0 / 60.0);
         assert!(pilled(&rt).is_empty(), "a range the text no longer reaches is dropped");

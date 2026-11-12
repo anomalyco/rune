@@ -56,6 +56,12 @@
       "key": "count",
       "name": "0 files",
       "role": "label"
+    },
+    {
+      "role": "status",
+      "states": [
+        "live-polite"
+      ]
     }
   ],
   "role": "window"

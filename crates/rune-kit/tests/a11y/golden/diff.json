@@ -240,6 +240,12 @@
     {
       "name": "end",
       "role": "label"
+    },
+    {
+      "role": "status",
+      "states": [
+        "live-polite"
+      ]
     }
   ],
   "role": "window"

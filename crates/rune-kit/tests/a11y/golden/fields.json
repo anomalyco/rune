@@ -132,6 +132,12 @@
       "key": "token",
       "name": "Token",
       "role": "group"
+    },
+    {
+      "role": "status",
+      "states": [
+        "live-polite"
+      ]
     }
   ],
   "role": "window"

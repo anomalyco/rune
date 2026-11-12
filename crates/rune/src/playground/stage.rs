@@ -97,7 +97,11 @@ impl<X: 'static> Trigger<X> {
     /// Its step, to queue.
     pub(super) fn queued(&self) -> Queued<X> {
         let run = self.run.clone();
-        Box::new(move |x, play| run(x, play))
+        Box::new(move |x, play| {
+            // The trigger is input even though its step runs in the next frame's poll.
+            play.tx.asked_motion = true;
+            run(x, play);
+        })
     }
 }
 

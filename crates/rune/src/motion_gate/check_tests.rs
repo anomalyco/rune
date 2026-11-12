@@ -90,6 +90,8 @@ fn words_that_swap_in_place_are_a_text_swap_but_a_ticking_count_is_not() {
     assert_eq!(with(&[(0, "Read backoff.ts"), (30, "Grep retryBudget")]), ["text-swap"]);
     assert!(with(&[(0, "9s"), (30, "10s")]).is_empty(), "a clock ticks");
     assert!(with(&[(0, "Looks"), (30, "Looks right")]).is_empty(), "streaming words grow");
+    assert!(with(&[(0, "run \u{2066}t\u{2069}"), (30, "run \u{2066}th\u{2069}")]).is_empty(), "words grow inside an isolate");
+    assert_eq!(with(&[(0, "run \u{2066}test\u{2069}"), (30, "run \u{2066}build\u{2069}")]), ["text-swap"]);
     // A streaming link's box widens with its next word.
     let link: Vec<_> = (0..60).map(|k| (k, [0.0, 0.0, if k < 30 { 40.0 } else { 85.0 }, 20.0], 1.0)).collect();
     let mut r = rec(vec![("a", link)], 60);

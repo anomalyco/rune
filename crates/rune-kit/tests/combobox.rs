@@ -55,7 +55,7 @@ fn opening_takes_focus_and_reveals_the_offscreen_selection() {
     assert!(last.visible[3] > 0.0);
     key(&mut rt, Key::Text("099".into()), Mods::default());
     assert_eq!(rt.state.combo.search().text, "099");
-    assert_eq!(rt.state.other.text, "");
+    assert_eq!(rt.state.other.text, "pending", "blurring commits the old field's composition");
 }
 
 #[test]
@@ -286,4 +286,3 @@ fn typing_crossfades_the_rows_in_view() {
     let (top, opacity, _) = row(&rt, "item-99").expect("a match mounted out of view");
     assert!(top.abs() < 0.5 && opacity < 0.05, "it fades in rather than appearing whole: {top} at {opacity}");
 }
-

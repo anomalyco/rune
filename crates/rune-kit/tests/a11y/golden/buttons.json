@@ -64,6 +64,12 @@
       "states": [
         "disabled"
       ]
+    },
+    {
+      "role": "status",
+      "states": [
+        "live-polite"
+      ]
     }
   ],
   "role": "window"

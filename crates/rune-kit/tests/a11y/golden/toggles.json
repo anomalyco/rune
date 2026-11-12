@@ -54,6 +54,12 @@
         "disabled",
         "checked"
       ]
+    },
+    {
+      "role": "status",
+      "states": [
+        "live-polite"
+      ]
     }
   ],
   "role": "window"

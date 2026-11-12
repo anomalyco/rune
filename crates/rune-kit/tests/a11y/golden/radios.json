@@ -95,6 +95,12 @@
       "name": "Range",
       "role": "radio-group",
       "setSize": 3
+    },
+    {
+      "role": "status",
+      "states": [
+        "live-polite"
+      ]
     }
   ],
   "role": "window"
