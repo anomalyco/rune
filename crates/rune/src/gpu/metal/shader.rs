@@ -86,7 +86,7 @@ impl Ir {
     /// Parses and validates `source` now, unless it is a built-in shader, which parses only if a
     /// pipeline needs a function the precompiled library lacks.
     pub(super) fn new(label: &str, source: &str, checks: wgpu::ShaderRuntimeChecks) -> Self {
-        let hash = blake3::hash(source.as_bytes());
+        let hash = source_hash(source);
         let ir = Ir { label: label.into(), source: source.into(), hash, parsed: OnceLock::new(), checks };
         if !builtin::known(&hash) { ir.parsed(); }
         ir
@@ -94,7 +94,7 @@ impl Ir {
 
     #[cfg(test)]
     pub(super) fn parse(label: &str, source: &str, checks: wgpu::ShaderRuntimeChecks) -> Self {
-        let ir = Ir { label: label.into(), source: source.into(), hash: blake3::hash(source.as_bytes()), parsed: OnceLock::new(), checks };
+        let ir = Ir { label: label.into(), source: source.into(), hash: source_hash(source), parsed: OnceLock::new(), checks };
         ir.parsed();
         ir
     }
@@ -114,6 +114,21 @@ impl Ir {
         let (module, info) = self.parsed();
         (module, info)
     }
+}
+
+/// BLAKE3 of `source` with each `\r\n` read as `\n`: a built-in shader's WGSL from a checkout
+/// with CRLF line endings (one made before `.gitattributes`, or an archive) keys the same
+/// precompiled function as an LF one. LF text, the usual case, costs one scan for `\r`.
+fn source_hash(source: &str) -> blake3::Hash {
+    if !source.as_bytes().contains(&b'\r') {
+        return blake3::hash(source.as_bytes());
+    }
+    let mut hasher = blake3::Hasher::new();
+    for (i, line) in source.split("\r\n").enumerate() {
+        if i > 0 { hasher.update(b"\n"); }
+        hasher.update(line.as_bytes());
+    }
+    hasher.finalize()
 }
 
 impl ShaderModule {
