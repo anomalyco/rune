@@ -1,0 +1,1 @@
+- **Virtual lists: a list pinned to its end counts only the rows its end window lacks.** After many rows landed at once, the fill counted every row past the mounted ones, though it mounts only the overscan at the end (at least 32 rows), and it missed rows of that window above the mounted ones.

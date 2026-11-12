@@ -185,6 +185,8 @@ const INDEXED_EDGE: f32 = 1.75;
 /// Rows past it mount over the next frames, so a jump or a prepended page doesn't shape it all
 /// in one frame.
 const INDEXED_BUDGET: f32 = 0.5;
+/// The fewest rows a list pinned to its end keeps mounted above the end, whatever its overscan.
+const PINNED_ROWS: usize = 32;
 
 impl VirtualList {
     pub fn height(&self, key: &str) -> f32 {
@@ -382,7 +384,7 @@ impl VirtualList {
         // A row still at its estimate grows or shrinks once measured; anchoring to it would move
         // the measured rows below, such as the reader's row under a page that just landed.
         self.anchor = if pinned { None } else { self.anchor_at(offset) };
-        if pinned { start = start.min(end.saturating_sub(32)); }
+        if pinned { start = start.min(end.saturating_sub(PINNED_ROWS)); }
         end = end.max(start);
         self.place(start..end);
     }
@@ -452,11 +454,16 @@ impl VirtualList {
     /// is filled. The fill measures this at its bound to tell a list that is still making
     /// progress from one whose heights keep changing under it. Only the overscan's own rows
     /// count: after a jump the mounted window may lie wholly above or below it, and the rows
-    /// between the two are wanted by neither.
+    /// between the two are wanted by neither. A pinned list wants the overscan at its end, and
+    /// at least [`PINNED_ROWS`] rows, as [`select`](Self::select) mounts them.
     pub(crate) fn unfilled(&self, offset: f32, pinned: bool) -> usize {
         if self.keys.is_empty() { return 0; }
-        if pinned { return self.keys.len().saturating_sub(self.range.end); }
-        let (start, end) = self.overscan(offset.min(self.max_offset()));
+        let (start, end) = if pinned {
+            let (start, end) = self.overscan(self.max_offset());
+            (start.min(end.saturating_sub(PINNED_ROWS)), end)
+        } else {
+            self.overscan(offset.min(self.max_offset()))
+        };
         let mounted = self.range.end.min(end).saturating_sub(self.range.start.max(start));
         end.saturating_sub(start) - mounted
     }
@@ -535,5 +542,31 @@ mod tests {
         assert_eq!(v.unfilled(offset, false), 10, "a window above the overscan after a jump");
         v.range = 90..100;
         assert_eq!(v.unfilled(offset, false), 10, "a window below the overscan after a jump");
+    }
+
+    /// A list pinned to its end counts the rows of its end window the mounted ones don't hold:
+    /// the overscan at the end, or the last 32 rows when that is fewer. A window left far above
+    /// it after many rows land counts that end window alone, and rows above the window count too.
+    #[test]
+    fn pinned_unfilled_counts_only_the_end_window_rows_the_window_lacks() {
+        let mut v = VirtualList::default();
+        v.set_estimate(20.0);
+        v.set_keys((0..100).map(|i| format!("r{i}")).collect(), 0, None);
+        // A 40 tall viewport ends at 2000, its overscan from 1880: six rows, fewer than 32.
+        // A 300 tall one's overscan runs from 1100: rows 55 on.
+        for (viewport, wanted) in [(40.0, 68..100), (300.0, 55..100)] {
+            v.viewport = viewport;
+            for a in 0..=100 {
+                for b in a..=100 {
+                    v.range = a..b;
+                    let missing = wanted.clone().filter(|i| !(a..b).contains(i)).count();
+                    // The offset passed is ignored: a pinned list sits at its end.
+                    assert_eq!(v.unfilled(0.0, true), missing, "viewport {viewport}, window {a}..{b}");
+                }
+            }
+        }
+        v.viewport = 40.0;
+        v.range = 0..10;
+        assert_eq!(v.unfilled(0.0, true), 32, "a window left at the top after rows landed below it");
     }
 }
