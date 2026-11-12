@@ -19,7 +19,7 @@ impl<S: 'static> Runtime<S> {
             self.end_group_path(h).unwrap_or_else(|| self.end_path(h)).to_owned()
         });
         if unit.is_some() {
-            self.text_sel.pick.0 = unit;
+            self.selectable.pick.0 = unit;
         }
     }
 
@@ -35,7 +35,7 @@ impl<S: 'static> Runtime<S> {
             };
         }
         let live = |i: usize| self.is_selectable(i) && !self.subtree_exiting(i) && self.allowed(i);
-        let picked = self.text_sel.pick.0.as_deref().and_then(|p| self.live(p)).filter(|&u| {
+        let picked = self.selectable.pick.0.as_deref().and_then(|p| self.live(p)).filter(|&u| {
             if self.nodes[u].selection_group { (u + 1..self.nodes.len()).any(|j| self.member(j, u)) } else { live(u) }
         });
         if picked.is_some() {

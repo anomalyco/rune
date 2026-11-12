@@ -59,7 +59,7 @@ impl<S: 'static> Runtime<S> {
         let Some(h) = self.selection_holder_end() else { return false };
         match self.focus_holder_end(h) {
             Some(f) if f != h => self.tree_order(f) < self.tree_order(h),
-            Some(_) => self.text_sel.focus < self.text_sel.anchor,
+            Some(_) => self.selectable.phase.selection().is_some_and(|s| s.focus < s.anchor),
             None => false,
         }
     }

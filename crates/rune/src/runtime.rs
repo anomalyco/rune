@@ -694,7 +694,7 @@ pub struct Runtime<S: 'static> {
     caret_follow: bool,
     links: links::LinkState,
     /// The selection in `El::selectable` text.
-    text_sel: selectable::Held,
+    selectable: selectable::phase::TextSel,
     /// `Tx::text_selection`'s snapshot, kept while neither a commit nor the selection changed.
     sel_snapshot: std::cell::RefCell<Option<selectable::Snapshot>>,
     /// What each `El::on_selection_change` element (by path) last heard.
@@ -1012,7 +1012,7 @@ impl<S: 'static> Runtime<S> {
             feedback: Default::default(),
             caret_follow: false,
             links: Default::default(),
-            text_sel: Default::default(),
+            selectable: Default::default(),
             sel_snapshot: Default::default(),
             sel_heard: Default::default(),
             input_click: Default::default(),

@@ -43,8 +43,8 @@ impl<S: 'static> Runtime<S> {
     /// queue the press itself skips. A key press hides a tooltip.
     fn observe_mods(&mut self, event: &PhysicalInput) {
         match event {
-            PhysicalInput::Modifiers(m) => { self.text_sel.shift = m.shift; self.held_mods = *m; }
-            PhysicalInput::FocusLost => { self.text_sel.shift = false; self.held_mods = Default::default(); self.dismiss_help(); }
+            PhysicalInput::Modifiers(m) => { self.selectable.shift = m.shift; self.held_mods = *m; }
+            PhysicalInput::FocusLost => { self.selectable.shift = false; self.held_mods = Default::default(); self.dismiss_help(); }
             PhysicalInput::Key { pressed: true, mods, .. } => { self.held_mods = *mods; self.dismiss_help(); }
             PhysicalInput::Key { mods, .. } => self.held_mods = *mods,
         }

@@ -80,7 +80,7 @@ impl<S: 'static> Runtime<S> {
         self.press = capture::Press::default();
         self.secondary = capture::Secondary::Up;
         self.drop_drag_out_request();
-        self.text_sel.dragging = false;
+        self.select_step(selectable::phase::Event::Release);
         self.input_click.clear();
         self.hovered = None;
         self.hover_gone.clear();

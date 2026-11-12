@@ -5,7 +5,8 @@ use super::{
     collect_virtual_row_selection, offscreen_piece,
 };
 use crate::el::{SelectRequest, SelectionCopy};
-use crate::runtime::selectable::{CopyJoin, SelectedText, TextSelection, Unit, floor_boundary};
+use crate::runtime::selectable::phase::{self, Selection};
+use crate::runtime::selectable::{CopyJoin, SelectedText, TextSelection, floor_boundary};
 use crate::runtime::{Node, Runtime, playground_host};
 
 impl<S: 'static> Runtime<S> {
@@ -90,7 +91,7 @@ impl<S: 'static> Runtime<S> {
     pub(crate) fn collect_virtual_selection(&self, base: Option<usize>) -> Option<TextSelection> {
         let h = self.selection_holder_end()?;
         let f = self.focus_holder_end(h)?;
-        let sel = &self.text_sel;
+        let sel = self.selectable.phase.selection()?;
         let base_path = base.map(|b| self.nodes[b].path.as_str());
 
         if h == f {
@@ -417,11 +418,7 @@ impl<S: 'static> Runtime<S> {
                 let content = self.content_of(i).to_owned();
                 let (a, b) = (floor_boundary(&content, range.start), floor_boundary(&content, range.end.max(range.start)));
                 let path = self.nodes[i].path.clone();
-                let sel = &mut self.text_sel;
-                (sel.path, sel.content, sel.anchor, sel.focus, sel.origin, sel.unit, sel.far) =
-                    (Some(path), content, a, b, (a, b), Unit::Char, None);
-                (sel.anchor_end, sel.focus_end, sel.dragging) = (None, None, false);
-                self.seal_between();
+                self.select_step(phase::Event::Select(Selection::new(path, content, (a, b), (a, b))));
             }
             SelectRequest::All(key) => {
                 let Some(i) = named(&key) else {
@@ -503,14 +500,9 @@ impl<S: 'static> Runtime<S> {
                             );
                             self.pin_offscreen_row(&list_path, r);
                             let Some(end_ref) = self.resolve_end(&target_path, None) else { return false };
-                            let v_end = self.virtual_end_of(end_ref, a);
-                            let sel = &mut self.text_sel;
-                            (sel.path, sel.content, sel.anchor, sel.focus, sel.origin, sel.unit, sel.far) =
-                                (Some(target_path), content, a, b, (a, b), Unit::Char, None);
-                            sel.anchor_end = v_end;
-                            sel.focus_end = None;
-                            sel.dragging = false;
-                            self.seal_between();
+                            let mut sel = Selection::new(target_path, content, (a, b), (a, b));
+                            sel.anchor_end = self.virtual_end_of(end_ref, a);
+                            self.select_step(phase::Event::Select(sel));
                             return true;
                         }
                     }
