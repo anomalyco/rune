@@ -123,10 +123,18 @@ fn set(window: &winit::window::Window, cloaked: bool) -> bool {
     unsafe { DwmSetWindowAttribute(hwnd, DWMWA_CLOAK as u32, (&raw const value).cast(), 4) >= 0 }
 }
 
-/// Brings the window to the foreground and gives it the focus, as a show that activates would.
+/// Brings the window to the foreground and gives it the focus, as a show that activates would,
+/// when this process may take the foreground (a launch by the user). Otherwise it stays where a
+/// show without the foreground puts it, below the foreground window: a `SetForegroundWindow` that
+/// Windows refuses also holds the window under the foreground window from then on, so another
+/// process's `HWND_TOPMOST` (PowerToys' Always On Top) succeeds and changes nothing.
+/// `AllowSetForegroundWindow` for this process fails exactly when this process can't take it.
 fn activate(window: &winit::window::Window) {
     let Some(hwnd) = super::hwnd(window) else { return };
-    // SAFETY: a window this thread owns; a launch by the user lets this process take the foreground.
-    unsafe { windows_sys::Win32::UI::WindowsAndMessaging::SetForegroundWindow(hwnd); }
+    // SAFETY: plain calls on this process's id and a window this thread owns.
+    unsafe {
+        if windows_sys::Win32::UI::WindowsAndMessaging::AllowSetForegroundWindow(windows_sys::Win32::System::Threading::GetCurrentProcessId()) == 0 { return; }
+        windows_sys::Win32::UI::WindowsAndMessaging::SetForegroundWindow(hwnd);
+    }
     crate::marks::mark("window.activated");
 }
