@@ -257,7 +257,7 @@ impl DragImage {
     /// blends. `None` if the PNG doesn't decode.
     #[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
     pub(crate) fn over(&self, backing: Color) -> Option<Self> {
-        let mut rgba = image::load_from_memory_with_format(&self.png, image::ImageFormat::Png).ok()?.to_rgba8();
+        let mut rgba = crate::image::png_rgba8(&self.png).ok()?;
         let bg = [backing.r, backing.g, backing.b];
         for p in rgba.pixels_mut() {
             let a = p[3] as f32 / 255.0;

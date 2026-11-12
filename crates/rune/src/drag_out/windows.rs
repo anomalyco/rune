@@ -188,7 +188,7 @@ fn png_format() -> u16 {
 /// The picture as the drag image manager takes it: a top-down 32-bit DIB of premultiplied BGRA,
 /// with where the pointer sits in it.
 fn drag_image(picture: &DragImage, start: &DragOutStart, scale: f32) -> Option<SHDRAGIMAGE> {
-    let rgba = image::load_from_memory_with_format(picture.png_data(), image::ImageFormat::Png).ok()?.to_rgba8();
+    let rgba = crate::image::png_rgba8(picture.png_data()).ok()?;
     let (w, h) = (rgba.width() as i32, rgba.height() as i32);
     let [fx, fy, fw, fh] = picture.frame(start.bounds, start.press, (w as f32 / scale, h as f32 / scale));
     let offset = POINT {

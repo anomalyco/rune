@@ -48,7 +48,7 @@ pub(crate) struct Decoded {
 /// clamping its hot spot into the result.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn decode(image: CursorImage, scale: f32) -> Result<Decoded, String> {
-    let src = ::image::load_from_memory_with_format(image.bytes(), ::image::ImageFormat::Png).map_err(|e| e.to_string())?.into_rgba8();
+    let src = crate::image::png_rgba8(image.bytes()).map_err(|e| e.to_string())?;
     let (w, h) = src.dimensions();
     if w > MAX_SIDE || h > MAX_SIDE {
         return Err(format!("{w}×{h} px is over the {MAX_SIDE} px limit"));
