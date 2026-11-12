@@ -74,6 +74,7 @@ fn run_configured(factory: Factory, args: Args, accessory: bool) -> Result<(), S
             .with_activate_ignoring_other_apps(false);
     }
     let event_loop = builder.build().inspect_err(|_| crate::render::discard_prewarm()).map_err(event_loop_error)?;
+    crate::marks::mark("loop.built");
     event_loop.set_control_flow(ControlFlow::Wait);
     #[cfg(target_os = "macos")]
     crate::platform::app_icon::launched();

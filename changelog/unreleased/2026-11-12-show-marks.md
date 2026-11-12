@@ -1,0 +1,1 @@
+- **Windows: a launch trace splits the first frame's show.** New marks: `loop.built` (winit's event loop made), `window.frame_installed` (the custom title bar's frame), `frame.first.done` (the CPU frame's turn finished), `window.cloaked` and `window.uncloaked` (DWM's cloak on and off). Between the CPU frame and the window on screen they show where 9 ms of the show goes.

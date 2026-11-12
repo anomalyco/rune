@@ -52,6 +52,7 @@ impl<S: 'static> Host<S> {
         // Before it shows, so the title bar never appears.
         #[cfg(target_os = "windows")]
         let frame = self.titlebar.and_then(|t| crate::platform::win32::CustomFrame::install(&window, t.height()));
+        crate::marks::mark("window.frame_installed");
         #[cfg(target_os = "windows")]
         let cloak = crate::platform::win32::Cloak::default();
         // Its first frame on the CPU renderer, painted before it shows (`cpu_frame`).

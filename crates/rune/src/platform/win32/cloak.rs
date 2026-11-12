@@ -109,6 +109,7 @@ impl Cloak {
             CloakEffect::Uncloak { activate: then } => {
                 self.state.set(next);
                 set(window, false);
+                crate::marks::mark("window.uncloaked");
                 if then { activate(window); }
             }
         }
