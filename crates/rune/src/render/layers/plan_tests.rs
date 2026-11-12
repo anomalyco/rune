@@ -68,7 +68,8 @@ fn scenes() -> Vec<Vec<Spec>> {
         // The cached card grown, so the target it kept no longer fits its bucket.
         vec![Spec::cached([4.0, 2.0, 26.0, 13.0], window, (7, 1)),
             Spec { opacity: 0.5, ..Spec::child(0, [8.0, 4.0, 18.0, 7.0], window) }],
-        // A turned cache, and a fade that isolates without a target of its own.
+        // A turned cache, whose hit writes the same turned composite as its miss, and a fade that
+        // isolates without a target of its own.
         vec![Spec { turn: Some((0.3, [16.0, 8.0])), ..Spec::cached([8.0, 4.0, 16.0, 8.0], window, (31, 4)) },
             Spec { fade: 1200, hole: [16.0, 8.0, 6.0, 8.0], ..Spec::plain([6.0, 2.0, 12.0, 12.0], window) }],
         // A cached card that blurs widely: its target and the scratch's own work target are three
@@ -177,11 +178,13 @@ struct OldHeld {
     last_used: u64,
     content: [f32; 2],
     blur: Option<OldScratch>,
+    /// The turn the composite quad was written with.
+    quad: Option<(f32, [f32; 2])>,
 }
 
 impl OldHeld {
     fn new(size: [u32; 2]) -> Self {
-        Self { size, cache: None, last_used: 0, content: [0.0; 2], blur: None }
+        Self { size, cache: None, last_used: 0, content: [0.0; 2], blur: None, quad: None }
     }
 
     /// The texture, and the scratch's own texture plus its work target when it has one.
@@ -272,6 +275,9 @@ impl Old {
                 t.last_used = stamp;
                 active_cache_bytes += t_bytes;
             }
+            // differs from dev: dev wrote the hit's composite quad upright, so a turned cache drew
+            // its content where it stood on the miss and snapped back on the hit.
+            t.quad = l.turn;
             l.show = OldShow::Cached;
             l.cache_target = t.cache;
             self.slots[index] = Some(t);
@@ -350,6 +356,7 @@ impl Old {
             t.cache = cache_target;
             t.last_used = stamp;
             t.content = [bounds[2], bounds[3]];
+            t.quad = plan[index].turn;
             if sigma > 0.0 {
                 t.blur(sigma, [bounds[2], bounds[3]]);
             } else {
@@ -391,11 +398,13 @@ fn finish(pools: &mut Old, plan: &[Layer], dispositions: &[Disposition], stamp: 
             Disposition::Cached { cache, .. } => {
                 t.cache = cache;
                 if cache.is_some() { t.last_used = stamp; }
+                t.quad = plan[index].turn;
             }
             Disposition::Render { rect, cache } => {
                 t.cache = cache;
                 t.last_used = stamp;
                 t.content = [rect[2], rect[3]];
+                t.quad = plan[index].turn;
                 // The plan dropped a scratch the layer no longer wants (`Move::Unblur`).
                 if plan[index].blur > 0.0 { t.blur(plan[index].blur, [rect[2], rect[3]]); }
             }

@@ -18,6 +18,41 @@ fn cached_card(bounds: [f32; 4]) -> Vec<Instance> {
         rect(inner), rect([inner[0] + 4.0, inner[1], inner[2] - 8.0, inner[3]]), Instance::end_layer(), Instance::end_layer()]
 }
 
+/// A cache hit composites from a texture the miss drew upright, so it must carry the same turn the
+/// miss did: an unturned hit snaps the scope back to where its bounds sit.
+#[test]
+fn a_cache_hit_composites_with_its_layer_turn() {
+    let gpu = Gpu::headless();
+    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    let target = Offscreen::new(&gpu.device, 64, 64);
+    let mut atlas = crate::text::TextSystem::default().atlas;
+    // A wide scope holding ink in its left third, turned about its centre: the turn moves it.
+    let bounds = [16.0, 22.0, 32.0, 12.0];
+    let turned = |angle: Option<f32>| {
+        let mut cache = Instance::begin_layer(bounds, NO_CLIP, LayerSpec::default());
+        if let Some(angle) = angle { cache = cache.turned(angle, [32.0, 28.0]); }
+        cache.params[3] = 1.0;
+        cache.radii = pack_u64_f32(31);
+        cache.uv = pack_u64_f32(1);
+        vec![cache, rect([bounds[0] + 2.0, bounds[1] + 2.0, 8.0, 6.0]), Instance::end_layer()]
+    };
+    // The miss draws the turned scope into its target and composites it turned.
+    let instances = turned(Some(0.6));
+    renderer.prepare(&gpu.device, &gpu.queue, &mut atlas, &instances, (64, 64));
+    assert!(matches!(renderer.layers.planner.dispositions[0], Disposition::Render { .. }), "the first frame draws it");
+    let miss = pixels(&gpu, &renderer, &target);
+    // The hit composites the texture it kept, and must land the same pixels.
+    renderer.prepare(&gpu.device, &gpu.queue, &mut atlas, &instances, (64, 64));
+    assert!(matches!(renderer.layers.planner.dispositions[0], Disposition::Cached { .. }), "the second frame hits");
+    let hit = pixels(&gpu, &renderer, &target);
+    let differing = hit.iter().zip(&miss).filter(|(hit, miss)| hit != miss).count();
+    assert_eq!(differing, 0, "a hit composites the turned quad the miss drew");
+    // And the turn is what moves them: the same scope upright draws elsewhere.
+    let upright = turned(None);
+    for _ in 0..2 { renderer.prepare(&gpu.device, &gpu.queue, &mut atlas, &upright, (64, 64)); }
+    assert_ne!(pixels(&gpu, &renderer, &target), hit, "the turn is in the composite, not only the render");
+}
+
 /// The planning walk takes a kept cache to be a hit and covers what's inside it; when the cache
 /// then doesn't fit the budget, the scope draws as a plain group, and its faded child with it.
 #[test]

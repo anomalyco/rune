@@ -490,6 +490,9 @@ impl Renderer {
                     if cache.is_some() { t.last_used = stamp; }
                     let mut quad = Instance::begin_layer(rect, l.clip, LayerSpec {
                         opacity: l.opacity, blend: l.blend, ..Default::default() });
+                    // A hit composites the same turned quad a miss drew: the turn belongs to the
+                    // scope, not to the pass that filled its texture.
+                    if let Some((angle, pivot)) = l.turn { quad = quad.turned(angle, pivot); }
                     quad.fade = l.fade;
                     if (t.content_size[0] - rect[2]).abs() > 0.5 || (t.content_size[1] - rect[3]).abs() > 0.5 {
                         quad.uv = [0.0, 0.0, t.content_size[0], t.content_size[1]];
