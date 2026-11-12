@@ -96,6 +96,8 @@ pub struct Tx {
     pub(crate) focus_to: Option<(String, bool, FocusAsk)>,
     /// `Tx::focus_visible`.
     pub(crate) focus_visible: bool,
+    /// `Tx::assistive_technology`.
+    pub(crate) assistive: bool,
     /// `Tx::by_keys`.
     pub(crate) by_keys: bool,
     /// The text selection as the event arrived (`Tx::text_selection`).
@@ -499,6 +501,13 @@ impl Tx {
         if self.focus_to.as_ref().is_none_or(|(.., ask)| *ask == FocusAsk::Return) {
             self.focus_to = Some((key.into(), ring, FocusAsk::Return));
         }
+    }
+
+    /// Whether an assistive client (a screen reader, Voice Access, an automation tool) is
+    /// reading this window's accessibility tree: the tree is built only then. Work done only for
+    /// one, such as deciding what [`Tx::announce`] says, can wait for it and cost nothing without.
+    pub fn assistive_technology(&self) -> bool {
+        self.assistive
     }
 
     /// Whether keyboard focus was showing its ring (`:focus-visible`) as this event arrived:
