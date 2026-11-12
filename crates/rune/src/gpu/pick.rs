@@ -250,8 +250,8 @@ pub(crate) fn display_vendor() -> Option<u32> {
 
 static DISPLAY_VENDOR: std::sync::OnceLock<Option<u32>> = std::sync::OnceLock::new();
 
-/// Starts reading [`display_vendor`] on a thread of its own, so the first window needn't wait
-/// for it; a window that asks sooner waits for that thread.
+/// Starts reading [`display_vendor`] on a thread of its own once the event loop exists, so the
+/// first window needn't wait for it; a window that asks sooner waits for that thread.
 #[cfg(target_os = "windows")]
 pub(crate) fn find_display_vendor_soon() {
     let _ = std::thread::Builder::new().name("rune-display-vendor".into()).spawn(display_vendor);
