@@ -29,7 +29,6 @@ impl<S: 'static> Host<S> {
             l.first_frame.skipped(now);
             #[cfg(target_os = "macos")]
             l.set_live_resize(false);
-            self.rt.set_live_visible(false);
             self.secure_input.set(false);
             self.idle = true;
         }
@@ -52,13 +51,15 @@ impl<S: 'static> Host<S> {
         l.presented = None;
         l.stop_pacing();
         let shown = self.life.shown();
+        let minimized = l.minimized();
         l.first_frame.skipped(Instant::now());
         // Covered by other windows, it still draws what changed, later (`CoveredDraw`).
         #[cfg(target_os = "windows")]
         if shown && self.life.covered() && !l.minimized() { l.covered_draw = l.covered_draw.step(CoveredDrawEvent::Asked(Instant::now())); }
         self.land_frame();
         if shown {
-            self.rt.set_live_visible(false);
+            // Minimised, it isn't live; covered, its state stays live (`set_cover`).
+            if minimized { self.rt.set_live_visible(false); }
             covered_step(&mut self.rt);
             self.clipboard.flush(&mut self.rt);
             self.frame_reports.skipped();
@@ -97,7 +98,7 @@ impl<S: 'static> Host<S> {
         if owed { self.rt.settle_all(); }
         // A missed frame's retry, or the timer pacing unpaced motion: input waits for it, and
         // `new_events` runs due timers meanwhile.
-        if !resizing && l.backing_off(Instant::now()) { return; }
+        if !resizing && !owed && l.backing_off(Instant::now()) { return; }
         // A device that died (a driver reset, a GPU removed, a resume from Modern Standby) and a
         // surface that refused its configuration can draw nothing: the window makes both again
         // before this frame, or waits out a retry of its own (`SurfaceRetries`) and then gives

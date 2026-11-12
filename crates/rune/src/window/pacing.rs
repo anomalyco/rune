@@ -16,9 +16,15 @@ pub(crate) fn wall_wake_deadline<S>(rt: &Runtime<S>) -> Option<Instant> {
 /// after each poll, they'd drift later every frame and drop one every half second.
 pub(crate) fn timer_deadline<S>(rt: &Runtime<S>) -> Option<Instant> {
     let wall = |t: f64| rt.wall_start?.checked_add(Duration::try_from_secs_f64(t).ok()?);
+    poll_deadline(rt).into_iter().chain(rt.motion_wake_deadline().and_then(wall)).min()
+}
+
+/// `timer_deadline` without motion's own cadence: what a covered window wakes for (its `poll`'s
+/// timers; its motion waits, unseen, for the frame it draws next).
+pub(crate) fn poll_deadline<S>(rt: &Runtime<S>) -> Option<Instant> {
+    let wall = |t: f64| rt.wall_start?.checked_add(Duration::try_from_secs_f64(t).ok()?);
     let polled = wall(rt.polled_at());
-    let timer = rt.poll_wake_deadline().and_then(wall).map(|due| polled.map_or(due, |polled| due.max(polled + TIMER_FRAME)));
-    timer.into_iter().chain(rt.motion_wake_deadline().and_then(wall)).min()
+    rt.poll_wake_deadline().and_then(wall).map(|due| polled.map_or(due, |polled| due.max(polled + TIMER_FRAME)))
 }
 
 /// Paces the frame a hidden host keeps ready to show (a launcher's cached pixels, a retained
