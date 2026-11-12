@@ -303,11 +303,22 @@ impl TextSystem {
                 self.add_symbol_files(direct_write::family_files(SYMBOL_FAMILIES));
             }
             if !missing.is_empty() {
-                // A symbol that isn't an emoji by default (☺ ✓ ♥) draws in Segoe UI Symbol's
-                // text form, as Chromium draws it, not in the colour emoji Windows maps it to.
+                // A symbol that isn't an emoji by default (☺ ✓ ♥) draws in a text face, as
+                // Chromium draws it, not in the colour emoji Windows maps it to. Chromium tries
+                // the page's families first, and official's end `system-ui, "Segoe UI",
+                // sans-serif`: Segoe UI, then Arial (Windows' sans-serif), then the standard font
+                // (Times New Roman), and only then the system fallback, Segoe UI Symbol. So ☺,
+                // which Inter and Segoe UI lack, is Arial's (CDP `getPlatformFontsForNode`,
+                // `proof\languages\symbols\chromium-faces.tsv`).
                 if !self.fallbacks.text_symbols && missing.iter().any(|&c| fallback::needs_symbols(c) && !fallback::is_emoji(c.encode_utf8(&mut [0; 4]))) {
                     self.fallbacks.text_symbols = true;
-                    self.add_symbol_files(direct_write::family_files(&["Segoe UI Symbol"]));
+                    const CHROMIUM: [&str; 4] = ["Segoe UI", "Arial", "Times New Roman", "Segoe UI Symbol"];
+                    self.add_symbol_files(direct_write::family_files(&CHROMIUM));
+                    // Ahead of the other symbol faces, in that order, wherever an earlier lookup
+                    // already put Segoe UI Symbol.
+                    let (mut text, rest): (Vec<_>, Vec<_>) = self.symbol_families.drain(..).partition(|f| CHROMIUM.contains(f));
+                    text.sort_by_key(|f| CHROMIUM.iter().position(|n| n == f));
+                    self.symbol_families = text.into_iter().chain(rest).collect();
                 }
                 self.fallbacks.asked.extend(missing.iter().copied());
                 self.add_symbol_files(direct_write::fallback_family_files(&missing, locale.as_deref()));

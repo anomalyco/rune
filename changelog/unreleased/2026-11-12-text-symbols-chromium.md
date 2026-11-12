@@ -1,0 +1,1 @@
+- **Windows: a text-form symbol the app's fonts lack draws in the face Chromium picks.** Chromium tries the page's families before the system fallback, and official's end `system-ui, "Segoe UI", sans-serif`. So ☺ draws in Arial and ℹ in Times New Roman, as in official, where Rune drew both in Segoe UI Symbol (larger). Symbols Inter has (✓ →) were already Inter's in both.
