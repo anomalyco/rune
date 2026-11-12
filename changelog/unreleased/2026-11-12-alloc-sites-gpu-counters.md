@@ -1,0 +1,1 @@
+- **rune: a measuring build's heap dumps list what the GPU device holds by kind (`alloc-sites`).** Textures and buffers with their bytes, views, bind groups, pipelines, command encoders, shader modules and memory allocations, from wgpu's counters: the suballocator's report was empty, since a device made with `MemoryHints::MemoryUsage` commits its resources one by one.
