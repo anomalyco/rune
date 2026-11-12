@@ -615,6 +615,8 @@ struct SwapChain {
     present_mode: wgt::PresentMode,
     format: wgt::TextureFormat,
     size: wgt::Extent3d,
+    /// Rune: what the next present changed (Surface::set_present_rects); empty is all of it.
+    dirty: Vec<Foundation::RECT>,
 }
 
 enum SurfaceTarget {
@@ -649,6 +651,15 @@ unsafe impl Sync for Surface {}
 impl Surface {
     pub fn swap_chain(&self) -> Option<Dxgi::IDXGISwapChain3> {
         Some(self.swap_chain.read().as_ref()?.raw.clone())
+    }
+
+    /// Rune: the only rectangles the next present changed, in the swap chain's pixels; the rest of
+    /// the buffer holds what the frame before showed. Cleared by the present.
+    pub fn set_present_rects(&self, rects: &[Foundation::RECT]) {
+        if let Some(sc) = self.swap_chain.write().as_mut() {
+            sc.dirty.clear();
+            sc.dirty.extend_from_slice(rects);
+        }
     }
 
     /// Returns the waitable handle associated with this swap chain, if any.
@@ -1535,7 +1546,9 @@ impl crate::Surface for Surface {
                     BufferUsage: Dxgi::DXGI_USAGE_RENDER_TARGET_OUTPUT,
                     BufferCount: swap_chain_buffer,
                     Scaling: Dxgi::DXGI_SCALING_STRETCH,
-                    SwapEffect: Dxgi::DXGI_SWAP_EFFECT_FLIP_DISCARD,
+                    // Rune: presenting part of a frame (Surface::set_present_rects, Present1's dirty
+                    // rectangles) needs the sequential flip model; FLIP_DISCARD can't.
+                    SwapEffect: Dxgi::DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
                     Flags: flags.0 as u32,
                 };
                 let swap_chain1 = match self.target {
@@ -1702,6 +1715,7 @@ impl crate::Surface for Surface {
             present_mode: config.present_mode,
             format: config.format,
             size: config.extent,
+            dirty: Vec::new(),
         });
 
         Ok(())
@@ -1838,9 +1852,22 @@ impl crate::Queue for Queue {
         };
 
         profiling::scope!("IDXGISwapchain3::Present");
-        unsafe { sc.raw.Present(interval, flags) }
-            .ok()
-            .into_device_result("Present")?;
+        let dirty = core::mem::take(&mut sc.dirty);
+        if dirty.is_empty() {
+            unsafe { sc.raw.Present(interval, flags) }
+                .ok()
+                .into_device_result("Present")?;
+        } else {
+            let params = Dxgi::DXGI_PRESENT_PARAMETERS {
+                DirtyRectsCount: dirty.len() as u32,
+                pDirtyRects: dirty.as_ptr().cast_mut(),
+                pScrollRect: core::ptr::null_mut(),
+                pScrollOffset: core::ptr::null_mut(),
+            };
+            unsafe { sc.raw.Present1(interval, flags, &params) }
+                .ok()
+                .into_device_result("Present1")?;
+        }
 
         Ok(())
     }

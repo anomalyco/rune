@@ -58,7 +58,9 @@ exclude = ["tools/rune-dev-guard", "vendor/accesskit_windows", "vendor/parley_en
 
 # wgpu-hal as published plus `vendor/wgpu-hal.patch`: `dx12::Instance::expose_adapter` (a `wgpu::Adapter` for the
 # one adapter Rune picks through DXGI, with no device made on the others, `gpu/pick.rs`) and FXC loaded on
-# the first compile rather than with the instance (Rune's uber shader is precompiled). Re-made by
+# the first compile rather than with the instance (Rune's uber shader is precompiled), and partial presents
+# (`Surface::set_present_rects`: `Present1` dirty rectangles on a sequential flip-model swap chain, for
+# `render::damaged`). Re-made by
 # `scripts/vendor-wgpu-hal.sh <version>` when wgpu is bumped. An app that builds Rune patches it too:
 # a dependency's `[patch]` doesn't apply to the workspace that depends on it.
 [patch.crates-io]

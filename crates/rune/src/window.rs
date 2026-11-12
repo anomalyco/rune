@@ -56,6 +56,8 @@ use covered_draw::{CoveredDraw, CoveredDrawEvent};
 mod look;
 #[cfg(target_os = "windows")]
 mod slot;
+#[cfg(target_os = "windows")]
+mod damage;
 use redraw::{Redraw, RedrawEffect, RedrawEvent};
 mod presented;
 pub(crate) use presented::Presented;
@@ -713,6 +715,9 @@ pub(crate) fn surface_config(surface: &wgpu::Surface, adapter: &wgpu::Adapter, (
     // backdrops, rune-fx blend modes). On Metal it costs `framebufferOnly`, but without it they
     // quietly fall back.
     config.usage |= caps.usages & wgpu::TextureUsages::COPY_SRC;
+    // A frame that redrew part of itself is copied in whole from the one the renderer keeps
+    // (`render::damaged`).
+    config.usage |= caps.usages & wgpu::TextureUsages::COPY_DST;
     config.present_mode = wgpu::PresentMode::AutoVsync;
     config.desired_maximum_frame_latency = FRAME_LATENCY;
     Some((config, crate::render::translucency::mode(surface, adapter)))

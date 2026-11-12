@@ -514,7 +514,7 @@ impl SurfaceRenderer {
     pub(super) fn live_planes(&self) -> usize {
         self.importer.as_ref().map_or(0, |i| i.live_planes.load(std::sync::atomic::Ordering::SeqCst))
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     pub(crate) fn draws_nothing(&self) -> bool {
         self.draws.is_empty()
     }
