@@ -29,6 +29,8 @@ mod atlas;
 mod atlas_fill;
 pub(crate) use atlas_fill::QueuedFill;
 mod case;
+mod collate;
+pub use collate::compare_names;
 mod colr;
 mod color_icon;
 mod cursor;
