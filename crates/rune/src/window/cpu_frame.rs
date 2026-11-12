@@ -291,6 +291,7 @@ impl<S: 'static> Host<S> {
         // The first frame, into the hidden window, then the window with it.
         crate::marks::mark("frame.first.begin");
         self.draw_cpu(false);
+        crate::marks::mark("frame.first.done");
         let Some(w) = self.win.as_ref() else { return Ok(()) };
         if !w.first_frame.ready() {
             // Only the GPU draws this frame (`start_gpu` began it): shown cloaked until it has.
@@ -303,6 +304,7 @@ impl<S: 'static> Host<S> {
         // screen, activating as the cloak lifts.
         if !w.native.cloak.held() {
             w.native.cloak.hold(&w.window, Instant::now() + win::READY_FALLBACK, focus);
+            crate::marks::mark("window.cloaked");
             w.window.set_visible(true);
             crate::marks::mark("window.visible");
         }
