@@ -63,9 +63,6 @@ fn run_configured(factory: Factory, args: Args, accessory: bool) -> Result<(), S
     }
     // While AppKit starts up.
     crate::render::prewarm_gpu();
-    // While winit makes its event loop: the first CPU frame's rounding needs it.
-    #[cfg(target_os = "windows")]
-    crate::gpu::pick::find_display_vendor_soon();
     #[allow(unused_mut)]
     let mut builder = EventLoop::<WakeEvent>::with_user_event();
     #[cfg(target_os = "macos")]
@@ -78,6 +75,11 @@ fn run_configured(factory: Factory, args: Args, accessory: bool) -> Result<(), S
     }
     let event_loop = builder.build().inspect_err(|_| crate::render::discard_prewarm()).map_err(event_loop_error)?;
     crate::marks::mark("loop.built");
+    // While the app sets up, after winit's first window: the first CPU frame's rounding needs it.
+    // Beside `EventLoop::new` it waited on the window manager's lock that window takes, and made
+    // it 1,134 µs slower.
+    #[cfg(target_os = "windows")]
+    crate::gpu::pick::find_display_vendor_soon();
     event_loop.set_control_flow(ControlFlow::Wait);
     #[cfg(target_os = "macos")]
     crate::platform::app_icon::launched();

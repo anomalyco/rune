@@ -1,0 +1,1 @@
+- **Windows: the display's GPU vendor is read after winit's event loop exists, not beside it.** Beside `EventLoop::new` its `EnumDisplayDevicesW` waited on the lock winit's first window takes, and made the event loop 1,134 µs slower; after it, the first window's path is 2,298 µs shorter than before #757 (p50, tabs10, n=10).
