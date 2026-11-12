@@ -389,7 +389,7 @@ impl<S: 'static> Runtime<S> {
         (self.end_same_group(f, holder) && kept(&far.content, self.end_content(f), upto)).then_some(f)
     }
 
-    /// Updates `anchor_end`, `focus_end` and each `VirtualList::pinned_rows`.
+    /// Updates the selection's `anchor_end` and far `end`, and each `VirtualList::pinned_rows`.
     pub(crate) fn sync_selection_pins(&mut self) {
         let Some(sel) = self.selectable.phase.selection() else {
             for v in self.virtuals.values_mut() {

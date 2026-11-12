@@ -33,6 +33,8 @@ mod scroll_hover;
 mod scroll_retarget;
 mod scroll_spring;
 mod secure_text;
+mod selection_phase;
+mod selection_phase_virtual;
 mod shimmer;
 mod springs;
 mod stream_overflow;
