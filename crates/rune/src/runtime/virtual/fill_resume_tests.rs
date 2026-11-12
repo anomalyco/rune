@@ -32,24 +32,29 @@ fn thinning() -> Runtime<Thinning> {
 }
 
 fn thinning_view(s: &Thinning, _: &mut Cx<Thinning>) -> El {
-    if s.gone { return col().key("empty").w_full().h_full(); }
+    if s.gone { return el().key("empty").w_full().h_full(); }
     let builds = s.builds.clone();
     let count = if s.short { 3 } else { ROWS };
-    col().w_full().h_full().child(
-        col().key("scroll").w_full().h(VIEWPORT).scroll(ScrollSpec { stick_bottom: false }).child(
-            col().key("rows").w_full().growth(GrowthSpec::default()).virtual_rows(
-                count,
-                ROW_H,
-                |_: &Thinning, i| format!("r{i}").into(),
-                move |_: &Thinning, i| {
-                    let n = builds.get();
-                    builds.set(n + 1);
-                    let height = if n < 12 { ROW_H } else { THIN };
-                    el().key(format!("r{i}")).w_full().h(height).fill(Color::WHITE)
-                },
-            ),
+    let list = col().key("scroll").w(300.0).h(VIEWPORT).scroll(ScrollSpec { stick_bottom: false }).child(
+        col().key("rows").w_full().growth(GrowthSpec::default()).virtual_rows(
+            count,
+            ROW_H,
+            |_: &Thinning, i| format!("r{i}").into(),
+            move |_: &Thinning, i| {
+                let n = builds.get();
+                builds.set(n + 1);
+                let height = if n < 12 { ROW_H } else { THIN };
+                el().key(format!("r{i}")).w_full().h(height).fill(Color::WHITE)
+            },
         ),
-    )
+    );
+    // A second viewport, so another scroller can move while the list waits.
+    let other = col().key("other").w(80.0).h(VIEWPORT).scroll(ScrollSpec { stick_bottom: false }).child(
+        col().key("other-rows").w_full().children(
+            (0..60).map(|i| el().key(format!("o{i}")).w_full().h(ROW_H).fill(Color::WHITE)),
+        ),
+    );
+    crate::row().w_full().h_full().child(list).child(other)
 }
 
 /// Draws while the runtime asks for a frame and wakes at any timer it armed, like a host does.
@@ -147,6 +152,42 @@ fn a_wake_after_the_list_unmounts_draws_nothing() {
     assert!(rt.clock >= due - 1e-9, "the deadline came due");
     assert_eq!(rt.virtual_fill.state(), State::Idle, "the unmounted list retires the wait, not resuming it");
     assert_eq!(rt.anim_sources & AnimSource::VIRTUAL_FILL, 0, "and the fill adds no frame");
+    assert_eq!(rt.wake_deadline(), None, "nothing is left armed");
+}
+
+/// r373: a list that unmounts mid-wait must not leave a deadline that turns away the first fill
+/// frame of the list that replaces it.
+#[test]
+fn a_replacement_list_draws_its_first_fill_frame() {
+    let mut rt = thinning();
+    let due = draw_to_wait(&mut rt);
+    rt.update(|s, _| s.gone = true);
+    // The frame the wake comes due in is also the one the list unmounts in.
+    rt.frame((due - rt.clock).max(1.0 / 120.0));
+    assert_eq!(rt.virtual_fill.state(), State::Idle, "the unmounted list retires the wait");
+    // The replacement starts exactly as a list that was never here: its first frame fills.
+    rt.update(|s, _| s.gone = false);
+    rt.frame(1.0 / 120.0);
+    assert_ne!(rt.anim_sources & AnimSource::VIRTUAL_FILL, 0, "the replacement's first fill frame draws");
+    assert!(matches!(rt.virtual_fill.state(), State::Filling { .. }), "and starts a run: {:?}", rt.virtual_fill.state());
+}
+
+/// r372: another viewport scrolling is not this list's invalidation, so the fill keeps the budget
+/// it has and still stops within its bound.
+#[test]
+fn an_unrelated_scroller_does_not_reset_the_fill() {
+    let mut rt = thinning();
+    let due = draw_to_wait(&mut rt);
+    rt.wheel(340.0, 100.0, -60.0);
+    rt.frame(1.0 / 120.0);
+    assert!(rt.clock < due, "the frame is before the fill's deadline");
+    assert!(
+        matches!(rt.virtual_fill.state(), State::Waiting { .. }),
+        "another scroller leaves the wait alone: {:?}",
+        rt.virtual_fill.state()
+    );
+    let frames = draw_while_asked(&mut rt, false);
+    assert!(frames < 4_000, "the fill still stops: {frames} frames");
     assert_eq!(rt.wake_deadline(), None, "nothing is left armed");
 }
 

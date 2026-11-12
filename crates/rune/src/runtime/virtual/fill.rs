@@ -68,15 +68,6 @@ pub(crate) enum FillEffect {
     WakeAt(f64),
 }
 
-/// A deadline that came due.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) enum Wake {
-    /// The state still holds its attempt: resume the fill.
-    Resume(Attempt),
-    /// Its attempt is gone: the deadline draws nothing, and starts nothing.
-    Stale,
-}
-
 impl Fill {
     /// Whether the next frame reaches this run's bound, so the caller reads `missing` for it.
     pub(super) fn at_bound(&self) -> bool {
@@ -84,25 +75,19 @@ impl Fill {
     }
 
     /// Takes this fill's armed deadline when it has come due: `None` before it, or once it has
-    /// been taken. Whether its attempt still stands decides between resuming and nothing at all.
-    pub(super) fn wake(&mut self, now: f64) -> Option<Wake> {
+    /// been taken. The fill clears it when it leaves the wait, so this only answers for the run
+    /// that armed it.
+    pub(super) fn wake(&mut self, now: f64) -> Option<Attempt> {
         let (attempt, due) = self.wake?;
         if now < due { return None; }
         self.wake = None;
-        Some(match self.state {
-            State::Waiting { attempt: held, .. } if held == attempt => Wake::Resume(attempt),
-            _ => Wake::Stale,
-        })
+        Some(attempt)
     }
 
-    /// Whether an armed deadline is due at `now` with an attempt the state still holds, so a
-    /// resting window draws the frame that resumes it.
+    /// Whether an armed deadline is due at `now`, so a resting window draws the frame that
+    /// resumes it.
     pub(super) fn resuming(&self, now: f64) -> bool {
-        self.wake.is_some_and(|(attempt, due)| now >= due && self.holds(attempt))
-    }
-
-    fn holds(&self, attempt: Attempt) -> bool {
-        matches!(self.state, State::Waiting { attempt: held, .. } if held == attempt)
+        self.wake.is_some_and(|(_, due)| now >= due)
     }
 
     /// Arms this fill's deadline at `due` for `attempt`.
@@ -111,6 +96,15 @@ impl Fill {
     }
 
     pub(crate) fn step(&mut self, event: FillEvent) -> Effects<FillEffect> {
+        let effects = self.transition(event);
+        // Only a wait owns the deadline. Once the fill leaves it (nothing wanted, a moved
+        // viewport, the bound), that deadline is spent bookkeeping: it can neither draw for this
+        // fill nor turn away the first frame a list that replaces it wants.
+        if !matches!(self.state, State::Waiting { .. }) { self.wake = None; }
+        effects
+    }
+
+    fn transition(&mut self, event: FillEvent) -> Effects<FillEffect> {
         match (self.state, event) {
             // No list wants a frame: the run is over, and any wait it left retires.
             (_, FillEvent::Frame { wanted: false, .. }) => {
@@ -160,7 +154,6 @@ impl Fill {
             (State::Waiting { attempt, due, best, resumes }, FillEvent::Due { attempt: a, now })
                 if attempt == a && now >= due =>
             {
-                self.wake = None;
                 self.state = State::Filling { frames: 1, best, resumes };
                 Effects::one(FillEffect::Draw)
             }

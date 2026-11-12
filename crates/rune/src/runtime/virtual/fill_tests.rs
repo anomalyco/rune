@@ -1,5 +1,5 @@
 //! The fill machine against origin/dev's counter, and the wait that resumes a starved fill.
-use super::{FILL_FRAMES, Fill, FillEffect, FillEvent, RESUME_LIMIT, State, Wake};
+use super::{FILL_FRAMES, Fill, FillEffect, FillEvent, RESUME_LIMIT, State};
 use crate::machine::{Attempt, Effects};
 
 /// origin/dev's `Runtime::virtual_filling`, transcribed as it was: `Runtime.virtual_fill: u32`
@@ -42,8 +42,7 @@ fn run_to_bound(fill: &mut Fill, now: f64, missing: usize) -> Option<(f64, Attem
 /// stale one draws nothing, and any other frame counts as a fill frame. Returns whether it drew.
 fn frame(fill: &mut Fill, now: f64, missing: usize, deadlines: &mut Vec<f64>) -> bool {
     match fill.wake(now) {
-        Some(Wake::Resume(attempt)) => !fill.step(FillEvent::Due { attempt, now }).is_empty(),
-        Some(Wake::Stale) => false,
+        Some(attempt) => !fill.step(FillEvent::Due { attempt, now }).is_empty(),
         None => {
             let count = if fill.at_bound() { missing } else { 0 };
             let effects = fill.step(FillEvent::Frame { now, wanted: true, missing: count, moved: false });
@@ -181,13 +180,16 @@ fn a_wake_after_the_list_is_gone_draws_nothing() {
     let (due, attempt) = run_to_bound(&mut fill, 0.0, 4).expect("the bound asks for a wake");
     assert!(matches!(fill.state(), State::Waiting { .. }));
 
-    // The list finishes or unmounts: the wait retires with it.
+    // The list finishes or unmounts: the wait retires with it, and its deadline is forgotten.
     assert!(fill.step(FillEvent::Frame { now: 0.1, wanted: false, missing: 0, moved: false }).is_empty());
     assert_eq!(fill.state(), State::Idle);
     assert!(!fill.resuming(due), "a retired deadline resumes nothing");
-    assert_eq!(fill.wake(due), Some(Wake::Stale), "the deadline it left is stale");
+    assert_eq!(fill.wake(due), None, "the deadline it left is no longer the fill's");
     assert!(fill.step(FillEvent::Due { attempt, now: due }).is_empty(), "and draws nothing");
     assert_eq!(fill.state(), State::Idle);
+    // A list that replaces it starts exactly as one that was never here: its first frame draws.
+    assert!(fill.step(FillEvent::Frame { now: due + 1.0, wanted: true, missing: 8, moved: false })
+        .into_iter().any(|e| e == FillEffect::Draw));
 }
 
 /// A resume that finds the unfilled range smaller counts as progress and resets the bound, so a

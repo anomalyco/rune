@@ -1,7 +1,7 @@
 //! Virtual lists between commits: whether a window wants moving, and which rows show.
 
 use super::*;
-use super::virtual_fill::{FillEffect, FillEvent, Wake};
+use super::virtual_fill::{FillEffect, FillEvent};
 
 impl<S: 'static> Runtime<S> {
     pub(super) fn virtual_window_changed(&self) -> bool {
@@ -62,6 +62,18 @@ impl<S: 'static> Runtime<S> {
             .map_or((0.0, false), |s| ((s.offset as f32 - v.top).max(0.0), s.pinned()))
     }
 
+    /// Whether an index-built list wants its window moved, and whether one of those lists' own
+    /// viewports moved this frame. Another viewport's motion invalidates nothing here.
+    fn virtual_demand(&self) -> (bool, bool) {
+        let (mut wanted, mut moved) = (false, false);
+        for (path, v) in &self.virtuals {
+            if !v.indexed || !self.wants_window(path, v) { continue; }
+            wanted = true;
+            moved |= self.path_ids.get(&v.scroll_path).and_then(|id| self.scrolls.get(id)).is_some_and(|s| s.moving());
+        }
+        (wanted, moved)
+    }
+
     /// Rows an index-built list still has to mount across the lists that want a window moved;
     /// zero when every one of them is filled.
     fn virtual_unfilled(&self) -> usize {
@@ -80,23 +92,20 @@ impl<S: 'static> Runtime<S> {
     /// the unfilled range stops shrinking.
     pub(super) fn virtual_filling(&mut self) -> bool {
         let now = self.clock;
-        let wanted = self.virtuals.iter().any(|(path, v)| v.indexed && self.wants_window(path, v));
+        let (wanted, moved) = self.virtual_demand();
         // A wake must draw nothing for a list that finished, unmounted or stopped filling: it
         // retires the wait, and the deadline it left draws no frame of its own.
         if !wanted {
             self.virtual_fill.step(FillEvent::Frame { now, wanted: false, missing: 0, moved: false });
             return false;
         }
-        // The fill's own deadline. Only an attempt it still holds resumes; any other is stale
-        // and draws nothing, rather than counting as a frame drawn for another cause.
-        match self.virtual_fill.wake(now) {
-            Some(Wake::Resume(attempt)) => return !self.virtual_fill.step(FillEvent::Due { attempt, now }).is_empty(),
-            Some(Wake::Stale) => return false,
-            None => {}
+        // The fill's own deadline, which it clears when it leaves the wait: a deadline a retired
+        // run left behind is not this call's cause, so the frame is read as any other.
+        if let Some(attempt) = self.virtual_fill.wake(now) {
+            return !self.virtual_fill.step(FillEvent::Due { attempt, now }).is_empty();
         }
         // The count is only read at the bound, so a fill that finishes inside it costs none.
         let missing = if self.virtual_fill.at_bound() { self.virtual_unfilled() } else { 0 };
-        let moved = self.scrolling();
         let mut draw = false;
         for effect in self.virtual_fill.step(FillEvent::Frame { now, wanted, missing, moved }) {
             match effect {
