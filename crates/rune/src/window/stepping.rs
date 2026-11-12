@@ -101,7 +101,11 @@ impl<S: 'static> Host<S> {
         }
         // After the first frame: files can only be dragged onto a window a person has seen.
         #[cfg(target_os = "windows")]
-        if let Some(w) = &self.win { crate::platform::win32::drop_target::install(&w.window); }
+        if let Some(w) = &self.win {
+            crate::platform::win32::drop_target::install(&w.window);
+            // Win+L wipes a secret left on the clipboard.
+            crate::platform::win32::session_lock::install(&w.window);
+        }
         #[cfg(not(target_arch = "wasm32"))]
         crate::platform::ready_signal::ready();
     }

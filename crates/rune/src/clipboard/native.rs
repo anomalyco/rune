@@ -54,6 +54,12 @@ fn worker() -> &'static mpsc::Sender<Request> {
 }
 
 /// Called by the shared event-loop exit path, including overlay-only applications.
+/// `clipboard::clear_secret_now`: the worker clears the last secret if it still holds the clipboard.
+#[cfg(target_os = "windows")]
+pub(super) fn clear_secret_now() {
+    if let Some(w) = WORKER.get() { let _ = w.sender.send(Request::Clear(None)); }
+}
+
 pub(super) fn shutdown() {
     if let Some(worker) = WORKER.get() { worker.stop(); }
 }

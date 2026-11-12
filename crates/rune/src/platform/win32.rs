@@ -25,6 +25,7 @@ pub(crate) mod occlusion;
 mod placement;
 pub(crate) mod press_point;
 mod pointer;
+pub(crate) mod session_lock;
 pub(crate) mod taskbar;
 
 pub(crate) use cloak::Cloak;

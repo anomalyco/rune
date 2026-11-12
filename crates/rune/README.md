@@ -1331,6 +1331,7 @@ history-exclusion marker and expires on Rune's shared clipboard worker. Expiry
 compares the current text and, on macOS/Windows, the clipboard revision; copying
 something else cancels the old expiry. Linux's portable API exposes no revision,
 so it compares text. Clipboard managers must honor the platform marker themselves.
+On Windows, locking the session (Win+L) clears a secret still on the clipboard at once.
 
 Put `.on_paste(|s: &mut State, text: &str, tx| { ... })` on the view root (or modal
 root) to handle Cmd/Ctrl-V when no field is focused. `tx.request_paste()` requests

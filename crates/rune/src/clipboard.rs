@@ -263,6 +263,13 @@ impl Backend for Board {
     fn clear(&mut self) -> Result<(), String> { self.content = None; self.revision += 1; Ok(()) }
 }
 
+/// Wipes the secret Rune copied last, if the clipboard still holds it, from outside any handler
+/// (the session locking, `platform::win32::session_lock`). Nothing was copied yet: nothing to do.
+#[cfg(target_os = "windows")]
+pub(crate) fn clear_secret_now() {
+    native::clear_secret_now();
+}
+
 /// Called by the shared event-loop exit path, including overlay-only applications.
 pub(crate) fn shutdown() {
     #[cfg(not(target_arch = "wasm32"))]
