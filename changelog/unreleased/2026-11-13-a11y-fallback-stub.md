@@ -1,0 +1,1 @@
+- Focus: when the element that had focus sat in a part the old tree keeps only as a moved stub (a region kept from an earlier commit, a virtual row), focus goes to its nearest container in the new tree that takes focus, else that container's first control, rather than to nothing (a diff line whose comment box Escape closed).

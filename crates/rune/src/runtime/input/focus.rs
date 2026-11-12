@@ -401,7 +401,7 @@ impl<S: 'static> Runtime<S> {
         // A field that Escape blurred and that then closed (a comment box cancelled, gone once
         // its exit ends) counts as focused: the keyboard was on it, and nothing took focus since.
         let gone = self.focus.path().or_else(|| self.focus.now_or_blurred().or(self.focus.tab_start()).filter(|_| self.focus.keyboard()))?;
-        let at = self.nodes.iter().position(|n| n.path == gone)?;
+        let Some(at) = self.nodes.iter().position(|n| n.path == gone) else { return self.fallback_in_new(gone, nodes) };
         if self.focus.path().is_none() && (self.nodes[at].input.is_none() || nodes.iter().any(|n| n.path == gone)) { return None; }
         if self.active_modal().is_some_and(|m| at >= m && self.modal_member(at)) { return None; }
         let new: rustc_hash::FxHashMap<&str, usize> = nodes.iter().enumerate().map(|(j, n)| (n.path.as_str(), j)).collect();
@@ -426,6 +426,24 @@ impl<S: 'static> Runtime<S> {
                 }
             }
             scope = self.nodes[s].parent;
+        }
+        None
+    }
+    /// [`Self::focus_fallback`] when the old tree holds the part that had focus only as a moved
+    /// stub (a region kept from an earlier commit, a virtual row): the nearest container of it in
+    /// the new tree takes focus when it can (a diff line whose comment box closed), else its first
+    /// control.
+    fn fallback_in_new(&self, gone: &str, nodes: &[Node]) -> Option<String> {
+        if self.active_modal().is_some() || nodes.iter().any(|n| n.path == gone) { return None; }
+        let can = |j: usize| !nodes[j].inert && nodes[j].vis.opacity > 0.0
+            && std::iter::successors(nodes[j].parent, |&p| nodes[p].parent).all(|p| !nodes[p].inert && nodes[p].vis.opacity > 0.0)
+            && (self.takes_focus(&nodes[j]) || nodes[j].input.as_ref().is_some_and(|i| i.access.is_some()));
+        let mut p = gone;
+        while let Some(k) = p.rfind('/') {
+            p = &p[..k];
+            let Some(j) = nodes.iter().position(|n| n.path == p) else { continue };
+            let inside = |m: usize| nodes[m].path.len() > p.len() && nodes[m].path.starts_with(p) && nodes[m].path.as_bytes()[p.len()] == b'/';
+            return std::iter::once(j).chain((j + 1..nodes.len()).take_while(|&m| inside(m))).find(|&m| can(m)).map(|m| nodes[m].path.clone());
         }
         None
     }
