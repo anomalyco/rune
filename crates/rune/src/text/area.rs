@@ -1,0 +1,419 @@
+//! Icon elements covered as Chromium covers them. Chromium rasters an inline SVG on the GPU with
+//! Skia's Ganesh, which first simplifies each shape (`GrStyledShape`) and then picks an op for
+//! what's left. Measured on Desktop at true 1, 1.25, 1.5, 1.875 and 2x
+//! (`harness/probe-icon-coverage.ts` with every Desktop icon and `proof/.../icons/shapes`):
+//!
+//! - **A rectangle** (a closed axis-aligned rect path, or a straight axis-aligned line stroked
+//!   with butt or square caps, which Ganesh turns into a filled one): the ramp to its nearest
+//!   edge, where a ramp is half a pixel plus the distance inside, clamped, so a corner pixel is the
+//!   lesser of its two edges' cover. Stroked with mitred corners, its outer rect's ramp less its
+//!   inner one's. (Ganesh batches rects into one op, and a batch holding a turned quad covers all
+//!   of them by the product of their edges instead: on Desktop only `appearance` has one.)
+//! - **A stroked turned line**, butt or square: the ramp to its outline's nearest edge.
+//! - **A rounded rect, a circle, or an axis-aligned line with round caps** (a capsule, which
+//!   Ganesh turns into a round rect): the ramp of the round rect's distance; stroked, the outer
+//!   ramp times the inner one's complement.
+//! - **A stroke a device pixel wide or less**, of anything else: Ganesh's hairlines
+//!   (`super::convex::hairline`), at the width's share of full coverage.
+//! - **A closed convex path stroked with mitred or bevelled joins**, or **a convex fill** (a
+//!   stroke's outline counts once it's applied): Ganesh's own geometry (`super::convex`).
+//! - **Anything else** (more than one subpath, a polyline, round joins): Skia's stroker and its
+//!   analytic scan converter (`super::aaa`) into a mask of the path's own, as Ganesh's small-path
+//!   renderer does it, so where the icon lands doesn't change its pixels.
+//!
+//! Two of Chromium's choices aren't followed: a `<circle>` whose float box isn't exactly square
+//! goes to the path renderers rather than the circle op, and an SVG arc stays a conic in Skia's
+//! path where Rune's parser makes cubics.
+
+use swash::zeno::{Cap, Command, Fill, Join, Point, Transform};
+
+/// An icon element as Chromium hands it to Skia: a path, or a shape Blink draws as itself.
+pub(super) enum Shape<'a> {
+    Path(&'a [Command]),
+    /// `<circle>`, `<ellipse>`: centre and radii, in user units.
+    Oval { center: Point, radii: Point },
+    /// `<rect>` with corners rounded `r`, in user units.
+    Rounded { lo: Point, hi: Point, r: f32 },
+}
+
+/// How a stroke is drawn: its width in user units, caps, joins and miter limit.
+pub(super) struct Pen {
+    pub width: f32,
+    pub cap: Cap,
+    pub join: Join,
+    pub miter_limit: f32,
+}
+
+/// The op Chromium draws one element's fill (no `pen`) or stroke with, in device pixels.
+pub(super) enum Op {
+    /// A stroke at most a device pixel wide, this wide: `super::hairline`.
+    Hairline(f32),
+    /// An axis-aligned rect, `[min, max]`: its ramp, less an inner one's for a mitred stroke.
+    Rect { outer: [Point; 2], inner: Option<[Point; 2]> },
+    /// A turned straight stroke's outline: the ramp to its nearest edge.
+    Quad([Point; 4]),
+    /// A round rect's ramp, less a hole's for a stroke.
+    Round { outer: Round, inner: Option<Round> },
+    /// A closed convex path stroked with mitred or bevelled joins: Ganesh's convex tessellator
+    /// (`super::convex`).
+    ConvexStroke,
+    /// Skia's stroker and analytic scan converter.
+    Path,
+}
+
+/// A round rect in device pixels: `[min, max]` and its corners' radius (half its short side
+/// for a circle or a capsule).
+#[derive(Clone, Copy)]
+pub(super) struct Round {
+    lo: Point,
+    hi: Point,
+    r: f32,
+}
+
+/// The op for `shape` under `ctm`: filled with no `pen`, else stroked with it.
+pub(super) fn op(shape: &Shape<'_>, ctm: Transform, pen: Option<&Pen>) -> Op {
+    let scale = (ctm.xx * ctm.yy - ctm.xy * ctm.yx).abs().sqrt();
+    let upright = ctm.xy == 0.0 && ctm.yx == 0.0 && ctm.xx.abs() == ctm.yy.abs();
+    let hw = pen.map_or(0.0, |p| p.width * scale * 0.5);
+    match shape {
+        Shape::Oval { center, radii } => {
+            if !upright || radii.x != radii.y {
+                // An ellipse goes to Ganesh's path renderers as the oval path it is.
+                return match pen {
+                    Some(p) if linearizes(p, scale, ctm) => Op::ConvexStroke,
+                    _ => thin(pen, scale),
+                };
+            }
+            let c = ctm.transform_point(*center);
+            let r = radii.x * scale;
+            ring(Round { lo: Point::new(c.x - r, c.y - r), hi: Point::new(c.x + r, c.y + r), r }, pen.map(|_| hw))
+        }
+        Shape::Rounded { lo, hi, r } => {
+            if !upright {
+                return thin(pen, scale);
+            }
+            let (a, b) = (ctm.transform_point(*lo), ctm.transform_point(*hi));
+            let (lo, hi) = (Point::new(a.x.min(b.x), a.y.min(b.y)), Point::new(a.x.max(b.x), a.y.max(b.y)));
+            ring(Round { lo, hi, r: r * scale }, pen.map(|_| hw))
+        }
+        Shape::Path(path) => {
+            if let Some(r) = rect_corners(path, ctm) {
+                return match pen {
+                    None => Op::Rect { outer: r, inner: None },
+                    Some(p) if p.join == Join::Miter => {
+                        let hollow = r[1].x - r[0].x > 2.0 * hw && r[1].y - r[0].y > 2.0 * hw;
+                        Op::Rect { outer: grow(r, hw), inner: hollow.then(|| grow(r, -hw)) }
+                    }
+                    Some(_) => thin(pen, scale),
+                };
+            }
+            match (pen, path) {
+                // `AALinearizingConvexPathRenderer` takes these, a device pixel wide to twenty.
+                (Some(p), _) if linearizes(p, scale, ctm) && super::convex::closed_convex(&super::convex::elements(path)) => Op::ConvexStroke,
+                (Some(p), [Command::MoveTo(a), Command::LineTo(b)]) => line(ctm.transform_point(*a), ctm.transform_point(*b), p.cap, hw, upright)
+                    .unwrap_or_else(|| thin(pen, scale)),
+                _ => thin(pen, scale),
+            }
+        }
+    }
+}
+
+/// Whether `AALinearizingConvexPathRenderer` takes a closed convex path stroked with `pen`:
+/// mitred or bevelled, a device pixel wide to twenty, under a similarity.
+fn linearizes(pen: &Pen, scale: f32, ctm: Transform) -> bool {
+    // Ganesh's hairline renderer comes first in its chain and takes a stroke a pixel wide.
+    pen.join != Join::Round && pen.width * scale > 1.0 + 1.0 / 256.0 && pen.width * scale <= 20.0 && is_similarity(ctm)
+}
+
+/// Skia's elements for `shape`: an oval as `SkPath::addOval` makes it, conics and all.
+pub(super) fn elements(shape: &Shape<'_>) -> Vec<super::convex::El> {
+    match shape {
+        Shape::Path(path) => super::convex::elements(path),
+        Shape::Oval { center, radii } => super::convex::oval(super::convex::V::new(center.x, center.y), super::convex::V::new(radii.x, radii.y)),
+        Shape::Rounded { .. } => Vec::new(),
+    }
+}
+
+/// Whether `ctm` keeps shapes' angles and proportions (`SkMatrix::isSimilarity`).
+fn is_similarity(ctm: Transform) -> bool {
+    let (a, b, c, d) = (ctm.xx, ctm.xy, ctm.yx, ctm.yy);
+    (a * a + b * b - (c * c + d * d)).abs() <= 1.0 / 4096.0 && (a * c + b * d).abs() <= 1.0 / 4096.0
+}
+
+/// A path's op once nothing simpler takes it: a hairline for a stroke a device pixel wide or
+/// less, else Skia's scan converter.
+fn thin(pen: Option<&Pen>, scale: f32) -> Op {
+    match pen {
+        Some(p) if p.width * scale <= 1.0 + 1.0 / 256.0 => Op::Hairline(p.width * scale),
+        _ => Op::Path,
+    }
+}
+
+/// A round rect filled (no `hw`) or stroked `2 hw` wide.
+fn ring(shape: Round, hw: Option<f32>) -> Op {
+    let Some(hw) = hw else { return Op::Round { outer: shape, inner: None } };
+    let outer = Round { lo: Point::new(shape.lo.x - hw, shape.lo.y - hw), hi: Point::new(shape.hi.x + hw, shape.hi.y + hw), r: shape.r + hw };
+    let inner = Round { lo: Point::new(shape.lo.x + hw, shape.lo.y + hw), hi: Point::new(shape.hi.x - hw, shape.hi.y - hw), r: (shape.r - hw).max(0.0) };
+    let hollow = inner.hi.x > inner.lo.x && inner.hi.y > inner.lo.y;
+    Op::Round { outer, inner: hollow.then_some(inner) }
+}
+
+/// A straight stroke from `a` to `b` (device pixels) `2 hw` wide, as Ganesh simplifies it: a
+/// point with round caps is a circle and with square ones a square; an axis-aligned line is a
+/// filled rect (a capsule with round caps); a turned one stroked butt or square is its quad.
+/// Ganesh simplifies the line before it looks at the width, so a line a pixel wide is one of these
+/// too; only one under a pixel is left to its hairline renderer.
+fn line(a: Point, b: Point, cap: Cap, hw: f32, upright: bool) -> Option<Op> {
+    let (ext, thin) = (if cap == Cap::Butt { 0.0 } else { hw }, hw * 2.0 < 1.0 - 1.0 / 256.0);
+    let (lo, hi) = (Point::new(a.x.min(b.x), a.y.min(b.y)), Point::new(a.x.max(b.x), a.y.max(b.y)));
+    if upright && (a.x == b.x || a.y == b.y) {
+        let (ox, oy) = if a.y == b.y && a.x != b.x { (ext, hw) } else if a.x == b.x && a.y != b.y { (hw, ext) } else { (ext, ext) };
+        let (lo, hi) = (Point::new(lo.x - ox, lo.y - oy), Point::new(hi.x + ox, hi.y + oy));
+        return match cap {
+            _ if hi.x <= lo.x || hi.y <= lo.y => None,
+            Cap::Round => Some(Op::Round { outer: Round { lo, hi, r: hw }, inner: None }),
+            _ if thin => None,
+            _ => Some(Op::Rect { outer: [lo, hi], inner: None }),
+        };
+    }
+    let len = (b.x - a.x).hypot(b.y - a.y);
+    if cap == Cap::Round || thin || len < 1e-6 {
+        return None;
+    }
+    let (ux, uy) = ((b.x - a.x) / len, (b.y - a.y) / len);
+    let (a, b) = (Point::new(a.x - ux * ext, a.y - uy * ext), Point::new(b.x + ux * ext, b.y + uy * ext));
+    let (nx, ny) = (-uy * hw, ux * hw);
+    Some(Op::Quad([Point::new(a.x + nx, a.y + ny), Point::new(b.x + nx, b.y + ny), Point::new(b.x - nx, b.y - ny), Point::new(a.x - nx, a.y - ny)]))
+}
+
+impl Op {
+    /// Covers `out` (`px` × `px`) with an op that needs no path.
+    pub(super) fn render(&self, px: u32, out: &mut [u8]) {
+        let n = px as usize;
+        for y in 0..n {
+            for x in 0..n {
+                let q = Point::new(x as f32 + 0.5, y as f32 + 0.5);
+                let c = match self {
+                    Op::Rect { outer, inner } => ramp(inside_rect(outer, q)) - inner.as_ref().map_or(0.0, |r| ramp(inside_rect(r, q))),
+                    Op::Quad(quad) => ramp(inside_quad(quad, q)),
+                    Op::Round { outer, inner } => ramp(outer.inside(q)) * inner.map_or(1.0, |r| ramp(-r.inside(q))),
+                    Op::Hairline(_) | Op::Path | Op::ConvexStroke => 0.0,
+                };
+                out[y * n + x] = (c.clamp(0.0, 1.0) * 255.0).round() as u8;
+            }
+        }
+    }
+}
+
+impl Round {
+    /// How far `q` is inside the round rect's edge (negative outside).
+    fn inside(&self, q: Point) -> f32 {
+        let (cx, cy) = ((self.lo.x + self.hi.x) * 0.5, (self.lo.y + self.hi.y) * 0.5);
+        let r = self.r.min((self.hi.x - self.lo.x) * 0.5).min((self.hi.y - self.lo.y) * 0.5);
+        let dx = (q.x - cx).abs() - ((self.hi.x - self.lo.x) * 0.5 - r);
+        let dy = (q.y - cy).abs() - ((self.hi.y - self.lo.y) * 0.5 - r);
+        r - (dx.max(0.0).hypot(dy.max(0.0)) + dx.max(dy).min(0.0))
+    }
+}
+
+fn ramp(inside: f32) -> f32 {
+    (0.5 + inside).clamp(0.0, 1.0)
+}
+
+fn grow([lo, hi]: [Point; 2], by: f32) -> [Point; 2] {
+    [Point::new(lo.x - by, lo.y - by), Point::new(hi.x + by, hi.y + by)]
+}
+
+/// How far `q` is inside the rect's nearest edge (negative outside).
+fn inside_rect([lo, hi]: &[Point; 2], q: Point) -> f32 {
+    (q.x - lo.x).min(hi.x - q.x).min(q.y - lo.y).min(hi.y - q.y)
+}
+
+/// How far `q` is inside the convex quad's nearest edge, either winding.
+fn inside_quad(quad: &[Point; 4], q: Point) -> f32 {
+    let wind = {
+        let (a, b, c) = (quad[0], quad[1], quad[2]);
+        ((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)).signum()
+    };
+    (0..4)
+        .map(|i| {
+            let (a, b) = (quad[i], quad[(i + 1) % 4]);
+            let len = (b.x - a.x).hypot(b.y - a.y).max(1e-6);
+            wind * ((b.x - a.x) * (q.y - a.y) - (b.y - a.y) * (q.x - a.x)) / len
+        })
+        .fold(f32::MAX, f32::min)
+}
+
+/// Covers `out` (`px` × `px`, cleared first) with `shape` under `ctm` as Skia's analytic scan
+/// converter does (`super::aaa`): stroked first, if `pen`, as Skia strokes (in user space, its
+/// curves approximated for the device scale, then mapped to device pixels).
+pub(super) fn render_aaa(shape: &Shape<'_>, pen: Option<&Pen>, fill: Fill, ctm: Transform, origin: Point, px: u32, out: &mut [u8]) {
+    out.iter_mut().for_each(|b| *b = 0);
+    let shape_in = shape;
+    let ts = tiny_skia_path::Transform::from_row(ctm.xx, ctm.xy, ctm.yx, ctm.yy, ctm.x, ctm.y);
+    let res = tiny_skia_path::PathStroker::compute_resolution_scale(&ts);
+    let Some(user) = skia_path(shape, 0.25 / res) else { return };
+    let shape = match pen {
+        Some(p) => {
+            let stroke = tiny_skia_path::Stroke {
+                width: p.width,
+                miter_limit: p.miter_limit,
+                line_cap: match p.cap {
+                    Cap::Butt => tiny_skia_path::LineCap::Butt,
+                    Cap::Round => tiny_skia_path::LineCap::Round,
+                    Cap::Square => tiny_skia_path::LineCap::Square,
+                },
+                line_join: match p.join {
+                    Join::Miter => tiny_skia_path::LineJoin::Miter,
+                    Join::Round => tiny_skia_path::LineJoin::Round,
+                    Join::Bevel => tiny_skia_path::LineJoin::Bevel,
+                },
+                dash: None,
+            };
+            user.stroke(&stroke, res)
+        }
+        None => Some(user),
+    };
+    let Some(outline) = shape else { return };
+    // Filled (a stroke's outline, once it's applied), a convex path whose winding Skia knows
+    // takes Ganesh's convex fill; one with no area, nothing.
+    let els = match (pen, shape_in) {
+        (None, Shape::Oval { .. }) => elements(shape_in),
+        _ => super::convex::elements(&commands(&outline)),
+    };
+    if let Some(dir) = super::convex::direction(&els).filter(|&d| d != 0) {
+        let placed = Transform { x: ctm.x + origin.x, y: ctm.y + origin.y, ..ctm };
+        if let Some(mesh) = super::convex::fill(&els, placed, dir) {
+            super::convex::fill_quad_edges(&mesh, [origin.x, origin.y], px, out);
+        }
+        return;
+    }
+    let rule = match (pen, fill) {
+        (None, Fill::EvenOdd) => super::aaa::Rule::EvenOdd,
+        _ => super::aaa::Rule::NonZero,
+    };
+    // As Ganesh's small-path renderer does it: into a mask of its own, the transform's whole
+    // pixels taken out and the path's bounds a pixel in from the mask's corner. Where the path
+    // ends up on the device doesn't change how its floats round.
+    let (fx, fy) = (ctm.x - ctm.x.floor(), ctm.y - ctm.y.floor());
+    let frac = tiny_skia_path::Transform::from_row(ctm.xx, ctm.xy, ctm.yx, ctm.yy, fx, fy);
+    let b = outline.bounds();
+    let corners = [(b.left(), b.top()), (b.right(), b.top()), (b.left(), b.bottom()), (b.right(), b.bottom())].map(|(x, y)| {
+        let mut p = [tiny_skia_path::Point::from_xy(x, y)];
+        frac.map_points(&mut p);
+        p[0]
+    });
+    let (l, t) = corners.iter().fold((f32::MAX, f32::MAX), |(l, t), p| (l.min(p.x), t.min(p.y)));
+    let (r, btm) = corners.iter().fold((f32::MIN, f32::MIN), |(r, b), p| (r.max(p.x), b.max(p.y)));
+    let (dx, dy) = (l.floor(), t.floor());
+    let (w, h) = ((r.ceil() - dx) as usize + 2, (btm.ceil() - dy) as usize + 2);
+    let Some(device) = outline.transform(frac.post_translate(1.0 - dx, 1.0 - dy)) else { return };
+    let mut mask = vec![0u8; w * h];
+    super::aaa::fill(&device, rule, w, h, &mut mask);
+    let (ox, oy) = ((ctm.x.floor() + dx) as i64 - 1, (ctm.y.floor() + dy) as i64 - 1);
+    let n = px as i64;
+    for y in 0..h as i64 {
+        for x in 0..w as i64 {
+            let (cx, cy) = (ox + x, oy + y);
+            if (0..n).contains(&cx) && (0..n).contains(&cy) {
+                out[(cy * n + cx) as usize] = mask[(y * w as i64 + x) as usize];
+            }
+        }
+    }
+}
+
+/// `path` as commands.
+fn commands(path: &tiny_skia_path::Path) -> Vec<Command> {
+    let p = |q: tiny_skia_path::Point| Point::new(q.x, q.y);
+    path.segments()
+        .map(|s| match s {
+            tiny_skia_path::PathSegment::MoveTo(a) => Command::MoveTo(p(a)),
+            tiny_skia_path::PathSegment::LineTo(a) => Command::LineTo(p(a)),
+            tiny_skia_path::PathSegment::QuadTo(a, b) => Command::QuadTo(p(a), p(b)),
+            tiny_skia_path::PathSegment::CubicTo(a, b, c) => Command::CurveTo(p(a), p(b), p(c)),
+            tiny_skia_path::PathSegment::Close => Command::Close,
+        })
+        .collect()
+}
+
+/// `shape` as Skia's path type, its conics cut into quads `tolerance` user units from them at
+/// most: an oval as `SkPath::addOval` builds it (four conics), a round rect as `addRRect` does.
+fn skia_path(shape: &Shape<'_>, tolerance: f32) -> Option<tiny_skia_path::Path> {
+    let mut b = tiny_skia_path::PathBuilder::new();
+    b.set_conic_tolerance(tolerance);
+    match shape {
+        Shape::Path(path) => {
+            for cmd in path.iter() {
+                match *cmd {
+                    Command::MoveTo(p) => b.move_to(p.x, p.y),
+                    Command::LineTo(p) => b.line_to(p.x, p.y),
+                    Command::QuadTo(c, p) => b.quad_to(c.x, c.y, p.x, p.y),
+                    Command::CurveTo(c1, c2, p) => b.cubic_to(c1.x, c1.y, c2.x, c2.y, p.x, p.y),
+                    Command::Close => b.close(),
+                }
+            }
+        }
+        Shape::Oval { center, radii } => b.push_oval(tiny_skia_path::Rect::from_ltrb(center.x - radii.x, center.y - radii.y, center.x + radii.x, center.y + radii.y)?),
+        Shape::Rounded { lo, hi, r } => push_round_rect(&mut b, *lo, *hi, *r),
+    }
+    b.finish()
+}
+
+/// A round rect as `SkPath::addRRect` builds it: clockwise from the top edge's left end, each
+/// corner a quarter conic.
+fn push_round_rect(b: &mut tiny_skia_path::PathBuilder, lo: Point, hi: Point, r: f32) {
+    let r = r.min((hi.x - lo.x) * 0.5).min((hi.y - lo.y) * 0.5);
+    let w = std::f32::consts::FRAC_1_SQRT_2;
+    b.move_to(lo.x + r, lo.y);
+    b.line_to(hi.x - r, lo.y);
+    b.conic_to(hi.x, lo.y, hi.x, lo.y + r, w);
+    b.line_to(hi.x, hi.y - r);
+    b.conic_to(hi.x, hi.y, hi.x - r, hi.y, w);
+    b.line_to(lo.x + r, hi.y);
+    b.conic_to(lo.x, hi.y, lo.x, hi.y - r, w);
+    b.line_to(lo.x, lo.y + r);
+    b.conic_to(lo.x, lo.y, lo.x + r, lo.y, w);
+    b.close();
+}
+
+/// The rectangle `path` is under `ctm`, in device pixels `[min, max]`, if Chromium draws it as one:
+/// one closed subpath of three or four axis-aligned lines round a box, under a transform that
+/// keeps it axis-aligned (`SkPath::isRect`, which Ganesh draws with its rect ops).
+fn rect_corners(path: &[Command], ctm: Transform) -> Option<[Point; 2]> {
+    if ctm.xy != 0.0 || ctm.yx != 0.0 {
+        return None;
+    }
+    let [Command::MoveTo(start), lines @ .., Command::Close] = path else { return None };
+    let mut pts = vec![*start];
+    for cmd in lines {
+        let Command::LineTo(p) = cmd else { return None };
+        pts.push(*p);
+    }
+    if pts.len() == 5 && pts[4] == pts[0] {
+        pts.pop();
+    }
+    if pts.len() != 4 {
+        return None;
+    }
+    // Each side vertical (`Some(true)`) or horizontal, and the four alternating.
+    let axis: Vec<_> = (0..4)
+        .map(|i| (pts[i], pts[(i + 1) % 4]))
+        .map(|(a, b)| match (a.x == b.x, a.y == b.y) {
+            (true, false) => Some(true),
+            (false, true) => Some(false),
+            _ => None,
+        })
+        .collect();
+    if !(axis.iter().all(Option::is_some) && (0..4).all(|i| axis[i] != axis[(i + 1) % 4])) {
+        return None;
+    }
+    let d: Vec<Point> = pts.iter().map(|p| ctm.transform_point(*p)).collect();
+    let (lo, hi) = bounds(&d);
+    Some([lo, hi])
+}
+
+fn bounds(pts: &[Point]) -> (Point, Point) {
+    pts.iter().fold((Point::new(f32::MAX, f32::MAX), Point::new(f32::MIN, f32::MIN)), |(lo, hi), p| {
+        (Point::new(lo.x.min(p.x), lo.y.min(p.y)), Point::new(hi.x.max(p.x), hi.y.max(p.y)))
+    })
+}

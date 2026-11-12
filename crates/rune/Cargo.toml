@@ -87,6 +87,10 @@ taffy = { version = "0.15", default-features = false, features = ["std", "taffy_
 # has them.
 parley = { version = "0.12", default-features = false, features = ["std"] }
 swash = "0.2.10"
+# Skia's paths and stroker, for icons covered as Chromium covers them (text/area.rs): tiny-skia-path
+# as published plus `vendor/tiny-skia-path.patch` (Skia's conic splitting and stroker steps), re-made
+# by `scripts/vendor-tiny-skia-path.sh <version>`. A path dependency, not a patch, so resvg keeps its own.
+tiny-skia-path = { path = "../../vendor/tiny-skia-path" }
 skrifa = "0.44"
 bytemuck = { version = "1.25", features = ["derive"] }
 png = "0.18"

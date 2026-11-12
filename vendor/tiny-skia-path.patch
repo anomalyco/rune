@@ -1,0 +1,273 @@
+diff --git a/src/lib.rs b/src/lib.rs
+index e80a70c..41700ba 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -248,8 +248,9 @@ fn set_point_length(
+     let yy = y as f64;
+     let dmag = (xx * xx + yy * yy).sqrt();
+     let dscale = length as f64 / dmag;
+-    x *= dscale as f32;
+-    y *= dscale as f32;
++    // As Skia's `set_point_length`: the float times the double, rounded once.
++    x = (x as f64 * dscale) as f32;
++    y = (y as f64 * dscale) as f32;
+ 
+     // check if we're not finite, or we're zero-length
+     if !x.is_finite() || !y.is_finite() || (x == 0.0 && y == 0.0) {
+diff --git a/src/path.rs b/src/path.rs
+index a72d06d..b5ebbe0 100644
+--- a/src/path.rs
++++ b/src/path.rs
+@@ -161,6 +161,7 @@ impl Path {
+             points: self.points,
+             last_move_to_index: 0,
+             move_to_required: true,
++            conic_tolerance: 0.0,
+         }
+     }
+ }
+diff --git a/src/path_builder.rs b/src/path_builder.rs
+index 275f528..78f674a 100644
+--- a/src/path_builder.rs
++++ b/src/path_builder.rs
+@@ -30,6 +30,9 @@ pub struct PathBuilder {
+     pub(crate) points: Vec<Point>,
+     pub(crate) last_move_to_index: usize,
+     pub(crate) move_to_required: bool,
++    /// How far, in this path's units, the quads a conic becomes may stray from it: Skia's 0.25 of
++    /// a device pixel. 0 (the default) is 0.25; a stroker sets its own from its resolution scale.
++    pub(crate) conic_tolerance: f32,
+ }
+ 
+ impl PathBuilder {
+@@ -40,6 +43,7 @@ impl PathBuilder {
+             points: Vec::new(),
+             last_move_to_index: 0,
+             move_to_required: true,
++            conic_tolerance: 0.0,
+         }
+     }
+ 
+@@ -58,6 +62,7 @@ impl PathBuilder {
+             points: Vec::with_capacity(points_capacity),
+             last_move_to_index: 0,
+             move_to_required: true,
++            conic_tolerance: 0.0,
+         }
+     }
+ 
+@@ -114,6 +119,12 @@ impl PathBuilder {
+         self.points.reserve(additional_points);
+     }
+ 
++    /// Sets how far, in this path's units, the quads each conic is turned into may stray from it
++    /// (Skia: 0.25 of a device pixel, so 0.25 over the scale the path will be drawn at).
++    pub fn set_conic_tolerance(&mut self, tolerance: f32) {
++        self.conic_tolerance = tolerance;
++    }
++
+     /// Returns the current number of segments in the builder.
+     pub fn len(&self) -> usize {
+         self.verbs.len()
+@@ -179,7 +190,7 @@ impl PathBuilder {
+ 
+     // We do not support conic segments, but Skia still relies on them from time to time.
+     // This method will simply convert the input data into quad segments.
+-    pub(crate) fn conic_to(&mut self, x1: f32, y1: f32, x: f32, y: f32, weight: f32) {
++    pub fn conic_to(&mut self, x1: f32, y1: f32, x: f32, y: f32, weight: f32) {
+         // check for <= 0 or NaN with this test
+         if !(weight > 0.0) {
+             self.line_to(x, y);
+@@ -192,11 +203,13 @@ impl PathBuilder {
+             self.inject_move_to_if_needed();
+ 
+             let last = self.last_point().unwrap();
++            let tolerance = if self.conic_tolerance > 0.0 { self.conic_tolerance } else { 0.25 };
+             let quadder = path_geometry::AutoConicToQuads::compute(
+                 last,
+                 Point::from_xy(x1, y1),
+                 Point::from_xy(x, y),
+                 weight,
++                tolerance,
+             );
+             if let Some(quadder) = quadder {
+                 // Points are ordered as: 0 - 1 2 - 3 4 - 5 6 - ..
+diff --git a/src/path_geometry.rs b/src/path_geometry.rs
+index 1bb631c..3132f5c 100644
+--- a/src/path_geometry.rs
++++ b/src/path_geometry.rs
+@@ -629,9 +629,8 @@ impl Conic {
+             pow2 += 1;
+         }
+ 
+-        // Unlike Skia, we always expect `pow2` to be at least 1.
+-        // Otherwise it produces ugly results.
+-        Some(pow2.max(1))
++        // As Skia: a conic within the tolerance of its hull's quad is that one quad.
++        Some(pow2)
+     }
+ 
+     // Chop this conic into N quads, stored continuously in pts[], where
+@@ -865,15 +864,15 @@ fn between(a: f32, b: f32, c: f32) -> bool {
+     (a - b) * (c - b) <= 0.0
+ }
+ 
+-pub(crate) struct AutoConicToQuads {
++pub struct AutoConicToQuads {
+     pub points: [Point; 64],
+     pub len: u8, // the number of quads
+ }
+ 
+ impl AutoConicToQuads {
+-    pub fn compute(pt0: Point, pt1: Point, pt2: Point, weight: f32) -> Option<Self> {
++    pub fn compute(pt0: Point, pt1: Point, pt2: Point, weight: f32, tolerance: f32) -> Option<Self> {
+         let conic = Conic::new(pt0, pt1, pt2, weight);
+-        let pow2 = conic.compute_quad_pow2(0.25)?;
++        let pow2 = conic.compute_quad_pow2(tolerance)?;
+         let mut points = [Point::zero(); 64];
+         let len = conic.chop_into_quads_pow2(pow2, &mut points);
+         Some(AutoConicToQuads { points, len })
+diff --git a/src/stroker.rs b/src/stroker.rs
+index 6a6aa55..7e06db5 100644
+--- a/src/stroker.rs
++++ b/src/stroker.rs
+@@ -347,6 +347,11 @@ impl PathStroker {
+         // The '4' below matches the fill scan converter's error term.
+         self.inv_res_scale = (res_scale * 4.0).invert();
+         self.inv_res_scale_squared = self.inv_res_scale.sqr();
++        // Skia turns a conic into quads in device space, a quarter pixel from it at most; the
++        // outline here is in the path's own units, res_scale device pixels each.
++        self.inner.conic_tolerance = 0.25 / res_scale;
++        self.outer.conic_tolerance = 0.25 / res_scale;
++        self.cusper.conic_tolerance = 0.25 / res_scale;
+ 
+         self.radius = width.get().half();
+         self.inv_miter_limit = inv_miter_limit;
+@@ -677,7 +682,10 @@ impl PathStroker {
+ 
+         self.recursion_depth += 1;
+         if self.recursion_depth > RECURSIVE_LIMITS[self.found_tangents as usize] {
+-            return false; // just abort if projected quad isn't representable
++            // As Skia now does: when it stops making progress, a line, and on.
++            self.add_degenerate_line(quad_points);
++            self.recursion_depth -= 1;
++            return true;
+         }
+ 
+         let mut half = QuadConstruct::default();
+@@ -1019,18 +1027,33 @@ impl PathStroker {
+             return true;
+         }
+ 
++        if !quad_points.quad[2].x.is_finite() || !quad_points.quad[2].y.is_finite() {
++            return false; // just abort if projected quad isn't representable
++        }
++
+         self.recursion_depth += 1;
+         if self.recursion_depth > RECURSIVE_LIMITS[QUAD_RECURSIVE_LIMIT] {
+-            return false; // just abort if projected quad isn't representable
++            // As Skia now does: when it stops making progress, a line, and on.
++            self.add_degenerate_line(quad_points);
++            self.recursion_depth -= 1;
++            return true;
+         }
+ 
+         let mut half = QuadConstruct::default();
+-        half.init_with_start(quad_points);
++        if !half.init_with_start(quad_points) {
++            self.add_degenerate_line(quad_points);
++            self.recursion_depth -= 1;
++            return true;
++        }
+         if !self.quad_stroke(quad, &mut half) {
+             return false;
+         }
+ 
+-        half.init_with_end(quad_points);
++        if !half.init_with_end(quad_points) {
++            self.add_degenerate_line(quad_points);
++            self.recursion_depth -= 1;
++            return true;
++        }
+         if !self.quad_stroke(quad, &mut half) {
+             return false;
+         }
+@@ -1098,9 +1121,9 @@ impl PathStroker {
+         on_p.x = tp.x + axis_flip * dxy.y;
+         on_p.y = tp.y - axis_flip * dxy.x;
+ 
++        // As Skia now keeps it: the tangent as a vector, not a point a tangent's length on.
+         if let Some(ref mut tangent) = tangent {
+-            tangent.x = on_p.x + dxy.x;
+-            tangent.y = on_p.y + dxy.y;
++            **tangent = *dxy;
+         }
+     }
+ 
+@@ -1191,8 +1214,8 @@ impl PathStroker {
+     ) -> ResultType {
+         let start = quad_points.quad[0];
+         let end = quad_points.quad[2];
+-        let a_len = quad_points.tangent_start - start;
+-        let b_len = quad_points.tangent_end - end;
++        let a_len = quad_points.tangent_start;
++        let b_len = quad_points.tangent_end;
+ 
+         // Slopes match when denom goes to zero:
+         //                   axLen / ayLen ==                   bxLen / byLen
+@@ -1214,8 +1237,8 @@ impl PathStroker {
+ 
+             // if the perpendicular distances from the quad points to the opposite tangent line
+             // are small, a straight line is good enough
+-            let dist1 = pt_to_line(start, end, quad_points.tangent_end);
+-            let dist2 = pt_to_line(end, start, quad_points.tangent_start);
++            let dist1 = pt_to_tangent_line(start, end, quad_points.tangent_end);
++            let dist2 = pt_to_tangent_line(end, start, quad_points.tangent_start);
+             if dist1.max(dist2) <= self.inv_res_scale_squared {
+                 return ResultType::Degenerate;
+             }
+@@ -1231,10 +1254,8 @@ impl PathStroker {
+             if intersect_ray_type == IntersectRayType::CtrlPt {
+                 // the intersection of the tangents need not be on the tangent segment
+                 // so 0 <= numerA <= 1 is not necessarily true
+-                quad_points.quad[1].x =
+-                    start.x * (1.0 - numer_a) + quad_points.tangent_start.x * numer_a;
+-                quad_points.quad[1].y =
+-                    start.y * (1.0 - numer_a) + quad_points.tangent_start.y * numer_a;
++                quad_points.quad[1].x = start.x + quad_points.tangent_start.x * numer_a;
++                quad_points.quad[1].y = start.y + quad_points.tangent_start.y * numer_a;
+             }
+ 
+             return ResultType::Quad;
+@@ -1733,8 +1754,8 @@ fn fn_ptr_eq(f1: CapProc, f2: CapProc) -> bool {
+ struct QuadConstruct {
+     // The state of the quad stroke under construction.
+     quad: [Point; 3],       // the stroked quad parallel to the original curve
+-    tangent_start: Point,   // a point tangent to quad[0]
+-    tangent_end: Point,     // a point tangent to quad[2]
++    tangent_start: Point,   // the tangent at quad[0]
++    tangent_end: Point,     // the tangent at quad[2]
+     start_t: NormalizedF32, // a segment of the original curve
+     mid_t: NormalizedF32,
+     end_t: NormalizedF32,
+@@ -1855,6 +1876,20 @@ fn quad_in_line(quad: &[Point; 3]) -> bool {
+     pt_to_line(quad[mid], quad[outer1], quad[outer2]) <= line_slop
+ }
+ 
++// The distance squared from `pt` to the segment from `line_start` along `tangent`.
++fn pt_to_tangent_line(pt: Point, line_start: Point, tangent: Point) -> f32 {
++    let ab0 = pt - line_start;
++    let numer = tangent.dot(ab0);
++    let denom = tangent.dot(tangent);
++    let t = numer / denom;
++    if t >= 0.0 && t <= 1.0 {
++        let hit = Point::from_xy(line_start.x + tangent.x * t, line_start.y + tangent.y * t);
++        hit.distance_to_sqd(pt)
++    } else {
++        pt.distance_to_sqd(line_start)
++    }
++}
++
+ // returns the distance squared from the point to the line
+ fn pt_to_line(pt: Point, line_start: Point, line_end: Point) -> f32 {
+     let dxy = line_end - line_start;
