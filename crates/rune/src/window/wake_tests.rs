@@ -2,9 +2,11 @@
 //! each checked against a literal transcription of the fields and branches they replaced: every
 //! combination of the facts for the first, every short sequence of events for the second.
 
-use super::minimize::{step, MinimizeEffect, MinimizeEvent};
+use super::minimize::{HiddenPoll, MinimizeEffect, MinimizeEvent, shell_take, step};
 use super::{Minimize, WakeFacts, WakeWork};
 use crate::Cx;
+use crate::el::Tx;
+use crate::popup_menu::{PopupAnchor, PopupItem, PopupMenu, Presenter};
 use crate::runtime::Runtime;
 
 /// Every sequence of `alphabet` up to `len` long that `allowed` lets be extended, prefixes first.
@@ -170,20 +172,44 @@ fn a_poll_that_holds_a_minimize_lets_the_shell_after_the_show_take_it() {
 }
 
 #[test]
-fn a_popup_callback_s_minimize_does_not_take_the_ask_a_hidden_poll_holds() {
-    // A hidden window receives Show. Its poll asks to minimize and opens a pop-up; with no shown
-    // window the pop-up resolves at once with `None`, and that callback asks again. The hidden
-    // shell's retry takes the callback's ask, and the poll's own ask is still due after the show.
+fn a_hidden_polls_minimize_survives_its_popup_callback_asking_again() {
+    // The turn a hidden window is woken by Show: its poll asks to minimize and opens a pop-up.
+    // With no shown window the pop-up answers `None` at once and its callback asks again, so
+    // the hidden shell's retry takes the callback's ask and the poll's own is still due after
+    // the show. Drives the real poll, the real pop-up callback and the shell's take/return
+    // wiring, so a shell that drops the return loses the final minimize here.
     let mut rt = Runtime::new(0u32, |_: &u32, _: &mut Cx<u32>| crate::el(), (100.0, 100.0), crate::Env::default());
+    rt.poll = Some(|asked: &mut u32, _, tx: &mut Tx| {
+        if *asked > 0 { return false; }
+        *asked += 1;
+        tx.minimize();
+        tx.popup_menu(
+            PopupMenu::new().item(PopupItem::new("ok", "OK")),
+            PopupAnchor::Point(10.0, 20.0),
+            |_: &mut u32, picked, tx: &mut Tx| {
+                assert_eq!(picked, None, "a pop-up with no window answers None");
+                tx.minimize();
+            },
+        );
+        true
+    });
+    let poll = HiddenPoll::new(true);
+    assert!(rt.poll_hidden(), "the hidden poll asked for a change");
+    poll.enter(&mut rt);
+
+    // The hidden shell: take, open the waiting pop-up (which asks again), retry.
+    let mut popup = Presenter::default();
     let mut took = Vec::new();
-    rt.update(|_, tx| tx.minimize());
-    took.push(rt.minimize_step(MinimizeEvent::HeldForShow));
-    took.push(rt.minimize_step(MinimizeEvent::Taken));
-    rt.update(|_, tx| tx.minimize());
-    took.push(rt.minimize_step(MinimizeEvent::Taken));
-    took.push(rt.minimize_step(MinimizeEvent::Returned));
-    took.push(rt.minimize_step(MinimizeEvent::Taken));
-    assert_eq!(took, [false, false, true, false, true], "the retry takes the callback's, the show's shell the poll's");
+    loop {
+        took.push(shell_take(&mut rt));
+        let opened = popup.open(&mut rt, None, false);
+        if !opened && !rt.minimize.field() { break; }
+    }
+    // The show happens, and the shell after it takes what the poll held.
+    poll.leave(&mut rt);
+    took.push(shell_take(&mut rt));
+
+    assert_eq!(took, [false, true, true], "the retry takes the callback's ask, the show's shell the poll's");
     assert_eq!(rt.minimize, Minimize::None);
 }
 

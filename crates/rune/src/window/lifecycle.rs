@@ -2,6 +2,7 @@
 //! polling while hidden, closing, hiding, opening and creating.
 
 use super::*;
+use super::minimize::{HiddenPoll, shell_take};
 
 impl<S: 'static> Host<S> {
     pub(super) fn window_request(&mut self, event_loop: &ActiveEventLoop, request: WindowRequest) {
@@ -258,9 +259,10 @@ impl<S: 'static> Host<S> {
         self.clipboard.flush(&mut self.rt);
         // A show this turn minimizes after it: this poll holds the ask across its own shell, and
         // a callback's ask during that shell is the one it takes first.
-        if shows { self.rt.minimize_step(MinimizeEvent::HeldForShow); }
+        let poll = HiddenPoll::new(shows);
+        poll.enter(&mut self.rt);
         self.shell(event_loop);
-        if shows { self.rt.minimize_step(MinimizeEvent::Returned); }
+        poll.leave(&mut self.rt);
         if changed && self.launcher() { self.refresh_hidden(); }
         true
     }
@@ -304,7 +306,7 @@ impl<S: 'static> Host<S> {
             if self.rt.stale() { w.request_redraw(); }
         }
         for _ in 0..8 {
-            let minimize = self.rt.minimize_step(MinimizeEvent::Taken);
+            let minimize = shell_take(&mut self.rt);
             match self.rt.shell_request.take() {
                 Some(shell @ (Shell::Quit | Shell::Relaunch)) => {
                     let after = shell.after().unwrap_or(crate::quit::After::Exit);

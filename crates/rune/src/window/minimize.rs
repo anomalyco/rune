@@ -90,3 +90,31 @@ impl<S> Runtime<S> {
         effects.into_iter().any(|effect| effect == MinimizeEffect::Minimize)
     }
 }
+
+/// A hidden poll's ask held across its own shell, without the window or event loop the shell
+/// runs in: `Host` steps it around the shell, and a test drives exactly the same steps.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct HiddenPoll {
+    /// The poll runs in a turn that shows the window, so it holds the ask across its shell.
+    shows: bool,
+}
+
+impl HiddenPoll {
+    pub(crate) fn new(shows: bool) -> Self { Self { shows } }
+
+    /// Before its shell: the ask is out of the shell's hands; only an ask that arrives during
+    /// the shell (a pop-up's callback) is in them.
+    pub(crate) fn enter<S>(&self, rt: &mut Runtime<S>) {
+        if self.shows { rt.minimize_step(MinimizeEvent::HeldForShow); }
+    }
+
+    /// After it: the held ask is due again, so the shell after the show takes it.
+    pub(crate) fn leave<S>(&self, rt: &mut Runtime<S>) {
+        if self.shows { rt.minimize_step(MinimizeEvent::Returned); }
+    }
+}
+
+/// A shell step: take what waits, saying whether the window minimizes now.
+pub(crate) fn shell_take<S>(rt: &mut Runtime<S>) -> bool {
+    rt.minimize_step(MinimizeEvent::Taken)
+}
