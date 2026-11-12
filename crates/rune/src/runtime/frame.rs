@@ -522,6 +522,7 @@ impl<S: 'static> Runtime<S> {
             }
             merge(&mut tx, one);
         }
+        crate::marks::mark("f.polled");
         if self.playground.as_ref().is_some_and(|p| p.polls()) {
             let mut one = self.transaction();
             let clock = self.clock;
@@ -534,8 +535,10 @@ impl<S: 'static> Runtime<S> {
         if self.commits == 0 && self.queue.iter().any(|a| matches!(a, Action::WindowFocus(_))) {
             self.commit(&Tx::default());
         }
+        crate::marks::mark("f.before_rows");
         let mut ran_layout = false;
         self.report_visible_rows();
+        crate::marks::mark("f.rows");
         // Hosts take a drag-out inside the move that asked for it; by now nothing will.
         self.drop_drag_out_request();
         let ended: Vec<_> = self.drag_ends.borrow_mut().drain(..).collect();

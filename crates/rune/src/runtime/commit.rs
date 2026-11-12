@@ -129,6 +129,7 @@ pub(super) struct Measured {
 impl<S: 'static> Runtime<S> {
     pub(super) fn commit(&mut self, tx: &Tx) {
         let _commit_time = crate::frame::profile::Scope::new(crate::frame::profile::Phase::Commit);
+        crate::marks::mark("c.begin");
         let _first_view = crate::tooling::perf_warn::launch::FirstView::start(self.commits == 0);
         let budget = crate::tooling::perf_warn::budget::Commit::start();
         self.apply_playground();
@@ -144,6 +145,7 @@ impl<S: 'static> Runtime<S> {
             }
         }
         self.note_drawn_rows();
+        crate::marks::mark("c.rows_noted");
         let mut measured = self.measure_commit(tx);
         crate::marks::mark("c.measured");
         // A new zoom lays the view out again at the scale and size it gives, in this commit.
