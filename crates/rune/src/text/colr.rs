@@ -11,7 +11,7 @@ use skrifa::outline::{DrawSettings, OutlinePen};
 use skrifa::metrics::BoundingBox;
 use skrifa::raw::TableProvider;
 use skrifa::{GlyphId, MetadataProvider};
-use swash::zeno::{Command, Mask, Vector};
+use swash::zeno::{Command, Mask, Scratch, Vector};
 
 /// Glyph `glyph` of the font as a COLR v1 image at `size` px, with its placement (left, top
 /// above the baseline, width, height): None when the font has no v1 paint graph for it.
@@ -46,7 +46,8 @@ pub(super) fn rasterize(data: &[u8], index: u32, glyph: u32, size: f32, coords: 
         h,
         transforms: vec![base],
         outlines: font.outline_glyphs(),
-        clips: vec![Clip { cover: vec![1.0; (w * h) as usize], bounds: [0, 0, w as usize, h as usize] }],
+        clips: vec![Clip { cover: vec![1.0; (w * h) as usize], bounds: [0, 0, w as usize, h as usize], full: true }],
+        scratch: Scratch::new(),
         layers: vec![(vec![[0.0; 4]; (w * h) as usize], CompositeMode::SrcOver)],
     };
     color.paint(location, &mut painter).ok()?;
@@ -100,13 +101,17 @@ struct Painter<'a> {
     clips: Vec<Clip>,
     /// Premultiplied RGBA layers, each with the mode it merges down with.
     layers: Vec<(Vec<[f32; 4]>, CompositeMode)>,
+    /// zeno's buffers, kept across a glyph's masks.
+    scratch: Scratch,
 }
 
-/// Coverage 0..1 per pixel, and the rows and columns (x0, y0, x1, y1) where it isn't zero, which
-/// a fill visits alone.
+/// Coverage 0..1 over the box (x0, y0, x1, y1) where it may be non-zero, row by row: a fill
+/// visits that box alone, and a small clip costs its own size, not the glyph's.
 struct Clip {
     cover: Vec<f32>,
     bounds: [usize; 4],
+    /// The whole image, every pixel covered: the clip at the bottom.
+    full: bool,
 }
 
 /// `a` after `b`: `b` applies first.
@@ -159,10 +164,21 @@ impl OutlinePen for Pen<'_> {
 impl Painter<'_> {
     fn transform(&self) -> Transform { *self.transforms.last().unwrap_or(&Transform::default()) }
 
-    fn push_mask(&mut self, path: &[Command]) {
-        let (w, h) = (self.w as usize, self.h as usize);
-        let Some(under) = self.clips.last() else { return };
-        // Only the box the path and the clip under it share is rasterised and visited.
+    /// Glyph `glyph`'s outline in image pixels, through the current transform.
+    fn glyph_path(&self, glyph: GlyphId) -> Vec<Command> {
+        let t = self.transform();
+        let mut pen = Pen { t: &t, path: Vec::new() };
+        if let Some(outline) = self.outlines.get(glyph) {
+            let _ = outline.draw(DrawSettings::unhinted(Size::unscaled(), self.location), &mut pen);
+        }
+        pen.path
+    }
+
+    /// `path`'s coverage inside the clip on top: only the box the path and that clip share is
+    /// rasterised and kept.
+    fn mask(&mut self, path: &[Command]) -> Clip {
+        let empty = Clip { cover: Vec::new(), bounds: [0; 4], full: false };
+        let Some(under) = self.clips.last() else { return empty };
         let (mut lo, mut hi) = ([f32::MAX; 2], [f32::MIN; 2]);
         for v in path.iter().flat_map(|c| match *c {
             Command::MoveTo(a) | Command::LineTo(a) => [Some(a), None, None],
@@ -174,30 +190,127 @@ impl Painter<'_> {
             hi = [hi[0].max(v.x), hi[1].max(v.y)];
         }
         let [ux0, uy0, ux1, uy1] = under.bounds;
-        let bx0 = (lo[0].floor().max(0.0) as usize).max(ux0);
-        let by0 = (lo[1].floor().max(0.0) as usize).max(uy0);
-        let bx1 = (hi[0].ceil().max(0.0) as usize).min(w).min(ux1);
-        let by1 = (hi[1].ceil().max(0.0) as usize).min(h).min(uy1);
-        let mut cover = vec![0.0f32; w * h];
-        let mut bounds = [usize::MAX, usize::MAX, 0, 0];
-        if bx1 > bx0 && by1 > by0 {
-            let (bw, bh) = (bx1 - bx0, by1 - by0);
-            let mut mask = vec![0u8; bw * bh];
-            Mask::new(path).size(bw as u32, bh as u32).offset(Vector::new(-(bx0 as f32), -(by0 as f32))).render_into(&mut mask, None);
-            for y in by0..by1 {
-                for x in bx0..bx1 {
-                    let (m, k) = (mask[(y - by0) * bw + (x - bx0)], y * w + x);
-                    if m == 0 || under.cover[k] <= 0.0 { continue; }
-                    cover[k] = m as f32 / 255.0 * under.cover[k];
-                    bounds = [bounds[0].min(x), bounds[1].min(y), bounds[2].max(x + 1), bounds[3].max(y + 1)];
-                }
+        let x0 = (lo[0].floor().max(0.0) as usize).max(ux0);
+        let y0 = (lo[1].floor().max(0.0) as usize).max(uy0);
+        let x1 = (hi[0].ceil().max(0.0) as usize).min(ux1);
+        let y1 = (hi[1].ceil().max(0.0) as usize).min(uy1);
+        if x1 <= x0 || y1 <= y0 { return empty; }
+        let (bw, bh) = (x1 - x0, y1 - y0);
+        let mut mask = vec![0u8; bw * bh];
+        Mask::with_scratch(path, &mut self.scratch).size(bw as u32, bh as u32).offset(Vector::new(-(x0 as f32), -(y0 as f32))).render_into(&mut mask, None);
+        let mut cover = Vec::with_capacity(bw * bh);
+        if under.full {
+            cover.extend(mask.iter().map(|&m| m as f32 * (1.0 / 255.0)));
+        } else {
+            let uw = ux1 - ux0;
+            for y in 0..bh {
+                let row = (y0 + y - uy0) * uw + (x0 - ux0);
+                cover.extend(mask[y * bw..(y + 1) * bw].iter().zip(&under.cover[row..row + bw]).map(|(&m, &u)| m as f32 * (1.0 / 255.0) * u));
             }
         }
-        if bounds[0] == usize::MAX { bounds = [0, 0, 0, 0]; }
-        self.clips.push(Clip { cover, bounds });
+        Clip { cover, bounds: [x0, y0, x1, y1], full: false }
     }
 }
 
+/// Paints `colour` at each pixel centre (x, y) under `clip` over `layer`, source over: one loop
+/// per brush kind, the colour inlined.
+fn shade(layer: &mut [[f32; 4]], w: usize, clip: &Clip, mut colour: impl FnMut(f32, f32) -> [f32; 4]) {
+    let [x0, y0, x1, y1] = clip.bounds;
+    let bw = x1 - x0;
+    for y in y0..y1 {
+        let (row, cover) = (&mut layer[y * w + x0..y * w + x1], &clip.cover[(y - y0) * bw..(y - y0 + 1) * bw]);
+        for (i, (d, &m)) in row.iter_mut().zip(cover).enumerate() {
+            if m <= 0.0 { continue; }
+            blend(d, colour((x0 + i) as f32 + 0.5, y as f32 + 0.5), m);
+        }
+    }
+}
+
+/// A gradient's fill: `line` writes each row's colour-line parameters (NaN where the gradient
+/// draws nothing) for pixel centres x = x0 + 0.5.. at y, a whole row in one pass the compiler can
+/// vectorise; then each is looked up in `lut` and painted, source over.
+fn shade_line(layer: &mut [[f32; 4]], w: usize, clip: &Clip, lut: &[[f32; 4]; 64], extend: Extend, mut line: impl FnMut(f32, f32, &mut [f32])) {
+    let [x0, y0, x1, y1] = clip.bounds;
+    let bw = x1 - x0;
+    let mut ts = vec![0.0f32; bw];
+    for y in y0..y1 {
+        line(x0 as f32 + 0.5, y as f32 + 0.5, &mut ts);
+        let (row, cover) = (&mut layer[y * w + x0..y * w + x1], &clip.cover[(y - y0) * bw..(y - y0 + 1) * bw]);
+        for ((d, &m), &t) in row.iter_mut().zip(cover).zip(&ts) {
+            if m <= 0.0 || t.is_nan() { continue; }
+            blend(d, lut[(extend_t(extend, t) * 63.0 + 0.5) as usize], m);
+        }
+    }
+}
+
+fn blend(d: &mut [f32; 4], c: [f32; 4], m: f32) {
+    let a = c[3] * m;
+    let k = 1.0 - a;
+    *d = [c[0] * m + d[0] * k, c[1] * m + d[1] * k, c[2] * m + d[2] * k, a + d[3] * k];
+}
+
+/// Fills `clip` on `layer` with `brush`, whose points are in the space `inv` maps pixels to.
+fn fill_brush(palette: &Palette<'_>, layer: &mut [[f32; 4]], w: usize, clip: &Clip, inv: &Transform, brush: &Brush<'_>) {
+    // A gradient's colour line, sampled once per fill in 64 steps: finer than one step a pixel
+    // at emoji sizes (20-80 px across), and a quarter of 256's setup.
+    let line = |stops: &[ColorStop]| std::array::from_fn::<[f32; 4], 64, _>(|i| palette.stop(stops, Extend::Pad, i as f32 / 63.0));
+    match *brush {
+        Brush::Solid { palette_index, alpha } => {
+            let c = premul(palette.color(palette_index, alpha));
+            shade(layer, w, clip, |_, _| c);
+        }
+        Brush::LinearGradient { p0, p1, color_stops, extend } => {
+            // t is affine in the pixel's position: t = a x + b y + c.
+            let (dx, dy) = (p1.x - p0.x, p1.y - p0.y);
+            let len = (dx * dx + dy * dy).max(1e-12);
+            let (a, b) = ((inv.xx * dx + inv.yx * dy) / len, (inv.xy * dx + inv.yy * dy) / len);
+            let c = ((inv.dx - p0.x) * dx + (inv.dy - p0.y) * dy) / len;
+            shade_line(layer, w, clip, &line(color_stops), extend, |x0, y, ts| {
+                for (i, t) in ts.iter_mut().enumerate() { *t = a * (x0 + i as f32) + b * y + c; }
+            });
+        }
+        Brush::RadialGradient { c0, r0, c1, r1, color_stops, extend } => {
+            // The two-point conical gradient's parameter at each pixel: the largest t with
+            // |p - c(t)| = r(t) and r(t) >= 0, its constants hoisted and its divisions made products.
+            let (cdx, cdy, dr) = (c1.x - c0.x, c1.y - c0.y, r1 - r0);
+            let a = cdx * cdx + cdy * cdy - dr * dr;
+            let (ox, oy) = (inv.dx - c0.x, inv.dy - c0.y);
+            let (r0dr, r0r0) = (r0 * dr, r0 * r0);
+            let lut = line(color_stops);
+            if a.abs() < 1e-6 {
+                shade_line(layer, w, clip, &lut, extend, |x0, y, ts| for (i, t) in ts.iter_mut().enumerate() {
+                    let x = x0 + i as f32;
+                    let (px, py) = (inv.xx * x + inv.xy * y + ox, inv.yx * x + inv.yy * y + oy);
+                    let b = px * cdx + py * cdy + r0dr;
+                    let v = (px * px + py * py - r0r0) / (2.0 * b);
+                    *t = if b.abs() < 1e-6 || r0 + v * dr < 0.0 { f32::NAN } else { v };
+                });
+                return;
+            }
+            let ia = 1.0 / a;
+            shade_line(layer, w, clip, &lut, extend, |x0, y, ts| for (i, t) in ts.iter_mut().enumerate() {
+                let x = x0 + i as f32;
+                let (px, py) = (inv.xx * x + inv.xy * y + ox, inv.yx * x + inv.yy * y + oy);
+                let b = px * cdx + py * cdy + r0dr;
+                let disc = b * b - a * (px * px + py * py - r0r0);
+                let s = disc.max(0.0).sqrt();
+                let (t1, t2) = ((b + s) * ia, (b - s) * ia);
+                let (hi, lo) = (t1.max(t2), t1.min(t2));
+                let v = if r0 + hi * dr >= 0.0 { hi } else if r0 + lo * dr >= 0.0 { lo } else { f32::NAN };
+                *t = if disc < 0.0 { f32::NAN } else { v };
+            });
+        }
+        Brush::SweepGradient { c0, start_angle, end_angle, color_stops, extend } => {
+            let span = end_angle - start_angle;
+            shade_line(layer, w, clip, &line(color_stops), extend, |x0, y, ts| for (i, t) in ts.iter_mut().enumerate() {
+                let p = apply(inv, x0 + i as f32, y);
+                // Clockwise degrees in font space (y up), as skrifa hands them over.
+                let angle = (-(p.1 - c0.y).atan2(p.0 - c0.x).to_degrees()).rem_euclid(360.0);
+                *t = if span.abs() > 1e-6 { (angle - start_angle) / span } else { 0.0 };
+            });
+        }
+    }
+}
 /// `t` on the colour line's 0..1 as `extend` carries it past the ends.
 fn extend_t(extend: Extend, t: f32) -> f32 {
     match extend {
@@ -208,27 +321,6 @@ fn extend_t(extend: Extend, t: f32) -> f32 {
 }
 
 fn premul(c: [f32; 4]) -> [f32; 4] { [c[0] * c[3], c[1] * c[3], c[2] * c[3], c[3]] }
-
-/// The parameter of the two-point conical gradient at `p`: the largest `t` with
-/// `|p - c(t)| = r(t)` and `r(t) >= 0`.
-fn radial_t(p: (f32, f32), c0: (f32, f32), r0: f32, c1: (f32, f32), r1: f32) -> Option<f32> {
-    let (cdx, cdy, dr) = (c1.0 - c0.0, c1.1 - c0.1, r1 - r0);
-    let (pdx, pdy) = (p.0 - c0.0, p.1 - c0.1);
-    let a = cdx * cdx + cdy * cdy - dr * dr;
-    let b = pdx * cdx + pdy * cdy + r0 * dr;
-    let c = pdx * pdx + pdy * pdy - r0 * r0;
-    if a.abs() < 1e-6 {
-        if b.abs() < 1e-6 { return None; }
-        let t = c / (2.0 * b);
-        return (r0 + t * dr >= 0.0).then_some(t);
-    }
-    let disc = b * b - a * c;
-    if disc < 0.0 { return None; }
-    let s = disc.sqrt();
-    let (t1, t2) = ((b + s) / a, (b - s) / a);
-    let (hi, lo) = if t1 > t2 { (t1, t2) } else { (t2, t1) };
-    if r0 + hi * dr >= 0.0 { Some(hi) } else if r0 + lo * dr >= 0.0 { Some(lo) } else { None }
-}
 
 fn composite(mode: CompositeMode, src: [f32; 4], dst: [f32; 4]) -> [f32; 4] {
     let (sa, da) = (src[3], dst[3]);
@@ -269,13 +361,9 @@ impl ColorPainter for Painter<'_> {
     }
 
     fn push_clip_glyph(&mut self, glyph_id: GlyphId) {
-        let t = self.transform();
-        let mut pen = Pen { t: &t, path: Vec::new() };
-        if let Some(outline) = self.outlines.get(glyph_id) {
-            let _ = outline.draw(DrawSettings::unhinted(Size::unscaled(), self.location), &mut pen);
-        }
-        let path = pen.path;
-        self.push_mask(&path);
+        let path = self.glyph_path(glyph_id);
+        let clip = self.mask(&path);
+        self.clips.push(clip);
     }
 
     fn push_clip_box(&mut self, b: BoundingBox) {
@@ -286,7 +374,8 @@ impl ColorPainter for Painter<'_> {
             if i == 0 { Command::MoveTo(Vector::new(x, y)) } else { Command::LineTo(Vector::new(x, y)) }
         }).collect();
         path.push(Command::Close);
-        self.push_mask(&path);
+        let clip = self.mask(&path);
+        self.clips.push(clip);
     }
 
     fn pop_clip(&mut self) {
@@ -295,57 +384,22 @@ impl ColorPainter for Painter<'_> {
 
     fn fill(&mut self, brush: Brush<'_>) {
         let Some(inv) = invert(&self.transform()) else { return };
-        let Painter { palette, clips, layers, w, .. } = self;
-        let w = *w as usize;
-        let (Some(clip), Some((layer, _))) = (clips.last(), layers.last_mut()) else { return };
-        let [x0, y0, x1, y1] = clip.bounds;
-        // A gradient's colour line, sampled once per fill in 64 steps: finer than one step a
-        // pixel at emoji sizes (an emoji is 20-80 px across), and a quarter of 256's setup.
-        let line = |stops: &[ColorStop]| std::array::from_fn::<[f32; 4], 64, _>(|i| palette.stop(stops, Extend::Pad, i as f32 / 63.0));
-        let pick = |lut: &[[f32; 4]; 64], extend: Extend, t: f32| lut[(extend_t(extend, t) * 63.0 + 0.5) as usize];
-        // Each brush's colour at pixel (x, y), decided once per fill rather than per pixel.
-        let mut paint = |colour: &mut dyn FnMut(f32, f32) -> [f32; 4]| {
-            for y in y0..y1 {
-                for x in x0..x1 {
-                    let k = y * w + x;
-                    let cover = clip.cover[k];
-                    if cover <= 0.0 { continue; }
-                    let c = colour(x as f32 + 0.5, y as f32 + 0.5);
-                    let (s, d) = (c.map(|v| v * cover), layer[k]);
-                    layer[k] = [s[0] + d[0] * (1.0 - s[3]), s[1] + d[1] * (1.0 - s[3]), s[2] + d[2] * (1.0 - s[3]), s[3] + d[3] * (1.0 - s[3])];
-                }
-            }
-        };
-        match brush {
-            Brush::Solid { palette_index, alpha } => {
-                let c = premul(palette.color(palette_index, alpha));
-                paint(&mut |_, _| c);
-            }
-            Brush::LinearGradient { p0, p1, color_stops, extend } => {
-                // t is affine in the pixel's position: t = a x + b y + c.
-                let (dx, dy) = (p1.x - p0.x, p1.y - p0.y);
-                let len = (dx * dx + dy * dy).max(1e-12);
-                let (a, b) = ((inv.xx * dx + inv.yx * dy) / len, (inv.xy * dx + inv.yy * dy) / len);
-                let c = ((inv.dx - p0.x) * dx + (inv.dy - p0.y) * dy) / len;
-                let lut = line(color_stops);
-                paint(&mut |x, y| pick(&lut, extend, a * x + b * y + c));
-            }
-            Brush::RadialGradient { c0, r0, c1, r1, color_stops, extend } => {
-                let lut = line(color_stops);
-                paint(&mut |x, y| radial_t(apply(&inv, x, y), (c0.x, c0.y), r0, (c1.x, c1.y), r1).map_or([0.0; 4], |t| pick(&lut, extend, t)));
-            }
-            Brush::SweepGradient { c0, start_angle, end_angle, color_stops, extend } => {
-                let lut = line(color_stops);
-                let span = end_angle - start_angle;
-                paint(&mut |x, y| {
-                    let p = apply(&inv, x, y);
-                    // Clockwise degrees in font space (y up), as skrifa hands them over.
-                    let angle = (-(p.1 - c0.y).atan2(p.0 - c0.x).to_degrees()).rem_euclid(360.0);
-                    pick(&lut, extend, if span.abs() > 1e-6 { (angle - start_angle) / span } else { 0.0 })
-                });
-            }
-        }
+        let w = self.w as usize;
+        let (Some(clip), Some((layer, _))) = (self.clips.last(), self.layers.last_mut()) else { return };
+        fill_brush(&self.palette, layer, w, clip, &inv, &brush);
     }
+
+    /// Most of an emoji's paints: a glyph's shape filled, its mask used once and not kept as a clip.
+    fn fill_glyph(&mut self, glyph_id: GlyphId, brush_transform: Option<Transform>, brush: Brush<'_>) {
+        let path = self.glyph_path(glyph_id);
+        let clip = self.mask(&path);
+        let t = brush_transform.map_or(self.transform(), |b| concat(&self.transform(), &b));
+        let Some(inv) = invert(&t) else { return };
+        let w = self.w as usize;
+        let Some((layer, _)) = self.layers.last_mut() else { return };
+        fill_brush(&self.palette, layer, w, &clip, &inv, &brush);
+    }
+
     fn push_layer(&mut self, composite_mode: CompositeMode) {
         self.layers.push((vec![[0.0; 4]; (self.w * self.h) as usize], composite_mode));
     }
