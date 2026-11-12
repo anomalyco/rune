@@ -334,7 +334,7 @@ impl ApplicationHandler<WakeEvent> for Windows {
             let proxy = self.proxy.clone();
             crate::platform::reopen::install(move || proxy.send_event(WakeEvent::Reopen).is_ok());
         }
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
         {
             let proxy = self.proxy.clone();
             crate::open_url::instance::on_relaunch(move || proxy.send_event(WakeEvent::Reopen).is_ok());
@@ -380,10 +380,10 @@ impl ApplicationHandler<WakeEvent> for Windows {
     }
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         let _handling = crate::quit::handling();
-        // Windows: a later launch handed to this loop (`single_instance`) is served once the app
-        // goes on with a window shown. One that came as the app ended (its last window already
-        // closing, the quit not started) isn't: the process starts the app again for it.
-        #[cfg(target_os = "windows")]
+        // Windows, Linux: a later launch handed to this loop (`single_instance`) is served once
+        // the app goes on with a window shown. One that came as the app ended (its last window
+        // already closing, the quit not started) isn't: the process starts the app again for it.
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
         if crate::open_url::instance::launches_waiting() && !event_loop.exiting() {
             let windows: Vec<_> = self.hosts.iter().map(|h| h.as_ref().map(|h| h.reopen_candidate()).unwrap_or_default()).collect();
             if crate::platform::reopen::has_visible(&windows) {
@@ -427,7 +427,7 @@ impl ApplicationHandler<WakeEvent> for Windows {
         if crate::quit::send(crate::quit::Event::Exited).contains(&crate::quit::Effect::Relaunch) {
             crate::relaunch::spawn();
         }
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
         crate::open_url::instance::exited();
     }
 }
