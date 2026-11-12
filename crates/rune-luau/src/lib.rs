@@ -79,5 +79,6 @@ pub use vm::Host;
 pub use workers::Completer;
 pub use workers::spawn_blocking;
 
-/// Whether this build runs Luau as native code (Windows and Linux) rather than interpreted.
+/// Whether this build compiles `--!native` modules to native code (the `native-code` feature, on
+/// Windows and Linux) rather than interpreting them.
 pub const NATIVE_CODE: bool = cfg!(luau_jit);

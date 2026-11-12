@@ -8,8 +8,9 @@ fn main() {
     println!("cargo::rustc-check-cfg=cfg(luau_jit)");
     let var = |name: &str| std::env::var_os(name).map(|v| v.to_string_lossy().into_owned()).unwrap_or_default();
     let (os, arch) = (var("CARGO_CFG_TARGET_OS"), var("CARGO_CFG_TARGET_ARCH"));
-    // Must match the `luau-jit` target condition in Cargo.toml.
-    if matches!(os.as_str(), "windows" | "linux") && matches!(arch.as_str(), "x86_64" | "aarch64") {
+    // The `native-code` feature, on the targets where Luau has a backend and a process may map
+    // executable memory without an entitlement.
+    if std::env::var_os("CARGO_FEATURE_NATIVE_CODE").is_some() && matches!(os.as_str(), "windows" | "linux") && matches!(arch.as_str(), "x86_64" | "aarch64") {
         println!("cargo:rustc-cfg=luau_jit");
     }
     if var("TARGET") != "wasm32-unknown-unknown" {
