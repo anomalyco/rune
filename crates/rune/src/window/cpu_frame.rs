@@ -635,8 +635,18 @@ impl<S: 'static> Host<S> {
                 }
                 // What DWM shows is in the window's own surface now, not in the buffer: it goes on a
                 // worker, after counting how many of its pixels the GPU's same frame drew otherwise.
+                // A frame only the GPU draws (Slug's text, a native surface) never showed a CPU
+                // frame: its buffer holds nothing to count against.
+                let shown = matches!(cpu.shown, Shown::Copied(_));
                 if let Some(dib) = cpu.into_dib() {
-                    match readback { Some(r) => count_drift(gpu.clone(), r, dib), None => free_later(dib) }
+                    match readback {
+                        Some(r) if shown => count_drift(gpu.clone(), r, dib),
+                        Some(_) => {
+                            eprintln!("rune: cpu boot drift: none to count, the CPU showed no frame (the first needed the GPU)");
+                            free_later(dib);
+                        }
+                        None => free_later(dib),
+                    }
                 }
                 w.native.mode = SurfaceMode::Handed { handover };
                 w.presented = None;

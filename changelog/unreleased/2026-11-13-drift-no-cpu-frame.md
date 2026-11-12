@@ -1,0 +1,1 @@
+- **Windows: the hand-over's drift count no longer reports a frame the CPU never showed.** With Slug text (or anything else only the GPU draws) the CPU-first window shows no CPU frame and waits for the GPU; `RUNE_CPU_BOOT_DRIFT` then compared the GPU's first frame with an empty buffer and logged every pixel as different. It now logs that there was nothing to count.
