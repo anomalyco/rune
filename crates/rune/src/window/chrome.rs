@@ -85,6 +85,14 @@ pub(super) fn toggle_maximized(window: &Window) {
     }
 }
 
+/// Shows a window that opens maximized or full screen that way (`App::maximized`,
+/// `App::full_screen`): maximized first, so leaving full screen returns to it.
+#[cfg(target_os = "windows")]
+pub(super) fn open_as(window: &Window, open_as: crate::windows::OpenAs) {
+    if open_as.maximizes() { window.set_maximized(true); }
+    if open_as.full_screens() { window.set_fullscreen(Some(winit::window::Fullscreen::Borderless(None))); }
+}
+
 /// Takes the window full screen, borderless over its display, or brings it back.
 pub(super) fn toggle_full_screen(window: &Window) {
     let full = window.fullscreen().is_some();

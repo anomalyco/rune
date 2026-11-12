@@ -21,6 +21,7 @@ mod dpi_drag;
 pub(crate) mod drop_target;
 mod frame;
 pub(crate) mod occlusion;
+mod placement;
 pub(crate) mod press_point;
 mod pointer;
 
@@ -31,6 +32,7 @@ pub(crate) use frame::CustomFrame;
 pub(crate) use frame::has_window_menu;
 pub(crate) use frame::request_inner_size;
 pub(crate) use frame::window_menu;
+pub(crate) use placement::restore_frame;
 
 pub(crate) fn hwnd(window: &winit::window::Window) -> Option<HWND> {
     let RawWindowHandle::Win32(h) = window.window_handle().ok()?.as_raw() else { return None };

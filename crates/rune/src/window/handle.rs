@@ -88,14 +88,21 @@ impl WindowHandle {
         let window = self.window().ok()?;
         let (outer, inner) = (window.outer_position().ok()?, window.inner_position().ok()?);
         let size = window.inner_size();
+        let (maximized, minimized, full_screen) = (window.is_maximized(), window.is_minimized().unwrap_or(false), window.fullscreen().is_some());
+        #[cfg(target_os = "windows")]
+        let restore = ((maximized || minimized) && !full_screen).then(|| crate::platform::win32::restore_frame(&window)).flatten();
+        #[cfg(not(target_os = "windows"))]
+        let restore = None;
         Some(crate::windows::WindowPlacement {
             position: (outer.x, outer.y),
             content_position: (inner.x, inner.y),
             content_size: (size.width, size.height),
             scale: window.scale_factor(),
-            maximized: window.is_maximized(),
-            minimized: window.is_minimized().unwrap_or(false),
-            full_screen: window.fullscreen().is_some(),
+            maximized,
+            minimized,
+            full_screen,
+            restore,
+            display: window.current_monitor().map(|m| ((m.position().x, m.position().y), (m.size().width, m.size().height))),
         })
     }
     pub fn set_click_through(&self, click_through: bool) -> Result<(), String> {

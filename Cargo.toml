@@ -65,8 +65,9 @@ exclude = ["tools/rune-dev-guard", "vendor/wgpu-hal", "vendor/winit"]
 wgpu-hal = { path = "vendor/wgpu-hal" }
 # winit as published plus `vendor/winit.patch`: on Windows a new window isn't added again to the
 # taskbar it's already on (that took CoInitializeEx and a TaskbarList COM object, about 7,800 µs
-# and nine shell DLLs, before every window's first frame). Re-made by `scripts/vendor-winit.sh
-# <version>` when winit is bumped; apps that build Rune patch it too.
+# and nine shell DLLs, before every window's first frame), and a window given a position is made there, so it is
+# born at that display's scale instead of crossing to it and being resized. Re-made by
+# `scripts/vendor-winit.sh <version>` when winit is bumped; apps that build Rune patch it too.
 winit = { path = "vendor/winit" }
 
 [workspace.package]

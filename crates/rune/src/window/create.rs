@@ -28,10 +28,13 @@ impl<S: 'static> Host<S> {
                 attrs = winit::platform::startup_notify::WindowAttributesExtStartupNotify::with_activation_token(attrs, token);
             }
         }
-        let maximize = self.open_maximized && !self.shown && self.options.resizable;
+        let open_as = if !self.shown && self.options.resizable { self.open_as } else { crate::windows::OpenAs::Normal };
         // Windows maximizes it once cloaked: maximizing shows a window.
         #[cfg(not(target_os = "windows"))]
-        { attrs = attrs.with_maximized(maximize); }
+        {
+            attrs = attrs.with_maximized(open_as.maximizes());
+            if open_as.full_screens() { attrs = attrs.with_fullscreen(Some(winit::window::Fullscreen::Borderless(None))); }
+        }
         let chrome = frame_chrome(self.chrome, self.titlebar, self.rt.titlebar_set());
         #[cfg(target_os = "macos")]
         if !self.options.borderless && chrome.full_size_content {
@@ -63,7 +66,7 @@ impl<S: 'static> Host<S> {
             // Unfocused (`App::open_inactive`), it never activates.
             cloak.hold(&window, Instant::now() + win::READY_FALLBACK, focus);
             window.set_visible(true);
-            if maximize { window.set_maximized(true); }
+            chrome::open_as(&window, open_as);
         }
         crate::marks::mark("window.framed");
         // First, before anything observes the view (macOS) or an assistive client asks. On Windows,
@@ -109,7 +112,7 @@ impl<S: 'static> Host<S> {
             self.rt.help_delay = self.rt.double_click_interval;
         }
         #[cfg(target_os = "windows")]
-        if cpu_first { return self.open_on_cpu(event_loop, window, a11y, a11y_start, frame, cloak, focus, maximize, built); }
+        if cpu_first { return self.open_on_cpu(event_loop, window, a11y, a11y_start, frame, cloak, focus, open_as, built); }
         let mut prewarmed = None;
         crate::marks::mark("gpu.begin");
         // A device that died while this window was closed draws nothing: make another.
