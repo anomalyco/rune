@@ -486,6 +486,7 @@ impl TextSystem {
         self.smoothing = mode.drawn(self.lcd_ok());
         self.apple.set_pipeline(self.smoothing.pipeline());
         self.atlas.lcd = self.smoothing.lcd();
+        self.atlas.lcd_wanted = mode.lcd();
     }
 
     /// Whether subpixel text draws here now: the renderer draws outlines and blends by channel,

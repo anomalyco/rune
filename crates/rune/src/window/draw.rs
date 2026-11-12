@@ -349,6 +349,7 @@ impl<S: 'static> Host<S> {
         let fp_uploaded = fp_start.map(|_| crate::frame::live_log::Stamp::now());
         let mut enc = gpu.device.create_command_encoder(&Default::default());
         let target = l.alpha.as_ref().map_or(&view, |a| &a.view);
+        renderer.set_frame_wake(rt.live_wake());
         if let Some(c) = self.comp.as_mut() {
             let mut f = Frame {
                 device: &gpu.device,

@@ -166,6 +166,9 @@ impl LiveLane {
 }
 
 impl<S: 'static> Runtime<S> {
+    /// The window's live wake: another thread tells it to get the window's next frame drawn.
+    pub(crate) fn live_wake(&self) -> &Arc<crate::live::Wake> { self.live.waker() }
+
     /// Install before the first frame. Live updates use this separate coalesced wake lane.
     pub fn set_live_waker(&mut self, waker: Waker) {
         for sub in &self.live_subscriptions { sub.active.store(false, Ordering::Release); }

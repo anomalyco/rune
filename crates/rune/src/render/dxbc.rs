@@ -24,6 +24,13 @@ include!("uber/dxbc_hash.rs");
 const VERTEX: &[u8] = include_bytes!("../../uber.vs.dxbc");
 #[cfg(target_os = "windows")]
 const FRAGMENT: &[u8] = include_bytes!("../../uber.fs.dxbc");
+/// The subpixel variant's stages (render/variant.rs `dual_wgsl`), whose fragment blends by a
+/// second output. FXC takes about a minute for it, so a window drawing subpixel text froze that
+/// long compiling it.
+#[cfg(target_os = "windows")]
+const VERTEX_DUAL: &[u8] = include_bytes!("../../uber.vs-dual.dxbc");
+#[cfg(target_os = "windows")]
+const FRAGMENT_DUAL: &[u8] = include_bytes!("../../uber.fs-dual.dxbc");
 
 /// The uber shader's modules: one WGSL (or metallib) module for both stages, or one
 /// precompiled module per stage.
@@ -72,6 +79,17 @@ impl Layout<false> {
 /// matches Windfoil's WGSL and layout and the driver takes it.
 #[cfg(target_os = "windows")]
 pub(super) fn uber<T>(device: &wgpu::Device, make_pipeline: impl FnOnce(&Shaders) -> T) -> Option<(Shaders, T)> {
+    load(device, (VERTEX, FRAGMENT), "uber", make_pipeline)
+}
+
+/// [`uber`] for the subpixel variant.
+#[cfg(target_os = "windows")]
+pub(super) fn uber_dual<T>(device: &wgpu::Device, make_pipeline: impl FnOnce(&Shaders) -> T) -> Option<(Shaders, T)> {
+    load(device, (VERTEX_DUAL, FRAGMENT_DUAL), "subpixel uber", make_pipeline)
+}
+
+#[cfg(target_os = "windows")]
+fn load<T>(device: &wgpu::Device, (vertex, fragment): (&'static [u8], &'static [u8]), what: &str, make_pipeline: impl FnOnce(&Shaders) -> T) -> Option<(Shaders, T)> {
     if device.adapter_info().backend != wgpu::Backend::Dx12 || !device.features().contains(wgpu::Features::PASSTHROUGH_SHADERS) || !enabled() {
         return None;
     }
@@ -93,13 +111,13 @@ pub(super) fn uber<T>(device: &wgpu::Device, make_pipeline: impl FnOnce(&Shaders
     };
     let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
     let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
-    let shaders = Shaders { vertex: module(VERTEX, "vs"), fragment: module(FRAGMENT, "fs") };
+    let shaders = Shaders { vertex: module(vertex, "vs"), fragment: module(fragment, "fs") };
     let pipeline = make_pipeline(&shaders);
     let refused = pollster::block_on(internal.pop()).or(pollster::block_on(validation.pop()));
     match refused {
         None => Some((shaders, pipeline)),
         Some(error) => {
-            eprintln!("rune: the precompiled uber shader was refused ({error}); compiling WGSL");
+            eprintln!("rune: the precompiled {what} shader was refused ({error}); compiling WGSL");
             None
         }
     }
