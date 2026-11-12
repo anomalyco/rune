@@ -266,7 +266,7 @@ impl<S: 'static> Host<S> {
             window,
             backoff: Backoff::default(),
             hidden_pace: HiddenPace::default(),
-            cursor: crate::cursor::os::OsCursor::new(event_loop),
+            cursor: crate::cursor::os::OsCursor::new(),
             alpha: None,
             timer_frame: TimerFrame::default(),
             presented: None,

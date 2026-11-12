@@ -1,0 +1,1 @@
+- **A new window no longer makes a clear cursor it may never use (~1,000 µs on Windows).** The 1×1 cursor `Cursor::Hidden` sets is made once per thread, the first time a window hides the cursor, before the loop next sleeps; every window shares it.
