@@ -264,6 +264,15 @@ impl<S: 'static> Runtime<S> {
         self.schedule_wakes_from(self.clock, wakes);
     }
 
+    /// Wakes for a frame once the clock reaches `due`, as [`Tx::wake_at`] asks from a handler (a
+    /// deadline already past wakes the next frame), for the runtime's own timers.
+    #[cfg_attr(feature = "frame-profile", track_caller)]
+    pub(super) fn wake_at(&mut self, due: f64) {
+        #[cfg(feature = "frame-profile")]
+        crate::frame::live_log::waker(std::panic::Location::caller(), std::time::Duration::from_secs_f64((due - self.clock).max(0.0)));
+        self.schedule_wakes_from(due, [std::time::Duration::ZERO]);
+    }
+
     pub(super) fn schedule_wakes_from(&mut self, now: f64, wakes: impl IntoIterator<Item = std::time::Duration>) {
         for delay in wakes {
             let deadline = now + delay.as_secs_f64();

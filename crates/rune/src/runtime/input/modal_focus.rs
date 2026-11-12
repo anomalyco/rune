@@ -127,7 +127,7 @@ impl<S: 'static> Runtime<S> {
         for effect in effects {
             match effect {
                 ModalEffect::CancelGestures => {
-                    self.press.drop_held();
+                    self.drop_press();
                     self.secondary = capture::Secondary::Up;
                     self.hovered = None;
                 }

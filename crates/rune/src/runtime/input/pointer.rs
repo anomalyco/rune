@@ -109,17 +109,30 @@ impl<S: 'static> Runtime<S> {
         self.titlebar.clear();
         self.cancel_drag();
         self.drop_drag_out_request();
-        self.select_step(selectable::phase::Event::Release);
         self.input_click.clear();
-        self.press.drop_held();
+        self.drop_press();
         self.secondary = capture::Secondary::Up;
         self.pointer_leave();
         self.drag_files_leave();
     }
 
     /// End a held drag without a drop: its handler hears `Phase::Up` with [`Drag::cancelled`]
-    /// and the release that follows does nothing. False when no drag is held.
-    pub(super) fn cancel_drag(&mut self) -> bool { self.cancel_drag_at(self.pointer) }
+    /// and the release that follows does nothing. A press selecting text lets go where the
+    /// selection stands, without a click. False when no drag is held.
+    pub(super) fn cancel_drag(&mut self) -> bool {
+        if self.cancel_drag_at(self.pointer) { return true; }
+        if !self.selectable.phase.dragging() || !self.press.is_held() || self.input_click.captured() { return false; }
+        self.drop_press();
+        true
+    }
+
+    /// Lets go of the held press without a click: a cancel, a drag-out taking the pointer, a
+    /// modal opening. Every press that ends this way, and every release, ends the selection
+    /// drag it was making, and with it the list's edge scroll. Returns the press.
+    pub(super) fn drop_press(&mut self) -> Option<Box<capture::Held>> {
+        self.select_step(selectable::phase::Event::Release);
+        self.press.drop_held()
+    }
 
     /// [`Self::cancel_drag`], its last report at `point`, or where the press began.
     fn cancel_drag_at(&mut self, point: Option<(f32, f32)>) -> bool {
@@ -132,11 +145,10 @@ impl<S: 'static> Runtime<S> {
         let [lx, ly] = self.to_local(i, x, y);
         let (dx, dy) = (x - at.0, y - at.1);
         let screen = self.screen_at(x, y);
-        let Some(held) = self.press.drop_held() else { return false };
+        let Some(held) = self.drop_press() else { return false };
         let d = Drag { phase: Phase::Up, x: lx, y: ly, dx, dy, cancelled: true, window: [x, y], screen, ..held.drag };
         self.queue.push(Action::Drag(held.path, d, held.button));
         self.end_press_repeat();
-        self.select_step(selectable::phase::Event::Release);
         true
     }
 
@@ -165,7 +177,7 @@ impl<S: 'static> Runtime<S> {
         self.drop_drag_out_request();
         self.queue.push(Action::DragStart(path.clone()));
         self.drag_out_request = Some(crate::drag_out::DragOutStart { path, item, rect, bounds: r, press });
-        self.press.drop_held();
+        self.drop_press();
         self.pointer_leave();
         true
     }

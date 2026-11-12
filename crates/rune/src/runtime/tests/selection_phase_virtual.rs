@@ -32,13 +32,12 @@ fn path(row: usize) -> String { format!("{LIST}/r{row}") }
 
 fn row_of(path: &str) -> usize { path.rsplit_once("/r").and_then(|(_, r)| r.parse().ok()).expect("a row path") }
 
-/// The top line of the viewport at its start, its bottom line past the end, or far below the
-/// viewport, where a held drag scrolls the list.
+/// The top line of the viewport at its start, or its bottom line past the end.
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum Spot { HiStart, LoEnd, Below }
+enum Spot { HiStart, LoEnd }
 
 fn point(spot: Spot) -> (f32, f32) {
-    match spot { Spot::HiStart => (2.0, 20.0), Spot::LoEnd => (296.0, 100.0), Spot::Below => (150.0, 420.0) }
+    match spot { Spot::HiStart => (2.0, 20.0), Spot::LoEnd => (296.0, 100.0) }
 }
 
 /// The row under `spot`, with the list scrolled to its top or its end, and the byte a press
@@ -46,18 +45,18 @@ fn point(spot: Spot) -> (f32, f32) {
 fn under(spot: Spot, top: bool) -> (usize, usize) {
     match (spot, top) {
         (Spot::HiStart, true) => (0, 0),
-        (Spot::LoEnd | Spot::Below, true) => (2, LEN),
+        (Spot::LoEnd, true) => (2, LEN),
         (Spot::HiStart, false) => (ROWS - 3, 0),
-        (Spot::LoEnd | Spot::Below, false) => (ROWS - 1, LEN),
+        (Spot::LoEnd, false) => (ROWS - 1, LEN),
     }
 }
 
 #[derive(Clone, Copy, Debug)]
 enum Letter { Press(Spot), Drag(Spot), Up, Lost, Down, Top, SelectAll, Clear }
 
-const ALPHABET: [Letter; 11] = [
+const ALPHABET: [Letter; 10] = [
     Letter::Press(Spot::HiStart), Letter::Press(Spot::LoEnd), Letter::Drag(Spot::HiStart), Letter::Drag(Spot::LoEnd),
-    Letter::Drag(Spot::Below), Letter::Up, Letter::Lost, Letter::Down, Letter::Top, Letter::SelectAll, Letter::Clear,
+    Letter::Up, Letter::Lost, Letter::Down, Letter::Top, Letter::SelectAll, Letter::Clear,
 ];
 
 fn view(_: &(), _: &mut Cx<()>) -> El {
@@ -215,7 +214,7 @@ impl Walk {
 
     fn settle(&mut self) {
         for _ in 0..60 {
-            if !self.rt.frame(1.0 / 60.0) && !self.rt.selectable.edge.running() { break; }
+            if !self.rt.frame(1.0 / 60.0) { break; }
         }
         self.rt.clock = 0.0;
     }
@@ -250,15 +249,6 @@ impl Walk {
                 self.rt.pointer_move(x, y);
                 self.dev.drag(spot, self.top);
                 self.at = spot;
-                if spot == Spot::Below {
-                    self.settle();
-                    // differs from dev: held still below the list, the list scrolls to its end
-                    // and the drag follows it there.
-                    if self.dev.dragging && self.top {
-                        self.top = false;
-                        self.dev.drag(spot, false);
-                    }
-                }
             }
             Letter::Up => {
                 let (x, y) = point(self.at);

@@ -1,11 +1,14 @@
 //! A held press extending a selection keeps scrolling its list while the pointer stays at or past
 //! the list's top or bottom edge, as an AppKit text view autoscrolls on its periodic events: each
-//! step moves the list by an amount that grows with how far past the edge the pointer is, then
-//! extends the selection to the point under the pointer. A step is a timer: [`step`] keeps its
-//! `Attempt` and asks for the next frame, which feeds it back as `Due`. A pointer back inside,
-//! the end of the list, and the drag ending stop it.
-use std::time::Duration;
-
+//! step moves the list by an amount that grows with how far past the edge the pointer is. A step
+//! is a timer: [`step`] keeps its `Attempt` and asks for the next frame, which feeds it back as
+//! `Due`. Each step first extends the selection to the point under the pointer, over the frame
+//! that laid out the step before it, and the step that reaches the end is followed by one that
+//! only extends, so the rows the last scroll brought in are selected too. A pointer back inside,
+//! the end of the list, a step that moved nothing (a list pinned to its bottom pulling it back),
+//! and the drag ending stop it. Each step lets go of a list stuck to its bottom before
+//! `step_scroll` can pull it back, so it leaves the bottom however small its steps are; once it
+//! stops within half a point of the bottom, the list sticks there again.
 use crate::machine::{Attempt, Effects, Seq};
 
 use super::*;
@@ -35,9 +38,12 @@ pub(in crate::runtime) struct EdgeScroll {
 pub(in crate::runtime) enum State {
     #[default]
     Idle,
-    /// Scrolling viewport `scroll`: it last stepped at `last` (clock seconds), and steps again
-    /// at `due` as attempt `attempt`.
-    Running { attempt: Attempt, scroll: NodeId, last: f64, due: f64 },
+    /// Scrolling viewport `scroll`: it last stepped at `last` (clock seconds), from offset `from`
+    /// when that step moved it, and steps again at `due` as attempt `attempt`.
+    Running { attempt: Attempt, scroll: NodeId, last: f64, from: Option<f64>, due: f64 },
+    /// The last step reached `scroll`'s end; at `due`, once that's laid out, the selection
+    /// follows it there.
+    Landing { attempt: Attempt, scroll: NodeId, due: f64 },
 }
 
 /// The held pointer at or past an edge of the viewport the selection is in.
@@ -48,6 +54,8 @@ pub(in crate::runtime) struct Edge {
     pub(in crate::runtime) speed: f32,
     /// How much further it can scroll that way, in points.
     pub(in crate::runtime) room: f64,
+    /// Where it has scrolled to, in points.
+    pub(in crate::runtime) offset: f64,
 }
 
 impl Edge {
@@ -65,8 +73,10 @@ pub(in crate::runtime) enum Event {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(in crate::runtime) enum Effect {
-    /// Scroll `scroll` by `by` points, then extend the selection to the pointer.
-    Scroll { scroll: NodeId, by: f64 },
+    /// Extend the selection to the pointer, then scroll `scroll` by `by` points.
+    Step { scroll: NodeId, by: f64 },
+    /// Extend the selection to the pointer.
+    Extend,
     /// Wake at this clock time, when the next step is due.
     WakeAt(f64),
 }
@@ -82,26 +92,39 @@ pub(in crate::runtime) fn step(seq: &mut Seq, state: &mut State, event: Event) -
             (Some(e), State::Running { scroll, .. }) if scroll == e.scroll => Effects::none(),
             (Some(e), _) => {
                 let attempt = seq.next();
-                *state = State::Running { attempt, scroll: e.scroll, last: now, due: now };
+                *state = State::Running { attempt, scroll: e.scroll, last: now, from: None, due: now };
                 Effects::one(Effect::WakeAt(now))
             }
         },
-        Event::Due { attempt, now, edge } => {
-            let State::Running { attempt: armed, scroll, last, due } = *state else { return Effects::none() };
-            if armed != attempt || now < due { return Effects::none(); }
-            let Some(e) = edge.filter(|e| e.moves() && e.scroll == scroll) else {
+        Event::Due { attempt, now, edge } => match *state {
+            State::Landing { attempt: armed, due, .. } if armed == attempt && now >= due => {
                 *state = State::Idle;
-                return Effects::none();
-            };
-            let by = (f64::from(e.speed) * (now - last).clamp(0.0, MAX_STEP)).clamp(-e.room, e.room);
-            if e.room - by.abs() <= 1e-3 {
-                *state = State::Idle;
-                return Effects::one(Effect::Scroll { scroll, by });
+                Effects::one(Effect::Extend)
             }
-            let attempt = seq.next();
-            *state = State::Running { attempt, scroll, last: now, due: now };
-            Effects::two(Effect::Scroll { scroll, by }, Effect::WakeAt(now))
-        }
+            State::Running { attempt: armed, scroll, last, from, due } if armed == attempt && now >= due => {
+                let Some(e) = edge.filter(|e| e.moves() && e.scroll == scroll) else {
+                    *state = State::Idle;
+                    return Effects::none();
+                };
+                // The last step moved nothing: whatever undid it would undo the next.
+                if from.is_some_and(|f| (e.offset - f).abs() <= 1e-9) {
+                    *state = State::Idle;
+                    return Effects::none();
+                }
+                let by = f64::from(e.speed) * (now - last).clamp(0.0, MAX_STEP);
+                let attempt = seq.next();
+                // A step that reaches the end, or comes within a thousandth of a point of it,
+                // goes exactly there.
+                let (by, landing) = if e.room - by.abs() <= 1e-3 { (e.room.copysign(f64::from(e.speed)), true) } else { (by, false) };
+                *state = if landing {
+                    State::Landing { attempt, scroll, due: now }
+                } else {
+                    State::Running { attempt, scroll, last: now, from: (by != 0.0).then_some(e.offset), due: now }
+                };
+                Effects::two(Effect::Step { scroll, by }, Effect::WakeAt(now))
+            }
+            _ => Effects::none(),
+        },
         Event::Stop => {
             *state = State::Idle;
             Effects::none()
@@ -112,15 +135,16 @@ pub(in crate::runtime) fn step(seq: &mut Seq, state: &mut State, event: Event) -
 impl EdgeScroll {
     fn step(&mut self, event: Event) -> Effects<Effect> { step(&mut self.seq, &mut self.state, event) }
 
-    /// The attempt the next step carries, while it runs.
+    /// The attempt the next step carries, while one is asked for.
     fn attempt(&self) -> Option<Attempt> {
         match self.state {
-            State::Running { attempt, .. } => Some(attempt),
+            State::Running { attempt, .. } | State::Landing { attempt, .. } => Some(attempt),
             State::Idle => None,
         }
     }
 
     pub(in crate::runtime) fn running(&self) -> bool { self.attempt().is_some() }
+
 }
 
 /// Points a second for a pointer `past` points beyond the edge.
@@ -151,28 +175,34 @@ impl<S: 'static> Runtime<S> {
     fn carry_edge_scroll(&mut self, effects: Effects<Effect>) {
         for effect in effects {
             match effect {
-                Effect::Scroll { scroll, by } => self.edge_scroll_by(scroll, by),
-                Effect::WakeAt(due) => self.schedule_wakes_from(due, [Duration::ZERO]),
+                Effect::Step { scroll, by } => {
+                    self.extend_to_pointer();
+                    self.edge_scroll_by(scroll, by);
+                }
+                Effect::Extend => self.extend_to_pointer(),
+                Effect::WakeAt(due) => self.wake_at(due),
             }
         }
     }
 
-    /// Scrolls viewport `id` by `by` points, as the wheel does, and extends the selection to
-    /// what the pointer is over.
+    /// The selection follows the pointer over what the last frame laid out.
+    fn extend_to_pointer(&mut self) {
+        if let Some((x, y)) = self.pointer { self.selection_drag(x, y); }
+    }
+
+    /// Scrolls viewport `id` by `by` points, as the wheel does, except that a list stuck to its
+    /// bottom lets go of it even when the step leaves it within the half point the wheel pins in.
     fn edge_scroll_by(&mut self, id: NodeId, by: f64) {
-        let stick = self.node_index.get(&id).and_then(|&i| self.nodes[i].scroll).is_some_and(|s| s.stick_bottom);
         let Some(st) = self.scrolls.get_mut(&id) else { return };
         let before = st.offset;
         st.offset = (st.offset + by).clamp(0.0, st.max);
         st.moved();
-        st.land(stick);
-        if st.offset == before { return; }
-        self.scroll_cancels_press(id);
-        if let Some((x, y)) = self.pointer { self.selection_drag(x, y); }
+        st.land(false);
+        if st.offset != before { self.scroll_cancels_press(id); }
     }
 
-    /// Where height `y` is against the edges of the vertical viewport around the selection a held
-    /// press is extending: at or past its top or bottom (as drawn, inside its clips and the
+    /// Where height `y` is against the edges of the vertical viewport around the selection a
+    /// held press is extending: at or past its top or bottom (as drawn, inside its clips and the
     /// window), how fast that scrolls, and how far it still can.
     fn edge_at(&self, y: f32) -> Option<Edge> {
         if !self.selectable.phase.dragging() || !self.press.is_held() { return None; }
@@ -191,7 +221,7 @@ impl<S: 'static> Runtime<S> {
         } else {
             return None;
         };
-        Some(Edge { scroll: id, speed, room })
+        Some(Edge { scroll: id, speed, room, offset: st.offset })
     }
 }
 
