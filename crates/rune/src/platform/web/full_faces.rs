@@ -19,7 +19,8 @@ static STARTED: AtomicBool = AtomicBool::new(false);
 /// Starts the fetches, once per page; `wake` runs as each set arrives. The full Inter faces
 /// are one set, as a page that fetches only some would set text in two cuts; the app's late
 /// fonts are another, each skipped alone if it fails.
-pub(super) fn fetch(late: Vec<String>, wake: impl Fn() + Clone + 'static) {
+/// `share` adds the late fonts to the page's own too (`page_fonts`).
+pub(super) fn fetch(late: Vec<String>, share: bool, wake: impl Fn() + Clone + 'static) {
     if STARTED.swap(true, Ordering::AcqRel) {
         return;
     }
@@ -27,14 +28,14 @@ pub(super) fn fetch(late: Vec<String>, wake: impl Fn() + Clone + 'static) {
     if crate::text::full_faces::embedded_inter() {
         let base = MODULE_URL.with(String::clone);
         let urls = crate::text::full_faces::FILES.iter().map(|file| super::platform::resolve_url(file, &base)).collect();
-        load(urls, true, wake.clone());
+        load(urls, true, false, wake.clone());
     }
     if !late.is_empty() {
-        load(late, false, wake);
+        load(late, false, share, wake);
     }
 }
 
-fn load(urls: Vec<String>, all_or_none: bool, wake: impl FnOnce() + 'static) {
+fn load(urls: Vec<String>, all_or_none: bool, share: bool, wake: impl FnOnce() + 'static) {
     let files: Vec<_> = urls.into_iter().map(|url| {
         let bytes = super::platform::fetch_bytes(&url);
         (url, bytes)
@@ -55,6 +56,7 @@ fn load(urls: Vec<String>, all_or_none: bool, wake: impl FnOnce() + 'static) {
         if faces.is_empty() {
             return;
         }
+        if share { super::page_fonts::share(faces.iter().map(Vec::as_slice)); }
         crate::text::full_faces::arrive(faces);
         wake();
     });

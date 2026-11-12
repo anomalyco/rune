@@ -30,7 +30,8 @@ fn mirrors_headings_inline_links_and_buttons_and_skips_idle_frames() {
     assert_eq!(items[1].runs.len(), 3);
     assert_eq!((items[1].runs[1].text.as_str(), items[1].runs[1].href.as_deref()), ("spec", Some("https://example.com/spec")));
     assert_eq!((items[2].kind, items[2].text.as_str(), items[2].expanded), ("button", "Show details", Some(false)));
-    assert!(items[1].font.is_none(), "outside a page the canvas selects text itself");
+    assert!(items[1].font.is_some(), "text carries its font, so Find highlights land on the glyphs");
+    assert!(!items[1].selectable, "outside a page the canvas selects text itself");
 
     let btn_path = items[2].path.clone();
     let link_path = items[1].path.clone();
