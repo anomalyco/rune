@@ -648,6 +648,15 @@ fn decode(bytes: &[u8]) -> Result<Decoded, ImageError> {
     mip_chain(image.width(), image.height(), image.as_raw())
 }
 
+/// A PNG decoded to 8-bit RGBA by the PNG decoder alone. `image::load_from_memory_with_format`
+/// dispatches on the format at run time, which links every codec the crate is built with (JPEG,
+/// WebP, GIF, BMP, ICO) into an app that only ever reads PNGs from the clipboard or a cursor.
+/// The same decoder and limits as that call's PNG arm.
+pub(crate) fn png_rgba8(bytes: &[u8]) -> image::ImageResult<image::RgbaImage> {
+    let decoder = image::codecs::png::PngDecoder::with_limits(std::io::Cursor::new(bytes), image::Limits::default())?;
+    Ok(image::DynamicImage::from_decoder(decoder)?.into_rgba8())
+}
+
 fn icns_png(bytes: &[u8]) -> Result<&[u8], ImageError> {
     let invalid = || ImageError("invalid ICNS container or no supported PNG representation".into());
     let len = u32::from_be_bytes(bytes.get(4..8).ok_or_else(invalid)?.try_into().unwrap()) as usize;

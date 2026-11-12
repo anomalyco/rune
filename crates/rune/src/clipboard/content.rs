@@ -146,7 +146,7 @@ impl ClipboardImage {
     /// Decodes the PNG to 8-bit RGBA, for clipboards that take pixels.
     #[cfg(any(target_os = "windows", all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android")))))]
     pub(crate) fn to_rgba(&self) -> Option<image::RgbaImage> {
-        image::load_from_memory_with_format(&self.png, image::ImageFormat::Png).ok().map(|i| i.into_rgba8())
+        crate::image::png_rgba8(&self.png).ok()
     }
     /// The PNG file's bytes, ready to save, upload or decode.
     pub fn png(&self) -> &[u8] { &self.png }
