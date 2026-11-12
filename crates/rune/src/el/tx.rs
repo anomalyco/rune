@@ -33,6 +33,12 @@ pub struct Tx {
     pub(crate) motion: Option<MotionSource>,
     /// `Tx::follow_edge`.
     pub(crate) follow_edge: bool,
+    /// No input in this window caused this commit and no handler asked for motion
+    /// (`Tx::animated`): what it mounts and unmounts appears and goes in its final state.
+    /// Set by the runtime for each frame's commit.
+    pub(crate) unprompted: bool,
+    /// A handler called [`Self::animated`].
+    pub(crate) asked_motion: bool,
     pub(crate) color_motion: Option<Spring>,
     pub(crate) relayout: bool,
     /// The viewport moved only because the window's own resize animation stepped it.
@@ -634,7 +640,8 @@ impl Tx {
         self.commit = self.commit.instant();
     }
     /// Animate this change even where the runtime would apply it at once, as it does a drag's
-    /// moves: the rows a dragged row passes step aside on their springs, while the dragged row
+    /// moves, or a commit no input in this window caused (`El::transition`: those mount and
+    /// unmount at once otherwise): the rows a dragged row passes step aside on their springs, while the dragged row
     /// follows the pointer exactly with `El::offset_motion(Anim::INSTANT)`.
     /// This clears this handler's snap; another handler's `instant()` in the same frame still
     /// wins. A `settle()` in the same change keeps its landing of running tracks. It neither
@@ -642,6 +649,7 @@ impl Tx {
     /// last call to `instant()` or `animated()` in this handler wins.
     pub fn animated(&mut self) {
         self.commit = self.commit.animated();
+        self.asked_motion = true;
     }
     /// Animate this change's layout with `spring` instead of each element's own.
     pub fn motion(&mut self, spring: Spring) {
