@@ -157,9 +157,51 @@ fn end_process() -> ! {
 pub(crate) fn send(event: Event) -> Vec<Effect> {
     let mut state = STATE.lock().unwrap_or_else(|e| e.into_inner());
     let (next, effects) = step(*state, event);
-    if *state == State::Running && matches!(next, State::Quitting(..)) { crate::marks::mark("quit.start"); }
+    if *state == State::Running && matches!(next, State::Quitting(..)) {
+        crate::marks::mark("quit.start");
+        #[cfg(not(target_arch = "wasm32"))]
+        watch_quit();
+    }
     *state = next;
     effects
+}
+
+/// A quit still running this long after it started says where it is on stderr, and again as long
+/// as it runs: the last step it reached and, on Windows, the threads still alive.
+#[cfg(not(target_arch = "wasm32"))]
+const QUIT_REPORT_EVERY: std::time::Duration = std::time::Duration::from_secs(3);
+
+#[cfg(not(target_arch = "wasm32"))]
+fn watch_quit() {
+    let started = std::time::Instant::now();
+    let _ = std::thread::Builder::new().name("rune-quit-watch".into()).spawn(move || loop {
+        std::thread::sleep(QUIT_REPORT_EVERY);
+        eprintln!("rune: still quitting {} ms after the quit started: {}", started.elapsed().as_millis(), where_the_quit_is());
+    });
+}
+
+/// Ends the process `after` from now if it's still alive then, saying on stderr what it was
+/// waiting for (the last step it reached, the threads still alive) and marking `quit.deadline`.
+/// For an app to call once nothing of its own is left to lose, after its storage has closed, so
+/// that a quit always ends.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn exit_deadline(after: std::time::Duration) {
+    let _ = std::thread::Builder::new().name("rune-exit-deadline".into()).spawn(move || {
+        std::thread::sleep(after);
+        eprintln!("rune: the quit didn't end within {} ms of the app's last step, so the process ends itself: {}", after.as_millis(), where_the_quit_is());
+        crate::marks::mark("quit.deadline");
+        end_process();
+    });
+}
+
+/// The quit's last step reached and how long ago, and the process's threads.
+#[cfg(not(target_arch = "wasm32"))]
+fn where_the_quit_is() -> String {
+    let last = crate::marks::marks().into_iter().last().map_or_else(|| "no step".to_owned(), |(name, at)| format!("last step {name}, {} ms ago", at.elapsed().as_millis()));
+    #[cfg(target_os = "windows")]
+    return format!("{last}; threads: {}", crate::platform::win32::threads_summary());
+    #[cfg(not(target_os = "windows"))]
+    last
 }
 
 pub(crate) fn state() -> State { *STATE.lock().unwrap_or_else(|e| e.into_inner()) }

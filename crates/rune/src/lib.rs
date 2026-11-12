@@ -254,6 +254,8 @@ pub use popup_menu::PopupMenu;
 pub use popup_menu::PopupMenuError;
 pub use popup_menu::popup_menu_supported;
 pub use quit::fast_exit;
+#[cfg(not(target_arch = "wasm32"))]
+pub use quit::exit_deadline;
 pub use quit::quitting;
 pub use recorder::FakeMicrophone;
 pub use recorder::Level;
