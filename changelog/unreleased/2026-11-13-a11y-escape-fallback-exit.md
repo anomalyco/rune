@@ -1,0 +1,1 @@
+- Focus: the fallback also follows a field Escape blurred that leaves the tree later, after its exit.
