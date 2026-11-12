@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex};
 
 use super::*;
 use crate::platform::win32::dcomp_handover::Handover;
-use crate::platform::win32::dib::{Blit, Dib, Prefault, fill_window, free_later};
+use crate::platform::win32::dib::{Blit, Dib, Prefault, free_later};
 use crate::render::cpu_boot::{CpuPainter, HalfRounding, Scene, Target};
 
 /// The CPU renderer's side of a window: the buffer it paints in place and the painter that
@@ -43,9 +43,8 @@ pub(super) struct Cpu {
 enum Shown {
     /// Nothing painted yet.
     Nothing,
-    /// The first frame is painted: when the window shows, it gets `colour` everywhere (the
-    /// tiles the painter left to it, `CpuPainter::window_shows`), then `rects`.
-    Waiting { rects: Vec<[u32; 4]>, colour: Option<[u8; 4]> },
+    /// The first frame is painted; the window gets all of it when it shows.
+    Waiting,
     /// The last frame copied was `size` big.
     Copied((u32, u32)),
 }
@@ -175,22 +174,14 @@ fn copy_last(cpu: &Cpu, window: &Window) {
     if let Some(hwnd) = crate::platform::win32::hwnd(window) { dib.present(hwnd, *size, Blit::All); }
 }
 
-/// The first frame, painted while the window was hidden, into the window that now shows: its own
-/// colour first if the painter left tiles to it, then the frame's rects, one by one (nothing
-/// composes the window before its cloak lifts).
+/// The first frame, painted while the window was hidden, into the window that now shows, whole
+/// (nothing composes the window before its cloak lifts).
 fn copy_first(cpu: &mut Cpu, window: &Window, size: (u32, u32)) {
-    let (Shown::Waiting { rects, colour }, Buffer::Ready(dib)) = (&cpu.shown, &cpu.buffer) else { return };
+    let (Shown::Waiting, Buffer::Ready(dib)) = (&cpu.shown, &cpu.buffer) else { return };
     let Some(hwnd) = crate::platform::win32::hwnd(window) else { return };
-    if let Some(colour) = colour { fill_window(hwnd, size, *colour); }
-    dib.present(hwnd, size, Blit::Each(rects));
+    dib.present(hwnd, size, Blit::All);
     cpu.shown = Shown::Copied(size);
     crate::marks::mark("frame.first.copied");
-}
-
-/// Whether a window's first frame goes into a window already filled with its clear colour, which
-/// the painter then needn't write (`CpuPainter::window_shows`): `RUNE_CPU_COLOUR=1`.
-fn window_colour() -> bool {
-    std::env::var_os("RUNE_CPU_COLOUR").is_some_and(|v| v == "1")
 }
 
 fn painter_threads() -> usize {
@@ -300,7 +291,6 @@ impl<S: 'static> Host<S> {
         crate::marks::mark("frame.first.begin");
         self.draw_cpu(false);
         crate::marks::mark("frame.first.done");
-        let Some(w) = self.win.as_ref() else { return Ok(()) };
         let Some(w) = self.win.as_mut() else { return Ok(()) };
         if !w.first_frame.ready() {
             // Only the GPU draws this frame (`start_gpu` began it): shown cloaked until it has.
@@ -377,21 +367,6 @@ impl<S: 'static> Host<S> {
                 return;
             };
             let stride = dib.stride();
-            // The first frame can leave the tiles all in the window's own colour unwritten; they're
-            // written into the buffer before the next frame, whose copy may cover them.
-            let colour = match shown {
-                Shown::Nothing if window_colour() => {
-                    let colour = crate::render::cpu_boot::opaque_bgra(rt.clear_color());
-                    painter.window_shows(colour);
-                    Some(colour)
-                }
-                Shown::Nothing => None,
-                Shown::Waiting { colour, .. } => *colour,
-                Shown::Copied(_) => {
-                    painter.fill_absent(&mut Target::with_stride(dib.bytes(), width, height, stride));
-                    None
-                }
-            };
             match painter.paint(&scene, &mut Target::with_stride(dib.bytes(), width, height, stride)) {
                 Ok(painted) => {
                     crate::marks::mark_once(&FIRST_PAINT, "frame.first.painted");
@@ -401,8 +376,7 @@ impl<S: 'static> Host<S> {
                             if let Some(hwnd) = crate::platform::win32::hwnd(&l.window) { dib.present(hwnd, (width, height), blit); }
                             Shown::Copied((width, height))
                         }
-                        Shown::Waiting { mut rects, .. } => { rects.extend_from_slice(&painted.rects); Shown::Waiting { rects, colour } }
-                        Shown::Nothing => Shown::Waiting { rects: painted.rects, colour },
+                        Shown::Waiting | Shown::Nothing => Shown::Waiting,
                     };
                     if let Some(focus) = cpu.show.take() {
                         // The window shows with its first frame, before the frame's hooks run
