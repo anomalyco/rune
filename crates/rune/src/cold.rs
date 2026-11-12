@@ -77,6 +77,9 @@ pub(crate) struct SharedBox<T: Clone>(Rc<T>);
 impl<T: Clone> SharedBox<T> {
     pub(crate) fn new(value: T) -> Self { Self(Rc::new(value)) }
 
+    /// The value, copied only when something else shares it.
+    pub(crate) fn into_inner(self) -> T { Rc::unwrap_or_clone(self.0) }
+
     #[allow(dead_code)]
     pub(crate) fn ptr_eq(a: &Self, b: &Self) -> bool { Rc::ptr_eq(&a.0, &b.0) }
 }

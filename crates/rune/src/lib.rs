@@ -130,6 +130,7 @@ pub use el::Tx;
 pub use el::anchor_rect;
 pub use el::auto_grow;
 pub use el::canvas;
+pub use el::{GridRow, grid};
 pub use el::col;
 pub use el::edit_access;
 pub use el::effect;

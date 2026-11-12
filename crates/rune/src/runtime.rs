@@ -263,6 +263,9 @@ pub use selectable::{SelectedText, SelectionChange, TextSelection};
 #[path = "runtime/timer_wake_tests.rs"]
 mod timer_wake_tests;
 #[cfg(test)]
+#[path = "runtime/grid_tests.rs"]
+mod grid_tests;
+#[cfg(test)]
 #[path = "runtime/truncate_tests.rs"]
 mod truncate_tests;
 #[cfg(test)]
@@ -376,6 +379,8 @@ mod paint_helpers;
 use paint_helpers::*;
 #[path = "runtime/paint/content.rs"]
 mod paint_content;
+#[path = "runtime/paint/grid.rs"]
+mod grid_paint;
 #[path = "runtime/input/hit.rs"]
 mod hit;
 #[path = "runtime/paint/build.rs"]

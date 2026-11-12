@@ -86,6 +86,7 @@ pub(crate) fn map(role: &str, cx: &RoleCtx) -> Option<Role> {
         "window" => Role::Window,
         "note" => Role::Note,
         "document" => Role::Document,
+        "terminal" => Role::Terminal,
         "article" => Role::Article,
         "navigation" => Role::Navigation,
         "main" => Role::Main,

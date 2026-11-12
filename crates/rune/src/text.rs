@@ -458,6 +458,23 @@ impl TextSystem {
     /// How glyphs rasterise and place ([`FontSmoothing`]).
     pub fn font_smoothing(&self) -> FontSmoothing { self.requested }
 
+    /// What the atlas quads of a still, unscaled text depend on besides its layout, origin and
+    /// inks: the atlas's clock (a page evicted or added moves masks) and how glyphs rasterise.
+    /// Quads emitted under one key can be drawn again while it holds (`El::grid` rows).
+    pub(crate) fn emit_key(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = rune_motion::Fx::default();
+        (self.atlas.clock, self.smoothing, self.apple.pipeline(), self.atlas.lcd).hash(&mut h);
+        self.glide.map(f32::to_bits).hash(&mut h);
+        h.finish()
+    }
+
+    /// Marks the atlas page `quad` samples as drawn this frame, as emitting it did, so a quad
+    /// drawn again from a cache keeps its page from eviction.
+    pub(crate) fn touch_quad(&mut self, page: u16, texels: u32) {
+        self.atlas.touch(page, texels);
+    }
+
     /// How far each gliding glyph mask's ink sits below the top of its quad, in device px, keyed
     /// as `blend::apron_key` keys its instance: a DirectWrite or Windfoil mask keeps one box across its y
     /// phases and moves its ink down that box by its phase, so the box moves a whole pixel only

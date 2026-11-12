@@ -59,6 +59,10 @@ impl<S: 'static> Runtime<S> {
         let text_color = self.nodes[i].vis.icon.map(|(_, c)| c)
             .or_else(|| self.nodes[i].text.as_ref().map(|sp| sp.color))
             .map(|c| self.color(node_id, P_TEXT, c));
+        // A terminal's cell grid paints its rows itself (`grid.rs`).
+        if let Some(g) = self.nodes[i].vis.grid.clone() {
+            self.paint_grid(i, &g, r, r_exact, clip, fade, o, glyph_count);
+        }
         let n = &self.nodes[i];
         let text_tint = |c: Color| paint_tracks::group_tint(n, c, group);
         if let Some(shape) = &n.vis.shape {
