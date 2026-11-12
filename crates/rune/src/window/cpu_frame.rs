@@ -208,7 +208,11 @@ impl<S: 'static> Host<S> {
         crate::marks::mark("x.dib");
         crate::render::cpu_boot::attach_text(&mut self.rt.text.atlas);
         crate::marks::mark("x.attach_text");
-        Some((Prefault::start(dib, size.1), capacity, CpuPainter::new(painter_threads())))
+        let prefault = Prefault::start(dib, size.1);
+        crate::marks::mark("x.prefault");
+        let painter = CpuPainter::new(painter_threads());
+        crate::marks::mark("x.painter");
+        Some((prefault, capacity, painter))
     }
 
     /// The rest of `try_create` for a window that opens on the CPU: no GPU, no surface. Its first

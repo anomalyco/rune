@@ -1140,7 +1140,9 @@ impl InitData<'_> {
         // If the system theme is dark, we need to set the window theme now
         // before we update the window flags (and possibly show the
         // window for the first time).
+        crate::ib3_mark("w.touch_dpi");
         let current_theme = try_theme(window, self.attributes.preferred_theme);
+        crate::ib3_mark("w.theme");
 
         let window_state = {
             let window_state = WindowState::new(
@@ -1156,9 +1158,12 @@ impl InitData<'_> {
             window_state
         };
 
+        crate::ib3_mark("w.state");
         enable_non_client_dpi_scaling(window);
+        crate::ib3_mark("w.dpi_scaling");
 
         unsafe { ImeContext::set_ime_allowed(window, false) };
+        crate::ib3_mark("w.ime");
 
         Window { window, window_state, thread_executor: self.event_loop.create_thread_executor() }
     }
@@ -1261,11 +1266,14 @@ impl InitData<'_> {
             win.set_content_protected(true);
         }
 
+        crate::ib3_mark("w.taskbar_icons");
         win.set_cursor(attributes.cursor);
+        crate::ib3_mark("w.cursor");
 
         // Set visible before setting the size to ensure the
         // attribute is correctly applied.
         win.set_visible(attributes.visible);
+        crate::ib3_mark("w.visible");
 
         win.set_enabled_buttons(attributes.enabled_buttons);
 
@@ -1275,7 +1283,9 @@ impl InitData<'_> {
             .unwrap_or_else(|| PhysicalSize::new(f64::MAX, f64::MAX).into());
         let min_size = attributes.min_inner_size.unwrap_or_else(|| PhysicalSize::new(0, 0).into());
         let clamped_size = Size::clamp(size, min_size, max_size, win.scale_factor());
+        crate::ib3_mark("w.buttons");
         win.request_inner_size(clamped_size);
+        crate::ib3_mark("w.inner_size");
 
         // let margins = MARGINS {
         //     cxLeftWidth: 1,
@@ -1289,6 +1299,7 @@ impl InitData<'_> {
             win.set_outer_position(position);
         }
 
+        crate::ib3_mark("w.position");
         win.set_system_backdrop(self.attributes.platform_specific.backdrop_type);
 
         if let Some(color) = self.attributes.platform_specific.border_color {
@@ -1381,6 +1392,7 @@ unsafe fn init(
 
     let (style, ex_style) = window_flags.to_window_styles();
     let handle = unsafe {
+        crate::ib3_mark("w.before_create");
         CreateWindowExW(
             ex_style,
             class_name.as_ptr(),
