@@ -1,0 +1,1 @@
+- **A layer target waiting to be reused draws through the current outline store.** When text expands the Windfoil outline texture, the targets parked for a later layer of their size are rebound with the slots and retained caches, so text that needs the new rows no longer draws through the texture the target was made against.

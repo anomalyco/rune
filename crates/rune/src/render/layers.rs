@@ -37,6 +37,9 @@ mod continuous_corner_tests;
 #[cfg(test)]
 #[path = "layer_show_tests.rs"]
 mod show_tests;
+#[cfg(test)]
+#[path = "layer_rebind_tests.rs"]
+mod rebind_tests;
 
 pub(super) struct Layers {
     plan: Vec<Layer>,
@@ -156,6 +159,9 @@ pub(super) struct Target {
     cache: Option<(u64, u64)>,
     last_used: u64,
     content_size: [f32; 2],
+    /// Test-only: the outline texture's height the base bind group was made against.
+    #[cfg(test)]
+    outline_rows: u32,
 }
 
 impl Describe for Target {
@@ -473,7 +479,9 @@ impl Renderer {
         Target { texture, view, projection,
             identity: self.layers.allocations, composite_parent: None,
             quad: Self::instance_buffer(device, 1), base, composite, images: Vec::new(), glyphs: Vec::new(), image_generation: u64::MAX, blur: None,
-            cache: None, last_used: 0, content_size: [0.0; 2] }
+            cache: None, last_used: 0, content_size: [0.0; 2],
+            #[cfg(test)]
+            outline_rows: self.uber.outlines().map_or(0, wgpu::Texture::height) }
     }
 
     /// Draws what each layer's disposition says: its target's descriptor, its blur, and the quad
@@ -601,14 +609,17 @@ impl Renderer {
     pub(super) fn images_changed(&mut self) { self.layers.image_generation += 1; }
 
     /// Makes every target's bind groups again (a new outline texture): the base one here, its
-    /// composite and image and glyph pages at the next `prepare_layers`.
+    /// composite and image and glyph pages at the next `prepare_layers`. Parked targets are
+    /// included: one taken back into a slot this frame may draw text from the new rows.
     pub(super) fn rebind_layers(&mut self, device: &wgpu::Device) {
         let (layout, globals, outlines, atlas) = (&self.bind_layout, &self.globals, self.uber.outlines(), &self.atlas);
-        for t in self.layers.targets.iter_mut().flatten().chain(&mut self.layers.retained) {
+        for t in self.layers.targets.iter_mut().flatten().chain(&mut self.layers.retained).chain(&mut self.layers.spare) {
             t.base = Self::bind_group(device, layout, globals, outlines, atlas, atlas, Some(&t.projection));
             // No target's identity is 0, so the composite is made again.
             t.composite_parent = Some(0);
             t.image_generation = u64::MAX;
+            #[cfg(test)]
+            { t.outline_rows = outlines.map_or(0, wgpu::Texture::height); }
         }
     }
 
