@@ -17,7 +17,6 @@ mod layout_reads;
 mod layout_rows;
 mod loop_sleep;
 mod matched_scroll;
-mod motion_cause;
 mod no_motion;
 mod one_snap;
 mod picture_scale;
