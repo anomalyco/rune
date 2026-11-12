@@ -246,6 +246,8 @@ impl<S: 'static> Host<S> {
             _ => false,
         };
         if stops { self.land_frame(); }
+        // Minimised on Windows, where no occlusion event need say so.
+        if matches!(event, WindowEvent::Resized(size) if size.width == 0 || size.height == 0) { self.rest_step(RestEvent::Unseen); }
         if let WindowEvent::Occluded(occluded) = event {
             // Alpha-zero launcher panels remain renderable on explicit invalidation.
             // Their native occlusion transitions must not settle or redraw a reveal.

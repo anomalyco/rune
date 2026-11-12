@@ -13,6 +13,10 @@ pub(super) const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 pub const DEFAULT_CACHE_BUDGET: u64 = 64 * 1024 * 1024;
 /// What spare layer targets may hold (Layers::spare): a full-window layer at 2880x1800 or two menus' worth.
 const SPARE_BYTES: u64 = 32 * 1024 * 1024;
+/// What they keep once the window rests (`window::rest`): the most recently used, which the
+/// screen on show takes again for its menus and hovers. Making a target costs the frame that
+/// takes it a few ms on an integrated GPU.
+const RESTING_SPARE_BYTES: u64 = 8 * 1024 * 1024;
 /// Maximum width or height of a cached subtree's offscreen texture in device pixels.
 const MAX_CACHE_DIM: u32 = 4096;
 
@@ -87,8 +91,13 @@ impl Layers {
     fn park(&mut self, mut t: Target) {
         t.cache = None;
         self.spare.push(t);
+        self.trim_spare(SPARE_BYTES);
+    }
+
+    /// Drops the least recently used spare targets until they hold at most `limit` bytes.
+    fn trim_spare(&mut self, limit: u64) {
         let mut bytes: u64 = self.spare.iter().map(Renderer::target_bytes).sum();
-        while bytes > SPARE_BYTES {
+        while bytes > limit {
             let oldest = self.spare.iter().enumerate().min_by_key(|(_, t)| t.last_used).unwrap().0;
             bytes -= Renderer::target_bytes(&self.spare.swap_remove(oldest));
         }
@@ -237,6 +246,63 @@ impl Renderer {
     /// Current [`El::cache`](crate::El::cache) texture memory budget in bytes.
     pub fn cache_budget(&self) -> u64 {
         self.layers.cache_budget
+    }
+
+    /// With `alloc-sites` (a measuring build), the heap dump's `rune-gpu` section lists what this
+    /// renderer's pools hold after its latest frame or rest, as `<pool> <count> <bytes>`.
+    #[cfg(all(feature = "alloc-sites", not(target_arch = "wasm32")))]
+    pub(super) fn report_pools(&self) {
+        static POOLS: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        fn texture_bytes(t: &wgpu::Texture) -> u64 {
+            let block = u64::from(t.format().block_copy_size(None).unwrap_or(4));
+            (0..t.mip_level_count()).map(|m| u64::from((t.width() >> m).max(1)) * u64::from((t.height() >> m).max(1)) * block).sum()
+        }
+        let pool = |name: &str, ts: &mut dyn Iterator<Item = u64>| {
+            let (n, bytes) = ts.fold((0, 0), |(n, b), x| (n + 1, b + x));
+            format!("{name} {n} {bytes}\n")
+        };
+        let l = &self.layers;
+        let out = [
+            pool("layer-live", &mut l.targets.iter().flatten().filter(|t| t.cache.is_none()).map(Self::target_bytes)),
+            pool("layer-cache-live", &mut l.targets.iter().flatten().filter(|t| t.cache.is_some()).map(Self::target_bytes)),
+            pool("layer-retained", &mut l.retained.iter().map(Self::target_bytes)),
+            pool("layer-spare", &mut l.spare.iter().map(Self::target_bytes)),
+            pool("backdrops", &mut self.backdrops.iter().map(|b| texture_bytes(&b.texture))),
+            pool("glyph-atlas", &mut std::iter::once(&self.atlas).chain(self.atlas_pages.iter().map(|p| &p.0)).map(texture_bytes)),
+            pool("image-pages", &mut self.images.iter().flatten().map(|p| texture_bytes(&p.0))),
+        ].concat();
+        *POOLS.lock().unwrap_or_else(|e| e.into_inner()) = out;
+        ONCE.call_once(|| procwatch::alloc::sites::contribute("rune-gpu", || POOLS.lock().unwrap_or_else(|e| e.into_inner()).clone()));
+    }
+
+    /// What a window at rest gives back (`window::rest`): spare targets past the most recently
+    /// used `RESTING_SPARE_BYTES`, and cache textures no layer drew last frame. With `all`, every
+    /// spare target, and the scratch targets of this screen's layers and its backdrop copies and
+    /// blur pyramid, which its next frame makes again (a few ms on an integrated GPU). It keeps the
+    /// textures of caches on screen, which the last frame's instances name instead of their
+    /// contents, and takes the ones it drops out of `resident`, so their next frame paints them.
+    /// What no submission still uses is freed here; the rest when the device next polls.
+    pub(crate) fn give_back(&mut self, all: bool, resident: &mut std::collections::HashMap<u64, u64>) {
+        for t in self.layers.retained.drain(..) {
+            if let Some((node, _)) = t.cache { resident.remove(&node); }
+        }
+        self.layers.trim_spare(if all { 0 } else { RESTING_SPARE_BYTES });
+        if all {
+            for slot in &mut self.layers.targets {
+                if slot.as_ref().is_some_and(|t| t.cache.is_none()) { *slot = None; }
+            }
+            self.backdrops.clear();
+            if let Some(blur) = &mut self.backdrop_blur { blur.give_back(); }
+        }
+        #[cfg(all(feature = "alloc-sites", not(target_arch = "wasm32")))]
+        self.report_pools();
+    }
+
+    /// Frees the staging chunks kept for reuse (`window::rest`, out of sight only: the next
+    /// frame's uploads would make new ones).
+    pub(crate) fn trim_uploads(&self) {
+        self.uploads.trim();
     }
 
     pub(super) fn sync_resident_caches(&self, out: &mut std::collections::HashMap<u64, u64>) {

@@ -63,6 +63,7 @@ impl<S: 'static> Host<S> {
             l.stop_pacing();
             self.rt.cancel_timer_frame();
             self.idle = true;
+            self.rest_step(RestEvent::Unseen);
             return;
         }
         // Its first frame uncovered draws what a covered one owed.

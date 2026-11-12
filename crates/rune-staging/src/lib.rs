@@ -216,6 +216,14 @@ impl Staging {
     pub fn stats(&self) -> Stats {
         self.lock().stats
     }
+
+    /// Frees the chunks kept for reuse, those the GPU has handed back included; the next write
+    /// makes a new one. Chunks holding pending writes stay.
+    pub fn trim(&self) {
+        let mut s = self.lock();
+        while s.returned.try_recv().is_ok() {}
+        s.free.clear();
+    }
 }
 
 impl Inner {

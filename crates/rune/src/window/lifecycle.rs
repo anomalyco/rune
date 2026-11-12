@@ -391,6 +391,7 @@ impl<S: 'static> Host<S> {
     }
 
     pub(super) fn hide(&mut self, event_loop: &ActiveEventLoop) {
+        self.rest_step(RestEvent::Unseen);
         self.stop_showing();
         self.wind_down();
         let launcher = self.launcher();

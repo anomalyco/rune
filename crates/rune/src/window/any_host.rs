@@ -51,6 +51,7 @@ impl<S: 'static> AnyHost for Host<S> {
             .chain(win.filter(|_| shown.is_none()).and_then(|w| w.hidden_pace.deadline()))
             .chain(self.files.pointer.as_ref().filter(|_| shown.is_some()).map(|_| now + DROP_SAMPLE))
             .chain(shown.and_then(|w| w.cursor.reassert_at(now)))
+            .chain(self.rest.deadline())
             .min()
     }
 
@@ -202,6 +203,7 @@ impl<S: 'static> Host<S> {
             self.life.cover(Cover::Surface, false);
             if launcher || self.life.shown() { w.request_redraw(); }
         }
+        self.rest_step(RestEvent::Woke { now: Instant::now() });
         if let Some(w) = &mut self.win && !self.life.shown() && w.hidden_pace.take_due(Instant::now()) {
             w.request_redraw();
         }
