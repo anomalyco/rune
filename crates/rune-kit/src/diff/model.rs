@@ -137,6 +137,50 @@ pub struct FileDiff {
     new_text: Option<Rc<Source>>,
 }
 
+impl FileDiff {
+    /// The file's changes as a unified patch, as `git diff` writes one: the `diff --git` header,
+    /// modes, rename and binary lines when there are any, then each hunk. `git apply` takes it,
+    /// and it's what a chat or an issue wants of a diff dragged out of the app.
+    pub fn patch(&self) -> String {
+        let old = self.old_path.as_deref().or(self.new_path.as_deref()).unwrap_or_default();
+        let new = self.new_path.as_deref().or(self.old_path.as_deref()).unwrap_or_default();
+        let mut out = format!("diff --git a/{old} b/{new}\n");
+        match self.status {
+            FileStatus::Added => out.push_str(&format!("new file mode {}\n", self.new_mode.as_deref().unwrap_or("100644"))),
+            FileStatus::Deleted => out.push_str(&format!("deleted file mode {}\n", self.old_mode.as_deref().unwrap_or("100644"))),
+            FileStatus::Renamed | FileStatus::Copied => {
+                let verb = if self.status == FileStatus::Renamed { "rename" } else { "copy" };
+                if let Some(s) = self.similarity { out.push_str(&format!("similarity index {s}%\n")); }
+                out.push_str(&format!("{verb} from {old}\n{verb} to {new}\n"));
+            }
+            FileStatus::Modified => {
+                if let (Some(a), Some(b)) = (&self.old_mode, &self.new_mode) && a != b {
+                    out.push_str(&format!("old mode {a}\nnew mode {b}\n"));
+                }
+            }
+        }
+        if self.binary {
+            out.push_str(&format!("Binary files a/{old} and b/{new} differ\n"));
+            return out;
+        }
+        if self.hunks.is_empty() { return out; }
+        let from = if self.status == FileStatus::Added { "/dev/null".to_owned() } else { format!("a/{old}") };
+        let to = if self.status == FileStatus::Deleted { "/dev/null".to_owned() } else { format!("b/{new}") };
+        out.push_str(&format!("--- {from}\n+++ {to}\n"));
+        for hunk in &self.hunks {
+            out.push_str(&hunk.header());
+            out.push('\n');
+            for line in &hunk.lines {
+                out.push(match line.kind { LineKind::Context => ' ', LineKind::Added => '+', LineKind::Removed => '-' });
+                out.push_str(&line.text);
+                out.push('\n');
+                if line.no_newline { out.push_str("\\ No newline at end of file\n"); }
+            }
+        }
+        out
+    }
+}
+
 /// A whole text, split into lines.
 #[derive(Debug)]
 pub(crate) struct Source {
