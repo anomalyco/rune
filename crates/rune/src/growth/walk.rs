@@ -1,6 +1,7 @@
 //! A walk over a growth row's events, checked after every one against `origin/dev`'s own fields
 //! and branches, transcribed literally below. The reference never calls the code under test, not
-//! even a helper: its constants are the numbers written out, and every branch is dev's.
+//! even a helper: its constants are the numbers written out, and every branch is dev's, with the
+//! one departure the feather's riding read marks as `differs from dev:`.
 //!
 //! The walk drives the real entry points one event at a time (`set_kind`, `retarget`,
 //! `hide_above`, `ride_up`, one substep) and compares the whole state after each: every sequence
@@ -43,7 +44,9 @@ const DEV_SETTLE: f32 = 1.0 / 16.0;
 const DEV_SETTLE_V: f32 = 1.5;
 
 /// `origin/dev`'s `GrowTrack` before the conversion: the fields as they were, and every branch
-/// as it was, moved onto `Dev` without a change.
+/// as it was, moved onto `Dev` without a change but for the one `// differs from dev:` in `step`.
+/// `riding` is dev's own state, which dev kept in the `slide` slope; it's a flag here so the one
+/// branch that reads it can read a state rather than a float.
 #[derive(Clone, Copy, Debug, Default)]
 struct Dev {
     h: f32,
@@ -60,6 +63,8 @@ struct Dev {
     limit: f32,
     stage: Option<f32>,
     slide: Option<(f32, f32)>,
+    /// `hide_above` cut it under a stuck header, and nothing has replaced that yet.
+    riding: bool,
     restore: f32,
     give: Option<f32>,
     paced: bool,
@@ -70,7 +75,7 @@ struct Dev {
 
 impl Dev {
     fn settled(h: f32) -> Dev {
-        Dev { h, v: 0.0, target: h, age: 0.0, mask: 0.0, streaming: false, whole: false, duration: 0.0, span: 0.0, glide: None, feather: None, limit: f32::INFINITY, stage: None, slide: None, restore: 0.0, give: None, paced: false, rate: 0.0, ended: 0.0, shut: false }
+        Dev { h, v: 0.0, target: h, age: 0.0, mask: 0.0, streaming: false, whole: false, duration: 0.0, span: 0.0, glide: None, feather: None, limit: f32::INFINITY, stage: None, slide: None, riding: false, restore: 0.0, give: None, paced: false, rate: 0.0, ended: 0.0, shut: false }
     }
 
     fn moving(&self) -> bool {
@@ -110,6 +115,7 @@ impl Dev {
             }
             let d = target - self.h;
             self.slide = (lift > 1.0 / 64.0 && d.abs() > 1.0 / 64.0).then(|| (lift * target / d, -lift / d));
+            self.riding = false;
         }
     }
 
@@ -123,6 +129,7 @@ impl Dev {
         self.h -= cut;
         self.span = (self.target - self.h).abs();
         self.slide = Some((pinned, -1.0));
+        self.riding = true;
         cut
     }
 
@@ -132,6 +139,7 @@ impl Dev {
         let (d, end) = (stage - h, self.target - stage);
         let b = if d > 1.0 / 64.0 { (end - from) / d } else { 0.0 };
         self.slide = Some((if d > 1.0 / 64.0 { from - b * h } else { end }, b));
+        self.riding = false;
         self.stage = Some(stage);
         self.span = d;
     }
@@ -215,9 +223,9 @@ impl Dev {
         };
         if self.glide.is_some() && !self.streaming {
             let left = (self.target - self.h).abs();
-            // differs from dev: this is the sentinel the branch no longer carries, kept here so
-            // the reference stays dev's own reading of an easing that lands on exactly -1.0.
-            let riding = self.slide.is_some_and(|(_, b)| b == -1.0);
+            // differs from dev: dev read riding off the float (`b == -1.0`), so a computed slope
+            // landing on exactly -1.0 zeroed the fold's feather; the state says it now.
+            let riding = self.riding;
             let aim = if left > 0.25 && !riding { self.feather.unwrap_or(edge.mask_max).min(1.5 * left) } else { 0.0 };
             self.mask = if aim > self.mask { (self.mask + DEV_FOLD_FEATHER_GROW * dt).min(aim) } else { aim };
         } else if aim > self.mask {
@@ -229,6 +237,7 @@ impl Dev {
         if !self.moving() {
             if !self.shut {
                 self.slide = None;
+                self.riding = false;
             }
             if !self.streaming {
                 self.paced = false;
@@ -352,7 +361,7 @@ fn compare(t: &GrowTrack, d: &Dev, path: &[Ev], e: Ev) {
 
     // How the contents draw.
     let riding = matches!(t.lift, Lift::Riding { .. });
-    assert_eq!(riding, d.slide.is_some_and(|(_, b)| b == -1.0), "riding after {}", what());
+    assert_eq!(riding, d.riding, "riding after {}", what());
     assert_eq!(!matches!(t.lift, Lift::None), d.slide.is_some(), "lifted at all after {}", what());
 
     // The climb on the stream's pace.
