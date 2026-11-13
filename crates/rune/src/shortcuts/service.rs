@@ -35,7 +35,13 @@ static NATIVE: Mutex<Vec<(ShortcutId, Shortcut, &'static str)>> = Mutex::new(Vec
 struct Slot {
     engine: Arc<Mutex<Engine>>,
     wake: Waker,
+    /// The generation of the host that installed it: only that host's close takes it.
+    generation: u64,
 }
+
+/// An owner thread's engine and the generation of the host that installed it.
+#[cfg(not(target_os = "linux"))]
+type Installed = (u64, Rc<RefCell<Engine>>);
 
 struct Control {
     #[cfg(not(target_os = "linux"))]
@@ -45,6 +51,10 @@ struct Control {
     engine: Mutex<Option<Slot>>,
     /// How many hosts have attached; changed and read under the routing lock.
     hosts: AtomicU64,
+    /// The newest host's generation, taken as it installs its engine (on Linux under the slot
+    /// lock, so the slot always holds the newest). A guard, engine or activation holding an
+    /// older one is stale, and changes nothing its successor owns.
+    generation: AtomicU64,
 }
 
 pub(crate) struct Hub<S> {
@@ -66,6 +76,7 @@ impl<S> Default for Hub<S> {
                 #[cfg(target_os = "linux")]
                 engine: Mutex::default(),
                 hosts: AtomicU64::new(0),
+                generation: AtomicU64::new(0),
             }),
             pending: Mutex::default(), handlers: Arc::default(), errors: Mutex::default(), title: OnceLock::new(), unmodified: AtomicBool::new(false),
         }
@@ -75,7 +86,7 @@ impl<S> Default for Hub<S> {
 #[cfg(not(target_os = "linux"))]
 thread_local! {
     // Native handles never cross threads, even though AppHandle can.
-    static ENGINES: RefCell<HashMap<usize, Rc<RefCell<Engine>>>> = RefCell::default();
+    static ENGINES: RefCell<HashMap<usize, Installed>> = RefCell::default();
 }
 
 struct Engine {
@@ -149,6 +160,9 @@ impl Drop for Engine {
 }
 
 impl Control {
+    /// Whether `generation` belongs to the newest host.
+    fn current(&self, generation: u64) -> bool { self.generation.load(Ordering::Relaxed) == generation }
+
     fn call<T: Send + 'static>(&self, f: impl FnOnce(&mut Engine) -> Result<T, ShortcutError> + Send + 'static) -> Result<T, ShortcutError> {
         self.call_stamped(None, f)
     }
@@ -185,7 +199,7 @@ impl Control {
         match effect {
             Some(AttachEffect::Run { wake }) => {
                 drop(route);
-                let engine = ENGINES.with(|engines| engines.borrow().get(&self.key).cloned()).ok_or(ShortcutError::NotRunning)?;
+                let engine = ENGINES.with(|engines| engines.borrow().get(&self.key).map(|(_, engine)| engine.clone())).ok_or(ShortcutError::NotRunning)?;
                 let result = f(&mut engine.borrow_mut());
                 wake();
                 result
@@ -253,10 +267,49 @@ impl<S: 'static> Hub<S> {
 /// Owned by the host, not AppHandle: closing/dropping the app releases native registrations.
 pub(crate) struct Guard {
     control: Arc<Control>,
+    /// The generation this host's engine was installed with.
+    generation: u64,
     /// Told the last host the close ends.
     cleanup: Option<Box<dyn FnOnce(u64)>>,
     // The guard must be destroyed on the owning event-loop thread.
     _thread: std::marker::PhantomData<Rc<()>>,
+}
+
+/// A host whose engine is installed, before it takes routing.
+struct Attaching {
+    control: Arc<Control>,
+    generation: u64,
+    wake: Waker,
+    // Routing names this thread as the owner, and a macOS or Windows engine never leaves it.
+    _thread: std::marker::PhantomData<Rc<()>>,
+}
+
+/// A close part-way through.
+struct Closing {
+    /// The last host the close ends: handlers stamped after it stay.
+    ended: u64,
+    /// This host was still the newest once routing closed. A stale close clears no handlers.
+    current: bool,
+}
+
+/// What a backend calls when its chord is pressed. The handler runs only if the engine's host is
+/// still the newest when the update is delivered: a replaced engine's activation runs nothing.
+fn sink<S: 'static>(shared: &Arc<Shared<S>>, generation: u64) -> Sink {
+    let weak = Arc::downgrade(shared);
+    Arc::new(move |id, token| {
+        if let Some(shared) = weak.upgrade() {
+            let weak = Arc::downgrade(&shared);
+            crate::AppHandle { shared }.update(move |state, tx| {
+                let handler = weak.upgrade().filter(|s| s.shortcuts.control.current(generation))
+                    .and_then(|s| s.shortcuts.handlers.lock().unwrap().get(&id).map(|(_, handler)| handler.clone()));
+                if let Some(handler) = handler {
+                    tx.shortcut_activation_token = token;
+                    handler(state, tx);
+                    tx.shortcut_activation_token = None;
+                }
+            });
+        }
+    })
 }
 
 impl Guard {
@@ -265,29 +318,91 @@ impl Guard {
     }
 
     fn attach_with<S: 'static>(shared: &Arc<Shared<S>>, wake: Waker, headless: bool, wayland: bool, connect: Connect) -> Self {
-        let weak = Arc::downgrade(shared);
-        let sink: Sink = Arc::new(move |id, token| {
-            if let Some(shared) = weak.upgrade() {
-                let weak = Arc::downgrade(&shared);
-                crate::AppHandle { shared }.update(move |state, tx| {
-                    let handler = weak.upgrade().and_then(|s| s.shortcuts.handlers.lock().unwrap().get(&id).map(|(_, handler)| handler.clone()));
-                    if let Some(handler) = handler {
-                        tx.shortcut_activation_token = token;
-                        handler(state, tx);
-                        tx.shortcut_activation_token = None;
-                    }
-                });
-            }
-        });
+        Self::install(shared, wake, headless, wayland, connect).route(shared)
+    }
+
+    /// The first half of an attach: a new engine, with the next generation, replaces the one this
+    /// thread (or, on Linux, the App) had.
+    fn install<S: 'static>(shared: &Arc<Shared<S>>, wake: Waker, headless: bool, wayland: bool, connect: Connect) -> Attaching {
         let control = shared.shortcuts.control.clone();
         let title = shared.shortcuts.title.get().copied().unwrap_or_default();
         let bindings = if headless { Bindings::Virtual(HashMap::new()) } else { Bindings::Disconnected };
-        let engine = Engine { title, wayland, sink, connect, bindings };
+        let engine = |generation| Engine { title, wayland, sink: sink(shared, generation), connect, bindings };
         #[cfg(not(target_os = "linux"))]
-        ENGINES.with(|engines| engines.borrow_mut().insert(control.key, Rc::new(RefCell::new(engine))));
+        let generation = {
+            let generation = control.generation.fetch_add(1, Ordering::Relaxed) + 1;
+            ENGINES.with(|engines| engines.borrow_mut().insert(control.key, (generation, Rc::new(RefCell::new(engine(generation))))));
+            generation
+        };
         // A replaced engine closes with the slot locked, so callers wait until its chords are free.
         #[cfg(target_os = "linux")]
-        { *control.engine.lock().unwrap() = Some(Slot { engine: Arc::new(Mutex::new(engine)), wake: wake.clone() }); }
+        let generation = {
+            let mut slot = control.engine.lock().unwrap();
+            let generation = control.generation.fetch_add(1, Ordering::Relaxed) + 1;
+            *slot = Some(Slot { engine: Arc::new(Mutex::new(engine(generation))), wake: wake.clone(), generation });
+            generation
+        };
+        Attaching { control, generation, wake, _thread: std::marker::PhantomData }
+    }
+
+    pub(crate) fn drain(&self) {
+        #[cfg(not(target_os = "linux"))]
+        {
+            // Calls wait for the newest host, so a replaced one leaves them for it.
+            if !self.control.current(self.generation) { return; }
+            let drained = step_attachment(&mut self.control.attachment.lock().unwrap(), AttachEvent::Drain);
+            let Some(AttachEffect::Jobs(jobs)) = drained.into_iter().next() else { return };
+            let engine = ENGINES.with(|engines| engines.borrow().get(&self.control.key).map(|(_, engine)| engine.clone()));
+            if let Some(engine) = engine { for job in jobs { job(&mut engine.borrow_mut()); } }
+        }
+    }
+
+    /// Ends routing, whichever host holds it, and releases the callers waiting on it.
+    fn close_routing(&self) -> Closing {
+        let mut route = self.control.attachment.lock().unwrap();
+        let closed = step_attachment(&mut route, AttachEvent::Close);
+        let ended = self.control.hosts.load(Ordering::Relaxed);
+        // A host that installs after this reads newer, and counts after `ended`.
+        let current = self.control.current(self.generation);
+        drop(route);
+        // Dropping queued reply senders releases waiting callers with NotRunning.
+        for effect in closed { if let AttachEffect::Release(jobs) = effect { drop(jobs); } }
+        Closing { ended, current }
+    }
+
+    /// Takes and releases this host's own engine, and never one a newer host installed.
+    #[cfg_attr(not(target_os = "linux"), allow(unused_variables))]
+    fn release_engine(&self, closing: &mut Closing) {
+        #[cfg(not(target_os = "linux"))]
+        ENGINES.with(|engines| {
+            let own = engines.borrow().get(&self.control.key).is_some_and(|(generation, _)| *generation == self.generation);
+            if own { engines.borrow_mut().remove(&self.control.key); }
+        });
+        // The slot stays locked through the release, so a new host can't start while this one's
+        // backend still holds its chords.
+        #[cfg(target_os = "linux")]
+        {
+            let mut slot = self.control.engine.lock().unwrap();
+            if slot.as_ref().is_some_and(|slot| slot.generation == self.generation) && let Some(own) = slot.take() {
+                // As on dev, the close ends every host counted by now. None installed since this
+                // one, or the slot would hold its engine.
+                closing.ended = self.control.hosts.load(Ordering::Relaxed);
+                own.engine.lock().unwrap().release();
+            }
+        }
+    }
+
+    /// Clears the handlers of the hosts the close ended, unless a newer host owns them now.
+    fn end(&mut self, closing: Closing) {
+        if !closing.current { return; }
+        if let Some(cleanup) = self.cleanup.take() { cleanup(closing.ended); }
+    }
+}
+
+impl Attaching {
+    /// The second half of an attach: this host takes routing, then registers what waited for it.
+    fn route<S: 'static>(self, shared: &Arc<Shared<S>>) -> Guard {
+        let Self { control, generation, wake, .. } = self;
         {
             let mut route = control.attachment.lock().unwrap();
             control.hosts.fetch_add(1, Ordering::Relaxed);
@@ -296,7 +411,7 @@ impl Guard {
         let handlers = shared.shortcuts.handlers.clone();
         // A host that attached after the close took routing keeps its handlers.
         let cleanup = move |ended: u64| handlers.lock().unwrap().retain(|_, (stamp, _)| stamp.load(Ordering::Relaxed) > ended);
-        let guard = Self { control, cleanup: Some(Box::new(cleanup)), _thread: std::marker::PhantomData };
+        let guard = Guard { control, generation, cleanup: Some(Box::new(cleanup)), _thread: std::marker::PhantomData };
         for (shortcut, handler) in std::mem::take(&mut *shared.shortcuts.pending.lock().unwrap()) {
             if let Err(error) = shortcut.and_then(|s| shared.shortcuts.register(s, handler)) {
                 eprintln!("rune: {error}");
@@ -305,38 +420,13 @@ impl Guard {
         }
         guard
     }
-
-    pub(crate) fn drain(&self) {
-        #[cfg(not(target_os = "linux"))]
-        {
-            let drained = step_attachment(&mut self.control.attachment.lock().unwrap(), AttachEvent::Drain);
-            let Some(AttachEffect::Jobs(jobs)) = drained.into_iter().next() else { return };
-            let engine = ENGINES.with(|engines| engines.borrow().get(&self.control.key).cloned());
-            if let Some(engine) = engine { for job in jobs { job(&mut engine.borrow_mut()); } }
-        }
-    }
 }
 
 impl Drop for Guard {
     fn drop(&mut self) {
-        let mut route = self.control.attachment.lock().unwrap();
-        let closed = step_attachment(&mut route, AttachEvent::Close);
-        #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
-        let mut ended = self.control.hosts.load(Ordering::Relaxed);
-        drop(route);
-        // Dropping queued reply senders releases waiting callers with NotRunning.
-        for effect in closed { if let AttachEffect::Release(jobs) = effect { drop(jobs); } }
-        #[cfg(not(target_os = "linux"))]
-        ENGINES.with(|engines| engines.borrow_mut().remove(&self.control.key));
-        // The slot stays locked through the release, so a new host can't start while this one's
-        // backend still holds its chords.
-        #[cfg(target_os = "linux")]
-        if let Some(slot) = self.control.engine.lock().unwrap().take() {
-            // A host that attached since installed this engine first, so it ends with this close.
-            ended = self.control.hosts.load(Ordering::Relaxed);
-            slot.engine.lock().unwrap().release();
-        }
-        if let Some(cleanup) = self.cleanup.take() { cleanup(ended); }
+        let mut closing = self.close_routing();
+        self.release_engine(&mut closing);
+        self.end(closing);
     }
 }
 
@@ -348,6 +438,8 @@ mod machine_tests;
 mod routing_tests;
 #[cfg(test)]
 mod host_handler_tests;
+#[cfg(test)]
+mod generation_tests;
 #[cfg(all(test, target_os = "linux"))]
 mod teardown_tests;
 

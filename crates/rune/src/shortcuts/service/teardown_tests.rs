@@ -309,7 +309,11 @@ fn a_call_that_reaches_the_new_engine_wakes_its_host_and_lets_the_old_one_go() {
         let (old, seen) = (old.clone(), seen.clone());
         Arc::new(move || { *seen.lock().unwrap() = Some(old.upgrade().is_some()); })
     };
-    *control.engine.lock().unwrap() = Some(Slot { engine: second.clone(), wake: b_wake.clone() });
+    {
+        let mut slot = control.engine.lock().unwrap();
+        let generation = control.generation.fetch_add(1, Ordering::Relaxed) + 1;
+        *slot = Some(Slot { engine: second.clone(), wake: b_wake.clone(), generation });
+    }
 
     // The call captures routing's wake (the first host) and the newer engine, then runs on it.
     let (entered, enter) = mpsc::channel();
