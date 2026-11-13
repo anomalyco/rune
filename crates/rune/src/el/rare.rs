@@ -40,6 +40,8 @@ pub(crate) struct ElCold {
     pub(crate) virtual_rows: Option<Rc<crate::el::virtual_rows::RowSource>>,
     /// [`El::virtual_rows_version`](crate::El::virtual_rows_version), hashed.
     pub(crate) virtual_rows_version: Option<u64>,
+    /// [`El::virtual_rows_source`](crate::El::virtual_rows_source), hashed.
+    pub(crate) virtual_rows_source: Option<u64>,
     /// The memo this element was expanded from (`El::expand_memo`) to mount virtual rows.
     pub(crate) expanded_memo: Option<Rc<crate::memo::Built>>,
     pub(crate) glide: Option<crate::growth::FoldGlide>,
@@ -86,6 +88,7 @@ impl Empty for ElCold {
         virtual_estimate: None,
         virtual_rows: None,
         virtual_rows_version: None,
+        virtual_rows_source: None,
         expanded_memo: None,
         glide: None,
         input: None,

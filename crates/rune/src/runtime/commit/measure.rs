@@ -336,6 +336,7 @@ impl<S: 'static> Measurement<'_, S> {
             None => v.same_keys(el.children.iter().map(|c| c.key.as_deref())),
         };
         v.keys_version = version;
+        v.source = el.cold.virtual_rows_source.filter(|_| source.is_some());
         let mut renamed_children = Vec::new();
         // Most commits keep the same rows; only a change pays for sets of every key.
         let anchor = if same {

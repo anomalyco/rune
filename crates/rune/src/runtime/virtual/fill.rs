@@ -3,6 +3,7 @@
 //! frame that finds no list asking settles it; a list whose heights keep changing for longer
 //! than the bound waits, backs off and resumes, so it fills once they settle instead of going
 //! blank. A wake whose attempt the fill no longer holds draws nothing and never starts it again.
+//! Lists that name their data (`El::virtual_rows_source`) start a fresh run when it changes.
 
 use crate::machine::{Attempt, Effects, Seq};
 
@@ -44,6 +45,11 @@ pub(crate) struct Fill {
     /// The deadline this fill armed: the attempt it resumes and when. A wake whose attempt the
     /// state no longer holds is stale, so the fill draws nothing for it.
     wake: Option<(Attempt, f64)>,
+    /// The sum of the `El::virtual_rows_source`s of the lists asking for rows; zero when none
+    /// names one.
+    sources: u64,
+    /// The host timer the last wait armed for named lists, while no other timer is at its instant.
+    timer: Option<f64>,
 }
 
 /// What a finished frame found.
@@ -88,6 +94,31 @@ impl Fill {
     /// resumes it.
     pub(super) fn resuming(&self, now: f64) -> bool {
         self.wake.is_some_and(|(_, due)| now >= due)
+    }
+
+    /// Notes `sources` asking for rows. A change retires the run as a frame with nothing wanted
+    /// would, and returns the host timer its wait alone armed, for the caller to disarm.
+    pub(super) fn lists(&mut self, now: f64, sources: u64) -> Option<f64> {
+        if sources == self.sources { return None; }
+        self.sources = sources;
+        let timer = self.timer.take().filter(|_| matches!(self.state, State::Waiting { .. }));
+        self.step(FillEvent::Frame { now, wanted: false, missing: 0, moved: false });
+        timer
+    }
+
+    /// Whether the run's lists name their data, so its wait tracks its host timer.
+    pub(super) fn named(&self) -> bool {
+        self.sources != 0
+    }
+
+    /// The wait armed the host timer at `due`: `Some` when its alone, for named lists.
+    pub(super) fn own_timer(&mut self, due: Option<f64>) {
+        self.timer = due;
+    }
+
+    /// Another timer was armed at `at`: a wait's timer there is no longer its alone.
+    pub(super) fn timer_shared(&mut self, at: f64) {
+        if self.timer == Some(at) { self.timer = None; }
     }
 
     /// Arms this fill's deadline at `due` for `attempt`.

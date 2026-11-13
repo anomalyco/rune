@@ -62,16 +62,18 @@ impl<S: 'static> Runtime<S> {
             .map_or((0.0, false), |s| ((s.offset as f32 - v.top).max(0.0), s.pinned()))
     }
 
-    /// Whether an index-built list wants its window moved, and whether one of those lists' own
-    /// viewports moved this frame. Another viewport's motion invalidates nothing here.
-    fn virtual_demand(&self) -> (bool, bool) {
-        let (mut wanted, mut moved) = (false, false);
+    /// Whether an index-built list wants its window moved, whether one of those lists' own
+    /// viewports moved this frame (another viewport's motion invalidates nothing here), and the
+    /// sum of their `El::virtual_rows_source`s.
+    fn virtual_demand(&self) -> (bool, bool, u64) {
+        let (mut wanted, mut moved, mut sources) = (false, false, 0u64);
         for (path, v) in &self.virtuals {
             if !v.indexed || !self.wants_window(path, v) { continue; }
             wanted = true;
             moved |= self.path_ids.get(&v.scroll_path).and_then(|id| self.scrolls.get(id)).is_some_and(|s| s.moving());
+            if let Some(source) = v.source { sources = sources.wrapping_add(source); }
         }
-        (wanted, moved)
+        (wanted, moved, sources)
     }
 
     /// Rows an index-built list still has to mount across the lists that want a window moved;
@@ -92,12 +94,18 @@ impl<S: 'static> Runtime<S> {
     /// the unfilled range stops shrinking.
     pub(super) fn virtual_filling(&mut self) -> bool {
         let now = self.clock;
-        let (wanted, moved) = self.virtual_demand();
+        let (wanted, moved, sources) = self.virtual_demand();
         // A wake must draw nothing for a list that finished, unmounted or stopped filling: it
         // retires the wait, and the deadline it left draws no frame of its own.
         if !wanted {
             self.virtual_fill.step(FillEvent::Frame { now, wanted: false, missing: 0, moved: false });
             return false;
+        }
+        // Lists asking under another `El::virtual_rows_source` retire the run and its timer.
+        if let Some(due) = self.virtual_fill.lists(now, sources)
+            && let Ok(i) = self.wake_deadlines.binary_search_by(|t| t.total_cmp(&due))
+        {
+            self.wake_deadlines.remove(i);
         }
         // The fill's own deadline, which it clears when it leaves the wait: a deadline a retired
         // run left behind is not this call's cause, so the frame is read as any other.
@@ -110,7 +118,11 @@ impl<S: 'static> Runtime<S> {
         for effect in self.virtual_fill.step(FillEvent::Frame { now, wanted, missing, moved }) {
             match effect {
                 FillEffect::Draw => draw = true,
-                FillEffect::WakeAt(due) => self.wake_at(due),
+                FillEffect::WakeAt(due) => {
+                    let alone = self.virtual_fill.named() && self.wake_deadlines.binary_search_by(|t| t.total_cmp(&due)).is_err();
+                    self.wake_at(due);
+                    self.virtual_fill.own_timer(alone.then_some(due));
+                }
             }
         }
         draw

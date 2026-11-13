@@ -99,6 +99,15 @@ impl El {
         self
     }
 
+    /// Names the data [`El::virtual_rows`] shows (a folder, a query); a new one restarts its fill.
+    pub fn virtual_rows_source(mut self, source: impl std::hash::Hash) -> Self {
+        // SipHash, not Fx: the fill sums the ids of the lists asking, and Fx is linear on integers.
+        let mut hasher = std::hash::DefaultHasher::new();
+        std::hash::Hash::hash(&source, &mut hasher);
+        self.cold_mut().virtual_rows_source = Some(std::hash::Hasher::finish(&hasher));
+        self
+    }
+
     /// On a virtual list ([`El::virtualize`] or [`El::virtual_rows`]), called with the index
     /// range `start..end` of rows currently visible in its scroll viewport: once after its
     /// first layout, then whenever that range or the rows change. Return `true` when `f`

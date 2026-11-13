@@ -309,6 +309,7 @@ impl<S: 'static> Runtime<S> {
     pub(super) fn schedule_wakes_from(&mut self, now: f64, wakes: impl IntoIterator<Item = std::time::Duration>) {
         for delay in wakes {
             let deadline = now + delay.as_secs_f64();
+            self.virtual_fill.timer_shared(deadline);
             if let Err(index) = self.wake_deadlines.binary_search_by(|t| t.total_cmp(&deadline)) {
                 self.wake_deadlines.insert(index, deadline);
             }

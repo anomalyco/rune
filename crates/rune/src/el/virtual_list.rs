@@ -66,6 +66,8 @@ pub(crate) struct VirtualList {
     pub anchor: Option<(String, f32)>,
     /// The `El::virtual_rows_version` that `keys` came with.
     pub keys_version: Option<u64>,
+    /// The `El::virtual_rows_source` the rows came with.
+    pub source: Option<u64>,
     /// The visible row range last sent to `El::on_visible_rows`.
     pub reported_visible: Option<Range<usize>>,
     /// What the last applied commit mounted, for a memo holding this list to keep its nodes.
