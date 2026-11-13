@@ -1,5 +1,8 @@
 //! Convert Rune's premultiplied composition to the straight alpha required by
 //! wgpu's straight-alpha surfaces and PNG exports. Metal's CAMetalLayer stays premultiplied.
+/// The pass's shader (`surface_alpha.wgsl`).
+pub(crate) const WGSL: &str = include_str!("../surface_alpha.wgsl");
+
 pub(crate) struct AlphaSurface {
     pub view: wgpu::TextureView,
     texture: wgpu::Texture,
@@ -46,21 +49,6 @@ mod tests {
 }
 impl AlphaSurface {
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat, size: (u32, u32)) -> Self {
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("straight alpha"),
-            source: wgpu::ShaderSource::Wgsl(r#"
-@group(0) @binding(0) var source: texture_2d<f32>;
-@vertex fn vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
-    let points = array(vec2(-1.0, -1.0), vec2(3.0, -1.0), vec2(-1.0, 3.0));
-    return vec4(points[index], 0.0, 1.0);
-}
-@fragment fn fs(@builtin(position) point: vec4<f32>) -> @location(0) vec4<f32> {
-    let color = textureLoad(source, vec2<i32>(point.xy), 0);
-    if color.a > 0.0 { return vec4(color.rgb / color.a, color.a); }
-    return vec4(0.0);
-}
-"#.into()),
-        });
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("alpha source"), entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0, visibility: wgpu::ShaderStages::FRAGMENT,
@@ -71,14 +59,24 @@ impl AlphaSurface {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("alpha conversion"), bind_group_layouts: &[Some(&layout)], immediate_size: 0,
         });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let make = |shaders: &super::dxbc::Shaders| device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("straight alpha"), layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState { module: &shader, entry_point: Some("vs"), compilation_options: Default::default(), buffers: &[] },
+            vertex: wgpu::VertexState { module: &shaders.vertex, entry_point: Some("vs"), compilation_options: Default::default(), buffers: &[] },
             primitive: Default::default(), depth_stencil: None, multisample: Default::default(),
-            fragment: Some(wgpu::FragmentState { module: &shader, entry_point: Some("fs"), compilation_options: Default::default(),
+            fragment: Some(wgpu::FragmentState { module: &shaders.fragment, entry_point: Some("fs"), compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::ALL })] }),
             multiview_mask: None, cache: None,
         });
+        // DX12 takes the bytecode regen_dxbc compiled from this WGSL; elsewhere, or when it's stale
+        // or refused, the WGSL compiles here.
+        #[cfg(target_os = "windows")]
+        let precompiled = super::dxbc::surface_alpha(device, WGSL, &make);
+        #[cfg(not(target_os = "windows"))]
+        let precompiled = None;
+        let pipeline = precompiled.map_or_else(|| {
+            let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("straight alpha"), source: wgpu::ShaderSource::Wgsl(WGSL.into()) });
+            make(&super::dxbc::Shaders::one(module))
+        }, |(_, pipeline)| pipeline);
         let (texture, view, bind) = Self::target(device, &layout, format, size);
         Self { texture, view, bind, pipeline, layout, format }
     }

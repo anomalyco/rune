@@ -28,6 +28,13 @@ impl Renderer {
     }
 }
 
+/// Makes and drops the straight-alpha pass from its WGSL, for regen_dxbc to take the HLSL wgpu
+/// generates for it.
+#[doc(hidden)]
+pub fn make_straight_alpha(device: &wgpu::Device, format: wgpu::TextureFormat) {
+    drop(AlphaSurface::new(device, format, (16, 16)));
+}
+
 /// How many pipelines Rune's Metal backend compiled at runtime because its precompiled library
 /// lacked them; `None` on any other backend.
 #[doc(hidden)]

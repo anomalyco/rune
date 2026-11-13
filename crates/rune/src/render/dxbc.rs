@@ -32,6 +32,15 @@ const VERTEX_DUAL: &[u8] = include_bytes!("../../uber.vs-dual.dxbc");
 #[cfg(target_os = "windows")]
 const FRAGMENT_DUAL: &[u8] = include_bytes!("../../uber.fs-dual.dxbc");
 
+// The built-in passes besides the uber shader, compiled by regen_dxbc from their WGSL as wgpu
+// would, and the BLAKE3 of the WGSL each came from (`uber/pass_dxbc_hash.rs`).
+#[cfg(target_os = "windows")]
+include!("uber/pass_dxbc_hash.rs");
+#[cfg(target_os = "windows")]
+const ALPHA_VERTEX: &[u8] = include_bytes!("../../alpha.vs.dxbc");
+#[cfg(target_os = "windows")]
+const ALPHA_FRAGMENT: &[u8] = include_bytes!("../../alpha.fs.dxbc");
+
 /// The uber shader's modules: one WGSL (or metallib) module for both stages, or one
 /// precompiled module per stage.
 #[derive(Clone)]
@@ -79,30 +88,44 @@ impl Layout<false> {
 /// matches Windfoil's WGSL and layout and the driver takes it.
 #[cfg(target_os = "windows")]
 pub(super) fn uber<T>(device: &wgpu::Device, make_pipeline: impl FnOnce(&Shaders) -> T) -> Option<(Shaders, T)> {
-    load(device, (VERTEX, FRAGMENT), "uber", make_pipeline)
+    load(device, (VERTEX, FRAGMENT), "uber", uber_fresh, make_pipeline)
 }
 
 /// [`uber`] for the subpixel variant.
 #[cfg(target_os = "windows")]
 pub(super) fn uber_dual<T>(device: &wgpu::Device, make_pipeline: impl FnOnce(&Shaders) -> T) -> Option<(Shaders, T)> {
-    load(device, (VERTEX_DUAL, FRAGMENT_DUAL), "subpixel uber", make_pipeline)
+    load(device, (VERTEX_DUAL, FRAGMENT_DUAL), "subpixel uber", uber_fresh, make_pipeline)
+}
+
+/// The straight-alpha pass (render/surface_alpha.rs) from its precompiled stages, when they were
+/// compiled from `wgsl` and the driver takes them.
+#[cfg(target_os = "windows")]
+pub(super) fn surface_alpha<T>(device: &wgpu::Device, wgsl: &str, make_pipeline: impl FnOnce(&Shaders) -> T) -> Option<(Shaders, T)> {
+    load(device, (ALPHA_VERTEX, ALPHA_FRAGMENT), "straight alpha", || compiled_from(wgsl, ALPHA_DXBC_WGSL_BLAKE3, "straight alpha"), make_pipeline)
+}
+
+/// Whether a pass's bytecode came from `wgsl` (its `\r\n` read as `\n`, as build.rs reads the
+/// uber shader's); says so when it didn't.
+#[cfg(target_os = "windows")]
+fn compiled_from(wgsl: &str, recorded: &str, what: &str) -> bool {
+    let now = blake3::hash(wgsl.replace("\r\n", "\n").as_bytes()).to_hex();
+    if now.as_str() == recorded { return true; }
+    eprintln!("rune: the precompiled DX12 {what} shader was built from other WGSL (blake3 {recorded}, now {now}); compiling WGSL. Rebuild it with `cargo run -p rune --example regen_dxbc` on Windows");
+    false
 }
 
 #[cfg(target_os = "windows")]
-fn load<T>(device: &wgpu::Device, (vertex, fragment): (&'static [u8], &'static [u8]), what: &str, make_pipeline: impl FnOnce(&Shaders) -> T) -> Option<(Shaders, T)> {
+fn load<T>(device: &wgpu::Device, (vertex, fragment): (&'static [u8], &'static [u8]), what: &str, fresh: impl FnOnce() -> bool, make_pipeline: impl FnOnce(&Shaders) -> T) -> Option<(Shaders, T)> {
     if device.adapter_info().backend != wgpu::Backend::Dx12 || !device.features().contains(wgpu::Features::PASSTHROUGH_SHADERS) || !enabled() {
         return None;
     }
-    if !WGSL_MATCHES || !ABI_MATCHES {
-        stale();
-        return None;
-    }
+    if !fresh() { return None; }
     let module = |blob: &'static [u8], entry: &'static str| {
-        // SAFETY: the bytecode is FXC's compile of the HLSL wgpu generates for `wgsl` with the
-        // uber layout (checked by `uber_dxbc_is_fresh`), so it binds what the layout declares.
+        // SAFETY: the bytecode is FXC's compile of the HLSL wgpu generates for this pass's WGSL with
+        // its layout (regen_dxbc; `fresh` checked it's that WGSL), so it binds what the layout declares.
         unsafe {
             device.create_shader_module_passthrough(wgpu::ShaderModuleDescriptorPassthrough {
-                label: Some("uber"),
+                label: Some(what),
                 entry_points: std::borrow::Cow::Owned(vec![wgpu::PassthroughShaderEntryPoint { name: entry.into(), workgroup_size: (0, 0, 0) }]),
                 dxil: Some(std::borrow::Cow::Borrowed(blob)),
                 ..Default::default()
@@ -121,6 +144,13 @@ fn load<T>(device: &wgpu::Device, (vertex, fragment): (&'static [u8], &'static [
             None
         }
     }
+}
+
+/// Whether the uber bytecode matches this build's Windfoil WGSL and layout; says why once when not.
+#[cfg(target_os = "windows")]
+fn uber_fresh() -> bool {
+    if !WGSL_MATCHES || !ABI_MATCHES { stale(); }
+    WGSL_MATCHES && ABI_MATCHES
 }
 
 /// Says once why the shipped bytecode can't be used, and how to rebuild it.

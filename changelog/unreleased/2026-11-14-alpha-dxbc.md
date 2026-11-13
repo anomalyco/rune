@@ -1,0 +1,1 @@
+- **Windows: the straight-alpha pass (transparent windows and overlays, transparent PNG exports) ships precompiled for DX12.** It compiled its WGSL with FXC the first time a process made one: 7,830-8,280 µs, now 580-793 µs. The first of the built-in passes to stop needing naga at run time on Windows; `regen_dxbc` rebuilds it with the uber shader.
