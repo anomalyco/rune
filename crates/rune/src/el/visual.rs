@@ -104,6 +104,8 @@ pub struct VisualCold {
     pub(crate) hold_landing: bool,
     /// `El::paint_contained`: the origin (window points) its children snap against.
     pub(crate) paint_contain: Option<[f32; 2]>,
+    /// `El::motion_snaps`: while it moves, it and its subtree snap every frame.
+    pub(crate) motion_snaps: bool,
     /// `El::offset`: a visual shift in points.
     pub(crate) offset: [f32; 2],
     /// Static alpha of this element's own paint; never inherited or isolated.
@@ -168,6 +170,7 @@ impl Empty for VisualCold {
         flight_crop: false,
         hold_landing: false,
         paint_contain: None,
+        motion_snaps: false,
         offset: [0.0; 2],
         paint_alpha: 1.0,
         layer_opacity: 1.0,

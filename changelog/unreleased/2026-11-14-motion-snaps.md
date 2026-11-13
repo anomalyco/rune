@@ -1,0 +1,1 @@
+- `El::motion_snaps()` snaps a moving element and its subtree to whole device pixels every frame, as Chromium paints a box that layout moves; by default a moving box still glides at sub-pixel precision.

@@ -31,4 +31,14 @@ impl El {
         self.vis.cold_mut().paint_contain = Some(origin);
         self
     }
+
+    /// While it moves, this element and everything in it snap to whole device pixels every
+    /// frame, as Chromium paints a box that layout moves (a width or position that springs):
+    /// its fill, border, shadow and ring keep the profile they have at rest, stepping a pixel
+    /// at a time. By default a moving box glides at sub-pixel precision, as Chromium draws a
+    /// CSS transform, and its edges blend over the pixels they cross.
+    pub fn motion_snaps(mut self) -> Self {
+        self.vis.cold_mut().motion_snaps = true;
+        self
+    }
 }

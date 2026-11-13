@@ -115,6 +115,8 @@ pub(super) struct Inherit {
     /// The origin in points of the paint containment above (`El::paint_contained`), which is
     /// part of `rigid`: what draws from its own exact box rounds against it too.
     pub contain: [f32; 2],
+    /// `El::motion_snaps` here or above: a moving box snaps where it is each frame.
+    pub steps: bool,
     /// The nearest scaled layer above or here, as an index into this frame's layers plus one
     /// (0: none).
     pub layer: u32,
