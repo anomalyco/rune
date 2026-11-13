@@ -556,7 +556,10 @@ impl<S: 'static> Runtime<S> {
                     let shared = piece.shared.or(laid.single());
                     let still = scale_motion == ScaleMotion::Still && glide == [0.0; 2] && !bytes && !place_masks
                         && !self.flights.iter().any(|f| f.lands(&n.path, n.key.as_deref()));
-                    if let Some(l) = shared.filter(|_| still && !direct && !secret) {
+                    // A layout whose stamp the id table dropped draws from its glyphs, uncopied.
+                    if let Some(l) = shared.filter(|_| still && !direct && !secret)
+                        && let Some(layout_id) = self.text.layout_id(l)
+                    {
                         use std::hash::{Hash, Hasher};
                         let mut h = rune_motion::Fx::default();
                         (origin.map(f32::to_bits), clip.map(f32::to_bits), fade.map(f32::to_bits), shown.map(f32::to_bits), [tk, raster, s].map(f32::to_bits)).hash(&mut h);
@@ -564,7 +567,7 @@ impl<S: 'static> Runtime<S> {
                         for sp in spans_here.iter() {
                             sp.color.map(|c| premul(c, o, srgb).map(f32::to_bits)).hash(&mut h);
                         }
-                        let (id, key) = ((n.id, self.text.layout_id(l)), h.finish());
+                        let (id, key) = ((n.id, layout_id), h.finish());
                         match self.text_quads.get_mut(&id).filter(|(d, _)| d.key == key) {
                             Some((d, used)) => {
                                 *used = self.quads_frame;
