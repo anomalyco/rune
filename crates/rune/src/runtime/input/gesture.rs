@@ -41,12 +41,11 @@ impl<S: 'static> Runtime<S> {
     /// Queues `ev` for the `on_wheel` handlers it may go to; false leaves it to scrolling now.
     fn offer_wheel(&mut self, gesture: Attempt, ev: WheelEvent) -> bool {
         let lock = &self.wheel_lock;
-        let same_gesture = lock.owner_is_arriving();
         // A delta queued this frame may yet be taken: later ones wait their turn behind it.
         let pending = self.wheel_queued(Some(gesture));
         let (scrolls, handled) = match lock.owner() {
-            WheelOwner::Vertical | WheelOwner::Horizontal(_) => (same_gesture, false),
-            WheelOwner::Handler(_) => (false, same_gesture),
+            WheelOwner::Vertical | WheelOwner::Horizontal(_) => (true, false),
+            WheelOwner::Handler(_) => (false, true),
             WheelOwner::Unpicked => (false, false),
         };
         if scrolls && !pending { return false; }
@@ -64,17 +63,21 @@ impl<S: 'static> Runtime<S> {
     pub(super) fn run_wheel(&mut self, gesture: Attempt, chain: Vec<String>, ev: WheelEvent, phased: bool, tx: &mut Tx) -> bool {
         self.wheel_lock.sync_gesture(gesture);
         let mut taken = None;
-        if let WheelOwner::Handler(path) = self.wheel_lock.owner().clone() {
-            taken = self.call_wheel(&path, ev, tx);
-            if taken.is_none() { self.wheel_lock.set_owner(WheelOwner::Unpicked); }
-        } else if self.wheel_lock.owner() == &WheelOwner::Unpicked {
-            for path in chain {
-                if self.call_wheel(&path, ev, tx) == Some(true) {
-                    self.wheel_lock.set_owner(WheelOwner::Handler(path));
-                    taken = Some(true);
-                    break;
+        match self.wheel_lock.owner_of(gesture).cloned() {
+            Some(WheelOwner::Handler(path)) => {
+                taken = self.call_wheel(&path, ev, tx);
+                if taken.is_none() { self.wheel_lock.set_owner(gesture, WheelOwner::Unpicked); }
+            }
+            Some(WheelOwner::Unpicked) => {
+                for path in chain {
+                    if self.call_wheel(&path, ev, tx) == Some(true) {
+                        self.wheel_lock.set_owner(gesture, WheelOwner::Handler(path));
+                        taken = Some(true);
+                        break;
+                    }
                 }
             }
+            _ => {}
         }
         if taken.is_none() {
             self.wheel_scroll_for(gesture, ev.x, ev.y, ev.dx, ev.dy, phased);
@@ -474,6 +477,28 @@ mod tests {
         rt.wheel_event(crate::WheelEvent::new(0.0, -10.0).at(290.0, 50.0));
         rt.frame(1.0 / 60.0);
         assert_eq!(rt.state.heard, [10.0], "the queued delta reaches the handler it was offered to");
+        let id = rt.nodes.iter().find(|n| n.key.as_deref() == Some("list")).unwrap().id;
+        assert_eq!(rt.scrolls[&id].offset, 10.0, "only the newer gesture's own delta scrolled");
+    }
+
+    /// A delta queued for the handler that has the gesture keeps reaching it when the gesture
+    /// ends and the next one scrolls at once, before the frame drains the queue.
+    #[test]
+    fn a_queued_delta_keeps_its_owner_when_the_next_gesture_scrolls_first() {
+        let mut rt = Runtime::new(Wheeled::default(), wheeling, (300.0, 300.0), Env::default());
+        rt.frame(0.0);
+        rt.frame(1.0 / 60.0);
+        // The handler takes the gesture.
+        rt.wheel_event(crate::WheelEvent::new(0.0, -10.0).at(110.0, 50.0));
+        rt.frame(1.0 / 60.0);
+        assert_eq!(rt.state.heard, [10.0]);
+        // A delta outside it is queued for that owner; the gesture ends, and the next one
+        // scrolls at once outside every handler.
+        rt.wheel_event(crate::WheelEvent::new(0.0, -10.0).at(290.0, 50.0));
+        rt.wheel_ended();
+        rt.wheel_event(crate::WheelEvent::new(0.0, -10.0).at(290.0, 50.0));
+        rt.frame(1.0 / 60.0);
+        assert_eq!(rt.state.heard, [10.0, 190.0], "the queued delta still reaches the gesture's owner");
         let id = rt.nodes.iter().find(|n| n.key.as_deref() == Some("list")).unwrap().id;
         assert_eq!(rt.scrolls[&id].offset, 10.0, "only the newer gesture's own delta scrolled");
     }
