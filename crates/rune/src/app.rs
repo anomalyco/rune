@@ -33,7 +33,7 @@ mod web;
 #[cfg(target_arch = "wasm32")]
 pub(crate) use web::with_font;
 
-type Update<S> = Box<dyn FnOnce(&mut S, &mut Tx) -> bool + Send>;
+pub(crate) type Update<S> = Box<dyn FnOnce(&mut S, &mut Tx) -> bool + Send>;
 /// `App::on_window`'s hook, run after each native window creation.
 pub(crate) type OnWindow = Box<dyn FnMut(&crate::WindowHandle)>;
 

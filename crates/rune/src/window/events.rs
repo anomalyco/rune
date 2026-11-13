@@ -9,7 +9,7 @@ impl<S: 'static> Host<S> {
             return;
         }
         // Updates queued before launch (the link that launched the app) show in the first frame.
-        for f in self.shared.take_updates() { self.rt.update_if(f); self.menus.drain(); }
+        startup_updates(&self.shared, &self.shortcuts, |f| { self.rt.update_if(f); self.menus.drain(); });
         if self.launcher() {
             self.create(event_loop, None, false);
             if self.open_at_start && self.options.visible { self.reveal_launcher(event_loop); }
@@ -562,6 +562,13 @@ impl<S: 'static> Host<S> {
             _ => {}
         }
     }
+}
+
+/// Runs the updates queued before launch with `run`, as the host `shortcuts` guards, as every
+/// later drain does, so an activation queued before launch runs in its place among them.
+pub(super) fn startup_updates<S: 'static>(shared: &Shared<S>, shortcuts: &crate::shortcuts::Guard, run: impl FnMut(crate::app::Update<S>)) {
+    let _receiving = shortcuts.receiving();
+    shared.take_updates().into_iter().for_each(run);
 }
 
 /// Whether the mouse message being handled is one Windows made up from a touch or a pen

@@ -44,13 +44,30 @@ fn sink_of(n: usize) -> Sink { SINKS.lock().unwrap().iter().rev().find(|(i, _)| 
 /// A host's guard, its attach or close in progress, and its own state, on the thread the guard
 /// belongs to.
 #[derive(Default)]
-struct Host { guard: Option<Guard>, attaching: Option<Attaching>, closing: Option<Closing>, state: u32 }
+struct Host {
+    guard: Option<Guard>,
+    // Only the reversed routes, off Linux, attach in two steps on a host's own thread.
+    #[cfg_attr(target_os = "linux", allow(dead_code))]
+    attaching: Option<Attaching>,
+    closing: Option<Closing>,
+    state: u32,
+    held: Vec<crate::app::Update<u32>>,
+}
 
 impl Host {
     /// Runs the App's queued updates on this host's state, as its event loop does.
     fn deliver(&mut self, shared: &Shared<u32>) -> u32 {
+        self.take(shared);
+        self.run_held()
+    }
+
+    /// Takes the App's queued updates, as an event loop's drain starts by doing.
+    fn take(&mut self, shared: &Shared<u32>) { self.held.extend(shared.take().updates); }
+
+    /// Runs the updates it took on its own state.
+    fn run_held(&mut self) -> u32 {
         let _receiving = self.guard.as_ref().unwrap().receiving();
-        for f in shared.take().updates { f(&mut self.state, &mut Tx::default()); }
+        for f in std::mem::take(&mut self.held) { f(&mut self.state, &mut Tx::default()); }
         self.state
     }
 }
@@ -423,16 +440,100 @@ fn a_host_paused_before_it_takes_the_calls_leaves_them_to_the_host_routed_meanwh
         host.guard.as_ref().unwrap().drain();
     });
     pauses.recv_timeout(PATIENCE).expect("A paused before it took the calls");
-    let b = Guard::attach(&app.shared, Arc::new(|| {}), true, false);
+    let (b_woken, b_woke) = mpsc::channel();
+    let b = Guard::attach(&app.shared, Arc::new(move || { let _ = b_woken.send(()); }), true, false);
     resume.send(()).unwrap();
     drained.recv_timeout(PATIENCE).expect("A's drain finished");
 
     let on_a = { let shortcut = shortcut.clone(); a.run(move |_| held(key, &shortcut)) };
     assert!(!on_a, "A's engine never ran B's call");
     assert!(waiting(), "the call waits for B");
+    b_woke.recv_timeout(PATIENCE).expect("B was woken for the call it took over");
     b.drain();
     assert!(caller.join().unwrap().is_ok());
     assert!(held(key, &shortcut), "B's engine ran it");
     drop(b);
     a.finish();
+}
+
+/// A caller waits for A, and only A is woken. B takes routing, and the call with it, before A
+/// drains, so A's drain takes nothing. Each host drains only when its own wake asks: B's
+/// attach wakes B for the call it took over, and B runs it.
+#[cfg(not(target_os = "linux"))]
+#[test]
+fn a_host_that_takes_over_a_waiting_call_is_woken_for_it() {
+    let app = app("Inherited");
+    let handle = app.handle();
+    let key = app.shared.shortcuts.control.key;
+    let (mut a, mut b) = (Place::new(true), Place::new(true));
+    // A's wake is only noted: A drains when the test says it answers it.
+    let (a_woken, a_woke) = mpsc::channel();
+    {
+        let shared = app.shared.clone();
+        a.run(move |host| host.guard = Some(Guard::attach(&shared, Arc::new(move || { let _ = a_woken.send(()); }), true, false)));
+    }
+    let shortcut = chord("ctrl+alt+super+f10");
+    let (answer, answered) = mpsc::channel();
+    {
+        let (handle, shortcut) = (handle.clone(), shortcut.clone());
+        std::thread::spawn(move || { let _ = answer.send(handle.register_shortcut(shortcut, |_, _| {})); });
+    }
+    a_woke.recv_timeout(PATIENCE).expect("the call woke A");
+    // B's wake asks B's thread to drain, as its event loop does.
+    let send = b.sender();
+    let wake: Waker = Arc::new(move || { let _ = send.send(Box::new(|host: &mut Host| if let Some(guard) = &host.guard { guard.drain() })); });
+    {
+        let shared = app.shared.clone();
+        b.run(move |host| host.guard = Some(Guard::attach(&shared, wake, true, false)));
+    }
+    // A answers its wake, after B took the call over.
+    a.run(|host| host.guard.as_ref().unwrap().drain());
+    let answer = answered.recv_timeout(PATIENCE).expect("B's own wake drained the call it took over");
+    assert!(answer.is_ok(), "{answer:?}");
+    let on = |place: &mut Place| { let shortcut = shortcut.clone(); place.run(move |_| held(key, &shortcut)) };
+    assert!(!on(&mut a), "A's engine never took the call");
+    assert!(on(&mut b), "B's engine ran it");
+    // B's wake, held by routing, can send B's thread steps, so B closes first.
+    b.finish();
+    a.finish();
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Press { X, Y, ATakes, ARuns, BDelivers }
+
+/// B is the newest host throughout, and presses X, then Y, whose handlers don't commute. A
+/// replaced host on its own thread takes the App's updates in one step and runs them in a later
+/// one, and B delivers at any point: B runs X, then Y, whoever took them first.
+#[test]
+fn a_hosts_presses_run_in_the_order_they_came_whoever_takes_them_first() {
+    use Press::*;
+    let lanes: [&[Press]; 3] = [&[X, Y], &[ATakes, ARuns], &[BDelivers]];
+    for order in interleavings(&lanes) {
+        let app = app("Ordered");
+        let handle = app.handle();
+        let mut a = Place::new(true);
+        {
+            let shared = app.shared.clone();
+            a.run(move |host| host.guard = Some(Guard::attach(&shared, Arc::new(|| {}), true, false)));
+        }
+        let mut b = Host { guard: Some(Guard::attach(&app.shared, Arc::new(|| {}), true, false)), ..Host::default() };
+        let (x, y) = (chord("ctrl+alt+super+f11"), chord("ctrl+alt+super+f12"));
+        handle.register_shortcut(x.clone(), |state, _| *state = *state * 10 + 1).unwrap();
+        handle.register_shortcut(y.clone(), |state, _| *state = *state * 10 + 2).unwrap();
+        for (n, step) in order.iter().enumerate() {
+            let at = format!("{order:?} at {n}");
+            match step {
+                X => app.shared.shortcuts.fire(&x).unwrap(),
+                Y => app.shared.shortcuts.fire(&y).unwrap(),
+                ATakes => { let shared = app.shared.clone(); a.run(move |host| host.take(&shared)); }
+                ARuns => { a.run(|host| host.run_held()); }
+                BDelivers => { b.deliver(&app.shared); }
+            }
+            assert_eq!(a.run(|host| host.state), 0, "A runs none of B's presses: {at}");
+            assert!([0, 1, 12].contains(&b.state), "B ran its presses in order: {at}: {}", b.state);
+        }
+        assert_eq!(b.deliver(&app.shared), 12, "B ran X, then Y: {order:?}");
+        drop(b);
+        a.finish();
+    }
 }

@@ -38,8 +38,10 @@ fn only_the_routed_host_takes_the_waiting_calls() {
     let other = std::thread::spawn(|| std::thread::current().id()).join().unwrap();
     assert!(matches!(step_attachment(&mut state, AttachEvent::Call { from: other, shared: false }).into_iter().next(), Some(AttachEffect::Wait)));
     step_attachment(&mut state, AttachEvent::Post(7));
-    // A later host takes routing; the call stays queued for it.
-    step_attachment(&mut state, AttachEvent::Attach { owner: std::thread::current().id(), wake: Arc::new(|| {}), host: 2 });
+    // A later host takes routing; the call stays queued for it, and it is woken for it.
+    let wake: Waker = Arc::new(|| {});
+    let attached = step_attachment(&mut state, AttachEvent::Attach { owner: std::thread::current().id(), wake: wake.clone(), host: 2 });
+    assert!(matches!(attached.into_iter().next(), Some(AttachEffect::Wake(woken)) if Arc::ptr_eq(&woken, &wake)), "the host that inherits the call is woken");
     assert!(step_attachment(&mut state, AttachEvent::Drain { host: 1 }).is_empty(), "the replaced host leaves it");
     assert!(matches!(step_attachment(&mut state, AttachEvent::Drain { host: 2 }).into_iter().next(), Some(AttachEffect::Jobs(jobs)) if jobs == [7]));
 }

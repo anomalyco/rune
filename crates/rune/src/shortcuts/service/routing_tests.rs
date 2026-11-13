@@ -199,7 +199,11 @@ impl Model for NewControl {
         // The host is named by the engine it installed, if no close has taken it since.
         let engine = if self.linux { self.engine } else { self.engines.get(&thread).copied() };
         let host = engine.unwrap_or_default().into();
-        assert!(step_attachment(&mut self.attachment, AttachEvent::Attach { owner: thread, wake, host }).is_empty());
+        let own = address(&wake);
+        // differs from dev: a host that inherits waiting calls is woken for them.
+        for effect in step_attachment(&mut self.attachment, AttachEvent::Attach { owner: thread, wake, host }) {
+            assert!(matches!(effect, AttachEffect::Wake(wake) if address(&wake) == own), "an attach only wakes the host it routes to");
+        }
     }
 
     fn call(&mut self, thread: ThreadId, job: u32) -> Outcome {

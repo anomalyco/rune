@@ -519,6 +519,28 @@ fn a_window_s_first_updates_can_register_on_a_later_window() {
     assert_eq!(hosts[0].as_ref().unwrap().3, ["Ok(())", "Ok(())"]);
 }
 
+/// A chord pressed before launch, then another thread's update that reads what the press did:
+/// the startup batch runs the press first, on this host's state.
+#[test]
+fn a_shortcut_pressed_before_launch_runs_before_the_updates_queued_after_it() {
+    use crate::{App, AppSpec, el};
+    type S = Vec<String>;
+    const CHORD: &str = "ctrl+alt+shift+f19";
+    let app: App<S> = App::new(AppSpec::new("startup", (10.0, 10.0), Vec::new, |_, _| el()))
+        .global_shortcut(CHORD, |s: &mut S, _| s.push("pressed".into()));
+    // As Host::new: the guard attaches and registers the App's shortcuts.
+    let shortcuts = crate::shortcuts::Guard::attach(&app.shared, Arc::new(|| {}), true, false);
+    // The press, queued as the backend's sink queues it, on the thread that owns the engine.
+    app.shared.shortcuts.fire(&CHORD.parse().unwrap()).unwrap();
+    let handle = app.handle();
+    std::thread::spawn(move || handle.update(|s: &mut S, _| { let seen = s.len(); s.push(format!("saw {seen}")); })).join().unwrap();
+    // As Host::resume.
+    let mut state = S::new();
+    events::startup_updates(&app.shared, &shortcuts, |f| { f(&mut state, &mut Tx::default()); });
+    assert_eq!(state, ["pressed", "saw 1"], "the press ran first, in the startup batch");
+    assert!(app.shared.take().updates.is_empty(), "nothing waits for a later drain");
+}
+
 #[test]
 fn drag_region_policy_preserves_titled_windows_and_panels() {
     for enabled in [false, true] {

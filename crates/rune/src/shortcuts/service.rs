@@ -314,6 +314,9 @@ struct Delivery<S> {
     generation: u64,
     wake: Waker,
     live: std::sync::Weak<()>,
+    /// The host's presses, oldest first. Each activation queued for them runs the oldest, so
+    /// however hosts pass the activations along, this host runs its presses in the order they came.
+    pressed: Mutex<std::collections::VecDeque<(ShortcutId, Option<String>)>>,
 }
 
 /// A close part-way through.
@@ -329,27 +332,29 @@ fn sink<S: 'static>(delivery: Delivery<S>) -> Sink {
     let delivery = Arc::new(delivery);
     Arc::new(move |id, token| {
         if let Some(shared) = delivery.shared.upgrade() {
-            shared.queue_update(deliver(delivery.clone(), id, token));
+            delivery.pressed.lock().unwrap().push_back((id, token));
+            shared.queue_update(deliver(delivery.clone()));
             shared.wake();
         }
     })
 }
 
-/// An activation, as an update. It runs only on its own host's state, and only while that host
-/// is the newest. Another host delivering it leaves it for its own host, and wakes that host; an
-/// activation whose host was replaced or has gone runs nothing.
-fn deliver<S: 'static>(delivery: Arc<Delivery<S>>, id: ShortcutId, token: Option<String>) -> Box<dyn FnOnce(&mut S, &mut Tx) -> bool + Send> {
+/// An activation, as an update: it runs the host's oldest press. It runs only on its own host's
+/// state, and only while that host is the newest. Another host delivering it leaves it for its own
+/// host, and wakes that host; an activation whose host was replaced or has gone runs nothing.
+fn deliver<S: 'static>(delivery: Arc<Delivery<S>>) -> Box<dyn FnOnce(&mut S, &mut Tx) -> bool + Send> {
     Box::new(move |state, tx| {
         let Some(shared) = delivery.shared.upgrade() else { return false };
         if !shared.shortcuts.control.current(delivery.generation) { return false; }
         if RECEIVING.with(|receiving| receiving.get()) != Some(delivery.generation) {
             if delivery.live.strong_count() > 0 {
                 let wake = delivery.wake.clone();
-                shared.queue_update(deliver(delivery, id, token));
+                shared.queue_update(deliver(delivery));
                 wake();
             }
             return false;
         }
+        let Some((id, token)) = delivery.pressed.lock().unwrap().pop_front() else { return false };
         let Some(handler) = shared.shortcuts.handlers.lock().unwrap().get(&id).map(|(_, handler)| handler.clone()) else { return false };
         tx.shortcut_activation_token = token;
         handler(state, tx);
@@ -375,7 +380,7 @@ impl Guard {
         let bindings = if headless { Bindings::Virtual(HashMap::new()) } else { Bindings::Disconnected };
         let live = Arc::new(());
         let engine = |generation| {
-            let delivery = Delivery { shared: Arc::downgrade(shared), generation, wake: wake.clone(), live: Arc::downgrade(&live) };
+            let delivery = Delivery { shared: Arc::downgrade(shared), generation, wake: wake.clone(), live: Arc::downgrade(&live), pressed: Mutex::default() };
             Engine { title, wayland, sink: sink(delivery), connect, bindings }
         };
         // Published when this host takes routing.
@@ -463,14 +468,16 @@ impl Attaching {
     /// The second half of an attach: this host takes routing, then registers what waited for it.
     fn route<S: 'static>(self, shared: &Arc<Shared<S>>) -> Guard {
         let Self { control, generation, wake, live, .. } = self;
-        {
+        let routed = {
             let mut route = control.attachment.lock().unwrap();
             control.hosts.fetch_add(1, Ordering::Relaxed);
             // The routed host is the newest, in the same step that routes to it.
             #[cfg(not(target_os = "linux"))]
             control.generation.store(generation, Ordering::Relaxed);
-            step_attachment(&mut route, AttachEvent::Attach { owner: std::thread::current().id(), wake, host: generation });
-        }
+            step_attachment(&mut route, AttachEvent::Attach { owner: std::thread::current().id(), wake, host: generation })
+        };
+        // Calls this host inherited wait for it, so it is woken for them, once routing is free.
+        for effect in routed { if let AttachEffect::Wake(wake) = effect { wake(); } }
         let handlers = shared.shortcuts.handlers.clone();
         // A host that attached after the close took routing keeps its handlers.
         let cleanup = move |ended: u64| handlers.lock().unwrap().retain(|_, (stamp, _)| stamp.load(Ordering::Relaxed) > ended);

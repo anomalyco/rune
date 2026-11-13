@@ -58,10 +58,12 @@ pub(super) enum AttachEffect<J> {
 pub(super) fn step_attachment<J>(state: &mut Attachment<J>, event: AttachEvent<J>) -> Effects<AttachEffect<J>> {
     match event {
         AttachEvent::Attach { owner, wake, host } => {
-            // Callers already waiting stay queued for the new host.
+            // Callers already waiting stay queued for the new host, which only its own wake
+            // brings to them: the old host's wake now drains nothing.
             let jobs = match state { Attachment::Attached { jobs, .. } => mem::take(jobs), _ => Vec::new() };
+            let effects = if jobs.is_empty() { Effects::none() } else { Effects::one(AttachEffect::Wake(wake.clone())) };
             *state = Attachment::Attached { owner, wake, host, jobs };
-            Effects::none()
+            effects
         }
         AttachEvent::Call { from, shared } => match state {
             Attachment::Attached { owner, wake, .. } if shared || *owner == from => Effects::one(AttachEffect::Run { wake: wake.clone() }),
