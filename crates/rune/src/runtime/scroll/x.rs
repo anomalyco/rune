@@ -207,12 +207,43 @@ impl WheelLock {
 /// with no horizontal part turns horizontal, as browsers and Windows and Linux apps do for a
 /// mouse wheel. macOS turns it itself (`shift` is false there), and a delta that already has a
 /// horizontal part was turned by the system or comes from a trackpad.
-pub(crate) fn wheel_delta(delta: winit::event::MouseScrollDelta, scale: f32, shift: bool) -> (f32, f32) {
+pub(crate) fn wheel_delta(delta: winit::event::MouseScrollDelta, scale: f32, shift: bool, line_points: f32) -> (f32, f32) {
     let (dx, dy) = match delta {
         winit::event::MouseScrollDelta::PixelDelta(p) => (p.x as f32 / scale, p.y as f32 / scale),
-        winit::event::MouseScrollDelta::LineDelta(x, y) => (x * 40.0, y * 40.0),
+        winit::event::MouseScrollDelta::LineDelta(x, y) => (x * line_points, y * line_points),
     };
     if shift && dx == 0.0 { (dy, 0.0) } else { (dx, dy) }
+}
+
+// Chromium 152: ui/events/event.cc (kWheelDelta on Linux), ui/events/x/events_x_utils.cc
+// (XI2 scroll increments), ui/events/cocoa/cocoa_event_utils.h (kScrollbarPixelsPerCocoaTick)
+// and cc/input/scroll_utils.h (kPixelsPerLineStep for browser line units).
+#[cfg(any(not(target_os = "windows"), test))]
+pub(crate) const LINE_POINTS: f32 = if cfg!(target_os = "linux") { 120.0 } else { 40.0 };
+
+#[cfg(target_os = "windows")]
+impl<S: 'static> Runtime<S> {
+    pub(crate) fn windows_wheel_points(&self, delta: winit::event::MouseScrollDelta, shift: bool) -> f32 {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{SystemParametersInfoW, SPI_GETWHEELSCROLLCHARS, SPI_GETWHEELSCROLLLINES};
+        let winit::event::MouseScrollDelta::LineDelta(x, y) = delta else { return 0.0 };
+        let horizontal = x != 0.0;
+        let (setting, default) = if horizontal { (SPI_GETWHEELSCROLLCHARS, 1u32) } else { (SPI_GETWHEELSCROLLLINES, 3u32) };
+        let mut count = default;
+        // SAFETY: both SPI queries write one UINT. Read per event so Settings changes apply immediately.
+        if unsafe { SystemParametersInfoW(setting, 0, (&raw mut count).cast(), 0) } == 0 { count = default; }
+        // Chromium 152: ui/events/blink/web_input_event_builders_win.cc, WebMouseWheelEventBuilder.
+        const POINTS_PER_SCROLL_LINE: f32 = 100.0 / 3.0;
+        if !horizontal && count == u32::MAX {
+            // WHEEL_PAGESCROLL: cc/input/input_handler.cc, ResolveScrollGranularityToPixels,
+            // uses the smaller of the scroller and the window. Clamp after applying the ticks.
+            const PAGE_FRACTION: f32 = 0.875;
+            let viewport = self.pointer().and_then(|(x, y)| self.scroll_at_axis(x, y, shift))
+                .and_then(|id| self.node_index.get(&id)).map(|&i| self.nodes[i].local);
+            let (window, scroller) = if shift { (self.viewport.0, viewport.map(|r| r.w)) } else { (self.viewport.1, viewport.map(|r| r.h)) };
+            let page = scroller.unwrap_or(window).min(window) * self.zoom() * PAGE_FRACTION;
+            if y == 0.0 { 0.0 } else { page.max(1.0 / y.abs()) }
+        } else { count as f32 * POINTS_PER_SCROLL_LINE }
+    }
 }
 
 /// Whether Shift turns the wheel on this platform (macOS does it before the app sees the event).
@@ -700,9 +731,10 @@ mod tests {
 
     #[test]
     fn shift_turns_only_a_purely_vertical_wheel() {
-        assert_eq!(wheel_delta(LineDelta(0.0, -1.0), 2.0, false), (0.0, -40.0));
-        assert_eq!(wheel_delta(LineDelta(0.0, -1.0), 2.0, true), (-40.0, 0.0), "Shift + mouse wheel");
-        assert_eq!(wheel_delta(LineDelta(1.0, 0.0), 2.0, false), (40.0, 0.0), "a horizontal wheel (WM_MOUSEHWHEEL, X11 buttons 6/7)");
+        let wheel_delta = |delta, scale, shift| wheel_delta(delta, scale, shift, LINE_POINTS);
+        assert_eq!(wheel_delta(LineDelta(0.0, -1.0), 2.0, false), (0.0, -LINE_POINTS));
+        assert_eq!(wheel_delta(LineDelta(0.0, -1.0), 2.0, true), (-LINE_POINTS, 0.0), "Shift + mouse wheel");
+        assert_eq!(wheel_delta(LineDelta(0.5, 0.0), 2.0, false), (LINE_POINTS / 2.0, 0.0), "a fractional horizontal scroll increment");
         let trackpad = PixelDelta(PhysicalPosition::new(-8.0, 20.0));
         assert_eq!(wheel_delta(trackpad, 2.0, true), (-4.0, 10.0), "a delta with a horizontal part stays as it is");
         assert!(SHIFT_TURNS_WHEEL != cfg!(target_os = "macos"));
