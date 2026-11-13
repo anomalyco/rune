@@ -408,6 +408,7 @@ impl<S: 'static> Host<S> {
             }
             WindowEvent::KeyboardInput { event, is_synthetic: false, .. } => {
                 let pressed = event.state == ElementState::Pressed;
+                if pressed { crate::marks::input_arrived(true); }
                 // A release's logical key only matters to `on_key_up` handlers.
                 let logical = (pressed || rt.wants_key_up()).then(|| map_key_event(&event, self.mods)).flatten();
                 let mut redraw = false;
@@ -511,6 +512,7 @@ impl<S: 'static> Host<S> {
             }
             WindowEvent::MouseInput { state, button: MouseButton::Left, .. } => {
                 if state == ElementState::Pressed {
+                    crate::marks::input_arrived(false);
                     self.control_click = cfg!(target_os = "macos") && self.mods.control_key();
                 }
                 if let Some((x, y)) = button_at(rt, &l.window) {
@@ -521,6 +523,7 @@ impl<S: 'static> Host<S> {
                             #[cfg(target_os = "macos")]
                             rt.set_native_titlebar_band(mac::native_titlebar_band(&l.window));
                             rt.pointer_down(x, y);
+                            crate::marks::input_handled(false);
                             rt.physical_input(crate::PhysicalInput::Modifiers(map_mods(self.mods)));
                             // AppKit needs the drag started inside this mouse-down.
                             match rt.take_titlebar_action() {
