@@ -91,6 +91,8 @@ impl<S: 'static> Runtime<S> {
             state_unchanged: std::mem::take(&mut self.state_unchanged),
             pass: Pass::First,
             hold_windows,
+            windowed: HashMap::default(),
+            kept_lists: Vec::new(),
         }
     }
 
@@ -202,6 +204,7 @@ impl<S: 'static> Measurement<'_, S> {
             self.pass = Pass::of(passes);
             self.virtual_culled.clear();
             self.virtual_inputs.clear();
+            self.windowed.clear();
             // Degenerate zero-height runs fall back to a full measurement instead of
             // an unbounded retry loop. Normal transcripts need one pass.
             let (layout, mut nodes, pending, mut reused, mut taken) = self.measure_view(tx, self.pass.forced());
@@ -250,113 +253,26 @@ impl<S: 'static> Measurement<'_, S> {
         if !el.flags.has(ElFlags::HAS_VIRTUAL) {
             return;
         }
+        let path = node_path(parent, el.key.as_deref(), index);
+        // A memo reused whole whose lists mount what the last commit did stays a placeholder,
+        // so flattening reuses its nodes, rows included.
+        if self.keeps_windows(el, &path, scroll, tx, force_all, bound) {
+            return;
+        }
         el.expand_memo();
         let inert = inert || el.flags.has(ElFlags::INERT);
         let bound = crate::el::virtual_list::height_bound(&el.style, bound);
-        let path = node_path(parent, el.key.as_deref(), index);
         if let Some(estimate) = el.cold.virtual_estimate {
-            assert!(el.cold.growth.is_some(), "`.virtualize(..)` at {path:?} needs `.growth(GrowthSpec)` on the same element");
-            let (scroll_path, sticky, scroll_bound) = scroll.expect("virtual stack must be inside a scroll viewport");
-            let old_scroll = self.path_ids.get(scroll_path).and_then(|id| self.scrolls.get(id));
-            let pinned = (tx.commit.lands() && sticky) || old_scroll.map_or(sticky, |s| s.pinned());
-            let mut offset = old_scroll.map_or(0.0, |s| s.offset as f32);
-            // A new viewport has no height yet: its bound from the tree, else the window's.
-            let first = if scroll_bound.is_finite() { scroll_bound } else { self.viewport.1 };
-            let height = self.committed_node(scroll_path).map_or(first, |i| {
-                let old = self.nodes[i].local.h;
-                // A viewport filling the old window follows its new bound on resize. Picking
-                // rows for the old height first can require running the entire view twice.
-                if tx.relayout && old == self.nodes[0].local.h { first } else { old }
-            });
-            let padding = |p: LengthPercentage| match p.expand() {
-                taffy::style::ExpandedLengthPercentage::Length(x) => x,
-                _ => panic!("virtual stack padding must be in points"),
+            let w = match self.windowed.remove(&path) {
+                Some(w) => w,
+                None => self.window(el, &path, estimate, scroll, tx, force_all),
             };
-            let list = self.committed_node(&path);
-            let v = self.virtuals.entry(path.clone()).or_default();
-            v.set_estimate(estimate);
-            v.scroll_path = scroll_path.to_owned();
-            // A retry keeps the viewport the last pass measured; `self.nodes` is the last commit's.
-            if self.pass.trusts_estimates() { v.viewport = height; }
-            offset = (offset - v.top).max(0.0);
-            let el_pad = el.style.padding();
-            v.pad_top = padding(el_pad.top);
-            v.pad_bottom = padding(el_pad.bottom);
-            v.set_gap(crate::el::virtual_list::gap_y(&el.style));
             let source = el.cold.get_mut_if_some().and_then(|c| c.virtual_rows.take());
-            let state = playground_host::handler_states_ref(self.state, self.playground);
-            if source.is_some() {
-                assert!(el.children.is_empty(), "`.virtual_rows(..)` at {path:?} builds its own rows; it takes no children");
+            for (i, key) in w.renamed {
+                el.children[i].key = Some(key);
             }
-            v.indexed = source.is_some();
-            let version = el.cold.virtual_rows_version.filter(|_| source.is_some());
-            let same = match &source {
-                Some(rows) => rows.count == v.keys.len()
-                    && (self.state_unchanged || (version.is_some() && version == v.keys_version) || (0..rows.count).all(|i| (rows.key)(state, i) == v.keys[i])),
-                None => v.same_keys(el.children.iter().map(|c| c.key.as_deref())),
-            };
-            v.keys_version = version;
-            // Most commits keep the same rows; only a change pays for sets of every key.
-            let anchor = if same {
-                if pinned { None } else { v.first_visible(offset, |_| true) }
-            } else {
-                let mut keys: Vec<_> = match &source {
-                    Some(rows) => (0..rows.count).map(|i| (rows.key)(state, i).into_owned()).collect(),
-                    None => el.children.iter().map(|c| c.key.clone().expect("virtual rows require stable keys")).collect(),
-                };
-                // Rows sharing a key would share a height and a node: rename the later ones, as
-                // the view's siblings are, so the list still lays out.
-                let renamed = crate::input::key_diagnostics::rename_duplicates(keys.iter_mut());
-                if !renamed.is_empty() {
-                    let duplicates: Vec<_> = renamed.iter().map(|(_, key)| {
-                        let key = key.clone();
-                        let message = format!("duplicate virtual row key {key:?} under {path:?}; give rows unique keys");
-                        crate::input::key_diagnostics::Duplicate { key, message }
-                    }).collect();
-                    if source.is_none() {
-                        for (i, _) in &renamed { el.children[*i].key = Some(keys[*i].clone()); }
-                    }
-                    match self.key_warnings.as_mut() {
-                        Some(out) => out.extend(duplicates.into_iter().map(|d| d.message)),
-                        None => crate::input::key_diagnostics::warn_once(&duplicates),
-                    }
-                }
-                // A reorder keeps each row where it was drawn, by its offset or by sliding it
-                // (`row_reorder.rs`). Anchoring to the formerly first row as it changes slots
-                // would scroll the entire list a second time. Inserts/removals still preserve
-                // the reader's anchor, and so does a reorder that lands at once.
-                let slides = !tx.commit.snaps() && !tx.commit.lands() && !tx.relayout && !self.reduced_motion;
-                let reorder = keys.len() == v.keys.len() && keys.iter().all(|key| v.has(key))
-                    && (slides || list.is_some_and(|list| self.nodes.iter().any(|n| n.vis.offset != [0.0; 2] && n.parent == Some(list))));
-                v.set_keys(keys, self.commits, (!pinned && !reorder).then_some(offset))
-            };
-            v.anchor = anchor;
-            let delta = v.anchor_delta();
-            offset = (offset + delta).max(0.0);
-            if let Some(st) = self.path_ids.get(scroll_path).and_then(|id| self.scrolls.get_mut(id)) {
-                if !pinned { st.offset = (st.offset + f64::from(delta)).max(0.0); }
-            }
-            // Rows new since the last commit spread over frames, unless this pass is a retry to
-            // fill the viewport or a settle. A list's first showing is all new rows: it mounts
-            // its viewport and a budget of overscan, and the rest fills over the next frames.
-            let budget = v.indexed && self.pass.spreads_rows() && !tx.commit.lands();
-            let shown = std::mem::take(&mut v.shown);
-            // A live-only check's commit keeps the rows mounted now while they still cover the
-            // viewport, as skipping the commit would: re-picking the overscan for a viewport that
-            // changed since would build rows the handler had nothing to do with.
-            if self.hold_windows && same && self.pass.spreads_rows() && !force_all && !v.needs_window(offset, pinned) {
-                v.hold(offset, pinned);
-            } else {
-                v.select(offset, pinned, budget.then_some(&shown));
-            }
-            if force_all { v.range = 0..v.keys.len(); v.before = 0.0; v.after = 0.0; }
-            // Keys are unique, so a key is mounted when its row's index is in the range.
-            for key in shown.iter().filter(|k| v.index_of(k).is_some_and(|i| !v.range.contains(&i))) {
-                self.virtual_culled.insert(format!("{path}/{key}"));
-            }
-            v.shown = shown;
-            el.style.set_pad_top(v.pad_top + v.before);
-            el.style.set_pad_bottom(v.pad_bottom + v.after);
+            el.style.set_pad_top(w.pad_top);
+            el.style.set_pad_bottom(w.pad_bottom);
             self.populate_virtual_children(el, &path, source, inert, group);
         }
         let bounds = crate::el::virtual_list::child_bounds(&el.style, el.cold.scroll.is_some(), bound, &el.children);
@@ -375,6 +291,164 @@ impl<S: 'static> Measurement<'_, S> {
         }
     }
 
+    /// Picks the rows virtual list `el` at `path` mounts, updating its `VirtualList`, the scroll
+    /// offset its anchor keeps and the rows it culls. Reads `el` only: the caller applies the
+    /// padding, the renamed keys and the rows.
+    fn window(&mut self, el: &El, path: &str, estimate: f32, scroll: Option<(&str, bool, f32)>, tx: &Tx, force_all: bool) -> Window {
+        assert!(el.cold.growth.is_some(), "`.virtualize(..)` at {path:?} needs `.growth(GrowthSpec)` on the same element");
+        let (scroll_path, sticky, scroll_bound) = scroll.expect("virtual stack must be inside a scroll viewport");
+        let old_scroll = self.path_ids.get(scroll_path).and_then(|id| self.scrolls.get(id));
+        let pinned = (tx.commit.lands() && sticky) || old_scroll.map_or(sticky, |s| s.pinned());
+        let mut offset = old_scroll.map_or(0.0, |s| s.offset as f32);
+        // A new viewport has no height yet: its bound from the tree, else the window's.
+        let first = if scroll_bound.is_finite() { scroll_bound } else { self.viewport.1 };
+        let height = self.committed_node(scroll_path).map_or(first, |i| {
+            let old = self.nodes[i].local.h;
+            // A viewport filling the old window follows its new bound on resize. Picking
+            // rows for the old height first can require running the entire view twice.
+            if tx.relayout && old == self.nodes[0].local.h { first } else { old }
+        });
+        let padding = |p: LengthPercentage| match p.expand() {
+            taffy::style::ExpandedLengthPercentage::Length(x) => x,
+            _ => panic!("virtual stack padding must be in points"),
+        };
+        let list = self.committed_node(path);
+        let v = self.virtuals.entry(path.to_owned()).or_default();
+        v.set_estimate(estimate);
+        v.scroll_path = scroll_path.to_owned();
+        // A retry keeps the viewport the last pass measured; `self.nodes` is the last commit's.
+        if self.pass.trusts_estimates() { v.viewport = height; }
+        offset = (offset - v.top).max(0.0);
+        let el_pad = el.style.padding();
+        v.pad_top = padding(el_pad.top);
+        v.pad_bottom = padding(el_pad.bottom);
+        v.set_gap(crate::el::virtual_list::gap_y(&el.style));
+        let source = el.cold.virtual_rows.as_ref();
+        let state = playground_host::handler_states_ref(self.state, self.playground);
+        if source.is_some() {
+            assert!(el.children.is_empty(), "`.virtual_rows(..)` at {path:?} builds its own rows; it takes no children");
+        }
+        v.indexed = source.is_some();
+        let version = el.cold.virtual_rows_version.filter(|_| source.is_some());
+        let same = match source {
+            Some(rows) => rows.count == v.keys.len()
+                && (self.state_unchanged || (version.is_some() && version == v.keys_version) || (0..rows.count).all(|i| (rows.key)(state, i) == v.keys[i])),
+            None => v.same_keys(el.children.iter().map(|c| c.key.as_deref())),
+        };
+        v.keys_version = version;
+        let mut renamed_children = Vec::new();
+        // Most commits keep the same rows; only a change pays for sets of every key.
+        let anchor = if same {
+            if pinned { None } else { v.first_visible(offset, |_| true) }
+        } else {
+            let mut keys: Vec<_> = match source {
+                Some(rows) => (0..rows.count).map(|i| (rows.key)(state, i).into_owned()).collect(),
+                None => el.children.iter().map(|c| c.key.clone().expect("virtual rows require stable keys")).collect(),
+            };
+            // Rows sharing a key would share a height and a node: rename the later ones, as
+            // the view's siblings are, so the list still lays out.
+            let renamed = crate::input::key_diagnostics::rename_duplicates(keys.iter_mut());
+            if !renamed.is_empty() {
+                let duplicates: Vec<_> = renamed.iter().map(|(_, key)| {
+                    let key = key.clone();
+                    let message = format!("duplicate virtual row key {key:?} under {path:?}; give rows unique keys");
+                    crate::input::key_diagnostics::Duplicate { key, message }
+                }).collect();
+                if source.is_none() {
+                    renamed_children = renamed.iter().map(|(i, _)| (*i, keys[*i].clone())).collect();
+                }
+                match self.key_warnings.as_mut() {
+                    Some(out) => out.extend(duplicates.into_iter().map(|d| d.message)),
+                    None => crate::input::key_diagnostics::warn_once(&duplicates),
+                }
+            }
+            // A reorder keeps each row where it was drawn, by its offset or by sliding it
+            // (`row_reorder.rs`). Anchoring to the formerly first row as it changes slots
+            // would scroll the entire list a second time. Inserts/removals still preserve
+            // the reader's anchor, and so does a reorder that lands at once.
+            let slides = !tx.commit.snaps() && !tx.commit.lands() && !tx.relayout && !self.reduced_motion;
+            let reorder = keys.len() == v.keys.len() && keys.iter().all(|key| v.has(key))
+                && (slides || list.is_some_and(|list| self.nodes.iter().any(|n| n.vis.offset != [0.0; 2] && n.parent == Some(list))));
+            v.set_keys(keys, self.commits, (!pinned && !reorder).then_some(offset))
+        };
+        v.anchor = anchor;
+        let delta = v.anchor_delta();
+        offset = (offset + delta).max(0.0);
+        if let Some(st) = self.path_ids.get(scroll_path).and_then(|id| self.scrolls.get_mut(id)) {
+            if !pinned { st.offset = (st.offset + f64::from(delta)).max(0.0); }
+        }
+        // Rows new since the last commit spread over frames, unless this pass is a retry to
+        // fill the viewport or a settle. A list's first showing is all new rows: it mounts
+        // its viewport and a budget of overscan, and the rest fills over the next frames.
+        let budget = v.indexed && self.pass.spreads_rows() && !tx.commit.lands();
+        let shown = std::mem::take(&mut v.shown);
+        // A live-only check's commit keeps the rows mounted now while they still cover the
+        // viewport, as skipping the commit would: re-picking the overscan for a viewport that
+        // changed since would build rows the handler had nothing to do with.
+        if self.hold_windows && same && self.pass.spreads_rows() && !force_all && !v.needs_window(offset, pinned) {
+            v.hold(offset, pinned);
+        } else {
+            v.select(offset, pinned, budget.then_some(&shown));
+        }
+        if force_all { v.range = 0..v.keys.len(); v.before = 0.0; v.after = 0.0; }
+        // Keys are unique, so a key is mounted when its row's index is in the range.
+        for key in shown.iter().filter(|k| v.index_of(k).is_some_and(|i| !v.range.contains(&i))) {
+            self.virtual_culled.insert(format!("{path}/{key}"));
+        }
+        v.shown = shown;
+        Window { same, renamed: renamed_children, pad_top: v.pad_top + v.before, pad_bottom: v.pad_bottom + v.after }
+    }
+
+    /// Whether memo placeholder `el` at `path` can stay one: a region's, flattened by the last
+    /// commit, whose virtual lists are index-built and mount the rows, at the padding, that commit
+    /// did (`VirtualList::mounted`), with what their rows read unchanged (`VirtualList::row_reads`)
+    /// and no focused or selected row built off screen. Its lists are windowed either way, once:
+    /// when it can't stay, `window_tree` applies these windows to the expanded subtree.
+    #[allow(clippy::too_many_arguments)]
+    fn keeps_windows(&mut self, el: &El, path: &str, scroll: Option<(&str, bool, f32)>, tx: &Tx, force_all: bool, bound: f32) -> bool {
+        let Some(built) = el.memo_built() else { return false };
+        if !built.region || !built.reusable || force_all || !matches!(self.pass, Pass::First) || !crate::memo::flattened(built.id) {
+            return false;
+        }
+        let mut lists = Vec::new();
+        if !windowed_lists(el, path, scroll, bound, &mut lists) {
+            return false;
+        }
+        let prefix = format!("{path}/");
+        let under = self.virtuals.keys().filter(|k| k.starts_with(&prefix) || *k == path).count();
+        // An outer memo that couldn't stay windowed these lists already: they apply as picked.
+        if under != lists.len() || lists.iter().any(|(p, ..)| self.windowed.contains_key(p)) {
+            return false;
+        }
+        let mut keeps = true;
+        let mut quiet = Vec::with_capacity(lists.len());
+        for (list_path, list_el, list_scroll) in lists {
+            let Some(estimate) = list_el.cold.virtual_estimate else { return false };
+            let held = self.virtuals.get(&list_path).is_some_and(|v| {
+                v.mounted.is_some() && v.focused_row.is_none() && v.selection.pins.rows().is_empty() && v.row_reads.hold()
+            });
+            let w = self.window(list_el, &list_path, estimate, list_scroll.as_ref().map(|(p, s, b)| (p.as_str(), *s, *b)), tx, force_all);
+            let v = self.virtuals.get_mut(&list_path).expect("windowed");
+            let same = held && w.same && v.mounted == Some(crate::el::virtual_list::Mounted::of(v));
+            if same {
+                let commits = self.commits;
+                quiet.push((list_path.clone(), v.range.clone().map(|i| v.mounts_quietly(i, commits)).collect::<Vec<_>>()));
+            }
+            keeps &= same;
+            self.windowed.insert(list_path, w);
+        }
+        if !keeps {
+            return false;
+        }
+        for (list_path, _) in &quiet {
+            self.windowed.remove(list_path);
+            let v = &self.virtuals[list_path];
+            v.row_reads.replay();
+            crate::memo::keep_rows(v.keys[v.range.clone()].iter().map(|key| crate::memo::virtual_row_tag(list_path, key)));
+        }
+        self.kept_lists.extend(quiet);
+        true
+    }
     fn measure_view(&mut self, tx: &Tx, force_all: bool) -> (LayoutEngine, Vec<Node>, Vec<memo_reuse::PendingFlat>, Vec<memo_reuse::ReusedSpan>, Vec<(u32, u32)>) {
         let scale = self.env.scale;
         let fresh_cx = |this: &Self| Cx::<S> {
@@ -478,6 +552,14 @@ impl<S: 'static> Measurement<'_, S> {
             self.memo.path_scratch = path_buf;
             (pending, reused, taken_paths, root_id)
         };
+        // Rows of a list kept with its memo came from the last commit's nodes: mark which mount
+        // quietly, as `populate_virtual_children` marks a list's rows.
+        for (path, quiet) in self.kept_lists.drain(..) {
+            let Some(list) = nodes.iter().position(|n| n.path == path) else { continue };
+            for (n, quiet) in nodes[list + 1..].iter_mut().filter(|n| n.parent == Some(list)).zip(quiet) {
+                n.virtual_mount = quiet;
+            }
+        }
         if self.committing { release_kept_layouts(self.nodes, &mut nodes, &taffy, self.text, &reused); }
         taffy.finish_flatten();
         let (taffy, nodes) = self.solve(taffy, root_id, nodes);
@@ -503,51 +585,57 @@ impl<S: 'static> Measurement<'_, S> {
         // holding a resource doesn't keep it through building its replacement.
         v.selection.stored.clear();
         if let Some(rows) = source {
-            let quiet: Vec<bool> = v.range.clone().map(|i| v.mounts_quietly(i, self.commits)).collect();
-            let key_warnings = &mut *self.key_warnings;
-            let keys = &v.keys;
-            let mut build = |i: usize| {
-                let key = &keys[i];
-                let tag = crate::memo::virtual_row_tag(path, key);
-                let mut row = crate::memo::in_virtual_row(tag, || (rows.build)(state, i)).key(key.clone());
-                // The view's key repair ran before these rows existed.
-                if crate::input::key_diagnostics::clean(&row) { return row; }
-                let duplicates = crate::input::key_diagnostics::repair_at(&mut row, &format!("{path}/{key}"));
-                match key_warnings.as_mut() {
-                    Some(out) => out.extend(duplicates.into_iter().map(|d| d.message)),
-                    None => crate::input::key_diagnostics::warn_once(&duplicates),
+            // What the rows read, so a memo holding the list can keep them while it holds.
+            let ((), reads) = crate::memo::recording(|| {
+                let quiet: Vec<bool> = v.range.clone().map(|i| v.mounts_quietly(i, self.commits)).collect();
+                let key_warnings = &mut *self.key_warnings;
+                let keys = &v.keys;
+                let mut build = |i: usize| {
+                    let key = &keys[i];
+                    let tag = crate::memo::virtual_row_tag(path, key);
+                    let mut row = crate::memo::in_virtual_row(tag, || (rows.build)(state, i)).key(key.clone());
+                    // The view's key repair ran before these rows existed.
+                    if crate::input::key_diagnostics::clean(&row) { return row; }
+                    let duplicates = crate::input::key_diagnostics::repair_at(&mut row, &format!("{path}/{key}"));
+                    match key_warnings.as_mut() {
+                        Some(out) => out.extend(duplicates.into_iter().map(|d| d.message)),
+                        None => crate::input::key_diagnostics::warn_once(&duplicates),
+                    }
+                    row
+                };
+                // A focused field's row and a selection's pinned end rows are built unmounted.
+                let under = |f: &str| f.strip_prefix(path).is_some_and(|rest| rest.starts_with('/'));
+                let focused = v.focused_row.as_deref().filter(|_| self.focused.is_some_and(under))
+                    .and_then(|key| v.index_of(key)).filter(|i| !v.range.contains(i));
+                let pinned: Vec<usize> = v.selection.pins.rows().iter()
+                    .filter_map(|key| v.index_of(key))
+                    .filter(|i| !v.range.contains(i))
+                    .collect();
+                if let Some(i) = focused {
+                    let row = build(i);
+                    collect_virtual_inputs(&row, path, i, inert, self.virtual_inputs);
+                    if pinned.contains(&i) {
+                        selectable::virtual_selection::collect_row_into_pins(
+                            &mut v.selection.pins, &row, path, &v.keys[i], i, list_group.as_deref(), inert,
+                        );
+                    }
                 }
-                row
-            };
-            // A focused field's row and a selection's pinned end rows are built unmounted.
-            let under = |f: &str| f.strip_prefix(path).is_some_and(|rest| rest.starts_with('/'));
-            let focused = v.focused_row.as_deref().filter(|_| self.focused.is_some_and(under))
-                .and_then(|key| v.index_of(key)).filter(|i| !v.range.contains(i));
-            let pinned: Vec<usize> = v.selection.pins.rows().iter()
-                .filter_map(|key| v.index_of(key))
-                .filter(|i| !v.range.contains(i))
-                .collect();
-            if let Some(i) = focused {
-                let row = build(i);
-                collect_virtual_inputs(&row, path, i, inert, self.virtual_inputs);
-                if pinned.contains(&i) {
+                for i in pinned {
+                    if Some(i) == focused { continue; }
+                    let row = build(i);
                     selectable::virtual_selection::collect_row_into_pins(
                         &mut v.selection.pins, &row, path, &v.keys[i], i, list_group.as_deref(), inert,
                     );
                 }
-            }
-            for i in pinned {
-                if Some(i) == focused { continue; }
-                let row = build(i);
-                selectable::virtual_selection::collect_row_into_pins(
-                    &mut v.selection.pins, &row, path, &v.keys[i], i, list_group.as_deref(), inert,
-                );
-            }
-            el.children = v.range.clone().zip(quiet).map(|(i, quiet)| {
-                let mut row = build(i);
-                row.flags.set(ElFlags::VIRTUAL_MOUNT, quiet);
-                row
-            }).collect();
+                el.children = v.range.clone().zip(quiet).map(|(i, quiet)| {
+                    let mut row = build(i);
+                    row.flags.set(ElFlags::VIRTUAL_MOUNT, quiet);
+                    row
+                }).collect();
+            });
+            v.row_reads = reads;
+            // Rows a pass that doesn't commit built aren't the nodes a memo would keep.
+            if !self.committing { v.mounted = None; }
             v.selection.pins.set_source(selectable::virtual_selection::Source::Rebuild(rows));
         } else {
             if self.pass.reveals() && el.cold.focus.reveal_selected {
@@ -611,4 +699,44 @@ impl<S: 'static> Runtime<S> {
             }
         }
     }
+}
+
+/// The `virtual_rows` lists in memo placeholder `el`'s shared subtree at `path`, with the scroll
+/// viewport each windows against, as `window_tree` would find them. False when one can't be
+/// windowed without expanding: a list built from children, or a memo given extra children.
+fn windowed_lists<'e>(el: &'e El, path: &str, scroll: Option<(&str, bool, f32)>, bound: f32, out: &mut Vec<(String, &'e El, Option<(String, bool, f32)>)>) -> bool {
+    if !el.flags.has(ElFlags::HAS_VIRTUAL) {
+        return true;
+    }
+    let kids: &[El] = match el.memo_children() {
+        Some(m) if el.children.is_empty() && !el.flags.has(ElFlags::MEMO_EXTENDED) => &m.children,
+        Some(_) => return false,
+        None => &el.children,
+    };
+    let bound = crate::el::virtual_list::height_bound(&el.style, bound);
+    if el.cold.virtual_estimate.is_some() {
+        if el.cold.virtual_rows.is_none() {
+            return false;
+        }
+        out.push((path.to_owned(), el, scroll.map(|(p, s, b)| (p.to_owned(), s, b))));
+    }
+    let bounds = crate::el::virtual_list::child_bounds(&el.style, el.cold.scroll.is_some(), bound, kids);
+    let scroll = match el.cold.scroll {
+        Some(s) => Some((path, s.stick_bottom, bound)),
+        None if el.cold.virtual_estimate.is_some() => None,
+        None => scroll,
+    };
+    kids.iter().enumerate().filter(|(_, c)| c.flags.has(ElFlags::HAS_VIRTUAL)).all(|(i, child)| {
+        windowed_lists(child, &node_path(path, child.key.as_deref(), i), scroll, bounds.of(child), out)
+    })
+}
+
+/// A virtual list's window, picked before its element is expanded (`Measurement::window`).
+pub(super) struct Window {
+    /// The list's keys are the ones it had.
+    same: bool,
+    /// Children renamed for a duplicate key: their index and new key.
+    renamed: Vec<(usize, String)>,
+    pad_top: f32,
+    pad_bottom: f32,
 }

@@ -68,6 +68,26 @@ pub(crate) struct VirtualList {
     pub keys_version: Option<u64>,
     /// The visible row range last sent to `El::on_visible_rows`.
     pub reported_visible: Option<Range<usize>>,
+    /// What the last applied commit mounted, for a memo holding this list to keep its nodes.
+    pub mounted: Option<Mounted>,
+    /// What the last pass that built the rows read building them.
+    pub row_reads: crate::memo::Reads,
+}
+
+/// The rows a virtual list mounted and the padding standing in for the rest.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Mounted {
+    range: Range<usize>,
+    before: f32,
+    after: f32,
+    pad_top: f32,
+    pad_bottom: f32,
+}
+
+impl Mounted {
+    pub(crate) fn of(v: &VirtualList) -> Self {
+        Mounted { range: v.range.clone(), before: v.before, after: v.after, pad_top: v.pad_top, pad_bottom: v.pad_bottom }
+    }
 }
 
 /// The most an element can be tall before layout, so a list's first showing, which has no

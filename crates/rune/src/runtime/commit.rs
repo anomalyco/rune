@@ -96,6 +96,10 @@ pub(super) struct Measurement<'a, S: 'static> {
     pub(super) pass: Pass,
     /// This commit is a live-only check's: virtual lists keep the rows they mount now.
     pub(super) hold_windows: bool,
+    /// Windows picked for lists in a memo that `keeps_windows` then expanded, by list path.
+    pub(super) windowed: HashMap<String, super::measure::Window>,
+    /// Lists kept with their memo this pass, and which of their mounted rows mount quietly.
+    pub(super) kept_lists: Vec<(String, Vec<bool>)>,
     pub(super) caret: Option<(String, [f32; 4])>,
     pub(super) caret_read: bool,
     pub(super) layout_seen: layout_read::LayoutRects,

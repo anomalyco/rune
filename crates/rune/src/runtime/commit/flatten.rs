@@ -420,7 +420,8 @@ fn flatten_owned(
         return (slot, false);
     }
     let record_built = parent_sx.is_none().then(|| {
-        let built = el.memo_built().filter(|b| b.reusable && memo_reuse::same_root_el(&el, b))?;
+        let built = el.memo_built().filter(|b| b.reusable && memo_reuse::same_root_el(&el, b, false))
+            .or_else(|| el.cold.expanded_memo.as_ref().filter(|b| b.reusable && memo_reuse::same_root_el(&el, b, true)))?;
         let (inherited, hover_within) = memo_reuse::inherited_for(parent, nodes, motion, in_row, scale, memo_ctx.foreground);
         Some((built.id, inherited, hover_within))
     }).flatten();
@@ -623,7 +624,8 @@ fn flatten_ref(
         return (slot, false);
     }
     let record_built = parent_sx.is_none().then(|| {
-        let built = el.memo_built().filter(|b| b.reusable && memo_reuse::same_root_el(el, b))?;
+        let built = el.memo_built().filter(|b| b.reusable && memo_reuse::same_root_el(el, b, false))
+            .or_else(|| el.cold.expanded_memo.as_ref().filter(|b| b.reusable && memo_reuse::same_root_el(el, b, true)))?;
         let (inherited, hover_within) = memo_reuse::inherited_for(parent, nodes, motion, in_row, scale, memo_ctx.foreground);
         Some((built.id, inherited, hover_within))
     }).flatten();

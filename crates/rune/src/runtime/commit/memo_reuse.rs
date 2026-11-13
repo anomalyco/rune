@@ -249,6 +249,7 @@ fn same_el_cold(a: &crate::el::ElCold, b: &crate::el::ElCold) -> bool {
         focus, looping, trace_name, trace_namespace, role, label, live, above, motion, opacity_motion, lead,
         animated_changes, transition, matched, scroll, scroll_axes, sticky, scroll_edges, growth, virtual_estimate, virtual_rows,
         virtual_rows_version, glide, input, time_scale, help, help_cut, help_side, material, aspect_fit, a11y,
+        expanded_memo: _,
         #[cfg(debug_assertions)]
         scroll_source: _,
         #[cfg(debug_assertions)]
@@ -420,7 +421,8 @@ fn same_handlers(
 
 /// Exhaustively checks that `el` has not been mutated by builders after `Built::placeholder`
 /// returned it (apart from `key` and `virtual_mount`, which flattening handles explicitly).
-pub(super) fn same_root_el(el: &El, built: &crate::memo::Built) -> bool {
+/// `expanded`: `el` is the placeholder after `El::expand_memo` copied the shared children in.
+pub(super) fn same_root_el(el: &El, built: &crate::memo::Built, expanded: bool) -> bool {
     let base = &built.root;
     let El {
         style,
@@ -445,8 +447,7 @@ pub(super) fn same_root_el(el: &El, built: &crate::memo::Built) -> bool {
     a.set(ignored, false);
     b.set(ignored, false);
 
-    el.children.is_empty()
-        && el.memo_children().is_some_and(|mc| Rc::ptr_eq(mc, &built.children))
+    (expanded || (el.children.is_empty() && el.memo_children().is_some_and(|mc| Rc::ptr_eq(mc, &built.children))))
         && el.role == *role
         && a == b
         && el.vis_flags == *vis_flags
@@ -540,7 +541,7 @@ pub(super) fn try_reuse_memo(
     if flat.inherited != inherited || flat.hover_within.as_deref() != hover_within.as_deref() {
         return None;
     }
-    if el.key != old_slice[0].key || !same_root_el(el, built) {
+    if el.key != old_slice[0].key || !same_root_el(el, built, false) {
         return None;
     }
     if !old_slice.iter().all(|old| !old.is_moved_stub() && !old.path.is_empty() && taffy.can_reuse(old.id.0, old.taffy)) {
