@@ -95,7 +95,7 @@ impl TextSystem {
         max_width: Option<f32>,
         options: RichLayoutOptions,
     ) -> Rc<Layout<Ink>> {
-        self.layout_keyed(None, text, spans, &[], &[], style, scale, max_width, options.align, options.wrap_anywhere, Keep::Cached, options.direction)
+        self.layout_keyed(None, text, spans, &[], &[], style, scale, max_width, options.align, options.wrap_anywhere, false, Keep::Cached, options.direction)
     }
 
     /// [`layout_aligned`](Self::layout_aligned) with per-paragraph [`Block`](crate::Block)
@@ -132,7 +132,7 @@ impl TextSystem {
         wrap_anywhere: bool,
         cache: bool,
     ) -> Rc<Layout<Ink>> {
-        self.layout_keyed(None, text, spans, blocks, pills, style, scale, max_width, align, wrap_anywhere, if cache { Keep::Cached } else { Keep::Secret }, parley::BaseDirection::Auto)
+        self.layout_keyed(None, text, spans, blocks, pills, style, scale, max_width, align, wrap_anywhere, false, if cache { Keep::Cached } else { Keep::Secret }, parley::BaseDirection::Auto)
     }
 
     /// Secure display runs must not enter the shared layout cache or leave character
@@ -146,7 +146,7 @@ impl TextSystem {
         align: Alignment,
     ) -> Rc<Layout<Ink>> {
         let shape = spec.shape_key(scale);
-        self.layout_keyed(shape, &spec.content, &spec.spans, &spec.cold.blocks, &spec.cold.pills, spec.style, scale, max_width, align, spec.wrap_anywhere, if spec.redacted { Keep::Secret } else { Keep::Cached }, spec.base())
+        self.layout_keyed(shape, &spec.content, &spec.spans, &spec.cold.blocks, &spec.cold.pills, spec.style, scale, max_width, align, spec.wrap_anywhere, spec.pretty(), if spec.redacted { Keep::Secret } else { Keep::Cached }, spec.base())
     }
 
     /// [`Self::layout_blocks_inner`] of a cut of `spec`'s content, in its direction.
@@ -161,7 +161,7 @@ impl TextSystem {
         align: Alignment,
         cache: bool,
     ) -> Rc<Layout<Ink>> {
-        self.layout_keyed(None, text, spans, &spec.cold.blocks, &[], spec.style, scale, max_width, align, spec.wrap_anywhere, if cache { Keep::Cached } else { Keep::Secret }, spec.base())
+        self.layout_keyed(None, text, spans, &spec.cold.blocks, &[], spec.style, scale, max_width, align, spec.wrap_anywhere, false, if cache { Keep::Cached } else { Keep::Secret }, spec.base())
     }
 }
 

@@ -47,6 +47,8 @@ pub struct TextSpec {
     pub(crate) selectable: bool,
     pub(crate) redacted: bool,
     pub(crate) wrap_anywhere: bool,
+    /// See [`El::wrap_greedy`](crate::El::wrap_greedy).
+    pub(crate) greedy: bool,
     /// See [`El::exact_lines`](crate::El::exact_lines): the height is its lines' own, unrounded,
     /// unless [`El::rounded_lines`](crate::El::rounded_lines) rounds it to device pixels.
     pub(crate) exact_lines: bool,
@@ -188,6 +190,7 @@ impl TextSpec {
             selectable: false,
             redacted: false,
             wrap_anywhere: false,
+            greedy: false,
             exact_lines: true,
             dir: TextDir::Auto,
         }
@@ -250,6 +253,11 @@ impl TextSpec {
             TextDir::Plaintext(flow) => flow.unwrap_or_default(),
             _ => crate::el::Flow::Ltr,
         }
+    }
+
+    /// Whether its lines break as Chromium's `text-wrap-style: pretty` does ([`crate::text::set_pretty_wrap`]).
+    pub(crate) fn pretty(&self) -> bool {
+        crate::text::pretty_wrap() && !self.greedy && !self.redacted && !self.wrap_anywhere && !self.justify
     }
 
     /// [`crate::text::shape_key`] of this text in its direction.

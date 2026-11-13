@@ -510,7 +510,7 @@ impl TextSystem {
             let base = forced.or_else(|| flow_of(&spec.content, &[])).unwrap_or(spec.plaintext_flow()).base();
             let shape = spec.shape_key(scale).map(|k| hash::directed(k, base));
             let style = (&spec.content, &spec.spans, &spec.cold.blocks);
-            return TextLayout::Single(self.layout_keyed(shape, style.0, style.1, style.2, &[], spec.style, scale, max_width, align, spec.wrap_anywhere, Keep::Cached, base));
+            return TextLayout::Single(self.layout_keyed(shape, style.0, style.1, style.2, &[], spec.style, scale, max_width, align, spec.wrap_anywhere, false, Keep::Cached, base));
         }
         let whole = spec.shape_key(scale).unwrap_or_else(|| spec.fresh_shape_key(scale));
         // Lines with no strong character take the element's flow, so it keys the whole too.
@@ -607,7 +607,7 @@ impl TextSystem {
                     let text: Cow<str> = if isolates.is_empty() { Cow::Borrowed(words) } else { Cow::Owned(with_isolates(words, &isolates)) };
                     let spans: Vec<Span> = spans_in(&spec.spans, a, b, &isolates).collect();
                     let pills: Vec<PillChip> = pills_in(&spec.cold.pills, a, b, &isolates).collect();
-                    self.layout_keyed(Some(key), &text, &spans, blocks, &pills, style, scale, max_width, align, spec.wrap_anywhere, Keep::Owned, flow.base())
+                    self.layout_keyed(Some(key), &text, &spans, blocks, &pills, style, scale, max_width, align, spec.wrap_anywhere, false, Keep::Owned, flow.base())
                 }
             };
             // A paragraph kept as it was keeps its measures too: touching 2,000 layouts to read

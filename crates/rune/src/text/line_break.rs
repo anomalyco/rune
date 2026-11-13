@@ -13,6 +13,23 @@ pub(super) fn rebreak(layout: &mut Layout<Ink>, blocks: &[crate::edit::Block], f
     layout.align(align, parley::AlignmentOptions::default());
 }
 
+/// Breaks a layout [`TextSystem::layout_keyed`] shaped from `text`: by blocks and pills when
+/// `indented` (it has either), else at `max_width`; then, when `pretty`, a plain one's paragraphs
+/// that end on a lone short word again, as [`super::pretty`] scores them.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn break_new(layout: &mut Layout<Ink>, text: &str, blocks: &[crate::edit::Block], indented: bool, font_size: f32, scale: f32, max_width: Option<f32>, pretty: bool) {
+    if indented {
+        return break_lines_with_blocks(layout, blocks, font_size, scale, max_width);
+    }
+    layout.break_all_lines(max_width);
+    if let (true, Some(width)) = (pretty, max_width) {
+        let caps = super::pretty::caps(layout, text, font_size, scale, width);
+        if !caps.is_empty() {
+            break_lines_capped(layout, &[], font_size, scale, max_width, &caps, &mut Vec::new());
+        }
+    }
+}
+
 /// Breaks `layout` into lines, each paragraph indented by its block. A pill's chip that would
 /// end a line apart from its label, or run past the line's end, moves to the next line.
 pub(super) fn break_lines_with_blocks(
