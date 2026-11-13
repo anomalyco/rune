@@ -102,6 +102,8 @@ pub struct VisualCold {
     pub(crate) flight_crop: bool,
     /// `El::hold_landing_width`: an animated width change lands its contents and slides them.
     pub(crate) hold_landing: bool,
+    /// `El::press_color`: its text and icons' colour while a press on it is held.
+    pub(crate) press_color: Option<Color>,
     /// `El::paint_contained`: the origin (window points) its children snap against.
     pub(crate) paint_contain: Option<[f32; 2]>,
     /// `El::motion_snaps`: while it moves, it and its subtree snap every frame.
@@ -169,6 +171,7 @@ impl Empty for VisualCold {
         clip_to_content: false,
         flight_crop: false,
         hold_landing: false,
+        press_color: None,
         paint_contain: None,
         motion_snaps: false,
         offset: [0.0; 2],
@@ -359,4 +362,11 @@ impl VisualFlags {
     pub(crate) fn no_pixel_snap(self) -> bool { self.0 & Self::NO_PIXEL_SNAP != 0 }
     #[inline(always)]
     pub(crate) fn ride_trailing(self) -> bool { self.0 & Self::RIDE_TRAILING != 0 }
+}
+
+impl Visual {
+    /// Whether a press on it shows (an `El::press` overlay or an `El::press_color`).
+    pub(crate) fn tracks_press(&self) -> bool {
+        self.press().a > 0.0 || self.cold.get().is_some_and(|c| c.press_color.is_some())
+    }
 }

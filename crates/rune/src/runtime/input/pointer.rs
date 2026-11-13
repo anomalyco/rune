@@ -73,7 +73,7 @@ impl<S: 'static> Runtime<S> {
     pub(crate) fn observe_pointer(&mut self, x: f32, y: f32) -> bool {
         if self.pointer == Some((x, y)) { return false; }
         let visual_changed = self.nodes.iter().enumerate().any(|(i, n)| {
-            if n.vis.hover().a <= 0.0 && n.vis.press().a <= 0.0 && n.handlers.get().is_none_or(|h| h.press_scale.is_none()) { return false; }
+            if n.vis.hover().a <= 0.0 && !n.vis.tracks_press() && n.handlers.get().is_none_or(|h| h.press_scale.is_none()) { return false; }
             let inside = |p: Option<(f32, f32)>| p.is_some_and(|(x, y)| self.node_contains(i, x, y));
             inside(self.pointer) != inside(Some((x, y)))
         });
