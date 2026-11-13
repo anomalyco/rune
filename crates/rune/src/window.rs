@@ -471,6 +471,8 @@ struct Host<S: 'static> {
     args: Args,
     keep_running: bool,
     on_close: Option<fn(&mut S, &mut Tx)>,
+    /// `App::on_rest`.
+    on_rest: Option<fn(&mut S, &mut Tx) -> bool>,
     on_quit: Option<fn(&mut S, &mut Tx)>,
     /// `App::turn_scope`, and whether a turn is in it now.
     turn_scope: Option<crate::app::TurnScope<S>>,
@@ -546,6 +548,7 @@ impl<S: 'static> Host<S> {
             let _ = proxy.send_event(WakeEvent::App(slot));
         });
         let (open, keep_running, on_close, release_gpu) = (app.open, app.keep_running, app.on_close, app.release_gpu);
+        let on_rest = app.on_rest;
         let (on_reopen, on_quit, turn_scope) = (app.on_reopen, app.on_quit, app.turn_scope);
         #[cfg(target_os = "macos")]
         let present_log = args.trace.as_ref().map(|_| Arc::default());
@@ -628,6 +631,7 @@ impl<S: 'static> Host<S> {
             args,
             keep_running,
             on_close,
+            on_rest,
             on_quit,
             turn_scope,
             turn: any_host::Turn::Between,

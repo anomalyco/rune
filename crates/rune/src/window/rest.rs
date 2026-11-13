@@ -11,6 +11,11 @@
 //!
 //! A window that can't be seen (hidden, minimised, covered whole) gives back both: the frame that
 //! shows it again makes its targets afresh.
+//!
+//! Either way the runtime's caches go back to what the screen on show uses: text layouts the last
+//! two commits didn't use and their glyph runs (`TextSystem::rest`), images no element showed in
+//! the last frame and the CPU copies of pages left empty (`ImageAtlas::rest`). Then the app's
+//! `App::on_rest` runs, for its own caches.
 
 use super::*;
 use crate::machine::Effects;
@@ -87,6 +92,9 @@ impl<S: 'static> Host<S> {
     }
 
     fn give_back(&mut self, all: bool) {
+        self.rt.text.rest();
+        self.rt.images.rest();
+        if let Some(f) = self.on_rest { self.rt.update_if(f); }
         if let Some((gpu, renderer)) = &mut self.gpu {
             renderer.give_back(all, &mut self.rt.text.atlas.resident_caches);
             // Out of sight, what the last frame used goes too, and the staging chunks: an empty

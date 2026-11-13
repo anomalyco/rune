@@ -233,6 +233,16 @@ impl Script {
         self.inner.metrics.get()
     }
 
+    /// A full garbage collection now, for a window at rest (`App::on_rest`): the incremental
+    /// steps that follow script calls leave garbage behind once the calls stop, and Luau gives
+    /// back a page only once it's empty.
+    pub fn collect_garbage(&self) {
+        if let Some(vm) = self.inner.vm() {
+            vm.collect();
+            vm.lua.gc_collect().ok();
+        }
+    }
+
     /// Bytes the VM's heap holds.
     pub fn memory(&self) -> usize {
         self.inner.vm().map_or(0, |vm| vm.lua.used_memory())

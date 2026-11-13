@@ -344,6 +344,25 @@ impl ImageAtlas {
         self.pages.truncate(keep);
     }
 
+    /// A window at rest (`window::rest`): forgets the images no element showed in the last
+    /// frame, the first page's included, and frees the CPU copy of every page left empty. An
+    /// image shown again after it is copied in again.
+    pub fn rest(&mut self) {
+        let pages = &self.pages;
+        self.slots.retain(|_, s| pages[s.page].shown);
+        let slots = &self.slots;
+        self.starts.retain(|id, _| slots.keys().any(|(slot, _)| slot == id));
+        for (i, page) in self.pages.iter_mut().enumerate() {
+            if !self.slots.values().any(|slot| slot.page == i) {
+                (page.shelf_x, page.shelf_y, page.shelf_h) = (0, 0, 0);
+                page.dirty = None;
+                page.data = Vec::new();
+            }
+        }
+        let keep = self.slots.values().map(|s| s.page + 1).max().unwrap_or(0);
+        self.pages.truncate(keep);
+    }
+
     /// Marks every row for upload (a new texture).
     pub fn invalidate(&mut self) {
         for page in &mut self.pages { page.dirty = Some((0, page.height)); }

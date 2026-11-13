@@ -154,6 +154,13 @@ impl GlyphCache {
         self.bytes = 0;
     }
 
+    /// Drops the entries whose layout is gone, and the spare one (`TextSystem::rest`).
+    pub(crate) fn drop_orphans(&mut self) {
+        self.entries.retain(|_, e| e.layout.strong_count() > 0);
+        self.spare = None;
+        self.bytes = self.entries.values().map(Entry::size).sum();
+    }
+
     /// Drops entries whose layout is gone, then the least recently painted while over budget.
     pub(crate) fn begin_frame(&mut self) {
         self.frame += 1;
