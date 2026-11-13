@@ -40,7 +40,7 @@ impl<S: 'static> Runtime<S> {
         let s = self.env.scale;
         let t = sticky::anchored_target(nodes, &self.scrolls, i, self.viewport);
         let y = t[1] + self.stack_row_dy(nodes, i);
-        let tw = layout.full_width().ceil() / s;
+        let tw = text_width(layout.full_width()) / s;
         let (x0, x1) = (t[0] + n.inset[0], t[2] - n.inset[2]);
         let mut x = text_x(spec, x0, x1, tw, layout.flow());
         if inp.single_line && let Some(l) = laid.single() {

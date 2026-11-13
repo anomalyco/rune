@@ -85,7 +85,7 @@ impl<S: 'static> Runtime<S> {
             // The line: a `rich` text clipped to its row (its truncate fade).
             let line = &laid.line;
             let line_flow = crate::el::Flow::of_layout(line);
-            let origin = [text_x(&row.line, row_r[0], row_r[2], line.full_width().ceil(), line_flow), row_r[1]];
+            let origin = [text_x(&row.line, row_r[0], row_r[2], text_width(line.full_width()), line_flow), row_r[1]];
             let exact_w = x1 - x0;
             let overflows = line.full_width() > cols * cw * s + 0.5 && line.full_width() > (row_r[2] - row_r[0]).max(exact_w) + 0.5;
             let mut bounds = row_r;

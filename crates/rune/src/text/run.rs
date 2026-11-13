@@ -97,7 +97,8 @@ impl RunLayout {
             prev = x;
             graphemes.push((start, (x * 64.0).round() / 64.0, glyphs.partition_point(|g| g.0 < i) as u32));
         }
-        graphemes.push((text.len() as u32, (layout.full_width() - 1e-3).ceil(), glyphs.len() as u32));
+        // The run ends at its width in 64ths of a pixel, as a text box does (`runtime::text_width`).
+        graphemes.push((text.len() as u32, crate::runtime::text_width(layout.full_width()), glyphs.len() as u32));
         RunLayout { layout, graphemes, faces, glyphs: glyphs.into_iter().map(|g| g.1).collect() }
     }
 

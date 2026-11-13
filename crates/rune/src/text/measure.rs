@@ -213,7 +213,7 @@ pub fn measure_with(
         let l = t.layout_rich_with(text, spans, style, 1.0, max_width, options);
         // Spaces hanging past a wrapped line's end take no room, as the runtime measures them.
         let w = if max_width.is_some() { l.width() } else { l.full_width() };
-        (w.ceil(), super::line_metrics::spec_height(&l, style, 1.0, true))
+        (crate::runtime::text_width(w), super::line_metrics::spec_height(&l, style, 1.0, true))
     })
 }
 

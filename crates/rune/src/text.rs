@@ -977,7 +977,7 @@ impl TextSystem {
     /// Size in points, rounded up to whole device pixels so layout stays on the pixel grid.
     pub fn measure(&mut self, text: &str, style: TextStyle, scale: f32) -> (f32, f32) {
         let l = self.layout_rich(text, &[], style, scale, None);
-        (l.full_width().ceil() / scale, layout_height(&l, style, scale) / scale)
+        (crate::runtime::text_width(l.full_width()) / scale, layout_height(&l, style, scale) / scale)
     }
 
     /// The atlas quad for `icon` at `px` device pixels square, top-left at `origin`.
