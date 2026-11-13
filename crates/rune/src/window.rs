@@ -172,6 +172,8 @@ pub(crate) trait AnyHost {
     fn quit_hook(&mut self) {}
     /// The app quits: off the screen now, before any hook runs.
     fn vanish(&mut self) {}
+    /// The close about to come ends the app (`Host::close`).
+    fn closing_ends_app(&mut self) {}
     /// Ends a tracking pop-up menu and answers waiting ones `None`, before the host drops or
     /// the loop exits.
     fn cancel_menus(&mut self) {}
@@ -387,6 +389,14 @@ impl ApplicationHandler<WakeEvent> for Windows {
     }
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
         let _handling = crate::quit::handling();
+        // The last window's close ends a fast-exiting app: the window can go at once.
+        #[cfg(not(target_arch = "wasm32"))]
+        if matches!(event, WindowEvent::CloseRequested) && crate::quit::fast_exit_hook().is_some()
+            && !self.hosts.iter().flatten().any(|h| !h.owns(id) && !h.finished() && h.keeps_loop())
+            && let Some(host) = self.hosts.iter_mut().flatten().find(|h| h.owns(id) && h.keeps_loop())
+        {
+            host.closing_ends_app();
+        }
         if let Some(host) = self.hosts.iter_mut().flatten().find(|h| h.owns(id)) {
             let _input = crate::input::time::arrived(&event);
             host.window_event(event_loop, id, event);
@@ -470,6 +480,8 @@ struct Host<S: 'static> {
     spec: AppSpec<S>,
     args: Args,
     keep_running: bool,
+    /// Its close ends the app (`Windows::window_event`): the last window of a fast-exiting app.
+    ends_app: bool,
     on_close: Option<fn(&mut S, &mut Tx)>,
     /// `App::on_rest`.
     on_rest: Option<fn(&mut S, &mut Tx) -> bool>,
@@ -630,6 +642,7 @@ impl<S: 'static> Host<S> {
             spec,
             args,
             keep_running,
+            ends_app: false,
             on_close,
             on_rest,
             on_quit,
