@@ -349,29 +349,24 @@ impl<S: 'static> Host<S> {
         self.secure_input.set(false);
         if !self.closes() { return; }
         crate::marks::mark("window.close");
-<<<<<<< HEAD
         // The last window of an app that ends fast goes as a bare window's close does: its hook,
         // then the window destroyed at once, with no hide before it. The quit runs after it and
         // the process ends without dropping the window.
         let ends = std::mem::take(&mut self.ends_app) && !self.keep_running && cfg!(target_os = "windows");
-=======
         crate::quit::ib3("close");
->>>>>>> 23bdad4f (IB-3 measuring: IB3_CLOSE stamps through a close and fast exit)
         // Off the screen first: the close looks done at once and `on_close` runs unseen.
         if !ends && let Some(w) = self.shown_win() { w.hide(); }
         crate::marks::mark("window.close.hidden");
         crate::quit::ib3("close.hidden");
         self.close_hook();
         crate::marks::mark("window.close.hooked");
-<<<<<<< HEAD
         #[cfg(target_os = "windows")]
         if ends && let Some(w) = &self.win {
             crate::platform::win32::destroy_window_now(&w.window);
             crate::marks::mark("window.destroyed");
+            crate::quit::ib3("close.destroyed");
         }
-=======
         crate::quit::ib3("close.hooked");
->>>>>>> 23bdad4f (IB-3 measuring: IB3_CLOSE stamps through a close and fast exit)
         self.rt.set_live_visible(false);
         // While the window still shows its last frames.
         if let Some(trace) = &mut self.trace { trace.settle_presents(crate::frame::present_time::SETTLE); }
