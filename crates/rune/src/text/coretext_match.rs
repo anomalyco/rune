@@ -236,17 +236,25 @@ const WINDOWS_GAMMA: [f32; 2] = [1.12, 0.45];
 /// more ink. With Windows' curve, light-on-dark text drew 7-14% more ink than Linux Chromium's.
 const LINUX_GAMMA: [f32; 2] = [1.02, 0.83];
 
-/// A Mac browser draws unsmoothed type with the same coverage as native macOS.
-/// Use the platform decision that selects its smoothing default, not the WASM
-/// target OS. Cache the decision: this runs during glyph placement.
+/// A browser on a Mac, an iPhone or an iPad draws unsmoothed type with the same coverage as
+/// native Apple text: WebKit and Chrome there draw through CoreText. Decided by the platform the
+/// browser reports, not the WASM target OS, nor the smoothing default (an iPad's is Off, and it
+/// still draws as is). Cached: this runs during glyph placement.
 pub(super) fn apple_coverage() -> bool {
     #[cfg(target_arch = "wasm32")]
     {
-        thread_local! { static MAC: bool = FontSmoothing::classic() == FontSmoothing::On; }
-        MAC.with(|mac| *mac)
+        thread_local! { static APPLE: bool = crate::platform::web::platform::browser_platform().is_some_and(|p| apple_platform(&p.0)); }
+        APPLE.with(|apple| *apple)
     }
     #[cfg(not(target_arch = "wasm32"))]
     { cfg!(any(target_os = "macos", target_os = "ios")) }
+}
+
+/// Whether a browser's `navigator` platform is an Apple one: `MacIntel`, `iPhone`, `iPad`,
+/// `iPod` (an iPad in desktop mode says `MacIntel`), or `macOS` from `userAgentData`.
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) fn apple_platform(platform: &str) -> bool {
+    ["mac", "iphone", "ipad", "ipod"].iter().any(|p| platform.get(..p.len()).is_some_and(|q| q.eq_ignore_ascii_case(p)))
 }
 
 /// Whether text takes Windows' Chromium gamma rather than Linux's: on Windows, and in a browser

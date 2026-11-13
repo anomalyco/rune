@@ -1,0 +1,1 @@
+- **Web: unsmoothed text on an iPhone or iPad draws at its native weight.** Since the Mac browser change, a page on an iPhone or iPad (and on a Mac with a touch screen) took the Linux text gamma, because Apple coverage followed the smoothing default, which is Off there. It now follows the platform the browser reports.
