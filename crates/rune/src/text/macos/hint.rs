@@ -103,24 +103,55 @@ pub(crate) fn autohint(m: HintMetrics, ppem: f64, d: f64) -> Option<HintTransfor
 }
 
 /// Metrics for a TrueType (`glyf`) face from its 'o' and 'X' outlines (at `coords`), `head`
-/// and the known descriptor stemH. Other formats return None, so they aren't hinted.
+/// and the known descriptor stemH. Other formats return None, so they aren't hinted, and so do
+/// faces whose `post` table doesn't name the glyphs 'o' and 'X': CoreGraphics finds them by name,
+/// not through `cmap`, and draws a face without them (a subset with `post` format 3, PingFang)
+/// unhinted.
 pub(crate) fn truetype_metrics(font: FontRef<'_>, coords: &[i16], cx: &mut ScaleContext) -> Option<HintMetrics> {
     font.table(u32::from_be_bytes(*b"glyf"))?;
     let head = font.table(u32::from_be_bytes(*b"head"))?;
     let upem = font.metrics(coords).units_per_em as f64;
     let max_y = i16::from_be_bytes(head.get(42..44)?.try_into().ok()?) as f64;
-    let mut top = |ch: char| {
-        let id = font.charmap().map(ch);
-        if id == 0 {
-            return None;
-        }
+    let mut top = |name: (u16, &[u8])| {
+        let id = post_glyph(font, name)?;
         let mut scaler = cx.builder(font).size(upem as f32).hint(false).normalized_coords(coords.iter().copied()).build();
         let outline = scaler.scale_outline(id)?;
         Some(outline.points().iter().map(|p| p.y as f64).fold(f64::NEG_INFINITY, f64::max))
     };
-    let x_height = top('o')?;
-    let cap_height = top('X')?;
+    let x_height = top(O)?;
+    let cap_height = top(X)?;
     Some(HintMetrics { upem, x_height, cap_height, max_y, stem_height: descriptor_stem_height(font) })
+}
+
+/// 'o' and 'X': their indices among the 258 standard Macintosh glyph names, and the names.
+const O: (u16, &[u8]) = (82, b"o");
+const X: (u16, &[u8]) = (59, b"X");
+
+/// The glyph the `post` table names `name`: format 1 keeps the standard order, format 2 indexes
+/// the standard names or its own Pascal strings after the index array. Format 3 names nothing.
+fn post_glyph(font: FontRef<'_>, (standard, name): (u16, &[u8])) -> Option<u16> {
+    let post = font.table(u32::from_be_bytes(*b"post"))?;
+    let u16_at = |at: usize| post.get(at..at + 2).map(|b| u16::from_be_bytes([b[0], b[1]]));
+    match post.get(0..4)? {
+        [0, 1, 0, 0] => Some(standard),
+        [0, 2, 0, 0] => {
+            let count = u16_at(32)? as usize;
+            let indices = (0..count).map(|g| u16_at(34 + 2 * g)).collect::<Option<Vec<u16>>>()?;
+            if let Some(g) = indices.iter().position(|&i| i == standard) {
+                return Some(g as u16);
+            }
+            // The font's own names, in order, for indices from 258 up.
+            let mut at = 34 + 2 * count;
+            let mut own = Vec::new();
+            while let Some(&len) = post.get(at) {
+                own.push(post.get(at + 1..at + 1 + len as usize)?);
+                at += 1 + len as usize;
+            }
+            let k = own.iter().position(|n| *n == name)?;
+            indices.iter().position(|&i| i as usize == 258 + k).map(|g| g as u16)
+        }
+        _ => None,
+    }
 }
 
 /// The stemH CoreGraphics' font descriptor reports, which moves the hinter's lowest band. It
