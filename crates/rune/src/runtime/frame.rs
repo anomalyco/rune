@@ -259,7 +259,9 @@ impl<S: 'static> Runtime<S> {
                 self.set_focus(None, self.focus.keyboard());
                 self.dirty = true;
             }
-            // An explicit blur is not the temporary pointer-down blur of a scrim.
+            // An explicit blur is not the temporary pointer-down blur of a scrim, and nothing
+            // hands focus on from it: only a control the user blurred and then left does.
+            self.focus.step(focus_machine::FocusEvent::Dropped);
             self.focus.step(focus_machine::FocusEvent::Settled);
         }
         if let Some(request) = tx.focus_to.take() {

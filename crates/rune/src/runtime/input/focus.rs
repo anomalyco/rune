@@ -401,13 +401,18 @@ impl<S: 'static> Runtime<S> {
         // A field that Escape blurred and that then closed (a comment box cancelled, gone once
         // its exit ends) counts as focused: the keyboard was on it, and nothing took focus since.
         let gone = self.focus.path().or_else(|| self.focus.now_or_blurred().or(self.focus.tab_start()).filter(|_| self.focus.keyboard()))?;
+        // `Tx::blur` says nothing has focus: it hands nothing on, unlike Escape or a deleted row.
+        if self.focus.path().is_none() && !self.focus.handoff() { return None; }
         let Some(at) = self.nodes.iter().position(|n| n.path == gone) else {
             // An offscreen field had no layout node. Only a moved node lost its path.
             let old = self.nodes.get(*self.node_index.get(self.path_ids.get(gone)?)?)?;
             if !old.is_moved_stub() { return None; }
             return self.fallback_in_new(gone, nodes);
         };
-        if self.focus.path().is_none() && (self.nodes[at].input.is_none() || nodes.iter().any(|n| n.path == gone)) { return None; }
+        // The control that held it is still in the tree, even when a model cleared its flag or a
+        // commit hid it: nothing takes its keyboard.
+        if nodes.iter().any(|n| n.path == gone) { return None; }
+        if self.focus.path().is_none() && self.nodes[at].input.is_none() { return None; }
         if self.active_modal().is_some_and(|m| at >= m && self.modal_member(at)) { return None; }
         let new: rustc_hash::FxHashMap<&str, usize> = nodes.iter().enumerate().map(|(j, n)| (n.path.as_str(), j)).collect();
         // Building the new tree hands an old node's path and id to the node that replaces it and
@@ -418,12 +423,14 @@ impl<S: 'static> Runtime<S> {
             self.node_index.get(&n.id).copied()
                 .filter(|&j| nodes.get(j).is_some_and(|m| m.id == n.id))
         };
-        // A node built again this commit has no layout yet: its size is the old node's.
+        // A node built this commit may have no box yet, and is judged by the size its old node
+        // had; one laid out keeps its own box, so a collapsed or hidden control takes no focus.
         let sized = |i: usize| self.nodes[i].local.w > 0.0 && self.nodes[i].local.h > 0.0;
+        let unlaid = |j: usize| nodes[j].local.w <= 0.0 && nodes[j].local.h <= 0.0;
         let visible = |j: usize| !nodes[j].inert && nodes[j].vis.opacity > 0.0
             && std::iter::successors(nodes[j].parent, |&p| nodes[p].parent).all(|p| nodes[p].vis.opacity > 0.0);
         let survivor = |i: usize| at_new(i)
-            .filter(|&j| (shown(j) || (sized(i) && visible(j))) && (self.takes_focus(&nodes[j]) || nodes[j].input.as_ref().is_some_and(|i| i.access.is_some())));
+            .filter(|&j| (shown(j) || (unlaid(j) && sized(i) && visible(j))) && (self.takes_focus(&nodes[j]) || nodes[j].input.as_ref().is_some_and(|i| i.access.is_some())));
         let within = |j: usize, s: usize| {
             // Compare in the new tree where both ends are in it; a node that left keeps its old
             // path, so the scan still reaches the siblings after it.
