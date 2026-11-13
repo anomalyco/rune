@@ -3,7 +3,7 @@ use super::{Shortcut, ShortcutError, ShortcutId, Sink, NativeBackend};
 use super::Backend;
 use crate::{Tx, app::Shared, runtime::Waker};
 use machine::{AttachEffect, AttachEvent, Attachment, BindEffect, BindEvent, Bindings, step_attachment, step_bindings};
-use std::{collections::HashMap, rc::Rc, sync::{Arc, Mutex, OnceLock, atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering}}};
+use std::{collections::HashMap, rc::Rc, sync::{Arc, Mutex, OnceLock, PoisonError, RwLock, Weak, atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering}}};
 #[cfg(not(target_os = "linux"))]
 use std::cell::RefCell;
 #[cfg(not(target_os = "linux"))]
@@ -99,6 +99,42 @@ thread_local! {
     /// Runs as a drain is about to take the waiting calls, so a test can pause it there.
     #[cfg(all(test, not(target_os = "linux")))]
     static BEFORE_DEQUEUE: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::default();
+    /// Runs as this thread is about to wake a host, so a test can pause it there.
+    #[cfg(test)]
+    static BEFORE_WAKE: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = std::cell::RefCell::default();
+}
+
+/// A host's wake, which stops for good as the host closes. Its engine, its activations and
+/// routing all wake the host through it, so a call that finishes after the close, or an
+/// activation passed along after it, wakes nothing. A close waits out a wake already running,
+/// so once a host's `Guard` has dropped its wake never fires; a host's wake must not wait for
+/// that host's thread.
+struct HostWake(RwLock<Option<Waker>>);
+
+impl HostWake {
+    /// The waker the host's engine, activations and routing hold, and what its close ends.
+    /// Only they keep the host's wake alive, so one nothing reaches any more lets it go.
+    fn new(wake: Waker) -> (Waker, Weak<Self>) {
+        let host = Arc::new(Self(RwLock::new(Some(wake))));
+        let closer = Arc::downgrade(&host);
+        (Arc::new(move || host.wake()), closer)
+    }
+
+    fn wake(&self) {
+        #[cfg(test)]
+        if let Some(pause) = BEFORE_WAKE.with(|hook| hook.borrow_mut().take()) { pause(); }
+        // Held through the wake, so a close can't finish while it runs. Wakes share it.
+        let wake = self.0.read().unwrap_or_else(PoisonError::into_inner);
+        if let Some(wake) = wake.as_ref() { wake(); }
+    }
+
+    /// Ends the host's wake, once any wake under way has finished.
+    fn close(host: &Weak<Self>) {
+        let Some(host) = host.upgrade() else { return };
+        let wake = host.0.write().unwrap_or_else(PoisonError::into_inner).take();
+        // The host's own waker goes once the lock is free.
+        drop(wake);
+    }
 }
 
 fn next_generation() -> u64 { NEXT_GENERATION.fetch_add(1, Ordering::Relaxed) }
@@ -287,6 +323,8 @@ pub(crate) struct Guard {
     cleanup: Option<Box<dyn FnOnce(u64)>>,
     /// Held while the host lives, so an activation left for it is dropped once it has gone.
     _live: Arc<()>,
+    /// Ended first as the host closes, so nothing wakes it once the guard has dropped.
+    closes_wake: Weak<HostWake>,
     // The guard must be destroyed on the owning event-loop thread.
     _thread: std::marker::PhantomData<Rc<()>>,
 }
@@ -295,7 +333,9 @@ pub(crate) struct Guard {
 struct Attaching {
     control: Arc<Control>,
     generation: u64,
+    /// The host's wake, which `closes_wake` ends.
     wake: Waker,
+    closes_wake: Weak<HostWake>,
     live: Arc<()>,
     // Routing names this thread as the owner, and a macOS or Windows engine never leaves it.
     _thread: std::marker::PhantomData<Rc<()>>,
@@ -380,6 +420,8 @@ impl Guard {
         let title = shared.shortcuts.title.get().copied().unwrap_or_default();
         let bindings = if headless { Bindings::Virtual(HashMap::new()) } else { Bindings::Disconnected };
         let live = Arc::new(());
+        // Everything below wakes the host through this, so its close ends them all.
+        let (wake, closes_wake) = HostWake::new(wake);
         let engine = |generation| {
             let delivery = Delivery { shared: Arc::downgrade(shared), generation, wake: wake.clone(), live: Arc::downgrade(&live), pressed: Mutex::default() };
             Engine { title, wayland, sink: sink(Arc::new(delivery)), connect, bindings }
@@ -400,7 +442,7 @@ impl Guard {
             *slot = Some(Slot { engine: Arc::new(Mutex::new(engine(generation))), wake: wake.clone(), generation });
             generation
         };
-        Attaching { control, generation, wake, live, _thread: std::marker::PhantomData }
+        Attaching { control, generation, wake, closes_wake, live, _thread: std::marker::PhantomData }
     }
 
     /// Names this host as the one delivering updates on this thread until the result drops.
@@ -468,7 +510,7 @@ impl Guard {
 impl Attaching {
     /// The second half of an attach: this host takes routing, then registers what waited for it.
     fn route<S: 'static>(self, shared: &Arc<Shared<S>>) -> Guard {
-        let Self { control, generation, wake, live, .. } = self;
+        let Self { control, generation, wake, closes_wake, live, .. } = self;
         let routed = {
             let mut route = control.attachment.lock().unwrap();
             control.hosts.fetch_add(1, Ordering::Relaxed);
@@ -482,7 +524,7 @@ impl Attaching {
         let handlers = shared.shortcuts.handlers.clone();
         // A host that attached after the close took routing keeps its handlers.
         let cleanup = move |ended: u64| handlers.lock().unwrap().retain(|_, (stamp, _)| stamp.load(Ordering::Relaxed) > ended);
-        let guard = Guard { control, generation, cleanup: Some(Box::new(cleanup)), _live: live, _thread: std::marker::PhantomData };
+        let guard = Guard { control, generation, cleanup: Some(Box::new(cleanup)), _live: live, closes_wake, _thread: std::marker::PhantomData };
         for (shortcut, handler) in std::mem::take(&mut *shared.shortcuts.pending.lock().unwrap()) {
             if let Err(error) = shortcut.and_then(|s| shared.shortcuts.register(s, handler)) {
                 eprintln!("rune: {error}");
@@ -495,6 +537,8 @@ impl Attaching {
 
 impl Drop for Guard {
     fn drop(&mut self) {
+        // Holding nothing, so a wake under way can finish.
+        HostWake::close(&self.closes_wake);
         let mut closing = self.close_routing();
         self.release_engine(&mut closing);
         self.end(closing);
@@ -511,6 +555,8 @@ mod routing_tests;
 mod host_handler_tests;
 #[cfg(test)]
 mod generation_tests;
+#[cfg(test)]
+mod closed_wake_tests;
 #[cfg(all(test, target_os = "linux"))]
 mod teardown_tests;
 
