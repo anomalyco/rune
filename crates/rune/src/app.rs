@@ -106,6 +106,9 @@ pub struct App<S: 'static> {
     pub(crate) font_smoothing: crate::FontSmoothing,
     pub(crate) dev_stats: Option<fn() -> String>,
     pub(crate) playground: Option<crate::Playground<S>>,
+    /// `playground::attach`, set by `App::playground`: a window calls it through this, so an app
+    /// without a playground doesn't link it.
+    pub(crate) attach_playground: Option<crate::playground::Attach<S>>,
 }
 
 impl<S: 'static> App<S> {
@@ -160,6 +163,7 @@ impl<S: 'static> App<S> {
             font_smoothing: crate::FontSmoothing::default(),
             dev_stats: None,
             playground: None,
+            attach_playground: None,
         }
     }
 
@@ -582,6 +586,7 @@ impl<S: 'static> App<S> {
             self = self.menu_item(item);
         }
         self.playground = Some(playground);
+        self.attach_playground = Some(crate::playground::attach::<S>);
         self
     }
 

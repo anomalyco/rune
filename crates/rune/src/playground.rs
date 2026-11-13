@@ -400,6 +400,9 @@ impl Default for Controls {
     }
 }
 
+/// `attach`'s signature, for `App::attach_playground`.
+pub(crate) type Attach<S> = fn(&mut crate::Runtime<S>, Option<Playground<S>>, &crate::AppSpec<S>, Option<Option<String>>, Option<String>, bool);
+
 /// Shows `playground` in `rt`'s window when this run offers it: an enabled playground, in a
 /// window unless `RUNE_PLAYGROUND=0`, or wherever `--playground` asks for it, headless included,
 /// opened at the story it names, on the variant `--variant` names.

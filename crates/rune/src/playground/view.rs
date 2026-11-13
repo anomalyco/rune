@@ -4,7 +4,8 @@ use super::*;
 
 impl<S: 'static> Live<S> {
     /// The window's root: the app's view above the bar, or the playground around its stage.
-    pub(crate) fn view(&self, app: &S, view: fn(&S, &mut Cx<S>) -> El, cx: &mut Cx<S>, viewport: (f32, f32)) -> El {
+    /// Reached through `Live::view`.
+    pub(super) fn compose(&self, app: &S, view: fn(&S, &mut Cx<S>) -> El, cx: &mut Cx<S>, viewport: (f32, f32)) -> El {
         let dark = self.app_dark.map_or_else(|| cx.system_dark(), |dark| dark(app));
         let t = tok::theme(dark);
         if !self.is_open() {
