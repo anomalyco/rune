@@ -592,12 +592,13 @@ impl<S: 'static> App<S> {
 
     /// Runs until the app quits. Agent-tooling arguments (`--snap`, `--tree`, ...) render
     /// headless instead: the window requests are ignored there, and updates apply each frame.
-    /// Panics when the app can't start, such as without a display; `try_run` returns that error.
+    /// Prints the error to stderr and exits 1 when the app can't start, such as without a
+    /// display (wasm32 has no process exit, so there it panics); `try_run` returns that error.
     pub fn run(self) {
-        if let Err(error) = self.try_run() { panic!("{error}"); }
+        crate::tooling::started(self.try_run());
     }
 
-    /// `run`, returning an error instead of panicking when the event loop can't start (no
+    /// `run`, returning an error instead of exiting when the event loop can't start (no
     /// display over ssh or in CI, no Wayland or X11 server) or fails.
     #[cfg(target_arch = "wasm32")]
     pub fn try_run(mut self) -> Result<(), String> {
