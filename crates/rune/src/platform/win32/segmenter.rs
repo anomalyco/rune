@@ -2,23 +2,53 @@
 //! Windows 10 1903 and later): the Windows build links none of ICU4X's dictionaries (about 3 MB),
 //! and Parley takes these boundaries for those runs' words and, in Thai, Lao, Khmer and Burmese,
 //! their line breaks (`parley_engine::dictionary`), as the web build takes the browser's. A
-//! double-click takes its words from here too. `icu.dll` loads the first time a run needs it,
-//! never at launch; without it (Windows Server Core, older Windows 10) those runs fall back to
+//! double-click takes its words from here too. `icu.dll` and its Thai and Japanese dictionaries
+//! load on a thread of their own as the app starts (`warm`: about 12,000 µs of that thread's CPU and
+//! 800,000 B), so the UI thread never pays for them, a Thai first frame or a pasted line included;
+//! without it (Windows Server Core, older Windows 10) those runs fall back to
 //! what the rule-based segmenter does, and the `segmenter-dictionaries` feature links ICU4X's
 //! instead.
 
 use std::ffi::c_void;
 use std::sync::OnceLock;
 
-/// Gives Parley Windows' word boundaries, once per process. Loads nothing yet.
+/// Gives Parley Windows' word boundaries, once per process, and starts loading them (`warm`).
 pub(crate) fn install() {
     parley_engine::dictionary::set_dictionary_segmenter(dictionary_words);
+    warm();
+}
+
+/// Loads `icu.dll` and opens a Thai and a Japanese word iterator on a thread of its own, once:
+/// the first open of a dictionary language costs ~12,000 µs (ICU reads its dictionary), the next
+/// ~20 µs. A layout that needs them before this is done waits for it rather than loading twice.
+fn warm() {
+    static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if STARTED.swap(true, std::sync::atomic::Ordering::Relaxed) { return; }
+    let _ = std::thread::Builder::new().name("rune-icu".into()).spawn(|| {
+        let _ = word_bounds("\u{0E20}\u{0E32}\u{0E29}\u{0E32}\u{0E44}\u{0E17}\u{0E22}", "th");
+        let _ = word_bounds("\u{65E5}\u{672C}\u{8A9E}", "ja");
+    });
 }
 
 /// The boundaries strictly inside `text` (byte offsets, ascending) for one dictionary language.
 fn dictionary_words(text: &str, language: &str, out: &mut Vec<usize>) {
     let Some(bounds) = word_bounds(text, language) else { return };
-    out.extend(bounds.into_iter().filter(|&b| b > 0 && b < text.len()));
+    // ICU's word iterator ends a `word` where UAX #14 never breaks a line: after marks with no
+    // letter under them (a run that starts U+0E31 U+0308; LineBreakTest 17.0.0, case 14571), and
+    // before a non-starter or a combining mark (LB9, LB21: U+17D6 U+17D6; 16.0.0, cases 16121
+    // and 16123). ICU4X's line segmenter keeps both together, and so does this.
+    out.extend(bounds.into_iter().filter(|&b| b > 0 && b < text.len() && !marks_only(&text[..b]) && !no_break_before(&text[b..])));
+}
+
+fn no_break_before(rest: &str) -> bool {
+    use icu_properties::{CodePointMapData, props::LineBreak};
+    rest.chars().next().is_some_and(|c| matches!(CodePointMapData::<LineBreak>::new().get(c), LineBreak::Nonstarter | LineBreak::CombiningMark | LineBreak::ZWJ))
+}
+
+fn marks_only(s: &str) -> bool {
+    use icu_properties::{CodePointMapData, props::GeneralCategory};
+    let category = CodePointMapData::<GeneralCategory>::new();
+    s.chars().all(|c| matches!(category.get(c), GeneralCategory::NonspacingMark | GeneralCategory::SpacingMark | GeneralCategory::EnclosingMark))
 }
 
 /// `text`'s word boundaries by ICU's rules and dictionaries, as byte offsets, ascending, ending
