@@ -84,7 +84,9 @@ impl<S: 'static> Runtime<S> {
         visual_changed || help_changed || self.queue.len() != queued || self.press.inside() != capture_inside
     }
 
-    pub(crate) fn pointer_captured(&self) -> bool { self.press.is_held() || self.secondary.is_held() }
+    /// A button holds the pointer: the OS keeps sending its moves to this window, and a leave
+    /// waits for the release.
+    pub(crate) fn pointer_captured(&self) -> bool { self.press.is_held() || self.secondary.is_held() || self.tint.path().is_some() }
 
     /// The host's window content top-left in desktop pixels; `None` where it has none.
     pub(crate) fn set_window_pixels(&mut self, pixels: Option<(i32, i32)>) {
