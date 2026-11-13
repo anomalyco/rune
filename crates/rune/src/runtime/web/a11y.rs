@@ -14,8 +14,16 @@ pub(crate) struct A11yMirror {
     commits: u64,
     viewport: (u32, u32),
     scroll_digest: u64,
+    /// Whether motion ran at the last build, and when (clock seconds) it was.
+    moving: bool,
+    built_at: f64,
     json: String,
 }
+
+/// While motion runs (a sheet sliding in, a panel opening), how often the mirror follows what's
+/// drawn. Its boxes are the drawn ones, so a build at the commit alone keeps a sliding element
+/// where it started: off screen for a sheet, under a reader's focus ring.
+const MOVING_EVERY: f64 = 0.1;
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct A11yItem {
@@ -532,9 +540,14 @@ impl<S: 'static> Runtime<S> {
     pub(crate) fn web_a11y<'a>(&self, mirror: &'a mut A11yMirror) -> Option<&'a str> {
         let vp = (self.viewport.0.to_bits(), if self.page.is_some() { 0 } else { self.viewport.1.to_bits() });
         let sd = self.scroll_digest();
-        if mirror.commits == self.commits && mirror.viewport == vp && mirror.scroll_digest == sd && !mirror.json.is_empty() {
+        // Motion moves drawn boxes without a commit: follow it while it runs, and once more where it stops.
+        let moving = self.animating;
+        let follow = moving != mirror.moving || (moving && self.clock - mirror.built_at >= MOVING_EVERY);
+        if mirror.commits == self.commits && mirror.viewport == vp && mirror.scroll_digest == sd && !follow && !mirror.json.is_empty() {
             return None;
         }
+        mirror.moving = moving;
+        mirror.built_at = self.clock;
         mirror.commits = self.commits;
         mirror.viewport = vp;
         mirror.scroll_digest = sd;
