@@ -13,6 +13,7 @@ impl Windows {
         if hide {
             for host in self.hosts.iter_mut().flatten() { host.vanish(); }
             crate::marks::mark("quit.hidden");
+            crate::quit::ib3("quit.hidden");
         }
         for effect in crate::quit::send(Event::Start { ending, after: After::Exit }) {
             match effect {

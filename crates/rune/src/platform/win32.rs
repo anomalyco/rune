@@ -447,6 +447,8 @@ fn destroy(hwnd: windows_sys::Win32::Foundation::HWND) {
     // SAFETY: a window of this thread's; nothing of this process's uses it after.
     unsafe {
         SetWindowLongPtrW(hwnd, GWLP_WNDPROC, DefWindowProcW as usize as isize);
+        crate::quit::ib3(&format!("destroy {}", { let mut c = [0u16; 64]; let n = windows_sys::Win32::UI::WindowsAndMessaging::GetClassNameW(hwnd, c.as_mut_ptr(), 64); String::from_utf16_lossy(&c[..n.max(0) as usize]).replace(' ', "_") }));
         DestroyWindow(hwnd);
+        crate::quit::ib3("destroyed");
     }
 }
