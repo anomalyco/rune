@@ -1,7 +1,8 @@
 //! Measuring text from a view, for views that place things themselves (table columns, diagram
-//! nodes). A view has no handle on the runtime's text system, so each thread keeps one of its own
-//! built from the fonts the most recent [`TextSystem`] was given: the app's `AppSpec::fonts` in
-//! an app, the built-in Inter in a test runtime. Same shaper, same fonts, same numbers.
+//! nodes). While a window's view runs, its measures use the window's own text system (`lend`).
+//! Elsewhere (a handler, another thread) each thread keeps one of its own, built from the fonts the
+//! most recent [`TextSystem`] was given: the app's `AppSpec::fonts` in an app, the built-in Inter
+//! in a test runtime. Same shaper, same fonts, same numbers.
 
 use std::cell::RefCell;
 use std::marker::PhantomData;

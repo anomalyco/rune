@@ -1,0 +1,1 @@
+- **A view's `rune::text::measure` uses its window's text system.** It used a second text system of the thread's own, which loaded every font and fallback again: a session header measuring a title cost OpenCode's ten-tab launch 5.8-10.4 ms in its first frame, now 0.06-0.19 ms. Outside a view (a handler, another thread), and under `with_families`, it measures as before.
