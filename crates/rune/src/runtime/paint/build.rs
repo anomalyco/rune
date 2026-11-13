@@ -7,6 +7,12 @@ impl<S: 'static> Runtime<S> {
         let s = self.env.scale;
         let snap_px = |v: f32| grid(v, s) * s;
         self.instances.clear();
+        self.quads_frame += 1;
+        // Quads a text hasn't drawn with for a while go, with the layouts they hold.
+        if self.quads_frame % 64 == 0 {
+            let frame = self.quads_frame;
+            self.text_quads.retain(|_, (_, _, used)| frame - *used < 64);
+        }
         let mut pinned_pages = 0u32;
         for f in &self.flights {
             for q in &f.glyphs {

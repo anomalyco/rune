@@ -513,6 +513,11 @@ impl<S: 'static> Runtime<S> {
                 // A cell of a longer run draws its slice of the run's glyphs, shaped in context, at the
                 // same raster factor as a paragraph: under a zoom its masks are made at the zoomed size
                 // rather than magnified, and the frame it comes to rest places them.
+                // A still text whose quads this frame would draw as the last one did copies them,
+                // as `El::grid` rows do: `quads` is the entry to record them under otherwise.
+                let mut copied = false;
+                let mut quads: Option<((NodeId, usize), Rc<parley::Layout<crate::text::Ink>>, u64, usize, usize)> = None;
+                let mut pages: Option<Vec<(u16, u32)>> = None;
                 let zoom = if let (Some(r), Some((_, at))) = (&n.run_layout, &spec.cold.advance_in)
                     && let Some(x) = r.x(*at)
                 {
@@ -539,7 +544,33 @@ impl<S: 'static> Runtime<S> {
                     // A secret's glyphs aren't kept past the frame that draws them.
                     let secret = spec.redacted || n.input.as_ref().is_some_and(|i| i.edit.is_secure());
                     let shared = piece.shared.or(laid.single());
+                    let still = scale_motion == ScaleMotion::Still && glide == [0.0; 2] && !bytes && !place_masks
+                        && !self.flights.iter().any(|f| f.lands(&n.path, n.key.as_deref()));
+                    if let Some(l) = shared.filter(|_| still && !direct && !secret) {
+                        use std::hash::{Hash, Hasher};
+                        let mut h = rune_motion::Fx::default();
+                        (origin.map(f32::to_bits), clip.map(f32::to_bits), fade.map(f32::to_bits), shown.map(f32::to_bits), [tk, raster, s].map(f32::to_bits)).hash(&mut h);
+                        (premul(color, o, srgb).map(f32::to_bits), srgb, self.text.emit_key()).hash(&mut h);
+                        for sp in spans_here.iter() {
+                            sp.color.map(|c| premul(c, o, srgb).map(f32::to_bits)).hash(&mut h);
+                        }
+                        let (id, key) = ((n.id, Rc::as_ptr(l) as usize), h.finish());
+                        match self.text_quads.get_mut(&id).filter(|(held, d, _)| Rc::ptr_eq(held, l) && d.key == key) {
+                            Some((_, d, used)) => {
+                                *used = self.quads_frame;
+                                self.instances.extend_from_slice(&d.instances);
+                                d.pages.iter().for_each(|&(page, texels)| self.text.touch_quad(page, texels));
+                                *glyph_count += d.glyphs;
+                                copied = true;
+                            }
+                            None => {
+                                quads = Some((id, l.clone(), key, self.instances.len(), *glyph_count));
+                                pages = Some(Vec::new());
+                            }
+                        }
+                    }
                     match shared.filter(|_| !direct && !secret) {
+                        _ if copied => {}
                         Some(l) => self.text.glyphs_in_band_cached(l, r_origin, raster, bytes, band.clone(), &mut self.glyph_scratch),
                         None => self.text.glyphs_in_band(layout, r_origin, raster, bytes, band.clone(), &mut self.glyph_scratch),
                     }
@@ -597,6 +628,20 @@ impl<S: 'static> Runtime<S> {
                     self.instances.extend(glyph_or_image(q, &self.text, &mut self.images, f, clip, fade)
                         .map(|g| zoom_glyph(g, origin, r_origin, zoom)));
                     *glyph_count += 1;
+                    // A colour or outline glyph draws per frame, from another atlas or a record.
+                    if q.color != 0 || q.outline.is_some() {
+                        pages = None;
+                    } else if let Some(pages) = pages.as_mut() {
+                        let (page, texels) = (q.atlas_page() as u16, (q.rect[2] * if q.lcd { 3.0 } else { 1.0 } * q.rect[3]) as u32);
+                        match pages.iter_mut().find(|p| p.0 == page) {
+                            Some(p) => p.1 += texels,
+                            None => pages.push((page, texels)),
+                        }
+                    }
+                }
+                if let (Some((id, layout, key, start, glyphs)), Some(pages)) = (quads, pages) {
+                    let d = crate::el::grid::DrawnRow { key, instances: self.instances[start..].to_vec(), pages, glyphs: *glyph_count - glyphs };
+                    self.text_quads.insert(id, (layout, d, self.quads_frame));
                 }
             }
             if let (Some(c), Some(inp)) = (caret, &n.input) {

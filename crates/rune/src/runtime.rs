@@ -522,6 +522,10 @@ pub struct Runtime<S: 'static> {
     hits: Vec<(NodeId, [f32; 4])>,
     overlay_hits: Vec<[f32; 4]>,
     glyph_scratch: Vec<GlyphQuad>,
+    /// Each still text's quads as it drew them, by node and layout, and the paint they were last
+    /// used in (`paint_content`): a frame that draws it the same copies them.
+    text_quads: HashMap<(NodeId, usize), (Rc<parley::Layout<crate::text::Ink>>, crate::el::grid::DrawnRow, u64)>,
+    quads_frame: u64,
     deco_scratch: Vec<PaintedDeco>,
     inh_scratch: Vec<Inh>,
     /// `motion_elements`' per-node scratch, kept so a frame doesn't allocate.
@@ -937,6 +941,8 @@ impl<S: 'static> Runtime<S> {
             hits: Vec::new(),
             overlay_hits: Vec::new(),
             glyph_scratch: Vec::new(),
+            text_quads: HashMap::default(),
+            quads_frame: 0,
             deco_scratch: Vec::new(),
             inh_scratch: Vec::new(),
             motion_scratch: Default::default(),
