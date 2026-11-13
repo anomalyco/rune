@@ -18,9 +18,9 @@ pub(super) struct CpuCanvas {
     /// The frame painted last, `size.0 * 4` bytes a row, B, G, R, A.
     buffer: Vec<u8>,
     size: (u32, u32),
-    /// One rectangle's RGBA rows on their way to the canvas.
+    /// One row of a rectangle in RGBA, on its way to `staged`.
     rows: Vec<u8>,
-    /// The same rows in the page's own memory: an image made over the module's memory takes the
+    /// The rectangle's rows in the page's own memory: an image made over the module's memory takes the
     /// browser tens of milliseconds to put (all of it, for a full frame), one over this a few
     /// hundred microseconds.
     staged: js_sys::Uint8ClampedArray,
@@ -96,17 +96,20 @@ impl CpuCanvas {
             if rw == 0 || rh == 0 { continue; }
             let began = crate::time::Instant::now();
             let line = rw as usize * 4;
-            self.rows.resize(line * rh as usize, 0);
-            for (y, out) in (y0..y1).zip(self.rows.chunks_exact_mut(line)) {
+            let len = line * rh as usize;
+            if (self.staged.length() as usize) < len {
+                self.staged = js_sys::Uint8ClampedArray::new_with_length((w as usize * h as usize * 4).max(len) as u32);
+            }
+            // A row at a time through one row's buffer: a whole frame's RGBA copy in the module's
+            // memory (4 MB at 1280x800) would stay in its high-water mark for good.
+            self.rows.resize(line, 0);
+            for (i, y) in (y0..y1).enumerate() {
                 let at = (y as usize * w as usize + x0 as usize) * 4;
-                rgba(&self.buffer[at..at + line], out);
+                rgba(&self.buffer[at..at + line], &mut self.rows);
+                self.staged.subarray((i * line) as u32, ((i + 1) * line) as u32).copy_from(&self.rows);
             }
             swizzle += began.elapsed();
-            if (self.staged.length() as usize) < self.rows.len() {
-                self.staged = js_sys::Uint8ClampedArray::new_with_length((w as usize * h as usize * 4).max(self.rows.len()) as u32);
-            }
-            let staged = self.staged.subarray(0, self.rows.len() as u32);
-            staged.copy_from(&self.rows);
+            let staged = self.staged.subarray(0, len as u32);
             if let Ok(image) = web_sys::ImageData::new_with_js_u8_clamped_array_and_sh(&staged, rw, rh) {
                 let _ = self.ctx.put_image_data(&image, f64::from(x0), f64::from(y0));
             }
@@ -122,8 +125,11 @@ impl CpuCanvas {
     /// The frame painted last: B, G, R, A, `size.0 * 4` bytes a row.
     pub(super) fn pixels(&self) -> &[u8] { &self.buffer }
 
-    /// The canvas goes: the GPU's frames are on screen in its place.
+    /// The canvas goes: the GPU's frames are on screen in its place. Its pixels go now (a 0x0
+    /// canvas has none), not when the page next collects garbage: 15.6 MB at 1280x800 until then.
     pub(super) fn remove(self) {
+        self.canvas.set_width(0);
+        self.canvas.set_height(0);
         self.canvas.remove();
     }
 }
