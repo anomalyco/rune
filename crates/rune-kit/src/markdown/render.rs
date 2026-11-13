@@ -60,6 +60,9 @@ pub(super) struct Flow {
     /// The marker a copy puts before the paragraph that opens a list item, its indent, and the
     /// newlines before it: two to set a top-level list apart from the block before it.
     pub(super) lead: Option<(u8, Lead, u8)>,
+    /// They're the last top-level block of a source still streaming in: its text wraps greedily,
+    /// as a page keeps `text-wrap-style: auto` on the block that grows, so settled words stay put.
+    pub(super) growing: bool,
 }
 
 /// A list item's marker as copying writes it.
@@ -355,6 +358,7 @@ impl Renderer {
     }
 
     pub(super) fn with_reveal(&self, e: El) -> El {
+        let e = if self.flow.get().growing { e.wrap_greedy() } else { e };
         if self.reveal >= 0.0 {
             e.reveal(self.reveal)
         } else if self.streaming {
@@ -415,6 +419,7 @@ impl Renderer {
             };
             if top_level {
                 self.current_block_key.replace(key.clone().into());
+                self.flow.set(Flow { growing: self.streaming && i + 1 == blocks.len(), ..self.flow.get() });
             }
             // Only an item's first block copies after its marker.
             if i > 0 {

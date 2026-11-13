@@ -253,6 +253,7 @@ pub(super) fn text(spec: &TextSpec, d: &mut Decls) {
     } else {
         d.push(("white-space", if spec.wrap { "pre-wrap" } else { "pre" }.into()));
         if spec.wrap_anywhere { d.push(("overflow-wrap", "anywhere".into())); }
+        if spec.pretty() { d.push(("text-wrap-style", "pretty".into())); }
     }
 }
 
