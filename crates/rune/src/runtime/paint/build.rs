@@ -1117,6 +1117,7 @@ impl<S: 'static> Runtime<S> {
                         r,
                         r_exact,
                         raw_size: [raw_edges[2] - raw_edges[0], raw_edges[3] - raw_edges[1]],
+                        contain: pinh.snap.contain.map(|v| v * s),
                         radii,
                         sc,
                         o,
@@ -1174,6 +1175,13 @@ impl<S: 'static> Runtime<S> {
             let mut dy = pinh.dy;
             let snap_off = pinh.snap.off || n.vis_flags.no_pixel_snap() || turn_index != 0;
             let mut snap_rigid = pinh.snap.rigid;
+            // `El::paint_contained`: its children snap against the containing box's origin,
+            // rounded on its own, as a translation that snaps as a whole.
+            let mut snap_contain = pinh.snap.contain;
+            if let Some(o) = n.vis.cold.get().and_then(|c| c.paint_contain) {
+                snap_rigid = [snap_rigid[0] - snap_contain[0] + o[0], snap_rigid[1] - snap_contain[1] + o[1]];
+                snap_contain = o;
+            }
             if n.scroll.is_some()
                 && let Some(st) = self.scrolls.get(&n.id)
             {
@@ -1224,7 +1232,7 @@ impl<S: 'static> Runtime<S> {
                 hit_opacity: hit_opacity * kids_fade, group_rect: if hover_owner { rect_pt } else { pinh.group_rect },
                 scale_motion, still: if scale_motion == ScaleMotion::Still { (scale, anchor, anchor_to) } else { pinh.still },
                 in_cache, skip_paint, turn: turn_index,
-                snap: pixel_snap::Inherit { off: snap_off, rigid: snap_rigid, layer: if cover.is_some() { 0 } else { snap_layer }, parent: snap_rest.filter(|_| cover.is_none() && snap_rigid == pinh.snap.rigid && pixel_snap::frames(&n.vis)) } };
+                snap: pixel_snap::Inherit { off: snap_off, rigid: snap_rigid, contain: snap_contain, layer: if cover.is_some() { 0 } else { snap_layer }, parent: snap_rest.filter(|_| cover.is_none() && snap_rigid == pinh.snap.rigid && pixel_snap::frames(&n.vis)) } };
             // Shown only under its group's hover, it takes presses where the pointer hovers the
             // group: a press in the same frame as the move that reveals it finds it, as a page's
             // `:hover` applies before the press does.

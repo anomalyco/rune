@@ -102,6 +102,8 @@ pub struct VisualCold {
     pub(crate) flight_crop: bool,
     /// `El::hold_landing_width`: an animated width change lands its contents and slides them.
     pub(crate) hold_landing: bool,
+    /// `El::paint_contained`: the origin (window points) its children snap against.
+    pub(crate) paint_contain: Option<[f32; 2]>,
     /// `El::offset`: a visual shift in points.
     pub(crate) offset: [f32; 2],
     /// Static alpha of this element's own paint; never inherited or isolated.
@@ -165,6 +167,7 @@ impl Empty for VisualCold {
         clip_to_content: false,
         flight_crop: false,
         hold_landing: false,
+        paint_contain: None,
         offset: [0.0; 2],
         paint_alpha: 1.0,
         layer_opacity: 1.0,

@@ -5,6 +5,9 @@ pub(super) struct LeafBox {
     pub r: [f32; 4],
     pub r_exact: [f32; 4],
     pub raw_size: [f32; 2],
+    /// The paint containment's origin above (`El::paint_contained`), device px: what draws
+    /// from its exact box's origin rounds against it, as Blink rounds inside it.
+    pub contain: [f32; 2],
     pub radii: [f32; 4],
     pub sc: f32,
     pub o: f32,
@@ -25,6 +28,13 @@ pub(super) struct LeafBox {
     pub shown: [f32; 2],
 }
 
+/// `v` (device px) on the device grid inside a paint containment at `c`: the containment's
+/// origin and the offset in it each round half up, as Blink rounds them.
+fn on_grid(v: f32, c: f32) -> f32 {
+    let round = |x: f32| (x + 0.5).floor();
+    round(v - c) + round(c)
+}
+
 impl<S: 'static> Runtime<S> {
     pub(super) fn paint_content(
         &mut self,
@@ -41,6 +51,7 @@ impl<S: 'static> Runtime<S> {
             r,
             r_exact,
             raw_size,
+            contain,
             radii,
             sc,
             o,
@@ -79,7 +90,7 @@ impl<S: 'static> Runtime<S> {
             // a glide or a swap to an icon doesn't wobble. A view-boxed shape stretches to the box.
             let still = cover.is_none() && scale_motion == ScaleMotion::Still && !gliding && (sc - 1.0).abs() < 1e-5;
             let at = if still {
-                [(r_exact[0] + 0.5).floor(), (r_exact[1] + 0.5).floor()]
+                [on_grid(r_exact[0], contain[0]), on_grid(r_exact[1], contain[1])]
             } else {
                 [r[0] + (w - w_exact) * 0.5, r[1] + (h - h_exact) * 0.5]
             };
@@ -167,8 +178,7 @@ impl<S: 'static> Runtime<S> {
             let exact = w_exact.min(h_exact);
             if resting && exact > 1e-4 && !self.text.is_color_icon(ic) {
                 let canvas = (exact - 1.0 / 64.0).ceil().max(1.0) as u32;
-                let grid = |v: f32| (v + 0.5).floor();
-                let at = [grid(r_exact[0] + (w_exact - exact) * 0.5), grid(r_exact[1] + (h_exact - exact) * 0.5)];
+                let at = [on_grid(r_exact[0] + (w_exact - exact) * 0.5, contain[0]), on_grid(r_exact[1] + (h_exact - exact) * 0.5, contain[1])];
                 if let Some(q) = self.text.icon_quad_sized(ic, (canvas, exact), at, facing) {
                     self.push_icon(icon_inst(&q, at, canvas as f32, 0.0, premul(color, o, srgb), clip, fade));
                 }
