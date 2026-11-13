@@ -38,8 +38,14 @@ pub const FAMILIES: (&str, &str) = ("Inter", "IBM Plex Mono");
 pub fn theme(dark: bool) -> &'static Theme {
     static DARK: OnceLock<Theme> = OnceLock::new();
     static LIGHT: OnceLock<Theme> = OnceLock::new();
-    let load = || Theme::from_json(THEME, dark).unwrap_or_else(|e| panic!("{e}"));
+    let load = || Theme::from_value(document(), dark).unwrap_or_else(|e| panic!("{e}"));
     if dark { DARK.get_or_init(load) } else { LIGHT.get_or_init(load) }
+}
+
+/// `theme.json`, parsed once for both appearances and the kit's shadows.
+fn document() -> &'static Value {
+    static DOC: OnceLock<Value> = OnceLock::new();
+    DOC.get_or_init(|| serde_json::from_str(THEME).expect("theme.json"))
 }
 
 /// The brand's hot colour for one appearance: ember step 9, for marks like a logo or a
@@ -65,16 +71,11 @@ pub fn scale(name: &str, dark: bool, step: u8) -> Color {
     theme(dark).color(&format!("{name}-{}-{step}", if dark { "dark" } else { "light" }))
 }
 
-/// The theme without sRGB re-solving: translucent tokens keep their authored alpha.
-fn raw_theme(dark: bool) -> &'static Theme {
-    static DARK: OnceLock<Theme> = OnceLock::new();
-    static LIGHT: OnceLock<Theme> = OnceLock::new();
-    let load = || {
-        let mut v: Value = serde_json::from_str(THEME).expect("theme.json");
-        v.as_object_mut().expect("theme object").remove("blend");
-        Theme::from_json(&v.to_string(), dark).unwrap_or_else(|e| panic!("{e}"))
-    };
-    if dark { DARK.get_or_init(load) } else { LIGHT.get_or_init(load) }
+/// Token `name` as the theme authors it, without sRGB re-solving: translucent tokens keep their
+/// authored alpha.
+#[track_caller]
+fn authored(dark: bool, name: &str) -> Color {
+    theme(dark).authored(name).unwrap_or_else(|| panic!("theme.json has no {name:?}"))
 }
 
 /// The kit tokens for one appearance, resolved for the blend mode of the window building the
@@ -106,7 +107,7 @@ fn build(dark: bool) -> Kit {
     let t = theme(dark);
     let c = |n: &str| t.color(n);
     let v = |n: &str| t.color(&format!("v2-{n}"));
-    let raw = |n: &str| raw_theme(dark).color(&format!("v2-{n}"));
+    let raw = |n: &str| authored(dark, &format!("v2-{n}"));
     let state = |n: &str, icon: Color| StateColors {
         bg: v(&format!("state-bg-{n}")),
         fg: v(&format!("state-fg-{n}")),
@@ -115,7 +116,7 @@ fn build(dark: bool) -> Kit {
     };
     let blend = v("background-bg-base");
     let solve = |x: Color| rune::theme::for_blend(x, blend);
-    let data: Value = serde_json::from_str(THEME).expect("theme.json");
+    let data = document();
     let mode = if dark { "dark" } else { "light" };
     let sh = |n: &str| {
         let src = data["shadows"][mode][n].as_str().unwrap_or_else(|| panic!("theme.json has no {mode} shadow {n:?}"));
@@ -275,7 +276,7 @@ mod tests {
         for dark in [false, true] {
             let srgb = rune::theme::with_blend(true, || super::kit(dark));
             let linear = rune::theme::with_blend(false, || super::kit(dark));
-            let authored = super::raw_theme(dark).color("v2-overlay-simple-overlay-hover");
+            let authored = super::authored(dark, "v2-overlay-simple-overlay-hover");
             assert_eq!(srgb.c.hover, authored, "sRGB blending paints the authored alpha");
             assert_eq!(linear.c.hover, rune::theme::srgb_equivalent(authored, linear.c.bg_base));
             assert_ne!(linear.c.hover.a, authored.a);

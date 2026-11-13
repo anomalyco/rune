@@ -105,7 +105,12 @@ pub fn srgb_equivalent(c: Color, bg: Color) -> Color {
 
 impl Theme {
     pub fn from_json(src: &str, dark: bool) -> Result<Theme, String> {
-        let v: Value = serde_json::from_str(src).map_err(|e| format!("theme: {e}"))?;
+        Theme::from_value(&serde_json::from_str(src).map_err(|e| format!("theme: {e}"))?, dark)
+    }
+
+    /// [`Theme::from_json`] from the document already parsed, for a caller that reads more of it
+    /// or builds both appearances from one parse.
+    pub fn from_value(v: &Value, dark: bool) -> Result<Theme, String> {
         let palette = v.get("palette").and_then(Value::as_object);
         let mode = if dark { "dark" } else { "light" };
         let tokens = v.get(mode).and_then(Value::as_object).ok_or(format!("theme: no \"{mode}\" section"))?;
@@ -144,6 +149,11 @@ impl Theme {
         }
         let name = v.get("name").and_then(Value::as_str).unwrap_or("theme").to_owned();
         Ok(Theme { name, dark, blend_bg, colors, numbers })
+    }
+
+    /// A colour token as the theme authors it, never re-solved for the blend mode, or None.
+    pub fn authored(&self, name: &str) -> Option<Color> {
+        self.colors.get(name).copied()
     }
 
     /// A colour token for the current blend mode ([`blends_srgb`]), or None.
