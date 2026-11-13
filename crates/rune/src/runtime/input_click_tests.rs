@@ -103,7 +103,8 @@ fn rect_of(rt: &Runtime<Form>, key: &str) -> [f32; 4] {
 /// Window point `(x, y)` at `frac` (`0.0..1.0`) across the glyph cluster at `byte` in `key`.
 fn point_in_cluster(rt: &Runtime<Form>, key: &str, byte: usize, frac: f32) -> (f32, f32) {
     let n = rt.nodes.iter().find(|n| n.key.as_deref() == Some(key)).unwrap();
-    let l = n.text_layout.as_ref().and_then(crate::text::TextLayout::single).unwrap();
+    let piece = n.text_layout.as_ref().unwrap().view().piece_at(byte);
+    let (l, byte) = (piece.layout, piece.shaped(byte));
     let s = rt.env.scale;
     let cl = parley::Cluster::from_byte_index(l, byte).unwrap();
     let x0 = cl.visual_offset().unwrap();
@@ -113,7 +114,7 @@ fn point_in_cluster(rt: &Runtime<Form>, key: &str, byte: usize, frac: f32) -> (f
     let r = rect_of(rt, key);
     (
         r[0] + n.inset[0] + (x0 + adv * frac) / s,
-        r[1] + n.inset[1] + ((bb.y0 + bb.y1) * 0.5) as f32 / s,
+        r[1] + n.inset[1] + (piece.y + ((bb.y0 + bb.y1) * 0.5) as f32) / s,
     )
 }
 
@@ -238,6 +239,29 @@ fn click_drag_double_drag_and_triple_drag_extend_by_unit_in_both_directions() {
     rt.pointer_up(l1.0, l1.1);
     rt.frame(1.0 / 60.0);
     assert_eq!((rt.state.multi.anchor, rt.state.multi.focus), (third, 0));
+}
+
+#[test]
+fn double_click_drag_extends_by_word_across_paragraphs() {
+    let mut rt = runtime();
+    let text = &rt.state.multi.text;
+    let line = text.find("line").unwrap();
+    let second = text.find("second").unwrap();
+    let end = text.find("end").unwrap();
+    let start = point_at_byte(&rt, "multi", second + 2);
+    let forward = point_at_byte(&rt, "multi", end + 1);
+    let back = point_at_byte(&rt, "multi", line + 1);
+
+    click(&mut rt, start);
+    rt.pointer_down(start.0, start.1);
+    rt.frame(1.0 / 60.0);
+    rt.pointer_move(forward.0, forward.1);
+    rt.frame(1.0 / 60.0);
+    assert_eq!((rt.state.multi.anchor, rt.state.multi.focus), (second, end + 3));
+    rt.pointer_move(back.0, back.1);
+    rt.pointer_up(back.0, back.1);
+    rt.frame(1.0 / 60.0);
+    assert_eq!((rt.state.multi.anchor, rt.state.multi.focus), (second + 6, line));
 }
 
 #[test]
