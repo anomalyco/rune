@@ -613,6 +613,9 @@ pub struct Runtime<S: 'static> {
     /// Fresh view accessors for focused text fields omitted by virtualization.
     virtual_inputs: HashMap<String, Box<InputSpec>>,
     reveals: HashMap<NodeId, RevealPhase>,
+    /// The reveal states `reveals` keeps for texts that have left the tree, newest first, at
+    /// most `prune::REVEALS_KEPT` of them (see `prune_exited`).
+    reveals_kept: Vec<NodeId>,
     /// The newest streamed word of any text, which the next text's words queue behind.
     reveal_chain: RevealChain,
     flights: Vec<TextFlight>,
@@ -984,6 +987,7 @@ impl<S: 'static> Runtime<S> {
             reuse: Default::default(),
             virtual_inputs: HashMap::default(),
             reveals: HashMap::default(),
+            reveals_kept: Vec::new(),
             reveal_chain: RevealChain::default(),
             flights: Vec::new(),
             launches: Default::default(),

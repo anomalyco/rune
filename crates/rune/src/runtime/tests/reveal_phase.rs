@@ -794,3 +794,101 @@ fn a_paused_clock_freezes_the_fade_and_its_resume_shifts_the_words() {
     w.set(|s| s.content = "a b c d e f g".to_owned()).unwrap();
     w.tick(0.2).unwrap();
 }
+
+/// A child that never comes back leaves its reveal behind, and so keeps the path that maps to
+/// it: only the newest `REVEALS_KEPT` that left are kept for a return, the oldest go.
+#[test]
+fn removed_children_keep_at_most_the_newest_reveals() {
+    use crate::runtime::prune::REVEALS_KEPT;
+    #[derive(Default)]
+    struct S {
+        n: usize,
+        present: bool,
+    }
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        col().key("root").w(300.0).children(
+            s.present.then(|| col().key(format!("p{}", s.n)).child(text("a b c").key("t").w_full().wrap().reveal(FADE))),
+        )
+    }
+    let mut rt = Runtime::new(S::default(), view, (300.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let mounted = rt.path_ids.len();
+    let count = REVEALS_KEPT * 2;
+    for n in 0..count {
+        rt.update(|s, _| {
+            s.n = n;
+            s.present = true;
+        });
+        rt.frame(0.0);
+        rt.frame(0.1);
+        rt.update(|s, tx| {
+            s.present = false;
+            tx.instant();
+        });
+        rt.frame(0.0);
+    }
+    assert_eq!(rt.reveals.len(), REVEALS_KEPT, "the newest keys' reveals stay and the oldest left");
+    assert!(rt.reveals_kept.len() <= REVEALS_KEPT, "{} orphans tracked", rt.reveals_kept.len());
+    // A dropped reveal's path leaves with the next commit's `prune_path_ids`.
+    rt.update(|s, _| s.n += 1);
+    rt.frame(0.0);
+    assert!(rt.path_ids.len() <= mounted + REVEALS_KEPT, "{} ids kept for {mounted} mounted paths", rt.path_ids.len());
+    let newest = format!("root/p{}/t", count.saturating_sub(1));
+    assert!(rt.path_ids.contains_key(&newest), "the newest key's reveal stays for a return");
+    assert!(!rt.path_ids.contains_key("root/p0/t"), "the oldest key's reveal left with its path");
+}
+
+/// A child that comes back after its parent unmounted instantly keeps its words while its reveal
+/// is still one of the newest `REVEALS_KEPT`, however many other keys have left since.
+#[test]
+fn a_child_returning_within_the_bound_keeps_its_words() {
+    use crate::runtime::prune::REVEALS_KEPT;
+    #[derive(Default)]
+    struct S {
+        parent: bool,
+        other: usize,
+        other_present: bool,
+    }
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        let mut kids = Vec::new();
+        if s.parent {
+            kids.push(col().key("p").child(text("a b c").key("t").w_full().wrap().reveal(FADE)));
+        }
+        if s.other_present {
+            kids.push(col().key(format!("o{}", s.other)).child(text("a b c").key("t").w_full().wrap().reveal(FADE)));
+        }
+        col().key("root").w(300.0).children(kids)
+    }
+    let mut rt = Runtime::new(S::default(), view, (300.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.update(|s, _| s.parent = true);
+    rt.frame(0.0);
+    rt.frame(0.1);
+    let id = rt.nodes.iter().find(|n| n.path == "root/p/t").unwrap().id;
+    assert!(rt.reveals.get(&id).is_some_and(|p| p.caught_up(5)), "the first words have shown");
+    rt.update(|s, tx| {
+        s.parent = false;
+        tx.instant();
+    });
+    rt.frame(0.0);
+    for n in 0..REVEALS_KEPT / 2 {
+        rt.update(|s, _| {
+            s.other = n;
+            s.other_present = true;
+        });
+        rt.frame(0.0);
+        rt.frame(0.1);
+        rt.update(|s, tx| {
+            s.other_present = false;
+            tx.instant();
+        });
+        rt.frame(0.0);
+    }
+    assert!(rt.reveals.contains_key(&id), "the returning child's reveal is still within the bound");
+    rt.update(|s, _| s.parent = true);
+    rt.frame(0.0);
+    let back = rt.nodes.iter().find(|n| n.path == "root/p/t").unwrap().id;
+    assert_eq!(back, id, "the same key returns under the same id");
+    let phase = rt.reveals.get(&back).unwrap();
+    assert!(phase.caught_up(5), "it comes back showing its words, not replaying them: {phase:?}");
+}

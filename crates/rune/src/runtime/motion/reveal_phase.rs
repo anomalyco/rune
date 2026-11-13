@@ -4,8 +4,9 @@
 //!
 //! A commit says what a text's content is now (`commit/apply.rs`), a frame tick says how far its
 //! clock has run (`motion/tracks.rs`), a clock change moves its word times
-//! (`motion/loop_clock.rs`), and the node leaving drops the state (`commit/prune.rs`). The last
-//! of those is the only way a text forgets a fade it was in the middle of.
+//! (`motion/loop_clock.rs`), and the node leaving keeps the state for a return, dropping the
+//! oldest past `REVEALS_KEPT` (`commit/prune.rs`). The last of those is the only way a text
+//! forgets a fade it was in the middle of.
 use crate::machine::Effects;
 
 /// How a text arrived at one commit.
