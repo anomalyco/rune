@@ -11,7 +11,7 @@ impl<S: 'static> Runtime<S> {
         // Quads a text hasn't drawn with for a while go, with the layouts they hold.
         if self.quads_frame % 64 == 0 {
             let frame = self.quads_frame;
-            self.text_quads.retain(|_, (_, _, used)| frame - *used < 64);
+            self.text_quads.retain(|_, (_, used)| frame - *used < 64);
         }
         let mut pinned_pages = 0u32;
         for f in &self.flights {

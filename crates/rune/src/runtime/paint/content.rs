@@ -526,7 +526,7 @@ impl<S: 'static> Runtime<S> {
                 // A still text whose quads this frame would draw as the last one did copies them,
                 // as `El::grid` rows do: `quads` is the entry to record them under otherwise.
                 let mut copied = false;
-                let mut quads: Option<((NodeId, usize), Rc<parley::Layout<crate::text::Ink>>, u64, usize, usize)> = None;
+                let mut quads: Option<((NodeId, crate::text::LayoutId), u64, usize, usize)> = None;
                 let mut pages: Option<Vec<(u16, u32)>> = None;
                 let zoom = if let (Some(r), Some((_, at))) = (&n.run_layout, &spec.cold.advance_in)
                     && let Some(x) = r.x(*at)
@@ -564,17 +564,21 @@ impl<S: 'static> Runtime<S> {
                         for sp in spans_here.iter() {
                             sp.color.map(|c| premul(c, o, srgb).map(f32::to_bits)).hash(&mut h);
                         }
-                        let (id, key) = ((n.id, Rc::as_ptr(l) as usize), h.finish());
-                        match self.text_quads.get_mut(&id).filter(|(held, d, _)| Rc::ptr_eq(held, l) && d.key == key) {
-                            Some((_, d, used)) => {
+                        let (id, key) = ((n.id, self.text.layout_id(l)), h.finish());
+                        match self.text_quads.get_mut(&id).filter(|(d, _)| d.key == key) {
+                            Some((d, used)) => {
                                 *used = self.quads_frame;
                                 self.instances.extend_from_slice(&d.instances);
                                 d.pages.iter().for_each(|&(page, texels)| self.text.touch_quad(page, texels));
                                 *glyph_count += d.glyphs;
                                 copied = true;
+                                #[cfg(test)]
+                                {
+                                    self.quads_copied += 1;
+                                }
                             }
                             None => {
-                                quads = Some((id, l.clone(), key, self.instances.len(), *glyph_count));
+                                quads = Some((id, key, self.instances.len(), *glyph_count));
                                 pages = Some(Vec::new());
                             }
                         }
@@ -649,9 +653,9 @@ impl<S: 'static> Runtime<S> {
                         }
                     }
                 }
-                if let (Some((id, layout, key, start, glyphs)), Some(pages)) = (quads, pages) {
+                if let (Some((id, key, start, glyphs)), Some(pages)) = (quads, pages) {
                     let d = crate::el::grid::DrawnRow { key, instances: self.instances[start..].to_vec(), pages, glyphs: *glyph_count - glyphs };
-                    self.text_quads.insert(id, (layout, d, self.quads_frame));
+                    self.text_quads.insert(id, (d, self.quads_frame));
                 }
             }
             if let (Some(c), Some(inp)) = (caret, &n.input) {

@@ -598,6 +598,8 @@ impl TextSystem {
                     fresh += b - a;
                     let mut l = o.layout.clone();
                     line_break::rebreak(Rc::make_mut(&mut l), blocks, style.size, scale, max_width, align);
+                    // Re-broken, in place or as a copy: the lines it draws now are new.
+                    self.layout_ids.build(&l);
                     l
                 }
                 (Some(o), None) => o.layout.clone(),

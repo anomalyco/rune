@@ -42,6 +42,9 @@ pub mod fill_bench;
 pub(crate) mod full_faces;
 mod language;
 pub use language::set_language;
+mod layout_id;
+pub(crate) use layout_id::LayoutId;
+use layout_id::LayoutIds;
 mod line_break;
 mod ltr_units;
 pub use ltr_units::ltr_units;
@@ -195,6 +198,8 @@ pub struct TextSystem {
     last_paragraphs: Option<Rc<ParagraphLayout>>,
     runs: Cache<Rc<RunLayout>>,
     generation: u32,
+    /// The id of the layout at each address one was built or re-broken at (`layout_id`).
+    layout_ids: LayoutIds,
     /// The slots' families as named; `sans` and `mono` are the lists text asks for.
     families: (String, String),
     /// The `choose_families` change these slots follow.
@@ -336,6 +341,7 @@ impl TextSystem {
             last_paragraphs: None,
             runs: Default::default(),
             generation: 0,
+            layout_ids: LayoutIds::default(),
             families: (families.0.to_owned(), families.1.to_owned()),
             chosen: 0,
             language: None,
@@ -658,6 +664,8 @@ impl TextSystem {
             let layout = Rc::make_mut(&mut l);
             break_lines(layout);
             layout.align(align, AlignmentOptions::default());
+            // Re-broken, in place or as a copy: whatever it draws now is its own.
+            self.layout_ids.build(&l);
             self.layouts.insert(key, Entry::new(l.clone(), g, text.len(), shape_key));
             self.shapes.insert(shape_key, key);
             return l;
@@ -955,6 +963,7 @@ impl TextSystem {
         }
         layout.align(align, AlignmentOptions::default());
         let l = Rc::new(layout);
+        self.layout_ids.build(&l);
         if cache {
             self.layouts.insert(key, Entry::new(l.clone(), g, text.len(), shape_key));
             self.shapes.insert(shape_key, key);
