@@ -247,6 +247,23 @@ struct Handlers<S> {
     tear_move: Option<Commit<S, TabTearMove>>,
 }
 
+/// A tab strip's words for assistive technology ([`TabStrip::words`]): the close button's name
+/// and each status a tab's mark shows, said after the tab's title.
+#[derive(Clone, Copy, Debug)]
+pub struct TabWords {
+    pub close: &'static str,
+    pub busy: &'static str,
+    pub attention: &'static str,
+    pub unread: &'static str,
+    pub failed: &'static str,
+}
+
+impl Default for TabWords {
+    fn default() -> Self {
+        TabWords { close: "Close tab", busy: "Working", attention: "Needs attention", unread: "Unread", failed: "Failed" }
+    }
+}
+
 /// What every tab of one strip shares while it builds.
 struct Strip<S> {
     handlers: Handlers<S>,
@@ -268,6 +285,7 @@ struct Strip<S> {
     /// `TabStrip::close_tab_stop`.
     close_tab_stop: bool,
     busy: fn(&Kit) -> El,
+    words: TabWords,
     scroll_key: String,
     list_key: String,
     /// A torn-out tab floats in the caller's layer ([`TabStrip::build_layered`]).
@@ -317,6 +335,7 @@ pub struct TabStrip<'a, S: 'static> {
     close_tab_stop: bool,
     busy: fn(&Kit) -> El,
     label: String,
+    words: TabWords,
     handlers: Handlers<S>,
 }
 
@@ -343,6 +362,7 @@ impl<'a, S: 'static> TabStrip<'a, S> {
             close_tab_stop: false,
             busy: busy_ring,
             label: "Tabs".into(),
+            words: TabWords::default(),
             handlers: Handlers { select: None, close: None, double: None, hover: None, reorder: None, tear_out: None, tear_move: None },
         }
     }
@@ -442,6 +462,12 @@ impl<'a, S: 'static> TabStrip<'a, S> {
         self
     }
     /// The tab list's accessible name (default "Tabs").
+    /// What a screen reader hears of each tab beyond its title, in the app's language: its
+    /// close button's name and its status. English by default.
+    pub fn words(mut self, words: TabWords) -> Self {
+        self.words = words;
+        self
+    }
     pub fn label(mut self, label: impl Into<String>) -> Self {
         self.label = label.into();
         self
@@ -539,6 +565,7 @@ impl<'a, S: 'static> TabStrip<'a, S> {
             close_icon: self.close_icon,
             close_tab_stop: self.close_tab_stop,
             busy: self.busy,
+            words: self.words,
             auto,
             scroll_key: format!("{}-scroll", self.key),
             list_key: format!("{}-list", self.key),
