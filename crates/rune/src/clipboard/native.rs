@@ -8,6 +8,8 @@ impl Client {
     }
     pub fn flush<S: 'static>(&self, rt: &mut Runtime<S>) {
         if rt.clipboard.is_some() { return flush_memory(rt); }
+        #[cfg(target_os = "linux")]
+        self.flush_primary(rt);
         // Nothing to clear before the first write.
         if std::mem::take(&mut rt.clear_secret_request) && let Some(w) = WORKER.get() { let _ = w.sender.send(Request::Clear(None)); }
         if let Some(copy) = rt.copy_request.take() {

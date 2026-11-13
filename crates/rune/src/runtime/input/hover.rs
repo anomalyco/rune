@@ -352,7 +352,10 @@ impl<S: 'static> Runtime<S> {
             } else {
                 self.press.inside()
             };
-            let down = self.allowed(i) && captured == Some(n.path.as_str()) && capture_inside;
+            // The middle or secondary button shows pressed what it went down on while it's over
+            // it, as the primary does.
+            let tinted = self.tint.path() == Some(n.path.as_str()) && self.pointer.is_some_and(|(x, y)| self.node_contains(i, x, y));
+            let down = self.allowed(i) && ((captured == Some(n.path.as_str()) && capture_inside) || tinted);
             let pressed = down && n.vis.press().a > 0.0;
             let id = n.id;
             changed |= self.scene.store().target(id, P_PRESS).unwrap_or(0.0) != pressed as u8 as f32;

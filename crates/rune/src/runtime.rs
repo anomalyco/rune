@@ -194,6 +194,9 @@ mod scroll_watch;
 pub use scroll_watch::scroll_watch_state;
 #[path = "runtime/input/autoscroll.rs"]
 mod autoscroll;
+#[cfg(target_os = "linux")]
+#[path = "runtime/input/primary_selection.rs"]
+mod primary_selection;
 #[path = "runtime/input/gesture.rs"]
 mod gesture_dispatch;
 #[path = "runtime/input/key_releases.rs"]
@@ -505,6 +508,11 @@ pub struct Runtime<S: 'static> {
     press: capture::Press,
     /// The secondary button's press, held beside it.
     secondary: capture::Secondary,
+    /// The middle or secondary button's pressed look (`capture::Tint`).
+    tint: capture::Tint,
+    /// Linux's primary selection (`runtime/input/primary_selection.rs`).
+    #[cfg(target_os = "linux")]
+    pub(crate) primary: primary_selection::PrimarySelection,
     /// The middle button's autoscroll (`runtime/input/autoscroll.rs`).
     autoscroll: autoscroll::Autoscroll,
     drag_data: f32,
@@ -930,6 +938,9 @@ impl<S: 'static> Runtime<S> {
             pointer: None,
             press: Default::default(),
             secondary: Default::default(),
+            tint: Default::default(),
+            #[cfg(target_os = "linux")]
+            primary: Default::default(),
             autoscroll: Default::default(),
             drag_data: 0.0,
             instances: Vec::new(),

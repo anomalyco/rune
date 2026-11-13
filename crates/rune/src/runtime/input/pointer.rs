@@ -114,6 +114,7 @@ impl<S: 'static> Runtime<S> {
         self.input_click.clear();
         self.drop_press();
         self.secondary = capture::Secondary::Up;
+        self.tint = capture::Tint::Up;
         self.pointer_leave();
         self.drag_files_leave();
     }
@@ -326,6 +327,8 @@ impl<S: 'static> Runtime<S> {
 
     pub fn pointer_up(&mut self, x: f32, y: f32) {
         if self.autoscroll_release(crate::PointerButton::Primary) { self.pointer = Some((x, y)); return; }
+        #[cfg(target_os = "linux")]
+        self.primary_released();
         if self.press.held().is_some_and(|h| h.button != crate::PointerButton::Primary) {
             self.pointer = Some((x, y));
             return;

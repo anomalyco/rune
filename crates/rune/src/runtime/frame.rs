@@ -577,6 +577,8 @@ impl<S: 'static> Runtime<S> {
             { ran_other |= r && checks == self.live_checks; }
             if r { ran = true; why |= CommitWhy::INPUT; }
         }
+        #[cfg(target_os = "linux")]
+        self.note_primary_selection();
         let mut open_urls = std::mem::take(&mut tx.open_urls);
         self.latch_requests(&mut tx);
         // A handler asked for a menu: the hover it takes ends in this commit, not a frame later.

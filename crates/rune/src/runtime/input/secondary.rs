@@ -27,6 +27,7 @@ impl<S: 'static> Runtime<S> {
     pub fn secondary_down(&mut self, x: f32, y: f32) {
         self.pointer = Some((x, y));
         if self.autoscroll_press(crate::PointerButton::Secondary) { return; }
+        self.tint_down(x, y, crate::PointerButton::Secondary);
         self.release_hover_hold();
         self.focus.step(focus_machine::FocusEvent::Pointed);
         self.dismiss_help();
@@ -45,6 +46,14 @@ impl<S: 'static> Runtime<S> {
         {
             self.queue.push(Action::FocusControl(self.nodes[c].path.clone()));
         }
+    }
+
+    /// A middle or secondary press at (x, y), with no primary press held: what a primary press
+    /// there would take shows pressed until the button comes up (`capture::Tint`).
+    pub(super) fn tint_down(&mut self, x: f32, y: f32, button: crate::PointerButton) {
+        if self.press.held().is_some_and(|h| h.button == crate::PointerButton::Primary) { return; }
+        let path = self.primary_target(x, y).filter(|&i| self.allowed(i) && !self.subtree_exiting(i)).map(|i| self.nodes[i].path.clone());
+        self.tint = path.map_or(capture::Tint::Up, |path| capture::Tint::Held { path, button });
     }
 
     /// What the secondary press being held is on, for a browser that shows its own context
@@ -82,6 +91,7 @@ impl<S: 'static> Runtime<S> {
 
     pub fn secondary_up(&mut self, x: f32, y: f32) {
         self.pointer = Some((x, y));
+        self.tint.release(crate::PointerButton::Secondary);
         if self.autoscroll_release(crate::PointerButton::Secondary) { return; }
         self.secondary_region_up(x, y);
         let (path, down_link, left) = match std::mem::take(&mut self.secondary) {
