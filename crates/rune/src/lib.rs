@@ -200,7 +200,7 @@ pub use live::Live;
 pub use live::LiveText;
 pub use live::Tween;
 pub use memo::{memo, region, region_with};
-pub use tracked::Tracked;
+pub use tracked::{Reads, Tracked, tracked_reads};
 pub use native_menu::MenuError;
 pub use native_menu::MenuItem;
 pub use native_surface::NativeSurface;
