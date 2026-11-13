@@ -753,10 +753,7 @@ mod tests {
         assert!(!rt.state.first.focused && rt.state.next.focused);
         assert!(rt.ime_area.is_some());
         rt.update(|s, _| s.hidden = true); rt.frame(0.0);
-        // The field that the app hid hands the keyboard back to the one before it, so the
-        // hidden input never holds the IME: focus, and the IME area with it, moves away.
-        assert_eq!(focused(&rt), "first");
-        assert!(!rt.state.next.focused && rt.state.first.focused);
+        assert!(rt.ime_area.is_none(), "authored hidden inputs must not enable IME");
     }
 
     #[test]
@@ -1595,5 +1592,56 @@ mod tests {
         rt.update(|s, _| s.open = false);
         rt.frame(0.0);
         assert_eq!(focused(&rt), "next", "the button after the field takes the keyboard");
+    }
+
+    /// Three stacked fields, the first of them removable, for the fallback's guard tests.
+    struct Fields { open: bool, zero: bool, a: crate::TextEdit, b: crate::TextEdit, c: crate::TextEdit }
+    fn fields_view(s: &Fields, _: &mut Cx<Fields>) -> El {
+        let style = || crate::TextStyle::new(14.0, 400.0);
+        col().size(200.0, 150.0)
+            .children(s.open.then(|| crate::text_input(&s.a, style()).key("a").size(200.0, 35.0)
+                .on_edit(|s: &mut Fields| &mut s.a)))
+            .child(crate::text_input(&s.b, style()).key("b").size(200.0, if s.zero { 0.0 } else { 35.0 })
+                .on_edit(|s: &mut Fields| &mut s.b))
+            .child(crate::text_input(&s.c, style()).key("c").size(200.0, 35.0).on_edit(|s: &mut Fields| &mut s.c))
+    }
+    fn fields(open: bool) -> Runtime<Fields> {
+        let mut rt = Runtime::new(Fields { open, zero: false, a: crate::TextEdit::new(""), b: crate::TextEdit::new(""),
+            c: crate::TextEdit::new("") }, fields_view, (200.0, 150.0), Env::new(true, 1.0));
+        rt.set_tab_visits_controls(true);
+        rt.frame(0.0);
+        press(&mut rt, Key::Tab);
+        assert_eq!(focused(&rt), "a");
+        rt
+    }
+
+    #[test]
+    fn a_field_the_model_blurs_while_it_stays_hands_no_focus_on() {
+        let mut rt = fields(true);
+        rt.update(|s, _| s.a.focused = false);
+        rt.frame(0.0);
+        assert!(!rt.has_focus(), "the field is still here: clearing its flag focuses nothing else");
+        assert!(!rt.state.b.focused && !rt.state.c.focused);
+    }
+
+    #[test]
+    fn a_fallback_skips_a_candidate_the_commit_collapsed() {
+        let mut rt = fields(true);
+        rt.update(|s, tx| { tx.instant(); s.open = false; s.zero = true; });
+        rt.frame(0.0);
+        assert_eq!(focused(&rt), "c", "a control the commit collapsed to no height takes no focus");
+        assert!(!rt.state.b.focused, "the collapsed field has none");
+        assert!(rt.state.c.focused);
+    }
+
+    #[test]
+    fn an_explicit_blur_hands_no_focus_on_when_its_field_goes() {
+        let mut rt = fields(true);
+        let was = rt.focus.owned();
+        rt.update(|s, tx| { tx.blur(); s.open = false; });
+        rt.frame(0.0);
+        assert!(!rt.has_focus(), "Tx::blur says nothing has focus, even as the field leaves");
+        assert!(!rt.state.b.focused && !rt.state.c.focused);
+        assert_eq!(rt.focus.tab_start(), was.as_deref(), "Tab still starts from where the keyboard was");
     }
 }
