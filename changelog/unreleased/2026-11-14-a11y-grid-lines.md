@@ -1,0 +1,1 @@
+- Accessibility: a `grid`'s rows end in a line break, so a screen reader's text calls, say-all and braille keep a terminal's rows apart; `GridRow::wraps` marks a row the terminal wrapped into the next, which runs on as one line. The caret past a row's text sits before its break.
