@@ -72,7 +72,7 @@ impl AlphaSurface {
         #[cfg(target_os = "windows")]
         let precompiled = super::dxbc::surface_alpha(device, WGSL, &make);
         #[cfg(not(target_os = "windows"))]
-        let precompiled = None;
+        let precompiled: Option<(super::dxbc::Shaders, wgpu::RenderPipeline)> = None;
         let pipeline = precompiled.map_or_else(|| {
             let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("straight alpha"), source: wgpu::ShaderSource::Wgsl(WGSL.into()) });
             make(&super::dxbc::Shaders::one(module))
