@@ -102,10 +102,12 @@ static STATE: Mutex<State> = Mutex::new(State::Running);
 
 /// IB-3 measuring: `name` with this moment's FILETIME on stderr, when IB3_CLOSE is set.
 pub(crate) fn ib3(name: &str) {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    if !*ON.get_or_init(|| std::env::var_os("IB3_CLOSE").is_some()) { return; }
+    static ON: std::sync::OnceLock<Option<std::ffi::OsString>> = std::sync::OnceLock::new();
+    let Some(to) = ON.get_or_init(|| std::env::var_os("IB3_CLOSE")) else { return };
     let ft = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos() / 100 + 116_444_736_000_000_000;
-    eprintln!("ib3close {ft} {name}");
+    if to == "1" { eprintln!("ib3close {ft} {name}"); return; }
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(to) { let _ = writeln!(f, "ib3close {} {ft} {name}", std::process::id()); }
 }
 static FAST_EXIT: std::sync::OnceLock<fn()> = std::sync::OnceLock::new();
 
