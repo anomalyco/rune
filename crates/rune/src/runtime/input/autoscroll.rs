@@ -154,8 +154,10 @@ impl<S: 'static> Runtime<S> {
         let (took, effects) = step(&mut a.seq, &mut a.state, event);
         for effect in effects {
             match effect {
+                // A step of no length (the first, in the frame of the move that armed it) moves
+                // nothing and says nothing about the end.
                 Effect::Scroll { scroll, by } => {
-                    if !self.autoscroll_by(scroll, by) {
+                    if by != (0.0, 0.0) && !self.autoscroll_by(scroll, by) {
                         let a = &mut self.autoscroll;
                         let _ = step(&mut a.seq, &mut a.state, Event::Stuck);
                     }
