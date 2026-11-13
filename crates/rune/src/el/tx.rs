@@ -200,8 +200,9 @@ impl Commit {
 pub(crate) enum MotionSource {
     /// A spring, as Rune's layout springs normally are.
     Spring(Spring),
-    /// A curve, with the zero-bounce spring of its duration for what only takes a spring
-    /// (scroll requests, matched flights).
+    /// A curve, with the zero-bounce spring of its duration for what the layout moves but only
+    /// takes a spring (matched flights). Scroll requests aren't one: they glide on the spring
+    /// they name.
     Curve { anim: Anim, spring: Spring },
 }
 
@@ -660,15 +661,18 @@ impl Tx {
         self.commit = self.commit.animated();
         self.asked_motion = true;
     }
-    /// Animate this change's layout with `spring` instead of each element's own.
+    /// Animate this change's layout with `spring` instead of each element's own. Scroll
+    /// requests keep the spring they name; see [`Self::motion_curve`].
     pub fn motion(&mut self, spring: Spring) {
         self.motion = Some(MotionSource::Spring(spring));
     }
     /// Animate this change's layout on `anim` instead of each element's own spring: a spring,
     /// or a fixed-duration eased tween to compare against one
     /// (`tx.motion_curve(Curve::tween(0.35, Easing::cubic(0.16, 1.0, 0.3, 1.0)))`). What
-    /// moves with the layout but only takes a spring (scroll requests, matched flights) uses a
-    /// zero-bounce spring of the curve's duration. The last `motion` or `motion_curve` wins.
+    /// moves with the layout but only takes a spring (matched flights) uses a zero-bounce
+    /// spring of the curve's duration. Scroll requests don't follow it: each glides on the
+    /// spring it names, [`Self::scroll_to_with`]'s or `tok::motion::GLIDE`. The last `motion` or
+    /// `motion_curve` wins.
     pub fn motion_curve(&mut self, anim: impl Into<Anim>) {
         self.motion = Some(MotionSource::curve(anim.into()));
     }

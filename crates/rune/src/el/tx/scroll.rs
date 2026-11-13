@@ -1,5 +1,9 @@
 //! `Tx`'s scroll requests: revealing a row, moving a viewport to its end, a page or an
 //! offset, and holding an element where it shows.
+//!
+//! None of them follows the change's motion ([`Tx::motion`], [`Tx::motion_curve`]): a glide
+//! runs on `tok::motion::GLIDE`, or on the spring [`Tx::scroll_to_with`] takes, and every other
+//! request moves at once.
 
 #[cfg(doc)]
 use crate::El;
