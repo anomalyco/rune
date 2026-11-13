@@ -1,0 +1,1 @@
+- **macOS (Metal backend): windows keep their sRGB colour space.** The Metal surface cleared the layer's colour space on every configure, the first included, so saturated colours drew as the Display P3 colours with the same numbers: `#3b82f6` showed as P3 59, 130, 246 instead of 78, 128, 238. Greys are unchanged.
