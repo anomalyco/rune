@@ -487,7 +487,7 @@ impl Renderer {
         if !self.layers.plan.is_empty() || !self.layers.retained.is_empty() {
             self.layers.frame_stamp += 1;
         }
-        let max_dim = device.limits().max_texture_dimension_2d.min(MAX_CACHE_DIM);
+        let max_dim = self.max_texture_dim.min(MAX_CACHE_DIM);
         if self.layers.plan.is_empty() {
             // No layers to plan: what closed at the last frame's end is all this frame keeps or
             // drops, exactly as dev trimmed the pool. Nothing here reads a target's size.
