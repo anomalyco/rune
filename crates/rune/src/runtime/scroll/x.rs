@@ -36,16 +36,16 @@ pub(super) struct WheelLock {
     phase: WheelPhase,
 }
 
-/// Whose deltas the lock runs: the gesture arriving now, or the previous one while its last
-/// queued deltas still wait for `on_wheel` handlers.
+/// Whose deltas the lock runs: the gesture arriving now, or an older one whose deltas were
+/// queued for `on_wheel` handlers before a newer gesture began.
 #[derive(Clone, Debug, PartialEq)]
 enum WheelRun {
     /// The gesture arriving now has `owner`: its deltas go to it, and its first delta picks it
     /// afresh.
     Arriving(WheelOwner),
-    /// A newer gesture began while `owner`'s own still had deltas queued: those finish with
-    /// `owner`, and the arriving gesture picks afresh once they have run.
-    Previous(WheelOwner),
+    /// Deltas of `gesture` still wait in the queue: `owner` takes them, and the gesture arriving
+    /// now picks afresh on its own first delta.
+    Previous { gesture: Attempt, owner: WheelOwner },
 }
 
 impl Default for WheelRun {
@@ -55,13 +55,13 @@ impl Default for WheelRun {
 impl WheelRun {
     fn owner(&self) -> &WheelOwner {
         match self {
-            WheelRun::Arriving(owner) | WheelRun::Previous(owner) => owner,
+            WheelRun::Arriving(owner) | WheelRun::Previous { owner, .. } => owner,
         }
     }
 
     fn owner_mut(&mut self) -> &mut WheelOwner {
         match self {
-            WheelRun::Arriving(owner) | WheelRun::Previous(owner) => owner,
+            WheelRun::Arriving(owner) | WheelRun::Previous { owner, .. } => owner,
         }
     }
 
@@ -163,39 +163,54 @@ impl WheelPhase {
 }
 
 impl WheelLock {
-    /// Who has the gesture the lock runs: the arriving one, or the previous one whose last
-    /// queued deltas it keeps.
+    /// Who has the gesture the lock runs: the arriving one, or an older one whose queued deltas
+    /// it keeps.
     pub(super) fn owner(&self) -> &WheelOwner { self.run.owner() }
 
-    /// Who has the gesture's deltas becomes `owner`; whether that is the gesture arriving now
-    /// stays as it is.
+    /// Who has the gesture's deltas becomes `owner`; which gesture that is stays as it is.
     pub(super) fn set_owner(&mut self, owner: WheelOwner) { *self.run.owner_mut() = owner; }
 
-    /// The owner has the gesture arriving now: deltas of the previous gesture don't reach it.
+    /// The owner has the gesture arriving now: deltas of an older gesture don't reach it.
     pub(super) fn owner_is_arriving(&self) -> bool { self.run.arriving() }
 
-    /// A delta of `gesture` runs: the owner the lock has keeps it. A delta of the arriving
-    /// gesture lets the previous one go, whose last queued delta has run by then, and picks
-    /// afresh; a delta of an earlier gesture keeps the owner it has.
-    pub(super) fn sync_gesture(&mut self, gesture: Attempt) {
-        if gesture == self.gesture && !self.run.arriving() {
-            self.run = WheelRun::Arriving(WheelOwner::Unpicked);
+    /// The gesture whose deltas `owner` takes: the one arriving now, or the older one whose
+    /// queued deltas still run.
+    fn run_gesture(&self) -> Attempt {
+        match &self.run {
+            WheelRun::Arriving(_) => self.gesture,
+            WheelRun::Previous { gesture, .. } => *gesture,
         }
+    }
+
+    /// Whether the platform reports the phases of the gesture the lock runs.
+    pub(super) fn phased(&self) -> bool { self.phase.phased() }
+
+    /// A delta of `gesture` runs: an owner that already has that gesture takes it, else the
+    /// queue picks afresh for it — every queued gesture keeps its own turn, however many began
+    /// since it was queued.
+    pub(super) fn sync_gesture(&mut self, gesture: Attempt) {
+        if self.run_gesture() == gesture { return; }
+        self.run = if gesture == self.gesture {
+            WheelRun::Arriving(WheelOwner::Unpicked)
+        } else {
+            WheelRun::Previous { gesture, owner: WheelOwner::Unpicked }
+        };
     }
 
     /// The gesture is the momentum of one that ended (`WheelEvent::momentum`).
     pub(super) fn momentum(&self) -> bool { self.phase.momentum() }
 
     /// The next gesture starts, unphased. Who has it starts afresh too, unless a delta of an
-    /// earlier gesture still waits for `on_wheel` handlers (`queued`): that keeps its owner
-    /// until the last of them has run.
+    /// earlier gesture still waits for `on_wheel` handlers (`queued`): that keeps its owner, and
+    /// its gesture, until the last of them has run.
     fn restart(&mut self, queued: bool) {
+        let gesture = self.gesture;
         self.gesture = self.seq.next();
         self.phase = WheelPhase::Unphased { at: None };
         self.run = if queued {
             match std::mem::take(&mut self.run) {
-                WheelRun::Arriving(owner) => WheelRun::Previous(owner),
-                previous @ WheelRun::Previous(_) => previous,
+                WheelRun::Arriving(owner) => WheelRun::Previous { gesture, owner },
+                previous @ WheelRun::Previous { .. } => previous,
             }
         } else {
             WheelRun::Arriving(WheelOwner::Unpicked)
@@ -203,11 +218,12 @@ impl WheelLock {
     }
 
     /// The axis the gesture's owner keeps for a delta (dx, dy): horizontal (`true`) or
-    /// vertical, or `None` when it picks afresh. Without phases, a delta wholly on the other
-    /// axis is another wheel turning (Shift let go, a tilt, a second device).
-    fn keeps_axis(&self, dx: f32, dy: f32) -> Option<bool> {
+    /// vertical, or `None` when it picks afresh. `phased` is the delta's own gesture's policy:
+    /// without phases, a delta wholly on the other axis is another wheel turning (Shift let go,
+    /// a tilt, a second device).
+    fn keeps_axis(&self, dx: f32, dy: f32, phased: bool) -> Option<bool> {
         let h = self.owner().horizontal()?;
-        (self.phase.phased() || if h { dx != 0.0 } else { dy != 0.0 }).then_some(h)
+        (phased || if h { dx != 0.0 } else { dy != 0.0 }).then_some(h)
     }
 
     /// A delta picked afresh: the horizontal viewport under it (`across`), else vertical.
@@ -332,16 +348,18 @@ impl<S: 'static> Runtime<S> {
     /// Whether a wheel delta waits in the queue for `on_wheel` handlers: one of gesture `of`,
     /// or of any gesture.
     pub(super) fn wheel_queued(&self, of: Option<Attempt>) -> bool {
-        self.queue.iter().any(|a| matches!(a, Action::Wheel(g, ..) if of.is_none_or(|of| *g == of)))
+        self.queue.iter().any(|a| matches!(a, Action::Wheel { gesture: g, .. } if of.is_none_or(|of| *g == of)))
     }
 
     /// Scrolls by a delta no `on_wheel` handler took, on the axis the gesture locked to.
-    pub(super) fn wheel_scroll_for(&mut self, gesture: Attempt, x: f32, y: f32, dx: f32, dy: f32) {
+    /// `phased` is that delta's own gesture's policy, which a delta queued before a newer
+    /// gesture began keeps.
+    pub(super) fn wheel_scroll_for(&mut self, gesture: Attempt, x: f32, y: f32, dx: f32, dy: f32, phased: bool) {
         if dx == 0.0 && dy == 0.0 { return; }
         self.wheel_lock.sync_gesture(gesture);
         // Without phases, a delta wholly on the other axis is another wheel turning (Shift let
         // go, a tilt, a second device), so it picks afresh rather than being dropped.
-        let horizontal = match self.wheel_lock.keeps_axis(dx, dy) {
+        let horizontal = match self.wheel_lock.keeps_axis(dx, dy, phased) {
             Some(h) => h,
             None => {
                 let scroller = (dx.abs() > dy.abs()).then(|| self.scroll_at_axis(x, y, true)).flatten();
@@ -591,6 +609,29 @@ mod tests {
         assert_eq!((rt.scrolls[&id].x.offset, rt.scrolls[&id].offset), (10.0, 20.0), "each queued delta scrolls the axis it picks");
     }
 
+    /// A phased gesture beginning while an unphased one's deltas wait keeps each delta's own
+    /// axis policy: the cross-axis one still picks its axis, rather than the successor's
+    /// phases holding the earlier gesture to its first axis.
+    #[test]
+    fn a_delta_queued_before_a_phased_gesture_began_keeps_its_own_axis_policy() {
+        fn view(_: &(), _: &mut Cx<()>) -> El {
+            crate::col().size(200.0, 200.0)
+                .child(crate::col().key("xy").size(200.0, 200.0).scroll_xy()
+                    .on_wheel(|_: &mut (), _: crate::WheelEvent, _: &mut Tx| false)
+                    .child(crate::el().key("content").w(1000.0).h(1000.0)))
+        }
+        use crate::WheelEvent;
+        let mut rt = Runtime::new((), view, (200.0, 200.0), Env::default());
+        rt.frame(0.0);
+        rt.frame(1.0 / 60.0);
+        rt.wheel_event(WheelEvent::new(-10.0, 0.0).at(100.0, 100.0));
+        rt.wheel_event(WheelEvent::new(0.0, -20.0).at(100.0, 100.0));
+        rt.wheel_began();
+        rt.frame(1.0 / 60.0);
+        let id = rt.nodes.iter().find(|n| n.key.as_deref() == Some("xy")).unwrap().id;
+        assert_eq!((rt.scrolls[&id].x.offset, rt.scrolls[&id].offset), (10.0, 20.0), "the queued cross-axis delta keeps its own policy");
+    }
+
     /// origin/dev's wheel lock, transcribed from this file: when its last delta came (`at`),
     /// whether the gesture was phased and momentum, and when the platform ended it (`ended`),
     /// beside the owner, in place of the phase that carries them.
@@ -720,7 +761,8 @@ mod tests {
                     dev.lost(*queued);
                 }
                 WAct::Scroll { dx, dy, across } => {
-                    let h = match lock.keeps_axis(*dx, *dy) {
+                    // A delta of the gesture the lock runs, which carries that gesture's policy.
+                    let h = match lock.keeps_axis(*dx, *dy, lock.phased()) {
                         Some(h) => h,
                         None => lock.repick(across.then_some(NodeId(1))),
                     };

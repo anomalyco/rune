@@ -41,8 +41,9 @@ pub(super) enum Action {
     Key { ev: KeyEvent, repeat: bool, stage: bool },
     KeyUp(KeyEvent),
     /// A wheel delta at window point (x, y) for the `on_wheel` handlers at the pointer,
-    /// innermost first (`runtime/input/gesture.rs`).
-    Wheel(crate::machine::Attempt, Vec<String>, crate::WheelEvent),
+    /// innermost first, with the gesture's own axis policy: whether the platform reported its
+    /// phases (`runtime/input/gesture.rs`).
+    Wheel { gesture: crate::machine::Attempt, chain: Vec<String>, ev: crate::WheelEvent, phased: bool },
     Gesture(Vec<String>, gesture_dispatch::Gesture),
     Ime(Ime),
     /// The window went inactive: an open composition becomes text (`Runtime::finish_composition`).
@@ -129,7 +130,7 @@ pub(super) fn live_only_handler(action: &Action) -> Option<&'static str> {
         Action::DragEnd(..) => "on_drag_end",
         Action::Key { .. } => "on_key",
         Action::KeyUp(_) => "on_key_up",
-        Action::Wheel(..) => "on_wheel",
+        Action::Wheel { .. } => "on_wheel",
         Action::Gesture(_, gesture_dispatch::Gesture::Magnify(_)) => "on_magnify",
         Action::Gesture(_, gesture_dispatch::Gesture::Rotate(_)) => "on_rotate",
         Action::Gesture(_, gesture_dispatch::Gesture::SmartMagnify(..)) => "on_smart_magnify",
@@ -143,7 +144,7 @@ pub(super) fn action_path(action: &Action) -> Option<&str> {
         Action::PointerMove(path, _) | Action::DrawnLayout(path, ..) | Action::Layout(path, _) | Action::Hover(path) | Action::HoverChange(path, _) | Action::SelectionChange(path, _) | Action::Press(path, _) | Action::DoublePress(path)
         | Action::Link(path, _) | Action::LinkSecondary(path, ..) | Action::SecondaryPress(path, _) | Action::Drag(path, ..) | Action::DragRepeat(path, ..) | Action::DragStart(path)
         | Action::DragEnd(path, _) | Action::Visible(path, _) => Some(path),
-        Action::Wheel(_, chain, _) | Action::Gesture(chain, _) => chain.first().map(String::as_str),
+        Action::Wheel { chain, .. } | Action::Gesture(chain, _) => chain.first().map(String::as_str),
         _ => None,
     }
 }
@@ -455,7 +456,7 @@ impl<S: 'static> Runtime<S> {
                 if stage { self.route_stage_key(&ev, &mut one) } else { self.route_key(&ev, repeat, &mut one) }
             }
             Action::KeyUp(ev) => self.route_key_up(&ev, &mut one),
-            Action::Wheel(gesture, chain, ev) => self.run_wheel(gesture, chain, ev, &mut one),
+            Action::Wheel { gesture, chain, ev, phased } => self.run_wheel(gesture, chain, ev, phased, &mut one),
             Action::Gesture(chain, gesture) => self.run_gesture(chain, gesture, &mut one),
             Action::Ime(ev) => self.run_ime(ev, &mut one),
             Action::FinishIme => self.finish_ime(&mut one),
