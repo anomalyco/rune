@@ -85,6 +85,8 @@ impl ActionQueue {
     /// Puts `queued` ahead of everything queued.
     pub(super) fn prepend(&mut self, queued: Vec<Queued>) { self.0.splice(0..0, queued); }
     pub(super) fn iter(&self) -> impl Iterator<Item = &Action> { self.0.iter().map(|q| &q.action) }
+    /// Whether any of them came from the user's input (they carry its arrival time).
+    pub(super) fn has_input(&self) -> bool { self.0.iter().any(|q| q.at.is_some()) }
     pub(super) fn len(&self) -> usize { self.0.len() }
     pub(super) fn is_empty(&self) -> bool { self.0.is_empty() }
     pub(super) fn retain(&mut self, mut keep: impl FnMut(&Action) -> bool) { self.0.retain(|q| keep(&q.action)); }

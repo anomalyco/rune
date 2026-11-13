@@ -42,6 +42,12 @@ impl Tx {
     /// (`Runtime::key` and kin, headless scripts).
     pub fn input_time(&self) -> Option<crate::time::Instant> { self.input_time }
 
+    /// In `poll`: whether the user's input (a key, a press, the pointer, the wheel, text) is
+    /// waiting for this frame's handlers, which run after `poll`. Work that can wait a frame (a
+    /// background start, a cache warm-up) waits, so the input's frame comes without it. False
+    /// everywhere else.
+    pub fn input_waiting(&self) -> bool { self.input_waiting }
+
     /// The key of the element that had focus when the event arrived, `None` when nothing had:
     /// in a key handler, when the key arrived; in a press handler, after the press moved focus (a
     /// menu opened there remembers it to hand focus back). Timers, polls and updates read the focus
