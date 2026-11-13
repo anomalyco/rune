@@ -25,6 +25,8 @@ pub(crate) mod occlusion;
 mod placement;
 pub(crate) mod press_point;
 mod pointer;
+#[cfg(not(feature = "segmenter-dictionaries"))]
+pub(crate) mod segmenter;
 pub(crate) mod session_lock;
 pub(crate) mod taskbar;
 

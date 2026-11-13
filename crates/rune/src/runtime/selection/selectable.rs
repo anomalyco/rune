@@ -104,9 +104,12 @@ pub(crate) fn unit_at(text: &str, i: usize, unit: Unit) -> (usize, usize) {
 }
 
 /// Where each of `text`'s words ends, in order, the last at `text.len()`: ICU4X's dictionaries
-/// natively, the browser's (`Intl.Segmenter`) in a page, which links none.
+/// natively, the browser's (`Intl.Segmenter`) in a page and Windows' own (`icu.dll`) on Windows,
+/// which link none.
 fn word_ends(text: &str) -> impl Iterator<Item = usize> {
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(target_os = "windows", not(feature = "segmenter-dictionaries")))]
+    return crate::platform::win32::segmenter::words(text).into_iter();
+    #[cfg(not(any(target_arch = "wasm32", all(target_os = "windows", not(feature = "segmenter-dictionaries")))))]
     {
         use icu_segmenter::{WordSegmenter, options::WordBreakInvariantOptions};
         WordSegmenter::new_dictionary(WordBreakInvariantOptions::default()).segment_str(text).filter(|&b| b > 0)
