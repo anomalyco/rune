@@ -173,6 +173,16 @@ fn turned_bounds(r: [f32; 4], angle: f32, p: [f32; 2]) -> [f32; 4] {
     out
 }
 
+/// The part of a layer's own content that can reach `outer`, a region of its parent's: `outer`
+/// inside the layer's clip, turned back by its turn.
+fn reaching(outer: [f32; 4], clip: [f32; 4], turn: Option<(f32, [f32; 2])>) -> [f32; 4] {
+    let shown = [outer[0].max(clip[0]), outer[1].max(clip[1]), outer[2].min(clip[2]), outer[3].min(clip[3])];
+    match turn {
+        Some((angle, pivot)) if shown[2] > shown[0] && shown[3] > shown[1] => turned_bounds(shown, -angle, pivot),
+        _ => shown,
+    }
+}
+
 pub(super) struct Target {
     identity: u64,
     composite_parent: Option<u64>,
@@ -404,11 +414,7 @@ impl Renderer {
                             [reach[0] - support, reach[1] - support, reach[2] + support, reach[3] + support]
                         }
                     };
-                    let shown = [outer[0].max(i.clip[0]), outer[1].max(i.clip[1]), outer[2].min(i.clip[2]), outer[3].min(i.clip[3])];
-                    match turn {
-                        Some((angle, pivot)) if shown[2] > shown[0] && shown[3] > shown[1] => turned_bounds(shown, -angle, pivot),
-                        _ => shown,
-                    }
+                    reaching(outer, i.clip, turn)
                 } else { [0.0; 4] };
                 let limit = if parent_free { NO_CLIP } else { limit };
                 self.layers.stack.push(self.layers.plan.len());

@@ -151,3 +151,80 @@ fn same(hit: &[u8], fresh: &[u8], what: &str) {
         panic!("{what}: ({}, {}) is {:?} on the hit, {:?} fresh", at % 64, at / 64, &hit[at * 4..at * 4 + 4], &fresh[at * 4..at * 4 + 4]);
     }
 }
+
+/// A cached scope (node 43) over `[0, 0, 128, 64]` holding `inside`, closed.
+fn wide_cache(inside: Vec<Instance>) -> Vec<Instance> {
+    let mut cache = Instance::begin_layer([0.0, 0.0, 128.0, 64.0], NO_CLIP, LayerSpec::default());
+    cache.params[3] = 1.0;
+    cache.radii = pack_u64_f32(43);
+    cache.uv = pack_u64_f32(1);
+    let mut out = vec![cache];
+    out.extend(inside);
+    out.push(Instance::end_layer());
+    out
+}
+
+/// A half-faded layer holding an 8x8 rect at `at`.
+fn faded(at: [f32; 2]) -> Vec<Instance> {
+    let child = [at[0], at[1], 8.0, 8.0];
+    vec![Instance::begin_layer(child, NO_CLIP, LayerSpec { opacity: 0.5, ..Default::default() }), rect(child), Instance::end_layer()]
+}
+
+/// `instances` drawn by a cache over its budget, which keeps nothing, beside them drawn by one
+/// within it, with the over-budget frame's dispositions.
+fn over_budget(instances: &[Instance]) -> (Vec<u8>, Vec<u8>, Vec<Disposition>) {
+    let gpu = Gpu::headless();
+    let target = Offscreen::new(&gpu.device, 64, 64);
+    let mut atlas = crate::text::TextSystem::default().atlas;
+    let mut within = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    within.prepare(&gpu.device, &gpu.queue, &mut atlas, instances, (64, 64));
+    assert!(matches!(within.layers.planner.dispositions[0], Disposition::Render { cache: Some(_), .. }));
+    let within = pixels(&gpu, &within, &target);
+    let mut over = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    over.layers.cache_budget = 1;
+    over.prepare(&gpu.device, &gpu.queue, &mut atlas, instances, (64, 64));
+    // An opaque, unclipped cache that keeps nothing draws straight into the window.
+    assert_eq!(over.layers.planner.dispositions[0], Disposition::Inline, "the cache misses its budget");
+    (pixels(&gpu, &over, &target), within, over.layers.planner.dispositions.clone())
+}
+
+/// A cache over its budget keeps nothing, so the layers inside it the window can't see draw
+/// nothing, as they never did, even through a plain group that shows in part.
+#[test]
+fn the_layers_a_cache_over_its_budget_hides_draw_nothing() {
+    let mut group = vec![Instance::begin_layer([16.0, 24.0, 88.0, 8.0], NO_CLIP, LayerSpec::default())];
+    group.extend(faded([16.0, 24.0]));
+    group.extend(faded([96.0, 24.0]));
+    group.push(Instance::end_layer());
+    let (over, within, dispositions) = over_budget(&wide_cache(group));
+    assert_eq!(dispositions[1], Disposition::Inline, "the group shows in part");
+    assert!(matches!(dispositions[2], Disposition::Render { .. }), "the child the window shows draws");
+    assert_eq!(dispositions[3], Disposition::Skip, "the child off the window draws nothing");
+    same(&over, &within, "over its budget");
+}
+
+/// Over its budget, a turned layer in the cache still draws what its turn brings onto the window.
+#[test]
+fn a_turned_layer_in_a_cache_over_its_budget_draws_what_turns_into_view() {
+    let turned = Instance::begin_layer([0.0, 0.0, 128.0, 64.0], NO_CLIP, LayerSpec::default()).turned(std::f32::consts::PI, [64.0, 32.0]);
+    let mut inside = vec![turned];
+    inside.extend(faded([96.0, 24.0]));
+    inside.push(Instance::end_layer());
+    let (over, within, dispositions) = over_budget(&wide_cache(inside));
+    assert!(matches!(dispositions[2], Disposition::Render { .. }), "half a turn brings it onto the window");
+    let at = (36 * 64 + 28) * 4;
+    near(&over[at..at + 4], rgba([0.5; 4]));
+    same(&over, &within, "turned over its budget");
+}
+
+/// Over its budget, a blurred layer in the cache still takes the taps just off the window.
+#[test]
+fn a_blurred_layer_in_a_cache_over_its_budget_keeps_its_taps_off_the_window() {
+    let mut inside = vec![Instance::begin_layer([64.0, 24.0, 8.0, 8.0], NO_CLIP, LayerSpec { blur: 4.0, ..Default::default() })];
+    inside.extend(faded([64.0, 24.0]));
+    inside.push(Instance::end_layer());
+    let (over, within, _) = over_budget(&wide_cache(inside));
+    let at = (28 * 64 + 62) * 4;
+    assert!(within[at + 3] > 8, "the halo reaches the window: {:?}", &within[at..at + 4]);
+    near(&over[at..at + 4], within[at..at + 4].try_into().unwrap());
+}

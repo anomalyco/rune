@@ -127,6 +127,16 @@ pub(super) fn rect_of(edges: [f32; 4]) -> [f32; 4] {
     [edges[0], edges[1], (edges[2] - edges[0]).max(0.0), (edges[3] - edges[1]).max(0.0)]
 }
 
+/// Edges `r` grown by `by` on every side.
+fn grown(r: [f32; 4], by: f32) -> [f32; 4] {
+    [r[0] - by, r[1] - by, r[2] + by, r[3] + by]
+}
+
+/// The whole pixels of edges `a` inside edges `b`.
+fn meet(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
+    [a[0].max(b[0]).floor(), a[1].max(b[1]).floor(), a[2].min(b[2]).ceil(), a[3].min(b[3]).ceil()]
+}
+
 /// A target's texture size for `bounds`: whole 64-pixel buckets, beside the size it was asked for.
 fn bucket_of(bounds: [f32; 4]) -> ([u32; 2], u32, u32) {
     let (width, height) = (bounds[2] as u32, bounds[3] as u32);
@@ -266,6 +276,9 @@ pub(super) struct Planner {
     pub(super) moves: Vec<Move>,
     /// Where the target in each layer's slot is before the moves.
     slots: Vec<Option<Source>>,
+    /// Under a cache that missed its budget, the part of each layer's content its children draw
+    /// into: what reaches the window, as dev bounded them. Empty on a frame where no cache did.
+    shown: Vec<Option<[f32; 4]>>,
     pub(super) kept: View,
     pub(super) parked: View,
     /// Test-only: how many frames have given scratch back.
@@ -279,6 +292,7 @@ impl Default for Planner {
             dispositions: Vec::new(),
             moves: Vec::new(),
             slots: Vec::new(),
+            shown: Vec::new(),
             kept: View::new(Source::Retained),
             parked: View::new(Source::Spare),
             #[cfg(test)]
@@ -318,9 +332,21 @@ impl Planner {
             self.slots[index] = Some(self.kept.swap_remove(at));
             self.moves.push(Move::Set { slot: index, from: Kept::Retained(at) });
         }
+        self.shown.clear();
+        // Whether a cache has missed its budget yet this frame: until one does, `shown` is empty.
+        let mut fell = false;
         for (index, layer) in plan.iter().enumerate() {
             if matches!(self.dispositions[index], Disposition::Cached { .. }) { continue; }
-            let rect = rect_of(layer.edges);
+            // Inside a cache that missed its budget, nothing is kept, so a layer draws only what
+            // can reach the window: its parent's shown part inside its clip, turned back by its
+            // turn, and its blur's taps around that.
+            let shown = if fell {
+                layer.parent.and_then(|p| self.shown[p]).map(|outer| grown(reaching(outer, layer.clip, layer.turn), (3.0 * layer.blur).ceil()))
+            } else { None };
+            let rect = match shown {
+                Some(shown) if layer.cache.is_none() => rect_of(meet(layer.edges, shown)),
+                _ => rect_of(layer.edges),
+            };
             let parent = layer.parent.map(|p| self.dispositions[p]);
             // A layer inside a cache that composites from its texture, or inside a transparent one,
             // draws nothing: what a cache kept comes from its texture.
@@ -336,6 +362,7 @@ impl Planner {
                 self.park_slot(index, pools);
                 continue;
             }
+            if layer.cache.is_none() && let Some(shown) = shown { self.shown[index] = Some(shown); }
             let mut bounds = rect;
             let (mut bucket, mut width, mut height) = bucket_of(bounds);
             let mut cache = None;
@@ -359,8 +386,12 @@ impl Planner {
                         self.kept.swap_remove(at);
                         self.moves.push(Move::Drop(Kept::Retained(at)));
                     }
-                    // Drawn like an uncached group, it only needs the part that shows.
-                    bounds = rect_of(layer.vis);
+                    // Drawn like an uncached group, it only needs the part that shows, and so do
+                    // the layers inside it.
+                    let vis = shown.map_or(layer.vis, |shown| meet(layer.vis, shown));
+                    if !fell { fell = true; self.shown.resize(plan.len(), None); }
+                    self.shown[index] = Some(vis);
+                    bounds = rect_of(vis);
                     (bucket, width, height) = bucket_of(bounds);
                 }
             }
@@ -426,6 +457,7 @@ impl Planner {
         shrink(&mut self.dispositions, keep);
         shrink(&mut self.moves, keep);
         shrink(&mut self.slots, keep);
+        shrink(&mut self.shown, keep);
         shrink(&mut self.kept.order, retained.max(WARM));
         shrink(&mut self.parked.order, spare.max(WARM));
     }
