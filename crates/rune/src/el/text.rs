@@ -451,6 +451,15 @@ impl El {
         }
         self
     }
+    /// Lay this field's placeholder out in `style` rather than the field's own, as CSS's
+    /// `::placeholder` can: a phone's field types at 16 pt (so iOS doesn't zoom to it) while its
+    /// hint keeps the design's size.
+    pub fn placeholder_font(mut self, style: TextStyle) -> Self {
+        if let Some(i) = self.cold.get_mut_if_some().and_then(|c| c.input.as_deref_mut()) {
+            i.placeholder_style = Some(style);
+        }
+        self
+    }
     pub fn caret(mut self, caret: Color, selection: Color) -> Self {
         if let Some(i) = self.cold.get_mut_if_some().and_then(|c| c.input.as_deref_mut()) {
             i.caret = caret;

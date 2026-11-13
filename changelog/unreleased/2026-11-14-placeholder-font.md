@@ -1,0 +1,1 @@
+- `El::placeholder_font` lays a text field's placeholder out in its own style, as CSS's `::placeholder` does.

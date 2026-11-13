@@ -296,7 +296,7 @@ impl<S: 'static> Runtime<S> {
                         crate::el::TextDir::Fixed(f) if !own => Some(f),
                         _ => None,
                     });
-                    let pl = self.text.layout_rich_with(&inp.placeholder, &[], spec.style, s, wrap, options);
+                    let pl = self.text.layout_rich_with(&inp.placeholder, &[], inp.placeholder_style.unwrap_or(spec.style), s, wrap, options);
                     let pl_flow = crate::el::Flow::of_layout(&pl);
                     let start = if own && pl_flow != n.flow { rest_origin[0] + ins[2] - ins[0] } else { rest_origin[0] };
                     // Right to left it ends at the field's start edge, its right.
