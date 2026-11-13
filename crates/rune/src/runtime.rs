@@ -683,6 +683,8 @@ pub struct Runtime<S: 'static> {
     /// Files dragged over the window from another app (`drop_dispatch`).
     file_drag: drop_dispatch::FileDrag,
     pub ime_area: Option<[f32; 4]>,
+    /// The `El::ime_cursor` that has the input method asks for Option as Alt (`El::ime_option_as_alt`).
+    pub(crate) ime_option_as_alt: bool,
     /// The focused field's caret (path, window rect) the next view sees through `Cx::caret`.
     caret: Option<(String, [f32; 4])>,
     /// The last view read the caret, so it re-runs when the caret moves.
@@ -1020,6 +1022,7 @@ impl<S: 'static> Runtime<S> {
             hover_hold: Default::default(),
             file_drag: Default::default(),
             ime_area: None,
+            ime_option_as_alt: false,
             caret: None,
             caret_watch: false,
             layout_seen: Default::default(),
