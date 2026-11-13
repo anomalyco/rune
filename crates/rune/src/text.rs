@@ -515,7 +515,7 @@ impl TextSystem {
     /// elsewhere.
     pub fn coverage_exponent(&self, fill: [f32; 4]) -> f32 {
         let apple = coretext_match::apple_coverage();
-        coretext_match::coverage_exponent(self.smoothing, fill, apple, cfg!(target_os = "windows"))
+        coretext_match::coverage_exponent(self.smoothing, fill, apple, coretext_match::windows_gamma())
     }
 
     /// Rasterise and place glyphs in `mode` from the next placement on, with its CoreGraphics
