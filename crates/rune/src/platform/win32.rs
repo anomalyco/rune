@@ -420,7 +420,7 @@ pub(crate) fn work_area(monitor: &winit::monitor::MonitorHandle) -> Option<(i32,
 pub(crate) fn destroy_own_windows() {
     use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM, TRUE};
     use windows_sys::Win32::System::Threading::GetCurrentThreadId;
-    use windows_sys::Win32::UI::WindowsAndMessaging::{DefWindowProcW, DestroyWindow, EnumThreadWindows, GWLP_WNDPROC, SetWindowLongPtrW};
+    use windows_sys::Win32::UI::WindowsAndMessaging::EnumThreadWindows;
     unsafe extern "system" fn add(hwnd: HWND, list: LPARAM) -> BOOL {
         // SAFETY: `list` is the Vec `destroy_own_windows` passes, alive for the enumeration.
         unsafe { (*(list as *mut Vec<HWND>)).push(hwnd) };
@@ -430,9 +430,23 @@ pub(crate) fn destroy_own_windows() {
     // SAFETY: this thread's own top-level windows; each is destroyed by the thread that made it.
     unsafe {
         EnumThreadWindows(GetCurrentThreadId(), Some(add), (&raw mut windows) as LPARAM);
-        for hwnd in windows {
-            SetWindowLongPtrW(hwnd, GWLP_WNDPROC, DefWindowProcW as usize as isize);
-            DestroyWindow(hwnd);
-        }
+    }
+    for hwnd in windows { destroy(hwnd); }
+}
+
+/// Destroys `window` at once, for the last window of an app that ends fast (`Host::close`):
+/// what's left of the quit runs without it.
+pub(crate) fn destroy_window_now(window: &winit::window::Window) {
+    if let Some(hwnd) = hwnd(window) { destroy(hwnd); }
+}
+
+/// Destroys `hwnd` with the default window procedure in place, so neither winit's nor a subclass
+/// runs while the process is ending.
+fn destroy(hwnd: windows_sys::Win32::Foundation::HWND) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{DefWindowProcW, DestroyWindow, GWLP_WNDPROC, SetWindowLongPtrW};
+    // SAFETY: a window of this thread's; nothing of this process's uses it after.
+    unsafe {
+        SetWindowLongPtrW(hwnd, GWLP_WNDPROC, DefWindowProcW as usize as isize);
+        DestroyWindow(hwnd);
     }
 }
