@@ -71,6 +71,10 @@ pub(crate) struct Live<S: 'static> {
     /// The time scale the app had when the playground opened, which every new stage starts
     /// from and Back restores.
     pub(crate) app_time_scale: f32,
+    /// `compose` and `apply_requests`, which the runtime reaches through these so that only an app
+    /// that makes a playground (`Live::new`) links the playground's views and requests.
+    compose: fn(&Self, &S, fn(&S, &mut Cx<S>) -> El, &mut Cx<S>, (f32, f32)) -> El,
+    apply_requests: fn(&mut Self, f64, &mut S) -> bool,
 }
 
 impl<S: 'static> Live<S> {
@@ -116,6 +120,8 @@ impl<S: 'static> Live<S> {
             generation: 0,
             root: 0,
             app_time_scale: 1.0,
+            compose: Self::compose,
+            apply_requests: Self::apply_requests,
         };
         // Scene names as `find` takes them: a path or a name, matching case if it can.
         let scene = |live: &Self, name: &str| {
@@ -231,8 +237,15 @@ impl<S: 'static> Live<S> {
         self.pending.iter().filter(|r| r.swaps_stage()).all(|r| matches!(r, Request::Replay | Request::Variant(_)))
     }
 
+    /// The window's root: the app's view above the bar, or the playground around its stage.
+    pub(crate) fn view(&self, app: &S, view: fn(&S, &mut Cx<S>) -> El, cx: &mut Cx<S>, viewport: (f32, f32)) -> El {
+        (self.compose)(self, app, view, cx, viewport)
+    }
+
     /// Applies the requests handlers made since the last commit; true when anything changed.
-    pub(crate) fn apply(&mut self, clock: f64, real: &mut S) -> bool {
+    pub(crate) fn apply(&mut self, clock: f64, real: &mut S) -> bool { (self.apply_requests)(self, clock, real) }
+
+    fn apply_requests(&mut self, clock: f64, real: &mut S) -> bool {
         self.now = clock;
         self.load_folds();
         self.load_widths();

@@ -561,13 +561,13 @@ impl<S: 'static> Host<S> {
         let float_on_open = app.float_on_open;
         let (open_inactive, open_as) = (app.open_inactive, app.open_as);
         let app_stats = app.dev_stats;
-        let playground = app.playground.take();
+        let (playground, attach_playground) = (app.playground.take(), app.attach_playground);
         let (mut spec, state, shared) = app.into_parts(args.scene.as_deref());
         let mut size = args.size.unwrap_or(spec.size);
         // The window reports the system appearance and scale when it opens.
         let env = Env::new(args.theme.as_deref() != Some("light"), 1.0);
         let mut rt = runtime_for(&spec, state, size, env, setup_waker(&shared));
-        crate::playground::attach(&mut rt, playground, &spec, args.playground.clone(), args.variant.clone(), true);
+        if let Some(attach) = attach_playground { attach(&mut rt, playground, &spec, args.playground.clone(), args.variant.clone(), true); }
         if fit_height {
             spec.min_size = options.fit_min_size(spec.min_size);
             // Opens at the content's height; the first frame corrects any difference its
