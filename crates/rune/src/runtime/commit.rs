@@ -144,6 +144,9 @@ impl<S: 'static> Runtime<S> {
             }
         }
         self.note_drawn_rows();
+        // Release the painted layouts before measuring: a resize can rebreak them in place,
+        // and an edit can recycle their flattened glyph buffers for the next layout.
+        self.text_quads.clear();
         let mut measured = self.measure_commit(tx);
         // A new zoom lays the view out again at the scale and size it gives, in this commit.
         if self.apply_zoom(measured.zoom) {
