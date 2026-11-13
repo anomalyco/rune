@@ -10,7 +10,7 @@ hot = ["rune/hot"]
 
 [dependencies]
 procwatch = { path = "../../crates/procwatch", optional = true }
-rune = { path = "../../crates/rune", features = ["tooling"] }
+rune = { path = "../../crates/rune", features = ["keys-overlay"] }
 
 [lints]
 workspace = true

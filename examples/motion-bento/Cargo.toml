@@ -6,7 +6,7 @@ license.workspace = true
 publish = false
 
 [dependencies]
-rune = { path = "../../crates/rune", features = ["tooling"] }
+rune = { path = "../../crates/rune", features = ["keys-overlay"] }
 rune-kit = { path = "../../crates/rune-kit" }
 motion-bento-chaos = { path = "chaos" }
 
