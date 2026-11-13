@@ -249,6 +249,14 @@ impl<S> Cx<S> {
         #[cfg(not(target_arch = "wasm32"))]
         { false }
     }
+    /// A page's primary pointer is coarse and can't hover. Use this for a phone or tablet's
+    /// controls rather than the viewport width: a narrow window can still have a mouse.
+    pub fn touch_controls(&self) -> bool {
+        #[cfg(target_arch = "wasm32")]
+        { crate::platform::web::touch_controls() }
+        #[cfg(not(target_arch = "wasm32"))]
+        { false }
+    }
     /// The system's contrast theme when one is on (Windows' Contrast themes, high contrast):
     /// the colours it asks every app to paint with, which a view uses in place of its own
     /// (CSS `forced-colors: active`). None otherwise. A change re-runs the view.
