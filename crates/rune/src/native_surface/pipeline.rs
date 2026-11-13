@@ -113,6 +113,8 @@ pub struct SurfaceRenderer {
     importer: Option<macos::Importer>,
     #[cfg(target_os = "windows")]
     shared: Option<windows::Importer>,
+    #[cfg(target_os = "linux")]
+    dmabuf: Option<linux::Importer>,
 }
 impl SurfaceRenderer {
     #[cfg(target_arch = "wasm32")]
@@ -231,6 +233,8 @@ impl SurfaceRenderer {
             importer: None,
             #[cfg(target_os = "windows")]
             shared: None,
+            #[cfg(target_os = "linux")]
+            dmabuf: None,
         }
     }
 
@@ -501,6 +505,8 @@ impl SurfaceRenderer {
                 }
                 self.shared.as_mut().unwrap().import_decoded(queue, planes, *value)?
             }
+            #[cfg(target_os = "linux")]
+            Source::Dmabuf(d) => linux::Importer::on(&mut self.dmabuf, device)?.import(queue, d)?,
         };
         Ok(Imported { frame, textures })
     }

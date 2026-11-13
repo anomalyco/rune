@@ -3778,6 +3778,7 @@ dependencies = [
  "accesskit_unix",
  "accesskit_windows",
  "arboard",
+ "ash",
  "avif-decode",
  "blake3",
  "block2 0.5.1",
