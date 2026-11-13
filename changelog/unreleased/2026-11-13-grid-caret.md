@@ -1,0 +1,1 @@
+- **`El::grid_caret(col, row)`: a terminal grid's cursor is a screen reader's caret.** The grid sets its text selection to the character at the cursor's cell (the wide character it covers, or the end of the row past its text), so a reader reads where typing goes and moves from there by character, word and line; the rows stay a text line each.

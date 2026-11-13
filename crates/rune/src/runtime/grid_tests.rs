@@ -54,3 +54,27 @@ fn one_changed_row_draws_as_a_fresh_screen_would() {
     fresh.frame(0.0);
     assert_eq!(placed(&rt), placed(&fresh));
 }
+
+#[test]
+fn a_reader_gets_a_line_per_row_and_the_cursor_as_its_caret() {
+    struct Caret;
+    fn view(_: &Caret, _: &mut Cx<Caret>) -> El {
+        let style = TextStyle::new(14.0, 400.0).lh(18.0);
+        let rows = vec![
+            Rc::new(GridRow::new("$ ls", Vec::new(), style)),
+            Rc::new(GridRow::new("ab", Vec::new(), style).cell(3, 2, "日", style, Color::WHITE)),
+            Rc::new(GridRow::new("", Vec::new(), style)),
+        ];
+        col().child(grid(24, 8.0, 18.0, rows).key("screen").w(192.0).h(54.0).grid_caret(4, 1))
+    }
+    let mut rt = Runtime::new(Caret, view, (240.0, 100.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let tree = rt.accessibility_tree();
+    let (_, screen) = tree.nodes.iter().find(|(_, n)| n.author_id() == Some("screen")).expect("the grid");
+    assert_eq!(screen.role(), accesskit::Role::Terminal);
+    let runs: Vec<_> = tree.nodes.iter().filter(|(_, n)| n.role() == accesskit::Role::TextRun).collect();
+    assert_eq!(runs.iter().map(|(_, n)| n.value().unwrap_or("")).collect::<Vec<_>>(), ["$ ls", "ab 日", ""], "a line per row, its wide cell in place");
+    let caret = screen.text_selection().expect("the cursor as the caret");
+    assert_eq!(caret.focus.node, runs[1].0, "on the cursor's row");
+    assert_eq!(caret.focus.character_index, 3, "the wide character whose second column the cursor is on");
+}
