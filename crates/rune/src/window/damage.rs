@@ -149,6 +149,11 @@ fn changed(old: &[Instance], new: &[Instance], size: (u32, u32), s: &mut Scratch
     s.each.clear();
     s.each.extend(counts.values().filter(|(n, _)| *n != 0)
         .filter_map(|(_, at)| bounds(if *at < old.len() { &old[*at] } else { &new[*at - old.len()] }, size)));
+    // A scrolled list changes thousands of instances over most of the window: their union says
+    // so (the plan draws whole above `MOST`) without gathering them into rectangles.
+    if s.each.len() > 256 && let Some(all) = s.each.iter().copied().reduce(join) && area(all) as f32 > MOST * (size.0 * size.1) as f32 {
+        return Area::Rects(vec![all]);
+    }
     s.each.sort_unstable_by_key(|r| (r[1], r[0]));
     let mut rects = Vec::new();
     for r in s.each.iter().copied() { add(&mut rects, r); }
