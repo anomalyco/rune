@@ -1,5 +1,8 @@
 //! `Tx::scroll_to_with`: a programmatic glide on the app's spring, and glides retargeted by key
 //! repeat running as one motion.
+//!
+//! No scroll request follows the change's motion (`Tx::motion`, `Tx::motion_curve`): each keeps
+//! the spring it names, and the tests here hold that.
 use super::*;
 
 const DT: f64 = 1.0 / 120.0;
@@ -127,4 +130,50 @@ fn another_glide_after_a_springed_one_runs_on_glide_again() {
     rt.update(|_, tx| tx.scroll_to_bottom("scroll"));
     rt.frame(DT);
     assert!(rt.scrolls.values().next().unwrap().spring.is_none(), "a glide to the bottom takes the default spring");
+}
+
+/// The viewport's offset each of 120 frames of the request `ask` makes.
+fn glide_frames(ask: &dyn Fn(&mut Tx)) -> Vec<f64> {
+    let mut rt = runtime();
+    rt.update(|_, tx| ask(tx));
+    let mut path = Vec::new();
+    for _ in 0..120 {
+        rt.frame(DT);
+        path.push(offset(&rt));
+    }
+    path
+}
+
+/// `Tx::motion` and `Tx::motion_curve` move the change's own layout; the scroll requests asked
+/// for in the same handler keep the spring each names, so an app tuning its layout curve can't
+/// quietly retime a glide. Each path is the one the same request walks without an override.
+fn same_glide(name: &str, plain: &dyn Fn(&mut Tx), with_curve: &dyn Fn(&mut Tx), with_spring: &dyn Fn(&mut Tx)) {
+    let plain = glide_frames(plain);
+    assert!(plain.last().unwrap() > &0.0, "{name} moved");
+    assert_eq!(glide_frames(with_curve), plain, "{name}: `Tx::motion_curve` retimed the scroll");
+    assert_eq!(glide_frames(with_spring), plain, "{name}: `Tx::motion` retimed the scroll");
+}
+
+#[test]
+fn a_motion_override_leaves_scroll_requests_alone() {
+    let curve = rune_motion::Curve::tween(0.3, rune_motion::Easing::EASE_OUT);
+    let spring = Spring::new(0.18, 0.0);
+    same_glide(
+        "scroll_to",
+        &|tx| tx.scroll_to("scroll", 0.0, 500.0),
+        &|tx| { tx.motion_curve(curve); tx.scroll_to("scroll", 0.0, 500.0) },
+        &|tx| { tx.motion(spring); tx.scroll_to("scroll", 0.0, 500.0) },
+    );
+    same_glide(
+        "scroll_to_bottom",
+        &|tx| tx.scroll_to_bottom("scroll"),
+        &|tx| { tx.motion_curve(curve); tx.scroll_to_bottom("scroll") },
+        &|tx| { tx.motion(spring); tx.scroll_to_bottom("scroll") },
+    );
+    same_glide(
+        "scroll_center",
+        &|tx| tx.scroll_center("r20"),
+        &|tx| { tx.motion_curve(curve); tx.scroll_center("r20") },
+        &|tx| { tx.motion(spring); tx.scroll_center("r20") },
+    );
 }
