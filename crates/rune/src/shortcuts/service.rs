@@ -3,7 +3,7 @@ use super::{Shortcut, ShortcutError, ShortcutId, Sink, NativeBackend};
 use super::Backend;
 use crate::{Tx, app::Shared, runtime::Waker};
 use machine::{AttachEffect, AttachEvent, Attachment, BindEffect, BindEvent, Bindings, step_attachment, step_bindings};
-use std::{collections::HashMap, rc::Rc, sync::{Arc, Mutex, OnceLock, PoisonError, RwLock, Weak, atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering}}};
+use std::{collections::HashMap, rc::Rc, sync::{Arc, Mutex, OnceLock, PoisonError, Weak, atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering}}};
 #[cfg(not(target_os = "linux"))]
 use std::cell::RefCell;
 #[cfg(not(target_os = "linux"))]
@@ -106,16 +106,17 @@ thread_local! {
 
 /// A host's wake, which stops for good as the host closes. Its engine, its activations and
 /// routing all wake the host through it, so a call that finishes after the close, or an
-/// activation passed along after it, wakes nothing. A close waits out a wake already running,
-/// so once a host's `Guard` has dropped its wake never fires; a host's wake must not wait for
-/// that host's thread.
-struct HostWake(RwLock<Option<Waker>>);
+/// activation passed along after it, wakes nothing. The lock is held only to clone the waker,
+/// never through the wake, so a close never waits for a wake (whose callback may wait for the
+/// close). A wake that took the waker just before the close still fires, and the closed host's
+/// event loop ignores it.
+struct HostWake(Mutex<Option<Waker>>);
 
 impl HostWake {
     /// The waker the host's engine, activations and routing hold, and what its close ends.
     /// Only they keep the host's wake alive, so one nothing reaches any more lets it go.
     fn new(wake: Waker) -> (Waker, Weak<Self>) {
-        let host = Arc::new(Self(RwLock::new(Some(wake))));
+        let host = Arc::new(Self(Mutex::new(Some(wake))));
         let closer = Arc::downgrade(&host);
         (Arc::new(move || host.wake()), closer)
     }
@@ -123,15 +124,14 @@ impl HostWake {
     fn wake(&self) {
         #[cfg(test)]
         if let Some(pause) = BEFORE_WAKE.with(|hook| hook.borrow_mut().take()) { pause(); }
-        // Held through the wake, so a close can't finish while it runs. Wakes share it.
-        let wake = self.0.read().unwrap_or_else(PoisonError::into_inner);
-        if let Some(wake) = wake.as_ref() { wake(); }
+        let wake = self.0.lock().unwrap_or_else(PoisonError::into_inner).clone();
+        if let Some(wake) = wake { wake(); }
     }
 
-    /// Ends the host's wake, once any wake under way has finished.
+    /// Ends the host's wake: a wake that starts after this fires nothing.
     fn close(host: &Weak<Self>) {
         let Some(host) = host.upgrade() else { return };
-        let wake = host.0.write().unwrap_or_else(PoisonError::into_inner).take();
+        let wake = host.0.lock().unwrap_or_else(PoisonError::into_inner).take();
         // The host's own waker goes once the lock is free.
         drop(wake);
     }
@@ -306,11 +306,13 @@ impl<S: 'static> Hub<S> {
 
     pub(crate) fn fire(&self, shortcut: &Shortcut) -> Result<(), ShortcutError> {
         let shortcut = shortcut.clone();
-        self.control.call(move |engine| {
+        let (id, sink) = self.control.call(move |engine| {
             let id = engine.bindings.find(&shortcut).ok_or(ShortcutError::UnknownId)?;
-            (engine.sink)(id, None);
-            Ok(())
-        })
+            Ok((id, engine.sink.clone()))
+        })?;
+        // Pressed as a backend would, holding nothing, so the press's wake runs under no lock.
+        sink(id, None);
+        Ok(())
     }
 }
 
@@ -367,13 +369,16 @@ struct Closing {
     current: bool,
 }
 
-/// What a backend calls when its chord is pressed: it queues the activation and wakes the App.
+/// What a backend calls when its chord is pressed: it queues the activation and wakes the
+/// engine's own host, never the window that connected last, which may have closed. A press for
+/// a host that has gone queues nothing, as its activation would run nothing.
 fn sink<S: 'static>(delivery: Arc<Delivery<S>>) -> Sink {
     Arc::new(move |id, token| {
+        if delivery.live.strong_count() == 0 { return; }
         if let Some(shared) = delivery.shared.upgrade() {
             delivery.pressed.lock().unwrap().push_back((id, token));
             shared.queue_update(deliver(delivery.clone()));
-            shared.wake();
+            (delivery.wake)();
         }
     })
 }
@@ -537,7 +542,7 @@ impl Attaching {
 
 impl Drop for Guard {
     fn drop(&mut self) {
-        // Holding nothing, so a wake under way can finish.
+        // First, so nothing the close sets off wakes this host.
         HostWake::close(&self.closes_wake);
         let mut closing = self.close_routing();
         self.release_engine(&mut closing);
