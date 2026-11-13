@@ -1,0 +1,1 @@
+- `El::paint_contained(origin)` snaps an element's children as Blink snaps inside a box with paint containment at `origin`: the box's origin and each child's offset in it round to device pixels separately. At 1.875x that puts content under a box at 44 pt one pixel where Chromium draws it.

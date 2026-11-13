@@ -19,4 +19,16 @@ impl El {
         self.vis_flags.set(crate::el::VisualFlags::NO_PIXEL_SNAP, !on);
         self
     }
+
+    /// Snaps this element's children as Blink does inside a box with paint containment
+    /// (`contain: paint`, `content` or `strict`) whose top-left is `origin`, in window points:
+    /// that box's origin rounds to a whole device pixel on its own, and each child's position
+    /// in it rounds again, with no carry between the two. At 1.875x a box at 44 pt (82.5 px)
+    /// starts at 83, so a child 17 pt into it (31.875 px) lands on 115, not on 114 where its
+    /// own position would round. Pass the containing box's origin even when this element
+    /// isn't it (a panel inset inside a `main` that has the containment).
+    pub fn paint_contained(mut self, origin: [f32; 2]) -> Self {
+        self.vis.cold_mut().paint_contain = Some(origin);
+        self
+    }
 }
