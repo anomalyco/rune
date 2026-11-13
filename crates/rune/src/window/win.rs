@@ -85,9 +85,6 @@ pub(super) struct Win {
     pub(super) timer_frame: TimerFrame,
     /// The last frame presented, while the window rests.
     pub(super) presented: Option<Presented>,
-    /// The window's steady run after a change (`STEADY`).
-    #[cfg(target_os = "windows")]
-    pub(super) steady: Steady,
     /// A frame asked for while other windows covered it, still to draw (`CoveredDraw`).
     #[cfg(target_os = "windows")]
     pub(super) covered_draw: CoveredDraw,

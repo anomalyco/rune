@@ -236,9 +236,7 @@ impl<S: 'static> Host<S> {
         cloak.extend(Instant::now() + win::READY_FALLBACK);
         #[cfg(target_os = "windows")]
         let native = {
-            let handle = self.native_handle.clone();
-            let report = Arc::new(move |covered| handle.send(move |slot| WakeEvent::Covered(slot, covered)));
-            Native { cloak, frame, _occlusion: crate::platform::win32::occlusion::Tracked::new(&window, report), mode: Default::default(), a11y_start, video_layers: Default::default() }
+            Native { cloak, frame, a11y_start, ..Default::default() }
         };
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         let native = Native::default();
@@ -257,8 +255,6 @@ impl<S: 'static> Host<S> {
             alpha,
             timer_frame: TimerFrame::default(),
             presented: None,
-            #[cfg(target_os = "windows")]
-            steady: Steady::Rest,
             #[cfg(target_os = "windows")]
             covered_draw: CoveredDraw::Current,
             redraw: std::cell::Cell::new(Redraw::Idle),
@@ -389,6 +385,8 @@ impl<S: 'static> Host<S> {
         w.surface_ok = true;
         w.alpha = alpha;
         #[cfg(target_os = "windows")]
+        w.native.slot.reset();
+        #[cfg(target_os = "windows")]
         w.native.mode.rebind();
         #[cfg(target_os = "macos")]
         {
@@ -433,6 +431,7 @@ impl<S: 'static> Host<S> {
         w.config = config;
         w.surface_ok = true;
         w.presented = None;
+        w.native.slot.reset();
         w.native.mode.rebind();
         Ok(true)
     }

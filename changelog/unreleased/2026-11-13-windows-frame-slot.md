@@ -1,0 +1,1 @@
+- **Windows: a window's swap chain holds one frame, and the window waits for room in the loop, not in `acquire`.** wgpu no longer waits on the swap chain's waitable object; a frame that finds the swap chain full asks a one-shot thread-pool wait to wake the loop when it isn't, so input that arrives meanwhile is handled before the frame is built from it (`window::slot`).

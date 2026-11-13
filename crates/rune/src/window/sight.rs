@@ -33,6 +33,10 @@ pub(crate) enum Sight {
 impl Sight {
     pub(crate) fn covered(self) -> bool { matches!(self, Sight::Covered(_)) }
 
+    /// Whether `cover` is among what covers it.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    pub(crate) fn has(self, cover: Cover) -> bool { matches!(self, Sight::Covered(set) if set.get() & cover as u8 != 0) }
+
     /// `cover` starts (`on`) or stops covering the window. A notification, either way,
     /// supersedes a refused drawable's guess, which only stood in for one.
     pub(crate) fn step(self, cover: Cover, on: bool) -> Sight {

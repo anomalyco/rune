@@ -152,10 +152,17 @@ impl<S: 'static> Host<S> {
                 self.shell(event_loop);
             }
             WakeEvent::A11y(_) => self.a11y_receive(),
-            WakeEvent::Covered(_, covered) => {
-                if covered { self.land_frame(); }
-                self.set_cover(Cover::Windows, covered);
+            #[cfg(target_os = "windows")]
+            WakeEvent::FrameSlot(_) => {
+                // The frame that waited for room in the swap chain draws now, after the input
+                // that came meanwhile.
+                if let Some(w) = &mut self.win && matches!(w.native.slot, super::slot::Slot::Waiting(_)) {
+                    w.native.slot.came_back();
+                    w.request_redraw();
+                }
             }
+            #[cfg(not(target_os = "windows"))]
+            WakeEvent::FrameSlot(_) => {}
             #[cfg(target_os = "windows")]
             WakeEvent::GpuReady(_) => self.gpu_ready(),
             #[cfg(not(target_os = "windows"))]
@@ -197,6 +204,14 @@ impl<S: 'static> Host<S> {
             return;
         }
         self.a11y_window_event(&event);
+        // What says whether other windows cover it (`look`): the pointer reaching it shows some
+        // of it; its own move, size or focus makes the next frame look.
+        #[cfg(target_os = "windows")]
+        match &event {
+            WindowEvent::CursorMoved { .. } | WindowEvent::CursorEntered { .. } | WindowEvent::MouseInput { .. } | WindowEvent::MouseWheel { .. } => self.sighted(),
+            WindowEvent::Focused(true) | WindowEvent::Moved(_) | WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => self.look_stale(),
+            _ => {}
+        }
         if !matches!(event, WindowEvent::RedrawRequested) && let Some(w) = &mut self.win { w.timer_frame.no_longer_quiet(); }
         #[cfg(target_os = "macos")]
         if matches!(event, WindowEvent::Moved(_) | WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } | WindowEvent::Occluded(_))

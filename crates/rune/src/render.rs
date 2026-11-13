@@ -610,6 +610,9 @@ impl Gpu {
         descriptor.flags.remove(wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL);
         // An HWND's DXGI swapchain is opaque only; DirectComposition composites alpha on every GPU.
         descriptor.backend_options.dx12.presentation_system = wgpu::Dx12SwapchainKind::DxgiFromVisual;
+        // A window waits for room in its swap chain itself, in the loop rather than in
+        // `acquire` (`window::slot`).
+        descriptor.backend_options.dx12.latency_waitable_object = wgpu::Dx12UseFrameLatencyWaitableObject::DontWait;
         // FXC ships with Windows (d3dcompiler_47.dll in System32). wgpu's default looks for
         // dxcompiler.dll on PATH, where another app's incompatible copy crashes the first
         // shader compile (Hex #587).
