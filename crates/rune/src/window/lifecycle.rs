@@ -176,6 +176,7 @@ impl<S: 'static> Host<S> {
         self.shortcuts.drain();
         self.menus.drain();
         let (mut had_updates, mut updated) = (false, false);
+        let _receiving = self.shortcuts.receiving();
         let requests = self.shared.drain_window(&mut self.rt, |changed| {
             had_updates = true;
             updated |= changed;

@@ -267,6 +267,7 @@ impl<S: 'static> Member for Window<S> {
         let mut changes = Changes::default();
         self.shortcuts.drain();
         self.menus.drain();
+        let _receiving = self.shortcuts.receiving();
         let requests = self.shared.drain(|f| {
             self.rt.update_if(f);
             self.menus.drain();

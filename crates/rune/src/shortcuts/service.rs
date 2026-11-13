@@ -25,6 +25,9 @@ type Connect = fn(bool, Sink) -> Result<NativeBackend, ShortcutError>;
 #[cfg(not(target_os = "linux"))]
 static NEXT_OWNER: AtomicUsize = AtomicUsize::new(1);
 static NEXT_ID: AtomicU32 = AtomicU32::new(1);
+/// Host generations, unique across Apps, so the receiving host a thread names is never another
+/// App's.
+static NEXT_GENERATION: AtomicU64 = AtomicU64::new(1);
 /// Every App's native registrations in this process, with the App's title, so a conflict
 /// between two Apps can name its owner. Headless registrations stay out of it.
 static NATIVE: Mutex<Vec<(ShortcutId, Shortcut, &'static str)>> = Mutex::new(Vec::new());
@@ -51,9 +54,10 @@ struct Control {
     engine: Mutex<Option<Slot>>,
     /// How many hosts have attached; changed and read under the routing lock.
     hosts: AtomicU64,
-    /// The newest host's generation, taken as it installs its engine (on Linux under the slot
-    /// lock, so the slot always holds the newest). A guard, engine or activation holding an
-    /// older one is stale, and changes nothing its successor owns.
+    /// The newest host's generation. On Linux it is stored as a host installs its engine, under
+    /// the slot lock, so the slot always holds the newest. Elsewhere it is stored as a host takes
+    /// routing, under the routing lock, so it always names the host routing hands calls to. A
+    /// guard, engine or activation holding another is stale, and changes nothing the newest owns.
     generation: AtomicU64,
 }
 
@@ -88,6 +92,16 @@ thread_local! {
     // Native handles never cross threads, even though AppHandle can.
     static ENGINES: RefCell<HashMap<usize, Installed>> = RefCell::default();
 }
+
+thread_local! {
+    /// The generation of the host delivering updates on this thread, while it delivers them.
+    static RECEIVING: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+    /// Runs as a drain is about to take the waiting calls, so a test can pause it there.
+    #[cfg(all(test, not(target_os = "linux")))]
+    static BEFORE_DEQUEUE: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::default();
+}
+
+fn next_generation() -> u64 { NEXT_GENERATION.fetch_add(1, Ordering::Relaxed) }
 
 struct Engine {
     title: &'static str,
@@ -271,6 +285,8 @@ pub(crate) struct Guard {
     generation: u64,
     /// Told the last host the close ends.
     cleanup: Option<Box<dyn FnOnce(u64)>>,
+    /// Held while the host lives, so an activation left for it is dropped once it has gone.
+    _live: Arc<()>,
     // The guard must be destroyed on the owning event-loop thread.
     _thread: std::marker::PhantomData<Rc<()>>,
 }
@@ -280,8 +296,24 @@ struct Attaching {
     control: Arc<Control>,
     generation: u64,
     wake: Waker,
+    live: Arc<()>,
     // Routing names this thread as the owner, and a macOS or Windows engine never leaves it.
     _thread: std::marker::PhantomData<Rc<()>>,
+}
+
+/// While held, this thread delivers updates for the host that made it.
+pub(crate) struct Receiving(Option<u64>);
+
+impl Drop for Receiving {
+    fn drop(&mut self) { RECEIVING.with(|receiving| receiving.set(self.0)); }
+}
+
+/// The host an engine's activations belong to.
+struct Delivery<S> {
+    shared: std::sync::Weak<Shared<S>>,
+    generation: u64,
+    wake: Waker,
+    live: std::sync::Weak<()>,
 }
 
 /// A close part-way through.
@@ -292,23 +324,37 @@ struct Closing {
     current: bool,
 }
 
-/// What a backend calls when its chord is pressed. The handler runs only if the engine's host is
-/// still the newest when the update is delivered: a replaced engine's activation runs nothing.
-fn sink<S: 'static>(shared: &Arc<Shared<S>>, generation: u64) -> Sink {
-    let weak = Arc::downgrade(shared);
+/// What a backend calls when its chord is pressed: it queues the activation and wakes the App.
+fn sink<S: 'static>(delivery: Delivery<S>) -> Sink {
+    let delivery = Arc::new(delivery);
     Arc::new(move |id, token| {
-        if let Some(shared) = weak.upgrade() {
-            let weak = Arc::downgrade(&shared);
-            crate::AppHandle { shared }.update(move |state, tx| {
-                let handler = weak.upgrade().filter(|s| s.shortcuts.control.current(generation))
-                    .and_then(|s| s.shortcuts.handlers.lock().unwrap().get(&id).map(|(_, handler)| handler.clone()));
-                if let Some(handler) = handler {
-                    tx.shortcut_activation_token = token;
-                    handler(state, tx);
-                    tx.shortcut_activation_token = None;
-                }
-            });
+        if let Some(shared) = delivery.shared.upgrade() {
+            shared.queue_update(deliver(delivery.clone(), id, token));
+            shared.wake();
         }
+    })
+}
+
+/// An activation, as an update. It runs only on its own host's state, and only while that host
+/// is the newest. Another host delivering it leaves it for its own host, and wakes that host; an
+/// activation whose host was replaced or has gone runs nothing.
+fn deliver<S: 'static>(delivery: Arc<Delivery<S>>, id: ShortcutId, token: Option<String>) -> Box<dyn FnOnce(&mut S, &mut Tx) -> bool + Send> {
+    Box::new(move |state, tx| {
+        let Some(shared) = delivery.shared.upgrade() else { return false };
+        if !shared.shortcuts.control.current(delivery.generation) { return false; }
+        if RECEIVING.with(|receiving| receiving.get()) != Some(delivery.generation) {
+            if delivery.live.strong_count() > 0 {
+                let wake = delivery.wake.clone();
+                shared.queue_update(deliver(delivery, id, token));
+                wake();
+            }
+            return false;
+        }
+        let Some(handler) = shared.shortcuts.handlers.lock().unwrap().get(&id).map(|(_, handler)| handler.clone()) else { return false };
+        tx.shortcut_activation_token = token;
+        handler(state, tx);
+        tx.shortcut_activation_token = None;
+        true
     })
 }
 
@@ -327,10 +373,15 @@ impl Guard {
         let control = shared.shortcuts.control.clone();
         let title = shared.shortcuts.title.get().copied().unwrap_or_default();
         let bindings = if headless { Bindings::Virtual(HashMap::new()) } else { Bindings::Disconnected };
-        let engine = |generation| Engine { title, wayland, sink: sink(shared, generation), connect, bindings };
+        let live = Arc::new(());
+        let engine = |generation| {
+            let delivery = Delivery { shared: Arc::downgrade(shared), generation, wake: wake.clone(), live: Arc::downgrade(&live) };
+            Engine { title, wayland, sink: sink(delivery), connect, bindings }
+        };
+        // Published when this host takes routing.
         #[cfg(not(target_os = "linux"))]
         let generation = {
-            let generation = control.generation.fetch_add(1, Ordering::Relaxed) + 1;
+            let generation = next_generation();
             ENGINES.with(|engines| engines.borrow_mut().insert(control.key, (generation, Rc::new(RefCell::new(engine(generation))))));
             generation
         };
@@ -338,21 +389,30 @@ impl Guard {
         #[cfg(target_os = "linux")]
         let generation = {
             let mut slot = control.engine.lock().unwrap();
-            let generation = control.generation.fetch_add(1, Ordering::Relaxed) + 1;
+            let generation = next_generation();
+            control.generation.store(generation, Ordering::Relaxed);
             *slot = Some(Slot { engine: Arc::new(Mutex::new(engine(generation))), wake: wake.clone(), generation });
             generation
         };
-        Attaching { control, generation, wake, _thread: std::marker::PhantomData }
+        Attaching { control, generation, wake, live, _thread: std::marker::PhantomData }
+    }
+
+    /// Names this host as the one delivering updates on this thread until the result drops.
+    pub(crate) fn receiving(&self) -> Receiving {
+        Receiving(RECEIVING.with(|receiving| receiving.replace(Some(self.generation))))
     }
 
     pub(crate) fn drain(&self) {
         #[cfg(not(target_os = "linux"))]
         {
-            // Calls wait for the newest host, so a replaced one leaves them for it.
-            if !self.control.current(self.generation) { return; }
-            let drained = step_attachment(&mut self.control.attachment.lock().unwrap(), AttachEvent::Drain);
+            #[cfg(test)]
+            if let Some(pause) = BEFORE_DEQUEUE.with(|hook| hook.borrow_mut().take()) { pause(); }
+            // Calls wait for the routed host, so another host leaves them for it. Routing changes
+            // only under this lock, so the host it names is the one the jobs were posted to.
+            let drained = step_attachment(&mut self.control.attachment.lock().unwrap(), AttachEvent::Drain { host: self.generation });
             let Some(AttachEffect::Jobs(jobs)) = drained.into_iter().next() else { return };
-            let engine = ENGINES.with(|engines| engines.borrow().get(&self.control.key).map(|(_, engine)| engine.clone()));
+            // The routed host's thread holds its engine.
+            let engine = ENGINES.with(|engines| engines.borrow().get(&self.control.key).filter(|(generation, _)| *generation == self.generation).map(|(_, engine)| engine.clone()));
             if let Some(engine) = engine { for job in jobs { job(&mut engine.borrow_mut()); } }
         }
     }
@@ -402,16 +462,19 @@ impl Guard {
 impl Attaching {
     /// The second half of an attach: this host takes routing, then registers what waited for it.
     fn route<S: 'static>(self, shared: &Arc<Shared<S>>) -> Guard {
-        let Self { control, generation, wake, .. } = self;
+        let Self { control, generation, wake, live, .. } = self;
         {
             let mut route = control.attachment.lock().unwrap();
             control.hosts.fetch_add(1, Ordering::Relaxed);
-            step_attachment(&mut route, AttachEvent::Attach { owner: std::thread::current().id(), wake });
+            // The routed host is the newest, in the same step that routes to it.
+            #[cfg(not(target_os = "linux"))]
+            control.generation.store(generation, Ordering::Relaxed);
+            step_attachment(&mut route, AttachEvent::Attach { owner: std::thread::current().id(), wake, host: generation });
         }
         let handlers = shared.shortcuts.handlers.clone();
         // A host that attached after the close took routing keeps its handlers.
         let cleanup = move |ended: u64| handlers.lock().unwrap().retain(|_, (stamp, _)| stamp.load(Ordering::Relaxed) > ended);
-        let guard = Guard { control, generation, cleanup: Some(Box::new(cleanup)), _thread: std::marker::PhantomData };
+        let guard = Guard { control, generation, cleanup: Some(Box::new(cleanup)), _live: live, _thread: std::marker::PhantomData };
         for (shortcut, handler) in std::mem::take(&mut *shared.shortcuts.pending.lock().unwrap()) {
             if let Err(error) = shortcut.and_then(|s| shared.shortcuts.register(s, handler)) {
                 eprintln!("rune: {error}");
@@ -507,6 +570,7 @@ mod tests {
         let shortcut = "cmd+shift+space".parse().unwrap();
         app.shared.shortcuts.fire(&shortcut).unwrap();
         let mut state = 0;
+        let receiving = guard.receiving();
         for f in app.shared.take().updates { f(&mut state, &mut Tx::default()); }
         assert_eq!(state, 1);
         assert_eq!(handle.register_shortcut(shortcut, |_, _| {}), Err(ShortcutError::Conflict));
@@ -515,6 +579,7 @@ mod tests {
         handle.unregister_shortcut(id).unwrap();
         for f in app.shared.take().updates { f(&mut state, &mut Tx::default()); }
         assert_eq!(state, 1);
+        drop(receiving);
         drop(guard);
         assert_eq!(handle.unregister_shortcut(id), Err(ShortcutError::NotRunning));
     }
@@ -571,7 +636,9 @@ mod tests {
         }).unwrap();
         let mut state = false;
         let mut tx = Tx::default();
+        let receiving = guard.receiving();
         for f in app.shared.take().updates { f(&mut state, &mut tx); }
+        drop(receiving);
         assert!(state);
         assert_eq!(tx.activation_token(), None);
         assert_eq!(app.shared.take().window, Some(crate::app::WindowRequest::Open(Some("compositor-token".into()))));

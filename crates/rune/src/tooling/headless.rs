@@ -181,6 +181,7 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
         shortcuts.drain();
         let requests = shared.take();
         menus.drain();
+        let _receiving = shortcuts.receiving();
         for f in requests.updates {
             rt.update_if(f);
             menus.drain();

@@ -1069,6 +1069,7 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
                 web_sys::console::warn_1(&"Native window management is ignored on web.".into());
             }
             let had_updates = !requests.updates.is_empty();
+            let _receiving = r.shortcuts.receiving();
             for update in requests.updates { r.rt.update_if(update); }
             if !had_updates { r.rt.invalidate(); }
             window.request_redraw();

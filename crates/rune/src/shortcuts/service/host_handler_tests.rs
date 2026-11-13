@@ -8,9 +8,10 @@ fn app(title: &'static str) -> App<u32> { App::new(AppSpec::new(title, (10.0, 10
 
 fn chord(text: &str) -> Shortcut { text.parse().unwrap() }
 
-/// Runs every queued update, and returns how far the handlers moved the count.
-fn deliver(app: &App<u32>) -> u32 {
+/// Runs every queued update as `host` would, and returns how far the handlers moved the count.
+fn deliver(app: &App<u32>, host: Option<&Guard>) -> u32 {
     let mut state = 0;
+    let _receiving = host.map(Guard::receiving);
     for f in app.shared.take().updates { f(&mut state, &mut Tx::default()); }
     state
 }
@@ -49,7 +50,7 @@ fn a_closing_host_leaves_a_later_hosts_handlers_alone() {
 
     assert_eq!(app.shared.shortcuts.handlers.lock().unwrap().len(), 1, "only A's handler went");
     app.shared.shortcuts.fire(&chord("ctrl+alt+h")).unwrap();
-    assert_eq!(deliver(&app), 1, "B's shortcut still reaches its handler");
+    assert_eq!(deliver(&app, Some(&guard)), 1, "B's shortcut still reaches its handler");
     drop(guard);
     assert!(app.shared.shortcuts.handlers.lock().unwrap().is_empty());
 }
@@ -74,7 +75,7 @@ fn closing_a_later_host_ends_the_handlers_of_the_host_it_replaced() {
     // B replaces A without A closing, then closes: the service is closed, as on dev.
     drop(Guard::attach(&app.shared, Arc::new(|| {}), true, false));
     assert!(app.shared.shortcuts.handlers.lock().unwrap().is_empty());
-    assert_eq!(deliver(&app), 0, "A's queued activation runs nothing");
+    assert_eq!(deliver(&app, None), 0, "A's queued activation runs nothing");
     finish.send(()).unwrap();
     first.join().unwrap();
 }

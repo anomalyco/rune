@@ -196,7 +196,10 @@ impl Model for NewControl {
     }
 
     fn finish_attach(&mut self, thread: ThreadId, wake: Waker) {
-        assert!(step_attachment(&mut self.attachment, AttachEvent::Attach { owner: thread, wake }).is_empty());
+        // The host is named by the engine it installed, if no close has taken it since.
+        let engine = if self.linux { self.engine } else { self.engines.get(&thread).copied() };
+        let host = engine.unwrap_or_default().into();
+        assert!(step_attachment(&mut self.attachment, AttachEvent::Attach { owner: thread, wake, host }).is_empty());
     }
 
     fn call(&mut self, thread: ThreadId, job: u32) -> Outcome {
@@ -221,7 +224,9 @@ impl Model for NewControl {
 
     fn drain(&mut self, thread: ThreadId) -> Outcome {
         if self.linux { return Outcome::Drained { ran: vec![], dropped: vec![] }; }
-        let Some(AttachEffect::Jobs(jobs)) = step_attachment(&mut self.attachment, AttachEvent::Drain).into_iter().next() else {
+        // As on dev, any drainer takes the calls: the walk doesn't model host generations (r410).
+        let host = self.attachment.host().unwrap_or_default();
+        let Some(AttachEffect::Jobs(jobs)) = step_attachment(&mut self.attachment, AttachEvent::Drain { host }).into_iter().next() else {
             return Outcome::Drained { ran: vec![], dropped: vec![] };
         };
         if self.engines.contains_key(&thread) { Outcome::Drained { ran: jobs, dropped: vec![] } } else { Outcome::Drained { ran: vec![], dropped: jobs } }
@@ -249,7 +254,7 @@ impl Model for NewControl {
     fn view(&self) -> RouteView {
         let engines = sorted(&self.engines);
         match &self.attachment {
-            Attachment::Attached { owner, wake, jobs } => (Some(*owner), Some(address(wake)), jobs.clone(), self.engine, engines),
+            Attachment::Attached { owner, wake, jobs, .. } => (Some(*owner), Some(address(wake)), jobs.clone(), self.engine, engines),
             Attachment::Detached | Attachment::Closed => (None, None, vec![], self.engine, engines),
         }
     }

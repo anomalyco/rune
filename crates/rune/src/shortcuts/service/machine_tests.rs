@@ -22,13 +22,26 @@ fn only_a_close_reaches_closed_and_a_later_host_can_attach() {
     let mut state = Attachment::<u32>::Detached;
     assert!(matches!(step_attachment(&mut state, AttachEvent::Call { from: thread, shared: true }).into_iter().next(), Some(AttachEffect::Refuse)));
     assert!(matches!(state, Attachment::Detached));
-    step_attachment(&mut state, AttachEvent::Attach { owner: thread, wake: Arc::new(|| {}) });
+    step_attachment(&mut state, AttachEvent::Attach { owner: thread, wake: Arc::new(|| {}), host: 1 });
     assert!(matches!(state, Attachment::Attached { .. }));
     step_attachment(&mut state, AttachEvent::Close);
     assert!(matches!(state, Attachment::Closed));
     assert!(matches!(step_attachment(&mut state, AttachEvent::Call { from: thread, shared: true }).into_iter().next(), Some(AttachEffect::Refuse)));
-    assert!(step_attachment(&mut state, AttachEvent::Attach { owner: thread, wake: Arc::new(|| {}) }).is_empty());
+    assert!(step_attachment(&mut state, AttachEvent::Attach { owner: thread, wake: Arc::new(|| {}), host: 2 }).is_empty());
     assert!(matches!(state, Attachment::Attached { .. }));
+}
+
+#[test]
+fn only_the_routed_host_takes_the_waiting_calls() {
+    let mut state = Attachment::<u32>::Detached;
+    step_attachment(&mut state, AttachEvent::Attach { owner: std::thread::current().id(), wake: Arc::new(|| {}), host: 1 });
+    let other = std::thread::spawn(|| std::thread::current().id()).join().unwrap();
+    assert!(matches!(step_attachment(&mut state, AttachEvent::Call { from: other, shared: false }).into_iter().next(), Some(AttachEffect::Wait)));
+    step_attachment(&mut state, AttachEvent::Post(7));
+    // A later host takes routing; the call stays queued for it.
+    step_attachment(&mut state, AttachEvent::Attach { owner: std::thread::current().id(), wake: Arc::new(|| {}), host: 2 });
+    assert!(step_attachment(&mut state, AttachEvent::Drain { host: 1 }).is_empty(), "the replaced host leaves it");
+    assert!(matches!(step_attachment(&mut state, AttachEvent::Drain { host: 2 }).into_iter().next(), Some(AttachEffect::Jobs(jobs)) if jobs == [7]));
 }
 
 // The engine as it was, with `super::backend` behind a field and its own process-wide list.
