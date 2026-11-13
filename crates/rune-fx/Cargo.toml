@@ -16,7 +16,7 @@ wgpu = { version = "30", default-features = false, features = ["vulkan", "dx12"]
 
 [dev-dependencies]
 # The examples' headless runs (`--snap`, `--trace`, ...) in release builds.
-rune = { path = "../rune", default-features = false, features = ["tooling"] }
+rune = { path = "../rune", default-features = false, features = ["keys-overlay"] }
 rune-ref = { path = "../rune-ref" }
 ab_glyph = "0.2.32"
 png = "0.18"

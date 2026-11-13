@@ -2541,6 +2541,9 @@ $L --desktop examples/launcher/backdrop.png --script examples/launcher/scripts/d
   the app's root background, falling back to `--theme` when the background is transparent.
   `--pointer` adds a ripple at each press. A separate runtime draws both after the app, so they
   appear in `--video`, `--out`, `--snap` and strips but never in `--tree` or `--trace`.
+  That runtime is a second `Runtime` in the exe (about 1.46 MB), so a release build draws them only
+  with the `keys-overlay` feature (which includes `tooling`; Rune's examples have it); debug builds
+  always do.
 - **Desktop recordings**: `--desktop BACKDROP.png` renders all of a multi-window app's visible
   windows into one frame, so a launcher, its panel and the app's other windows record together
   the way a screen recording would show them. Each window renders with its own state into its

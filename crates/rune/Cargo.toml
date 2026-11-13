@@ -18,6 +18,10 @@ webgl = ["wgpu/webgl"]
 # 3,480,576 B less), and a headless argument makes `run` fail saying so; `rune::tooling::headless_run`
 # and the test helpers work either way.
 tooling = []
+# `--keys` and `--pointer` (keycaps and click ripples over headless frames and videos) in release builds.
+# They draw with a second `Runtime`, about 1.46 MB of an app's exe, so `tooling` leaves them out;
+# debug builds always have them.
+keys-overlay = ["tooling"]
 # Headless benchmark instrumentation; ordinary builds contain no phase clocks.
 frame-profile = ["tooling", "dep:procwatch"]
 # A measuring build's heap dumps (procwatch's `alloc-sites`) also list the GPU device's allocations.

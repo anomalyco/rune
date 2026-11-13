@@ -6,7 +6,7 @@ license.workspace = true
 publish = false
 
 [dependencies]
-rune = { path = "../../crates/rune", features = ["tooling"] }
+rune = { path = "../../crates/rune", features = ["keys-overlay"] }
 rune-motion = { path = "../../crates/rune-motion" }
 rune-fx = { path = "../../crates/rune-fx" }
 wgpu = { version = "30", default-features = false, features = ["std", "parking_lot", "metal", "wgsl"] }

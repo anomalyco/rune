@@ -7,7 +7,7 @@ publish = false
 description = "Renders the material stills on Rune's home page headless: liquid metal, glass and light."
 
 [dependencies]
-rune = { path = "../../crates/rune", features = ["tooling"] }
+rune = { path = "../../crates/rune", features = ["keys-overlay"] }
 rune-fx = { path = "../../crates/rune-fx" }
 rune-light = { path = "../../crates/rune-light" }
 wgpu = { version = "30", default-features = false, features = ["std", "parking_lot", "metal", "wgsl"] }

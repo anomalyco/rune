@@ -1,5 +1,10 @@
 //! `--keys` and `--pointer`: screencast-style keycaps and click ripples drawn over headless
 //! frames. A separate runtime draws them, so they never enter the app's tree.
+//!
+//! That runtime is a second instance of `Runtime` (about 1.46 MB of code in an app's release exe),
+//! so a release build has the overlay only with Rune's `keys-overlay` feature; debug builds always
+//! do. Without it `--keys` and `--pointer` stop the run with a message naming the feature.
+#![cfg_attr(not(any(debug_assertions, feature = "keys-overlay")), allow(dead_code, unused_imports))]
 
 use crate::edit::{Key, KeyEvent, Mods};
 use crate::el::{El, col, el, text};
@@ -178,6 +183,7 @@ fn title(name: &str) -> String {
     format!("{first}{}", chars.as_str().to_lowercase())
 }
 
+#[cfg(any(debug_assertions, feature = "keys-overlay"))]
 #[derive(Clone, Default, PartialEq)]
 pub(crate) struct Scene {
     caps: Vec<(u64, String)>,
@@ -196,6 +202,7 @@ pub(crate) fn parse_theme(s: &str) -> Option<Option<bool>> {
     })
 }
 
+#[cfg(any(debug_assertions, feature = "keys-overlay"))]
 /// The overlay's own runtime: caps and ripples as keyed elements whose enter and exit run on
 /// the motion system's springs.
 pub(crate) struct Overlay {
@@ -205,6 +212,7 @@ pub(crate) struct Overlay {
     theme: Option<bool>,
 }
 
+#[cfg(any(debug_assertions, feature = "keys-overlay"))]
 impl Overlay {
     pub(crate) fn new(size: (f32, f32), scale: f32, keys: Option<Corner>, theme: Option<bool>, pointer: bool) -> Overlay {
         let scene = Scene { corner: keys.unwrap_or_default(), ..Scene::default() };
@@ -249,6 +257,7 @@ impl Overlay {
     }
 }
 
+#[cfg(any(debug_assertions, feature = "keys-overlay"))]
 fn view(s: &Scene, _: &mut Cx<Scene>) -> El {
     let caps = col().gap(8.0).children(s.caps.iter().map(|(id, label)| cap(*id, label, s.dark)));
     let m = Some(MARGIN);
@@ -263,6 +272,7 @@ fn view(s: &Scene, _: &mut Cx<Scene>) -> El {
     el().w_full().h_full().child(caps).children(s.ripples.iter().map(|&(id, x, y)| ripple(id, x, y)))
 }
 
+#[cfg(any(debug_assertions, feature = "keys-overlay"))]
 fn cap(id: u64, label: &str, dark: bool) -> El {
     // Blending is linear, so a dark cap needs a high alpha to read as dark over light content.
     let (fill, border, ink, shadow) = if dark {
@@ -279,6 +289,7 @@ fn cap(id: u64, label: &str, dark: bool) -> El {
         .transition(Transition::asymmetric(Transition::scale(0.85), Transition::opacity()).hold_layout())
 }
 
+#[cfg(any(debug_assertions, feature = "keys-overlay"))]
 fn ripple(id: u64, x: f32, y: f32) -> El {
     const R: f32 = 14.0;
     el().key(format!("ripple-{id}")).absolute(x - R, y - R).size(2.0 * R, 2.0 * R).radius(R)
@@ -359,3 +370,24 @@ mod tests {
             (Some(None), Some(Some(false)), Some(Some(true)), None));
     }
 }
+
+/// Without `keys-overlay` in a release build: no overlay can exist, so its runtime isn't linked.
+#[cfg(not(any(debug_assertions, feature = "keys-overlay")))]
+pub(crate) struct Overlay(std::convert::Infallible);
+
+#[cfg(not(any(debug_assertions, feature = "keys-overlay")))]
+impl Overlay {
+    pub(crate) fn new(_: (f32, f32), _: f32, _: Option<Corner>, _: Option<bool>, _: bool) -> Overlay {
+        crate::tooling::die("--keys and --pointer need Rune's `keys-overlay` feature in a release build (rune = { ..., features = [\"keys-overlay\"] }); debug builds always have it")
+    }
+    pub(crate) fn set_srgb_blend(&mut self, _: bool) { match self.0 {} }
+    pub(crate) fn key(&mut self, _: f64, _: &KeyEvent) { match self.0 {} }
+    pub(crate) fn chord(&mut self, _: f64, _: &crate::Shortcut) { match self.0 {} }
+    pub(crate) fn press(&mut self, _: f64, _: f32, _: f32) { match self.0 {} }
+    pub(crate) fn frame(&mut self, _: f64, _: f64, _: bool) -> &mut Runtime<Scene> { match self.0 {} }
+}
+
+/// The type the overlay's frame names; never built without the feature.
+#[cfg(not(any(debug_assertions, feature = "keys-overlay")))]
+#[derive(Clone, Default, PartialEq)]
+pub(crate) struct Scene;
