@@ -20,7 +20,8 @@ static PRETTY: AtomicBool = AtomicBool::new(false);
 /// Wraps the app's text as `text-wrap-style: pretty` does in Chromium: a paragraph that would end
 /// on a lone short word takes a word or more down with it. Text in a monospace family, justified,
 /// with `wrap_anywhere`, in an editor, cut to a number of lines or opted out with
-/// [`El::wrap_greedy`](crate::El::wrap_greedy) keeps greedy lines. Call it before any text is laid
+/// [`El::wrap_greedy`](crate::El::wrap_greedy) keeps greedy lines, as does a paragraph whose last
+/// line holds an isolated run (inline code), as in Chromium. Call it before any text is laid
 /// out: layouts are cached.
 pub fn set_pretty_wrap(on: bool) {
     PRETTY.store(on, Ordering::Relaxed);
@@ -89,6 +90,14 @@ fn paragraph(lines: &[Line<'_, Ink>], text: &str, font_size: f32, scale: f32, ma
     let last = &lines[n - 1];
     let m = last.metrics();
     if m.advance - m.hanging_advance >= max_width / 3.0 {
+        return None;
+    }
+    // Nor when the last line holds an isolate (`unicode-bidi: isolate`, as Desktop sets on inline
+    // code): Chromium then keeps the greedy lines. Measured in official Desktop on Windows, 1x: a
+    // paragraph whose last word is inline code keeps `… for` / `session.renamed.`; the same words
+    // as plain text, or in a plain `<span>`, move `for` down; an isolate on an earlier line doesn't
+    // stop it.
+    if text[last.text_range()].chars().any(|c| ('\u{2066}'..='\u{2069}').contains(&c)) {
         return None;
     }
     let first = n.saturating_sub(MAX_LINES);
