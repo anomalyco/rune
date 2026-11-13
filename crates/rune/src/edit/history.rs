@@ -307,6 +307,153 @@ impl TextEdit {
     }
 }
 
+/// What a stored history looks like (`TextEdit::history_json`): version 1.
+const HISTORY_FORMAT: u64 = 1;
+
+impl TextEdit {
+    /// How many steps undo and redo hold. A change says the history moved, for an app that
+    /// stores it ([`TextEdit::history_json`]) only when it has.
+    pub fn history_len(&self) -> (usize, usize) {
+        (self.history.undo.len(), self.history.redo.len())
+    }
+
+    /// The undo and redo history as JSON, for an app to keep past a restart and give back with
+    /// [`TextEdit::restore_history_json`]: the newest steps, at most `max_steps` of them and
+    /// about `max_bytes` of document between them (each step is the document before and after
+    /// it: text, selection, marks, blocks). `None` for a secure field, which records nothing,
+    /// and for an empty history.
+    pub fn history_json(&self, max_steps: usize, max_bytes: usize) -> Option<serde_json::Value> {
+        if self.secure || (self.history.undo.is_empty() && self.history.redo.is_empty()) {
+            return None;
+        }
+        let (mut steps, mut bytes) = (0, 0);
+        let mut fits = |c: &Change| {
+            steps += 1;
+            bytes += c.bytes();
+            steps <= max_steps && bytes <= max_bytes
+        };
+        // Redo first: the steps nearest the document as it is.
+        let redo: Vec<_> = self.history.redo.iter().rev().take_while(|c| fits(c)).map(change_json).collect();
+        let mut undo: Vec<_> = self.history.undo.iter().rev().take_while(|c| fits(c)).map(change_json).collect();
+        undo.reverse();
+        let redo: Vec<_> = redo.into_iter().rev().collect();
+        Some(serde_json::json!({ "v": HISTORY_FORMAT, "undo": undo, "redo": redo }))
+    }
+
+    /// Takes back a history [`TextEdit::history_json`] wrote, when it leads to this document:
+    /// its newest undo step ends in this text (or its newest redo step starts from it). A history
+    /// stored a few keystrokes before the document was (an app stores it less often than the
+    /// text) gets one more step, from where it ends to this document, so the first undo goes
+    /// back to where the stored history stood. Anything that doesn't fit (another document, a
+    /// step whose offsets aren't in its text) is left out and the field keeps no history.
+    /// Returns whether it was taken.
+    pub fn restore_history_json(&mut self, v: &serde_json::Value) -> bool {
+        if self.secure || self.group.is_open() || v["v"].as_u64() != Some(HISTORY_FORMAT) {
+            return false;
+        }
+        let read = |key: &str| -> Option<Vec<Change>> { v[key].as_array()?.iter().map(change_from).collect() };
+        let (Some(mut undo), Some(mut redo)) = (read("undo"), read("redo")) else { return false };
+        self.sync_invariants();
+        let now = self.snapshot_now();
+        let leads_here = undo.last().map(|c| &c.after).or_else(|| redo.last().map(|c| &c.before)).is_some_and(|s| s.same_doc(&now));
+        if !leads_here {
+            let Some(last) = undo.last().map(|c| c.after.clone()) else { return false };
+            if last.text == now.text {
+                return false;
+            }
+            redo.clear();
+            undo.push(Change { before: last, after: now });
+        }
+        let mut h = History { undo: undo.into(), redo, bytes: 0, run: Run::Closed };
+        h.bytes = h.undo.iter().chain(h.redo.iter()).map(Change::bytes).sum();
+        while h.undo.len() > HISTORY_STEPS || h.bytes > HISTORY_BYTES {
+            let Some(c) = h.undo.pop_front() else { break };
+            h.bytes -= c.bytes();
+        }
+        self.history = Arc::new(h);
+        true
+    }
+}
+
+fn change_json(c: &Change) -> serde_json::Value {
+    serde_json::json!({ "b": snapshot_json(&c.before), "a": snapshot_json(&c.after) })
+}
+
+fn change_from(v: &serde_json::Value) -> Option<Change> {
+    Some(Change { before: snapshot_from(&v["b"])?, after: snapshot_from(&v["a"])? })
+}
+
+fn snapshot_json(s: &Snapshot) -> serde_json::Value {
+    let marks: Vec<_> = s
+        .marks
+        .iter()
+        .map(|m| {
+            let kind = match &m.mark {
+                Mark::Bold => serde_json::json!("b"),
+                Mark::Italic => serde_json::json!("i"),
+                Mark::Underline => serde_json::json!("u"),
+                Mark::Strike => serde_json::json!("s"),
+                Mark::Code => serde_json::json!("c"),
+                Mark::Link(url) => serde_json::json!(["l", url]),
+                Mark::Pill(id) => serde_json::json!(["p", id]),
+            };
+            serde_json::json!([m.start, m.end, kind])
+        })
+        .collect();
+    let blocks: Vec<_> = s
+        .blocks
+        .iter()
+        .map(|b| match b {
+            Block::Paragraph => serde_json::json!("p"),
+            Block::Quote => serde_json::json!("q"),
+            Block::Code => serde_json::json!("c"),
+            Block::Bullet(l) => serde_json::json!(["b", l]),
+            Block::Numbered(l) => serde_json::json!(["n", l]),
+        })
+        .collect();
+    serde_json::json!({ "t": s.text.as_str(), "a": s.anchor, "f": s.focus, "m": marks, "k": blocks, "s": s.soft_breaks })
+}
+
+/// A stored snapshot, when every offset in it is on a character boundary of its text.
+fn snapshot_from(v: &serde_json::Value) -> Option<Snapshot> {
+    let text = v["t"].as_str()?.to_owned();
+    let at = |n: &serde_json::Value| n.as_u64().map(|n| n as usize).filter(|&n| text.is_char_boundary(n));
+    let (anchor, focus) = (at(&v["a"])?, at(&v["f"])?);
+    let marks = v["m"]
+        .as_array()?
+        .iter()
+        .map(|m| {
+            let (start, end) = (at(&m[0])?, at(&m[1])?);
+            let mark = match (&m[2], m[2][0].as_str(), m[2][1].as_str()) {
+                (k, _, _) if k == "b" => Mark::Bold,
+                (k, _, _) if k == "i" => Mark::Italic,
+                (k, _, _) if k == "u" => Mark::Underline,
+                (k, _, _) if k == "s" => Mark::Strike,
+                (k, _, _) if k == "c" => Mark::Code,
+                (_, Some("l"), Some(url)) => Mark::Link(url.to_owned()),
+                (_, Some("p"), Some(id)) => Mark::Pill(id.to_owned()),
+                _ => return None,
+            };
+            (start < end).then_some(MarkRange { start, end, mark })
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let lines = text.split('\n').count();
+    let blocks = v["k"]
+        .as_array()?
+        .iter()
+        .map(|b| match (b.as_str(), b[0].as_str(), b[1].as_u64()) {
+            (Some("p"), ..) => Some(Block::Paragraph),
+            (Some("q"), ..) => Some(Block::Quote),
+            (Some("c"), ..) => Some(Block::Code),
+            (_, Some("b"), Some(l)) => Some(Block::Bullet((l as u8).min(MAX_LIST_LEVEL))),
+            (_, Some("n"), Some(l)) => Some(Block::Numbered((l as u8).min(MAX_LIST_LEVEL))),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>()
+        .filter(|b| b.is_empty() || b.len() == lines)?;
+    let soft_breaks = v["s"].as_array()?.iter().map(|n| n.as_u64().map(|n| n as u32).filter(|&n| n > 0 && (n as usize) < lines)).collect::<Option<Vec<_>>>()?;
+    Some(Snapshot { text: Arc::new(Zeroizing::new(text)), anchor, focus, marks, blocks, soft_breaks })
+}
 #[cfg(test)]
 #[path = "history_tests.rs"]
 mod tests;

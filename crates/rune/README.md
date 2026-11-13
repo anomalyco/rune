@@ -1478,6 +1478,12 @@ newline on `Shift+Return` and pastes plain text. The mark and block methods work
   `edit.paragraphs()`, adding soft breaks with `.with_soft_breaks(edit.soft_breaks().to_vec())`
   (or `set_soft_breaks`) and dropping undo/redo stacks with `edit.clear_history()`. Accessibility
   roles (`textbox`) and plain-text values are unchanged.
+- **Undo history past a restart**: `edit.history_json(max_steps, max_bytes)` gives the newest
+  undo and redo steps (each the document before and after it: text, selection, marks, blocks)
+  as JSON for the app to store, and `edit.restore_history_json(&v)` takes them back when they
+  lead to the field's document; a history stored a few keystrokes early gets one step from where
+  it ends to the document. A secure field gives and takes none. `edit.history_len()` (undo, redo)
+  changes when the history moves, so an app can store it only then.
 - **Allowed formatting**: `.allow_marks([Mark::Bold, Mark::Italic, ..])` and
   `.allow_blocks([Block::Bullet(0), ..])` keep a field to what its app can store (Markdown has no
   underline, say). The field never holds the rest: its shortcut (`⌘U`) goes on to the app's key
