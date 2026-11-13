@@ -27,7 +27,9 @@ impl<S: 'static> AnyHost for Host<S> {
         // running link, a timer due sooner than a frame waits a frame (`timer_deadline`).
         let now = Instant::now();
         let win = self.win.as_ref();
-        let runtime = timer_deadline(&self.rt).filter(|_| !win.is_some_and(Win::paced));
+        // A frame waiting for room in the swap chain comes when there is (`slot`): its timers
+        // would turn the loop at once until then.
+        let runtime = timer_deadline(&self.rt).filter(|_| !win.is_some_and(|w| w.paced() || w.waits_for_slot()));
         // A due timer whose frame is still on its way takes the frame's bound instead
         // (`TimerFrame`), so the loop sleeps rather than waking at once for a frame that can't
         // come.
@@ -214,6 +216,7 @@ impl<S: 'static> Host<S> {
         }
         if matches!(cause, StartCause::ResumeTimeReached { .. } | StartCause::Poll)
             && timer_deadline(&self.rt).is_some_and(|deadline| deadline <= Instant::now())
+            && !self.win.as_ref().is_some_and(Win::waits_for_slot)
         {
             let hidden = self.shown_win().is_none();
             if hidden && !(launcher && self.hidden_launcher_renders()) {
