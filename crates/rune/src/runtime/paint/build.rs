@@ -1124,6 +1124,7 @@ impl<S: 'static> Runtime<S> {
                         rest: pinh.still.0,
                         gliding,
                         caret: input_caret.map(|(caret, _)| caret),
+                        shown: if node_turn.is_none() && !pinh.in_cache { [clip[1].max(vp[1] - m), clip[3].min(vp[3] + m)] } else { [clip[1], clip[3]] },
                     },
                     &sel_ranges,
                     &mark_ranges,

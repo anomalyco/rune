@@ -19,6 +19,10 @@ pub(super) struct LeafBox {
     pub rest: f32,
     pub gliding: bool,
     pub caret: Option<[f32; 4]>,
+    /// The rows of the screen, in pixels, where what it draws can show: its clip's, cut to the
+    /// window's unless it draws into a layer turned or cached first. A long text draws its
+    /// lines there and no others.
+    pub shown: [f32; 2],
 }
 
 impl<S: 'static> Runtime<S> {
@@ -50,6 +54,7 @@ impl<S: 'static> Runtime<S> {
             rest,
             gliding,
             caret: input_caret,
+            shown,
         } = b;
         let (w, h) = ((r[2] - r[0]).max(0.0), (r[3] - r[1]).max(0.0));
         let (w_exact, h_exact) = ((r_exact[2] - r_exact[0]).max(0.0), (r_exact[3] - r_exact[1]).max(0.0));
@@ -265,7 +270,7 @@ impl<S: 'static> Runtime<S> {
                 let e = &inp.edit;
                 // The bytes of the paragraphs the clip shows, which a long draft's selection and
                 // spelling marks are drawn in; the newline after the last one included.
-                let (top, bottom) = if tk > 1e-4 { ((clip[1] - origin[1]) / tk, (clip[3] - origin[1]) / tk) } else { (f32::NEG_INFINITY, f32::INFINITY) };
+                let (top, bottom) = if tk > 1e-4 { ((shown[0] - origin[1]) / tk, (shown[1] - origin[1]) / tk) } else { (f32::NEG_INFINITY, f32::INFINITY) };
                 let (shown_a, shown_b) = flow.pieces_in(top, bottom).fold((usize::MAX, 0), |(lo, hi), p| (lo.min(p.start), hi.max(p.end.saturating_add(1))));
                 let departing = self.flights.iter().any(|f| f.departs(&n.path, n.key.as_deref())
                     && f.alphas(f.destination, now, self.reduced_motion).0 > 0.0);
@@ -362,7 +367,7 @@ impl<S: 'static> Runtime<S> {
             let single = laid.single().is_some();
             let em = spec.spans.iter().filter_map(|sp| sp.size).fold(spec.style.size.max(spec.style.line_px()), f32::max);
             let pad = 2.0 * em * s + 2.0 / raster.max(1e-4);
-            let rows = if tk > 1e-4 { (clip[1] - rest_origin[1]) / tk - pad..(clip[3] - rest_origin[1]) / tk + pad } else { f32::NEG_INFINITY..f32::INFINITY };
+            let rows = if tk > 1e-4 { (shown[0] - rest_origin[1]) / tk - pad..(shown[1] - rest_origin[1]) / tk + pad } else { f32::NEG_INFINITY..f32::INFINITY };
             for piece in flow.pieces_in(rows.start, rows.end) {
                 let layout = piece.layout;
                 let (origin, rest_origin) = ([origin[0], origin[1] + piece.y * tk], [rest_origin[0], rest_origin[1] + piece.y * tk]);
@@ -526,7 +531,7 @@ impl<S: 'static> Runtime<S> {
                     let band = if tk > 1e-4 {
                         let em = spec.spans.iter().filter_map(|sp| sp.size).fold(spec.style.size.max(spec.style.line_px()), f32::max);
                         let pad = 2.0 * em * s + 2.0 / raster.max(1e-4);
-                        (clip[1] - origin[1]) / tk - pad..(clip[3] - origin[1]) / tk + pad
+                        (shown[0] - origin[1]) / tk - pad..(shown[1] - origin[1]) / tk + pad
                     } else {
                         f32::NEG_INFINITY..f32::INFINITY
                     };
