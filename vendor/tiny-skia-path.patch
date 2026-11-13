@@ -1,0 +1,671 @@
+diff --git a/src/dash.rs b/src/dash.rs
+index e648ad9..863db27 100644
+--- a/src/dash.rs
++++ b/src/dash.rs
+@@ -296,7 +296,8 @@ impl Iterator for ContourMeasureIter<'_> {
+ 
+                     prev_p = p0;
+                 }
+-                PathSegment::QuadTo(p0, p1) => {
++                // Dashing measures a conic as the quad through its control point.
++                PathSegment::QuadTo(p0, p1) | PathSegment::ConicTo(p0, p1, _) => {
+                     let prev_d = distance;
+                     distance = contour.compute_quad_segs(
+                         prev_p,
+diff --git a/src/lib.rs b/src/lib.rs
+index e80a70c..41700ba 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -248,8 +248,9 @@ fn set_point_length(
+     let yy = y as f64;
+     let dmag = (xx * xx + yy * yy).sqrt();
+     let dscale = length as f64 / dmag;
+-    x *= dscale as f32;
+-    y *= dscale as f32;
++    // As Skia's `set_point_length`: the float times the double, rounded once.
++    x = (x as f64 * dscale) as f32;
++    y = (y as f64 * dscale) as f32;
+ 
+     // check if we're not finite, or we're zero-length
+     if !x.is_finite() || !y.is_finite() || (x == 0.0 && y == 0.0) {
+diff --git a/src/path.rs b/src/path.rs
+index a72d06d..89695d9 100644
+--- a/src/path.rs
++++ b/src/path.rs
+@@ -21,6 +21,8 @@ pub enum PathVerb {
+     Line,
+     Quad,
+     Cubic,
++    /// Only in a path built with `PathBuilder::set_keep_conics`.
++    Conic,
+     Close,
+ }
+ 
+@@ -49,6 +51,8 @@ pub enum PathVerb {
+ pub struct Path {
+     pub(crate) verbs: Vec<PathVerb>,
+     pub(crate) points: Vec<Point>,
++    /// Each conic's weight, in order.
++    pub(crate) weights: Vec<f32>,
+     pub(crate) bounds: Rect,
+ }
+ 
+@@ -92,7 +96,7 @@ impl Path {
+                     extremas[0] = p;
+                     count = 1;
+                 }
+-                PathSegment::QuadTo(p0, p1) => {
++                PathSegment::QuadTo(p0, p1) | PathSegment::ConicTo(p0, p1, _) => {
+                     count = compute_quad_extremas(last_point, p0, p1, &mut extremas);
+                 }
+                 PathSegment::CubicTo(p0, p1, p2) => {
+@@ -123,6 +127,11 @@ impl Path {
+         &self.points
+     }
+ 
++    /// Returns each conic's weight, in order.
++    pub fn weights(&self) -> &[f32] {
++        &self.weights
++    }
++
+     /// Returns a transformed in-place path.
+     ///
+     /// Some points may become NaN/inf therefore this method can fail.
+@@ -145,6 +154,7 @@ impl Path {
+             path: self,
+             verb_index: 0,
+             points_index: 0,
++            weight_index: 0,
+             is_auto_close: false,
+             last_move_to: Point::zero(),
+             last_point: Point::zero(),
+@@ -159,8 +169,11 @@ impl Path {
+         PathBuilder {
+             verbs: self.verbs,
+             points: self.points,
++            weights: alloc::vec::Vec::new(),
++            keep_conics: false,
+             last_move_to_index: 0,
+             move_to_required: true,
++            conic_tolerance: 0.0,
+         }
+     }
+ }
+@@ -181,6 +194,10 @@ impl core::fmt::Debug for Path {
+                     "C {} {} {} {} {} {} ",
+                     p0.x, p0.y, p1.x, p1.y, p2.x, p2.y
+                 ))?,
++                PathSegment::ConicTo(p0, p1, w) => s.write_fmt(format_args!(
++                    "K {} {} {} {} {} ",
++                    p0.x, p0.y, p1.x, p1.y, w
++                ))?,
+                 PathSegment::Close => s.write_fmt(format_args!("Z "))?,
+             }
+         }
+@@ -249,6 +266,8 @@ pub enum PathSegment {
+     LineTo(Point),
+     QuadTo(Point, Point),
+     CubicTo(Point, Point, Point),
++    /// A conic's control point, end and weight.
++    ConicTo(Point, Point, f32),
+     Close,
+ }
+ 
+@@ -259,6 +278,7 @@ pub struct PathSegmentsIter<'a> {
+     path: &'a Path,
+     verb_index: usize,
+     points_index: usize,
++    weight_index: usize,
+ 
+     is_auto_close: bool,
+     last_move_to: Point,
+@@ -297,7 +317,7 @@ impl<'a> PathSegmentsIter<'a> {
+ 
+                     return true;
+                 }
+-                PathSegment::QuadTo(p1, p2) => {
++                PathSegment::QuadTo(p1, p2) | PathSegment::ConicTo(p1, p2, _) => {
+                     if iter.last_point == p1 && iter.last_point == p2 {
+                         continue;
+                     }
+@@ -368,6 +388,16 @@ impl<'a> Iterator for PathSegmentsIter<'a> {
+                         self.last_point,
+                     ))
+                 }
++                PathVerb::Conic => {
++                    self.points_index += 2;
++                    self.weight_index += 1;
++                    self.last_point = self.path.points[self.points_index - 1];
++                    Some(PathSegment::ConicTo(
++                        self.path.points[self.points_index - 2],
++                        self.last_point,
++                        self.path.weights[self.weight_index - 1],
++                    ))
++                }
+                 PathVerb::Close => {
+                     let seg = self.auto_close();
+                     self.last_point = self.last_move_to;
+diff --git a/src/path_builder.rs b/src/path_builder.rs
+index 275f528..619962f 100644
+--- a/src/path_builder.rs
++++ b/src/path_builder.rs
+@@ -30,6 +30,13 @@ pub struct PathBuilder {
+     pub(crate) points: Vec<Point>,
+     pub(crate) last_move_to_index: usize,
+     pub(crate) move_to_required: bool,
++    /// How far, in this path's units, the quads a conic becomes may stray from it: Skia's 0.25 of
++    /// a device pixel. 0 (the default) is 0.25; a stroker sets its own from its resolution scale.
++    pub(crate) conic_tolerance: f32,
++    /// Each conic's weight, where `keep_conics` keeps them as conics.
++    pub(crate) weights: Vec<f32>,
++    /// Whether `conic_to` keeps a conic, as Skia's paths do, rather than cutting it into quads.
++    pub(crate) keep_conics: bool,
+ }
+ 
+ impl PathBuilder {
+@@ -40,6 +47,9 @@ impl PathBuilder {
+             points: Vec::new(),
+             last_move_to_index: 0,
+             move_to_required: true,
++            conic_tolerance: 0.0,
++            weights: Vec::new(),
++            keep_conics: false,
+         }
+     }
+ 
+@@ -58,6 +68,9 @@ impl PathBuilder {
+             points: Vec::with_capacity(points_capacity),
+             last_move_to_index: 0,
+             move_to_required: true,
++            conic_tolerance: 0.0,
++            weights: Vec::new(),
++            keep_conics: false,
+         }
+     }
+ 
+@@ -88,6 +101,7 @@ impl PathBuilder {
+             bounds: rect,
+             verbs,
+             points,
++            weights: Vec::new(),
+         }
+     }
+ 
+@@ -114,6 +128,18 @@ impl PathBuilder {
+         self.points.reserve(additional_points);
+     }
+ 
++    /// Keeps each conic `conic_to` adds as a conic, as Skia's own paths do (the stroker then strokes
++    /// it as one), rather than cutting it into quads.
++    pub fn set_keep_conics(&mut self, keep: bool) {
++        self.keep_conics = keep;
++    }
++
++    /// Sets how far, in this path's units, the quads each conic is turned into may stray from it
++    /// (Skia: 0.25 of a device pixel, so 0.25 over the scale the path will be drawn at).
++    pub fn set_conic_tolerance(&mut self, tolerance: f32) {
++        self.conic_tolerance = tolerance;
++    }
++
+     /// Returns the current number of segments in the builder.
+     pub fn len(&self) -> usize {
+         self.verbs.len()
+@@ -179,7 +205,7 @@ impl PathBuilder {
+ 
+     // We do not support conic segments, but Skia still relies on them from time to time.
+     // This method will simply convert the input data into quad segments.
+-    pub(crate) fn conic_to(&mut self, x1: f32, y1: f32, x: f32, y: f32, weight: f32) {
++    pub fn conic_to(&mut self, x1: f32, y1: f32, x: f32, y: f32, weight: f32) {
+         // check for <= 0 or NaN with this test
+         if !(weight > 0.0) {
+             self.line_to(x, y);
+@@ -188,15 +214,23 @@ impl PathBuilder {
+             self.line_to(x, y);
+         } else if weight == 1.0 {
+             self.quad_to(x1, y1, x, y);
++        } else if self.keep_conics {
++            self.inject_move_to_if_needed();
++            self.verbs.push(PathVerb::Conic);
++            self.points.push(Point::from_xy(x1, y1));
++            self.points.push(Point::from_xy(x, y));
++            self.weights.push(weight);
+         } else {
+             self.inject_move_to_if_needed();
+ 
+             let last = self.last_point().unwrap();
++            let tolerance = if self.conic_tolerance > 0.0 { self.conic_tolerance } else { 0.25 };
+             let quadder = path_geometry::AutoConicToQuads::compute(
+                 last,
+                 Point::from_xy(x1, y1),
+                 Point::from_xy(x, y),
+                 weight,
++                tolerance,
+             );
+             if let Some(quadder) = quadder {
+                 // Points are ordered as: 0 - 1 2 - 3 4 - 5 6 - ..
+@@ -341,6 +375,7 @@ impl PathBuilder {
+ 
+         self.verbs.extend_from_slice(&other.verbs);
+         self.points.extend_from_slice(&other.points);
++        self.weights.extend_from_slice(&other.weights);
+     }
+ 
+     pub(crate) fn push_path_builder(&mut self, other: &PathBuilder) {
+@@ -354,6 +389,7 @@ impl PathBuilder {
+ 
+         self.verbs.extend_from_slice(&other.verbs);
+         self.points.extend_from_slice(&other.points);
++        self.weights.extend_from_slice(&other.weights);
+     }
+ 
+     /// Appends, in a reverse order, the first contour of path ignoring path's last point.
+@@ -390,6 +426,13 @@ impl PathBuilder {
+                     points_offset -= 3;
+                     self.cubic_to(pt1.x, pt1.y, pt2.x, pt2.y, pt3.x, pt3.y);
+                 }
++                PathVerb::Conic => {
++                    // A stroker's own builders never keep conics.
++                    let pt1 = other.points[points_offset - 1];
++                    let pt2 = other.points[points_offset - 2];
++                    points_offset -= 2;
++                    self.quad_to(pt1.x, pt1.y, pt2.x, pt2.y);
++                }
+                 PathVerb::Close => {}
+             }
+         }
+@@ -401,6 +444,7 @@ impl PathBuilder {
+     pub fn clear(&mut self) {
+         self.verbs.clear();
+         self.points.clear();
++        self.weights.clear();
+         self.last_move_to_index = 0;
+         self.move_to_required = true;
+     }
+@@ -424,6 +468,7 @@ impl PathBuilder {
+             bounds,
+             verbs: self.verbs,
+             points: self.points,
++            weights: self.weights,
+         })
+     }
+ }
+diff --git a/src/path_geometry.rs b/src/path_geometry.rs
+index 1bb631c..3132f5c 100644
+--- a/src/path_geometry.rs
++++ b/src/path_geometry.rs
+@@ -629,9 +629,8 @@ impl Conic {
+             pow2 += 1;
+         }
+ 
+-        // Unlike Skia, we always expect `pow2` to be at least 1.
+-        // Otherwise it produces ugly results.
+-        Some(pow2.max(1))
++        // As Skia: a conic within the tolerance of its hull's quad is that one quad.
++        Some(pow2)
+     }
+ 
+     // Chop this conic into N quads, stored continuously in pts[], where
+@@ -865,15 +864,15 @@ fn between(a: f32, b: f32, c: f32) -> bool {
+     (a - b) * (c - b) <= 0.0
+ }
+ 
+-pub(crate) struct AutoConicToQuads {
++pub struct AutoConicToQuads {
+     pub points: [Point; 64],
+     pub len: u8, // the number of quads
+ }
+ 
+ impl AutoConicToQuads {
+-    pub fn compute(pt0: Point, pt1: Point, pt2: Point, weight: f32) -> Option<Self> {
++    pub fn compute(pt0: Point, pt1: Point, pt2: Point, weight: f32, tolerance: f32) -> Option<Self> {
+         let conic = Conic::new(pt0, pt1, pt2, weight);
+-        let pow2 = conic.compute_quad_pow2(0.25)?;
++        let pow2 = conic.compute_quad_pow2(tolerance)?;
+         let mut points = [Point::zero(); 64];
+         let len = conic.chop_into_quads_pow2(pow2, &mut points);
+         Some(AutoConicToQuads { points, len })
+diff --git a/src/stroker.rs b/src/stroker.rs
+index 6a6aa55..9ee46d3 100644
+--- a/src/stroker.rs
++++ b/src/stroker.rs
+@@ -127,6 +127,7 @@ impl Default for LineJoin {
+ }
+ 
+ const QUAD_RECURSIVE_LIMIT: usize = 3;
++const CONIC_RECURSIVE_LIMIT: usize = 2;
+ 
+ // quads with extreme widths (e.g. (0,1) (1,6) (0,3) width=5e7) recurse to point of failure
+ // largest seen for normal cubics: 5, 26
+@@ -347,6 +348,11 @@ impl PathStroker {
+         // The '4' below matches the fill scan converter's error term.
+         self.inv_res_scale = (res_scale * 4.0).invert();
+         self.inv_res_scale_squared = self.inv_res_scale.sqr();
++        // Skia turns a conic into quads in device space, a quarter pixel from it at most; the
++        // outline here is in the path's own units, res_scale device pixels each.
++        self.inner.conic_tolerance = 0.25 / res_scale;
++        self.outer.conic_tolerance = 0.25 / res_scale;
++        self.cusper.conic_tolerance = 0.25 / res_scale;
+ 
+         self.radius = width.get().half();
+         self.inv_miter_limit = inv_miter_limit;
+@@ -408,6 +414,10 @@ impl PathStroker {
+                     self.cubic_to(p1, p2, p3);
+                     last_segment_is_line = false;
+                 }
++                PathSegment::ConicTo(p1, p2, w) => {
++                    self.conic_to(p1, p2, w);
++                    last_segment_is_line = false;
++                }
+                 PathSegment::Close => {
+                     if line_cap != LineCap::Butt {
+                         // If the stroke consists of a moveTo followed by a close, treat it
+@@ -551,6 +561,127 @@ impl PathStroker {
+         self.post_join_to(p2, normal_bc, unit_bc);
+     }
+ 
++    // As Skia's `SkPathStroker::conicTo`: a conic stroked as itself, its outline quads fitted
++    // to the conic's own offsets.
++    fn conic_to(&mut self, p1: Point, p2: Point, weight: f32) {
++        let conic = [self.prev_pt, p1, p2];
++        let (reduction, reduction_type) = check_conic_linear(&conic, weight);
++        if reduction_type == ReductionType::Point || reduction_type == ReductionType::Line {
++            self.line_to(p2, None);
++            return;
++        }
++
++        if reduction_type == ReductionType::Degenerate {
++            self.line_to(reduction, None);
++            let save_joiner = self.joiner;
++            self.joiner = round_joiner;
++            self.line_to(p2, None);
++            self.joiner = save_joiner;
++            return;
++        }
++
++        let mut normal_ab = Point::zero();
++        let mut unit_ab = Point::zero();
++        let mut normal_bc = Point::zero();
++        let mut unit_bc = Point::zero();
++        if !self.pre_join_to(p1, false, &mut normal_ab, &mut unit_ab) {
++            self.line_to(p2, None);
++            return;
++        }
++
++        let mut quad_points = QuadConstruct::default();
++        self.init_quad(StrokeType::Outer, NormalizedF32::ZERO, NormalizedF32::ONE, &mut quad_points);
++        self.conic_stroke(&conic, weight, &mut quad_points);
++        self.init_quad(StrokeType::Inner, NormalizedF32::ZERO, NormalizedF32::ONE, &mut quad_points);
++        self.conic_stroke(&conic, weight, &mut quad_points);
++
++        let ok = set_normal_unit_normal(conic[1], conic[2], self.res_scale, self.radius, &mut normal_bc, &mut unit_bc);
++        if !ok {
++            normal_bc = normal_ab;
++            unit_bc = unit_ab;
++        }
++
++        self.post_join_to(p2, normal_bc, unit_bc);
++    }
++
++    fn conic_stroke(&mut self, conic: &[Point; 3], weight: f32, quad_points: &mut QuadConstruct) -> bool {
++        let result_type = self.compare_quad_conic(conic, weight, quad_points);
++        if result_type == ResultType::Quad {
++            let path = if self.stroke_type == StrokeType::Outer { &mut self.outer } else { &mut self.inner };
++            path.quad_to(quad_points.quad[1].x, quad_points.quad[1].y, quad_points.quad[2].x, quad_points.quad[2].y);
++            return true;
++        }
++
++        if result_type == ResultType::Degenerate {
++            self.add_degenerate_line(quad_points);
++            return true;
++        }
++
++        if !quad_points.quad[2].x.is_finite() || !quad_points.quad[2].y.is_finite() {
++            return false;
++        }
++
++        self.recursion_depth += 1;
++        if self.recursion_depth > RECURSIVE_LIMITS[CONIC_RECURSIVE_LIMIT] {
++            self.add_degenerate_line(quad_points);
++            self.recursion_depth -= 1;
++            return true;
++        }
++
++        let mut half = QuadConstruct::default();
++        if !half.init_with_start(quad_points) {
++            self.add_degenerate_line(quad_points);
++            self.recursion_depth -= 1;
++            return true;
++        }
++        if !self.conic_stroke(conic, weight, &mut half) {
++            return false;
++        }
++
++        if !half.init_with_end(quad_points) {
++            self.add_degenerate_line(quad_points);
++            self.recursion_depth -= 1;
++            return true;
++        }
++        if !self.conic_stroke(conic, weight, &mut half) {
++            return false;
++        }
++
++        self.recursion_depth -= 1;
++        true
++    }
++
++    fn compare_quad_conic(&mut self, conic: &[Point; 3], weight: f32, quad_points: &mut QuadConstruct) -> ResultType {
++        if !quad_points.start_set {
++            let mut start = Point::zero();
++            self.conic_perp_ray(conic, weight, quad_points.start_t, &mut start, &mut quad_points.quad[0], Some(&mut quad_points.tangent_start));
++            quad_points.start_set = true;
++        }
++        if !quad_points.end_set {
++            let mut end = Point::zero();
++            self.conic_perp_ray(conic, weight, quad_points.end_t, &mut end, &mut quad_points.quad[2], Some(&mut quad_points.tangent_end));
++            quad_points.end_set = true;
++        }
++
++        let result_type = self.intersect_ray(IntersectRayType::CtrlPt, quad_points);
++        if result_type != ResultType::Quad {
++            return result_type;
++        }
++
++        let mut ray0 = Point::zero();
++        let mut ray1 = Point::zero();
++        self.conic_perp_ray(conic, weight, quad_points.mid_t, &mut ray1, &mut ray0, None);
++        self.stroke_close_enough(&quad_points.quad.clone(), &[ray0, ray1], quad_points)
++    }
++
++    fn conic_perp_ray(&self, conic: &[Point; 3], weight: f32, t: NormalizedF32, tp: &mut Point, on_p: &mut Point, tangent: Option<&mut Point>) {
++        *tp = conic_eval(conic, weight, t.get());
++        let mut dxy = conic_eval_tangent(conic, weight, t.get());
++        if dxy.is_zero() {
++            dxy = conic[2] - conic[0];
++        }
++        self.set_ray_points(*tp, &mut dxy, on_p, tangent);
++    }
+     fn cubic_to(&mut self, pt1: Point, pt2: Point, pt3: Point) {
+         let cubic = [self.prev_pt, pt1, pt2, pt3];
+         let mut reduction = [Point::zero(); 3];
+@@ -677,7 +808,10 @@ impl PathStroker {
+ 
+         self.recursion_depth += 1;
+         if self.recursion_depth > RECURSIVE_LIMITS[self.found_tangents as usize] {
+-            return false; // just abort if projected quad isn't representable
++            // As Skia now does: when it stops making progress, a line, and on.
++            self.add_degenerate_line(quad_points);
++            self.recursion_depth -= 1;
++            return true;
+         }
+ 
+         let mut half = QuadConstruct::default();
+@@ -1019,18 +1153,33 @@ impl PathStroker {
+             return true;
+         }
+ 
++        if !quad_points.quad[2].x.is_finite() || !quad_points.quad[2].y.is_finite() {
++            return false; // just abort if projected quad isn't representable
++        }
++
+         self.recursion_depth += 1;
+         if self.recursion_depth > RECURSIVE_LIMITS[QUAD_RECURSIVE_LIMIT] {
+-            return false; // just abort if projected quad isn't representable
++            // As Skia now does: when it stops making progress, a line, and on.
++            self.add_degenerate_line(quad_points);
++            self.recursion_depth -= 1;
++            return true;
+         }
+ 
+         let mut half = QuadConstruct::default();
+-        half.init_with_start(quad_points);
++        if !half.init_with_start(quad_points) {
++            self.add_degenerate_line(quad_points);
++            self.recursion_depth -= 1;
++            return true;
++        }
+         if !self.quad_stroke(quad, &mut half) {
+             return false;
+         }
+ 
+-        half.init_with_end(quad_points);
++        if !half.init_with_end(quad_points) {
++            self.add_degenerate_line(quad_points);
++            self.recursion_depth -= 1;
++            return true;
++        }
+         if !self.quad_stroke(quad, &mut half) {
+             return false;
+         }
+@@ -1098,9 +1247,9 @@ impl PathStroker {
+         on_p.x = tp.x + axis_flip * dxy.y;
+         on_p.y = tp.y - axis_flip * dxy.x;
+ 
++        // As Skia now keeps it: the tangent as a vector, not a point a tangent's length on.
+         if let Some(ref mut tangent) = tangent {
+-            tangent.x = on_p.x + dxy.x;
+-            tangent.y = on_p.y + dxy.y;
++            **tangent = *dxy;
+         }
+     }
+ 
+@@ -1191,8 +1340,8 @@ impl PathStroker {
+     ) -> ResultType {
+         let start = quad_points.quad[0];
+         let end = quad_points.quad[2];
+-        let a_len = quad_points.tangent_start - start;
+-        let b_len = quad_points.tangent_end - end;
++        let a_len = quad_points.tangent_start;
++        let b_len = quad_points.tangent_end;
+ 
+         // Slopes match when denom goes to zero:
+         //                   axLen / ayLen ==                   bxLen / byLen
+@@ -1214,8 +1363,8 @@ impl PathStroker {
+ 
+             // if the perpendicular distances from the quad points to the opposite tangent line
+             // are small, a straight line is good enough
+-            let dist1 = pt_to_line(start, end, quad_points.tangent_end);
+-            let dist2 = pt_to_line(end, start, quad_points.tangent_start);
++            let dist1 = pt_to_tangent_line(start, end, quad_points.tangent_end);
++            let dist2 = pt_to_tangent_line(end, start, quad_points.tangent_start);
+             if dist1.max(dist2) <= self.inv_res_scale_squared {
+                 return ResultType::Degenerate;
+             }
+@@ -1231,10 +1380,8 @@ impl PathStroker {
+             if intersect_ray_type == IntersectRayType::CtrlPt {
+                 // the intersection of the tangents need not be on the tangent segment
+                 // so 0 <= numerA <= 1 is not necessarily true
+-                quad_points.quad[1].x =
+-                    start.x * (1.0 - numer_a) + quad_points.tangent_start.x * numer_a;
+-                quad_points.quad[1].y =
+-                    start.y * (1.0 - numer_a) + quad_points.tangent_start.y * numer_a;
++                quad_points.quad[1].x = start.x + quad_points.tangent_start.x * numer_a;
++                quad_points.quad[1].y = start.y + quad_points.tangent_start.y * numer_a;
+             }
+ 
+             return ResultType::Quad;
+@@ -1733,8 +1880,8 @@ fn fn_ptr_eq(f1: CapProc, f2: CapProc) -> bool {
+ struct QuadConstruct {
+     // The state of the quad stroke under construction.
+     quad: [Point; 3],       // the stroked quad parallel to the original curve
+-    tangent_start: Point,   // a point tangent to quad[0]
+-    tangent_end: Point,     // a point tangent to quad[2]
++    tangent_start: Point,   // the tangent at quad[0]
++    tangent_end: Point,     // the tangent at quad[2]
+     start_t: NormalizedF32, // a segment of the original curve
+     mid_t: NormalizedF32,
+     end_t: NormalizedF32,
+@@ -1819,6 +1966,53 @@ fn check_quad_linear(quad: &[Point; 3]) -> (Point, ReductionType) {
+     )
+ }
+ 
++/// `CheckConicLinear`.
++fn check_conic_linear(conic: &[Point; 3], weight: f32) -> (Point, ReductionType) {
++    let degenerate_ab = degenerate_vector(conic[1] - conic[0]);
++    let degenerate_bc = degenerate_vector(conic[2] - conic[1]);
++    if degenerate_ab & degenerate_bc {
++        return (Point::zero(), ReductionType::Point);
++    }
++    if degenerate_ab | degenerate_bc {
++        return (Point::zero(), ReductionType::Line);
++    }
++    if !quad_in_line(conic) {
++        return (Point::zero(), ReductionType::Quad);
++    }
++    let t = path_geometry::find_quad_max_curvature(conic).get();
++    if t == 0.0 || t.is_nan() {
++        return (Point::zero(), ReductionType::Line);
++    }
++    (conic_eval(conic, weight, t), ReductionType::Degenerate)
++}
++
++/// `SkConic::evalAt` (`SkConicCoeff`): the point at `t`.
++fn conic_eval(conic: &[Point; 3], weight: f32, t: f32) -> Point {
++    let (p0, p1, p2) = (conic[0], conic[1], conic[2]);
++    let p1w = Point::from_xy(p1.x * weight, p1.y * weight);
++    let a = Point::from_xy(p2.x - (p1w.x + p1w.x) + p0.x, p2.y - (p1w.y + p1w.y) + p0.y);
++    let b = Point::from_xy((p1w.x - p0.x) + (p1w.x - p0.x), (p1w.y - p0.y) + (p1w.y - p0.y));
++    let db = (weight - 1.0) + (weight - 1.0);
++    let da = 0.0 - db;
++    let numer = Point::from_xy((a.x * t + b.x) * t + p0.x, (a.y * t + b.y) * t + p0.y);
++    let denom = (da * t + db) * t + 1.0;
++    Point::from_xy(numer.x / denom, numer.y / denom)
++}
++
++/// `SkConic::evalTangentAt`.
++fn conic_eval_tangent(conic: &[Point; 3], weight: f32, t: f32) -> Point {
++    let (p0, p1, p2) = (conic[0], conic[1], conic[2]);
++    if (t == 0.0 && p0 == p1) || (t == 1.0 && p1 == p2) {
++        return p2 - p0;
++    }
++    let p20 = p2 - p0;
++    let p10 = p1 - p0;
++    let c = Point::from_xy(weight * p10.x, weight * p10.y);
++    let a = Point::from_xy(weight * p20.x - p20.x, weight * p20.y - p20.y);
++    let b = Point::from_xy(p20.x - c.x - c.x, p20.y - c.y - c.y);
++    Point::from_xy((a.x * t + b.x) * t + c.x, (a.y * t + b.y) * t + c.y)
++}
++
+ fn degenerate_vector(v: Point) -> bool {
+     !v.can_normalize()
+ }
+@@ -1855,6 +2049,20 @@ fn quad_in_line(quad: &[Point; 3]) -> bool {
+     pt_to_line(quad[mid], quad[outer1], quad[outer2]) <= line_slop
+ }
+ 
++// The distance squared from `pt` to the segment from `line_start` along `tangent`.
++fn pt_to_tangent_line(pt: Point, line_start: Point, tangent: Point) -> f32 {
++    let ab0 = pt - line_start;
++    let numer = tangent.dot(ab0);
++    let denom = tangent.dot(tangent);
++    let t = numer / denom;
++    if t >= 0.0 && t <= 1.0 {
++        let hit = Point::from_xy(line_start.x + tangent.x * t, line_start.y + tangent.y * t);
++        hit.distance_to_sqd(pt)
++    } else {
++        pt.distance_to_sqd(line_start)
++    }
++}
++
+ // returns the distance squared from the point to the line
+ fn pt_to_line(pt: Point, line_start: Point, line_end: Point) -> f32 {
+     let dxy = line_end - line_start;

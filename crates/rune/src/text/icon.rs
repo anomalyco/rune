@@ -3,9 +3,9 @@
 //! inherit and whose `opacity` fades them as one; `transform` on groups and elements). What
 //! `defs`, `clipPath`, `mask` and the like hold doesn't paint.
 
-use swash::zeno::{Cap, Fill, Join, Mask, Stroke, Transform};
+use swash::zeno::{Cap, Fill, Join, Point, Transform};
 
-use super::{Atlas, Rasterized, svg_path};
+use super::{Atlas, Rasterized};
 
 /// An SVG icon body as found in `@opencode/ui`'s catalog: elements inside a square viewBox,
 /// drawn in its element's colour. A body that names its own colours (`fill="#…"`, gradients),
@@ -133,6 +133,23 @@ fn element_path(el: &str) -> Option<String> {
     })
 }
 
+/// An element Blink draws as the shape it is rather than as a path: a circle or ellipse
+/// (`drawOval`), or a rect (`drawRect`, or `addRRect` with round corners), in viewBox units.
+fn element_shape(el: &str) -> Option<super::area::Shape<'static>> {
+    let tag = el.trim_start_matches('<').split_whitespace().next()?;
+    match tag {
+        "circle" => Some(super::area::Shape::Oval { center: Point::new(num(el, "cx"), num(el, "cy")), radii: Point::new(num(el, "r"), num(el, "r")) }),
+        "ellipse" => Some(super::area::Shape::Oval { center: Point::new(num(el, "cx"), num(el, "cy")), radii: Point::new(num(el, "rx"), num(el, "ry")) }),
+        "rect" => {
+            let (x, y, w, h) = (num(el, "x"), num(el, "y"), num(el, "width"), num(el, "height"));
+            let r = num(el, "rx").min(w / 2.0).min(h / 2.0);
+            let ry = attr(el, "ry").map_or(r, |_| num(el, "ry").min(h / 2.0));
+            (r == 0.0 || ry == r).then(|| super::area::Shape::Rounded { lo: Point::new(x, y), hi: Point::new(x + w, y + h), r: r.max(0.0) })
+        }
+        _ => None,
+    }
+}
+
 /// Which way an icon's drawing faces.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Facing {
@@ -152,7 +169,7 @@ pub(super) fn rasterize_icon(icon: &Icon, (px, size): (u32, f32), facing: Facing
     if px + 4 > super::ATLAS_SIZE {
         return Rasterized::Unplaced;
     }
-    let mut cov = icon_coverage_at(icon, px, size);
+    let mut cov = icon_coverage_at(icon, px, size, Point::new(0.0, 0.0));
     if facing == Facing::Mirrored {
         cov.chunks_exact_mut(px as usize).for_each(<[u8]>::reverse);
     }
@@ -185,17 +202,26 @@ struct Scope<'a> {
 }
 
 /// Paint attributes SVG passes from a group to the elements inside it.
-const INHERITED: [&str; 8] =
-    ["fill", "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin", "fill-rule", "fill-opacity", "stroke-opacity"];
+const INHERITED: [&str; 9] = [
+    "fill", "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin", "stroke-miterlimit", "fill-rule", "fill-opacity", "stroke-opacity",
+];
 
 /// `icon`'s coverage at `px` × `px` device pixels, row-major, as the glyph atlas stores it.
 pub fn icon_coverage(icon: &Icon, px: u32) -> Vec<u8> {
-    icon_coverage_at(icon, px, px as f32)
+    icon_coverage_at(icon, px, px as f32, Point::new(0.0, 0.0))
+}
+
+/// [`icon_coverage`] as Chromium covers it drawn with its top-left at `origin` device pixels:
+/// where a path lands changes how its float steps round (`super::area::render_aaa`). For probes
+/// that compare with Chromium's pixels; Rune draws every icon at 0.
+#[doc(hidden)]
+pub fn icon_coverage_placed(icon: &Icon, px: u32, origin: [f32; 2]) -> Vec<u8> {
+    icon_coverage_at(icon, px, px as f32, Point::new(origin[0], origin[1]))
 }
 
 /// `icon`'s coverage drawn `size` device pixels across, from the top-left of a `px` × `px`
-/// canvas.
-pub fn icon_coverage_at(icon: &Icon, px: u32, size: f32) -> Vec<u8> {
+/// canvas placed at `origin`.
+fn icon_coverage_at(icon: &Icon, px: u32, size: f32, origin: Point) -> Vec<u8> {
     let s = size / icon.view;
     let mut acc = vec![0u8; (px * px) as usize];
     // Each open group with an `opacity`: what it holds so far, and that opacity.
@@ -239,7 +265,8 @@ pub fn icon_coverage_at(icon: &Icon, px: u32, size: f32) -> Vec<u8> {
             continue;
         }
         let Some(d) = element_path(el) else { continue };
-        let d = svg_path::parse(&d);
+        // Skia's elements: an arc stays the conics Blink's `SkPath::arcTo` makes.
+        let d = super::convex::parse(&d);
         // The element's own attribute, else the innermost group's that sets it.
         let get = |name: &str| {
             attr(el, name).or_else(|| {
@@ -250,40 +277,46 @@ pub fn icon_coverage_at(icon: &Icon, px: u32, size: f32) -> Vec<u8> {
         let fill = get("fill").map_or(!stroke, |v| v != "none");
         let whole = opacity(attr(el, "opacity"));
         let into = layers.last_mut().map_or(&mut acc, |l| &mut l.0);
-        // `hair`: a stroke this many device pixels wide, at most one, drawn as Chromium draws it.
-        let mut paint = |style: swash::zeno::Style<'_>, alpha: f32, hair: Option<f32>| {
-            match hair {
-                Some(width) => super::hairline::render(d.as_slice(), ctm, width, px, &mut buf),
-                None => {
-                    buf.iter_mut().for_each(|b| *b = 0);
-                    Mask::new(d.as_slice()).style(style).transform(Some(ctm)).size(px, px).render_into(&mut buf, None);
+        let shape = element_shape(el).unwrap_or(super::area::Shape::Path(d.as_slice()));
+        // With the op Chromium's GPU raster picks for the shape (`super::area`).
+        let mut paint = |pen: Option<&super::area::Pen>, fill: Fill, alpha: f32| {
+            match super::area::op(&shape, ctm, pen) {
+                super::area::Op::Hairline(width) => {
+                    let placed = Transform { x: ctm.x + origin.x, y: ctm.y + origin.y, ..ctm };
+                    super::convex::hairline(&super::area::elements(&shape), placed, width, [origin.x, origin.y], px, &mut buf);
                 }
+                super::area::Op::Path => super::area::render_aaa(&shape, pen, fill, ctm, origin, px, &mut buf),
+                super::area::Op::ConvexStroke => {
+                    let placed = Transform { x: ctm.x + origin.x, y: ctm.y + origin.y, ..ctm };
+                    match pen.and_then(|p| super::convex::stroke(&super::area::elements(&shape), placed, p.width, p.join, p.miter_limit)) {
+                        Some(mesh) => super::convex::fill_triangles(&mesh, [origin.x, origin.y], px, &mut buf),
+                        None => super::area::render_aaa(&shape, pen, fill, ctm, origin, px, &mut buf),
+                    }
+                }
+                op => op.render(px, &mut buf),
             }
             union(into, &buf, alpha);
         };
         if fill {
             let rule = if get("fill-rule") == Some("evenodd") { Fill::EvenOdd } else { Fill::NonZero };
-            paint(rule.into(), whole * opacity(get("fill-opacity")), None);
+            paint(None, rule, whole * opacity(get("fill-opacity")));
         }
         if stroke {
             let w = get("stroke-width").and_then(|v| v.trim_end_matches("px").parse().ok()).unwrap_or(1.0f32);
-            // The transform scales the width with the geometry.
-            let mut st = Stroke::new(w);
-            st.cap(match get("stroke-linecap") {
+            let cap = match get("stroke-linecap") {
                 Some("round") => Cap::Round,
                 Some("square") => Cap::Square,
                 _ => Cap::Butt,
-            });
-            st.join(match get("stroke-linejoin") {
+            };
+            let join = match get("stroke-linejoin") {
                 Some("round") => Join::Round,
                 Some("bevel") => Join::Bevel,
                 _ => Join::Miter,
-            });
-            // No wider than a device pixel, Chromium (Skia) draws a stroke as a hairline, unless
-            // the path is a rectangle, which it draws as one.
-            let device = w * (ctm.xx * ctm.yy - ctm.xy * ctm.yx).abs().sqrt();
-            let hair = (device <= 1.0 + 1.0 / 256.0 && !super::hairline::draws_as_rect(d.as_slice(), ctm)).then_some(device);
-            paint(st.into(), whole * opacity(get("stroke-opacity")), hair);
+            };
+            let miter_limit = get("stroke-miterlimit").and_then(|v| v.parse().ok()).unwrap_or(4.0);
+            // The transform scales the width with the geometry.
+            let pen = super::area::Pen { width: w, cap, join, miter_limit };
+            paint(Some(&pen), Fill::NonZero, whole * opacity(get("stroke-opacity")));
         }
     }
     // A group left open still ends at the body's end.
@@ -330,10 +363,13 @@ fn transform(list: &str) -> Transform {
             "translate" => Transform::translation(at(0), at(1)),
             "scale" => Transform::scale(at(0), a.get(1).copied().unwrap_or(at(0))),
             "rotate" => {
-                let (sin, cos) = at(0).to_radians().sin_cos();
-                let (cx, cy) = (at(1), at(2));
+                // In double, as Blink's `AffineTransform` is: a quarter turn's cosine is then 6e-17,
+                // not f32's -4e-8, which is enough to tip a flat edge onto the next quarter pixel.
+                let (sin, cos) = (at(0) as f64).to_radians().sin_cos();
+                let (cx, cy) = (at(1) as f64, at(2) as f64);
                 // translate(cx cy) rotate(a) translate(-cx -cy)
-                Transform::new(cos, sin, -sin, cos, cx - cos * cx + sin * cy, cy - sin * cx - cos * cy)
+                let (tx, ty) = (cx - cos * cx + sin * cy, cy - sin * cx - cos * cy);
+                Transform::new(cos as f32, sin as f32, -sin as f32, cos as f32, tx as f32, ty as f32)
             }
             "skewX" => Transform::new(1.0, 0.0, at(0).to_radians().tan(), 1.0, 0.0, 0.0),
             "skewY" => Transform::new(1.0, at(0).to_radians().tan(), 0.0, 1.0, 0.0, 0.0),
