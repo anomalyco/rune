@@ -439,7 +439,8 @@ impl<S: 'static> Runtime<S> {
             } else {
                 pinh.snap.layer
             };
-            let rest = if snaps && animating { self.scene.rest(n.id) } else { None };
+            let steps = pinh.snap.steps || n.vis.cold.get().is_some_and(|c| c.motion_snaps);
+            let rest = if snaps && animating && !steps { self.scene.rest(n.id) } else { None };
             let gliding = snaps && (rest.is_some() || !unscaled);
             let (r, snap_rest) = if !snaps {
                 (r_exact, None)
@@ -1232,7 +1233,7 @@ impl<S: 'static> Runtime<S> {
                 hit_opacity: hit_opacity * kids_fade, group_rect: if hover_owner { rect_pt } else { pinh.group_rect },
                 scale_motion, still: if scale_motion == ScaleMotion::Still { (scale, anchor, anchor_to) } else { pinh.still },
                 in_cache, skip_paint, turn: turn_index,
-                snap: pixel_snap::Inherit { off: snap_off, rigid: snap_rigid, contain: snap_contain, layer: if cover.is_some() { 0 } else { snap_layer }, parent: snap_rest.filter(|_| cover.is_none() && snap_rigid == pinh.snap.rigid && pixel_snap::frames(&n.vis)) } };
+                snap: pixel_snap::Inherit { off: snap_off, rigid: snap_rigid, contain: snap_contain, steps, layer: if cover.is_some() { 0 } else { snap_layer }, parent: snap_rest.filter(|_| cover.is_none() && snap_rigid == pinh.snap.rigid && pixel_snap::frames(&n.vis)) } };
             // Shown only under its group's hover, it takes presses where the pointer hovers the
             // group: a press in the same frame as the move that reveals it finds it, as a page's
             // `:hover` applies before the press does.
