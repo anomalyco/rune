@@ -238,7 +238,8 @@ fn lead(avatar: Option<El>, glyph: Option<&'static rune::Icon>, active: bool, ba
 /// The title: clipped, never ellipsised, fading out before the status and close slot.
 fn title(title: &str, editor: Option<El>, at: &Place, vertical: bool, emphasized: bool, k: &Kit) -> El {
     let c = &k.c;
-    let font = rune::TextStyle { weight: k.ty.ui_medium.weight, ..k.ty.ui_compact };
+    // `text-[13px] font-medium` with no tracking, where the kit's compact UI type has -0.04.
+    let font = rune::TextStyle { weight: k.ty.ui_medium.weight, tracking: 0.0, ..k.ty.ui_compact };
     let ink = if at.active || editor.is_some() { c.text_base } else { c.text_faint };
     if let Some(field) = editor {
         return row().key("title").grow(1.0).shrink().min_w(0.0).mr(SLOT_END).child(field);
