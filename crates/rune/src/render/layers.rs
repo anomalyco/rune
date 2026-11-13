@@ -374,10 +374,19 @@ impl Renderer {
                     _ if parent_cached_hit => Planned::Covered,
                     _ => Planned::Inline,
                 };
+                // What its pixels can reach: the window, or all of a cache's content, which the
+                // cache's texture keeps however a later hit moves, turns or clips it.
+                let reach = match parent.map(|p| &self.layers.plan[p]) {
+                    None => [0.0, 0.0, viewport.0 as f32, viewport.1 as f32],
+                    Some(p) if p.cache.is_some() => p.edges,
+                    Some(p) => p.reach,
+                };
                 // Bound storage by the ancestor's required input, including filter support.
-                // Keep the actual clip separate so rounded corners never move.
+                // Keep the actual clip separate so rounded corners never move. A cache's clip and
+                // the filters above it apply to its composite, not to what its texture keeps.
                 let limit = parent.map_or(NO_CLIP, |p| {
                     let p = &self.layers.plan[p];
+                    if p.cache.is_some() { return NO_CLIP; }
                     let grow = (3.0 * p.blur).ceil();
                     [p.clip[0].max(p.limit[0]) - grow, p.clip[1].max(p.limit[1]) - grow,
                         p.clip[2].min(p.limit[2]) + grow, p.clip[3].min(p.limit[3]) + grow]
@@ -389,10 +398,10 @@ impl Renderer {
                 let free = turn.is_some() || parent_free;
                 let frame = if free {
                     let outer = match parent {
-                        Some(p) if parent_free => self.layers.plan[p].frame,
+                        Some(p) if parent_free && self.layers.plan[p].cache.is_none() => self.layers.plan[p].frame,
                         _ => {
                             let support = parent.map_or(0.0, |p| self.layers.plan[p].support);
-                            [-support, -support, viewport.0 as f32 + support, viewport.1 as f32 + support]
+                            [reach[0] - support, reach[1] - support, reach[2] + support, reach[3] + support]
                         }
                     };
                     let shown = [outer[0].max(i.clip[0]), outer[1].max(i.clip[1]), outer[2].min(i.clip[2]), outer[3].min(i.clip[3])];
@@ -419,6 +428,7 @@ impl Renderer {
                     turn,
                     free,
                     frame,
+                    reach,
                     // A cached scope's `radii` name its node instead.
                     hole: if cache.is_some() { [0.0; 4] } else { i.radii },
                 });
@@ -434,10 +444,10 @@ impl Renderer {
                     [(e[0] - grow).max(l.frame[0] - grow).floor(), (e[1] - grow).max(l.frame[1] - grow).floor(),
                         (e[2] + grow).min(l.frame[2] + grow).ceil(), (e[3] + grow).min(l.frame[3] + grow).ceil()]
                 } else {
-                    [(e[0] - grow).max(l.clip[0].max(l.limit[0]) - grow).max(-l.support).floor(),
-                        (e[1] - grow).max(l.clip[1].max(l.limit[1]) - grow).max(-l.support).floor(),
-                        (e[2] + grow).min(l.clip[2].min(l.limit[2]) + grow).min(viewport.0 as f32 + l.support).ceil(),
-                        (e[3] + grow).min(l.clip[3].min(l.limit[3]) + grow).min(viewport.1 as f32 + l.support).ceil()]
+                    [(e[0] - grow).max(l.clip[0].max(l.limit[0]) - grow).max(l.reach[0] - l.support).floor(),
+                        (e[1] - grow).max(l.clip[1].max(l.limit[1]) - grow).max(l.reach[1] - l.support).floor(),
+                        (e[2] + grow).min(l.clip[2].min(l.limit[2]) + grow).min(l.reach[2] + l.support).ceil(),
+                        (e[3] + grow).min(l.clip[3].min(l.limit[3]) + grow).min(l.reach[3] + l.support).ceil()]
                 };
                 l.vis = vis;
                 if l.cache.is_some() {

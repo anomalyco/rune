@@ -77,3 +77,77 @@ fn a_layer_inside_a_cache_that_misses_its_budget_still_draws() {
     near(&pixels(&gpu, &renderer, &target)[at..at + 4], rgba([0.5; 4]));
     assert!(matches!(renderer.layers.planner.dispositions[1], Disposition::Render { .. }));
 }
+
+/// A cached scope (node 41) at `bounds`: at each of `children`, from its corner, a plain group
+/// holding a half-faded layer, which needs a target of its own.
+fn cached_children(bounds: [f32; 4], clip: [f32; 4], turn: Option<f32>, children: &[[f32; 2]]) -> Vec<Instance> {
+    let mut cache = Instance::begin_layer(bounds, clip, LayerSpec::default());
+    if let Some(angle) = turn { cache = cache.turned(angle, [bounds[0] + bounds[2] * 0.5, bounds[1] + bounds[3] * 0.5]); }
+    cache.params[3] = 1.0;
+    cache.radii = pack_u64_f32(41);
+    cache.uv = pack_u64_f32(1);
+    let mut out = vec![cache];
+    for at in children {
+        let child = [bounds[0] + at[0], bounds[1] + at[1], 8.0, 8.0];
+        out.extend([Instance::begin_layer(child, NO_CLIP, LayerSpec::default()),
+            Instance::begin_layer(child, NO_CLIP, LayerSpec { opacity: 0.5, ..Default::default() }),
+            rect(child), Instance::end_layer(), Instance::end_layer()]);
+    }
+    out.push(Instance::end_layer());
+    out
+}
+
+/// What `second` shows as a hit after `first` drew the cache, beside what it shows drawn fresh.
+fn hit_and_fresh(first: &[Instance], second: &[Instance]) -> (Vec<u8>, Vec<u8>) {
+    let gpu = Gpu::headless();
+    let target = Offscreen::new(&gpu.device, 64, 64);
+    let mut atlas = crate::text::TextSystem::default().atlas;
+    let mut fresh = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    fresh.prepare(&gpu.device, &gpu.queue, &mut atlas, second, (64, 64));
+    let fresh = pixels(&gpu, &fresh, &target);
+    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    renderer.prepare(&gpu.device, &gpu.queue, &mut atlas, first, (64, 64));
+    // Drawing the first frame is what fills the cache's texture.
+    pixels(&gpu, &renderer, &target);
+    renderer.prepare(&gpu.device, &gpu.queue, &mut atlas, second, (64, 64));
+    assert!(matches!(renderer.layers.planner.dispositions[0], Disposition::Cached { .. }), "the second frame hits");
+    (pixels(&gpu, &renderer, &target), fresh)
+}
+
+/// A cache's texture keeps all of its content, the layers in it too, so a hit that turns a child
+/// the window couldn't see into view shows it as a fresh miss does, both ways round.
+#[test]
+fn a_cache_hit_turned_shows_a_child_the_window_could_not_see() {
+    // Half a turn about (64, 32) swaps the child at 96 (off the window upright) and the one at 16.
+    let scene = |turn| cached_children([0.0, 0.0, 128.0, 64.0], NO_CLIP, turn, &[[16.0, 24.0], [96.0, 24.0]]);
+    let (upright, turned) = (scene(None), scene(Some(std::f32::consts::PI)));
+    let (hit, fresh) = hit_and_fresh(&upright, &turned);
+    let at = (36 * 64 + 28) * 4;
+    near(&fresh[at..at + 4], rgba([0.5; 4]));
+    same(&hit, &fresh, "turned into view");
+    let (hit, fresh) = hit_and_fresh(&turned, &upright);
+    let at = (28 * 64 + 20) * 4;
+    near(&fresh[at..at + 4], rgba([0.5; 4]));
+    same(&hit, &fresh, "turned back into view");
+}
+
+/// A cache's clip applies to its composite: a hit that moves a child its clip hid into the clip
+/// shows it as a fresh miss does.
+#[test]
+fn a_cache_hit_moved_shows_a_child_its_clip_hid() {
+    let clip = [0.0, 0.0, 32.0, 64.0];
+    let first = cached_children([0.0, 0.0, 64.0, 64.0], clip, None, &[[40.0, 24.0]]);
+    let second = cached_children([-32.0, 0.0, 64.0, 64.0], clip, None, &[[40.0, 24.0]]);
+    let (hit, fresh) = hit_and_fresh(&first, &second);
+    let at = (28 * 64 + 12) * 4;
+    near(&fresh[at..at + 4], rgba([0.5; 4]));
+    same(&hit, &fresh, "moved into the clip");
+}
+
+/// Asserts the hit landed every pixel the fresh miss did, naming the first that differs.
+fn same(hit: &[u8], fresh: &[u8], what: &str) {
+    let differing = hit.chunks(4).zip(fresh.chunks(4)).position(|(hit, fresh)| hit != fresh);
+    if let Some(at) = differing {
+        panic!("{what}: ({}, {}) is {:?} on the hit, {:?} fresh", at % 64, at / 64, &hit[at * 4..at * 4 + 4], &fresh[at * 4..at * 4 + 4]);
+    }
+}

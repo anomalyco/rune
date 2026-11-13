@@ -35,6 +35,9 @@ pub(super) struct Layer {
     pub(super) free: bool,
     /// For a free layer, the edges of its contents that can reach the window.
     pub(super) frame: [f32; 4],
+    /// The edges its pixels can reach: the window's, or, inside a cache, all of the cache's
+    /// content, which its texture keeps for hits that move, turn or clip it differently.
+    pub(super) reach: [f32; 4],
     /// The round hole its composite cuts (`El::cutout_circle`): centre, then the radii it's clear
     /// within and whole from, in window device pixels; zeros for none.
     pub(super) hole: [f32; 4],

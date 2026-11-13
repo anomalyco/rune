@@ -124,7 +124,7 @@ fn plan_of(scene: &[Spec], held: &[Held]) -> Vec<Layer> {
             edges: spec.edges, vis: spec.vis, clip: spec.clip, limit: NO_CLIP,
             fade: [0, 0, 0, spec.fade], opacity: spec.opacity, blend: spec.blend, blur: spec.blur,
             support: 0.0, cache: spec.cache, planned: planned[index], turn: spec.turn,
-            free: spec.turn.is_some(), frame: spec.edges, hole: spec.hole,
+            free: spec.turn.is_some(), frame: spec.edges, reach: spec.edges, hole: spec.hole,
         }
     }).collect()
 }
