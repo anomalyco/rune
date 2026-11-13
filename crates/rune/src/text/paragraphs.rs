@@ -504,16 +504,17 @@ impl TextSystem {
         if !spec.by_paragraph(input) {
             return TextLayout::Single(self.layout_for_spec(spec, scale, max_width, align));
         }
+        let forced = spec.paragraphs_flow();
         // One paragraph and no pills, as most drafts are: one layout in its own direction.
         if spec.cold.pills.is_empty() && !spec.content.contains('\n') {
-            let base = flow_of(&spec.content, &[]).unwrap_or(spec.plaintext_flow()).base();
+            let base = forced.or_else(|| flow_of(&spec.content, &[])).unwrap_or(spec.plaintext_flow()).base();
             let shape = spec.shape_key(scale).map(|k| hash::directed(k, base));
             let style = (&spec.content, &spec.spans, &spec.cold.blocks);
             return TextLayout::Single(self.layout_keyed(shape, style.0, style.1, style.2, &[], spec.style, scale, max_width, align, spec.wrap_anywhere, Keep::Cached, base));
         }
         let whole = spec.shape_key(scale).unwrap_or_else(|| spec.fresh_shape_key(scale));
         // Lines with no strong character take the element's flow, so it keys the whole too.
-        let whole = if spec.plaintext_flow() == Flow::Rtl { whole ^ 0x3c6e_f372_fe94_f82b } else { whole };
+        let whole = if forced.unwrap_or(spec.plaintext_flow()) == Flow::Rtl { whole ^ 0x3c6e_f372_fe94_f82b } else { whole };
         let blocks = &spec.cold.blocks;
         let indented = blocks.iter().any(|&b| b != Block::Paragraph).then_some(blocks.as_slice());
         let key = hash::break_key(whole ^ PARAGRAPHS, max_width, align, indented);
@@ -556,22 +557,23 @@ impl TextSystem {
         // A plain text's edit keys only the paragraphs it touched: those before it and after it
         // keep their keys (`reuse_keys`), so a keystroke costs its own paragraph, not the draft.
         let plain = spec.spans.is_empty() && spec.cold.pills.is_empty() && spec.cold.blocks.iter().all(|&b| b == Block::Paragraph);
-        let start_flow = spec.plaintext_flow();
+        let forced = spec.paragraphs_flow();
+        let start_flow = forced.unwrap_or(spec.plaintext_flow());
         let reused = prev.filter(|_| plain).and_then(|p| reuse_keys(p, content, style_key, start_flow));
         let (mut found, tail, entering) = reused.map_or((Vec::new(), Vec::new(), start_flow), |r| (r.head, r.tail, r.entering));
         let at = found.last().map_or(0, |f| f.1 + 1);
         match tail.first().map(|t| t.0) {
             Some(t) => {
-                key_paragraphs(spec, style_key, at, t - 1, start_flow, &mut found);
+                key_paragraphs(spec, style_key, at, t - 1, start_flow, forced, &mut found);
                 // The paragraphs after the edit keep their keys if they start from the direction
                 // they were keyed in (a neutral one takes the one before it).
                 if found.last().map(|f| f.2) == Some(entering) {
                     found.extend(tail);
                 } else {
-                    key_paragraphs(spec, style_key, t, content.len(), start_flow, &mut found);
+                    key_paragraphs(spec, style_key, t, content.len(), start_flow, forced, &mut found);
                 }
             }
-            None => key_paragraphs(spec, style_key, at, content.len(), start_flow, &mut found),
+            None => key_paragraphs(spec, style_key, at, content.len(), start_flow, forced, &mut found),
         }
         // What the edit left alone: the paragraphs before it, and those after it.
         let old = prev.map_or(&[][..], |p| p.paragraphs.as_slice());
@@ -630,14 +632,14 @@ type Found = (usize, usize, Flow, u64, Box<[(u32, u32)]>);
 
 /// Keys the paragraphs of `spec`'s content bytes `a..z` (a paragraph's start to a paragraph's
 /// end) onto `found`. A paragraph with no strong character reads the way the one before it
-/// does, the first `start_flow`.
-fn key_paragraphs(spec: &TextSpec, style_key: u64, a: usize, z: usize, start_flow: Flow, found: &mut Vec<Found>) {
+/// does, the first `start_flow`; with `forced`, every paragraph reads that way.
+fn key_paragraphs(spec: &TextSpec, style_key: u64, a: usize, z: usize, start_flow: Flow, forced: Option<Flow>, found: &mut Vec<Found>) {
     let mut start = a;
     for words in spec.content[a..z].split('\n') {
         let (a, b, k) = (start, start + words.len(), found.len());
         start = b + 1;
         let isolates: Box<[(u32, u32)]> = spec.cold.pills.iter().filter(|p| inside(p, a, b)).map(|p| (p.start - a as u32, p.end - a as u32)).collect();
-        let flow = flow_of(words, &isolates).unwrap_or(found.last().map_or(start_flow, |f| f.2));
+        let flow = forced.or_else(|| flow_of(words, &isolates)).unwrap_or(found.last().map_or(start_flow, |f| f.2));
         let mut h = hash::KeyHasher::default();
         (words, style_key, flow == Flow::Rtl, spec.cold.blocks.get(k).copied().unwrap_or(Block::Paragraph)).hash(&mut h);
         for s in spans_in(&spec.spans, a, b, &isolates) {
