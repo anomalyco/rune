@@ -449,6 +449,29 @@ fn rows_arriving_after_it_let_go_of_the_end_change_nothing() {
     }
 }
 
+/// A list stuck to its bottom follows rows that arrive there under a still pointer held below
+/// it: the selection follows the pointer over them, to the new last row, and it rests there
+/// with no wake.
+#[test]
+fn a_list_stuck_to_its_bottom_brings_new_rows_into_a_held_selection() {
+    let mut rt = rest_at_end(List { stick: true, ..VIRTUAL });
+    assert!(rt.scrolls.values().next().unwrap().pinned(), "stuck to its bottom");
+    let anchor = range(&rt).0;
+    rt.update(|s, _| s.rows += 20);
+    let mut frames = 0;
+    while offset(&rt) < max(&rt) || frames == 0 {
+        rt.frame(1.0 / 60.0);
+        frames += 1;
+        assert!(frames < 600, "the list followed its bottom");
+    }
+    settle(&mut rt);
+    assert_eq!(offset(&rt), max(&rt), "at the new end");
+    assert_eq!(range(&rt), (anchor, (ROWS + 19, LEN)), "the selection reaches the new last row");
+    assert_eq!(rt.wake_deadline(), None, "and rests");
+    assert!(!rt.frame(1.0 / 60.0), "an idle frame");
+    assert!(rt.press.is_held() && rt.selectable.phase.dragging(), "still held");
+}
+
 /// A list that shrinks while a held drag waits at its end ends the wait: rows appended after it
 /// move neither the list nor the selection, whose ends both stay.
 #[test]
@@ -580,6 +603,11 @@ impl Reference {
                 let attempt = self.next();
                 self.state = Dev::Running { attempt, scroll, last: now, from: None, due: now };
                 vec![Effect::WakeAt(now)]
+            }
+            // differs from dev: dev rested at the new extent without extending the selection.
+            Some(e) if e.scroll == scroll && e.speed != 0.0 && e.max > max => {
+                self.state = Dev::AtEnd { scroll, max: e.max };
+                vec![Effect::Extend]
             }
             _ => {
                 self.state = Self::rest(edge, Some(scroll));

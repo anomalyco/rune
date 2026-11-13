@@ -89,7 +89,8 @@ pub(in crate::runtime) enum Event {
     /// The frame that stepped has laid the list out.
     Laid,
     /// A layout changed the extent of the viewport it rests at the end of; the pointer is at
-    /// `edge`. Grown, it goes on if there's room; shrunk, it stops waiting.
+    /// `edge`. Grown, it goes on if there's room, and otherwise extends the selection over what
+    /// came in; shrunk, it stops waiting.
     Extent { now: f64, edge: Option<Edge> },
     /// The drag ended.
     Stop,
@@ -164,6 +165,12 @@ pub(in crate::runtime) fn step(seq: &mut Seq, state: &mut State, event: Event) -
                     *state = State::Running { attempt, scroll, last: now, from: None, due: now };
                     Effects::one(Effect::WakeAt(now))
                 }
+                // Grown, with the list already at its new end (one stuck to its bottom follows
+                // it): the selection follows the pointer over the rows that came in under it.
+                Some(e) if e.scroll == scroll && e.speed != 0.0 && e.max > max => {
+                    *state = State::AtEnd { scroll, max: e.max };
+                    Effects::one(Effect::Extend)
+                }
                 _ => {
                     *state = rest(edge, Some(scroll));
                     Effects::none()
@@ -223,32 +230,35 @@ impl<S: 'static> Runtime<S> {
     /// again. Resting at the end of a list instead, it hears whether this layout changed the
     /// list's extent.
     pub(in crate::runtime) fn laid_edge_scroll(&mut self) -> bool {
-        if !matches!(self.selectable.edge.state, State::Laying { .. }) {
-            self.edge_scroll_extent();
-            return false;
-        }
+        if !matches!(self.selectable.edge.state, State::Laying { .. }) { return self.edge_scroll_extent(); }
+        let changed = self.edge_step_heard(Event::Laid);
+        // A step that reached the end, when this layout changed the extent it saw.
+        self.edge_scroll_extent() | changed
+    }
+
+    /// A press resting at the end of a list hears that this frame's layout changed the list's
+    /// extent (rows arrived at its end, or left): it goes on scrolling if it now can, or the
+    /// selection follows the pointer over what came in. True when the selection changed.
+    fn edge_scroll_extent(&mut self) -> bool {
+        let State::AtEnd { scroll, max } = self.selectable.edge.state else { return false };
+        if self.scrolls.get(&scroll).is_some_and(|st| st.max == max) { return false; }
+        let edge = self.pointer.and_then(|(_, y)| self.edge_at(y));
+        self.edge_step_heard(Event::Extent { now: self.clock, edge })
+    }
+
+    /// Steps the edge scroll after a layout and carries out what it asks for; what that changed
+    /// in the selection is heard. True when it changed, so the frame paints again.
+    fn edge_step_heard(&mut self, event: Event) -> bool {
         let ends = |rt: &Self| rt.selectable.phase.selection().map(|s| (s.anchor, s.focus, s.far.as_ref().map(|f| f.path.clone())));
         let before = ends(self);
-        let effects = self.selectable.edge.step(Event::Laid);
+        let effects = self.selectable.edge.step(event);
         self.carry_edge_scroll(effects);
-        // A step that reached the end, when this layout changed the extent it saw.
-        self.edge_scroll_extent();
         let changed = ends(self) != before;
         if changed {
             let heard = self.selection_changes();
             self.queue.extend(heard);
         }
         changed
-    }
-
-    /// A press resting at the end of a list hears that this frame's layout changed the list's
-    /// extent (rows arrived at its end, or left), and goes on scrolling if it now can.
-    fn edge_scroll_extent(&mut self) {
-        let State::AtEnd { scroll, max } = self.selectable.edge.state else { return };
-        if self.scrolls.get(&scroll).is_some_and(|st| st.max == max) { return; }
-        let edge = self.pointer.and_then(|(_, y)| self.edge_at(y));
-        let effects = self.selectable.edge.step(Event::Extent { now: self.clock, edge });
-        self.carry_edge_scroll(effects);
     }
 
     fn carry_edge_scroll(&mut self, effects: Effects<Effect>) {
