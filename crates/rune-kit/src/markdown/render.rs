@@ -254,6 +254,9 @@ impl Renderer {
         };
         let mut next_link = 0;
         let mut out = Vec::with_capacity(inl.spans.len());
+        // Code keeps its own weight in bold text, as `markdown.css`'s `:not(pre) > code` sets it, so
+        // its spans go after the rest: of overlapping spans, the later one's weight wins.
+        let mut code = Vec::new();
         for &(a, b, st) in &inl.spans {
             if matches!(st, Style::Link) {
                 let sp = links[next_link].clone();
@@ -275,6 +278,8 @@ impl Renderer {
                     sp.weight = Some(s.inline_code_weight);
                     sp.size = Some(base * s.inline_code_scale);
                     sp.color = self.code_link_color(a, b, inl);
+                    code.push(sp);
+                    continue;
                 }
                 Style::Code => {
                     let link_base = in_link.and_then(|l| l.size).unwrap_or(base);
@@ -285,6 +290,8 @@ impl Renderer {
                     if in_link.is_none_or(|l| l.bg.is_none()) {
                         sp = sp.bg(s.code_bg, s.inline_code_pad);
                     }
+                    code.push(sp);
+                    continue;
                 }
                 Style::CodePad => {
                     sp.size = Some(pad_size(font, s.inline_code_pad));
@@ -296,6 +303,7 @@ impl Renderer {
             }
             out.push(sp);
         }
+        out.extend(code);
         out
     }
 

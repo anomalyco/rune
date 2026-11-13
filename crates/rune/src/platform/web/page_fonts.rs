@@ -37,8 +37,9 @@ pub(super) fn share<'a>(fonts: impl IntoIterator<Item = &'a [u8]>) {
             let Some(family) = collection.family_name(id).map(str::to_owned) else { continue };
             // A collection file's later faces would need their own file; its first is the one.
             for face in faces.iter().filter(|f| f.index() == 0) {
-                let weight = face.axes().iter().find(|a| a.tag.to_string() == "wght")
-                    .map_or_else(|| face.weight().value().to_string(), |a| format!("{} {}", a.min, a.max));
+                let declared = crate::text::face_weights::declared(&family, face.weight().value()).map(|r| format!("{} {}", r.0, r.1));
+                let weight = declared.or_else(|| face.axes().iter().find(|a| a.tag.to_string() == "wght").map(|a| format!("{} {}", a.min, a.max)))
+                    .unwrap_or_else(|| face.weight().value().to_string());
                 let style = match face.style() { FontStyle::Normal => "normal", FontStyle::Italic => "italic", FontStyle::Oblique(_) => "oblique" };
                 add_font_face(&family, bytes, &weight, style);
             }

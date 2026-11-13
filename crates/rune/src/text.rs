@@ -11,9 +11,8 @@ use std::collections::HashMap;
 use std::hash::Hash;
 use crate::runtime::{HashMap as FxHashMap, HashSet as FxHashSet};
 use std::rc::Rc;
-use std::sync::Arc;
 
-use parley::fontique::{Blob, Collection, CollectionOptions, FallbackKey, FamilyId, Script, SourceCache};
+use parley::fontique::{Collection, CollectionOptions, FallbackKey, FamilyId, Script, SourceCache};
 use parley::{
     Alignment, AlignmentOptions, FontContext, FontFamily, FontFamilyName, FontStyle, FontWeight, Layout, LayoutContext,
     LineHeight, PositionedLayoutItem, StyleProperty,
@@ -35,6 +34,8 @@ mod colr;
 mod color_icon;
 mod cursor;
 mod decorations;
+pub(crate) mod face_weights;
+pub use face_weights::{FaceWeights, set_face_weights};
 mod families;
 #[doc(hidden)]
 pub mod fill_bench;
@@ -293,7 +294,7 @@ impl TextSystem {
         let list: &[&'static [u8]] = if fonts.is_empty() { DEFAULT_FONTS } else { fonts };
         let mut registered = Vec::new();
         for data in list {
-            let mut added: Vec<FamilyId> = collection.register_fonts(Blob::new(Arc::new(*data)), None).into_iter().map(|(id, _)| id).collect();
+            let mut added = face_weights::register(&mut collection, data);
             added.sort_unstable();
             registered.extend(added);
         }
@@ -304,7 +305,7 @@ impl TextSystem {
         {
             let fill: Vec<bool> = default_fonts::DEFAULT_FAMILIES.iter().map(|f| fonts.is_empty() || collection.family_id(f).is_none()).collect();
             for (data, _) in DEFAULT_FONTS.iter().zip(&fill).filter(|(_, fill)| **fill && !fonts.is_empty()) {
-                collection.register_fonts(Blob::new(Arc::new(*data)), None);
+                face_weights::register(&mut collection, data);
             }
             if fill[0] {
                 full_faces::note_embedded_inter();
