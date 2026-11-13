@@ -98,6 +98,7 @@ pub(crate) use families::choose_families;
 pub use measure::{FamiliesGuard, TextInk, advance, content_widths, font_epoch, ink, measure, measure_with, with_families};
 #[cfg(target_arch = "wasm32")]
 pub(crate) use measure::line_starts;
+pub(crate) use measure::lend;
 pub use rich_layout::RichLayoutOptions;
 pub use run::{Run, RunLayout};
 pub(crate) use case::Source as CaseSource;
