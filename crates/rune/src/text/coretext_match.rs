@@ -252,7 +252,7 @@ pub(super) fn apple_coverage() -> bool {
 
 /// Whether a browser's `navigator` platform is an Apple one: `MacIntel`, `iPhone`, `iPad`,
 /// `iPod` (an iPad in desktop mode says `MacIntel`), or `macOS` from `userAgentData`.
-#[cfg(any(target_arch = "wasm32", test))]
+#[cfg(target_arch = "wasm32")]
 pub(crate) fn apple_platform(platform: &str) -> bool {
     ["mac", "iphone", "ipad", "ipod"].iter().any(|p| platform.get(..p.len()).is_some_and(|q| q.eq_ignore_ascii_case(p)))
 }
