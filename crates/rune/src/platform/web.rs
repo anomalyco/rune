@@ -24,12 +24,16 @@ thread_local! {
     /// The largest viewport's height in CSS points (`100lvh`): a page's band is sized from it so
     /// a phone's toolbar coming and going never changes the band.
     static LARGE_VIEWPORT: std::cell::Cell<f32> = const { std::cell::Cell::new(0.0) };
+    /// The page's primary pointer can't hover (CSS `(hover: none)`): a phone's or tablet's touch screen.
+    static HOVER_NONE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 pub(crate) fn safe_area() -> [f32; 4] { INSETS.get() }
 
 /// The largest viewport's height in CSS points, or 0 before the browser has reported one.
 pub(crate) fn large_viewport() -> f32 { LARGE_VIEWPORT.get() }
+
+pub(crate) fn hover_none() -> bool { HOVER_NONE.get() }
 
 /// Fetches the font at `url` now, for something about to draw in it (a terminal's face, say),
 /// as `App::font_url_later` fetches its fonts after the first frame: every window takes it up
@@ -1120,6 +1124,7 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
         std::mem::take(&mut self.borrowed).give_back();
         INSETS.set([0.0; 4]);
         LARGE_VIEWPORT.set(0.0);
+        HOVER_NONE.set(false);
         page::vacate();
     }
 }

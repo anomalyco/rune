@@ -163,6 +163,9 @@ export function viewport(canvas, callback, embedded) {
     };
     const motion = matchMedia('(prefers-reduced-motion: reduce)');
     const reduced = () => callback(JSON.stringify({ kind: 'motion', reduced: motion.matches }));
+    // A primary pointer that can't hover (a touch screen): `Cx::hover_none`.
+    const hoverNone = matchMedia('(hover: none)');
+    const hover = () => callback(JSON.stringify({ kind: 'hover', none: hoverNone.matches }));
     // A contrast theme (Windows' Contrast themes): `forced-colors`, and its system colours read
     // off a probe, as sRGB bytes, for `Cx::system_contrast`.
     const forced = matchMedia('(forced-colors: active)');
@@ -195,18 +198,20 @@ export function viewport(canvas, callback, embedded) {
     window.visualViewport?.addEventListener('scroll', update);
     window.addEventListener('resize', update);
     motion.addEventListener('change', reduced);
+    hoverNone.addEventListener('change', hover);
     forced.addEventListener('change', contrast);
     window.addEventListener('focus', focus);
     window.addEventListener('blur', focus);
     document.addEventListener('visibilitychange', visibility);
     // Mount is called while Rust is installing the shell; enter it only after installation.
-    queueMicrotask(() => { update(); reduced(); contrast(); focus(); visibility(); });
+    queueMicrotask(() => { update(); reduced(); hover(); contrast(); focus(); visibility(); });
     return () => {
         dprMedia?.removeEventListener('change', onDpr);
         window.visualViewport?.removeEventListener('resize', update);
         window.visualViewport?.removeEventListener('scroll', update);
         window.removeEventListener('resize', update);
         motion.removeEventListener('change', reduced);
+        hoverNone.removeEventListener('change', hover);
         forced.removeEventListener('change', contrast);
         window.removeEventListener('focus', focus);
         window.removeEventListener('blur', focus);

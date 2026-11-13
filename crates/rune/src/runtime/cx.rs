@@ -240,6 +240,15 @@ impl<S> Cx<S> {
         #[cfg(not(target_arch = "wasm32"))]
         { [0.0; 4] }
     }
+    /// The primary pointer can't hover: a browser's `(hover: none)`, a phone's or tablet's touch
+    /// screen. What a mouse would reveal on hover (a code block's Copy, a row's actions) should
+    /// show without it. False natively. A change re-runs the view.
+    pub fn hover_none(&self) -> bool {
+        #[cfg(target_arch = "wasm32")]
+        { crate::platform::web::hover_none() }
+        #[cfg(not(target_arch = "wasm32"))]
+        { false }
+    }
     /// The system's contrast theme when one is on (Windows' Contrast themes, high contrast):
     /// the colours it asks every app to paint with, which a view uses in place of its own
     /// (CSS `forced-colors: active`). None otherwise. A change re-runs the view.
