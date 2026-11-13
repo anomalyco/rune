@@ -230,6 +230,19 @@ pub(crate) fn glyph_x(x: f32, ppem: f32) -> (f32, u8) {
 /// text gamma (sRGB, contrast 1) draws grayscale text with, for outlines rasterised elsewhere.
 const TEXT_GAMMA: [f32; 2] = [1.12, 0.45];
 
+/// A Mac browser draws unsmoothed type with the same coverage as native macOS.
+/// Use the platform decision that selects its smoothing default, not the WASM
+/// target OS. Cache the decision: this runs during glyph placement.
+pub(super) fn apple_coverage() -> bool {
+    #[cfg(target_arch = "wasm32")]
+    {
+        thread_local! { static MAC: bool = FontSmoothing::classic() == FontSmoothing::On; }
+        MAC.with(|mac| *mac)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    { cfg!(any(target_os = "macos", target_os = "ios")) }
+}
+
 /// The exponent glyph coverage in `mode` is raised to when drawn in premultiplied `fill`, on
 /// Apple platforms (`apple`) or Windows (`windows`) or neither. With smoothing off on Linux,
 /// Windows and the web it stands in for the text gamma a browser's grayscale antialiasing

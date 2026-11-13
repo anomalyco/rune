@@ -1,0 +1,1 @@
+- **Web: unsmoothed text in a Mac browser draws at its native weight.** `FontSmoothing::Off` no longer raises the coverage of light glyph edges on dark backgrounds as it does on non-Apple desktops. The choice of renderer and native rendering are unchanged.
