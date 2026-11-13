@@ -108,7 +108,8 @@ impl SurfaceInterface for MetalSurface {
             wgpu::CompositeAlphaMode::PostMultiplied => layer.setOpaque(false),
             _ => {}
         }
-        layer.setColorspace(None);
+        // The layer keeps the colour space its window gave it (sRGB, `pin_contents_top_left`): a
+        // reconfigure, as on every resize, must not untag it.
         layer.setMaximumDrawableCount(config.desired_maximum_frame_latency.clamp(1, 2) as usize + 1);
         layer.setDrawableSize(CGSize::new(f64::from(config.width), f64::from(config.height)));
         // iOS layers are always display-synced, and keep the drawable timeout as wgpu-hal does: with
