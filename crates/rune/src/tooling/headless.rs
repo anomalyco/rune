@@ -494,6 +494,10 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
     if let Some(s) = comp.as_mut().and_then(|c| c.summary(&gpu.device)) {
         eprintln!("{s}");
     }
+    // A headless run opens no links (`Tx::open_url`): say which its handlers asked for.
+    for url in rt.take_url_requests() {
+        eprintln!("rune: open_url {url} (headless: not opened)");
+    }
 }
 
 /// Takes the size handlers asked for a headless window, inside the limits the app set; its
