@@ -1,0 +1,1 @@
+- A pick callback that puts back its `Tx` on a miss also puts back the minimize it discarded.

@@ -142,14 +142,14 @@ impl<S> Shared<S> {
     /// Drain a native window's updates, running `after` (menu callbacks) after each update.
     pub(crate) fn drain_window(&self, rt: &mut crate::runtime::Runtime<S>, mut after: impl FnMut(bool)) -> Requests<S>
     where S: 'static {
-        // Keep only these updates’ minimizes aside; a minimize already latched by a handler
-        // or requested by a nested callback is not ours to cancel.
+        // Only these updates’ minimizes, and only those that survive their pick callbacks, are
+        // ordered here; a minimize a handler or nested callback latched is already in the machine.
         let mut minimize = None;
-        let batch = self.drain(|f| after(rt.update_if(|s, tx| {
-            let changed = f(s, tx);
-            minimize = minimize.max(tx.minimize_order.take());
-            changed
-        })));
+        let batch = self.drain(|f| {
+            let (changed, ordered) = rt.update_if_ordered(f);
+            minimize = minimize.max(ordered);
+            after(changed);
+        });
         if minimize > batch.last_cancel { rt.minimize_step(crate::window::MinimizeEvent::Asked); }
         batch
     }

@@ -159,16 +159,38 @@ impl<S: 'static> Runtime<S> {
     /// Returning false after changing state the view reads leaves the screen stale until the
     /// next change.
     pub fn update_if(&mut self, f: impl FnOnce(&mut S, &mut Tx) -> bool) -> bool {
+        self.update_inner(f, false).0
+    }
+
+    /// `update_if` for an update a window drain runs: a minimize it asked for comes back instead
+    /// of reaching the minimize machine, so the drain can order it against the handle requests it
+    /// took. A pick callback that replaces its `Tx` discards the minimize, as running the
+    /// callbacks before reading `Tx::minimize` does; one the callback asks for itself still
+    /// latches. Returns stale, then the minimize's order when it survived.
+    pub(crate) fn update_if_ordered(&mut self, f: impl FnOnce(&mut S, &mut Tx) -> bool) -> (bool, Option<std::num::NonZeroU64>) {
+        self.update_inner(f, true)
+    }
+
+    fn update_inner(&mut self, f: impl FnOnce(&mut S, &mut Tx) -> bool, ordered: bool) -> (bool, Option<std::num::NonZeroU64>) {
         // Its wakes count from now (`schedule_pending_wakes`), so its clock reads now too.
         let mut one = Tx { clock: self.now_clock(), ..self.transaction() };
         let changed = crate::tooling::perf_warn::timed("an `update` closure", || f(&mut self.state, &mut one));
         let stale = changed || one.frame_work() || one.window_frame.is_some() || one.srgb_blend.is_some_and(|b| b != self.srgb_blend) || one.font_smoothing.is_some_and(|m| m != self.text.font_smoothing())
             || self.changes_families(&one)
             || (one.blur && self.focus.path().is_some());
-        self.latch_requests(&mut one);
+        let minimize = if ordered {
+            let asked = one.minimize_order;
+            self.run_pick_reads(&mut one);
+            let survived = if asked.is_some() && one.minimize_order == asked { one.minimize_order.take() } else { None };
+            self.latch_after_picks(&mut one);
+            survived
+        } else {
+            self.latch_requests(&mut one);
+            None
+        };
         merge(&mut self.pending, one);
         self.dirty |= changed;
-        stale
+        (stale, minimize)
     }
 
     /// Takes a `Tx::minimize` that `what` can't carry out, saying so in debug builds.
@@ -185,6 +207,11 @@ impl<S: 'static> Runtime<S> {
     /// memory clipboard at once. A secret clear drops an earlier secret copy not yet written.
     pub(super) fn latch_requests(&mut self, tx: &mut Tx) {
         self.run_pick_reads(tx);
+        self.latch_after_picks(tx);
+    }
+
+    /// [`Self::latch_requests`] once the pick callbacks have run.
+    fn latch_after_picks(&mut self, tx: &mut Tx) {
         self.shell_request = self.shell_request.max(tx.shell.take());
         if tx.minimize_order.take().is_some() { self.minimize_step(crate::window::MinimizeEvent::Asked); }
         self.titlebar.toggle_maximized |= std::mem::take(&mut tx.toggle_maximized);

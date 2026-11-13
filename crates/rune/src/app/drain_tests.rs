@@ -64,3 +64,22 @@ fn drain_orders_restores_even_if_a_show_replaces_the_window_request() {
         assert_eq!(rt.minimize.field(), !restore);
     }
 }
+
+#[test]
+fn a_pick_callback_that_puts_back_its_tx_discards_the_minimize() {
+    // queue an update that minimizes, then restores its saved Tx from a pick miss.
+    let shared = Arc::new(Shared::default());
+    let mut rt = Runtime::new((), |_: &(), _: &mut Cx<()>| el(), (100.0, 100.0), Env::default());
+    shared.queue_update(Box::new(|_, tx| {
+        let before = tx.clone();
+        tx.minimize();
+        // Outside the viewport: nothing to pick.
+        tx.element_at::<()>(-50.0, -50.0, move |_, hit, tx| {
+            assert!(hit.is_none(), "the pick misses");
+            *tx = before;
+        });
+        false
+    }));
+    shared.drain_window(&mut rt, |_| {});
+    assert!(!rt.minimize.field(), "the callback discarded the update's minimize, as on dev");
+}
