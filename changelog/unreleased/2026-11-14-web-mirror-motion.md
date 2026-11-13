@@ -1,0 +1,1 @@
+- Web: the page's accessibility mirror follows motion: while elements slide (a sheet opening) it rebuilds from the drawn boxes every 100 ms and once where the motion stops, so a screen reader's focus ring sits where the element is drawn, not where it started.
