@@ -182,9 +182,13 @@ impl<S: 'static> Running<S> {
             Some("motion") => self.rt.set_system_reduced_motion(event["reduced"].as_bool().unwrap_or(false)),
             // The primary pointer can or can't hover (a mouse or a touch screen), read by views
             // through `Cx::hover_none`.
-            Some("hover") => {
-                let none = event["none"].as_bool().unwrap_or(false);
-                if HOVER_NONE.replace(none) == none { return false; }
+            Some("primary_pointer") => {
+                let pointer = match (event["hover"].as_bool(), event["coarse"].as_bool()) {
+                    (Some(false), Some(true)) => PrimaryPointer::Touch,
+                    (Some(false), _) => PrimaryPointer::NoHover,
+                    _ => PrimaryPointer::Hover,
+                };
+                if PRIMARY_POINTER.replace(pointer) == pointer { return false; }
                 self.rt.invalidate();
             }
             // The browser's `forced-colors` (a contrast theme) and its system colours, as sRGB bytes:

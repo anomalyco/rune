@@ -1,0 +1,1 @@
+- Web: `Cx::touch_controls()` follows `(hover: none) and (pointer: coarse)`. Pointer capability changes no longer consume the semantic mirror's mouse-movement events.
