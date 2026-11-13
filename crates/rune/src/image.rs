@@ -134,18 +134,42 @@ impl Input {
         })
     }
 }
-struct Job { image: Image, input: Input }
-/// Decoder threads per cache, at most one per core.
+#[cfg(not(target_arch = "wasm32"))]
+struct Job { image: Image, input: Input, waker: crate::Waker }
+/// Decoder threads for the process, at most one per core.
 #[cfg(not(target_arch = "wasm32"))]
 const DECODERS: usize = 4;
 
+/// The process's decoder threads, shared by every cache and started by the first image to
+/// decode: an app that makes a cache per feature, or shows no image, pays no thread for it.
+#[cfg(not(target_arch = "wasm32"))]
+fn decoders() -> &'static mpsc::Sender<Job> {
+    static JOBS: OnceLock<mpsc::Sender<Job>> = OnceLock::new();
+    JOBS.get_or_init(|| {
+        let (jobs, receive) = mpsc::channel::<Job>();
+        // A session opening on several screenshots decodes them side by side, not one by one.
+        let receive = Arc::new(Mutex::new(receive));
+        for _ in 0..DECODERS.min(std::thread::available_parallelism().map_or(1, |n| n.get())) {
+            let receive = receive.clone();
+            std::thread::Builder::new().name("rune-images".into()).spawn(move || {
+                loop {
+                    let Ok(job) = receive.lock().unwrap_or_else(|e| e.into_inner()).recv() else { return };
+                    job.image.finish(job.input.decode_caught());
+                    (job.waker)();
+                }
+            }).expect("image worker");
+        }
+        jobs
+    })
+}
+
 /// Construct once during app setup. The cache deduplicates by content, not a path or pointer;
-/// dropping all handles releases decoded pixels. Dropping the cache stops its worker after
-/// queued requests complete. The waker should be the one supplied by `AppSpec::setup`.
+/// dropping all handles releases decoded pixels. Its images decode on the process's decoder
+/// threads, which every cache shares. The waker should be the one supplied by `AppSpec::setup`.
 pub struct ImageCache {
     entries: Mutex<HashMap<ImageId, Weak<State>>>,
     #[cfg(not(target_arch = "wasm32"))]
-    jobs: mpsc::Sender<Job>,
+    waker: crate::Waker,
     #[cfg(target_arch = "wasm32")]
     wake: crate::Waker,
 }
@@ -156,20 +180,7 @@ impl ImageCache {
     }
     #[cfg(not(target_arch = "wasm32"))]
     pub fn new(waker: crate::Waker) -> Self {
-        let (jobs, receive) = mpsc::channel::<Job>();
-        // A session opening on several screenshots decodes them side by side, not one by one.
-        let receive = Arc::new(Mutex::new(receive));
-        for _ in 0..DECODERS.min(std::thread::available_parallelism().map_or(1, |n| n.get())) {
-            let (receive, waker) = (receive.clone(), waker.clone());
-            std::thread::Builder::new().name("rune-images".into()).spawn(move || {
-                loop {
-                    let Ok(job) = receive.lock().unwrap_or_else(|e| e.into_inner()).recv() else { return };
-                    job.image.finish(job.input.decode_caught());
-                    waker();
-                }
-            }).expect("image worker");
-        }
-        Self { entries: Mutex::new(HashMap::new()), jobs }
+        Self { entries: Mutex::new(HashMap::new()), waker }
     }
 
     /// PNG (APNG animates), JPEG, GIF and WebP (both animate), BMP, ICO, AVIF (with the `avif`
@@ -284,7 +295,7 @@ impl ImageCache {
         let image = Image::new(Arc::new(State { id, pixels: crate::Pixels::from_url(url, srcset), decoded: OnceLock::new() }));
         entries.insert(id, Arc::downgrade(&image.0));
         #[cfg(not(target_arch = "wasm32"))]
-        if self.jobs.send(Job { image: image.clone(), input }).is_err() {
+        if decoders().send(Job { image: image.clone(), input, waker: self.waker.clone() }).is_err() {
             let _ = image.0.decoded.set(Err(ImageError("image worker stopped".into())));
         }
         #[cfg(target_arch = "wasm32")]
