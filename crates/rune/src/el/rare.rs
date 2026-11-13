@@ -18,7 +18,7 @@ pub(crate) struct ElCold {
     pub(crate) trace_namespace: Option<(&'static str, &'static str)>,
     /// A role outside `RoleTag`'s table, read when the tag is `RoleTag::CUSTOM`.
     pub(crate) role: &'static str,
-    pub(crate) label: Option<String>,
+    pub(crate) label: Option<std::borrow::Cow<'static, str>>,
     pub(crate) live: Vec<crate::live::Bound>,
     pub(crate) above: Option<Anchor>,
     pub(crate) motion: Option<Spring>,

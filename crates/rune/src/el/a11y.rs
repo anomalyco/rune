@@ -2,6 +2,7 @@
 //! state, live updates and its place in a set. Screen readers, Voice Control and automation
 //! tools read it through the OS accessibility tree (`crate::a11y`).
 
+use std::borrow::Cow;
 use crate::El;
 
 /// How assistive technology announces changes to an element's text ([`El::live_region`]), as ARIA's
@@ -37,7 +38,7 @@ pub(crate) struct Range {
 /// The rarer accessibility properties, boxed so an element without them stays small.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct A11yMore {
-    pub description: Option<String>,
+    pub description: Option<Cow<'static, str>>,
     pub value: Option<String>,
     pub range: Option<Range>,
     /// 1-based position and the set's size.
@@ -52,9 +53,9 @@ pub(crate) struct A11yMore {
     /// `El::href`: the URL this element links to.
     pub href: Option<String>,
     /// `El::labelled_by`'s key.
-    pub labelled_by: Option<String>,
+    pub labelled_by: Option<Cow<'static, str>>,
     /// `El::described_by`'s key.
-    pub described_by: Option<String>,
+    pub described_by: Option<Cow<'static, str>>,
     /// `El::busy`.
     pub busy: bool,
 }
@@ -112,7 +113,14 @@ impl El {
     /// setting does, or the shortcut a button has. The label stays short. Without one, an
     /// [`El::help`] tooltip describes the element; `description("")` turns that off.
     pub fn description(mut self, text: impl Into<String>) -> Self {
-        self.cold_mut().a11y.more().description = Some(text.into());
+        self.cold_mut().a11y.more().description = Some(Cow::Owned(text.into()));
+        self
+    }
+    /// [`El::description`] from a string that lives for the program (a translated message, a
+    /// literal): kept as it is, with nothing copied, so a view that runs every frame pays
+    /// nothing for it.
+    pub fn description_static(mut self, text: &'static str) -> Self {
+        self.cold_mut().a11y.more().description = Some(Cow::Borrowed(text));
         self
     }
     /// The element whose content is active while this one keeps keyboard focus (ARIA
@@ -128,13 +136,13 @@ impl El {
     /// grandparent, and so on, so a component's controls can all name their own `"title"`. A label
     /// set with [`El::label`] wins.
     pub fn labelled_by(mut self, key: impl Into<String>) -> Self {
-        self.cold_mut().a11y.more().labelled_by = Some(key.into());
+        self.cold_mut().a11y.more().labelled_by = Some(Cow::Owned(key.into()));
         self
     }
     /// The element whose text describes this one (ARIA `aria-describedby`): a setting's
     /// explanation for its switch, a dialog's message for the dialog.
     pub fn described_by(mut self, key: impl Into<String>) -> Self {
-        self.cold_mut().a11y.more().described_by = Some(key.into());
+        self.cold_mut().a11y.more().described_by = Some(Cow::Owned(key.into()));
         self
     }
     /// The element is still changing and a reader should wait for it to settle (ARIA
@@ -262,10 +270,18 @@ impl El {
         self.set_label(label);
         self
     }
+    /// [`El::label`] from a string that lives for the program (a translated message, a
+    /// literal): kept as it is, with nothing copied, so a view that runs every frame pays
+    /// nothing for its names.
+    #[inline]
+    pub fn label_static(mut self, label: &'static str) -> Self {
+        self.cold_mut().label = Some(Cow::Borrowed(label));
+        self
+    }
     /// [`El::label`] in place.
     #[inline]
     pub fn set_label(&mut self, label: impl Into<String>) -> &mut Self {
-        self.cold_mut().label = Some(label.into());
+        self.cold_mut().label = Some(Cow::Owned(label.into()));
         self
     }
     /// An outline row's depth for accessibility, 1 at the top (ARIA `aria-level`), as a

@@ -378,7 +378,7 @@ impl<S: 'static> Runtime<S> {
                 item.tag = Some(tag);
                 item.role = aria_role(n.role);
                 item.id = anchor_id(n.key.as_deref());
-                item.text = n.label.clone().filter(|s| !s.trim().is_empty()).unwrap_or_default();
+                item.text = n.label.as_deref().map(str::to_owned).filter(|s| !s.trim().is_empty()).unwrap_or_default();
                 push(&mut out, item);
                 open.push((end, out.len() - 1));
                 last_flow_parent = None;
@@ -386,7 +386,7 @@ impl<S: 'static> Runtime<S> {
                 continue;
             }
             if let Some(href) = n.a11y.more.as_ref().and_then(|m| m.href.clone()) {
-                let label = n.label.clone().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| self.descendant_label(i, end));
+                let label = n.label.as_deref().map(str::to_owned).filter(|s| !s.trim().is_empty()).unwrap_or_else(|| self.descendant_label(i, end));
                 if !label.is_empty() && rect[2] > 0.0 && rect[3] > 0.0 {
                     let mut item = A11yItem::new("link", &n.path, rect);
                     item.text = label;
@@ -398,7 +398,7 @@ impl<S: 'static> Runtime<S> {
                 last_flow_parent = None;
                 continue;
             }
-            if matches!(n.role, "image" | "img") && let Some(label) = n.label.clone().filter(|s| !s.trim().is_empty()) {
+            if matches!(n.role, "image" | "img") && let Some(label) = n.label.as_deref().map(str::to_owned).filter(|s| !s.trim().is_empty()) {
                 let mut item = A11yItem::new("image", &n.path, rect);
                 item.text = label;
                 push(&mut out, item);
@@ -411,7 +411,7 @@ impl<S: 'static> Runtime<S> {
             // multi-block section with independent buttons inside.
             let nested_press = (i + 1..end).any(|j| self.nodes[j].handlers.on_press.is_some() || self.nodes[j].role == "button");
             if button_like && !nested_press && rect[2] > 0.0 && rect[3] > 0.0 {
-                let label = n.label.clone().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| self.descendant_label(i, end));
+                let label = n.label.as_deref().map(str::to_owned).filter(|s| !s.trim().is_empty()).unwrap_or_else(|| self.descendant_label(i, end));
                 if !label.is_empty() {
                     let mut item = A11yItem::new("button", &n.path, rect);
                     item.expanded = n.a11y.expanded;
@@ -497,7 +497,7 @@ impl<S: 'static> Runtime<S> {
                         selectable,
                     });
                 }
-            } else if n.role == "heading" && let Some(lbl) = n.label.clone().filter(|s| !s.trim().is_empty()) {
+            } else if n.role == "heading" && let Some(lbl) = n.label.as_deref().map(str::to_owned).filter(|s| !s.trim().is_empty()) {
                 let mut item = A11yItem::new("heading", &n.path, rect);
                 item.font_size = 16.0;
                 item.level = Some(n.a11y.level.unwrap_or(2).clamp(1, 6));
