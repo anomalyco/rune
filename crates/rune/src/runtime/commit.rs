@@ -167,6 +167,8 @@ impl<S: 'static> Runtime<S> {
         self.scene.keep_flights(false);
         self.memo.keep_since(self.memo_since);
         self.track_focused_rows();
+        #[cfg(debug_assertions)]
+        if COMMITS.get() % 16 == 1 { self.a11y_warn_nameless(); }
         self.prune_text_selection();
         budget.end(self.watch.cause);
     }

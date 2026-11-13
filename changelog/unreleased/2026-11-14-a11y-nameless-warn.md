@@ -1,0 +1,1 @@
+- Debug builds warn once per site, on stderr, about a focusable control a screen reader could say only by its role (no label, no `labelled_by` words, no text of its own or inside it; a text field's placeholder isn't a name). `RUNE_A11Y_WARN=0` silences it; release builds contain none of it.
