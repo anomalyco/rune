@@ -33,6 +33,8 @@ pub struct GridRow {
     pub(crate) laid: RefCell<Option<LaidRow>>,
     /// What the row drew last, to draw again while nothing it depends on changed.
     pub(crate) drawn: RefCell<Option<DrawnRow>>,
+    /// [`GridRow::wraps`].
+    pub(crate) wraps: bool,
 }
 
 pub(crate) struct GridCell {
@@ -70,13 +72,21 @@ impl GridRow {
     /// `spans` (colour, weight, italic, single underline) over `style`.
     pub fn new(text: impl Into<String>, spans: Vec<Span>, style: TextStyle) -> GridRow {
         let line = super::rich(text, spans).font(style).truncate_fade_width(0.0);
-        GridRow { line: spec_of(line), cells: Vec::new(), fills: Vec::new(), over: None, laid: RefCell::new(None), drawn: RefCell::new(None) }
+        GridRow { line: spec_of(line), cells: Vec::new(), fills: Vec::new(), over: None, laid: RefCell::new(None), drawn: RefCell::new(None), wraps: false }
     }
 
     /// A cell drawn on its own at column `col`, `width` columns wide: a wide or fallback glyph
     /// that mustn't move the columns after it. The line holds a space for each of its columns.
     pub fn cell(mut self, col: u16, width: u16, text: impl Into<String>, style: TextStyle, color: Color) -> GridRow {
         self.cells.push(GridCell { col, width: width.max(1), spec: spec_of(super::text(text).font(style).color(color)) });
+        self
+    }
+
+    /// The row runs on into the next (the terminal wrapped a line longer than the screen is
+    /// wide): a screen reader reads the two as one line of text, with no line break between
+    /// them. Every other row ends its line.
+    pub fn wraps(mut self, wraps: bool) -> GridRow {
+        self.wraps = wraps;
         self
     }
 
@@ -147,7 +157,7 @@ impl std::fmt::Debug for Grid {
 /// A terminal's screen: `rows` top to bottom, each `cell_h` points tall and `cols` columns of`
 /// `cell_w` points wide from the element's left edge. Size the element like any box; rows past its
 /// height are clipped by it as any content is. Accessibility reads it as a terminal with a
-/// text line per row.
+/// text line per row, each ending in a line break unless it [wraps](GridRow::wraps) on.
 pub fn grid(cols: u16, cell_w: f32, cell_h: f32, rows: Vec<Rc<GridRow>>) -> El {
     let mut e = base(FlexDirection::Row);
     e.vis.cold_mut().grid = Some(Rc::new(Grid { cols, cell: [cell_w, cell_h], rows, caret: None }));

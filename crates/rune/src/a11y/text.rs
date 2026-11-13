@@ -169,10 +169,19 @@ impl<S: 'static> Runtime<S> {
         let me = out.len() - 1;
         let r = self.drawn[i];
         let [cw, ch] = g.cell;
-        for (k, row) in g.rows.iter().enumerate() {
-            let (text, places) = row.reading();
+        let shown = g.rows.len().min((r[3] / ch.max(1.0)).ceil() as usize);
+        for (k, row) in g.rows.iter().take(shown).enumerate() {
+            let (mut text, mut places) = row.reading();
+            let read = places.len();
             let y = r[1] + k as f32 * ch;
-            if y >= r[1] + r[3] { break; }
+            // A row's line ends in a line break, as a text field's does, so a reader's text
+            // calls (and braille, and say-all) keep rows apart; a wrapped row runs on into the
+            // next. The break takes no room, at the row's end.
+            if !row.wraps && k + 1 < shown {
+                let end = places.last().map_or(0, |&(c, w)| c + w.max(1));
+                text.push('\n');
+                places.push((end, 0));
+            }
             let mut run = AkNode::new(Role::TextRun);
             run.set_bounds(AkRect {
                 x0: round(r[0] + w.shift[0]), y0: round(y + w.shift[1]),
@@ -190,7 +199,8 @@ impl<S: 'static> Runtime<S> {
             let id = line_id(n.id, k);
             // The cursor's cell is the caret, so a reader follows typing and output.
             if let Some((col, _)) = g.caret.filter(|c| usize::from(c.1) == k) {
-                let at = TextPosition { node: id, character_index: crate::el::GridRow::char_at(&places, col) };
+                // Past the text, the caret sits before the line break, at the row's end.
+                let at = TextPosition { node: id, character_index: crate::el::GridRow::char_at(&places[..read], col) };
                 out[me].1.set_text_selection(TextSelection { anchor: at, focus: at });
             }
             run.set_value(text);
