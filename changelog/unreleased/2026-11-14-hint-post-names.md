@@ -1,0 +1,1 @@
+- **macOS text: faces that don't name their glyphs draw unhinted at small sizes, as CoreGraphics draws them.** The 1x y autohinter finds 'o' and 'X' by their `post` names; a face with `post` format 3 (most subsets, PingFang) isn't hinted. Rune hinted such faces and drew them up to 8.6% heavier than CoreText at 7-18 px.
