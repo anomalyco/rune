@@ -1,0 +1,1 @@
+- `rune_luau::Sources::with_embedded` lets apps ship trusted build-time Luau bytecode without also shipping the source. Module paths and line numbers in errors are unchanged. Folder plugins still compile from text.
