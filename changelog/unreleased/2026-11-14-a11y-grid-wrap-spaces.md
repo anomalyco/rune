@@ -1,0 +1,1 @@
+- Accessibility: a `grid` row that wraps keeps its trailing spaces in its text, so a wrapped line's words stay apart (`echo` at the edge, `ab` on the next row read `echo ab`).

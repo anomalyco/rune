@@ -177,10 +177,16 @@ impl<S: 'static> Runtime<S> {
             // A row's line ends in a line break, as a text field's does, so a reader's text
             // calls (and braille, and say-all) keep rows apart; a wrapped row runs on into the
             // next. The break takes no room, at the row's end.
+            let end = places.last().map_or(0, |&(c, w)| c + w.max(1));
             if !row.wraps && k + 1 < shown {
-                let end = places.last().map_or(0, |&(c, w)| c + w.max(1));
                 text.push('\n');
                 places.push((end, 0));
+            }
+            // A wrapped row keeps the spaces at its end: they are the line's, between its words
+            // ("echo" at the edge, "ab" on the next row).
+            if row.wraps {
+                text.extend((end..g.cols).map(|_| ' '));
+                places.extend((end..g.cols).map(|col| (col, 1)));
             }
             let mut run = AkNode::new(Role::TextRun);
             run.set_bounds(AkRect {
