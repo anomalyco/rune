@@ -84,7 +84,9 @@ impl<S: 'static> Runtime<S> {
         visual_changed || help_changed || self.queue.len() != queued || self.press.inside() != capture_inside
     }
 
-    pub(crate) fn pointer_captured(&self) -> bool { self.press.is_held() || self.secondary.is_held() }
+    /// A button holds the pointer: the OS keeps sending its moves to this window, and a leave
+    /// waits for the release.
+    pub(crate) fn pointer_captured(&self) -> bool { self.press.is_held() || self.secondary.is_held() || self.tint.path().is_some() }
 
     /// The host's window content top-left in desktop pixels; `None` where it has none.
     pub(crate) fn set_window_pixels(&mut self, pixels: Option<(i32, i32)>) {
@@ -114,6 +116,7 @@ impl<S: 'static> Runtime<S> {
         self.input_click.clear();
         self.drop_press();
         self.secondary = capture::Secondary::Up;
+        self.tint = capture::Tint::Up;
         self.pointer_leave();
         self.drag_files_leave();
     }
@@ -326,6 +329,8 @@ impl<S: 'static> Runtime<S> {
 
     pub fn pointer_up(&mut self, x: f32, y: f32) {
         if self.autoscroll_release(crate::PointerButton::Primary) { self.pointer = Some((x, y)); return; }
+        #[cfg(target_os = "linux")]
+        self.primary_released();
         if self.press.held().is_some_and(|h| h.button != crate::PointerButton::Primary) {
             self.pointer = Some((x, y));
             return;

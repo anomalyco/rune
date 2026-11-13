@@ -179,6 +179,19 @@ impl<S: 'static> Runtime<S> {
         self.press.hold(capture::Held::new(path, d, crate::PointerButton::Primary, (x, y), down_at, second, None));
     }
 
+    /// Focuses text field `ji` with its caret at (x, y), as a single click does, but holds no
+    /// press: nothing drags from it (Linux's middle-click paste, `primary_selection.rs`).
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub(super) fn place_caret(&mut self, ji: usize, x: f32, y: f32) {
+        let [lx, ly] = self.to_local(ji, x, y);
+        let jn = &self.nodes[ji];
+        let path = jn.path.clone();
+        let (ix, iy) = (lx - jn.inset[0], ly - jn.inset[1]);
+        self.input_click.presses.clear();
+        self.input_click.steps.push_back((path.clone(), Step::Down { clicks: 1, shift: false }));
+        self.queue.push(Action::Focus(path, ix, iy));
+    }
+
     pub(super) fn input_drag(&mut self, x: f32, y: f32, drag_move: bool) {
         if !drag_move {
             return;

@@ -191,6 +191,10 @@ impl<S: 'static> Runtime<S> {
         if self.autoscroll_press(button) { self.pointer = Some((x, y)); return; }
         if self.press.is_held() { return; }
         self.pointer = Some((x, y));
+        if button == PointerButton::Middle { self.tint_down(x, y, button); }
+        // On Linux a middle click in a text field pastes the primary selection there.
+        #[cfg(target_os = "linux")]
+        if button == PointerButton::Middle && self.primary_paste_down(x, y) { return; }
         self.dismiss_help();
         let hit = self.hits.iter().rev().find(|&&(id, r)| self.hit_contains(id, r, x, y)).and_then(|(id, _)| self.node_index.get(id).copied());
         let middle = button == PointerButton::Middle;
@@ -238,6 +242,7 @@ impl<S: 'static> Runtime<S> {
 
     /// A mouse button came up at (x, y): the release of [`Self::button_down`].
     pub fn button_up(&mut self, x: f32, y: f32, button: PointerButton) {
+        self.tint.release(button);
         if !matches!(button, PointerButton::Primary | PointerButton::Secondary) && self.autoscroll_release(button) { self.pointer = Some((x, y)); return; }
         match button {
             PointerButton::Primary => self.pointer_up(x, y),

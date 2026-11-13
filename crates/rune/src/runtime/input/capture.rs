@@ -135,6 +135,31 @@ pub(crate) enum Secondary {
     Held { path: String, link: Option<usize>, left: bool },
 }
 
+/// The middle or secondary button held where the primary isn't: the element it shows pressed
+/// ([`El::press`](crate::El::press)) while the pointer is over it, as a browser sets `:active`
+/// for a press of any button. It's the element a primary press there would take; it hears
+/// nothing, and the release lets go of it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) enum Tint {
+    #[default]
+    Up,
+    Held { path: String, button: PointerButton },
+}
+
+impl Tint {
+    pub(crate) fn path(&self) -> Option<&str> {
+        match self {
+            Self::Held { path, .. } => Some(path),
+            Self::Up => None,
+        }
+    }
+
+    /// `button` came up: it lets go if it's the one holding.
+    pub(crate) fn release(&mut self, button: PointerButton) {
+        if matches!(self, Self::Held { button: b, .. } if *b == button) { *self = Self::Up; }
+    }
+}
+
 impl Secondary {
     pub(crate) fn path(&self) -> Option<&str> {
         match self {

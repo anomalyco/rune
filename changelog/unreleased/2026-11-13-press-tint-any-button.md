@@ -1,0 +1,1 @@
+- **The middle and secondary buttons show a press too.** While either is held where the primary isn't, what a primary press there would take draws its `El::press` fill (and `press_scale`) while the pointer is over it, as a browser sets `:active` for a press of any button; it hears nothing, and the release lets go of it.
