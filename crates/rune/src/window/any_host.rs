@@ -210,9 +210,11 @@ impl<S: 'static> Host<S> {
         if let Some(w) = &mut self.win && !self.life.shown() && w.hidden_pace.take_due(Instant::now()) {
             w.request_redraw();
         }
-        // A covered window with motion on screen looks again whether it's still covered (`look`).
-        if let Some(w) = &self.win && self.life.covered() && look_deadline(Some(w)).is_some_and(|at| at <= Instant::now()) {
-            w.request_redraw();
+        // A covered window with motion on screen looks again whether it's still covered (`look`),
+        // without a frame: asked for while covered, one would draw (`CoveredDraw`) for no one.
+        #[cfg(target_os = "windows")]
+        if self.win.as_ref().is_some_and(|w| look_deadline(Some(w)).is_some_and(|at| at <= Instant::now())) && self.life.covered() {
+            self.look();
         }
         if matches!(cause, StartCause::ResumeTimeReached { .. } | StartCause::Poll)
             && timer_deadline(&self.rt).is_some_and(|deadline| deadline <= Instant::now())
