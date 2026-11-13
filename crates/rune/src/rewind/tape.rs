@@ -13,6 +13,8 @@ pub(crate) type Q = [i32; 5];
 pub(crate) const FIELDS: usize = 5;
 /// The delta header's low bits: which fields follow. Zero says the element went away.
 const MASK_BITS: u32 = 5;
+/// Elements known before the first compaction (`Tape::compact`).
+const COMPACT_AT: usize = 4096;
 
 pub(crate) fn quantize(rect: [f32; 4], opacity: f32) -> Q {
     let q = |v: f32, k: f32| (v * k).round().clamp(i32::MIN as f32, i32::MAX as f32) as i32;
@@ -46,6 +48,8 @@ pub(crate) struct Tape {
     pub words: VecDeque<u32>,
     /// Each id's state just before the oldest kept frame (None: not on screen).
     pub base: Vec<Option<Q>>,
+    /// Known elements past which the next frame's end forgets those nothing kept refers to.
+    compact_at: usize,
 }
 
 impl Tape {
@@ -54,7 +58,7 @@ impl Tape {
             window, max_bytes, paused: false, viewport: (0.0, 0.0),
             ids: HashMap::default(), names: Vec::new(), name_bytes: 0,
             last: Vec::new(), seen: Vec::new(), present: Vec::new(), next_present: Vec::new(), serial: 0,
-            open: None, frames: VecDeque::new(), words: VecDeque::new(), base: Vec::new(),
+            open: None, frames: VecDeque::new(), words: VecDeque::new(), base: Vec::new(), compact_at: COMPACT_AT,
         }
     }
 
@@ -113,6 +117,43 @@ impl Tape {
         let len = (self.words.len() - start) as u32;
         self.frames.push_back(Mark { t, len });
         self.evict(t);
+        if self.names.len() >= self.compact_at {
+            self.compact();
+            self.compact_at = (self.names.len() * 2).max(COMPACT_AT);
+        }
+    }
+
+    /// Forgets the elements nothing kept refers to: not on screen, with no state before the
+    /// oldest kept frame, and in no kept frame. Without it every element a window ever showed
+    /// keeps its name and state for good (each session opened and closed adds its own), and
+    /// past `max_bytes` those alone evict every frame. The rest are numbered afresh.
+    fn compact(&mut self) {
+        let mut keep = vec![false; self.names.len()];
+        for &id in &self.present { keep[id as usize] = true; }
+        for (k, b) in keep.iter_mut().zip(&self.base) { *k |= b.is_some(); }
+        Tape::decode(self.words.make_contiguous(), |id, _, _| keep[id as usize] = true);
+        let mut map = vec![u32::MAX; keep.len()];
+        let mut next = 0u32;
+        for (m, k) in map.iter_mut().zip(&keep) {
+            if *k { *m = next; next += 1; }
+        }
+        let kept = |i: &usize| keep[*i];
+        let names = std::mem::take(&mut self.names);
+        self.names = names.into_iter().enumerate().filter(|(i, _)| kept(i)).map(|(_, n)| n).collect();
+        self.name_bytes = self.names.iter().map(String::len).sum();
+        self.last = self.last.iter().enumerate().filter(|(i, _)| kept(i)).map(|(_, q)| *q).collect();
+        self.seen = self.seen.iter().enumerate().filter(|(i, _)| kept(i)).map(|(_, s)| *s).collect();
+        self.base = self.base.iter().enumerate().filter(|(i, _)| kept(i)).map(|(_, b)| *b).collect();
+        self.ids.retain(|_, id| { *id = map[*id as usize]; *id != u32::MAX });
+        for id in &mut self.present { *id = map[*id as usize]; }
+        self.next_present.clear();
+        let words = self.words.make_contiguous();
+        let mut k = 0;
+        while k < words.len() {
+            let mask = words[k] & ((1 << MASK_BITS) - 1);
+            words[k] = map[(words[k] >> MASK_BITS) as usize] << MASK_BITS | mask;
+            k += 1 + mask.count_ones() as usize;
+        }
     }
 
     fn evict(&mut self, now: f64) {
