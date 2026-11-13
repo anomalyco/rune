@@ -90,6 +90,8 @@ struct Track {
     gutter: bool,
     /// Along the viewport's bottom edge, for a viewport that scrolls sideways.
     x: bool,
+    /// ScrollView and MenuScroll install a pointer handler on the thumb, not the track.
+    thumb_only: bool,
     /// The pointer anywhere over the area shows an overlay bar, not only near its edge; only
     /// over the thumb does it take the hover colour.
     area_reveals: bool,
@@ -119,6 +121,7 @@ const KIT_TRACK: Track = Track {
     overlay: false,
     gutter: false,
     x: false,
+    thumb_only: false,
     area_reveals: false,
     targeted: false,
     scroll_only: false,
@@ -143,6 +146,7 @@ const SCROLL_VIEW_TRACK: Track = Track {
     overlay: true,
     gutter: false,
     x: false,
+    thumb_only: true,
     area_reveals: true,
     targeted: false,
     scroll_only: false,
@@ -169,6 +173,7 @@ const NATIVE_TRACK: Track = Track {
     overlay: true,
     gutter: true,
     x: false,
+    thumb_only: false,
     area_reveals: true,
     targeted: false,
     scroll_only: false,
@@ -492,7 +497,8 @@ impl Bar {
     fn thumb_rect(&self, h: f32) -> [f32; 4] {
         let style = self.style();
         let w = if self.wide() { style.hover_width } else { style.width };
-        self.flowed(turned(&style.track, [style.widest() - w, 0.0, w, h]), if style.track.x { h } else { style.widest() })
+        let (slot, end) = if style.track.thumb_only { (style.track(), style.track.edge) } else { (style.widest(), 0.0) };
+        self.flowed(turned(&style.track, [slot - end - w, 0.0, w, h]), if style.track.x { h } else { slot })
     }
 
     /// Whether the viewport runs right to left, which puts its bar on its left and starts a
@@ -554,7 +560,8 @@ impl Bar {
         let style = self.style();
         let t = style.track;
         let within = if t.x { track_len(self.pos.get(), &t).0.max(0.0) } else { style.track() };
-        self.flowed(turned(&t, [style.track() - t.edge - style.widest(), top, style.widest(), h]), within)
+        let (start, width) = if t.thumb_only { (0.0, style.track()) } else { (style.track() - t.edge - style.widest(), style.widest()) };
+        self.flowed(turned(&t, [start, top, width, h]), within)
     }
 
     /// An overlay bar stays up while the thumb is held or the pointer is at its edge.
@@ -777,6 +784,16 @@ fn attach(style: ScrollBarStyle, area: &str, key: &str, outer: El, viewport: El)
     bar.restyle(style);
     let target = format!("{area}/{key}");
     let (watch, moved, left, drag) = (bar.clone(), bar.clone(), bar.clone(), bar.clone());
+    let on_drag = move |d: &mut rune::Drag, tx: &mut rune::Tx| drag.drag(&target, jumps, d, tx);
+    let slot = el().key("thumb-slot").absolute(0.0, 0.0).live_rect(bar.slot.smooth(style.track.tint)).child(
+        el().key("thumb").absolute(0.0, 0.0).live_rect(bar.thumb.smooth(style.track.tint))
+            .radius(style.widest() / 2.0).live_fill(bar.fill.smooth(style.track.tint)),
+    );
+    let track = el().key("scroll-bar").absolute(0.0, 0.0).live_rect(&bar.track)
+        .live_opacity(bar.opacity.smooth(style.track.enter).rest(style.track.leave)).a11y_hidden();
+    // The transparent area beyond a ScrollView/MenuScroll thumb belongs to the viewport. A
+    // press there must not capture a drag, swallow a row's click, page or start a repeat timer.
+    let track = if style.track.thumb_only { track.child(slot.on_drag_any(on_drag)) } else { track.on_drag_any(on_drag).child(slot) };
     outer
         .on_pointer_move_any(move |p, tx| {
             tx.live_only();
@@ -789,24 +806,7 @@ fn attach(style: ScrollBarStyle, area: &str, key: &str, outer: El, viewport: El)
             }
         })
         .child(viewport.chain_scroll_offset(move |at| watch.follow(at, overlay)))
-        .child(
-            el().key("scroll-bar")
-                .absolute(0.0, 0.0)
-                .live_rect(&bar.track)
-                .live_opacity(bar.opacity.smooth(style.track.enter).rest(style.track.leave))
-                .on_drag_any(move |d, tx| drag.drag(&target, jumps, d, tx))
-                // The scroll view it drags already scrolls for assistive technology.
-                .a11y_hidden()
-                .child(
-                    el().key("thumb-slot").absolute(0.0, 0.0).live_rect(bar.slot.smooth(style.track.tint)).child(
-                        el().key("thumb")
-                            .absolute(0.0, 0.0)
-                            .live_rect(bar.thumb.smooth(style.track.tint))
-                            .radius(style.widest() / 2.0)
-                            .live_fill(bar.fill.smooth(style.track.tint)),
-                    ),
-                ),
-        )
+        .child(track)
 }
 
 #[cfg(test)]

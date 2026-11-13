@@ -1,0 +1,1 @@
+- `ScrollBarStyle::scroll_view` and `menu_scroll` take drags on the thumb only. Pressing the empty part of the track no longer pages the content or intercepts a press meant for the viewport. Native and Kit bars keep their track paging and jump-to-spot preferences.
