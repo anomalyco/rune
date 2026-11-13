@@ -89,7 +89,7 @@ pub(in crate::runtime) enum Event {
     /// The frame that stepped has laid the list out.
     Laid,
     /// A layout changed the extent of the viewport it rests at the end of; the pointer is at
-    /// `edge`.
+    /// `edge`. Grown, it goes on if there's room; shrunk, it stops waiting.
     Extent { now: f64, edge: Option<Edge> },
     /// The drag ended.
     Stop,
@@ -151,8 +151,14 @@ pub(in crate::runtime) fn step(seq: &mut Seq, state: &mut State, event: Event) -
             Effects::one(Effect::Extend)
         }
         Event::Extent { now, edge } => {
-            let State::AtEnd { scroll, .. } = *state else { return Effects::none() };
+            let State::AtEnd { scroll, max } = *state else { return Effects::none() };
             match edge {
+                // The content it waited at the end of shrank: rows that arrive later aren't the
+                // ones it waited for.
+                Some(e) if e.scroll == scroll && e.max < max => {
+                    *state = State::Idle;
+                    Effects::none()
+                }
                 Some(e) if e.moves() && e.scroll == scroll => {
                     let attempt = seq.next();
                     *state = State::Running { attempt, scroll, last: now, from: None, due: now };

@@ -9,26 +9,30 @@ const BOTTOM: f32 = 120.0;
 /// What each row reads.
 const LEN: usize = 6;
 
-/// The list each test builds: virtual rows or plain ones, how many, and whether it sticks to its
-/// bottom.
+/// The list each test builds: virtual rows or plain ones, how many, whether it sticks to its
+/// bottom, and whether row 10 is half height.
 #[derive(Clone, Copy)]
 struct List {
     rows: usize,
     virtual_rows: bool,
     stick: bool,
+    short: bool,
 }
 
-const VIRTUAL: List = List { rows: ROWS, virtual_rows: true, stick: false };
-const PLAIN: List = List { rows: ROWS, virtual_rows: false, stick: false };
+const VIRTUAL: List = List { rows: ROWS, virtual_rows: true, stick: false, short: false };
+const PLAIN: List = List { rows: ROWS, virtual_rows: false, stick: false, short: false };
 
-fn row(i: usize) -> El { text(format!("row {i:02}")).font(TextStyle::new(14.0, 400.0)).w_full().h(ROW_H).selectable(true) }
+fn row(s: &List, i: usize) -> El {
+    let h = if s.short && i == 10 { ROW_H / 2.0 } else { ROW_H };
+    text(format!("row {i:02}")).font(TextStyle::new(14.0, 400.0)).w_full().h(h).selectable(true)
+}
 
 fn view(s: &List, _: &mut Cx<List>) -> El {
     let list = col().key("list").w_full().growth(GrowthSpec::default()).selection_group(true);
     let list = if s.virtual_rows {
-        list.virtual_rows(s.rows, ROW_H, |_: &List, i| format!("r{i}").into(), |_: &List, i| row(i))
+        list.virtual_rows(s.rows, ROW_H, |_: &List, i| format!("r{i}").into(), |s: &List, i| row(s, i))
     } else {
-        list.children((0..s.rows).map(|i| row(i).key(format!("r{i}"))))
+        list.children((0..s.rows).map(|i| row(s, i).key(format!("r{i}"))))
     };
     col().key("root").w(300.0).h(BOTTOM).child(col().key("scroll").w_full().h(BOTTOM).scroll(ScrollSpec { stick_bottom: s.stick }).child(list))
 }
@@ -267,7 +271,7 @@ fn at_the_end_of_the_list_it_stops_asking_for_frames() {
 #[test]
 fn a_list_stuck_to_its_bottom_scrolls_up_and_then_rests() {
     for hz in [240.0, 120.0] {
-        let mut rt = window(List { rows: 10, virtual_rows: true, stick: true });
+        let mut rt = window(List { rows: 10, virtual_rows: true, stick: true, short: false });
         rt.wheel(150.0, 60.0, -10_000.0);
         settle(&mut rt);
         let end = max(&rt);
@@ -445,15 +449,34 @@ fn rows_arriving_after_it_let_go_of_the_end_change_nothing() {
     }
 }
 
+/// A list that shrinks while a held drag waits at its end ends the wait: rows appended after it
+/// move neither the list nor the selection, whose ends both stay.
+#[test]
+fn a_list_that_shrinks_under_a_resting_drag_ends_the_wait() {
+    let mut rt = rest_at_end(PLAIN);
+    let (before, selected) = (max(&rt), range(&rt));
+    rt.update(|s, _| s.short = true);
+    settle(&mut rt);
+    assert!(max(&rt) < before, "the extent shrank");
+    assert_eq!((offset(&rt), range(&rt)), (max(&rt), selected), "at the new end, the selection as it was");
+    let at = offset(&rt);
+    rt.update(|s, _| s.rows += 20);
+    settle(&mut rt);
+    assert_eq!((offset(&rt), range(&rt)), (at, selected), "the rows that arrive after it move nothing");
+    assert_eq!(rt.wake_deadline(), None);
+    assert!(rt.press.is_held() && rt.selectable.phase.dragging(), "still held");
+}
+
 /// The edge scroll's letters, as the runtime feeds them: a pointer move, the frame for the step
 /// asked for (or an old one's), a stepped layout, a layout that changed the extent, a stop.
 #[derive(Clone, Copy, Debug)]
 enum Letter { Moved(At), Due(At), Stale, Laid, Extent(At), Stop }
 
 /// Where the pointer is: inside, at the bottom of viewport 7 with room, with less room than a
-/// step, at its end, at its end after more rows arrived, at the bottom of another viewport.
+/// step, at its end, at its end after more rows arrived or after some left, at the bottom of
+/// another viewport.
 #[derive(Clone, Copy, Debug)]
-enum At { Inside, Room, Near, End, Grown, Other }
+enum At { Inside, Room, Near, End, Grown, Shrunk, Other }
 
 fn at(at: At) -> Option<Edge> {
     let e = |scroll, room, offset, max| Some(Edge { scroll: NodeId(scroll), speed: 600.0, room, offset, max });
@@ -463,6 +486,7 @@ fn at(at: At) -> Option<Edge> {
         At::Near => e(7, 3.0, 97.0, 100.0),
         At::End => e(7, 0.0, 100.0, 100.0),
         At::Grown => e(7, 50.0, 100.0, 150.0),
+        At::Shrunk => e(7, 0.0, 80.0, 80.0),
         At::Other => e(8, 100.0, 0.0, 100.0),
     }
 }
@@ -546,8 +570,12 @@ impl Reference {
 
     /// differs from dev: dev had no such event; resting at the end, room the layout made goes on.
     fn extent(&mut self, now: f64, edge: Option<Edge>) -> Vec<Effect> {
-        let Dev::AtEnd { scroll, .. } = self.state else { return vec![] };
+        let Dev::AtEnd { scroll, max } = self.state else { return vec![] };
         match edge {
+            Some(e) if e.scroll == scroll && e.max < max => {
+                self.state = Dev::Idle;
+                vec![]
+            }
             Some(e) if Self::moves(&e) && e.scroll == scroll => {
                 let attempt = self.next();
                 self.state = Dev::Running { attempt, scroll, last: now, from: None, due: now };
@@ -609,7 +637,7 @@ fn walks(alphabet: &[Letter], len: usize, prefix: &mut Vec<Letter>, ran: &mut us
 
 #[test]
 fn every_short_sequence_steps_as_the_reference_does() {
-    let ats = [At::Inside, At::Room, At::Near, At::End, At::Grown, At::Other];
+    let ats = [At::Inside, At::Room, At::Near, At::End, At::Grown, At::Shrunk, At::Other];
     let alphabet: Vec<Letter> = ats.iter().map(|&a| Letter::Moved(a))
         .chain(ats.iter().map(|&a| Letter::Due(a)))
         .chain(ats.iter().map(|&a| Letter::Extent(a)))
