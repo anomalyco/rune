@@ -25,12 +25,15 @@ enum Outcome {
     Skipped,
 }
 
-enum Op { Attach(Waker, u32), Call(u32), Drain, Close, ReleaseEngine }
+/// An engine's number is also the generation of the host that installed it.
+enum Op { Attach(Waker, u32), Call(u32), Drain, Close, ReleaseEngine(u32) }
 
-/// Teardowns still running, oldest first, each with the wake of the attach it holds up, and the
-/// operations parked behind them.
+/// Teardowns still running, oldest first, each with the wake and generation of the attach it
+/// holds up, the operations parked behind them, and each thread's guard, by its generation. A
+/// thread's later attach takes the place of its guard here, and the guard it replaced never
+/// closes.
 #[derive(Default)]
-struct Schedule { teardowns: Vec<(ThreadId, Option<Waker>)>, parked: Vec<(ThreadId, Op)> }
+struct Schedule { teardowns: Vec<(ThreadId, Option<(Waker, u32)>)>, parked: Vec<(ThreadId, Op)>, guards: HashMap<ThreadId, u32> }
 
 impl Schedule {
     fn busy(&self, thread: ThreadId) -> bool {
@@ -55,23 +58,37 @@ fn sorted(engines: &HashMap<ThreadId, u32>) -> Vec<(ThreadId, u32)> {
 trait Model {
     fn schedule(&mut self) -> &mut Schedule;
     fn attach(&mut self, thread: ThreadId, wake: Waker, engine: u32) -> Outcome;
-    /// The routing half of an attach, which runs once any replaced engine is gone.
-    fn finish_attach(&mut self, thread: ThreadId, wake: Waker);
+    /// The routing half of an attach by the host of generation `host`, which runs once any
+    /// replaced engine is gone.
+    fn finish_attach(&mut self, thread: ThreadId, wake: Waker, host: u32);
     fn call(&mut self, thread: ThreadId, job: u32) -> Outcome;
-    fn drain(&mut self, thread: ThreadId) -> Outcome;
-    fn close(&mut self, thread: ThreadId) -> Outcome;
+    /// A drain by the thread's guard, of generation `host`.
+    fn drain(&mut self, thread: ThreadId, host: u32) -> Outcome;
+    /// The close of the thread's guard, of generation `host`.
+    fn close(&mut self, thread: ThreadId, host: u32) -> Outcome;
     /// The engine half of a close on Linux.
-    fn release_engine(&mut self, thread: ThreadId) -> Outcome;
+    fn release_engine(&mut self, thread: ThreadId, host: u32) -> Outcome;
     fn view(&self) -> RouteView;
 }
 
 fn perform(model: &mut impl Model, thread: ThreadId, op: Op) -> Outcome {
     match op {
-        Op::Attach(wake, engine) => model.attach(thread, wake, engine),
+        Op::Attach(wake, engine) => {
+            let outcome = model.attach(thread, wake, engine);
+            // A parked attach hasn't installed yet; it gets its guard when it does.
+            if outcome != Outcome::Blocked { model.schedule().guards.insert(thread, engine); }
+            outcome
+        }
         Op::Call(job) => model.call(thread, job),
-        Op::Drain => model.drain(thread),
-        Op::Close => model.close(thread),
-        Op::ReleaseEngine => model.release_engine(thread),
+        Op::Drain => {
+            let host = model.schedule().guards[&thread];
+            model.drain(thread, host)
+        }
+        Op::Close => {
+            let host = model.schedule().guards.remove(&thread).expect("only a thread with a guard closes");
+            model.close(thread, host)
+        }
+        Op::ReleaseEngine(host) => model.release_engine(thread, host),
     }
 }
 
@@ -83,7 +100,7 @@ fn finish_teardown(model: &mut impl Model) -> Vec<Outcome> {
     let (thread, attaching) = schedule.teardowns.remove(0);
     let (calls, others): (Vec<_>, Vec<_>) = std::mem::take(&mut schedule.parked).into_iter().partition(|(_, op)| matches!(op, Op::Call(_)));
     let mut outcomes: Vec<_> = calls.into_iter().map(|(thread, op)| perform(model, thread, op)).collect();
-    if let Some(wake) = attaching { model.finish_attach(thread, wake); }
+    if let Some((wake, host)) = attaching { model.finish_attach(thread, wake, host); }
     outcomes.extend(others.into_iter().map(|(thread, op)| perform(model, thread, op)));
     outcomes
 }
@@ -92,10 +109,17 @@ fn finish_teardown(model: &mut impl Model) -> Vec<Outcome> {
 // with the current thread passed in and a job as a number. A running teardown on Linux holds
 // the slot's lock.
 #[derive(Default)]
-struct OldRouting { owner: Option<ThreadId>, wake: Option<Waker>, jobs: Vec<u32> }
+struct OldRouting {
+    owner: Option<ThreadId>,
+    wake: Option<Waker>,
+    jobs: Vec<u32>,
+    // differs from dev: routing names the generation of the host it routes to.
+    host: Option<u32>,
+}
 
+/// `left_newer` and `left_calls` note that a marked departure took effect.
 #[derive(Default)]
-struct OldControl { routing: OldRouting, engine: Option<u32>, engines: HashMap<ThreadId, u32>, linux: bool, schedule: Schedule }
+struct OldControl { routing: OldRouting, engine: Option<u32>, engines: HashMap<ThreadId, u32>, linux: bool, schedule: Schedule, left_newer: bool, left_calls: bool }
 
 impl OldControl {
     fn slot_locked(&self) -> bool { self.linux && !self.schedule.teardowns.is_empty() }
@@ -107,17 +131,18 @@ impl Model for OldControl {
     fn attach(&mut self, thread: ThreadId, wake: Waker, engine: u32) -> Outcome {
         if self.slot_locked() { self.schedule.parked.push((thread, Op::Attach(wake, engine))); return Outcome::Blocked; }
         let replaced = if self.linux { self.engine.replace(engine) } else { self.engines.insert(thread, engine) };
-        if let Some(engine) = replaced {
-            self.schedule.teardowns.push((thread, Some(wake)));
-            return Outcome::Replacing { engine };
+        if let Some(replaced) = replaced {
+            self.schedule.teardowns.push((thread, Some((wake, engine))));
+            return Outcome::Replacing { engine: replaced };
         }
-        self.finish_attach(thread, wake);
+        self.finish_attach(thread, wake, engine);
         Outcome::Attached
     }
 
-    fn finish_attach(&mut self, thread: ThreadId, wake: Waker) {
+    fn finish_attach(&mut self, thread: ThreadId, wake: Waker, host: u32) {
         self.routing.owner = Some(thread);
         self.routing.wake = Some(wake);
+        self.routing.host = Some(host);
     }
 
     fn call(&mut self, thread: ThreadId, job: u32) -> Outcome {
@@ -140,26 +165,35 @@ impl Model for OldControl {
         Outcome::Queued { wake: address(&wake.unwrap()) }
     }
 
-    fn drain(&mut self, thread: ThreadId) -> Outcome {
+    fn drain(&mut self, thread: ThreadId, host: u32) -> Outcome {
         if self.linux { return Outcome::Drained { ran: vec![], dropped: vec![] }; }
+        // differs from dev: only the routed host takes the waiting calls; another leaves them.
+        if self.routing.host != Some(host) {
+            self.left_calls |= !self.routing.jobs.is_empty();
+            return Outcome::Drained { ran: vec![], dropped: vec![] };
+        }
         let jobs = std::mem::take(&mut self.routing.jobs);
-        if self.engines.contains_key(&thread) { Outcome::Drained { ran: jobs, dropped: vec![] } } else { Outcome::Drained { ran: vec![], dropped: jobs } }
+        // differs from dev: they run on the drainer's engine only if its own host installed it.
+        if self.engines.get(&thread) == Some(&host) { Outcome::Drained { ran: jobs, dropped: vec![] } } else { Outcome::Drained { ran: vec![], dropped: jobs } }
     }
 
-    fn close(&mut self, thread: ThreadId) -> Outcome {
+    fn close(&mut self, thread: ThreadId, host: u32) -> Outcome {
         let route = std::mem::take(&mut self.routing);
         if self.linux {
-            if self.slot_locked() { self.schedule.parked.push((thread, Op::ReleaseEngine)); return Outcome::Blocked; }
-            return self.release_engine(thread);
+            if self.slot_locked() { self.schedule.parked.push((thread, Op::ReleaseEngine(host))); return Outcome::Blocked; }
+            return self.release_engine(thread, host);
         }
-        let engine = self.engines.remove(&thread);
+        // differs from dev: a close takes only the engine its own host installed.
+        let engine = if self.engines.get(&thread) == Some(&host) { self.engines.remove(&thread) } else { None };
         if engine.is_some() { self.schedule.teardowns.push((thread, None)); }
         Outcome::Closed { jobs: route.jobs, engine }
     }
 
-    fn release_engine(&mut self, thread: ThreadId) -> Outcome {
-        if self.slot_locked() { self.schedule.parked.push((thread, Op::ReleaseEngine)); return Outcome::Blocked; }
-        let engine = self.engine.take();
+    fn release_engine(&mut self, thread: ThreadId, host: u32) -> Outcome {
+        if self.slot_locked() { self.schedule.parked.push((thread, Op::ReleaseEngine(host))); return Outcome::Blocked; }
+        // differs from dev: a close takes only the engine its own host installed, never a newer one.
+        let engine = if self.engine == Some(host) { self.engine.take() } else { None };
+        self.left_newer |= engine.is_none() && self.engine.is_some();
         if engine.is_some() { self.schedule.teardowns.push((thread, None)); }
         Outcome::Closed { jobs: vec![], engine }
     }
@@ -187,18 +221,16 @@ impl Model for NewControl {
             self.slot_wake = Some(wake.clone());
             self.engine.replace(engine)
         } else { self.engines.insert(thread, engine) };
-        if let Some(engine) = replaced {
-            self.schedule.teardowns.push((thread, Some(wake)));
-            return Outcome::Replacing { engine };
+        if let Some(replaced) = replaced {
+            self.schedule.teardowns.push((thread, Some((wake, engine))));
+            return Outcome::Replacing { engine: replaced };
         }
-        self.finish_attach(thread, wake);
+        self.finish_attach(thread, wake, engine);
         Outcome::Attached
     }
 
-    fn finish_attach(&mut self, thread: ThreadId, wake: Waker) {
-        // The host is named by the engine it installed, if no close has taken it since.
-        let engine = if self.linux { self.engine } else { self.engines.get(&thread).copied() };
-        let host = engine.unwrap_or_default().into();
+    fn finish_attach(&mut self, thread: ThreadId, wake: Waker, host: u32) {
+        let host = host.into();
         let own = address(&wake);
         // differs from dev: a host that inherits waiting calls is woken for them.
         for effect in step_attachment(&mut self.attachment, AttachEvent::Attach { owner: thread, wake, host }) {
@@ -226,32 +258,33 @@ impl Model for NewControl {
         }
     }
 
-    fn drain(&mut self, thread: ThreadId) -> Outcome {
+    fn drain(&mut self, thread: ThreadId, host: u32) -> Outcome {
         if self.linux { return Outcome::Drained { ran: vec![], dropped: vec![] }; }
-        // As on dev, any drainer takes the calls: the walk doesn't model host generations (r410).
-        let host = self.attachment.host().unwrap_or_default();
-        let Some(AttachEffect::Jobs(jobs)) = step_attachment(&mut self.attachment, AttachEvent::Drain { host }).into_iter().next() else {
+        let Some(AttachEffect::Jobs(jobs)) = step_attachment(&mut self.attachment, AttachEvent::Drain { host: host.into() }).into_iter().next() else {
             return Outcome::Drained { ran: vec![], dropped: vec![] };
         };
-        if self.engines.contains_key(&thread) { Outcome::Drained { ran: jobs, dropped: vec![] } } else { Outcome::Drained { ran: vec![], dropped: jobs } }
+        // The routed host's thread holds its engine.
+        if self.engines.get(&thread) == Some(&host) { Outcome::Drained { ran: jobs, dropped: vec![] } } else { Outcome::Drained { ran: vec![], dropped: jobs } }
     }
 
-    fn close(&mut self, thread: ThreadId) -> Outcome {
+    fn close(&mut self, thread: ThreadId, host: u32) -> Outcome {
         let mut released = vec![];
         for effect in step_attachment(&mut self.attachment, AttachEvent::Close) {
             if let AttachEffect::Release(jobs) = effect { released = jobs; }
         }
-        if self.linux { return self.release_engine(thread); }
-        let engine = self.engines.remove(&thread);
+        if self.linux { return self.release_engine(thread, host); }
+        let engine = if self.engines.get(&thread) == Some(&host) { self.engines.remove(&thread) } else { None };
         if engine.is_some() { self.schedule.teardowns.push((thread, None)); }
         Outcome::Closed { jobs: released, engine }
     }
 
-    fn release_engine(&mut self, thread: ThreadId) -> Outcome {
-        if self.slot_locked() { self.schedule.parked.push((thread, Op::ReleaseEngine)); return Outcome::Blocked; }
+    fn release_engine(&mut self, thread: ThreadId, host: u32) -> Outcome {
+        if self.slot_locked() { self.schedule.parked.push((thread, Op::ReleaseEngine(host))); return Outcome::Blocked; }
+        // Only the engine this host installed, with the wake that travels with it.
+        if self.engine != Some(host) { return Outcome::Closed { jobs: vec![], engine: None }; }
         let engine = self.engine.take();
         self.slot_wake = None;
-        if engine.is_some() { self.schedule.teardowns.push((thread, None)); }
+        self.schedule.teardowns.push((thread, None));
         Outcome::Closed { jobs: vec![], engine }
     }
 
@@ -284,6 +317,7 @@ fn assert_outcomes(old: &[Outcome], new: &[Outcome], linux: bool, at: &str) -> b
 }
 
 /// Letters 0..8 are Attach, Call, Drain and Close from either thread; 8 ends the oldest teardown.
+/// Only a thread with a guard drains or closes.
 fn play(model: &mut impl Model, letter: usize, threads: &[ThreadId; 2], wakes: &[Waker; 2], number: u32) -> Vec<Outcome> {
     if letter == 8 { return finish_teardown(model); }
     let thread = threads[letter % 2];
@@ -294,6 +328,7 @@ fn play(model: &mut impl Model, letter: usize, threads: &[ThreadId; 2], wakes: &
         2 => Op::Drain,
         _ => Op::Close,
     };
+    if matches!(op, Op::Drain | Op::Close) && !model.schedule().guards.contains_key(&thread) { return vec![Outcome::Skipped]; }
     vec![perform(model, thread, op)]
 }
 
@@ -370,7 +405,7 @@ fn the_newest_hosts_close_and_drain_and_any_close_ending_routing_stay_as_they_we
 fn every_attachment_sequence_matches_the_old_routing() {
     let threads = [std::thread::current().id(), other_thread()];
     let wakes: [Waker; 2] = [Arc::new(|| {}), Arc::new(|| { let _ = 1; })];
-    let mut departed = false;
+    let (mut departed, mut left_newer, mut left_calls) = (false, false, false);
     for linux in [false, true] {
         every_sequence(9, 6, |sequence| {
             let mut old = OldControl { linux, ..OldControl::default() };
@@ -386,8 +421,12 @@ fn every_attachment_sequence_matches_the_old_routing() {
                     assert!(new.schedule.teardowns.is_empty(), "a call reached an engine during a teardown: {sequence:?} at {n}");
                 }
             }
+            left_newer |= old.left_newer;
+            left_calls |= old.left_calls;
         });
     }
     assert!(departed, "the walk never saw a call that reached the engine a newer host installed");
+    assert!(left_newer, "the walk never saw a replaced host's close leave the newer engine");
+    assert!(left_calls, "the walk never saw a replaced host's drain leave the calls to the routed host");
 }
 

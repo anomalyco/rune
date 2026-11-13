@@ -3,7 +3,7 @@
 //! teardown keeps running until the sequence says it finished.
 
 use super::*;
-use std::{cell::RefCell, collections::BTreeSet, rc::Rc, sync::LazyLock, thread::ThreadId};
+use std::{cell::RefCell, collections::BTreeSet, rc::Rc, sync::LazyLock};
 
 
 /// The sequences of `length` letters drawn from `0..letters`, each passed to `run`.
@@ -339,6 +339,7 @@ const STALE_CONFLICT: &str = "a conflict came from an engine nobody is using";
 const GRAB_WITHOUT_OWNER: &str = "a live engine holds a chord with no owner on record";
 const OWNER_WITHOUT_GRAB: &str = "an owner is on record for a chord no live engine holds";
 const WAKE_LETS_GO: &str = "a call in its wake no longer keeps the engine's claims";
+const STALE_CLOSE_KEEPS: &str = "a replaced host's close left the newer host's engine and handlers";
 
 fn overlap_claims(native: &Mutex<Vec<(ShortcutId, Shortcut, &'static str)>>) -> Vec<u32> {
     let mut claims: Vec<_> = native.lock().unwrap().iter().filter(|(_, s, _)| *s == *OVERLAP_CHORD).map(|(id, ..)| id.0).collect();
@@ -397,6 +398,8 @@ struct Stage<E> {
     waiting: Option<(Handle<E>, Waiter)>,
     /// A host whose engine is in the slot but whose attach waits for that routing lock.
     pending: Option<usize>,
+    /// The host that installed last, whose engine the slot holds until its close takes it.
+    newest: Option<usize>,
     next: u32,
     latest: Option<u32>,
     /// The first registration this host made, which a successor never sees again.
@@ -406,7 +409,7 @@ struct Stage<E> {
 
 impl<E: OverlapEngine> Stage<E> {
     fn new() -> Self {
-        Self { attached: false, open: [false; 2], slot: None, handlers: BTreeSet::new(), in_wake: false, held: None, inside: None, waiting: None, pending: None, next: OVERLAP_ID, latest: None, first: None, broken: vec![] }
+        Self { attached: false, open: [false; 2], slot: None, handlers: BTreeSet::new(), in_wake: false, held: None, inside: None, waiting: None, pending: None, newest: None, next: OVERLAP_ID, latest: None, first: None, broken: vec![] }
     }
 
     fn slot_held(&self) -> Vec<u32> { self.slot.as_ref().map_or_else(Vec::new, |engine| engine.borrow().held()) }
@@ -473,6 +476,7 @@ impl<E: OverlapEngine> Stage<E> {
     /// The engine goes in the slot under the slot's own lock; the attach then waits for routing.
     fn attach(&mut self, host: usize) -> Seen {
         self.slot = Some(Rc::new(RefCell::new(E::fresh())));
+        self.newest = Some(host);
         if self.waiting.is_some() {
             self.pending = Some(host);
             return Seen::Parked;
@@ -486,9 +490,11 @@ impl<E: OverlapEngine> Stage<E> {
         self.attached = true;
     }
 
-    fn close(&mut self, host: usize) -> Seen {
+    /// Any close ends routing. `own`: it also takes the slot's engine and clears the handlers.
+    fn close(&mut self, host: usize, own: bool) -> Seen {
         self.open[host] = false;
         self.attached = false;
+        if !own { return Seen::Done; }
         if let Some(engine) = self.slot.take() { engine.borrow_mut().close(); }
         self.handlers.clear();
         Seen::Done
@@ -510,6 +516,8 @@ trait Overlap {
     fn stage(&mut self) -> &mut Stage<Self::E>;
     fn stage_ref(&self) -> &Stage<Self::E>;
     fn stop_in_wake(&mut self);
+    /// Whether `host`'s close takes the slot's engine and clears the handlers.
+    fn closes_own(&self, host: usize) -> bool;
     fn claims(&self) -> Vec<u32>;
 }
 
@@ -527,6 +535,11 @@ impl Overlap for Reference {
         self.stage.held = self.stage.slot.clone();
     }
 
+    fn closes_own(&self, host: usize) -> bool {
+        // differs from dev: a replaced host's close leaves the newer host's engine and handlers.
+        !self.departures || self.stage.newest == Some(host)
+    }
+
     fn claims(&self) -> Vec<u32> { overlap_claims(&OLD_NATIVE) }
 }
 
@@ -538,6 +551,9 @@ impl Overlap for NewOverlap {
     fn stage(&mut self) -> &mut Stage<Engine> { &mut self.0 }
     fn stage_ref(&self) -> &Stage<Engine> { &self.0 }
     fn stop_in_wake(&mut self) {}
+    /// A guard takes only its own generation's engine, and only the newest host's close clears
+    /// the handlers.
+    fn closes_own(&self, host: usize) -> bool { self.0.newest == Some(host) }
     fn claims(&self) -> Vec<u32> { overlap_claims(&NATIVE) }
 }
 
@@ -545,13 +561,14 @@ impl Overlap for NewOverlap {
 /// 6, 7 a call stops in its wake and goes; 8 a call stops inside the engine; 9 it leaves;
 /// 10 it leaves and the backend then refuses what was waiting; 11 unregister the first chord.
 fn overlap_play(world: &mut impl Overlap, letter: usize) -> Seen {
+    let own = matches!(letter, 2 | 3) && world.closes_own(letter - 2);
     let stage = world.stage();
     let reachable = stage.attached && stage.slot.is_some();
     match letter {
         0 | 1 if stage.open[letter] || stage.pending.is_some() => Seen::Skipped,
         0 | 1 => stage.attach(letter),
         2 | 3 if !stage.open[letter - 2] || stage.inside.is_some() || stage.waiting.is_some() => Seen::Skipped,
-        2 | 3 => stage.close(letter - 2),
+        2 | 3 => stage.close(letter - 2, own),
         4 => stage.register(),
         5 => stage.unregister(),
         6 if stage.in_wake || !reachable || stage.slot_is_inside() || stage.waiting.is_some() => Seen::Skipped,
@@ -614,10 +631,17 @@ fn overlap_dev_trace(sequence: &[usize], found: &mut BTreeSet<&'static str>) -> 
 /// checked, so a later event that differs for another reason still fails the walk. differs from
 /// dev: a call lets go of its engine before its wake, so dev alone still holds the claims of an
 /// engine nothing but that call keeps, and every registration those claims refused.
-fn approved_difference(dev: &OverlapView, want: &OverlapView, target: Option<u32>, registering: bool, departed: &mut BTreeSet<u32>, sequence: &[usize], n: usize) -> Option<&'static str> {
+#[allow(clippy::too_many_arguments)]
+fn approved_difference(dev: &OverlapView, want: &OverlapView, target: Option<u32>, registering: bool, departed: &mut BTreeSet<u32>, kept: &BTreeSet<u32>, sequence: &[usize], n: usize) -> Option<&'static str> {
     if dev == want { return None; }
     let at = format!("{sequence:?} at {n}\ndev {dev:?}\nwant {want:?}");
     assert_eq!((want.1, want.2), (dev.1, dev.2), "the hosts agree: {at}");
+    // differs from dev: a replaced host's close leaves the newer host's engine and handlers, so
+    // `kept`, what they held then, may still stand where dev's close took it.
+    let only_kept = |dev: &[u32], want: &[u32]| dev.iter().all(|id| want.contains(id)) && want.iter().all(|id| dev.contains(id) || kept.contains(id));
+    if (&dev.0, &dev.6) == (&want.0, &want.6) && only_kept(&dev.3, &want.3) && only_kept(&dev.4, &want.4) && only_kept(&dev.5, &want.5) {
+        return Some(STALE_CLOSE_KEEPS);
+    }
     // An event that did nothing, stopped in its wake, or parked is not an answer, and must keep
     // its exact kind: only the answers may move under the departure.
     // An event that did nothing, stopped in its wake, or parked is not an answer, and must keep
@@ -662,10 +686,10 @@ fn approved_difference(dev: &OverlapView, want: &OverlapView, target: Option<u32
     };
     let (lost, gained) = aside(&dev.4, &want.4);
     assert!(lost.iter().all(|id| allowed.contains(id)), "a claim went for another reason in {at}");
-    assert!(gained.iter().all(|id| departed.contains(id)), "a claim appeared for another reason in {at}");
+    assert!(gained.iter().all(|id| departed.contains(id) || kept.contains(id)), "a claim appeared for another reason in {at}");
     for (lost, gained) in [aside(&dev.3, &want.3), aside(&dev.5, &want.5)] {
         assert!(lost.iter().all(|id| allowed.contains(id)), "a handler or engine entry went for another reason in {at}");
-        assert!(gained.iter().all(|id| departed.contains(id)), "a handler or engine entry appeared for another reason in {at}");
+        assert!(gained.iter().all(|id| departed.contains(id) || kept.contains(id)), "a handler or engine entry appeared for another reason in {at}");
     }
     Some(WAKE_LETS_GO)
 }
@@ -675,7 +699,7 @@ fn overlap_replay(sequence: &[usize], found: &mut BTreeSet<&'static str>, fired:
     let dev = overlap_dev_trace(sequence, found);
     let mut reference = Reference { stage: Stage::new(), departures: true };
     let mut new = NewOverlap(Stage::new());
-    let (mut moved, mut departed) = (false, BTreeSet::new());
+    let (mut moved, mut departed, mut kept) = (false, BTreeSet::new(), BTreeSet::new());
     for (n, letter) in sequence.iter().enumerate() {
         assert_eq!(new.0.next, reference.stage.next, "{sequence:?} at {n}");
         let (target, registering) = match letter {
@@ -691,12 +715,15 @@ fn overlap_replay(sequence: &[usize], found: &mut BTreeSet<&'static str>, fired:
         };
         let expected = overlap_play(&mut reference, *letter);
         let actual = overlap_play(&mut new, *letter);
+        if matches!(letter, 2 | 3) && expected == Seen::Done && !reference.closes_own(letter - 2) {
+            kept.extend(reference.stage.handlers.iter().copied().chain(reference.stage.slot_held()));
+        }
         moved = actual != Seen::Skipped;
         overlap_check(&mut new);
         assert!(new.0.broken.is_empty(), "{:?}: {sequence:?} at {n}", new.0.broken);
         let want = overlap_view(&reference, expected);
         assert_eq!(overlap_view(&new, actual), want, "{sequence:?} at {n}");
-        if let Some(departure) = approved_difference(&dev[n], &want, target, registering, &mut departed, sequence, n) {
+        if let Some(departure) = approved_difference(&dev[n], &want, target, registering, &mut departed, &kept, sequence, n) {
             fired.insert(departure);
         }
     }
@@ -791,7 +818,7 @@ fn the_newest_hosts_close_and_any_close_ending_routing_stay_as_they_were() {
 fn a_walk_difference_needs_the_marked_departure() {
     use std::panic::{AssertUnwindSafe, catch_unwind};
     let view = |seen| (seen, true, [false, false], vec![], vec![], vec![], vec![]);
-    let rejected = |dev: OverlapView, want: OverlapView, registering| catch_unwind(AssertUnwindSafe(|| approved_difference(&dev, &want, Some(7), registering, &mut BTreeSet::new(), &[], 0))).is_err();
+    let rejected = |dev: OverlapView, want: OverlapView, registering| catch_unwind(AssertUnwindSafe(|| approved_difference(&dev, &want, Some(7), registering, &mut BTreeSet::new(), &BTreeSet::new(), &[], 0))).is_err();
     assert!(rejected(view(Seen::Done), view(Seen::Parked), false), "a parked event is not a completed one");
     assert!(rejected(view(Seen::Answer(Err(ShortcutError::Conflict))), view(Seen::Answer(Ok(()))), true), "a registration with no wake-held claim is not the departure");
 }
@@ -805,4 +832,5 @@ fn every_overlap_sequence_differs_from_dev_only_at_its_marked_departure() {
         assert!(found.contains(invariant), "the walk never saw the old code break this, so it proves nothing: {invariant}");
     }
     assert!(fired.contains(WAKE_LETS_GO), "the departure never took effect");
+    assert!(fired.contains(STALE_CLOSE_KEEPS), "a replaced host's close never left the newer host's engine");
 }
