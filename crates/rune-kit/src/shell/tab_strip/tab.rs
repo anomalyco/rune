@@ -98,7 +98,10 @@ pub(super) fn build<S: 'static>(item: TabItem<'_, S>, at: Place, prev: Option<&s
         true => row().key("avatar").size(16.0, 16.0),
         false => lead(item.avatar, item.icon, at.active, icon_only && dotted, status, k),
     };
-    let title = (!icon_only).then(|| title(&item.title, item.editor, &at, vertical, emphasized, k));
+    // Without hover every closable tab shows its slot: the title fades 24 before the tab's end, 44 with a status mark beside the close button.
+    let touch = st.hover_none && closable && !icon_only;
+    let room = if touch && status.is_some() { 44.0 } else { 24.0 };
+    let title = (!icon_only).then(|| title(&item.title, item.editor, &at, vertical, emphasized || touch, room, k));
     pill = match (item.subtitle, title) {
         (Some(sub), Some(t)) if vertical => {
             let sub = text(sub.into_owned()).key("subtitle").font(k.ty.ui_compact).color(c.text_muted).truncate_fade_width(FADE / k.ty.ui_compact.size).a11y_hidden();
@@ -110,7 +113,7 @@ pub(super) fn build<S: 'static>(item: TabItem<'_, S>, at: Place, prev: Option<&s
     };
     // What the pointer lays over the slot's ground where the tab has no overlay of its own.
     let hover_overlay = (overlay == Color::TRANSPARENT).then_some(c.hover);
-    let look = SlotLook { status, active: at.active, vertical, icon_only, hover_overlay, closable, composite, h, width: at.width };
+    let look = SlotLook { status, active: at.active, vertical, icon_only, hover_overlay, closable, composite, h, width: at.width, touch };
     if let Some(slot) = status_slot(look, st, &id, k) {
         pill = pill.child(slot);
     }
@@ -236,7 +239,7 @@ fn lead(avatar: Option<El>, glyph: Option<&'static rune::Icon>, active: bool, ba
 }
 
 /// The title: clipped, never ellipsised, fading out before the status and close slot.
-fn title(title: &str, editor: Option<El>, at: &Place, vertical: bool, emphasized: bool, k: &Kit) -> El {
+fn title(title: &str, editor: Option<El>, at: &Place, vertical: bool, emphasized: bool, room: f32, k: &Kit) -> El {
     let c = &k.c;
     // `text-[13px] font-medium` with no tracking, where the kit's compact UI type has -0.04.
     let font = rune::TextStyle { weight: k.ty.ui_medium.weight, tracking: 0.0, ..k.ty.ui_compact };
@@ -259,7 +262,7 @@ fn title(title: &str, editor: Option<El>, at: &Place, vertical: bool, emphasized
     // never hiding its first word under the slot (as Desktop's `flex-1` title does).
     let faded = |label: El| label.truncate_fade_width(FADE / font.size);
     if emphasized {
-        return wrap.mr(24.0).child(faded(label));
+        return wrap.mr(room).child(faded(label));
     }
     // At rest it fades only an overflowing title, 4 points from a horizontal tab's end. A compact
     // tab's hover hides it; a wider tab's hover shows it faded clear of the slot instead, in the
@@ -288,12 +291,14 @@ struct SlotLook {
     composite: [Color; 2],
     h: f32,
     width: Option<f32>,
+    /// `TabStrip::hover_none`: the close button and its ground show at rest.
+    touch: bool,
 }
 
 /// The status mark and close button, which share one slot: the close button shows in the
 /// mark's place while the pointer is on the tab, at once.
 fn status_slot<S: 'static>(look: SlotLook, st: &Strip<S>, id: &str, k: &Kit) -> Option<El> {
-    let SlotLook { status, active, vertical, icon_only, hover_overlay, closable, composite, h, width } = look;
+    let SlotLook { status, active, vertical, icon_only, hover_overlay, closable, composite, h, width, touch } = look;
     let busy = status == Some(TabItemStatus::Busy);
     // An icon-only tab carries its dots on the avatar; only a busy ring takes the slot.
     let mark = match status {
@@ -309,7 +314,7 @@ fn status_slot<S: 'static>(look: SlotLook, st: &Strip<S>, id: &str, k: &Kit) -> 
     // The slot paints the tab under it so a long title never shows through.
     // A vertical tab's slot is clear unless the pointer or a status is on it.
     // Under the pointer it's always painted, in the hover's overlay where the tab has none.
-    let painted = (status.is_some() || (active && !vertical)) && !(icon_only && !busy);
+    let painted = touch || ((status.is_some() || (active && !vertical)) && !(icon_only && !busy));
     let top = (h - SLOT) / 2.0;
     let mut slot = row().key("status").size(SLOT, SLOT).center();
     let ground = |key: &'static str, fill: Color| hidden(el().key(key).pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).fill(fill).group_opacity(0.0, 1.0));
@@ -335,7 +340,8 @@ fn status_slot<S: 'static>(look: SlotLook, st: &Strip<S>, id: &str, k: &Kit) -> 
     if let Some(m) = mark {
         let keep = icon_only && busy && !active;
         let m = row().key("status-mark").size(SLOT, SLOT).absolute(0.0, 0.0).center().child(m).a11y_hidden();
-        slot = slot.child(if close && !keep { hidden(m.group_opacity(1.0, 0.0)) } else { m });
+        // Without hover the mark stays, beside the close button (`tab-status`'s `inset-inline-end: 20px`).
+        slot = slot.child(if touch { m.absolute(-16.0, 0.0) } else if close && !keep { hidden(m.group_opacity(1.0, 0.0)) } else { m });
     }
     if close {
         let lock = width.filter(|_| st.horizontal_lock).unwrap_or(0.0);
@@ -357,7 +363,8 @@ fn status_slot<S: 'static>(look: SlotLook, st: &Strip<S>, id: &str, k: &Kit) -> 
         // and keyboard focus on the tab shows it without a ring of its own.
         let button = if st.close_tab_stop { button } else { button.focusable(false).no_focus_ring() };
         // Its glyph enters with it, unseen until the pointer comes, so the wrapper lands it at once.
-        slot = slot.child(hidden(row().key("close").absolute(0.0, 0.0).group_opacity(0.0, 1.0).instant_changes().child(button)));
+        let close = row().key("close").absolute(0.0, 0.0).instant_changes().child(button);
+        slot = slot.child(if touch { close } else { hidden(close.group_opacity(0.0, 1.0)) });
     }
     Some(slot)
 }

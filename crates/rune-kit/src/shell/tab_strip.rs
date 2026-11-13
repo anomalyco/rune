@@ -284,6 +284,8 @@ struct Strip<S> {
     close_icon: Option<&'static Icon>,
     /// `TabStrip::close_tab_stop`.
     close_tab_stop: bool,
+    /// `TabStrip::hover_none`.
+    hover_none: bool,
     busy: fn(&Kit) -> El,
     words: TabWords,
     scroll_key: String,
@@ -333,6 +335,7 @@ pub struct TabStrip<'a, S: 'static> {
     fill: Option<Color>,
     close_icon: Option<&'static Icon>,
     close_tab_stop: bool,
+    hover_none: bool,
     busy: fn(&Kit) -> El,
     label: String,
     words: TabWords,
@@ -360,6 +363,7 @@ impl<'a, S: 'static> TabStrip<'a, S> {
             fill: None,
             close_icon: None,
             close_tab_stop: false,
+            hover_none: false,
             busy: busy_ring,
             label: "Tabs".into(),
             words: TabWords::default(),
@@ -452,6 +456,13 @@ impl<'a, S: 'static> TabStrip<'a, S> {
     }
     /// Each tab's close button is a Tab stop after its tab with the kit's focus ring, as a web
     /// page's `<button>` is. Off, it's pointer only: the strip's arrows move between tabs.
+    /// A primary pointer that can't hover (`@media (hover: none)`, `tab-nav.css`): every tab shows
+    /// its close button on its painted slot, its status mark 16 points before it, and its title
+    /// fades clear of both, as a hover shows them.
+    pub fn hover_none(mut self, on: bool) -> Self {
+        self.hover_none = on;
+        self
+    }
     pub fn close_tab_stop(mut self, on: bool) -> Self {
         self.close_tab_stop = on;
         self
@@ -564,6 +575,7 @@ impl<'a, S: 'static> TabStrip<'a, S> {
             matched: self.matched.map(str::to_owned),
             close_icon: self.close_icon,
             close_tab_stop: self.close_tab_stop,
+            hover_none: self.hover_none,
             busy: self.busy,
             words: self.words,
             auto,
