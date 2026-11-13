@@ -434,7 +434,17 @@ impl ApplicationHandler<WakeEvent> for Windows {
         }
         for host in self.hosts.iter_mut().flatten() { host.cancel_menus(); }
         #[cfg(not(target_arch = "wasm32"))]
-        if let Some(last) = crate::quit::fast_exit_hook() { crate::quit::end_fast(last); }
+        if let Some(last) = crate::quit::fast_exit_hook() {
+            // IB-3 experiment: the GPU objects dropped in order before the process ends.
+            if std::env::var_os("IB3_DROP_GPU").is_some() {
+                #[cfg(target_os = "windows")]
+                crate::platform::win32::destroy_own_windows();
+                crate::marks::mark("ib3.gpu_drop");
+                self.hosts.clear();
+                crate::marks::mark("ib3.gpu_dropped");
+            }
+            crate::quit::end_fast(last);
+        }
         // Surfaces go while winit's display connection is still open (layer surfaces live on it).
         self.hosts.clear();
         crate::marks::mark("windows.dropped");
