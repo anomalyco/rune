@@ -213,7 +213,7 @@ roles! {
     "separator", "tablist", "segment", "window", "navigation", "grid", "none", "img", "tooltip",
     "canvas", "document", "figure", "table", "search", "searchbox", "complementary", "blockquote",
     "menuitemcheckbox", "menuitemradio", "scrollbar", "spinbutton", "tabpanel", "article",
-    "terminal",
+    "terminal", "banner", "form", "contentinfo", "alertdialog", "log",
 }
 
 impl RoleTag {
