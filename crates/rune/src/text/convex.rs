@@ -11,10 +11,11 @@ mod tess;
 
 pub(super) use fill::fill;
 pub(super) use geom::V;
+use geom::nearly_zero;
 pub(super) use hair::render as hairline;
 pub(super) use raster::{fill_quad_edges, fill_triangles};
 pub(super) use tess::stroke;
-use swash::zeno::{Command, Transform};
+use swash::zeno::Transform;
 
 /// A path element as Skia keeps it, conics and all, in user units.
 #[derive(Clone, Copy, PartialEq)]
@@ -37,20 +38,6 @@ impl El {
             El::Close => vec![],
         }
     }
-}
-
-/// `path` as elements.
-pub(super) fn elements(path: &[Command]) -> Vec<El> {
-    let v = |p: swash::zeno::Point| V::new(p.x, p.y);
-    path.iter()
-        .map(|c| match *c {
-            Command::MoveTo(a) => El::Move(v(a)),
-            Command::LineTo(a) => El::Line(v(a)),
-            Command::QuadTo(a, b) => El::Quad(v(a), v(b)),
-            Command::CurveTo(a, b, d) => El::Cubic(v(a), v(b), v(d)),
-            Command::Close => El::Close,
-        })
-        .collect()
 }
 
 /// An oval as `SkPath::addOval` builds it: clockwise from its right end, four quarter conics.
@@ -239,4 +226,128 @@ impl Convexicator {
         self.last_vec = v;
         true
     }
+}
+
+/// Skia's elements for SVG path data: arcs as the conics `SkPath::arcTo` makes, the rest as is.
+pub(super) fn parse(d: &str) -> Vec<El> {
+    let mut out = Elements(Vec::new());
+    let _ = super::svg_path::parse_into(d, &mut out);
+    out.0
+}
+
+struct Elements(Vec<El>);
+
+fn v(p: swash::zeno::Point) -> V {
+    V::new(p.x, p.y)
+}
+
+impl super::svg_path::Sink for Elements {
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+    fn move_to(&mut self, p: swash::zeno::Point) {
+        self.0.push(El::Move(v(p)));
+    }
+    fn line_to(&mut self, p: swash::zeno::Point) {
+        self.0.push(El::Line(v(p)));
+    }
+    fn quad_to(&mut self, c: swash::zeno::Point, p: swash::zeno::Point) {
+        self.0.push(El::Quad(v(c), v(p)));
+    }
+    fn curve_to(&mut self, c1: swash::zeno::Point, c2: swash::zeno::Point, p: swash::zeno::Point) {
+        self.0.push(El::Cubic(v(c1), v(c2), v(p)));
+    }
+    fn arc_to(&mut self, from: swash::zeno::Point, rx: f32, ry: f32, angle: f32, large: bool, sweep: bool, to: swash::zeno::Point) {
+        arc_to(&mut self.0, v(from), rx, ry, angle, large, sweep, v(to));
+    }
+    fn close(&mut self) {
+        self.0.push(El::Close);
+    }
+}
+
+/// `SkPath::arcTo` for an SVG arc (`sweep` is SVG's sweep flag: clockwise on screen), as conics.
+#[allow(clippy::too_many_arguments)]
+fn arc_to(out: &mut Vec<El>, from: V, rx: f32, ry: f32, angle: f32, large: bool, sweep: bool, to: V) {
+    use std::f32::consts::PI;
+    let (mut rx, mut ry) = (rx.abs(), ry.abs());
+    let mid = (from - to) * 0.5;
+    let rotate = |deg: f32, p: V| {
+        let (s, c) = rotation(deg);
+        V::new(c * p.x - s * p.y, s * p.x + c * p.y)
+    };
+    let m = rotate(-angle, mid);
+    let (sq_rx, sq_ry, sq_x, sq_y) = (rx * rx, ry * ry, m.x * m.x, m.y * m.y);
+    let radii_scale = sq_x / sq_rx + sq_y / sq_ry;
+    if radii_scale > 1.0 {
+        let s = radii_scale.sqrt();
+        rx *= s;
+        ry *= s;
+    }
+    // setScale(1 / rx, 1 / ry), preRotate(-angle): rotated, then scaled.
+    let to_unit = |p: V| {
+        let r = rotate(-angle, p);
+        V::new(r.x * (1.0 / rx), r.y * (1.0 / ry))
+    };
+    let (mut u0, mut u1) = (to_unit(from), to_unit(to));
+    let mut delta = u1 - u0;
+    let d = delta.x * delta.x + delta.y * delta.y;
+    let mut scale = (1.0 / d - 0.25).max(0.0).sqrt();
+    if !sweep != large {
+        scale = -scale;
+    }
+    delta = delta * scale;
+    let mut center = (u0 + u1) * 0.5;
+    center = V::new(center.x - delta.y, center.y + delta.x);
+    u0 = u0 - center;
+    u1 = u1 - center;
+    let (theta1, theta2) = (u0.y.atan2(u0.x), u1.y.atan2(u1.x));
+    let mut arc = theta2 - theta1;
+    if arc < 0.0 && sweep {
+        arc += PI * 2.0;
+    } else if arc > 0.0 && !sweep {
+        arc -= PI * 2.0;
+    }
+    if arc.abs() < PI / (1000.0 * 1000.0) {
+        out.push(El::Line(to));
+        return;
+    }
+    // setRotate(angle), preScale(rx, ry): scaled, then rotated.
+    let from_unit = |p: V| rotate(angle, V::new(p.x * rx, p.y * ry));
+    let segments = (arc / (2.0 * PI / 3.0)).abs().ceil() as i32;
+    let width = arc / segments as f32;
+    let t = (0.5 * width).tan();
+    if !t.is_finite() {
+        return;
+    }
+    let w = (0.5 + width.cos() * 0.5).sqrt();
+    let is_int = |s: f32| s == s.floor();
+    let integers = nearly_zero(PI / 2.0 - width.abs()) && is_int(rx) && is_int(ry) && is_int(to.x) && is_int(to.y);
+    let mut start = theta1;
+    for _ in 0..segments {
+        let end = start + width;
+        let (sin_end, cos_end) = (snap_to_zero(end.sin()), snap_to_zero(end.cos()));
+        let end_pt = V::new(cos_end, sin_end) + center;
+        let ctrl = V::new(end_pt.x + t * sin_end, end_pt.y - t * cos_end);
+        let (mut c, mut e) = (from_unit(ctrl), from_unit(end_pt));
+        if integers {
+            c = V::new(c.x.round(), c.y.round());
+            e = V::new(e.x.round(), e.y.round());
+        }
+        out.push(El::Conic(c, e, w));
+        start = end;
+    }
+    // The final point is the arc's end by definition.
+    if let Some(El::Conic(_, e, _)) = out.last_mut() {
+        *e = to;
+    }
+}
+
+/// `SkMatrix::setRotate`'s sine and cosine, each snapped to zero within 1/4096.
+fn rotation(deg: f32) -> (f32, f32) {
+    let rad = deg * (std::f32::consts::PI / 180.0);
+    (snap_to_zero(rad.sin()), snap_to_zero(rad.cos()))
+}
+
+fn snap_to_zero(x: f32) -> f32 {
+    if nearly_zero(x) { 0.0 } else { x }
 }

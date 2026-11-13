@@ -5,7 +5,7 @@
 
 use swash::zeno::{Cap, Fill, Join, Point, Transform};
 
-use super::{Atlas, Rasterized, svg_path};
+use super::{Atlas, Rasterized};
 
 /// An SVG icon body as found in `@opencode/ui`'s catalog: elements inside a square viewBox,
 /// drawn in its element's colour. A body that names its own colours (`fill="#…"`, gradients),
@@ -265,7 +265,8 @@ fn icon_coverage_at(icon: &Icon, px: u32, size: f32, origin: Point) -> Vec<u8> {
             continue;
         }
         let Some(d) = element_path(el) else { continue };
-        let d = svg_path::parse(&d);
+        // Skia's elements: an arc stays the conics Blink's `SkPath::arcTo` makes.
+        let d = super::convex::parse(&d);
         // The element's own attribute, else the innermost group's that sets it.
         let get = |name: &str| {
             attr(el, name).or_else(|| {

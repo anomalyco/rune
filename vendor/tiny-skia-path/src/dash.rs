@@ -296,7 +296,8 @@ impl Iterator for ContourMeasureIter<'_> {
 
                     prev_p = p0;
                 }
-                PathSegment::QuadTo(p0, p1) => {
+                // Dashing measures a conic as the quad through its control point.
+                PathSegment::QuadTo(p0, p1) | PathSegment::ConicTo(p0, p1, _) => {
                     let prev_d = distance;
                     distance = contour.compute_quad_segs(
                         prev_p,

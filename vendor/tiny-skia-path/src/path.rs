@@ -21,6 +21,8 @@ pub enum PathVerb {
     Line,
     Quad,
     Cubic,
+    /// Only in a path built with `PathBuilder::set_keep_conics`.
+    Conic,
     Close,
 }
 
@@ -49,6 +51,8 @@ pub enum PathVerb {
 pub struct Path {
     pub(crate) verbs: Vec<PathVerb>,
     pub(crate) points: Vec<Point>,
+    /// Each conic's weight, in order.
+    pub(crate) weights: Vec<f32>,
     pub(crate) bounds: Rect,
 }
 
@@ -92,7 +96,7 @@ impl Path {
                     extremas[0] = p;
                     count = 1;
                 }
-                PathSegment::QuadTo(p0, p1) => {
+                PathSegment::QuadTo(p0, p1) | PathSegment::ConicTo(p0, p1, _) => {
                     count = compute_quad_extremas(last_point, p0, p1, &mut extremas);
                 }
                 PathSegment::CubicTo(p0, p1, p2) => {
@@ -123,6 +127,11 @@ impl Path {
         &self.points
     }
 
+    /// Returns each conic's weight, in order.
+    pub fn weights(&self) -> &[f32] {
+        &self.weights
+    }
+
     /// Returns a transformed in-place path.
     ///
     /// Some points may become NaN/inf therefore this method can fail.
@@ -145,6 +154,7 @@ impl Path {
             path: self,
             verb_index: 0,
             points_index: 0,
+            weight_index: 0,
             is_auto_close: false,
             last_move_to: Point::zero(),
             last_point: Point::zero(),
@@ -159,6 +169,8 @@ impl Path {
         PathBuilder {
             verbs: self.verbs,
             points: self.points,
+            weights: alloc::vec::Vec::new(),
+            keep_conics: false,
             last_move_to_index: 0,
             move_to_required: true,
             conic_tolerance: 0.0,
@@ -181,6 +193,10 @@ impl core::fmt::Debug for Path {
                 PathSegment::CubicTo(p0, p1, p2) => s.write_fmt(format_args!(
                     "C {} {} {} {} {} {} ",
                     p0.x, p0.y, p1.x, p1.y, p2.x, p2.y
+                ))?,
+                PathSegment::ConicTo(p0, p1, w) => s.write_fmt(format_args!(
+                    "K {} {} {} {} {} ",
+                    p0.x, p0.y, p1.x, p1.y, w
                 ))?,
                 PathSegment::Close => s.write_fmt(format_args!("Z "))?,
             }
@@ -250,6 +266,8 @@ pub enum PathSegment {
     LineTo(Point),
     QuadTo(Point, Point),
     CubicTo(Point, Point, Point),
+    /// A conic's control point, end and weight.
+    ConicTo(Point, Point, f32),
     Close,
 }
 
@@ -260,6 +278,7 @@ pub struct PathSegmentsIter<'a> {
     path: &'a Path,
     verb_index: usize,
     points_index: usize,
+    weight_index: usize,
 
     is_auto_close: bool,
     last_move_to: Point,
@@ -298,7 +317,7 @@ impl<'a> PathSegmentsIter<'a> {
 
                     return true;
                 }
-                PathSegment::QuadTo(p1, p2) => {
+                PathSegment::QuadTo(p1, p2) | PathSegment::ConicTo(p1, p2, _) => {
                     if iter.last_point == p1 && iter.last_point == p2 {
                         continue;
                     }
@@ -367,6 +386,16 @@ impl<'a> Iterator for PathSegmentsIter<'a> {
                         self.path.points[self.points_index - 3],
                         self.path.points[self.points_index - 2],
                         self.last_point,
+                    ))
+                }
+                PathVerb::Conic => {
+                    self.points_index += 2;
+                    self.weight_index += 1;
+                    self.last_point = self.path.points[self.points_index - 1];
+                    Some(PathSegment::ConicTo(
+                        self.path.points[self.points_index - 2],
+                        self.last_point,
+                        self.path.weights[self.weight_index - 1],
                     ))
                 }
                 PathVerb::Close => {

@@ -21,15 +21,16 @@
 //!   analytic scan converter (`super::aaa`) into a mask of the path's own, as Ganesh's small-path
 //!   renderer does it, so where the icon lands doesn't change its pixels.
 //!
-//! Two of Chromium's choices aren't followed: a `<circle>` whose float box isn't exactly square
-//! goes to the path renderers rather than the circle op, and an SVG arc stays a conic in Skia's
-//! path where Rune's parser makes cubics.
+//! One remaining difference: Chromium sends a `<circle>` whose float box isn't exactly square
+//! to the path renderers rather than the circle op. SVG path arcs keep their conic weights.
 
-use swash::zeno::{Cap, Command, Fill, Join, Point, Transform};
+use super::convex::{El, V};
+use swash::zeno::{Cap, Fill, Join, Point, Transform};
 
 /// An icon element as Chromium hands it to Skia: a path, or a shape Blink draws as itself.
 pub(super) enum Shape<'a> {
-    Path(&'a [Command]),
+    /// Skia's elements, conics and all.
+    Path(&'a [El]),
     /// `<circle>`, `<ellipse>`: centre and radii, in user units.
     Oval { center: Point, radii: Point },
     /// `<rect>` with corners rounded `r`, in user units.
@@ -110,8 +111,8 @@ pub(super) fn op(shape: &Shape<'_>, ctm: Transform, pen: Option<&Pen>) -> Op {
             }
             match (pen, path) {
                 // `AALinearizingConvexPathRenderer` takes these, a device pixel wide to twenty.
-                (Some(p), _) if linearizes(p, scale, ctm) && super::convex::closed_convex(&super::convex::elements(path)) => Op::ConvexStroke,
-                (Some(p), [Command::MoveTo(a), Command::LineTo(b)]) => line(ctm.transform_point(*a), ctm.transform_point(*b), p.cap, hw, upright)
+                (Some(p), _) if linearizes(p, scale, ctm) && super::convex::closed_convex(path) => Op::ConvexStroke,
+                (Some(p), [El::Move(a), El::Line(b)]) => line(at(ctm, *a), at(ctm, *b), p.cap, hw, upright)
                     .unwrap_or_else(|| thin(pen, scale)),
                 _ => thin(pen, scale),
             }
@@ -129,8 +130,8 @@ fn linearizes(pen: &Pen, scale: f32, ctm: Transform) -> bool {
 /// Skia's elements for `shape`: an oval as `SkPath::addOval` makes it, conics and all.
 pub(super) fn elements(shape: &Shape<'_>) -> Vec<super::convex::El> {
     match shape {
-        Shape::Path(path) => super::convex::elements(path),
-        Shape::Oval { center, radii } => super::convex::oval(super::convex::V::new(center.x, center.y), super::convex::V::new(radii.x, radii.y)),
+        Shape::Path(path) => path.to_vec(),
+        Shape::Oval { center, radii } => super::convex::oval(V::new(center.x, center.y), V::new(radii.x, radii.y)),
         Shape::Rounded { .. } => Vec::new(),
     }
 }
@@ -215,7 +216,19 @@ impl Op {
                         let full = if inset < 0.5 { 2.0 * inset / (inset + 0.5) } else { 1.0 };
                         let outset = 1.0 - inset;
                         let a = (inside_rect(outside, q) + outset).clamp(0.0, 1.0);
-                        let b = inside.as_ref().map_or(1.0, |r| (outset - inside_rect(r, q)).clamp(0.0, 1.0));
+                        let b = inside.as_ref().map_or(1.0, |r| {
+                            // A hole under two AA outsets across collapses its innermost rect
+                            // to its centre on that axis, and Ganesh lerps the inner corners'
+                            // coverage back toward the stroke's by how far the edges crossed.
+                            let half = [(r[1].x - r[0].x) * 0.5, (r[1].y - r[0].y) * 0.5];
+                            let backset = (1.0 - half[0].min(half[1]) / outset).max(0.0);
+                            if backset == 0.0 {
+                                return (outset - inside_rect(r, q)).clamp(0.0, 1.0);
+                            }
+                            let x = ((q.x - r[0].x).min(r[1].x - q.x) + inset) / (inset + half[0].min(outset));
+                            let y = ((q.y - r[0].y).min(r[1].y - q.y) + inset) / (inset + half[1].min(outset));
+                            1.0 - (1.0 - backset) * x.min(y).clamp(0.0, 1.0)
+                        });
                         full * a.min(b)
                     }
                     Op::Quad(quad) => ramp(inside_quad(quad, q)),
@@ -302,7 +315,7 @@ pub(super) fn render_aaa(shape: &Shape<'_>, pen: Option<&Pen>, fill: Fill, ctm: 
     // takes Ganesh's convex fill; one with no area, nothing.
     let els = match (pen, shape_in) {
         (None, Shape::Oval { .. }) => elements(shape_in),
-        _ => super::convex::elements(&commands(&outline)),
+        _ => elements_of(&outline),
     };
     if let Some(dir) = super::convex::direction(&els).filter(|&d| d != 0) {
         let placed = Transform { x: ctm.x + origin.x, y: ctm.y + origin.y, ..ctm };
@@ -330,7 +343,7 @@ pub(super) fn render_aaa(shape: &Shape<'_>, pen: Option<&Pen>, fill: Fill, ctm: 
     let (r, btm) = corners.iter().fold((f32::MIN, f32::MIN), |(r, b), p| (r.max(p.x), b.max(p.y)));
     let (dx, dy) = (l.floor(), t.floor());
     let (w, h) = ((r.ceil() - dx) as usize + 2, (btm.ceil() - dy) as usize + 2);
-    let pad = std::env::var("AAA_PAD").ok().and_then(|v| v.parse::<f32>().ok()).unwrap_or(1.0);
+    let pad = 1.0;
     let Some(device) = outline.transform(frac.post_translate(pad - dx, pad - dy)) else { return };
     let mut mask = vec![0u8; w * h];
     super::aaa::fill(&device, rule, w, h, &mut mask);
@@ -346,18 +359,23 @@ pub(super) fn render_aaa(shape: &Shape<'_>, pen: Option<&Pen>, fill: Fill, ctm: 
     }
 }
 
-/// `path` as commands.
-fn commands(path: &tiny_skia_path::Path) -> Vec<Command> {
-    let p = |q: tiny_skia_path::Point| Point::new(q.x, q.y);
+/// `path`'s elements.
+fn elements_of(path: &tiny_skia_path::Path) -> Vec<El> {
+    let p = |q: tiny_skia_path::Point| V::new(q.x, q.y);
     path.segments()
         .map(|s| match s {
-            tiny_skia_path::PathSegment::MoveTo(a) => Command::MoveTo(p(a)),
-            tiny_skia_path::PathSegment::LineTo(a) => Command::LineTo(p(a)),
-            tiny_skia_path::PathSegment::QuadTo(a, b) => Command::QuadTo(p(a), p(b)),
-            tiny_skia_path::PathSegment::CubicTo(a, b, c) => Command::CurveTo(p(a), p(b), p(c)),
-            tiny_skia_path::PathSegment::Close => Command::Close,
+            tiny_skia_path::PathSegment::MoveTo(a) => El::Move(p(a)),
+            tiny_skia_path::PathSegment::LineTo(a) => El::Line(p(a)),
+            tiny_skia_path::PathSegment::QuadTo(a, b) => El::Quad(p(a), p(b)),
+            tiny_skia_path::PathSegment::CubicTo(a, b, c) => El::Cubic(p(a), p(b), p(c)),
+            tiny_skia_path::PathSegment::ConicTo(a, b, w) => El::Conic(p(a), p(b), w),
+            tiny_skia_path::PathSegment::Close => El::Close,
         })
         .collect()
+}
+
+fn at(ctm: Transform, p: V) -> Point {
+    ctm.transform_point(Point::new(p.x, p.y))
 }
 
 /// `shape` as Skia's path type, its conics cut into quads `tolerance` user units from them at
@@ -367,13 +385,16 @@ fn skia_path(shape: &Shape<'_>, tolerance: f32) -> Option<tiny_skia_path::Path> 
     b.set_conic_tolerance(tolerance);
     match shape {
         Shape::Path(path) => {
-            for cmd in path.iter() {
-                match *cmd {
-                    Command::MoveTo(p) => b.move_to(p.x, p.y),
-                    Command::LineTo(p) => b.line_to(p.x, p.y),
-                    Command::QuadTo(c, p) => b.quad_to(c.x, c.y, p.x, p.y),
-                    Command::CurveTo(c1, c2, p) => b.cubic_to(c1.x, c1.y, c2.x, c2.y, p.x, p.y),
-                    Command::Close => b.close(),
+            // Conics stay conics, for Skia's stroker to stroke as conics.
+            b.set_keep_conics(true);
+            for el in path.iter() {
+                match *el {
+                    El::Move(p) => b.move_to(p.x, p.y),
+                    El::Line(p) => b.line_to(p.x, p.y),
+                    El::Quad(c, p) => b.quad_to(c.x, c.y, p.x, p.y),
+                    El::Cubic(c1, c2, p) => b.cubic_to(c1.x, c1.y, c2.x, c2.y, p.x, p.y),
+                    El::Conic(c, p, w) => b.conic_to(c.x, c.y, p.x, p.y, w),
+                    El::Close => b.close(),
                 }
             }
         }
@@ -411,14 +432,14 @@ fn push_round_rect(b: &mut tiny_skia_path::PathBuilder, lo: Point, hi: Point, r:
 /// The rectangle `path` is under `ctm`, in device pixels `[min, max]`, if Chromium draws it as one:
 /// one closed subpath of three or four axis-aligned lines round a box, under a transform that
 /// keeps it axis-aligned (`SkPath::isRect`, which Ganesh draws with its rect ops).
-fn rect_corners(path: &[Command], ctm: Transform) -> Option<[Point; 2]> {
+fn rect_corners(path: &[El], ctm: Transform) -> Option<[Point; 2]> {
     if ctm.xy != 0.0 || ctm.yx != 0.0 {
         return None;
     }
-    let [Command::MoveTo(start), lines @ .., Command::Close] = path else { return None };
+    let [El::Move(start), lines @ .., El::Close] = path else { return None };
     let mut pts = vec![*start];
     for cmd in lines {
-        let Command::LineTo(p) = cmd else { return None };
+        let El::Line(p) = cmd else { return None };
         pts.push(*p);
     }
     if pts.len() == 5 && pts[4] == pts[0] {
@@ -439,7 +460,7 @@ fn rect_corners(path: &[Command], ctm: Transform) -> Option<[Point; 2]> {
     if !(axis.iter().all(Option::is_some) && (0..4).all(|i| axis[i] != axis[(i + 1) % 4])) {
         return None;
     }
-    let d: Vec<Point> = pts.iter().map(|p| ctm.transform_point(*p)).collect();
+    let d: Vec<Point> = pts.iter().map(|p| at(ctm, *p)).collect();
     let (lo, hi) = bounds(&d);
     Some([lo, hi])
 }

@@ -33,6 +33,10 @@ pub struct PathBuilder {
     /// How far, in this path's units, the quads a conic becomes may stray from it: Skia's 0.25 of
     /// a device pixel. 0 (the default) is 0.25; a stroker sets its own from its resolution scale.
     pub(crate) conic_tolerance: f32,
+    /// Each conic's weight, where `keep_conics` keeps them as conics.
+    pub(crate) weights: Vec<f32>,
+    /// Whether `conic_to` keeps a conic, as Skia's paths do, rather than cutting it into quads.
+    pub(crate) keep_conics: bool,
 }
 
 impl PathBuilder {
@@ -44,6 +48,8 @@ impl PathBuilder {
             last_move_to_index: 0,
             move_to_required: true,
             conic_tolerance: 0.0,
+            weights: Vec::new(),
+            keep_conics: false,
         }
     }
 
@@ -63,6 +69,8 @@ impl PathBuilder {
             last_move_to_index: 0,
             move_to_required: true,
             conic_tolerance: 0.0,
+            weights: Vec::new(),
+            keep_conics: false,
         }
     }
 
@@ -93,6 +101,7 @@ impl PathBuilder {
             bounds: rect,
             verbs,
             points,
+            weights: Vec::new(),
         }
     }
 
@@ -117,6 +126,12 @@ impl PathBuilder {
     pub(crate) fn reserve(&mut self, additional_verbs: usize, additional_points: usize) {
         self.verbs.reserve(additional_verbs);
         self.points.reserve(additional_points);
+    }
+
+    /// Keeps each conic `conic_to` adds as a conic, as Skia's own paths do (the stroker then strokes
+    /// it as one), rather than cutting it into quads.
+    pub fn set_keep_conics(&mut self, keep: bool) {
+        self.keep_conics = keep;
     }
 
     /// Sets how far, in this path's units, the quads each conic is turned into may stray from it
@@ -199,6 +214,12 @@ impl PathBuilder {
             self.line_to(x, y);
         } else if weight == 1.0 {
             self.quad_to(x1, y1, x, y);
+        } else if self.keep_conics {
+            self.inject_move_to_if_needed();
+            self.verbs.push(PathVerb::Conic);
+            self.points.push(Point::from_xy(x1, y1));
+            self.points.push(Point::from_xy(x, y));
+            self.weights.push(weight);
         } else {
             self.inject_move_to_if_needed();
 
@@ -354,6 +375,7 @@ impl PathBuilder {
 
         self.verbs.extend_from_slice(&other.verbs);
         self.points.extend_from_slice(&other.points);
+        self.weights.extend_from_slice(&other.weights);
     }
 
     pub(crate) fn push_path_builder(&mut self, other: &PathBuilder) {
@@ -367,6 +389,7 @@ impl PathBuilder {
 
         self.verbs.extend_from_slice(&other.verbs);
         self.points.extend_from_slice(&other.points);
+        self.weights.extend_from_slice(&other.weights);
     }
 
     /// Appends, in a reverse order, the first contour of path ignoring path's last point.
@@ -403,6 +426,13 @@ impl PathBuilder {
                     points_offset -= 3;
                     self.cubic_to(pt1.x, pt1.y, pt2.x, pt2.y, pt3.x, pt3.y);
                 }
+                PathVerb::Conic => {
+                    // A stroker's own builders never keep conics.
+                    let pt1 = other.points[points_offset - 1];
+                    let pt2 = other.points[points_offset - 2];
+                    points_offset -= 2;
+                    self.quad_to(pt1.x, pt1.y, pt2.x, pt2.y);
+                }
                 PathVerb::Close => {}
             }
         }
@@ -414,6 +444,7 @@ impl PathBuilder {
     pub fn clear(&mut self) {
         self.verbs.clear();
         self.points.clear();
+        self.weights.clear();
         self.last_move_to_index = 0;
         self.move_to_required = true;
     }
@@ -437,6 +468,7 @@ impl PathBuilder {
             bounds,
             verbs: self.verbs,
             points: self.points,
+            weights: self.weights,
         })
     }
 }

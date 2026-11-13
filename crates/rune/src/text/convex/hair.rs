@@ -3,7 +3,8 @@
 //! Each line segment is a hexagon whose coverage falls from the line to nothing a pixel either
 //! side (and over a pixel across each end); each quad (a cubic is first cut into quads) is a
 //! pentagon round its control triangle, shaded by the quad's implicit distance as a one pixel
-//! tent. Lines draw first, then curves, each blended over.
+//! tent; each conic likewise, by its own implicit form (`GrConicEffect`). Lines draw first,
+//! then quads, then conics, each blended over.
 
 use super::El;
 use super::fill::{chop_at_inflections, quad_uv_matrix};
@@ -16,16 +17,17 @@ use swash::zeno::Transform;
 pub(in super::super) fn render(path: &[El], ctm: Transform, width: f32, origin: [f32; 2], px: u32, out: &mut [u8]) {
     // `newCoverage`: the width's share of full, to a byte.
     let coverage = (width.clamp(0.0, 1.0) * 255.0).round() / 255.0;
-    let (lines, quads) = gather(path, ctm);
-    // Every vertex: its position, and either a line's coverage or a quad's (u, v).
+    let (lines, quads, conics) = gather(path, ctm);
+    // Every vertex: its position, its kind, and a line's coverage, a quad's (u, v) or a conic's
+    // (k, l, m).
     let mut pts: Vec<[f32; 2]> = Vec::new();
-    let mut attr: Vec<(bool, [f32; 2])> = Vec::new();
+    let mut attr: Vec<(Kind, [f32; 3])> = Vec::new();
     let mut indices: Vec<usize> = Vec::new();
     for l in lines.as_chunks::<2>().0 {
         let Some(hex) = line(l[0], l[1], coverage) else { continue };
         let base = pts.len();
         pts.extend(hex.iter().map(|(p, _)| [p.x, p.y]));
-        attr.extend(hex.iter().map(|&(_, c)| (false, [c, 0.0])));
+        attr.extend(hex.iter().map(|&(_, c)| (Kind::Line, [c, 0.0, 0.0])));
         indices.extend([0, 1, 3, 0, 3, 2, 0, 4, 5, 0, 5, 1, 0, 2, 4, 1, 5, 3].map(|i| base + i));
     }
     for q in quads.as_chunks::<3>().0 {
@@ -33,31 +35,70 @@ pub(in super::super) fn render(path: &[El], ctm: Transform, width: f32, origin: 
         let m = quad_uv_matrix([q[0], q[1], q[2]]);
         let base = pts.len();
         pts.extend(pent.iter().map(|p| [p.x, p.y]));
-        attr.extend(pent.iter().map(|p| (true, [m[0] * p.x + m[1] * p.y + m[2], m[3] * p.x + m[4] * p.y + m[5]])));
+        attr.extend(pent.iter().map(|p| (Kind::Quad, [m[0] * p.x + m[1] * p.y + m[2], m[3] * p.x + m[4] * p.y + m[5], 0.0])));
+        indices.extend([0, 1, 2, 2, 4, 3, 1, 4, 2].map(|i| base + i));
+    }
+    for (c, w) in conics {
+        let Some(pent) = bloat_quad(c) else { continue };
+        let klm = conic_klm(c, w);
+        let base = pts.len();
+        pts.extend(pent.iter().map(|p| [p.x, p.y]));
+        attr.extend(pent.iter().map(|p| (Kind::Conic, klm.map(|r| r[0] * p.x + r[1] * p.y + r[2]))));
         indices.extend([0, 1, 2, 2, 4, 3, 1, 4, 2].map(|i| base + i));
     }
     rasterize(&pts, &indices, origin, px, out, |tri, w| {
         let at = |k: usize| (0..3).map(|i| w[i] * attr[tri[i]].1[k] as f64).sum::<f64>() as f32;
-        if !attr[tri[0]].0 {
-            return at(0);
-        }
-        // `GrQuadEffect`, hairline: one less the implicit distance, times the coverage.
-        let (u, v) = (at(0), at(1));
-        let (du, dv) = (gradient(&pts, tri, |i| attr[i].1[0], origin), gradient(&pts, tri, |i| attr[i].1[1], origin));
-        let g = [2.0 * u * du[0] - dv[0], 2.0 * u * du[1] - dv[1]];
-        let f = u * u - v;
-        let gg = g[0] * g[0] + g[1] * g[1];
-        if gg == 0.0 {
+        let d = |k: usize| gradient(&pts, tri, |i| attr[i].1[k], origin);
+        let (f, g) = match attr[tri[0]].0 {
+            Kind::Line => return at(0),
+            // `GrQuadEffect`, hairline: one less the implicit distance, times the coverage.
+            Kind::Quad => {
+                let (u, v, du, dv) = (at(0), at(1), d(0), d(1));
+                (u * u - v, [2.0 * u * du[0] - dv[0], 2.0 * u * du[1] - dv[1]])
+            }
+            // `GrConicEffect`, likewise for k² - lm.
+            Kind::Conic => {
+                let (k, l, m, dk, dl, dm) = (at(0), at(1), at(2), d(0), d(1), d(2));
+                let g = |a: usize| 2.0 * k * dk[a] - l * dm[a] - m * dl[a];
+                (k * k - l * m, [g(0), g(1)])
+            }
+        };
+        let gm = (g[0] * g[0] + g[1] * g[1]).sqrt();
+        if gm == 0.0 {
             return 0.0;
         }
-        (1.0 - (f * f / gg).sqrt()).max(0.0) * coverage
+        (1.0 - f.abs() / gm).max(0.0) * coverage
     });
 }
 
-/// `gather_lines_and_quads`: line segments (pairs) and quads (triples), in device pixels.
-fn gather(path: &[El], ctm: Transform) -> (Vec<V>, Vec<V>) {
+/// A conic's control triangle and weight, in device pixels.
+type Conic = ([V; 3], f32);
+
+#[derive(Clone, Copy)]
+enum Kind {
+    Line,
+    Quad,
+    Conic,
+}
+
+/// `GrPathUtils::getConicKLM`: the rows k, l and m of the conic's implicit form, scaled so the
+/// largest coefficient is 10.
+fn conic_klm(p: [V; 3], w: f32) -> [[f32; 3]; 3] {
+    let w2 = 2.0 * w;
+    let klm = [
+        [p[2].y - p[0].y, p[0].x - p[2].x, p[2].x * p[0].y - p[0].x * p[2].y],
+        [w2 * (p[1].y - p[0].y), w2 * (p[0].x - p[1].x), w2 * (p[1].x * p[0].y - p[0].x * p[1].y)],
+        [w2 * (p[2].y - p[1].y), w2 * (p[1].x - p[2].x), w2 * (p[2].x * p[1].y - p[1].x * p[2].y)],
+    ];
+    let scale = 10.0 / klm.iter().flatten().fold(0.0f32, |a, &b| a.max(b.abs()));
+    klm.map(|r| r.map(|c| c * scale))
+}
+
+/// `gather_lines_and_quads`: line segments (pairs), quads (triples) and conics with their
+/// weights, in device pixels.
+fn gather(path: &[El], ctm: Transform) -> (Vec<V>, Vec<V>, Vec<Conic>) {
     let map = |p: V| super::map(ctm, p);
-    let (mut lines, mut quads) = (Vec::new(), Vec::new());
+    let (mut lines, mut quads, mut conics) = (Vec::new(), Vec::new(), Vec::new());
     let add_quad = |q: [V; 3], lines: &mut Vec<V>, quads: &mut Vec<V>| {
         if degenerate(q) {
             lines.extend([q[0], q[1], q[1], q[2]]);
@@ -80,12 +121,14 @@ fn gather(path: &[El], ctm: Transform) -> (Vec<V>, Vec<V>) {
                 cur = p;
             }
             El::Conic(c, p, w) => {
-                // Drawn as quads (Ganesh's conic effect isn't ported).
-                let mut last = map(cur);
-                let qs = super::conic_quads([map(cur), map(c), map(p)], w);
-                for pair in qs.as_chunks::<2>().0 {
-                    add_quad([last, pair[0], pair[1]], &mut lines, &mut quads);
-                    last = pair[1];
+                // Cut where it curves most, and each half again, for a tighter fit.
+                for (q, w) in split_conic([cur, c, p], w).into_iter().flat_map(|(q, w)| split_conic(q, w)) {
+                    let d = q.map(map);
+                    if degenerate(d) {
+                        lines.extend([d[0], d[1], d[1], d[2]]);
+                    } else {
+                        conics.push((d, w));
+                    }
                 }
                 cur = p;
             }
@@ -108,7 +151,44 @@ fn gather(path: &[El], ctm: Transform) -> (Vec<V>, Vec<V>) {
             }
         }
     }
-    (lines, quads)
+    (lines, quads, conics)
+}
+
+/// `split_conic`: the conic cut at its quad's point of most curvature, if that's inside it.
+fn split_conic(p: [V; 3], w: f32) -> Vec<([V; 3], f32)> {
+    let t = max_curvature(p);
+    if !(t > 0.0 && t < 1.0) {
+        return vec![(p, w)];
+    }
+    // `SkConic::chopAt`: de Casteljau on the conic's homogeneous points, back in standard form.
+    let h = [[p[0].x, p[0].y, 1.0], [p[1].x * w, p[1].y * w, w], [p[2].x, p[2].y, 1.0]];
+    let mix = |a: [f32; 3], b: [f32; 3]| [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+    let (ab, bc) = (mix(h[0], h[1]), mix(h[1], h[2]));
+    let abc = mix(ab, bc);
+    let down = |a: [f32; 3]| V::new(a[0] / a[2], a[1] / a[2]);
+    let root = abc[2].sqrt();
+    let halves = [([p[0], down(ab), down(abc)], ab[2] / root), ([down(abc), down(bc), p[2]], bc[2] / root)];
+    let finite = halves.iter().all(|(q, w)| w.is_finite() && q.iter().all(|v| v.x.is_finite() && v.y.is_finite()));
+    if !finite {
+        return vec![(p, w)];
+    }
+    halves.to_vec()
+}
+
+/// `SkFindQuadMaxCurvature`.
+fn max_curvature(p: [V; 3]) -> f32 {
+    let (a, b) = (p[1] - p[0], V::new(p[0].x - p[1].x - p[1].x + p[2].x, p[0].y - p[1].y - p[1].y + p[2].y));
+    let (mut numer, mut denom) = (-(a.x * b.x + a.y * b.y), b.x * b.x + b.y * b.y);
+    if denom < 0.0 {
+        (numer, denom) = (-numer, -denom);
+    }
+    if numer <= 0.0 {
+        return 0.0;
+    }
+    if numer >= denom {
+        return 1.0;
+    }
+    numer / denom
 }
 
 /// `is_degen_quad_or_conic` at Ganesh's default tolerance, a quarter pixel.
@@ -127,12 +207,7 @@ fn line_sqd(pt: V, a: V, b: V) -> f32 {
 
 /// `SkChopQuadAtMaxCurvature`.
 fn chop_at_max_curvature(p: [V; 3]) -> Vec<[V; 3]> {
-    let (a, b) = (p[1] - p[0], V::new(p[0].x - p[1].x - p[1].x + p[2].x, p[0].y - p[1].y - p[1].y + p[2].y));
-    let (mut numer, mut denom) = (-(a.x * b.x + a.y * b.y), b.x * b.x + b.y * b.y);
-    if denom < 0.0 {
-        (numer, denom) = (-numer, -denom);
-    }
-    let t = if numer <= 0.0 { 0.0 } else if numer >= denom { 1.0 } else { numer / denom };
+    let t = max_curvature(p);
     if t > 0.0 && t < 1.0 {
         let mix = |a: V, b: V| (b - a) * t + a;
         let (ab, bc) = (mix(p[0], p[1]), mix(p[1], p[2]));

@@ -495,6 +495,7 @@ pub(super) fn build_edges(path: &Path) -> Vec<Edge> {
     };
     let pts = path.points();
     let (mut i, mut start, mut last, mut open) = (0usize, Point::zero(), Point::zero(), false);
+    let mut weight = 0usize;
     for verb in path.verbs() {
         match verb {
             PathVerb::Move => {
@@ -522,6 +523,19 @@ pub(super) fn build_edges(path: &Path) -> Vec<Edge> {
                 add_cubic(&mut list, [last, pts[i], pts[i + 1], pts[i + 2]]);
                 last = pts[i + 2];
                 i += 3;
+                open = true;
+            }
+            // As `SkEdgeBuilder`: quads a quarter pixel from the conic, each cut at its y extrema.
+            PathVerb::Conic => {
+                let w = path.weights()[weight];
+                weight += 1;
+                if let Some(q) = tiny_skia_path::path_geometry::AutoConicToQuads::compute(last, pts[i], pts[i + 1], w, 0.25) {
+                    for k in 0..q.len as usize {
+                        add_quad(&mut list, [q.points[2 * k], q.points[2 * k + 1], q.points[2 * k + 2]]);
+                    }
+                }
+                last = pts[i + 1];
+                i += 2;
                 open = true;
             }
             PathVerb::Close => {

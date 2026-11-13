@@ -9,6 +9,8 @@
 #     Skia's `pt_to_tangent_line` does, and, out of recursion, emits a line rather than giving up;
 #   - `set_point_length` multiplies in double and rounds once, as `SkPoint::setLength` does;
 #   - `PathBuilder::conic_to`, `set_conic_tolerance` and `AutoConicToQuads` are public.
+#   - `set_keep_conics` retains weighted conic segments for SVG arcs; the stroker fits the two
+#     contours against the conic itself instead of fitting against quadratic approximations.
 # Run it when tiny-skia-path is bumped, then build: a patch that no longer applies fails here,
 # and the changes go back in by hand.
 # Usage: scripts/vendor-tiny-skia-path.sh <version>     e.g. scripts/vendor-tiny-skia-path.sh 0.11.4
