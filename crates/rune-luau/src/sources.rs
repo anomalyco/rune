@@ -18,10 +18,16 @@ const CONFIGS: [&str; 2] = [".luaurc", ".config.luau"];
 /// `require("./row")` would be a sibling of the folder, so it fails.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Sources {
-    files: BTreeMap<String, Arc<str>>,
+    files: BTreeMap<String, Input>,
     parent_config: Option<Arc<str>>,
     folder: Option<String>,
     entry: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Input {
+    Text(Arc<str>),
+    Embedded { code: &'static [u8], native: bool },
 }
 
 impl Sources {
@@ -42,7 +48,18 @@ impl Sources {
 
     /// Adds or replaces the file at `path`.
     pub fn insert(&mut self, path: impl AsRef<str>, source: impl Into<Arc<str>>) {
-        self.files.insert(normalize(path.as_ref()), source.into());
+        self.files.insert(normalize(path.as_ref()), Input::Text(source.into()));
+    }
+
+    /// Adds a built-in module by its original path. The bytecode retains its line table; no text
+    /// is needed for stack traces. `native` is the source file's `--!native` directive.
+    ///
+    /// # Safety
+    /// `code` must be trusted output of this build's Luau compiler. Never pass downloaded bytes
+    /// or files from a plugin directory: the VM expects compiler output, not untrusted bytecode.
+    pub unsafe fn with_embedded(mut self, path: &str, code: &'static [u8], native: bool) -> Self {
+        self.files.insert(normalize(path), Input::Embedded { code, native });
+        self
     }
 
     /// The `.luaurc` of the folder holding the script's folder, as an editor finds it above a
@@ -103,9 +120,9 @@ impl Sources {
         Ok(out)
     }
 
-    /// The file at `path`.
+    /// The text at `path`, if supplied as source rather than as an embedded module.
     pub fn get(&self, path: &str) -> Option<&str> {
-        self.files.get(path).map(|s| &**s)
+        match self.files.get(path)? { Input::Text(s) => Some(s), Input::Embedded { .. } => None }
     }
 
     /// Every file's path, sorted.
@@ -133,23 +150,30 @@ impl Sources {
         }
         let mut modules = BTreeMap::new();
         let mut configs = BTreeMap::new();
-        for (path, source) in &self.files {
+        for (path, input) in &self.files {
+            let source = match input {
+                Input::Text(source) => source,
+                Input::Embedded { code, native } => {
+                    modules.insert(path.clone(), Module { code: Arc::from(*code), native: *native, source: None });
+                    continue;
+                }
+            };
             if !path.ends_with(".luau") || path.ends_with(".config.luau") {
                 configs.insert(path.clone(), source.clone());
                 continue;
             }
-            if let Some(same) = previous.and_then(|p| p.modules.get(path)).filter(|m| m.source == *source) {
+            if let Some(same) = previous.and_then(|p| p.modules.get(path)).filter(|m| m.source.as_ref() == Some(source)) {
                 modules.insert(path.clone(), same.clone());
                 continue;
             }
             if let Some(code) = PRECOMPILED.get().and_then(|table| table.get(&**source)) {
-                modules.insert(path.clone(), Module { code: Arc::from(*code), native: is_native(source), source: source.clone() });
+                modules.insert(path.clone(), Module { code: Arc::from(*code), native: is_native(source), source: Some(source.clone()) });
                 continue;
             }
             let code = compiler
                 .compile(source.as_bytes())
                 .map_err(|e| ScriptError::new(ErrorKind::Syntax, format!("{path}{}", ScriptError::from(e).message)))?;
-            modules.insert(path.clone(), Module { code: code.into(), native: is_native(source), source: source.clone() });
+            modules.insert(path.clone(), Module { code: code.into(), native: is_native(source), source: Some(source.clone()) });
         }
         Ok(Compiled { modules, configs, parent_config: self.parent_config.clone(), folder: self.folder.clone(), entry: entry.to_owned() })
     }
@@ -171,7 +195,7 @@ pub(crate) struct Module {
     /// The file starts with `--!native`: compile it to native code with the `native-code` feature.
     pub(crate) native: bool,
     /// What it was compiled from, so a later compile of the same text reuses it.
-    source: Arc<str>,
+    source: Option<Arc<str>>,
 }
 
 impl Compiled {
