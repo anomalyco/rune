@@ -1,0 +1,1 @@
+- Blurring or removing an offscreen text field no longer moves focus to a visible row.

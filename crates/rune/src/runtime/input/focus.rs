@@ -401,7 +401,12 @@ impl<S: 'static> Runtime<S> {
         // A field that Escape blurred and that then closed (a comment box cancelled, gone once
         // its exit ends) counts as focused: the keyboard was on it, and nothing took focus since.
         let gone = self.focus.path().or_else(|| self.focus.now_or_blurred().or(self.focus.tab_start()).filter(|_| self.focus.keyboard()))?;
-        let Some(at) = self.nodes.iter().position(|n| n.path == gone) else { return self.fallback_in_new(gone, nodes) };
+        let Some(at) = self.nodes.iter().position(|n| n.path == gone) else {
+            // An offscreen field had no layout node. Only a moved node lost its path.
+            let old = self.nodes.get(*self.node_index.get(self.path_ids.get(gone)?)?)?;
+            if !old.is_moved_stub() { return None; }
+            return self.fallback_in_new(gone, nodes);
+        };
         if self.focus.path().is_none() && (self.nodes[at].input.is_none() || nodes.iter().any(|n| n.path == gone)) { return None; }
         if self.active_modal().is_some_and(|m| at >= m && self.modal_member(at)) { return None; }
         let new: rustc_hash::FxHashMap<&str, usize> = nodes.iter().enumerate().map(|(j, n)| (n.path.as_str(), j)).collect();
