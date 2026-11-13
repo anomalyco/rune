@@ -70,6 +70,7 @@ pub struct App<S: 'static> {
     pub(crate) on_focus: Option<fn(&mut S, bool, &mut Tx)>,
     pub(crate) on_mods: Option<fn(&mut S, crate::Mods, &mut Tx)>,
     pub(crate) on_visibility: Option<fn(&mut S, bool, &mut Tx)>,
+    pub(crate) on_rest: Option<fn(&mut S, &mut Tx) -> bool>,
     pub(crate) on_ime: Option<fn(&mut S, &crate::Ime, &mut Tx) -> bool>,
     pub(crate) on_reopen: Option<fn(&mut S, bool, &mut Tx) -> bool>,
     pub(crate) on_open_url: Option<crate::open_url::incoming::OnOpenUrl<S>>,
@@ -132,6 +133,7 @@ impl<S: 'static> App<S> {
             on_focus: None,
             on_mods: None,
             on_visibility: None,
+            on_rest: None,
             on_ime: None,
             on_reopen: None,
             on_open_url: None,
@@ -306,6 +308,16 @@ impl<S: 'static> App<S> {
     /// frame. Native windows only.
     pub fn on_visibility(mut self, f: fn(&mut S, bool, &mut Tx)) -> Self {
         self.on_visibility = Some(f);
+        self
+    }
+
+    /// Runs when a window rests: it has drawn nothing for 10 s (1 s while the system says memory
+    /// is low), or it was hidden, minimised or covered whole. By then its renderer and Rune's
+    /// own caches have given back what they keep for frames to come (`window::rest`); this is
+    /// for the app's caches of what isn't on screen. Return whether state the view reads changed
+    /// (normally false: nothing on screen should).
+    pub fn on_rest(mut self, f: fn(&mut S, &mut Tx) -> bool) -> Self {
+        self.on_rest = Some(f);
         self
     }
 
