@@ -385,7 +385,7 @@ impl<S: 'static> Host<S> {
         w.surface_ok = true;
         w.alpha = alpha;
         #[cfg(target_os = "windows")]
-        w.native.slot.reset();
+        { w.native.slot.reset(); w.native.damage.reset(); }
         #[cfg(target_os = "windows")]
         w.native.mode.rebind();
         #[cfg(target_os = "macos")]
@@ -432,6 +432,7 @@ impl<S: 'static> Host<S> {
         w.surface_ok = true;
         w.presented = None;
         w.native.slot.reset();
+        w.native.damage.reset();
         w.native.mode.rebind();
         Ok(true)
     }

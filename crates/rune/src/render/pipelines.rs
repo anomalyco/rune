@@ -92,6 +92,10 @@ impl Renderer {
             uploads: Default::default(),
             fills: Default::default(),
             device_key: crate::compose::DeviceKey::next(),
+            #[cfg(target_os = "windows")]
+            clear_quad: std::sync::OnceLock::new(),
+            #[cfg(target_os = "windows")]
+            damage: Default::default(),
         }
     }
 

@@ -258,7 +258,7 @@ impl<S: 'static> Host<S> {
         let half = HalfRounding::of_vendor(crate::gpu::pick::display_vendor().unwrap_or(0));
         crate::marks::mark("cpu.side");
         let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_DST,
             format: wgpu::TextureFormat::Bgra8Unorm,
             width: size.0,
             height: size.1,
@@ -540,6 +540,7 @@ impl<S: 'static> Host<S> {
         w.native.video_layers.hold_premultiplied(vrr_guard(gpu.adapter.get_info().vendor));
         w.native.mode = SurfaceMode::HandingOver { cpu, handover, done: None, readback: None, since: Instant::now(), nudged: None, tries };
         w.native.slot.reset();
+        w.native.damage.reset();
         // D3D12's idle-priority threads compile the first frame's shaders: on a busy machine they
         // would hold the hand-over frame off.
         crate::platform::win32::unidle_d3d_threads_soon();

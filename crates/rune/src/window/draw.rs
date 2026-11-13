@@ -344,6 +344,9 @@ impl<S: 'static> Host<S> {
             format: (target_format != l.config.format).then_some(target_format),
             ..Default::default()
         });
+        // An image's pixels changed where its instances didn't: the whole frame draws (`damage`).
+        #[cfg(target_os = "windows")]
+        let images_changed = rt.images.pages.iter().any(|p| p.dirty.is_some());
         renderer.upload_images(&gpu.device, &gpu.queue, &mut rt.images);
         renderer.build_surfaces(&gpu.device, &rt.surfaces, rt.live_notifier());
         // Playing clips on their own layer (`video_layer`): the surfaces this frame punches out.
@@ -360,8 +363,29 @@ impl<S: 'static> Host<S> {
         #[cfg(feature = "frame-profile")]
         let fp_uploaded = fp_start.map(|_| crate::frame::live_log::Stamp::now());
         let mut enc = gpu.device.create_command_encoder(&Default::default());
+        #[cfg(target_os = "windows")]
+        let mut present_rect = None;
+        // Why the frame drew all of the window (frame-profile).
+        #[allow(unused_mut)]
+        let mut whole_why: Option<&'static str> = None;
         let target = l.alpha.as_ref().map_or(&view, |a| &a.view);
         renderer.set_frame_wake(rt.live_wake());
+        let size = (l.config.width, l.config.height);
+        // Only what changed is redrawn and presented (`damage`): the renderer's `draw` takes the
+        // armed rectangles when nothing but the instances draws there, a compositor's
+        // `Frame::draw_ui` included.
+        #[cfg(target_os = "windows")]
+        let part = {
+            let whole = if l.alpha.is_some() { Some("alpha") } else if images_changed { Some("image") }
+                else if !l.config.usage.contains(wgpu::TextureUsages::COPY_DST) { Some("no copies") } else { None };
+            match l.native.damage.plan(&rt.instances, size, rt.clear_color(), whole.is_none()) {
+                super::damage::Plan::All(why) => { whole_why = Some(whole.unwrap_or(why)); None }
+                super::damage::Plan::Part { draw, present } => {
+                    renderer.arm_damage(&gpu.device, &gpu.queue, &draw, rt.clear_color(), size, l.config.format);
+                    Some(present)
+                }
+            }
+        };
         if let Some(c) = self.comp.as_mut() {
             let mut f = Frame {
                 device: &gpu.device,
@@ -369,7 +393,7 @@ impl<S: 'static> Host<S> {
                 encoder: &mut enc,
                 target,
                 format: target_format,
-                size: (l.config.width, l.config.height),
+                size,
                 dt,
                 update_ms,
                 rt: &mut *rt,
@@ -378,9 +402,18 @@ impl<S: 'static> Host<S> {
             c.render(&mut f);
             animating |= c.animating();
         } else {
-            renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, (l.config.width, l.config.height));
+            renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, size);
             renderer.draw(&mut enc, target, rt.clear_color());
         }
+        // Every frame, so a frame drawn whole leaves the renderer's kept frame behind.
+        #[cfg(target_os = "windows")]
+        match (renderer.damage_drawn(), part) {
+            (Ok(()), part) => present_rect = part,
+            (Err(why), Some(_)) => whole_why = Some(why),
+            (Err(_), None) => {}
+        }
+        #[cfg(not(feature = "frame-profile"))]
+        let _ = whole_why;
         if let Some(alpha) = &l.alpha { alpha.draw(&mut enc, &view); }
         #[cfg(feature = "frame-profile")]
         let fp_encoded = fp_start.map(|_| crate::frame::live_log::Stamp::now());
@@ -392,6 +425,13 @@ impl<S: 'static> Host<S> {
         l.window.pre_present_notify();
         #[cfg(target_os = "macos")]
         l.native.materials.present(&rt.materials, rt.env.scale, || gpu.queue.present(frame));
+        #[cfg(target_os = "windows")]
+        if let (Some(rects), Some(surface)) = (&present_rect, l.surface.as_ref())
+            // SAFETY: only names the rectangles the next present changed.
+            && let Some(hal) = unsafe { surface.as_hal::<wgpu::hal::api::Dx12>() } {
+            let rects: Vec<_> = rects.iter().map(|&[left, top, right, bottom]| windows::Win32::Foundation::RECT { left, top, right, bottom }).collect();
+            hal.set_present_rects(&rects);
+        }
         #[cfg(not(target_os = "macos"))]
         gpu.queue.present(frame);
         #[cfg(target_os = "windows")]
@@ -415,6 +455,15 @@ impl<S: 'static> Host<S> {
                 entry: fp_entry.unwrap_or(start), start, acquired, built, uploaded, encoded, submitted, presented: crate::frame::live_log::Stamp::now(),
                 phases: crate::frame::profile::take(), nodes: rt.nodes.len(), shaped: rt.stats.shaped, instances: rt.instances.len(),
                 animating, why: std::mem::take(&mut rt.commit_why), next: 0, poll_due: None, loop_due: None, loops: Vec::new(),
+                #[cfg(target_os = "windows")]
+                damage: present_rect,
+                #[cfg(not(target_os = "windows"))]
+                damage: None,
+                whole: whole_why,
+                #[cfg(target_os = "windows")]
+                change: l.native.damage.seen,
+                #[cfg(not(target_os = "windows"))]
+                change: None,
             }),
             _ => None,
         };

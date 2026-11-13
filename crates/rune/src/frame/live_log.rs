@@ -95,6 +95,12 @@ pub(crate) struct Frame {
     pub(crate) loop_due: Option<f64>,
     /// The drawn nodes with a running loop, while one wakes the window.
     pub(crate) loops: Vec<String>,
+    /// The rectangle the frame presented (`[x0, y0, x1, y1]`), or None for all of it.
+    pub(crate) damage: Option<Vec<[i32; 4]>>,
+    /// Why it drew all of the window (an effect, a layer, a changed image, or most of it changed).
+    pub(crate) whole: Option<&'static str>,
+    /// The bounds of what changed (`[x0, y0, x1, y1]`), however much it drew.
+    pub(crate) change: Option<[u32; 4]>,
 }
 
 pub(crate) fn frame(f: Frame) {
@@ -116,7 +122,7 @@ pub(crate) fn frame(f: Frame) {
         "cpu": f.presented.cpu.saturating_sub(f.entry.cpu), "build_cpu": f.built.cpu.saturating_sub(f.acquired.cpu), "acquire_cpu": f.acquired.cpu.saturating_sub(f.start.cpu), "encode_cpu": f.encoded.cpu.saturating_sub(f.uploaded.cpu), "submit_cpu": f.submitted.cpu.saturating_sub(f.encoded.cpu), "present_cpu": f.presented.cpu.saturating_sub(f.submitted.cpu),
         "nodes": f.nodes, "shaped": f.shaped, "instances": f.instances, "animating": f.animating,
         "why": crate::runtime::CommitWhy::names(f.why),
-        "next": next, "poll_due": f.poll_due, "loop_due": f.loop_due, "loops": f.loops,
+        "next": next, "poll_due": f.poll_due, "loop_due": f.loop_due, "loops": f.loops, "damage": f.damage, "whole": f.whole, "change": f.change,
     });
     OUT.with_borrow_mut(|out| {
         if let Some(Some(w)) = out.as_mut() {

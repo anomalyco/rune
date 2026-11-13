@@ -16,6 +16,9 @@ pub(super) enum ActivePass<'a, 'p> {
         pass: &'a mut wgpu::RenderPass<'p>,
         /// The scissor a scope set (`None`: the whole target), restored after a nested scope.
         scissor: Option<[u32; 4]>,
+        /// What every scissor stays inside: the part of the target a frame redraws
+        /// (`Renderer::draw_damaged`).
+        bound: Option<[u32; 4]>,
     },
     /// A pass this renderer opened along with its encoder and target.
     Owned(OpenPass<'a, 'p>),
@@ -37,7 +40,12 @@ pub(super) struct OpenPass<'a, 'p> {
 
 impl<'a, 'p> ActivePass<'a, 'p> {
     pub(super) fn borrowed(pass: &'a mut wgpu::RenderPass<'p>) -> Self {
-        ActivePass::Borrowed { pass, scissor: None }
+        ActivePass::Borrowed { pass, scissor: None, bound: None }
+    }
+
+    /// A caller's pass whose scissors all stay inside `bound` (`[x, y, width, height]`).
+    pub(super) fn borrowed_within(pass: &'a mut wgpu::RenderPass<'p>, bound: [u32; 4]) -> Self {
+        ActivePass::Borrowed { pass, scissor: None, bound: Some(bound) }
     }
 
     pub(super) fn owned(
@@ -59,12 +67,20 @@ impl<'a, 'p> ActivePass<'a, 'p> {
 
     /// Sets the scissor to `rect` (`[x, y, width, height]`), or to the whole `size` target.
     pub(super) fn set_scissor(&mut self, rect: Option<[u32; 4]>, size: [u32; 2]) {
-        match self {
-            ActivePass::Borrowed { scissor, .. } => *scissor = rect,
-            ActivePass::Owned(owned) => owned.scissor = rect,
-            ActivePass::Parked => {}
-        }
+        let bound = match self {
+            ActivePass::Borrowed { scissor, bound, .. } => { *scissor = rect; *bound }
+            ActivePass::Owned(owned) => { owned.scissor = rect; None }
+            ActivePass::Parked => None,
+        };
         let [x, y, w, h] = rect.unwrap_or([0, 0, size[0], size[1]]);
+        let [x, y, w, h] = match bound {
+            Some([bx, by, bw, bh]) => {
+                let (x0, y0) = (x.max(bx), y.max(by));
+                let (x1, y1) = ((x + w).min(bx + bw).max(x0), (y + h).min(by + bh).max(y0));
+                [x0, y0, x1 - x0, y1 - y0]
+            }
+            None => [x, y, w, h],
+        };
         self.set_scissor_rect(x, y, w, h);
     }
 

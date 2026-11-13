@@ -9,6 +9,10 @@ use crate::text::{ATLAS_SIZE, Atlas};
 
 mod backdrop_blur;
 mod breaker;
+#[cfg(target_os = "windows")]
+mod damaged;
+#[cfg(target_os = "windows")]
+pub(crate) use damaged::MAX_RECTS;
 pub mod cpu_boot;
 mod dxbc;
 mod fill;
@@ -785,6 +789,12 @@ pub struct Renderer {
     fills: std::sync::Mutex<Option<fill::PendingFills>>,
     /// Unique to this renderer, so to the device it was made on (`Frame::device_key`).
     device_key: crate::compose::DeviceKey,
+    /// The one instance per rectangle that clears a damaged one (`arm_damage`), made on first use.
+    #[cfg(target_os = "windows")]
+    clear_quad: std::sync::OnceLock<wgpu::Buffer>,
+    /// The kept frame and the rectangles the next `draw` may redraw alone (`damaged`).
+    #[cfg(target_os = "windows")]
+    damage: std::sync::Mutex<damaged::DamageState>,
 }
 
 impl Renderer {
@@ -991,6 +1001,8 @@ impl Renderer {
     }
 
     pub fn draw(&self, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, clear: [f32; 4]) {
+        #[cfg(target_os = "windows")]
+        if self.draw_armed(encoder, view) { return; }
         self.draw_timed(encoder, view, clear, None);
     }
 
