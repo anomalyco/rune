@@ -136,7 +136,7 @@ pub(super) fn build<S: 'static>(item: TabItem<'_, S>, at: Place, prev: Option<&s
     let mut slot = el()
         .key(format!("t-{id}"))
         .label(item.title.into_owned())
-        .description(status_words(status))
+        .description_static(status_words(st.words, status))
         // `:is(:hover, :has(:focus-visible))`: Tab reaching it shows its close button and wash.
         .hover_group_focus()
         // The separator after it hides with it.
@@ -343,7 +343,7 @@ fn status_slot<S: 'static>(look: SlotLook, st: &Strip<S>, id: &str, k: &Kit) -> 
         let button = IconButton::new(st.close_icon.unwrap_or(k.glyph.close))
             .control_size(ControlSize::Small)
             .variant(IconButtonVariant::GhostMuted)
-            .label("Close tab")
+            .label(st.words.close)
             .on_press_tx(move |s: &mut S, tx: &mut Tx| {
                 if let Some(a) = access.filter(|_| lock > 0.0) {
                     a(s).width_lock = Some(lock);
@@ -485,12 +485,12 @@ fn dot_color(status: Option<TabItemStatus>, k: &Kit) -> Color {
     }
 }
 
-fn status_words(status: Option<TabItemStatus>) -> &'static str {
+fn status_words(w: super::TabWords, status: Option<TabItemStatus>) -> &'static str {
     match status {
-        Some(TabItemStatus::Busy) => "Working",
-        Some(TabItemStatus::Attention) => "Needs attention",
-        Some(TabItemStatus::Unread) => "Unread",
-        Some(TabItemStatus::Failed) => "Failed",
+        Some(TabItemStatus::Busy) => w.busy,
+        Some(TabItemStatus::Attention) => w.attention,
+        Some(TabItemStatus::Unread) => w.unread,
+        Some(TabItemStatus::Failed) => w.failed,
         None => "",
     }
 }
