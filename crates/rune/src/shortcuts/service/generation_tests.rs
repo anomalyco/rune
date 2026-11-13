@@ -331,6 +331,36 @@ fn an_activation_runs_only_on_its_own_hosts_state_while_that_host_is_newest() {
     assert!(left, "the walk had A deliver B's activation before B did");
 }
 
+/// A replaced host A stays alive on its own thread, and its engine's sink keeps taking presses.
+/// Whichever host delivers them, each is discarded, so A's presses never pile up.
+#[test]
+fn a_replaced_engines_presses_are_discarded_not_kept() {
+    let app = app("Replaced");
+    let mut a = Place::new(true);
+    let (generation, live) = {
+        let shared = app.shared.clone();
+        a.run(move |host| {
+            let guard = Guard::attach(&shared, Arc::new(|| {}), true, false);
+            let seen = (guard.generation, Arc::downgrade(&guard._live));
+            host.guard = Some(guard);
+            seen
+        })
+    };
+    // A's engine's sink, as `install` builds it.
+    let delivery = Arc::new(Delivery { shared: Arc::downgrade(&app.shared), generation, wake: Arc::new(|| {}), live, pressed: Mutex::default() });
+    let press = sink(delivery.clone());
+    let mut b = Host { guard: Some(Guard::attach(&app.shared, Arc::new(|| {}), true, false)), ..Host::default() };
+    for n in 0..50 {
+        press(ShortcutId(u32::MAX - 3), None);
+        if n % 2 == 0 { b.deliver(&app.shared); } else { let shared = app.shared.clone(); a.run(move |host| { host.deliver(&shared); }); }
+        assert_eq!(delivery.pressed.lock().unwrap().len(), 0, "press {n} was discarded");
+        assert!(app.shared.take().updates.is_empty(), "nothing waits for another host: press {n}");
+    }
+    assert_eq!((a.run(|host| host.state), b.state), (0, 0), "no press ran");
+    drop(b);
+    a.finish();
+}
+
 /// A caller off the owner thread waits for the newest host, B. A replaced host A on its own
 /// thread drains before or after B: the call runs once, on B's engine.
 #[cfg(not(target_os = "linux"))]

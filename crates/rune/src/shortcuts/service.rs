@@ -328,8 +328,7 @@ struct Closing {
 }
 
 /// What a backend calls when its chord is pressed: it queues the activation and wakes the App.
-fn sink<S: 'static>(delivery: Delivery<S>) -> Sink {
-    let delivery = Arc::new(delivery);
+fn sink<S: 'static>(delivery: Arc<Delivery<S>>) -> Sink {
     Arc::new(move |id, token| {
         if let Some(shared) = delivery.shared.upgrade() {
             delivery.pressed.lock().unwrap().push_back((id, token));
@@ -341,17 +340,19 @@ fn sink<S: 'static>(delivery: Delivery<S>) -> Sink {
 
 /// An activation, as an update: it runs the host's oldest press. It runs only on its own host's
 /// state, and only while that host is the newest. Another host delivering it leaves it for its own
-/// host, and wakes that host; an activation whose host was replaced or has gone runs nothing.
+/// host, and wakes that host; an activation whose host was replaced or has gone runs nothing, and
+/// discards a press, so the host's presses are only those that can still run.
 fn deliver<S: 'static>(delivery: Arc<Delivery<S>>) -> Box<dyn FnOnce(&mut S, &mut Tx) -> bool + Send> {
     Box::new(move |state, tx| {
-        let Some(shared) = delivery.shared.upgrade() else { return false };
-        if !shared.shortcuts.control.current(delivery.generation) { return false; }
+        // Once stale, a host's presses all are, so which one goes doesn't matter.
+        let discard = || { delivery.pressed.lock().unwrap().pop_front(); false };
+        let Some(shared) = delivery.shared.upgrade() else { return discard() };
+        if !shared.shortcuts.control.current(delivery.generation) { return discard(); }
         if RECEIVING.with(|receiving| receiving.get()) != Some(delivery.generation) {
-            if delivery.live.strong_count() > 0 {
-                let wake = delivery.wake.clone();
-                shared.queue_update(deliver(delivery));
-                wake();
-            }
+            if delivery.live.strong_count() == 0 { return discard(); }
+            let wake = delivery.wake.clone();
+            shared.queue_update(deliver(delivery));
+            wake();
             return false;
         }
         let Some((id, token)) = delivery.pressed.lock().unwrap().pop_front() else { return false };
@@ -381,7 +382,7 @@ impl Guard {
         let live = Arc::new(());
         let engine = |generation| {
             let delivery = Delivery { shared: Arc::downgrade(shared), generation, wake: wake.clone(), live: Arc::downgrade(&live), pressed: Mutex::default() };
-            Engine { title, wayland, sink: sink(delivery), connect, bindings }
+            Engine { title, wayland, sink: sink(Arc::new(delivery)), connect, bindings }
         };
         // Published when this host takes routing.
         #[cfg(not(target_os = "linux"))]
