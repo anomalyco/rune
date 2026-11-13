@@ -258,6 +258,34 @@ impl<S: 'static> Runtime<S> {
         own.or_else(|| self.nodes.iter().position(|n| n.named(key))).filter(|&j| !self.subtree_exiting(j))
     }
 
+    /// Debug builds: warns once per site about a control a screen reader would say only by its
+    /// role ("button", "edit"): focusable, shown, and named by nothing (no `El::label`, no
+    /// `El::labelled_by` that finds words, no text of its own or, for a role named from its
+    /// content, inside it; a text field's placeholder isn't a name). Runs after a commit, every
+    /// sixteenth, so it costs a debug build little and a release build nothing.
+    /// `RUNE_A11Y_WARN=0` silences it.
+    #[cfg(debug_assertions)]
+    pub(crate) fn a11y_warn_nameless(&self) {
+        use std::{collections::HashSet, sync::{Mutex, OnceLock}};
+        static ON: OnceLock<bool> = OnceLock::new();
+        static WARNED: Mutex<Option<HashSet<String>>> = Mutex::new(None);
+        if !*ON.get_or_init(|| std::env::var_os("RUNE_A11Y_WARN").is_none_or(|v| v != "0")) { return; }
+        const NAMED: &[&str] = &["button", "toggle", "swatch", "sidebar-toggle", "checkbox", "switch", "radio", "segment", "link", "tab",
+            "menuitem", "menuitemcheckbox", "menuitemradio", "option", "treeitem", "slider", "combobox", "spinbutton"];
+        for i in 0..self.nodes.len() {
+            let n = &self.nodes[i];
+            let field = n.input.is_some();
+            if n.path.is_empty() || n.a11y.hidden || n.inert || !(field || NAMED.contains(&n.role)) || !self.can_focus(i) { continue; }
+            if n.label.as_deref().is_some_and(|l| !l.trim().is_empty()) { continue; }
+            let more = n.a11y.more.as_deref();
+            if more.and_then(|m| m.labelled_by.as_deref()).and_then(|k| self.a11y_keyed(i, k)).is_some_and(|j| !self.a11y_words(j).is_empty()) { continue; }
+            if !field && (n.text.as_deref().is_some_and(|t| !t.source_text().trim().is_empty()) || !self.a11y_content_name(i).is_empty()) { continue; }
+            let site: String = n.path.chars().map(|c| if c.is_ascii_digit() { '#' } else { c }).collect();
+            if !WARNED.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_default().insert(site) { continue; }
+            let what = if field { "text field" } else { n.role };
+            eprintln!("rune: a focusable {what} has no name a screen reader can say (give it El::label or El::labelled_by): {} (debug builds only; RUNE_A11Y_WARN=0 silences)", n.path);
+        }
+    }
     /// The element keyed `key` nearest node `i`, which isn't leaving: the first inside its
     /// parent, else inside its grandparent, and so on out, as a component's own `"title"` is
     /// the one a control inside it means. What `El::labelled_by` and `El::described_by` name.
