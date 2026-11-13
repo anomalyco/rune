@@ -213,20 +213,24 @@ impl WheelLock {
     /// The gesture is the momentum of one that ended (`WheelEvent::momentum`).
     pub(super) fn momentum(&self) -> bool { self.phase.momentum() }
 
-    /// The next gesture starts, unphased. Who has it starts afresh too, unless a delta of an
-    /// earlier gesture still waits for `on_wheel` handlers (`queued`): that keeps its owner, and
-    /// its gesture, until the last of them has run.
-    fn restart(&mut self, queued: bool) {
-        let gesture = self.gesture;
+    /// The next gesture starts, unphased. Only an owner whose gesture still has a delta waiting
+    /// for `on_wheel` handlers keeps its place: `pending` is the gesture the oldest queued delta
+    /// belongs to, so one that has run its last delta gives its owner up.
+    fn restart(&mut self, pending: Option<Attempt>) {
+        let arriving = self.gesture;
+        let mut run = std::mem::take(&mut self.run);
         self.gesture = self.seq.next();
         self.phase = WheelPhase::Unphased { at: None };
-        self.run = if queued {
-            match std::mem::take(&mut self.run) {
-                WheelRun::Arriving(owner) => WheelRun::Waiting { gesture, owner, arriving: WheelOwner::Unpicked },
-                WheelRun::Waiting { gesture: waiting, owner, .. } => WheelRun::Waiting { gesture: waiting, owner, arriving: WheelOwner::Unpicked },
+        self.run = match pending {
+            None => WheelRun::Arriving(WheelOwner::Unpicked),
+            Some(next) if next == arriving => {
+                WheelRun::Waiting { gesture: next, owner: std::mem::take(run.arriving_mut()), arriving: WheelOwner::Unpicked }
             }
-        } else {
-            WheelRun::Arriving(WheelOwner::Unpicked)
+            Some(next) => WheelRun::Waiting {
+                gesture: next,
+                owner: run.waiting_mut(next).map(std::mem::take).unwrap_or_default(),
+                arriving: WheelOwner::Unpicked,
+            },
         };
     }
 
@@ -249,20 +253,20 @@ impl WheelLock {
     /// A delta arrived at `now`, on (dx, dy) points: a gesture idle too long, ended, or wholly
     /// on the other axis (Shift let go, a tilt, a second wheel), is over, and this delta starts
     /// the next.
-    fn delta(&mut self, now: f64, dx: f32, dy: f32, queued: bool) {
+    fn delta(&mut self, now: f64, dx: f32, dy: f32, pending: Option<Attempt>) {
         let phased = self.phase.phased();
         let idle = if phased { PHASED_IDLE } else { WHEEL_IDLE };
         let flipped = !phased && self.run.arriving().horizontal().is_some_and(|h| if h { dx == 0.0 } else { dy == 0.0 });
         let stale = self.phase.ended().is_some() || self.phase.at().is_none_or(|a| now - a > idle) || flipped;
-        if stale { self.restart(queued); }
+        if stale { self.restart(pending); }
         self.phase = self.phase.moving(now);
     }
 
     /// The platform began a gesture at `now`: its first delta picks the axis afresh, unless it
     /// is the momentum of one that just ended.
-    fn began(&mut self, now: f64, active: bool, queued: bool, any_queued: bool) {
+    fn began(&mut self, now: f64, active: bool, queued: bool, pending: Option<Attempt>) {
         let momentum = !self.phase.momentum() && (active || queued) && self.phase.ended().is_some_and(|e| now - e <= MOMENTUM_GAP);
-        if !momentum { self.restart(any_queued); }
+        if !momentum { self.restart(pending); }
         self.phase = if momentum { WheelPhase::Momentum { at: now } } else { WheelPhase::Phased { at: now } };
     }
 
@@ -278,7 +282,7 @@ impl WheelLock {
     }
 
     /// The window lost the pointer or focus: a gesture in progress won't report its end here.
-    fn lost(&mut self, queued: bool) { self.restart(queued); }
+    fn lost(&mut self, pending: Option<Attempt>) { self.restart(pending); }
 }
 
 /// A wheel event's delta in points, positive moving content right and down. With Shift, a delta
@@ -354,8 +358,17 @@ impl<S: 'static> Runtime<S> {
     pub(super) fn wheel_delta_arrived(&mut self, dx: f32, dy: f32) {
         self.drop_scroll_holds();
         let now = self.now_clock();
-        let queued = self.wheel_queued(None);
-        self.wheel_lock.delta(now, dx, dy, queued);
+        let pending = self.wheel_pending();
+        self.wheel_lock.delta(now, dx, dy, pending);
+    }
+
+    /// The gesture the oldest wheel delta still waiting for `on_wheel` handlers belongs to: the
+    /// only owner a new gesture can hand over to, since the queue runs in order.
+    pub(super) fn wheel_pending(&self) -> Option<Attempt> {
+        self.queue.iter().find_map(|a| match a {
+            Action::Wheel { gesture, .. } => Some(*gesture),
+            _ => None,
+        })
     }
 
     /// Whether a wheel delta waits in the queue for `on_wheel` handlers: one of gesture `of`,
@@ -389,9 +402,9 @@ impl<S: 'static> Runtime<S> {
         let gesture = self.wheel_lock.gesture;
         // A delta queued for `on_wheel` handlers hasn't picked who has the gesture yet.
         let queued = self.wheel_queued(Some(gesture));
-        let any_queued = self.wheel_queued(None);
+        let pending = self.wheel_pending();
         let active = self.wheel_lock.owner() != &WheelOwner::Unpicked;
-        self.wheel_lock.began(now, active, queued, any_queued);
+        self.wheel_lock.began(now, active, queued, pending);
     }
 
     /// The platform ended a trackpad gesture (`TouchPhase::Ended` or `Cancelled`).
@@ -402,8 +415,8 @@ impl<S: 'static> Runtime<S> {
 
     /// The window lost the pointer or focus: a gesture in progress won't report its end here.
     pub(super) fn wheel_lost(&mut self) {
-        let queued = self.wheel_queued(None);
-        self.wheel_lock.lost(queued);
+        let pending = self.wheel_pending();
+        self.wheel_lock.lost(pending);
     }
 
     /// Scrolls the horizontal viewport latched for `gesture` (or the innermost one at (x, y)) by
@@ -555,48 +568,48 @@ mod tests {
     #[test]
     fn the_phase_carries_when_the_gesture_last_moved_and_when_it_ended() {
         let mut lock = WheelLock::default();
-        lock.delta(1.0, 0.0, -10.0, false);
+        lock.delta(1.0, 0.0, -10.0, None);
         assert_eq!(lock.phase, WheelPhase::Unphased { at: Some(1.0) }, "a delta starts it, timed");
-        lock.delta(1.05, 0.0, -10.0, false);
+        lock.delta(1.05, 0.0, -10.0, None);
         assert_eq!(lock.phase, WheelPhase::Unphased { at: Some(1.05) }, "a pause under the idle keeps the gesture");
         let gesture = lock.gesture;
-        lock.delta(1.05 + WHEEL_IDLE + 0.01, 0.0, -10.0, false);
+        lock.delta(1.05 + WHEEL_IDLE + 0.01, 0.0, -10.0, None);
         assert_ne!(lock.gesture, gesture, "a longer pause starts another");
         assert_eq!(lock.phase, WheelPhase::Unphased { at: Some(1.05 + WHEEL_IDLE + 0.01) }, "timed from the new delta");
         lock.set_owner(lock.gesture, WheelOwner::Vertical);
         lock.ended_at(2.0);
         assert_eq!(lock.phase, WheelPhase::Ended { at: 2.0, from: GestureKind::Unphased }, "an unphased end keeps its phase");
         let ended = lock.gesture;
-        lock.delta(2.001, 0.0, -10.0, false);
+        lock.delta(2.001, 0.0, -10.0, None);
         assert_ne!(lock.gesture, ended, "a delta after the end starts another gesture at once");
-        lock.lost(false);
+        lock.lost(None);
         assert_eq!(lock.phase, WheelPhase::Unphased { at: None }, "the loss forgets when it last moved");
     }
 
     #[test]
     fn an_ended_gestures_momentum_has_the_gap_its_end_time_measures() {
         let mut lock = WheelLock::default();
-        lock.delta(0.0, 0.0, -10.0, false);
+        lock.delta(0.0, 0.0, -10.0, None);
         lock.set_owner(lock.gesture, WheelOwner::Vertical);
         lock.ended_at(1.0);
         let gesture = lock.gesture;
         let soon = 1.0 + MOMENTUM_GAP * 0.5;
-        lock.began(soon, true, false, false);
+        lock.began(soon, true, false, None);
         assert_eq!(lock.phase, WheelPhase::Momentum { at: soon }, "within the gap: its momentum");
         assert_eq!(lock.gesture, gesture, "keeping the gesture");
         assert!(lock.momentum());
         lock.ended_at(2.0);
         assert_eq!(lock.phase, WheelPhase::Ended { at: 2.0, from: GestureKind::Momentum });
-        lock.began(2.0 + MOMENTUM_GAP * 0.5, true, false, false);
+        lock.began(2.0 + MOMENTUM_GAP * 0.5, true, false, None);
         assert!(matches!(lock.phase, WheelPhase::Phased { .. }), "one that ended as momentum is a new touch");
         assert!(!lock.momentum());
 
         let mut lock = WheelLock::default();
-        lock.delta(0.0, 0.0, -10.0, false);
+        lock.delta(0.0, 0.0, -10.0, None);
         lock.set_owner(lock.gesture, WheelOwner::Vertical);
         lock.ended_at(1.0);
         let gesture = lock.gesture;
-        lock.began(1.0 + MOMENTUM_GAP + 0.01, true, false, false);
+        lock.began(1.0 + MOMENTUM_GAP + 0.01, true, false, None);
         assert_ne!(lock.gesture, gesture, "after the gap it is its own gesture");
     }
 
@@ -771,13 +784,15 @@ mod tests {
             match act {
                 WAct::Delta { dx, dy, gap, queued } => {
                     now += gap;
-                    lock.delta(now, *dx, *dy, *queued);
+                    let pending = (*queued).then_some(running(&lock));
+                    lock.delta(now, *dx, *dy, pending);
                     dev.delta(now, *dx, *dy, *queued);
                 }
                 WAct::Began { gap, queued } => {
                     now += gap;
                     let active = lock.owner() != &WheelOwner::Unpicked;
-                    lock.began(now, active, *queued, *queued);
+                    let pending = (*queued).then_some(running(&lock));
+                    lock.began(now, active, *queued, pending);
                     let dev_active = dev.run_gesture == dev.gesture && dev.owner != DevOwner::Unpicked;
                     dev.began(now, dev_active, *queued, *queued);
                 }
@@ -787,7 +802,8 @@ mod tests {
                     dev.ended = Some(now);
                 }
                 WAct::Lost { queued } => {
-                    lock.lost(*queued);
+                    let pending = (*queued).then_some(running(&lock));
+                    lock.lost(pending);
                     dev.lost(*queued);
                 }
                 WAct::Scroll { dx, dy, across } => {

@@ -516,6 +516,29 @@ mod tests {
                         .on_wheel(|s: &mut Two, _: crate::WheelEvent, _: &mut Tx| { s.heard.push("b"); true }))))
     }
 
+    /// A gesture whose queued deltas have all run gives its owner's place up: the next gesture's
+    /// queued delta still reaches that gesture's handler instead of scrolling.
+    #[test]
+    fn a_drained_gesture_gives_its_owner_up_to_the_next_queued_one() {
+        let mut rt = Runtime::new(Two::default(), two_handlers, (300.0, 300.0), Env::default());
+        rt.frame(0.0);
+        rt.frame(1.0 / 60.0);
+        // A delta over `a`, then a gesture begins and a delta over `b`: each reaches its own.
+        rt.wheel_event(crate::WheelEvent::new(0.0, -10.0).at(30.0, 50.0));
+        rt.wheel_began();
+        rt.wheel_event(crate::WheelEvent::new(0.0, -10.0).at(210.0, 50.0));
+        rt.frame(1.0 / 60.0);
+        assert_eq!(rt.state.heard, ["a", "b"]);
+        // `b` owns the gesture now; a delta outside it is queued for `b`, and the next gesture
+        // begins before the frame drains it.
+        rt.wheel_event(crate::WheelEvent::new(0.0, -10.0).at(290.0, 50.0));
+        rt.wheel_began();
+        rt.frame(1.0 / 60.0);
+        assert_eq!(rt.state.heard, ["a", "b", "b"], "the queued delta still reaches b");
+        let id = rt.nodes.iter().find(|n| n.key.as_deref() == Some("list")).unwrap().id;
+        assert_eq!(rt.scrolls[&id].offset, 0.0, "every delta reached a handler");
+    }
+
     /// With a delta queued for a handler under one gesture and another under the next, each
     /// reaches its own gesture's handler, however many gestures began before the frame.
     #[test]
