@@ -94,14 +94,24 @@ fn whole_frames() -> bool {
 
 type Counts = HashMap<u64, (i32, usize), BuildHasherDefault<Hashed>>;
 
-/// The map's keys are hashes already.
+/// The map's keys are hashes already, mixed once more: FNV's multiply carries only upward, so its
+/// low bits, which pick the bucket, come from the words' low bits alone, and most instances share
+/// those (whole-pixel rects and clips). Unmixed, a scrolled list's thousands of instances fell in
+/// a few long probe chains.
 #[derive(Default)]
 struct Hashed(u64);
 
 impl Hasher for Hashed {
     fn finish(&self) -> u64 { self.0 }
     fn write(&mut self, _: &[u8]) { unreachable!("keys are u64") }
-    fn write_u64(&mut self, v: u64) { self.0 = v; }
+    fn write_u64(&mut self, v: u64) {
+        // MurmurHash3's 64-bit finaliser.
+        let mut h = v ^ (v >> 33);
+        h = h.wrapping_mul(0xff51_afd7_ed55_8ccd);
+        h ^= h >> 33;
+        h = h.wrapping_mul(0xc4ce_b9fe_1a85_ec53);
+        self.0 = h ^ (h >> 33);
+    }
 }
 
 /// FNV-1a over an instance's 32 words: a few ns, against SipHash's ~100.
