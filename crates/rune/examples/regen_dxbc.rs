@@ -1,6 +1,7 @@
 //! Rewrites the precompiled DX12 uber shader (`uber.vs.dxbc`, `uber.fs.dxbc`, the subpixel
 //! variant's `uber.vs-dual.dxbc` and `uber.fs-dual.dxbc`, and
-//! `src/render/uber/dxbc_hash.rs`) after `shader.wgsl`, `clip.wgsl`, `outline.wgsl`, the uber layout or wgpu
+//! `src/render/uber/dxbc_hash.rs`), and the straight-alpha pass's `alpha.vs.dxbc`, `alpha.fs.dxbc` and
+//! `src/render/uber/pass_dxbc_hash.rs`, after `shader.wgsl`, `clip.wgsl`, `outline.wgsl`, the uber layout or wgpu
 //! changes, without building Rune's unit tests: `cargo run -p rune --example regen_dxbc` on
 //! Windows. It does what `RUNE_REGENERATE_DXBC=1 cargo test -p rune --lib uber_dxbc_is_fresh`
 //! does: makes the uber pipeline from WGSL on a DX12 device, takes the HLSL wgpu-hal logs, and
@@ -47,6 +48,20 @@ fn main() {
          #[cfg(test)]\npub(super) const UBER_DXBC_HLSL_BLAKE3: &str = \"{hlsl}\";\n\
          #[cfg(test)]\npub(super) const UBER_DXBC_DUAL_HLSL_BLAKE3: &str = \"{dual}\";\n")).unwrap();
     println!("uber.vs.dxbc {} bytes, uber.fs.dxbc {} bytes, uber.fs-dual.dxbc {} bytes, WGSL {wgsl}", vs.len(), fs.len(), fs_dual.len());
+    drop(logged);
+
+    // The other built-in passes, each made once from its WGSL (render/dxbc.rs loads them).
+    let start = HLSL.lock().unwrap().len();
+    rune::render::make_straight_alpha(&gpu.device, wgpu::TextureFormat::Bgra8Unorm);
+    let logged = HLSL.lock().unwrap();
+    let (alpha_vs, alpha_fs) = (fxc(&stage(&logged[start..], "vs"), "vs", "vs_5_1"), fxc(&stage(&logged[start..], "fs"), "fs", "ps_5_1"));
+    std::fs::write(format!("{root}/alpha.vs.dxbc"), &alpha_vs).unwrap();
+    std::fs::write(format!("{root}/alpha.fs.dxbc"), &alpha_fs).unwrap();
+    let alpha_wgsl = blake3::hash(std::fs::read_to_string(format!("{root}/src/surface_alpha.wgsl")).unwrap().replace("\r\n", "\n").as_bytes()).to_hex();
+    std::fs::write(format!("{root}/src/render/uber/pass_dxbc_hash.rs"), format!(
+        "// Written by `cargo run -p rune --example regen_dxbc` on Windows.\n\
+         pub(super) const ALPHA_DXBC_WGSL_BLAKE3: &str = \"{alpha_wgsl}\";\n")).unwrap();
+    println!("alpha.vs.dxbc {} bytes, alpha.fs.dxbc {} bytes, WGSL {alpha_wgsl}", alpha_vs.len(), alpha_fs.len());
 }
 
 #[cfg(not(target_os = "windows"))]
