@@ -155,7 +155,8 @@ struct Browser<S: 'static> {
     /// isn't set again.
     waiting: Option<u64>,
     /// For a page that starts on the CPU: when its first frame was presented, when it last drew
-    /// one, and whether the GPU was asked for.
+    /// one that changed more than an ambient loop (a spinner's step), and whether the GPU was
+    /// asked for.
     first_at: Option<Instant>,
     drawn_at: Option<Instant>,
     gpu_asked: bool,
@@ -805,7 +806,8 @@ impl<S: 'static> Browser<S> {
     }
 
     /// After the first frame of a page that starts on the CPU: the GPU is asked for once the page
-    /// has drawn nothing for `QUIET` (its first reads in and shown), or `QUIET_LIMIT` after that
+    /// has drawn nothing but ambient loops for `QUIET` (its first reads in and shown; a spinner on
+    /// screen would otherwise hold the page on the CPU, painting each of its steps there), or `QUIET_LIMIT` after that
     /// frame at the latest; until then this looks again every `QUIET`.
     fn maybe_start_gpu(&mut self) {
         if self.gpu_asked || self.start != Start::CpuFirst { return; }
@@ -824,6 +826,7 @@ impl<S: 'static> Browser<S> {
         let (Some(window), Some(r)) = (&self.window, &mut *running) else { return };
         if r.suspended || r.draw.waiting_for_gpu() { return; }
         let now = Instant::now();
+        let (commits, input) = (r.rt.stats.commits, r.rt.has_pending_input());
         let (animating, dt) = r.clock.advance(&mut r.rt, now, r.compositor.as_ref().is_some_and(|c| c.animating()));
         r.apply_frame_requests(window);
         r.clipboard.flush(&mut r.rt);
@@ -890,7 +893,9 @@ impl<S: 'static> Browser<S> {
         };
         // In the same commit as the frame: the canvas moves to where this frame drew it.
         r.sync_band(window);
-        if drawn { self.drawn_at = Some(now); }
+        // Only an ambient loop's step (a frame its wake asked for, no commit, nothing else moving).
+        let ambient = !input && !animating && r.rt.stats.commits == commits && r.rt.ambient.is_some();
+        if drawn && !ambient { self.drawn_at = Some(now); }
         if drawn && !r.presented {
             r.presented = true;
             self.first_at = Some(now);
