@@ -222,3 +222,34 @@ pub(crate) fn end() -> Vec<(u32, u64)> {
     ids.dedup();
     VERSIONS.with_borrow(|v| ids.into_iter().map(|id| (id, v.get(id as usize).copied().unwrap_or(0))).collect())
 }
+
+/// The [`Tracked`] values a closure read, at the versions it read them ([`tracked_reads`]): for
+/// keeping a value derived from state outside a region (a poll's derived list, a cache in a
+/// handler) while the state it came from is unchanged.
+#[derive(Clone, Debug, Default)]
+pub struct Reads(Vec<(u32, u64)>);
+
+impl Reads {
+    /// Whether any value read was written since.
+    pub fn changed(&self) -> bool {
+        VERSIONS.with_borrow(|v| self.0.iter().any(|&(id, version)| v.get(id as usize).copied().unwrap_or(0) != version))
+    }
+
+    /// Counts the values as read again, by a region building around a caller that reuses what
+    /// it derived from them instead of reading them.
+    pub fn read(&self) {
+        if RECORDING.get() > 0 {
+            READS.with_borrow_mut(|r| if let Some(frame) = r.last_mut() { frame.extend(self.0.iter().map(|&(id, _)| id)) });
+        }
+    }
+}
+
+/// Runs `f`, recording which [`Tracked`] values it reads. A region building around the call
+/// reads them too.
+pub fn tracked_reads<R>(f: impl FnOnce() -> R) -> (R, Reads) {
+    begin();
+    let out = f();
+    let reads = Reads(end());
+    reads.read();
+    (out, reads)
+}
