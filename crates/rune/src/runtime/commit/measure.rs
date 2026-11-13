@@ -476,16 +476,20 @@ impl<S: 'static> Measurement<'_, S> {
         let emptied = self.memo.emptied();
         let memo = crate::memo::enter(std::mem::take(self.memo), self.env, self.system_accent, self.system_reduced_motion, crate::theme::blends_srgb(), self.chrome_bits(), cx.caret.clone(), cx.layout.clone());
         let view_time = crate::frame::profile::Scope::new(crate::frame::profile::Phase::View);
+        // The view and the rows it builds measure text with the window's own text system.
+        let text: *mut TextSystem = &mut *self.text;
         #[cfg(not(feature = "hot"))]
-        let mut root = { let root = self.root_view(&mut cx); self.build_tree(root, tx, force_all) };
+        // SAFETY: nothing here uses `self.text` until `lend` returns.
+        let mut root = crate::text::lend(unsafe { &mut *text }, || { let root = self.root_view(&mut cx); self.build_tree(root, tx, force_all) });
         // Index-built rows run the app's closures in `build_tree`, so a patch's panic there
         // falls back like one in the view.
         #[cfg(feature = "hot")]
         let (mut root, memo) = {
-            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // SAFETY: as above.
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| crate::text::lend(unsafe { &mut *text }, || {
                 let root = self.root_view(&mut cx);
                 self.build_tree(root, tx, force_all)
-            })) {
+            }))) {
                 Ok(root) => (root, memo),
                 Err(_) => {
                     eprintln!("rune-hot: view panicked; rendering the original view");

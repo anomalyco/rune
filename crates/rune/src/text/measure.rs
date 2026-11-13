@@ -1,7 +1,8 @@
 //! Measuring text from a view, for views that place things themselves (table columns, diagram
-//! nodes). A view has no handle on the runtime's text system, so each thread keeps one of its own
-//! built from the fonts the most recent [`TextSystem`] was given: the app's `AppSpec::fonts` in
-//! an app, the built-in Inter in a test runtime. Same shaper, same fonts, same numbers.
+//! nodes). While a window's view runs, its measures use the window's own text system (`lend`).
+//! Elsewhere (a handler, another thread) each thread keeps one of its own, built from the fonts the
+//! most recent [`TextSystem`] was given: the app's `AppSpec::fonts` in an app, the built-in Inter
+//! in a test runtime. Same shaper, same fonts, same numbers.
 
 use std::cell::RefCell;
 use std::marker::PhantomData;
@@ -42,6 +43,21 @@ thread_local! {
     static MEASURER: RefCell<Option<Measurer>> = const { RefCell::new(None) };
     /// This thread's [`with_families`] state: a private copy of `FONTS` that notes land in.
     static OVERRIDE: RefCell<Option<Fonts>> = const { RefCell::new(None) };
+    /// The text system of the window whose view is running on this thread (`lend`), if any.
+    static LENT: std::cell::Cell<*mut TextSystem> = const { std::cell::Cell::new(std::ptr::null_mut()) };
+}
+
+/// Runs `f` (a window's view) with [`measure`] and the rest using `text`, the window's own text
+/// system, rather than this thread's copy. The copy loads every font and fallback again (a title
+/// with one Arabic or emoji character costs 6-30 ms its first time), and its shapes aren't the ones
+/// the window lays out. `text` mustn't be used another way until `f` returns.
+pub(crate) fn lend<R>(text: &mut TextSystem, f: impl FnOnce() -> R) -> R {
+    struct Restore(*mut TextSystem);
+    impl Drop for Restore {
+        fn drop(&mut self) { LENT.with(|l| l.set(self.0)); }
+    }
+    let _restore = Restore(LENT.with(|l| l.replace(text)));
+    f()
 }
 
 /// Runs `f` on the state this thread measures with: its override when a [`with_families`]
@@ -231,6 +247,20 @@ pub(crate) fn line_starts(text: &str, size: f32, weight: f32, width: f32) -> Vec
 
 /// Runs `f` on this thread's text system, built from the fonts the app was given.
 pub(super) fn with_text<R>(f: impl FnOnce(&mut TextSystem) -> R) -> R {
+    // A view's measures use its window's text system, unless a `with_families` guard asks for
+    // other families. Taken while in use, so a measure inside `f` can't alias it.
+    let lent = LENT.with(|l| l.replace(std::ptr::null_mut()));
+    if !lent.is_null() && OVERRIDE.with_borrow(Option::is_none) {
+        struct Restore(*mut TextSystem);
+        impl Drop for Restore {
+            fn drop(&mut self) { LENT.with(|l| l.set(self.0)); }
+        }
+        let _restore = Restore(lent);
+        // SAFETY: `lend` set it from a live `&mut TextSystem` that nothing else uses until
+        // `lend` returns, and it's taken out of `LENT` while this borrow lives.
+        return f(unsafe { &mut *lent });
+    }
+    LENT.with(|l| l.set(lent));
     MEASURER.with_borrow_mut(|m| {
         let current = font_epoch();
         if m.as_ref().is_none_or(|m| m.generation != current) {
