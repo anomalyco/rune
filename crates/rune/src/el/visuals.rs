@@ -543,6 +543,13 @@ impl El {
         self.vis.cold_mut().group_color = Some(c);
         self
     }
+    /// While a press on this element is held, the text and icons in it (its own included) draw
+    /// in `c`, on the same track as a [`Self::press`] overlay, with or without one: a ghost
+    /// button whose icon brightens under the press, as CSS `:active { color }` does.
+    pub fn press_color(mut self, c: Color) -> Self {
+        self.vis.cold_mut().press_color = Some(c);
+        self
+    }
     /// Hovering this element shows only its own hover: while the pointer is on it, the
     /// elements it sits inside show no hover overlay and their `group_*` styles rest, as if the
     /// pointer had left them. A face or button inside a hoverable row, for one. Paint only: it

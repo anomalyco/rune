@@ -285,6 +285,10 @@ impl<S: 'static> Runtime<S> {
             } else {
                 pinh.group
             };
+            let (pressed, press_to) = match n.vis.cold.get().and_then(|c| c.press_color) {
+                Some(c) => (self.scene.get(n.id, P_PRESS).unwrap_or(0.0).clamp(0.0, 1.0), Some(c)),
+                None => (pinh.pressed, pinh.press_to),
+            };
             // Loops and reveals run on the node's clock (`El::time_scale`).
             let track = self.loops.get(&n.id);
             let lnow = if track.is_some() { self.scene.store().node_time(n.id) } else { self.t };
@@ -1126,6 +1130,8 @@ impl<S: 'static> Runtime<S> {
                         clip,
                         fade,
                         group: pinh.group,
+                        pressed,
+                        press_to,
                         loop_value,
                         cover,
                         scale_motion,
@@ -1229,7 +1235,7 @@ impl<S: 'static> Runtime<S> {
             self.inh_scratch[i] = Inh { opacity: effective_opacity, paint_opacity: o, first_fade: kids_fade,
                 clip: full_clip, fade: hit_fade, fade_origin: hit_origin,
                 paint_clip: clip, paint_fade: fade, paint_fade_origin: fade_origin, rounded, scale, anchor, anchor_to, blur, dy, dx,
-                cover: cover_offset, outer, mark, group,
+                cover: cover_offset, outer, mark, group, pressed, press_to,
                 hit_opacity: hit_opacity * kids_fade, group_rect: if hover_owner { rect_pt } else { pinh.group_rect },
                 scale_motion, still: if scale_motion == ScaleMotion::Still { (scale, anchor, anchor_to) } else { pinh.still },
                 in_cache, skip_paint, turn: turn_index,

@@ -15,6 +15,9 @@ pub(super) struct LeafBox {
     pub clip: [f32; 4],
     pub fade: [f32; 4],
     pub group: f32,
+    /// The nearest `El::press_color` (here or above) and how far a press on it is held.
+    pub pressed: f32,
+    pub press_to: Option<Color>,
     pub loop_value: Option<f32>,
     pub cover: Option<(f32, [f32; 2])>,
     pub scale_motion: ScaleMotion,
@@ -59,6 +62,8 @@ impl<S: 'static> Runtime<S> {
             clip,
             fade,
             group,
+            pressed,
+            press_to,
             loop_value,
             cover,
             scale_motion,
@@ -80,7 +85,7 @@ impl<S: 'static> Runtime<S> {
             self.paint_grid(i, &g, r, r_exact, clip, fade, o, glyph_count);
         }
         let n = &self.nodes[i];
-        let text_tint = |c: Color| paint_tracks::group_tint(n, c, group);
+        let text_tint = |c: Color| paint_tracks::press_tint(paint_tracks::group_tint(n, c, group), press_to, pressed);
         if let Some(shape) = &n.vis.shape {
             // At rest a shape draws from its exact box's origin rounded to the device grid, at its
             // exact scale, as Chromium draws a canvas or an inline SVG: what it holds keeps its

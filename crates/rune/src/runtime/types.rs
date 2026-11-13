@@ -297,8 +297,11 @@ pub(super) struct Inh {
     /// The clip, fade and fade origin outside the nearest flight above, for a flight nested in it.
     pub(super) outer: Option<[[f32; 4]; 3]>,
     pub(super) mark: u32,
-    /// The nearest hover group's hover amount (0–1), for `group_*` styles.
+    /// The nearest hover group's hover amount (0-1), for `group_*` styles.
     pub(super) group: f32,
+    /// The nearest `El::press_color` above or here, and how far a press on it is held (0-1).
+    pub(super) pressed: f32,
+    pub(super) press_to: Option<Color>,
     /// `opacity` with each `El::group_opacity` at its hovered level: a press where the pointer
     /// hovers the group finds what the hover shows, before a frame has drawn it.
     pub(super) hit_opacity: f32,
@@ -351,7 +354,7 @@ impl Default for Inh {
     fn default() -> Self {
         Inh { opacity: 1.0, paint_opacity: 1.0, first_fade: 1.0, clip: NO_CLIP, fade: [0.0; 4], fade_origin: NO_CLIP,
             paint_clip: NO_CLIP, paint_fade: [0.0; 4], paint_fade_origin: NO_CLIP, rounded: None,
-            scale: 1.0, anchor: [0.0; 2], anchor_to: [0.0; 2], blur: 0.0, dy: 0.0, dx: 0.0, cover: [0.0; 2], outer: None, mark: 0, group: 0.0,
+            scale: 1.0, anchor: [0.0; 2], anchor_to: [0.0; 2], blur: 0.0, dy: 0.0, dx: 0.0, cover: [0.0; 2], outer: None, mark: 0, group: 0.0, pressed: 0.0, press_to: None,
             hit_opacity: 1.0, group_rect: [f32::NEG_INFINITY, f32::NEG_INFINITY, f32::INFINITY, f32::INFINITY],
             scale_motion: ScaleMotion::Still, still: (1.0, [0.0; 2], [0.0; 2]), in_cache: false, skip_paint: false, turn: 0,
             snap: Default::default() }

@@ -331,7 +331,7 @@ impl<S: 'static> Runtime<S> {
         for i in 0..self.nodes.len() {
             let n = &self.nodes[i];
             let press_scale = n.handlers.get().and_then(|h| h.press_scale);
-            if n.vis.hover().a <= 0.0 && !n.vis_flags.hover_group() && n.vis.press().a <= 0.0 && press_scale.is_none() { continue; }
+            if n.vis.hover().a <= 0.0 && !n.vis_flags.hover_group() && !n.vis.tracks_press() && press_scale.is_none() { continue; }
             if self.is_exiting(n.id) { continue; }
             match self.hover_flip(i, captured, alone, &shared) {
                 Some(f) if f.changed => flips.push(f),
@@ -346,7 +346,7 @@ impl<S: 'static> Runtime<S> {
                 Some(_) => {}
                 None => {}
             }
-            if n.vis.press().a <= 0.0 && press_scale.is_none() { continue; }
+            if !n.vis.tracks_press() && press_scale.is_none() { continue; }
             let capture_inside = if self.secondary.is_held() {
                 self.pointer.is_some_and(|(x, y)| self.node_contains(i, x, y))
             } else {
@@ -356,7 +356,7 @@ impl<S: 'static> Runtime<S> {
             // it, as the primary does.
             let tinted = self.tint.path() == Some(n.path.as_str()) && self.pointer.is_some_and(|(x, y)| self.node_contains(i, x, y));
             let down = self.allowed(i) && ((captured == Some(n.path.as_str()) && capture_inside) || tinted);
-            let pressed = down && n.vis.press().a > 0.0;
+            let pressed = down && n.vis.tracks_press();
             let id = n.id;
             changed |= self.scene.store().target(id, P_PRESS).unwrap_or(0.0) != pressed as u8 as f32;
             if paint_tracks::ready_from_rest(&mut self.scene, id, P_PRESS, 0.0, pressed as u8 as f32) {

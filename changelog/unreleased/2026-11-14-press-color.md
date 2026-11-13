@@ -1,0 +1,1 @@
+- `El::press_color(c)`: while a press on the element is held, its text and icons draw in `c`, on the press track, with or without an `El::press` overlay (CSS `:active { color }`).
