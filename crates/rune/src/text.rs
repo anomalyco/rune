@@ -509,7 +509,7 @@ impl TextSystem {
     /// platform: 1 (coverage as is) on macOS and iOS, and a browser's text gamma for `Off`
     /// elsewhere.
     pub fn coverage_exponent(&self, fill: [f32; 4]) -> f32 {
-        let apple = cfg!(any(target_os = "macos", target_os = "ios"));
+        let apple = coretext_match::apple_coverage();
         coretext_match::coverage_exponent(self.smoothing, fill, apple, cfg!(target_os = "windows"))
     }
 
