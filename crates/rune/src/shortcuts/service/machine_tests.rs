@@ -758,6 +758,35 @@ fn a_parked_unregister_finishes_on_the_engine_it_captured_and_the_successor_forg
     clear_notes();
 }
 
+/// The closes a host generation must leave as they were: the newest host's close takes its own
+/// engine and handlers, and any close ends routing.
+#[test]
+fn the_newest_hosts_close_and_any_close_ending_routing_stay_as_they_were() {
+    let _claims = CLAIMS.lock().unwrap_or_else(|error| error.into_inner());
+    let scripts: [&[usize]; 3] = [&[0, 4, 2], &[0, 1, 4, 3], &[0, 4, 1, 4, 3, 2]];
+    for script in scripts {
+        let mut dev = Reference { stage: Stage::new(), departures: false };
+        let mut new = NewOverlap(Stage::new());
+        for (n, letter) in script.iter().enumerate() {
+            let (dev_seen, new_seen) = (overlap_play(&mut dev, *letter), overlap_play(&mut new, *letter));
+            assert_ne!(new_seen, Seen::Skipped, "{script:?} at {n}");
+            assert_eq!(overlap_view(&new, new_seen), overlap_view(&dev, dev_seen), "{script:?} at {n}");
+        }
+        assert!(!new.0.attached && new.0.slot.is_none(), "the close took its own engine: {script:?}");
+        assert!(new.0.handlers.is_empty() && new.claims().is_empty(), "and cleared its handlers and claims: {script:?}");
+        drop(dev);
+        drop(new);
+        clear_notes();
+    }
+    // A replaced host's close still ends routing, whoever holds it.
+    let mut new = NewOverlap(Stage::new());
+    for letter in [0, 1, 2] { assert_eq!(overlap_play(&mut new, letter), Seen::Done); }
+    assert_eq!((new.0.attached, new.0.open), (false, [false, true]), "routing ended");
+    assert_eq!(overlap_play(&mut new, 4), Seen::Answer(Err(ShortcutError::NotRunning)), "a call after it is refused");
+    drop(new);
+    clear_notes();
+}
+
 #[test]
 fn a_walk_difference_needs_the_marked_departure() {
     use std::panic::{AssertUnwindSafe, catch_unwind};

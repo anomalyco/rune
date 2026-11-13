@@ -297,6 +297,75 @@ fn play(model: &mut impl Model, letter: usize, threads: &[ThreadId; 2], wakes: &
     vec![perform(model, thread, op)]
 }
 
+/// Plays `steps` through both models, each letter with the outcomes given, and returns who
+/// routing names at the end.
+fn script(linux: bool, steps: &[(usize, Vec<Outcome>)], threads: &[ThreadId; 2], wakes: &[Waker; 2]) -> Option<ThreadId> {
+    let mut old = OldControl { linux, ..OldControl::default() };
+    let mut new = NewControl { attachment: Attachment::Detached, engine: None, slot_wake: None, engines: HashMap::new(), linux, schedule: Schedule::default() };
+    for (n, (letter, expected)) in steps.iter().enumerate() {
+        let number = n as u32 + 1;
+        assert_eq!(&play(&mut old, *letter, threads, wakes, number), expected, "linux {linux}, the old routing at {n}");
+        assert_eq!(&play(&mut new, *letter, threads, wakes, number), expected, "linux {linux}, the new routing at {n}");
+        assert_eq!(new.view(), old.view(), "linux {linux} at {n}");
+    }
+    new.view().0
+}
+
+/// The cases a host generation must leave as they were: the newest host's close takes its own
+/// engine, the routed host runs the calls waiting for it, and any close still ends routing and
+/// releases those calls.
+#[test]
+fn the_newest_hosts_close_and_drain_and_any_close_ending_routing_stay_as_they_were() {
+    let threads = [std::thread::current().id(), other_thread()];
+    let wakes: [Waker; 2] = [Arc::new(|| {}), Arc::new(|| { let _ = 1; })];
+    let (w0, w1) = (address(&wakes[0]), address(&wakes[1]));
+    use Outcome::*;
+    // Off Linux: the owner drains a call from the other thread, then closes and takes its engine.
+    let routed = script(false, &[
+        (0, vec![Attached]),
+        (3, vec![Queued { wake: w0 }]),
+        (4, vec![Drained { ran: vec![2], dropped: vec![] }]),
+        (6, vec![Closed { jobs: vec![], engine: Some(1) }]),
+        (8, vec![]),
+    ], &threads, &wakes);
+    assert_eq!(routed, None);
+    // The routed host drains the call that waits for it, though another host attached first.
+    let routed = script(false, &[
+        (0, vec![Attached]),
+        (1, vec![Attached]),
+        (2, vec![Queued { wake: w1 }]),
+        (5, vec![Drained { ran: vec![3], dropped: vec![] }]),
+    ], &threads, &wakes);
+    assert_eq!(routed, Some(threads[1]));
+    // A replaced host's close still ends routing and releases its successor's waiting caller.
+    let routed = script(false, &[
+        (0, vec![Attached]),
+        (1, vec![Attached]),
+        (2, vec![Queued { wake: w1 }]),
+        (6, vec![Closed { jobs: vec![3], engine: Some(1) }]),
+        (3, vec![Refused]),
+    ], &threads, &wakes);
+    assert_eq!(routed, None);
+    // On Linux: a lone host's close takes its engine.
+    let routed = script(true, &[
+        (0, vec![Attached]),
+        (2, vec![Ran { engine: 1, wake: w0 }]),
+        (6, vec![Closed { jobs: vec![], engine: Some(1) }]),
+        (8, vec![]),
+    ], &threads, &wakes);
+    assert_eq!(routed, None);
+    // The newest host's close takes its own engine, once the one it replaced has gone.
+    let routed = script(true, &[
+        (0, vec![Attached]),
+        (1, vec![Replacing { engine: 1 }]),
+        (8, vec![]),
+        (7, vec![Closed { jobs: vec![], engine: Some(2) }]),
+        (8, vec![]),
+        (2, vec![Refused]),
+    ], &threads, &wakes);
+    assert_eq!(routed, None);
+}
+
 #[test]
 fn every_attachment_sequence_matches_the_old_routing() {
     let threads = [std::thread::current().id(), other_thread()];
