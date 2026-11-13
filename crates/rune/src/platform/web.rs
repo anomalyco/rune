@@ -911,7 +911,9 @@ impl<S: 'static> Browser<S> {
             after(QUIET, move || { let _ = proxy.send_event(Wake::StartGpu); });
             crate::marks::mark("web.first.presented");
             r.input.presented();
-            if let Some(mut ready) = r.on_ready.take() { ready(&crate::WindowHandle::new("main")); }
+            // In a task of its own: a click or key that came with the first frame is handled
+            // first, not after what the app starts once it shows (about 9 ms in OpenCode's).
+            if let Some(mut ready) = r.on_ready.take() { after(Duration::ZERO, move || ready(&crate::WindowHandle::new("main"))); }
             page_fonts::share_later(r.fonts);
             let proxy = self.proxy.clone();
             full_faces::fetch(std::mem::take(&mut r.late_fonts), !r.document, move || { let _ = proxy.send_event(Wake::App); });

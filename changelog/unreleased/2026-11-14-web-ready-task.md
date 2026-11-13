@@ -1,0 +1,2 @@
+- In a browser, `App::on_ready` runs in a task of its own after the first frame, so a click or key that arrives with the first frame is handled before what the app starts once it shows.
+- A renderer reads its device's largest texture size once, not on every frame with layers: in a browser each read of the device's limits crosses into JavaScript for every limit (about 35 µs a frame while scrolling).
