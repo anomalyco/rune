@@ -175,10 +175,12 @@ impl<S: 'static> Runtime<S> {
         crate::marks::mark("c.applied");
         self.scene.keep_flights(false);
         self.memo.keep_since(self.memo_since);
+        crate::marks::mark("c.memo_kept");
         self.track_focused_rows();
         #[cfg(debug_assertions)]
         if COMMITS.get() % 16 == 1 { self.a11y_warn_nameless(); }
         self.prune_text_selection();
+        crate::marks::mark("c.end");
         budget.end(self.watch.cause);
     }
 
