@@ -125,9 +125,14 @@ impl El {
     }
     /// The element whose content is active while this one keeps keyboard focus (ARIA
     /// `aria-activedescendant`): the highlighted row of a tree, table or suggestion list whose
-    /// container or search field holds focus. `key` names it as `Cx::layout` does.
+    /// container or search field holds focus. `key` names it as `Cx::layout` does; an empty
+    /// one names none, and costs nothing.
     pub fn active_descendant(mut self, key: impl Into<String>) -> Self {
-        self.cold_mut().a11y.more().active = Some(key.into());
+        let key = key.into();
+        if key.is_empty() {
+            return self;
+        }
+        self.cold_mut().a11y.more().active = Some(key);
         self
     }
     /// The element whose text names this one (ARIA `aria-labelledby`): a setting's title for
