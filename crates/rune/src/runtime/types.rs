@@ -18,7 +18,7 @@ pub(super) enum RowLayout {
 pub(crate) struct NodeCold {
     pub trace_name: Option<&'static str>,
     pub trace_namespace: Option<(&'static str, &'static str)>,
-    pub label: Option<String>,
+    pub label: Option<std::borrow::Cow<'static, str>>,
     pub(super) live: Vec<crate::live::Bound>,
     /// The run a cell measures and draws from (see `El::advance_in`).
     pub(super) run_layout: Option<Rc<crate::text::RunLayout>>,

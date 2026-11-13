@@ -1,0 +1,1 @@
+- `El::label_static` and `El::description_static` keep a `&'static str` (a translated message, a literal) as it is: a view that runs every frame copies nothing for an element's accessible name or description. Labels and descriptions are stored as `Cow<'static, str>`; `label` and `description` take `impl Into<String>` as before.

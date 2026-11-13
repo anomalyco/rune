@@ -312,11 +312,11 @@ impl<S: 'static> Runtime<S> {
                     path: n.path.clone(),
                     key: n.key.clone(),
                     role: n.role,
-                    label: n.label.clone(),
+                    label: n.label.as_deref().map(str::to_owned),
                     text: match &n.text {
                         Some(t) => (!secure).then(|| t.source_text().to_owned()),
                         // A text built from several (a rolling label's glyphs) reads as its label.
-                        None => (!secure).then(|| n.label.clone()).flatten().filter(|_| n.role == "text"),
+                        None => (!secure).then(|| n.label.as_deref().map(str::to_owned)).flatten().filter(|_| n.role == "text"),
                     },
                     rect,
                     target: [n.target[0], n.target[1], n.target[2] - n.target[0], n.target[3] - n.target[1]],
