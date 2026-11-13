@@ -349,11 +349,14 @@ impl<S: 'static> Host<S> {
         self.secure_input.set(false);
         if !self.closes() { return; }
         crate::marks::mark("window.close");
+        crate::quit::ib3("close");
         // Off the screen first: the close looks done at once and `on_close` runs unseen.
         if let Some(w) = self.shown_win() { w.hide(); }
         crate::marks::mark("window.close.hidden");
+        crate::quit::ib3("close.hidden");
         self.close_hook();
         crate::marks::mark("window.close.hooked");
+        crate::quit::ib3("close.hooked");
         self.rt.set_live_visible(false);
         // While the window still shows its last frames.
         if let Some(trace) = &mut self.trace { trace.settle_presents(crate::frame::present_time::SETTLE); }
@@ -373,6 +376,7 @@ impl<S: 'static> Host<S> {
             self.files = FileDrop::default();
             if let Some(w) = &mut self.win { w.apply_cursor(&self.rt, false); w.hide(); }
             crate::marks::mark("window.hidden");
+            crate::quit::ib3("window.hidden");
             self.life.finish();
             return;
         }

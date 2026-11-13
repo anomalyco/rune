@@ -99,6 +99,14 @@ pub(crate) fn step(state: State, event: Event) -> (State, Vec<Effect>) {
 }
 
 static STATE: Mutex<State> = Mutex::new(State::Running);
+
+/// IB-3 measuring: `name` with this moment's FILETIME on stderr, when IB3_CLOSE is set.
+pub(crate) fn ib3(name: &str) {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if !*ON.get_or_init(|| std::env::var_os("IB3_CLOSE").is_some()) { return; }
+    let ft = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos() / 100 + 116_444_736_000_000_000;
+    eprintln!("ib3close {ft} {name}");
+}
 static FAST_EXIT: std::sync::OnceLock<fn()> = std::sync::OnceLock::new();
 
 /// How a quitting app ends: fast, unless it asked for an orderly exit (`orderly_exit`).
@@ -136,6 +144,7 @@ pub(crate) fn fast_exit_hook() -> Option<fn()> {
 /// `last`, then the process ends without dropping a window, a device or an allocation.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn end_fast(last: fn()) -> ! {
+    crate::quit::ib3("end_fast");
     // The windows go now, not when the process's threads are torn down.
     #[cfg(target_os = "windows")]
     crate::platform::win32::destroy_own_windows();
@@ -150,7 +159,9 @@ pub(crate) fn end_fast(last: fn()) -> ! {
     #[cfg(any(target_os = "windows", target_os = "linux"))]
     crate::open_url::instance::exited();
     crate::marks::mark("quit.last");
+    crate::quit::ib3("last");
     last();
+    crate::quit::ib3("lasted");
     end_process()
 }
 
@@ -158,6 +169,7 @@ pub(crate) fn end_fast(last: fn()) -> ! {
 #[cfg(not(target_arch = "wasm32"))]
 fn end_process() -> ! {
     crate::marks::mark("quit.end");
+    crate::quit::ib3("end_process");
     // A process ends once each of its threads has run to its end: an idle-priority one (D3D12's
     // shader threads) on a busy machine can hold it for seconds.
     #[cfg(target_os = "windows")]
@@ -166,6 +178,7 @@ fn end_process() -> ! {
     // SAFETY: the pseudo-handle names this process; TerminateProcess on it doesn't return.
     unsafe {
         use windows_sys::Win32::System::Threading::{GetCurrentProcess, TerminateProcess};
+        crate::quit::ib3("terminate");
         TerminateProcess(GetCurrentProcess(), 0);
     }
     #[cfg(unix)]
@@ -181,6 +194,7 @@ pub(crate) fn send(event: Event) -> Vec<Effect> {
     let (next, effects) = step(*state, event);
     if *state == State::Running && matches!(next, State::Quitting(..)) {
         crate::marks::mark("quit.start");
+        crate::quit::ib3("quit.start");
         #[cfg(not(target_arch = "wasm32"))]
         watch_quit();
     }

@@ -432,7 +432,9 @@ pub(crate) fn destroy_own_windows() {
         EnumThreadWindows(GetCurrentThreadId(), Some(add), (&raw mut windows) as LPARAM);
         for hwnd in windows {
             SetWindowLongPtrW(hwnd, GWLP_WNDPROC, DefWindowProcW as usize as isize);
+            crate::quit::ib3(&format!("destroy {hwnd:?}"));
             DestroyWindow(hwnd);
+            crate::quit::ib3(&format!("destroyed {hwnd:?}"));
         }
     }
 }

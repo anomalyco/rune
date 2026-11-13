@@ -422,6 +422,7 @@ impl ApplicationHandler<WakeEvent> for Windows {
             else { deadline.map_or(ControlFlow::Wait, |at| ControlFlow::WaitUntil(crate::time::for_winit(at))) });
     }
     fn exiting(&mut self, event_loop: &ActiveEventLoop) {
+        crate::quit::ib3("exiting");
         let _handling = crate::quit::handling();
         crate::marks::mark("loop.exiting");
         // Every quit ends here, so the windows still open run `App::on_quit` first, unless the
