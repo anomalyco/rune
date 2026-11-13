@@ -1,0 +1,1 @@
+- `TabStrip::hover_none` shows every tab's close button, its status mark beside it and the title faded clear of both, as the web app's `@media (hover: none)` tab rules do.
