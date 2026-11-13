@@ -77,6 +77,7 @@ fn bare_audio() -> Arc<Shared> {
         waker: WakerSlot::default(),
         notified: AtomicU64::new(0),
         native: Mutex::new(backend::Native::default()),
+        backend: &BACKEND,
     })
 }
 

@@ -50,7 +50,7 @@ mod windows;
 #[cfg(target_os = "windows")]
 use self::windows as backend;
 #[cfg(target_os = "windows")]
-pub(crate) use self::windows::{layer, unlayer};
+pub(crate) use self::windows::LayerStatus;
 mod waker;
 
 use phases::{Effect, Event, Run, Stage, step};
@@ -66,6 +66,41 @@ use crate::time::Instant;
 /// A playing clip whose next picture is due sooner than this (seconds) draws every refresh;
 /// later, the window sleeps until then.
 pub(crate) const WAKE_MIN: f64 = 0.002;
+
+/// The platform player's entry points that a window reaches through a clip it draws, called through
+/// the clip so that only an app that makes a [Player] links them (the decoder, the audio
+/// stream, Media Foundation): a window links this module's code whether or not it ever draws video.
+pub(crate) struct Backend {
+    probe: fn(&mut backend::Native, &MediaSource, &[(String, String)], Kind) -> Result<Meta, String>,
+    decode: fn(&mut backend::Native, &MediaSource, &[(String, String)], f64) -> Result<ByteFrame, String>,
+    drive: fn(&Arc<Shared>),
+    pull: fn(&Arc<Shared>, &NativeSurface, Instant) -> bool,
+    due: fn(&Shared) -> Option<Instant>,
+    #[cfg(target_os = "windows")]
+    layer: fn(&Arc<Shared>, Option<(u32, u32)>) -> LayerStatus,
+    #[cfg(target_os = "windows")]
+    unlayer: fn(&Arc<Shared>, &NativeSurface),
+}
+
+static BACKEND: Backend = Backend {
+    probe: backend::probe,
+    decode: backend::decode,
+    drive: backend::drive,
+    pull: backend::pull,
+    due: backend::due,
+    #[cfg(target_os = "windows")]
+    layer: backend::layer,
+    #[cfg(target_os = "windows")]
+    unlayer: backend::unlayer,
+};
+
+/// Windows: shows shared's video in a compositor layer, or (None) asks for none.
+#[cfg(target_os = "windows")]
+pub(crate) fn layer(shared: &Arc<Shared>, ask: Option<(u32, u32)>) -> LayerStatus { (shared.backend.layer)(shared, ask) }
+
+/// Windows: takes shared's video out of its compositor layer, back to surface.
+#[cfg(target_os = "windows")]
+pub(crate) fn unlayer(shared: &Arc<Shared>, surface: &NativeSurface) { (shared.backend.unlayer)(shared, surface) }
 
 /// Set once a window event loop runs. Until then (headless runs, tests) no player is created.
 static PLAYBACK: AtomicBool = AtomicBool::new(false);
@@ -281,6 +316,7 @@ impl Player {
             waker: WakerSlot::default(),
             notified: AtomicU64::new(0),
             native: Mutex::new(backend::Native::default()),
+            backend: &BACKEND,
         });
         backend::created(&shared);
         if kind == Kind::Audio && !playback_enabled() {
@@ -502,6 +538,7 @@ pub(crate) struct Shared {
     /// The generation windows last heard about.
     notified: AtomicU64,
     native: Mutex<backend::Native>,
+    backend: &'static Backend,
 }
 
 impl Shared {
@@ -549,7 +586,7 @@ impl Shared {
     fn open_now(&self) {
         let mut native = self.native.lock().unwrap();
         if !self.ctl.lock().unwrap().opened() {
-            let meta = backend::probe(&mut native, &self.source, &self.headers, self.kind);
+            let meta = (self.backend.probe)(&mut native, &self.source, &self.headers, self.kind);
             self.ctl.lock().unwrap().open(meta);
             drop(native);
             self.settle(false);
@@ -576,13 +613,13 @@ impl Shared {
             // Nothing to draw: the element only re-runs its view when the state changes.
             match clock {
                 Clock::Virtual(_) => self.open_now(),
-                Clock::Display(_) => backend::drive(self),
+                Clock::Display(_) => (self.backend.drive)(self),
             }
             return Pulled { active: false, generation: self.ctl.lock().unwrap().generation, due: None };
         }
         let (active, due) = match clock {
             Clock::Virtual(now) => (self.pull_virtual(surface, now), None),
-            Clock::Display(target) => (backend::pull(self, surface, target), backend::due(self)),
+            Clock::Display(target) => ((self.backend.pull)(self, surface, target), (self.backend.due)(self)),
         };
         let pulled = {
             let mut c = self.ctl.lock().unwrap();
@@ -608,7 +645,7 @@ impl Shared {
             (meta, meta.frame_index(c.time), c.shown)
         };
         if shown != Some(frame) {
-            let decoded = backend::decode(&mut native, &self.source, &self.headers, meta.frame_time(frame));
+            let decoded = (self.backend.decode)(&mut native, &self.source, &self.headers, meta.frame_time(frame));
             let mut c = self.ctl.lock().unwrap();
             c.shown = Some(frame);
             let id = c.next_frame_id();
