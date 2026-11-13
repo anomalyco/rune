@@ -1,0 +1,1 @@
+- **rune-kit: a tab's title has no letter spacing.** `TabStrip` titles drew with the compact UI type's -0.04 pt tracking; OpenCode's `tab-nav.tsx` titles have none, so a long title ran about a point short of the shipped app's.
