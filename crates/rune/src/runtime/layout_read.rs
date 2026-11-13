@@ -411,6 +411,11 @@ impl<S: 'static> Runtime<S> {
         let rects = &mut self.layout_seen.rects;
         let moved = reads.iter().zip(&now).position(|(r, rect)| rects.get(&r.key).is_none_or(|old| r.moved(*old, *rect)));
         let changed = moved.is_some() || boxes.as_ref().is_some_and(|b| boxes_moved(&rects.selection, b));
+        if pass.is_some() && let Some(path) = std::env::var_os("IB3_READS") {
+            use std::io::Write;
+            let lines: Vec<String> = reads.iter().zip(&now).filter(|(r, rect)| rects.get(&r.key).is_none_or(|old| r.moved(*old, **rect))).map(|(r, rect)| format!("{} {:?} -> {:?} at {}", r.key, rects.get(&r.key).copied().flatten(), rect, r.at.map_or(String::new(), |l| format!("{}:{}", l.file(), l.line())))).collect();
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) { let _ = writeln!(f, "pass reads={} moved={}\n  {}", reads.len(), lines.len(), lines.join("\n  ")); }
+        }
         // The once-a-frame check names the read for the scroll warning.
         #[cfg(debug_assertions)]
         if !nodes_given && let Some(k) = moved { self.watch.meter.read(&reads[k].key, reads[k].at); }
