@@ -208,7 +208,9 @@ impl<S: 'static> Measurement<'_, S> {
             // Degenerate zero-height runs fall back to a full measurement instead of
             // an unbounded retry loop. Normal transcripts need one pass.
             let (layout, mut nodes, pending, mut reused, mut taken) = self.measure_view(tx, self.pass.forced());
-            if !self.measure_virtuals(&nodes, tx.commit.lands()) { break (layout, nodes, pending, reused, taken); }
+            let ib3_more = self.measure_virtuals(&nodes, tx.commit.lands());
+            crate::marks::ib3_pass("m.virtuals");
+            if !ib3_more { break (layout, nodes, pending, reused, taken); }
             memo_reuse::restore_moved_nodes(self.nodes, &mut nodes, &reused, &taken);
             nodes.clear();
             *self.spare_nodes = nodes;
@@ -476,6 +478,8 @@ impl<S: 'static> Measurement<'_, S> {
         let emptied = self.memo.emptied();
         let memo = crate::memo::enter(std::mem::take(self.memo), self.env, self.system_accent, self.system_reduced_motion, crate::theme::blends_srgb(), self.chrome_bits(), cx.caret.clone(), cx.layout.clone());
         crate::marks::mark("c.view");
+        crate::marks::ib3_pass("m.view");
+        crate::marks::ib3_pass("m.view");
         let view_time = crate::frame::profile::Scope::new(crate::frame::profile::Phase::View);
         // The view and the rows it builds measure text with the window's own text system.
         let text: *mut TextSystem = &mut *self.text;
@@ -506,6 +510,8 @@ impl<S: 'static> Measurement<'_, S> {
                 }
             }
         };
+        crate::marks::ib3_pass("m.viewed");
+        crate::marks::ib3_pass("m.viewed");
         // Both paths finish the memo here, after the rows are built.
         let (memo, replayed) = memo.finish();
         drop(view_time);
@@ -520,6 +526,8 @@ impl<S: 'static> Measurement<'_, S> {
         self.layout_reads = cx.layout_reads.take();
         for read in replayed.layout { layout_read::note_read_at(&mut self.layout_reads, &read.key, read.same, read.at); }
 
+        crate::marks::ib3_pass("m.memo");
+        crate::marks::ib3_pass("m.memo");
         let mut taffy = std::mem::replace(self.layout, LayoutEngine::with_capacity(0));
         taffy.begin_commit();
         let mut nodes = std::mem::take(self.spare_nodes);
@@ -567,7 +575,9 @@ impl<S: 'static> Measurement<'_, S> {
         }
         if self.committing { release_kept_layouts(self.nodes, &mut nodes, &taffy, self.text, &reused); }
         taffy.finish_flatten();
+        crate::marks::ib3_pass("m.flattened");
         let (taffy, nodes) = self.solve(taffy, root_id, nodes);
+        crate::marks::ib3_pass("m.solved");
         (taffy, nodes, pending, reused, taken_paths)
     }
 

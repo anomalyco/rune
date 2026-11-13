@@ -31,6 +31,28 @@ fn book() -> std::sync::MutexGuard<'static, Book> {
 }
 
 /// Records `name` at now, unless it was reached before. An app marks its own steps here too.
+/// IB-3 measuring: `name`#<n>, n counting the calls of `name` in this process.
+pub fn ib3_pass(name: &'static str) {
+    use std::sync::Mutex;
+    static COUNTS: Mutex<Vec<(&'static str, u32)>> = Mutex::new(Vec::new());
+    let k = {
+        let mut c = COUNTS.lock().unwrap_or_else(|e| e.into_inner());
+        match c.iter_mut().find(|(n, _)| *n == name) { Some(e) => { e.1 += 1; e.1 } None => { c.push((name, 1)); 1 } }
+    };
+    if k <= 6 { mark(Box::leak(format!("{name}#{k}").into_boxed_str())); }
+}
+
+/// IB-3 measuring: `name`#<n>, n counting the calls of `name` in this process.
+pub fn ib3_pass(name: &'static str) {
+    use std::sync::Mutex;
+    static COUNTS: Mutex<Vec<(&'static str, u32)>> = Mutex::new(Vec::new());
+    let k = {
+        let mut c = COUNTS.lock().unwrap_or_else(|e| e.into_inner());
+        match c.iter_mut().find(|(n, _)| *n == name) { Some(e) => { e.1 += 1; e.1 } None => { c.push((name, 1)); 1 } }
+    };
+    if k <= 6 { mark(Box::leak(format!("{name}#{k}").into_boxed_str())); }
+}
+
 pub fn mark(name: &'static str) {
     let now = Instant::now();
     let mut book = book();

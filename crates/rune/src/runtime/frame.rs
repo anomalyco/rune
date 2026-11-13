@@ -829,19 +829,25 @@ impl<S: 'static> Runtime<S> {
         }
         let mut source = |on: bool, bit: u16| { if on { sources |= bit; } on };
         self.begin_exit_mask();
+        crate::marks::ib3_pass("s.build");
         animating |= self.build();
+        crate::marks::ib3_pass("s.built");
         // Compensate drawn motion, leaving unrelated layout and growth springs alone.
         for _ in 0..3 {
             if !self.follow_keeps() { break; }
             animating |= self.build();
         }
         self.finish_keeps();
+        crate::marks::ib3_pass("s.keeps");
         animating |= self.write_drawn_rects();
+        crate::marks::ib3_pass("s.drawn_rects");
         // A selection's edge scroll stepped: it follows the pointer over this layout, and shows.
         if self.laid_edge_scroll() { animating |= self.build(); }
         self.report_at_bottom();
         animating |= self.report_visible_rows();
+        crate::marks::ib3_pass("s.reports");
         self.report_layout();
+        crate::marks::ib3_pass("s.reported");
         // A report waits for the next frame: draw one to deliver it.
         animating |= self.report_drawn() | self.report_visible();
         self.end_exit_mask();
