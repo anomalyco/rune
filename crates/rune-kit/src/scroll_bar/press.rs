@@ -60,14 +60,20 @@ impl Bar {
         let (top, h) = thumb_along(at, len, t.min_thumb, a, t.pixels);
         // Down a vertical bar, or along a horizontal one from its start, its right edge right to
         // left.
-        let y = match (t.x, self.rtl()) {
-            (false, _) => d.y,
-            (true, false) => d.x,
-            (true, true) => len - d.x,
+        let y = match (t.thumb_only, t.x, self.rtl()) {
+            // The hit element is the moving thumb, not the track. Use travel from the press
+            // rather than its changing local coordinates. Don't move on down.
+            (true, _, _) if d.phase == Phase::Down => { d.data = top; top }
+            (true, false, _) => d.data + d.dy,
+            (true, true, false) => d.data + d.dx,
+            (true, true, true) => d.data - d.dx,
+            (false, false, _) => d.y,
+            (false, true, false) => d.x,
+            (false, true, true) => len - d.x,
         };
         let press = match d.phase {
             Phase::Down => {
-                let on_thumb = (top..=top + h).contains(&y);
+                let on_thumb = t.thumb_only || (top..=top + h).contains(&y);
                 // A track press pages toward itself, or with Option (or the preference) jumps
                 // there. Pages run down, so a horizontal bar jumps. A press on the thumb holds it
                 // where it was caught; a jump centres it there.
