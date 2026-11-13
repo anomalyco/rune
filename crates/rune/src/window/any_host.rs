@@ -8,6 +8,7 @@ impl<S: 'static> AnyHost for Host<S> {
     }
     fn finished(&self) -> bool { self.life.finished() }
     fn keeps_loop(&self) -> bool { self.keeps_loop }
+    fn closing_ends_app(&mut self) { self.ends_app = true; }
     fn key(&self) -> Option<&str> { Some(self.native_handle.key()) }
     fn reopen_candidate(&self) -> crate::platform::reopen::Candidate {
         let shown = self.shown_win();
