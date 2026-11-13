@@ -1,0 +1,1 @@
+- **`Cx::hover_none` says a page's primary pointer can't hover** (CSS `(hover: none)`: a phone's or tablet's touch screen), so a view can show what a mouse would reveal on hover, as a web app's `@media (hover: none)` rules do. It follows the browser's media query as it changes (a tablet gaining a mouse), re-running the view; natively it's false.

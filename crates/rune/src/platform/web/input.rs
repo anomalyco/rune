@@ -180,6 +180,13 @@ impl<S: 'static> Running<S> {
                 self.resize_surface(window, size, scale);
             }
             Some("motion") => self.rt.set_system_reduced_motion(event["reduced"].as_bool().unwrap_or(false)),
+            // The primary pointer can or can't hover (a mouse or a touch screen), read by views
+            // through `Cx::hover_none`.
+            Some("hover") => {
+                let none = event["none"].as_bool().unwrap_or(false);
+                if HOVER_NONE.replace(none) == none { return false; }
+                self.rt.invalidate();
+            }
             // The browser's `forced-colors` (a contrast theme) and its system colours, as sRGB bytes:
             // Canvas, CanvasText, Highlight, HighlightText, GrayText, ButtonFace, ButtonText, LinkText.
             Some("contrast") => {
