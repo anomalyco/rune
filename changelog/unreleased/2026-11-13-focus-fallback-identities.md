@@ -3,3 +3,6 @@
   which building the new tree had already taken from the nodes that stayed, so nothing took
   focus and Tab started over at the top. It now resolves each old node to the node that replaced
   it and hands focus to the next control still in the tree, as it does when a row is deleted.
+  Only a control that actually leaves the tree hands the keyboard on: clearing a field's
+  `TextEdit::focused` while it stays, hiding it, collapsing a candidate to no size, or
+  `Tx::blur` leaves nothing focused.
