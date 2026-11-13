@@ -1,6 +1,7 @@
-//! Work off the UI thread, the same code on every target: natively each piece runs on its own
-//! named thread; on the web, which has no threads, the main thread runs it from a task after the
-//! current event, so it never runs inside a frame.
+//! Work off the UI thread, the same code on every target: natively a piece runs on one of a few
+//! shared threads (`pool`), and a service ([`serve`]) on a thread of its own; on the web, which
+//! has no threads, the main thread runs it from a task after the current event, so it never runs
+//! inside a frame.
 //!
 //! On the web the work can wait without blocking the page: after [`start_runners`] (called from
 //! a `#[wasm_bindgen(jspi)]` export), it runs on a few JS Promise Integration fibers, and
@@ -14,13 +15,16 @@ use std::time::Duration;
 
 #[cfg(target_arch = "wasm32")]
 mod web;
+#[cfg(not(target_arch = "wasm32"))]
+mod pool;
 
-/// Runs `work` off the UI thread: a thread named `name`, or a task after the current event on
-/// the web. Fails only when the system has no thread left to give.
+/// Runs `work` off the UI thread: on a shared task thread, which takes `name` as its Windows
+/// thread description while it runs, or a task after the current event on the web. Fails only when
+/// the system has no thread left to give.
 pub fn spawn(name: impl Into<String>, work: impl FnOnce() + Send + 'static) -> std::io::Result<()> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        std::thread::Builder::new().name(name.into()).spawn(work).map(drop)
+        pool::run(name.into(), Box::new(work))
     }
     #[cfg(target_arch = "wasm32")]
     {
@@ -30,7 +34,7 @@ pub fn spawn(name: impl Into<String>, work: impl FnOnce() + Send + 'static) -> s
     }
 }
 
-/// [`spawn`] after `delay`: a thread that sleeps first, or a timer on the web.
+/// [`spawn`] after `delay`: a task thread that sleeps first, or a timer on the web.
 pub fn spawn_after(name: impl Into<String>, delay: Duration, work: impl FnOnce() + Send + 'static) -> std::io::Result<()> {
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -57,13 +61,13 @@ pub fn serve<T: Send + 'static>(
 ) -> std::io::Result<()> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        spawn(name, move || {
+        std::thread::Builder::new().name(name.into()).spawn(move || {
             for message in rx {
                 if each(message).is_break() {
                     return;
                 }
             }
-        })
+        }).map(drop)
     }
     #[cfg(target_arch = "wasm32")]
     {
