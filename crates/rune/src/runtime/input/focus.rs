@@ -410,19 +410,32 @@ impl<S: 'static> Runtime<S> {
         if self.focus.path().is_none() && (self.nodes[at].input.is_none() || nodes.iter().any(|n| n.path == gone)) { return None; }
         if self.active_modal().is_some_and(|m| at >= m && self.modal_member(at)) { return None; }
         let new: rustc_hash::FxHashMap<&str, usize> = nodes.iter().enumerate().map(|(j, n)| (n.path.as_str(), j)).collect();
+        // Building the new tree hands an old node's path and id to the node that replaces it and
+        // leaves it without a path, so a control still here can look absent. Resolve those by id.
+        let at_new = |i: usize| -> Option<usize> {
+            let n = &self.nodes[i];
+            if !n.path.is_empty() { return new.get(n.path.as_str()).copied(); }
+            self.node_index.get(&n.id).copied()
+                .filter(|&j| nodes.get(j).is_some_and(|m| m.id == n.id))
+        };
         // A node built again this commit has no layout yet: its size is the old node's.
         let sized = |i: usize| self.nodes[i].local.w > 0.0 && self.nodes[i].local.h > 0.0;
         let visible = |j: usize| !nodes[j].inert && nodes[j].vis.opacity > 0.0
             && std::iter::successors(nodes[j].parent, |&p| nodes[p].parent).all(|p| nodes[p].vis.opacity > 0.0);
-        let survivor = |i: usize| new.get(self.nodes[i].path.as_str()).copied()
+        let survivor = |i: usize| at_new(i)
             .filter(|&j| (shown(j) || (sized(i) && visible(j))) && (self.takes_focus(&nodes[j]) || nodes[j].input.as_ref().is_some_and(|i| i.access.is_some())));
         let within = |j: usize, s: usize| {
-            let (p, root) = (self.nodes[j].path.as_str(), self.nodes[s].path.as_str());
+            // Compare in the new tree where both ends are in it; a node that left keeps its old
+            // path, so the scan still reaches the siblings after it.
+            let (p, root) = match (at_new(j), at_new(s)) {
+                (Some(p), Some(r)) => (nodes[p].path.as_str(), nodes[r].path.as_str()),
+                _ => (self.nodes[j].path.as_str(), self.nodes[s].path.as_str()),
+            };
             root.is_empty() || (p.len() > root.len() && p.starts_with(root) && p.as_bytes()[root.len()] == b'/')
         };
         let mut scope = self.nodes[at].parent;
         while let Some(s) = scope {
-            if new.contains_key(self.nodes[s].path.as_str()) {
+            if at_new(s).is_some() {
                 let end = (s + 1..self.nodes.len()).find(|&j| !within(j, s)).unwrap_or(self.nodes.len());
                 // Then the container itself, when it takes focus (a list row whose comment box
                 // closed under it).
@@ -740,7 +753,10 @@ mod tests {
         assert!(!rt.state.first.focused && rt.state.next.focused);
         assert!(rt.ime_area.is_some());
         rt.update(|s, _| s.hidden = true); rt.frame(0.0);
-        assert!(rt.ime_area.is_none(), "authored hidden inputs must not enable IME");
+        // The field that the app hid hands the keyboard back to the one before it, so the
+        // hidden input never holds the IME: focus, and the IME area with it, moves away.
+        assert_eq!(focused(&rt), "first");
+        assert!(!rt.state.next.focused && rt.state.first.focused);
     }
 
     #[test]
@@ -1557,5 +1573,27 @@ mod tests {
             assert_eq!(focused(&rt), want, "after {key:?}");
             assert!(shown(&rt, want), "{want} scrolled into view");
         }
+    }
+
+    #[test]
+    fn a_blurred_field_that_leaves_hands_focus_to_the_button_after_it() {
+        struct Form { open: bool, field: crate::TextEdit }
+        fn view(s: &Form, _: &mut Cx<Form>) -> El {
+            col().size(200.0, 100.0)
+                .children(s.open.then(|| crate::text_input(&s.field, crate::TextStyle::new(14.0, 400.0))
+                    .key("field").size(200.0, 40.0).on_edit(|s: &mut Form| &mut s.field)))
+                .child(button("next"))
+        }
+        let mut rt = Runtime::new(Form { open: true, field: crate::TextEdit::new("") }, view,
+            (200.0, 100.0), Env::new(true, 1.0));
+        rt.set_tab_visits_controls(true);
+        rt.frame(0.0);
+        press(&mut rt, Key::Tab);
+        assert_eq!(focused(&rt), "field");
+        press(&mut rt, Key::Escape);
+        assert!(!rt.has_focus(), "Escape blurs the field");
+        rt.update(|s, _| s.open = false);
+        rt.frame(0.0);
+        assert_eq!(focused(&rt), "next", "the button after the field takes the keyboard");
     }
 }
