@@ -248,7 +248,9 @@ impl<S: 'static> Host<S> {
         };
         #[cfg(feature = "frame-profile")]
         let fp_acquired = fp_start.map(|_| crate::frame::live_log::Stamp::now());
-        if !hidden && !self.rt.live_visible() && { let size = l.window.inner_size(); size.width > 0 && size.height > 0 } {
+        // A covered window's owed frame (`CoveredDraw`) draws settled and stays covered: live, its
+        // loops would ask for frames no one sees.
+        if !hidden && !self.life.covered() && !self.rt.live_visible() && { let size = l.window.inner_size(); size.width > 0 && size.height > 0 } {
             // Uncovered after a missed frame said it was occluded.
             self.rt.set_live_visible(true);
             self.rt.settle_all();
