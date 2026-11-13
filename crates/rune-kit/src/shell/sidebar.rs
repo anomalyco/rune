@@ -596,6 +596,7 @@ impl SidebarRow {
                 text_input(&edit, font)
                     .single_line()
                     .key("rename")
+                    .label(self.label.clone())
                     .focus_selected(true)
                     .focus_return("sidebar-list")
                     .grow(1.0)
