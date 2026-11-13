@@ -1,4 +1,13 @@
 use super::*;
+use std::num::NonZeroU64;
+use std::sync::atomic::AtomicU64;
+
+/// Compare a Tx call on the UI thread with a handle request published under the queue lock.
+/// The counter carries no request data; only its modification order is shared.
+pub(crate) fn window_request_order() -> NonZeroU64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NonZeroU64::new(NEXT.fetch_add(1, Ordering::Relaxed)).expect("window request order exhausted")
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum WindowRequest {
@@ -21,6 +30,7 @@ pub(crate) enum Activation {
 }
 
 pub(crate) struct Requests<S> {
+    last_cancel: Option<NonZeroU64>,
     pub window: Option<WindowRequest>,
     pub dock: Option<bool>,
     /// `AppHandle::focus` or `AppHandle::minimize`; last-wins (`cancel_minimize`).
@@ -44,6 +54,7 @@ impl<S> Requests<S> {
     /// A later open, hide, close or focus takes a minimize back out; a show leaves it, so a
     /// minimize can follow one.
     pub(super) fn cancel_minimize(&mut self) {
+        self.last_cancel = Some(window_request_order());
         if self.activation == Some(Activation::Minimize) { self.activation = None; }
     }
 
@@ -56,6 +67,7 @@ impl<S> Requests<S> {
 impl<S> Default for Requests<S> {
     fn default() -> Self {
         Requests {
+            last_cancel: None,
             window: None,
             dock: None,
             activation: None,
@@ -127,6 +139,21 @@ impl<S> Shared<S> {
         std::mem::replace(&mut *requests, Requests { updates: later, ..Requests::default() })
     }
 
+    /// Drain a native window's updates, running `after` (menu callbacks) after each update.
+    pub(crate) fn drain_window(&self, rt: &mut crate::runtime::Runtime<S>, mut after: impl FnMut(bool)) -> Requests<S>
+    where S: 'static {
+        // Keep only these updates’ minimizes aside; a minimize already latched by a handler
+        // or requested by a nested callback is not ours to cancel.
+        let mut minimize = None;
+        let batch = self.drain(|f| after(rt.update_if(|s, tx| {
+            let changed = f(s, tx);
+            minimize = minimize.max(tx.minimize_order.take());
+            changed
+        })));
+        if minimize > batch.last_cancel { rt.minimize_step(crate::window::MinimizeEvent::Asked); }
+        batch
+    }
+
     /// Queues `f` for the next `take`, as `AppHandle::update_if` does, without waking the loop.
     pub(crate) fn queue_update(&self, f: Update<S>) {
         self.requests.lock().unwrap().updates.push(f);
@@ -142,3 +169,7 @@ impl<S> Shared<S> {
         self.requests.lock().unwrap().place.take()
     }
 }
+
+#[cfg(test)]
+#[path = "drain_tests.rs"]
+mod drain_tests;

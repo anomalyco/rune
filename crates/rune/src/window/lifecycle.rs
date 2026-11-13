@@ -176,9 +176,9 @@ impl<S: 'static> Host<S> {
         self.shortcuts.drain();
         self.menus.drain();
         let (mut had_updates, mut updated) = (false, false);
-        let requests = self.shared.drain(|f| {
+        let requests = self.shared.drain_window(&mut self.rt, |changed| {
             had_updates = true;
-            updated |= self.rt.update_if(f);
+            updated |= changed;
             self.menus.drain();
         });
         let changed = clipboard || answered || updated || self.rt.drag_ends_pending();

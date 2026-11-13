@@ -1,0 +1,1 @@
+- A window stays restored when `AppHandle::focus` or `open` follows an update’s `Tx::minimize` before Rune collects the window requests.

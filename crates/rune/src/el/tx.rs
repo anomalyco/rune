@@ -65,7 +65,7 @@ pub struct Tx {
     pub(crate) keep_on_screen: Vec<String>,
     pub(crate) wakes: Vec<std::time::Duration>,
     pub(crate) shell: Option<Shell>,
-    pub(crate) minimize: bool,
+    pub(crate) minimize_order: Option<std::num::NonZeroU64>,
     /// `Tx::toggle_maximized`.
     pub(crate) toggle_maximized: bool,
     /// `Tx::toggle_full_screen`.
@@ -386,7 +386,7 @@ impl Tx {
     /// minimize button.
     /// A close or quit asked in the same change wins.
     pub fn minimize(&mut self) {
-        self.minimize = true;
+        self.minimize_order = Some(crate::app::window_request_order());
     }
 
     /// Maximize this window after this handler, or restore it when it is maximized, as its

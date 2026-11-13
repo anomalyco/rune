@@ -692,7 +692,7 @@ impl<S: 'static> AppHandle<S> {
     /// Focus/activate an already-visible window, restoring it if minimized.
     /// On Wayland this requests attention; use activate(token) for compositor-authorized focus.
     pub fn focus(&self) {
-        self.request(|q| { q.activation = Some(Activation::Focus); });
+        self.request(|q| { q.cancel_minimize(); q.activation = Some(Activation::Focus); });
     }
 
     /// Set the outer position in physical desktop pixels (negative coordinates are valid).
@@ -794,7 +794,7 @@ impl<S: 'static> AppHandle<S> {
 }
 
 mod requests;
-pub(crate) use requests::{Activation, Requests, Shared, WindowRequest};
+pub(crate) use requests::{window_request_order, Activation, Requests, Shared, WindowRequest};
 
 #[cfg(test)]
 mod tests {
