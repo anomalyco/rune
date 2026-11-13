@@ -227,8 +227,14 @@ pub(crate) fn glyph_x(x: f32, ppem: f32) -> (f32, u8) {
 }
 
 /// Coverage exponents for black and for white text with font smoothing off: the curve Skia's
-/// text gamma (sRGB, contrast 1) draws grayscale text with, for outlines rasterised elsewhere.
-const TEXT_GAMMA: [f32; 2] = [1.12, 0.45];
+/// text gamma draws a grayscale Chromium's text with, for outlines rasterised elsewhere. On Windows
+/// Chromium configures it with sRGB and a contrast of 1 (`skia_gamma.rs`): light text on a dark
+/// page draws much heavier than its coverage.
+const WINDOWS_GAMMA: [f32; 2] = [1.12, 0.45];
+/// On Linux and ChromeOS Chromium builds Skia with `SK_GAMMA_EXPONENT=1.2` and
+/// `SK_GAMMA_CONTRAST=0.2`: the same tables, fitted, give light text on a dark page only a little
+/// more ink. With Windows' curve, light-on-dark text drew 7-14% more ink than Linux Chromium's.
+const LINUX_GAMMA: [f32; 2] = [1.02, 0.83];
 
 /// A Mac browser draws unsmoothed type with the same coverage as native macOS.
 /// Use the platform decision that selects its smoothing default, not the WASM
@@ -243,11 +249,23 @@ pub(super) fn apple_coverage() -> bool {
     { cfg!(any(target_os = "macos", target_os = "ios")) }
 }
 
+/// Whether text takes Windows' Chromium gamma rather than Linux's: on Windows, and in a browser
+/// on Windows, whose platform name the page reads once.
+pub(super) fn windows_gamma() -> bool {
+    #[cfg(target_arch = "wasm32")]
+    {
+        thread_local! { static WIN: bool = crate::platform::web::platform::browser_platform().is_some_and(|p| p.0.get(..3).is_some_and(|w| w.eq_ignore_ascii_case("win"))); }
+        WIN.with(|win| *win)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    { cfg!(target_os = "windows") }
+}
+
 /// The exponent glyph coverage in `mode` is raised to when drawn in premultiplied `fill`, on
-/// Apple platforms (`apple`) or Windows (`windows`) or neither. With smoothing off on Linux,
-/// Windows and the web it stands in for the text gamma a browser's grayscale antialiasing
-/// applies there: light text on a dark page draws heavier and dark text on a light one a little
-/// lighter than coverage blended as is, keyed by the text's luminance. On macOS and iOS coverage
+/// Apple platforms (`apple`), Windows (`windows`, Chromium's Windows gamma) or neither (Linux's).
+/// With smoothing off on Linux, Windows and the web it stands in for the text gamma a browser's
+/// grayscale antialiasing applies there: light text on a dark page draws heavier and dark text on
+/// a light one a little lighter than coverage blended as is, keyed by the text's luminance. On macOS and iOS coverage
 /// is drawn as is in every mode: CoreText with smoothing off, and Safari and Chrome with
 /// `-webkit-font-smoothing: antialiased`, apply no text gamma (measured on macOS 15.3 with
 /// Chrome 156: the same ink as CoreText, where the gamma drew light-on-dark text up to 24%
@@ -261,8 +279,10 @@ pub(crate) fn coverage_exponent(mode: FontSmoothing, fill: [f32; 4], apple: bool
     if (apple && !chromium) || direct_write || matches!(mode, FontSmoothing::On | FontSmoothing::Windfoil) || fill[3] <= 0.0 {
         return 1.0;
     }
+    // Chromium-weight outline modes on a Mac keep the curve the lab drew them with.
+    let [black, white] = if windows || apple { WINDOWS_GAMMA } else { LINUX_GAMMA };
     let luma = (0.2126 * fill[0] + 0.7152 * fill[1] + 0.0722 * fill[2]) / fill[3];
-    TEXT_GAMMA[0] + (TEXT_GAMMA[1] - TEXT_GAMMA[0]) * luma.clamp(0.0, 1.0)
+    black + (white - black) * luma.clamp(0.0, 1.0)
 }
 
 #[cfg(test)]
