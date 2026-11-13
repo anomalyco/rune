@@ -171,6 +171,8 @@ pub(crate) struct Attach {
     /// Runs the callback on press with a `press` event naming the element's key, and any
     /// fields a host node adds (a switch's `checked`).
     pub(crate) press: fn(&mut El, Rc<Callback>, Option<Rc<str>>, Fields),
+    /// Runs the callback on a middle click, with a `middle-press` event.
+    pub(crate) middle: fn(El, Rc<Callback>, Option<Rc<str>>) -> El,
     /// Runs the callback as the pointer enters and leaves, with a `hover` event.
     pub(crate) hover: fn(El, Rc<Callback>, Option<Rc<str>>) -> El,
     pub(crate) rows: fn(El, rows::Spec) -> El,
@@ -181,7 +183,7 @@ pub(crate) struct Attach {
 pub(crate) type Fields = Rc<[(&'static str, crate::Data)]>;
 
 pub(crate) fn attach<S: 'static>() -> &'static Attach {
-    const { &Attach { press: press::<S>, hover: hover::<S>, rows: rows::attach::<S>, reload: reload::<S> } }
+    const { &Attach { press: press::<S>, middle: middle::<S>, hover: hover::<S>, rows: rows::attach::<S>, reload: reload::<S> } }
 }
 
 fn press<S: 'static>(el: &mut El, cb: Rc<Callback>, key: Option<Rc<str>>, fields: Fields) {
@@ -192,6 +194,18 @@ fn press<S: 'static>(el: &mut El, cb: Rc<Callback>, key: Option<Rc<str>>, fields
             script.around_write(s, Some(tx), |tx| script.handle(&cb, event, tx));
         }
     });
+}
+
+/// `onMiddlePress`: a middle click on the node (`El::on_middle_press`), as a `middle-press` event
+/// with the modifier keys.
+fn middle<S: 'static>(el: El, cb: Rc<Callback>, key: Option<Rc<str>>) -> El {
+    el.on_middle_press(move |s: &mut S, tx: &mut rune::Tx| {
+        if let Some(script) = cb.script.upgrade() {
+            let mods = tx.mods();
+            let event = Event { kind: "middle-press", ..Event::press(key.as_deref(), mods.shift, mods.alt, mods.cmd) };
+            script.around_write(s, Some(tx), |tx| script.handle(&cb, event, tx));
+        }
+    })
 }
 
 fn hover<S: 'static>(el: El, cb: Rc<Callback>, key: Option<Rc<str>>) -> El {

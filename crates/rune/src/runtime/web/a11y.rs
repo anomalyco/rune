@@ -170,7 +170,7 @@ const CONTROL_ROLES: [&str; 16] = ["button", "link", "tab", "checkbox", "switch"
 /// Hover alone doesn't count; the page's mirror forwards hover to the canvas.
 pub(crate) fn takes_pointer(n: &Node) -> bool {
     let h = &n.handlers;
-    h.on_press.is_some() || h.on_double_press.is_some() || h.on_secondary_press.is_some()
+    h.on_press.is_some() || h.on_double_press.is_some() || h.on_secondary_press.is_some() || h.on_middle_press.is_some()
         || h.on_pointer_move.is_some() || h.on_drag.is_some() || h.drag_out.is_some() || h.on_drag_start.is_some()
         || h.gestures.as_ref().is_some_and(|g| g.takes_gestures())
         || n.input.is_some() || n.window_drag == crate::el::WindowDrag::Drag
@@ -561,7 +561,7 @@ impl<S: 'static> Runtime<S> {
                 let Some(k) = event["link"].as_u64().and_then(|n| usize::try_from(n).ok()) else { return false };
                 let Some(i) = self.live(path) else { return false };
                 if self.nodes[i].text.as_ref().is_none_or(|t| k >= t.cold.links.len()) { return false; }
-                self.queue.push(Action::Link(path.to_owned(), k));
+                self.queue.push(Action::Link(path.to_owned(), k, crate::PointerButton::Primary));
                 true
             }
             _ => false,

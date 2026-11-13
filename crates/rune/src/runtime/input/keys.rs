@@ -272,6 +272,8 @@ impl<S: 'static> Runtime<S> {
     /// [`Runtime::key`]; `stage` routes it to the open playground's stage, for `Play::press`.
     pub(super) fn queue_key(&mut self, ev: KeyEvent, stage: bool) {
         self.dismiss_help();
+        // A key ends a middle-click autoscroll, and does nothing else.
+        if self.autoscroll_key() { return; }
         // Escape during a drag cancels it and goes no further.
         if ev.key == crate::Key::Escape && self.cancel_drag() { return; }
         self.queue.push(Action::Key { ev, repeat: false, stage });

@@ -44,6 +44,16 @@ impl El {
         self.handlers.on_double_press = Some(Rc::new(move |s, tx| f(downcast::<S>(s), tx)));
         self
     }
+    /// A middle click (a browser's `auxclick` with the wheel button): the middle button went
+    /// down on this element, or one inside it that doesn't take the middle button itself, and
+    /// came up over it. A tab closes this way, a row opens in the background. A press that leaves
+    /// first runs nothing. It changes no focus, starts no drag (`on_drag` hears only the buttons
+    /// [`El::pointer_buttons`] names) and, where the platform has it, keeps the middle button's
+    /// autoscroll from starting.
+    pub fn on_middle_press<S: 'static>(mut self, f: impl Fn(&mut S, &mut Tx) + 'static) -> Self {
+        self.handlers.on_middle_press = Some(Rc::new(move |s, tx| f(downcast::<S>(s), tx)));
+        self
+    }
     /// Receives Down, Move, then Up. Up also ends a cancelled gesture: always check
     /// [`Drag::cancelled`] before committing a drop or notifying an application callback.
     /// Save the original value on Down (in state, or [`Drag::data`]) and restore it on cancel.

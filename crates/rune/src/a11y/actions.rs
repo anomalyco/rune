@@ -46,7 +46,7 @@ impl<S: 'static> Runtime<S> {
         let (expanded, steps, scrolls) = (n.a11y.expanded, n.focus.step.is_some(), n.scroll.is_some());
         let focusable = self.can_focus(i);
         let action = match (request.action, link) {
-            (Ak::Click, Some(k)) => Action::Link(path, k),
+            (Ak::Click, Some(k)) => Action::Link(path, k, crate::PointerButton::Primary),
             (Ak::ShowContextMenu, Some(k)) => {
                 let Some((_, r)) = self.link_boxes(i, self.drawn_box(i)).into_iter().find(|(j, _)| *j == k) else { return false };
                 Action::LinkSecondary(path, k, self.pointer_event(i, r[0], r[3]))

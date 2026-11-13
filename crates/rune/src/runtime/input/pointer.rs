@@ -14,6 +14,7 @@ impl<S: 'static> Runtime<S> {
         let moved = self.pointer != Some((x, y));
         if moved { self.hover_paused = false; self.release_hover_hold(); }
         self.pointer = Some((x, y));
+        self.autoscroll_moved(x, y);
         if self.in_viewport(x, y) { self.set_left(false); }
         for &(id, rect) in &self.hits {
             if self.hit_contains(id, rect, x, y)
@@ -40,7 +41,7 @@ impl<S: 'static> Runtime<S> {
             return;
         }
         let Some(i) = self.live_index(&path) else { return };
-        let (id, r, has_drag) = (self.nodes[i].id, self.nodes[i].target, self.nodes[i].handlers.on_drag.is_some() && !self.drags_out(&self.nodes[i]));
+        let (id, r, has_drag) = (self.nodes[i].id, self.nodes[i].target, self.drags_with(i, button));
         // A hit rect is where the element was drawn (after scrolling); `target` is its
         // unscrolled layout rect, kept only for elements that were never drawn. Only the
         // pointer moving decides whether it's still inside: a button that springs out from
@@ -107,6 +108,7 @@ impl<S: 'static> Runtime<S> {
     pub(crate) fn cancel_pointer(&mut self) {
         // differs from dev: a cancelled press cannot pair with a click after refocusing.
         self.titlebar.clear();
+        self.autoscroll_cancel();
         self.cancel_drag();
         self.drop_drag_out_request();
         self.input_click.clear();
@@ -139,7 +141,7 @@ impl<S: 'static> Runtime<S> {
         if self.input_click.captured() { return false; }
         let Some(held) = self.press.held() else { return false };
         let Some(i) = self.live_index(&held.path) else { return false };
-        if self.nodes[i].handlers.on_drag.is_none() || self.drags_out(&self.nodes[i]) { return false; }
+        if !self.drags_with(i, held.button) { return false; }
         let at = held.at;
         let (x, y) = point.unwrap_or(at);
         let [lx, ly] = self.to_local(i, x, y);
@@ -199,6 +201,8 @@ impl<S: 'static> Runtime<S> {
     }
 
     pub fn pointer_down(&mut self, x: f32, y: f32) {
+        // A press ends a middle-click autoscroll, and does nothing else.
+        if self.autoscroll_press(crate::PointerButton::Primary) { self.pointer = Some((x, y)); return; }
         if self.press.held().is_some_and(|h| h.button != crate::PointerButton::Primary) {
             self.pointer = Some((x, y));
             return;
@@ -321,6 +325,7 @@ impl<S: 'static> Runtime<S> {
     }
 
     pub fn pointer_up(&mut self, x: f32, y: f32) {
+        if self.autoscroll_release(crate::PointerButton::Primary) { self.pointer = Some((x, y)); return; }
         if self.press.held().is_some_and(|h| h.button != crate::PointerButton::Primary) {
             self.pointer = Some((x, y));
             return;
@@ -395,15 +400,22 @@ impl<S: 'static> Runtime<S> {
         if input_capture { return; }
         let Some(i) = self.live_index(&path) else { return };
         let n = &self.nodes[i];
-        let (has_drag, has_press, has_double) = (n.handlers.on_drag.is_some() && !self.drags_out(n), n.handlers.on_press.is_some(), n.handlers.on_double_press.is_some());
+        // A button the element didn't opt in to is the middle button's click on a link or on
+        // `on_middle_press`: neither its `on_press` nor its `on_drag` hears it.
+        let opted = self.takes_button(i, button);
+        let (has_drag, has_press, has_double) = (self.drags_with(i, button), opted && n.handlers.on_press.is_some(), n.handlers.on_double_press.is_some());
+        let middle_press = !opted && link.is_none() && n.handlers.on_middle_press.is_some();
         if has_drag {
             let (dx, dy) = (x - at.0, y - at.1);
             let [lx, ly] = self.to_local(i, x, y);
             self.queue.push(Action::Drag(path.clone(), Drag { phase: Phase::Up, x: lx, y: ly, dx, dy, window: [x, y], screen: self.screen_at(x, y), ..d }, button));
         }
-        if let Some(k) = link.filter(|_| inside) { self.link_up(&path, k, x, y); }
+        if let Some(k) = link.filter(|_| inside) { self.link_up(&path, k, x, y, button); }
         if has_press && inside && !selected {
             self.queue.push(Action::Press(path.clone(), button));
+        }
+        if middle_press && inside {
+            self.queue.push(Action::MiddlePress(path.clone()));
         }
         let click = !moved && now - down_at <= interval;
         if has_double && inside && click && button == crate::PointerButton::Primary && double {
@@ -438,6 +450,7 @@ impl<S: 'static> Runtime<S> {
     /// layout holds it), from the nearest ancestor that sets one. The arrow while the pointer is outside the window.
     pub fn cursor(&self) -> crate::el::Cursor {
         let Some((x, y)) = self.pointer.filter(|&(x, y)| self.in_viewport(x, y)) else { return crate::el::Cursor::Default };
+        if let Some(pan) = self.autoscroll_cursor() { return pan; }
         // An element on its way out has no cursor: `Cursor::Hidden` ends when it's removed.
         // Selectable text shows its I-beam even where its presses go to a row around it.
         let target = match self.press.path() {

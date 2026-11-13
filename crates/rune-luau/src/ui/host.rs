@@ -264,7 +264,7 @@ unsafe fn build_from(state: *mut ffi::lua_State, el: El, tables: [c_int; 2], arg
                 } {
                     let own = matches!(props::read(state, -2), Value::Str(k) if args.read().any(|u| u == k));
                     match props::key_atom(state, -2) {
-                        Ok(Atom::OnPress | Atom::OnHover) => {}
+                        Ok(Atom::OnPress | Atom::OnHover | Atom::OnMiddlePress) => {}
                         Ok(atom) if !own => p.decode_at(el, state, atom, -1, env, false)?,
                         _ => {}
                     }

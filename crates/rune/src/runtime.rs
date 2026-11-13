@@ -192,6 +192,8 @@ use scroll_mode::ScrollMode;
 mod scroll_watch;
 #[doc(hidden)]
 pub use scroll_watch::scroll_watch_state;
+#[path = "runtime/input/autoscroll.rs"]
+mod autoscroll;
 #[path = "runtime/input/gesture.rs"]
 mod gesture_dispatch;
 #[path = "runtime/input/key_releases.rs"]
@@ -503,6 +505,8 @@ pub struct Runtime<S: 'static> {
     press: capture::Press,
     /// The secondary button's press, held beside it.
     secondary: capture::Secondary,
+    /// The middle button's autoscroll (`runtime/input/autoscroll.rs`).
+    autoscroll: autoscroll::Autoscroll,
     drag_data: f32,
     pub instances: Vec<Instance>,
     /// Per instance, the `El::mark` of its nearest marked node (0 for none). Filled only while
@@ -922,6 +926,7 @@ impl<S: 'static> Runtime<S> {
             pointer: None,
             press: Default::default(),
             secondary: Default::default(),
+            autoscroll: Default::default(),
             drag_data: 0.0,
             instances: Vec::new(),
             marks: Vec::new(),

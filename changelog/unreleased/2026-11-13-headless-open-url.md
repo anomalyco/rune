@@ -1,0 +1,1 @@
+- **Tooling: a headless run prints each link its handlers asked to open (`rune: open_url <url> (headless: not opened)`)**, so a script can check what a click opened.

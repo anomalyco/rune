@@ -1,0 +1,1 @@
+- **Touch: a finger held still for half a second is a secondary click, as Chromium's long press sends `contextmenu`.** The press it began lets go without a click (a drag it started hears a cancelled `Phase::Up`), the element's `on_secondary_press` (or the text's Copy menu) opens under the finger, and lifting it presses nothing.

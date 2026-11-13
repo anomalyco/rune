@@ -1,7 +1,7 @@
 //! One tab of a [`TabStrip`](super::TabStrip): its pill, avatar, title, status mark and close
 //! button, with the press, drag, hover and middle-click handlers on its slot.
 
-use rune::{Anim, Beat, Color, Drag, Easing, El, MotionIntent, Phase, PointerButton, Sequence, SpringPair, Transition, Tx, col, el, icon, row, text};
+use rune::{Anim, Beat, Color, Drag, Easing, El, MotionIntent, Phase, Sequence, SpringPair, Transition, Tx, col, el, icon, row, text};
 
 use super::drag::{Lane, Release};
 use super::{Strip, TabDensity, TabItem, TabItemStatus, TabReorder, TabTearMove, TabTearOut};
@@ -367,23 +367,22 @@ fn handlers<S: 'static>(mut slot: El, id: &str, at: &Place, closable: bool, st: 
     let lock = at.width.filter(|_| st.horizontal_lock).unwrap_or(0.0);
     let select_early = st.select_on_drag_start;
     let reveal = (st.scroll_key.clone(), format!("t-{id}"));
-    if closable {
-        slot = slot.pointer_buttons([PointerButton::Middle]);
+    if let Some(close) = h.close.clone().filter(|_| closable) {
+        let id = id.to_owned();
+        slot = slot.on_middle_press(move |s: &mut S, tx: &mut Tx| {
+            if let Some(a) = access.filter(|_| lock > 0.0) {
+                a(s).width_lock = Some(lock);
+            }
+            close(s, &id, tx);
+        });
     }
     {
-        let (id, select, close, reveal) = (id.to_owned(), h.select.clone(), h.close.clone().filter(|_| closable), reveal.clone());
+        let (id, select, reveal) = (id.to_owned(), h.select.clone(), reveal.clone());
         slot = slot.on_press_tx(move |s: &mut S, tx: &mut Tx| {
             if let Some(a) = access
                 && a(s).take_swallowed_click()
             {
                 return;
-            }
-            if tx.button() == PointerButton::Middle {
-                let Some(f) = &close else { return };
-                if let Some(a) = access.filter(|_| lock > 0.0) {
-                    a(s).width_lock = Some(lock);
-                }
-                return f(s, &id, tx);
             }
             if let Some(f) = &select {
                 f(s, &id, tx);
@@ -414,9 +413,6 @@ fn handlers<S: 'static>(mut slot: El, id: &str, at: &Place, closable: bool, st: 
     let (id, select, reorder, tear, tear_move) = (id.to_owned(), h.select.clone(), h.reorder.clone(), h.tear_out.clone(), h.tear_move.clone());
     let (scroll, auto) = (st.scroll_key.clone(), st.auto.clone());
     slot.on_drag(move |s: &mut S, d: &mut Drag, tx: &mut Tx| {
-        if tx.button() != PointerButton::Primary {
-            return;
-        }
         match d.phase {
             Phase::Down => {
                 access(s).press(&lane, [d.x, d.y], super::auto_scroll::offset(&auto, vertical));

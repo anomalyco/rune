@@ -26,7 +26,10 @@ pub(super) enum Action {
     Visible(String, bool),
     Press(String, crate::PointerButton),
     DoublePress(String),
-    Link(String, usize),
+    /// `El::on_middle_press`.
+    MiddlePress(String),
+    /// A text's link and the button that clicked it (the primary or the middle).
+    Link(String, usize, crate::PointerButton),
     /// `El::on_link_secondary`: the text, its link and the press.
     LinkSecondary(String, usize, PointerEvent),
     SecondaryPress(String, PointerEvent),
@@ -122,6 +125,7 @@ pub(super) fn live_only_handler(action: &Action) -> Option<&'static str> {
         Action::SelectionChange(..) => "on_selection_change",
         Action::Press(..) => "on_press",
         Action::DoublePress(_) => "on_double_press",
+        Action::MiddlePress(_) => "on_middle_press",
         Action::Link(..) => "on_link",
         Action::LinkSecondary(..) => "on_link_secondary",
         Action::SecondaryPress(..) => "on_secondary_press",
@@ -141,8 +145,8 @@ pub(super) fn live_only_handler(action: &Action) -> Option<&'static str> {
 #[cfg(debug_assertions)]
 pub(super) fn action_path(action: &Action) -> Option<&str> {
     match action {
-        Action::PointerMove(path, _) | Action::DrawnLayout(path, ..) | Action::Layout(path, _) | Action::Hover(path) | Action::HoverChange(path, _) | Action::SelectionChange(path, _) | Action::Press(path, _) | Action::DoublePress(path)
-        | Action::Link(path, _) | Action::LinkSecondary(path, ..) | Action::SecondaryPress(path, _) | Action::Drag(path, ..) | Action::DragRepeat(path, ..) | Action::DragStart(path)
+        Action::PointerMove(path, _) | Action::DrawnLayout(path, ..) | Action::Layout(path, _) | Action::Hover(path) | Action::HoverChange(path, _) | Action::SelectionChange(path, _) | Action::Press(path, _) | Action::DoublePress(path) | Action::MiddlePress(path)
+        | Action::Link(path, ..) | Action::LinkSecondary(path, ..) | Action::SecondaryPress(path, _) | Action::Drag(path, ..) | Action::DragRepeat(path, ..) | Action::DragStart(path)
         | Action::DragEnd(path, _) | Action::Visible(path, _) => Some(path),
         Action::Wheel { chain, .. } | Action::Gesture(chain, _) => chain.first().map(String::as_str),
         _ => None,
@@ -411,7 +415,17 @@ impl<S: 'static> Runtime<S> {
                 f(states!(self), &mut one);
                 true
             }
-            Action::Link(path, k) => self.press_link(&path, k, &mut one),
+            Action::MiddlePress(path) => {
+                let Some(f) = self.node(&path).and_then(|n| n.handlers.on_middle_press.clone()) else { return false };
+                log_event!(self, "middle press {path}");
+                one.button = crate::PointerButton::Middle;
+                f(states!(self), &mut one);
+                true
+            }
+            Action::Link(path, k, button) => {
+                one.button = button;
+                self.press_link(&path, k, &mut one)
+            }
             Action::LinkSecondary(path, k, point) => self.secondary_press_link(&path, k, point, &mut one),
             Action::SecondaryPress(path, point) => {
                 let Some(n) = self.node(&path).filter(|n| !self.is_exiting(n.id)) else { return false };
