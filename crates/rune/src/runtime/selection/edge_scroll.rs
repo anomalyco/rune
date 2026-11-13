@@ -7,8 +7,10 @@
 //! the selection always matches what that frame shows and nothing waits on a later step. A
 //! pointer back inside,
 //! the end of the list, a step that moved nothing (a list pinned to its bottom pulling it back),
-//! and the drag ending stop it. Each step lets go of a list stuck to its bottom before
-//! `step_scroll` can pull it back, so it leaves the bottom however small its steps are; once it
+//! and the drag ending stop it. Stopped at an edge it can't scroll past, a press still held there
+//! waits without a wake for the list's extent to change (rows arriving at its end): the frame that
+//! lays that out looks at the edge again, and goes on if there's room. Each step lets go of a
+//! list stuck to its bottom before `step_scroll` can pull it back, so it leaves the bottom however small its steps are; once it
 //! stops within half a point of the bottom, the list sticks there again.
 use crate::machine::{Attempt, Effects, Seq};
 
@@ -42,9 +44,14 @@ pub(in crate::runtime) enum State {
     /// Scrolling viewport `scroll`: it last stepped at `last` (clock seconds), from offset `from`
     /// when that step moved it, and steps again at `due` as attempt `attempt`.
     Running { attempt: Attempt, scroll: NodeId, last: f64, from: Option<f64>, due: f64 },
-    /// This frame stepped `scroll` at `last`; once it's laid out the selection follows, and the
-    /// next step is attempt `next`, or none when this one reached the end.
-    Laying { next: Option<Attempt>, scroll: NodeId, last: f64, from: Option<f64> },
+    /// This frame stepped `scroll` at `last`, whose extent was `max`; once it's laid out the
+    /// selection follows, and the next step is attempt `next`, or none when this one reached the
+    /// end.
+    Laying { next: Option<Attempt>, scroll: NodeId, last: f64, from: Option<f64>, max: f64 },
+    /// Held at an edge of `scroll` with nothing left to scroll that way, or whose last step
+    /// moved nothing, when its extent was `max`: it asks for no frame, and a layout that changes
+    /// that extent looks at the edge again.
+    AtEnd { scroll: NodeId, max: f64 },
 }
 
 /// The held pointer at or past an edge of the viewport the selection is in.
@@ -57,10 +64,21 @@ pub(in crate::runtime) struct Edge {
     pub(in crate::runtime) room: f64,
     /// Where it has scrolled to, in points.
     pub(in crate::runtime) offset: f64,
+    /// How far it scrolls at most, in points: its content's extent past the viewport.
+    pub(in crate::runtime) max: f64,
 }
 
 impl Edge {
     fn moves(&self) -> bool { self.speed != 0.0 && self.room > 0.0 }
+}
+
+/// Where a pointer at `edge` rests when it doesn't scroll `scroll` (any viewport when `None`):
+/// at its end, waiting on its extent, or idle when it isn't at that viewport's edge.
+fn rest(edge: Option<Edge>, scroll: Option<NodeId>) -> State {
+    match edge {
+        Some(e) if e.speed != 0.0 && scroll.is_none_or(|s| s == e.scroll) => State::AtEnd { scroll: e.scroll, max: e.max },
+        _ => State::Idle,
+    }
 }
 
 pub(in crate::runtime) enum Event {
@@ -70,6 +88,9 @@ pub(in crate::runtime) enum Event {
     Due { attempt: Attempt, now: f64, edge: Option<Edge> },
     /// The frame that stepped has laid the list out.
     Laid,
+    /// A layout changed the extent of the viewport it rests at the end of; the pointer is at
+    /// `edge`.
+    Extent { now: f64, edge: Option<Edge> },
     /// The drag ended.
     Stop,
 }
@@ -88,7 +109,7 @@ pub(in crate::runtime) fn step(seq: &mut Seq, state: &mut State, event: Event) -
     match event {
         Event::Moved { now, edge } => match (edge.filter(Edge::moves), *state) {
             (None, _) => {
-                *state = State::Idle;
+                *state = rest(edge, None);
                 Effects::none()
             }
             // The next step reads how far past the edge the pointer is now.
@@ -102,12 +123,13 @@ pub(in crate::runtime) fn step(seq: &mut Seq, state: &mut State, event: Event) -
         Event::Due { attempt, now, edge } => match *state {
             State::Running { attempt: armed, scroll, last, from, due } if armed == attempt && now >= due => {
                 let Some(e) = edge.filter(|e| e.moves() && e.scroll == scroll) else {
-                    *state = State::Idle;
+                    *state = rest(edge, Some(scroll));
                     return Effects::none();
                 };
-                // The last step moved nothing: whatever undid it would undo the next.
+                // The last step moved nothing: whatever undid it would undo the next, until the
+                // content changes.
                 if from.is_some_and(|f| (e.offset - f).abs() <= 1e-9) {
-                    *state = State::Idle;
+                    *state = State::AtEnd { scroll, max: e.max };
                     return Effects::none();
                 }
                 let by = f64::from(e.speed) * (now - last).clamp(0.0, MAX_STEP);
@@ -115,7 +137,7 @@ pub(in crate::runtime) fn step(seq: &mut Seq, state: &mut State, event: Event) -
                 // goes exactly there, and is the last.
                 let (by, end) = if e.room - by.abs() <= 1e-3 { (e.room.copysign(f64::from(e.speed)), true) } else { (by, false) };
                 let next = (!end).then(|| seq.next());
-                *state = State::Laying { next, scroll, last: now, from: (by != 0.0).then_some(e.offset) };
+                *state = State::Laying { next, scroll, last: now, from: (by != 0.0).then_some(e.offset), max: e.max };
                 let mut effects = Effects::one(Effect::Scroll { scroll, by });
                 if !end { effects.push(Effect::WakeAt(now)); }
                 effects
@@ -123,9 +145,24 @@ pub(in crate::runtime) fn step(seq: &mut Seq, state: &mut State, event: Event) -
             _ => Effects::none(),
         },
         Event::Laid => {
-            let State::Laying { next, scroll, last, from } = *state else { return Effects::none() };
-            *state = next.map_or(State::Idle, |attempt| State::Running { attempt, scroll, last, from, due: last });
+            let State::Laying { next, scroll, last, from, max } = *state else { return Effects::none() };
+            // At the end, a layout that has changed the extent this step saw looks again.
+            *state = next.map_or(State::AtEnd { scroll, max }, |attempt| State::Running { attempt, scroll, last, from, due: last });
             Effects::one(Effect::Extend)
+        }
+        Event::Extent { now, edge } => {
+            let State::AtEnd { scroll, .. } = *state else { return Effects::none() };
+            match edge {
+                Some(e) if e.moves() && e.scroll == scroll => {
+                    let attempt = seq.next();
+                    *state = State::Running { attempt, scroll, last: now, from: None, due: now };
+                    Effects::one(Effect::WakeAt(now))
+                }
+                _ => {
+                    *state = rest(edge, Some(scroll));
+                    Effects::none()
+                }
+            }
         }
         Event::Stop => {
             *state = State::Idle;
@@ -142,12 +179,12 @@ impl EdgeScroll {
         match self.state {
             State::Running { attempt, .. } => Some(attempt),
             State::Laying { next, .. } => next,
-            State::Idle => None,
+            State::Idle | State::AtEnd { .. } => None,
         }
     }
 
-    pub(in crate::runtime) fn running(&self) -> bool { self.state != State::Idle }
-
+    /// Stepping, or about to: not idle, nor resting at an end.
+    pub(in crate::runtime) fn running(&self) -> bool { matches!(self.state, State::Running { .. } | State::Laying { .. }) }
 }
 
 /// Points a second for a pointer `past` points beyond the edge.
@@ -157,7 +194,7 @@ impl<S: 'static> Runtime<S> {
     /// The held pointer moved to height `y`: step while it's at or past an edge the selection's
     /// viewport can still scroll past, and stop when it isn't.
     pub(in crate::runtime) fn edge_scroll_moved(&mut self, y: f32) {
-        if !self.selectable.phase.dragging() && !self.selectable.edge.running() { return; }
+        if !self.selectable.phase.dragging() && self.selectable.edge.state == State::Idle { return; }
         let edge = self.edge_at(y);
         let now = self.now_clock();
         let effects = self.selectable.edge.step(Event::Moved { now, edge });
@@ -177,19 +214,35 @@ impl<S: 'static> Runtime<S> {
 
     /// The frame that took a step has laid it out: the selection follows the pointer over that
     /// layout, and what changed is heard. True when the selection changed, so the frame paints
-    /// again.
+    /// again. Resting at the end of a list instead, it hears whether this layout changed the
+    /// list's extent.
     pub(in crate::runtime) fn laid_edge_scroll(&mut self) -> bool {
-        if !matches!(self.selectable.edge.state, State::Laying { .. }) { return false; }
+        if !matches!(self.selectable.edge.state, State::Laying { .. }) {
+            self.edge_scroll_extent();
+            return false;
+        }
         let ends = |rt: &Self| rt.selectable.phase.selection().map(|s| (s.anchor, s.focus, s.far.as_ref().map(|f| f.path.clone())));
         let before = ends(self);
         let effects = self.selectable.edge.step(Event::Laid);
         self.carry_edge_scroll(effects);
+        // A step that reached the end, when this layout changed the extent it saw.
+        self.edge_scroll_extent();
         let changed = ends(self) != before;
         if changed {
             let heard = self.selection_changes();
             self.queue.extend(heard);
         }
         changed
+    }
+
+    /// A press resting at the end of a list hears that this frame's layout changed the list's
+    /// extent (rows arrived at its end, or left), and goes on scrolling if it now can.
+    fn edge_scroll_extent(&mut self) {
+        let State::AtEnd { scroll, max } = self.selectable.edge.state else { return };
+        if self.scrolls.get(&scroll).is_some_and(|st| st.max == max) { return; }
+        let edge = self.pointer.and_then(|(_, y)| self.edge_at(y));
+        let effects = self.selectable.edge.step(Event::Extent { now: self.clock, edge });
+        self.carry_edge_scroll(effects);
     }
 
     fn carry_edge_scroll(&mut self, effects: Effects<Effect>) {
@@ -233,7 +286,7 @@ impl<S: 'static> Runtime<S> {
         } else {
             return None;
         };
-        Some(Edge { scroll: id, speed, room, offset: st.offset })
+        Some(Edge { scroll: id, speed, room, offset: st.offset, max: st.max })
     }
 }
 

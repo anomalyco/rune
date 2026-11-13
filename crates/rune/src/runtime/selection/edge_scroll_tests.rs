@@ -313,7 +313,7 @@ fn an_idle_window_with_no_drag_draws_nothing() {
     assert_eq!(offset(&rt), 0.0);
 }
 
-fn edge(speed: f32, room: f64, offset: f64) -> Option<Edge> { Some(Edge { scroll: NodeId(7), speed, room, offset }) }
+fn edge(speed: f32, room: f64, offset: f64) -> Option<Edge> { Some(Edge { scroll: NodeId(7), speed, room, offset, max: 1000.0 }) }
 
 #[test]
 fn a_stale_step_does_nothing() {
@@ -352,9 +352,10 @@ fn a_step_stops_at_the_room_left_and_a_late_frame_doesnt_jump() {
     let effects = step(&mut seq, &mut state, Event::Due { attempt, now: 1.05, edge: up(10.0, 10.0) });
     assert_eq!(effects, Effects::one(Effect::Scroll { scroll: NodeId(7), by: -10.0 }), "the last step asks for no other");
     assert_eq!(step(&mut seq, &mut state, Event::Laid), Effects::one(Effect::Extend), "the selection follows it in the same frame");
-    assert_eq!(state, State::Idle);
+    assert_eq!(state, State::AtEnd { scroll: NodeId(7), max: 1000.0 }, "at the end, waiting on the extent");
     let _ = step(&mut seq, &mut state, Event::Moved { now: 2.0, edge: up(0.0, 0.0) });
-    assert_eq!(state, State::Idle, "nothing left to scroll");
+    assert_eq!(state, State::AtEnd { scroll: NodeId(7), max: 1000.0 }, "nothing left to scroll");
+    assert!(step(&mut seq, &mut state, Event::Laid).is_empty());
 }
 
 /// A step that something undid (here a list pulling itself back to its bottom) ends it, with no
@@ -372,5 +373,249 @@ fn a_step_that_moved_nothing_ends_it() {
     let _ = step(&mut seq, &mut state, Event::Laid);
     let State::Running { attempt, .. } = state else { panic!() };
     assert_eq!(step(&mut seq, &mut state, Event::Due { attempt, now: 0.02, edge: up(500.0) }), Effects::none(), "pulled back");
-    assert_eq!(state, State::Idle);
+    assert_eq!(state, State::AtEnd { scroll: NodeId(7), max: 1000.0 }, "until the content changes");
+}
+
+/// Frames until the edge scroll stops stepping.
+fn run_out(rt: &mut Runtime<List>) {
+    let mut ticks = 0;
+    while rt.selectable.edge.running() {
+        rt.frame(1.0 / 60.0);
+        ticks += 1;
+        assert!(ticks < 2000, "reached the end");
+    }
+}
+
+/// Holds below the list until it has scrolled to its end and rests there with no wake.
+fn rest_at_end(list: List) -> Runtime<List> {
+    let mut rt = hold_below_in(list, 400.0);
+    run_out(&mut rt);
+    settle(&mut rt);
+    assert_eq!((offset(&rt), ends(&rt).1), (max(&rt), ROWS - 1), "at the end, the last row selected");
+    assert_eq!(rt.wake_deadline(), None, "no wake while it rests");
+    assert!(matches!(rt.selectable.edge.state, State::AtEnd { .. }), "{:?}", rt.selectable.edge.state);
+    rt
+}
+
+/// Held still past the end of a list it scrolled to the end of, rows arriving at that end set it
+/// going again: it scrolls to the new end, selecting them, and rests there with no wake again.
+#[test]
+fn rows_arriving_at_the_end_a_held_drag_rests_at_set_it_going_again() {
+    for list in [VIRTUAL, PLAIN] {
+        let mut rt = rest_at_end(list);
+        let (before, anchor) = (max(&rt), range(&rt).0);
+        rt.update(|s, _| s.rows += 20);
+        rt.frame(1.0 / 60.0);
+        assert!(max(&rt) > before, "virtual {}: the extent grew", list.virtual_rows);
+        let at = offset(&rt);
+        for _ in 0..3 { rt.frame(1.0 / 60.0); }
+        assert!(offset(&rt) > at, "virtual {}: it goes on under a still pointer", list.virtual_rows);
+        run_out(&mut rt);
+        settle(&mut rt);
+        assert_eq!(offset(&rt), max(&rt), "to the new end");
+        assert_eq!(range(&rt), (anchor, (ROWS + 19, LEN)), "virtual {}: the new rows selected", list.virtual_rows);
+        assert_eq!(rt.wake_deadline(), None, "and rests again");
+        assert!(!rt.frame(1.0 / 60.0), "an idle frame");
+        assert!(rt.press.is_held() && rt.selectable.phase.dragging(), "still held");
+    }
+}
+
+/// Rows that arrive after the drag let go of the edge (released, Escape, back inside, focus
+/// lost) move neither the list nor the selection.
+#[test]
+fn rows_arriving_after_it_let_go_of_the_end_change_nothing() {
+    let stops: [(&str, fn(&mut Runtime<List>)); 4] = [
+        ("release", |rt| rt.pointer_up(150.0, BOTTOM + 400.0)),
+        ("escape", |rt| rt.key(KeyEvent { key: Key::Escape, mods: Mods::default() })),
+        ("inside", |rt| rt.pointer_move(150.0, 60.0)),
+        ("blur", |rt| { rt.window_focus(true); rt.window_focus(false); }),
+    ];
+    for list in [VIRTUAL, PLAIN] {
+        for (name, stop) in stops {
+            let mut rt = rest_at_end(list);
+            stop(&mut rt);
+            assert_eq!(rt.selectable.edge.state, State::Idle, "{name}");
+            settle(&mut rt);
+            let (at, selected) = (offset(&rt), range(&rt));
+            rt.update(|s, _| s.rows += 20);
+            settle(&mut rt);
+            assert_eq!((offset(&rt), range(&rt)), (at, selected), "virtual {} {name}: the list and the selection stay", list.virtual_rows);
+            assert_eq!(rt.wake_deadline(), None, "{name}");
+        }
+    }
+}
+
+/// The edge scroll's letters, as the runtime feeds them: a pointer move, the frame for the step
+/// asked for (or an old one's), a stepped layout, a layout that changed the extent, a stop.
+#[derive(Clone, Copy, Debug)]
+enum Letter { Moved(At), Due(At), Stale, Laid, Extent(At), Stop }
+
+/// Where the pointer is: inside, at the bottom of viewport 7 with room, with less room than a
+/// step, at its end, at its end after more rows arrived, at the bottom of another viewport.
+#[derive(Clone, Copy, Debug)]
+enum At { Inside, Room, Near, End, Grown, Other }
+
+fn at(at: At) -> Option<Edge> {
+    let e = |scroll, room, offset, max| Some(Edge { scroll: NodeId(scroll), speed: 600.0, room, offset, max });
+    match at {
+        At::Inside => None,
+        At::Room => e(7, 100.0, 0.0, 100.0),
+        At::Near => e(7, 3.0, 97.0, 100.0),
+        At::End => e(7, 0.0, 100.0, 100.0),
+        At::Grown => e(7, 50.0, 100.0, 150.0),
+        At::Other => e(8, 100.0, 0.0, 100.0),
+    }
+}
+
+/// origin/dev's `edge_scroll::step`, transcribed: its three states, and where it went instead of
+/// resting at an end.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Dev {
+    Idle,
+    Running { attempt: u32, scroll: NodeId, last: f64, from: Option<f64>, due: f64 },
+    Laying { next: Option<u32>, scroll: NodeId, last: f64, from: Option<f64>,
+        /// differs from dev: the extent the step saw.
+        max: f64 },
+    /// differs from dev: dev went idle wherever this rests.
+    AtEnd { scroll: NodeId, max: f64 },
+}
+
+struct Reference { seq: u32, state: Dev }
+
+impl Reference {
+    fn next(&mut self) -> u32 { self.seq += 1; self.seq }
+
+    fn moves(e: &Edge) -> bool { e.speed != 0.0 && e.room > 0.0 }
+
+    /// differs from dev: dev went idle; at an edge of `scroll` (any, when `None`) it rests.
+    fn rest(edge: Option<Edge>, scroll: Option<NodeId>) -> Dev {
+        match edge {
+            Some(e) if e.speed != 0.0 && (scroll.is_none() || scroll == Some(e.scroll)) => Dev::AtEnd { scroll: e.scroll, max: e.max },
+            _ => Dev::Idle,
+        }
+    }
+
+    fn moved(&mut self, now: f64, edge: Option<Edge>) -> Vec<Effect> {
+        match (edge.filter(Self::moves), self.state) {
+            (None, _) => {
+                self.state = Self::rest(edge, None);
+                vec![]
+            }
+            (Some(e), Dev::Running { scroll, .. }) if scroll == e.scroll => vec![],
+            (Some(e), _) => {
+                let attempt = self.next();
+                self.state = Dev::Running { attempt, scroll: e.scroll, last: now, from: None, due: now };
+                vec![Effect::WakeAt(now)]
+            }
+        }
+    }
+
+    fn due(&mut self, attempt: u32, now: f64, edge: Option<Edge>) -> Vec<Effect> {
+        match self.state {
+            Dev::Running { attempt: armed, scroll, last, from, due } if armed == attempt && now >= due => {
+                let Some(e) = edge.filter(|e| Self::moves(e) && e.scroll == scroll) else {
+                    self.state = Self::rest(edge, Some(scroll));
+                    return vec![];
+                };
+                if from.is_some_and(|f| (e.offset - f).abs() <= 1e-9) {
+                    // differs from dev: dev went idle.
+                    self.state = Dev::AtEnd { scroll, max: e.max };
+                    return vec![];
+                }
+                let by = f64::from(e.speed) * (now - last).clamp(0.0, 0.05);
+                let (by, end) = if e.room - by.abs() <= 1e-3 { (e.room.copysign(f64::from(e.speed)), true) } else { (by, false) };
+                let next = if end { None } else { Some(self.next()) };
+                self.state = Dev::Laying { next, scroll, last: now, from: if by != 0.0 { Some(e.offset) } else { None }, max: e.max };
+                let mut effects = vec![Effect::Scroll { scroll, by }];
+                if !end { effects.push(Effect::WakeAt(now)); }
+                effects
+            }
+            _ => vec![],
+        }
+    }
+
+    fn laid(&mut self) -> Vec<Effect> {
+        let Dev::Laying { next, scroll, last, from, max } = self.state else { return vec![] };
+        self.state = match next {
+            Some(attempt) => Dev::Running { attempt, scroll, last, from, due: last },
+            // differs from dev: dev went idle.
+            None => Dev::AtEnd { scroll, max },
+        };
+        vec![Effect::Extend]
+    }
+
+    /// differs from dev: dev had no such event; resting at the end, room the layout made goes on.
+    fn extent(&mut self, now: f64, edge: Option<Edge>) -> Vec<Effect> {
+        let Dev::AtEnd { scroll, .. } = self.state else { return vec![] };
+        match edge {
+            Some(e) if Self::moves(&e) && e.scroll == scroll => {
+                let attempt = self.next();
+                self.state = Dev::Running { attempt, scroll, last: now, from: None, due: now };
+                vec![Effect::WakeAt(now)]
+            }
+            _ => {
+                self.state = Self::rest(edge, Some(scroll));
+                vec![]
+            }
+        }
+    }
+}
+
+fn same(state: &State, dev: &Dev) -> bool {
+    match (*state, *dev) {
+        (State::Idle, Dev::Idle) => true,
+        (State::Running { attempt, scroll, last, from, due }, Dev::Running { attempt: a, scroll: s, last: l, from: f, due: d }) =>
+            (attempt.0, scroll, last, from, due) == (a, s, l, f, d),
+        (State::Laying { next, scroll, last, from, max }, Dev::Laying { next: n, scroll: s, last: l, from: f, max: m }) =>
+            (next.map(|a| a.0), scroll, last, from, max) == (n, s, l, f, m),
+        (State::AtEnd { scroll, max }, Dev::AtEnd { scroll: s, max: m }) => (scroll, max) == (s, m),
+        _ => false,
+    }
+}
+
+/// Drives `letters` through `step` and the reference, a letter a frame's tenth apart, comparing
+/// the effects and the state after every one.
+fn walk(letters: &[Letter]) {
+    let (mut seq, mut state) = (Seq::default(), State::Idle);
+    let mut dev = Reference { seq: 0, state: Dev::Idle };
+    for (i, &letter) in letters.iter().enumerate() {
+        let now = 1.0 + i as f64 * 0.01;
+        // The runtime asks for a step with the attempt its state holds; an old one is attempt 0.
+        let armed = match state { State::Running { attempt, .. } => attempt, State::Laying { next: Some(a), .. } => a, _ => Attempt(0) };
+        let (event, theirs) = match letter {
+            Letter::Moved(a) => (Event::Moved { now, edge: at(a) }, dev.moved(now, at(a))),
+            Letter::Due(a) => (Event::Due { attempt: armed, now, edge: at(a) }, dev.due(armed.0, now, at(a))),
+            Letter::Stale => (Event::Due { attempt: Attempt(0), now, edge: at(At::Room) }, dev.due(0, now, at(At::Room))),
+            Letter::Laid => (Event::Laid, dev.laid()),
+            Letter::Extent(a) => (Event::Extent { now, edge: at(a) }, dev.extent(now, at(a))),
+            Letter::Stop => (Event::Stop, { dev.state = Dev::Idle; vec![] }),
+        };
+        let ours: Vec<Effect> = step(&mut seq, &mut state, event).into_iter().collect();
+        assert_eq!(ours, theirs, "{letters:?}, letter {i}");
+        assert!(same(&state, &dev.state), "{letters:?}, letter {i}: {state:?}, reference {:?}", dev.state);
+    }
+}
+
+fn walks(alphabet: &[Letter], len: usize, prefix: &mut Vec<Letter>, ran: &mut usize) {
+    walk(prefix);
+    *ran += 1;
+    if prefix.len() == len { return; }
+    for &letter in alphabet {
+        prefix.push(letter);
+        walks(alphabet, len, prefix, ran);
+        prefix.pop();
+    }
+}
+
+#[test]
+fn every_short_sequence_steps_as_the_reference_does() {
+    let ats = [At::Inside, At::Room, At::Near, At::End, At::Grown, At::Other];
+    let alphabet: Vec<Letter> = ats.iter().map(|&a| Letter::Moved(a))
+        .chain(ats.iter().map(|&a| Letter::Due(a)))
+        .chain(ats.iter().map(|&a| Letter::Extent(a)))
+        .chain([Letter::Stale, Letter::Laid, Letter::Stop])
+        .collect();
+    let mut ran = 0;
+    walks(&alphabet, 5, &mut Vec::new(), &mut ran);
+    assert_eq!(ran, (0..=5).map(|n| alphabet.len().pow(n)).sum::<usize>());
 }
