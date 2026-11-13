@@ -174,39 +174,68 @@ impl<S: 'static> Runtime<S> {
     }
 
     /// A mouse button went down at (x, y). The primary and secondary buttons do what
-    /// [`Self::pointer_down`] and [`Self::secondary_down`] do; another presses the innermost
-    /// element there that takes it ([`El::pointer_buttons`]), whose `on_drag` and `on_press`
-    /// follow as for the primary button.
+    /// [`Self::pointer_down`] and [`Self::secondary_down`] do. Another presses the innermost
+    /// element there that takes it: one that opted in ([`El::pointer_buttons`]), whose `on_drag`
+    /// and `on_press` follow as for the primary button; for the middle button, also a link of a
+    /// text with `on_link`, or an element with [`El::on_middle_press`], each clicked when the
+    /// button comes up over it.
     pub fn button_down(&mut self, x: f32, y: f32, button: PointerButton) {
         match button {
             PointerButton::Primary => return self.pointer_down(x, y),
             PointerButton::Secondary => return self.secondary_down(x, y),
             _ => {}
         }
+        if self.autoscroll_press(button) { self.pointer = Some((x, y)); return; }
         if self.press.is_held() { return; }
         self.pointer = Some((x, y));
         self.dismiss_help();
         let hit = self.hits.iter().rev().find(|&&(id, r)| self.hit_contains(id, r, x, y)).and_then(|(id, _)| self.node_index.get(id).copied());
+        let middle = button == PointerButton::Middle;
         let target = std::iter::successors(hit, |&i| self.nodes[i].parent)
             .take_while(|&i| !self.subtree_exiting(i) && self.allowed(i))
-            .find(|&i| {
-                let n = &self.nodes[i];
-                n.handlers.gestures.as_ref().is_some_and(|g| g.buttons & button.bit() != 0) && (n.handlers.on_press.is_some() || n.handlers.on_drag.is_some())
+            .find_map(|i| {
+                let h = &self.nodes[i].handlers;
+                if self.takes_button(i, button) && (h.on_press.is_some() || h.on_drag.is_some()) { return Some((i, None)); }
+                if !middle { return None; }
+                if let Some(k) = self.middle_link_at(i, x, y) { return Some((i, Some(k))); }
+                h.on_middle_press.is_some().then_some((i, None))
             });
-        let Some(i) = target else { return };
+        let Some((i, link)) = target else {
+            if middle { self.autoscroll_down(x, y); }
+            return;
+        };
         let n = &self.nodes[i];
         let r = n.target;
         let [lx, ly] = self.to_local(i, x, y);
         let d = Drag { phase: Phase::Down, x: lx, y: ly, w: r[2] - r[0], h: r[3] - r[1], start_x: lx, start_y: ly, dx: 0.0, dy: 0.0, data: 0.0, clicks: 1, cancelled: false, window: [x, y], screen: self.screen_at(x, y) };
         let path = n.path.clone();
-        if n.handlers.on_drag.is_some() { self.queue.push(Action::Drag(path.clone(), d, button)); }
+        if self.drags_with(i, button) { self.queue.push(Action::Drag(path.clone(), d, button)); }
         self.press_clicks.clear();
         let now = self.now_clock();
-        self.press.hold(capture::Held::new(path, d, button, (x, y), now, false, None));
+        self.press.hold(capture::Held::new(path, d, button, (x, y), now, false, None).on_link(link));
+    }
+
+    /// Element `i` opted in to `button` ([`El::pointer_buttons`]); every element takes the
+    /// primary.
+    pub(super) fn takes_button(&self, i: usize, button: PointerButton) -> bool {
+        button == PointerButton::Primary || self.nodes[i].handlers.gestures.as_ref().is_some_and(|g| g.buttons & button.bit() != 0)
+    }
+
+    /// Element `i`'s `on_drag` hears a press of `button`.
+    pub(super) fn drags_with(&self, i: usize, button: PointerButton) -> bool {
+        let n = &self.nodes[i];
+        n.handlers.on_drag.is_some() && !self.drags_out(n) && self.takes_button(i, button)
+    }
+
+    /// The link of text `i` under (x, y) that a middle click opens: one its `on_link` hears.
+    fn middle_link_at(&self, i: usize, x: f32, y: f32) -> Option<usize> {
+        self.nodes[i].text.as_ref()?.cold.on_link.as_ref()?;
+        self.link_at(i, x, y)
     }
 
     /// A mouse button came up at (x, y): the release of [`Self::button_down`].
     pub fn button_up(&mut self, x: f32, y: f32, button: PointerButton) {
+        if !matches!(button, PointerButton::Primary | PointerButton::Secondary) && self.autoscroll_release(button) { self.pointer = Some((x, y)); return; }
         match button {
             PointerButton::Primary => self.pointer_up(x, y),
             PointerButton::Secondary => self.secondary_up(x, y),

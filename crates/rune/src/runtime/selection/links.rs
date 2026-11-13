@@ -202,12 +202,12 @@ impl<S: 'static> Runtime<S> {
         LinkFx(fx)
     }
 
-    /// Pointer up on text `path` of a press that began on its link `k`: ending on the same link
-    /// activates it.
-    pub(super) fn link_up(&mut self, path: &str, k: usize, x: f32, y: f32) {
+    /// Pointer up on text `path` of a press with `button` that began on its link `k`: ending on
+    /// the same link activates it.
+    pub(super) fn link_up(&mut self, path: &str, k: usize, x: f32, y: f32, button: crate::PointerButton) {
         let Some(i) = self.nodes.iter().position(|n| n.path == path) else { return };
         if self.link_at(i, x, y) == Some(k) {
-            self.queue.push(Action::Link(path.to_owned(), k));
+            self.queue.push(Action::Link(path.to_owned(), k, button));
         }
     }
 

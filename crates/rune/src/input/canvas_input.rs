@@ -206,6 +206,7 @@ impl El {
 impl Tx {
     /// In `on_press` and `on_drag`, the button that drove it, which is
     /// [`PointerButton::Primary`] unless the element opted in to others with
-    /// [`El::pointer_buttons`]. Other handlers see `Primary`.
+    /// [`El::pointer_buttons`]; in `on_link`, `Middle` for a middle click on the link; in
+    /// [`El::on_middle_press`], `Middle`. Other handlers see `Primary`.
     pub fn button(&self) -> PointerButton { self.button }
 }

@@ -32,6 +32,7 @@ impl<S: 'static> Runtime<S> {
     pub fn physical_input(&mut self, event: PhysicalInput) {
         self.observe_mods(&event);
         if self.cancel_drag_key(&event) { return; }
+        if matches!(event, PhysicalInput::Key { pressed: true, .. }) && self.autoscroll_key() { return; }
         self.queue.push(Action::Physical(event, None));
     }
 
@@ -64,6 +65,8 @@ impl<S: 'static> Runtime<S> {
     /// `unhandled` happens when no handler takes the logical key.
     pub(crate) fn physical_then(&mut self, event: PhysicalInput, key: Option<KeyEvent>, base: Option<char>, unhandled: Option<Unhandled>) -> bool {
         if self.cancel_drag_key(&event) { return true; }
+        // A key ends a middle-click autoscroll, and does nothing else.
+        if matches!(event, PhysicalInput::Key { pressed: true, .. }) && self.autoscroll_key() { return true; }
         if key.is_none() && matches!(event, PhysicalInput::Modifiers(_) | PhysicalInput::Key { pressed: false, .. }) {
             return self.physical_observation(event);
         }
