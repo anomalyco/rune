@@ -1,0 +1,6 @@
+{
+  "events": [
+    { "t": 0.25, "type": "wheel", "x": 200, "y": 220, "dy": -120, "precise": false, "expect": "instant", "scope": "cards" },
+    { "t": 0.65, "type": "wheel", "x": 200, "y": 220, "dy": 12, "precise": true, "expect": "instant", "scope": "cards" }
+  ]
+}

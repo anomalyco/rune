@@ -449,7 +449,11 @@ impl<S: 'static> Host<S> {
                 let shift = crate::runtime::SHIFT_TURNS_WHEEL && self.mods.shift_key();
                 // In window points: a wheel turns as far on screen at any zoom, as Chromium's does,
                 // and a pinch is the same gesture whatever the zoom.
-                let (dx, dy) = crate::runtime::wheel_delta(delta, scale, shift);
+                #[cfg(target_os = "windows")]
+                let points = rt.windows_wheel_points(delta, shift);
+                #[cfg(not(target_os = "windows"))]
+                let points = crate::runtime::LINE_POINTS;
+                let (dx, dy) = crate::runtime::wheel_delta(delta, scale, shift, points);
                 let precise = matches!(delta, winit::event::MouseScrollDelta::PixelDelta(_));
                 let phase = gesture_phase(phase);
                 match rt.pointer() {

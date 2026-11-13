@@ -255,6 +255,8 @@ mod shadow_paint;
 mod shape_paint;
 use shape_paint::push_shape;
 use props::*;
+#[cfg(not(target_os = "windows"))]
+pub(crate) use scroll_x::LINE_POINTS;
 pub(crate) use scroll_x::{SHIFT_TURNS_WHEEL, wheel_delta};
 pub(crate) use scroll_offset::ScrollRequest;
 pub(crate) use reveal::ScrollReveal;

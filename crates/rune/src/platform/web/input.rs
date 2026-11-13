@@ -293,7 +293,7 @@ impl<S: 'static> Running<S> {
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 let Some((x, y)) = self.rt.pointer() else { return false };
-                let (dx, dy) = crate::runtime::wheel_delta(*delta, scale, self.input.mods.shift_key());
+                let (dx, dy) = crate::runtime::wheel_delta(*delta, scale, self.input.mods.shift_key(), crate::runtime::LINE_POINTS);
                 // A page's pinch is the browser's zoom.
                 // Where nothing of Rune's pinches, it's the browser's zoom (bridge.js).
                 if self.input.mods.control_key() {

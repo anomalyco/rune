@@ -169,7 +169,7 @@ impl PointerHandler for WinitState {
                         window_id,
                     );
                 },
-                PointerEventKind::Axis { horizontal, vertical, .. } => {
+                PointerEventKind::Axis { horizontal, vertical, source, .. } => {
                     // Get the current phase.
                     let mut pointer_data = pointer.winit_data().inner.lock().unwrap();
 
@@ -203,8 +203,17 @@ impl PointerHandler for WinitState {
                         )
                     } else {
                         // NOTE: Wayland sign convention is the inverse of winit.
+                        use sctk::reexports::client::protocol::wl_pointer::AxisSource;
+                        // Chromium 152, wayland_pointer.cc: OnAxis converts surface units by
+                        // kWheelDelta / kAxisValueScale. Only finger and continuous sources use
+                        // this gain here: a wheel can send axis-only frames between detents.
+                        const FINGER_POINTS_PER_AXIS_UNIT: f64 = 120.0 / 10.0;
+                        let gain = match source {
+                            Some(AxisSource::Finger | AxisSource::Continuous) => FINGER_POINTS_PER_AXIS_UNIT,
+                            _ => 1.0,
+                        };
                         MouseScrollDelta::PixelDelta(
-                            LogicalPosition::new(-horizontal.absolute, -vertical.absolute)
+                            LogicalPosition::new(-horizontal.absolute * gain, -vertical.absolute * gain)
                                 .to_physical(scale_factor),
                         )
                     };
