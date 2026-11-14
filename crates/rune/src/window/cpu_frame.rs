@@ -516,6 +516,7 @@ impl<S: 'static> Host<S> {
         let hwnd = hwnd as isize;
         let spawned = std::thread::Builder::new().name("rune-gpu-window".into()).spawn(move || {
             if below { lower_priority(); }
+            if let Some(ms) = std::env::var("IB3_GPU_DELAY_MS").ok().and_then(|v| v.parse::<u64>().ok()) { std::thread::sleep(std::time::Duration::from_millis(ms)); }
             let made = prepare(hwnd, size, srgb, features, &instances);
             *out.lock().unwrap_or_else(|e| e.into_inner()) = Some(made);
             handle.send(WakeEvent::GpuReady);
