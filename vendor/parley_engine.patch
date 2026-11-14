@@ -1,11 +1,24 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 68a28c1..c09da2b 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -43,6 +43,7 @@ bytemuck = [
+     "parlance/bytemuck",
+ ]
+ complex-scripts = []
++line-dictionaries = []
+ default = ["std"]
+ libm = [
+     "fontique/libm",
 diff --git a/src/analysis.rs b/src/analysis.rs
-index 7d871af..d35c610 100644
+index 7d871af..31cf0dc 100644
 --- a/src/analysis.rs
 +++ b/src/analysis.rs
-@@ -150,6 +150,33 @@ impl AnalysisDataSources {
+@@ -150,13 +150,43 @@ impl AnalysisDataSources {
      }
  }
  
+-#[cfg(feature = "complex-scripts")]
 +/// The segmenters an [`Analyzer`] has made, kept for its next texts (Rune:
 +/// vendor/parley_engine.patch). Making one looks up its rule data and, with `complex-scripts`,
 +/// loads the dictionaries; they're `'static` and `Copy`, so a kept one is the same value a new
@@ -33,10 +46,21 @@ index 7d871af..d35c610 100644
 +    }
 +}
 +
- #[cfg(feature = "complex-scripts")]
++// `line-dictionaries` (Rune: vendor/parley_engine.patch): the line segmenter's Thai, Lao, Khmer and
++// Burmese dictionaries without the word segmenter's (Chinese and Japanese words come from the host's
++// `dictionary` segmenter instead).
++#[cfg(any(feature = "complex-scripts", feature = "line-dictionaries"))]
  #[inline(always)]
  fn line_segmenter_impl(opt: LineBreakOptions<'_>) -> LineSegmenterBorrowed<'static> {
-@@ -558,8 +585,9 @@ pub(crate) fn analyze_text(
+     LineSegmenter::new_dictionary(opt)
+ }
+ 
+-#[cfg(not(feature = "complex-scripts"))]
++#[cfg(not(any(feature = "complex-scripts", feature = "line-dictionaries")))]
+ #[inline(always)]
+ fn line_segmenter_impl(opt: LineBreakOptions<'_>) -> LineSegmenterBorrowed<'static> {
+     LineSegmenter::new_for_non_complex_scripts(opt)
+@@ -558,8 +588,9 @@ pub(crate) fn analyze_text(
      for (substring_index, (substring, segmenter_key, last)) in contiguous_substrings.enumerate() {
          // Fast path for text with a single segmenter configuration.
          if substring_index == 0 && last {
@@ -48,7 +72,7 @@ index 7d871af..d35c610 100644
                  .segment_str(substring);
  
              let _first = lb_iter.next();
-@@ -580,8 +608,9 @@ pub(crate) fn analyze_text(
+@@ -580,8 +611,9 @@ pub(crate) fn analyze_text(
              break;
          }
  
@@ -60,7 +84,7 @@ index 7d871af..d35c610 100644
              .segment_str(substring);
  
          let mut substring_chars = substring.chars();
-@@ -613,8 +642,18 @@ pub(crate) fn analyze_text(
+@@ -613,8 +645,18 @@ pub(crate) fn analyze_text(
          }
      }
  
@@ -80,7 +104,7 @@ index 7d871af..d35c610 100644
      let mut gb_iter = data_sources
          .grapheme_segmenter()
          .segment_str(text)
-@@ -679,8 +718,11 @@ pub(crate) fn analyze_text(
+@@ -679,8 +721,11 @@ pub(crate) fn analyze_text(
          let properties = data_sources.properties(ch);
  
          // For characters requiring a dictionary for deciding word boundaries, apply
@@ -123,10 +147,10 @@ index 25aa622..fd44780 100644
              }
 diff --git a/src/dictionary.rs b/src/dictionary.rs
 new file mode 100644
-index 0000000..a65c7da
+index 0000000..5032d35
 --- /dev/null
 +++ b/src/dictionary.rs
-@@ -0,0 +1,133 @@
+@@ -0,0 +1,134 @@
 +// Copyright 2026 the Parley Authors
 +// SPDX-License-Identifier: Apache-2.0 OR MIT
 +
@@ -234,8 +258,9 @@ index 0000000..a65c7da
 +    }
 +
 +    /// The boundaries inside Thai, Lao, Khmer and Burmese runs: their line break opportunities.
++    /// None with `line-dictionaries`, whose line segmenter finds them itself.
 +    pub(crate) fn line_breaks(&self) -> impl Iterator<Item = usize> + '_ {
-+        let mut run = 0;
++        let mut run = if cfg!(feature = "line-dictionaries") { self.runs.len() } else { 0 };
 +        self.bounds.iter().copied().filter(move |&b| {
 +            while self.runs.get(run).is_some_and(|r| r.1 <= b) {
 +                run += 1;

@@ -22,10 +22,11 @@ tooling = []
 # They draw with a second `Runtime`, about 1.46 MB of an app's exe, so `tooling` leaves them out;
 # debug builds always have them.
 keys-overlay = ["tooling"]
-# Windows: link ICU4X's word and line dictionaries for Thai, Lao, Khmer, Burmese, Chinese and
-# Japanese (3,126,217 B) instead of asking Windows' own ICU (`icu.dll`, Windows 10 1903 and later)
-# the first time a run needs them. For an app that runs where `icu.dll` isn't (Server Core). Other
-# native platforms always link them; the web asks the browser.
+# Windows: link ICU4X's word dictionaries (Chinese and Japanese words above all: 1,939,456 B of a
+# minimal release exe) instead of asking Windows' own ICU (`icu.dll`, Windows 10 1903 and later) for
+# the words a double-click and word movement take. For an app that runs where `icu.dll` isn't
+# (Server Core). Line breaks never need it: Thai, Lao, Khmer and Burmese keep their baked line
+# dictionaries either way. Other native platforms always link the word dictionaries.
 segmenter-dictionaries = ["parley/complex-scripts"]
 # Headless benchmark instrumentation; ordinary builds contain no phase clocks.
 frame-profile = ["tooling", "dep:procwatch"]
@@ -207,8 +208,10 @@ x11rb = { version = "0.13", features = ["shape", "xinput", "randr", "allow-unsaf
 xkbcommon = "0.9"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-# `dictionary::set_dictionary_segmenter` (vendor/parley_engine), for `icu.dll`'s words.
-parley_engine = { version = "0.12", default-features = false }
+# `dictionary::set_dictionary_segmenter` (vendor/parley_engine), for `icu.dll`'s words, and
+# `line-dictionaries`: Thai, Lao, Khmer and Burmese line breaks from ICU4X's baked line dictionaries,
+# so no line ever waits for `icu.dll`.
+parley_engine = { version = "0.12", default-features = false, features = ["line-dictionaries"] }
 # D3D12 shared textures for `NativeSurface` (`native_surface::windows`), on wgpu-hal's version.
 # Media Foundation, D3D11 and WASAPI for video playback (`video::windows`): COM interfaces only;
 # their DLLs load on the first clip, through `GetProcAddress`, so the import table gains nothing.

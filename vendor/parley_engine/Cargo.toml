@@ -43,6 +43,7 @@ bytemuck = [
     "parlance/bytemuck",
 ]
 complex-scripts = []
+line-dictionaries = []
 default = ["std"]
 libm = [
     "fontique/libm",

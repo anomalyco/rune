@@ -134,6 +134,9 @@ static INPUT_READY: AtomicBool = AtomicBool::new(false);
 pub(crate) fn presented() {
     if !TOTALS_DONE.swap(true, Ordering::Relaxed) {
         mark("frame.first.presented");
+        // Windows' word dictionaries load once the first frame is out (platform/win32/segmenter.rs).
+        #[cfg(all(target_os = "windows", not(feature = "segmenter-dictionaries")))]
+        crate::platform::win32::segmenter::first_frame_presented();
     }
     if !MISSED.swap(false, Ordering::Relaxed) {
         mark_once(&TEXT_COMPLETE, "text.complete");
