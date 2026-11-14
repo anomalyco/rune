@@ -459,6 +459,18 @@ impl super::Device {
         &self.raw
     }
 
+    /// IB-3 measuring: resets and closes `count` of the reserved lists on this thread, timing each.
+    pub fn ib3_touch_spare(&self, count: usize) {
+        let spare = self.shared.spare_lists.lock();
+        let Some(allocator) = spare.1.clone() else { return };
+        for list in spare.0.iter().take(count) {
+            let t = std::time::Instant::now();
+            let _ = unsafe { list.Reset(&allocator, None) };
+            let reset = t.elapsed().as_micros();
+            let _ = unsafe { list.Close() };
+            eprintln!("ib3-hal: touch reset {reset} us, close {} us on {:?}", t.elapsed().as_micros() - reset, std::thread::current().name());
+        }
+    }
     /// Makes `count` command lists now, for encoders that have none of their own to reuse to
     /// take later: a list costs about a millisecond to make on some drivers (Intel's), and a frame
     /// with layers takes two for each render pass. Lists past `count` already made are kept.

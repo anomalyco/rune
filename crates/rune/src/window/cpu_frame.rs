@@ -541,6 +541,8 @@ impl<S: 'static> Host<S> {
         };
         crate::marks::mark("gpu.window.ready");
         let Prepared { gpu, mut renderer, surface, config, handover } = prepared;
+        // SAFETY: IB-3 measuring only.
+        if std::env::var_os("IB3_TOUCH").is_some() && let Some(hal) = unsafe { gpu.device.as_hal::<wgpu::hal::api::Dx12>() } { hal.ib3_touch_spare(8); }
         let gpu = Arc::new(gpu);
         let target_format = if self.rt.srgb_blend() { config.format.remove_srgb_suffix() } else { config.format };
         rebuild_renderer(&gpu.device, &mut renderer, target_format, &mut self.rt);
