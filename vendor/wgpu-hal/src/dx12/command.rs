@@ -88,6 +88,7 @@ impl Drop for super::CommandEncoder {
 
 impl super::CommandEncoder {
     unsafe fn begin_pass(&mut self, kind: super::PassKind, label: crate::Label) {
+        let _ib3 = super::Ib3Guard::new("begin_pass");
         let list = self.list.as_ref().unwrap();
         self.pass.kind = kind;
         if let Some(label) = label {
@@ -106,6 +107,7 @@ impl super::CommandEncoder {
     }
 
     unsafe fn end_pass(&mut self) {
+        let _ib3 = super::Ib3Guard::new("end_pass");
         let list = self.list.as_ref().unwrap();
         unsafe { list.SetDescriptorHeaps(&[]) };
         if self.pass.has_label {
@@ -115,6 +117,7 @@ impl super::CommandEncoder {
     }
 
     unsafe fn prepare_vertex_buffers(&mut self) {
+        let _ib3 = super::Ib3Guard::new("prepare_vertex_buffers");
         while self.pass.dirty_vertex_buffers != 0 {
             let list = self.list.as_ref().unwrap();
             let index = self.pass.dirty_vertex_buffers.trailing_zeros();
@@ -129,6 +132,7 @@ impl super::CommandEncoder {
     }
 
     unsafe fn prepare_draw(&mut self, first_vertex: i32, first_instance: u32) {
+        let _ib3 = super::Ib3Guard::new("prepare_draw");
         unsafe {
             self.prepare_vertex_buffers();
         }
@@ -318,6 +322,7 @@ impl super::CommandEncoder {
         tex_fmt: wgt::TextureFormat,
         copy_op: impl FnOnce(&mut Self, &super::Buffer, wgt::BufferSize, crate::BufferTextureCopy) -> T,
     ) -> (T, super::Buffer) {
+        let _ib3 = super::Ib3Guard::new("buf_tex_intermediate");
         let size = {
             let copy_info = region.buffer_layout.get_buffer_texture_copy_info(
                 tex_fmt,
@@ -389,6 +394,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
     type A = super::Api;
 
     unsafe fn begin_encoding(&mut self, label: crate::Label) -> Result<(), crate::DeviceError> {
+        let _ib3 = super::Ib3Guard::new("begin_encoding");
         let list = loop {
             if let Some(list) = self.free_lists.pop() {
                 // TODO: Is an error expected here and should we print it?
@@ -428,6 +434,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
         Ok(())
     }
     unsafe fn discard_encoding(&mut self) {
+        let _ib3 = super::Ib3Guard::new("discard_encoding");
         if let Some(list) = self.list.take() {
             if unsafe { list.Close() }.is_ok() {
                 self.free_lists.push(list);
@@ -435,6 +442,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
         }
     }
     unsafe fn end_encoding(&mut self) -> Result<super::CommandBuffer, crate::DeviceError> {
+        let _ib3 = super::Ib3Guard::new("end_encoding");
         let raw = self.list.take().unwrap();
         let t = std::time::Instant::now();
         unsafe { raw.Close() }.into_device_result("GraphicsCommandList::close")?;
@@ -442,6 +450,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
         Ok(super::CommandBuffer { raw })
     }
     unsafe fn reset_all<I: Iterator<Item = super::CommandBuffer>>(&mut self, command_buffers: I) {
+        let _ib3 = super::Ib3Guard::new("reset_all");
         self.intermediate_copy_bufs.clear();
         for cmd_buf in command_buffers {
             self.free_lists.push(cmd_buf.raw);
@@ -455,6 +464,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
     where
         T: Iterator<Item = crate::BufferBarrier<'a, super::Buffer>>,
     {
+        let _ib3 = super::Ib3Guard::new("transition_buffers");
         self.temp.barriers.clear();
 
         for barrier in barriers {
@@ -510,6 +520,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
     where
         T: Iterator<Item = crate::TextureBarrier<'a, super::Texture>>,
     {
+        let _ib3 = super::Ib3Guard::new("transition_textures");
         self.temp.barriers.clear();
 
         for barrier in barriers {
@@ -606,6 +617,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
     }
 
     unsafe fn clear_buffer(&mut self, buffer: &super::Buffer, range: crate::MemoryRange) {
+        let _ib3 = super::Ib3Guard::new("clear_buffer");
         let list = self.list.as_ref().unwrap();
         let mut offset = range.start;
         while offset < range.end {
@@ -625,6 +637,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
     ) where
         T: Iterator<Item = crate::BufferCopy>,
     {
+        let _ib3 = super::Ib3Guard::new("copy_buffer_to_buffer");
         let list = self.list.as_ref().unwrap();
         for r in regions {
             unsafe {
@@ -648,6 +661,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
     ) where
         T: Iterator<Item = crate::TextureCopy>,
     {
+        let _ib3 = super::Ib3Guard::new("copy_texture_to_texture");
         let list = self.list.as_ref().unwrap();
 
         for r in regions {
@@ -689,6 +703,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
     ) where
         T: Iterator<Item = crate::BufferTextureCopy>,
     {
+        let _ib3 = super::Ib3Guard::new("copy_buffer_to_texture");
         let offset_alignment = self.shared.private_caps.texture_data_placement_alignment();
 
         for naive_copy_region in regions {
@@ -758,6 +773,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
     ) where
         T: Iterator<Item = crate::BufferTextureCopy>,
     {
+        let _ib3 = super::Ib3Guard::new("copy_texture_to_buffer");
         let copy_aligned = |this: &mut Self,
                             src: &super::Texture,
                             dst: &super::Buffer,
@@ -818,6 +834,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
     }
 
     unsafe fn begin_query(&mut self, set: &super::QuerySet, index: u32) {
+        let _ib3 = super::Ib3Guard::new("begin_query");
         unsafe {
             self.list
                 .as_ref()
@@ -826,6 +843,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
         };
     }
     unsafe fn end_query(&mut self, set: &super::QuerySet, index: u32) {
+        let _ib3 = super::Ib3Guard::new("end_query");
         unsafe {
             self.list
                 .as_ref()
@@ -834,6 +852,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
         };
     }
     unsafe fn write_timestamp(&mut self, set: &super::QuerySet, index: u32) {
+        let _ib3 = super::Ib3Guard::new("write_timestamp");
         unsafe {
             self.list.as_ref().unwrap().EndQuery(
                 &set.raw,
@@ -847,6 +866,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
         acceleration_structure: &super::AccelerationStructure,
         buf: &super::Buffer,
     ) {
+        let _ib3 = super::Ib3Guard::new("read_acceleration_structure_compact_size");
         let list = self
             .list
             .as_ref()
@@ -866,6 +886,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
         }
     }
     unsafe fn reset_queries(&mut self, _set: &super::QuerySet, _range: Range<u32>) {
+        let _ib3 = super::Ib3Guard::new("reset_queries");
         // nothing to do here
     }
     unsafe fn copy_query_results(
@@ -876,6 +897,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
         offset: wgt::BufferAddress,
         _stride: wgt::BufferSize,
     ) {
+        let _ib3 = super::Ib3Guard::new("copy_query_results");
         unsafe {
             self.list.as_ref().unwrap().ResolveQueryData(
                 &set.raw,
@@ -894,6 +916,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
         &mut self,
         desc: &crate::RenderPassDescriptor<super::QuerySet, super::TextureView>,
     ) -> Result<(), crate::DeviceError> {
+        let _ib3 = super::Ib3Guard::new("begin_render_pass");
         unsafe { self.begin_pass(super::PassKind::Render, desc.label) };
 
         // Start timestamp if any (before all other commands but after debug marker)
@@ -1045,6 +1068,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
     }
 
     unsafe fn end_render_pass(&mut self) {
+        let _ib3 = super::Ib3Guard::new("end_render_pass");
         if !self.pass.resolves.is_empty() {
             let list = self.list.as_ref().unwrap();
             self.temp.barriers.clear();
@@ -1129,6 +1153,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
         group: &super::BindGroup,
         dynamic_offsets: &[wgt::DynamicOffset],
     ) {
+        let _ib3 = super::Ib3Guard::new("set_bind_group");
         let info = layout.bind_group_infos[index as usize].as_ref().unwrap();
         let mut root_index = info.base_root_index as usize;
 
@@ -1199,6 +1224,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
         offset_bytes: u32,
         data: &[u32],
     ) {
+        let _ib3 = super::Ib3Guard::new("set_immediates");
         let offset_words = offset_bytes as usize / 4;
 
         let info = layout.shared.immediates_info.as_ref().unwrap();
@@ -1216,6 +1242,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
     }
 
     unsafe fn insert_debug_marker(&mut self, label: &str) {
+        let _ib3 = super::Ib3Guard::new("insert_debug_marker");
         let (wide_label, size) = self.temp.prepare_marker(label);
         unsafe {
             self.list
@@ -1225,6 +1252,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
         };
     }
     unsafe fn begin_debug_marker(&mut self, group_label: &str) {
+        let _ib3 = super::Ib3Guard::new("begin_debug_marker");
         let (wide_label, size) = self.temp.prepare_marker(group_label);
         unsafe {
             self.list
@@ -1234,10 +1262,12 @@ impl crate::CommandEncoder for super::CommandEncoder {
         };
     }
     unsafe fn end_debug_marker(&mut self) {
+        let _ib3 = super::Ib3Guard::new("end_debug_marker");
         unsafe { self.list.as_ref().unwrap().EndEvent() }
     }
 
     unsafe fn set_render_pipeline(&mut self, pipeline: &super::RenderPipeline) {
+        let _ib3 = super::Ib3Guard::new("set_render_pipeline");
         let list = self.list.clone().unwrap();
 
         if self.pass.layout.signature != pipeline.layout.signature {
@@ -1270,6 +1300,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
         binding: crate::BufferBinding<'a, super::Buffer>,
         format: wgt::IndexFormat,
     ) {
+        let _ib3 = super::Ib3Guard::new("set_index_buffer");
         let ibv = Direct3D12::D3D12_INDEX_BUFFER_VIEW {
             BufferLocation: binding.resolve_address(),
             SizeInBytes: binding.resolve_size().try_into().unwrap(),
@@ -1283,6 +1314,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
         index: u32,
         binding: crate::BufferBinding<'a, super::Buffer>,
     ) {
+        let _ib3 = super::Ib3Guard::new("set_vertex_buffer");
         let vb = &mut self.pass.vertex_buffers[index as usize];
         vb.BufferLocation = binding.resolve_address();
         vb.SizeInBytes = binding.resolve_size().try_into().unwrap();
@@ -1290,6 +1322,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
     }
 
     unsafe fn set_viewport(&mut self, rect: &crate::Rect<f32>, depth_range: Range<f32>) {
+        let _ib3 = super::Ib3Guard::new("set_viewport");
         let raw_vp = Direct3D12::D3D12_VIEWPORT {
             TopLeftX: rect.x,
             TopLeftY: rect.y,
@@ -1306,6 +1339,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
         }
     }
     unsafe fn set_scissor_rect(&mut self, rect: &crate::Rect<u32>) {
+        let _ib3 = super::Ib3Guard::new("set_scissor_rect");
         let raw_rect = Foundation::RECT {
             left: rect.x as i32,
             top: rect.y as i32,
@@ -1320,9 +1354,11 @@ impl crate::CommandEncoder for super::CommandEncoder {
         }
     }
     unsafe fn set_stencil_reference(&mut self, value: u32) {
+        let _ib3 = super::Ib3Guard::new("set_stencil_reference");
         unsafe { self.list.as_ref().unwrap().OMSetStencilRef(value) }
     }
     unsafe fn set_blend_constants(&mut self, color: &[f32; 4]) {
+        let _ib3 = super::Ib3Guard::new("set_blend_constants");
         unsafe { self.list.as_ref().unwrap().OMSetBlendFactor(Some(color)) }
     }
 
@@ -1333,6 +1369,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
         first_instance: u32,
         instance_count: u32,
     ) {
+        let _ib3 = super::Ib3Guard::new("draw");
         let t = std::time::Instant::now();
         unsafe { self.prepare_draw(first_vertex as i32, first_instance) };
         unsafe {
@@ -1353,6 +1390,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
         first_instance: u32,
         instance_count: u32,
     ) {
+        let _ib3 = super::Ib3Guard::new("draw_indexed");
         unsafe { self.prepare_draw(base_vertex, first_instance) };
         unsafe {
             self.list.as_ref().unwrap().DrawIndexedInstanced(
@@ -1370,6 +1408,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
         group_count_y: u32,
         group_count_z: u32,
     ) {
+        let _ib3 = super::Ib3Guard::new("draw_mesh_tasks");
         self.prepare_dispatch([group_count_x, group_count_y, group_count_z]);
         let cmd_list6: Direct3D12::ID3D12GraphicsCommandList6 =
             self.list.as_ref().unwrap().cast().unwrap();
@@ -1383,6 +1422,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
         offset: wgt::BufferAddress,
         draw_count: u32,
     ) {
+        let _ib3 = super::Ib3Guard::new("draw_indirect");
         if self
             .pass
             .layout
@@ -1422,6 +1462,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
         offset: wgt::BufferAddress,
         draw_count: u32,
     ) {
+        let _ib3 = super::Ib3Guard::new("draw_indexed_indirect");
         if self
             .pass
             .layout
@@ -1461,6 +1502,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
         offset: wgt::BufferAddress,
         draw_count: u32,
     ) {
+        let _ib3 = super::Ib3Guard::new("draw_mesh_tasks_indirect");
         self.prepare_dispatch([0; 3]);
         let cmd_list6: Direct3D12::ID3D12GraphicsCommandList6 =
             self.list.as_ref().unwrap().cast().unwrap();
@@ -1479,6 +1521,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
         count_offset: wgt::BufferAddress,
         max_count: u32,
     ) {
+        let _ib3 = super::Ib3Guard::new("draw_indirect_count");
         unsafe { self.prepare_draw(0, 0) };
         unsafe {
             self.list.as_ref().unwrap().ExecuteIndirect(
@@ -1499,6 +1542,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
         count_offset: wgt::BufferAddress,
         max_count: u32,
     ) {
+        let _ib3 = super::Ib3Guard::new("draw_indexed_indirect_count");
         unsafe { self.prepare_draw(0, 0) };
         unsafe {
             self.list.as_ref().unwrap().ExecuteIndirect(
@@ -1519,6 +1563,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
         count_offset: wgt::BufferAddress,
         max_count: u32,
     ) {
+        let _ib3 = super::Ib3Guard::new("draw_mesh_tasks_indirect_count");
         self.prepare_dispatch([0; 3]);
         let cmd_list6: Direct3D12::ID3D12GraphicsCommandList6 =
             self.list.as_ref().unwrap().cast().unwrap();
@@ -1543,6 +1588,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
         &mut self,
         desc: &crate::ComputePassDescriptor<'a, super::QuerySet>,
     ) {
+        let _ib3 = super::Ib3Guard::new("begin_compute_pass");
         unsafe { self.begin_pass(super::PassKind::Compute, desc.label) };
 
         if let Some(timestamp_writes) = desc.timestamp_writes.as_ref() {
@@ -1557,11 +1603,13 @@ impl crate::CommandEncoder for super::CommandEncoder {
         }
     }
     unsafe fn end_compute_pass(&mut self) {
+        let _ib3 = super::Ib3Guard::new("end_compute_pass");
         self.write_pass_end_timestamp_if_requested();
         unsafe { self.end_pass() };
     }
 
     unsafe fn set_compute_pipeline(&mut self, pipeline: &super::ComputePipeline) {
+        let _ib3 = super::Ib3Guard::new("set_compute_pipeline");
         let list = self.list.clone().unwrap();
 
         if self.pass.layout.signature != pipeline.layout.signature {
@@ -1574,6 +1622,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
     }
 
     unsafe fn dispatch_workgroups(&mut self, count @ [x, y, z]: [u32; 3]) {
+        let _ib3 = super::Ib3Guard::new("dispatch_workgroups");
         self.prepare_dispatch(count);
         unsafe { self.list.as_ref().unwrap().Dispatch(x, y, z) }
     }
@@ -1583,6 +1632,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
         buffer: &super::Buffer,
         offset: wgt::BufferAddress,
     ) {
+        let _ib3 = super::Ib3Guard::new("dispatch_workgroups_indirect");
         if self
             .pass
             .layout
@@ -1630,6 +1680,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
             >,
         >,
     {
+        let _ib3 = super::Ib3Guard::new("build_acceleration_structures");
         // Implement using `BuildRaytracingAccelerationStructure`:
         // https://microsoft.github.io/DirectX-Specs/d3d/Raytracing.html#buildraytracingaccelerationstructure
         let list = self
@@ -1798,6 +1849,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
         &mut self,
         _barriers: crate::AccelerationStructureBarrier,
     ) {
+        let _ib3 = super::Ib3Guard::new("place_acceleration_structure_barrier");
         // TODO: This is not very optimal, we should be using [enhanced barriers](https://microsoft.github.io/DirectX-Specs/d3d/D3D12EnhancedBarriers.html) if possible
         let list = self
             .list
@@ -1824,6 +1876,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
         dst: &super::AccelerationStructure,
         copy: wgt::AccelerationStructureCopy,
     ) {
+        let _ib3 = super::Ib3Guard::new("copy_acceleration_structure_to_acceleration_structure");
         let list = self
             .list
             .as_ref()
@@ -1843,13 +1896,16 @@ impl crate::CommandEncoder for super::CommandEncoder {
         _command_buffers: &[&super::CommandBuffer],
         _dependencies: &[&super::AccelerationStructure],
     ) {
+        let _ib3 = super::Ib3Guard::new("set_acceleration_structure_dependencies");
     }
 
     unsafe fn begin_ray_tracing_pass(&mut self, _desc: &crate::RayTracingPassDescriptor) {
+        let _ib3 = super::Ib3Guard::new("begin_ray_tracing_pass");
         unreachable!("Ray tracing pipelines not supported")
     }
 
     unsafe fn end_ray_tracing_pass(&mut self) {
+        let _ib3 = super::Ib3Guard::new("end_ray_tracing_pass");
         unreachable!("Ray tracing pipelines not supported")
     }
 
@@ -1857,6 +1913,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
         &mut self,
         _pipeline: &<Self::A as crate::Api>::RayTracingPipeline,
     ) {
+        let _ib3 = super::Ib3Guard::new("set_ray_tracing_pipeline");
         unreachable!("Ray tracing pipelines not supported")
     }
 
@@ -1867,6 +1924,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
         _miss_group_data: crate::PipelineGroupData<super::Buffer>,
         _intersection_group_data: crate::PipelineGroupData<super::Buffer>,
     ) {
+        let _ib3 = super::Ib3Guard::new("trace_rays");
         unreachable!("Ray tracing pipelines not supported")
     }
 }
