@@ -1,0 +1,1 @@
+- **Windows: the layer blur (`El::blur`) ships precompiled for DX12.** Its five pipelines compiled their WGSL with FXC the first time a process blurred anything: 302,259-395,422 µs on an Iris Xe, now 3,890-8,960 µs. The second of the built-in passes to stop needing naga at run time on Windows; `regen_dxbc` rebuilds it.

@@ -58,12 +58,15 @@ impl Mode {
     fn passes(&self) -> usize { if matches!(self, Mode::Reduced { .. }) { 4 } else { 2 } }
 }
 
+/// The pass's shader (`layer_blur.wgsl`).
+pub(crate) const WGSL: &str = include_str!("../layer_blur.wgsl");
+
+/// Each pipeline's `MODE` and `ADDITIVE` overrides, in `Pipeline::pipelines`' order.
+pub(crate) const MODES: [(f64, f64); 5] = [(0.0, 0.0), (0.0, 1.0), (2.0, 0.0), (2.0, 1.0), (3.0, 0.0)];
+
 impl Pipeline {
     /// The pipelines for layers of `format` (`layers::FORMAT`).
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("layer gaussian"), source: wgpu::ShaderSource::Wgsl(include_str!("../layer_blur.wgsl").into()),
-        });
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("gaussian inputs"), entries: &[
                 wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::FRAGMENT,
@@ -78,15 +81,29 @@ impl Pipeline {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("gaussian"), bind_group_layouts: &[Some(&layout)], immediate_size: 0,
         });
-        let pipelines = [(0.0, 0.0), (0.0, 1.0), (2.0, 0.0), (2.0, 1.0), (3.0, 0.0)].map(|(mode, additive)| device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("layer gaussian"), layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState { module: &shader, entry_point: Some("vs"), compilation_options: Default::default(), buffers: &[] },
-            primitive: Default::default(), depth_stencil: None, multisample: Default::default(),
-            fragment: Some(wgpu::FragmentState { module: &shader, entry_point: Some("fs"),
-                compilation_options: wgpu::PipelineCompilationOptions { constants: &[("MODE", mode), ("ADDITIVE", additive)], ..Default::default() },
-                targets: &[Some(wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::ALL })] }),
-            multiview_mask: None, cache: None,
-        }));
+        // One pipeline per `MODES` entry: from WGSL, its `MODE` and `ADDITIVE` overrides set here; from
+        // DX12 bytecode (`fragments[i]`), compiled in by regen_dxbc.
+        let make = |vertex: &wgpu::ShaderModule, fragments: &[&wgpu::ShaderModule; 5], overrides: bool| std::array::from_fn(|i| {
+            let (mode, additive) = MODES[i];
+            let constants = [("MODE", mode), ("ADDITIVE", additive)];
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("layer gaussian"), layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState { module: vertex, entry_point: Some("vs"), compilation_options: Default::default(), buffers: &[] },
+                primitive: Default::default(), depth_stencil: None, multisample: Default::default(),
+                fragment: Some(wgpu::FragmentState { module: fragments[i], entry_point: Some("fs"),
+                    compilation_options: wgpu::PipelineCompilationOptions { constants: if overrides { &constants } else { &[] }, ..Default::default() },
+                    targets: &[Some(wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::ALL })] }),
+                multiview_mask: None, cache: None,
+            })
+        });
+        #[cfg(target_os = "windows")]
+        let precompiled = super::dxbc::layer_blur(device, WGSL, |m| make(&m[0], &[&m[1], &m[2], &m[3], &m[4], &m[5]], false));
+        #[cfg(not(target_os = "windows"))]
+        let precompiled = None;
+        let pipelines = precompiled.unwrap_or_else(|| {
+            let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("layer gaussian"), source: wgpu::ShaderSource::Wgsl(WGSL.into()) });
+            make(&shader, &[&shader; 5], true)
+        });
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("gaussian linear taps"), mag_filter: wgpu::FilterMode::Linear, min_filter: wgpu::FilterMode::Linear,
             ..Default::default()

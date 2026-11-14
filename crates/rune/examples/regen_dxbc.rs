@@ -58,10 +58,28 @@ fn main() {
     std::fs::write(format!("{root}/alpha.vs.dxbc"), &alpha_vs).unwrap();
     std::fs::write(format!("{root}/alpha.fs.dxbc"), &alpha_fs).unwrap();
     let alpha_wgsl = blake3::hash(std::fs::read_to_string(format!("{root}/src/surface_alpha.wgsl")).unwrap().replace("\r\n", "\n").as_bytes()).to_hex();
+    println!("alpha.vs.dxbc {} bytes, alpha.fs.dxbc {} bytes, WGSL {alpha_wgsl}", alpha_vs.len(), alpha_fs.len());
+    drop(logged);
+
+    // The layer blur: one vertex stage, and a fragment stage per `layer_blur::MODES` entry, in its order.
+    let start = HLSL.lock().unwrap().len();
+    rune::render::make_layer_blur(&gpu.device);
+    let logged = HLSL.lock().unwrap();
+    let fragments: Vec<&String> = logged[start..].iter().filter(|text| text.starts_with("Naga generated shader for \"fs\"")).collect();
+    assert_eq!(fragments.len(), 5, "the layer blur makes five pipelines");
+    let blur_vs = fxc(&stage(&logged[start..], "vs"), "vs", "vs_5_1");
+    std::fs::write(format!("{root}/layer_blur.vs.dxbc"), &blur_vs).unwrap();
+    for (i, text) in fragments.iter().enumerate() {
+        let fs = fxc(text.split_once(":\n").unwrap().1, "fs", "ps_5_1");
+        std::fs::write(format!("{root}/layer_blur.fs{i}.dxbc"), &fs).unwrap();
+    }
+    let blur_wgsl = blake3::hash(std::fs::read_to_string(format!("{root}/src/layer_blur.wgsl")).unwrap().replace("\r\n", "\n").as_bytes()).to_hex();
+    println!("layer_blur.vs.dxbc {} bytes and 5 fragment variants, WGSL {blur_wgsl}", blur_vs.len());
+
     std::fs::write(format!("{root}/src/render/uber/pass_dxbc_hash.rs"), format!(
         "// Written by `cargo run -p rune --example regen_dxbc` on Windows.\n\
-         pub(super) const ALPHA_DXBC_WGSL_BLAKE3: &str = \"{alpha_wgsl}\";\n")).unwrap();
-    println!("alpha.vs.dxbc {} bytes, alpha.fs.dxbc {} bytes, WGSL {alpha_wgsl}", alpha_vs.len(), alpha_fs.len());
+         pub(super) const ALPHA_DXBC_WGSL_BLAKE3: &str = \"{alpha_wgsl}\";\n\
+         pub(super) const LAYER_BLUR_DXBC_WGSL_BLAKE3: &str = \"{blur_wgsl}\";\n")).unwrap();
 }
 
 #[cfg(not(target_os = "windows"))]
