@@ -763,6 +763,9 @@ struct CommandSignatures {
 struct DeviceShared {
     adapter: DxgiAdapter,
     zero_buffer: Direct3D12::ID3D12Resource,
+    /// Closed command lists made ahead (`Device::reserve_command_lists`), which any encoder takes
+    /// when it has none of its own to reuse, with the allocator they were made on.
+    spare_lists: Mutex<(Vec<Direct3D12::ID3D12GraphicsCommandList>, Option<Direct3D12::ID3D12CommandAllocator>)>,
     cmd_signatures: CommandSignatures,
     heap_views: descriptor::GeneralHeap,
     sampler_heap: sampler::SamplerHeap,

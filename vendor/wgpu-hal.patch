@@ -1,5 +1,5 @@
 diff --git a/src/auxil/dxgi/factory.rs b/src/auxil/dxgi/factory.rs
-index ac050bcd..6e3c74ef 100644
+index ac050bc..6e3c74e 100644
 --- a/src/auxil/dxgi/factory.rs
 +++ b/src/auxil/dxgi/factory.rs
 @@ -9,7 +9,7 @@ use super::result::HResult as _;
@@ -11,8 +11,70 @@ index ac050bcd..6e3c74ef 100644
      let desc = unsafe { adapter.GetDesc1() }.unwrap();
  
      // The Intel Haswell family of iGPUs had support for the D3D12 API but it was later
+diff --git a/src/dx12/command.rs b/src/dx12/command.rs
+index 9e90e26..cc95979 100644
+--- a/src/dx12/command.rs
++++ b/src/dx12/command.rs
+@@ -401,6 +401,12 @@ impl crate::CommandEncoder for super::CommandEncoder {
+             }
+         };
+ 
++        // A list made ahead, when this encoder has none to reuse (`Device::reserve_command_lists`).
++        let list = list.or_else(|| {
++            let spare = self.shared.spare_lists.lock().0.pop()?;
++            unsafe { spare.Reset(&self.allocator, None) }.is_ok().then_some(spare)
++        });
++
+         let list = if let Some(list) = list {
+             list
+         } else {
+diff --git a/src/dx12/device.rs b/src/dx12/device.rs
+index 63fb313..f34b626 100644
+--- a/src/dx12/device.rs
++++ b/src/dx12/device.rs
+@@ -139,6 +139,7 @@ impl super::Device {
+         let shared = super::DeviceShared {
+             adapter,
+             zero_buffer,
++            spare_lists: Mutex::new((Vec::new(), None)),
+             cmd_signatures: super::CommandSignatures {
+                 draw: Self::create_command_signature(
+                     &raw,
+@@ -458,6 +459,32 @@ impl super::Device {
+         &self.raw
+     }
+ 
++    /// Makes `count` command lists now, for encoders that have none of their own to reuse to
++    /// take later: a list costs about a millisecond to make on some drivers (Intel's), and a frame
++    /// with layers takes two for each render pass. Lists past `count` already made are kept.
++    pub fn reserve_command_lists(&self, count: usize) -> Result<(), crate::DeviceError> {
++        let mut spare = self.shared.spare_lists.lock();
++        let allocator = match &spare.1 {
++            Some(allocator) => allocator.clone(),
++            None => {
++                let allocator: Direct3D12::ID3D12CommandAllocator =
++                    unsafe { self.raw.CreateCommandAllocator(Direct3D12::D3D12_COMMAND_LIST_TYPE_DIRECT) }
++                        .into_device_result("Command allocator creation")?;
++                spare.1 = Some(allocator.clone());
++                allocator
++            }
++        };
++        while spare.0.len() < count {
++            let list: Direct3D12::ID3D12GraphicsCommandList = unsafe {
++                self.raw.CreateCommandList(0, Direct3D12::D3D12_COMMAND_LIST_TYPE_DIRECT, &allocator, None)
++            }
++            .into_device_result("Create command list")?;
++            unsafe { list.Close() }.into_device_result("GraphicsCommandList::close")?;
++            spare.0.push(list);
++        }
++        Ok(())
++    }
++
+     pub fn raw_queue(&self) -> &Direct3D12::ID3D12CommandQueue {
+         &self.present_queue
+     }
 diff --git a/src/dx12/instance.rs b/src/dx12/instance.rs
-index fdb63bcb..5f64a804 100644
+index fdb63bc..5f64a80 100644
 --- a/src/dx12/instance.rs
 +++ b/src/dx12/instance.rs
 @@ -187,3 +187,37 @@ impl crate::Instance for super::Instance {
@@ -54,7 +116,7 @@ index fdb63bcb..5f64a804 100644
 +    }
 +}
 diff --git a/src/dx12/mod.rs b/src/dx12/mod.rs
-index 285d635..36e8b82 100644
+index 285d635..63ecee4 100644
 --- a/src/dx12/mod.rs
 +++ b/src/dx12/mod.rs
 @@ -615,6 +615,8 @@ struct SwapChain {
@@ -82,7 +144,17 @@ index 285d635..36e8b82 100644
      /// Returns the waitable handle associated with this swap chain, if any.
      /// Handle is only valid while the swap chain is alive.
      pub unsafe fn waitable_handle(&self) -> Option<Foundation::HANDLE> {
-@@ -1535,7 +1546,9 @@ impl crate::Surface for Surface {
+@@ -752,6 +763,9 @@ struct CommandSignatures {
+ struct DeviceShared {
+     adapter: DxgiAdapter,
+     zero_buffer: Direct3D12::ID3D12Resource,
++    /// Closed command lists made ahead (`Device::reserve_command_lists`), which any encoder takes
++    /// when it has none of its own to reuse, with the allocator they were made on.
++    spare_lists: Mutex<(Vec<Direct3D12::ID3D12GraphicsCommandList>, Option<Direct3D12::ID3D12CommandAllocator>)>,
+     cmd_signatures: CommandSignatures,
+     heap_views: descriptor::GeneralHeap,
+     sampler_heap: sampler::SamplerHeap,
+@@ -1535,7 +1549,9 @@ impl crate::Surface for Surface {
                      BufferUsage: Dxgi::DXGI_USAGE_RENDER_TARGET_OUTPUT,
                      BufferCount: swap_chain_buffer,
                      Scaling: Dxgi::DXGI_SCALING_STRETCH,
@@ -93,7 +165,7 @@ index 285d635..36e8b82 100644
                      Flags: flags.0 as u32,
                  };
                  let swap_chain1 = match self.target {
-@@ -1702,6 +1715,7 @@ impl crate::Surface for Surface {
+@@ -1702,6 +1718,7 @@ impl crate::Surface for Surface {
              present_mode: config.present_mode,
              format: config.format,
              size: config.extent,
@@ -101,7 +173,7 @@ index 285d635..36e8b82 100644
          });
  
          Ok(())
-@@ -1838,9 +1852,22 @@ impl crate::Queue for Queue {
+@@ -1838,9 +1855,22 @@ impl crate::Queue for Queue {
          };
  
          profiling::scope!("IDXGISwapchain3::Present");
@@ -128,7 +200,7 @@ index 285d635..36e8b82 100644
          Ok(())
      }
 diff --git a/src/dx12/shader_compilation.rs b/src/dx12/shader_compilation.rs
-index ff41e503..7961cbf9 100644
+index ff41e50..7961cbf 100644
 --- a/src/dx12/shader_compilation.rs
 +++ b/src/dx12/shader_compilation.rs
 @@ -17,7 +17,8 @@ pub(super) enum CompilerContainer {
