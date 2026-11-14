@@ -13,15 +13,15 @@ pub(super) struct Chores {
     pub(super) hooks: bool,
 }
 
-/// Whether input (or a message that may be input, as one another app posts) is waiting in this
-/// thread's queue, so the next piece waits for the turn after winit has taken it.
+/// Whether the user's input (a key, the mouse, raw input) is waiting in this thread's queue, so
+/// the next piece waits for the turn after winit has taken it. Posted messages don't count:
+/// winit's own wakes are posted, and they keep coming while the app starts.
 pub(super) fn input_waiting() -> bool {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{GetQueueStatus, QS_INPUT, QS_POSTMESSAGE, QS_SENDMESSAGE};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetQueueStatus, QS_INPUT};
     // SAFETY: no arguments beyond the flags; the high word is what's in the queue now.
-    let status = unsafe { GetQueueStatus(QS_INPUT | QS_POSTMESSAGE | QS_SENDMESSAGE) };
+    let status = unsafe { GetQueueStatus(QS_INPUT) };
     status >> 16 != 0
 }
-
 impl<S: 'static> Host<S> {
     /// One owed piece, unless input waits; true while more are owed, so the loop turns again.
     pub(super) fn post_frame_turn(&mut self) -> bool {
