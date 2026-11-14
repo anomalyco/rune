@@ -98,6 +98,12 @@ impl TextSystem {
     }
 
     /// Drops replaced layouts this commit didn't use, then keeps layouts used in the last two
+    /// A layout pass begins: a text compared before it may have gone, and another taken its
+    /// address.
+    pub(crate) fn forget_diff(&mut self) {
+        self.last_diff = None;
+    }
+
     /// commits, and older ones, most recently used first, while they fit in [`STALE_BYTES`].
     pub fn end_commit(&mut self) {
         let g = self.generation;
@@ -111,6 +117,7 @@ impl TextSystem {
         evict(&mut self.layouts, g);
         evict(&mut self.paragraphs, g);
         self.last_paragraphs = None;
+        self.last_diff = None;
         let layouts = &self.layouts;
         self.shapes.retain(|_, key| layouts.contains_key(key));
         evict(&mut self.elisions, g);

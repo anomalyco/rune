@@ -60,7 +60,14 @@ fn sync_input_focus(input: &mut crate::el::InputSpec, states: crate::states::Sta
         edit.break_history_group();
         changed = true;
     }
+    // Into the copy's own buffer: a long draft's field is copied without a new allocation, and
+    // without wiping the old one.
+    let mut text = std::mem::take(&mut input.edit.text);
+    let kept = std::mem::take(&mut edit.text);
     input.edit = edit.clone();
+    edit.text = kept;
+    text.clone_from(&edit.text);
+    input.edit.text = text;
     changed
 }
 
