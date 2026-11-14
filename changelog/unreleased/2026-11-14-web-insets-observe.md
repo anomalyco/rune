@@ -1,0 +1,1 @@
+- Web: the safe-area insets are read again whenever they change, not only on a resize: Safari can settle `env(safe-area-inset-*)` after a rotation's resize event.
