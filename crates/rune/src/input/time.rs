@@ -16,6 +16,11 @@ thread_local! {
 /// input dispatched after a frame is always later than that frame. `None` before any.
 pub fn last_input() -> Option<Instant> { LAST.with(Cell::get) }
 
+/// Input the platform delivered outside a window event (a browser page's own text field): it
+/// counts for [`last_input`].
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub(crate) fn typed() { LAST.with(|c| c.set(Some(Instant::now()))); }
+
 /// The arrival time of the input being dispatched on this thread, if any.
 pub(crate) fn current() -> Option<Instant> { CURRENT.with(Cell::get) }
 

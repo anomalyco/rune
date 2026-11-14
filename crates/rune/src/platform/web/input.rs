@@ -197,6 +197,11 @@ impl<S: 'static> Running<S> {
     /// when it moves the band (the browser's compositor scrolls the pixels Rune already drew).
     pub(super) fn input_event(&mut self, event: &mut serde_json::Value, window: &Arc<Window>) -> bool {
         let mut activate = false;
+        // What a person typed or pressed through the page's own elements is input too, for
+        // `rune::last_input` (an app holds background work while someone types).
+        if matches!(event["kind"].as_str(), Some("edit" | "preedit" | "selection" | "key" | "paste" | "a11y_press" | "a11y_link")) {
+            crate::input::time::typed();
+        }
         match event["kind"].as_str() {
             Some("viewport") => {
                 let insets = std::array::from_fn(|i| event["insets"][i].as_f64().unwrap_or(0.0).max(0.0) as f32);
