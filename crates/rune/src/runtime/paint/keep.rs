@@ -89,6 +89,8 @@ pub(super) struct PaintKeep {
     clean: Vec<bool>,
     fits: Vec<bool>,
     open: Vec<usize>,
+    /// Last paint's index of each node by id, built when this paint's order leaves last paint's.
+    by_id: HashMap<NodeId, u32>,
     /// Debug builds: the last paint's index of a subtree painted to check its copy.
     verify: Vec<u32>,
     verify_span: (usize, usize),
@@ -171,6 +173,14 @@ impl<S: 'static> Runtime<S> {
         std::mem::swap(&mut self.sticky_frame, &mut k.sticky_frame);
         std::mem::swap(&mut k.recs, &mut k.prev);
         std::mem::swap(&mut k.pages, &mut k.prev_pages);
+        // The other pairs too, as the instances above: a paint that grows one buffer doesn't
+        // leave the frame after it to grow the other.
+        twin(&mut self.marks, &k.marks);
+        twin(&mut self.hits, &k.hits);
+        twin(&mut self.overlay_hits, &k.overlay);
+        twin(&mut self.help.hits, &k.help);
+        twin(&mut self.file_drag.hits, &k.drop);
+        twin(&mut k.pages, &k.prev_pages);
         k.pages.clear();
         k.recs.clear();
         k.recs.resize(self.nodes.len(), PaintRec::default());
@@ -216,12 +226,16 @@ impl<S: 'static> Runtime<S> {
         // Last paint's index of each node: in order, as kept regions leave them.
         k.old.clear();
         k.old.resize(n, NONE);
-        let mut by_id: Option<HashMap<NodeId, u32>> = None;
+        // Scratch kept from paint to paint: a frame allocates nothing here.
+        k.by_id.clear();
         let mut cursor = 0usize;
         for i in 0..n {
             let id = self.nodes[i].id;
             let o = if k.prev.get(cursor).is_some_and(|r| r.id == id) { Some(cursor) } else {
-                by_id.get_or_insert_with(|| k.prev.iter().enumerate().map(|(o, r)| (r.id, o as u32)).collect()).get(&id).map(|&o| o as usize)
+                if k.by_id.is_empty() {
+                    k.by_id.extend(k.prev.iter().enumerate().map(|(o, r)| (r.id, o as u32)));
+                }
+                k.by_id.get(&id).map(|&o| o as usize)
             };
             if let Some(o) = o {
                 k.old[i] = o as u32;
@@ -356,12 +370,9 @@ impl<S: 'static> Runtime<S> {
         self.hits.extend_from_slice(&k.hits[range(r.hits)]);
         self.overlay_hits.extend_from_slice(&k.overlay[range(r.overlay)]);
         let seq = |s: usize| s + at[1] - r.hits[0] as usize;
-        let help: Vec<_> = k.help[range(r.help)].iter().map(|&(id, rect, s, l)| (id, rect, seq(s), l)).collect();
-        let drop: Vec<_> = k.drop[range(r.drop)].iter().map(|&(id, rect, s)| (id, rect, seq(s))).collect();
         let (at_help, at_drop) = (self.help.hits.len(), self.file_drag.hits.len());
-        self.help.hits.extend(help);
-        self.file_drag.hits.extend(drop);
-        let k = &mut self.paint_keep;
+        self.help.hits.extend(k.help[range(r.help)].iter().map(|&(id, rect, s, l)| (id, rect, seq(s), l)));
+        self.file_drag.hits.extend(k.drop[range(r.drop)].iter().map(|&(id, rect, s)| (id, rect, seq(s))));
         let pages = range(r.pages);
         k.pages.extend_from_slice(&k.prev_pages[pages.clone()]);
         for &(page, texels) in &k.prev_pages[pages] {
@@ -507,10 +518,13 @@ impl<S: 'static> Runtime<S> {
         let mut differ = Vec::new();
         if bytes(&self.instances[range(now.inst)]) != bytes(&k.instances[range(was.inst)]) { differ.push("instances"); }
         if self.hits[range(now.hits)] != k.hits[range(was.hits)] { differ.push("hits"); }
-        let rebase = |v: &[(NodeId, [f32; 4], usize, Option<usize>)], from: u32| v.iter().map(|&(id, rect, s, l)| (id, rect, s - from as usize, l)).collect::<Vec<_>>();
-        if rebase(&self.help.hits[range(now.help)], now.hits[0]) != rebase(&k.help[range(was.help)], was.hits[0]) { differ.push("help hits"); }
-        let rebase = |v: &[(NodeId, [f32; 4], usize)], from: u32| v.iter().map(|&(id, rect, s)| (id, rect, s - from as usize)).collect::<Vec<_>>();
-        if rebase(&self.file_drag.hits[range(now.drop)], now.hits[0]) != rebase(&k.drop[range(was.drop)], was.hits[0]) { differ.push("drop hits"); }
+        // Rebased hits compared in place, as the bytes are: a debug frame's check allocates nothing.
+        let help = |v: &[(NodeId, [f32; 4], usize, Option<usize>)], from: u32, at: usize| { let (id, rect, s, l) = v[at]; (id, rect, s - from as usize, l) };
+        let (a, b) = (&self.help.hits[range(now.help)], &k.help[range(was.help)]);
+        if a.len() != b.len() || (0..a.len()).any(|j| help(a, now.hits[0], j) != help(b, was.hits[0], j)) { differ.push("help hits"); }
+        let drop = |v: &[(NodeId, [f32; 4], usize)], from: u32, at: usize| { let (id, rect, s) = v[at]; (id, rect, s - from as usize) };
+        let (a, b) = (&self.file_drag.hits[range(now.drop)], &k.drop[range(was.drop)]);
+        if a.len() != b.len() || (0..a.len()).any(|j| drop(a, now.hits[0], j) != drop(b, was.hits[0], j)) { differ.push("drop hits"); }
         if self.track_marks && self.marks.get(range(now.inst)) != k.marks.get(range(was.inst)) { differ.push("marks"); }
         let len = k.end[r] as usize - r;
         if self.drawn[r..r + len] != k.drawn[o..o + len] || self.drawn_scale[r..r + len] != k.drawn_scale[o..o + len] || self.seen[r..r + len] != k.seen[o..o + len] { differ.push("drawn rects"); }
@@ -522,6 +536,13 @@ impl<S: 'static> Runtime<S> {
         if !differ.is_empty() {
             eprintln!("rune: paint keep: {} would have copied what differs: {}", self.nodes[r].path, differ.join(", "));
         }
+    }
+}
+
+/// `now` with room for as much as `was` holds room for.
+fn twin<T>(now: &mut Vec<T>, was: &Vec<T>) {
+    if now.capacity() < was.capacity() {
+        now.reserve_exact(was.capacity() - now.len());
     }
 }
 
