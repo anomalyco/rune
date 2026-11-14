@@ -16,6 +16,7 @@ mod page_fonts;
 pub(crate) mod health;
 mod input;
 mod page;
+mod pipelines;
 pub(crate) mod platform;
 pub(crate) mod segmenter;
 
@@ -133,7 +134,7 @@ fn spawn<S: 'static>(mut app: App<S>) -> Result<(), String> {
     shared.connect(Arc::new(move || { let _ = wake.send_event(Wake::App); }));
     page::occupy(quitting(&shared), app.same_tab_router.take());
     event_loop.spawn_app(Browser { app: Some(app), shared, proxy, window: None, embedded: false, document: false, owns_canvas: true,
-        borrowed: page::Borrowed::default(), start: Start::GpuFirst, fonts: Rc::default(), pending: Rc::default(), running: Rc::default(),
+        borrowed: page::Borrowed::default(), start: Start::GpuFirst, fonts: Rc::default(), pending: Rc::default(), warmed: Rc::default(), running: Rc::default(),
         lost: Rc::default(), waiting: None, first_at: None, drawn_at: None, gpu_asked: false });
     Ok(())
 }
@@ -155,6 +156,8 @@ struct Browser<S: 'static> {
     fonts: Rc<RefCell<Option<Vec<Vec<u8>>>>>,
     /// The GPU, once the browser answered for it.
     pending: Rc<RefCell<Option<Result<(Gpu, wgpu::Surface<'static>), String>>>>,
+    /// The pipelines compiled ahead for that GPU (`pipelines::warm`), kept until its renderer is made.
+    warmed: Rc<RefCell<Option<pipelines::Warmed>>>,
     running: Rc<RefCell<Option<Running<S>>>>,
     /// Why the browser lost the GPU device, until the page goes back to the CPU for it.
     lost: Rc<RefCell<Option<String>>>,
@@ -416,22 +419,8 @@ async fn gpu(canvas: web_sys::HtmlCanvasElement, features: wgpu::Features) -> Re
 /// text system told its masks are the renderer's to fill from now on. `lost` runs if the device
 /// is lost.
 fn gpu_side<S: 'static>(gpu: Gpu, surface: wgpu::Surface<'static>, size: (u32, u32), rt: &mut Runtime<S>, lost: impl Fn(String) + 'static) -> Result<GpuSide, String> {
-    let max_dim = gpu.device.limits().max_texture_dimension_2d.max(1);
-    let Some(mut config) = surface.get_default_config(&gpu.adapter, size.0.clamp(1, max_dim), size.1.clamp(1, max_dim)) else {
+    let Some((config, format)) = canvas_config(&gpu, &surface, size, rt.srgb_blend()) else {
         return Err("WebGPU canvas has no supported configuration".into());
-    };
-    config.present_mode = wgpu::PresentMode::Fifo;
-    let caps = surface.get_capabilities(&gpu.adapter);
-    config.usage |= caps.usages & wgpu::TextureUsages::COPY_SRC;
-    // A canvas can always be copied from; the hand-over's drift count needs that.
-    if drift_wanted() { config.usage |= wgpu::TextureUsages::COPY_SRC; }
-    let wanted = if rt.srgb_blend() { config.format.remove_srgb_suffix() } else { config.format.add_srgb_suffix() };
-    let is_gl = gpu.adapter.get_info().backend == wgpu::Backend::Gl;
-    let format = if wanted != config.format && !is_gl {
-        config.view_formats.push(wanted);
-        wanted
-    } else {
-        config.format
     };
     surface.configure(&gpu.device, &config);
     health::watch(&gpu.device, lost);
@@ -439,6 +428,27 @@ fn gpu_side<S: 'static>(gpu: Gpu, surface: wgpu::Surface<'static>, size: (u32, u
     renderer.set_srgb_blend(!format.is_srgb());
     renderer.attach_text(&mut rt.text.atlas);
     Ok(GpuSide { gpu, surface, config, renderer })
+}
+
+/// The canvas's configuration for `size`, and the format the renderer draws in: the canvas's,
+/// or its sRGB twin as a view format for the blend `srgb_blend` asks.
+fn canvas_config(gpu: &Gpu, surface: &wgpu::Surface<'static>, size: (u32, u32), srgb_blend: bool) -> Option<(wgpu::SurfaceConfiguration, wgpu::TextureFormat)> {
+    let max_dim = gpu.device.limits().max_texture_dimension_2d.max(1);
+    let mut config = surface.get_default_config(&gpu.adapter, size.0.clamp(1, max_dim), size.1.clamp(1, max_dim))?;
+    config.present_mode = wgpu::PresentMode::Fifo;
+    let caps = surface.get_capabilities(&gpu.adapter);
+    config.usage |= caps.usages & wgpu::TextureUsages::COPY_SRC;
+    // A canvas can always be copied from; the hand-over's drift count needs that.
+    if drift_wanted() { config.usage |= wgpu::TextureUsages::COPY_SRC; }
+    let wanted = if srgb_blend { config.format.remove_srgb_suffix() } else { config.format.add_srgb_suffix() };
+    let is_gl = gpu.adapter.get_info().backend == wgpu::Backend::Gl;
+    let format = if wanted != config.format && !is_gl {
+        config.view_formats.push(wanted);
+        wanted
+    } else {
+        config.format
+    };
+    Some((config, format))
 }
 
 /// A frame drawn on the GPU from the runtime's instances, presented; `Err` when the canvas gave
@@ -738,6 +748,8 @@ impl<S: 'static> Browser<S> {
             let (lost, proxy) = (self.lost.clone(), self.proxy.clone());
             gpu_side(gpu, surface, r.size, &mut r.rt, move |why| { *lost.borrow_mut() = Some(why); let _ = proxy.send_event(Wake::App); })
         });
+        // The renderer is made: the pipelines compiled ahead for it can go.
+        self.warmed.borrow_mut().take();
         let side = match side {
             Ok(side) => side,
             Err(why) => {
@@ -804,15 +816,24 @@ impl<S: 'static> Browser<S> {
             Some(c) => c.features(),
             None => self.running.borrow().as_ref().and_then(|r| r.compositor.as_ref()).map_or(wgpu::Features::empty(), |c| c.features()),
         };
-        let (pending, proxy) = (self.pending.clone(), self.proxy.clone());
+        // The renderer's pipelines are compiled ahead for the running app's canvas and blend, so
+        // making its renderer at the hand-over finds them built (`pipelines::warm`).
+        let canvas_now = self.running.borrow().as_ref().map(|r| (r.size, r.rt.srgb_blend()));
+        let (pending, warmed, proxy) = (self.pending.clone(), self.warmed.clone(), self.proxy.clone());
         wasm_bindgen_futures::spawn_local(async move {
             let result = gpu(canvas, features).await;
+            crate::marks::mark("web.gpu.answered");
+            let format = result.as_ref().ok().zip(canvas_now).and_then(|((gpu, surface), (size, srgb))| canvas_config(gpu, surface, size, srgb)).map(|(_, format)| format);
+            if let (Ok((gpu, _)), Some(format)) = (&result, format) && let Some(w) = pipelines::warm(&gpu.device, format).await {
+                crate::marks::mark("web.gpu.warmed");
+                *warmed.borrow_mut() = Some(w);
+            }
             // A loop that has closed was quit while the GPU started.
             if proxy.send_event(Wake::Ready).is_err() {
+                warmed.borrow_mut().take();
                 if let Ok((gpu, _)) = result { gpu.device.destroy(); }
                 return;
             }
-            crate::marks::mark("web.gpu.answered");
             *pending.borrow_mut() = Some(result);
         });
     }
@@ -820,12 +841,14 @@ impl<S: 'static> Browser<S> {
     /// After the first frame of a page that starts on the CPU: the GPU is asked for once the page
     /// has drawn nothing but ambient loops for `QUIET` (its first reads in and shown; a spinner on
     /// screen would otherwise hold the page on the CPU, painting each of its steps there), or `QUIET_LIMIT` after that
-    /// frame at the latest; until then this looks again every `QUIET`.
+    /// frame at the latest; until then this looks again every `QUIET`. A browser that compiles
+    /// pipelines asynchronously is asked at the first look: its pipelines build off the thread
+    /// that presents the CPU's frames (`pipelines::warm`), so nothing waits for quiet.
     fn maybe_start_gpu(&mut self) {
         if self.gpu_asked || self.start != Start::CpuFirst { return; }
         let Some(first) = self.first_at else { return };
         let quiet = self.drawn_at.is_none_or(|at| at.elapsed() >= QUIET);
-        if quiet || first.elapsed() >= QUIET_LIMIT { return self.ask_gpu(); }
+        if quiet || first.elapsed() >= QUIET_LIMIT || pipelines::browser_compiles_async() { return self.ask_gpu(); }
         let proxy = self.proxy.clone();
         after(QUIET, move || { let _ = proxy.send_event(Wake::StartGpu); });
     }
@@ -1137,6 +1160,7 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
         self.shared.quitting.store(true, Ordering::Release);
         let running = self.running.borrow_mut().take();
         if let Some(r) = running { r.close(); }
+        self.warmed.borrow_mut().take();
         if let Some(Ok((gpu, _))) = self.pending.borrow_mut().take() { gpu.device.destroy(); }
         if let Some(window) = self.window.take() && self.owns_canvas && let Some(canvas) = window.canvas() { canvas.remove(); }
         std::mem::take(&mut self.borrowed).give_back();
