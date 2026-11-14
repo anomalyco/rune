@@ -783,6 +783,8 @@ pub struct Renderer {
     /// Pooled viewport-sized backdrop copies, allocated only when a slot sets `effect_backdrop`
     /// or an element sets `backdrop_blur`.
     backdrops: Vec<Backdrop>,
+    /// The last prepared frame had an effect reading the backdrop: a rest keeps the copies.
+    backdrop_used: bool,
     /// Pipelines and pyramid for backdrop blur records, built on the first one.
     backdrop_blur: Option<backdrop_blur::BackdropBlur>,
     /// Which lazily built pipelines the device took (`breaker`).
