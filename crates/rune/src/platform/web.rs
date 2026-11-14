@@ -78,8 +78,8 @@ enum Wake {
 }
 
 /// How a page's frames start: on the CPU until WebGPU takes over (a full-window app, the
-/// default), or on the GPU from the first frame (a page that is the document or is inline, an
-/// app with a compositor). `globalThis.RUNE_CPU_FIRST` set to `"off"` starts every app on the
+/// default, with or without a compositor), or on the GPU from the first frame (a page that is
+/// the document or is inline). `globalThis.RUNE_CPU_FIRST` set to `"off"` starts every app on the
 /// GPU; `"only"` keeps it on the CPU for good.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Start {
@@ -799,7 +799,11 @@ impl<S: 'static> Browser<S> {
         let Some(canvas) = self.window.as_ref().and_then(|w| w.canvas()) else { return };
         self.gpu_asked = true;
         crate::marks::mark("web.gpu.asked");
-        let features = self.app.as_ref().and_then(|a| a.compositor.as_ref()).map_or(wgpu::Features::empty(), |c| c.features());
+        // A page that started on the CPU asks after its first frame, when the running app holds the compositor.
+        let features = match self.app.as_ref().and_then(|a| a.compositor.as_ref()) {
+            Some(c) => c.features(),
+            None => self.running.borrow().as_ref().and_then(|r| r.compositor.as_ref()).map_or(wgpu::Features::empty(), |c| c.features()),
+        };
         let (pending, proxy) = (self.pending.clone(), self.proxy.clone());
         wasm_bindgen_futures::spawn_local(async move {
             let result = gpu(canvas, features).await;
@@ -1016,10 +1020,12 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
             }
         }
         // A full-window app starts on the CPU, under the GPU's canvas, which stays see-through
-        // (and takes the input) until the GPU's first frame is done. A page that is the document
-        // or sits inline, or an app with a compositor, starts on the GPU.
+        // (and takes the input) until the GPU's first frame is done; one with a compositor too:
+        // its effect slots draw from the hand-over on, and never where the browser has no GPU
+        // (starting on the GPU would leave such a page with nothing at all). A page that is the
+        // document or sits inline starts on the GPU.
         let asked = cpu_first_asked();
-        self.start = if self.document || self.embedded || app.compositor.is_some() || asked.as_deref() == Some("off") {
+        self.start = if self.document || self.embedded || asked.as_deref() == Some("off") {
             Start::GpuFirst
         } else if asked.as_deref() == Some("only") {
             Start::CpuOnly

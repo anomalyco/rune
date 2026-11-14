@@ -1,0 +1,1 @@
+- Web: an app with a compositor starts on the CPU as other full-window apps do, and its effect slots draw from the hand-over on; it starts in a browser with no WebGPU (it showed "WebGPU adapter unavailable" and nothing else). The GPU it asks for after the first frame still has the compositor's features.
