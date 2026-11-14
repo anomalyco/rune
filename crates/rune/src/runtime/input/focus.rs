@@ -289,7 +289,11 @@ impl<S: 'static> Runtime<S> {
         changed
     }
     pub(super) fn sync_requested_focus(&mut self, nodes: &mut Vec<Node>) -> bool {
-        let asked = self.focus_request.take();
+        // A `Tx::focus_when_shown` still owed stands while focus is where it left it.
+        let owed = self.focus_owed.take().filter(|(.., at)| at.as_deref() == self.focus.path())
+            .map(|(key, ring, _)| (key, ring, crate::el::FocusAsk::WhenShown));
+        let asked = self.focus_request.take().or(owed);
+        let waits = asked.as_ref().filter(|(.., ask)| *ask == crate::el::FocusAsk::WhenShown).map(|(key, ring, _)| (key.clone(), *ring));
         for old in &self.nodes {
             if let Some(input) = &old.input
                 && input.edit.focused
@@ -379,6 +383,7 @@ impl<S: 'static> Runtime<S> {
             _ => self.focus.keyboard(),
         };
         self.focus_returned = matches!(&asked, Some((p, _, crate::el::FocusAsk::Return)) if next.as_deref() == Some(p.as_str()));
+        if asked.is_none() && let Some((key, ring)) = waits { self.focus_owed = Some((key, ring, next.clone())); }
         std::mem::swap(&mut self.nodes, nodes);
         self.nodes_replaced();
         let changed = self.set_focus(next, keyboard);

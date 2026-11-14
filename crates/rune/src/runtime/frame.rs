@@ -562,6 +562,10 @@ impl<S: 'static> Runtime<S> {
             let _input = crate::input::time::scope(at);
             if matches!(action, Action::Key { stage: false, .. } | Action::Physical(crate::PhysicalInput::Key { pressed: true, .. }, _)) { crate::marks::input_handled(true); }
             pointer_hover |= matches!(action, Action::Hover(_));
+            // The user's own key or press takes over from a `Tx::focus_when_shown` still waiting.
+            if matches!(action, Action::Key { stage: false, .. } | Action::Physical(crate::PhysicalInput::Key { pressed: true, .. }, _) | Action::Press(..) | Action::Focus(..)) {
+                self.focus_owed = None;
+            }
             // State may have requested focus on a newly mounted field. Resolve the
             // new tree before routing this frame's text, not after it has gone to
             // the previous field. The same boundary covers an earlier handler, and lets a
