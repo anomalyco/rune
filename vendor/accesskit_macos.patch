@@ -1,0 +1,52 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index c378985d..2704a744 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -39,11 +39,6 @@ default-target = "x86_64-apple-darwin"
+ name = "accesskit_macos"
+ path = "src/lib.rs"
+ 
+-[[test]]
+-name = "integration"
+-path = "tests/integration/main.rs"
+-harness = false
+-
+ [dependencies.accesskit]
+ version = "0.25.2"
+ 
+@@ -80,6 +75,3 @@ features = [
+     "NSValue",
+     "NSThread",
+ ]
+-
+-[dev-dependencies.libtest-mimic]
+-version = "0.8.2"
+diff --git a/src/node.rs b/src/node.rs
+index 7be2e59b..dfc2ef3a 100644
+--- a/src/node.rs
++++ b/src/node.rs
+@@ -122,7 +122,10 @@ fn ns_role(node: &NodeRef) -> &'static NSAccessibilityRole {
+             Role::Grid => NSAccessibilityTableRole,
+             Role::Group => NSAccessibilityGroupRole,
+             Role::Header => NSAccessibilityGroupRole,
+-            Role::Heading => ns_string!("Heading"),
++            // Rune (vendor/accesskit_macos.patch): AppKit's heading role, which VoiceOver's
++            // rotor and VO-Command-H find, as WebKit and Chromium give it. The published
++            // "Heading" is no role VoiceOver knows.
++            Role::Heading => ns_string!("AXHeading"),
+             Role::Iframe => NSAccessibilityGroupRole,
+             Role::IframePresentational => NSAccessibilityGroupRole,
+             Role::ImeCandidate => NSAccessibilityUnknownRole,
+@@ -355,6 +358,12 @@ impl NodeWrapper<'_> {
+                 return Some(Value::String(label));
+             }
+         }
++        // Rune (vendor/accesskit_macos.patch): a heading's value is its level, as WebKit and
++        // Chromium give VoiceOver ("heading level 2"); Rune sets AccessKit's level one less
++        // (`a11y/node.rs`), and ARIA's default is 2.
++        if self.0.role() == Role::Heading {
++            return Some(Value::Number(self.0.level().map_or(2, |l| l + 1).clamp(1, 9) as f64));
++        }
+         if let Some(value) = self.0.value() {
+             return Some(Value::String(value));
+         }
