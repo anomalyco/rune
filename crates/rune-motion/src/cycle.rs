@@ -2,8 +2,8 @@
 
 /// A looping opacity curve sampled from the wall clock: `stops` are (loop fraction 0–1, opacity)
 /// pairs interpolated linearly; this element is at `frac(t / period - phase)`. Every cycle with
-/// the same period stays in phase. Reduced motion holds `still`. While only cycles move, the
-/// window wakes at `fps` instead of every display frame.
+/// the same period stays in phase. Reduced motion holds `still`. Use [`Cycle::DISPLAY_RATE`]
+/// for a continuous sweep, or a positive `fps` for an intentionally stepped indicator.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Cycle {
     pub period: f32,
@@ -14,6 +14,13 @@ pub struct Cycle {
 }
 
 impl Cycle {
+    /// Sample on the host's display frames, without arming an independent timer.
+    pub const DISPLAY_RATE: f32 = 0.0;
+
+    pub(crate) fn frame_interval(self) -> Option<f64> {
+        (self.fps != Self::DISPLAY_RATE).then(|| f64::from(1.0 / self.fps.max(1.0)))
+    }
+
     pub fn sample(&self, t: f64) -> f32 {
         let x = (t / f64::from(self.period) - f64::from(self.phase)).rem_euclid(1.0) as f32;
         let s = self.stops;

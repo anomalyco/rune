@@ -1,0 +1,1 @@
+- Motion: `Cycle::DISPLAY_RATE` samples a visible opacity cycle on display frames instead of arming a fixed-rate timer. Positive rates keep their existing cadence and reduced motion still holds the cycle's resting pose.
