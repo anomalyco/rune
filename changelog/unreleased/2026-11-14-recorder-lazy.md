@@ -1,0 +1,1 @@
+- **An app that never makes a `Recorder` no longer links its state machine (65,536 B of a minimal release exe).** Every runtime's frame called into the recorders' headless clock; it now goes through hooks the first `Recorder::to_file` sets.
