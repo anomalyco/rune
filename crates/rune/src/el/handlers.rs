@@ -98,6 +98,13 @@ impl El {
     /// # struct App;
     /// el().drag_out(|_: &App| Some(DragItem::new().text("row"))).drag_threshold(3.0);
     /// ```
+    /// A finger on this [`El::on_drag`] element drags it from where it lands: no 8-point slop,
+    /// no long press (a finger held still keeps dragging, as a game's paddle wants), and never a
+    /// pan of the page under it. A mouse is unchanged.
+    pub fn touch_drags_at_once(mut self) -> Self {
+        self.handlers.touch_at_once = true;
+        self
+    }
     pub fn drag_threshold(mut self, points: f32) -> Self {
         self.handlers.drag_threshold = Some(points.max(0.0));
         self
