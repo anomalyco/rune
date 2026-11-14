@@ -684,9 +684,8 @@ pub struct Runtime<S: 'static> {
     focus_before_commit: Option<String>,
     /// `Tx::focus`: the key the next commit focuses, and whether its ring shows.
     focus_request: Option<(String, bool, crate::el::FocusAsk)>,
-    /// `Tx::focus_when_shown` still waiting for its element: the key, the ring, and the focus
-    /// it left (a move from there drops it).
-    focus_owed: Option<(String, bool, Option<String>)>,
+    /// `Tx::focus_when_shown` still waiting for its element: the key and whether its ring shows.
+    focus_owed: Option<(String, bool)>,
     /// This commit's focus is a `Tx::return_focus` hand-back, which a modal opening in it
     /// doesn't take as where focus was.
     focus_returned: bool,
