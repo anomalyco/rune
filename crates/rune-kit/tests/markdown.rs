@@ -368,7 +368,10 @@ fn table_options_drop_the_outline_dim_the_header_and_line_up_figures() {
         let w = |t: &str, f| rune::text::measure(t, &[], f, None).0;
         assert_eq!(w("1111", tnum), w("0000", tnum), "{family:?}");
         assert_ne!(w("1111", plain), w("0000", plain), "{family:?}'s default figures are proportional");
-        assert_eq!(w("draft cursor, updatedAt", tnum), w("draft cursor, updatedAt", plain), "{family:?}");
+        // Words only: Inter's tabular set also covers the space and the comma, as Chromium
+        // measures it ("draft cursor, updatedAt" at 14 px: 153.0625 plain, 153.296875 with 'tnum'),
+        // which widths rounded up to whole points hid until #934.
+        assert_eq!(w("draftCursorUpdatedAt", tnum), w("draftCursorUpdatedAt", plain), "{family:?}");
     }
 }
 

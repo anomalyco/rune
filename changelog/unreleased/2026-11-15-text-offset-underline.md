@@ -1,0 +1,1 @@
+- Text inside an `El::offset` moves with its box again, as a CSS transform moves it, instead of laying out from its exact place: a card gliding toward a moving offset keeps its words on it (#935 let them tick a pixel sideways). Underlines of text elements set side by side meet without overlapping a pixel.
