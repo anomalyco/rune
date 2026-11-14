@@ -1121,6 +1121,12 @@ impl<S: 'static> Runtime<S> {
                     paint_content::LeafBox {
                         r,
                         r_exact,
+                        // Where its exact box comes to rest: a glide's rest (`pixel_snap::motion`),
+                        // else where it is.
+                        exact_at: match rest.filter(|_| n.above.is_none()) {
+                            Some(rest) => [r_exact[0] - (p.rect.x - rest.x) * s, r_exact[1] - (p.rect.y - rest.y) * s],
+                            None => [r_exact[0], r_exact[1]],
+                        },
                         raw_size: [raw_edges[2] - raw_edges[0], raw_edges[3] - raw_edges[1]],
                         contain: pinh.snap.contain.map(|v| v * s),
                         radii,
