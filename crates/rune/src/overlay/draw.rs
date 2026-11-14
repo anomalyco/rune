@@ -119,6 +119,18 @@ impl<T: 'static> Overlay<T> {
             frame::Turn::Rest | frame::Turn::BackedOff => return false,
             frame::Turn::Draw => if !prewarm { self.backoff_step(crate::window::BackoffEvent::Lapsed); },
         }
+        // The swap chain still holds a frame the compositor hasn't shown: this one draws when it
+        // has room, built from what changed by then (`slot`).
+        #[cfg(target_os = "windows")]
+        if let Some(wake) = self.slot_wake.clone() && let Some(live) = self.surface.live_mut() {
+            // SAFETY: the object is the live swap chain's; `Slot` waits on its own copy.
+            let waitable = unsafe { live.surface.as_hal::<wgpu::hal::api::Dx12>().and_then(|h| h.waitable_handle()) };
+            if live.slot.take(waitable.map(|h| h.0), move || wake()) == Take::Later {
+                // The registered wait asks for this frame (`WakeEvent::FrameSlot`): not a miss,
+                // and no timer of its own to turn the loop with (`waits_for_slot`).
+                return false;
+            }
+        }
         let (Some(live), Some(renderer), Some(gpu)) = (self.surface.live_mut(), self.renderer.as_mut(), self.gpu.as_ref()) else {
             return false;
         };
@@ -161,6 +173,9 @@ impl<T: 'static> Overlay<T> {
         if !prewarm { self.meter.redraw(paced || !cfg!(target_os = "macos")); }
         if renderer.srgb_blend() != self.rt.srgb_blend() {
             if !crate::window::reblend(&live.surface, gpu, &mut live.config, renderer, &mut live.alpha, &mut self.rt) { self.surface_refused("its GPU surface refused a new configuration".into()); return false }
+            // A reconfigured swap chain holds none of ours.
+            #[cfg(target_os = "windows")]
+            live.slot.reset();
         }
         let frame = match crate::window::acquire_checked(&live.surface, gpu, &live.config, true, if prewarm { 2 } else { 1 }, &mut self.meter, !read_occlusion) {
             Ok(frame) => frame,
@@ -215,6 +230,9 @@ impl<T: 'static> Overlay<T> {
         let frame = if renderer.srgb_blend() != self.rt.srgb_blend() {
             drop(frame);
             if !crate::window::reblend(&live.surface, gpu, &mut live.config, renderer, &mut live.alpha, &mut self.rt) { self.surface_refused("its GPU surface refused a new configuration".into()); return false }
+            // A reconfigured swap chain holds none of ours.
+            #[cfg(target_os = "windows")]
+            live.slot.reset();
             match crate::window::acquire_checked(&live.surface, gpu, &live.config, true, if prewarm { 2 } else { 1 }, &mut self.meter, !read_occlusion) {
                 Ok(frame) => frame,
                 Err(missed) => {
@@ -260,6 +278,9 @@ impl<T: 'static> Overlay<T> {
             alpha.draw(&mut enc, &view);
         }
         frame::submit_and_present(live, renderer, gpu, &self.rt, enc, frame, prewarm);
+        // The next frame waits for the room this one took (`slot`).
+        #[cfg(target_os = "windows")]
+        live.slot.presented();
         crate::render::gpu_events::presented();
         self.clock.presented(&mut self.rt, Instant::now());
         if !prewarm { self.meter.presented(); }

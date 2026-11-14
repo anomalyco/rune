@@ -599,7 +599,7 @@ fn a_live_edit_patch_wakes_a_hidden_overlay_and_its_next_frame_rebuilds_the_view
     let (mut overlay, _) = Overlay::new(OverlaySpec::new("hot", app.size, view).options(Default::default()), 0u8, &app);
     overlay.rt.wall_start = None;
     let (tx, rx) = std::sync::mpsc::channel();
-    overlay.connect(Arc::new(move || { let _ = tx.send(()); }), Arc::new(|| {}), Rc::default());
+    overlay.connect(Arc::new(move || { let _ = tx.send(()); }), Arc::new(|| {}), Arc::new(|| {}), Rc::default());
     let hub: &'static crate::hot::Hub = Box::leak(Box::default());
     overlay.rt.hot.as_mut().expect("connect attaches the overlay to live edits").move_to(hub);
     while rx.try_recv().is_ok() {}
@@ -642,8 +642,8 @@ fn overlay_setup_runs_once_with_a_waker_that_redraws_the_overlay() {
     let (tx, rx) = std::sync::mpsc::channel();
     let counter = loop_wakes.clone();
     let wake: Waker = Arc::new(move || { counter.fetch_add(1, Ordering::SeqCst); let _ = tx.send(()); });
-    overlay.connect(wake.clone(), Arc::new(|| {}), Rc::default());
-    overlay.connect(wake, Arc::new(|| {}), Rc::default());
+    overlay.connect(wake.clone(), Arc::new(|| {}), Arc::new(|| {}), Rc::default());
+    overlay.connect(wake, Arc::new(|| {}), Arc::new(|| {}), Rc::default());
     assert_eq!(overlay.rt.state.setups, 1, "setup runs once");
     while rx.try_recv().is_ok() {}
     let take = |overlay: &mut Overlay<State>| std::mem::take(&mut *overlay.shared.requests.lock().unwrap());

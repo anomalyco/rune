@@ -38,6 +38,8 @@ use crate::runtime::{Cx, Env, Runtime, Waker};
 use crate::text::TextSystem;
 use crate::tooling::AppSpec;
 use crate::window::{AnyHost, WakeEvent};
+#[cfg(target_os = "windows")]
+use crate::window::slot::{Slot, Take};
 use crate::{ConfiguredOverlay, DisplayTarget, KeyPolicy, OverlayInput, OverlayOptions, OverlayPlacement, OverlaySupport};
 
 #[path = "overlay/draw.rs"]
@@ -279,7 +281,7 @@ impl<T: 'static> OverlayHandle<T> {
 
 /// An overlay before the event loop runs: the shell gives it a wake-up and the GPU pool.
 pub(crate) trait PendingOverlay: AnyHost {
-    fn connect(&mut self, wake: Waker, frame_wake: Waker, gpu: Rc<RefCell<Weak<Gpu>>>);
+    fn connect(&mut self, wake: Waker, frame_wake: Waker, slot_wake: Waker, gpu: Rc<RefCell<Weak<Gpu>>>);
 }
 
 enum Backing {
@@ -307,6 +309,10 @@ struct Live {
     /// Fn presses, which winit doesn't send, while the overlay wants modifier keys.
     #[cfg(target_os = "macos")]
     fn_key: Option<crate::input::fn_key::FnKey>,
+    /// Whether the swap chain can take the next frame, and the wait when it can't
+    /// (`window::slot`). Before the surface so an outstanding wait goes first.
+    #[cfg(target_os = "windows")]
+    slot: Slot,
     alpha: Option<crate::render::surface_alpha::AlphaSurface>,
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
@@ -368,6 +374,9 @@ pub(crate) struct Overlay<T: 'static> {
     hidden_pace: crate::window::HiddenPace,
     #[cfg(target_os = "macos")]
     frame_wake: Option<Waker>,
+    /// Windows: asks the loop for the frame whose swap chain has room (`WakeEvent::FrameSlot`).
+    #[cfg(target_os = "windows")]
+    slot_wake: Option<Waker>,
     meter: crate::frame::surface_stats::SurfaceMeter,
     /// The display `refollow_pointer` last found the pointer on, away from the overlay's.
     refollow_away: Option<winit::monitor::MonitorHandle>,
@@ -442,6 +451,8 @@ impl<T: 'static> Overlay<T> {
             hidden_pace: Default::default(),
             #[cfg(target_os = "macos")]
             frame_wake: None,
+            #[cfg(target_os = "windows")]
+            slot_wake: None,
             meter,
             refollow_away: None,
         };
