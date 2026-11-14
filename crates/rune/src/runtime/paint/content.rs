@@ -237,7 +237,7 @@ impl<S: 'static> Runtime<S> {
             let direct = self.text.emit() == crate::text::outline::Emit::Outline;
             let ins = n.inset.map(|v| v * zk * s);
             let (x0, x1) = (zr[0] + ins[0], zr[2] - ins[2]);
-            let mut origin = [text_x(spec, x0, x1, (flow.full_width() * tk).ceil(), flow.flow()), zr[1] + ins[1]];
+            let mut origin = [text_x(spec, x0, x1, text_width(flow.full_width() * tk), flow.flow()), zr[1] + ins[1]];
             // A gliding box's glyphs and decorations lay out from its nearest whole pixel and move the rest.
             // Within a 64th of a pixel they don't move, but still lay out from that pixel, as at rest.
             let (glide, off) = if gliding && cover.is_none() && scale_motion == ScaleMotion::Still {
@@ -308,7 +308,7 @@ impl<S: 'static> Runtime<S> {
                     let pl_x = match (pl_flow, wrap) {
                         (crate::el::Flow::Ltr, _) => start + pl_indent,
                         (crate::el::Flow::Rtl, Some(_)) => start,
-                        (crate::el::Flow::Rtl, None) => start - pl_indent - (pl.full_width() * tk).ceil(),
+                        (crate::el::Flow::Rtl, None) => start - pl_indent - text_width(pl.full_width() * tk),
                     };
                     let pl_origin = [pl_x, rest_origin[1]];
                     let pl_r_origin = if scale_motion == ScaleMotion::Still { pl_origin } else { [0.0, 0.0] };

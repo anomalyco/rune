@@ -334,6 +334,7 @@ pub(crate) mod web_export;
 #[path = "runtime/commit/text_layout.rs"]
 mod text_layout;
 use text_layout::*;
+pub(crate) use text_layout::text_width;
 #[path = "runtime/commit/flatten.rs"]
 mod flatten;
 use flatten::*;

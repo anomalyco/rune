@@ -11,6 +11,13 @@ impl CeilTo for f32 {
     }
 }
 
+/// `px` device pixels rounded up to a 64th of one, the unit Chromium's layout keeps a text
+/// run's width in (`LayoutUnit`): a label is as wide as its glyphs, so what follows it sits
+/// where Chromium puts it, never up to a pixel further on.
+pub(crate) fn text_width(px: f32) -> f32 {
+    ((px - 1e-3) * 64.0).ceil().max(0.0) / 64.0
+}
+
 /// How far a single-line field's text shifts left (device px) so its caret stays inside
 /// `visible` device px. Unfocused fields rest at their start, like a native text field.
 pub(super) fn single_line_scroll(scrolls: &mut HashMap<String, f32>, path: &str, inp: &crate::el::InputSpec, content: &str, layout: &Layout<Ink>, s: f32, visible: f32) -> f32 {
@@ -361,7 +368,7 @@ pub(super) fn compute_layout(taffy: &mut LayoutEngine, root: SlotId, room: Size<
             let laid = text.layout_text(spec, nodes[i].input.is_some(), scale, w.map(|w| w * scale), parley::Alignment::Start, nodes[i].text_layout.as_ref());
             let l = laid.view();
             // Spaces hanging past a wrapped line's end take no room, as in CSS.
-            let mut lw = ((if w.is_some() { l.width() } else { l.full_width() }) / scale).ceil_to(scale);
+            let mut lw = text_width(if w.is_some() { l.width() } else { l.full_width() }) / scale;
             if (spec.truncate || spec.truncate_fade || spec.max_lines > 0)
                 && let AvailableSpace::Definite(a) = avail.width
             {
