@@ -17,7 +17,7 @@ impl<S: 'static> Runtime<S> {
             let Some(v) = self.virtuals.get_mut(path) else { continue };
             let (offset, pinned) = self.path_ids.get(&v.scroll_path)
                 .and_then(|id| self.scrolls.get(id))
-                .map_or((0.0, false), |s| ((s.offset as f32 - v.top).max(0.0), s.pinned()));
+                .map_or((0.0, false), |s| v.at(s.offset as f32, s.pinned()));
             let range = v.visible_range(offset, pinned);
             if v.reported_visible.as_ref() != Some(&range) {
                 v.reported_visible = Some(range.clone());
@@ -59,7 +59,7 @@ impl<S: 'static> Runtime<S> {
     /// A list's scroll offset within its window, and whether that viewport is pinned to its end.
     fn window_offset(&self, v: &crate::el::virtual_list::VirtualList) -> (f32, bool) {
         self.path_ids.get(&v.scroll_path).and_then(|id| self.scrolls.get(id))
-            .map_or((0.0, false), |s| ((s.offset as f32 - v.top).max(0.0), s.pinned()))
+            .map_or((0.0, false), |s| v.at(s.offset as f32, s.pinned()))
     }
 
     /// Whether an index-built list wants its window moved, and whether one of those lists' own
