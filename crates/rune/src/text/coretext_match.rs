@@ -305,8 +305,35 @@ pub(crate) fn coverage_exponent(mode: FontSmoothing, fill: [f32; 4], apple: bool
     // Linux's curve is for `Off` only (a fit, not yet a Linux capture); Chromium-weight outline
     // modes keep the curve they were drawn with everywhere.
     let [black, white] = if windows || apple || mode != FontSmoothing::Off { WINDOWS_GAMMA } else { LINUX_GAMMA };
-    let luma = (0.2126 * fill[0] + 0.7152 * fill[1] + 0.0722 * fill[2]) / fill[3];
-    black + (white - black) * luma.clamp(0.0, 1.0)
+    let luma = ((0.2126 * fill[0] + 0.7152 * fill[1] + 0.0722 * fill[2]) / fill[3]).clamp(0.0, 1.0);
+    let line = black + (white - black) * luma;
+    if windows { line + windows_correction(luma * 255.0) } else { line }
+}
+
+/// What Chromium's grayscale text on Windows adds to `WINDOWS_GAMMA`'s straight line, by the
+/// text's luma (0-255, as the line reads it: the fill reaches here sRGB-encoded). Chromium picks
+/// one of Skia's eight gamma tables by the colour's luma (`windows/skia_gamma.rs`), and those
+/// aren't a line: luma 32-127 keeps nearly black's weight before it falls, and white ends a little
+/// heavier than 0.45. Each point is the exponent that gives Windfoil's coverage Chromium's ink for
+/// a grey of that luma (Inter and Plex Mono, 1x and 1.875x), less the line's; the line already
+/// draws Chromium's ink to within 1.5% at black, `#161616`, `#808080` and `#aeaeae`, so the
+/// correction is 0 around those and they draw exactly as before.
+const WINDOWS_CORRECTION: [(f32, f32); 15] = [
+    (22.5, 0.0), (48.0, 0.143), (80.0, 0.148), (92.0, 0.177), (112.0, 0.107), (127.5, 0.0), (128.5, 0.0),
+    (144.0, 0.078), (173.5, 0.0), (174.5, 0.0), (208.0, -0.055), (240.0, -0.092), (250.0, -0.067), (255.0, -0.055),
+    (256.0, -0.055),
+];
+
+/// [`WINDOWS_CORRECTION`] at `luma` (0-255), linear between its points and 0 below the first.
+fn windows_correction(luma: f32) -> f32 {
+    let mut prev = (0.0, 0.0);
+    for (at, by) in WINDOWS_CORRECTION {
+        if luma <= at {
+            return prev.1 + (by - prev.1) * (luma - prev.0) / (at - prev.0);
+        }
+        prev = (at, by);
+    }
+    prev.1
 }
 
 #[cfg(test)]
