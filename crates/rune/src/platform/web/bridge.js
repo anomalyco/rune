@@ -791,6 +791,7 @@ export function focusA11y(h, json) {
         return;
     }
     if (f.o === 'textbox') h.textarea.setAttribute('aria-label', f.t || 'Text input');
+    if (f.f) h.textarea.setAttribute('aria-label', f.f);
     h.focusTurn ^= 1;
     const el = h.focusProxies[h.focusTurn];
     for (const a of [...el.attributes]) if (a.name === 'role' || a.name.startsWith('aria-')) el.removeAttribute(a.name);

@@ -603,7 +603,14 @@ impl<S: 'static> Runtime<S> {
         mirror.focus_at = at;
         // A field naming a highlighted row (`El::active_descendant`, the palette's): the row is
         // what a reader is told about, as the native trees hand it focus.
-        let next = self.focused_index().map(|i| self.web_focus_item(self.a11y_active_descendant(i).unwrap_or(i)).to_string()).unwrap_or_default();
+        let next = self.focused_index().map(|i| match self.a11y_active_descendant(i) {
+            Some(row) => {
+                let mut item = self.web_focus_item(row);
+                if let Some(o) = item.as_object_mut() { o.insert("f".into(), json!(self.mirror_name(i).unwrap_or_default())); }
+                item.to_string()
+            }
+            None => self.web_focus_item(i).to_string(),
+        }).unwrap_or_default();
         if mirror.focus_json == next { return None; }
         mirror.focus_json = next;
         Some(&mirror.focus_json)
