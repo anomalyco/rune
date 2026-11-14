@@ -268,7 +268,7 @@ impl Atlas {
     #[cfg(test)]
     pub(crate) fn glyph_entries(&self) -> usize { self.map.len() }
 
-    pub(super) fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Atlas {
             // Made with the first mask (`alloc`).
             data: Vec::new(),
