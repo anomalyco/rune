@@ -469,7 +469,14 @@ impl super::Device {
             let _ = unsafe { list.Close() };
             let first = t.elapsed().as_micros();
             let t = std::time::Instant::now();
-            let _ = unsafe { list.Reset(&allocator, None) };
+            let own: Direct3D12::ID3D12CommandAllocator = unsafe { self.raw.CreateCommandAllocator(Direct3D12::D3D12_COMMAND_LIST_TYPE_DIRECT) }.unwrap();
+            let made = t.elapsed().as_micros();
+            let t2 = std::time::Instant::now();
+            let _ = unsafe { list.Reset(&own, None) };
+            let _ = unsafe { list.Close() };
+            eprintln!("ib3-hal: touch {i} own allocator made {made} us, reset {} us", t2.elapsed().as_micros());
+            let t = std::time::Instant::now();
+            let _ = unsafe { list.Reset(&own, None) };
             let _ = unsafe { list.Close() };
             eprintln!("ib3-hal: touch {i} first {first} us, second {} us on {:?}", t.elapsed().as_micros(), std::thread::current().name());
         }
