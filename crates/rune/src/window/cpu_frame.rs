@@ -133,8 +133,9 @@ pub(super) enum GpuJob {
     /// `retry_at`.
     Waiting { tries: u8, retry_at: Option<Instant> },
     /// Being made on `thread` since `since`; it reports through `slot`. `raised`: the thread runs
-    /// at normal priority now (`RAISE_AFTER`).
-    Building { slot: Arc<Mutex<Option<Result<Prepared, String>>>>, thread: std::thread::JoinHandle<()>, since: Instant, raised: bool, tries: u8 },
+    /// at normal priority now (`RAISE_AFTER`). `latest`: the last CPU frame's instances, which the
+    /// thread draws once before it reports (`warm_frame`).
+    Building { slot: Arc<Mutex<Option<Result<Prepared, String>>>>, latest: Arc<Mutex<Vec<crate::render::Instance>>>, thread: std::thread::JoinHandle<()>, since: Instant, raised: bool, tries: u8 },
     /// It failed `TRIES` times: the window stays on the CPU.
     Failed,
 }
@@ -388,6 +389,9 @@ impl<S: 'static> Host<S> {
         let update_ms = now.elapsed().as_secs_f64() * 1000.0;
         sync_platform(l, rt, &mut self.secure_input, &mut self.ime_allowed, &self.clipboard);
         let (width, height) = (l.config.width, l.config.height);
+        if let SurfaceMode::Cpu { job: GpuJob::Building { latest, .. }, .. } = &l.native.mode {
+            *latest.lock().unwrap_or_else(|e| e.into_inner()) = warm_instances(&rt.instances);
+        }
         let painted = {
             let (SurfaceMode::Cpu { cpu, .. } | SurfaceMode::HandingOver { cpu, .. }) = &mut l.native.mode else { return };
             cpu.painter.fill_masks(&mut rt.text.atlas);
@@ -504,8 +508,10 @@ impl<S: 'static> Host<S> {
         let Some(hwnd) = crate::platform::win32::hwnd(&w.window) else { *job = GpuJob::Failed; return };
         let slot = Arc::new(Mutex::new(None));
         let (out, handle, srgb, size) = (slot.clone(), self.native_handle.clone(), self.rt.srgb_blend(), (w.config.width, w.config.height));
-        // What the window draws now, for the GPU thread's first frame of its own (`warm_frame`).
-        let instances = warm_instances(&self.rt.instances, size);
+        // What the window draws, for the GPU thread's first frame of its own (`warm_frame`): each CPU
+        // frame until then replaces it.
+        let latest = Arc::new(Mutex::new(warm_instances(&self.rt.instances)));
+        let instances = latest.clone();
         let features = self.comp.as_ref().map_or(wgpu::Features::empty(), |c| c.features());
         let hwnd = hwnd as isize;
         let spawned = std::thread::Builder::new().name("rune-gpu-window".into()).spawn(move || {
@@ -515,7 +521,7 @@ impl<S: 'static> Host<S> {
             handle.send(WakeEvent::GpuReady);
         });
         match spawned {
-            Ok(thread) => { crate::marks::mark("gpu.window.start"); *job = GpuJob::Building { slot, thread, since: Instant::now(), raised: !below, tries: tries + 1 }; }
+            Ok(thread) => { crate::marks::mark("gpu.window.start"); *job = GpuJob::Building { slot, latest, thread, since: Instant::now(), raised: !below, tries: tries + 1 }; }
             Err(error) => self.fail_gpu(format!("its thread couldn't start: {error}"), tries + 1),
         }
     }
@@ -741,7 +747,7 @@ static FIRST_GPU: AtomicBool = AtomicBool::new(false);
 
 /// On the GPU thread: the device (the one `warm_gpu` made, if it did), the renderer, the
 /// uncommitted visual and a swap chain on it, configured for `size`.
-fn prepare(hwnd: isize, size: (u32, u32), srgb: bool, features: wgpu::Features, instances: &[crate::render::Instance]) -> Result<Prepared, String> {
+fn prepare(hwnd: isize, size: (u32, u32), srgb: bool, features: wgpu::Features, latest: &Mutex<Vec<crate::render::Instance>>) -> Result<Prepared, String> {
     let handover = Handover::new(hwnd)?;
     let visual = handover.visual();
     // SAFETY: the visual stays alive while the surface does: the surface takes its own reference
@@ -752,16 +758,20 @@ fn prepare(hwnd: isize, size: (u32, u32), srgb: bool, features: wgpu::Features, 
     configure(&surface, &gpu, &config)?;
     let target_format = if srgb { config.format.remove_srgb_suffix() } else { config.format };
     let mut renderer = renderer.unwrap_or_else(|| Renderer::new(&gpu.device, target_format));
-    warm_frame(&gpu, &mut renderer, target_format, (config.width, config.height), instances);
+    let instances = std::mem::take(&mut *latest.lock().unwrap_or_else(|e| e.into_inner()));
+    warm_frame(&gpu, &mut renderer, target_format, (config.width, config.height), &instances);
     crate::marks::mark("gpu.window.warmed");
     Ok(Prepared { gpu, renderer, surface, config, handover })
 }
 
-/// On the GPU thread, before the hand-over: the renderer draws what the window draws once, into a
-/// target of the swap chain's format, and waits for the GPU. Its first frame's costs (the driver's
-/// shaders compiled at first use, the layer targets, the staging space, the instance buffer) are
-/// paid here, so the hand-over frame on the app's thread costs what a frame does. The atlas is an
-/// empty one: the glyphs land with the hand-over frame's own prepare.
+/// On the GPU thread, before the hand-over: the renderer draws the window's latest CPU frame once,
+/// into a target of the swap chain's format, and waits for the GPU. Its first frame's costs are
+/// paid here, so the hand-over frame on the app's thread costs what a frame does: the pipelines
+/// its layers' formats need, its layers' targets (the hand-over frame's layers are the latest
+/// frame's, or nearly), the staging space, the instance buffer, and D3D12 command lists, a
+/// millisecond each to make on Intel's driver and two for each render pass (wgpu records a
+/// pass's barriers in a list of its own). The atlas is an empty one: the glyphs land with the
+/// hand-over frame's own prepare.
 fn warm_frame(gpu: &Gpu, renderer: &mut Renderer, format: wgpu::TextureFormat, size: (u32, u32), instances: &[crate::render::Instance]) {
     let target = gpu.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("rune warm frame"),
@@ -779,21 +789,29 @@ fn warm_frame(gpu: &Gpu, renderer: &mut Renderer, format: wgpu::TextureFormat, s
     renderer.prepare(&gpu.device, &gpu.queue, &mut atlas, instances, size);
     renderer.draw(&mut enc, &view, [0.0; 4]);
     renderer.submit(&gpu.queue, enc);
+    // A reserve of command lists in the encoder the hand-over frame takes first (the pool hands
+    // back the last one finished): the frames that fade in after it draw more layers.
+    let mut reserve = gpu.device.create_command_encoder(&Default::default());
+    for _ in 0..RESERVE_PASSES {
+        let _ = reserve.begin_render_pass(&wgpu::RenderPassDescriptor {
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment { view: &view, depth_slice: None, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store } })],
+            ..Default::default()
+        });
+    }
+    gpu.queue.submit([reserve.finish()]);
     let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
 }
 
-/// The last CPU frame's instances as the warm frame draws them: what reads the app's own state
-/// (an image's slot, a glyph's atlas page, a compositor's effect) draws as a plain box, so the
-/// frame needs nothing but the renderer. They draw twice: as they are, and again inside a
-/// half-opaque layer the size of the window, because the frames after the first one often fade
-/// something in (an entrance) and a layer is the costliest first use: its target, its format's
-/// pipelines and their compile in the driver. The layer's target stays in the renderer's pool.
-fn warm_instances(instances: &[crate::render::Instance], size: (u32, u32)) -> Vec<crate::render::Instance> {
-    use crate::render::{Instance, KIND_EFFECT, KIND_GLYPH, KIND_IMAGE, KIND_LAYER, KIND_LAYER_END, KIND_RECT};
-    use bytemuck::Zeroable;
-    let plain: Vec<Instance> = instances
+/// Empty render passes the warm frame records for its reserve of command lists (two a pass).
+const RESERVE_PASSES: usize = 16;
+
+/// A CPU frame's instances as the warm frame draws them: what reads the app's own state (an
+/// image's slot, a glyph's atlas page, a compositor's effect) draws as a plain box, so the frame
+/// needs nothing but the renderer.
+fn warm_instances(instances: &[crate::render::Instance]) -> Vec<crate::render::Instance> {
+    use crate::render::{KIND_EFFECT, KIND_GLYPH, KIND_IMAGE, KIND_RECT};
+    instances
         .iter()
-        .filter(|i| i.params[1] != KIND_LAYER && i.params[1] != KIND_LAYER_END)
         .map(|i| {
             let mut i = *i;
             if i.params[1] == KIND_IMAGE || i.params[1] == KIND_EFFECT {
@@ -803,12 +821,7 @@ fn warm_instances(instances: &[crate::render::Instance], size: (u32, u32)) -> Ve
             }
             i
         })
-        .collect();
-    let whole = [0.0, 0.0, size.0 as f32, size.1 as f32];
-    let layer = Instance { rect: whole, fill: [0.0, 0.0, 0.0, 0.5], params: [0.0, KIND_LAYER, 0.0, 0.0], clip: whole, ..Instance::zeroed() };
-    let cover = Instance { rect: whole, fill: [0.5, 0.5, 0.5, 1.0], params: [0.0, KIND_RECT, 0.0, 0.0], clip: whole, ..Instance::zeroed() };
-    let end = Instance { params: [0.0, KIND_LAYER_END, 0.0, 0.0], ..Instance::zeroed() };
-    plain.iter().copied().chain([layer, cover]).chain(plain.iter().copied()).chain([end]).collect()
+        .collect()
 }
 
 /// On a worker: maps the GPU frame's copy, counts the pixels that differ from the CPU's buffer
