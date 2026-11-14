@@ -137,6 +137,7 @@ impl Renderer {
     pub fn upload_images(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, images: &mut ImageAtlas) {
         if images.pages.is_empty() && self.images.is_empty() { return self.refresh_layer_bindings(device); }
         let staging = self.uploads.staging(device, queue);
+        crate::marks::mark("ho.p.staging");
         if staging.lost() != self.uploads.lost.1 {
             self.uploads.lost.1 = staging.lost();
             for page in &mut images.pages { page.dirty = Some((0, page.height)); }
@@ -215,11 +216,14 @@ impl Renderer {
             atlas.invalidate();
         }
         atlas.outlines.set_support(self.uber.support());
+        crate::marks::mark("ho.p.windfoil");
         self.lcd_frame = self.lcd_ready(device, atlas.lcd_wanted) && atlas.lcd;
+        crate::marks::mark("ho.p.lcd");
         if let Some(rows) = atlas.dirty.take() {
             atlas.rows_uploaded(0, rows);
             Self::write_rows(&staging, &self.atlas, &atlas.data, rows);
         }
+        crate::marks::mark("ho.p.atlas0");
         let mut atlas_changed = self.atlas_pages.len() > atlas.pages.len();
         self.atlas_pages.truncate(atlas.pages.len());
         let filled = self.uber.outlines().is_some();
@@ -235,15 +239,19 @@ impl Renderer {
                 Self::write_rows(&staging, &self.atlas_pages[index].0, &atlas.pages[index].data, rows);
             }
         }
+        crate::marks::mark("ho.p.pages");
         if atlas_changed { self.images_changed(); }
         self.upload_outlines(device, &staging, atlas);
+        crate::marks::mark("ho.p.outlines");
         self.fill_atlas(device, queue, &staging, atlas);
+        crate::marks::mark("ho.p.fill");
         if instances.len() > self.capacity {
             self.capacity = instances.len().next_power_of_two();
             self.instances = Self::instance_buffer(device, self.capacity);
             self.uploads.forget_instances();
         }
         self.write_instances(&staging, instances);
+        crate::marks::mark("ho.p.instances");
         // Geometry uploads must preserve a presentation timestamp already latched this frame.
         if self.uploads.viewport.swap(pack(viewport), Ordering::Relaxed) != pack(viewport) {
             staging.write_buffer(&self.globals, 0, bytemuck::cast_slice(&[viewport.0 as f32, viewport.1 as f32]));
@@ -261,8 +269,10 @@ impl Renderer {
             // Same batches: only the effects' copies of their instances can be out of date.
             for (at, effect) in &mut self.effects { *effect = instances[*at as usize]; }
         }
+        crate::marks::mark("ho.p.batched");
         let has_layers = self.uploads.has_layers;
         self.prepare_layers(device, queue, if has_layers { instances } else { &[] }, viewport);
+        crate::marks::mark("ho.p.layers");
         self.sync_resident_caches(&mut atlas.resident_caches);
         if self.effects.iter().any(|(_, i)| i.params[0] != 0.0 || i.params[1] == KIND_BACKDROP_BLUR) {
             self.ensure_backdrop(device, self.format, viewport);
@@ -273,7 +283,9 @@ impl Renderer {
                 self.ensure_backdrop(device, layers::FORMAT, viewport);
             }
         }
+        crate::marks::mark("ho.p.backdrop");
         self.prepare_backdrop_blur(device, queue, viewport);
+        crate::marks::mark("ho.p.blur");
         #[cfg(all(feature = "alloc-sites", not(target_arch = "wasm32")))]
         self.report_pools();
     }
