@@ -31,7 +31,11 @@ fn book() -> std::sync::MutexGuard<'static, Book> {
 }
 
 /// Records `name` at now, unless it was reached before. An app marks its own steps here too.
+/// IB-3 measuring: the warm frame's own steps don't take the hand-over's `ho.` marks.
+pub static WARMING: AtomicBool = AtomicBool::new(false);
+
 pub fn mark(name: &'static str) {
+    if name.starts_with("ho.") && WARMING.load(Ordering::Relaxed) { return; }
     let now = Instant::now();
     let mut book = book();
     if !book.marks.iter().any(|(n, _)| *n == name) {
