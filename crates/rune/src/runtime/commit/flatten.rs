@@ -569,6 +569,7 @@ fn flatten_owned(
         ime_cursor: flags.has(ElFlags::IME_CURSOR),
         ime_option_as_alt: option_as_alt,
         moved_stub: false,
+        epoch: crate::runtime::paint_keep::next_epoch(),
     });
     let child_in_row = match in_row {
         RowLayout::Free if parent_is_stack => if animate_layout { RowLayout::Horizontal } else { RowLayout::Snaps },
@@ -772,6 +773,7 @@ fn flatten_ref(
         ime_cursor: flags.has(ElFlags::IME_CURSOR),
         ime_option_as_alt: el.cold.option_as_alt,
         moved_stub: false,
+        epoch: crate::runtime::paint_keep::next_epoch(),
     });
     let child_in_row = match in_row {
         RowLayout::Free if parent_is_stack => if animate_layout { RowLayout::Horizontal } else { RowLayout::Snaps },

@@ -781,6 +781,11 @@ impl Scene {
         FrameOutput { changed: &self.out, exited: self.exited.as_slice(), events: self.store.events(), animating }
     }
 
+    /// What [`frame`](Self::frame) and any [`present`](Self::present) since presented.
+    pub fn changed(&self) -> &[Presented] {
+        &self.out
+    }
+
     /// Presents what was set or animated since [`frame`](Self::frame), without stepping time,
     /// so a value worked out from something that frame moved afterwards (a scroll offset)
     /// shows in the same frame. The motion trace, already written for that frame, records them

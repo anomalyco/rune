@@ -27,7 +27,7 @@ pub(crate) struct FileDrag {
     hovered: Option<(Aim, Option<DropHoverFn>)>,
     /// This frame's drop targets: (node, visible rect in points, `hits.len()` before it). Kept
     /// apart from `hits`, so a drop zone doesn't cover the context menus and help under it.
-    hits: Vec<(NodeId, [f32; 4], usize)>,
+    pub(crate) hits: Vec<(NodeId, [f32; 4], usize)>,
     /// File steps waiting for this frame's build (`hold_files`), and whether those leading the
     /// queue already waited one.
     held: Vec<Queued>,

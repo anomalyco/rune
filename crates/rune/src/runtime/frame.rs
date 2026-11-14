@@ -786,6 +786,7 @@ impl<S: 'static> Runtime<S> {
         self.end_unseen_exits();
         let out = self.scene.frame();
         let (mut animating, exited) = (out.animating, !out.exited.is_empty());
+        self.paint_keep.frame += 1;
         // Tracks that only wait for a delayed start (`El::enter_delay`, a delayed `Anim`)
         // draw nothing new until it: sleep, and wake for it after the build.
         let mut waits = if animating { self.scene.store().waiting_until() } else { None };
@@ -825,6 +826,7 @@ impl<S: 'static> Runtime<S> {
             animating = sources != 0;
             self.scene.present();
         }
+        self.paint_keep.moved.extend(self.scene.changed().iter().map(|p| p.node));
         let mut source = |on: bool, bit: u16| { if on { sources |= bit; } on };
         self.begin_exit_mask();
         animating |= self.build();

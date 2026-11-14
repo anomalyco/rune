@@ -6,6 +6,7 @@ impl<S: 'static> Runtime<S> {
         let (_paint_time, _blend) = (crate::frame::profile::Scope::new(crate::frame::profile::Phase::Paint), crate::theme::scope(self.srgb_blend));
         let s = self.env.scale;
         let snap_px = |v: f32| grid(v, s) * s;
+        self.keep_swap();
         self.instances.clear();
         self.quads_frame += 1;
         // Quads a text hasn't drawn with for a while go, with the layouts they hold.
@@ -110,9 +111,13 @@ impl<S: 'static> Runtime<S> {
                 || self.scene.presented(n.id).is_some_and(|p| (p.opacity > 0.0 && p.opacity < 1.0) || p.blur > 0.0 || p.transform.rotate.abs() > 1e-6))
         });
         let default_ring = self.default_ring_owner();
+        self.keep_begin(tree_order, vp, default_ring, &sel_ranges, &mark_ranges);
         let mut active_cache: Option<ActiveCache> = None;
         self.pixel_snap.begin_frame(self.t, [vp[2], vp[3]]);
+        // One past the subtree the last one copied from the last paint.
+        let mut skip_to = 0;
         for paint_index in 0..n_nodes {
+            if paint_index < skip_to { continue; }
             let i = if tree_order { self.layer_paint_order[paint_index] } else { paint_index };
             if let Some(rank) = self.paint_rank.as_mut() {
                 rank.resize(n_nodes, 0);
@@ -133,6 +138,7 @@ impl<S: 'static> Runtime<S> {
                     }
                 }
             }
+            self.keep_close(Some(node_parent), &mut layers, &mut active_cache, &mut glyph_count);
             while let Some(&(ancestor, start, surface_start)) = layers.last() {
                 let mut parent = node_parent;
                 while parent.is_some_and(|p| p != ancestor) { parent = self.nodes[parent.unwrap()].parent; }
@@ -145,6 +151,7 @@ impl<S: 'static> Runtime<S> {
                 }
                 layers.pop();
             }
+            self.keep_open(i, glyph_count, &sel_ranges, &mark_ranges);
             let n = &self.nodes[i];
             let Some(p) = self.scene.presented(n.id) else { continue };
             let mut pinh = n.parent.map_or_else(|| self.root_inh(), |pr| self.inh_scratch[pr]);
@@ -205,6 +212,11 @@ impl<S: 'static> Runtime<S> {
                     pinh.paint_fade_origin[slot] = origin;
                 }
             }
+            if let Some(len) = self.keep_or_paint(i, &pinh, &mut glyph_count) {
+                skip_to = paint_index + len;
+                continue;
+            }
+            let n = &self.nodes[i];
             if raised {
                 // Out of its ancestors' layers: their opacity applies directly instead.
                 pinh.paint_opacity = pinh.opacity;
@@ -1248,7 +1260,10 @@ impl<S: 'static> Runtime<S> {
             if self.has_sticky {
                 self.fade_below_header(i, s);
             }
+            self.keep_painted(i, own_turn.is_none() && !opens_snap_layer && snap_layer == 0 && !in_cache && !skip_paint && cover.is_none() && !lift && !raised);
         }
+        self.keep_close(None, &mut layers, &mut active_cache, &mut glyph_count);
+        self.keep_end();
         while let Some((_, start, surface_start)) = layers.pop() {
             if active_cache.is_some_and(|ac| ac.instance_start == start) {
                 let ac = active_cache.take().unwrap();
