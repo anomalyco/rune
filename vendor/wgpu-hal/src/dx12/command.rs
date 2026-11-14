@@ -401,6 +401,12 @@ impl crate::CommandEncoder for super::CommandEncoder {
             }
         };
 
+        // A list made ahead, when this encoder has none to reuse (`Device::reserve_command_lists`).
+        let list = list.or_else(|| {
+            let spare = self.shared.spare_lists.lock().0.pop()?;
+            unsafe { spare.Reset(&self.allocator, None) }.is_ok().then_some(spare)
+        });
+
         let list = if let Some(list) = list {
             list
         } else {

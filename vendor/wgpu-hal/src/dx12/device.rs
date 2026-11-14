@@ -139,6 +139,7 @@ impl super::Device {
         let shared = super::DeviceShared {
             adapter,
             zero_buffer,
+            spare_lists: Mutex::new((Vec::new(), None)),
             cmd_signatures: super::CommandSignatures {
                 draw: Self::create_command_signature(
                     &raw,
@@ -456,6 +457,32 @@ impl super::Device {
 
     pub fn raw_device(&self) -> &Direct3D12::ID3D12Device {
         &self.raw
+    }
+
+    /// Makes `count` command lists now, for encoders that have none of their own to reuse to
+    /// take later: a list costs about a millisecond to make on some drivers (Intel's), and a frame
+    /// with layers takes two for each render pass. Lists past `count` already made are kept.
+    pub fn reserve_command_lists(&self, count: usize) -> Result<(), crate::DeviceError> {
+        let mut spare = self.shared.spare_lists.lock();
+        let allocator = match &spare.1 {
+            Some(allocator) => allocator.clone(),
+            None => {
+                let allocator: Direct3D12::ID3D12CommandAllocator =
+                    unsafe { self.raw.CreateCommandAllocator(Direct3D12::D3D12_COMMAND_LIST_TYPE_DIRECT) }
+                        .into_device_result("Command allocator creation")?;
+                spare.1 = Some(allocator.clone());
+                allocator
+            }
+        };
+        while spare.0.len() < count {
+            let list: Direct3D12::ID3D12GraphicsCommandList = unsafe {
+                self.raw.CreateCommandList(0, Direct3D12::D3D12_COMMAND_LIST_TYPE_DIRECT, &allocator, None)
+            }
+            .into_device_result("Create command list")?;
+            unsafe { list.Close() }.into_device_result("GraphicsCommandList::close")?;
+            spare.0.push(list);
+        }
+        Ok(())
     }
 
     pub fn raw_queue(&self) -> &Direct3D12::ID3D12CommandQueue {

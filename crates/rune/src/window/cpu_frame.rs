@@ -770,7 +770,7 @@ fn prepare(hwnd: isize, size: (u32, u32), srgb: bool, features: wgpu::Features, 
 /// its layers' formats need, its layers' targets (the hand-over frame's layers are the latest
 /// frame's, or nearly), the staging space, the instance buffer, and D3D12 command lists, a
 /// millisecond each to make on Intel's driver and two for each render pass (wgpu records a
-/// pass's barriers in a list of its own). The atlas is an empty one: the glyphs land with the
+/// pass's barriers in a list of its own; `RESERVED_LISTS`). The atlas is an empty one: the glyphs land with the
 /// hand-over frame's own prepare.
 fn warm_frame(gpu: &Gpu, renderer: &mut Renderer, format: wgpu::TextureFormat, size: (u32, u32), instances: &[crate::render::Instance]) {
     let target = gpu.device.create_texture(&wgpu::TextureDescriptor {
@@ -789,21 +789,18 @@ fn warm_frame(gpu: &Gpu, renderer: &mut Renderer, format: wgpu::TextureFormat, s
     renderer.prepare(&gpu.device, &gpu.queue, &mut atlas, instances, size);
     renderer.draw(&mut enc, &view, [0.0; 4]);
     renderer.submit(&gpu.queue, enc);
-    // A reserve of command lists in the encoder the hand-over frame takes first (the pool hands
-    // back the last one finished): the frames that fade in after it draw more layers.
-    let mut reserve = gpu.device.create_command_encoder(&Default::default());
-    for _ in 0..RESERVE_PASSES {
-        let _ = reserve.begin_render_pass(&wgpu::RenderPassDescriptor {
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment { view: &view, depth_slice: None, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store } })],
-            ..Default::default()
-        });
+    // Command lists for whichever encoders the hand-over frame and the frames after it take: the
+    // ones the warm frame made stay with its own encoders.
+    // SAFETY: only Rune's own call on the raw device, which is alive.
+    if let Some(hal) = unsafe { gpu.device.as_hal::<wgpu::hal::api::Dx12>() } {
+        let _ = hal.reserve_command_lists(RESERVED_LISTS);
     }
-    gpu.queue.submit([reserve.finish()]);
     let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
 }
 
-/// Empty render passes the warm frame records for its reserve of command lists (two a pass).
-const RESERVE_PASSES: usize = 16;
+/// Command lists made ahead on the GPU thread: a frame takes two for each render pass, and one
+/// that fades a dozen layers in takes about 50.
+const RESERVED_LISTS: usize = 64;
 
 /// A CPU frame's instances as the warm frame draws them: what reads the app's own state (an
 /// image's slot, a glyph's atlas page, a compositor's effect) draws as a plain box, so the frame
