@@ -72,6 +72,29 @@ unsafe fn gnome_animations() -> Option<bool> {
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 pub(crate) fn reduced_motion() -> bool { false }
 
+/// Whether the system asks apps for more contrast: macOS's Increase Contrast (Accessibility >
+/// Display), or a Windows contrast theme. `RUNE_INCREASE_CONTRAST=1` reports it on, for captures
+/// and checks, without turning it on for the whole machine. Read as [`reduced_motion`] is, and on
+/// macOS again when the display options change (`a11y/macos.rs`).
+pub(crate) fn increased_contrast() -> bool {
+    if std::env::var_os("RUNE_INCREASE_CONTRAST").is_some_and(|v| v == "1") { return true; }
+    #[cfg(target_os = "macos")]
+    {
+        use objc2::{class, msg_send};
+        // SAFETY: NSWorkspace's shared instance lives for the process; the selector returns an
+        // Objective-C BOOL. Native hosts call on the UI thread.
+        unsafe {
+            let workspace: *mut objc2::runtime::AnyObject = msg_send![class!(NSWorkspace), sharedWorkspace];
+            let more: objc2::runtime::Bool = msg_send![workspace, accessibilityDisplayShouldIncreaseContrast];
+            more.as_bool()
+        }
+    }
+    #[cfg(target_os = "windows")]
+    { contrast().is_some() }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    { false }
+}
+
 /// The colours a system contrast theme asks every app to paint with (Windows' Contrast themes,
 /// CSS `forced-colors`' system colours), in linear sRGB as Rune's colours are.
 #[derive(Clone, Copy, Debug, PartialEq)]
