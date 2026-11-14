@@ -725,6 +725,8 @@ export function syncA11y(h, json) {
         const css = itemStyle(h, item, parent ? parent.r : [0, 0]);
         if (el._css !== css) { el._css = css; el.style.cssText = css; }
         if (item.i) el.id = item.i; else el.removeAttribute('id');
+        // `El::description` and `El::described_by`'s words: what a reader says after the name.
+        if (item.d) el.setAttribute('aria-description', item.d); else el.removeAttribute('aria-description');
         // A table's parts: the role says what the div is (`aria_role`).
         if ((el.getAttribute('role') ?? undefined) !== item.o && item.k === 'group') {
             if (item.o) el.setAttribute('role', item.o); else el.removeAttribute('role');

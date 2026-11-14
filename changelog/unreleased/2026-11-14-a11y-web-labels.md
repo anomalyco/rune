@@ -1,0 +1,1 @@
+- Web: the page's mirror names a control, link, image, heading or landmark by the words of the element `El::labelled_by` names when it has no label of its own, and gives it `aria-description` from `El::description` or `El::described_by`'s words, as the native tree does.
