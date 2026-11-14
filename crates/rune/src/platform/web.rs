@@ -935,7 +935,10 @@ impl<S: 'static> Browser<S> {
             r.presented = true;
             self.first_at = Some(now);
             let proxy = self.proxy.clone();
-            after(QUIET, move || { let _ = proxy.send_event(Wake::StartGpu); });
+            // A browser that compiles pipelines asynchronously is asked in the task after this
+            // frame: nothing waits for quiet there (`maybe_start_gpu`).
+            let first_look = if pipelines::browser_compiles_async() { Duration::ZERO } else { QUIET };
+            after(first_look, move || { let _ = proxy.send_event(Wake::StartGpu); });
             crate::marks::mark("web.first.presented");
             r.input.presented();
             // In a task of its own: a click or key that came with the first frame is handled

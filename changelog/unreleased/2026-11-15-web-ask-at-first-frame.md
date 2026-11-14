@@ -1,0 +1,1 @@
+- In a browser that compiles pipelines asynchronously, a page that starts on the CPU asks for the GPU in the task right after its first frame, not 250 ms later.
