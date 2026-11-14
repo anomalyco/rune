@@ -579,7 +579,9 @@ impl<S: 'static> Host<S> {
         let tab_visits_controls = app.tab_visits_controls;
         let fit_height = app.fit_content_height;
         let float_on_open = app.float_on_open;
-        let (open_inactive, open_as) = (app.open_inactive, app.open_as);
+        // `RUNE_OPEN_INACTIVE`: a tool's launch (an accessibility probe, a capture) leaves the user's
+        // focus and keyboard where they are, as `App::open_inactive` does.
+        let (open_inactive, open_as) = (app.open_inactive || std::env::var_os("RUNE_OPEN_INACTIVE").is_some(), app.open_as);
         let app_stats = app.dev_stats;
         let (playground, attach_playground) = (app.playground.take(), app.attach_playground);
         let (mut spec, state, shared) = app.into_parts(args.scene.as_deref());
