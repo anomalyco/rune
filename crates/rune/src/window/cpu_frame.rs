@@ -797,10 +797,15 @@ fn warm_frame(gpu: &Gpu, renderer: &mut Renderer, format: wgpu::TextureFormat, s
     });
     let view = target.create_view(&Default::default());
     let mut atlas = crate::text::Atlas::new();
+    crate::marks::WARMING.store(true, std::sync::atomic::Ordering::Relaxed);
+    crate::marks::mark("warm.begin");
     let mut enc = gpu.device.create_command_encoder(&Default::default());
     renderer.prepare(&gpu.device, &gpu.queue, &mut atlas, instances, size);
+    crate::marks::mark("warm.prepared");
     renderer.draw(&mut enc, &view, [0.0; 4]);
+    crate::marks::mark("warm.drawn");
     renderer.submit(&gpu.queue, enc);
+    crate::marks::mark("warm.submitted");
     // A reserve of command lists in the encoder the hand-over frame takes first (the pool hands
     // back the last one finished): the frames that fade in after it draw more layers.
     let mut reserve = gpu.device.create_command_encoder(&Default::default());
@@ -811,7 +816,14 @@ fn warm_frame(gpu: &Gpu, renderer: &mut Renderer, format: wgpu::TextureFormat, s
         });
     }
     gpu.queue.submit([reserve.finish()]);
+    crate::marks::mark("warm.reserved");
     let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+    crate::marks::mark("warm.polled");
+    crate::marks::WARMING.store(false, std::sync::atomic::Ordering::Relaxed);
+    if let Some(path) = std::env::var_os("IB3_WARM_LOG") {
+        let kinds = instances.iter().fold([0u32; 16], |mut k, i| { if (0.0..16.0).contains(&i.params[1]) { k[i.params[1] as usize] += 1; } k });
+        let _ = std::fs::write(path, format!("instances {} kinds {:?} size {:?} format {:?}\n", instances.len(), kinds, size, format));
+    }
 }
 
 /// Empty render passes the warm frame records for its reserve of command lists (two a pass).

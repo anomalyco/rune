@@ -347,6 +347,7 @@ impl Renderer {
 
     pub(super) fn prepare_layers(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, instances: &[Instance], viewport: (u32, u32)) {
         let staging = self.uploads.staging(device, queue);
+        crate::marks::mark("ho.l.staging");
         self.layers.viewport = viewport;
         #[cfg(test)]
         { self.layers.peak = 0; }
@@ -498,8 +499,11 @@ impl Renderer {
             let layers = &mut self.layers;
             let pools = Pools { slots: &layers.targets, retained: &layers.retained, spare: &layers.spare };
             layers.planner.decide(&layers.plan, &pools, layers.cache_budget, isolate, max_dim);
+            crate::marks::mark("ho.l.decided");
             self.commit(device);
+            crate::marks::mark("ho.l.committed");
             self.paint_layers(device, &staging);
+            crate::marks::mark("ho.l.painted");
         }
         // A frame whose layers fell gives back what a burst grew the plan's scratch to; a frame
         // that keeps its layers, or stays empty, leaves it alone.
@@ -520,6 +524,7 @@ impl Renderer {
             t.composite = composite;
             t.composite_parent = parent_identity;
         }
+        crate::marks::mark("ho.l.rebound");
         if self.layers.targets.iter().any(Option::is_some) {
             self.add_format(device, FORMAT);
             self.add_layer_format(device, self.format);
