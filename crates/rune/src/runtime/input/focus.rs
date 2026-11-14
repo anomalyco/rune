@@ -68,6 +68,10 @@ impl<S: 'static> Runtime<S> {
     pub(super) fn active_modal(&self) -> Option<usize> {
         self.modal_scope.as_ref().map(|m| m.index)
     }
+    /// Node `i` (its subtree ending before `end`) holds the open modal.
+    pub(crate) fn modal_ancestor(&self, i: usize, end: usize) -> bool {
+        self.modal_scope.as_ref().is_some_and(|m| m.index > i && m.index < end)
+    }
     /// Node `i` is inside the open modal's scope, or no modal is open.
     pub(crate) fn modal_member(&self, i: usize) -> bool {
         self.modal_scope.as_ref().is_none_or(|m| m.members.get(i).copied().unwrap_or(false))

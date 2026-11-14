@@ -734,6 +734,13 @@ export function syncA11y(h, json) {
         if (tag === 'button') {
             if (item.x === true || item.x === false) el.setAttribute('aria-expanded', String(item.x));
             else el.removeAttribute('aria-expanded');
+            // A control's role and states (a palette's option, a tab, a switch): `control_role`.
+            const states = [['role', item.o], ['aria-selected', item.se === undefined ? undefined : String(item.se)], ['aria-checked', item.c],
+                ['aria-posinset', item.n ? String(item.n[0]) : undefined], ['aria-setsize', item.n ? String(item.n[1]) : undefined]];
+            for (const [name, value] of states) {
+                if (value === undefined) el.removeAttribute(name);
+                else if (el.getAttribute(name) !== value) el.setAttribute(name, value);
+            }
         }
         if (item.k === 'group' || item.k === 'image') {
             if (item.t) el.setAttribute('aria-label', item.t); else el.removeAttribute('aria-label');
