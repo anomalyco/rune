@@ -77,7 +77,7 @@ impl<S: 'static> Host<S> {
         if !w.first_frame.pending() {
             // No first frame to wait for (`FirstFrame::skipped`, `READY_FALLBACK`): the app's live
             // work starts anyway. The window isn't ready (`is_ready`) until it draws.
-            if w.first_frame.ready_due(Instant::now()) && w.first_frame.take_ready() { self.run_on_ready(); }
+            if w.first_frame.ready_due(Instant::now()) && w.first_frame.take_ready() { self.ready_owed(); }
             return;
         }
         let reveal = w.first_frame.complete();
@@ -87,7 +87,7 @@ impl<S: 'static> Host<S> {
         *self.shared.window_error.lock().unwrap() = None;
         crate::tooling::perf_warn::launch::first_frame();
         w.first_frame.notify();
-        if w.first_frame.take_ready() { self.run_on_ready(); }
+        if w.first_frame.take_ready() { self.ready_owed(); }
         if reveal {
             self.reveal_launcher(event_loop);
             self.shell(event_loop);
@@ -95,19 +95,32 @@ impl<S: 'static> Host<S> {
         self.publish();
     }
 
-    fn run_on_ready(&mut self) {
+    /// The window is ready: on Windows its `on_ready` and hooks run in the turns after it, one
+    /// piece a turn and none while input waits (`post_frame`); elsewhere now.
+    fn ready_owed(&mut self) {
+        #[cfg(target_os = "windows")]
+        { self.chores = post_frame::Chores::Ready; }
+        #[cfg(not(target_os = "windows"))]
+        self.run_on_ready();
+    }
+
+    pub(super) fn run_on_ready(&mut self) {
         if let Some(ready) = self.on_ready.as_mut() {
             crate::tooling::perf_warn::timed("on_ready", || ready(&self.native_handle));
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::platform::ready_signal::ready();
+    }
+
+    /// Windows: the hooks a shown window takes once it's ready.
+    #[cfg(target_os = "windows")]
+    pub(super) fn run_ready_hooks(&mut self) {
         // After the first frame: files can only be dragged onto a window a person has seen.
-        #[cfg(target_os = "windows")]
         if let Some(w) = &self.win {
             crate::platform::win32::drop_target::install(&w.window);
             // Win+L wipes a secret left on the clipboard.
             crate::platform::win32::session_lock::install(&w.window);
         }
-        #[cfg(not(target_arch = "wasm32"))]
-        crate::platform::ready_signal::ready();
     }
 
     pub(super) fn place(&mut self, event_loop: &ActiveEventLoop, request: crate::windows::PlaceRequest) {
