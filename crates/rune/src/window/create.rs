@@ -307,12 +307,18 @@ impl<S: 'static> Host<S> {
         crate::a11y::Adapter::new(window, Arc::new(move || handle.send(WakeEvent::A11y)))
     }
 
-    /// Windows: the accessibility adapter a window opened without, on the first idle turn after
-    /// its first frame; assistive clients hear the window's content change so they ask again.
+    /// Whether the window opened without its accessibility adapter and its first frame is up.
+    #[cfg(target_os = "windows")]
+    pub(super) fn a11y_owed(&self) -> bool {
+        self.win.as_ref().is_some_and(|w| w.native.a11y_start == native::A11yStart::AfterFirstFrame && w.first_frame.ready())
+    }
+
+    /// Windows: the accessibility adapter a window opened without, in a turn after its first
+    /// frame (`post_frame`); assistive clients hear the window's content change so they ask again.
     #[cfg(target_os = "windows")]
     pub(super) fn a11y_after_frame(&mut self) {
+        if !self.a11y_owed() { return; }
         let Some(w) = self.win.as_ref() else { return };
-        if w.native.a11y_start != native::A11yStart::AfterFirstFrame || !w.first_frame.ready() { return; }
         let adapter = self.a11y_adapter(&w.window);
         crate::marks::mark("window.a11y");
         let Some(w) = self.win.as_mut() else { return };

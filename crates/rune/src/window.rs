@@ -37,6 +37,8 @@ mod create;
 #[cfg(target_os = "windows")]
 mod cpu_frame;
 #[cfg(target_os = "windows")]
+mod post_frame;
+#[cfg(target_os = "windows")]
 mod video_layer;
 mod native;
 use native::Native;
@@ -480,6 +482,9 @@ struct Host<S: 'static> {
     spec: AppSpec<S>,
     args: Args,
     keep_running: bool,
+    /// What the window still owes after its first frame (`post_frame`).
+    #[cfg(target_os = "windows")]
+    chores: post_frame::Chores,
     /// Its close ends the app (`Windows::window_event`): the last window of a fast-exiting app.
     ends_app: bool,
     on_close: Option<fn(&mut S, &mut Tx)>,
@@ -642,6 +647,8 @@ impl<S: 'static> Host<S> {
             spec,
             args,
             keep_running,
+            #[cfg(target_os = "windows")]
+            chores: Default::default(),
             ends_app: false,
             on_close,
             on_rest,
