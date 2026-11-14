@@ -21,6 +21,8 @@ extern "C" {
     fn destroy(handle: &JsValue);
     #[wasm_bindgen(js_name = pastedImage)]
     fn pasted_image(handle: &JsValue, max: u32) -> js_sys::Promise;
+    #[wasm_bindgen(js_name = announceA11y)]
+    fn announce_a11y(handle: &JsValue, text: &str, assertive: bool);
     #[wasm_bindgen(js_name = scheduleA11y)]
     fn schedule_a11y(handle: &JsValue);
     #[wasm_bindgen(js_name = syncSecondary)]
@@ -64,6 +66,8 @@ pub(super) struct Bridge {
     caret: Option<[f32; 4]>,
     /// When the mirror was last rebuilt, for the scroll throttle (`sync_input`).
     a11y_at: Option<crate::time::Instant>,
+    /// `Tx::announce`'s calls the page's live regions have said.
+    announced: u32,
     /// The slot families the mirror's text was last set in.
     families: (String, String),
 }
@@ -89,7 +93,7 @@ impl Bridge {
         let handle = mount(canvas, callback.as_ref().unchecked_ref(), embedded, fit_height, document);
         Self { handle, _callback: callback, dispose_viewport, mods: ModifiersState::empty(),
             mirror: Default::default(), a11y: Default::default(),
-            copy_cache: String::new(), fit_height, document, page: None, scroll_x: Vec::new(), caret: None, a11y_at: None, families: Default::default() }
+            copy_cache: String::new(), fit_height, document, page: None, scroll_x: Vec::new(), caret: None, a11y_at: None, announced: 0, families: Default::default() }
     }
 
     /// The first frame is on screen: a page swaps its static export for the live mirror.
@@ -139,6 +143,13 @@ impl<S: 'static> Running<S> {
         } else if let Some(json) = self.rt.web_a11y(&mut self.input.a11y) {
             sync_a11y(&self.input.handle, json);
             self.input.a11y_at = Some(now);
+        }
+        // `Tx::announce`: the page's own live regions say it, as the native tree's announcer does.
+        if self.rt.announcement.said() != self.input.announced {
+            self.input.announced = self.rt.announcement.said();
+            if let Some((words, how)) = self.rt.announcement.words() {
+                announce_a11y(&self.input.handle, &words, how == crate::LiveRegion::Assertive);
+            }
         }
         if self.input.document {
             let page = (self.rt.page_height().ceil(), self.rt.has_focus());

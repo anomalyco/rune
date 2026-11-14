@@ -1,0 +1,1 @@
+- Web: `Tx::announce` reaches a browser's screen reader through two live regions beside the page's mirror, polite and assertive, as the native tree's announcer does; the same words said twice are said twice.

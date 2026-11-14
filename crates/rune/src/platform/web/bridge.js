@@ -763,6 +763,28 @@ export function syncA11y(h, json) {
     }
 }
 
+// `Tx::announce`: two live regions in the mirror, polite and assertive, made the first time
+// something is said (a region must be in the page before its text changes for a reader to say
+// it). The words go in on the next frame, after the region is emptied, so the same words said
+// twice are said twice.
+export function announceA11y(h, text, assertive) {
+    if (h.disposed) return;
+    h.live ??= {};
+    const kind = assertive ? 'assertive' : 'polite';
+    let el = h.live[kind];
+    if (!el) {
+        el = document.createElement('div');
+        el.setAttribute('aria-live', kind);
+        el.setAttribute('aria-atomic', 'true');
+        if (!assertive) el.setAttribute('role', 'status');
+        el.style.cssText = 'position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;';
+        h.a11y.parentNode.insertBefore(el, h.a11y);
+        h.live[kind] = el;
+    }
+    el.textContent = '';
+    requestAnimationFrame(() => { if (!h.disposed) el.textContent = text; });
+}
+
 // Rune skipped rebuilding the mirror while it scrolls: it asks again once the scroll has rested.
 export function scheduleA11y(h) {
     clearTimeout(h.a11yTimer);
