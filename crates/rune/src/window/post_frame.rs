@@ -13,14 +13,20 @@ pub(super) struct Chores {
     pub(super) hooks: bool,
 }
 
-/// Whether the user's input (a key, the mouse, raw input) is waiting in this thread's queue, so
-/// the next piece waits for the turn after winit has taken it. Posted messages don't count:
-/// winit's own wakes are posted, and they keep coming while the app starts.
+/// Whether a key or mouse message is waiting in this thread's queue, so the next piece waits for
+/// the turn after winit has taken it: the user's input, or one another app posted (an assistive
+/// tool, a test). winit's own wakes are posted messages outside those ranges, and they keep
+/// coming while the app starts, so they don't count. Sent messages aren't dispatched here.
 pub(super) fn input_waiting() -> bool {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{GetQueueStatus, QS_INPUT};
-    // SAFETY: no arguments beyond the flags; the high word is what's in the queue now.
-    let status = unsafe { GetQueueStatus(QS_INPUT) };
-    status >> 16 != 0
+    use windows_sys::Win32::UI::WindowsAndMessaging::{MSG, PM_NOREMOVE, PM_QS_INPUT, PM_QS_POSTMESSAGE, PeekMessageW, WM_KEYFIRST, WM_KEYLAST, WM_MOUSEFIRST, WM_MOUSELAST};
+    [(WM_KEYFIRST, WM_KEYLAST), (WM_MOUSEFIRST, WM_MOUSELAST)].into_iter().any(|(first, last)| {
+        // SAFETY: `msg` is written only; PM_NOREMOVE leaves the message in the queue, and the
+        // PM_QS_* flags keep sent messages from being dispatched.
+        unsafe {
+            let mut msg: MSG = std::mem::zeroed();
+            PeekMessageW(&mut msg, std::ptr::null_mut(), first, last, PM_NOREMOVE | PM_QS_INPUT | PM_QS_POSTMESSAGE) != 0
+        }
+    })
 }
 impl<S: 'static> Host<S> {
     /// One owed piece, unless input waits; true while more are owed, so the loop turns again.
