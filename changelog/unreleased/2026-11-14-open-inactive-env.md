@@ -1,0 +1,1 @@
+- `RUNE_OPEN_INACTIVE=1` makes a launch behave as `App::open_inactive`: the first window opens without taking focus, and on macOS the app doesn't take activation at launch, so a tool's run (an accessibility probe, a capture) never takes the user's keyboard.

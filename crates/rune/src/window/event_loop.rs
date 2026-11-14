@@ -66,12 +66,13 @@ fn run_configured(factory: Factory, args: Args, accessory: bool) -> Result<(), S
     #[allow(unused_mut)]
     let mut builder = EventLoop::<WakeEvent>::with_user_event();
     #[cfg(target_os = "macos")]
-    if accessory {
+    // `RUNE_OPEN_INACTIVE` (a tool's launch): the app doesn't take activation at launch either.
+    if accessory || std::env::var_os("RUNE_OPEN_INACTIVE").is_some() {
         use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
-        builder
-            .with_activation_policy(ActivationPolicy::Accessory)
-            .with_default_menu(false)
-            .with_activate_ignoring_other_apps(false);
+        if accessory {
+            builder.with_activation_policy(ActivationPolicy::Accessory).with_default_menu(false);
+        }
+        builder.with_activate_ignoring_other_apps(false);
     }
     let event_loop = builder.build().inspect_err(|_| crate::render::discard_prewarm()).map_err(event_loop_error)?;
     crate::marks::mark("loop.built");
