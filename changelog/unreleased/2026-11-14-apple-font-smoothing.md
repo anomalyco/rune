@@ -1,0 +1,1 @@
+- On macOS, `FontSmoothing::On` draws as `Off` when the user turned font smoothing off (`AppleFontSmoothing` 0 for the app or globally), as AppKit, SwiftUI and GPUI do. Rune reads the setting once. Any other value, or none, keeps smoothing on. Other modes and other OSes are unchanged.
