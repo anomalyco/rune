@@ -1,9 +1,10 @@
 //! Rendered-text search over Markdown documents, returning source UTF-8 byte ranges for
 //! [`Markdown::highlights`].
 
+use std::borrow::Cow;
 use std::ops::Range;
 
-use super::{Block, BlockMap, Highlight, HighlightItem, Markdown, PAD, SpanMap, Table, doc_cached};
+use super::{Block, BlockMap, Highlight, HighlightItem, Markdown, PAD, SpanMap, doc_cached};
 
 /// Case sensitivity for [`find`] (and [`Markdown::find`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -102,41 +103,45 @@ fn push_folded(out: &mut String, c: char) {
     }
 }
 
-fn find_in_blocks(src: &str, blocks: &[Block], maps: &[BlockMap], needle: &Needle<'_>, out: &mut Vec<Vec<Range<usize>>>) {
-    let empty = BlockMap::None;
-    for (b, map) in blocks.iter().zip(maps.iter().chain(std::iter::repeat(&empty))) {
+/// Calls `f` with each searchable text of `blocks` and its map back to `src`, in document order.
+fn each_text<'a>(blocks: &'a [Block], maps: &'a [BlockMap], f: &mut impl FnMut(&'a str, &'a SpanMap)) {
+    let empty = &BlockMap::None;
+    for (b, map) in blocks.iter().zip(maps.iter().chain(std::iter::repeat(empty))) {
         match (b, map) {
-            (Block::Para(inl) | Block::Heading(_, inl), BlockMap::Inline(m)) => find_in_text(src, &inl.text, m, needle, out),
-            (Block::Image { alt, .. }, BlockMap::Inline(m)) => find_in_text(src, alt, m, needle, out),
-            (Block::Code(code) | Block::Diff(code), BlockMap::Code(m)) => find_in_text(src, code, m, needle, out),
+            (Block::Para(inl) | Block::Heading(_, inl), BlockMap::Inline(m)) => f(&inl.text, m),
+            (Block::Image { alt, .. }, BlockMap::Inline(m)) => f(alt, m),
+            (Block::Code(code) | Block::Diff(code), BlockMap::Code(m)) => f(code, m),
             (Block::Mermaid(code), BlockMap::Code(m)) => {
                 #[cfg(feature = "mermaid")]
                 if crate::mermaid::supported(code) { continue; }
-                find_in_text(src, code, m, needle, out);
+                f(code, m);
             }
-            (Block::Table(t), BlockMap::Table { head, rows }) => find_in_table(src, t, head, rows, needle, out),
-            (Block::List { items, .. }, BlockMap::List(item_maps)) => {
-                for (item, imap) in items.iter().zip(item_maps) {
-                    find_in_blocks(src, item, imap, needle, out);
+            (Block::Table(t), BlockMap::Table { head, rows }) => {
+                for (cell, map) in t.head.iter().zip(head) {
+                    f(&cell.text, map);
+                }
+                for (row, rmaps) in t.rows.iter().zip(rows) {
+                    for (cell, map) in row.iter().zip(rmaps) {
+                        f(&cell.text, map);
+                    }
                 }
             }
-            (Block::Quote(inner), BlockMap::Quote(inner_maps)) => find_in_blocks(src, inner, inner_maps, needle, out),
+            (Block::List { items, .. }, BlockMap::List(item_maps)) => {
+                for (item, imap) in items.iter().zip(item_maps) {
+                    each_text(item, imap, f);
+                }
+            }
+            (Block::Quote(inner), BlockMap::Quote(inner_maps)) => each_text(inner, inner_maps, f),
             _ => {}
         }
     }
 }
 
-fn find_in_table(src: &str, t: &Table, head_maps: &[SpanMap], row_maps: &[Vec<SpanMap>], needle: &Needle<'_>, out: &mut Vec<Vec<Range<usize>>>) {
-    for (cell, map) in t.head.iter().zip(head_maps) {
-        find_in_text(src, &cell.text, map, needle, out);
-    }
-    for (row, rmaps) in t.rows.iter().zip(row_maps) {
-        for (cell, map) in row.iter().zip(rmaps) {
-            find_in_text(src, &cell.text, map, needle, out);
-        }
-    }
+fn find_in_blocks(src: &str, blocks: &[Block], maps: &[BlockMap], needle: &Needle<'_>, out: &mut Vec<Vec<Range<usize>>>) {
+    each_text(blocks, maps, &mut |text, map| find_in_text(src, text, map, needle, out));
 }
 
+#[derive(Clone, Debug)]
 struct Seg {
     src: Range<usize>,
     out: Range<usize>,
@@ -149,24 +154,25 @@ fn is_linear_seg(src: &str, vis: &str, s_seg: &Range<usize>, o_seg: &Range<usize
             || !src.get(s_seg.clone()).is_some_and(|s| s.starts_with('&')))
 }
 
-fn find_in_text(src: &str, text: &str, map: &SpanMap, needle: &Needle<'_>, out: &mut Vec<Vec<Range<usize>>>) {
+/// A text's visible characters and the segments mapping them to `src`: the text itself when its
+/// map covers it end to end, else the pieces the map names, joined.
+fn visible<'a>(src: &str, text: &'a str, map: &SpanMap) -> Option<(Cow<'a, str>, Vec<Seg>)> {
     if text.is_empty() || map.0.is_empty() {
-        return;
+        return None;
     }
     let contiguous = map.0[0].1.start == 0
         && map.0[map.0.len() - 1].1.end == text.len()
         && map.0.windows(2).all(|w| w[0].1.end == w[1].1.start);
 
-    let mut owned_vis = String::new();
     let mut segments = Vec::with_capacity(map.0.len());
-    let vis: &str = if contiguous {
+    let vis = if contiguous {
         for (src_r, out_r) in &map.0 {
             let linear = is_linear_seg(src, text, src_r, out_r);
             segments.push(Seg { src: src_r.clone(), out: out_r.clone(), linear });
         }
-        text
+        Cow::Borrowed(text)
     } else {
-        owned_vis.reserve(text.len());
+        let mut owned_vis = String::with_capacity(text.len());
         for (src_r, out_r) in &map.0 {
             if let Some(slice) = text.get(out_r.clone()) && !slice.is_empty() {
                 let start = owned_vis.len();
@@ -176,12 +182,72 @@ fn find_in_text(src: &str, text: &str, map: &SpanMap, needle: &Needle<'_>, out: 
                 segments.push(Seg { src: src_r.clone(), out: new_out, linear });
             }
         }
-        &owned_vis
+        Cow::Owned(owned_vis)
     };
-    if vis.is_empty() {
-        return;
+    (!vis.is_empty()).then_some((vis, segments))
+}
+
+fn find_in_text(src: &str, text: &str, map: &SpanMap, needle: &Needle<'_>, out: &mut Vec<Vec<Range<usize>>>) {
+    if let Some((vis, segments)) = visible(src, text, map) {
+        find_in_visible(src, &vis, &segments, needle, out);
+    }
+}
+
+/// The text each block of a document shows, as [`find`] searches it, with the map from each
+/// back to the document's source bytes: a read of the parse Rune already keeps for drawing
+/// ([`parse_cached`](super::parse_cached); the source is parsed and kept there if it isn't).
+///
+/// It owns its text and is `Send`, so a search over many documents can make one per document
+/// once and run every query over them with [`Rendered::find`], on any thread, without parsing
+/// again. `Rendered::find(src, q, case)` returns what [`find`]`(src, q, case)` does.
+#[derive(Clone, Debug, Default)]
+pub struct Rendered {
+    blocks: Vec<(String, Vec<Seg>)>,
+}
+
+impl Rendered {
+    /// `src`'s rendered blocks, from the cached parse.
+    pub fn new(src: &str) -> Self {
+        let (blocks, _, _, _, maps) = doc_cached(src);
+        let mut out = Vec::new();
+        each_text(&blocks, &maps, &mut |text, map| {
+            if let Some((vis, segments)) = visible(src, text, map) {
+                out.push((vis.into_owned(), segments));
+            }
+        });
+        Rendered { blocks: out }
     }
 
+    /// Each block's visible text, in document order (matches never cross from one to the next).
+    pub fn texts(&self) -> impl Iterator<Item = &str> {
+        self.blocks.iter().map(|(text, _)| text.as_str())
+    }
+
+    /// The source byte ranges `range` of block `block`'s visible text covers, merged where they
+    /// touch; empty when they name nothing in `src`. `src` is the source this was made from.
+    pub fn source_ranges(&self, src: &str, block: usize, range: Range<usize>) -> Vec<Range<usize>> {
+        let Some((text, segments)) = self.blocks.get(block) else { return Vec::new() };
+        if range.start >= range.end || range.end > text.len() {
+            return Vec::new();
+        }
+        map_vis_range(src, segments, &mut 0, range)
+    }
+
+    /// [`find`] over these blocks: `src` is the source this was made from.
+    pub fn find(&self, src: &str, query: &str, case: Case) -> Vec<Vec<Range<usize>>> {
+        if src.is_empty() || query.is_empty() {
+            return Vec::new();
+        }
+        let needle = Needle::new(query, case);
+        let mut out = Vec::new();
+        for (vis, segments) in &self.blocks {
+            find_in_visible(src, vis, segments, &needle, &mut out);
+        }
+        out
+    }
+}
+
+fn find_in_visible(src: &str, vis: &str, segments: &[Seg], needle: &Needle<'_>, out: &mut Vec<Vec<Range<usize>>>) {
     let mut seg_idx = 0usize;
     match needle {
         Needle::Sensitive(q) => {
