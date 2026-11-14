@@ -1287,6 +1287,7 @@ impl<S: 'static> Runtime<S> {
         // follow the hold this decides.
         let queued = self.queue.len();
         let held = self.pointer.map(|(x, y)| self.refresh_hover(x, y));
+        self.queue.observe_since(queued);
         self.update_help();
         self.layer_scratch = layers;
         self.built = true;

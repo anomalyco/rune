@@ -10,6 +10,7 @@
 //! Events that test every request on every frame are types of their own, generic over what
 //! they measure, so a caller's measurements compile into the loop with no indirect call.
 use super::sticky::{Keep, Reveal};
+use super::{Runtime, Tx};
 use crate::machine::Effects;
 
 /// One request outliving the commit that made it.
@@ -189,6 +190,27 @@ where G: Fn(&str) -> bool, A: Fn(&str) -> bool, M: Fn(&Reveal) -> bool {
         requests.keeps.retain(|k| animating(&k.viewport));
         requests.reveals.retain(|r| gliding(&r.viewport) || (animating(&r.viewport) && mounted(r)));
         Effects::none()
+    }
+}
+
+impl<S: 'static> Runtime<S> {
+    /// Resolve reveals and destinations against the tree from the update that requested them.
+    pub(super) fn finish_scroll_requests(&mut self, tx: &mut Tx, follow: bool) {
+        let destination = !tx.scroll_bottom.is_empty() || !tx.scroll_pages.is_empty() || !tx.scroll_offsets.is_empty();
+        if tx.scroll_to.is_empty() && !destination && !follow { return; }
+        self.drop_scroll_holds();
+        for r in tx.scroll_to.drain(..) { self.reveal_row(&r, tx.commit.snaps()); }
+        if !destination && !follow { return; }
+        self.step_scroll(0.0);
+        if follow { self.follow_caret(); }
+        if tx.commit.snaps() {
+            for (_, animated) in &mut tx.scroll_bottom { *animated = false; }
+            for r in &mut tx.scroll_offsets { r.glide = None; }
+        }
+        if !tx.scroll_bottom.is_empty() { self.scroll_to_bottom(std::mem::take(&mut tx.scroll_bottom)); }
+        if !tx.scroll_pages.is_empty() { self.scroll_pages(std::mem::take(&mut tx.scroll_pages)); }
+        if !tx.scroll_offsets.is_empty() { self.scroll_to_offsets(std::mem::take(&mut tx.scroll_offsets)); }
+        if destination { self.requests.step(Event::Destination); }
     }
 }
 

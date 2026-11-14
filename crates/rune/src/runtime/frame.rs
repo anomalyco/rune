@@ -471,7 +471,7 @@ impl<S: 'static> Runtime<S> {
         }
         let mut tx = std::mem::take(&mut self.pending);
         let mut ran = false;
-        let mut why = 0;
+        let mut why = if tx.polled_change && self.dirty { CommitWhy::POLL } else { 0 };
         #[cfg(debug_assertions)]
         let commits0 = self.commits;
         let shaped0 = self.text.shaped;
@@ -547,8 +547,7 @@ impl<S: 'static> Runtime<S> {
         #[cfg(debug_assertions)]
         let mut ran_other = ran;
         let mut pointer_hover = false;
-        for Queued { action, at } in queue {
-            let _input = crate::input::time::scope(at);
+        for Queued { action, at, input } in queue {
             if matches!(action, Action::Key { stage: false, .. } | Action::Physical(crate::PhysicalInput::Key { pressed: true, .. }, _)) { crate::marks::input_handled(true); }
             pointer_hover |= matches!(action, Action::Hover(_));
             // State may have requested focus on a newly mounted field. Resolve the
@@ -559,7 +558,16 @@ impl<S: 'static> Runtime<S> {
             let routed = matches!(&action, Action::Key { .. } | Action::KeyUp(_) | Action::Physical(..) | Action::Ime(_) | Action::FinishIme | Action::Paste(..) | Action::Files(_));
             // So is a playground an earlier handler opened or moved.
             if routed { self.latch_playground(&mut tx); }
-            if (ran || self.dirty || !tx.scroll_to.is_empty()) && routed {
+            // Both callbacks see ordinary &mut S. After the next mutation a single view
+            // cannot tell which one introduced a row. Observe the poll's tree now, without
+            // drawing it or advancing time. A key already needed this same routing boundary.
+            let split = self.motion_needs_cause && why & CommitWhy::POLL != 0 && (input || routed);
+            if split || (ran || self.dirty || !tx.scroll_to.is_empty()) && routed {
+                if split {
+                    let links = std::mem::take(&mut tx.open_urls);
+                    self.latch_requests(&mut tx);
+                    tx.open_urls = links;
+                }
                 if ran || self.dirty {
                     self.capture_flights(&mut tx);
                     if self.settle { tx.settle(); }
@@ -568,19 +576,33 @@ impl<S: 'static> Runtime<S> {
                     if ran_other || self.dirty || ran_layout { self.live_check = None; }
                     self.capture_keeps(&mut tx);
                     tx.unprompted = self.motion_needs_cause && why & CommitWhy::INPUT == 0 && !tx.asked_motion;
-                    self.commit_for(&tx, std::mem::take(&mut why) | CommitWhy::ROUTE | if self.dirty { CommitWhy::DIRTY } else { 0 });
+                    if split && tx.unprompted { tx.commit = tx.commit.instant(); }
+                    if routed { why |= CommitWhy::ROUTE; }
+                    if self.dirty { why |= CommitWhy::DIRTY; }
+                    self.commit_for(&tx, std::mem::take(&mut why));
                     #[cfg(debug_assertions)]
                     { let check = self.live_check.take(); self.compare_live_check(check); ran_other = false; }
                     self.apply_keeps();
                     ran = false;
                 }
-                if !tx.scroll_to.is_empty() {
+                if split {
+                    self.finish_scroll_requests(&mut tx, false);
+                    // The poll's motion policy belongs to the tree just applied, not to
+                    // the handler about to run. Shell requests and timers still go out once.
+                    tx.commit = Commit::Animate;
+                    tx.unprompted = false;
+                    tx.asked_motion = false;
+                    tx.motion = None;
+                    tx.color_motion = None;
+                    tx.follow_edge = false;
+                    tx.unclipped_flights = false;
+                    ran_layout = false;
+                } else if !tx.scroll_to.is_empty() {
                     self.drop_scroll_holds();
-                    for r in std::mem::take(&mut tx.scroll_to) {
-                        self.reveal_row(&r, tx.commit.snaps());
-                    }
+                    for r in tx.scroll_to.drain(..) { self.reveal_row(&r, tx.commit.snaps()); }
                 }
             }
+            let _input = crate::input::time::scope(at);
             // A selection an earlier handler asked for is what this key copies.
             if matches!(action, Action::Key { .. } | Action::Physical(..)) && let Some(request) = tx.select.take() {
                 let from_change = std::mem::take(&mut tx.select_from_change);
@@ -595,7 +617,7 @@ impl<S: 'static> Runtime<S> {
                 #[cfg(debug_assertions)]
                 { ran_other |= r && checks == self.live_checks; }
                 ran |= r;
-                if r { why |= CommitWhy::INPUT; }
+                if r { why |= if input { CommitWhy::INPUT } else { CommitWhy::DIRTY }; }
             }
             self.run_pick_reads(&mut tx);
         }
@@ -606,7 +628,7 @@ impl<S: 'static> Runtime<S> {
             let r = self.run_action(action, &mut tx);
             #[cfg(debug_assertions)]
             { ran_other |= r && checks == self.live_checks; }
-            if r { ran = true; why |= CommitWhy::INPUT; }
+            if r { ran = true; why |= CommitWhy::DIRTY; }
         }
         #[cfg(target_os = "linux")]
         self.note_primary_selection();
@@ -621,7 +643,7 @@ impl<S: 'static> Runtime<S> {
                 let r = self.run_action(queued.action, &mut tx);
                 #[cfg(debug_assertions)]
                 { ran_other |= r && checks == self.live_checks; }
-                if r { ran = true; why |= CommitWhy::INPUT; }
+                if r { ran = true; why |= if queued.input { CommitWhy::INPUT } else { CommitWhy::DIRTY }; }
             }
             open_urls.extend(std::mem::take(&mut tx.open_urls));
             self.latch_requests(&mut tx);
@@ -665,40 +687,19 @@ impl<S: 'static> Runtime<S> {
         #[cfg(debug_assertions)]
         { self.live_check = None; }
         tx.keep_on_screen.clear();
-        let mut scroll_to = std::mem::take(&mut tx.scroll_to);
         for (path, v) in &mut self.virtuals {
             if let Some(key) = v.reveal_selected.take() && !pointer_hover {
                 // Use the keyed ancestor path so identical row keys in other lists do not
                 // intercept the reveal, including when this row is still virtual.
                 let scope = path.split('/').filter(|seg| !seg.starts_with('#')).collect::<Vec<_>>().join("/");
                 let key = if scope.is_empty() { key } else { format!("{scope}/{key}") };
-                scroll_to.push(ScrollReveal::into_view(None, key));
+                tx.scroll_to.push(ScrollReveal::into_view(None, key));
             }
         }
-        let mut scroll_bottom = std::mem::take(&mut tx.scroll_bottom);
-        let scroll_pages = std::mem::take(&mut tx.scroll_pages);
-        let mut scroll_offsets = std::mem::take(&mut tx.scroll_offsets);
-        if tx.commit.snaps() {
-            for (_, animated) in &mut scroll_bottom { *animated = false; }
-            for r in &mut scroll_offsets { r.glide = None; }
-        }
         #[cfg(debug_assertions)]
-        self.watch_frame(commits0, scroll_offsets.iter().find(|r| r.glide.is_none()).map(|r| r.key.as_str()));
+        self.watch_frame(commits0, tx.scroll_offsets.iter().find(|r| tx.commit.snaps() || r.glide.is_none()).map(|r| r.key.as_str()));
         let follow = std::mem::take(&mut self.caret_follow);
-        let destination = !scroll_bottom.is_empty() || !scroll_pages.is_empty() || !scroll_offsets.is_empty();
-        if !scroll_to.is_empty() || destination || follow {
-            self.drop_scroll_holds();
-        }
-        for r in &scroll_to { self.reveal_row(r, tx.commit.snaps()); }
-        if destination || follow {
-            self.step_scroll(0.0);
-        }
-        if follow { self.follow_caret(); }
-        if !scroll_bottom.is_empty() { self.scroll_to_bottom(scroll_bottom); }
-        if !scroll_pages.is_empty() { self.scroll_pages(scroll_pages); }
-        if !scroll_offsets.is_empty() { self.scroll_to_offsets(scroll_offsets); }
-        // Explicit destinations processed after a reveal win for its entire lifetime.
-        if destination { self.requests.step(requests::Event::Destination); }
+        self.finish_scroll_requests(&mut tx, follow);
         // Those scrolls moved the caret after the commit a view placed from it saw.
         if self.caret_watch && self.caret_moved(None) { self.commit(&Tx { commit: Commit::Instant, ..Tx::default() }); }
         if let Some(request) = tx.select.take() {
