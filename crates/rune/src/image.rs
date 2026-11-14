@@ -309,10 +309,14 @@ impl ImageCache {
         entries.insert(id, Arc::downgrade(&image.0));
         // A small straight RGBA image (a 16 pt tile at 2x) is ready at once: its mips take
         // microseconds, less than handing it to a decoder, and the view that asked for it draws it
-        // in the same frame rather than a placeholder first.
+        // in the same frame rather than a placeholder first. It still wakes the app once, as a
+        // decoded one does: a caller outside a view's build (an overlay's state, a poll) is
+        // redrawn by that wake alone.
         #[cfg(not(target_arch = "wasm32"))]
         if let Input::Rgba(w, h, _) = &input && u64::from(*w) * u64::from(*h) <= INLINE_RGBA_PIXELS {
             image.finish(input.decode_caught());
+            drop(entries);
+            (self.waker)();
             return image;
         }
         #[cfg(not(target_arch = "wasm32"))]
