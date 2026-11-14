@@ -23,7 +23,7 @@ use super::*;
 pub(super) struct HelpState {
     /// This frame's help elements: (node, visible rect in points, `hits.len()` before it, the
     /// link of its text when the help is that link's).
-    hits: Vec<(NodeId, [f32; 4], usize, Option<usize>)>,
+    pub(crate) hits: Vec<(NodeId, [f32; 4], usize, Option<usize>)>,
     state: Tip,
     /// The tooltip showing this frame: its text and box in points.
     tip: Option<(String, [f32; 4])>,

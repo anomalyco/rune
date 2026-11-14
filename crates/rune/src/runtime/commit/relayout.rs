@@ -133,7 +133,7 @@ impl<S: 'static> Measurement<'_, S> {
                 // The new nodes lay their text out again; the cache then holds the only reference.
                 // A by-paragraph field's goes with it, to re-break its paragraphs from.
                 let kept = slot.text_layout.take().filter(|l| matches!(l, TextLayout::Paragraphs(_)));
-                let mut copy = Node { elided: None, virtual_mount: false, text_layout: kept, ..slot.clone() };
+                let mut copy = Node { elided: None, virtual_mount: false, text_layout: kept, epoch: crate::runtime::paint_keep::next_epoch(), ..slot.clone() };
                 copy.clear_run_layout();
                 nodes.push(copy);
             } else {

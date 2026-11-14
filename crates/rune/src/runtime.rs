@@ -396,6 +396,8 @@ mod grid_paint;
 mod hit;
 #[path = "runtime/paint/build.rs"]
 mod build;
+#[path = "runtime/paint/keep.rs"]
+mod paint_keep;
 #[path = "runtime/input/keys.rs"]
 mod keys;
 #[path = "runtime/input/pointer.rs"]
@@ -531,6 +533,8 @@ pub struct Runtime<S: 'static> {
     hits: Vec<(NodeId, [f32; 4])>,
     overlay_hits: Vec<[f32; 4]>,
     glyph_scratch: Vec<GlyphQuad>,
+    /// What the last paint painted, for subtrees that would paint it again (`paint_keep`).
+    paint_keep: paint_keep::PaintKeep,
     /// Each still text's quads as it drew them, by node and layout id, and the paint they were
     /// last used in (`paint_content`): a frame that draws it the same copies them.
     text_quads: HashMap<(NodeId, crate::text::LayoutId), (crate::el::grid::DrawnRow, u64)>,
@@ -956,6 +960,7 @@ impl<S: 'static> Runtime<S> {
             hits: Vec::new(),
             overlay_hits: Vec::new(),
             glyph_scratch: Vec::new(),
+            paint_keep: Default::default(),
             text_quads: HashMap::default(),
             quads_frame: 0,
             #[cfg(test)]

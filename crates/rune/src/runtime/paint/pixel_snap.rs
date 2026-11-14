@@ -125,6 +125,22 @@ pub(super) struct Inherit {
     pub parent: Option<Parent>,
 }
 
+impl Inherit {
+    /// Its bits, for `paint_keep`'s comparison of what a subtree inherits.
+    pub(super) fn hash_bits(&self, h: &mut impl std::hash::Hasher) {
+        h.write_u8(self.off as u8);
+        for v in self.rigid.iter().chain(&self.contain) { h.write_u32(v.to_bits()); }
+        h.write_u32(self.layer);
+        match &self.parent {
+            Some(p) => {
+                h.write_u8(1);
+                for v in p.rest.exact.iter().chain(&p.rest.at).chain(&p.now.exact).chain(&p.now.at).chain(&p.left) { h.write_u32(v.to_bits()); }
+            }
+            None => h.write_u8(0),
+        }
+    }
+}
+
 /// A box's edges (device px, less its rigid translation): `exact`, and `at` where it draws them.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct Rest {

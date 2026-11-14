@@ -146,6 +146,9 @@ pub(crate) struct Node {
     pub(super) ime_option_as_alt: bool,
     /// Placeholder left in `self.nodes` after `try_reuse_memo` moves a node into the new pass.
     pub(super) moved_stub: bool,
+    /// A new one each time it's built from its element; a node a region keeps keeps it
+    /// (`paint_keep`).
+    pub(super) epoch: u32,
 }
 
 impl std::ops::Deref for Node {
@@ -213,6 +216,7 @@ impl Node {
             ime_cursor: false,
             ime_option_as_alt: false,
             moved_stub: true,
+            epoch: 0,
         }
     }
 
