@@ -1,0 +1,1 @@
+- Headless runs (`--snap`, `--out`, `--tree`, scripts) take the capture presets `RUNE_CONTRAST` and `RUNE_INCREASE_CONTRAST`, so an app can be captured in a contrast theme or under Increase Contrast without a window or a change to the machine's settings.

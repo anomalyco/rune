@@ -72,12 +72,17 @@ unsafe fn gnome_animations() -> Option<bool> {
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 pub(crate) fn reduced_motion() -> bool { false }
 
+/// `RUNE_INCREASE_CONTRAST=1`: [`increased_contrast`] on, for captures and checks.
+pub(crate) fn increased_contrast_preset() -> bool {
+    std::env::var_os("RUNE_INCREASE_CONTRAST").is_some_and(|v| v == "1")
+}
+
 /// Whether the system asks apps for more contrast: macOS's Increase Contrast (Accessibility >
 /// Display), or a Windows contrast theme. `RUNE_INCREASE_CONTRAST=1` reports it on, for captures
 /// and checks, without turning it on for the whole machine. Read as [`reduced_motion`] is, and on
 /// macOS again when the display options change (`a11y/macos.rs`).
 pub(crate) fn increased_contrast() -> bool {
-    if std::env::var_os("RUNE_INCREASE_CONTRAST").is_some_and(|v| v == "1") { return true; }
+    if increased_contrast_preset() { return true; }
     #[cfg(target_os = "macos")]
     {
         use objc2::{class, msg_send};
@@ -145,7 +150,7 @@ pub(crate) fn contrast() -> Option<SystemContrast> { contrast_preset() }
 /// `RUNE_CONTRAST=aquatic|desert|dusk|night-sky`: Windows 11's contrast theme of that name, as
 /// its system colours are, without turning it on for the whole machine: for captures and checks
 /// of an app in each.
-fn contrast_preset() -> Option<SystemContrast> {
+pub(crate) fn contrast_preset() -> Option<SystemContrast> {
     let name = std::env::var("RUNE_CONTRAST").ok()?;
     let [window, text, highlight, highlight_text, disabled, link] = match name.to_ascii_lowercase().as_str() {
         "aquatic" => ["#202020", "#ffffff", "#8ee3f0", "#263b50", "#a6a6a6", "#75e9fc"],
