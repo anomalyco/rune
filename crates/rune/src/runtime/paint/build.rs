@@ -1121,11 +1121,12 @@ impl<S: 'static> Runtime<S> {
                     paint_content::LeafBox {
                         r,
                         r_exact,
-                        // Where its exact box comes to rest: a glide's rest (`pixel_snap::motion`),
-                        // else where it is.
-                        exact_at: match rest.filter(|_| n.above.is_none()) {
-                            Some(rest) => [r_exact[0] - (p.rect.x - rest.x) * s, r_exact[1] - (p.rect.y - rest.y) * s],
-                            None => [r_exact[0], r_exact[1]],
+                        // Its exact resting place against its snapped one, inside its containment's
+                        // own rounding (`LeafBox::exact_off`).
+                        exact_off: {
+                            let o = snap_rest.map_or([0.0; 2], |p| p.exact_off(rigid));
+                            let c = pinh.snap.contain.map(|v| v * s);
+                            [o[0] + (c[0] + 0.5).floor() - c[0], o[1] + (c[1] + 0.5).floor() - c[1]]
                         },
                         raw_size: [raw_edges[2] - raw_edges[0], raw_edges[3] - raw_edges[1]],
                         contain: pinh.snap.contain.map(|v| v * s),

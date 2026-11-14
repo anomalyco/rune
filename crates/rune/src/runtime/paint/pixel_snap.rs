@@ -143,6 +143,14 @@ pub(super) struct Parent {
     left: [f32; 4],
 }
 
+impl Parent {
+    /// How far its exact resting top-left sits from where it rests snapped (device px), `rigid`
+    /// as it was snapped with: where a text inside lays out from, at rest and through a glide alike.
+    pub(super) fn exact_off(&self, rigid: [f32; 2]) -> [f32; 2] {
+        core::array::from_fn(|a| self.rest.exact[a] + rigid[a] - self.rest.at[a] - round(rigid[a]))
+    }
+}
+
 /// The glides of the nodes moving now and the scaled layers, owned by the runtime.
 #[derive(Default)]
 pub(super) struct Glides {
