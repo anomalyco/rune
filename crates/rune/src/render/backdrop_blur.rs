@@ -64,13 +64,25 @@ struct Pyramid {
     result: wgpu::BindGroup,
 }
 
+/// The down and up passes' shader (`backdrop_blur.wgsl`).
+pub(crate) const BLUR_WGSL: &str = include_str!("../backdrop_blur.wgsl");
+
+/// The composite's shader: the clip helpers, then `backdrop_composite.wgsl`.
+pub(crate) fn composite_wgsl() -> String { format!("{CLIP_WGSL}\n{}", include_str!("../backdrop_composite.wgsl")) }
+
+fn composite_from_wgsl(device: &wgpu::Device, wgsl: &str) -> super::dxbc::Shaders {
+    super::dxbc::Shaders::one(device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("backdrop blur composite"), source: wgpu::ShaderSource::Wgsl(wgsl.into()) }))
+}
+
 pub(super) struct BackdropBlur {
     down: wgpu::RenderPipeline,
     up: wgpu::RenderPipeline,
     level_layout: wgpu::BindGroupLayout,
     result_layout: wgpu::BindGroupLayout,
     composite_layout: wgpu::PipelineLayout,
-    composite_shader: wgpu::ShaderModule,
+    /// The composite's stages: precompiled (`composite_precompiled`) or from WGSL.
+    composite: super::dxbc::Shaders,
+    composite_precompiled: bool,
     composites: Vec<(wgpu::TextureFormat, wgpu::RenderPipeline)>,
     sampler: wgpu::Sampler,
     dummy: wgpu::TextureView,
@@ -126,24 +138,20 @@ impl BackdropBlur {
             label: Some("backdrop blur result"),
             entries: &[texture(0), sampler_entry(1), levels_entry(2, wgpu::ShaderStages::FRAGMENT)],
         });
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("backdrop blur"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../backdrop_blur.wgsl").into()),
-        });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("backdrop blur"),
             bind_group_layouts: &[Some(&level_layout)],
             immediate_size: 0,
         });
-        let pass = |entry| device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let pass = |vertex: &wgpu::ShaderModule, fragment: &wgpu::ShaderModule, entry| device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("backdrop blur"),
             layout: Some(&layout),
-            vertex: wgpu::VertexState { module: &shader, entry_point: Some("vs"), compilation_options: Default::default(), buffers: &[] },
+            vertex: wgpu::VertexState { module: vertex, entry_point: Some("vs"), compilation_options: Default::default(), buffers: &[] },
             primitive: Default::default(),
             depth_stencil: None,
             multisample: Default::default(),
             fragment: Some(wgpu::FragmentState {
-                module: &shader,
+                module: fragment,
                 entry_point: Some(entry),
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState { format: layers::FORMAT, blend: None, write_mask: wgpu::ColorWrites::ALL })],
@@ -151,11 +159,23 @@ impl BackdropBlur {
             multiview_mask: None,
             cache: None,
         });
-        let (down, up) = (pass("fs_down"), pass("fs_up"));
-        let composite_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("backdrop blur composite"),
-            source: wgpu::ShaderSource::Wgsl(format!("{CLIP_WGSL}\n{}", include_str!("../backdrop_composite.wgsl")).into()),
+        // DX12 takes the bytecode regen_dxbc compiled from this WGSL; elsewhere, or when it's stale or
+        // refused, the WGSL compiles here.
+        #[cfg(target_os = "windows")]
+        let precompiled = super::dxbc::backdrop_blur(device, BLUR_WGSL, |m| (pass(&m[0], &m[1], "fs_down"), pass(&m[0], &m[2], "fs_up")));
+        #[cfg(not(target_os = "windows"))]
+        let precompiled = None;
+        let (down, up) = precompiled.unwrap_or_else(|| {
+            let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("backdrop blur"), source: wgpu::ShaderSource::Wgsl(BLUR_WGSL.into()) });
+            (pass(&shader, &shader, "fs_down"), pass(&shader, &shader, "fs_up"))
         });
+        let composite_wgsl = composite_wgsl();
+        #[cfg(target_os = "windows")]
+        let composite = super::dxbc::backdrop_composite(device, &composite_wgsl);
+        #[cfg(not(target_os = "windows"))]
+        let composite = None;
+        let composite_precompiled = composite.is_some();
+        let composite = composite.unwrap_or_else(|| composite_from_wgsl(device, &composite_wgsl));
         let composite_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("backdrop blur composite"),
             bind_group_layouts: &[Some(uber), Some(&result_layout)],
@@ -184,7 +204,7 @@ impl BackdropBlur {
             mapped_at_creation: false,
         });
         BackdropBlur {
-            down, up, level_layout, result_layout, composite_layout, composite_shader,
+            down, up, level_layout, result_layout, composite_layout, composite, composite_precompiled,
             composites: Vec::new(), sampler, dummy, uniforms, pyramid: None, first: Vec::new(), records: Vec::new(),
         }
     }
@@ -228,11 +248,11 @@ impl BackdropBlur {
 
     pub(super) fn ensure_composite(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat) {
         if self.composites.iter().any(|(f, _)| *f == format) { return; }
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let make = |shaders: &super::dxbc::Shaders| device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("backdrop blur composite"),
             layout: Some(&self.composite_layout),
             vertex: wgpu::VertexState {
-                module: &self.composite_shader,
+                module: &shaders.vertex,
                 entry_point: Some("vs"),
                 compilation_options: Default::default(),
                 buffers: &[Some(metallib::uber_vertex_layout())],
@@ -241,7 +261,7 @@ impl BackdropBlur {
             depth_stencil: None,
             multisample: Default::default(),
             fragment: Some(wgpu::FragmentState {
-                module: &self.composite_shader,
+                module: &shaders.fragment,
                 entry_point: Some("fs"),
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
@@ -253,6 +273,16 @@ impl BackdropBlur {
             multiview_mask: None,
             cache: None,
         });
+        #[cfg(target_os = "windows")]
+        if self.composite_precompiled {
+            if let Some(pipeline) = super::dxbc::checked(device, "backdrop blur composite", || make(&self.composite)) {
+                self.composites.push((format, pipeline));
+                return;
+            }
+            self.composite = composite_from_wgsl(device, &composite_wgsl());
+            self.composite_precompiled = false;
+        }
+        let pipeline = make(&self.composite);
         self.composites.push((format, pipeline));
     }
 
