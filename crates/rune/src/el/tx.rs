@@ -507,6 +507,8 @@ impl Tx {
     /// Whether an assistive client (a screen reader, Voice Access, an automation tool) is
     /// reading this window's accessibility tree: the tree is built only then. Work done only for
     /// one, such as deciding what [`Tx::announce`] says, can wait for it and cost nothing without.
+    /// In a browser it's always true: a page can't tell whether a screen reader reads it, and
+    /// its mirror and live regions are always there.
     pub fn assistive_technology(&self) -> bool {
         self.assistive
     }
