@@ -13,6 +13,14 @@ use crate::monitor::MonitorHandle;
 use crate::window::{BadIcon, Icon, Window, WindowAttributes};
 
 /// Window Handle type used by Win32 API
+/// Builds winit's keyboard-layout table for thread `thread_id`'s keyboard layout on the calling
+/// thread, so the first key or mouse message that thread's windows handle doesn't build it (8-10
+/// ms, every virtual key through `ToUnicodeEx`). Call it on a thread of its own at launch with
+/// the UI thread's id.
+pub fn warm_keyboard_layout(thread_id: u32) {
+    crate::platform_impl::warm_layout(thread_id);
+}
+
 pub type HWND = isize;
 /// Menu Handle type used by Win32 API
 pub type HMENU = isize;

@@ -8,6 +8,7 @@ pub(crate) use self::event_loop::{
 };
 pub(crate) use self::icon::{SelectedCursor, WinIcon};
 pub(crate) use self::keyboard::{physicalkey_to_scancode, scancode_to_physicalkey};
+pub(crate) use self::keyboard_layout::warm_layout;
 pub(crate) use self::monitor::{MonitorHandle, VideoModeHandle};
 pub(crate) use self::window::Window;
 
