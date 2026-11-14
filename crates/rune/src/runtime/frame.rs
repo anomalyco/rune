@@ -410,6 +410,17 @@ impl<S: 'static> Runtime<S> {
         self.poll_hidden()
     }
 
+    /// [`Runtime::hidden_wake`] for a shown window that can't draw (covered, minimised, on a
+    /// locked or sleeping display). While an assistive client reads its tree, what changed is
+    /// built at once, without drawing or motion, so the tree it reads and focus asked of what
+    /// the change shows (a permission's card) are current whatever the window's motion does.
+    /// Returns what `hidden_wake` does.
+    pub(crate) fn covered_wake(&mut self) -> bool {
+        let stale = self.hidden_wake();
+        if self.a11y.is_some() && self.needs_commit() { self.hidden_timer_frame(); }
+        stale
+    }
+
     /// One frame in one pass that steps `catch_up + dt` seconds. Motion already running advances
     /// `catch_up` before this frame's handlers and commit, so they retarget it from its pose at
     /// the frame's time. Then everything, including what the commit started, steps `dt`. A late

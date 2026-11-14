@@ -712,10 +712,11 @@ fn setup_waker<S: 'static>(shared: &Arc<crate::app::Shared<S>>) -> Waker {
 /// What a shown window that can't draw runs for an update, a wake, a due timer or a redraw:
 /// covered (an occlusion event, or a drawable refused as occluded), minimised, or waiting out
 /// a missed frame. `poll`, due timers and queued input run now, as for a hidden window
-/// (`Runtime::hidden_wake`); the view and layout wait, dirty, for the frame that uncovers it.
+/// (`Runtime::hidden_wake`); the view and layout wait, dirty, for the frame that uncovers it,
+/// unless an assistive client reads the window (`Runtime::covered_wake`).
 /// Uncovering settles first, so that frame builds once and paints motion where it would have
 /// ended, as Core Animation's time-based motion has by the time a covered window shows again.
-pub(crate) fn covered_step<S: 'static>(rt: &mut Runtime<S>) { rt.hidden_wake(); }
+pub(crate) fn covered_step<S: 'static>(rt: &mut Runtime<S>) { rt.covered_wake(); }
 
 /// Frames a window's swap chain may hold that the compositor hasn't shown. Windows: one, so a
 /// frame shows at the first composition after it's done, and the window waits for room itself
