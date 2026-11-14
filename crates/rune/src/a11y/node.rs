@@ -289,7 +289,7 @@ impl<S: 'static> Runtime<S> {
     /// The element keyed `key` nearest node `i`, which isn't leaving: the first inside its
     /// parent, else inside its grandparent, and so on out, as a component's own `"title"` is
     /// the one a control inside it means. What `El::labelled_by` and `El::described_by` name.
-    fn a11y_keyed(&self, i: usize, key: &str) -> Option<usize> {
+    pub(crate) fn a11y_keyed(&self, i: usize, key: &str) -> Option<usize> {
         let mut scope = self.nodes[i].parent;
         while let Some(s) = scope {
             let inside = |j: &usize| std::iter::successors(self.nodes[*j].parent, |&p| self.nodes[p].parent).any(|p| p == s);
@@ -302,7 +302,7 @@ impl<S: 'static> Runtime<S> {
     }
 
     /// Node `j`'s words as a name: its label, else its text, else the text inside it.
-    fn a11y_words(&self, j: usize) -> String {
+    pub(crate) fn a11y_words(&self, j: usize) -> String {
         let n = &self.nodes[j];
         if n.is_secure() { return String::new(); }
         n.label.as_deref().filter(|l| !l.trim().is_empty()).map(str::to_owned)

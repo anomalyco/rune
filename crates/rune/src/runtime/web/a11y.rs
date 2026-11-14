@@ -52,6 +52,9 @@ pub(crate) struct A11yItem {
     /// Text the browser selects and copies, in a page: `El::selectable` text, and text outside
     /// anything that takes the pointer (`Runtime::page_text_selects`).
     pub selectable: bool,
+    /// What describes it beyond its name (`El::description`, `El::described_by`'s words):
+    /// `aria-description`.
+    pub description: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -77,7 +80,7 @@ pub(crate) struct A11yRun {
 impl A11yItem {
     fn new(kind: &'static str, path: &str, rect: [f32; 4]) -> Self {
         A11yItem { kind, path: path.to_owned(), rect, font_size: 0.0, level: None, expanded: None, text: String::new(),
-            runs: Vec::new(), tag: None, role: None, parent: None, id: None, href: None, font: None, selectable: false }
+            runs: Vec::new(), tag: None, role: None, parent: None, id: None, href: None, font: None, selectable: false, description: String::new() }
     }
 
     fn to_json(&self) -> Value {
@@ -89,6 +92,7 @@ impl A11yItem {
         if let Some(l) = self.level { obj.insert("l".into(), json!(l)); }
         if let Some(x) = self.expanded { obj.insert("x".into(), json!(x)); }
         if !self.text.is_empty() { obj.insert("t".into(), json!(self.text)); }
+        if !self.description.is_empty() { obj.insert("d".into(), json!(self.description)); }
         if let Some(g) = self.tag { obj.insert("g".into(), json!(g)); }
         if let Some(o) = self.role { obj.insert("o".into(), json!(o)); }
         if let Some(a) = self.parent { obj.insert("a".into(), json!(a)); }
@@ -383,13 +387,14 @@ impl<S: 'static> Runtime<S> {
 
             // A labelled `group` (a game's surface naming its keys, a set of controls) is a div
             // with the role and its label; an unlabelled one adds nothing a reader would say.
-            let labelled_group = n.role == "group" && n.label.as_deref().is_some_and(|s| !s.trim().is_empty());
+            let labelled_group = n.role == "group" && self.mirror_name(i).is_some();
             if let Some(tag) = container_tag(n.role).or(labelled_group.then_some("div")) {
                 let mut item = A11yItem::new("group", &n.path, rect);
                 item.tag = Some(tag);
                 item.role = aria_role(n.role).or(labelled_group.then_some("group"));
                 item.id = anchor_id(n.key.as_deref());
-                item.text = n.label.as_deref().map(str::to_owned).filter(|s| !s.trim().is_empty()).unwrap_or_default();
+                item.text = self.mirror_name(i).unwrap_or_default();
+                item.description = self.mirror_description(i);
                 push(&mut out, item);
                 open.push((end, out.len() - 1));
                 last_flow_parent = None;
@@ -397,7 +402,7 @@ impl<S: 'static> Runtime<S> {
                 continue;
             }
             if let Some(href) = n.a11y.more.as_ref().and_then(|m| m.href.clone()) {
-                let label = n.label.as_deref().map(str::to_owned).filter(|s| !s.trim().is_empty()).unwrap_or_else(|| self.descendant_label(i, end));
+                let label = self.mirror_name(i).unwrap_or_else(|| self.descendant_label(i, end));
                 if !label.is_empty() && rect[2] > 0.0 && rect[3] > 0.0 {
                     let mut item = A11yItem::new("link", &n.path, rect);
                     item.text = label;
@@ -409,7 +414,7 @@ impl<S: 'static> Runtime<S> {
                 last_flow_parent = None;
                 continue;
             }
-            if matches!(n.role, "image" | "img") && let Some(label) = n.label.as_deref().map(str::to_owned).filter(|s| !s.trim().is_empty()) {
+            if matches!(n.role, "image" | "img") && let Some(label) = self.mirror_name(i) {
                 let mut item = A11yItem::new("image", &n.path, rect);
                 item.text = label;
                 push(&mut out, item);
@@ -422,11 +427,12 @@ impl<S: 'static> Runtime<S> {
             // multi-block section with independent buttons inside.
             let nested_press = (i + 1..end).any(|j| self.nodes[j].handlers.on_press.is_some() || self.nodes[j].role == "button");
             if button_like && !nested_press && rect[2] > 0.0 && rect[3] > 0.0 {
-                let label = n.label.as_deref().map(str::to_owned).filter(|s| !s.trim().is_empty()).unwrap_or_else(|| self.descendant_label(i, end));
+                let label = self.mirror_name(i).unwrap_or_else(|| self.descendant_label(i, end));
                 if !label.is_empty() {
                     let mut item = A11yItem::new("button", &n.path, rect);
                     item.expanded = n.a11y.expanded;
                     item.text = label;
+                    item.description = self.mirror_description(i);
                     push(&mut out, item);
                     i = end;
                     last_flow_parent = None;
@@ -508,7 +514,7 @@ impl<S: 'static> Runtime<S> {
                         selectable,
                     });
                 }
-            } else if n.role == "heading" && let Some(lbl) = n.label.as_deref().map(str::to_owned).filter(|s| !s.trim().is_empty()) {
+            } else if n.role == "heading" && let Some(lbl) = self.mirror_name(i) {
                 let mut item = A11yItem::new("heading", &n.path, rect);
                 item.font_size = 16.0;
                 item.level = Some(n.a11y.level.unwrap_or(2).clamp(1, 6));
@@ -520,6 +526,26 @@ impl<S: 'static> Runtime<S> {
             i += 1;
         }
         out
+    }
+
+    /// Node `i`'s name in the mirror, as the native tree names it: its label, else the words of
+    /// the element `El::labelled_by` names.
+    fn mirror_name(&self, i: usize) -> Option<String> {
+        let n = &self.nodes[i];
+        n.label.as_deref().filter(|s| !s.trim().is_empty()).map(str::to_owned).or_else(|| {
+            let key = n.a11y.more.as_deref()?.labelled_by.as_deref()?;
+            Some(self.a11y_words(self.a11y_keyed(i, key)?)).filter(|w| !w.trim().is_empty())
+        })
+    }
+
+    /// Node `i`'s description in the mirror: `El::description`, else the words of the element
+    /// `El::described_by` names.
+    fn mirror_description(&self, i: usize) -> String {
+        let Some(more) = self.nodes[i].a11y.more.as_deref() else { return String::new() };
+        more.description.as_deref().map(str::to_owned)
+            .or_else(|| more.described_by.as_deref().and_then(|k| self.a11y_keyed(i, k)).map(|j| self.a11y_words(j)))
+            .filter(|w| !w.trim().is_empty())
+            .unwrap_or_default()
     }
 
     /// The page's horizontal scroll viewports: their paths and how far each is scrolled right.
