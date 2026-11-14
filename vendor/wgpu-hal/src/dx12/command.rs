@@ -395,6 +395,8 @@ impl crate::CommandEncoder for super::CommandEncoder {
 
     unsafe fn begin_encoding(&mut self, label: crate::Label) -> Result<(), crate::DeviceError> {
         let _ib3 = super::Ib3Guard::new("begin_encoding");
+        let ib3_free = self.free_lists.len();
+        let ib3_t = std::time::Instant::now();
         let list = loop {
             if let Some(list) = self.free_lists.pop() {
                 // TODO: Is an error expected here and should we print it?
@@ -408,11 +410,18 @@ impl crate::CommandEncoder for super::CommandEncoder {
         };
 
         // A list made ahead, when this encoder has none to reuse (`Device::reserve_command_lists`).
+        let ib3_path = if list.is_some() { "own" } else { "spare" };
+        super::ib3_slow(if list.is_some() { "begin.own.reset" } else { "begin.own.none" }, ib3_t, ib3_free);
+        let ib3_t = std::time::Instant::now();
+        let ib3_spare = self.shared.spare_lists.lock().0.len();
         let list = list.or_else(|| {
             let spare = self.shared.spare_lists.lock().0.pop()?;
             unsafe { spare.Reset(&self.allocator, None) }.is_ok().then_some(spare)
         });
 
+        if ib3_path == "spare" { super::ib3_slow(if list.is_some() { "begin.spare.reset" } else { "begin.spare.none" }, ib3_t, ib3_spare); }
+        let ib3_t = std::time::Instant::now();
+        let ib3_created = list.is_none();
         let list = if let Some(list) = list {
             list
         } else {
@@ -427,6 +436,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
             .into_device_result("Create command list")?
         };
 
+        if ib3_created { super::ib3_slow("begin.create", ib3_t, 0); }
         if let Some(label) = label {
             list.set_name(label)?;
         }

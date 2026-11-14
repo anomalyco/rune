@@ -482,6 +482,7 @@ impl super::Device {
             unsafe { list.Close() }.into_device_result("GraphicsCommandList::close")?;
             spare.0.push(list);
         }
+        if std::env::var_os("IB3_HAL_LOG").is_some() { eprintln!("ib3-hal: reserved {} lists on {:?}", spare.0.len(), std::thread::current().name()); }
         Ok(())
     }
 
