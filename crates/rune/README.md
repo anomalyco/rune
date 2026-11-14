@@ -2431,10 +2431,9 @@ target/release/settings                       # the window
 
 ### Depending on Rune
 
-An app pins a `dev` rev and patches the same four crates Rune does, from the same rev. A
-dependency's `[patch]` doesn't reach the workspace that depends on it, and without these the app
-builds against stock crates: winit's patch carries macOS input-method and Windows window-creation
-fixes, parley_engine's carries bidi and shaping fixes.
+Pin Rune to a `dev` revision. In your app's workspace root `Cargo.toml`, patch each crate listed
+in Rune's `[patch.crates-io]` table at that revision. Cargo doesn't inherit patches from a
+dependency. Without `accesskit_macos`, for example, VoiceOver won't recognize Rune's headings.
 
 ```toml
 [dependencies]
@@ -2445,10 +2444,11 @@ winit = { git = "https://github.com/anomalyco/rune", rev = "<rev>" }
 parley_engine = { git = "https://github.com/anomalyco/rune", rev = "<rev>" }
 wgpu-hal = { git = "https://github.com/anomalyco/rune", rev = "<rev>" }
 accesskit_windows = { git = "https://github.com/anomalyco/rune", rev = "<rev>" }
+accesskit_macos = { git = "https://github.com/anomalyco/rune", rev = "<rev>" }
 ```
 
-The list is the `[patch.crates-io]` table in Rune's root `Cargo.toml`; when a bump adds an entry
-there, add it here too.
+When you update Rune, check its [root `Cargo.toml`](../../Cargo.toml) at the new revision and
+use that same `rev` for Rune and every patch.
 
 ### Linux
 
