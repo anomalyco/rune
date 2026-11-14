@@ -1,0 +1,1 @@
+- **`input.key.handled` marks a key that comes as a physical key too.** Keys with a physical code reach a frame as `Action::Physical` (their logical key follows from it), so the mark from #921 missed every ordinary key.

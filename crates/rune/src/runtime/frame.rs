@@ -548,7 +548,7 @@ impl<S: 'static> Runtime<S> {
         let mut pointer_hover = false;
         for Queued { action, at } in queue {
             let _input = crate::input::time::scope(at);
-            if matches!(action, Action::Key { stage: false, .. }) { crate::marks::input_handled(true); }
+            if matches!(action, Action::Key { stage: false, .. } | Action::Physical(crate::PhysicalInput::Key { pressed: true, .. }, _)) { crate::marks::input_handled(true); }
             pointer_hover |= matches!(action, Action::Hover(_));
             // State may have requested focus on a newly mounted field. Resolve the
             // new tree before routing this frame's text, not after it has gone to
