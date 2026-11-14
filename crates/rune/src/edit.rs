@@ -703,6 +703,9 @@ impl TextEdit {
                     out.push(c);
                 }
             }
+        } else if !s.contains('\r') {
+            // Most pastes: copied whole, not a character at a time.
+            out.push_str(s);
         } else {
             let mut chars = s.chars().peekable();
             while let Some(c) = chars.next() {

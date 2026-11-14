@@ -99,6 +99,11 @@ pub(crate) struct Lazy {
     wrap_anywhere: bool,
     /// Its layout's entry in the cache, which a fill replaces.
     cache_key: u64,
+    /// What keys a run's lines when a fill takes it apart (`key_paragraphs`).
+    style_key: u64,
+    forced: Option<Flow>,
+    start_flow: Flow,
+    ascii: Rc<AsciiLine>,
 }
 
 /// One line of printable ASCII in a style: each character's advance and the line's height
@@ -106,14 +111,36 @@ pub(crate) struct Lazy {
 /// shaped yet.
 pub(crate) struct AsciiLine {
     advance: [f32; 95],
+    /// The widest character's advance: a line this many times its length that fits needs no sum.
+    widest: f32,
     height: f32,
     empty: Rc<Layout<Ink>>,
 }
 
+/// Whether every byte of `s` is printable ASCII (`0x20..0x7f`), eight at a time.
+fn printable(s: &[u8]) -> bool {
+    let mut chunks = s.chunks_exact(8);
+    for c in &mut chunks {
+        let w = u64::from_le_bytes(c.try_into().unwrap());
+        // A byte under 0x20 borrows when 0x20 is taken from it; one at or over 0x7f has its top
+        // bit set once 1 is added to it.
+        let low = w.wrapping_sub(0x2020_2020_2020_2020) & !w;
+        let high = w.wrapping_add(0x0101_0101_0101_0101) | w;
+        if (low | high) & 0x8080_8080_8080_8080 != 0 { return false; }
+    }
+    chunks.remainder().iter().all(|b| (0x20..0x7f).contains(b))
+}
+
 impl AsciiLine {
     /// `words`' height and width when they're printable ASCII that fits on one line at
-    /// `max_width`, with room to spare for what kerning and ligatures do to the sum.
-    fn one_line(&self, words: &str, max_width: Option<f32>) -> Option<(f32, f32)> {
+    /// `max_width`, with room to spare for what kerning and ligatures do to the sum. A line no
+    /// wider than `floor` however wide its characters (a wider line beside it, whose width only
+    /// a maximum reads) reports `floor`, summing none of them.
+    fn one_line(&self, words: &str, max_width: Option<f32>, floor: f32) -> Option<(f32, f32)> {
+        let bound = words.len() as f32 * self.widest;
+        if bound <= floor && max_width.is_none_or(|m| bound * 1.03 + 2.0 <= m) && printable(words.as_bytes()) {
+            return Some((self.height, floor));
+        }
         let mut w = 0.0f32;
         for b in words.bytes() {
             if !(0x20..0x7f).contains(&b) { return None; }
@@ -129,13 +156,16 @@ impl AsciiLine {
     }
 
     /// `words` broken at their narrowest, estimated: a line per space-separated word, as wide as
-    /// the widest. Only a min-content measure asks, for the width.
-    fn narrowest(&self, words: &str) -> Option<(f32, f32)> {
-        if !words.bytes().all(|b| (0x20..0x7f).contains(&b)) { return None; }
-        let (mut lines, mut widest) = (0usize, 0.0f32);
+    /// the widest. Only a min-content measure asks, for the width. A word no wider than `floor`
+    /// however wide its characters isn't summed, as `one_line` doesn't.
+    fn narrowest(&self, words: &str, floor: f32) -> Option<(f32, f32)> {
+        if !printable(words.as_bytes()) { return None; }
+        let (mut lines, mut widest) = (0usize, floor);
         for w in words.split(' ').filter(|w| !w.is_empty()) {
             lines += 1;
-            widest = widest.max(w.bytes().map(|b| self.advance[(b - 0x20) as usize]).sum());
+            if w.len() as f32 * self.widest > widest {
+                widest = widest.max(w.bytes().map(|b| self.advance[(b - 0x20) as usize]).sum());
+            }
         }
         Some((self.height * lines.max(1) as f32, widest))
     }
@@ -167,6 +197,11 @@ pub(crate) struct Paragraph {
     pub(crate) layout: Rc<Layout<Ink>>,
     /// False while it waits for a fill: `layout` is an empty stand-in, its height exact.
     pub(crate) shaped: bool,
+    /// How many lines of the text it holds: more than one for a run of waiting lines, which a
+    /// long paste keeps as one record so its frame doesn't touch every line.
+    pub(crate) lines: u32,
+    /// A run as keying found it, keyed by its bytes: a fill takes it apart into its lines first.
+    run: bool,
 }
 
 /// One layout of a text and where it sits: its whole layout, or one paragraph of a field's.
@@ -633,18 +668,24 @@ impl TextSystem {
         let reused = prev.filter(|_| plain).and_then(|p| reuse_keys(p, content, style_key, start_flow));
         let (mut found, tail, entering) = reused.map_or((Vec::new(), Vec::new(), start_flow), |r| (r.head, r.tail, r.entering));
         let at = found.last().map_or(0, |f| f.1 + 1);
+        // A long paste's plain ASCII lines that fit on one line, away from the edit's ends, wait
+        // as runs: one record each, at their exact height, for `fill_paragraphs`.
+        let edited = tail.first().map_or(content.len(), |t| t.0).saturating_sub(at);
+        let ascii = (plain && edited > LAZY_MIN * 8 && count_newlines(&content.as_bytes()[at..at + edited]) > LAZY_MIN)
+            .then(|| self.ascii_line(style, scale, spec.wrap_anywhere)).flatten();
+        let runs = ascii.as_deref().map(|m| Runs { ascii: m, max_width, edit: true });
         match tail.first().map(|t| t.0) {
             Some(t) => {
-                key_paragraphs(spec, style_key, at, t - 1, start_flow, forced, &mut found);
+                key_paragraphs(spec, style_key, at, t - 1, start_flow, forced, runs, &mut found);
                 // The paragraphs after the edit keep their keys if they start from the direction
                 // they were keyed in (a neutral one takes the one before it).
                 if found.last().map(|f| f.2) == Some(entering) {
                     found.extend(tail);
                 } else {
-                    key_paragraphs(spec, style_key, t, content.len(), start_flow, forced, &mut found);
+                    key_paragraphs(spec, style_key, t, content.len(), start_flow, forced, None, &mut found);
                 }
             }
-            None => key_paragraphs(spec, style_key, at, content.len(), start_flow, forced, &mut found),
+            None => key_paragraphs(spec, style_key, at, content.len(), start_flow, forced, runs, &mut found),
         }
         // What the edit left alone: the paragraphs before it, and those after it.
         let old = prev.map_or(&[][..], |p| p.paragraphs.as_slice());
@@ -653,41 +694,41 @@ impl TextSystem {
         let after = found[before..].iter().rev().zip(old[before..].iter().rev()).take_while(|(f, o)| f.3 == o.key).count();
         let rebreak = prev.is_some_and(|p| p.max_width != max_width || p.align != align);
         let line = style.line_px() * scale;
-        // A long paste shapes the paragraphs near its ends; plain ASCII lines that fit on one
-        // line elsewhere wait, at their exact height, for `fill_paragraphs`.
-        let ascii = (plain && n - before - after > LAZY_MIN).then(|| self.ascii_line(style, scale, spec.wrap_anywhere)).flatten();
-        let waits = |k: usize, words: &str| -> Option<(f32, f32)> {
-            let m = ascii.as_ref()?;
-            if words.is_empty() { return None; }
-            if m.narrow(max_width) { return m.narrowest(words); }
-            let near = k < before + EAGER_START || k + EAGER_END >= n - after;
-            if near { return None; }
-            m.one_line(words, max_width)
-        };
+        // Each record found with the one the last layout had for it. A waiting one broken at
+        // another width is keyed again there: its lines may not all fit any more.
+        let mut items: Vec<(Found, Option<&Paragraph>)> = Vec::with_capacity(n);
+        for (k, f) in found.into_iter().enumerate() {
+            let kept = if k < before { Some(&old[k]) } else if k >= n - after { Some(&old[old.len() - (n - k)]) } else { None };
+            match kept {
+                Some(o) if !o.shaped && rebreak => {
+                    let m = match &ascii { Some(m) => Some(m.clone()), None => self.ascii_line(style, scale, spec.wrap_anywhere) };
+                    let mut again = Vec::new();
+                    let from = items.last().map_or(start_flow, |(f, _)| f.2);
+                    key_paragraphs(spec, style_key, f.0, f.1, from, forced, m.as_deref().map(|m| Runs { ascii: m, max_width, edit: false }), &mut again);
+                    items.extend(again.into_iter().map(|f| (f, None)));
+                }
+                _ => items.push((f, kept)),
+            }
+        }
         let mut waiting = 0;
-        let (mut paragraphs, mut y) = (Vec::with_capacity(n), 0.0f64);
+        let (mut paragraphs, mut y) = (Vec::with_capacity(items.len()), 0.0f64);
         let (mut width, mut full_width, mut fresh) = (0.0f32, 0.0f32, 0);
-        for (k, (a, b, flow, key, isolates)) in found.into_iter().enumerate() {
+        for (k, ((a, b, flow, key, isolates, run), kept)) in items.into_iter().enumerate() {
             let block = spec.cold.blocks.get(k).copied().unwrap_or(Block::Paragraph);
             let blocks: &[Block] = if block == Block::Paragraph { &[] } else { std::slice::from_ref(&block) };
-            let kept = if k < before { Some(&old[k]) } else if k >= n - after { Some(&old[old.len() - (n - k)]) } else { None };
-            // One still waiting stays so while its width allows; one that doesn't is new here.
-            if let Some(o) = kept.filter(|o| !o.shaped) {
-                let words = &content[a..b];
-                let fits = (!rebreak).then_some((o.height, o.widths[0])).or_else(|| ascii.as_ref().and_then(|m| m.one_line(words, max_width)).or_else(|| self.ascii_line(style, scale, spec.wrap_anywhere)?.one_line(words, max_width)));
-                if let Some((height, w)) = fits {
-                    waiting += 1;
-                    (width, full_width) = (width.max(w), full_width.max(w));
-                    paragraphs.push(Paragraph { start: a, end: b, y: y.round() as f32, height, widths: [w, w], flow, key, isolates, layout: o.layout.clone(), shaped: false });
-                    y += f64::from(height);
-                    continue;
+            // A waiting record kept at the same width stays as it was; a run found here waits.
+            let wait = match (kept, run) {
+                (Some(o), _) if !o.shaped => Some((o.height, o.widths[0], o.lines, o.layout.clone(), o.run)),
+                (None, Some((height, w, lines))) => {
+                    let m = match &ascii { Some(m) => Some(m.clone()), None => self.ascii_line(style, scale, spec.wrap_anywhere) };
+                    m.map(|m| (height, w, lines, m.empty.clone(), true))
                 }
-            }
-            let kept = kept.filter(|o| o.shaped);
-            if kept.is_none() && let Some((height, w)) = waits(k, &content[a..b]) && let Some(m) = &ascii {
+                _ => None,
+            };
+            if let Some((height, w, lines, layout, run)) = wait {
                 waiting += 1;
                 (width, full_width) = (width.max(w), full_width.max(w));
-                paragraphs.push(Paragraph { start: a, end: b, y: y.round() as f32, height, widths: [w, w], flow, key, isolates, layout: m.empty.clone(), shaped: false });
+                paragraphs.push(Paragraph { start: a, end: b, y: y.round() as f32, height, widths: [w, w], flow, key, isolates, layout, shaped: false, lines, run });
                 y += f64::from(height);
                 continue;
             }
@@ -722,17 +763,41 @@ impl TextSystem {
                 _ => (if a == b { layout.height().max(line) } else { layout.height() }, [layout.width(), layout.full_width()]),
             };
             (width, full_width) = (width.max(widths[0]), full_width.max(widths[1]));
-            paragraphs.push(Paragraph { start: a, end: b, y: y.round() as f32, height, widths, flow, key, isolates, layout, shaped: true });
+            paragraphs.push(Paragraph { start: a, end: b, y: y.round() as f32, height, widths, flow, key, isolates, layout, shaped: true, lines: 1, run: false });
             y += f64::from(height);
         }
         let (asc, desc) = self.primary_extents(style.family, style.weight, style.italic).unwrap_or((0.8, 0.2));
         let newline = 0.25 * (asc + desc.abs()) * style.size * scale;
-        let keyed = plain.then(|| Keyed { content: Rc::from(content), style_key, start_flow });
-        let lazy = (waiting > 0).then(|| Rc::new(Lazy {
+        // One copy of a long text for both widths a measure asks for, not one each.
+        let shared = self.last_paragraphs.as_ref().and_then(|l| l.keyed.as_ref()).map(|k| k.content.clone()).filter(|c| **c == *content);
+        let keyed = plain.then(|| Keyed { content: shared.unwrap_or_else(|| Rc::from(content)), style_key, start_flow });
+        let lazy = (waiting > 0).then(|| self.ascii_line(style, scale, spec.wrap_anywhere)).flatten().map(|ascii| Rc::new(Lazy {
             content: keyed.as_ref().map_or_else(|| Rc::from(content), |k| k.content.clone()),
-            style, scale, wrap_anywhere: spec.wrap_anywhere, cache_key,
+            style, scale, wrap_anywhere: spec.wrap_anywhere, cache_key, style_key, forced, start_flow, ascii,
         }));
         (ParagraphLayout { paragraphs, width, full_width, height: y as f32, max_width, align, whole, newline, keyed, lazy }, fresh)
+    }
+
+    /// Run `k`'s lines as waiting paragraphs of their own, keyed as `key_paragraphs` keys a line.
+    fn run_lines(&mut self, lazy: &Lazy, laid: &ParagraphLayout, paragraphs: &[Paragraph], k: usize) -> Vec<Paragraph> {
+        let r = &paragraphs[k];
+        let mut flow = k.checked_sub(1).map_or(lazy.start_flow, |i| paragraphs[i].flow);
+        let (mut at, mut y) = (r.start, r.y);
+        let mut out = Vec::with_capacity(r.lines as usize);
+        let mut widest = 0.0f32;
+        for words in lazy.content[r.start..r.end].split('\n') {
+            let (a, b) = (at, at + words.len());
+            at = b + 1;
+            // Printable ASCII, as every line of a run is: its letters are its strong characters.
+            flow = lazy.forced.or_else(|| words.bytes().any(|b| b.is_ascii_alphabetic()).then_some(Flow::Ltr)).unwrap_or(flow);
+            let mut h = hash::KeyHasher::default();
+            (words, lazy.style_key, flow == Flow::Rtl, Block::Paragraph).hash(&mut h);
+            let (height, w) = lazy.ascii.one_line(words, laid.max_width, widest).unwrap_or((lazy.ascii.height, 0.0));
+            widest = widest.max(w);
+            out.push(Paragraph { start: a, end: b, y, height, widths: [w, w], flow, key: h.finish(), isolates: Box::default(), layout: r.layout.clone(), shaped: false, lines: 1, run: false });
+            y += height;
+        }
+        out
     }
 
     /// Printable ASCII in `style` at `scale`, measured once: None when its characters don't all
@@ -758,32 +823,46 @@ impl TextSystem {
                 if r.len() != 1 || !(0x20..0x7f).contains(&b) { return None; }
                 advance[(b - 0x20) as usize] = cluster.advance();
             }
-            advance.iter().all(|a| a.is_finite()).then(|| Rc::new(AsciiLine { advance, height: l.height(), empty }))
+            advance.iter().all(|a| a.is_finite()).then(|| Rc::new(AsciiLine { advance, widest: advance.iter().copied().fold(0.0, f32::max), height: l.height(), empty }))
         })();
         self.ascii.insert(key, measured.clone());
         measured
     }
 
     /// Shapes waiting paragraphs of `laid` for up to `budget`, those meeting device rows `rows`
-    /// first, then the nearest: the layout with them shaped (cached in its place), and whether a
-    /// height moved (it shouldn't: a waiting height is exact). None when none were waiting.
+    /// first, then the nearest, none further than `reach` from them: the layout with them shaped
+    /// (cached in its place), and whether a height moved (it shouldn't: a waiting height is
+    /// exact). A run is taken apart into its lines, each keyed as keying would, before its first
+    /// line is shaped. None when none were waiting.
     pub(crate) fn fill_paragraphs(&mut self, laid: &ParagraphLayout, budget: std::time::Duration, rows: (f32, f32), reach: f32) -> Option<(Rc<ParagraphLayout>, bool)> {
         let lazy = laid.lazy.clone()?;
         let start = std::time::Instant::now();
-        let mut order: Vec<usize> = (0..laid.paragraphs.len()).filter(|&k| !laid.paragraphs[k].shaped).collect();
         let distance = |p: &Paragraph| if p.y + p.height >= rows.0 && p.y <= rows.1 { 0.0 } else { (rows.0 - p.y - p.height).max(p.y - rows.1) };
-        order.sort_by(|&a, &b| distance(&laid.paragraphs[a]).total_cmp(&distance(&laid.paragraphs[b])));
         let mut paragraphs = laid.paragraphs.clone();
-        let mut moved = false;
-        let mut left = order.len();
-        for k in order {
-            if (start.elapsed() >= budget && left < laid.paragraphs.len()) || distance(&laid.paragraphs[k]) > reach { break; }
+        let (mut moved, mut shaped_any) = (false, false);
+        loop {
+            if shaped_any && start.elapsed() >= budget { break; }
+            // The nearest waiting record: out from where the rows start, both ways.
+            let mid = paragraphs.partition_point(|p| p.y + p.height < rows.0);
+            let up = paragraphs[mid..].iter().position(|p| !p.shaped).map(|i| mid + i);
+            let down = paragraphs[..mid].iter().rposition(|p| !p.shaped);
+            let k = match (up, down) {
+                (Some(u), Some(d)) => if distance(&paragraphs[u]) <= distance(&paragraphs[d]) { u } else { d },
+                (Some(k), None) | (None, Some(k)) => k,
+                (None, None) => break,
+            };
+            if distance(&paragraphs[k]) > reach { break; }
+            if paragraphs[k].run {
+                let lines = self.run_lines(&lazy, laid, &paragraphs, k);
+                paragraphs.splice(k..k + 1, lines);
+                continue;
+            }
             let p = &mut paragraphs[k];
             let words = &lazy.content[p.start..p.end];
             let l = self.layout_keyed(Some(p.key), words, &[], &[], &[], lazy.style, lazy.scale, laid.max_width, laid.align, lazy.wrap_anywhere, false, Keep::Owned, p.flow.base());
             moved |= l.height() != p.height;
             (p.height, p.widths, p.layout, p.shaped) = (l.height(), [l.width(), l.full_width()], l, true);
-            left -= 1;
+            shaped_any = true;
         }
         let (mut y, mut width, mut full_width) = (0.0f64, 0.0f32, 0.0f32);
         for p in &mut paragraphs {
@@ -791,31 +870,84 @@ impl TextSystem {
             y += f64::from(p.height);
             (width, full_width) = (width.max(p.widths[0]), full_width.max(p.widths[1]));
         }
+        let left = paragraphs.iter().any(|p| !p.shaped);
         let keyed = laid.keyed.as_ref().map(|k| Keyed { content: k.content.clone(), style_key: k.style_key, start_flow: k.start_flow });
         let built = Rc::new(ParagraphLayout {
             paragraphs, width, full_width, height: y as f32, max_width: laid.max_width, align: laid.align, whole: laid.whole,
-            newline: laid.newline, keyed, lazy: (left > 0).then_some(lazy.clone()),
+            newline: laid.newline, keyed, lazy: left.then_some(lazy.clone()),
         });
         let g = self.generation;
         self.paragraphs.insert(lazy.cache_key, Entry::new(built.clone(), g, built.paragraphs.len() * size_of::<Paragraph>() / 64, built.whole));
-        if self.last_paragraphs.as_ref().is_some_and(|l| std::ptr::eq(&**l, laid)) { self.last_paragraphs = Some(built.clone()); }
-        Some((built, moved))
+        if self.last_paragraphs.as_ref().is_some_and(|l| std::ptr::eq(&**l, laid)) { self.last_paragraphs = Some(built.clone()); }        Some((built, moved))
     }
 }
 
-/// A paragraph found in a field's text: its bytes, direction, key and isolated pills.
-type Found = (usize, usize, Flow, u64, Box<[(u32, u32)]>);
+/// A paragraph found in a field's text: its bytes, direction, key and isolated pills, and for a
+/// run of waiting lines its height, width and line count.
+type Found = (usize, usize, Flow, u64, Box<[(u32, u32)]>, Option<(f32, f32, u32)>);
+
+/// What lets lines wait as runs while they're keyed: printable ASCII's measures at the field's
+/// width, and whether the lines are an edit's (whose ends are shaped at once, as the caret's
+/// window) or a waiting run's keyed again at another width.
+#[derive(Clone, Copy)]
+struct Runs<'a> {
+    ascii: &'a AsciiLine,
+    max_width: Option<f32>,
+    edit: bool,
+}
+
+/// `\n` bytes in `s`, counted eight at a time.
+fn count_newlines(s: &[u8]) -> usize {
+    let mut chunks = s.chunks_exact(8);
+    let mut n = 0usize;
+    for c in &mut chunks {
+        let w = u64::from_le_bytes(c.try_into().unwrap()) ^ 0x0a0a_0a0a_0a0a_0a0a;
+        n += ((w.wrapping_sub(0x0101_0101_0101_0101) & !w & 0x8080_8080_8080_8080).count_ones()) as usize;
+    }
+    n + chunks.remainder().iter().filter(|&&b| b == b'\n').count()
+}
 
 /// Keys the paragraphs of `spec`'s content bytes `a..z` (a paragraph's start to a paragraph's
 /// end) onto `found`. A paragraph with no strong character reads the way the one before it
-/// does, the first `start_flow`; with `forced`, every paragraph reads that way.
-fn key_paragraphs(spec: &TextSpec, style_key: u64, a: usize, z: usize, start_flow: Flow, forced: Option<Flow>, found: &mut Vec<Found>) {
+/// does, the first `start_flow`; with `forced`, every paragraph reads that way. With `runs`, more
+/// than [`LAZY_MIN`] lines of an edit (or any number of a run keyed again) put the plain ASCII
+/// lines that fit on one line, away from the edit's ends, in runs: one record per run, keyed by
+/// its bytes, its height the sum of its lines'.
+fn key_paragraphs(spec: &TextSpec, style_key: u64, a: usize, z: usize, start_flow: Flow, forced: Option<Flow>, runs: Option<Runs<'_>>, found: &mut Vec<Found>) {
+    let lines = if runs.is_some() { count_newlines(&spec.content.as_bytes()[a..z]) + 1 } else { 0 };
+    let runs = runs.filter(|r| !r.edit || lines > LAZY_MIN);
+    // The run being gathered: its first byte, last byte, height, width, lines and last flow.
+    let mut run: Option<(usize, usize, f32, f32, u32, Flow)> = None;
+    let close = |run: &mut Option<(usize, usize, f32, f32, u32, Flow)>, found: &mut Vec<Found>| {
+        if let Some((a, b, height, w, n, flow)) = run.take() {
+            let mut h = hash::KeyHasher::default();
+            (&spec.content[a..b], style_key, flow == Flow::Rtl, n, "run").hash(&mut h);
+            found.push((a, b, flow, h.finish(), Box::default(), Some((height, w, n))));
+        }
+    };
     let mut start = a;
-    for words in spec.content[a..z].split('\n') {
+    for (j, words) in spec.content[a..z].split('\n').enumerate() {
         let (a, b, k) = (start, start + words.len(), found.len());
         start = b + 1;
+        let last_flow = run.map(|r| r.5).or_else(|| found.last().map(|f| f.2)).unwrap_or(start_flow);
+        if let Some(r) = runs {
+            // A measure of the narrowest width is never shown: none of its lines needs shaping.
+            let near = r.edit && !r.ascii.narrow(r.max_width) && (j < EAGER_START || j + EAGER_END >= lines);
+            let floor = run.map_or(0.0, |r| r.3);
+            let fits = if near || words.is_empty() { None } else if r.ascii.narrow(r.max_width) { r.ascii.narrowest(words, floor) } else { r.ascii.one_line(words, r.max_width, floor) };
+            if let Some((height, w)) = fits {
+                // Printable ASCII: its letters are its only strong characters, all left to right.
+                let flow = forced.or_else(|| words.bytes().any(|b| b.is_ascii_alphabetic()).then_some(Flow::Ltr)).unwrap_or(last_flow);
+                match &mut run {
+                    Some(run) => { run.1 = b; run.2 += height; run.3 = run.3.max(w); run.4 += 1; run.5 = flow; }
+                    None => run = Some((a, b, height, w, 1, flow)),
+                }
+                continue;
+            }
+            close(&mut run, found);
+        }
         let isolates: Box<[(u32, u32)]> = spec.cold.pills.iter().filter(|p| inside(p, a, b)).map(|p| (p.start - a as u32, p.end - a as u32)).collect();
-        let flow = forced.or_else(|| flow_of(words, &isolates)).unwrap_or(found.last().map_or(start_flow, |f| f.2));
+        let flow = forced.or_else(|| flow_of(words, &isolates)).unwrap_or(last_flow);
         let mut h = hash::KeyHasher::default();
         (words, style_key, flow == Flow::Rtl, spec.cold.blocks.get(k).copied().unwrap_or(Block::Paragraph)).hash(&mut h);
         for s in spans_in(&spec.spans, a, b, &isolates) {
@@ -824,10 +956,10 @@ fn key_paragraphs(spec: &TextSpec, style_key: u64, a: usize, z: usize, start_flo
         for p in pills_in(&spec.cold.pills, a, b, &isolates) {
             (p.start, p.end, p.icon.is_some(), p.bare.as_ref().map(|b| (b.size.to_bits(), b.gap.to_bits()))).hash(&mut h);
         }
-        found.push((a, b, flow, h.finish(), isolates));
+        found.push((a, b, flow, h.finish(), isolates, None));
     }
+    close(&mut run, found);
 }
-
 /// The paragraphs an edit left whole, with their keys: those before it (`head`) and after it
 /// (`tail`, moved to their new bytes), and the direction the paragraph before the tail had.
 struct Reuse {
@@ -842,26 +974,36 @@ struct Reuse {
 fn reuse_keys(prev: &ParagraphLayout, content: &str, style_key: u64, start_flow: Flow) -> Option<Reuse> {
     let keyed = prev.keyed.as_ref().filter(|k| k.style_key == style_key && k.start_flow == start_flow)?;
     let (old, new) = (keyed.content.as_bytes(), content.as_bytes());
-    let prefix = common(old.chunks_exact(16).zip(new.chunks_exact(16)), old.iter().zip(new));
+    let prefix = common_start(old, new);
     let room = old.len().min(new.len()) - prefix;
-    let suffix = common(old.rchunks_exact(16).zip(new.rchunks_exact(16)), old.iter().rev().zip(new.iter().rev())).min(room);
+    let suffix = common_end(old, new).min(room);
     let ps = &prev.paragraphs;
     // Before the edit: its newline too. After it: the newline before it too.
     let h = ps.partition_point(|p| p.end < prefix);
     let t = ps.partition_point(|p| p.start + suffix <= old.len());
     let moved = |at: usize| at + new.len() - old.len();
     Some(Reuse {
-        head: ps[..h].iter().map(|p| (p.start, p.end, p.flow, p.key, Box::default())).collect(),
-        tail: ps[t..].iter().map(|p| (moved(p.start), moved(p.end), p.flow, p.key, Box::default())).collect(),
+        head: ps[..h].iter().map(|p| (p.start, p.end, p.flow, p.key, Box::default(), p.run.then_some((p.height, p.widths[0], p.lines)))).collect(),
+        tail: ps[t..].iter().map(|p| (moved(p.start), moved(p.end), p.flow, p.key, Box::default(), p.run.then_some((p.height, p.widths[0], p.lines)))).collect(),
         entering: t.checked_sub(1).map_or(start_flow, |i| ps[i].flow),
     })
 }
 
-/// How many bytes two texts share from one end: compared 16 at a time (a draft's 120 KB in
-/// microseconds), then byte by byte inside the first block that differs.
-fn common<'a>(blocks: impl Iterator<Item = (&'a [u8], &'a [u8])>, bytes: impl Iterator<Item = (&'a u8, &'a u8)>) -> usize {
-    let same = blocks.take_while(|(a, b)| a == b).count() * 16;
-    same + bytes.skip(same).take_while(|(a, b)| a == b).count()
+/// How many bytes two texts share from their start: compared 4 KB at a time (one memcmp each;
+/// a 1.7 MB paste in a few dozen), then byte by byte inside the first block that differs.
+fn common_start(a: &[u8], b: &[u8]) -> usize {
+    let n = a.len().min(b.len());
+    let mut at = 0;
+    while at + 4096 <= n && a[at..at + 4096] == b[at..at + 4096] { at += 4096; }
+    at + a[at..n].iter().zip(&b[at..n]).take_while(|(x, y)| x == y).count()
+}
+
+/// How many bytes two texts share at their end, as `common_start` counts.
+fn common_end(a: &[u8], b: &[u8]) -> usize {
+    let n = a.len().min(b.len());
+    let mut at = 0;
+    while at + 4096 <= n && a[a.len() - at - 4096..a.len() - at] == b[b.len() - at - 4096..b.len() - at] { at += 4096; }
+    at + a[..a.len() - at].iter().rev().zip(b[..b.len() - at].iter().rev()).take(n - at).take_while(|(x, y)| x == y).count()
 }
 
 /// A paragraph's direction: its first strong character's outside its pills, or None with none.
