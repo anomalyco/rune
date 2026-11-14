@@ -155,6 +155,10 @@ impl<S: 'static> Runtime<S> {
     pub(super) fn keep_swap(&mut self) {
         let k = &mut self.paint_keep;
         std::mem::swap(&mut self.instances, &mut k.instances);
+        // Both sides of the swap retain the warmed paint budget, even if a reveal
+        // temporarily emits fewer glyphs on the frames painted into one of them.
+        self.instances.clear();
+        self.instances.reserve_exact(k.instances.capacity());
         std::mem::swap(&mut self.marks, &mut k.marks);
         std::mem::swap(&mut self.hits, &mut k.hits);
         std::mem::swap(&mut self.overlay_hits, &mut k.overlay);
@@ -475,7 +479,8 @@ impl<S: 'static> Runtime<S> {
         }
         // Subtree ends, from the tree: a record holds one past its subtree.
         let n = self.nodes.len();
-        let mut open: Vec<usize> = Vec::new();
+        let open = &mut k.open;
+        debug_assert!(open.is_empty(), "paint closed every subtree");
         for i in 0..n {
             let parent = self.nodes[i].parent;
             while let Some(&r) = open.last() && parent.is_none_or(|p| r > p) {
@@ -484,7 +489,7 @@ impl<S: 'static> Runtime<S> {
             }
             open.push(i);
         }
-        for r in open { k.recs[r].end = n as u32; }
+        for r in open.drain(..) { k.recs[r].end = n as u32; }
         k.moved.clear();
         if logging() {
             eprintln!("rune: paint keep: {} of {} nodes copied (on: {}; unfit {}, new {}, moved {}, rebuilt {}, rows {}, as they were {})", k.kept, n, k.on, k.why[0], k.why[1], k.why[2], k.why[3], k.why[4], k.why[5]);
@@ -498,7 +503,7 @@ impl<S: 'static> Runtime<S> {
         let o = k.verify[r] as usize;
         let (now, was) = (k.recs[r], k.prev[o]);
         let range = |a: [u32; 2]| a[0] as usize..a[1] as usize;
-        let bytes = |v: &[Instance]| bytemuck::cast_slice::<_, u8>(v).to_vec();
+        let bytes = bytemuck::cast_slice::<Instance, u8>;
         let mut differ = Vec::new();
         if bytes(&self.instances[range(now.inst)]) != bytes(&k.instances[range(was.inst)]) { differ.push("instances"); }
         if self.hits[range(now.hits)] != k.hits[range(was.hits)] { differ.push("hits"); }
