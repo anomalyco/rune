@@ -257,7 +257,7 @@ impl TextSpec {
 
     /// Whether its lines break as Chromium's `text-wrap-style: pretty` does ([`crate::text::set_pretty_wrap`]).
     pub(crate) fn pretty(&self) -> bool {
-        crate::text::pretty_wrap() && !self.greedy && !self.redacted && !self.wrap_anywhere && !self.justify
+        crate::text::pretty_wrap() && !self.greedy && !self.redacted && !self.justify
     }
 
     /// [`crate::text::shape_key`] of this text in its direction.

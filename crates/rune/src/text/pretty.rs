@@ -11,17 +11,18 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use icu_segmenter::LineSegmenter;
 use icu_segmenter::options::LineBreakOptions;
-use parley::{BreakReason, Layout, Line};
+use parley::{BreakReason, Layout, Line, PositionedLayoutItem};
 
 use super::Ink;
 
 static PRETTY: AtomicBool = AtomicBool::new(false);
 
 /// Wraps the app's text as `text-wrap-style: pretty` does in Chromium: a paragraph that would end
-/// on a lone short word takes a word or more down with it. Text in a monospace family, justified,
-/// with `wrap_anywhere`, in an editor, cut to a number of lines or opted out with
-/// [`El::wrap_greedy`](crate::El::wrap_greedy) keeps greedy lines, as does a paragraph whose last
-/// line holds an isolated run (inline code), as in Chromium. Call it before any text is laid
+/// on a lone short word takes a word or more down with it, pills and inline boxes included. Text
+/// in a monospace family, justified, in an editor, cut to a number of lines or opted out with
+/// [`El::wrap_greedy`](crate::El::wrap_greedy) keeps greedy lines, as does, as in Chromium, a
+/// paragraph whose last line holds an isolated run (inline code), one with a word broken inside to
+/// fit (`wrap_anywhere`), and one in an indented block (a list item, a quote). Call it before any text is laid
 /// out: layouts are cached.
 pub fn set_pretty_wrap(on: bool) {
     PRETTY.store(on, Ordering::Relaxed);
@@ -58,6 +59,8 @@ struct Candidate {
 /// (device px) and unindented; `font_size` is its style's, in points.
 pub(super) fn caps(layout: &Layout<Ink>, text: &str, font_size: f32, scale: f32, max_width: f32) -> Vec<((usize, usize), f32)> {
     let lines: Vec<Line<'_, Ink>> = layout.lines().collect();
+    // Inline boxes (a pill's chip, a link's icon) take room in a line: each one's byte, by id.
+    let boxes: Vec<(u64, usize)> = layout.inline_boxes().map(|b| (b.id, b.index)).collect();
     let mut out = Vec::new();
     let (mut start, mut para) = (0, 0);
     while start < lines.len() {
@@ -65,7 +68,7 @@ pub(super) fn caps(layout: &Layout<Ink>, text: &str, font_size: f32, scale: f32,
         while end + 1 < lines.len() && lines[end].break_reason() != BreakReason::Explicit {
             end += 1;
         }
-        if let Some(rooms) = paragraph(&lines[start..=end], text, font_size, scale, max_width) {
+        if let Some(rooms) = paragraph(&lines[start..=end], &boxes, text, font_size, scale, max_width) {
             out.extend(rooms.into_iter().map(|(line, room)| ((para, line), room)));
         }
         para += 1;
@@ -81,9 +84,14 @@ fn trimmed(text: &str, range: Range<usize>) -> Range<usize> {
 }
 
 /// The line breaks one paragraph's lines take instead, as (line in the paragraph, room).
-fn paragraph(lines: &[Line<'_, Ink>], text: &str, font_size: f32, scale: f32, max_width: f32) -> Option<Vec<(usize, f32)>> {
+fn paragraph(lines: &[Line<'_, Ink>], boxes: &[(u64, usize)], text: &str, font_size: f32, scale: f32, max_width: f32) -> Option<Vec<(usize, f32)>> {
     let n = lines.len();
     if n < 2 || lines.iter().any(|l| l.runs().any(|r| r.is_rtl())) {
+        return None;
+    }
+    // A word broken inside to fit (`wrap_anywhere`'s overflow-wrap) keeps the greedy lines: Blink
+    // turns the score breaker off once a line overflows and breaks again (`RetryAfterOverflow`).
+    if lines.iter().any(|l| l.break_reason() == BreakReason::Emergency) {
         return None;
     }
     // `ShouldOptimize`: a last line shorter than a third of the line, with no break inside it.
@@ -109,15 +117,25 @@ fn paragraph(lines: &[Line<'_, Ink>], text: &str, font_size: f32, scale: f32, ma
     if breaks.iter().any(|&b| b > last_words.start && b < last_words.end) {
         return None;
     }
-    // Each cluster's byte, x from the stretch's start and advance, and whether it's a space.
+    // Each cluster's byte, x from the stretch's start and advance, and whether it's a space. An
+    // inline box is a cluster at its byte, before the text that follows it there.
     let mut clusters: Vec<(usize, f32, f32, bool)> = Vec::new();
     let mut x = 0.0;
     for line in window {
-        for run in line.runs() {
-            for c in run.clusters() {
-                let advance = c.advance();
-                clusters.push((c.text_range().start, x, advance, c.is_space_or_nbsp() || c.is_hard_line_break()));
-                x += advance;
+        for item in line.items() {
+            match item {
+                PositionedLayoutItem::GlyphRun(g) => {
+                    for c in g.run().clusters() {
+                        let advance = c.advance();
+                        clusters.push((c.text_range().start, x, advance, c.is_space_or_nbsp() || c.is_hard_line_break()));
+                        x += advance;
+                    }
+                }
+                PositionedLayoutItem::InlineBox(b) => {
+                    let at = boxes.iter().find(|(id, _)| *id == b.id).map_or(0, |&(_, i)| i);
+                    clusters.push((at, x, b.width, false));
+                    x += b.width;
+                }
             }
         }
     }
@@ -126,7 +144,11 @@ fn paragraph(lines: &[Line<'_, Ink>], text: &str, font_size: f32, scale: f32, ma
     let css = |px: f32| px / scale;
     let mut cands = vec![Candidate { at: span.start, no_break: 0.0, if_break: 0.0, penalty: 0.0 }];
     for b in breaks {
-        let Ok(i) = clusters.binary_search_by_key(&b, |c| c.0) else { continue };
+        // The first cluster at the break's byte: a box there starts the next line.
+        let i = clusters.partition_point(|c| c.0 < b);
+        if clusters.get(i).is_none_or(|c| c.0 != b) {
+            continue;
+        }
         cands.push(Candidate { at: b, no_break: css(clusters[i].1), if_break: css(end_before(i)), penalty: 0.0 });
     }
     let end = css(end_before(clusters.len()));

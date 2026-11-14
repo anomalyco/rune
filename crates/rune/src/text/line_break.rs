@@ -6,7 +6,7 @@ use super::*;
 /// [`TextSystem::layout_keyed`] breaks the layouts it shapes.
 pub(super) fn rebreak(layout: &mut Layout<Ink>, blocks: &[crate::edit::Block], font_size: f32, scale: f32, max_width: Option<f32>, align: Alignment) {
     if blocks.iter().any(|&b| b != crate::edit::Block::Paragraph) || layout.inline_boxes().next().is_some() {
-        break_lines_with_blocks(layout, blocks, font_size, scale, max_width);
+        break_lines_with_blocks(layout, blocks, font_size, scale, max_width, Vec::new());
     } else {
         layout.break_all_lines(max_width);
     }
@@ -19,7 +19,16 @@ pub(super) fn rebreak(layout: &mut Layout<Ink>, blocks: &[crate::edit::Block], f
 #[allow(clippy::too_many_arguments)]
 pub(super) fn break_new(layout: &mut Layout<Ink>, text: &str, blocks: &[crate::edit::Block], indented: bool, font_size: f32, scale: f32, max_width: Option<f32>, pretty: bool) {
     if indented {
-        return break_lines_with_blocks(layout, blocks, font_size, scale, max_width);
+        break_lines_with_blocks(layout, blocks, font_size, scale, max_width, Vec::new());
+        // Pills (a link's icon, a mention's chip) wrap prettily too, as their inline boxes do in
+        // Chromium; indented blocks (lists, quotes, code) keep the greedy lines.
+        if let (true, Some(width)) = (pretty && blocks.iter().all(|&b| b == crate::edit::Block::Paragraph), max_width) {
+            let caps = super::pretty::caps(layout, text, font_size, scale, width);
+            if !caps.is_empty() {
+                break_lines_with_blocks(layout, blocks, font_size, scale, max_width, caps);
+            }
+        }
+        return;
     }
     layout.break_all_lines(max_width);
     if let (true, Some(width)) = (pretty, max_width) {
@@ -31,19 +40,20 @@ pub(super) fn break_new(layout: &mut Layout<Ink>, text: &str, blocks: &[crate::e
 }
 
 /// Breaks `layout` into lines, each paragraph indented by its block. A pill's chip that would
-/// end a line apart from its label, or run past the line's end, moves to the next line.
+/// end a line apart from its label, or run past the line's end, moves to the next line. `caps`
+/// start as the room given lines (pretty wrapping's); a pill's adjustments come after them.
 pub(super) fn break_lines_with_blocks(
     layout: &mut Layout<Ink>,
     blocks: &[crate::edit::Block],
     font_size: f32,
     scale: f32,
     max_width: Option<f32>,
+    mut caps: Vec<((usize, usize), f32)>,
 ) {
     let pills = layout.inline_boxes().filter(|b| b.id & PILL_BOX != 0).count() / 2;
     // `(para_idx, line_in_para)` and the room it gets instead: less to break before a chip, or
     // more to keep a chip with its label. Paragraphs break independently at `\n`, so one pass
     // can adjust the first misplaced pill in every paragraph at once.
-    let mut caps: Vec<((usize, usize), f32)> = Vec::new();
     let mut lines_meta = Vec::new();
     for _ in 0..=2 * pills {
         break_lines_capped(layout, blocks, font_size, scale, max_width, &caps, &mut lines_meta);
