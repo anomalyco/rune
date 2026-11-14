@@ -35,6 +35,12 @@ pub fn make_straight_alpha(device: &wgpu::Device, format: wgpu::TextureFormat) {
     drop(AlphaSurface::new(device, format, (16, 16)));
 }
 
+/// Makes and drops the layer blur's pipelines from their WGSL, for regen_dxbc.
+#[doc(hidden)]
+pub fn make_layer_blur(device: &wgpu::Device) {
+    drop(layer_blur::Pipeline::new(device, super::layers::FORMAT));
+}
+
 /// How many pipelines Rune's Metal backend compiled at runtime because its precompiled library
 /// lacked them; `None` on any other backend.
 #[doc(hidden)]
