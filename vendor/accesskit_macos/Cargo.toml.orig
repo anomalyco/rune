@@ -1,0 +1,46 @@
+[package]
+name = "accesskit_macos"
+version = "0.27.2"
+authors.workspace = true
+license.workspace = true
+description = "AccessKit UI accessibility infrastructure: macOS adapter"
+categories.workspace = true
+keywords = ["gui", "ui", "accessibility"]
+repository.workspace = true
+readme = "README.md"
+edition.workspace = true
+rust-version.workspace = true
+
+[package.metadata.docs.rs]
+default-target = "x86_64-apple-darwin"
+
+[dependencies]
+accesskit = { version = "0.25.2", path = "../../accesskit" }
+accesskit_consumer = { version = "0.39.2", path = "../../accesskit_consumer" }
+hashbrown.workspace = true
+objc2 = "0.5.1"
+objc2-foundation = { version = "0.2.0", features = [
+    "NSArray",
+    "NSDictionary",
+    "NSValue",
+    "NSThread",
+] }
+objc2-app-kit = { version = "0.2.0", features = [
+    "NSAccessibility",
+    "NSAccessibilityConstants",
+    "NSAccessibilityElement",
+    "NSAccessibilityProtocols",
+    "NSColor",
+    "NSResponder",
+    "NSText",
+    "NSView",
+    "NSWindow",
+] }
+
+[dev-dependencies]
+libtest-mimic = "0.8.2"
+
+# AppKit must be used from the main thread, where libtest doesn't run tests.
+[[test]]
+name = "integration"
+harness = false

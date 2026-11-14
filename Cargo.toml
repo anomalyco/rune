@@ -54,7 +54,7 @@ members = [
     "examples/site-scenes",
     "examples/luau-panel",
 ]
-exclude = ["tools/rune-dev-guard", "vendor/accesskit_windows", "vendor/parley_engine", "vendor/tiny-skia-path", "vendor/wgpu-hal", "vendor/winit"]
+exclude = ["tools/rune-dev-guard", "vendor/accesskit_macos", "vendor/accesskit_windows", "vendor/parley_engine", "vendor/tiny-skia-path", "vendor/wgpu-hal", "vendor/winit"]
 
 # wgpu-hal as published plus `vendor/wgpu-hal.patch`: `dx12::Instance::expose_adapter` (a `wgpu::Adapter` for the
 # one adapter Rune picks through DXGI, with no device made on the others, `gpu/pick.rs`) and FXC loaded on
@@ -83,6 +83,11 @@ parley_engine = { path = "vendor/parley_engine" }
 # heading and landmark navigation read. Re-made by `scripts/vendor-accesskit-windows.sh <version>`
 # when AccessKit is bumped; apps that build Rune patch it too.
 accesskit_windows = { path = "vendor/accesskit_windows" }
+# accesskit_macos as published plus `vendor/accesskit_macos.patch`: headings reach NSAccessibility as
+# AppKit's `AXHeading` with their level as the value (the published role, `Heading`, is none VoiceOver
+# knows), so VoiceOver's rotor and VO-Command-H find them and say their level. Re-made by
+# `scripts/vendor-accesskit-macos.sh <version>` when AccessKit is bumped; apps that build Rune patch it too.
+accesskit_macos = { path = "vendor/accesskit_macos" }
 
 [workspace.package]
 edition = "2024"
