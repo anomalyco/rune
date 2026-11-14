@@ -818,17 +818,29 @@ fn warm_frame(gpu: &Gpu, renderer: &mut Renderer, format: wgpu::TextureFormat, s
     });
     let view = target.create_view(&Default::default());
     let mut atlas = crate::text::Atlas::new();
+    crate::marks::WARMING.store(true, std::sync::atomic::Ordering::Relaxed);
+    crate::marks::mark("warm.begin");
     let mut enc = gpu.device.create_command_encoder(&Default::default());
     renderer.prepare(&gpu.device, &gpu.queue, &mut atlas, instances, size);
+    crate::marks::mark("warm.prepared");
     renderer.draw(&mut enc, &view, [0.0; 4]);
+    crate::marks::mark("warm.drawn");
     renderer.submit(&gpu.queue, enc);
+    crate::marks::mark("warm.submitted");
     // Command lists armed ahead, for the hand-over frame and every frame after it to record into
     // without resetting one on the app's thread (`reserve_command_lists`).
     // SAFETY: only Rune's own call on the raw device, which is alive.
     if let Some(hal) = unsafe { gpu.device.as_hal::<wgpu::hal::api::Dx12>() } {
         let _ = hal.reserve_command_lists(RESERVED_LISTS);
     }
+    crate::marks::mark("warm.reserved");
     let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+    crate::marks::mark("warm.polled");
+    crate::marks::WARMING.store(false, std::sync::atomic::Ordering::Relaxed);
+    if let Some(path) = std::env::var_os("IB3_WARM_LOG") {
+        let kinds = instances.iter().fold([0u32; 16], |mut k, i| { if (0.0..16.0).contains(&i.params[1]) { k[i.params[1] as usize] += 1; } k });
+        let _ = std::fs::write(path, format!("instances {} kinds {:?} size {:?} format {:?}\n", instances.len(), kinds, size, format));
+    }
 }
 
 /// Command lists kept armed: a frame takes two for each render pass, and one that draws a dozen
