@@ -186,12 +186,13 @@ fn a_rolled_label_is_as_wide_as_the_same_string_set_as_one_text() {
     for (text, font) in [("Copy password", plex), ("Copy password", inter), ("AVATAR Tokyo, WAVE", inter)] {
         let mut rt = pair(text, font);
         let (rolled, plain) = widths(&rt);
-        // What each glyph took when it was measured on its own, rounded up to a device pixel.
+        // What each glyph took when it was measured on its own, rounded up to a 64th of a device
+        // pixel (#934; it was a whole pixel, which made Plex's 13 glyphs 4 pt wider).
         let separate: f32 = text.graphemes(true).map(|g| rt.text.measure(g, font, 2.0).0).sum();
         eprintln!("{text:?} {}pt: rolled {rolled} pt, one text {plain} pt, glyphs alone {separate} pt", font.size);
         assert!((rolled - plain).abs() <= 0.25, "{text:?}: rolled {rolled} vs one text {plain} (0.5 device px)");
         if font.size == 11.0 {
-            assert!(separate - plain > 4.0, "Plex rounds each glyph up: {separate} vs {plain}");
+            assert!((separate - plain).abs() <= 13.0 / 128.0, "Plex's glyphs alone add up to the text: {separate} vs {plain}");
         }
     }
 }

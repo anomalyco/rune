@@ -118,6 +118,10 @@ pub(super) struct Inherit {
     pub contain: [f32; 2],
     /// `El::motion_snaps` here or above: a moving box snaps where it is each frame.
     pub steps: bool,
+    /// An `El::offset` here or above comes to rest away from zero: a translation, as a CSS
+    /// transform is, which moves a text with its box rather than laying it out again from its
+    /// exact place (`LeafBox::exact_off` is zero under it).
+    pub shifted: bool,
     /// The nearest scaled layer above or here, as an index into this frame's layers plus one
     /// (0: none).
     pub layer: u32,
@@ -130,6 +134,7 @@ impl Inherit {
     /// Its bits, for `paint_keep`'s comparison of what a subtree inherits.
     pub(super) fn hash_bits(&self, h: &mut impl std::hash::Hasher) {
         h.write_u8(self.off as u8);
+        h.write_u8(self.shifted as u8);
         for v in self.rigid.iter().chain(&self.contain) { h.write_u32(v.to_bits()); }
         h.write_u32(self.layer);
         match &self.parent {

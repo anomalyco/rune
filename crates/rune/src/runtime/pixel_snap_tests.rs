@@ -187,20 +187,24 @@ fn text_keeps_its_place_against_its_fill() {
     fn view(y: &f32, _: &mut Cx<f32>) -> El {
         el().size(80.0, 40.0).child(text("Hg").padding(2.3).absolute(4.0, *y).fill(Color::WHITE.mix(Color::BLACK, 0.8)))
     }
-    let offset = |y: f32| {
+    let place = |y: f32| {
         let mut rt = Runtime::new(y, view, (80.0, 40.0), Env::new(true, 2.0));
         rt.frame(0.0);
         let fill = fills(&rt)[0];
         let glyph = rt.instances.iter().filter(|i| i.params[1] == KIND_GLYPH).map(|i| i.rect[1]).fold(f32::MAX, f32::min);
         assert!(glyph < f32::MAX, "draws glyphs");
-        (glyph - fill[1], fill[1])
+        (glyph, fill[1])
     };
-    // At a whole-pixel position snapping changes nothing; elsewhere the text keeps that offset.
-    let (want, _) = offset(10.0);
-    for k in 1..10 {
-        let (got, top) = offset(10.0 + k as f32 * 0.05);
+    // The fill snaps to whole pixels. The text lays out from its box's exact place and rounds
+    // once, as Blink paints a text fragment (#935), so it keeps its place against where its box
+    // is rather than its snapped fill: half a point (a device pixel) further down, it draws one
+    // pixel lower, at every phase; and between, it steps at most a pixel, never back.
+    for k in 0..10 {
+        let y = 10.0 + k as f32 * 0.05;
+        let ((glyph, top), (next, _), (lower, _)) = (place(y), place(y + 0.05), place(y + 0.5));
         assert!(whole(top), "{top}");
-        assert!((got - want).abs() < 1e-3, "y {}: {got} vs {want}", 10.0 + k as f32 * 0.05);
+        assert_eq!(lower, glyph + 1.0, "y {y}: a device pixel lower draws a pixel lower");
+        assert!(next == glyph || next == glyph + 1.0, "y {y}: {glyph} then {next}");
     }
 }
 
