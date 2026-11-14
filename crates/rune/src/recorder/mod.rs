@@ -168,9 +168,24 @@ thread_local! {
     static HEADLESS: std::cell::RefCell<Vec<Weak<Shared>>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
+/// `follow_headless` and `reset_headless`, set by `Recorder::to_file`: every runtime's frame calls
+/// them through this, so an app that never makes a `Recorder` doesn't link a recorder's state
+/// machine.
+static HEADLESS_HOOKS: std::sync::OnceLock<(fn(), fn())> = std::sync::OnceLock::new();
+
 /// A headless runtime starts a frame: fake recorders started on this thread catch up to it,
 /// so bound level meters move and an unplugged fake microphone interrupts on time.
 pub(crate) fn headless_frame(_clock: f64) {
+    if let Some((follow, _)) = HEADLESS_HOOKS.get() { follow(); }
+}
+
+/// A new runtime on this thread starts its clock at 0: fake recordings keep their elapsed
+/// time and go on from there.
+pub(crate) fn headless_reset() {
+    if let Some((_, reset)) = HEADLESS_HOOKS.get() { reset(); }
+}
+
+fn follow_headless() {
     let recorders: Vec<Arc<Shared>> = HEADLESS.with_borrow_mut(|h| {
         h.retain(|w| w.strong_count() > 0);
         h.iter().filter_map(Weak::upgrade).collect()
@@ -180,9 +195,7 @@ pub(crate) fn headless_frame(_clock: f64) {
     }
 }
 
-/// A new runtime on this thread starts its clock at 0: fake recordings keep their elapsed
-/// time and go on from there.
-pub(crate) fn headless_reset() {
+fn reset_headless() {
     let recorders: Vec<Arc<Shared>> = HEADLESS.with_borrow(|h| h.iter().filter_map(Weak::upgrade).collect());
     for r in recorders {
         r.apply(Event::Tick);
@@ -201,6 +214,7 @@ impl Recorder {
     /// [`Recording::path`] is always the file written. Nothing happens until
     /// [`start`](Self::start); each start overwrites the file.
     pub fn to_file(path: impl Into<PathBuf>) -> Self {
+        HEADLESS_HOOKS.get_or_init(|| (follow_headless, reset_headless));
         let path = path.into();
         let wav = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("wav"));
         let format = if wav { RecordFormat::Wav } else { RecordFormat::Aac };
