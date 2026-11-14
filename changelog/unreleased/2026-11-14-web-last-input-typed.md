@@ -1,0 +1,1 @@
+- In a browser, what someone types, selects or presses through the page's own elements (its text field, its accessibility mirror) counts for `rune::last_input`, as window input already did.
