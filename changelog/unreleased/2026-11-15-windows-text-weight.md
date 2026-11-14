@@ -1,0 +1,1 @@
+- On Windows, grayscale text's weight follows Chromium's at every grey: mid-greys on a light background draw up to 8% lighter and near-white text on a dark one up to 3% heavier, as Chromium draws them. `#161616`, `#808080` and `#aeaeae` text draws exactly as before; macOS, Linux and DirectWrite text are unchanged.
