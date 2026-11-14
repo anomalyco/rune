@@ -31,9 +31,20 @@ function browserShortcut(event) {
     if (event.key === 'F5' || event.key === 'F12') return true;
     if (!chord) return false;
     const k = event.key.toLowerCase();
+    // With Alt only the developer tools' chords are the browser's: Ctrl+Alt+W and the like are
+    // the app's (its Close tab, where the browser keeps Ctrl+W).
+    if (event.altKey) return ['i', 'j', 'u'].includes(k);
+    // An installed app's window gives the page every key first (Chromium: "In Apps mode, no keys
+    // are reserved"), and closes itself on a Ctrl+W the page lets through: there the tab, window
+    // and new-session keys are the app's, as in its desktop build.
+    if (['t', 'w', 'n'].includes(k) && appWindow()) return false;
     // Leave copy ('c') un-prevented too so the browser fires its synchronous `copy` event.
-    return ['c', 'r', 'l', 't', 'w', 'n', 'f', 'g', '=', '+', '-', '0'].includes(k)
-        || (event.altKey && ['i', 'j', 'u'].includes(k));
+    return ['c', 'r', 'l', 't', 'w', 'n', 'f', 'g', '=', '+', '-', '0'].includes(k);
+}
+
+function appWindow() {
+    return navigator.standalone === true
+        || matchMedia('(display-mode: standalone), (display-mode: window-controls-overlay), (display-mode: minimal-ui)').matches;
 }
 
 // Keys that scroll a page when nothing in Rune has focus.
