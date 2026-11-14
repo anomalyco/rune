@@ -752,27 +752,33 @@ fn prepare(hwnd: isize, size: (u32, u32), srgb: bool, features: wgpu::Features, 
     configure(&surface, &gpu, &config)?;
     let target_format = if srgb { config.format.remove_srgb_suffix() } else { config.format };
     let mut renderer = renderer.unwrap_or_else(|| Renderer::new(&gpu.device, target_format));
-    warm_frame(&gpu, &mut renderer, &surface, &config, target_format, instances);
+    warm_frame(&gpu, &mut renderer, target_format, (config.width, config.height), instances);
     crate::marks::mark("gpu.window.warmed");
     Ok(Prepared { gpu, renderer, surface, config, handover })
 }
 
-/// On the GPU thread, before the hand-over: the renderer draws what the window draws once into
-/// the swap chain, presents it and waits for the GPU. Its first frame's costs (the driver's
-/// shaders compiled at first use, the swap chain's first buffers, the layer targets, the staging
-/// space, the instance buffer) are paid here, so the hand-over frame on the app's thread costs
-/// what a frame does. Nothing shows it: the swap chain's visual stays uncommitted until the
-/// hand-over frame is done (`Handover`), and that frame is drawn after this one. The atlas is an
+/// On the GPU thread, before the hand-over: the renderer draws what the window draws once, into a
+/// target of the swap chain's format, and waits for the GPU. Its first frame's costs (the driver's
+/// shaders compiled at first use, the layer targets, the staging space, the instance buffer) are
+/// paid here, so the hand-over frame on the app's thread costs what a frame does. The atlas is an
 /// empty one: the glyphs land with the hand-over frame's own prepare.
-fn warm_frame(gpu: &Gpu, renderer: &mut Renderer, surface: &wgpu::Surface<'static>, config: &wgpu::SurfaceConfiguration, format: wgpu::TextureFormat, instances: &[crate::render::Instance]) {
-    let (wgpu::CurrentSurfaceTexture::Success(frame) | wgpu::CurrentSurfaceTexture::Suboptimal(frame)) = surface.get_current_texture() else { return };
-    let view = frame.texture.create_view(&wgpu::TextureViewDescriptor { format: (format != config.format).then_some(format), ..Default::default() });
+fn warm_frame(gpu: &Gpu, renderer: &mut Renderer, format: wgpu::TextureFormat, size: (u32, u32), instances: &[crate::render::Instance]) {
+    let target = gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("rune warm frame"),
+        size: wgpu::Extent3d { width: size.0.max(1), height: size.1.max(1), depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    let view = target.create_view(&Default::default());
     let mut atlas = crate::text::Atlas::new();
     let mut enc = gpu.device.create_command_encoder(&Default::default());
-    renderer.prepare(&gpu.device, &gpu.queue, &mut atlas, instances, (config.width, config.height));
+    renderer.prepare(&gpu.device, &gpu.queue, &mut atlas, instances, size);
     renderer.draw(&mut enc, &view, [0.0; 4]);
     renderer.submit(&gpu.queue, enc);
-    gpu.queue.present(frame);
     let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
 }
 
