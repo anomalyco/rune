@@ -19,7 +19,8 @@ pub enum FontSmoothing {
     /// Text that matches CoreText's with font smoothing on (macOS's default): the pipeline plus
     /// font smoothing's outline dilation, which grows outlines by a radius set by the text
     /// colour's luminance and the device ppem ([`ApplePipeline::SMOOTHED`]). The default on
-    /// macOS, and on the web in a Mac's browser, which draws the page's own text this way.
+    /// macOS, and on the web in a Mac's browser, which draws the page's own text this way. On
+    /// macOS it draws as `Off` when the user turned smoothing off (`AppleFontSmoothing` 0).
     On,
     /// Text that matches CoreText with font smoothing off, which is what macOS browsers draw
     /// for `-webkit-font-smoothing: antialiased`: the pipeline without the dilation
@@ -108,11 +109,25 @@ pub(crate) fn browser_default(platform: &str, touch_points: u32) -> FontSmoothin
     if mac && touch_points <= 1 { FontSmoothing::On } else { FontSmoothing::Off }
 }
 
+/// `AppleFontSmoothing` read once (`text::macos::smoothing_allowed_by_user`); true off macOS.
+fn smoothing_allowed_by_user() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        static ALLOWED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *ALLOWED.get_or_init(super::macos::smoothing_allowed_by_user)
+    }
+    #[cfg(not(target_os = "macos"))]
+    true
+}
+
 impl FontSmoothing {
     /// The CoreGraphics stages glyphs rasterise with: all of them for `On`, all but the
-    /// dilation for `Off` (and for `DirectWrite` where DirectWrite can't draw a glyph).
+    /// dilation for `Off` (and for `DirectWrite` where DirectWrite can't draw a glyph). On macOS
+    /// `On` draws as `Off` when the user turned smoothing off (`AppleFontSmoothing` 0), as AppKit
+    /// and SwiftUI then do.
     pub fn pipeline(self) -> ApplePipeline {
         match self {
+            FontSmoothing::On if !smoothing_allowed_by_user() => ApplePipeline::UNSMOOTHED,
             FontSmoothing::On | FontSmoothing::Windfoil => ApplePipeline::SMOOTHED,
             _ => ApplePipeline::UNSMOOTHED,
         }
