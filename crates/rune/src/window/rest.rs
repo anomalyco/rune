@@ -94,6 +94,7 @@ impl<S: 'static> Host<S> {
     fn give_back(&mut self, all: bool) {
         self.rt.text.rest();
         self.rt.images.rest();
+        if let Some(rewind) = self.rt.rewind() { rewind.rest(); }
         if let Some(f) = self.on_rest { self.rt.update_if(f); }
         if let Some((gpu, renderer)) = &mut self.gpu {
             renderer.give_back(all, &mut self.rt.text.atlas.resident_caches);
