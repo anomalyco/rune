@@ -1810,7 +1810,9 @@ impl crate::Queue for Queue {
 
         {
             profiling::scope!("ID3D12CommandQueue::ExecuteCommandLists");
-            unsafe { self.raw.ExecuteCommandLists(&temp_lists) }
+            let t = std::time::Instant::now();
+            unsafe { self.raw.ExecuteCommandLists(&temp_lists) };
+            ib3_slow("ExecuteCommandLists", t, temp_lists.len());
         }
 
         unsafe { self.raw.Signal(&signal_fence.raw, signal_value) }
@@ -1932,4 +1934,12 @@ pub enum ShaderModel {
     V6_7,
     V6_8,
     V6_9,
+}
+
+/// IB-3 measuring: a D3D12 call that took 300 µs or more, on stderr (`IB3_HAL_LOG`).
+pub(crate) fn ib3_slow(what: &str, t: std::time::Instant, extra: usize) {
+    let us = t.elapsed().as_micros();
+    if us >= 300 && std::env::var_os("IB3_HAL_LOG").is_some() {
+        eprintln!("ib3-hal: {what} {us} us ({extra:x}) on {:?}", std::thread::current().name());
+    }
 }

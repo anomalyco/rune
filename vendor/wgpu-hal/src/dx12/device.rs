@@ -590,8 +590,10 @@ impl crate::Device for super::Device {
             Flags: conv::map_texture_usage_to_resource_flags(desc.usage),
         };
 
+        let t = std::time::Instant::now();
         let (resource, allocation) =
             suballocation::DeviceAllocationContext::from(self).create_texture(desc, raw_desc)?;
+        super::ib3_slow(desc.label.unwrap_or("create_texture"), t, (desc.size.width as usize) << 16 | desc.size.height as usize);
 
         self.counters.textures.add(1);
 
@@ -2179,6 +2181,9 @@ impl crate::Device for super::Device {
 
         if let Some(label) = desc.label {
             raw.set_name(label)?;
+        }
+        if std::env::var_os("IB3_HAL_LOG").is_some() {
+            eprintln!("ib3-hal: render pipeline {:?} = ({:x}) on {:?}", desc.label, windows::core::Interface::as_raw(&raw) as usize, std::thread::current().name());
         }
 
         self.counters.render_pipelines.add(1);
