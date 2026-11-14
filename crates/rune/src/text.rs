@@ -196,6 +196,8 @@ pub struct TextSystem {
     paragraphs: Cache<Rc<ParagraphLayout>>,
     /// The last by-paragraph layout made this commit, which its text at another width breaks from.
     last_paragraphs: Option<Rc<ParagraphLayout>>,
+    /// Printable ASCII's advances and line height per style and scale (`paragraphs::AsciiLine`).
+    ascii: HashMap<u64, Option<Rc<paragraphs::AsciiLine>>>,
     runs: Cache<Rc<RunLayout>>,
     generation: u32,
     /// The id of the layout at each address one was built or re-broken at (`layout_id`).
@@ -342,6 +344,7 @@ impl TextSystem {
             elisions: Default::default(),
             paragraphs: Default::default(),
             last_paragraphs: None,
+            ascii: HashMap::default(),
             runs: Default::default(),
             generation: 0,
             layout_ids: LayoutIds::default(),

@@ -379,9 +379,19 @@ impl<S: 'static> Runtime<S> {
                 }
                 // Misspelled words (`El::spellcheck`), but the one the caret is typing.
                 if inp.spellcheck && !e.is_secure() && e.preedit().is_none() && !departing {
-                    let found = crate::spell::misspelled(&e.text, Some(self.live.waker()));
+                    // Windows and the web check word by word, so the paragraphs shown are checked
+                    // alone: a 20,000-line draft hashes and walks only what's on screen. macOS
+                    // finds each text's language from the whole of it.
+                    let (from, to) = (shown_a.min(e.text.len()), shown_b.min(e.text.len()));
+                    let found = if cfg!(any(target_os = "windows", target_arch = "wasm32")) && (from > 0 || to < e.text.len()) && e.text.is_char_boundary(from) && e.text.is_char_boundary(to) {
+                        std::rc::Rc::new(crate::spell::misspelled(&e.text[from..to], Some(self.live.waker())).iter().map(|&(a, b)| (a + from, b + from)).collect::<Vec<_>>())
+                    } else {
+                        crate::spell::misspelled(&e.text, Some(self.live.waker()))
+                    };
                     // The word typing left the caret in waits unmarked until the pause ends (`spell::pause`).
-                    let caret = if e.focused { crate::spell::pause::observe(&mut self.spell_watch, &n.path, &e.text, e.range(), self.clock) } else { None };
+                    // Typing shows in the paragraphs shown, the caret's among them.
+                    let watched = if e.text.is_char_boundary(from) && e.text.is_char_boundary(to) { &e.text[from..to] } else { e.text.as_str() };
+                    let caret = if e.focused { crate::spell::pause::observe(&mut self.spell_watch, &n.path, watched, e.range(), self.clock) } else { None };
                     let color = premul(SPELLING, o, srgb);
                     for &(a, b) in found.iter().filter(|&&(a, b)| caret.is_none_or(|c| c < a || c > b)) {
                         let (da, db) = e.display_selection_range(a, b);
@@ -401,6 +411,9 @@ impl<S: 'static> Runtime<S> {
             let em = spec.spans.iter().filter_map(|sp| sp.size).fold(spec.style.size.max(spec.style.line_px()), f32::max);
             let pad = 2.0 * em * s + 2.0 / raster.max(1e-4);
             let rows = if tk > 1e-4 { (shown[0] - rest_origin[1]) / tk - pad..(shown[1] - rest_origin[1]) / tk + pad } else { f32::NEG_INFINITY..f32::INFINITY };
+            if let crate::text::TextLayout::Paragraphs(p) = laid && p.waiting() {
+                self.text_rows.insert(n.id, (rows.start, rows.end));
+            }
             for piece in flow.pieces_in(rows.start, rows.end) {
                 let layout = piece.layout;
                 let (origin, rest_origin) = ([origin[0], origin[1] + piece.y * tk], [rest_origin[0], rest_origin[1] + piece.y * tk]);
