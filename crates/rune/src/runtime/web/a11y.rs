@@ -381,10 +381,13 @@ impl<S: 'static> Runtime<S> {
                 out.push(item);
             };
 
-            if let Some(tag) = container_tag(n.role) {
+            // A labelled `group` (a game's surface naming its keys, a set of controls) is a div
+            // with the role and its label; an unlabelled one adds nothing a reader would say.
+            let labelled_group = n.role == "group" && n.label.as_deref().is_some_and(|s| !s.trim().is_empty());
+            if let Some(tag) = container_tag(n.role).or(labelled_group.then_some("div")) {
                 let mut item = A11yItem::new("group", &n.path, rect);
                 item.tag = Some(tag);
-                item.role = aria_role(n.role);
+                item.role = aria_role(n.role).or(labelled_group.then_some("group"));
                 item.id = anchor_id(n.key.as_deref());
                 item.text = n.label.as_deref().map(str::to_owned).filter(|s| !s.trim().is_empty()).unwrap_or_default();
                 push(&mut out, item);

@@ -1,0 +1,1 @@
+- Web: a labelled `group` is in the page's accessibility mirror, a div with `role="group"` and its label, so a reader says it (a game's surface naming its keys). Unlabelled groups stay out.
