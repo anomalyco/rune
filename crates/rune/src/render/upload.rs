@@ -209,8 +209,17 @@ impl Renderer {
         // The Windfoil shader, built the first time text draws from outlines (render/variant.rs),
         // fills atlas pages on the GPU, so the pages are made again as ones it can draw into.
         if atlas.outlines.has_records() && self.select(device, variant::Event::OutlinesWanted) {
-            self.atlas = Self::atlas_texture(device, true);
-            for page in &mut self.atlas_pages { page.0 = Self::atlas_texture(device, true); }
+            self.atlas = Self::atlas_texture(device, true, self.atlas.height());
+            for page in &mut self.atlas_pages { page.0 = Self::atlas_texture(device, true, ATLAS_SIZE); }
+            self.rebind_all(device);
+            atlas.invalidate();
+        }
+        // The first page's texture grows with what its shelves hold; a new one starts empty, so
+        // every placed row goes up again and every GPU-filled mask is filled again (`invalidate`).
+        let rows = atlas.page_rows(0);
+        if rows > self.atlas.height() {
+            let height = rows.next_power_of_two().clamp(ATLAS_START_ROWS, ATLAS_SIZE);
+            self.atlas = Self::atlas_texture(device, self.uber.outlines().is_some(), height);
             self.rebind_all(device);
             atlas.invalidate();
         }
@@ -225,7 +234,7 @@ impl Renderer {
         let filled = self.uber.outlines().is_some();
         for index in 0..atlas.pages.len() {
             if index >= self.atlas_pages.len() {
-                let texture = Self::atlas_texture(device, filled);
+                let texture = Self::atlas_texture(device, filled, ATLAS_SIZE);
                 let bind = Self::bind_group(device, &self.bind_layout, &self.globals, self.uber.outlines(), &texture, &texture, None);
                 self.atlas_pages.push((texture, bind));
                 atlas_changed = true;
