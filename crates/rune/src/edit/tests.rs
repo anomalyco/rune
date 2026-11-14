@@ -428,8 +428,12 @@ fn history_is_bounded_shared_and_cleared_after_send() {
     assert_eq!(e.text, "é".repeat(12));
     assert_eq!(rendered.text, "é".repeat(HISTORY_STEPS + 12));
     e.paste(&"a".repeat(HISTORY_BYTES));
-    assert!(e.history.bytes <= HISTORY_BYTES);
-    assert!(e.history.undo.is_empty(), "one oversized edit drops history rather than retaining unbounded text");
+    // Changed with undo as changes: the newest step stays however large, so a paste of a whole
+    // file can always be undone (older steps go to keep the history in its bytes).
+    assert_eq!(e.history.undo.len(), 1, "one oversized edit keeps its own step");
+    e.undo();
+    assert_eq!(e.text.len(), 24, "undoing it gives back the twelve characters before it");
+    e.redo();
     e.focused = true;
     e.clear();
     e.undo();
