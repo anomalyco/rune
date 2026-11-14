@@ -286,9 +286,9 @@ impl Renderer {
 
     /// What a window at rest gives back (`window::rest`): every spare target (the first menu,
     /// hover or session after it makes its own again, within a frame's run-to-run spread on an
-    /// Iris Xe), and cache textures no layer drew last frame. With `all`, also the scratch
-    /// targets of this screen's layers and its backdrop copies and
-    /// blur pyramid, which its next frame makes again (a few ms on an integrated GPU). It keeps the
+    /// Iris Xe), cache textures no layer drew last frame, and the backdrop copies and blur pyramid
+    /// when the last frame read none. With `all`, also the scratch targets of this screen's
+    /// layers and its backdrop copies, which its next frame makes again (a few ms on an integrated GPU). It keeps the
     /// textures of caches on screen, which the last frame's instances name instead of their
     /// contents, and takes the ones it drops out of `resident`, so their next frame paints them.
     /// What no submission still uses is freed here; the rest when the device next polls.
@@ -301,6 +301,11 @@ impl Renderer {
             for slot in &mut self.layers.targets {
                 if slot.as_ref().is_some_and(|t| t.cache.is_none()) { *slot = None; }
             }
+        }
+        // The backdrop copies (one full-window texture per target format) and the blur pyramid:
+        // out of sight, or when the last frame read none (a session's jump button had blurred
+        // what was under it, and Home doesn't).
+        if all || !self.backdrop_used {
             self.backdrops.clear();
             if let Some(blur) = &mut self.backdrop_blur { blur.give_back(); }
         }
