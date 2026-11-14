@@ -537,8 +537,10 @@ impl<S: 'static> Host<S> {
         let gpu = Arc::new(gpu);
         let target_format = if self.rt.srgb_blend() { config.format.remove_srgb_suffix() } else { config.format };
         rebuild_renderer(&gpu.device, &mut renderer, target_format, &mut self.rt);
+        crate::marks::mark("ho.rebuilt");
         *self.gpu_pool.borrow_mut() = Arc::downgrade(&gpu);
         crate::render::surface_gpu(&gpu);
+        crate::marks::mark("ho.surface_gpu");
         let size = w.window.inner_size();
         let SurfaceMode::Cpu { mut cpu, .. } = std::mem::replace(&mut w.native.mode, SurfaceMode::Gpu) else { unreachable!() };
         cpu.half = HalfRounding::of_vendor(gpu.adapter.get_info().vendor);
@@ -549,11 +551,13 @@ impl<S: 'static> Host<S> {
         // D3D12's idle-priority threads compile the first frame's shaders: on a busy machine they
         // would hold the hand-over frame off.
         crate::platform::win32::unidle_d3d_threads_soon();
+        crate::marks::mark("ho.unidled");
         w.surface = Some(surface);
         w.config = config;
         w.surface_ok = true;
         // The window changed size while the GPU was made.
         if size.width > 0 && size.height > 0 { w.resize_surface(Some(&*gpu), size); }
+        crate::marks::mark("ho.resized");
         self.gpu = Some((gpu, renderer));
         w.request_redraw();
     }
@@ -564,12 +568,16 @@ impl<S: 'static> Host<S> {
         let (Some(l), Some((gpu, renderer))) = (self.win.as_mut(), self.gpu.as_mut()) else { return };
         let SurfaceMode::HandingOver { done, readback, .. } = &mut l.native.mode else { return };
         let Some(surface) = l.surface.as_ref() else { return };
+        crate::marks::mark("ho.acquire");
         let Ok(frame) = acquire(surface, gpu, &l.config, l.surface_ok, 1, &mut self.meter) else { return };
+        crate::marks::mark("ho.acquired");
         let rt = &mut self.rt;
         let target_format = if rt.srgb_blend() { l.config.format.remove_srgb_suffix() } else { l.config.format };
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor { format: (target_format != l.config.format).then_some(target_format), ..Default::default() });
         renderer.upload_images(&gpu.device, &gpu.queue, &mut rt.images);
+        crate::marks::mark("ho.images");
         renderer.prepare_surfaces(&gpu.device, &gpu.queue, &rt.surfaces, (l.config.width, l.config.height));
+        crate::marks::mark("ho.surfaces");
         let mut enc = gpu.device.create_command_encoder(&Default::default());
         // The app's compositor draws the same instances the CPU painted (the CPU frame drew none of
         // its effect slots, or it would have asked for the GPU).
@@ -579,7 +587,9 @@ impl<S: 'static> Host<S> {
             c.render(&mut Frame { device: &gpu.device, queue: &gpu.queue, encoder: &mut enc, target: &view, format: target_format, size, dt: 0.0, update_ms: 0.0, rt: &mut *rt, ui: &mut *renderer });
         } else {
             renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, (l.config.width, l.config.height));
+            crate::marks::mark("ho.prepared");
             renderer.draw(&mut enc, &view, rt.clear_color());
+            crate::marks::mark("ho.drawn");
         }
         // A copy of the frame, for the drift count once it's the one the window commits to: only
         // when it's asked for (`RUNE_CPU_BOOT_DRIFT`), as the count is a diagnostic.
@@ -592,7 +602,9 @@ impl<S: 'static> Host<S> {
             Readback { buffer, row, size: (width, height) }
         });
         renderer.submit(&gpu.queue, enc);
+        crate::marks::mark("ho.submitted");
         gpu.queue.present(frame);
+        crate::marks::mark("ho.presented");
         l.native.slot.presented();
         let flag = Arc::new(AtomicBool::new(false));
         let set = flag.clone();
