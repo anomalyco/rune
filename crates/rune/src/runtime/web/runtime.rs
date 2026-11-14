@@ -210,6 +210,53 @@ fn byte_at(text: &str, utf16: usize) -> Option<usize> {
 }
 
 impl<S: 'static> Runtime<S> {
+    /// An action whose handler may ask for what a browser allows only inside the input's event
+    /// (the clipboard, a new tab, a menu, a dialog) or that routes keys and focus: it runs in a
+    /// frame inside that event. The rest (a move's hover, enter and leave, what a frame reports
+    /// for the next: layout, visibility, rows shown, a selection's change) waits for the display.
+    fn web_needs_event(action: &Action) -> bool {
+        matches!(action, Action::Press(..) | Action::DoublePress(_) | Action::MiddlePress(_) | Action::Link(..) | Action::LinkSecondary(..)
+            | Action::SecondaryPress(..) | Action::Drag(..) | Action::DragRepeat(..) | Action::DragStart(_) | Action::DragEnd(..) | Action::Dismiss(_)
+            | Action::FieldMenu(..) | Action::Files(_) | Action::Paste(..) | Action::ClipboardRead(..) | Action::FileDialog(..) | Action::Key { .. }
+            | Action::KeyUp(_) | Action::Physical(..) | Action::Focus(..) | Action::FocusControl(_) | Action::Blur)
+    }
+
+    /// Whether a release (or an edit) left a handler that has to run inside the input's event.
+    pub(crate) fn web_release_needs_frame(&self) -> bool {
+        self.queue.iter().any(Self::web_needs_event)
+    }
+
+    /// A press whose only such action focuses a text field runs that action now, as a frame
+    /// would (its double click and its composition included), so the page's own field takes
+    /// focus inside the press and the next key goes to it; the rest of the queue and the frame
+    /// wait for the display's. False, with nothing run, when any other such action is queued or
+    /// a focus is already asked for.
+    pub(crate) fn web_focus_field(&mut self) -> bool {
+        if self.relayout || self.focus_request.is_some() || self.pending.focus_to.is_some() { return false; }
+        let needs: Vec<usize> = self.queue.iter().enumerate().filter(|(_, a)| Self::web_needs_event(a)).map(|(i, _)| i).collect();
+        let [pos] = needs[..] else { return false };
+        if !matches!(self.queue.iter().nth(pos), Some(Action::Focus(..))) { return false; }        let mut tx = self.transaction();
+        let action = self.queue.remove(pos);
+        let changed = self.run_action(action, &mut tx);
+        self.dirty |= changed;
+        merge(&mut self.pending, tx);
+        true
+    }
+
+    /// The focused field's context from the model, which an edit or a focus just changed, for
+    /// the page's field before its next key; None when what's pending needs a whole frame now
+    /// (a handler that asked for the clipboard, a link, focus or a selection).
+    pub(crate) fn web_edit_context(&mut self, mirror: &mut Mirror) -> Option<bool> {
+        let tx = &self.pending;
+        if self.web_release_needs_frame() || self.focus_request.is_some() || tx.blur || tx.focus_to.is_some() || tx.select.is_some() || !tx.keys.is_empty()
+            || tx.copy.is_some() || tx.paste || !tx.clipboard_reads.is_empty() || !tx.pick_reads.is_empty()
+            || !tx.open_urls.is_empty() || !tx.file_dialogs.is_empty() || !tx.popups.is_empty() || tx.clear_secret {
+            return None;
+        }
+        let access = self.focused_input()?.access.clone()?;
+        let key = self.focus.path()?;
+        Some(mirror.update(key, Some(access(states!(self)))))
+    }
     pub(crate) fn web_context(&self, mirror: &mut Mirror) -> bool {
         match self.focused_input().filter(|i| i.access.is_some()) {
             Some(input) => mirror.update(self.focus.path().unwrap_or_default(), Some(&input.edit)),

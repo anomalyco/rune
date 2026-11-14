@@ -788,6 +788,12 @@ export function announceA11y(h, text, assertive) {
 }
 
 // Rune skipped rebuilding the mirror while it scrolls: it asks again once the scroll has rested.
+// The mirror's first build, in the page's idle time (its first frame's input goes first).
+export function scheduleA11yIdle(h) {
+    const due = () => { if (!h.disposed) h.send({ kind: 'a11y_due' }); };
+    if (globalThis.requestIdleCallback) requestIdleCallback(due, { timeout: 100 }); else setTimeout(due, 0);
+}
+
 export function scheduleA11y(h) {
     clearTimeout(h.a11yTimer);
     h.a11yTimer = setTimeout(() => { h.a11yTimer = 0; if (!h.disposed) h.send({ kind: 'a11y_due' }); }, 160);
