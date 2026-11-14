@@ -4,7 +4,7 @@ use crate::{Animated, Beat, Cycle, Easing, Sequence, PropClass, Spring};
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum LoopKind {
     Opacity { low: f32, high: f32 },
-    /// Piecewise-linear, wall-clock opacity with a bounded frame rate.
+    /// Piecewise-linear, wall-clock opacity sampled at display rate or a fixed cadence.
     OpacityCycle(Cycle),
     /// Finite opacity/scale choreography; holds its last pose at rest.
     Sequence(Sequence),
@@ -147,10 +147,10 @@ impl LoopTrack {
             _ => None,
         }
     }
-    /// Wall-clock cycles retain their cadence even when animation time is paused.
+    /// A stepped cycle's timer interval. Continuous tracks use the host's frame request.
     pub fn frame_interval(&self) -> Option<f64> {
         match self.spec.kind {
-            LoopKind::OpacityCycle(c) => Some(f64::from(1.0 / c.fps.max(1.0))),
+            LoopKind::OpacityCycle(c) => c.frame_interval(),
             _ => None,
         }
     }
