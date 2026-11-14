@@ -3,6 +3,7 @@ use super::*;
 
 impl<S: 'static> Runtime<S> {
     pub(super) fn build(&mut self) -> bool {
+        let ib3_total = std::time::Instant::now();
         let (_paint_time, _blend) = (crate::frame::profile::Scope::new(crate::frame::profile::Phase::Paint), crate::theme::scope(self.srgb_blend));
         let s = self.env.scale;
         let snap_px = |v: f32| grid(v, s) * s;
@@ -96,7 +97,9 @@ impl<S: 'static> Runtime<S> {
             self.dissolve_scratch[parent] |= opacity > 0.001 && opacity < 1.0;
         }
 
+        let ib3_prep = std::time::Instant::now();
         let paint_state_hash = self.prepare_cache_layers(&sel_ranges, &mark_ranges);
+        let _ = crate::marks::ib3_ns(19, ib3_prep);
 
         self.place_growth_rows();
 
@@ -212,7 +215,11 @@ impl<S: 'static> Runtime<S> {
                     pinh.paint_fade_origin[slot] = origin;
                 }
             }
-            if let Some(len) = self.keep_or_paint(i, &pinh, &mut glyph_count) {
+            crate::marks::ib3_acc(14, 1);
+            let ib3_k = std::time::Instant::now();
+            let ib3_kept = self.keep_or_paint(i, &pinh, &mut glyph_count);
+            let _ = crate::marks::ib3_ns(17, ib3_k);
+            if let Some(len) = ib3_kept {
                 skip_to = paint_index + len;
                 continue;
             }
@@ -1128,6 +1135,7 @@ impl<S: 'static> Runtime<S> {
                         });
                     }
                 }
+                let ib3_c = std::time::Instant::now();
                 self.paint_content(
                     i,
                     paint_content::LeafBox {
@@ -1163,6 +1171,7 @@ impl<S: 'static> Runtime<S> {
                     &mark_ranges,
                     &mut glyph_count,
                 );
+                let _ = crate::marks::ib3_ns(12, ib3_c);
             }
             let packed_fade = crate::render::pack_fade(fade, fade_origin, clip);
             for instance in &mut self.instances[first_instance..] {
@@ -1263,7 +1272,9 @@ impl<S: 'static> Runtime<S> {
             // group: a press in the same frame as the move that reveals it finds it, as a page's
             // `:hover` applies before the press does.
             let (hit_opacity, hit_rect) = if effective_opacity > 0.001 { (effective_opacity, rect_pt) } else { (hit_opacity, intersect(rect_pt, pinh.group_rect)) };
+            let ib3_h = std::time::Instant::now();
             self.register_node_hits(i, pinh.clip, (hit_opacity, visible), hit_rect, (press_k, press_anchor));
+            let _ = crate::marks::ib3_ns(13, ib3_h);
             if self.has_sticky {
                 self.fade_below_header(i, s);
             }
@@ -1298,6 +1309,10 @@ impl<S: 'static> Runtime<S> {
         }
         if self.track_marks { self.marks.resize(self.instances.len(), 0); }
         self.stats.glyphs = glyph_count;
+        crate::marks::ib3_acc(15, self.instances.len() as u64);
+        crate::marks::ib3_acc(16, glyph_count as u64);
+        let _ = crate::marks::ib3_ns(18, ib3_total);
+        crate::marks::ib3_flush();
         self.ambient = ambient;
         // A live transform can change hover paint with no handler and no running spring.
         // Retarget from the new geometry and schedule the frame that samples that paint. A

@@ -31,6 +31,18 @@ fn book() -> std::sync::MutexGuard<'static, Book> {
 }
 
 /// Records `name` at now, unless it was reached before. An app marks its own steps here too.
+/// IB-3 measuring: per-step accumulators for flatten (`crate::marks::ib3_acc`), flushed into metrics.
+pub const IB3_NAMES: [&str; 20] = ["ib3.flat.path_ns", "ib3.flat.text_ns", "ib3.flat.push_ns", "ib3.flat.sync_ns", "ib3.flat.cold_ns", "ib3.flat.nodes", "ib3.flat.refs", "ib3.flat.texts", "ib3.flat.colds", "ib3.flat.memo_hits", "ib3.flat.path_bytes", "ib3.flat.rest_ns", "ib3.scene.content_ns", "ib3.scene.hits_ns", "ib3.scene.nodes", "ib3.scene.instances", "ib3.scene.glyphs", "ib3.scene.keep_ns", "ib3.scene.total_ns", "ib3.scene.prep_ns"];
+thread_local! { static IB3_ACC: std::cell::RefCell<[u64; 20]> = const { std::cell::RefCell::new([0; 20]) }; }
+#[inline]
+pub fn ib3_acc(i: usize, v: u64) { IB3_ACC.with_borrow_mut(|a| a[i] += v); }
+#[inline]
+pub fn ib3_ns(i: usize, since: std::time::Instant) -> std::time::Instant { let now = std::time::Instant::now(); ib3_acc(i, (now - since).as_nanos() as u64); now }
+pub fn ib3_flush() {
+    let acc = IB3_ACC.with_borrow_mut(std::mem::take);
+    for (i, v) in acc.iter().enumerate() { if *v > 0 { add(IB3_NAMES[i], *v); } }
+}
+
 pub fn mark(name: &'static str) {
     let now = Instant::now();
     let mut book = book();

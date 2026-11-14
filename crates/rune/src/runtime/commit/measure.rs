@@ -566,6 +566,7 @@ impl<S: 'static> Measurement<'_, S> {
         }
         if self.committing { release_kept_layouts(self.nodes, &mut nodes, &taffy, self.text, &reused); }
         taffy.finish_flatten();
+        crate::marks::ib3_flush();
         let (taffy, nodes) = self.solve(taffy, root_id, nodes);
         (taffy, nodes, pending, reused, taken_paths)
     }

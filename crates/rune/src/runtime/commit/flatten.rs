@@ -417,6 +417,7 @@ fn flatten_owned(
     if parent_sx.is_none()
         && let Some(slot) = memo_reuse::try_reuse_memo(&el, parent, path_buf, index, motion, in_row, scale, taffy, nodes, memo_ctx)
     {
+        crate::marks::ib3_acc(9, 1);
         return (slot, false);
     }
     let record_built = parent_sx.is_none().then(|| {
@@ -425,10 +426,15 @@ fn flatten_owned(
         let (inherited, hover_within) = memo_reuse::inherited_for(parent, nodes, motion, in_row, scale, memo_ctx.foreground);
         Some((built.id, inherited, hover_within))
     }).flatten();
+    let ib3_t = std::time::Instant::now();
     let prev_len = path_buf.len();
     push_segment(path_buf, el.key.as_deref(), index);
     let me = nodes.len();
     let (path, id) = resolve_path_and_id(path_buf, me, memo_ctx);
+    crate::marks::ib3_acc(5, 1);
+    
+    crate::marks::ib3_acc(10, path_buf.len() as u64);
+    let ib3_t = crate::marks::ib3_ns(0, ib3_t);
     let own_motion = el.cold.motion;
     let motion = own_motion.unwrap_or(motion);
     let parent_is_stack = parent.is_some_and(|p| nodes[p].growth.is_some());
@@ -456,7 +462,10 @@ fn flatten_owned(
     if let Some(sx) = parent_sx {
         apply_scroll_x_child(&mut style, sx);
     }
+    let ib3_t = crate::marks::ib3_ns(11, ib3_t);
     let (measure, secure_measure) = prepare_text(&mut text, input.as_deref(), scale, directed.then_some(flow));
+    if measure.is_some() { crate::marks::ib3_acc(7, 1); }
+    let ib3_t = crate::marks::ib3_ns(1, ib3_t);
     take_foreground(&mut text, input.as_deref_mut(), &mut vis, memo_ctx.foreground);
     if vis.border_layout { lay_out_border(&mut style, &vis, scale); }
     if dir_effect == crate::el::DirEffect::Mirror {
@@ -529,6 +538,8 @@ fn flatten_owned(
             scroll_source: c.scroll_source,
         })
     };
+    let ib3_t = crate::marks::ib3_ns(11, ib3_t);
+    if cold.get().is_some() { crate::marks::ib3_acc(8, 1); }
     nodes.push(Node {
         id,
         path,
@@ -576,6 +587,7 @@ fn flatten_owned(
         r => r,
     };
     let row = matches!(style.flex_direction(), FlexDirection::Row | FlexDirection::RowReverse);
+    let _ = crate::marks::ib3_ns(2, ib3_t);
     let child_mark = taffy.begin_children();
     let mut children_dirty = false;
     let shared_len = memo_children.as_ref().map_or(0, |m| m.children.len());
@@ -592,7 +604,9 @@ fn flatten_owned(
         children_dirty |= kid_dirty;
     }
     path_buf.truncate(prev_len);
+    let ib3_t = std::time::Instant::now();
     let (slot, dirty) = taffy.sync_node(id.0, me as u32, style, measure, secure_measure, child_mark, children_dirty);
+    let _ = crate::marks::ib3_ns(3, ib3_t);
     nodes[me].taffy = slot;
     if let Some((built_id, inherited, hover_within)) = record_built {
         memo_ctx.pending.push(memo_reuse::PendingFlat {
@@ -624,6 +638,7 @@ fn flatten_ref(
     if parent_sx.is_none()
         && let Some(slot) = memo_reuse::try_reuse_memo(el, parent, path_buf, index, motion, in_row, scale, taffy, nodes, memo_ctx)
     {
+        crate::marks::ib3_acc(9, 1);
         return (slot, false);
     }
     let record_built = parent_sx.is_none().then(|| {
@@ -632,10 +647,15 @@ fn flatten_ref(
         let (inherited, hover_within) = memo_reuse::inherited_for(parent, nodes, motion, in_row, scale, memo_ctx.foreground);
         Some((built.id, inherited, hover_within))
     }).flatten();
+    let ib3_t = std::time::Instant::now();
     let prev_len = path_buf.len();
     push_segment(path_buf, el.key.as_deref(), index);
     let me = nodes.len();
     let (path, id) = resolve_path_and_id(path_buf, me, memo_ctx);
+    crate::marks::ib3_acc(5, 1);
+    crate::marks::ib3_acc(6, 1);
+    crate::marks::ib3_acc(10, path_buf.len() as u64);
+    let ib3_t = crate::marks::ib3_ns(0, ib3_t);
     let own_motion = el.cold.motion;
     let motion = own_motion.unwrap_or(motion);
     let parent_is_stack = parent.is_some_and(|p| nodes[p].growth.is_some());
@@ -660,7 +680,10 @@ fn flatten_ref(
     let parent_flow = parent.map_or(crate::el::Flow::Ltr, |p| nodes[p].flow);
     let (flow, dir_effect) = crate::el::step_direction(parent_flow, crate::el::DirEvent::of(el));
     let directed = el.flags.dir().is_some() || parent.is_some_and(|p| nodes[p].directed);
+    let ib3_t = crate::marks::ib3_ns(11, ib3_t);
     let (measure, secure_measure) = prepare_text(&mut text, input.as_deref(), scale, directed.then_some(flow));
+    if measure.is_some() { crate::marks::ib3_acc(7, 1); }
+    let ib3_t = crate::marks::ib3_ns(1, ib3_t);
     let inert = flags.has(ElFlags::INERT) || parent.is_some_and(|p| nodes[p].inert);
     let mut vis = el.vis.clone();
     take_foreground(&mut text, input.as_deref_mut(), &mut vis, memo_ctx.foreground);
@@ -733,6 +756,8 @@ fn flatten_ref(
             scroll_source: c.scroll_source,
         })
     };
+    let ib3_t = crate::marks::ib3_ns(11, ib3_t);
+    if cold.get().is_some() { crate::marks::ib3_acc(8, 1); }
     nodes.push(Node {
         id,
         path,
@@ -780,6 +805,7 @@ fn flatten_ref(
         r => r,
     };
     let row = matches!(style.flex_direction(), FlexDirection::Row | FlexDirection::RowReverse);
+    let _ = crate::marks::ib3_ns(2, ib3_t);
     let child_mark = taffy.begin_children();
     let mut children_dirty = false;
     for (i, c) in el.all_children().enumerate() {
@@ -788,7 +814,9 @@ fn flatten_ref(
         children_dirty |= kid_dirty;
     }
     path_buf.truncate(prev_len);
+    let ib3_t = std::time::Instant::now();
     let (slot, dirty) = taffy.sync_node(id.0, me as u32, style.into_owned(), measure, secure_measure, child_mark, children_dirty);
+    let _ = crate::marks::ib3_ns(3, ib3_t);
     nodes[me].taffy = slot;
     if let Some((built_id, inherited, hover_within)) = record_built {
         memo_ctx.pending.push(memo_reuse::PendingFlat {
