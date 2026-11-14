@@ -177,13 +177,16 @@ impl Segmenters {
     }
 }
 
-#[cfg(feature = "complex-scripts")]
+// `line-dictionaries` (Rune: vendor/parley_engine.patch): the line segmenter's Thai, Lao, Khmer and
+// Burmese dictionaries without the word segmenter's (Chinese and Japanese words come from the host's
+// `dictionary` segmenter instead).
+#[cfg(any(feature = "complex-scripts", feature = "line-dictionaries"))]
 #[inline(always)]
 fn line_segmenter_impl(opt: LineBreakOptions<'_>) -> LineSegmenterBorrowed<'static> {
     LineSegmenter::new_dictionary(opt)
 }
 
-#[cfg(not(feature = "complex-scripts"))]
+#[cfg(not(any(feature = "complex-scripts", feature = "line-dictionaries")))]
 #[inline(always)]
 fn line_segmenter_impl(opt: LineBreakOptions<'_>) -> LineSegmenterBorrowed<'static> {
     LineSegmenter::new_for_non_complex_scripts(opt)

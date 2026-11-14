@@ -22,6 +22,12 @@ tooling = []
 # They draw with a second `Runtime`, about 1.46 MB of an app's exe, so `tooling` leaves them out;
 # debug builds always have them.
 keys-overlay = ["tooling"]
+# Windows: link ICU4X's word dictionaries (Chinese and Japanese words above all: 1,939,456 B of a
+# minimal release exe) instead of asking Windows' own ICU (`icu.dll`, Windows 10 1903 and later) for
+# the words a double-click and word movement take. For an app that runs where `icu.dll` isn't
+# (Server Core). Line breaks never need it: Thai, Lao, Khmer and Burmese keep their baked line
+# dictionaries either way. Other native platforms always link the word dictionaries.
+segmenter-dictionaries = ["parley/complex-scripts"]
 # Headless benchmark instrumentation; ordinary builds contain no phase clocks.
 frame-profile = ["tooling", "dep:procwatch"]
 # A measuring build's heap dumps (procwatch's `alloc-sites`) also list the GPU device's allocations.
@@ -113,12 +119,15 @@ resvg = { version = "0.45", default-features = false, optional = true }
 # The thread CPU clock for frame profiles and debug builds' stall warnings.
 libc = "0.2"
 
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "windows")))'.dependencies]
 # `complex-scripts`: Chinese and Japanese words (2.0 MB) and Thai, Lao, Khmer and Burmese words and
 # line breaks (1.8 MB); without them a Thai phrase never wraps and every CJK line logs a missing
 # segmentation model. A browser has its own (`Intl.Segmenter`), which the page gives Parley
-# (`platform/web/segmenter.rs`), and links none.
+# (`platform/web/segmenter.rs`), and Windows has its own (`icu.dll`, `platform/win32/segmenter.rs`);
+# neither links them.
 parley = { version = "0.12", default-features = false, features = ["std", "complex-scripts"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 pollster = "1"
 # JPEG, GIF, WebP, BMP and ICO decoding; a web build hands them to the browser's codecs instead.
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "ico"] }
@@ -199,6 +208,10 @@ x11rb = { version = "0.13", features = ["shape", "xinput", "randr", "allow-unsaf
 xkbcommon = "0.9"
 
 [target.'cfg(target_os = "windows")'.dependencies]
+# `dictionary::set_dictionary_segmenter` (vendor/parley_engine), for `icu.dll`'s words, and
+# `line-dictionaries`: Thai, Lao, Khmer and Burmese line breaks from ICU4X's baked line dictionaries,
+# so no line ever waits for `icu.dll`.
+parley_engine = { version = "0.12", default-features = false, features = ["line-dictionaries"] }
 # D3D12 shared textures for `NativeSurface` (`native_surface::windows`), on wgpu-hal's version.
 # Media Foundation, D3D11 and WASAPI for video playback (`video::windows`): COM interfaces only;
 # their DLLs load on the first clip, through `GetProcAddress`, so the import table gains nothing.

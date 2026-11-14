@@ -8,7 +8,9 @@
 # font metrics per font instance and size (`run_metrics_cache`), and `FontMetrics::from_font_instance`
 # keeps a style's per thread (64 entries). Two hooks for a host without ICU's dictionaries or the
 # fonts a script needs (Rune's web build): `dictionary::set_dictionary_segmenter` (the words, and
-# Thai, Lao, Khmer and Burmese line breaks, of runs that need a dictionary) and
+# Thai, Lao, Khmer and Burmese line breaks, of runs that need a dictionary; with the
+# `line-dictionaries` feature, the words alone, the line segmenter keeping its Thai, Lao, Khmer and
+# Burmese dictionaries: Rune's Windows build) and
 # `platform::set_platform_face` (a face whose runs the host measures and draws, not HarfRust;
 # `push_run` takes glyph infos and positions instead of a `GlyphBuffer` for it). Run it when
 # parley is bumped, then build: a patch that no longer applies fails here, and the change goes

@@ -105,8 +105,9 @@ impl Words {
     }
 
     /// The boundaries inside Thai, Lao, Khmer and Burmese runs: their line break opportunities.
+    /// None with `line-dictionaries`, whose line segmenter finds them itself.
     pub(crate) fn line_breaks(&self) -> impl Iterator<Item = usize> + '_ {
-        let mut run = 0;
+        let mut run = if cfg!(feature = "line-dictionaries") { self.runs.len() } else { 0 };
         self.bounds.iter().copied().filter(move |&b| {
             while self.runs.get(run).is_some_and(|r| r.1 <= b) {
                 run += 1;
