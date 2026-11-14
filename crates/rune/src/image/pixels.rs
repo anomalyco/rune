@@ -7,6 +7,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 pub const IMAGE_ATLAS_SIZE: u32 = 1024;
+/// Rows a shelf page starts with (`ImagePage::new`).
+const IMAGE_PAGE_START_ROWS: u32 = 128;
 
 struct Frame {
     width: u32,
@@ -392,22 +394,31 @@ impl ImageAtlas {
 }
 
 impl ImagePage {
+    /// A shelf page starts with the rows its first image needs (at least
+    /// `IMAGE_PAGE_START_ROWS`) and grows as its shelves fill (`allocate`), up to
+    /// `IMAGE_ATLAS_SIZE`: a window that shows a few icons holds 512 KiB of it, not 4 MiB.
     fn new(w: u32, h: u32) -> Self {
         let (width, height) = if w > IMAGE_ATLAS_SIZE || h > IMAGE_ATLAS_SIZE { (w, h) }
-            else { (IMAGE_ATLAS_SIZE, IMAGE_ATLAS_SIZE) };
+            else { (IMAGE_ATLAS_SIZE, h.next_power_of_two().max(IMAGE_PAGE_START_ROWS)) };
         Self { width, height, data: vec![0; width as usize * height as usize * 4],
             dirty: None, shelf_x: 0, shelf_y: 0, shelf_h: 0, shown: false, touched: false }
     }
 
     fn allocate(&mut self, w: u32, h: u32) -> Option<(u32, u32)> {
-        if w > self.width || h > self.height { return None; }
+        let shelf = self.width == IMAGE_ATLAS_SIZE && self.height <= IMAGE_ATLAS_SIZE;
+        if w > self.width || h > if shelf { IMAGE_ATLAS_SIZE } else { self.height } { return None; }
         if self.shelf_x + w > self.width {
             self.shelf_y += self.shelf_h;
             self.shelf_x = 0;
             self.shelf_h = 0;
         }
         if self.shelf_y + h > self.height {
-            return None;
+            if !shelf || self.shelf_y + h > IMAGE_ATLAS_SIZE { return None; }
+            // Rows already placed keep their texels; the renderer makes the page's texture again
+            // at its new size and uploads all of it.
+            self.height = (self.shelf_y + h).next_power_of_two().min(IMAGE_ATLAS_SIZE);
+            self.data.resize(self.width as usize * self.height as usize * 4, 0);
+            self.dirty = Some((0, self.height));
         }
         let at = (self.shelf_x, self.shelf_y);
         self.shelf_x += w;
