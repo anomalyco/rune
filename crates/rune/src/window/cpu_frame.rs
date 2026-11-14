@@ -505,7 +505,7 @@ impl<S: 'static> Host<S> {
         let slot = Arc::new(Mutex::new(None));
         let (out, handle, srgb, size) = (slot.clone(), self.native_handle.clone(), self.rt.srgb_blend(), (w.config.width, w.config.height));
         // What the window draws now, for the GPU thread's first frame of its own (`warm_frame`).
-        let instances = warm_instances(&self.rt.instances);
+        let instances = warm_instances(&self.rt.instances, size);
         let features = self.comp.as_ref().map_or(wgpu::Features::empty(), |c| c.features());
         let hwnd = hwnd as isize;
         let spawned = std::thread::Builder::new().name("rune-gpu-window".into()).spawn(move || {
@@ -784,11 +784,16 @@ fn warm_frame(gpu: &Gpu, renderer: &mut Renderer, format: wgpu::TextureFormat, s
 
 /// The last CPU frame's instances as the warm frame draws them: what reads the app's own state
 /// (an image's slot, a glyph's atlas page, a compositor's effect) draws as a plain box, so the
-/// frame needs nothing but the renderer.
-fn warm_instances(instances: &[crate::render::Instance]) -> Vec<crate::render::Instance> {
-    use crate::render::{KIND_EFFECT, KIND_GLYPH, KIND_IMAGE, KIND_RECT};
-    instances
+/// frame needs nothing but the renderer. They draw twice: as they are, and again inside a
+/// half-opaque layer the size of the window, because the frames after the first one often fade
+/// something in (an entrance) and a layer is the costliest first use: its target, its format's
+/// pipelines and their compile in the driver. The layer's target stays in the renderer's pool.
+fn warm_instances(instances: &[crate::render::Instance], size: (u32, u32)) -> Vec<crate::render::Instance> {
+    use crate::render::{Instance, KIND_EFFECT, KIND_GLYPH, KIND_IMAGE, KIND_LAYER, KIND_LAYER_END, KIND_RECT};
+    use bytemuck::Zeroable;
+    let plain: Vec<Instance> = instances
         .iter()
+        .filter(|i| i.params[1] != KIND_LAYER && i.params[1] != KIND_LAYER_END)
         .map(|i| {
             let mut i = *i;
             if i.params[1] == KIND_IMAGE || i.params[1] == KIND_EFFECT {
@@ -798,7 +803,12 @@ fn warm_instances(instances: &[crate::render::Instance]) -> Vec<crate::render::I
             }
             i
         })
-        .collect()
+        .collect();
+    let whole = [0.0, 0.0, size.0 as f32, size.1 as f32];
+    let layer = Instance { rect: whole, fill: [0.0, 0.0, 0.0, 0.5], params: [0.0, KIND_LAYER, 0.0, 0.0], clip: whole, ..Instance::zeroed() };
+    let cover = Instance { rect: whole, fill: [0.5, 0.5, 0.5, 1.0], params: [0.0, KIND_RECT, 0.0, 0.0], clip: whole, ..Instance::zeroed() };
+    let end = Instance { params: [0.0, KIND_LAYER_END, 0.0, 0.0], ..Instance::zeroed() };
+    plain.iter().copied().chain([layer, cover]).chain(plain.iter().copied()).chain([end]).collect()
 }
 
 /// On a worker: maps the GPU frame's copy, counts the pixels that differ from the CPU's buffer
