@@ -12,60 +12,123 @@ index ac050bc..6e3c74e 100644
  
      // The Intel Haswell family of iGPUs had support for the D3D12 API but it was later
 diff --git a/src/dx12/command.rs b/src/dx12/command.rs
-index 9e90e26..cc95979 100644
+index 9e90e26..b39f52f 100644
 --- a/src/dx12/command.rs
 +++ b/src/dx12/command.rs
-@@ -401,6 +401,12 @@ impl crate::CommandEncoder for super::CommandEncoder {
-             }
-         };
+@@ -389,17 +389,24 @@ impl crate::CommandEncoder for super::CommandEncoder {
+     type A = super::Api;
  
-+        // A list made ahead, when this encoder has none to reuse (`Device::reserve_command_lists`).
-+        let list = list.or_else(|| {
-+            let spare = self.shared.spare_lists.lock().0.pop()?;
-+            unsafe { spare.Reset(&self.allocator, None) }.is_ok().then_some(spare)
-+        });
-+
+     unsafe fn begin_encoding(&mut self, label: crate::Label) -> Result<(), crate::DeviceError> {
+-        let list = loop {
+-            if let Some(list) = self.free_lists.pop() {
+-                // TODO: Is an error expected here and should we print it?
+-                let reset_result = unsafe { list.Reset(&self.allocator, None) };
+-                if reset_result.is_ok() {
+-                    break Some(list);
++        // An armed list (`Device::reserve_command_lists`) is open already, with an allocator of
++        // its own: nothing is reset or made here.
++        let armed = self.shared.armed.take();
++        let list = match &armed {
++            Some(super::Armed(list, _)) => Some(list.clone()),
++            None => loop {
++                if let Some(list) = self.free_lists.pop() {
++                    // TODO: Is an error expected here and should we print it?
++                    let reset_result = unsafe { list.Reset(&self.allocator, None) };
++                    if reset_result.is_ok() {
++                        break Some(list);
++                    }
++                } else {
++                    break None;
+                 }
+-            } else {
+-                break None;
+-            }
++            },
+         };
++        self.list_allocator = armed.map(|super::Armed(_, allocator)| allocator);
+ 
          let list = if let Some(list) = list {
              list
-         } else {
+@@ -430,19 +437,26 @@ impl crate::CommandEncoder for super::CommandEncoder {
+     unsafe fn discard_encoding(&mut self) {
+         if let Some(list) = self.list.take() {
+             if unsafe { list.Close() }.is_ok() {
+-                self.free_lists.push(list);
++                match self.list_allocator.take() {
++                    Some(allocator) => self.shared.armed.give_back(list, allocator),
++                    None => self.free_lists.push(list),
++                }
+             }
+         }
+     }
+     unsafe fn end_encoding(&mut self) -> Result<super::CommandBuffer, crate::DeviceError> {
+         let raw = self.list.take().unwrap();
++        let armed = self.list_allocator.take();
+         unsafe { raw.Close() }.into_device_result("GraphicsCommandList::close")?;
+-        Ok(super::CommandBuffer { raw })
++        Ok(super::CommandBuffer { raw, armed })
+     }
+     unsafe fn reset_all<I: Iterator<Item = super::CommandBuffer>>(&mut self, command_buffers: I) {
+         self.intermediate_copy_bufs.clear();
+         for cmd_buf in command_buffers {
+-            self.free_lists.push(cmd_buf.raw);
++            match cmd_buf.armed {
++                Some(allocator) => self.shared.armed.give_back(cmd_buf.raw, allocator),
++                None => self.free_lists.push(cmd_buf.raw),
++            }
+         }
+         if let Err(e) = unsafe { self.allocator.Reset() } {
+             log::error!("ID3D12CommandAllocator::Reset() failed with {e}");
 diff --git a/src/dx12/device.rs b/src/dx12/device.rs
-index 63fb313..f34b626 100644
+index 63fb313..7fd46ba 100644
 --- a/src/dx12/device.rs
 +++ b/src/dx12/device.rs
 @@ -139,6 +139,7 @@ impl super::Device {
          let shared = super::DeviceShared {
              adapter,
              zero_buffer,
-+            spare_lists: Mutex::new((Vec::new(), None)),
++            armed: Arc::new(super::ArmedLists { ready: Mutex::new(Vec::new()), rearm: Mutex::new(None) }),
              cmd_signatures: super::CommandSignatures {
                  draw: Self::create_command_signature(
                      &raw,
-@@ -458,6 +459,32 @@ impl super::Device {
+@@ -458,6 +459,44 @@ impl super::Device {
          &self.raw
      }
  
-+    /// Makes `count` command lists now, for encoders that have none of their own to reuse to
-+    /// take later: a list costs about a millisecond to make on some drivers (Intel's), and a frame
-+    /// with layers takes two for each render pass. Lists past `count` already made are kept.
++    /// Makes `count` command lists now, each open with an allocator of its own, for any encoder to
++    /// record into instead of resetting a list of its own, and starts the thread that arms each
++    /// again (resets its allocator and itself) once the GPU is done with it. A list costs about a
++    /// millisecond to make or reset on some drivers (Intel's), and wgpu takes two for each render
++    /// pass: an encoder that takes armed lists pays neither. The thread waits on its channel
++    /// between frames, and ends with the device.
 +    pub fn reserve_command_lists(&self, count: usize) -> Result<(), crate::DeviceError> {
-+        let mut spare = self.shared.spare_lists.lock();
-+        let allocator = match &spare.1 {
-+            Some(allocator) => allocator.clone(),
-+            None => {
-+                let allocator: Direct3D12::ID3D12CommandAllocator =
-+                    unsafe { self.raw.CreateCommandAllocator(Direct3D12::D3D12_COMMAND_LIST_TYPE_DIRECT) }
-+                        .into_device_result("Command allocator creation")?;
-+                spare.1 = Some(allocator.clone());
-+                allocator
-+            }
++        let make = |raw: &Direct3D12::ID3D12Device| -> Result<super::Armed, crate::DeviceError> {
++            let allocator: Direct3D12::ID3D12CommandAllocator =
++                unsafe { raw.CreateCommandAllocator(Direct3D12::D3D12_COMMAND_LIST_TYPE_DIRECT) }
++                    .into_device_result("Command allocator creation")?;
++            let list: Direct3D12::ID3D12GraphicsCommandList =
++                unsafe { raw.CreateCommandList(0, Direct3D12::D3D12_COMMAND_LIST_TYPE_DIRECT, &allocator, None) }
++                    .into_device_result("Create command list")?;
++            Ok(super::Armed(list, allocator))
 +        };
-+        while spare.0.len() < count {
-+            let list: Direct3D12::ID3D12GraphicsCommandList = unsafe {
-+                self.raw.CreateCommandList(0, Direct3D12::D3D12_COMMAND_LIST_TYPE_DIRECT, &allocator, None)
-+            }
-+            .into_device_result("Create command list")?;
-+            unsafe { list.Close() }.into_device_result("GraphicsCommandList::close")?;
-+            spare.0.push(list);
++        let missing = count.saturating_sub(self.shared.armed.ready.lock().len());
++        let made = (0..missing).map(|_| make(&self.raw)).collect::<Result<Vec<_>, _>>()?;
++        self.shared.armed.ready.lock().extend(made);
++        let mut rearm = self.shared.armed.rearm.lock();
++        if rearm.is_none() {
++            let (sent, received) = std::sync::mpsc::channel::<super::Armed>();
++            // The thread holds the pool weakly: the device's end drops the sender, and the thread ends.
++            let armed = Arc::downgrade(&self.shared.armed);
++            let spawned = std::thread::Builder::new().name("wgpu-dx12-lists".into()).spawn(move || {
++                for super::Armed(list, allocator) in received {
++                    let Some(armed) = armed.upgrade() else { return };
++                    // SAFETY: the GPU is done with the list (`reset_all`) or never had it
++                    // (`discard_encoding`), and no other list records into its allocator.
++                    let reset = unsafe { allocator.Reset() }.is_ok() && unsafe { list.Reset(&allocator, None) }.is_ok();
++                    if reset { armed.ready.lock().push(super::Armed(list, allocator)); }
++                }
++            });
++            if spawned.is_ok() { *rearm = Some(sent); }
 +        }
 +        Ok(())
 +    }
@@ -73,6 +136,14 @@ index 63fb313..f34b626 100644
      pub fn raw_queue(&self) -> &Direct3D12::ID3D12CommandQueue {
          &self.present_queue
      }
+@@ -826,6 +865,7 @@ impl crate::Device for super::Device {
+             intermediate_copy_bufs: Vec::new(),
+             null_rtv_handle: self.null_rtv_handle,
+             list: None,
++            list_allocator: None,
+             free_lists: Vec::new(),
+             pass: super::PassState::new(),
+             temp: super::Temp::default(),
 diff --git a/src/dx12/instance.rs b/src/dx12/instance.rs
 index fdb63bc..5f64a80 100644
 --- a/src/dx12/instance.rs
@@ -116,7 +187,7 @@ index fdb63bc..5f64a80 100644
 +    }
 +}
 diff --git a/src/dx12/mod.rs b/src/dx12/mod.rs
-index 285d635..63ecee4 100644
+index 285d635..270aa92 100644
 --- a/src/dx12/mod.rs
 +++ b/src/dx12/mod.rs
 @@ -615,6 +615,8 @@ struct SwapChain {
@@ -144,17 +215,65 @@ index 285d635..63ecee4 100644
      /// Returns the waitable handle associated with this swap chain, if any.
      /// Handle is only valid while the swap chain is alive.
      pub unsafe fn waitable_handle(&self) -> Option<Foundation::HANDLE> {
-@@ -752,6 +763,9 @@ struct CommandSignatures {
+@@ -752,6 +763,8 @@ struct CommandSignatures {
  struct DeviceShared {
      adapter: DxgiAdapter,
      zero_buffer: Direct3D12::ID3D12Resource,
-+    /// Closed command lists made ahead (`Device::reserve_command_lists`), which any encoder takes
-+    /// when it has none of its own to reuse, with the allocator they were made on.
-+    spare_lists: Mutex<(Vec<Direct3D12::ID3D12GraphicsCommandList>, Option<Direct3D12::ID3D12CommandAllocator>)>,
++    /// Command lists kept open to record into (`Device::reserve_command_lists`).
++    armed: Arc<ArmedLists>,
      cmd_signatures: CommandSignatures,
      heap_views: descriptor::GeneralHeap,
      sampler_heap: sampler::SamplerHeap,
-@@ -1535,7 +1549,9 @@ impl crate::Surface for Surface {
+@@ -992,6 +1005,8 @@ pub struct CommandEncoder {
+ 
+     null_rtv_handle: descriptor::Handle,
+     list: Option<Direct3D12::ID3D12GraphicsCommandList>,
++    /// The allocator of its own the open list came with, when it's an armed one (`ArmedLists`).
++    list_allocator: Option<Direct3D12::ID3D12CommandAllocator>,
+     free_lists: Vec<Direct3D12::ID3D12GraphicsCommandList>,
+     pass: PassState,
+     temp: Temp,
+@@ -1018,6 +1033,39 @@ impl fmt::Debug for CommandEncoder {
+ #[derive(Debug)]
+ pub struct CommandBuffer {
+     raw: Direct3D12::ID3D12GraphicsCommandList,
++    /// The allocator of its own an armed list came with (`ArmedLists`): it goes back to be armed
++    /// again rather than into its encoder's free lists.
++    armed: Option<Direct3D12::ID3D12CommandAllocator>,
++}
++
++/// An open command list and the allocator of its own it records into.
++struct Armed(Direct3D12::ID3D12GraphicsCommandList, Direct3D12::ID3D12CommandAllocator);
++
++// SAFETY: a list and its allocator are used by one thread at a time: the arming thread, then the
++// encoder that takes them, then the arming thread again once the GPU is done with them.
++unsafe impl Send for Armed {}
++
++/// Command lists kept open and ready to record into, each with an allocator of its own. Some
++/// drivers (Intel's) take about a millisecond to reset a list or make one, and wgpu takes two
++/// for each render pass, so an encoder takes an armed list instead of resetting one of its own,
++/// and a thread of their own resets each (allocator and list) once the GPU is done with it.
++struct ArmedLists {
++    ready: Mutex<Vec<Armed>>,
++    /// To the arming thread, while it runs (`Device::reserve_command_lists` starts it).
++    rearm: Mutex<Option<std::sync::mpsc::Sender<Armed>>>,
++}
++
++impl ArmedLists {
++    fn take(&self) -> Option<Armed> {
++        self.ready.lock().pop()
++    }
++
++    /// Hands `list` (closed, its GPU work done or never submitted) back to be armed again.
++    fn give_back(&self, list: Direct3D12::ID3D12GraphicsCommandList, allocator: Direct3D12::ID3D12CommandAllocator) {
++        if let Some(rearm) = self.rearm.lock().as_ref() {
++            let _ = rearm.send(Armed(list, allocator));
++        }
++    }
+ }
+ 
+ impl crate::DynCommandBuffer for CommandBuffer {}
+@@ -1535,7 +1583,9 @@ impl crate::Surface for Surface {
                      BufferUsage: Dxgi::DXGI_USAGE_RENDER_TARGET_OUTPUT,
                      BufferCount: swap_chain_buffer,
                      Scaling: Dxgi::DXGI_SCALING_STRETCH,
@@ -165,7 +284,7 @@ index 285d635..63ecee4 100644
                      Flags: flags.0 as u32,
                  };
                  let swap_chain1 = match self.target {
-@@ -1702,6 +1718,7 @@ impl crate::Surface for Surface {
+@@ -1702,6 +1752,7 @@ impl crate::Surface for Surface {
              present_mode: config.present_mode,
              format: config.format,
              size: config.extent,
@@ -173,7 +292,7 @@ index 285d635..63ecee4 100644
          });
  
          Ok(())
-@@ -1838,9 +1855,22 @@ impl crate::Queue for Queue {
+@@ -1838,9 +1889,22 @@ impl crate::Queue for Queue {
          };
  
          profiling::scope!("IDXGISwapchain3::Present");

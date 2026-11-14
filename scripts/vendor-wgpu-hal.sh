@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Re-makes vendor/wgpu-hal: the wgpu-hal crate exactly as published on crates.io at <version>, plus
 # vendor/wgpu-hal.patch (`dx12::Instance::expose_adapter`, which `gpu/pick.rs` uses to hand wgpu the one
-# adapter it picked through DXGI; FXC loaded on first use; `Surface::set_present_rects`, partial presents; `dx12::Device::reserve_command_lists`, command lists made ahead). Run it when wgpu is bumped, then build: a patch
+# adapter it picked through DXGI; FXC loaded on first use; `Surface::set_present_rects`, partial presents; `dx12::Device::reserve_command_lists`, command lists kept armed off the recording thread). Run it when wgpu is bumped, then build: a patch
 # that no longer applies fails here, and the function goes back in by hand. If upstream wgpu takes
 # the function, delete vendor/ and the `[patch.crates-io]` entries instead.
 # Usage: scripts/vendor-wgpu-hal.sh <version>     e.g. scripts/vendor-wgpu-hal.sh 30.0.1

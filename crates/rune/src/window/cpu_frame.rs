@@ -810,8 +810,8 @@ fn warm_frame(gpu: &Gpu, renderer: &mut Renderer, format: wgpu::TextureFormat, s
     renderer.prepare(&gpu.device, &gpu.queue, &mut atlas, instances, size);
     renderer.draw(&mut enc, &view, [0.0; 4]);
     renderer.submit(&gpu.queue, enc);
-    // Command lists for whichever encoders the hand-over frame and the frames after it take: the
-    // ones the warm frame made stay with its own encoders.
+    // Command lists armed ahead, for the hand-over frame and every frame after it to record into
+    // without resetting one on the app's thread (`reserve_command_lists`).
     // SAFETY: only Rune's own call on the raw device, which is alive.
     if let Some(hal) = unsafe { gpu.device.as_hal::<wgpu::hal::api::Dx12>() } {
         let _ = hal.reserve_command_lists(RESERVED_LISTS);
@@ -819,8 +819,8 @@ fn warm_frame(gpu: &Gpu, renderer: &mut Renderer, format: wgpu::TextureFormat, s
     let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
 }
 
-/// Command lists made ahead on the GPU thread: a frame takes two for each render pass, and one
-/// that fades a dozen layers in takes about 50.
+/// Command lists kept armed: a frame takes two for each render pass, and one that draws a dozen
+/// layers takes about 50.
 const RESERVED_LISTS: usize = 64;
 
 /// A CPU frame's instances as the warm frame draws them: what reads the app's own state (an

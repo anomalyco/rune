@@ -389,23 +389,24 @@ impl crate::CommandEncoder for super::CommandEncoder {
     type A = super::Api;
 
     unsafe fn begin_encoding(&mut self, label: crate::Label) -> Result<(), crate::DeviceError> {
-        let list = loop {
-            if let Some(list) = self.free_lists.pop() {
-                // TODO: Is an error expected here and should we print it?
-                let reset_result = unsafe { list.Reset(&self.allocator, None) };
-                if reset_result.is_ok() {
-                    break Some(list);
+        // An armed list (`Device::reserve_command_lists`) is open already, with an allocator of
+        // its own: nothing is reset or made here.
+        let armed = self.shared.armed.take();
+        let list = match &armed {
+            Some(super::Armed(list, _)) => Some(list.clone()),
+            None => loop {
+                if let Some(list) = self.free_lists.pop() {
+                    // TODO: Is an error expected here and should we print it?
+                    let reset_result = unsafe { list.Reset(&self.allocator, None) };
+                    if reset_result.is_ok() {
+                        break Some(list);
+                    }
+                } else {
+                    break None;
                 }
-            } else {
-                break None;
-            }
+            },
         };
-
-        // A list made ahead, when this encoder has none to reuse (`Device::reserve_command_lists`).
-        let list = list.or_else(|| {
-            let spare = self.shared.spare_lists.lock().0.pop()?;
-            unsafe { spare.Reset(&self.allocator, None) }.is_ok().then_some(spare)
-        });
+        self.list_allocator = armed.map(|super::Armed(_, allocator)| allocator);
 
         let list = if let Some(list) = list {
             list
@@ -436,19 +437,26 @@ impl crate::CommandEncoder for super::CommandEncoder {
     unsafe fn discard_encoding(&mut self) {
         if let Some(list) = self.list.take() {
             if unsafe { list.Close() }.is_ok() {
-                self.free_lists.push(list);
+                match self.list_allocator.take() {
+                    Some(allocator) => self.shared.armed.give_back(list, allocator),
+                    None => self.free_lists.push(list),
+                }
             }
         }
     }
     unsafe fn end_encoding(&mut self) -> Result<super::CommandBuffer, crate::DeviceError> {
         let raw = self.list.take().unwrap();
+        let armed = self.list_allocator.take();
         unsafe { raw.Close() }.into_device_result("GraphicsCommandList::close")?;
-        Ok(super::CommandBuffer { raw })
+        Ok(super::CommandBuffer { raw, armed })
     }
     unsafe fn reset_all<I: Iterator<Item = super::CommandBuffer>>(&mut self, command_buffers: I) {
         self.intermediate_copy_bufs.clear();
         for cmd_buf in command_buffers {
-            self.free_lists.push(cmd_buf.raw);
+            match cmd_buf.armed {
+                Some(allocator) => self.shared.armed.give_back(cmd_buf.raw, allocator),
+                None => self.free_lists.push(cmd_buf.raw),
+            }
         }
         if let Err(e) = unsafe { self.allocator.Reset() } {
             log::error!("ID3D12CommandAllocator::Reset() failed with {e}");
