@@ -108,8 +108,9 @@ impl Tx {
     /// a page that opens on a heading lands it just under its bar. It's placed from the layout of the commit this
     /// handler causes, so the frame that first draws a new page draws it there, and unlike
     /// [`Tx::scroll_into_view`] where it lands doesn't depend on where the view was or what was
-    /// stuck over it. Instant; any momentum or glide stops. The element must be laid out: reveal
-    /// a virtual row that isn't mounted with [`Tx::scroll_into_view`].
+    /// stuck over it. Instant; any momentum or glide stops. A virtual row that isn't mounted
+    /// lands too: the jump goes where its list's estimates put it, which mounts it, and is placed
+    /// again from its layout before the frame draws, the rows it mounts there showing at once.
     pub fn scroll_key_to(&mut self, key: impl Into<String>, at: f32) {
         self.scroll_offsets.push(crate::runtime::ScrollRequest { key: key.into(), x: None, y: Some(at), glide: None, anchor: true });
     }
