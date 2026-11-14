@@ -803,6 +803,9 @@ export function focusA11y(h, json) {
     if (f.n) { el.setAttribute('aria-posinset', String(f.n[0])); el.setAttribute('aria-setsize', String(f.n[1])); }
     if (f.l) el.setAttribute('aria-level', String(f.l));
     h.canvas.setAttribute('aria-activedescendant', el.id);
+    // Typing in a field whose highlighted row this is (the palette): the field says it too.
+    if (f.o !== 'textbox') h.textarea.setAttribute('aria-activedescendant', el.id);
+    else h.textarea.removeAttribute('aria-activedescendant');
 }
 
 // `Tx::announce`: two live regions in the mirror, polite and assertive, made the first time

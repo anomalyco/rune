@@ -601,7 +601,9 @@ impl<S: 'static> Runtime<S> {
         let at = (self.commits, self.focus.path().unwrap_or_default().to_owned());
         if mirror.focus_at == at { return None; }
         mirror.focus_at = at;
-        let next = self.focused_index().map(|i| self.web_focus_item(i).to_string()).unwrap_or_default();
+        // A field naming a highlighted row (`El::active_descendant`, the palette's): the row is
+        // what a reader is told about, as the native trees hand it focus.
+        let next = self.focused_index().map(|i| self.web_focus_item(self.a11y_active_descendant(i).unwrap_or(i)).to_string()).unwrap_or_default();
         if mirror.focus_json == next { return None; }
         mirror.focus_json = next;
         Some(&mirror.focus_json)

@@ -254,7 +254,7 @@ impl<S: 'static> Runtime<S> {
     }
 
     /// The element node `i`'s `El::active_descendant` names, if it is in the tree.
-    fn a11y_active_descendant(&self, i: usize) -> Option<usize> {
+    pub(crate) fn a11y_active_descendant(&self, i: usize) -> Option<usize> {
         let key = self.nodes[i].a11y.more.as_deref()?.active.as_deref()?;
         // Its own rows first: a row id may also key something elsewhere.
         let inside = |j: &usize| std::iter::successors(self.nodes[*j].parent, |&p| self.nodes[p].parent).any(|p| p == i);
