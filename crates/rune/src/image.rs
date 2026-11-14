@@ -139,9 +139,14 @@ struct Job { image: Image, input: Input, waker: crate::Waker }
 /// Decoder threads for the process, at most one per core.
 #[cfg(not(target_arch = "wasm32"))]
 const DECODERS: usize = 4;
+/// Straight RGBA images up to this many pixels (64 x 64) finish on the calling thread.
+#[cfg(not(target_arch = "wasm32"))]
+const INLINE_RGBA_PIXELS: u64 = 64 * 64;
 
 /// The process's decoder threads, shared by every cache and started by the first image to
 /// decode: an app that makes a cache per feature, or shows no image, pays no thread for it.
+/// The caller starts one; that one starts the others, so the first image (often in a window's
+/// first frame) costs its thread one spawn, not four.
 #[cfg(not(target_arch = "wasm32"))]
 fn decoders() -> &'static mpsc::Sender<Job> {
     static JOBS: OnceLock<mpsc::Sender<Job>> = OnceLock::new();
@@ -149,18 +154,26 @@ fn decoders() -> &'static mpsc::Sender<Job> {
         let (jobs, receive) = mpsc::channel::<Job>();
         // A session opening on several screenshots decodes them side by side, not one by one.
         let receive = Arc::new(Mutex::new(receive));
-        for _ in 0..DECODERS.min(std::thread::available_parallelism().map_or(1, |n| n.get())) {
-            let receive = receive.clone();
-            std::thread::Builder::new().name("rune-images".into()).spawn(move || {
-                loop {
-                    let Ok(job) = receive.lock().unwrap_or_else(|e| e.into_inner()).recv() else { return };
-                    job.image.finish(job.input.decode_caught());
-                    (job.waker)();
-                }
-            }).expect("image worker");
-        }
+        let count = DECODERS.min(std::thread::available_parallelism().map_or(1, |n| n.get()));
+        let first = receive.clone();
+        std::thread::Builder::new().name("rune-images".into()).spawn(move || {
+            for _ in 1..count {
+                let receive = receive.clone();
+                let _ = std::thread::Builder::new().name("rune-images".into()).spawn(move || decode_jobs(&receive));
+            }
+            decode_jobs(&first);
+        }).expect("image worker");
         jobs
     })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn decode_jobs(receive: &Mutex<mpsc::Receiver<Job>>) {
+    loop {
+        let Ok(job) = receive.lock().unwrap_or_else(|e| e.into_inner()).recv() else { return };
+        job.image.finish(job.input.decode_caught());
+        (job.waker)();
+    }
 }
 
 /// Construct once during app setup. The cache deduplicates by content, not a path or pointer;
@@ -294,6 +307,14 @@ impl ImageCache {
         };
         let image = Image::new(Arc::new(State { id, pixels: crate::Pixels::from_url(url, srcset), decoded: OnceLock::new() }));
         entries.insert(id, Arc::downgrade(&image.0));
+        // A small straight RGBA image (a 16 pt tile at 2x) is ready at once: its mips take
+        // microseconds, less than handing it to a decoder, and the view that asked for it draws it
+        // in the same frame rather than a placeholder first.
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Input::Rgba(w, h, _) = &input && u64::from(*w) * u64::from(*h) <= INLINE_RGBA_PIXELS {
+            image.finish(input.decode_caught());
+            return image;
+        }
         #[cfg(not(target_arch = "wasm32"))]
         if decoders().send(Job { image: image.clone(), input, waker: self.waker.clone() }).is_err() {
             let _ = image.0.decoded.set(Err(ImageError("image worker stopped".into())));
