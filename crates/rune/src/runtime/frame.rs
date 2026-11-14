@@ -514,6 +514,7 @@ impl<S: 'static> Runtime<S> {
         if let Some(at) = wake { self.schedule_wakes([std::time::Duration::from_secs_f64((at - self.clock).max(0.0))]); }
         if let Some(poll) = self.poll.filter(|_| !polled) {
             let mut one = self.transaction();
+            one.input_waiting = self.queue.has_input();
             // Scheduling does not imply a model change.
             if self.idle_meter.polled(crate::tooling::perf_warn::timed("poll", || app_call!(poll, &mut self.state, self.clock, &mut one))) {
                 ran = true;
