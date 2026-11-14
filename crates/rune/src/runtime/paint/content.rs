@@ -236,6 +236,18 @@ impl<S: 'static> Runtime<S> {
             }
             let direct = self.text.emit() == crate::text::outline::Emit::Outline;
             let ins = n.inset.map(|v| v * zk * s);
+            // At rest, text lays out from its box's exact place, moved by its paint containment's
+            // own rounding, as Blink paints a text fragment: its glyphs then round as Skia rounds
+            // them (the baseline half up, pens to a quarter pixel) from where Chromium has them,
+            // rather than from a box already snapped to the grid. A field keeps its snapped box,
+            // which its caret and selection share.
+            let exact = cover.is_none() && scale_motion == ScaleMotion::Still && !gliding && (sc - 1.0).abs() < 1e-5 && n.input.is_none();
+            let zr = if exact {
+                let shift = [(contain[0] + 0.5).floor() - contain[0], (contain[1] + 0.5).floor() - contain[1]];
+                [r_exact[0] + shift[0], r_exact[1] + shift[1], r_exact[2] + shift[0], r_exact[3] + shift[1]]
+            } else {
+                zr
+            };
             let (x0, x1) = (zr[0] + ins[0], zr[2] - ins[2]);
             let mut origin = [text_x(spec, x0, x1, text_width(flow.full_width() * tk), flow.flow()), zr[1] + ins[1]];
             // A gliding box's glyphs and decorations lay out from its nearest whole pixel and move the rest.
