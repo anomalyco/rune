@@ -132,7 +132,7 @@ pub(crate) enum WakeEvent {
     Position(usize, (i32, i32)), Level(usize, bool),
     Place(usize, crate::windows::PlaceRequest),
     Frame(usize, crate::window::frame::FrameRequest),
-    /// Windows: the window's swap chain can take the frame it waits for (`slot`).
+    /// Windows: the window's or an overlay's swap chain can take the frame it waits for (`slot`).
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     FrameSlot(usize),
     /// The app was reopened (macOS: its Dock icon clicked; Windows: launched again while it

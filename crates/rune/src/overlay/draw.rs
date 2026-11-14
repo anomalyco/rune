@@ -173,9 +173,6 @@ impl<T: 'static> Overlay<T> {
         if !prewarm { self.meter.redraw(paced || !cfg!(target_os = "macos")); }
         if renderer.srgb_blend() != self.rt.srgb_blend() {
             if !crate::window::reblend(&live.surface, gpu, &mut live.config, renderer, &mut live.alpha, &mut self.rt) { self.surface_refused("its GPU surface refused a new configuration".into()); return false }
-            // A reconfigured swap chain holds none of ours.
-            #[cfg(target_os = "windows")]
-            live.slot.reset();
         }
         let frame = match crate::window::acquire_checked(&live.surface, gpu, &live.config, true, if prewarm { 2 } else { 1 }, &mut self.meter, !read_occlusion) {
             Ok(frame) => frame,
@@ -230,9 +227,6 @@ impl<T: 'static> Overlay<T> {
         let frame = if renderer.srgb_blend() != self.rt.srgb_blend() {
             drop(frame);
             if !crate::window::reblend(&live.surface, gpu, &mut live.config, renderer, &mut live.alpha, &mut self.rt) { self.surface_refused("its GPU surface refused a new configuration".into()); return false }
-            // A reconfigured swap chain holds none of ours.
-            #[cfg(target_os = "windows")]
-            live.slot.reset();
             match crate::window::acquire_checked(&live.surface, gpu, &live.config, true, if prewarm { 2 } else { 1 }, &mut self.meter, !read_occlusion) {
                 Ok(frame) => frame,
                 Err(missed) => {

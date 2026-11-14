@@ -316,8 +316,8 @@ impl<T: 'static> Overlay<T> {
             self.surface_refused(format!("could not resize its GPU surface: {error}"));
             return;
         }
-        // A configured swap chain frees the waitable object a registered wait holds (`Slot::take`
-        // waits on a copy), so the wait its new one would answer isn't the one outstanding.
+        // `configure` waits for the present queue to drain, so none of our frames are queued on
+        // the swap chain it reconfigures.
         #[cfg(target_os = "windows")]
         live.slot.reset();
         if let Some(alpha) = &mut live.alpha {
@@ -355,8 +355,7 @@ impl<T: 'static> Overlay<T> {
                 // The present worker joins, and the display link stops, before the surface goes.
                 #[cfg(target_os = "macos")]
                 { live.present.take(); live.pacing.take(); }
-                // A wait for the swap chain's room goes before the surface it names, so unhiding
-                // never drops a surface a registered wait is about to ask for a frame on.
+                // The wait for the swap chain's room is unregistered before the surface drops.
                 #[cfg(target_os = "windows")]
                 live.slot.reset();
                 let Live { alpha, surface, backing, .. } = live;

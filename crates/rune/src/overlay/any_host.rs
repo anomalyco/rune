@@ -55,10 +55,10 @@ impl<T: 'static> AnyHost for Overlay<T> {
         #[cfg(target_os = "windows")]
         if matches!(event, WakeEvent::FrameSlot(_)) {
             // The frame that waited for room in the swap chain draws now, after what changed
-            // meanwhile.
+            // meanwhile. It waited from a turn `frame::turn` said had a frame to draw, and that
+            // turn left `dirty` and `idle` as they were, so the gate still does.
             if let Some(live) = self.surface.live_mut() && matches!(live.slot, Slot::Waiting(_)) {
                 live.slot.came_back();
-                self.dirty = true;
             }
         }
         #[cfg(target_os = "macos")]

@@ -5,5 +5,5 @@
   live surface now owns a `window::slot::Slot`: before a frame it takes the room, and when there is
   none it skips the turn until a thread-pool wait wakes the event loop (`WakeEvent::FrameSlot`), so
   the frame is built from what changed meanwhile. Waiting isn't a missed frame and arms no timer,
-  and a hide, park or release with a wait outstanding unregisters it before the surface goes.
-  Overlays elsewhere draw as before (#887).
+  and a park or release with a wait outstanding unregisters it before the surface goes. Overlays
+  elsewhere draw as before (#887).
