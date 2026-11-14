@@ -32,6 +32,9 @@ const LAZY_MIN: usize = 64;
 /// its caret, which follows the paste's end), and after its start.
 const EAGER_END: usize = 24;
 const EAGER_START: usize = 4;
+/// The most lines one run holds: a keystroke inside a long paste keys its run's lines again,
+/// and the other runs keep theirs.
+const RUN_LINES: usize = 512;
 
 /// A text node's layout: one paragraph layout, or a by-paragraph field's stack of them.
 #[derive(Clone)]
@@ -593,7 +596,10 @@ impl TextSystem {
         // A long paste's plain ASCII lines that fit on one line, away from the edit's ends, wait
         // as runs: one record each, at their exact height, for `fill_paragraphs`.
         let edited = tail.first().map_or(content.len(), |t| t.0).saturating_sub(at);
-        let ascii = (plain && edited > LAZY_MIN * 8 && count_newlines(&content.as_bytes()[at..at + edited]) > LAZY_MIN)
+        // A min-content measure of a text whose lines wait keys an edit's lines into runs too,
+        // however few: none of them is shown, and its run held them as one record.
+        let measuring = prev.is_some_and(|p| p.waiting()) && max_width.is_some_and(|m| m < style.line_px() * scale);
+        let ascii = (plain && (measuring || edited > LAZY_MIN * 8 && count_newlines(&content.as_bytes()[at..at + edited]) > LAZY_MIN))
             .then(|| self.ascii_line(style, scale, spec.wrap_anywhere)).flatten();
         let runs = ascii.as_deref().map(|m| Runs { ascii: m, max_width, edit: true });
         match tail.first().map(|t| t.0) {
@@ -736,7 +742,7 @@ fn count_newlines(s: &[u8]) -> usize {
 /// its bytes, its height the sum of its lines'.
 fn key_paragraphs(spec: &TextSpec, style_key: u64, a: usize, z: usize, start_flow: Flow, forced: Option<Flow>, runs: Option<Runs<'_>>, found: &mut Vec<Found>) {
     let lines = if runs.is_some() { count_newlines(&spec.content.as_bytes()[a..z]) + 1 } else { 0 };
-    let runs = runs.filter(|r| !r.edit || lines > LAZY_MIN);
+    let runs = runs.filter(|r| !r.edit || lines > LAZY_MIN || r.ascii.narrow(r.max_width));
     // The run being gathered: its first byte, last byte, height, width, lines and last flow.
     let mut run: Option<(usize, usize, f32, f32, u32, Flow)> = None;
     let close = |run: &mut Option<(usize, usize, f32, f32, u32, Flow)>, found: &mut Vec<Found>| {
@@ -762,6 +768,10 @@ fn key_paragraphs(spec: &TextSpec, style_key: u64, a: usize, z: usize, start_flo
                 match &mut run {
                     Some(run) => { run.1 = b; run.2 += height; run.3 = run.3.max(w); run.4 += 1; run.5 = flow; }
                     None => run = Some((a, b, height, w, 1, flow)),
+                }
+                // A run holds at most RUN_LINES: an edit inside one keys only its run again.
+                if run.is_some_and(|r| r.4 as usize >= RUN_LINES) {
+                    close(&mut run, found);
                 }
                 continue;
             }

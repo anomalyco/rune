@@ -75,14 +75,41 @@ impl AsciiLine {
     /// the widest. Only a min-content measure asks, for the width. A word no wider than `floor`
     /// however wide its characters isn't summed, as `one_line` doesn't.
     pub(super) fn narrowest(&self, words: &str, floor: f32) -> Option<(f32, f32)> {
-        if !printable(words.as_bytes()) { return None; }
-        let (mut lines, mut widest) = (0usize, floor);
-        for w in words.split(' ').filter(|w| !w.is_empty()) {
+        let b = words.as_bytes();
+        let (mut lines, mut widest, mut start) = (0usize, floor, 0usize);
+        let mut word = |s: usize, e: usize| {
+            if e == s { return; }
             lines += 1;
-            if w.len() as f32 * self.widest > widest {
-                widest = widest.max(w.bytes().map(|b| self.advance[(b - 0x20) as usize]).sum());
+            if (e - s) as f32 * self.widest > widest {
+                widest = widest.max(b[s..e].iter().map(|&c| self.advance[(c - 0x20) as usize]).sum());
+            }
+        };
+        // Eight bytes at a time: whether all are printable, and where the spaces are.
+        let mut chunks = b.chunks_exact(8);
+        let mut at = 0;
+        for c in &mut chunks {
+            let w = u64::from_le_bytes(c.try_into().unwrap());
+            let (low, high) = (w.wrapping_sub(0x2020_2020_2020_2020) & !w, w.wrapping_add(0x0101_0101_0101_0101) | w);
+            if (low | high) & 0x8080_8080_8080_8080 != 0 { return None; }
+            // A space is a zero byte of `w ^ 0x20..`, flagged exactly (no borrow between bytes).
+            let x = w ^ 0x2020_2020_2020_2020;
+            let mut spaces = !((x & 0x7f7f_7f7f_7f7f_7f7f).wrapping_add(0x7f7f_7f7f_7f7f_7f7f) | x | 0x7f7f_7f7f_7f7f_7f7f);
+            while spaces != 0 {
+                let j = at + (spaces.trailing_zeros() / 8) as usize;
+                word(start, j);
+                start = j + 1;
+                spaces &= spaces - 1;
+            }
+            at += 8;
+        }
+        for (k, &c) in chunks.remainder().iter().enumerate() {
+            if !(0x20..0x7f).contains(&c) { return None; }
+            if c == b' ' {
+                word(start, at + k);
+                start = at + k + 1;
             }
         }
+        word(start, b.len());
         Some((self.height * lines.max(1) as f32, widest))
     }
 }
