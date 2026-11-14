@@ -48,6 +48,18 @@ use crate::platform_impl::{loword, primarylangid, scancode_to_physicalkey};
 pub(crate) static LAYOUT_CACHE: Lazy<Mutex<LayoutCache>> =
     Lazy::new(|| Mutex::new(LayoutCache::default()));
 
+/// Builds the layout cache's entry for the keyboard layout of thread `thread`, on the calling
+/// thread. The first key or mouse message a window's thread handles builds it otherwise (every
+/// virtual key through `ToUnicodeEx`, 8-10 ms), so a window's first input waited for it.
+pub(crate) fn warm_layout(thread: u32) {
+    let hkl = unsafe { GetKeyboardLayout(thread) } as u64;
+    if LAYOUT_CACHE.lock().unwrap().layouts.contains_key(&hkl) {
+        return;
+    }
+    let layout = LayoutCache::prepare_layout(hkl);
+    LAYOUT_CACHE.lock().unwrap().layouts.entry(hkl).or_insert(layout);
+}
+
 fn key_pressed(vkey: VIRTUAL_KEY) -> bool {
     unsafe { (GetKeyState(vkey as i32) & (1 << 15)) == (1 << 15) }
 }
