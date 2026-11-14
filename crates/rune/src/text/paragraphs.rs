@@ -778,28 +778,6 @@ impl TextSystem {
         (ParagraphLayout { paragraphs, width, full_width, height: y as f32, max_width, align, whole, newline, keyed, lazy }, fresh)
     }
 
-    /// Run `k`'s lines as waiting paragraphs of their own, keyed as `key_paragraphs` keys a line.
-    fn run_lines(&mut self, lazy: &Lazy, laid: &ParagraphLayout, paragraphs: &[Paragraph], k: usize) -> Vec<Paragraph> {
-        let r = &paragraphs[k];
-        let mut flow = k.checked_sub(1).map_or(lazy.start_flow, |i| paragraphs[i].flow);
-        let (mut at, mut y) = (r.start, r.y);
-        let mut out = Vec::with_capacity(r.lines as usize);
-        let mut widest = 0.0f32;
-        for words in lazy.content[r.start..r.end].split('\n') {
-            let (a, b) = (at, at + words.len());
-            at = b + 1;
-            // Printable ASCII, as every line of a run is: its letters are its strong characters.
-            flow = lazy.forced.or_else(|| words.bytes().any(|b| b.is_ascii_alphabetic()).then_some(Flow::Ltr)).unwrap_or(flow);
-            let mut h = hash::KeyHasher::default();
-            (words, lazy.style_key, flow == Flow::Rtl, Block::Paragraph).hash(&mut h);
-            let (height, w) = lazy.ascii.one_line(words, laid.max_width, widest).unwrap_or((lazy.ascii.height, 0.0));
-            widest = widest.max(w);
-            out.push(Paragraph { start: a, end: b, y, height, widths: [w, w], flow, key: h.finish(), isolates: Box::default(), layout: r.layout.clone(), shaped: false, lines: 1, run: false });
-            y += height;
-        }
-        out
-    }
-
     /// Printable ASCII in `style` at `scale`, measured once: None when its characters don't all
     /// come from one font, whose one line is then not every ASCII line's.
     fn ascii_line(&mut self, style: TextStyle, scale: f32, wrap_anywhere: bool) -> Option<Rc<AsciiLine>> {
@@ -853,7 +831,7 @@ impl TextSystem {
             };
             if distance(&paragraphs[k]) > reach { break; }
             if paragraphs[k].run {
-                let lines = self.run_lines(&lazy, laid, &paragraphs, k);
+                let lines = split_run(&lazy, laid.max_width, &paragraphs, k, rows);
                 paragraphs.splice(k..k + 1, lines);
                 continue;
             }
@@ -880,6 +858,57 @@ impl TextSystem {
         self.paragraphs.insert(lazy.cache_key, Entry::new(built.clone(), g, built.paragraphs.len() * size_of::<Paragraph>() / 64, built.whole));
         if self.last_paragraphs.as_ref().is_some_and(|l| std::ptr::eq(&**l, laid)) { self.last_paragraphs = Some(built.clone()); }        Some((built, moved))
     }
+}
+
+/// How many lines a fill takes out of a run at once, at least: those it shapes next and the rows
+/// around them. The rest stay runs, so the frames after a long paste hold a few records, not one
+/// per line.
+const SPLIT_LINES: usize = 64;
+
+/// Run `k` taken apart where `rows` meet it, or at its end nearest them: its lines there as
+/// waiting paragraphs of their own, keyed as `key_paragraphs` keys a line, between the runs its
+/// lines before and after them stay, each as wide as its widest line.
+fn split_run(lazy: &Lazy, max_width: Option<f32>, paragraphs: &[Paragraph], k: usize, rows: (f32, f32)) -> Vec<Paragraph> {
+    let r = &paragraphs[k];
+    let (n, h) = (r.lines as usize, lazy.ascii.height);
+    let pick = |y: f32| ((f64::from(y) - f64::from(r.y)) / f64::from(h)).floor().clamp(0.0, n as f64) as usize;
+    let (top, bottom) = (pick(rows.0), (pick(rows.1) + 1).min(n));
+    let room = SPLIT_LINES.saturating_sub(bottom.saturating_sub(top)).div_ceil(2);
+    let a = top.saturating_sub(room).min(n.saturating_sub(SPLIT_LINES));
+    let b = (bottom + room).max(a + SPLIT_LINES).min(n);
+    let mut out = Vec::with_capacity(b - a + 2);
+    let mut flow = k.checked_sub(1).map_or(lazy.start_flow, |i| paragraphs[i].flow);
+    let mut y = f64::from(r.y);
+    // The run gathered before `a` or after `b`: its first byte, its lines and its widest line's width.
+    let mut run: Option<(usize, u32, f32)> = None;
+    let mut at = r.start;
+    for (j, words) in lazy.content[r.start..r.end].split('\n').enumerate() {
+        let (s, e) = (at, at + words.len());
+        at = e + 1;
+        // Printable ASCII, as every line of a run is: its letters are its strong characters.
+        flow = lazy.forced.or_else(|| words.bytes().any(|c| c.is_ascii_alphabetic()).then_some(Flow::Ltr)).unwrap_or(flow);
+        if j < a || j >= b {
+            let floor = run.map_or(0.0, |g| g.2);
+            let w = lazy.ascii.one_line(words, max_width, floor).map_or(floor, |(_, w)| w);
+            let (start, lines, widest) = run.map_or((s, 1, w), |(start, lines, widest)| (start, lines + 1, widest.max(w)));
+            run = Some((start, lines, widest));
+            if j + 1 == a || j + 1 == n {
+                run = None;
+                let mut hs = hash::KeyHasher::default();
+                (&lazy.content[start..e], lazy.style_key, flow == Flow::Rtl, lines, "run").hash(&mut hs);
+                let height = (f64::from(lines) * f64::from(h)) as f32;
+                out.push(Paragraph { start, end: e, y: y.round() as f32, height, widths: [widest, widest], flow, key: hs.finish(), isolates: Box::default(), layout: r.layout.clone(), shaped: false, lines, run: true });
+                y += f64::from(height);
+            }
+            continue;
+        }
+        let mut hs = hash::KeyHasher::default();
+        (words, lazy.style_key, flow == Flow::Rtl, Block::Paragraph).hash(&mut hs);
+        let (height, w) = lazy.ascii.one_line(words, max_width, 0.0).unwrap_or((h, 0.0));
+        out.push(Paragraph { start: s, end: e, y: y.round() as f32, height, widths: [w, w], flow, key: hs.finish(), isolates: Box::default(), layout: r.layout.clone(), shaped: false, lines: 1, run: false });
+        y += f64::from(height);
+    }
+    out
 }
 
 /// A paragraph found in a field's text: its bytes, direction, key and isolated pills, and for a
