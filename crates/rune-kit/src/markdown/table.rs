@@ -473,6 +473,10 @@ impl Renderer {
                     let pad = |hit: bool| if hit { self.s.inline_code_pad } else { 0.0 };
                     let pads = inl.spans.iter().filter(|s| s.2 == Style::CodePad && inl.spans.iter().any(|c| c.2 == Style::Code && c.1 == s.0));
                     let (last, word) = pads.fold((false, false), |(last, word), s| (last || s.1 == inl.text.len(), word || ends_code(s.1)));
+                    // Code that ends the cell lost its end padding with the line's trailing space
+                    // (`parser::trimmed_len`), but a page still counts it: the cell is as wide as the chip.
+                    let ends = inl.spans.iter().any(|c| c.2 == Style::Code && c.1 >= inl.text.len());
+                    let (last, word) = (last || ends, word || ends);
                     natural[j] = natural[j].max(max + pad(last) + 0.01);
                     fit[j] = fit[j].max(min + pad(word) + 0.01);
                 }
