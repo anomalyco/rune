@@ -43,6 +43,11 @@ const ALPHA_FRAGMENT: &[u8] = include_bytes!("../../alpha.fs.dxbc");
 #[cfg(target_os = "windows")]
 const LAYER_BLUR_VERTEX: &[u8] = include_bytes!("../../layer_blur.vs.dxbc");
 #[cfg(target_os = "windows")]
+#[cfg(target_os = "windows")]
+const BACKDROP_BLUR: [&[u8]; 3] = [include_bytes!("../../backdrop_blur.vs.dxbc"), include_bytes!("../../backdrop_blur.fs_down.dxbc"), include_bytes!("../../backdrop_blur.fs_up.dxbc")];
+#[cfg(target_os = "windows")]
+const BACKDROP_COMPOSITE: [&[u8]; 2] = [include_bytes!("../../backdrop_composite.vs.dxbc"), include_bytes!("../../backdrop_composite.fs.dxbc")];
+#[cfg(target_os = "windows")]
 const LAYER_BLUR_FRAGMENTS: [&[u8]; 5] = [include_bytes!("../../layer_blur.fs0.dxbc"), include_bytes!("../../layer_blur.fs1.dxbc"),
     include_bytes!("../../layer_blur.fs2.dxbc"), include_bytes!("../../layer_blur.fs3.dxbc"), include_bytes!("../../layer_blur.fs4.dxbc")];
 
@@ -149,10 +154,17 @@ fn load_modules<T>(device: &wgpu::Device, blobs: &[(&'static [u8], &'static str)
             })
         }
     };
+    let modules: Vec<wgpu::ShaderModule> = blobs.iter().map(|&(blob, entry)| module(blob, entry)).collect();
+    checked(device, what, || make_pipelines(&modules))
+}
+
+/// `make`'s pipelines from precompiled modules, or `None` (said once on stderr) when the driver
+/// refuses them, so the caller compiles WGSL instead.
+#[cfg(target_os = "windows")]
+pub(super) fn checked<T>(device: &wgpu::Device, what: &str, make: impl FnOnce() -> T) -> Option<T> {
     let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
     let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
-    let modules: Vec<wgpu::ShaderModule> = blobs.iter().map(|&(blob, entry)| module(blob, entry)).collect();
-    let made = make_pipelines(&modules);
+    let made = make();
     let refused = pollster::block_on(internal.pop()).or(pollster::block_on(validation.pop()));
     match refused {
         None => Some(made),
@@ -161,6 +173,24 @@ fn load_modules<T>(device: &wgpu::Device, blobs: &[(&'static [u8], &'static str)
             None
         }
     }
+}
+
+/// The backdrop blur's down and up passes (render/backdrop_blur.rs): its vertex stage and its
+/// `fs_down` and `fs_up` fragment stages, when they were compiled from `wgsl`.
+#[cfg(target_os = "windows")]
+pub(super) fn backdrop_blur<T>(device: &wgpu::Device, wgsl: &str, make_pipelines: impl FnOnce(&[wgpu::ShaderModule]) -> T) -> Option<T> {
+    let blobs = [(BACKDROP_BLUR[0], "vs"), (BACKDROP_BLUR[1], "fs_down"), (BACKDROP_BLUR[2], "fs_up")];
+    load_modules(device, &blobs, "backdrop blur", || compiled_from(wgsl, BACKDROP_BLUR_DXBC_WGSL_BLAKE3, "backdrop blur"), make_pipelines)
+}
+
+/// The backdrop blur's composite stages, which bind the uber shader's group 0: when they were
+/// compiled from `wgsl` and for this build's uber layout. Its pipelines are made per target format
+/// later, each through [`checked`].
+#[cfg(target_os = "windows")]
+pub(super) fn backdrop_composite(device: &wgpu::Device, wgsl: &str) -> Option<Shaders> {
+    let fresh = || ABI_MATCHES && compiled_from(wgsl, BACKDROP_COMPOSITE_DXBC_WGSL_BLAKE3, "backdrop blur composite");
+    load_modules(device, &[(BACKDROP_COMPOSITE[0], "vs"), (BACKDROP_COMPOSITE[1], "fs")], "backdrop blur composite", fresh,
+        |m| Shaders { vertex: m[0].clone(), fragment: m[1].clone() })
 }
 
 /// The layer blur's vertex stage and its five fragment variants (render/layer_blur.rs `MODES`, the

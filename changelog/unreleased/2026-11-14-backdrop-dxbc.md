@@ -1,0 +1,1 @@
+- **Windows: the backdrop blur (`El::backdrop_blur`) ships precompiled for DX12.** Its down, up and composite passes compiled their WGSL with FXC the first time a process frosted anything: 123,790-155,997 µs on an Iris Xe, now 4,939-5,647 µs. The third of the built-in passes to stop needing naga at run time on Windows; `regen_dxbc` rebuilds it.

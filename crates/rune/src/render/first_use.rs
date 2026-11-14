@@ -7,6 +7,12 @@ use crate::time::Instant;
 use super::{Renderer, backdrop_blur::BackdropBlur, layer_blur, surface_alpha::AlphaSurface};
 
 impl Renderer {
+    /// Makes and drops a backdrop blur with its composite for this renderer's format, for regen_dxbc.
+    #[doc(hidden)]
+    pub fn make_backdrop_blur(&self, device: &wgpu::Device) {
+        BackdropBlur::new(device, &self.bind_layout).ensure_composite(device, self.format);
+    }
+
     /// Makes, times and drops what a first backdrop blur, layer blur, video frame, transparent
     /// window and spring-driven renderer build, in milliseconds each.
     #[doc(hidden)]
