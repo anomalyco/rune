@@ -993,7 +993,9 @@ impl Renderer {
 
     pub fn submit(&self, queue: &wgpu::Queue, mut encoder: wgpu::CommandEncoder) -> wgpu::SubmissionIndex {
         self.before_submit(&mut encoder);
-        if let Some(s) = &self.surfaces { s.submit(queue,encoder) } else { queue.submit([encoder.finish()]) }
+        let index = if let Some(s) = &self.surfaces { s.submit(queue,encoder) } else { let b = encoder.finish(); crate::marks::mark("ho.s.finished"); queue.submit([b]) };
+        crate::marks::mark("ho.s.queued");
+        index
     }
 
     /// Whether `submit` is `queue.submit` after `before_submit` and nothing more: no native video
