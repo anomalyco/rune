@@ -230,6 +230,8 @@ windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_Wind
 [target.'cfg(target_os = "linux")'.dependencies]
 # AT-SPI over D-Bus on its own async-io thread, started only when the desktop's accessibility bus is on.
 accesskit_unix = { version = "0.24.1", optional = true }
+# The window GPU's render node, for dmabuf producers (`native_surface::linux`): wgpu-hal's version.
+ash = "0.38"
 libc = "0.2"
 libloading = "0.8"
 zbus = { version = "6", default-features = false, features = ["tokio", "proxy", "service"], optional = true }
