@@ -814,7 +814,7 @@ fn warm_frame(gpu: &Gpu, renderer: &mut Renderer, format: wgpu::TextureFormat, s
     // SAFETY: only Rune's own call on the raw device, which is alive.
     if let Some(hal) = unsafe { gpu.device.as_hal::<wgpu::hal::api::Dx12>() } {
         let _ = hal.reserve_command_lists(RESERVED_LISTS);
-        if std::env::var_os("IB3_TOUCH").is_some() { hal.ib3_touch_spare(8); }
+        if std::env::var_os("IB3_PROBE").is_some() { let t0 = std::time::Instant::now(); for _ in 0..150 { let us = hal.probe_command_list_reset(); eprintln!("ib3-probe: {} ms {us} us", t0.elapsed().as_millis()); std::thread::sleep(std::time::Duration::from_millis(10)); } }
     }
     crate::marks::mark("warm.reserved");
     let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());

@@ -459,6 +459,16 @@ impl super::Device {
         &self.raw
     }
 
+    /// How long one reserved list takes to reset and close now, in µs (0 when none is reserved):
+    /// a driver still compiling pipelines on its own threads makes it slow.
+    pub fn probe_command_list_reset(&self) -> u128 {
+        let spare = self.shared.spare_lists.lock();
+        let (Some(list), Some(allocator)) = (spare.0.first(), spare.1.as_ref()) else { return 0 };
+        let t = std::time::Instant::now();
+        let _ = unsafe { list.Reset(allocator, None) };
+        let _ = unsafe { list.Close() };
+        t.elapsed().as_micros()
+    }
     /// IB-3 measuring: resets and closes `count` of the reserved lists on this thread, timing each.
     pub fn ib3_touch_spare(&self, count: usize) {
         let spare = self.shared.spare_lists.lock();
