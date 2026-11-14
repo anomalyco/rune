@@ -127,8 +127,11 @@ impl<S: 'static> Frame<'_, S> {
     /// The default frame: every instance into the target, cleared to the window colour.
     pub fn draw_ui(&mut self) {
         let clear = self.rt.clear_color();
+        crate::marks::mark("ho.ui");
         self.ui.prepare(self.device, self.queue, &mut self.rt.text.atlas, &self.rt.instances, self.size);
+        crate::marks::mark("ho.ui.prepared");
         self.ui.draw(self.encoder, self.target, clear);
+        crate::marks::mark("ho.ui.drawn");
     }
 }
 
