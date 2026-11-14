@@ -321,12 +321,14 @@ pub(crate) fn start<S: 'static>(mut spec: WindowSpec<S>, handle: Option<WindowHa
 
 impl ApplicationHandler<WakeEvent> for Windows {
     fn new_events(&mut self, event_loop: &ActiveEventLoop, cause: StartCause) {
+        let _busy = UiBusy::new("new_events".into());
         let _handling = crate::quit::handling();
         for host in self.hosts.iter_mut().flatten() { host.new_events(event_loop, cause); }
         // Before resumed there are no hosts to clean up.
         if self.factory.is_none() { self.cleanup(event_loop); }
     }
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        let _busy = UiBusy::new("resumed".into());
         let _handling = crate::quit::handling();
         let Some(factory) = self.factory.take() else { return };
         crate::marks::mark("loop.resumed");
@@ -364,6 +366,7 @@ impl ApplicationHandler<WakeEvent> for Windows {
         self.cleanup(event_loop);
     }
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: WakeEvent) {
+        let _busy = UiBusy::new(format!("user{:?}", std::mem::discriminant(&event)));
         let _handling = crate::quit::handling();
         let slot = match &event {
             WakeEvent::DisplayTick(i) | WakeEvent::App(i) | WakeEvent::Live(i) | WakeEvent::Window(i, _) | WakeEvent::Focus(i)
@@ -388,6 +391,7 @@ impl ApplicationHandler<WakeEvent> for Windows {
         self.cleanup(event_loop);
     }
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        let _busy = UiBusy::new({ let d = format!("{event:?}"); d.split(['(', ' ', '{']).next().unwrap_or("").to_owned() });
         let _handling = crate::quit::handling();
         // The last window's close ends a fast-exiting app: the window can go at once.
         #[cfg(not(target_arch = "wasm32"))]
@@ -404,6 +408,7 @@ impl ApplicationHandler<WakeEvent> for Windows {
         self.cleanup(event_loop);
     }
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        let _busy = UiBusy::new("about_to_wait".into());
         let _handling = crate::quit::handling();
         // Windows, Linux: a later launch handed to this loop (`single_instance`) is served once
         // the app goes on with a window shown. One that came as the app ended (its last window
@@ -872,5 +877,21 @@ impl<S: 'static> Host<S> {
     fn publish(&self) {
         let visible = self.life.shown() && self.win.is_some();
         self.shared.visible.store(visible, Ordering::Release);
+    }
+}
+
+/// IB-3 measuring: an event-loop callback that held the UI thread over 300 us, among the first 300.
+struct UiBusy(String, std::time::Instant);
+impl UiBusy {
+    fn new(kind: String) -> Self { UiBusy(kind, std::time::Instant::now()) }
+}
+impl Drop for UiBusy {
+    fn drop(&mut self) {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static N: AtomicU32 = AtomicU32::new(0);
+        let us = self.1.elapsed().as_micros();
+        if us < 300 { return; }
+        let n = N.fetch_add(1, Ordering::Relaxed);
+        if n < 300 { crate::marks::mark(Box::leak(format!("ui.{n:03}.{}.{us}", self.0).into_boxed_str())); }
     }
 }
