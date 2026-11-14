@@ -1,7 +1,7 @@
 //! Building the renderer and its uber pipelines: the pipeline for each target format and blend,
 //! the sampled textures the CPU fills, and the bind group the uber shader reads.
 
-use super::{Blend, CLIP_WGSL, Renderer, dxbc, metallib, variant};
+use super::{ATLAS_START_ROWS, Blend, CLIP_WGSL, Renderer, dxbc, metallib, variant};
 
 impl Renderer {
     pub(super) fn create(device: &wgpu::Device, format: wgpu::TextureFormat, properties: Option<(&[crate::gpu::springs::Node], &[u32])>, classic: bool) -> Renderer {
@@ -32,7 +32,7 @@ impl Renderer {
         } else {
             Self::start_windfoil(device, &variant::BuildContext { format, vertex_entry, globals: &globals, stand_in: &stand_in })
         };
-        let atlas = Self::atlas_texture(device, windfoil.is_some());
+        let atlas = Self::atlas_texture(device, windfoil.is_some(), ATLAS_START_ROWS);
         let (bgl, layout, shader, pipeline) = match windfoil {
             Some(built) => (built.bind_layout, built.layout, built.shader, built.pipeline),
             None => {

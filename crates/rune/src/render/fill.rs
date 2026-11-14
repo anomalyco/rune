@@ -10,6 +10,8 @@ use crate::text::QueuedFill;
 pub(super) struct FillPass {
     pipeline: wgpu::RenderPipeline,
     projection: wgpu::Buffer,
+    /// `projection` for each page height, copied in before each page's pass.
+    projections: wgpu::Buffer,
     bind: wgpu::BindGroup,
     instances: wgpu::Buffer,
     capacity: usize,
@@ -47,16 +49,22 @@ impl FillPass {
             cache: None,
         });
         let projection = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("atlas fill projection"), size: 16, usage: wgpu::BufferUsages::UNIFORM, mapped_at_creation: true,
+            label: Some("atlas fill projection"), size: 16, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
         });
-        let size = ATLAS_SIZE as f32;
-        if let Ok(mut range) = projection.slice(..).get_mapped_range_mut() {
-            range.copy_from_slice(bytemuck::cast_slice(&[0.0f32, 0.0, size, size]));
+        // One projection per page height a page can have (`ATLAS_START_ROWS` doubling up to
+        // `ATLAS_SIZE`): each pass copies its page's into `projection` first.
+        let heights: Vec<f32> = std::iter::successors(Some(ATLAS_START_ROWS), |h| (*h < ATLAS_SIZE).then_some(h * 2)).map(|h| h as f32).collect();
+        let projections = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("atlas fill projections"), size: 16 * heights.len() as u64, usage: wgpu::BufferUsages::COPY_SRC, mapped_at_creation: true,
+        });
+        if let Ok(mut range) = projections.slice(..).get_mapped_range_mut() {
+            let all: Vec<f32> = heights.iter().flat_map(|h| [0.0, 0.0, ATLAS_SIZE as f32, *h]).collect();
+            range.copy_from_slice(bytemuck::cast_slice(&all));
         }
-        projection.unmap();
+        projections.unmap();
         let bind = Self::bind(device, &bindings, &projection);
         let capacity = 64;
-        FillPass { pipeline, projection, bind, instances: Renderer::instance_buffer(device, capacity), capacity }
+        FillPass { pipeline, projection, projections, bind, instances: Renderer::instance_buffer(device, capacity), capacity }
     }
 
     fn bind(device: &wgpu::Device, b: &FillBindings<'_>, projection: &wgpu::Buffer) -> wgpu::BindGroup {
@@ -90,6 +98,8 @@ impl FillPass {
     /// Records the fills `stage` wrote into `encoder`: one pass a page, each drawing into it.
     fn encode(&self, encoder: &mut wgpu::CommandEncoder, pages: &[(&wgpu::Texture, std::ops::Range<u32>)]) {
         for (texture, range) in pages {
+            let at = u64::from((texture.height() / ATLAS_START_ROWS).max(1).ilog2()) * 16;
+            encoder.copy_buffer_to_buffer(&self.projections, at, &self.projection, 0, 16);
             let view = texture.create_view(&Default::default());
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("atlas fill"),
@@ -141,12 +151,14 @@ fn instance(q: &QueuedFill) -> Instance {
 
 impl Renderer {
     /// A glyph atlas page; a Windfoil renderer also draws into its pages (`FillPass`).
-    pub(super) fn atlas_texture(device: &wgpu::Device, filled: bool) -> wgpu::Texture {
+    /// A glyph atlas page `rows` texels tall (`ATLAS_SIZE` wide): the first starts at
+    /// `ATLAS_START_ROWS` and grows with what its shelves hold (`prepare`).
+    pub(super) fn atlas_texture(device: &wgpu::Device, filled: bool, rows: u32) -> wgpu::Texture {
         // A page the GPU fills can be read back to compare its fills with the CPU's (`fill_drift`).
         let render = if filled { wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC } else { wgpu::TextureUsages::empty() };
         device.create_texture(&wgpu::TextureDescriptor {
             label: Some("glyph atlas"),
-            size: wgpu::Extent3d { width: ATLAS_SIZE, height: ATLAS_SIZE, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d { width: ATLAS_SIZE, height: rows, depth_or_array_layers: 1 },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -222,8 +234,9 @@ impl Renderer {
         let pages: Vec<&wgpu::Texture> = std::iter::once(&self.atlas).chain(self.atlas_pages.iter().map(|(t, _)| t)).collect();
         let read = |texture: &wgpu::Texture| -> Vec<u8> {
             let buffer = device.create_buffer(&wgpu::BufferDescriptor { label: Some("fill drift"), size: u64::from(ATLAS_SIZE * ATLAS_SIZE), usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
+            let rows = texture.height();
             let mut encoder = device.create_command_encoder(&Default::default());
-            encoder.copy_texture_to_buffer(texture.as_image_copy(), wgpu::TexelCopyBufferInfo { buffer: &buffer, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(ATLAS_SIZE), rows_per_image: Some(ATLAS_SIZE) } }, wgpu::Extent3d { width: ATLAS_SIZE, height: ATLAS_SIZE, depth_or_array_layers: 1 });
+            encoder.copy_texture_to_buffer(texture.as_image_copy(), wgpu::TexelCopyBufferInfo { buffer: &buffer, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(ATLAS_SIZE), rows_per_image: Some(rows) } }, wgpu::Extent3d { width: ATLAS_SIZE, height: rows, depth_or_array_layers: 1 });
             queue.submit([encoder.finish()]);
             let slice = buffer.slice(..);
             slice.map_async(wgpu::MapMode::Read, |r| r.expect("map fill drift"));

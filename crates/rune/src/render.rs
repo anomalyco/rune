@@ -6,6 +6,9 @@ use bytemuck::{Pod, Zeroable};
 
 use crate::pixels::ImageAtlas;
 use crate::text::{ATLAS_SIZE, Atlas};
+/// Rows the first glyph atlas page's texture starts with: a window that shows a few labels holds
+/// 512 KiB of it, not 4 MiB. It doubles as its shelves fill, up to `ATLAS_SIZE` (`prepare`).
+pub(crate) const ATLAS_START_ROWS: u32 = 256;
 
 mod backdrop_blur;
 mod breaker;
