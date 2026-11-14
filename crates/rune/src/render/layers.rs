@@ -13,10 +13,6 @@ pub(super) const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 pub const DEFAULT_CACHE_BUDGET: u64 = 64 * 1024 * 1024;
 /// What spare layer targets may hold (Layers::spare): a full-window layer at 2880x1800 or two menus' worth.
 const SPARE_BYTES: u64 = 32 * 1024 * 1024;
-/// What they keep once the window rests (`window::rest`): the most recently used, which the
-/// screen on show takes again for its menus and hovers. Making a target costs the frame that
-/// takes it a few ms on an integrated GPU.
-const RESTING_SPARE_BYTES: u64 = 8 * 1024 * 1024;
 /// Maximum width or height of a cached subtree's offscreen texture in device pixels.
 const MAX_CACHE_DIM: u32 = 4096;
 
@@ -288,9 +284,10 @@ impl Renderer {
         ONCE.call_once(|| procwatch::alloc::sites::contribute("rune-gpu", || POOLS.lock().unwrap_or_else(|e| e.into_inner()).clone()));
     }
 
-    /// What a window at rest gives back (`window::rest`): spare targets past the most recently
-    /// used `RESTING_SPARE_BYTES`, and cache textures no layer drew last frame. With `all`, every
-    /// spare target, and the scratch targets of this screen's layers and its backdrop copies and
+    /// What a window at rest gives back (`window::rest`): every spare target (the first menu,
+    /// hover or session after it makes its own again, within a frame's run-to-run spread on an
+    /// Iris Xe), and cache textures no layer drew last frame. With `all`, also the scratch
+    /// targets of this screen's layers and its backdrop copies and
     /// blur pyramid, which its next frame makes again (a few ms on an integrated GPU). It keeps the
     /// textures of caches on screen, which the last frame's instances name instead of their
     /// contents, and takes the ones it drops out of `resident`, so their next frame paints them.
@@ -299,7 +296,7 @@ impl Renderer {
         for t in self.layers.retained.drain(..) {
             if let Some((node, _)) = t.cache { resident.remove(&node); }
         }
-        self.layers.trim_spare(if all { 0 } else { RESTING_SPARE_BYTES });
+        self.layers.trim_spare(0);
         if all {
             for slot in &mut self.layers.targets {
                 if slot.as_ref().is_some_and(|t| t.cache.is_none()) { *slot = None; }
