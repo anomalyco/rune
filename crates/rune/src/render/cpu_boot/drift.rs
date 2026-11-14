@@ -62,7 +62,38 @@ pub fn drift(cpu: Pixels<'_>, gpu: Pixels<'_>) -> Drift {
     }
     *LAST.lock().unwrap_or_else(|e| e.into_inner()) = Some(d);
     eprintln!("rune: cpu boot drift: {} of {} px differ from the GPU's first frame, {} by more than 2 (max {})", d.differ, d.pixels, d.over_two, d.max);
+    if let Some(dir) = std::env::var_os("IB3_DRIFT_DUMP") { ib3_dump(std::path::Path::new(&dir), cpu, gpu, w, h); }
     d
+}
+
+/// IB-3 measuring: both frames, a map of where they differ (red, over the CPU frame dimmed), and
+/// each 16 px cell with a difference: its pixels and largest channel difference.
+fn ib3_dump(dir: &std::path::Path, cpu: Pixels<'_>, gpu: Pixels<'_>, w: u32, h: u32) {
+    let _ = std::fs::create_dir_all(dir);
+    let rgba = |p: &Pixels<'_>| (0..h).flat_map(|y| (0..w).flat_map(move |x| { let [b, g, r, a] = p.bgra_at(x, y); [r, g, b, a] })).collect::<Vec<u8>>();
+    let (c, g) = (rgba(&cpu), rgba(&gpu));
+    let mut map = Vec::with_capacity(c.len());
+    let mut cells: std::collections::BTreeMap<(u32, u32), (u32, u8, [u8; 4], [u8; 4])> = Default::default();
+    for y in 0..h {
+        for x in 0..w {
+            let i = ((y * w + x) * 4) as usize;
+            let m = (0..4).map(|k| c[i + k].abs_diff(g[i + k])).max().unwrap_or(0);
+            if m > 0 {
+                map.extend_from_slice(&[255, 0, 0, 255]);
+                let e = cells.entry((x / 16, y / 16)).or_insert((0, 0, [0; 4], [0; 4]));
+                e.0 += 1;
+                if m > e.1 { *e = (e.0, m, [c[i], c[i + 1], c[i + 2], c[i + 3]], [g[i], g[i + 1], g[i + 2], g[i + 3]]); }
+            } else {
+                let l = ((u32::from(c[i]) + u32::from(c[i + 1]) + u32::from(c[i + 2])) / 6) as u8;
+                map.extend_from_slice(&[l, l, l, 255]);
+            }
+        }
+    }
+    let _ = crate::render::write_png(&dir.join("cpu.png"), w, h, &c);
+    let _ = crate::render::write_png(&dir.join("gpu.png"), w, h, &g);
+    let _ = crate::render::write_png(&dir.join("diff.png"), w, h, &map);
+    let lines: Vec<String> = cells.iter().map(|((cx, cy), (n, m, a, b))| format!("cell x {} y {}: {n} px, max {m}, cpu {a:?} gpu {b:?}", cx * 16, cy * 16)).collect();
+    let _ = std::fs::write(dir.join("cells.txt"), lines.join("\n"));
 }
 
 /// The drift the last hand-over measured, if one did.
