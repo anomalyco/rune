@@ -93,6 +93,8 @@ enum Input {
     /// A decoder that panics, standing in for a codec bug.
     #[cfg(test)]
     Panic,
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    Gated(Box<Input>, mpsc::Receiver<()>),
 }
 
 impl Input {
@@ -121,6 +123,11 @@ impl Input {
             Input::Url(url, _) => Err(ImageError(format!("{url}: fetched, not decoded"))),
             #[cfg(test)]
             Input::Panic => panic!("decoder bug"),
+            #[cfg(all(test, not(target_arch = "wasm32")))]
+            Input::Gated(input, release) => {
+                release.recv().map_err(|_| ImageError("test gate dropped".into()))?;
+                input.decode()
+            }
         }
     }
 
@@ -762,30 +769,41 @@ mod tests {
         assert_eq!(*seen.lock().unwrap(), [(true, Some([2, 1]))]);
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn a_small_image_queued_behind_a_large_one_decodes_without_waiting_for_it() {
         if std::thread::available_parallelism().map_or(1, |n| n.get()) < 2 { return; }
         let (tx, rx) = mpsc::channel();
-        let cache = ImageCache::new(Arc::new(move || { let _ = tx.send(()); }));
-        let large = cache.rgba(3000, 3000, vec![128; 3000 * 3000 * 4]);
-        let small = cache.rgba(1, 1, vec![20, 40, 60, 255]);
-        // Order is the point, not speed: a load spike must not fail this.
+        let caller = std::thread::current().id();
+        let cache = ImageCache::new(Arc::new(move || { let _ = tx.send(std::thread::current().id()); }));
+        let (release, gate) = mpsc::channel();
+        let input = Input::Rgba(128, 128, vec![128; 128 * 128 * 4].into());
+        let large = cache.request([8; 32], Input::Gated(Box::new(input), gate));
+        let inline = cache.rgba(64, 64, vec![255; 64 * 64 * 4]);
+        assert_eq!(inline.size(), Some([64, 64]));
+        assert_eq!(rx.try_recv(), Ok(caller));
+        assert_eq!(rx.try_recv(), Err(mpsc::TryRecvError::Empty));
+        // Just over the inline limit: a second worker must finish this one.
+        let small = cache.rgba(65, 64, vec![255; 65 * 64 * 4]);
+        assert_ne!(rx.recv_timeout(std::time::Duration::from_secs(120)).unwrap(), caller);
+        assert_eq!(small.size(), Some([65, 64]));
+        assert!(!large.is_ready());
+        release.send(()).unwrap();
         rx.recv_timeout(std::time::Duration::from_secs(120)).unwrap();
-        assert!(small.is_ready() && !large.is_ready());
-        rx.recv_timeout(std::time::Duration::from_secs(120)).unwrap();
-        assert!(large.is_ready());
+        assert_eq!(large.size(), Some([128, 128]));
     }
 
     #[test]
     fn cache_deduplicates_and_wakes_after_async_completion() {
         let (tx, rx) = mpsc::channel();
         let cache = ImageCache::new(Arc::new(move || { tx.send(()).unwrap(); }));
-        let first = cache.rgba(1, 1, vec![20, 40, 60, 255]);
-        let second = cache.rgba(1, 1, vec![20, 40, 60, 255]);
+        let queued = || cache.rgba(65, 64, [20, 40, 60, 255].repeat(65 * 64));
+        let first = queued();
+        let second = queued();
         assert!(Arc::ptr_eq(&first.0, &second.0));
         rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
-        assert_eq!(first.size(), Some([1, 1]));
-        assert_eq!(first.decoded().unwrap().unwrap().mips[0].pixels, [20, 40, 60, 255]);
+        assert_eq!(first.size(), Some([65, 64]));
+        assert_eq!(first.decoded().unwrap().unwrap().mips[0].pixels, [20, 40, 60, 255].repeat(65 * 64));
         let invalid = cache.load(vec![0, 1, 2]);
         rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
         assert!(invalid.error().is_some());
@@ -802,12 +820,15 @@ mod tests {
         assert!(!wanted(&weak), "a guess replaced before its fetch runs fetches nothing");
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn drawn_pixels_keep_their_image_cached_after_the_handle_drops() {
         let (tx, rx) = mpsc::channel();
-        let cache = ImageCache::new(Arc::new(move || { tx.send(()).unwrap(); }));
+        let cache = ImageCache::new(Arc::new(move || { let _ = tx.send(()); }));
         let image = cache.rgba(1, 1, vec![20, 40, 60, 255]);
-        rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        assert_eq!(image.size(), Some([1, 1]));
+        assert_eq!(rx.try_recv(), Ok(()), "a fresh inline decode wakes before returning");
+        assert_eq!(rx.try_recv(), Err(mpsc::TryRecvError::Empty));
         // A view keeps only the pixels in its element, then asks again on the next build.
         let drawn = image.pixels().clone();
         let first = Arc::downgrade(&image.0);
@@ -815,12 +836,8 @@ mod tests {
         let again = cache.rgba(1, 1, vec![20, 40, 60, 255]);
         assert!(std::ptr::eq(first.as_ptr(), Arc::as_ptr(&again.0)), "the same entry, not a new request");
         assert!(again.is_ready());
+        assert_eq!(rx.try_recv(), Err(mpsc::TryRecvError::Empty), "a cache hit does not wake");
         drop((again, drawn));
-        // The worker drops its own handle just after it wakes us.
-        for _ in 0..200 {
-            if first.upgrade().is_none() { break }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
         assert!(first.upgrade().is_none(), "nothing left draws it, so it's released");
     }
 
@@ -890,9 +907,9 @@ mod tests {
         let broken = cache.request([7; 32], Input::Panic);
         rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
         assert_eq!(broken.error(), Some(&ImageError("image decoder panicked: decoder bug".into())));
-        let next = cache.rgba(1, 1, vec![20, 40, 60, 255]);
+        let next = cache.rgba(65, 64, vec![255; 65 * 64 * 4]);
         rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
-        assert_eq!(next.size(), Some([1, 1]), "later images still load");
+        assert_eq!(next.size(), Some([65, 64]), "later queued images still load");
     }
 
     #[cfg(feature = "svg")]
