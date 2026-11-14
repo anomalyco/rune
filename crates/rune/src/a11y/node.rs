@@ -15,7 +15,7 @@ const NAME_MAX: usize = 400;
 
 impl<S: 'static> Runtime<S> {
     /// Node `i`'s role in the tree, or `None` when it joins its parent.
-    pub(super) fn a11y_role(&self, i: usize) -> Option<Role> {
+    pub(crate) fn a11y_role(&self, i: usize) -> Option<Role> {
         let n = &self.nodes[i];
         let handlers = n.handlers.get();
         let input = n.input.as_deref();

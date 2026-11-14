@@ -23,6 +23,8 @@ extern "C" {
     fn pasted_image(handle: &JsValue, max: u32) -> js_sys::Promise;
     #[wasm_bindgen(js_name = announceA11y)]
     fn announce_a11y(handle: &JsValue, text: &str, assertive: bool);
+    #[wasm_bindgen(js_name = focusA11y)]
+    fn focus_a11y(handle: &JsValue, json: &str);
     #[wasm_bindgen(js_name = scheduleA11y)]
     fn schedule_a11y(handle: &JsValue);
     #[wasm_bindgen(js_name = scheduleA11yIdle)]
@@ -155,6 +157,10 @@ impl<S: 'static> Running<S> {
         } else if let Some(json) = self.rt.web_a11y(&mut self.input.a11y) {
             sync_a11y(&self.input.handle, json);
             self.input.a11y_at = Some(now);
+        }
+        // An app's focus, for a reader: the browser's focus stays on the canvas or its text field.
+        if !self.input.document && let Some(focus) = self.rt.web_a11y_focus(&mut self.input.a11y) {
+            focus_a11y(&self.input.handle, focus);
         }
         // `Tx::announce`: the page's own live regions say it, as the native tree's announcer does.
         if self.rt.announcement.said() != self.input.announced {

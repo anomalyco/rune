@@ -765,6 +765,46 @@ export function syncA11y(h, json) {
     }
 }
 
+// An app's focus (`Runtime::web_a11y_focus`), for a reader: the browser's own focus stays on the
+// canvas (where keys go) or its text field, so the canvas is an `application` whose active
+// descendant is a proxy in its fallback content saying the focused element's role, name and
+// states. Two proxies, taking turns, so every move is a change of active descendant a reader
+// follows, even between two elements alike. A text field's name goes on the field the browser
+// edits.
+export function focusA11y(h, json) {
+    if (h.disposed || h.page) return;
+    const f = json ? JSON.parse(json) : null;
+    if (!h.focusProxies) {
+        h.focusProxies = [0, 1].map(n => {
+            const el = document.createElement('div');
+            el.id = `rune-focus-${n}`;
+            el.tabIndex = -1;
+            h.canvas.append(el);
+            return el;
+        });
+        h.focusTurn = 0;
+        h.canvas.setAttribute('role', 'application');
+        if (document.title) h.canvas.setAttribute('aria-label', document.title);
+    }
+    if (!f) {
+        h.canvas.removeAttribute('aria-activedescendant');
+        return;
+    }
+    if (f.o === 'textbox') h.textarea.setAttribute('aria-label', f.t || 'Text input');
+    h.focusTurn ^= 1;
+    const el = h.focusProxies[h.focusTurn];
+    for (const a of [...el.attributes]) if (a.name === 'role' || a.name.startsWith('aria-')) el.removeAttribute(a.name);
+    el.setAttribute('role', f.o);
+    el.setAttribute('aria-label', f.t ?? '');
+    if (f.d) el.setAttribute('aria-description', f.d);
+    if (f.c) el.setAttribute('aria-checked', f.c);
+    if (f.s !== undefined) el.setAttribute('aria-selected', String(f.s));
+    if (f.x !== undefined) el.setAttribute('aria-expanded', String(f.x));
+    if (f.n) { el.setAttribute('aria-posinset', String(f.n[0])); el.setAttribute('aria-setsize', String(f.n[1])); }
+    if (f.l) el.setAttribute('aria-level', String(f.l));
+    h.canvas.setAttribute('aria-activedescendant', el.id);
+}
+
 // `Tx::announce`: two live regions in the mirror, polite and assertive, made the first time
 // something is said (a region must be in the page before its text changes for a reader to say
 // it). The words go in on the next frame, after the region is emptied, so the same words said
