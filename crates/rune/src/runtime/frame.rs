@@ -827,6 +827,7 @@ impl<S: 'static> Runtime<S> {
             self.scene.present();
         }
         self.paint_keep.moved.extend(self.scene.changed().iter().map(|p| p.node));
+        if self.fill_text() { animating = true; sources |= AnimSource::TEXT_FILL; }
         let mut source = |on: bool, bit: u16| { if on { sources |= bit; } on };
         self.begin_exit_mask();
         animating |= self.build();

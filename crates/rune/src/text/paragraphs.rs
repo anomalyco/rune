@@ -22,6 +22,13 @@ use crate::el::{Direction, Flow, TextSpec};
 const ISOLATE: usize = 3;
 /// Keeps a by-paragraph layout's cache key apart from a one-layout one of the same text.
 const PARAGRAPHS: u64 = 0x3c6e_f372_fe94_f82b;
+/// More new paragraphs than this in one layout (a long paste) shape only those near the edit;
+/// the others wait (`Lazy`).
+const LAZY_MIN: usize = 64;
+/// How many paragraphs before an edit's end a long paste shapes at once (a field's lines above
+/// its caret, which follows the paste's end), and after its start.
+const EAGER_END: usize = 24;
+const EAGER_START: usize = 4;
 
 /// A text node's layout: one paragraph layout, or a by-paragraph field's stack of them.
 #[derive(Clone)]
@@ -71,6 +78,67 @@ pub(crate) struct ParagraphLayout {
     /// What the next edit's keys start from (`Keys`): the text it laid out, when it had no
     /// spans or pills, in the style and starting direction its keys were made in.
     keyed: Option<Keyed>,
+    /// While some of its paragraphs wait to be shaped: what shapes them.
+    lazy: Option<Rc<Lazy>>,
+}
+
+impl ParagraphLayout {
+    /// Whether some of its paragraphs wait to be shaped.
+    pub(crate) fn waiting(&self) -> bool {
+        self.lazy.is_some()
+    }
+}
+
+/// What shapes the paragraphs a long paste left waiting ([`TextSystem::fill_paragraphs`]). A
+/// waiting paragraph is plain printable ASCII that fits on one line, so its height is the
+/// style's one line exactly and nothing moves when its layout lands.
+pub(crate) struct Lazy {
+    content: Rc<str>,
+    style: TextStyle,
+    scale: f32,
+    wrap_anywhere: bool,
+    /// Its layout's entry in the cache, which a fill replaces.
+    cache_key: u64,
+}
+
+/// One line of printable ASCII in a style: each character's advance and the line's height
+/// (device px), read from one shaped line, and an empty layout to stand in for a paragraph not
+/// shaped yet.
+pub(crate) struct AsciiLine {
+    advance: [f32; 95],
+    height: f32,
+    empty: Rc<Layout<Ink>>,
+}
+
+impl AsciiLine {
+    /// `words`' height and width when they're printable ASCII that fits on one line at
+    /// `max_width`, with room to spare for what kerning and ligatures do to the sum.
+    fn one_line(&self, words: &str, max_width: Option<f32>) -> Option<(f32, f32)> {
+        let mut w = 0.0f32;
+        for b in words.bytes() {
+            if !(0x20..0x7f).contains(&b) { return None; }
+            w += self.advance[(b - 0x20) as usize];
+        }
+        max_width.is_none_or(|m| w * 1.03 + 2.0 <= m).then_some((self.height, w))
+    }
+
+    /// Whether `max_width` is a measure of the narrowest the text can be (Taffy's min-content
+    /// size, under a line's height wide): no line it breaks there is shown.
+    fn narrow(&self, max_width: Option<f32>) -> bool {
+        max_width.is_some_and(|m| m < self.height)
+    }
+
+    /// `words` broken at their narrowest, estimated: a line per space-separated word, as wide as
+    /// the widest. Only a min-content measure asks, for the width.
+    fn narrowest(&self, words: &str) -> Option<(f32, f32)> {
+        if !words.bytes().all(|b| (0x20..0x7f).contains(&b)) { return None; }
+        let (mut lines, mut widest) = (0usize, 0.0f32);
+        for w in words.split(' ').filter(|w| !w.is_empty()) {
+            lines += 1;
+            widest = widest.max(w.bytes().map(|b| self.advance[(b - 0x20) as usize]).sum());
+        }
+        Some((self.height * lines.max(1) as f32, widest))
+    }
 }
 
 /// A plain text's content and the key inputs that aren't per paragraph, so an edit keys only the
@@ -82,6 +150,7 @@ pub(crate) struct Keyed {
 }
 
 /// One paragraph: content bytes `start..end` (its newline left out), laid out at `y`.
+#[derive(Clone)]
 pub(crate) struct Paragraph {
     pub(crate) start: usize,
     pub(crate) end: usize,
@@ -96,6 +165,8 @@ pub(crate) struct Paragraph {
     /// Its pills' labels, as bytes from its start, each shaped between FSI and PDI.
     isolates: Box<[(u32, u32)]>,
     pub(crate) layout: Rc<Layout<Ink>>,
+    /// False while it waits for a fill: `layout` is an empty stand-in, its height exact.
+    pub(crate) shaped: bool,
 }
 
 /// One layout of a text and where it sits: its whole layout, or one paragraph of a field's.
@@ -536,7 +607,7 @@ impl TextSystem {
         // This text laid out at another width measuring asked for this commit: a paragraph
         // neither keeps is broken again from it rather than shaped twice.
         let other = self.last_paragraphs.clone().filter(|o| o.whole == whole && (o.max_width != max_width || o.align != align));
-        let (built, fresh) = self.lay_out_paragraphs(spec, scale, max_width, align, whole, prev.as_deref(), other.as_deref());
+        let (built, fresh) = self.lay_out_paragraphs(spec, scale, max_width, align, (whole, key), prev.as_deref(), other.as_deref());
         let built = Rc::new(built);
         self.last_paragraphs = Some(built.clone());
         // It holds what it shaped or broke anew; the paragraphs it kept are its last layout's.
@@ -547,7 +618,7 @@ impl TextSystem {
     /// Lays out each of `spec`'s paragraphs, keeping `prev`'s layout of each it still has: those
     /// before an edit and after it. A paragraph is the same when its words, the spans and pills
     /// over them that shape them, its block and its direction are.
-    fn lay_out_paragraphs(&mut self, spec: &TextSpec, scale: f32, max_width: Option<f32>, align: Alignment, whole: u64, prev: Option<&ParagraphLayout>, other: Option<&ParagraphLayout>) -> (ParagraphLayout, usize) {
+    fn lay_out_paragraphs(&mut self, spec: &TextSpec, scale: f32, max_width: Option<f32>, align: Alignment, (whole, cache_key): (u64, u64), prev: Option<&ParagraphLayout>, other: Option<&ParagraphLayout>) -> (ParagraphLayout, usize) {
         let (content, style) = (spec.content.as_str(), spec.style);
         let style_key = {
             let mut h = hash::KeyHasher::default();
@@ -582,14 +653,46 @@ impl TextSystem {
         let after = found[before..].iter().rev().zip(old[before..].iter().rev()).take_while(|(f, o)| f.3 == o.key).count();
         let rebreak = prev.is_some_and(|p| p.max_width != max_width || p.align != align);
         let line = style.line_px() * scale;
+        // A long paste shapes the paragraphs near its ends; plain ASCII lines that fit on one
+        // line elsewhere wait, at their exact height, for `fill_paragraphs`.
+        let ascii = (plain && n - before - after > LAZY_MIN).then(|| self.ascii_line(style, scale, spec.wrap_anywhere)).flatten();
+        let waits = |k: usize, words: &str| -> Option<(f32, f32)> {
+            let m = ascii.as_ref()?;
+            if words.is_empty() { return None; }
+            if m.narrow(max_width) { return m.narrowest(words); }
+            let near = k < before + EAGER_START || k + EAGER_END >= n - after;
+            if near { return None; }
+            m.one_line(words, max_width)
+        };
+        let mut waiting = 0;
         let (mut paragraphs, mut y) = (Vec::with_capacity(n), 0.0f64);
         let (mut width, mut full_width, mut fresh) = (0.0f32, 0.0f32, 0);
         for (k, (a, b, flow, key, isolates)) in found.into_iter().enumerate() {
             let block = spec.cold.blocks.get(k).copied().unwrap_or(Block::Paragraph);
             let blocks: &[Block] = if block == Block::Paragraph { &[] } else { std::slice::from_ref(&block) };
             let kept = if k < before { Some(&old[k]) } else if k >= n - after { Some(&old[old.len() - (n - k)]) } else { None };
+            // One still waiting stays so while its width allows; one that doesn't is new here.
+            if let Some(o) = kept.filter(|o| !o.shaped) {
+                let words = &content[a..b];
+                let fits = (!rebreak).then_some((o.height, o.widths[0])).or_else(|| ascii.as_ref().and_then(|m| m.one_line(words, max_width)).or_else(|| self.ascii_line(style, scale, spec.wrap_anywhere)?.one_line(words, max_width)));
+                if let Some((height, w)) = fits {
+                    waiting += 1;
+                    (width, full_width) = (width.max(w), full_width.max(w));
+                    paragraphs.push(Paragraph { start: a, end: b, y: y.round() as f32, height, widths: [w, w], flow, key, isolates, layout: o.layout.clone(), shaped: false });
+                    y += f64::from(height);
+                    continue;
+                }
+            }
+            let kept = kept.filter(|o| o.shaped);
+            if kept.is_none() && let Some((height, w)) = waits(k, &content[a..b]) && let Some(m) = &ascii {
+                waiting += 1;
+                (width, full_width) = (width.max(w), full_width.max(w));
+                paragraphs.push(Paragraph { start: a, end: b, y: y.round() as f32, height, widths: [w, w], flow, key, isolates, layout: m.empty.clone(), shaped: false });
+                y += f64::from(height);
+                continue;
+            }
             // The same paragraph at the other width (the same text, so the same index).
-            let twin = other.and_then(|o| o.paragraphs.get(k)).filter(|o| o.key == key);
+            let twin = other.and_then(|o| o.paragraphs.get(k)).filter(|o| o.key == key && o.shaped);
             // A kept paragraph broken at another width, or this text's own paragraph at the
             // other width measuring asks for, breaks again here rather than shaping anew.
             let again = match kept { Some(o) if rebreak => Some(o), Some(_) => None, None => twin };
@@ -619,13 +722,84 @@ impl TextSystem {
                 _ => (if a == b { layout.height().max(line) } else { layout.height() }, [layout.width(), layout.full_width()]),
             };
             (width, full_width) = (width.max(widths[0]), full_width.max(widths[1]));
-            paragraphs.push(Paragraph { start: a, end: b, y: y.round() as f32, height, widths, flow, key, isolates, layout });
+            paragraphs.push(Paragraph { start: a, end: b, y: y.round() as f32, height, widths, flow, key, isolates, layout, shaped: true });
             y += f64::from(height);
         }
         let (asc, desc) = self.primary_extents(style.family, style.weight, style.italic).unwrap_or((0.8, 0.2));
         let newline = 0.25 * (asc + desc.abs()) * style.size * scale;
         let keyed = plain.then(|| Keyed { content: Rc::from(content), style_key, start_flow });
-        (ParagraphLayout { paragraphs, width, full_width, height: y as f32, max_width, align, whole, newline, keyed }, fresh)
+        let lazy = (waiting > 0).then(|| Rc::new(Lazy {
+            content: keyed.as_ref().map_or_else(|| Rc::from(content), |k| k.content.clone()),
+            style, scale, wrap_anywhere: spec.wrap_anywhere, cache_key,
+        }));
+        (ParagraphLayout { paragraphs, width, full_width, height: y as f32, max_width, align, whole, newline, keyed, lazy }, fresh)
+    }
+
+    /// Printable ASCII in `style` at `scale`, measured once: None when its characters don't all
+    /// come from one font, whose one line is then not every ASCII line's.
+    fn ascii_line(&mut self, style: TextStyle, scale: f32, wrap_anywhere: bool) -> Option<Rc<AsciiLine>> {
+        let key = {
+            let mut h = hash::KeyHasher::default();
+            (hash::text_hash("", &[], style, scale, None), wrap_anywhere).hash(&mut h);
+            h.finish()
+        };
+        if let Some(m) = self.ascii.get(&key) { return m.clone(); }
+        let sample: String = (0x21u8..0x7f).flat_map(|b| [b as char, ' ']).collect();
+        let l = self.layout_keyed(None, &sample, &[], &[], &[], style, scale, None, Alignment::Start, wrap_anywhere, false, Keep::Owned, Flow::Ltr.base());
+        let empty = self.layout_keyed(None, "", &[], &[], &[], style, scale, None, Alignment::Start, wrap_anywhere, false, Keep::Owned, Flow::Ltr.base());
+        let measured = (|| {
+            let line = l.lines().next().filter(|_| l.lines().count() == 1)?;
+            let mut runs = line.runs();
+            let run = runs.next().filter(|_| runs.next().is_none())?;
+            let mut advance = [f32::NAN; 95];
+            for cluster in run.clusters() {
+                let r = cluster.text_range();
+                let b = *sample.as_bytes().get(r.start)?;
+                if r.len() != 1 || !(0x20..0x7f).contains(&b) { return None; }
+                advance[(b - 0x20) as usize] = cluster.advance();
+            }
+            advance.iter().all(|a| a.is_finite()).then(|| Rc::new(AsciiLine { advance, height: l.height(), empty }))
+        })();
+        self.ascii.insert(key, measured.clone());
+        measured
+    }
+
+    /// Shapes waiting paragraphs of `laid` for up to `budget`, those meeting device rows `rows`
+    /// first, then the nearest: the layout with them shaped (cached in its place), and whether a
+    /// height moved (it shouldn't: a waiting height is exact). None when none were waiting.
+    pub(crate) fn fill_paragraphs(&mut self, laid: &ParagraphLayout, budget: std::time::Duration, rows: (f32, f32), reach: f32) -> Option<(Rc<ParagraphLayout>, bool)> {
+        let lazy = laid.lazy.clone()?;
+        let start = std::time::Instant::now();
+        let mut order: Vec<usize> = (0..laid.paragraphs.len()).filter(|&k| !laid.paragraphs[k].shaped).collect();
+        let distance = |p: &Paragraph| if p.y + p.height >= rows.0 && p.y <= rows.1 { 0.0 } else { (rows.0 - p.y - p.height).max(p.y - rows.1) };
+        order.sort_by(|&a, &b| distance(&laid.paragraphs[a]).total_cmp(&distance(&laid.paragraphs[b])));
+        let mut paragraphs = laid.paragraphs.clone();
+        let mut moved = false;
+        let mut left = order.len();
+        for k in order {
+            if (start.elapsed() >= budget && left < laid.paragraphs.len()) || distance(&laid.paragraphs[k]) > reach { break; }
+            let p = &mut paragraphs[k];
+            let words = &lazy.content[p.start..p.end];
+            let l = self.layout_keyed(Some(p.key), words, &[], &[], &[], lazy.style, lazy.scale, laid.max_width, laid.align, lazy.wrap_anywhere, false, Keep::Owned, p.flow.base());
+            moved |= l.height() != p.height;
+            (p.height, p.widths, p.layout, p.shaped) = (l.height(), [l.width(), l.full_width()], l, true);
+            left -= 1;
+        }
+        let (mut y, mut width, mut full_width) = (0.0f64, 0.0f32, 0.0f32);
+        for p in &mut paragraphs {
+            p.y = y.round() as f32;
+            y += f64::from(p.height);
+            (width, full_width) = (width.max(p.widths[0]), full_width.max(p.widths[1]));
+        }
+        let keyed = laid.keyed.as_ref().map(|k| Keyed { content: k.content.clone(), style_key: k.style_key, start_flow: k.start_flow });
+        let built = Rc::new(ParagraphLayout {
+            paragraphs, width, full_width, height: y as f32, max_width: laid.max_width, align: laid.align, whole: laid.whole,
+            newline: laid.newline, keyed, lazy: (left > 0).then_some(lazy.clone()),
+        });
+        let g = self.generation;
+        self.paragraphs.insert(lazy.cache_key, Entry::new(built.clone(), g, built.paragraphs.len() * size_of::<Paragraph>() / 64, built.whole));
+        if self.last_paragraphs.as_ref().is_some_and(|l| std::ptr::eq(&**l, laid)) { self.last_paragraphs = Some(built.clone()); }
+        Some((built, moved))
     }
 }
 

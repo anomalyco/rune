@@ -299,6 +299,9 @@ impl<S: 'static> Runtime<S> {
     }
 
     fn dispatch_action(&mut self, action: Action, tx: &mut Tx) -> bool {
+        // A caret key or a press reads the field's layout where it lands: a long paste's
+        // paragraphs still waiting there are shaped first. Typing at the caret needs none.
+        if !self.text_rows.is_empty() && reads_text_layout(&action) { self.fill_text_near(); }
         let mut one = self.transaction();
         // Debug builds name the element too, for the stale-view warning.
         #[cfg(debug_assertions)]
@@ -539,5 +542,20 @@ impl<S: 'static> Runtime<S> {
             return self.skip_view(label);
         }
         ran
+    }
+}
+
+/// Whether `action` reads a text's layout away from its caret: caret movement, a press or a
+/// drag. Text typed, deleted or composed at the caret doesn't.
+fn reads_text_layout(action: &Action) -> bool {
+    use crate::Key;
+    match action {
+        Action::Key { ev, .. } => match &ev.key {
+            Key::Text(_) | Key::Backspace | Key::Delete => ev.mods.cmd || ev.mods.ctrl || ev.mods.alt,
+            Key::Modifier { .. } => false,
+            _ => true,
+        },
+        Action::Press(..) | Action::DoublePress(..) | Action::MiddlePress(..) | Action::SecondaryPress(..) | Action::Drag(..) | Action::DragStart(..) => true,
+        _ => false,
     }
 }
