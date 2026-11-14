@@ -134,8 +134,9 @@ pub(super) enum GpuJob {
     Waiting { tries: u8, retry_at: Option<Instant> },
     /// Being made on `thread` since `since`; it reports through `slot`. `raised`: the thread runs
     /// at normal priority now (`RAISE_AFTER`). `latest`: the last CPU frame's instances, which the
-    /// thread draws once before it reports (`warm_frame`).
-    Building { slot: Arc<Mutex<Option<Result<Prepared, String>>>>, latest: Arc<Mutex<Vec<crate::render::Instance>>>, thread: std::thread::JoinHandle<()>, since: Instant, raised: bool, tries: u8 },
+    /// thread draws once before it reports (`warm_frame`). `animating`: the last CPU frame moved
+    /// something. `ready`: since when the GPU has waited for a frame that doesn't (`gpu_ready`).
+    Building { slot: Arc<Mutex<Option<Result<Prepared, String>>>>, latest: Arc<Mutex<Vec<crate::render::Instance>>>, thread: std::thread::JoinHandle<()>, since: Instant, raised: bool, tries: u8, animating: bool, ready: Option<Instant> },
     /// It failed `TRIES` times: the window stays on the CPU.
     Failed,
 }
@@ -149,6 +150,9 @@ const BUILD_SLOW: Duration = Duration::from_secs(20);
 const NUDGE_EVERY: Duration = Duration::from_millis(100);
 /// The longest the GPU may take to finish the frame both drew: then the hand-over fails.
 const FINISH_LIMIT: Duration = Duration::from_secs(5);
+/// The longest a GPU that's ready waits for a CPU frame that moves nothing to hand over at: an
+/// animation that doesn't end (a spinner) hands over within it.
+const QUIET_WAIT: Duration = Duration::from_secs(1);
 /// A failed try is made again after this long.
 const RETRY_AFTER: Duration = Duration::from_secs(30);
 /// Tries in all before the window stays on the CPU.
@@ -389,9 +393,14 @@ impl<S: 'static> Host<S> {
         let update_ms = now.elapsed().as_secs_f64() * 1000.0;
         sync_platform(l, rt, &mut self.secure_input, &mut self.ime_allowed, &self.clipboard);
         let (width, height) = (l.config.width, l.config.height);
-        if let SurfaceMode::Cpu { job: GpuJob::Building { latest, .. }, .. } = &l.native.mode {
+        let mut quiet_now = false;
+        if let SurfaceMode::Cpu { job: GpuJob::Building { latest, animating: moving, ready, .. }, .. } = &mut l.native.mode {
             *latest.lock().unwrap_or_else(|e| e.into_inner()) = warm_instances(&rt.instances);
+            *moving = animating;
+            // The GPU waited for this: a frame at rest, which the hand-over frame draws again.
+            quiet_now = !animating && ready.is_some();
         }
+        if quiet_now { self.native_handle.send(WakeEvent::GpuReady); }
         let painted = {
             let (SurfaceMode::Cpu { cpu, .. } | SurfaceMode::HandingOver { cpu, .. }) = &mut l.native.mode else { return };
             cpu.painter.fill_masks(&mut rt.text.atlas);
@@ -521,7 +530,7 @@ impl<S: 'static> Host<S> {
             handle.send(WakeEvent::GpuReady);
         });
         match spawned {
-            Ok(thread) => { crate::marks::mark("gpu.window.start"); *job = GpuJob::Building { slot, latest, thread, since: Instant::now(), raised: !below, tries: tries + 1 }; }
+            Ok(thread) => { crate::marks::mark("gpu.window.start"); *job = GpuJob::Building { slot, latest, thread, since: Instant::now(), raised: !below, tries: tries + 1, animating: false, ready: None }; }
             Err(error) => self.fail_gpu(format!("its thread couldn't start: {error}"), tries + 1),
         }
     }
@@ -531,9 +540,19 @@ impl<S: 'static> Host<S> {
     pub(super) fn gpu_ready(&mut self) {
         if self.win.as_ref().is_some_and(|w| matches!(w.native.mode, SurfaceMode::HandingOver { .. })) { return self.hand_over_if_done(); }
         let Some(w) = self.win.as_mut() else { return };
-        let SurfaceMode::Cpu { job: GpuJob::Building { slot, tries, .. }, .. } = &w.native.mode else { return };
+        let SurfaceMode::Cpu { job: GpuJob::Building { slot, tries, animating, ready, .. }, .. } = &mut w.native.mode else { return };
         let tries = *tries;
-        let Some(made) = slot.lock().unwrap_or_else(|e| e.into_inner()).take() else { return };
+        let mut slot = slot.lock().unwrap_or_else(|e| e.into_inner());
+        // Ready while the CPU frames move something (a view fading in): the hand-over waits for a
+        // frame at rest, so the frame both renderers draw is one that costs what a frame at rest
+        // does, not the first of the GPU's frames to draw every layer of an entrance.
+        let now = Instant::now();
+        if slot.as_ref().is_some_and(Result::is_ok) && *animating && now < *ready.get_or_insert(now) + QUIET_WAIT {
+            crate::marks::mark("gpu.window.deferred");
+            return;
+        }
+        let Some(made) = slot.take() else { return };
+        drop(slot);
         let prepared = match made {
             Ok(prepared) => prepared,
             Err(error) => return self.fail_gpu(error, tries),
@@ -685,7 +704,8 @@ impl<S: 'static> Host<S> {
     pub(super) fn watch_handover(&mut self, now: Instant) {
         let Some(w) = self.win.as_mut() else { return };
         match &mut w.native.mode {
-            SurfaceMode::Cpu { job: GpuJob::Building { thread, since, raised, .. }, .. } => {
+            SurfaceMode::Cpu { job: GpuJob::Building { thread, since, raised, ready, .. }, .. } => {
+                if ready.is_some_and(|at| now >= at + QUIET_WAIT) { return self.gpu_ready(); }
                 if !*raised && now >= *since + RAISE_AFTER {
                     *raised = true;
                     raise_priority(thread);
@@ -721,6 +741,7 @@ impl Win {
     /// When the hand-over next has something to do (`Host::watch_handover`).
     pub(super) fn handover_deadline(&self, now: Instant) -> Option<Instant> {
         match &self.native.mode {
+            SurfaceMode::Cpu { job: GpuJob::Building { ready: Some(at), .. }, .. } => Some(*at + QUIET_WAIT),
             SurfaceMode::Cpu { job: GpuJob::Building { since, raised: false, .. }, .. } => Some(*since + RAISE_AFTER),
             SurfaceMode::Cpu { job: GpuJob::Building { since, .. }, .. } => Some(*since + BUILD_SLOW).filter(|&at| at > now),
             SurfaceMode::HandingOver { done: None, since, nudged, .. } => Some(nudged.unwrap_or(*since) + NUDGE_EVERY),
