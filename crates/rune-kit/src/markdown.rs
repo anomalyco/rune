@@ -65,7 +65,7 @@ mod stream;
 mod style;
 mod table;
 
-pub use find::{Case, find};
+pub use find::{Case, Rendered, find};
 pub use image::ImageFrame;
 pub use style::MarkdownStyle;
 #[cfg(feature = "mermaid")] pub(crate) use style::DiagramPaint;

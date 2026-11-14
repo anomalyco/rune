@@ -4,7 +4,7 @@
 use std::ops::Range;
 
 use rune::{Cx, El, Env, Runtime, ScrollSpec, col};
-use rune_kit::markdown::{Case, Highlight, find};
+use rune_kit::markdown::{Case, Highlight, Rendered, find};
 use rune_kit::{Kit, Markdown, MarkdownStyle};
 
 fn slice_all<'a>(src: &'a str, matches: &[Vec<Range<usize>>]) -> Vec<Vec<&'a str>> {
@@ -465,4 +465,23 @@ fn highlighting_fragmented_match_is_linear() {
     let marks: Vec<_> = rt.elements().into_iter().filter(|e| e.role == "mark").collect();
     assert_eq!(marks.len(), 1);
     assert_eq!(marks[0].label.as_deref(), Some(expected.as_str()));
+}
+
+#[test]
+fn rendered_finds_what_find_finds() {
+    let docs = [
+        "Start *italic* and **bold** and `code` and ~~struck~~ and [linked words](https://example.org/path) end.",
+        "# Title\n\n- one **two**\n- three\n\n> quoted `x`\n\n| a | b |\n|---|---|\n| cell | Straße |\n\n```rust\nlet x = 1;\n```",
+        "AT&amp;T &lt;tag&gt; and İstanbul",
+    ];
+    for src in docs {
+        let rendered = Rendered::new(src);
+        for q in ["t", "two", "x", "strasse", "&", "istanbul", "cell"] {
+            for case in [Case::Insensitive, Case::Sensitive] {
+                assert_eq!(rendered.find(src, q, case), find(src, q, case), "{q:?} in {src:?}");
+            }
+        }
+        let first = rendered.texts().next().expect("a block");
+        assert!(!rendered.source_ranges(src, 0, 0..first.len()).is_empty());
+    }
 }
