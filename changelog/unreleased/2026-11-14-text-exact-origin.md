@@ -1,0 +1,1 @@
+- Text at rest lays out from its box's exact place (and its paint containment's rounding), as Blink paints a text fragment, so its baseline and pens round where Chromium's do.
