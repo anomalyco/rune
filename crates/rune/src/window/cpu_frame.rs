@@ -787,11 +787,23 @@ fn warm_frame(gpu: &Gpu, renderer: &mut Renderer, format: wgpu::TextureFormat, s
     });
     let view = target.create_view(&Default::default());
     let mut atlas = crate::text::Atlas::new();
+    crate::marks::WARMING.store(true, std::sync::atomic::Ordering::Relaxed);
+    crate::marks::mark("warm.begin");
     let mut enc = gpu.device.create_command_encoder(&Default::default());
     renderer.prepare(&gpu.device, &gpu.queue, &mut atlas, instances, size);
+    crate::marks::mark("warm.prepared");
     renderer.draw(&mut enc, &view, [0.0; 4]);
+    crate::marks::mark("warm.drawn");
     renderer.submit(&gpu.queue, enc);
+    crate::marks::mark("warm.submitted");
     let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+    crate::marks::mark("warm.polled");
+    crate::marks::WARMING.store(false, std::sync::atomic::Ordering::Relaxed);
+    if let Some(path) = std::env::var_os("IB3_WARM_LOG") {
+        let kinds = instances.iter().fold([0u32; 16], |mut k, i| { if (0.0..16.0).contains(&i.params[1]) { k[i.params[1] as usize] += 1; } k });
+        let _ = std::fs::write(path, format!("instances {} kinds {:?} size {:?} format {:?}
+", instances.len(), kinds, size, format));
+    }
 }
 
 /// The last CPU frame's instances as the warm frame draws them: what reads the app's own state

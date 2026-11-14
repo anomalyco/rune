@@ -111,8 +111,11 @@ impl Renderer {
     /// Readies the frame's `encoder` for submission: submits pending uploads ahead of it, and
     /// seals the compositor's writes recorded into it.
     pub(crate) fn before_submit(&self, encoder: &mut wgpu::CommandEncoder) {
+        crate::marks::mark("ho.s.begin");
         self.submit_uploads();
+        crate::marks::mark("ho.s.uploads");
         if let Some(s) = &self.uploads.frame_writes { s.flush(encoder); }
+        crate::marks::mark("ho.s.flushed");
     }
 
     /// `Queue::write_buffer` through staging chunks, recorded into `encoder` here: ahead of the
