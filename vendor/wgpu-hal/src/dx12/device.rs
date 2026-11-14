@@ -463,12 +463,15 @@ impl super::Device {
     pub fn ib3_touch_spare(&self, count: usize) {
         let spare = self.shared.spare_lists.lock();
         let Some(allocator) = spare.1.clone() else { return };
-        for list in spare.0.iter().take(count) {
+        for (i, list) in spare.0.iter().enumerate().take(count) {
             let t = std::time::Instant::now();
             let _ = unsafe { list.Reset(&allocator, None) };
-            let reset = t.elapsed().as_micros();
             let _ = unsafe { list.Close() };
-            eprintln!("ib3-hal: touch reset {reset} us, close {} us on {:?}", t.elapsed().as_micros() - reset, std::thread::current().name());
+            let first = t.elapsed().as_micros();
+            let t = std::time::Instant::now();
+            let _ = unsafe { list.Reset(&allocator, None) };
+            let _ = unsafe { list.Close() };
+            eprintln!("ib3-hal: touch {i} first {first} us, second {} us on {:?}", t.elapsed().as_micros(), std::thread::current().name());
         }
     }
     /// Makes `count` command lists now, for encoders that have none of their own to reuse to
