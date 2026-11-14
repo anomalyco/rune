@@ -1,0 +1,1 @@
+- Motion: a row delivered by a poll appears at once even when a pointer or key handler changes the view in the same frame. The handler keeps its own animation.
