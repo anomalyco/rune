@@ -1,0 +1,2 @@
+- In a browser, a key typed into a field, a press into a field and a release with no handler no longer run a whole frame inside the input's event: the model and the page's field take the change at once, and the display's next frame draws every one of them. A press, link, drag, key or menu that may need the event's user activation still runs inside it.
+- In a browser, an app's first accessibility mirror is built in the page's idle time after its first frame, so a click or key that came with the first frame is handled before it.
