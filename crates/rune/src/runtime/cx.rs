@@ -59,6 +59,7 @@ pub struct Cx<S> {
     pub(super) titlebar: crate::titlebar::TitlebarSet,
     pub(super) system_accent: crate::SystemAccent,
     pub(super) system_contrast: Option<crate::SystemContrast>,
+    pub(super) system_increased_contrast: bool,
     pub(super) system_scroll_bars: crate::platform::scroll_bars::SystemScrollBars,
     pub(super) system_reduced_motion: bool,
     pub(super) reduced_motion: bool,
@@ -84,6 +85,7 @@ impl<S> Cx<S> {
             titlebar: self.titlebar,
             system_accent: self.system_accent,
             system_contrast: self.system_contrast,
+            system_increased_contrast: self.system_increased_contrast,
             system_scroll_bars: self.system_scroll_bars,
             system_reduced_motion: self.system_reduced_motion, reduced_motion: self.reduced_motion, time_scale: self.time_scale, zoom: self.zoom,
             caret: self.caret.clone(), caret_read: self.caret_read.clone(),
@@ -262,6 +264,12 @@ impl<S> Cx<S> {
     /// (CSS `forced-colors: active`). None otherwise. A change re-runs the view.
     pub fn system_contrast(&self) -> Option<crate::SystemContrast> {
         self.system_contrast
+    }
+    /// Whether the system asks for more contrast: macOS's Increase Contrast, or a Windows contrast
+    /// theme (when [`Self::system_contrast`] is also there). A view can draw its stronger edges for
+    /// it while keeping its own colours. A change re-runs the view.
+    pub fn system_increased_contrast(&self) -> bool {
+        self.system_increased_contrast
     }
     /// The host's OS accessibility preference, independent of this commit's override.
     pub fn system_reduced_motion(&self) -> bool {

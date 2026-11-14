@@ -376,6 +376,7 @@ impl<S: 'static> Host<S> {
             WindowEvent::Focused(focused) => {
                 rt.set_system_reduced_motion(crate::platform::preferences::reduced_motion());
             rt.set_system_contrast(crate::platform::preferences::contrast());
+                rt.set_system_increased_contrast(crate::platform::preferences::increased_contrast());
                 rt.set_full_keyboard_access(crate::platform::preferences::full_keyboard_access());
                 rt.set_system_scroll_bars_state(crate::platform::scroll_bars::reread().with_override(self.args.scroll_bars));
                 self.secure_input.set(focused && self.life.uncovered() && rt.has_secure_focus());

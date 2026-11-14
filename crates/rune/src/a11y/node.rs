@@ -20,8 +20,12 @@ impl<S: 'static> Runtime<S> {
         let handlers = n.handlers.get();
         let input = n.input.as_deref();
         let text = n.text.as_deref().filter(|_| input.is_none());
+        // A group that takes its own keys and no press (a game's surface: arrows, Space) is
+        // no button even when it steers by drag: Return or Space doesn't press it. As the web
+        // mirror has it, a labelled one stays a group.
+        let owns_keys = n.role == "group" && n.focus.key.is_some() && handlers.is_none_or(|h| h.on_press.is_none() && h.on_double_press.is_none());
         let cx = RoleCtx {
-            pressable: handlers.is_some_and(|h| h.has_primary()),
+            pressable: handlers.is_some_and(|h| h.has_primary()) && !owns_keys,
             focusable: self.takes_focus(n),
             input: input.is_some(),
             multiline: input.is_some_and(|i| !i.single_line),

@@ -56,6 +56,10 @@ pub(crate) struct A11yTree {
     stamp: Option<Stamp>,
     /// The next update must hold the whole tree (activation, or the adapter asked again).
     full: bool,
+    /// The last whole tree held back the announcer's words: an adapter raises no events for the
+    /// tree it starts from, so words said as a reader attached (a request arriving as it starts)
+    /// would never be spoken. The next update sends them as a change.
+    held: bool,
     /// The root's name when the runtime has no window title (an overlay's name).
     pub(crate) name: String,
     /// What the last update changed, beyond what AccessKit announces itself.
@@ -157,7 +161,7 @@ impl<S: 'static> Runtime<S> {
         if self.a11y.is_none() || self.drawn.len() != self.nodes.len() || self.nodes.is_empty() { return None; }
         let stamp = self.a11y_stamp();
         let tree = self.a11y.as_ref()?;
-        if !tree.full && tree.stamp.as_ref() == Some(&stamp) { return None; }
+        if !tree.full && !tree.held && tree.stamp.as_ref() == Some(&stamp) { return None; }
         // Only scrolled: the rows keep their bounds in their viewport's content space, so only
         // the viewports' offsets change. Sticky elements move against the content; they don't.
         let scrolled_only = !tree.full && !self.has_sticky
@@ -166,11 +170,17 @@ impl<S: 'static> Runtime<S> {
         let found = self.a11y_walk();
         let tree = self.a11y.as_ref()?;
         let full = tree.full;
-        let changed: Vec<bool> = found.slots.iter().map(|s| full || tree.sent.get(&s.id.0).is_none_or(|old| old.print != s.print)).collect();
-        let nodes = self.a11y_build(&found, &changed, &tree.name);
+        let hold = full && self.announcement.recent();
+        // Held words go out with the root, whose node carries the announcer.
+        let held = tree.held;
+        let changed: Vec<bool> = found.slots.iter().enumerate()
+            .map(|(k, s)| full || (held && k == 0) || tree.sent.get(&s.id.0).is_none_or(|old| old.print != s.print)).collect();
+        let nodes = self.a11y_build(&found, &changed, &tree.name, hold);
+        if hold { self.dirty = true; }
         let tree = self.a11y.as_mut()?;
         tree.stamp = Some(stamp);
         tree.full = false;
+        tree.held = hold;
         tree.pass = tree.pass.wrapping_add(1);
         let pass = tree.pass;
         for s in &found.slots {
@@ -266,7 +276,7 @@ impl<S: 'static> Runtime<S> {
     pub fn accessibility_tree(&self) -> TreeUpdate {
         let found = self.a11y_walk();
         let name = self.a11y.as_ref().map_or("", |t| t.name.as_str());
-        let nodes = self.a11y_build(&found, &vec![true; found.slots.len()], name).into_iter().map(|(id, n, _)| (id, n)).collect();
+        let nodes = self.a11y_build(&found, &vec![true; found.slots.len()], name, false).into_iter().map(|(id, n, _)| (id, n)).collect();
         TreeUpdate { nodes, tree: Some(self.a11y_info()), tree_id: TreeId::ROOT, focus: found.focus }
     }
 
@@ -368,8 +378,8 @@ impl<S: 'static> Runtime<S> {
     }
 
     /// The nodes of `found` whose `changed` flag is set, built, with their lines and links:
-    /// (id, node, fingerprint).
-    fn a11y_build(&self, found: &Found, changed: &[bool], fallback_name: &str) -> Vec<(AkId, AkNode, u64)> {
+    /// (id, node, fingerprint). `hold_words`: the announcer goes without its words for now.
+    fn a11y_build(&self, found: &Found, changed: &[bool], fallback_name: &str, hold_words: bool) -> Vec<(AkId, AkNode, u64)> {
         let mut children: Vec<Vec<AkId>> = vec![Vec::new(); found.slots.len()];
         for &(parent, id) in &found.kids {
             if changed[parent] { children[parent].push(id); }
@@ -395,7 +405,7 @@ impl<S: 'static> Runtime<S> {
                 // that appeared.
                 let mut node = AkNode::new(Role::Status);
                 let (words, how) = self.announcement.words().unwrap_or_default();
-                if !words.is_empty() { node.set_label(words); }
+                if !words.is_empty() && !hold_words { node.set_label(words); }
                 node.set_live(if how == crate::LiveRegion::Assertive { accesskit::Live::Assertive } else { accesskit::Live::Polite });
                 node.set_bounds(AkRect { x0: 0.0, y0: 0.0, x1: 1.0, y1: 1.0 });
                 kids.push(ANNOUNCER);
