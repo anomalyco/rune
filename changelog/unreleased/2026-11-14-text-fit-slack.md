@@ -1,0 +1,1 @@
+- **A one-line text in a box sized to it no longer wraps its last word.** Since text boxes are sized in 64ths of a device pixel, a shrink-to-fit box (a prompt's bubble, a button's label) could come out a thousandth of a pixel under its text, and laying the text out again in it wrapped the last word at 1x. Text now fits when it runs past its width by up to 1/256 of a device pixel.
