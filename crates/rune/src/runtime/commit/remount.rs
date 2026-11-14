@@ -182,14 +182,14 @@ impl<S: 'static> Measurement<'_, S> {
 
             let sticky = self.nodes[scroll_idx].scroll.unwrap().stick_bottom;
             let old_scroll = self.scrolls.get(&scroll_id);
-            let pinned = old_scroll.map_or(sticky, |s| s.pinned());
-            let mut offset = old_scroll.map_or(0.0, |s| s.offset as f32);
+            let held = old_scroll.map_or(sticky, |s| s.pinned());
+            let offset = old_scroll.map_or(0.0, |s| s.offset as f32);
             v.viewport = self.nodes[scroll_idx].local.h;
-            offset = (offset - v.top).max(0.0);
-            v.anchor = if pinned { None } else { v.first_visible(offset, |_| true) };
+            let (mut offset, pinned) = v.locate(offset, held);
+            v.anchor = if pinned || v.passed() { None } else { v.first_visible(offset, |_| true) };
             let delta = v.anchor_delta();
             offset = (offset + delta).max(0.0);
-            if let Some(st) = self.scrolls.get_mut(&scroll_id) && !pinned {
+            if let Some(st) = self.scrolls.get_mut(&scroll_id) && !held {
                 st.offset = (st.offset + f64::from(delta)).max(0.0);
             }
             let shown = std::mem::take(&mut v.shown);

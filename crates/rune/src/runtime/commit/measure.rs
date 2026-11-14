@@ -127,19 +127,26 @@ impl<S: 'static> Measurement<'_, S> {
             for n in nodes.iter().filter(|n| n.parent == Some(ci)) {
                 v.set_height(n.key.as_deref().unwrap(), n.local.h);
             }
-            let Some(scroll) = nodes.iter().find(|n| n.path == v.scroll_path) else { continue };
+            let Some((si, scroll)) = nodes.iter().enumerate().find(|(_, n)| n.path == v.scroll_path) else { continue };
             v.viewport = scroll.local.h;
             v.top = (nodes[ci].target[1] - scroll.target[1]).max(0.0);
+            if v.nested {
+                // What the viewport's content holds under the list, for its window while the
+                // viewport holds its end.
+                let bottom = nodes.iter().filter(|n| n.parent == Some(si)).map(|n| n.target[1] + n.local.h).fold(0.0f32, f32::max);
+                v.tail = (bottom - nodes[ci].target[1] - nodes[ci].local.h).max(0.0);
+            }
             let st = self.scrolls.get_mut(&scroll.id);
             let sticky = scroll.scroll.unwrap().stick_bottom;
-            let pinned = (settle && sticky) || st.as_ref().map_or(sticky, |s| s.pinned());
+            let held = (settle && sticky) || st.as_ref().map_or(sticky, |s| s.pinned());
             let offset = if let Some(st) = st {
-                if !pinned { st.offset = (st.offset + f64::from(v.anchor_delta())).max(0.0); }
+                if !held { st.offset = (st.offset + f64::from(v.anchor_delta())).max(0.0); }
                 st.offset as f32
             } else { 0.0 };
             // Rows that shrank or went leave the offset past the end until scrolling clamps it;
             // what shows then is the end.
-            let offset = (offset - v.top).clamp(0.0, v.max_offset());
+            let (offset, pinned) = v.locate(offset, held);
+            let offset = offset.min(v.max_offset());
             let end = v.row_end(v.range.end);
             let mounted_height = (end - v.before).max(0.0);
             // Never present a blank caused by an estimate. Expand and measure again first.
@@ -276,11 +283,10 @@ impl<S: 'static> Measurement<'_, S> {
             self.populate_virtual_children(el, &path, source, inert, group);
         }
         let bounds = crate::el::virtual_list::child_bounds(&el.style, el.cold.scroll.is_some(), bound, &el.children);
-        // A virtual stack windows against the nearest scroll viewport around it, under or among
-        // other content; a virtual list's rows only against viewports inside them.
+        // A virtual stack windows against the nearest scroll viewport around it, its rows' lists
+        // included: a list in a row windows against the same viewport (`VirtualList::nested`).
         let scroll = match el.cold.scroll {
             Some(s) => Some((path.as_str(), s.stick_bottom, bound)),
-            None if el.cold.virtual_estimate.is_some() => None,
             None => scroll,
         };
         let child_group = if el.flags.has(ElFlags::SELECTION_GROUP) { Some(path.as_str()) } else { group };
@@ -313,16 +319,22 @@ impl<S: 'static> Measurement<'_, S> {
             _ => panic!("virtual stack padding must be in points"),
         };
         let list = self.committed_node(path);
+        // A list in a row of another list windows against that list's viewport too.
+        let nested = self.virtuals.keys().any(|p| p.starts_with(scroll_path) && path.strip_prefix(p.as_str()).is_some_and(|r| r.starts_with('/')));
         let v = self.virtuals.entry(path.to_owned()).or_default();
         v.set_estimate(estimate);
         v.scroll_path = scroll_path.to_owned();
         // A retry keeps the viewport the last pass measured; `self.nodes` is the last commit's.
         if self.pass.trusts_estimates() { v.viewport = height; }
-        offset = (offset - v.top).max(0.0);
         let el_pad = el.style.padding();
         v.pad_top = padding(el_pad.top);
         v.pad_bottom = padding(el_pad.bottom);
         v.set_gap(crate::el::virtual_list::gap_y(&el.style));
+        v.nested = nested;
+        // The viewport's own pin moves its offset; the list windows where that leaves it.
+        let held = pinned;
+        let (list_offset, pinned) = v.locate(offset, held);
+        offset = list_offset;
         let source = el.cold.virtual_rows.as_ref();
         let state = playground_host::handler_states_ref(self.state, self.playground);
         if source.is_some() {
@@ -339,7 +351,7 @@ impl<S: 'static> Measurement<'_, S> {
         let mut renamed_children = Vec::new();
         // Most commits keep the same rows; only a change pays for sets of every key.
         let anchor = if same {
-            if pinned { None } else { v.first_visible(offset, |_| true) }
+            if pinned || v.passed() { None } else { v.first_visible(offset, |_| true) }
         } else {
             let mut keys: Vec<_> = match source {
                 Some(rows) => (0..rows.count).map(|i| (rows.key)(state, i).into_owned()).collect(),
@@ -369,13 +381,13 @@ impl<S: 'static> Measurement<'_, S> {
             let slides = !tx.commit.snaps() && !tx.commit.lands() && !tx.relayout && !self.reduced_motion;
             let reorder = keys.len() == v.keys.len() && keys.iter().all(|key| v.has(key))
                 && (slides || list.is_some_and(|list| self.nodes.iter().any(|n| n.vis.offset != [0.0; 2] && n.parent == Some(list))));
-            v.set_keys(keys, self.commits, (!pinned && !reorder).then_some(offset))
+            v.set_keys(keys, self.commits, (!pinned && !reorder && !v.passed()).then_some(offset))
         };
         v.anchor = anchor;
         let delta = v.anchor_delta();
         offset = (offset + delta).max(0.0);
         if let Some(st) = self.path_ids.get(scroll_path).and_then(|id| self.scrolls.get_mut(id)) {
-            if !pinned { st.offset = (st.offset + f64::from(delta)).max(0.0); }
+            if !held { st.offset = (st.offset + f64::from(delta)).max(0.0); }
         }
         // Rows new since the last commit spread over frames, unless this pass is a retry to
         // fill the viewport or a settle. A list's first showing is all new rows: it mounts
@@ -727,7 +739,6 @@ fn windowed_lists<'e>(el: &'e El, path: &str, scroll: Option<(&str, bool, f32)>,
     let bounds = crate::el::virtual_list::child_bounds(&el.style, el.cold.scroll.is_some(), bound, kids);
     let scroll = match el.cold.scroll {
         Some(s) => Some((path, s.stick_bottom, bound)),
-        None if el.cold.virtual_estimate.is_some() => None,
         None => scroll,
     };
     kids.iter().enumerate().filter(|(_, c)| c.flags.has(ElFlags::HAS_VIRTUAL)).all(|(i, child)| {

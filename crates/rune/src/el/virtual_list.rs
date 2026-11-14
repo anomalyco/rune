@@ -60,6 +60,17 @@ pub(crate) struct VirtualList {
     pub scroll_path: String,
     pub viewport: f32,
     pub top: f32,
+    /// The list lies in a row of another virtual list with the same scroll viewport (an open
+    /// section of a long list, itself long): it windows against that viewport where the row
+    /// places it ([`VirtualList::top`]), and only that viewport, not this list, is pinned to its
+    /// end ([`VirtualList::locate`]).
+    pub nested: bool,
+    /// How far the viewport's content runs on under a nested list, as last laid out: where its
+    /// window stands while the viewport is pinned to its end.
+    pub tail: f32,
+    /// A nested list wholly above the viewport's top holds no reader, so it anchors nothing:
+    /// its rows changing height move the rows under it, which the list around it anchors.
+    passed: bool,
     pub pad_top: f32,
     pub pad_bottom: f32,
     gap: f32,
@@ -260,6 +271,36 @@ impl VirtualList {
         anchor
     }
 
+    /// The list's own scroll offset, and whether its window is pinned to its end, for its
+    /// viewport scrolled to `scroll` (`pinned`: the viewport holds its end). A nested list
+    /// is never pinned itself: it stands where the viewport's end leaves it.
+    pub fn at(&self, scroll: f32, pinned: bool) -> (f32, bool) {
+        if !self.nested {
+            return ((scroll - self.top).max(0.0), pinned);
+        }
+        let offset = if pinned { self.extent() + self.tail - self.viewport } else { scroll - self.top };
+        (offset.max(0.0), false)
+    }
+
+    /// [`VirtualList::at`], noting whether a nested list lies wholly above the viewport's top
+    /// and so anchors nothing (`select`, `hold` and the commits that anchor the reader).
+    pub fn locate(&mut self, scroll: f32, pinned: bool) -> (f32, bool) {
+        let at = self.at(scroll, pinned);
+        self.passed = self.nested && at.0 >= self.extent();
+        at
+    }
+
+    /// Whether the list is nested and wholly above the viewport's top, so it anchors nothing
+    /// ([`VirtualList::locate`]).
+    pub fn passed(&self) -> bool {
+        self.passed
+    }
+
+    /// The rows' extent, their padding included.
+    fn extent(&self) -> f32 {
+        self.pad_top + self.prefix(self.keys.len()) + self.pad_bottom
+    }
+
     pub fn set_estimate(&mut self, estimate: f32) {
         if estimate != self.estimate {
             self.estimate = estimate;
@@ -383,7 +424,7 @@ impl VirtualList {
         (start, end) = (lo, hi);
         // A row still at its estimate grows or shrinks once measured; anchoring to it would move
         // the measured rows below, such as the reader's row under a page that just landed.
-        self.anchor = if pinned { None } else { self.anchor_at(offset) };
+        self.anchor = if pinned || self.passed { None } else { self.anchor_at(offset) };
         if pinned { start = start.min(end.saturating_sub(PINNED_ROWS)); }
         end = end.max(start);
         self.place(start..end);
@@ -393,7 +434,7 @@ impl VirtualList {
     /// [`select`](Self::select) does, and re-derives the space above and below them.
     pub fn hold(&mut self, offset: f32, pinned: bool) {
         let offset = if pinned { self.max_offset() } else { offset.min(self.max_offset()) };
-        self.anchor = if pinned { None } else { self.anchor_at(offset) };
+        self.anchor = if pinned || self.passed { None } else { self.anchor_at(offset) };
         let len = self.keys.len();
         self.place(self.range.start.min(len)..self.range.end.min(len));
     }
