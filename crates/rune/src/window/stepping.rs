@@ -99,7 +99,7 @@ impl<S: 'static> Host<S> {
     /// piece a turn and none while input waits (`post_frame`); elsewhere now.
     fn ready_owed(&mut self) {
         #[cfg(target_os = "windows")]
-        { self.chores.ready = true; }
+        { self.chores = post_frame::Chores::Ready; }
         #[cfg(not(target_os = "windows"))]
         self.run_on_ready();
     }

@@ -5,12 +5,15 @@
 //! them. Between pieces winit takes what's in the queue, and the frame it asks for comes first.
 use super::*;
 
-/// The pieces still owed: the app's `on_ready`, then the window's hooks. The GPU's start and the
-/// adapter are owed while their own states say so (`GpuJob::Waiting`, `A11yStart::AfterFirstFrame`).
+/// The window's own pieces still owed: the app's `on_ready`, then the window's hooks, then none.
+/// The GPU's start and the adapter are owed while their own states say so (`GpuJob::Waiting`,
+/// `A11yStart::AfterFirstFrame`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(super) struct Chores {
-    pub(super) ready: bool,
-    pub(super) hooks: bool,
+pub(super) enum Chores {
+    #[default]
+    Done,
+    Ready,
+    Hooks,
 }
 
 /// Whether a key or mouse message is waiting in this thread's queue, so the next piece waits for
@@ -28,26 +31,28 @@ pub(super) fn input_waiting() -> bool {
         }
     })
 }
+
 impl<S: 'static> Host<S> {
     /// One owed piece, unless input waits; true while more are owed, so the loop turns again.
     pub(super) fn post_frame_turn(&mut self) -> bool {
         if !self.post_frame_owed() { return false; }
         if input_waiting() { return true; }
-        if self.chores.ready {
-            self.chores = Chores { ready: false, hooks: true };
-            self.run_on_ready();
-        } else if self.chores.hooks {
-            self.chores.hooks = false;
-            self.run_ready_hooks();
-        } else if self.gpu_owed() {
-            self.cpu_idle();
-        } else {
-            self.a11y_after_frame();
+        match self.chores {
+            Chores::Ready => {
+                self.chores = Chores::Hooks;
+                self.run_on_ready();
+            }
+            Chores::Hooks => {
+                self.chores = Chores::Done;
+                self.run_ready_hooks();
+            }
+            Chores::Done if self.gpu_owed() => self.cpu_idle(),
+            Chores::Done => self.a11y_after_frame(),
         }
         self.post_frame_owed()
     }
 
     fn post_frame_owed(&self) -> bool {
-        self.chores.ready || self.chores.hooks || self.gpu_owed() || self.a11y_owed()
+        self.chores != Chores::Done || self.gpu_owed() || self.a11y_owed()
     }
 }
