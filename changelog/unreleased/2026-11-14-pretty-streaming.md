@@ -1,0 +1,1 @@
+- **Markdown: a reply still streaming in wraps prettily too, as Desktop's does.** The block that grows took greedy lines until the stream ended and then re-broke, so its last words could jump a line seconds after they arrived. Chromium keeps `text-wrap-style: pretty` on it: a word moves, if it does, as the text that moves it arrives, and nothing moves when the stream ends.
