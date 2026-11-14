@@ -351,6 +351,7 @@ fn same_handlers(
         on_drag,
         drag_out,
         drag_threshold,
+        touch_at_once,
         on_drag_start,
         on_drag_end,
         drop,
@@ -396,6 +397,7 @@ fn same_handlers(
         && opt_rc_eq(&a.on_drag, on_drag)
         && opt_rc_eq(&a.drag_out, drag_out)
         && a.drag_threshold == *drag_threshold
+        && a.touch_at_once == *touch_at_once
         && opt_rc_eq(&a.on_drag_start, on_drag_start)
         && opt_rc_eq(&a.on_drag_end, on_drag_end)
         && same_drop(&a.drop, drop)

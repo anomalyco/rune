@@ -93,6 +93,12 @@ impl<S: 'static> Runtime<S> {
         let scroll = self.touch_scroll_start(x, y);
         self.pointer_move(x, y);
         self.pointer_down(x, y);
+        // `El::touch_drags_at_once`: a drag from the first move, and no long press to cut it.
+        if self.press_drags_at_once() {
+            self.touch_scroll_end(scroll, 0.0);
+            self.touch.finger = Some(Finger { id, origin: (x, y), last: 0.0, at: time, velocity: 0.0, mode: Mode::Drag, hold_due: f64::INFINITY });
+            return;
+        }
         let hold_due = self.now_clock() + LONG_PRESS;
         self.wake_at(hold_due);
         self.touch.finger = Some(Finger { id, origin: (x, y), last: 0.0, at: time, velocity: 0.0, mode: Mode::Pending { scroll }, hold_due });
@@ -153,6 +159,12 @@ impl<S: 'static> Runtime<S> {
         self.secondary_down(x, y);
         self.secondary_up(x, y);
         if let Some(f) = self.touch.finger.as_mut() { f.mode = Mode::Menu; }
+    }
+
+    /// Whether the held press is on an `El::touch_drags_at_once` element.
+    fn press_drags_at_once(&self) -> bool {
+        let Some(path) = self.press.path() else { return false };
+        self.live_index(path).is_some_and(|i| self.nodes[i].handlers.touch_at_once && self.nodes[i].handlers.on_drag.is_some())
     }
 
     /// Whether the held press is on an element that drags, so a finger drags it, not the page.

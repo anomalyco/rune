@@ -1,0 +1,1 @@
+- `El::touch_drags_at_once()`: a finger on an `on_drag` element drags it from where it lands, with no touch slop and no long press, as a game's paddle or a handle that moves with the finger wants.
