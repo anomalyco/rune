@@ -1,11 +1,14 @@
-//! Inline code that keeps inside the line box its paragraph sets. A monospace span at the
-//! text's line height has a box as tall as the strut's, but placed by its own ascent and
-//! descent: at 13 px IBM Plex Mono's round to 13 and 4 where Inter's round to 13 and 3, so the
-//! code's box reached a pixel under the strut's and a 13/16 line with code in it stood 17 tall,
-//! a markdown table row 38 where Chromium's stands 36. Chromium's line keeps the strut's height
-//! (a cell of 13/16 text with inline code is 16 tall), so each such span's line height is cut
-//! until its box fits in the strut, as Parley lays boxes out with quantizing. Glyphs stay on the
-//! shared baseline; only the box moves.
+//! The spaces that pad inline code keep inside the line box their paragraph sets.
+//!
+//! Inline code itself grows the line as Blink's does: Parley lays each run's box out with
+//! quantizing (`BoxMetrics::from_font`: ascent and descent rounded to device px, the half-leading
+//! over the text floored), and the line box is the largest reach above the baseline plus the
+//! largest below. That is Chromium's rule to the device pixel: at 13/16 IBM Plex Mono reaches 4
+//! under the baseline where Inter reaches 3, so a table cell with code is 17 tall at 1x and 2x
+//! (33 device px) and 16 at 1.25x, 1.5x and 1.875x, and a 14/22.4 paragraph with code is 22.933
+//! at 1.875x (`operation-detox` `proof/layout-cards/icline/`). The smaller spaces that stand for
+//! the code's CSS padding have no box in a browser, so theirs is cut until it fits in the strut.
+//! Glyphs stay on the shared baseline; only the box moves.
 use std::ops::Range;
 
 use parley::Layout;
@@ -13,16 +16,15 @@ use parley::Layout;
 use super::{Ink, Span};
 use crate::tok::TextStyle;
 
-/// Line heights (points) for the runs of `layout`'s monospace spans, and of the smaller spaces
-/// padding them, whose box would stand out of the strut of proportional `style` text, by byte
-/// range. Code larger than the text keeps its own box, which may grow the line as a browser's does.
+/// Line heights (points) for the runs of the smaller spaces padding `layout`'s monospace spans
+/// whose box would stand out of the strut of proportional `style` text, by byte range.
 pub(super) fn mono_fits(layout: &Layout<Ink>, text: &str, spans: &[Span], style: TextStyle, scale: f32, strut: (f32, f32)) -> Vec<(Range<usize>, f32)> {
     if !spans.iter().any(|s| s.mono) || style.size <= 0.0 || scale <= 0.0 {
         return Vec::new();
     }
-    // Code, and the smaller spaces that stand for its padding: they make room and show nothing.
-    let room = |s: &Span| s.size.is_some_and(|z| z < style.size) && text.get(s.start as usize..s.end as usize).is_some_and(|t| !t.is_empty() && t.chars().all(char::is_whitespace));
-    let span_at = |at: usize| spans.iter().rev().find(|s| (s.mono || room(s)) && (s.start as usize) <= at && at < s.end as usize);
+    // The smaller spaces that stand for the code's padding: they make room and show nothing.
+    let room = |s: &Span| !s.mono && s.size.is_some_and(|z| z < style.size) && text.get(s.start as usize..s.end as usize).is_some_and(|t| !t.is_empty() && t.chars().all(char::is_whitespace));
+    let span_at = |at: usize| spans.iter().rev().find(|s| room(s) && (s.start as usize) <= at && at < s.end as usize);
     let runs = || layout.lines().flat_map(|line| line.runs().collect::<Vec<_>>());
     // The strut: the text's own font at its size (`strut` is its ascent and descent per em).
     let (ascent, descent) = (strut.0 * style.size * scale, strut.1 * style.size * scale);

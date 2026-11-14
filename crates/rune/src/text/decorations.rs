@@ -96,11 +96,17 @@ impl TextSystem {
                         .find(|&&(ra, rb, _, rw)| rw > 0.0 && ra < s.end && s.start < rb)
                         .map(|&(_, _, c, rw)| (c, rw * scale));
                     let pad = s.bg_pad * scale;
-                    // Balanced on the cap height (not a mono face's tall line box), on whole device pixels.
-                    let cap = gr.run().font_metrics().cap_height.unwrap_or(gr.run().font_size() * 0.7);
+                    // Inline code's box is its font's content area, as a browser paints an inline
+                    // element's background: ascent over the baseline and descent under it, each
+                    // rounded to device px. Other spans balance on the cap height. Whole device pixels.
+                    let fm = gr.run().font_metrics();
+                    let cap = fm.cap_height.unwrap_or(gr.run().font_size() * 0.7);
                     let base = origin[1] + m.baseline;
-                    let top = (base - cap * 1.35).round();
-                    let bot = (base + cap * 0.55).round();
+                    let (top, bot) = if s.mono {
+                        (base.round() - fm.ascent.round(), base.round() + fm.descent.round())
+                    } else {
+                        ((base - cap * 1.35).round(), (base + cap * 0.55).round())
+                    };
                     let (l, r) = ((x0 - pad).round(), (x0 + w + pad).round());
                     let rect = [l, top, r - l, bot - top];
                     // Touching runs with the same background and ring on one line (a span split by
