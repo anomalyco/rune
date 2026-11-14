@@ -94,6 +94,9 @@ impl Rewind {
     /// Bytes the recording holds, roughly.
     pub fn bytes(&self) -> usize { self.lock().bytes() }
 
+    /// A window at rest (`window::rest`): what the recording no longer refers to goes.
+    pub(crate) fn rest(&self) { self.lock().rest(); }
+
     pub(crate) fn lock(&self) -> MutexGuard<'_, tape::Tape> {
         self.tape.lock().unwrap_or_else(PoisonError::into_inner)
     }

@@ -123,6 +123,20 @@ impl Tape {
         }
     }
 
+    /// A window at rest: forgets the elements nothing kept refers to now, not at the next
+    /// `compact_at` (each session or terminal opened and closed adds its own, and frames past
+    /// the window have gone into the base since), and gives back the space the ring grew to.
+    pub(crate) fn rest(&mut self) {
+        if self.paused { return; }
+        self.compact();
+        self.compact_at = (self.names.len() * 2).max(COMPACT_AT);
+        self.ids.shrink_to_fit();
+        self.words.shrink_to_fit();
+        self.frames.shrink_to_fit();
+        self.present.shrink_to_fit();
+        self.next_present.shrink_to_fit();
+    }
+
     /// Forgets the elements nothing kept refers to: not on screen, with no state before the
     /// oldest kept frame, and in no kept frame. Without it every element a window ever showed
     /// keeps its name and state for good (each session opened and closed adds its own), and
