@@ -1943,3 +1943,12 @@ pub(crate) fn ib3_slow(what: &str, t: std::time::Instant, extra: usize) {
         eprintln!("ib3-hal: {what} {us} us ({extra:x}) on {:?}", std::thread::current().name());
     }
 }
+
+/// IB-3 measuring: logs a hal call that took 300 µs or more when dropped (`IB3_HAL_LOG`).
+pub(crate) struct Ib3Guard(&'static str, std::time::Instant);
+impl Ib3Guard {
+    pub(crate) fn new(what: &'static str) -> Self { Self(what, std::time::Instant::now()) }
+}
+impl Drop for Ib3Guard {
+    fn drop(&mut self) { ib3_slow(self.0, self.1, 0) }
+}
