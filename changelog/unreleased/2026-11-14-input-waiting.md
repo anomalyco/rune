@@ -1,0 +1,1 @@
+- **`Tx::input_waiting`: in `poll`, whether the user's input waits for this frame's handlers.** Work that can wait a frame (a background start, a cache warm-up) can wait, so the input's frame comes without it. False outside `poll`.
