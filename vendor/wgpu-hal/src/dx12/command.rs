@@ -436,7 +436,9 @@ impl crate::CommandEncoder for super::CommandEncoder {
     }
     unsafe fn end_encoding(&mut self) -> Result<super::CommandBuffer, crate::DeviceError> {
         let raw = self.list.take().unwrap();
+        let t = std::time::Instant::now();
         unsafe { raw.Close() }.into_device_result("GraphicsCommandList::close")?;
+        super::ib3_slow("Close", t, 0);
         Ok(super::CommandBuffer { raw })
     }
     unsafe fn reset_all<I: Iterator<Item = super::CommandBuffer>>(&mut self, command_buffers: I) {
@@ -1244,7 +1246,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
             self.reset_signature(&pipeline.layout);
         };
 
-        unsafe { list.SetPipelineState(&pipeline.raw) };
+        { let t = std::time::Instant::now(); unsafe { list.SetPipelineState(&pipeline.raw) }; super::ib3_slow("SetPipelineState", t, windows::core::Interface::as_raw(&pipeline.raw) as usize) }
         unsafe { list.IASetPrimitiveTopology(pipeline.topology) };
 
         for (index, (vb, &stride)) in self
@@ -1331,6 +1333,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
         first_instance: u32,
         instance_count: u32,
     ) {
+        let t = std::time::Instant::now();
         unsafe { self.prepare_draw(first_vertex as i32, first_instance) };
         unsafe {
             self.list.as_ref().unwrap().DrawInstanced(
@@ -1340,6 +1343,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
                 first_instance,
             )
         }
+        super::ib3_slow("DrawInstanced", t, instance_count as usize);
     }
     unsafe fn draw_indexed(
         &mut self,
