@@ -20,6 +20,11 @@ use crate::render::Instance;
 
 /// Above this share of the window, a frame draws all of it.
 const MOST: f32 = 0.6;
+/// Past this many instances the new list has that the old doesn't, a frame draws all of it without
+/// looking for where they are: a scroll moves every row, and checking the order of thousands of
+/// instances and bounding them only to find they cover the window costs a list's frame hundreds of
+/// microseconds. A typed glyph, a streamed line or a hover changes far fewer.
+const MANY: usize = 256;
 /// Rectangles a change is gathered into, at most.
 pub(super) const RECTS: usize = crate::render::MAX_RECTS;
 
@@ -40,6 +45,8 @@ pub(super) enum Area {
     /// Everything (or not known).
     #[default]
     All,
+    /// More than `MANY` instances.
+    Many,
     Rects(Vec<[u32; 4]>),
 }
 
@@ -61,10 +68,11 @@ impl Damage {
             (_, false) => (Area::All, "new size or colour"),
             _ => {
                 let now = changed(&self.last, instances, size, &mut self.scratch);
-                self.seen = match &now { Area::Rects(r) => r.iter().copied().reduce(join), Area::All => None };
+                self.seen = match &now { Area::Rects(r) => r.iter().copied().reduce(join), Area::All | Area::Many => None };
                 match now {
                     Area::Rects(r) if r.iter().map(|r| area(*r)).sum::<u32>() as f32 > MOST * (size.0 * size.1) as f32 => (Area::All, "most of it changed"),
                     Area::All => (Area::All, "reordered"),
+                    Area::Many => (Area::All, "many changed"),
                     other => (other, ""),
                 }
             }
@@ -73,7 +81,7 @@ impl Damage {
         self.last.extend_from_slice(instances);
         self.shape = Some((size, clear));
         match now {
-            Area::All => Plan::All(why),
+            Area::All | Area::Many => Plan::All(why),
             // Nothing changed: one pixel keeps the present, which DWM composes again as is.
             Area::Rects(r) if r.is_empty() => Plan::Part { draw: vec![[0, 0, 1, 1]], present: vec![[0, 0, 1, 1]] },
             Area::Rects(r) => Plan::Part {
@@ -141,7 +149,13 @@ fn changed(old: &[Instance], new: &[Instance], size: (u32, u32), s: &mut Scratch
     s.new.clear();
     s.new.extend(new.iter().map(hash));
     for (i, h) in s.old.iter().enumerate() { s.counts.entry(*h).or_insert((0, i)).0 += 1; }
-    for (i, h) in s.new.iter().enumerate() { s.counts.entry(*h).or_insert((0, old.len() + i)).0 -= 1; }
+    let mut added = 0;
+    for (i, h) in s.new.iter().enumerate() {
+        let count = &mut s.counts.entry(*h).or_insert((0, old.len() + i)).0;
+        *count -= 1;
+        if *count < 0 { added += 1; }
+        if added > MANY { return Area::Many; }
+    }
     // The instances both lists have, in order: drawn in another order, anything may have changed.
     let counts = &s.counts;
     if !s.old.iter().filter(|h| counts[h].0 == 0).eq(s.new.iter().filter(|h| counts[h].0 == 0)) { return Area::All; }
