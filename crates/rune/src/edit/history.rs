@@ -619,6 +619,8 @@ fn snapshot_from(v: &serde_json::Value) -> Option<Snapshot> {
     let m = meta_from(v)?;
     if !meta_holds(&m, &text) { return None; }
     Some(Snapshot { text: Arc::new(Zeroizing::new(text)), anchor: m.anchor, focus: m.focus, marks: m.marks, blocks: m.blocks, soft_breaks: m.soft_breaks })
-}#[cfg(test)]
+}
+
+#[cfg(test)]
 #[path = "history_tests.rs"]
 mod tests;

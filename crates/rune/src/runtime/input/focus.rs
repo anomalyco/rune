@@ -260,6 +260,7 @@ impl<S: 'static> Runtime<S> {
         for (p, input) in &mut self.virtual_inputs {
             changed |= sync_input_focus(input, states!(self), path.as_deref() == Some(p.as_str()));
         }
+        let shown = (self.focus.keyboard(), self.focus.shown());
         for effect in self.focus.step(focus_machine::FocusEvent::Set { path, keyboard }) {
             match effect {
                 focus_machine::FocusEffect::Moved => {
@@ -275,7 +276,10 @@ impl<S: 'static> Runtime<S> {
         }
         self.sync_side_focus();
         // A hover group keyboard focus enters or leaves hovers or rests now (`El::hover_group`).
-        if self.nodes.iter().any(|n| n.vis_flags.hover_group()) {
+        // Focus that stayed where it was, shown as it was (every commit's focus pass, most of
+        // the time), moves no group: the frame's own interaction pass sees the rest.
+        let regrouped = moved || shown != (self.focus.keyboard(), self.focus.shown());
+        if regrouped && self.nodes.iter().any(|n| n.vis_flags.hover_group()) {
             changed |= self.update_interaction(None);
         }
         changed
