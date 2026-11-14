@@ -66,8 +66,9 @@ pub(super) fn motion(p: &Presented, rest: Option<Rect>, s: f32, anchored: bool, 
 }
 
 /// How far a gliding box's top (device px) sits below its nearest whole pixel: its glyphs lay
-/// out from that pixel, as at rest, and move down by this ([`crate::text::TextSystem::set_glide`]),
-/// so they keep their place against the box instead of stepping a pixel at a time.
+/// out from that pixel (moved by the fraction its resting box sits off the grid, as at rest) and
+/// move down by this ([`crate::text::TextSystem::set_glide`]), so they keep their place against
+/// the box instead of stepping a pixel at a time, and its last frame lays out as rest does.
 pub(super) fn text_glide(top: f32) -> f32 {
     let g = top - top.round();
     if g.abs() < 1.0 / 64.0 { 0.0 } else { g }
@@ -156,6 +157,14 @@ pub(super) struct Parent {
     rest: Rest,
     now: Rest,
     left: [f32; 4],
+}
+
+impl Parent {
+    /// How far its exact resting top-left sits from where it rests snapped (device px), `rigid`
+    /// as it was snapped with: where a text inside lays out from, at rest and through a glide alike.
+    pub(super) fn exact_off(&self, rigid: [f32; 2]) -> [f32; 2] {
+        core::array::from_fn(|a| self.rest.exact[a] + rigid[a] - self.rest.at[a] - round(rigid[a]))
+    }
 }
 
 /// The glides of the nodes moving now and the scaled layers, owned by the runtime.

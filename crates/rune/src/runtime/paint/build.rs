@@ -1133,6 +1133,13 @@ impl<S: 'static> Runtime<S> {
                     paint_content::LeafBox {
                         r,
                         r_exact,
+                        // Its exact resting place against its snapped one, inside its containment's
+                        // own rounding (`LeafBox::exact_off`).
+                        exact_off: {
+                            let o = snap_rest.map_or([0.0; 2], |p| p.exact_off(rigid));
+                            let c = pinh.snap.contain.map(|v| v * s);
+                            [o[0] + (c[0] + 0.5).floor() - c[0], o[1] + (c[1] + 0.5).floor() - c[1]]
+                        },
                         raw_size: [raw_edges[2] - raw_edges[0], raw_edges[3] - raw_edges[1]],
                         contain: pinh.snap.contain.map(|v| v * s),
                         radii,

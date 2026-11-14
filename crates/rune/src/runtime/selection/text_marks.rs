@@ -79,9 +79,15 @@ pub(super) fn push_mark(out: &mut Vec<Instance>, layout: &Layout<Ink>, content: 
     for line in marked.split_inclusive('\n') {
         let (from, to) = laid(at, at + line.trim_end_matches(['\n', '\r']).len());
         for (bb, _) in crate::text::range_boxes(layout, from, to, true) {
-            let rect = [origin[0] + bb.x0 as f32 * k, origin[1] + bb.y0 as f32 * k, (bb.x1 - bb.x0) as f32 * k, (bb.y1 - bb.y0) as f32 * k];
-            out.push(rect_inst(rect, fill, 0.0, clip, fade));
+            out.push(rect_inst(pixel_rect(origin, bb, k), fill, 0.0, clip, fade));
         }
         at += line.len();
     }
+}
+
+/// A highlight's box from text at `origin` drawn `k` times its size, its edges on the device grid,
+/// as Chromium snaps a selection's rect: hard-edged wherever the text's origin falls.
+pub(super) fn pixel_rect(origin: [f32; 2], bb: parley::BoundingBox, k: f32) -> [f32; 4] {
+    let [x0, y0, x1, y1] = [origin[0] + bb.x0 as f32 * k, origin[1] + bb.y0 as f32 * k, origin[0] + bb.x1 as f32 * k, origin[1] + bb.y1 as f32 * k].map(f32::round);
+    [x0, y0, x1 - x0, y1 - y0]
 }

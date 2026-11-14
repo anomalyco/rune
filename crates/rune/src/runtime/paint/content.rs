@@ -4,6 +4,9 @@ use super::*;
 pub(super) struct LeafBox {
     pub r: [f32; 4],
     pub r_exact: [f32; 4],
+    /// Where its exact box rests against where its snapped box rests (device px), its paint
+    /// containment's rounding in: Blink's text lays out from the exact place.
+    pub exact_off: [f32; 2],
     pub raw_size: [f32; 2],
     /// The paint containment's origin above (`El::paint_contained`), device px: what draws
     /// from its exact box's origin rounds against it, as Blink rounds inside it.
@@ -53,6 +56,7 @@ impl<S: 'static> Runtime<S> {
         let LeafBox {
             r,
             r_exact,
+            exact_off,
             raw_size,
             contain,
             radii,
@@ -236,10 +240,24 @@ impl<S: 'static> Runtime<S> {
             }
             let direct = self.text.emit() == crate::text::outline::Emit::Outline;
             let ins = n.inset.map(|v| v * zk * s);
+            // Text lays out from its box's place moved by how far its exact resting box sits from its
+            // snapped one (inside its paint containment), as Blink paints a text fragment from its
+            // exact place: its glyphs then round as Skia rounds them (the baseline half up, pens to
+            // a quarter pixel) where Chromium has them, rather than from a box already snapped. A
+            // gliding box carries its rest's offset, so the frame a glide ends or
+            // a flight lands places glyphs exactly as the resting frame after it. A field keeps its
+            // snapped box, which its caret and selection share.
+            let zr = if scale_motion == ScaleMotion::Still && (sc - 1.0).abs() < 1e-5 && n.input.is_none() {
+                let by = exact_off;
+                [zr[0] + by[0], zr[1] + by[1], zr[2] + by[0], zr[3] + by[1]]
+            } else {
+                zr
+            };
             let (x0, x1) = (zr[0] + ins[0], zr[2] - ins[2]);
             let mut origin = [text_x(spec, x0, x1, text_width(flow.full_width() * tk), flow.flow()), zr[1] + ins[1]];
-            // A gliding box's glyphs and decorations lay out from its nearest whole pixel and move the rest.
-            // Within a 64th of a pixel they don't move, but still lay out from that pixel, as at rest.
+            // A gliding box's glyphs and decorations lay out from its nearest whole pixel (plus its rest's
+            // fraction, above) and move the rest. Within a 64th of a pixel they don't move, but still lay
+            // out from that pixel, as at rest.
             let (glide, off) = if gliding && cover.is_none() && scale_motion == ScaleMotion::Still {
                 ([pixel_snap::text_glide(r[0]), pixel_snap::text_glide(r[1])], [r[0] - r[0].round(), r[1] - r[1].round()])
             } else {
