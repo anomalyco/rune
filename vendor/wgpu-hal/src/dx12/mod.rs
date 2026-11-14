@@ -617,6 +617,10 @@ struct SwapChain {
     size: wgt::Extent3d,
     /// Rune: what the next present changed (Surface::set_present_rects); empty is all of it.
     dirty: Vec<Foundation::RECT>,
+    /// Rune: the buffers' own size, which size (the source size the window shows) fits in.
+    buffers: wgt::Extent3d,
+    /// Rune: what else a configure may change without resizing the buffers.
+    kept: (u32, wgt::PresentMode, wgt::TextureFormat, wgt::CompositeAlphaMode),
 }
 
 enum SurfaceTarget {
@@ -1511,15 +1515,32 @@ impl crate::Surface for Surface {
         // For high latency extra buffers seems excessive, so go with a minimum of 3 and beyond that add 1.
         let swap_chain_buffer = (config.maximum_frame_latency + 1).min(16);
 
+        // Rune: a new size the buffers already hold is a new source size, not ResizeBuffers (which waits
+        // for the GPU and makes new buffers: most of a live resize step on an Iris Xe). Buffers made by a
+        // resize have headroom (a multiple of 256 px) so the next steps fit.
+        let kept = (config.maximum_frame_latency, config.present_mode, config.format, config.composite_alpha_mode);
+        if let Some(sc) = self.swap_chain.write().as_mut() {
+            let fits = sc.kept == kept && sc.acquired_count == 0
+                && config.extent.width <= sc.buffers.width && config.extent.height <= sc.buffers.height
+                && config.extent.width + 512 > sc.buffers.width && config.extent.height + 512 > sc.buffers.height;
+            if fits && unsafe { sc.raw.SetSourceSize(config.extent.width, config.extent.height) }.is_ok() {
+                sc.size = config.extent;
+                return Ok(());
+            }
+        }
+        let headroom = |n: u32| n.div_ceil(256) * 256;
+        let mut buffers = config.extent;
         let swap_chain = match self.swap_chain.write().take() {
             //Note: this path doesn't properly re-initialize all of the things
             Some(sc) => {
                 let raw = unsafe { sc.release_resources() };
+                buffers.width = headroom(config.extent.width);
+                buffers.height = headroom(config.extent.height);
                 let result = unsafe {
                     raw.ResizeBuffers(
                         swap_chain_buffer,
-                        config.extent.width,
-                        config.extent.height,
+                        buffers.width,
+                        buffers.height,
                         non_srgb_format,
                         flags,
                     )
@@ -1691,6 +1712,11 @@ impl crate::Surface for Surface {
         unsafe { swap_chain.SetMaximumFrameLatency(config.maximum_frame_latency) }
             .into_device_result("SetMaximumFrameLatency")?;
 
+        if buffers != config.extent {
+            unsafe { swap_chain.SetSourceSize(config.extent.width, config.extent.height) }
+                .into_device_result("SetSourceSize")?;
+        }
+
         let waitable = match device.options.latency_waitable_object {
             wgt::Dx12UseFrameLatencyWaitableObject::None => None,
             wgt::Dx12UseFrameLatencyWaitableObject::Wait
@@ -1716,6 +1742,8 @@ impl crate::Surface for Surface {
             format: config.format,
             size: config.extent,
             dirty: Vec::new(),
+            buffers,
+            kept,
         });
 
         Ok(())
