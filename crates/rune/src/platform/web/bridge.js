@@ -31,9 +31,20 @@ function browserShortcut(event) {
     if (event.key === 'F5' || event.key === 'F12') return true;
     if (!chord) return false;
     const k = event.key.toLowerCase();
+    // With Alt only the developer tools' chords are the browser's: Ctrl+Alt+W and the like are
+    // the app's (its Close tab, where the browser keeps Ctrl+W).
+    if (event.altKey) return ['i', 'j', 'u'].includes(k);
+    // An installed app's window gives the page every key first (Chromium: "In Apps mode, no keys
+    // are reserved"), and closes itself on a Ctrl+W the page lets through: there the tab, window
+    // and new-session keys are the app's, as in its desktop build.
+    if (['t', 'w', 'n'].includes(k) && appWindow()) return false;
     // Leave copy ('c') un-prevented too so the browser fires its synchronous `copy` event.
-    return ['c', 'r', 'l', 't', 'w', 'n', 'f', 'g', '=', '+', '-', '0'].includes(k)
-        || (event.altKey && ['i', 'j', 'u'].includes(k));
+    return ['c', 'r', 'l', 't', 'w', 'n', 'f', 'g', '=', '+', '-', '0'].includes(k);
+}
+
+function appWindow() {
+    return navigator.standalone === true
+        || matchMedia('(display-mode: standalone), (display-mode: window-controls-overlay), (display-mode: minimal-ui)').matches;
 }
 
 // Keys that scroll a page when nothing in Rune has focus.
@@ -734,6 +745,13 @@ export function syncA11y(h, json) {
         if (tag === 'button') {
             if (item.x === true || item.x === false) el.setAttribute('aria-expanded', String(item.x));
             else el.removeAttribute('aria-expanded');
+            // A control's role and states (a palette's option, a tab, a switch): `control_role`.
+            const states = [['role', item.o], ['aria-selected', item.se === undefined ? undefined : String(item.se)], ['aria-checked', item.c],
+                ['aria-posinset', item.n ? String(item.n[0]) : undefined], ['aria-setsize', item.n ? String(item.n[1]) : undefined]];
+            for (const [name, value] of states) {
+                if (value === undefined) el.removeAttribute(name);
+                else if (el.getAttribute(name) !== value) el.setAttribute(name, value);
+            }
         }
         if (item.k === 'group' || item.k === 'image') {
             if (item.t) el.setAttribute('aria-label', item.t); else el.removeAttribute('aria-label');
