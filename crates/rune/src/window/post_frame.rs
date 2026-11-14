@@ -26,13 +26,15 @@ impl<S: 'static> Host<S> {
     /// One owed piece, unless input waits; true while more are owed, so the loop turns again.
     pub(super) fn post_frame_turn(&mut self) -> bool {
         if !self.post_frame_owed() { return false; }
-        if input_waiting() { return true; }
+        if input_waiting() { crate::marks::ib3_pass("pf.deferred"); return true; }
         if self.chores.ready {
             self.chores = Chores { ready: false, hooks: true };
             self.run_on_ready();
+            crate::marks::mark("pf.ready");
         } else if self.chores.hooks {
             self.chores.hooks = false;
             self.run_ready_hooks();
+            crate::marks::mark("pf.hooks");
         } else if self.gpu_owed() {
             self.cpu_idle();
         } else {

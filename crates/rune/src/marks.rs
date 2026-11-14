@@ -42,7 +42,12 @@ pub fn ib3_pass(name: &'static str) {
     if k <= 6 { mark(Box::leak(format!("{name}#{k}").into_boxed_str())); }
 }
 
+/// IB-3 measuring: whether `frame.first.copied` has been marked.
+pub(crate) fn noted_first_frame() -> bool { FIRST_COPIED.load(Ordering::Relaxed) }
+static FIRST_COPIED: AtomicBool = AtomicBool::new(false);
+
 pub fn mark(name: &'static str) {
+    if name == "frame.first.copied" { FIRST_COPIED.store(true, Ordering::Relaxed); }
     let now = Instant::now();
     let mut book = book();
     if !book.marks.iter().any(|(n, _)| *n == name) {

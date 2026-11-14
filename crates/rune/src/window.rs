@@ -897,8 +897,11 @@ impl Drop for UiBusy {
         use std::sync::atomic::{AtomicU32, Ordering};
         static N: AtomicU32 = AtomicU32::new(0);
         let us = self.1.elapsed().as_micros();
-        if us < 300 { return; }
+        // Every callback once the first frame is up (IB3_ALL_UI), else those over 300 us.
+        static ALL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let all = *ALL.get_or_init(|| std::env::var_os("IB3_ALL_UI").is_some());
+        if us < 300 && !(all && crate::marks::noted_first_frame()) { return; }
         let n = N.fetch_add(1, Ordering::Relaxed);
-        if n < 300 { crate::marks::mark(Box::leak(format!("ui.{n:03}.{}.{us}", self.0).into_boxed_str())); }
+        if n < 400 { crate::marks::mark(Box::leak(format!("ui.{n:03}.{}.{us}", self.0).into_boxed_str())); }
     }
 }
