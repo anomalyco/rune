@@ -76,7 +76,8 @@ impl<S: 'static> Runtime<S> {
         // Landing mounts the virtual rows there, which measure and can move the end it clamped to.
         for _ in 0..3 {
             if !self.virtual_window_changed() { break; }
-            self.commit(&Tx::default());
+            // A jump is at once, and so are the rows it mounts: none fades in where it lands.
+            self.commit(&Tx { commit: Commit::Instant, ..Tx::default() });
             self.step_scroll(0.0);
             for (j, key, at) in &anchors {
                 if let Some((_, to)) = self.anchor_offset(key, *at) { jumps[*j].2 = to; }
@@ -110,15 +111,25 @@ impl<S: 'static> Runtime<S> {
 
     /// The vertical viewport around the element or `TextHighlight` `key` and the offset that puts
     /// its top `at` points below the viewport's top, before clamping.
+    /// A virtual row not mounted yet stands where its list's estimates put it: the jump there
+    /// mounts it, and is placed again from its laid-out top once it has (`scroll_to_offsets`).
     fn anchor_offset(&self, key: &str, at: f32) -> Option<(usize, f64)> {
         let top = self.nodes.iter().enumerate()
             .find_map(|(i, n)| (n.named(key) && !self.subtree_exiting(i)).then_some(n.target[1]))
             .or_else(|| {
                 let (i, [_, y0, _, _]) = self.highlight_target_in(&self.nodes, None, key)?;
                 (!self.subtree_exiting(i)).then_some(y0)
-            })?;
-        let v = self.scroll_viewport_on(key, false, true)?;
-        Some((v, f64::from(top - self.nodes[v].target[1] - at).max(0.0)))
+            });
+        if let Some(top) = top {
+            let v = self.scroll_viewport_on(key, false, true)?;
+            return Some((v, f64::from(top - self.nodes[v].target[1] - at).max(0.0)));
+        }
+        self.nodes.iter().find_map(|n| {
+            let list = self.virtuals.get(&n.path)?;
+            let index = list.index_of(key)?;
+            let v = *self.node_index.get(self.path_ids.get(&list.scroll_path)?)?;
+            Some((v, f64::from(list.top + list.pad_top + list.prefix(index) - at).max(0.0)))
+        })
     }
 
     /// The viewport keyed (or pathed) `key`, or the nearest one around it, that scrolls
