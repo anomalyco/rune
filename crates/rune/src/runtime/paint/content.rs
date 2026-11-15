@@ -50,6 +50,7 @@ impl<S: 'static> Runtime<S> {
         mark_ranges: &[(usize, usize, usize)],
         glyph_count: &mut usize,
     ) {
+        self.fill_drawn_field(i, &b);
         let s = self.env.scale;
         let srgb = self.srgb_blend;
         let now = self.t;

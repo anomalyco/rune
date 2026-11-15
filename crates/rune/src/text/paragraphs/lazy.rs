@@ -176,6 +176,10 @@ impl TextSystem {
     /// line is shaped. None when none were waiting.
     pub(crate) fn fill_paragraphs(&mut self, laid: &ParagraphLayout, budget: std::time::Duration, rows: (f32, f32), reach: f32) -> Option<(Rc<ParagraphLayout>, bool)> {
         let lazy = laid.lazy.clone()?;
+        if reach.is_finite() {
+            let i = laid.paragraphs.partition_point(|p| p.y + p.height < rows.0 - reach);
+            if !laid.paragraphs[i..].iter().take_while(|p| p.y <= rows.1 + reach).any(|p| !p.shaped) { return None; }
+        }
         let start = std::time::Instant::now();
         let distance = |p: &Paragraph| if p.y + p.height >= rows.0 && p.y <= rows.1 { 0.0 } else { (rows.0 - p.y - p.height).max(p.y - rows.1) };
         let mut paragraphs = laid.paragraphs.clone();
@@ -218,7 +222,8 @@ impl TextSystem {
         });
         let g = self.generation;
         self.paragraphs.insert(lazy.cache_key, Entry::new(built.clone(), g, built.paragraphs.len() * size_of::<Paragraph>() / 64, built.whole));
-        if self.last_paragraphs.as_ref().is_some_and(|l| std::ptr::eq(&**l, laid)) { self.last_paragraphs = Some(built.clone()); }        Some((built, moved))
+        if self.last_paragraphs.as_ref().is_some_and(|l| std::ptr::eq(&**l, laid)) { self.last_paragraphs = Some(built.clone()); }
+        Some((built, moved))
     }
 }
 

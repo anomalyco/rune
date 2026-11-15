@@ -362,6 +362,13 @@ pub(super) fn lay_out_text(text: &mut TextSystem, n: &mut Node, w: f32, scale: f
         TextLayout::Single(l) => l,
         TextLayout::Paragraphs(mut p) => {
             text.prepare_highlights(&mut p, &spec.cold.highlights);
+            // A caret is also read before paint (IME, Cx::caret, scroll-to-caret). Give those
+            // readers the real line even when the edit or an external selection moved offscreen.
+            if let Some(inp) = &n.input && inp.edit.focused && p.fills_visible() {
+                let byte = super::text_layout::caret_index(&inp.edit, &spec.content);
+                if let Some(y) = p.waiting_row_at(byte)
+                    && let Some((filled, _)) = text.fill_paragraphs(&p, std::time::Duration::MAX, (y, y), 0.0) { p = filled; }
+            }
             n.text_layout = Some(TextLayout::Paragraphs(p));
             n.elided = None;
             return;

@@ -32,6 +32,9 @@ const LAZY_MIN: usize = 64;
 /// its caret, which follows the paste's end), and after its start.
 const EAGER_END: usize = 24;
 const EAGER_START: usize = 4;
+/// Large multiline fields defer one-line ASCII to the actual paint clip, not a guessed number
+/// of rows either side of the edit. Smaller fields keep their existing progressive fill.
+const VIEWPORT_BYTES: usize = 64 * 1024;
 /// The most lines one run holds: a keystroke inside a long paste keys its run's lines again,
 /// and the other runs keep theirs.
 const RUN_LINES: usize = 512;
@@ -92,6 +95,20 @@ impl ParagraphLayout {
     /// Whether some of its paragraphs wait to be shaped.
     pub(crate) fn waiting(&self) -> bool {
         self.lazy.is_some()
+    }
+
+    pub(crate) fn fills_visible(&self) -> bool {
+        self.lazy.as_ref().is_some_and(|l| l.content.len() > VIEWPORT_BYTES && self.max_width.is_some() && !l.ascii.narrow(self.max_width))
+    }
+
+    /// A point strictly inside the waiting line containing `byte`. This is a run of known
+    /// single-height lines; looking for the line never reads more than `RUN_LINES` lines.
+    pub(crate) fn waiting_row_at(&self, byte: usize) -> Option<f32> {
+        let lazy = self.lazy.as_ref()?;
+        let p = self.paragraphs.get(self.paragraphs.partition_point(|p| p.end < byte))?;
+        if p.shaped { return None; }
+        let line = lazy.content.as_bytes()[p.start..byte].iter().filter(|&&b| b == b'\n').count();
+        Some(p.y + (line as f32 + 0.5) * lazy.ascii.height)
     }
 }
 
@@ -776,7 +793,8 @@ fn key_paragraphs(spec: &TextSpec, style_key: u64, a: usize, z: usize, start_flo
         let last_flow = run.map(|r| r.5).or_else(|| found.last().map(|f| f.2)).unwrap_or(start_flow);
         if let Some(r) = runs {
             // A measure of the narrowest width is never shown: none of its lines needs shaping.
-            let near = r.edit && !r.ascii.narrow(r.max_width) && (j < EAGER_START || j + EAGER_END >= lines);
+            let viewport = spec.content.len() > VIEWPORT_BYTES && r.max_width.is_some();
+            let near = r.edit && !r.ascii.narrow(r.max_width) && if viewport { a == 0 } else { j < EAGER_START || j + EAGER_END >= lines };
             let floor = run.map_or(0.0, |r| r.3);
             let printable = known.map(|f| f & PRINTABLE != 0);
             let fits = if near || words.is_empty() || printable == Some(false) { None } else if r.ascii.narrow(r.max_width) { r.ascii.narrowest(words, floor) } else { r.ascii.one_line(words, r.max_width, floor, printable == Some(true)) };
