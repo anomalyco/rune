@@ -370,13 +370,11 @@ impl<S: 'static> Runtime<S> {
             }
             Action::AtBottom(path, at) => {
                 let Some(f) = self.node(&path).and_then(|n| n.handlers.on_at_bottom.clone()) else { return false };
-                f(states!(self), at);
-                true
+                f(states!(self), at)
             }
             Action::FarFromBottom(path, far) => {
                 let Some((_, _, f)) = self.node(&path).and_then(|n| n.handlers.on_far_from_bottom.clone()) else { return false };
-                f(states!(self), far);
-                true
+                f(states!(self), far)
             }
             Action::VisibleRows(path, range) => {
                 let Some(f) = self.node(&path).and_then(|n| n.handlers.on_visible_rows.clone()) else { return false };

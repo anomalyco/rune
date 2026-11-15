@@ -83,23 +83,32 @@ impl El {
     /// On a scroll viewport, called with whether it shows its bottom (within a point): once
     /// after its first layout, then only when that changes, never per frame. Pair with
     /// [`Tx::scroll_to_bottom`] for a "jump to latest" button.
-    pub fn on_at_bottom<S: 'static>(mut self, f: impl Fn(&mut S, bool) + 'static) -> Self {
+    pub fn on_at_bottom<S: 'static>(self, f: impl Fn(&mut S, bool) + 'static) -> Self {
+        self.on_at_bottom_if(move |s, at| { f(s, at); true })
+    }
+    /// Like [`Self::on_at_bottom`], but a report that returns false does not rebuild the view.
+    /// The first report after mounting can confirm state the app already drew.
+    pub fn on_at_bottom_if<S: 'static>(mut self, f: impl Fn(&mut S, bool) -> bool + 'static) -> Self {
         self.handlers.on_at_bottom = Some(Rc::new(move |s, at| f(downcast::<S>(s), at)));
         self
     }
     /// On a scroll viewport, called with whether it stands more than its own height, and at
     /// least `min` points, above its bottom: where a chat shows its "jump to latest" button and
     /// hides it again near the end. Once after its first layout, then only when that changes.
-    pub fn on_far_from_bottom<S: 'static>(mut self, min: f32, f: impl Fn(&mut S, bool) + 'static) -> Self {
-        self.handlers.on_far_from_bottom = Some((min, None, Rc::new(move |s, far| f(downcast::<S>(s), far))));
-        self
+    pub fn on_far_from_bottom<S: 'static>(self, min: f32, f: impl Fn(&mut S, bool) + 'static) -> Self {
+        self.on_far_from_bottom_if(min, None, move |s, far| { f(s, far); true })
     }
     /// [`El::on_far_from_bottom`] for a viewport that runs under a frame, the nearest ancestor
     /// keyed `frame` (a chat's pane, with a header and a dock over its scroll): far is more than
     /// the frame's height above the bottom, and at least `min`. The height is measured as it
     /// scrolls, so the view never reads it and a resize re-runs no view.
-    pub fn on_far_from_bottom_under<S: 'static>(mut self, min: f32, frame: &str, f: impl Fn(&mut S, bool) + 'static) -> Self {
-        self.handlers.on_far_from_bottom = Some((min, Some(Rc::from(frame)), Rc::new(move |s, far| f(downcast::<S>(s), far))));
+    pub fn on_far_from_bottom_under<S: 'static>(self, min: f32, frame: &str, f: impl Fn(&mut S, bool) + 'static) -> Self {
+        self.on_far_from_bottom_if(min, Some(frame), move |s, far| { f(s, far); true })
+    }
+    /// Like [`Self::on_far_from_bottom`] (under `frame` if given), but the callback returns
+    /// whether its report changed the view. A stationary viewport still receives its first report.
+    pub fn on_far_from_bottom_if<S: 'static>(mut self, min: f32, frame: Option<&str>, f: impl Fn(&mut S, bool) -> bool + 'static) -> Self {
+        self.handlers.on_far_from_bottom = Some((min, frame.map(Rc::from), Rc::new(move |s, far| f(downcast::<S>(s), far))));
         self
     }
     /// On a scroll viewport, fade its top and bottom edges over `width` points (16–32 reads well),
@@ -285,5 +294,5 @@ impl ScrollAxes {
     pub(crate) fn has(self, horizontal: bool) -> bool { if horizontal { self.x() } else { self.y() } }
 }
 
-pub(crate) type AtBottomFn = Rc<dyn Fn(crate::states::States<'_>, bool)>;
+pub(crate) type AtBottomFn = Rc<dyn Fn(crate::states::States<'_>, bool) -> bool>;
 pub(crate) type VisibleRowsFn = Rc<dyn Fn(crate::states::States<'_>, std::ops::Range<usize>) -> bool>;
