@@ -1,6 +1,6 @@
 //! Vector canvas, text measurement, geometry primitives and scene assembly for [`crate::render`].
 
-use rune::{Align, Color, El, LineCap, Shape, TextStyle, Transition, canvas, col, el, text};
+use rune::{Align, Color, El, LineCap, Shape, TextHighlight, TextStyle, Transition, canvas, col, el, text};
 
 use crate::DiagramStyle;
 use crate::hover::{Hover, Spot, Trace};
@@ -8,6 +8,12 @@ use crate::parts::{LabelKey, Mark, Names, Piece, pieces};
 
 /// The card's padding on each side.
 const CARD_PAD: f32 = 16.0;
+
+type Marks<'a> = Option<&'a dyn Fn(&str) -> Vec<TextHighlight>>;
+
+fn marked(el: El, key: &str, marks: Marks<'_>) -> El {
+    if let Some(paint) = marks { el.text_highlights(paint(key)) } else { el }
+}
 
 /// The widest a diagram's drawing can be for its card to fit `paint.max_width`.
 pub(crate) fn room(paint: &DiagramStyle) -> f32 {
@@ -331,30 +337,30 @@ impl Scene {
             // the card's padding rather than stopping at a hard edge.
             card = card.clip_fade(CARD_PAD, 0.0, CARD_PAD, 0.0);
         }
-        if let Some(title) = self.title_el(paint, streaming) {
+        if let Some(title) = self.title_el(paint, streaming, None) {
             card = card.gap(TITLE_GAP).child(title);
         }
-        card.child(self.diagram_el(streaming))
+        card.child(self.diagram_el(streaming, None))
     }
 
     /// The title and drawing without the card around them, and the size they take.
-    pub(crate) fn drawing(&self, paint: &DiagramStyle) -> (El, [f32; 2]) {
+    pub(crate) fn drawing(&self, paint: &DiagramStyle, marks: Marks<'_>) -> (El, [f32; 2]) {
         let mut size = self.size;
         let mut out = col().items_center();
-        if let Some(title) = self.title_el(paint, false) {
+        if let Some(title) = self.title_el(paint, false, marks) {
             let t = measure(self.title.as_deref().unwrap_or_default(), title_font(paint)).size;
             size = [size[0].max(t[0] + 2.0), size[1] + t[1] + TITLE_GAP];
             out = out.gap(TITLE_GAP).child(title);
         }
-        (out.child(self.diagram_el(false)), size)
+        (out.child(self.diagram_el(false, marks)), size)
     }
 
-    fn title_el(&self, paint: &DiagramStyle, streaming: bool) -> Option<El> {
+    fn title_el(&self, paint: &DiagramStyle, streaming: bool, marks: Marks<'_>) -> Option<El> {
         let still = if streaming { Transition::opacity() } else { Transition::none() };
-        self.title.as_ref().map(|title| text(title.clone()).key("title").font(title_font(paint)).color(paint.text).transition(still))
+        self.title.as_ref().map(|title| marked(text(title.clone()).key("title").font(title_font(paint)).color(paint.text).transition(still), "title", marks))
     }
 
-    fn diagram_el(&self, streaming: bool) -> El {
+    fn diagram_el(&self, streaming: bool, marks: Marks<'_>) -> El {
         let [w, h] = self.full;
         let still = |t: Transition| if streaming { t } else { Transition::none() };
         // Fit destinations before springing them. Multiplying a springing canvas size by a
@@ -373,7 +379,7 @@ impl Scene {
         // Labels and hover groups are placed by offset, as pieces are ([`Piece::el`]).
         for (l, (key, kind)) in self.labels.iter().zip(&self.label_keys) {
             let (enter, delay) = kind.map_or((Transition::opacity(), 0.0), |k| k.label_enter());
-            let mut t = label(l, l.color).absolute(0.0, 0.0).offset((l.at[0] - 1.0) * scale, l.at[1] * scale).origin(0.0, 0.0).scale(scale).key(key.clone()).transition(still(enter));
+            let mut t = marked(label(l, l.color), key, marks).absolute(0.0, 0.0).offset((l.at[0] - 1.0) * scale, l.at[1] * scale).origin(0.0, 0.0).scale(scale).key(key.clone()).transition(still(enter));
             if streaming && delay > 0.0 {
                 t = t.enter_delay(delay);
             }
@@ -395,7 +401,8 @@ impl Scene {
                 .child(canvas(s.lit.clone()).key("lit").absolute(0.0, 0.0).size(w, h).transition(Transition::none()));
             for &i in &s.labels {
                 if let Some(l) = self.labels.get(i) {
-                    glow = glow.child(label(l, self.lit).absolute(l.at[0] - 1.0, l.at[1]).key(format!("t{i}")).transition(Transition::none()));
+                    let t = marked(label(l, self.lit), &self.label_keys[i].0, marks);
+                    glow = glow.child(t.absolute(l.at[0] - 1.0, l.at[1]).key(format!("t{i}")).transition(Transition::none()));
                 }
             }
             let exit = if streaming { Transition { insertion: rune::Effect::IDENTITY, ..Transition::opacity() } } else { Transition::none() };
