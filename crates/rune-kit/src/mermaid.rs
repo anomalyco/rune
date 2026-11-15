@@ -23,6 +23,15 @@ use rune::El;
 use crate::markdown::{DiagramPaint, MarkdownStyle};
 
 pub use rune_mermaid::{DiagramStyle, Drawing, Hover, may_draw, supported};
+pub use rune_mermaid::DrawingModel;
+
+/// Prepare the drawn label runs for a viewer that searches and highlights a diagram.
+pub fn prepare(src: &str, style: &MarkdownStyle, max_width: f32) -> Option<DrawingModel> {
+    let paint = &style.diagram;
+    let mut full = self::style(paint);
+    full.max_width = max_width;
+    rune_mermaid::prepare_drawing(src, &full, hover(paint), paint.hover)
+}
 
 /// `src` drawn as a diagram card with `style`'s diagram colours, or `None` when it is outside
 /// the supported subset.

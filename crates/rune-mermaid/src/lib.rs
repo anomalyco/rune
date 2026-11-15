@@ -110,6 +110,7 @@ mod chart;
 mod class;
 mod connector;
 mod date;
+mod drawing;
 mod er;
 mod flowchart;
 mod gantt;
@@ -142,6 +143,7 @@ use std::hash::{Hash, Hasher};
 use rune::{Color, El, TextStyle, oklch, oklcha, tok};
 
 use canvas::Scene;
+pub use drawing::{DrawingModel, prepare_drawing};
 pub use hover::Hover;
 
 /// Colours and type a diagram draws with.
@@ -258,7 +260,7 @@ pub struct Drawing {
 /// as its card would be.
 pub fn render_drawing(src: &str, style: &DiagramStyle, hover: Hover, color: Color) -> Option<Drawing> {
     let hover = (hover != Hover::Off).then_some((hover, color));
-    let (el, size) = scenes::built(src, style, hover, None).0?.drawing(style);
+    let (el, size) = scenes::built(src, style, hover, None).0?.drawing(style, None);
     Some(Drawing { el, size, surface: style.surface, surface_border: style.surface_border })
 }
 

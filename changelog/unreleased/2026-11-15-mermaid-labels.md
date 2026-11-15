@@ -1,0 +1,1 @@
+- Mermaid viewers can now search a prepared diagram's displayed title and labels and highlight ranges in that same drawing without parsing the source again.
