@@ -19,7 +19,7 @@ use objc2::{
     sel,
 };
 use objc2_app_kit::{NSView, NSWindow};
-use objc2_foundation::{NSArray, NSObject, NSPoint};
+use objc2_foundation::{MainThreadMarker, NSArray, NSObject, NSPoint};
 use std::{cell::RefCell, ffi::c_void, sync::Mutex};
 
 use crate::{Adapter, event::QueuedEvents};
@@ -80,6 +80,17 @@ fn associated_object(view: &NSView) -> Option<&AssociatedObject> {
     }
 }
 
+// Rune (vendor/accesskit_macos.patch): AppKit answers an accessibility request about this
+// process on the thread that asked, so a system-wide read such as AXFocusedApplication from a
+// background thread arrives here off the main thread. The adapter's state belongs to the main
+// thread; off it these methods leave the state alone and answer as the view's own class does,
+// since borrowing it inside `extern "C"` aborts the process and an unguarded use races the
+// main thread.
+fn main_thread_associated_object(view: &NSView) -> Option<&AssociatedObject> {
+    MainThreadMarker::new()?;
+    associated_object(view)
+}
+
 // Unlike `[view class]`, this sees the subclass that key-value observing
 // hides by overriding `class`.
 fn runtime_class(view: &NSView) -> &'static AnyClass {
@@ -119,7 +130,7 @@ unsafe extern "C" fn superclass(this: &NSView, _cmd: Sel) -> Option<&AnyClass> {
 }
 
 unsafe extern "C" fn children(this: &NSView, _cmd: Sel) -> *mut NSArray<NSObject> {
-    let Some(associated) = associated_object(this) else {
+    let Some(associated) = main_thread_associated_object(this) else {
         return unsafe { msg_send![super(this, prev_class(this)), accessibilityChildren] };
     };
     let mut state = associated.ivars().state.borrow_mut();
@@ -130,7 +141,7 @@ unsafe extern "C" fn children(this: &NSView, _cmd: Sel) -> *mut NSArray<NSObject
 }
 
 unsafe extern "C" fn focus(this: &NSView, _cmd: Sel) -> *mut NSObject {
-    let Some(associated) = associated_object(this) else {
+    let Some(associated) = main_thread_associated_object(this) else {
         return unsafe { msg_send![super(this, prev_class(this)), accessibilityFocusedUIElement] };
     };
     let mut state = associated.ivars().state.borrow_mut();
@@ -139,7 +150,7 @@ unsafe extern "C" fn focus(this: &NSView, _cmd: Sel) -> *mut NSObject {
 }
 
 unsafe extern "C" fn hit_test(this: &NSView, _cmd: Sel, point: NSPoint) -> *mut NSObject {
-    let Some(associated) = associated_object(this) else {
+    let Some(associated) = main_thread_associated_object(this) else {
         return unsafe { msg_send![super(this, prev_class(this)), accessibilityHitTest: point] };
     };
     let mut state = associated.ivars().state.borrow_mut();
