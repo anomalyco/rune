@@ -272,6 +272,7 @@ impl<S: 'static> Host<S> {
     }
 
     fn about_to_wait_in_turn(&mut self, event_loop: &ActiveEventLoop) -> bool {
+        let _m=crate::marks::gate_span("about-to-wait");
         #[cfg(target_os = "macos")]
         self.fn_key();
         self.flush_files(event_loop);
@@ -298,6 +299,7 @@ impl<S: 'static> Host<S> {
     }
 
     fn user_event_in_turn(&mut self, event_loop: &ActiveEventLoop, event: WakeEvent) {
+        let _m=crate::marks::gate_span("user-event");
         #[cfg(feature = "frame-profile")]
         let logged = Some(crate::frame::live_log::now());
         self.meter.waited();
@@ -308,6 +310,7 @@ impl<S: 'static> Host<S> {
     }
 
     fn window_event_in_turn(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        let _m=crate::marks::gate_span(match &event{WindowEvent::RedrawRequested=>"redraw-event",WindowEvent::MouseInput{..}=>"mouse",WindowEvent::KeyboardInput{..}=>"key",WindowEvent::CursorMoved{..}=>"move",_=>"window-event"});
         #[cfg(feature = "frame-profile")]
         let logged = (!matches!(event, WindowEvent::RedrawRequested)).then(crate::frame::live_log::now);
         if !matches!(event, WindowEvent::RedrawRequested) { self.meter.waited(); }

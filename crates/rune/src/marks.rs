@@ -15,6 +15,14 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use crate::time::Instant;
 
+// Measuring branch only: capture nested UI spans in memory; write only at quit. `at` in
+// microseconds from first present, like the external post converted through its launch trace.
+std::thread_local! {static IB_BUSY:std::cell::RefCell<Vec<(&'static str,Instant,Instant)>>=const{std::cell::RefCell::new(Vec::new())};}
+pub struct GateSpan(&'static str,Option<Instant>);
+pub fn gate_span(label:&'static str)->GateSpan{static ON:std::sync::OnceLock<bool>=std::sync::OnceLock::new();GateSpan(label,ON.get_or_init(||std::env::var_os("IB3_BUSY").is_some()).then(Instant::now))}
+impl Drop for GateSpan{fn drop(&mut self){if let Some(t)=self.1{let e=Instant::now(); if e.duration_since(t).as_micros()>=50{IB_BUSY.with_borrow_mut(|v|{if v.len()<20000{v.push((self.0,t,e));}})}}}}
+pub fn gate_spans()->Vec<(&'static str,i64,i64)>{let Some((_,base))=marks().into_iter().find(|(k,_)|*k=="frame.first.presented") else{return Vec::new()};let rel=|t:Instant|if t>=base{t.duration_since(base).as_micros() as i64}else{-(base.duration_since(t).as_micros() as i64)};IB_BUSY.with_borrow(|v|v.iter().map(|&(l,a,b)|(l,rel(a),rel(b))).collect())}
+
 #[derive(Default)]
 struct Book {
     marks: Vec<(&'static str, Instant)>,

@@ -39,15 +39,17 @@ impl<S: 'static> Host<S> {
         if input_waiting() { return true; }
         match self.chores {
             Chores::Ready => {
+                let _m=crate::marks::gate_span("ready");
                 self.chores = Chores::Hooks;
                 self.run_on_ready();
             }
             Chores::Hooks => {
+                let _m=crate::marks::gate_span("hooks");
                 self.chores = Chores::Done;
                 self.run_ready_hooks();
             }
-            Chores::Done if self.gpu_owed() => self.cpu_idle(),
-            Chores::Done => self.a11y_after_frame(),
+            Chores::Done if self.gpu_owed() => {let _m=crate::marks::gate_span("gpu-start");self.cpu_idle()},
+            Chores::Done => {let _m=crate::marks::gate_span("a11y-install");self.a11y_after_frame()},
         }
         self.post_frame_owed()
     }

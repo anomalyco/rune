@@ -343,6 +343,7 @@ impl<S: 'static> Host<S> {
     /// changed, and only those rectangles go to the window. While handing over, the GPU draws the
     /// same instances too.
     pub(super) fn draw_cpu(&mut self, resizing: bool) {
+        let _m=crate::marks::gate_span("cpu-frame");
         // The system threw away what the window showed (it was covered whole, then came back) and
         // asks for it again: the window is in sight, whatever the occlusion tracker said last, so
         // this frame is drawn and copied whole. Skipped, the system would count it painted, and the
@@ -598,6 +599,7 @@ impl<S: 'static> Host<S> {
     /// While handing over: the GPU draws the instances the CPU just painted, into its swap chain
     /// on the uncommitted visual.
     fn gpu_draws_same_frame(&mut self) {
+        let _m=crate::marks::gate_span("gpu-same");
         let (Some(l), Some((gpu, renderer))) = (self.win.as_mut(), self.gpu.as_mut()) else { return };
         let SurfaceMode::HandingOver { done, readback, paused: false, .. } = &mut l.native.mode else { return };
         let Some(surface) = l.surface.as_ref() else { return };
@@ -607,7 +609,7 @@ impl<S: 'static> Host<S> {
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor { format: (target_format != l.config.format).then_some(target_format), ..Default::default() });
         renderer.upload_images(&gpu.device, &gpu.queue, &mut rt.images);
         renderer.prepare_surfaces(&gpu.device, &gpu.queue, &rt.surfaces, (l.config.width, l.config.height));
-        let mut enc = gpu.device.create_command_encoder(&Default::default());
+        let mut enc = renderer.ib3_held.pop().unwrap_or_else(||gpu.device.create_command_encoder(&Default::default()));
         // The app's compositor draws the same instances the CPU painted (the CPU frame drew none of
         // its effect slots, or it would have asked for the GPU).
         renderer.set_frame_wake(rt.live_wake());
@@ -836,6 +838,9 @@ fn warm_frame(gpu: &Gpu, renderer: &mut Renderer, format: wgpu::TextureFormat, s
     eprintln!("IBOFF {:?}",spans);
     target.destroy();
     let _ = gpu.device.poll(wgpu::PollType::Poll);
+    let held=std::env::var("IB3_HOLD").ok().and_then(|s|s.parse::<usize>().ok()).unwrap_or(0).min(4);
+    renderer.ib3_held=(0..held).map(|_|gpu.device.create_command_encoder(&Default::default())).collect();
+    renderer.ib3_held.reverse();
 }
 
 /// A CPU frame's instances as the warm frame draws them: what reads the app's own state (an

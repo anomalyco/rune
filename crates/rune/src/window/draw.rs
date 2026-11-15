@@ -70,6 +70,7 @@ impl<S: 'static> Host<S> {
     /// Draws a frame. `resizing` draws one for a size the user just dragged the window to, at
     /// once: AppKit shows the new size when the event returns, with or without it.
     pub(super) fn draw(&mut self, resizing: bool) {
+        let _m=crate::marks::gate_span("draw");
         // Windows: a window still on the CPU renderer draws there (`cpu_frame`).
         #[cfg(target_os = "windows")]
         {
@@ -362,7 +363,7 @@ impl<S: 'static> Host<S> {
         renderer.prepare_surfaces(&gpu.device, &gpu.queue, &rt.surfaces, (l.config.width, l.config.height));
         #[cfg(feature = "frame-profile")]
         let fp_uploaded = fp_start.map(|_| crate::frame::live_log::Stamp::now());
-        let mut enc = gpu.device.create_command_encoder(&Default::default());
+        let mut enc = renderer.ib3_held.pop().unwrap_or_else(||gpu.device.create_command_encoder(&Default::default()));
         #[cfg(target_os = "windows")]
         let mut present_rect = None;
         // Why the frame drew all of the window (frame-profile).

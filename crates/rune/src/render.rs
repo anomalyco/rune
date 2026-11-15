@@ -792,6 +792,7 @@ pub struct Renderer {
     fills: std::sync::Mutex<Option<fill::PendingFills>>,
     /// Unique to this renderer, so to the device it was made on (`Frame::device_key`).
     device_key: crate::compose::DeviceKey,
+    pub(crate) ib3_held: Vec<wgpu::CommandEncoder>,
     /// The device's largest 2D texture, read once: in a browser each `Device::limits` reads every
     /// limit from JavaScript (about 35 µs), which a frame's layers used to pay.
     max_texture_dim: u32,

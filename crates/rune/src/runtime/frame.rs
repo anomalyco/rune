@@ -376,6 +376,7 @@ impl<S: 'static> Runtime<S> {
     /// if state changed, steps `Scene`, growth, scroll and reveals, and builds this frame's
     /// instances.
     pub fn frame(&mut self, dt: f64) -> bool {
+        let _m=crate::marks::gate_span("runtime-frame");
         self.frame_split(0.0, dt)
     }
 

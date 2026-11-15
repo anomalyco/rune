@@ -93,6 +93,7 @@ impl Renderer {
             uploads: Default::default(),
             fills: Default::default(),
             device_key: crate::compose::DeviceKey::next(),
+            ib3_held: Vec::new(),
             max_texture_dim: device.limits().max_texture_dimension_2d,
             #[cfg(target_os = "windows")]
             clear_quad: std::sync::OnceLock::new(),
