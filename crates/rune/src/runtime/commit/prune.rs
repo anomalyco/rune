@@ -21,7 +21,7 @@ impl<S: 'static> Runtime<S> {
         let mut remap = std::mem::take(&mut self.apply_scratch.remap);
         remap.clear();
         remap.resize(old.len(), None);
-        self.node_index.clear();
+        self.node_index.rebuild(old.len());
         for (old_idx, mut n) in old.drain(..).enumerate() {
             if !self.scene.contains(n.id) {
                 self.hover_pruned(&n);

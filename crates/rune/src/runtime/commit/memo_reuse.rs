@@ -157,7 +157,7 @@ impl<S: 'static> Runtime<S> {
 pub(super) struct MemoFlattenCtx<'a> {
     pub(super) old_nodes: &'a mut [Node],
     pub(super) old_present_len: usize,
-    pub(super) old_node_index: &'a HashMap<NodeId, usize>,
+    pub(super) old_node_index: &'a NodeIndex,
     pub(super) old_cursor: usize,
     pub(super) committing: bool,
     pub(super) committed: &'a HashMap<u64, FlattenedMemo>,

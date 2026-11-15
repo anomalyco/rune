@@ -78,7 +78,7 @@ pub(super) struct Measurement<'a, S: 'static> {
     pub(super) spare_nodes: &'a mut Vec<Node>,
     pub(super) text: &'a mut TextSystem,
     pub(super) layout: &'a mut LayoutEngine,
-    pub(super) node_index: &'a mut HashMap<NodeId, usize>,
+    pub(super) node_index: &'a mut NodeIndex,
     pub(super) path_ids: &'a mut HashMap<String, NodeId>,
     pub(super) memo: &'a mut crate::memo::MemoCache,
     pub(super) next_id: &'a mut u64,

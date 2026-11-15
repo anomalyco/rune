@@ -96,6 +96,8 @@ mod raster_check;
 mod font_families;
 #[path = "runtime/key_index.rs"]
 mod key_index;
+mod node_index;
+use node_index::NodeIndex;
 #[path = "runtime/system_settings.rs"]
 mod system_settings;
 #[path = "runtime/zoom.rs"]
@@ -497,7 +499,7 @@ pub struct Runtime<S: 'static> {
     spare_nodes: Vec<Node>,
     apply_scratch: apply_scratch::ApplyScratch,
     layout: LayoutEngine,
-    node_index: HashMap<NodeId, usize>,
+    node_index: NodeIndex,
     path_ids: HashMap<String, NodeId>,
     pub(crate) memo: crate::memo::MemoCache,
     next_id: u64,
@@ -942,7 +944,7 @@ impl<S: 'static> Runtime<S> {
             spare_nodes: Vec::new(),
             apply_scratch: Default::default(),
             layout: LayoutEngine::new(),
-            node_index: HashMap::default(),
+            node_index: NodeIndex::default(),
             path_ids: HashMap::default(),
             memo: Default::default(),
             next_id: 1,

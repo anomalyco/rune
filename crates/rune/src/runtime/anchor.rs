@@ -78,8 +78,7 @@ impl<S: 'static> Measurement<'_, S> {
     /// Places every node from `taffy`'s layout: ids, local and window rects, insets, and
     /// anchored overlays beside their anchors.
     pub(super) fn place(&mut self, taffy: &LayoutEngine, nodes: &mut [Node]) {
-        self.node_index.clear();
-        self.node_index.reserve(nodes.len());
+        self.node_index.rebuild(nodes.len());
         for i in 0..nodes.len() {
             let id = if nodes[i].id != NodeId(0) {
                 debug_assert_eq!(self.path_ids.get(&nodes[i].path).copied(), Some(nodes[i].id));
