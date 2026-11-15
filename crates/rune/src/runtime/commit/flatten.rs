@@ -1,8 +1,8 @@
 use std::borrow::Cow;
-
 use crate::el::ElFlags;
 
 use super::*;
+mod device;
 
 /// An `aspect_fit` element's first layout: it takes the free space along its parent's main axis
 /// and the whole cross side, within its max sizes, as the room its fitted box must fit. Its
@@ -289,12 +289,6 @@ fn prepare_text(
     (measure, secure_measure)
 }
 
-/// `El::border_layout`: the border's sides as layout room, each as wide as it draws at `scale`.
-fn lay_out_border(style: &mut CompactStyle, vis: &Visual, scale: f32) {
-    let sides = vis.border_sides.unwrap_or([vis.border_width(); 4]);
-    style.set_border(sides.map(|w| crate::runtime::pixel_snap::line_width(w * scale) / scale));
-}
-
 /// Text, an icon, and a text field's placeholder, caret and selection that weren't given a
 /// colour take the window's foreground ([`Cx::foreground`]), as CSS text takes `color`.
 fn take_foreground(
@@ -458,7 +452,8 @@ fn flatten_owned(
     }
     let (measure, secure_measure) = prepare_text(&mut text, input.as_deref(), scale, directed.then_some(flow));
     take_foreground(&mut text, input.as_deref_mut(), &mut vis, memo_ctx.foreground);
-    if vis.border_layout { lay_out_border(&mut style, &vis, scale); }
+    if vis.border_layout { device::border(&mut style, &vis, scale); }
+    if let Some(metrics) = cold.list_disc { device::disc(&mut style, metrics, scale); }
     if dir_effect == crate::el::DirEffect::Mirror {
         crate::el::mirror_visual(&mut vis);
         if let Some(a) = cold.get_mut_if_some().and_then(|c| c.above.as_mut()) { crate::el::mirror_anchor(a); }
@@ -664,7 +659,8 @@ fn flatten_ref(
     let inert = flags.has(ElFlags::INERT) || parent.is_some_and(|p| nodes[p].inert);
     let mut vis = el.vis.clone();
     take_foreground(&mut text, input.as_deref_mut(), &mut vis, memo_ctx.foreground);
-    if vis.border_layout { lay_out_border(style.to_mut(), &vis, scale); }
+    if vis.border_layout { device::border(style.to_mut(), &vis, scale); }
+    if let Some(metrics) = c.list_disc { device::disc(style.to_mut(), metrics, scale); }
     if dir_effect == crate::el::DirEffect::Mirror { crate::el::mirror_visual(&mut vis); }
     let hover_within = inherit_hover_within(&vis, c.above.as_ref(), parent, nodes);
     let pixel_aspect = vis.pixels.as_ref()

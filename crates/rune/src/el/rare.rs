@@ -53,6 +53,8 @@ pub(crate) struct ElCold {
     pub(crate) material: Option<crate::SystemMaterial>,
     /// `El::aspect_fit`'s width over height; 0 when unset.
     pub(crate) aspect_fit: f32,
+    /// Outside disc: logical ascent, descent and line height; resolved with this commit's scale.
+    pub(crate) list_disc: Option<[f32; 3]>,
     /// `El::level` and `El::expanded`.
     pub(crate) a11y: A11y,
     #[cfg(debug_assertions)]
@@ -95,6 +97,7 @@ impl Empty for ElCold {
         help_side: None,
         material: None,
         aspect_fit: 0.0,
+        list_disc: None,
         a11y: A11y::EMPTY,
         #[cfg(debug_assertions)]
         scroll_source: None,
