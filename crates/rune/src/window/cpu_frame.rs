@@ -109,7 +109,9 @@ pub(super) enum SurfaceMode {
     /// how many differ from the CPU's.
     /// `since`: when the GPU came; `nudged`: when a frame was last asked for, while none has been
     /// drawn by both (`Host::watch_handover`); `done`'s instant: when that frame was submitted.
-    HandingOver { cpu: Cpu, handover: Handover, done: Option<(Arc<AtomicBool>, Instant)>, readback: Option<Readback>, since: Instant, nudged: Option<Instant>, tries: u8 },
+    /// `paused`: input came while handing over, so the CPU draws it and the hand-over waits for a
+    /// frame at rest (the visual is uncommitted: DWM goes on showing the CPU's frames).
+    HandingOver { cpu: Cpu, handover: Handover, done: Option<(Arc<AtomicBool>, Instant)>, readback: Option<Readback>, since: Instant, nudged: Option<Instant>, tries: u8, paused: bool },
     /// The GPU draws through the committed visual, which lives as long as the window's surface.
     Handed { handover: Handover },
     /// The GPU's swap chain was made again (a lost device) on the same visual: committed once its
@@ -346,11 +348,17 @@ impl<S: 'static> Host<S> {
         // this frame is drawn and copied whole. Skipped, the system would count it painted, and the
         // window would show what's behind it until something changed.
         let owed = self.win.as_ref().is_some_and(|w| crate::platform::win32::repaint_owed(&w.window));
-        // Handing over, with the GPU's frame not finished yet: nothing new until it is (a repaint
-        // the system asks for meanwhile gets the last frame).
-        if let Some(w) = self.win.as_mut() && let SurfaceMode::HandingOver { cpu, done: Some(_), .. } = &mut w.native.mode {
-            if owed { copy_last(cpu, &w.window); }
-            return;
+        // Handing over: input that comes gives way to nothing. The CPU draws it now and the
+        // hand-over waits for a frame at rest; otherwise, with the GPU's frame not finished yet,
+        // nothing new until it is (a repaint the system asks for meanwhile gets the last frame).
+        if let Some(w) = self.win.as_mut() && let SurfaceMode::HandingOver { cpu, done, paused, since, readback, .. } = &mut w.native.mode {
+            if self.rt.has_pending_input() {
+                if !*paused { crate::marks::mark("gpu.window.paused"); }
+                (*done, *readback, *paused, *since) = (None, None, true, Instant::now());
+            } else if done.is_some() {
+                if owed { copy_last(cpu, &w.window); }
+                return;
+            }
         }
         let launcher = self.launcher();
         let Some(l) = self.win.as_ref() else { return };
@@ -474,6 +482,10 @@ impl<S: 'static> Host<S> {
         }
         self.gpu_draws_same_frame();
         let Some(l) = self.win.as_mut() else { return };
+        // The input the hand-over paused for is drawn: the next frame at rest hands over.
+        if let SurfaceMode::HandingOver { paused, since, .. } = &mut l.native.mode && *paused && !animating && !self.rt.has_pending_input() {
+            (*paused, *since) = (false, Instant::now());
+        }
         let rt = &mut self.rt;
         let submitted = Instant::now();
         self.clock.presented(rt, submitted);
@@ -568,7 +580,7 @@ impl<S: 'static> Host<S> {
         let SurfaceMode::Cpu { mut cpu, .. } = std::mem::replace(&mut w.native.mode, SurfaceMode::Gpu) else { unreachable!() };
         cpu.half = HalfRounding::of_vendor(gpu.adapter.get_info().vendor);
         w.native.video_layers.hold_premultiplied(vrr_guard(gpu.adapter.get_info().vendor));
-        w.native.mode = SurfaceMode::HandingOver { cpu, handover, done: None, readback: None, since: Instant::now(), nudged: None, tries };
+        w.native.mode = SurfaceMode::HandingOver { cpu, handover, done: None, readback: None, since: Instant::now(), nudged: None, tries, paused: false };
         w.native.slot.reset();
         w.native.damage.reset();
         // D3D12's idle-priority threads compile the first frame's shaders: on a busy machine they
@@ -587,7 +599,7 @@ impl<S: 'static> Host<S> {
     /// on the uncommitted visual.
     fn gpu_draws_same_frame(&mut self) {
         let (Some(l), Some((gpu, renderer))) = (self.win.as_mut(), self.gpu.as_mut()) else { return };
-        let SurfaceMode::HandingOver { done, readback, .. } = &mut l.native.mode else { return };
+        let SurfaceMode::HandingOver { done, readback, paused: false, .. } = &mut l.native.mode else { return };
         let Some(surface) = l.surface.as_ref() else { return };
         let Ok(frame) = acquire(surface, gpu, &l.config, l.surface_ok, 1, &mut self.meter) else { return };
         let rt = &mut self.rt;
@@ -789,9 +801,9 @@ fn prepare(hwnd: isize, size: (u32, u32), srgb: bool, features: wgpu::Features, 
 /// into a target of the swap chain's format, and waits for the GPU. Its first frame's costs are
 /// paid here, so the hand-over frame on the app's thread costs what a frame does: the pipelines
 /// its layers' formats need, its layers' targets (the hand-over frame's layers are the latest
-/// frame's, or nearly), the staging space, the instance buffer, and armed D3D12 command lists
-/// (`RESERVED_LISTS`). The atlas is an empty one: the glyphs land with the hand-over frame's own
-/// prepare.
+/// frame's, or nearly), the staging space and the instance buffer. Its own target goes as soon as
+/// the GPU is done with it. The atlas is an empty one: the glyphs land with the hand-over frame's
+/// own prepare.
 fn warm_frame(gpu: &Gpu, renderer: &mut Renderer, format: wgpu::TextureFormat, size: (u32, u32), instances: &[crate::render::Instance]) {
     let target = gpu.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("rune warm frame"),
@@ -809,18 +821,10 @@ fn warm_frame(gpu: &Gpu, renderer: &mut Renderer, format: wgpu::TextureFormat, s
     renderer.prepare(&gpu.device, &gpu.queue, &mut atlas, instances, size);
     renderer.draw(&mut enc, &view, [0.0; 4]);
     renderer.submit(&gpu.queue, enc);
-    // Command lists armed ahead, for the hand-over frame and every frame after it to record into
-    // without resetting one on the app's thread (`reserve_command_lists`).
-    // SAFETY: only Rune's own call on the raw device, which is alive.
-    if let Some(hal) = unsafe { gpu.device.as_hal::<wgpu::hal::api::Dx12>() } {
-        let _ = hal.reserve_command_lists(RESERVED_LISTS);
-    }
     let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+    target.destroy();
+    let _ = gpu.device.poll(wgpu::PollType::Poll);
 }
-
-/// Command lists kept armed: a frame takes two for each render pass, and one that draws a dozen
-/// layers takes about 50.
-const RESERVED_LISTS: usize = 64;
 
 /// A CPU frame's instances as the warm frame draws them: what reads the app's own state (an
 /// image's slot, a glyph's atlas page, a compositor's effect) draws as a plain box, so the frame
