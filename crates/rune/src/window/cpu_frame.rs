@@ -789,9 +789,9 @@ fn prepare(hwnd: isize, size: (u32, u32), srgb: bool, features: wgpu::Features, 
 /// into a target of the swap chain's format, and waits for the GPU. Its first frame's costs are
 /// paid here, so the hand-over frame on the app's thread costs what a frame does: the pipelines
 /// its layers' formats need, its layers' targets (the hand-over frame's layers are the latest
-/// frame's, or nearly), the staging space, the instance buffer, and armed D3D12 command lists
-/// (`RESERVED_LISTS`). The atlas is an empty one: the glyphs land with the hand-over frame's own
-/// prepare.
+/// frame's, or nearly), the staging space and the instance buffer. Its own target goes as soon as
+/// the GPU is done with it. The atlas is an empty one: the glyphs land with the hand-over frame's
+/// own prepare.
 fn warm_frame(gpu: &Gpu, renderer: &mut Renderer, format: wgpu::TextureFormat, size: (u32, u32), instances: &[crate::render::Instance]) {
     let target = gpu.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("rune warm frame"),
@@ -809,18 +809,10 @@ fn warm_frame(gpu: &Gpu, renderer: &mut Renderer, format: wgpu::TextureFormat, s
     renderer.prepare(&gpu.device, &gpu.queue, &mut atlas, instances, size);
     renderer.draw(&mut enc, &view, [0.0; 4]);
     renderer.submit(&gpu.queue, enc);
-    // Command lists armed ahead, for the hand-over frame and every frame after it to record into
-    // without resetting one on the app's thread (`reserve_command_lists`).
-    // SAFETY: only Rune's own call on the raw device, which is alive.
-    if let Some(hal) = unsafe { gpu.device.as_hal::<wgpu::hal::api::Dx12>() } {
-        let _ = hal.reserve_command_lists(RESERVED_LISTS);
-    }
     let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+    target.destroy();
+    let _ = gpu.device.poll(wgpu::PollType::Poll);
 }
-
-/// Command lists kept armed: a frame takes two for each render pass, and one that draws a dozen
-/// layers takes about 50.
-const RESERVED_LISTS: usize = 64;
 
 /// A CPU frame's instances as the warm frame draws them: what reads the app's own state (an
 /// image's slot, a glyph's atlas page, a compositor's effect) draws as a plain box, so the frame

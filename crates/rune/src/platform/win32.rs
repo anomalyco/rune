@@ -48,6 +48,12 @@ pub(crate) fn hwnd(window: &winit::window::Window) -> Option<HWND> {
 /// frame when DWM won't say).
 pub(crate) fn next_vblank(now: std::time::Instant) -> std::time::Instant {
     use windows_sys::Win32::Graphics::Dwm::{DWM_TIMING_INFO, DwmGetCompositionTimingInfo};
+    // The first ask comes from the window's first frame, as DWM shows the window: the query then
+    // waits on DWM for 2-2.5 ms, in front of the first input. A refresh from now does for that one.
+    static ASKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if !ASKED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        return now + std::time::Duration::from_micros(16_667);
+    }
     use windows_sys::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
     // SAFETY: plain out-parameters.
     unsafe {
