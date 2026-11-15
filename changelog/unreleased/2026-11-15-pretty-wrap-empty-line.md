@@ -1,0 +1,1 @@
+- Pretty text wrapping no longer crashes on a paragraph with a line that holds only an inline box (a pill); it keeps the greedy breaks there.
