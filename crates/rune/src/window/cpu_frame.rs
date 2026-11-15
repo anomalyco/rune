@@ -789,10 +789,9 @@ fn prepare(hwnd: isize, size: (u32, u32), srgb: bool, features: wgpu::Features, 
 /// into a target of the swap chain's format, and waits for the GPU. Its first frame's costs are
 /// paid here, so the hand-over frame on the app's thread costs what a frame does: the pipelines
 /// its layers' formats need, its layers' targets (the hand-over frame's layers are the latest
-/// frame's, or nearly), the staging space, the instance buffer, and D3D12 command lists, a
-/// millisecond each to make on Intel's driver and two for each render pass (wgpu records a
-/// pass's barriers in a list of its own; `RESERVED_LISTS`). The atlas is an empty one: the glyphs land with the
-/// hand-over frame's own prepare.
+/// frame's, or nearly), the staging space, the instance buffer, and armed D3D12 command lists
+/// (`RESERVED_LISTS`). The atlas is an empty one: the glyphs land with the hand-over frame's own
+/// prepare.
 fn warm_frame(gpu: &Gpu, renderer: &mut Renderer, format: wgpu::TextureFormat, size: (u32, u32), instances: &[crate::render::Instance]) {
     let target = gpu.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("rune warm frame"),
