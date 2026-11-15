@@ -498,8 +498,9 @@ impl Tx {
     /// [`Tx::focus`] for an element that may not be shown yet: content still loading, a card that
     /// comes in with the next build, a window that isn't drawing. The request waits, through any
     /// number of commits, until an element with the key shows, and focuses it then, however long
-    /// its loading or motion takes. It's dropped when the user presses a key or a pointer button,
-    /// when focus moves by any other means meanwhile, or when another focus is asked for.
+    /// its loading or motion takes, whatever focus did meanwhile (a closing palette leaving it on
+    /// the prompt). It's dropped when the user presses a key or a pointer button, or when another
+    /// focus is asked for.
     pub fn focus_when_shown(&mut self, key: impl Into<String>, ring: bool) {
         self.focus_to = Some((key.into(), ring, FocusAsk::WhenShown));
     }
