@@ -86,7 +86,13 @@ fn trimmed(text: &str, range: Range<usize>) -> Range<usize> {
 /// The line breaks one paragraph's lines take instead, as (line in the paragraph, room).
 fn paragraph(lines: &[Line<'_, Ink>], boxes: &[(u64, usize)], text: &str, font_size: f32, scale: f32, max_width: f32) -> Option<Vec<(usize, f32)>> {
     let n = lines.len();
-    if n < 2 || lines.iter().any(|l| l.runs().any(|r| r.is_rtl())) {
+    // A line that holds no text (only an inline box) reports an empty range at `usize::MAX`:
+    // nothing here can slice such a line, so keep the greedy breaks.
+    let sliceable = |l: &Line<'_, Ink>| {
+        let r = l.text_range();
+        r.start <= r.end && r.end <= text.len()
+    };
+    if n < 2 || !lines.iter().all(sliceable) || lines.iter().any(|l| l.runs().any(|r| r.is_rtl())) {
         return None;
     }
     // A word broken inside to fit (`wrap_anywhere`'s overflow-wrap) keeps the greedy lines: Blink
