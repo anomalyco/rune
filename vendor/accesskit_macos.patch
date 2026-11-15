@@ -50,3 +50,60 @@ index 7be2e59b..dfc2ef3a 100644
          if let Some(value) = self.0.value() {
              return Some(Value::String(value));
          }
+diff --git a/src/subclass.rs b/src/subclass.rs
+index f4ebc19..6e10394 100644
+--- a/src/subclass.rs
++++ b/src/subclass.rs
+@@ -19,7 +19,7 @@ use objc2::{
+     sel,
+ };
+ use objc2_app_kit::{NSView, NSWindow};
+-use objc2_foundation::{NSArray, NSObject, NSPoint};
++use objc2_foundation::{MainThreadMarker, NSArray, NSObject, NSPoint};
+ use std::{cell::RefCell, ffi::c_void, sync::Mutex};
+ 
+ use crate::{Adapter, event::QueuedEvents};
+@@ -80,6 +80,16 @@ fn associated_object(view: &NSView) -> Option<&AssociatedObject> {
+     }
+ }
+ 
++// Rune (vendor/accesskit_macos.patch): AppKit can call the accessibility methods below from a
++// background thread, while this process asks the system about itself (a hit test, or the focused
++// application), and the main thread may hold the adapter's `RefCell` borrow at that moment.
++// Borrowing off the main thread would race, or panic inside `extern "C"` and abort, so answer as
++// though the view had no adapter and let the superclass's own answer through.
++fn associated_object_on_main_thread(view: &NSView) -> Option<&AssociatedObject> {
++    MainThreadMarker::new()?;
++    associated_object(view)
++}
++
+ // Unlike `[view class]`, this sees the subclass that key-value observing
+ // hides by overriding `class`.
+ fn runtime_class(view: &NSView) -> &'static AnyClass {
+@@ -119,7 +129,7 @@ unsafe extern "C" fn superclass(this: &NSView, _cmd: Sel) -> Option<&AnyClass> {
+ }
+ 
+ unsafe extern "C" fn children(this: &NSView, _cmd: Sel) -> *mut NSArray<NSObject> {
+-    let Some(associated) = associated_object(this) else {
++    let Some(associated) = associated_object_on_main_thread(this) else {
+         return unsafe { msg_send![super(this, prev_class(this)), accessibilityChildren] };
+     };
+     let mut state = associated.ivars().state.borrow_mut();
+@@ -130,7 +140,7 @@ unsafe extern "C" fn children(this: &NSView, _cmd: Sel) -> *mut NSArray<NSObject
+ }
+ 
+ unsafe extern "C" fn focus(this: &NSView, _cmd: Sel) -> *mut NSObject {
+-    let Some(associated) = associated_object(this) else {
++    let Some(associated) = associated_object_on_main_thread(this) else {
+         return unsafe { msg_send![super(this, prev_class(this)), accessibilityFocusedUIElement] };
+     };
+     let mut state = associated.ivars().state.borrow_mut();
+@@ -139,7 +149,7 @@ unsafe extern "C" fn focus(this: &NSView, _cmd: Sel) -> *mut NSObject {
+ }
+ 
+ unsafe extern "C" fn hit_test(this: &NSView, _cmd: Sel, point: NSPoint) -> *mut NSObject {
+-    let Some(associated) = associated_object(this) else {
++    let Some(associated) = associated_object_on_main_thread(this) else {
+         return unsafe { msg_send![super(this, prev_class(this)), accessibilityHitTest: point] };
+     };
+     let mut state = associated.ivars().state.borrow_mut();
