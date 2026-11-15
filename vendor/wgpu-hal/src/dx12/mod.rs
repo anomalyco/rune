@@ -763,8 +763,6 @@ struct CommandSignatures {
 struct DeviceShared {
     adapter: DxgiAdapter,
     zero_buffer: Direct3D12::ID3D12Resource,
-    /// Command lists kept open to record into (`Device::reserve_command_lists`).
-    armed: Arc<ArmedLists>,
     cmd_signatures: CommandSignatures,
     heap_views: descriptor::GeneralHeap,
     sampler_heap: sampler::SamplerHeap,
@@ -1005,8 +1003,6 @@ pub struct CommandEncoder {
 
     null_rtv_handle: descriptor::Handle,
     list: Option<Direct3D12::ID3D12GraphicsCommandList>,
-    /// The allocator of its own the open list came with, when it's an armed one (`ArmedLists`).
-    list_allocator: Option<Direct3D12::ID3D12CommandAllocator>,
     free_lists: Vec<Direct3D12::ID3D12GraphicsCommandList>,
     pass: PassState,
     temp: Temp,
@@ -1033,39 +1029,6 @@ impl fmt::Debug for CommandEncoder {
 #[derive(Debug)]
 pub struct CommandBuffer {
     raw: Direct3D12::ID3D12GraphicsCommandList,
-    /// The allocator of its own an armed list came with (`ArmedLists`): it goes back to be armed
-    /// again rather than into its encoder's free lists.
-    armed: Option<Direct3D12::ID3D12CommandAllocator>,
-}
-
-/// An open command list and the allocator of its own it records into.
-struct Armed(Direct3D12::ID3D12GraphicsCommandList, Direct3D12::ID3D12CommandAllocator);
-
-// SAFETY: a list and its allocator are used by one thread at a time: the arming thread, then the
-// encoder that takes them, then the arming thread again once the GPU is done with them.
-unsafe impl Send for Armed {}
-
-/// Command lists kept open and ready to record into, each with an allocator of its own. Some
-/// drivers (Intel's) take about a millisecond to reset a list or make one, and wgpu takes two
-/// for each render pass, so an encoder takes an armed list instead of resetting one of its own,
-/// and a thread of their own resets each (allocator and list) once the GPU is done with it.
-struct ArmedLists {
-    ready: Mutex<Vec<Armed>>,
-    /// To the arming thread, while it runs (`Device::reserve_command_lists` starts it).
-    rearm: Mutex<Option<std::sync::mpsc::Sender<Armed>>>,
-}
-
-impl ArmedLists {
-    fn take(&self) -> Option<Armed> {
-        self.ready.lock().pop()
-    }
-
-    /// Hands `list` (closed, its GPU work done or never submitted) back to be armed again.
-    fn give_back(&self, list: Direct3D12::ID3D12GraphicsCommandList, allocator: Direct3D12::ID3D12CommandAllocator) {
-        if let Some(rearm) = self.rearm.lock().as_ref() {
-            let _ = rearm.send(Armed(list, allocator));
-        }
-    }
 }
 
 impl crate::DynCommandBuffer for CommandBuffer {}
