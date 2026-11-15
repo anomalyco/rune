@@ -664,12 +664,14 @@ impl Renderer {
                         c = c.child(self.task_item((k, n), indent, item, imap, marker_offset, checked).mt(gap(k)));
                         continue;
                     }
-                    let marker = match start {
-                        Some(n) => format!("{}.", n + k as u64),
-                        None => "•".into(),
+                    let marker = if start.is_none() && s.list_outside {
+                        // The indent is still the column's width: the symbol cannot rewrap an item.
+                        el().w(indent).h(s.body.line_px()).child(el().outside_list_disc(s.body).fill(s.muted))
+                    } else {
+                        let words = start.map_or_else(|| "•".into(), |n| format!("{}.", n + k as u64));
+                        let marker = text(words).font(s.body).color(s.muted).exact_lines().w(indent);
+                        if s.list_outside { marker.align(Align::End).pr(space) } else { marker.align(Align::Center) }
                     };
-                    let marker = text(marker).font(s.body).color(s.muted).exact_lines().w(indent);
-                    let marker = if s.list_outside { marker.align(Align::End).pr(space) } else { marker.align(Align::Center) };
                     // The item's place in the list says what its marker shows.
                     c = c.child(
                         row()

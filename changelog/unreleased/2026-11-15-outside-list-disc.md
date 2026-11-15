@@ -1,0 +1,1 @@
+- Outside bullets in `rune_kit::Markdown` use a disc instead of a font glyph. `El::outside_list_disc` places it relative to the first line, resolving font metrics at the window's current scale. Numbered markers, checkboxes and the item's wrapping width are unchanged.
