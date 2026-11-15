@@ -13,6 +13,11 @@ use crate::machine::{Attempt, Effects, Seq};
 /// explicit choice on that surface should call [`Ticket::quit_anyway`]. `resumed` dismisses it.
 pub struct Hooks {
     pub begin: fn(Ticket),
+    /// On the UI loop, atomically compare the durable revision with the last admitted edit
+    /// and close admission if they match. Never wait for a lock, producer or disk. On false,
+    /// arrange another receipt; the retained hosts and original overdue deadline stay live.
+    /// A cancelled session-end query calls `resumed` to reopen even a successful seal.
+    pub try_seal: fn(Ticket, u64) -> bool,
     pub overdue: fn(Ticket),
     pub resumed: fn(Ticket),
     pub confirmed: fn(Ticket),
@@ -94,9 +99,10 @@ pub(super) fn session_ends() {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Ticket(Attempt);
 impl Ticket {
-    /// The app has verified that all changes in this attempt are durable.
-    pub fn confirm(self) {
-        post(Message::Event(Event::Receipt(self)));
+    /// The writer has made edits through `revision` durable. Posting this receipt is not
+    /// permission to exit: the live attempt must still pass [`Hooks::try_seal`] on the loop.
+    pub fn saved_through(self, revision: u64) {
+        post(Message::Event(Event::Receipt(self, revision)));
     }
     /// Saving failed. Present the overdue surface without waiting for its clock.
     pub fn failed(self) {
@@ -162,7 +168,8 @@ pub(crate) enum Event {
     Prepared(Ticket),
     Due(Ticket, Instant),
     Failed(Ticket),
-    Receipt(Ticket),
+    Receipt(Ticket, u64),
+    Sealed(Ticket),
     Reopen,
     Force(Ticket),
 }
@@ -176,6 +183,7 @@ pub(crate) enum Intent {
 pub(crate) enum Effect {
     HideAndPrepare(Ticket),
     Status(Ticket),
+    CheckRevision(Ticket, u64),
     Restore(Ticket),
     Finalize(Ticket, After),
     #[cfg(target_os = "windows")]
@@ -199,7 +207,7 @@ pub(crate) fn step(state: &mut State, seq: &mut Seq, event: Event) -> Effects<Ef
             Effects::one(Effect::HideAndPrepare(k))
         }
         #[cfg(target_os = "windows")]
-        (State::Saving { k, after: Intent::System, .. } | State::Overdue { k, after: Intent::System }, Event::Receipt(t)) if *k == t => {
+        (State::Saving { k, after: Intent::System, .. } | State::Overdue { k, after: Intent::System }, Event::Sealed(t)) if *k == t => {
             *state = State::AwaitSessionEnd(t);
             Effects::one(Effect::Consent)
         }
@@ -237,7 +245,10 @@ pub(crate) fn step(state: &mut State, seq: &mut Seq, event: Event) -> Effects<Ef
             *state = State::Resumed;
             Effects::one(Effect::Restore(k))
         }
-        (State::Saving { k, after: Intent::User(after), .. } | State::Overdue { k, after: Intent::User(after) }, Event::Receipt(t)) if *k == t => {
+        // A stale attempt never even asks the app to seal. A valid attempt with an obsolete
+        // revision stays reversible; another save does not reset the two-second clock.
+        (State::Saving { k, .. } | State::Overdue { k, .. }, Event::Receipt(t, rev)) if *k == t => Effects::one(Effect::CheckRevision(t, rev)),
+        (State::Saving { k, after: Intent::User(after), .. } | State::Overdue { k, after: Intent::User(after) }, Event::Sealed(t)) if *k == t => {
             let after = *after;
             *state = State::Confirmed;
             Effects::one(Effect::Finalize(t, after))
