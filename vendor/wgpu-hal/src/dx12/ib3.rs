@@ -13,6 +13,9 @@ struct Meter { current:Row, back:usize, rows:Vec<Row>, ended:bool }
 std::thread_local! { static S:RefCell<Meter>=RefCell::default(); }
 pub static LIVE:AtomicUsize=AtomicUsize::new(0);
 pub static PEAK:AtomicUsize=AtomicUsize::new(0);
+std::thread_local!{static IDS:RefCell<([usize;64],[usize;64],usize,u32)>=RefCell::new(([0;64],[0;64],0,0));}
+pub fn opened(a:usize,l:usize){IDS.with_borrow_mut(|s|{if s.3<12&&s.2<64{let n=s.2;s.0[n]=a;s.1[n]=l;s.2+=1;}})}
+pub fn ids(){IDS.with_borrow_mut(|s|{if s.3<12{std::eprintln!("IBIDS {} {:?} {:?}",s.3,&s.0[..s.2],&s.1[..s.2]);s.2=0;}s.3+=1;})}
 pub fn add(n:usize,t:Instant) {let ns=t.elapsed().as_nanos() as u64; S.with_borrow_mut(|s|{s.current.calls[n]+=1;s.current.ns[n]+=ns;});}
 pub fn surface(index:usize,buffers:usize,back:usize,w:u32,h:u32) { S.with_borrow_mut(|s| {s.back=back; s.current.index=index; s.current.buffers=buffers; s.current.width=w; s.current.height=h;}); }
 pub fn back(ptr:usize)->bool{S.with_borrow(|s|s.back==ptr)}

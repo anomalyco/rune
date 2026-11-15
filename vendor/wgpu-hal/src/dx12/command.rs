@@ -417,6 +417,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
         };
 
         if let Some(t)=create {super::ib3::add(super::ib3::CREATE,t);}
+        super::ib3::opened(windows::core::Interface::as_raw(&self.allocator) as usize, windows::core::Interface::as_raw(&list) as usize);
         if let Some(label) = label {
             list.set_name(label)?;
         }

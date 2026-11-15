@@ -1872,7 +1872,7 @@ impl crate::Queue for Queue {
                 .into_device_result("Present1")?;
         }
 
-        ib3::add(ib3::PRESENT,t);ib3::end();
+        ib3::add(ib3::PRESENT,t);ib3::end();ib3::ids();
 
         Ok(())
     }
