@@ -25,7 +25,24 @@ unsafe extern "C" {
 /// `NSTerminateNow`.
 const TERMINATE_NOW: usize = 1;
 
+#[cfg(feature = "deferred-quit")]
+thread_local! { static OWES_REPLY: Cell<bool> = const { Cell::new(false) }; }
+
+#[cfg(feature = "deferred-quit")]
+pub(crate) fn reply(terminate: bool) {
+    if OWES_REPLY.replace(false) && let Some(mtm) = MainThreadMarker::new() {
+        let app = NSApplication::sharedApplication(mtm);
+        // SAFETY: one reply on the main thread per outstanding NSTerminateLater request.
+        unsafe { let _: () = msg_send![&*app, replyToApplicationShouldTerminate: Bool::new(terminate)]; }
+    }
+}
+
 extern "C" fn should_terminate(_: *mut AnyObject, _: Sel, _: *mut AnyObject) -> usize {
+    #[cfg(feature = "deferred-quit")]
+    if super::deferred::request(super::After::Exit) {
+        OWES_REPLY.set(true);
+        return 2; // NSTerminateLater; the event loop answers on confirmation or resume.
+    }
     // Windows::exiting carries out the quit's effects.
     let _ = super::send(super::Event::Start { ending: false, after: super::After::Exit });
     TERMINATE_NOW

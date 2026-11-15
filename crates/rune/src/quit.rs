@@ -15,8 +15,11 @@
 
 use std::sync::Mutex;
 
+#[cfg(all(feature = "deferred-quit", any(windows, target_os = "macos", target_os = "linux")))]
+pub mod deferred;
+
 #[cfg(target_os = "macos")]
-mod mac;
+pub(crate) mod mac;
 pub(crate) mod relaunch;
 #[cfg(target_os = "windows")]
 mod win32;

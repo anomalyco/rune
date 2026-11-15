@@ -95,6 +95,10 @@ mod handoff;
 
 #[cfg(target_os = "windows")]
 mod windows;
+#[cfg(all(feature="deferred-quit",target_os="windows"))]
+pub(crate) use windows::ui_claim;
+#[cfg(all(feature="deferred-quit",target_os="linux"))]
+pub(crate) use linux::ui_claim;
 
 #[cfg(target_os = "linux")]
 mod linux;

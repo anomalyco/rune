@@ -127,6 +127,8 @@ mod backoff_tests;
 mod frame_move_tests;
 
 pub(crate) enum WakeEvent {
+    #[cfg(all(feature = "deferred-quit", any(windows, target_os = "macos", target_os = "linux")))]
+    Deferred(crate::deferred_quit::Message),
     DisplayTick(usize),
     App(usize), Live(usize), Window(usize, WindowRequest), Focus(usize),
     Position(usize, (i32, i32)), Level(usize, bool),
@@ -157,6 +159,14 @@ pub(crate) enum WakeEvent {
 
 /// What `Windows` needs of a host, whatever its state type: an app window or an overlay.
 pub(crate) trait AnyHost {
+    #[cfg(all(feature = "deferred-quit", any(windows, target_os = "macos", target_os = "linux")))]
+    fn suspend_quit(&mut self, _el: &ActiveEventLoop) -> Option<deferred::Reveal> { self.vanish(); None }
+    #[cfg(all(feature = "deferred-quit", any(windows, target_os = "macos", target_os = "linux")))]
+    fn restore_quit(&mut self, _el: &ActiveEventLoop, _reveal: deferred::Reveal) {}
+    #[cfg(all(feature = "deferred-quit", any(windows, target_os = "macos", target_os = "linux")))]
+    fn close_one(&mut self, _el: &ActiveEventLoop) {}
+    #[cfg(all(feature = "deferred-quit", any(windows, target_os = "macos", target_os = "linux")))]
+    fn close_quits(&self) -> bool { false }
     fn new_events(&mut self, _event_loop: &ActiveEventLoop, _cause: StartCause) {}
     fn wake_deadline(&self) -> Option<Instant> { None }
     fn resumed(&mut self, event_loop: &ActiveEventLoop);
@@ -205,6 +215,8 @@ fn start_all<T, H>(items: Vec<T>, mut build: impl FnMut(usize, T) -> Option<H>, 
 type Factory = Box<dyn FnOnce(&[Display]) -> Vec<AnyWindowSpec>>;
 
 struct Windows {
+    #[cfg(all(feature = "deferred-quit", any(windows, target_os = "macos", target_os = "linux")))]
+    deferred: deferred::Session,
     factory: Option<Factory>,
     args: Args,
     proxy: EventLoopProxy<WakeEvent>,
@@ -324,10 +336,14 @@ pub(crate) fn start<S: 'static>(mut spec: WindowSpec<S>, handle: Option<WindowHa
 }
 
 mod dispatch;
+#[cfg(all(feature = "deferred-quit", any(windows, target_os = "macos", target_os = "linux")))]
+mod deferred;
 
 use file_drop::{DROP_SAMPLE, FileDrop, FileStep};
 
 struct Host<S: 'static> {
+    #[cfg(all(feature = "deferred-quit", any(windows, target_os = "macos", target_os = "linux")))]
+    slot: usize,
     /// `App::chrome`, as the app set it (`chrome::frame_chrome` lays a titlebar over it).
     chrome: Chrome,
     /// `App::titlebar`, unless the window is borderless.
@@ -522,6 +538,7 @@ impl<S: 'static> Host<S> {
             on_close,
             on_rest,
             on_quit,
+            #[cfg(all(feature = "deferred-quit", any(windows, target_os = "macos", target_os = "linux")))] slot,
             turn_scope,
             turn: any_host::Turn::Between,
             on_reopen,

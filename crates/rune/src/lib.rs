@@ -20,6 +20,8 @@ mod overlay;
 mod platform;
 mod popup_menu;
 mod quit;
+#[cfg(all(feature = "deferred-quit", any(windows, target_os = "macos", target_os = "linux")))]
+pub use quit::deferred as deferred_quit;
 mod recorder;
 mod shortcuts;
 mod states;

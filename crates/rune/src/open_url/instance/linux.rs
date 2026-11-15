@@ -97,6 +97,8 @@ fn claimed(path: PathBuf, listener: UnixListener) -> bool {
             // A client that connects and sends nothing doesn't hold the next launch up for long.
             stream.set_read_timeout(Some(Duration::from_secs(1))).ok();
             let Some(args) = read(&mut stream) else { continue };
+            #[cfg(feature="deferred-quit")]
+            if let Some(answer)=super::handoff::ui_answer(&args) { let _=stream.write_all(&[answer]); continue; }
             let quitting = crate::quit::quitting();
             // A sender that stopped waiting (this process didn't answer in time, and the launch
             // went on without it) has closed its end: the answer fails and the launch is its own.
@@ -185,6 +187,50 @@ fn send(path: &Path) -> Sent {
         (true, QUITTING) => Sent::Quitting,
         _ => Sent::Nobody,
     }
+}
+
+/// Never unlink a listening socket on a missed acknowledgement. Use a nonblocking connect
+/// (a full accept queue must not spend the UI acknowledgement budget in connect()).
+#[cfg(feature="deferred-quit")]
+pub(crate) fn ui_claim(id: &str) -> crate::deferred_quit::Claim {
+    use crate::deferred_quit::{ACK_WITHIN,Claim};
+    use std::os::fd::{FromRawFd,AsRawFd};
+    use std::os::unix::ffi::OsStrExt;
+    let until=Instant::now()+ACK_WITHIN;
+    let Some(path)=socket_path(id) else {return Claim::Unresponsive};
+    let Ok(lock)=std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(path.with_extension("lock")) else {return Claim::Unresponsive};
+    loop {
+        if Instant::now()>=until {return Claim::Unresponsive}
+        match lock.try_lock() { Ok(())=>break, Err(std::fs::TryLockError::WouldBlock)=>std::thread::yield_now(), Err(_)=>return Claim::Unresponsive }
+    }
+    match UnixListener::bind(&path) {
+        Ok(listener)=>{claimed(path,listener);return Claim::Primary},
+        Err(e) if e.kind()==ErrorKind::AddrInUse=>{}, _=>return Claim::Unresponsive,
+    }
+    let raw=path.as_os_str().as_bytes();
+    // SAFETY: initialize the Unix address and own the socket exactly once. The path was checked
+    // against sun_path's length; passing the full zero-padded address includes the trailing NUL.
+    let (mut stream, result) = unsafe {
+        let mut addr:libc::sockaddr_un=std::mem::zeroed();
+        if raw.len()>=addr.sun_path.len(){return Claim::Unresponsive}
+        addr.sun_family=libc::AF_UNIX as _;
+        for (to,from) in addr.sun_path.iter_mut().zip(raw){*to=*from as _;}
+        let fd=libc::socket(libc::AF_UNIX,libc::SOCK_STREAM|libc::SOCK_NONBLOCK|libc::SOCK_CLOEXEC,0);
+        if fd<0{return Claim::Unresponsive}
+        let stream=UnixStream::from_raw_fd(fd);
+        let rc=libc::connect(stream.as_raw_fd(),(&raw const addr).cast(),std::mem::size_of_val(&addr) as _);
+        (stream, if rc==0{Ok(())}else{Err(std::io::Error::last_os_error())})
+    };
+    if let Err(e)=result {
+        if e.kind()==ErrorKind::ConnectionRefused && std::fs::remove_file(&path).is_ok() && let Ok(l)=UnixListener::bind(&path) {claimed(path,l);return Claim::Primary}
+        return Claim::Unresponsive;
+    }
+    drop(lock);
+    let send=super::handoff::ui_message(until);
+    let left=||until.saturating_duration_since(Instant::now());
+    if stream.set_nonblocking(false).is_err() || stream.set_write_timeout(Some(left())).is_err() || stream.write_all(&send).is_err() || stream.set_read_timeout(Some(left())).is_err() {return Claim::Unresponsive}
+    let mut ans=[0]; if stream.read_exact(&mut ans).is_err(){return Claim::Unresponsive}
+    match ans[0] { b'R'=>Claim::Delivered, ACCEPTED=>Claim::LegacyDelivery, _=>Claim::Unresponsive }
 }
 
 /// Waits, at most `HANDED_WAIT`, for a quitting process to remove its socket (or to die with

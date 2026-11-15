@@ -64,10 +64,31 @@ pub(super) fn install(deliver: impl Fn(bool) -> bool + 'static) {
 unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPARAM) -> LRESULT {
     match message {
         WM_QUERYENDSESSION => {
+            #[cfg(feature="deferred-quit")]
+            if let Some(hooks) = super::deferred::hooks() {
+                if super::deferred::terminal() { return TRUE as LRESULT; }
+                use windows_sys::Win32::System::Shutdown::ShutdownBlockReasonCreate;
+                let reason: Vec<u16>=(hooks.shutdown_reason)().encode_utf16().take(255).chain(Some(0)).collect();
+                // SAFETY: the reason is NUL terminated; this is the session window's own thread.
+                unsafe { ShutdownBlockReasonCreate(hwnd,reason.as_ptr()); }
+                super::deferred::system_query();
+                // As for the existing session hook, do not dispatch a nested event while a Rune
+                // handler is running. A query is permission, not the final end of the session.
+                if super::loop_state() == Loop::Idle { run_query_loop(); }
+                return super::deferred::terminal() as LRESULT;
+            }
             answer(false);
             TRUE as LRESULT
         }
         WM_ENDSESSION => {
+            #[cfg(feature="deferred-quit")]
+            if super::deferred::hooks().is_some() {
+                if w != 0 {
+                    if !super::deferred::terminal() { std::process::exit(2); }
+                    super::deferred::session_ends();
+                } else { clear_reason(); super::deferred::cancel_system_query(); }
+                return 0;
+            }
             if w != 0 {
                 answer(true);
             } else {
@@ -78,6 +99,31 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
         }
         // SAFETY: the parameters are the ones Windows passed.
         _ => unsafe { DefWindowProcW(hwnd, message, w, l) },
+    }
+}
+
+#[cfg(feature="deferred-quit")]
+fn run_query_loop() {
+    let until=Instant::now()+Duration::from_secs(2);
+    while !super::deferred::terminal() && Instant::now()<until {
+        // SAFETY: same UI thread and message pump as run_loop. Preserve WM_QUIT for winit.
+        unsafe {
+            let mut msg:MSG=std::mem::zeroed();
+            if PeekMessageW(&mut msg,std::ptr::null_mut(),0,0,PM_REMOVE)==0 {
+                MsgWaitForMultipleObjects(0,std::ptr::null(),0,until.saturating_duration_since(Instant::now()).as_millis() as u32,QS_ALLINPUT);continue;
+            }
+            if msg.message==WM_QUIT {PostQuitMessage(msg.wParam as i32);return}
+            TranslateMessage(&msg);DispatchMessageW(&msg);
+        }
+    }
+}
+
+#[cfg(feature="deferred-quit")]
+pub(super) fn clear_reason() {
+    let hwnd=WINDOW.get();
+    if !hwnd.is_null() {
+        // SAFETY: called on the UI thread which created the hidden session window.
+        unsafe { windows_sys::Win32::System::Shutdown::ShutdownBlockReasonDestroy(hwnd); }
     }
 }
 

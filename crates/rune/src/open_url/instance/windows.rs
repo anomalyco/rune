@@ -84,6 +84,8 @@ pub(super) fn claim(id: &str) -> bool {
                 continue;
             }
             match send(&name) {
+                #[cfg(feature="deferred-quit")]
+                Sent::UiDelivered => return false,
                 Sent::Delivered => return false,
                 // It quits: the name is free once it has closed what it holds.
                 Sent::Quitting(server) => match wait_free(&name, server) {
@@ -99,6 +101,27 @@ pub(super) fn claim(id: &str) -> bool {
     }
     // Every name is held by a process that doesn't answer: run unclaimed rather than not at all.
     true
+}
+
+#[cfg(feature="deferred-quit")]
+pub(crate) fn ui_claim(id: &str) -> crate::deferred_quit::Claim {
+    use crate::deferred_quit::{ACK_WITHIN, Claim};
+    let deadline = Instant::now()+ACK_WITHIN;
+    let name = wide(&pipe_name(id,0));
+    let wire = super::handoff::ui_message(deadline);
+    loop {
+        match create(&name) {
+            Ok(pipe) => { claimed(name,pipe); return Claim::Primary; }
+            Err(ERROR_ACCESS_DENIED) => {}
+            Err(_) => return Claim::Unresponsive,
+        }
+        match exchange(&name,deadline,|| wire.clone()) {
+            Sent::UiDelivered => return Claim::Delivered,
+            Sent::Delivered => return Claim::LegacyDelivery,
+            Sent::Gone | Sent::Quitting(_) if Instant::now() < deadline => continue,
+            _ => return Claim::Unresponsive,
+        }
+    }
 }
 
 fn claimed(name: Vec<u16>, pipe: HANDLE) -> bool {
@@ -201,8 +224,12 @@ fn listen(pipe: HANDLE) {
             let connected = unsafe { ConnectNamedPipe(pipe, std::ptr::null_mut()) } != 0 || unsafe { GetLastError() } == ERROR_PIPE_CONNECTED;
             if connected && let Some(launch) = read(pipe) {
                 let quitting = crate::quit::quitting();
+                #[cfg(feature="deferred-quit")]
+                let ui = launch.answers.then(|| super::handoff::ui_answer(&launch.args)).flatten();
                 if launch.answers {
                     let answer = [if quitting { QUITTING } else { ACCEPTED }];
+                    #[cfg(feature="deferred-quit")]
+                    let answer = ui.map(|a| [a]).unwrap_or(answer);
                     let mut written = 0;
                     // SAFETY: one byte from `answer` to the connected client; the flush waits
                     // for the client to read it (or to close), so the disconnect below
@@ -214,7 +241,11 @@ fn listen(pipe: HANDLE) {
                 }
                 // A launch told the app quits claims the instance itself; one that couldn't
                 // be told (an older sender) is started again once this process exits.
-                if !(quitting && launch.answers) {
+                #[cfg(feature="deferred-quit")]
+                let handled = ui.is_some() || (quitting && launch.answers);
+                #[cfg(not(feature="deferred-quit"))]
+                let handled = quitting && launch.answers;
+                if !handled {
                     relaunched(launch.args);
                 }
             }
@@ -277,6 +308,8 @@ fn read(pipe: HANDLE) -> Option<Launch> {
 }
 
 enum Sent {
+    #[cfg(feature="deferred-quit")]
+    UiDelivered,
     /// The running process took the launch.
     Delivered,
     /// The running process quits: it lets go of the name once it has closed what it holds.
@@ -292,6 +325,10 @@ enum Sent {
 /// `ANSWER_WITHIN`, for its answer.
 fn send(name: &[u16]) -> Sent {
     let deadline = Instant::now() + ANSWER_WITHIN;
+    exchange(name,deadline,super::handoff::message)
+}
+
+fn exchange(name: &[u16], deadline: Instant, payload: impl FnOnce() -> Vec<u8>) -> Sent {
     let left = || u32::try_from(deadline.saturating_duration_since(Instant::now()).as_millis()).unwrap_or(u32::MAX);
     let pipe = loop {
         // SAFETY: `name` is NUL-terminated; opens the pipe's client end, overlapped so the
@@ -326,7 +363,7 @@ fn send(name: &[u16]) -> Sent {
         unsafe { CloseHandle(pipe) };
         return Sent::Nobody;
     }
-    let message = super::handoff::message();
+    let message = payload();
     let mut answer = [0u8; 1];
 
     let answered = io(pipe, deadline, |o| {
@@ -345,6 +382,8 @@ fn send(name: &[u16]) -> Sent {
     unsafe { CloseHandle(pipe) };
     crate::marks::mark("instance.answered");
     match (answered, answer[0]) {
+        #[cfg(feature="deferred-quit")]
+        (Some(1), b'R') => Sent::UiDelivered,
         (Some(1), ACCEPTED) => Sent::Delivered,
         (Some(1), QUITTING) => Sent::Quitting(server),
         _ => Sent::Nobody,

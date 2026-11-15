@@ -48,11 +48,15 @@ impl ApplicationHandler<WakeEvent> for Windows {
     }
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: WakeEvent) {
         let _handling = crate::quit::handling();
+        #[cfg(all(feature = "deferred-quit", any(windows, target_os = "macos", target_os = "linux")))]
+        if let WakeEvent::Deferred(m) = event { self.deferred_message(event_loop, m); return; }
         let slot = match &event {
             WakeEvent::DisplayTick(i) | WakeEvent::App(i) | WakeEvent::Live(i) | WakeEvent::Window(i, _) | WakeEvent::Focus(i)
                 | WakeEvent::Position(i, _) | WakeEvent::Level(i, _) | WakeEvent::Place(i, _) | WakeEvent::Frame(i, _)
                 | WakeEvent::A11y(i) | WakeEvent::FrameSlot(i) | WakeEvent::GpuReady(i) => *i,
             WakeEvent::Reopen => {
+                #[cfg(all(feature = "deferred-quit", any(windows, target_os = "macos", target_os = "linux")))]
+                if self.resume_quit(event_loop) { return; }
                 self.reopen(event_loop);
                 self.cleanup(event_loop);
                 return;
@@ -64,6 +68,8 @@ impl ApplicationHandler<WakeEvent> for Windows {
                 return;
             }
             WakeEvent::Turn => { #[cfg(not(target_arch = "wasm32"))] self.turn(event_loop); return; }
+            #[cfg(all(feature = "deferred-quit", any(windows, target_os = "macos", target_os = "linux")))]
+            WakeEvent::Deferred(_) => unreachable!(),
         };
         if let Some(Some(host)) = self.hosts.get_mut(slot) {
             host.user_event(event_loop, event);
@@ -73,6 +79,13 @@ impl ApplicationHandler<WakeEvent> for Windows {
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
         let _handling = crate::quit::handling();
         // The last window's close ends a fast-exiting app: the window can go at once.
+        #[cfg(all(feature = "deferred-quit", any(windows, target_os = "macos", target_os = "linux")))]
+        if crate::deferred_quit::hooks().is_some() && matches!(event, WindowEvent::CloseRequested)
+            && let Some(slot) = self.hosts.iter().position(|h| h.as_ref().is_some_and(|h| h.owns(id) && h.close_quits()))
+            && self.last_quit_host(slot) {
+            self.deferred_step(event_loop, crate::deferred_quit::Event::Quit(Instant::now(), crate::quit::After::Exit));
+            return;
+        }
         #[cfg(not(target_arch = "wasm32"))]
         if matches!(event, WindowEvent::CloseRequested) && crate::quit::fast_exit_hook().is_some()
             && !self.hosts.iter().flatten().any(|h| !h.owns(id) && !h.finished() && h.keeps_loop())
@@ -111,12 +124,31 @@ impl ApplicationHandler<WakeEvent> for Windows {
         // Layer surfaces have no redraw events: keep turning while one animates (its vsync
         // paces the loop). Hosts whose only motion is an ambient loop sleep until its next step.
         let deadline = self.hosts.iter().flatten().filter_map(|host| host.wake_deadline()).min();
+        #[cfg(all(feature = "deferred-quit", any(windows, target_os = "macos", target_os = "linux")))]
+        let deadline = deadline.into_iter().chain(self.deferred_deadline(event_loop, now)).min();
         event_loop.set_control_flow(if animating { ControlFlow::Poll }
             else { deadline.map_or(ControlFlow::Wait, |at| ControlFlow::WaitUntil(crate::time::for_winit(at))) });
     }
     fn exiting(&mut self, event_loop: &ActiveEventLoop) {
         let _handling = crate::quit::handling();
         crate::marks::mark("loop.exiting");
+        #[cfg(all(feature = "deferred-quit", any(windows, target_os = "macos", target_os = "linux")))]
+        if crate::deferred_quit::hooks().is_some() {
+            if !matches!(self.deferred.state, crate::deferred_quit::State::Confirmed) {
+                // The OS ended the loop, not a durable receipt. Never run an install-on-confirm hook.
+                crate::marks::mark("quit.interrupted");
+                std::process::exit(2);
+            }
+            // Prepare and confirmation replace the legacy quit hooks. Running them here could
+            // enqueue authoritative writes *after* the receipt that authorized this exit.
+            for host in self.hosts.iter_mut().flatten() { host.cancel_menus(); }
+            if let Some(last) = crate::quit::fast_exit_hook() { crate::quit::end_fast(last); }
+            self.hosts.clear();
+            crate::clipboard::shutdown();
+            if crate::quit::send(crate::quit::Event::Exited).contains(&crate::quit::Effect::Relaunch) { crate::relaunch::spawn(); }
+            #[cfg(any(target_os="windows",target_os="linux"))] crate::open_url::instance::exited();
+            return;
+        }
         // Every quit ends here, so the windows still open run `App::on_quit` first, unless the
         // quit's hooks already ran (a Windows logoff, the last window closing).
         self.quit(event_loop, false, true);
