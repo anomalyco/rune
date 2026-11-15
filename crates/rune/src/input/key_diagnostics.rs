@@ -109,6 +109,12 @@ pub(crate) fn warnings(root: &El) -> Vec<String> {
 /// already taken, so the first keeps its key. Returns each renamed index with its old key.
 pub(crate) fn rename_duplicates<'a>(keys: impl Iterator<Item = &'a mut String>) -> Vec<(usize, String)> {
     let mut keys: Vec<&mut String> = keys.collect();
+    // Unique keys, the usual case, are found so by borrowing them: no copy of each.
+    let mut seen: crate::runtime::HashSet<&str> = crate::runtime::HashSet::with_capacity_and_hasher(keys.len(), Default::default());
+    if keys.iter().all(|k| seen.insert(k.as_str())) {
+        return Vec::new();
+    }
+    drop(seen);
     let mut taken: HashSet<String> = keys.iter().map(|k| k.to_string()).collect();
     let mut kept: HashSet<String> = HashSet::new();
     let mut renamed = Vec::new();
