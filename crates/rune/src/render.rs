@@ -12,7 +12,7 @@ pub(crate) const ATLAS_START_ROWS: u32 = 256;
 
 mod backdrop_blur;
 mod breaker;
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_arch = "wasm32"))]
 mod damaged;
 #[cfg(target_os = "windows")]
 pub(crate) use damaged::MAX_RECTS;
@@ -796,10 +796,10 @@ pub struct Renderer {
     /// limit from JavaScript (about 35 µs), which a frame's layers used to pay.
     max_texture_dim: u32,
     /// The one instance per rectangle that clears a damaged one (`arm_damage`), made on first use.
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_arch = "wasm32"))]
     clear_quad: std::sync::OnceLock<wgpu::Buffer>,
     /// The kept frame and the rectangles the next `draw` may redraw alone (`damaged`).
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_arch = "wasm32"))]
     damage: std::sync::Mutex<damaged::DamageState>,
 }
 
@@ -1007,8 +1007,8 @@ impl Renderer {
     }
 
     pub fn draw(&self, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, clear: [f32; 4]) {
-        #[cfg(target_os = "windows")]
-        if self.draw_armed(encoder, view) { return; }
+        #[cfg(any(target_os = "windows", target_arch = "wasm32"))]
+        if self.armed() && self.draw_armed(encoder, &view.texture()) { return; }
         self.draw_timed(encoder, view, clear, None);
     }
 

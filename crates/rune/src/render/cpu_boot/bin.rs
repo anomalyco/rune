@@ -237,7 +237,7 @@ impl Bins {
 
 /// The pixels whose centres lie in the quad the vertex shader draws for `i` (`base_vs`), within
 /// the reach of its clip and the target. Empty for what rasterises nothing.
-pub(super) fn pixel_bounds(i: &Instance, w: i32, h: i32) -> [i32; 4] {
+pub(in crate::render) fn pixel_bounds(i: &Instance, w: i32, h: i32) -> [i32; 4] {
     let kind = i.params[1];
     if kind > 11.5 || kind == crate::render::KIND_LAYER_END { return [0; 4]; }
     let grow = match kind as u32 {

@@ -94,9 +94,9 @@ impl Renderer {
             fills: Default::default(),
             device_key: crate::compose::DeviceKey::next(),
             max_texture_dim: device.limits().max_texture_dimension_2d,
-            #[cfg(target_os = "windows")]
+            #[cfg(any(target_os = "windows", target_arch = "wasm32"))]
             clear_quad: std::sync::OnceLock::new(),
-            #[cfg(target_os = "windows")]
+            #[cfg(any(target_os = "windows", target_arch = "wasm32"))]
             damage: Default::default(),
         }
     }

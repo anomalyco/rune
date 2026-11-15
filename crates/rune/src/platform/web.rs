@@ -179,6 +179,8 @@ struct GpuSide {
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
     renderer: Renderer,
+    /// The adapter is WebGL2's.
+    gl: bool,
 }
 
 /// Who draws the page's frames, and how far the GPU is (the native CPU-first window's
@@ -226,6 +228,9 @@ struct Running<S: 'static> {
     clock: crate::frame::clock::FrameClock,
     compositor: Option<Box<dyn crate::Compositor<S>>>,
     suspended: bool,
+    /// An input or app event can share a redraw with the animation timer. In that case the
+    /// timer must not consume the redraw as a stand-alone paint.
+    full_redraw: bool,
     embedded: bool,
     document: bool,
     /// The first frame is on screen.
@@ -427,7 +432,8 @@ fn gpu_side<S: 'static>(gpu: Gpu, surface: wgpu::Surface<'static>, size: (u32, u
     let mut renderer = Renderer::new(&gpu.device, format);
     renderer.set_srgb_blend(!format.is_srgb());
     renderer.attach_text(&mut rt.text.atlas);
-    Ok(GpuSide { gpu, surface, config, renderer })
+    let gl = gpu.adapter.get_info().backend == wgpu::Backend::Gl;
+    Ok(GpuSide { gpu, surface, config, renderer, gl })
 }
 
 /// The canvas's configuration for `size`, and the format the renderer draws in: the canvas's,
@@ -438,6 +444,9 @@ fn canvas_config(gpu: &Gpu, surface: &wgpu::Surface<'static>, size: (u32, u32), 
     config.present_mode = wgpu::PresentMode::Fifo;
     let caps = surface.get_capabilities(&gpu.adapter);
     config.usage |= caps.usages & wgpu::TextureUsages::COPY_SRC;
+    // A WebGPU canvas can be copied into (wgpu names only its render use): a loop-only step's
+    // frame is the last one, kept, with its dots redrawn (`Renderer::arm_cycle`).
+    if gpu.adapter.get_info().backend == wgpu::Backend::BrowserWebGpu { config.usage |= wgpu::TextureUsages::COPY_DST; }
     // A canvas can always be copied from; the hand-over's drift count needs that.
     if drift_wanted() { config.usage |= wgpu::TextureUsages::COPY_SRC; }
     let wanted = if srgb_blend { config.format.remove_srgb_suffix() } else { config.format.add_srgb_suffix() };
@@ -453,8 +462,8 @@ fn canvas_config(gpu: &Gpu, surface: &wgpu::Surface<'static>, size: (u32, u32), 
 
 /// A frame drawn on the GPU from the runtime's instances, presented; `Err` when the canvas gave
 /// no texture to draw into.
-fn gpu_frame<S: 'static>(side: &mut GpuSide, rt: &mut Runtime<S>, compositor: &mut Option<Box<dyn crate::Compositor<S>>>, now: Instant, dt: f64, readback: bool) -> Result<Option<Readback>, String> {
-    if side.gpu.adapter.get_info().backend != wgpu::Backend::Gl && side.renderer.srgb_blend() != rt.srgb_blend() {
+fn gpu_frame<S: 'static>(side: &mut GpuSide, rt: &mut Runtime<S>, compositor: &mut Option<Box<dyn crate::Compositor<S>>>, now: Instant, dt: f64, readback: bool, tick: bool) -> Result<Option<Readback>, String> {
+    if !side.gl && side.renderer.srgb_blend() != rt.srgb_blend() {
         let format = if rt.srgb_blend() { side.config.format.remove_srgb_suffix() } else { side.config.format.add_srgb_suffix() };
         if format != side.config.format && !side.config.view_formats.contains(&format) {
             side.config.view_formats.push(format);
@@ -466,15 +475,28 @@ fn gpu_frame<S: 'static>(side: &mut GpuSide, rt: &mut Runtime<S>, compositor: &m
         wgpu::CurrentSurfaceTexture::Success(frame) | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
         _ => return Err("WebGPU canvas acquisition failed".into()),
     };
-    let target = frame.texture.create_view(&wgpu::TextureViewDescriptor { format: Some(side.renderer.format()), ..Default::default() });
     side.renderer.upload_images(&side.gpu.device, &side.gpu.queue, &mut rt.images);
+    // A loop-only step (`runtime/paint/cycle.rs`) writes only the dots it changed, and redraws
+    // only where they are, into the last frame the renderer keeps, which is copied to the canvas.
+    let (paint, slots) = rt.cycle_paint();
+    let size = (side.config.width, side.config.height);
+    let armed = tick && side.config.usage.contains(wgpu::TextureUsages::COPY_DST)
+        && side.renderer.arm_cycle(&side.gpu.device, &side.gpu.queue, paint, &rt.instances, &slots, rt.clear_color(), size, side.config.format).is_ok();
+    side.renderer.next_instances(paint, tick.then_some(slots));
     let mut encoder = side.gpu.device.create_command_encoder(&Default::default());
-    if let Some(compositor) = compositor {
+    if armed {
+        // Rune's default frame (a compositor that drew its own would have kept this a whole one):
+        // nothing draws into the canvas but the copy of the kept frame.
+        side.renderer.prepare(&side.gpu.device, &side.gpu.queue, &mut rt.text.atlas, &rt.instances, size);
+        side.renderer.draw_armed(&mut encoder, &frame.texture);
+    } else if let Some(compositor) = compositor {
+        let target = frame.texture.create_view(&wgpu::TextureViewDescriptor { format: Some(side.renderer.format()), ..Default::default() });
         compositor.render(&mut crate::Frame { device: &side.gpu.device, queue: &side.gpu.queue, encoder: &mut encoder,
             target: &target, format: side.renderer.format(), size: (side.config.width, side.config.height), dt,
             update_ms: now.elapsed().as_secs_f64() * 1000.0, rt, ui: &mut side.renderer });
     } else {
-        side.renderer.prepare(&side.gpu.device, &side.gpu.queue, &mut rt.text.atlas, &rt.instances, (side.config.width, side.config.height));
+        let target = frame.texture.create_view(&wgpu::TextureViewDescriptor { format: Some(side.renderer.format()), ..Default::default() });
+        side.renderer.prepare(&side.gpu.device, &side.gpu.queue, &mut rt.text.atlas, &rt.instances, size);
         side.renderer.draw(&mut encoder, &target, rt.clear_color());
     }
     // A copy of the frame for counting how many of its pixels the CPU's differ in (drift).
@@ -487,6 +509,8 @@ fn gpu_frame<S: 'static>(side: &mut GpuSide, rt: &mut Runtime<S>, compositor: &m
             wgpu::Extent3d { width, height, depth_or_array_layers: 1 });
         Readback { buffer, row, size: (width, height), rgba: matches!(side.config.format, wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Rgba8UnormSrgb) }
     });
+    // Every frame: one drawn whole leaves the kept frame behind.
+    let _ = side.renderer.damage_drawn();
     side.renderer.submit(&side.gpu.queue, encoder);
     side.gpu.queue.present(frame);
     Ok(copy)
@@ -728,7 +752,7 @@ impl<S: 'static> Browser<S> {
         let input = input::Bridge::new(&window.canvas().unwrap(), Rc::downgrade(&self.running), window.clone(),
             input::Mode { embedded: self.embedded, fit_height, document });
         *self.running.borrow_mut() = Some(Running { draw, rt, shared, input, clipboard,
-            clock: crate::frame::clock::FrameClock::new(now), compositor, suspended: false, embedded: self.embedded,
+            clock: crate::frame::clock::FrameClock::new(now), compositor, suspended: false, full_redraw: true, embedded: self.embedded,
             document, presented: false, band: None, size: physical, on_ready, late_fonts, fonts: page_fonts,
             cursor, _menus: menus, shortcuts });
         crate::marks::mark("web.started");
@@ -862,7 +886,13 @@ impl<S: 'static> Browser<S> {
         if r.suspended || r.draw.waiting_for_gpu() { return; }
         let now = Instant::now();
         let (commits, input) = (r.rt.stats.commits, r.rt.has_pending_input());
-        let (animating, dt) = r.clock.advance(&mut r.rt, now, r.compositor.as_ref().is_some_and(|c| c.animating()));
+        let tick = !std::mem::take(&mut r.full_redraw) && matches!(&r.draw, Draw::Gpu(side) if !side.renderer.checking_gpu())
+            && r.compositor.as_ref().is_none_or(|c| !c.animating() && !c.draws_own()) && r.rt.paint_cycle_tick();
+        let (animating, dt) = if tick {
+            let dt = now.saturating_duration_since(r.clock.last()).as_secs_f64();
+            r.clock.hold(now);
+            (false, dt)
+        } else { r.clock.advance(&mut r.rt, now, r.compositor.as_ref().is_some_and(|c| c.animating())) };
         r.apply_frame_requests(window);
         r.clipboard.flush(&mut r.rt);
         // A menu asked for opens as the page's own elements (bridge.js `showMenu`), once the frame
@@ -875,7 +905,7 @@ impl<S: 'static> Browser<S> {
             }
         }
         r.rt.refuse_file_dialog("native file dialogs are unsupported on web");
-        r.sync_input(false);
+        if !tick { r.sync_input(false); }
         r.cursor.apply(window, r.rt.cursor(), r.rt.pointer().is_some());
         if !r.rt.surfaces.is_empty() {
             error("native video surfaces are unsupported on web", window.canvas().as_ref(), r.embedded, r.document);
@@ -892,7 +922,7 @@ impl<S: 'static> Browser<S> {
                 // Both renderers draw this frame once the browser has compiled the GPU's
                 // pipelines; the GPU's canvas stays see-through until its frame is done.
                 if built.get() {
-                    match gpu_frame(side, &mut r.rt, &mut r.compositor, now, dt, drift_wanted()) {
+                    match gpu_frame(side, &mut r.rt, &mut r.compositor, now, dt, drift_wanted(), false) {
                         // That frame made pipelines its draw needed and drew a fallback for each
                         // while the browser checks it (the renderer hears the answers as it
                         // draws): frames go on drawing into the see-through canvas, and the
@@ -913,7 +943,7 @@ impl<S: 'static> Browser<S> {
             }
             Draw::Gpu(side) => {
                 window.pre_present_notify();
-                gpu_frame(side, &mut r.rt, &mut r.compositor, now, dt, false).map(|_| true)
+                gpu_frame(side, &mut r.rt, &mut r.compositor, now, dt, false, tick).map(|_| true)
             }
             Draw::Moving => Ok(false),
         };
@@ -1094,6 +1124,7 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
         }
         let Some(window) = self.window.as_ref() else { return };
         if let Some(r) = &mut *self.running.borrow_mut() {
+            r.full_redraw = true;
             r.shortcuts.drain();
             r.clipboard.receive(&mut r.rt);
             let requests = r.shared.take();
@@ -1117,6 +1148,7 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
         let mut running = self.running.borrow_mut();
         let (Some(window), Some(r)) = (&self.window, &mut *running) else { return };
         let _input = crate::input::time::arrived(&event);
+        r.full_redraw = true;
         if r.window_input(&event, window) { window.request_redraw(); return; }
         match event {
             WindowEvent::Resized(size) => {

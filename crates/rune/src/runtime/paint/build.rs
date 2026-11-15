@@ -570,6 +570,7 @@ impl<S: 'static> Runtime<S> {
                 }
                 if self.time_scale > 0.0 && node_k > 0.0 && let Some(start) = track.pending_start(lnow) {
                     let window_start = now + (start - lnow) / node_k;
+                    self.paint_keep.cycles.other_deadline();
                     let wake = self.clock + (window_start - now) / self.time_scale as f64;
                     if self.loop_wake.is_none_or(|w| wake < w.0) { self.loop_wake = Some((wake, window_start)); }
                 }
@@ -1058,6 +1059,7 @@ impl<S: 'static> Runtime<S> {
                             match wait {
                                 Some(wait) if pulled.active && wait > crate::video::WAKE_MIN => {
                                     let wake = self.clock + wait;
+                                    self.paint_keep.cycles.other_deadline();
                                     if self.loop_wake.is_none_or(|w| wake < w.0) {
                                         self.loop_wake = Some((wake, now + wait * self.time_scale as f64));
                                     }
@@ -1083,6 +1085,19 @@ impl<S: 'static> Runtime<S> {
                     if fill == [0.0; 4] && border_kind == KIND_RECT && bw > 0.0 && sides.is_none() {
                         bands::push_ring(&mut self.instances, ring);
                     } else {
+                        if let Some(rune_motion::LoopKind::OpacityCycle(curve)) = n.looping.as_ref().map(|l| l.kind)
+                            && n.a11y.hidden && !next.is_some_and(|j| self.nodes[j].parent == Some(i))
+                            && !isolate && !in_cache && !skip_paint && loop_vis && base_opacity == 1.0
+                            && pinh.paint_opacity == 1.0 && pinh.hit_opacity == 1.0 && n.vis.layer_opacity == 1.0
+                            && n.vis.paint_alpha == 1.0 && bw == 0.0 && overlay == [0.0; 4]
+                            && self.instances.len() == primitive_start && n.text.is_none() && n.input.is_none()
+                            && n.vis.shape.is_none() && n.vis.pixels.is_none() && n.vis.effect.is_none()
+                            && n.vis.shadows.is_empty() && n.handlers.get().is_none() && n.focus.get().is_none()
+                            && !n.vis_flags.hit() && node_turn.is_none() && cover.is_none() && n.help.is_none()
+                            && curve.stops.iter().all(|&(_, a)| a.is_finite() && a > 0.001 && a <= 1.0 && base[3] * a > 0.0005)
+                        {
+                            self.paint_keep.cycles.record(i, self.instances.len(), curve, base, ring.rect);
+                        }
                         self.instances.push(Instance { fill, ..ring });
                     }
                 }

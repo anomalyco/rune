@@ -29,7 +29,7 @@ use crate::pixels::ImageAtlas;
 use crate::text::{Atlas, FontSmoothing};
 
 mod backdrop;
-mod bin;
+pub(super) mod bin;
 mod blend;
 mod damage;
 mod drift;
