@@ -193,7 +193,9 @@ impl<S: 'static> Runtime<S> {
         let heard = if n.handlers.hover_delay == [0.0; 2] { inside } else { shown };
         let Some(f) = n.handlers.on_hover_change.clone().filter(|_| heard) else { return };
         self.hover_gone.push((n.path.clone(), f));
+        let queued = self.queue.len();
         self.queue.push(Action::HoverChange(n.path.clone(), false));
+        self.queue.observe_since(queued);
     }
 
     /// The pointer moved or pressed, or a hand scrolled: hover follows the pointer through the

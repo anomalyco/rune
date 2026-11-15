@@ -41,6 +41,8 @@ pub struct Tx {
     pub(crate) unprompted: bool,
     /// A handler called [`Self::animated`].
     pub(crate) asked_motion: bool,
+    /// A resting poll changed the model but hasn't committed its tree yet.
+    pub(crate) polled_change: bool,
     pub(crate) color_motion: Option<Spring>,
     pub(crate) relayout: bool,
     /// The viewport moved only because the window's own resize animation stepped it.
