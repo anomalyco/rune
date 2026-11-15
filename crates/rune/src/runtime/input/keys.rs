@@ -157,6 +157,22 @@ impl<S: 'static> Runtime<S> {
     pub(super) fn focused_layout(&mut self) -> Option<TextLayout> {
         let path = self.focus.owned()?;
         let s = self.env.scale;
+        if let Some(i) = self.focused_index() {
+            let n = &self.nodes[i];
+            if let (Some(TextLayout::Paragraphs(p)), Some(inp)) = (&n.text_layout, &n.input) && p.fills_visible() {
+                let mut exact = p.clone();
+                let focus = inp.edit.display_index(inp.edit.focus);
+                let anchor = inp.edit.display_index(inp.edit.anchor);
+                let mut moved = self.text.resolve_field_byte(&mut exact, focus, true);
+                if anchor != focus { moved |= self.text.resolve_field_byte(&mut exact, anchor, false); }
+                if !std::rc::Rc::ptr_eq(p, &exact) {
+                    self.nodes[i].text_layout = Some(TextLayout::Paragraphs(exact));
+                    self.nodes[i].epoch = paint_keep::next_epoch();
+                    self.dirty |= moved;
+                }
+            }
+        }
+        self.settle_field_height();
         let n = self.node(&path)?;
         // The field shows its edit's display text: the layout it drew is that text's. A secret
         // draws its mask, so the keys move through a layout of what it holds.

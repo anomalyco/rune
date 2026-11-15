@@ -6,6 +6,31 @@ use super::*;
 const BUDGET: std::time::Duration = std::time::Duration::from_micros(1_500);
 
 impl<S: 'static> Runtime<S> {
+    pub(super) fn settle_field_height(&mut self) -> bool {
+        if !std::mem::take(&mut self.text.remeasure_field) { return false; }
+        self.layout.mark_all_dirty();
+        self.relayout = true;
+        self.commit(&Tx { commit: Commit::Instant, ..Tx::default() });
+        self.follow_caret();
+        true
+    }
+    /// A pointer can land beyond last frame's clip (e.g. during drag autoscroll). `hit`
+    /// clamps past the ends to the first/last piece; materialise that piece, not a phantom row.
+    pub(super) fn resolve_field_hit(&mut self, i: usize, y: f32) {
+        let Some(TextLayout::Paragraphs(p)) = &self.nodes[i].text_layout else { return };
+        if !p.fills_visible() { return; }
+        let h = p.paragraphs.last().map_or(0.0, |q| q.y + q.height);
+        let y = (y * self.env.scale).clamp(0.0, (h - 0.001).max(0.0));
+        let mut built = p.clone();
+        let moved = self.text.resolve_field_rows(&mut built, (y, y));
+        if !std::rc::Rc::ptr_eq(p, &built) {
+            self.nodes[i].text_layout = Some(TextLayout::Paragraphs(built));
+            self.nodes[i].epoch = paint_keep::next_epoch();
+            self.dirty |= moved;
+        }
+        self.settle_field_height();
+    }
+
     /// Resolve waiting field lines using *this* draw's clip and text origin. A scroll or a
     /// caret jump can have moved the band since the last paint; last frame's rows won't do.
     pub(super) fn fill_drawn_field(&mut self, i: usize, b: &paint_content::LeafBox) {
@@ -22,7 +47,9 @@ impl<S: 'static> Runtime<S> {
         let raster = if b.cover.is_some() { 1.0 } else { b.scale_motion.raster(b.sc, b.rest) };
         let pad = 2.0 * spec.style.size.max(spec.style.line_px()) * s + 2.0 / raster.max(1e-4);
         let rows = ((b.shown[0] - origin) / tk - pad, (b.shown[1] - origin) / tk + pad);
-        if let Some((filled, moved)) = self.text.fill_paragraphs(p, std::time::Duration::MAX, rows, 0.0) {
+        let mut filled = p.clone();
+        let moved = self.text.resolve_field_rows(&mut filled, rows);
+        if !std::rc::Rc::ptr_eq(p, &filled) {
             let n = &mut self.nodes[i];
             n.text_layout = Some(crate::text::TextLayout::Paragraphs(filled));
             n.epoch = paint_keep::next_epoch();
@@ -52,6 +79,9 @@ impl<S: 'static> Runtime<S> {
             if self.nodes[i].input.is_none() { continue; }
             let Some(crate::text::TextLayout::Paragraphs(p)) = &self.nodes[i].text_layout else { continue };
             if !p.waiting() { continue; }
+            // The visible-only layout resolves hits, caret moves and adjacent visual lines
+            // at their point of use. Don't walk or shape the previous band for those queries.
+            if reach.is_some() && p.fills_visible() { continue; }
             // Documents larger than AccessKit's TextRun limit have no per-line AT nodes.
             // Preserve progressive fill for other consumers that need an entire flight's layout.
             if reach.is_none() && p.fills_visible() && self.flights.is_empty() && self.nodes[i].matched.is_none() { continue; }

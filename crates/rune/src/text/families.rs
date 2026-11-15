@@ -74,6 +74,11 @@ impl TextSystem {
     /// Drops every layout, run and measurement shaped so far, for new families or a new
     /// language. Glyphs stay in the atlas under their own font's key until they age out.
     pub(super) fn drop_shaped(&mut self) {
+        self.paragraph_font_epoch = self.paragraph_font_epoch.wrapping_add(1);
+        self.paragraphs.clear();
+        self.last_paragraphs = None;
+        self.ascii.clear();
+        self.forget_diff();
         self.layouts.clear();
         self.shapes.clear();
         self.superseded.clear();

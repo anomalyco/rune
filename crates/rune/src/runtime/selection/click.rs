@@ -225,6 +225,7 @@ impl<S: 'static> Runtime<S> {
             return false;
         };
         let single = self.node(&path).and_then(|n| n.input.as_ref()).is_some_and(|i| i.single_line);
+        if let Some(i) = self.live(&path) { self.resolve_field_hit(i, y); }
         let layout = self.node(&path).and_then(|n| n.text_layout.clone());
         let s = self.env.scale;
         let scroll = self.input_scroll.get(&path).copied().unwrap_or(0.0);

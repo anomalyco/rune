@@ -1,0 +1,1 @@
+- A large multiline field shapes unwrapped offscreen ASCII lines when they are drawn or queried. Hit testing, caret navigation and input method positioning request the lines they need without waiting for the next paint.

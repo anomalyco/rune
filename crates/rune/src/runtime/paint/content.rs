@@ -364,7 +364,7 @@ impl<S: 'static> Runtime<S> {
                         let pa = e.range().0;
                         for clause in e.preedit_clauses() {
                             let (a, b, thick) = (pa + clause.range().start, pa + clause.range().end, if clause.is_target() { 2.0 } else { 1.0 });
-                            for (bb, _) in flow.range_boxes(a, b, false) {
+                            for (bb, _) in flow.range_boxes(a.max(shown_a), b.min(shown_b), false) {
                                 let (x0, x1) = (origin[0] + bb.x0 as f32 * tk, origin[0] + bb.x1 as f32 * tk);
                                 let inset = if x1 - x0 > 4.0 * s { s } else { 0.0 };
                                 let h = thick * s;

@@ -33,6 +33,11 @@ impl<S: 'static> Runtime<S> {
         self.dismiss_help();
         let path = self.secondary_target(x, y).map(str::to_owned);
         let i = path.as_ref().and_then(|p| self.nodes.iter().position(|n| n.path == *p));
+        if let Some(i) = i && self.nodes[i].input.is_some() {
+            let [_, ly] = self.to_local(i, x, y);
+            self.resolve_field_hit(i, ly - self.nodes[i].inset[1]);
+        }
+        let i = path.as_ref().and_then(|p| self.live(p));
         self.secondary = match path {
             Some(path) => capture::Secondary::Held { path, link: i.and_then(|i| self.secondary_link_at(i, x, y)), left: false },
             None => capture::Secondary::Up,

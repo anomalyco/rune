@@ -101,6 +101,10 @@ impl ParagraphLayout {
         self.lazy.as_ref().is_some_and(|l| l.content.len() > VIEWPORT_BYTES && self.max_width.is_some() && !l.ascii.narrow(self.max_width))
     }
 
+    pub(crate) fn narrow_estimate(&self) -> bool {
+        self.lazy.as_ref().is_some_and(|l| l.ascii.narrow(self.max_width))
+    }
+
     /// A point strictly inside the waiting line containing `byte`. This is a run of known
     /// single-height lines; looking for the line never reads more than `RUN_LINES` lines.
     pub(crate) fn waiting_row_at(&self, byte: usize) -> Option<f32> {
@@ -599,7 +603,7 @@ impl TextSystem {
         let (content, style) = (spec.content.as_str(), spec.style);
         let style_key = {
             let mut h = hash::KeyHasher::default();
-            (hash::text_hash("", &[], style, scale, None), spec.wrap_anywhere).hash(&mut h);
+            (hash::text_hash("", &[], style, scale, None), spec.wrap_anywhere, self.paragraph_font_epoch).hash(&mut h);
             h.finish()
         };
         // A plain text's edit keys only the paragraphs it touched: those before it and after it

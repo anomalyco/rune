@@ -196,6 +196,10 @@ pub struct TextSystem {
     paragraphs: Cache<Rc<ParagraphLayout>>,
     /// The last by-paragraph layout made this commit, which its text at another width breaks from.
     last_paragraphs: Option<Rc<ParagraphLayout>>,
+    /// A line provisionally measured as unwrapped actually changed height. Its cache now
+    /// contains the exact layout; discard the provisional layout solve before publishing it.
+    pub(crate) remeasure_field: bool,
+    paragraph_font_epoch: u64,
     /// The bytes the last two texts compared this commit share at their start and end, and the
     /// two texts (address and length): measuring a field at its two widths compares it once.
     last_diff: Option<([usize; 4], usize, usize)>,
@@ -349,6 +353,8 @@ impl TextSystem {
             elisions: Default::default(),
             paragraphs: Default::default(),
             last_paragraphs: None,
+            remeasure_field: false,
+            paragraph_font_epoch: 0,
             last_diff: None,
             line_scan: None,
             ascii: HashMap::default(),

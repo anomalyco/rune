@@ -102,6 +102,17 @@ pub(crate) fn byte_at(lines: &[Line], k: usize, c: usize) -> Option<usize> {
 }
 
 impl<S: 'static> Runtime<S> {
+    /// A published TextRun's line ID, UTF-8 range and character positions must refer to
+    /// shaped text. Above the adapter's run limit no line geometry is requested.
+    pub(super) fn prepare_accessible_field_lines(&mut self) {
+        for n in &mut self.nodes {
+            if n.input.is_none() || n.is_secure() || !n.text.as_ref().is_some_and(|t| t.content.len() <= RUN_MAX_BYTES) { continue; }
+            let Some(TextLayout::Paragraphs(p)) = &mut n.text_layout else { continue };
+            if p.waiting() { self.text.resolve_field_rows(p, (0.0, f32::INFINITY)); }
+        }
+        self.settle_field_height();
+    }
+
     /// Node `i`'s text as AccessKit sees it: the lines of a field or selectable text, and the
     /// links of any text, pushed after it as its children.
     pub(super) fn a11y_text_nodes(&self, i: usize, w: &a11y_tree::Walk, out: &mut Vec<(AkId, AkNode)>) {

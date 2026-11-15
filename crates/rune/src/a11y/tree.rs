@@ -167,6 +167,7 @@ impl<S: 'static> Runtime<S> {
         let scrolled_only = !tree.full && !self.has_sticky
             && tree.stamp.as_ref().is_some_and(|s| Stamp { scrolls: stamp.scrolls, ..s.clone() } == stamp);
         if scrolled_only { return self.a11y_scrolled(stamp); }
+        self.prepare_accessible_field_lines();
         let found = self.a11y_walk();
         let tree = self.a11y.as_ref()?;
         let full = tree.full;

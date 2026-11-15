@@ -133,11 +133,33 @@ impl TextSystem {
                 p.y + (lines as f32 + 0.5) * lazy.ascii.height
             };
             let rows = (row(first, start), row(last, end - 1));
-            if let Some((filled, moved)) = self.fill_paragraphs(laid, std::time::Duration::MAX, rows, 0.0) {
-                *laid = filled;
-                if moved && let Some((exact, _)) = self.fill_paragraphs(laid, std::time::Duration::MAX, rows, f32::INFINITY) { *laid = exact; }
+            self.resolve_field_rows(laid, rows);
+        }
+    }
+
+    /// Make this line's geometry usable now. If a provisional height was wrong, finish this
+    /// layout rather than locating another request from a stale prefix of heights.
+    pub(crate) fn resolve_field_rows(&mut self, p: &mut Rc<ParagraphLayout>, rows: (f32, f32)) -> bool {
+        let Some((filled, moved)) = self.fill_paragraphs(p, std::time::Duration::MAX, rows, 0.0) else { return false };
+        *p = filled;
+        if moved && let Some((exact, _)) = self.fill_paragraphs(p, std::time::Duration::MAX, rows, f32::INFINITY) { *p = exact; }
+        self.remeasure_field |= moved;
+        moved
+    }
+
+    /// Resolve the line at a display byte, not the distance from the last paint. Vertical
+    /// navigation also reads the previous or next piece at a paragraph boundary.
+    pub(crate) fn resolve_field_byte(&mut self, p: &mut Rc<ParagraphLayout>, at: usize, adjacent: bool) -> bool {
+        let mut moved = false;
+        if let Some(y) = p.waiting_row_at(at) { moved = self.resolve_field_rows(p, (y, y)); }
+        if adjacent && p.waiting() {
+            let k = p.paragraphs.partition_point(|q| q.end < at).min(p.paragraphs.len()-1);
+            let q = &p.paragraphs[k];
+            for at in [q.start.saturating_sub(1), q.end.saturating_add(1)] {
+                if let Some(y) = p.waiting_row_at(at) { moved |= self.resolve_field_rows(p, (y, y)); }
             }
         }
+        moved
     }
 
     /// Printable ASCII in `style` at `scale`, measured once: None when its characters don't all

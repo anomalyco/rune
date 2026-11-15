@@ -262,9 +262,21 @@ impl<S: 'static> Measurement<'_, S> {
             compute_layout(&mut taffy, root_id, room, &nodes, &mut self.text, scale);
             self.place(&taffy, &mut nodes);
         }
-        for n in nodes.iter_mut().filter(|n| n.text.is_some()) {
-            let w = (taffy.box_layout(n.taffy).w - n.inset[0] - n.inset[2]).max(0.0);
-            lay_out_text(&mut self.text, n, w, scale);
+        loop {
+            for n in nodes.iter_mut().filter(|n| n.text.is_some()) {
+                let w = (taffy.box_layout(n.taffy).w - n.inset[0] - n.inset[2]).max(0.0);
+                lay_out_text(&mut self.text, n, w, scale);
+            }
+            if !std::mem::take(&mut self.text.remeasure_field) { break; }
+            // A query replaced a provisional measure with the exact one. Resolve Taffy and
+            // anchored positions before the commit exposes caret/scroll geometry.
+            taffy.mark_all_dirty();
+            compute_layout(&mut taffy, root_id, room, &nodes, &mut self.text, scale);
+            self.place(&taffy, &mut nodes);
+            if self.fit_anchored(&mut taffy, &nodes) {
+                compute_layout(&mut taffy, root_id, room, &nodes, &mut self.text, scale);
+                self.place(&taffy, &mut nodes);
+            }
         }
 
         (taffy, nodes)
@@ -361,13 +373,19 @@ pub(super) fn lay_out_text(text: &mut TextSystem, n: &mut Node, w: f32, scale: f
     let mut layout = match text.layout_text(spec, n.input.is_some(), scale, wrap, line_alignment(spec), n.text_layout.as_ref()) {
         TextLayout::Single(l) => l,
         TextLayout::Paragraphs(mut p) => {
+            // A real but very narrow field can land on a width also used for min-content
+            // measurement. Its estimate is not a usable cursor map at that width.
+            if p.narrow_estimate() { text.resolve_field_rows(&mut p, (0.0, f32::INFINITY)); }
             text.prepare_highlights(&mut p, &spec.cold.highlights);
             // A caret is also read before paint (IME, Cx::caret, scroll-to-caret). Give those
             // readers the real line even when the edit or an external selection moved offscreen.
             if let Some(inp) = &n.input && inp.edit.focused && p.fills_visible() {
                 let byte = super::text_layout::caret_index(&inp.edit, &spec.content);
-                if let Some(y) = p.waiting_row_at(byte)
-                    && let Some((filled, _)) = text.fill_paragraphs(&p, std::time::Duration::MAX, (y, y), 0.0) { p = filled; }
+                text.resolve_field_byte(&mut p, byte, false);
+                if let Some((a, b)) = inp.edit.preedit_target() {
+                    let at = inp.edit.range().0;
+                    for end in [a,b] { text.resolve_field_byte(&mut p, at.saturating_add(end).min(spec.content.len()), false); }
+                }
             }
             n.text_layout = Some(TextLayout::Paragraphs(p));
             n.elided = None;

@@ -26,6 +26,11 @@ impl<S: 'static> Runtime<S> {
     /// from its text's top-left), or from the keyboard (`None`).
     pub(super) fn field_menu(&mut self, path: String, at: (f32, f32), local: Option<(f32, f32)>, one: &mut Tx) -> bool {
         let Some(i) = self.live(&path) else { return false };
+        let i = if let Some((_, y)) = local {
+            self.resolve_field_hit(i, y);
+            let Some(current) = self.live(&path) else { return false };
+            current
+        } else { i };
         let Some(input) = self.nodes[i].input.as_deref() else { return false };
         let Some(access) = input.access.clone() else { return false };
         let (single, secure) = (input.single_line, input.edit.is_secure());
