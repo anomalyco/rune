@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [features]
+deferred-quit = ["windows-sys/Win32_System_Shutdown"]
 default = ["accessibility", "dbus", "embedded-fonts", "metal-backend", "ogg-audio", "svg"]
 # Bundle Inter (Regular, Medium, SemiBold; on web also IBM Plex Mono) as the fonts text falls back
 # to when the app registers none. Disable when AppSpec::fonts supplies the app's own fonts to omit

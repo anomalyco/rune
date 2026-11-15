@@ -1,0 +1,1 @@
+- **Native apps can opt into `deferred-quit` to hide their windows while saving.** A confirmed save permits exit; an overdue one asks the app to show what is still outstanding. Reopening a responsive app cancels the pending quit and shows its existing windows. The existing quit and launch APIs remain the default.

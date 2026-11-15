@@ -168,6 +168,8 @@ impl<S: 'static> Host<S> {
             #[cfg(not(target_os = "windows"))]
             WakeEvent::GpuReady(_) => {}
             WakeEvent::Reopen | WakeEvent::Turn | WakeEvent::Quit(_) => {}
+            #[cfg(all(feature = "deferred-quit", any(windows, target_os = "macos", target_os = "linux")))]
+            WakeEvent::Deferred(_) => {}
         }
     }
 

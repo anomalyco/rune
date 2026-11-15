@@ -3,6 +3,27 @@
 use super::*;
 
 impl<S: 'static> AnyHost for Host<S> {
+    #[cfg(all(feature = "deferred-quit", any(windows, target_os = "macos", target_os = "linux")))]
+    fn close_quits(&self) -> bool { self.keeps_loop && !self.keep_running && self.closes() }
+    #[cfg(all(feature = "deferred-quit", any(windows, target_os = "macos", target_os = "linux")))]
+    fn close_one(&mut self, el: &ActiveEventLoop) { self.in_turn(|h| h.close_now(el)); }
+    #[cfg(all(feature = "deferred-quit", any(windows, target_os = "macos", target_os = "linux")))]
+    fn suspend_quit(&mut self, el: &ActiveEventLoop) -> Option<deferred::Reveal> {
+        let w = self.shown_win()?;
+        let mode = if w.minimized() { deferred::Reveal::Minimized } else if w.window.has_focus() { deferred::Reveal::Front } else { deferred::Reveal::Shown };
+        if is_wayland(el) { self.in_turn(|h| h.hide(el)); } else {
+            w.hide(); self.life.hide(crate::platform::reopen::stamp); self.rt.set_live_visible(false);
+            if let Some(w) = &mut self.win { w.stop_pacing(); }
+        }
+        Some(mode)
+    }
+    #[cfg(all(feature = "deferred-quit", any(windows, target_os = "macos", target_os = "linux")))]
+    fn restore_quit(&mut self, el: &ActiveEventLoop, mode: deferred::Reveal) {
+        self.in_turn(|h| {
+            match mode { deferred::Reveal::Front => h.open(el, None), _ => h.show(el) }
+            if matches!(mode, deferred::Reveal::Minimized) && let Some(w) = &h.win { w.window.set_minimized(true); }
+        });
+    }
     fn owns(&self, id: WindowId) -> bool {
         self.win.as_ref().is_some_and(|w| w.window.id() == id)
     }

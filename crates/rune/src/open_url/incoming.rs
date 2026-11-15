@@ -250,7 +250,11 @@ mod mac {
     extern "C" fn get_url(_: &AnyObject, _: Sel, event: *mut AnyObject, _reply: *mut AnyObject) {
         let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             // SAFETY: AppKit passes the event, or nil.
-            if let Some(url) = unsafe { event.as_ref() }.and_then(url_of) { super::INBOX.receive(url); }
+            if let Some(url) = unsafe { event.as_ref() }.and_then(url_of) {
+                #[cfg(feature="deferred-quit")]
+                if crate::deferred_quit::hooks().is_some() { return crate::deferred_quit::appkit_link(url); }
+                super::INBOX.receive(url);
+            }
         }));
         if caught.is_err() { eprintln!("rune: open-url handler panicked"); }
     }

@@ -101,6 +101,8 @@ impl<T: 'static> AnyHost for Overlay<T> {
             self.rt.ignore_minimize("an overlay");
             match self.rt.shell_request.take() {
                 Some(crate::el::Shell::Close) => self.hide(),
+                #[cfg(all(feature = "deferred-quit", any(windows, target_os = "macos", target_os = "linux")))]
+                Some(s @ (crate::el::Shell::Quit | crate::el::Shell::Relaunch)) if crate::deferred_quit::request(s.after().unwrap_or(crate::quit::After::Exit)) => {},
                 Some(crate::el::Shell::Quit) => event_loop.exit(),
                 Some(crate::el::Shell::Relaunch) => {
                     let _ = crate::quit::send(crate::quit::Event::Start { ending: false, after: crate::quit::After::Relaunch });

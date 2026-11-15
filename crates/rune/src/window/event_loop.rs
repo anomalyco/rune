@@ -95,7 +95,14 @@ fn run_configured(factory: Factory, args: Args, accessory: bool) -> Result<(), S
     let proxy = event_loop.create_proxy();
     let turn = proxy.clone();
     crate::popup_menu::start(std::sync::Arc::new(move || { let _ = turn.send_event(WakeEvent::Turn); }));
-    let mut windows = Windows { factory: Some(factory), args, proxy, hosts: Vec::new(), gpu: Rc::default() };
+    #[cfg(all(feature = "deferred-quit", any(windows, target_os = "macos", target_os = "linux")))]
+    if crate::deferred_quit::hooks().is_some() {
+        let p = proxy.clone();
+        crate::deferred_quit::connect(move |e| p.send_event(WakeEvent::Deferred(e)).is_ok());
+    }
+    let mut windows = Windows { factory: Some(factory), args, proxy, hosts: Vec::new(), gpu: Rc::default(),
+        #[cfg(all(feature = "deferred-quit", any(windows, target_os = "macos", target_os = "linux")))] deferred: Default::default(),
+    };
     crate::open_url::incoming::prepare();
     crate::marks::mark("loop.run");
     let result = event_loop.run_app(&mut windows);

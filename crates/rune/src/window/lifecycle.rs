@@ -191,6 +191,8 @@ impl<S: 'static> Host<S> {
         // The next frame polls for the wake.
         if wake && !quiet { self.rt.cancel_timer_frame(); }
         if let Some(after) = requests.quit {
+            #[cfg(all(feature = "deferred-quit", any(windows, target_os = "macos", target_os = "linux")))]
+            if crate::deferred_quit::request(after) { return; }
             // Quitting from now on: a close later in this turn closes for the quit.
             // `Windows::exiting` carries out its effects.
             let _ = crate::quit::send(crate::quit::Event::Start { ending: false, after });
@@ -311,6 +313,8 @@ impl<S: 'static> Host<S> {
             match self.rt.shell_request.take() {
                 Some(shell @ (Shell::Quit | Shell::Relaunch)) => {
                     let after = shell.after().unwrap_or(crate::quit::After::Exit);
+                    #[cfg(all(feature = "deferred-quit", any(windows, target_os = "macos", target_os = "linux")))]
+                    if crate::deferred_quit::request(after) { return; }
                     let _ = crate::quit::send(crate::quit::Event::Start { ending: false, after });
                     self.popup.cancel(&mut self.rt);
                     self.file_dialog.cancel(&mut self.rt);
@@ -341,6 +345,12 @@ impl<S: 'static> Host<S> {
     }
 
     pub(super) fn close(&mut self, event_loop: &ActiveEventLoop) {
+        #[cfg(all(feature = "deferred-quit", any(windows, target_os = "macos", target_os = "linux")))]
+        if crate::deferred_quit::close(self.slot) { return; }
+        self.close_now(event_loop);
+    }
+
+    pub(super) fn close_now(&mut self, event_loop: &ActiveEventLoop) {
         self.rt.minimize_step(MinimizeEvent::Lost);
         if let Some(w) = &mut self.win {
             w.first_frame.hide();
@@ -368,6 +378,8 @@ impl<S: 'static> Host<S> {
         // While the window still shows its last frames.
         if let Some(trace) = &mut self.trace { trace.settle_presents(crate::frame::present_time::SETTLE); }
         if let Some(after) = self.rt.shell_request.take().and_then(Shell::after) {
+            #[cfg(all(feature = "deferred-quit", any(windows, target_os = "macos", target_os = "linux")))]
+            if crate::deferred_quit::request(after) { return; }
             if after == crate::quit::After::Relaunch {
                 let _ = crate::quit::send(crate::quit::Event::Start { ending: false, after });
             }
