@@ -604,16 +604,16 @@ impl TextSystem {
         let runs = ascii.as_deref().map(|m| Runs { ascii: m, max_width, edit: true });
         match tail.first().map(|t| t.0) {
             Some(t) => {
-                key_paragraphs(spec, style_key, at, t - 1, start_flow, forced, runs, &mut found);
+                key_paragraphs(spec, style_key, at, t - 1, start_flow, forced, runs, &mut self.line_scan, &mut found);
                 // The paragraphs after the edit keep their keys if they start from the direction
                 // they were keyed in (a neutral one takes the one before it).
                 if found.last().map(|f| f.2) == Some(entering) {
                     found.extend(tail);
                 } else {
-                    key_paragraphs(spec, style_key, t, content.len(), start_flow, forced, None, &mut found);
+                    key_paragraphs(spec, style_key, t, content.len(), start_flow, forced, None, &mut self.line_scan, &mut found);
                 }
             }
-            None => key_paragraphs(spec, style_key, at, content.len(), start_flow, forced, runs, &mut found),
+            None => key_paragraphs(spec, style_key, at, content.len(), start_flow, forced, runs, &mut self.line_scan, &mut found),
         }
         // What the edit left alone: the paragraphs before it, and those after it.
         let old = prev.map_or(&[][..], |p| p.paragraphs.as_slice());
@@ -632,7 +632,7 @@ impl TextSystem {
                     let m = match &ascii { Some(m) => Some(m.clone()), None => self.ascii_line(style, scale, spec.wrap_anywhere) };
                     let mut again = Vec::new();
                     let from = items.last().map_or(start_flow, |(f, _)| f.2);
-                    key_paragraphs(spec, style_key, f.0, f.1, from, forced, m.as_deref().map(|m| Runs { ascii: m, max_width, edit: false }), &mut again);
+                    key_paragraphs(spec, style_key, f.0, f.1, from, forced, m.as_deref().map(|m| Runs { ascii: m, max_width, edit: false }), &mut self.line_scan, &mut again);
                     items.extend(again.into_iter().map(|f| (f, None)));
                 }
                 _ => items.push((f, kept)),
@@ -740,9 +740,18 @@ fn count_newlines(s: &[u8]) -> usize {
 /// than [`LAZY_MIN`] lines of an edit (or any number of a run keyed again) put the plain ASCII
 /// lines that fit on one line, away from the edit's ends, in runs: one record per run, keyed by
 /// its bytes, its height the sum of its lines'.
-fn key_paragraphs(spec: &TextSpec, style_key: u64, a: usize, z: usize, start_flow: Flow, forced: Option<Flow>, runs: Option<Runs<'_>>, found: &mut Vec<Found>) {
-    let lines = if runs.is_some() { count_newlines(&spec.content.as_bytes()[a..z]) + 1 } else { 0 };
+fn key_paragraphs(spec: &TextSpec, style_key: u64, a: usize, z: usize, start_flow: Flow, forced: Option<Flow>, runs: Option<Runs<'_>>, scan: &mut Option<LineScan>, found: &mut Vec<Found>) {
+    // The other width's keying of these bytes, this layout pass, read them already.
+    let key = [spec.content.as_ptr() as usize, spec.content.len(), a, z];
+    let cache = scan.take_if(|s| runs.is_some() && s.key == key);
+    let lines = match (&cache, runs) {
+        (Some(c), _) => c.ends.len(),
+        (None, Some(_)) => count_newlines(&spec.content.as_bytes()[a..z]) + 1,
+        (None, None) => 0,
+    };
     let runs = runs.filter(|r| !r.edit || lines > LAZY_MIN || r.ascii.narrow(r.max_width));
+    let mut record = (runs.is_some() && cache.is_none()).then(|| LineScan { key, ends: Vec::with_capacity(lines), flags: Vec::with_capacity(lines) });
+    let mut split = spec.content[a..z].split('\n');
     // The run being gathered: its first byte, last byte, height, width, lines and last flow.
     let mut run: Option<(usize, usize, f32, f32, u32, Flow)> = None;
     let close = |run: &mut Option<(usize, usize, f32, f32, u32, Flow)>, found: &mut Vec<Found>| {
@@ -753,7 +762,15 @@ fn key_paragraphs(spec: &TextSpec, style_key: u64, a: usize, z: usize, start_flo
         }
     };
     let mut start = a;
-    for (j, words) in spec.content[a..z].split('\n').enumerate() {
+    for j in 0.. {
+        let (words, known) = match &cache {
+            Some(c) if j < c.ends.len() => (&spec.content[start..a + c.ends[j] as usize], Some(c.flags[j])),
+            Some(_) => break,
+            None => match split.next() {
+                Some(words) => (words, None),
+                None => break,
+            },
+        };
         let (a, b, k) = (start, start + words.len(), found.len());
         start = b + 1;
         let last_flow = run.map(|r| r.5).or_else(|| found.last().map(|f| f.2)).unwrap_or(start_flow);
@@ -761,10 +778,19 @@ fn key_paragraphs(spec: &TextSpec, style_key: u64, a: usize, z: usize, start_flo
             // A measure of the narrowest width is never shown: none of its lines needs shaping.
             let near = r.edit && !r.ascii.narrow(r.max_width) && (j < EAGER_START || j + EAGER_END >= lines);
             let floor = run.map_or(0.0, |r| r.3);
-            let fits = if near || words.is_empty() { None } else if r.ascii.narrow(r.max_width) { r.ascii.narrowest(words, floor) } else { r.ascii.one_line(words, r.max_width, floor) };
+            let printable = known.map(|f| f & PRINTABLE != 0);
+            let fits = if near || words.is_empty() || printable == Some(false) { None } else if r.ascii.narrow(r.max_width) { r.ascii.narrowest(words, floor) } else { r.ascii.one_line(words, r.max_width, floor, printable == Some(true)) };
+            // Printable ASCII: its letters are its only strong characters, all left to right.
+            let letter = || known.map_or_else(|| words.bytes().any(|b| b.is_ascii_alphabetic()), |f| f & LETTER != 0);
+            if let Some(rec) = &mut record {
+                // What the other width's keying reads: a line that fit is printable; one that didn't
+                // (or wasn't asked, near the edit's ends) is looked at here.
+                let shown = fits.is_some() || (!words.is_empty() && lazy::printable(words.as_bytes()));
+                rec.ends.push((b - key[2]) as u32);
+                rec.flags.push(if shown { PRINTABLE | if letter() { LETTER } else { 0 } } else { 0 });
+            }
             if let Some((height, w)) = fits {
-                // Printable ASCII: its letters are its only strong characters, all left to right.
-                let flow = forced.or_else(|| words.bytes().any(|b| b.is_ascii_alphabetic()).then_some(Flow::Ltr)).unwrap_or(last_flow);
+                let flow = forced.or_else(|| letter().then_some(Flow::Ltr)).unwrap_or(last_flow);
                 match &mut run {
                     Some(run) => { run.1 = b; run.2 += height; run.3 = run.3.max(w); run.4 += 1; run.5 = flow; }
                     None => run = Some((a, b, height, w, 1, flow)),
@@ -790,7 +816,23 @@ fn key_paragraphs(spec: &TextSpec, style_key: u64, a: usize, z: usize, start_flo
         found.push((a, b, flow, h.finish(), isolates, None));
     }
     close(&mut run, found);
+    *scan = record.or(cache);
 }
+
+/// A line of a [`LineScan`] is printable ASCII (not empty), and holds a letter.
+const PRINTABLE: u8 = 1;
+const LETTER: u8 = 2;
+
+/// A text's lines between two of its bytes as one width's keying read them (`key_paragraphs`):
+/// where each ends and what it holds, so the other width's keying of a long paste, in the same
+/// layout pass, reads these instead of the bytes. `key` is the text's address and length and the
+/// two bytes; `TextSystem::forget_diff` drops it when a pass begins.
+pub(crate) struct LineScan {
+    key: [usize; 4],
+    ends: Vec<u32>,
+    flags: Vec<u8>,
+}
+
 /// The paragraphs an edit left whole, with their keys: those before it (`head`) and after it
 /// (`tail`, moved to their new bytes), and the direction the paragraph before the tail had.
 struct Reuse {
