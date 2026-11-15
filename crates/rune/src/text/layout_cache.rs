@@ -102,6 +102,7 @@ impl TextSystem {
     /// address.
     pub(crate) fn forget_diff(&mut self) {
         self.last_diff = None;
+        self.line_scan = None;
     }
 
     /// commits, and older ones, most recently used first, while they fit in [`STALE_BYTES`].
@@ -118,6 +119,7 @@ impl TextSystem {
         evict(&mut self.paragraphs, g);
         self.last_paragraphs = None;
         self.last_diff = None;
+        self.line_scan = None;
         let layouts = &self.layouts;
         self.shapes.retain(|_, key| layouts.contains_key(key));
         evict(&mut self.elisions, g);

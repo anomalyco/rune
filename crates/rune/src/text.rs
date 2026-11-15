@@ -199,6 +199,8 @@ pub struct TextSystem {
     /// The bytes the last two texts compared this commit share at their start and end, and the
     /// two texts (address and length): measuring a field at its two widths compares it once.
     last_diff: Option<([usize; 4], usize, usize)>,
+    /// A long paste's lines as one width's keying read them this layout pass, for the other's.
+    line_scan: Option<paragraphs::LineScan>,
     /// Printable ASCII's advances and line height per style and scale (`paragraphs::AsciiLine`).
     ascii: HashMap<u64, Option<Rc<paragraphs::AsciiLine>>>,
     runs: Cache<Rc<RunLayout>>,
@@ -348,6 +350,7 @@ impl TextSystem {
             paragraphs: Default::default(),
             last_paragraphs: None,
             last_diff: None,
+            line_scan: None,
             ascii: HashMap::default(),
             runs: Default::default(),
             generation: 0,

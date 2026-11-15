@@ -34,7 +34,7 @@ pub(crate) struct AsciiLine {
 }
 
 /// Whether every byte of `s` is printable ASCII (`0x20..0x7f`), eight at a time.
-fn printable(s: &[u8]) -> bool {
+pub(super) fn printable(s: &[u8]) -> bool {
     let mut chunks = s.chunks_exact(8);
     for c in &mut chunks {
         let w = u64::from_le_bytes(c.try_into().unwrap());
@@ -51,10 +51,11 @@ impl AsciiLine {
     /// `words`' height and width when they're printable ASCII that fits on one line at
     /// `max_width`, with room to spare for what kerning and ligatures do to the sum. A line no
     /// wider than `floor` however wide its characters (a wider line beside it, whose width only
-    /// a maximum reads) reports `floor`, summing none of them.
-    pub(super) fn one_line(&self, words: &str, max_width: Option<f32>, floor: f32) -> Option<(f32, f32)> {
+    /// a maximum reads) reports `floor`, summing none of them. With `printable_known`, `words`
+    /// are known to be printable ASCII already (a line keying read once).
+    pub(super) fn one_line(&self, words: &str, max_width: Option<f32>, floor: f32, printable_known: bool) -> Option<(f32, f32)> {
         let bound = words.len() as f32 * self.widest;
-        if bound <= floor && max_width.is_none_or(|m| bound * 1.03 + 2.0 <= m) && printable(words.as_bytes()) {
+        if bound <= floor && max_width.is_none_or(|m| bound * 1.03 + 2.0 <= m) && (printable_known || printable(words.as_bytes())) {
             return Some((self.height, floor));
         }
         let mut w = 0.0f32;
@@ -225,7 +226,7 @@ fn split_run(lazy: &Lazy, max_width: Option<f32>, paragraphs: &[Paragraph], k: u
         flow = lazy.forced.or_else(|| words.bytes().any(|c| c.is_ascii_alphabetic()).then_some(Flow::Ltr)).unwrap_or(flow);
         if j < a || j >= b {
             let floor = run.map_or(0.0, |g| g.2);
-            let w = lazy.ascii.one_line(words, max_width, floor).map_or(floor, |(_, w)| w);
+            let w = lazy.ascii.one_line(words, max_width, floor, true).map_or(floor, |(_, w)| w);
             let (start, lines, widest) = run.map_or((s, 1, w), |(start, lines, widest)| (start, lines + 1, widest.max(w)));
             run = Some((start, lines, widest));
             if j + 1 == a || j + 1 == n {
@@ -240,7 +241,7 @@ fn split_run(lazy: &Lazy, max_width: Option<f32>, paragraphs: &[Paragraph], k: u
         }
         let mut hs = hash::KeyHasher::default();
         (words, lazy.style_key, flow == Flow::Rtl, Block::Paragraph).hash(&mut hs);
-        let (height, w) = lazy.ascii.one_line(words, max_width, 0.0).unwrap_or((h, 0.0));
+        let (height, w) = lazy.ascii.one_line(words, max_width, 0.0, true).unwrap_or((h, 0.0));
         out.push(Paragraph { start: s, end: e, y: y.round() as f32, height, widths: [w, w], flow, key: hs.finish(), isolates: Box::default(), layout: r.layout.clone(), shaped: false, lines: 1, run: false });
         y += f64::from(height);
     }
