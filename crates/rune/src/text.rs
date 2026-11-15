@@ -1010,7 +1010,7 @@ impl TextSystem {
         // A mirrored drawing is cached apart, under the size's top bit; what the size falls short
         // of the canvas, in 64ths of a pixel, under the seven bits below it; quad parity below.
         let short = ((px as f32 - size) * 64.0).round().clamp(0.0, 63.0) as u32;
-        let key = (icon as *const Icon as usize, px | (parity[0] << 22) | (parity[1] << 23) | (short << 24) | (u32::from(facing == Facing::Mirrored) << 31));
+        let key = icon::atlas_key(&self.atlas, icon, px | (short << 24) | (u32::from(facing == Facing::Mirrored) << 31), parity);
         let size = px as f32 - short as f32 / 64.0;
         let entry = match self.atlas.icons.get(&key) {
             Some(&e) => {

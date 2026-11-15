@@ -198,6 +198,17 @@ pub(crate) fn quad_parity(origin: [f32; 2], own_layer: bool) -> [u32; 2] {
     if own_layer { [0, 0] } else { origin.map(|o| (o.round() as i64).rem_euclid(2) as u32) }
 }
 
+/// Only a rounded rectangle can depend on quad parity. Keep a single ordinary atlas placement
+/// for glyph-like icons, even if the same icon appears on all four pixel parities. Inspect the
+/// body only on a miss; a cached parity-independent entry always wins.
+pub(super) fn atlas_key(atlas: &Atlas, icon: &Icon, size: u32, parity: [u32; 2]) -> (usize, u32) {
+    let base = (icon as *const Icon as usize, size);
+    let placed = (base.0, size | (1 << 21) | (parity[0] << 22) | (parity[1] << 23));
+    if atlas.icons.contains_key(&base) { base }
+    else if atlas.icons.contains_key(&placed) || (icon.body.contains("<rect") && icon.body.contains("rx=\"")) { placed }
+    else { base }
+}
+
 /// What an open element hands the ones inside it: its transform to device pixels, whether they
 /// paint at all, and the group whose paint attributes they inherit.
 struct Scope<'a> {

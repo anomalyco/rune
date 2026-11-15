@@ -158,8 +158,11 @@ pub(in super::super) fn fill_rrect(lo: [f32; 2], hi: [f32; 2], r: f32, parity: [
             linear = true;
         } else {
             for k in 0..2 {
-                radii[k] = radii[k].clamp(pixel[k] * 1.5, 2.0 - pixel[k] * 1.5);
-                neighbor[k] = neighbor[k].clamp(pixel[k] * 1.5, 2.0 - pixel[k] * 1.5);
+                // A general icon (unlike the radar) can have two 0.75px corners on a side
+                // shorter than 3px. The minimum cannot exceed half the available side.
+                let min = (pixel[k] * 1.5).min(1.0);
+                radii[k] = radii[k].clamp(min, 2.0 - min);
+                neighbor[k] = neighbor[k].clamp(min, 2.0 - min);
                 let spacing = 2.0 - radii[k] - neighbor[k];
                 radii[k] -= (pixel[k] * 0.0625 - spacing).max(0.0) * 0.5;
             }
