@@ -820,9 +820,11 @@ fn warm_frame(gpu: &Gpu, renderer: &mut Renderer, format: wgpu::TextureFormat, s
     let passes=std::env::var("IB3_OFFSCREEN").ok().and_then(|s|s.parse::<usize>().ok()).unwrap_or(1).clamp(1,32);
     let mut spans=Vec::new();
     let group=std::env::var("IB3_GROUP").ok().and_then(|s|s.parse::<usize>().ok()).unwrap_or(1).clamp(1,8);
+    let rotate=std::env::var_os("IB3_PENDING").is_some().then(||gpu.device.create_buffer(&wgpu::BufferDescriptor{label:Some("warm pending write"),size:4,usage:wgpu::BufferUsages::COPY_DST,mapped_at_creation:false}));
     for _ in 0..passes {
     let encs:Vec<_>=(0..group).map(|_|gpu.device.create_command_encoder(&Default::default())).collect();
     for mut enc in encs {
+    if let Some(buf)=rotate.as_ref(){gpu.queue.write_buffer(buf,0,&[1,2,3,4]);}
     renderer.prepare(&gpu.device, &gpu.queue, &mut atlas, instances, size);
     renderer.draw(&mut enc, &view, [0.0; 4]);
     let t=std::time::Instant::now();
