@@ -897,12 +897,13 @@ impl<S: 'static> Runtime<S> {
                         overlay = over(premul(self.color(n.id, P_PRESS_C, n.vis.press()), prs_v, srgb), overlay);
                     }
                 }
+                let layered = n.vis.gradient.is_some() || n.vis.radial.is_some() || n.vis.surface.is_some();
+                let base_color = |c: Color| super::blend::flat_base(c, srgb, !layered && n.vis.border_width() == 0.0 && c.a * o < 1.0);
                 let base = match n.material {
                     _ if native_material.is_some() => [0.0; 4],
-                    Some(_) => premul(self.color(n.id, P_FILL, crate::system_material::fallback_fill(n.vis.fill, self.env.system_dark)), 1.0, srgb),
-                    None => premul(self.color(n.id, P_FILL, n.vis.fill), 1.0, srgb),
+                    Some(_) => base_color(self.color(n.id, P_FILL, crate::system_material::fallback_fill(n.vis.fill, self.env.system_dark))),
+                    None => base_color(self.color(n.id, P_FILL, n.vis.fill)),
                 };
-                let layered = n.vis.gradient.is_some() || n.vis.radial.is_some() || n.vis.surface.is_some();
                 let fill = if layered { base } else { over(overlay, base) }.map(|c| c * o);
                 let bw = pixel_snap::line_width(n.vis.border_width() * s) * sc;
                 let border = if bw > 0.0 { premul(self.color(n.id, P_BORDER, n.vis.border()), o, srgb) } else { [0.0; 4] };
