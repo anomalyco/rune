@@ -7,6 +7,7 @@ mod fill;
 mod geom;
 mod hair;
 mod raster;
+mod rrect;
 mod tess;
 
 pub(super) use fill::fill;
@@ -14,6 +15,7 @@ pub(super) use geom::V;
 use geom::nearly_zero;
 pub(super) use hair::render as hairline;
 pub(super) use raster::{fill_quad_edges, fill_triangles};
+pub(super) use rrect::fill_rrect;
 pub(super) use tess::stroke;
 use swash::zeno::Transform;
 

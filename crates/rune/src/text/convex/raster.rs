@@ -9,7 +9,7 @@ use super::fill::EdgeMesh;
 /// points are `origin` device pixels off the canvas's.
 pub(in super::super) fn fill_triangles(mesh: &Mesh, origin: [f32; 2], px: u32, out: &mut [u8]) {
     let pts: Vec<[f32; 2]> = mesh.pts.iter().map(|p| [p.x, p.y]).collect();
-    rasterize(&pts, &mesh.indices, origin, px, out, |tri, w| (0..3).map(|k| w[k] * mesh.coverage[tri[k]] as f64).sum::<f64>() as f32);
+    rasterize(&pts, &mesh.indices, origin, px, out, |tri, w, _| (0..3).map(|k| w[k] * mesh.coverage[tri[k]] as f64).sum::<f64>() as f32);
 }
 
 /// Covers `out` with `mesh` as Ganesh's `QuadEdgeEffect` shades it: per pixel, the edge's
@@ -17,7 +17,7 @@ pub(in super::super) fn fill_triangles(mesh: &Mesh, origin: [f32; 2], px: u32, o
 /// constant across a triangle), or, between a curve's tangent lines, their distance.
 pub(in super::super) fn fill_quad_edges(mesh: &EdgeMesh, origin: [f32; 2], px: u32, out: &mut [u8]) {
     let pts: Vec<[f32; 2]> = mesh.verts.iter().map(|v| v.pos).collect();
-    rasterize(&pts, &mesh.indices, origin, px, out, |tri, w| {
+    rasterize(&pts, &mesh.indices, origin, px, out, |tri, w, _| {
         let at = |k: usize| (0..3).map(|i| w[i] * mesh.verts[tri[i]].edge[k] as f64).sum::<f64>() as f32;
         let e = [at(0), at(1), at(2), at(3)];
         if e[2] > 0.0 && e[3] > 0.0 {
@@ -44,8 +44,8 @@ pub(super) fn gradient(pts: &[[f32; 2]], tri: [usize; 3], a: impl Fn(usize) -> f
 }
 
 /// Each triangle of `indices` over `pts` (device pixels, `origin` off the canvas), shaded by
-/// `shade(triangle, barycentric weights)` and blended over.
-pub(super) fn rasterize(pts: &[[f32; 2]], indices: &[usize], origin: [f32; 2], px: u32, out: &mut [u8], shade: impl Fn([usize; 3], [f64; 3]) -> f32) {
+/// `shade(triangle, barycentric weights, pixel)` and blended over.
+pub(super) fn rasterize(pts: &[[f32; 2]], indices: &[usize], origin: [f32; 2], px: u32, out: &mut [u8], shade: impl Fn([usize; 3], [f64; 3], [i64; 2]) -> f32) {
     let n = px as usize;
     let mut acc = vec![0f32; n * n];
     // Fixed point, 8 bits of subpixel.
@@ -74,7 +74,7 @@ pub(super) fn rasterize(pts: &[[f32; 2]], indices: &[usize], origin: [f32; 2], p
                 if !(inside(wa, b, c) && inside(wb, c, a) && inside(wc, a, b)) {
                     continue;
                 }
-                let cov = shade(tri, [wa as f64 / area as f64, wb as f64 / area as f64, wc as f64 / area as f64]).clamp(0.0, 1.0);
+                let cov = shade(tri, [wa as f64 / area as f64, wb as f64 / area as f64, wc as f64 / area as f64], [x, y]).clamp(0.0, 1.0);
                 let d = &mut acc[y as usize * n + x as usize];
                 *d = cov + *d * (1.0 - cov);
             }

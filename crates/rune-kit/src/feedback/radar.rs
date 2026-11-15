@@ -5,7 +5,7 @@
 
 use std::sync::OnceLock;
 
-use rune::Cycle;
+use rune::{Cycle, Icon};
 
 const SPAN: i32 = 5;
 /// Dot side and pitch, in a 16-unit box.
@@ -33,6 +33,23 @@ pub(super) struct Dot {
 pub(super) fn dots() -> &'static [Dot] {
     static DOTS: OnceLock<Vec<Dot>> = OnceLock::new();
     DOTS.get_or_init(layout)
+}
+
+/// Each dot as Desktop draws it: an SVG over the whole 16-unit box holding its one `<rect>`,
+/// corners rounded 0.24 of its side.
+pub(super) fn icons() -> &'static [Icon] {
+    static ICONS: OnceLock<Vec<Icon>> = OnceLock::new();
+    ICONS.get_or_init(|| {
+        dots()
+            .iter()
+            .enumerate()
+            .map(|(i, d)| Icon {
+                name: Box::leak(format!("kit-spinner-dot-{i}").into_boxed_str()),
+                view: 16.0,
+                body: Box::leak(format!(r#"<rect x="{}" y="{}" width="{}" height="{}" rx="{}"/>"#, d.x, d.y, d.size, d.size, d.size * 0.24).into_boxed_str()),
+            })
+            .collect()
+    })
 }
 
 type Stops = Vec<(f64, f64)>;

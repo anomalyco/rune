@@ -46,7 +46,7 @@ pub(in super::super) fn render(path: &[El], ctm: Transform, width: f32, origin: 
         attr.extend(pent.iter().map(|p| (Kind::Conic, klm.map(|r| r[0] * p.x + r[1] * p.y + r[2]))));
         indices.extend([0, 1, 2, 2, 4, 3, 1, 4, 2].map(|i| base + i));
     }
-    rasterize(&pts, &indices, origin, px, out, |tri, w| {
+    rasterize(&pts, &indices, origin, px, out, |tri, w, _| {
         let at = |k: usize| (0..3).map(|i| w[i] * attr[tri[i]].1[k] as f64).sum::<f64>() as f32;
         let d = |k: usize| gradient(&pts, tri, |i| attr[i].1[k], origin);
         let (f, g) = match attr[tri[0]].0 {

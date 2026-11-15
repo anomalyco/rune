@@ -57,8 +57,11 @@ pub(super) enum Op {
     StrokeRect { outside: [Point; 2], inside: Option<[Point; 2]>, hw: f32 },
     /// A turned straight stroke's outline: the ramp to its nearest edge.
     Quad([Point; 4]),
-    /// A round rect's ramp, less a hole's for a stroke.
+    /// A round rect's ramp, less a hole's for a stroke (`CircularRRectOp`).
     Round { outer: Round, inner: Option<Round> },
+    /// A filled round rect `[lo, hi]` with corners `r` round that `FillRRectOp` draws
+    /// (`super::convex::fill_rrect`).
+    FillRRect { lo: Point, hi: Point, r: f32 },
     /// A closed convex path stroked with mitred or bevelled joins: Ganesh's convex tessellator
     /// (`super::convex`).
     ConvexStroke,
@@ -93,15 +96,23 @@ pub(super) fn op(shape: &Shape<'_>, ctm: Transform, pen: Option<&Pen>) -> Op {
             let r = radii.x * scale;
             ring(Round { lo: Point::new(c.x - r, c.y - r), hi: Point::new(c.x + r, c.y + r), r }, pen.map(|_| hw))
         }
-        Shape::Rounded { lo, hi, r } => {
+        Shape::Rounded { lo: user_lo, hi: user_hi, r } => {
             if !upright {
                 return thin(pen, scale);
             }
-            let (a, b) = (ctm.transform_point(*lo), ctm.transform_point(*hi));
+            let (a, b) = (ctm.transform_point(*user_lo), ctm.transform_point(*user_hi));
             let (lo, hi) = (Point::new(a.x.min(b.x), a.y.min(b.y)), Point::new(a.x.max(b.x), a.y.max(b.y)));
             // Blink draws a `<rect>` as the rect it is, however its float sides add up.
             if *r == 0.0 {
                 return rect(&[lo, hi], pen, hw, scale);
+            }
+            // Filled, Ganesh takes a circular round rect at least half a pixel round to its
+            // circle op, and everything else but an oval (which `addRRect` adds as one) to
+            // `FillRRectOp`.
+            let scaled = (r * scale).min((hi.x - lo.x) * 0.5).min((hi.y - lo.y) * 0.5);
+            let oval = 2.0 * r >= user_hi.x - user_lo.x && 2.0 * r >= user_hi.y - user_lo.y;
+            if pen.is_none() && !oval && (scaled < 0.5 || !circular(*user_lo, *user_hi, *r)) {
+                return Op::FillRRect { lo, hi, r: r * scale };
             }
             ring(Round { lo, hi, r: r * scale }, pen.map(|_| hw))
         }
@@ -233,7 +244,7 @@ impl Op {
                     }
                     Op::Quad(quad) => ramp(inside_quad(quad, q)),
                     Op::Round { outer, inner } => ramp(outer.inside(q)) * inner.map_or(1.0, |r| ramp(-r.inside(q))),
-                    Op::Hairline(_) | Op::Path | Op::ConvexStroke => 0.0,
+                    Op::Hairline(_) | Op::Path | Op::ConvexStroke | Op::FillRRect { .. } => 0.0,
                 };
                 out[y * n + x] = (c.clamp(0.0, 1.0) * 255.0).round() as u8;
             }
@@ -250,6 +261,17 @@ impl Round {
         let dy = (q.y - cy).abs() - ((self.hi.y - self.lo.y) * 0.5 - r);
         r - (dx.max(0.0).hypot(dy.max(0.0)) + dx.max(dy).min(0.0))
     }
+}
+
+/// Whether Ganesh draws a filled `<rect>` with corners `r` round, `[lo, hi]` in user units, as
+/// a circular round rect (`CircularRRectOp`). Blink adds the rect to a path (`SkPath::addRRect`),
+/// and Skia reads its corners back from the path's points: each radius is a side less the point
+/// `r` along it, in float, which isn't always `r`. Only corners that all come back equal, and as
+/// wide as tall, are circular; `FillRRectOp` draws the rest.
+fn circular(lo: Point, hi: Point, r: f32) -> bool {
+    let (left, right) = ((lo.x + r) - lo.x, hi.x - (hi.x - r));
+    let (top, bottom) = ((lo.y + r) - lo.y, hi.y - (hi.y - r));
+    left == right && top == bottom && left == top
 }
 
 fn ramp(inside: f32) -> f32 {
