@@ -124,7 +124,12 @@ pub fn home_from(var: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
 
 /// The base a [`crate::prefs::Prefs`] app folder goes in, without the id.
 pub(crate) fn config_base(var: &impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
-    Bases::resolve(var).map(|b| b.config.base)
+    let config = Bases::resolve(var).map(|b| b.config.base);
+    // A caller asking only for preferences doesn't need a cache directory. A Windows process
+    // can have its roaming folder without a local folder or a user profile to derive one from.
+    #[cfg(target_os = "windows")]
+    let config = config.or_else(|| var("APPDATA").filter(|v| !v.is_empty()).map(PathBuf::from));
+    config
 }
 
 /// One kind of folder: `<base>/<id>`, then `tail` when the platform nests it.
