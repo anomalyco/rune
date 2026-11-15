@@ -85,7 +85,10 @@ parley_engine = { path = "vendor/parley_engine" }
 accesskit_windows = { path = "vendor/accesskit_windows" }
 # accesskit_macos as published plus `vendor/accesskit_macos.patch`: headings reach NSAccessibility as
 # AppKit's `AXHeading` with their level as the value (the published role, `Heading`, is none VoiceOver
-# knows), so VoiceOver's rotor and VO-Command-H find them and say their level. Re-made by
+# knows), so VoiceOver's rotor and VO-Command-H find them and say their level; and the accessibility
+# children, focused element and hit test leave the adapter alone off the main thread, which AppKit
+# calls them on while the process queries itself, so they answer from the superclass instead of
+# racing or panicking on the main thread's borrow. Re-made by
 # `scripts/vendor-accesskit-macos.sh <version>` when AccessKit is bumped; apps that build Rune patch it too.
 accesskit_macos = { path = "vendor/accesskit_macos" }
 
