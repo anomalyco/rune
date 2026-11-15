@@ -565,6 +565,28 @@ mod tests {
         assert_ne!(rt.wheel_lock.gesture, wheel_gesture, "without phases, a delta wholly on the other axis starts another");
     }
 
+    /// A viewport whose content fits is passed over: the wheel over a section that is its own
+    /// viewport, as tall as its rows, scrolls the list around it, on either axis.
+    #[test]
+    fn the_wheel_over_a_viewport_with_nothing_to_scroll_scrolls_the_one_around_it() {
+        fn view(_: &(), _: &mut Cx<()>) -> El {
+            let fits = crate::col().key("section").w_full().h(200.0).scroll(crate::ScrollSpec { stick_bottom: false }).child(crate::el().w_full().h(200.0));
+            let fits_x = crate::row().key("chips").w_full().h(40.0).scroll_x().child(crate::el().w(100.0).h(40.0));
+            let list = crate::col().w_full().child(fits_x).child(fits).child(crate::el().w_full().h(2000.0));
+            crate::col().key("list").w_full().h(300.0).scroll(crate::ScrollSpec { stick_bottom: false }).child(list)
+        }
+        let mut rt = Runtime::new((), view, (300.0, 300.0), Env::default());
+        rt.frame(0.0);
+        rt.frame(1.0 / 60.0);
+        let id = |rt: &Runtime<()>, key: &str| rt.nodes.iter().find(|n| n.key.as_deref() == Some(key)).unwrap().id;
+        let (list, section) = (id(&rt, "list"), id(&rt, "section"));
+        // The strip that fits sideways is no horizontal viewport for the wheel, and over it the list scrolls.
+        assert_eq!(rt.scroll_at_axis(100.0, 20.0, true), None);
+        assert_eq!(rt.scroll_at(100.0, 20.0), Some(list));
+        rt.wheel_xy(100.0, 100.0, 0.0, -30.0);
+        assert_eq!((rt.scrolls[&list].offset, rt.scrolls[&section].offset), (30.0, 0.0));
+    }
+
     #[test]
     fn the_phase_carries_when_the_gesture_last_moved_and_when_it_ended() {
         let mut lock = WheelLock::default();
