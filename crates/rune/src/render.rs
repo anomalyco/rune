@@ -502,7 +502,7 @@ impl Gpu {
         let max_immediate_size = if required_features.contains(wgpu::Features::IMMEDIATES) { adapter.limits().max_immediate_size } else { 0 };
         let adapter_limits = adapter.limits();
         // DX12 allocates this heap up front. Other backends keep their previous limit.
-        let views = (if adapter.get_info().backend == wgpu::Backend::Dx12 { MAX_VIEWS } else { 65_536 })
+        let views = (if adapter.get_info().backend == wgpu::Backend::Dx12 && std::env::var_os("IB3_SMALL_HEAP").is_some() { MAX_VIEWS } else { 65_536 })
             .min(adapter_limits.max_non_sampler_bindings);
         let required_limits = if adapter_limits.max_inter_stage_shader_variables < wgpu::Limits::default().max_inter_stage_shader_variables
             || adapter_limits.max_color_attachments < wgpu::Limits::default().max_color_attachments
@@ -995,8 +995,21 @@ impl Renderer {
     pub fn srgb_blend(&self) -> bool { self.srgb_blend }
 
     pub fn submit(&self, queue: &wgpu::Queue, mut encoder: wgpu::CommandEncoder) -> wgpu::SubmissionIndex {
+        #[cfg(target_os = "windows")]
+        {
+            use wgpu::hal::dx12::ib3;
+            let mut kinds = [0;16];for i in &self.uploads.instances { if (0.0..16.0).contains(&i.params[1]) {kinds[i.params[1] as usize]+=1;} }
+            let l=self.layer_stats();ib3::scene(kinds,l.extra_passes,l.targets);
+            let t=std::time::Instant::now();self.before_submit(&mut encoder);ib3::add(ib3::PREP,t);
+            if let Some(s)=&self.surfaces{return s.submit(queue,encoder)}
+            let t=std::time::Instant::now();let buf=encoder.finish();ib3::add(ib3::FINISH,t);
+            let t=std::time::Instant::now();let id=queue.submit([buf]);ib3::add(ib3::SUBMIT,t);return id;
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
         self.before_submit(&mut encoder);
         if let Some(s) = &self.surfaces { s.submit(queue,encoder) } else { queue.submit([encoder.finish()]) }
+        }
     }
 
     /// Whether `submit` is `queue.submit` after `before_submit` and nothing more: no native video

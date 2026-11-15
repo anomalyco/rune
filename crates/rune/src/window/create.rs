@@ -46,6 +46,9 @@ impl<S: 'static> Host<S> {
         // does as it lifts, so the text services' start-up follows the frame.
         #[cfg(target_os = "windows")]
         let attrs = crate::platform::app_icon::with_icon(winit::platform::windows::WindowAttributesExtWindows::with_drag_and_drop(attrs.with_visible(false).with_active(false), false));
+        let attrs=if let Ok(dim)=std::env::var("IB3_SIZE") && let Some((w,h))=dim.split_once('x') {
+            attrs.with_inner_size(winit::dpi::PhysicalSize::new(w.parse::<u32>().unwrap(),h.parse::<u32>().unwrap()))
+        }else{attrs};
         let window = Arc::new(event_loop.create_window(attrs).map_err(|e| e.to_string())?);
         crate::marks::mark("window.native");
         #[cfg(target_os = "windows")]

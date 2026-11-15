@@ -685,10 +685,12 @@ impl crate::Device for super::Device {
             {
                 let raw_desc = unsafe { view_desc.to_rtv() };
                 let handle = self.rtv_pool.lock().alloc_handle()?;
+                let t=std::time::Instant::now();
                 unsafe {
                     self.raw
                         .CreateRenderTargetView(&texture.resource, Some(&raw_desc), handle.raw)
                 };
+                super::ib3::add(super::ib3::RTV,t);
                 Some(handle)
             } else {
                 None

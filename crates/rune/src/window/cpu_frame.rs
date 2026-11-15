@@ -817,11 +817,18 @@ fn warm_frame(gpu: &Gpu, renderer: &mut Renderer, format: wgpu::TextureFormat, s
     });
     let view = target.create_view(&Default::default());
     let mut atlas = crate::text::Atlas::new();
+    let passes=std::env::var("IB3_OFFSCREEN").ok().and_then(|s|s.parse::<usize>().ok()).unwrap_or(1).clamp(1,32);
+    let mut spans=Vec::new();
+    for _ in 0..passes {
     let mut enc = gpu.device.create_command_encoder(&Default::default());
     renderer.prepare(&gpu.device, &gpu.queue, &mut atlas, instances, size);
     renderer.draw(&mut enc, &view, [0.0; 4]);
+    let t=std::time::Instant::now();
     renderer.submit(&gpu.queue, enc);
+    spans.push(t.elapsed().as_micros());
     let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+    }
+    eprintln!("IBOFF {:?}",spans);
     target.destroy();
     let _ = gpu.device.poll(wgpu::PollType::Poll);
 }

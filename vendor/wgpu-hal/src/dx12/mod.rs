@@ -84,6 +84,7 @@ mod dcomp;
 mod descriptor;
 mod device;
 mod device_creation;
+pub mod ib3;
 mod instance;
 mod pipeline_desc;
 mod sampler;
@@ -1509,7 +1510,7 @@ impl crate::Surface for Surface {
         // Nvidia recommends to use 1-2 more buffers than the maximum latency
         // https://developer.nvidia.com/blog/advanced-api-performance-swap-chains/
         // For high latency extra buffers seems excessive, so go with a minimum of 3 and beyond that add 1.
-        let swap_chain_buffer = (config.maximum_frame_latency + 1).min(16);
+        let swap_chain_buffer = std::env::var("IB3_BUFFERS").ok().and_then(|s| s.parse::<u32>().ok()).filter(|n| matches!(n,2|3)).unwrap_or((config.maximum_frame_latency + 1).min(16));
 
         let swap_chain = match self.swap_chain.write().take() {
             //Note: this path doesn't properly re-initialize all of the things
@@ -1755,6 +1756,7 @@ impl crate::Surface for Surface {
 
         let base_index = unsafe { sc.raw.GetCurrentBackBufferIndex() } as usize;
         let index = (base_index + sc.acquired_count) % sc.resources.len();
+        ib3::surface(index,sc.resources.len(),sc.resources[index].as_raw() as usize,sc.size.width,sc.size.height);
         sc.acquired_count += 1;
 
         let texture = Texture {
@@ -1810,7 +1812,7 @@ impl crate::Queue for Queue {
 
         {
             profiling::scope!("ID3D12CommandQueue::ExecuteCommandLists");
-            unsafe { self.raw.ExecuteCommandLists(&temp_lists) }
+            let t=std::time::Instant::now();unsafe { self.raw.ExecuteCommandLists(&temp_lists) };ib3::add(ib3::EXECUTE,t);
         }
 
         unsafe { self.raw.Signal(&signal_fence.raw, signal_value) }
@@ -1853,6 +1855,7 @@ impl crate::Queue for Queue {
 
         profiling::scope!("IDXGISwapchain3::Present");
         let dirty = core::mem::take(&mut sc.dirty);
+        let t=std::time::Instant::now();
         if dirty.is_empty() {
             unsafe { sc.raw.Present(interval, flags) }
                 .ok()
@@ -1868,6 +1871,8 @@ impl crate::Queue for Queue {
                 .ok()
                 .into_device_result("Present1")?;
         }
+
+        ib3::add(ib3::PRESENT,t);ib3::end();
 
         Ok(())
     }

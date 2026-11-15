@@ -107,6 +107,8 @@ impl GeneralHeap {
             crate::DeviceError::OutOfMemory
         })?;
         self.live.add(count as isize);
+        let live=super::ib3::LIVE.fetch_add(count as usize,core::sync::atomic::Ordering::Relaxed)+count as usize;
+        super::ib3::PEAK.fetch_max(live,core::sync::atomic::Ordering::Relaxed);
         let live = self.live.read();
         if live > self.peak.read() {
             self.peak.set(live);
@@ -122,6 +124,7 @@ impl GeneralHeap {
         let mut ranges = self.ranges.lock();
         ranges.free_range(start..start + handle.count);
         self.live.sub(handle.count as isize);
+        super::ib3::LIVE.fetch_sub(handle.count as usize,core::sync::atomic::Ordering::Relaxed);
     }
 }
 

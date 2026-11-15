@@ -392,7 +392,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
         let list = loop {
             if let Some(list) = self.free_lists.pop() {
                 // TODO: Is an error expected here and should we print it?
-                let reset_result = unsafe { list.Reset(&self.allocator, None) };
+                let t=std::time::Instant::now();let reset_result = unsafe { list.Reset(&self.allocator, None) };super::ib3::add(super::ib3::RESET,t);
                 if reset_result.is_ok() {
                     break Some(list);
                 }
@@ -401,6 +401,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
             }
         };
 
+        let create = list.is_none().then(std::time::Instant::now);
         let list = if let Some(list) = list {
             list
         } else {
@@ -415,6 +416,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
             .into_device_result("Create command list")?
         };
 
+        if let Some(t)=create {super::ib3::add(super::ib3::CREATE,t);}
         if let Some(label) = label {
             list.set_name(label)?;
         }
@@ -436,7 +438,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
     }
     unsafe fn end_encoding(&mut self) -> Result<super::CommandBuffer, crate::DeviceError> {
         let raw = self.list.take().unwrap();
-        unsafe { raw.Close() }.into_device_result("GraphicsCommandList::close")?;
+        let t=std::time::Instant::now();unsafe { raw.Close() }.into_device_result("GraphicsCommandList::close")?;super::ib3::add(super::ib3::CLOSE,t);
         Ok(super::CommandBuffer { raw })
     }
     unsafe fn reset_all<I: Iterator<Item = super::CommandBuffer>>(&mut self, command_buffers: I) {
@@ -444,9 +446,10 @@ impl crate::CommandEncoder for super::CommandEncoder {
         for cmd_buf in command_buffers {
             self.free_lists.push(cmd_buf.raw);
         }
-        if let Err(e) = unsafe { self.allocator.Reset() } {
+        let t=std::time::Instant::now();if let Err(e) = unsafe { self.allocator.Reset() } {
             log::error!("ID3D12CommandAllocator::Reset() failed with {e}");
         }
+        super::ib3::add(super::ib3::A_RESET,t);
     }
 
     unsafe fn transition_buffers<'a, T>(&mut self, barriers: T)
@@ -510,7 +513,9 @@ impl crate::CommandEncoder for super::CommandEncoder {
     {
         self.temp.barriers.clear();
 
+        let mut back=false;
         for barrier in barriers {
+            back |= super::ib3::back(windows::core::Interface::as_raw(&barrier.texture.resource) as usize);
             let s0 = conv::map_texture_usage_to_state(barrier.usage.from);
             let s1 = conv::map_texture_usage_to_state(barrier.usage.to);
             if s0 != s1 {
@@ -594,12 +599,15 @@ impl crate::CommandEncoder for super::CommandEncoder {
         }
 
         if !self.temp.barriers.is_empty() {
+            let t=std::time::Instant::now();
             unsafe {
                 self.list
                     .as_ref()
                     .unwrap()
                     .ResourceBarrier(&self.temp.barriers)
             };
+            super::ib3::add(super::ib3::BARRIER,t);
+            if back {super::ib3::add(super::ib3::SURFACE_BARRIER,t);}
         }
     }
 
@@ -734,6 +742,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
             };
 
             let src_box = make_box(&wgt::Origin3d::ZERO, &final_copy_region.size);
+            let t=std::time::Instant::now();
             unsafe {
                 list.CopyTextureRegion(
                     &dst_location,
@@ -744,6 +753,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
                     Some(&src_box),
                 )
             };
+            super::ib3::add(super::ib3::COPY_TEX,t);
         }
     }
 
@@ -1244,7 +1254,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
             self.reset_signature(&pipeline.layout);
         };
 
-        unsafe { list.SetPipelineState(&pipeline.raw) };
+        let t=std::time::Instant::now();unsafe { list.SetPipelineState(&pipeline.raw) };super::ib3::add(super::ib3::BIND,t);
         unsafe { list.IASetPrimitiveTopology(pipeline.topology) };
 
         for (index, (vb, &stride)) in self

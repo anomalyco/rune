@@ -20,7 +20,7 @@ pub(super) struct Uploads {
     /// sealed when it's submitted. Apart from `staging`, whose `submit` would seal them early.
     frame_writes: Option<Staging>,
     /// The instance buffer's contents, so a frame writes only the span that changed.
-    instances: Vec<Instance>,
+    pub(super) instances: Vec<Instance>,
     /// Whether `image_batches`, `effects` and `has_layers` were made from `instances`: false
     /// once the list's length or an instance's `params` change, which can move a batch.
     batched: bool,
