@@ -18,6 +18,9 @@ mod web;
 #[cfg(not(target_arch = "wasm32"))]
 mod pool;
 
+mod queue;
+pub use queue::{Queue, queue};
+
 /// Runs `work` off the UI thread: on a shared task thread, which takes `name` as its Windows
 /// thread description while it runs, or a task after the current event on the web. Fails only when
 /// the system has no thread left to give.
