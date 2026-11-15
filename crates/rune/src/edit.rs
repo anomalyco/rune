@@ -165,6 +165,12 @@ impl std::ops::Deref for Wiped {
     }
 }
 
+impl std::ops::DerefMut for Wiped {
+    fn deref_mut(&mut self) -> &mut String {
+        &mut self.0
+    }
+}
+
 impl Drop for Wiped {
     fn drop(&mut self) {
         wipe(&mut self.0);
@@ -724,8 +730,8 @@ impl TextEdit {
     /// fields fold CRLF to LF (and multi-line secure fields also drop control characters other
     /// than `\n` and `\t`). Sized up front so no partial copy of a secret is left behind by a
     /// reallocation.
-    fn sanitize(&self, s: &str) -> Zeroizing<String> {
-        let mut out = Zeroizing::new(String::with_capacity(s.len()));
+    fn sanitize(&self, s: &str) -> Wiped {
+        let mut out = Wiped(String::with_capacity(s.len()));
         if self.is_single_line() {
             out.extend(s.chars().filter(|c| !c.is_control() && !matches!(c, '\u{2028}' | '\u{2029}')));
         } else if self.secure {
