@@ -673,6 +673,10 @@ impl<S: 'static> Host<S> {
                 }
                 w.native.mode = SurfaceMode::Handed { handover };
                 w.presented = None;
+                // The GPU's frame went into the swap chain while its visual wasn't shown, so DWM takes
+                // it only from this commit's composition on (later still across adapters): the next
+                // frame doesn't wait for that room (`slot`), or a key just after the hand-over waits it.
+                w.native.slot.reset();
                 // What was asked for while the GPU finished its frame draws now, on the GPU.
                 w.request_redraw();
             }
