@@ -162,14 +162,14 @@ pub(crate) enum Facing {
 /// `icon` drawn `size` device pixels across (its viewBox's scale) on a `px` × `px` canvas,
 /// `px` the size rounded up, so an icon at a fractional size keeps its exact scale and its canvas
 /// lands 1:1 on the device grid, as Chromium paints an SVG at its scale from a snapped origin.
-pub(super) fn rasterize_icon(icon: &Icon, (px, size): (u32, f32), facing: Facing, atlas: &mut Atlas) -> Rasterized {
+pub(super) fn rasterize_icon(icon: &Icon, (px, size): (u32, f32), facing: Facing, parity: [u32; 2], atlas: &mut Atlas) -> Rasterized {
     if px == 0 {
         return Rasterized::Empty;
     }
     if px + 4 > super::ATLAS_SIZE {
         return Rasterized::Unplaced;
     }
-    let mut cov = icon_coverage_at(icon, px, size, Point::new(0.0, 0.0));
+    let mut cov = icon_coverage_at(icon, px, size, Point::new(0.0, 0.0), parity);
     if facing == Facing::Mirrored {
         cov.chunks_exact_mut(px as usize).for_each(<[u8]>::reverse);
     }
@@ -191,6 +191,13 @@ pub(super) fn rasterize_icon(icon: &Icon, (px, size): (u32, f32), facing: Facing
     }
 }
 
+/// Where on the GPU's 2×2 quads Chromium shades an inline SVG drawn from `origin` (device
+/// pixels, on the grid): on the window's, or, for an SVG whose opacity animates (`own_layer`),
+/// on the composited layer it rasters into, which starts at the SVG.
+pub(crate) fn quad_parity(origin: [f32; 2], own_layer: bool) -> [u32; 2] {
+    if own_layer { [0, 0] } else { origin.map(|o| (o.round() as i64).rem_euclid(2) as u32) }
+}
+
 /// What an open element hands the ones inside it: its transform to device pixels, whether they
 /// paint at all, and the group whose paint attributes they inherit.
 struct Scope<'a> {
@@ -208,7 +215,7 @@ const INHERITED: [&str; 9] = [
 
 /// `icon`'s coverage at `px` × `px` device pixels, row-major, as the glyph atlas stores it.
 pub fn icon_coverage(icon: &Icon, px: u32) -> Vec<u8> {
-    icon_coverage_at(icon, px, px as f32, Point::new(0.0, 0.0))
+    icon_coverage_at(icon, px, px as f32, Point::new(0.0, 0.0), [0, 0])
 }
 
 /// [`icon_coverage`] as Chromium covers it drawn with its top-left at `origin` device pixels:
@@ -216,12 +223,13 @@ pub fn icon_coverage(icon: &Icon, px: u32) -> Vec<u8> {
 /// that compare with Chromium's pixels; Rune draws every icon at 0.
 #[doc(hidden)]
 pub fn icon_coverage_placed(icon: &Icon, px: u32, origin: [f32; 2]) -> Vec<u8> {
-    icon_coverage_at(icon, px, px as f32, Point::new(origin[0], origin[1]))
+    icon_coverage_at(icon, px, px as f32, Point::new(origin[0], origin[1]), origin.map(|o| (o.floor() as i64).rem_euclid(2) as u32))
 }
 
 /// `icon`'s coverage drawn `size` device pixels across, from the top-left of a `px` × `px`
-/// canvas placed at `origin`.
-fn icon_coverage_at(icon: &Icon, px: u32, size: f32, origin: Point) -> Vec<u8> {
+/// canvas placed at `origin`, whose whole pixels are `parity` (odd or even, per axis) on the
+/// grid the GPU shades in 2×2 quads.
+fn icon_coverage_at(icon: &Icon, px: u32, size: f32, origin: Point, parity: [u32; 2]) -> Vec<u8> {
     let s = size / icon.view;
     let mut acc = vec![0u8; (px * px) as usize];
     // Each open group with an `opacity`: what it holds so far, and that opacity.
@@ -293,6 +301,7 @@ fn icon_coverage_at(icon: &Icon, px: u32, size: f32, origin: Point) -> Vec<u8> {
                         None => super::area::render_aaa(&shape, pen, fill, ctm, origin, px, &mut buf),
                     }
                 }
+                super::area::Op::FillRRect { lo, hi, r } => super::convex::fill_rrect([lo.x, lo.y], [hi.x, hi.y], r, parity, px, &mut buf),
                 op => op.render(px, &mut buf),
             }
             union(into, &buf, alpha);

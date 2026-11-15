@@ -180,16 +180,16 @@ impl<S: 'static> Runtime<S> {
             let pos = [(r[0] + r[2] - drawn) * 0.5, (r[1] + r[3] - drawn) * 0.5];
             // At rest, a monochrome icon draws as Chromium paints an inline SVG: its box's own
             // origin rounded to the device grid (not the box a centring snap shrank by a pixel,
-            // which redrew it at another scale), and the drawing at its exact scale on a canvas
-            // the size rounded up, 1:1 on the grid. A 1 pt stroke at 1.875x covers two pixels
-            // at 94% instead of one whole and two at 40%. Moving, turned or scaled icons keep
-            // the sub-pixel path below.
+            // which redrew it at another scale), the drawing at its exact scale on a canvas the
+            // size rounded up, 1:1 on the grid (a 1 pt stroke at 1.875x covers two pixels at 94%,
+            // not one whole and two at 40%). Moving, turned or scaled icons keep the path below.
             let resting = cover.is_none() && scale_motion == ScaleMotion::Still && !gliding && turn == 0.0 && (sc - 1.0).abs() < 1e-5;
             let exact = w_exact.min(h_exact);
             if resting && exact > 1e-4 && !self.text.is_color_icon(ic) {
                 let canvas = (exact - 1.0 / 64.0).ceil().max(1.0) as u32;
                 let at = [on_grid(r_exact[0] + (w_exact - exact) * 0.5, contain[0]), on_grid(r_exact[1] + (h_exact - exact) * 0.5, contain[1])];
-                if let Some(q) = self.text.icon_quad_sized(ic, (canvas, exact), at, facing) {
+                let own_layer = matches!(n.looping.as_ref().map(|l| l.kind), Some(rune_motion::LoopKind::OpacityCycle(_))) && !self.reduced_motion;
+                if let Some(q) = self.text.icon_quad_sized(ic, (canvas, exact), at, facing, crate::text::quad_parity(at, own_layer)) {
                     self.push_icon(icon_inst(&q, at, canvas as f32, 0.0, premul(color, o, srgb), clip, fade));
                 }
             // An icon that paints its own colours draws as its image (or its silhouette in
