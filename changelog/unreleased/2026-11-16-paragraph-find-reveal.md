@@ -1,0 +1,1 @@
+- Find can highlight and reveal a match in a multiline field on the same frame, including matches in offscreen paragraphs.
