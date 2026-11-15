@@ -590,7 +590,7 @@ impl TextSystem {
         let plain = spec.spans.is_empty() && spec.cold.pills.is_empty() && spec.cold.blocks.iter().all(|&b| b == Block::Paragraph);
         let forced = spec.paragraphs_flow();
         let start_flow = forced.unwrap_or(spec.plaintext_flow());
-        let reused = prev.filter(|_| plain).and_then(|p| reuse_keys(p, content, style_key, start_flow));
+        let reused = prev.filter(|_| plain).and_then(|p| reuse_keys(p, content, style_key, start_flow, &mut self.last_diff));
         let (mut found, tail, entering) = reused.map_or((Vec::new(), Vec::new(), start_flow), |r| (r.head, r.tail, r.entering));
         let at = found.last().map_or(0, |f| f.1 + 1);
         // A long paste's plain ASCII lines that fit on one line, away from the edit's ends, wait
@@ -802,12 +802,20 @@ struct Reuse {
 /// `prev`'s paragraphs that `content` keeps byte for byte, newline included, when `prev` was a
 /// plain text in the same style and starting direction. The edit is what lies between the
 /// texts' common start and common end.
-fn reuse_keys(prev: &ParagraphLayout, content: &str, style_key: u64, start_flow: Flow) -> Option<Reuse> {
+fn reuse_keys(prev: &ParagraphLayout, content: &str, style_key: u64, start_flow: Flow, last: &mut Option<([usize; 4], usize, usize)>) -> Option<Reuse> {
     let keyed = prev.keyed.as_ref().filter(|k| k.style_key == style_key && k.start_flow == start_flow)?;
     let (old, new) = (keyed.content.as_bytes(), content.as_bytes());
-    let prefix = common_start(old, new);
-    let room = old.len().min(new.len()) - prefix;
-    let suffix = common_end(old, new).min(room);
+    // The same two texts as the last comparison this commit (both are alive till it ends).
+    let texts = [old.as_ptr() as usize, old.len(), new.as_ptr() as usize, new.len()];
+    let (prefix, suffix) = match *last {
+        Some((t, p, s)) if t == texts => (p, s),
+        _ => {
+            let prefix = common_start(old, new);
+            let suffix = common_end(old, new).min(old.len().min(new.len()) - prefix);
+            *last = Some((texts, prefix, suffix));
+            (prefix, suffix)
+        }
+    };
     let ps = &prev.paragraphs;
     // Before the edit: its newline too. After it: the newline before it too.
     let h = ps.partition_point(|p| p.end < prefix);
@@ -822,7 +830,7 @@ fn reuse_keys(prev: &ParagraphLayout, content: &str, style_key: u64, start_flow:
 
 /// How many bytes two texts share from their start: compared 4 KB at a time (one memcmp each;
 /// a 1.7 MB paste in a few dozen), then byte by byte inside the first block that differs.
-fn common_start(a: &[u8], b: &[u8]) -> usize {
+pub(crate) fn common_start(a: &[u8], b: &[u8]) -> usize {
     let n = a.len().min(b.len());
     let mut at = 0;
     while at + 4096 <= n && a[at..at + 4096] == b[at..at + 4096] { at += 4096; }
@@ -830,7 +838,7 @@ fn common_start(a: &[u8], b: &[u8]) -> usize {
 }
 
 /// How many bytes two texts share at their end, as `common_start` counts.
-fn common_end(a: &[u8], b: &[u8]) -> usize {
+pub(crate) fn common_end(a: &[u8], b: &[u8]) -> usize {
     let n = a.len().min(b.len());
     let mut at = 0;
     while at + 4096 <= n && a[a.len() - at - 4096..a.len() - at] == b[b.len() - at - 4096..b.len() - at] { at += 4096; }

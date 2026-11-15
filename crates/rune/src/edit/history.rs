@@ -12,7 +12,7 @@ pub(super) const HISTORY_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Snapshot {
-    text: Arc<Zeroizing<String>>,
+    text: Arc<Wiped>,
     anchor: usize,
     focus: usize,
     marks: Vec<MarkRange>,
@@ -61,6 +61,27 @@ impl PartialEq for EditedTag {
     }
 }
 
+/// What an edit that replaces some bytes starts from (`TextEdit::ranged`): those bytes, where
+/// they were, the text's length and the rest of the document, and what the history said of it.
+pub(super) struct Ranged {
+    meta: Meta,
+    at: usize,
+    removed: Wiped,
+    len: usize,
+    prior: Prior,
+}
+
+/// What the history says of the document an edit starts from: whether it leads there (else it's
+/// dropped), whether its newest step ends there (so typing may join it), whether that document
+/// is empty, and whether its selection was a caret.
+#[derive(Clone, Copy)]
+struct Prior {
+    leads: bool,
+    joins: bool,
+    empty: bool,
+    collapsed: bool,
+}
+
 /// What a document holds besides its text, either side of a [`Change`].
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Meta {
@@ -87,8 +108,8 @@ impl Meta {
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Change {
     at: usize,
-    removed: Arc<Zeroizing<String>>,
-    inserted: Arc<Zeroizing<String>>,
+    removed: Arc<Wiped>,
+    inserted: Arc<Wiped>,
     /// The text's length before and after, to tell a document the app replaced from this one.
     lens: [usize; 2],
     before: Meta,
@@ -126,25 +147,64 @@ impl Change {
         text.len() == len && text.get(self.at..self.at + there.len()) == Some(there.as_str())
     }
 
+    /// The bytes of the document between this step and `next` that joining them reads: those
+    /// either step touched, and any between.
+    fn window(&self, next: &Change) -> (usize, usize) {
+        (self.at.min(next.at), (self.at + self.inserted.len()).max(next.at + next.removed.len()))
+    }
+
     /// `next`, from this step's document after, folded into this step: one step from this one's
-    /// before to `next`'s after.
+    /// before to `next`'s after. `mid` is that document's bytes in `self.window(&next)`.
     fn join(&mut self, mid: &str, next: Change) {
-        let (s, e) = (self.at.min(next.at), (self.at + self.inserted.len()).max(next.at + next.removed.len()));
+        let (s, e) = self.window(&next);
+        let at = |i: usize| i - s;
         let mut removed = String::with_capacity(e - s);
-        removed.push_str(&mid[s..self.at]);
+        removed.push_str(&mid[..at(self.at)]);
         removed.push_str(&self.removed);
-        removed.push_str(&mid[self.at + self.inserted.len()..e.max(self.at + self.inserted.len())]);
+        removed.push_str(&mid[at(self.at + self.inserted.len())..]);
         let mut inserted = String::with_capacity(e - s);
-        inserted.push_str(&mid[s..next.at]);
+        inserted.push_str(&mid[..at(next.at)]);
         inserted.push_str(&next.inserted);
-        inserted.push_str(&mid[(next.at + next.removed.len()).min(e)..e]);
-        (self.at, self.removed, self.inserted) = (s, Arc::new(Zeroizing::new(removed)), Arc::new(Zeroizing::new(inserted)));
+        inserted.push_str(&mid[at((next.at + next.removed.len()).min(e))..]);
+        (self.at, self.removed, self.inserted) = (s, Arc::new(Wiped(removed)), Arc::new(Wiped(inserted)));
         (self.lens[1], self.after) = (next.lens[1], next.after);
     }
 }
 
-fn shared(s: &str) -> Arc<Zeroizing<String>> {
-    Arc::new(Zeroizing::new(s.to_owned()))
+fn shared(s: &str) -> Arc<Wiped> {
+    Arc::new(Wiped(s.to_owned()))
+}
+
+/// An edit's undo step into history: joined to the open step when typing may join it, else a
+/// step of its own; the oldest steps go to keep the history in its bounds, never the newest.
+fn push_change(history: &mut Arc<History>, rich: bool, change: Change, prior: Prior, kind: EditKind, mid: impl FnOnce(usize, usize) -> String) {
+    // A rich contenteditable creates its first text node here; a plain field just types.
+    let into_empty = rich && prior.empty;
+    let h = Arc::make_mut(history);
+    if !prior.leads {
+        *h = History::default();
+    }
+    h.bytes -= h.redo.iter().map(Change::bytes).sum::<usize>();
+    h.redo.clear();
+    let record = step(&mut h.run, kind, into_empty);
+    if record == Record::Join
+        && prior.collapsed
+        && prior.joins
+        && h.undo.back().is_some_and(|c| c.after == change.before)
+    {
+        let last = h.undo.back_mut().unwrap();
+        let (s, e) = last.window(&change);
+        h.bytes -= last.bytes();
+        last.join(&mid(s, e), change);
+        h.bytes += last.bytes();
+    } else {
+        h.bytes += change.bytes();
+        h.undo.push_back(change);
+    }
+    // The newest step stays, however large: it's the way back from what was just done.
+    while h.undo.len() > 1 && (h.undo.len() > HISTORY_STEPS || h.bytes > HISTORY_BYTES) {
+        h.bytes -= h.undo.pop_front().unwrap().bytes();
+    }
 }
 
 /// Where `a` and `b` differ: the byte both share up to (a character boundary), and how many
@@ -258,7 +318,7 @@ impl TextEdit {
 
     pub(super) fn snapshot_now(&self) -> Snapshot {
         Snapshot {
-            text: Arc::new(Zeroizing::new(self.text.clone())),
+            text: Arc::new(Wiped(self.text.clone())),
             anchor: self.anchor,
             focus: self.focus,
             marks: self.marks.clone(),
@@ -290,41 +350,85 @@ impl TextEdit {
         };
         // What the edit left, read in place: copying a long document to compare it costs more
         // than the edit.
-        let after = Meta { anchor: self.anchor, focus: self.focus, marks: self.marks.clone(), blocks: self.blocks.clone(), soft_breaks: self.soft_breaks.clone() };
+        let after = self.meta_now();
         if before.text.as_str() == self.text && before.marks == after.marks && before.blocks == after.blocks && before.soft_breaks == after.soft_breaks {
             return;
         }
         let change = Change::to_text(&before, &self.text, after);
-        let h = Arc::make_mut(&mut self.history);
-        // Public model text may have been replaced by the app: a history that doesn't lead to
-        // the document this edit started from is dropped.
-        let leads = match (h.redo.last(), h.undo.back()) {
-            (Some(c), _) => c.leads_to(&before.text, false),
-            (None, Some(c)) => c.leads_to(&before.text, true),
-            (None, None) => true,
+        let prior = self.prior(&before.text, before.anchor == before.focus);
+        push_change(&mut self.history, self.rich, change, prior, kind, |s, e| before.text[s..e].to_owned());
+    }
+
+    /// What an edit replacing text bytes `a..b` starts from, for its undo step: those bytes and
+    /// what the document holds besides, not the whole text.
+    pub(super) fn ranged(&self, a: usize, b: usize) -> Option<Ranged> {
+        self.recording().then(|| Ranged {
+            meta: self.meta_now(),
+            at: a,
+            removed: Wiped(self.text[a..b].to_owned()),
+            len: self.text.len(),
+            prior: self.prior(&self.text, self.anchor == self.focus),
+        })
+    }
+
+    /// The undo step of an edit that replaced `before`'s bytes with `inserted`, the rest of the
+    /// text as it was.
+    pub(super) fn record_ranged(&mut self, before: Option<Ranged>, inserted: &str, kind: EditKind) {
+        let Some(r) = before.filter(|_| self.recording()) else {
+            return;
         };
-        if !leads {
-            *h = History::default();
+        let after = self.meta_now();
+        if r.removed.as_str() == inserted && r.meta.marks == after.marks && r.meta.blocks == after.blocks && r.meta.soft_breaks == after.soft_breaks {
+            return;
         }
-        h.bytes -= h.redo.iter().map(Change::bytes).sum::<usize>();
-        h.redo.clear();
-        // A rich contenteditable creates its first text node here; a plain field just types.
-        let record = step(&mut h.run, kind, self.rich && before.text.is_empty());
-        if record == Record::Join
-            && before.anchor == before.focus
-            && h.undo.back().is_some_and(|c| c.after == change.before && c.leads_to(&before.text, true))
-        {
-            let last = h.undo.back_mut().unwrap();
-            h.bytes -= last.bytes();
-            last.join(&before.text, change);
-            h.bytes += last.bytes();
-        } else {
-            h.bytes += change.bytes();
-            h.undo.push_back(change);
-        }
-        // The newest step stays, however large: it's the way back from what was just done.
-        while h.undo.len() > 1 && (h.undo.len() > HISTORY_STEPS || h.bytes > HISTORY_BYTES) {
-            h.bytes -= h.undo.pop_front().unwrap().bytes();
+        // The bytes the replacement really changed, as a diff of the two documents finds them.
+        let (x, y) = (r.removed.as_bytes(), inserted.as_bytes());
+        let mut p = crate::text::common_start(x, y);
+        while !r.removed.is_char_boundary(p) || !inserted.is_char_boundary(p) { p -= 1; }
+        let room = x.len().min(y.len()) - p;
+        let mut q = crate::text::common_end(x, y).min(room);
+        while !r.removed.is_char_boundary(x.len() - q) || !inserted.is_char_boundary(y.len() - q) { q -= 1; }
+        let change = Change {
+            at: r.at + p,
+            removed: shared(&r.removed[p..x.len() - q]),
+            inserted: shared(&inserted[p..y.len() - q]),
+            lens: [r.len, self.text.len()],
+            before: r.meta,
+            after,
+        };
+        // The document before the edit, in the bytes a join reads: this text with the
+        // replacement taken back.
+        let text = &self.text;
+        let (at, removed, gone) = (r.at, r.removed.as_str(), inserted.len());
+        let mid = |s: usize, e: usize| {
+            let mut out = String::with_capacity(e - s);
+            out.push_str(&text[s.min(at)..e.min(at)]);
+            out.push_str(&removed[s.clamp(at, at + removed.len()) - at..e.clamp(at, at + removed.len()) - at]);
+            let (s, e) = (s.max(at + removed.len()), e.max(at + removed.len()));
+            out.push_str(&text[s - removed.len() + gone..e - removed.len() + gone]);
+            out
+        };
+        push_change(&mut self.history, self.rich, change, r.prior, kind, mid);
+    }
+
+    fn meta_now(&self) -> Meta {
+        Meta { anchor: self.anchor, focus: self.focus, marks: self.marks.clone(), blocks: self.blocks.clone(), soft_breaks: self.soft_breaks.clone() }
+    }
+
+    /// What the history says of the document `text` an edit starts from, before it records.
+    fn prior(&self, text: &str, collapsed: bool) -> Prior {
+        let h = &self.history;
+        Prior {
+            // Public model text may have been replaced by the app: a history that doesn't lead
+            // to the document this edit started from is dropped.
+            leads: match (h.redo.last(), h.undo.back()) {
+                (Some(c), _) => c.leads_to(text, false),
+                (None, Some(c)) => c.leads_to(text, true),
+                (None, None) => true,
+            },
+            joins: h.undo.back().is_some_and(|c| c.leads_to(text, true)),
+            empty: text.is_empty(),
+            collapsed,
         }
     }
 
@@ -464,7 +568,7 @@ impl TextEdit {
                 return false;
             }
             redo.clear();
-            let stored = Snapshot { text: Arc::new(Zeroizing::new(doc.to_string())), anchor: last.anchor, focus: last.focus, marks: last.marks, blocks: last.blocks, soft_breaks: last.soft_breaks };
+            let stored = Snapshot { text: Arc::new(Wiped(doc.to_string())), anchor: last.anchor, focus: last.focus, marks: last.marks, blocks: last.blocks, soft_breaks: last.soft_breaks };
             undo.push(Change::between(&stored, &now));
         }
         let mut h = History { undo: undo.into(), redo, bytes: 0, run: Run::Closed };
@@ -618,7 +722,7 @@ fn snapshot_from(v: &serde_json::Value) -> Option<Snapshot> {
     let text = v["t"].as_str()?.to_owned();
     let m = meta_from(v)?;
     if !meta_holds(&m, &text) { return None; }
-    Some(Snapshot { text: Arc::new(Zeroizing::new(text)), anchor: m.anchor, focus: m.focus, marks: m.marks, blocks: m.blocks, soft_breaks: m.soft_breaks })
+    Some(Snapshot { text: Arc::new(Wiped(text)), anchor: m.anchor, focus: m.focus, marks: m.marks, blocks: m.blocks, soft_breaks: m.soft_breaks })
 }
 
 #[cfg(test)]
