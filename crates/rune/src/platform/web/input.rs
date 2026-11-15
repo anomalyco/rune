@@ -202,6 +202,7 @@ impl<S: 'static> Running<S> {
     /// Handles one DOM event. Returns whether a frame must be drawn: a page's scroll only draws
     /// when it moves the band (the browser's compositor scrolls the pixels Rune already drew).
     pub(super) fn input_event(&mut self, event: &mut serde_json::Value, window: &Arc<Window>) -> bool {
+        self.full_redraw = true;
         let mut activate = false;
         // What a person typed or pressed through the page's own elements is input too, for
         // `rune::last_input` (an app holds background work while someone types).

@@ -32,6 +32,13 @@ pub(super) struct Uploads {
     srgb: Option<bool>,
     /// `Staging::lost` as last seen by `prepare` and by `upload_images`.
     lost: (u64, u64),
+    /// The paint the next `prepare`'s instances come from, and which of them alone changed
+    /// since the last `prepare` of that paint (`Renderer::next_instances`).
+    next: Option<(u64, Option<Vec<u32>>)>,
+    /// The paint `instances` came from, when the last `prepare` was told it.
+    held_paint: Option<u64>,
+    /// The last `prepare` wrote only a loop-only frame's slots.
+    patched: bool,
     #[cfg(test)]
     pub(super) globals_writes: u64,
     #[cfg(test)]
@@ -40,7 +47,7 @@ pub(super) struct Uploads {
 
 impl Default for Uploads {
     fn default() -> Uploads {
-        Uploads { staging: None, frame_writes: None, instances: Vec::new(), batched: false, has_layers: false, viewport: AtomicU64::new(u64::MAX), srgb: None, lost: (0, 0),
+        Uploads { staging: None, frame_writes: None, instances: Vec::new(), batched: false, has_layers: false, viewport: AtomicU64::new(u64::MAX), srgb: None, lost: (0, 0), next: None, held_paint: None, patched: false,
             #[cfg(test)] globals_writes: 0, #[cfg(test)] batch_runs: 0 }
     }
 }
@@ -50,6 +57,7 @@ impl Uploads {
     fn forget_instances(&mut self) {
         self.instances.clear();
         self.batched = false;
+        self.held_paint = None;
     }
 
     pub(super) fn staging(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) -> Staging {
@@ -271,7 +279,12 @@ impl Renderer {
             for (at, effect) in &mut self.effects { *effect = instances[*at as usize]; }
         }
         let has_layers = self.uploads.has_layers;
-        self.prepare_layers(device, queue, if has_layers { instances } else { &[] }, viewport);
+        // A loop-only frame that draws no layer leaves them as the last frame drew them.
+        #[cfg(target_arch = "wasm32")]
+        let layers_kept = self.uploads.patched && self.cycle_leaves_layers();
+        #[cfg(not(target_arch = "wasm32"))]
+        let layers_kept = false;
+        if !layers_kept { self.prepare_layers(device, queue, if has_layers { instances } else { &[] }, viewport); }
         self.sync_resident_caches(&mut atlas.resident_caches);
         self.backdrop_used = self.effects.iter().any(|(_, i)| i.params[0] != 0.0 || i.params[1] == KIND_BACKDROP_BLUR);
         if self.backdrop_used {
@@ -407,6 +420,13 @@ impl Renderer {
     /// where a few instances move writes only those. A span whose `params` changed asks `prepare`
     /// to batch again.
     fn write_instances(&mut self, staging: &Staging, instances: &[Instance]) {
+        let next = self.uploads.next.take();
+        self.uploads.patched = false;
+        if let Some((paint, Some(patched))) = &next && self.uploads.held_paint == Some(*paint) && instances.len() == self.uploads.instances.len() {
+            self.uploads.patched = true;
+            return self.write_patched(staging, instances, patched);
+        }
+        self.uploads.held_paint = next.map(|n| n.0);
         let held = &mut self.uploads.instances;
         let shared = instances.len().min(held.len());
         let mut rebatch = instances.len() != held.len();
@@ -425,6 +445,36 @@ impl Renderer {
         if instances.len() > shared { rebatch |= Self::join(&self.instances, held, staging, instances, &mut open, shared..instances.len()); }
         if let Some(span) = open { rebatch |= Self::write_span(&self.instances, held, staging, instances, span); }
         self.uploads.batched &= !rebatch;
+    }
+
+    /// Writes only `patched` (ascending): the instances a loop-only frame changed in colour since
+    /// the buffer was written from the same paint, so nothing else needs comparing. Only a change
+    /// of kind, or of an instance that isn't a plain box, can move a batch.
+    fn write_patched(&mut self, staging: &Staging, instances: &[Instance], patched: &[u32]) {
+        let held = &mut self.uploads.instances;
+        debug_assert!(held.iter().zip(instances).enumerate().all(|(n, (h, i))| patched.binary_search(&(n as u32)).is_ok() || same(std::slice::from_ref(h), std::slice::from_ref(i))),
+            "a loop-only frame changed an instance that isn't one of its slots");
+        let mut rebatch = false;
+        let mut k = 0;
+        while k < patched.len() {
+            let start = patched[k] as usize;
+            let mut end = start + 1;
+            while k + 1 < patched.len() && patched[k + 1] as usize == end { k += 1; end += 1; }
+            k += 1;
+            if end > instances.len() || same(&instances[start..end], &held[start..end]) { continue; }
+            rebatch |= held[start..end].iter().zip(&instances[start..end]).any(|(h, i)| h.params[1] != i.params[1] || i.params[1] != KIND_RECT);
+            held[start..end].copy_from_slice(&instances[start..end]);
+            let offset = (start * std::mem::size_of::<Instance>()) as u64;
+            staging.write_buffer(&self.instances, offset, bytemuck::cast_slice(&instances[start..end]));
+        }
+        self.uploads.batched &= !rebatch;
+    }
+
+    /// The next `prepare`'s instances are paint `paint`'s (`runtime/paint/cycle.rs`). With
+    /// `patched`, only those instances changed since the last `prepare` of the same paint.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    pub(crate) fn next_instances(&mut self, paint: u64, patched: Option<Vec<u32>>) {
+        self.uploads.next = Some((paint, patched));
     }
 
     /// Adds `span` to the open span if it is less than a block past it, or writes the open span

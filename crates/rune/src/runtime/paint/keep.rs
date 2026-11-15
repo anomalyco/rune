@@ -56,6 +56,7 @@ impl Default for PaintRec {
 
 #[derive(Default)]
 pub(super) struct PaintKeep {
+    pub(super) cycles: cycle::CyclePaint,
     recs: Vec<PaintRec>,
     prev: Vec<PaintRec>,
     instances: Vec<Instance>,
@@ -156,6 +157,7 @@ impl<S: 'static> Runtime<S> {
     /// come from.
     pub(super) fn keep_swap(&mut self) {
         let k = &mut self.paint_keep;
+        k.cycles.begin(self.commits);
         std::mem::swap(&mut self.instances, &mut k.instances);
         // Both sides of the swap retain the warmed paint budget, even if a reveal
         // temporarily emits fewer glyphs on the frames painted into one of them.
@@ -538,6 +540,9 @@ impl<S: 'static> Runtime<S> {
         }
     }
 }
+
+#[path = "cycle.rs"]
+mod cycle;
 
 /// `now` with room for as much as `was` holds room for.
 fn twin<T>(now: &mut Vec<T>, was: &Vec<T>) {

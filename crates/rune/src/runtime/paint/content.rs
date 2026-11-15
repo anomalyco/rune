@@ -127,6 +127,7 @@ impl<S: 'static> Runtime<S> {
             // window: off screen it isn't painted, so it asks for nothing.
             if let Some((_, Some(at))) = placed && self.live.visible() && self.time_scale > 0.0 {
                 let wake = self.clock + (at - now).max(0.0) / self.time_scale as f64;
+                self.paint_keep.cycles.other_deadline();
                 if self.loop_wake.is_none_or(|w| wake < w.0) { self.loop_wake = Some((wake, at)); }
             }
             if let Some((image, _)) = placed {

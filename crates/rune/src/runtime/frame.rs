@@ -754,6 +754,7 @@ impl<S: 'static> Runtime<S> {
     /// frame then runs at exactly that time, however long the host slept. A hidden window
     /// sleeps through it; showing it settles.
     fn wake_for_motion(&mut self, at: f64) {
+        self.paint_keep.cycles.other_deadline();
         if !self.live.visible() || self.time_scale <= 0.0 { return; }
         let wake = self.clock + (at - self.t).max(0.0) / self.time_scale as f64;
         if self.loop_wake.is_none_or(|w| wake < w.0) { self.loop_wake = Some((wake, at)); }

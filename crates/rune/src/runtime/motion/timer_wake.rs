@@ -144,9 +144,14 @@ impl<S: 'static> Runtime<S> {
 
     /// Nothing but a timer asks this runtime for a frame.
     pub(crate) fn rests(&self) -> bool {
+        self.loop_wake.is_none() && self.rests_except_loop()
+    }
+
+    /// `rests`, apart from a loop's own wake (`paint_cycle_tick`).
+    pub(super) fn rests_except_loop(&self) -> bool {
         #[cfg(feature = "hot")]
         if self.hot.is_some() { return false; }
-        !self.animating && !self.stale() && !self.settle && self.loop_wake.is_none() && self.window_frame.is_none()
+        !self.animating && !self.stale() && !self.settle && self.window_frame.is_none()
             && !self.hover_delays.waiting() && !self.tooltip_waiting() && !self.press_repeat_waiting() && !self.drag_ends_pending()
             && self.drag_out_request.is_none() && !self.files_held() && !self.live_pending()
             && self.surfaces.is_empty() && !self.steps_frames()
