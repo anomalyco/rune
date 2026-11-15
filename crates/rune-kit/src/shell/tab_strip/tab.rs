@@ -390,6 +390,7 @@ fn handlers<S: 'static>(mut slot: El, id: &str, at: &Place, closable: bool, st: 
             if let Some(a) = access
                 && a(s).take_swallowed_click()
             {
+                tx.live_only();
                 return;
             }
             if let Some(f) = &select {
@@ -449,10 +450,16 @@ fn handlers<S: 'static>(mut slot: El, id: &str, at: &Place, closable: bool, st: 
                 }
             }
             Phase::Up => {
-                tx.animated();
                 let on_tab = (0.0..=d.w).contains(&d.x) && (0.0..=d.h).contains(&d.y);
                 // A press already selected the tab; its click needn't again.
-                match access(s).release(d.cancelled(), on_tab, select_early && on_tab) {
+                let release = access(s).release(d.cancelled(), on_tab, select_early && on_tab);
+                // A press that never moved a tab leaves the strip as it drew it.
+                if matches!(release, Release::Click) {
+                    tx.live_only();
+                } else {
+                    tx.animated();
+                }
+                match release {
                     Release::Click => {}
                     Release::Reorder { from, to } => {
                         if let Some(f) = &reorder {
