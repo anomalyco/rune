@@ -49,18 +49,7 @@ impl Renderer {
     pub(crate) fn arm_damage(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, rects: &[[u32; 4]], clear: [f32; 4], size: (u32, u32), format: wgpu::TextureFormat) {
         let mut d = self.damage.lock().unwrap();
         if d.retained.as_ref().is_none_or(|r| (r.texture.width(), r.texture.height()) != size || r.texture.format() != format) {
-            let texture = device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("last frame"),
-                size: wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: 1 },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-                view_formats: &[self.format],
-            });
-            let view = texture.create_view(&wgpu::TextureViewDescriptor { format: Some(self.format), ..Default::default() });
-            d.retained = Some(Retained { texture, view, current: false });
+            d.retained = Some(kept_frame(device, size, format, self.format));
         }
         let fills: Vec<Instance> = rects.iter().take(MAX_RECTS).map(|&[x, y, w, h]| Instance {
             rect: [x as f32, y as f32, w as f32, h as f32],
@@ -209,6 +198,42 @@ impl Renderer {
         d.drawn = Some(Ok(()));
         true
     }
+
+    /// The target for a frame whose drawable is bigger than the window (`window::buffer`): the
+    /// kept frame, at the window's `size`, drawn whole and then copied in (`copy_kept`).
+    #[cfg(target_os = "windows")]
+    pub(crate) fn sized_target(&mut self, device: &wgpu::Device, size: (u32, u32), format: wgpu::TextureFormat) -> wgpu::TextureView {
+        let d = self.damage.get_mut().unwrap();
+        if d.retained.as_ref().is_none_or(|r| (r.texture.width(), r.texture.height()) != size || r.texture.format() != format) {
+            d.retained = Some(kept_frame(device, size, format, self.format));
+        }
+        d.retained.as_ref().unwrap().view.clone()
+    }
+
+    /// Lets go of the kept frame: a window's buffers went back to its size after a resize, so the
+    /// next frame draws whole and the kept frame, made at a size the resize passed through, is
+    /// behind anyway. The next partial frame makes it again, as the window's first did.
+    #[cfg(target_os = "windows")]
+    pub(crate) fn drop_kept(&self) { self.damage.lock().unwrap().retained = None; }
+
+    /// Copies the kept frame into the top-left of `dst` (viewed as `view`), the rest cleared to
+    /// `clear`: what the window shows where it grows before its next frame comes.
+    #[cfg(target_os = "windows")]
+    pub(crate) fn copy_kept(&self, encoder: &mut wgpu::CommandEncoder, dst: &wgpu::Texture, view: &wgpu::TextureView, clear: [f32; 4]) {
+        let d = self.damage.lock().unwrap();
+        let Some(kept) = d.retained.as_ref() else { return };
+        let clear = wgpu::Color { r: clear[0] as f64, g: clear[1] as f64, b: clear[2] as f64, a: clear[3] as f64 };
+        drop(encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("around the frame"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment { view, depth_slice: None, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(clear), store: wgpu::StoreOp::Store } })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        }));
+        let (w, h) = (kept.texture.width().min(dst.width()), kept.texture.height().min(dst.height()));
+        encoder.copy_texture_to_texture(kept.texture.as_image_copy(), dst.as_image_copy(), wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 });
+    }
 }
 
 /// A loop-only frame's rectangles, the runs drawn in each, and whether a layer is among them.
@@ -271,4 +296,20 @@ fn cycle_cull(instances: &[Instance], slots: &[u32], size: (u32, u32)) -> Result
     }).collect();
     let layers = units.iter().any(|(u, _)| instances[u.start as usize].params[1] == KIND_LAYER && runs.iter().flatten().any(|r| r.start <= u.start && u.end <= r.end));
     Ok((rects.iter().map(|r| [r[0] as u32, r[1] as u32, (r[2] - r[0]) as u32, (r[3] - r[1]) as u32]).collect(), runs, layers))
+}
+
+/// The texture a window's last frame is kept in, `format` (the drawable's), viewed as `view`.
+fn kept_frame(device: &wgpu::Device, size: (u32, u32), format: wgpu::TextureFormat, view: wgpu::TextureFormat) -> Retained {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("last frame"),
+        size: wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[view],
+    });
+    let view = texture.create_view(&wgpu::TextureViewDescriptor { format: Some(view), ..Default::default() });
+    Retained { texture, view, current: false }
 }

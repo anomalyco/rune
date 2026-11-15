@@ -60,6 +60,8 @@ mod look;
 pub(crate) mod slot;
 #[cfg(target_os = "windows")]
 mod damage;
+#[cfg(target_os = "windows")]
+mod buffer;
 use redraw::{Redraw, RedrawEffect, RedrawEvent};
 mod presented;
 pub(crate) use presented::Presented;

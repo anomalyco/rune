@@ -340,6 +340,14 @@ impl<S: 'static> Host<S> {
         let fp_built = fp_start.map(|_| crate::frame::live_log::Stamp::now());
         sync_platform(l, rt, &mut self.secure_input, &mut self.ime_allowed, &self.clipboard);
         let target_format = if rt.srgb_blend() { l.config.format.remove_srgb_suffix() } else { l.config.format };
+        // Acquire/recovery can configure a replacement at the exact size. Never copy assuming
+        // the old swap chain still owns display-sized buffers (or preserve its dirty history).
+        #[cfg(target_os = "windows")]
+        if !l.native.buffer.accepts_drawable((frame.texture.width(), frame.texture.height())) || (l.native.buffer.larger() && l.alpha.is_some()) {
+            drop(frame);
+            l.fallback_buffer(Some(gpu));
+            return;
+        }
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
             format: (target_format != l.config.format).then_some(target_format),
             ..Default::default()
@@ -374,9 +382,15 @@ impl<S: 'static> Host<S> {
         // Only what changed is redrawn and presented (`damage`): the renderer's `draw` takes the
         // armed rectangles when nothing but the instances draws there, a compositor's
         // `Frame::draw_ui` included.
+        // Buffers bigger than the window while it's resized (`buffer`): the frame draws at the window's
+        // size into the renderer's kept frame, copied in below.
+        #[cfg(target_os = "windows")]
+        let sized = l.native.buffer.larger().then(|| renderer.sized_target(&gpu.device, size, l.config.format));
+        #[cfg(target_os = "windows")]
+        let target = sized.as_ref().unwrap_or(target);
         #[cfg(target_os = "windows")]
         let part = {
-            let whole = if l.alpha.is_some() { Some("alpha") } else if images_changed { Some("image") }
+            let whole = if l.alpha.is_some() { Some("alpha") } else if images_changed { Some("image") } else if l.native.buffer.larger() { Some("resizing") }
                 else if !l.config.usage.contains(wgpu::TextureUsages::COPY_DST) { Some("no copies") } else { None };
             match l.native.damage.plan(&rt.instances, size, rt.clear_color(), whole.is_none()) {
                 super::damage::Plan::All(why) => { whole_why = Some(whole.unwrap_or(why)); None }
@@ -412,6 +426,8 @@ impl<S: 'static> Host<S> {
             (Err(why), Some(_)) => whole_why = Some(why),
             (Err(_), None) => {}
         }
+        #[cfg(target_os = "windows")]
+        if sized.is_some() { renderer.copy_kept(&mut enc, &frame.texture, &view, rt.clear_color()); }
         #[cfg(not(feature = "frame-profile"))]
         let _ = whole_why;
         if let Some(alpha) = &l.alpha { alpha.draw(&mut enc, &view); }
@@ -435,7 +451,10 @@ impl<S: 'static> Host<S> {
         #[cfg(not(target_os = "macos"))]
         gpu.queue.present(frame);
         #[cfg(target_os = "windows")]
-        l.native.slot.presented();
+        {
+            l.native.slot.presented();
+            if let super::buffer::Buffer::Growing(display) = l.native.buffer { l.native.buffer = super::buffer::Buffer::Filled(display); }
+        }
         // A swap chain made again on a handed-over window's visual takes over now (`cpu_frame`).
         #[cfg(target_os = "windows")]
         if matches!(l.native.mode, super::cpu_frame::SurfaceMode::Rebinding { .. }) {

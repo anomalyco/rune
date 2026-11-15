@@ -218,6 +218,12 @@ impl<S: 'static> Host<S> {
             && let Some(w) = &mut self.win && let Some(pacing) = &mut w.native.pacing {
             pacing.update_display(&w.window);
         }
+        #[cfg(target_os = "windows")]
+        if let Some(w) = &mut self.win && (matches!(event, WindowEvent::ScaleFactorChanged { .. }) ||
+            matches!(event, WindowEvent::Moved(_)) && w.native.buffer.display().is_some_and(|d|
+                super::buffer::Display::measured(&w.window, (w.config.width, w.config.height)) != Some(d))) {
+            w.fallback_buffer(self.gpu.as_ref().map(|(gpu, _)| &**gpu));
+        }
         if matches!(&event, WindowEvent::ScaleFactorChanged { .. }) { self.apply_placement(event_loop); }
         match event {
             WindowEvent::Focused(focused) => {
@@ -332,9 +338,11 @@ impl<S: 'static> Host<S> {
                 // Windows sizes the window in its own loop and shows the new size at once: the
                 // swap chain just took it, so a frame drawn later would leave the old pixels
                 // stretched over it until then.
+                // So does a resize's first step, which then grows the buffers (`buffer`).
                 #[cfg(target_os = "windows")]
-                if crate::platform::win32::in_size_move(&l.window) {
+                if crate::platform::win32::in_size_move(&l.window) || matches!(l.native.buffer, super::buffer::Buffer::Growing(_)) {
                     self.draw(true);
+                    if self.grow_buffer() { self.draw(true); }
                     self.shell(event_loop);
                     return;
                 }

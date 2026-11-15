@@ -125,6 +125,27 @@ impl Win {
         // No surface: `Host::reattach` is between the old one and the new, and takes this size
         // from the window itself; or the CPU renderer draws it, whose buffer follows this size.
         let (Some(surface), Some(gpu)) = (&self.surface, gpu) else { return true };
+        // Resized inside buffers as big as its display (`buffer`): no `ResizeBuffers`.
+        #[cfg(target_os = "windows")]
+        if self.native.buffer != super::buffer::Buffer::Fallback {
+            use super::buffer::{Buffer, Display};
+            let display = (self.alpha.is_none() && self.config.usage.contains(wgpu::TextureUsages::COPY_DST))
+                .then(|| Display::measured(&self.window, (width, height))).flatten();
+            let previous = self.native.buffer;
+            self.native.buffer = match (previous, display) {
+                (Buffer::Larger { display: old, .. }, Some(display)) if old == display => {
+                    self.native.buffer = Buffer::Larger { display, at: Instant::now() };
+                    return true;
+                }
+                (Buffer::Exact, Some(d)) => Buffer::Growing(d),
+                (Buffer::Growing(old) | Buffer::Filled(old), Some(d)) if old == d => Buffer::Growing(d),
+                _ => Buffer::Fallback,
+            };
+            if self.native.buffer != Buffer::Fallback || previous.larger() {
+                self.native.slot.reset();
+                self.native.damage.reset();
+            }
+        }
         if let Err(error) = super::configure(surface, gpu, &self.config) {
             eprintln!("rune: a window's surface refused its new size: {error}");
             self.surface_ok = false;

@@ -82,6 +82,8 @@ pub(super) struct Native {
     pub(super) slot: super::slot::Slot,
     /// What its last frames changed, so the next redraws only that (`damage`).
     pub(super) damage: super::damage::Damage,
+    /// Whether its swap chain's buffers are bigger than it, while it's resized (`buffer`).
+    pub(super) buffer: super::buffer::Buffer,
     /// Whether the CPU renderer or the GPU draws its frames (`cpu_frame`).
     pub(super) mode: super::cpu_frame::SurfaceMode,
     /// Whether its accessibility adapter waits for the first frame (`Host::a11y_after_frame`).

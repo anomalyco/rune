@@ -53,6 +53,7 @@ impl<S: 'static> AnyHost for Host<S> {
             .chain(win.and_then(|w| w.backoff.deadline()))
             .chain(win.filter(|_| shown.is_none()).and_then(|w| w.hidden_pace.deadline()))
             .chain(look_deadline(win))
+            .chain(buffer_deadline(win))
             .chain(self.files.pointer.as_ref().filter(|_| shown.is_some()).map(|_| now + DROP_SAMPLE))
             .chain(shown.and_then(|w| w.cursor.reassert_at(now)))
             .chain(self.rest.deadline())
@@ -287,7 +288,11 @@ impl<S: 'static> Host<S> {
         // After the first frame: its on_ready, hooks, the GPU's start and the accessibility
         // adapter, one a turn, none while input waits; the loop turns again while some are owed.
         #[cfg(target_os = "windows")]
-        return self.post_frame_turn();
+        {
+            // A resized window's buffers back to its size, once it's done (`buffer`).
+            self.settle_buffer();
+            return self.post_frame_turn();
+        }
         #[cfg(not(target_os = "windows"))]
         false
     }
@@ -316,6 +321,14 @@ impl<S: 'static> Host<S> {
         #[cfg(feature = "frame-profile")]
         if let Some(start) = logged { crate::frame::live_log::input(start); }
     }
+}
+
+/// When a resized window's buffers go back to its size (`buffer`).
+fn buffer_deadline(win: Option<&Win>) -> Option<Instant> {
+    #[cfg(target_os = "windows")]
+    return win.and_then(|w| w.native.buffer.settle_at().filter(|_| !crate::platform::win32::in_size_move(&w.window)));
+    #[cfg(not(target_os = "windows"))]
+    { let _ = win; None }
 }
 
 /// When a covered window looks again whether it's still covered (`look`).
