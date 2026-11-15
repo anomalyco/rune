@@ -185,7 +185,7 @@ pub(super) fn render_frame<T: 'static>(f: &mut Frame<'_, T>, compositor: &mut Op
         c.render(f);
         c.animating()
     } else {
-        f.ui.prepare(f.device, f.queue, &mut f.rt.text.atlas, &f.rt.instances, f.size);
+        f.ui.prepare_ui(f.device, f.queue, &mut f.rt.text.atlas, &f.rt.instances, f.size);
         f.ui.draw(f.encoder, f.target, [0.0; 4]);
         false
     }

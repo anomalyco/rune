@@ -1,0 +1,1 @@
+- Translucent flat fills drawn directly to an 8-bit gamma-space window blend with the same source precision as the CPU painter, including after an opacity change. A window switching painters no longer darkens the flat interior of such a fill by one channel level.

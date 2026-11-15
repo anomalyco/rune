@@ -615,7 +615,7 @@ impl<S: 'static> Host<S> {
             let size = (l.config.width, l.config.height);
             c.render(&mut Frame { device: &gpu.device, queue: &gpu.queue, encoder: &mut enc, target: &view, format: target_format, size, dt: 0.0, update_ms: 0.0, rt: &mut *rt, ui: &mut *renderer });
         } else {
-            renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, (l.config.width, l.config.height));
+            renderer.prepare_ui(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, (l.config.width, l.config.height));
             renderer.draw(&mut enc, &view, rt.clear_color());
         }
         // A copy of the frame, for the drift count once it's the one the window commits to: only
@@ -818,7 +818,7 @@ fn warm_frame(gpu: &Gpu, renderer: &mut Renderer, format: wgpu::TextureFormat, s
     let view = target.create_view(&Default::default());
     let mut atlas = crate::text::Atlas::new();
     let mut enc = gpu.device.create_command_encoder(&Default::default());
-    renderer.prepare(&gpu.device, &gpu.queue, &mut atlas, instances, size);
+    renderer.prepare_ui(&gpu.device, &gpu.queue, &mut atlas, instances, size);
     renderer.draw(&mut enc, &view, [0.0; 4]);
     renderer.submit(&gpu.queue, enc);
     let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());

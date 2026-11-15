@@ -548,5 +548,13 @@ fn fs(i: Out) -> @location(0) vec4<f32> {
             col = i.fill * pow(cov, i.params.w);
         }
     }
-    return col * clip_alpha(clip_p, i.clip, i.fade);
+    let source = col * clip_alpha(clip_p, i.clip, i.fade);
+    // Direct byte surfaces: blend a translucent flat fill at the same source precision as
+    // cpu_boot::blend. Coverage at a rounded corner or faded clip is part of the source, so
+    // rounding i.fill before that multiply would change the corner rather than match it.
+    // A nonzero projection size selects a floating-point intermediate layer.
+    if (g.flags.y > 0.5 && projection.z == 0.0 && kind == 0.0 && i.params.x == 0.0 && i.fill.a > 0.0 && i.fill.a < 1.0) {
+        return round(clamp(source, vec4<f32>(0.0), vec4<f32>(1.0)) * 255.0) / 255.0;
+    }
+    return source;
 }
