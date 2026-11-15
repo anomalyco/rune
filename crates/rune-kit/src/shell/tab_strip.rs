@@ -146,6 +146,20 @@ type Commit<S, T> = Rc<dyn Fn(&mut S, T, &mut Tx)>;
 type Access<S> = fn(&mut S) -> &mut TabDragState;
 type Wrap<'a> = Box<dyn FnOnce(El, TabDensity) -> El + 'a>;
 
+/// What a strip knows of a tab it may not build ([`TabStrip::lazy_tabs`]): its id, and what
+/// sets its length along the strip and keeps it built.
+#[derive(Clone, Debug)]
+pub struct TabSlot<'a> {
+    pub id: Cow<'a, str>,
+    pub pinned: bool,
+    /// It has a subtitle ([`TabItem::subtitle`]): a vertical row of 45 points.
+    pub two_line: bool,
+    /// Built wherever the strip has scrolled: its menu is open, or it's being renamed.
+    pub keep: bool,
+}
+
+type Build<'a, S> = Box<dyn FnMut(usize) -> TabItem<'a, S> + 'a>;
+
 /// One tab: `TabItem::new(id, title).avatar(..).status(..)`.
 pub struct TabItem<'a, S: 'static> {
     id: Cow<'a, str>,
@@ -320,6 +334,7 @@ pub struct TabStrip<'a, S: 'static> {
     key: String,
     orientation: TabOrientation,
     items: Vec<TabItem<'a, S>>,
+    lazy: Option<(Vec<TabSlot<'a>>, Build<'a, S>)>,
     active: Option<&'a str>,
     viewport: Option<f32>,
     overflow: Option<TabOverflow>,
@@ -348,6 +363,7 @@ impl<'a, S: 'static> TabStrip<'a, S> {
             key: key.into(),
             orientation,
             items: Vec::new(),
+            lazy: None,
             active: None,
             viewport: None,
             overflow: None,
@@ -372,6 +388,13 @@ impl<'a, S: 'static> TabStrip<'a, S> {
     }
     pub fn tabs(mut self, tabs: impl IntoIterator<Item = TabItem<'a, S>>) -> Self {
         self.items.extend(tabs);
+        self
+    }
+    /// The tabs, of which the strip builds only those it shows (`build(index)`), when there are
+    /// more than [`BAND_PAST`]: the rest stand as empty space their length, so a strip of
+    /// hundreds of tabs costs a frame what a screenful does. In place of [`Self::tabs`].
+    pub fn lazy_tabs(mut self, slots: Vec<TabSlot<'a>>, build: impl FnMut(usize) -> TabItem<'a, S> + 'a) -> Self {
+        self.lazy = Some((slots, Box::new(build)));
         self
     }
     /// The selected tab, by id.
@@ -528,12 +551,21 @@ impl<'a, S: 'static> TabStrip<'a, S> {
         self.assemble(k, Some(layer))
     }
 
-    fn assemble(self, k: &Kit, mut layer: Option<&mut Vec<El>>) -> El {
+    fn assemble(mut self, k: &Kit, mut layer: Option<&mut Vec<El>>) -> El {
         let vertical = self.orientation == TabOrientation::Vertical;
         let overflow = self.overflow.unwrap_or(if vertical { TabOverflow::VERTICAL_DEFAULT } else { TabOverflow::HORIZONTAL_DEFAULT });
         let gap = self.gap.unwrap_or(if vertical { 3.0 } else { 6.0 });
-        let count = self.items.len();
-        let pinned = self.items.iter().filter(|t| t.pinned).count();
+        // Tabs given whole take the lazy path too: each is built once, in order.
+        let (slots, mut build): (Vec<TabSlot<'a>>, Build<'a, S>) = match self.lazy.take() {
+            Some(lazy) => lazy,
+            None => {
+                let slots = self.items.iter().map(|t| TabSlot { id: t.id.clone(), pinned: t.pinned, two_line: t.subtitle.is_some(), keep: t.marked || t.editor.is_some() }).collect();
+                let mut items: Vec<Option<TabItem<'a, S>>> = std::mem::take(&mut self.items).into_iter().map(Some).collect();
+                (slots, Box::new(move |i| items[i].take().expect("a tab builds once")))
+            }
+        };
+        let count = slots.len();
+        let pinned = slots.iter().filter(|t| t.pinned).count();
         let mut drag = self.drag.as_ref().map(|d| d.0.clone()).unwrap_or_default();
         let access = self.drag.as_ref().map(|d| d.1);
         let trailing = if self.trailing.is_some() { self.trailing_width + gap } else { 0.0 };
@@ -553,10 +585,12 @@ impl<'a, S: 'static> TabStrip<'a, S> {
             (false, false) => tab_w + gap,
             (true, _) => (if two_line { two_line_height } else { self.row_height }) + gap,
         };
-        let pitches: Vec<f32> = self.items.iter().map(|t| pitch(t.pinned, t.subtitle.is_some())).collect();
+        let pitches: Vec<f32> = slots.iter().map(|t| pitch(t.pinned, t.two_line)).collect();
         let auto = auto_scroll::view(&format!("{}-scroll", self.key));
+        let mut landing = None;
         if let Some(point) = drag.incoming() {
             let slot = landing_slot(&pitches, pinned, point, &auto, vertical);
+            landing = Some(slot);
             drag.open_gap(slot, pitch(false, false));
         }
         let st = Strip {
@@ -585,39 +619,84 @@ impl<'a, S: 'static> TabStrip<'a, S> {
             drag,
         };
         let active = self.active;
-        let ids: Vec<String> = self.items.iter().map(|t| t.id.clone().into_owned()).collect();
         // A hover hides its tab's separators by hover groups (`tab::build`); the active tab has none.
-        let quiet = |i: usize| active == Some(ids[i].as_str());
+        let quiet = |i: usize| active == Some(slots[i].id.as_ref());
         let tear = self.tear.filter(|t| count > 1 || t.lone);
-        let mut tabs: Vec<El> = self
-            .items
-            .into_iter()
-            .enumerate()
-            .map(|(i, item)| {
-                let pin = item.pinned;
-                let width = (!vertical).then_some(if pin { pinned_w } else { tab_w });
-                let (lo, hi) = if pin { (0, pinned) } else { (pinned, count) };
-                let at = tab::Place {
-                    index: i,
-                    lane: drag::Lane { index: i, lo, hi, pitch: pitches[i], pinned: pin, tear },
-                    width,
-                    density: if pin { TabDensity::IconOnly } else { width.map_or(TabDensity::Full, TabOverflow::density_for) },
-                    active: active == Some(ids[i].as_str()),
-                    separator: !vertical && i > 0 && !quiet(i) && !quiet(i - 1),
-                };
-                let (tab, ghost) = tab::build(item, at, (i > 0).then(|| ids[i - 1].as_str()), &st, k);
-                if let (Some(layer), Some(ghost)) = (layer.as_deref_mut(), ghost) {
-                    layer.push(ghost);
+        // Which tabs are built: past `BAND_PAST`, those near what the strip shows, and the ones a
+        // gesture, a key or a menu is on wherever they are.
+        let shown = (count > BAND_PAST).then(|| {
+            let along = if vertical { (self.row_height + gap) * 6.0 } else { (tab_w + gap) * 4.0 };
+            let fallback = if vertical { 1200.0 } else { self.viewport.unwrap_or(2000.0) };
+            let (lo, hi) = band(&st.list_key, &st.scroll_key, vertical, along.max(64.0), fallback);
+            let mut start = 0.0;
+            let mut built: Vec<bool> = pitches
+                .iter()
+                .map(|p| {
+                    let near = start < hi && start + p > lo;
+                    start += p;
+                    near
+                })
+                .collect();
+            let keep = [Some(0), Some(count - 1), slots.iter().position(|t| active == Some(t.id.as_ref())), st.drag.dragging()];
+            let near_landing = landing.map(|s| [s.checked_sub(1), Some(s)]).unwrap_or_default();
+            for i in keep.into_iter().chain(near_landing).flatten().chain(slots.iter().enumerate().filter(|(_, t)| t.keep || t.pinned).map(|(i, _)| i)) {
+                if let Some(b) = built.get_mut(i) {
+                    *b = true;
                 }
-                tab
-            })
-            .collect();
+            }
+            built
+        });
+        let mut tabs: Vec<El> = Vec::with_capacity(count.min(BAND_PAST * 2));
+        // Where each built tab's element is in `tabs`.
+        let mut at_child: Vec<Option<usize>> = vec![None; count];
+        // A run of tabs not built: where it starts, and its length along the strip.
+        let mut run: Option<(usize, f32)> = None;
+        let space = |tabs: &mut Vec<El>, run: &mut Option<(usize, f32)>, end: usize| {
+            let Some((from, len)) = run.take() else { return };
+            let el = el().key(format!("{}-unbuilt-{from}", st.list_key)).a11y_hidden();
+            tabs.push(if vertical {
+                // A row reaches half the gap past each neighbour, but the first and last don't.
+                let ends = (if from == 0 { gap / 2.0 } else { 0.0 }) + (if end == count { gap / 2.0 } else { 0.0 });
+                el.w_full().h(len - ends)
+            } else {
+                // The row's own gap stands after it, as after a tab.
+                el.w(len - gap).h(st.row_height)
+            });
+        };
+        for i in 0..count {
+            if shown.as_ref().is_some_and(|b| !b[i]) {
+                let (from, len) = run.unwrap_or((i, 0.0));
+                run = Some((from, len + pitches[i]));
+                continue;
+            }
+            space(&mut tabs, &mut run, i);
+            let item = build(i);
+            let pin = slots[i].pinned;
+            let width = (!vertical).then_some(if pin { pinned_w } else { tab_w });
+            let (lo, hi) = if pin { (0, pinned) } else { (pinned, count) };
+            let at = tab::Place {
+                index: i,
+                lane: drag::Lane { index: i, lo, hi, pitch: pitches[i], pinned: pin, tear },
+                width,
+                density: if pin { TabDensity::IconOnly } else { width.map_or(TabDensity::Full, TabOverflow::density_for) },
+                active: quiet(i),
+                separator: !vertical && i > 0 && !quiet(i) && !quiet(i - 1),
+            };
+            let (tab, ghost) = tab::build(item, at, (i > 0).then(|| slots[i - 1].id.as_ref()), &st, k);
+            if let (Some(layer), Some(ghost)) = (layer.as_deref_mut(), ghost) {
+                layer.push(ghost);
+            }
+            at_child[i] = Some(tabs.len());
+            tabs.push(tab);
+        }
+        space(&mut tabs, &mut run, count);
         // The incoming tab's place: an empty slot its own length, which the tabs after it make
         // room for on the reorder spring and the tab takes when it's let go.
         if let Some((slot, pitch)) = st.drag.gap() {
             let place = el().key(format!("{}-incoming", st.list_key)).a11y_hidden();
             let place = if vertical { place.w_full().h(pitch) } else { place.w(pitch - gap).h(st.row_height) };
-            tabs.insert(slot.min(tabs.len()), place);
+            let child = at_child.get(slot).copied().flatten().unwrap_or(tabs.len());
+            tabs.insert(child, place);
         }
         let fade = overflow.fade();
         let mut root = if vertical {
@@ -650,6 +729,21 @@ impl<'a, S: 'static> TabStrip<'a, S> {
         }
         root
     }
+}
+
+/// Past this many tabs a strip builds only those near what it shows ([`TabStrip::lazy_tabs`]).
+pub const BAND_PAST: usize = 40;
+
+/// The stretch of the strip whose tabs are built, in points along it from its first tab: what
+/// the scroll viewport shows, rounded out to whole steps of `step` and a step more each side. The
+/// view reads where the list is scrolled to in those steps, so a scroll runs it once a step, not
+/// every frame; before the first layout it's the strip's start and `fallback` long.
+fn band(list_key: &str, scroll_key: &str, vertical: bool, step: f32, fallback: f32) -> (f32, f32) {
+    let a = usize::from(vertical);
+    let start = rune::memo::layout_with(list_key, move |r| r[a]);
+    let at = start.and_then(|start| rune::memo::window_layout_with(list_key, move |w| ((start - w[a]) / step).floor() as i32)).unwrap_or(0);
+    let shows = rune::memo::layout_with(scroll_key, move |r| (r[2 + a] / step).ceil() as i32).unwrap_or((fallback / step).ceil() as i32);
+    ((at - 1) as f32 * step, (at + 2 + shows) as f32 * step)
 }
 
 /// The slot a tab dragged in from another strip lands in at `point` (view points): after each
