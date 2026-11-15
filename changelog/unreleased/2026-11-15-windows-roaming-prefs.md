@@ -1,0 +1,1 @@
+- Windows preferences use the roaming config directory even when the process has no local app-data or user-profile directory.
