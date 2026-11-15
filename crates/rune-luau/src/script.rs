@@ -129,7 +129,13 @@ impl Script {
             #[cfg(all(feature = "watch", not(target_arch = "wasm32")))]
             watch: RefCell::new(None),
         });
-        let started = sources.compile().and_then(|c| inner.swap(c).map(|_| ()));
+        let ib3_t = std::time::Instant::now();
+        let compiled = sources.compile();
+        let ib3_compiled = ib3_t.elapsed().as_micros();
+        let started = compiled.and_then(|c| inner.swap(c).map(|_| ()));
+        if std::env::var_os("IB3_SCRIPT_LOG").is_some() {
+            eprintln!("ib3-script: {name} compile {ib3_compiled} us, vm and main {} us", ib3_t.elapsed().as_micros() - ib3_compiled);
+        }
         if let Err(err) = started {
             inner.fail(err);
         }
