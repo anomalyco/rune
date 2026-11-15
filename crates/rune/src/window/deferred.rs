@@ -89,6 +89,10 @@ impl Windows {
                     self.deferred_step(el, Event::Prepared(k));
                 }
                 Effect::Status(k) => (hooks.overdue)(k),
+                Effect::CheckRevision(k, revision) => {
+                    // No event-loop turn between closing admission and committing the quit.
+                    if (hooks.try_seal)(k, revision) { self.deferred_step(el, Event::Sealed(k)); }
+                }
                 Effect::Restore(k) => {
                     #[cfg(target_os = "windows")]
                     crate::deferred_quit::resolved(false);
