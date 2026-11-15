@@ -2,6 +2,8 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 use zeroize::Zeroizing;
+
+use crate::edit::Wiped;
 use super::sanitize_html;
 
 /// What a copy puts on the clipboard, or what a paste found there: plain text, and optionally
@@ -23,9 +25,11 @@ use super::sanitize_html;
 /// in a web view as is. `rtf` is passed through untouched.
 #[derive(Clone, Default)]
 pub struct ClipboardContent {
-    pub(super) text: Zeroizing<String>,
-    html: Option<Zeroizing<String>>,
-    rtf: Option<Zeroizing<String>>,
+    // Wiped as they go, eight bytes a write: a 1.7 MB paste's text is gone in a tenth of a
+    // millisecond, where `Zeroizing`'s byte at a time took most of one in the paste's frame.
+    pub(super) text: Wiped,
+    html: Option<Wiped>,
+    rtf: Option<Wiped>,
     image: Option<ClipboardImage>,
     files: Vec<PathBuf>,
     pub(super) own_pills: bool,
@@ -38,11 +42,11 @@ impl PartialEq for ClipboardContent {
 impl Eq for ClipboardContent {}
 impl ClipboardContent {
     /// Plain text, the form every app can paste. Empty when only other forms carry content.
-    pub fn new(text: impl Into<String>) -> Self { Self { text: Zeroizing::new(text.into()), ..Self::default() } }
+    pub fn new(text: impl Into<String>) -> Self { Self { text: Wiped(text.into()), ..Self::default() } }
     /// Adds an HTML form (a fragment or a document), for apps that paste formatted text.
-    pub fn with_html(mut self, html: impl Into<String>) -> Self { self.html = Some(Zeroizing::new(html.into())); self }
+    pub fn with_html(mut self, html: impl Into<String>) -> Self { self.html = Some(Wiped(html.into())); self }
     /// Adds an RTF form, for apps that read RTF but not HTML.
-    pub fn with_rtf(mut self, rtf: impl Into<String>) -> Self { self.rtf = Some(Zeroizing::new(rtf.into())); self }
+    pub fn with_rtf(mut self, rtf: impl Into<String>) -> Self { self.rtf = Some(Wiped(rtf.into())); self }
     /// Adds an image. macOS writes it as PNG and TIFF beside the other forms; Windows and Linux
     /// write it alone (see [`Tx::copy_rich`](crate::Tx::copy_rich)); the web as PNG.
     pub fn with_image(mut self, image: ClipboardImage) -> Self { self.image = Some(image); self }
@@ -64,7 +68,7 @@ impl ClipboardContent {
     pub fn is_empty(&self) -> bool { self.text.is_empty() && !self.is_rich() }
     /// Content from another app: its HTML sanitised.
     pub(crate) fn untrusted(mut self) -> Self {
-        if let Some(html) = &mut self.html { *html = Zeroizing::new(sanitize_html(html)); }
+        if let Some(html) = &mut self.html { *html = Wiped(sanitize_html(html)); }
         self
     }
     pub(crate) fn has_own_pills(&self) -> bool { self.own_pills }
@@ -89,7 +93,7 @@ impl From<&str> for ClipboardContent {
     fn from(text: &str) -> Self { Self::new(text) }
 }
 impl From<Zeroizing<String>> for ClipboardContent {
-    fn from(text: Zeroizing<String>) -> Self { Self { text, ..Self::default() } }
+    fn from(mut text: Zeroizing<String>) -> Self { Self { text: Wiped(std::mem::take(&mut *text)), ..Self::default() } }
 }
 impl std::fmt::Debug for ClipboardContent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

@@ -218,7 +218,7 @@ pub fn memory() -> MemoryClipboard {
     MemoryClipboard(Arc::new(Mutex::new(Memory { core: Core::default(), board: Board::default() })))
 }
 impl MemoryClipboard {
-    pub fn text(&self) -> Option<Zeroizing<String>> { self.content().filter(ClipboardContent::has_plain).map(|c| c.text) }
+    pub fn text(&self) -> Option<Zeroizing<String>> { self.content().filter(ClipboardContent::has_plain).map(|mut c| Zeroizing::new(std::mem::take(&mut c.text.0))) }
     /// Every form on the clipboard, as written: pastes from it are sanitised, this isn't.
     pub fn content(&self) -> Option<ClipboardContent> { self.ticked(|_, board| board.content.clone()) }
     /// Changes the clipboard as another app would.
@@ -256,7 +256,7 @@ impl Backend for Board {
         Ok(())
     }
     fn text(&mut self) -> Option<Zeroizing<String>> {
-        self.content.as_ref().filter(|c| c.has_plain()).map(|c| c.text.clone())
+        self.content.as_ref().filter(|c| c.has_plain()).map(|c| Zeroizing::new(c.text.0.clone()))
     }
     fn content(&mut self, all: bool) -> Option<ClipboardContent> {
         self.content.clone().and_then(|c| if all { Some(c) } else { c.text_forms() })

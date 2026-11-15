@@ -286,7 +286,7 @@ impl Backend for Fake {
     fn write(&mut self, copy: &ClipboardWrite) -> Result<(), String> { self.land(&copy.content) }
     fn text(&mut self) -> Option<Zeroizing<String>> {
         if self.unreadable { return None; }
-        self.content.as_ref().filter(|c| c.has_plain()).map(|c| c.text.clone())
+        self.content.as_ref().filter(|c| c.has_plain()).map(|c| Zeroizing::new(c.text().to_owned()))
     }
     fn content(&mut self, all: bool) -> Option<ClipboardContent> {
         if self.unreadable { return None; }
