@@ -217,7 +217,7 @@ impl<S: 'static> Runtime<S> {
         // A press is the hand's: hover follows the pointer through moving layout.
         self.release_hover_hold();
         self.focus.step(focus_machine::FocusEvent::Pointed);
-        self.press_help(x, y);
+        self.dismiss_help();
         // A press cancels the waits to report an enter; the next move after it starts them again.
         self.press_hover_delays();
         self.hover_paused = true;

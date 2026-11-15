@@ -139,6 +139,7 @@ impl super::Device {
         let shared = super::DeviceShared {
             adapter,
             zero_buffer,
+            armed: Arc::new(super::ArmedLists { ready: Mutex::new(Vec::new()), rearm: Mutex::new(None) }),
             cmd_signatures: super::CommandSignatures {
                 draw: Self::create_command_signature(
                     &raw,
@@ -456,6 +457,44 @@ impl super::Device {
 
     pub fn raw_device(&self) -> &Direct3D12::ID3D12Device {
         &self.raw
+    }
+
+    /// Makes `count` command lists now, each open with an allocator of its own, for any encoder to
+    /// record into instead of resetting a list of its own, and starts the thread that arms each
+    /// again (resets its allocator and itself) once the GPU is done with it. A list costs about a
+    /// millisecond to make or reset on some drivers (Intel's), and wgpu takes two for each render
+    /// pass: an encoder that takes armed lists pays neither. The thread waits on its channel
+    /// between frames, and ends with the device.
+    pub fn reserve_command_lists(&self, count: usize) -> Result<(), crate::DeviceError> {
+        let make = |raw: &Direct3D12::ID3D12Device| -> Result<super::Armed, crate::DeviceError> {
+            let allocator: Direct3D12::ID3D12CommandAllocator =
+                unsafe { raw.CreateCommandAllocator(Direct3D12::D3D12_COMMAND_LIST_TYPE_DIRECT) }
+                    .into_device_result("Command allocator creation")?;
+            let list: Direct3D12::ID3D12GraphicsCommandList =
+                unsafe { raw.CreateCommandList(0, Direct3D12::D3D12_COMMAND_LIST_TYPE_DIRECT, &allocator, None) }
+                    .into_device_result("Create command list")?;
+            Ok(super::Armed(list, allocator))
+        };
+        let missing = count.saturating_sub(self.shared.armed.ready.lock().len());
+        let made = (0..missing).map(|_| make(&self.raw)).collect::<Result<Vec<_>, _>>()?;
+        self.shared.armed.ready.lock().extend(made);
+        let mut rearm = self.shared.armed.rearm.lock();
+        if rearm.is_none() {
+            let (sent, received) = std::sync::mpsc::channel::<super::Armed>();
+            // The thread holds the pool weakly: the device's end drops the sender, and the thread ends.
+            let armed = Arc::downgrade(&self.shared.armed);
+            let spawned = std::thread::Builder::new().name("wgpu-dx12-lists".into()).spawn(move || {
+                for super::Armed(list, allocator) in received {
+                    let Some(armed) = armed.upgrade() else { return };
+                    // SAFETY: the GPU is done with the list (`reset_all`) or never had it
+                    // (`discard_encoding`), and no other list records into its allocator.
+                    let reset = unsafe { allocator.Reset() }.is_ok() && unsafe { list.Reset(&allocator, None) }.is_ok();
+                    if reset { armed.ready.lock().push(super::Armed(list, allocator)); }
+                }
+            });
+            if spawned.is_ok() { *rearm = Some(sent); }
+        }
+        Ok(())
     }
 
     pub fn raw_queue(&self) -> &Direct3D12::ID3D12CommandQueue {
@@ -826,6 +865,7 @@ impl crate::Device for super::Device {
             intermediate_copy_bufs: Vec::new(),
             null_rtv_handle: self.null_rtv_handle,
             list: None,
+            list_allocator: None,
             free_lists: Vec::new(),
             pass: super::PassState::new(),
             temp: super::Temp::default(),

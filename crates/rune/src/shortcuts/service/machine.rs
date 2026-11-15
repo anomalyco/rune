@@ -19,14 +19,6 @@ pub(super) enum Attachment<J> {
     Closed,
 }
 
-#[cfg(test)]
-impl<J> Attachment<J> {
-    /// The routed host's generation.
-    pub(super) fn host(&self) -> Option<u64> {
-        match self { Self::Attached { host, .. } => Some(*host), _ => None }
-    }
-}
-
 // Linux calls reach the engine directly, so nothing posts or drains there.
 #[cfg_attr(target_os = "linux", allow(dead_code))]
 pub(super) enum AttachEvent<J> {

@@ -87,6 +87,7 @@ impl Renderer {
             srgb_blend: false,
             effects: Vec::new(),
             backdrops: Vec::new(),
+            backdrop_used: false,
             backdrop_blur: None,
             breakers: Default::default(),
             uploads: Default::default(),

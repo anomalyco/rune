@@ -121,10 +121,12 @@ pub struct Tx {
     pub(crate) clock: f64,
 }
 
-/// Which asked for focus: [`Tx::focus`], or [`Tx::return_focus`] handing it back.
+/// Which asked for focus: [`Tx::focus`], [`Tx::focus_when_shown`], or [`Tx::return_focus`]
+/// handing it back.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum FocusAsk {
     Focus,
+    WhenShown,
     Return,
 }
 
@@ -493,6 +495,16 @@ impl Tx {
     /// in the same change wins over it. Nothing happens when no such element shows.
     pub fn focus(&mut self, key: impl Into<String>, ring: bool) {
         self.focus_to = Some((key.into(), ring, FocusAsk::Focus));
+    }
+
+    /// [`Tx::focus`] for an element that may not be shown yet: content still loading, a card that
+    /// comes in with the next build, a window that isn't drawing. The request waits, through any
+    /// number of commits, until an element with the key shows, and focuses it then, however long
+    /// its loading or motion takes, whatever focus did meanwhile (a closing palette leaving it on
+    /// the prompt). It's dropped when the user presses a key or a pointer button, or when another
+    /// focus is asked for.
+    pub fn focus_when_shown(&mut self, key: impl Into<String>, ring: bool) {
+        self.focus_to = Some((key.into(), ring, FocusAsk::WhenShown));
     }
 
     /// [`Tx::focus`] for focus a closing menu or popover hands back to its trigger, as a web

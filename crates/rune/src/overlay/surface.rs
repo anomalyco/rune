@@ -296,6 +296,9 @@ impl<T: 'static> Overlay<T> {
             fn_key,
             #[cfg(target_os = "macos")]
             present: None,
+            // A new swap chain holds none of ours, and its waitable object is its own.
+            #[cfg(target_os = "windows")]
+            slot: Slot::default(),
             a11y, alpha, surface, config, backing, scale,
         })
     }
@@ -313,6 +316,10 @@ impl<T: 'static> Overlay<T> {
             self.surface_refused(format!("could not resize its GPU surface: {error}"));
             return;
         }
+        // `configure` waits for the present queue to drain, so none of our frames are queued on
+        // the swap chain it reconfigures.
+        #[cfg(target_os = "windows")]
+        live.slot.reset();
         if let Some(alpha) = &mut live.alpha {
             alpha.resize(&gpu.device, (live.config.width, live.config.height));
         }
@@ -348,6 +355,9 @@ impl<T: 'static> Overlay<T> {
                 // The present worker joins, and the display link stops, before the surface goes.
                 #[cfg(target_os = "macos")]
                 { live.present.take(); live.pacing.take(); }
+                // The wait for the swap chain's room is unregistered before the surface drops.
+                #[cfg(target_os = "windows")]
+                live.slot.reset();
                 let Live { alpha, surface, backing, .. } = live;
                 drop(alpha);
                 drop(surface);

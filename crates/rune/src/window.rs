@@ -57,7 +57,7 @@ use covered_draw::{CoveredDraw, CoveredDrawEvent};
 #[cfg(target_os = "windows")]
 mod look;
 #[cfg(target_os = "windows")]
-mod slot;
+pub(crate) mod slot;
 #[cfg(target_os = "windows")]
 mod damage;
 use redraw::{Redraw, RedrawEffect, RedrawEvent};
@@ -132,7 +132,7 @@ pub(crate) enum WakeEvent {
     Position(usize, (i32, i32)), Level(usize, bool),
     Place(usize, crate::windows::PlaceRequest),
     Frame(usize, crate::window::frame::FrameRequest),
-    /// Windows: the window's swap chain can take the frame it waits for (`slot`).
+    /// Windows: the window's or an overlay's swap chain can take the frame it waits for (`slot`).
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     FrameSlot(usize),
     /// The app was reopened (macOS: its Dock icon clicked; Windows: launched again while it
@@ -243,8 +243,10 @@ impl Windows {
         for mut overlay in overlays {
             let (slot, proxy) = (self.hosts.len(), self.proxy.clone());
             let frame_proxy = proxy.clone();
+            let slot_proxy = proxy.clone();
             overlay.connect(Arc::new(move || { let _ = proxy.send_event(WakeEvent::App(slot)); }),
-                Arc::new(move || { let _ = frame_proxy.send_event(WakeEvent::DisplayTick(slot)); }), self.gpu.clone());
+                Arc::new(move || { let _ = frame_proxy.send_event(WakeEvent::DisplayTick(slot)); }),
+                Arc::new(move || { let _ = slot_proxy.send_event(WakeEvent::FrameSlot(slot)); }), self.gpu.clone());
             overlay.resumed(event_loop);
             self.hosts.push(Some(overlay));
         }
@@ -608,6 +610,7 @@ impl<S: 'static> Host<S> {
         rt.set_srgb_blend(srgb_blend); rt.set_font_smoothing(font_smoothing);
         rt.set_system_reduced_motion(crate::platform::preferences::reduced_motion());
         rt.set_system_contrast(crate::platform::preferences::contrast());
+        rt.set_system_increased_contrast(crate::platform::preferences::increased_contrast());
         rt.set_full_keyboard_access(crate::platform::preferences::full_keyboard_access());
         rt.set_tab_visits_controls(tab_visits_controls);
         crate::platform::accent::watch();
@@ -709,10 +712,11 @@ fn setup_waker<S: 'static>(shared: &Arc<crate::app::Shared<S>>) -> Waker {
 /// What a shown window that can't draw runs for an update, a wake, a due timer or a redraw:
 /// covered (an occlusion event, or a drawable refused as occluded), minimised, or waiting out
 /// a missed frame. `poll`, due timers and queued input run now, as for a hidden window
-/// (`Runtime::hidden_wake`); the view and layout wait, dirty, for the frame that uncovers it.
+/// (`Runtime::hidden_wake`); the view and layout wait, dirty, for the frame that uncovers it,
+/// unless an assistive client reads the window (`Runtime::covered_wake`).
 /// Uncovering settles first, so that frame builds once and paints motion where it would have
 /// ended, as Core Animation's time-based motion has by the time a covered window shows again.
-pub(crate) fn covered_step<S: 'static>(rt: &mut Runtime<S>) { rt.hidden_wake(); }
+pub(crate) fn covered_step<S: 'static>(rt: &mut Runtime<S>) { rt.covered_wake(); }
 
 /// Frames a window's swap chain may hold that the compositor hasn't shown. Windows: one, so a
 /// frame shows at the first composition after it's done, and the window waits for room itself

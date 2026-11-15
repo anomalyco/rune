@@ -124,6 +124,14 @@ fn find(rt: &Runtime<S>, key: &str) -> ElementInfo {
     rt.elements().into_iter().find(|e| e.key.as_deref() == Some(key) && !e.exiting).unwrap_or_else(|| panic!("no {key}"))
 }
 
+/// The accessibility node keyed `key`, at any depth.
+fn a11y_node<'a>(v: &'a serde_json::Value, key: &str) -> Option<&'a serde_json::Value> {
+    if v["key"] == key {
+        return Some(v);
+    }
+    v["children"].as_array()?.iter().find_map(|c| a11y_node(c, key))
+}
+
 fn press(rt: &mut Runtime<S>, key: Key) {
     rt.key(KeyEvent { key, mods: Mods::default() });
     rt.frame(1.0 / 60.0);
@@ -526,6 +534,25 @@ fn a_rename_field_keeps_letters_and_arrows_that_would_type_select_a_row() {
     }
     assert_eq!(rt.state.edit.text, "Del", "Delta's first letter goes to the field");
     assert_eq!((rt.state.picked, focused(&rt).as_deref()), (1, Some("rename")), "no row was type-selected");
+}
+
+#[test]
+fn a_renaming_row_names_its_field_after_the_row() {
+    for two_lines in [false, true] {
+        let mut rt = runtime(S { two_lines, ..state() });
+        rt.update(|s, _| {
+            s.renaming = Some(1);
+            s.edit = TextEdit::new("Bravo");
+            s.edit.focused = true;
+        });
+        rt.frame(1.0 / 60.0);
+        let field = find(&rt, "rename");
+        assert!(field.focusable && !field.inert, "the rename field is the focusable field a nameless warning is about");
+        assert_eq!(field.label.as_deref(), Some("Bravo"), "the rename field is named after the row it edits");
+        let tree = rt.accessibility_json();
+        let node = a11y_node(&tree, "rename").expect("the rename field is in the accessibility tree");
+        assert_eq!(node["name"].as_str(), Some("Bravo"), "a reader says the row's label for its rename field");
+    }
 }
 
 #[test]

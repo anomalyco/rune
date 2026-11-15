@@ -470,6 +470,8 @@ pub struct Runtime<S: 'static> {
     system_accent: crate::SystemAccent,
     /// What [`Cx::system_contrast`] reports.
     pub(crate) system_contrast: Option<crate::SystemContrast>,
+    /// What [`Cx::system_increased_contrast`] reports.
+    pub(crate) system_increased_contrast: bool,
     scroll_bars: system_settings::ScrollBarHost,
     pub time_scale: f32,
     /// The last view's `Cx::foreground` and `Cx::focus_ring`, for rows built after it and the
@@ -682,6 +684,8 @@ pub struct Runtime<S: 'static> {
     focus_before_commit: Option<String>,
     /// `Tx::focus`: the key the next commit focuses, and whether its ring shows.
     focus_request: Option<(String, bool, crate::el::FocusAsk)>,
+    /// `Tx::focus_when_shown` still waiting for its element: the key and whether its ring shows.
+    focus_owed: Option<(String, bool)>,
     /// This commit's focus is a `Tx::return_focus` hand-back, which a modal opening in it
     /// doesn't take as where focus was.
     focus_returned: bool,
@@ -920,6 +924,7 @@ impl<S: 'static> Runtime<S> {
             titlebar_inset: 0.0,
             system_accent: crate::SystemAccent::DEFAULT,
             system_contrast: None,
+            system_increased_contrast: false,
             scroll_bars: Default::default(),
             time_scale: 1.0,
             defaults: Default::default(),
@@ -1048,6 +1053,7 @@ impl<S: 'static> Runtime<S> {
             modal_focus: modal_focus::ModalFocus::Closed,
             focus_before_commit: None,
             focus_request: None,
+            focus_owed: None,
             focus_returned: false,
             unmounted_focused: Vec::new(),
             modal_scope: None,

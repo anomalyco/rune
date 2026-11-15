@@ -12,7 +12,7 @@
 //! Where the tooltip is in its life is one [`Tip`], stepped by [`step`] once a frame with what
 //! the pointer is over, and on a dismissal; it mirrors `@opencode/ui`'s tooltip machine
 //! (`ui/src/overlays/tooltip/machine.ts`) with Kobalte's open and skip delays. A press on the
-//! element keeps its tooltip, as there; a popup or modal over the element suppresses it until
+//! element dismisses its tooltip; a popup or modal over the element suppresses it until
 //! the pointer leaves. The look's fade (`HelpLook::fade`) plays as the tooltip opens and
 //! closes, the closing one fading out under the next.
 use crate::machine::Effects;
@@ -55,7 +55,7 @@ enum Tip {
     Waiting { target: Target, since: f64 },
     /// `target`'s tooltip shows, fading in from `since`.
     Open { target: Target, since: f64 },
-    /// A press elsewhere, a scroll or key, or a popup over `target` hid its tooltip until the
+    /// A press, a scroll or key, or a popup over `target` hid its tooltip until the
     /// pointer leaves it.
     Suppressed { target: Target },
 }
@@ -84,7 +84,7 @@ enum Over {
 #[derive(Debug, PartialEq)]
 enum Event {
     Frame { over: Over, now: f64 },
-    /// A press away from the open tooltip's element, a scroll or a key.
+    /// A press, a scroll or a key.
     Dismiss,
 }
 
@@ -290,16 +290,6 @@ impl<S: 'static> Runtime<S> {
         if self.help.state.target().is_some() { self.step_help(Event::Dismiss); }
     }
 
-    /// A press at (x, y): on the open tooltip's element it keeps the tooltip, as a web
-    /// tooltip's trigger does through its click; anywhere else it dismisses it.
-    pub(super) fn press_help(&mut self, x: f32, y: f32) {
-        let on_open = match &self.help.state {
-            Tip::Open { target, .. } => self.help_at(x, y).is_some_and(|(i, k)| self.nodes[i].path == target.path && k == target.link),
-            _ => false,
-        };
-        if !on_open || self.defaults.help.is_none() { self.dismiss_help(); }
-    }
-
     /// The help element under (x, y): the topmost one, unless something interactive drawn over
     /// it (not inside it) is there too.
     fn help_at(&self, x: f32, y: f32) -> Option<(usize, Option<usize>)> {
@@ -343,8 +333,7 @@ impl<S: 'static> Runtime<S> {
         }
         let Some((i, link, reaches)) = self.help_under(x, y) else { return (Over::Nothing, None) };
         let at = target(i, link);
-        // A press holds the pointer: it keeps its own element's tooltip, and a drag across
-        // other elements starts none.
+        // A press holds the pointer: a drag across other elements starts no tooltip.
         if self.pointer_captured() && self.help.state.target() != Some(&at) {
             return (Over::Nothing, None);
         }

@@ -60,13 +60,24 @@ fn sync_input_focus(input: &mut crate::el::InputSpec, states: crate::states::Sta
         edit.break_history_group();
         changed = true;
     }
+    // Into the copy's own buffer: a long draft's field is copied without a new allocation, and
+    // without wiping the old one.
+    let mut text = std::mem::take(&mut input.edit.text);
+    let kept = std::mem::take(&mut edit.text);
     input.edit = edit.clone();
+    edit.text = kept;
+    text.clone_from(&edit.text);
+    input.edit.text = text;
     changed
 }
 
 impl<S: 'static> Runtime<S> {
     pub(super) fn active_modal(&self) -> Option<usize> {
         self.modal_scope.as_ref().map(|m| m.index)
+    }
+    /// Node `i` (its subtree ending before `end`) holds the open modal.
+    pub(crate) fn modal_ancestor(&self, i: usize, end: usize) -> bool {
+        self.modal_scope.as_ref().is_some_and(|m| m.index > i && m.index < end)
     }
     /// Node `i` is inside the open modal's scope, or no modal is open.
     pub(crate) fn modal_member(&self, i: usize) -> bool {
@@ -260,6 +271,7 @@ impl<S: 'static> Runtime<S> {
         for (p, input) in &mut self.virtual_inputs {
             changed |= sync_input_focus(input, states!(self), path.as_deref() == Some(p.as_str()));
         }
+        let shown = (self.focus.keyboard(), self.focus.shown());
         for effect in self.focus.step(focus_machine::FocusEvent::Set { path, keyboard }) {
             match effect {
                 focus_machine::FocusEffect::Moved => {
@@ -275,13 +287,20 @@ impl<S: 'static> Runtime<S> {
         }
         self.sync_side_focus();
         // A hover group keyboard focus enters or leaves hovers or rests now (`El::hover_group`).
-        if self.nodes.iter().any(|n| n.vis_flags.hover_group()) {
+        // Focus that stayed where it was, shown as it was (every commit's focus pass, most of
+        // the time), moves no group: the frame's own interaction pass sees the rest.
+        let regrouped = moved || shown != (self.focus.keyboard(), self.focus.shown());
+        if regrouped && self.nodes.iter().any(|n| n.vis_flags.hover_group()) {
             changed |= self.update_interaction(None);
         }
         changed
     }
     pub(super) fn sync_requested_focus(&mut self, nodes: &mut Vec<Node>) -> bool {
-        let asked = self.focus_request.take();
+        // A `Tx::focus_when_shown` still owed stands until the user's own input or another ask,
+        // whatever focus did meanwhile (a closing palette leaves it nowhere, then on the prompt).
+        let owed = self.focus_owed.take().map(|(key, ring)| (key, ring, crate::el::FocusAsk::WhenShown));
+        let asked = self.focus_request.take().or(owed);
+        let waits = asked.as_ref().filter(|(.., ask)| *ask == crate::el::FocusAsk::WhenShown).map(|(key, ring, _)| (key.clone(), *ring));
         for old in &self.nodes {
             if let Some(input) = &old.input
                 && input.edit.focused
@@ -371,6 +390,7 @@ impl<S: 'static> Runtime<S> {
             _ => self.focus.keyboard(),
         };
         self.focus_returned = matches!(&asked, Some((p, _, crate::el::FocusAsk::Return)) if next.as_deref() == Some(p.as_str()));
+        if asked.is_none() && let Some(owed) = waits { self.focus_owed = Some(owed); }
         std::mem::swap(&mut self.nodes, nodes);
         self.nodes_replaced();
         let changed = self.set_focus(next, keyboard);

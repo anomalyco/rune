@@ -1,0 +1,1 @@
+- In a browser whose WebGPU compiles pipelines asynchronously, the renderer's pipelines are compiled ahead with `createRenderPipelineAsync` before the renderer is made, and a page that starts on the CPU asks for the GPU right after its first frame instead of waiting up to 3 s for a quiet moment. The hand-over no longer holds the browser's GPU thread while it compiles.

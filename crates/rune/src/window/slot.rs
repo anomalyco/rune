@@ -1,11 +1,12 @@
-//! Windows: when a window's swap chain can take its next frame. It holds at most one frame the
-//! compositor hasn't shown (`FRAME_LATENCY`), and its waitable object is signalled when it can
-//! take another. wgpu doesn't wait on it (`Dx12UseFrameLatencyWaitableObject::DontWait`): a
-//! frame that blocked in `acquire` would be built from the input that came before the wait, and
-//! the input that came during it would wait a frame more. Instead a window that wants a frame
-//! while the swap chain is full asks a thread-pool wait to wake the loop when it isn't; the loop
-//! then handles every input that came meanwhile, and the frame is built from all of it. Nothing
-//! waits, and no thread runs, while the window draws nothing.
+//! Windows: when a window's or an overlay's swap chain can take its next frame. It holds at most
+//! one frame the compositor hasn't shown (`FRAME_LATENCY`), and its waitable object is signalled
+//! when it can take another. wgpu doesn't wait on it
+//! (`Dx12UseFrameLatencyWaitableObject::DontWait`): a frame that blocked in `acquire` would be
+//! built from the input that came before the wait, and the input that came during it would wait a
+//! frame more. Instead a surface that wants a frame while the swap chain is full asks a
+//! thread-pool wait to wake the loop when it isn't; the loop then handles every input that came
+//! meanwhile, and the frame is built from all of it. Nothing waits, and no thread runs, while the
+//! surface draws nothing.
 
 use std::ffi::c_void;
 
@@ -18,9 +19,9 @@ use windows_sys::Win32::System::Threading::{
 /// made again or lost never signals the object the wait holds.
 const GIVE_UP_MS: u32 = 100;
 
-/// One window's swap chain, as the next frame sees it.
+/// One surface's swap chain, as the next frame sees it: an app window's or an overlay's.
 #[derive(Default)]
-pub(super) enum Slot {
+pub(crate) enum Slot {
     /// No frame of ours is queued (none yet, or the swap chain was made again).
     #[default]
     Free,
@@ -30,9 +31,9 @@ pub(super) enum Slot {
     Waiting(#[allow(dead_code)] Wait),
 }
 
-/// What the window's next frame does (`Slot::take`).
+/// What the surface's next frame does (`Slot::take`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Take {
+pub(crate) enum Take {
     /// Draw now.
     Draw,
     /// Don't: the registered wait asks for the frame (`WakeEvent::FrameSlot`).
@@ -42,7 +43,7 @@ pub(super) enum Take {
 impl Slot {
     /// The frame about to draw takes the swap chain's room, or waits for it. `waitable` is the
     /// swap chain's object; `wake` asks the loop for the frame from the thread-pool thread.
-    pub(super) fn take(&mut self, waitable: Option<HANDLE>, wake: impl Fn() + Send + 'static) -> Take {
+    pub(crate) fn take(&mut self, waitable: Option<HANDLE>, wake: impl Fn() + Send + 'static) -> Take {
         match self {
             Slot::Free => Take::Draw,
             Slot::Waiting(_) => Take::Later,
@@ -64,20 +65,20 @@ impl Slot {
     }
 
     /// The registered wait came back: the swap chain has room (its count is ours now).
-    pub(super) fn came_back(&mut self) {
+    pub(crate) fn came_back(&mut self) {
         if matches!(self, Slot::Waiting(_)) { *self = Slot::Free; }
     }
 
     /// A frame was presented.
-    pub(super) fn presented(&mut self) { *self = Slot::Owed; }
+    pub(crate) fn presented(&mut self) { *self = Slot::Owed; }
 
     /// The swap chain was configured again or replaced: nothing of ours is queued on it.
-    pub(super) fn reset(&mut self) { *self = Slot::Free; }
+    pub(crate) fn reset(&mut self) { *self = Slot::Free; }
 }
 
 /// A one-shot thread-pool wait on a copy of the swap chain's object, so wgpu closing its handle
 /// (a reconfigure makes a new one) never leaves the wait on a closed handle.
-pub(super) struct Wait {
+pub(crate) struct Wait {
     wait: HANDLE,
     object: HANDLE,
     wake: *mut Box<dyn Fn() + Send>,

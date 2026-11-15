@@ -337,14 +337,16 @@ pub(super) fn release_kept_layouts(
 /// half the longer one.
 pub(super) fn edited(was: &str, now: &str) -> bool {
     let (a, b) = (was.as_bytes(), now.as_bytes());
-    let prefix = a.iter().zip(b).take_while(|(x, y)| x == y).count();
-    let suffix = a[prefix..].iter().rev().zip(b[prefix..].iter().rev()).take_while(|(x, y)| x == y).count();
-    a != b && 2 * (prefix + suffix) >= a.len().max(b.len())
+    // Compared in blocks: a long draft's keystroke compares it in a few dozen memcmps.
+    let prefix = crate::text::common_start(a, b);
+    let suffix = crate::text::common_end(a, b).min(a.len().min(b.len()) - prefix);
+    prefix + suffix < a.len().max(b.len()) && 2 * (prefix + suffix) >= a.len().max(b.len())
 }
 
 /// Lays out the flattened tree in `room`, measuring text leaves. Not generic over the app state,
 /// so Taffy's layout code is instantiated once, not once per `Runtime<S>`.
 pub(super) fn compute_layout(taffy: &mut LayoutEngine, root: SlotId, room: Size<AvailableSpace>, nodes: &[Node], text: &mut TextSystem, scale: f32) {
+    text.forget_diff();
     taffy.compute_layout(root, room, |inputs, ctx, style| {
         taffy::compute_leaf_layout(inputs, style, |_, _| 0.0, |known, avail| {
             let Some(i) = ctx else { return Size::ZERO };

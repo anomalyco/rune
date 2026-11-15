@@ -128,8 +128,46 @@ impl std::hash::Hash for TextEdit {
 
 impl Drop for TextEdit {
     fn drop(&mut self) {
-        self.text.zeroize();
+        wipe(&mut self.text);
         self.cancel_composition();
+    }
+}
+
+/// Overwrites every byte `s` holds, its spare capacity too, with zeros the compiler can't leave
+/// out (volatile writes and a fence, as `zeroize`), then empties it. Eight bytes a write, not
+/// one: a 1.7 MB draft's copy goes in a tenth of a millisecond, where a byte at a time was most
+/// of one on every frame a long draft's field was built.
+pub(crate) fn wipe(s: &mut String) {
+    // SAFETY: only zeros are written, inside the allocation (`capacity` bytes from its start),
+    // each at an address aligned for what's written there; the length is reset to 0 after.
+    unsafe {
+        let v = s.as_mut_vec();
+        let (p, cap) = (v.as_mut_ptr(), v.capacity());
+        let head = p.align_offset(8).min(cap);
+        let mut i = 0;
+        while i < head { std::ptr::write_volatile(p.add(i), 0u8); i += 1; }
+        while i + 8 <= cap { std::ptr::write_volatile(p.add(i).cast::<u64>(), 0); i += 8; }
+        while i < cap { std::ptr::write_volatile(p.add(i), 0u8); i += 1; }
+        v.set_len(0);
+    }
+    std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst);
+}
+
+/// Document text kept aside (an undo step's, a snapshot's): wiped when it goes, as the field's
+/// own text is.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Wiped(pub(crate) String);
+
+impl std::ops::Deref for Wiped {
+    type Target = String;
+    fn deref(&self) -> &String {
+        &self.0
+    }
+}
+
+impl Drop for Wiped {
+    fn drop(&mut self) {
+        wipe(&mut self.0);
     }
 }
 
@@ -469,7 +507,7 @@ impl TextEdit {
     /// Replace the whole draft and discard its history, preserving focus and password mode.
     pub fn replace_text(&mut self, text: impl Into<String>) {
         let text = text.into();
-        self.text.zeroize();
+        wipe(&mut self.text);
         let line_count = if self.secure { 0 } else { 1 + count_newlines(text.as_bytes()) };
         self.text = text;
         self.anchor = self.text.len();
@@ -703,6 +741,9 @@ impl TextEdit {
                     out.push(c);
                 }
             }
+        } else if !s.contains('\r') {
+            // Most pastes: copied whole, not a character at a time.
+            out.push_str(s);
         } else {
             let mut chars = s.chars().peekable();
             while let Some(c) = chars.next() {
@@ -898,7 +939,8 @@ impl TextEdit {
             self.mark_edited();
             return;
         }
-        let before = self.snapshot();
+        // Only the bytes this replaces: a keystroke in a long draft copies none of the rest.
+        let before = self.ranged(a, b);
         let inserted_marks: Vec<Mark> = if s.is_empty() {
             self.typing = Typing::Inherited;
             Vec::new()
@@ -921,7 +963,7 @@ impl TextEdit {
         };
 
         self.apply_text_and_attr_replace((a, b), s, &inserted_marks, None, false);
-        self.record_change(before, kind);
+        self.record_ranged(before, s, kind);
     }
 
 }

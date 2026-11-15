@@ -119,6 +119,18 @@ impl<T: 'static> Overlay<T> {
             frame::Turn::Rest | frame::Turn::BackedOff => return false,
             frame::Turn::Draw => if !prewarm { self.backoff_step(crate::window::BackoffEvent::Lapsed); },
         }
+        // The swap chain still holds a frame the compositor hasn't shown: this one draws when it
+        // has room, built from what changed by then (`slot`).
+        #[cfg(target_os = "windows")]
+        if let Some(wake) = self.slot_wake.clone() && let Some(live) = self.surface.live_mut() {
+            // SAFETY: the object is the live swap chain's; `Slot` waits on its own copy.
+            let waitable = unsafe { live.surface.as_hal::<wgpu::hal::api::Dx12>().and_then(|h| h.waitable_handle()) };
+            if live.slot.take(waitable.map(|h| h.0), move || wake()) == Take::Later {
+                // The registered wait asks for this frame (`WakeEvent::FrameSlot`): not a miss,
+                // and no timer of its own to turn the loop with (`waits_for_slot`).
+                return false;
+            }
+        }
         let (Some(live), Some(renderer), Some(gpu)) = (self.surface.live_mut(), self.renderer.as_mut(), self.gpu.as_ref()) else {
             return false;
         };
@@ -260,6 +272,9 @@ impl<T: 'static> Overlay<T> {
             alpha.draw(&mut enc, &view);
         }
         frame::submit_and_present(live, renderer, gpu, &self.rt, enc, frame, prewarm);
+        // The next frame waits for the room this one took (`slot`).
+        #[cfg(target_os = "windows")]
+        live.slot.presented();
         crate::render::gpu_events::presented();
         self.clock.presented(&mut self.rt, Instant::now());
         if !prewarm { self.meter.presented(); }

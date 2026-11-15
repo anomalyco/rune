@@ -1,0 +1,1 @@
+- **`rune_kit::shell`: a sidebar row's inline rename field is named after the row.** `SidebarRow::renaming`'s text field carries the row's label as its accessible name, so a screen reader says which row is being edited, and debug builds no longer warn that a focusable text field has no name.

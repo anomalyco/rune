@@ -141,6 +141,10 @@ pub(crate) fn runtime_for<S: 'static>(spec: &AppSpec<S>, state: S, size: (f32, f
     rt.on_key = spec.on_key;
     rt.motion_needs_cause = true;
     rt.window_title.start(spec.title);
+    // The capture presets (`RUNE_CONTRAST`, `RUNE_INCREASE_CONTRAST`), never the machine's own
+    // settings, so a headless snap shows an app in a contrast theme or under Increase Contrast.
+    rt.set_system_contrast(crate::platform::preferences::contrast_preset());
+    rt.set_system_increased_contrast(crate::platform::preferences::increased_contrast_preset());
     rt.set_live_waker(waker.clone());
     #[cfg(feature = "hot")]
     if crate::hot::enabled() {

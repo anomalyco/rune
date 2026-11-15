@@ -3,6 +3,17 @@
 
 use super::*;
 
+impl<T: 'static> Overlay<T> {
+    /// Windows: its next frame waits for room in the swap chain, and comes when there is
+    /// (`slot`).
+    fn waits_for_slot(&self) -> bool {
+        #[cfg(target_os = "windows")]
+        return self.surface.live().is_some_and(|l| matches!(l.slot, Slot::Waiting(_)));
+        #[cfg(not(target_os = "windows"))]
+        false
+    }
+}
+
 impl<T: 'static> AnyHost for Overlay<T> {
     fn new_events(&mut self, _event_loop: &ActiveEventLoop, cause: StartCause) {
         self.meter.turn(matches!(cause, StartCause::ResumeTimeReached { .. } | StartCause::Poll), crate::frame::surface_stats::slept(cause));
@@ -19,6 +30,9 @@ impl<T: 'static> AnyHost for Overlay<T> {
         // pointer deadline, but do not spin on an overdue animation timer. Without one (hidden,
         // covered, faded out or unpaced), a timer due sooner than a frame waits a frame.
         let deadline = crate::window::timer_deadline(&self.rt);
+        // A frame waiting for room in the swap chain comes when there is (`slot`): its timers
+        // would turn the loop at once until then.
+        let deadline = deadline.filter(|_| !self.waits_for_slot());
         #[cfg(target_os = "macos")]
         let deadline = deadline.filter(|_| !self.surface.live().and_then(|l| l.pacing.as_ref()).is_some_and(|p| p.running()));
         #[cfg(target_os = "macos")]
@@ -38,6 +52,15 @@ impl<T: 'static> AnyHost for Overlay<T> {
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: WakeEvent) {
         self.meter.waited();
+        #[cfg(target_os = "windows")]
+        if matches!(event, WakeEvent::FrameSlot(_)) {
+            // The frame that waited for room in the swap chain draws now, after what changed
+            // meanwhile. It waited from a turn `frame::turn` said had a frame to draw, and that
+            // turn left `dirty` and `idle` as they were, so the gate still does.
+            if let Some(live) = self.surface.live_mut() && matches!(live.slot, Slot::Waiting(_)) {
+                live.slot.came_back();
+            }
+        }
         #[cfg(target_os = "macos")]
         if matches!(event, WakeEvent::DisplayTick(_))
             && self.surface.live().and_then(|l| l.pacing.as_ref()).is_some_and(|p| p.running()) {
@@ -233,9 +256,11 @@ impl<T: 'static> Overlay<T> {
 }
 
 impl<T: 'static> PendingOverlay for Overlay<T> {
-    fn connect(&mut self, wake: Waker, _frame_wake: Waker, gpu: Rc<RefCell<Weak<Gpu>>>) {
+    fn connect(&mut self, wake: Waker, _frame_wake: Waker, _slot_wake: Waker, gpu: Rc<RefCell<Weak<Gpu>>>) {
         #[cfg(target_os = "macos")]
         { self.frame_wake = Some(_frame_wake); }
+        #[cfg(target_os = "windows")]
+        { self.slot_wake = Some(_slot_wake); }
         // All live sources (including Pixels) must share this registration: a second
         // set_live_waker call replaces the wake lane and resets its subscriptions.
         self.rt.set_live_waker(wake.clone());

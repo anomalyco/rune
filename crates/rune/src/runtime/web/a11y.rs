@@ -18,6 +18,9 @@ pub(crate) struct A11yMirror {
     moving: bool,
     built_at: f64,
     json: String,
+    /// The focus proxy last sent (`web_a11y_focus`), and the commit and focus it was read at.
+    focus_at: (u64, String),
+    focus_json: String,
 }
 
 /// While motion runs (a sheet sliding in, a panel opening), how often the mirror follows what's
@@ -55,6 +58,11 @@ pub(crate) struct A11yItem {
     /// What describes it beyond its name (`El::description`, `El::described_by`'s words):
     /// `aria-description`.
     pub description: String,
+    /// A control's states, for a button carrying a control's role (`role`): `aria-selected`,
+    /// `aria-checked`, and its place in its set (`El::position_in_set`).
+    pub selected: Option<bool>,
+    pub checked: Option<&'static str>,
+    pub set: Option<(usize, usize)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -80,7 +88,7 @@ pub(crate) struct A11yRun {
 impl A11yItem {
     fn new(kind: &'static str, path: &str, rect: [f32; 4]) -> Self {
         A11yItem { kind, path: path.to_owned(), rect, font_size: 0.0, level: None, expanded: None, text: String::new(),
-            runs: Vec::new(), tag: None, role: None, parent: None, id: None, href: None, font: None, selectable: false, description: String::new() }
+            runs: Vec::new(), tag: None, role: None, parent: None, id: None, href: None, font: None, selectable: false, description: String::new(), selected: None, checked: None, set: None }
     }
 
     fn to_json(&self) -> Value {
@@ -93,6 +101,9 @@ impl A11yItem {
         if let Some(x) = self.expanded { obj.insert("x".into(), json!(x)); }
         if !self.text.is_empty() { obj.insert("t".into(), json!(self.text)); }
         if !self.description.is_empty() { obj.insert("d".into(), json!(self.description)); }
+        if let Some(s) = self.selected { obj.insert("se".into(), json!(s)); }
+        if let Some(c) = self.checked { obj.insert("c".into(), json!(c)); }
+        if let Some((pos, size)) = self.set { obj.insert("n".into(), json!([pos, size])); }
         if let Some(g) = self.tag { obj.insert("g".into(), json!(g)); }
         if let Some(o) = self.role { obj.insert("o".into(), json!(o)); }
         if let Some(a) = self.parent { obj.insert("a".into(), json!(a)); }
@@ -131,6 +142,9 @@ pub(crate) fn container_tag(role: &str) -> Option<&'static str> {
         "list" => "ul",
         "listitem" => "li",
         "figure" => "figure",
+        // A list of options (the palette's), and a dialog: role-carrying divs, so the options
+        // inside read as one list of places and the dialog by its name.
+        "listbox" | "dialog" | "alertdialog" => "div",
         // A table's parts are divs with their ARIA roles: the mirror places every element itself,
         // and an HTML table's semantics follow its CSS display.
         "table" | "row" | "cell" | "columnheader" | "rowheader" => "div",
@@ -146,6 +160,26 @@ pub(crate) fn aria_role(role: &str) -> Option<&'static str> {
         "cell" => "cell",
         "columnheader" => "columnheader",
         "rowheader" => "rowheader",
+        "listbox" => "listbox",
+        "dialog" => "dialog",
+        "alertdialog" => "alertdialog",
+        _ => return None,
+    })
+}
+
+/// The ARIA role a mirrored button carries when Rune's role is a control's: a palette's option,
+/// a tab, a switch, a checkbox, a radio, a menu's item, a tree's item.
+fn control_role(role: &str) -> Option<&'static str> {
+    Some(match role {
+        "option" => "option",
+        "tab" => "tab",
+        "switch" => "switch",
+        "checkbox" => "checkbox",
+        "radio" => "radio",
+        "menuitem" => "menuitem",
+        "menuitemcheckbox" => "menuitemcheckbox",
+        "menuitemradio" => "menuitemradio",
+        "treeitem" => "treeitem",
         _ => return None,
     })
 }
@@ -351,6 +385,13 @@ impl<S: 'static> Runtime<S> {
             let parent = open.last().map(|&(_, item)| item);
             let n = &self.nodes[i];
             let end = ends[i];
+            // An open modal's ancestors (the root among them) are outside its scope but hold it:
+            // go into them, saying nothing of them, so the modal is mirrored and the rest isn't.
+            if !n.inert && !self.modal_member(i) && self.modal_ancestor(i, end) {
+                i += 1;
+                last_flow_parent = None;
+                continue;
+            }
             if !self.allowed(i) || self.subtree_exiting(i) || n.vis.opacity <= 0.01 || n.a11y.hidden
                 || matches!(n.role, "none" | "presentation")
             {
@@ -433,6 +474,13 @@ impl<S: 'static> Runtime<S> {
                     item.expanded = n.a11y.expanded;
                     item.text = label;
                     item.description = self.mirror_description(i);
+                    if let Some(role) = control_role(n.role) {
+                        item.role = Some(role);
+                        if self.a11y_role(i).is_some_and(crate::a11y::roles::selectable_item) { item.selected = Some(n.focus.selected); }
+                        item.checked = n.a11y.checked.map(|c| match c { crate::el::Checked::True => "true", crate::el::Checked::False => "false", crate::el::Checked::Mixed => "mixed" })
+                            .or_else(|| (n.role == "radio").then_some(if n.focus.selected { "true" } else { "false" }));
+                        item.set = n.a11y.more.as_ref().and_then(|m| m.set);
+                    }
                     push(&mut out, item);
                     i = end;
                     last_flow_parent = None;
@@ -589,6 +637,50 @@ impl<S: 'static> Runtime<S> {
         Some(&mirror.json)
     }
 
+    /// An app's focus, for the canvas's focus proxy (`focusA11y` in `bridge.js`): the page keeps
+    /// the browser's focus on the canvas (keys go there) or its text field, so without this a
+    /// reader heard nothing as Tab, arrows or a request moved Rune's focus. The focused
+    /// element's ARIA role, name, description and states; empty when nothing has focus. `None`
+    /// when unchanged since the last call.
+    pub(crate) fn web_a11y_focus<'a>(&self, mirror: &'a mut A11yMirror) -> Option<&'a str> {
+        let at = (self.commits, self.focus.path().unwrap_or_default().to_owned());
+        if mirror.focus_at == at { return None; }
+        mirror.focus_at = at;
+        // A field naming a highlighted row (`El::active_descendant`, the palette's): the row is
+        // what a reader is told about, as the native trees hand it focus.
+        let next = self.focused_index().map(|i| match self.a11y_active_descendant(i) {
+            Some(row) => {
+                let mut item = self.web_focus_item(row);
+                if let Some(o) = item.as_object_mut() { o.insert("f".into(), json!(self.mirror_name(i).unwrap_or_default())); }
+                item.to_string()
+            }
+            None => self.web_focus_item(i).to_string(),
+        }).unwrap_or_default();
+        if mirror.focus_json == next { return None; }
+        mirror.focus_json = next;
+        Some(&mirror.focus_json)
+    }
+
+    fn web_focus_item(&self, i: usize) -> Value {
+        let n = &self.nodes[i];
+        let role = self.a11y_role(i);
+        let mut o = serde_json::Map::new();
+        o.insert("o".into(), json!(role.map_or("group", focus_role)));
+        let name = self.mirror_name(i).unwrap_or_else(|| self.descendant_label(i, self.subtree_end(i)));
+        o.insert("t".into(), json!(name));
+        let description = self.mirror_description(i);
+        if !description.is_empty() { o.insert("d".into(), json!(description)); }
+        let checked = n.a11y.checked.or_else(|| (role == Some(accesskit::Role::RadioButton)).then_some(if n.focus.selected { crate::el::Checked::True } else { crate::el::Checked::False }));
+        if let Some(c) = checked {
+            o.insert("c".into(), json!(match c { crate::el::Checked::True => "true", crate::el::Checked::False => "false", crate::el::Checked::Mixed => "mixed" }));
+        }
+        if role.is_some_and(crate::a11y::roles::selectable_item) { o.insert("s".into(), json!(n.focus.selected)); }
+        if let Some(open) = n.a11y.expanded { o.insert("x".into(), json!(open)); }
+        if let Some((pos, size)) = n.a11y.more.as_ref().and_then(|m| m.set) { o.insert("n".into(), json!([pos, size])); }
+        if let Some(level) = n.a11y.level { o.insert("l".into(), json!(level)); }
+        Value::Object(o)
+    }
+
     /// Dispatches assistive-tech activation of a mirrored button or inline link.
     pub(crate) fn web_a11y_action(&mut self, event: &serde_json::Value) -> bool {
         let Some(path) = event["path"].as_str() else { return false };
@@ -697,3 +789,33 @@ fn join_inline(prev: &mut A11yItem, rect: [f32; 4], mut runs: Vec<A11yRun>, gap:
 #[cfg(test)]
 #[path = "a11y_tests.rs"]
 mod tests;
+
+/// The ARIA role a browser's reader knows for an AccessKit role, for the focus proxy.
+fn focus_role(role: accesskit::Role) -> &'static str {
+    use accesskit::Role as R;
+    match role {
+        R::Button | R::DefaultButton => "button",
+        R::CheckBox => "checkbox",
+        R::Switch => "switch",
+        R::RadioButton => "radio",
+        R::Tab => "tab",
+        R::ListBoxOption | R::MenuListOption => "option",
+        R::TreeItem => "treeitem",
+        R::MenuItem => "menuitem",
+        R::MenuItemCheckBox => "menuitemcheckbox",
+        R::MenuItemRadio => "menuitemradio",
+        R::Link => "link",
+        R::TextInput | R::MultilineTextInput | R::SearchInput | R::PasswordInput | R::Terminal => "textbox",
+        R::Slider => "slider",
+        R::ComboBox | R::EditableComboBox => "combobox",
+        R::Row => "row",
+        R::GridCell | R::Cell => "gridcell",
+        R::ListItem => "listitem",
+        R::Dialog => "dialog",
+        R::AlertDialog => "alertdialog",
+        R::Region => "region",
+        R::Heading => "heading",
+        R::Image => "img",
+        _ => "group",
+    }
+}
