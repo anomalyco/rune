@@ -487,7 +487,7 @@ fn gpu_frame<S: 'static>(side: &mut GpuSide, rt: &mut Runtime<S>, compositor: &m
     if armed {
         // Rune's default frame (a compositor that drew its own would have kept this a whole one):
         // nothing draws into the canvas but the copy of the kept frame.
-        side.renderer.prepare(&side.gpu.device, &side.gpu.queue, &mut rt.text.atlas, &rt.instances, size);
+        side.renderer.prepare_ui(&side.gpu.device, &side.gpu.queue, &mut rt.text.atlas, &rt.instances, size);
         side.renderer.draw_armed(&mut encoder, &frame.texture);
     } else if let Some(compositor) = compositor {
         let target = frame.texture.create_view(&wgpu::TextureViewDescriptor { format: Some(side.renderer.format()), ..Default::default() });
@@ -496,7 +496,7 @@ fn gpu_frame<S: 'static>(side: &mut GpuSide, rt: &mut Runtime<S>, compositor: &m
             update_ms: now.elapsed().as_secs_f64() * 1000.0, rt, ui: &mut side.renderer });
     } else {
         let target = frame.texture.create_view(&wgpu::TextureViewDescriptor { format: Some(side.renderer.format()), ..Default::default() });
-        side.renderer.prepare(&side.gpu.device, &side.gpu.queue, &mut rt.text.atlas, &rt.instances, size);
+        side.renderer.prepare_ui(&side.gpu.device, &side.gpu.queue, &mut rt.text.atlas, &rt.instances, size);
         side.renderer.draw(&mut encoder, &target, rt.clear_color());
     }
     // A copy of the frame for counting how many of its pixels the CPU's differ in (drift).

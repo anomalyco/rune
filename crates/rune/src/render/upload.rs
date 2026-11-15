@@ -28,8 +28,8 @@ pub(super) struct Uploads {
     has_layers: bool,
     /// The viewport last written to globals (`width << 32 | height`, `u64::MAX` before any).
     viewport: AtomicU64,
-    /// The sRGB flag last written to globals.
-    srgb: Option<bool>,
+    /// Gamma-space blend and byte-source flags last written to globals.
+    srgb: Option<(bool, bool)>,
     /// `Staging::lost` as last seen by `prepare` and by `upload_images`.
     lost: (u64, u64),
     /// The paint the next `prepare`'s instances come from, and which of them alone changed
@@ -208,6 +208,20 @@ impl Renderer {
         instances: &[Instance],
         viewport: (u32, u32),
     ) {
+        // A caller may draw these lists into several different formats with draw_range.
+        self.prepare_with_precision(device, queue, atlas, instances, viewport, false);
+    }
+
+    /// The default UI pass draws the root into one known target. Its float intermediate layers
+    /// have their own projection and keep their source precision in the shader.
+    pub(crate) fn prepare_ui(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, atlas: &mut Atlas,
+        instances: &[Instance], viewport: (u32, u32)) {
+        let bytes = self.srgb_blend && matches!(self.format, wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Rgba8Unorm);
+        self.prepare_with_precision(device, queue, atlas, instances, viewport, bytes);
+    }
+
+    fn prepare_with_precision(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, atlas: &mut Atlas,
+        instances: &[Instance], viewport: (u32, u32), byte_source: bool) {
         if self.springs.is_some() { assert_eq!(instances.len(), self.spring_instances); }
         let staging = self.uploads.staging(device, queue);
         if staging.lost() != self.uploads.lost.0 {
@@ -266,8 +280,9 @@ impl Renderer {
             staging.write_buffer(&self.globals, 0, bytemuck::cast_slice(&[viewport.0 as f32, viewport.1 as f32]));
             #[cfg(test)] { self.uploads.globals_writes += 1; }
         }
-        if self.uploads.srgb.replace(self.srgb_blend) != Some(self.srgb_blend) {
-            let flags: [f32; 4] = [if self.srgb_blend { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0];
+        let mode = (self.srgb_blend, byte_source);
+        if self.uploads.srgb.replace(mode) != Some(mode) {
+            let flags: [f32; 4] = [self.srgb_blend as u8 as f32, byte_source as u8 as f32, 0.0, 0.0];
             staging.write_buffer(&self.globals, 16, bytemuck::cast_slice(&flags));
             #[cfg(test)] { self.uploads.globals_writes += 1; }
         }

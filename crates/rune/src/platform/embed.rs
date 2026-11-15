@@ -201,7 +201,7 @@ impl<S: 'static> LayerHost<S> {
             };
             comp.render(&mut f);
         } else {
-            self.renderer.prepare(
+            self.renderer.prepare_ui(
                 &self.gpu.device,
                 &self.gpu.queue,
                 &mut self.rt.text.atlas,

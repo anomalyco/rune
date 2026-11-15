@@ -366,13 +366,13 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
             c.render(&mut f);
             animating |= c.animating();
         } else {
-            renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, (wp, hp));
+            renderer.prepare_ui(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, (wp, hp));
             renderer.draw(&mut enc, view, rt.clear_color());
         }
         if let Some((ov, ui)) = overlay.as_mut() {
             let ort = ov.frame(real_t, step, rt.backdrop_dark().unwrap_or(dark));
             if !ort.instances.is_empty() {
-                ui.prepare(&gpu.device, &gpu.queue, &mut ort.text.atlas, &ort.instances, (wp, hp));
+                ui.prepare_ui(&gpu.device, &gpu.queue, &mut ort.text.atlas, &ort.instances, (wp, hp));
                 ui.draw_over(&mut enc, view);
             }
         }

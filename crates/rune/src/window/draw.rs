@@ -402,7 +402,7 @@ impl<S: 'static> Host<S> {
             c.render(&mut f);
             animating |= c.animating();
         } else {
-            renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, size);
+            renderer.prepare_ui(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, size);
             renderer.draw(&mut enc, target, rt.clear_color());
         }
         // Every frame, so a frame drawn whole leaves the renderer's kept frame behind.

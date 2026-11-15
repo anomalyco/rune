@@ -127,3 +127,17 @@ pub(crate) fn apron_key(i: &Instance) -> [u32; 3] {
 pub(crate) fn premul(c: Color, opacity: f32, srgb: bool) -> [f32; 4] {
     if srgb { c.premul_srgb(opacity) } else { c.premul(opacity) }
 }
+
+/// The transfer curve maps linear 1 to encoded 1 exactly. The f32 power formula at that
+/// endpoint yields 0.99999994: half white would round to RGB 127 but alpha 128, darkening
+/// even white over white. Preserve the authored endpoint before the two painters take their
+/// byte steps. This isn't a near-white threshold or a change to gradient interpolation.
+pub(super) fn flat_base(c: Color, srgb: bool, translucent: bool) -> [f32; 4] {
+    let mut rgba = premul(c, 1.0, srgb);
+    if srgb && translucent {
+        for (channel, linear) in rgba[..3].iter_mut().zip([c.r, c.g, c.b]) {
+            if linear == 1.0 { *channel = c.a; }
+        }
+    }
+    rgba
+}

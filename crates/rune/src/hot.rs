@@ -375,7 +375,7 @@ fn headless<S: 'static>(spec: &AppSpec<S>, state: S, args: Args, (srgb_blend, fo
             }
             renderer.upload_images(&gpu.device, &gpu.queue, &mut rt.images);
             renderer.prepare_surfaces(&gpu.device, &gpu.queue, &rt.surfaces, (w, h));
-            renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, (w, h));
+            renderer.prepare_ui(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, (w, h));
             let mut enc = gpu.device.create_command_encoder(&Default::default());
             renderer.draw(&mut enc, &target.view, rt.clear_color());
             target.copy(&mut enc);
