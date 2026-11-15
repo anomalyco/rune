@@ -480,7 +480,9 @@ impl<S: 'static> Host<S> {
             crate::marks::mark_once(&FIRST_CPU, "frame.first.cpu");
             if !l.first_frame.ready() { l.first_frame.gpu_done(); }
         }
+        crate::marks::mark("ff.cpu");
         self.gpu_draws_same_frame();
+        crate::marks::mark("ff.gpu_same");
         let Some(l) = self.win.as_mut() else { return };
         // The input the hand-over paused for is drawn: the next frame at rest hands over.
         if let SurfaceMode::HandingOver { paused, since, .. } = &mut l.native.mode && *paused && !animating && !self.rt.has_pending_input() {
@@ -490,11 +492,15 @@ impl<S: 'static> Host<S> {
         let submitted = Instant::now();
         self.clock.presented(rt, submitted);
         self.meter.presented();
+        crate::marks::mark("ff.clock");
         self.frame_reports.drawn(encoded, None, now, update_ms);
         rt.interaction_presented(submitted, None);
+        crate::marks::mark("ff.interaction");
         self.frame_reports.inspect(rt);
+        crate::marks::mark("ff.inspect");
         let next_tick = l.next_tick(now).filter(|_| !hidden);
         self.idle = Presented::settle(&mut l.presented, rt, &l.config, animating || stepping::FrameMove::moving(&self.frame_move), next_tick, !hidden, false);
+        crate::marks::mark("ff.settled");
         // Motion's next frame comes at the display's next refresh: a CPU frame presents at once,
         // so nothing else paces it.
         if !hidden && !self.idle {
