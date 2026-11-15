@@ -492,8 +492,12 @@ impl<S: 'static> Host<S> {
         // Motion's next frame comes at the display's next refresh: a CPU frame presents at once,
         // so nothing else paces it.
         if !hidden && !self.idle {
-            l.backoff_step(BackoffEvent::At(crate::platform::win32::next_vblank(Instant::now())));
+            let vblank = crate::platform::win32::next_vblank(Instant::now());
+            crate::marks::mark("ff.vblank");
+            l.backoff_step(BackoffEvent::At(vblank));
+            crate::marks::mark("ff.backoff");
             self.meter.set_pacing(l.pacing_state(true));
+            crate::marks::mark("ff.pacing");
         } else {
             l.stop_pacing();
             self.meter.set_pacing(l.pacing_state(false));
@@ -786,7 +790,7 @@ fn prepare(hwnd: isize, size: (u32, u32), srgb: bool, features: wgpu::Features, 
     let target_format = if srgb { config.format.remove_srgb_suffix() } else { config.format };
     let mut renderer = renderer.unwrap_or_else(|| Renderer::new(&gpu.device, target_format));
     let instances = std::mem::take(&mut *latest.lock().unwrap_or_else(|e| e.into_inner()));
-    warm_frame(&gpu, &mut renderer, target_format, (config.width, config.height), &instances);
+    if std::env::var_os("IB3_NO_WARM").is_none() { warm_frame(&gpu, &mut renderer, target_format, (config.width, config.height), &instances); }
     crate::marks::mark("gpu.window.warmed");
     Ok(Prepared { gpu, renderer, surface, config, handover })
 }
@@ -818,7 +822,7 @@ fn warm_frame(gpu: &Gpu, renderer: &mut Renderer, format: wgpu::TextureFormat, s
     // Command lists armed ahead, for the hand-over frame and every frame after it to record into
     // without resetting one on the app's thread (`reserve_command_lists`).
     // SAFETY: only Rune's own call on the raw device, which is alive.
-    if let Some(hal) = unsafe { gpu.device.as_hal::<wgpu::hal::api::Dx12>() } {
+    if std::env::var_os("IB3_NO_ARM").is_none() && let Some(hal) = unsafe { gpu.device.as_hal::<wgpu::hal::api::Dx12>() } {
         let _ = hal.reserve_command_lists(RESERVED_LISTS);
     }
     let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
