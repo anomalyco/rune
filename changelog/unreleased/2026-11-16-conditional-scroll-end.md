@@ -1,0 +1,1 @@
+- `El::on_at_bottom_if` and `El::on_far_from_bottom_if` let a scroll observer return `false` when the first layout confirms the state it already drew. The observer still hears the initial value and every threshold crossing. Existing scroll observers continue to rebuild the view.
