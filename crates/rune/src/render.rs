@@ -415,8 +415,8 @@ pub struct Gpu {
     lost: Arc<AtomicBool>,
 }
 
-/// The most views and buffers a device binds at once (`Limits::max_non_sampler_bindings`).
-const MAX_VIEWS: u32 = 65_536;
+/// Size of the DX12 device's shader-visible CBV/SRV/UAV heap, in descriptors.
+const MAX_VIEWS: u32 = 4_096;
 
 /// Vulkan loaders crash when two threads create instances or devices at once (seen with
 /// parallel GPU tests on lavapipe), so Rune creates them one at a time.
@@ -501,11 +501,9 @@ impl Gpu {
         // A compositor that asks for immediates (`Compositor::features`) gets all the adapter has.
         let max_immediate_size = if required_features.contains(wgpu::Features::IMMEDIATES) { adapter.limits().max_immediate_size } else { 0 };
         let adapter_limits = adapter.limits();
-        // Views and buffers bound at once (D3D12's shader-visible descriptor heap, which wgpu sizes from
-        // this limit when it makes the device). wgpu's default, a million, is a 32-64 MB heap on
-        // Windows; 65,536 is far more than Rune binds and keeps it to a few MB (a bare wgpu window:
-        // 82.0 MB private bytes with a million, 24.8 MB with 65,536; a bare D3D12 window, 14.1 MB).
-        let views = MAX_VIEWS.min(adapter_limits.max_non_sampler_bindings);
+        // DX12 allocates this heap up front. Other backends keep their previous limit.
+        let views = (if adapter.get_info().backend == wgpu::Backend::Dx12 { MAX_VIEWS } else { 65_536 })
+            .min(adapter_limits.max_non_sampler_bindings);
         let required_limits = if adapter_limits.max_inter_stage_shader_variables < wgpu::Limits::default().max_inter_stage_shader_variables
             || adapter_limits.max_color_attachments < wgpu::Limits::default().max_color_attachments
             || adapter_limits.max_compute_workgroup_storage_size < wgpu::Limits::default().max_compute_workgroup_storage_size
