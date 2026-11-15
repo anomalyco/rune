@@ -302,6 +302,7 @@ fn icon_coverage_at(icon: &Icon, px: u32, size: f32, origin: Point, parity: [u32
                     }
                 }
                 super::area::Op::FillRRect { lo, hi, r } => super::convex::fill_rrect([lo.x, lo.y], [hi.x, hi.y], r, parity, px, &mut buf),
+                super::area::Op::CircularRRect { lo, hi, r } => super::convex::fill_circular([lo.x, lo.y], [hi.x, hi.y], r, px, &mut buf),
                 op => op.render(px, &mut buf),
             }
             union(into, &buf, alpha);

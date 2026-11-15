@@ -62,6 +62,8 @@ pub(super) enum Op {
     /// A filled round rect `[lo, hi]` with corners `r` round that `FillRRectOp` draws
     /// (`super::convex::fill_rrect`).
     FillRRect { lo: Point, hi: Point, r: f32 },
+    /// A filled circular round rect `CircularRRectOp` draws (`super::convex::fill_circular`).
+    CircularRRect { lo: Point, hi: Point, r: f32 },
     /// A closed convex path stroked with mitred or bevelled joins: Ganesh's convex tessellator
     /// (`super::convex`).
     ConvexStroke,
@@ -111,8 +113,12 @@ pub(super) fn op(shape: &Shape<'_>, ctm: Transform, pen: Option<&Pen>) -> Op {
             // `FillRRectOp`.
             let scaled = (r * scale).min((hi.x - lo.x) * 0.5).min((hi.y - lo.y) * 0.5);
             let oval = 2.0 * r >= user_hi.x - user_lo.x && 2.0 * r >= user_hi.y - user_lo.y;
-            if pen.is_none() && !oval && (scaled < 0.5 || !circular(*user_lo, *user_hi, *r)) {
-                return Op::FillRRect { lo, hi, r: r * scale };
+            if pen.is_none() && !oval {
+                return if scaled < 0.5 || !circular(*user_lo, *user_hi, *r) {
+                    Op::FillRRect { lo, hi, r: r * scale }
+                } else {
+                    Op::CircularRRect { lo, hi, r: scaled }
+                };
             }
             ring(Round { lo, hi, r: r * scale }, pen.map(|_| hw))
         }
@@ -244,7 +250,7 @@ impl Op {
                     }
                     Op::Quad(quad) => ramp(inside_quad(quad, q)),
                     Op::Round { outer, inner } => ramp(outer.inside(q)) * inner.map_or(1.0, |r| ramp(-r.inside(q))),
-                    Op::Hairline(_) | Op::Path | Op::ConvexStroke | Op::FillRRect { .. } => 0.0,
+                    Op::Hairline(_) | Op::Path | Op::ConvexStroke | Op::FillRRect { .. } | Op::CircularRRect { .. } => 0.0,
                 };
                 out[y * n + x] = (c.clamp(0.0, 1.0) * 255.0).round() as u8;
             }

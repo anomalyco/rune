@@ -89,6 +89,38 @@ const INDICES: [usize; 90] = [
     34, 35, 39, 35, 39, 36, 39, 36, 38, 36, 38, 37,
 ];
 
+/// Covers `out` (`px` × `px`, cleared first) with the round rect `[lo, hi]` (canvas device
+/// pixels) whose corners are `r` device pixels round, filled antialiased by Ganesh's
+/// `CircularRRectOp`: a nine-patch half a pixel wider, whose corners interpolate each pixel's
+/// offset from their circle's centre, normalized to the radius half a pixel wider, covered by
+/// how far inside that circle it is.
+pub(in super::super) fn fill_circular(lo: [f32; 2], hi: [f32; 2], r: f32, px: u32, out: &mut [u8]) {
+    let outer = r + 0.5;
+    let (l, t, rr, b) = (lo[0] - 0.5, lo[1] - 0.5, hi[0] + 0.5, hi[1] + 0.5);
+    let xs = [l, l + outer, rr - outer, rr];
+    let ys = [t, t + outer, b - outer, b];
+    const OFFSETS: [f32; 4] = [-1.0, 0.0, 0.0, 1.0];
+    let mut pts = Vec::with_capacity(16);
+    let mut offsets = Vec::with_capacity(16);
+    for (j, &y) in ys.iter().enumerate() {
+        for (i, &x) in xs.iter().enumerate() {
+            pts.push([x, y]);
+            offsets.push([OFFSETS[i], OFFSETS[j]]);
+        }
+    }
+    let mut indices = Vec::with_capacity(54);
+    for j in 0..3 {
+        for i in 0..3 {
+            let k = j * 4 + i;
+            indices.extend([k, k + 1, k + 5, k, k + 5, k + 4]);
+        }
+    }
+    rasterize(&pts, &indices, [0.0, 0.0], px, out, |tri, w, _| {
+        let at = |c: usize| (0..3).map(|i| w[i] as f32 * offsets[tri[i]][c]).sum::<f32>();
+        (outer * (1.0 - at(0).hypot(at(1)))).clamp(0.0, 1.0)
+    });
+}
+
 fn sign(v: f32) -> f32 {
     if v > 0.0 { 1.0 } else if v < 0.0 { -1.0 } else { 0.0 }
 }
