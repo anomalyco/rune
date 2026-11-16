@@ -246,16 +246,23 @@ fn srgb_encode(x: vec3<f32>) -> vec3<f32> {
     return select(1.055 * pow(v, vec3<f32>(1.0 / 2.4)) - 0.055, v * 12.92, v <= vec3<f32>(0.0031308));
 }
 
+fn srgb_decode(x: vec3<f32>) -> vec3<f32> {
+    return select(pow((x + 0.055) / 1.055, vec3<f32>(2.4)), x / 12.92, x <= vec3<f32>(0.04045));
+}
+
 /// One image texel, premultiplied (the atlas holds straight alpha) so filtering doesn't darken edges.
+/// The atlas is plain UNORM: a texture's sRGB decode differs between drivers, so the shader
+/// decodes. Blending in sRGB encoding, a straight or opaque texel is its stored bytes as they are.
 fn image_texel(t: vec2<i32>, premultiplied: bool) -> vec4<f32> {
     let c = textureLoad(images, t, 0);
     if (g.flags.x > 0.5) {
         if (c.a <= 0.0) { return vec4<f32>(0.0); }
-        let lin = select(c.rgb, c.rgb / c.a, premultiplied);
-        return vec4<f32>(srgb_encode(lin) * c.a, c.a);
+        if (!premultiplied || c.a == 1.0) { return vec4<f32>(c.rgb * c.a, c.a); }
+        return vec4<f32>(srgb_encode(srgb_decode(c.rgb) / c.a) * c.a, c.a);
     }
-    if premultiplied { return c; }
-    return vec4<f32>(c.rgb * c.a, c.a);
+    let lin = srgb_decode(c.rgb);
+    if premultiplied { return vec4<f32>(lin, c.a); }
+    return vec4<f32>(lin * c.a, c.a);
 }
 
 // Arc length to the point nearest `p` (rect-local) on the centre line of a `bw`-wide ring inside

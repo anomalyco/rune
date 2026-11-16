@@ -15,8 +15,8 @@ impl std::fmt::Display for ImageError {
 }
 impl std::error::Error for ImageError {}
 
-/// Pixels are sRGB-encoded *linear-premultiplied* RGB plus linear alpha. Sampling with
-/// Rgba8UnormSrgb yields linear-premultiplied RGBA, including between mip levels.
+/// Pixels are sRGB-encoded *linear-premultiplied* RGB plus linear alpha. Decoding them as sRGB
+/// yields linear-premultiplied RGBA, including between mip levels.
 pub(crate) struct Mip {
     pub width: u32,
     pub height: u32,

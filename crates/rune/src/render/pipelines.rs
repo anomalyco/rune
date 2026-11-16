@@ -137,7 +137,8 @@ impl Renderer {
     }
 
     pub(super) fn image_texture(device: &wgpu::Device, width: u32, height: u32) -> wgpu::Texture {
-        Self::texture(device, "image atlas", wgpu::TextureFormat::Rgba8UnormSrgb, width, height)
+        // Plain UNORM: `image_texel` in the shader decodes the stored bytes itself.
+        Self::texture(device, "image atlas", wgpu::TextureFormat::Rgba8Unorm, width, height)
     }
 
     /// A sampled texture the CPU fills with `write_rows`.
