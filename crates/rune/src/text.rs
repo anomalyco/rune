@@ -684,6 +684,11 @@ impl TextSystem {
             return l;
         }
         self.shaped += 1;
+        static SHAPE_LOG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if *SHAPE_LOG.get_or_init(|| std::env::var_os("RUNE_SHAPE_LOG").is_some()) {
+            let t: String = text.chars().take(80).collect();
+            eprintln!("SHAPE {{\"g\":{g},\"size\":{},\"weight\":{},\"scale\":{scale},\"spans\":{},\"cached\":{cache},\"width\":\"{:?}\",\"base\":\"{:?}\",\"text\":{:?}}}", style.size, style.weight, spans.len(), max_width, base, t);
+        }
         crate::marks::add("text.shaped", 1);
         let _shape_ns = crate::marks::Timed::start("text.shape_ns", true);
         let _shape_time = crate::frame::profile::Scope::new(crate::frame::profile::Phase::Text);
