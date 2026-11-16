@@ -2,6 +2,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+#[cfg(feature="deferred-quit")]
+mod delivery;
+#[cfg(feature="deferred-quit")]
+mod closing;
+#[cfg(feature="deferred-quit")]
+pub(crate) use closing::announce;
+
 use windows_sys::Win32::Foundation::{
     CloseHandle, ERROR_ACCESS_DENIED, ERROR_BROKEN_PIPE, ERROR_FILE_NOT_FOUND, ERROR_IO_PENDING, ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED,
     GENERIC_READ, GENERIC_WRITE, GetLastError, HANDLE, HWND, INVALID_HANDLE_VALUE, LPARAM, WAIT_OBJECT_0,
@@ -58,6 +65,8 @@ pub(super) fn release() {
     if let Some(listener) = LISTENER.lock().unwrap_or_else(|e| e.into_inner()).take().filter(|_| woken) {
         listener.join().ok();
     }
+    #[cfg(feature="deferred-quit")]
+    if crate::deferred_quit::exiting(){closing::released();}
 }
 
 pub(super) fn claim(id: &str) -> bool {
@@ -106,21 +115,60 @@ pub(super) fn claim(id: &str) -> bool {
 #[cfg(feature="deferred-quit")]
 pub(crate) fn ui_claim(id: &str) -> crate::deferred_quit::Claim {
     use crate::deferred_quit::{ACK_WITHIN, Claim};
-    let deadline = Instant::now()+ACK_WITHIN;
     let name = wide(&pipe_name(id,0));
-    let wire = super::handoff::ui_message(deadline);
+    if let Some(pid)=crate::relaunch::handed_from() && crate::relaunch::alive(pid) {
+        if let Some(pipe)=wait_free(&name,pid) {claimed(name,pipe);return Claim::Primary;}
+    }
+    let mut deadline = Instant::now()+ACK_WITHIN;
+    let mut request=None;
     loop {
         match create(&name) {
             Ok(pipe) => { claimed(name,pipe); return Claim::Primary; }
-            Err(ERROR_ACCESS_DENIED) => {}
+            Err(ERROR_ACCESS_DENIED|ERROR_PIPE_BUSY) => {}
+            Err(_) if closing::announced(&name)=>return wait_announced(&name),
             Err(_) => return Claim::Unresponsive,
         }
-        match exchange(&name,deadline,|| wire.clone()) {
+        if closing::announced(&name){return wait_announced(&name)}
+        if request.is_none(){request=delivery::Request::new(deadline);}
+        let Some(req)=&request else{return Claim::Unresponsive};
+        match exchange(&name,deadline,|| req.wire.clone()) {
             Sent::UiDelivered => return Claim::Delivered,
             Sent::Delivered => return Claim::LegacyDelivery,
-            Sent::Gone | Sent::Quitting(_) if Instant::now() < deadline => continue,
-            _ => return Claim::Unresponsive,
+            Sent::Quitting(pid) => {
+                if let Some(pipe)=wait_free(&name,pid){claimed(name,pipe);return Claim::Primary;}
+                if crate::relaunch::alive(pid){return Claim::StillClosing;}
+                // A different successor may already own the name. Ask that owner,
+                // not the old UI, and do not reuse a spent request token.
+                request=None;deadline=Instant::now()+ACK_WITHIN;
+            },
+            Sent::Gone if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(1)),
+            _ if req.owner_won()=>return Claim::Delivered,
+            _ if closing::announced(&name)=>return wait_announced(&name),
+            _ => return match create(&name){Ok(pipe)=>{claimed(name,pipe);Claim::Primary},Err(_)=>Claim::Unresponsive},
         }
+    }
+}
+
+#[cfg(feature="deferred-quit")]
+fn wait_announced(name:&[u16])->crate::deferred_quit::Claim{
+    use crate::deferred_quit::{ACK_WITHIN,Claim};
+    let until=Instant::now()+HANDED_WAIT;
+    loop{
+        if let Ok(pipe)=create(name){claimed(name.to_vec(),pipe);return Claim::Primary}
+        if !closing::announced(name){
+            // The named event and the pipe are separate kernel handles. On
+            // force the OS can close either first. Retry ownership before IPC.
+            if let Ok(pipe)=create(name){claimed(name.to_vec(),pipe);return Claim::Primary}
+            let deadline=Instant::now()+ACK_WITHIN;
+            let Some(req)=delivery::Request::new(deadline) else{return Claim::StillClosing};
+            match exchange(name,deadline,||req.wire.clone()){
+                Sent::UiDelivered=>return Claim::Delivered,Sent::Delivered=>return Claim::LegacyDelivery,
+                Sent::Nobody if req.owner_won()=>return Claim::Delivered,
+                _=>{},
+            }
+        }
+        if Instant::now()>=until{return Claim::StillClosing}
+        std::thread::sleep(Duration::from_millis(4));
     }
 }
 
@@ -225,7 +273,7 @@ fn listen(pipe: HANDLE) {
             if connected && let Some(launch) = read(pipe) {
                 let quitting = crate::quit::quitting();
                 #[cfg(feature="deferred-quit")]
-                let ui = launch.answers.then(|| super::handoff::ui_answer(&launch.args)).flatten();
+                let ui = launch.answers.then(|| delivery::answer(&launch.args)).flatten();
                 if launch.answers {
                     let answer = [if quitting { QUITTING } else { ACCEPTED }];
                     #[cfg(feature="deferred-quit")]
@@ -329,7 +377,7 @@ fn send(name: &[u16]) -> Sent {
 }
 
 fn exchange(name: &[u16], deadline: Instant, payload: impl FnOnce() -> Vec<u8>) -> Sent {
-    let left = || u32::try_from(deadline.saturating_duration_since(Instant::now()).as_millis()).unwrap_or(u32::MAX);
+    let left = || wait_ms(deadline);
     let pipe = loop {
         // SAFETY: `name` is NUL-terminated; opens the pipe's client end, overlapped so the
         // answer can be waited for with a deadline.
@@ -342,9 +390,7 @@ fn exchange(name: &[u16], deadline: Instant, payload: impl FnOnce() -> Vec<u8>) 
             ERROR_FILE_NOT_FOUND => return Sent::Gone,
             // Another launch is talking to it: wait for the pipe to be free.
             // SAFETY: `name` is NUL-terminated.
-            ERROR_PIPE_BUSY if left() > 0 => unsafe {
-                WaitNamedPipeW(name.as_ptr(), left());
-            },
+            ERROR_PIPE_BUSY => {let ms=left();if ms==0{return Sent::Nobody}unsafe {WaitNamedPipeW(name.as_ptr(),ms);}},
             _ => return Sent::Nobody,
         }
     };
@@ -361,6 +407,8 @@ fn exchange(name: &[u16], deadline: Instant, payload: impl FnOnce() -> Vec<u8>) 
     if server != 0 && !crate::relaunch::alive(server) {
         // SAFETY: the client handle, closed once.
         unsafe { CloseHandle(pipe) };
+        #[cfg(feature="deferred-quit")]
+        if crate::deferred_quit::hooks().is_some() { return Sent::Gone; }
         return Sent::Nobody;
     }
     let message = payload();
@@ -386,8 +434,14 @@ fn exchange(name: &[u16], deadline: Instant, payload: impl FnOnce() -> Vec<u8>) 
         (Some(1), b'R') => Sent::UiDelivered,
         (Some(1), ACCEPTED) => Sent::Delivered,
         (Some(1), QUITTING) => Sent::Quitting(server),
+        #[cfg(feature="deferred-quit")]
+        (None,_) if crate::deferred_quit::hooks().is_some() && server!=0 && !crate::relaunch::alive(server) => Sent::Gone,
         _ => Sent::Nobody,
     }
+}
+
+fn wait_ms(deadline:Instant)->u32 {
+    deadline.saturating_duration_since(Instant::now()).as_nanos().div_ceil(1_000_000).try_into().unwrap_or(u32::MAX-1)
 }
 
 /// One overlapped read or write on `pipe`, waited for until `deadline`: the bytes it moved, or
@@ -402,7 +456,7 @@ fn io(pipe: HANDLE, deadline: Instant, start: impl FnOnce(*mut OVERLAPPED) -> i3
     // operation is done or cancelled and waited for.
     let mut o: OVERLAPPED = unsafe { std::mem::zeroed() };
     o.hEvent = event;
-    let left = u32::try_from(deadline.saturating_duration_since(Instant::now()).as_millis()).unwrap_or(u32::MAX);
+    let left = wait_ms(deadline);
     // SAFETY: `o` outlives the operation: it's waited for, or cancelled and waited for, below.
     unsafe {
         let started = start(&mut o) != 0 || GetLastError() == ERROR_IO_PENDING;

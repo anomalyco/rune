@@ -160,9 +160,15 @@ pub(crate) enum WakeEvent {
 /// What `Windows` needs of a host, whatever its state type: an app window or an overlay.
 pub(crate) trait AnyHost {
     #[cfg(all(feature = "deferred-quit", any(windows, target_os = "macos", target_os = "linux")))]
-    fn suspend_quit(&mut self, _el: &ActiveEventLoop) -> Option<deferred::Reveal> { self.vanish(); None }
+    fn quit_reveal(&self) -> deferred::Reveal { deferred::Reveal::Hidden }
     #[cfg(all(feature = "deferred-quit", any(windows, target_os = "macos", target_os = "linux")))]
-    fn restore_quit(&mut self, _el: &ActiveEventLoop, _reveal: deferred::Reveal) {}
+    fn suspend_quit(&mut self, _el: &ActiveEventLoop) { self.vanish(); }
+    #[cfg(all(feature = "deferred-quit", any(windows, target_os = "macos", target_os = "linux")))]
+    fn drain_saving(&mut self) {}
+    #[cfg(all(feature="deferred-quit",any(windows,target_os="macos",target_os="linux")))]
+    fn committed_quit(&mut self) {}
+    #[cfg(all(feature = "deferred-quit", any(windows, target_os = "macos", target_os = "linux")))]
+    fn restore_quit(&mut self, _el: &ActiveEventLoop, _reveal: deferred::Reveal, _paused: Duration) {}
     #[cfg(all(feature = "deferred-quit", any(windows, target_os = "macos", target_os = "linux")))]
     fn close_one(&mut self, _el: &ActiveEventLoop) {}
     #[cfg(all(feature = "deferred-quit", any(windows, target_os = "macos", target_os = "linux")))]
@@ -232,9 +238,17 @@ impl Windows {
         if self.factory.is_some() { return; }
         loop {
             let specs = crate::windows::flatten(crate::windows::take_opened());
+            #[cfg(all(feature = "deferred-quit", any(windows, target_os = "macos", target_os = "linux")))]
+            let specs = if !self.deferred.pending() && !self.deferred.parked.is_empty() {
+                let mut delayed = std::mem::take(&mut self.deferred.parked); delayed.extend(specs); delayed
+            } else { specs };
             if specs.is_empty() { return; }
             let wayland = is_wayland(event_loop);
             for spec in specs {
+                #[cfg(all(feature = "deferred-quit", any(windows, target_os = "macos", target_os = "linux")))]
+                if self.deferred.pending() && self.deferred.status.as_deref() != Some(spec.key()) {
+                    self.deferred.parked.push(spec); continue;
+                }
                 if self.hosts.iter().flatten().any(|h| h.key() == Some(spec.key())) {
                     eprintln!("rune: a window keyed {:?} is already open", spec.key());
                     continue;
@@ -373,6 +387,8 @@ struct Host<S: 'static> {
     /// `App::on_rest`.
     on_rest: Option<fn(&mut S, &mut Tx) -> bool>,
     on_quit: Option<fn(&mut S, &mut Tx)>,
+    #[cfg(all(feature="deferred-quit",any(windows,target_os="macos",target_os="linux")))]
+    on_quit_committed: Option<fn(&mut S)>,
     /// `App::turn_scope`, and whether a turn is in it now.
     turn_scope: Option<crate::app::TurnScope<S>>,
     turn: any_host::Turn,
@@ -449,6 +465,8 @@ impl<S: 'static> Host<S> {
         let (open, keep_running, on_close, release_gpu) = (app.open, app.keep_running, app.on_close, app.release_gpu);
         let on_rest = app.on_rest;
         let (on_reopen, on_quit, turn_scope) = (app.on_reopen, app.on_quit, app.turn_scope);
+        #[cfg(all(feature="deferred-quit",any(windows,target_os="macos",target_os="linux")))]
+        let on_quit_committed=app.on_quit_committed;
         #[cfg(target_os = "macos")]
         let present_log = args.trace.as_ref().map(|_| Arc::default());
         let mut app = app;
@@ -538,6 +556,8 @@ impl<S: 'static> Host<S> {
             on_close,
             on_rest,
             on_quit,
+            #[cfg(all(feature="deferred-quit",any(windows,target_os="macos",target_os="linux")))]
+            on_quit_committed,
             #[cfg(all(feature = "deferred-quit", any(windows, target_os = "macos", target_os = "linux")))] slot,
             turn_scope,
             turn: any_host::Turn::Between,

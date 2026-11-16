@@ -123,7 +123,9 @@ impl Windows {
     pub(super) fn turn(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
         use winit::application::ApplicationHandler;
         let now = std::time::Instant::now();
-        for host in self.hosts.iter_mut().flatten() {
+        for (i,h) in self.hosts.iter_mut().enumerate() {
+            #[cfg(all(feature="deferred-quit",any(windows,target_os="macos",target_os="linux")))] if self.deferred.parked_host(i){continue;}
+            let Some(host)=h else{continue};
             if let Some(due) = host.wake_deadline().filter(|&due| due <= now) {
                 host.new_events(event_loop, winit::event::StartCause::ResumeTimeReached { start: due, requested_resume: due });
             }

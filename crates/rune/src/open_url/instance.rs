@@ -97,6 +97,8 @@ mod handoff;
 mod windows;
 #[cfg(all(feature="deferred-quit",target_os="windows"))]
 pub(crate) use windows::ui_claim;
+#[cfg(all(feature="deferred-quit",windows))]
+pub(crate) use windows::announce as announce_exit;
 #[cfg(all(feature="deferred-quit",target_os="linux"))]
 pub(crate) use linux::ui_claim;
 

@@ -66,16 +66,21 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
         WM_QUERYENDSESSION => {
             #[cfg(feature="deferred-quit")]
             if let Some(hooks) = super::deferred::hooks() {
-                if super::deferred::terminal() { return TRUE as LRESULT; }
+                use super::deferred::session::{self,Query};
+                if session::current()==Query::Allowed || super::deferred::exiting() { return TRUE as LRESULT; }
                 use windows_sys::Win32::System::Shutdown::ShutdownBlockReasonCreate;
                 let reason: Vec<u16>=(hooks.shutdown_reason)().encode_utf16().take(255).chain(Some(0)).collect();
                 // SAFETY: the reason is NUL terminated; this is the session window's own thread.
                 unsafe { ShutdownBlockReasonCreate(hwnd,reason.as_ptr()); }
-                super::deferred::system_query();
+                session::ask();
                 // As for the existing session hook, do not dispatch a nested event while a Rune
                 // handler is running. A query is permission, not the final end of the session.
-                if super::loop_state() == Loop::Idle { run_query_loop(); }
-                return super::deferred::terminal() as LRESULT;
+                if super::loop_state() == Loop::Idle { run_query_loop(); } else {
+                    // A menu owns the nested dispatch; don't borrow the handler
+                    // twice. Unwind it and let the save complete after our veto.
+                    unsafe { EndMenu(); }
+                }
+                return session::answered() as LRESULT;
             }
             answer(false);
             TRUE as LRESULT
@@ -84,9 +89,10 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
             #[cfg(feature="deferred-quit")]
             if super::deferred::hooks().is_some() {
                 if w != 0 {
-                    if !super::deferred::terminal() { std::process::exit(2); }
+                    if super::deferred::exiting(){return 0}
+                    if super::deferred::session::current()!=super::deferred::session::Query::Allowed { super::deferred::commit_exit();std::process::exit(2); }
                     super::deferred::session_ends();
-                } else { clear_reason(); super::deferred::cancel_system_query(); }
+                } else { clear_reason(); super::deferred::session::cancel(); }
                 return 0;
             }
             if w != 0 {
@@ -105,7 +111,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
 #[cfg(feature="deferred-quit")]
 fn run_query_loop() {
     let until=Instant::now()+Duration::from_secs(2);
-    while !super::deferred::terminal() && Instant::now()<until {
+    while super::deferred::session::current()==super::deferred::session::Query::Asking && Instant::now()<until {
         // SAFETY: same UI thread and message pump as run_loop. Preserve WM_QUIT for winit.
         unsafe {
             let mut msg:MSG=std::mem::zeroed();
