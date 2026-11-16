@@ -324,7 +324,7 @@ impl<S: 'static> Runtime<S> {
                 let words = words.trim();
                 !words.is_empty() && t.cold.links.is_empty() && name.contains(words)
             }
-            None => n.label.as_deref().is_none_or(|l| l.trim().is_empty()) && n.vis.grid.is_none(),
+            None => n.label.as_deref().is_none_or(|l| l.trim().is_empty() || name.contains(l.trim())) && n.vis.grid.is_none(),
         }
     }
 
