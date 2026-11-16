@@ -420,15 +420,27 @@ pub(super) struct ScrollState {
     pub(super) nudge: scroll_nudge::Nudge,
 }
 
-/// A scroll viewport's horizontal offset, momentum velocity and limit (points).
+/// What moves a viewport's horizontal offset, one motion at a time.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(super) enum XMotion {
+    /// Where a hand, an app or a motion left it.
+    #[default]
+    Rest,
+    /// Coasting from a fling or a touch at `v` points a second, decaying.
+    Momentum(f32),
+    /// Gliding on a spring (`ScrollState::glide_spring`) at `v` points a second to `aim`
+    /// (`Tx::scroll_to`).
+    Glide { v: f32, aim: f64 },
+    /// Easing to where a notched mouse wheel sent it (`runtime/scroll/wheel.rs`).
+    Wheel(scroll_wheel::WheelCurve),
+}
+
+/// A scroll viewport's horizontal offset, motion and limit (points).
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct AxisScroll {
     pub(super) offset: f64,
-    pub(super) v: f32,
+    pub(super) motion: XMotion,
     pub(super) max: f64,
-    /// Velocity of a glide to `aim` (`Tx::scroll_to`) while one runs.
-    pub(super) glide: Option<f32>,
-    pub(super) aim: f64,
     /// The viewport's flow (`El::dir`): right to left, its content starts at its right edge and
     /// `offset` counts how far it moved right, uncovering what is to the left.
     pub(super) flow: crate::el::Flow,
@@ -445,6 +457,21 @@ impl AxisScroll {
     /// `offset`.
     pub(super) fn toward(&self, delta: f64) -> f64 {
         match self.flow { crate::el::Flow::Ltr => -delta, crate::el::Flow::Rtl => delta }
+    }
+
+    /// Its momentum (points a second), 0 unless coasting.
+    pub(super) fn coast(&self) -> f32 {
+        match self.motion { XMotion::Momentum(v) => v, _ => 0.0 }
+    }
+
+    /// A glide or a wheel's ease moves it on its own.
+    pub(super) fn carried(&self) -> bool {
+        matches!(self.motion, XMotion::Glide { .. } | XMotion::Wheel(_))
+    }
+
+    /// Coasting at `v` from here; at 0 a coast stops, and a glide or a wheel's ease runs on.
+    pub(super) fn set_coast(&mut self, v: f32) {
+        if v != 0.0 { self.motion = XMotion::Momentum(v); } else if matches!(self.motion, XMotion::Momentum(_)) { self.motion = XMotion::Rest; }
     }
 }
 

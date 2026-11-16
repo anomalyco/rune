@@ -190,6 +190,8 @@ mod scroll_mode;
 use scroll_mode::ScrollMode;
 #[path = "runtime/scroll/watch.rs"]
 mod scroll_watch;
+#[path = "runtime/scroll/wheel.rs"]
+mod scroll_wheel;
 #[doc(hidden)]
 pub use scroll_watch::scroll_watch_state;
 #[path = "runtime/input/autoscroll.rs"]
@@ -422,7 +424,7 @@ pub(crate) use commit_why::CommitWhy;
 #[cfg(debug_assertions)]
 pub(crate) use layout_read::window_read_key;
 pub(crate) use types::{AnimSource, Node};
-use types::{AxisScroll, GlideTo, Inh, NodeCold, RowLayout, ScaleMotion, ScrollState, Stack, WidthHold};
+use types::{AxisScroll, GlideTo, Inh, NodeCold, RowLayout, ScaleMotion, ScrollState, Stack, WidthHold, XMotion};
 #[path = "runtime/motion/tracks.rs"]
 mod tracks;
 use tracks::{SCROLL_DECAY, mark_ancestors, scroll_offsets};
@@ -627,6 +629,8 @@ pub struct Runtime<S: 'static> {
     scrolls: HashMap<NodeId, ScrollState>,
     /// The axis the current wheel or trackpad gesture scrolls (`runtime/scroll/x.rs`).
     wheel_lock: scroll_x::WheelLock,
+    /// Whole notches of a mouse wheel ease where the platform's browsers do (`Runtime::set_wheel_glide`).
+    wheel_glide: bool,
     /// The finger that is down and the viewport a touch holds (`runtime/input/touch.rs`).
     touch: touch_input::Touch,
     grows: HashMap<NodeId, GrowTrack>,
@@ -1021,6 +1025,7 @@ impl<S: 'static> Runtime<S> {
             seen: Vec::new(),
             scrolls: HashMap::default(),
             wheel_lock: Default::default(),
+            wheel_glide: true,
             touch: Default::default(),
             grows: HashMap::default(),
             stacks: HashMap::default(),

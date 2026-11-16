@@ -423,7 +423,8 @@ impl<S: 'static> Runtime<S> {
     /// Scrolls by a delta no `on_wheel` handler took, on the axis the gesture locked to.
     /// `phased` is that delta's own gesture's policy, which a delta queued before a newer
     /// gesture began keeps.
-    pub(super) fn wheel_scroll_for(&mut self, gesture: Attempt, x: f32, y: f32, dx: f32, dy: f32, phased: bool, start: crate::runtime::gesture_dispatch::WheelStart) {
+    pub(super) fn wheel_scroll_for(&mut self, gesture: Attempt, ev: crate::WheelEvent, phased: bool, start: crate::runtime::gesture_dispatch::WheelStart) {
+        let (x, y, dx, dy) = (ev.x, ev.y, ev.dx, ev.dy);
         if dx == 0.0 && dy == 0.0 { return; }
         self.wheel_lock.sync_gesture(gesture);
         // Without phases, a delta wholly on the other axis is another wheel turning (Shift let
@@ -435,7 +436,11 @@ impl<S: 'static> Runtime<S> {
                 self.wheel_lock.repick(gesture, scroller)
             }
         };
-        if horizontal { if dx != 0.0 { self.wheel_x(gesture, x, y, dx); } } else if dy != 0.0 { self.wheel_from(x, y, dy, start); }
+        if horizontal {
+            if dx != 0.0 { self.wheel_x(gesture, x, y, dx, ev.notch); }
+        } else if dy != 0.0 {
+            if ev.notch { self.wheel_notch(x, y, dy, start) } else { self.wheel_from(x, y, dy, start) }
+        }
     }
 
     /// The platform began a trackpad gesture (winit's `TouchPhase::Started` on a wheel event):
@@ -463,8 +468,9 @@ impl<S: 'static> Runtime<S> {
     }
 
     /// Scrolls the horizontal viewport latched for `gesture` (or the innermost one at (x, y)) by
-    /// `dx` points, 1:1.
-    fn wheel_x(&mut self, gesture: Attempt, x: f32, y: f32, dx: f32) {
+    /// `dx` points: 1:1, or for whole notches of a wheel eased there as the vertical axis does
+    /// (`Self::wheel_notch`).
+    fn wheel_x(&mut self, gesture: Attempt, x: f32, y: f32, dx: f32, notch: bool) {
         self.release_hover_hold();
         self.dismiss_help();
         let latched = match self.wheel_lock.owner_of(gesture) { Some(WheelOwner::Horizontal(id)) => Some(*id), _ => None }.filter(|id| {
@@ -473,11 +479,22 @@ impl<S: 'static> Runtime<S> {
             })
         });
         let Some(id) = latched.or_else(|| self.scroll_at_axis(x, y, true)) else { return };
+        let glides = notch && self.wheel_glides();
+        let scale = f64::from(self.env.scale * self.zoom());
         let Some(st) = self.scrolls.get_mut(&id) else { return };
         let before = st.x.offset;
+        if glides {
+            let mut curve = match st.x.motion { XMotion::Wheel(c) => c, _ => scroll_wheel::WheelCurve::new(st.x.offset, st.x.offset, scale) };
+            let to = (curve.target() + st.x.toward(f64::from(dx))).clamp(0.0, st.x.max);
+            if !curve.retarget(to, scale) { return; }
+            st.x.motion = XMotion::Wheel(curve);
+            st.moved();
+            log_event!(self, "wheel-x-notch {dx:.1}");
+            self.scroll_cancels_press(id);
+            return;
+        }
         st.x.offset = (st.x.offset + st.x.toward(f64::from(dx))).clamp(0.0, st.x.max);
-        st.x.v = 0.0;
-        st.x.glide = None;
+        st.x.motion = XMotion::Rest;
         st.moved();
         log_event!(self, "wheel-x {dx:.1}");
         if st.x.offset != before { self.scroll_cancels_press(id); }
@@ -495,8 +512,7 @@ impl<S: 'static> Runtime<S> {
         self.dismiss_help();
         let Some(id) = self.scroll_at_axis(x, y, true) else { return };
         if let Some(st) = self.scrolls.get_mut(&id) {
-            st.x.v = st.x.toward(f64::from(vx)) as f32;
-            st.x.glide = None;
+            st.x.motion = XMotion::Momentum(st.x.toward(f64::from(vx)) as f32);
             log_event!(self, "fling-x {vx:.0}");
             if vx != 0.0 { self.scroll_cancels_press(id); }
         }
@@ -519,19 +535,33 @@ impl<S: 'static> Runtime<S> {
         let id = self.nodes[i].id;
         let overflow = self.scroll_overflow_x(i);
         if let Some(active) = self.step_touch_scroll(id, overflow, dt, true) { return active; }
+        let scale = f64::from(self.env.scale * self.zoom());
+        let land_wheel = !self.wheel_glides();
         let Some(st) = self.scrolls.get_mut(&id) else { return false };
         st.x.max = overflow.max(0.0);
         let mut moving = false;
-        if st.x.glide.is_some() {
-            moving = scroll_offset::glide_axis(st.glide_spring(), &mut st.x.offset, &mut st.x.glide, st.x.aim.min(st.x.max), dt);
-        } else if st.x.v.abs() > 1.0 {
-            let decay = (-SCROLL_DECAY * dt).exp();
-            st.x.offset += f64::from(st.x.v * (1.0 - decay) / SCROLL_DECAY);
-            st.x.v *= decay;
-            if st.x.offset <= 0.0 || st.x.offset >= st.x.max { st.x.v = 0.0; }
-            moving = true;
-        } else {
-            st.x.v = 0.0;
+        match st.x.motion {
+            XMotion::Glide { v, aim } => {
+                let mut glide = Some(v);
+                moving = scroll_offset::glide_axis(st.glide_spring(), &mut st.x.offset, &mut glide, aim.min(st.x.max), dt);
+                st.x.motion = glide.map_or(XMotion::Rest, |v| XMotion::Glide { v, aim });
+            }
+            XMotion::Momentum(v) if v.abs() > 1.0 => {
+                let decay = (-SCROLL_DECAY * dt).exp();
+                st.x.offset += f64::from(v * (1.0 - decay) / SCROLL_DECAY);
+                let edge = st.x.offset <= 0.0 || st.x.offset >= st.x.max;
+                st.x.motion = if edge { XMotion::Rest } else { XMotion::Momentum(v * decay) };
+                moving = true;
+            }
+            XMotion::Momentum(_) => st.x.motion = XMotion::Rest,
+            XMotion::Wheel(mut curve) => {
+                if curve.target() > st.x.max { curve.retarget(st.x.max, scale); }
+                curve.advance(if land_wheel { f64::INFINITY } else { f64::from(dt) });
+                st.x.offset = curve.value();
+                st.moved();
+                if curve.done() { st.x.motion = XMotion::Rest; } else { st.x.motion = XMotion::Wheel(curve); moving = true; }
+            }
+            XMotion::Rest => {}
         }
         st.x.offset = st.x.offset.clamp(0.0, st.x.max);
         moving
@@ -564,8 +594,7 @@ impl<S: 'static> Runtime<S> {
         let offset = scroll_edge::reveal(st.x.offset, left, width, viewport, margin).clamp(0.0, max);
         if offset == st.x.offset { return; }
         st.x.offset = offset;
-        st.x.v = 0.0;
-        st.x.glide = None;
+        st.x.motion = XMotion::Rest;
         st.moved();
     }
 }
