@@ -1,7 +1,7 @@
 //! Windows: what a window does once its first frame is up runs one piece a turn, and none while
 //! input waits. The pieces: the app's `on_ready`, the drop target and session-lock hooks, the GPU's
-//! start, the accessibility adapter, then the outlines the app asked to have built ahead
-//! (`text::warm_outlines`), a slice a turn. Run together, in the first idle turn, they held the UI
+//! start, the accessibility adapter, then text work the app asked for ahead: a view's text to
+//! lay out (`Tx::prepare_text`) or outlines to build (`text::warm_outlines`), a slice a turn. Run together, in the first idle turn, they held the UI
 //! thread for 30-50 ms, so a click or key that came as the first frame showed waited behind all of
 //! them. Between pieces winit takes what's in the queue, and the frame it asks for comes first.
 use super::*;
@@ -49,12 +49,12 @@ impl<S: 'static> Host<S> {
             }
             Chores::Done if self.gpu_owed() => self.cpu_idle(),
             Chores::Done if self.a11y_owed() => self.a11y_after_frame(),
-            Chores::Done => { self.rt.warm_text(); }
+            Chores::Done => { self.rt.text_idle_turn(); }
         }
         self.post_frame_owed()
     }
 
     fn post_frame_owed(&self) -> bool {
-        self.chores != Chores::Done || self.gpu_owed() || self.a11y_owed() || self.rt.text.warm_owed()
+        self.chores != Chores::Done || self.gpu_owed() || self.a11y_owed() || self.rt.text_idle_owed()
     }
 }

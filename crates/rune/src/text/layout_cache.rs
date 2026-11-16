@@ -142,6 +142,26 @@ impl TextSystem {
         self.glyph_cache.drop_orphans();
     }
 
+    /// The keys of the layouts held now, for [`Self::keep_prepared`].
+    pub(crate) fn layout_keys(&self) -> std::collections::HashSet<u64> {
+        self.layouts.keys().copied().collect()
+    }
+
+    /// Keeps at most `budget` bytes of the layouts made since `before` was read, by the cache's
+    /// own count, dropping the largest past it so the most texts stay; how many it kept.
+    pub(crate) fn keep_prepared(&mut self, before: &std::collections::HashSet<u64>, budget: usize) -> usize {
+        let mut added: Vec<(u64, usize)> = self.layouts.iter().filter(|(k, _)| !before.contains(k)).map(|(k, e)| (*k, e.cost as usize)).collect();
+        added.sort_unstable_by_key(|&(k, cost)| (cost, k));
+        let (mut used, mut kept) = (0, 0);
+        for (k, cost) in added {
+            used += cost;
+            if used > budget { self.layouts.remove(&k); } else { kept += 1; }
+        }
+        let layouts = &self.layouts;
+        self.shapes.retain(|_, key| layouts.contains_key(key));
+        kept
+    }
+
     #[inline]
     pub(crate) fn get_elision(&mut self, key: u64) -> Option<CachedElision> {
         let g = self.generation;

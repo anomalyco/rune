@@ -622,6 +622,29 @@ impl Tx {
         self.font_families = Some((sans.into(), mono.into()));
     }
 
+    /// Shapes and breaks the text of `view`, laid out at `size` (points) as this window would
+    /// lay it out, into the window's layout cache in its next idle turn, without mounting it:
+    /// nothing draws, hits, animates or is announced, and no handler runs. A view shown later with
+    /// the same texts at the same widths finds them laid out. At most about 1 MiB of layouts by
+    /// the cache's own count; what no view shows goes as other stale layouts do, and all of it at
+    /// the window's next rest. One request is held, the latest; it is for the window whose state
+    /// `view` reads. For a page about to show (the session under a resting pointer).
+    pub fn prepare_text<S: 'static>(&mut self, view: fn(&S, &mut crate::Cx<S>) -> crate::El, size: (f32, f32)) {
+        PREPARE.with_borrow_mut(|a| *a = Some((Box::new(view), size)));
+    }
+
+    /// Takes `prepare_text`'s request if it is for a window of state `S`.
+    pub(crate) fn take_prepared<S: 'static>() -> Option<(fn(&S, &mut crate::Cx<S>) -> crate::El, (f32, f32))> {
+        if !Self::prepare_owed::<S>() { return None; }
+        let (view, size) = PREPARE.with_borrow_mut(Option::take)?;
+        Some((*view.downcast::<fn(&S, &mut crate::Cx<S>) -> crate::El>().ok()?, size))
+    }
+
+    /// Whether `prepare_text` holds a request for a window of state `S`.
+    pub(crate) fn prepare_owed<S: 'static>() -> bool {
+        PREPARE.with_borrow(|a| a.as_ref().is_some_and(|(view, _)| view.is::<fn(&S, &mut crate::Cx<S>) -> crate::El>()))
+    }
+
     fn frame_request(&mut self, request: crate::window::frame::FrameRequest) {
         self.window_frame = Some(self.window_frame.unwrap_or_default().merge(request));
     }
@@ -719,4 +742,9 @@ impl Tx {
     pub fn color_motion(&mut self, spring: Spring) {
         self.color_motion = Some(spring);
     }
+}
+
+thread_local! {
+    /// `Tx::prepare_text`'s latest request on this thread: the view, boxed, and its size in points.
+    static PREPARE: std::cell::RefCell<Option<(Box<dyn std::any::Any>, (f32, f32))>> = const { std::cell::RefCell::new(None) };
 }

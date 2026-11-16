@@ -288,9 +288,9 @@ impl<S: 'static> Host<S> {
         // adapter, one a turn, none while input waits; the loop turns again while some are owed.
         #[cfg(target_os = "windows")]
         return self.post_frame_turn();
-        // Elsewhere `on_ready` ran with the first frame; outlines asked for since build a slice a turn.
+        // Elsewhere `on_ready` ran with the first frame; text work asked for since runs a slice a turn.
         #[cfg(not(target_os = "windows"))]
-        { !crate::marks::counting() && self.rt.text.warm_owed() && self.rt.warm_text() }
+        { !crate::marks::counting() && self.rt.text_idle_owed() && self.rt.text_idle_turn() }
     }
 
     fn resumed_in_turn(&mut self, event_loop: &ActiveEventLoop) {
