@@ -330,7 +330,7 @@ fn icon_coverage_at(icon: &Icon, px: u32, size: f32, origin: Point, grid: SvgGri
                 super::area::Op::FillRRect { lo, hi, r } => {
                     let start = [lo.x.floor() as i32, lo.y.floor() as i32];
                     let parity = if bounded { start.map(|v| v.rem_euclid(2) as u32) } else { grid.parity() };
-                    super::convex::fill_rrect([lo.x, lo.y], [hi.x, hi.y], r, parity, px, &mut buf);
+                    super::convex::fill_rrect([lo.x, lo.y], [hi.x, hi.y], r, parity, px, bounded, &mut buf);
                     if bounded {
                         let end = [hi.x.ceil() as i32, hi.y.ceil() as i32];
                         for (y, row) in buf.chunks_exact_mut(px as usize).enumerate() {

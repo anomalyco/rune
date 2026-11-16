@@ -190,6 +190,8 @@ impl<S: 'static> Runtime<S> {
                 let at = [on_grid(r_exact[0] + (w_exact - exact) * 0.5, contain[0]), on_grid(r_exact[1] + (h_exact - exact) * 0.5, contain[1])];
                 let cycle = n.looping.as_ref().and_then(|l| match l.kind { rune_motion::LoopKind::OpacityCycle(c) => Some(c), _ => None });
                 let grid = crate::text::SvgGrid::placed(at, !self.reduced_motion && cycle.is_some(), n.vis.opacity < 1.0 || cycle.is_some_and(|c| c.still < 1.0));
+                // That layer composites at an 8-bit alpha (`saveLayerAlpha`).
+                let o = if matches!(grid, crate::text::SvgGrid::Translucent(_)) { (o * 255.0).round() / 255.0 } else { o };
                 if let Some(q) = self.text.icon_quad_sized(ic, (canvas, exact), at, facing, grid) {
                     self.push_icon(icon_inst(&q, at, canvas as f32, 0.0, premul(color, o, srgb), clip, fade));
                 }

@@ -46,6 +46,12 @@ pub(super) fn gradient(pts: &[[f32; 2]], tri: [usize; 3], a: impl Fn(usize) -> f
 /// Each triangle of `indices` over `pts` (device pixels, `origin` off the canvas), shaded by
 /// `shade(triangle, barycentric weights, pixel)` and blended over.
 pub(super) fn rasterize(pts: &[[f32; 2]], indices: &[usize], origin: [f32; 2], px: u32, out: &mut [u8], shade: impl Fn([usize; 3], [f64; 3], [i64; 2]) -> f32) {
+    rasterize_into(pts, indices, origin, px, out, false, shade);
+}
+
+/// [`rasterize`], storing a coverage exactly between two bytes as the lower one when
+/// `half_down`: what a GPU's float-to-unorm conversion stores in an 8-bit layer.
+pub(super) fn rasterize_into(pts: &[[f32; 2]], indices: &[usize], origin: [f32; 2], px: u32, out: &mut [u8], half_down: bool, shade: impl Fn([usize; 3], [f64; 3], [i64; 2]) -> f32) {
     let n = px as usize;
     let mut acc = vec![0f32; n * n];
     // Fixed point, 8 bits of subpixel.
@@ -81,7 +87,8 @@ pub(super) fn rasterize(pts: &[[f32; 2]], indices: &[usize], origin: [f32; 2], p
         }
     }
     for (o, a) in out.iter_mut().zip(acc) {
-        *o = (a.clamp(0.0, 1.0) * 255.0).round() as u8;
+        let v = a.clamp(0.0, 1.0) * 255.0;
+        *o = if half_down { (v - 0.5).ceil() } else { v.round() } as u8;
     }
 }
 

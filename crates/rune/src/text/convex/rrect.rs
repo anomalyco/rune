@@ -5,7 +5,7 @@
 //! quad, which is where the window's pixel grid comes in: `parity` is the canvas's origin, odd
 //! or even, on it.
 
-use super::raster::{gradient, rasterize};
+use super::raster::{gradient, rasterize, rasterize_into};
 
 /// One of the op's 40 vertices (`kVertexData`): its corner (top-left, top-right, bottom-right,
 /// bottom-left), where on that corner it sits, how it bloats for antialiasing, its coverage and
@@ -127,7 +127,7 @@ fn sign(v: f32) -> f32 {
 
 /// Covers `out` (`px` × `px`, cleared first) with the round rect `[lo, hi]` (canvas device
 /// pixels) whose corners are `r` device pixels round, filled antialiased.
-pub(in super::super) fn fill_rrect(lo: [f32; 2], hi: [f32; 2], r: f32, parity: [u32; 2], px: u32, out: &mut [u8]) {
+pub(in super::super) fn fill_rrect(lo: [f32; 2], hi: [f32; 2], r: f32, parity: [u32; 2], px: u32, half_down: bool, out: &mut [u8]) {
     let half = [(hi[0] - lo[0]) * 0.5, (hi[1] - lo[1]) * 0.5];
     let center = [lo[0] + half[0], lo[1] + half[1]];
     let pixel = [1.0 / half[0], 1.0 / half[1]];
@@ -196,7 +196,7 @@ pub(in super::super) fn fill_rrect(lo: [f32; 2], hi: [f32; 2], r: f32, parity: [
             (false, [arc[0] + 1.0, arc[1]])
         });
     }
-    rasterize(&pts, &INDICES, [0.0, 0.0], px, out, |tri, w, at| {
+    rasterize_into(&pts, &INDICES, [0.0, 0.0], px, out, half_down, |tri, w, at| {
         let lerp = |k: usize| (0..3).map(|i| w[i] * vary[tri[i]].1[k] as f64).sum::<f64>();
         if vary[tri[0]].0 {
             return lerp(1) as f32;
