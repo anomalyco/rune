@@ -52,11 +52,18 @@ impl Slot {
                 // SAFETY: the swap chain's live object; a zero timeout only polls it (and takes its
                 // count when it's signalled).
                 if unsafe { WaitForSingleObject(object, 0) } == WAIT_OBJECT_0 {
+                    #[cfg(feature = "frame-profile")]
+                    crate::frame::live_log::mark("slot.signalled");
                     *self = Slot::Free;
                     return Take::Draw;
                 }
                 match Wait::register(object, Box::new(wake)) {
-                    Some(wait) => { *self = Slot::Waiting(wait); Take::Later }
+                    Some(wait) => {
+                        #[cfg(feature = "frame-profile")]
+                        crate::frame::live_log::mark("slot.registered");
+                        *self = Slot::Waiting(wait);
+                        Take::Later
+                    }
                     // No thread-pool wait: draw, and let `acquire` find what it finds.
                     None => { *self = Slot::Free; Take::Draw }
                 }
@@ -132,6 +139,8 @@ impl Drop for Wait {
 }
 
 unsafe extern "system" fn came(context: *mut c_void, _timed_out: BOOLEAN) {
+    #[cfg(feature = "frame-profile")]
+    crate::frame::live_log::mark(if _timed_out != 0 { "slot.timeout" } else { "slot.came" });
     // SAFETY: the `Box` `register` made, alive until the wait is unregistered.
     let wake = unsafe { &*(context as *const Box<dyn Fn() + Send>) };
     wake();

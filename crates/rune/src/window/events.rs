@@ -156,6 +156,8 @@ impl<S: 'static> Host<S> {
             WakeEvent::FrameSlot(_) => {
                 // The frame that waited for room in the swap chain draws now, after the input
                 // that came meanwhile.
+                #[cfg(feature = "frame-profile")]
+                crate::frame::live_log::mark("slot.wake");
                 if let Some(w) = &mut self.win && matches!(w.native.slot, super::slot::Slot::Waiting(_)) {
                     w.native.slot.came_back();
                     w.request_redraw();
@@ -416,6 +418,8 @@ impl<S: 'static> Host<S> {
                 if rt.stale() { l.request_redraw(); }
             }
             WindowEvent::KeyboardInput { event, is_synthetic: false, .. } => {
+                #[cfg(feature = "frame-profile")]
+                crate::frame::live_log::mark(if event.state.is_pressed() { "key.down" } else { "key.up" });
                 let pressed = event.state == ElementState::Pressed;
                 if pressed { crate::marks::input_arrived(true); }
                 // A release's logical key only matters to `on_key_up` handlers.
