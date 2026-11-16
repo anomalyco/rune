@@ -794,9 +794,13 @@ fn prepare(hwnd: isize, size: (u32, u32), srgb: bool, features: wgpu::Features, 
     let (config, _) = surface_config(&surface, &gpu.adapter, (size.0.max(1), size.1.max(1)), srgb).ok_or("the GPU can't present to this window")?;
     configure(&surface, &gpu, &config)?;
     let target_format = if srgb { config.format.remove_srgb_suffix() } else { config.format };
+    let mode = std::env::var("IB3_WARM_MODE").unwrap_or_default();
+    let early = (mode == "early").then(|| { let (d, q) = (gpu.device.clone(), gpu.queue.clone()); std::thread::spawn(move || warm_allocators(&d, &q)) });
     let mut renderer = renderer.unwrap_or_else(|| Renderer::new(&gpu.device, target_format));
     let instances = std::mem::take(&mut *latest.lock().unwrap_or_else(|e| e.into_inner()));
     warm_frame(&gpu, &mut renderer, target_format, (config.width, config.height), &instances);
+    if mode == "empty" { warm_allocators(&gpu.device, &gpu.queue); }
+    if let Some(h) = early { let _ = h.join(); }
     crate::marks::mark("gpu.window.warmed");
     Ok(Prepared { gpu, renderer, surface, config, handover })
 }
@@ -827,8 +831,10 @@ fn warm_frame(gpu: &Gpu, renderer: &mut Renderer, format: wgpu::TextureFormat, s
     });
     let view = target.create_view(&Default::default());
     let mut atlas = crate::text::Atlas::new();
-    for _ in 0..WARM_ROUNDS {
-        let encoders: Vec<_> = (0..WARM_ENCODERS).map(|_| gpu.device.create_command_encoder(&Default::default())).collect();
+    let real = matches!(std::env::var("IB3_WARM_MODE").as_deref(), Err(_) | Ok("") | Ok("real"));
+    let (encoders, rounds) = if real { (knob("IB3_WARM_ENC", WARM_ENCODERS), knob("IB3_WARM_ROUNDS", WARM_ROUNDS)) } else { (1, 1) };
+    for _ in 0..rounds {
+        let encoders: Vec<_> = (0..encoders).map(|_| gpu.device.create_command_encoder(&Default::default())).collect();
         for mut enc in encoders {
             renderer.prepare_ui(&gpu.device, &gpu.queue, &mut atlas, instances, size);
             renderer.draw(&mut enc, &view, [0.0; 4]);
@@ -846,6 +852,31 @@ fn warm_frame(gpu: &Gpu, renderer: &mut Renderer, format: wgpu::TextureFormat, s
     }
     target.destroy();
     let _ = gpu.device.poll(wgpu::PollType::Poll);
+}
+
+fn knob(name: &str, default: usize) -> usize { std::env::var(name).ok().and_then(|s| s.parse().ok()).unwrap_or(default) }
+
+/// Measuring branch: command allocators warmed with empty passes on a 4x4 target, and one queue
+/// write a submission for wgpu's pending-writes allocators.
+fn warm_allocators(device: &wgpu::Device, queue: &wgpu::Queue) {
+    let (encoders, rounds, passes) = (knob("IB3_WARM_ENC", 4), knob("IB3_WARM_ROUNDS", 2), knob("IB3_WARM_PASSES", 8));
+    let t = std::time::Instant::now();
+    let target = device.create_texture(&wgpu::TextureDescriptor { label: Some("rune warm allocators"), size: wgpu::Extent3d { width: 4, height: 4, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: wgpu::TextureFormat::Bgra8Unorm, usage: wgpu::TextureUsages::RENDER_ATTACHMENT, view_formats: &[] });
+    let view = target.create_view(&Default::default());
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 16, usage: wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+    for _ in 0..rounds {
+        let all: Vec<_> = (0..encoders).map(|_| device.create_command_encoder(&Default::default())).collect();
+        for mut enc in all {
+            for _ in 0..passes {
+                drop(enc.begin_render_pass(&wgpu::RenderPassDescriptor { label: None, color_attachments: &[Some(wgpu::RenderPassColorAttachment { view: &view, depth_slice: None, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store } })], ..Default::default() }));
+            }
+            queue.write_buffer(&buffer, 0, &[0; 16]);
+            queue.submit([enc.finish()]);
+        }
+        let _ = device.poll(wgpu::PollType::wait_indefinitely());
+    }
+    target.destroy();
+    eprintln!("IBWARM {}", t.elapsed().as_micros());
 }
 
 /// A CPU frame's instances as the warm frame draws them: what reads the app's own state (an
