@@ -195,10 +195,6 @@ impl<S: 'static> Runtime<S> {
             // streaming row still waits for the width to settle, then eases. A stack held at its
             // landing width (`El::hold_landing_width`) lands its rewrapped rows the same way.
             let resized = existed && (stack.window != self.viewport || held.get(c).copied().unwrap_or(false));
-            let live_rows = if existed && !first && !resized && !concealing && !self.reduced_motion && !tx.live_growth.is_empty() {
-                self.live_tail(&nodes[c], tx, stack.viewport_height)
-            } else { None };
-            stack.viewport_height = list.map_or(0.0, |v| v.viewport);
             stack.window = self.viewport;
             if first || !existed || tx.commit.lands() || self.reduced_motion || (reading && !revealing_moving) {
                 stack.width_hold = WidthHold::Off;
@@ -206,6 +202,10 @@ impl<S: 'static> Runtime<S> {
             } else if (width - stack.width).abs() > 0.25 {
                 stack.width_hold = WidthHold::rewrap(now);
             }
+            let live_rows = if existed && !first && !resized && !concealing && !self.reduced_motion && !tx.live_growth.is_empty() && !stack.width_hold.defers(now) {
+                self.live_tail(&nodes, c, tx, stack.viewport_height)
+            } else { None };
+            stack.viewport_height = list.map_or(0.0, |v| v.viewport);
             stack.width = width;
             stack.pending_heights.retain(|id, _| new_set.contains(id));
             stack.gap = crate::el::virtual_list::gap_y(taffy.style(nodes[c].taffy));
@@ -495,7 +495,7 @@ impl<S: 'static> Runtime<S> {
                 // moves in it (a padding, gap or margin above its first child changed), they all
                 // slide from where they were drawn; a sibling's new size still moves the ones
                 // under it at once, as the row's growth reveals it.
-                if nodes[i].in_row == RowLayout::Snaps && !stack_row && (!lands || crossing.is_some()) && !tx.relayout && !follows_window && !out_of_sight
+                if nodes[i].in_row == RowLayout::Snaps && !stack_row && (!lands || (crossing.is_some() && !nodes[i].instant_changes)) && !tx.relayout && !follows_window && !out_of_sight
                     && let Some(p) = nodes[i].parent
                 {
                     if i == p + 1 && flying.is_none() && let Some(drawn) = self.scene.get(id, prop::FRAME) {
