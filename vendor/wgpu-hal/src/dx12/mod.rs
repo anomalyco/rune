@@ -1509,7 +1509,10 @@ impl crate::Surface for Surface {
         // Nvidia recommends to use 1-2 more buffers than the maximum latency
         // https://developer.nvidia.com/blog/advanced-api-performance-swap-chains/
         // For high latency extra buffers seems excessive, so go with a minimum of 3 and beyond that add 1.
-        let swap_chain_buffer = (config.maximum_frame_latency + 1).min(16);
+        // Measuring only (branch `present-buffers-probe`): RUNE_SWAP_BUFFERS sets the buffer count
+        // without changing the frame latency.
+        let swap_chain_buffer = std::env::var("RUNE_SWAP_BUFFERS").ok().and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(config.maximum_frame_latency + 1).clamp(config.maximum_frame_latency + 1, 16);
 
         let swap_chain = match self.swap_chain.write().take() {
             //Note: this path doesn't properly re-initialize all of the things
