@@ -111,14 +111,25 @@ impl Health {
 enum Warm {
     #[default]
     Idle,
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    #[cfg_attr(any(test, target_arch = "wasm32"), allow(dead_code))]
     Building(std::sync::mpsc::Receiver<Warmed>),
     /// Taken, or not to be made for this shader.
     Done,
 }
 
+/// Renderers whose isolation pipelines a thread is still compiling.
+static WARMING: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// Whether a thread is still compiling isolation pipelines. Meanwhile paint takes a group's
+/// opacity, and a list fade over a stack, on each paint instead of in a layer, so no frame waits
+/// for them; the frame after they're built draws the layers.
+pub(crate) fn isolation_pending() -> bool {
+    WARMING.load(std::sync::atomic::Ordering::Relaxed) > 0
+}
+
 /// What the warming thread built: the uber pipeline for layer targets and the composites into
 /// the window's format and into layer targets, with the error the device raised building them.
+#[cfg_attr(any(test, target_arch = "wasm32"), allow(dead_code))]
 struct Warmed {
     layer: wgpu::RenderPipeline,
     composites: [(wgpu::TextureFormat, wgpu::RenderPipeline); 2],
@@ -196,28 +207,43 @@ impl Renderer {
         if self.breakers.ui_frames < 2 { self.breakers.ui_frames += 1; return; }
         if !matches!(self.breakers.warm, Warm::Idle) || !matches!(self.breakers.isolation, Health::Untried) { return; }
         self.breakers.warm = Warm::Done;
-        #[cfg(not(target_arch = "wasm32"))]
+        // Tests share one process: a thread warming for one would change what paint isolates in
+        // the others (isolation_pending), so they build on the frame as before.
+        #[cfg(not(any(test, target_arch = "wasm32")))]
         {
-            #[cfg(test)]
-            let format = if self.breakers.refuse == Some(Feature::Isolation) { wgpu::TextureFormat::Rgba32Uint } else { FORMAT };
-            #[cfg(not(test))]
             let format = FORMAT;
             let (device, layout, shader, entry, window) = (device.clone(), self.layout.clone(), self.shader.clone(), self.vertex_entry, self.format);
+            let wake = self.frame_wake.clone();
             let (sent, done) = std::sync::mpsc::channel();
+            WARMING.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let spawned = std::thread::Builder::new().name("rune-layer-pipelines".into()).spawn(move || {
+                // Measuring builds: `RUNE_SLOW_ISOLATION_MS` stands in for a driver compiling
+                // with an empty shader cache, to show the frames before the pipelines exist.
+                #[cfg(any(debug_assertions, feature = "frame-profile"))]
+                if let Some(ms) = std::env::var("RUNE_SLOW_ISOLATION_MS").ok().and_then(|v| v.parse().ok()) {
+                    std::thread::sleep(std::time::Duration::from_millis(ms));
+                }
                 let mut built = None;
-                let Verdict::Now(error) = checked(&device, || {
+                let verdict = checked(&device, || {
                     let pipeline = |format, entry| Self::pipeline(&device, &layout, &shader, format, entry, Blend::SourceOver);
                     built = Some((pipeline(format, entry), [(window, pipeline(window, "vs")), (FORMAT, pipeline(format, "vs"))]));
-                }) else { return };
-                if let Some((layer, composites)) = built { sent.send(Warmed { layer, composites, error }).ok(); }
+                });
+                if let (Some((layer, composites)), Verdict::Now(error)) = (built, verdict) { sent.send(Warmed { layer, composites, error }).ok(); }
+                WARMING.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                // A window resting with its layers drawn on each paint draws them as layers now.
+                if let Some(wake) = wake { wake.notify(); }
             });
-            if spawned.is_ok() { self.breakers.warm = Warm::Building(done); }
+            match spawned {
+                Ok(_) => self.breakers.warm = Warm::Building(done),
+                Err(_) => { WARMING.fetch_sub(1, std::sync::atomic::Ordering::Relaxed); }
+            }
         }
     }
 
-    /// The warmed isolation pipelines, waiting for the thread if it hasn't finished, put where
-    /// `build_feature` puts them, with what the device said. None: build them here.
+    /// The warmed isolation pipelines, put where `build_feature` puts them, with what the device
+    /// said. None: build them here. While the thread compiles, paint asks for no layer it can do
+    /// without (`isolation_pending`), so a frame that waits here is one whose layers can't be
+    /// drawn any other way (a blur, a turn, a dissolve, a cutout, a cache).
     fn take_warm(&mut self, device: &wgpu::Device) -> Option<Verdict> {
         let Warm::Building(done) = std::mem::replace(&mut self.breakers.warm, Warm::Done) else { return None };
         let warmed = done.recv().ok()?;

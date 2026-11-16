@@ -192,7 +192,7 @@ impl<S: 'static> Runtime<S> {
 
     /// Whether this paint copies what it can, from the window's shared state, and if so which
     /// of its subtrees are as last paint left them.
-    pub(super) fn keep_begin(&mut self, tree_order: bool, vp: [f32; 4], default_ring: Option<usize>, sel: &[(usize, usize, usize)], marks: &[(usize, usize, usize)]) {
+    pub(super) fn keep_begin(&mut self, tree_order: bool, vp: [f32; 4], default_ring: Option<usize>, sel: &[(usize, usize, usize)], marks: &[(usize, usize, usize)], layers_ready: bool) {
         let second = self.paint_keep.painted == self.paint_keep.frame;
         self.paint_keep.painted = self.paint_keep.frame;
         // Paint goes depth first, siblings in paint order (`update_layer_paint_order`), so a subtree
@@ -204,7 +204,7 @@ impl<S: 'static> Runtime<S> {
             let mut h = rune_motion::Fx::default();
             bits(&mut h, &[self.env.scale]);
             bits(&mut h, &vp);
-            (self.srgb_blend, self.track_marks, self.reduced_motion, self.env.system_dark, self.text.emit_key(), self.has_sticky, tree_order).hash(&mut h);
+            (self.srgb_blend, self.track_marks, self.reduced_motion, self.env.system_dark, self.text.emit_key(), self.has_sticky, tree_order, layers_ready).hash(&mut h);
             (self.focus.path(), self.focus.keyboard(), self.focus.shown()).hash(&mut h);
             default_ring.map(|i| self.nodes[i].id).hash(&mut h);
             let ring = self.default_focus_ring();

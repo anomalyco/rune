@@ -12,6 +12,7 @@ pub(crate) const ATLAS_START_ROWS: u32 = 256;
 
 mod backdrop_blur;
 mod breaker;
+pub(crate) use breaker::isolation_pending;
 #[cfg(any(target_os = "windows", target_arch = "wasm32"))]
 mod damaged;
 #[cfg(target_os = "windows")]

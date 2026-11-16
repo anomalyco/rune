@@ -111,7 +111,10 @@ impl<S: 'static> Runtime<S> {
                 || self.scene.presented(n.id).is_some_and(|p| (p.opacity > 0.0 && p.opacity < 1.0) || p.blur > 0.0 || p.transform.rotate.abs() > 1e-6))
         });
         let default_ring = self.default_ring_owner();
-        self.keep_begin(tree_order, vp, default_ring, &sel_ranges, &mark_ranges);
+        // While the renderer's layer pipelines compile on a thread, a group's opacity and a
+        // list fade over a stack go on each paint, so no frame waits for them (ender::breaker).
+        let layers_ready = !crate::render::isolation_pending();
+        self.keep_begin(tree_order, vp, default_ring, &sel_ranges, &mark_ranges, layers_ready);
         let mut active_cache: Option<ActiveCache> = None;
         self.pixel_snap.begin_frame(self.t, [vp[2], vp[3]]);
         // One past the subtree the last one copied from the last paint.
@@ -321,7 +324,7 @@ impl<S: 'static> Runtime<S> {
             // once as a layer rather than each primitive taking it over the ones beneath. So
             // does a layer opacity over two paints of the node's own (a label on its fill).
             let mut isolate = effective_opacity > 0.001 && (p.blur > 0.0 || dissolve
-                || additive_parent || (paint_own > 0.001 && paint_own < 1.0
+                || additive_parent || (layers_ready && paint_own > 0.001 && paint_own < 1.0
                     && (next.is_some_and(|j| self.nodes[j].parent == Some(i)) || n.vis.shape.as_ref().is_some_and(|s| s.overlaps())
                         || (n.vis.layer_opacity < 1.0 && own_paints(n) >= 2))));
             let (mut clip, mut fade) = (pinh.paint_clip, pinh.paint_fade);
@@ -732,7 +735,7 @@ impl<S: 'static> Runtime<S> {
             // image over its placeholder fill, a label over its bubble) the one beneath shows
             // through the fade, and the stack brightens or darkens towards the edge. A stack that
             // reaches into a soft edge composites as one layer, which takes the fade once.
-            if !isolate && visible && effective_opacity > 0.001 && fade.iter().any(|&f| f != 0.0)
+            if !isolate && layers_ready && visible && effective_opacity > 0.001 && fade.iter().any(|&f| f != 0.0)
                 && in_fade([r[0], r[1], r[0] + w, r[1] + h], clip, fade, fade_origin)
             {
                 let paints = own_paints(n);
