@@ -645,6 +645,30 @@ pub struct Surface {
     hdr_source: Option<auxil::dxgi::hdr::DxgiHdrSource>,
 }
 
+/// Rune, measuring only (branch `present-depth-measure`): each D3D12/DXGI call this module times,
+/// to the file `RUNE_HAL_LOG` names, one JSON line each: name, QPC ns at its start, its ns, a count.
+pub(crate) struct TextureTimer(pub(crate) u64, pub(crate) usize);
+impl Drop for TextureTimer { fn drop(&mut self) { rune_time::log("texture_create", self.0, self.1) } }
+pub(crate) struct PresentTimer(u64, usize);
+impl Drop for PresentTimer { fn drop(&mut self) { rune_time::log("present", self.0, self.1) } }
+pub(crate) fn scopeguard_present(t: u64, n: usize) -> PresentTimer { PresentTimer(t, n) }
+
+pub(crate) mod rune_time {
+    use std::io::Write;
+    static OUT: std::sync::Mutex<Option<Option<std::fs::File>>> = std::sync::Mutex::new(None);
+    pub(crate) fn now() -> u64 {
+        use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
+        let (mut c, mut f) = (0i64, 0i64);
+        unsafe { let _ = QueryPerformanceCounter(&mut c); let _ = QueryPerformanceFrequency(&mut f); }
+        (c as u128 * 1_000_000_000 / f.max(1) as u128) as u64
+    }
+    pub(crate) fn log(name: &str, start: u64, n: usize) {
+        let ns = now().saturating_sub(start);
+        let mut out = OUT.lock().unwrap_or_else(|e| e.into_inner());
+        let file = out.get_or_insert_with(|| std::env::var_os("RUNE_HAL_LOG").and_then(|p| std::fs::File::create(p).ok()));
+        if let Some(f) = file { let _ = writeln!(f, "{{\"hal\":\"{name}\",\"t\":{start},\"ns\":{ns},\"n\":{n}}}"); }
+    }
+}
 unsafe impl Send for Surface {}
 unsafe impl Sync for Surface {}
 
@@ -1826,11 +1850,15 @@ impl crate::Queue for Queue {
 
         {
             profiling::scope!("ID3D12CommandQueue::ExecuteCommandLists");
+            let t = rune_time::now();
             unsafe { self.raw.ExecuteCommandLists(&temp_lists) }
+            rune_time::log("exec", t, temp_lists.len());
         }
 
+        let t = rune_time::now();
         unsafe { self.raw.Signal(&signal_fence.raw, signal_value) }
             .into_device_result("Signal fence")?;
+        rune_time::log("signal", t, 1);
 
         // Drain caller-staged signals after our own Signal so each
         // additional fence value publishes once the submit completes.
@@ -1869,6 +1897,9 @@ impl crate::Queue for Queue {
 
         profiling::scope!("IDXGISwapchain3::Present");
         let dirty = core::mem::take(&mut sc.dirty);
+        let t = rune_time::now();
+        let n = dirty.len();
+        let _timed = scopeguard_present(t, n);
         if dirty.is_empty() {
             unsafe { sc.raw.Present(interval, flags) }
                 .ok()
