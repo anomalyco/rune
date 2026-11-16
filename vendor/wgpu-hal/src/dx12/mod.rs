@@ -655,6 +655,8 @@ pub struct Surface {
 /// to the file `RUNE_HAL_LOG` names, one JSON line each: name, QPC ns at its start, its ns, a count.
 pub(crate) struct TextureTimer(pub(crate) u64, pub(crate) usize);
 impl Drop for TextureTimer { fn drop(&mut self) { rune_time::log("texture_create", self.0, self.1) } }
+pub(crate) struct NamedTimer(pub(crate) &'static str, pub(crate) u64, pub(crate) usize);
+impl Drop for NamedTimer { fn drop(&mut self) { rune_time::log(self.0, self.1, self.2) } }
 pub(crate) struct PresentTimer(u64, usize);
 impl Drop for PresentTimer { fn drop(&mut self) { rune_time::log("present", self.0, self.1) } }
 pub(crate) fn scopeguard_present(t: u64, n: usize) -> PresentTimer { PresentTimer(t, n) }
@@ -1536,10 +1538,13 @@ impl crate::Surface for Surface {
         if self.supports_allow_tearing {
             flags |= Dxgi::DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
         }
+        let _timed = NamedTimer("cfg_total", rune_time::now(), config.extent.width as usize * config.extent.height as usize);
 
         // While `configure`s contract ensures that no work on the GPU's main queues
         // are in flight, we still need to wait for the present queue to be idle.
+        let t = rune_time::now();
         unsafe { device.wait_for_present_queue_idle() }?;
+        rune_time::log("cfg_present_idle", t, 1);
 
         let non_srgb_format = auxil::dxgi::conv::map_texture_format_nosrgb(config.format);
 
@@ -1555,7 +1560,10 @@ impl crate::Surface for Surface {
         let swap_chain = match self.swap_chain.write().take() {
             //Note: this path doesn't properly re-initialize all of the things
             Some(sc) => {
+                let t = rune_time::now();
                 let raw = unsafe { sc.release_resources() };
+                rune_time::log("cfg_release", t, 1);
+                let _resize = NamedTimer("cfg_resize_buffers", rune_time::now(), swap_chain_buffer as usize);
                 let result = unsafe {
                     raw.ResizeBuffers(
                         swap_chain_buffer,
