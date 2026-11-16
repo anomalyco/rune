@@ -233,6 +233,7 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
 
     #[cfg(feature = "frame-profile")]
     let mut profile = crate::frame::profile::Log::new(last_frame + 1);
+    let mut split_rows: std::collections::HashSet<String> = std::collections::HashSet::new();
     for k in 0..=last_frame {
         #[cfg(feature = "frame-profile")]
         let (alloc0, commits0, cpu0) = {
@@ -391,7 +392,20 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
             for (shot, px) in readback.make_room(&gpu.device) { deliver(shot, px); }
             readback.copy(&mut enc, &target, shot);
         }
+        let pre_submit = frame_start.elapsed().as_secs_f64() * 1000.0;
         renderer.submit(&gpu.queue, enc);
+        let submitted = frame_start.elapsed().as_secs_f64() * 1000.0;
+        if std::env::var_os("RUNE_SHAPE_LOG").is_some() {
+            let prep = crate::render::upload::PREP_NS.replace(0) as f64 / 1e6;
+            let inst = crate::render::upload::PREP_INSTANCES.replace(0);
+            let rows: std::collections::HashSet<String> = rt.nodes.iter().filter_map(|n| n.key.as_deref())
+                .filter(|k| k.starts_with("sw-") && !k.starts_with("sw-section") && !k.starts_with("sw-gap")).map(str::to_owned).collect();
+            let added = rows.difference(&split_rows).count();
+            let removed = split_rows.difference(&rows).count();
+            eprintln!("SPLIT {{\"k\":{k},\"update\":{update_ms:.4},\"prepare\":{prep:.4},\"encode\":{:.4},\"submit\":{:.4},\"instances\":{inst},\"nodes\":{},\"rows\":{},\"rows_added\":{added},\"rows_removed\":{removed}}}",
+                pre_submit - update_ms - prep, submitted - pre_submit, rt.nodes.len(), rows.len());
+            split_rows = rows;
+        }
         reports.drawn(reports.stamp(), None, frame_start, update_ms);
         rt.interaction_presented(Instant::now(), None);
         if want_pixels { readback.submitted(); }

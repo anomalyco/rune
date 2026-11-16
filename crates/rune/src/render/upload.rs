@@ -222,6 +222,14 @@ impl Renderer {
 
     fn prepare_with_precision(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, atlas: &mut Atlas,
         instances: &[Instance], viewport: (u32, u32), byte_source: bool) {
+        let t0 = std::time::Instant::now();
+        self.prepare_with_precision_inner(device, queue, atlas, instances, viewport, byte_source);
+        PREP_NS.set(PREP_NS.get() + t0.elapsed().as_nanos() as u64);
+        PREP_INSTANCES.set(PREP_INSTANCES.get() + instances.len() as u64);
+    }
+
+    fn prepare_with_precision_inner(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, atlas: &mut Atlas,
+        instances: &[Instance], viewport: (u32, u32), byte_source: bool) {
         if self.springs.is_some() { assert_eq!(instances.len(), self.spring_instances); }
         let staging = self.uploads.staging(device, queue);
         if staging.lost() != self.uploads.lost.0 {
@@ -527,3 +535,9 @@ impl Renderer {
 
 #[cfg(test)]
 mod tests;
+
+thread_local! {
+    /// Local diagnostic: time in and instances through prepare since the last take.
+    pub(crate) static PREP_NS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    pub(crate) static PREP_INSTANCES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}

@@ -34,7 +34,7 @@ mod pipelines;
 pub(crate) mod surface_alpha;
 pub(crate) mod translucency;
 mod uber_wgsl;
-mod upload;
+pub(crate) mod upload;
 mod variant;
 #[cfg(target_os = "macos")]
 mod windfoil_metallib;
