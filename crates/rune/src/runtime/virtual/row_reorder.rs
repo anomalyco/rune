@@ -49,6 +49,24 @@ impl Reorder {
 }
 
 impl<S: 'static> Runtime<S> {
+    /// Only a virtual list already showing its tail, in the same viewport, can grow it for a
+    /// live arrival. If its viewport changes height too (a tray closing under it), landing
+    /// both together avoids first moving by the tray's height and then back by the row's.
+    pub(super) fn live_tail(&self, nodes: &[Node], i: usize, tx: &Tx, previous_height: f32) -> Option<std::ops::Range<usize>> {
+        let node = &nodes[i];
+        if tx.commit != Commit::Unprompted || node.instant_changes || !tx.live_growth.iter().any(|key| node.named(key)) { return None; }
+        let list = self.virtuals.get(&node.path)?;
+        let scroll = self.path_ids.get(&list.scroll_path)?;
+        let same_height = (previous_height - list.viewport).abs() < 1.0 / 64.0;
+        if !same_height || list.nested || list.replaced_view() || list.drawn.is_empty() || !self.scrolls.get(scroll)?.pinned() { return None; }
+        // The list's own tail is the viewport's tail only if nothing extends below it.
+        // A toolbar *after* the list may cover even its last overscanned rows.
+        let parent = node.parent?;
+        if nodes[parent].id != *scroll || nodes[i + 1..].iter().take_while(|n| n.parent >= Some(parent))
+            .any(|n| n.parent == Some(parent) && n.target[3] > node.target[3]) { return None; }
+        Some(list.visible_range(0.0, true))
+    }
+
     /// How far node `i`, a growth row, jumped because its stack's rows changed order this commit.
     pub(super) fn reorder_jump(&self, nodes: &[Node], i: usize) -> f32 {
         nodes[i].parent.and_then(|p| self.stacks.get(&nodes[p].id)).map_or(0.0, |s| s.reorder.jump(nodes[i].id))
@@ -70,3 +88,6 @@ impl<S: 'static> Runtime<S> {
 #[cfg(test)]
 #[path = "../row_reorder_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod live_tail_tests;

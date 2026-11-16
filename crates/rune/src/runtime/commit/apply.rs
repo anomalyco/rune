@@ -101,6 +101,7 @@ impl<S: 'static> Runtime<S> {
         };
 
         // Growth stacks: rows of a stack that existed before grow; a new stack mounts settled.
+        let mut crossings = HashMap::default();
         for c in 0..nodes.len() {
             if nodes[c].cold.get().is_none_or(|nd| nd.growth.is_none()) { continue }
             let cid = nodes[c].id;
@@ -201,6 +202,10 @@ impl<S: 'static> Runtime<S> {
             } else if (width - stack.width).abs() > 0.25 {
                 stack.width_hold = WidthHold::rewrap(now);
             }
+            let live_rows = if existed && !first && !resized && !concealing && !self.reduced_motion && !tx.live_growth.is_empty() && !stack.width_hold.defers(now) {
+                self.live_tail(&nodes, c, tx, stack.viewport_height)
+            } else { None };
+            stack.viewport_height = list.map_or(0.0, |v| v.viewport);
             stack.width = width;
             stack.pending_heights.retain(|id, _| new_set.contains(id));
             stack.gap = crate::el::virtual_list::gap_y(taffy.style(nodes[c].taffy));
@@ -219,6 +224,9 @@ impl<S: 'static> Runtime<S> {
                 let g_moving = self.grows.get(&id).is_some_and(|g| g.moving()) || stack.pending_heights.contains_key(&id);
                 let entering = revealed_now && reader && !self.grows.contains_key(&id);
                 let row_reading = (reading && !(revealing && g_moving)) || entering;
+                let live = !row_reading && live_rows.as_ref().is_some_and(|range| {
+                    nodes[j].key.as_deref().and_then(|key| list?.index_of(key)).is_some_and(|index| range.contains(&index))
+                });
                 if streaming && existed && !tx.commit.lands() && !first && !self.reduced_motion && !row_reading {
                     // Measure the final wrapped text before mutating the growth track. Targets
                     // retain full layout height; only the presented stack extent lags the fill.
@@ -235,10 +243,10 @@ impl<S: 'static> Runtime<S> {
                 let hidden = if glide.is_some() { self.fold_hidden_above(&nodes, j, h) } else { None };
                 if existed && !cut && !nodes[j].virtual_mount && nodes[j].glide.is_some() && !self.grows.contains_key(&id) { opened.push(id); }
                 let g = self.grows.entry(id).or_insert_with(|| {
-                    if existed && !cut && !nodes[j].virtual_mount { GrowTrack { duration, ..GrowTrack::settled(0.0) } } else { GrowTrack::settled(h) }
+                    if existed && (!cut || live) && !nodes[j].virtual_mount { GrowTrack { duration, ..GrowTrack::settled(0.0) } } else { GrowTrack::settled(h) }
                 });
                 g.set_kind(streaming, whole, glide);
-                let snap_change = (instant || resized) && !streaming && (h - g.target).abs() > 1e-4;
+                let snap_change = ((instant && !live) || resized) && !streaming && (h - g.target).abs() > 1e-4;
                 if tx.commit.lands() || !existed || first || self.reduced_motion || snap_change || row_reading {
                     *g = g.restarted(h);
                     stack.pending_heights.remove(&id);
@@ -251,7 +259,7 @@ impl<S: 'static> Runtime<S> {
                         stack.pending_heights.insert(id, t);
                     } else {
                         stack.pending_heights.remove(&id);
-                        if (t - g.target).abs() > 1e-4 { g.duration = duration; }
+                        if (t - g.target).abs() > 1e-4 { g.duration = duration; g.linear_edge = live; }
                         let shutting = t < g.target - 1e-4;
                         // A fold opening again while its contents draw lifted, or opening from
                         // rest (not one mounting): `ride_from_end` grows it from its bottom where
@@ -284,8 +292,16 @@ impl<S: 'static> Runtime<S> {
                 || order.iter().any(|r| self.grows.get(r).is_some_and(|g| g.moving()));
             // Order holds the rows this commit brought and the ones still closing; no others.
             stack.tops.retain(|id, _| new_set.contains(id) || stack.closing.contains_key(id));
-            let animates = existed && !instant && !tx.relayout && !self.reduced_motion;
+            let animates = existed && (!instant || live_rows.is_some()) && !tx.relayout && !self.reduced_motion;
             stack.reorder.measure(animates, &stack.order, &order, stack.gap, |id| self.grows.get(&id).map(|g| g.h));
+            if let Some(range) = live_rows && let Some(v) = self.virtuals.get(&nodes[c].path) && stack.order != order {
+                for &j in rows {
+                    let jump = stack.reorder.jump(nodes[j].id);
+                    if jump != 0.0 && nodes[j].key.as_deref().is_some_and(|k| v.index_of(k).is_some_and(|i| range.contains(&i)) && v.drawn.iter().any(|old| old == k)) {
+                        crossings.insert(nodes[j].id, jump);
+                    }
+                }
+            }
             scratch.order = std::mem::replace(&mut stack.order, order);
             self.stacks.insert(cid, stack);
         }
@@ -318,6 +334,9 @@ impl<S: 'static> Runtime<S> {
         let has_virtuals = !self.virtuals.is_empty();
         let mut last = paint_tracks::Finder::default();
         let mut skip_cursor = 0usize;
+        // Descendants of a row crossing its neighbour may change their top padding in the
+        // same commit. Carry that change on the row's height rather than jumping within it.
+        let mut crossing = None;
         let mut i = 0usize;
         while i < nodes.len() {
             while skip_cursor < skip_spans.len() && skip_spans[skip_cursor].new_start + skip_spans[skip_cursor].len <= i {
@@ -334,6 +353,7 @@ impl<S: 'static> Runtime<S> {
             let cur_i = i;
             i += 1;
             let i = cur_i;
+            if crossing.is_some_and(|root| nodes[i].parent.is_none_or(|p| p < root)) { crossing = None; }
             let id = nodes[i].id;
             let mut scene_rect = nodes[i].local;
             let parent_virtual = if has_virtuals {
@@ -432,6 +452,10 @@ impl<S: 'static> Runtime<S> {
                 // Out of sight before and after: nobody would see it move.
                 let out_of_sight = unseen.get(i).copied().unwrap_or(false) && nodes[i].matched.is_none()
                     && !self.flying.iter().any(|f| f.0 == id);
+                if !crossings.is_empty() && !out_of_sight && !nodes[i].instant_changes && let Some(&jump) = crossings.get(&id) {
+                    reorder_jump = jump;
+                    crossing = Some(i);
+                }
                 let layout_anim = if out_of_sight || held.get(i).copied().unwrap_or(false) {
                     LayoutAnim::INSTANT
                 } else if stack_row && !lands && !tx.relayout && !follows_window {
@@ -471,7 +495,7 @@ impl<S: 'static> Runtime<S> {
                 // moves in it (a padding, gap or margin above its first child changed), they all
                 // slide from where they were drawn; a sibling's new size still moves the ones
                 // under it at once, as the row's growth reveals it.
-                if nodes[i].in_row == RowLayout::Snaps && !stack_row && !lands && !tx.relayout && !follows_window && !out_of_sight
+                if nodes[i].in_row == RowLayout::Snaps && !stack_row && (!lands || (crossing.is_some() && !nodes[i].instant_changes)) && !tx.relayout && !follows_window && !out_of_sight
                     && let Some(p) = nodes[i].parent
                 {
                     if i == p + 1 && flying.is_none() && let Some(drawn) = self.scene.get(id, prop::FRAME) {
@@ -535,7 +559,7 @@ impl<S: 'static> Runtime<S> {
                 && (shift != [0.0; 2] || reorder_jump != 0.0 || self.scene.store().has(id, prop::OFFSET))
             {
                 let to = rune_motion::Vec2::new(shift[0], shift[1]);
-                if rest_quiet {
+                if rest_quiet && reorder_jump == 0.0 {
                     self.scene.set(id, prop::OFFSET, to);
                 } else if self.scene.store().target(id, prop::OFFSET).unwrap_or(rune_motion::Vec2::ZERO) != to {
                     if row_jump != 0.0 {

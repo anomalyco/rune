@@ -591,7 +591,7 @@ impl<S: 'static> Runtime<S> {
                     if ran_other || self.dirty || ran_layout { self.live_check = None; }
                     self.capture_keeps(&mut tx);
                     tx.unprompted = self.motion_needs_cause && why & CommitWhy::INPUT == 0 && !tx.asked_motion;
-                    if split && tx.unprompted { tx.commit = tx.commit.instant(); }
+                    if split && tx.unprompted { tx.commit = tx.commit.without_input(); }
                     if routed { why |= CommitWhy::ROUTE; }
                     if self.dirty { why |= CommitWhy::DIRTY; }
                     self.commit_for(&tx, std::mem::take(&mut why));
@@ -607,6 +607,7 @@ impl<S: 'static> Runtime<S> {
                     tx.commit = Commit::Animate;
                     tx.unprompted = false;
                     tx.asked_motion = false;
+                    tx.live_growth.clear();
                     tx.motion = None;
                     tx.color_motion = None;
                     tx.follow_edge = false;
@@ -692,7 +693,7 @@ impl<S: 'static> Runtime<S> {
             tx.unprompted = self.motion_needs_cause && why & CommitWhy::INPUT == 0 && !tx.asked_motion;
             // Its layout lands too, as an instant change's does: a container that grows to fit what a
             // server brought doesn't ease to its height (motion already running keeps on).
-            if tx.unprompted { tx.commit = tx.commit.instant(); }
+            if tx.unprompted { tx.commit = tx.commit.without_input(); }
             self.commit_for(&tx, why | flag(self.dirty, CommitWhy::DIRTY) | flag(self.relayout, CommitWhy::RELAYOUT) | flag(self.settle, CommitWhy::SETTLE)
                 | flag(shifted, CommitWhy::VIRTUAL) | flag(ran_layout, CommitWhy::LAYOUT) | flag(read_moved, CommitWhy::READ));
             #[cfg(debug_assertions)]

@@ -3,6 +3,11 @@
 use super::*;
 
 impl<S: 'static> Runtime<S> {
+    pub(in crate::runtime) fn growth_feather(&self, i: usize) -> f32 {
+        let width = self.row_mask[i] * self.env.scale;
+        if self.grows.get(&self.nodes[i].id).is_some_and(|g| g.linear_edge) { -width } else { width }
+    }
+
     /// Fills `row_dy`, `row_h` and `row_mask` for this frame's nodes.
     pub(super) fn place_growth_rows(&mut self) {
         let (s, n_nodes) = (self.env.scale, self.nodes.len());
