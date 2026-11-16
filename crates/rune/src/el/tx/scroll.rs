@@ -10,6 +10,17 @@ use crate::El;
 use crate::Tx;
 
 impl Tx {
+    /// Let newly inserted and resizing rows at the visible end of this virtual growth stack
+    /// grow through a linear feather on their usual springs. For a live arrival, not a page
+    /// load. Rows that trade places carry their contents with them. The selector names the
+    /// stack, not the scroll viewport. This neither scrolls to the end nor animates other
+    /// layout or chrome. A reader scrolled away, a resizing viewport, reduced motion, the
+    /// first paint and an explicit `instant()` or `settle()` still land.
+    pub fn grow_visible_tail(&mut self, stack: impl Into<String>) {
+        let stack = stack.into();
+        if !self.live_growth.contains(&stack) { self.live_growth.push(stack); }
+    }
+
     /// Reveal a keyed row, including a currently unrealized virtual row. It scrolls the nearest
     /// vertical viewport around the row and, through [`El::scroll_x`] or [`El::scroll_xy`], the
     /// nearest horizontal one, each just far enough. The vertical reveal follows the presented

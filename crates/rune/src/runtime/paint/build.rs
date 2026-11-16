@@ -1215,7 +1215,7 @@ impl<S: 'static> Runtime<S> {
                 clip[3] = clip[3].min(r[3]);
                 // A fold's lifted contents (`GrowTrack::hide_above`) never draw above its top.
                 if self.row_lifts.iter().any(|&(ri, _)| ri == i) { clip[1] = clip[1].max(r[1]); }
-                inherit_fade(&mut fade, &mut fade_origin, r, [0.0, 0.0, 0.0, mask * s]);
+                inherit_fade(&mut fade, &mut fade_origin, r, [0.0, 0.0, 0.0, self.growth_feather(i)]);
             }
             let mut dy = pinh.dy;
             let snap_off = pinh.snap.off || n.vis_flags.no_pixel_snap() || turn_index != 0;

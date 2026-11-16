@@ -41,6 +41,8 @@ pub struct Tx {
     pub(crate) unprompted: bool,
     /// A handler called [`Self::animated`].
     pub(crate) asked_motion: bool,
+    /// Virtual growth stacks whose visible tail may grow for this commit alone.
+    pub(crate) live_growth: Vec<String>,
     /// A resting poll changed the model but hasn't committed its tree yet.
     pub(crate) polled_change: bool,
     pub(crate) color_motion: Option<Spring>,
@@ -147,6 +149,9 @@ pub(crate) enum Commit {
     /// Animate this change; motion an earlier change set going keeps running.
     #[default]
     Animate,
+    /// Only the lack of an input cause made this commit instant. An explicit instant wins
+    /// even over a request to animate a list's tail.
+    Unprompted,
     /// Apply this change at once; motion an earlier change set going keeps running.
     Instant,
     /// Apply this change at once and land every running track.
@@ -157,6 +162,10 @@ pub(crate) enum Commit {
 }
 
 impl Commit {
+    pub(crate) fn without_input(self) -> Self {
+        if self == Self::Animate { Self::Unprompted } else { self.instant() }
+    }
+
     /// The two facts as one intent.
     pub(crate) fn new(snaps: bool, lands: bool) -> Commit {
         match (snaps, lands) {
@@ -169,7 +178,7 @@ impl Commit {
 
     /// This change's own layout applies at once instead of moving on its spring.
     pub(crate) fn snaps(self) -> bool {
-        matches!(self, Commit::Instant | Commit::Settle)
+        matches!(self, Commit::Unprompted | Commit::Instant | Commit::Settle)
     }
 
     /// This change lands every running track: growth, reveals and follow-the-end.

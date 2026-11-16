@@ -227,6 +227,8 @@ pub struct GrowTrack {
     pub age: f32,
     /// Presented feather height (points).
     pub mask: f32,
+    /// A live tail grows under a linear ramp (negative width in the renderer).
+    pub(crate) linear_edge: bool,
     /// `El::streaming`: this row climbs on its stream's pace, which overrides its whole or fold
     /// kind until it rests off the stream.
     pub streaming: bool,
@@ -267,7 +269,7 @@ const SETTLE_V: f32 = 1.5;
 
 impl GrowTrack {
     pub fn settled(h: f32) -> GrowTrack {
-        GrowTrack { h, v: 0.0, target: h, age: 0.0, mask: 0.0, streaming: false, whole: false, duration: 0.0, span: 0.0, motion: Motion::Spring, stage: Stage::Free, lift: Lift::None, restore: 0.0, give: None, pace: Pace::Rest, rate: 0.0 }
+        GrowTrack { h, v: 0.0, target: h, age: 0.0, mask: 0.0, linear_edge: false, streaming: false, whole: false, duration: 0.0, span: 0.0, motion: Motion::Spring, stage: Stage::Free, lift: Lift::None, restore: 0.0, give: None, pace: Pace::Rest, rate: 0.0 }
     }
 
     pub fn moving(&self) -> bool {

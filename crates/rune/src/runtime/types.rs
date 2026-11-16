@@ -465,6 +465,8 @@ pub(super) struct Stack {
     pub(super) pending_heights: HashMap<NodeId, f32>,
     /// The window size at the last commit.
     pub(super) window: (f32, f32),
+    /// The list viewport in the last layout, apart from the window (e.g. above a dock).
+    pub(super) viewport_height: f32,
     /// How far its rows grew (positive steps only) this frame.
     pub(super) grown: f32,
     /// Whether any row in the stack still has height left to grow.
