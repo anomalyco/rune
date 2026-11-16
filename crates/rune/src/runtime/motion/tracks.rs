@@ -118,7 +118,7 @@ impl<S: 'static> Runtime<S> {
             stack.slides.keep(&stack.order);
             stack.growing = st_growing;
             stack.moving = st_moving;
-            stack.handoff.place(&self.grows, &mut self.scene, &self.nodes, &self.node_index);
+            stack.handoff.place(&mut self.grows, &mut self.scene, &self.nodes, &self.node_index, &mut self.scrolls);
             // Keep the shared clock awake through the hold. No timer thread or remeasurement.
             moving |= st_moving;
         }

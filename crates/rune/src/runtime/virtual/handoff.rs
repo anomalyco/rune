@@ -6,7 +6,7 @@ use super::*;
 pub(in crate::runtime) enum Handoff {
     #[default]
     Idle,
-    Growing { row: NodeId, frames: Vec<(NodeId, rune_motion::Rect, f32, f32)> },
+    Growing { row: NodeId, viewport: NodeId, frames: Vec<(NodeId, rune_motion::Rect, f32, f32)>, rows: Vec<(NodeId, f32, f32)> },
 }
 
 impl<S: 'static> Runtime<S> {
@@ -29,14 +29,24 @@ impl<S: 'static> Runtime<S> {
                 let (dy, dh) = (was.y - n.local.y, was.h - n.local.h);
                 (dy != 0.0 || dh != 0.0).then_some((n.id, n.local, dy, dh))
             }).collect();
-        Some(Handoff::Growing { row: row.id, frames })
+        // A kept row can lose its footer to the arriving row. Tie that height to the same
+        // progress too: independent whole-row springs land at different absolute tolerances.
+        let rows = nodes.iter().filter(|n| n.parent == Some(stack) && n.whole && !n.streaming && n.id != row.id)
+            .filter_map(|n| { let from = self.grows.get(&n.id)?.h;
+                (from != n.local.h).then_some((n.id, from, n.local.h)) }).collect();
+        Some(Handoff::Growing { row: row.id, viewport: view.id, frames, rows })
     }
 }
 
 impl Handoff {
-    pub(in crate::runtime) fn place(&mut self, grows: &HashMap<NodeId, GrowTrack>, scene: &mut rune_motion::Scene, nodes: &[Node], index: &HashMap<NodeId, usize>) {
-        let Self::Growing { row, frames } = self else { return };
-        let left = grows.get(row).filter(|g| g.target > 0.0).map_or(0.0, |g| (1.0 - g.h / g.target).clamp(0.0, 1.0));
+    pub(in crate::runtime) fn place(&mut self, grows: &mut HashMap<NodeId, GrowTrack>, scene: &mut rune_motion::Scene, nodes: &[Node], index: &HashMap<NodeId, usize>, scrolls: &mut HashMap<NodeId, ScrollState>) {
+        let Self::Growing { row, viewport, frames, rows } = self else { return };
+        let (left, rate) = grows.get(row).filter(|g| g.target > 0.0).map_or((0.0, 0.0), |g| ((1.0 - g.h / g.target).clamp(0.0, 1.0), g.v / g.target));
+        for &(id, from, to) in rows.iter() {
+            if let Some(g) = grows.get_mut(&id) && g.target == to { g.h = to + (from - to) * left; g.v = (to - from) * rate; }
+        }
+        // The edge was already paid for by the row. Don't add the same space to slack.
+        if let Some(s) = scrolls.get_mut(viewport) { s.slack.follow = true; }
         for &(id, target, dy, dh) in frames.iter() {
             let Some(n) = index.get(&id).map(|&k| &nodes[k]) else { continue };
             // A later measurement (e.g. typing or a resize) owns its new geometry.
