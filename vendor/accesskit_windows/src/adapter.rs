@@ -18,6 +18,7 @@ use windows::Win32::{
 use crate::{
     context::{ActionHandlerNoMut, ActionHandlerWrapper, Context},
     filters::filter,
+    long_text::long_text,
     node::{NodeWrapper, PlatformNode},
     util::{QueuedEvent, StringBuffer},
     window_handle::WindowHandle,
@@ -52,7 +53,7 @@ impl<'a> AdapterChangeHandler<'a> {
 
 impl AdapterChangeHandler<'_> {
     fn insert_text_change_if_needed_parent(&mut self, node: NodeRef) {
-        if !node.supports_text_ranges() {
+        if !node.supports_text_ranges() && long_text(&node).is_none() {
             return;
         }
         let id = node.id();
@@ -75,6 +76,10 @@ impl AdapterChangeHandler<'_> {
     }
 
     fn insert_text_change_if_needed(&mut self, node: &NodeRef) {
+        // Rune: a long field's text is its value.
+        if long_text(node).is_some() {
+            return self.insert_text_change_if_needed_parent(*node);
+        }
         if node.role() != Role::TextRun {
             return;
         }

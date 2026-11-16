@@ -14,6 +14,7 @@ use std::{collections::VecDeque, rc::Rc};
 use crate::{
     context::Context,
     filters::filter,
+    long_text::long_text,
     node::{NodeWrapper, Value},
 };
 
@@ -288,8 +289,8 @@ impl TreeChangeHandler for EventGenerator {
                 });
             }
         }
-        if old_wrapper.supports_text_ranges()
-            && new_wrapper.supports_text_ranges()
+        if (old_wrapper.supports_text_ranges() || long_text(old_node).is_some())
+            && (new_wrapper.supports_text_ranges() || long_text(new_node).is_some())
             && old_wrapper.raw_text_selection() != new_wrapper.raw_text_selection()
         {
             self.events.push(QueuedEvent::Generic {

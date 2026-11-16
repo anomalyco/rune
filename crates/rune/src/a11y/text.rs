@@ -6,7 +6,7 @@ use accesskit::{Action as Ak, Node as AkNode, NodeId as AkId, Rect as AkRect, Ro
 use std::borrow::Cow;
 
 use super::*;
-use super::a11y_tree::{line_id, link_id, round};
+use super::a11y_tree::{element_id, line_id, link_id, round};
 use crate::text::TextFlow;
 
 /// Text longer than this gets no per-character runs (a reader still gets its whole value).
@@ -130,6 +130,12 @@ impl<S: 'static> Runtime<S> {
                 out.push((id, run));
             }
             if let Some(sel) = self.a11y_selection(i, &content, &lines) { out[me].1.set_text_selection(sel); }
+        } else if let Some(input) = n.input.as_deref() && !input.edit.is_secure() {
+            // A field with no runs (past `RUN_MAX_BYTES`): its selection in its value's bytes,
+            // on the field itself. The vendored adapters answer its lines from the value when a
+            // reader asks (`vendor/accesskit_windows.patch`, `vendor/accesskit_macos.patch`).
+            let at = |character_index| TextPosition { node: element_id(n.id), character_index };
+            out[me].1.set_text_selection(TextSelection { anchor: at(input.edit.anchor), focus: at(input.edit.focus) });
         }
         if spec.cold.links.is_empty() || spec.redacted { return; }
         let boxes = self.link_boxes(i, self.drawn_box(i));
