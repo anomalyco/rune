@@ -235,9 +235,9 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
     let mut profile = crate::frame::profile::Log::new(last_frame + 1);
     for k in 0..=last_frame {
         #[cfg(feature = "frame-profile")]
-        let (alloc0, commits0, cpu0) = {
+        let (alloc0, commits0, cpu0, gpu0) = {
             crate::frame::profile::take();
-            (procwatch::alloc::thread_allocations(), rt.stats.commits, crate::frame::profile::cpu_ms())
+            (procwatch::alloc::thread_allocations(), rt.stats.commits, crate::frame::profile::cpu_ms(), gpu_objects(&gpu.device))
         };
         let real_t = k as f64 * dt;
         if args.realtime {
@@ -401,6 +401,8 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
             phases: crate::frame::profile::take(), update_ms, encode_ms: ms - update_ms, events: next_ev - events0,
             allocations: procwatch::alloc::thread_allocations() - alloc0, commits: rt.stats.commits - commits0,
             why: std::mem::take(&mut rt.commit_why), shaped: rt.stats.shaped, animating, cpu_ms: cpu0.map(|start| crate::frame::profile::cpu_ms().unwrap() - start),
+            glyphs: rt.instances.iter().filter(|i| i.params[1] == crate::render::KIND_GLYPH).count() as u32,
+            gpu_new: { let now = gpu_objects(&gpu.device); std::array::from_fn(|i| now[i] - gpu0[i]) },
         });
         cpu_ms.push(ms);
         if k > 0 {
@@ -644,4 +646,11 @@ fn report_traffic_light_overlaps<S>(rt: &Runtime<S>, lights: &[[f32; 4]; 3]) {
         }
     }
     eprintln!("rune: chrome: traffic lights at {:?}, {n} overlapping elements", lights[0].map(r2));
+}
+
+/// Live GPU objects by kind, for the frame log's `gpu_new`.
+#[cfg(feature = "frame-profile")]
+fn gpu_objects(device: &wgpu::Device) -> [isize; 6] {
+    let h = device.get_internal_counters().hal;
+    [h.buffers.read(), h.textures.read(), h.texture_views.read(), h.bind_groups.read(), h.render_pipelines.read(), h.shader_modules.read()]
 }

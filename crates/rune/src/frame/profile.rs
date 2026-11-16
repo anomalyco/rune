@@ -64,6 +64,12 @@ pub(crate) struct Row {
     pub shaped: u32,
     pub animating: bool,
     pub cpu_ms: Option<f64>,
+    /// Glyph quads drawn.
+    pub glyphs: u32,
+    /// GPU objects the frame left alive that weren't before it (wgpu's counters): buffers,
+    /// textures, texture views, bind groups, render pipelines, shader modules. A frame that
+    /// carries input should make none (`render::breaker`).
+    pub gpu_new: [isize; 6],
 }
 
 /// A headless run's frames. With `RUNE_FRAME_LOG=FILE`, each frame is also written to FILE as a
@@ -93,8 +99,12 @@ impl Log {
                 "k": self.rows.len(), "ms": row.update_ms + row.encode_ms, "cpu_ms": row.cpu_ms, "events": row.events, "update_ms": row.update_ms, "encode_ms": row.encode_ms,
                 "view_cpu": p[PHASES], "commit_cpu": p[PHASES + 1], "layout_cpu": p[PHASES + 2], "text_cpu": p[PHASES + 3],
                 "paint_cpu": p[PHASES + 4], "apply_cpu": p[PHASES + 5], "allocations": row.allocations,
-                "commits": row.commits, "shaped": row.shaped, "animating": row.animating,
+                "commits": row.commits, "shaped": row.shaped, "animating": row.animating, "glyphs": row.glyphs,
             });
+            if row.gpu_new.iter().any(|&n| n != 0) {
+                let [buffers, textures, views, bind_groups, pipelines, shaders] = row.gpu_new;
+                line["gpu_new"] = serde_json::json!({ "buffers": buffers, "textures": textures, "views": views, "bind_groups": bind_groups, "pipelines": pipelines, "shaders": shaders });
+            }
             if row.commits > 0 { line["why"] = crate::runtime::CommitWhy::names(row.why).into(); }
             writeln!(out, "{line}").expect("RUNE_FRAME_LOG write");
         }

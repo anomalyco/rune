@@ -29,7 +29,7 @@ keys-overlay = ["tooling"]
 # dictionaries either way. Other native platforms always link the word dictionaries.
 segmenter-dictionaries = ["parley/complex-scripts"]
 # Headless benchmark instrumentation; ordinary builds contain no phase clocks.
-frame-profile = ["tooling", "dep:procwatch"]
+frame-profile = ["tooling", "dep:procwatch", "wgpu/counters"]
 # A measuring build's heap dumps (procwatch's `alloc-sites`) also list the GPU device's allocations.
 alloc-sites = ["dep:procwatch", "procwatch/alloc-sites", "wgpu/counters"]
 # Native Open, Save and folder dialogs: rfd on macOS and Windows, the XDG desktop portal over zbus on Linux.
