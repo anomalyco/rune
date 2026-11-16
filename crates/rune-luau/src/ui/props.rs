@@ -675,6 +675,7 @@ fn role(s: &str) -> Option<&'static str> {
         "heading" => "heading",
         "img" => "img",
         "status" => "status",
+        "timer" => "timer",
         "alert" => "alert",
         _ => return None,
     })
