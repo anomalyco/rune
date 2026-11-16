@@ -330,7 +330,14 @@ mod windows {
         let mut gone_at = None;
         while Instant::now() < until {
             match create(name) {
-                Ok(pipe) => return Some(pipe),
+                // The name can come free before the rest of what `server` holds (its files):
+                // keep the name, but answer only once the process object is signalled.
+                Ok(pipe) => {
+                    while crate::relaunch::alive(server) && Instant::now() < until {
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                    return Some(pipe);
+                }
                 Err(ERROR_ACCESS_DENIED) => {}
                 Err(_) => return None,
             }
