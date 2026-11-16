@@ -153,6 +153,9 @@ impl TextSystem {
         let miss = crate::marks::counting() && !self.atlas.map.contains_key(&key);
         if miss { crate::marks::add("text.glyphs", 1); }
         let _raster = crate::marks::Timed::start("text.raster_ns", miss);
+        let probe_miss = super::miss_probe::on() && !self.atlas.map.contains_key(&key);
+        if probe_miss { super::miss_probe::count(super::miss_probe::Count::Glyphs); }
+        let _probe = super::miss_probe::Timer::new(super::miss_probe::Slot::Raster, probe_miss);
         let entry = match self.atlas.map.get(&key) {
             Some(e) => {
                 let mask = e.mask();
