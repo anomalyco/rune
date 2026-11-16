@@ -49,6 +49,15 @@ impl Reorder {
 }
 
 impl<S: 'static> Runtime<S> {
+    /// The row's reorder shift, including zero for a neighbour resizing in that same commit:
+    /// its inset can still change, and must ride its height. Only previously drawn rows qualify.
+    pub(super) fn live_row_shift(&self, row: &Node, reorder: &Reorder, list: &crate::el::virtual_list::VirtualList, range: &std::ops::Range<usize>) -> Option<(NodeId, f32)> {
+        let jump = reorder.jump(row.id);
+        if jump == 0.0 && !self.grows.get(&row.id).is_some_and(|g| g.moving()) { return None; }
+        let key = row.key.as_deref()?;
+        (range.contains(&list.index_of(key)?) && list.drawn.iter().any(|old| old == key)).then_some((row.id, jump))
+    }
+
     /// Only a virtual list already showing its tail, in the same viewport, can grow it for a
     /// live arrival. If its viewport changes height too (a tray closing under it), landing
     /// both together avoids first moving by the tray's height and then back by the row's.

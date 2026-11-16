@@ -1,0 +1,1 @@
+- In a virtual list following a live delivery, a row crossing its neighbour keeps its colour changes and any child exit its view asked for. A resizing neighbour carries its contents through a change of top inset instead of jumping inside its own moving bounds.

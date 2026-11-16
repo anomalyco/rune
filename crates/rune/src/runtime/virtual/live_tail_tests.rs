@@ -12,9 +12,10 @@ struct Feed { case: Case, phase: Phase }
 fn view(feed: &Feed, _: &mut Cx<Feed>) -> El {
     let delivered = feed.phase == Phase::Delivered;
     let narrow = matches!(feed.case, Case::Narrow | Case::Rewrapping) && feed.phase != Phase::Waiting;
-    let label = el().key("label").w(40.0).h(10.0).fill(Color::WHITE);
+    let label = el().key("label").w(40.0).h(10.0).fill(if delivered { Color::WHITE } else { Color::BLACK });
     let mut content = col().key("content").w_full().pt(if delivered { 12.0 } else { 4.0 }).child(label);
     if feed.case == Case::InstantChild { content = content.instant_changes(); }
+    content = content.child_exit(Transition::opacity()).children((!delivered).then(|| el().key("badge").size(10.0, 10.0).fill(Color::WHITE)));
     let pending = col().key("pending").w_full().h(if delivered { 64.0 } else { 48.0 }).arrives_whole().child(content);
     let working = el().key("working").w(40.0).h(20.0).fill(Color::WHITE);
     let stack = col().key("rows").w_full().growth(GrowthSpec::default()).virtualize(48.0)
@@ -48,6 +49,12 @@ fn record(case: Case) -> Recording {
     if growing {
         let h = run.rt.grows[&row.unwrap().id].h;
         assert!((48.0..64.0).contains(&h), "live row started at {h}");
+        if case == Case::Delivery {
+            let badge = run.rt.nodes.iter().find(|n| n.named("badge")).expect("the visible badge fades on its row");
+            assert!(run.rt.is_exiting(badge.id));
+            let label = run.rt.nodes.iter().find(|n| n.named("label")).unwrap();
+            assert!(run.rt.scene.store().is_animating(label.id, P_FILL));
+        }
         if case == Case::InstantChild {
             let label = run.rt.nodes.iter().position(|n| n.key.as_deref() == Some("label")).unwrap();
             let group = run.rt.nodes[label].parent.unwrap();

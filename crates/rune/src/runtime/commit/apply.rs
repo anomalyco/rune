@@ -295,12 +295,7 @@ impl<S: 'static> Runtime<S> {
             let animates = existed && (!instant || live_rows.is_some()) && !tx.relayout && !self.reduced_motion;
             stack.reorder.measure(animates, &stack.order, &order, stack.gap, |id| self.grows.get(&id).map(|g| g.h));
             if let Some(range) = live_rows && let Some(v) = self.virtuals.get(&nodes[c].path) && stack.order != order {
-                for &j in rows {
-                    let jump = stack.reorder.jump(nodes[j].id);
-                    if jump != 0.0 && nodes[j].key.as_deref().is_some_and(|k| v.index_of(k).is_some_and(|i| range.contains(&i)) && v.drawn.iter().any(|old| old == k)) {
-                        crossings.insert(nodes[j].id, jump);
-                    }
-                }
+                crossings.extend(rows.iter().filter_map(|&j| self.live_row_shift(&nodes[j], &stack.reorder, v, &range)));
             }
             scratch.order = std::mem::replace(&mut stack.order, order);
             self.stacks.insert(cid, stack);
@@ -334,9 +329,10 @@ impl<S: 'static> Runtime<S> {
         let has_virtuals = !self.virtuals.is_empty();
         let mut last = paint_tracks::Finder::default();
         let mut skip_cursor = 0usize;
-        // Descendants of a row crossing its neighbour may change their top padding in the
-        // same commit. Carry that change on the row's height rather than jumping within it.
+        // Carry changed insets on the row's growth, including a resizing neighbour. Only
+        // a row actually crossing another also carries its paint changes and requested exits.
         let mut crossing = None;
+        let mut exit_parents = HashSet::default();
         let mut i = 0usize;
         while i < nodes.len() {
             while skip_cursor < skip_spans.len() && skip_spans[skip_cursor].new_start + skip_spans[skip_cursor].len <= i {
@@ -353,7 +349,7 @@ impl<S: 'static> Runtime<S> {
             let cur_i = i;
             i += 1;
             let i = cur_i;
-            if crossing.is_some_and(|root| nodes[i].parent.is_none_or(|p| p < root)) { crossing = None; }
+            if crossing.is_some_and(|(root, _)| nodes[i].parent.is_none_or(|p| p < root)) { crossing = None; }
             let id = nodes[i].id;
             let mut scene_rect = nodes[i].local;
             let parent_virtual = if has_virtuals {
@@ -364,6 +360,9 @@ impl<S: 'static> Runtime<S> {
             if let Some(v) = parent_virtual {
                 scene_rect.y -= v.before;
             }
+            if !crossings.is_empty() && let Some(jump) = crossings.get(&id) { crossing = Some((i, *jump != 0.0)); }
+            let riding = crossing.is_some_and(|(_, moves)| moves) && !nodes[i].instant_changes;
+            if riding && nodes[i].vis.child_exit.is_some() { exit_parents.insert(id); }
             let old = last.find(&self.nodes, id);
             if can_skip_apply
                 && slid.is_empty()
@@ -454,7 +453,6 @@ impl<S: 'static> Runtime<S> {
                     && !self.flying.iter().any(|f| f.0 == id);
                 if !crossings.is_empty() && !out_of_sight && !nodes[i].instant_changes && let Some(&jump) = crossings.get(&id) {
                     reorder_jump = jump;
-                    crossing = Some(i);
                 }
                 let layout_anim = if out_of_sight || held.get(i).copied().unwrap_or(false) {
                     LayoutAnim::INSTANT
@@ -537,7 +535,7 @@ impl<S: 'static> Runtime<S> {
                     }
                     self.scene.set_frame(id, scene_rect, layout_anim);
                 }
-                let quiet = lands || out_of_sight;
+                let quiet = (lands && !riding) || out_of_sight;
                 self.set_or_anim(id, prop::RADIUS, Corners(nodes[i].vis.radii()), spring_l, quiet);
                 if nodes[i].live.iter().any(|b| b.property == crate::live::Property::Opacity) {
                     // The live source owns this property, including across unrelated commits.
@@ -552,7 +550,7 @@ impl<S: 'static> Runtime<S> {
                     self.set_or_anim(id, prop::OPACITY, nodes[i].vis.opacity, spring_l, quiet);
                 }
             }
-            let rest_quiet = lands || !was_present || was_exiting || self.reduced_motion;
+            let rest_quiet = (lands && !riding) || !was_present || was_exiting || self.reduced_motion;
             let shift = nodes[i].vis.offset;
             if !slid.is_empty() && nodes[i].parent.is_some_and(|p| slid[p]) { slid[i] = true; }
             if nodes[i].looping.is_none() && !nodes[i].live.iter().any(|b| b.property == crate::live::Property::Offset)
@@ -598,7 +596,7 @@ impl<S: 'static> Runtime<S> {
             if turn != 0.0 || self.scene.store().has(id, prop::ROTATION) {
                 self.snap_or_animate(id, prop::ROTATION, turn, rest_quiet, 0.0, nodes[i].vis.rotate_motion.as_deref().copied(), spring_l);
             }
-            let (instant, vis) = (instant || self.enters_unseen(&nodes, &unseen, i), &nodes[i].vis);
+            let (instant, vis) = ((instant && !riding) || self.enters_unseen(&nodes, &unseen, i), &nodes[i].vis);
             if !nodes[i].live.iter().any(|b| b.property == crate::live::Property::Blur)
                 && (vis.blur != 0.0 || self.scene.store().has(id, prop::BLUR))
             {
@@ -781,7 +779,8 @@ impl<S: 'static> Runtime<S> {
                     old_parent_id.is_none_or(|pid| self.node_index.get(&pid).is_some_and(|&i| i < present_len));
                 if parent_remained_present {
                     let instant = instant || (old.instant_changes && old_parent_id.and_then(|pid| self.node_index.get(&pid)).is_some_and(|&p| nodes[p].instant_changes));
-                    if tx.commit.lands() || ((instant || tx.unprompted) && !self.is_exiting(old.id)) || drew_nothing.get(oi).copied().unwrap_or(false) {
+                    let rides_parent = old_parent_id.is_some_and(|p| exit_parents.contains(&p));
+                    if tx.commit.lands() || ((instant || tx.unprompted) && !rides_parent && !self.is_exiting(old.id)) || drew_nothing.get(oi).copied().unwrap_or(false) {
                         self.scene.unmount(old.id);
                     } else {
                         if let Some(t) = old_parent_id.and_then(|pid| self.node_index.get(&pid)).and_then(|&p| nodes[p].vis.child_exit.as_deref().copied()) {
