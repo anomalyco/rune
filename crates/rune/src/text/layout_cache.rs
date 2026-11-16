@@ -115,6 +115,7 @@ impl TextSystem {
     /// commits, and older ones, most recently used first, while they fit in [`STALE_BYTES`].
     pub fn end_commit(&mut self) {
         let g = self.generation;
+        let before = self.layouts.len();
         if !self.superseded.is_empty() {
             let gone = &self.superseded;
             self.layouts.retain(|_, e| e.used == g || !gone.contains(&e.shape));
@@ -131,6 +132,7 @@ impl TextSystem {
         self.shapes.retain(|_, key| layouts.contains_key(key));
         evict(&mut self.elisions, g);
         evict(&mut self.runs, g);
+        super::miss_probe::event("end_commit", g, before, self.layouts.len());
         self.generation = g.wrapping_add(1);
     }
 
@@ -141,7 +143,9 @@ impl TextSystem {
         self.prepare_forget();
         // `end_commit` moved the generation on after the last commit.
         let g = self.generation.wrapping_sub(1);
+        let before = self.layouts.len();
         evict_to(&mut self.layouts, g, 0);
+        super::miss_probe::event("rest", g, before, self.layouts.len());
         evict_to(&mut self.paragraphs, g, 0);
         evict_to(&mut self.elisions, g, 0);
         evict_to(&mut self.runs, g, 0);

@@ -74,6 +74,7 @@ impl TextSystem {
     /// Drops every layout, run and measurement shaped so far, for new families or a new
     /// language. Glyphs stay in the atlas under their own font's key until they age out.
     pub(super) fn drop_shaped(&mut self) {
+        super::miss_probe::event("drop_shaped", self.generation, self.layouts.len(), 0);
         self.layouts.clear();
         self.prepare_forget();
         self.shapes.clear();
