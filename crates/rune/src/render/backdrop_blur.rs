@@ -88,6 +88,8 @@ pub(super) struct BackdropBlur {
     dummy: wgpu::TextureView,
     uniforms: wgpu::Buffer,
     pyramid: Option<Pyramid>,
+    /// The first pyramid, being made on a thread (`prepare_backdrop_blur`).
+    making: Option<std::sync::mpsc::Receiver<Pyramid>>,
     /// The down pass into level 0, reading the pooled backdrop of each format.
     first: Vec<(wgpu::TextureFormat, wgpu::BindGroup)>,
     records: Vec<Record>,
@@ -205,29 +207,22 @@ impl BackdropBlur {
         });
         BackdropBlur {
             down, up, level_layout, result_layout, composite_layout, composite, composite_precompiled,
-            composites: Vec::new(), sampler, dummy, uniforms, pyramid: None, first: Vec::new(), records: Vec::new(),
+            composites: Vec::new(), sampler, dummy, uniforms, pyramid: None, making: None, first: Vec::new(), records: Vec::new(),
         }
     }
 
     fn levels_binding(&self) -> wgpu::BindingResource<'_> {
-        wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-            buffer: &self.uniforms,
-            offset: 0,
-            size: wgpu::BufferSize::new(std::mem::size_of::<Level>() as u64),
-        })
+        levels_binding(&self.uniforms)
     }
 
     fn level_bind(&self, device: &wgpu::Device, src: &wgpu::TextureView, fine: &wgpu::TextureView) -> wgpu::BindGroup {
-        device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("backdrop blur level"),
-            layout: &self.level_layout,
-            entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(src) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(fine) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.sampler) },
-                wgpu::BindGroupEntry { binding: 3, resource: self.levels_binding() },
-            ],
-        })
+        self.parts().level_bind(device, src, fine)
+    }
+
+    /// What a pyramid binds against, to make one on another thread.
+    fn parts(&self) -> PyramidParts {
+        PyramidParts { level_layout: self.level_layout.clone(), result_layout: self.result_layout.clone(),
+            sampler: self.sampler.clone(), dummy: self.dummy.clone(), uniforms: self.uniforms.clone() }
     }
 
     /// Points the first down pass at the pooled backdrop of `format` (new or resized).
@@ -291,38 +286,34 @@ impl BackdropBlur {
         let have = self.pyramid.as_ref().map_or([0; 2], |p| p.size);
         let size = [0, 1].map(|k| have[k].min(cap[k]).max(need[k]));
         if size == have { return; }
-        let mips = MIPS;
-        let chain = |label| {
-            let t = device.create_texture(&wgpu::TextureDescriptor {
-                label: Some(label),
-                size: wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
-                mip_level_count: mips,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: layers::FORMAT,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
+        self.pyramid = Some(self.parts().pyramid(device, size));
+    }
+
+    /// The first pyramid, `need` texels, made on a thread rather than on the frame that first
+    /// blurs (content first scrolling under a frosted header). True while it's being made: that
+    /// frame and the next few draw without the blur, and the thread wakes the window.
+    fn pyramid_pending(&mut self, device: &wgpu::Device, need: [u32; 2], wake: Option<std::sync::Arc<crate::live::Wake>>) -> bool {
+        if self.pyramid.is_some() { return false; }
+        if let Some(making) = &self.making {
+            return match making.try_recv() {
+                Ok(pyramid) => { self.making = None; self.pyramid = Some(pyramid); false }
+                Err(std::sync::mpsc::TryRecvError::Empty) => true,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => { self.making = None; false }
+            };
+        }
+        // Tests share a process and check what a frame draws: they make it on the frame.
+        #[cfg(not(any(test, target_arch = "wasm32")))]
+        {
+            let (parts, device, (sent, making)) = (self.parts(), device.clone(), std::sync::mpsc::channel());
+            let spawned = std::thread::Builder::new().name("rune-backdrop-pyramid".into()).spawn(move || {
+                sent.send(parts.pyramid(&device, need)).ok();
+                if let Some(wake) = wake { wake.notify(); }
             });
-            (0..mips)
-                .map(|m| t.create_view(&wgpu::TextureViewDescriptor { base_mip_level: m, mip_level_count: Some(1), ..Default::default() }))
-                .collect::<Vec<_>>()
-        };
-        let (down, up) = (chain("backdrop blur down"), chain("backdrop blur up"));
-        let m = down.len();
-        let down_binds = (1..m).map(|k| self.level_bind(device, &down[k - 1], &self.dummy)).collect();
-        let up_binds = (0..m.saturating_sub(1))
-            .map(|k| (self.level_bind(device, &down[k + 1], &down[k]), (k + 2 < m).then(|| self.level_bind(device, &up[k + 1], &down[k]))))
-            .collect();
-        let result = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("backdrop blur result"),
-            layout: &self.result_layout,
-            entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&up[0]) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
-                wgpu::BindGroupEntry { binding: 2, resource: self.levels_binding() },
-            ],
-        });
-        self.pyramid = Some(Pyramid { size, down, up, down_binds, up_binds, result });
+            if spawned.is_ok() { self.making = Some(making); return true; }
+        }
+        #[cfg(any(test, target_arch = "wasm32"))]
+        let _ = (device, need, wake);
+        false
     }
 
     /// Records the pyramid passes for `record`, reading the backdrop of `format`.
@@ -388,10 +379,13 @@ impl Renderer {
         let any = self.effects.iter().any(|(_, i)| i.params[1] == KIND_BACKDROP_BLUR);
         if let Some(b) = &mut self.backdrop_blur { b.records.clear(); }
         if !any || vw == 0 || vh == 0 { return; }
-        // Still compiling on the warming thread: this frame draws without the blur.
+        // Still compiling on the warming thread, or the window's copy still being made
+        // (`backdrops_pending`): this frame draws without the blur.
         if self.backdrop_blur.is_none() && self.backdrop_pending() { return; }
+        if !self.backdrops.iter().any(|b| b.format == self.format) { return; }
         let staging = self.uploads.staging(device, queue);
         if self.backdrop_blur.is_none() { self.adopt_backdrop_blur(device, BackdropBlur::new(device, &self.bind_layout)); }
+        let wake = self.frame_wake.clone();
         let Some(blur) = &mut self.backdrop_blur else { return };
         blur.ensure_composite(device, self.format);
         for (format, _) in &self.extra { blur.ensure_composite(device, *format); }
@@ -420,6 +414,7 @@ impl Renderer {
         if placed.is_empty() { return; }
         // The window plus the most an aligned origin can sit before it.
         let cap = [vw, vh].map(|v| (v.div_ceil(2) + STEP).next_multiple_of(STEP));
+        if blur.pyramid_pending(device, need, wake) { return; }
         blur.ensure_pyramid(device, need, cap);
         let Some(pyramid) = &blur.pyramid else { return };
         let extent = [pyramid.size[0] as f32 * 2.0, pyramid.size[1] as f32 * 2.0];
@@ -480,6 +475,75 @@ impl Renderer {
             pass.draw(0..4, at..at + 1);
         }
         pass.set_scissor(scope, size);
+    }
+}
+
+/// The binding of one record's level uniforms in `uniforms`.
+fn levels_binding(uniforms: &wgpu::Buffer) -> wgpu::BindingResource<'_> {
+    wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+        buffer: uniforms,
+        offset: 0,
+        size: wgpu::BufferSize::new(std::mem::size_of::<Level>() as u64),
+    })
+}
+
+/// What a pyramid binds against, cloned from the blur so a thread can make one.
+struct PyramidParts {
+    level_layout: wgpu::BindGroupLayout,
+    result_layout: wgpu::BindGroupLayout,
+    sampler: wgpu::Sampler,
+    dummy: wgpu::TextureView,
+    uniforms: wgpu::Buffer,
+}
+
+impl PyramidParts {
+    fn level_bind(&self, device: &wgpu::Device, src: &wgpu::TextureView, fine: &wgpu::TextureView) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("backdrop blur level"),
+            layout: &self.level_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(src) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(fine) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                wgpu::BindGroupEntry { binding: 3, resource: levels_binding(&self.uniforms) },
+            ],
+        })
+    }
+
+    /// A pyramid whose level 0 is `size` texels.
+    fn pyramid(&self, device: &wgpu::Device, size: [u32; 2]) -> Pyramid {
+        let mips = MIPS;
+        let chain = |label| {
+            let t = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
+                mip_level_count: mips,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: layers::FORMAT,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+            (0..mips)
+                .map(|m| t.create_view(&wgpu::TextureViewDescriptor { base_mip_level: m, mip_level_count: Some(1), ..Default::default() }))
+                .collect::<Vec<_>>()
+        };
+        let (down, up) = (chain("backdrop blur down"), chain("backdrop blur up"));
+        let m = down.len();
+        let down_binds = (1..m).map(|k| self.level_bind(device, &down[k - 1], &self.dummy)).collect();
+        let up_binds = (0..m.saturating_sub(1))
+            .map(|k| (self.level_bind(device, &down[k + 1], &down[k]), (k + 2 < m).then(|| self.level_bind(device, &up[k + 1], &down[k]))))
+            .collect();
+        let result = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("backdrop blur result"),
+            layout: &self.result_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&up[0]) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                wgpu::BindGroupEntry { binding: 2, resource: levels_binding(&self.uniforms) },
+            ],
+        });
+        Pyramid { size, down, up, down_binds, up_binds, result }
     }
 }
 

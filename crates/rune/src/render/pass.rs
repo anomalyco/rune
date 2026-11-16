@@ -262,7 +262,61 @@ impl<'p> std::ops::DerefMut for ActivePass<'_, 'p> {
     }
 }
 
+/// A window-sized backdrop copy of `format`, made on any thread.
+fn new_backdrop(device: &wgpu::Device, format: wgpu::TextureFormat, (width, height): (u32, u32)) -> Backdrop {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("effect backdrop"),
+        size: wgpu::Extent3d { width: width.max(1), height: height.max(1), depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&Default::default());
+    Backdrop { format, texture, view }
+}
+
 impl Renderer {
+    /// The window's first backdrop copies (content first under a frosted header), made on a
+    /// thread rather than on that frame: true while they're being made, and that frame draws
+    /// without what reads them. A copy of a new size (a resize) is made on the frame, as before.
+    pub(super) fn backdrops_pending(&mut self, device: &wgpu::Device, viewport: (u32, u32)) -> bool {
+        if let Some(making) = &self.breakers.backdrops {
+            return match making.try_recv() {
+                Ok(made) => {
+                    self.breakers.backdrops = None;
+                    for b in made {
+                        if self.backdrops.iter().any(|have| have.format == b.format) { continue; }
+                        if let Some(blur) = &mut self.backdrop_blur { blur.bind_backdrop(device, b.format, &b.view); }
+                        self.backdrops.push(b);
+                    }
+                    false
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => true,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => { self.breakers.backdrops = None; false }
+            };
+        }
+        if !self.backdrops.is_empty() { return false; }
+        // Tests share a process and check what a frame draws: they make them on the frame.
+        #[cfg(not(any(test, target_arch = "wasm32")))]
+        {
+            let mut formats = vec![self.format];
+            formats.extend(self.extra.iter().map(|(f, _)| *f));
+            if self.layers.targets.iter().any(Option::is_some) { formats.push(super::layers::FORMAT); }
+            let (device, wake, (sent, making)) = (device.clone(), self.frame_wake.clone(), std::sync::mpsc::channel());
+            let spawned = std::thread::Builder::new().name("rune-backdrop-copies".into()).spawn(move || {
+                sent.send(formats.into_iter().map(|f| new_backdrop(&device, f, viewport)).collect()).ok();
+                if let Some(wake) = wake { wake.notify(); }
+            });
+            if spawned.is_ok() { self.breakers.backdrops = Some(making); return true; }
+        }
+        #[cfg(any(test, target_arch = "wasm32"))]
+        let _ = (device, viewport);
+        false
+    }
+
     pub(super) fn ensure_backdrop(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat, (width, height): (u32, u32)) {
         let (width, height) = (width.max(1), height.max(1));
         if let Some(b) = self.backdrops.iter().find(|b| b.format == format)

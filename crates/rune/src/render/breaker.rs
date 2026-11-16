@@ -166,6 +166,8 @@ pub(super) struct Breakers {
     ui_frames: u8,
     /// Layer targets made ahead for faded lists (`Renderer::warm_fade_pool`).
     pool: Pool,
+    /// The window's first backdrop copies, being made on a thread (`Renderer::backdrops_pending`).
+    pub(super) backdrops: Option<std::sync::mpsc::Receiver<Vec<super::pass::Backdrop>>>,
     /// Tests: build this feature's pipelines broken, as a device that refuses them would.
     #[cfg(test)]
     pub refuse: Option<Feature>,
@@ -293,6 +295,8 @@ impl Renderer {
         // A fade's widths are the first two words (`pack_fade`); its clip is the list it fades.
         let Some(list) = instances.iter().find(|i| i.fade[0] != 0 || i.fade[1] != 0).map(|i| i.clip) else { return };
         self.breakers.pool = Pool::Done;
+        #[cfg(any(test, target_arch = "wasm32"))]
+        let _ = (device, list);
         // As `warm_first_use`: a thread in one test would change what the others plan.
         #[cfg(not(any(test, target_arch = "wasm32")))]
         {
