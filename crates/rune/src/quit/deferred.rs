@@ -35,6 +35,10 @@ pub struct Hooks {
     /// Return the status host. While overdue its native Close means Keep waiting, never
     /// discard. Use `status_key` for a new host so an older dismissal cannot address it.
     pub overdue: fn(Ticket) -> crate::WindowHandle,
+    /// The status host's native Close (its X, Alt+F4) while the quit is pending. Rune never
+    /// destroys that host for it; the app decides what the close means at its current stage
+    /// (keep waiting, or return to the workspace when nothing is being saved).
+    pub status_closed: fn(Ticket),
     pub resumed: fn(Ticket),
     /// A durable user quit is committed; Then::Relaunch means this app starts again at once,
     /// so nothing that replaces its bundle may be authorized.
@@ -166,6 +170,12 @@ impl Default for State {
 impl State {
     pub(crate) fn accepts_activation(&self) -> bool {
         matches!(self, Self::Running | Self::Resumed | Self::Quitting { .. } | Self::Saving { .. } | Self::Overdue { .. })
+    }
+    pub(crate) fn ticket(&self) -> Option<Ticket> {
+        match *self {
+            Self::Quitting { k, .. } | Self::Saving { k, .. } | Self::Overdue { k, .. } => Some(k),
+            _ => None,
+        }
     }
     pub(crate) fn due(&self) -> Option<(Ticket, Instant)> {
         match *self {

@@ -185,7 +185,12 @@ fn wait_free(name: &[u16], server: u32) -> Option<HANDLE> {
     let mut gone_at = None;
     while Instant::now() < until {
         match create(name) {
-            Ok(pipe) => return Some(pipe),
+            // The name can come free before the rest of what server holds (its storage lease):
+            // keep the name, but answer only once the process object is signalled.
+            Ok(pipe) => {
+                while crate::relaunch::alive(server) && Instant::now() < until { std::thread::sleep(Duration::from_millis(1)); }
+                return Some(pipe);
+            }
             Err(ERROR_ACCESS_DENIED) => {}
             Err(_) => return None,
         }
@@ -402,8 +407,14 @@ fn exchange(name: &[u16], deadline: Instant, payload: impl FnOnce() -> Vec<u8>) 
             AllowSetForegroundWindow(server);
         }
     }
-    // A killed process's pipe can outlast it (its kernel objects go after its exit): nobody
-    // reads it, so don't wait for an answer.
+    // A killed process's pipe outlasts its exit code until the kernel closes its handles:
+    // nobody reads it. Wait for the name as for a quit, never start beside it.
+    if server != 0 && crate::relaunch::ending(server) {
+        // SAFETY: the client handle, closed once.
+        unsafe { CloseHandle(pipe) };
+        return Sent::Quitting(server);
+    }
+    // Held by a process that is gone (an inherited handle): nobody reads it.
     if server != 0 && !crate::relaunch::alive(server) {
         // SAFETY: the client handle, closed once.
         unsafe { CloseHandle(pipe) };
@@ -434,6 +445,8 @@ fn exchange(name: &[u16], deadline: Instant, payload: impl FnOnce() -> Vec<u8>) 
         (Some(1), b'R') => Sent::UiDelivered,
         (Some(1), ACCEPTED) => Sent::Delivered,
         (Some(1), QUITTING) => Sent::Quitting(server),
+        // It died while answering: its name is free once its handles are.
+        (None,_) if server!=0 && crate::relaunch::ending(server) => Sent::Quitting(server),
         #[cfg(feature="deferred-quit")]
         (None,_) if crate::deferred_quit::hooks().is_some() && server!=0 && !crate::relaunch::alive(server) => Sent::Gone,
         _ => Sent::Nobody,
