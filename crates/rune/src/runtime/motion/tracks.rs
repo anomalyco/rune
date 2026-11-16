@@ -145,10 +145,7 @@ impl<S: 'static> Runtime<S> {
             let n = &self.nodes[c];
             f64::from(n.target[1] - view[1]) + self.stack_extent(c).unwrap_or(f64::from(n.target[3] - n.target[1]))
         }).reduce(f64::max).unwrap_or(0.0);
-        let height = self.scroll_stack(i).and_then(|c| self.stacks.get(&self.nodes[c].id))
-            .filter(|s| !matches!(s.handoff, row_reorder::handoff::Handoff::Idle))
-            .and_then(|_| self.scene.get(self.nodes[i].id, prop::FRAME)).map_or(view[3] - view[1], |r| r.h);
-        content_h - f64::from(height)
+        content_h - f64::from(view[3] - view[1])
     }
 
     pub(super) fn step_scroll(&mut self, dt: f32) -> bool {
