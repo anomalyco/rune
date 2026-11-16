@@ -121,6 +121,12 @@ impl Renderer {
         !d.armed.is_empty() && !d.runs.is_empty() && !d.layers_reached && d.retained.as_ref().is_some_and(|r| r.current)
     }
 
+    /// A window at rest (`give_back`): the kept frame goes. It's a window-sized texture (9.2 MB
+    /// at 1920x1200), made by the first partial frame and otherwise held for the window's life.
+    pub(super) fn forget_kept_frame(&self) {
+        self.damage.lock().unwrap().retained = None;
+    }
+
     /// After every frame: whether it redrew only the armed rectangles, or why not. A frame that
     /// drew any other way leaves the kept frame behind.
     pub(crate) fn damage_drawn(&self) -> Drawn {
