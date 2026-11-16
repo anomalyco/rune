@@ -434,6 +434,19 @@ impl<S: 'static> Host<S> {
         }
         #[cfg(not(target_os = "macos"))]
         gpu.queue.present(frame);
+        // Measuring only: the swap chain's own count of which present the display showed at which
+        // refresh (`GetFrameStatistics`), in-process: no ETW session.
+        #[cfg(all(target_os = "windows", feature = "frame-profile"))]
+        if let Some(sc) = l.surface.as_ref().and_then(|s| unsafe { s.as_hal::<wgpu::hal::api::Dx12>().and_then(|h| h.swap_chain()) }) {
+            let mut st = Default::default();
+            let got = unsafe { sc.GetFrameStatistics(&mut st) };
+            let last = unsafe { sc.GetLastPresentCount() }.unwrap_or(0);
+            let line = match got {
+                Ok(()) => format!("stats\",\"last\":{last},\"present\":{},\"present_refresh\":{},\"sync_refresh\":{},\"sync_qpc\":{},\"x\":\"", st.PresentCount, st.PresentRefreshCount, st.SyncRefreshCount, st.SyncQPCTime),
+                Err(e) => format!("stats\",\"last\":{last},\"error\":\"{:#x}", e.code().0),
+            };
+            crate::frame::live_log::mark(&line);
+        }
         #[cfg(target_os = "windows")]
         l.native.slot.presented();
         // A swap chain made again on a handed-over window's visual takes over now (`cpu_frame`).
