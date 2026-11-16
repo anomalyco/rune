@@ -51,7 +51,7 @@ pub(super) struct Layers {
     /// kept for the next layer of their size: opening a menu or a popover again makes no texture.
     spare: Vec<Target>,
     stack: Vec<usize>,
-    pipelines: Vec<(wgpu::TextureFormat, wgpu::RenderPipeline)>,
+    pub(super) pipelines: Vec<(wgpu::TextureFormat, wgpu::RenderPipeline)>,
     pub additive: Option<(wgpu::RenderPipeline, wgpu::RenderPipeline)>,
     pub blur: Option<layer_blur::Pipeline>,
     viewport: (u32, u32),
