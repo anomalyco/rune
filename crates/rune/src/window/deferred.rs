@@ -199,7 +199,7 @@ impl Windows {
                     #[cfg(target_os = "windows")]
                     crate::deferred_quit::session::clear();
                     crate::marks::mark("quit.confirmed");
-                    (hooks.confirmed)(k);
+                    (hooks.confirmed)(k, match after { crate::quit::After::Exit => crate::deferred_quit::Then::Exit, crate::quit::After::Relaunch => crate::deferred_quit::Then::Relaunch });
                     for h in self.hosts.iter_mut().flatten(){h.committed_quit();}
                     let _ = crate::quit::send(crate::quit::Event::Start { ending: false, after });
                     #[cfg(target_os = "macos")]
