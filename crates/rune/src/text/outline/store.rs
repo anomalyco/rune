@@ -66,11 +66,13 @@ pub(crate) struct OutlineStore {
     /// A record didn't fit: start again at the next frame.
     full: bool,
     support: Support,
+    /// The outlines an app asked to have built ahead (`text::warm_outlines`).
+    pub(crate) warm: crate::text::outline_warm::Warm,
 }
 
 impl Default for OutlineStore {
     fn default() -> Self {
-        OutlineStore { texels: vec![[0; 4]; WIDTH as usize], used: 1, glyphs: Default::default(), hints: Default::default(), dirty: None, full: false, support: Support::Untried }
+        OutlineStore { texels: vec![[0; 4]; WIDTH as usize], used: 1, glyphs: Default::default(), hints: Default::default(), dirty: None, full: false, support: Support::Untried, warm: Default::default() }
     }
 }
 

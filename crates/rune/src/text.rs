@@ -79,6 +79,8 @@ pub use macos::smoothing::ApplePipeline;
 mod windows;
 mod measure;
 pub(crate) mod outline;
+mod outline_warm;
+pub use outline_warm::warm_outlines;
 pub use outline::Outline;
 mod pill_chips;
 mod pretty;

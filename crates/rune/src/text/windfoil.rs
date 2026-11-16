@@ -27,7 +27,7 @@ const CJK_HINT_MAX: f32 = 24.0;
 const CJK_WEIGHT: f64 = 0.5;
 
 /// What the outline store holds for a glyph.
-enum Found {
+pub(super) enum Found {
     /// Its record, and whether its TrueType hints fitted it to the pixel grid.
     Draws(outline::Glyph, bool),
     /// Nothing to draw (a space).
@@ -79,7 +79,7 @@ impl TextSystem {
     /// takes its TrueType-hinted outline, whose strokes sit on whole pixels as DirectWrite's do:
     /// dense ideographs blur without it. A mode that autohints takes the light-autohinted
     /// outline at `ppem` for every face.
-    fn find_outline(&mut self, face: &Face, coords: &[i16], glyph: u32, ppem: f32) -> Found {
+    pub(super) fn find_outline(&mut self, face: &Face, coords: &[i16], glyph: u32, ppem: f32) -> Found {
         let (font, skew) = (&face.font, face.skew);
         let face_key = (font.data.id(), font.index);
         let Some(font_ref) = FontRef::from_index(font.data.as_ref(), font.index as usize) else { return Found::Elsewhere };

@@ -23,6 +23,12 @@ impl<S: 'static> Runtime<S> {
         tx.font_families.as_ref().is_some_and(|(sans, mono)| self.text.families() != (sans.as_str(), mono.as_str()))
     }
 
+    /// Builds about a millisecond of the outlines the app asked to have built ahead
+    /// (`text::warm_outlines`), at this window's scale; true while more are owed.
+    pub(crate) fn warm_text(&mut self) -> bool {
+        self.text.warm_step(self.env.scale, std::time::Duration::from_millis(1))
+    }
+
     /// Takes up families chosen, or a web app's full faces fetched, since this runtime last
     /// looked. On a change, everything sized in the old fonts goes: memoized subtrees, and every
     /// measured leaf's layout result. The text system has already dropped its layouts. True
