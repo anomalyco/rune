@@ -775,6 +775,7 @@ struct AllocatorSlot {
     raw: Direct3D12::ID3D12CommandAllocator,
     lists: Vec<Direct3D12::ID3D12GraphicsCommandList>,
     weight: u32,
+    pending: bool,
 }
 
 unsafe impl Send for DeviceShared {}
@@ -1002,6 +1003,7 @@ pub struct CommandEncoder {
     allocator: Option<Direct3D12::ID3D12CommandAllocator>,
     weight: u32,
     recorded: u32,
+    pending: bool,
     device: Direct3D12::ID3D12Device,
     shared: Arc<DeviceShared>,
     mem_allocator: Allocator,

@@ -393,11 +393,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
             let pending = label == Some("(wgpu internal) PendingWrites");
             let slot = {
                 let mut pool = self.shared.allocators.lock();
-                let pick = if pending {
-                    pool.iter().enumerate().min_by_key(|(_, s)| s.weight).map(|(i, _)| i)
-                } else {
-                    pool.iter().enumerate().max_by_key(|(_, s)| s.weight).map(|(i, _)| i)
-                };
+                let pick = pool.iter().enumerate().filter(|(_, s)| s.pending == pending).max_by_key(|(_, s)| s.weight).map(|(i, _)| i);
                 pick.map(|i| pool.swap_remove(i))
             };
             match slot {
@@ -405,6 +401,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
                     self.allocator = Some(slot.raw);
                     self.free_lists = slot.lists;
                     self.weight = slot.weight;
+                    self.pending = slot.pending;
                 }
                 None => {
                     super::ib3::ALLOCS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
@@ -413,6 +410,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
                             .into_device_result("Command allocator creation")?,
                     );
                     self.weight = 0;
+                    self.pending = pending;
                 }
             }
         }
@@ -483,7 +481,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
         if super::ib3::shared() {
             if let Some(raw) = self.allocator.take() {
                 let weight = self.weight.saturating_add(self.recorded);
-                self.shared.allocators.lock().push(super::AllocatorSlot { raw, lists: mem::take(&mut self.free_lists), weight });
+                self.shared.allocators.lock().push(super::AllocatorSlot { raw, lists: mem::take(&mut self.free_lists), weight, pending: self.pending });
             }
         }
         self.recorded = 0;

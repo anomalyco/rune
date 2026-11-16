@@ -828,6 +828,7 @@ impl crate::Device for super::Device {
             allocator,
             weight: 0,
             recorded: 0,
+            pending: false,
             device: self.raw.clone(),
             shared: Arc::clone(&self.shared),
             mem_allocator: self.mem_allocator.clone(),
