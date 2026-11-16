@@ -215,9 +215,12 @@ impl<S: 'static> Host<S> {
         // Input says the window is in use: the next free turn gives its swap chain a third buffer
         // (`depth`), before the frames a scroll or a key ask for.
         #[cfg(target_os = "windows")]
-        if matches!(event, WindowEvent::CursorMoved { .. } | WindowEvent::CursorEntered { .. } | WindowEvent::MouseInput { .. } | WindowEvent::MouseWheel { .. }
-            | WindowEvent::KeyboardInput { .. } | WindowEvent::Touch(_) | WindowEvent::Focused(true)) {
-            self.depth_step(super::depth::DepthEvent::Likely { now: Instant::now() });
+        match event {
+            WindowEvent::CursorMoved { .. } | WindowEvent::CursorEntered { .. } | WindowEvent::Focused(true) =>
+                self.depth_step(super::depth::DepthEvent::Likely { now: Instant::now() }),
+            WindowEvent::MouseInput { .. } | WindowEvent::MouseWheel { .. } | WindowEvent::KeyboardInput { .. } | WindowEvent::Touch(_) =>
+                self.depth_step(super::depth::DepthEvent::Active { now: Instant::now() }),
+            _ => {}
         }
         if !matches!(event, WindowEvent::RedrawRequested) && let Some(w) = &mut self.win { w.timer_frame.no_longer_quiet(); }
         #[cfg(target_os = "macos")]

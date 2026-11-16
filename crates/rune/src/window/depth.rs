@@ -8,11 +8,12 @@
 //! waits behind a queued one.
 //!
 //! A third buffer costs a window-sized buffer, so a window has it only while it's in use. Making
-//! it (`ResizeBuffers`) waits for the GPU to finish and the new buffer is slow the first time it's
-//! drawn into, so it's never made on a frame the user waits for: input that makes it likely (the
-//! pointer reaching the window, focus, a show) asks for it, and the first turn with nothing
-//! waiting (no input, no frame owed, the swap chain's room free) makes it and draws into each
-//! buffer once. [`IDLE`] after the window's last input, or as it goes out of sight, it
+//! it (`ResizeBuffers`, 13-16 ms on blade's Iris) waits for the GPU to finish and the new buffer is
+//! slow the first time it's drawn into, so it's never made on a frame the user waits for: the
+//! pointer reaching or moving over the window, or focus, asks for it, and the first turn with
+//! nothing waiting (no input, no frame owed, the swap chain's room free) once the pointer has
+//! rested [`SETTLE`] and [`HOLD`] after the last wheel, key, press or touch makes it, then draws
+//! into each buffer once. A scroll with no pointer move first stays on two until it pauses. [`IDLE`] after the window's last input, or as it goes out of sight, it
 //! goes back to two, on a turn when nothing is in flight. A resize takes two (each step configures
 //! anyway); a swap chain made again starts at two. If the third can't be made, the window keeps
 //! two for its life.
@@ -23,13 +24,21 @@ use crate::time::Instant;
 
 /// How long after its last input a window keeps its third buffer.
 pub(super) const IDLE: Duration = Duration::from_secs(60);
+/// How long after a wheel, key, press or touch no third buffer is made: a free turn between two
+/// steps of a scroll or a glide isn't free for the 13-16 ms `ResizeBuffers` takes (blade's Iris).
+pub(super) const HOLD: Duration = Duration::from_millis(250);
+/// How long the pointer rests before the third buffer is made: not between two moves, where a
+/// press may come.
+pub(super) const SETTLE: Duration = Duration::from_millis(100);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum Depth {
-    /// Two buffers; `wanted`: input says the window is in use, so the next free turn makes a third.
+    /// Two buffers.
     #[default]
     Two,
-    Wanted,
+    /// Two, and the pointer or focus says the window is in use: the next free turn from `hold` on
+    /// makes a third.
+    Wanted { hold: Instant },
     /// Three buffers, `warm` of them drawn into since they were made; last input at `last`.
     Three { warm: u8, last: Instant },
     /// Two for the window's life: a third couldn't be made, or the window draws with alpha.
@@ -38,8 +47,10 @@ pub(super) enum Depth {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum DepthEvent {
-    /// Input reached the window (the pointer, a key, a wheel), it gained focus, or it was shown.
+    /// The pointer reached or moved over the window, or it gained focus: it's about to be used.
     Likely { now: Instant },
+    /// A wheel, key, press or touch: the window is in use, and its frames come now.
+    Active { now: Instant },
     /// A frame was presented.
     Presented { now: Instant },
     /// A turn with no input waiting, no frame owed and the swap chain's room free; `seen` is
@@ -68,11 +79,17 @@ impl Depth {
         match (self, event) {
             (D::Off, _) | (_, E::Failed) => (D::Off, F::None),
             (_, E::Remade) => (D::Two, F::None),
-            (D::Two | D::Wanted, E::Likely { .. }) => (D::Wanted, F::None),
-            (D::Two | D::Wanted, E::Presented { .. }) | (D::Two, E::Free { .. }) => (self, F::None),
-            (D::Wanted, E::Free { now, seen: true }) => (D::Three { warm: 0, last: now }, F::Grow),
-            (D::Wanted, E::Free { seen: false, .. }) => (D::Two, F::None),
-            (D::Three { warm, .. }, E::Likely { now }) => (D::Three { warm, last: now }, F::None),
+            (D::Two, E::Likely { now }) => (D::Wanted { hold: now + SETTLE }, F::None),
+            (D::Wanted { hold }, E::Likely { now }) => (D::Wanted { hold: hold.max(now + SETTLE) }, F::None),
+            // A scroll that came with no pointer move first (a touchpad's, a touch screen's) waits
+            // for its pause: the glide stays on two buffers.
+            (D::Two, E::Active { .. }) => (D::Two, F::None),
+            (D::Wanted { hold }, E::Active { now }) => (D::Wanted { hold: hold.max(now + HOLD) }, F::None),
+            (D::Two | D::Wanted { .. }, E::Presented { .. }) | (D::Two, E::Free { .. }) => (self, F::None),
+            (D::Wanted { hold }, E::Free { now, .. }) if now < hold => (self, F::None),
+            (D::Wanted { .. }, E::Free { now, seen: true }) => (D::Three { warm: 0, last: now }, F::Grow),
+            (D::Wanted { .. }, E::Free { seen: false, .. }) => (D::Two, F::None),
+            (D::Three { warm, .. }, E::Likely { now } | E::Active { now }) => (D::Three { warm, last: now }, F::None),
             // A frame doesn't keep the third buffer: an animation's frames leave no free turn.
             (D::Three { warm, last }, E::Presented { .. }) => (D::Three { warm: (warm + 1).min(3), last }, F::None),
             (D::Three { last, .. }, E::Free { now, seen }) if !seen || now >= last + IDLE => (D::Two, F::Shrink),
@@ -85,7 +102,11 @@ impl Depth {
     /// for anything else does it: a swap chain whose room isn't free (a covered window's frame
     /// DWM hasn't taken) mustn't spin the loop.
     pub(super) fn deadline(self, now: Instant) -> Option<Instant> {
-        match self { Depth::Three { last, .. } if now < last + IDLE => Some(last + IDLE), _ => None }
+        match self {
+            Depth::Three { last, .. } if now < last + IDLE => Some(last + IDLE),
+            Depth::Wanted { hold } if now < hold => Some(hold),
+            _ => None,
+        }
     }
 
     pub(super) fn extra(self) -> u32 { matches!(self, Depth::Three { .. }) as u32 }
