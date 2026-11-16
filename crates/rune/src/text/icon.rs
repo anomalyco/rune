@@ -162,14 +162,14 @@ pub(crate) enum Facing {
 /// `icon` drawn `size` device pixels across (its viewBox's scale) on a `px` × `px` canvas,
 /// `px` the size rounded up, so an icon at a fractional size keeps its exact scale and its canvas
 /// lands 1:1 on the device grid, as Chromium paints an SVG at its scale from a snapped origin.
-pub(super) fn rasterize_icon(icon: &Icon, (px, size): (u32, f32), facing: Facing, parity: [u32; 2], atlas: &mut Atlas) -> Rasterized {
+pub(super) fn rasterize_icon(icon: &Icon, (px, size): (u32, f32), facing: Facing, grid: SvgGrid, atlas: &mut Atlas) -> Rasterized {
     if px == 0 {
         return Rasterized::Empty;
     }
     if px + 4 > super::ATLAS_SIZE {
         return Rasterized::Unplaced;
     }
-    let mut cov = icon_coverage_at(icon, px, size, Point::new(0.0, 0.0), parity);
+    let mut cov = icon_coverage_at(icon, px, size, Point::new(0.0, 0.0), grid);
     if facing == Facing::Mirrored {
         cov.chunks_exact_mut(px as usize).for_each(<[u8]>::reverse);
     }
@@ -194,16 +194,30 @@ pub(super) fn rasterize_icon(icon: &Icon, (px, size): (u32, f32), facing: Facing
 /// Where on the GPU's 2×2 quads Chromium shades an inline SVG drawn from `origin` (device
 /// pixels, on the grid): on the window's, or, for an SVG whose opacity animates (`own_layer`),
 /// on the composited layer it rasters into, which starts at the SVG.
-pub(crate) fn quad_parity(origin: [f32; 2], own_layer: bool) -> [u32; 2] {
-    if own_layer { [0, 0] } else { origin.map(|o| (o.round() as i64).rem_euclid(2) as u32) }
+#[derive(Clone, Copy)]
+pub(crate) enum SvgGrid {
+    Surface([u32; 2]),
+    /// Static SVG opacity on a single filled shape: Chromium first paints into a layer the
+    /// size of that shape's outward-rounded ink bounds, then composites it at the given alpha.
+    Translucent([u32; 2]),
+}
+
+impl SvgGrid {
+    pub(crate) fn placed(origin: [f32; 2], own_layer: bool, translucent: bool) -> Self {
+        let p = origin.map(|o| (o.round() as i64).rem_euclid(2) as u32);
+        if own_layer { Self::Surface([0, 0]) } else if translucent { Self::Translucent(p) } else { Self::Surface(p) }
+    }
+
+    fn parity(self) -> [u32; 2] { match self { Self::Surface(p) | Self::Translucent(p) => p } }
 }
 
 /// Only a rounded rectangle can depend on quad parity. Keep a single ordinary atlas placement
 /// for glyph-like icons, even if the same icon appears on all four pixel parities. Inspect the
 /// body only on a miss; a cached parity-independent entry always wins.
-pub(super) fn atlas_key(atlas: &Atlas, icon: &Icon, size: u32, parity: [u32; 2]) -> (usize, u32) {
+pub(super) fn atlas_key(atlas: &Atlas, icon: &Icon, size: u32, grid: SvgGrid) -> (usize, u32) {
     let base = (icon as *const Icon as usize, size);
-    let placed = (base.0, size | (1 << 21) | (parity[0] << 22) | (parity[1] << 23));
+    let parity = grid.parity();
+    let placed = (base.0, size | (u32::from(matches!(grid, SvgGrid::Translucent(_))) << 20) | (1 << 21) | (parity[0] << 22) | (parity[1] << 23));
     if atlas.icons.contains_key(&base) { base }
     else if atlas.icons.contains_key(&placed) || (icon.body.contains("<rect") && icon.body.contains("rx=\"")) { placed }
     else { base }
@@ -226,7 +240,7 @@ const INHERITED: [&str; 9] = [
 
 /// `icon`'s coverage at `px` × `px` device pixels, row-major, as the glyph atlas stores it.
 pub fn icon_coverage(icon: &Icon, px: u32) -> Vec<u8> {
-    icon_coverage_at(icon, px, px as f32, Point::new(0.0, 0.0), [0, 0])
+    icon_coverage_at(icon, px, px as f32, Point::new(0.0, 0.0), SvgGrid::Surface([0, 0]))
 }
 
 /// [`icon_coverage`] as Chromium covers it drawn with its top-left at `origin` device pixels:
@@ -234,14 +248,15 @@ pub fn icon_coverage(icon: &Icon, px: u32) -> Vec<u8> {
 /// that compare with Chromium's pixels; Rune draws every icon at 0.
 #[doc(hidden)]
 pub fn icon_coverage_placed(icon: &Icon, px: u32, origin: [f32; 2]) -> Vec<u8> {
-    icon_coverage_at(icon, px, px as f32, Point::new(origin[0], origin[1]), origin.map(|o| (o.floor() as i64).rem_euclid(2) as u32))
+    icon_coverage_at(icon, px, px as f32, Point::new(origin[0], origin[1]), SvgGrid::Surface(origin.map(|o| (o.floor() as i64).rem_euclid(2) as u32)))
 }
 
 /// `icon`'s coverage drawn `size` device pixels across, from the top-left of a `px` × `px`
 /// canvas placed at `origin`, whose whole pixels are `parity` (odd or even, per axis) on the
 /// grid the GPU shades in 2×2 quads.
-fn icon_coverage_at(icon: &Icon, px: u32, size: f32, origin: Point, parity: [u32; 2]) -> Vec<u8> {
+fn icon_coverage_at(icon: &Icon, px: u32, size: f32, origin: Point, grid: SvgGrid) -> Vec<u8> {
     let s = size / icon.view;
+    let bounded = matches!(grid, SvgGrid::Translucent(_)) && icon.body.trim().strip_suffix("/>").is_some_and(|s| s.starts_with("<rect ") && !s.contains('>'));
     let mut acc = vec![0u8; (px * px) as usize];
     // Each open group with an `opacity`: what it holds so far, and that opacity.
     let mut layers: Vec<(Vec<u8>, f32)> = Vec::new();
@@ -312,7 +327,19 @@ fn icon_coverage_at(icon: &Icon, px: u32, size: f32, origin: Point, parity: [u32
                         None => super::area::render_aaa(&shape, pen, fill, ctm, origin, px, &mut buf),
                     }
                 }
-                super::area::Op::FillRRect { lo, hi, r } => super::convex::fill_rrect([lo.x, lo.y], [hi.x, hi.y], r, parity, px, &mut buf),
+                super::area::Op::FillRRect { lo, hi, r } => {
+                    let start = [lo.x.floor() as i32, lo.y.floor() as i32];
+                    let parity = if bounded { start.map(|v| v.rem_euclid(2) as u32) } else { grid.parity() };
+                    super::convex::fill_rrect([lo.x, lo.y], [hi.x, hi.y], r, parity, px, &mut buf);
+                    if bounded {
+                        let end = [hi.x.ceil() as i32, hi.y.ceil() as i32];
+                        for (y, row) in buf.chunks_exact_mut(px as usize).enumerate() {
+                            if !(start[1]..end[1]).contains(&(y as i32)) { row.fill(0); continue; }
+                            row[..start[0].clamp(0, px as i32) as usize].fill(0);
+                            row[end[0].clamp(0, px as i32) as usize..].fill(0);
+                        }
+                    }
+                }
                 super::area::Op::CircularRRect { lo, hi, r } => super::convex::fill_circular([lo.x, lo.y], [hi.x, hi.y], r, px, &mut buf),
                 op => op.render(px, &mut buf),
             }

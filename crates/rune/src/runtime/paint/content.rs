@@ -188,8 +188,9 @@ impl<S: 'static> Runtime<S> {
             if resting && exact > 1e-4 && !self.text.is_color_icon(ic) {
                 let canvas = (exact - 1.0 / 64.0).ceil().max(1.0) as u32;
                 let at = [on_grid(r_exact[0] + (w_exact - exact) * 0.5, contain[0]), on_grid(r_exact[1] + (h_exact - exact) * 0.5, contain[1])];
-                let own_layer = matches!(n.looping.as_ref().map(|l| l.kind), Some(rune_motion::LoopKind::OpacityCycle(_))) && !self.reduced_motion;
-                if let Some(q) = self.text.icon_quad_sized(ic, (canvas, exact), at, facing, crate::text::quad_parity(at, own_layer)) {
+                let cycle = n.looping.as_ref().and_then(|l| match l.kind { rune_motion::LoopKind::OpacityCycle(c) => Some(c), _ => None });
+                let grid = crate::text::SvgGrid::placed(at, !self.reduced_motion && cycle.is_some(), n.vis.opacity < 1.0 || cycle.is_some_and(|c| c.still < 1.0));
+                if let Some(q) = self.text.icon_quad_sized(ic, (canvas, exact), at, facing, grid) {
                     self.push_icon(icon_inst(&q, at, canvas as f32, 0.0, premul(color, o, srgb), clip, fade));
                 }
             // An icon that paints its own colours draws as its image (or its silhouette in
