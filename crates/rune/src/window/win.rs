@@ -131,7 +131,7 @@ impl Win {
         if self.native.depth.extra() > 0 {
             // SAFETY: only sets a count the configure below reads.
             unsafe { if let Some(h) = surface.as_hal::<wgpu::hal::api::Dx12>() { h.set_extra_buffers(0); } }
-            self.native.depth = self.native.depth.step(super::depth::DepthEvent::Remade).0;
+            self.native.depth = self.native.depth.step(super::depth::DepthEvent::Remade { now: Instant::now() }).0;
         }
         if let Err(error) = super::configure(surface, gpu, &self.config) {
             eprintln!("rune: a window's surface refused its new size: {error}");

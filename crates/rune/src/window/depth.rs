@@ -3,61 +3,80 @@
 //! can't start a frame until DWM gives back the buffer it draws into, which it does when it
 //! composes the frame before; while another window keeps the GPU busy, that round trip takes two
 //! refreshes, and a moving window shows a new image every other refresh (a 240 Hz list scroll:
-//! 223-302 of about 717 refreshes missed with the OpenCode desktop drawing beside it). A third
-//! buffer lets the GPU start at once: 1-5 missed. The frame latency stays 1, so no frame of input
+//! 223-324 of about 717 refreshes missed with the OpenCode desktop drawing beside it). A third
+//! buffer lets the GPU start at once: 1-16 missed. The frame latency stays 1, so no frame of input
 //! waits behind a queued one.
 //!
-//! A third buffer costs a window-sized buffer, so a window has it only while it's in use. Making
-//! it (`ResizeBuffers`, 13-16 ms on blade's Iris) waits for the GPU to finish and the new buffer is
-//! slow the first time it's drawn into, so it's never made on a frame the user waits for: the
-//! pointer reaching or moving over the window, or focus, asks for it, and the first turn with
-//! nothing waiting (no input, no frame owed, the swap chain's room free) once the pointer has
-//! rested [`SETTLE`] and [`HOLD`] after the last wheel, key, press or touch makes it, then draws
-//! into each buffer once. A scroll with no pointer move first stays on two until it pauses. [`IDLE`] after the window's last input, or as it goes out of sight, it
-//! goes back to two, on a turn when nothing is in flight. A resize takes two (each step configures
-//! anyway); a swap chain made again starts at two. If the third can't be made, the window keeps
-//! two for its life.
+//! The window the user works in keeps a third buffer: the focused window, and for [`UNFOCUSED`]
+//! after it loses focus. Read a long reply for minutes, then roll the wheel: the scroll has it. A
+//! window unfocused that long, or hidden, minimised or covered whole, goes back to two.
+//!
+//! Making it (`ResizeBuffers`, 13-16 ms on blade's Iris) waits for the GPU to finish, and a new
+//! buffer is slow the first time it's drawn into, so it's never made on a frame the user waits for:
+//! only on a free turn (no input waiting, no frame on its way, the swap chain's room free), and
+//! not within [`HOLD`] of a wheel, key, press, touch or resize step, so a click that focuses the
+//! window has its frame first and a scroll that comes before the grow runs on two until it pauses.
+//! Then each buffer is drawn into once. A resize or a swap chain made again starts at two and
+//! grows again on the next free turn; if the third can't be made, the window keeps two for its life.
 
 use std::time::Duration;
 
 use crate::time::Instant;
 
-/// How long after its last input a window keeps its third buffer.
-pub(super) const IDLE: Duration = Duration::from_secs(60);
-/// How long after a wheel, key, press or touch no third buffer is made: a free turn between two
-/// steps of a scroll or a glide isn't free for the 13-16 ms `ResizeBuffers` takes (blade's Iris).
+/// How long after losing focus a window keeps its third buffer.
+pub(super) const UNFOCUSED: Duration = Duration::from_secs(60);
+/// How long after a wheel, key, press, touch or resize step no third buffer is made: a free turn
+/// between two steps of a scroll or a click isn't free for the 13-16 ms `ResizeBuffers` takes.
 pub(super) const HOLD: Duration = Duration::from_millis(250);
-/// How long the pointer rests before the third buffer is made: not between two moves, where a
-/// press may come.
-pub(super) const SETTLE: Duration = Duration::from_millis(100);
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Depth {
-    /// Two buffers.
-    #[default]
-    Two,
-    /// Two, and the pointer or focus says the window is in use: the next free turn from `hold` on
-    /// makes a third.
-    Wanted { hold: Instant },
-    /// Three buffers, `warm` of them drawn into since they were made; last input at `last`.
-    Three { warm: u8, last: Instant },
+    /// Two buffers; no third is made before `hold`.
+    Two { hold: Instant },
+    /// Three buffers, `warm` of them drawn into since they were made.
+    Three { warm: u8 },
     /// Two for the window's life: a third couldn't be made, or the window draws with alpha.
     Off,
 }
 
+impl Default for Depth {
+    fn default() -> Self { Depth::Two { hold: Instant::now() } }
+}
+
+/// Whether the user works in the window.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum Focus {
+    /// Not focused since it opened.
+    #[default]
+    Never,
+    Focused,
+    /// Lost focus at the instant.
+    Since(Instant),
+}
+
+impl Focus {
+    /// Whether the window keeps a third buffer at `now`.
+    pub(super) fn keeps(self, now: Instant) -> bool {
+        match self { Focus::Focused => true, Focus::Since(at) => now < at + UNFOCUSED, Focus::Never => false }
+    }
+
+    /// When it stops keeping one.
+    fn ends(self) -> Option<Instant> {
+        match self { Focus::Since(at) => Some(at + UNFOCUSED), _ => None }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum DepthEvent {
-    /// The pointer reached or moved over the window, or it gained focus: it's about to be used.
-    Likely { now: Instant },
-    /// A wheel, key, press or touch: the window is in use, and its frames come now.
+    /// A wheel, key, press, touch or resize step: its frames come now.
     Active { now: Instant },
     /// A frame was presented.
-    Presented { now: Instant },
-    /// A turn with no input waiting, no frame owed and the swap chain's room free; `seen` is
-    /// whether the window can be seen.
-    Free { now: Instant, seen: bool },
+    Presented,
+    /// A turn with no input waiting, no frame on its way and the swap chain's room free. `keep`:
+    /// the window is focused (or was, within `UNFOCUSED`) and can be seen.
+    Free { now: Instant, keep: bool },
     /// The swap chain was configured to another size or made again: it has two.
-    Remade,
+    Remade { now: Instant },
     /// Making the third failed.
     Failed,
 }
@@ -78,35 +97,29 @@ impl Depth {
         use {Depth as D, DepthEffect as F, DepthEvent as E};
         match (self, event) {
             (D::Off, _) | (_, E::Failed) => (D::Off, F::None),
-            (_, E::Remade) => (D::Two, F::None),
-            (D::Two, E::Likely { now }) => (D::Wanted { hold: now + SETTLE }, F::None),
-            (D::Wanted { hold }, E::Likely { now }) => (D::Wanted { hold: hold.max(now + SETTLE) }, F::None),
-            // A scroll that came with no pointer move first (a touchpad's, a touch screen's) waits
-            // for its pause: the glide stays on two buffers.
-            (D::Two, E::Active { .. }) => (D::Two, F::None),
-            (D::Wanted { hold }, E::Active { now }) => (D::Wanted { hold: hold.max(now + HOLD) }, F::None),
-            (D::Two | D::Wanted { .. }, E::Presented { .. }) | (D::Two, E::Free { .. }) => (self, F::None),
-            (D::Wanted { hold }, E::Free { now, .. }) if now < hold => (self, F::None),
-            (D::Wanted { .. }, E::Free { now, seen: true }) => (D::Three { warm: 0, last: now }, F::Grow),
-            (D::Wanted { .. }, E::Free { seen: false, .. }) => (D::Two, F::None),
-            (D::Three { warm, .. }, E::Likely { now } | E::Active { now }) => (D::Three { warm, last: now }, F::None),
-            // A frame doesn't keep the third buffer: an animation's frames leave no free turn.
-            (D::Three { warm, last }, E::Presented { .. }) => (D::Three { warm: (warm + 1).min(3), last }, F::None),
-            (D::Three { last, .. }, E::Free { now, seen }) if !seen || now >= last + IDLE => (D::Two, F::Shrink),
-            (D::Three { warm, last }, E::Free { .. }) if warm < 3 => (D::Three { warm, last }, F::Warm),
+            (_, E::Remade { now }) => (D::Two { hold: now + HOLD }, F::None),
+            (D::Two { hold }, E::Active { now }) => (D::Two { hold: hold.max(now + HOLD) }, F::None),
+            (D::Three { .. }, E::Active { .. }) | (D::Two { .. }, E::Presented) => (self, F::None),
+            (D::Two { hold }, E::Free { now, keep: true }) if now >= hold => (D::Three { warm: 0 }, F::Grow),
+            (D::Two { .. }, E::Free { .. }) => (self, F::None),
+            (D::Three { warm }, E::Presented) => (D::Three { warm: (warm + 1).min(3) }, F::None),
+            (D::Three { .. }, E::Free { now, keep: false }) => (D::Two { hold: now }, F::Shrink),
+            (D::Three { warm }, E::Free { keep: true, .. }) if warm < 3 => (self, F::Warm),
             (D::Three { .. }, E::Free { .. }) => (self, F::None),
         }
     }
 
-    /// When a turn must come to give the third buffer back. Once past, the next turn that comes
-    /// for anything else does it: a swap chain whose room isn't free (a covered window's frame
-    /// DWM hasn't taken) mustn't spin the loop.
-    pub(super) fn deadline(self, now: Instant) -> Option<Instant> {
-        match self {
-            Depth::Three { last, .. } if now < last + IDLE => Some(last + IDLE),
-            Depth::Wanted { hold } if now < hold => Some(hold),
+    /// When a turn must come: to grow once the hold ends while the window keeps a third buffer,
+    /// or to give it back when focus has been gone long enough. Once past, the next turn that
+    /// comes for anything else does it: a swap chain whose room isn't free (a covered window's
+    /// frame DWM hasn't taken) mustn't spin the loop.
+    pub(super) fn deadline(self, focus: Focus, now: Instant) -> Option<Instant> {
+        let at = match self {
+            Depth::Two { hold } if focus.keeps(now) => Some(hold),
+            Depth::Three { .. } => focus.ends(),
             _ => None,
-        }
+        };
+        at.filter(|at| now < *at)
     }
 
     pub(super) fn extra(self) -> u32 { matches!(self, Depth::Three { .. }) as u32 }
@@ -128,25 +141,35 @@ impl<S: 'static> super::Host<S> {
         }
     }
 
-    /// At the end of a turn: a free turn grows or gives back the third buffer, or draws into a
-    /// buffer not yet drawn into. Free: no input waiting, no frame on its way, the swap chain's
-    /// room free, the GPU drawing it.
-    pub(super) fn depth_turn(&mut self) {
-        let seen = self.shown_win().is_some();
+    /// The window gained or lost focus.
+    pub(super) fn depth_focus(&mut self, focused: bool) {
         let Some(w) = self.win.as_mut() else { return };
-        if matches!(w.native.depth, Depth::Two | Depth::Off) { return; }
+        w.native.focus = if focused { Focus::Focused } else { Focus::Since(Instant::now()) };
+    }
+
+    /// At the end of a turn: a free turn grows or gives back the third buffer, or draws into a
+    /// buffer not yet drawn into.
+    pub(super) fn depth_turn(&mut self) {
+        let seen = self.shown_win().is_some_and(|w| !matches!(w.native.look, super::look::Look::Covered { .. }));
+        let Some(w) = self.win.as_mut() else { return };
+        if w.native.depth == Depth::Off { return; }
+        let now = Instant::now();
+        let keep = seen && w.native.focus.keeps(now);
+        // Nothing to do: two and not kept, or three, warm and kept.
+        if matches!(w.native.depth, Depth::Two { .. }) && !keep || w.native.depth == (Depth::Three { warm: 3 }) && keep { return; }
         if w.alpha.is_some() { return self.depth_step(DepthEvent::Failed); }
         let gpu_draws = matches!(w.native.mode, super::cpu_frame::SurfaceMode::Gpu | super::cpu_frame::SurfaceMode::Handed { .. });
         if !gpu_draws || !w.surface_ok || w.redraw.get() != super::redraw::Redraw::Idle || super::post_frame::input_waiting() { return; }
         // SAFETY: the object is the live swap chain's; a zero timeout only polls it.
         let waitable = w.surface.as_ref().and_then(|s| unsafe { s.as_hal::<wgpu::hal::api::Dx12>().and_then(|h| h.waitable_handle()) });
         if !w.native.slot.room(waitable.map(|h| h.0)) { return; }
-        self.depth_step(DepthEvent::Free { now: Instant::now(), seen });
+        self.depth_step(DepthEvent::Free { now, keep });
     }
 
     /// Configures the window's swap chain with the buffers its depth says, at its size. If the
     /// third can't be made, two, for the window's life.
     fn configure_depth(&mut self) {
+        let shown = self.life.shown();
         let (Some(w), Some((gpu, _))) = (self.win.as_mut(), self.gpu.as_ref()) else { return };
         let Some(surface) = w.surface.as_ref() else { return };
         let extra = w.native.depth.extra();
@@ -168,6 +191,6 @@ impl<S: 'static> super::Host<S> {
         w.presented = None;
         // What DWM shows next comes from the new buffers: a frame fills them. A window out of
         // sight draws when it's shown.
-        if self.life.shown() { w.request_redraw(); }
+        if shown { w.request_redraw(); }
     }
 }

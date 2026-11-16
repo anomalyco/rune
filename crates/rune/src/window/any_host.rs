@@ -326,7 +326,7 @@ impl<S: 'static> Host<S> {
 /// When a window in use gives back its third buffer (`depth`).
 fn depth_deadline(win: Option<&Win>) -> Option<Instant> {
     #[cfg(target_os = "windows")]
-    return win.and_then(|w| w.native.depth.deadline(Instant::now()));
+    return win.and_then(|w| w.native.depth.deadline(w.native.focus, Instant::now()));
     #[cfg(not(target_os = "windows"))]
     { let _ = win; None }
 }
