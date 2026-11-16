@@ -336,6 +336,8 @@ impl<S: 'static> Host<S> {
         l.backoff_step(BackoffEvent::Presented);
         if hidden { l.hidden_pace.rendered(now); }
         let update_ms = now.elapsed().as_secs_f64() * 1000.0;
+        let probe_t = [std::time::Instant::now(); 1];
+        let probe_prepared = std::cell::Cell::new(probe_t[0]);
         #[cfg(feature = "frame-profile")]
         let fp_built = fp_start.map(|_| crate::frame::live_log::Stamp::now());
         sync_platform(l, rt, &mut self.secure_input, &mut self.ime_allowed, &self.clipboard);
@@ -403,6 +405,7 @@ impl<S: 'static> Host<S> {
             animating |= c.animating();
         } else {
             renderer.prepare_ui(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, size);
+            probe_prepared.set(std::time::Instant::now());
             renderer.draw(&mut enc, target, rt.clear_color());
         }
         // Every frame, so a frame drawn whole leaves the renderer's kept frame behind.
@@ -417,7 +420,9 @@ impl<S: 'static> Host<S> {
         if let Some(alpha) = &l.alpha { alpha.draw(&mut enc, &view); }
         #[cfg(feature = "frame-profile")]
         let fp_encoded = fp_start.map(|_| crate::frame::live_log::Stamp::now());
+        let probe_encoded = std::time::Instant::now();
         renderer.submit(&gpu.queue, enc);
+        let probe_submitted = std::time::Instant::now();
         #[cfg(feature = "frame-profile")]
         let fp_submitted = fp_start.map(|_| crate::frame::live_log::Stamp::now());
         crate::marks::mark_once(&FIRST_ENCODED, "frame.first.encoded");
@@ -434,6 +439,10 @@ impl<S: 'static> Host<S> {
         }
         #[cfg(not(target_os = "macos"))]
         gpu.queue.present(frame);
+        {
+            let us = |a: std::time::Instant, b: std::time::Instant| b.duration_since(a).as_secs_f64() * 1e6;
+            crate::text::probe_frame(update_ms * 1000.0, us(probe_t[0], probe_prepared.get()), us(probe_prepared.get(), probe_encoded), us(probe_encoded, probe_submitted), us(probe_submitted, std::time::Instant::now()));
+        }
         #[cfg(target_os = "windows")]
         l.native.slot.presented();
         // A swap chain made again on a handed-over window's visual takes over now (`cpu_frame`).

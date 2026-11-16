@@ -38,6 +38,7 @@ pub(crate) mod face_weights;
 pub use face_weights::{FaceWeights, set_face_weights};
 mod families;
 mod miss_probe;
+pub(crate) use miss_probe::frame as probe_frame;
 #[doc(hidden)]
 pub mod fill_bench;
 pub(crate) mod full_faces;
@@ -675,6 +676,8 @@ impl TextSystem {
             && let Some(Entry { value: shaped, used, .. }) = self.layouts.get(&prev)
         {
             self.rebroken += 1;
+            let _probe = miss_probe::Timer::new(miss_probe::Slot::Rebreak, true);
+            miss_probe::count(miss_probe::Count::Rebroken);
             let _break_time = crate::frame::profile::Scope::new(crate::frame::profile::Phase::Text);
             // One this commit hasn't used and nothing else holds moves to the new width and
             // re-breaks in place; otherwise the shaped runs are copied.
@@ -691,6 +694,8 @@ impl TextSystem {
             return l;
         }
         self.shaped += 1;
+        let _probe = miss_probe::Timer::new(miss_probe::Slot::Shape, true);
+        miss_probe::count(miss_probe::Count::Shaped);
         miss_probe::shaped(if cache { "shape" } else { "shape-uncached" }, g, shape_key, key, scale, max_width, &style, text, self.layouts.len());
         crate::marks::add("text.shaped", 1);
         let _shape_ns = crate::marks::Timed::start("text.shape_ns", true);
