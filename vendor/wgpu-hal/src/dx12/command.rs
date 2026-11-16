@@ -416,6 +416,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
         }
         self.recorded += 1;
         let allocator = self.allocator.clone().unwrap();
+        let opened_at = std::time::Instant::now();
         let list = loop {
             if let Some(list) = self.free_lists.pop() {
                 // TODO: Is an error expected here and should we print it?
@@ -445,6 +446,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
 
         if let Some(t)=create {super::ib3::add(super::ib3::CREATE,t);}
         super::ib3::opened(windows::core::Interface::as_raw(&allocator) as usize, windows::core::Interface::as_raw(&list) as usize);
+        super::ib3::open_log(windows::core::Interface::as_raw(&allocator) as usize, windows::core::Interface::as_raw(&list) as usize, create.is_some(), opened_at.elapsed().as_nanos() as u64, label);
         if let Some(label) = label {
             list.set_name(label)?;
         }

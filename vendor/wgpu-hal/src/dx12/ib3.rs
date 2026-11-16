@@ -14,6 +14,8 @@ std::thread_local! { static S:RefCell<Meter>=RefCell::default(); }
 pub static LIVE:AtomicUsize=AtomicUsize::new(0);
 pub static PEAK:AtomicUsize=AtomicUsize::new(0);
 pub static LISTS:AtomicUsize=AtomicUsize::new(0);pub static ALLOCS:AtomicUsize=AtomicUsize::new(0);
+pub static OPENS:parking_lot::Mutex<Vec<(u64,usize,usize,bool,u64,alloc::string::String)>>=parking_lot::Mutex::new(Vec::new());
+pub fn open_log(a:usize,l:usize,created:bool,ns:u64,label:Option<&str>){let mut v=OPENS.lock();if v.len()<1500{let tid=std::thread::current().id();let tid=alloc::format!("{tid:?}");v.push((tid.trim_start_matches("ThreadId(").trim_end_matches(")").parse().unwrap_or(0),a,l,created,ns,label.unwrap_or("").chars().take(32).collect()));}}
 pub fn shared()->bool{static ON:std::sync::OnceLock<bool>=std::sync::OnceLock::new();*ON.get_or_init(||std::env::var_os("IB3_SHARED").is_some())}
 std::thread_local!{static IDS:RefCell<([usize;64],[usize;64],usize,u32)>=RefCell::new(([0;64],[0;64],0,0));}
 pub fn opened(a:usize,l:usize){IDS.with_borrow_mut(|s|{if s.3<12&&s.2<64{let n=s.2;s.0[n]=a;s.1[n]=l;s.2+=1;}})}
@@ -22,4 +24,4 @@ pub fn add(n:usize,t:Instant) {if n==CREATE{LISTS.fetch_add(1,Relaxed);}let ns=t
 pub fn surface(index:usize,buffers:usize,back:usize,w:u32,h:u32) { S.with_borrow_mut(|s| {s.back=back; s.current.index=index; s.current.buffers=buffers; s.current.width=w; s.current.height=h;}); }
 pub fn back(ptr:usize)->bool{S.with_borrow(|s|s.back==ptr)}
 pub fn scene(kinds:[usize;16],layers:usize,targets:usize){S.with_borrow_mut(|s|{s.current.kinds=kinds;s.current.layers=layers;s.current.targets=targets;});}
-pub fn end(){S.with_borrow_mut(|s|{if s.ended{return} let mut r=core::mem::take(&mut s.current);r.live=LIVE.load(Relaxed);r.peak=PEAK.load(Relaxed);s.rows.push(r);if s.rows.len()==34{ s.ended=true;std::eprintln!("IBLISTS {} {}",LISTS.load(Relaxed),ALLOCS.load(Relaxed));for (i,r) in s.rows.iter().enumerate(){std::eprintln!("IBD {i} {} {} {} {} {} {} {} {} {:?} {:?} {:?}",r.index,r.buffers,r.width,r.height,r.layers,r.targets,r.live,r.peak,r.kinds,r.calls,r.ns);} }});}
+pub fn end(){S.with_borrow_mut(|s|{if s.ended{return} let mut r=core::mem::take(&mut s.current);r.live=LIVE.load(Relaxed);r.peak=PEAK.load(Relaxed);s.rows.push(r);if s.rows.len()==34{ s.ended=true;std::eprintln!("IBLISTS {} {}",LISTS.load(Relaxed),ALLOCS.load(Relaxed));for o in OPENS.lock().iter(){std::eprintln!("IBOPEN {} {} {} {} {} {}",o.0,o.1,o.2,o.3 as u8,o.4,o.5);}for (i,r) in s.rows.iter().enumerate(){std::eprintln!("IBD {i} {} {} {} {} {} {} {} {} {:?} {:?} {:?}",r.index,r.buffers,r.width,r.height,r.layers,r.targets,r.live,r.peak,r.kinds,r.calls,r.ns);} }});}
