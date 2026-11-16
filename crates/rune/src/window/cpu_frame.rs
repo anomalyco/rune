@@ -809,9 +809,9 @@ fn prepare(hwnd: isize, size: (u32, u32), srgb: bool, features: wgpu::Features, 
 /// the GPU is done with it. The atlas is an empty one: the glyphs land with the hand-over frame's
 /// own prepare.
 ///
-/// It draws the frame more than once: on D3D12 a command list's first two recordings on an
-/// allocator cost about 0.5 ms each on the Iris Xe (a dozen lists a frame: 4-10 ms), and frames
-/// rotate through several allocators while earlier ones are on the GPU. So `WARM_ENCODERS` frames
+/// It draws the frame more than once: on D3D12 a command allocator's first two cycles at a given
+/// number of lists cost about 0.5 ms a list on the Iris Xe (a dozen lists a frame: 4-10 ms), and
+/// frames rotate through several allocators while earlier ones are on the GPU. So `WARM_ENCODERS` frames
 /// at once, `WARM_ROUNDS` times: as many allocators as frames keep in flight, each past its slow
 /// recordings, and the vendored wgpu-hal hands a frame the allocator that has recorded the most.
 fn warm_frame(gpu: &Gpu, renderer: &mut Renderer, format: wgpu::TextureFormat, size: (u32, u32), instances: &[crate::render::Instance]) {
@@ -832,6 +832,14 @@ fn warm_frame(gpu: &Gpu, renderer: &mut Renderer, format: wgpu::TextureFormat, s
         for mut enc in encoders {
             renderer.prepare_ui(&gpu.device, &gpu.queue, &mut atlas, instances, size);
             renderer.draw(&mut enc, &view, [0.0; 4]);
+            // The window's frames record one list more than this one (the swap chain's
+            // transition to present), and an allocator's first two cycles at a new size are slow
+            // again: an empty pass gives each allocator room for that list.
+            drop(enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: None,
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment { view: &view, depth_slice: None, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store } })],
+                ..Default::default()
+            }));
             renderer.submit(&gpu.queue, enc);
         }
         let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());

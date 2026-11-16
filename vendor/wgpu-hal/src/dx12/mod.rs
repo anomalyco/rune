@@ -767,10 +767,10 @@ struct DeviceShared {
     heap_views: descriptor::GeneralHeap,
     sampler_heap: sampler::SamplerHeap,
     private_caps: PrivateCapabilities,
-    /// Rune: the device's command allocators not in use, each with the lists recorded on it. A
-    /// list's first two recordings on an allocator are slow on some drivers (Intel Iris Xe: about
-    /// 0.5 ms a list, a dozen lists a frame) and later ones aren't; an allocator kept with one
-    /// encoder sees its first two recordings whenever wgpu's pool of encoders grows or reorders.
+    /// Rune: the device's command allocators not in use, each with the lists recorded on it. An
+    /// allocator's first two cycles at a given number of lists are slow on some drivers (Intel Iris
+    /// Xe: about 0.5 ms a list, a dozen lists a frame) and later ones aren't; an allocator kept with
+    /// one encoder goes through them again whenever wgpu's pool of encoders grows or reorders.
     /// So an encoder takes an allocator here as it begins, the most-used one, and gives it back
     /// once the GPU is done with it: a frame records on allocators that frames already used.
     allocators: Mutex<Vec<AllocatorSlot>>,
