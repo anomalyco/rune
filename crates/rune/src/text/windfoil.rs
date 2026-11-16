@@ -101,6 +101,8 @@ impl TextSystem {
         let scale_cx = &mut self.scale_cx;
         match self.atlas.outlines.glyph(key, || {
             let _built = crate::marks::Timed::start("text.outline_ns", true);
+            let _probe = super::miss_probe::Timer::new(super::miss_probe::Slot::Outline, true);
+            super::miss_probe::count(super::miss_probe::Count::Outlines);
             outline::extract(scale_cx, font_ref, face_key.1, coords, glyph as u16, skew, hint)
         }) {
             outline::Found::Outline(g) => Found::Draws(g, matches!(hint, outline::Hinting::TrueType(_))),
