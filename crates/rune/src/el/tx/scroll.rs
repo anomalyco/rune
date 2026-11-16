@@ -111,6 +111,8 @@ impl Tx {
     /// stuck over it. Instant; any momentum or glide stops. A virtual row that isn't mounted
     /// lands too: the jump goes where its list's estimates put it, which mounts it, and is placed
     /// again from its layout before the frame draws, the rows it mounts there showing at once.
+    /// `"row/mark"` lands element or highlight `mark` anywhere inside the element keyed `row`,
+    /// including a virtual row that isn't mounted yet: one request, one jump.
     pub fn scroll_key_to(&mut self, key: impl Into<String>, at: f32) {
         self.scroll_offsets.push(crate::runtime::ScrollRequest { key: key.into(), x: None, y: Some(at), glide: None, anchor: true });
     }
