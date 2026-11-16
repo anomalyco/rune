@@ -435,12 +435,13 @@ fn handlers<S: 'static>(mut slot: El, id: &str, at: &Place, closable: bool, st: 
                         f(s, &id, tx);
                         tx.scroll_into_view_in(reveal.0.clone(), reveal.1.clone());
                     }
-                    _ if select_early => tx.live_only(),
+                    Some(_) if select_early => tx.live_only(),
                     _ => {}
                 }
             }
-            // A strip that neither reorders nor tears out only selects: its tabs stay put.
-            Phase::Move if reorder.is_none() && tear.is_none() => tx.live_only(),
+            // A strip that neither reorders nor lets a tab tear out (`TabStrip::tear_out`) only
+            // selects: its tabs stay put under a drag.
+            Phase::Move if reorder.is_none() && lane.tear.is_none() => tx.live_only(),
             Phase::Move => {
                 // Near an end the strip scrolls under the dragged tab, which keeps to the pointer.
                 if access(s).reordering() {
