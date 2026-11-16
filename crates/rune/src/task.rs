@@ -10,8 +10,30 @@
 //! page nothing while it waits.
 
 use std::ops::ControlFlow;
+use std::sync::OnceLock;
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
+
+/// How long a thread waits with nothing to do before it tidies up ([`on_idle`]).
+pub const IDLE: Duration = Duration::from_secs(10);
+
+static TIDY: OnceLock<fn()> = OnceLock::new();
+
+/// Sets what a thread that has waited [`IDLE`] with nothing to do runs, once, before it waits
+/// again with no timer: an app's allocator giving back the pages that thread holds free (an
+/// allocator's per-thread heap gives back only when its own thread asks). Rune's task and service
+/// threads call it; an app's own long-lived threads call [`idle`]. The first call wins.
+pub fn on_idle(tidy: fn()) {
+    let _ = TIDY.set(tidy);
+}
+
+/// Runs what [`on_idle`] set, on this thread: for a thread of the app's own that has waited
+/// [`IDLE`] with nothing to do.
+pub fn idle() {
+    if let Some(tidy) = TIDY.get() {
+        tidy();
+    }
+}
 
 #[cfg(target_arch = "wasm32")]
 mod web;
@@ -65,7 +87,20 @@ pub fn serve<T: Send + 'static>(
     #[cfg(not(target_arch = "wasm32"))]
     {
         std::thread::Builder::new().name(name.into()).spawn(move || {
-            for message in rx {
+            use std::sync::mpsc::RecvTimeoutError;
+            loop {
+                // Once a quiet spell reaches IDLE the thread tidies up, then waits with no timer.
+                let message = match rx.recv_timeout(IDLE) {
+                    Ok(message) => message,
+                    Err(RecvTimeoutError::Timeout) => {
+                        idle();
+                        match rx.recv() {
+                            Ok(message) => message,
+                            Err(_) => return,
+                        }
+                    }
+                    Err(RecvTimeoutError::Disconnected) => return,
+                };
                 if each(message).is_break() {
                     return;
                 }

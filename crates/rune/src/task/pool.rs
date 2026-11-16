@@ -53,6 +53,9 @@ pub(super) fn run(name: String, work: Box<dyn FnOnce() + Send>) -> std::io::Resu
 
 fn worker() {
     let mut s = lock();
+    // Whether this thread has tidied up since its last task (`task::on_idle`): a kept thread
+    // then waits with no timer, so an idle app's kept threads don't wake every LINGER.
+    let mut tidied = false;
     loop {
         if let Some((name, work)) = s.jobs.pop_front() {
             drop(s);
@@ -60,16 +63,29 @@ fn worker() {
             // A task that panics ends itself, not the thread (the panic hook has reported it).
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(work));
             describe("idle");
+            tidied = false;
             s = lock();
             continue;
         }
         s.idle += 1;
-        let (next, wait) = POOL.1.wait_timeout(s, LINGER).unwrap_or_else(|e| e.into_inner());
-        s = next;
+        let timed_out = if tidied {
+            s = POOL.1.wait(s).unwrap_or_else(|e| e.into_inner());
+            false
+        } else {
+            let (next, wait) = POOL.1.wait_timeout(s, LINGER).unwrap_or_else(|e| e.into_inner());
+            s = next;
+            wait.timed_out()
+        };
         s.idle -= 1;
-        if wait.timed_out() && s.jobs.is_empty() && s.threads > KEEP {
-            s.threads -= 1;
-            return;
+        if timed_out && s.jobs.is_empty() {
+            if s.threads > KEEP {
+                s.threads -= 1;
+                return;
+            }
+            drop(s);
+            super::idle();
+            tidied = true;
+            s = lock();
         }
     }
 }
