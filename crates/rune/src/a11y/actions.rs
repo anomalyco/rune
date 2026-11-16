@@ -85,7 +85,7 @@ impl<S: 'static> Runtime<S> {
             },
             (Ak::SetTextSelection, None) if editable => {
                 let Some(ActionData::SetTextSelection(sel)) = &request.data else { return false };
-                let lines = self.a11y_lines(i).unwrap_or_default();
+                let Some((_, lines)) = self.a11y_lines(i) else { return false };
                 let byte = |p: accesskit::TextPosition| {
                     let (pid, line) = split_id(p.node);
                     if pid != id || line == 0 { return None; }

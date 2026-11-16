@@ -1,0 +1,1 @@
+- Accessibility text runs copy only the line they expose rather than the entire field per line; password masking and IME display text are unchanged.
