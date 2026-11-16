@@ -23,7 +23,8 @@ impl<S: 'static> Runtime<S> {
         let mut chain: HashSet<usize> = ancestors(viewport).collect();
         chain.extend(ancestors(r));
         let end = r + 1 + nodes[r+1..].iter().take_while(|n| n.parent >= Some(r)).count();
-        let frames = nodes.iter().enumerate().filter(|(k,n)| chain.contains(k) || (r..end).contains(k) || n.parent == panel.parent)
+        let frames = nodes.iter().enumerate().filter(|(k,n)| chain.contains(k) || (r..end).contains(k)
+            || (n.parent == panel.parent && old(n.id).is_some_and(|o| o.target == n.target)))
             .filter_map(|(_,n)| {
                 let was = self.scene.get(n.id, prop::FRAME)?;
                 let (dy, dh) = (was.y - n.local.y, was.h - n.local.h);
@@ -39,8 +40,8 @@ impl<S: 'static> Runtime<S> {
 }
 
 impl Handoff {
-    pub(in crate::runtime) fn place(&mut self, grows: &mut HashMap<NodeId, GrowTrack>, scene: &mut rune_motion::Scene, nodes: &[Node], index: &HashMap<NodeId, usize>, scrolls: &mut HashMap<NodeId, ScrollState>) {
-        let Self::Growing { row, viewport, frames, rows } = self else { return };
+    pub(in crate::runtime) fn place(&mut self, grows: &mut HashMap<NodeId, GrowTrack>, scene: &mut rune_motion::Scene, nodes: &[Node], index: &HashMap<NodeId, usize>, scrolls: &mut HashMap<NodeId, ScrollState>) -> bool {
+        let Self::Growing { row, viewport, frames, rows } = self else { return false };
         let (left, rate) = grows.get(row).filter(|g| g.target > 0.0).map_or((0.0, 0.0), |g| ((1.0 - g.h / g.target).clamp(0.0, 1.0), g.v / g.target));
         for &(id, from, to) in rows.iter() {
             if let Some(g) = grows.get_mut(&id) && g.target == to { g.h = to + (from - to) * left; g.v = (to - from) * rate; }
@@ -50,9 +51,10 @@ impl Handoff {
         for &(id, target, dy, dh) in frames.iter() {
             let Some(n) = index.get(&id).map(|&k| &nodes[k]) else { continue };
             // A later measurement (e.g. typing or a resize) owns its new geometry.
-            if n.local != target { continue; }
-            scene.set(id, prop::FRAME, rune_motion::Rect { y: target.y + dy * left, h: target.h + dh * left, ..target });
+            if n.local.y != target.y || n.local.h != target.h { continue; }
+            scene.set(id, prop::FRAME, rune_motion::Rect { y: target.y + dy * left, h: target.h + dh * left, ..n.local });
         }
         if left == 0.0 { *self = Self::Idle; }
+        true
     }
 }

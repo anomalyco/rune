@@ -57,6 +57,9 @@ fn record(case: Case) -> Recording {
         let room = run.rt.nodes.iter().position(|n| n.key.as_deref() == Some("room")).unwrap();
         let first = run.rt.drawn[room][3];
         assert!(first > 0.0 && first < 40.0, "room snapped to {first}");
+        let row = run.rt.nodes.iter().find(|n| n.key.as_deref() == Some("arrival")).unwrap();
+        let remaining = 1.0 - run.rt.grows[&row.id].h / 64.0;
+        assert!((first - 40.0 * remaining).abs() < 1.0 / 64.0, "room {first} must follow the drawn row on the first frame");
     }
     if growing {
         let h = run.rt.grows[&row.unwrap().id].h;
