@@ -37,6 +37,7 @@ mod decorations;
 pub(crate) mod face_weights;
 pub use face_weights::{FaceWeights, set_face_weights};
 mod families;
+mod miss_probe;
 #[doc(hidden)]
 pub mod fill_bench;
 pub(crate) mod full_faces;
@@ -686,9 +687,11 @@ impl TextSystem {
             self.layout_ids.build(&l);
             self.layouts.insert(key, Entry::new(l.clone(), g, text.len(), shape_key));
             self.shapes.insert(shape_key, key);
+            miss_probe::shaped("rebreak", g, shape_key, key, scale, max_width, &style, text, self.layouts.len());
             return l;
         }
         self.shaped += 1;
+        miss_probe::shaped(if cache { "shape" } else { "shape-uncached" }, g, shape_key, key, scale, max_width, &style, text, self.layouts.len());
         crate::marks::add("text.shaped", 1);
         let _shape_ns = crate::marks::Timed::start("text.shape_ns", true);
         let _shape_time = crate::frame::profile::Scope::new(crate::frame::profile::Phase::Text);
