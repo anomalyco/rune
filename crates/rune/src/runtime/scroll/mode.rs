@@ -115,8 +115,6 @@ impl ScrollMode {
 
     /// The same mode easing on a wheel's `curve`, keeping the hand's latches.
     pub(super) fn to_wheel(self, curve: WheelCurve) -> Self {
-        #[cfg(test)]
-        note_write();
         ScrollMode::Wheel { curve, hand: self.hand() }
     }
 

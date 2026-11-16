@@ -153,7 +153,11 @@ impl<S: 'static> Runtime<S> {
         content_h - f64::from(view[3] - view[1])
     }
 
-    pub(super) fn step_scroll(&mut self, dt: f32) -> bool {
+    pub(super) fn step_scroll(&mut self, dt: f32) -> bool { self.step_scroll_by(dt, false) }
+
+    /// Steps every scroll viewport `dt` seconds on: a frame's own step, or (`catch_up`) the time
+    /// it charges to motion that was already running (`frame::clock::split`).
+    pub(super) fn step_scroll_by(&mut self, dt: f32, catch_up: bool) -> bool {
         let slack_dt = std::mem::take(&mut self.slack_dt);
         let scale = f64::from(self.env.scale * self.zoom());
         // Motion reduced mid-ease: a wheel's ease lands where it was going, at once.
@@ -164,7 +168,7 @@ impl<S: 'static> Runtime<S> {
             if self.subtree_exiting(i) { continue; }
             let id = self.nodes[i].id;
             let axes = self.nodes[i].scroll_axes;
-            if axes.x() { moving |= self.step_scroll_x(i, dt); }
+            if axes.x() { moving |= self.step_scroll_x(i, dt, catch_up); }
             // A horizontal viewport doesn't move vertically, even with content taller than it.
             let overflow = if axes.y() { self.scroll_overflow(i) } else { 0.0 };
             if let Some(active) = self.step_touch_scroll(id, overflow, dt, false) {
@@ -199,8 +203,11 @@ impl<S: 'static> Runtime<S> {
                 ScrollMode::Wheel { mut curve, .. } => {
                     // An end that shrank under the ease takes its target with it.
                     if curve.target() > st.max { curve.retarget(st.max, scale); }
-                    curve.advance(if land_wheels { f64::INFINITY } else { f64::from(dt) });
-                    st.offset = curve.value();
+                    if land_wheels { curve.advance(f64::INFINITY, false) } else { curve.advance(f64::from(dt), catch_up) }
+                    // On whole device pixels, as Chromium's scroll offsets are: everything inside
+                    // moves by the same whole pixels each frame and draws as it did, rather than
+                    // landing at a new fraction of a pixel every frame.
+                    st.offset = scroll_wheel::device_pixel(curve.value(), scale);
                     // The hand moved it: the app hears a wheel's ease as the wheel.
                     st.moved();
                     if curve.done() { st.land(sp.stick_bottom) } else { st.mode = st.mode.to_wheel(curve); moving = true; }

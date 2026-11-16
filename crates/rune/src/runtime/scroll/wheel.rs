@@ -26,12 +26,15 @@ pub(crate) struct WheelCurve {
     t: f64,
     duration: f64,
     ease: CubicBezier,
+    /// Set since a notch began or retargeted it, until the first frame that steps it: time a
+    /// frame catches up for motion that was already running is none of its.
+    fresh: bool,
 }
 
 impl WheelCurve {
     /// An ease from `from` to `to`, `scale` device pixels to a point.
     pub(crate) fn new(from: f64, to: f64, scale: f64) -> Self {
-        WheelCurve { from, to, t: 0.0, duration: duration(to - from, scale), ease: CubicBezier::new(0.42, 0.0, 0.58, 1.0) }
+        WheelCurve { from, to, t: 0.0, duration: duration(to - from, scale), ease: CubicBezier::new(0.42, 0.0, 0.58, 1.0), fresh: true }
     }
 
     /// Where it heads.
@@ -54,8 +57,13 @@ impl WheelCurve {
     /// It has reached its target.
     pub(crate) fn done(&self) -> bool { self.t >= self.duration }
 
-    /// Steps it `dt` seconds on.
-    pub(crate) fn advance(&mut self, dt: f64) { self.t = (self.t + dt).min(self.duration.max(0.0)); }
+    /// Steps it `dt` seconds on: a frame's own step, or (`catch_up`) the time a frame charges to
+    /// motion already running, which a notch that came since then doesn't take.
+    pub(crate) fn advance(&mut self, dt: f64, catch_up: bool) {
+        if catch_up && self.fresh { return; }
+        self.fresh = false;
+        self.t = (self.t + dt).min(self.duration.max(0.0));
+    }
 
     /// Sends it on to `to` from where it is now, keeping its speed (`UpdateTarget`). Returns
     /// false when it's already there and nothing is left to move.
@@ -87,10 +95,15 @@ impl WheelCurve {
         }
         // The new segment starts at the old one's speed (`EaseInOutWithInitialSlope`).
         let slope = (v * duration / delta).clamp(-1000.0, 1000.0) as f32;
-        *self = WheelCurve { from: at, to, t: 0.0, duration, ease: CubicBezier::new(0.42, 0.42 * slope, 0.58, 1.0) };
+        *self = WheelCurve { from: at, to, t: 0.0, duration, ease: CubicBezier::new(0.42, 0.42 * slope, 0.58, 1.0), fresh: true };
         true
     }
 
+}
+
+/// `offset` points on the nearest whole device pixel, `scale` of them to a point.
+pub(crate) fn device_pixel(offset: f64, scale: f64) -> f64 {
+    if scale > 0.0 { (offset * scale).round() / scale } else { offset }
 }
 
 /// How long a wheel's ease over `delta` points lasts, in seconds.

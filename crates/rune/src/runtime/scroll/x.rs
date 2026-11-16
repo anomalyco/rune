@@ -531,7 +531,7 @@ impl<S: 'static> Runtime<S> {
     }
 
     /// Steps viewport `i`'s horizontal limit and momentum, as `step_scroll` does the vertical.
-    pub(super) fn step_scroll_x(&mut self, i: usize, dt: f32) -> bool {
+    pub(super) fn step_scroll_x(&mut self, i: usize, dt: f32, catch_up: bool) -> bool {
         let id = self.nodes[i].id;
         let overflow = self.scroll_overflow_x(i);
         if let Some(active) = self.step_touch_scroll(id, overflow, dt, true) { return active; }
@@ -556,8 +556,8 @@ impl<S: 'static> Runtime<S> {
             XMotion::Momentum(_) => st.x.motion = XMotion::Rest,
             XMotion::Wheel(mut curve) => {
                 if curve.target() > st.x.max { curve.retarget(st.x.max, scale); }
-                curve.advance(if land_wheel { f64::INFINITY } else { f64::from(dt) });
-                st.x.offset = curve.value();
+                if land_wheel { curve.advance(f64::INFINITY, false) } else { curve.advance(f64::from(dt), catch_up) }
+                st.x.offset = scroll_wheel::device_pixel(curve.value(), scale);
                 st.moved();
                 if curve.done() { st.x.motion = XMotion::Rest; } else { st.x.motion = XMotion::Wheel(curve); moving = true; }
             }
