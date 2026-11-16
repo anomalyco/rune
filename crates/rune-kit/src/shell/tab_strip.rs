@@ -326,8 +326,9 @@ fn busy_ring(k: &Kit) -> El {
 /// buttons take presses. Vertical tabs fill the row with 3 points between them, each reaching
 /// across half the gap so no press misses.
 ///
-/// A press selects a horizontal tab at once; a vertical one selects on release, so dragging it
-/// leaves the selection where it is ([`Self::select_on_drag_start`]). Dragging 4 points along
+/// A press selects a tab as the button goes down, so a drag carries the selected tab and the
+/// release draws nothing ([`Self::select_on_drag_start`]); a press on the selected tab and a
+/// press on a close button select nothing. Dragging 4 points along
 /// the strip reorders, Escape puts the tab back, and with [`Self::tear_out`] dragging it off
 /// the strip tears it out. A middle click closes a tab.
 pub struct TabStrip<'a, S: 'static> {
@@ -425,8 +426,9 @@ impl<'a, S: 'static> TabStrip<'a, S> {
         self.row_height = points.max(1.0);
         self
     }
-    /// Whether a press selects the tab at once, so a drag selects it too (default true
-    /// horizontal), or the release does and a drag leaves the selection (default false vertical).
+    /// Whether a press selects the tab as the button goes down, so a drag selects it too (default
+    /// true, as 	ab-nav.tsx's onMouseDown does in either orientation), or the release does and
+    /// a drag leaves the selection (for touch, where a long press opens a menu).
     pub fn select_on_drag_start(mut self, on: bool) -> Self {
         self.select_on_drag_start = Some(on);
         self
@@ -604,7 +606,7 @@ impl<'a, S: 'static> TabStrip<'a, S> {
             link_inset: 8.0,
             count,
             spring: self.spring,
-            select_on_drag_start: self.select_on_drag_start.unwrap_or(!vertical),
+            select_on_drag_start: self.select_on_drag_start.unwrap_or(true),
             horizontal_lock: !vertical,
             matched: self.matched.map(str::to_owned),
             close_icon: self.close_icon,
