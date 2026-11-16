@@ -210,16 +210,6 @@ impl View {
         (0..self.len).find(|&place| test(&self.held(place, pools)))
     }
 
-    /// The place of the smallest target that passes `test`, the first of equals.
-    fn smallest<T: Describe>(&mut self, pools: &Pools<'_, T>, test: impl Fn(&Held) -> bool) -> Option<usize> {
-        let mut best: Option<(usize, u64)> = None;
-        for place in 0..self.len {
-            let held = self.held(place, pools);
-            if test(&held) && best.is_none_or(|(_, bytes)| held.bytes < bytes) { best = Some((place, held.bytes)); }
-        }
-        best.map(|(place, _)| place)
-    }
-
     /// What every target in it costs.
     fn bytes<T: Describe>(&mut self, pools: &Pools<'_, T>) -> u64 {
         (0..self.len).map(|place| self.held(place, pools).bytes).sum()
@@ -384,28 +374,20 @@ impl Planner {
                 continue;
             }
             self.dispositions[index] = Disposition::Render { rect: bounds, cache };
-            // A layer under a soft edge (a card or chip crossing a list's fade) comes and goes as
-            // the list scrolls: any target big enough serves it, so the ones made ahead for fades
-            // (`Renderer::warm_fade_pool`) do, and first contact makes nothing.
-            let faded = layer.fade != [0; 4];
             let fits = self.slots[index].is_some_and(|source| {
                 let size = pools.held(source).size;
                 // The minimum bucket is unavoidable for tiny controls. Do not recreate that
                 // same bucket every frame when rounding alone exceeds the 2x area limit.
-                size[0] >= width && size[1] >= height && (size == bucket || faded
+                size[0] >= width && size[1] >= height && (size == bucket
                     || u64::from(size[0]) * u64::from(size[1]) <= 2 * u64::from(width) * u64::from(height))
             });
             if !fits {
                 self.park_slot(index, pools);
-                let spare = if faded {
-                    self.parked.smallest(pools, |t| t.size[0] >= width && t.size[1] >= height)
-                } else {
-                    self.parked.position(pools, |t| {
-                        let size = t.size;
-                        size[0] >= width && size[1] >= height
-                            && u64::from(size[0]) * u64::from(size[1]) <= 2 * u64::from(width.max(64)) * u64::from(height.max(64))
-                    })
-                };
+                let spare = self.parked.position(pools, |t| {
+                    let size = t.size;
+                    size[0] >= width && size[1] >= height
+                        && u64::from(size[0]) * u64::from(size[1]) <= 2 * u64::from(width.max(64)) * u64::from(height.max(64))
+                });
                 match spare {
                     Some(at) => {
                         self.slots[index] = Some(self.parked.swap_remove(at));

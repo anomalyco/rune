@@ -129,9 +129,10 @@ enum Pool {
     Done,
 }
 
-/// The fade pool: small targets (chips, keycaps) and window-wide ones (cards), in device pixels,
-/// as many of each as a fade band holds at once.
-const POOL_SMALL: ([u32; 2], usize) = ([256, 128], 6);
+/// The fade pool in device pixels, as many of each as a fade band holds at once: buckets a chip or a
+/// keycap asks for, and list-wide ones for cards (the fading list's width). The planner takes a
+/// spare no more than twice a layer's area, so each is a bucket the layers it serves ask for.
+const POOL_SMALL: [([u32; 2], usize); 2] = [([128, 64], 6), ([256, 64], 2)];
 const POOL_WIDE: (u32, usize) = (128, 2);
 
 /// Renderers whose isolation pipelines a thread is still compiling.
@@ -278,8 +279,8 @@ impl Renderer {
 
     /// The first frame that draws a soft edge (a list's fade) asks a thread for the fade pool;
     /// a later frame takes it as spare targets, so the first chip or card to cross the fade makes
-    /// none. Faded layers take any spare big enough (`layers::plan`).
-    fn warm_fade_pool(&mut self, device: &wgpu::Device, instances: &[super::Instance], (width, _): (u32, u32)) {
+    /// none of its own.
+    fn warm_fade_pool(&mut self, device: &wgpu::Device, instances: &[super::Instance], _viewport: (u32, u32)) {
         if let Pool::Building(done) = &self.breakers.pool {
             match done.try_recv() {
                 Ok(targets) => { self.breakers.pool = Pool::Done; self.adopt_spares(targets); }
@@ -288,14 +289,17 @@ impl Renderer {
             }
             return;
         }
-        if !matches!(self.breakers.pool, Pool::Unasked) || !instances.iter().any(|i| i.fade != [0; 4]) { return; }
+        if !matches!(self.breakers.pool, Pool::Unasked) { return; }
+        // A fade's widths are the first two words (`pack_fade`); its clip is the list it fades.
+        let Some(list) = instances.iter().find(|i| i.fade[0] != 0 || i.fade[1] != 0).map(|i| i.clip) else { return };
         self.breakers.pool = Pool::Done;
         // As `warm_first_use`: a thread in one test would change what the others plan.
         #[cfg(not(any(test, target_arch = "wasm32")))]
         {
             let max = self.max_texture_dim;
+            let width = (list[2] - list[0]).max(0.0) as u32;
             let wide = [width.div_ceil(64).saturating_mul(64).clamp(64, max), POOL_WIDE.0];
-            let sizes: Vec<[u32; 2]> = std::iter::repeat_n(POOL_SMALL.0, POOL_SMALL.1).chain(std::iter::repeat_n(wide, POOL_WIDE.1)).collect();
+            let sizes: Vec<[u32; 2]> = POOL_SMALL.iter().flat_map(|&(size, n)| std::iter::repeat_n(size, n)).chain(std::iter::repeat_n(wide, POOL_WIDE.1)).collect();
             let (device, layout, globals, outlines, atlas, binding) = (device.clone(), self.bind_layout.clone(), self.globals.clone(),
                 self.uber.outlines().cloned(), self.atlas.clone(), self.layer_bindings());
             let wake = self.frame_wake.clone();
