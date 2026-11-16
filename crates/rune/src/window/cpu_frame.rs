@@ -633,6 +633,8 @@ impl<S: 'static> Host<S> {
         });
         renderer.submit(&gpu.queue, enc);
         gpu.queue.present(frame);
+        #[cfg(feature = "frame-profile")]
+        crate::frame::live_log::mark("handover.present");
         l.native.slot.presented();
         let flag = Arc::new(AtomicBool::new(false));
         let set = flag.clone();
@@ -688,6 +690,14 @@ impl<S: 'static> Host<S> {
                 }
                 w.native.mode = SurfaceMode::Handed { handover };
                 w.presented = None;
+                #[cfg(feature = "frame-profile")]
+                crate::frame::live_log::mark("handover.commit");
+                // Measuring only: `9dfd56fa`'s reset, chosen per launch so both arms are one binary.
+                if std::env::var_os("RUNE_HANDOVER_RESET").is_some_and(|v| v == "1") {
+                    #[cfg(feature = "frame-profile")]
+                    crate::frame::live_log::mark("handover.reset");
+                    w.native.slot.reset();
+                }
                 // What was asked for while the GPU finished its frame draws now, on the GPU.
                 w.request_redraw();
             }

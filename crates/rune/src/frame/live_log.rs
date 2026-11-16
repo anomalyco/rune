@@ -33,6 +33,16 @@ pub(crate) fn on() -> bool {
     })
 }
 
+/// Measuring only (branch `present-rtx-measure`): a named instant from any thread, to the file
+/// `RUNE_MARK_LOG` names, one JSON line each.
+pub(crate) fn mark(name: &str) {
+    static MARKS: std::sync::Mutex<Option<Option<std::fs::File>>> = std::sync::Mutex::new(None);
+    let t = now_ns();
+    let mut out = MARKS.lock().unwrap_or_else(|e| e.into_inner());
+    let file = out.get_or_insert_with(|| std::env::var_os("RUNE_MARK_LOG").and_then(|p| std::fs::File::create(p).ok()));
+    if let Some(f) = file { let _ = writeln!(f, "{{\"mark\":\"{name}\",\"t\":{t}}}"); }
+}
+
 /// An input event handled outside a frame, from `start` (ns) to now.
 pub(crate) fn input(start: u64) {
     let (n, ns) = INPUT.get();
