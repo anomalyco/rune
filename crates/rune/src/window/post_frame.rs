@@ -1,6 +1,6 @@
 //! Windows: what a window does once its first frame is up runs one piece a turn, and none while
 //! input waits. The pieces: the app's `on_ready`, the drop target and session-lock hooks, the GPU's
-//! start, and the accessibility adapter. Run together, in the first idle turn, they held the UI
+//! start, the accessibility adapter, and the kept last frame a long rest gave back (`rest`). Run together, in the first idle turn, they held the UI
 //! thread for 30-50 ms, so a click or key that came as the first frame showed waited behind all of
 //! them. Between pieces winit takes what's in the queue, and the frame it asks for comes first.
 use super::*;
@@ -47,12 +47,22 @@ impl<S: 'static> Host<S> {
                 self.run_ready_hooks();
             }
             Chores::Done if self.gpu_owed() => self.cpu_idle(),
-            Chores::Done => self.a11y_after_frame(),
+            Chores::Done if self.a11y_owed() => self.a11y_after_frame(),
+            Chores::Done => self.refill_kept(),
         }
         self.post_frame_owed()
     }
 
     fn post_frame_owed(&self) -> bool {
-        self.chores != Chores::Done || self.gpu_owed() || self.a11y_owed()
+        self.chores != Chores::Done || self.gpu_owed() || self.a11y_owed() || self.kept_owed()
+    }
+
+    /// A frame drew whole since a long rest gave the kept last frame back.
+    fn kept_owed(&self) -> bool {
+        self.gpu.as_ref().is_some_and(|(_, renderer)| renderer.kept_owed())
+    }
+
+    fn refill_kept(&mut self) {
+        if let Some((gpu, renderer)) = &self.gpu { renderer.refill_kept(&gpu.device, &gpu.queue); }
     }
 }

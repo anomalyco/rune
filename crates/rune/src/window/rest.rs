@@ -12,6 +12,12 @@
 //! A window that can't be seen (hidden, minimised, covered whole) gives back both: the frame that
 //! shows it again makes its targets afresh.
 //!
+//! A window that has drawn nothing for [`LONG_REST_AFTER`] also gives back its kept last frame
+//! (`render::damaged`, 9.2 MB at 1920x1200) and polls the device once, so wgpu frees it then
+//! rather than at the next frame. The first frame back draws whole straight into the drawable,
+//! making and copying nothing; the next idle turn with no input waiting makes the kept frame
+//! again (`post_frame`).
+//!
 //! Either way the runtime's caches go back to what the screen on show uses: text layouts the last
 //! two commits didn't use and their glyph runs (`TextSystem::rest`), images no element showed in
 //! the last frame and the CPU copies of pages left empty (`ImageAtlas::rest`). Then the app's
@@ -24,6 +30,9 @@ use crate::machine::Effects;
 pub(super) const REST_AFTER: Duration = Duration::from_secs(10);
 /// The same while the system says memory is low.
 pub(super) const PRESSED_AFTER: Duration = Duration::from_secs(1);
+/// How long a window draws nothing before it gives back its kept last frame too: long enough
+/// that a reader pausing on a page doesn't come back to a frame that pays for it.
+pub(super) const LONG_REST_AFTER: Duration = Duration::from_secs(60);
 
 /// What the renderer may hold that a rest gives back.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -31,10 +40,12 @@ pub(super) enum Rest {
     /// Nothing: nothing drawn since the window opened, or since it went out of sight.
     #[default]
     Rested,
-    /// Drew; gives back what the screen doesn't use at `due`, unless it draws again first.
-    Drawing { due: Instant },
-    /// Gave that back; holds only what the screen on show draws into.
-    Idle,
+    /// Drew; gives back what the screen doesn't use at `due`, and the kept last frame at `long`,
+    /// unless it draws again first.
+    Drawing { due: Instant, long: Instant },
+    /// Gave that back; holds only what the screen on show draws into, and the kept last frame
+    /// until `long` (`None`: given back too).
+    Idle { long: Option<Instant> },
 }
 
 /// What happened to the window.
@@ -55,30 +66,35 @@ pub(super) enum RestEffect {
     GiveBackUnused,
     /// Everything the renderer keeps between frames.
     GiveBackAll,
+    /// The kept last frame.
+    GiveBackKept,
 }
 
 impl Rest {
     /// When the loop must wake to give back.
     pub(super) fn deadline(self) -> Option<Instant> {
         match self {
-            Rest::Drawing { due } => Some(due),
-            Rest::Rested | Rest::Idle => None,
+            Rest::Drawing { due, .. } => Some(due),
+            Rest::Idle { long } => long,
+            Rest::Rested => None,
         }
     }
 }
 
-/// The one transition. A drawn frame sets the deadline afresh; the deadline passing gives back
-/// what the screen doesn't use, once; going out of sight gives back everything, once.
+/// The one transition. A drawn frame sets the deadlines afresh; the first passing gives back
+/// what the screen doesn't use, once, and the long one the kept last frame, once; going out of
+/// sight gives back everything, once.
 pub(super) fn step(state: &mut Rest, event: RestEvent) -> Effects<RestEffect> {
     use RestEvent as E;
     match (*state, event) {
         (_, E::Drew { now, low }) => {
-            *state = Rest::Drawing { due: now + if low { PRESSED_AFTER } else { REST_AFTER } };
+            *state = Rest::Drawing { due: now + if low { PRESSED_AFTER } else { REST_AFTER }, long: now + LONG_REST_AFTER };
             Effects::none()
         }
-        (Rest::Drawing { due }, E::Woke { now }) if now >= due => { *state = Rest::Idle; Effects::one(RestEffect::GiveBackUnused) }
-        (Rest::Drawing { .. } | Rest::Idle, E::Unseen) => { *state = Rest::Rested; Effects::one(RestEffect::GiveBackAll) }
-        (Rest::Drawing { .. } | Rest::Idle | Rest::Rested, E::Woke { .. }) | (Rest::Rested, E::Unseen) => Effects::none(),
+        (Rest::Drawing { due, long }, E::Woke { now }) if now >= due => { *state = Rest::Idle { long: Some(long) }; Effects::one(RestEffect::GiveBackUnused) }
+        (Rest::Idle { long: Some(long) }, E::Woke { now }) if now >= long => { *state = Rest::Idle { long: None }; Effects::one(RestEffect::GiveBackKept) }
+        (Rest::Drawing { .. } | Rest::Idle { .. }, E::Unseen) => { *state = Rest::Rested; Effects::one(RestEffect::GiveBackAll) }
+        (Rest::Drawing { .. } | Rest::Idle { .. } | Rest::Rested, E::Woke { .. }) | (Rest::Rested, E::Unseen) => Effects::none(),
     }
 }
 impl<S: 'static> Host<S> {
@@ -87,6 +103,11 @@ impl<S: 'static> Host<S> {
             match effect {
                 RestEffect::GiveBackUnused => self.give_back(false),
                 RestEffect::GiveBackAll => self.give_back(true),
+                // Polled once, without waiting: the GPU finished with it long ago, and without a
+                // poll wgpu frees it only at the next frame.
+                RestEffect::GiveBackKept => if let Some((gpu, renderer)) = &self.gpu && renderer.give_back_kept() {
+                    let _ = gpu.device.poll(wgpu::PollType::Poll);
+                },
             }
         }
     }
