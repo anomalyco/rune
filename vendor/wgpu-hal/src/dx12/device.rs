@@ -567,6 +567,7 @@ impl crate::Device for super::Device {
         &self,
         desc: &crate::TextureDescriptor,
     ) -> Result<super::Texture, crate::DeviceError> {
+        let _timed = super::TextureTimer(super::rune_time::now(), (desc.size.width * desc.size.height) as usize);
         let raw_desc = Direct3D12::D3D12_RESOURCE_DESC {
             Dimension: conv::map_texture_dimension(desc.dimension),
             Alignment: 0,
@@ -804,11 +805,13 @@ impl crate::Device for super::Device {
         &self,
         desc: &crate::CommandEncoderDescriptor<super::Queue>,
     ) -> Result<super::CommandEncoder, crate::DeviceError> {
+        let t = super::rune_time::now();
         let allocator: Direct3D12::ID3D12CommandAllocator = unsafe {
             self.raw
                 .CreateCommandAllocator(Direct3D12::D3D12_COMMAND_LIST_TYPE_DIRECT)
         }
         .into_device_result("Command allocator creation")?;
+        super::rune_time::log("allocator_create", t, 1);
 
         if let Some(label) = desc.label {
             allocator.set_name(label)?;
