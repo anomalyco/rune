@@ -9,7 +9,8 @@ use super::*;
 use super::a11y_tree::{element_id, line_id, link_id, round};
 use crate::text::TextFlow;
 
-/// Text longer than this gets no per-character runs (a reader still gets its whole value).
+/// Text longer than this gets no per-character runs (a reader still gets its whole value). A field
+/// past it marks its selection on itself, and the vendored adapters answer its lines from its value.
 const RUN_MAX_BYTES: usize = 64 * 1024;
 
 /// One laid-out line: its bytes in the drawn text and each character's place in points.

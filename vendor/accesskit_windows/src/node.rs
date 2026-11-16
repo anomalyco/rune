@@ -806,6 +806,10 @@ impl NodeWrapper<'_> {
     }
 }
 
+fn long_value_unchanged(new: &NodeRef, old: &NodeRef) -> bool {
+    long_text(new).is_some() && long_text(old).is_some() && new.raw_value() == old.raw_value()
+}
+
 fn enqueue_property_change(
     queue: &mut Vec<QueuedEvent>,
     element: &IRawElementProviderSimple,
@@ -1320,7 +1324,10 @@ macro_rules! patterns {
                 old: &mut NodeWrapper,
             ) {
                 $(if self.$is_supported() && old.$is_supported() {
-                    $({
+                    $(
+                    // Rune: a long field's unchanged value isn't copied twice to UTF-16 to find
+                    // it unchanged (14.5 MB each way at 200,000 lines, on every caret move).
+                    if !(stringify!($getter) == "value" && long_value_unchanged(&self.node, &old.node)) {
                         let old_value = old.$getter();
                         let new_value = self.$getter();
                         if old_value != new_value {
