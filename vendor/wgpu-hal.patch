@@ -11,6 +11,192 @@ index ac050bcd..6e3c74ef 100644
      let desc = unsafe { adapter.GetDesc1() }.unwrap();
  
      // The Intel Haswell family of iGPUs had support for the D3D12 API but it was later
+diff --git a/src/dx12/command.rs b/src/dx12/command.rs
+index 9e90e266..dac895ca 100644
+--- a/src/dx12/command.rs
++++ b/src/dx12/command.rs
+@@ -87,6 +87,25 @@ impl Drop for super::CommandEncoder {
+ }
+ 
+ impl super::CommandEncoder {
++    /// Rune: the free allocator of this kind that has recorded the most, or a new one. wgpu's
++    /// pending writes keep their own, so a frame's never goes to a list of copies.
++    fn take_allocator(&self, pending_writes: bool) -> Result<super::AllocatorSlot, crate::DeviceError> {
++        let mut pool = self.shared.allocators.lock();
++        let pick = pool
++            .iter()
++            .enumerate()
++            .filter(|(_, s)| s.pending_writes == pending_writes)
++            .max_by_key(|(_, s)| s.recorded)
++            .map(|(i, _)| i);
++        if let Some(i) = pick {
++            return Ok(pool.swap_remove(i));
++        }
++        drop(pool);
++        let raw = unsafe { self.device.CreateCommandAllocator(Direct3D12::D3D12_COMMAND_LIST_TYPE_DIRECT) }
++            .into_device_result("Command allocator creation")?;
++        Ok(super::AllocatorSlot { raw, lists: Vec::new(), recorded: 0, pending_writes })
++    }
++
+     unsafe fn begin_pass(&mut self, kind: super::PassKind, label: crate::Label) {
+         let list = self.list.as_ref().unwrap();
+         self.pass.kind = kind;
+@@ -389,10 +408,15 @@ impl crate::CommandEncoder for super::CommandEncoder {
+     type A = super::Api;
+ 
+     unsafe fn begin_encoding(&mut self, label: crate::Label) -> Result<(), crate::DeviceError> {
++        if self.allocator.is_none() {
++            self.allocator = Some(self.take_allocator(label == Some("(wgpu internal) PendingWrites"))?);
++        }
++        let slot = self.allocator.as_mut().unwrap();
++        slot.recorded = slot.recorded.saturating_add(1);
+         let list = loop {
+-            if let Some(list) = self.free_lists.pop() {
++            if let Some(list) = slot.lists.pop() {
+                 // TODO: Is an error expected here and should we print it?
+-                let reset_result = unsafe { list.Reset(&self.allocator, None) };
++                let reset_result = unsafe { list.Reset(&slot.raw, None) };
+                 if reset_result.is_ok() {
+                     break Some(list);
+                 }
+@@ -408,7 +432,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
+                 self.device.CreateCommandList(
+                     0,
+                     Direct3D12::D3D12_COMMAND_LIST_TYPE_DIRECT,
+-                    &self.allocator,
++                    &slot.raw,
+                     None,
+                 )
+             }
+@@ -430,7 +454,9 @@ impl crate::CommandEncoder for super::CommandEncoder {
+     unsafe fn discard_encoding(&mut self) {
+         if let Some(list) = self.list.take() {
+             if unsafe { list.Close() }.is_ok() {
+-                self.free_lists.push(list);
++                if let Some(slot) = self.allocator.as_mut() {
++                    slot.lists.push(list);
++                }
+             }
+         }
+     }
+@@ -441,12 +467,14 @@ impl crate::CommandEncoder for super::CommandEncoder {
+     }
+     unsafe fn reset_all<I: Iterator<Item = super::CommandBuffer>>(&mut self, command_buffers: I) {
+         self.intermediate_copy_bufs.clear();
+-        for cmd_buf in command_buffers {
+-            self.free_lists.push(cmd_buf.raw);
+-        }
+-        if let Err(e) = unsafe { self.allocator.Reset() } {
++        let Some(mut slot) = self.allocator.take() else {
++            return;
++        };
++        slot.lists.extend(command_buffers.map(|c| c.raw));
++        if let Err(e) = unsafe { slot.raw.Reset() } {
+             log::error!("ID3D12CommandAllocator::Reset() failed with {e}");
+         }
++        self.shared.allocators.lock().push(slot);
+     }
+ 
+     unsafe fn transition_buffers<'a, T>(&mut self, barriers: T)
+diff --git a/src/dx12/descriptor.rs b/src/dx12/descriptor.rs
+index f57ba46e..475a9e31 100644
+--- a/src/dx12/descriptor.rs
++++ b/src/dx12/descriptor.rs
+@@ -37,6 +37,10 @@ pub(super) struct GeneralHeap {
+     total_handles: u64,
+     start: DualHandle,
+     ranges: Mutex<RangeAllocator<DescriptorIndex>>,
++    // Zero-sized without wgpu's counters. Updated under the range lock, so a free racing
++    // an allocation cannot inflate the high-water mark.
++    live: wgt::InternalCounter,
++    peak: wgt::InternalCounter,
+ }
+ 
+ impl GeneralHeap {
+@@ -70,6 +74,8 @@ impl GeneralHeap {
+             total_handles,
+             start,
+             ranges: Mutex::new(RangeAllocator::new(0..total_handles)),
++            live: Default::default(),
++            peak: Default::default(),
+         })
+     }
+ 
+@@ -95,10 +101,17 @@ impl GeneralHeap {
+     }
+ 
+     pub(super) fn allocate_slice(&self, count: u64) -> Result<DescriptorIndex, crate::DeviceError> {
+-        let range = self.ranges.lock().allocate_range(count).map_err(|err| {
++        let mut ranges = self.ranges.lock();
++        let range = ranges.allocate_range(count).map_err(|err| {
+             log::error!("Unable to allocate descriptors: {err:?}");
+             crate::DeviceError::OutOfMemory
+         })?;
++        self.live.add(count as isize);
++        let live = self.live.read();
++        if live > self.peak.read() {
++            self.peak.set(live);
++            std::eprintln!("dx12: peak live view descriptors {live}/{} ({} B each)", self.total_handles, self.handle_size);
++        }
+         Ok(range.start)
+     }
+ 
+@@ -106,7 +119,9 @@ impl GeneralHeap {
+     /// Do not use this with handles not given out by this `DescriptorHeapSlice`.
+     pub(crate) fn free_slice(&self, handle: DualHandle) {
+         let start = (handle.gpu.ptr - self.start.gpu.ptr) / self.handle_size;
+-        self.ranges.lock().free_range(start..start + handle.count);
++        let mut ranges = self.ranges.lock();
++        ranges.free_range(start..start + handle.count);
++        self.live.sub(handle.count as isize);
+     }
+ }
+ 
+diff --git a/src/dx12/device.rs b/src/dx12/device.rs
+index 63fb3139..45dd25c4 100644
+--- a/src/dx12/device.rs
++++ b/src/dx12/device.rs
+@@ -179,6 +179,7 @@ impl super::Device {
+             )?,
+             sampler_heap: super::sampler::SamplerHeap::new(&raw, &private_caps)?,
+             private_caps,
++            allocators: Mutex::new(Vec::new()),
+         };
+ 
+         let mut rtv_pool =
+@@ -802,22 +803,12 @@ impl crate::Device for super::Device {
+ 
+     unsafe fn create_command_encoder(
+         &self,
+-        desc: &crate::CommandEncoderDescriptor<super::Queue>,
++        _desc: &crate::CommandEncoderDescriptor<super::Queue>,
+     ) -> Result<super::CommandEncoder, crate::DeviceError> {
+-        let allocator: Direct3D12::ID3D12CommandAllocator = unsafe {
+-            self.raw
+-                .CreateCommandAllocator(Direct3D12::D3D12_COMMAND_LIST_TYPE_DIRECT)
+-        }
+-        .into_device_result("Command allocator creation")?;
+-
+-        if let Some(label) = desc.label {
+-            allocator.set_name(label)?;
+-        }
+-
+         self.counters.command_encoders.add(1);
+ 
+         Ok(super::CommandEncoder {
+-            allocator,
++            allocator: None,
+             device: self.raw.clone(),
+             shared: Arc::clone(&self.shared),
+             mem_allocator: self.mem_allocator.clone(),
+@@ -826,7 +817,6 @@ impl crate::Device for super::Device {
+             intermediate_copy_bufs: Vec::new(),
+             null_rtv_handle: self.null_rtv_handle,
+             list: None,
+-            free_lists: Vec::new(),
+             pass: super::PassState::new(),
+             temp: super::Temp::default(),
+             end_of_pass_timer_query: None,
 diff --git a/src/dx12/instance.rs b/src/dx12/instance.rs
 index fdb63bcb..5f64a804 100644
 --- a/src/dx12/instance.rs
@@ -54,7 +240,7 @@ index fdb63bcb..5f64a804 100644
 +    }
 +}
 diff --git a/src/dx12/mod.rs b/src/dx12/mod.rs
-index 285d635..36e8b82 100644
+index 285d6356..d875c6e5 100644
 --- a/src/dx12/mod.rs
 +++ b/src/dx12/mod.rs
 @@ -615,6 +615,8 @@ struct SwapChain {
@@ -82,7 +268,59 @@ index 285d635..36e8b82 100644
      /// Returns the waitable handle associated with this swap chain, if any.
      /// Handle is only valid while the swap chain is alive.
      pub unsafe fn waitable_handle(&self) -> Option<Foundation::HANDLE> {
-@@ -1535,7 +1546,9 @@ impl crate::Surface for Surface {
+@@ -756,6 +767,22 @@ struct DeviceShared {
+     heap_views: descriptor::GeneralHeap,
+     sampler_heap: sampler::SamplerHeap,
+     private_caps: PrivateCapabilities,
++    /// Rune: the device's command allocators not in use, each with the lists recorded on it. A
++    /// list's first two recordings on an allocator are slow on some drivers (Intel Iris Xe: about
++    /// 0.5 ms a list, a dozen lists a frame) and later ones aren't; an allocator kept with one
++    /// encoder sees its first two recordings whenever wgpu's pool of encoders grows or reorders.
++    /// So an encoder takes an allocator here as it begins, the most-used one, and gives it back
++    /// once the GPU is done with it: a frame records on allocators that frames already used.
++    allocators: Mutex<Vec<AllocatorSlot>>,
++}
++
++/// Rune: a command allocator, its lists, how many lists it has recorded, and whether wgpu's
++/// pending writes use it (a list a submission) or frames (a list a pass and more).
++struct AllocatorSlot {
++    raw: Direct3D12::ID3D12CommandAllocator,
++    lists: Vec<Direct3D12::ID3D12GraphicsCommandList>,
++    recorded: u32,
++    pending_writes: bool,
+ }
+ 
+ unsafe impl Send for DeviceShared {}
+@@ -980,7 +1007,8 @@ impl PassState {
+ // Any state in this struct that may be dirty after an abandoned encoding must
+ // be reset for reused encoders in `begin_encoding`.
+ pub struct CommandEncoder {
+-    allocator: Direct3D12::ID3D12CommandAllocator,
++    /// Rune: taken from `DeviceShared::allocators` as the encoder begins, given back by `reset_all`.
++    allocator: Option<AllocatorSlot>,
+     device: Direct3D12::ID3D12Device,
+     shared: Arc<DeviceShared>,
+     mem_allocator: Allocator,
+@@ -992,7 +1020,6 @@ pub struct CommandEncoder {
+ 
+     null_rtv_handle: descriptor::Handle,
+     list: Option<Direct3D12::ID3D12GraphicsCommandList>,
+-    free_lists: Vec<Direct3D12::ID3D12GraphicsCommandList>,
+     pass: PassState,
+     temp: Temp,
+ 
+@@ -1009,8 +1036,8 @@ unsafe impl Sync for CommandEncoder {}
+ impl fmt::Debug for CommandEncoder {
+     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+         f.debug_struct("CommandEncoder")
+-            .field("allocator", &self.allocator)
+-            .field("device", &self.allocator)
++            .field("allocator", &self.allocator.as_ref().map(|a| &a.raw))
++            .field("device", &self.device)
+             .finish()
+     }
+ }
+@@ -1535,7 +1562,9 @@ impl crate::Surface for Surface {
                      BufferUsage: Dxgi::DXGI_USAGE_RENDER_TARGET_OUTPUT,
                      BufferCount: swap_chain_buffer,
                      Scaling: Dxgi::DXGI_SCALING_STRETCH,
@@ -93,7 +331,7 @@ index 285d635..36e8b82 100644
                      Flags: flags.0 as u32,
                  };
                  let swap_chain1 = match self.target {
-@@ -1702,6 +1715,7 @@ impl crate::Surface for Surface {
+@@ -1702,6 +1731,7 @@ impl crate::Surface for Surface {
              present_mode: config.present_mode,
              format: config.format,
              size: config.extent,
@@ -101,7 +339,7 @@ index 285d635..36e8b82 100644
          });
  
          Ok(())
-@@ -1838,9 +1852,22 @@ impl crate::Queue for Queue {
+@@ -1838,9 +1868,22 @@ impl crate::Queue for Queue {
          };
  
          profiling::scope!("IDXGISwapchain3::Present");
@@ -161,57 +399,3 @@ index ff41e503..7961cbf9 100644
              ),
              CompilerContainer::DynamicDxc(CompilerDynamicDxc { compiler, .. })
              | CompilerContainer::StaticDxc(CompilerStaticDxc { compiler, .. }) => compile_dxc(
-diff --git a/src/dx12/descriptor.rs b/src/dx12/descriptor.rs
-index f57ba46e..475a9e31 100644
---- a/src/dx12/descriptor.rs
-+++ b/src/dx12/descriptor.rs
-@@ -37,6 +37,10 @@ pub(super) struct GeneralHeap {
-     total_handles: u64,
-     start: DualHandle,
-     ranges: Mutex<RangeAllocator<DescriptorIndex>>,
-+    // Zero-sized without wgpu's counters. Updated under the range lock, so a free racing
-+    // an allocation cannot inflate the high-water mark.
-+    live: wgt::InternalCounter,
-+    peak: wgt::InternalCounter,
- }
- 
- impl GeneralHeap {
-@@ -70,6 +74,8 @@ impl GeneralHeap {
-             total_handles,
-             start,
-             ranges: Mutex::new(RangeAllocator::new(0..total_handles)),
-+            live: Default::default(),
-+            peak: Default::default(),
-         })
-     }
- 
-@@ -95,10 +101,17 @@ impl GeneralHeap {
-     }
- 
-     pub(super) fn allocate_slice(&self, count: u64) -> Result<DescriptorIndex, crate::DeviceError> {
--        let range = self.ranges.lock().allocate_range(count).map_err(|err| {
-+        let mut ranges = self.ranges.lock();
-+        let range = ranges.allocate_range(count).map_err(|err| {
-             log::error!("Unable to allocate descriptors: {err:?}");
-             crate::DeviceError::OutOfMemory
-         })?;
-+        self.live.add(count as isize);
-+        let live = self.live.read();
-+        if live > self.peak.read() {
-+            self.peak.set(live);
-+            std::eprintln!("dx12: peak live view descriptors {live}/{} ({} B each)", self.total_handles, self.handle_size);
-+        }
-         Ok(range.start)
-     }
- 
-@@ -106,7 +119,9 @@ impl GeneralHeap {
-     /// Do not use this with handles not given out by this `DescriptorHeapSlice`.
-     pub(crate) fn free_slice(&self, handle: DualHandle) {
-         let start = (handle.gpu.ptr - self.start.gpu.ptr) / self.handle_size;
--        self.ranges.lock().free_range(start..start + handle.count);
-+        let mut ranges = self.ranges.lock();
-+        ranges.free_range(start..start + handle.count);
-+        self.live.sub(handle.count as isize);
-     }
- }
- 

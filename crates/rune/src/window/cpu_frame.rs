@@ -772,6 +772,10 @@ fn raise_priority(thread: &std::thread::JoinHandle<()>) {
     unsafe { SetThreadPriority(thread.as_raw_handle(), THREAD_PRIORITY_NORMAL) };
 }
 
+/// How many frames the warm frame records at once, and how many times (warm_frame).
+const WARM_ENCODERS: usize = 4;
+const WARM_ROUNDS: usize = 3;
+
 static FIRST_CPU: AtomicBool = AtomicBool::new(false);
 static FIRST_LAYOUT: AtomicBool = AtomicBool::new(false);
 static FIRST_MASKS: AtomicBool = AtomicBool::new(false);
@@ -804,6 +808,12 @@ fn prepare(hwnd: isize, size: (u32, u32), srgb: bool, features: wgpu::Features, 
 /// frame's, or nearly), the staging space and the instance buffer. Its own target goes as soon as
 /// the GPU is done with it. The atlas is an empty one: the glyphs land with the hand-over frame's
 /// own prepare.
+///
+/// It draws the frame more than once: on D3D12 a command list's first two recordings on an
+/// allocator cost about 0.5 ms each on the Iris Xe (a dozen lists a frame: 4-10 ms), and frames
+/// rotate through several allocators while earlier ones are on the GPU. So `WARM_ENCODERS` frames
+/// at once, `WARM_ROUNDS` times: as many allocators as frames keep in flight, each past its slow
+/// recordings, and the vendored wgpu-hal hands a frame the allocator that has recorded the most.
 fn warm_frame(gpu: &Gpu, renderer: &mut Renderer, format: wgpu::TextureFormat, size: (u32, u32), instances: &[crate::render::Instance]) {
     let target = gpu.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("rune warm frame"),
@@ -817,11 +827,15 @@ fn warm_frame(gpu: &Gpu, renderer: &mut Renderer, format: wgpu::TextureFormat, s
     });
     let view = target.create_view(&Default::default());
     let mut atlas = crate::text::Atlas::new();
-    let mut enc = gpu.device.create_command_encoder(&Default::default());
-    renderer.prepare_ui(&gpu.device, &gpu.queue, &mut atlas, instances, size);
-    renderer.draw(&mut enc, &view, [0.0; 4]);
-    renderer.submit(&gpu.queue, enc);
-    let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+    for _ in 0..WARM_ROUNDS {
+        let encoders: Vec<_> = (0..WARM_ENCODERS).map(|_| gpu.device.create_command_encoder(&Default::default())).collect();
+        for mut enc in encoders {
+            renderer.prepare_ui(&gpu.device, &gpu.queue, &mut atlas, instances, size);
+            renderer.draw(&mut enc, &view, [0.0; 4]);
+            renderer.submit(&gpu.queue, enc);
+        }
+        let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+    }
     target.destroy();
     let _ = gpu.device.poll(wgpu::PollType::Poll);
 }
