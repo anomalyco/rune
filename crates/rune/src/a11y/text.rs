@@ -114,7 +114,11 @@ impl<S: 'static> Runtime<S> {
         let Some(spec) = n.text.as_deref() else { return };
         let me = out.len() - 1;
         let runs = n.input.is_some() || (spec.selectable && !n.is_secure());
-        if runs && let Some((content, lines)) = self.a11y_lines(i) {
+        let found = self.a11y_lines(i).filter(|_| runs);
+        // A field's rows that wait to be shaped have no lines yet: runs for only the shaped ones
+        // would be a shorter document, so the field answers from its value instead, below.
+        let found = found.filter(|(content, lines)| n.input.is_none() || lines.iter().map(|l| l.range.len()).sum::<usize>() == content.len());
+        if let Some((content, lines)) = found {
             for (k, l) in lines.iter().enumerate() {
                 let id = line_id(n.id, k);
                 let mut run = AkNode::new(Role::TextRun);
@@ -132,7 +136,7 @@ impl<S: 'static> Runtime<S> {
             }
             if let Some(sel) = self.a11y_selection(i, &content, &lines) { out[me].1.set_text_selection(sel); }
         } else if let Some(input) = n.input.as_deref() && !input.edit.is_secure() {
-            // A field with no runs (past `RUN_MAX_BYTES`): its selection in its value's bytes,
+            // A field with no runs (past `RUN_MAX_BYTES`, or rows still unshaped): its selection in its value's bytes,
             // on the field itself. The vendored adapters answer its lines from the value when a
             // reader asks (`vendor/accesskit_windows.patch`, `vendor/accesskit_macos.patch`).
             let at = |character_index| TextPosition { node: element_id(n.id), character_index };
