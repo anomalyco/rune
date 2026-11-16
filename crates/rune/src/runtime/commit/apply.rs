@@ -101,7 +101,7 @@ impl<S: 'static> Runtime<S> {
         };
 
         // Growth stacks: rows of a stack that existed before grow; a new stack mounts settled.
-        let mut crossings = HashMap::default();
+        let mut live_by_id = HashMap::default();
         for c in 0..nodes.len() {
             if nodes[c].cold.get().is_none_or(|nd| nd.growth.is_none()) { continue }
             let cid = nodes[c].id;
@@ -295,7 +295,11 @@ impl<S: 'static> Runtime<S> {
             let animates = existed && (!instant || live_rows.is_some()) && !tx.relayout && !self.reduced_motion;
             stack.reorder.measure(animates, &stack.order, &order, stack.gap, |id| self.grows.get(&id).map(|g| g.h));
             if let Some(range) = live_rows && let Some(v) = self.virtuals.get(&nodes[c].path) && stack.order != order {
-                crossings.extend(rows.iter().filter_map(|&j| self.live_row_shift(&nodes[j], &stack.reorder, v, &range)));
+                live_by_id.extend(rows.iter().enumerate().filter_map(|(k, &j)| {
+                    let moves = |&n: &usize| stack.reorder.jump(nodes[n].id) != 0.0;
+                    let joins = rows.get(k.wrapping_sub(1)).is_some_and(moves) || rows.get(k + 1).is_some_and(moves);
+                    self.live_row(&nodes[j], &stack.reorder, joins, v, &range)
+                }));
             }
             scratch.order = std::mem::replace(&mut stack.order, order);
             self.stacks.insert(cid, stack);
@@ -329,9 +333,9 @@ impl<S: 'static> Runtime<S> {
         let has_virtuals = !self.virtuals.is_empty();
         let mut last = paint_tracks::Finder::default();
         let mut skip_cursor = 0usize;
-        // Carry changed insets on the row's growth, including a resizing neighbour. Only
-        // a row actually crossing another also carries its paint changes and requested exits.
-        let mut crossing = None;
+        // A crossing carries its paint and exits; a resizing row carries its inset. Its
+        // stationary neighbour only rounds a changed corner, not its opacity or contents.
+        let mut live_row = None;
         let mut exit_parents = HashSet::default();
         let mut i = 0usize;
         while i < nodes.len() {
@@ -349,7 +353,7 @@ impl<S: 'static> Runtime<S> {
             let cur_i = i;
             i += 1;
             let i = cur_i;
-            if crossing.is_some_and(|(root, _)| nodes[i].parent.is_none_or(|p| p < root)) { crossing = None; }
+            if live_row.is_some_and(|(root, _)| nodes[i].parent.is_none_or(|p| p < root)) { live_row = None; }
             let id = nodes[i].id;
             let mut scene_rect = nodes[i].local;
             let parent_virtual = if has_virtuals {
@@ -360,8 +364,9 @@ impl<S: 'static> Runtime<S> {
             if let Some(v) = parent_virtual {
                 scene_rect.y -= v.before;
             }
-            if !crossings.is_empty() && let Some(jump) = crossings.get(&id) { crossing = Some((i, *jump != 0.0)); }
-            let riding = crossing.is_some_and(|(_, moves)| moves) && !nodes[i].instant_changes;
+            if !live_by_id.is_empty() && let Some(&row) = live_by_id.get(&id) { live_row = Some((i, row)); }
+            let shift = live_row.and_then(|(_, row)| row.shift);
+            let riding = shift.is_some_and(|jump| jump != 0.0) && !nodes[i].instant_changes;
             if riding && nodes[i].vis.child_exit.is_some() { exit_parents.insert(id); }
             let old = last.find(&self.nodes, id);
             if can_skip_apply
@@ -451,8 +456,8 @@ impl<S: 'static> Runtime<S> {
                 // Out of sight before and after: nobody would see it move.
                 let out_of_sight = unseen.get(i).copied().unwrap_or(false) && nodes[i].matched.is_none()
                     && !self.flying.iter().any(|f| f.0 == id);
-                if !crossings.is_empty() && !out_of_sight && !nodes[i].instant_changes && let Some(&jump) = crossings.get(&id) {
-                    reorder_jump = jump;
+                if !out_of_sight && !nodes[i].instant_changes && live_row.is_some_and(|(root, _)| root == i) {
+                    reorder_jump = shift.unwrap_or(0.0);
                 }
                 let layout_anim = if out_of_sight || held.get(i).copied().unwrap_or(false) {
                     LayoutAnim::INSTANT
@@ -493,7 +498,7 @@ impl<S: 'static> Runtime<S> {
                 // moves in it (a padding, gap or margin above its first child changed), they all
                 // slide from where they were drawn; a sibling's new size still moves the ones
                 // under it at once, as the row's growth reveals it.
-                if nodes[i].in_row == RowLayout::Snaps && !stack_row && (!lands || (crossing.is_some() && !nodes[i].instant_changes)) && !tx.relayout && !follows_window && !out_of_sight
+                if nodes[i].in_row == RowLayout::Snaps && !stack_row && (!lands || (shift.is_some() && !nodes[i].instant_changes)) && !tx.relayout && !follows_window && !out_of_sight
                     && let Some(p) = nodes[i].parent
                 {
                     if i == p + 1 && flying.is_none() && let Some(drawn) = self.scene.get(id, prop::FRAME) {
@@ -536,7 +541,8 @@ impl<S: 'static> Runtime<S> {
                     self.scene.set_frame(id, scene_rect, layout_anim);
                 }
                 let quiet = (lands && !riding) || out_of_sight;
-                self.set_or_anim(id, prop::RADIUS, Corners(nodes[i].vis.radii()), spring_l, quiet);
+                let joins = live_row.is_some_and(|(_, row)| row.joins) && !nodes[i].instant_changes;
+                self.set_or_anim(id, prop::RADIUS, Corners(nodes[i].vis.radii()), spring_l, (lands && !riding && !joins) || out_of_sight);
                 if nodes[i].live.iter().any(|b| b.property == crate::live::Property::Opacity) {
                     // The live source owns this property, including across unrelated commits.
                 } else if !quiet && let Some(&anim) = nodes[i].opacity_motion.as_deref() {

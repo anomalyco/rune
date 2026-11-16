@@ -85,6 +85,43 @@ fn live_tail_motion_gate_instant_controls() {
 }
 
 #[test]
+fn live_tail_motion_gate_joined_corner_retargets_on_adjacent_deliveries() {
+    fn grouped(accepted: &usize, _: &mut Cx<usize>) -> El {
+        let apart = *accepted == 1;
+        let second = el().key("second").w_full().h(30.0)
+            .corners([10.0, if apart { 10.0 } else { 4.0 }, 10.0, 10.0])
+            .opacity(if apart { 0.75 } else { 1.0 });
+        let first = el().key("first").w_full().h(30.0);
+        let working = el().key("working").w_full().h(20.0);
+        let order = match accepted { 0 => [working, first, second], 1 => [first, working, second], _ => [first, second, working] };
+        col().w_full().h_full().scroll(ScrollSpec { stick_bottom: true }).child(col().key("rows").w_full()
+            .growth(GrowthSpec::default()).virtualize(30.0).child(el().key("earlier").w_full().h(240.0)).children(order))
+    }
+    let mut rt = Runtime::new(0, grouped, (280.0, 180.0), Env::new(true, 1.0));
+    rt.motion_needs_cause = true;
+    rt.poll = Some(|accepted, t, tx| {
+        if t < 0.5 || *accepted == 2 { return false; }
+        *accepted += 1;
+        tx.grow_visible_tail("rows");
+        true
+    });
+    let mut run = Run::new(rt, 60.0);
+    while run.rt.state == 0 { assert!(run.rt.t < 0.6); run.step(); }
+    let id = run.rt.nodes.iter().find(|n| n.named("second")).unwrap().id;
+    let radii = |rt: &Runtime<usize>| rt.scene.presented(id).unwrap().radius.0;
+    let [tl, first, br, bl] = radii(&run.rt);
+    assert_eq!([tl, br, bl], [10.0; 3]);
+    assert!(first > 4.0 && first < 6.0, "the corner begins to open: {first}");
+    assert_eq!(run.rt.scene.get(id, prop::OPACITY), Some(0.75), "only corners inherit the neighbour's motion");
+    run.step();
+    assert_eq!(run.rt.state, 2);
+    let next = radii(&run.rt)[1];
+    assert!(next > 4.0 && (next - first).abs() < 1.0, "retarget from {first}, not the intermediate goal: {next}");
+    run.play(1.0);
+    assert_eq!(radii(&run.rt), [10.0, 4.0, 10.0, 10.0]);
+}
+
+#[test]
 fn live_tail_motion_gate_covered_polls_keep_one_request_per_selector() {
     let mut pending = Tx::default();
     for _ in 0..32 {

@@ -48,14 +48,21 @@ impl Reorder {
     }
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct LiveRow {
+    /// Some(0) for a resizing row: its inset still rides its height.
+    pub shift: Option<f32>,
+    /// A row that stays put can gain or lose a joined corner as its neighbour moves.
+    pub joins: bool,
+}
+
 impl<S: 'static> Runtime<S> {
-    /// The row's reorder shift, including zero for a neighbour resizing in that same commit:
-    /// its inset can still change, and must ride its height. Only previously drawn rows qualify.
-    pub(super) fn live_row_shift(&self, row: &Node, reorder: &Reorder, list: &crate::el::virtual_list::VirtualList, range: &std::ops::Range<usize>) -> Option<(NodeId, f32)> {
+    pub(super) fn live_row(&self, row: &Node, reorder: &Reorder, joins: bool, list: &crate::el::virtual_list::VirtualList, range: &std::ops::Range<usize>) -> Option<(NodeId, LiveRow)> {
         let jump = reorder.jump(row.id);
-        if jump == 0.0 && !self.grows.get(&row.id).is_some_and(|g| g.moving()) { return None; }
+        let shift = (jump != 0.0 || self.grows.get(&row.id).is_some_and(|g| g.moving())).then_some(jump);
+        if shift.is_none() && !joins { return None; }
         let key = row.key.as_deref()?;
-        (range.contains(&list.index_of(key)?) && list.drawn.iter().any(|old| old == key)).then_some((row.id, jump))
+        (range.contains(&list.index_of(key)?) && list.drawn.iter().any(|old| old == key)).then_some((row.id, LiveRow { shift, joins }))
     }
 
     /// Only a virtual list already showing its tail, in the same viewport, can grow it for a
