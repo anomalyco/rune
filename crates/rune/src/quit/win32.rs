@@ -27,7 +27,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 
 use super::{Event, Hooks, Loop, State};
 
-/// How long the window runs the loop for the hooks before it answers anyway: Windows shows
+/// How long the window runs the loop for the hooks before it answers anyway, and the most a
+/// consented session end runs its final save before the process ends itself: Windows shows
 /// that the app is preventing shutdown after five seconds.
 const WAIT: Duration = Duration::from_secs(3);
 
@@ -98,6 +99,10 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                     // is not called), so the app's last step only saves.
                     #[cfg(not(target_arch = "wasm32"))]
                     if let Some(last) = super::fast_exit_hook() {
+                        // Never hold the session's end past `WAIT`: a final save that overruns
+                        // (a stalled disk) leaves the draft journal unclean, and the next launch
+                        // replays it; what the consented query sealed is already durable.
+                        super::exit_deadline(WAIT);
                         super::deferred::commit_exit();
                         crate::marks::mark("quit.session_end");
                         super::end_fast(last);

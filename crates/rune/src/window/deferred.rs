@@ -74,7 +74,13 @@ impl Windows {
             Message::Event(e) => self.deferred_step(el, e),
             Message::Close(i) => {
                 if self.deferred.pending() && let Some(status) = self.deferred.status.as_deref()
-                    && self.hosts.get(i).and_then(Option::as_ref).and_then(|h| h.key()) == Some(status) { return; }
+                    && self.hosts.get(i).and_then(Option::as_ref).and_then(|h| h.key()) == Some(status) {
+                    if let (Some(hooks), Some(k)) = (hooks(), self.deferred.state.ticket()) { (hooks.status_closed)(k); }
+                    return;
+                }
+                // A hidden window waiting for the save is not closed by a stray close: closing
+                // would save and forget it, and a resume must bring back every window that was there.
+                if self.deferred.pending() && self.deferred.parked_host(i) { return; }
                 if self.last_quit_host(i) && self.hosts.get(i).and_then(Option::as_ref).is_some_and(|h| h.close_quits()) {
                     self.deferred_step(el, Event::Quit(Instant::now(), crate::quit::After::Exit));
                 } else if let Some(Some(h)) = self.hosts.get_mut(i) {
