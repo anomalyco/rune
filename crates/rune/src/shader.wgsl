@@ -11,6 +11,8 @@ struct Globals {
     viewport: vec2<f32>,
     pad: vec2<f32>,
     flags: vec4<f32>,
+    /// Image byte tables (`byte_table`): 256 sRGB round trips, then 256 decodes.
+    bytes: array<vec4<f32>, 128>,
 };
 
 @group(0) @binding(0) var<uniform> g: Globals;
@@ -246,21 +248,29 @@ fn srgb_encode(x: vec3<f32>) -> vec3<f32> {
     return select(1.055 * pow(v, vec3<f32>(1.0 / 2.4)) - 0.055, v * 12.92, v <= vec3<f32>(0.0031308));
 }
 
-fn srgb_decode(x: vec3<f32>) -> vec3<f32> {
-    return select(pow((x + 0.055) / 1.055, vec3<f32>(2.4)), x / 12.92, x <= vec3<f32>(0.04045));
+/// `Globals::bytes` at byte value `v`: the CPU painter's sRGB round trip (`v` < 256) or decode
+/// (`v` + 256), the tables `cpu_boot::shade::image_texel` reads.
+fn byte_table(v: u32) -> f32 {
+    return g.bytes[v >> 2u][v & 3u];
+}
+
+fn byte_tables(c: vec3<u32>, first: u32) -> vec3<f32> {
+    return vec3<f32>(byte_table(c.r + first), byte_table(c.g + first), byte_table(c.b + first));
 }
 
 /// One image texel, premultiplied (the atlas holds straight alpha) so filtering doesn't darken edges.
-/// The atlas is plain UNORM: a texture's sRGB decode differs between drivers, so the shader
-/// decodes. Blending in sRGB encoding, a straight or opaque texel is its stored bytes as they are.
+/// The atlas is plain UNORM and each stored byte goes through the CPU painter's tables: a
+/// texture's own sRGB decode differs between drivers.
 fn image_texel(t: vec2<i32>, premultiplied: bool) -> vec4<f32> {
     let c = textureLoad(images, t, 0);
+    let b = vec4<u32>(round(c * 255.0));
     if (g.flags.x > 0.5) {
-        if (c.a <= 0.0) { return vec4<f32>(0.0); }
-        if (!premultiplied || c.a == 1.0) { return vec4<f32>(c.rgb * c.a, c.a); }
-        return vec4<f32>(srgb_encode(srgb_decode(c.rgb) / c.a) * c.a, c.a);
+        if (b.a == 0u) { return vec4<f32>(0.0); }
+        if (!premultiplied) { return vec4<f32>(byte_tables(b.rgb, 0u) * c.a, c.a); }
+        if (b.a == 255u) { return vec4<f32>(byte_tables(b.rgb, 0u), 1.0); }
+        return vec4<f32>(srgb_encode(byte_tables(b.rgb, 256u) / c.a) * c.a, c.a);
     }
-    let lin = srgb_decode(c.rgb);
+    let lin = byte_tables(b.rgb, 256u);
     if premultiplied { return vec4<f32>(lin, c.a); }
     return vec4<f32>(lin * c.a, c.a);
 }

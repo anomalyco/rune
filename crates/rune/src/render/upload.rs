@@ -284,6 +284,10 @@ impl Renderer {
         if self.uploads.srgb.replace(mode) != Some(mode) {
             let flags: [f32; 4] = [self.srgb_blend as u8 as f32, byte_source as u8 as f32, 0.0, 0.0];
             staging.write_buffer(&self.globals, 16, bytemuck::cast_slice(&flags));
+            // `Globals::bytes`, with the flags: the CPU painter's own image tables, so both
+            // painters read a stored image byte as the same value on every adapter.
+            let (decoded, round_trip) = super::cpu_boot::srgb_tables();
+            staging.write_buffer(&self.globals, 32, bytemuck::cast_slice(&[*round_trip, *decoded]));
             #[cfg(test)] { self.uploads.globals_writes += 1; }
         }
         self.count = instances.len() as u32;

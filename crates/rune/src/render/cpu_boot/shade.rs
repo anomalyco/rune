@@ -468,25 +468,33 @@ pub(super) fn linear_row_outside(i: &Instance, py: f32, x0: f32, x1: f32) -> boo
     (t0_raw >= 1.5 && ta < t0_raw - 2.0 && tb < t0_raw - 2.0) || (t1_raw >= 1.5 && ta >= t1_raw - 2.0 && tb >= t1_raw - 2.0)
 }
 
-/// `image_texel` in an sRGB-blending frame: one texel of a plain UNORM image page, premultiplied
-/// in sRGB encoding. The page holds straight alpha unless `premultiplied`.
+/// `image_texel` in an sRGB-blending frame: one texel of an `Rgba8UnormSrgb` image page,
+/// premultiplied in sRGB encoding. The page holds straight alpha unless `premultiplied`.
 pub(super) fn image_texel(page: &super::Image<'_>, t: [i32; 2], premultiplied: bool) -> [f32; 4] {
     let at = (t[1] as usize * page.width as usize + t[0] as usize) * 4;
     let Some(c) = page.data.get(at..at + 4) else { return [0.0; 4] };
     let a = c[3] as f32 / 255.0;
     if a <= 0.0 { return [0.0; 4]; }
-    let byte = |v: u8| v as f32 / 255.0;
-    // Straight, or opaque (dividing by exactly 1): the stored bytes as they are, as the shader.
-    if !premultiplied || c[3] == 255 { return [byte(c[0]) * a, byte(c[1]) * a, byte(c[2]) * a, a]; }
-    let decoded = srgb_table();
+    let (decoded, round_trip) = srgb_tables();
+    if !premultiplied {
+        // The texture decodes sRGB to linear and the shader encodes it back: a round trip per
+        // byte value, taken from a table.
+        return [round_trip[c[0] as usize] * a, round_trip[c[1] as usize] * a, round_trip[c[2] as usize] * a, a];
+    }
+    // Opaque, the texel divides by exactly 1: the round trip again.
+    if c[3] == 255 { return [round_trip[c[0] as usize], round_trip[c[1] as usize], round_trip[c[2] as usize], 1.0]; }
     let e = |v: u8| crate::color::srgb_encode(decoded[v as usize] / a) * a;
     [e(c[0]), e(c[1]), e(c[2]), a]
 }
 
-/// Each byte's sRGB decode, built the first time an image draws.
-fn srgb_table() -> &'static [f32; 256] {
-    static TABLE: std::sync::OnceLock<[f32; 256]> = std::sync::OnceLock::new();
-    TABLE.get_or_init(|| std::array::from_fn(|v| crate::color::srgb_decode(v as f32 / 255.0)))
+/// Each byte's sRGB decode (what an `Rgba8UnormSrgb` texel reads as) and its encode back, built
+/// the first time an image draws.
+pub(crate) fn srgb_tables() -> &'static ([f32; 256], [f32; 256]) {
+    static TABLES: std::sync::OnceLock<([f32; 256], [f32; 256])> = std::sync::OnceLock::new();
+    TABLES.get_or_init(|| {
+        let decoded: [f32; 256] = std::array::from_fn(|v| crate::color::srgb_decode(v as f32 / 255.0));
+        (decoded, decoded.map(crate::color::srgb_encode))
+    })
 }
 
 /// `KIND_IMAGE` at pixel centre `p`: bilinear, clamped to the image's own texels.

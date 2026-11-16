@@ -16,7 +16,7 @@ impl Renderer {
         };
         let globals = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
-            size: u64::from(device.limits().min_uniform_buffer_offset_alignment).max(32) + 16,
+            size: Self::projection_offset(device) + 16,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -136,6 +136,12 @@ impl Renderer {
         })
     }
 
+    /// Where the window projection sits in the globals buffer: after `Globals` (32 bytes, then
+    /// its 2,048 bytes of image tables), at the device's uniform offset alignment.
+    fn projection_offset(device: &wgpu::Device) -> u64 {
+        (32 + 2048_u64).next_multiple_of(u64::from(device.limits().min_uniform_buffer_offset_alignment))
+    }
+
     pub(super) fn image_texture(device: &wgpu::Device, width: u32, height: u32) -> wgpu::Texture {
         // Plain UNORM: `image_texel` in the shader decodes the stored bytes itself.
         Self::texture(device, "image atlas", wgpu::TextureFormat::Rgba8Unorm, width, height)
@@ -173,7 +179,7 @@ impl Renderer {
             wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&image_view) },
             wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                 buffer: target.unwrap_or(globals),
-                offset: if target.is_some() { 0 } else { u64::from(device.limits().min_uniform_buffer_offset_alignment).max(32) },
+                offset: if target.is_some() { 0 } else { Self::projection_offset(device) },
                 size: std::num::NonZeroU64::new(16),
             }) },
         ];

@@ -46,6 +46,7 @@ pub(crate) mod tool;
 pub use drift::{Drift, Pixels, drift, drift_wanted, last_drift};
 pub use fill::{FillReport, attach_text, fill_masks};
 pub use painter::{CpuPainter, Painted};
+pub(crate) use shade::srgb_tables;
 
 /// One frame's draw data, borrowed from the runtime that built it.
 pub struct Scene<'a> {
