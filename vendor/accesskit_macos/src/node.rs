@@ -29,7 +29,29 @@ use objc2_foundation::{
 };
 use std::rc::{Rc, Weak};
 
-use crate::{context::Context, filters::filter, util::*};
+use crate::{
+    context::Context,
+    filters::filter,
+    long_text::{Text, Unit, long_text},
+    util::*,
+};
+
+/// Rune: bytes `a..b` of a long field's value ([`long_text`]) as AppKit's range.
+fn long_ns_range(text: Text, a: usize, b: usize) -> NSRange {
+    let (start, len) = text.utf16_span(a, b);
+    NSRange::new(start, len)
+}
+
+/// Rune: AppKit's range in a long field's value as bytes.
+fn long_bytes(text: Text, range: NSRange) -> (usize, usize) {
+    (text.from_utf16(range.location), text.from_utf16(range.location.saturating_add(range.length)))
+}
+
+/// Rune: the character at `index` (UTF-16) in a long field's value.
+fn long_char(text: Text, index: usize) -> NSRange {
+    let at = text.from_utf16(index);
+    long_ns_range(text, at, text.next(at, Unit::Character))
+}
 
 const SCROLL_TO_VISIBLE_ACTION: &str = "AXScrollToVisible";
 
@@ -764,6 +786,9 @@ declare_class!(
         #[method(accessibilityNumberOfCharacters)]
         fn number_of_characters(&self) -> NSInteger {
             self.resolve(|node| {
+                if let Some((text, _)) = long_text(node) {
+                    return text.utf16(text.len()) as _;
+                }
                 if node.supports_text_ranges() {
                     node.document_range().end().to_global_utf16_index() as _
                 } else {
@@ -776,6 +801,9 @@ declare_class!(
         #[method_id(accessibilitySelectedText)]
         fn selected_text(&self) -> Option<Id<NSString>> {
             self.resolve(|node| {
+                if let Some((text, s)) = long_text(node) {
+                    return Some(NSString::from_str(text.slice(s.anchor.character_index, s.focus.character_index)));
+                }
                 if node.supports_text_ranges() {
                     if let Some(range) = node.text_selection() {
                         let text = range.text();
@@ -790,6 +818,9 @@ declare_class!(
         #[method(accessibilitySelectedTextRange)]
         fn selected_text_range(&self) -> NSRange {
             self.resolve(|node| {
+                if let Some((text, s)) = long_text(node) {
+                    return long_ns_range(text, s.anchor.character_index, s.focus.character_index);
+                }
                 if node.supports_text_ranges() {
                     if let Some(range) = node.text_selection() {
                         return to_ns_range(&range);
@@ -803,6 +834,9 @@ declare_class!(
         #[method(accessibilityInsertionPointLineNumber)]
         fn insertion_point_line_number(&self) -> NSInteger {
             self.resolve(|node| {
+                if let Some((text, s)) = long_text(node) {
+                    return text.line_of(text.clamp(s.focus.character_index)) as _;
+                }
                 if node.supports_text_ranges() {
                     if let Some(pos) = node.text_selection_focus() {
                         return pos.to_line_index() as _;
@@ -816,6 +850,10 @@ declare_class!(
         #[method(accessibilityRangeForLine:)]
         fn range_for_line(&self, line_index: NSInteger) -> NSRange {
             self.resolve(|node| {
+                if let Some((text, _)) = long_text(node) {
+                    let line = usize::try_from(line_index).ok().and_then(|n| text.line(n));
+                    return line.map_or_else(|| NSRange::new(0, 0), |(a, b)| long_ns_range(text, a, b));
+                }
                 if node.supports_text_ranges() && line_index >= 0 {
                     if let Some(range) = node.line_range_from_index(line_index as _) {
                         return to_ns_range(&range);
@@ -836,6 +874,11 @@ declare_class!(
                     }
                 };
 
+                // A long field's characters have no known places: its caret stands in.
+                if let Some((text, s)) = long_text(node) {
+                    let at = text.clamp(s.focus.character_index);
+                    return long_ns_range(text, at, text.next(at, Unit::Character));
+                }
                 if node.supports_text_ranges() {
                     let point = from_ns_point(&view, node, point);
                     let pos = node.text_position_at_point(point);
@@ -849,6 +892,10 @@ declare_class!(
         #[method_id(accessibilityStringForRange:)]
         fn string_for_range(&self, range: NSRange) -> Option<Id<NSString>> {
             self.resolve(|node| {
+                if let Some((text, _)) = long_text(node) {
+                    let (a, b) = long_bytes(text, range);
+                    return Some(NSString::from_str(text.slice(a, b)));
+                }
                 if node.supports_text_ranges() {
                     if let Some(range) = from_ns_range(node, range) {
                         let text = range.text();
@@ -863,6 +910,11 @@ declare_class!(
         #[method_id(accessibilityAttributedStringForRange:)]
         fn attributed_string_for_range(&self, range: NSRange) -> Option<Id<NSAttributedString>> {
             self.resolve(|node| {
+                if let Some((text, _)) = long_text(node) {
+                    let (a, b) = long_bytes(text, range);
+                    let plain = NSAttributedString::from_nsstring(&NSString::from_str(text.slice(a, b)));
+                    return Some(plain);
+                }
                 if node.supports_text_ranges() {
                     if let Some(range) = from_ns_range(node, range) {
                         let mut result = NSMutableAttributedString::new();
@@ -976,6 +1028,7 @@ declare_class!(
                     }
                 };
 
+                // Where a long field's lines are isn't known without laying them out.
                 if node.supports_text_ranges() {
                     if let Some(range) = from_ns_range(node, range) {
                         let rects = range.bounding_boxes();
@@ -994,6 +1047,9 @@ declare_class!(
         #[method(accessibilityLineForIndex:)]
         fn line_for_index(&self, index: NSInteger) -> NSInteger {
             self.resolve(|node| {
+                if let Some((text, _)) = long_text(node) {
+                    return text.line_of(text.from_utf16(index.max(0) as _)) as _;
+                }
                 if node.supports_text_ranges() && index >= 0 {
                     if let Some(pos) = node.text_position_from_global_utf16_index(index as _) {
                         return pos.to_line_index() as _;
@@ -1007,6 +1063,9 @@ declare_class!(
         #[method(accessibilityRangeForIndex:)]
         fn range_for_index(&self, index: NSInteger) -> NSRange {
             self.resolve(|node| {
+                if let Some((text, _)) = long_text(node) {
+                    return long_char(text, index.max(0) as _);
+                }
                 if node.supports_text_ranges() && index >= 0 {
                     if let Some(pos) = node.text_position_from_global_utf16_index(index as _) {
                         return to_ns_range_for_character(&pos);
@@ -1020,6 +1079,10 @@ declare_class!(
         #[method(accessibilityStyleRangeForIndex:)]
         fn style_range_for_index(&self, index: NSInteger) -> NSRange {
             self.resolve(|node| {
+                // A long field's text is one style.
+                if let Some((text, _)) = long_text(node) {
+                    return long_ns_range(text, 0, text.len());
+                }
                 if node.supports_text_ranges() && index >= 0 {
                     if let Some(pos) = node.text_position_from_global_utf16_index(index as _) {
                         let start = if pos.is_format_start() {
@@ -1040,6 +1103,18 @@ declare_class!(
         #[method(setAccessibilitySelectedTextRange:)]
         fn set_selected_text_range(&self, range: NSRange) {
             self.resolve_with_context(|node, tree, context| {
+                if let Some((text, _)) = long_text(node) {
+                    let (a, b) = long_bytes(text, range);
+                    let (target_node, target_tree) = node.locate();
+                    let at = |character_index| accesskit::TextPosition { node: target_node, character_index };
+                    context.do_action(ActionRequest {
+                        action: Action::SetTextSelection,
+                        target_tree,
+                        target_node,
+                        data: Some(ActionData::SetTextSelection(TextSelection { anchor: at(a), focus: at(b) })),
+                    });
+                    return;
+                }
                 if node.supports_text_ranges() {
                     if let Some(range) = from_ns_range(node, range) {
                         if let Some((target_node, target_tree)) = tree.state().locate_node(node.id()) {
@@ -1269,7 +1344,7 @@ declare_class!(
                     || selector == sel!(accessibilityStyleRangeForIndex:)
                     || selector == sel!(setAccessibilitySelectedTextRange:)
                 {
-                    return node.supports_text_ranges();
+                    return node.supports_text_ranges() || long_text(node).is_some();
                 }
                 if selector == sel!(setAccessibilityValue:) {
                     return (node.supports_text_ranges() && !node.is_read_only()) || node.supports_action(Action::SetValue, &filter);

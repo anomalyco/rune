@@ -1,0 +1,2 @@
+- Accessibility text runs copy only the line they expose rather than the entire field per line; password masking and IME display text are unchanged.
+- A text field past 64 KiB keeps its text ranges for screen readers: UI Automation's text pattern and AppKit's line, string and selection-range calls are answered from the field's value when a reader asks, a line at a time, with nothing more published per frame. A reader can move by line, read a line, select it and hear the caret in a 200,000-line field on Windows and macOS. Lines there end at line breaks and have no rectangles.

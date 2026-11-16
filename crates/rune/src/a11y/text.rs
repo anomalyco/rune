@@ -3,12 +3,14 @@
 //! the caret; a selectable text's lines likewise; and a text's inline links as link nodes.
 
 use accesskit::{Action as Ak, Node as AkNode, NodeId as AkId, Rect as AkRect, Role, TextPosition, TextSelection};
+use std::borrow::Cow;
 
 use super::*;
-use super::a11y_tree::{line_id, link_id, round};
+use super::a11y_tree::{element_id, line_id, link_id, round};
 use crate::text::TextFlow;
 
-/// Text longer than this gets no per-character runs (a reader still gets its whole value).
+/// Text longer than this gets no per-character runs (a reader still gets its whole value). A field
+/// past it marks its selection on itself, and the vendored adapters answer its lines from its value.
 const RUN_MAX_BYTES: usize = 64 * 1024;
 
 /// One laid-out line: its bytes in the drawn text and each character's place in points.
@@ -112,12 +114,15 @@ impl<S: 'static> Runtime<S> {
         let Some(spec) = n.text.as_deref() else { return };
         let me = out.len() - 1;
         let runs = n.input.is_some() || (spec.selectable && !n.is_secure());
-        if runs && let Some(lines) = self.a11y_lines(i) {
+        let found = self.a11y_lines(i).filter(|_| runs);
+        // A field's rows that wait to be shaped have no lines yet: runs for only the shaped ones
+        // would be a shorter document, so the field answers from its value instead, below.
+        let found = found.filter(|(content, lines)| n.input.is_none() || lines.iter().map(|l| l.range.len()).sum::<usize>() == content.len());
+        if let Some((content, lines)) = found {
             for (k, l) in lines.iter().enumerate() {
                 let id = line_id(n.id, k);
                 let mut run = AkNode::new(Role::TextRun);
-                let value = self.a11y_drawn_text(i).map(|t| t.get(l.range.clone()).unwrap_or("").to_owned()).unwrap_or_default();
-                run.set_value(value);
+                run.set_value(content.get(l.range.clone()).unwrap_or_default());
                 run.set_bounds(AkRect {
                     x0: round(l.rect[0] + w.shift[0]), y0: round(l.rect[1] + w.shift[1]),
                     x1: round(l.rect[0] + l.rect[2] + w.shift[0]), y1: round(l.rect[1] + l.rect[3] + w.shift[1]),
@@ -129,7 +134,13 @@ impl<S: 'static> Runtime<S> {
                 out[me].1.push_child(id);
                 out.push((id, run));
             }
-            if let Some(sel) = self.a11y_selection(i, &lines) { out[me].1.set_text_selection(sel); }
+            if let Some(sel) = self.a11y_selection(i, &content, &lines) { out[me].1.set_text_selection(sel); }
+        } else if let Some(input) = n.input.as_deref() && !input.edit.is_secure() {
+            // A field with no runs (past `RUN_MAX_BYTES`, or rows still unshaped): its selection in its value's bytes,
+            // on the field itself. The vendored adapters answer its lines from the value when a
+            // reader asks (`vendor/accesskit_windows.patch`, `vendor/accesskit_macos.patch`).
+            let at = |character_index| TextPosition { node: element_id(n.id), character_index };
+            out[me].1.set_text_selection(TextSelection { anchor: at(input.edit.anchor), focus: at(input.edit.focus) });
         }
         if spec.cold.links.is_empty() || spec.redacted { return; }
         let boxes = self.link_boxes(i, self.drawn_box(i));
@@ -217,17 +228,18 @@ impl<S: 'static> Runtime<S> {
 
     /// What node `i` draws as text: a field's display text (its mask when secure), else its
     /// content.
-    pub(super) fn a11y_drawn_text(&self, i: usize) -> Option<String> {
+    fn a11y_drawn_text(&self, i: usize) -> Option<Cow<'_, str>> {
         let n = &self.nodes[i];
         match n.input.as_deref() {
-            Some(input) => Some(input.edit.display().0),
-            None => n.text.as_deref().map(|t| t.content.clone()),
+            Some(input) if !input.edit.is_secure() && input.edit.preedit().is_none() => Some(Cow::Borrowed(input.edit.text.as_str())),
+            Some(input) => Some(Cow::Owned(input.edit.display().0)),
+            None => n.text.as_deref().map(|t| Cow::Borrowed(t.content.as_str())),
         }
     }
 
     /// Node `i`'s laid-out lines, in points in its scroll viewport's content space (before the
     /// walk's shift).
-    pub(super) fn a11y_lines(&self, i: usize) -> Option<Vec<Line>> {
+    pub(super) fn a11y_lines(&self, i: usize) -> Option<(Cow<'_, str>, Vec<Line>)> {
         let n = &self.nodes[i];
         let (spec, layout) = (n.text.as_deref()?, n.text_layout.as_ref()?.view());
         if n.elided.is_some() { return None; }
@@ -240,16 +252,17 @@ impl<S: 'static> Runtime<S> {
         if let Some(input) = n.input.as_deref() && input.single_line {
             x -= self.input_scroll.get(&n.path).copied().unwrap_or(0.0);
         }
-        Some(lines(layout, &content, s, [x, r[1] + n.inset[1]]))
+        let lines = lines(layout, &content, s, [x, r[1] + n.inset[1]]);
+        Some((content, lines))
     }
 
     /// A field's caret or selection, in its lines.
-    fn a11y_selection(&self, i: usize, lines: &[Line]) -> Option<TextSelection> {
+    fn a11y_selection(&self, i: usize, content: &str, lines: &[Line]) -> Option<TextSelection> {
         let n = &self.nodes[i];
         let input = n.input.as_deref()?;
         let edit = &input.edit;
         let (anchor, focus) = if edit.preedit().is_some() {
-            let caret = caret_index(edit, &self.a11y_drawn_text(i)?);
+            let caret = caret_index(edit, content);
             (caret, caret)
         } else {
             (edit.display_index(edit.anchor), edit.display_index(edit.focus))
