@@ -212,6 +212,13 @@ impl<S: 'static> Host<S> {
             WindowEvent::Focused(true) | WindowEvent::Moved(_) | WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => self.look_stale(),
             _ => {}
         }
+        // Input says the window is in use: the next free turn gives its swap chain a third buffer
+        // (`depth`), before the frames a scroll or a key ask for.
+        #[cfg(target_os = "windows")]
+        if matches!(event, WindowEvent::CursorMoved { .. } | WindowEvent::CursorEntered { .. } | WindowEvent::MouseInput { .. } | WindowEvent::MouseWheel { .. }
+            | WindowEvent::KeyboardInput { .. } | WindowEvent::Touch(_) | WindowEvent::Focused(true)) {
+            self.depth_step(super::depth::DepthEvent::Likely { now: Instant::now() });
+        }
         if !matches!(event, WindowEvent::RedrawRequested) && let Some(w) = &mut self.win { w.timer_frame.no_longer_quiet(); }
         #[cfg(target_os = "macos")]
         if matches!(event, WindowEvent::Moved(_) | WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } | WindowEvent::Occluded(_))
