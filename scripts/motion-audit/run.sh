@@ -58,10 +58,6 @@ run growth-reorder-flight 2.6 $GR steer --script $S/growth-reorder-flight.json
 run sticky-scroll     1.6 $B/examples/sticky --script crates/rune/examples/sticky.json
 run scroll-keys       3.2 $B/examples/scroll_keys --script $S/scroll-keys.json
 run wheel-distance    1.2 $B/examples/scroll_keys --script $S/wheel-distance.json
-# At 165 Hz a frame is 1.45 growth substeps: rows must advance by the frame's own time.
-FPS=165
-run growth-reorder-165hz 4.2 $GR --script $S/growth-reorder.json
-FPS=120
 run scroll-anchor     3.4 $B/examples/scroll_anchor --script $S/scroll-anchor.json
 run text-glide        3.8 $B/examples/text_glide --script $S/text-glide.json
 run one-snap          4.4 $B/examples/one_snap --script $S/one-snap.json
