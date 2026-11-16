@@ -101,8 +101,10 @@ impl super::CommandEncoder {
             return Ok(pool.swap_remove(i));
         }
         drop(pool);
+        let t = super::rune_time::now();
         let raw = unsafe { self.device.CreateCommandAllocator(Direct3D12::D3D12_COMMAND_LIST_TYPE_DIRECT) }
             .into_device_result("Command allocator creation")?;
+        super::rune_time::log("allocator_create", t, 1);
         Ok(super::AllocatorSlot { raw, lists: Vec::new(), recorded: 0, pending_writes })
     }
 
@@ -416,7 +418,9 @@ impl crate::CommandEncoder for super::CommandEncoder {
         let list = loop {
             if let Some(list) = slot.lists.pop() {
                 // TODO: Is an error expected here and should we print it?
+                let t = super::rune_time::now();
                 let reset_result = unsafe { list.Reset(&slot.raw, None) };
+                super::rune_time::log("list_reset", t, 1);
                 if reset_result.is_ok() {
                     break Some(list);
                 }
@@ -428,7 +432,8 @@ impl crate::CommandEncoder for super::CommandEncoder {
         let list = if let Some(list) = list {
             list
         } else {
-            unsafe {
+            let t = super::rune_time::now();
+            let made = unsafe {
                 self.device.CreateCommandList(
                     0,
                     Direct3D12::D3D12_COMMAND_LIST_TYPE_DIRECT,
@@ -436,7 +441,9 @@ impl crate::CommandEncoder for super::CommandEncoder {
                     None,
                 )
             }
-            .into_device_result("Create command list")?
+            .into_device_result("Create command list");
+            super::rune_time::log("list_create", t, 1);
+            made?
         };
 
         if let Some(label) = label {
@@ -462,7 +469,10 @@ impl crate::CommandEncoder for super::CommandEncoder {
     }
     unsafe fn end_encoding(&mut self) -> Result<super::CommandBuffer, crate::DeviceError> {
         let raw = self.list.take().unwrap();
-        unsafe { raw.Close() }.into_device_result("GraphicsCommandList::close")?;
+        let t = super::rune_time::now();
+        let closed = unsafe { raw.Close() };
+        super::rune_time::log("list_close", t, 1);
+        closed.into_device_result("GraphicsCommandList::close")?;
         Ok(super::CommandBuffer { raw })
     }
     unsafe fn reset_all<I: Iterator<Item = super::CommandBuffer>>(&mut self, command_buffers: I) {
@@ -471,7 +481,10 @@ impl crate::CommandEncoder for super::CommandEncoder {
             return;
         };
         slot.lists.extend(command_buffers.map(|c| c.raw));
-        if let Err(e) = unsafe { slot.raw.Reset() } {
+        let t = super::rune_time::now();
+        let reset = unsafe { slot.raw.Reset() };
+        super::rune_time::log("allocator_reset", t, 1);
+        if let Err(e) = reset {
             log::error!("ID3D12CommandAllocator::Reset() failed with {e}");
         }
         self.shared.allocators.lock().push(slot);
