@@ -115,6 +115,31 @@ impl AsciiLine {
     }
 }
 impl TextSystem {
+    /// Find can ask for a range before the field paints. Resolve just the waiting lines
+    /// intersecting each mark, including marks that cross a packed run's boundary.
+    pub(crate) fn prepare_highlights(&mut self, laid: &mut Rc<ParagraphLayout>, marks: &[crate::TextHighlight]) {
+        for m in marks {
+            let Some(lazy) = &laid.lazy else { break };
+            let end = (m.end as usize).min(lazy.content.len());
+            let start = m.start as usize;
+            if start >= end { continue; }
+            let from = laid.paragraphs.partition_point(|p| p.end < start);
+            let mut waiting = laid.paragraphs[from..].iter().take_while(|p| p.start < end).filter(|p| !p.shaped);
+            let Some(first) = waiting.next() else { continue };
+            let last = waiting.last().unwrap_or(first);
+            let row = |p: &Paragraph, byte: usize| {
+                let at = byte.clamp(p.start, p.end);
+                let lines = lazy.content.as_bytes()[p.start..at].iter().filter(|&&b| b == b'\n').count();
+                p.y + (lines as f32 + 0.5) * lazy.ascii.height
+            };
+            let rows = (row(first, start), row(last, end - 1));
+            if let Some((filled, moved)) = self.fill_paragraphs(laid, std::time::Duration::MAX, rows, 0.0) {
+                *laid = filled;
+                if moved && let Some((exact, _)) = self.fill_paragraphs(laid, std::time::Duration::MAX, rows, f32::INFINITY) { *laid = exact; }
+            }
+        }
+    }
+
     /// Printable ASCII in `style` at `scale`, measured once: None when its characters don't all
     /// come from one font, whose one line is then not every ASCII line's.
     pub(super) fn ascii_line(&mut self, style: TextStyle, scale: f32, wrap_anywhere: bool) -> Option<Rc<AsciiLine>> {

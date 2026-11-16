@@ -360,8 +360,9 @@ pub(super) fn lay_out_text(text: &mut TextSystem, n: &mut Node, w: f32, scale: f
     // A by-paragraph field keeps what its last layout (still on it) shares with this one.
     let mut layout = match text.layout_text(spec, n.input.is_some(), scale, wrap, line_alignment(spec), n.text_layout.as_ref()) {
         TextLayout::Single(l) => l,
-        paragraphs => {
-            n.text_layout = Some(paragraphs);
+        TextLayout::Paragraphs(mut p) => {
+            text.prepare_highlights(&mut p, &spec.cold.highlights);
+            n.text_layout = Some(TextLayout::Paragraphs(p));
             n.elided = None;
             return;
         }

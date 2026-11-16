@@ -434,7 +434,17 @@ impl<S: 'static> Runtime<S> {
                 let drawn_len = n.elided.map_or(spec.content.len(), |e| e.drawn_len(spec.content.len()));
                 if !spec.cold.highlights.is_empty() {
                     let drawn = n.elided.map(|e| e.highlights(&spec.cold.highlights));
-                    self.text.highlight_decorations(layout, drawn.as_deref().unwrap_or(&spec.cold.highlights), drawn_len, s, d_origin, &mut self.deco_scratch);
+                    let marks = drawn.as_deref().unwrap_or(&spec.cold.highlights);
+                    let local;
+                    let marks = if piece.is_whole() { marks } else {
+                        local = marks.iter().filter_map(|h| {
+                            let (a, b) = piece.clip(h.start as usize, h.end as usize)?;
+                            Some(crate::TextHighlight { start: a as u32, end: b as u32, ..h.clone() })
+                        }).collect::<Vec<_>>();
+                        &local
+                    };
+                    let len = if piece.is_whole() { drawn_len } else { piece.shaped(piece.end) };
+                    self.text.highlight_decorations(layout, marks, len, s, d_origin, &mut self.deco_scratch);
                 }
                 if !strikes.is_empty() {
                     let drawn = n.elided.map(|e| e.strikes(&strikes));
@@ -664,7 +674,7 @@ impl<S: 'static> Runtime<S> {
                     if has_hl_fg
                         && let Some(c) = spec.cold.highlights.iter().rev().find_map(|h| {
                             let (a, b) = n.elided.map_or((h.start as usize, h.end as usize), |e| e.mark(h.start as usize, h.end as usize, false));
-                            ((q.byte as usize) >= a && (q.byte as usize) < b).then_some(h.fg).flatten()
+                            (a..b).contains(&piece.content(q.byte as usize)).then_some(h.fg).flatten()
                         })
                     {
                         f = premul(c, o, srgb);
