@@ -768,6 +768,7 @@ struct DeviceShared {
     heap_views: descriptor::GeneralHeap,
     sampler_heap: sampler::SamplerHeap,
     private_caps: PrivateCapabilities,
+    free_lists: Mutex<Vec<Direct3D12::ID3D12GraphicsCommandList>>,
 }
 
 unsafe impl Send for DeviceShared {}

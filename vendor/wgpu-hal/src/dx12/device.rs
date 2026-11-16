@@ -179,6 +179,7 @@ impl super::Device {
             )?,
             sampler_heap: super::sampler::SamplerHeap::new(&raw, &private_caps)?,
             private_caps,
+            free_lists: Mutex::new(Vec::new()),
         };
 
         let mut rtv_pool =
