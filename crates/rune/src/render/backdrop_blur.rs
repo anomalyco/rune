@@ -377,17 +377,21 @@ impl Renderer {
         self.backdrop_blur.as_ref().is_some_and(|b| !b.records.is_empty())
     }
 
+    /// Takes lur as the renderer's backdrop blur, bound to the backdrop copies it already has.
+    pub(super) fn adopt_backdrop_blur(&mut self, device: &wgpu::Device, mut blur: BackdropBlur) {
+        for bd in &self.backdrops { blur.bind_backdrop(device, bd.format, &bd.view); }
+        self.backdrop_blur = Some(blur);
+    }
+
     /// Builds what this frame's backdrop blur records need and writes their pyramid uniforms.
     pub(super) fn prepare_backdrop_blur(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, (vw, vh): (u32, u32)) {
         let any = self.effects.iter().any(|(_, i)| i.params[1] == KIND_BACKDROP_BLUR);
         if let Some(b) = &mut self.backdrop_blur { b.records.clear(); }
         if !any || vw == 0 || vh == 0 { return; }
+        // Still compiling on the warming thread: this frame draws without the blur.
+        if self.backdrop_blur.is_none() && self.backdrop_pending() { return; }
         let staging = self.uploads.staging(device, queue);
-        if self.backdrop_blur.is_none() {
-            let mut blur = BackdropBlur::new(device, &self.bind_layout);
-            for bd in &self.backdrops { blur.bind_backdrop(device, bd.format, &bd.view); }
-            self.backdrop_blur = Some(blur);
-        }
+        if self.backdrop_blur.is_none() { self.adopt_backdrop_blur(device, BackdropBlur::new(device, &self.bind_layout)); }
         let Some(blur) = &mut self.backdrop_blur else { return };
         blur.ensure_composite(device, self.format);
         for (format, _) in &self.extra { blur.ensure_composite(device, *format); }

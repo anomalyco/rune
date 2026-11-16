@@ -104,9 +104,9 @@ impl Health {
     }
 }
 
-/// The isolation pipelines, compiled on a thread before any frame wants them. A driver compiles
-/// the uber shader for each new target format: on Iris Xe with an empty shader cache that is
-/// 337 ms, which the first frame with a layer (a card entering a list's fade) used to pay.
+/// What a renderer builds on first use, compiled on a thread before any frame wants it. A driver
+/// compiles each new pipeline: on Iris Xe with an empty shader cache the uber shader for a layer
+/// target took 337 ms, which the first frame with a layer (a card entering a list's fade) paid.
 #[derive(Default)]
 enum Warm {
     #[default]
@@ -127,13 +127,13 @@ pub(crate) fn isolation_pending() -> bool {
     WARMING.load(std::sync::atomic::Ordering::Relaxed) > 0
 }
 
-/// What the warming thread built: the uber pipeline for layer targets and the composites into
-/// the window's format and into layer targets, with the error the device raised building them.
+/// What the warming thread built, all of which the device took: the uber pipeline for layer
+/// targets, the composites into the window's format and into layer targets, and the backdrop blur.
 #[cfg_attr(any(test, target_arch = "wasm32"), allow(dead_code))]
 struct Warmed {
     layer: wgpu::RenderPipeline,
     composites: [(wgpu::TextureFormat, wgpu::RenderPipeline); 2],
-    error: Option<String>,
+    backdrop: super::backdrop_blur::BackdropBlur,
 }
 
 /// The renderer's breakers, one per lazily built feature.
@@ -143,7 +143,7 @@ pub(super) struct Breakers {
     isolation: Health,
     plus_lighter: Health,
     layer_blur: Health,
-    /// The isolation pipelines built ahead of the first layer (`Renderer::warm_isolation`).
+    /// What the warming thread builds ahead of first use (`Renderer::warm_first_use`).
     warm: Warm,
     /// Default UI frames prepared, up to the one that starts `warm`.
     ui_frames: u8,
@@ -200,23 +200,28 @@ impl Renderer {
         for feature in [Feature::Isolation, Feature::PlusLighter] { self.run_breaker(device, feature, Event::ShaderChanged); }
     }
 
-    /// A default UI frame: from the second on, the isolation pipelines start compiling on a
-    /// thread, so a frame whose first layer comes later (a list's fade, a dialog's fade-in)
-    /// finds them built. Once per shader, and only while no frame has built them.
-    pub(super) fn warm_isolation(&mut self, device: &wgpu::Device) {
+    /// A default UI frame: from the second on, what a renderer otherwise builds the first time a
+    /// frame needs it compiles on a thread: the isolation pipelines (a list's fade over a card, a
+    /// group's opacity) and the backdrop blur (a frosted header over scrolled content). Once per
+    /// shader. A frame never waits for it: until it's built, paint draws the layers it can do
+    /// without on each paint (`isolation_pending`) and a backdrop blur waits (`backdrop_pending`).
+    /// No pipeline is made on a frame that carries input, from the second frame on: something
+    /// new a frame builds lazily belongs here.
+    pub(super) fn warm_first_use(&mut self, device: &wgpu::Device) {
+        self.poll_warm(device);
         if self.breakers.ui_frames < 2 { self.breakers.ui_frames += 1; return; }
         if !matches!(self.breakers.warm, Warm::Idle) || !matches!(self.breakers.isolation, Health::Untried) { return; }
         self.breakers.warm = Warm::Done;
         // Tests share one process: a thread warming for one would change what paint isolates in
-        // the others (isolation_pending), so they build on the frame as before.
+        // the others (`isolation_pending`), so they build on the frame as before.
         #[cfg(not(any(test, target_arch = "wasm32")))]
         {
-            let format = FORMAT;
             let (device, layout, shader, entry, window) = (device.clone(), self.layout.clone(), self.shader.clone(), self.vertex_entry, self.format);
+            let bind_layout = self.bind_layout.clone();
             let wake = self.frame_wake.clone();
             let (sent, done) = std::sync::mpsc::channel();
             WARMING.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let spawned = std::thread::Builder::new().name("rune-layer-pipelines".into()).spawn(move || {
+            let spawned = std::thread::Builder::new().name("rune-first-use-pipelines".into()).spawn(move || {
                 // Measuring builds: `RUNE_SLOW_ISOLATION_MS` stands in for a driver compiling
                 // with an empty shader cache, to show the frames before the pipelines exist.
                 #[cfg(any(debug_assertions, feature = "frame-profile"))]
@@ -226,11 +231,13 @@ impl Renderer {
                 let mut built = None;
                 let verdict = checked(&device, || {
                     let pipeline = |format, entry| Self::pipeline(&device, &layout, &shader, format, entry, Blend::SourceOver);
-                    built = Some((pipeline(format, entry), [(window, pipeline(window, "vs")), (FORMAT, pipeline(format, "vs"))]));
+                    let mut backdrop = super::backdrop_blur::BackdropBlur::new(&device, &bind_layout);
+                    backdrop.ensure_composite(&device, window);
+                    built = Some((pipeline(FORMAT, entry), [(window, pipeline(window, "vs")), (FORMAT, pipeline(FORMAT, "vs"))], backdrop));
                 });
-                if let (Some((layer, composites)), Verdict::Now(error)) = (built, verdict) { sent.send(Warmed { layer, composites, error }).ok(); }
+                if let (Some((layer, composites, backdrop)), Verdict::Now(None)) = (built, verdict) { sent.send(Warmed { layer, composites, backdrop }).ok(); }
                 WARMING.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-                // A window resting with its layers drawn on each paint draws them as layers now.
+                // A window resting with what it drew without them draws with them now.
                 if let Some(wake) = wake { wake.notify(); }
             });
             match spawned {
@@ -240,36 +247,37 @@ impl Renderer {
         }
     }
 
-    /// The warmed isolation pipelines, put where `build_feature` puts them, with what the device
-    /// said. None: build them here. While the thread compiles, paint asks for no layer it can do
-    /// without (`isolation_pending`), so a frame that waits here is one whose layers can't be
-    /// drawn any other way (a blur, a turn, a dissolve, a cutout, a cache).
-    fn take_warm(&mut self, device: &wgpu::Device) -> Option<Verdict> {
-        let Warm::Building(done) = std::mem::replace(&mut self.breakers.warm, Warm::Done) else { return None };
-        let warmed = done.recv().ok()?;
-        if !self.extra.iter().any(|(f, _)| *f == FORMAT) { self.extra.push((FORMAT, warmed.layer)); }
-        for (format, pipeline) in warmed.composites {
-            if !self.layers.pipelines.iter().any(|(f, _)| *f == format) { self.layers.pipelines.push((format, pipeline)); }
+    /// Puts what the warming thread built where a frame would have built it, once it's done.
+    /// Anything the device refused there is left for a frame to build and check as before.
+    fn poll_warm(&mut self, device: &wgpu::Device) {
+        let Warm::Building(done) = &self.breakers.warm else { return };
+        let warmed = match done.try_recv() {
+            Ok(warmed) => warmed,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => { self.breakers.warm = Warm::Done; return; }
+        };
+        self.breakers.warm = Warm::Done;
+        if matches!(self.breakers.isolation, Health::Untried) {
+            if !self.extra.iter().any(|(f, _)| *f == FORMAT) { self.extra.push((FORMAT, warmed.layer)); }
+            for (format, pipeline) in warmed.composites {
+                if !self.layers.pipelines.iter().any(|(f, _)| *f == format) { self.layers.pipelines.push((format, pipeline)); }
+            }
         }
-        // A window format changed meanwhile, or a compositor's other formats: built here.
-        let rest = checked(device, || {
-            let formats: Vec<_> = [self.format].into_iter().chain(self.extra.iter().map(|(f, _)| *f)).collect();
-            for format in formats { self.add_layer_format(device, format); }
-        });
-        Some(match (warmed.error, rest) {
-            (Some(why), _) => Verdict::Now(Some(why)),
-            (None, rest) => rest,
-        })
+        if self.backdrop_blur.is_none() { self.adopt_backdrop_blur(device, warmed.backdrop); }
     }
 
+    /// Whether the backdrop blur is still compiling on the warming thread: a frame draws without
+    /// it rather than building it.
+    pub(super) fn backdrop_pending(&self) -> bool {
+        matches!(self.breakers.warm, Warm::Building(_))
+    }
     /// Steps `feature`'s breaker on `event` and carries out what it asks, until nothing is left.
     fn run_breaker(&mut self, device: &wgpu::Device, feature: Feature, event: Event) {
         let mut queue: std::collections::VecDeque<Effect> = self.breakers.step(feature, event).into_iter().collect();
         while let Some(effect) = queue.pop_front() {
             match effect {
                 Effect::Build => {
-                    let warmed = if feature == Feature::Isolation { self.take_warm(device) } else { None };
-                    let verdict = match warmed { Some(verdict) => verdict, None => checked(device, || self.build_feature(device, feature)) };
+                    let verdict = checked(device, || self.build_feature(device, feature));
                     queue.extend(self.breakers.step(feature, Event::Built(verdict)));
                 }
                 Effect::Drop => self.drop_feature(feature),
