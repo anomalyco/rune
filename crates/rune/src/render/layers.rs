@@ -569,28 +569,22 @@ impl Renderer {
 
     /// A target of `size`, with the buffers and bind groups a layer draws into it through.
     fn make_target(&mut self, device: &wgpu::Device, size: [u32; 2]) -> Target {
-        let (width, height) = (size[0], size[1]);
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("isolated group"), size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
-            mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
-            format: FORMAT, usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-        let view = texture.create_view(&Default::default());
-        let projection = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("layer projection"), size: 16, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let base = Self::bind_group(device, &self.bind_layout, &self.globals, self.uber.outlines(), &self.atlas, &self.atlas, Some(&projection));
-        let composite = Self::bind_group(device, &self.bind_layout, &self.globals, self.uber.outlines(), &self.atlas, &texture, None);
         self.layers.allocations += 1;
-        Target { texture, view, projection,
-            identity: self.layers.allocations, composite_parent: None,
-            quad: Self::instance_buffer(device, 1), base, composite, images: Vec::new(), glyphs: Vec::new(), image_generation: u64::MAX, blur: None,
-            cache: None, last_used: 0, content_size: [0.0; 2], binding: self.layers.bindings,
-            #[cfg(test)]
-            outline_rows: self.uber.outlines().map_or(0, wgpu::Texture::height) }
+        let bindings = (&self.bind_layout, &self.globals, self.uber.outlines(), &self.atlas);
+        new_target(device, bindings, size, self.layers.allocations, self.layers.bindings)
     }
+
+    /// Takes targets made ahead on a thread (`warm_fade_pool`) as spares any faded layer can use.
+    pub(super) fn adopt_spares(&mut self, targets: Vec<Target>) {
+        for mut t in targets {
+            self.layers.allocations += 1;
+            t.identity = self.layers.allocations;
+            self.layers.spare.push(t);
+        }
+    }
+
+    /// The `Layers::bindings` generation targets made now bind against.
+    pub(super) fn layer_bindings(&self) -> u64 { self.layers.bindings }
 
     /// Draws what each layer's disposition says: its target's descriptor, its blur, and the quad
     /// that composites it.
@@ -901,4 +895,32 @@ impl Renderer {
         }
         self.draw_with_effects(pass, format, cursor..range.end, target, hook);
     }
+}
+
+/// The renderer's bindings a layer target binds against: the uber bind group layout, globals,
+/// outline store and glyph atlas.
+pub(super) type TargetBindings<'a> = (&'a wgpu::BindGroupLayout, &'a wgpu::Buffer, Option<&'a wgpu::Texture>, &'a wgpu::Texture);
+
+/// A layer target of `size`, made on any thread: `identity` and `binding` as `Layers` counts them.
+pub(super) fn new_target(device: &wgpu::Device, (layout, globals, outlines, atlas): TargetBindings<'_>, size: [u32; 2], identity: u64, binding: u64) -> Target {
+    let (width, height) = (size[0], size[1]);
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("isolated group"), size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
+        format: FORMAT, usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&Default::default());
+    let projection = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("layer projection"), size: 16, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let base = Renderer::bind_group(device, layout, globals, outlines, atlas, atlas, Some(&projection));
+    let composite = Renderer::bind_group(device, layout, globals, outlines, atlas, &texture, None);
+    Target { texture, view, projection,
+        identity, composite_parent: None,
+        quad: Renderer::instance_buffer(device, 1), base, composite, images: Vec::new(), glyphs: Vec::new(), image_generation: u64::MAX, blur: None,
+        cache: None, last_used: 0, content_size: [0.0; 2], binding,
+        #[cfg(test)]
+        outline_rows: outlines.map_or(0, wgpu::Texture::height) }
 }

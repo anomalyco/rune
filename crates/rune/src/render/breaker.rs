@@ -117,6 +117,23 @@ enum Warm {
     Done,
 }
 
+/// Spare layer targets for faded lists, made on a thread the first time a frame draws a soft
+/// edge: on the Iris each new target cost 0.3–1.2 ms (a texture, two buffers, two bind groups),
+/// once per chip or card the first time it crossed a fade (the palette's key 1).
+#[derive(Default)]
+enum Pool {
+    #[default]
+    Unasked,
+    #[cfg_attr(any(test, target_arch = "wasm32"), allow(dead_code))]
+    Building(std::sync::mpsc::Receiver<Vec<super::layers::Target>>),
+    Done,
+}
+
+/// The fade pool: small targets (chips, keycaps) and window-wide ones (cards), in device pixels,
+/// as many of each as a fade band holds at once.
+const POOL_SMALL: ([u32; 2], usize) = ([256, 128], 6);
+const POOL_WIDE: (u32, usize) = (128, 2);
+
 /// Renderers whose isolation pipelines a thread is still compiling.
 static WARMING: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
@@ -131,9 +148,8 @@ pub(crate) fn isolation_pending() -> bool {
 /// targets, the composites into the window's format and into layer targets, and the backdrop blur.
 #[cfg_attr(any(test, target_arch = "wasm32"), allow(dead_code))]
 struct Warmed {
-    layer: wgpu::RenderPipeline,
-    composites: [(wgpu::TextureFormat, wgpu::RenderPipeline); 2],
-    backdrop: super::backdrop_blur::BackdropBlur,
+    isolation: Option<(wgpu::RenderPipeline, [(wgpu::TextureFormat, wgpu::RenderPipeline); 2])>,
+    backdrop: Option<super::backdrop_blur::BackdropBlur>,
 }
 
 /// The renderer's breakers, one per lazily built feature.
@@ -147,6 +163,8 @@ pub(super) struct Breakers {
     warm: Warm,
     /// Default UI frames prepared, up to the one that starts `warm`.
     ui_frames: u8,
+    /// Layer targets made ahead for faded lists (`Renderer::warm_fade_pool`).
+    pool: Pool,
     /// Tests: build this feature's pipelines broken, as a device that refuses them would.
     #[cfg(test)]
     pub refuse: Option<Feature>,
@@ -207,11 +225,16 @@ impl Renderer {
     /// without on each paint (`isolation_pending`) and a backdrop blur waits (`backdrop_pending`).
     /// No pipeline is made on a frame that carries input, from the second frame on: something
     /// new a frame builds lazily belongs here.
-    pub(super) fn warm_first_use(&mut self, device: &wgpu::Device) {
+    pub(super) fn warm_first_use(&mut self, device: &wgpu::Device, instances: &[super::Instance], viewport: (u32, u32)) {
         self.poll_warm(device);
+        self.warm_fade_pool(device, instances, viewport);
         if self.breakers.ui_frames < 2 { self.breakers.ui_frames += 1; return; }
-        if !matches!(self.breakers.warm, Warm::Idle) || !matches!(self.breakers.isolation, Health::Untried) { return; }
+        if !matches!(self.breakers.warm, Warm::Idle) { return; }
         self.breakers.warm = Warm::Done;
+        // What an earlier frame already built (a layer or a blur on screen at launch) is left.
+        let isolation = matches!(self.breakers.isolation, Health::Untried);
+        let backdrop = self.backdrop_blur.is_none();
+        if !isolation && !backdrop { return; }
         // Tests share one process: a thread warming for one would change what paint isolates in
         // the others (`isolation_pending`), so they build on the frame as before.
         #[cfg(not(any(test, target_arch = "wasm32")))]
@@ -220,7 +243,7 @@ impl Renderer {
             let bind_layout = self.bind_layout.clone();
             let wake = self.frame_wake.clone();
             let (sent, done) = std::sync::mpsc::channel();
-            WARMING.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if isolation { WARMING.fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
             let spawned = std::thread::Builder::new().name("rune-first-use-pipelines".into()).spawn(move || {
                 // Measuring builds: `RUNE_SLOW_ISOLATION_MS` stands in for a driver compiling
                 // with an empty shader cache, to show the frames before the pipelines exist.
@@ -228,22 +251,62 @@ impl Renderer {
                 if let Some(ms) = std::env::var("RUNE_SLOW_ISOLATION_MS").ok().and_then(|v| v.parse().ok()) {
                     std::thread::sleep(std::time::Duration::from_millis(ms));
                 }
-                let mut built = None;
+                let mut built = Warmed { isolation: None, backdrop: None };
                 let verdict = checked(&device, || {
                     let pipeline = |format, entry| Self::pipeline(&device, &layout, &shader, format, entry, Blend::SourceOver);
-                    let mut backdrop = super::backdrop_blur::BackdropBlur::new(&device, &bind_layout);
-                    backdrop.ensure_composite(&device, window);
-                    built = Some((pipeline(FORMAT, entry), [(window, pipeline(window, "vs")), (FORMAT, pipeline(FORMAT, "vs"))], backdrop));
+                    if isolation {
+                        built.isolation = Some((pipeline(FORMAT, entry), [(window, pipeline(window, "vs")), (FORMAT, pipeline(FORMAT, "vs"))]));
+                    }
+                    if backdrop {
+                        let mut blur = super::backdrop_blur::BackdropBlur::new(&device, &bind_layout);
+                        blur.ensure_composite(&device, window);
+                        blur.ensure_composite(&device, FORMAT);
+                        built.backdrop = Some(blur);
+                    }
                 });
-                if let (Some((layer, composites, backdrop)), Verdict::Now(None)) = (built, verdict) { sent.send(Warmed { layer, composites, backdrop }).ok(); }
-                WARMING.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                if let Verdict::Now(None) = verdict { sent.send(built).ok(); }
+                if isolation { WARMING.fetch_sub(1, std::sync::atomic::Ordering::Relaxed); }
                 // A window resting with what it drew without them draws with them now.
                 if let Some(wake) = wake { wake.notify(); }
             });
             match spawned {
                 Ok(_) => self.breakers.warm = Warm::Building(done),
-                Err(_) => { WARMING.fetch_sub(1, std::sync::atomic::Ordering::Relaxed); }
+                Err(_) => if isolation { WARMING.fetch_sub(1, std::sync::atomic::Ordering::Relaxed); },
             }
+        }
+    }
+
+    /// The first frame that draws a soft edge (a list's fade) asks a thread for the fade pool;
+    /// a later frame takes it as spare targets, so the first chip or card to cross the fade makes
+    /// none. Faded layers take any spare big enough (`layers::plan`).
+    fn warm_fade_pool(&mut self, device: &wgpu::Device, instances: &[super::Instance], (width, _): (u32, u32)) {
+        if let Pool::Building(done) = &self.breakers.pool {
+            match done.try_recv() {
+                Ok(targets) => { self.breakers.pool = Pool::Done; self.adopt_spares(targets); }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.breakers.pool = Pool::Done,
+            }
+            return;
+        }
+        if !matches!(self.breakers.pool, Pool::Unasked) || !instances.iter().any(|i| i.fade != [0; 4]) { return; }
+        self.breakers.pool = Pool::Done;
+        // As `warm_first_use`: a thread in one test would change what the others plan.
+        #[cfg(not(any(test, target_arch = "wasm32")))]
+        {
+            let max = self.max_texture_dim;
+            let wide = [width.div_ceil(64).saturating_mul(64).clamp(64, max), POOL_WIDE.0];
+            let sizes: Vec<[u32; 2]> = std::iter::repeat_n(POOL_SMALL.0, POOL_SMALL.1).chain(std::iter::repeat_n(wide, POOL_WIDE.1)).collect();
+            let (device, layout, globals, outlines, atlas, binding) = (device.clone(), self.bind_layout.clone(), self.globals.clone(),
+                self.uber.outlines().cloned(), self.atlas.clone(), self.layer_bindings());
+            let wake = self.frame_wake.clone();
+            let (sent, done) = std::sync::mpsc::channel();
+            let spawned = std::thread::Builder::new().name("rune-fade-pool".into()).spawn(move || {
+                let bindings = (&layout, &globals, outlines.as_ref(), &atlas);
+                let targets = sizes.into_iter().map(|size| super::layers::new_target(&device, bindings, size, 0, binding)).collect();
+                sent.send(targets).ok();
+                if let Some(wake) = wake { wake.notify(); }
+            });
+            if spawned.is_ok() { self.breakers.pool = Pool::Building(done); }
         }
     }
 
@@ -257,13 +320,13 @@ impl Renderer {
             Err(std::sync::mpsc::TryRecvError::Disconnected) => { self.breakers.warm = Warm::Done; return; }
         };
         self.breakers.warm = Warm::Done;
-        if matches!(self.breakers.isolation, Health::Untried) {
-            if !self.extra.iter().any(|(f, _)| *f == FORMAT) { self.extra.push((FORMAT, warmed.layer)); }
-            for (format, pipeline) in warmed.composites {
+        if let Some((layer, composites)) = warmed.isolation && matches!(self.breakers.isolation, Health::Untried) {
+            if !self.extra.iter().any(|(f, _)| *f == FORMAT) { self.extra.push((FORMAT, layer)); }
+            for (format, pipeline) in composites {
                 if !self.layers.pipelines.iter().any(|(f, _)| *f == format) { self.layers.pipelines.push((format, pipeline)); }
             }
         }
-        if self.backdrop_blur.is_none() { self.adopt_backdrop_blur(device, warmed.backdrop); }
+        if let Some(blur) = warmed.backdrop && self.backdrop_blur.is_none() { self.adopt_backdrop_blur(device, blur); }
     }
 
     /// Whether the backdrop blur is still compiling on the warming thread: a frame draws without

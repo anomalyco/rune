@@ -217,7 +217,7 @@ impl Renderer {
     pub(crate) fn prepare_ui(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, atlas: &mut Atlas,
         instances: &[Instance], viewport: (u32, u32)) {
         let bytes = self.srgb_blend && matches!(self.format, wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Rgba8Unorm);
-        self.warm_first_use(device);
+        self.warm_first_use(device, instances, viewport);
         self.prepare_with_precision(device, queue, atlas, instances, viewport, bytes);
     }
 
