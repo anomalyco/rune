@@ -33,6 +33,7 @@ impl<S: 'static> Runtime<S> {
     /// else, then drops it, keeping at most [`PREPARE_BYTES`] of the layouts it made. Returns the
     /// layouts it added.
     pub(crate) fn prepare_text(&mut self, view: fn(&S, &mut Cx<S>) -> El, size: (f32, f32)) -> usize {
+        let t0 = std::time::Instant::now();
         let before = self.text.layout_keys();
         let (mut nodes, mut spare_nodes, mut layout) = (Vec::new(), Vec::new(), LayoutEngine::new());
         let (mut node_index, mut path_ids, mut memo) = (HashMap::default(), HashMap::default(), crate::memo::MemoCache::default());
@@ -86,6 +87,8 @@ impl<S: 'static> Runtime<S> {
             kept_lists: Vec::new(),
         };
         drop(m.finish(&Tx::default()));
-        self.text.keep_prepared(&before, PREPARE_BYTES)
+        let kept = self.text.keep_prepared(&before, PREPARE_BYTES);
+        crate::text::probe_note(format_args!("prepare us={:.0} kept={kept}", t0.elapsed().as_secs_f64() * 1e6));
+        kept
     }
 }

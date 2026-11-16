@@ -48,6 +48,14 @@ impl TextSystem {
 
     /// Builds owed outlines at `scale` for about `budget`; true while more are owed.
     pub(crate) fn warm_step(&mut self, scale: f32, budget: Duration) -> bool {
+        let t0 = Instant::now();
+        let used0 = self.atlas.outlines.texels_used();
+        let more = self.warm_step_inner(scale, budget);
+        super::miss_probe::note(format_args!("warm slice_us={:.0} texels={} more={more}", t0.elapsed().as_secs_f64() * 1e6, self.atlas.outlines.texels_used() - used0));
+        more
+    }
+
+    fn warm_step_inner(&mut self, scale: f32, budget: Duration) -> bool {
         let end = Instant::now() + budget;
         ASKED.with_borrow(|(n, asked)| {
             let w = &mut self.atlas.outlines.warm;

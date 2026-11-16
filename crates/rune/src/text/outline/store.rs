@@ -77,6 +77,9 @@ impl Default for OutlineStore {
 }
 
 impl OutlineStore {
+    /// Texels holding records (probe).
+    pub(crate) fn texels_used(&self) -> usize { self.used }
+
     /// The record of `key`, built by `build` the first time it's asked for.
     pub(crate) fn glyph(&mut self, key: Key, build: impl FnOnce() -> Option<Built>) -> Found {
         if let Some(g) = self.glyphs.get(&key) {
