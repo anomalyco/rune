@@ -102,6 +102,8 @@ impl Depth {
 /// The depth a new swap chain is configured with: three for a window created visible and opaque,
 /// set before its first configure; two otherwise (it grows when shown).
 pub(super) fn created(surface: &wgpu::Surface, three: bool) -> Depth {
+    // Measuring only: RUNE_DEPTH=0 keeps two buffers, so both arms are one binary.
+    if std::env::var_os("RUNE_DEPTH").is_some_and(|v| v == "0") { return Depth::Off; }
     // SAFETY: only sets a count the first configure reads.
     let set = three && unsafe { surface.as_hal::<wgpu::hal::api::Dx12>().map(|h| h.set_extra_buffers(1)).is_some() };
     if set { Depth::Three { warm: 3 } } else { Depth::default() }
@@ -111,6 +113,8 @@ impl<S: 'static> super::Host<S> {
     /// One step of the window's buffer count, and what it asks for.
     pub(super) fn depth_step(&mut self, event: DepthEvent) {
         let Some(w) = self.win.as_mut() else { return };
+        // Measuring only: RUNE_DEPTH=0 keeps two buffers.
+        if std::env::var_os("RUNE_DEPTH").is_some_and(|v| v == "0") { w.native.depth = Depth::Off; return; }
         let (next, effect) = w.native.depth.step(event);
         w.native.depth = next;
         match effect {
@@ -147,6 +151,8 @@ impl<S: 'static> super::Host<S> {
         // SAFETY: only sets a count the next configure reads.
         let set = |extra| unsafe { surface.as_hal::<wgpu::hal::api::Dx12>().map(|h| h.set_extra_buffers(extra)).is_some() };
         if !set(extra) { w.native.depth = Depth::Off; return; }
+        #[cfg(feature = "frame-profile")]
+        let start = crate::frame::live_log::now();
         let oom = gpu.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
         let configured = super::configure(surface, gpu, &w.config);
         let refused = pollster::block_on(oom.pop()).is_some() || configured.is_err();
@@ -157,6 +163,8 @@ impl<S: 'static> super::Host<S> {
         } else if configured.is_err() {
             w.surface_ok = false;
         }
+        #[cfg(feature = "frame-profile")]
+        crate::frame::live_log::mark(&format!("depth\",\"extra\":{extra},\"refused\":{refused},\"start\":{start},\"ns\":{},\"x\":\"", crate::frame::live_log::now() - start));
         w.native.slot.reset();
         w.native.damage.reset();
         w.presented = None;

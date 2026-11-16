@@ -803,7 +803,9 @@ fn prepare(hwnd: isize, size: (u32, u32), srgb: bool, features: wgpu::Features, 
     let (config, _) = surface_config(&surface, &gpu.adapter, (size.0.max(1), size.1.max(1)), srgb).ok_or("the GPU can't present to this window")?;
     // Created with its third buffer (`depth`): a window that opened on the CPU is visible and opaque.
     let depth = super::depth::created(&surface, true);
+    #[cfg(feature = "frame-profile")] crate::frame::live_log::mark("first.configure");
     configure(&surface, &gpu, &config)?;
+    #[cfg(feature = "frame-profile")] crate::frame::live_log::mark("first.configure.done");
     let target_format = if srgb { config.format.remove_srgb_suffix() } else { config.format };
     let mut renderer = renderer.unwrap_or_else(|| Renderer::new(&gpu.device, target_format));
     let instances = std::mem::take(&mut *latest.lock().unwrap_or_else(|e| e.into_inner()));

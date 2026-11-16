@@ -172,7 +172,9 @@ impl<S: 'static> Host<S> {
         // A window created visible is created with its third buffer (`depth`): nothing to grow later.
         #[cfg(target_os = "windows")]
         let depth = super::depth::created(&surface, visible && config.alpha_mode == wgpu::CompositeAlphaMode::Opaque);
+        #[cfg(feature = "frame-profile")] crate::frame::live_log::mark("first.configure");
         let refused = configure(&surface, gpu, &config).err().map(|error| (gpu.is_lost(), error));
+        #[cfg(feature = "frame-profile")] crate::frame::live_log::mark("first.configure.done");
         if let Some((lost, error)) = refused {
             if lost {
                 self.gpu = None;
