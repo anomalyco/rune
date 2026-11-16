@@ -171,7 +171,7 @@ impl<S: 'static> Runtime<S> {
                 pinh.paint_opacity *= shown;
             }
             pinh.dy += self.row_dy[i];
-            pinh.snap.rigid[1] += self.row_dy[i];
+            pinh.snap.grow(self.row_dy[i], n.growth.is_some());
             if let Some(a) = &n.above
                 && let Some(j) = anchor_index(&self.nodes, i, a)
             {
@@ -195,7 +195,7 @@ impl<S: 'static> Runtime<S> {
                     pinh.paint_clip[1] = top;
                 }
                 if edge == crate::el::StickyEdge::Left { pinh.dx += shift } else { pinh.dy += shift }
-                pinh.snap.rigid[(edge != crate::el::StickyEdge::Left) as usize] += shift;
+                pinh.snap.shift((edge != crate::el::StickyEdge::Left) as usize, shift);
                 // A sticky element stays crisp against the viewport edge it sticks to while rows
                 // scrolling under its fill fade out.
                 let slot = match edge {
@@ -1155,7 +1155,7 @@ impl<S: 'static> Runtime<S> {
                         // with its box, as it did before this: a glide toward a moving offset keeps
                         // the text on its card, and lands as a card that never moved draws.
                         exact_off: if pinh.snap.shifted || n.vis.offset != [0.0; 2] { [0.0; 2] } else {
-                            let o = snap_rest.map_or([0.0; 2], |p| p.exact_off(rigid));
+                            let o = snap_rest.map_or([0.0; 2], |p| p.exact_off(pinh.snap.steady.map(|v| v * s)));
                             let c = pinh.snap.contain.map(|v| v * s);
                             [o[0] + (c[0] + 0.5).floor() - c[0], o[1] + (c[1] + 0.5).floor() - c[1]]
                         },
@@ -1219,13 +1219,11 @@ impl<S: 'static> Runtime<S> {
             }
             let mut dy = pinh.dy;
             let snap_off = pinh.snap.off || n.vis_flags.no_pixel_snap() || turn_index != 0;
-            let mut snap_rigid = pinh.snap.rigid;
+            let mut snap = pinh.snap;
             // `El::paint_contained`: its children snap against the containing box's origin,
             // rounded on its own, as a translation that snaps as a whole.
-            let mut snap_contain = pinh.snap.contain;
             if let Some(o) = n.vis.cold.get().and_then(|c| c.paint_contain) {
-                snap_rigid = [snap_rigid[0] - snap_contain[0] + o[0], snap_rigid[1] - snap_contain[1] + o[1]];
-                snap_contain = o;
+                snap.contain_at(o);
             }
             if n.scroll.is_some()
                 && let Some(st) = self.scrolls.get(&n.id)
@@ -1235,14 +1233,14 @@ impl<S: 'static> Runtime<S> {
                 let exact = offset as f32 + st.slack.height();
                 let (drawn, hold) = st.drawn.draw(exact, st.offset as f32, st.pinned(), s);
                 dy -= drawn;
-                snap_rigid[1] -= drawn;
+                snap.shift(1, -drawn);
                 if let Some(st) = self.scrolls.get_mut(&self.nodes[i].id) { (st.held, st.drawn) = (held, hold); }
             }
             let (mut scale, mut anchor, mut anchor_to, mut dx) = (sc, anchor, anchor_to, pinh.dx);
             if n.scroll_axes.x() && let Some(st) = self.scrolls.get_mut(&self.nodes[i].id) {
                 st.drawn_x = grid(st.x.shift() as f32, s);
                 dx -= st.drawn_x;
-                snap_rigid[0] -= st.drawn_x;
+                snap.shift(0, -st.drawn_x);
             }
             if open_cache && sc > 1e-4 {
                 dx += (r_exact[0] / s - rect_pt[0]) / sc;
@@ -1277,7 +1275,7 @@ impl<S: 'static> Runtime<S> {
                 hit_opacity: hit_opacity * kids_fade, group_rect: if hover_owner { rect_pt } else { pinh.group_rect },
                 scale_motion, still: if scale_motion == ScaleMotion::Still { (scale, anchor, anchor_to) } else { pinh.still },
                 in_cache, skip_paint, turn: turn_index,
-                snap: pixel_snap::Inherit { off: snap_off, rigid: snap_rigid, contain: snap_contain, steps, shifted: pinh.snap.shifted || n.vis.offset != [0.0; 2], layer: if cover.is_some() { 0 } else { snap_layer }, parent: snap_rest.filter(|_| cover.is_none() && snap_rigid == pinh.snap.rigid && pixel_snap::frames(&n.vis)) } };
+                snap: pixel_snap::Inherit { off: snap_off, steps, shifted: pinh.snap.shifted || n.vis.offset != [0.0; 2], layer: if cover.is_some() { 0 } else { snap_layer }, parent: snap_rest.filter(|_| cover.is_none() && snap.rigid == pinh.snap.rigid && pixel_snap::frames(&n.vis)), ..snap } };
             // Shown only under its group's hover, it takes presses where the pointer hovers the
             // group: a press in the same frame as the move that reveals it finds it, as a page's
             // `:hover` applies before the press does.
