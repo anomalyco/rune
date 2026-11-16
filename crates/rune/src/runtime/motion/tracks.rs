@@ -118,6 +118,7 @@ impl<S: 'static> Runtime<S> {
             stack.slides.keep(&stack.order);
             stack.growing = st_growing;
             stack.moving = st_moving;
+            stack.handoff.place(&self.grows, &mut self.scene, &self.nodes, &self.node_index);
             // Keep the shared clock awake through the hold. No timer thread or remeasurement.
             moving |= st_moving;
         }
@@ -144,7 +145,10 @@ impl<S: 'static> Runtime<S> {
             let n = &self.nodes[c];
             f64::from(n.target[1] - view[1]) + self.stack_extent(c).unwrap_or(f64::from(n.target[3] - n.target[1]))
         }).reduce(f64::max).unwrap_or(0.0);
-        content_h - f64::from(view[3] - view[1])
+        let height = self.scroll_stack(i).and_then(|c| self.stacks.get(&self.nodes[c].id))
+            .filter(|s| !matches!(s.handoff, row_reorder::handoff::Handoff::Idle))
+            .and_then(|_| self.scene.get(self.nodes[i].id, prop::FRAME)).map_or(view[3] - view[1], |r| r.h);
+        content_h - f64::from(height)
     }
 
     pub(super) fn step_scroll(&mut self, dt: f32) -> bool {
