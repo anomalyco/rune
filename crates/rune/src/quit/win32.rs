@@ -91,7 +91,19 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                 if w != 0 {
                     if super::deferred::exiting(){return 0}
                     if super::deferred::session::current()!=super::deferred::session::Query::Allowed { super::deferred::commit_exit();std::process::exit(2); }
+                    // Windows may end the process as soon as this returns. Finish here, as the
+                    // loop's end would: the app's last step closes storage with a final barrier
+                    // (covering any write admitted since the query) and marks the journal clean.
+                    // A consented session end never authorizes the updater (`Hooks::confirmed`
+                    // is not called), so the app's last step only saves.
+                    #[cfg(not(target_arch = "wasm32"))]
+                    if let Some(last) = super::fast_exit_hook() {
+                        super::deferred::commit_exit();
+                        crate::marks::mark("quit.session_end");
+                        super::end_fast(last);
+                    }
                     super::deferred::session_ends();
+                    run_until_exit();
                 } else { clear_reason(); super::deferred::session::cancel(); }
                 return 0;
             }
@@ -112,6 +124,23 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
 fn run_query_loop() {
     let until=Instant::now()+Duration::from_secs(2);
     while super::deferred::session::current()==super::deferred::session::Query::Asking && Instant::now()<until {
+        // SAFETY: same UI thread and message pump as run_loop. Preserve WM_QUIT for winit.
+        unsafe {
+            let mut msg:MSG=std::mem::zeroed();
+            if PeekMessageW(&mut msg,std::ptr::null_mut(),0,0,PM_REMOVE)==0 {
+                MsgWaitForMultipleObjects(0,std::ptr::null(),0,until.saturating_duration_since(Instant::now()).as_millis() as u32,QS_ALLINPUT);continue;
+            }
+            if msg.message==WM_QUIT {PostQuitMessage(msg.wParam as i32);return}
+            TranslateMessage(&msg);DispatchMessageW(&msg);
+        }
+    }
+}
+
+/// An app with an orderly exit: run the posted session end for at most `WAIT` before answering.
+#[cfg(feature="deferred-quit")]
+fn run_until_exit() {
+    let until=Instant::now()+WAIT;
+    while Instant::now()<until {
         // SAFETY: same UI thread and message pump as run_loop. Preserve WM_QUIT for winit.
         unsafe {
             let mut msg:MSG=std::mem::zeroed();

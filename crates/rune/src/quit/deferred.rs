@@ -18,6 +18,10 @@ pub enum Seal { Query, Exit }
 /// Callbacks run on the UI thread and must not wait for a worker. `overdue` presents or updates
 /// one app-owned surface describing what is unconfirmed. Waiting is the default. Only a user's
 /// explicit choice on that surface should call [`Ticket::quit_anyway`]. `resumed` dismisses it.
+/// What follows a confirmed user quit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Then { Exit, Relaunch }
+
 pub struct Hooks {
     pub begin: fn(Ticket),
     /// Non-link activation data delivered to the owner. The UI thread must not wait for
@@ -32,7 +36,9 @@ pub struct Hooks {
     /// discard. Use `status_key` for a new host so an older dismissal cannot address it.
     pub overdue: fn(Ticket) -> crate::WindowHandle,
     pub resumed: fn(Ticket),
-    pub confirmed: fn(Ticket),
+    /// A durable user quit is committed; Then::Relaunch means this app starts again at once,
+    /// so nothing that replaces its bundle may be authorized.
+    pub confirmed: fn(Ticket, Then),
     /// Localized, short, non-sensitive shutdown-block reason (also used by the app's surface).
     pub shutdown_reason: fn() -> String,
 }
