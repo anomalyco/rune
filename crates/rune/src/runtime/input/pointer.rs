@@ -603,6 +603,7 @@ impl<S: 'static> Runtime<S> {
         let scale = f64::from(self.env.scale * self.zoom());
         let Some(st) = self.scrolls.get_mut(&id) else { return };
         let mut curve = st.mode.wheel().unwrap_or_else(|| scroll_wheel::WheelCurve::new(st.offset, st.offset, scale));
+        curve.follow(st.offset);
         let to = (curve.target() - f64::from(dy)).clamp(0.0, st.max);
         let moved = curve.retarget(to, scale);
         if moved {

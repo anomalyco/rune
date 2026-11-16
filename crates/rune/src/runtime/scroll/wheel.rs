@@ -29,13 +29,31 @@ pub(crate) struct WheelCurve {
     /// Set since a notch began or retargeted it, until the first frame that steps it: time a
     /// frame catches up for motion that was already running is none of its.
     fresh: bool,
+    /// The offset it last put the viewport at: one that differs when the ease next steps was
+    /// moved under it (rows above measured or arrived, an anchor kept what's on screen).
+    applied: f64,
 }
 
 impl WheelCurve {
     /// An ease from `from` to `to`, `scale` device pixels to a point.
     pub(crate) fn new(from: f64, to: f64, scale: f64) -> Self {
-        WheelCurve { from, to, t: 0.0, duration: duration(to - from, scale), ease: CubicBezier::new(0.42, 0.0, 0.58, 1.0), fresh: true }
+        WheelCurve { from, to, t: 0.0, duration: duration(to - from, scale), ease: CubicBezier::new(0.42, 0.0, 0.58, 1.0), fresh: true, applied: from }
     }
+
+    /// The viewport's offset is `offset` before the ease steps: whatever moved it since the ease
+    /// last did (rows above measured, an anchor holding what's on screen) moves the whole ease
+    /// with it, so the content under the reader doesn't jump back (Chromium's `ApplyAdjustment`).
+    pub(crate) fn follow(&mut self, offset: f64) {
+        let moved = offset - self.applied;
+        if moved != 0.0 {
+            self.from += moved;
+            self.to += moved;
+            self.applied = offset;
+        }
+    }
+
+    /// The ease put the viewport at `offset`.
+    pub(crate) fn applied(&mut self, offset: f64) { self.applied = offset; }
 
     /// Where it heads.
     pub(crate) fn target(&self) -> f64 { self.to }
@@ -68,6 +86,14 @@ impl WheelCurve {
     /// Sends it on to `to` from where it is now, keeping its speed (`UpdateTarget`). Returns
     /// false when it's already there and nothing is left to move.
     pub(crate) fn retarget(&mut self, to: f64, scale: f64) -> bool {
+        // What it last put the viewport at stays: a new segment starts from there.
+        let applied = self.applied;
+        let moving = self.send_to(to, scale);
+        self.applied = applied;
+        moving
+    }
+
+    fn send_to(&mut self, to: f64, scale: f64) -> bool {
         if ((self.to - to) * scale).abs() < THERE {
             self.to = to;
             return !self.done();
@@ -95,7 +121,7 @@ impl WheelCurve {
         }
         // The new segment starts at the old one's speed (`EaseInOutWithInitialSlope`).
         let slope = (v * duration / delta).clamp(-1000.0, 1000.0) as f32;
-        *self = WheelCurve { from: at, to, t: 0.0, duration, ease: CubicBezier::new(0.42, 0.42 * slope, 0.58, 1.0), fresh: true };
+        *self = WheelCurve { from: at, to, t: 0.0, duration, ease: CubicBezier::new(0.42, 0.42 * slope, 0.58, 1.0), fresh: true, ..*self };
         true
     }
 

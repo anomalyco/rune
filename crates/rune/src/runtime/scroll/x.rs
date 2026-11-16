@@ -485,6 +485,7 @@ impl<S: 'static> Runtime<S> {
         let before = st.x.offset;
         if glides {
             let mut curve = match st.x.motion { XMotion::Wheel(c) => c, _ => scroll_wheel::WheelCurve::new(st.x.offset, st.x.offset, scale) };
+            curve.follow(st.x.offset);
             let to = (curve.target() + st.x.toward(f64::from(dx))).clamp(0.0, st.x.max);
             if !curve.retarget(to, scale) { return; }
             st.x.motion = XMotion::Wheel(curve);
@@ -555,9 +556,11 @@ impl<S: 'static> Runtime<S> {
             }
             XMotion::Momentum(_) => st.x.motion = XMotion::Rest,
             XMotion::Wheel(mut curve) => {
+                curve.follow(st.x.offset);
                 if curve.target() > st.x.max { curve.retarget(st.x.max, scale); }
                 if land_wheel { curve.advance(f64::INFINITY, false) } else { curve.advance(f64::from(dt), catch_up) }
-                st.x.offset = scroll_wheel::device_pixel(curve.value(), scale);
+                st.x.offset = scroll_wheel::device_pixel(curve.value(), scale).clamp(0.0, st.x.max);
+                curve.applied(st.x.offset);
                 st.moved();
                 if curve.done() { st.x.motion = XMotion::Rest; } else { st.x.motion = XMotion::Wheel(curve); moving = true; }
             }
