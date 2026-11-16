@@ -389,10 +389,39 @@ impl crate::CommandEncoder for super::CommandEncoder {
     type A = super::Api;
 
     unsafe fn begin_encoding(&mut self, label: crate::Label) -> Result<(), crate::DeviceError> {
+        if self.allocator.is_none() {
+            let pending = label == Some("(wgpu internal) PendingWrites");
+            let slot = {
+                let mut pool = self.shared.allocators.lock();
+                let pick = if pending {
+                    pool.iter().enumerate().min_by_key(|(_, s)| s.weight).map(|(i, _)| i)
+                } else {
+                    pool.iter().enumerate().max_by_key(|(_, s)| s.weight).map(|(i, _)| i)
+                };
+                pick.map(|i| pool.swap_remove(i))
+            };
+            match slot {
+                Some(slot) => {
+                    self.allocator = Some(slot.raw);
+                    self.free_lists = slot.lists;
+                    self.weight = slot.weight;
+                }
+                None => {
+                    super::ib3::ALLOCS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                    self.allocator = Some(
+                        unsafe { self.device.CreateCommandAllocator(Direct3D12::D3D12_COMMAND_LIST_TYPE_DIRECT) }
+                            .into_device_result("Command allocator creation")?,
+                    );
+                    self.weight = 0;
+                }
+            }
+        }
+        self.recorded += 1;
+        let allocator = self.allocator.clone().unwrap();
         let list = loop {
-            if let Some(list) = self.free_lists.pop().or_else(|| super::ib3::shared().then(|| self.shared.free_lists.lock().pop()).flatten()) {
+            if let Some(list) = self.free_lists.pop() {
                 // TODO: Is an error expected here and should we print it?
-                let t=std::time::Instant::now();let reset_result = unsafe { list.Reset(&self.allocator, None) };super::ib3::add(super::ib3::RESET,t);
+                let t=std::time::Instant::now();let reset_result = unsafe { list.Reset(&allocator, None) };super::ib3::add(super::ib3::RESET,t);
                 if reset_result.is_ok() {
                     break Some(list);
                 }
@@ -409,7 +438,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
                 self.device.CreateCommandList(
                     0,
                     Direct3D12::D3D12_COMMAND_LIST_TYPE_DIRECT,
-                    &self.allocator,
+                    &allocator,
                     None,
                 )
             }
@@ -417,7 +446,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
         };
 
         if let Some(t)=create {super::ib3::add(super::ib3::CREATE,t);}
-        super::ib3::opened(windows::core::Interface::as_raw(&self.allocator) as usize, windows::core::Interface::as_raw(&list) as usize);
+        super::ib3::opened(windows::core::Interface::as_raw(&allocator) as usize, windows::core::Interface::as_raw(&list) as usize);
         if let Some(label) = label {
             list.set_name(label)?;
         }
@@ -444,17 +473,20 @@ impl crate::CommandEncoder for super::CommandEncoder {
     }
     unsafe fn reset_all<I: Iterator<Item = super::CommandBuffer>>(&mut self, command_buffers: I) {
         self.intermediate_copy_bufs.clear();
-        if super::ib3::shared() {
-            self.shared.free_lists.lock().extend(command_buffers.map(|c| c.raw));
-        } else {
-            for cmd_buf in command_buffers {
-                self.free_lists.push(cmd_buf.raw);
-            }
+        for cmd_buf in command_buffers {
+            self.free_lists.push(cmd_buf.raw);
         }
-        let t=std::time::Instant::now();if let Err(e) = unsafe { self.allocator.Reset() } {
+        let t=std::time::Instant::now();if let Some(Err(e)) = self.allocator.as_ref().map(|a| unsafe { a.Reset() }) {
             log::error!("ID3D12CommandAllocator::Reset() failed with {e}");
         }
         super::ib3::add(super::ib3::A_RESET,t);
+        if super::ib3::shared() {
+            if let Some(raw) = self.allocator.take() {
+                let weight = self.weight.saturating_add(self.recorded);
+                self.shared.allocators.lock().push(super::AllocatorSlot { raw, lists: mem::take(&mut self.free_lists), weight });
+            }
+        }
+        self.recorded = 0;
     }
 
     unsafe fn transition_buffers<'a, T>(&mut self, barriers: T)

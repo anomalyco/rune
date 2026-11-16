@@ -768,7 +768,13 @@ struct DeviceShared {
     heap_views: descriptor::GeneralHeap,
     sampler_heap: sampler::SamplerHeap,
     private_caps: PrivateCapabilities,
-    free_lists: Mutex<Vec<Direct3D12::ID3D12GraphicsCommandList>>,
+    allocators: Mutex<Vec<AllocatorSlot>>,
+}
+
+struct AllocatorSlot {
+    raw: Direct3D12::ID3D12CommandAllocator,
+    lists: Vec<Direct3D12::ID3D12GraphicsCommandList>,
+    weight: u32,
 }
 
 unsafe impl Send for DeviceShared {}
@@ -993,7 +999,9 @@ impl PassState {
 // Any state in this struct that may be dirty after an abandoned encoding must
 // be reset for reused encoders in `begin_encoding`.
 pub struct CommandEncoder {
-    allocator: Direct3D12::ID3D12CommandAllocator,
+    allocator: Option<Direct3D12::ID3D12CommandAllocator>,
+    weight: u32,
+    recorded: u32,
     device: Direct3D12::ID3D12Device,
     shared: Arc<DeviceShared>,
     mem_allocator: Allocator,
