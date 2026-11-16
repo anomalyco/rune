@@ -535,8 +535,15 @@ mod windows {
                 AllowSetForegroundWindow(server);
             }
         }
-        // A killed process's pipe can outlast it (its kernel objects go after its exit): nobody
-        // reads it, so don't wait for an answer.
+        // A killed process's pipe outlasts its exit code until the kernel closes its handles:
+        // nobody reads it, and the name comes free once it's gone. Wait for that (as for a quit)
+        // rather than take the next name and start beside a process that still holds files.
+        if server != 0 && crate::relaunch::ending(server) {
+            // SAFETY: the client handle, closed once.
+            unsafe { CloseHandle(pipe) };
+            return Sent::Quitting(server);
+        }
+        // Held by a process that is gone (an inherited handle): nobody reads it.
         if server != 0 && !crate::relaunch::alive(server) {
             // SAFETY: the client handle, closed once.
             unsafe { CloseHandle(pipe) };
