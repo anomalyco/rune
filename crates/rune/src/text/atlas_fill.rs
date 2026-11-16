@@ -111,6 +111,7 @@ impl Atlas {
         self.map.insert(key, Residency::Pending(g, fill));
         self.queue(page, key);
         crate::marks::add("text.gpu_fills", 1);
+        super::miss_probe::count(super::miss_probe::Count::GpuFills);
         Some(g)
     }
 
