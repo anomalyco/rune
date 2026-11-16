@@ -135,6 +135,42 @@ enum Pool {
 const POOL_SMALL: [([u32; 2], usize); 2] = [([128, 64], 6), ([256, 64], 2)];
 const POOL_WIDE: (u32, usize) = (128, 2);
 
+/// An element with a backdrop blur has painted (shown or not): the window warms the blur's
+/// resources (`Renderer::warm_backdrop`) before content first goes under it.
+static BLUR_SEEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub(crate) fn note_backdrop_blur() {
+    BLUR_SEEN.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Frames that drew a backdrop blur's content without the blur because its resources weren't
+/// made yet: the last resort when input beats the warm-up. It should stay 0.
+static BLUR_DEFERRED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+#[cfg(feature = "frame-profile")]
+pub(crate) fn blur_deferred_frames() -> u64 {
+    BLUR_DEFERRED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+pub(super) fn count_blur_deferred() {
+    BLUR_DEFERRED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// When the process's first default UI frame was prepared, for `warmed`.
+static FIRST_UI: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
+/// Frame-profile builds: says what a warming thread made, how long it took, and how long after
+/// the first frame it was ready.
+#[cfg_attr(not(feature = "frame-profile"), allow(unused_variables))]
+#[cfg_attr(any(test, target_arch = "wasm32"), allow(dead_code))]
+pub(super) fn warmed(what: &str, started: std::time::Instant) {
+    #[cfg(feature = "frame-profile")]
+    {
+        let since = FIRST_UI.get().map_or(0.0, |t| t.elapsed().as_secs_f64() * 1e3);
+        eprintln!("rune-warm {what}: {:.1} ms to make, ready {since:.1} ms after the first frame", started.elapsed().as_secs_f64() * 1e3);
+    }
+}
+
 /// Renderers whose isolation pipelines a thread is still compiling.
 static WARMING: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
@@ -166,6 +202,8 @@ pub(super) struct Breakers {
     ui_frames: u8,
     /// Layer targets made ahead for faded lists (`Renderer::warm_fade_pool`).
     pool: Pool,
+    /// The blur's resources are warmed, or a frame made them (`Renderer::warm_backdrop`).
+    blur_warmed: bool,
     /// The window's first backdrop copies, being made on a thread (`Renderer::backdrops_pending`).
     pub(super) backdrops: Option<std::sync::mpsc::Receiver<Vec<super::pass::Backdrop>>>,
     /// Tests: build this feature's pipelines broken, as a device that refuses them would.
@@ -229,9 +267,11 @@ impl Renderer {
     /// No pipeline is made on a frame that carries input, from the second frame on: something
     /// new a frame builds lazily belongs here.
     pub(super) fn warm_first_use(&mut self, device: &wgpu::Device, instances: &[super::Instance], viewport: (u32, u32)) {
+        FIRST_UI.get_or_init(std::time::Instant::now);
         self.poll_warm(device);
         self.warm_fade_pool(device, instances, viewport);
         if self.breakers.ui_frames < 2 { self.breakers.ui_frames += 1; return; }
+        self.warm_backdrop(device, viewport);
         if !matches!(self.breakers.warm, Warm::Idle) { return; }
         self.breakers.warm = Warm::Done;
         // What an earlier frame already built (a layer or a blur on screen at launch) is left.
@@ -248,6 +288,7 @@ impl Renderer {
             let (sent, done) = std::sync::mpsc::channel();
             if isolation { WARMING.fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
             let spawned = std::thread::Builder::new().name("rune-first-use-pipelines".into()).spawn(move || {
+                let started = std::time::Instant::now();
                 // Measuring builds: `RUNE_SLOW_ISOLATION_MS` stands in for a driver compiling
                 // with an empty shader cache, to show the frames before the pipelines exist.
                 #[cfg(any(debug_assertions, feature = "frame-profile"))]
@@ -268,6 +309,7 @@ impl Renderer {
                     }
                 });
                 if let Verdict::Now(None) = verdict { sent.send(built).ok(); }
+                warmed("layer pipelines and backdrop blur", started);
                 if isolation { WARMING.fetch_sub(1, std::sync::atomic::Ordering::Relaxed); }
                 // A window resting with what it drew without them draws with them now.
                 if let Some(wake) = wake { wake.notify(); }
@@ -277,6 +319,33 @@ impl Renderer {
                 Err(_) => if isolation { WARMING.fetch_sub(1, std::sync::atomic::Ordering::Relaxed); },
             }
         }
+    }
+
+    /// Once an element with a backdrop blur has painted (a frosted header, shown or not), the
+    /// blur's window-sized resources are made on threads at the window's size: the backdrop
+    /// copies, then the first pyramid (window-wide, two steps tall: a header and its reach). So
+    /// content first going under the header finds them, and that frame neither makes them nor
+    /// draws without the blur. Once per window: a window at rest still gives them back
+    /// (`give_back`) and this doesn't make them again until a frame draws.
+    fn warm_backdrop(&mut self, device: &wgpu::Device, (vw, vh): (u32, u32)) {
+        if !BLUR_SEEN.load(std::sync::atomic::Ordering::Relaxed) || self.breakers.blur_warmed || vw == 0 || vh == 0 { return; }
+        // The blur itself comes from the first-use warm-up; the pyramid binds against it.
+        if self.backdrop_pending() { return; }
+        // Both formats: under a header, content in a list's fade composites into a layer too.
+        if self.backdrops_pending(device, (vw, vh), true) { return; }
+        let wake = self.frame_wake.clone();
+        if let Some(blur) = &mut self.backdrop_blur {
+            let need = [super::backdrop_blur::window_need(vw), 2 * super::backdrop_blur::STEP];
+            if blur.pyramid_pending(device, need, wake) { return; }
+        }
+        self.breakers.blur_warmed = true;
+    }
+
+    /// A window at rest gave back its spare targets and its blur's resources (`give_back`): the
+    /// next frame it draws warms them again, and no thread wakes it while it rests.
+    pub(super) fn rewarm_after_rest(&mut self) {
+        if matches!(self.breakers.pool, Pool::Done) { self.breakers.pool = Pool::Unasked; }
+        self.breakers.blur_warmed = false;
     }
 
     /// The first frame that draws a soft edge (a list's fade) asks a thread for the fade pool;
@@ -309,9 +378,11 @@ impl Renderer {
             let wake = self.frame_wake.clone();
             let (sent, done) = std::sync::mpsc::channel();
             let spawned = std::thread::Builder::new().name("rune-fade-pool".into()).spawn(move || {
+                let started = std::time::Instant::now();
                 let bindings = (&layout, &globals, outlines.as_ref(), &atlas);
                 let targets = sizes.into_iter().map(|size| super::layers::new_target(&device, bindings, size, 0, binding)).collect();
                 sent.send(targets).ok();
+                warmed("fade pool", started);
                 if let Some(wake) = wake { wake.notify(); }
             });
             if spawned.is_ok() { self.breakers.pool = Pool::Building(done); }

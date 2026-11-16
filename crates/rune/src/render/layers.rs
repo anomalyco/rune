@@ -297,6 +297,8 @@ impl Renderer {
             if let Some((node, _)) = t.cache { resident.remove(&node); }
         }
         self.layers.trim_spare(0);
+        // What the warm-up made goes too; the next frame that draws asks for it again.
+        self.rewarm_after_rest();
         if all {
             for slot in &mut self.layers.targets {
                 if slot.as_ref().is_some_and(|t| t.cache.is_none()) { *slot = None; }
@@ -584,6 +586,7 @@ impl Renderer {
     }
 
     /// The `Layers::bindings` generation targets made now bind against.
+    #[cfg_attr(any(test, target_arch = "wasm32"), allow(dead_code))]
     pub(super) fn layer_bindings(&self) -> u64 { self.layers.bindings }
 
     /// Draws what each layer's disposition says: its target's descriptor, its blur, and the quad

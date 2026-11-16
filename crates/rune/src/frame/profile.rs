@@ -70,6 +70,9 @@ pub(crate) struct Row {
     /// textures, texture views, bind groups, render pipelines, shader modules. A frame that
     /// carries input should make none (`render::breaker`).
     pub gpu_new: [isize; 6],
+    /// Frames this one drew a backdrop blur's content without the blur, its resources not yet
+    /// made (`render::breaker`): 0 or 1.
+    pub blur_deferred: u64,
 }
 
 /// A headless run's frames. With `RUNE_FRAME_LOG=FILE`, each frame is also written to FILE as a
@@ -101,6 +104,7 @@ impl Log {
                 "paint_cpu": p[PHASES + 4], "apply_cpu": p[PHASES + 5], "allocations": row.allocations,
                 "commits": row.commits, "shaped": row.shaped, "animating": row.animating, "glyphs": row.glyphs,
             });
+            if row.blur_deferred > 0 { line["blur_deferred"] = row.blur_deferred.into(); }
             if row.gpu_new.iter().any(|&n| n != 0) {
                 let [buffers, textures, views, bind_groups, pipelines, shaders] = row.gpu_new;
                 line["gpu_new"] = serde_json::json!({ "buffers": buffers, "textures": textures, "views": views, "bind_groups": bind_groups, "pipelines": pipelines, "shaders": shaders });

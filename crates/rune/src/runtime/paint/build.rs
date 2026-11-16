@@ -679,6 +679,8 @@ impl<S: 'static> Runtime<S> {
                     }
                 }
             }
+            // Shown or not, it tells the renderer to warm the blur's resources before it's needed.
+            if n.vis.backdrop_blur > 0.0 { crate::render::note_backdrop_blur(); }
             // A backdrop blur samples what is drawn before it, so it goes ahead of any layer this
             // element opens (a fade still blurs the window) and of its shadows, which skip it.
             let blur_hole = (n.vis.backdrop_blur > 0.0 && !skip_paint && visible && backdrop_blurs < crate::MAX_BACKDROP_BLURS

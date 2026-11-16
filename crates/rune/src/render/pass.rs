@@ -282,7 +282,7 @@ impl Renderer {
     /// The window's first backdrop copies (content first under a frosted header), made on a
     /// thread rather than on that frame: true while they're being made, and that frame draws
     /// without what reads them. A copy of a new size (a resize) is made on the frame, as before.
-    pub(super) fn backdrops_pending(&mut self, device: &wgpu::Device, viewport: (u32, u32)) -> bool {
+    pub(super) fn backdrops_pending(&mut self, device: &wgpu::Device, viewport: (u32, u32), layers: bool) -> bool {
         if let Some(making) = &self.breakers.backdrops {
             return match making.try_recv() {
                 Ok(made) => {
@@ -304,16 +304,18 @@ impl Renderer {
         {
             let mut formats = vec![self.format];
             formats.extend(self.extra.iter().map(|(f, _)| *f));
-            if self.layers.targets.iter().any(Option::is_some) { formats.push(super::layers::FORMAT); }
+            if layers { formats.push(super::layers::FORMAT); }
             let (device, wake, (sent, making)) = (device.clone(), self.frame_wake.clone(), std::sync::mpsc::channel());
             let spawned = std::thread::Builder::new().name("rune-backdrop-copies".into()).spawn(move || {
+                let started = std::time::Instant::now();
                 sent.send(formats.into_iter().map(|f| new_backdrop(&device, f, viewport)).collect()).ok();
+                super::breaker::warmed("backdrop copies", started);
                 if let Some(wake) = wake { wake.notify(); }
             });
             if spawned.is_ok() { self.breakers.backdrops = Some(making); return true; }
         }
         #[cfg(any(test, target_arch = "wasm32"))]
-        let _ = (device, viewport);
+        let _ = (device, viewport, layers);
         false
     }
 

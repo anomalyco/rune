@@ -18,7 +18,7 @@ const SLOT: u64 = 256;
 const SLOTS: usize = MIPS as usize + 1;
 /// Pyramid sizes are multiples of this many half-resolution texels, so every level halves
 /// exactly and small changes in a region's size don't reallocate.
-const STEP: u32 = 1 << (MIPS - 1);
+pub(super) const STEP: u32 = 1 << (MIPS - 1);
 /// Standard deviation in device pixels of the pyramid's blur when its up chain starts at level
 /// `n` at full weight (`n = 0`: the half-resolution downsample alone). Measured from the
 /// filters' line spread; each level doubles it, and a crossfade mixes variances linearly.
@@ -211,10 +211,6 @@ impl BackdropBlur {
         }
     }
 
-    fn levels_binding(&self) -> wgpu::BindingResource<'_> {
-        levels_binding(&self.uniforms)
-    }
-
     fn level_bind(&self, device: &wgpu::Device, src: &wgpu::TextureView, fine: &wgpu::TextureView) -> wgpu::BindGroup {
         self.parts().level_bind(device, src, fine)
     }
@@ -292,7 +288,7 @@ impl BackdropBlur {
     /// The first pyramid, `need` texels, made on a thread rather than on the frame that first
     /// blurs (content first scrolling under a frosted header). True while it's being made: that
     /// frame and the next few draw without the blur, and the thread wakes the window.
-    fn pyramid_pending(&mut self, device: &wgpu::Device, need: [u32; 2], wake: Option<std::sync::Arc<crate::live::Wake>>) -> bool {
+    pub(super) fn pyramid_pending(&mut self, device: &wgpu::Device, need: [u32; 2], wake: Option<std::sync::Arc<crate::live::Wake>>) -> bool {
         if self.pyramid.is_some() { return false; }
         if let Some(making) = &self.making {
             return match making.try_recv() {
@@ -306,7 +302,9 @@ impl BackdropBlur {
         {
             let (parts, device, (sent, making)) = (self.parts(), device.clone(), std::sync::mpsc::channel());
             let spawned = std::thread::Builder::new().name("rune-backdrop-pyramid".into()).spawn(move || {
+                let started = std::time::Instant::now();
                 sent.send(parts.pyramid(&device, need)).ok();
+                super::breaker::warmed("backdrop pyramid", started);
                 if let Some(wake) = wake { wake.notify(); }
             });
             if spawned.is_ok() { self.making = Some(making); return true; }
@@ -381,8 +379,10 @@ impl Renderer {
         if !any || vw == 0 || vh == 0 { return; }
         // Still compiling on the warming thread, or the window's copy still being made
         // (`backdrops_pending`): this frame draws without the blur.
-        if self.backdrop_blur.is_none() && self.backdrop_pending() { return; }
-        if !self.backdrops.iter().any(|b| b.format == self.format) { return; }
+        if (self.backdrop_blur.is_none() && self.backdrop_pending()) || !self.backdrops.iter().any(|b| b.format == self.format) {
+            super::breaker::count_blur_deferred();
+            return;
+        }
         let staging = self.uploads.staging(device, queue);
         if self.backdrop_blur.is_none() { self.adopt_backdrop_blur(device, BackdropBlur::new(device, &self.bind_layout)); }
         let wake = self.frame_wake.clone();
@@ -413,8 +413,8 @@ impl Renderer {
         }
         if placed.is_empty() { return; }
         // The window plus the most an aligned origin can sit before it.
-        let cap = [vw, vh].map(|v| (v.div_ceil(2) + STEP).next_multiple_of(STEP));
-        if blur.pyramid_pending(device, need, wake) { return; }
+        let cap = [vw, vh].map(window_need);
+        if blur.pyramid_pending(device, need, wake) { super::breaker::count_blur_deferred(); return; }
         blur.ensure_pyramid(device, need, cap);
         let Some(pyramid) = &blur.pyramid else { return };
         let extent = [pyramid.size[0] as f32 * 2.0, pyramid.size[1] as f32 * 2.0];
@@ -476,6 +476,12 @@ impl Renderer {
         }
         pass.set_scissor(scope, size);
     }
+}
+
+/// The most a pyramid's level 0 needs along a window side of `v` device pixels: half of it,
+/// plus the most an aligned origin can sit before it.
+pub(super) fn window_need(v: u32) -> u32 {
+    (v.div_ceil(2) + STEP).next_multiple_of(STEP)
 }
 
 /// The binding of one record's level uniforms in `uniforms`.
