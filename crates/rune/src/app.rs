@@ -66,6 +66,8 @@ pub struct App<S: 'static> {
     pub(crate) keep_running: bool,
     pub(crate) on_close: Option<fn(&mut S, &mut Tx)>,
     pub(crate) on_quit: Option<fn(&mut S, &mut Tx)>,
+    #[cfg(all(feature="deferred-quit",any(windows,target_os="macos",target_os="linux")))]
+    pub(crate) on_quit_committed: Option<fn(&mut S)>,
     pub(crate) turn_scope: Option<TurnScope<S>>,
     pub(crate) on_focus: Option<fn(&mut S, bool, &mut Tx)>,
     pub(crate) on_mods: Option<fn(&mut S, crate::Mods, &mut Tx)>,
@@ -129,6 +131,8 @@ impl<S: 'static> App<S> {
             keep_running: false,
             on_close: None,
             on_quit: None,
+            #[cfg(all(feature="deferred-quit",any(windows,target_os="macos",target_os="linux")))]
+            on_quit_committed: None,
             turn_scope: None,
             on_focus: None,
             on_mods: None,
@@ -462,6 +466,13 @@ impl<S: 'static> App<S> {
         self.on_quit = Some(f);
         self
     }
+
+    /// Final per-window side effects after a durable **user** quit. Never run
+    /// on resume, forced exit, no-change volatile exit or system session end.
+    /// This runs in the retained host's turn, without polling or draining other
+    /// callbacks; do not submit new state for the save that already finished.
+    #[cfg(all(feature="deferred-quit",any(windows,target_os="macos",target_os="linux")))]
+    pub fn on_quit_committed(mut self,f:fn(&mut S))->Self{self.on_quit_committed=Some(f);self}
 
     /// Runs `enter` before each turn of the window's event handling that can reach its state
     /// (an event, a wake, a frame, a hook), and `leave` after it, so state the app's windows

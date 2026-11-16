@@ -8,20 +8,57 @@ impl<S: 'static> AnyHost for Host<S> {
     #[cfg(all(feature = "deferred-quit", any(windows, target_os = "macos", target_os = "linux")))]
     fn close_one(&mut self, el: &ActiveEventLoop) { self.in_turn(|h| h.close_now(el)); }
     #[cfg(all(feature = "deferred-quit", any(windows, target_os = "macos", target_os = "linux")))]
-    fn suspend_quit(&mut self, el: &ActiveEventLoop) -> Option<deferred::Reveal> {
-        let w = self.shown_win()?;
-        let mode = if w.minimized() { deferred::Reveal::Minimized } else if w.window.has_focus() { deferred::Reveal::Front } else { deferred::Reveal::Shown };
-        if is_wayland(el) { self.in_turn(|h| h.hide(el)); } else {
-            w.hide(); self.life.hide(crate::platform::reopen::stamp); self.rt.set_live_visible(false);
-            if let Some(w) = &mut self.win { w.stop_pacing(); }
-        }
-        Some(mode)
+    fn quit_reveal(&self)->deferred::Reveal {
+        let Some(w)=self.shown_win() else{return deferred::Reveal::Hidden};
+        if w.window.is_minimized()==Some(true){deferred::Reveal::Minimized}else if w.window.has_focus(){deferred::Reveal::Front}else{deferred::Reveal::Shown}
     }
     #[cfg(all(feature = "deferred-quit", any(windows, target_os = "macos", target_os = "linux")))]
-    fn restore_quit(&mut self, el: &ActiveEventLoop, mode: deferred::Reveal) {
+    fn suspend_quit(&mut self, el:&ActiveEventLoop){
+        self.in_turn(|h|{
+            if is_wayland(el){h.hide(el);return}
+            if h.shown_win().is_some(){
+                if let Some(w)=&h.win{w.hide();}
+                h.life.hide(crate::platform::reopen::stamp);
+                h.rt.finish_composition();
+                h.wind_down();
+                if let Some(w)=&mut h.win{w.stop_pacing();}
+                // Deliver the last queued key/IME commit before taking the app
+                // snapshot. No surface acquisition, present or device teardown.
+                h.rt.hidden_timer_frame();h.clipboard.flush(&mut h.rt);
+            }
+        });
+    }
+    #[cfg(all(feature = "deferred-quit", any(windows, target_os = "macos", target_os = "linux")))]
+    fn committed_quit(&mut self){
+        if let Some(f)=self.on_quit_committed.take().filter(|_|!self.life.finished()){
+            self.in_turn(|h|f(&mut h.rt.state));
+        }
+    }
+    #[cfg(all(feature="deferred-quit",any(windows,target_os="macos",target_os="linux")))]
+    fn drain_saving(&mut self){
+        self.in_turn(|h|{
+            for f in h.shared.take_updates(){h.rt.update_if(f);}
+            if let Some(after)=h.shared.take_quit(){crate::deferred_quit::request(after);}
+            if let Some(after)=h.rt.shell_request.as_ref().and_then(|s|s.after()) {h.rt.shell_request.take();crate::deferred_quit::request(after);}
+        });
+    }
+    #[cfg(all(feature = "deferred-quit", any(windows, target_os = "macos", target_os = "linux")))]
+    fn restore_quit(&mut self, el: &ActiveEventLoop, mode: deferred::Reveal, _paused:Duration) {
         self.in_turn(|h| {
-            match mode { deferred::Reveal::Front => h.open(el, None), _ => h.show(el) }
-            if matches!(mode, deferred::Reveal::Minimized) && let Some(w) = &h.win { w.window.set_minimized(true); }
+            #[cfg(windows)] if let Some(w)=&mut h.win{deferred::resume_surface(w,_paused);}
+            match mode {
+                deferred::Reveal::Hidden=>{},deferred::Reveal::Front=>h.open(el,None),deferred::Reveal::Shown=>h.show(el),
+                deferred::Reveal::Minimized=>{
+                    #[cfg(windows)] if let Some(w)=&h.win && let Some(hwnd)=crate::platform::win32::hwnd(&w.window){
+                        use windows_sys::Win32::UI::WindowsAndMessaging::{ShowWindow,SW_SHOWMINNOACTIVE};
+                        // SAFETY: this is the retained host's live HWND on its owning thread.
+                        unsafe{ShowWindow(hwnd,SW_SHOWMINNOACTIVE);}
+                        h.life.show();h.rt.set_live_visible(false);
+                    }
+                    #[cfg(not(windows))] {h.show(el);if let Some(w)=&h.win{w.window.set_minimized(true);}}
+                }
+            }
+            h.publish();
         });
     }
     fn owns(&self, id: WindowId) -> bool {

@@ -192,7 +192,11 @@ impl<S: 'static> Host<S> {
         if wake && !quiet { self.rt.cancel_timer_frame(); }
         if let Some(after) = requests.quit {
             #[cfg(all(feature = "deferred-quit", any(windows, target_os = "macos", target_os = "linux")))]
-            if crate::deferred_quit::request(after) { return; }
+            if crate::deferred_quit::request(after) {
+                self.shared.retain_native(requests);
+                self.popup.cancel(&mut self.rt); self.file_dialog.cancel(&mut self.rt);
+                return;
+            }
             // Quitting from now on: a close later in this turn closes for the quit.
             // `Windows::exiting` carries out its effects.
             let _ = crate::quit::send(crate::quit::Event::Start { ending: false, after });
@@ -314,7 +318,11 @@ impl<S: 'static> Host<S> {
                 Some(shell @ (Shell::Quit | Shell::Relaunch)) => {
                     let after = shell.after().unwrap_or(crate::quit::After::Exit);
                     #[cfg(all(feature = "deferred-quit", any(windows, target_os = "macos", target_os = "linux")))]
-                    if crate::deferred_quit::request(after) { return; }
+                    if crate::deferred_quit::request(after) {
+                        if minimize { self.rt.minimize_step(MinimizeEvent::Asked); }
+                        self.popup.cancel(&mut self.rt); self.file_dialog.cancel(&mut self.rt);
+                        return;
+                    }
                     let _ = crate::quit::send(crate::quit::Event::Start { ending: false, after });
                     self.popup.cancel(&mut self.rt);
                     self.file_dialog.cancel(&mut self.rt);

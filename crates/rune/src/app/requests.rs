@@ -129,6 +129,20 @@ impl<S> Shared<S> {
         std::mem::take(&mut self.requests.lock().unwrap().updates)
     }
 
+    #[cfg(all(feature="deferred-quit",any(windows,target_os="macos",target_os="linux")))]
+    pub(crate) fn take_quit(&self)->Option<crate::quit::After>{self.requests.lock().unwrap().quit.take()}
+
+    /// A reversible quit took a batch but did not apply its native operations.
+    /// Keep them for resume without replacing newer requests or executing updates twice.
+    #[cfg(all(feature="deferred-quit",any(windows,target_os="macos",target_os="linux")))]
+    pub(crate) fn retain_native(&self,older:Requests<S>){
+        let mut q=self.requests.lock().unwrap();
+        q.window=q.window.take().or(older.window);q.position=q.position.or(older.position);
+        q.place=q.place.take().or(older.place);q.dock=q.dock.or(older.dock);
+        if q.last_cancel.is_none(){q.activation=q.activation.or(older.activation);}
+        q.last_cancel=q.last_cancel.max(older.last_cancel);q.woken|=older.woken;
+    }
+
     /// Runs the queued updates with `run`, then takes the other requests, so a window an update
     /// opens (or shows, focuses, places, quits) applies in this turn. Updates the updates queue
     /// wait for the next turn, which their wake brings.

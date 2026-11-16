@@ -5,7 +5,10 @@ use super::*;
 impl ApplicationHandler<WakeEvent> for Windows {
     fn new_events(&mut self, event_loop: &ActiveEventLoop, cause: StartCause) {
         let _handling = crate::quit::handling();
-        for host in self.hosts.iter_mut().flatten() { host.new_events(event_loop, cause); }
+        for (i,host) in self.hosts.iter_mut().enumerate(){
+            #[cfg(all(feature="deferred-quit",any(windows,target_os="macos",target_os="linux")))] if self.deferred.parked_host(i){continue;}
+            if let Some(host)=host{host.new_events(event_loop,cause);}
+        }
         // Before resumed there are no hosts to clean up.
         if self.factory.is_none() { self.cleanup(event_loop); }
     }
@@ -49,7 +52,7 @@ impl ApplicationHandler<WakeEvent> for Windows {
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: WakeEvent) {
         let _handling = crate::quit::handling();
         #[cfg(all(feature = "deferred-quit", any(windows, target_os = "macos", target_os = "linux")))]
-        if let WakeEvent::Deferred(m) = event { self.deferred_message(event_loop, m); return; }
+        if let WakeEvent::Deferred(m) = event { self.deferred_message(event_loop, m); self.cleanup(event_loop); return; }
         let slot = match &event {
             WakeEvent::DisplayTick(i) | WakeEvent::App(i) | WakeEvent::Live(i) | WakeEvent::Window(i, _) | WakeEvent::Focus(i)
                 | WakeEvent::Position(i, _) | WakeEvent::Level(i, _) | WakeEvent::Place(i, _) | WakeEvent::Frame(i, _)
@@ -72,12 +75,21 @@ impl ApplicationHandler<WakeEvent> for Windows {
             WakeEvent::Deferred(_) => unreachable!(),
         };
         if let Some(Some(host)) = self.hosts.get_mut(slot) {
+            #[cfg(all(feature="deferred-quit",any(windows,target_os="macos",target_os="linux")))]
+            if self.deferred.parked_host(slot){
+                if matches!(event,WakeEvent::App(_)) && !self.deferred.consented(){host.drain_saving();}
+                self.deferred.retain_request(slot,event);
+                self.cleanup(event_loop);return;
+            }
             host.user_event(event_loop, event);
         }
         self.cleanup(event_loop);
     }
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
         let _handling = crate::quit::handling();
+        #[cfg(all(feature="deferred-quit",any(windows,target_os="macos",target_os="linux")))]
+        if self.deferred.pending() && !matches!(event,WindowEvent::CloseRequested|WindowEvent::Destroyed)
+            && self.hosts.iter().enumerate().any(|(i,h)| self.deferred.parked_host(i) && h.as_ref().is_some_and(|h|h.owns(id))){return;}
         // The last window's close ends a fast-exiting app: the window can go at once.
         #[cfg(all(feature = "deferred-quit", any(windows, target_os = "macos", target_os = "linux")))]
         if crate::deferred_quit::hooks().is_some() && matches!(event, WindowEvent::CloseRequested)
@@ -113,19 +125,28 @@ impl ApplicationHandler<WakeEvent> for Windows {
         }
         crate::marks::loop_waits();
         crate::cursor::os::make_pending(event_loop);
+        #[cfg(all(feature = "deferred-quit", any(windows, target_os = "macos", target_os = "linux")))]
+        let save_deadline = self.deferred_deadline(event_loop, Instant::now());
         let mut animating = false;
-        for host in self.hosts.iter_mut().flatten() {
-            animating |= host.about_to_wait(event_loop);
+        for (i,host) in self.hosts.iter_mut().enumerate() {
+            #[cfg(all(feature="deferred-quit",any(windows,target_os="macos",target_os="linux")))] if self.deferred.parked_host(i){continue;}
+            if let Some(host)=host{animating |= host.about_to_wait(event_loop);}
         }
         // The frames windows want next (`redraw`), and on Windows the paints the system keeps
         // putting off behind another window's.
         let now = Instant::now();
-        for host in self.hosts.iter_mut().flatten() { host.turn_ends(event_loop, now); }
+        for (i,host) in self.hosts.iter_mut().enumerate(){
+            #[cfg(all(feature="deferred-quit",any(windows,target_os="macos",target_os="linux")))] if self.deferred.parked_host(i){continue;}
+            if let Some(host)=host{host.turn_ends(event_loop,now);}
+        }
         // Layer surfaces have no redraw events: keep turning while one animates (its vsync
         // paces the loop). Hosts whose only motion is an ambient loop sleep until its next step.
-        let deadline = self.hosts.iter().flatten().filter_map(|host| host.wake_deadline()).min();
+        let deadline = self.hosts.iter().enumerate().filter_map(|(i,h)|{
+            #[cfg(all(feature="deferred-quit",any(windows,target_os="macos",target_os="linux")))] if self.deferred.parked_host(i){return None;}
+            h.as_ref()?.wake_deadline()
+        }).min();
         #[cfg(all(feature = "deferred-quit", any(windows, target_os = "macos", target_os = "linux")))]
-        let deadline = deadline.into_iter().chain(self.deferred_deadline(event_loop, now)).min();
+        let deadline = deadline.into_iter().chain(save_deadline).min();
         event_loop.set_control_flow(if animating { ControlFlow::Poll }
             else { deadline.map_or(ControlFlow::Wait, |at| ControlFlow::WaitUntil(crate::time::for_winit(at))) });
     }
@@ -134,7 +155,7 @@ impl ApplicationHandler<WakeEvent> for Windows {
         crate::marks::mark("loop.exiting");
         #[cfg(all(feature = "deferred-quit", any(windows, target_os = "macos", target_os = "linux")))]
         if crate::deferred_quit::hooks().is_some() {
-            if !matches!(self.deferred.state, crate::deferred_quit::State::Confirmed) {
+            if !matches!(self.deferred.state, crate::deferred_quit::State::Confirmed | crate::deferred_quit::State::LeftEmpty) {
                 // The OS ended the loop, not a durable receipt. Never run an install-on-confirm hook.
                 crate::marks::mark("quit.interrupted");
                 std::process::exit(2);

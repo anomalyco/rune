@@ -28,7 +28,7 @@ pub(super) fn message() -> Vec<u8> {
     frame(&body)
 }
 
-fn frame(body: &[u8]) -> Vec<u8> {
+pub(super) fn frame(body: &[u8]) -> Vec<u8> {
     let mut message = MAGIC.to_vec();
     message.extend((body.len() as u32).to_le_bytes());
     message.extend_from_slice(body);
@@ -37,21 +37,21 @@ fn frame(body: &[u8]) -> Vec<u8> {
 
 // A backwards-compatible non-link argument. Only a client requesting UI delivery adds it;
 // existing clients still send precisely the old payload and get the old one-byte answer.
-#[cfg(feature = "deferred-quit")]
+#[cfg(all(feature = "deferred-quit",not(windows)))]
 const PREFIX: &str = "--rune-ui-delivery-until=";
-#[cfg(feature = "deferred-quit")]
+#[cfg(all(feature = "deferred-quit",not(windows)))]
 pub(super) fn ui_message(until: Instant) -> Vec<u8> {
     let expiry = std::time::SystemTime::now() + until.saturating_duration_since(Instant::now());
     let micros = expiry.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_micros();
     frame(std::iter::once(format!("{PREFIX}{micros}")).chain(std::env::args().skip(1)).collect::<Vec<_>>().join("\0").as_bytes())
 }
-#[cfg(feature = "deferred-quit")]
+#[cfg(all(feature = "deferred-quit",not(windows)))]
 pub(super) fn ui_answer(args: &[String]) -> Option<u8> {
     use crate::deferred_quit::{ACK_WITHIN, activate, hooks};
     hooks()?;
     let micros: u64 = args.first()?.strip_prefix(PREFIX)?.parse().ok()?;
     let left = std::time::UNIX_EPOCH.checked_add(Duration::from_micros(micros))?.duration_since(std::time::SystemTime::now()).unwrap_or_default().min(ACK_WITHIN);
-    Some(if activate(args[1..].to_vec(), Instant::now()+left) { b'R' } else { b'U' })
+    Some(if crate::deferred_quit::exiting() { QUITTING } else if activate(args[1..].to_vec(), Instant::now()+left) { b'R' } else if crate::deferred_quit::exiting() { QUITTING } else { b'U' })
 }
 
 /// A message's body as the launch's arguments; none when it isn't UTF-8.
@@ -118,6 +118,8 @@ pub(super) fn relaunched(args: Vec<String>) {
     if crate::quit::quitting() {
         return crate::relaunch::spawn_with(args);
     }
+    #[cfg(feature="deferred-quit")]
+    if crate::deferred_quit::legacy_activation(&args) { return; }
     let links: Vec<String> = args.iter().filter(|a| super::is_link(a)).cloned().collect();
     {
         let mut waiting = WAITING.lock().unwrap_or_else(|e| e.into_inner());
