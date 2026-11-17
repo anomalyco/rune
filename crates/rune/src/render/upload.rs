@@ -306,14 +306,15 @@ impl Renderer {
         if self.backdrop_used {
             // The warm-up's copies (`warm_backdrop`); input that beats it makes them here.
             self.take_made_backdrops(device);
-            if !self.backdrops.iter().any(|b| b.format == self.format) { super::breaker::count_blur_on_frame(); }
-            self.ensure_backdrop(device, self.format, viewport);
-            for index in 0..self.extra.len() {
-                self.ensure_backdrop(device, self.extra[index].0, viewport);
-            }
-            if self.layers.targets.iter().any(Option::is_some) {
-                self.ensure_backdrop(device, layers::FORMAT, viewport);
-            }
+            // What the blurs cover, not the window, unless an effect reads its backdrop (`backdrop_size`).
+            // One size for every format: the blur's uniforms address whichever copy a record reads.
+            let size = self.backdrop_size(viewport);
+            let formats = std::iter::once(self.format).chain(self.extra.iter().map(|(f, _)| *f))
+                .chain(self.layers.targets.iter().any(Option::is_some).then_some(layers::FORMAT))
+                .chain(self.backdrops.iter().map(|b| b.format))
+                .fold(Vec::new(), |mut all, f| { if !all.contains(&f) { all.push(f); } all });
+            let made = formats.into_iter().fold(false, |made, format| self.ensure_backdrop(device, format, size) | made);
+            if made { super::breaker::count_blur_on_frame(); }
         }
         self.prepare_backdrop_blur(device, queue, viewport);
         #[cfg(all(feature = "alloc-sites", not(target_arch = "wasm32")))]

@@ -395,19 +395,7 @@ impl Renderer {
         let mut need = [STEP; 2];
         let records = self.effects.iter().filter(|(_, i)| i.params[1] == KIND_BACKDROP_BLUR).take(MAX_BACKDROP_BLURS);
         for (at, i) in records {
-            let sigma = i.params[0];
-            let (n, share) = levels(sigma, MIPS as usize - 1);
-            let reach = sigma.min(SIGMAS[n]) * 3.0 + 2.0;
-            let region = [
-                (i.rect[0] - reach).max(0.0),
-                (i.rect[1] - reach).max(0.0),
-                (i.rect[0] + i.rect[2] + reach).min(viewport[0]),
-                (i.rect[1] + i.rect[3] + reach).min(viewport[1]),
-            ];
-            if region[2] <= region[0] || region[3] <= region[1] { continue; }
-            // On level n's texel grid, so the blur stays put while content scrolls under it.
-            let align = (2u32 << n) as f32;
-            let origin = [(region[0] / align).floor() * align, (region[1] / align).floor() * align];
+            let Some((n, share, region, origin)) = place(i, viewport) else { continue };
             for k in 0..2 { need[k] = need[k].max((((region[k + 2] - origin[k]) / 2.0).ceil() as u32).next_multiple_of(STEP)); }
             placed.push((*at, n, share, region, origin));
         }
@@ -419,16 +407,18 @@ impl Renderer {
         blur.ensure_pyramid(device, need, cap);
         let Some(pyramid) = &blur.pyramid else { return };
         let extent = [pyramid.size[0] as f32 * 2.0, pyramid.size[1] as f32 * 2.0];
+        let copy = self.backdrops.first().map_or(viewport, |b| [b.texture.width() as f32, b.texture.height() as f32]);
         let mut levels_data = vec![0u8; MAX_BACKDROP_BLURS * SLOTS * SLOT as usize];
         for (slot, (at, n, share, region, origin)) in placed.into_iter().enumerate() {
             let inside = [(region[0] - origin[0]) / extent[0], (region[1] - origin[1]) / extent[1],
                 (region[2] - origin[0]) / extent[0], (region[3] - origin[1]) / extent[1]];
             let place = [origin[0], origin[1], extent[0], extent[1]];
             for m in 0..SLOTS {
-                // The first down pass reads the window-sized backdrop; the rest read the pyramid.
+                // The first down pass reads the backdrop copy, which starts at the origin (`Pass::split`'s
+                // shift); the rest read the pyramid.
                 let (region, map) = if m == MIPS as usize {
-                    ([region[0] / viewport[0], region[1] / viewport[1], region[2] / viewport[0], region[3] / viewport[1]],
-                        [extent[0] / viewport[0], extent[1] / viewport[1], origin[0] / viewport[0], origin[1] / viewport[1]])
+                    ([(region[0] - origin[0]) / copy[0], (region[1] - origin[1]) / copy[1], (region[2] - origin[0]) / copy[0], (region[3] - origin[1]) / copy[1]],
+                        [extent[0] / copy[0], extent[1] / copy[1], 0.0, 0.0])
                 } else {
                     (inside, [1.0, 1.0, 0.0, 0.0])
                 };
@@ -456,7 +446,8 @@ impl Renderer {
         let (x0, y0) = (edge(r[0].max(c[0]).floor(), origin[0], size[0]), edge(r[1].max(c[1]).floor(), origin[1], size[1]));
         let (x1, y1) = (edge((r[0] + r[2]).min(c[2]).ceil(), origin[0], size[0]), edge((r[1] + r[3]).min(c[3]).ceil(), origin[1], size[1]));
         if x1 <= x0 || y1 <= y0 { return; }
-        let split = pass.split(self, format, origin, size, target.is_some(), Some(record.region), |encoder, backdrop| {
+        let shift = record.origin.map(|v| v as u32);
+        let split = pass.split(self, format, origin, size, target.is_some(), Some(record.region), shift, |encoder, backdrop| {
             blur.encode(encoder, backdrop.format, record);
         });
         if split.is_none() { return; }
@@ -478,6 +469,41 @@ impl Renderer {
         pass.set_scissor(scope, size);
     }
 }
+
+/// Where record `i` blurs in a `viewport` window: its pyramid's first level of the up chain and
+/// that level's share, the region (the rect plus the blur's reach, in the viewport) and the
+/// pyramid's origin. None when nothing of it is in the window.
+fn place(i: &Instance, viewport: [f32; 2]) -> Option<(usize, f32, [f32; 4], [f32; 2])> {
+    let sigma = i.params[0];
+    let (n, share) = levels(sigma, MIPS as usize - 1);
+    let reach = sigma.min(SIGMAS[n]) * 3.0 + 2.0;
+    let region = [
+        (i.rect[0] - reach).max(0.0),
+        (i.rect[1] - reach).max(0.0),
+        (i.rect[0] + i.rect[2] + reach).min(viewport[0]),
+        (i.rect[1] + i.rect[3] + reach).min(viewport[1]),
+    ];
+    if region[2] <= region[0] || region[3] <= region[1] { return None; }
+    // On level n's texel grid, so the blur stays put while content scrolls under it.
+    let align = (2u32 << n) as f32;
+    Some((n, share, region, [(region[0] / align).floor() * align, (region[1] / align).floor() * align]))
+}
+
+/// The backdrop copy the blurs in `instances` need: each record copies its region from its
+/// pyramid's origin, so the largest of those, rounded up to `COPY_STEP` and inside the window.
+/// None when no record blurs inside the window.
+pub(super) fn copy_need<'a>(instances: impl Iterator<Item = &'a Instance>, (vw, vh): (u32, u32)) -> Option<(u32, u32)> {
+    let viewport = [vw as f32, vh as f32];
+    instances.filter(|i| i.params[1] == KIND_BACKDROP_BLUR).take(MAX_BACKDROP_BLURS)
+        .filter_map(|i| place(i, viewport))
+        .map(|(_, _, region, origin)| ((region[2] - origin[0]).ceil() as u32, (region[3] - origin[1]).ceil() as u32))
+        .reduce(|a, b| (a.0.max(b.0), a.1.max(b.1)))
+        .map(|(w, h)| (w.next_multiple_of(COPY_STEP).min(vw), h.next_multiple_of(COPY_STEP).min(vh)))
+}
+
+/// Backdrop copies grow in steps of this many device pixels, so a frosted element that grows
+/// by a little doesn't make them again.
+const COPY_STEP: u32 = 64;
 
 /// The most a pyramid's level 0 needs along a window side of `v` device pixels: half of it,
 /// plus the most an aligned origin can sit before it.

@@ -273,7 +273,7 @@ impl Renderer {
         self.poll_warm(device);
         self.warm_fade_pool(device, instances, viewport);
         if self.breakers.ui_frames < 2 { self.breakers.ui_frames += 1; return; }
-        self.warm_backdrop(device, viewport);
+        self.warm_backdrop(device, instances, viewport);
         self.warm_layer_pipelines(device);
     }
 
@@ -332,18 +332,20 @@ impl Renderer {
     }
 
     /// Once an element with a backdrop blur has painted (a frosted header, shown or not), the
-    /// blur's window-sized resources are made on threads at the window's size: the backdrop
-    /// copies, then the first pyramid (window-wide, two steps tall: a header and its reach). So
+    /// blur's resources are made on threads: the backdrop copies at the size of what the blurs
+    /// cover, then the first pyramid (window-wide, two steps tall: a header and its reach). So
     /// content first going under the header finds them, and that frame neither makes them nor
     /// draws without the blur. Once per window: a window at rest still gives them back
     /// (`give_back`) and this doesn't make them again until a frame draws.
-    fn warm_backdrop(&mut self, device: &wgpu::Device, (vw, vh): (u32, u32)) {
+    fn warm_backdrop(&mut self, device: &wgpu::Device, instances: &[super::Instance], (vw, vh): (u32, u32)) {
         // Tests share a process: what one paints would warm another's renderer.
         if cfg!(test) || !BLUR_SEEN.load(std::sync::atomic::Ordering::Relaxed) || self.breakers.blur_warmed || vw == 0 || vh == 0 { return; }
         // The blur itself comes from the first-use warm-up; the pyramid binds against it.
         if self.backdrop_pending() { return; }
+        // The copies are the size of what the blurs cover (`copy_need`), known once a record draws.
+        let Some(copies) = super::backdrop_blur::copy_need(instances.iter(), (vw, vh)) else { return };
         // Every format: under a header, content in a list's fade composites into a layer too.
-        if self.warm_backdrops(device, (vw, vh)) { return; }
+        if self.warm_backdrops(device, copies) { return; }
         if let Some(blur) = &mut self.backdrop_blur {
             let need = [super::backdrop_blur::window_need(vw), 2 * super::backdrop_blur::STEP];
             if blur.warm_pyramid(device, need) { return; }

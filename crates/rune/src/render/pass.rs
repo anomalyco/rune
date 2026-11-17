@@ -123,7 +123,7 @@ impl<'a, 'p> ActivePass<'a, 'p> {
         in_layer: bool,
         hook: &mut EffectBackdropHook<'_>,
     ) -> Option<&'r wgpu::TextureView> {
-        let bd = self.split(renderer, format, origin, size, in_layer, None, |encoder, bd| {
+        let bd = self.split(renderer, format, origin, size, in_layer, None, [0, 0], |encoder, bd| {
             let site = EffectSite {
                 index: at,
                 instance,
@@ -143,7 +143,8 @@ impl<'a, 'p> ActivePass<'a, 'p> {
     }
 
     /// Ends the pass, copies its target into the pooled backdrop of `format` (all of it, or
-    /// only `copy`, a window device-pixel rect `[x0, y0, x1, y1]`), runs `then` on the encoder,
+    /// only `copy`, a window device-pixel rect `[x0, y0, x1, y1]`, landing `shift` window
+    /// pixels up and left of its place: a blur's copy starts at its pyramid's origin), runs `then` on the encoder,
     /// and re-opens the pass with `LoadOp::Load`. `None` when the pass is borrowed, its target
     /// lacks `COPY_SRC`, or no backdrop of `format` is pooled.
     pub(super) fn split<'r>(
@@ -154,6 +155,7 @@ impl<'a, 'p> ActivePass<'a, 'p> {
         size: [u32; 2],
         in_layer: bool,
         copy: Option<[f32; 4]>,
+        shift: [u32; 2],
         then: impl FnOnce(&mut wgpu::CommandEncoder, &'r Backdrop),
     ) -> Option<&'r Backdrop> {
         if !self.splittable() { return None; }
@@ -194,9 +196,10 @@ impl<'a, 'p> ActivePass<'a, 'p> {
                     let hi = hi.ceil().min(o + src as f32).min(dst as f32);
                     (lo, (hi - lo).max(0.0) as u32)
                 };
-                let (x, w) = span(r[0], r[2], origin[0], size[0].min(src_tex.width()), vw);
-                let (y, h) = span(r[1], r[3], origin[1], size[1].min(src_tex.height()), vh);
-                ((x - origin[0].ceil()) as u32, (y - origin[1].ceil()) as u32, x as u32, y as u32, w, h)
+                let (x, w) = span(r[0], r[2], origin[0], size[0].min(src_tex.width()), vw + shift[0]);
+                let (y, h) = span(r[1], r[3], origin[1], size[1].min(src_tex.height()), vh + shift[1]);
+                // A blur's region never starts before its pyramid's origin, the shift.
+                ((x - origin[0].ceil()) as u32, (y - origin[1].ceil()) as u32, (x as u32).saturating_sub(shift[0]), (y as u32).saturating_sub(shift[1]), w, h)
             }
         };
         if copy_w > 0 && copy_h > 0 {
@@ -281,7 +284,7 @@ fn new_backdrop(device: &wgpu::Device, format: wgpu::TextureFormat, (width, heig
 impl Renderer {
     /// Warm-up: the window's first backdrop copies, one per target format at `viewport`, made on
     /// a thread before content first goes under a frosted header. True while they're being made.
-    pub(super) fn warm_backdrops(&mut self, device: &wgpu::Device, viewport: (u32, u32)) -> bool {
+    pub(super) fn warm_backdrops(&mut self, device: &wgpu::Device, size: (u32, u32)) -> bool {
         self.take_made_backdrops(device);
         if self.breakers.backdrops.is_some() { return true; }
         if !self.backdrops.is_empty() { return false; }
@@ -293,13 +296,13 @@ impl Renderer {
             let (device, (sent, making)) = (device.clone(), std::sync::mpsc::channel());
             let spawned = std::thread::Builder::new().name("rune-backdrop-copies".into()).spawn(move || {
                 let started = std::time::Instant::now();
-                sent.send(formats.into_iter().map(|f| new_backdrop(&device, f, viewport)).collect()).ok();
+                sent.send(formats.into_iter().map(|f| new_backdrop(&device, f, size)).collect()).ok();
                 super::breaker::warmed("backdrop copies", started);
             });
             if spawned.is_ok() { self.breakers.backdrops = Some(making); return true; }
         }
         #[cfg(target_arch = "wasm32")]
-        let _ = (device, viewport);
+        let _ = (device, size);
         false
     }
 
@@ -320,29 +323,27 @@ impl Renderer {
         }
     }
 
-    pub(super) fn ensure_backdrop(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat, (width, height): (u32, u32)) {
+    /// Makes the backdrop copy of `format` `width` by `height` unless it already is; true when
+    /// it made one.
+    pub(super) fn ensure_backdrop(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat, (width, height): (u32, u32)) -> bool {
         let (width, height) = (width.max(1), height.max(1));
-        if let Some(b) = self.backdrops.iter().find(|b| b.format == format)
-            && b.texture.width() == width && b.texture.height() == height
-        {
-            return;
+        if self.backdrops.iter().any(|b| b.format == format && b.texture.width() == width && b.texture.height() == height) { return false; }
+        let made = new_backdrop(device, format, (width, height));
+        if let Some(blur) = &mut self.backdrop_blur { blur.bind_backdrop(device, format, &made.view); }
+        match self.backdrops.iter_mut().find(|b| b.format == format) {
+            Some(b) => *b = made,
+            None => self.backdrops.push(made),
         }
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("effect backdrop"),
-            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-        });
-        let view = texture.create_view(&Default::default());
-        if let Some(blur) = &mut self.backdrop_blur { blur.bind_backdrop(device, format, &view); }
-        if let Some(b) = self.backdrops.iter_mut().find(|b| b.format == format) {
-            *b = Backdrop { format, texture, view };
-        } else {
-            self.backdrops.push(Backdrop { format, texture, view });
-        }
+        true
+    }
+
+    /// The size every backdrop copy is this frame: the window when an effect reads its backdrop
+    /// (`EffectSite::backdrop` is window-sized); otherwise what the blurs cover (`copy_need`),
+    /// never smaller than the copies already are, so they don't shrink and grow back.
+    pub(super) fn backdrop_size(&self, viewport: (u32, u32)) -> (u32, u32) {
+        if self.effects.iter().any(|(_, i)| i.params[1] != super::KIND_BACKDROP_BLUR && i.params[0] != 0.0) { return viewport; }
+        let need = super::backdrop_blur::copy_need(self.effects.iter().map(|(_, i)| i), viewport).unwrap_or((1, 1));
+        let have = self.backdrops.first().map_or((0, 0), |b| (b.texture.width(), b.texture.height()));
+        (need.0.max(have.0).min(viewport.0), need.1.max(have.1).min(viewport.1))
     }
 }

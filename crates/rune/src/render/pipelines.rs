@@ -205,9 +205,9 @@ impl Renderer {
             self.extra.push((format, p));
         }
         if self.layer_stats().targets > 0 { self.add_layer_format(device, format); }
-        let [vw, vh] = self.target_frame(None).1;
-        if !self.backdrops.is_empty() && vw > 0 && vh > 0 {
-            self.ensure_backdrop(device, format, (vw, vh));
+        // A new format's copy matches the others (`backdrop_size`).
+        if let Some(size) = self.backdrops.first().map(|b| (b.texture.width(), b.texture.height())) {
+            self.ensure_backdrop(device, format, size);
         }
         if let Some(s) = &mut self.surfaces { s.add_format(device, format); }
     }
@@ -226,9 +226,9 @@ impl Renderer {
         self.lcd = variant::Lcd::Unbuilt;
         self.srgb_blend = !format.is_srgb();
         if self.layer_stats().targets > 0 { self.add_layer_format(device, format); }
-        let [vw, vh] = self.target_frame(None).1;
-        if !self.backdrops.is_empty() && vw > 0 && vh > 0 {
-            self.ensure_backdrop(device, format, (vw, vh));
+        // A new format's copy matches the others (`backdrop_size`).
+        if let Some(size) = self.backdrops.first().map(|b| (b.texture.width(), b.texture.height())) {
+            self.ensure_backdrop(device, format, size);
         }
         if let Some(s) = &mut self.surfaces {
             s.set_srgb_blend(self.srgb_blend);
