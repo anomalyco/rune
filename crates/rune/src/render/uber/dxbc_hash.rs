@@ -1,4 +1,5 @@
-// Written by `cargo run -p rune --example regen_dxbc` (or `RUNE_REGENERATE_DXBC=1 cargo test -p rune --lib uber_dxbc_is_fresh`) on Windows.
+// Written by `cargo run -p rune --example regen_dxbc` on Windows, the one way to regenerate the uber bytecode:
+// it also writes the pinned fragments and their hashes (dxbc_pinned_hash.rs), which nothing else updates.
 pub(super) const UBER_DXBC_WGSL_BLAKE3: &str = "7b009be21463342c93146b1c67c68187ba60864286e44da37760ddda3b05c24e";
 pub(super) const UBER_DXBC_ABI_FNV64: u64 = 0x6b9932e7795ec011;
 #[cfg(test)]

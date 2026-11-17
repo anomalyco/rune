@@ -380,7 +380,9 @@ impl Renderer {
     pub(super) fn pinned_pipelines(&self, device: &wgpu::Device) -> Vec<Option<wgpu::RenderPipeline>> {
         #[cfg(target_os = "windows")]
         if matches!(self.uber, Uber::Windfoil { source: Source::Precompiled, .. }) && self.vertex_entry == "vs" {
-            return PINNED.iter().map(|&kind| dxbc::uber_pinned(device, kind, |shader| Self::pipeline(device, &self.layout, shader, self.format, "vs", Blend::SourceOver)).map(|(_, p)| p)).collect();
+            let pinned: Vec<_> = PINNED.iter().map(|&kind| dxbc::uber_pinned(device, kind, |shader| Self::pipeline(device, &self.layout, shader, self.format, "vs", Blend::SourceOver)).map(|(_, p)| p)).collect();
+            // None taken (refused, or every fragment stale): no split at all, as before.
+            if pinned.iter().any(Option::is_some) { return pinned; }
         }
         let _ = device;
         Vec::new()
@@ -401,7 +403,9 @@ impl Renderer {
         // Built on the old bind layout; made again at the next backdrop blur and subpixel frame.
         self.backdrop_blur = None;
         self.lcd = Lcd::Unbuilt;
-        self.pinned = None;
+        // The pinned pipelines again from the new shader, beside the frame pipeline, not on the next visible frame.
+        self.pinned_extra.clear();
+        self.pinned = Some(self.pinned_pipelines(device));
     }
 }
 

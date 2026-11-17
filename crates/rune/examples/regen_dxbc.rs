@@ -4,9 +4,11 @@
 //! `src/render/uber/dxbc_hash.rs`), and the straight-alpha pass's `alpha.vs.dxbc`, `alpha.fs.dxbc` and
 //! `src/render/uber/pass_dxbc_hash.rs`, after `shader.wgsl`, `clip.wgsl`, `outline.wgsl`, the uber layout or wgpu
 //! changes, without building Rune's unit tests: `cargo run -p rune --example regen_dxbc` on
-//! Windows. It does what `RUNE_REGENERATE_DXBC=1 cargo test -p rune --lib uber_dxbc_is_fresh`
-//! does: makes the uber pipeline from WGSL on a DX12 device, takes the HLSL wgpu-hal logs, and
-//! compiles it with FXC as wgpu-hal does. `uber_dxbc_is_fresh` checks the result.
+//! Windows: the one way to regenerate them, since it writes every file, the pinned fragments and
+//! their hashes (`src/render/uber/dxbc_pinned_hash.rs`) included. It makes the uber pipeline from
+//! WGSL on a DX12 device, takes the HLSL wgpu-hal logs, and compiles it with FXC as wgpu-hal does.
+//! `uber_dxbc_is_fresh` checks the general and subpixel bytecode; the pinned fragments are checked
+//! at load (render/dxbc.rs `pinned_fresh`): one compiled from other WGSL isn't used.
 
 #[cfg(target_os = "windows")]
 fn main() {
@@ -58,11 +60,23 @@ fn main() {
     }
     let dual = blake3::hash(format!("{dual_vertex}\0{dual_fragment}").as_bytes()).to_hex();
     std::fs::write(format!("{root}/src/render/uber/dxbc_hash.rs"), format!(
-        "// Written by `cargo run -p rune --example regen_dxbc` (or `RUNE_REGENERATE_DXBC=1 cargo test -p rune --lib uber_dxbc_is_fresh`) on Windows.\n\
+        "// Written by `cargo run -p rune --example regen_dxbc` on Windows, the one way to regenerate the uber bytecode:\n\
+         // it also writes the pinned fragments and their hashes (dxbc_pinned_hash.rs), which nothing else updates.\n\
          pub(super) const UBER_DXBC_WGSL_BLAKE3: &str = \"{wgsl}\";\n\
          pub(super) const UBER_DXBC_ABI_FNV64: u64 = {abi:#018x};\n\
          #[cfg(test)]\npub(super) const UBER_DXBC_HLSL_BLAKE3: &str = \"{hlsl}\";\n\
          #[cfg(test)]\npub(super) const UBER_DXBC_DUAL_HLSL_BLAKE3: &str = \"{dual}\";\n")).unwrap();
+    // What each pinned fragment was compiled from (render/dxbc.rs `pinned_fresh` refuses one that no longer
+    // matches), and the Windfoil WGSL they came from (build.rs warns when it moves).
+    let pinned: Vec<String> = pinned_logged.iter()
+        .map(|&(kind, _)| format!("\"{}\"", rune::render::pinned_wgsl_blake3(kind).expect("shader.wgsl's PINNED_KIND"))).collect();
+    std::fs::write(format!("{root}/src/render/uber/dxbc_pinned_hash.rs"), format!(
+        "// Written by `cargo run -p rune --example regen_dxbc` on Windows with uber.fs-k0/k1/k2.dxbc; nothing else writes them.\n\
+         /// BLAKE3 of the WGSL each pinned fragment was compiled from (render/variant.rs `pinned_wgsl`, `PINNED` order).\n\
+         pub(super) const UBER_DXBC_PINNED_WGSL_BLAKE3: [&str; {}] = [{}];\n\
+         /// BLAKE3 of the Windfoil WGSL they were made from (build.rs warns when it moves).\n\
+         #[allow(dead_code)]\n\
+         pub(super) const UBER_DXBC_PINNED_FROM_BLAKE3: &str = \"{wgsl}\";\n", pinned.len(), pinned.join(", "))).unwrap();
     println!("uber.vs.dxbc {} bytes, uber.fs.dxbc {} bytes, uber.fs-dual.dxbc {} bytes, WGSL {wgsl}", vs.len(), fs.len(), fs_dual.len());
     drop(logged);
 

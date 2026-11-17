@@ -38,6 +38,10 @@ fn main() {
     };
     stale("The precompiled DX12 uber shader (uber.vs.dxbc, uber.fs.dxbc)", recorded("src/render/uber/dxbc_hash.rs", "UBER_DXBC_WGSL_BLAKE3"),
         &windfoil_hash, "`cargo run -p rune --example regen_dxbc` on Windows; until then every Windows launch compiles it with FXC, which takes seconds");
+    // Only regen_dxbc writes the pinned fragments; a launch refuses a stale one (render/dxbc.rs `pinned_fresh`).
+    stale("The precompiled DX12 pinned fragments (uber.fs-k0.dxbc, uber.fs-k1.dxbc, uber.fs-k2.dxbc)",
+        recorded("src/render/uber/dxbc_pinned_hash.rs", "UBER_DXBC_PINNED_FROM_BLAKE3"), &windfoil_hash,
+        "`cargo run -p rune --example regen_dxbc` on Windows; until then the general shader draws rects, shadows and glyphs");
     stale("The precompiled Metal uber shader (uber.metallib)", recorded("src/render/uber/metallib_hash.rs", "UBER_WGSL_BLAKE3"),
         &classic_hash, "scripts/precompile-metal-shaders.sh on a Mac");
     stale("The precompiled Metal Windfoil shader (uber_windfoil.metallib)", recorded("src/render/uber/windfoil_hash.rs", "WINDFOIL_WGSL_BLAKE3"),

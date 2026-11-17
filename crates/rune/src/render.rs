@@ -45,6 +45,13 @@ pub use layers::LayerStats;
 #[doc(hidden)]
 pub const PINNED_KINDS: [u32; 3] = variant::PINNED;
 
+/// BLAKE3 of the WGSL the frame pass's pipeline pinned to `kind` compiles from (`variant::pinned_wgsl`, `\r\n` read as
+/// `\n`): what `regen_dxbc` records beside each pinned fragment and `dxbc::uber_pinned` checks before using one.
+#[doc(hidden)]
+pub fn pinned_wgsl_blake3(kind: u32) -> Option<String> {
+    variant::pinned_wgsl(kind).map(|wgsl| blake3::hash(wgsl.replace("\r\n", "\n").as_bytes()).to_hex().to_string())
+}
+
 /// Rounded rect in `fill` with a `params.x`-wide `border` ring drawn over it, as CSS paints a
 /// border over its background. `params.w` is the opacity the colours already carry (1 when not
 /// faded), so the ring hides the fill by `border.a / params.w`. Non-zero `uv` (with `uv.z >= 0`)
@@ -766,9 +773,11 @@ pub struct Renderer {
     /// Windfoil's subpixel pipeline for the window (`variant::Lcd`), and whether this frame's
     /// text draws subpixel masks.
     lcd: variant::Lcd,
-    /// The frame pass's pipelines pinned to one kind each (`variant::PINNED`), made at the first prepare
-    /// after the shader or format changes; empty where there's no bytecode for them.
+    /// The frame pass's pipelines pinned to one kind each (`variant::PINNED`), made at the first prepare and
+    /// again beside the frame pipeline when the shader or format changes; empty where there's no bytecode for them.
     pinned: Option<Vec<Option<wgpu::RenderPipeline>>>,
+    /// Those of the formats `extra` keeps a frame pipeline for, so a switch back makes none.
+    pinned_extra: Vec<(wgpu::TextureFormat, Vec<Option<wgpu::RenderPipeline>>)>,
     /// Each instance's kind (`params[1]`), as batched: where a run of one kind starts and ends.
     kinds: Vec<u8>,
     lcd_frame: bool,
@@ -976,7 +985,7 @@ impl Renderer {
         pass.set_pipeline(frame_pipeline);
         // The pinned pipelines draw the frame pass's runs of one kind (`variant::PINNED`), in paint order:
         // only where the frame's own pipeline would draw (not a layer target, an additive layer or subpixel text).
-        let pinned = self.pinned.as_deref().filter(|p| !p.is_empty() && std::ptr::eq(frame_pipeline, &self.pipeline) && target.is_none() && format == self.format);
+        let pinned = self.pinned.as_deref().filter(|p| p.iter().any(Option::is_some) && std::ptr::eq(frame_pipeline, &self.pipeline) && target.is_none() && format == self.format);
         let mut bound = frame_pipeline;
         if let Some(properties) = &self.springs { pass.set_bind_group(1, &properties.group, &[]); }
         pass.set_vertex_buffer(0, self.instances.slice(..));
@@ -1000,7 +1009,14 @@ impl Renderer {
             };
             pass.set_bind_group(0, bind, &[]);
             let span = batch.start.max(range.start)..batch.end.min(range.end);
-            let Some(pinned) = pinned else { pass.draw(0..4, span); continue };
+            // A span whose kinds alternate (a chip behind each token, a terminal's cell backgrounds between its
+            // glyphs) draws in one call with the general shader: a draw and a pipeline switch per run cost more
+            // than the smaller shader saves.
+            let Some(pinned) = pinned.filter(|_| few_runs(&self.kinds, span.clone())) else {
+                if !std::ptr::eq(bound, frame_pipeline) { pass.set_pipeline(frame_pipeline); bound = frame_pipeline; }
+                pass.draw(0..4, span);
+                continue;
+            };
             for run in kind_runs(&self.kinds, span) {
                 let kind = self.kinds[run.start as usize];
                 let pipeline = variant::PINNED.iter().position(|&k| k == u32::from(kind)).and_then(|at| pinned[at].as_ref()).unwrap_or(&self.pipeline);
@@ -1375,6 +1391,18 @@ fn report_gpu_allocations(device: wgpu::Device) {
         }
         out
     });
+}
+
+/// Most runs a span is split into (`few_runs`), and fewest instances a run has on average.
+const MAX_RUNS: usize = 64;
+const MIN_RUN: usize = 8;
+
+/// Whether `span` splits into few enough runs of one kind to draw them with the pinned pipelines: one run,
+/// or at most `MAX_RUNS` of `MIN_RUN` instances or more on average.
+fn few_runs(kinds: &[u8], span: std::ops::Range<u32>) -> bool {
+    let len = span.len();
+    let runs = kind_runs(kinds, span).take(MAX_RUNS + 1).count();
+    runs <= 1 || (runs <= MAX_RUNS && runs * MIN_RUN <= len)
 }
 
 /// `span` split into runs of instances of one kind (`kinds` by instance).
