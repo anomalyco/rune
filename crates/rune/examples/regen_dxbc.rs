@@ -1,5 +1,6 @@
 //! Rewrites the precompiled DX12 uber shader (`uber.vs.dxbc`, `uber.fs.dxbc`, the subpixel
-//! variant's `uber.vs-dual.dxbc` and `uber.fs-dual.dxbc`, and
+//! variant's `uber.vs-dual.dxbc` and `uber.fs-dual.dxbc`, the fragments pinned to one kind each
+//! (`uber.fs-k0.dxbc`, `-k1`, `-k2`), and
 //! `src/render/uber/dxbc_hash.rs`), and the straight-alpha pass's `alpha.vs.dxbc`, `alpha.fs.dxbc` and
 //! `src/render/uber/pass_dxbc_hash.rs`, after `shader.wgsl`, `clip.wgsl`, `outline.wgsl`, the uber layout or wgpu
 //! changes, without building Rune's unit tests: `cargo run -p rune --example regen_dxbc` on
@@ -19,6 +20,12 @@ fn main() {
     let uber_logged = HLSL.lock().unwrap().len();
     // The subpixel variant (render/variant.rs `dual_wgsl`): FXC takes about a minute for it.
     renderer.compile_subpixel_now(&gpu.device).expect("the subpixel pipeline compiles");
+    // The frame pass's pipelines pinned to one kind each (render/variant.rs `pinned_wgsl`).
+    let pinned_logged: Vec<(u32, usize)> = rune::render::PINNED_KINDS.iter().map(|&kind| {
+        let at = HLSL.lock().unwrap().len();
+        renderer.compile_pinned_now(&gpu.device, kind).expect("the pinned pipeline compiles");
+        (kind, at)
+    }).collect();
     drop(renderer);
     let logged = HLSL.lock().unwrap();
     let stage = |logged: &[String], name: &str| {
@@ -27,7 +34,8 @@ fn main() {
         text.split_once(":\n").unwrap().1.to_owned()
     };
     let (vertex, fragment) = (stage(&logged[..uber_logged], "vs"), stage(&logged[..uber_logged], "fs"));
-    let (dual_vertex, dual_fragment) = (stage(&logged[uber_logged..], "vs"), stage(&logged[uber_logged..], "fs"));
+    let dual_end = pinned_logged.first().map_or(logged.len(), |p| p.1);
+    let (dual_vertex, dual_fragment) = (stage(&logged[uber_logged..dual_end], "vs"), stage(&logged[uber_logged..dual_end], "fs"));
     let (vs, fs) = (fxc(&vertex, "vs", "vs_5_1"), fxc(&fragment, "fs", "ps_5_1"));
     let started = std::time::Instant::now();
     let (vs_dual, fs_dual) = (fxc(&dual_vertex, "vs", "vs_5_1"), fxc(&dual_fragment, "fs", "ps_5_1"));
@@ -40,6 +48,14 @@ fn main() {
     std::fs::write(format!("{root}/uber.fs.dxbc"), &fs).unwrap();
     std::fs::write(format!("{root}/uber.vs-dual.dxbc"), &vs_dual).unwrap();
     std::fs::write(format!("{root}/uber.fs-dual.dxbc"), &fs_dual).unwrap();
+    // Each pinned fragment beside the shared vertex stage (render/dxbc.rs `uber_pinned`).
+    for (n, &(kind, at)) in pinned_logged.iter().enumerate() {
+        let end = pinned_logged.get(n + 1).map_or(logged.len(), |p| p.1);
+        let started = std::time::Instant::now();
+        let fs_pinned = fxc(&stage(&logged[at..end], "fs"), "fs", "ps_5_1");
+        std::fs::write(format!("{root}/uber.fs-k{kind}.dxbc"), &fs_pinned).unwrap();
+        println!("uber.fs-k{kind}.dxbc {} bytes (FXC {:.1} s)", fs_pinned.len(), started.elapsed().as_secs_f64());
+    }
     let dual = blake3::hash(format!("{dual_vertex}\0{dual_fragment}").as_bytes()).to_hex();
     std::fs::write(format!("{root}/src/render/uber/dxbc_hash.rs"), format!(
         "// Written by `cargo run -p rune --example regen_dxbc` (or `RUNE_REGENERATE_DXBC=1 cargo test -p rune --lib uber_dxbc_is_fresh`) on Windows.\n\

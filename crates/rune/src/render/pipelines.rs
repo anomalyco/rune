@@ -72,6 +72,8 @@ impl Renderer {
             atlas,
             uber,
             lcd: variant::Lcd::Unbuilt,
+            pinned: None,
+            kinds: Vec::new(),
             lcd_frame: false,
             frame_wake: None,
             stand_in,
@@ -224,6 +226,7 @@ impl Renderer {
         self.extra.push((self.format, old));
         self.format = format;
         self.lcd = variant::Lcd::Unbuilt;
+        self.pinned = None;
         self.srgb_blend = !format.is_srgb();
         if self.layer_stats().targets > 0 { self.add_layer_format(device, format); }
         let [vw, vh] = self.target_frame(None).1;
