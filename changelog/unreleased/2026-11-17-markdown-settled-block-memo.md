@@ -1,0 +1,1 @@
+- `Markdown` memoises settled blocks, list item bodies, closed code cards, and settled table rows across streaming commits, and `Table` caches per-row column widths so adding or editing a row measures only the changed row.\n

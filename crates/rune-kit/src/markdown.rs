@@ -58,6 +58,7 @@ mod image;
 mod interrupt;
 mod link_icon;
 mod links;
+mod memo;
 mod parser;
 mod plain;
 mod render;
@@ -481,7 +482,9 @@ impl Markdown {
             #[cfg(feature = "mermaid")]
             diagram_frame: self.diagram_frame, code_frame: self.code_frame, quote_frame: self.quote_frame, link_favicon: self.link_favicon, images: self.images, on_image: self.on_image, flow: Cell::default() };
         // The document reads the way its first words do; until any arrive, the way it was asked.
-        let root = bidi::directed(r.blocks(&blocks, &maps, &keys, true), bidi::blocks_dir(&blocks).or(self.tentative)).selection_group(self.selectable);
+        let root = memo::with_renderer(&r, || {
+            bidi::directed(r.blocks(&blocks, &maps, &keys, true), bidi::blocks_dir(&blocks).or(self.tentative)).selection_group(self.selectable)
+        });
         if !(self.selectable && self.copy_source) { return root; }
         let names: Rc<[String]> = rendered_keys(blocks.len(), &keys).into();
         let src: Rc<str> = self.src.into();

@@ -422,12 +422,32 @@ impl Renderer {
             }
             let own = bidi::blocks_dir(std::slice::from_ref(b));
             let prose = !matches!(b, Block::Code(_) | Block::Diff(_) | Block::Mermaid(_) | Block::Image { .. } | Block::Rule);
-            let drawn = self.block(b, maps.get(i).unwrap_or(&empty));
-            let drawn = if prose { bidi::directed(drawn, own.or(last)) } else { drawn };
+            let dir = prose.then(|| own.or(last)).flatten();
+            let map = maps.get(i).unwrap_or(&empty);
+            let settled = !self.streaming || i + 1 < blocks.len();
+            let (src_at, src_n) = (self.next_source.get(), super::memo::source_count(b));
+            let (task_at, task_n) = (self.next_task.get(), super::memo::task_count(b));
+            let child = match settled.then(|| self.settled_block_digest(b, map, &key, top, dir, (src_at, src_n), (task_at, task_n))).flatten() {
+                Some(digest) => {
+                    let key_c = key.clone();
+                    let el = rune::memo::cached(digest, || {
+                        self.next_source.set(src_at);
+                        self.next_task.set(task_at);
+                        let drawn = bidi::directed(self.block(b, map), dir);
+                        debug_assert_eq!(self.next_source.get(), src_at + src_n);
+                        debug_assert_eq!(self.next_task.get(), task_at + task_n);
+                        drawn.key(key_c).mt(top)
+                    });
+                    self.next_source.set(src_at + src_n);
+                    self.next_task.set(task_at + task_n);
+                    el
+                }
+                None => bidi::directed(self.block(b, map), dir).key(key).mt(top),
+            };
             if own.is_some() {
                 last = own;
             }
-            c = c.child(drawn.key(key).mt(top));
+            c = c.child(child);
             prev_mb = mb;
             after_heading = matches!(b, Block::Heading(..));
         }
@@ -607,10 +627,15 @@ impl Renderer {
                 let n = self.next_source.get();
                 self.next_source.set(n + 1);
                 let source = self.sources.get(n).filter(|src| src.len == code.len());
-                let card = self.code(code, source, code_map);
                 match &self.code_frame {
-                    Some(f) => f(card.key("card"), &CodeFrame { index: n, source: code, language: source.and_then(|s| s.lang.as_deref()), open: source.is_some_and(|s| s.open) }),
-                    None => card,
+                    Some(f) => {
+                        let card = match self.settled_code_card_digest(code, source, code_map) {
+                            Some(digest) => rune::memo::cached(digest, || self.code(code, source, code_map).key("card")),
+                            None => self.code(code, source, code_map).key("card"),
+                        };
+                        f(card, &CodeFrame { index: n, source: code, language: source.and_then(|s| s.lang.as_deref()), open: source.is_some_and(|s| s.open) })
+                    }
+                    None => self.code(code, source, code_map),
                 }
             }
             Block::Diff(src) => self.diff(src, code_map),
@@ -672,6 +697,25 @@ impl Renderer {
                         let marker = text(words).font(s.body).color(s.muted).exact_lines().w(indent);
                         if s.list_outside { marker.align(Align::End).pr(space) } else { marker.align(Align::Center) }
                     };
+                    let settled_item = !self.streaming || k + 1 < n;
+                    let (src_at, src_n) = (self.next_source.get(), item.iter().map(super::memo::source_count).sum::<usize>());
+                    let (task_at, task_n) = (self.next_task.get(), item.iter().map(super::memo::task_count).sum::<usize>());
+                    let body = match settled_item.then(|| self.settled_item_digest(item, imap, (src_at, src_n), (task_at, task_n))).flatten() {
+                        Some(digest) => {
+                            let el = rune::memo::cached(digest, || {
+                                self.next_source.set(src_at);
+                                self.next_task.set(task_at);
+                                let b = self.blocks_in(item, imap, &[], false, true).grow(1.0).shrink();
+                                debug_assert_eq!(self.next_source.get(), src_at + src_n);
+                                debug_assert_eq!(self.next_task.get(), task_at + task_n);
+                                b
+                            });
+                            self.next_source.set(src_at + src_n);
+                            self.next_task.set(task_at + task_n);
+                            el
+                        }
+                        None => self.blocks_in(item, imap, &[], false, true).grow(1.0).shrink(),
+                    };
                     // The item's place in the list says what its marker shows.
                     c = c.child(
                         row()
@@ -681,7 +725,7 @@ impl Renderer {
                             .w_full()
                             .mt(gap(k))
                             .child(self.with_reveal(marker).a11y_hidden())
-                            .child(self.blocks_in(item, imap, &[], false, true).grow(1.0).shrink()),
+                            .child(body),
                     );
                 }
                 self.flow.set(flow);
