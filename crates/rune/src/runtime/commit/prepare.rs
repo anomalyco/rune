@@ -5,13 +5,19 @@
 //! shows it (then it is found, not shaped) or the cache lets it go: past [`PREPARE_BYTES`] of
 //! prepared layouts the oldest go first, and all of them at the window's next rest. One request is
 //! held at a time, the latest; it runs in the window's next idle turn after its first frame, and
-//! none while input waits.
+//! none while input waits. A pass shapes for at most [`PREPARE_TURN`] of one turn and lays out at
+//! most the request's share of [`PREPARE_BYTES`]; a pass its time cut short goes on in the next
+//! idle turn unless a newer request came, and one its bytes cut short ends there.
 
 use super::*;
 
 /// The most prepared layouts no view holds may take in the layout cache, by the cache's own count
 /// (`LAYOUT_PER_BYTE`): about one transcript screen.
 pub(crate) const PREPARE_BYTES: usize = 1 << 20;
+
+/// How long one idle turn's pass may go on starting new layouts: half a 120 Hz frame, so input
+/// that arrives during it waits at most about that.
+pub(crate) const PREPARE_TURN: std::time::Duration = std::time::Duration::from_micros(4_000);
 
 impl<S: 'static> Runtime<S> {
     /// Whether an idle turn has a view to prepare for this window.
@@ -21,15 +27,17 @@ impl<S: 'static> Runtime<S> {
 
     /// One idle turn's text work: the view asked to be prepared, if any; true while more is owed.
     pub(crate) fn text_idle_turn(&mut self) -> bool {
-        if let Some((view, size)) = Tx::take_prepared::<S>() {
-            self.prepare_text(view, size.unwrap_or(self.viewport));
+        if let Some((view, size, spent)) = Tx::take_prepared::<S>() {
+            let (bytes, cut) = self.prepare_text(view, size.unwrap_or(self.viewport), PREPARE_BYTES.saturating_sub(spent));
+            if cut == crate::text::PrepareCut::Time { Tx::resume_prepared(view, size, spent + bytes); }
         }
         self.text_idle_owed()
     }
 
     /// Measures `view` at `size` (points) with this window's text system and scratch everything
-    /// else, then drops it. Returns the layouts it added.
-    pub(crate) fn prepare_text(&mut self, view: fn(&S, &mut Cx<S>) -> El, size: (f32, f32)) -> usize {
+    /// else, then drops it, laying out at most `bytes` of new text for at most [`PREPARE_TURN`].
+    /// Returns the bytes it laid out and whether it stopped short.
+    pub(crate) fn prepare_text(&mut self, view: fn(&S, &mut Cx<S>) -> El, size: (f32, f32), bytes: usize) -> (usize, crate::text::PrepareCut) {
         let before = self.text.layout_keys();
         let (mut nodes, mut spare_nodes, mut layout) = (Vec::new(), Vec::new(), LayoutEngine::new());
         let (mut node_index, mut path_ids, mut memo) = (HashMap::default(), HashMap::default(), crate::memo::MemoCache::default());
@@ -84,7 +92,10 @@ impl<S: 'static> Runtime<S> {
             windowed: HashMap::default(),
             kept_lists: Vec::new(),
         };
+        let budget = crate::text::PrepareBudget::open(bytes, std::time::Instant::now() + PREPARE_TURN);
         drop(m.finish(&Tx::default()));
-        self.text.keep_prepared(&before, PREPARE_BYTES)
+        let used = budget.close();
+        self.text.keep_prepared(&before, PREPARE_BYTES);
+        used
     }
 }

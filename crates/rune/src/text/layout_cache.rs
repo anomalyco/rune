@@ -43,9 +43,14 @@ pub(super) struct Entry<T> {
 
 impl<T> Entry<T> {
     pub(super) fn new(value: T, used: u32, text_len: usize, shape: u64) -> Self {
-        let cost = (text_len * LAYOUT_PER_BYTE + LAYOUT_BASE).min(u32::MAX as usize) as u32;
+        let cost = entry_cost(text_len).min(u32::MAX as usize) as u32;
         Entry { value, used, cost, shape, prepared: 0 }
     }
+}
+
+/// Heap bytes a layout of `text_len` bytes of text is counted at.
+pub(super) fn entry_cost(text_len: usize) -> usize {
+    text_len * LAYOUT_PER_BYTE + LAYOUT_BASE
 }
 
 /// Heap bytes a layout holds per byte of its text, and on top of that. A freshly shaped

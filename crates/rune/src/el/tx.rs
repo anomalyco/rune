@@ -633,19 +633,25 @@ impl Tx {
     /// held, the latest, for the window whose state `view` reads; it never runs on a turn with
     /// input waiting, and an idle window wakes for it no more once it ran.
     pub fn prepare_text<S: 'static>(&mut self, view: fn(&S, &mut crate::Cx<S>) -> crate::El, size: Option<(f32, f32)>) {
-        PREPARE.with_borrow_mut(|a| *a = Some((Box::new(view), size)));
+        PREPARE.with_borrow_mut(|a| *a = Some((Box::new(view), size, 0)));
     }
 
-    /// Takes `prepare_text`'s request if it is for a window of state `S`.
-    pub(crate) fn take_prepared<S: 'static>() -> Option<(fn(&S, &mut crate::Cx<S>) -> crate::El, Option<(f32, f32)>)> {
+    /// Takes `prepare_text`'s request if it is for a window of state `S`, with the bytes its
+    /// earlier turns laid out.
+    pub(crate) fn take_prepared<S: 'static>() -> Option<(fn(&S, &mut crate::Cx<S>) -> crate::El, Option<(f32, f32)>, usize)> {
         if !Self::prepare_owed::<S>() { return None; }
-        let (view, size) = PREPARE.with_borrow_mut(Option::take)?;
-        Some((*view.downcast::<fn(&S, &mut crate::Cx<S>) -> crate::El>().ok()?, size))
+        let (view, size, spent) = PREPARE.with_borrow_mut(Option::take)?;
+        Some((*view.downcast::<fn(&S, &mut crate::Cx<S>) -> crate::El>().ok()?, size, spent))
+    }
+
+    /// Holds a request its turn ran out of time on for the next idle turn, unless a newer one came.
+    pub(crate) fn resume_prepared<S: 'static>(view: fn(&S, &mut crate::Cx<S>) -> crate::El, size: Option<(f32, f32)>, spent: usize) {
+        PREPARE.with_borrow_mut(|a| if a.is_none() { *a = Some((Box::new(view), size, spent)); });
     }
 
     /// Whether `prepare_text` holds a request for a window of state `S`.
     pub(crate) fn prepare_owed<S: 'static>() -> bool {
-        PREPARE.with_borrow(|a| a.as_ref().is_some_and(|(view, _)| view.is::<fn(&S, &mut crate::Cx<S>) -> crate::El>()))
+        PREPARE.with_borrow(|a| a.as_ref().is_some_and(|(view, ..)| view.is::<fn(&S, &mut crate::Cx<S>) -> crate::El>()))
     }
 
     fn frame_request(&mut self, request: crate::window::frame::FrameRequest) {
@@ -748,7 +754,7 @@ impl Tx {
 }
 
 thread_local! {
-    /// `Tx::prepare_text`'s latest request on this thread: the view, boxed, and its size in points
-    /// if not the window's.
-    static PREPARE: std::cell::RefCell<Option<(Box<dyn std::any::Any>, Option<(f32, f32)>)>> = const { std::cell::RefCell::new(None) };
+    /// `Tx::prepare_text`'s latest request on this thread: the view, boxed, its size in points if
+    /// not the window's, and the bytes its earlier turns laid out.
+    static PREPARE: std::cell::RefCell<Option<(Box<dyn std::any::Any>, Option<(f32, f32)>, usize)>> = const { std::cell::RefCell::new(None) };
 }

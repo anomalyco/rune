@@ -81,6 +81,7 @@ mod measure;
 pub(crate) mod outline;
 pub use outline::Outline;
 mod pill_chips;
+mod prepare_budget;
 mod pretty;
 pub use pretty::set_pretty_wrap;
 pub(crate) use pretty::pretty_wrap;
@@ -119,6 +120,7 @@ use glyph_emit::Face;
 use hidden_axes::hidden_axes;
 use layout_cache::{Cache, Entry};
 pub(crate) use layout_cache::Keep;
+pub(crate) use prepare_budget::{Cut as PrepareCut, PrepareBudget};
 pub(crate) use paragraphs::{ParagraphLayout, Piece, TextFlow, TextLayout, common_end, common_start};
 #[cfg(test)]
 use layout_cache::STALE_BYTES;
@@ -643,6 +645,9 @@ impl TextSystem {
             // A width change re-breaks the newest layout, not one measured since at another.
             self.shapes.entry(shape_key).or_insert(key);
             return l.clone();
+        }
+        if cache && let Some(empty) = self.past_prepare_budget(text.len(), style, scale, align, base) {
+            return empty;
         }
         // Each pill's label range, and the room before and after it in device px; boxes keep
         // the pill's index in their id, so ranges that fail the checks keep no chip.
