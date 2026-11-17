@@ -22,6 +22,8 @@ pub(in crate::runtime) struct CyclePaint {
     pub(super) open: Option<usize>,
     /// Why this paint recorded no window for a sliding loop it drew, if it didn't.
     pub(super) missed: Option<&'static str>,
+    /// What the last step would have drawn, while `RUNE_LOOP_CHECK=1` runs ordinary frames instead.
+    check: Option<Vec<Instance>>,
 }
 
 struct Slot {
@@ -56,6 +58,13 @@ impl CyclePaint {
     pub(in crate::runtime) fn glyph(&mut self, quad: [f32; 4], drawn: bool) {
         if let Some(k) = self.open { self.slides[k].glyphs.push((quad, drawn)); }
     }
+}
+
+/// `RUNE_LOOP_CHECK=1`: a frame a loop-only step could draw runs as an ordinary one, and the
+/// two are compared (`loop_checked`).
+fn checking() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("RUNE_LOOP_CHECK").is_some_and(|v| v == "1"))
 }
 
 impl<S: 'static> Runtime<S> {
@@ -125,6 +134,20 @@ impl<S: 'static> Runtime<S> {
         if !self.slots_hold() || (due && self.ambient.is_none()) { return Err("a slot moved"); }
         let t = self.t + dt * f64::from(self.time_scale);
         let poses = self.slide_poses(t)?;
+        if checking() {
+            // What the step would draw, for the ordinary frame that runs instead (`loop_checked`).
+            let mut predicted = self.instances.clone();
+            for s in &self.paint_keep.cycles.slots {
+                let a = s.curve.sample(wall) * s.scale;
+                predicted[s.at].fill = s.ink.map(|v| v * a);
+                predicted[s.at].params[3] = a;
+            }
+            for (sl, &(clip, fade)) in self.paint_keep.cycles.slides.iter().zip(&poses) {
+                for q in &mut predicted[sl.instances.clone()] { q.clip = clip; q.fade = fade; }
+            }
+            self.paint_keep.cycles.check = Some(predicted);
+            return Err("checked against an ordinary frame");
+        }
         self.clock = wall;
         self.t = t;
         self.scene.set_time(t);
@@ -156,6 +179,26 @@ impl<S: 'static> Runtime<S> {
                 else { "a cycle paint didn't record" };
         }
         "a loop it can't draw"
+    }
+
+    /// `RUNE_LOOP_CHECK=1`: what the last loop-only step would have drawn against what the
+    /// ordinary frame that ran instead drew. The instances that differ, and by how much at most
+    /// (the largest difference in any field, in pixels or colour; infinite when their number or
+    /// soft edges differ). None when no step was checked.
+    pub(crate) fn loop_checked(&mut self) -> Option<(usize, f32)> {
+        let predicted = self.paint_keep.cycles.check.take()?;
+        if predicted.len() != self.instances.len() { return Some((usize::MAX, f32::INFINITY)); }
+        let (mut differ, mut worst) = (0, 0.0f32);
+        for (p, q) in predicted.iter().zip(&self.instances) {
+            if bytemuck::bytes_of(p) == bytemuck::bytes_of(q) { continue; }
+            let fields = |i: &Instance| [i.rect, i.radii, i.fill, i.border, i.params, i.uv, i.clip];
+            let d = if p.fade != q.fade { f32::INFINITY } else {
+                fields(p).iter().flatten().zip(fields(q).iter().flatten()).map(|(a, b)| (a - b).abs()).fold(0.0, f32::max)
+            };
+            if d > 1e-3 { differ += 1; }
+            worst = worst.max(d);
+        }
+        Some((differ, worst))
     }
 
     /// A layer may have folded a primitive after its slot was observed. Never patch a different

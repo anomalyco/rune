@@ -319,6 +319,9 @@ impl<S: 'static> Host<S> {
         } else {
             self.clock.advance(rt, frame_time, composing(self.comp.as_deref()))
         };
+        // `RUNE_LOOP_CHECK=1`: how the loop-only step this frame stood in for compares with it.
+        #[allow(unused_variables)]
+        let loop_check = rt.loop_checked();
         #[cfg(target_os = "macos")]
         let frame = if l.surface.as_ref().is_some_and(|surface| l.native.materials.update(rt.transparent, !rt.materials.is_empty(), &l.window, surface)) {
             // This drawable presents without the views: build again natively into a new one.
@@ -506,6 +509,7 @@ impl<S: 'static> Host<S> {
                 change: None,
                 looped: looped.as_ref().map(Vec::len),
                 loop_why,
+                loop_check,
             }),
             _ => None,
         };
