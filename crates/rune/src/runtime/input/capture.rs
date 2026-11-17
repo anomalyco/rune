@@ -49,18 +49,24 @@ pub(crate) struct Held {
     pub(crate) left: bool,
     /// The link of its text it began on: a release on the same link activates it.
     pub(crate) link: Option<usize>,
+    /// It ran its element's `on_press` as it went down (`El::press_on_down`): its release
+    /// runs nothing.
+    pub(crate) pressed_on_down: bool,
 }
 
 impl Held {
     /// A press that just went down at `at`, inside its element and still.
     pub(crate) fn new(path: String, drag: Drag, button: PointerButton, at: (f32, f32), down_at: f64, second: bool, drag_out: Option<f32>) -> Self {
-        Self { path, drag, button, at, down_at, hit: Hit::Inside, moved: false, second, drag_out, left: false, link: None }
+        Self { path, drag, button, at, down_at, hit: Hit::Inside, moved: false, second, drag_out, left: false, link: None, pressed_on_down: false }
     }
 
     pub(crate) fn inside(&self) -> bool { self.hit == Hit::Inside }
 
     /// Began on link `link` of its text.
     pub(crate) fn on_link(self, link: Option<usize>) -> Self { Self { link, ..self } }
+
+    /// Ran its element's `on_press` as it went down.
+    pub(crate) fn pressed_on_down(self, pressed_on_down: bool) -> Self { Self { pressed_on_down, ..self } }
 }
 
 #[derive(Clone, Debug)]
