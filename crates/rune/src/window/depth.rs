@@ -130,7 +130,9 @@ impl<S: 'static> super::Host<S> {
     /// At the end of a turn: a free turn in a window that can be seen grows the third buffer, or
     /// draws into a buffer not yet drawn into.
     pub(super) fn depth_turn(&mut self) {
-        let seen = self.shown_win().is_some_and(|w| !matches!(w.native.look, super::look::Look::Covered { .. }));
+        // Shown, not covered and not minimised: a minimised window is still shown (`life`), and a
+        // turn that grew it there would undo the rest's drop at once.
+        let seen = self.life.uncovered() && self.shown_win().is_some_and(|w| !w.minimized() && !matches!(w.native.look, super::look::Look::Covered { .. }));
         let Some(w) = self.win.as_mut() else { return };
         if !seen || w.native.depth == Depth::Off || w.native.depth == (Depth::Three { warm: 3 }) { return; }
         if w.alpha.is_some() { return self.depth_step(DepthEvent::Failed); }
@@ -141,6 +143,7 @@ impl<S: 'static> super::Host<S> {
         if !w.native.slot.room(waitable.map(|h| h.0)) { return; }
         self.depth_step(DepthEvent::Free { now: Instant::now() });
     }
+
     /// Configures the window's swap chain with the buffers its depth says, at its size. If the
     /// third can't be made, two, for the window's life.
     fn configure_depth(&mut self) {
