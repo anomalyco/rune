@@ -217,8 +217,11 @@ impl<S: 'static> Host<S> {
         // Input holds off making a window's third buffer (`depth`) until a pause.
         #[cfg(target_os = "windows")]
         match &event {
-            WindowEvent::MouseInput { .. } | WindowEvent::MouseWheel { .. } | WindowEvent::KeyboardInput { .. } | WindowEvent::Touch(_) | WindowEvent::Resized(_) =>
-                self.depth_step(super::depth::DepthEvent::Active { now: Instant::now() }),
+            WindowEvent::MouseInput { .. } | WindowEvent::MouseWheel { .. } | WindowEvent::KeyboardInput { .. } | WindowEvent::Touch(_) | WindowEvent::Resized(_) => {
+                let pressed = matches!(&event, WindowEvent::KeyboardInput { event, .. } if event.state.is_pressed()) || matches!(&event, WindowEvent::MouseInput { state: winit::event::ElementState::Pressed, .. });
+                if pressed && let Some(w) = &mut self.win { w.native.input_owed = true; }
+                self.depth_step(super::depth::DepthEvent::Active { now: Instant::now() })
+            }
             _ => {}
         }
         if !matches!(event, WindowEvent::RedrawRequested) && let Some(w) = &mut self.win { w.timer_frame.no_longer_quiet(); }

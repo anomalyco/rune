@@ -560,6 +560,7 @@ impl Instance {
             options: self.options.clone(),
             hdr_source: None,
             extra_buffers: Default::default(),
+            restart_next: Default::default(),
         }
     }
 
@@ -580,6 +581,7 @@ impl Instance {
             options: self.options.clone(),
             hdr_source: None,
             extra_buffers: Default::default(),
+            restart_next: Default::default(),
         }
     }
 
@@ -599,6 +601,7 @@ impl Instance {
             options: self.options.clone(),
             hdr_source: None,
             extra_buffers: Default::default(),
+            restart_next: Default::default(),
         }
     }
 }
@@ -649,6 +652,9 @@ pub struct Surface {
     /// Rune: buffers beyond `maximum_frame_latency + 1` the next configure makes
     /// (`Surface::set_extra_buffers`), so the GPU needn't wait for the compositor to give one back.
     extra_buffers: core::sync::atomic::AtomicU32,
+    /// Rune, measuring (`present-depth-measure`): the next present discards the presents still
+    /// queued (`DXGI_PRESENT_RESTART`), so an input's frame replaces a motion frame not yet shown.
+    restart_next: core::sync::atomic::AtomicBool,
 }
 
 unsafe impl Send for Surface {}
@@ -663,6 +669,11 @@ impl Surface {
     /// the buffer holds what the frame before showed. Cleared by the present.
     /// Rune: buffers the next configure makes beyond `maximum_frame_latency + 1`. The frame latency
     /// (and so how many frames may wait to be shown) is unchanged.
+    /// Rune, measuring: the next present discards queued presents (`DXGI_PRESENT_RESTART`).
+    pub fn restart_next_present(&self) {
+        self.restart_next.store(true, core::sync::atomic::Ordering::Relaxed);
+    }
+
     pub fn set_extra_buffers(&self, extra: u32) {
         self.extra_buffers.store(extra, core::sync::atomic::Ordering::Relaxed);
     }
@@ -1869,6 +1880,7 @@ impl crate::Queue for Queue {
         };
 
         profiling::scope!("IDXGISwapchain3::Present");
+        let flags = if surface.restart_next.swap(false, core::sync::atomic::Ordering::Relaxed) { flags | Dxgi::DXGI_PRESENT_RESTART } else { flags };
         let dirty = core::mem::take(&mut sc.dirty);
         if dirty.is_empty() {
             unsafe { sc.raw.Present(interval, flags) }

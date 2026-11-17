@@ -156,6 +156,7 @@ impl crate::Instance for super::Instance {
                     options: self.options.clone(),
                     hdr_source: Some(auxil::dxgi::hdr::DxgiHdrSource::new(handle)),
                     extra_buffers: Default::default(),
+                    restart_next: Default::default(),
                 })
             }
             _ => Err(crate::InstanceError::new(format!(
