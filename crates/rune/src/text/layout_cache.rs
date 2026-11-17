@@ -166,13 +166,17 @@ impl TextSystem {
         let held = |e: &Entry<Rc<Layout<Ink>>>| Rc::strong_count(&e.value) > 1;
         let mut loose: Vec<(u32, u64, usize)> = self.layouts.iter().filter(|(_, e)| e.prepared != 0 && !held(e)).map(|(k, e)| (pass.wrapping_sub(e.prepared), *k, e.cost as usize)).collect();
         let mut total: usize = loose.iter().map(|l| l.2).sum();
+        let (before_total, held_n, held_bytes) = (total, self.layouts.values().filter(|e| e.prepared != 0 && held(e)).count(), self.layouts.values().filter(|e| e.prepared != 0 && held(e)).map(|e| e.cost as usize).sum::<usize>());
+        let mut dropped = Vec::new();
         // Oldest pass first: the largest age.
         loose.sort_unstable_by(|a, b| b.0.cmp(&a.0).then(b.2.cmp(&a.2)));
-        for (_, k, cost) in loose {
+        for (age, k, cost) in loose {
             if total <= budget { break; }
             self.layouts.remove(&k);
             total -= cost;
+            dropped.push(age);
         }
+        super::probe_note(format_args!("keep_prepared pass={pass} added={added} loose_bytes={before_total}->{total} budget={budget} dropped={} dropped_ages={:?} held_prepared={held_n} held_bytes={held_bytes}", dropped.len(), { let mut a = dropped.clone(); a.dedup(); a }));
         let layouts = &self.layouts;
         self.shapes.retain(|_, key| layouts.contains_key(key));
         added
