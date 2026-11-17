@@ -93,6 +93,40 @@ impl GpuTimer {
                 kinds[class].2 += area(lo[0].max(i.clip[0]), lo[1].max(i.clip[1]), hi[0].min(i.clip[2]), hi[1].min(i.clip[3]));
             }
         }
+        // RUNE_CENSUS_COVER=1 (rehearsals only: it costs CPU per frame): what covered-rect culling could skip. In
+        // reverse paint order on 4 px cells, each instance's rasterized cells already under later plain opaque
+        // rects (square, borderless, alpha 1, no fade, no band, inside their clip): 21 all its cells covered (could
+        // be dropped), 22 the covered cells of every instance (what a depth pre-pass would reject). A layer, a
+        // backdrop or an effect marker (kinds 5 to 10) clears the cells: nothing is assumed across a target change.
+        if std::env::var_os("RUNE_CENSUS_COVER").is_some() {
+            kinds.resize(23, (0, 0.0, 0.0));
+            const CELL: f32 = 4.0;
+            let (cw, ch) = ((viewport.0 as f32 / CELL).ceil() as usize, (viewport.1 as f32 / CELL).ceil() as usize);
+            let mut covered = vec![false; cw * ch];
+            let cells = |x0: f32, y0: f32, x1: f32, y1: f32, inside: bool| {
+                // Cells whose centre is in the box (inside = false) or that lie wholly in it (inside = true).
+                let (a, b) = if inside { ((x0 / CELL).ceil(), (x1 / CELL).floor()) } else { ((x0 / CELL - 0.5).ceil(), (x1 / CELL - 0.5).floor() + 1.0) };
+                let (c, d) = if inside { ((y0 / CELL).ceil(), (y1 / CELL).floor()) } else { ((y0 / CELL - 0.5).ceil(), (y1 / CELL - 0.5).floor() + 1.0) };
+                (a.max(0.0) as usize, (b.max(0.0) as usize).min(cw), c.max(0.0) as usize, (d.max(0.0) as usize).min(ch))
+            };
+            for i in instances.iter().rev() {
+                let k = (i.params[1] as usize).min(15);
+                if (5..=10).contains(&k) { covered.iter_mut().for_each(|c| *c = false); continue; }
+                let grow = match k { 1 => i.params[2] * 3.0 + 1.0, 2 => 0.0, 3 => 1.0, _ => 1.0 + i.params[2] * 2.0 };
+                let (x0, y0, x1, y1) = cells(i.rect[0] - grow, i.rect[1] - grow, i.rect[0] + i.rect[2] + grow, i.rect[1] + i.rect[3] + grow, false);
+                let (mut all, mut some) = (x0 < x1 && y0 < y1, 0u32);
+                for y in y0..y1 { for x in x0..x1 { if covered[y * cw + x] { some += 1 } else { all = false } } }
+                let px = f64::from(CELL * CELL);
+                if all { kinds[21].0 += 1; kinds[21].1 += f64::from(some) * px; }
+                kinds[22].0 += u32::from(some > 0);
+                kinds[22].1 += f64::from(some) * px;
+                let plain = k == 0 && i.radii == [0.0; 4] && i.params[0] == 0.0 && i.fade == [0; 4] && i.fill[3] >= 1.0 && i.uv[2] >= 0.0;
+                if plain {
+                    let (x0, x1, y0, y1) = { let c = cells(i.rect[0].max(i.clip[0]), i.rect[1].max(i.clip[1]), (i.rect[0] + i.rect[2]).min(i.clip[2]), (i.rect[1] + i.rect[3]).min(i.clip[3]), true); (c.0, c.1, c.2, c.3) };
+                    for y in y0..y1 { for x in x0..x1 { covered[y * cw + x] = true } }
+                }
+            }
+        }
         *self.kinds.lock().unwrap_or_else(|e| e.into_inner()) = kinds;
     }
 
