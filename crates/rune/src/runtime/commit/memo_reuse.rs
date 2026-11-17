@@ -553,7 +553,7 @@ pub(super) fn try_reuse_memo(
     if el.key != old_slice[0].key || !same_root_el(el, built, false) {
         return None;
     }
-    if !old_slice.iter().all(|old| !old.is_moved_stub() && !old.path.is_empty() && taffy.can_reuse(old.id.0, old.taffy)) {
+    if !old_slice.iter().all(|old| !old.is_moved_stub() && old.local_key != LocalKey::NONE && !old.path.is_empty() && taffy.can_reuse(old.id.0, old.taffy)) {
         return None;
     }
     // A picture that takes a side from its image's ratio keeps its layout only while the image
@@ -563,7 +563,16 @@ pub(super) fn try_reuse_memo(
     }
 
     let old_root_path = old_slice[0].path.as_str();
-    let same_path = path_matches(old_root_path, parent_path, el.key.as_deref(), index);
+    let base_parent = if parent_path.is_empty() {
+        NodeId(0)
+    } else {
+        parent.map_or(NodeId(0), |p| nodes[p].id)
+    };
+    let same_path = match el.key.as_deref() {
+        None => old_slice[0].parent_id == base_parent && old_slice[0].local_key == LocalKey::index(index),
+        Some(k) if !k.is_empty() && !k.as_bytes().contains(&b'/') => old_slice[0].parent_id == base_parent,
+        _ => path_matches(old_root_path, parent_path, el.key.as_deref(), index),
+    };
     let new_start = nodes.len();
     let moved = same_path && ctx.committing;
     let root_taffy = old_slice[0].taffy;
