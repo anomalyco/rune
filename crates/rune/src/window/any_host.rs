@@ -288,8 +288,9 @@ impl<S: 'static> Host<S> {
         // adapter, one a turn, none while input waits; the loop turns again while some are owed.
         #[cfg(target_os = "windows")]
         return self.post_frame_turn();
+        // Elsewhere `on_ready` ran with the first frame; a view asked to be prepared since runs now.
         #[cfg(not(target_os = "windows"))]
-        false
+        { !crate::marks::counting() && self.rt.text_idle_owed() && self.rt.text_idle_turn() }
     }
 
     fn resumed_in_turn(&mut self, event_loop: &ActiveEventLoop) {
