@@ -31,6 +31,10 @@ const FRAGMENT: &[u8] = include_bytes!("../../uber.fs.dxbc");
 const VERTEX_DUAL: &[u8] = include_bytes!("../../uber.vs-dual.dxbc");
 #[cfg(target_os = "windows")]
 const FRAGMENT_DUAL: &[u8] = include_bytes!("../../uber.fs-dual.dxbc");
+/// The fragment stage pinned to one kind each (render/variant.rs `pinned_wgsl`, `PINNED`), beside the
+/// shared vertex stage: the frame pass's pipelines for rects, shadows and glyphs.
+#[cfg(target_os = "windows")]
+const FRAGMENT_PINNED: [&[u8]; 3] = [include_bytes!("../../uber.fs-k0.dxbc"), include_bytes!("../../uber.fs-k1.dxbc"), include_bytes!("../../uber.fs-k2.dxbc")];
 
 // The built-in passes besides the uber shader, compiled by regen_dxbc from their WGSL as wgpu
 // would, and the BLAKE3 of the WGSL each came from (`uber/pass_dxbc_hash.rs`).
@@ -105,6 +109,13 @@ pub(super) fn uber<T>(device: &wgpu::Device, make_pipeline: impl FnOnce(&Shaders
 #[cfg(target_os = "windows")]
 pub(super) fn uber_dual<T>(device: &wgpu::Device, make_pipeline: impl FnOnce(&Shaders) -> T) -> Option<(Shaders, T)> {
     load(device, (VERTEX_DUAL, FRAGMENT_DUAL), "subpixel uber", uber_fresh, make_pipeline)
+}
+
+/// [`uber`] pinned to `KIND_*` `kind` (render/variant.rs `PINNED`): the shared vertex stage and that kind's fragment.
+#[cfg(target_os = "windows")]
+pub(super) fn uber_pinned<T>(device: &wgpu::Device, kind: u32, make_pipeline: impl FnOnce(&Shaders) -> T) -> Option<(Shaders, T)> {
+    let fragment = super::variant::PINNED.iter().position(|&k| k == kind).map(|at| FRAGMENT_PINNED[at]).filter(|f| !f.is_empty())?;
+    load(device, (VERTEX, fragment), "pinned uber", uber_fresh, make_pipeline)
 }
 
 /// The straight-alpha pass (render/surface_alpha.rs) from its precompiled stages, when they were

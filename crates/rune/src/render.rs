@@ -48,6 +48,9 @@ mod windfoil_metallib;
 pub use backdrop_blur::MAX_BACKDROP_BLURS;
 pub use first_use::{make_layer_blur, make_straight_alpha, precompiled_misses};
 pub use layers::LayerStats;
+/// The kinds the frame pass has a pipeline of its own for (`regen_dxbc` compiles each).
+#[doc(hidden)]
+pub const PINNED_KINDS: [u32; 3] = variant::PINNED;
 
 /// Rounded rect in `fill` with a `params.x`-wide `border` ring drawn over it, as CSS paints a
 /// border over its background. `params.w` is the opacity the colours already carry (1 when not
@@ -773,6 +776,11 @@ pub struct Renderer {
     /// Windfoil's subpixel pipeline for the window (`variant::Lcd`), and whether this frame's
     /// text draws subpixel masks.
     lcd: variant::Lcd,
+    /// The frame pass's pipelines pinned to one kind each (`variant::PINNED`), made at the first prepare
+    /// after the shader or format changes; empty where there's no bytecode for them.
+    pinned: Option<Vec<Option<wgpu::RenderPipeline>>>,
+    /// Each instance's kind (`params[1]`), as batched: where a run of one kind starts and ends.
+    kinds: Vec<u8>,
     lcd_frame: bool,
     /// The window's wake, for work a frame starts on another thread (set_frame_wake).
     frame_wake: Option<std::sync::Arc<crate::live::Wake>>,
@@ -984,7 +992,12 @@ impl Renderer {
         if range.is_empty() {
             return;
         }
-        pass.set_pipeline(self.draw_pipeline(format, target));
+        let frame_pipeline = self.draw_pipeline(format, target);
+        pass.set_pipeline(frame_pipeline);
+        // The pinned pipelines draw the frame pass's runs of one kind (`variant::PINNED`), in paint order:
+        // only where the frame's own pipeline would draw (not a layer target, an additive layer or subpixel text).
+        let pinned = self.pinned.as_deref().filter(|p| !p.is_empty() && std::ptr::eq(frame_pipeline, &self.pipeline) && target.is_none() && format == self.format);
+        let mut bound = frame_pipeline;
         if let Some(properties) = &self.springs { pass.set_bind_group(1, &properties.group, &[]); }
         pass.set_vertex_buffer(0, self.instances.slice(..));
         let start = self.image_batches.partition_point(|(batch, _)| batch.end <= range.start);
@@ -1014,11 +1027,19 @@ impl Renderer {
                 }
                 continue;
             }
-            pass.draw(0..4, batch.start.max(range.start)..batch.end.min(range.end));
+            let span = batch.start.max(range.start)..batch.end.min(range.end);
+            let Some(pinned) = pinned else { pass.draw(0..4, span); continue };
+            for run in kind_runs(&self.kinds, span) {
+                let kind = self.kinds[run.start as usize];
+                let pipeline = variant::PINNED.iter().position(|&k| k == u32::from(kind)).and_then(|at| pinned[at].as_ref()).unwrap_or(&self.pipeline);
+                if !std::ptr::eq(pipeline, bound) { pass.set_pipeline(pipeline); bound = pipeline; }
+                pass.draw(0..4, run);
+            }
         }
     }
 
     /// The format of the target the renderer was built for (`draw_range` with this format).
+
     pub fn format(&self) -> wgpu::TextureFormat { self.format }
 
     /// Frame-profile builds: whether `RUNE_CUT` (a comma list) leaves `name` out of every frame,
@@ -1411,4 +1432,16 @@ fn report_gpu_allocations(device: wgpu::Device) {
         }
         out
     });
+}
+
+/// `span` split into runs of instances of one kind (`kinds` by instance).
+fn kind_runs(kinds: &[u8], span: std::ops::Range<u32>) -> impl Iterator<Item = std::ops::Range<u32>> + '_ {
+    let mut at = span.start;
+    std::iter::from_fn(move || {
+        if at >= span.end { return None; }
+        let kind = kinds.get(at as usize).copied();
+        let start = at;
+        while at < span.end && kinds.get(at as usize).copied() == kind { at += 1; }
+        Some(start..at)
+    })
 }

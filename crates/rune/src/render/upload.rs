@@ -245,6 +245,8 @@ impl Renderer {
             self.build_special(device);
             if self.special.is_some() { self.special_kinds = instances.iter().map(|i| i.params[1] as u8).collect(); }
         }
+        // The pinned pipelines (`variant::pinned_pipelines`): on Windows the first prepare is the warm frame, before the hand-over.
+        if self.pinned.is_none() { self.pinned = Some(self.pinned_pipelines(device)); }
         let staging = self.uploads.staging(device, queue);
         if staging.lost() != self.uploads.lost.0 {
             self.uploads.lost.0 = staging.lost();
@@ -421,6 +423,8 @@ impl Renderer {
     /// and whether they hold a layer.
     fn batch(&mut self, instances: &[Instance]) {
         self.image_batches.clear();
+        self.kinds.clear();
+        self.kinds.extend(instances.iter().map(|i| i.params[1] as u8));
         let (mut start, mut bind) = (0, BatchBind::Image(0));
         let mut has_layers = false;
         self.effects.clear();

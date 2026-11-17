@@ -43,6 +43,20 @@ fn fs(i: Out) -> DualOut {
 }
 "#;
 
+/// The kinds the frame pass has a pipeline of its own for (`KIND_RECT`, `KIND_SHADOW`, `KIND_GLYPH`):
+/// what most of a frame's fragments draw.
+pub(crate) const PINNED: [u32; 3] = [0, 1, 2];
+
+/// shader.wgsl's marker for the kind a fragment draws: -1, every kind.
+const PINNED_OFF: &str = "const PINNED_KIND: f32 = -1.0;";
+
+/// Windfoil's WGSL with its fragment entry pinned to `kind` (shader.wgsl `fragment_kind`): the
+/// compiler drops every other kind's code. The vertex stage is unchanged.
+pub(crate) fn pinned_wgsl(kind: u32) -> Option<String> {
+    let windfoil = windfoil_wgsl();
+    (windfoil.matches(PINNED_OFF).count() == 1).then(|| windfoil.replacen(PINNED_OFF, &format!("const PINNED_KIND: f32 = {kind}.0;"), 1))
+}
+
 /// outline.wgsl's switch for subpixel outline glyphs, off but in the subpixel variant.
 const SUBPIXEL_OFF: &str = "const OUTLINE_SUBPIXEL: bool = false;";
 
@@ -349,6 +363,29 @@ impl Renderer {
         Ok(())
     }
 
+    /// Compiles the pipeline pinned to `KIND_*` `kind` (`pinned_wgsl`) from WGSL now, so wgpu logs
+    /// its HLSL (`regen_dxbc`): it bypasses the shipped bytecode.
+    #[doc(hidden)]
+    pub fn compile_pinned_now(&mut self, device: &wgpu::Device, kind: u32) -> Result<(), String> {
+        let wgsl = pinned_wgsl(kind).ok_or("shader.wgsl's PINNED_KIND moved")?;
+        let (layout, format, entry) = (self.layout.clone(), self.format, self.vertex_entry);
+        compile(device, &wgsl, |shader| Self::pipeline(device, &layout, shader, format, entry, Blend::SourceOver))?;
+        Ok(())
+    }
+
+    /// The frame pass's pipelines pinned to one kind each (`PINNED`), from the shipped bytecode:
+    /// Windows renderers drawing Windfoil from its precompiled shader. Anywhere else, or when the
+    /// bytecode doesn't match, none: every kind draws with the one shader, as before. Never from
+    /// WGSL, which takes FXC tens of seconds each.
+    pub(super) fn pinned_pipelines(&self, device: &wgpu::Device) -> Vec<Option<wgpu::RenderPipeline>> {
+        #[cfg(target_os = "windows")]
+        if matches!(self.uber, Uber::Windfoil { source: Source::Precompiled, .. }) && self.vertex_entry == "vs" {
+            return PINNED.iter().map(|&kind| dxbc::uber_pinned(device, kind, |shader| Self::pipeline(device, &self.layout, shader, self.format, "vs", Blend::SourceOver)).map(|(_, p)| p)).collect();
+        }
+        let _ = device;
+        Vec::new()
+    }
+
     /// Takes `built` as the renderer's shader: every pipeline again from it. Bind groups follow
     /// once the outline texture exists (`rebind_all`).
     fn adopt(&mut self, device: &wgpu::Device, built: Built) {
@@ -364,6 +401,7 @@ impl Renderer {
         // Built on the old bind layout; made again at the next backdrop blur and subpixel frame.
         self.backdrop_blur = None;
         self.lcd = Lcd::Unbuilt;
+        self.pinned = None;
     }
 }
 
