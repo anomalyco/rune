@@ -121,9 +121,13 @@ impl<S: 'static> Host<S> {
                 RestEffect::GiveBackAll => self.give_back(true),
                 // Polled once, without waiting: the GPU finished with it long ago, and without a
                 // poll wgpu frees it only at the next frame.
+                // The kept last frame is Windows' only (`render::damaged`, partial presents).
+                #[cfg(target_os = "windows")]
                 RestEffect::GiveBackKept => if let Some((gpu, renderer)) = &self.gpu && renderer.give_back_kept() {
                     let _ = gpu.device.poll(wgpu::PollType::Poll);
                 },
+                #[cfg(not(target_os = "windows"))]
+                RestEffect::GiveBackKept => {}
                 #[cfg(target_os = "windows")]
                 RestEffect::DropThirdBuffer => self.depth_step(super::depth::DepthEvent::Unseen { now: Instant::now() }),
                 #[cfg(not(target_os = "windows"))]
@@ -139,6 +143,7 @@ impl<S: 'static> Host<S> {
         if let Some(f) = self.on_rest { self.rt.update_if(f); }
         if let Some((gpu, renderer)) = &mut self.gpu {
             renderer.give_back(all, &mut self.rt.text.atlas.resident_caches);
+            #[cfg(target_os = "windows")]
             if all { renderer.give_back_kept(); }
             // Out of sight, what the last frame used goes too, and the staging chunks: an empty
             // submission and a wait land those frees now. At an idle rest the device isn't
