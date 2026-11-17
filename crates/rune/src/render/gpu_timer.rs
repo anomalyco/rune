@@ -153,6 +153,8 @@ impl GpuTimer {
             let first = (0..passes.len()).map(|i| ticks[2 * i]).filter(|&t| t != 0).min().unwrap_or(0);
             let last = (0..passes.len()).map(|i| ticks[2 * i + 1]).max().unwrap_or(0);
             let line = serde_json::json!({ "frame": slot.frame.load(Ordering::Relaxed), "t": slot.submitted.load(Ordering::Relaxed), "span_us": (us(last.saturating_sub(first)) * 10.0).round() / 10.0,
+                // The GPU clock's own times of the frame's first pass start and last end: the gap before a frame is the GPU's idle time.
+                "gpu_start_us": (us(first) * 10.0).round() / 10.0, "gpu_end_us": (us(last) * 10.0).round() / 10.0,
                 "kinds": kinds, "passes": passes.len(), "bytes": passes.iter().map(|p| p.1).sum::<u64>(), "by": list });
             let mut out = self.out.lock().unwrap_or_else(|e| e.into_inner());
             let _ = writeln!(out, "{line}");
