@@ -306,8 +306,10 @@ fn status_slot<S: 'static>(look: SlotLook, st: &Strip<S>, id: &str, k: &Kit) -> 
         Some(s) if !icon_only => Some(el().size(DOT, DOT).radius(DOT / 2.0).fill(dot_color(Some(s), k))),
         _ => None,
     };
-    // A busy icon-only tab that isn't active keeps spinning over its avatar instead of closing.
-    let close = closable && !(icon_only && busy && !active);
+    // An icon-only tab that isn't active has no close button, even under the pointer: a press
+    // on it selects it (`tab-nav.css`'s `@container (max-width: 44px)`); a busy one keeps
+    // spinning over its avatar. A middle click still closes it.
+    let close = closable && !(icon_only && !active);
     if mark.is_none() && !close {
         return None;
     }
@@ -374,6 +376,7 @@ fn handlers<S: 'static>(mut slot: El, id: &str, at: &Place, closable: bool, st: 
     let (access, lane, vertical) = (st.access, at.lane, at.width.is_none());
     let lock = at.width.filter(|_| st.horizontal_lock).unwrap_or(0.0);
     let select_early = st.select_on_drag_start;
+    let active = at.active;
     let reveal = (st.scroll_key.clone(), format!("t-{id}"));
     if let Some(close) = h.close.clone().filter(|_| closable) {
         let id = id.to_owned();
@@ -425,11 +428,20 @@ fn handlers<S: 'static>(mut slot: El, id: &str, at: &Place, closable: bool, st: 
         match d.phase {
             Phase::Down => {
                 access(s).press(&lane, [d.x, d.y], super::auto_scroll::offset(&auto, vertical));
-                if select_early && let Some(f) = &select {
-                    f(s, &id, tx);
-                    tx.scroll_into_view_in(reveal.0.clone(), reveal.1.clone());
+                // The button going down switches to the tab, in this frame (`tab-nav.tsx`'s
+                // `onMouseDown`); a press on the selected tab changes nothing that shows.
+                match &select {
+                    Some(f) if select_early && !active => {
+                        f(s, &id, tx);
+                        tx.scroll_into_view_in(reveal.0.clone(), reveal.1.clone());
+                    }
+                    Some(_) if select_early => tx.live_only(),
+                    _ => {}
                 }
             }
+            // A strip that neither reorders nor lets a tab tear out (`TabStrip::tear_out`) only
+            // selects: its tabs stay put under a drag.
+            Phase::Move if reorder.is_none() && lane.tear.is_none() => tx.live_only(),
             Phase::Move => {
                 // Near an end the strip scrolls under the dragged tab, which keeps to the pointer.
                 if access(s).reordering() {

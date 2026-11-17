@@ -80,7 +80,9 @@ winit = { path = "vendor/winit" }
 parley_engine = { path = "vendor/parley_engine" }
 # accesskit_windows as published plus `vendor/accesskit_windows.patch`: headings and landmarks reach
 # UI Automation (HeadingLevel, LandmarkType, LocalizedLandmarkType), which Narrator's and NVDA's
-# heading and landmark navigation read. Re-made by `scripts/vendor-accesskit-windows.sh <version>`
+# heading and landmark navigation read; and a field past Rune's 64 KiB text-run limit keeps its text
+# pattern, its lines answered from its value when a reader asks (`src/long_text.rs`). Re-made by
+# `scripts/vendor-accesskit-windows.sh <version>`
 # when AccessKit is bumped; apps that build Rune patch it too.
 accesskit_windows = { path = "vendor/accesskit_windows" }
 # accesskit_macos as published plus `vendor/accesskit_macos.patch`: headings reach NSAccessibility as
@@ -88,7 +90,8 @@ accesskit_windows = { path = "vendor/accesskit_windows" }
 # knows), so VoiceOver's rotor and VO-Command-H find them and say their level; and the accessibility
 # children, focused element and hit test leave the adapter alone off the main thread, which AppKit
 # calls them on while the process queries itself, so they answer from the superclass instead of
-# racing or panicking on the main thread's borrow. Re-made by
+# racing or panicking on the main thread's borrow; and a field past Rune's 64 KiB text-run limit keeps
+# its line, string and selection ranges, answered from its value when a reader asks. Re-made by
 # `scripts/vendor-accesskit-macos.sh <version>` when AccessKit is bumped; apps that build Rune patch it too.
 accesskit_macos = { path = "vendor/accesskit_macos" }
 

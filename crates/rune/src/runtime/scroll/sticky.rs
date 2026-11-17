@@ -411,7 +411,7 @@ impl<S: 'static> Runtime<S> {
             inherit_fade(&mut widths, &mut origins, r, clip.map(|v| v * self.inh_scratch[i].scale * self.env.scale));
         }
         if self.row_mask[i] >= 0.0 {
-            inherit_fade(&mut widths, &mut origins, r, [0.0, 0.0, 0.0, self.row_mask[i] * self.env.scale]);
+            inherit_fade(&mut widths, &mut origins, r, [0.0, 0.0, 0.0, self.growth_feather(i)]);
         }
         // An isolation layer already consumed the parent's paint fade. Its descendants
         // must not apply that same fade a second time.

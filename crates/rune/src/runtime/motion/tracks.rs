@@ -58,6 +58,7 @@ impl<S: 'static> Runtime<S> {
         self.grow_acc -= steps as f32 * SUBSTEP;
         let now = self.t;
         let mut moving = false;
+        let mut placed = false;
         let (mut restored, mut gave) = (Vec::new(), Vec::new());
         for (cid, stack) in self.stacks.iter_mut() {
             let Some(&ci) = self.node_index.get(cid) else { continue };
@@ -118,9 +119,13 @@ impl<S: 'static> Runtime<S> {
             stack.slides.keep(&stack.order);
             stack.growing = st_growing;
             stack.moving = st_moving;
+            placed |= stack.handoff.place(&mut self.grows, &mut self.scene, &self.nodes, &self.node_index, &mut self.scrolls);
             // Keep the shared clock awake through the hold. No timer thread or remeasurement.
             moving |= st_moving;
         }
+        // Growth steps after Scene::frame. Scroll follow and painting must see this step's
+        // shared edge, even in a viewport with no scroll-offset callback to present it.
+        if placed { self.scene.present(); }
         for (ci, id, r) in restored { self.restore_above(ci, id, r); }
         for (id, d) in gave { self.lower_hold(id, d); }
         moving
