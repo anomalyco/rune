@@ -6,6 +6,7 @@ impl<S: 'static> Runtime<S> {
         let (_paint_time, _blend) = (crate::frame::profile::Scope::new(crate::frame::profile::Phase::Paint), crate::theme::scope(self.srgb_blend));
         let s = self.env.scale;
         let snap_px = |v: f32| grid(v, s) * s;
+        if std::env::var("RUNE_TEXT2_TIE").is_ok_and(|v| v == "2") { static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0); eprintln!("TEXT2FRAME n={}", N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)); }
         self.keep_swap();
         self.instances.clear();
         self.quads_frame += 1;
