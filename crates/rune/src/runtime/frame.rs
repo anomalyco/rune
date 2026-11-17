@@ -607,7 +607,7 @@ impl<S: 'static> Runtime<S> {
                     tx.commit = Commit::Animate;
                     tx.unprompted = false;
                     tx.asked_motion = false;
-                    tx.live_growth.clear();
+                    tx.live_growth.clear(); tx.tail_rooms.clear();
                     tx.motion = None;
                     tx.color_motion = None;
                     tx.follow_edge = false;

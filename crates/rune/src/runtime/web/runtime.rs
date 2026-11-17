@@ -37,10 +37,39 @@ fn context_window(edit: &crate::TextEdit) -> (usize, &str, u32, u32) {
     (start, &edit.text[start..end], anchor, focus)
 }
 
+/// UTF-16 units a window may grow by at each end to take in the rest of a line it cuts.
+const LINE_MORE: usize = 2048;
+
+/// `window` grown to whole lines at either end, where the line it cuts ends within
+/// [`LINE_MORE`] more units: a screen reader reads the page's field a line at a time, so the
+/// caret's lines are whole however long the draft. A longer line stays cut.
+fn whole_lines<'a>(edit: &'a crate::TextEdit, (start, text, anchor, focus): (usize, &'a str, u32, u32)) -> (usize, &'a str, u32, u32) {
+    let s = edit.text.as_str();
+    let end = start + text.len();
+    // Only as far back and on as could be taken in (4 bytes a unit at most).
+    let from = s.floor_char_boundary(start.saturating_sub(LINE_MORE * 4));
+    let head = match s[from..start].rfind('\n') {
+        Some(p) => from + p + 1,
+        None if from == 0 => 0,
+        None => start,
+    };
+    let to = s.ceil_char_boundary((end + LINE_MORE * 4).min(s.len()));
+    let tail = match s[end..to].find('\n') {
+        Some(p) => end + p,
+        None if to == s.len() => to,
+        None => end,
+    };
+    let units = |a: usize, b: usize| s[a..b].encode_utf16().count();
+    let head = if units(head, start) <= LINE_MORE { head } else { start };
+    let tail = if units(end, tail) <= LINE_MORE { tail } else { end };
+    let shift = units(head, start) as u32;
+    (head, &s[head..tail], anchor + shift, focus + shift)
+}
+
 impl Mirror {
     fn update(&mut self, key: &str, edit: Option<&crate::TextEdit>) -> bool {
         let secure = edit.is_some_and(|e| e.is_secure());
-        let (base, text, anchor, focus) = edit.filter(|_| !secure).map(context_window).unwrap_or((0, "", 0, 0));
+        let (base, text, anchor, focus) = edit.filter(|_| !secure).map(|e| whole_lines(e, context_window(e))).unwrap_or((0, "", 0, 0));
         if self.key == key && self.base == base && self.text == text && self.anchor == anchor
             && self.focus == focus && self.secure == secure { return false; }
         self.key.clear(); self.key.push_str(key);

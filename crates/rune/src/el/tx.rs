@@ -42,7 +42,8 @@ pub struct Tx {
     /// A handler called [`Self::animated`].
     pub(crate) asked_motion: bool,
     /// Virtual growth stacks whose visible tail may grow for this commit alone.
-    pub(crate) live_growth: Vec<String>,
+    pub(crate) live_growth: Vec<(String, bool)>, // selector, carry row ink
+    pub(crate) tail_rooms: Vec<(String, String, String)>,
     /// A resting poll changed the model but hasn't committed its tree yet.
     pub(crate) polled_change: bool,
     pub(crate) color_motion: Option<Spring>,

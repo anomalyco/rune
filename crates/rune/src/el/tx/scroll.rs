@@ -17,8 +17,32 @@ impl Tx {
     /// layout or chrome. A reader scrolled away, a resizing viewport, reduced motion, the
     /// first paint and an explicit `instant()` or `settle()` still land.
     pub fn grow_visible_tail(&mut self, stack: impl Into<String>) {
+        self.request_live_growth(stack.into(), false);
+    }
+
+    /// Like [`Self::grow_visible_tail`], but a row crossing a neighbour also carries its
+    /// changing paint and child exits. A resizing row carries its inset, and a stationary
+    /// neighbour can round its joined corners. This applies only to this live commit.
+    pub fn grow_visible_tail_with_ink(&mut self, stack: impl Into<String>) {
+        self.request_live_growth(stack.into(), true);
+    }
+
+    pub(crate) fn request_live_growth(&mut self, stack: String, ink: bool) {
+        if let Some((_, carry)) = self.live_growth.iter_mut().find(|(key, _)| *key == stack) {
+            *carry |= ink;
+        } else {
+            self.live_growth.push((stack, ink));
+        }
+    }
+
+    /// A newly delivered `row` in `stack` takes room from a panel immediately below its
+    /// viewport. If the panel gives the viewport exactly the height it loses, move that
+    /// shared edge on the incoming row's growth, not a second spring. Otherwise the usual
+    /// `grow_visible_tail` rules apply. `panel` names its occupied space, excluding overlaps.
+    pub fn grow_visible_tail_from(&mut self, stack: impl Into<String>, row: impl Into<String>, panel: impl Into<String>) {
         let stack = stack.into();
-        if !self.live_growth.contains(&stack) { self.live_growth.push(stack); }
+        self.grow_visible_tail(stack.clone());
+        self.tail_rooms.push((stack, row.into(), panel.into()));
     }
 
     /// Reveal a keyed row, including a currently unrealized virtual row. It scrolls the nearest

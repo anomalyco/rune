@@ -137,6 +137,14 @@ pub(crate) fn selectable_item(role: Role) -> bool {
     matches!(role, Role::ListBoxOption | Role::ListItem | Role::Tab | Role::TreeItem | Role::GridCell | Role::Row | Role::MenuListOption)
 }
 
+/// Controls a reader hears as one thing: Chromium makes the content of a button, checkbox, radio
+/// button, switch, tab and option one leaf (ARIA's "children presentational"), and a link's or a
+/// menu item's text is its name.
+pub(crate) fn leaf_control(role: Role) -> bool {
+    matches!(role, Role::Button | Role::DefaultButton | Role::Link | Role::CheckBox | Role::RadioButton | Role::Switch
+        | Role::Tab | Role::MenuItem | Role::MenuItemCheckBox | Role::MenuItemRadio | Role::ListBoxOption)
+}
+
 /// Roles that take their name from the text inside them through AccessKit itself.
 pub(crate) fn named_by_accesskit(role: Role) -> bool {
     matches!(role, Role::Button | Role::CheckBox | Role::Link | Role::MenuItem | Role::RadioButton)

@@ -74,6 +74,7 @@ impl<S: 'static> Runtime<S> {
             let header = self.fold_headers.get(&self.nodes[ri].id).and_then(|p| self.path_ids.get(p)).and_then(|id| self.node_index.get(id));
             if let Some(&h) = header.filter(|&&h| h > ri && h < k) { self.row_dy[h] += lift; }
         }
+        self.place_joined_rows();
         if !self.fold_headers.is_empty() {
             let lifted: Vec<NodeId> = self.row_lifts.iter().map(|&(ri, _)| self.nodes[ri].id).collect();
             self.fold_headers.retain(|id, _| lifted.contains(id));

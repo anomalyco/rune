@@ -467,6 +467,7 @@ pub(super) struct Stack {
     pub(super) window: (f32, f32),
     /// The list viewport in the last layout, apart from the window (e.g. above a dock).
     pub(super) viewport_height: f32,
+    pub(super) handoff: row_reorder::handoff::Handoff,
     /// How far its rows grew (positive steps only) this frame.
     pub(super) grown: f32,
     /// Whether any row in the stack still has height left to grow.
@@ -474,6 +475,7 @@ pub(super) struct Stack {
     /// Whether any row in the stack is still animating.
     pub(crate) moving: bool,
     pub(super) reorder: row_reorder::Reorder,
+    pub(super) seams: Vec<row_reorder::joined::Seam>,
     pub(super) slides: content_slide::ContentSlides,
     /// Fold rows opening or shutting together as one block.
     pub(super) runs: Vec<growth_runs::GrowthRun>,
