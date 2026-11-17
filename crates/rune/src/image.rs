@@ -152,6 +152,11 @@ const INLINE_RGBA_PIXELS: u64 = 64 * 64;
 
 /// The process's decoder threads, shared by every cache and started by the first image to
 /// decode: an app that makes a cache per feature, or shows no image, pays no thread for it.
+/// Stack size of each `rune-images` worker thread: `MAX_SVG_DEPTH` (512 nested SVG containers,
+/// ~2.3 MiB in `usvg` + `resvg` on an LTO build) leaves > 5.5 MiB of headroom. Address space only.
+#[cfg(not(target_arch = "wasm32"))]
+const WORKER_STACK: usize = 8 * 1024 * 1024;
+
 /// The caller starts one; that one starts the others, so the first image (often in a window's
 /// first frame) costs its thread one spawn, not four.
 #[cfg(not(target_arch = "wasm32"))]
@@ -163,10 +168,10 @@ fn decoders() -> &'static mpsc::Sender<Job> {
         let receive = Arc::new(Mutex::new(receive));
         let count = DECODERS.min(std::thread::available_parallelism().map_or(1, |n| n.get()));
         let first = receive.clone();
-        std::thread::Builder::new().name("rune-images".into()).spawn(move || {
+        std::thread::Builder::new().name("rune-images".into()).stack_size(WORKER_STACK).spawn(move || {
             for _ in 1..count {
                 let receive = receive.clone();
-                let _ = std::thread::Builder::new().name("rune-images".into()).spawn(move || decode_jobs(&receive));
+                let _ = std::thread::Builder::new().name("rune-images".into()).stack_size(WORKER_STACK).spawn(move || decode_jobs(&receive));
             }
             decode_jobs(&first);
         }).expect("image worker");
@@ -488,13 +493,32 @@ fn linux_icon(path: &std::path::Path, px: u32) -> Result<(u32, u32, Vec<u8>), Im
     Ok((image.width(), image.height(), image.into_raw()))
 }
 
+/// Maximum nested XML container elements inside an SVG's root element (513 open elements in all,
+/// matching Blink's 512-element HTML/SVG tree bound; Chromium's standalone XML limit of 5,000
+/// exceeds both `usvg`'s 1,024 node cap and a worker stack at ~4.5 KiB per `<g>`).
+#[cfg(feature = "svg")]
+const MAX_SVG_DEPTH: usize = 512;
+
 /// An SVG scaled to fit `px` square, keeping its aspect ratio, as straight-alpha sRGB RGBA8.
 /// `px == 0` rasterizes at twice the drawing's own size, at most 4096 pixels per side.
 #[cfg(feature = "svg")]
 pub(crate) fn svg_rgba(bytes: &[u8], px: u32) -> Result<(u32, u32, Vec<u8>), ImageError> {
     use resvg::{tiny_skia, usvg};
-    if bytes.len() > 32 << 20 { return Err(ImageError("SVG is too large".into())); }
-    let tree = usvg::Tree::from_data(bytes, &usvg::Options::default()).map_err(|e| ImageError(format!("SVG: {e}")))?;
+    const MAX_BYTES: usize = 32 << 20;
+    if bytes.len() > MAX_BYTES { return Err(ImageError("SVG is too large".into())); }
+    let unzipped;
+    let raw = if bytes.starts_with(&[0x1f, 0x8b]) {
+        unzipped = usvg::decompress_svgz(bytes).map_err(|e| ImageError(format!("SVG: {e}")))?;
+        if unzipped.len() > MAX_BYTES { return Err(ImageError("SVG is too large".into())); }
+        unzipped.as_slice()
+    } else {
+        bytes
+    };
+    let text = std::str::from_utf8(raw).map_err(|_| ImageError("SVG is not UTF-8".into()))?;
+    if svg_exceeds_depth(text, MAX_SVG_DEPTH) {
+        return Err(ImageError(format!("SVG exceeds maximum nesting depth of {MAX_SVG_DEPTH}")));
+    }
+    let tree = usvg::Tree::from_str(text, &usvg::Options::default()).map_err(|e| ImageError(format!("SVG: {e}")))?;
     let size = tree.size();
     let px = if px == 0 { (size.width().max(size.height()) * 2.0).ceil().clamp(1.0, 4096.0) as u32 } else { px };
     let k = px as f32 / size.width().max(size.height());
@@ -505,6 +529,87 @@ pub(crate) fn svg_rgba(bytes: &[u8], px: u32) -> Result<(u32, u32, Vec<u8>), Ima
         let c = p.demultiply();
         [c.red(), c.green(), c.blue(), c.alpha()]
     }).collect()))
+}
+
+/// Iterative byte scan for open XML element depth, run before `roxmltree` so deeply nested input
+/// cannot overflow the decoder stack inside the XML parser or `usvg`/`resvg`.
+#[cfg(feature = "svg")]
+fn svg_exceeds_depth(text: &str, max_nested: usize) -> bool {
+    let b = text.as_bytes();
+    let limit = max_nested + 1;
+    let (mut i, mut depth) = (0usize, 0usize);
+    while i < b.len() {
+        let Some(rel) = b[i..].iter().position(|&c| c == b'<') else { return false };
+        i += rel;
+        if b[i..].starts_with(b"<!--") {
+            i += 4;
+            let Some(end) = b[i..].windows(3).position(|w| w == b"-->") else { return false };
+            i += end + 3;
+        } else if b[i..].starts_with(b"<![CDATA[") {
+            i += 9;
+            let Some(end) = b[i..].windows(3).position(|w| w == b"]]>") else { return false };
+            i += end + 3;
+        } else if b[i..].starts_with(b"<?") {
+            i += 2;
+            let Some(end) = b[i..].windows(2).position(|w| w == b"?>") else { return false };
+            i += end + 2;
+        } else if b[i..].starts_with(b"<!") {
+            i += 2;
+            let (mut decl, mut quote) = (1usize, 0u8);
+            while i < b.len() && decl > 0 {
+                let c = b[i];
+                if quote != 0 {
+                    if c == quote { quote = 0; }
+                } else if c == b'"' || c == b'\'' {
+                    quote = c;
+                } else if c == b'<' {
+                    decl += 1;
+                } else if c == b'>' {
+                    decl -= 1;
+                }
+                i += 1;
+            }
+        } else if b[i..].starts_with(b"</") {
+            i += 2;
+            depth = depth.saturating_sub(1);
+            let mut quote = 0u8;
+            while i < b.len() {
+                let c = b[i];
+                i += 1;
+                if quote != 0 {
+                    if c == quote { quote = 0; }
+                } else if c == b'"' || c == b'\'' {
+                    quote = c;
+                } else if c == b'>' {
+                    break;
+                }
+            }
+        } else {
+            i += 1;
+            let (mut quote, mut last_non_ws, mut closed) = (0u8, 0u8, false);
+            while i < b.len() {
+                let c = b[i];
+                i += 1;
+                if quote != 0 {
+                    if c == quote { quote = 0; }
+                } else if c == b'"' || c == b'\'' {
+                    quote = c;
+                    last_non_ws = c;
+                } else if c == b'>' {
+                    closed = true;
+                    break;
+                } else if !c.is_ascii_whitespace() {
+                    last_non_ws = c;
+                }
+            }
+            if !closed { return false; }
+            if last_non_ws != b'/' {
+                depth += 1;
+                if depth > limit { return true; }
+            }
+        }
+    }
+    false
 }
 
 #[cfg(not(feature = "svg"))]
