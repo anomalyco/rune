@@ -155,6 +155,12 @@ impl WindowOptions {
             .with_window_level(if self.always_on_top { WindowLevel::AlwaysOnTop } else { WindowLevel::Normal });
         if let Some((w, h)) = self.max_size { attrs = attrs.with_max_inner_size(LogicalSize::new(w, h)); }
         if let Some((x, y)) = self.position { attrs = attrs.with_position(PhysicalPosition::new(x, y)); }
+        // Measuring only: `RUNE_WINDOW_AT=x,y` opens the window there (physical px), so a timing
+        // run can show it away from the owner's cursor from its first frame.
+        #[cfg(feature = "frame-profile")]
+        if let Some((x, y)) = std::env::var("RUNE_WINDOW_AT").ok().and_then(|v| { let (x, y) = v.split_once(',')?; Some((x.trim().parse::<i32>().ok()?, y.trim().parse::<i32>().ok()?)) }) {
+            attrs = attrs.with_position(PhysicalPosition::new(x, y));
+        }
         if let Some((w, h)) = self.physical_size { attrs = attrs.with_inner_size(PhysicalSize::new(w, h)); }
         attrs
     }
