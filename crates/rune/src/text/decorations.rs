@@ -86,7 +86,7 @@ impl TextSystem {
                 if ink == 0 {
                     continue;
                 }
-                let Some(s) = spans.get(ink as usize - 1) else { continue };
+                let Some(s) = spans.iter().filter(|s| s.affects_layout()).nth(ink as usize - 1) else { continue };
                 let x0 = origin[0] + gr.offset();
                 let w = gr.advance();
                 if let Some(bg) = s.bg {

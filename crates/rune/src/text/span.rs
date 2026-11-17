@@ -2,7 +2,8 @@
 
 use super::*;
 
-/// Brush carried through Parley: 0 is the element's own colour, n is `spans[n - 1]`.
+/// Brush carried through Parley: 0 is unspanned, n is the nth layout-affecting span; glyph
+/// colour is resolved from [`TextSystem::set_glyph_inks`] at emission.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Ink(pub u16);
 
@@ -57,6 +58,34 @@ impl Span {
     pub fn color(mut self, color: Color) -> Span {
         self.color = Some(color);
         self
+    }
+
+    /// Whether this span changes shaping, line metrics or painted decorations (`decorations.rs`),
+    /// rather than glyph ink alone.
+    pub(crate) fn affects_layout(&self) -> bool {
+        self.weight.is_some()
+            || self.mono
+            || self.size.is_some()
+            || self.italic
+            || self.bg.is_some()
+            || self.underline.is_some()
+    }
+
+    /// What [`Self::affects_layout`] depends on, hashed into a layout's key.
+    pub(crate) fn hash_layout(&self, h: &mut impl std::hash::Hasher) {
+        use std::hash::Hash;
+        (
+            self.start,
+            self.end,
+            self.mono,
+            self.weight.map(f32::to_bits),
+            self.size.map(f32::to_bits),
+            self.italic,
+            self.bg.is_some(),
+            self.bg.map(|_| self.bg_pad.to_bits()),
+            self.underline.is_some(),
+        )
+            .hash(h);
     }
 
     /// A rounded `color` background padded by `pad` points, as inline code draws.

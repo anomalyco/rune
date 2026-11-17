@@ -1,0 +1,1 @@
+- Colour-only `Span`s stay out of `text_hash` and the shaped-layout cache key, and resolve each glyph's ink from its cluster's first byte at emission (before mask dilation and gamma lookup), so search highlights and syntax spans reuse existing shaped and truncated layouts without reshaping.

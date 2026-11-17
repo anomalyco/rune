@@ -251,8 +251,10 @@ pub struct TextSystem {
     pub shaped: u32,
     /// Layouts re-broken at a new width from an earlier shaping, a running count.
     pub rebroken: u32,
-    /// Reused across lines and frames when mapping reveal glyphs back to source bytes.
-    cluster_scratch: Vec<(f32, u32)>,
+    /// Reused across lines and frames when mapping glyphs back to cluster start bytes.
+    cluster_scratch: Vec<u32>,
+    /// Byte ranges `(start, end, ink)` of coloured spans set by [`Self::set_glyph_inks`].
+    ink_spans: Vec<(u32, u32, u16)>,
     coords_scratch: Vec<i16>,
     traks: Traks,
     /// The mode glyphs draw in: [`Self::requested`]'s, or its grayscale twin while subpixel
@@ -381,6 +383,7 @@ impl TextSystem {
             shaped: 0,
             rebroken: 0,
             cluster_scratch: Vec::new(),
+            ink_spans: Vec::new(),
             coords_scratch: Vec::new(),
             traks: Traks::new(),
             smoothing: FontSmoothing::default(),
@@ -490,6 +493,8 @@ impl TextSystem {
     pub fn set_glyph_inks(&mut self, element: Color, spans: &[Span]) {
         self.apple.set_inks(element, spans);
         self.windows.set_inks(element, spans);
+        self.ink_spans.clear();
+        self.ink_spans.extend(spans.iter().enumerate().filter(|(_, s)| s.start < s.end && s.color.is_some()).map(|(i, s)| (s.start, s.end, i as u16 + 1)));
     }
 
     /// Whether glyphs rasterise with DirectWrite: `FontSmoothing::DirectWrite` where it exists.
@@ -587,6 +592,7 @@ impl TextSystem {
         let wake = self.mask_cache_frame(true);
         self.paths.begin_frame();
         self.glyph_cache.begin_frame();
+        self.ink_spans.clear();
         if self.color_bytes > COLOR_GLYPH_BUDGET {
             let before = self.color_glyphs.len();
             self.color_glyphs.retain(|_, c| c.used);
@@ -848,12 +854,17 @@ impl TextSystem {
             if base_spacing != 0.0 {
                 b.push_default(StyleProperty::LetterSpacing(base_spacing));
             }
+            let mut layout_span = 0u16;
             for (i, s) in spans.iter().enumerate() {
+                if !s.affects_layout() {
+                    continue;
+                }
+                layout_span += 1;
                 let r = span_range(s);
                 if r.is_empty() {
                     continue;
                 }
-                b.push(StyleProperty::Brush(Ink(i as u16 + 1)), r.clone());
+                b.push(StyleProperty::Brush(Ink(layout_span)), r.clone());
                 if s.mono {
                     b.push(FontFamily::from(mono.as_slice()), r.clone());
                     b.push(StyleProperty::FontFeatures(unligated.as_slice().into()), r.clone());
