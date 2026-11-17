@@ -103,6 +103,9 @@ impl BlockMap {
 pub(super) struct Builder {
     /// Open containers: (kind, blocks so far, maps so far).
     stack: Vec<(Container, Vec<Block>, Vec<BlockMap>)>,
+    quote_nested: Vec<bool>,
+    list_slots: Vec<ListSlot>,
+    item_nested: Vec<bool>,
     inline: Option<(InlineKind, Inline, Vec<Open>, SpanMap)>,
     code: Option<(String, Fence, SpanMap)>,
     /// The source range of the last paragraph started at the root.
@@ -189,6 +192,18 @@ pub(super) struct Open {
     url: Option<String>,
 }
 
+/// Maximum open HTML container elements inside a Markdown block, matching Chromium's
+/// 512-element HTML parser cap after `<html>` and `<body>` in `DOMParser`: 255 nested lists
+/// (`<ul><li>` / `<ol><li>`) or 510 nested `<blockquote>`s.
+const MAX_CONTAINER_DEPTH: usize = 510;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ListSlot {
+    Nested,
+    SiblingItems,
+    InlineBlocks,
+}
+
 enum Container {
     Root,
     Quote,
@@ -205,11 +220,25 @@ enum InlineKind {
 }
 
 impl Builder {
+    fn depth(&self) -> usize {
+        self.stack.len() - 1
+    }
+
     fn push(&mut self, b: Block, map: BlockMap) {
         if self.stack.len() == 1 {
             self.block_starts.push(self.root_start);
         }
         let top = self.stack.last_mut().unwrap();
+        if let Container::List(_, items, item_maps) = &mut top.0 {
+            if let (Some(last_b), Some(last_m)) = (items.last_mut(), item_maps.last_mut()) {
+                last_b.push(b);
+                last_m.push(map);
+            } else {
+                items.push(vec![b]);
+                item_maps.push(vec![map]);
+            }
+            return;
+        }
         top.1.push(b);
         top.2.push(map);
     }
@@ -449,6 +478,9 @@ pub(super) fn parse_doc(src: &str, autolink: bool) -> ParsedDoc {
 pub(super) fn parse_doc_tail(src: &str, autolink: bool) -> (ParsedDoc, Tail) {
     let mut b = Builder {
         stack: vec![(Container::Root, Vec::new(), Vec::new())],
+        quote_nested: Vec::new(),
+        list_slots: Vec::new(),
+        item_nested: Vec::new(),
         inline: None,
         code: None,
         last_root_para: None,
@@ -526,17 +558,37 @@ pub(super) fn parse_doc_tail(src: &str, autolink: bool) -> (ParsedDoc, Tail) {
                 }
                 Tag::BlockQuote(_) => {
                     b.flush_inline();
-                    b.stack.push((Container::Quote, Vec::new(), Vec::new()));
+                    if b.depth() < MAX_CONTAINER_DEPTH {
+                        b.quote_nested.push(true);
+                        b.stack.push((Container::Quote, Vec::new(), Vec::new()));
+                    } else {
+                        b.quote_nested.push(false);
+                    }
                 }
                 Tag::List(start) => {
                     b.flush_inline();
-                    b.stack.push((Container::List(start, Vec::new(), Vec::new()), Vec::new(), Vec::new()));
+                    if b.depth() + 2 <= MAX_CONTAINER_DEPTH {
+                        b.list_slots.push(ListSlot::Nested);
+                        b.stack.push((Container::List(start, Vec::new(), Vec::new()), Vec::new(), Vec::new()));
+                    } else if matches!(b.stack.last(), Some((Container::List(..) | Container::Item(_), _, _))) {
+                        b.list_slots.push(ListSlot::SiblingItems);
+                    } else {
+                        b.list_slots.push(ListSlot::InlineBlocks);
+                    }
                 }
                 Tag::Item => {
                     b.flush_inline();
-                    let idx = b.tasks.len();
-                    b.tasks.push(None);
-                    b.stack.push((Container::Item(idx), Vec::new(), Vec::new()));
+                    if b.list_slots.last() == Some(&ListSlot::InlineBlocks) {
+                        b.item_nested.push(false);
+                    } else {
+                        if matches!(b.stack.last(), Some((Container::Item(_), _, _))) {
+                            b.pop_container();
+                        }
+                        let idx = b.tasks.len();
+                        b.tasks.push(None);
+                        b.item_nested.push(true);
+                        b.stack.push((Container::Item(idx), Vec::new(), Vec::new()));
+                    }
                 }
                 Tag::Table(aligns) => {
                     b.flush_inline();
@@ -597,7 +649,31 @@ pub(super) fn parse_doc_tail(src: &str, autolink: bool) -> (ParsedDoc, Tail) {
                         rows.push(std::mem::take(cell_maps));
                     }
                 }
-                TagEnd::BlockQuote(_) | TagEnd::Item | TagEnd::List(_) | TagEnd::Table => b.pop_container(),
+                TagEnd::BlockQuote(_) => {
+                    if b.quote_nested.pop().unwrap_or(false) {
+                        b.pop_container();
+                    } else {
+                        b.flush_inline();
+                    }
+                }
+                TagEnd::Item => {
+                    b.flush_inline();
+                    if b.item_nested.pop().unwrap_or(false)
+                        && matches!(b.stack.last(), Some((Container::Item(_), _, _)))
+                    {
+                        b.pop_container();
+                    }
+                }
+                TagEnd::List(_) => match b.list_slots.pop().unwrap_or(ListSlot::Nested) {
+                    ListSlot::Nested => {
+                        if matches!(b.stack.last(), Some((Container::Item(_), _, _))) {
+                            b.pop_container();
+                        }
+                        b.pop_container();
+                    }
+                    ListSlot::SiblingItems | ListSlot::InlineBlocks => b.flush_inline(),
+                },
+                TagEnd::Table => b.pop_container(),
                 TagEnd::Strong | TagEnd::Emphasis | TagEnd::Strikethrough | TagEnd::Link => close(&mut b),
                 TagEnd::Image => {
                     if let Some(start) = b.image_starts.pop() {
@@ -653,11 +729,8 @@ pub(super) fn parse_doc_tail(src: &str, autolink: bool) -> (ParsedDoc, Tail) {
                 inl.3.push(range, start..inl.1.text.len());
             }
             Event::TaskListMarker(checked) => {
-                if let Some(idx) = b.stack.iter().rev().find_map(|(c, _, _)| match c {
-                    Container::Item(idx) => Some(*idx),
-                    _ => None,
-                }) {
-                    b.tasks[idx] = Some((checked, range.start));
+                if let Some((Container::Item(idx), _, _)) = b.stack.last() {
+                    b.tasks[*idx] = Some((checked, range.start));
                 }
             }
             Event::Rule => {

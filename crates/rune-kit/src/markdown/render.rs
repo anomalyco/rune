@@ -56,10 +56,10 @@ pub(super) struct Flow {
     /// How much narrower than the text column they are: list indents and quote rules.
     pub(super) inset: f32,
     /// The columns a nested list's copied markers are indented by (`"  - "` under `"- "`).
-    pub(super) cols: u8,
+    pub(super) cols: usize,
     /// The marker a copy puts before the paragraph that opens a list item, its indent, and the
     /// newlines before it: two to set a top-level list apart from the block before it.
-    pub(super) lead: Option<(u8, Lead, u8)>,
+    pub(super) lead: Option<(usize, Lead, u8)>,
 }
 
 /// A list item's marker as copying writes it.
@@ -80,9 +80,9 @@ impl Lead {
     }
 
     /// The columns a list nested in the item is indented by, past the item's own.
-    pub(super) fn width(self) -> u8 {
+    pub(super) fn width(self) -> usize {
         match self {
-            Lead::Number(n) => n.to_string().len() as u8 + 2,
+            Lead::Number(n) => n.to_string().len() + 2,
             _ => 2,
         }
     }
@@ -164,23 +164,57 @@ pub(super) fn margins(b: &Block, s: &MarkdownStyle) -> (f32, f32) {
 /// margin pass through it, and a list item's 8 through the list: a quote that ends a list item
 /// spaces the list 16 from what follows, as it would standing alone.
 pub(super) fn collapsed(b: &Block, s: &MarkdownStyle, i: usize, in_item: bool) -> (f32, f32) {
-    let (mt, mb) = match b {
+    (collapsed_top(b, s, i, in_item), collapsed_bottom(b, s, i, in_item))
+}
+
+fn own_margins(b: &Block, s: &MarkdownStyle, i: usize, in_item: bool) -> (f32, f32) {
+    match b {
         Block::Para(_) if in_item => (if i == 0 { 0.0 } else { 8.0 }, if i == 0 { 0.0 } else { 12.0 }),
         Block::List { .. } if in_item => (4.0, 4.0),
         _ => margins(b, s),
-    };
-    let (first, last) = match b {
-        Block::Quote(inner) => (
-            inner.first().map(|f| collapsed(f, s, 0, false).0),
-            inner.last().map(|l| collapsed(l, s, inner.len() - 1, false).1),
-        ),
-        Block::List { items, .. } => (
-            items.first().and_then(|item| item.first()).map(|f| collapsed(f, s, 0, true).0),
-            items.last().map(|item| item.last().map_or(0.0, |l| collapsed(l, s, item.len() - 1, true).1).max(s.list_gap)),
-        ),
-        _ => (None, None),
-    };
-    (first.map_or(mt, |f| f.max(mt)), last.map_or(mb, |l| l.max(mb)))
+    }
+}
+
+fn collapsed_top(mut b: &Block, s: &MarkdownStyle, mut i: usize, mut in_item: bool) -> f32 {
+    let mut top = 0.0f32;
+    loop {
+        top = top.max(own_margins(b, s, i, in_item).0);
+        match b {
+            Block::Quote(inner) => match inner.first() {
+                Some(f) => (b, i, in_item) = (f, 0, false),
+                None => return top,
+            },
+            Block::List { items, .. } => match items.first().and_then(|item| item.first()) {
+                Some(f) => (b, i, in_item) = (f, 0, true),
+                None => return top,
+            },
+            _ => return top,
+        }
+    }
+}
+
+fn collapsed_bottom(mut b: &Block, s: &MarkdownStyle, mut i: usize, mut in_item: bool) -> f32 {
+    let mut bot = 0.0f32;
+    loop {
+        bot = bot.max(own_margins(b, s, i, in_item).1);
+        match b {
+            Block::Quote(inner) => match inner.last() {
+                Some(l) => (b, i, in_item) = (l, inner.len() - 1, false),
+                None => return bot,
+            },
+            Block::List { items, .. } => match items.last() {
+                Some(item) => {
+                    bot = bot.max(s.list_gap);
+                    match item.last() {
+                        Some(l) => (b, i, in_item) = (l, item.len() - 1, true),
+                        None => return bot,
+                    }
+                }
+                None => return bot,
+            },
+            _ => return bot,
+        }
+    }
 }
 
 thread_local! {
@@ -372,7 +406,7 @@ impl Renderer {
         // A copy puts a blank line around a paragraph, one newline around a list item's first
         // with its marker before it.
         let e = match self.flow.get().lead {
-            Some((cols, lead, before)) => e.copy_prefix(format!("{}{}", " ".repeat(cols.into()), lead.marker())).copy_breaks(before, 1),
+            Some((cols, lead, before)) => e.copy_prefix(format!("{}{}", " ".repeat(cols), lead.marker())).copy_breaks(before, 1),
             None => e.copy_breaks(2, 2),
         };
         self.select_inline(e, inl, map)
@@ -644,8 +678,8 @@ impl Renderer {
                 // Between items, their 8 collapsed with the margins passing out of the blocks
                 // either side (`collapsed`): an item ending in a quote keeps its 16 below.
                 let edge = |item: &[Block], last: bool| match (last, item) {
-                    (true, [.., l]) => collapsed(l, s, item.len() - 1, true).1,
-                    (false, [f, ..]) => collapsed(f, s, 0, true).0,
+                    (true, [.., l]) => collapsed_bottom(l, s, item.len() - 1, true),
+                    (false, [f, ..]) => collapsed_top(f, s, 0, true),
                     _ => 0.0,
                 };
                 let gap = |k: usize| if k == 0 { 0.0 } else { s.list_gap.max(edge(&items[k - 1], true)).max(edge(&items[k], false)) };

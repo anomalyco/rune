@@ -30,7 +30,7 @@ impl Renderer {
 }
 
 /// `lead`: the marker before the first block's text, with the newlines before it.
-fn plain(blocks: &[Block], tasks: &[Option<(bool, usize)>], task: &mut usize, cols: u8, lists: u32, lead: Option<(String, u8)>, out: &mut Vec<Piece>) {
+fn plain(blocks: &[Block], tasks: &[Option<(bool, usize)>], task: &mut usize, cols: usize, lists: u32, lead: Option<(String, u8)>, out: &mut Vec<Piece>) {
     let mut lead = lead;
     for b in blocks {
         let here = lead.take();
@@ -53,7 +53,7 @@ fn plain(blocks: &[Block], tasks: &[Option<(bool, usize)>], task: &mut usize, co
                         (None, Some(n)) => Lead::Number(n + k as u64),
                         (None, None) => Lead::Bullet,
                     };
-                    let marker = format!("{}{}", " ".repeat(cols.into()), mark.marker());
+                    let marker = format!("{}{}", " ".repeat(cols), mark.marker());
                     let before = if k == 0 && lists == 0 { 2 } else { 1 };
                     plain(item, tasks, task, cols + mark.width(), lists + 1, Some((marker, before)), out);
                 }
