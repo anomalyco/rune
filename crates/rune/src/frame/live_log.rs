@@ -105,6 +105,15 @@ pub(crate) struct Frame {
     pub(crate) change: Option<[u32; 4]>,
 }
 
+/// Measuring only: `RUNE_MARK_LOG` names, one JSON line each.
+pub(crate) fn mark(name: &str) {
+    static MARKS: std::sync::Mutex<Option<Option<std::fs::File>>> = std::sync::Mutex::new(None);
+    let t = now_ns();
+    let mut out = MARKS.lock().unwrap_or_else(|e| e.into_inner());
+    let file = out.get_or_insert_with(|| std::env::var_os("RUNE_MARK_LOG").and_then(|p| std::fs::File::create(p).ok()));
+    if let Some(f) = file { let _ = writeln!(f, "{{\"mark\":\"{name}\",\"t\":{t}}}"); }
+}
+
 pub(crate) fn frame(f: Frame) {
     let (inputs, input_ns) = INPUT.replace((0, 0));
     let (wakes, wake_ns) = WAKE.replace((0, 0));
