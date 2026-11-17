@@ -294,7 +294,9 @@ impl<S: 'static> Runtime<S> {
             stack.tops.retain(|id, _| new_set.contains(id) || stack.closing.contains_key(id));
             let animates = existed && (!instant || live_rows.is_some()) && !tx.relayout && !self.reduced_motion;
             stack.reorder.measure(animates, &stack.order, &order, stack.gap, |id| self.grows.get(&id).map(|g| g.h));
+            if first || self.reduced_motion || concealing || resized || reader || nodes[c].instant_changes || tx.commit.lands() || (stack.order != order && live_rows.is_none()) { stack.seams.clear(); }
             if let Some(range) = live_rows && let Some(v) = self.virtuals.get(&nodes[c].path) && stack.order != order {
+                self.join_live_rows(&mut stack, &nodes, rows, v, &range);
                 live_by_id.extend(rows.iter().enumerate().filter_map(|(k, &j)| {
                     let moves = |&n: &usize| stack.reorder.jump(nodes[n].id) != 0.0;
                     let joins = rows.get(k.wrapping_sub(1)).is_some_and(moves) || rows.get(k + 1).is_some_and(moves);

@@ -10,6 +10,9 @@
 //! no row here: growth carries those, as it does a row inserted or removed above another.
 use super::*;
 
+#[path = "row_reorder/joined.rs"]
+pub(super) mod joined;
+
 /// One growth stack's rows that the last commit reordered.
 #[derive(Clone, Debug, Default)]
 pub(super) struct Reorder {
