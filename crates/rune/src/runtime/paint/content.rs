@@ -260,8 +260,8 @@ impl<S: 'static> Runtime<S> {
             // 4 s of a launch, for a baseline sitting on a half pixel. Not for dev.
             {
                 static ON: std::sync::OnceLock<(bool, std::time::Instant)> = std::sync::OnceLock::new();
-                let (on, t0) = *ON.get_or_init(|| (std::env::var("RUNE_TEXT2_TIE").is_ok_and(|v| v == "1"), std::time::Instant::now()));
-                if on && t0.elapsed().as_secs_f32() < 4.0 {
+                let (on, t0) = *ON.get_or_init(|| (std::env::var("RUNE_TEXT2_TIE").is_ok_and(|v| v == "1" || v == "2"), std::time::Instant::now()));
+                if on && (t0.elapsed().as_secs_f32() < 4.0 || std::env::var("RUNE_TEXT2_TIE").is_ok_and(|v| v == "2")) {
                     let first = laid.single().and_then(|l| l.lines().next().map(|ln| ln.metrics().baseline)).unwrap_or(f32::NAN);
                     let base = origin[1] + first * tk;
                     eprintln!("TEXT2TIE t={:.1} path={} y={:.6} ybits={:08x} base={:.6} frac={:.6} exact_off={:.6} r={:.6} r_exact={:.6} contain={:.6} gliding={gliding} still={}", t0.elapsed().as_secs_f64() * 1e3, n.path, origin[1], origin[1].to_bits(), base, base - base.floor(), exact_off[1], r[1], r_exact[1], contain[1], scale_motion == ScaleMotion::Still);
