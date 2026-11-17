@@ -13,7 +13,7 @@
 //! (Windows) compares the HLSL wgpu generates now with the HLSL the general and subpixel bytecode
 //! came from, and `cargo run -p rune --example regen_dxbc` rewrites everything, the pinned fragments
 //! (`uber.fs-k0/k1/k2.dxbc`) and the hash of the WGSL each came from included: no other path writes
-//! those, and a launch uses a pinned fragment only while that hash is the WGSL's now. The
+//! those, and a pinned fragment is used only while the build finds that WGSL and those files (`PINNED_FRESH`). The
 //! bytecode is used only while the WGSL hashes as it did when it was compiled, which the build
 //! knows (`build.rs` hashes the WGSL with `\r\n` read as `\n`, so a CRLF checkout matches too, and
 //! warns when it doesn't match), and while the layout hashes the same. A launch that can't use it
@@ -133,23 +133,38 @@ pub(super) fn uber_pinned<T>(device: &wgpu::Device, kind: u32, make_pipeline: im
     load(device, (VERTEX, fragment), "pinned uber", || uber_fresh() && pinned_fresh(at, kind), "the general shader draws that kind", make_pipeline)
 }
 
-/// Whether the pinned fragment at `at` came from the WGSL `pinned_wgsl(kind)` gives now (its `\r\n` read as `\n`):
-/// `regen_dxbc` records that hash beside it (`uber/dxbc_pinned_hash.rs`), and nothing else writes the pinned files,
-/// so general bytecode regenerated another way leaves them stale and refused here. Says once which are stale.
+/// Whether each pinned fragment (`PINNED` order) is the one `regen_dxbc` compiled from this build's WGSL beside this
+/// build's vertex stage: the WGSL hash and both files' BLAKE3 that build.rs takes (render/uber_wgsl.rs) against what
+/// `regen_dxbc` recorded with them (`uber/dxbc_pinned_hash.rs`). Settled at compile time, so nothing is hashed at run
+/// time. A fragment left by another shader, another wgpu or a regenerated vertex stage, a hand-edited hash or a
+/// swapped file all fail it, and the general shader draws that kind.
+#[cfg(target_os = "windows")]
+const PINNED_FRESH: [bool; 3] = {
+    use super::uber_wgsl::same;
+    let mut fresh = [false; 3];
+    let mut at = 0;
+    while at < 3 {
+        fresh[at] = same(super::uber_wgsl::PINNED_WGSL_BLAKE3[at], UBER_DXBC_PINNED_WGSL_BLAKE3[at])
+            && same(super::uber_wgsl::PINNED_FS_BLAKE3[at], UBER_DXBC_PINNED_FS_BLAKE3[at])
+            && same(super::uber_wgsl::PINNED_VS_BLAKE3, UBER_DXBC_PINNED_VS_BLAKE3);
+        at += 1;
+    }
+    fresh
+};
+
+/// [`PINNED_FRESH`] for the fragment at `at`; says once for each stale kind (build.rs warns too).
 #[cfg(target_os = "windows")]
 fn pinned_fresh(at: usize, kind: u32) -> bool {
-    let fresh = super::pinned_wgsl_blake3(kind).is_some_and(|now| now == UBER_DXBC_PINNED_WGSL_BLAKE3[at]);
-    if !fresh {
+    if !PINNED_FRESH[at] {
         static STALE: std::sync::Mutex<Vec<u32>> = std::sync::Mutex::new(Vec::new());
         let mut said = STALE.lock().unwrap_or_else(|e| e.into_inner());
         if !said.contains(&kind) {
             said.push(kind);
-            eprintln!("rune: the precompiled DX12 uber fragment pinned to kind {kind} (uber.fs-k{kind}.dxbc) was compiled from other WGSL, so the general shader draws that kind; rebuild it with `cargo run -p rune --example regen_dxbc` on Windows");
+            eprintln!("rune: the precompiled DX12 fragment pinned to kind {kind} (uber.fs-k{kind}.dxbc) wasn't compiled from this shader beside this vertex stage, so the general shader draws that kind (scrolling on the slow path); rebuild it with `cargo run -p rune --example regen_dxbc` on Windows");
         }
     }
-    fresh
+    PINNED_FRESH[at]
 }
-
 /// The straight-alpha pass (render/surface_alpha.rs) from its precompiled stages, when they were
 /// compiled from `wgsl` and the driver takes them.
 #[cfg(target_os = "windows")]

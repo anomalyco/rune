@@ -380,7 +380,18 @@ impl Renderer {
     pub(super) fn pinned_pipelines(&self, device: &wgpu::Device) -> Vec<Option<wgpu::RenderPipeline>> {
         #[cfg(target_os = "windows")]
         if matches!(self.uber, Uber::Windfoil { source: Source::Precompiled, .. }) && self.vertex_entry == "vs" {
+            #[cfg(feature = "frame-profile")]
+            let started = crate::time::Instant::now();
             let pinned: Vec<_> = PINNED.iter().map(|&kind| dxbc::uber_pinned(device, kind, |shader| Self::pipeline(device, &self.layout, shader, self.format, "vs", Blend::SourceOver)).map(|(_, p)| p)).collect();
+            // Frame-profile builds: what making them costs where it lands (the warm frame, `set_format`, `adopt`),
+            // and what the run-time freshness check before `PINNED_FRESH` cost (three `pinned_wgsl` and their hashes).
+            #[cfg(feature = "frame-profile")]
+            {
+                let made = started.elapsed();
+                let checked = crate::time::Instant::now();
+                let old: usize = PINNED.iter().filter_map(|&kind| super::pinned_wgsl_blake3(kind)).map(|h| h.len()).sum();
+                eprintln!("rune-warm pinned pipelines: {:.0} us to make {} of 3 (the run-time check they replace: {:.0} us, {old} hex)", made.as_secs_f64() * 1e6, pinned.iter().filter(|p| p.is_some()).count(), checked.elapsed().as_secs_f64() * 1e6);
+            }
             // None taken (refused, or every fragment stale): no split at all, as before.
             if pinned.iter().any(Option::is_some) { return pinned; }
         }

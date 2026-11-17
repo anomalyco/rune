@@ -8,7 +8,8 @@
 //! their hashes (`src/render/uber/dxbc_pinned_hash.rs`) included. It makes the uber pipeline from
 //! WGSL on a DX12 device, takes the HLSL wgpu-hal logs, and compiles it with FXC as wgpu-hal does.
 //! `uber_dxbc_is_fresh` checks the general and subpixel bytecode; the pinned fragments are checked
-//! at load (render/dxbc.rs `pinned_fresh`): one compiled from other WGSL isn't used.
+//! by the build (render/dxbc.rs `PINNED_FRESH`): one compiled from other WGSL, or beside another vertex
+//! stage, isn't used.
 
 #[cfg(target_os = "windows")]
 fn main() {
@@ -50,12 +51,14 @@ fn main() {
     std::fs::write(format!("{root}/uber.fs.dxbc"), &fs).unwrap();
     std::fs::write(format!("{root}/uber.vs-dual.dxbc"), &vs_dual).unwrap();
     std::fs::write(format!("{root}/uber.fs-dual.dxbc"), &fs_dual).unwrap();
-    // Each pinned fragment beside the shared vertex stage (render/dxbc.rs `uber_pinned`).
+    // Each pinned fragment beside the shared vertex stage (render/dxbc.rs `uber_pinned`), and its file's BLAKE3.
+    let mut pinned_fs = Vec::new();
     for (n, &(kind, at)) in pinned_logged.iter().enumerate() {
         let end = pinned_logged.get(n + 1).map_or(logged.len(), |p| p.1);
         let started = std::time::Instant::now();
         let fs_pinned = fxc(&stage(&logged[at..end], "fs"), "fs", "ps_5_1");
         std::fs::write(format!("{root}/uber.fs-k{kind}.dxbc"), &fs_pinned).unwrap();
+        pinned_fs.push(format!("\"{}\"", blake3::hash(&fs_pinned).to_hex()));
         println!("uber.fs-k{kind}.dxbc {} bytes (FXC {:.1} s)", fs_pinned.len(), started.elapsed().as_secs_f64());
     }
     let dual = blake3::hash(format!("{dual_vertex}\0{dual_fragment}").as_bytes()).to_hex();
@@ -66,17 +69,18 @@ fn main() {
          pub(super) const UBER_DXBC_ABI_FNV64: u64 = {abi:#018x};\n\
          #[cfg(test)]\npub(super) const UBER_DXBC_HLSL_BLAKE3: &str = \"{hlsl}\";\n\
          #[cfg(test)]\npub(super) const UBER_DXBC_DUAL_HLSL_BLAKE3: &str = \"{dual}\";\n")).unwrap();
-    // What each pinned fragment was compiled from (render/dxbc.rs `pinned_fresh` refuses one that no longer
-    // matches), and the Windfoil WGSL they came from (build.rs warns when it moves).
-    let pinned: Vec<String> = pinned_logged.iter()
+    // What each pinned fragment was compiled from, and the bytes it was compiled beside: render/dxbc.rs uses one only
+    // while build.rs finds the same WGSL hash and the same two files (`PINNED_FRESH`).
+    let pinned_wgsl: Vec<String> = pinned_logged.iter()
         .map(|&(kind, _)| format!("\"{}\"", rune::render::pinned_wgsl_blake3(kind).expect("shader.wgsl's PINNED_KIND"))).collect();
+    let pinned_vs = blake3::hash(&vs).to_hex();
     std::fs::write(format!("{root}/src/render/uber/dxbc_pinned_hash.rs"), format!(
         "// Written by `cargo run -p rune --example regen_dxbc` on Windows with uber.fs-k0/k1/k2.dxbc; nothing else writes them.\n\
          /// BLAKE3 of the WGSL each pinned fragment was compiled from (render/variant.rs `pinned_wgsl`, `PINNED` order).\n\
-         pub(super) const UBER_DXBC_PINNED_WGSL_BLAKE3: [&str; {}] = [{}];\n\
-         /// BLAKE3 of the Windfoil WGSL they were made from (build.rs warns when it moves).\n\
-         #[allow(dead_code)]\n\
-         pub(super) const UBER_DXBC_PINNED_FROM_BLAKE3: &str = \"{wgsl}\";\n", pinned.len(), pinned.join(", "))).unwrap();
+         pub(super) const UBER_DXBC_PINNED_WGSL_BLAKE3: [&str; {n}] = [{}];\n\
+         /// BLAKE3 of each pinned fragment's file, and of the `uber.vs.dxbc` it was compiled beside.\n\
+         pub(super) const UBER_DXBC_PINNED_FS_BLAKE3: [&str; {n}] = [{}];\n\
+         pub(super) const UBER_DXBC_PINNED_VS_BLAKE3: &str = \"{pinned_vs}\";\n", pinned_wgsl.join(", "), pinned_fs.join(", "), n = pinned_wgsl.len())).unwrap();
     println!("uber.vs.dxbc {} bytes, uber.fs.dxbc {} bytes, uber.fs-dual.dxbc {} bytes, WGSL {wgsl}", vs.len(), fs.len(), fs_dual.len());
     drop(logged);
 

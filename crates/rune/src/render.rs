@@ -986,6 +986,10 @@ impl Renderer {
         // The pinned pipelines draw the frame pass's runs of one kind (`variant::PINNED`), in paint order:
         // only where the frame's own pipeline would draw (not a layer target, an additive layer or subpixel text).
         let pinned = self.pinned.as_deref().filter(|p| p.iter().any(Option::is_some) && std::ptr::eq(frame_pipeline, &self.pipeline) && target.is_none() && format == self.format);
+        // Frame-profile builds: `RUNE_PINNED=off` draws every span with the general shader, `all` splits every span
+        // whatever its runs; the screen comparison runs both against the general build.
+        #[cfg(feature = "frame-profile")]
+        let pinned = pinned.filter(|_| pinned_forced() != Some(false));
         let mut bound = frame_pipeline;
         if let Some(properties) = &self.springs { pass.set_bind_group(1, &properties.group, &[]); }
         pass.set_vertex_buffer(0, self.instances.slice(..));
@@ -1012,7 +1016,13 @@ impl Renderer {
             // A span whose kinds alternate (a chip behind each token, a terminal's cell backgrounds between its
             // glyphs) draws in one call with the general shader: a draw and a pipeline switch per run cost more
             // than the smaller shader saves.
-            let Some(pinned) = pinned.filter(|_| few_runs(&self.kinds, span.clone())) else {
+            #[cfg(not(feature = "frame-profile"))]
+            let split = pinned.filter(|_| few_runs(&self.kinds, span.clone()));
+            #[cfg(feature = "frame-profile")]
+            let split = pinned.filter(|_| pinned_forced() == Some(true) || few_runs(&self.kinds, span.clone()));
+            #[cfg(feature = "frame-profile")]
+            PINNED_DRAWN[usize::from(split.is_some())].fetch_add(u64::from(span.end - span.start), std::sync::atomic::Ordering::Relaxed);
+            let Some(pinned) = split else {
                 if !std::ptr::eq(bound, frame_pipeline) { pass.set_pipeline(frame_pipeline); bound = frame_pipeline; }
                 pass.draw(0..4, span);
                 continue;
@@ -1391,6 +1401,28 @@ fn report_gpu_allocations(device: wgpu::Device) {
         }
         out
     });
+}
+
+/// Frame-profile builds: `RUNE_PINNED` forcing the split on (`all`) or off (`off`), and the instances drawn
+/// unsplit and split since the last report (`report_pinned`).
+#[cfg(feature = "frame-profile")]
+fn pinned_forced() -> Option<bool> {
+    static FORCED: std::sync::OnceLock<Option<bool>> = std::sync::OnceLock::new();
+    *FORCED.get_or_init(|| match std::env::var("RUNE_PINNED").as_deref() { Ok("all") => Some(true), Ok("off") => Some(false), _ => None })
+}
+
+#[cfg(feature = "frame-profile")]
+static PINNED_DRAWN: [std::sync::atomic::AtomicU64; 2] = [const { std::sync::atomic::AtomicU64::new(0) }; 2];
+
+/// Frame-profile builds with `RUNE_PINNED` set: every 60th frame, how many instances of the window's pass the
+/// pinned pipelines drew and how many went unsplit, so a comparison shows it exercised the pinned path.
+#[cfg(feature = "frame-profile")]
+pub(crate) fn report_pinned() {
+    static FRAMES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let frame = FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if std::env::var_os("RUNE_PINNED").is_none() || frame % 60 != 0 { return; }
+    let [whole, split] = [0, 1].map(|i| PINNED_DRAWN[i].swap(0, std::sync::atomic::Ordering::Relaxed));
+    eprintln!("rune-pinned: {split} instances split into runs, {whole} drawn unsplit (frame {frame})");
 }
 
 /// Most runs a span is split into (`few_runs`), and fewest instances a run has on average.

@@ -225,6 +225,8 @@ impl Renderer {
         if self.springs.is_some() { assert_eq!(instances.len(), self.spring_instances); }
         // The pinned pipelines (`variant::pinned_pipelines`): on Windows the first prepare is the warm frame, before the hand-over.
         if self.pinned.is_none() { self.pinned = Some(self.pinned_pipelines(device)); }
+        #[cfg(feature = "frame-profile")]
+        super::report_pinned();
         let staging = self.uploads.staging(device, queue);
         if staging.lost() != self.uploads.lost.0 {
             self.uploads.lost.0 = staging.lost();
