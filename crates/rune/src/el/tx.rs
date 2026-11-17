@@ -91,6 +91,7 @@ pub struct Tx {
     pub(crate) window_frame: Option<crate::window::frame::FrameRequest>,
     /// The mouse button driving this press or drag (`Tx::button`).
     pub(crate) button: crate::PointerButton,
+    pub(crate) touch_tap: bool,
     /// Modifier keys held as the handler runs.
     pub(crate) mods: crate::Mods,
     pub(crate) srgb_blend: Option<bool>,
@@ -623,6 +624,31 @@ impl Tx {
         self.font_families = Some((sans.into(), mono.into()));
     }
 
+    /// Shapes and breaks the text of `view` into the window's layout cache in its next idle turn,
+    /// laid out as the window would lay it out (at its own size, or at `size` in points), without
+    /// mounting it: nothing draws, hits, animates or is announced, and no handler runs. A view shown
+    /// later with the same texts at the same widths finds them laid out. For the most it from the
+    /// window's own root, as the next frame will lay it out (the session under a resting pointer
+    /// shown where the open one is). Prepared layouts no view holds are kept to about 1 MiB by the
+    /// cache's own count, oldest out first, and all go at the window's next rest. One request is
+    /// held, the latest, for the window whose state `view` reads; it never runs on a turn with
+    /// input waiting, and an idle window wakes for it no more once it ran.
+    pub fn prepare_text<S: 'static>(&mut self, view: fn(&S, &mut crate::Cx<S>) -> crate::El, size: Option<(f32, f32)>) {
+        PREPARE.with_borrow_mut(|a| *a = Some((Box::new(view), size)));
+    }
+
+    /// Takes `prepare_text`'s request if it is for a window of state `S`.
+    pub(crate) fn take_prepared<S: 'static>() -> Option<(fn(&S, &mut crate::Cx<S>) -> crate::El, Option<(f32, f32)>)> {
+        if !Self::prepare_owed::<S>() { return None; }
+        let (view, size) = PREPARE.with_borrow_mut(Option::take)?;
+        Some((*view.downcast::<fn(&S, &mut crate::Cx<S>) -> crate::El>().ok()?, size))
+    }
+
+    /// Whether `prepare_text` holds a request for a window of state `S`.
+    pub(crate) fn prepare_owed<S: 'static>() -> bool {
+        PREPARE.with_borrow(|a| a.as_ref().is_some_and(|(view, _)| view.is::<fn(&S, &mut crate::Cx<S>) -> crate::El>()))
+    }
+
     fn frame_request(&mut self, request: crate::window::frame::FrameRequest) {
         self.window_frame = Some(self.window_frame.unwrap_or_default().merge(request));
     }
@@ -720,4 +746,10 @@ impl Tx {
     pub fn color_motion(&mut self, spring: Spring) {
         self.color_motion = Some(spring);
     }
+}
+
+thread_local! {
+    /// `Tx::prepare_text`'s latest request on this thread: the view, boxed, and its size in points
+    /// if not the window's.
+    static PREPARE: std::cell::RefCell<Option<(Box<dyn std::any::Any>, Option<(f32, f32)>)>> = const { std::cell::RefCell::new(None) };
 }
