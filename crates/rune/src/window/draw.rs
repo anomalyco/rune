@@ -374,6 +374,9 @@ impl<S: 'static> Host<S> {
         // Only what changed is redrawn and presented (`damage`): the renderer's `draw` takes the
         // armed rectangles when nothing but the instances draws there, a compositor's
         // `Frame::draw_ui` included.
+        // Measuring only: the CPU painter's scroll proof on this frame (`RUNE_SHIFT_PROBE`).
+        #[cfg(feature = "frame-profile")]
+        crate::render::cpu_boot::shift_probe::frame(&rt.instances, &rt.text.atlas, &rt.images, size, rt.clear_color());
         #[cfg(target_os = "windows")]
         let part = {
             let whole = if l.alpha.is_some() { Some("alpha") } else if images_changed { Some("image") }

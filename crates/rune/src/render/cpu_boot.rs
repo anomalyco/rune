@@ -41,6 +41,8 @@ mod scroll;
 #[doc(hidden)]
 pub mod record;
 mod shade;
+#[cfg(feature = "frame-profile")]
+pub(crate) mod shift_probe;
 pub(crate) mod tool;
 
 pub use drift::{Drift, Pixels, drift, drift_wanted, last_drift};

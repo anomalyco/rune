@@ -19,6 +19,13 @@ pub(super) enum PixelHold {
     Holding { drawn: f32, dir: i8 },
 }
 
+/// Measuring only: whether `RUNE_CUT` (a comma list) holds `wholepx`.
+#[cfg(feature = "frame-profile")]
+fn whole_px() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("RUNE_CUT").unwrap_or_default().split(',').any(|c| c.trim() == "wholepx"))
+}
+
 impl PixelHold {
     /// The vertical offset the last frame drew at, in points.
     pub(super) fn y(self) -> f32 {
@@ -33,7 +40,11 @@ impl PixelHold {
     pub(super) fn draw(self, exact: f32, offset: f32, pinned: bool, s: f32) -> (f32, PixelHold) {
         // `grid` rounds to 1/64 of a device pixel, so a hold spanning under one quantum only
         // absorbs rounding noise. Real travel always lands at the layout offset.
+        #[cfg(not(feature = "frame-profile"))]
         let rounded = grid(exact, s);
+        // Measuring only: `RUNE_CUT=wholepx` draws a glide in whole device pixels, landing on the layout offset.
+        #[cfg(feature = "frame-profile")]
+        let rounded = if whole_px() && exact != offset { (exact * s).round() / s } else { grid(exact, s) };
         let (drawn, dir, stepped_pinned) = match self {
             PixelHold::Unseen => (0.0, 0, false),
             PixelHold::Stepping { drawn, dir, pinned } => (drawn, dir, pinned),
