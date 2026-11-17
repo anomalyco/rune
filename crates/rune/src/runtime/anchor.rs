@@ -256,7 +256,7 @@ impl<S: 'static> Runtime<S> {
         // End-aligned box growing in width would start from its old x and its end edge would
         // swing out and back. Zoomed about `pivot`, the box's top-left lands on (ax, ay).
         let world = self.scene.world(self.nodes[i].id).unwrap_or(p.rect);
-        (pinh.snap.rigid, pinh.snap.layer) = ([0.0; 2], 0);
+        (pinh.snap.rigid, pinh.snap.steady, pinh.snap.layer) = ([0.0; 2], [0.0; 2], 0);
         if k == 1.0 {
             (pinh.dx, pinh.dy) = (ax - world.x, ay - world.y);
             (pinh.scale, pinh.anchor, pinh.anchor_to) = (1.0, [0.0; 2], [0.0; 2]);
