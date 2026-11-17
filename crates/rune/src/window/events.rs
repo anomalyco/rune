@@ -212,6 +212,13 @@ impl<S: 'static> Host<S> {
             WindowEvent::Focused(true) | WindowEvent::Moved(_) | WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => self.look_stale(),
             _ => {}
         }
+        // Input holds off making a window's third buffer (`depth`) until a pause.
+        #[cfg(target_os = "windows")]
+        match &event {
+            WindowEvent::MouseInput { .. } | WindowEvent::MouseWheel { .. } | WindowEvent::KeyboardInput { .. } | WindowEvent::Touch(_) | WindowEvent::Resized(_) =>
+                self.depth_step(super::depth::DepthEvent::Active { now: Instant::now() }),
+            _ => {}
+        }
         if !matches!(event, WindowEvent::RedrawRequested) && let Some(w) = &mut self.win { w.timer_frame.no_longer_quiet(); }
         #[cfg(target_os = "macos")]
         if matches!(event, WindowEvent::Moved(_) | WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } | WindowEvent::Occluded(_))

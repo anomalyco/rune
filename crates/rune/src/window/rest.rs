@@ -124,6 +124,9 @@ impl<S: 'static> Host<S> {
                 RestEffect::GiveBackKept => if let Some((gpu, renderer)) = &self.gpu && renderer.give_back_kept() {
                     let _ = gpu.device.poll(wgpu::PollType::Poll);
                 },
+                #[cfg(target_os = "windows")]
+                RestEffect::DropThirdBuffer => self.depth_step(super::depth::DepthEvent::Unseen { now: Instant::now() }),
+                #[cfg(not(target_os = "windows"))]
                 RestEffect::DropThirdBuffer => {}
             }
         }

@@ -53,6 +53,7 @@ impl<S: 'static> AnyHost for Host<S> {
             .chain(win.and_then(|w| w.backoff.deadline()))
             .chain(win.filter(|_| shown.is_none()).and_then(|w| w.hidden_pace.deadline()))
             .chain(look_deadline(win))
+            .chain(depth_deadline(win))
             .chain(self.files.pointer.as_ref().filter(|_| shown.is_some()).map(|_| now + DROP_SAMPLE))
             .chain(shown.and_then(|w| w.cursor.reassert_at(now)))
             .chain(self.rest.deadline())
@@ -287,7 +288,11 @@ impl<S: 'static> Host<S> {
         // After the first frame: its on_ready, hooks, the GPU's start and the accessibility
         // adapter, one a turn, none while input waits; the loop turns again while some are owed.
         #[cfg(target_os = "windows")]
-        return self.post_frame_turn();
+        {
+            // A free turn grows or gives back the swap chain's third buffer (`depth`).
+            self.depth_turn();
+            return self.post_frame_turn();
+        }
         #[cfg(not(target_os = "windows"))]
         false
     }
@@ -316,6 +321,14 @@ impl<S: 'static> Host<S> {
         #[cfg(feature = "frame-profile")]
         if let Some(start) = logged { crate::frame::live_log::input(start); }
     }
+}
+
+/// When a window in use gives back its third buffer (`depth`).
+fn depth_deadline(win: Option<&Win>) -> Option<Instant> {
+    #[cfg(target_os = "windows")]
+    return win.and_then(|w| w.native.depth.deadline(Instant::now()));
+    #[cfg(not(target_os = "windows"))]
+    { let _ = win; None }
 }
 
 /// When a covered window looks again whether it's still covered (`look`).

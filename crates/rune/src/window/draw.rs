@@ -435,7 +435,10 @@ impl<S: 'static> Host<S> {
         #[cfg(not(target_os = "macos"))]
         gpu.queue.present(frame);
         #[cfg(target_os = "windows")]
-        l.native.slot.presented();
+        {
+            l.native.slot.presented();
+            l.native.depth = l.native.depth.step(super::depth::DepthEvent::Presented).0;
+        }
         // A swap chain made again on a handed-over window's visual takes over now (`cpu_frame`).
         #[cfg(target_os = "windows")]
         if matches!(l.native.mode, super::cpu_frame::SurfaceMode::Rebinding { .. }) {
