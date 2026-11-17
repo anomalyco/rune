@@ -264,7 +264,7 @@ impl<S: 'static> Runtime<S> {
                 if on && t0.elapsed().as_secs_f32() < 4.0 {
                     let first = laid.single().and_then(|l| l.lines().next().map(|ln| ln.metrics().baseline)).unwrap_or(f32::NAN);
                     let base = origin[1] + first * tk;
-                    eprintln!("TEXT2TIE t={:.1} path={} y={:.6} ybits={:08x} base={:.6} frac={:.6} exact_off={:.6}", t0.elapsed().as_secs_f64() * 1e3, n.path, origin[1], origin[1].to_bits(), base, base - base.floor(), exact_off[1]);
+                    eprintln!("TEXT2TIE t={:.1} path={} y={:.6} ybits={:08x} base={:.6} frac={:.6} exact_off={:.6} r={:.6} r_exact={:.6} contain={:.6} gliding={gliding} still={}", t0.elapsed().as_secs_f64() * 1e3, n.path, origin[1], origin[1].to_bits(), base, base - base.floor(), exact_off[1], r[1], r_exact[1], contain[1], scale_motion == ScaleMotion::Still);
                 }
             }
             // A gliding box's glyphs and decorations lay out from its nearest whole pixel (plus its rest's
