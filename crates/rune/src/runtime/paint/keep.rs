@@ -215,7 +215,6 @@ impl<S: 'static> Runtime<S> {
             eprintln!("rune: paint keep off: raise {}, text flights {}, flying {}, rank {}, modal {}", self.has_raise, self.flights.len(), self.flying.len(), self.paint_rank.is_some(), self.modal_scope.is_some());
         }
         let k = &mut self.paint_keep;
-        k.cycles.preorder = !tree_order;
         k.recording = !lifted;
         k.on = key.is_some() && key == k.key && !second && !std::mem::take(&mut k.off_once) && !k.prev.is_empty();
         k.key = key;

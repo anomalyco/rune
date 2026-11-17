@@ -11,8 +11,8 @@ use std::ops::Range;
 use super::*;
 
 pub(in crate::runtime) struct Slide {
-    window: usize,
-    counter: usize,
+    pub(super) window: usize,
+    pub(super) counter: usize,
     /// One past the window's subtree, in node order.
     pub(super) end: usize,
     pub(super) instances: Range<usize>,
@@ -70,7 +70,9 @@ impl<S: 'static> Runtime<S> {
     pub(super) fn slide_node_opens(&mut self, i: usize) {
         let c = &mut self.paint_keep.cycles;
         c.opened = (i, self.instances.len());
-        if c.open.is_some_and(|k| i >= c.slides[k].end) { self.close_slide(); }
+        // A subtree paints in one run, in tree order or the layers' (`update_layer_paint_order`),
+        // as long as nothing in it is lifted or raised out to paint later.
+        if c.open.is_some_and(|k| i < c.slides[k].window || i >= c.slides[k].end) { self.close_slide(); }
     }
 
     /// Node `i` clipped what it holds to `r` under `outer` (clip, fade widths, fade origins),
@@ -116,7 +118,7 @@ impl<S: 'static> Runtime<S> {
     /// fade widths; or why not.
     fn slide_fits(&self, i: usize, r: [f32; 4], clip: [f32; 4], vp: [f32; 4]) -> Result<(usize, usize, [f32; 4]), &'static str> {
         let c = &self.paint_keep.cycles;
-        if !c.preorder || !self.flying.is_empty() { return Err("a slide painted out of tree order"); }
+        if !self.flying.is_empty() { return Err("a slide while something flies"); }
         if c.open.is_some() { return Err("a slide inside a slide"); }
         if c.opened != (i, self.instances.len()) { return Err("a slide that draws itself"); }
         let n = &self.nodes[i];

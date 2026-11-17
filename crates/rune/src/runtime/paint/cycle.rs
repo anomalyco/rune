@@ -16,8 +16,6 @@ pub(in crate::runtime) struct CyclePaint {
     slots: Vec<Slot>,
     pub(super) slides: Vec<super::slide::Slide>,
     mixed: bool,
-    /// This paint goes depth first, so a subtree paints in one run.
-    pub(super) preorder: bool,
     /// The node paint last reached, and how many instances it had drawn by then.
     pub(super) opened: (usize, usize),
     /// The sliding window whose subtree paints now.
@@ -103,7 +101,7 @@ impl<S: 'static> Runtime<S> {
         let wall = self.now_clock();
         let keep = &self.paint_keep.cycles;
         let loops = keep.slots.len() + 2 * keep.slides.len();
-        let why = if self.loops.is_empty() { "no loop" } else if loops != self.loops.len() { keep.missed.unwrap_or(if loops == 0 { "no loop it can draw" } else { "a loop it can't draw" }) }
+        let why = if self.loops.is_empty() { "no loop" } else if loops != self.loops.len() { self.loop_refusal() }
             else if keep.mixed || keep.generation != self.commits { "other motion or a commit" }
             else if self.wall_start.is_none() || self.reduced_motion || self.time_scale <= 0.0 || !self.live_visible() || self.tracing() { "not live" }
             else if !(0.0..=1.0 / 30.0).contains(&dt) { "late" }
@@ -134,6 +132,29 @@ impl<S: 'static> Runtime<S> {
         self.apply_slides(&poses, &mut patched);
         patched.sort_unstable();
         Ok(patched)
+    }
+
+    /// Why a loop on screen has no slot or window (`loop_step`'s answer): the first such loop's
+    /// reason, from what paint read.
+    fn loop_refusal(&self) -> &'static str {
+        let c = &self.paint_keep.cycles;
+        if let Some(why) = c.missed { return why; }
+        for id in self.loops.keys() {
+            let Some(&i) = self.node_index.get(id) else { continue };
+            if c.slots.iter().any(|s| s.node == i) || c.slides.iter().any(|s| s.window == i || s.counter == i) { continue; }
+            let n = &self.nodes[i];
+            let Some(rune_motion::LoopKind::OpacityCycle(_)) = n.looping.as_ref().map(|l| l.kind) else { return "a loop that isn't a cycle or a window" };
+            let parent = n.parent.map_or_else(|| self.root_inh(), |p| self.inh_scratch[p]);
+            return if !self.seen.get(i).copied().unwrap_or(false) { "a cycle out of sight" }
+                else if !n.a11y.hidden { "a cycle screen readers see" }
+                else if self.nodes.get(i + 1).is_some_and(|m| m.parent == Some(i)) { "a cycle with children" }
+                else if parent.paint_opacity != 1.0 || parent.hit_opacity != 1.0 || parent.opacity != 1.0 { "a cycle under a fade" }
+                else if n.vis.layer_opacity != 1.0 || n.vis.paint_alpha != 1.0 || self.scene.presented(n.id).is_none_or(|p| p.opacity != 1.0) { "a cycle that fades itself" }
+                else if parent.in_cache || parent.skip_paint || parent.turn != 0 { "a cycle in a layer" }
+                else if n.handlers.get().is_some() || n.focus.get().is_some() || n.vis_flags.hit() { "a cycle that takes input" }
+                else { "a cycle paint didn't record" };
+        }
+        "a loop it can't draw"
     }
 
     /// A layer may have folded a primitive after its slot was observed. Never patch a different
