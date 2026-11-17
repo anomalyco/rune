@@ -25,13 +25,25 @@ pub(super) fn inline_dir(inl: &Inline) -> Option<Direction> {
 /// The direction of the first of `blocks` that has one: a list's first item's, a quote's first
 /// block's, a table's.
 pub(super) fn blocks_dir(blocks: &[Block]) -> Option<Direction> {
-    blocks.iter().find_map(|b| match b {
-        Block::Para(inl) | Block::Heading(_, inl) => inline_dir(inl),
-        Block::List { items, .. } => items.iter().find_map(|item| blocks_dir(item)),
-        Block::Quote(inner) => blocks_dir(inner),
-        Block::Table(t) => table_dir(t),
-        _ => None,
-    })
+    let mut stack: Vec<&Block> = blocks.iter().rev().collect();
+    while let Some(b) = stack.pop() {
+        match b {
+            Block::Para(inl) | Block::Heading(_, inl) => {
+                if let Some(d) = inline_dir(inl) {
+                    return Some(d);
+                }
+            }
+            Block::List { items, .. } => stack.extend(items.iter().rev().flat_map(|it| it.iter().rev())),
+            Block::Quote(inner) => stack.extend(inner.iter().rev()),
+            Block::Table(t) => {
+                if let Some(d) = table_dir(t) {
+                    return Some(d);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// A table's direction (which side its first column sits on): its header's, else its rows'.

@@ -52,43 +52,45 @@ where
         inputs: LayoutInput,
         block_ctx: Option<&mut BlockContext<'_>>,
     ) -> LayoutOutput {
-        if inputs.run_mode == RunMode::PerformHiddenLayout {
-            self.slot_mut(node_id).box_layout = BoxLayout::ZERO;
-            return compute_hidden_layout(self, node_id);
-        }
-
-        compute_cached_layout(self, node_id, inputs, |view, node_id, inputs| {
-            let idx = u64::from(node_id) as usize;
-            // SAFETY: `node_id` is a live `SlotId` index into `slots`.
-            let (display_mode, has_children) = unsafe {
-                let s = view.store.slots.get_unchecked(idx);
-                (s.style.display(), s.child_len() != 0)
-            };
-
-            let mut output = match (display_mode, has_children) {
-                (Display::None, _) => compute_hidden_layout(view, node_id),
-                (Display::Block, true) => compute_block_layout(view, node_id, inputs, block_ctx),
-                (Display::FlowRoot, true) => compute_block_layout(view, node_id, inputs, None),
-                (Display::Flex, true) => compute_flexbox_layout(view, node_id, inputs),
-                (Display::Grid, true) => compute_grid_layout(view, node_id, inputs),
-                (_, false) => {
-                    // SAFETY: `idx` is in bounds of both `slots` and `node_idx`.
-                    let (ctx, style) = unsafe {
-                        let s = view.store.slots.get_unchecked(idx);
-                        let ctx = s
-                            .has_context()
-                            .then(|| *view.store.node_idx.get_unchecked(idx) as usize);
-                        (ctx, &s.style)
-                    };
-                    (view.measure_leaf)(inputs, ctx, style)
-                }
-            };
-
-            if inputs.run_mode == RunMode::PerformLayout {
-                compute_oof_layout(view, node_id, &mut output);
+        crate::stack::maybe_grow(|| {
+            if inputs.run_mode == RunMode::PerformHiddenLayout {
+                self.slot_mut(node_id).box_layout = BoxLayout::ZERO;
+                return compute_hidden_layout(self, node_id);
             }
 
-            output
+            compute_cached_layout(self, node_id, inputs, |view, node_id, inputs| {
+                let idx = u64::from(node_id) as usize;
+                // SAFETY: `node_id` is a live `SlotId` index into `slots`.
+                let (display_mode, has_children) = unsafe {
+                    let s = view.store.slots.get_unchecked(idx);
+                    (s.style.display(), s.child_len() != 0)
+                };
+
+                let mut output = match (display_mode, has_children) {
+                    (Display::None, _) => compute_hidden_layout(view, node_id),
+                    (Display::Block, true) => compute_block_layout(view, node_id, inputs, block_ctx),
+                    (Display::FlowRoot, true) => compute_block_layout(view, node_id, inputs, None),
+                    (Display::Flex, true) => compute_flexbox_layout(view, node_id, inputs),
+                    (Display::Grid, true) => compute_grid_layout(view, node_id, inputs),
+                    (_, false) => {
+                        // SAFETY: `idx` is in bounds of both `slots` and `node_idx`.
+                        let (ctx, style) = unsafe {
+                            let s = view.store.slots.get_unchecked(idx);
+                            let ctx = s
+                                .has_context()
+                                .then(|| *view.store.node_idx.get_unchecked(idx) as usize);
+                            (ctx, &s.style)
+                        };
+                        (view.measure_leaf)(inputs, ctx, style)
+                    }
+                };
+
+                if inputs.run_mode == RunMode::PerformLayout {
+                    compute_oof_layout(view, node_id, &mut output);
+                }
+
+                output
+            })
         })
     }
 }

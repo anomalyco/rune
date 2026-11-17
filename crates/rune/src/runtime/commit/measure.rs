@@ -20,9 +20,11 @@ pub(super) fn collect_virtual_inputs(el: &El, parent: &str, index: usize, inert:
         if inert { input.edit.focused = false; }
         inputs.insert(path.clone(), input);
     }
-    for (i, child) in el.all_children().enumerate().skip(skip) {
-        collect_virtual_inputs(child, &path, i, inert, inputs);
-    }
+    rune_taffy::maybe_grow(|| {
+        for (i, child) in el.all_children().enumerate().skip(skip) {
+            collect_virtual_inputs(child, &path, i, inert, inputs);
+        }
+    });
 }
 
 impl<S: 'static> Runtime<S> {
@@ -283,7 +285,7 @@ impl<S: 'static> Measurement<'_, S> {
             el.style.set_pad_bottom(w.pad_bottom);
             self.populate_virtual_children(el, &path, source, inert, group);
         }
-        let bounds = crate::el::virtual_list::child_bounds(&el.style, el.cold.scroll.is_some(), bound, &el.children);
+        let bounds = crate::el::virtual_list::child_bounds(&el.style, el.cold.scroll.is_some(), bound, &el.children.0);
         // A virtual stack windows against the nearest scroll viewport around it, its rows' lists
         // included: a list in a row windows against the same viewport (`VirtualList::nested`).
         let scroll = match el.cold.scroll {
@@ -291,11 +293,13 @@ impl<S: 'static> Measurement<'_, S> {
             None => scroll,
         };
         let child_group = if el.flags.has(ElFlags::SELECTION_GROUP) { Some(path.as_str()) } else { group };
-        for (i, child) in el.children.iter_mut().enumerate() {
-            if !child.flags.has(ElFlags::HAS_VIRTUAL) { continue; }
-            let bound = bounds.of(child);
-            self.window_tree(child, &path, i, scroll, tx, force_all, bound, inert, child_group);
-        }
+        rune_taffy::maybe_grow(|| {
+            for (i, child) in el.children.iter_mut().enumerate() {
+                if !child.flags.has(ElFlags::HAS_VIRTUAL) { continue; }
+                let bound = bounds.of(child);
+                self.window_tree(child, &path, i, scroll, tx, force_all, bound, inert, child_group);
+            }
+        });
     }
 
     /// Picks the rows virtual list `el` at `path` mounts, updating its `VirtualList`, the scroll
@@ -729,7 +733,7 @@ fn windowed_lists<'e>(el: &'e El, path: &str, scroll: Option<(&str, bool, f32)>,
     let kids: &[El] = match el.memo_children() {
         Some(m) if el.children.is_empty() && !el.flags.has(ElFlags::MEMO_EXTENDED) => &m.children,
         Some(_) => return false,
-        None => &el.children,
+        None => &el.children.0,
     };
     let bound = crate::el::virtual_list::height_bound(&el.style, bound);
     if el.cold.virtual_estimate.is_some() {
@@ -743,8 +747,10 @@ fn windowed_lists<'e>(el: &'e El, path: &str, scroll: Option<(&str, bool, f32)>,
         Some(s) => Some((path, s.stick_bottom, bound)),
         None => scroll,
     };
-    kids.iter().enumerate().filter(|(_, c)| c.flags.has(ElFlags::HAS_VIRTUAL)).all(|(i, child)| {
-        windowed_lists(child, &node_path(path, child.key.as_deref(), i), scroll, bounds.of(child), out)
+    rune_taffy::maybe_grow(|| {
+        kids.iter().enumerate().filter(|(_, c)| c.flags.has(ElFlags::HAS_VIRTUAL)).all(|(i, child)| {
+            windowed_lists(child, &node_path(path, child.key.as_deref(), i), scroll, bounds.of(child), out)
+        })
     })
 }
 

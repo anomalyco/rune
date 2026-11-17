@@ -106,33 +106,51 @@ fn push_folded(out: &mut String, c: char) {
 /// Calls `f` with each searchable text of `blocks` and its map back to `src`, in document order.
 fn each_text<'a>(blocks: &'a [Block], maps: &'a [BlockMap], f: &mut impl FnMut(&'a str, &'a SpanMap)) {
     let empty = &BlockMap::None;
-    for (b, map) in blocks.iter().zip(maps.iter().chain(std::iter::repeat(empty))) {
-        match (b, map) {
-            (Block::Para(inl) | Block::Heading(_, inl), BlockMap::Inline(m)) => f(&inl.text, m),
-            (Block::Image { alt, .. }, BlockMap::Inline(m)) => f(alt, m),
-            (Block::Code(code) | Block::Diff(code), BlockMap::Code(m)) => f(code, m),
-            (Block::Mermaid(code), BlockMap::Code(m)) => {
-                #[cfg(feature = "mermaid")]
-                if crate::mermaid::supported(code) { continue; }
-                f(code, m);
-            }
-            (Block::Table(t), BlockMap::Table { head, rows }) => {
-                for (cell, map) in t.head.iter().zip(head) {
-                    f(&cell.text, map);
+    let mut stack = vec![(blocks, maps)];
+    while let Some((bs, ms)) = stack.pop() {
+        for (idx, (b, map)) in bs.iter().zip(ms.iter().chain(std::iter::repeat(empty))).enumerate() {
+            let push_rest = |stack: &mut Vec<(&'a [Block], &'a [BlockMap])>| {
+                let rest_b = &bs[idx + 1..];
+                if !rest_b.is_empty() {
+                    let rest_m = ms.get(idx + 1..).unwrap_or(&[]);
+                    stack.push((rest_b, rest_m));
                 }
-                for (row, rmaps) in t.rows.iter().zip(rows) {
-                    for (cell, map) in row.iter().zip(rmaps) {
+            };
+            match (b, map) {
+                (Block::Para(inl) | Block::Heading(_, inl), BlockMap::Inline(m)) => f(&inl.text, m),
+                (Block::Image { alt, .. }, BlockMap::Inline(m)) => f(alt, m),
+                (Block::Code(code) | Block::Diff(code), BlockMap::Code(m)) => f(code, m),
+                (Block::Mermaid(code), BlockMap::Code(m)) => {
+                    #[cfg(feature = "mermaid")]
+                    if crate::mermaid::supported(code) { continue; }
+                    f(code, m);
+                }
+                (Block::Table(t), BlockMap::Table { head, rows }) => {
+                    for (cell, map) in t.head.iter().zip(head) {
                         f(&cell.text, map);
                     }
+                    for (row, rmaps) in t.rows.iter().zip(rows) {
+                        for (cell, map) in row.iter().zip(rmaps) {
+                            f(&cell.text, map);
+                        }
+                    }
                 }
-            }
-            (Block::List { items, .. }, BlockMap::List(item_maps)) => {
-                for (item, imap) in items.iter().zip(item_maps) {
-                    each_text(item, imap, f);
+                (Block::List { items, .. }, BlockMap::List(item_maps)) => {
+                    push_rest(&mut stack);
+                    let base = stack.len();
+                    for (item, imap) in items.iter().zip(item_maps) {
+                        stack.push((item, imap));
+                    }
+                    stack[base..].reverse();
+                    break;
                 }
+                (Block::Quote(inner), BlockMap::Quote(inner_maps)) => {
+                    push_rest(&mut stack);
+                    stack.push((inner, inner_maps));
+                    break;
+                }
+                _ => {}
             }
-            (Block::Quote(inner), BlockMap::Quote(inner_maps)) => each_text(inner, inner_maps, f),
-            _ => {}
         }
     }
 }

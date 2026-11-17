@@ -264,14 +264,15 @@ impl El {
     /// Call after adding children. Useful for static disabled styling; animation and hit-test
     /// opacity still belong to `opacity` / `live_opacity`.
     pub fn dim(mut self, alpha: f32) -> Self {
-        fn apply(e: &mut El, alpha: f32) {
+        let alpha = alpha.clamp(0.0, 1.0);
+        let mut stack = vec![&mut self];
+        while let Some(e) = stack.pop() {
             e.expand_memo();
             if alpha < 1.0 || !e.vis.cold.is_empty() {
                 e.vis.cold_mut().paint_alpha *= alpha;
             }
-            for child in &mut e.children { apply(child, alpha); }
+            stack.extend(&mut e.children);
         }
-        apply(&mut self, alpha.clamp(0.0, 1.0));
         self
     }
     /// Fade the whole subtree as one composited layer, like CSS `opacity`: a label over its

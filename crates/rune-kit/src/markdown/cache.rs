@@ -13,6 +13,17 @@ pub(super) struct Parsed {
     pub(super) cuts: Rc<[Cut]>,
 }
 
+impl Drop for Parsed {
+    fn drop(&mut self) {
+        if let Some(blocks) = Rc::get_mut(&mut self.doc.0) {
+            super::drop_blocks(blocks);
+        }
+        if let Some(maps) = Rc::get_mut(&mut self.doc.4) {
+            super::drop_block_maps(maps);
+        }
+    }
+}
+
 pub(super) struct Cache {
     pub(super) docs: Budget<Rc<str>, Parsed>,
     /// The source parsed last, which a stream's next string extends.
@@ -74,9 +85,10 @@ fn cached(c: &mut Cache, src: &str, parse: fn(&str, bool) -> ParsedDoc) -> Doc {
     let key: Rc<str> = src.into();
     // Parsed text is about as long as its source, plus each block's bookkeeping.
     let bytes = 2 * src.len() + 64 * parsed.cuts.len() + 128;
-    c.docs.insert(key.clone(), parsed.clone(), bytes);
+    let doc = parsed.doc.clone();
+    c.docs.insert(key.clone(), parsed, bytes);
     c.last = Some(key);
-    parsed.doc
+    doc
 }
 
 /// The parse of `src`, which extends the `base_len` bytes `base` parsed, reusing every

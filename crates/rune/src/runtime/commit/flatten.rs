@@ -574,29 +574,27 @@ fn flatten_owned(
     let child_mark = taffy.begin_children();
     let mut children_dirty = false;
     let shared_len = memo_children.as_ref().map_or(0, |m| m.children.len());
-    if let Some(shared) = &memo_children {
-        for (i, c) in shared.children.iter().enumerate() {
-            let (kid, kid_dirty) = flatten_ref(c, Some(me), path_buf, i, motion, child_in_row, row, child_sx, taffy, nodes, scale, memo_ctx);
-            taffy.push_child(kid);
-            children_dirty |= kid_dirty;
-        }
-    }
-    for (j, c) in children.into_iter().enumerate() {
-        let (kid, kid_dirty) = flatten_owned(c, Some(me), path_buf, shared_len + j, motion, child_in_row, row, child_sx, taffy, nodes, scale, memo_ctx);
-        taffy.push_child(kid);
-        children_dirty |= kid_dirty;
+    if total_children > 0 {
+        rune_taffy::maybe_grow(|| {
+            if let Some(shared) = &memo_children {
+                for (i, c) in shared.children.iter().enumerate() {
+                    let (kid, kid_dirty) = flatten_ref(c, Some(me), path_buf, i, motion, child_in_row, row, child_sx, taffy, nodes, scale, memo_ctx);
+                    taffy.push_child(kid);
+                    children_dirty |= kid_dirty;
+                }
+            }
+            for (j, c) in children.into_iter().enumerate() {
+                let (kid, kid_dirty) = flatten_owned(c, Some(me), path_buf, shared_len + j, motion, child_in_row, row, child_sx, taffy, nodes, scale, memo_ctx);
+                taffy.push_child(kid);
+                children_dirty |= kid_dirty;
+            }
+        });
     }
     path_buf.truncate(prev_len);
     let (slot, dirty) = taffy.sync_node(id.0, me as u32, style, measure, secure_measure, child_mark, children_dirty);
     nodes[me].taffy = slot;
     if let Some((built_id, inherited, hover_within)) = record_built {
-        memo_ctx.pending.push(memo_reuse::PendingFlat {
-            built_id,
-            start: me,
-            len: nodes.len() - me,
-            inherited,
-            hover_within,
-        });
+        memo_ctx.pending.push(memo_reuse::PendingFlat { built_id, start: me, len: nodes.len() - me, inherited, hover_within });
     }
     (slot, dirty)
 }
@@ -778,22 +776,20 @@ fn flatten_ref(
     let row = matches!(style.flex_direction(), FlexDirection::Row | FlexDirection::RowReverse);
     let child_mark = taffy.begin_children();
     let mut children_dirty = false;
-    for (i, c) in el.all_children().enumerate() {
-        let (kid, kid_dirty) = flatten_ref(c, Some(me), path_buf, i, motion, child_in_row, row, child_sx, taffy, nodes, scale, memo_ctx);
-        taffy.push_child(kid);
-        children_dirty |= kid_dirty;
+    if total_children > 0 {
+        rune_taffy::maybe_grow(|| {
+            for (i, c) in el.all_children().enumerate() {
+                let (kid, kid_dirty) = flatten_ref(c, Some(me), path_buf, i, motion, child_in_row, row, child_sx, taffy, nodes, scale, memo_ctx);
+                taffy.push_child(kid);
+                children_dirty |= kid_dirty;
+            }
+        });
     }
     path_buf.truncate(prev_len);
     let (slot, dirty) = taffy.sync_node(id.0, me as u32, style.into_owned(), measure, secure_measure, child_mark, children_dirty);
     nodes[me].taffy = slot;
     if let Some((built_id, inherited, hover_within)) = record_built {
-        memo_ctx.pending.push(memo_reuse::PendingFlat {
-            built_id,
-            start: me,
-            len: nodes.len() - me,
-            inherited,
-            hover_within,
-        });
+        memo_ctx.pending.push(memo_reuse::PendingFlat { built_id, start: me, len: nodes.len() - me, inherited, hover_within });
     }
     (slot, dirty)
 }

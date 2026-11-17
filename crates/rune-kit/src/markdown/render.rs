@@ -56,10 +56,10 @@ pub(super) struct Flow {
     /// How much narrower than the text column they are: list indents and quote rules.
     pub(super) inset: f32,
     /// The columns a nested list's copied markers are indented by (`"  - "` under `"- "`).
-    pub(super) cols: u8,
+    pub(super) cols: usize,
     /// The marker a copy puts before the paragraph that opens a list item, its indent, and the
     /// newlines before it: two to set a top-level list apart from the block before it.
-    pub(super) lead: Option<(u8, Lead, u8)>,
+    pub(super) lead: Option<(usize, Lead, u8)>,
 }
 
 /// A list item's marker as copying writes it.
@@ -80,9 +80,9 @@ impl Lead {
     }
 
     /// The columns a list nested in the item is indented by, past the item's own.
-    pub(super) fn width(self) -> u8 {
+    pub(super) fn width(self) -> usize {
         match self {
-            Lead::Number(n) => n.to_string().len() as u8 + 2,
+            Lead::Number(n) => n.to_string().len() + 2,
             _ => 2,
         }
     }
@@ -164,23 +164,49 @@ pub(super) fn margins(b: &Block, s: &MarkdownStyle) -> (f32, f32) {
 /// margin pass through it, and a list item's 8 through the list: a quote that ends a list item
 /// spaces the list 16 from what follows, as it would standing alone.
 pub(super) fn collapsed(b: &Block, s: &MarkdownStyle, i: usize, in_item: bool) -> (f32, f32) {
-    let (mt, mb) = match b {
-        Block::Para(_) if in_item => (if i == 0 { 0.0 } else { 8.0 }, if i == 0 { 0.0 } else { 12.0 }),
-        Block::List { .. } if in_item => (4.0, 4.0),
-        _ => margins(b, s),
+    let own = |cur: &Block, idx: usize, item: bool| match cur {
+        Block::Para(_) if item => (if idx == 0 { 0.0 } else { 8.0 }, if idx == 0 { 0.0 } else { 12.0 }),
+        Block::List { .. } if item => (4.0, 4.0),
+        _ => margins(cur, s),
     };
-    let (first, last) = match b {
-        Block::Quote(inner) => (
-            inner.first().map(|f| collapsed(f, s, 0, false).0),
-            inner.last().map(|l| collapsed(l, s, inner.len() - 1, false).1),
-        ),
-        Block::List { items, .. } => (
-            items.first().and_then(|item| item.first()).map(|f| collapsed(f, s, 0, true).0),
-            items.last().map(|item| item.last().map_or(0.0, |l| collapsed(l, s, item.len() - 1, true).1).max(s.list_gap)),
-        ),
-        _ => (None, None),
-    };
-    (first.map_or(mt, |f| f.max(mt)), last.map_or(mb, |l| l.max(mb)))
+    let (mut top, mut bot) = own(b, i, in_item);
+    let (mut cur, mut idx, mut item) = (b, i, in_item);
+    loop {
+        top = top.max(own(cur, idx, item).0);
+        match cur {
+            Block::Quote(inner) => match inner.first() {
+                Some(f) => (cur, idx, item) = (f, 0, false),
+                None => break,
+            },
+            Block::List { items, .. } => match items.first().and_then(|it| it.first()) {
+                Some(f) => (cur, idx, item) = (f, 0, true),
+                None => break,
+            },
+            _ => break,
+        }
+    }
+    let (mut cur, mut idx, mut item) = (b, i, in_item);
+    loop {
+        bot = bot.max(own(cur, idx, item).1);
+        match cur {
+            Block::Quote(inner) => match inner.last() {
+                Some(l) => (cur, idx, item) = (l, inner.len() - 1, false),
+                None => break,
+            },
+            Block::List { items, .. } => match items.last() {
+                Some(it) => {
+                    bot = bot.max(s.list_gap);
+                    match it.last() {
+                        Some(l) => (cur, idx, item) = (l, it.len() - 1, true),
+                        None => break,
+                    }
+                }
+                None => break,
+            },
+            _ => break,
+        }
+    }
+    (top, bot)
 }
 
 thread_local! {
@@ -372,7 +398,7 @@ impl Renderer {
         // A copy puts a blank line around a paragraph, one newline around a list item's first
         // with its marker before it.
         let e = match self.flow.get().lead {
-            Some((cols, lead, before)) => e.copy_prefix(format!("{}{}", " ".repeat(cols.into()), lead.marker())).copy_breaks(before, 1),
+            Some((cols, lead, before)) => e.copy_prefix(format!("{}{}", " ".repeat(cols), lead.marker())).copy_breaks(before, 1),
             None => e.copy_breaks(2, 2),
         };
         self.select_inline(e, inl, map)
@@ -661,7 +687,7 @@ impl Renderer {
                     };
                     self.flow.set(Flow { lists: flow.lists + 1, inset: flow.inset + indent, cols: flow.cols + lead.width(), lead: Some((flow.cols, lead, if k == 0 && flow.lists == 0 { 2 } else { 1 })), ..flow });
                     if let Some((checked, marker_offset)) = task {
-                        c = c.child(self.task_item((k, n), indent, item, imap, marker_offset, checked).mt(gap(k)));
+                        c = c.child(rune::maybe_grow(|| self.task_item((k, n), indent, item, imap, marker_offset, checked)).mt(gap(k)));
                         continue;
                     }
                     let marker = if start.is_none() && s.list_outside {
@@ -673,6 +699,7 @@ impl Renderer {
                         if s.list_outside { marker.align(Align::End).pr(space) } else { marker.align(Align::Center) }
                     };
                     // The item's place in the list says what its marker shows.
+                    let body = rune::maybe_grow(|| self.blocks_in(item, imap, &[], false, true));
                     c = c.child(
                         row()
                             .key(format!("i{k}"))
@@ -681,7 +708,7 @@ impl Renderer {
                             .w_full()
                             .mt(gap(k))
                             .child(self.with_reveal(marker).a11y_hidden())
-                            .child(self.blocks_in(item, imap, &[], false, true).grow(1.0).shrink()),
+                            .child(body.grow(1.0).shrink()),
                     );
                 }
                 self.flow.set(flow);
@@ -698,7 +725,7 @@ impl Renderer {
                 let flow = self.flow.get();
                 let first_task = self.next_task.get();
                 self.flow.set(Flow { ink: q.text.or(flow.ink), inset: flow.inset + q.width + q.pad, ..flow });
-                let drawn = self.blocks(inner, inner_maps, &[], false);
+                let drawn = rune::maybe_grow(|| self.blocks(inner, inner_maps, &[], false));
                 self.flow.set(flow);
                 // The rule stands on the side the quote starts on.
                 let quote = bidi::directed(

@@ -74,10 +74,16 @@ pub(crate) struct Shared {
     pub(crate) reusable: bool,
 }
 
+impl Drop for Shared {
+    fn drop(&mut self) {
+        crate::el::drop_el_vec(&mut self.children);
+    }
+}
+
 impl El {
     /// Every child: those shared with a memo cache, then the element's own.
     pub(crate) fn all_children(&self) -> impl Iterator<Item = &El> {
-        self.memo_children().into_iter().flat_map(|c| c.children.iter()).chain(&self.children)
+        self.memo_children().into_iter().flat_map(|c| c.children.iter()).chain(&self.children.0)
     }
 
     /// The children shared with a memo cache, which come before `children`.
@@ -105,14 +111,17 @@ impl El {
                     self.cold_mut().expanded_memo = Some(built.clone());
                 }
             }
-            let shared = Rc::unwrap_or_clone(built.children.clone()).children;
-            let own = std::mem::replace(&mut self.children, shared);
+            let shared = match Rc::try_unwrap(built.children.clone()) {
+                Ok(mut s) => std::mem::take(&mut s.children),
+                Err(rc) => rc.children.clone(),
+            };
+            let own = std::mem::replace(&mut self.children.0, shared);
             self.children.extend(own);
         }
     }
 }
 
-fn el_flatten_reusable(e: &El) -> bool {
+fn el_node_reusable(e: &El) -> bool {
     let c = &*e.cold;
     // A list whose rows `virtual_rows` builds is reused with them while it mounts the same rows
     // (`Measurement::keeps_windows`); one built from children isn't.
@@ -125,32 +134,71 @@ fn el_flatten_reusable(e: &El) -> bool {
         && e.handlers.get().is_none_or(|h| h.modal.is_none())
         && e.text.as_ref().is_none_or(|t| !t.redacted && t.cold.live.is_none())
         && e.memo_children().is_none_or(|m| m.reusable && !m.duplicate_keys)
-        && e.children.iter().all(el_flatten_reusable)
+}
+
+fn el_flatten_reusable(e: &El) -> bool {
+    if !el_node_reusable(e) {
+        return false;
+    }
+    if e.children.is_empty() {
+        return true;
+    }
+        let mut stack: Vec<&El> = e.children.0.iter().collect();
+    while let Some(cur) = stack.pop() {
+        if !el_node_reusable(cur) {
+            return false;
+        }
+        stack.extend(&cur.children.0);
+    }
+    true
 }
 
 /// Precomputes `shape` on plain, non-input, non-cased text specs at `scale` while the freshly
 /// built subtree is still uniquely owned, so flattening never has to copy a shared `TextSpec`.
 fn prekey_text_shapes(el: &mut El, scale: f32) {
-    if el.cold.input.is_none()
-        && let Some(t) = &el.text
-        && !t.redacted
-        && t.case.is_none()
-        && t.cold.rings.is_empty()
-        && t.shape.is_none_or(|s| s.0 != scale.to_bits())
-        && let Some(t) = &mut el.text
-    {
-        t.key_shape(scale);
+    fn key_one(el: &mut El, scale: f32) {
+        if el.cold.input.is_none()
+            && let Some(t) = &el.text
+            && !t.redacted
+            && t.case.is_none()
+            && t.cold.rings.is_empty()
+            && t.shape.is_none_or(|s| s.0 != scale.to_bits())
+            && let Some(t) = &mut el.text
+        {
+            t.key_shape(scale);
+        }
     }
-    for child in &mut el.children {
-        prekey_text_shapes(child, scale);
+    key_one(el, scale);
+    if el.children.is_empty() {
+        return;
+    }
+    let mut stack: Vec<&mut El> = el.children.0.iter_mut().collect();
+    while let Some(cur) = stack.pop() {
+        key_one(cur, scale);
+        stack.extend(&mut cur.children.0);
     }
 }
 
 /// Whether `el` or anything under it is a focused field.
 pub(crate) fn has_focused_input(el: &El) -> bool {
-    el.cold.input.as_ref().is_some_and(|i| i.edit.focused)
-        || el.memo_children().is_some_and(|m| m.focused_input)
-        || el.children.iter().any(has_focused_input)
+    let own = |e: &El| {
+        e.cold.input.as_ref().is_some_and(|i| i.edit.focused)
+            || e.memo_children().is_some_and(|m| m.focused_input)
+    };
+    if own(el) {
+        return true;
+    }
+    if el.children.is_empty() {
+        return false;
+    }
+    let mut stack: Vec<&El> = el.children.0.iter().collect();
+    while let Some(cur) = stack.pop() {
+        if own(cur) {
+            return true;
+        }
+        stack.extend(&cur.children.0);
+    }
+    false
 }
 
 /// A built subtree: its root without children (or key, supplied per placeholder), and the
@@ -177,7 +225,7 @@ impl Built {
         } else {
             el.expand_memo();
             prekey_text_shapes(&mut el, scale);
-            let children = std::mem::take(&mut el.children);
+            let children = std::mem::take(&mut el.children.0);
             let focused_input = children.iter().any(has_focused_input);
             let duplicate_keys = crate::input::key_diagnostics::memo_children_have_duplicates(&el, &children);
             let has_virtual = children.iter().any(|c| c.flags.has(ElFlags::HAS_VIRTUAL));
@@ -840,9 +888,11 @@ fn print_el(el: &El, parent: &str, out: &mut Vec<String>) {
     let path = format!("{parent}/{}", el.key.as_deref().unwrap_or("#"));
     let text = el.text.as_ref().map(|t| format!("{:?} {:?} {}/{} {} spans", t.content, t.color, t.style.size, t.style.weight, t.spans.len()));
     out.push(format!("{path} {} {:?} {:?} {:?}", el.role_name(), el.style, el.vis, text));
-    for child in el.all_children() {
-        print_el(child, &path, out);
-    }
+    rune_taffy::maybe_grow(|| {
+        for child in el.all_children() {
+            print_el(child, &path, out);
+        }
+    });
 }
 
 #[doc(hidden)]

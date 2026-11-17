@@ -307,6 +307,8 @@ pub use rune_motion::Transition;
 pub use rune_motion::Travel;
 pub use rune_motion::Vec2;
 pub use rune_motion::Velocity;
+#[doc(hidden)]
+pub use rune_taffy::maybe_grow;
 pub use runtime::Cx;
 pub use runtime::ElementInfo;
 pub use runtime::Env;

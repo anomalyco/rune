@@ -100,7 +100,11 @@ impl Tree<'_> {
         if n.role() == Role::TextRun {
             v["chars"] = n.character_lengths().len().into();
         }
-        let children: Vec<Value> = n.children().iter().filter_map(|c| self.node(*c, origin, false)).collect();
+        let children: Vec<Value> = if n.children().is_empty() {
+            Vec::new()
+        } else {
+            rune_taffy::maybe_grow(|| n.children().iter().filter_map(|c| self.node(*c, origin, false)).collect())
+        };
         if !children.is_empty() { v["children"] = Value::Array(children); }
         Some(v)
     }
@@ -116,14 +120,19 @@ impl Tree<'_> {
     }
 
     fn descendant_labels(&self, n: &Node, out: &mut Vec<String>) {
-        for c in n.children() {
-            let Some(c) = self.nodes.get(&c.0) else { continue };
-            match c.role() {
-                Role::Label => if let Some(v) = c.value() { out.push(v.to_owned()) },
-                Role::Image => if let Some(l) = c.label() { out.push(l.to_owned()) },
-                Role::GenericContainer => self.descendant_labels(c, out),
-                _ => {}
+        let mut stack = vec![n];
+        while let Some(cur) = stack.pop() {
+            let base = stack.len();
+            for c in cur.children() {
+                let Some(c) = self.nodes.get(&c.0) else { continue };
+                match c.role() {
+                    Role::Label => if let Some(v) = c.value() { out.push(v.to_owned()) },
+                    Role::Image => if let Some(l) = c.label() { out.push(l.to_owned()) },
+                    Role::GenericContainer => stack.push(c),
+                    _ => {}
+                }
             }
+            stack[base..].reverse();
         }
     }
 }

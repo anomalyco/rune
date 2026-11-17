@@ -134,21 +134,23 @@ fn walk_row_el<'a>(
         *order_in_row += 1;
         had_child_text = true;
     }
-    for (i, child) in el.all_children().enumerate() {
-        let child_path = crate::runtime::flatten::node_path(path, child.key.as_deref(), i);
-        let child_rel = crate::runtime::flatten::node_path(rel_path, child.key.as_deref(), i);
-        let before_len = texts.len();
-        walk_row_el(
-            child, list_path, row_key, row_index, &child_path, &child_rel,
-            group, inert, order_in_row, texts, copy_providers,
-        );
-        if texts.len() > before_len {
-            if had_child_text {
-                texts[before_len].tab_before = is_row;
+    rune_taffy::maybe_grow(|| {
+        for (i, child) in el.all_children().enumerate() {
+            let child_path = crate::runtime::flatten::node_path(path, child.key.as_deref(), i);
+            let child_rel = crate::runtime::flatten::node_path(rel_path, child.key.as_deref(), i);
+            let before_len = texts.len();
+            walk_row_el(
+                child, list_path, row_key, row_index, &child_path, &child_rel,
+                group, inert, order_in_row, texts, copy_providers,
+            );
+            if texts.len() > before_len {
+                if had_child_text {
+                    texts[before_len].tab_before = is_row;
+                }
+                had_child_text = true;
             }
-            had_child_text = true;
         }
-    }
+    });
 }
 
 pub(super) fn offscreen_piece(t: &OffscreenText, range: Range<usize>, base: Option<&str>) -> SelectedText {

@@ -67,34 +67,17 @@ pub(super) enum BlockMap {
 
 impl BlockMap {
     pub(super) fn shift_src(mut self, offset: usize) -> Self {
-        if offset == 0 {
-            return self;
-        }
-        match &mut self {
-            BlockMap::Inline(m) | BlockMap::Code(m) => m.shift_src(offset),
-            BlockMap::List(items) => {
-                for item in items {
-                    for b in item {
-                        *b = std::mem::take(b).shift_src(offset);
-                    }
+        if offset > 0 {
+            let mut stack = vec![&mut self];
+            while let Some(cur) = stack.pop() {
+                match cur {
+                    BlockMap::Inline(m) | BlockMap::Code(m) => m.shift_src(offset),
+                    BlockMap::List(items) => stack.extend(items.iter_mut().flatten()),
+                    BlockMap::Quote(inner) => stack.extend(inner.iter_mut()),
+                    BlockMap::Table { head, rows } => head.iter_mut().chain(rows.iter_mut().flatten()).for_each(|m| m.shift_src(offset)),
+                    BlockMap::None => {}
                 }
             }
-            BlockMap::Quote(inner) => {
-                for b in inner {
-                    *b = std::mem::take(b).shift_src(offset);
-                }
-            }
-            BlockMap::Table { head, rows } => {
-                for m in head {
-                    m.shift_src(offset);
-                }
-                for row in rows {
-                    for m in row {
-                        m.shift_src(offset);
-                    }
-                }
-            }
-            BlockMap::None => {}
         }
         self
     }

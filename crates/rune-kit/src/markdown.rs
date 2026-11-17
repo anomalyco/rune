@@ -462,7 +462,7 @@ impl Markdown {
     fn render_uncached(self, style: &MarkdownStyle) -> El {
         #[cfg(test)]
         RENDERS.with(|n| n.set(n.get() + 1));
-        let (blocks, sources, tasks, starts, maps) = match (self.autolink, self.streaming) {
+        let (mut blocks, sources, tasks, starts, mut maps) = match (self.autolink, self.streaming) {
             (true, false) => doc_cached(&self.src),
             (true, true) => stream_cached(&self.src),
             (false, streaming) => {
@@ -482,10 +482,52 @@ impl Markdown {
             diagram_frame: self.diagram_frame, code_frame: self.code_frame, quote_frame: self.quote_frame, link_favicon: self.link_favicon, images: self.images, on_image: self.on_image, flow: Cell::default() };
         // The document reads the way its first words do; until any arrive, the way it was asked.
         let root = bidi::directed(r.blocks(&blocks, &maps, &keys, true), bidi::blocks_dir(&blocks).or(self.tentative)).selection_group(self.selectable);
-        if !(self.selectable && self.copy_source) { return root; }
-        let names: Rc<[String]> = rendered_keys(blocks.len(), &keys).into();
+        let names = (self.selectable && self.copy_source).then(|| rendered_keys(blocks.len(), &keys).into());
+        if let Some(owned) = Rc::get_mut(&mut blocks) {
+            drop_blocks(owned);
+        }
+        if let Some(owned) = Rc::get_mut(&mut maps) {
+            drop_block_maps(owned);
+        }
+        let Some(names): Option<Rc<[String]>> = names else { return root };
         let src: Rc<str> = self.src.into();
         root.selection_copy(move |sel| source_copy(&src, &starts, &names, sel))
+    }
+}
+
+fn drop_blocks(blocks: &mut Vec<Block>) {
+    if !blocks.iter().any(|b| matches!(b, Block::List { .. } | Block::Quote(_))) {
+        return;
+    }
+    let mut stack = std::mem::take(blocks);
+    while let Some(mut b) = stack.pop() {
+        match &mut b {
+            Block::List { items, .. } => {
+                for mut item in std::mem::take(items) {
+                    stack.append(&mut item);
+                }
+            }
+            Block::Quote(inner) => stack.append(inner),
+            _ => {}
+        }
+    }
+}
+
+fn drop_block_maps(maps: &mut [BlockMap]) {
+    if !maps.iter().any(|m| matches!(m, BlockMap::List(_) | BlockMap::Quote(_))) {
+        return;
+    }
+    let mut stack: Vec<BlockMap> = maps.iter_mut().map(std::mem::take).collect();
+    while let Some(mut cur) = stack.pop() {
+        match &mut cur {
+            BlockMap::List(items) => {
+                for mut item in std::mem::take(items) {
+                    stack.append(&mut item);
+                }
+            }
+            BlockMap::Quote(inner) => stack.append(inner),
+            _ => {}
+        }
     }
 }
 

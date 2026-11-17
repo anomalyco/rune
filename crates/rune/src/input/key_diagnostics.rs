@@ -45,8 +45,9 @@ fn shared_children(el: &El) -> &[El] {
 
 fn clean_with(el: &El, hashes: &mut Vec<u64>) -> bool {
     if el.memo_children().is_some_and(|m| m.duplicate_keys) { return false; }
-    if checks_siblings(el) && !unique(shared_children(el), &el.children, hashes) { return false; }
-    el.children.iter().all(|c| clean_with(c, hashes))
+    if checks_siblings(el) && !unique(shared_children(el), &el.children.0, hashes) { return false; }
+    if el.children.is_empty() { return true; }
+    rune_taffy::maybe_grow(|| el.children.iter().all(|c| clean_with(c, hashes)))
 }
 
 /// Whether no parent in `root` has two children with one key: the per-commit check, which
@@ -85,11 +86,13 @@ fn find(root: &El, path: &str) -> Vec<Duplicate> {
                 }
             }
         }
-        for (index, child) in el.all_children().enumerate() {
-            if clean_with(child, hashes) { continue; }
-            let segment = child.key.clone().unwrap_or_else(|| format!("#{index}"));
-            walk(child, &format!("{path}/{segment}"), hashes, out);
-        }
+        rune_taffy::maybe_grow(|| {
+            for (index, child) in el.all_children().enumerate() {
+                if clean_with(child, hashes) { continue; }
+                let segment = child.key.clone().unwrap_or_else(|| format!("#{index}"));
+                walk(child, &format!("{path}/{segment}"), hashes, out);
+            }
+        });
     }
     let mut out = Vec::new();
     walk(root, path, &mut Vec::new(), &mut out);
@@ -146,13 +149,17 @@ pub(crate) fn repair_at(root: &mut El, path: &str) -> Vec<Duplicate> {
     // Only memos on the way to a duplicate are copied out of the cache.
     fn walk(el: &mut El, hashes: &mut Vec<u64>) {
         let shared = el.memo_children().is_some_and(|m| m.duplicate_keys);
-        let siblings = checks_siblings(el) && !unique(shared_children(el), &el.children, hashes);
+        let siblings = checks_siblings(el) && !unique(shared_children(el), &el.children.0, hashes);
         if shared || siblings { el.expand_memo(); }
         if siblings || (shared && el.cold.virtual_estimate.is_none()) {
             rename_duplicates(el.children.iter_mut().filter_map(|c| c.key.as_mut()));
         }
-        for child in &mut el.children {
-            if !clean_with(child, hashes) { walk(child, hashes); }
+        if !el.children.is_empty() {
+            rune_taffy::maybe_grow(|| {
+                for child in &mut el.children {
+                    if !clean_with(child, hashes) { walk(child, hashes); }
+                }
+            });
         }
     }
     walk(root, &mut Vec::new());

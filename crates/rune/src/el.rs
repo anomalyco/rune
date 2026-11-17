@@ -215,13 +215,77 @@ pub(crate) type ScrollOffsetFn = Rc<dyn Fn(crate::ScrollPos)>;
 pub(crate) type WindowFocusFn = Rc<dyn Fn(crate::states::States<'_>, bool, &mut Tx)>;
 pub(crate) type LanguagesFn = Rc<dyn Fn(crate::states::States<'_>, Vec<String>, &mut Tx)>;
 
+#[repr(transparent)]
+#[derive(Clone, Default)]
+pub(crate) struct ElChildren(pub(crate) Vec<El>);
+
+impl std::ops::Deref for ElChildren {
+    type Target = Vec<El>;
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target { &self.0 }
+}
+
+impl std::ops::DerefMut for ElChildren {
+    #[inline(always)]
+    fn deref_mut(&mut self) -> &mut Self::Target { &mut self.0 }
+}
+
+impl FromIterator<El> for ElChildren {
+    #[inline]
+    fn from_iter<T: IntoIterator<Item = El>>(iter: T) -> Self { Self(iter.into_iter().collect()) }
+}
+
+impl Extend<El> for ElChildren {
+    #[inline]
+    fn extend<T: IntoIterator<Item = El>>(&mut self, iter: T) { self.0.extend(iter); }
+}
+
+impl IntoIterator for ElChildren {
+    type Item = El;
+    type IntoIter = std::vec::IntoIter<El>;
+    #[inline]
+    fn into_iter(mut self) -> Self::IntoIter { std::mem::take(&mut self.0).into_iter() }
+}
+
+impl<'a> IntoIterator for &'a ElChildren {
+    type Item = &'a El;
+    type IntoIter = std::slice::Iter<'a, El>;
+    #[inline]
+    fn into_iter(self) -> Self::IntoIter { self.0.iter() }
+}
+
+impl<'a> IntoIterator for &'a mut ElChildren {
+    type Item = &'a mut El;
+    type IntoIter = std::slice::IterMut<'a, El>;
+    #[inline]
+    fn into_iter(self) -> Self::IntoIter { self.0.iter_mut() }
+}
+
+impl Drop for ElChildren {
+    fn drop(&mut self) {
+        drop_el_vec(&mut self.0);
+    }
+}
+
+pub(crate) fn drop_el_vec(vec: &mut Vec<El>) {
+    if !vec.iter().any(El::has_nested_drop) {
+        return;
+    }
+    let mut stack = std::mem::take(vec);
+    while let Some(mut node) = stack.pop() {
+        if node.has_nested_drop() {
+            node.drain_drop_children(&mut stack);
+        }
+    }
+}
+
 /// An element: layout, paint, children and handlers. Hot fields sit inline in three cache lines;
 /// the rest wait behind `cold`, allocated on the first write.
 #[derive(Clone)]
 pub struct El {
     pub(crate) style: CompactStyle,
     pub(crate) vis: Visual,
-    pub(crate) children: Vec<El>,
+    pub(crate) children: ElChildren,
     pub(crate) key: Option<String>,
     pub(crate) text: Option<crate::cold::SharedBox<TextSpec>>,
     pub(crate) handlers: crate::cold::Cold<Handlers>,
@@ -253,7 +317,7 @@ fn base(dir: FlexDirection) -> El {
         // to the window instead, as CSS does.
         style: CompactStyle::rune_base(dir),
         vis: Visual::default(),
-        children: Vec::new(),
+        children: ElChildren::default(),
         key: None,
         text: None,
         handlers: crate::cold::Cold::NONE,
@@ -426,5 +490,33 @@ impl El {
             self.flags.set(ElFlags::HAS_VIRTUAL, true);
         }
         self
+    }
+
+    #[inline]
+    fn has_nested_drop(&self) -> bool {
+        !self.children.is_empty()
+            || self.memo.as_ref().is_some_and(|b| Rc::strong_count(b) == 1)
+            || (!self.cold.is_empty() && self.cold.expanded_memo.as_ref().is_some_and(|b| Rc::strong_count(b) == 1))
+    }
+
+    fn drain_drop_children(&mut self, stack: &mut Vec<El>) {
+        stack.append(&mut self.children.0);
+        let mut drain_built = |slot: &mut Option<Rc<crate::memo::Built>>| {
+            if slot.as_ref().is_some_and(|b| Rc::strong_count(b) == 1)
+                && let Some(built) = slot.take()
+                && let Ok(mut built) = Rc::try_unwrap(built)
+            {
+                if built.root.has_nested_drop() {
+                    built.root.drain_drop_children(stack);
+                }
+                if let Some(shared) = Rc::get_mut(&mut built.children) {
+                    stack.append(&mut shared.children);
+                }
+            }
+        };
+        drain_built(&mut self.memo);
+        if let Some(cold) = self.cold.get_mut_if_some() {
+            drain_built(&mut cold.expanded_memo);
+        }
     }
 }

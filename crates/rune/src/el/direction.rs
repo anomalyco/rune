@@ -195,9 +195,7 @@ fn first_strong_char(text: &str, across: bool) -> Option<Direction> {
     None
 }
 
-/// The first strong direction in `el`'s text, then its children's in order, skipping children
-/// that set their own direction.
-fn first_strong(el: &El) -> Option<Direction> {
+fn own_strong(el: &El) -> Option<Direction> {
     // A by-paragraph field reads as a `contenteditable` with `dir="auto"`: its text across its
     // lines, each mention pill (a `dir="auto"` span) skipped, and none while it's empty (its
     // placeholder is another element).
@@ -224,7 +222,26 @@ fn first_strong(el: &El) -> Option<Direction> {
     {
         return Some(d);
     }
-    el.all_children().filter(|c| c.flags.dir().is_none()).find_map(first_strong)
+    None
+}
+
+/// The first strong direction in `el`'s text, then its children's in order, skipping children
+/// that set their own direction.
+fn first_strong(el: &El) -> Option<Direction> {
+    if let Some(d) = own_strong(el) {
+        return Some(d);
+    }
+    let mut stack: Vec<&El> = el.all_children().filter(|c| c.flags.dir().is_none()).collect();
+    stack.reverse();
+    while let Some(cur) = stack.pop() {
+        if let Some(d) = own_strong(cur) {
+            return Some(d);
+        }
+        let base = stack.len();
+        stack.extend(cur.all_children().filter(|c| c.flags.dir().is_none()));
+        stack[base..].reverse();
+    }
+    None
 }
 
 /// Mirrors what a right-to-left element draws on its own left and right: corner radii, border

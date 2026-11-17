@@ -21,14 +21,19 @@ use super::parser::{ParsedDoc, Scope, Tail, parse_doc_tail};
 
 /// [`parse_doc`] of `src` as a stream's current text.
 pub(super) fn parse_streaming(src: &str, autolink: bool) -> ParsedDoc {
-    let (raw, tail) = parse_doc_tail(src, autolink);
+    let (mut raw, tail) = parse_doc_tail(src, autolink);
     let end = held_table(src, tail, raw.0.last()).unwrap_or(src.len());
     let patch = match tail {
         Tail::Inline(start, scope) if start < end => close_tail(&src[start..end], start, scope),
         _ => None,
     };
     let Some(Patch { cut, closers, markers, code }) = patch else {
-        return if end == src.len() { raw } else { parse_doc(&src[..end], autolink) };
+        if end == src.len() {
+            return raw;
+        }
+        super::drop_blocks(&mut raw.0);
+        super::drop_block_maps(&mut raw.5);
+        return parse_doc(&src[..end], autolink);
     };
     if !closers.is_empty() {
         let kept = src[..cut].trim_end();
@@ -39,17 +44,33 @@ pub(super) fn parse_streaming(src: &str, autolink: bool) -> ParsedDoc {
             if code {
                 drop_closing_pad(&mut doc);
             }
+            super::drop_blocks(&mut raw.0);
+            super::drop_block_maps(&mut raw.5);
             return doc;
         }
+        super::drop_blocks(&mut doc.0);
+        super::drop_block_maps(&mut doc.5);
     }
-    let doc = parse_doc(&src[..cut], autolink);
+    let mut doc = parse_doc(&src[..cut], autolink);
     if columns(&doc) >= columns(&raw) {
+        super::drop_blocks(&mut raw.0);
+        super::drop_block_maps(&mut raw.5);
         return doc;
     }
+    super::drop_blocks(&mut doc.0);
+    super::drop_block_maps(&mut doc.5);
     // Leaving markers out of a header's last cell (`| a | *`) left that cell out too: keep it,
     // empty, so the table keeps its columns.
-    let doc = parse_doc(&format!("{}|", &src[..cut]), autolink);
-    if columns(&doc) >= columns(&raw) { doc } else { raw }
+    let mut doc = parse_doc(&format!("{}|", &src[..cut]), autolink);
+    if columns(&doc) >= columns(&raw) {
+        super::drop_blocks(&mut raw.0);
+        super::drop_block_maps(&mut raw.5);
+        doc
+    } else {
+        super::drop_blocks(&mut doc.0);
+        super::drop_block_maps(&mut doc.5);
+        raw
+    }
 }
 
 /// How many columns the last block has, if it's a table.
@@ -337,29 +358,42 @@ fn drop_closing_pad(doc: &mut ParsedDoc) {
 }
 
 /// The last inline text of block `b`, and its map.
-fn last_inline<'a>(b: &'a mut Block, m: &'a mut BlockMap) -> Option<(&'a mut Inline, &'a mut SpanMap)> {
-    match (b, m) {
-        (Block::Para(i) | Block::Heading(_, i), BlockMap::Inline(m)) => Some((i, m)),
-        (Block::List { items, .. }, BlockMap::List(maps)) => last_inline(items.last_mut()?.last_mut()?, maps.last_mut()?.last_mut()?),
-        (Block::Quote(inner), BlockMap::Quote(maps)) => last_inline(inner.last_mut()?, maps.last_mut()?),
-        (Block::Table(t), BlockMap::Table { head, rows }) => match (t.rows.last_mut(), rows.last_mut()) {
-            (Some(r), Some(m)) => Some((r.last_mut()?, m.last_mut()?)),
-            _ => Some((t.head.last_mut()?, head.last_mut()?)),
-        },
-        _ => None,
+fn last_inline<'a>(mut b: &'a mut Block, mut m: &'a mut BlockMap) -> Option<(&'a mut Inline, &'a mut SpanMap)> {
+    loop {
+        match (b, m) {
+            (Block::Para(i) | Block::Heading(_, i), BlockMap::Inline(m)) => return Some((i, m)),
+            (Block::List { items, .. }, BlockMap::List(maps)) => {
+                b = items.last_mut()?.last_mut()?;
+                m = maps.last_mut()?.last_mut()?;
+            }
+            (Block::Quote(inner), BlockMap::Quote(maps)) => {
+                b = inner.last_mut()?;
+                m = maps.last_mut()?;
+            }
+            (Block::Table(t), BlockMap::Table { head, rows }) => return match (t.rows.last_mut(), rows.last_mut()) {
+                (Some(r), Some(m)) => Some((r.last_mut()?, m.last_mut()?)),
+                _ => Some((t.head.last_mut()?, head.last_mut()?)),
+            },
+            _ => return None,
+        }
     }
 }
 
 /// Whether any of `map`'s text comes from source bytes `r`.
 fn shows(map: &BlockMap, r: &Range<usize>) -> bool {
     let hit = |m: &SpanMap| m.0.iter().any(|(s, _)| s.start < r.end && r.start < s.end);
-    match map {
-        BlockMap::Inline(m) | BlockMap::Code(m) => hit(m),
-        BlockMap::List(items) => items.iter().flatten().any(|b| shows(b, r)),
-        BlockMap::Quote(inner) => inner.iter().any(|b| shows(b, r)),
-        BlockMap::Table { head, rows } => head.iter().chain(rows.iter().flatten()).any(hit),
-        BlockMap::None => false,
+    let mut stack = vec![map];
+    while let Some(cur) = stack.pop() {
+        match cur {
+            BlockMap::Inline(m) | BlockMap::Code(m) if hit(m) => return true,
+            BlockMap::Inline(_) | BlockMap::Code(_) | BlockMap::None => {}
+            BlockMap::List(items) => stack.extend(items.iter().flatten()),
+            BlockMap::Quote(inner) => stack.extend(inner),
+            BlockMap::Table { head, rows } if head.iter().chain(rows.iter().flatten()).any(hit) => return true,
+            BlockMap::Table { .. } => {}
+        }
     }
+    false
 }
 
 #[cfg(test)]
