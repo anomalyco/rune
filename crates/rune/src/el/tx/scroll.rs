@@ -21,6 +21,16 @@ impl Tx {
         if !self.live_growth.contains(&stack) { self.live_growth.push(stack); }
     }
 
+    /// A newly delivered `row` in `stack` takes room from a panel immediately below its
+    /// viewport. If the panel gives the viewport exactly the height it loses, move that
+    /// shared edge on the incoming row's growth, not a second spring. Otherwise the usual
+    /// `grow_visible_tail` rules apply. `panel` names its occupied space, excluding overlaps.
+    pub fn grow_visible_tail_from(&mut self, stack: impl Into<String>, row: impl Into<String>, panel: impl Into<String>) {
+        let stack = stack.into();
+        self.grow_visible_tail(stack.clone());
+        self.tail_rooms.push((stack, row.into(), panel.into()));
+    }
+
     /// Reveal a keyed row, including a currently unrealized virtual row. It scrolls the nearest
     /// vertical viewport around the row and, through [`El::scroll_x`] or [`El::scroll_xy`], the
     /// nearest horizontal one, each just far enough. The vertical reveal follows the presented

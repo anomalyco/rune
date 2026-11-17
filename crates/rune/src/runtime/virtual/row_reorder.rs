@@ -10,6 +10,9 @@
 //! no row here: growth carries those, as it does a row inserted or removed above another.
 use super::*;
 
+#[path = "handoff.rs"]
+pub(super) mod handoff;
+
 /// One growth stack's rows that the last commit reordered.
 #[derive(Clone, Debug, Default)]
 pub(super) struct Reorder {
@@ -52,19 +55,24 @@ impl<S: 'static> Runtime<S> {
     /// Only a virtual list already showing its tail, in the same viewport, can grow it for a
     /// live arrival. If its viewport changes height too (a tray closing under it), landing
     /// both together avoids first moving by the tray's height and then back by the row's.
-    pub(super) fn live_tail(&self, nodes: &[Node], i: usize, tx: &Tx, previous_height: f32) -> Option<std::ops::Range<usize>> {
+    pub(super) fn live_tail(&self, nodes: &[Node], i: usize, tx: &Tx, stack: &mut Stack) -> Option<std::ops::Range<usize>> {
         let node = &nodes[i];
         if tx.commit != Commit::Unprompted || node.instant_changes || !tx.live_growth.iter().any(|key| node.named(key)) { return None; }
         let list = self.virtuals.get(&node.path)?;
         let scroll = self.path_ids.get(&list.scroll_path)?;
-        let same_height = (previous_height - list.viewport).abs() < 1.0 / 64.0;
-        if !same_height || list.nested || list.replaced_view() || list.drawn.is_empty() || !self.scrolls.get(scroll)?.pinned() { return None; }
+        if list.nested || list.replaced_view() || list.drawn.is_empty() || !self.scrolls.get(scroll)?.pinned() { return None; }
         // The list's own tail is the viewport's tail only if nothing extends below it.
         // A toolbar *after* the list may cover even its last overscanned rows.
         let parent = node.parent?;
         if nodes[parent].id != *scroll || nodes[i + 1..].iter().take_while(|n| n.parent >= Some(parent))
             .any(|n| n.parent == Some(parent) && n.target[3] > node.target[3]) { return None; }
-        Some(list.visible_range(0.0, true))
+        let range = list.visible_range(0.0, true);
+        if (stack.viewport_height - list.viewport).abs() >= 1.0 / 64.0 {
+            let (_, row, room) = tx.tail_rooms.iter().rev().find(|(key, _, _)| node.named(key))?;
+            if !range.contains(&list.index_of(row)?) { return None; }
+            stack.handoff = self.tail_handoff(nodes, i, parent, row, room)?;
+        }
+        Some(range)
     }
 
     /// How far node `i`, a growth row, jumped because its stack's rows changed order this commit.
