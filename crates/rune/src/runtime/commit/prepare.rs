@@ -8,7 +8,7 @@
 //! none while input waits. Each idle turn works for one [`PREPARE_SLICE`]: the first measures the
 //! view and shapes what it can in its slice, queuing the rest (`text/prepare_budget.rs`); each
 //! later turn shapes queued texts for a slice, up to [`PREPARE_BYTES`] in all. A press or a key
-//! drops what is left.
+//! drops the request and what is left of it.
 
 use super::*;
 
@@ -26,6 +26,13 @@ impl<S: 'static> Runtime<S> {
     /// Whether an idle turn has a view to prepare for this window.
     pub(crate) fn text_idle_owed(&self) -> bool {
         Tx::prepare_owed::<S>() || crate::text::TextSystem::prepare_queued(std::any::TypeId::of::<S>())
+    }
+
+    /// A press or a key: the request and whatever of it is left go, so the frame it causes shapes
+    /// what it needs, as it would have, and nothing runs after it for a view it may have left.
+    pub(crate) fn stop_prepare(&mut self) {
+        Tx::drop_prepared();
+        self.text.prepare_stop();
     }
 
     /// One idle turn's text work: the view asked to be prepared, if any; true while more is owed.
