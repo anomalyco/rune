@@ -103,6 +103,7 @@ impl GpuTimer {
             const CELL: f32 = 4.0;
             let (cw, ch) = ((viewport.0 as f32 / CELL).ceil() as usize, (viewport.1 as f32 / CELL).ceil() as usize);
             let mut covered = vec![false; cw * ch];
+            let across = std::env::var_os("RUNE_CENSUS_COVER").is_some_and(|v| v == "across");
             let cells = |x0: f32, y0: f32, x1: f32, y1: f32, inside: bool| {
                 // Cells whose centre is in the box (inside = false) or that lie wholly in it (inside = true).
                 let (a, b) = if inside { ((x0 / CELL).ceil(), (x1 / CELL).floor()) } else { ((x0 / CELL - 0.5).ceil(), (x1 / CELL - 0.5).floor() + 1.0) };
@@ -111,7 +112,8 @@ impl GpuTimer {
             };
             for i in instances.iter().rev() {
                 let k = (i.params[1] as usize).min(15);
-                if matches!(k, 8 | 9 | 12 | 13) { kinds[23].0 += 1; covered.iter_mut().for_each(|c| *c = false); continue; }
+                // RUNE_CENSUS_COVER=across: an upper bound that also counts what a layer's opaque content covers below it.
+                if matches!(k, 8 | 9 | 12 | 13) { kinds[23].0 += 1; if !across { covered.iter_mut().for_each(|c| *c = false); } continue; }
                 let grow = match k { 1 => i.params[2] * 3.0 + 1.0, 2 => 0.0, 3 | 5..=7 | 10 => 1.0, _ => 1.0 + i.params[2] * 2.0 };
                 let (x0, y0, x1, y1) = cells(i.rect[0] - grow, i.rect[1] - grow, i.rect[0] + i.rect[2] + grow, i.rect[1] + i.rect[3] + grow, false);
                 let (mut all, mut some) = (x0 < x1 && y0 < y1, 0u32);
