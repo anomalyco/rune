@@ -18,6 +18,18 @@
 //! animation, a transcript of any length) parses nothing. A growing stream parses only from the
 //! start of its last top-level block each time it grows.
 //!
+//! **Nesting & stack.** Container nesting (`<blockquote>`, `<ul>`/`<ol>`, `<li>`) is bounded at
+//! `511` open elements (`255` nested lists, `1` quote + `255` nested lists, or `510` nested block
+//! quotes; deeper items flatten into the innermost list or quote, capped at `64` flattened tail
+//! lines per block), matching Blink's `DOMParser` HTML tree limit (`kMaximumHTMLParserDOMTreeDepth`
+//! = `512` including `<html>` and `<body>`). `Markdown`'s own parser, direction pre-pass, plain
+//! text formatter and element builder run iteratively (`O(1)` call stack), while Rune's commit
+//! flatten and `wasm32` layout recurse up to `~1,020` elements at `510` quotes (`~1.6 MiB` on
+//! `wasm32`, `~2.1 MiB` on 64-bit native without `rune-taffy` stack continuation, and `< 1 MiB`
+//! on Windows/macOS/Linux with `rune-taffy` segment continuation). Web builds should link with at
+//! least `-C link-arg=-zstack-size=2097152` (`2 MiB`), and native targets without `stacker`
+//! should reserve at least `4 MiB` of UI-thread stack.
+//!
 //! **Keys.** Top-level blocks are keyed `b{index}` (or by [`Markdown::block_keys`]), list items
 //! `i{index}` and their blocks by `b{index}` inside the item. Appending to a stream only ever
 //! changes the last block or adds blocks after it, so earlier blocks keep their keys and never
@@ -474,6 +486,8 @@ impl Markdown {
             starts.iter().map(|at| self.block_keys.iter().find(|(offset, _)| offset == at)
                 .map_or_else(String::new, |(_, key)| key.clone())).collect::<Vec<_>>()
         };
+        let dirs = bidi::Dirs::new(&blocks);
+        let root_dir = dirs.of_slice(&blocks).or(self.tentative);
         let r = Renderer { s: style.clone(), highlights: self.highlights, reveal: self.reveal, streaming: self.streaming, on_link: self.on_link, on_link_secondary: self.on_link_secondary, link_look: self.link_look, link_help: self.link_help, link_ring: self.link_ring, code_link: self.code_link,
             on_task: self.on_task, tasks_read_only: self.tasks_read_only, selectable: self.selectable, scroll_wide: self.scroll_wide, tentative: self.tentative,
             highlighter: self.highlighter, sources, next_source: Cell::new(0), tasks, next_task: Cell::new(0),
@@ -481,7 +495,7 @@ impl Markdown {
             #[cfg(feature = "mermaid")]
             diagram_frame: self.diagram_frame, code_frame: self.code_frame, quote_frame: self.quote_frame, link_favicon: self.link_favicon, images: self.images, on_image: self.on_image, flow: Cell::default() };
         // The document reads the way its first words do; until any arrive, the way it was asked.
-        let root = bidi::directed(r.blocks(&blocks, &maps, &keys, true), bidi::blocks_dir(&blocks).or(self.tentative)).selection_group(self.selectable);
+        let root = bidi::directed(r.blocks_with_dirs(&blocks, &maps, &keys, true, &dirs), root_dir).selection_group(self.selectable);
         if !(self.selectable && self.copy_source) { return root; }
         let names: Rc<[String]> = rendered_keys(blocks.len(), &keys).into();
         let src: Rc<str> = self.src.into();

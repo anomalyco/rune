@@ -105,7 +105,6 @@ pub(super) struct Builder {
     stack: Vec<(Container, Vec<Block>, Vec<BlockMap>)>,
     quote_nested: Vec<bool>,
     list_slots: Vec<ListSlot>,
-    item_nested: Vec<bool>,
     inline: Option<(InlineKind, Inline, Vec<Open>, SpanMap)>,
     code: Option<(String, Fence, SpanMap)>,
     /// The source range of the last paragraph started at the root.
@@ -192,16 +191,16 @@ pub(super) struct Open {
     url: Option<String>,
 }
 
-/// Maximum open HTML container elements inside a Markdown block, matching Chromium's
-/// 512-element HTML parser cap after `<html>` and `<body>` in `DOMParser`: 255 nested lists
-/// (`<ul><li>` / `<ol><li>`) or 510 nested `<blockquote>`s.
-const MAX_CONTAINER_DEPTH: usize = 510;
+/// Maximum open HTML elements under `<body>` in Blink's HTML parser (`kMaximumHTMLParserDOMTreeDepth`
+/// = 512, where `AttachLater` reparents only once `StackDepth() > 512`, leaving 511 elements under
+/// `<html><body>` while text nodes still attach directly to the current element): 255 nested lists
+/// (`<ul><li>` / `<ol><li>`), 1 quote + 255 nested lists, or 510 non-empty `<blockquote>`s.
+pub(super) const MAX_ELEMENT_DEPTH: usize = 511;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ListSlot {
     Nested,
     SiblingItems,
-    InlineBlocks,
 }
 
 enum Container {
@@ -228,12 +227,14 @@ impl Builder {
         if self.stack.len() == 1 {
             self.block_starts.push(self.root_start);
         }
-        let top = self.stack.last_mut().unwrap();
+        let Self { stack, tasks, .. } = self;
+        let top = stack.last_mut().unwrap();
         if let Container::List(_, items, item_maps) = &mut top.0 {
             if let (Some(last_b), Some(last_m)) = (items.last_mut(), item_maps.last_mut()) {
                 last_b.push(b);
                 last_m.push(map);
             } else {
+                tasks.push(None);
                 items.push(vec![b]);
                 item_maps.push(vec![map]);
             }
@@ -476,11 +477,40 @@ pub(super) fn parse_doc(src: &str, autolink: bool) -> ParsedDoc {
 
 /// [`parse_doc`], and what the source ends inside.
 pub(super) fn parse_doc_tail(src: &str, autolink: bool) -> (ParsedDoc, Tail) {
+    if let Some((cut_start, cut_end)) = super::cache::find_deep_tail_cut(src) {
+        let (mut head, _) = parse_doc_tail_raw(&src[..cut_start], autolink);
+        if cut_end >= src.len() {
+            return (head, Tail::None);
+        }
+        let (tail, tail_state) = parse_doc_tail(&src[cut_end..], autolink);
+        let base_blocks = head.0.len();
+        let base_sources = head.1.len();
+        let base_tasks = head.2.len();
+        head.0.extend(tail.0);
+        head.1.extend(tail.1);
+        head.2.extend(tail.2.into_iter().map(|t| t.map(|(c, at)| (c, at + cut_end))));
+        head.3.extend(tail.3.into_iter().map(|c| Cut {
+            at: c.at + cut_end,
+            blocks: c.blocks + base_blocks,
+            sources: c.sources + base_sources,
+            tasks: c.tasks + base_tasks,
+        }));
+        head.4.extend(tail.4.into_iter().map(|at| at + cut_end));
+        head.5.extend(tail.5.into_iter().map(|m| m.shift_src(cut_end)));
+        let tail_state = match tail_state {
+            Tail::Inline(at, scope) => Tail::Inline(at + cut_end, scope),
+            other => other,
+        };
+        return (head, tail_state);
+    }
+    parse_doc_tail_raw(src, autolink)
+}
+
+fn parse_doc_tail_raw(src: &str, autolink: bool) -> (ParsedDoc, Tail) {
     let mut b = Builder {
         stack: vec![(Container::Root, Vec::new(), Vec::new())],
         quote_nested: Vec::new(),
         list_slots: Vec::new(),
-        item_nested: Vec::new(),
         inline: None,
         code: None,
         last_root_para: None,
@@ -558,7 +588,7 @@ pub(super) fn parse_doc_tail(src: &str, autolink: bool) -> (ParsedDoc, Tail) {
                 }
                 Tag::BlockQuote(_) => {
                     b.flush_inline();
-                    if b.depth() < MAX_CONTAINER_DEPTH {
+                    if b.depth() + 2 <= MAX_ELEMENT_DEPTH {
                         b.quote_nested.push(true);
                         b.stack.push((Container::Quote, Vec::new(), Vec::new()));
                     } else {
@@ -567,28 +597,23 @@ pub(super) fn parse_doc_tail(src: &str, autolink: bool) -> (ParsedDoc, Tail) {
                 }
                 Tag::List(start) => {
                     b.flush_inline();
-                    if b.depth() + 2 <= MAX_CONTAINER_DEPTH {
+                    if b.depth() + 2 <= MAX_ELEMENT_DEPTH
+                        || !matches!(b.stack.last(), Some((Container::List(..) | Container::Item(_), _, _)))
+                    {
                         b.list_slots.push(ListSlot::Nested);
                         b.stack.push((Container::List(start, Vec::new(), Vec::new()), Vec::new(), Vec::new()));
-                    } else if matches!(b.stack.last(), Some((Container::List(..) | Container::Item(_), _, _))) {
-                        b.list_slots.push(ListSlot::SiblingItems);
                     } else {
-                        b.list_slots.push(ListSlot::InlineBlocks);
+                        b.list_slots.push(ListSlot::SiblingItems);
                     }
                 }
                 Tag::Item => {
                     b.flush_inline();
-                    if b.list_slots.last() == Some(&ListSlot::InlineBlocks) {
-                        b.item_nested.push(false);
-                    } else {
-                        if matches!(b.stack.last(), Some((Container::Item(_), _, _))) {
-                            b.pop_container();
-                        }
-                        let idx = b.tasks.len();
-                        b.tasks.push(None);
-                        b.item_nested.push(true);
-                        b.stack.push((Container::Item(idx), Vec::new(), Vec::new()));
+                    if matches!(b.stack.last(), Some((Container::Item(_), _, _))) {
+                        b.pop_container();
                     }
+                    let idx = b.tasks.len();
+                    b.tasks.push(None);
+                    b.stack.push((Container::Item(idx), Vec::new(), Vec::new()));
                 }
                 Tag::Table(aligns) => {
                     b.flush_inline();
@@ -658,9 +683,7 @@ pub(super) fn parse_doc_tail(src: &str, autolink: bool) -> (ParsedDoc, Tail) {
                 }
                 TagEnd::Item => {
                     b.flush_inline();
-                    if b.item_nested.pop().unwrap_or(false)
-                        && matches!(b.stack.last(), Some((Container::Item(_), _, _)))
-                    {
+                    if matches!(b.stack.last(), Some((Container::Item(_), _, _))) {
                         b.pop_container();
                     }
                 }
@@ -671,7 +694,7 @@ pub(super) fn parse_doc_tail(src: &str, autolink: bool) -> (ParsedDoc, Tail) {
                         }
                         b.pop_container();
                     }
-                    ListSlot::SiblingItems | ListSlot::InlineBlocks => b.flush_inline(),
+                    ListSlot::SiblingItems => b.flush_inline(),
                 },
                 TagEnd::Table => b.pop_container(),
                 TagEnd::Strong | TagEnd::Emphasis | TagEnd::Strikethrough | TagEnd::Link => close(&mut b),

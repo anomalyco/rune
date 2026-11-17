@@ -416,56 +416,164 @@ impl Renderer {
     /// sets the gap under it (CSS's `h2 + p { margin-top: 0 }`). In a list item (`in_item`) the
     /// first paragraph has no margins, a later one 8 above, and a nested list 4 above and below,
     /// as a web page spaces an `li`'s children.
-    pub(super) fn blocks(&self, blocks: &[Block], maps: &[BlockMap], keys: &[String], top_level: bool) -> El {
-        self.blocks_in(blocks, maps, keys, top_level, false)
+    pub(super) fn blocks_with_dirs(&self, blocks: &[Block], maps: &[BlockMap], keys: &[String], top_level: bool, dirs: &bidi::Dirs) -> El {
+        self.blocks_in_with_dirs(blocks, maps, keys, top_level, false, dirs)
     }
 
-    pub(super) fn blocks_in(&self, blocks: &[Block], maps: &[BlockMap], keys: &[String], top_level: bool, in_item: bool) -> El {
-        let mut c = col().w_full();
-        let mut prev_mb = 0.0f32;
-        let mut after_heading = false;
-        let names = rendered_keys(blocks.len(), keys);
+    fn blocks_in_with_dirs(&self, root_blocks: &[Block], root_maps: &[BlockMap], keys: &[String], top_level: bool, in_item: bool, dirs: &bidi::Dirs) -> El {
+        enum Frame<'a> {
+            Blocks { blocks: &'a [Block], maps: &'a [BlockMap], names: Vec<String>, top_level: bool, in_item: bool, idx: usize, prev_mb: f32, after_heading: bool, last_dir: Option<rune::Direction>, col: El, pending: Option<(String, f32, bool, Option<rune::Direction>)> },
+            Quote { quote_block: &'a Block, inner: &'a [Block], saved_flow: Flow, first_task: usize },
+            List { list_block: &'a Block, start: Option<u64>, items: &'a [Vec<Block>], item_maps: &'a [Vec<BlockMap>], saved_flow: Flow, indent: f32, space: f32, idx: usize, col: El, pending_item: Option<(usize, f32, Option<(bool, usize)>)> },
+        }
         let empty = BlockMap::None;
-        // A block with no strong character of its own reads the way the one before it does.
-        let mut last = if top_level { self.tentative } else { None };
-        for ((i, b), key) in blocks.iter().enumerate().zip(names) {
-            // A fence still arriving with no lines yet (its language may be half written:
-            // ```` ```mer ````) shows nothing until its first line, then mounts as what it is.
-            if self.streaming && matches!(b, Block::Code(c) if c.is_empty()) {
-                let n = self.next_source.get();
-                if self.sources.get(n).is_some_and(|s| s.open && s.len == 0) {
-                    self.next_source.set(n + 1);
-                    continue;
+        let mut quote_plain_cache = plain::QuotePlainCache::default();
+        let mut stack = vec![Frame::Blocks { blocks: root_blocks, maps: root_maps, names: rendered_keys(root_blocks.len(), keys), top_level, in_item, idx: 0, prev_mb: 0.0, after_heading: false, last_dir: if top_level { self.tentative } else { None }, col: col().w_full(), pending: None }];
+        let mut ret: Option<El> = None;
+
+        while let Some(top_frame) = stack.last_mut() {
+            match top_frame {
+                Frame::Blocks { blocks, maps, names, top_level, in_item, idx, prev_mb, after_heading, last_dir, col: cur_col, pending } => {
+                    if let Some(child_el) = ret.take() {
+                        let (key, top, prose, own) = pending.take().unwrap();
+                        let drawn = if prose { bidi::directed(child_el, own.or(*last_dir)) } else { child_el };
+                        if own.is_some() { *last_dir = own; }
+                        *cur_col = std::mem::replace(cur_col, el()).child(drawn.key(key).mt(top));
+                        continue;
+                    }
+                    let mut descended = false;
+                    let blocks_slice = *blocks;
+                    let maps_slice = *maps;
+                    while *idx < blocks_slice.len() {
+                        let i = *idx;
+                        *idx += 1;
+                        let b = &blocks_slice[i];
+                        if self.streaming && matches!(b, Block::Code(c) if c.is_empty()) {
+                            let n = self.next_source.get();
+                            if self.sources.get(n).is_some_and(|s| s.open && s.len == 0) {
+                                self.next_source.set(n + 1);
+                                continue;
+                            }
+                        }
+                        let (mt, mb) = collapsed(b, &self.s, i, *in_item);
+                        let top = match b {
+                            _ if i == 0 => 0.0,
+                            Block::Heading(..) | Block::Rule | Block::Image { .. } => mt.max(*prev_mb),
+                            _ if *after_heading => *prev_mb,
+                            _ => mt.max(*prev_mb),
+                        };
+                        *prev_mb = mb;
+                        *after_heading = matches!(b, Block::Heading(..));
+                        let key = std::mem::take(&mut names[i]);
+                        if *top_level { self.current_block_key.replace(key.clone().into()); }
+                        if i > 0 { self.flow.set(Flow { lead: None, ..self.flow.get() }); }
+                        let own = dirs.of(b);
+                        let prose = !matches!(b, Block::Code(_) | Block::Diff(_) | Block::Mermaid(_) | Block::Image { .. } | Block::Rule);
+                        let map = maps_slice.get(i).unwrap_or(&empty);
+                        match b {
+                            Block::Quote(inner) => {
+                                *pending = Some((key, top, prose, own));
+                                let inner_maps = match map { BlockMap::Quote(m) => m.as_slice(), _ => &[][..] };
+                                let q = self.s.quote;
+                                let saved = self.flow.get();
+                                let first_task = self.next_task.get();
+                                self.flow.set(Flow { ink: q.text.or(saved.ink), inset: saved.inset + q.width + q.pad, ..saved });
+                                stack.push(Frame::Quote { quote_block: b, inner, saved_flow: saved, first_task });
+                                stack.push(Frame::Blocks { blocks: inner, maps: inner_maps, names: rendered_keys(inner.len(), &[]), top_level: false, in_item: false, idx: 0, prev_mb: 0.0, after_heading: false, last_dir: None, col: col().w_full(), pending: None });
+                                descended = true;
+                                break;
+                            }
+                            Block::List { start, items } => {
+                                *pending = Some((key, top, prose, own));
+                                let item_maps = match map { BlockMap::List(m) => m.as_slice(), _ => &[][..] };
+                                let saved = self.flow.get();
+                                let indent = match self.s.list_nested {
+                                    Some([bullets, numbers]) if saved.lists > 0 => if start.is_some() { numbers } else { bullets },
+                                    _ => self.s.list_indent,
+                                };
+                                let space = if self.s.list_outside { rune::text::measure("x x", &[], self.s.body, None).0 - rune::text::measure("xx", &[], self.s.body, None).0 } else { 0.0 };
+                                stack.push(Frame::List { list_block: b, start: *start, items, item_maps, saved_flow: saved, indent, space, idx: 0, col: col().role("list").w_full(), pending_item: None });
+                                descended = true;
+                                break;
+                            }
+                            _ => {
+                                let child_el = self.leaf_block(b, map);
+                                let drawn = if prose { bidi::directed(child_el, own.or(*last_dir)) } else { child_el };
+                                if own.is_some() { *last_dir = own; }
+                                *cur_col = std::mem::replace(cur_col, el()).child(drawn.key(key).mt(top));
+                            }
+                        }
+                    }
+                    if !descended {
+                        let Some(Frame::Blocks { col: done, .. }) = stack.pop() else { unreachable!() };
+                        ret = Some(done);
+                    }
+                }
+                Frame::Quote { .. } => {
+                    let Some(Frame::Quote { quote_block, inner, saved_flow, first_task }) = stack.pop() else { unreachable!() };
+                    let drawn = ret.take().unwrap();
+                    self.flow.set(saved_flow);
+                    let q = self.s.quote;
+                    let quote = bidi::directed(
+                        row().role("blockquote").w_full()
+                            .child(el().w(q.width).h_full().radius((q.width / 2.0).min(1.0)).fill(self.s.quote_rule))
+                            .child(drawn.grow(1.0).shrink().pl(q.pad)),
+                        dirs.of(quote_block),
+                    );
+                    ret = Some(match &self.quote_frame {
+                        Some(f) => {
+                            let txt = self.plain_text_rc(inner, first_task, Flow { lead: None, ..saved_flow }, &mut quote_plain_cache);
+                            f(quote, &QuoteFrame { text: &txt })
+                        }
+                        None => quote,
+                    });
+                }
+                Frame::List { start, items, item_maps, saved_flow, indent, space, idx, col: list_col, pending_item, .. } => {
+                    let n = items.len();
+                    if let Some(item_body) = ret.take() {
+                        let (k, gap_mt, task) = pending_item.take().unwrap();
+                        if let Some((checked, marker_offset)) = task {
+                            *list_col = std::mem::replace(list_col, el()).child(self.task_item_body((k, n), *indent, &items[k], item_body, marker_offset, checked).mt(gap_mt));
+                        } else {
+                            let marker = self.list_marker(*start, k, *indent, *space);
+                            *list_col = std::mem::replace(list_col, el()).child(
+                                row().key(format!("i{k}")).role("listitem").position_in_set(k + 1, n).w_full().mt(gap_mt)
+                                    .child(self.with_reveal(marker).a11y_hidden())
+                                    .child(item_body.grow(1.0).shrink()),
+                            );
+                        }
+                        continue;
+                    }
+                    if *idx < n {
+                        let k = *idx;
+                        *idx += 1;
+                        let items_slice = *items;
+                        let imaps_slice = *item_maps;
+                        let item = &items_slice[k];
+                        let imap = imaps_slice.get(k).map_or(&[][..], Vec::as_slice);
+                        let gap_mt = list_item_gap(&self.s, items_slice, k);
+                        let task_idx = self.next_task.get();
+                        self.next_task.set(task_idx + 1);
+                        let task = self.tasks.get(task_idx).copied().flatten();
+                        let lead = match (task, *start) {
+                            (Some((checked, _)), _) => Lead::Task(checked),
+                            (None, Some(num)) => Lead::Number(num + k as u64),
+                            (None, None) => Lead::Bullet,
+                        };
+                        let sf = *saved_flow;
+                        let ind = *indent;
+                        self.flow.set(Flow { lists: sf.lists + 1, inset: sf.inset + ind, cols: sf.cols + lead.width(), lead: Some((sf.cols, lead, if k == 0 && sf.lists == 0 { 2 } else { 1 })), ..sf });
+                        *pending_item = Some((k, gap_mt, task));
+                        stack.push(Frame::Blocks { blocks: item, maps: imap, names: rendered_keys(item.len(), &[]), top_level: false, in_item: true, idx: 0, prev_mb: 0.0, after_heading: false, last_dir: None, col: col().w_full(), pending: None });
+                    } else {
+                        let Some(Frame::List { list_block, saved_flow, col: done, .. }) = stack.pop() else { unreachable!() };
+                        self.flow.set(saved_flow);
+                        ret = Some(bidi::directed(done, dirs.of(list_block)));
+                    }
                 }
             }
-            let (mt, mb) = collapsed(b, &self.s, i, in_item);
-            let top = match b {
-                _ if i == 0 => 0.0,
-                // An image keeps its own 24 under a heading: the page zeroes the top margin of
-                // the paragraph holding it, not the image's, which collapses through.
-                Block::Heading(..) | Block::Rule | Block::Image { .. } => mt.max(prev_mb),
-                _ if after_heading => prev_mb,
-                _ => mt.max(prev_mb),
-            };
-            if top_level {
-                self.current_block_key.replace(key.clone().into());
-            }
-            // Only an item's first block copies after its marker.
-            if i > 0 {
-                self.flow.set(Flow { lead: None, ..self.flow.get() });
-            }
-            let own = bidi::blocks_dir(std::slice::from_ref(b));
-            let prose = !matches!(b, Block::Code(_) | Block::Diff(_) | Block::Mermaid(_) | Block::Image { .. } | Block::Rule);
-            let drawn = self.block(b, maps.get(i).unwrap_or(&empty));
-            let drawn = if prose { bidi::directed(drawn, own.or(last)) } else { drawn };
-            if own.is_some() {
-                last = own;
-            }
-            c = c.child(drawn.key(key).mt(top));
-            prev_mb = mb;
-            after_heading = matches!(b, Block::Heading(..));
         }
-        c
+        ret.unwrap()
     }
 
     pub(super) fn code(&self, code: &str, source: Option<&Source>, map: Option<&SpanMap>) -> El {
@@ -580,7 +688,7 @@ impl Renderer {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn task_item(&self, (k, n): (usize, usize), indent: f32, item: &[Block], item_maps: &[BlockMap], item_idx: usize, checked: bool) -> El {
+    fn task_item_body(&self, (k, n): (usize, usize), indent: f32, item: &[Block], item_body: El, item_idx: usize, checked: bool) -> El {
         let t = &self.s.task;
         let interactive = self.on_task.is_some() && !self.tasks_read_only;
         let (fill, border) = if checked {
@@ -616,7 +724,7 @@ impl Renderer {
             .focusable(interactive)
             .w_full()
             .child(control)
-            .child(self.blocks_in(item, item_maps, &[], false, true).grow(1.0).shrink());
+            .child(item_body.grow(1.0).shrink());
         if let Some(on_task) = self.on_task.as_ref().filter(|_| !self.tasks_read_only) {
             let block_key = self.current_block_key.borrow().clone();
             r = on_task(r.cursor(Cursor::Pointer), block_key, item_idx, !checked);
@@ -624,7 +732,18 @@ impl Renderer {
         r
     }
 
-    pub(super) fn block(&self, b: &Block, map: &BlockMap) -> El {
+    fn list_marker(&self, start: Option<u64>, k: usize, indent: f32, space: f32) -> El {
+        let s = &self.s;
+        if start.is_none() && s.list_outside {
+            el().w(indent).h(s.body.line_px()).child(el().outside_list_disc(s.body).fill(s.muted))
+        } else {
+            let words = start.map_or_else(|| "•".into(), |num| format!("{}.", num + k as u64));
+            let marker = text(words).font(s.body).color(s.muted).exact_lines().w(indent);
+            if s.list_outside { marker.align(Align::End).pr(space) } else { marker.align(Align::Center) }
+        }
+    }
+
+    fn leaf_block(&self, b: &Block, map: &BlockMap) -> El {
         let s = &self.s;
         let inl_map = match map {
             BlockMap::Inline(m) => Some(m),
@@ -658,102 +777,23 @@ impl Renderer {
                     BlockMap::Table { head, rows } => (head.as_slice(), rows.as_slice()),
                     _ => (&[][..], &[][..]),
                 };
-                // Its first column stands on the side its words start on.
                 bidi::directed(self.table(t, head_maps, row_maps), bidi::table_dir(t))
             }
-            Block::List { start, items } => {
-                let item_maps = match map {
-                    BlockMap::List(m) => m.as_slice(),
-                    _ => &[][..],
-                };
-                let flow = self.flow.get();
-                let indent = match s.list_nested {
-                    Some([bullets, numbers]) if flow.lists > 0 => if start.is_some() { numbers } else { bullets },
-                    _ => s.list_indent,
-                };
-                // Outside markers end a space's width before the text, as a browser sets "1. ".
-                let space = if s.list_outside { rune::text::measure("x x", &[], s.body, None).0 - rune::text::measure("xx", &[], s.body, None).0 } else { 0.0 };
-                let mut c = col().role("list").w_full();
-                let n = items.len();
-                // Between items, their 8 collapsed with the margins passing out of the blocks
-                // either side (`collapsed`): an item ending in a quote keeps its 16 below.
-                let edge = |item: &[Block], last: bool| match (last, item) {
-                    (true, [.., l]) => collapsed_bottom(l, s, item.len() - 1, true),
-                    (false, [f, ..]) => collapsed_top(f, s, 0, true),
-                    _ => 0.0,
-                };
-                let gap = |k: usize| if k == 0 { 0.0 } else { s.list_gap.max(edge(&items[k - 1], true)).max(edge(&items[k], false)) };
-                for (k, item) in items.iter().enumerate() {
-                    let imap = item_maps.get(k).map_or(&[][..], Vec::as_slice);
-                    let task_idx = self.next_task.get();
-                    self.next_task.set(task_idx + 1);
-                    let task = self.tasks.get(task_idx).copied().flatten();
-                    let lead = match (task, start) {
-                        (Some((checked, _)), _) => Lead::Task(checked),
-                        (None, Some(n)) => Lead::Number(n + k as u64),
-                        (None, None) => Lead::Bullet,
-                    };
-                    self.flow.set(Flow { lists: flow.lists + 1, inset: flow.inset + indent, cols: flow.cols + lead.width(), lead: Some((flow.cols, lead, if k == 0 && flow.lists == 0 { 2 } else { 1 })), ..flow });
-                    if let Some((checked, marker_offset)) = task {
-                        c = c.child(self.task_item((k, n), indent, item, imap, marker_offset, checked).mt(gap(k)));
-                        continue;
-                    }
-                    let marker = if start.is_none() && s.list_outside {
-                        // The indent is still the column's width: the symbol cannot rewrap an item.
-                        el().w(indent).h(s.body.line_px()).child(el().outside_list_disc(s.body).fill(s.muted))
-                    } else {
-                        let words = start.map_or_else(|| "•".into(), |n| format!("{}.", n + k as u64));
-                        let marker = text(words).font(s.body).color(s.muted).exact_lines().w(indent);
-                        if s.list_outside { marker.align(Align::End).pr(space) } else { marker.align(Align::Center) }
-                    };
-                    // The item's place in the list says what its marker shows.
-                    c = c.child(
-                        row()
-                            .key(format!("i{k}"))
-                            .role("listitem")
-                            .position_in_set(k + 1, n)
-                            .w_full()
-                            .mt(gap(k))
-                            .child(self.with_reveal(marker).a11y_hidden())
-                            .child(self.blocks_in(item, imap, &[], false, true).grow(1.0).shrink()),
-                    );
-                }
-                self.flow.set(flow);
-                // One direction for the whole list, its first item's with any, so every marker
-                // stands on one rail; each item's paragraphs still read their own way.
-                bidi::directed(c, items.iter().find_map(|item| bidi::blocks_dir(item)))
-            }
-            Block::Quote(inner) => {
-                let inner_maps = match map {
-                    BlockMap::Quote(m) => m.as_slice(),
-                    _ => &[][..],
-                };
-                let q = s.quote;
-                let flow = self.flow.get();
-                let first_task = self.next_task.get();
-                self.flow.set(Flow { ink: q.text.or(flow.ink), inset: flow.inset + q.width + q.pad, ..flow });
-                let drawn = self.blocks(inner, inner_maps, &[], false);
-                self.flow.set(flow);
-                // The rule stands on the side the quote starts on.
-                let quote = bidi::directed(
-                    row()
-                        .role("blockquote")
-                        .w_full()
-                        .child(el().w(q.width).h_full().radius((q.width / 2.0).min(1.0)).fill(s.quote_rule))
-                        .child(drawn.grow(1.0).shrink().pl(q.pad)),
-                    bidi::blocks_dir(inner),
-                );
-                match &self.quote_frame {
-                    Some(f) => f(quote, &QuoteFrame { text: &self.plain_text(inner, first_task, Flow { lead: None, ..flow }) }),
-                    None => quote,
-                }
-            }
-            // A clear rule is spacing only (`hr { border: none; height: 0 }`).
             Block::Image { src, alt, title } => self.image(src, alt, title),
             Block::Rule if s.rule.a <= 0.0 => el().w_full().h(0.0),
             Block::Rule => el().w_full().h(0.5).fill(s.rule),
+            Block::List { .. } | Block::Quote(_) => unreachable!(),
         }
     }
+}
+
+fn list_item_gap(s: &MarkdownStyle, items: &[Vec<Block>], k: usize) -> f32 {
+    if k == 0 {
+        return 0.0;
+    }
+    let prev_edge = items[k - 1].last().map_or(0.0, |l| collapsed_bottom(l, s, items[k - 1].len() - 1, true));
+    let cur_edge = items[k].first().map_or(0.0, |f| collapsed_top(f, s, 0, true));
+    s.list_gap.max(prev_edge).max(cur_edge)
 }
 
 fn item_label(blocks: &[Block]) -> String {
