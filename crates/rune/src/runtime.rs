@@ -26,7 +26,7 @@ use rune_taffy::prelude::*;
 use crate::color::{Color, over, srgb_encode};
 use crate::edit::{EditOutcome, Ime, KeyEvent};
 use crate::el::{Align, Commit, Drag, El, GrowthSpec, InputSpec, MotionSource, Phase, PointerEvent, ScrollSpec, Shell, TextSpec, Tx, Visual};
-use crate::growth::{GrowTrack, SUBSTEP};
+use crate::growth::GrowTrack;
 // Half-open, like overlays, NSPointInRect and PtInRect: a shared edge belongs to one side.
 use crate::overlay::options::contains;
 use crate::flight::{TextFlight, transformed};
@@ -659,7 +659,6 @@ pub struct Runtime<S: 'static> {
     fold_headers: HashMap<NodeId, String>,
     /// What this frame's commits held at their landing width (`El::hold_landing_width`).
     landing_holds: landing_hold::LandingHolds,
-    grow_acc: f32,
     caught_up: f32,
     slack_dt: f32,
     /// What has focus, how it shows and where Tab starts (`runtime/input/focus_machine.rs`).
@@ -1041,7 +1040,6 @@ impl<S: 'static> Runtime<S> {
             row_lifts: Vec::new(),
             fold_headers: HashMap::default(),
             landing_holds: Default::default(),
-            grow_acc: 0.0,
             caught_up: 0.0,
             slack_dt: 0.0,
             focus: Default::default(),

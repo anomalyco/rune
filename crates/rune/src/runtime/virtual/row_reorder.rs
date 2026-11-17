@@ -10,6 +10,11 @@
 //! no row here: growth carries those, as it does a row inserted or removed above another.
 use super::*;
 
+#[path = "handoff.rs"]
+pub(super) mod handoff;
+#[path = "row_reorder/joined.rs"]
+pub(super) mod joined;
+
 /// One growth stack's rows that the last commit reordered.
 #[derive(Clone, Debug, Default)]
 pub(super) struct Reorder {
@@ -48,7 +53,47 @@ impl Reorder {
     }
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct LiveRow {
+    pub ink: bool,
+    /// Some(0) for a resizing row: its inset still rides its height.
+    pub shift: Option<f32>,
+    /// A row that stays put can gain or lose a joined corner as its neighbour moves.
+    pub joins: bool,
+}
+
 impl<S: 'static> Runtime<S> {
+    pub(super) fn live_row(&self, row: &Node, reorder: &Reorder, ink: bool, joins: bool, list: &crate::el::virtual_list::VirtualList, range: &std::ops::Range<usize>) -> Option<(NodeId, LiveRow)> {
+        let jump = reorder.jump(row.id);
+        let shift = (jump != 0.0 || ink && self.grows.get(&row.id).is_some_and(|g| g.moving())).then_some(jump);
+        if shift.is_none() && !joins { return None; }
+        let key = row.key.as_deref()?;
+        (range.contains(&list.index_of(key)?) && list.drawn.iter().any(|old| old == key)).then_some((row.id, LiveRow { ink, shift, joins }))
+    }
+
+    /// Only a virtual list already showing its tail, in the same viewport, can grow it for a
+    /// live arrival. If its viewport changes height too (a tray closing under it), landing
+    /// both together avoids first moving by the tray's height and then back by the row's.
+    pub(super) fn live_tail(&self, nodes: &[Node], i: usize, tx: &Tx, stack: &mut Stack) -> Option<std::ops::Range<usize>> {
+        let node = &nodes[i];
+        if tx.commit != Commit::Unprompted || node.instant_changes || !tx.live_growth.iter().any(|(key, _)| node.named(key)) { return None; }
+        let list = self.virtuals.get(&node.path)?;
+        let scroll = self.path_ids.get(&list.scroll_path)?;
+        if list.nested || list.replaced_view() || list.drawn.is_empty() || !self.scrolls.get(scroll)?.pinned() { return None; }
+        // The list's own tail is the viewport's tail only if nothing extends below it.
+        // A toolbar *after* the list may cover even its last overscanned rows.
+        let parent = node.parent?;
+        if nodes[parent].id != *scroll || nodes[i + 1..].iter().take_while(|n| n.parent >= Some(parent))
+            .any(|n| n.parent == Some(parent) && n.target[3] > node.target[3]) { return None; }
+        let range = list.visible_range(0.0, true);
+        if (stack.viewport_height - list.viewport).abs() >= 1.0 / 64.0 {
+            let (_, row, room) = tx.tail_rooms.iter().rev().find(|(key, _, _)| node.named(key))?;
+            if !range.contains(&list.index_of(row)?) { return None; }
+            stack.handoff = self.tail_handoff(nodes, i, parent, row, room)?;
+        }
+        Some(range)
+    }
+
     /// How far node `i`, a growth row, jumped because its stack's rows changed order this commit.
     pub(super) fn reorder_jump(&self, nodes: &[Node], i: usize) -> f32 {
         nodes[i].parent.and_then(|p| self.stacks.get(&nodes[p].id)).map_or(0.0, |s| s.reorder.jump(nodes[i].id))
@@ -70,3 +115,6 @@ impl<S: 'static> Runtime<S> {
 #[cfg(test)]
 #[path = "../row_reorder_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod live_tail_tests;

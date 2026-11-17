@@ -10,6 +10,41 @@ use crate::El;
 use crate::Tx;
 
 impl Tx {
+    /// Let newly inserted and resizing rows at the visible end of this virtual growth stack
+    /// grow through a linear feather on their usual springs. For a live arrival, not a page
+    /// load. Rows that trade places carry their contents with them. The selector names the
+    /// stack, not the scroll viewport. This neither scrolls to the end nor animates other
+    /// layout or chrome. A reader scrolled away, a resizing viewport, reduced motion, the
+    /// first paint and an explicit `instant()` or `settle()` still land.
+    pub fn grow_visible_tail(&mut self, stack: impl Into<String>) {
+        self.request_live_growth(stack.into(), false);
+    }
+
+    /// Like [`Self::grow_visible_tail`], but a row crossing a neighbour also carries its
+    /// changing paint and child exits. A resizing row carries its inset, and a stationary
+    /// neighbour can round its joined corners. This applies only to this live commit.
+    pub fn grow_visible_tail_with_ink(&mut self, stack: impl Into<String>) {
+        self.request_live_growth(stack.into(), true);
+    }
+
+    pub(crate) fn request_live_growth(&mut self, stack: String, ink: bool) {
+        if let Some((_, carry)) = self.live_growth.iter_mut().find(|(key, _)| *key == stack) {
+            *carry |= ink;
+        } else {
+            self.live_growth.push((stack, ink));
+        }
+    }
+
+    /// A newly delivered `row` in `stack` takes room from a panel immediately below its
+    /// viewport. If the panel gives the viewport exactly the height it loses, move that
+    /// shared edge on the incoming row's growth, not a second spring. Otherwise the usual
+    /// `grow_visible_tail` rules apply. `panel` names its occupied space, excluding overlaps.
+    pub fn grow_visible_tail_from(&mut self, stack: impl Into<String>, row: impl Into<String>, panel: impl Into<String>) {
+        let stack = stack.into();
+        self.grow_visible_tail(stack.clone());
+        self.tail_rooms.push((stack, row.into(), panel.into()));
+    }
+
     /// Reveal a keyed row, including a currently unrealized virtual row. It scrolls the nearest
     /// vertical viewport around the row and, through [`El::scroll_x`] or [`El::scroll_xy`], the
     /// nearest horizontal one, each just far enough. The vertical reveal follows the presented

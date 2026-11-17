@@ -33,6 +33,8 @@ pub(crate) struct Handlers {
     pub drag_threshold: Option<f32>,
     /// `El::touch_drags_at_once`.
     pub touch_at_once: bool,
+    /// `El::press_on_down`.
+    pub press_on_down: bool,
     pub on_drag_start: Option<PressFn>,
     pub on_drag_end: Option<DragEndFn>,
     pub drop: Option<Box<DropSpec>>,
@@ -120,6 +122,7 @@ impl Empty for Handlers {
         drag_out: None,
         drag_threshold: None,
         touch_at_once: false,
+        press_on_down: false,
         on_drag_start: None,
         on_drag_end: None,
         drop: None,

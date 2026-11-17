@@ -41,6 +41,9 @@ pub struct Tx {
     pub(crate) unprompted: bool,
     /// A handler called [`Self::animated`].
     pub(crate) asked_motion: bool,
+    /// Virtual growth stacks whose visible tail may grow for this commit alone.
+    pub(crate) live_growth: Vec<(String, bool)>, // selector, carry row ink
+    pub(crate) tail_rooms: Vec<(String, String, String)>,
     /// A resting poll changed the model but hasn't committed its tree yet.
     pub(crate) polled_change: bool,
     pub(crate) color_motion: Option<Spring>,
@@ -88,6 +91,7 @@ pub struct Tx {
     pub(crate) window_frame: Option<crate::window::frame::FrameRequest>,
     /// The mouse button driving this press or drag (`Tx::button`).
     pub(crate) button: crate::PointerButton,
+    pub(crate) touch_tap: bool,
     /// Modifier keys held as the handler runs.
     pub(crate) mods: crate::Mods,
     pub(crate) srgb_blend: Option<bool>,
@@ -147,6 +151,9 @@ pub(crate) enum Commit {
     /// Animate this change; motion an earlier change set going keeps running.
     #[default]
     Animate,
+    /// Only the lack of an input cause made this commit instant. An explicit instant wins
+    /// even over a request to animate a list's tail.
+    Unprompted,
     /// Apply this change at once; motion an earlier change set going keeps running.
     Instant,
     /// Apply this change at once and land every running track.
@@ -157,6 +164,10 @@ pub(crate) enum Commit {
 }
 
 impl Commit {
+    pub(crate) fn without_input(self) -> Self {
+        if self == Self::Animate { Self::Unprompted } else { self.instant() }
+    }
+
     /// The two facts as one intent.
     pub(crate) fn new(snaps: bool, lands: bool) -> Commit {
         match (snaps, lands) {
@@ -169,7 +180,7 @@ impl Commit {
 
     /// This change's own layout applies at once instead of moving on its spring.
     pub(crate) fn snaps(self) -> bool {
-        matches!(self, Commit::Instant | Commit::Settle)
+        matches!(self, Commit::Unprompted | Commit::Instant | Commit::Settle)
     }
 
     /// This change lands every running track: growth, reveals and follow-the-end.
@@ -613,6 +624,31 @@ impl Tx {
         self.font_families = Some((sans.into(), mono.into()));
     }
 
+    /// Shapes and breaks the text of `view` into the window's layout cache in its next idle turn,
+    /// laid out as the window would lay it out (at its own size, or at `size` in points), without
+    /// mounting it: nothing draws, hits, animates or is announced, and no handler runs. A view shown
+    /// later with the same texts at the same widths finds them laid out. For the most it from the
+    /// window's own root, as the next frame will lay it out (the session under a resting pointer
+    /// shown where the open one is). Prepared layouts no view holds are kept to about 1 MiB by the
+    /// cache's own count, oldest out first, and all go at the window's next rest. One request is
+    /// held, the latest, for the window whose state `view` reads; it never runs on a turn with
+    /// input waiting, and an idle window wakes for it no more once it ran.
+    pub fn prepare_text<S: 'static>(&mut self, view: fn(&S, &mut crate::Cx<S>) -> crate::El, size: Option<(f32, f32)>) {
+        PREPARE.with_borrow_mut(|a| *a = Some((Box::new(view), size)));
+    }
+
+    /// Takes `prepare_text`'s request if it is for a window of state `S`.
+    pub(crate) fn take_prepared<S: 'static>() -> Option<(fn(&S, &mut crate::Cx<S>) -> crate::El, Option<(f32, f32)>)> {
+        if !Self::prepare_owed::<S>() { return None; }
+        let (view, size) = PREPARE.with_borrow_mut(Option::take)?;
+        Some((*view.downcast::<fn(&S, &mut crate::Cx<S>) -> crate::El>().ok()?, size))
+    }
+
+    /// Whether `prepare_text` holds a request for a window of state `S`.
+    pub(crate) fn prepare_owed<S: 'static>() -> bool {
+        PREPARE.with_borrow(|a| a.as_ref().is_some_and(|(view, _)| view.is::<fn(&S, &mut crate::Cx<S>) -> crate::El>()))
+    }
+
     fn frame_request(&mut self, request: crate::window::frame::FrameRequest) {
         self.window_frame = Some(self.window_frame.unwrap_or_default().merge(request));
     }
@@ -710,4 +746,10 @@ impl Tx {
     pub fn color_motion(&mut self, spring: Spring) {
         self.color_motion = Some(spring);
     }
+}
+
+thread_local! {
+    /// `Tx::prepare_text`'s latest request on this thread: the view, boxed, and its size in points
+    /// if not the window's.
+    static PREPARE: std::cell::RefCell<Option<(Box<dyn std::any::Any>, Option<(f32, f32)>)>> = const { std::cell::RefCell::new(None) };
 }
