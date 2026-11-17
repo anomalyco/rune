@@ -38,6 +38,7 @@ impl<S: 'static> Runtime<S> {
     /// else, then drops it, laying out at most `bytes` of new text for at most [`PREPARE_TURN`].
     /// Returns the bytes it laid out and whether it stopped short.
     pub(crate) fn prepare_text(&mut self, view: fn(&S, &mut Cx<S>) -> El, size: (f32, f32), bytes: usize) -> (usize, crate::text::PrepareCut) {
+        let t0 = std::time::Instant::now();
         let before = self.text.layout_keys();
         let (mut nodes, mut spare_nodes, mut layout) = (Vec::new(), Vec::new(), LayoutEngine::new());
         let (mut node_index, mut path_ids, mut memo) = (HashMap::default(), HashMap::default(), crate::memo::MemoCache::default());
@@ -95,7 +96,8 @@ impl<S: 'static> Runtime<S> {
         let budget = crate::text::PrepareBudget::open(bytes, std::time::Instant::now() + PREPARE_TURN);
         drop(m.finish(&Tx::default()));
         let used = budget.close();
-        self.text.keep_prepared(&before, PREPARE_BYTES);
+        let added = self.text.keep_prepared(&before, PREPARE_BYTES);
+        crate::text::probe_note(format_args!("prepare us={:.0} added={added} bytes={} cut={:?} size={size:?}", t0.elapsed().as_secs_f64() * 1e6, used.0, used.1));
         used
     }
 }

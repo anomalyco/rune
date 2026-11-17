@@ -73,3 +73,8 @@ pub(crate) fn shaped(kind: &str, g: u32, shape: u64, key: u64, scale: f32, w: Op
 pub(crate) fn event(what: &str, g: u32, before: usize, after: usize) {
     if lines() && before != after { eprintln!("TEXT2 {what} t={:.1} g={g} layouts {before}->{after}", ms()); }
 }
+
+/// A free-form probe line (`RUNE_TEXT2_MISS` set).
+pub(crate) fn note(line: std::fmt::Arguments<'_>) {
+    if on() { eprintln!("TEXT2N t={:.1} {line}", ms()); }
+}
