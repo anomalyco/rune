@@ -28,6 +28,7 @@ impl<S: 'static> Runtime<S> {
                 self.reveals.remove(&n.id);
                 self.scrolls.remove(&n.id);
                 self.loops.remove(&n.id);
+                self.node_ids.note_unreferenced(1);
                 if !self.node_caches.is_empty() {
                     self.node_caches.remove(&n.id);
                     self.text.atlas.resident_caches.remove(&n.id.0);
@@ -56,7 +57,11 @@ impl<S: 'static> Runtime<S> {
         gone.sort_unstable_by(|a, b| b.cmp(a));
         gone.append(&mut kept);
         if gone.len() > REVEALS_KEPT {
-            for id in gone.split_off(REVEALS_KEPT) { self.reveals.remove(&id); }
+            for id in gone.split_off(REVEALS_KEPT) {
+                if self.reveals.remove(&id).is_some() {
+                    self.node_ids.note_unreferenced(1);
+                }
+            }
         }
         self.reveals_kept = gone;
         self.memo.on_prune(&remap);

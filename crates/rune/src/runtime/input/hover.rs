@@ -96,7 +96,7 @@ impl<S: 'static> Runtime<S> {
     #[inline]
     fn resolved_hovered_id(&self) -> Option<NodeId> {
         let p = self.hovered.as_deref()?;
-        self.hovered_id.or_else(|| self.path_ids.get(p).copied())
+        self.hovered_id.filter(|&id| self.node_ids.contains(id)).or_else(|| self.path_ids.get(p).copied())
     }
 
     fn apply_hovered(&mut self, mut hovered: Option<usize>, held: bool) {
@@ -110,7 +110,7 @@ impl<S: 'static> Runtime<S> {
         // A row never takes focus from a text field (a search field above its results).
         let row = hovered.and_then(|i| self.highlight_row(i)).filter(|_| self.focused_input().is_none());
         match row {
-            Some(i) if self.focus.id_in(&self.path_ids) != Some(self.nodes[i].id) || !self.focus.hovered() =>
+            Some(i) if self.focus_id() != Some(self.nodes[i].id) || !self.focus.hovered() =>
                 self.queue.push(Action::HoverFocus(Some(self.nodes[i].path.clone()))),
             None if self.focus.hovered() => self.queue.push(Action::HoverFocus(None)),
             _ => {}

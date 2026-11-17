@@ -32,8 +32,8 @@ impl<S: 'static> Runtime<S> {
     pub(crate) fn prepare_text(&mut self, view: fn(&S, &mut Cx<S>) -> El, size: (f32, f32)) -> usize {
         let before = self.text.layout_keys();
         let (mut nodes, mut spare_nodes, mut layout) = (Vec::new(), Vec::new(), LayoutEngine::new());
-        let (mut node_index, mut path_ids, mut memo) = (HashMap::default(), HashMap::default(), crate::memo::MemoCache::default());
-        let (mut next_id, mut scrolls, mut virtuals) = (0u64, HashMap::default(), HashMap::default());
+        let (mut node_index, mut path_ids, mut node_ids, mut memo) = (HashMap::default(), HashMap::default(), node_ids::NodeIdTable::default(), crate::memo::MemoCache::default());
+        let (mut next_id, mut scrolls, mut virtuals) = (1u64, HashMap::default(), HashMap::default());
         let (mut virtual_culled, mut virtual_inputs, mut stats, mut key_warnings) = (HashSet::default(), HashMap::default(), FrameStats::default(), None);
         let m = Measurement {
             state: &self.state,
@@ -69,6 +69,7 @@ impl<S: 'static> Runtime<S> {
             layout: &mut layout,
             node_index: &mut node_index,
             path_ids: &mut path_ids,
+            node_ids: &mut node_ids,
             memo: &mut memo,
             next_id: &mut next_id,
             scrolls: &mut scrolls,

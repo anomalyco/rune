@@ -374,7 +374,7 @@ fn flatten_owned(
     push_segment(path_buf, el.key.as_deref(), index);
     let me = nodes.len();
     let raw_parent_id = parent.map_or(NodeId(0), |p| nodes[p].id);
-    let (path, id, parent_id, local_key) = node_ids::resolve_flattened(raw_parent_id, prev_len, el.key.as_deref(), index, path_buf, me, false, memo_ctx);
+    let (path, id, parent_id, local_key) = node_ids::resolve_flattened(raw_parent_id, prev_len, el.key.as_deref(), index, path_buf, me, memo_ctx);
     let own_motion = el.cold.motion;
     let motion = own_motion.unwrap_or(motion);
     let parent_is_stack = parent.is_some_and(|p| nodes[p].growth.is_some());
@@ -586,7 +586,7 @@ fn flatten_ref(
     push_segment(path_buf, el.key.as_deref(), index);
     let me = nodes.len();
     let raw_parent_id = parent.map_or(NodeId(0), |p| nodes[p].id);
-    let (path, id, parent_id, local_key) = node_ids::resolve_flattened(raw_parent_id, prev_len, el.key.as_deref(), index, path_buf, me, false, memo_ctx);
+    let (path, id, parent_id, local_key) = node_ids::resolve_flattened(raw_parent_id, prev_len, el.key.as_deref(), index, path_buf, me, memo_ctx);
     let own_motion = el.cold.motion;
     let motion = own_motion.unwrap_or(motion);
     let parent_is_stack = parent.is_some_and(|p| nodes[p].growth.is_some());

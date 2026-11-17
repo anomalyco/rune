@@ -288,7 +288,7 @@ impl<S: 'static> Runtime<S> {
 
     /// The focused element's index. Unlike [`Runtime::node`], this finds it while it exits.
     pub(super) fn focused_index(&self) -> Option<usize> {
-        if let Some(id) = self.focus.id_in(&self.path_ids)
+        if let Some(id) = self.focus_id()
             && let Some(i) = self.index_of_id(id)
         {
             return Some(i);

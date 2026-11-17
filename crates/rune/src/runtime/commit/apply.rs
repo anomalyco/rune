@@ -29,7 +29,7 @@ impl<S: 'static> Runtime<S> {
                 if let Some(&id) = self.path_ids.get(path) {
                     culled_ids.insert(id);
                     self.scene.unmount(id);
-                    self.grows.remove(&id);
+                    if self.grows.remove(&id).is_some() { self.node_ids.note_unreferenced(1); }
                 }
             }
             scratch.culled.clear();
@@ -38,7 +38,7 @@ impl<S: 'static> Runtime<S> {
                 if culled_ids.contains(&n.id) || n.parent.is_some_and(|p| scratch.culled[p]) {
                     scratch.culled[i] = true;
                     self.scene.unmount(n.id);
-                    self.grows.remove(&n.id);
+                    if self.grows.remove(&n.id).is_some() { self.node_ids.note_unreferenced(1); }
                 }
             }
         }
@@ -103,12 +103,11 @@ impl<S: 'static> Runtime<S> {
         };
 
         // Growth stacks: rows of a stack that existed before grow; a new stack mounts settled.
-        let v_by_id = node_ids::VirtualById::build(&self.virtuals, &self.path_ids);
         let mut live_by_id = HashMap::default();
         for c in 0..nodes.len() {
             if nodes[c].cold.get().is_none_or(|nd| nd.growth.is_none()) { continue }
             let cid = nodes[c].id;
-            let list = v_by_id.get(cid);
+            let list = self.virtuals.get(&nodes[c].path);
             let instant = instant || nodes[c].instant_changes;
             let cut = cut || nodes[c].instant_changes;
             // A reader away from the tail is anchored using measured row heights. Land those
@@ -178,7 +177,7 @@ impl<S: 'static> Runtime<S> {
                     stack.closing.entry(old).or_insert(now + hold);
                     order.push(old);
                 } else {
-                    self.grows.remove(&old);
+                    if self.grows.remove(&old).is_some() { self.node_ids.note_unreferenced(1); }
                     stack.closing.remove(&old);
                 }
             }
@@ -298,7 +297,7 @@ impl<S: 'static> Runtime<S> {
             let animates = existed && (!instant || live_rows.is_some()) && !tx.relayout && !self.reduced_motion;
             stack.reorder.measure(animates, &stack.order, &order, stack.gap, |id| self.grows.get(&id).map(|g| g.h));
             if first || self.reduced_motion || concealing || resized || reader || nodes[c].instant_changes || tx.commit.lands() || (stack.order != order && live_rows.is_none()) { stack.seams.clear(); }
-            if let Some(range) = live_rows && let Some(v) = list && stack.order != order {
+            if let Some(range) = live_rows && let Some(v) = self.virtuals.get(&nodes[c].path) && stack.order != order {
                 self.join_live_rows(&mut stack, &nodes, rows, v, &range);
                 let ink = tx.live_growth.iter().any(|(key, ink)| *ink && nodes[c].named(key));
                 live_by_id.extend(rows.iter().enumerate().filter_map(|(k, &j)| {
@@ -336,7 +335,8 @@ impl<S: 'static> Runtime<S> {
         // How far the top of each node's contents moved down in its growth row (drawn less new).
         let mut top_moved = std::mem::take(&mut scratch.top_moved);
         top_moved.clear();
-        let has_virtuals = !v_by_id.is_empty();
+        let v_snap = node_ids::VirtualSnapById::build(&self.virtuals, &self.path_ids);
+        let has_virtuals = !v_snap.is_empty();
         let mut last = paint_tracks::Finder::default();
         let mut skip_cursor = 0usize;
         // A crossing carries its paint and exits; a resizing row carries its inset. Its
@@ -363,7 +363,7 @@ impl<S: 'static> Runtime<S> {
             let id = nodes[i].id;
             let mut scene_rect = nodes[i].local;
             let parent_virtual = if has_virtuals {
-                nodes[i].parent.and_then(|p| v_by_id.get(nodes[p].id))
+                nodes[i].parent.and_then(|p| v_snap.get(nodes[p].id))
             } else {
                 None
             };
@@ -378,11 +378,11 @@ impl<S: 'static> Runtime<S> {
             if can_skip_apply
                 && slid.is_empty()
                 && top_moved.is_empty()
-                && self.unchanged_node_resting(&nodes, i, old, scene_rect, parent_virtual)
+                && self.unchanged_node_resting(&nodes, i, old, scene_rect, parent_virtual.is_some_and(|v| v.replaced))
             {
                 continue;
             }
-            let is_virtual = has_virtuals && v_by_id.contains(id);
+            let is_virtual = has_virtuals && v_snap.contains(id);
             let parent_id = nodes[i].parent.map(|p| nodes[p].id);
             let (spring_l, anim_l) = tx.motion.map_or_else(
                 || { let spring = nodes[i].motion; (spring, spring.into()) },
@@ -784,6 +784,7 @@ impl<S: 'static> Runtime<S> {
                 }
                 if !self.scene.contains(old.id) {
                     self.hover_pruned(&old);
+                    self.node_ids.note_unreferenced(1);
                     continue;
                 }
                 let old_parent_id = old.parent.and_then(|p| old_ids.get(p).copied());
@@ -907,7 +908,6 @@ impl<S: 'static> Runtime<S> {
         if self.nodes.len() > present_len || !self.flying.is_empty() || landed || self.has_sticky || self.has_raise || self.has_paint_order { self.update_layer_paint_order(); }
         else { self.layer_paint_order.clear(); }
         self.built = false;
-        let _ = v_by_id;
         if !self.virtuals.is_empty() {
             let Self { virtuals, path_ids, node_index, nodes, .. } = self;
             virtuals.retain(|path, _| {

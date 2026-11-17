@@ -103,20 +103,22 @@ impl<S: 'static> Runtime<S> {
     /// A path whose id still holds scroll, growth or reveal state keeps it, so it comes back
     /// with that state as before.
     pub(super) fn prune_path_ids(&mut self) {
-        if self.path_ids.len() <= self.node_index.len() { return; }
+        let state_lens = [self.scrolls.len(), self.stacks.len(), self.grows.len(), self.reveals.len()];
+        if !self.node_ids.needs_prune(self.path_ids.len(), self.node_index.len(), state_lens) {
+            return;
+        }
         let Self { path_ids, node_ids, node_index, scrolls, stacks, grows, reveals, .. } = self;
+        let mounted_len = node_index.len();
         node_ids.prune(
             |id| node_index.contains_key(id) || scrolls.contains_key(id) || stacks.contains_key(id) || grows.contains_key(id) || reveals.contains_key(id),
             path_ids,
+            mounted_len,
+            state_lens,
         );
     }
 }
 
 impl<S: 'static> Measurement<'_, S> {
-    pub(super) fn node_id(&mut self, path: &str) -> NodeId {
-        self.node_ids.intern_full_path(self.path_ids, self.next_id, path).0
-    }
-
     /// Finishes all row measurements before scene/growth mutation. Newly measured estimates
     /// above the viewport adjust the scroll offset by exactly the same amount.
     pub(super) fn measure_virtuals(&mut self, nodes: &[Node], settle: bool) -> bool {

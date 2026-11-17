@@ -112,7 +112,9 @@ impl<S: 'static> Runtime<S> {
             stack.order.retain(|id| {
                 let keep = !stack.closing.contains_key(id) || self.grows.get(id).is_some_and(|g| g.h > 0.01 || g.target > 0.0);
                 if !keep {
-                    self.grows.remove(id);
+                    if self.grows.remove(id).is_some() {
+                        self.node_ids.note_unreferenced(1);
+                    }
                 }
                 keep
             });

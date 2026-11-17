@@ -1,7 +1,7 @@
-//! Interned `(parent_id, LocalKey) -> NodeId` table and DFS `subtree_end` maintenance.
+//! Interned `(Option<NodeId>, LocalKey) -> NodeId` table and DFS `subtree_end` maintenance.
 //!
 //! Stage 1 keeps `Node::path` built identically for existing path readers while resolving node
-//! identity through 16-byte `(NodeId, LocalKey)` integer keys instead of hashing or comparing
+//! identity through `(Option<NodeId>, LocalKey)` integer keys instead of hashing or comparing
 //! full `O(depth)` path strings on every node.
 
 use super::*;
@@ -40,7 +40,7 @@ impl LocalKey {
 
 #[derive(Clone, Copy)]
 struct IdEntry {
-    parent: NodeId,
+    parent: Option<NodeId>,
     local: LocalKey,
     depth: u16,
     in_path_ids: bool,
@@ -48,19 +48,59 @@ struct IdEntry {
 
 #[derive(Default)]
 pub(crate) struct NodeIdTable {
-    child_ids: HashMap<(NodeId, LocalKey), NodeId>,
+    child_ids: HashMap<(Option<NodeId>, LocalKey), NodeId>,
     entries: HashMap<NodeId, IdEntry>,
     str_to_sym: HashMap<Box<str>, u32>,
     free_syms: Vec<u32>,
     next_sym: u32,
+    unreferenced: usize,
+    kept_path_ids_len: usize,
+    kept_mounted_len: usize,
+    kept_state_lens: [usize; 4],
+    direct_scratch: HashSet<NodeId>,
+    keep_scratch: HashSet<NodeId>,
+    sym_scratch: HashSet<u32>,
 }
 
 impl NodeIdTable {
     #[inline(always)]
+    pub(crate) fn contains(&self, id: NodeId) -> bool {
+        self.entries.contains_key(&id)
+    }
+
+    #[inline(always)]
+    pub(crate) fn note_unreferenced(&mut self, count: usize) {
+        self.unreferenced = self.unreferenced.saturating_add(count);
+    }
+
+    #[inline]
+    pub(crate) fn needs_prune(
+        &mut self,
+        path_ids_len: usize,
+        mounted_len: usize,
+        state_lens: [usize; 4],
+    ) -> bool {
+        if path_ids_len <= mounted_len {
+            self.unreferenced = 0;
+            self.kept_path_ids_len = path_ids_len;
+            self.kept_mounted_len = mounted_len;
+            self.kept_state_lens = state_lens;
+            return false;
+        }
+        if self.unreferenced > 0 || state_lens != self.kept_state_lens {
+            return true;
+        }
+        let max_expected = self
+            .kept_path_ids_len
+            .saturating_add(mounted_len.saturating_sub(self.kept_mounted_len));
+        path_ids_len > max_expected
+    }
+
+    #[inline(always)]
     pub(crate) fn get_child_sync_path(
         &mut self,
         path_ids: &mut HashMap<String, NodeId>,
-        parent: NodeId,
+        parent: Option<NodeId>,
         local: LocalKey,
         full_path: &str,
     ) -> Option<(NodeId, Option<String>)> {
@@ -83,8 +123,7 @@ impl NodeIdTable {
 
     #[inline(always)]
     pub(crate) fn parent_of(&self, id: NodeId) -> Option<NodeId> {
-        let p = self.entries.get(&id)?.parent;
-        (p != NodeId(0)).then_some(p)
+        self.entries.get(&id)?.parent
     }
 
     /// True when `desc == anc`, `anc == NodeId(0)`, or `anc` is an ancestor of `desc`.
@@ -94,13 +133,13 @@ impl NodeIdTable {
             return true;
         }
         while let Some(e) = self.entries.get(&desc) {
-            if e.parent == anc {
+            let Some(p) = e.parent else {
+                return false;
+            };
+            if p == anc {
                 return true;
             }
-            if e.parent == NodeId(0) {
-                return false;
-            }
-            desc = e.parent;
+            desc = p;
         }
         false
     }
@@ -137,12 +176,27 @@ impl NodeIdTable {
         &mut self,
         path_ids: &mut HashMap<String, NodeId>,
         next_id: &mut u64,
-        parent: NodeId,
+        parent: Option<NodeId>,
         local: LocalKey,
         full_path: &str,
     ) -> NodeId {
+        self.intern_step_inner(path_ids, next_id, parent, local, full_path, true)
+    }
+
+    #[inline]
+    fn intern_step_inner(
+        &mut self,
+        path_ids: &mut HashMap<String, NodeId>,
+        next_id: &mut u64,
+        parent: Option<NodeId>,
+        local: LocalKey,
+        full_path: &str,
+        insert_path: bool,
+    ) -> NodeId {
+        debug_assert!(parent != Some(NodeId(0)), "root parent must be None, never Some(NodeId(0))");
         if let Some(&id) = self.child_ids.get(&(parent, local)) {
-            if let Some(e) = self.entries.get_mut(&id)
+            if insert_path
+                && let Some(e) = self.entries.get_mut(&id)
                 && !e.in_path_ids
             {
                 e.in_path_ids = true;
@@ -150,27 +204,34 @@ impl NodeIdTable {
             }
             return id;
         }
-        let id = match path_ids.get(full_path) {
-            Some(&existing) => existing,
+        let (id, in_path_ids) = match path_ids.get(full_path) {
+            Some(&existing) => (existing, true),
             None => {
+                debug_assert!(*next_id != 0, "next_id must start at >= 1 so NodeId(0) is never allocated");
+                if *next_id == 0 {
+                    *next_id = 1;
+                }
                 let fresh = NodeId(*next_id);
                 *next_id += 1;
-                path_ids.insert(full_path.to_owned(), fresh);
-                fresh
+                if insert_path {
+                    path_ids.insert(full_path.to_owned(), fresh);
+                }
+                (fresh, insert_path)
             }
         };
-        let depth = if parent == NodeId(0) {
-            1
-        } else {
-            self.entries.get(&parent).map_or(1, |e| e.depth.saturating_add(1))
+        let depth = match parent {
+            None => 1,
+            Some(pid) => self.entries.get(&pid).map_or(1, |e| e.depth.saturating_add(1)),
         };
         self.child_ids.insert((parent, local), id);
-        self.entries.insert(id, IdEntry { parent, local, depth, in_path_ids: true });
+        self.entries.insert(id, IdEntry { parent, local, depth, in_path_ids });
         id
     }
 
-    /// Interns every `'/'`-delimited prefix of `full_path`, keeping `path_ids` and `self` in
-    /// 1-to-1 lockstep and returning `(id, parent_id, local_key)` for `full_path`.
+    /// Interns every `'/'`-delimited segment of `full_path` in `self`, inserting only `full_path`
+    /// itself into `path_ids` (intermediate prefixes of compound keys stay in `self` with
+    /// `in_path_ids = false` so they allocate no prefix `String`s and trigger no id prunes), and
+    /// returns `(id, parent_id_or_zero, local_key)` for `full_path`.
     pub(crate) fn intern_full_path(
         &mut self,
         path_ids: &mut HashMap<String, NodeId>,
@@ -179,10 +240,10 @@ impl NodeIdTable {
     ) -> (NodeId, NodeId, LocalKey) {
         if full_path.is_empty() {
             let local = LocalKey::named(self.intern_sym(""));
-            let id = self.intern_step(path_ids, next_id, NodeId(0), local, "");
+            let id = self.intern_step_inner(path_ids, next_id, None, local, "", true);
             return (id, NodeId(0), local);
         }
-        let mut cur_parent = NodeId(0);
+        let mut cur_parent: Option<NodeId> = None;
         let mut last_local = LocalKey::NONE;
         let mut last_id = NodeId(0);
         let bytes = full_path.as_bytes();
@@ -191,36 +252,46 @@ impl NodeIdTable {
             if i == bytes.len() || bytes[i] == b'/' {
                 let seg = &full_path[start..i];
                 let prefix = &full_path[..i];
+                let is_leaf = i == bytes.len();
                 let local = self.segment_key(seg);
-                last_id = self.intern_step(path_ids, next_id, cur_parent, local, prefix);
-                if i == bytes.len() {
+                last_id = self.intern_step_inner(path_ids, next_id, cur_parent, local, prefix, is_leaf);
+                if is_leaf {
                     last_local = local;
                 } else {
-                    cur_parent = last_id;
+                    cur_parent = Some(last_id);
                     start = i + 1;
                 }
             }
         }
-        (last_id, cur_parent, last_local)
+        (last_id, cur_parent.unwrap_or(NodeId(0)), last_local)
     }
 
     pub(crate) fn prune(
         &mut self,
         keep_pred: impl Fn(&NodeId) -> bool,
         path_ids: &mut HashMap<String, NodeId>,
+        mounted_len: usize,
+        state_lens: [usize; 4],
     ) {
-        let mut direct = HashSet::with_capacity_and_hasher(path_ids.len(), rustc_hash::FxBuildHasher);
-        let mut keep = HashSet::with_capacity_and_hasher(path_ids.len(), rustc_hash::FxBuildHasher);
+        self.direct_scratch.clear();
+        self.keep_scratch.clear();
+        self.direct_scratch.reserve(path_ids.len());
+        self.keep_scratch.reserve(path_ids.len());
         for &id in path_ids.values() {
             if !keep_pred(&id) {
                 continue;
             }
-            direct.insert(id);
-            let mut cur = id;
-            while cur != NodeId(0) && keep.insert(cur) {
-                cur = self.entries.get(&cur).map_or(NodeId(0), |e| e.parent);
+            self.direct_scratch.insert(id);
+            let mut cur = Some(id);
+            while let Some(cid) = cur {
+                if !self.keep_scratch.insert(cid) {
+                    break;
+                }
+                cur = self.entries.get(&cid).and_then(|e| e.parent);
             }
         }
+        let direct = &self.direct_scratch;
+        let keep = &self.keep_scratch;
         path_ids.retain(|_, id| direct.contains(id));
         self.entries.retain(|id, e| {
             if !keep.contains(id) {
@@ -231,12 +302,14 @@ impl NodeIdTable {
         });
         self.child_ids.retain(|_, id| keep.contains(id));
         if self.str_to_sym.len() > self.child_ids.len().saturating_mul(2) + 64 {
-            let mut live_syms = HashSet::with_capacity_and_hasher(self.entries.len(), rustc_hash::FxBuildHasher);
+            self.sym_scratch.clear();
+            self.sym_scratch.reserve(self.entries.len());
             for e in self.entries.values() {
                 if let Some(sym) = e.local.sym() {
-                    live_syms.insert(sym);
+                    self.sym_scratch.insert(sym);
                 }
             }
+            let live_syms = &self.sym_scratch;
             let free = &mut self.free_syms;
             self.str_to_sym.retain(|_, sym| {
                 if live_syms.contains(sym) {
@@ -247,17 +320,20 @@ impl NodeIdTable {
                 }
             });
         }
+        self.unreferenced = 0;
+        self.kept_path_ids_len = path_ids.len();
+        self.kept_mounted_len = mounted_len;
+        self.kept_state_lens = state_lens;
     }
 }
 
 #[inline]
-fn can_take_old_node(old: &Node, parent_id: NodeId, local_key: LocalKey, keep_input_paths: bool) -> bool {
+fn can_take_old_node(old: &Node, parent_id: NodeId, local_key: LocalKey) -> bool {
     local_key != LocalKey::NONE
         && old.local_key == local_key
         && old.parent_id == parent_id
         && !old.is_moved_stub()
         && !old.path.is_empty()
-        && (!keep_input_paths || (old.input.is_none() && old.focus.get().is_none_or(|f| f.return_to.is_none())))
 }
 
 #[inline]
@@ -268,11 +344,11 @@ pub(super) fn resolve_flattened(
     index: usize,
     path_buf: &str,
     new_idx: usize,
-    keep_input_paths: bool,
     memo_ctx: &mut memo_reuse::MemoFlattenCtx<'_>,
 ) -> (String, NodeId, NodeId, LocalKey) {
     let old_limit = memo_ctx.old_present_len.min(memo_ctx.old_nodes.len());
-    let base_parent = if prev_path_len == 0 { NodeId(0) } else { raw_parent_id };
+    let parent_opt = (prev_path_len != 0).then_some(raw_parent_id);
+    let base_parent = parent_opt.unwrap_or(NodeId(0));
 
     if !path_buf.is_empty() && !key.is_some_and(|k| k.as_bytes().contains(&b'/')) {
         let local = match key {
@@ -281,7 +357,7 @@ pub(super) fn resolve_flattened(
         };
         if memo_ctx.committing && memo_ctx.old_cursor < old_limit {
             let oi = memo_ctx.old_cursor;
-            if can_take_old_node(&memo_ctx.old_nodes[oi], base_parent, local, keep_input_paths) {
+            if can_take_old_node(&memo_ctx.old_nodes[oi], base_parent, local) {
                 let old = &mut memo_ctx.old_nodes[oi];
                 let id = old.id;
                 let path = std::mem::take(&mut old.path);
@@ -291,12 +367,12 @@ pub(super) fn resolve_flattened(
                 return (path, id, base_parent, local);
             }
         }
-        if let Some((id, synced_owned)) = memo_ctx.node_ids.get_child_sync_path(memo_ctx.path_ids, base_parent, local, path_buf) {
+        if let Some((id, synced_owned)) = memo_ctx.node_ids.get_child_sync_path(memo_ctx.path_ids, parent_opt, local, path_buf) {
             if memo_ctx.committing
                 && let Some(&oi) = memo_ctx.old_node_index.get(&id)
                 && oi < old_limit
                 && memo_ctx.old_nodes[oi].id == id
-                && can_take_old_node(&memo_ctx.old_nodes[oi], base_parent, local, keep_input_paths)
+                && can_take_old_node(&memo_ctx.old_nodes[oi], base_parent, local)
             {
                 let old = &mut memo_ctx.old_nodes[oi];
                 let path = std::mem::take(&mut old.path);
@@ -307,7 +383,7 @@ pub(super) fn resolve_flattened(
             }
             return (synced_owned.unwrap_or_else(|| path_buf.to_owned()), id, base_parent, local);
         }
-        let id = memo_ctx.node_ids.intern_step(memo_ctx.path_ids, memo_ctx.next_id, base_parent, local, path_buf);
+        let id = memo_ctx.node_ids.intern_step(memo_ctx.path_ids, memo_ctx.next_id, parent_opt, local, path_buf);
         return (path_buf.to_owned(), id, base_parent, local);
     }
 
@@ -317,7 +393,7 @@ pub(super) fn resolve_flattened(
         && let Some(&oi) = memo_ctx.old_node_index.get(&id)
         && oi < old_limit
         && memo_ctx.old_nodes[oi].id == id
-        && can_take_old_node(&memo_ctx.old_nodes[oi], eff_parent, local, keep_input_paths)
+        && can_take_old_node(&memo_ctx.old_nodes[oi], eff_parent, local)
     {
         let old = &mut memo_ctx.old_nodes[oi];
         let path = std::mem::take(&mut old.path);
@@ -332,6 +408,23 @@ pub(super) fn resolve_flattened(
 /// Populates `Node::subtree_end` across the DFS-ordered `0..present_len` prefix (`O(N)`).
 pub(crate) fn fill_subtree_ends(nodes: &mut [Node], present_len: usize) {
     let end = present_len.min(nodes.len());
+    #[cfg(debug_assertions)]
+    {
+        let mut open: Vec<usize> = Vec::new();
+        for (i, n) in nodes[..end].iter().enumerate() {
+            match n.parent {
+                None => open.clear(),
+                Some(p) => {
+                    debug_assert!(p < i, "DFS order violated at node {i}: parent {p} >= {i}");
+                    while open.last().is_some_and(|&top| top != p) {
+                        open.pop();
+                    }
+                    debug_assert_eq!(open.last().copied(), Some(p), "non-contiguous subtree at node {i} (parent {p})");
+                }
+            }
+            open.push(i);
+        }
+    }
     for (i, n) in nodes[..end].iter_mut().enumerate() {
         n.subtree_end = (i + 1) as u32;
     }
@@ -377,7 +470,8 @@ impl<'a> VirtualById<'a> {
             }
             return Self::Inline { len, items };
         }
-        let mut map = HashMap::with_capacity_and_hasher(virtuals.len(), rustc_hash::FxBuildHasher);
+        let mut map = HashMap::default();
+        map.reserve(virtuals.len());
         for (path, v) in virtuals {
             if let Some(&id) = path_ids.get(path) {
                 map.insert(id, v);
@@ -417,4 +511,78 @@ impl<'a> VirtualById<'a> {
     }
 }
 
-const _: () = assert!(std::mem::size_of::<Node>() <= 512);
+#[derive(Clone, Copy)]
+pub(crate) struct VirtualSnap {
+    pub(crate) before: f32,
+    pub(crate) replaced: bool,
+}
+
+pub(crate) enum VirtualSnapById {
+    Inline {
+        len: usize,
+        items: [Option<(NodeId, VirtualSnap)>; 4],
+    },
+    Map(HashMap<NodeId, VirtualSnap>),
+}
+
+impl VirtualSnapById {
+    #[inline]
+    pub(crate) fn build(
+        virtuals: &HashMap<String, crate::el::virtual_list::VirtualList>,
+        path_ids: &HashMap<String, NodeId>,
+    ) -> Self {
+        let snap = |v: &crate::el::virtual_list::VirtualList| VirtualSnap {
+            before: v.before,
+            replaced: v.replaced_view(),
+        };
+        if virtuals.len() <= 4 {
+            let mut items: [Option<(NodeId, VirtualSnap)>; 4] = [None; 4];
+            let mut len = 0usize;
+            for (path, v) in virtuals {
+                if let Some(&id) = path_ids.get(path) {
+                    items[len] = Some((id, snap(v)));
+                    len += 1;
+                }
+            }
+            return Self::Inline { len, items };
+        }
+        let mut map = HashMap::default();
+        map.reserve(virtuals.len());
+        for (path, v) in virtuals {
+            if let Some(&id) = path_ids.get(path) {
+                map.insert(id, snap(v));
+            }
+        }
+        Self::Map(map)
+    }
+
+    #[inline(always)]
+    pub(crate) fn is_empty(&self) -> bool {
+        match self {
+            Self::Inline { len, .. } => *len == 0,
+            Self::Map(m) => m.is_empty(),
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn get(&self, id: NodeId) -> Option<VirtualSnap> {
+        match self {
+            Self::Inline { len, items } => {
+                for slot in &items[..*len] {
+                    if let Some((vid, v)) = *slot
+                        && vid == id
+                    {
+                        return Some(v);
+                    }
+                }
+                None
+            }
+            Self::Map(m) => m.get(&id).copied(),
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn contains(&self, id: NodeId) -> bool {
+        self.get(id).is_some()
+    }
+}

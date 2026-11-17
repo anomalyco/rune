@@ -230,7 +230,7 @@ impl<S: 'static> Runtime<S> {
         i: usize,
         old: Option<usize>,
         scene_rect: MRect,
-        parent_virtual: Option<&crate::el::virtual_list::VirtualList>,
+        parent_replaced_view: bool,
     ) -> bool {
         let Some(o_idx) = old else { return false };
         let o = &self.nodes[o_idx];
@@ -256,7 +256,7 @@ impl<S: 'static> Runtime<S> {
             && plain_cold(o)
             && (self.flying.is_empty() || !self.flying.iter().any(|f| f.0 == n.id))
             && (self.aspect_snap.is_empty() || !self.aspect_snap.contains(&n.id))
-            && !parent_virtual.is_some_and(crate::el::virtual_list::VirtualList::replaced_view)
+            && !parent_replaced_view
             && memo_reuse::same_visual(&n.vis, &o.vis)
             && text_color(n) == text_color(o)
             && n.text.as_ref().is_none_or(|t| {

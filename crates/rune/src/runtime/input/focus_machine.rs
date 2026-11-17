@@ -92,9 +92,13 @@ impl FocusState {
     }
 
     #[inline]
-    pub(crate) fn id_in(&self, path_ids: &super::HashMap<String, super::NodeId>) -> Option<NodeId> {
+    pub(crate) fn id_in(
+        &self,
+        path_ids: &super::HashMap<String, super::NodeId>,
+        node_ids: &super::NodeIdTable,
+    ) -> Option<NodeId> {
         let p = self.path()?;
-        self.cached_id.or_else(|| path_ids.get(p).copied())
+        self.cached_id.filter(|&id| node_ids.contains(id)).or_else(|| path_ids.get(p).copied())
     }
 
     pub(crate) fn owned(&self) -> Option<String> { self.path().map(str::to_owned) }

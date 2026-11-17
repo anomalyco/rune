@@ -177,12 +177,13 @@ impl<S: 'static> Runtime<S> {
             i = n.parent?;
         }
     }
+    pub(super) fn focus_id(&self) -> Option<NodeId> { self.focus.id_in(&self.path_ids, &self.node_ids) }
     pub(super) fn highlight_visible(&self, i: usize) -> bool {
-        self.focus.shown() && self.focus.id_in(&self.path_ids) == Some(self.nodes[i].id)
+        self.focus.shown() && self.focus_id() == Some(self.nodes[i].id)
     }
     /// Focus is on node `i` or inside it (CSS `:focus-within`), however it got there.
     pub(super) fn focus_within(&self, i: usize) -> bool {
-        if let Some(fid) = self.focus.id_in(&self.path_ids) {
+        if let Some(fid) = self.focus_id() {
             if let Some(fi) = self.index_of_id(fid)
                 && fi < self.memo.present_len
                 && i < self.memo.present_len
@@ -206,7 +207,7 @@ impl<S: 'static> Runtime<S> {
             }
         }
         if !self.focus.keyboard() { return false; }
-        let Some(fid) = self.focus.id_in(&self.path_ids) else { return false };
+        let Some(fid) = self.focus_id() else { return false };
         loop {
             if self.nodes[i].id == fid { return true; }
             // A nested focusable owns its ring, never inherit another control's focus.
@@ -378,7 +379,7 @@ impl<S: 'static> Runtime<S> {
                 .find(|&j| shown(j) && (self.takes_focus(&nodes[j]) || nodes[j].input.as_ref().is_some_and(|i| i.access.is_some())))
                 .map(|j| (nodes[j].path.clone(), ring, ask))
         });
-        let focus_id = self.focus.id_in(&self.path_ids);
+        let focus_id = self.focus_id();
         let input_focused = focus_id.and_then(&in_new)
             .is_some_and(|j| !nodes[j].inert && nodes[j].input.as_ref().is_some_and(|i| i.edit.focused))
             || self.focus.path().is_some_and(|p| self.virtual_inputs.get(p).is_some_and(|i| i.edit.focused));
@@ -565,7 +566,7 @@ impl<S: 'static> Runtime<S> {
         None
     }
     pub(super) fn tab_order(&self) -> Vec<usize> {
-        let fid = self.focus.id_in(&self.path_ids);
+        let fid = self.focus_id();
         let all: Vec<_> = (0..self.nodes.len()).filter(|&i| self.can_focus(i) && self.nodes[i].focus.order >= 0).collect();
         let mut order: Vec<_> = all.iter().copied().filter(|&i| {
             let Some(g) = self.group(i) else { return true; };
@@ -667,7 +668,7 @@ impl<S: 'static> Runtime<S> {
                     || self.group(i).is_some_and(|g| LIST_ROLES.contains(&self.nodes[g].role)));
             }
             if order.is_empty() { return self.active_modal().is_some(); }
-            let fid = self.focus.id_in(&self.path_ids);
+            let fid = self.focus_id();
             let current = fid.and_then(|id| order.iter().position(|&i| self.nodes[i].id == id));
             // With nothing focused, Tab goes on from where focus was or the pointer pressed last;
             // from an element outside the Tab order (`tab_index(-1)`, a region a request focused),
