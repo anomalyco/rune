@@ -55,7 +55,13 @@ fn main() {
             // Enough tiles to cover the window at any offset, plus one.
             let count = h.div_ceil(tile_h) + 1;
             let tiles: Vec<_> = (0..count).map(|_| device.create_texture(&wgpu::TextureDescriptor { label: None, size: wgpu::Extent3d { width: w, height: tile_h, depth_or_array_layers: 1 },
-                mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format, usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT, view_formats: &[] })).collect();
+                mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format, usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_DST, view_formats: &[] })).collect();
+            // Real pixels in each tile (noise): a texture never written samples as its compressed clear state.
+            let noise: Vec<u8> = (0..w * tile_h * 4).map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8).collect();
+            for t in &tiles {
+                queue.write_texture(wgpu::TexelCopyTextureInfo { texture: t, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All }, &noise,
+                    wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * 4), rows_per_image: Some(tile_h) }, wgpu::Extent3d { width: w, height: tile_h, depth_or_array_layers: 1 });
+            }
             let stride = 256u64;
             let uniforms = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: stride * u64::from(count) * 240, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
             let binds: Vec<_> = tiles.iter().map(|t| device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &layout, entries: &[
@@ -105,6 +111,49 @@ fn main() {
                 let tile_bytes = u64::from(count) * u64::from(w) * u64::from(tile_h) * 4;
                 println!("{w}x{h} tile {tile_h} ({count} tiles, {:.1} MiB) {mode}: p50 {:.0} us p90 {:.0} us (target {:.1} MiB)", tile_bytes as f64 / 1048576.0, us[120], us[216], bytes as f64 / 1048576.0);
             }
+        }
+        // The shift design's copies (review of tile-cache.md, finding 6): the whole kept frame copied to another
+        // window-sized texture (`draw_armed`'s copy to the back buffer), and the kept frame moved by 40 rows into a
+        // second one (the shift). Each copy sits between two empty passes: the first pass's end and the second's
+        // start bracket it, so the time includes a pass boundary (the "clear only" row above is the floor).
+        let make = |usage| device.create_texture(&wgpu::TextureDescriptor { label: None, size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1,
+            dimension: wgpu::TextureDimension::D2, format, usage, view_formats: &[] });
+        let kept = make(wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::RENDER_ATTACHMENT);
+        // Real pixels in the kept frame (noise, as text and edges are): a texture never written copies as its compressed
+        // clear state, far faster than a frame's bytes.
+        let noise: Vec<u8> = (0..w * h * 4).map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8).collect();
+        queue.write_texture(wgpu::TexelCopyTextureInfo { texture: &kept, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All }, &noise,
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * 4), rows_per_image: Some(h) }, wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 });
+        let back = make(wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::RENDER_ATTACHMENT);
+        let (kept_view, back_view) = (kept.create_view(&Default::default()), back.create_view(&Default::default()));
+        for (mode, dy) in [("whole copy", 0u32), ("shift copy by 40 rows", 40)] {
+            let mut enc = device.create_command_encoder(&Default::default());
+            for f in 0..240u32 {
+                let empty = |enc: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, write: wgpu::RenderPassTimestampWrites<'_>| {
+                    drop(enc.begin_render_pass(&wgpu::RenderPassDescriptor { label: None, color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view, depth_slice: None, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store } })],
+                        depth_stencil_attachment: None, timestamp_writes: Some(write), occlusion_query_set: None, multiview_mask: None }));
+                };
+                empty(&mut enc, &kept_view, wgpu::RenderPassTimestampWrites { query_set: &queries, beginning_of_pass_write_index: None, end_of_pass_write_index: Some(2 * f) });
+                enc.copy_texture_to_texture(
+                    wgpu::TexelCopyTextureInfo { texture: &kept, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                    wgpu::TexelCopyTextureInfo { texture: &back, mip_level: 0, origin: wgpu::Origin3d { x: 0, y: dy, z: 0 }, aspect: wgpu::TextureAspect::All },
+                    wgpu::Extent3d { width: w, height: h - dy, depth_or_array_layers: 1 });
+                empty(&mut enc, &back_view, wgpu::RenderPassTimestampWrites { query_set: &queries, beginning_of_pass_write_index: Some(2 * f + 1), end_of_pass_write_index: None });
+            }
+            enc.resolve_query_set(&queries, 0..480, &resolve, 0);
+            enc.copy_buffer_to_buffer(&resolve, 0, &read, 0, 480 * 8);
+            queue.submit([enc.finish()]);
+            read.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+            device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+            let mut us: Vec<f64> = {
+                let v = read.slice(..).get_mapped_range().unwrap();
+                let t: &[u64] = bytemuck::cast_slice(&v);
+                (0..240).map(|f| (t[2 * f + 1].saturating_sub(t[2 * f])) as f64 * period / 1e3).collect()
+            };
+            read.unmap();
+            us.sort_by(f64::total_cmp);
+            println!("{w}x{h} {mode}: p50 {:.0} us p90 {:.0} us ({:.1} MiB)", us[120], us[216], f64::from(w) * f64::from(h - dy) * 4.0 / 1048576.0);
         }
     }
 }
