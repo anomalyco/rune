@@ -292,7 +292,7 @@ impl<S: 'static> Runtime<S> {
     }
 
     pub fn key(&mut self, ev: KeyEvent) {
-        self.text.prepare_stop();
+        self.stop_prepare();
         self.queue_key(ev, false);
     }
 

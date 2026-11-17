@@ -643,6 +643,11 @@ impl Tx {
         Some((*view.downcast::<fn(&S, &mut crate::Cx<S>) -> crate::El>().ok()?, size))
     }
 
+    /// Drops `prepare_text`'s request, whichever window it is for.
+    pub(crate) fn drop_prepared() {
+        PREPARE.with_borrow_mut(|a| *a = None);
+    }
+
     /// Whether `prepare_text` holds a request for a window of state `S`.
     pub(crate) fn prepare_owed<S: 'static>() -> bool {
         PREPARE.with_borrow(|a| a.as_ref().is_some_and(|(view, _)| view.is::<fn(&S, &mut crate::Cx<S>) -> crate::El>()))
