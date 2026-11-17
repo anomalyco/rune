@@ -1233,14 +1233,14 @@ impl<S: 'static> Runtime<S> {
                 let exact = offset as f32 + st.slack.height();
                 let (drawn, hold) = st.drawn.draw(exact, st.offset as f32, st.pinned(), s);
                 dy -= drawn;
-                snap.shift(1, -drawn);
+                snap.scroll(1, -drawn);
                 if let Some(st) = self.scrolls.get_mut(&self.nodes[i].id) { (st.held, st.drawn) = (held, hold); }
             }
             let (mut scale, mut anchor, mut anchor_to, mut dx) = (sc, anchor, anchor_to, pinh.dx);
             if n.scroll_axes.x() && let Some(st) = self.scrolls.get_mut(&self.nodes[i].id) {
                 st.drawn_x = grid(st.x.shift() as f32, s);
                 dx -= st.drawn_x;
-                snap.shift(0, -st.drawn_x);
+                snap.scroll(0, -st.drawn_x);
             }
             if open_cache && sc > 1e-4 {
                 dx += (r_exact[0] / s - rect_pt[0]) / sc;

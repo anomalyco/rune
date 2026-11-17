@@ -113,9 +113,10 @@ pub(super) struct Inherit {
     /// The translation in points from scrolls, sticky shifts and growth rows above, which
     /// snaps as a whole.
     pub rigid: [f32; 2],
-    /// `rigid` less the growth rows' offsets (`row_dy`, which settle to zero). A text lays out
-    /// from its exact place against this, so while rows glide it moves in whole pixels with its
-    /// box, as one piece with the lines and borders beside it, and lands where it rests.
+    /// `rigid` less the growth rows' offsets (`row_dy`, which settle to zero) and the scrolls'. A
+    /// text lays out from its exact place against this, so while rows glide or a list scrolls it
+    /// moves in whole pixels with its box, as one piece with the lines and borders beside it, and
+    /// lands where it rests.
     pub steady: [f32; 2],
     /// The origin in points of the paint containment above (`El::paint_contained`), which is
     /// part of `rigid`: what draws from its own exact box rounds against it too.
@@ -140,6 +141,14 @@ impl Inherit {
     pub(super) fn shift(&mut self, axis: usize, by: f32) {
         self.rigid[axis] += by;
         self.steady[axis] += by;
+    }
+
+    /// A scroll's drawn offset `by` on `axis`: it moves the subtree's boxes, which round it with
+    /// the rest of `rigid`, and not what its text lays out against, so text scrolls in whole
+    /// pixels with its box, as Chromium draws a scroller's contents from its pixel-snapped
+    /// offset.
+    pub(super) fn scroll(&mut self, axis: usize, by: f32) {
+        self.rigid[axis] += by;
     }
 
     /// A growth offset `dy`: a stack's own (`stack`) is its virtual window's, which holds still
