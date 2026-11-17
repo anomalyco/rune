@@ -43,6 +43,7 @@ struct IdEntry {
     parent: NodeId,
     local: LocalKey,
     depth: u16,
+    in_path_ids: bool,
 }
 
 #[derive(Default)]
@@ -56,8 +57,23 @@ pub(crate) struct NodeIdTable {
 
 impl NodeIdTable {
     #[inline(always)]
-    pub(crate) fn get_child(&self, parent: NodeId, local: LocalKey) -> Option<NodeId> {
-        self.child_ids.get(&(parent, local)).copied()
+    pub(crate) fn get_child_sync_path(
+        &mut self,
+        path_ids: &mut HashMap<String, NodeId>,
+        parent: NodeId,
+        local: LocalKey,
+        full_path: &str,
+    ) -> Option<(NodeId, Option<String>)> {
+        let id = *self.child_ids.get(&(parent, local))?;
+        if let Some(e) = self.entries.get_mut(&id)
+            && !e.in_path_ids
+        {
+            e.in_path_ids = true;
+            let owned = full_path.to_owned();
+            path_ids.insert(owned.clone(), id);
+            return Some((id, Some(owned)));
+        }
+        Some((id, None))
     }
 
     #[inline(always)]
@@ -126,6 +142,12 @@ impl NodeIdTable {
         full_path: &str,
     ) -> NodeId {
         if let Some(&id) = self.child_ids.get(&(parent, local)) {
+            if let Some(e) = self.entries.get_mut(&id)
+                && !e.in_path_ids
+            {
+                e.in_path_ids = true;
+                path_ids.insert(full_path.to_owned(), id);
+            }
             return id;
         }
         let id = match path_ids.get(full_path) {
@@ -143,7 +165,7 @@ impl NodeIdTable {
             self.entries.get(&parent).map_or(1, |e| e.depth.saturating_add(1))
         };
         self.child_ids.insert((parent, local), id);
-        self.entries.insert(id, IdEntry { parent, local, depth });
+        self.entries.insert(id, IdEntry { parent, local, depth, in_path_ids: true });
         id
     }
 
@@ -187,18 +209,26 @@ impl NodeIdTable {
         keep_pred: impl Fn(&NodeId) -> bool,
         path_ids: &mut HashMap<String, NodeId>,
     ) {
+        let mut direct = HashSet::with_capacity_and_hasher(path_ids.len(), rustc_hash::FxBuildHasher);
         let mut keep = HashSet::with_capacity_and_hasher(path_ids.len(), rustc_hash::FxBuildHasher);
         for &id in path_ids.values() {
             if !keep_pred(&id) {
                 continue;
             }
+            direct.insert(id);
             let mut cur = id;
             while cur != NodeId(0) && keep.insert(cur) {
                 cur = self.entries.get(&cur).map_or(NodeId(0), |e| e.parent);
             }
         }
-        path_ids.retain(|_, id| keep.contains(id));
-        self.entries.retain(|id, _| keep.contains(id));
+        path_ids.retain(|_, id| direct.contains(id));
+        self.entries.retain(|id, e| {
+            if !keep.contains(id) {
+                return false;
+            }
+            e.in_path_ids = direct.contains(id);
+            true
+        });
         self.child_ids.retain(|_, id| keep.contains(id));
         if self.str_to_sym.len() > self.child_ids.len().saturating_mul(2) + 64 {
             let mut live_syms = HashSet::with_capacity_and_hasher(self.entries.len(), rustc_hash::FxBuildHasher);
@@ -261,7 +291,7 @@ pub(super) fn resolve_flattened(
                 return (path, id, base_parent, local);
             }
         }
-        if let Some(id) = memo_ctx.node_ids.get_child(base_parent, local) {
+        if let Some((id, synced_owned)) = memo_ctx.node_ids.get_child_sync_path(memo_ctx.path_ids, base_parent, local, path_buf) {
             if memo_ctx.committing
                 && let Some(&oi) = memo_ctx.old_node_index.get(&id)
                 && oi < old_limit
@@ -275,7 +305,7 @@ pub(super) fn resolve_flattened(
                 memo_ctx.old_cursor = oi + 1;
                 return (path, id, base_parent, local);
             }
-            return (path_buf.to_owned(), id, base_parent, local);
+            return (synced_owned.unwrap_or_else(|| path_buf.to_owned()), id, base_parent, local);
         }
         let id = memo_ctx.node_ids.intern_step(memo_ctx.path_ids, memo_ctx.next_id, base_parent, local, path_buf);
         return (path_buf.to_owned(), id, base_parent, local);
