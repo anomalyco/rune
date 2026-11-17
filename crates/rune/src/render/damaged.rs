@@ -202,7 +202,10 @@ impl Renderer {
         }
         if kept.current {
             // No layer reaches the rectangles: their targets aren't drawn from, nor made again.
-            if runs.is_empty() || layers_reached { self.encode_layers_timed(encoder, None, &mut |_, _| {}); }
+            // The uploads go into this encoder ahead of the pass either way (`encode_layers_timed`
+            // flushes them too), not in a submission of their own: a submit costs the CPU about as
+            // much as the rest of a loop-only frame.
+            if runs.is_empty() || layers_reached { self.encode_layers_timed(encoder, None, &mut |_, _| {}); } else { self.flush_uploads(encoder); }
             self.submit_uploads();
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("frame (damage)"),
