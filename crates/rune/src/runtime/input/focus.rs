@@ -672,7 +672,7 @@ impl<S: 'static> Runtime<S> {
         }
         // Space presses the focused control. Return presses only rows and links; for a button
         // it goes on to the default button (`default_button_key`, which ran first) or `on_key`.
-        let space = ev.key == Key::Text(" ".into());
+        let space = ev.key == Key::Text(" ".into()) && !self.scrolls_on_space(i);
         if self.nodes[i].input.is_none() && (space || (ev.key == Key::Enter && self.takes_return(i))) {
             // A row the user cannot see highlighted (the pointer left it) chooses nothing.
             if self.nodes[i].focus.highlight.is_some() && !shown { self.focus.step(focus_machine::FocusEvent::Pointed); return true; }

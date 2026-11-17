@@ -176,7 +176,8 @@ impl TextSystem {
     /// line is shaped. None when none were waiting.
     pub(crate) fn fill_paragraphs(&mut self, laid: &ParagraphLayout, budget: std::time::Duration, rows: (f32, f32), reach: f32) -> Option<(Rc<ParagraphLayout>, bool)> {
         let lazy = laid.lazy.clone()?;
-        let start = std::time::Instant::now();
+        // The crate's clock: the standard library's has none in a browser, and panics there.
+        let start = crate::time::Instant::now();
         let distance = |p: &Paragraph| if p.y + p.height >= rows.0 && p.y <= rows.1 { 0.0 } else { (rows.0 - p.y - p.height).max(p.y - rows.1) };
         let mut paragraphs = laid.paragraphs.clone();
         let (mut moved, mut shaped_any) = (false, false);

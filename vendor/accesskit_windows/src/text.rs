@@ -5,9 +5,12 @@
 
 #![allow(non_upper_case_globals)]
 
-use accesskit::{Action, ActionData, ActionRequest, ScrollHint, VerticalOffset};
+use accesskit::{
+    Action, ActionData, ActionRequest, ScrollHint, TextPosition as WeakPosition, TextSelection,
+    VerticalOffset,
+};
 use accesskit_consumer::{
-    NodeRef, TextPosition as Position, TextRange as Range, Tree, TreeState,
+    FullNodeId, NodeRef, TextPosition as Position, TextRange as Range, Tree, TreeState,
     WeakTextRange as WeakRange,
 };
 use std::sync::{Arc, RwLock, Weak};
@@ -19,7 +22,50 @@ use windows::{
     core::*,
 };
 
-use crate::{context::Context, util::*};
+use crate::{
+    context::Context,
+    long_text::{Text, Unit, long_text},
+    util::*,
+};
+
+/// A range in published text runs, or (Rune) in a long field's value ([`long_text`]).
+#[derive(Clone, PartialEq)]
+enum State {
+    Runs(WeakRange),
+    Long {
+        node: FullNodeId,
+        start: usize,
+        end: usize,
+    },
+}
+
+fn runs(state: &State) -> Result<&WeakRange> {
+    match state {
+        State::Runs(range) => Ok(range),
+        State::Long { .. } => Err(invalid_arg()),
+    }
+}
+
+/// Moves one end of a long field's range, taking the other along if they'd cross.
+fn set_long_endpoint(start: &mut usize, end: &mut usize, endpoint: TextPatternRangeEndpoint, at: usize) {
+    if endpoint == TextPatternRangeEndpoint_Start {
+        *start = at;
+        *end = (*end).max(at);
+    } else {
+        *end = at;
+        *start = (*start).min(at);
+    }
+}
+
+fn long_unit(unit: TextUnit) -> Result<Unit> {
+    match unit {
+        TextUnit_Character => Ok(Unit::Character),
+        TextUnit_Word => Ok(Unit::Word),
+        TextUnit_Line | TextUnit_Paragraph => Ok(Unit::Line),
+        TextUnit_Format | TextUnit_Page | TextUnit_Document => Ok(Unit::Document),
+        _ => Err(invalid_arg()),
+    }
+}
 
 fn upgrade_range<'a>(weak: &WeakRange, tree_state: &'a TreeState) -> Result<Range<'a>> {
     if let Some(range) = weak.upgrade(tree_state) {
@@ -209,15 +255,65 @@ fn move_position(
 #[implement(ITextRangeProvider)]
 pub(crate) struct PlatformRange {
     context: Weak<Context>,
-    state: RwLock<WeakRange>,
+    state: RwLock<State>,
 }
 
 impl PlatformRange {
     pub(crate) fn new(context: &Weak<Context>, range: Range) -> Self {
         Self {
             context: context.clone(),
-            state: RwLock::new(range.downgrade()),
+            state: RwLock::new(State::Runs(range.downgrade())),
         }
+    }
+
+    /// Bytes `start..end` of long field `node`'s value.
+    pub(crate) fn new_long(context: &Weak<Context>, node: FullNodeId, start: usize, end: usize) -> Self {
+        Self {
+            context: context.clone(),
+            state: RwLock::new(State::Long { node, start, end }),
+        }
+    }
+
+    fn is_long(&self) -> bool {
+        matches!(*self.state.read().unwrap(), State::Long { .. })
+    }
+
+    /// Runs `f` on this long field range's text, node and endpoints, which it may move.
+    fn long<F, T>(&self, f: F) -> Result<T>
+    where
+        F: FnOnce(Text, NodeRef, &Arc<Context>, &mut usize, &mut usize) -> Result<T>,
+    {
+        let context = self.upgrade_context()?;
+        let tree = context.read_tree();
+        let mut state = self.state.write().unwrap();
+        let State::Long { node, start, end } = &mut *state else {
+            return Err(invalid_arg());
+        };
+        let node = tree.state().node_by_id(*node).ok_or_else(element_not_available)?;
+        let (text, _) = long_text(&node).ok_or_else(element_not_available)?;
+        // The value may have changed since the range was made.
+        *start = text.clamp(*start);
+        *end = text.clamp(*end).max(*start);
+        f(text, node, &context, start, end)
+    }
+
+    fn long_endpoints(&self) -> Option<(FullNodeId, usize, usize)> {
+        match *self.state.read().unwrap() {
+            State::Long { node, start, end } => Some((node, start, end)),
+            State::Runs(_) => None,
+        }
+    }
+
+    fn long_action(&self, action: Action, data: impl FnOnce(NodeRef, usize, usize) -> Option<ActionData>) -> Result<()> {
+        let context = self.upgrade_context()?;
+        let tree = context.read_tree();
+        let (id, start, end) = self.long_endpoints().ok_or_else(invalid_arg)?;
+        let node = tree.state().node_by_id(id).ok_or_else(element_not_available)?;
+        let (target_node, target_tree) = node.locate();
+        let data = data(node, start, end);
+        drop(tree);
+        context.do_action(ActionRequest { action, target_tree, target_node, data });
+        Ok(())
     }
 
     fn upgrade_context(&self) -> Result<Arc<Context>> {
@@ -242,12 +338,12 @@ impl PlatformRange {
 
     fn upgrade_node<'a>(&self, tree_state: &'a TreeState) -> Result<NodeRef<'a>> {
         let state = self.state.read().unwrap();
-        upgrade_range_node(&state, tree_state)
+        upgrade_range_node(runs(&state)?, tree_state)
     }
 
     fn upgrade_for_read<'a>(&self, tree_state: &'a TreeState) -> Result<Range<'a>> {
         let state = self.state.read().unwrap();
-        upgrade_range(&state, tree_state)
+        upgrade_range(runs(&state)?, tree_state)
     }
 
     fn read_with_context<F, T>(&self, f: F) -> Result<T>
@@ -273,9 +369,9 @@ impl PlatformRange {
     {
         self.with_tree_state(|tree_state| {
             let mut state = self.state.write().unwrap();
-            let mut range = upgrade_range(&state, tree_state)?;
+            let mut range = upgrade_range(runs(&state)?, tree_state)?;
             let result = f(&mut range);
-            *state = range.downgrade();
+            *state = State::Runs(range.downgrade());
             result
         })
     }
@@ -336,6 +432,18 @@ impl ITextRangeProvider_Impl for PlatformRange_Impl {
         other_endpoint: TextPatternRangeEndpoint,
     ) -> Result<i32> {
         let other = unsafe { required_param(&other)?.as_impl() };
+        if self.is_long() || other.is_long() {
+            let (Some(mine), Some(theirs)) = (self.long_endpoints(), other.long_endpoints()) else {
+                return Err(invalid_arg());
+            };
+            let at = |e: TextPatternRangeEndpoint, (node, start, end): (FullNodeId, usize, usize)| match e {
+                _ if node != mine.0 => Err(invalid_arg()),
+                TextPatternRangeEndpoint_Start => Ok(start),
+                TextPatternRangeEndpoint_End => Ok(end),
+                _ => Err(invalid_arg()),
+            };
+            return Ok(at(endpoint, mine)?.cmp(&at(other_endpoint, theirs)?) as i32);
+        }
         if std::ptr::eq(other as *const _, &self.this as *const _) {
             // Comparing endpoints within the same range can be done
             // safely without upgrading the range. This allows ATs
@@ -343,8 +451,8 @@ impl ITextRangeProvider_Impl for PlatformRange_Impl {
             // that range is no longer valid.
             let state = self.state.read().unwrap();
             let other_state = other.state.read().unwrap();
-            let pos = weak_comparable_position_from_endpoint(&state, endpoint)?;
-            let other_pos = weak_comparable_position_from_endpoint(&other_state, other_endpoint)?;
+            let pos = weak_comparable_position_from_endpoint(runs(&state)?, endpoint)?;
+            let other_pos = weak_comparable_position_from_endpoint(runs(&other_state)?, other_endpoint)?;
             let result = pos.cmp(other_pos);
             return Ok(result as i32);
         }
@@ -363,14 +471,25 @@ impl ITextRangeProvider_Impl for PlatformRange_Impl {
     }
 
     fn ExpandToEnclosingUnit(&self, unit: TextUnit) -> Result<()> {
+        if self.is_long() {
+            return self.long(|text, _, _, start, end| {
+                let unit = long_unit(unit)?;
+                if unit == Unit::Character && *start == text.len() {
+                    return Ok(());
+                }
+                *start = text.start_of(*start, unit);
+                *end = if *start == text.len() { *start } else { text.next(*start, unit) };
+                Ok(())
+            });
+        }
         if unit == TextUnit_Document {
             // Handle document as a special case so we can get to a document
             // range even if the current endpoints are now invalid.
             // Based on observed behavior, Narrator needs this ability.
             return self.with_tree_state(|tree_state| {
                 let mut state = self.state.write().unwrap();
-                let node = upgrade_range_node(&state, tree_state)?;
-                *state = node.document_range().downgrade();
+                let node = upgrade_range_node(runs(&state)?, tree_state)?;
+                *state = State::Runs(node.document_range().downgrade());
                 Ok(())
             });
         }
@@ -417,6 +536,27 @@ impl ITextRangeProvider_Impl for PlatformRange_Impl {
     }
 
     fn GetAttributeValue(&self, id: UIA_TEXTATTRIBUTE_ID) -> Result<VARIANT> {
+        if self.is_long() {
+            return self.long(|text, node, _, start, end| {
+                Ok(match id {
+                    UIA_IsReadOnlyAttributeId => node.is_read_only().into(),
+                    UIA_CaretPositionAttributeId => {
+                        let at = *start;
+                        let value = if at != *end {
+                            CaretPosition_Unknown
+                        } else if text.is_start(at, Unit::Line) {
+                            CaretPosition_BeginningOfLine
+                        } else if at == text.len() || text.0.as_bytes()[at] == b'\n' {
+                            CaretPosition_EndOfLine
+                        } else {
+                            CaretPosition_Unknown
+                        };
+                        value.0.into()
+                    }
+                    _ => unsafe { UiaGetReservedNotSupportedValue() }.unwrap().into(),
+                })
+            });
+        }
         self.read(|range| match id {
             UIA_IsReadOnlyAttributeId => {
                 // TBD: do we ever want to support mixed read-only/editable text?
@@ -492,6 +632,10 @@ impl ITextRangeProvider_Impl for PlatformRange_Impl {
     }
 
     fn GetBoundingRectangles(&self) -> Result<*mut SAFEARRAY> {
+        if self.is_long() {
+            // Where a long field's lines are isn't known without laying them out.
+            return Ok(std::ptr::null_mut());
+        }
         self.read_with_context(|range, context| {
             let rects = range.bounding_boxes();
             if rects.is_empty() {
@@ -511,13 +655,28 @@ impl ITextRangeProvider_Impl for PlatformRange_Impl {
 
     fn GetEnclosingElement(&self) -> Result<IRawElementProviderSimple> {
         // Revisit this if we eventually support embedded objects.
+        if self.is_long() {
+            return self.long(|_, node, context, _, _| {
+                Ok(context.get_or_create_platform_node(node.id()).into_interface())
+            });
+        }
         let context = self.upgrade_context()?;
         let tree = context.read_tree();
         let id = self.upgrade_node(tree.state())?.id();
         Ok(context.get_or_create_platform_node(id).into_interface())
     }
 
-    fn GetText(&self, _max_length: i32) -> Result<BSTR> {
+    fn GetText(&self, max_length: i32) -> Result<BSTR> {
+        if self.is_long() {
+            return self.long(|text, _, _, start, end| {
+                let s = text.slice(*start, *end);
+                let s = match usize::try_from(max_length) {
+                    Ok(n) => s.char_indices().nth(n).map_or(s, |(k, _)| &s[..k]),
+                    Err(_) => s,
+                };
+                Ok(BSTR::from(s))
+            });
+        }
         // The Microsoft docs imply that the provider isn't _required_
         // to truncate text at the max length, so we just ignore it.
         self.read(|range| {
@@ -529,6 +688,19 @@ impl ITextRangeProvider_Impl for PlatformRange_Impl {
     }
 
     fn Move(&self, unit: TextUnit, count: i32) -> Result<i32> {
+        if self.is_long() {
+            return self.long(|text, _, _, start, end| {
+                let unit = long_unit(unit)?;
+                let degenerate = start == end;
+                let from = if degenerate { *start } else { text.start_of(*start, unit) };
+                let (at, moved) = text.step(from, unit, count);
+                if moved != 0 {
+                    *start = at;
+                    *end = if degenerate || at == text.len() { at } else { text.next(at, unit) };
+                }
+                Ok(moved)
+            });
+        }
         self.write(|range| {
             let degenerate = range.is_degenerate();
             let start = range.start();
@@ -557,6 +729,19 @@ impl ITextRangeProvider_Impl for PlatformRange_Impl {
         unit: TextUnit,
         count: i32,
     ) -> Result<i32> {
+        if self.is_long() {
+            return self.long(|text, _, _, start, end| {
+                let unit = long_unit(unit)?;
+                let at = match endpoint {
+                    TextPatternRangeEndpoint_Start => *start,
+                    TextPatternRangeEndpoint_End => *end,
+                    _ => return Err(invalid_arg()),
+                };
+                let (at, moved) = text.step(at, unit, count);
+                set_long_endpoint(start, end, endpoint, at);
+                Ok(moved)
+            });
+        }
         self.write(|range| {
             let pos = position_from_endpoint(range, endpoint)?;
             let (pos, moved) =
@@ -574,24 +759,50 @@ impl ITextRangeProvider_Impl for PlatformRange_Impl {
     ) -> Result<()> {
         let other = unsafe { required_param(&other)?.as_impl() };
         self.require_same_context(other)?;
+        if self.is_long() || other.is_long() {
+            // Read the other range first: it may be this one.
+            let (mine, theirs) = (self.long_endpoints(), other.long_endpoints());
+            let (Some(mine), Some((node, a, b))) = (mine, theirs) else {
+                return Err(invalid_arg());
+            };
+            if node != mine.0 {
+                return Err(invalid_arg());
+            }
+            let at = match other_endpoint {
+                TextPatternRangeEndpoint_Start => a,
+                TextPatternRangeEndpoint_End => b,
+                _ => return Err(invalid_arg()),
+            };
+            return self.long(|text, _, _, start, end| {
+                set_long_endpoint(start, end, endpoint, text.clamp(at));
+                Ok(())
+            });
+        }
         // We have to obtain the tree state and ranges manually to avoid
         // lifetime issues, and work with the two locks in a specific order
         // to avoid deadlock.
         self.with_tree_state(|tree_state| {
             let other_range = other.upgrade_for_read(tree_state)?;
             let mut state = self.state.write().unwrap();
-            let mut range = upgrade_range(&state, tree_state)?;
+            let mut range = upgrade_range(runs(&state)?, tree_state)?;
             if range.node().id() != other_range.node().id() {
                 return Err(invalid_arg());
             }
             let pos = position_from_endpoint(&other_range, other_endpoint)?;
             set_endpoint_position(&mut range, endpoint, pos)?;
-            *state = range.downgrade();
+            *state = State::Runs(range.downgrade());
             Ok(())
         })
     }
 
     fn Select(&self) -> Result<()> {
+        if self.is_long() {
+            return self.long_action(Action::SetTextSelection, |node, start, end| {
+                let (id, _) = node.locate();
+                let at = |character_index| WeakPosition { node: id, character_index };
+                Some(ActionData::SetTextSelection(TextSelection { anchor: at(start), focus: at(end) }))
+            });
+        }
         self.do_action(|range, tree| {
             let (target_node, target_tree) = tree.state().locate_node(range.node().id()).unwrap();
             ActionRequest {
@@ -614,6 +825,9 @@ impl ITextRangeProvider_Impl for PlatformRange_Impl {
     }
 
     fn ScrollIntoView(&self, align_to_top: BOOL) -> Result<()> {
+        if self.is_long() {
+            return self.long_action(Action::ScrollIntoView, |_, _, _| None);
+        }
         self.do_action(|range, tree| {
             let position = if align_to_top.into() {
                 range.start()

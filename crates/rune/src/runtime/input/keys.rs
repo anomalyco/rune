@@ -115,12 +115,14 @@ impl<S: 'static> Runtime<S> {
     /// another view paged there routes the key itself with `Tx::scroll_page`.
     pub(super) fn page_scroll(&mut self, ev: &KeyEvent) -> bool {
         use crate::Key::*;
-        if !matches!(ev.key, PageUp | PageDown | Home | End) || ev.mods.cmd || ev.mods.alt || ev.mods.ctrl { return false; }
+        if ev.mods.cmd || ev.mods.alt || ev.mods.ctrl { return false; }
         // A focused field in a virtual row that scrolled out has no node: page its list.
         let focused = self.focus.path().and_then(|path| {
             std::iter::successors(Some(path), |p| p.rsplit_once('/').map(|(head, _)| head))
                 .find_map(|p| self.nodes.iter().position(|n| n.path == p))
         });
+        if let Some(f) = focused && self.focus.is(&self.nodes[f].path) && self.pageable(f) && self.scroller_key(f, ev) { return true; }
+        if !matches!(ev.key, PageUp | PageDown | Home | End) { return false; }
         // A step's key (`Play::press`) pages only the stage, never the playground around it.
         let staged = self.playground.as_ref().is_some_and(|p| p.pressing);
         let pageable = |i: usize| self.pageable(i) && (!staged || self.under(i, crate::playground::is_stage));
@@ -132,6 +134,30 @@ impl<S: 'static> Runtime<S> {
         if !self.page_to(i, |offset, max, page| match ev.key { PageUp => offset - page, PageDown => offset + page, Home => 0.0, _ => max }) { return false; }
         log_event!(self, "page {:?}", ev.key);
         true
+    }
+
+    /// Up and Down by a line of 40 points, and Space (Shift+Space back) by a page, on a scroll
+    /// view that has focus itself, as a browser scrolls a focused scroller (`tabindex` on an
+    /// `overflow: auto` region) when nothing in it took the key.
+    fn scroller_key(&mut self, i: usize, ev: &KeyEvent) -> bool {
+        use crate::Key::*;
+        const LINE: f64 = 40.0;
+        let space = ev.key == Text(" ".into());
+        if ev.mods.shift && !space { return false; }
+        let moved = match ev.key {
+            Up => self.page_to(i, |offset, _, _| offset - LINE),
+            Down => self.page_to(i, |offset, _, _| offset + LINE),
+            _ if space && ev.mods.shift => self.page_to(i, |offset, _, page| offset - page),
+            _ if space => self.page_to(i, |offset, _, page| offset + page),
+            _ => return false,
+        };
+        if moved { log_event!(self, "scroll {:?}", ev.key); }
+        moved
+    }
+
+    /// A focused scroll view that presses nothing passes Space on to scroll itself.
+    pub(super) fn scrolls_on_space(&self, i: usize) -> bool {
+        self.nodes[i].handlers.on_press.is_none() && self.pageable(i)
     }
 
     /// Whether node `i` is a live scroll view whose content overflows it.

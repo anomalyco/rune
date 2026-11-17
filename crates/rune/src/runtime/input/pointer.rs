@@ -204,6 +204,12 @@ impl<S: 'static> Runtime<S> {
     }
 
     pub fn pointer_down(&mut self, x: f32, y: f32) {
+        self.press_down(x, y, false);
+    }
+
+    /// A primary press at (x, y); `touch`: a finger's, which never runs `on_press` on the way
+    /// down (`El::press_on_down` is a mouse's).
+    pub(super) fn press_down(&mut self, x: f32, y: f32, touch: bool) {
         // A press ends a middle-click autoscroll, and does nothing else.
         if self.autoscroll_press(crate::PointerButton::Primary) { self.pointer = Some((x, y)); return; }
         if self.press.held().is_some_and(|h| h.button != crate::PointerButton::Primary) {
@@ -324,7 +330,11 @@ impl<S: 'static> Runtime<S> {
         if n.handlers.on_drag.is_some() && drag_out.is_none() {
             self.queue.push(Action::Drag(path.clone(), d, crate::PointerButton::Primary));
         }
-        self.press.hold(capture::Held::new(path, d, crate::PointerButton::Primary, (x, y), now, second, drag_out).on_link(link));
+        let on_down = !touch && n.handlers.press_on_down && n.handlers.on_press.is_some();
+        if on_down {
+            self.queue.push(Action::Press(path.clone(), crate::PointerButton::Primary));
+        }
+        self.press.hold(capture::Held::new(path, d, crate::PointerButton::Primary, (x, y), now, second, drag_out).on_link(link).pressed_on_down(on_down));
     }
 
     pub fn pointer_up(&mut self, x: f32, y: f32) {
@@ -399,7 +409,7 @@ impl<S: 'static> Runtime<S> {
             .then(|| capture::FirstClick { path: h.path.clone(), at: h.down_at, point: h.at });
         let Some(held) = self.press.release(first) else { return };
         let inside = held.inside();
-        let capture::Held { path, drag: d, button, at, down_at, moved, second: double, link, .. } = *held;
+        let capture::Held { path, drag: d, button, at, down_at, moved, second: double, link, pressed_on_down, .. } = *held;
         self.refresh_hover_within();
         if moved { self.press_clicks.clear(); }
         if input_capture { return; }
@@ -416,7 +426,7 @@ impl<S: 'static> Runtime<S> {
             self.queue.push(Action::Drag(path.clone(), Drag { phase: Phase::Up, x: lx, y: ly, dx, dy, window: [x, y], screen: self.screen_at(x, y), ..d }, button));
         }
         if let Some(k) = link.filter(|_| inside) { self.link_up(&path, k, x, y, button); }
-        if has_press && inside && !selected {
+        if has_press && inside && !selected && !pressed_on_down {
             self.queue.push(Action::Press(path.clone(), button));
         }
         if middle_press && inside {

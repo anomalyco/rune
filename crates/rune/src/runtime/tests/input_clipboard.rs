@@ -36,6 +36,33 @@ fn page_keys_reach_an_input_and_scroll_its_scroll_view_by_most_of_a_viewport() {
 }
 
 #[test]
+fn a_focused_scroll_view_scrolls_on_arrows_and_space() {
+    fn view(_: &(), _: &mut Cx<()>) -> El {
+        let list = col().key("list").w_full().children((0..20).map(|i| el().key(format!("r{i}")).size(200.0, 40.0)));
+        col().size(200.0, 200.0).child(col().key("scroll").size(200.0, 200.0).scroll(ScrollSpec { stick_bottom: false }).focusable(true).child(list))
+    }
+    let mut rt = Runtime::new((), view, (200.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.pointer_down(100.0, 100.0); rt.pointer_up(100.0, 100.0); rt.frame(0.05);
+    assert_eq!(rt.elements().iter().find(|e| e.focused).and_then(|e| e.key.as_deref()), Some("scroll"));
+    let top = |rt: &Runtime<()>| rt.presented("r0").unwrap().0[1];
+    let press = |rt: &mut Runtime<()>, key: crate::Key, shift: bool, t: f64| {
+        rt.key(KeyEvent { key, mods: crate::Mods { shift, ..Default::default() } });
+        rt.frame(t);
+    };
+    press(&mut rt, crate::Key::Down, false, 0.1);
+    assert_eq!(top(&rt), -40.0, "Down scrolls a line");
+    press(&mut rt, crate::Key::Text(" ".into()), false, 0.2);
+    assert_eq!(top(&rt), -220.0, "Space scrolls a page");
+    press(&mut rt, crate::Key::Text(" ".into()), true, 0.3);
+    assert_eq!(top(&rt), -40.0, "Shift+Space scrolls back a page");
+    press(&mut rt, crate::Key::Up, false, 0.4);
+    assert_eq!(top(&rt), 0.0);
+    press(&mut rt, crate::Key::PageDown, false, 0.5);
+    assert_eq!(top(&rt), -180.0);
+}
+
+#[test]
 fn page_keys_keep_paging_the_list_of_a_focused_field_that_scrolled_out() {
     struct State { edit: crate::TextEdit }
     fn view(s: &State, _: &mut Cx<State>) -> El {

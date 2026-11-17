@@ -126,7 +126,7 @@ impl<S: 'static> Runtime<S> {
         let mut inh = Inh::default();
         let dy = -self.page_offset();
         inh.dy = dy;
-        inh.snap.rigid[1] = dy;
+        inh.snap.shift(1, dy);
         inh
     }
 

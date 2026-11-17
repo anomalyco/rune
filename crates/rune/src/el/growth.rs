@@ -4,6 +4,13 @@
 use super::*;
 
 impl El {
+    /// The keyed face of a complete growth row. Consecutive such rows hold the seam
+    /// between their faces through a live reorder; an intervening row opens it as it passes.
+    /// Individual row identity, layout and accessibility order do not change.
+    pub fn joined_row_face(mut self, face: &'static str) -> Self {
+        self.vis.cold_mut().row_face = Some(face);
+        self
+    }
     /// Make this column a growth stack (see [`GrowthSpec`]). Required alongside
     /// [`El::virtualize`] on the same element.
     pub fn growth(mut self, spec: GrowthSpec) -> Self {

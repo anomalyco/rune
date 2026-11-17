@@ -245,6 +245,8 @@ pub(crate) fn merge(tx: &mut Tx, one: Tx) {
     tx.commit = tx.commit.merge(one.commit);
     tx.follow_edge |= one.follow_edge;
     tx.asked_motion |= one.asked_motion;
+    for (stack, ink) in one.live_growth { tx.request_live_growth(stack, ink); }
+    tx.tail_rooms.extend(one.tail_rooms);
     tx.motion = one.motion.or(tx.motion);
     tx.color_motion = one.color_motion.or(tx.color_motion);
 }

@@ -5,6 +5,7 @@
 
 mod context;
 mod filters;
+mod long_text;
 mod node;
 mod text;
 mod util;
