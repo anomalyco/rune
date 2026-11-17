@@ -1,8 +1,9 @@
-//! A loop-only step: a spinner's dots change opacity without the scene being built again. The
-//! ordinary paint records the instance each eligible dot drew (a hidden, decorative leaf with one
-//! plain fill and an opacity cycle, nothing else about it moving); a step on the loop's own wake
-//! samples the cycles into those instances. Every paint starts the record again. The host draws
-//! only what changed (`Renderer::arm_cycle` on the web).
+//! A loop-only step: what a loop changes on screen, without the scene being built again. The
+//! ordinary paint records the instances each eligible loop drew: a spinner's dot (a hidden,
+//! decorative leaf with one plain fill and an opacity cycle, nothing else about it moving), and
+//! a shimmer's sliding window (`slide.rs`). A step samples the loops into those instances, and
+//! nothing else runs. Every paint starts the record again. The host draws only what changed
+//! (`Renderer::arm_cycle` on the web, `Renderer::arm_loop` in a window).
 
 use super::*;
 
@@ -13,7 +14,14 @@ pub(in crate::runtime) struct CyclePaint {
     paint: u64,
     generation: u64,
     slots: Vec<Slot>,
+    pub(super) slides: Vec<super::slide::Slide>,
     mixed: bool,
+    /// This paint goes depth first, so a subtree paints in one run.
+    pub(super) preorder: bool,
+    /// The node paint last reached, and how many instances it had drawn by then.
+    pub(super) opened: (usize, usize),
+    /// The sliding window whose subtree paints now.
+    pub(super) open: Option<usize>,
 }
 
 struct Slot {
@@ -29,6 +37,9 @@ impl CyclePaint {
         self.paint += 1;
         self.generation = generation;
         self.slots.clear();
+        self.slides.clear();
+        self.open = None;
+        self.opened = (usize::MAX, 0);
         self.mixed = false;
     }
 
@@ -36,6 +47,11 @@ impl CyclePaint {
 
     pub(in crate::runtime) fn record(&mut self, node: usize, at: usize, curve: crate::Cycle, ink: [f32; 4], rect: [f32; 4]) {
         self.slots.push(Slot { node, at, curve, ink, rect });
+    }
+
+    /// A glyph at `quad` (x0, y0, x1, y1), drawn or left out: a sliding window over it notes it.
+    pub(in crate::runtime) fn glyph(&mut self, quad: [f32; 4], drawn: bool) {
+        if let Some(k) = self.open { self.slides[k].glyphs.push((quad, drawn)); }
     }
 }
 
@@ -47,12 +63,17 @@ impl<S: 'static> Runtime<S> {
         (c.paint, c.slots.iter().map(|s| s.at as u32).collect())
     }
 
+    /// The paint the instances come from.
+    pub(crate) fn paint_count(&self) -> u64 {
+        self.paint_keep.cycles.paint
+    }
+
     /// A loop's wake on a window that otherwise rests: samples the cycles into their slots of
     /// the last paint, and nothing else runs. False, for an ordinary frame, when anything else
     /// is due: another deadline, the app's timer, input, a commit, a changed scene.
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     pub(crate) fn paint_cycle_tick(&mut self) -> bool {
-        let Some((due, phase)) = self.loop_wake else { return false };
+        let Some((due, _)) = self.loop_wake else { return false };
         let wall = self.now_clock();
         let keep = &self.paint_keep.cycles;
         if wall < due || keep.mixed || keep.generation != self.commits || keep.slots.is_empty()
@@ -60,15 +81,55 @@ impl<S: 'static> Runtime<S> {
             || !self.live_visible() || !self.rests_except_loop() || self.tracing()
             || self.poll_wake_deadline().is_some_and(|d| d <= wall)
         { return false; }
-        let Some(dt) = self.ambient.map(f64::from) else { return false };
-        // A layer may have folded a primitive after its slot was observed. Never patch a
-        // different instance, even if the instance count stayed the same.
-        if !keep.slots.iter().all(|s| self.instances.get(s.at).is_some_and(|q| q.rect == s.rect && q.params[1] == KIND_RECT)) { return false; }
+        if self.ambient.is_none() || !self.slots_hold() { return false; }
         if self.virtual_fill.resuming(wall) { return false; }
         // No poll: as on a window resting without a loop, the app's poll runs when its timers,
         // wakes or input ask, each of which takes an ordinary frame.
         self.clock = wall;
         let _ = self.text.mask_cache_frame(false);
+        self.sample_cycles(&mut Vec::new());
+        true
+    }
+
+    /// A frame that only a window's loops asked for, `dt` seconds after the last: samples every
+    /// loop into the instances it drew, and nothing else runs (no poll, view, layout or paint).
+    /// Returns the instances it wrote (ascending), or None for an ordinary frame: when anything
+    /// else is due (input, a wake, a timer, a commit, other motion), when a loop on screen is
+    /// one a step can't draw, or when a step would show or hide anything.
+    pub(crate) fn loop_step(&mut self, dt: f64) -> Option<Vec<u32>> {
+        let wall = self.now_clock();
+        let keep = &self.paint_keep.cycles;
+        let loops = keep.slots.len() + 2 * keep.slides.len();
+        if loops == 0 || loops != self.loops.len() || keep.mixed || keep.generation != self.commits || self.wall_start.is_none()
+            || self.reduced_motion || self.time_scale <= 0.0 || !self.live_visible() || self.tracing()
+            || !(0.0..=1.0 / 30.0).contains(&dt) || self.poll_wake_deadline().is_some_and(|d| d <= wall)
+            || self.virtual_fill.resuming(wall) || !self.rests_but_motion()
+        { return None; }
+        // Running, only loops move; resting, a stepped cycle's wake is due.
+        let due = self.loop_wake.is_some_and(|(due, _)| wall >= due);
+        if if self.animating { self.anim_sources != AnimSource::LOOP } else { !due } { return None; }
+        if !self.slots_hold() || (due && self.ambient.is_none()) { return None; }
+        let t = self.t + dt * f64::from(self.time_scale);
+        let poses = self.slide_poses(t)?;
+        self.clock = wall;
+        self.t = t;
+        self.scene.set_time(t);
+        let _ = self.text.mask_cache_frame(false);
+        let mut patched = Vec::new();
+        self.sample_cycles(&mut patched);
+        self.apply_slides(&poses, &mut patched);
+        patched.sort_unstable();
+        Some(patched)
+    }
+
+    /// A layer may have folded a primitive after its slot was observed. Never patch a different
+    /// instance, even if the instance count stayed the same.
+    fn slots_hold(&self) -> bool {
+        self.paint_keep.cycles.slots.iter().all(|s| self.instances.get(s.at).is_some_and(|q| q.rect == s.rect && q.params[1] == KIND_RECT))
+    }
+
+    /// Samples each cycle at the clock into its slot, and moves a stepped cycle's wake on.
+    fn sample_cycles(&mut self, patched: &mut Vec<u32>) {
         for s in &self.paint_keep.cycles.slots {
             let a = s.curve.sample(self.clock);
             let q = &mut self.instances[s.at];
@@ -76,8 +137,10 @@ impl<S: 'static> Runtime<S> {
             q.params[3] = a;
             let inh = &mut self.inh_scratch[s.node];
             inh.opacity = a; inh.paint_opacity = a; inh.hit_opacity = a;
+            patched.push(s.at as u32);
         }
-        self.loop_wake = Some((self.clock + dt, phase + (self.clock + dt - due) * f64::from(self.time_scale)));
-        true
+        if let (Some((due, phase)), Some(dt)) = (self.loop_wake, self.ambient.map(f64::from)) && self.clock >= due {
+            self.loop_wake = Some((self.clock + dt, phase + (self.clock + dt - due) * f64::from(self.time_scale)));
+        }
     }
 }

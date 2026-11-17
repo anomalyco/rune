@@ -93,6 +93,13 @@ impl Damage {
 
     /// A new swap chain: the next frame draws whole.
     pub(super) fn reset(&mut self) { self.shape = None; }
+
+    /// A loop-only frame changed only `patched` (ascending) and drew them where they were and
+    /// are (`Renderer::arm_loop`): the next frame compares with them.
+    pub(super) fn patched(&mut self, instances: &[Instance], patched: &[u32]) {
+        if self.last.len() != instances.len() { self.shape = None; return; }
+        for &i in patched { self.last[i as usize] = instances[i as usize]; }
+    }
 }
 /// `RUNE_WHOLE_FRAMES=1`: every frame draws whole, to check partial frames against.
 fn whole_frames() -> bool {

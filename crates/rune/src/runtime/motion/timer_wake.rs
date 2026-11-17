@@ -149,9 +149,15 @@ impl<S: 'static> Runtime<S> {
 
     /// `rests`, apart from a loop's own wake (`paint_cycle_tick`).
     pub(super) fn rests_except_loop(&self) -> bool {
+        !self.animating && self.rests_but_motion()
+    }
+
+    /// Nothing waits for a frame but motion: no commit, input, held work, live value or timer
+    /// due now (`loop_step` asks the motion apart).
+    pub(super) fn rests_but_motion(&self) -> bool {
         #[cfg(feature = "hot")]
         if self.hot.is_some() { return false; }
-        !self.animating && !self.stale() && !self.settle && self.window_frame.is_none()
+        !self.stale() && !self.settle && self.window_frame.is_none()
             && !self.hover_delays.waiting() && !self.tooltip_waiting() && !self.press_repeat_waiting() && !self.drag_ends_pending()
             && self.drag_out_request.is_none() && !self.files_held() && !self.live_pending()
             && self.surfaces.is_empty() && !self.steps_frames()

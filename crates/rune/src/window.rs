@@ -49,6 +49,8 @@ use win::{SurfaceRetries, SurfaceStep, SURFACE_TRIES, Win};
 mod first_frame;
 use first_frame::FirstFrame;
 mod draw;
+mod loop_frame;
+use loop_frame::LoopFrame;
 mod redraw;
 #[cfg(target_os = "windows")]
 mod covered_draw;

@@ -295,10 +295,7 @@ impl Renderer {
         }
         let has_layers = self.uploads.has_layers;
         // A loop-only frame that draws no layer leaves them as the last frame drew them.
-        #[cfg(target_arch = "wasm32")]
         let layers_kept = self.uploads.patched && self.cycle_leaves_layers();
-        #[cfg(not(target_arch = "wasm32"))]
-        let layers_kept = false;
         if !layers_kept { self.prepare_layers(device, queue, if has_layers { instances } else { &[] }, viewport); }
         self.sync_resident_caches(&mut atlas.resident_caches);
         self.backdrop_used = self.effects.iter().any(|(_, i)| i.params[0] != 0.0 || i.params[1] == KIND_BACKDROP_BLUR);
@@ -462,9 +459,10 @@ impl Renderer {
         self.uploads.batched &= !rebatch;
     }
 
-    /// Writes only `patched` (ascending): the instances a loop-only frame changed in colour since
-    /// the buffer was written from the same paint, so nothing else needs comparing. Only a change
-    /// of kind, or of an instance that isn't a plain box, can move a batch.
+    /// Writes only `patched` (ascending): the instances a loop-only frame changed (a dot's colour,
+    /// a sliding window's clip) since the buffer was written from the same paint, so nothing else
+    /// needs comparing. Batches split on the image, kind and atlas page (`params` 0 to 2): only a
+    /// change there can move one.
     fn write_patched(&mut self, staging: &Staging, instances: &[Instance], patched: &[u32]) {
         let held = &mut self.uploads.instances;
         debug_assert!(held.iter().zip(instances).enumerate().all(|(n, (h, i))| patched.binary_search(&(n as u32)).is_ok() || same(std::slice::from_ref(h), std::slice::from_ref(i))),
@@ -477,7 +475,7 @@ impl Renderer {
             while k + 1 < patched.len() && patched[k + 1] as usize == end { k += 1; end += 1; }
             k += 1;
             if end > instances.len() || same(&instances[start..end], &held[start..end]) { continue; }
-            rebatch |= held[start..end].iter().zip(&instances[start..end]).any(|(h, i)| h.params[1] != i.params[1] || i.params[1] != KIND_RECT);
+            rebatch |= held[start..end].iter().zip(&instances[start..end]).any(|(h, i)| h.params[..3] != i.params[..3]);
             held[start..end].copy_from_slice(&instances[start..end]);
             let offset = (start * std::mem::size_of::<Instance>()) as u64;
             staging.write_buffer(&self.instances, offset, bytemuck::cast_slice(&instances[start..end]));
@@ -485,9 +483,13 @@ impl Renderer {
         self.uploads.batched &= !rebatch;
     }
 
+    /// The instances the buffer holds, when they are paint `paint`'s and `len` of them.
+    pub(super) fn held_instances(&self, paint: u64, len: usize) -> Option<&[Instance]> {
+        (self.uploads.held_paint == Some(paint) && self.uploads.instances.len() == len).then_some(&self.uploads.instances[..])
+    }
+
     /// The next `prepare`'s instances are paint `paint`'s (`runtime/paint/cycle.rs`). With
     /// `patched`, only those instances changed since the last `prepare` of the same paint.
-    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     pub(crate) fn next_instances(&mut self, paint: u64, patched: Option<Vec<u32>>) {
         self.uploads.next = Some((paint, patched));
     }

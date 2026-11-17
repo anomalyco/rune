@@ -438,7 +438,7 @@ impl<S: 'static> Runtime<S> {
             // A node the visibility test below culls paints nothing, and any clip it hands down is
             // off screen too, so it keeps its exact edges.
             let rigid = pinh.snap.rigid.map(|v| v * s);
-            let can_snap = !pinh.snap.off && !n.vis_flags.no_pixel_snap() && p.transform.rotate == 0.0;
+            let can_snap = !pinh.snap.off && !n.vis_flags.no_pixel_snap() && p.transform.rotate == 0.0 && !self.slide_glides(n);
             let snaps = can_snap && (pinh.in_cache || {
                 let m = filter_margin + 2.0;
                 r_exact[2].max(r_exact[0]) >= clip[0].max(vp[0]) - m && r_exact[0] <= clip[2].min(vp[2]) + m
@@ -1206,10 +1206,13 @@ impl<S: 'static> Runtime<S> {
             }
             // A scroll viewport clips its content with a hard edge unless it sets soft ones.
             if let Some(f) = n.vis.clip.or(n.scroll.map(|_| [0.0; 4])) {
+                let outer = [clip, fade, fade_origin];
                 clip = intersect(r, clip);
                 let (own, origin) = self.scroll_edge_fade(i, f, r, sc * s, p.rect.edges()[3]);
                 inherit_fade(&mut fade, &mut fade_origin, origin, own);
+                self.note_slide(i, outer, rect_pt, r, (if unscaled { 1.0 } else { sc }, sc));
             }
+            let n = &self.nodes[i];
             let mask = self.row_mask[i];
             if mask >= 0.0 {
                 clip[3] = clip[3].min(r[3]);

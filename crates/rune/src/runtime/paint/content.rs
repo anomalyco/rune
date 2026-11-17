@@ -657,9 +657,9 @@ impl<S: 'static> Runtime<S> {
                     let (x1, y1) = (x0 + q.rect[2] * zoom, y0 + q.rect[3] * zoom);
                     // Wholly outside the clip, a glyph draws nothing: a long line in an
                     // `El::scroll_x` skips the glyphs scrolled out of sight.
-                    if y0 > clip[3] || y1 < clip[1] || x0 > clip[2] || x1 < clip[0] {
-                        continue;
-                    }
+                    let out = y0 > clip[3] || y1 < clip[1] || x0 > clip[2] || x1 < clip[0];
+                    self.paint_keep.cycles.glyph([x0, y0, x1, y1], !out);
+                    if out { continue; }
                     let mut f = base;
                     if q.ink > 0
                         && let Some(c) = spans_here.get(q.ink as usize - 1).and_then(|sp| sp.color)
