@@ -148,18 +148,8 @@ impl<S: 'static> Runtime<S> {
     /// from the topmost hit, and from a scroll view there inside it. With `stop_at_scroll`, the
     /// walk ends at the first scroll view, which scrolls what its handlers leave.
     fn gesture_chain(&self, x: f32, y: f32, has: impl Fn(&CanvasInput) -> bool, stop_at_scroll: bool) -> Vec<String> {
-        let hit = self.hits.iter().rev().find(|&&(id, r)| self.hit_contains(id, r, x, y)).and_then(|(id, _)| self.node_index.get(id).copied());
-        // A scroll view without handlers of its own isn't a hit: one inside the hit wins.
-        let scroll = (0..self.nodes.len()).rev().find(|&i| self.nodes[i].scroll.is_some() && !self.subtree_exiting(i)
-            && self.allowed(i) && self.node_contains(i, x, y));
-        let inside = |s: usize, h: usize| std::iter::successors(self.nodes[s].parent, |&p| self.nodes[p].parent).any(|p| p == h);
-        let start = match (hit, scroll) {
-            (Some(h), Some(s)) if inside(s, h) => Some(s),
-            (None, s) => s,
-            (h, _) => h,
-        };
         let mut chain = Vec::new();
-        let mut at = start;
+        let mut at = self.chain_start(x, y);
         while let Some(i) = at {
             if self.subtree_exiting(i) || !self.allowed(i) { break; }
             let n = &self.nodes[i];
@@ -168,6 +158,23 @@ impl<S: 'static> Runtime<S> {
             at = n.parent;
         }
         chain
+    }
+
+    /// Where a wheel or gesture at window point (x, y) starts walking up the tree: the topmost hit
+    /// there (`hits`, in paint order), or a scroll view inside it (a scroll view without handlers
+    /// of its own isn't a hit, so one inside the hit wins); with no hit, the scroll view there.
+    /// Its ancestors are what Chromium chains a scroll through: a viewport that only lies beneath
+    /// the hit (the timeline under an open menu or a raised panel) is never one of them.
+    pub(super) fn chain_start(&self, x: f32, y: f32) -> Option<usize> {
+        let hit = self.hits.iter().rev().find(|&&(id, r)| self.hit_contains(id, r, x, y)).and_then(|(id, _)| self.node_index.get(id).copied());
+        let scroll = (0..self.nodes.len()).rev().find(|&i| self.nodes[i].scroll.is_some() && !self.subtree_exiting(i)
+            && self.allowed(i) && self.node_contains(i, x, y));
+        let inside = |s: usize, h: usize| std::iter::successors(self.nodes[s].parent, |&p| self.nodes[p].parent).any(|p| p == h);
+        match (hit, scroll) {
+            (Some(h), Some(s)) if inside(s, h) => Some(s),
+            (None, s) => s,
+            (h, _) => h,
+        }
     }
 
     /// Element `path` (not exiting or inert) and the handler `pick` takes from its canvas input.

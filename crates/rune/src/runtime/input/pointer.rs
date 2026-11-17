@@ -512,18 +512,19 @@ impl<S: 'static> Runtime<S> {
             .map(|(_, n)| n.id)
     }
 
-    /// The vertical viewport a delta `dy` at (x, y) starts a run on: the innermost viewport there,
-    /// or the nearest of its own scroll ancestors, that can still move that way, as Chromium
-    /// chains a wheel's scroll from the scroller under the pointer up its ancestors. One at its
-    /// end passes the run to the one around it, so a short region inside a page never traps the
-    /// wheel; a viewport that only lies beneath (the timeline under an open menu) never takes it.
+    /// The vertical viewport a delta `dy` at (x, y) starts a run on: from where a gesture there
+    /// starts (`Self::chain_start`: the topmost hit, or a scroll view inside it) up its ancestors,
+    /// the first that can still move that way, as Chromium chains a wheel's scroll. One at its end
+    /// passes the run to the one around it, so a short region inside a page never traps the wheel;
+    /// a viewport that only lies beneath (the timeline under an open menu, with or without a list
+    /// of its own, or under a raised panel) never takes it.
     pub(super) fn wheel_target(&self, x: f32, y: f32, dy: f32) -> Option<NodeId> {
         let viewport = |i: usize| {
             let n = &self.nodes[i];
             n.scroll.is_some() && n.scroll_axes.has(false) && !self.subtree_exiting(i) && self.allowed(i)
         };
         let room = |i: usize| self.scrolls.get(&self.nodes[i].id).is_some_and(|st| if dy > 0.0 { st.offset > 0.0 } else { st.offset < st.max });
-        let mut at = (0..self.nodes.len()).rev().find(|&i| viewport(i) && self.node_contains(i, x, y));
+        let mut at = self.chain_start(x, y);
         while let Some(i) = at {
             if viewport(i) && room(i) { return Some(self.nodes[i].id); }
             at = self.nodes[i].parent;
