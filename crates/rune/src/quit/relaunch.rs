@@ -84,11 +84,14 @@ fn bundle_of(exe: &std::path::Path) -> Option<std::path::PathBuf> {
 /// A relaunched process waits here, once, for the process that started it to exit, for at most
 /// ten seconds. Any other launch goes straight on.
 pub(crate) fn wait_for_previous() {
-    static ONCE: std::sync::Once = std::sync::Once::new();
-    ONCE.call_once(|| {
-        let Some(pid) = std::env::var_os(AFTER).and_then(|v| v.to_str().and_then(|v| v.parse::<u32>().ok())) else { return };
-        if pid != std::process::id() { wait(pid); }
-    });
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            let Some(pid) = std::env::var_os(AFTER).and_then(|v| v.to_str().and_then(|v| v.parse::<u32>().ok())) else { return };
+            if pid != std::process::id() { wait(pid); }
+        });
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -126,7 +129,7 @@ pub(crate) fn alive(pid: u32) -> bool {
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(all(not(target_os = "windows"), not(target_arch = "wasm32")))]
 fn wait(pid: u32) {
     let deadline = std::time::Instant::now() + WAIT;
     while alive(pid) && std::time::Instant::now() < deadline {
