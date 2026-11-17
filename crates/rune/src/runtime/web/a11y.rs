@@ -688,7 +688,7 @@ impl<S: 'static> Runtime<S> {
             Some("a11y_press") => {
                 let Some(i) = self.live(path) else { return false };
                 if self.nodes[i].handlers.on_press.is_none() { return false; }
-                self.queue.push(Action::Press(path.to_owned(), crate::PointerButton::Primary));
+                self.queue.push(Action::Press(path.to_owned(), crate::PointerButton::Primary, false));
                 true
             }
             Some("a11y_link") => {
