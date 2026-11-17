@@ -138,10 +138,15 @@ impl<S: 'static> Runtime<S> {
         }
         // A held press stays inside what holds it until it releases.
         if let Some(captured) = self.press.path() {
+            let captured_id = self.path_ids.get(captured).copied();
             for path in &self.hover_within {
-                if !inside.contains(path) && holds(path, captured)
-                    && self.nodes.iter().enumerate().any(|(i, n)| n.path == *path && self.allowed(i))
-                {
+                if inside.contains(path) { continue; }
+                let Some(i) = self.index_at_path(path).filter(|&i| self.allowed(i)) else { continue };
+                let holds_cap = match captured_id {
+                    Some(cid) => self.node_ids.within(cid, self.nodes[i].id),
+                    None => holds(path, captured),
+                };
+                if holds_cap {
                     inside.push(path.clone());
                 }
             }
@@ -186,8 +191,10 @@ impl<S: 'static> Runtime<S> {
         match flips {
             Some(flips) => flips.iter().any(held),
             None => {
-                let (captured, alone, shared) = (self.captured(), self.hovered_alone(), self.shared_hovered());
-                (0..self.nodes.len()).filter_map(|i| self.hover_flip(i, captured, alone, &shared)).any(|f| held(&f))
+                let captured = self.captured();
+                let captured_id = captured.and_then(|p| self.path_ids.get(p).copied());
+                let (alone, shared) = (self.hovered_alone(), self.shared_hovered());
+                (0..self.nodes.len()).filter_map(|i| self.hover_flip(i, captured, captured_id, alone, &shared)).any(|f| held(&f))
             }
         }
     }
@@ -276,7 +283,7 @@ impl<S: 'static> Runtime<S> {
         let (x, y) = self.pointer?;
         (0..self.nodes.len())
             .filter(|&i| self.nodes[i].vis.hover_alone && !self.is_exiting(self.nodes[i].id) && self.allowed(i) && self.node_contains(i, x, y))
-            .max_by_key(|&i| self.nodes[i].path.len())
+            .max_by_key(|&i| (self.node_ids.depth(self.nodes[i].id), self.nodes[i].path.len()))
     }
 
     /// Keyboard focus shows on node `i` or inside it (CSS `:has(:focus-visible)`): a hover group
@@ -300,19 +307,27 @@ impl<S: 'static> Runtime<S> {
     /// Node `i`'s hover track, if it has one and isn't leaving. `alone`: the `hover_alone`
     /// element under the pointer, which turns off the tracks of the elements around it.
     /// `shared`: the `hover_group_shared` keys the pointer is over.
-    fn hover_flip(&self, i: usize, captured: Option<&str>, alone: Option<usize>, shared: &[Rc<str>]) -> Option<Flip> {
+    fn hover_flip(&self, i: usize, captured: Option<&str>, captured_id: Option<NodeId>, alone: Option<usize>, shared: &[Rc<str>]) -> Option<Flip> {
         let n = &self.nodes[i];
         if !(n.vis.hover().a > 0.0 || n.vis_flags.hover_group()) || self.is_exiting(n.id) { return None; }
         let inside = self.pointer.is_some_and(|(x, y)| self.node_contains(i, x, y))
             || n.vis.hover_share.as_ref().is_some_and(|k| shared.contains(k))
             || (n.vis_flags.hover_group() && self.keyboard_within(i));
         let capture_inside = if self.secondary.is_held() { inside } else { self.press.inside() };
-        let held = captured == Some(n.path.as_str()) && capture_inside;
+        let is_captured = match captured_id {
+            Some(cid) => n.id == cid,
+            None => captured == Some(n.path.as_str()),
+        };
+        let held = is_captured && capture_inside;
         let allowed = self.allowed(i);
         // A held press stays hovered while it's inside, though a press scale shrank the drawn
         // rect away from the pointer. A group stays hovered while a descendant holds the press.
-        let shadowed = alone.is_some_and(|a| a != i && holds(&n.path, &self.nodes[a].path));
-        let on = allowed && (inside || held) && !shadowed && captured.is_none_or(|p| holds(&n.path, p));
+        let shadowed = alone.is_some_and(|a| a != i && self.inside(a, i));
+        let holds_captured = match captured_id {
+            Some(cid) => self.node_ids.within(cid, n.id),
+            None => captured.is_none_or(|p| holds(&n.path, p)),
+        };
+        let on = allowed && (inside || held) && !shadowed && holds_captured;
         // Like a native sidebar or menu: the highlight lands with the pointer and fades
         // briefly as it leaves.
         let anim = match n.hover_motion() {
@@ -336,6 +351,9 @@ impl<S: 'static> Runtime<S> {
         let mut changed = false;
         let mut flips = std::mem::take(&mut self.hover_hold.flips);
         let captured = self.press.path().or(self.secondary.path());
+        let captured_id = captured.and_then(|p| self.path_ids.get(p).copied());
+        let tint_path = self.tint.path();
+        let tint_id = tint_path.and_then(|p| self.path_ids.get(p).copied());
         let alone = self.hovered_alone();
         let shared = self.shared_hovered();
         for i in 0..self.nodes.len() {
@@ -343,7 +361,7 @@ impl<S: 'static> Runtime<S> {
             let press_scale = n.handlers.get().and_then(|h| h.press_scale);
             if n.vis.hover().a <= 0.0 && !n.vis_flags.hover_group() && !n.vis.tracks_press() && press_scale.is_none() { continue; }
             if self.is_exiting(n.id) { continue; }
-            match self.hover_flip(i, captured, alone, &shared) {
+            match self.hover_flip(i, captured, captured_id, alone, &shared) {
                 Some(f) if f.changed => flips.push(f),
                 // Default hover animations inherit velocity and have no completion token.
                 // An unchanged target preserves its trajectory in the store already; avoid
@@ -364,8 +382,16 @@ impl<S: 'static> Runtime<S> {
             };
             // The middle or secondary button shows pressed what it went down on while it's over
             // it, as the primary does.
-            let tinted = self.tint.path() == Some(n.path.as_str()) && self.pointer.is_some_and(|(x, y)| self.node_contains(i, x, y));
-            let down = self.allowed(i) && ((captured == Some(n.path.as_str()) && capture_inside) || tinted);
+            let is_tinted = match tint_id {
+                Some(tid) => n.id == tid,
+                None => tint_path == Some(n.path.as_str()),
+            };
+            let is_captured = match captured_id {
+                Some(cid) => n.id == cid,
+                None => captured == Some(n.path.as_str()),
+            };
+            let tinted = is_tinted && self.pointer.is_some_and(|(x, y)| self.node_contains(i, x, y));
+            let down = self.allowed(i) && ((is_captured && capture_inside) || tinted);
             let pressed = down && n.vis.tracks_press();
             let id = n.id;
             changed |= self.scene.store().target(id, P_PRESS).unwrap_or(0.0) != pressed as u8 as f32;

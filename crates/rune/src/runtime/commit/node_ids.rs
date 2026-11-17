@@ -61,13 +61,11 @@ impl NodeIdTable {
     }
 
     #[inline(always)]
-    #[allow(dead_code)]
     pub(crate) fn depth(&self, id: NodeId) -> u16 {
         self.entries.get(&id).map_or(0, |e| e.depth)
     }
 
     #[inline(always)]
-    #[allow(dead_code)]
     pub(crate) fn parent_of(&self, id: NodeId) -> Option<NodeId> {
         let p = self.entries.get(&id)?.parent;
         (p != NodeId(0)).then_some(p)
@@ -75,7 +73,6 @@ impl NodeIdTable {
 
     /// True when `desc == anc`, `anc == NodeId(0)`, or `anc` is an ancestor of `desc`.
     #[inline]
-    #[allow(dead_code)]
     pub(crate) fn within(&self, mut desc: NodeId, anc: NodeId) -> bool {
         if anc == NodeId(0) || desc == anc {
             return true;

@@ -182,6 +182,17 @@ impl<S: 'static> Runtime<S> {
     }
     /// Focus is on node `i` or inside it (CSS `:focus-within`), however it got there.
     pub(super) fn focus_within(&self, i: usize) -> bool {
+        if let Some(fid) = self.focus.id_in(&self.path_ids) {
+            if let Some(fi) = self.index_of_id(fid)
+                && fi < self.memo.present_len
+                && i < self.memo.present_len
+                && fi >= i
+                && fi < self.nodes[i].subtree_end as usize
+            {
+                return true;
+            }
+            return self.node_ids.within(fid, self.nodes[i].id);
+        }
         let path = self.nodes[i].path.as_str();
         self.focus.path().is_some_and(|f| f.strip_prefix(path).is_some_and(|rest| rest.is_empty() || rest.starts_with('/')))
     }
@@ -334,20 +345,26 @@ impl<S: 'static> Runtime<S> {
             if self.subtree_exiting(i) || in_new(old.id).is_some() { return None; }
             let focused = self.focus.now_or_blurred()?;
             let has_children = self.nodes.iter().any(|m| m.parent == Some(i));
-            let scope = if !has_children && !self.takes_focus(old) && old.input.is_none()
+            let (scope_id, scope_path) = if !has_children && !self.takes_focus(old) && old.input.is_none()
                 && old.local.w == 0.0 && old.local.h == 0.0 {
                 let p = self.nodes.get(old.parent?)?;
-                if p.is_moved_stub() || p.path.is_empty() {
+                let sp = if p.is_moved_stub() || p.path.is_empty() {
                     nodes.get(in_new(p.id)?)?.path.as_str()
                 } else {
                     p.path.as_str()
-                }
+                };
+                (p.id, sp)
             } else {
-                old.path.as_str()
+                (old.id, old.path.as_str())
             };
-            if !within(focused, scope) { return None; }
-            let anchor = nodes.iter().find(|n| n.key.as_deref() == Some(key))?;
-            let candidates = (0..nodes.len()).filter(|&j| within(&nodes[j].path, &anchor.path) && shown(j)
+            let is_within = match self.path_ids.get(focused).copied() {
+                Some(fid) if scope_id != NodeId(0) => self.node_ids.within(fid, scope_id),
+                _ => within(focused, scope_path),
+            };
+            if !is_within { return None; }
+            let anchor_idx = nodes.iter().position(|n| n.key.as_deref() == Some(key))?;
+            let sub_end = (nodes[anchor_idx].subtree_end as usize).min(nodes.len());
+            let candidates = (anchor_idx..sub_end).filter(|&j| shown(j)
                 && (self.takes_focus(&nodes[j]) || nodes[j].input.as_ref().is_some_and(|i| i.access.is_some())));
             candidates.clone().find(|&j| nodes[j].focus.selected)
                 .or_else(|| candidates.into_iter().next())
@@ -356,7 +373,8 @@ impl<S: 'static> Runtime<S> {
         // `Tx::focus`: the first shown element with the key, or its first focusable child.
         let asked = asked.and_then(|(key, ring, ask)| {
             let anchor = (0..nodes.len()).find(|&j| nodes[j].key.as_deref() == Some(key.as_str()) && shown(j))?;
-            (anchor..nodes.len()).take_while(|&j| within(&nodes[j].path, &nodes[anchor].path))
+            let sub_end = (nodes[anchor].subtree_end as usize).min(nodes.len());
+            (anchor..sub_end)
                 .find(|&j| shown(j) && (self.takes_focus(&nodes[j]) || nodes[j].input.as_ref().is_some_and(|i| i.access.is_some())))
                 .map(|j| (nodes[j].path.clone(), ring, ask))
         });
@@ -483,12 +501,22 @@ impl<S: 'static> Runtime<S> {
             .filter(|&j| (shown(j) || (unlaid(j) && sized(i) && visible(j))) && (self.takes_focus(&nodes[j]) || nodes[j].input.as_ref().is_some_and(|i| i.access.is_some())));
         let within = |j: usize, s: usize| {
             // Compare in the new tree where both ends are in it; a node that left keeps its old
-            // path, so the scan still reaches the siblings after it.
-            let (p, root) = match (at_new(j), at_new(s)) {
-                (Some(p), Some(r)) => (nodes[p].path.as_str(), nodes[r].path.as_str()),
-                _ => (self.nodes[j].path.as_str(), self.nodes[s].path.as_str()),
-            };
-            root.is_empty() || (p.len() > root.len() && p.starts_with(root) && p.as_bytes()[root.len()] == b'/')
+            // id/path, so the scan still reaches the siblings after it.
+            match (at_new(j), at_new(s)) {
+                (Some(p), Some(r)) => {
+                    (p > r && p < nodes[r].subtree_end as usize)
+                        || (nodes[p].id != nodes[r].id && self.node_ids.within(nodes[p].id, nodes[r].id))
+                }
+                _ => {
+                    let (jid, sid) = (self.nodes[j].id, self.nodes[s].id);
+                    if jid != NodeId(0) && sid != NodeId(0) {
+                        jid != sid && self.node_ids.within(jid, sid)
+                    } else {
+                        let (p, root) = (self.nodes[j].path.as_str(), self.nodes[s].path.as_str());
+                        root.is_empty() || (p.len() > root.len() && p.starts_with(root) && p.as_bytes()[root.len()] == b'/')
+                    }
+                }
+            }
         };
         let mut scope = self.nodes[at].parent;
         while let Some(s) = scope {
@@ -509,16 +537,30 @@ impl<S: 'static> Runtime<S> {
     /// the new tree takes focus when it can (a diff line whose comment box closed), else its first
     /// control.
     fn fallback_in_new(&self, gone: &str, nodes: &[Node]) -> Option<String> {
-        if self.active_modal().is_some() || nodes.iter().any(|n| n.path == gone) { return None; }
+        if self.active_modal().is_some() { return None; }
+        let in_new_by_id = |id: NodeId| -> Option<usize> {
+            self.node_index.get(&id).copied().filter(|&j| nodes.get(j).is_some_and(|m| m.id == id))
+        };
         let can = |j: usize| !nodes[j].inert && nodes[j].vis.opacity > 0.0
             && std::iter::successors(nodes[j].parent, |&p| nodes[p].parent).all(|p| !nodes[p].inert && nodes[p].vis.opacity > 0.0)
             && (self.takes_focus(&nodes[j]) || nodes[j].input.as_ref().is_some_and(|i| i.access.is_some()));
+        if let Some(mut cur_id) = self.path_ids.get(gone).copied() {
+            if in_new_by_id(cur_id).is_some() { return None; }
+            while let Some(pid) = self.node_ids.parent_of(cur_id) {
+                cur_id = pid;
+                let Some(j) = in_new_by_id(pid) else { continue };
+                let sub_end = (nodes[j].subtree_end as usize).min(nodes.len());
+                return (j..sub_end).find(|&m| can(m)).map(|m| nodes[m].path.clone());
+            }
+            return None;
+        }
+        if nodes.iter().any(|n| n.path == gone) { return None; }
         let mut p = gone;
         while let Some(k) = p.rfind('/') {
             p = &p[..k];
             let Some(j) = nodes.iter().position(|n| n.path == p) else { continue };
-            let inside = |m: usize| nodes[m].path.len() > p.len() && nodes[m].path.starts_with(p) && nodes[m].path.as_bytes()[p.len()] == b'/';
-            return std::iter::once(j).chain((j + 1..nodes.len()).take_while(|&m| inside(m))).find(|&m| can(m)).map(|m| nodes[m].path.clone());
+            let sub_end = (nodes[j].subtree_end as usize).min(nodes.len());
+            return (j..sub_end).find(|&m| can(m)).map(|m| nodes[m].path.clone());
         }
         None
     }
@@ -568,7 +610,16 @@ impl<S: 'static> Runtime<S> {
         LANDMARK_ROLES.contains(&n.role) || (n.role == "region" && n.label.as_deref().is_some_and(|l| !l.trim().is_empty()))
     }
     /// Node `j` is node `i` or inside it.
-    fn inside(&self, j: usize, i: usize) -> bool {
+    #[inline]
+    pub(super) fn inside(&self, j: usize, i: usize) -> bool {
+        if j == i { return true; }
+        if j < self.memo.present_len && i < self.memo.present_len && j > i && j < self.nodes[i].subtree_end as usize {
+            return true;
+        }
+        let (jid, iid) = (self.nodes[j].id, self.nodes[i].id);
+        if jid != NodeId(0) && iid != NodeId(0) {
+            return self.node_ids.within(jid, iid);
+        }
         let (p, root) = (self.nodes[j].path.as_str(), self.nodes[i].path.as_str());
         p == root || root.is_empty() || (p.len() > root.len() && p.starts_with(root) && p.as_bytes()[root.len()] == b'/')
     }
