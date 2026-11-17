@@ -295,7 +295,10 @@ impl Renderer {
         }
         let has_layers = self.uploads.has_layers;
         // A loop-only frame that draws no layer leaves them as the last frame drew them.
+        #[cfg(any(target_os = "windows", target_arch = "wasm32"))]
         let layers_kept = self.uploads.patched && self.cycle_leaves_layers();
+        #[cfg(not(any(target_os = "windows", target_arch = "wasm32")))]
+        let layers_kept = false;
         if !layers_kept { self.prepare_layers(device, queue, if has_layers { instances } else { &[] }, viewport); }
         self.sync_resident_caches(&mut atlas.resident_caches);
         self.backdrop_used = self.effects.iter().any(|(_, i)| i.params[0] != 0.0 || i.params[1] == KIND_BACKDROP_BLUR);
@@ -484,6 +487,7 @@ impl Renderer {
     }
 
     /// The instances the buffer holds, when they are paint `paint`'s and `len` of them.
+    #[cfg_attr(not(any(target_os = "windows", target_arch = "wasm32")), allow(dead_code))]
     pub(super) fn held_instances(&self, paint: u64, len: usize) -> Option<&[Instance]> {
         (self.uploads.held_paint == Some(paint) && self.uploads.instances.len() == len).then_some(&self.uploads.instances[..])
     }
