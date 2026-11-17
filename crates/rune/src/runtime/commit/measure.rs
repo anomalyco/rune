@@ -323,7 +323,7 @@ impl<S: 'static> Measurement<'_, S> {
         // A list in a row of another list windows against that list's viewport too.
         let nested = self.virtuals.keys().any(|p| p.starts_with(scroll_path) && path.strip_prefix(p.as_str()).is_some_and(|r| r.starts_with('/')));
         let v = self.virtuals.entry(path.to_owned()).or_default();
-        v.set_estimate(estimate);
+        v.set_estimate(if el.style.whole_rows_column() { (estimate + 0.5).floor() } else { estimate });
         v.scroll_path = scroll_path.to_owned();
         // A retry keeps the viewport the last pass measured; `self.nodes` is the last commit's.
         if self.pass.trusts_estimates() { v.viewport = height; }

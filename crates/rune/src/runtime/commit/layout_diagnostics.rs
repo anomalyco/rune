@@ -22,6 +22,19 @@ pub(super) fn collapsed_scrolls(taffy: &LayoutEngine, nodes: &[Node]) {
         s.flex_grow() > 0.0 && s.flex_basis() == length(0.0)
     };
     for (i, n) in nodes.iter().enumerate() {
+        let s = taffy.style(n.taffy);
+        if s.whole_rows() && !s.whole_rows_column() {
+            let mut set = WARNED.lock().unwrap();
+            if !set.iter().any(|k| k.strip_prefix("whole-rows-dir:") == Some(n.path.as_str())) {
+                set.insert(format!("whole-rows-dir:{}", n.path));
+                drop(set);
+                eprintln!(
+                    "rune: El::whole_rows on {:?} is ignored because its container is not a \
+                     non-wrapping flex column (Display::Flex, FlexDirection::Column, FlexWrap::NoWrap). (debug builds only)",
+                    n.path,
+                );
+            }
+        }
         if n.scroll.is_none() { continue; }
         let direct = || (i + 1..nodes.len()).take_while(|&j| nodes[j].parent >= Some(i)).filter(|&j| nodes[j].parent == Some(i));
         if n.growth.is_some() {
