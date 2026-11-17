@@ -332,9 +332,11 @@ impl<S: 'static> Runtime<S> {
         }
         let on_down = !touch && n.handlers.press_on_down && n.handlers.on_press.is_some();
         if on_down {
-            self.queue.push(Action::Press(path.clone(), crate::PointerButton::Primary));
+            self.queue.push(Action::Press(path.clone(), crate::PointerButton::Primary, false));
         }
-        self.press.hold(capture::Held::new(path, d, crate::PointerButton::Primary, (x, y), now, second, drag_out).on_link(link).pressed_on_down(on_down));
+        let mut held = capture::Held::new(path, d, crate::PointerButton::Primary, (x, y), now, second, drag_out).on_link(link).pressed_on_down(on_down);
+        held.touch = touch;
+        self.press.hold(held);
     }
 
     pub fn pointer_up(&mut self, x: f32, y: f32) {
@@ -427,7 +429,7 @@ impl<S: 'static> Runtime<S> {
         }
         if let Some(k) = link.filter(|_| inside) { self.link_up(&path, k, x, y, button); }
         if has_press && inside && !selected && !pressed_on_down {
-            self.queue.push(Action::Press(path.clone(), button));
+            self.queue.push(Action::Press(path.clone(), button, held.touch));
         }
         if middle_press && inside {
             self.queue.push(Action::MiddlePress(path.clone()));

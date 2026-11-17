@@ -1,6 +1,7 @@
 //! View-to-scene commit orchestration (`Runtime::commit`, `Measurement`, `Measured`).
 use super::*;
 
+mod prepare;
 pub(super) mod remount;
 
 /// Which measurement pass a commit is on. The first pass trusts the last commit's geometry; a

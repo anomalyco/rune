@@ -1,0 +1,1 @@
+- The OpenCode theme ships the final desktop icon artwork. Existing catalog names, including plugin aliases, draw their updated icons.
