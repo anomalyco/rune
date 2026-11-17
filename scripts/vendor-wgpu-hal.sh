@@ -20,16 +20,22 @@ trap 'rm -rf "$tmp"' EXIT
 curl -fsSL "https://static.crates.io/crates/wgpu-hal/wgpu-hal-$version.crate" -o "$tmp/crate.tar.gz"
 tar -xzf "$tmp/crate.tar.gz" -C "$tmp"
 if $regenerate; then
+  # The patch is against the version vendored: another version would pass its own round trip.
+  vendored="$(sed -n 's/^version = "\(.*\)"$/\1/p' vendor/wgpu-hal/Cargo.toml | head -n 1)"
+  [ "$vendored" = "$version" ] || { echo "vendor/wgpu-hal is wgpu-hal $vendored, not $version" >&2; exit 1; }
   mkdir "$tmp/a" "$tmp/b"
   cp -R "$tmp/wgpu-hal-$version/src" "$tmp/a/src"
   cp -R vendor/wgpu-hal/src "$tmp/b/src"
+  # Git's options pinned, whatever the user's config says: no line-ending conversion, no external
+  # diff or text conversion, the default algorithm and context, plain a/ b/ paths.
+  git_=(git -c core.autocrlf=false -c core.safecrlf=false -c core.eol=lf -c diff.noprefix=false -c diff.mnemonicPrefix=false -c diff.relative=false -c diff.algorithm=myers -c diff.indentHeuristic=true)
   # Exit 1 means the trees differ, which is the point; above 1 is an error.
   status=0
-  (cd "$tmp" && git diff --no-index --no-color --no-renames --abbrev=8 --src-prefix= --dst-prefix= a/src b/src) > "$tmp/new.patch" || status=$?
+  (cd "$tmp" && "${git_[@]}" diff --no-index --no-color --no-renames --no-ext-diff --no-textconv --abbrev=8 --unified=3 --src-prefix= --dst-prefix= a/src b/src) > "$tmp/new.patch" || status=$?
   [ "$status" -le 1 ] || exit "$status"
   mkdir "$tmp/check"
   cp -R "$tmp/wgpu-hal-$version/src" "$tmp/check/src"
-  (cd "$tmp/check" && git apply "$tmp/new.patch")
+  (cd "$tmp/check" && "${git_[@]}" apply "$tmp/new.patch")
   diff -r "$tmp/check/src" vendor/wgpu-hal/src
   mv "$tmp/new.patch" vendor/wgpu-hal.patch
   echo "vendor/wgpu-hal.patch: vendor/wgpu-hal/src against wgpu-hal $version"

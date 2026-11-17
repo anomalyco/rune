@@ -803,9 +803,9 @@ fn prepare(hwnd: isize, size: (u32, u32), srgb: bool, features: wgpu::Features, 
 
 /// The window's start-up warm-up, the one place it's ordered: on the GPU thread, before the
 /// hand-over, whatever the first GPU frames would otherwise create or compile on the UI thread,
-/// where they carry input. After the hand-over, only idle turns warm anything more. A step that
-/// starts work on a thread of its own and isn't waited for goes first, for the longest head start;
-/// then the window's frame and the command allocators the first frames record on (`warm_frame`).
+/// where they carry input. After the hand-over, only idle turns warm anything more. It's the window's
+/// frame and the command allocators the first frames record on (`warm_frame`); a step that started
+/// work on a thread of its own and wasn't waited for would go first, for the longest head start.
 fn warm_window(gpu: &Gpu, renderer: &mut Renderer, format: wgpu::TextureFormat, size: (u32, u32), instances: &[crate::render::Instance]) {
     warm_frame(gpu, renderer, format, size, instances);
 }

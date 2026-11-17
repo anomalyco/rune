@@ -12,23 +12,24 @@ index ac050bcd..6e3c74ef 100644
  
      // The Intel Haswell family of iGPUs had support for the D3D12 API but it was later
 diff --git a/src/dx12/command.rs b/src/dx12/command.rs
-index 9e90e266..10b602e9 100644
+index 9e90e266..4c1e1e9c 100644
 --- a/src/dx12/command.rs
 +++ b/src/dx12/command.rs
-@@ -87,6 +87,25 @@ impl Drop for super::CommandEncoder {
+@@ -87,6 +87,26 @@ impl Drop for super::CommandEncoder {
  }
  
  impl super::CommandEncoder {
-+    /// Rune: the free allocator of this kind that has recorded the most, or a new one. wgpu's
-+    /// pending writes keep their own, so a frame's never goes to a list of copies.
++    /// Rune: the free allocator of this kind that has recorded the most; else one of the other
++    /// kind (for pending writes the least used frame allocator, for a frame the most used); else a
++    /// new one. wgpu's pending writes keep their own, so a frame's doesn't go to a list of copies
++    /// while there's another, and no allocator waits unused while a new one is made.
 +    fn take_allocator(&self, pending_writes: bool) -> Result<super::AllocatorSlot, crate::DeviceError> {
 +        let mut pool = self.shared.allocators.lock();
-+        let pick = pool
-+            .iter()
-+            .enumerate()
-+            .filter(|(_, s)| s.pending_writes == pending_writes)
-+            .max_by_key(|(_, s)| s.recorded)
-+            .map(|(i, _)| i);
++        let rank = |s: &super::AllocatorSlot| match (s.pending_writes == pending_writes, pending_writes) {
++            (true, _) | (false, false) => (s.pending_writes == pending_writes, s.recorded),
++            (false, true) => (false, u32::MAX - s.recorded),
++        };
++        let pick = pool.iter().enumerate().max_by_key(|(_, s)| rank(s)).map(|(i, _)| i);
 +        if let Some(i) = pick {
 +            return Ok(pool.swap_remove(i));
 +        }
@@ -41,7 +42,7 @@ index 9e90e266..10b602e9 100644
      unsafe fn begin_pass(&mut self, kind: super::PassKind, label: crate::Label) {
          let list = self.list.as_ref().unwrap();
          self.pass.kind = kind;
-@@ -389,10 +408,18 @@ impl crate::CommandEncoder for super::CommandEncoder {
+@@ -389,10 +409,18 @@ impl crate::CommandEncoder for super::CommandEncoder {
      type A = super::Api;
  
      unsafe fn begin_encoding(&mut self, label: crate::Label) -> Result<(), crate::DeviceError> {
@@ -62,7 +63,7 @@ index 9e90e266..10b602e9 100644
                  if reset_result.is_ok() {
                      break Some(list);
                  }
-@@ -408,7 +435,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
+@@ -408,7 +436,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
                  self.device.CreateCommandList(
                      0,
                      Direct3D12::D3D12_COMMAND_LIST_TYPE_DIRECT,
@@ -71,7 +72,7 @@ index 9e90e266..10b602e9 100644
                      None,
                  )
              }
-@@ -430,7 +457,9 @@ impl crate::CommandEncoder for super::CommandEncoder {
+@@ -430,7 +458,9 @@ impl crate::CommandEncoder for super::CommandEncoder {
      unsafe fn discard_encoding(&mut self) {
          if let Some(list) = self.list.take() {
              if unsafe { list.Close() }.is_ok() {
@@ -82,7 +83,7 @@ index 9e90e266..10b602e9 100644
              }
          }
      }
-@@ -441,12 +470,20 @@ impl crate::CommandEncoder for super::CommandEncoder {
+@@ -441,12 +471,20 @@ impl crate::CommandEncoder for super::CommandEncoder {
      }
      unsafe fn reset_all<I: Iterator<Item = super::CommandBuffer>>(&mut self, command_buffers: I) {
          self.intermediate_copy_bufs.clear();

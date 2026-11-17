@@ -87,16 +87,17 @@ impl Drop for super::CommandEncoder {
 }
 
 impl super::CommandEncoder {
-    /// Rune: the free allocator of this kind that has recorded the most, or a new one. wgpu's
-    /// pending writes keep their own, so a frame's never goes to a list of copies.
+    /// Rune: the free allocator of this kind that has recorded the most; else one of the other
+    /// kind (for pending writes the least used frame allocator, for a frame the most used); else a
+    /// new one. wgpu's pending writes keep their own, so a frame's doesn't go to a list of copies
+    /// while there's another, and no allocator waits unused while a new one is made.
     fn take_allocator(&self, pending_writes: bool) -> Result<super::AllocatorSlot, crate::DeviceError> {
         let mut pool = self.shared.allocators.lock();
-        let pick = pool
-            .iter()
-            .enumerate()
-            .filter(|(_, s)| s.pending_writes == pending_writes)
-            .max_by_key(|(_, s)| s.recorded)
-            .map(|(i, _)| i);
+        let rank = |s: &super::AllocatorSlot| match (s.pending_writes == pending_writes, pending_writes) {
+            (true, _) | (false, false) => (s.pending_writes == pending_writes, s.recorded),
+            (false, true) => (false, u32::MAX - s.recorded),
+        };
+        let pick = pool.iter().enumerate().max_by_key(|(_, s)| rank(s)).map(|(i, _)| i);
         if let Some(i) = pick {
             return Ok(pool.swap_remove(i));
         }
