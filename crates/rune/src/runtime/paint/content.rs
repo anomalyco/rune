@@ -256,6 +256,17 @@ impl<S: 'static> Runtime<S> {
             };
             let (x0, x1) = (zr[0] + ins[0], zr[2] - ins[2]);
             let mut origin = [text_x(spec, x0, x1, text_width(flow.full_width() * tk), flow.flow()), zr[1] + ins[1]];
+            // TEXT-2 tie probe (RUNE_TEXT2_TIE=1): each text's exact origin y in device px, the first
+            // 4 s of a launch, for a baseline sitting on a half pixel. Not for dev.
+            {
+                static ON: std::sync::OnceLock<(bool, std::time::Instant)> = std::sync::OnceLock::new();
+                let (on, t0) = *ON.get_or_init(|| (std::env::var("RUNE_TEXT2_TIE").is_ok_and(|v| v == "1"), std::time::Instant::now()));
+                if on && t0.elapsed().as_secs_f32() < 4.0 {
+                    let first = laid.single().and_then(|l| l.lines().next().map(|ln| ln.metrics().baseline)).unwrap_or(f32::NAN);
+                    let base = origin[1] + first * tk;
+                    eprintln!("TEXT2TIE t={:.1} path={} y={:.6} ybits={:08x} base={:.6} frac={:.6} exact_off={:.6}", t0.elapsed().as_secs_f64() * 1e3, n.path, origin[1], origin[1].to_bits(), base, base - base.floor(), exact_off[1]);
+                }
+            }
             // A gliding box's glyphs and decorations lay out from its nearest whole pixel (plus its rest's
             // fraction, above) and move the rest. Within a 64th of a pixel they don't move, but still lay
             // out from that pixel, as at rest.
