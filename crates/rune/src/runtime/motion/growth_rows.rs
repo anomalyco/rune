@@ -18,11 +18,12 @@ impl<S: 'static> Runtime<S> {
         self.row_mask.clear();
         self.row_mask.resize(n_nodes, -1.0);
         self.row_lifts.clear();
+        let v_by_id = node_ids::VirtualById::build(&self.virtuals, &self.path_ids);
         let mut emptied = Vec::new();
         for (cid, stack) in &self.stacks {
             let Some(&ci) = self.node_index.get(cid) else { continue };
             let Some(spec) = self.nodes[ci].growth.as_deref().copied() else { continue };
-            let origin = self.virtuals.get(&self.nodes[ci].path).map_or(0.0, |v| v.before);
+            let origin = v_by_id.get(*cid).map_or(0.0, |v| v.before);
             self.row_dy[ci] = grid(origin, s);
             let mut y = stack.pad_top - origin;
             let mut first_row = true;

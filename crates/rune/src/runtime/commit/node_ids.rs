@@ -350,4 +350,71 @@ pub(crate) fn fill_subtree_ends(nodes: &mut [Node], present_len: usize) {
     }
 }
 
+/// Stack-inline `NodeId -> &VirtualList` view built once per pass (`<= 4` lists need zero heap
+/// allocations and probe in 1–4 integer compares instead of hashing 200 B path strings per node).
+pub(crate) enum VirtualById<'a> {
+    Inline {
+        len: usize,
+        items: [Option<(NodeId, &'a crate::el::virtual_list::VirtualList)>; 4],
+    },
+    Map(HashMap<NodeId, &'a crate::el::virtual_list::VirtualList>),
+}
+
+impl<'a> VirtualById<'a> {
+    #[inline]
+    pub(crate) fn build(
+        virtuals: &'a HashMap<String, crate::el::virtual_list::VirtualList>,
+        path_ids: &HashMap<String, NodeId>,
+    ) -> Self {
+        if virtuals.len() <= 4 {
+            let mut items: [Option<(NodeId, &'a crate::el::virtual_list::VirtualList)>; 4] = [None; 4];
+            let mut len = 0usize;
+            for (path, v) in virtuals {
+                if let Some(&id) = path_ids.get(path) {
+                    items[len] = Some((id, v));
+                    len += 1;
+                }
+            }
+            return Self::Inline { len, items };
+        }
+        let mut map = HashMap::with_capacity_and_hasher(virtuals.len(), rustc_hash::FxBuildHasher);
+        for (path, v) in virtuals {
+            if let Some(&id) = path_ids.get(path) {
+                map.insert(id, v);
+            }
+        }
+        Self::Map(map)
+    }
+
+    #[inline(always)]
+    pub(crate) fn is_empty(&self) -> bool {
+        match self {
+            Self::Inline { len, .. } => *len == 0,
+            Self::Map(m) => m.is_empty(),
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn get(&self, id: NodeId) -> Option<&'a crate::el::virtual_list::VirtualList> {
+        match self {
+            Self::Inline { len, items } => {
+                for slot in &items[..*len] {
+                    if let Some((vid, v)) = *slot
+                        && vid == id
+                    {
+                        return Some(v);
+                    }
+                }
+                None
+            }
+            Self::Map(m) => m.get(&id).copied(),
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn contains(&self, id: NodeId) -> bool {
+        self.get(id).is_some()
+    }
+}
+
 const _: () = assert!(std::mem::size_of::<Node>() <= 512);

@@ -24,19 +24,21 @@ impl<S: 'static> Runtime<S> {
         // Culling is not a model removal. Retire offscreen scene/growth state immediately;
         // re-entering historical rows mount settled and don't replay streaming words.
         if !self.virtual_culled.is_empty() {
+            let mut culled_ids = HashSet::with_capacity_and_hasher(self.virtual_culled.len(), rustc_hash::FxBuildHasher);
+            for path in &self.virtual_culled {
+                if let Some(&id) = self.path_ids.get(path) {
+                    culled_ids.insert(id);
+                    self.scene.unmount(id);
+                    self.grows.remove(&id);
+                }
+            }
             scratch.culled.clear();
             scratch.culled.resize(self.nodes.len(), false);
             for (i, n) in self.nodes.iter().enumerate() {
-                if self.virtual_culled.contains(&n.path) || n.parent.is_some_and(|p| scratch.culled[p]) {
+                if culled_ids.contains(&n.id) || n.parent.is_some_and(|p| scratch.culled[p]) {
                     scratch.culled[i] = true;
                     self.scene.unmount(n.id);
                     self.grows.remove(&n.id);
-                }
-            }
-            for path in &self.virtual_culled {
-                if let Some(id) = self.path_ids.get(path) {
-                    self.scene.unmount(*id);
-                    self.grows.remove(id);
                 }
             }
         }
@@ -101,10 +103,12 @@ impl<S: 'static> Runtime<S> {
         };
 
         // Growth stacks: rows of a stack that existed before grow; a new stack mounts settled.
+        let v_by_id = node_ids::VirtualById::build(&self.virtuals, &self.path_ids);
         let mut live_by_id = HashMap::default();
         for c in 0..nodes.len() {
             if nodes[c].cold.get().is_none_or(|nd| nd.growth.is_none()) { continue }
             let cid = nodes[c].id;
+            let list = v_by_id.get(cid);
             let instant = instant || nodes[c].instant_changes;
             let cut = cut || nodes[c].instant_changes;
             // A reader away from the tail is anchored using measured row heights. Land those
@@ -114,9 +118,9 @@ impl<S: 'static> Runtime<S> {
             // whose size springs too, the two springs carry them past their slots.
             // So does a reveal in this commit for rows new to the stack: rows inserted above an
             // anchored first row and revealed at once land whole instead of growing from zero.
-            let revealing = self.virtuals.get(&nodes[c].path)
+            let revealing = list
                 .is_some_and(|v| self.requests.reveals().any(|r| r.viewport == v.scroll_path));
-            let revealed_now = self.virtuals.get(&nodes[c].path).is_some_and(|v| {
+            let revealed_now = list.is_some_and(|v| {
                 tx.scroll_to.iter().any(|r| {
                     nodes.iter().enumerate().find(|(_, n)| n.named(&r.key)
                         && n.parent.is_none_or(|p| in_scope(&nodes[p].path, r.scope.as_deref())))
@@ -127,7 +131,7 @@ impl<S: 'static> Runtime<S> {
                         })
                 })
             });
-            let reader = self.virtuals.get(&nodes[c].path)
+            let reader = list
                 .filter(|v| !self.requests.keeps().any(|k| k.viewport == v.scroll_path))
                 .and_then(|v| self.path_ids.get(&v.scroll_path))
                 .and_then(|id| self.scrolls.get(id)).is_some_and(|s| !s.pinned());
@@ -147,7 +151,6 @@ impl<S: 'static> Runtime<S> {
             // nothing, or any row when the change keeps none the reader could see (a filter),
             // leaves no space to close: the list's anchor already holds what shows (`set_keys`),
             // and the space would only push the rows the change brings in down, out of view.
-            let list = self.virtuals.get(&nodes[c].path);
             let is_virtual = list.is_some();
             let replaced = list.is_some_and(crate::el::virtual_list::VirtualList::replaced_view);
             let (mut opened, mut shut) = (Vec::new(), Vec::new());
@@ -295,7 +298,7 @@ impl<S: 'static> Runtime<S> {
             let animates = existed && (!instant || live_rows.is_some()) && !tx.relayout && !self.reduced_motion;
             stack.reorder.measure(animates, &stack.order, &order, stack.gap, |id| self.grows.get(&id).map(|g| g.h));
             if first || self.reduced_motion || concealing || resized || reader || nodes[c].instant_changes || tx.commit.lands() || (stack.order != order && live_rows.is_none()) { stack.seams.clear(); }
-            if let Some(range) = live_rows && let Some(v) = self.virtuals.get(&nodes[c].path) && stack.order != order {
+            if let Some(range) = live_rows && let Some(v) = list && stack.order != order {
                 self.join_live_rows(&mut stack, &nodes, rows, v, &range);
                 let ink = tx.live_growth.iter().any(|(key, ink)| *ink && nodes[c].named(key));
                 live_by_id.extend(rows.iter().enumerate().filter_map(|(k, &j)| {
@@ -333,7 +336,7 @@ impl<S: 'static> Runtime<S> {
         // How far the top of each node's contents moved down in its growth row (drawn less new).
         let mut top_moved = std::mem::take(&mut scratch.top_moved);
         top_moved.clear();
-        let has_virtuals = !self.virtuals.is_empty();
+        let has_virtuals = !v_by_id.is_empty();
         let mut last = paint_tracks::Finder::default();
         let mut skip_cursor = 0usize;
         // A crossing carries its paint and exits; a resizing row carries its inset. Its
@@ -360,7 +363,7 @@ impl<S: 'static> Runtime<S> {
             let id = nodes[i].id;
             let mut scene_rect = nodes[i].local;
             let parent_virtual = if has_virtuals {
-                nodes[i].parent.and_then(|p| self.virtuals.get(&nodes[p].path))
+                nodes[i].parent.and_then(|p| v_by_id.get(nodes[p].id))
             } else {
                 None
             };
@@ -379,7 +382,7 @@ impl<S: 'static> Runtime<S> {
             {
                 continue;
             }
-            let is_virtual = has_virtuals && self.virtuals.contains_key(&nodes[i].path);
+            let is_virtual = has_virtuals && v_by_id.contains(id);
             let parent_id = nodes[i].parent.map(|p| nodes[p].id);
             let (spring_l, anim_l) = tx.motion.map_or_else(
                 || { let spring = nodes[i].motion; (spring, spring.into()) },
@@ -904,8 +907,12 @@ impl<S: 'static> Runtime<S> {
         if self.nodes.len() > present_len || !self.flying.is_empty() || landed || self.has_sticky || self.has_raise || self.has_paint_order { self.update_layer_paint_order(); }
         else { self.layer_paint_order.clear(); }
         self.built = false;
+        let _ = v_by_id;
         if !self.virtuals.is_empty() {
-            self.virtuals.retain(|path, _| self.nodes.iter().any(|n| n.path == *path));
+            let Self { virtuals, path_ids, node_index, nodes, .. } = self;
+            virtuals.retain(|path, _| {
+                path_ids.get(path).and_then(|id| node_index.get(id)).is_some_and(|&i| nodes.get(i).is_some_and(|n| n.path == *path))
+            });
         }
         self.prune_path_ids();
         self.subscribe_live();

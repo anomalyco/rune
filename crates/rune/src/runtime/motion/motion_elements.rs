@@ -85,6 +85,8 @@ impl<S: 'static> Runtime<S> {
         // Per node: its index in `out` (or its nearest listed ancestor's), the flags it passes
         // to what's under it, and whether it or an ancestor is leaving.
         let s = self.env.scale;
+        let v_by_id = node_ids::VirtualById::build(&self.virtuals, &self.path_ids);
+        let has_virtuals = !v_by_id.is_empty();
         for (i, node) in self.nodes.iter().enumerate() {
             // `elements` steps up to an `El::above` target before the parent.
             let up = step_up(&self.nodes, i);
@@ -125,7 +127,7 @@ impl<S: 'static> Runtime<S> {
             if node.vis.fill.a > 0.01 || text_hash != 0 { flags |= MotionElement::PAINTS; }
             let v = &node.vis;
             if v.fill.a == 0.0 && v.border_width() == 0.0 && v.shadows.is_empty() && node.text.is_none() && v.icon.is_none()
-                && !self.virtuals.is_empty() && self.virtuals.contains_key(&node.path)
+                && has_virtuals && v_by_id.contains(node.id)
             {
                 flags |= MotionElement::VIRTUAL;
             }

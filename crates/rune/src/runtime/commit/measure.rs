@@ -122,11 +122,14 @@ impl<S: 'static> Measurement<'_, S> {
     pub(super) fn measure_virtuals(&mut self, nodes: &[Node], settle: bool) -> bool {
         let mut retry = false;
         for (path, v) in self.virtuals.iter_mut() {
-            let Some((ci, _)) = nodes.iter().enumerate().find(|(_, n)| n.path == *path) else { continue };
+            let Some(ci) = self.path_ids.get(path).and_then(|id| self.node_index.get(id)).copied().filter(|&i| nodes.get(i).is_some_and(|n| n.path == *path))
+                .or_else(|| nodes.iter().position(|n| n.path == *path)) else { continue };
             for n in nodes.iter().filter(|n| n.parent == Some(ci)) {
                 v.set_height(n.key.as_deref().unwrap(), n.local.h);
             }
-            let Some((si, scroll)) = nodes.iter().enumerate().find(|(_, n)| n.path == v.scroll_path) else { continue };
+            let Some(si) = self.path_ids.get(&v.scroll_path).and_then(|id| self.node_index.get(id)).copied().filter(|&i| nodes.get(i).is_some_and(|n| n.path == v.scroll_path))
+                .or_else(|| nodes.iter().position(|n| n.path == v.scroll_path)) else { continue };
+            let scroll = &nodes[si];
             v.viewport = scroll.local.h;
             v.top = (nodes[ci].target[1] - scroll.target[1]).max(0.0);
             if v.nested {

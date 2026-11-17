@@ -91,6 +91,8 @@ impl<S: 'static> Runtime<S> {
         }
         out.reserve(reused.len());
         let any_animating = self.scene.store().active_len() > 0;
+        let v_by_id = node_ids::VirtualById::build(&self.virtuals, &self.path_ids);
+        let has_virtuals = !v_by_id.is_empty();
         for span in reused {
             if !span.same_path || span.len == 0 || span.old_start + span.len > self.nodes.len() || span.new_start + span.len > nodes.len() {
                 continue;
@@ -100,19 +102,20 @@ impl<S: 'static> Runtime<S> {
             if !self.scene.contains(r_new.id) || self.is_exiting(r_new.id) {
                 continue;
             }
+            let parent_virtual = if has_virtuals {
+                r_new.parent.and_then(|p| v_by_id.get(nodes[p].id))
+            } else {
+                None
+            };
             let mut scene_rect = r_new.local;
-            if !self.virtuals.is_empty()
-                && let Some(v) = r_new.parent.and_then(|p| self.virtuals.get(&nodes[p].path))
-            {
+            if let Some(v) = parent_virtual {
                 scene_rect.y -= v.before;
             }
             let parent_top_clean = r_new.in_row != RowLayout::Snaps
                 || r_new.parent.is_none_or(|p| {
                     nodes.get(p + 1).is_none_or(|first_sib| {
                         let mut sr = first_sib.local;
-                        if !self.virtuals.is_empty()
-                            && let Some(v) = self.virtuals.get(&nodes[p].path)
-                        {
+                        if let Some(v) = parent_virtual {
                             sr.y -= v.before;
                         }
                         self.scene.get(first_sib.id, prop::FRAME) == Some(sr)
@@ -121,11 +124,10 @@ impl<S: 'static> Runtime<S> {
             let root_clean = self.node_clean_for_apply(r_new, r_old, any_animating)
                 && parent_top_clean
                 && r_new.parent.map(|p| nodes[p].id) == r_old.parent.map(|p| self.nodes[p].id)
-                && (self.virtuals.is_empty() || !self.virtuals.contains_key(&r_new.path))
+                && (!has_virtuals || !v_by_id.contains(r_new.id))
                 && self.scene.is_resting_at(r_new.id, scene_rect)
                 && (self.stacks.is_empty() || self.reorder_jump(nodes, span.new_start) == 0.0)
-                && (self.virtuals.is_empty()
-                    || !r_new.parent.and_then(|p| self.virtuals.get(&nodes[p].path)).is_some_and(crate::el::virtual_list::VirtualList::replaced_view));
+                && !parent_virtual.is_some_and(crate::el::virtual_list::VirtualList::replaced_view);
 
             if !root_clean && !self.flying.is_empty() {
                 continue;

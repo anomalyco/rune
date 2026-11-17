@@ -63,7 +63,10 @@ impl<S: 'static> Runtime<S> {
         node_ids::fill_subtree_ends(&mut self.nodes, self.memo.present_len);
         remap.clear();
         self.apply_scratch.remap = remap;
-        self.virtuals.retain(|path, _| self.nodes.iter().any(|n| n.path == *path));
+        let Self { virtuals, path_ids, node_index, nodes, .. } = self;
+        virtuals.retain(|path, _| {
+            path_ids.get(path).and_then(|id| node_index.get(id)).is_some_and(|&i| nodes.get(i).is_some_and(|n| n.path == *path))
+        });
         self.refresh_modal_index();
         self.flying.retain(|(id, _)| self.node_index.contains_key(id));
         self.has_raise = self.nodes.iter().any(|n| n.vis_flags.raise());
