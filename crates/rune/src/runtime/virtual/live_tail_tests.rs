@@ -2,7 +2,7 @@ use super::*;
 use crate::{GrowthSpec, ScrollSpec, col, el, motion_gate::{Run, Recording, gate_rows}};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum Case { Delivery, Room, Narrow, Rewrapping, BelowList, Unpinned, InstantChild }
+enum Case { Delivery, Room, GeometryOnly, Narrow, Rewrapping, BelowList, Unpinned, InstantChild }
 
 #[derive(Clone, Copy, PartialEq)]
 enum Phase { Waiting, Rewrapping, Delivered }
@@ -38,7 +38,7 @@ fn poll(s: &mut Feed, t: f64, tx: &mut Tx) -> bool {
     if s.phase == Phase::Waiting && s.case == Case::Rewrapping && (0.47..0.5).contains(&t) { s.phase = Phase::Rewrapping; return true; }
     if s.phase != Phase::Delivered && t >= 0.5 {
         s.phase = Phase::Delivered;
-        if s.case == Case::Room { tx.grow_visible_tail_from("rows", "arrival", "room"); } else { tx.grow_visible_tail("rows"); }
+        if s.case == Case::Room { tx.grow_visible_tail_from("rows", "arrival", "room"); } else { if s.case == Case::GeometryOnly { tx.grow_visible_tail("rows"); } else { tx.grow_visible_tail_with_ink("rows"); } }
         return true;
     }
     false
@@ -51,7 +51,7 @@ fn record(case: Case) -> Recording {
     let mut run = Run::new(rt, 120.0);
     run.idle(0.45);
     run.step();
-    let growing = matches!(case, Case::Delivery | Case::InstantChild);
+    let growing = matches!(case, Case::Delivery | Case::GeometryOnly | Case::InstantChild);
     while run.rt.state.phase != Phase::Delivered { assert!(run.rt.t < 0.6, "delivery did not poll"); run.step(); }
     let row = run.rt.nodes.iter().find(|n| n.key.as_deref() == Some("pending"));
     if case == Case::Room {
@@ -70,6 +70,9 @@ fn record(case: Case) -> Recording {
             assert!(run.rt.is_exiting(badge.id));
             let label = run.rt.nodes.iter().find(|n| n.named("label")).unwrap();
             assert!(run.rt.scene.store().is_animating(label.id, P_FILL));
+        }
+        if case == Case::GeometryOnly {
+            assert!(!run.rt.nodes.iter().any(|n| n.named("badge")), "geometry-only growth lands child exits");
         }
         if case == Case::InstantChild {
             let label = run.rt.nodes.iter().position(|n| n.key.as_deref() == Some("label")).unwrap();
@@ -97,7 +100,7 @@ fn live_tail_motion_gate() {
 
 #[test]
 fn live_tail_motion_gate_instant_controls() {
-    for case in [Case::Narrow, Case::Rewrapping, Case::BelowList, Case::InstantChild] { record(case); }
+    for case in [Case::GeometryOnly, Case::Narrow, Case::Rewrapping, Case::BelowList, Case::InstantChild] { record(case); }
 }
 
 #[test]
@@ -118,7 +121,7 @@ fn live_tail_motion_gate_joined_corner_retargets_on_adjacent_deliveries() {
     rt.poll = Some(|accepted, t, tx| {
         if t < 0.5 || *accepted == 2 { return false; }
         *accepted += 1;
-        tx.grow_visible_tail("rows");
+        tx.grow_visible_tail_with_ink("rows");
         true
     });
     let mut run = Run::new(rt, 60.0);
@@ -175,5 +178,5 @@ fn live_tail_motion_gate_covered_polls_keep_one_request_per_selector() {
         poll.grow_visible_tail("right/rows");
         crate::runtime::action::merge(&mut pending, poll);
     }
-    assert_eq!(pending.live_growth, ["left/rows", "right/rows"]);
+    assert_eq!(pending.live_growth, [("left/rows".into(), false), ("right/rows".into(), false)]);
 }

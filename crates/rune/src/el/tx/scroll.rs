@@ -17,8 +17,22 @@ impl Tx {
     /// layout or chrome. A reader scrolled away, a resizing viewport, reduced motion, the
     /// first paint and an explicit `instant()` or `settle()` still land.
     pub fn grow_visible_tail(&mut self, stack: impl Into<String>) {
-        let stack = stack.into();
-        if !self.live_growth.contains(&stack) { self.live_growth.push(stack); }
+        self.request_live_growth(stack.into(), false);
+    }
+
+    /// Like [`Self::grow_visible_tail`], but a row crossing a neighbour also carries its
+    /// changing paint and child exits. A resizing row carries its inset, and a stationary
+    /// neighbour can round its joined corners. This applies only to this live commit.
+    pub fn grow_visible_tail_with_ink(&mut self, stack: impl Into<String>) {
+        self.request_live_growth(stack.into(), true);
+    }
+
+    pub(crate) fn request_live_growth(&mut self, stack: String, ink: bool) {
+        if let Some((_, carry)) = self.live_growth.iter_mut().find(|(key, _)| *key == stack) {
+            *carry |= ink;
+        } else {
+            self.live_growth.push((stack, ink));
+        }
     }
 
     /// A newly delivered `row` in `stack` takes room from a panel immediately below its

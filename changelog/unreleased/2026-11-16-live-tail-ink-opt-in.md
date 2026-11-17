@@ -1,0 +1,1 @@
+- `Tx::grow_visible_tail_with_ink` lets visible rows carry changing paint and child exits through a live reorder. `grow_visible_tail` keeps moving the rows without animating those changes.

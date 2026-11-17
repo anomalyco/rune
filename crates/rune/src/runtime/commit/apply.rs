@@ -297,10 +297,11 @@ impl<S: 'static> Runtime<S> {
             if first || self.reduced_motion || concealing || resized || reader || nodes[c].instant_changes || tx.commit.lands() || (stack.order != order && live_rows.is_none()) { stack.seams.clear(); }
             if let Some(range) = live_rows && let Some(v) = self.virtuals.get(&nodes[c].path) && stack.order != order {
                 self.join_live_rows(&mut stack, &nodes, rows, v, &range);
+                let ink = tx.live_growth.iter().any(|(key, ink)| *ink && nodes[c].named(key));
                 live_by_id.extend(rows.iter().enumerate().filter_map(|(k, &j)| {
                     let moves = |&n: &usize| stack.reorder.jump(nodes[n].id) != 0.0;
-                    let joins = rows.get(k.wrapping_sub(1)).is_some_and(moves) || rows.get(k + 1).is_some_and(moves);
-                    self.live_row(&nodes[j], &stack.reorder, joins, v, &range)
+                    let joins = ink && (rows.get(k.wrapping_sub(1)).is_some_and(moves) || rows.get(k + 1).is_some_and(moves));
+                    self.live_row(&nodes[j], &stack.reorder, ink, joins, v, &range)
                 }));
             }
             scratch.order = std::mem::replace(&mut stack.order, order);
@@ -368,7 +369,7 @@ impl<S: 'static> Runtime<S> {
             }
             if !live_by_id.is_empty() && let Some(&row) = live_by_id.get(&id) { live_row = Some((i, row)); }
             let shift = live_row.and_then(|(_, row)| row.shift);
-            let riding = shift.is_some_and(|jump| jump != 0.0) && !nodes[i].instant_changes;
+            let riding = live_row.is_some_and(|(_, row)| row.ink && row.shift.is_some_and(|jump| jump != 0.0)) && !nodes[i].instant_changes;
             if riding && nodes[i].vis.child_exit.is_some() { exit_parents.insert(id); }
             let old = last.find(&self.nodes, id);
             if can_skip_apply
