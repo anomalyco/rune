@@ -34,9 +34,16 @@ pub(crate) fn lines(layout: TextFlow<'_>, content: &str, s: f32, origin: [f32; 2
         if out.len() == first {
             out.push(Line { range: p.start..p.start, rect: [origin[0], origin[1] + p.y / s, 0.0, p.height / s], lengths: Vec::new(), positions: Vec::new(), widths: Vec::new(), word_starts: Vec::new() });
         }
-        if content.as_bytes().get(p.end) == Some(&b'\n') && let Some(l) = out.last_mut() {
-            l.range.end += 1;
-            l.lengths.push(1);
+        let nl = if content.as_bytes().get(p.end..p.end + 2) == Some(b"\r\n") {
+            2
+        } else if content.as_bytes().get(p.end) == Some(&b'\n') {
+            1
+        } else {
+            0
+        };
+        if nl > 0 && let Some(l) = out.last_mut() {
+            l.range.end += nl;
+            l.lengths.push(nl as u8);
             l.positions.push(l.rect[2]);
             l.widths.push(0.0);
         }

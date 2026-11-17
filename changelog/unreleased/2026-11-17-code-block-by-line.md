@@ -1,1 +1,1 @@
-- `Markdown` code blocks shape one `Layout` per line (`El::by_line`) and reuse unchanged lines across streaming commits while keeping selection, Find highlights, tabs, wrapping, left-to-right base direction, and copy identical.
+- `Markdown` code blocks shape one `Layout` per line (`El::by_line`), reusing unchanged lines across streaming commits and keeping off-screen ASCII lines of large blocks as deferred runs, while multi-paragraph inputs also align wrapped fractional-scale lines with single layouts and paint decorations across all paragraphs before selection and glyphs.

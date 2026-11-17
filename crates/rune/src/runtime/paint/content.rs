@@ -425,7 +425,7 @@ impl<S: 'static> Runtime<S> {
             for piece in flow.pieces_in(rows.start, rows.end) {
                 let layout = piece.layout;
                 let d_origin = [base_d_origin[0], base_d_origin[1] + piece.y];
-                let (spans_here, pills, strikes) = (piece.spans(&spec.spans), piece.pills(&spec.cold.pills), piece.strikes(&spec.cold.strikes));
+                let (spans_here, pills) = (piece.spans(&spec.spans), piece.pills(&spec.cold.pills));
                 let from = self.deco_scratch.len();
                 crate::text::pill_chips(layout, &pills, spec.style.size, s, d_origin, pill_bg, &mut self.deco_scratch, &mut pill_icons);
                 // Elided text draws its decorations over the drawn string's offsets.
@@ -433,15 +433,8 @@ impl<S: 'static> Runtime<S> {
                 let spans = drawn_spans.as_deref().unwrap_or(&spans_here);
                 let drawn_rings = n.elided.map(|e| e.rings(&spec.cold.rings));
                 self.text.decorations_with_rings(layout, spans, drawn_rings.as_deref().unwrap_or(&spec.cold.rings), spec.cold.span_radius, s, d_origin, &mut self.deco_scratch);
-                if !strikes.is_empty() {
-                    let drawn = n.elided.map(|e| e.strikes(&strikes));
-                    self.text.strike_decorations(layout, spans, drawn.as_deref().unwrap_or(&strikes), color, s, d_origin, &mut self.deco_scratch);
-                }
-                link_fx.decos_piece(&piece, drawn_len, s, d_origin, &mut self.deco_scratch);
                 if !piece.is_whole() {
-                    for d in &mut self.deco_scratch[from..] {
-                        d.byte = piece.content(d.byte as usize) as u32;
-                    }
+                    for d in &mut self.deco_scratch[from..] { d.byte = piece.content(d.byte as usize) as u32; }
                 }
                 if !pills.is_empty() {
                     let mut bare = Vec::new();
@@ -454,6 +447,22 @@ impl<S: 'static> Runtime<S> {
                 let marks = drawn.as_deref().unwrap_or(&spec.cold.highlights);
                 self.text.highlight_decorations_flow(flow, marks, drawn_len, s, base_d_origin, rows.clone(), &mut self.deco_scratch);
             }
+            for piece in flow.pieces_in(rows.start, rows.end) {
+                let d_origin = [base_d_origin[0], base_d_origin[1] + piece.y];
+                let strikes = piece.strikes(&spec.cold.strikes);
+                let from = self.deco_scratch.len();
+                if !strikes.is_empty() {
+                    let spans_here = piece.spans(&spec.spans);
+                    let drawn_spans = n.elided.map(|e| e.spans(&spans_here));
+                    let spans = drawn_spans.as_deref().unwrap_or(&spans_here);
+                    let drawn = n.elided.map(|e| e.strikes(&strikes));
+                    self.text.strike_decorations(piece.layout, spans, drawn.as_deref().unwrap_or(&strikes), color, s, d_origin, &mut self.deco_scratch);
+                }
+                link_fx.decos_piece(&piece, drawn_len, s, d_origin, &mut self.deco_scratch);
+                if !piece.is_whole() {
+                    for d in &mut self.deco_scratch[from..] { d.byte = piece.content(d.byte as usize) as u32; }
+                }
+            }
             if !spec.cold.rings.is_empty() || spec.cold.highlights.iter().any(|h| h.ring.is_some()) {
                 // Adjacent backgrounds overlap by bg_pad. Paint ringed chips after
                 // plain fills so a neighboring fill cannot erase an inset edge;
@@ -464,16 +473,11 @@ impl<S: 'static> Runtime<S> {
                 for d in &mut self.deco_scratch {
                     d.rect = scale_about(d.rect, base_rest, base_d_origin, tk);
                     d.radius *= tk;
-                    if let Some((_, rw)) = &mut d.ring {
-                        *rw *= tk;
-                    }
+                    if let Some((_, rw)) = &mut d.ring { *rw *= tk; }
                 }
             }
             if glide != [0.0; 2] {
-                for d in &mut self.deco_scratch {
-                    d.rect[0] += glide[0];
-                    d.rect[1] += glide[1];
-                }
+                for d in &mut self.deco_scratch { d.rect[0] += glide[0]; d.rect[1] += glide[1]; }
             }
             for d in &self.deco_scratch {
                 let alpha = if d.ring.is_some() {

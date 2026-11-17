@@ -869,6 +869,7 @@ impl<S: 'static> Runtime<S> {
         animating |= source(self.scale_frame.is_some() || self.pixel_snap.easing(), AnimSource::SCALE_SETTLE);
         animating |= source(self.videos_active, AnimSource::VIDEO);
         animating |= source(self.draw_text_flights(), AnimSource::TEXT_FLIGHT);
+        animating |= source(self.text_fill_due(), AnimSource::TEXT_FILL);
         if !animating && raster_check::on() {
             self.check_resting_raster();
         }

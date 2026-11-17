@@ -16,6 +16,7 @@ pub(super) struct Runs<'a> {
     pub(super) ascii: &'a AsciiLine,
     pub(super) max_width: Option<f32>,
     pub(super) edit: bool,
+    pub(super) eager: (usize, usize),
 }
 
 /// Start byte of the line after one ending at `end` (`\r\n` or `\n`).
@@ -59,6 +60,9 @@ pub(super) fn key_paragraphs(spec: &TextSpec, style_key: u64, disjoint_spans: bo
         if let Some((a, b, height, w, n, flow)) = run.take() {
             let mut h = hash::KeyHasher::default();
             (&spec.content[a..b], style_key, flow == Flow::Rtl, n, "run").hash(&mut h);
+            for s in spans_in(&spec.spans, a, b, &[], disjoint_spans) {
+                (s.start, s.end).hash(&mut h);
+            }
             found.push((a, b, flow, h.finish(), Box::default(), Some((height, w, n))));
         }
     };
@@ -79,7 +83,7 @@ pub(super) fn key_paragraphs(spec: &TextSpec, style_key: u64, disjoint_spans: bo
         let last_flow = run.map(|r| r.5).or_else(|| found.last().map(|f| f.2)).unwrap_or(start_flow);
         if let Some(r) = runs {
             // A measure of the narrowest width is never shown: none of its lines needs shaping.
-            let near = r.edit && !r.ascii.narrow(r.max_width) && (j < EAGER_START || j + EAGER_END >= lines);
+            let near = r.edit && !r.ascii.narrow(r.max_width) && (j < r.eager.0 || j + r.eager.1 >= lines);
             let floor = run.map_or(0.0, |r| r.3);
             let printable = known.map(|f| f & PRINTABLE != 0);
             let fits = if near || words.is_empty() || printable == Some(false) { None } else if r.ascii.narrow(r.max_width) { r.ascii.narrowest(words, floor) } else { r.ascii.one_line(words, r.max_width, floor, printable == Some(true)) };

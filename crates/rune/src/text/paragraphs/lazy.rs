@@ -10,6 +10,8 @@ use super::*;
 /// style's one line exactly and nothing moves when its layout lands.
 pub(crate) struct Lazy {
     pub(super) content: Rc<str>,
+    pub(super) spans: Rc<[Span]>,
+    pub(super) disjoint_spans: bool,
     pub(super) style: TextStyle,
     pub(super) scale: f32,
     pub(super) wrap_anywhere: bool,
@@ -200,7 +202,8 @@ impl TextSystem {
             }
             let p = &mut paragraphs[k];
             let words = &lazy.content[p.start..p.end];
-            let l = self.layout_keyed(Some(p.key), words, &[], &[], &[], lazy.style, lazy.scale, laid.max_width, laid.align, lazy.wrap_anywhere, false, Keep::Owned, p.flow.base());
+            let spans: Vec<Span> = spans_in(&lazy.spans, p.start, p.end, &[], lazy.disjoint_spans).collect();
+            let l = self.layout_keyed(Some(p.key), words, &spans, &[], &[], lazy.style, lazy.scale, laid.max_width, laid.align, lazy.wrap_anywhere, false, Keep::Owned, p.flow.base());
             moved |= l.height() != p.height;
             (p.height, p.widths, p.layout, p.shaped) = (l.height(), [l.width(), l.full_width()], l, true);
             shaped_any = true;
@@ -225,8 +228,12 @@ impl TextSystem {
             newline: laid.newline, blank_box: laid.blank_box, disjoint_spans: laid.disjoint_spans, keyed, lazy: left.then_some(lazy.clone()),
         });
         let g = self.generation;
-        self.paragraphs.insert(lazy.cache_key, Entry::new(built.clone(), g, built.paragraphs.len() * size_of::<Paragraph>() / 64, built.whole));
-        if self.last_paragraphs.as_ref().is_some_and(|l| std::ptr::eq(&**l, laid)) { self.last_paragraphs = Some(built.clone()); }        Some((built, moved))
+        let shaped_bytes: usize = built.paragraphs.iter().filter(|p| p.shaped).map(|p| p.end - p.start).sum();
+        let shaped_n = built.paragraphs.iter().filter(|p| p.shaped).count();
+        let cost = shaped_bytes + shaped_n.saturating_sub(1) * 32 + built.paragraphs.len() * size_of::<Paragraph>() / 64;
+        self.paragraphs.insert(lazy.cache_key, Entry::new(built.clone(), g, cost, built.whole));
+        if self.last_paragraphs.as_ref().is_some_and(|l| std::ptr::eq(&**l, laid)) { self.last_paragraphs = Some(built.clone()); }
+        Some((built, moved))
     }
 }
 
@@ -252,9 +259,11 @@ fn split_run(lazy: &Lazy, max_width: Option<f32>, paragraphs: &[Paragraph], k: u
     // The run gathered before `a` or after `b`: its first byte, its lines and its widest line's width.
     let mut run: Option<(usize, u32, f32)> = None;
     let mut at = r.start;
-    for (j, words) in lazy.content[r.start..r.end].split('\n').enumerate() {
+    for (j, raw) in lazy.content[r.start..r.end].split('\n').enumerate() {
+        let raw_len = raw.len();
+        let words = if at + raw_len < r.end { raw.strip_suffix('\r').unwrap_or(raw) } else { raw };
         let (s, e) = (at, at + words.len());
-        at = e + 1;
+        at += raw_len + 1;
         // Printable ASCII, as every line of a run is: its letters are its strong characters.
         flow = lazy.forced.or_else(|| words.bytes().any(|c| c.is_ascii_alphabetic()).then_some(Flow::Ltr)).unwrap_or(flow);
         if j < a || j >= b {
@@ -266,6 +275,9 @@ fn split_run(lazy: &Lazy, max_width: Option<f32>, paragraphs: &[Paragraph], k: u
                 run = None;
                 let mut hs = hash::KeyHasher::default();
                 (&lazy.content[start..e], lazy.style_key, flow == Flow::Rtl, lines, "run").hash(&mut hs);
+                for sp in spans_in(&lazy.spans, start, e, &[], lazy.disjoint_spans) {
+                    (sp.start, sp.end).hash(&mut hs);
+                }
                 let height = (f64::from(lines) * f64::from(h)) as f32;
                 out.push(Paragraph { start, end: e, y: y.round() as f32, y_frac: 0.0, height, widths: [widest, widest], flow, key: hs.finish(), isolates: Box::default(), layout: r.layout.clone(), shaped: false, lines, run: true });
                 y += f64::from(height);
@@ -274,6 +286,9 @@ fn split_run(lazy: &Lazy, max_width: Option<f32>, paragraphs: &[Paragraph], k: u
         }
         let mut hs = hash::KeyHasher::default();
         (words, lazy.style_key, flow == Flow::Rtl, Block::Paragraph).hash(&mut hs);
+        for sp in spans_in(&lazy.spans, s, e, &[], lazy.disjoint_spans) {
+            (sp.start, sp.end, sp.mono, sp.weight.map(f32::to_bits), sp.size.map(f32::to_bits), sp.italic).hash(&mut hs);
+        }
         let (height, w) = lazy.ascii.one_line(words, max_width, 0.0, true).unwrap_or((h, 0.0));
         out.push(Paragraph { start: s, end: e, y: y.round() as f32, y_frac: 0.0, height, widths: [w, w], flow, key: hs.finish(), isolates: Box::default(), layout: r.layout.clone(), shaped: false, lines: 1, run: false });
         y += f64::from(height);

@@ -18,18 +18,43 @@ impl<S: 'static> Runtime<S> {
         self.fill_text_within(std::time::Duration::MAX, Some(1.0));
     }
 
+    /// Whether any painted text still has unshaped paragraphs needing a background fill frame:
+    /// every waiting paragraph for an input field, or those within a viewport's height of the
+    /// painted clip for a read-only `by_line` block (whose off-screen lines stay compact runs).
+    pub(super) fn text_fill_due(&self) -> bool {
+        self.text_rows.iter().any(|(&id, &(r0, r1))| {
+            let Some(&i) = self.node_index.get(&id) else { return false };
+            let Some(crate::text::TextLayout::Paragraphs(p)) = &self.nodes[i].text_layout else { return false };
+            if !p.waiting() { return false; }
+            if self.nodes[i].input.is_some() { return true; }
+            let reach = (r1 - r0).max(0.0) + 1.0;
+            p.paragraphs.iter().any(|q| !q.shaped && q.y + q.height >= r0 - reach && q.y <= r1 + reach)
+        })
+    }
+
     fn fill_text_within(&mut self, budget: std::time::Duration, reach: Option<f32>) -> bool {
         let mut more = false;
         for i in 0..self.nodes.len() {
-            if self.nodes[i].input.is_none() { continue; }
+            let is_input = self.nodes[i].input.is_some();
             let Some(crate::text::TextLayout::Paragraphs(p)) = &self.nodes[i].text_layout else { continue };
             if !p.waiting() { continue; }
-            let p = p.clone();
             let id = self.nodes[i].id;
-            let rows = self.text_rows.get(&id).copied().unwrap_or((0.0, 0.0));
-            let reach = reach.map_or(f32::INFINITY, |k| (rows.1 - rows.0).max(0.0) * k + 1.0);
-            let Some((built, moved)) = self.text.fill_paragraphs(&p, budget, rows, reach) else { continue };
-            more |= built.waiting();
+            let rows = match (is_input, self.text_rows.get(&id).copied()) {
+                (true, r) => r.unwrap_or((0.0, 0.0)),
+                (false, Some(r)) => r,
+                (false, None) => continue,
+            };
+            let p = p.clone();
+            let eff_reach = match (is_input, reach) {
+                (true, None) => f32::INFINITY,
+                (_, r) => (rows.1 - rows.0).max(0.0) * r.unwrap_or(1.0) + 1.0,
+            };
+            let Some((built, moved)) = self.text.fill_paragraphs(&p, budget, rows, eff_reach) else { continue };
+            if is_input {
+                more |= built.waiting();
+            } else {
+                more |= built.paragraphs.iter().any(|q| !q.shaped && q.y + q.height >= rows.0 - eff_reach && q.y <= rows.1 + eff_reach);
+            }
             let n = &mut self.nodes[i];
             n.text_layout = Some(crate::text::TextLayout::Paragraphs(built));
             n.epoch = paint_keep::next_epoch();
@@ -40,7 +65,13 @@ impl<S: 'static> Runtime<S> {
                 self.dirty = true;
             }
         }
-        if !more { self.text_rows.clear(); }
+        let nodes = &self.nodes;
+        let idx = &self.node_index;
+        self.text_rows.retain(|id, _| {
+            idx.get(id)
+                .and_then(|&i| nodes[i].text_layout.as_ref())
+                .is_some_and(|l| matches!(l, crate::text::TextLayout::Paragraphs(p) if p.waiting()))
+        });
         more
     }
 }

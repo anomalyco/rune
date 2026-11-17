@@ -605,18 +605,21 @@ impl TextSystem {
         // This text laid out at another width measuring asked for this commit: a paragraph
         // neither keeps is broken again from it rather than shaped twice.
         let other = self.last_paragraphs.clone().filter(|o| o.whole == whole && (o.max_width != max_width || o.align != align));
-        let (built, fresh) = self.lay_out_paragraphs(spec, scale, max_width, align, (whole, key), prev.as_deref(), other.as_deref());
+        let (built, fresh) = self.lay_out_paragraphs(spec, input, scale, max_width, align, (whole, key), prev.as_deref(), other.as_deref());
         let built = Rc::new(built);
         self.last_paragraphs = Some(built.clone());
-        // It holds what it shaped or broke anew; the paragraphs it kept are its last layout's.
-        self.paragraphs.insert(key, Entry::new(built.clone(), g, fresh + built.paragraphs.len() * size_of::<Paragraph>() / 64, whole));
+        // Count LAYOUT_BASE (32 * LAYOUT_PER_BYTE) once per shaped line, not once per entry.
+        let shaped_n = built.paragraphs.iter().filter(|p| p.shaped).count();
+        let cost = fresh + shaped_n.saturating_sub(1) * 32 + built.paragraphs.len() * size_of::<Paragraph>() / 64;
+        self.paragraphs.insert(key, Entry::new(built.clone(), g, cost, whole));
         TextLayout::Paragraphs(built)
     }
 
     /// Lays out each of `spec`'s paragraphs, keeping `prev`'s layout of each it still has: those
     /// before an edit and after it. A paragraph is the same when its words, the spans and pills
     /// over them that shape them, its block and its direction are.
-    fn lay_out_paragraphs(&mut self, spec: &TextSpec, scale: f32, max_width: Option<f32>, align: Alignment, (whole, cache_key): (u64, u64), prev: Option<&ParagraphLayout>, other: Option<&ParagraphLayout>) -> (ParagraphLayout, usize) {
+    #[allow(clippy::too_many_arguments)]
+    fn lay_out_paragraphs(&mut self, spec: &TextSpec, input: bool, scale: f32, max_width: Option<f32>, align: Alignment, (whole, cache_key): (u64, u64), prev: Option<&ParagraphLayout>, other: Option<&ParagraphLayout>) -> (ParagraphLayout, usize) {
         let (content, style) = (spec.content.as_str(), spec.style);
         let style_key = {
             let mut h = hash::KeyHasher::default();
@@ -639,9 +642,12 @@ impl TextSystem {
         // A min-content measure of a text whose lines wait keys an edit's lines into runs too,
         // however few: none of them is shown, and its run held them as one record.
         let measuring = prev.is_some_and(|p| p.waiting()) && max_width.is_some_and(|m| m < style.line_px() * scale);
-        let ascii = (!spec.by_line && plain && (measuring || edited > LAZY_MIN * 8 && count_newlines(&bytes[at..at + edited]) > LAZY_MIN))
+        let color_only = spec.spans.iter().all(|s| !s.mono && s.weight.is_none() && s.size.is_none() && !s.italic && s.bg.is_none() && s.underline.is_none());
+        let can_lazy = spec.cold.pills.is_empty() && spec.cold.blocks.iter().all(|&b| b == Block::Paragraph) && (plain || (spec.by_line && color_only));
+        let ascii = (can_lazy && (measuring || edited > LAZY_MIN * 8 && count_newlines(&bytes[at..at + edited]) > LAZY_MIN))
             .then(|| self.ascii_line(style, scale, spec.wrap_anywhere)).flatten();
-        let runs = ascii.as_deref().map(|m| Runs { ascii: m, max_width, edit: true });
+        let (eager_s, eager_e) = if spec.by_line { (48, 48) } else { (EAGER_START, EAGER_END) };
+        let runs = ascii.as_deref().map(|m| Runs { ascii: m, max_width, edit: true, eager: (eager_s, eager_e) });
         match tail.first().map(|t| t.0) {
             Some(t) => {
                 let sep = if t >= 2 && bytes.get(t - 2) == Some(&b'\r') { 2 } else { 1 };
@@ -673,14 +679,16 @@ impl TextSystem {
                     let m = match &ascii { Some(m) => Some(m.clone()), None => self.ascii_line(style, scale, spec.wrap_anywhere) };
                     let mut again = Vec::new();
                     let from = items.last().map_or(start_flow, |(f, _)| f.2);
-                    key_paragraphs(spec, style_key, disjoint_spans, f.0, f.1, from, forced, m.as_deref().map(|m| Runs { ascii: m, max_width, edit: false }), &mut self.line_scan, &mut again);
+                    key_paragraphs(spec, style_key, disjoint_spans, f.0, f.1, from, forced, m.as_deref().map(|m| Runs { ascii: m, max_width, edit: false, eager: (eager_s, eager_e) }), &mut self.line_scan, &mut again);
                     items.extend(again.into_iter().map(|f| (f, None)));
                 }
                 _ => items.push((f, kept)),
             }
         }
+        let items_len = items.len();
+        let pretty = spec.by_line && spec.pretty() && !input;
         let mut waiting = 0;
-        let (mut paragraphs, mut y) = (Vec::with_capacity(items.len()), 0.0f64);
+        let (mut paragraphs, mut y) = (Vec::with_capacity(items_len), 0.0f64);
         let (mut width, mut full_width, mut fresh) = (0.0f32, 0.0f32, 0);
         for (k, ((a, b, flow, key, isolates, run), kept)) in items.into_iter().enumerate() {
             let block = spec.cold.blocks.get(k).copied().unwrap_or(Block::Paragraph);
@@ -722,21 +730,23 @@ impl TextSystem {
                     let text: Cow<str> = if isolates.is_empty() { Cow::Borrowed(words) } else { Cow::Owned(with_isolates(words, &isolates)) };
                     let spans: Vec<Span> = spans_in(&spec.spans, a, b, &isolates, disjoint_spans).collect();
                     let pills: Vec<PillChip> = pills_in(&spec.cold.pills, a, b, &isolates).collect();
-                    self.layout_keyed(Some(key), &text, &spans, blocks, &pills, style, scale, max_width, align, spec.wrap_anywhere, spec.pretty(), Keep::Owned, flow.base())
+                    self.layout_keyed(Some(key), &text, &spans, blocks, &pills, style, scale, max_width, align, spec.wrap_anywhere, pretty, Keep::Owned, flow.base())
                 }
             };
+            // Parley leaves out an empty trailing line after `\n` in a single layout (`"a\n"` is 1 line tall).
+            let empty_h = if spec.by_line && items_len > 1 && k + 1 == items_len { 0.0 } else { layout.height().max(line) };
             // A paragraph kept as it was keeps its measures too: touching 2,000 layouts to read
             // them again costs more than the edit.
             let (mut height, mut widths) = match (kept, again) {
-                (Some(o), None) => (o.height, o.widths),
-                _ => (if a == b { layout.height().max(line) } else { layout.height() }, [layout.width(), layout.full_width()]),
+                (Some(o), None) if !(a == b && (o.height == 0.0) != (empty_h == 0.0)) => (o.height, o.widths),
+                _ => (if a == b { empty_h } else { layout.height() }, [layout.width(), layout.full_width()]),
             };
             let want_frac = if layout.len() > 1 { (y - y.floor()) as f32 } else { 0.0 };
             let have_frac = match (kept, again) { (Some(o), None) => o.y_frac, _ => 0.0 };
             if (want_frac - have_frac).abs() > 1e-5 {
                 line_break::rebreak_at_y(Rc::make_mut(&mut layout), blocks, style.size, scale, max_width, align, f64::from(want_frac));
                 self.layout_ids.build(&layout);
-                (height, widths) = (if a == b { layout.height().max(line) } else { layout.height() }, [layout.width(), layout.full_width()]);
+                (height, widths) = (if a == b { empty_h } else { layout.height() }, [layout.width(), layout.full_width()]);
             }
             let py = if want_frac != 0.0 { y.floor() as f32 } else { y.round() as f32 };
             (width, full_width) = (width.max(widths[0]), full_width.max(widths[1]));
@@ -753,6 +763,8 @@ impl TextSystem {
         let keyed = plain.then(|| Keyed { content: shared.unwrap_or_else(|| Rc::from(content)), style_key, start_flow });
         let lazy = (waiting > 0).then(|| self.ascii_line(style, scale, spec.wrap_anywhere)).flatten().map(|ascii| Rc::new(Lazy {
             content: keyed.as_ref().map_or_else(|| Rc::from(content), |k| k.content.clone()),
+            spans: if spec.spans.is_empty() { Rc::from(&[][..]) } else { Rc::from(spec.spans.as_slice()) },
+            disjoint_spans,
             style, scale, wrap_anywhere: spec.wrap_anywhere, cache_key, style_key, forced, start_flow, ascii,
         }));
         (ParagraphLayout { paragraphs, width, full_width, height: y as f32, max_width, align, whole, newline, blank_box, disjoint_spans, keyed, lazy }, fresh)
