@@ -96,7 +96,8 @@ impl FillPass {
     }
 
     /// Records the fills `stage` wrote into `encoder`: one pass a page, each drawing into it.
-    fn encode(&self, encoder: &mut wgpu::CommandEncoder, pages: &[(&wgpu::Texture, std::ops::Range<u32>)]) {
+    fn encode<'t>(&self, encoder: &mut wgpu::CommandEncoder, pages: &[(&wgpu::Texture, std::ops::Range<u32>)],
+        timer: &dyn Fn(&wgpu::TextureView) -> Option<wgpu::RenderPassTimestampWrites<'t>>) {
         for (texture, range) in pages {
             let at = u64::from((texture.height() / ATLAS_START_ROWS).max(1).ilog2()) * 16;
             encoder.copy_buffer_to_buffer(&self.projections, at, &self.projection, 0, 16);
@@ -110,7 +111,7 @@ impl FillPass {
                     ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
                 })],
                 depth_stencil_attachment: None,
-                timestamp_writes: None,
+                timestamp_writes: timer(&view),
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
@@ -198,7 +199,7 @@ impl Renderer {
             let texture = if *page == 0 { Some(&self.atlas) } else { self.atlas_pages.get(page - 1).map(|p| &p.0) };
             texture.map(|t| (t, range.clone()))
         }).collect();
-        fill.encode(encoder, &pages);
+        fill.encode(encoder, &pages, &|view| self.pass_times("atlas fill", view));
     }
 
     /// Submits the fills `prepare` staged on their own, the uploads ahead of them, for a draw

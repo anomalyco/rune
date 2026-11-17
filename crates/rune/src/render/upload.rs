@@ -224,6 +224,8 @@ impl Renderer {
     fn prepare_with_precision(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, atlas: &mut Atlas,
         instances: &[Instance], viewport: (u32, u32), byte_source: bool) {
         if self.springs.is_some() { assert_eq!(instances.len(), self.spring_instances); }
+        #[cfg(feature = "frame-profile")]
+        self.gpu_timer.get_or_init(|| super::gpu_timer::GpuTimer::new(device, queue));
         let staging = self.uploads.staging(device, queue);
         if staging.lost() != self.uploads.lost.0 {
             self.uploads.lost.0 = staging.lost();

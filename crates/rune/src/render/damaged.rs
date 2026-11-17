@@ -153,6 +153,7 @@ impl Renderer {
     pub(crate) fn draw_armed(&self, encoder: &mut wgpu::CommandEncoder, dst: &wgpu::Texture) -> bool {
         let mut d = self.damage.lock().unwrap();
         if d.armed.is_empty() { return false; }
+        if super::Renderer::cut("kept") { d.armed.clear(); d.drawn = Some(Err("cut")); return false; }
         if let Err(why) = self.redraws_in_place() {
             d.drawn = Some(Err(why));
             return false;
@@ -179,7 +180,7 @@ impl Renderer {
                     ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
                 })],
                 depth_stencil_attachment: None,
-                timestamp_writes: None,
+                timestamp_writes: self.pass_times("frame (damage)", &kept.view),
                 occlusion_query_set: None,
                 multiview_mask: None,
             });

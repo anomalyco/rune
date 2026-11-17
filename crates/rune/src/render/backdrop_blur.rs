@@ -317,7 +317,8 @@ impl BackdropBlur {
     }
 
     /// Records the pyramid passes for `record`, reading the backdrop of `format`.
-    fn encode(&self, encoder: &mut wgpu::CommandEncoder, format: wgpu::TextureFormat, record: &Record) {
+    fn encode<'t>(&self, encoder: &mut wgpu::CommandEncoder, format: wgpu::TextureFormat, record: &Record,
+        timer: &dyn Fn(&wgpu::TextureView) -> Option<wgpu::RenderPassTimestampWrites<'t>>) {
         let (Some(pyramid), Some((_, first))) = (&self.pyramid, self.first.iter().find(|(f, _)| *f == format)) else { return };
         let [pw, ph] = pyramid.size;
         let ([x0, y0, x1, y1], [ox, oy]) = (record.region, record.origin);
@@ -342,7 +343,7 @@ impl BackdropBlur {
                     ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
                 })],
                 depth_stencil_attachment: None,
-                timestamp_writes: None,
+                timestamp_writes: timer(dst),
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
@@ -437,6 +438,7 @@ impl Renderer {
     /// element shows only its fill) when the pass can't be split or the record wasn't prepared.
     pub(super) fn draw_backdrop_blur(&self, pass: &mut ActivePass<'_, '_>, format: wgpu::TextureFormat, at: u32, instance: &Instance, target: Option<usize>) {
         let Some(blur) = &self.backdrop_blur else { return };
+        if super::Renderer::cut("blur") { return; }
         let Ok(k) = blur.records.binary_search_by_key(&at, |r| r.at) else { return };
         let record = &blur.records[k];
         let (Some((_, composite)), Some(pyramid)) = (blur.composites.iter().find(|(f, _)| *f == format), &blur.pyramid) else { return };
@@ -448,7 +450,7 @@ impl Renderer {
         if x1 <= x0 || y1 <= y0 { return; }
         let shift = record.origin.map(|v| v as u32);
         let split = pass.split(self, format, origin, size, target.is_some(), Some(record.region), shift, |encoder, backdrop| {
-            blur.encode(encoder, backdrop.format, record);
+            blur.encode(encoder, backdrop.format, record, &|dst| self.pass_times("backdrop blur level", dst));
         });
         if split.is_none() { return; }
         let scope = pass.scissor();

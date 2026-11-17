@@ -413,7 +413,7 @@ impl Renderer {
                     vis: [0.0; 4],
                     clip: i.clip,
                     limit,
-                    fade: i.fade,
+                    fade: if super::Renderer::cut("fade") { [0; 4] } else { i.fade },
                     opacity,
                     blend: if i.params[0] == 1.0 { Blend::PlusLighter } else { Blend::SourceOver },
                     blur,
@@ -653,6 +653,7 @@ impl Renderer {
         let isolation = shown().any(|(index, _)| self.isolates(index));
         let plus_lighter = shown().any(|(_, l)| l.blend == Blend::PlusLighter);
         let blur = shown().any(|(_, l)| l.blur > 0.0);
+        if super::Renderer::cut("layers") { return false; }
         if !isolation && !plus_lighter && !blur && !self.breakers.checking() { return false; }
         self.check_features(device, |feature| match feature {
             breaker::Feature::Isolation => isolation,
@@ -813,10 +814,13 @@ impl Renderer {
                     view: &target.view, depth_slice: None, resolve_target: None,
                     ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
                 })], depth_stencil_attachment: None,
-                timestamp_writes: if first { timestamps.map(|t| wgpu::RenderPassTimestampWrites {
-                    query_set: t.query_set, beginning_of_pass_write_index: t.beginning_of_pass_write_index,
-                    end_of_pass_write_index: None,
-                }) } else { None },
+                timestamp_writes: match timestamps.filter(|_| first) {
+                    Some(t) => Some(wgpu::RenderPassTimestampWrites {
+                        query_set: t.query_set, beginning_of_pass_write_index: t.beginning_of_pass_write_index,
+                        end_of_pass_write_index: None,
+                    }),
+                    None => self.pass_times("layer", &target.view),
+                },
                 occlusion_query_set: None, multiview_mask: None,
             }).forget_lifetime();
             first = false;

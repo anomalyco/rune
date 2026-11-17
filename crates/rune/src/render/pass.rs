@@ -174,7 +174,7 @@ impl<'a, 'p> ActivePass<'a, 'p> {
                     ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
                 })],
                 depth_stencil_attachment: None,
-                timestamp_writes: None,
+                timestamp_writes: renderer.pass_times("backdrop clear", &bd.view),
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
@@ -229,11 +229,14 @@ impl<'a, 'p> ActivePass<'a, 'p> {
                 ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
             })],
             depth_stencil_attachment: None,
-            timestamp_writes: timestamps.as_ref().filter(|t| t.end_of_pass_write_index.is_some()).map(|t| wgpu::RenderPassTimestampWrites {
-                query_set: t.query_set,
-                beginning_of_pass_write_index: None,
-                end_of_pass_write_index: t.end_of_pass_write_index,
-            }),
+            timestamp_writes: match timestamps.as_ref().filter(|t| t.end_of_pass_write_index.is_some()) {
+                Some(t) => Some(wgpu::RenderPassTimestampWrites {
+                    query_set: t.query_set,
+                    beginning_of_pass_write_index: None,
+                    end_of_pass_write_index: t.end_of_pass_write_index,
+                }),
+                None => renderer.pass_times(if in_layer { "layer after a backdrop" } else { "frame after a backdrop" }, view),
+            },
             occlusion_query_set: None,
             multiview_mask: None,
         }).forget_lifetime();

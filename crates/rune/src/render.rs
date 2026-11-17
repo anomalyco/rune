@@ -25,6 +25,8 @@ mod fill;
 #[doc(hidden)]
 pub use fill::FillDrift;
 mod first_use;
+#[cfg(feature = "frame-profile")]
+mod gpu_timer;
 pub(crate) mod gpu_events;
 mod gpu_loss;
 pub(crate) mod layer_blur;
@@ -502,6 +504,9 @@ impl Gpu {
         // Precompiled uber shaders: a metallib on macOS, DXBC on Windows.
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         let optional_features = optional_features | wgpu::Features::PASSTHROUGH_SHADERS;
+        // `RUNE_GPU_LOG` times the copies after a frame's last pass too (`gpu_timer`).
+        #[cfg(feature = "frame-profile")]
+        let optional_features = optional_features | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS;
         let required_features = adapter.features() & optional_features;
         // A compositor that asks for immediates (`Compositor::features`) gets all the adapter has.
         let max_immediate_size = if required_features.contains(wgpu::Features::IMMEDIATES) { adapter.limits().max_immediate_size } else { 0 };
@@ -802,6 +807,9 @@ pub struct Renderer {
     /// The device's largest 2D texture, read once: in a browser each `Device::limits` reads every
     /// limit from JavaScript (about 35 µs), which a frame's layers used to pay.
     max_texture_dim: u32,
+    /// Frame-profile builds: the timestamp queries of `RUNE_GPU_LOG` (`gpu_timer`), made by the first prepare.
+    #[cfg(feature = "frame-profile")]
+    gpu_timer: std::sync::OnceLock<Option<gpu_timer::GpuTimer>>,
     /// The one instance per rectangle that clears a damaged one (`arm_damage`), made on first use.
     #[cfg(any(target_os = "windows", target_arch = "wasm32"))]
     clear_quad: std::sync::OnceLock<wgpu::Buffer>,
@@ -922,7 +930,7 @@ impl Renderer {
                 ops: wgpu::Operations { load, store: wgpu::StoreOp::Store },
             })],
             depth_stencil_attachment: None,
-            timestamp_writes: None,
+            timestamp_writes: self.pass_times("frame", view),
             occlusion_query_set: None,
             multiview_mask: None,
         }).forget_lifetime();
@@ -996,6 +1004,30 @@ impl Renderer {
     /// The format of the target the renderer was built for (`draw_range` with this format).
     pub fn format(&self) -> wgpu::TextureFormat { self.format }
 
+    /// Frame-profile builds: whether `RUNE_CUT` (a comma list) leaves `name` out of every frame,
+    /// for measuring what it costs: `blur` (backdrop blurs: the element shows its fill), `layers`
+    /// (each group draws in its parent), `fade` (fades don't isolate or fade), `kept` (partial frames
+    /// draw whole, straight into the drawable). The picture is wrong with any of them.
+    #[cfg_attr(not(feature = "frame-profile"), allow(unused_variables))]
+    pub(super) fn cut(name: &str) -> bool {
+        #[cfg(feature = "frame-profile")]
+        {
+            static CUT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+            return CUT.get_or_init(|| std::env::var("RUNE_CUT").unwrap_or_default()).split(',').any(|c| c.trim() == name);
+        }
+        #[cfg(not(feature = "frame-profile"))]
+        false
+    }
+
+    /// Frame-profile builds with `RUNE_GPU_LOG`: timestamps for one more pass into `view`.
+    #[cfg_attr(not(feature = "frame-profile"), allow(unused_variables))]
+    pub(super) fn pass_times(&self, label: &'static str, view: &wgpu::TextureView) -> Option<wgpu::RenderPassTimestampWrites<'_>> {
+        #[cfg(feature = "frame-profile")]
+        return self.gpu_timer.get()?.as_ref()?.writes(label, gpu_timer::target_bytes(view));
+        #[cfg(not(feature = "frame-profile"))]
+        None
+    }
+
     /// True when colours are sRGB-encoded for blending: the target is a non-sRGB view and every
     /// pass, offscreen layers included, holds encoded premultiplied values. False means linear
     /// premultiplied values, encoded by the `*Srgb` target on write.
@@ -1003,7 +1035,12 @@ impl Renderer {
 
     pub fn submit(&self, queue: &wgpu::Queue, mut encoder: wgpu::CommandEncoder) -> wgpu::SubmissionIndex {
         self.before_submit(&mut encoder);
-        if let Some(s) = &self.surfaces { s.submit(queue,encoder) } else { queue.submit([encoder.finish()]) }
+        #[cfg(feature = "frame-profile")]
+        if let Some(Some(t)) = self.gpu_timer.get() { t.resolve(&mut encoder); }
+        let index = if let Some(s) = &self.surfaces { s.submit(queue,encoder) } else { queue.submit([encoder.finish()]) };
+        #[cfg(feature = "frame-profile")]
+        if let Some(Some(t)) = self.gpu_timer.get() { t.submitted(); }
+        index
     }
 
     /// Whether `submit` is `queue.submit` after `before_submit` and nothing more: no native video
@@ -1052,7 +1089,7 @@ impl Renderer {
                 ops: wgpu::Operations { load, store: wgpu::StoreOp::Store },
             })],
             depth_stencil_attachment: None,
-            timestamp_writes: timestamps.clone(),
+            timestamp_writes: timestamps.clone().or_else(|| self.pass_times("frame", view)),
             occlusion_query_set: None,
             multiview_mask: None,
         });

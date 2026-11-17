@@ -93,6 +93,8 @@ impl Renderer {
             uploads: Default::default(),
             fills: Default::default(),
             device_key: crate::compose::DeviceKey::next(),
+            #[cfg(feature = "frame-profile")]
+            gpu_timer: Default::default(),
             max_texture_dim: device.limits().max_texture_dimension_2d,
             #[cfg(any(target_os = "windows", target_arch = "wasm32"))]
             clear_quad: std::sync::OnceLock::new(),
