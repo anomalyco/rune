@@ -204,6 +204,7 @@ impl<S: 'static> Runtime<S> {
     }
 
     pub fn pointer_down(&mut self, x: f32, y: f32) {
+        crate::text::probe_note(format_args!("press queued={}", crate::text::TextSystem::prepare_queued(std::any::TypeId::of::<S>())));
         self.text.prepare_stop();
         self.press_down(x, y, false);
     }

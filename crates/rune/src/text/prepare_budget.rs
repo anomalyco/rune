@@ -94,7 +94,9 @@ impl TextSystem {
             if cost > q.left { q.items.clear(); break; }
             q.left -= cost;
             let Some(p) = q.items.pop_front() else { break };
+            let t0 = Instant::now();
             drop(self.layout_keyed(p.shape, &p.text, &p.spans, &p.blocks, &p.pills, p.style, p.scale, p.max_width, p.align, p.wrap_anywhere, p.pretty, Keep::Cached, p.base));
+            super::probe_note(format_args!("one us={:.0} len={}", t0.elapsed().as_secs_f64() * 1e6, p.text.len()));
             shaped += 1;
         }
         if q.items.is_empty() { self.keep_prepared(&q.before, q.keep); } else { QUEUE.set(Some(q)); }
@@ -126,6 +128,14 @@ impl TextSystem {
         base: BaseDirection,
     ) -> Option<Rc<Layout<Ink>>> {
         let late = PASS.with_borrow(|p| p.as_ref().is_some_and(|p| Instant::now() >= p.until));
+        if PASS.with_borrow(|p| p.is_some()) && !late && !text.is_empty() {
+            let t0 = Instant::now();
+            let pass = PASS.take();
+            let l = self.layout_keyed(shape, text, spans, blocks, pills, style, scale, max_width, align, wrap_anywhere, pretty, Keep::Cached, base);
+            PASS.set(pass);
+            super::probe_note(format_args!("one us={:.0} len={} first", t0.elapsed().as_secs_f64() * 1e6, text.len()));
+            return Some(l);
+        }
         if !late || text.is_empty() { return None; }
         let pending = Pending {
             shape,
