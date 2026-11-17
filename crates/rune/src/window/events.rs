@@ -203,6 +203,16 @@ impl<S: 'static> Host<S> {
 
     pub(super) fn handle_window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
         if self.win.as_ref().is_none_or(|w| w.window.id() != id) {
+            // Measuring only: an event for a window this host doesn't hold (which one, and which it holds).
+            #[cfg(feature = "frame-profile")]
+            {
+                static FOREIGN: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+                if FOREIGN.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 50 {
+                    let held = self.win.as_ref().map(|w| format!("{:?}", w.window.id())).unwrap_or_else(|| "none".into());
+                    let kind = format!("{event:?}");
+                    crate::frame::live_log::mark(&format!("event.foreign {} for {id:?}, holds {held}", kind.split(|c: char| !c.is_alphanumeric()).next().unwrap_or("?")));
+                }
+            }
             return;
         }
         // Measuring only: the first 400 window events, by kind.
