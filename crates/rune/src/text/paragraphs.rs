@@ -543,6 +543,10 @@ impl TextSystem {
             let style = (&spec.content, &spec.spans, &spec.cold.blocks);
             return TextLayout::Single(self.layout_keyed(shape, style.0, style.1, style.2, &[], spec.style, scale, max_width, align, spec.wrap_anywhere, false, Keep::Cached, base));
         }
+        // Past a prepare's slice, a text laid out by paragraph is left out of it.
+        if let Some(empty) = self.prepare_skip(spec.style, scale, align, forced.unwrap_or(spec.plaintext_flow()).base()) {
+            return TextLayout::Single(empty);
+        }
         let whole = spec.shape_key(scale).unwrap_or_else(|| spec.fresh_shape_key(scale));
         // Lines with no strong character take the element's flow, so it keys the whole too.
         let whole = if forced.unwrap_or(spec.plaintext_flow()) == Flow::Rtl { whole ^ 0x3c6e_f372_fe94_f82b } else { whole };

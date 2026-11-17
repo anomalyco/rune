@@ -252,6 +252,7 @@ impl<S: 'static> Runtime<S> {
         }
         if let Some(mode) = tx.font_smoothing.take() { self.set_font_smoothing(mode); }
         if let Some((sans, mono)) = tx.font_families.take() { self.set_font_families(&sans, &mono); }
+        if let Some((view, size)) = tx.prepare.take() { self.text.prepare_request(view, size); }
         if let Some(srgb) = tx.srgb_blend.take() { self.set_srgb_blend(srgb); }
         if let Some(rewind) = tx.rewind.take() { self.rewind = rewind; }
         if std::mem::take(&mut tx.blur) {

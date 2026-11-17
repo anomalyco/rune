@@ -98,6 +98,8 @@ pub struct Tx {
     pub(crate) rewind: Option<Option<crate::rewind::Rewind>>,
     pub(crate) font_smoothing: Option<crate::text::FontSmoothing>,
     pub(crate) font_families: Option<(String, String)>,
+    /// `Tx::prepare_text`: the view, boxed, and its size in points if not the window's.
+    pub(crate) prepare: Option<(std::rc::Rc<dyn std::any::Any>, Option<(f32, f32)>)>,
     pub(crate) blur: bool,
     /// `Tx::focus` and `Tx::return_focus`: the key, whether its ring shows, and which asked.
     pub(crate) focus_to: Option<(String, bool, FocusAsk)>,
@@ -623,34 +625,39 @@ impl Tx {
         self.font_families = Some((sans.into(), mono.into()));
     }
 
-    /// Shapes and breaks the text of `view` into the window's layout cache in its next idle turn,
+    /// Shapes and breaks the text of `view` into this window's layout cache in its idle turns,
     /// laid out as the window would lay it out (at its own size, or at `size` in points), without
     /// mounting it: nothing draws, hits, animates or is announced, and no handler runs. A view shown
-    /// later with the same texts at the same widths finds them laid out. For the most it from the
-    /// window's own root, as the next frame will lay it out (the session under a resting pointer
-    /// shown where the open one is). Prepared layouts no view holds are kept to about 1 MiB by the
-    /// cache's own count, oldest out first, and all go at the window's next rest. One request is
-    /// held, the latest, for the window whose state `view` reads; it never runs on a turn with
-    /// input waiting, and an idle window wakes for it no more once it ran.
+    /// later with the same texts at the same widths finds them laid out. For the most, pass the
+    /// view that will show (the session under a resting pointer shown where the open one is), as
+    /// small as it can be: its first turn measures all of it.
+    ///
+    /// - **Turns:** the first turn measures `view` in scratch and shapes for 1 ms from its start;
+    ///   each later idle turn shapes for 1 ms, stopping between texts. The first turn's measuring
+    ///   (the view, its rows, its layout) can't be cut: it is the floor of what a press in it waits
+    ///   for. On Windows a turn doesn't start while input waits; on macOS and Linux winit hands the
+    ///   queued events before every idle turn, and turns also run between the frames of an
+    ///   animation or a streaming reply, up to one slice each.
+    /// - **What it lays out:** each text node's full layout. Cuts for truncation and line clamps,
+    ///   runs, ink and measures called from view code are shaped for real, outside the slices. A
+    ///   text laid out by paragraph (a multi-line field, a code block shaped per line) is laid
+    ///   out only if the first turn reaches it within its slice; it is never queued.
+    /// - **Bounds:** at most 1 MiB of layouts after the first turn, by the cache's own count; a
+    ///   text that doesn't fit in what is left is skipped. Prepared layouts no view holds are kept
+    ///   to 1 MiB, oldest out first, and all go at the window's next rest.
+    /// - **Scroll and lists:** the scratch pass starts with no scroll offsets or virtual-list
+    ///   state, so a list prepares its rows from its top unless the view places them itself.
+    /// - **What drops it:** a newer request in the same window, a primary press or a key press in
+    ///   the window (before its handlers run; the frame it causes shapes what it needs), a change
+    ///   of the window's viewport or scale, new font families, and the window's rest. Not a right,
+    ///   middle or side click, the wheel, an input-method commit, an accessibility action or
+    ///   programmatic focus: none of them is the press a warm-up is for, so a request survives
+    ///   them. A request made from a key's own handler is held (the drop runs before it).
+    ///
+    /// One request is held per window, the latest; an idle window wakes for it no more once it
+    /// has run.
     pub fn prepare_text<S: 'static>(&mut self, view: fn(&S, &mut crate::Cx<S>) -> crate::El, size: Option<(f32, f32)>) {
-        PREPARE.with_borrow_mut(|a| *a = Some((Box::new(view), size)));
-    }
-
-    /// Takes `prepare_text`'s request if it is for a window of state `S`.
-    pub(crate) fn take_prepared<S: 'static>() -> Option<(fn(&S, &mut crate::Cx<S>) -> crate::El, Option<(f32, f32)>)> {
-        if !Self::prepare_owed::<S>() { return None; }
-        let (view, size) = PREPARE.with_borrow_mut(Option::take)?;
-        Some((*view.downcast::<fn(&S, &mut crate::Cx<S>) -> crate::El>().ok()?, size))
-    }
-
-    /// Drops `prepare_text`'s request, whichever window it is for.
-    pub(crate) fn drop_prepared() {
-        PREPARE.with_borrow_mut(|a| *a = None);
-    }
-
-    /// Whether `prepare_text` holds a request for a window of state `S`.
-    pub(crate) fn prepare_owed<S: 'static>() -> bool {
-        PREPARE.with_borrow(|a| a.as_ref().is_some_and(|(view, _)| view.is::<fn(&S, &mut crate::Cx<S>) -> crate::El>()))
+        self.prepare = Some((std::rc::Rc::new(view), size));
     }
 
     fn frame_request(&mut self, request: crate::window::frame::FrameRequest) {
@@ -752,8 +759,3 @@ impl Tx {
     }
 }
 
-thread_local! {
-    /// `Tx::prepare_text`'s latest request on this thread: the view, boxed, and its size in points
-    /// if not the window's.
-    static PREPARE: std::cell::RefCell<Option<(Box<dyn std::any::Any>, Option<(f32, f32)>)>> = const { std::cell::RefCell::new(None) };
-}

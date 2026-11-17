@@ -120,6 +120,7 @@ use glyph_emit::Face;
 use hidden_axes::hidden_axes;
 use layout_cache::{Cache, Entry};
 pub(crate) use layout_cache::Keep;
+pub(crate) use prepare_budget::NodeLayout;
 pub(crate) use paragraphs::{ParagraphLayout, Piece, TextFlow, TextLayout, common_end, common_start};
 #[cfg(test)]
 use layout_cache::STALE_BYTES;
@@ -187,6 +188,8 @@ pub struct TextSystem {
     layout_cx: LayoutContext<Ink>,
     scale_cx: ScaleContext,
     layouts: Cache<Rc<Layout<Ink>>>,
+    /// This window's `Tx::prepare_text` request and what is left of one begun.
+    prepare: prepare_budget::Prepare,
     /// The `layouts` key of the latest layout of each shaping (see `layout_blocks_inner`), whose
     /// glyphs a new width re-breaks instead of shaping the text again.
     shapes: HashMap<u64, u64>,
@@ -345,6 +348,7 @@ impl TextSystem {
             layout_cx: LayoutContext::new(),
             scale_cx: ScaleContext::new(),
             layouts: Default::default(),
+            prepare: Default::default(),
             shapes: Default::default(),
             superseded: Default::default(),
             elisions: Default::default(),
@@ -645,7 +649,7 @@ impl TextSystem {
             self.shapes.entry(shape_key).or_insert(key);
             return l.clone();
         }
-        if cache && let Some(empty) = self.prepare_defer(shape, text, spans, blocks, pills, style, scale, max_width, align, wrap_anywhere, pretty, base) {
+        if cache && let Some(empty) = self.prepare_defer(shape_key, text, spans, blocks, pills, style, scale, max_width, align, wrap_anywhere, pretty, base) {
             return empty;
         }
         // Each pill's label range, and the room before and after it in device px; boxes keep

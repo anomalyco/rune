@@ -7,8 +7,8 @@
 //! held at a time, the latest; it runs in the window's next idle turn after its first frame, and
 //! none while input waits. Each idle turn works for one [`PREPARE_SLICE`]: the first measures the
 //! view and shapes what it can in its slice, queuing the rest (`text/prepare_budget.rs`); each
-//! later turn shapes queued texts for a slice, up to [`PREPARE_BYTES`] in all. A press or a key
-//! drops the request and what is left of it.
+//! later turn shapes queued texts for a slice, up to [`PREPARE_BYTES`] in all. The request and
+//! its queue are the window's own; a press or a key in it drops them.
 
 use super::*;
 
@@ -25,31 +25,25 @@ pub(crate) const PREPARE_SLICE: std::time::Duration = std::time::Duration::from_
 impl<S: 'static> Runtime<S> {
     /// Whether an idle turn has a view to prepare for this window.
     pub(crate) fn text_idle_owed(&self) -> bool {
-        Tx::prepare_owed::<S>() || crate::text::TextSystem::prepare_queued(std::any::TypeId::of::<S>())
-    }
-
-    /// A press or a key: the request and whatever of it is left go, so the frame it causes shapes
-    /// what it needs, as it would have, and nothing runs after it for a view it may have left.
-    pub(crate) fn stop_prepare(&mut self) {
-        Tx::drop_prepared();
-        self.text.prepare_stop();
+        self.text.prepare_owed()
     }
 
     /// One idle turn's text work: the view asked to be prepared, if any; true while more is owed.
     pub(crate) fn text_idle_turn(&mut self) -> bool {
-        if let Some((view, size)) = Tx::take_prepared::<S>() {
-            self.prepare_text(view, size.unwrap_or(self.viewport));
+        let at = ([self.viewport.0, self.viewport.1], self.env.scale);
+        if let Some((view, size)) = self.text.prepare_take::<fn(&S, &mut Cx<S>) -> El>() {
+            self.prepare_text(view, size.unwrap_or(self.viewport), at);
         } else {
-            self.text.prepare_drain(std::time::Instant::now() + PREPARE_SLICE);
+            self.text.prepare_drain(std::time::Instant::now() + PREPARE_SLICE, at);
         }
         self.text_idle_owed()
     }
 
     /// Measures `view` at `size` (points) with this window's text system and scratch everything
     /// else, then drops it, shaping for one [`PREPARE_SLICE`] from the start and queuing the
-    /// rest. True when nothing was queued.
-    pub(crate) fn prepare_text(&mut self, view: fn(&S, &mut Cx<S>) -> El, size: (f32, f32)) -> bool {
-        self.text.prepare_open(std::time::Instant::now() + PREPARE_SLICE);
+    /// rest for a window at `at` (its viewport and scale).
+    pub(crate) fn prepare_text(&mut self, view: fn(&S, &mut Cx<S>) -> El, size: (f32, f32), at: ([f32; 2], f32)) {
+        let pass = self.text.prepare_open(std::time::Instant::now() + PREPARE_SLICE);
         let before = self.text.layout_keys();
         let (mut nodes, mut spare_nodes, mut layout) = (Vec::new(), Vec::new(), LayoutEngine::new());
         let (mut node_index, mut path_ids, mut memo) = (HashMap::default(), HashMap::default(), crate::memo::MemoCache::default());
@@ -105,6 +99,6 @@ impl<S: 'static> Runtime<S> {
             kept_lists: Vec::new(),
         };
         drop(m.finish(&Tx::default()));
-        self.text.prepare_close(std::any::TypeId::of::<S>(), PREPARE_BYTES, before)
+        self.text.prepare_close(pass, PREPARE_BYTES, before, at);
     }
 }

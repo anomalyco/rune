@@ -204,7 +204,7 @@ impl<S: 'static> Runtime<S> {
     }
 
     pub fn pointer_down(&mut self, x: f32, y: f32) {
-        self.stop_prepare();
+        self.text.prepare_drop();
         self.press_down(x, y, false);
     }
 

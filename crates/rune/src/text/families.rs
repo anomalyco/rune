@@ -75,6 +75,7 @@ impl TextSystem {
     /// language. Glyphs stay in the atlas under their own font's key until they age out.
     pub(super) fn drop_shaped(&mut self) {
         self.layouts.clear();
+        self.prepare_forget();
         self.shapes.clear();
         self.superseded.clear();
         self.elisions.clear();

@@ -138,6 +138,7 @@ impl TextSystem {
     /// and the glyph runs drawn from them. A view shown again after it shapes afresh, as one
     /// shown for the first time does.
     pub(crate) fn rest(&mut self) {
+        self.prepare_forget();
         // `end_commit` moved the generation on after the last commit.
         let g = self.generation.wrapping_sub(1);
         evict_to(&mut self.layouts, g, 0);

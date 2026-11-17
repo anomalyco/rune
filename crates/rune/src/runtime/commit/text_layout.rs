@@ -373,7 +373,10 @@ pub(super) fn compute_layout(taffy: &mut LayoutEngine, root: SlotId, room: Size<
                     };
                 }
             }
-            let laid = text.layout_text(spec, nodes[i].input.is_some(), scale, w.map(|w| w * scale + FIT_SLACK), parley::Alignment::Start, nodes[i].text_layout.as_ref());
+            let laid = {
+                let _node = crate::text::NodeLayout::enter();
+                text.layout_text(spec, nodes[i].input.is_some(), scale, w.map(|w| w * scale + FIT_SLACK), parley::Alignment::Start, nodes[i].text_layout.as_ref())
+            };
             let l = laid.view();
             // Spaces hanging past a wrapped line's end take no room, as in CSS.
             let mut lw = text_width(if w.is_some() { l.width() } else { l.full_width() }) / scale;

@@ -358,7 +358,11 @@ pub(super) fn lay_out_text(text: &mut TextSystem, n: &mut Node, w: f32, scale: f
     }
     let wrap = spec.wrap.then_some(w * scale + super::text_layout::FIT_SLACK);
     // A by-paragraph field keeps what its last layout (still on it) shares with this one.
-    let mut layout = match text.layout_text(spec, n.input.is_some(), scale, wrap, line_alignment(spec), n.text_layout.as_ref()) {
+    let laid = {
+        let _node = crate::text::NodeLayout::enter();
+        text.layout_text(spec, n.input.is_some(), scale, wrap, line_alignment(spec), n.text_layout.as_ref())
+    };
+    let mut layout = match laid {
         TextLayout::Single(l) => l,
         TextLayout::Paragraphs(mut p) => {
             text.prepare_highlights(&mut p, &spec.cold.highlights);
