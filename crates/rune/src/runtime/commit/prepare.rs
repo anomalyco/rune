@@ -58,7 +58,9 @@ impl<S: 'static> Runtime<S> {
             titlebar: self.titlebar_set(),
             caret: None,
             caret_read: false,
-            layout_seen: Default::default(),
+            // The rects the window last laid out, as its next frame reads them, so a view that
+            // measures against them (a header fitting its title) measures here too.
+            layout_seen: self.layout_seen.rects.clone(),
             layout_reads: Vec::new(),
             commits: self.commits,
             nodes: &mut nodes,
