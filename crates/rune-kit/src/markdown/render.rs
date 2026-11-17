@@ -382,11 +382,16 @@ impl Renderer {
     /// sets the gap under it (CSS's `h2 + p { margin-top: 0 }`). In a list item (`in_item`) the
     /// first paragraph has no margins, a later one 8 above, and a nested list 4 above and below,
     /// as a web page spaces an `li`'s children.
+    #[cfg(test)]
     pub(super) fn blocks(&self, blocks: &[Block], maps: &[BlockMap], keys: &[String], top_level: bool) -> El {
-        self.blocks_in(blocks, maps, keys, top_level, false)
+        self.blocks_in(blocks, None, maps, keys, top_level, false)
     }
 
-    pub(super) fn blocks_in(&self, blocks: &[Block], maps: &[BlockMap], keys: &[String], top_level: bool, in_item: bool) -> El {
+    pub(super) fn blocks_pre(&self, blocks: &[Block], pre: Option<&[super::memo::PreBlock]>, maps: &[BlockMap], keys: &[String], top_level: bool) -> El {
+        self.blocks_in(blocks, pre, maps, keys, top_level, false)
+    }
+
+    pub(super) fn blocks_in(&self, blocks: &[Block], pre: Option<&[super::memo::PreBlock]>, maps: &[BlockMap], keys: &[String], top_level: bool, in_item: bool) -> El {
         let mut c = col().w_full();
         let mut prev_mb = 0.0f32;
         let mut after_heading = false;
@@ -424,16 +429,18 @@ impl Renderer {
             let prose = !matches!(b, Block::Code(_) | Block::Diff(_) | Block::Mermaid(_) | Block::Image { .. } | Block::Rule);
             let dir = prose.then(|| own.or(last)).flatten();
             let map = maps.get(i).unwrap_or(&empty);
+            let pb = pre.and_then(|ps| ps.get(i));
             let settled = !self.streaming || i + 1 < blocks.len();
-            let (src_at, src_n) = (self.next_source.get(), super::memo::source_count(b));
-            let (task_at, task_n) = (self.next_task.get(), super::memo::task_count(b));
-            let child = match settled.then(|| self.settled_block_digest(b, map, &key, top, dir, (src_at, src_n), (task_at, task_n))).flatten() {
+            let (src_at, src_n) = (self.next_source.get(), pb.map_or_else(|| super::memo::source_count(b), |p| p.src_n as usize));
+            let (task_at, task_n) = (self.next_task.get(), pb.map_or_else(|| super::memo::task_count(b), |p| p.task_n as usize));
+            let child = match settled.then(|| self.settled_block_digest(b, pb, map, &key, top, dir, (src_at, src_n), (task_at, task_n))).flatten() {
                 Some(digest) => {
                     let key_c = key.clone();
                     let el = rune::memo::cached(digest, || {
+                        super::memo::note_block_build();
                         self.next_source.set(src_at);
                         self.next_task.set(task_at);
-                        let drawn = bidi::directed(self.block(b, map), dir);
+                        let drawn = bidi::directed(self.block_pre(b, pb, map), dir);
                         debug_assert_eq!(self.next_source.get(), src_at + src_n);
                         debug_assert_eq!(self.next_task.get(), task_at + task_n);
                         drawn.key(key_c).mt(top)
@@ -442,11 +449,9 @@ impl Renderer {
                     self.next_task.set(task_at + task_n);
                     el
                 }
-                None => bidi::directed(self.block(b, map), dir).key(key).mt(top),
+                None => bidi::directed(self.block_pre(b, pb, map), dir).key(key).mt(top),
             };
-            if own.is_some() {
-                last = own;
-            }
+            if own.is_some() { last = own; }
             c = c.child(child);
             prev_mb = mb;
             after_heading = matches!(b, Block::Heading(..));
@@ -566,7 +571,7 @@ impl Renderer {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn task_item(&self, (k, n): (usize, usize), indent: f32, item: &[Block], item_maps: &[BlockMap], item_idx: usize, checked: bool) -> El {
+    fn task_item(&self, (k, n): (usize, usize), indent: f32, item: &[Block], item_pre: Option<&[super::memo::PreBlock]>, item_maps: &[BlockMap], item_idx: usize, checked: bool) -> El {
         let t = &self.s.task;
         let interactive = self.on_task.is_some() && !self.tasks_read_only;
         let (fill, border) = if checked {
@@ -602,7 +607,7 @@ impl Renderer {
             .focusable(interactive)
             .w_full()
             .child(control)
-            .child(self.blocks_in(item, item_maps, &[], false, true).grow(1.0).shrink());
+            .child(self.blocks_in(item, item_pre, item_maps, &[], false, true).grow(1.0).shrink());
         if let Some(on_task) = self.on_task.as_ref().filter(|_| !self.tasks_read_only) {
             let block_key = self.current_block_key.borrow().clone();
             r = on_task(r.cursor(Cursor::Pointer), block_key, item_idx, !checked);
@@ -610,7 +615,12 @@ impl Renderer {
         r
     }
 
+    #[cfg(test)]
     pub(super) fn block(&self, b: &Block, map: &BlockMap) -> El {
+        self.block_pre(b, None, map)
+    }
+
+    pub(super) fn block_pre(&self, b: &Block, pre: Option<&super::memo::PreBlock>, map: &BlockMap) -> El {
         let s = &self.s;
         let inl_map = match map {
             BlockMap::Inline(m) => Some(m),
@@ -630,7 +640,10 @@ impl Renderer {
                 match &self.code_frame {
                     Some(f) => {
                         let card = match self.settled_code_card_digest(code, source, code_map) {
-                            Some(digest) => rune::memo::cached(digest, || self.code(code, source, code_map).key("card")),
+                            Some(digest) => rune::memo::cached(digest, || {
+                                super::memo::note_block_build();
+                                self.code(code, source, code_map).key("card")
+                            }),
                             None => self.code(code, source, code_map).key("card"),
                         };
                         f(card, &CodeFrame { index: n, source: code, language: source.and_then(|s| s.lang.as_deref()), open: source.is_some_and(|s| s.open) })
@@ -650,7 +663,7 @@ impl Renderer {
                     _ => (&[][..], &[][..]),
                 };
                 // Its first column stands on the side its words start on.
-                bidi::directed(self.table(t, head_maps, row_maps), bidi::table_dir(t))
+                bidi::directed(self.table(t, pre.and_then(|p| p.table.as_deref()), head_maps, row_maps), bidi::table_dir(t))
             }
             Block::List { start, items } => {
                 let item_maps = match map {
@@ -676,6 +689,7 @@ impl Renderer {
                 let gap = |k: usize| if k == 0 { 0.0 } else { s.list_gap.max(edge(&items[k - 1], true)).max(edge(&items[k], false)) };
                 for (k, item) in items.iter().enumerate() {
                     let imap = item_maps.get(k).map_or(&[][..], Vec::as_slice);
+                    let ipre = pre.and_then(|p| p.items.get(k));
                     let task_idx = self.next_task.get();
                     self.next_task.set(task_idx + 1);
                     let task = self.tasks.get(task_idx).copied().flatten();
@@ -686,7 +700,7 @@ impl Renderer {
                     };
                     self.flow.set(Flow { lists: flow.lists + 1, inset: flow.inset + indent, cols: flow.cols + lead.width(), lead: Some((flow.cols, lead, if k == 0 && flow.lists == 0 { 2 } else { 1 })), ..flow });
                     if let Some((checked, marker_offset)) = task {
-                        c = c.child(self.task_item((k, n), indent, item, imap, marker_offset, checked).mt(gap(k)));
+                        c = c.child(self.task_item((k, n), indent, item, ipre.map(|p| &*p.inner), imap, marker_offset, checked).mt(gap(k)));
                         continue;
                     }
                     let marker = if start.is_none() && s.list_outside {
@@ -698,14 +712,15 @@ impl Renderer {
                         if s.list_outside { marker.align(Align::End).pr(space) } else { marker.align(Align::Center) }
                     };
                     let settled_item = !self.streaming || k + 1 < n;
-                    let (src_at, src_n) = (self.next_source.get(), item.iter().map(super::memo::source_count).sum::<usize>());
-                    let (task_at, task_n) = (self.next_task.get(), item.iter().map(super::memo::task_count).sum::<usize>());
-                    let body = match settled_item.then(|| self.settled_item_digest(item, imap, (src_at, src_n), (task_at, task_n))).flatten() {
+                    let (src_at, src_n) = (self.next_source.get(), ipre.map_or_else(|| item.iter().map(super::memo::source_count).sum::<usize>(), |p| p.src_n as usize));
+                    let (task_at, task_n) = (self.next_task.get(), ipre.map_or_else(|| item.iter().map(super::memo::task_count).sum::<usize>(), |p| p.task_n as usize));
+                    let body = match settled_item.then(|| self.settled_item_digest(item, ipre, imap, (src_at, src_n), (task_at, task_n))).flatten() {
                         Some(digest) => {
                             let el = rune::memo::cached(digest, || {
+                                super::memo::note_block_build();
                                 self.next_source.set(src_at);
                                 self.next_task.set(task_at);
-                                let b = self.blocks_in(item, imap, &[], false, true).grow(1.0).shrink();
+                                let b = self.blocks_in(item, ipre.map(|p| &*p.inner), imap, &[], false, true).grow(1.0).shrink();
                                 debug_assert_eq!(self.next_source.get(), src_at + src_n);
                                 debug_assert_eq!(self.next_task.get(), task_at + task_n);
                                 b
@@ -714,19 +729,11 @@ impl Renderer {
                             self.next_task.set(task_at + task_n);
                             el
                         }
-                        None => self.blocks_in(item, imap, &[], false, true).grow(1.0).shrink(),
+                        None => self.blocks_in(item, ipre.map(|p| &*p.inner), imap, &[], false, true).grow(1.0).shrink(),
                     };
                     // The item's place in the list says what its marker shows.
-                    c = c.child(
-                        row()
-                            .key(format!("i{k}"))
-                            .role("listitem")
-                            .position_in_set(k + 1, n)
-                            .w_full()
-                            .mt(gap(k))
-                            .child(self.with_reveal(marker).a11y_hidden())
-                            .child(body),
-                    );
+                    c = c.child(row().key(format!("i{k}")).role("listitem").position_in_set(k + 1, n)
+                        .w_full().mt(gap(k)).child(self.with_reveal(marker).a11y_hidden()).child(body));
                 }
                 self.flow.set(flow);
                 // One direction for the whole list, its first item's with any, so every marker
@@ -742,7 +749,7 @@ impl Renderer {
                 let flow = self.flow.get();
                 let first_task = self.next_task.get();
                 self.flow.set(Flow { ink: q.text.or(flow.ink), inset: flow.inset + q.width + q.pad, ..flow });
-                let drawn = self.blocks(inner, inner_maps, &[], false);
+                let drawn = self.blocks_pre(inner, pre.map(|p| &*p.inner), inner_maps, &[], false);
                 self.flow.set(flow);
                 // The rule stands on the side the quote starts on.
                 let quote = bidi::directed(

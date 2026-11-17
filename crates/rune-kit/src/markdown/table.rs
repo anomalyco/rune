@@ -47,8 +47,8 @@ fn auto_layout(natural: &[f32], fit: &[f32], avail: f32, full: bool) -> Vec<f32>
 }
 
 thread_local! {
-    static WIDTHS: RefCell<Budget<u64, Rc<Columns>>> = RefCell::new(Budget::new(WIDTHS_BYTES));
-    static ROW_WIDTHS: RefCell<Budget<u64, Rc<RowWidths>>> = RefCell::new(Budget::new(ROW_WIDTHS_BYTES));
+    static WIDTHS: RefCell<Budget<(u64, u64), Rc<Columns>>> = RefCell::new(Budget::new(WIDTHS_BYTES));
+    static ROW_WIDTHS: RefCell<Budget<(u64, u64), Rc<RowWidths>>> = RefCell::new(Budget::new(ROW_WIDTHS_BYTES));
 }
 
 fn font_key(f: TextStyle) -> (u32, u32, u32, u32, String) {
@@ -253,10 +253,10 @@ impl Renderer {
         if self.s.table_tabular { TextStyle { features: with_tnum(f.features), ..f } } else { f }
     }
 
-    pub(super) fn table(&self, t: &Table, head_maps: &[SpanMap], row_maps: &[Vec<SpanMap>]) -> El {
+    pub(super) fn table(&self, t: &Table, pre: Option<&super::memo::PreTable>, head_maps: &[SpanMap], row_maps: &[Vec<SpanMap>]) -> El {
         let s = &self.s;
         let n = t.align.len().max(t.head.len()).max(1);
-        let cols = self.columns(t, n);
+        let cols = self.columns(t, pre, n);
         let total: f32 = cols.natural.iter().sum();
         // Without an outline the corners stay square, so the rules run the full width, and no
         // border inset moves the cells off the text around the table. Either way columns too
@@ -319,8 +319,11 @@ impl Renderer {
             let r = (6.0 - inset).max(0.0);
             let head_extra = hash_of((1u8, round, r.to_bits()));
             let style_head = |h: El| if round { h.clip_corners([r, r, 0.0, 0.0]) } else { h.clip_soft(0.0) };
-            let head = match self.settled_table_row_digest(&t.head, head_maps, &t.align, table_dir, &cols.natural, &cols.min, widths, head_font, s.table_head_text, head_pad, "columnheader", "th", head_extra) {
-                Some(digest) => rune::memo::cached(digest, || style_head(build_head())),
+            let head = match self.settled_table_row_digest(&t.head, pre.map(|p| &p.head), head_maps, &t.align, table_dir, &cols.natural, &cols.min, widths, head_font, s.table_head_text, head_pad, "columnheader", "th", head_extra) {
+                Some(digest) => rune::memo::cached(digest, || {
+                    super::memo::note_block_build();
+                    style_head(build_head())
+                }),
                 None => style_head(build_head()),
             };
             frame = frame.child(head);
@@ -332,11 +335,15 @@ impl Renderer {
                     let bordered = i + 1 < t.rows.len();
                     let settled = !self.streaming || !t.open || bordered;
                     let rmap = row_maps.get(i).map_or(&[][..], Vec::as_slice);
+                    let rpre = pre.and_then(|p| p.rows.get(i));
                     let rkey = format!("r{i}");
                     let extra = hash_of((2u8, bordered));
                     let style_row = |row: El| if bordered { row.border_sides([0.0, 0.0, 0.5, 0.0], s.table_rule).border_layout() } else { row };
-                    let row = match settled.then(|| self.settled_table_row_digest(cells, rmap, &t.align, table_dir, &cols.natural, &cols.min, widths, body_font, s.text, s.table_pad, "cell", &rkey, extra)).flatten() {
-                        Some(digest) => rune::memo::cached(digest, || style_row(row_at(i, cells))),
+                    let row = match settled.then(|| self.settled_table_row_digest(cells, rpre, rmap, &t.align, table_dir, &cols.natural, &cols.min, widths, body_font, s.text, s.table_pad, "cell", &rkey, extra)).flatten() {
+                        Some(digest) => rune::memo::cached(digest, || {
+                            super::memo::note_block_build();
+                            style_row(row_at(i, cells))
+                        }),
                         None => style_row(row_at(i, cells)),
                     };
                     rows = rows.child(row);
@@ -360,8 +367,11 @@ impl Renderer {
                 let h = h.fill(s.table_head_fill);
                 if ring.is_some() { h.clip_corners([r, r, b, b]) } else { h }
             };
-            let head = match self.settled_table_row_digest(&t.head, head_maps, &t.align, table_dir, &cols.natural, &cols.min, widths, head_font, s.table_head_text, head_pad, "columnheader", "th", head_extra) {
-                Some(digest) => rune::memo::cached(digest, || style_head(build_head())),
+            let head = match self.settled_table_row_digest(&t.head, pre.map(|p| &p.head), head_maps, &t.align, table_dir, &cols.natural, &cols.min, widths, head_font, s.table_head_text, head_pad, "columnheader", "th", head_extra) {
+                Some(digest) => rune::memo::cached(digest, || {
+                    super::memo::note_block_build();
+                    style_head(build_head())
+                }),
                 None => style_head(build_head()),
             };
             frame = frame.child(head);
@@ -370,9 +380,13 @@ impl Renderer {
                 let sep = match s.table_head_rule { Some(c) if i == 0 => sep.fill(c), _ => sep };
                 let settled = !self.streaming || !t.open || i + 1 < t.rows.len();
                 let rmap = row_maps.get(i).map_or(&[][..], Vec::as_slice);
+                let rpre = pre.and_then(|p| p.rows.get(i));
                 let rkey = format!("r{i}");
-                let row = match settled.then(|| self.settled_table_row_digest(cells, rmap, &t.align, table_dir, &cols.natural, &cols.min, widths, body_font, s.text, s.table_pad, "cell", &rkey, 4)).flatten() {
-                    Some(digest) => rune::memo::cached(digest, || row_at(i, cells)),
+                let row = match settled.then(|| self.settled_table_row_digest(cells, rpre, rmap, &t.align, table_dir, &cols.natural, &cols.min, widths, body_font, s.text, s.table_pad, "cell", &rkey, 4)).flatten() {
+                    Some(digest) => rune::memo::cached(digest, || {
+                        super::memo::note_block_build();
+                        row_at(i, cells)
+                    }),
                     None => row_at(i, cells),
                 };
                 frame = frame.child(sep).child(row);
@@ -455,7 +469,7 @@ impl Renderer {
     /// Column widths from the header and every finished row, cached by content and font. A last
     /// row without a newline is still arriving only while the text streams; otherwise the
     /// document is whole and it counts too.
-    fn columns(&self, t: &Table, n: usize) -> Rc<Columns> {
+    fn columns(&self, t: &Table, pre: Option<&super::memo::PreTable>, n: usize) -> Rc<Columns> {
         let (head, body) = (self.head_font(), self.body_font());
         let settled = if t.open && self.streaming { t.rows.len().saturating_sub(1) } else { t.rows.len() };
         let rows = &t.rows[..settled];
@@ -467,25 +481,16 @@ impl Renderer {
             self.s.inline_code_pad.to_bits(),
             self.s.strong_weight.to_bits(),
         );
-        let row_key = |cells: &[Inline], fkey: &(u32, u32, u32, u32, String)| {
-            let mut h = std::collections::hash_map::DefaultHasher::new();
-            (n, fkey, inline_code_key, epoch, cells.len().min(n)).hash(&mut h);
-            for inl in cells.iter().take(n) {
-                let resolved = self.with_code_links(inl);
-                resolved.hash(&mut h);
-                if let Some(look) = &self.link_look {
-                    for (_, _, url) in &resolved.links {
-                        look(url).map(|(sp, _)| (sp.weight.map(f32::to_bits), sp.size.map(f32::to_bits), sp.mono, sp.italic)).hash(&mut h);
-                    }
-                }
-            }
-            h.finish()
-        };
         let head_fkey = font_key(head);
         let body_fkey = font_key(body);
-        let head_rkey = row_key(&t.head, &head_fkey);
-        let body_rkeys: Vec<u64> = rows.iter().map(|c| row_key(c, &body_fkey)).collect();
-        let key = hash_of((
+        let head_rkey = self.table_row_width_key(&t.head, pre.map(|p| &p.head), n, &head_fkey, inline_code_key, epoch);
+        let body_rkeys: Vec<(u64, u64)> = rows
+            .iter()
+            .enumerate()
+            .map(|(i, c)| self.table_row_width_key(c, pre.and_then(|p| p.rows.get(i)), n, &body_fkey, inline_code_key, epoch))
+            .collect();
+        let mut kh = super::memo::PairHasher::new();
+        (
             n,
             head_rkey,
             &body_rkeys,
@@ -493,14 +498,16 @@ impl Renderer {
             self.s.table_pad.map(f32::to_bits),
             self.head_pad().map(f32::to_bits),
             self.s.table_flush_left,
-        ));
-        if let Some(hit) = WIDTHS.with_borrow_mut(|c| c.get(&key).cloned()) {
+        )
+            .hash(&mut kh);
+        let key = kh.finish128();
+        if let Some(hit) = WIDTHS.with_borrow_mut(|c| c.get(&key).cloned()).filter(|h| h.natural.len() == n && h.min.len() == n && h.fit.len() == n) {
             return hit;
         }
-        // Measure each row once per `(cells, font)` key; adding or editing a row reuses the
-        // cached widths of every unchanged row.
-        let measure_row = |cells: &[Inline], rkey: u64, font: TextStyle| -> Rc<RowWidths> {
-            if let Some(hit) = ROW_WIDTHS.with_borrow_mut(|c| c.get(&rkey).cloned()) {
+        // Measure each row once per 128-bit `(cells, font)` key; adding or editing a row reuses
+        // the cached widths of every unchanged row.
+        let measure_row = |cells: &[Inline], rkey: (u64, u64), font: TextStyle| -> Rc<RowWidths> {
+            if let Some(hit) = ROW_WIDTHS.with_borrow_mut(|c| c.get(&rkey).cloned()).filter(|h| h.natural.len() == n && h.fit.len() == n) {
                 return hit;
             }
             let (mut natural, mut fit) = (vec![0.0f32; n], vec![0.0f32; n]);
@@ -530,20 +537,22 @@ impl Renderer {
             ROW_WIDTHS.with_borrow_mut(|c| c.insert(rkey, rw.clone(), 8 * n + 48));
             rw
         };
-        let fold_rows = |lines: &[(u64, &[Inline])], font: TextStyle| {
+        let fold_rows = |lines: &[((u64, u64), &[Inline])], font: TextStyle| {
             let (mut natural, mut fit) = (vec![0.0f32; n], vec![0.0f32; n]);
             for &(rkey, cells) in lines {
                 let rw = measure_row(cells, rkey, font);
-                for j in 0..n {
-                    natural[j] = natural[j].max(rw.natural[j]);
-                    fit[j] = fit[j].max(rw.fit[j]);
+                if rw.natural.len() == n && rw.fit.len() == n {
+                    for j in 0..n {
+                        natural[j] = natural[j].max(rw.natural[j]);
+                        fit[j] = fit[j].max(rw.fit[j]);
+                    }
                 }
             }
             let min = fit.iter().map(|w| w.min(cap)).collect::<Vec<_>>();
             (natural, min, fit)
         };
         let (head_natural, head_min, head_fit) = fold_rows(&[(head_rkey, t.head.as_slice())], head);
-        let body_pairs: Vec<(u64, &[Inline])> = body_rkeys.into_iter().zip(rows.iter().map(Vec::as_slice)).collect();
+        let body_pairs: Vec<((u64, u64), &[Inline])> = body_rkeys.into_iter().zip(rows.iter().map(Vec::as_slice)).collect();
         let (body_natural, body_min, body_fit) = fold_rows(&body_pairs, body);
         let [head_x, body_x] = [self.head_pad()[0], self.s.table_pad[0]];
         let has_body = !rows.is_empty();

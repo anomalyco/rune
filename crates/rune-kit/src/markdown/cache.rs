@@ -11,6 +11,7 @@ pub(super) type Doc = (Rc<Vec<Block>>, Rc<[Source]>, Rc<[Option<(bool, usize)>]>
 pub(super) struct Parsed {
     pub(super) doc: Doc,
     pub(super) cuts: Rc<[Cut]>,
+    pub(super) meta: Rc<[super::memo::PreBlock]>,
 }
 
 pub(super) struct Cache {
@@ -45,24 +46,34 @@ pub fn parse_cached(src: &str) -> Rc<Vec<Block>> {
 }
 
 pub(super) fn doc_cached(src: &str) -> Doc {
+    doc_cached_with_meta(src).0
+}
+
+pub(super) fn doc_cached_with_meta(src: &str) -> (Doc, Rc<[super::memo::PreBlock]>) {
     CACHE.with_borrow_mut(|c| cached(c, src, parse_doc))
 }
 
 /// [`doc_cached`] for a source still arriving.
+#[cfg(test)]
 pub(super) fn stream_cached(src: &str) -> Doc {
+    stream_cached_with_meta(src).0
+}
+
+pub(super) fn stream_cached_with_meta(src: &str) -> (Doc, Rc<[super::memo::PreBlock]>) {
     STREAMS.with_borrow_mut(|c| cached(c, src, parse_streaming))
 }
 
-fn cached(c: &mut Cache, src: &str, parse: fn(&str, bool) -> ParsedDoc) -> Doc {
+fn cached(c: &mut Cache, src: &str, parse: fn(&str, bool) -> ParsedDoc) -> (Doc, Rc<[super::memo::PreBlock]>) {
     if let Some(hit) = c.docs.get(src) {
-        return hit.doc.clone();
+        return (hit.doc.clone(), hit.meta.clone());
     }
     let grown = c.last.clone().filter(|last| src.len() > last.len() && src.starts_with(&**last));
     let parsed = grown.as_ref().and_then(|last| extend(c.docs.peek(&**last)?, last.len(), src, parse)).unwrap_or_else(|| {
         #[cfg(test)]
         PARSES.with(|p| p.set((p.get().0 + 1, p.get().1)));
         let (blocks, sources, tasks, cuts, starts, maps) = parse(src, true);
-        Parsed { doc: (Rc::new(blocks), sources.into(), tasks.into(), starts.into(), maps.into()), cuts: cuts.into() }
+        let meta: Rc<[super::memo::PreBlock]> = blocks.iter().map(super::memo::precompute_block).collect();
+        Parsed { doc: (Rc::new(blocks), sources.into(), tasks.into(), starts.into(), maps.into()), cuts: cuts.into(), meta }
     });
     // A stream's earlier string is dead once it grows, unless something drew it this
     // commit; left in, a long stream would fill the budget with its prefixes.
@@ -73,10 +84,10 @@ fn cached(c: &mut Cache, src: &str, parse: fn(&str, bool) -> ParsedDoc) -> Doc {
     }
     let key: Rc<str> = src.into();
     // Parsed text is about as long as its source, plus each block's bookkeeping.
-    let bytes = 2 * src.len() + 64 * parsed.cuts.len() + 128;
+    let bytes = 2 * src.len() + 128 * parsed.meta.len() + 64 * parsed.cuts.len() + 128;
     c.docs.insert(key.clone(), parsed.clone(), bytes);
     c.last = Some(key);
-    parsed.doc
+    (parsed.doc, parsed.meta)
 }
 
 /// The parse of `src`, which extends the `base_len` bytes `base` parsed, reusing every
@@ -95,8 +106,10 @@ fn extend(base: &Parsed, base_len: usize, src: &str, parse: fn(&str, bool) -> Pa
     #[cfg(test)]
     PARSES.with(|p| p.set((p.get().0, p.get().1 + 1)));
     let (tail, sources, tasks, cuts, starts, maps) = parse(&src[cut.at..], true);
+    let tail_meta: Vec<super::memo::PreBlock> = tail.iter().map(super::memo::precompute_block).collect();
     let mut blocks = base.doc.0[..cut.blocks].to_vec();
     blocks.extend(tail);
+    let meta: Rc<[super::memo::PreBlock]> = base.meta[..cut.blocks].iter().cloned().chain(tail_meta).collect();
     let sources: Rc<[Source]> = base.doc.1[..cut.sources].iter().cloned().chain(sources).collect();
     let tasks = base.doc.2[..cut.tasks].iter().copied()
         .chain(tasks.into_iter().map(|t| t.map(|(checked, at)| (checked, at + cut.at)))).collect();
@@ -113,5 +126,5 @@ fn extend(base: &Parsed, base_len: usize, src: &str, parse: fn(&str, bool) -> Pa
             tasks: c.tasks + cut.tasks,
         }))
         .collect();
-    Some(Parsed { doc: (Rc::new(blocks), sources, tasks, starts, maps), cuts })
+    Some(Parsed { doc: (Rc::new(blocks), sources, tasks, starts, maps), cuts, meta })
 }

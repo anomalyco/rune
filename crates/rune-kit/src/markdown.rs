@@ -76,13 +76,15 @@ use crate::syntax::{Highlighter, SyntaxTheme};
 pub use crate::syntax::Syntax;
 use links::{CodeLink, LinkHelp, LinkLook, LinkRing, LinkWire};
 pub use cache::parse_cached;
+#[doc(hidden)]
+pub use memo::{block_builds, reset_block_builds};
 pub use highlight::{Highlight, HighlightItem};
 pub use parser::parse;
 
 use autolink::autolink_inline;
-use cache::{doc_cached, stream_cached};
+use cache::{doc_cached, doc_cached_with_meta, stream_cached_with_meta};
 #[cfg(test)]
-use cache::{CACHE, PARSES};
+use cache::{CACHE, PARSES, stream_cached};
 use parser::{BlockMap, CLOSE, Cut, PAD, ParsedDoc, Source, SpanMap, parse_doc, unpadded};
 use render::{Renderer, hash_of, rendered_keys, source_copy};
 use stream::parse_streaming;
@@ -463,12 +465,13 @@ impl Markdown {
     fn render_uncached(self, style: &MarkdownStyle) -> El {
         #[cfg(test)]
         RENDERS.with(|n| n.set(n.get() + 1));
-        let (blocks, sources, tasks, starts, maps) = match (self.autolink, self.streaming) {
-            (true, false) => doc_cached(&self.src),
-            (true, true) => stream_cached(&self.src),
+        let ((blocks, sources, tasks, starts, maps), meta) = match (self.autolink, self.streaming) {
+            (true, false) => doc_cached_with_meta(&self.src),
+            (true, true) => stream_cached_with_meta(&self.src),
             (false, streaming) => {
                 let (b, s, t, _, st, m) = if streaming { parse_streaming(&self.src, false) } else { parse_doc(&self.src, false) };
-                (Rc::new(b), s.into(), t.into(), st.into(), m.into())
+                let meta: Rc<[memo::PreBlock]> = b.iter().map(memo::precompute_block).collect();
+                ((Rc::new(b), s.into(), t.into(), st.into(), m.into()), meta)
             }
         };
         let keys = if self.block_keys.is_empty() { Vec::new() } else {
@@ -483,7 +486,7 @@ impl Markdown {
             diagram_frame: self.diagram_frame, code_frame: self.code_frame, quote_frame: self.quote_frame, link_favicon: self.link_favicon, images: self.images, on_image: self.on_image, flow: Cell::default() };
         // The document reads the way its first words do; until any arrive, the way it was asked.
         let root = memo::with_renderer(&r, || {
-            bidi::directed(r.blocks(&blocks, &maps, &keys, true), bidi::blocks_dir(&blocks).or(self.tentative)).selection_group(self.selectable)
+            bidi::directed(r.blocks_pre(&blocks, Some(&meta), &maps, &keys, true), bidi::blocks_dir(&blocks).or(self.tentative)).selection_group(self.selectable)
         });
         if !(self.selectable && self.copy_source) { return root; }
         let names: Rc<[String]> = rendered_keys(blocks.len(), &keys).into();
