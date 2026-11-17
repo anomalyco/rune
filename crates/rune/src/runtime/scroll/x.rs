@@ -324,8 +324,11 @@ impl WheelLock {
         self.phase = WheelPhase::Ended { at: now, from };
     }
 
-    /// The window lost the pointer or focus: a gesture in progress won't report its end here.
-    fn lost(&mut self, pending: Option<Attempt>) { self.restart(pending); self.vertical = None; }
+    /// The window lost the pointer or focus: a gesture in progress won't report its end here. A run
+    /// of vertical deltas outlives it, as Chromium's latch outlives a mouse leave (the phase handler
+    /// never hears one; `render_widget_host_view_event_handler.cc` forwards `kMouseExited` only to the
+    /// page): it still ends when the wheel rests, or the pointer comes back away from where it began.
+    fn lost(&mut self, pending: Option<Attempt>) { self.restart(pending); }
 }
 
 /// A wheel event's delta in points, positive moving content right and down. With Shift, a delta
