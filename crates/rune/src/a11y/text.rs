@@ -6,11 +6,12 @@ use accesskit::{Action as Ak, Node as AkNode, NodeId as AkId, Rect as AkRect, Ro
 use std::borrow::Cow;
 
 use super::*;
-use super::a11y_tree::{element_id, line_id, link_id, round};
+use super::a11y_tree::{LINK_BASE, element_id, line_id, link_id, round};
 use crate::text::TextFlow;
 
 /// Text longer than this gets no per-character runs (a reader still gets its whole value). A field
-/// past it marks its selection on itself, and the vendored adapters answer its lines from its value.
+/// past it marks its selection on itself, publishes only its drawn visual lines, and lets the
+/// vendored adapters answer its ranges and boxes on demand.
 const RUN_MAX_BYTES: usize = 64 * 1024;
 
 /// One laid-out line: its bytes in the drawn text and each character's place in points.
@@ -28,20 +29,24 @@ pub(crate) struct Line {
 pub(crate) fn lines(layout: TextFlow<'_>, content: &str, s: f32, origin: [f32; 2]) -> Vec<Line> {
     let mut out = Vec::new();
     for p in layout.pieces() {
-        let first = out.len();
-        piece_lines(p, content, s, origin, &mut out);
-        if p.is_whole() { continue; }
-        if out.len() == first {
-            out.push(Line { range: p.start..p.start, rect: [origin[0], origin[1] + p.y / s, 0.0, p.height / s], lengths: Vec::new(), positions: Vec::new(), widths: Vec::new(), word_starts: Vec::new() });
-        }
-        if content.as_bytes().get(p.end) == Some(&b'\n') && let Some(l) = out.last_mut() {
-            l.range.end += 1;
-            l.lengths.push(1);
-            l.positions.push(l.rect[2]);
-            l.widths.push(0.0);
-        }
+        push_piece_lines(p, content, s, origin, &mut out);
     }
     out
+}
+
+fn push_piece_lines(p: crate::text::Piece<'_>, content: &str, s: f32, origin: [f32; 2], out: &mut Vec<Line>) {
+    let first = out.len();
+    piece_lines(p, content, s, origin, out);
+    if p.is_whole() { return; }
+    if out.len() == first {
+        out.push(Line { range: p.start..p.start, rect: [origin[0], origin[1] + p.y / s, 0.0, p.height / s], lengths: Vec::new(), positions: Vec::new(), widths: Vec::new(), word_starts: Vec::new() });
+    }
+    if content.as_bytes().get(p.end) == Some(&b'\n') && let Some(l) = out.last_mut() {
+        l.range.end += 1;
+        l.lengths.push(1);
+        l.positions.push(l.rect[2]);
+        l.widths.push(0.0);
+    }
 }
 
 fn piece_lines(p: crate::text::Piece<'_>, content: &str, s: f32, origin: [f32; 2], out: &mut Vec<Line>) {
@@ -136,11 +141,34 @@ impl<S: 'static> Runtime<S> {
             }
             if let Some(sel) = self.a11y_selection(i, &content, &lines) { out[me].1.set_text_selection(sel); }
         } else if let Some(input) = n.input.as_deref() && !input.edit.is_secure() {
-            // A field with no runs (past `RUN_MAX_BYTES`, or rows still unshaped): its selection in its value's bytes,
-            // on the field itself. The vendored adapters answer its lines from the value when a
-            // reader asks (`vendor/accesskit_windows.patch`, `vendor/accesskit_macos.patch`).
+            // A field with no runs (past `RUN_MAX_BYTES`, or rows still unshaped): its selection
+            // in its value's bytes on the field itself, plus one `GenericContainer` per drawn
+            // visual line (`rune-line:<start>:<end>`) so the vendored adapters can answer screen
+            // rectangles, wrapped visual lines and hit-testing in view without shaping off screen.
             let at = |character_index| TextPosition { node: element_id(n.id), character_index };
             out[me].1.set_text_selection(TextSelection { anchor: at(input.edit.anchor), focus: at(input.edit.focus) });
+            let preedit = input.edit.preedit().is_some();
+            for (k, l) in self.a11y_drawn_lines(i, w.clip_y).into_iter().take(LINK_BASE as usize - 1).enumerate() {
+                let (a, b) = if preedit {
+                    (input.edit.model_index(l.range.start), input.edit.model_index(l.range.end))
+                } else {
+                    (l.range.start, l.range.end)
+                };
+                let id = line_id(n.id, k);
+                let mut line_node = AkNode::new(Role::GenericContainer);
+                line_node.set_author_id(format!("rune-line:{a}:{b}"));
+                line_node.set_bounds(AkRect {
+                    x0: round(l.rect[0] + w.shift[0]), y0: round(l.rect[1] + w.shift[1]),
+                    x1: round(l.rect[0] + l.rect[2] + w.shift[0]), y1: round(l.rect[1] + l.rect[3] + w.shift[1]),
+                });
+                if !preedit {
+                    line_node.set_character_lengths(l.lengths);
+                    line_node.set_character_positions(l.positions);
+                    line_node.set_character_widths(l.widths);
+                }
+                out[me].1.push_child(id);
+                out.push((id, line_node));
+            }
         }
         if spec.cold.links.is_empty() || spec.redacted { return; }
         let boxes = self.link_boxes(i, self.drawn_box(i));
@@ -235,6 +263,55 @@ impl<S: 'static> Runtime<S> {
             Some(input) => Some(Cow::Owned(input.edit.display().0)),
             None => n.text.as_deref().map(|t| Cow::Borrowed(t.content.as_str())),
         }
+    }
+
+    /// Whether node `i` is a non-secret text field answered through the long-field path.
+    pub(super) fn a11y_long_field(&self, i: usize) -> bool {
+        let n = &self.nodes[i];
+        let Some(input) = n.input.as_deref() else { return false };
+        if input.edit.is_secure() || n.elided.is_some() { return false; }
+        let waiting = matches!(&n.text_layout, Some(crate::text::TextLayout::Paragraphs(p)) if p.waiting());
+        waiting || self.a11y_drawn_text(i).is_some_and(|t| t.len() > RUN_MAX_BYTES)
+    }
+
+    /// The shaped visual lines of long field `i` inside window clip band `clip_y` (plus its
+    /// focused caret paragraph when outside `clip_y`), in points in its content space.
+    fn a11y_drawn_lines(&self, i: usize, clip_y: [f32; 2]) -> Vec<Line> {
+        let n = &self.nodes[i];
+        let (Some(spec), Some(tl), Some(input)) = (n.text.as_deref(), n.text_layout.as_ref(), n.input.as_deref()) else {
+            return Vec::new();
+        };
+        if n.elided.is_some() { return Vec::new(); }
+        let Some(content) = self.a11y_drawn_text(i) else { return Vec::new() };
+        let layout = tl.view();
+        let s = self.env.scale;
+        let r = self.drawn[i];
+        let (x0, x1) = (r[0] + n.inset[0], r[0] + r[2] - n.inset[2]);
+        let mut x = text_x(spec, x0, x1, layout.full_width() / s, layout.flow());
+        if input.single_line {
+            x -= self.input_scroll.get(&n.path).copied().unwrap_or(0.0);
+        }
+        let origin = [x, r[1] + n.inset[1]];
+        let top_px = ((clip_y[0] - origin[1]) * s).max(0.0);
+        let bot_px = ((clip_y[1] - origin[1]) * s).max(top_px);
+        let mut pieces: Vec<_> = layout.pieces_in(top_px, bot_px).filter(|p| p.shaped).collect();
+        if input.edit.focused {
+            let caret = if input.edit.preedit().is_some() {
+                caret_index(&input.edit, &content)
+            } else {
+                input.edit.display_index(input.edit.focus)
+            };
+            let cp = layout.piece_at(caret.min(content.len()));
+            if cp.shaped && pieces.iter().all(|p| p.index != cp.index) {
+                let pos = pieces.partition_point(|p| p.index < cp.index);
+                pieces.insert(pos, cp);
+            }
+        }
+        let mut out = Vec::new();
+        for p in pieces {
+            push_piece_lines(p, &content, s, origin, &mut out);
+        }
+        out
     }
 
     /// Node `i`'s laid-out lines, in points in its scroll viewport's content space (before the

@@ -20,7 +20,7 @@ const TOOLTIP: AkId = AkId(2);
 const ANNOUNCER: AkId = AkId(3);
 /// Bits under an element's id for the nodes it owns: its text's lines and links.
 const SUB: u32 = 16;
-const LINK_BASE: u64 = 0x8000;
+pub(crate) const LINK_BASE: u64 = 0x8000;
 
 pub(crate) fn element_id(id: NodeId) -> AkId { AkId(id.0 << SUB) }
 pub(crate) fn line_id(id: NodeId, line: usize) -> AkId { AkId((id.0 << SUB) | (1 + line as u64).min(LINK_BASE - 1)) }
@@ -93,6 +93,9 @@ pub(super) struct Walk {
     pub(super) shift: [f32; 2],
     /// Inside a scroll viewport, so it can be scrolled into view.
     pub(super) scrolled: bool,
+    /// Vertical window-space clip band from clipping/scrolling ancestors, for a long field's
+    /// drawn-line geometry.
+    pub(super) clip_y: [f32; 2],
 }
 
 /// A node the walk found: the element it is (`None` for the root), where it is, and its
@@ -164,7 +167,8 @@ impl<S: 'static> Runtime<S> {
         if !tree.full && !tree.held && tree.stamp.as_ref() == Some(&stamp) { return None; }
         // Only scrolled: the rows keep their bounds in their viewport's content space, so only
         // the viewports' offsets change. Sticky elements move against the content; they don't.
-        let scrolled_only = !tree.full && !self.has_sticky
+        let has_long_field = (0..self.nodes.len()).any(|i| self.a11y_long_field(i));
+        let scrolled_only = !tree.full && !self.has_sticky && !has_long_field
             && tree.stamp.as_ref().is_some_and(|s| Stamp { scrolls: stamp.scrolls, ..s.clone() } == stamp);
         if scrolled_only { return self.a11y_scrolled(stamp); }
         let found = self.a11y_walk();
@@ -343,9 +347,10 @@ impl<S: 'static> Runtime<S> {
     fn a11y_walk(&self) -> Found {
         let n_nodes = self.nodes.len();
         let mut slots = Vec::with_capacity(n_nodes / 2 + 2);
-        slots.push(Slot { id: ROOT, element: None, walk: Walk::default(), role: Role::Window, print: 0, set_size: None });
+        let root_walk = Walk { clip_y: [0.0, self.viewport.1], ..Walk::default() };
+        slots.push(Slot { id: ROOT, element: None, walk: root_walk, role: Role::Window, print: 0, set_size: None });
         let mut kids = Vec::with_capacity(n_nodes / 2 + 2);
-        let mut walk = vec![Walk::default(); n_nodes];
+        let mut walk = vec![root_walk; n_nodes];
         let mut scrollers = Vec::new();
         let mut focus = ROOT;
         let focused = self.focused_index();
@@ -366,12 +371,19 @@ impl<S: 'static> Runtime<S> {
         }
         for i in 0..n_nodes {
             let n = &self.nodes[i];
-            let up = n.parent.map(|p| walk[p]).unwrap_or_default();
-            let mut w = Walk { slot: up.slot, gone: up.gone, shift: up.shift, scrolled: up.scrolled };
-            if let Some(p) = n.parent && let Some(st) = self.scrolls.get(&self.nodes[p].id) {
-                let [x, y] = self.content_to_window(p, [st.drawn_x, st.drawn.y()]);
-                w.shift = [w.shift[0] + x, w.shift[1] + y];
-                w.scrolled = true;
+            let up = n.parent.map_or(root_walk, |p| walk[p]);
+            let mut w = Walk { slot: up.slot, gone: up.gone, shift: up.shift, scrolled: up.scrolled, clip_y: up.clip_y };
+            if let Some(p) = n.parent {
+                let pn = &self.nodes[p];
+                if pn.vis.clip.is_some() || pn.scroll.is_some() {
+                    let pr = self.drawn[p];
+                    w.clip_y = [w.clip_y[0].max(pr[1]), w.clip_y[1].min(pr[1] + pr[3].max(0.0))];
+                }
+                if let Some(st) = self.scrolls.get(&pn.id) {
+                    let [x, y] = self.content_to_window(p, [st.drawn_x, st.drawn.y()]);
+                    w.shift = [w.shift[0] + x, w.shift[1] + y];
+                    w.scrolled = true;
+                }
             }
             if !w.gone {
                 w.gone = n.is_moved_stub() || n.a11y.hidden || n.vis.opacity <= 0.01 || self.is_exiting(n.id)

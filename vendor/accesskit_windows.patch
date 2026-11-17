@@ -44,19 +44,20 @@ index 7aee09b..890b9b3 100644
  mod util;
 diff --git a/src/long_text.rs b/src/long_text.rs
 new file mode 100644
-index 0000000..d052290
+index 0000000..71492b9
 --- /dev/null
 +++ b/src/long_text.rs
-@@ -0,0 +1,176 @@
+@@ -0,0 +1,441 @@
 +// Rune (vendor/accesskit_windows.patch): a text field too long for its toolkit to publish text
 +// runs (Rune stops at 64 KiB) keeps its text ranges. The toolkit marks such a field by putting its
-+// selection on the field itself, as byte offsets into its value; ranges are then answered from the
-+// value when a reader asks, a line at a time, with no per-character data published up front. A
-+// line is what a line break ends. Off-screen geometry is not known, so ranges have no rectangles.
++// selection on the field itself, as byte offsets into its value, and publishes one GenericContainer
++// child (`rune-line:<start>:<end>`) per drawn visual line. Ranges are answered from the value when
++// a reader asks, and screen rectangles, hit-testing and wrapped visual lines are answered in the
++// drawn band without shaping off-screen rows.
 +// The same file is in accesskit_windows and accesskit_macos; each uses part of it.
 +#![allow(dead_code)]
 +
-+use accesskit::TextSelection;
++use accesskit::{Point, Rect, TextSelection};
 +use accesskit_consumer::NodeRef;
 +
 +#[derive(Clone, Copy, PartialEq, Eq)]
@@ -65,6 +66,21 @@ index 0000000..d052290
 +    Word,
 +    Line,
 +    Document,
++}
++
++/// One visual line currently drawn on screen for a long field.
++#[derive(Clone, Copy)]
++pub(crate) struct DrawnLine<'a> {
++    pub(crate) start: usize,
++    pub(crate) end: usize,
++    pub(crate) node: NodeRef<'a>,
++}
++
++struct Band {
++    start: usize,
++    end: usize,
++    first: usize,
++    count: usize,
 +}
 +
 +/// The value and selection a long field's text ranges are answered from.
@@ -81,8 +97,151 @@ index 0000000..d052290
 +    Some((Text(data.value().unwrap_or("")), selection))
 +}
 +
++/// Drawn visual lines Rune attached to `node` (`rune-line:<start>:<end>`), in document order.
++pub(crate) fn drawn_lines<'a>(node: &NodeRef<'a>, text: Text<'a>) -> Vec<DrawnLine<'a>> {
++    let mut out = Vec::new();
++    for child in node.children() {
++        let Some(rest) = child.author_id().and_then(|id| id.strip_prefix("rune-line:")) else {
++            continue;
++        };
++        let Some((a, b)) = rest.split_once(':') else {
++            continue;
++        };
++        let (Ok(a), Ok(b)) = (a.parse::<usize>(), b.parse::<usize>()) else {
++            continue;
++        };
++        let start = text.clamp(a);
++        let end = text.clamp(b).max(start);
++        out.push(DrawnLine { start, end, node: child });
++    }
++    out.sort_by_key(|d| (d.start, d.end));
++    out
++}
++
++fn bands(drawn: &[DrawnLine]) -> Vec<Band> {
++    let mut out: Vec<Band> = Vec::new();
++    for (idx, d) in drawn.iter().enumerate() {
++        if let Some(last) = out.last_mut()
++            && last.end == d.start
++        {
++            last.end = d.end;
++            last.count += 1;
++            continue;
++        }
++        out.push(Band { start: d.start, end: d.end, first: idx, count: 1 });
++    }
++    out
++}
++
++fn char_x_in_line(line: &NodeRef, rel_byte: usize, end_edge: bool) -> (f64, f64) {
++    let data = line.data();
++    let lengths = data.character_lengths();
++    let positions = data.character_positions().unwrap_or(&[]);
++    let widths = data.character_widths().unwrap_or(&[]);
++    if lengths.is_empty() || positions.len() < lengths.len() || widths.len() < lengths.len() {
++        let w = data.bounds().map_or(0.0, |r| r.width());
++        let x = if rel_byte == 0 && !end_edge { 0.0 } else { w };
++        return (x, x);
++    }
++    let mut seen = 0usize;
++    for (k, &len) in lengths.iter().enumerate() {
++        let next = seen + usize::from(len);
++        if rel_byte < next || (rel_byte == seen && !end_edge) {
++            let x0 = f64::from(positions[k]);
++            let x1 = x0 + f64::from(widths[k]);
++            return (x0, x1);
++        }
++        seen = next;
++    }
++    let last = lengths.len() - 1;
++    let end = f64::from(positions[last] + widths[last]);
++    (end, end)
++}
++
++/// Transformed bounding boxes (in root/window coordinates, matching AccessKit's `Range::bounding_boxes`)
++/// for the drawn portion of `a..b`. Off-screen bytes have no box, matching Chromium.
++pub(crate) fn bounding_boxes(node: &NodeRef, text: Text, a: usize, b: usize) -> Vec<Rect> {
++    let (a, b) = (text.clamp(a.min(b)), text.clamp(a.max(b)));
++    let drawn = drawn_lines(node, text);
++    if drawn.is_empty() {
++        return Vec::new();
++    }
++    if a == b {
++        let hit = drawn.iter().enumerate().find(|&(k, d)| {
++            (d.start <= a && a < d.end)
++                || (d.start == a && d.end == a)
++                || (a == d.end && (a == text.len() || drawn.get(k + 1).is_none_or(|nx| nx.start != a)))
++        });
++        let Some((_, d)) = hit else {
++            return Vec::new();
++        };
++        let Some(mut rect) = d.node.data().bounds() else {
++            return Vec::new();
++        };
++        let (x, _) = char_x_in_line(&d.node, a.saturating_sub(d.start), false);
++        let left = rect.x0 + x;
++        rect.x0 = left;
++        rect.x1 = left;
++        return vec![d.node.transform().transform_rect_bbox(rect)];
++    }
++    let mut out = Vec::new();
++    for d in &drawn {
++        let ov_start = a.max(d.start);
++        let ov_end = b.min(d.end);
++        if ov_start >= ov_end {
++            continue;
++        }
++        let Some(mut rect) = d.node.data().bounds() else {
++            continue;
++        };
++        if ov_start > d.start || ov_end < d.end {
++            let orig_left = rect.x0;
++            let (x0, _) = char_x_in_line(&d.node, ov_start - d.start, false);
++            let (_, x1) = char_x_in_line(&d.node, ov_end.saturating_sub(1) - d.start, true);
++            rect.x0 = orig_left + x0;
++            rect.x1 = orig_left + x1.max(x0);
++        }
++        out.push(d.node.transform().transform_rect_bbox(rect));
++    }
++    out
++}
++
++/// Byte offset in `text` at `point` (in `node`'s local coordinate space), when a drawn line covers it.
++pub(crate) fn byte_at_point(node: &NodeRef, text: Text, point: Point) -> Option<usize> {
++    let drawn = drawn_lines(node, text);
++    let d = drawn.iter().find(|d| {
++        d.node
++            .data()
++            .bounds()
++            .is_some_and(|r| point.y >= r.y0 && point.y <= r.y1)
++    })?;
++    let bounds = d.node.data().bounds()?;
++    let rel_x = (point.x - bounds.x0) as f32;
++    let data = d.node.data();
++    let lengths = data.character_lengths();
++    let positions = data.character_positions().unwrap_or(&[]);
++    let widths = data.character_widths().unwrap_or(&[]);
++    if lengths.is_empty() || positions.len() < lengths.len() || widths.len() < lengths.len() {
++        return Some(d.start);
++    }
++    let mut byte_off = 0usize;
++    for k in 0..lengths.len() {
++        let mid = positions[k] + widths[k] * 0.5;
++        if rel_x <= mid {
++            return Some(text.clamp(d.start + byte_off));
++        }
++        byte_off += usize::from(lengths[k]);
++    }
++    let trim_nl = usize::from(d.end > d.start && text.0.as_bytes().get(d.end - 1) == Some(&b'\n'));
++    Some(text.clamp(d.end.saturating_sub(trim_nl)))
++}
++
 +fn utf16_len(s: &str) -> usize {
 +    if s.is_ascii() { s.len() } else { s.chars().map(char::len_utf16).sum() }
++}
++
++fn count_newlines(s: &str) -> usize {
++    s.as_bytes().iter().filter(|&&b| b == b'\n').count()
 +}
 +
 +/// Byte offsets into a field's value.
@@ -122,9 +281,22 @@ index 0000000..d052290
 +        }
 +    }
 +
++    pub(crate) fn is_start_in(self, i: usize, unit: Unit, drawn: &[DrawnLine]) -> bool {
++        if unit == Unit::Line && !drawn.is_empty() {
++            if let Some(d) = drawn.iter().find(|d| (d.start <= i && i < d.end) || (d.start == i && d.end == i)) {
++                return i == d.start;
++            }
++        }
++        self.is_start(i, unit)
++    }
++
 +    /// The start of the unit holding `i`.
 +    pub(crate) fn start_of(self, i: usize, unit: Unit) -> usize {
 +        if self.is_start(i, unit) { i } else { self.prev(i, unit) }
++    }
++
++    pub(crate) fn start_of_in(self, i: usize, unit: Unit, drawn: &[DrawnLine]) -> usize {
++        if self.is_start_in(i, unit, drawn) { i } else { self.prev_in(i, unit, drawn) }
 +    }
 +
 +    /// The first unit start after `i`, or the text's end.
@@ -146,6 +318,20 @@ index 0000000..d052290
 +            Unit::Line => s[i..].find('\n').map_or(s.len(), |p| i + p + 1),
 +            Unit::Document => s.len(),
 +        }
++    }
++
++    pub(crate) fn next_in(self, i: usize, unit: Unit, drawn: &[DrawnLine]) -> usize {
++        if unit != Unit::Line || drawn.is_empty() {
++            return self.next(i, unit);
++        }
++        if let Some(d) = drawn.iter().find(|d| d.start <= i && i < d.end) {
++            return d.end;
++        }
++        let nl = self.next(i, Unit::Line);
++        drawn
++            .iter()
++            .find(|d| d.start > i && d.start < nl)
++            .map_or(nl, |d| d.start)
 +    }
 +
 +    /// The last unit start before `i`, or the text's start.
@@ -175,28 +361,107 @@ index 0000000..d052290
 +        }
 +    }
 +
++    pub(crate) fn prev_in(self, i: usize, unit: Unit, drawn: &[DrawnLine]) -> usize {
++        if unit != Unit::Line || drawn.is_empty() || i == 0 {
++            return self.prev(i, unit);
++        }
++        if let Some(d) = drawn.iter().rfind(|d| d.start < i && i <= d.end) {
++            return d.start;
++        }
++        if drawn.iter().any(|d| d.start == i) {
++            if let Some(prev_d) = drawn.iter().rfind(|d| d.end == i && d.start < i) {
++                return prev_d.start;
++            }
++            return self.line_start(i - 1);
++        }
++        let p = self.prev(i, Unit::Line);
++        drawn
++            .iter()
++            .rfind(|d| d.start >= p && d.start < i)
++            .map_or(p, |d| d.start)
++    }
++
 +    /// Moves `i` by `count` unit starts (a unit ends where the next starts), stopping at either
 +    /// end of the text. Returns where it got to and how many units it moved.
-+    pub(crate) fn step(self, mut i: usize, unit: Unit, count: i32) -> (usize, i32) {
++    pub(crate) fn step_in(self, mut i: usize, unit: Unit, count: i32, drawn: &[DrawnLine]) -> (usize, i32) {
 +        let mut moved = 0;
 +        for _ in 0..count.unsigned_abs() {
 +            if (count > 0 && i == self.len()) || (count < 0 && i == 0) {
 +                break;
 +            }
-+            i = if count > 0 { self.next(i, unit) } else { self.prev(i, unit) };
++            i = if count > 0 {
++                self.next_in(i, unit, drawn)
++            } else {
++                self.prev_in(i, unit, drawn)
++            };
 +            moved += 1;
 +        }
 +        (i, if count < 0 { -moved } else { moved })
 +    }
 +
-+    /// The zero-based line holding byte `i`.
-+    pub(crate) fn line_of(self, i: usize) -> usize {
-+        self.0.as_bytes()[..i].iter().filter(|&&b| b == b'\n').count()
++    /// The zero-based line holding byte `i`, counting drawn wrapped lines visually.
++    pub(crate) fn line_of_in(self, i: usize, drawn: &[DrawnLine]) -> usize {
++        let s = self.0;
++        let bs = bands(drawn);
++        if bs.is_empty() {
++            return count_newlines(&s[..i]);
++        }
++        let mut lines = 0usize;
++        let mut cursor = 0usize;
++        for b in &bs {
++            if i < b.start {
++                return lines + count_newlines(&s[cursor..i]);
++            }
++            lines += count_newlines(&s[cursor..b.start]);
++            if i < b.end || (i == b.end && b.end == s.len() && (b.start == b.end || s.as_bytes()[b.end - 1] != b'\n')) {
++                let sub = drawn[b.first..b.first + b.count]
++                    .iter()
++                    .rposition(|d| d.start <= i)
++                    .unwrap_or(0);
++                return lines + sub;
++            }
++            lines += b.count;
++            cursor = b.end;
++        }
++        lines + count_newlines(&s[cursor..i])
 +    }
 +
-+    /// Line `n`'s bytes, its line break included.
-+    pub(crate) fn line(self, n: usize) -> Option<(usize, usize)> {
-+        let start = if n == 0 { 0 } else { self.0.match_indices('\n').nth(n - 1)?.0 + 1 };
++    /// Line `n`'s bytes, counting drawn wrapped lines visually.
++    pub(crate) fn line_in(self, n: usize, drawn: &[DrawnLine]) -> Option<(usize, usize)> {
++        let s = self.0;
++        let bs = bands(drawn);
++        if bs.is_empty() {
++            let start = if n == 0 { 0 } else { s.match_indices('\n').nth(n - 1)?.0 + 1 };
++            return Some((start, self.next(start, Unit::Line)));
++        }
++        let mut rem = n;
++        let mut cursor = 0usize;
++        for b in &bs {
++            let gap_lines = count_newlines(&s[cursor..b.start]);
++            if rem < gap_lines {
++                let start = if rem == 0 {
++                    cursor
++                } else {
++                    cursor + s[cursor..b.start].match_indices('\n').nth(rem - 1)?.0 + 1
++                };
++                return Some((start, self.next(start, Unit::Line).min(b.start)));
++            }
++            rem -= gap_lines;
++            if rem < b.count {
++                let d = &drawn[b.first + rem];
++                return Some((d.start, d.end));
++            }
++            rem -= b.count;
++            cursor = b.end;
++        }
++        if cursor == s.len() && (s.is_empty() || s.as_bytes()[s.len() - 1] != b'\n') {
++            return None;
++        }
++        let start = if rem == 0 {
++            cursor
++        } else {
++            cursor + s[cursor..].match_indices('\n').nth(rem - 1)?.0 + 1
++        };
 +        Some((start, self.next(start, Unit::Line)))
 +    }
 +
@@ -225,7 +490,7 @@ index 0000000..d052290
 +    }
 +}
 diff --git a/src/node.rs b/src/node.rs
-index f4a97e3..86cc589 100644
+index f4a97e3..1f44d18 100644
 --- a/src/node.rs
 +++ b/src/node.rs
 @@ -12,7 +12,7 @@
@@ -241,7 +506,7 @@ index f4a97e3..86cc589 100644
  use crate::{
      context::Context,
      filters::{filter, filter_with_root_exception},
-+    long_text::{Text, long_text},
++    long_text::{Text, byte_at_point, long_text},
      text::PlatformRange as PlatformTextRange,
      util::*,
  };
@@ -307,7 +572,15 @@ index f4a97e3..86cc589 100644
  fn enqueue_property_change(
      queue: &mut Vec<QueuedEvent>,
      element: &IRawElementProviderSimple,
-@@ -907,6 +947,18 @@ impl PlatformNode {
+@@ -799,6 +839,7 @@ fn enqueue_property_change(
+     ISelectionItemProvider,
+     ISelectionProvider,
+     ITextProvider,
++    ITextProvider2,
+     IExpandCollapseProvider,
+     IWindowProvider
+ )]
+@@ -907,6 +948,18 @@ impl PlatformNode {
          })
      }
  
@@ -326,7 +599,7 @@ index f4a97e3..86cc589 100644
      fn resolve_for_text_pattern<F, T>(&self, f: F) -> Result<T>
      where
          for<'a> F: FnOnce(NodeRef<'a>) -> Result<T>,
-@@ -1272,7 +1324,10 @@ macro_rules! patterns {
+@@ -1272,7 +1325,10 @@ macro_rules! patterns {
                  old: &mut NodeWrapper,
              ) {
                  $(if self.$is_supported() && old.$is_supported() {
@@ -338,7 +611,7 @@ index f4a97e3..86cc589 100644
                          let old_value = old.$getter();
                          let new_value = self.$getter();
                          if old_value != new_value {
-@@ -1326,7 +1381,10 @@ properties! {
+@@ -1326,7 +1382,10 @@ properties! {
      (UIA_PositionInSetPropertyId, position_in_set),
      (UIA_SizeOfSetPropertyId, size_of_set),
      (UIA_AriaPropertiesPropertyId, aria_properties),
@@ -350,7 +623,7 @@ index f4a97e3..86cc589 100644
  }
  
  patterns! {
-@@ -1431,6 +1489,9 @@ patterns! {
+@@ -1431,6 +1490,9 @@ patterns! {
      )),
      (UIA_TextPatternId, ITextProvider, ITextProvider_Impl, is_text_pattern_supported, (), (
          fn GetSelection(&self) -> Result<*mut SAFEARRAY> {
@@ -360,18 +633,26 @@ index f4a97e3..86cc589 100644
              self.resolve_for_text_pattern(|node| {
                  if let Some(range) = node.text_selection() {
                      let platform_range: ITextRangeProvider = PlatformTextRange::new(&self.context, range).into();
-@@ -1455,6 +1516,10 @@ patterns! {
+@@ -1455,6 +1517,18 @@ patterns! {
          },
  
          fn RangeFromPoint(&self, point: &UiaPoint) -> Result<ITextRangeProvider> {
-+            // A long field's characters have no known places: its caret stands in.
-+            if let Some(range) = self.long_range(|_, s| (s.focus.character_index, s.focus.character_index))? {
++            let hit = self.resolve_with_context(|node, context| {
++                Ok(long_text(&node).map(|(text, s)| {
++                    let client_top_left = context.client_top_left();
++                    let pt = Point::new(point.x - client_top_left.x, point.y - client_top_left.y);
++                    let pt = node.transform().inverse() * pt;
++                    let at = byte_at_point(&node, text, pt).unwrap_or_else(|| text.clamp(s.focus.character_index));
++                    PlatformTextRange::new_long(&self.context, node.id(), at, at).into()
++                }))
++            })?;
++            if let Some(range) = hit {
 +                return Ok(range);
 +            }
              self.resolve_with_context_for_text_pattern(|node, context| {
                  let client_top_left = context.client_top_left();
                  let point = Point::new(point.x - client_top_left.x, point.y - client_top_left.y);
-@@ -1466,6 +1531,9 @@ patterns! {
+@@ -1466,6 +1540,9 @@ patterns! {
          },
  
          fn DocumentRange(&self) -> Result<ITextRangeProvider> {
@@ -381,7 +662,7 @@ index f4a97e3..86cc589 100644
              self.resolve_for_text_pattern(|node| {
                  let range = node.document_range();
                  Ok(PlatformTextRange::new(&self.context, range).into())
-@@ -1473,6 +1541,9 @@ patterns! {
+@@ -1473,6 +1550,9 @@ patterns! {
          },
  
          fn SupportedTextSelection(&self) -> Result<SupportedTextSelection> {
@@ -391,8 +672,42 @@ index f4a97e3..86cc589 100644
              self.resolve_for_text_pattern(|node| {
                  if node.has_text_selection() {
                      Ok(SupportedTextSelection_Single)
+@@ -1482,6 +1562,33 @@ patterns! {
+             })
+         }
+     )),
++    (UIA_TextPattern2Id, ITextProvider2, ITextProvider2_Impl, is_text_pattern_supported, (), (
++        fn RangeFromAnnotation(&self, _annotation: Ref<IRawElementProviderSimple>) -> Result<ITextRangeProvider> {
++            Err(not_supported())
++        },
++
++        fn GetCaretRange(&self, is_active: *mut BOOL) -> Result<ITextRangeProvider> {
++            let long_caret = self.resolve(|node| {
++                Ok(long_text(&node).map(|(text, s)| {
++                    if !is_active.is_null() {
++                        unsafe { *is_active = node.is_focused().into() };
++                    }
++                    let at = text.clamp(s.focus.character_index);
++                    PlatformTextRange::new_long(&self.context, node.id(), at, at).into()
++                }))
++            })?;
++            if let Some(range) = long_caret {
++                return Ok(range);
++            }
++            self.resolve_for_text_pattern(|node| {
++                if !is_active.is_null() {
++                    unsafe { *is_active = node.is_focused().into() };
++                }
++                let pos = node.text_selection_focus().unwrap_or_else(|| node.document_start());
++                Ok(PlatformTextRange::new(&self.context, pos.to_degenerate_range()).into())
++            })
++        }
++    )),
+     (UIA_ExpandCollapsePatternId, IExpandCollapseProvider, IExpandCollapseProvider_Impl, is_expand_collapse_pattern_supported, (
+         (UIA_ExpandCollapseExpandCollapseStatePropertyId, ExpandCollapseState, expand_collapse_state, ExpandCollapseState)
+     ), (
 diff --git a/src/text.rs b/src/text.rs
-index 6b18382..5a22675 100644
+index 6b18382..e62d3bc 100644
 --- a/src/text.rs
 +++ b/src/text.rs
 @@ -5,9 +5,12 @@
@@ -417,7 +732,7 @@ index 6b18382..5a22675 100644
 -use crate::{context::Context, util::*};
 +use crate::{
 +    context::Context,
-+    long_text::{Text, Unit, long_text},
++    long_text::{Text, Unit, bounding_boxes, drawn_lines, long_text},
 +    util::*,
 +};
 +
@@ -476,17 +791,17 @@ index 6b18382..5a22675 100644
              context: context.clone(),
 -            state: RwLock::new(range.downgrade()),
 +            state: RwLock::new(State::Runs(range.downgrade())),
-         }
-     }
- 
++        }
++    }
++
 +    /// Bytes `start..end` of long field `node`'s value.
 +    pub(crate) fn new_long(context: &Weak<Context>, node: FullNodeId, start: usize, end: usize) -> Self {
 +        Self {
 +            context: context.clone(),
 +            state: RwLock::new(State::Long { node, start, end }),
-+        }
-+    }
-+
+         }
+     }
+ 
 +    fn is_long(&self) -> bool {
 +        matches!(*self.state.read().unwrap(), State::Long { .. })
 +    }
@@ -589,18 +904,19 @@ index 6b18382..5a22675 100644
              let result = pos.cmp(other_pos);
              return Ok(result as i32);
          }
-@@ -363,14 +471,25 @@ impl ITextRangeProvider_Impl for PlatformRange_Impl {
+@@ -363,14 +471,26 @@ impl ITextRangeProvider_Impl for PlatformRange_Impl {
      }
  
      fn ExpandToEnclosingUnit(&self, unit: TextUnit) -> Result<()> {
 +        if self.is_long() {
-+            return self.long(|text, _, _, start, end| {
++            return self.long(|text, node, _, start, end| {
 +                let unit = long_unit(unit)?;
 +                if unit == Unit::Character && *start == text.len() {
 +                    return Ok(());
 +                }
-+                *start = text.start_of(*start, unit);
-+                *end = if *start == text.len() { *start } else { text.next(*start, unit) };
++                let drawn = if unit == Unit::Line { drawn_lines(&node, text) } else { Vec::new() };
++                *start = text.start_of_in(*start, unit, &drawn);
++                *end = if *start == text.len() { *start } else { text.next_in(*start, unit, &drawn) };
 +                Ok(())
 +            });
 +        }
@@ -617,7 +933,7 @@ index 6b18382..5a22675 100644
                  Ok(())
              });
          }
-@@ -417,6 +536,27 @@ impl ITextRangeProvider_Impl for PlatformRange_Impl {
+@@ -417,6 +537,31 @@ impl ITextRangeProvider_Impl for PlatformRange_Impl {
      }
  
      fn GetAttributeValue(&self, id: UIA_TEXTATTRIBUTE_ID) -> Result<VARIANT> {
@@ -627,11 +943,15 @@ index 6b18382..5a22675 100644
 +                    UIA_IsReadOnlyAttributeId => node.is_read_only().into(),
 +                    UIA_CaretPositionAttributeId => {
 +                        let at = *start;
++                        let drawn = drawn_lines(&node, text);
 +                        let value = if at != *end {
 +                            CaretPosition_Unknown
-+                        } else if text.is_start(at, Unit::Line) {
++                        } else if text.is_start_in(at, Unit::Line, &drawn) {
 +                            CaretPosition_BeginningOfLine
-+                        } else if at == text.len() || text.0.as_bytes()[at] == b'\n' {
++                        } else if at == text.len()
++                            || text.0.as_bytes()[at] == b'\n'
++                            || drawn.iter().any(|d| d.end == at && d.start < at)
++                        {
 +                            CaretPosition_EndOfLine
 +                        } else {
 +                            CaretPosition_Unknown
@@ -645,18 +965,31 @@ index 6b18382..5a22675 100644
          self.read(|range| match id {
              UIA_IsReadOnlyAttributeId => {
                  // TBD: do we ever want to support mixed read-only/editable text?
-@@ -492,6 +632,10 @@ impl ITextRangeProvider_Impl for PlatformRange_Impl {
+@@ -492,6 +637,23 @@ impl ITextRangeProvider_Impl for PlatformRange_Impl {
      }
  
      fn GetBoundingRectangles(&self) -> Result<*mut SAFEARRAY> {
 +        if self.is_long() {
-+            // Where a long field's lines are isn't known without laying them out.
-+            return Ok(std::ptr::null_mut());
++            return self.long(|text, node, context, start, end| {
++                let rects = bounding_boxes(&node, text, *start, *end);
++                if rects.is_empty() {
++                    return Ok(std::ptr::null_mut());
++                }
++                let client_top_left = context.client_top_left();
++                let mut result = Vec::<f64>::with_capacity(rects.len() * 4);
++                for rect in rects {
++                    result.push(rect.x0 + client_top_left.x);
++                    result.push(rect.y0 + client_top_left.y);
++                    result.push(rect.width());
++                    result.push(rect.height());
++                }
++                Ok(safe_array_from_f64_slice(&result))
++            });
 +        }
          self.read_with_context(|range, context| {
              let rects = range.bounding_boxes();
              if rects.is_empty() {
-@@ -511,13 +655,28 @@ impl ITextRangeProvider_Impl for PlatformRange_Impl {
+@@ -511,13 +673,28 @@ impl ITextRangeProvider_Impl for PlatformRange_Impl {
  
      fn GetEnclosingElement(&self) -> Result<IRawElementProviderSimple> {
          // Revisit this if we eventually support embedded objects.
@@ -686,19 +1019,20 @@ index 6b18382..5a22675 100644
          // The Microsoft docs imply that the provider isn't _required_
          // to truncate text at the max length, so we just ignore it.
          self.read(|range| {
-@@ -529,6 +688,19 @@ impl ITextRangeProvider_Impl for PlatformRange_Impl {
+@@ -529,6 +706,20 @@ impl ITextRangeProvider_Impl for PlatformRange_Impl {
      }
  
      fn Move(&self, unit: TextUnit, count: i32) -> Result<i32> {
 +        if self.is_long() {
-+            return self.long(|text, _, _, start, end| {
++            return self.long(|text, node, _, start, end| {
 +                let unit = long_unit(unit)?;
++                let drawn = if unit == Unit::Line { drawn_lines(&node, text) } else { Vec::new() };
 +                let degenerate = start == end;
-+                let from = if degenerate { *start } else { text.start_of(*start, unit) };
-+                let (at, moved) = text.step(from, unit, count);
++                let from = if degenerate { *start } else { text.start_of_in(*start, unit, &drawn) };
++                let (at, moved) = text.step_in(from, unit, count, &drawn);
 +                if moved != 0 {
 +                    *start = at;
-+                    *end = if degenerate || at == text.len() { at } else { text.next(at, unit) };
++                    *end = if degenerate || at == text.len() { at } else { text.next_in(at, unit, &drawn) };
 +                }
 +                Ok(moved)
 +            });
@@ -706,19 +1040,20 @@ index 6b18382..5a22675 100644
          self.write(|range| {
              let degenerate = range.is_degenerate();
              let start = range.start();
-@@ -557,6 +729,19 @@ impl ITextRangeProvider_Impl for PlatformRange_Impl {
+@@ -557,6 +748,20 @@ impl ITextRangeProvider_Impl for PlatformRange_Impl {
          unit: TextUnit,
          count: i32,
      ) -> Result<i32> {
 +        if self.is_long() {
-+            return self.long(|text, _, _, start, end| {
++            return self.long(|text, node, _, start, end| {
 +                let unit = long_unit(unit)?;
++                let drawn = if unit == Unit::Line { drawn_lines(&node, text) } else { Vec::new() };
 +                let at = match endpoint {
 +                    TextPatternRangeEndpoint_Start => *start,
 +                    TextPatternRangeEndpoint_End => *end,
 +                    _ => return Err(invalid_arg()),
 +                };
-+                let (at, moved) = text.step(at, unit, count);
++                let (at, moved) = text.step_in(at, unit, count, &drawn);
 +                set_long_endpoint(start, end, endpoint, at);
 +                Ok(moved)
 +            });
@@ -726,7 +1061,7 @@ index 6b18382..5a22675 100644
          self.write(|range| {
              let pos = position_from_endpoint(range, endpoint)?;
              let (pos, moved) =
-@@ -574,24 +759,50 @@ impl ITextRangeProvider_Impl for PlatformRange_Impl {
+@@ -574,24 +779,50 @@ impl ITextRangeProvider_Impl for PlatformRange_Impl {
      ) -> Result<()> {
          let other = unsafe { required_param(&other)?.as_impl() };
          self.require_same_context(other)?;
@@ -779,7 +1114,7 @@ index 6b18382..5a22675 100644
          self.do_action(|range, tree| {
              let (target_node, target_tree) = tree.state().locate_node(range.node().id()).unwrap();
              ActionRequest {
-@@ -614,6 +825,9 @@ impl ITextRangeProvider_Impl for PlatformRange_Impl {
+@@ -614,6 +845,9 @@ impl ITextRangeProvider_Impl for PlatformRange_Impl {
      }
  
      fn ScrollIntoView(&self, align_to_top: BOOL) -> Result<()> {

@@ -24,7 +24,7 @@ use windows::{
 
 use crate::{
     context::Context,
-    long_text::{Text, Unit, long_text},
+    long_text::{Text, Unit, bounding_boxes, drawn_lines, long_text},
     util::*,
 };
 
@@ -472,13 +472,14 @@ impl ITextRangeProvider_Impl for PlatformRange_Impl {
 
     fn ExpandToEnclosingUnit(&self, unit: TextUnit) -> Result<()> {
         if self.is_long() {
-            return self.long(|text, _, _, start, end| {
+            return self.long(|text, node, _, start, end| {
                 let unit = long_unit(unit)?;
                 if unit == Unit::Character && *start == text.len() {
                     return Ok(());
                 }
-                *start = text.start_of(*start, unit);
-                *end = if *start == text.len() { *start } else { text.next(*start, unit) };
+                let drawn = if unit == Unit::Line { drawn_lines(&node, text) } else { Vec::new() };
+                *start = text.start_of_in(*start, unit, &drawn);
+                *end = if *start == text.len() { *start } else { text.next_in(*start, unit, &drawn) };
                 Ok(())
             });
         }
@@ -542,11 +543,15 @@ impl ITextRangeProvider_Impl for PlatformRange_Impl {
                     UIA_IsReadOnlyAttributeId => node.is_read_only().into(),
                     UIA_CaretPositionAttributeId => {
                         let at = *start;
+                        let drawn = drawn_lines(&node, text);
                         let value = if at != *end {
                             CaretPosition_Unknown
-                        } else if text.is_start(at, Unit::Line) {
+                        } else if text.is_start_in(at, Unit::Line, &drawn) {
                             CaretPosition_BeginningOfLine
-                        } else if at == text.len() || text.0.as_bytes()[at] == b'\n' {
+                        } else if at == text.len()
+                            || text.0.as_bytes()[at] == b'\n'
+                            || drawn.iter().any(|d| d.end == at && d.start < at)
+                        {
                             CaretPosition_EndOfLine
                         } else {
                             CaretPosition_Unknown
@@ -633,8 +638,21 @@ impl ITextRangeProvider_Impl for PlatformRange_Impl {
 
     fn GetBoundingRectangles(&self) -> Result<*mut SAFEARRAY> {
         if self.is_long() {
-            // Where a long field's lines are isn't known without laying them out.
-            return Ok(std::ptr::null_mut());
+            return self.long(|text, node, context, start, end| {
+                let rects = bounding_boxes(&node, text, *start, *end);
+                if rects.is_empty() {
+                    return Ok(std::ptr::null_mut());
+                }
+                let client_top_left = context.client_top_left();
+                let mut result = Vec::<f64>::with_capacity(rects.len() * 4);
+                for rect in rects {
+                    result.push(rect.x0 + client_top_left.x);
+                    result.push(rect.y0 + client_top_left.y);
+                    result.push(rect.width());
+                    result.push(rect.height());
+                }
+                Ok(safe_array_from_f64_slice(&result))
+            });
         }
         self.read_with_context(|range, context| {
             let rects = range.bounding_boxes();
@@ -689,14 +707,15 @@ impl ITextRangeProvider_Impl for PlatformRange_Impl {
 
     fn Move(&self, unit: TextUnit, count: i32) -> Result<i32> {
         if self.is_long() {
-            return self.long(|text, _, _, start, end| {
+            return self.long(|text, node, _, start, end| {
                 let unit = long_unit(unit)?;
+                let drawn = if unit == Unit::Line { drawn_lines(&node, text) } else { Vec::new() };
                 let degenerate = start == end;
-                let from = if degenerate { *start } else { text.start_of(*start, unit) };
-                let (at, moved) = text.step(from, unit, count);
+                let from = if degenerate { *start } else { text.start_of_in(*start, unit, &drawn) };
+                let (at, moved) = text.step_in(from, unit, count, &drawn);
                 if moved != 0 {
                     *start = at;
-                    *end = if degenerate || at == text.len() { at } else { text.next(at, unit) };
+                    *end = if degenerate || at == text.len() { at } else { text.next_in(at, unit, &drawn) };
                 }
                 Ok(moved)
             });
@@ -730,14 +749,15 @@ impl ITextRangeProvider_Impl for PlatformRange_Impl {
         count: i32,
     ) -> Result<i32> {
         if self.is_long() {
-            return self.long(|text, _, _, start, end| {
+            return self.long(|text, node, _, start, end| {
                 let unit = long_unit(unit)?;
+                let drawn = if unit == Unit::Line { drawn_lines(&node, text) } else { Vec::new() };
                 let at = match endpoint {
                     TextPatternRangeEndpoint_Start => *start,
                     TextPatternRangeEndpoint_End => *end,
                     _ => return Err(invalid_arg()),
                 };
-                let (at, moved) = text.step(at, unit, count);
+                let (at, moved) = text.step_in(at, unit, count, &drawn);
                 set_long_endpoint(start, end, endpoint, at);
                 Ok(moved)
             });

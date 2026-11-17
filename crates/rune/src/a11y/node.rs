@@ -92,6 +92,10 @@ impl<S: 'static> Runtime<S> {
         // Its box in its viewport's content space, which scrolling leaves alone.
         let r = rect(self.drawn[i], w.shift);
         [r.x0, r.y0, r.x1, r.y1].map(f64::to_bits).hash(&mut h);
+        // A long field publishes only its drawn visual lines: scrolling changes which ones show.
+        if self.a11y_long_field(i) {
+            [self.drawn[i][1], w.clip_y[0], w.clip_y[1]].map(f32::to_bits).hash(&mut h);
+        }
         w.scrolled.hash(&mut h);
         self.env.scale.to_bits().hash(&mut h);
         self.drawn_scale.get(i).map(|v| v.to_bits()).hash(&mut h);

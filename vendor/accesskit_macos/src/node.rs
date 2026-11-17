@@ -32,7 +32,7 @@ use std::rc::{Rc, Weak};
 use crate::{
     context::Context,
     filters::filter,
-    long_text::{Text, Unit, long_text},
+    long_text::{Text, Unit, bounding_boxes, byte_at_point, drawn_lines, long_text},
     util::*,
 };
 
@@ -835,7 +835,8 @@ declare_class!(
         fn insertion_point_line_number(&self) -> NSInteger {
             self.resolve(|node| {
                 if let Some((text, s)) = long_text(node) {
-                    return text.line_of(text.clamp(s.focus.character_index)) as _;
+                    let drawn = drawn_lines(node, text);
+                    return text.line_of_in(text.clamp(s.focus.character_index), &drawn) as _;
                 }
                 if node.supports_text_ranges() {
                     if let Some(pos) = node.text_selection_focus() {
@@ -851,7 +852,8 @@ declare_class!(
         fn range_for_line(&self, line_index: NSInteger) -> NSRange {
             self.resolve(|node| {
                 if let Some((text, _)) = long_text(node) {
-                    let line = usize::try_from(line_index).ok().and_then(|n| text.line(n));
+                    let drawn = drawn_lines(node, text);
+                    let line = usize::try_from(line_index).ok().and_then(|n| text.line_in(n, &drawn));
                     return line.map_or_else(|| NSRange::new(0, 0), |(a, b)| long_ns_range(text, a, b));
                 }
                 if node.supports_text_ranges() && line_index >= 0 {
@@ -874,9 +876,9 @@ declare_class!(
                     }
                 };
 
-                // A long field's characters have no known places: its caret stands in.
                 if let Some((text, s)) = long_text(node) {
-                    let at = text.clamp(s.focus.character_index);
+                    let pt = from_ns_point(&view, node, point);
+                    let at = byte_at_point(node, text, pt).unwrap_or_else(|| text.clamp(s.focus.character_index));
                     return long_ns_range(text, at, text.next(at, Unit::Character));
                 }
                 if node.supports_text_ranges() {
@@ -1028,7 +1030,14 @@ declare_class!(
                     }
                 };
 
-                // Where a long field's lines are isn't known without laying them out.
+                if let Some((text, _)) = long_text(node) {
+                    let (a, b) = long_bytes(text, range);
+                    let rects = bounding_boxes(node, text, a, b);
+                    if let Some(rect) = rects.into_iter().reduce(|r1, r2| r1.union(r2)) {
+                        return to_ns_rect(&view, rect);
+                    }
+                    return NSRect::ZERO;
+                }
                 if node.supports_text_ranges() {
                     if let Some(range) = from_ns_range(node, range) {
                         let rects = range.bounding_boxes();
@@ -1048,7 +1057,8 @@ declare_class!(
         fn line_for_index(&self, index: NSInteger) -> NSInteger {
             self.resolve(|node| {
                 if let Some((text, _)) = long_text(node) {
-                    return text.line_of(text.from_utf16(index.max(0) as _)) as _;
+                    let drawn = drawn_lines(node, text);
+                    return text.line_of_in(text.from_utf16(index.max(0) as _), &drawn) as _;
                 }
                 if node.supports_text_ranges() && index >= 0 {
                     if let Some(pos) = node.text_position_from_global_utf16_index(index as _) {

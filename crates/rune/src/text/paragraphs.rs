@@ -143,17 +143,18 @@ pub(crate) struct Piece<'a> {
     pub(crate) flow: Flow,
     /// Its paragraph's index in the field, for its [`Block`].
     pub(crate) index: usize,
+    pub(crate) shaped: bool,
     isolates: &'a [(u32, u32)],
     whole: bool,
 }
 
 impl<'a> Piece<'a> {
     fn of_paragraph(k: usize, p: &'a Paragraph) -> Piece<'a> {
-        Piece { layout: &p.layout, shared: Some(&p.layout), start: p.start, end: p.end, y: p.y, height: p.height, flow: p.flow, index: k, isolates: &p.isolates, whole: false }
+        Piece { layout: &p.layout, shared: Some(&p.layout), start: p.start, end: p.end, y: p.y, height: p.height, flow: p.flow, index: k, shaped: p.shaped, isolates: &p.isolates, whole: false }
     }
 
     fn whole(layout: &'a Layout<Ink>) -> Piece<'a> {
-        Piece { layout, shared: None, start: 0, end: usize::MAX, y: 0.0, height: layout.height(), flow: Flow::of_layout(layout), index: 0, isolates: &[], whole: true }
+        Piece { layout, shared: None, start: 0, end: usize::MAX, y: 0.0, height: layout.height(), flow: Flow::of_layout(layout), index: 0, shaped: true, isolates: &[], whole: true }
     }
 
     /// Whether it's a text's one layout rather than a paragraph of a field's.
