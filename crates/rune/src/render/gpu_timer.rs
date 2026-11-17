@@ -21,6 +21,8 @@ pub(super) struct GpuTimer {
     slots: Vec<Slot>,
     /// This frame's passes so far: (label, target bytes).
     passes: Mutex<Vec<(&'static str, u64)>>,
+    /// This frame's instances by kind (`KIND_*`): count and the device pixels their quads cover.
+    kinds: Mutex<Vec<(u32, f64)>>,
     /// The slot resolved for this frame, mapped after its submit.
     pending: Mutex<Option<usize>>,
     frames: std::sync::atomic::AtomicU64,
@@ -33,6 +35,7 @@ pub(super) struct GpuTimer {
 struct Slot {
     buffer: wgpu::Buffer,
     passes: Mutex<Vec<(&'static str, u64)>>,
+    kinds: Mutex<Vec<(u32, f64)>>,
     frame: std::sync::atomic::AtomicU64,
     /// When the frame was submitted (`host_clock::now_ns`, the live frame log's clock).
     submitted: std::sync::atomic::AtomicU64,
@@ -50,15 +53,29 @@ impl GpuTimer {
         Some(GpuTimer {
             queries: device.create_query_set(&wgpu::QuerySetDescriptor { label: Some("gpu timer"), ty: wgpu::QueryType::Timestamp, count: CAP * 2 }),
             resolve: buffer(wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC),
-            slots: (0..SLOTS).map(|_| Slot { buffer: buffer(wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST), passes: Mutex::new(Vec::new()),
+            slots: (0..SLOTS).map(|_| Slot { buffer: buffer(wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST), passes: Mutex::new(Vec::new()), kinds: Mutex::new(Vec::new()),
                 frame: Default::default(), submitted: Default::default(), busy: AtomicBool::new(false), ready: Arc::new(AtomicBool::new(false)) }).collect(),
             passes: Mutex::new(Vec::new()),
+            kinds: Mutex::new(Vec::new()),
             pending: Mutex::new(None),
             frames: Default::default(),
             period: queue.get_timestamp_period(),
             inside: device.features().contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS),
             out: Mutex::new(std::io::BufWriter::new(file)),
         })
+    }
+
+    /// This frame's instances: count and covered device pixels by kind, clipped to their clip and the viewport.
+    pub(super) fn instances(&self, instances: &[super::Instance], viewport: (u32, u32)) {
+        let mut kinds = vec![(0u32, 0f64); 16];
+        for i in instances {
+            let k = (i.params[1] as usize).min(15);
+            let x0 = i.rect[0].max(i.clip[0]).max(0.0); let y0 = i.rect[1].max(i.clip[1]).max(0.0);
+            let x1 = (i.rect[0] + i.rect[2]).min(i.clip[2]).min(viewport.0 as f32); let y1 = (i.rect[1] + i.rect[3]).min(i.clip[3]).min(viewport.1 as f32);
+            kinds[k].0 += 1;
+            kinds[k].1 += f64::from((x1 - x0).max(0.0) * (y1 - y0).max(0.0));
+        }
+        *self.kinds.lock().unwrap_or_else(|e| e.into_inner()) = kinds;
     }
 
     /// Timestamps for one more pass of this frame, labelled `label`, covering `bytes` of target.
@@ -91,6 +108,7 @@ impl GpuTimer {
         encoder.resolve_query_set(&self.queries, 0..2 * n, &self.resolve, 0);
         encoder.copy_buffer_to_buffer(&self.resolve, 0, &slot.buffer, 0, u64::from(n) * 16);
         *slot.passes.lock().unwrap_or_else(|e| e.into_inner()) = passes;
+        *slot.kinds.lock().unwrap_or_else(|e| e.into_inner()) = std::mem::take(&mut *self.kinds.lock().unwrap_or_else(|e| e.into_inner()));
         slot.frame.store(frame, Ordering::Relaxed);
         slot.submitted.store(crate::frame::host_clock::now_ns(), Ordering::Relaxed);
         slot.ready.store(false, Ordering::Release);
@@ -109,6 +127,8 @@ impl GpuTimer {
         for slot in &self.slots {
             if !slot.busy.load(Ordering::Acquire) || !slot.ready.load(Ordering::Acquire) { continue; }
             let passes = std::mem::take(&mut *slot.passes.lock().unwrap_or_else(|e| e.into_inner()));
+            let kinds: serde_json::Map<String, serde_json::Value> = std::mem::take(&mut *slot.kinds.lock().unwrap_or_else(|e| e.into_inner())).iter().enumerate()
+                .filter(|(_, (n, _))| *n > 0).map(|(k, (n, px))| (k.to_string(), serde_json::json!([n, px.round()]))).collect();
             let ticks: Vec<u64> = {
                 let Ok(view) = slot.buffer.slice(..).get_mapped_range() else { continue };
                 bytemuck::cast_slice::<u8, u64>(&view[..passes.len() * 16]).to_vec()
@@ -124,7 +144,7 @@ impl GpuTimer {
             let first = (0..passes.len()).map(|i| ticks[2 * i]).filter(|&t| t != 0).min().unwrap_or(0);
             let last = (0..passes.len()).map(|i| ticks[2 * i + 1]).max().unwrap_or(0);
             let line = serde_json::json!({ "frame": slot.frame.load(Ordering::Relaxed), "t": slot.submitted.load(Ordering::Relaxed), "span_us": (us(last.saturating_sub(first)) * 10.0).round() / 10.0,
-                "passes": passes.len(), "bytes": passes.iter().map(|p| p.1).sum::<u64>(), "by": list });
+                "kinds": kinds, "passes": passes.len(), "bytes": passes.iter().map(|p| p.1).sum::<u64>(), "by": list });
             let mut out = self.out.lock().unwrap_or_else(|e| e.into_inner());
             let _ = writeln!(out, "{line}");
             let _ = out.flush();

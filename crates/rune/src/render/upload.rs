@@ -226,6 +226,20 @@ impl Renderer {
         if self.springs.is_some() { assert_eq!(instances.len(), self.spring_instances); }
         #[cfg(feature = "frame-profile")]
         self.gpu_timer.get_or_init(|| super::gpu_timer::GpuTimer::new(device, queue));
+        // Measuring only: `RUNE_CUT=kind<N>` draws instances of kind N (`KIND_*`) with no area.
+        #[cfg(feature = "frame-profile")]
+        let cut: Vec<Instance>;
+        #[cfg(feature = "frame-profile")]
+        let instances = if (0..16).any(|k| super::Renderer::cut(&format!("kind{k}"))) {
+            cut = instances.iter().map(|i| {
+                let mut i = *i;
+                if super::Renderer::cut(&format!("kind{}", i.params[1] as u32)) { i.rect[2] = 0.0; i.rect[3] = 0.0; }
+                i
+            }).collect();
+            &cut[..]
+        } else { instances };
+        #[cfg(feature = "frame-profile")]
+        if let Some(Some(t)) = self.gpu_timer.get() { t.instances(instances, viewport); }
         let staging = self.uploads.staging(device, queue);
         if staging.lost() != self.uploads.lost.0 {
             self.uploads.lost.0 = staging.lost();
