@@ -796,9 +796,20 @@ fn prepare(hwnd: isize, size: (u32, u32), srgb: bool, features: wgpu::Features, 
     let target_format = if srgb { config.format.remove_srgb_suffix() } else { config.format };
     let mut renderer = renderer.unwrap_or_else(|| Renderer::new(&gpu.device, target_format));
     let instances = std::mem::take(&mut *latest.lock().unwrap_or_else(|e| e.into_inner()));
-    warm_frame(&gpu, &mut renderer, target_format, (config.width, config.height), &instances);
+    warm_window(&gpu, &mut renderer, target_format, (config.width, config.height), &instances);
     crate::marks::mark("gpu.window.warmed");
     Ok(Prepared { gpu, renderer, surface, config, handover })
+}
+
+/// The window's start-up warm-up, the one place it's ordered: on the GPU thread, before the
+/// hand-over, whatever the first GPU frames would otherwise create or compile on the UI thread,
+/// where they carry input. After the hand-over, only idle turns warm anything more.
+/// 1. The layer pipelines, started on their own thread and not waited for: the longest head start
+///    for a compile of hundreds of milliseconds (`Renderer::warm_layer_pipelines`).
+/// 2. The window's frame, and the command allocators the first frames record on (`warm_frame`).
+fn warm_window(gpu: &Gpu, renderer: &mut Renderer, format: wgpu::TextureFormat, size: (u32, u32), instances: &[crate::render::Instance]) {
+    renderer.warm_layer_pipelines(&gpu.device);
+    warm_frame(gpu, renderer, format, size, instances);
 }
 
 /// On the GPU thread, before the hand-over: the renderer draws the window's latest CPU frame once,
