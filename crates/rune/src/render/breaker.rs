@@ -141,8 +141,13 @@ const POOL_WIDE: (u32, usize) = (128, 2);
 /// resources (`Renderer::warm_backdrop`) before content first goes under it.
 static BLUR_SEEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-pub(crate) fn note_backdrop_blur() {
+/// The last frosted element painted: its rect and sigma in device pixels, which size the warmed copies
+/// when no blur record is in the frame yet (nothing under the element).
+static BLUR_NOTED: std::sync::Mutex<Option<([f32; 4], f32)>> = std::sync::Mutex::new(None);
+
+pub(crate) fn note_backdrop_blur(rect: [f32; 4], sigma: f32) {
     BLUR_SEEN.store(true, std::sync::atomic::Ordering::Relaxed);
+    *BLUR_NOTED.lock().unwrap_or_else(|e| e.into_inner()) = Some((rect, sigma));
 }
 
 /// Frames that made a backdrop blur's resources (the blur, its copies, its first pyramid)
@@ -345,7 +350,9 @@ impl Renderer {
         // The blur itself comes from the first-use warm-up; the pyramid binds against it.
         if self.backdrop_pending() { return; }
         // The copies are the size of what the blurs cover (`copy_need`), known once a record draws.
-        let Some(copies) = super::backdrop_blur::copy_need(instances.iter(), (vw, vh)) else { return };
+        // From this frame's records, or the frosted element painted with nothing under it yet.
+        let noted = (*BLUR_NOTED.lock().unwrap_or_else(|e| e.into_inner())).map(|(rect, sigma)| super::Instance { rect, params: [sigma, super::KIND_BACKDROP_BLUR, 0.0, 1.0], ..bytemuck::Zeroable::zeroed() });
+        let Some(copies) = super::backdrop_blur::copy_need(instances.iter(), (vw, vh)).or_else(|| copy_need_noted(noted.as_ref(), (vw, vh))) else { return };
         // Every format: under a header, content in a list's fade composites into a layer too.
         if self.warm_backdrops(device, copies) { return; }
         if let Some(blur) = &mut self.backdrop_blur {
@@ -526,3 +533,8 @@ fn report(device: &wgpu::Device, feature: Feature, why: &str) {
 #[cfg(test)]
 #[path = "breaker_tests.rs"]
 mod tests;
+
+/// `copy_need` for the noted frosted element (`note_backdrop_blur`).
+fn copy_need_noted(noted: Option<&super::Instance>, viewport: (u32, u32)) -> Option<(u32, u32)> {
+    super::backdrop_blur::copy_need(noted.into_iter(), viewport)
+}
