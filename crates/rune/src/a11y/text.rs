@@ -121,11 +121,11 @@ fn build_visual_line(
         push_span_chunks(content, at..range.end, end_x, 0.0, &mut lengths, &mut positions, &mut widths);
     }
     word_starts.retain(|&w| (w as usize) < lengths.len());
-    let top = (p.y + m.block_min_coord) / s;
-    let mut height = (m.block_max_coord - m.block_min_coord) / s;
-    if !p.is_whole() && p.start == p.end && height <= 0.0 {
-        height = p.height / s;
+    if !m.block_min_coord.is_finite() || !m.block_max_coord.is_finite() || m.block_max_coord < m.block_min_coord {
+        return None;
     }
+    let top = (p.y + m.block_min_coord) / s;
+    let height = (m.block_max_coord - m.block_min_coord) / s;
     let rect = [origin[0] + m.offset / s, origin[1] + top, (max_right - m.offset).max(0.0) / s, height];
     Some(Line { range, rect, lengths, positions, widths, word_starts, rtl: line_rtl })
 }
@@ -167,6 +167,21 @@ fn push_piece_lines_in(
 ) {
     if out.len() >= max_out { return; }
     let first = out.len();
+    if p.is_blank() {
+        if band.is_none_or(|(top_px, bot_px)| p.y + p.height >= top_px && p.y <= bot_px) {
+            out.push(Line {
+                range: p.start..p.start,
+                rect: [origin[0], origin[1] + p.y / s, 0.0, p.height / s],
+                lengths: Vec::new(),
+                positions: Vec::new(),
+                widths: Vec::new(),
+                word_starts: Vec::new(),
+                rtl: p.flow == crate::el::Flow::Rtl,
+            });
+            finish_piece_newline(&p, content, first, true, out);
+        }
+        return;
+    }
     let total = p.layout.len();
     let lo = match band {
         Some((top_px, _)) => {
@@ -525,7 +540,7 @@ impl<S: 'static> Runtime<S> {
                 if cp.shaped {
                     let shaped_caret = cp.shaped(caret);
                     let total = cp.layout.len();
-                    if total == 0 && !cp.is_whole() {
+                    if (cp.is_blank() || total == 0) && !cp.is_whole() {
                         let mut single = Vec::new();
                         push_piece_lines_in(cp, content, s, origin, None, 1, &mut single);
                         if let Some(cl) = single.pop() {
