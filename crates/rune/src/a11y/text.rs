@@ -82,7 +82,7 @@ fn build_visual_line(
     let range = p.content(line.text_range().start)..p.content(line.text_range().end);
     if range.end > content.len() { return None; }
     let mut raw_clusters = Vec::new();
-    let mut line_rtl = p.flow == crate::el::Flow::Rtl;
+    let line_rtl = p.flow == crate::el::Flow::Rtl;
     let mut max_right = m.offset;
     for run in line.runs() {
         let mut cx = m.inline_min_coord
@@ -91,7 +91,6 @@ fn build_visual_line(
             let adv = cl.advance();
             let r = cl.text_range();
             let r = p.content(r.start)..p.content(r.end);
-            if cl.is_rtl() { line_rtl = true; }
             if r.start < range.end && r.end <= range.end && !r.is_empty() {
                 raw_clusters.push((r, (cx - m.offset) / s, adv / s, cl.is_word_boundary()));
             }
@@ -107,8 +106,15 @@ fn build_visual_line(
         if r.end <= at { continue; }
         let start = r.start.max(at);
         if start > at {
-            let prev_end = positions.last().zip(widths.last()).map_or(0.0, |(&px, &pw)| px + pw);
-            push_span_chunks(content, at..start, prev_end, 0.0, &mut lengths, &mut positions, &mut widths);
+            // Bytes a cluster skipped (an ignorable or BiDi mark) join the character before when
+            // they fit in its u8 length, avoiding an extra zero-width character stop.
+            let gap = start - at;
+            if let Some(last) = lengths.last_mut().filter(|l| usize::from(**l) + gap <= 255) {
+                *last += gap as u8;
+            } else {
+                let prev_end = positions.last().zip(widths.last()).map_or(0.0, |(&px, &pw)| px + pw);
+                push_span_chunks(content, at..start, prev_end, 0.0, &mut lengths, &mut positions, &mut widths);
+            }
         }
         if wb && !lengths.is_empty() && lengths.len() < 256 {
             word_starts.push(lengths.len() as u8);
@@ -251,6 +257,85 @@ pub(crate) fn byte_at(lines: &[Line], k: usize, c: usize) -> Option<usize> {
     Some(l.range.start + l.lengths.iter().take(c).map(|&n| n as usize).sum::<usize>())
 }
 
+#[allow(clippy::too_many_arguments)]
+fn fold_line_preedit(
+    model_text: &str,
+    disp_range: std::ops::Range<usize>,
+    line_w: f32,
+    rtl: bool,
+    (sel_a, sel_b, p_len, caret_in_pre): (usize, usize, usize, usize),
+    lengths: &[u8],
+    positions: &[f32],
+    widths: &[f32],
+) -> (Vec<u8>, Vec<f32>, Vec<f32>) {
+    let p_start = sel_a;
+    let p_end = sel_a + p_len;
+    let caret_disp = sel_a + caret_in_pre;
+    let (mut out_l, mut out_p, mut out_w) = (
+        Vec::with_capacity(lengths.len()),
+        Vec::with_capacity(lengths.len()),
+        Vec::with_capacity(lengths.len()),
+    );
+    let mut disp_cur = disp_range.start;
+    let mut pre_min = f32::INFINITY;
+    let mut pre_max = f32::NEG_INFINITY;
+    let mut caret_x: Option<f32> = None;
+    let mut folded = false;
+
+    let flush_fold = |folded: &mut bool,
+                      pre_min: f32,
+                      pre_max: f32,
+                      caret_x: Option<f32>,
+                      out_l: &mut Vec<u8>,
+                      out_p: &mut Vec<f32>,
+                      out_w: &mut Vec<f32>| {
+        if *folded { return; }
+        *folded = true;
+        let x0 = if pre_min.is_finite() { pre_min } else if rtl { line_w } else { 0.0 };
+        let x1 = if pre_max.is_finite() { pre_max } else { x0 };
+        if disp_range.start <= p_start && sel_b > sel_a {
+            push_span_chunks(model_text, sel_a..sel_b, x0, (x1 - x0).max(0.0), out_l, out_p, out_w);
+        } else if (disp_range.start <= caret_disp && caret_disp <= disp_range.end)
+            || disp_range.start <= p_start
+        {
+            let cx = caret_x.unwrap_or(if rtl { x0 } else { x1 });
+            out_l.push(0);
+            out_p.push(cx);
+            out_w.push(0.0);
+        }
+    };
+
+    for k in 0..lengths.len() {
+        let len = lengths[k];
+        let pos = positions.get(k).copied().unwrap_or(0.0);
+        let wid = widths.get(k).copied().unwrap_or(0.0);
+        let next = disp_cur + usize::from(len);
+        if next <= p_start {
+            out_l.push(len);
+            out_p.push(pos);
+            out_w.push(wid);
+        } else if disp_cur >= p_end {
+            flush_fold(&mut folded, pre_min, pre_max, caret_x, &mut out_l, &mut out_p, &mut out_w);
+            out_l.push(len);
+            out_p.push(pos);
+            out_w.push(wid);
+        } else {
+            pre_min = pre_min.min(pos);
+            pre_max = pre_max.max(pos + wid.max(0.0));
+            if caret_disp <= disp_cur && caret_x.is_none() {
+                caret_x = Some(if rtl { pos + wid } else { pos });
+            } else if caret_disp >= next {
+                caret_x = Some(if rtl { pos } else { pos + wid });
+            } else if caret_disp > disp_cur && caret_disp < next {
+                caret_x = Some(pos + wid * 0.5);
+            }
+        }
+        disp_cur = next;
+    }
+    flush_fold(&mut folded, pre_min, pre_max, caret_x, &mut out_l, &mut out_p, &mut out_w);
+    (out_l, out_p, out_w)
+}
+
 impl<S: 'static> Runtime<S> {
     /// Node `i`'s text as AccessKit sees it: the lines of a field or selectable text, and the
     /// links of any text, pushed after it as its children.
@@ -269,7 +354,9 @@ impl<S: 'static> Runtime<S> {
                 let id = line_id(n.id, k);
                 let mut run = AkNode::new(Role::TextRun);
                 run.set_value(content.get(l.range.clone()).unwrap_or_default());
-                run.set_text_direction(if l.rtl { TextDirection::RightToLeft } else { TextDirection::LeftToRight });
+                // `positions` are visual offsets from the line's left edge, which AccessKit's
+                // `LeftToRight` arithmetic expects for LTR, RTL, and mixed BiDi runs alike.
+                run.set_text_direction(TextDirection::LeftToRight);
                 run.set_bounds(AkRect {
                     x0: round(l.rect[0] + w.shift[0]), y0: round(l.rect[1] + w.shift[1]),
                     x1: round(l.rect[0] + l.rect[2] + w.shift[0]), y1: round(l.rect[1] + l.rect[3] + w.shift[1]),
@@ -390,8 +477,9 @@ impl<S: 'static> Runtime<S> {
     }
 
     /// Single shared predicate deciding whether node `i` is a non-secret text field answered
-    /// through the on-demand long-field path (past `RUN_MAX_BYTES`, waiting lazy paragraphs, or
-    /// truncated/line-capped so runs would not cover the whole value).
+    /// through the on-demand long-field path: past `RUN_MAX_BYTES`, waiting lazy paragraphs, or
+    /// laid-out lines that do not cover the whole value (for example an input clipped by `max_lines`
+    /// or `truncate`). Short `.truncate_fade()` fields whose layout covers the value stay on `TextRun`.
     pub(super) fn a11y_uses_long_field(&self, i: usize) -> bool {
         let n = &self.nodes[i];
         let (Some(spec), Some(tl), Some(input)) = (n.text.as_deref(), n.text_layout.as_ref(), n.input.as_deref()) else {
@@ -399,12 +487,18 @@ impl<S: 'static> Runtime<S> {
         };
         if input.edit.is_secure() || n.elided.is_some() { return false; }
         let waiting = matches!(tl, crate::text::TextLayout::Paragraphs(p) if p.waiting());
-        waiting
-            || input.edit.text.len() > RUN_MAX_BYTES
-            || spec.content.len() > RUN_MAX_BYTES
-            || spec.max_lines > 0
-            || spec.truncate
-            || spec.truncate_fade
+        if waiting || input.edit.text.len() > RUN_MAX_BYTES || spec.content.len() > RUN_MAX_BYTES {
+            return true;
+        }
+        self.a11y_lines_inner(i).is_none()
+    }
+
+    fn a11y_long_content_key(&self, i: usize) -> u64 {
+        let n = &self.nodes[i];
+        n.text.as_deref().and_then(|t| t.shape.map(|(_, k)| k))
+            .or_else(|| n.text_layout.as_ref().and_then(crate::text::TextLayout::content_key))
+            .or_else(|| n.text_layout.as_ref().map(|tl| tl.address() as u64))
+            .unwrap_or(0)
     }
 
     /// Lightweight O(1) fingerprint for long field `i`'s `lines_box_id` container (zero text hashing).
@@ -412,6 +506,8 @@ impl<S: 'static> Runtime<S> {
         let n = &self.nodes[i];
         let mut h = rustc_hash::FxHasher::default();
         n.text_layout.as_ref().map(crate::text::TextLayout::address).hash(&mut h);
+        self.a11y_long_content_key(i).hash(&mut h);
+        n.text.as_deref().map_or(0, |t| t.content.len()).hash(&mut h);
         self.drawn[i].map(f32::to_bits).hash(&mut h);
         w.shift.map(f32::to_bits).hash(&mut h);
         w.clip_y.map(f32::to_bits).hash(&mut h);
@@ -420,7 +516,7 @@ impl<S: 'static> Runtime<S> {
         if let Some(input) = n.input.as_deref() {
             let e = &input.edit;
             let upstream = e.focused && e.anchor == e.focus && e.affinity == parley::Affinity::Upstream;
-            (e.anchor, e.focus, e.focused, upstream, e.preedit().map(|p| (p.0.len(), p.1))).hash(&mut h);
+            (e.text.len(), e.anchor, e.focus, e.focused, upstream, e.preedit().map(|p| (p.0.len(), p.1))).hash(&mut h);
         }
         h.finish()
     }
@@ -434,10 +530,7 @@ impl<S: 'static> Runtime<S> {
         let Some(input) = n.input.as_deref() else {
             return vec![(box_id, box_node)];
         };
-        let content_key = n.text.as_deref().and_then(|t| t.shape.map(|(_, k)| k))
-            .or_else(|| n.text_layout.as_ref().and_then(crate::text::TextLayout::content_key))
-            .or_else(|| n.text_layout.as_ref().map(|tl| tl.address() as u64))
-            .unwrap_or(0);
+        let content_key = self.a11y_long_content_key(i);
         let upstream = u8::from(
             input.edit.focused
                 && input.edit.anchor == input.edit.focus
@@ -446,13 +539,15 @@ impl<S: 'static> Runtime<S> {
         box_node.set_author_id(format!("{content_key:x}:{upstream}"));
 
         let drawn = self.a11y_drawn_lines(i, w.clip_y);
-        let preedit_info = input.edit.preedit().map(|(p, _)| {
+        let preedit_info = input.edit.preedit().map(|(p, cur)| {
             let r = input.edit.range();
-            (r.0, r.1, p.len())
+            let caret_in_pre = cur.map_or(p.len(), |(_, b)| b.min(p.len()));
+            (r.0, r.1, p.len(), caret_in_pre)
         });
-        let model_len = input.edit.text.len();
+        let model_text = input.edit.text.as_str();
+        let model_len = model_text.len();
         let map_disp = |d: usize, is_end: bool| -> usize {
-            let Some((sel_a, sel_b, p_len)) = preedit_info else {
+            let Some((sel_a, sel_b, p_len, _)) = preedit_info else {
                 return d.min(model_len);
             };
             if d <= sel_a {
@@ -467,7 +562,8 @@ impl<S: 'static> Runtime<S> {
         let mut out = Vec::with_capacity(1 + drawn.len());
         let mut child_ids = Vec::with_capacity(drawn.len());
         for (k, l) in drawn.into_iter().take(MAX_DRAWN_LINES).enumerate() {
-            let (a, b) = (map_disp(l.range.start, false), map_disp(l.range.end, true));
+            let disp_range = l.range.clone();
+            let (a, b) = (map_disp(disp_range.start, false), map_disp(disp_range.end, true));
             let id = drawn_line_id(n.id, k);
             let mut line_node = AkNode::new(Role::GenericContainer);
             line_node.set_class_name(LINE_CLASS);
@@ -477,11 +573,26 @@ impl<S: 'static> Runtime<S> {
                 x0: round(l.rect[0] + w.shift[0]), y0: round(l.rect[1] + w.shift[1]),
                 x1: round(l.rect[0] + l.rect[2] + w.shift[0]), y1: round(l.rect[1] + l.rect[3] + w.shift[1]),
             });
-            if preedit_info.is_none() {
-                line_node.set_character_lengths(l.lengths);
-                line_node.set_character_positions(l.positions);
-                line_node.set_character_widths(l.widths);
-            }
+            let (lengths, positions, widths) = match preedit_info {
+                Some((sel_a, sel_b, p_len, caret_in_pre))
+                    if disp_range.start < sel_a + p_len && disp_range.end > sel_a =>
+                {
+                    fold_line_preedit(
+                        model_text,
+                        disp_range,
+                        l.rect[2],
+                        l.rtl,
+                        (sel_a, sel_b, p_len, caret_in_pre),
+                        &l.lengths,
+                        &l.positions,
+                        &l.widths,
+                    )
+                }
+                _ => (l.lengths, l.positions, l.widths),
+            };
+            line_node.set_character_lengths(lengths);
+            line_node.set_character_positions(positions);
+            line_node.set_character_widths(widths);
             child_ids.push(id);
             out.push((id, line_node));
         }
@@ -530,6 +641,7 @@ impl<S: 'static> Runtime<S> {
                 input.edit.display_index(input.edit.focus)
             }
             .min(content.len());
+            let upstream = input.edit.anchor == input.edit.focus && input.edit.affinity == parley::Affinity::Upstream;
             let covered = out.iter().any(|l| {
                 (l.range.start <= caret && caret < l.range.end)
                     || (l.range.start == caret && l.range.end == caret)
@@ -548,15 +660,17 @@ impl<S: 'static> Runtime<S> {
                             out.insert(pos, cl);
                         }
                     } else if total > 0 {
-                        let li = (0..total)
-                            .find(|&idx| {
-                                cp.layout.get(idx).is_some_and(|ln| {
-                                    let tr = ln.text_range();
-                                    (tr.start <= shaped_caret && shaped_caret < tr.end)
-                                        || (idx + 1 == total && shaped_caret == tr.end)
-                                })
-                            })
-                            .unwrap_or(total - 1);
+                        let (mut lo, mut hi) = (0usize, total - 1);
+                        while lo < hi {
+                            let mid = lo + (hi - lo) / 2;
+                            let end = cp.layout.get(mid).map_or(0, |ln| ln.text_range().end);
+                            if end < shaped_caret || (end == shaped_caret && !upstream) {
+                                lo = mid + 1;
+                            } else {
+                                hi = mid;
+                            }
+                        }
+                        let li = lo;
                         if let Some(ln) = cp.layout.get(li)
                             && let Some(mut cl) = build_visual_line(&cp, ln, content, s, origin)
                         {
@@ -579,7 +693,17 @@ impl<S: 'static> Runtime<S> {
     /// Node `i`'s laid-out lines, in points in its scroll viewport's content space (before the
     /// walk's shift).
     pub(super) fn a11y_lines(&self, i: usize) -> Option<(Cow<'_, str>, Vec<Line>)> {
-        if self.a11y_uses_long_field(i) { return None; }
+        let n = &self.nodes[i];
+        if n.input.as_deref().is_some_and(|inp| !inp.edit.is_secure() && inp.edit.text.len() > RUN_MAX_BYTES) {
+            return None;
+        }
+        if matches!(&n.text_layout, Some(crate::text::TextLayout::Paragraphs(p)) if p.waiting()) {
+            return None;
+        }
+        self.a11y_lines_inner(i)
+    }
+
+    fn a11y_lines_inner(&self, i: usize) -> Option<(Cow<'_, str>, Vec<Line>)> {
         let n = &self.nodes[i];
         let (spec, layout) = (n.text.as_deref()?, n.text_layout.as_ref()?.view());
         if n.elided.is_some() { return None; }

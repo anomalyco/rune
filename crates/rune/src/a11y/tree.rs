@@ -25,9 +25,9 @@ pub(crate) const LINES_BOX_CLASS: &str = "\x1frune-lines";
 pub(crate) const LINE_CLASS: &str = "\x1frune-line";
 
 pub(crate) fn element_id(id: NodeId) -> AkId { AkId(id.0 << SUB) }
-pub(crate) fn line_id(id: NodeId, line: usize) -> AkId { AkId((id.0 << SUB) | (1 + line as u64).min(LINK_BASE - 1)) }
-pub(crate) fn lines_box_id(id: NodeId) -> AkId { AkId((id.0 << SUB) | 1) }
-pub(crate) fn drawn_line_id(id: NodeId, line: usize) -> AkId { AkId((id.0 << SUB) | (2 + line as u64).min(LINK_BASE - 1)) }
+pub(crate) fn line_id(id: NodeId, line: usize) -> AkId { AkId((id.0 << SUB) | (1 + line as u64).min(LINK_BASE - 2)) }
+pub(crate) fn lines_box_id(id: NodeId) -> AkId { AkId((id.0 << SUB) | (LINK_BASE - 1)) }
+pub(crate) fn drawn_line_id(id: NodeId, line: usize) -> AkId { AkId((id.0 << SUB) | (1 + line as u64).min(LINK_BASE - 2)) }
 pub(crate) fn link_id(id: NodeId, k: usize) -> AkId { AkId((id.0 << SUB) | (LINK_BASE + k as u64).min((1 << SUB) - 1)) }
 /// The runtime node an AccessKit id names, and which of its own nodes: 0 the element, a line
 /// `1..LINK_BASE`, a link from `LINK_BASE`.

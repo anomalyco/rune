@@ -880,9 +880,12 @@ impl PlatformNode {
     where
         F: FnOnce(&Tree, &Arc<Context>) -> Result<T>,
     {
-        let context = self.upgrade_context()?;
-        let tree = context.read_tree();
-        f(&tree, &context)
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let context = self.upgrade_context()?;
+            let tree = context.read_tree();
+            f(&tree, &context)
+        }))
+        .unwrap_or_else(|_| Err(element_not_available()))
     }
 
     fn node<'a>(&self, tree: &'a Tree) -> Result<NodeRef<'a>> {
@@ -971,17 +974,20 @@ impl PlatformNode {
     where
         for<'a> F: FnOnce(NodeRef<'a>, NodeId, TreeId) -> Result<Option<ActionRequest>>,
     {
-        let context = self.upgrade_context()?;
-        if context.is_placeholder.load(Ordering::SeqCst) {
-            return Err(element_not_enabled());
-        }
-        let tree = context.read_tree();
-        let (node, target_node, target_tree) = self.node_with_location(&tree)?;
-        if let Some(request) = f(node, target_node, target_tree)? {
-            drop(tree);
-            context.do_action(request);
-        }
-        Ok(())
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let context = self.upgrade_context()?;
+            if context.is_placeholder.load(Ordering::SeqCst) {
+                return Err(element_not_enabled());
+            }
+            let tree = context.read_tree();
+            let (node, target_node, target_tree) = self.node_with_location(&tree)?;
+            if let Some(request) = f(node, target_node, target_tree)? {
+                drop(tree);
+                context.do_action(request);
+            }
+            Ok(())
+        }))
+        .unwrap_or_else(|_| Err(element_not_available()))
     }
 
     fn do_action<F>(&self, f: F) -> Result<()>

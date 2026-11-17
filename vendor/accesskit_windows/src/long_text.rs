@@ -63,8 +63,20 @@ struct Checkpoints {
     marks: Vec<Mark>,
 }
 
+const CHECKPOINT_SLOTS: usize = 4;
+
+struct CheckpointRing {
+    slots: [Option<Checkpoints>; CHECKPOINT_SLOTS],
+    next: usize,
+}
+
 thread_local! {
-    static CHECKPOINTS: RefCell<Option<Checkpoints>> = const { RefCell::new(None) };
+    static CHECKPOINTS: RefCell<CheckpointRing> = const {
+        RefCell::new(CheckpointRing {
+            slots: [None, None, None, None],
+            next: 0,
+        })
+    };
 }
 
 fn edge_sample(s: &str) -> [u8; 32] {
@@ -83,34 +95,31 @@ fn with_checkpoints<R>(s: &str, content_key: u64, f: impl FnOnce(&[Mark]) -> R) 
     }
     let edge = edge_sample(s);
     CHECKPOINTS.with(|cell| {
-        let mut borrow = cell.borrow_mut();
-        let hit = borrow.as_ref().is_some_and(|c| {
-            c.len == s.len() && c.edge == edge && (content_key == 0 || c.content_key == content_key)
-        });
-        if !hit {
-            let mut marks = Vec::with_capacity(s.len() / CHECKPOINT_STRIDE + 2);
-            marks.push(Mark { byte: 0, utf16: 0, newlines: 0 });
-            let mut utf16 = 0usize;
-            let mut newlines = 0usize;
-            let mut next_at = CHECKPOINT_STRIDE;
-            for (k, ch) in s.char_indices() {
-                if k >= next_at {
-                    marks.push(Mark { byte: k, utf16, newlines });
-                    next_at = k + CHECKPOINT_STRIDE;
-                }
-                utf16 += ch.len_utf16();
-                if ch == '\n' {
-                    newlines += 1;
-                }
-            }
-            *borrow = Some(Checkpoints { content_key, len: s.len(), edge, marks });
-        } else if content_key != 0
-            && let Some(c) = borrow.as_mut()
-            && c.content_key == 0
-        {
-            c.content_key = content_key;
+        let mut ring = cell.borrow_mut();
+        if let Some(hit) = ring.slots.iter().flatten().find(|c| {
+            c.content_key == content_key && c.len == s.len() && c.edge == edge
+        }) {
+            return f(hit.marks.as_slice());
         }
-        let marks = borrow.as_ref().map_or(&[][..], |c| c.marks.as_slice());
+        let mut marks = Vec::with_capacity(s.len() / CHECKPOINT_STRIDE + 2);
+        marks.push(Mark { byte: 0, utf16: 0, newlines: 0 });
+        let mut utf16 = 0usize;
+        let mut newlines = 0usize;
+        let mut next_at = CHECKPOINT_STRIDE;
+        for (k, ch) in s.char_indices() {
+            if k >= next_at {
+                marks.push(Mark { byte: k, utf16, newlines });
+                next_at = k + CHECKPOINT_STRIDE;
+            }
+            utf16 += ch.len_utf16();
+            if ch == '\n' {
+                newlines += 1;
+            }
+        }
+        let idx = ring.next % CHECKPOINT_SLOTS;
+        ring.next = ring.next.wrapping_add(1);
+        ring.slots[idx] = Some(Checkpoints { content_key, len: s.len(), edge, marks });
+        let marks = ring.slots[idx].as_ref().map_or(&[][..], |c| c.marks.as_slice());
         f(marks)
     })
 }
@@ -228,6 +237,8 @@ fn caret_x_in_line(line: &NodeRef, rel_byte: usize, trailing_edge: bool) -> f64 
             let x1 = x0 + f64::from(widths[k]);
             let cluster_rtl = if k + 1 < lengths.len() && widths[k] > 0.0 && widths[k + 1] > 0.0 {
                 positions[k + 1] < positions[k]
+            } else if k > 0 && widths[k] > 0.0 && widths[k - 1] > 0.0 {
+                positions[k] < positions[k - 1]
             } else {
                 rtl
             };
