@@ -16,6 +16,8 @@ thread_local! {
     static INPUT: Cell<(u32, u64)> = const { Cell::new((0, 0)) };
     /// Wakes (updates from other threads, timers) handled since the last logged frame, and their time.
     static WAKE: Cell<(u32, u64)> = const { Cell::new((0, 0)) };
+    /// The renderer's count of blur resources made on a frame (`render::breaker`), as of the last logged frame.
+    static BLUR_ON_FRAME: Cell<u64> = const { Cell::new(0) };
     /// Where frames were asked for since the last logged frame (Win::request_redraw callers).
     /// Tx::wake_after and wake_at callers since the last logged frame, with the shortest wait.
     static WAKERS: RefCell<Vec<(&'static std::panic::Location<'static>, std::time::Duration)>> = const { RefCell::new(Vec::new()) };
@@ -113,6 +115,7 @@ pub(crate) fn frame(f: Frame) {
     let p = &f.phases;
     let next: Vec<&str> = ["motion", "frame_move", "commit", "relayout_or_queue", "input", "live", "window_frame", "timer"]
         .into_iter().enumerate().filter(|(i, _)| f.next & (1 << i) != 0).map(|(_, n)| n).collect();
+    let blur_on_frame = { let now = crate::render::blur_on_frame_count(); now - BLUR_ON_FRAME.replace(now) };
     let line = serde_json::json!({
         "t": f.entry.wall, "inputs": inputs, "input": input_ns, "wakes": wakes, "wake": wake_ns, "asked": asked, "wakers": wakers,
         "prebuild": d(f.entry, f.start), "acquire": d(f.start, f.acquired), "build": d(f.acquired, f.built),
@@ -122,6 +125,7 @@ pub(crate) fn frame(f: Frame) {
         "cpu": f.presented.cpu.saturating_sub(f.entry.cpu), "build_cpu": f.built.cpu.saturating_sub(f.acquired.cpu), "acquire_cpu": f.acquired.cpu.saturating_sub(f.start.cpu), "encode_cpu": f.encoded.cpu.saturating_sub(f.uploaded.cpu), "submit_cpu": f.submitted.cpu.saturating_sub(f.encoded.cpu), "present_cpu": f.presented.cpu.saturating_sub(f.submitted.cpu),
         "nodes": f.nodes, "shaped": f.shaped, "instances": f.instances, "animating": f.animating,
         "why": crate::runtime::CommitWhy::names(f.why),
+        "blur_on_frame": blur_on_frame,
         "next": next, "poll_due": f.poll_due, "loop_due": f.loop_due, "loops": f.loops, "damage": f.damage, "whole": f.whole, "change": f.change,
     });
     OUT.with_borrow_mut(|out| {
