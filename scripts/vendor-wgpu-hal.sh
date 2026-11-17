@@ -23,12 +23,16 @@ if $regenerate; then
   # The patch is against the version vendored: another version would pass its own round trip.
   vendored="$(sed -n 's/^version = "\(.*\)"$/\1/p' vendor/wgpu-hal/Cargo.toml | head -n 1)"
   [ "$vendored" = "$version" ] || { echo "vendor/wgpu-hal is wgpu-hal $vendored, not $version" >&2; exit 1; }
+  # A checkout made before .gitattributes kept these bytes can still hold converted copies: the
+  # patch would be a whole-file one that passes its own check. `git checkout -- vendor/wgpu-hal`.
+  converted="$(git ls-files --eol -- vendor/wgpu-hal/src | awk '{ i = substr($1, 3); w = substr($2, 3); if (i != w && w != "") print $NF }')"
+  [ -z "$converted" ] || { echo "the checkout's line endings differ from the index's (git checkout -- vendor/wgpu-hal):" >&2; echo "$converted" >&2; exit 1; }
   mkdir "$tmp/a" "$tmp/b"
   cp -R "$tmp/wgpu-hal-$version/src" "$tmp/a/src"
   cp -R vendor/wgpu-hal/src "$tmp/b/src"
   # Git's options pinned, whatever the user's config says: no line-ending conversion, no external
   # diff or text conversion, the default algorithm and context, plain a/ b/ paths.
-  git_=(git -c core.autocrlf=false -c core.safecrlf=false -c core.eol=lf -c diff.noprefix=false -c diff.mnemonicPrefix=false -c diff.relative=false -c diff.algorithm=myers -c diff.indentHeuristic=true)
+  git_=(env GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -c core.attributesFile=/dev/null -c core.autocrlf=false -c core.safecrlf=false -c core.eol=lf -c diff.noprefix=false -c diff.mnemonicPrefix=false -c diff.relative=false -c diff.algorithm=myers -c diff.indentHeuristic=true)
   # Exit 1 means the trees differ, which is the point; above 1 is an error.
   status=0
   (cd "$tmp" && "${git_[@]}" diff --no-index --no-color --no-renames --no-ext-diff --no-textconv --abbrev=8 --unified=3 --src-prefix= --dst-prefix= a/src b/src) > "$tmp/new.patch" || status=$?
