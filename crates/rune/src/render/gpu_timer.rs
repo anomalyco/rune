@@ -115,7 +115,7 @@ impl GpuTimer {
                 // RUNE_CENSUS_COVER=across: an upper bound that also counts what a layer's opaque content covers below it.
                 if matches!(k, 8 | 9 | 12 | 13) { kinds[23].0 += 1; if !across { covered.iter_mut().for_each(|c| *c = false); } continue; }
                 let grow = match k { 1 => i.params[2] * 3.0 + 1.0, 2 => 0.0, 3 | 5..=7 | 10 => 1.0, _ => 1.0 + i.params[2] * 2.0 };
-                let (x0, y0, x1, y1) = cells(i.rect[0] - grow, i.rect[1] - grow, i.rect[0] + i.rect[2] + grow, i.rect[1] + i.rect[3] + grow, false);
+                let (x0, x1, y0, y1) = cells(i.rect[0] - grow, i.rect[1] - grow, i.rect[0] + i.rect[2] + grow, i.rect[1] + i.rect[3] + grow, false);
                 let (mut all, mut some) = (x0 < x1 && y0 < y1, 0u32);
                 for y in y0..y1 { for x in x0..x1 { if covered[y * cw + x] { some += 1 } else { all = false } } }
                 let px = f64::from(CELL * CELL);
