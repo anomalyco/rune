@@ -235,7 +235,7 @@ fn union(a: &mut [f32; 4], b: [f32; 4]) {
 }
 
 impl Renderer {
-    fn target_bytes(t: &Target) -> u64 {
+    pub(super) fn target_bytes(t: &Target) -> u64 {
         let mut bytes = u64::from(t.texture.width()) * u64::from(t.texture.height())
             * u64::from(FORMAT.block_copy_size(None).unwrap());
         if let Some(blur) = &t.blur {
@@ -296,20 +296,25 @@ impl Renderer {
         for t in self.layers.retained.drain(..) {
             if let Some((node, _)) = t.cache { resident.remove(&node); }
         }
-        self.layers.trim_spare(0);
-        // What the warm-up made goes too; the next frame that draws asks for it again.
-        self.rewarm_after_rest();
+        // In sight, the window keeps the warm-up's fade pool (its spare targets, a few MB) and strip-sized blur
+        // copies with their pyramid: the frame that ends a read then makes nothing, and no warm-up thread runs
+        // beside it. Out of sight everything goes, and the next frame that draws asks for it again.
+        self.layers.trim_spare(if all { 0 } else { self.breakers.pool_bytes });
         if all {
+            self.rewarm_after_rest();
             for slot in &mut self.layers.targets {
                 if slot.as_ref().is_some_and(|t| t.cache.is_none()) { *slot = None; }
             }
         }
-        // The backdrop copies (one full-window texture per target format) and the blur pyramid:
-        // out of sight, or when the last frame read none (a session's jump button had blurred
-        // what was under it, and Home doesn't).
-        if all || !self.backdrop_used {
+        // The backdrop copies and the blur pyramid: out of sight, or window-sized copies (an effect reads its
+        // backdrop) when the last frame read none (a session's jump button had blurred what was under it, and
+        // Home doesn't).
+        let [vw, vh] = self.target_frame(None).1;
+        let strip = !self.backdrops.is_empty() && self.backdrops.iter().all(|b| b.texture.width() < vw || b.texture.height() < vh);
+        if all || (!self.backdrop_used && !strip) {
             self.backdrops.clear();
             if let Some(blur) = &mut self.backdrop_blur { blur.give_back(); }
+            self.breakers.blur_warmed = false;
         }
         #[cfg(all(feature = "alloc-sites", not(target_arch = "wasm32")))]
         self.report_pools();

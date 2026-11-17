@@ -204,8 +204,10 @@ pub(super) struct Breakers {
     ui_frames: u8,
     /// Layer targets made ahead for faded lists (`Renderer::warm_fade_pool`).
     pool: Pool,
+    /// What the fade pool's targets hold, which a window at rest in sight keeps (`give_back`).
+    pub(super) pool_bytes: u64,
     /// The blur's resources are warmed, or a frame made them (`Renderer::warm_backdrop`).
-    blur_warmed: bool,
+    pub(super) blur_warmed: bool,
     /// The window's first backdrop copies, being made on a thread (`Renderer::warm_backdrops`).
     pub(super) backdrops: Option<std::sync::mpsc::Receiver<Vec<super::pass::Backdrop>>>,
     /// Tests: build this feature's pipelines broken, as a device that refuses them would.
@@ -366,7 +368,11 @@ impl Renderer {
     fn warm_fade_pool(&mut self, device: &wgpu::Device, instances: &[super::Instance], _viewport: (u32, u32)) {
         if let Pool::Building(done) = &self.breakers.pool {
             match done.try_recv() {
-                Ok(targets) => { self.breakers.pool = Pool::Done; self.adopt_spares(targets); }
+                Ok(targets) => {
+                    self.breakers.pool = Pool::Done;
+                    self.breakers.pool_bytes = targets.iter().map(Renderer::target_bytes).sum();
+                    self.adopt_spares(targets);
+                }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {}
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => self.breakers.pool = Pool::Done,
             }
