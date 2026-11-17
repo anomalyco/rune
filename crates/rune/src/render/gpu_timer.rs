@@ -97,7 +97,7 @@ impl GpuTimer {
         // reverse paint order on 4 px cells, each instance's rasterized cells already under later plain opaque
         // rects (square, borderless, alpha 1, no fade, no band, inside their clip): 21 all its cells covered (could
         // be dropped), 22 the covered cells of every instance (what a depth pre-pass would reject). A layer, a
-        // backdrop or an effect marker (kinds 5 to 10) clears the cells: nothing is assumed across a target change.
+        // backdrop or an effect marker (kinds 8, 9, 12, 13) clears the cells: nothing is assumed across a target change.
         if std::env::var_os("RUNE_CENSUS_COVER").is_some() {
             kinds.resize(25, (0, 0.0, 0.0));
             const CELL: f32 = 4.0;
@@ -111,8 +111,8 @@ impl GpuTimer {
             };
             for i in instances.iter().rev() {
                 let k = (i.params[1] as usize).min(15);
-                if (5..=10).contains(&k) { kinds[23].0 += 1; covered.iter_mut().for_each(|c| *c = false); continue; }
-                let grow = match k { 1 => i.params[2] * 3.0 + 1.0, 2 => 0.0, 3 => 1.0, _ => 1.0 + i.params[2] * 2.0 };
+                if matches!(k, 8 | 9 | 12 | 13) { kinds[23].0 += 1; covered.iter_mut().for_each(|c| *c = false); continue; }
+                let grow = match k { 1 => i.params[2] * 3.0 + 1.0, 2 => 0.0, 3 | 5..=7 | 10 => 1.0, _ => 1.0 + i.params[2] * 2.0 };
                 let (x0, y0, x1, y1) = cells(i.rect[0] - grow, i.rect[1] - grow, i.rect[0] + i.rect[2] + grow, i.rect[1] + i.rect[3] + grow, false);
                 let (mut all, mut some) = (x0 < x1 && y0 < y1, 0u32);
                 for y in y0..y1 { for x in x0..x1 { if covered[y * cw + x] { some += 1 } else { all = false } } }
