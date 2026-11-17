@@ -92,7 +92,7 @@ impl<S: 'static> Runtime<S> {
         if self.touch.finger.is_some() { return; }
         let scroll = self.touch_scroll_start(x, y);
         self.pointer_move(x, y);
-        self.pointer_down(x, y);
+        self.press_down(x, y, true);
         // `El::touch_drags_at_once`: a drag from the first move, and no long press to cut it.
         if self.press_drags_at_once() {
             self.touch_scroll_end(scroll, 0.0);

@@ -77,6 +77,7 @@ atoms! {
     ScrollX = "scrollX",
     StickBottom = "stickBottom",
     OnPress = "onPress",
+    MenuTrigger = "menuTrigger",
     Color = "color",
     Size = "size",
     Weight = "weight",
@@ -208,6 +209,8 @@ pub(crate) struct Props {
     corners: Option<[f32; 4]>,
     selected: bool,
     pub(crate) disabled: bool,
+    /// `menuTrigger`: the `onPress` opens a menu, so a mouse runs it as its button goes down.
+    menu_trigger: bool,
     text: TextStyle,
     color: Option<Color>,
     truncate: bool,
@@ -238,6 +241,7 @@ impl Props {
             corners: None,
             selected: false,
             disabled: false,
+            menu_trigger: false,
             text: env.text,
             color: None,
             truncate: false,
@@ -261,6 +265,10 @@ impl Props {
         let key: Option<Rc<str>> = (press.is_some() || middle.is_some() || self.on_hover.is_some()).then(|| self.key.as_deref().map(Into::into)).flatten();
         if let Some(cb) = press {
             (attach.press)(e, cb, key.clone(), Rc::new([]));
+            // Kobalte's `Menu.Trigger` opens on a mouse's `pointerdown`; keys and taps on the click.
+            if self.menu_trigger {
+                with(e, El::press_on_down);
+            }
         }
         if let Some(cb) = middle {
             with(e, |e| (attach.middle)(e, cb, key.clone()));
@@ -537,6 +545,7 @@ impl Props {
                 }
             }
             Atom::Disabled => self.disabled = flag(v)?,
+            Atom::MenuTrigger => self.menu_trigger = flag(v)?,
             Atom::HelpSide => {
                 let side = match v {
                     Value::Str("top") => Some(rune::Side::Top),

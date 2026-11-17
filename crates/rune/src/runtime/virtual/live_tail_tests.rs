@@ -2,7 +2,7 @@ use super::*;
 use crate::{GrowthSpec, ScrollSpec, col, el, motion_gate::{Run, Recording, gate_rows}};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum Case { Delivery, Narrow, Rewrapping, BelowList, Unpinned, InstantChild }
+enum Case { Delivery, Room, Narrow, Rewrapping, BelowList, Unpinned, InstantChild }
 
 #[derive(Clone, Copy, PartialEq)]
 enum Phase { Waiting, Rewrapping, Delivered }
@@ -18,6 +18,14 @@ fn view(feed: &Feed, _: &mut Cx<Feed>) -> El {
     content = content.child_exit(Transition::opacity()).children((!delivered).then(|| el().key("badge").size(10.0, 10.0).fill(Color::WHITE)));
     let pending = col().key("pending").w_full().h(if delivered { 64.0 } else { 48.0 }).arrives_whole().child(content);
     let working = el().key("working").w(40.0).h(20.0).fill(Color::WHITE);
+    if feed.case == Case::Room {
+        let rows = col().key("rows").w_full().growth(GrowthSpec::default()).virtualize(48.0)
+            .child(el().key("earlier").w_full().h(320.0))
+            .children(delivered.then(|| el().key("arrival").w_full().h(64.0).arrives_whole())).child(working);
+        return col().w_full().h_full().child(col().key("viewport").w_full().grow(1.0).min_h(0.0)
+            .scroll(ScrollSpec { stick_bottom: true }).child(rows))
+            .child(el().key("room").w_full().h(if delivered { 0.0 } else { 40.0 }));
+    }
     let stack = col().key("rows").w_full().growth(GrowthSpec::default()).virtualize(48.0)
         .child(el().key("earlier").w_full().h(320.0))
         .children(if delivered { [pending, working] } else { [working, pending] });
@@ -30,7 +38,7 @@ fn poll(s: &mut Feed, t: f64, tx: &mut Tx) -> bool {
     if s.phase == Phase::Waiting && s.case == Case::Rewrapping && (0.47..0.5).contains(&t) { s.phase = Phase::Rewrapping; return true; }
     if s.phase != Phase::Delivered && t >= 0.5 {
         s.phase = Phase::Delivered;
-        tx.grow_visible_tail("rows");
+        if s.case == Case::Room { tx.grow_visible_tail_from("rows", "arrival", "room"); } else { tx.grow_visible_tail("rows"); }
         return true;
     }
     false
@@ -46,6 +54,14 @@ fn record(case: Case) -> Recording {
     let growing = matches!(case, Case::Delivery | Case::InstantChild);
     while run.rt.state.phase != Phase::Delivered { assert!(run.rt.t < 0.6, "delivery did not poll"); run.step(); }
     let row = run.rt.nodes.iter().find(|n| n.key.as_deref() == Some("pending"));
+    if case == Case::Room {
+        let room = run.rt.nodes.iter().position(|n| n.key.as_deref() == Some("room")).unwrap();
+        let first = run.rt.drawn[room][3];
+        assert!(first > 0.0 && first < 40.0, "room snapped to {first}");
+        let row = run.rt.nodes.iter().find(|n| n.key.as_deref() == Some("arrival")).unwrap();
+        let remaining = 1.0 - run.rt.grows[&row.id].h / 64.0;
+        assert!((first - 40.0 * remaining).abs() < 1.0 / 64.0, "room {first} must follow the drawn row on the first frame");
+    }
     if growing {
         let h = run.rt.grows[&row.unwrap().id].h;
         assert!((48.0..64.0).contains(&h), "live row started at {h}");
@@ -75,7 +91,7 @@ fn record(case: Case) -> Recording {
 fn live_tail_motion_gate() {
     // A jump is an error in these two traces. In the instant controls below it's required:
     // check the actual landing height instead of allowlisting jumps in a motion recording.
-    gate_rows([Case::Delivery, Case::Unpinned].into_iter()
+    gate_rows([Case::Delivery, Case::Room, Case::Unpinned].into_iter()
         .map(|case| (format!("live-tail/{case:?}"), Box::new(move || record(case)) as crate::motion_gate::Job)).collect(), &[]);
 }
 

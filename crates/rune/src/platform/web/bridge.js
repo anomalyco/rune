@@ -61,6 +61,9 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
     const textarea = document.createElement('textarea');
     textarea.setAttribute('aria-label', 'Text input');
     textarea.setAttribute('autocapitalize', 'sentences');
+    // It is 1 px wide: wrapped, its every character would be a line to a screen reader reading by
+    // line. Unwrapped, a line is what a line break ends.
+    textarea.wrap = 'off';
     const password = document.createElement('input');
     password.type = 'password';
     password.setAttribute('aria-label', 'Password input');

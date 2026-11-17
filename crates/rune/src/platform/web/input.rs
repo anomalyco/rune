@@ -398,7 +398,10 @@ impl<S: 'static> Running<S> {
                         key.key = crate::Key::Command(text.chars().next().unwrap().to_ascii_lowercase());
                     }
                 }
-                activate = logical.as_ref().is_some_and(|k| k.key == crate::Key::Tab);
+                // Any key that puts Rune's focus in a field (Tab, or a shortcut such as the
+                // prompt's) hands the page's own field the browser's focus, so a screen reader is
+                // in a real text field with its text, not on the canvas's stand-in for it.
+                activate = pressed;
                 if let winit::keyboard::PhysicalKey::Code(key) = event.physical_key {
                     self.rt.physical_with_fallback(crate::PhysicalInput::Key { key, mods: modifiers(self.input.mods),
                         pressed: event.state == ElementState::Pressed, repeat: event.repeat }, logical);

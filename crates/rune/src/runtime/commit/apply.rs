@@ -203,7 +203,7 @@ impl<S: 'static> Runtime<S> {
                 stack.width_hold = WidthHold::rewrap(now);
             }
             let live_rows = if existed && !first && !resized && !concealing && !self.reduced_motion && !tx.live_growth.is_empty() && !stack.width_hold.defers(now) {
-                self.live_tail(&nodes, c, tx, stack.viewport_height)
+                self.live_tail(&nodes, c, tx, &mut stack)
             } else { None };
             stack.viewport_height = list.map_or(0.0, |v| v.viewport);
             stack.width = width;

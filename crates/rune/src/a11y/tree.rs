@@ -309,6 +309,36 @@ impl<S: 'static> Runtime<S> {
         }
     }
 
+    /// Whether node `i`, inside the control at `slot`, would only say again what that control
+    /// says: a text its name already holds, or a nameless part. Chromium makes a button's or a
+    /// link's content one leaf; a reader moving item by item would hear its words twice. What
+    /// adds words, or takes a press or focus, stays.
+    fn a11y_repeats_control(&self, i: usize, slot: &Slot, spoken: &mut rustc_hash::FxHashMap<usize, Option<String>>) -> bool {
+        let Some(c) = slot.element.filter(|_| crate::a11y::roles::leaf_control(slot.role)) else { return false };
+        let n = &self.nodes[i];
+        if n.input.is_some() || self.can_focus(i) || n.handlers.get().is_some_and(|h| h.has_primary()) { return false; }
+        let Some(name) = spoken.entry(c).or_insert_with(|| self.a11y_control_words(c, slot.role)).as_deref() else { return false };
+        match n.text.as_deref() {
+            Some(t) => {
+                let words = t.source_text();
+                let words = words.trim();
+                !words.is_empty() && t.cold.links.is_empty() && name.contains(words)
+            }
+            None => n.label.as_deref().is_none_or(|l| l.trim().is_empty() || name.contains(l.trim())) && n.vis.grid.is_none(),
+        }
+    }
+
+    /// What control `c` says as its name, when the tree doesn't need its content to say it
+    /// (AccessKit names an unlabelled button from the texts inside it, so those stay).
+    fn a11y_control_words(&self, c: usize, role: Role) -> Option<String> {
+        let n = &self.nodes[c];
+        if n.is_secure() { return None; }
+        n.label.as_deref().filter(|l| !l.trim().is_empty()).map(str::to_owned)
+            .or_else(|| n.a11y.more.as_deref().and_then(|m| m.labelled_by.as_deref()).and_then(|k| self.a11y_keyed(c, k)).map(|j| self.a11y_words(j)))
+            .or_else(|| crate::a11y::roles::named_from_content(role).then(|| self.a11y_words(c)))
+            .filter(|w| !w.trim().is_empty())
+    }
+
     /// One pass over the elements: which are nodes, where they sit, and their fingerprints.
     fn a11y_walk(&self) -> Found {
         let n_nodes = self.nodes.len();
@@ -320,6 +350,7 @@ impl<S: 'static> Runtime<S> {
         let mut focus = ROOT;
         let focused = self.focused_index();
         let content = self.a11y_content_prints();
+        let mut spoken = rustc_hash::FxHashMap::default();
         // Behind an open modal the tree holds only the modal and what contains it.
         let mut holds_modal = Vec::new();
         let modal = self.active_modal().is_some();
@@ -346,7 +377,8 @@ impl<S: 'static> Runtime<S> {
                 w.gone = n.is_moved_stub() || n.a11y.hidden || n.vis.opacity <= 0.01 || self.is_exiting(n.id)
                     || !self.scene.contains(n.id) || (modal && !self.modal_member(i) && !holds_modal[i]);
             }
-            if !w.gone && let Some(role) = self.a11y_role(i) {
+            let role = if w.gone { None } else { self.a11y_role(i) };
+            if let Some(role) = role.filter(|_| !self.a11y_repeats_control(i, &slots[w.slot], &mut spoken)) {
                 let id = element_id(n.id);
                 let mut print = mix(self.a11y_print(i, role, &w), content.get(i).copied().unwrap_or(0));
                 if let Some(index) = self.a11y_index_in_list(i) { print = mix(print, index as u64 + 1); }

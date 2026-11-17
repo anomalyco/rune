@@ -467,6 +467,7 @@ pub(super) struct Stack {
     pub(super) window: (f32, f32),
     /// The list viewport in the last layout, apart from the window (e.g. above a dock).
     pub(super) viewport_height: f32,
+    pub(super) handoff: row_reorder::handoff::Handoff,
     /// How far its rows grew (positive steps only) this frame.
     pub(super) grown: f32,
     /// Whether any row in the stack still has height left to grow.

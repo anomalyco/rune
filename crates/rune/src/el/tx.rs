@@ -43,6 +43,7 @@ pub struct Tx {
     pub(crate) asked_motion: bool,
     /// Virtual growth stacks whose visible tail may grow for this commit alone.
     pub(crate) live_growth: Vec<String>,
+    pub(crate) tail_rooms: Vec<(String, String, String)>,
     /// A resting poll changed the model but hasn't committed its tree yet.
     pub(crate) polled_change: bool,
     pub(crate) color_motion: Option<Spring>,
