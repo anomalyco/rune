@@ -567,7 +567,7 @@ fn static_ok(n: &Node) -> bool {
         && n.vis.backdrop_blur <= 0.0 && n.vis.effect.is_none() && n.vis.pixels.is_none()
         && n.sticky.is_none() && n.above.is_none() && n.matched.is_none()
         && n.static_scale == 1.0 && !n.scale_track && n.vis.mark == 0
-        && n.text.as_ref().is_none_or(|t| t.cold.links.is_empty() && t.cold.live.is_none() && t.cold.advance_in.is_none() && t.reveal < 0.0)
+        && n.text.as_ref().is_none_or(|t| t.cold.links.is_empty() && t.cold.live.is_none() && t.cold.advance_in.is_none())
 }
 
 /// What the runtime holds for a node besides it: selection, marks, reveals, loops, scales
@@ -575,7 +575,7 @@ fn static_ok(n: &Node) -> bool {
 fn dynamic_ok<S: 'static>(rt: &Runtime<S>, i: usize, sel: &[(usize, usize, usize)], marks: &[(usize, usize, usize)]) -> bool {
     let id = rt.nodes[i].id;
     !sel.iter().any(|r| r.0 == i) && !marks.iter().any(|r| r.0 == i)
-        && (rt.reveals.is_empty() || !rt.reveals.contains_key(&id))
+        && (rt.reveals.is_empty() || !rt.reveals.get(&id).is_some_and(RevealPhase::fading))
         && (rt.loops.is_empty() || !rt.loops.contains_key(&id))
         && (rt.static_scales.is_empty() || !rt.static_scales.contains_key(&id))
         && rt.row_mask[i] < 0.0
