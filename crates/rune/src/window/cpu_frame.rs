@@ -775,6 +775,9 @@ fn raise_priority(thread: &std::thread::JoinHandle<()>) {
 /// How many frames the warm frame records at once, and how many times (warm_frame).
 const WARM_ENCODERS: usize = 3;
 const WARM_ROUNDS: usize = 2;
+/// Empty passes each warm frame adds (`warm_frame`): measured on a first tab switch, the 5.4 ms of
+/// list and allocator calls it kept with one went to 0.4 ms with eight.
+const WARM_SPARE_PASSES: usize = 8;
 
 static FIRST_CPU: AtomicBool = AtomicBool::new(false);
 static FIRST_LAYOUT: AtomicBool = AtomicBool::new(false);
@@ -846,16 +849,18 @@ fn warm_frame(gpu: &Gpu, renderer: &mut Renderer, format: wgpu::TextureFormat, s
             let mut enc = gpu.device.create_command_encoder(&Default::default());
             renderer.prepare_ui(&gpu.device, &gpu.queue, &mut atlas, instances, size);
             renderer.draw(&mut enc, &view, [0.0; 4]);
-            // A window's frame records one list this one doesn't: the swap chain texture's
-            // transition to present. A render pass records two (wgpu puts a barrier list before
-            // each pass), so with this empty pass the warm frame has one list more than a window's
-            // frame. An allocator is past its slow cycles for as many lists as it has had, not
-            // only for exactly that many.
-            drop(enc.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: None,
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment { view: &view, depth_slice: None, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store } })],
-                ..Default::default()
-            }));
+            // Room beyond this frame's lists: an allocator is past its slow cycles for as many
+            // lists as it has had, not only for exactly that many, and the frames after the
+            // hand-over can record more than this one (the swap chain texture's transition to
+            // present; the first visit to a tab, 11 lists of a bigger frame). A render pass records
+            // two lists (wgpu puts a barrier list before each).
+            for _ in 0..WARM_SPARE_PASSES {
+                drop(enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: None,
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment { view: &view, depth_slice: None, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store } })],
+                    ..Default::default()
+                }));
+            }
             renderer.before_submit(&mut enc);
             frames.push(enc.finish());
         }
