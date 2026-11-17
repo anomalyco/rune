@@ -102,10 +102,12 @@ impl super::CommandEncoder {
             .max_by_key(|(_, s)| (s.pending_writes == pending_writes, s.recorded))
             .map(|(i, _)| i);
         if let Some(i) = pick {
-            return Ok(pool.swap_remove(i));
+            let s = pool.swap_remove(i);
+            ib3_take(pending_writes, if s.pending_writes == pending_writes { 0 } else { 1 });
+            return Ok(s);
         }
         drop(pool);
-        let raw = unsafe { self.device.CreateCommandAllocator(Direct3D12::D3D12_COMMAND_LIST_TYPE_DIRECT) }
+        ib3_take(pending_writes, 2);        let raw = unsafe { self.device.CreateCommandAllocator(Direct3D12::D3D12_COMMAND_LIST_TYPE_DIRECT) }
             .into_device_result("Command allocator creation")?;
         Ok(super::AllocatorSlot { raw, lists: Vec::new(), recorded: 0, cycle: 0, pending_writes })
     }
@@ -1905,5 +1907,13 @@ impl crate::CommandEncoder for super::CommandEncoder {
         _intersection_group_data: crate::PipelineGroupData<super::Buffer>,
     ) {
         unreachable!("Ray tracing pipelines not supported")
+    }
+}
+
+// Measuring branch only: each allocator take to stderr (unix ns, pending writes, 0 same class / 1 other class / 2 new).
+fn ib3_take(pending: bool, outcome: u8) {
+    if std::env::var_os("IB3_TAKES").is_some() {
+        let ns = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+        std::eprintln!("IBTAKE {ns} {} {outcome}", pending as u8);
     }
 }
