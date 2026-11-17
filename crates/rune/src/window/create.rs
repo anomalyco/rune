@@ -169,6 +169,9 @@ impl<S: 'static> Host<S> {
         rebuild_renderer(&gpu.device, renderer, target_format, &mut self.rt);
         // A refused configuration (the driver's, or a device that is gone) leaves a surface
         // wgpu panics on its next drawable: the window closes, and the next open makes both.
+        // A window created visible is created with its third buffer (`depth`): nothing to grow later.
+        #[cfg(target_os = "windows")]
+        let depth = super::depth::created(&surface, visible && config.alpha_mode == wgpu::CompositeAlphaMode::Opaque);
         let refused = configure(&surface, gpu, &config).err().map(|error| (gpu.is_lost(), error));
         if let Some((lost, error)) = refused {
             if lost {
@@ -236,7 +239,7 @@ impl<S: 'static> Host<S> {
         cloak.extend(Instant::now() + win::READY_FALLBACK);
         #[cfg(target_os = "windows")]
         let native = {
-            Native { cloak, frame, a11y_start, ..Default::default() }
+            Native { cloak, frame, a11y_start, depth, ..Default::default() }
         };
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         let native = Native::default();
@@ -391,7 +394,7 @@ impl<S: 'static> Host<S> {
         w.surface_ok = true;
         w.alpha = alpha;
         #[cfg(target_os = "windows")]
-        { w.native.slot.reset(); w.native.damage.reset(); }
+        { w.native.slot.reset(); w.native.damage.reset(); w.native.depth = w.native.depth.step(super::depth::DepthEvent::Remade { now: Instant::now() }).0; }
         #[cfg(target_os = "windows")]
         w.native.mode.rebind();
         #[cfg(target_os = "macos")]
@@ -439,6 +442,7 @@ impl<S: 'static> Host<S> {
         w.presented = None;
         w.native.slot.reset();
         w.native.damage.reset();
+        w.native.depth = w.native.depth.step(super::depth::DepthEvent::Remade { now: Instant::now() }).0;
         w.native.mode.rebind();
         Ok(true)
     }

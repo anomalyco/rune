@@ -64,6 +64,22 @@ impl Slot {
         }
     }
 
+    /// Whether the swap chain has room now, without registering a wait: free, or owed and its
+    /// object signalled (its count is ours then, as `take` would take it).
+    pub(crate) fn room(&mut self, waitable: Option<HANDLE>) -> bool {
+        match self {
+            Slot::Free => true,
+            Slot::Waiting(_) => false,
+            Slot::Owed => {
+                let Some(object) = waitable else { return false };
+                // SAFETY: the swap chain's live object; a zero timeout only polls it.
+                let signalled = unsafe { WaitForSingleObject(object, 0) } == WAIT_OBJECT_0;
+                if signalled { *self = Slot::Free; }
+                signalled
+            }
+        }
+    }
+
     /// The registered wait came back: the swap chain has room (its count is ours now).
     pub(crate) fn came_back(&mut self) {
         if matches!(self, Slot::Waiting(_)) { *self = Slot::Free; }

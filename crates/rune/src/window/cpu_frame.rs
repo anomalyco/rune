@@ -167,6 +167,8 @@ pub(super) struct Prepared {
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
     handover: Handover,
+    /// The swap chain's buffer count it was configured with (`depth`).
+    depth: super::depth::Depth,
 }
 
 // SAFETY: wgpu's objects are `Send`; a new `Renderer` has no native surface renderer (the one
@@ -570,7 +572,7 @@ impl<S: 'static> Host<S> {
             Err(error) => return self.fail_gpu(error, tries),
         };
         crate::marks::mark("gpu.window.ready");
-        let Prepared { gpu, mut renderer, surface, config, handover } = prepared;
+        let Prepared { gpu, mut renderer, surface, config, handover, depth } = prepared;
         let gpu = Arc::new(gpu);
         let target_format = if self.rt.srgb_blend() { config.format.remove_srgb_suffix() } else { config.format };
         rebuild_renderer(&gpu.device, &mut renderer, target_format, &mut self.rt);
@@ -587,6 +589,7 @@ impl<S: 'static> Host<S> {
         // would hold the hand-over frame off.
         crate::platform::win32::unidle_d3d_threads_soon();
         w.surface = Some(surface);
+        w.native.depth = depth;
         w.config = config;
         w.surface_ok = true;
         // The window changed size while the GPU was made.
@@ -788,13 +791,15 @@ fn prepare(hwnd: isize, size: (u32, u32), srgb: bool, features: wgpu::Features, 
     let (gpu, surface, renderer) = Gpu::for_surface(features, false,
         |instance| unsafe { instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::CompositionVisual(visual)) }.map_err(|e| e.to_string()))?;
     let (config, _) = surface_config(&surface, &gpu.adapter, (size.0.max(1), size.1.max(1)), srgb).ok_or("the GPU can't present to this window")?;
+    // Created with its third buffer (`depth`): a window that opened on the CPU is visible and opaque.
+    let depth = super::depth::created(&surface, true);
     configure(&surface, &gpu, &config)?;
     let target_format = if srgb { config.format.remove_srgb_suffix() } else { config.format };
     let mut renderer = renderer.unwrap_or_else(|| Renderer::new(&gpu.device, target_format));
     let instances = std::mem::take(&mut *latest.lock().unwrap_or_else(|e| e.into_inner()));
     warm_frame(&gpu, &mut renderer, target_format, (config.width, config.height), &instances);
     crate::marks::mark("gpu.window.warmed");
-    Ok(Prepared { gpu, renderer, surface, config, handover })
+    Ok(Prepared { gpu, renderer, surface, config, handover, depth })
 }
 
 /// On the GPU thread, before the hand-over: the renderer draws the window's latest CPU frame once,

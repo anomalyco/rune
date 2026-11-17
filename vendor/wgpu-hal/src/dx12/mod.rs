@@ -559,6 +559,7 @@ impl Instance {
             swap_chain: RwLock::new(None),
             options: self.options.clone(),
             hdr_source: None,
+            extra_buffers: Default::default(),
         }
     }
 
@@ -578,6 +579,7 @@ impl Instance {
             swap_chain: RwLock::new(None),
             options: self.options.clone(),
             hdr_source: None,
+            extra_buffers: Default::default(),
         }
     }
 
@@ -596,6 +598,7 @@ impl Instance {
             swap_chain: RwLock::new(None),
             options: self.options.clone(),
             hdr_source: None,
+            extra_buffers: Default::default(),
         }
     }
 }
@@ -643,6 +646,9 @@ pub struct Surface {
     /// HDR-info source for HWND-backed targets; `None` for composition /
     /// SwapChainPanel / surface-handle targets, which have no monitor identity.
     hdr_source: Option<auxil::dxgi::hdr::DxgiHdrSource>,
+    /// Rune: buffers beyond `maximum_frame_latency + 1` the next configure makes
+    /// (`Surface::set_extra_buffers`), so the GPU needn't wait for the compositor to give one back.
+    extra_buffers: core::sync::atomic::AtomicU32,
 }
 
 unsafe impl Send for Surface {}
@@ -655,6 +661,17 @@ impl Surface {
 
     /// Rune: the only rectangles the next present changed, in the swap chain's pixels; the rest of
     /// the buffer holds what the frame before showed. Cleared by the present.
+    /// Rune: buffers the next configure makes beyond `maximum_frame_latency + 1`. The frame latency
+    /// (and so how many frames may wait to be shown) is unchanged.
+    pub fn set_extra_buffers(&self, extra: u32) {
+        self.extra_buffers.store(extra, core::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Rune: how many buffers the swap chain has now, if there is one.
+    pub fn buffer_count(&self) -> Option<usize> {
+        self.swap_chain.read().as_ref().map(|sc| sc.resources.len())
+    }
+
     pub fn set_present_rects(&self, rects: &[Foundation::RECT]) {
         if let Some(sc) = self.swap_chain.write().as_mut() {
             sc.dirty.clear();
@@ -1509,7 +1526,7 @@ impl crate::Surface for Surface {
         // Nvidia recommends to use 1-2 more buffers than the maximum latency
         // https://developer.nvidia.com/blog/advanced-api-performance-swap-chains/
         // For high latency extra buffers seems excessive, so go with a minimum of 3 and beyond that add 1.
-        let swap_chain_buffer = (config.maximum_frame_latency + 1).min(16);
+        let swap_chain_buffer = (config.maximum_frame_latency + 1 + self.extra_buffers.load(core::sync::atomic::Ordering::Relaxed)).min(16);
 
         let swap_chain = match self.swap_chain.write().take() {
             //Note: this path doesn't properly re-initialize all of the things

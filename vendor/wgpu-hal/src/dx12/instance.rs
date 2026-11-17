@@ -155,6 +155,7 @@ impl crate::Instance for super::Instance {
                     swap_chain: RwLock::new(None),
                     options: self.options.clone(),
                     hdr_source: Some(auxil::dxgi::hdr::DxgiHdrSource::new(handle)),
+                    extra_buffers: Default::default(),
                 })
             }
             _ => Err(crate::InstanceError::new(format!(

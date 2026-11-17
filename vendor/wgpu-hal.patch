@@ -12,10 +12,18 @@ index ac050bcd..6e3c74ef 100644
  
      // The Intel Haswell family of iGPUs had support for the D3D12 API but it was later
 diff --git a/src/dx12/instance.rs b/src/dx12/instance.rs
-index fdb63bcb..5f64a804 100644
+index fdb63bcb..d12f6981 100644
 --- a/src/dx12/instance.rs
 +++ b/src/dx12/instance.rs
-@@ -187,3 +187,37 @@ impl crate::Instance for super::Instance {
+@@ -155,6 +155,7 @@ impl crate::Instance for super::Instance {
+                     swap_chain: RwLock::new(None),
+                     options: self.options.clone(),
+                     hdr_source: Some(auxil::dxgi::hdr::DxgiHdrSource::new(handle)),
++                    extra_buffers: Default::default(),
+                 })
+             }
+             _ => Err(crate::InstanceError::new(format!(
+@@ -187,3 +188,37 @@ impl crate::Instance for super::Instance {
              .collect()
      }
  }
@@ -54,10 +62,34 @@ index fdb63bcb..5f64a804 100644
 +    }
 +}
 diff --git a/src/dx12/mod.rs b/src/dx12/mod.rs
-index 285d635..36e8b82 100644
+index 285d6356..f3754c8b 100644
 --- a/src/dx12/mod.rs
 +++ b/src/dx12/mod.rs
-@@ -615,6 +615,8 @@ struct SwapChain {
+@@ -559,6 +559,7 @@ impl Instance {
+             swap_chain: RwLock::new(None),
+             options: self.options.clone(),
+             hdr_source: None,
++            extra_buffers: Default::default(),
+         }
+     }
+ 
+@@ -578,6 +579,7 @@ impl Instance {
+             swap_chain: RwLock::new(None),
+             options: self.options.clone(),
+             hdr_source: None,
++            extra_buffers: Default::default(),
+         }
+     }
+ 
+@@ -596,6 +598,7 @@ impl Instance {
+             swap_chain: RwLock::new(None),
+             options: self.options.clone(),
+             hdr_source: None,
++            extra_buffers: Default::default(),
+         }
+     }
+ }
+@@ -615,6 +618,8 @@ struct SwapChain {
      present_mode: wgt::PresentMode,
      format: wgt::TextureFormat,
      size: wgt::Extent3d,
@@ -66,12 +98,33 @@ index 285d635..36e8b82 100644
  }
  
  enum SurfaceTarget {
-@@ -651,6 +653,15 @@ impl Surface {
+@@ -641,6 +646,9 @@ pub struct Surface {
+     /// HDR-info source for HWND-backed targets; `None` for composition /
+     /// SwapChainPanel / surface-handle targets, which have no monitor identity.
+     hdr_source: Option<auxil::dxgi::hdr::DxgiHdrSource>,
++    /// Rune: buffers beyond `maximum_frame_latency + 1` the next configure makes
++    /// (`Surface::set_extra_buffers`), so the GPU needn't wait for the compositor to give one back.
++    extra_buffers: core::sync::atomic::AtomicU32,
+ }
+ 
+ unsafe impl Send for Surface {}
+@@ -651,6 +659,26 @@ impl Surface {
          Some(self.swap_chain.read().as_ref()?.raw.clone())
      }
  
 +    /// Rune: the only rectangles the next present changed, in the swap chain's pixels; the rest of
 +    /// the buffer holds what the frame before showed. Cleared by the present.
++    /// Rune: buffers the next configure makes beyond `maximum_frame_latency + 1`. The frame latency
++    /// (and so how many frames may wait to be shown) is unchanged.
++    pub fn set_extra_buffers(&self, extra: u32) {
++        self.extra_buffers.store(extra, core::sync::atomic::Ordering::Relaxed);
++    }
++
++    /// Rune: how many buffers the swap chain has now, if there is one.
++    pub fn buffer_count(&self) -> Option<usize> {
++        self.swap_chain.read().as_ref().map(|sc| sc.resources.len())
++    }
++
 +    pub fn set_present_rects(&self, rects: &[Foundation::RECT]) {
 +        if let Some(sc) = self.swap_chain.write().as_mut() {
 +            sc.dirty.clear();
@@ -82,7 +135,16 @@ index 285d635..36e8b82 100644
      /// Returns the waitable handle associated with this swap chain, if any.
      /// Handle is only valid while the swap chain is alive.
      pub unsafe fn waitable_handle(&self) -> Option<Foundation::HANDLE> {
-@@ -1535,7 +1546,9 @@ impl crate::Surface for Surface {
+@@ -1498,7 +1526,7 @@ impl crate::Surface for Surface {
+         // Nvidia recommends to use 1-2 more buffers than the maximum latency
+         // https://developer.nvidia.com/blog/advanced-api-performance-swap-chains/
+         // For high latency extra buffers seems excessive, so go with a minimum of 3 and beyond that add 1.
+-        let swap_chain_buffer = (config.maximum_frame_latency + 1).min(16);
++        let swap_chain_buffer = (config.maximum_frame_latency + 1 + self.extra_buffers.load(core::sync::atomic::Ordering::Relaxed)).min(16);
+ 
+         let swap_chain = match self.swap_chain.write().take() {
+             //Note: this path doesn't properly re-initialize all of the things
+@@ -1535,7 +1563,9 @@ impl crate::Surface for Surface {
                      BufferUsage: Dxgi::DXGI_USAGE_RENDER_TARGET_OUTPUT,
                      BufferCount: swap_chain_buffer,
                      Scaling: Dxgi::DXGI_SCALING_STRETCH,
@@ -93,7 +155,7 @@ index 285d635..36e8b82 100644
                      Flags: flags.0 as u32,
                  };
                  let swap_chain1 = match self.target {
-@@ -1702,6 +1715,7 @@ impl crate::Surface for Surface {
+@@ -1702,6 +1732,7 @@ impl crate::Surface for Surface {
              present_mode: config.present_mode,
              format: config.format,
              size: config.extent,
@@ -101,7 +163,7 @@ index 285d635..36e8b82 100644
          });
  
          Ok(())
-@@ -1838,9 +1852,22 @@ impl crate::Queue for Queue {
+@@ -1838,9 +1869,22 @@ impl crate::Queue for Queue {
          };
  
          profiling::scope!("IDXGISwapchain3::Present");
