@@ -274,6 +274,14 @@ impl Renderer {
         self.warm_fade_pool(device, instances, viewport);
         if self.breakers.ui_frames < 2 { self.breakers.ui_frames += 1; return; }
         self.warm_backdrop(device, viewport);
+        self.warm_layer_pipelines(device);
+    }
+
+    /// The isolation pipelines and the backdrop blur, compiled on a thread a frame never waits
+    /// for, once per renderer. A window with a hand-over asks first, from its start-up warm-up
+    /// (`window::cpu_frame::warm_window`), for the longest head start; any other renderer asks
+    /// from its second UI frame (`warm_first_use`).
+    pub(crate) fn warm_layer_pipelines(&mut self, device: &wgpu::Device) {
         if !matches!(self.breakers.warm, Warm::Idle) { return; }
         self.breakers.warm = Warm::Done;
         // What an earlier frame already built (a layer or a blur on screen at launch) is left.
