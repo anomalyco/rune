@@ -79,6 +79,11 @@ impl TextSystem {
         false
     }
 
+    /// Whether a scratch pass is open (probe only).
+    pub(crate) fn prepare_open_now() -> bool {
+        PASS.with_borrow(|p| p.is_some())
+    }
+
     /// Whether a request for windows of state `owner` has texts queued.
     pub(crate) fn prepare_queued(owner: TypeId) -> bool {
         QUEUE.with_borrow(|q| q.as_ref().is_some_and(|q| q.owner == owner))
