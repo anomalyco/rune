@@ -21,8 +21,8 @@ pub(super) struct GpuTimer {
     slots: Vec<Slot>,
     /// This frame's passes so far: (label, target bytes).
     passes: Mutex<Vec<(&'static str, u64)>>,
-    /// This frame's instances by kind (`KIND_*`): count and the device pixels their quads cover.
-    kinds: Mutex<Vec<(u32, f64)>>,
+    /// This frame's instances by kind (`KIND_*`): count, device pixels rasterized, and those inside their clip.
+    kinds: Mutex<Vec<(u32, f64, f64)>>,
     /// The slot resolved for this frame, mapped after its submit.
     pending: Mutex<Option<usize>>,
     frames: std::sync::atomic::AtomicU64,
@@ -35,7 +35,7 @@ pub(super) struct GpuTimer {
 struct Slot {
     buffer: wgpu::Buffer,
     passes: Mutex<Vec<(&'static str, u64)>>,
-    kinds: Mutex<Vec<(u32, f64)>>,
+    kinds: Mutex<Vec<(u32, f64, f64)>>,
     frame: std::sync::atomic::AtomicU64,
     /// When the frame was submitted (`host_clock::now_ns`, the live frame log's clock).
     submitted: std::sync::atomic::AtomicU64,
@@ -67,13 +67,22 @@ impl GpuTimer {
 
     /// This frame's instances: count and covered device pixels by kind, clipped to their clip and the viewport.
     pub(super) fn instances(&self, instances: &[super::Instance], viewport: (u32, u32)) {
-        let mut kinds = vec![(0u32, 0f64); 16];
+        let mut kinds = vec![(0u32, 0f64, 0f64); 16];
         for i in instances {
             let k = (i.params[1] as usize).min(15);
-            let x0 = i.rect[0].max(i.clip[0]).max(0.0); let y0 = i.rect[1].max(i.clip[1]).max(0.0);
-            let x1 = (i.rect[0] + i.rect[2]).min(i.clip[2]).min(viewport.0 as f32); let y1 = (i.rect[1] + i.rect[3]).min(i.clip[3]).min(viewport.1 as f32);
+            // The quad `base_vs` rasterizes: grown past the rect, a band (`runtime/paint/bands.rs`) only its window.
+            let grow = match k { 1 => i.params[2] * 3.0 + 1.0, 2 => 0.0, 3 | 5..=9 => 1.0, _ => 1.0 + i.params[2] * 2.0 };
+            let (mut lo, mut hi) = ([i.rect[0] - grow, i.rect[1] - grow], [i.rect[0] + i.rect[2] + grow, i.rect[1] + i.rect[3] + grow]);
+            if k <= 1 && i.uv[2] < 0.0 {
+                lo = [lo[0].max(i.rect[0] + i.uv[0]), lo[1].max(i.rect[1] + i.uv[1])];
+                hi = [hi[0].min(i.rect[0] - i.uv[2]).max(lo[0]), hi[1].min(i.rect[1] + i.uv[3]).max(lo[1])];
+            }
+            let (vw, vh) = (viewport.0 as f32, viewport.1 as f32);
+            let area = |x0: f32, y0: f32, x1: f32, y1: f32| f64::from((x1.min(vw) - x0.max(0.0)).max(0.0) * (y1.min(vh) - y0.max(0.0)).max(0.0));
             kinds[k].0 += 1;
-            kinds[k].1 += f64::from((x1 - x0).max(0.0) * (y1 - y0).max(0.0));
+            // Rasterized (the quad in the viewport: outside the clip a fragment still runs, then discards), and inside the clip.
+            kinds[k].1 += area(lo[0], lo[1], hi[0], hi[1]);
+            kinds[k].2 += area(lo[0].max(i.clip[0]), lo[1].max(i.clip[1]), hi[0].min(i.clip[2]), hi[1].min(i.clip[3]));
         }
         *self.kinds.lock().unwrap_or_else(|e| e.into_inner()) = kinds;
     }
@@ -128,7 +137,7 @@ impl GpuTimer {
             if !slot.busy.load(Ordering::Acquire) || !slot.ready.load(Ordering::Acquire) { continue; }
             let passes = std::mem::take(&mut *slot.passes.lock().unwrap_or_else(|e| e.into_inner()));
             let kinds: serde_json::Map<String, serde_json::Value> = std::mem::take(&mut *slot.kinds.lock().unwrap_or_else(|e| e.into_inner())).iter().enumerate()
-                .filter(|(_, (n, _))| *n > 0).map(|(k, (n, px))| (k.to_string(), serde_json::json!([n, px.round()]))).collect();
+                .filter(|(_, (n, _, _))| *n > 0).map(|(k, (n, raster, shown))| (k.to_string(), serde_json::json!([n, raster.round(), shown.round()]))).collect();
             let ticks: Vec<u64> = {
                 let Ok(view) = slot.buffer.slice(..).get_mapped_range() else { continue };
                 bytemuck::cast_slice::<u8, u64>(&view[..passes.len() * 16]).to_vec()
