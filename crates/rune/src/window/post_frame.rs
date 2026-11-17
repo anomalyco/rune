@@ -40,14 +40,18 @@ impl<S: 'static> Host<S> {
         match self.chores {
             Chores::Ready => {
                 self.chores = Chores::Hooks;
+                #[cfg(feature = "frame-profile")] crate::frame::live_log::mark("chore.ready");
                 self.run_on_ready();
+                #[cfg(feature = "frame-profile")] crate::frame::live_log::mark("chore.ready.done");
             }
             Chores::Hooks => {
                 self.chores = Chores::Done;
+                #[cfg(feature = "frame-profile")] crate::frame::live_log::mark("chore.hooks");
                 self.run_ready_hooks();
+                #[cfg(feature = "frame-profile")] crate::frame::live_log::mark("chore.hooks.done");
             }
-            Chores::Done if self.gpu_owed() => self.cpu_idle(),
-            Chores::Done => self.a11y_after_frame(),
+            Chores::Done if self.gpu_owed() => { #[cfg(feature = "frame-profile")] crate::frame::live_log::mark("chore.cpu_idle"); self.cpu_idle(); #[cfg(feature = "frame-profile")] crate::frame::live_log::mark("chore.cpu_idle.done"); }
+            Chores::Done => { #[cfg(feature = "frame-profile")] crate::frame::live_log::mark("chore.a11y"); self.a11y_after_frame(); #[cfg(feature = "frame-profile")] crate::frame::live_log::mark("chore.a11y.done"); }
         }
         self.post_frame_owed()
     }

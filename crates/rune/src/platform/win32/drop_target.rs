@@ -69,11 +69,16 @@ pub(crate) fn install(window: &winit::window::Window) {
     // single-threaded apartment; the target lives as long as the window (OLE holds a reference
     // until the window is destroyed and revokes it then).
     unsafe {
-        if OleInitialize(None).is_err() {
+        #[cfg(feature = "frame-profile")] crate::frame::live_log::mark("ole.init");
+        let init = OleInitialize(None);
+        #[cfg(feature = "frame-profile")] crate::frame::live_log::mark("ole.init.done");
+        if init.is_err() {
             return;
         }
         let target: IDropTarget = Target { hwnd: hwnd.0 as isize }.into();
+        #[cfg(feature = "frame-profile")] crate::frame::live_log::mark("ole.register");
         let _ = RegisterDragDrop(hwnd, &target);
+        #[cfg(feature = "frame-profile")] crate::frame::live_log::mark("ole.register.done");
     }
 }
 

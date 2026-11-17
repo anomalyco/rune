@@ -117,9 +117,13 @@ impl<S: 'static> Host<S> {
     pub(super) fn run_ready_hooks(&mut self) {
         // After the first frame: files can only be dragged onto a window a person has seen.
         if let Some(w) = &self.win {
+            #[cfg(feature = "frame-profile")] crate::frame::live_log::mark("hook.drop_target");
             crate::platform::win32::drop_target::install(&w.window);
+            #[cfg(feature = "frame-profile")] crate::frame::live_log::mark("hook.drop_target.done");
             // Win+L wipes a secret left on the clipboard.
+            #[cfg(feature = "frame-profile")] crate::frame::live_log::mark("hook.session_lock");
             crate::platform::win32::session_lock::install(&w.window);
+            #[cfg(feature = "frame-profile")] crate::frame::live_log::mark("hook.session_lock.done");
         }
     }
 

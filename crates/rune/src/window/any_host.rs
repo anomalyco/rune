@@ -272,6 +272,12 @@ impl<S: 'static> Host<S> {
     }
 
     fn about_to_wait_in_turn(&mut self, event_loop: &ActiveEventLoop) -> bool {
+        // Measuring only: the first 400 turn ends.
+        #[cfg(feature = "frame-profile")]
+        {
+            static TURNS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+            if TURNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 400 { crate::frame::live_log::mark("turn.end"); }
+        }
         #[cfg(target_os = "macos")]
         self.fn_key();
         self.flush_files(event_loop);

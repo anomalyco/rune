@@ -205,6 +205,15 @@ impl<S: 'static> Host<S> {
         if self.win.as_ref().is_none_or(|w| w.window.id() != id) {
             return;
         }
+        // Measuring only: the first 400 window events, by kind.
+        #[cfg(feature = "frame-profile")]
+        {
+            static SEEN: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+            if SEEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 400 {
+                let kind = format!("{event:?}");
+                crate::frame::live_log::mark(&format!("event.{}", kind.split(|c: char| !c.is_alphanumeric()).next().unwrap_or("?")));
+            }
+        }
         self.a11y_window_event(&event);
         // What says whether other windows cover it (`look`): the pointer reaching it shows some
         // of it; its own move, size or focus makes the next frame look.
