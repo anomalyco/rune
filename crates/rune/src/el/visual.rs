@@ -102,6 +102,7 @@ pub struct VisualCold {
     pub(crate) flight_crop: bool,
     /// `El::hold_landing_width`: an animated width change lands its contents and slides them.
     pub(crate) hold_landing: bool,
+    pub(crate) row_face: Option<&'static str>,
     /// `El::press_color`: its text and icons' colour while a press on it is held.
     pub(crate) press_color: Option<Color>,
     /// `El::paint_contained`: the origin (window points) its children snap against.
@@ -171,6 +172,7 @@ impl Empty for VisualCold {
         clip_to_content: false,
         flight_crop: false,
         hold_landing: false,
+        row_face: None,
         press_color: None,
         paint_contain: None,
         motion_snaps: false,
