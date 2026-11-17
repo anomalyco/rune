@@ -27,6 +27,8 @@ pub use fill::FillDrift;
 mod first_use;
 #[cfg(feature = "frame-profile")]
 mod gpu_timer;
+#[cfg(feature = "frame-profile")]
+mod special;
 pub(crate) mod gpu_events;
 mod gpu_loss;
 pub(crate) mod layer_blur;
@@ -810,6 +812,11 @@ pub struct Renderer {
     /// Frame-profile builds: the timestamp queries of `RUNE_GPU_LOG` (`gpu_timer`), made by the first prepare.
     #[cfg(feature = "frame-profile")]
     gpu_timer: std::sync::OnceLock<Option<gpu_timer::GpuTimer>>,
+    /// Frame-profile builds: `RUNE_CUT=wgsl|special`'s pipelines (`special`) and each instance's kind.
+    #[cfg(feature = "frame-profile")]
+    special: Option<special::Special>,
+    #[cfg(feature = "frame-profile")]
+    special_kinds: Vec<u8>,
     /// The one instance per rectangle that clears a damaged one (`arm_damage`), made on first use.
     #[cfg(any(target_os = "windows", target_arch = "wasm32"))]
     clear_quad: std::sync::OnceLock<wgpu::Buffer>,
@@ -997,6 +1004,14 @@ impl Renderer {
                 }
             };
             pass.set_bind_group(0, bind, &[]);
+            #[cfg(feature = "frame-profile")]
+            if let Some(special) = self.special_for(format, target) {
+                for (run, pipeline) in special::runs(special, &self.special_kinds, batch.start.max(range.start)..batch.end.min(range.end)) {
+                    pass.set_pipeline(pipeline);
+                    pass.draw(0..4, run);
+                }
+                continue;
+            }
             pass.draw(0..4, batch.start.max(range.start)..batch.end.min(range.end));
         }
     }

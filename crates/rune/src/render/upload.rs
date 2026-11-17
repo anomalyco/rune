@@ -240,6 +240,11 @@ impl Renderer {
         } else { instances };
         #[cfg(feature = "frame-profile")]
         if let Some(Some(t)) = self.gpu_timer.get() { t.instances(instances, viewport); }
+        #[cfg(feature = "frame-profile")]
+        {
+            self.build_special(device);
+            if self.special.is_some() { self.special_kinds = instances.iter().map(|i| i.params[1] as u8).collect(); }
+        }
         let staging = self.uploads.staging(device, queue);
         if staging.lost() != self.uploads.lost.0 {
             self.uploads.lost.0 = staging.lost();
