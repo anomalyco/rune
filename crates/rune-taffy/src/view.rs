@@ -52,16 +52,6 @@ where
         inputs: LayoutInput,
         block_ctx: Option<&mut BlockContext<'_>>,
     ) -> LayoutOutput {
-        crate::stack::maybe_grow(|| self.compute_child_layout_step(node_id, inputs, block_ctx))
-    }
-
-    #[inline(always)]
-    fn compute_child_layout_step(
-        &mut self,
-        node_id: NodeId,
-        inputs: LayoutInput,
-        block_ctx: Option<&mut BlockContext<'_>>,
-    ) -> LayoutOutput {
         if inputs.run_mode == RunMode::PerformHiddenLayout {
             self.slot_mut(node_id).box_layout = BoxLayout::ZERO;
             return compute_hidden_layout(self, node_id);
@@ -75,12 +65,23 @@ where
                 (s.style.display(), s.child_len() != 0)
             };
 
-            let mut output = match (display_mode, has_children) {
+            match (display_mode, has_children) {
                 (Display::None, _) => compute_hidden_layout(view, node_id),
-                (Display::Block, true) => compute_block_layout(view, node_id, inputs, block_ctx),
-                (Display::FlowRoot, true) => compute_block_layout(view, node_id, inputs, None),
-                (Display::Flex, true) => compute_flexbox_layout(view, node_id, inputs),
-                (Display::Grid, true) => compute_grid_layout(view, node_id, inputs),
+                (Display::Block | Display::FlowRoot | Display::Flex | Display::Grid, true) => {
+                    crate::stack::maybe_grow(|| {
+                        let mut output = match display_mode {
+                            Display::Block => compute_block_layout(view, node_id, inputs, block_ctx),
+                            Display::FlowRoot => compute_block_layout(view, node_id, inputs, None),
+                            Display::Flex => compute_flexbox_layout(view, node_id, inputs),
+                            Display::Grid => compute_grid_layout(view, node_id, inputs),
+                            Display::None => unreachable!(),
+                        };
+                        if inputs.run_mode == RunMode::PerformLayout {
+                            compute_oof_layout(view, node_id, &mut output);
+                        }
+                        output
+                    })
+                }
                 (_, false) => {
                     // SAFETY: `idx` is in bounds of both `slots` and `node_idx`.
                     let (ctx, style) = unsafe {
@@ -92,13 +93,7 @@ where
                     };
                     (view.measure_leaf)(inputs, ctx, style)
                 }
-            };
-
-            if inputs.run_mode == RunMode::PerformLayout {
-                compute_oof_layout(view, node_id, &mut output);
             }
-
-            output
         })
     }
 }
