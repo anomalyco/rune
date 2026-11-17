@@ -8,6 +8,7 @@
 mod baseline_store;
 mod cache;
 pub mod prelude;
+mod stack;
 mod store;
 mod style;
 #[cfg(test)]
@@ -17,6 +18,9 @@ mod view;
 pub use baseline_store::BaselineLayoutStore;
 pub use baseline_store::baseline_storage_stats;
 pub use cache::CompactCache;
+pub use stack::STACK_RED_ZONE;
+pub use stack::STACK_SEGMENT_SIZE;
+pub use stack::maybe_grow;
 pub use store::BoxLayout;
 pub use store::LayoutStore;
 pub use store::SlotChildIter;

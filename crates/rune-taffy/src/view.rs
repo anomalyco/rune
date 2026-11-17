@@ -52,6 +52,16 @@ where
         inputs: LayoutInput,
         block_ctx: Option<&mut BlockContext<'_>>,
     ) -> LayoutOutput {
+        crate::stack::maybe_grow(|| self.compute_child_layout_step(node_id, inputs, block_ctx))
+    }
+
+    #[inline(always)]
+    fn compute_child_layout_step(
+        &mut self,
+        node_id: NodeId,
+        inputs: LayoutInput,
+        block_ctx: Option<&mut BlockContext<'_>>,
+    ) -> LayoutOutput {
         if inputs.run_mode == RunMode::PerformHiddenLayout {
             self.slot_mut(node_id).box_layout = BoxLayout::ZERO;
             return compute_hidden_layout(self, node_id);
