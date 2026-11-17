@@ -122,7 +122,10 @@ fn build_visual_line(
     }
     word_starts.retain(|&w| (w as usize) < lengths.len());
     let top = (p.y + m.block_min_coord) / s;
-    let height = (m.block_max_coord - m.block_min_coord) / s;
+    let mut height = (m.block_max_coord - m.block_min_coord) / s;
+    if !p.is_whole() && p.start == p.end && height <= 0.0 {
+        height = p.height / s;
+    }
     let rect = [origin[0] + m.offset / s, origin[1] + top, (max_right - m.offset).max(0.0) / s, height];
     Some(Line { range, rect, lengths, positions, widths, word_starts, rtl: line_rtl })
 }
@@ -398,9 +401,6 @@ impl<S: 'static> Runtime<S> {
         w.shift.map(f32::to_bits).hash(&mut h);
         w.clip_y.map(f32::to_bits).hash(&mut h);
         self.env.scale.to_bits().hash(&mut h);
-        if let Some(st) = self.scrolls.get(&n.id) {
-            [st.drawn_x, st.drawn.y()].map(f32::to_bits).hash(&mut h);
-        }
         self.input_scroll.get(&n.path).map(|v| v.to_bits()).hash(&mut h);
         if let Some(input) = n.input.as_deref() {
             let e = &input.edit;
@@ -492,15 +492,10 @@ impl<S: 'static> Runtime<S> {
         let r = self.drawn[i];
         let (x0, x1) = (r[0] + n.inset[0], r[0] + r[2] - n.inset[2]);
         let mut x = text_x(spec, x0, x1, layout.full_width() / s, layout.flow());
-        let mut y = r[1] + n.inset[1];
         if input.single_line {
             x -= self.input_scroll.get(&n.path).copied().unwrap_or(0.0);
         }
-        if let Some(st) = self.scrolls.get(&n.id) {
-            x -= st.drawn_x;
-            y -= st.drawn.y();
-        }
-        let origin = [x, y];
+        let origin = [x, r[1] + n.inset[1]];
         let layout_h = layout.spec_height(spec.style, s, spec.exact_lines);
         let raw_top = (clip_y[0] - origin[1]) * s;
         let raw_bot = (clip_y[1] - origin[1]) * s;
@@ -579,15 +574,10 @@ impl<S: 'static> Runtime<S> {
         let r = self.drawn[i];
         let (x0, x1) = (r[0] + n.inset[0], r[0] + r[2] - n.inset[2]);
         let mut x = text_x(spec, x0, x1, layout.full_width() / s, layout.flow());
-        let mut y = r[1] + n.inset[1];
         if let Some(input) = n.input.as_deref() && input.single_line {
             x -= self.input_scroll.get(&n.path).copied().unwrap_or(0.0);
         }
-        if let Some(st) = self.scrolls.get(&n.id) {
-            x -= st.drawn_x;
-            y -= st.drawn.y();
-        }
-        let lines = lines(layout, &content, s, [x, y]);
+        let lines = lines(layout, &content, s, [x, r[1] + n.inset[1]]);
         if n.input.is_some() && lines.iter().map(|l| l.range.len()).sum::<usize>() != content.len() {
             return None;
         }
