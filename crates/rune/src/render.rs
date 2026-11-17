@@ -817,6 +817,8 @@ pub struct Renderer {
     special: Option<special::Special>,
     #[cfg(feature = "frame-profile")]
     special_kinds: Vec<u8>,
+    #[cfg(feature = "frame-profile")]
+    special_rx: Option<std::sync::mpsc::Receiver<special::Special>>,
     /// The one instance per rectangle that clears a damaged one (`arm_damage`), made on first use.
     #[cfg(any(target_os = "windows", target_arch = "wasm32"))]
     clear_quad: std::sync::OnceLock<wgpu::Buffer>,

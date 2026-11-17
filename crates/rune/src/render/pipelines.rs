@@ -99,6 +99,8 @@ impl Renderer {
             special: None,
             #[cfg(feature = "frame-profile")]
             special_kinds: Vec::new(),
+            #[cfg(feature = "frame-profile")]
+            special_rx: None,
             max_texture_dim: device.limits().max_texture_dimension_2d,
             #[cfg(any(target_os = "windows", target_arch = "wasm32"))]
             clear_quad: std::sync::OnceLock::new(),

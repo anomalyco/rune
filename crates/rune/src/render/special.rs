@@ -2,7 +2,8 @@
 //! `RUNE_CUT=wgsl` draws the frame's instances with Windfoil's WGSL compiled now instead of the
 //! shipped bytecode (the like-for-like base); `RUNE_CUT=special` also splits each batch into runs
 //! of one kind and draws rects, shadows and glyphs with that WGSL's `fs` pinned to their kind, so
-//! the compiler drops every other kind's branch. Not for merge.
+//! the compiler drops every other kind's branch. They compile on a thread (seconds each from
+//! WGSL); frames draw as shipped until they're in, and the log says when. Not for merge.
 
 use super::{Blend, Renderer, dxbc};
 
@@ -16,27 +17,34 @@ pub(super) struct Special {
 const PINNED: [u32; 3] = [0, 1, 2];
 
 impl Renderer {
-    /// Builds the measuring pipelines once, when `RUNE_CUT` asks for them.
+    /// Starts compiling the measuring pipelines once, when `RUNE_CUT` asks for them, and takes them
+    /// when they're done.
     pub(super) fn build_special(&mut self, device: &wgpu::Device) {
-        if self.special.is_some() || !(Renderer::cut("wgsl") || Renderer::cut("special")) { return; }
-        let source = super::variant::windfoil_wgsl();
-        let entry = "@fragment\nfn fs(i: Out) -> @location(0) vec4<f32> {";
-        let Some(at) = source.find(entry) else { eprintln!("rune: RUNE_CUT=special: no fs entry"); return };
-        let make = |wgsl: &str| {
-            let shader = dxbc::Shaders::one(device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("uber (measuring)"), source: wgpu::ShaderSource::Wgsl(wgsl.into()) }));
-            Self::pipeline(device, &self.layout, &shader, self.format, "vs", Blend::SourceOver)
-        };
-        let started = std::time::Instant::now();
-        let generic = make(source);
-        let by_kind = (0..16).map(|k| PINNED.contains(&k).then(|| {
-            // Only the fragment entry's reads of the kind: the vertex stage still reads its own.
-            let (head, fs) = source.split_at(at);
-            let pinned = fs.replacen("if (i.params.y == 8.0) {", &format!("if ({k}.0 == 8.0) {{"), 1)
-                .replacen("let kind = i.params.y;", &format!("let kind = {k}.0;"), 1);
-            make(&format!("{head}{pinned}"))
-        })).collect();
-        eprintln!("rune: RUNE_CUT measuring pipelines compiled in {:.0} ms", started.elapsed().as_secs_f64() * 1e3);
-        self.special = Some(Special { generic, by_kind });
+        if let Some(rx) = &self.special_rx && let Ok(built) = rx.try_recv() { self.special = Some(built); self.special_rx = None; }
+        if self.special.is_some() || self.special_rx.is_some() || !(Renderer::cut("wgsl") || Renderer::cut("special")) { return; }
+        let (device, layout, format) = (device.clone(), self.layout.clone(), self.format);
+        let (sent, rx) = std::sync::mpsc::channel();
+        self.special_rx = Some(rx);
+        std::thread::spawn(move || {
+            let source = super::variant::windfoil_wgsl();
+            let entry = "@fragment\nfn fs(i: Out) -> @location(0) vec4<f32> {";
+            let Some(at) = source.find(entry) else { eprintln!("rune: RUNE_CUT=special: no fs entry"); return };
+            let make = |wgsl: &str| {
+                let shader = dxbc::Shaders::one(device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("uber (measuring)"), source: wgpu::ShaderSource::Wgsl(wgsl.into()) }));
+                Self::pipeline(&device, &layout, &shader, format, "vs", Blend::SourceOver)
+            };
+            let started = std::time::Instant::now();
+            let generic = make(source);
+            let by_kind = (0..16).map(|k| PINNED.contains(&k).then(|| {
+                // Only the fragment entry's reads of the kind: the vertex stage still reads its own.
+                let (head, fs) = source.split_at(at);
+                let pinned = fs.replacen("if (i.params.y == 8.0) {", &format!("if ({k}.0 == 8.0) {{"), 1)
+                    .replacen("let kind = i.params.y;", &format!("let kind = {k}.0;"), 1);
+                make(&format!("{head}{pinned}"))
+            })).collect();
+            eprintln!("rune: RUNE_CUT measuring pipelines compiled in {:.0} ms", started.elapsed().as_secs_f64() * 1e3);
+            sent.send(Special { generic, by_kind }).ok();
+        });
     }
 
     /// The measuring pipelines for this draw, when asked for and the frame's own pipeline would draw.
