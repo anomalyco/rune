@@ -41,6 +41,10 @@ pub(super) struct DamageState {
     layers_reached: bool,
     clear: [f32; 4],
     drawn: Option<Drawn>,
+    /// Given back at a long rest (give_back_kept): until it's made again on an idle turn
+    /// (`refill_kept`), armed frames draw whole straight into the drawable, and what the next
+    /// one asked for (size, format, clear) waits here.
+    away: Option<Option<((u32, u32), wgpu::TextureFormat, [f32; 4])>>,
 }
 
 impl Renderer {
@@ -48,6 +52,13 @@ impl Renderer {
     /// most `MAX_RECTS`) of a `size` drawable of `format`, cleared to `clear`.
     pub(crate) fn arm_damage(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, rects: &[[u32; 4]], clear: [f32; 4], size: (u32, u32), format: wgpu::TextureFormat) {
         let mut d = self.damage.lock().unwrap();
+        // Given back at a long rest: this frame draws whole into the drawable, as an unarmed one
+        // does, with nothing made or copied; an idle turn makes the kept frame again.
+        if let Some(wanted) = &mut d.away {
+            *wanted = Some((size, format, clear));
+            d.drawn = Some(Err("given back"));
+            return;
+        }
         if d.retained.as_ref().is_none_or(|r| (r.texture.width(), r.texture.height()) != size || r.texture.format() != format) {
             let texture = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("last frame"),
@@ -121,10 +132,43 @@ impl Renderer {
         !d.armed.is_empty() && !d.runs.is_empty() && !d.layers_reached && d.retained.as_ref().is_some_and(|r| r.current)
     }
 
-    /// A window at rest (`give_back`): the kept frame goes. It's a window-sized texture (9.2 MB
-    /// at 1920x1200), made by the first partial frame and otherwise held for the window's life.
-    pub(super) fn forget_kept_frame(&self) {
-        self.damage.lock().unwrap().retained = None;
+    /// A long rest (window::rest, 60 s with no frame): the kept frame goes (9.2 MB at 1920x1200).
+    /// The window then polls the device once, so wgpu frees it without a frame.
+    /// False when there was none (a window that never drew part of a frame).
+    pub(crate) fn give_back_kept(&self) -> bool {
+        let mut d = self.damage.lock().unwrap();
+        let kept = d.retained.take().is_some();
+        if kept { d.away = Some(None); }
+        kept
+    }
+
+    /// Whether a frame drew whole since the kept frame was given back, so an idle turn may make
+    /// it again (`refill_kept`).
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    pub(crate) fn kept_owed(&self) -> bool {
+        matches!(self.damage.lock().unwrap().away, Some(Some(_)))
+    }
+
+    /// On an idle turn after the first frame back: makes the kept frame again and draws the last
+    /// frame whole into it, with no present, so the next armed frame redraws only its rectangles.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    pub(crate) fn refill_kept(&self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        let Some(Some((size, format, clear))) = self.damage.lock().unwrap().away.take() else { return };
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("last frame"),
+            size: wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[self.format],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor { format: Some(self.format), ..Default::default() });
+        let mut encoder = device.create_command_encoder(&Default::default());
+        self.draw_timed(&mut encoder, &view, clear, None);
+        self.submit(queue, encoder);
+        self.damage.lock().unwrap().retained = Some(Retained { texture, view, current: true });
     }
 
     /// After every frame: whether it redrew only the armed rectangles, or why not. A frame that
