@@ -106,10 +106,16 @@ pub(super) fn step(state: &mut Rest, event: RestEvent) -> Effects<RestEffect> {
             *state = Rest::Drawing { due: now + if low { PRESSED_AFTER } else { REST_AFTER }, long: now + LONG_REST_AFTER };
             Effects::none()
         }
-        (Rest::Drawing { due, long }, E::Woke { now }) if now >= due => { *state = Rest::Idle { long: Some(long) }; Effects::one(RestEffect::GiveBackUnused) }
+        (Rest::Drawing { due, long }, E::Woke { now }) if now >= due => {
+            *state = Rest::Idle { long: cfg!(target_os = "windows").then_some(long) };
+            Effects::one(RestEffect::GiveBackUnused)
+        }
         (Rest::Idle { long: Some(long) }, E::Woke { now }) if now >= long => { *state = Rest::Idle { long: None }; Effects::one(RestEffect::GiveBackKept) }
         (Rest::Unseen { long }, E::Woke { now }) if now >= long => { *state = Rest::Rested; Effects::one(RestEffect::DropThirdBuffer) }
-        (Rest::Drawing { .. } | Rest::Idle { .. }, E::Unseen { now }) => { *state = Rest::Unseen { long: now + LONG_REST_AFTER }; Effects::one(RestEffect::GiveBackAll) }
+        (Rest::Drawing { .. } | Rest::Idle { .. }, E::Unseen { now }) => {
+            *state = if cfg!(target_os = "windows") { Rest::Unseen { long: now + LONG_REST_AFTER } } else { Rest::Rested };
+            Effects::one(RestEffect::GiveBackAll)
+        }
         (Rest::Drawing { .. } | Rest::Idle { .. } | Rest::Unseen { .. } | Rest::Rested, E::Woke { .. }) | (Rest::Unseen { .. } | Rest::Rested, E::Unseen { .. }) => Effects::none(),
     }
 }
@@ -121,9 +127,12 @@ impl<S: 'static> Host<S> {
                 RestEffect::GiveBackAll => self.give_back(true),
                 // Polled once, without waiting: the GPU finished with it long ago, and without a
                 // poll wgpu frees it only at the next frame.
-                RestEffect::GiveBackKept => if let Some((gpu, renderer)) = &self.gpu && renderer.give_back_kept() {
-                    let _ = gpu.device.poll(wgpu::PollType::Poll);
-                },
+                RestEffect::GiveBackKept => {
+                    #[cfg(target_os = "windows")]
+                    if let Some((gpu, renderer)) = &self.gpu && renderer.give_back_kept() {
+                        let _ = gpu.device.poll(wgpu::PollType::Poll);
+                    }
+                }
                 RestEffect::DropThirdBuffer => {}
             }
         }
@@ -136,6 +145,7 @@ impl<S: 'static> Host<S> {
         if let Some(f) = self.on_rest { self.rt.update_if(f); }
         if let Some((gpu, renderer)) = &mut self.gpu {
             renderer.give_back(all, &mut self.rt.text.atlas.resident_caches);
+            #[cfg(target_os = "windows")]
             if all { renderer.give_back_kept(); }
             // Out of sight, what the last frame used goes too, and the staging chunks: an empty
             // submission and a wait land those frees now. At an idle rest the device isn't

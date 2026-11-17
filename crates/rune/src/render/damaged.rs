@@ -135,6 +135,7 @@ impl Renderer {
     /// A long rest (window::rest, 60 s with no frame): the kept frame goes (9.2 MB at 1920x1200).
     /// The window then polls the device once, so wgpu frees it without a frame.
     /// False when there was none (a window that never drew part of a frame).
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub(crate) fn give_back_kept(&self) -> bool {
         let mut d = self.damage.lock().unwrap();
         let kept = d.retained.take().is_some();
