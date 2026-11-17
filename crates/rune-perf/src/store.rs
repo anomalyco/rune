@@ -26,13 +26,15 @@ pub(crate) fn run(config: Config, rx: Receiver<Sample>, start: Instant, health: 
         let got = match writer.due {
             Some(due) => rx.recv_timeout(due.saturating_duration_since(Instant::now())),
             // Nothing due: after IDLE with nothing written, tidy up once, then wait with no timer.
-            None => match (config.idle, rx.recv_timeout(crate::IDLE)) {
-                (Some(idle), Err(RecvTimeoutError::Timeout)) => {
-                    idle();
-                    rx.recv().map_err(|_| RecvTimeoutError::Disconnected)
-                }
-                (None, Err(RecvTimeoutError::Timeout)) => rx.recv().map_err(|_| RecvTimeoutError::Disconnected),
-                (_, got) => got,
+            None => match config.idle {
+                Some(idle) => match rx.recv_timeout(crate::IDLE) {
+                    Err(RecvTimeoutError::Timeout) => {
+                        idle();
+                        rx.recv().map_err(|_| RecvTimeoutError::Disconnected)
+                    }
+                    got => got,
+                },
+                None => rx.recv().map_err(|_| RecvTimeoutError::Disconnected),
             },
         };
         match got {
