@@ -115,7 +115,13 @@ impl GpuTimer {
                 // RUNE_CENSUS_COVER=across: an upper bound that also counts what a layer's opaque content covers below it.
                 if matches!(k, 8 | 9 | 12 | 13) { kinds[23].0 += 1; if !across { covered.iter_mut().for_each(|c| *c = false); } continue; }
                 let grow = match k { 1 => i.params[2] * 3.0 + 1.0, 2 => 0.0, 3 | 5..=7 | 10 => 1.0, _ => 1.0 + i.params[2] * 2.0 };
-                let (x0, x1, y0, y1) = cells(i.rect[0] - grow, i.rect[1] - grow, i.rect[0] + i.rect[2] + grow, i.rect[1] + i.rect[3] + grow, false);
+                // The quad it rasterizes, as above: a band (`uv.z < 0`) only its window.
+                let (mut lo, mut hi) = ([i.rect[0] - grow, i.rect[1] - grow], [i.rect[0] + i.rect[2] + grow, i.rect[1] + i.rect[3] + grow]);
+                if k <= 1 && i.uv[2] < 0.0 {
+                    lo = [lo[0].max(i.rect[0] + i.uv[0]), lo[1].max(i.rect[1] + i.uv[1])];
+                    hi = [hi[0].min(i.rect[0] - i.uv[2]).max(lo[0]), hi[1].min(i.rect[1] + i.uv[3]).max(lo[1])];
+                }
+                let (x0, x1, y0, y1) = cells(lo[0], lo[1], hi[0], hi[1], false);
                 let (mut all, mut some) = (x0 < x1 && y0 < y1, 0u32);
                 for y in y0..y1 { for x in x0..x1 { if covered[y * cw + x] { some += 1 } else { all = false } } }
                 let px = f64::from(CELL * CELL);
