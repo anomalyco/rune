@@ -449,6 +449,16 @@ impl ApplicationHandler<WakeEvent> for Windows {
             for host in self.hosts.iter_mut().flatten() { host.terminate(); }
         }
         for host in self.hosts.iter_mut().flatten() { host.cancel_menus(); }
+        // Measuring only: RUNE_QUIT_RELEASE=1 releases the windows, surfaces and devices before the fast exit, to
+        // see whether the seconds after TerminateProcess are the GPU's teardown moved out of the quit.
+        #[cfg(feature = "frame-profile")]
+        {
+            crate::frame::live_log::mark("quit.fast");
+            if std::env::var_os("RUNE_QUIT_RELEASE").is_some_and(|v| v == "1") {
+                self.hosts.clear();
+                crate::frame::live_log::mark("quit.released");
+            }
+        }
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(last) = crate::quit::fast_exit_hook() { crate::quit::end_fast(last); }
         // Surfaces go while winit's display connection is still open (layer surfaces live on it).

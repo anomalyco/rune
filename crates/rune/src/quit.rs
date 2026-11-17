@@ -162,6 +162,8 @@ fn end_process() -> ! {
     // shader threads) on a busy machine can hold it for seconds.
     #[cfg(target_os = "windows")]
     crate::platform::win32::raise_threads(|_| true, windows_sys::Win32::System::Threading::THREAD_PRIORITY_NORMAL);
+    #[cfg(feature = "frame-profile")]
+    crate::frame::live_log::mark("quit.terminate");
     #[cfg(target_os = "windows")]
     // SAFETY: the pseudo-handle names this process; TerminateProcess on it doesn't return.
     unsafe {
