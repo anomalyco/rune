@@ -66,6 +66,13 @@ impl TextLayout {
             TextLayout::Paragraphs(p) => Rc::as_ptr(p) as usize,
         }
     }
+
+    pub(crate) fn content_key(&self) -> Option<u64> {
+        match self {
+            TextLayout::Single(_) => None,
+            TextLayout::Paragraphs(p) => Some(p.whole),
+        }
+    }
 }
 
 /// A by-paragraph field's paragraphs, top to bottom, in device px.

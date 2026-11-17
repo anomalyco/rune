@@ -24,7 +24,7 @@ use windows::{
 
 use crate::{
     context::Context,
-    long_text::{Text, Unit, bounding_boxes, drawn_lines, long_text},
+    long_text::{Text, Unit, bounding_boxes, drawn_lines, drawn_state, long_text},
     util::*,
 };
 
@@ -61,7 +61,8 @@ fn long_unit(unit: TextUnit) -> Result<Unit> {
     match unit {
         TextUnit_Character => Ok(Unit::Character),
         TextUnit_Word => Ok(Unit::Word),
-        TextUnit_Line | TextUnit_Paragraph => Ok(Unit::Line),
+        TextUnit_Line => Ok(Unit::Line),
+        TextUnit_Paragraph => Ok(Unit::Paragraph),
         TextUnit_Format | TextUnit_Page | TextUnit_Document => Ok(Unit::Document),
         _ => Err(invalid_arg()),
     }
@@ -279,22 +280,26 @@ impl PlatformRange {
     }
 
     /// Runs `f` on this long field range's text, node and endpoints, which it may move.
+    /// Catches any panic so an unexpected state never unwinds across UIA's `extern "system"` ABI.
     fn long<F, T>(&self, f: F) -> Result<T>
     where
         F: FnOnce(Text, NodeRef, &Arc<Context>, &mut usize, &mut usize) -> Result<T>,
     {
-        let context = self.upgrade_context()?;
-        let tree = context.read_tree();
-        let mut state = self.state.write().unwrap();
-        let State::Long { node, start, end } = &mut *state else {
-            return Err(invalid_arg());
-        };
-        let node = tree.state().node_by_id(*node).ok_or_else(element_not_available)?;
-        let (text, _) = long_text(&node).ok_or_else(element_not_available)?;
-        // The value may have changed since the range was made.
-        *start = text.clamp(*start);
-        *end = text.clamp(*end).max(*start);
-        f(text, node, &context, start, end)
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let context = self.upgrade_context()?;
+            let tree = context.read_tree();
+            let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
+            let State::Long { node, start, end } = &mut *state else {
+                return Err(invalid_arg());
+            };
+            let node = tree.state().node_by_id(*node).ok_or_else(element_not_available)?;
+            let (text, _) = long_text(&node).ok_or_else(element_not_available)?;
+            // The value may have changed since the range was made.
+            *start = text.clamp(*start);
+            *end = text.clamp(*end).max(*start);
+            f(text, node, &context, start, end)
+        }))
+        .unwrap_or_else(|_| Err(element_not_available()))
     }
 
     fn long_endpoints(&self) -> Option<(FullNodeId, usize, usize)> {
@@ -477,9 +482,14 @@ impl ITextRangeProvider_Impl for PlatformRange_Impl {
                 if unit == Unit::Character && *start == text.len() {
                     return Ok(());
                 }
-                let drawn = if unit == Unit::Line { drawn_lines(&node, text) } else { Vec::new() };
-                *start = text.start_of_in(*start, unit, &drawn);
-                *end = if *start == text.len() { *start } else { text.next_in(*start, unit, &drawn) };
+                if unit == Unit::Line {
+                    let state = drawn_state(&node, text);
+                    *start = text.start_of_in(*start, unit, &state);
+                    *end = if *start == text.len() { *start } else { text.next_in(*start, unit, &state.lines) };
+                } else {
+                    *start = text.start_of(*start, unit);
+                    *end = if *start == text.len() { *start } else { text.next(*start, unit) };
+                }
                 Ok(())
             });
         }
@@ -543,14 +553,16 @@ impl ITextRangeProvider_Impl for PlatformRange_Impl {
                     UIA_IsReadOnlyAttributeId => node.is_read_only().into(),
                     UIA_CaretPositionAttributeId => {
                         let at = *start;
-                        let drawn = drawn_lines(&node, text);
+                        let state = drawn_state(&node, text);
+                        let at_hard_end = at == text.len()
+                            || text.0.as_bytes().get(at) == Some(&b'\n')
+                            || text.0.as_bytes().get(at..at + 2) == Some(b"\r\n");
                         let value = if at != *end {
                             CaretPosition_Unknown
-                        } else if text.is_start_in(at, Unit::Line, &drawn) {
+                        } else if text.is_start_in(at, Unit::Line, &state) {
                             CaretPosition_BeginningOfLine
-                        } else if at == text.len()
-                            || text.0.as_bytes()[at] == b'\n'
-                            || drawn.iter().any(|d| d.end == at && d.start < at)
+                        } else if at_hard_end
+                            || state.lines.iter().any(|d| d.end == at && d.start < at)
                         {
                             CaretPosition_EndOfLine
                         } else {
@@ -709,13 +721,20 @@ impl ITextRangeProvider_Impl for PlatformRange_Impl {
         if self.is_long() {
             return self.long(|text, node, _, start, end| {
                 let unit = long_unit(unit)?;
-                let drawn = if unit == Unit::Line { drawn_lines(&node, text) } else { Vec::new() };
+                let state = (unit == Unit::Line).then(|| drawn_state(&node, text));
+                let drawn = state.as_ref().map_or(&[][..], |s| s.lines.as_slice());
                 let degenerate = start == end;
-                let from = if degenerate { *start } else { text.start_of_in(*start, unit, &drawn) };
-                let (at, moved) = text.step_in(from, unit, count, &drawn);
+                let from = if degenerate {
+                    *start
+                } else if let Some(st) = &state {
+                    text.start_of_in(*start, unit, st)
+                } else {
+                    text.start_of(*start, unit)
+                };
+                let (at, moved) = text.step_in(from, unit, count, drawn);
                 if moved != 0 {
                     *start = at;
-                    *end = if degenerate || at == text.len() { at } else { text.next_in(at, unit, &drawn) };
+                    *end = if degenerate || at == text.len() { at } else { text.next_in(at, unit, drawn) };
                 }
                 Ok(moved)
             });

@@ -1517,15 +1517,18 @@ patterns! {
         },
 
         fn RangeFromPoint(&self, point: &UiaPoint) -> Result<ITextRangeProvider> {
-            let hit = self.resolve_with_context(|node, context| {
-                Ok(long_text(&node).map(|(text, s)| {
-                    let client_top_left = context.client_top_left();
-                    let pt = Point::new(point.x - client_top_left.x, point.y - client_top_left.y);
-                    let pt = node.transform().inverse() * pt;
-                    let at = byte_at_point(&node, text, pt).unwrap_or_else(|| text.clamp(s.focus.character_index));
-                    PlatformTextRange::new_long(&self.context, node.id(), at, at).into()
-                }))
-            })?;
+            let hit = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                self.resolve_with_context(|node, context| {
+                    Ok(long_text(&node).map(|(text, s)| {
+                        let client_top_left = context.client_top_left();
+                        let pt = Point::new(point.x - client_top_left.x, point.y - client_top_left.y);
+                        let pt = node.transform().inverse() * pt;
+                        let at = byte_at_point(&node, text, pt, false).unwrap_or_else(|| text.clamp(s.focus.character_index));
+                        PlatformTextRange::new_long(&self.context, node.id(), at, at).into()
+                    }))
+                })
+            }))
+            .unwrap_or_else(|_| Err(element_not_available()))?;
             if let Some(range) = hit {
                 return Ok(range);
             }
@@ -1568,25 +1571,28 @@ patterns! {
         },
 
         fn GetCaretRange(&self, is_active: *mut BOOL) -> Result<ITextRangeProvider> {
-            let long_caret = self.resolve(|node| {
-                Ok(long_text(&node).map(|(text, s)| {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let long_caret = self.resolve(|node| {
+                    Ok(long_text(&node).map(|(text, s)| {
+                        if !is_active.is_null() {
+                            unsafe { *is_active = node.is_focused().into() };
+                        }
+                        let at = text.clamp(s.focus.character_index);
+                        PlatformTextRange::new_long(&self.context, node.id(), at, at).into()
+                    }))
+                })?;
+                if let Some(range) = long_caret {
+                    return Ok(range);
+                }
+                self.resolve_for_text_pattern(|node| {
                     if !is_active.is_null() {
                         unsafe { *is_active = node.is_focused().into() };
                     }
-                    let at = text.clamp(s.focus.character_index);
-                    PlatformTextRange::new_long(&self.context, node.id(), at, at).into()
-                }))
-            })?;
-            if let Some(range) = long_caret {
-                return Ok(range);
-            }
-            self.resolve_for_text_pattern(|node| {
-                if !is_active.is_null() {
-                    unsafe { *is_active = node.is_focused().into() };
-                }
-                let pos = node.text_selection_focus().unwrap_or_else(|| node.document_start());
-                Ok(PlatformTextRange::new(&self.context, pos.to_degenerate_range()).into())
-            })
+                    let pos = node.text_selection_focus().unwrap_or_else(|| node.document_start());
+                    Ok(PlatformTextRange::new(&self.context, pos.to_degenerate_range()).into())
+                })
+            }))
+            .unwrap_or_else(|_| Err(element_not_available()))
         }
     )),
     (UIA_ExpandCollapsePatternId, IExpandCollapseProvider, IExpandCollapseProvider_Impl, is_expand_collapse_pattern_supported, (
