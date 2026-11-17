@@ -99,7 +99,9 @@ impl GpuTimer {
         // be dropped), 22 the covered cells of every instance (what a depth pre-pass would reject). A layer, a
         // backdrop or an effect marker (kinds 8, 9, 12, 13) clears the cells: nothing is assumed across a target change.
         if std::env::var_os("RUNE_CENSUS_COVER").is_some() {
-            kinds.resize(25, (0, 0.0, 0.0));
+            kinds.resize(27, (0, 0.0, 0.0));
+            static DUMPED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+            let dump = std::env::var_os("RUNE_CENSUS_COVER_DUMP").is_some() && DUMPED.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 300;
             const CELL: f32 = 4.0;
             let (cw, ch) = ((viewport.0 as f32 / CELL).ceil() as usize, (viewport.1 as f32 / CELL).ceil() as usize);
             let mut covered = vec![false; cw * ch];
@@ -128,6 +130,9 @@ impl GpuTimer {
                 if all { kinds[21].0 += 1; kinds[21].1 += f64::from(some) * px; }
                 kinds[22].0 += u32::from(some > 0);
                 kinds[22].1 += f64::from(some) * px;
+                // 26: the covered cells of rects alone; RUNE_CENSUS_COVER_DUMP: the instances most covered, once.
+                if k == 0 { kinds[26].0 += u32::from(some > 0); kinds[26].1 += f64::from(some) * px; }
+                if some > 2000 && dump { eprintln!("rune-cover: kind {k} rect {:?} radii {:?} border {} fill {:?} band {} cells {} of {}", i.rect, i.radii, i.params[0], i.fill, i.uv[2] < 0.0, some, (x1.saturating_sub(x0)) * (y1.saturating_sub(y0))); }
                 // Opaque rects cover: plain ones whole, rounded or bordered ones their box inset by the largest radius
                 // and the border (24: how many covered as rounded).
                 let opaque = k == 0 && i.fade == [0; 4] && i.fill[3] >= 1.0 && i.uv[2] >= 0.0;
@@ -140,7 +145,7 @@ impl GpuTimer {
             }
         }
         // 25: runs of one kind in paint order (what #1140 splits a frame pass into, before batch boundaries).
-        kinds.resize(kinds.len().max(26), (0, 0.0, 0.0));
+        kinds.resize(kinds.len().max(27), (0, 0.0, 0.0));
         kinds[25].0 = instances.chunk_by(|a, b| a.params[1] == b.params[1]).count() as u32;
         *self.kinds.lock().unwrap_or_else(|e| e.into_inner()) = kinds;
     }
