@@ -1157,6 +1157,9 @@ impl<S: 'static> Runtime<S> {
                         exact_off: if pinh.snap.shifted || n.vis.offset != [0.0; 2] { [0.0; 2] } else {
                             let o = snap_rest.map_or([0.0; 2], |p| p.exact_off(pinh.snap.steady.map(|v| v * s)));
                             let c = pinh.snap.contain.map(|v| v * s);
+                            if std::env::var("RUNE_TEXT2_TIE").is_ok_and(|v| v == "1") && n.text.is_some() {
+                                eprintln!("TEXT2RIG path={} rigid={:.6} rigid_bits={:08x} o={:.6} rest={} c={:.6}", n.path, rigid[1], rigid[1].to_bits(), o[1], snap_rest.is_some(), c[1]);
+                            }
                             [o[0] + (c[0] + 0.5).floor() - c[0], o[1] + (c[1] + 0.5).floor() - c[1]]
                         },
                         raw_size: [raw_edges[2] - raw_edges[0], raw_edges[3] - raw_edges[1]],
