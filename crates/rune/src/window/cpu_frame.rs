@@ -343,6 +343,7 @@ impl<S: 'static> Host<S> {
     /// changed, and only those rectangles go to the window. While handing over, the GPU draws the
     /// same instances too.
     pub(super) fn draw_cpu(&mut self, resizing: bool) {
+        let _m = crate::marks::gate_span("cpu-frame");
         // The system threw away what the window showed (it was covered whole, then came back) and
         // asks for it again: the window is in sight, whatever the occlusion tracker said last, so
         // this frame is drawn and copied whole. Skipped, the system would count it painted, and the
@@ -382,7 +383,7 @@ impl<S: 'static> Host<S> {
             self.native_handle.native.number.store(native_window_number(&l.window).unwrap_or(0), Ordering::Release);
         }
         if !hidden { self.meter.redraw(l.paced_for_stats()); }
-        if !hidden && !resizing { self.step_frame(Instant::now()); }
+        if !hidden && !resizing { let _m = crate::marks::gate_span("cpu-step"); self.step_frame(Instant::now()); }
         let Some(l) = self.win.as_mut() else { return };
         l.backoff_step(BackoffEvent::Lapsed);
         l.backoff_step(BackoffEvent::Presented);
@@ -390,12 +391,14 @@ impl<S: 'static> Host<S> {
         let now = Instant::now();
         let rt = &mut self.rt;
         if hidden && l.first_frame.settles() { rt.settle_all(); }
+        let build_span = crate::marks::gate_span("cpu-build");
         let (animating, _dt) = if hidden {
             self.clock.hold(now);
             (rt.frame(0.0), 0.0)
         } else {
             self.clock.advance(rt, now, false)
         };
+        drop(build_span);
         if hidden { l.hidden_pace.rendered(now); }
         crate::marks::mark_once(&FIRST_LAYOUT, "frame.first.layout");
         let update_ms = now.elapsed().as_secs_f64() * 1000.0;
@@ -411,7 +414,9 @@ impl<S: 'static> Host<S> {
         if quiet_now { self.native_handle.send(WakeEvent::GpuReady); }
         let painted = {
             let (SurfaceMode::Cpu { cpu, .. } | SurfaceMode::HandingOver { cpu, .. }) = &mut l.native.mode else { return };
+            let masks_span = crate::marks::gate_span("cpu-masks");
             cpu.painter.fill_masks(&mut rt.text.atlas);
+            drop(masks_span);
             crate::marks::mark_once(&FIRST_MASKS, "frame.first.masks");
             let scene = Scene::new(&rt.instances, &rt.text.atlas, &rt.images, (width, height), rt.clear_color())
                 .srgb_blend(rt.srgb_blend())
@@ -426,13 +431,19 @@ impl<S: 'static> Host<S> {
                 return;
             };
             let stride = dib.stride();
-            match painter.paint(&scene, &mut Target::with_stride(dib.bytes(), width, height, stride)) {
+            let paint_span = crate::marks::gate_span("cpu-paint");
+            let result = painter.paint(&scene, &mut Target::with_stride(dib.bytes(), width, height, stride));
+            drop(paint_span);
+            match result {
                 Ok(painted) => {
                     crate::marks::mark_once(&FIRST_PAINT, "frame.first.painted");
                     *shown = match std::mem::replace(shown, Shown::Nothing) {
                         Shown::Copied(size) => {
                             let blit = if size == (width, height) && !owed { Blit::Bounds(&painted.rects) } else { Blit::All };
+                            let mut blit_span = crate::marks::gate_span("cpu-blit");
+                            blit_span.n(match &blit { Blit::All => u64::from(width) * u64::from(height), Blit::Bounds(r) => r.iter().fold([u32::MAX, u32::MAX, 0, 0], |u, r| [u[0].min(r[0]), u[1].min(r[1]), u[2].max(r[2]), u[3].max(r[3])]).pipe_area() });
                             if let Some(hwnd) = crate::platform::win32::hwnd(&l.window) { dib.present(hwnd, (width, height), blit); }
+                            drop(blit_span);
                             Shown::Copied((width, height))
                         }
                         Shown::Waiting | Shown::Nothing => Shown::Waiting,
@@ -909,3 +920,6 @@ fn lower_priority() {
 /// presents, and nothing while it rests. A fixed-rate display (blade's Iris panel) needs nothing:
 /// its refresh doesn't depend on who presents.
 fn vrr_guard(vendor: u32) -> bool { vendor == 0x10DE }
+
+trait PipeArea { fn pipe_area(self) -> u64; }
+impl PipeArea for [u32; 4] { fn pipe_area(self) -> u64 { if self[2] > self[0] && self[3] > self[1] { u64::from(self[2] - self[0]) * u64::from(self[3] - self[1]) } else { 0 } } }
