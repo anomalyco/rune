@@ -91,6 +91,11 @@ impl Drop for NodeLayout {
     }
 }
 
+/// Whether a scratch pass is open (probe only).
+pub(crate) fn pass_open() -> bool {
+    PASS.with_borrow(|p| p.is_some())
+}
+
 /// Whether the open pass's slice is spent and a text node's layout is asked for.
 fn late_node() -> bool {
     NODE.get() && PASS.with_borrow(|p| p.as_ref().is_some_and(|p| Instant::now() >= p.until))

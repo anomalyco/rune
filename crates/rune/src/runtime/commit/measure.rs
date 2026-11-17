@@ -215,7 +215,9 @@ impl<S: 'static> Measurement<'_, S> {
             self.windowed.clear();
             // Degenerate zero-height runs fall back to a full measurement instead of
             // an unbounded retry loop. Normal transcripts need one pass.
+            let probe_t = std::time::Instant::now();
             let (layout, mut nodes, pending, mut reused, mut taken) = self.measure_view(tx, self.pass.forced());
+            if crate::text::probe_pass_open() { crate::text::probe_note(format_args!("phase pass={passes} measure_view us={:.0}", probe_t.elapsed().as_secs_f64() * 1e6)); }
             if !self.measure_virtuals(&nodes, tx.commit.lands()) { break (layout, nodes, pending, reused, taken); }
             memo_reuse::restore_moved_nodes(self.nodes, &mut nodes, &reused, &taken);
             nodes.clear();
@@ -490,11 +492,19 @@ impl<S: 'static> Measurement<'_, S> {
         let emptied = self.memo.emptied();
         let memo = crate::memo::enter(std::mem::take(self.memo), self.env, self.system_accent, self.system_reduced_motion, crate::theme::blends_srgb(), self.chrome_bits(), cx.caret.clone(), cx.layout.clone());
         let view_time = crate::frame::profile::Scope::new(crate::frame::profile::Phase::View);
+        let probe_t0 = std::time::Instant::now();
         // The view and the rows it builds measure text with the window's own text system.
         let text: *mut TextSystem = &mut *self.text;
         #[cfg(not(feature = "hot"))]
         // SAFETY: nothing here uses `self.text` until `lend` returns.
-        let mut root = crate::text::lend(unsafe { &mut *text }, || { let root = self.root_view(&mut cx); self.build_tree(root, tx, force_all) });
+        let mut root = crate::text::lend(unsafe { &mut *text }, || {
+            let root = self.root_view(&mut cx);
+            if crate::text::probe_pass_open() { crate::text::probe_note(format_args!("phase view us={:.0}", probe_t0.elapsed().as_secs_f64() * 1e6)); }
+            let t1 = std::time::Instant::now();
+            let r = self.build_tree(root, tx, force_all);
+            if crate::text::probe_pass_open() { crate::text::probe_note(format_args!("phase build_tree us={:.0}", t1.elapsed().as_secs_f64() * 1e6)); }
+            r
+        });
         // Index-built rows run the app's closures in `build_tree`, so a patch's panic there
         // falls back like one in the view.
         #[cfg(feature = "hot")]

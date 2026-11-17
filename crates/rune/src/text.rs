@@ -39,6 +39,7 @@ pub use face_weights::{FaceWeights, set_face_weights};
 mod families;
 mod miss_probe;
 pub(crate) use miss_probe::frame as probe_frame;
+pub(crate) use miss_probe::note as probe_note;
 #[doc(hidden)]
 pub mod fill_bench;
 pub(crate) mod full_faces;
@@ -123,6 +124,7 @@ use hidden_axes::hidden_axes;
 use layout_cache::{Cache, Entry};
 pub(crate) use layout_cache::Keep;
 pub(crate) use prepare_budget::NodeLayout;
+pub(crate) use prepare_budget::pass_open as probe_pass_open;
 pub(crate) use paragraphs::{ParagraphLayout, Piece, TextFlow, TextLayout, common_end, common_start};
 #[cfg(test)]
 use layout_cache::STALE_BYTES;

@@ -31,10 +31,13 @@ impl<S: 'static> Runtime<S> {
     /// One idle turn's text work: the view asked to be prepared, if any; true while more is owed.
     pub(crate) fn text_idle_turn(&mut self) -> bool {
         let at = ([self.viewport.0, self.viewport.1], self.env.scale);
+        let t0 = std::time::Instant::now();
         if let Some((view, size)) = self.text.prepare_take::<fn(&S, &mut Cx<S>) -> El>() {
             self.prepare_text(view, size.unwrap_or(self.viewport), at);
+            crate::text::probe_note(format_args!("prepare us={:.0} queued={}", t0.elapsed().as_secs_f64() * 1e6, self.text_idle_owed()));
         } else {
-            self.text.prepare_drain(std::time::Instant::now() + PREPARE_SLICE, at);
+            let n = self.text.prepare_drain(std::time::Instant::now() + PREPARE_SLICE, at);
+            crate::text::probe_note(format_args!("drain us={:.0} made={n} more={}", t0.elapsed().as_secs_f64() * 1e6, self.text_idle_owed()));
         }
         self.text_idle_owed()
     }
