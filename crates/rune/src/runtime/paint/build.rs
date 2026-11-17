@@ -196,7 +196,7 @@ impl<S: 'static> Runtime<S> {
                     pinh.paint_clip[1] = top;
                 }
                 if edge == crate::el::StickyEdge::Left { pinh.dx += shift } else { pinh.dy += shift }
-                pinh.snap.shift((edge != crate::el::StickyEdge::Left) as usize, shift);
+                pinh.snap.scroll((edge != crate::el::StickyEdge::Left) as usize, shift);
                 // A sticky element stays crisp against the viewport edge it sticks to while rows
                 // scrolling under its fill fade out.
                 let slot = match edge {

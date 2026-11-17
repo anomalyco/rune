@@ -113,9 +113,10 @@ pub(super) struct Inherit {
     /// The translation in points from scrolls, sticky shifts and growth rows above, which
     /// snaps as a whole.
     pub rigid: [f32; 2],
-    /// `rigid` less the scrolls' offsets and the growth offsets (`row_dy`: rows' and stacks'
-    /// windows'). A text lays out from its exact place against this, so while rows glide or a
-    /// list scrolls it moves in whole pixels with its box, as one piece with the lines and borders
+    /// `rigid` less the scrolls' offsets, the sticky shifts and the growth offsets (`row_dy`: rows'
+    /// and stacks' windows'): the paint containments' origins alone (overlays start it again at
+    /// zero). A text lays out from its exact place against this, so while rows glide or a list
+    /// scrolls it moves in whole pixels with its box, as one piece with the lines and borders
     /// beside it, and at rest it sits against its box the same way wherever the list is.
     pub steady: [f32; 2],
     /// The origin in points of the paint containment above (`El::paint_contained`), which is
@@ -136,17 +137,11 @@ pub(super) struct Inherit {
 }
 
 impl Inherit {
-    /// Moves the subtree `by` points on `axis`: a scroll, a sticky shift or a stack's window,
-    /// which a text lays out against.
-    pub(super) fn shift(&mut self, axis: usize, by: f32) {
-        self.rigid[axis] += by;
-        self.steady[axis] += by;
-    }
-
-    /// A scroll's drawn offset `by` on `axis`: it moves the subtree's boxes, which round it with
-    /// the rest of `rigid`, and not what its text lays out against, so text scrolls in whole
-    /// pixels with its box, as Chromium draws a scroller's contents from its pixel-snapped
-    /// offset.
+    /// A translation that moves the subtree as a scroll does, `by` points on `axis`: a scroll's
+    /// drawn offset, a sticky shift (which, while stuck, cancels the scroll's motion), or a page's
+    /// band. It moves the subtree's boxes, which round it with the rest of `rigid`, and not what
+    /// its text lays out against, so text moves in whole pixels with its box, as Chromium draws a
+    /// scroller's contents from its pixel-snapped offset.
     pub(super) fn scroll(&mut self, axis: usize, by: f32) {
         self.rigid[axis] += by;
     }
