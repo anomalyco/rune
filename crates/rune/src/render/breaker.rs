@@ -132,7 +132,9 @@ enum Pool {
 /// The fade pool in device pixels, as many of each as a fade band holds at once: buckets a chip or a
 /// keycap asks for, and list-wide ones for cards (the fading list's width). The planner takes a
 /// spare no more than twice a layer's area, so each is a bucket the layers it serves ask for.
+#[cfg_attr(any(test, target_arch = "wasm32"), allow(dead_code))]
 const POOL_SMALL: [([u32; 2], usize); 2] = [([128, 64], 6), ([256, 64], 2)];
+#[cfg_attr(any(test, target_arch = "wasm32"), allow(dead_code))]
 const POOL_WIDE: (u32, usize) = (128, 2);
 
 /// An element with a backdrop blur has painted (shown or not): the window warms the blur's
@@ -143,17 +145,17 @@ pub(crate) fn note_backdrop_blur() {
     BLUR_SEEN.store(true, std::sync::atomic::Ordering::Relaxed);
 }
 
-/// Frames that drew a backdrop blur's content without the blur because its resources weren't
-/// made yet: the last resort when input beats the warm-up. It should stay 0.
-static BLUR_DEFERRED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Frames that made a backdrop blur's resources (the blur, its copies, its first pyramid)
+/// themselves because the warm-up hadn't: the last resort when input beats it. It should stay 0.
+static BLUR_ON_FRAME: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 #[cfg(feature = "frame-profile")]
-pub(crate) fn blur_deferred_frames() -> u64 {
-    BLUR_DEFERRED.load(std::sync::atomic::Ordering::Relaxed)
+pub(crate) fn blur_on_frame_count() -> u64 {
+    BLUR_ON_FRAME.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-pub(super) fn count_blur_deferred() {
-    BLUR_DEFERRED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+pub(super) fn count_blur_on_frame() {
+    BLUR_ON_FRAME.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// When the process's first default UI frame was prepared, for `warmed`.
@@ -204,7 +206,7 @@ pub(super) struct Breakers {
     pool: Pool,
     /// The blur's resources are warmed, or a frame made them (`Renderer::warm_backdrop`).
     blur_warmed: bool,
-    /// The window's first backdrop copies, being made on a thread (`Renderer::backdrops_pending`).
+    /// The window's first backdrop copies, being made on a thread (`Renderer::warm_backdrops`).
     pub(super) backdrops: Option<std::sync::mpsc::Receiver<Vec<super::pass::Backdrop>>>,
     /// Tests: build this feature's pipelines broken, as a device that refuses them would.
     #[cfg(test)]
@@ -328,15 +330,15 @@ impl Renderer {
     /// draws without the blur. Once per window: a window at rest still gives them back
     /// (`give_back`) and this doesn't make them again until a frame draws.
     fn warm_backdrop(&mut self, device: &wgpu::Device, (vw, vh): (u32, u32)) {
-        if !BLUR_SEEN.load(std::sync::atomic::Ordering::Relaxed) || self.breakers.blur_warmed || vw == 0 || vh == 0 { return; }
+        // Tests share a process: what one paints would warm another's renderer.
+        if cfg!(test) || !BLUR_SEEN.load(std::sync::atomic::Ordering::Relaxed) || self.breakers.blur_warmed || vw == 0 || vh == 0 { return; }
         // The blur itself comes from the first-use warm-up; the pyramid binds against it.
         if self.backdrop_pending() { return; }
-        // Both formats: under a header, content in a list's fade composites into a layer too.
-        if self.backdrops_pending(device, (vw, vh), true) { return; }
-        let wake = self.frame_wake.clone();
+        // Every format: under a header, content in a list's fade composites into a layer too.
+        if self.warm_backdrops(device, (vw, vh)) { return; }
         if let Some(blur) = &mut self.backdrop_blur {
             let need = [super::backdrop_blur::window_need(vw), 2 * super::backdrop_blur::STEP];
-            if blur.pyramid_pending(device, need, wake) { return; }
+            if blur.warm_pyramid(device, need) { return; }
         }
         self.breakers.blur_warmed = true;
     }

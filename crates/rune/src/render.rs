@@ -14,7 +14,7 @@ mod backdrop_blur;
 mod breaker;
 pub(crate) use breaker::{isolation_pending, note_backdrop_blur};
 #[cfg(feature = "frame-profile")]
-pub(crate) use breaker::blur_deferred_frames;
+pub(crate) use breaker::blur_on_frame_count;
 #[cfg(any(target_os = "windows", target_arch = "wasm32"))]
 mod damaged;
 #[cfg(target_os = "windows")]

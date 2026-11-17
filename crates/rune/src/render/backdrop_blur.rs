@@ -285,33 +285,35 @@ impl BackdropBlur {
         self.pyramid = Some(self.parts().pyramid(device, size));
     }
 
-    /// The first pyramid, `need` texels, made on a thread rather than on the frame that first
-    /// blurs (content first scrolling under a frosted header). True while it's being made: that
-    /// frame and the next few draw without the blur, and the thread wakes the window.
-    pub(super) fn pyramid_pending(&mut self, device: &wgpu::Device, need: [u32; 2], wake: Option<std::sync::Arc<crate::live::Wake>>) -> bool {
+    /// Warm-up: the first pyramid, `need` texels, made on a thread before content first goes
+    /// under a frosted header. True while it's being made.
+    pub(super) fn warm_pyramid(&mut self, device: &wgpu::Device, need: [u32; 2]) -> bool {
+        self.take_made_pyramid();
         if self.pyramid.is_some() { return false; }
-        if let Some(making) = &self.making {
-            return match making.try_recv() {
-                Ok(pyramid) => { self.making = None; self.pyramid = Some(pyramid); false }
-                Err(std::sync::mpsc::TryRecvError::Empty) => true,
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => { self.making = None; false }
-            };
-        }
-        // Tests share a process and check what a frame draws: they make it on the frame.
-        #[cfg(not(any(test, target_arch = "wasm32")))]
+        if self.making.is_some() { return true; }
+        #[cfg(not(target_arch = "wasm32"))]
         {
             let (parts, device, (sent, making)) = (self.parts(), device.clone(), std::sync::mpsc::channel());
             let spawned = std::thread::Builder::new().name("rune-backdrop-pyramid".into()).spawn(move || {
                 let started = std::time::Instant::now();
                 sent.send(parts.pyramid(&device, need)).ok();
                 super::breaker::warmed("backdrop pyramid", started);
-                if let Some(wake) = wake { wake.notify(); }
             });
             if spawned.is_ok() { self.making = Some(making); return true; }
         }
-        #[cfg(any(test, target_arch = "wasm32"))]
-        let _ = (device, need, wake);
+        #[cfg(target_arch = "wasm32")]
+        let _ = (device, need);
         false
+    }
+
+    /// The warm-up's pyramid, if it's made.
+    fn take_made_pyramid(&mut self) {
+        let Some(making) = &self.making else { return };
+        match making.try_recv() {
+            Ok(pyramid) => { self.making = None; if self.pyramid.is_none() { self.pyramid = Some(pyramid); } }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => self.making = None,
+        }
     }
 
     /// Records the pyramid passes for `record`, reading the backdrop of `format`.
@@ -377,15 +379,13 @@ impl Renderer {
         let any = self.effects.iter().any(|(_, i)| i.params[1] == KIND_BACKDROP_BLUR);
         if let Some(b) = &mut self.backdrop_blur { b.records.clear(); }
         if !any || vw == 0 || vh == 0 { return; }
-        // Still compiling on the warming thread, or the window's copy still being made
-        // (`backdrops_pending`): this frame draws without the blur.
-        if (self.backdrop_blur.is_none() && self.backdrop_pending()) || !self.backdrops.iter().any(|b| b.format == self.format) {
-            super::breaker::count_blur_deferred();
-            return;
-        }
         let staging = self.uploads.staging(device, queue);
-        if self.backdrop_blur.is_none() { self.adopt_backdrop_blur(device, BackdropBlur::new(device, &self.bind_layout)); }
-        let wake = self.frame_wake.clone();
+        // The warm-up (`Renderer::warm_backdrop`) makes these ahead; input that beats it makes
+        // them here, as before it, and counts it.
+        if self.backdrop_blur.is_none() {
+            super::breaker::count_blur_on_frame();
+            self.adopt_backdrop_blur(device, BackdropBlur::new(device, &self.bind_layout));
+        }
         let Some(blur) = &mut self.backdrop_blur else { return };
         blur.ensure_composite(device, self.format);
         for (format, _) in &self.extra { blur.ensure_composite(device, *format); }
@@ -414,7 +414,8 @@ impl Renderer {
         if placed.is_empty() { return; }
         // The window plus the most an aligned origin can sit before it.
         let cap = [vw, vh].map(window_need);
-        if blur.pyramid_pending(device, need, wake) { super::breaker::count_blur_deferred(); return; }
+        blur.take_made_pyramid();
+        if blur.pyramid.is_none() { super::breaker::count_blur_on_frame(); }
         blur.ensure_pyramid(device, need, cap);
         let Some(pyramid) = &blur.pyramid else { return };
         let extent = [pyramid.size[0] as f32 * 2.0, pyramid.size[1] as f32 * 2.0];

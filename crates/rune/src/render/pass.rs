@@ -279,44 +279,45 @@ fn new_backdrop(device: &wgpu::Device, format: wgpu::TextureFormat, (width, heig
 }
 
 impl Renderer {
-    /// The window's first backdrop copies (content first under a frosted header), made on a
-    /// thread rather than on that frame: true while they're being made, and that frame draws
-    /// without what reads them. A copy of a new size (a resize) is made on the frame, as before.
-    pub(super) fn backdrops_pending(&mut self, device: &wgpu::Device, viewport: (u32, u32), layers: bool) -> bool {
-        if let Some(making) = &self.breakers.backdrops {
-            return match making.try_recv() {
-                Ok(made) => {
-                    self.breakers.backdrops = None;
-                    for b in made {
-                        if self.backdrops.iter().any(|have| have.format == b.format) { continue; }
-                        if let Some(blur) = &mut self.backdrop_blur { blur.bind_backdrop(device, b.format, &b.view); }
-                        self.backdrops.push(b);
-                    }
-                    false
-                }
-                Err(std::sync::mpsc::TryRecvError::Empty) => true,
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => { self.breakers.backdrops = None; false }
-            };
-        }
+    /// Warm-up: the window's first backdrop copies, one per target format at `viewport`, made on
+    /// a thread before content first goes under a frosted header. True while they're being made.
+    pub(super) fn warm_backdrops(&mut self, device: &wgpu::Device, viewport: (u32, u32)) -> bool {
+        self.take_made_backdrops(device);
+        if self.breakers.backdrops.is_some() { return true; }
         if !self.backdrops.is_empty() { return false; }
-        // Tests share a process and check what a frame draws: they make them on the frame.
-        #[cfg(not(any(test, target_arch = "wasm32")))]
+        #[cfg(not(target_arch = "wasm32"))]
         {
             let mut formats = vec![self.format];
             formats.extend(self.extra.iter().map(|(f, _)| *f));
-            if layers { formats.push(super::layers::FORMAT); }
-            let (device, wake, (sent, making)) = (device.clone(), self.frame_wake.clone(), std::sync::mpsc::channel());
+            formats.push(super::layers::FORMAT);
+            let (device, (sent, making)) = (device.clone(), std::sync::mpsc::channel());
             let spawned = std::thread::Builder::new().name("rune-backdrop-copies".into()).spawn(move || {
                 let started = std::time::Instant::now();
                 sent.send(formats.into_iter().map(|f| new_backdrop(&device, f, viewport)).collect()).ok();
                 super::breaker::warmed("backdrop copies", started);
-                if let Some(wake) = wake { wake.notify(); }
             });
             if spawned.is_ok() { self.breakers.backdrops = Some(making); return true; }
         }
-        #[cfg(any(test, target_arch = "wasm32"))]
-        let _ = (device, viewport, layers);
+        #[cfg(target_arch = "wasm32")]
+        let _ = (device, viewport);
         false
+    }
+
+    /// The warm-up's backdrop copies, if they're made: each format not already there (a frame
+    /// may have made one meanwhile), bound to the blur.
+    pub(super) fn take_made_backdrops(&mut self, device: &wgpu::Device) {
+        let Some(making) = &self.breakers.backdrops else { return };
+        let made = match making.try_recv() {
+            Ok(made) => made,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => { self.breakers.backdrops = None; return; }
+        };
+        self.breakers.backdrops = None;
+        for b in made {
+            if self.backdrops.iter().any(|have| have.format == b.format) { continue; }
+            if let Some(blur) = &mut self.backdrop_blur { blur.bind_backdrop(device, b.format, &b.view); }
+            self.backdrops.push(b);
+        }
     }
 
     pub(super) fn ensure_backdrop(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat, (width, height): (u32, u32)) {

@@ -237,7 +237,7 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
         #[cfg(feature = "frame-profile")]
         let (alloc0, commits0, cpu0, gpu0) = {
             crate::frame::profile::take();
-            (procwatch::alloc::thread_allocations(), rt.stats.commits, crate::frame::profile::cpu_ms(), (gpu_objects(&gpu.device), crate::render::blur_deferred_frames()))
+            (procwatch::alloc::thread_allocations(), rt.stats.commits, crate::frame::profile::cpu_ms(), (gpu_objects(&gpu.device), crate::render::blur_on_frame_count()))
         };
         let real_t = k as f64 * dt;
         if args.realtime {
@@ -403,7 +403,7 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
             why: std::mem::take(&mut rt.commit_why), shaped: rt.stats.shaped, animating, cpu_ms: cpu0.map(|start| crate::frame::profile::cpu_ms().unwrap() - start),
             glyphs: rt.instances.iter().filter(|i| i.params[1] == crate::render::KIND_GLYPH).count() as u32,
             gpu_new: { let now = gpu_objects(&gpu.device); std::array::from_fn(|i| now[i] - gpu0.0[i]) },
-            blur_deferred: crate::render::blur_deferred_frames() - gpu0.1,
+            blur_on_frame: crate::render::blur_on_frame_count() - gpu0.1,
         });
         cpu_ms.push(ms);
         if k > 0 {
