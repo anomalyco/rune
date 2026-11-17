@@ -12,7 +12,7 @@ index ac050bcd..6e3c74ef 100644
  
      // The Intel Haswell family of iGPUs had support for the D3D12 API but it was later
 diff --git a/src/dx12/command.rs b/src/dx12/command.rs
-index 9e90e266..dac895ca 100644
+index 9e90e266..10b602e9 100644
 --- a/src/dx12/command.rs
 +++ b/src/dx12/command.rs
 @@ -87,6 +87,25 @@ impl Drop for super::CommandEncoder {
@@ -35,21 +35,24 @@ index 9e90e266..dac895ca 100644
 +        drop(pool);
 +        let raw = unsafe { self.device.CreateCommandAllocator(Direct3D12::D3D12_COMMAND_LIST_TYPE_DIRECT) }
 +            .into_device_result("Command allocator creation")?;
-+        Ok(super::AllocatorSlot { raw, lists: Vec::new(), recorded: 0, pending_writes })
++        Ok(super::AllocatorSlot { raw, lists: Vec::new(), recorded: 0, cycle: 0, pending_writes })
 +    }
 +
      unsafe fn begin_pass(&mut self, kind: super::PassKind, label: crate::Label) {
          let list = self.list.as_ref().unwrap();
          self.pass.kind = kind;
-@@ -389,10 +408,15 @@ impl crate::CommandEncoder for super::CommandEncoder {
+@@ -389,10 +408,18 @@ impl crate::CommandEncoder for super::CommandEncoder {
      type A = super::Api;
  
      unsafe fn begin_encoding(&mut self, label: crate::Label) -> Result<(), crate::DeviceError> {
 +        if self.allocator.is_none() {
++            // wgpu-core's `PendingWrites::activate` (device/queue.rs) begins its encoder with this
++            // label. It's only a first guess: `reset_all` files the allocator by what it recorded.
 +            self.allocator = Some(self.take_allocator(label == Some("(wgpu internal) PendingWrites"))?);
 +        }
 +        let slot = self.allocator.as_mut().unwrap();
 +        slot.recorded = slot.recorded.saturating_add(1);
++        slot.cycle += 1;
          let list = loop {
 -            if let Some(list) = self.free_lists.pop() {
 +            if let Some(list) = slot.lists.pop() {
@@ -59,7 +62,7 @@ index 9e90e266..dac895ca 100644
                  if reset_result.is_ok() {
                      break Some(list);
                  }
-@@ -408,7 +432,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
+@@ -408,7 +435,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
                  self.device.CreateCommandList(
                      0,
                      Direct3D12::D3D12_COMMAND_LIST_TYPE_DIRECT,
@@ -68,7 +71,7 @@ index 9e90e266..dac895ca 100644
                      None,
                  )
              }
-@@ -430,7 +454,9 @@ impl crate::CommandEncoder for super::CommandEncoder {
+@@ -430,7 +457,9 @@ impl crate::CommandEncoder for super::CommandEncoder {
      unsafe fn discard_encoding(&mut self) {
          if let Some(list) = self.list.take() {
              if unsafe { list.Close() }.is_ok() {
@@ -79,7 +82,7 @@ index 9e90e266..dac895ca 100644
              }
          }
      }
-@@ -441,12 +467,14 @@ impl crate::CommandEncoder for super::CommandEncoder {
+@@ -441,12 +470,20 @@ impl crate::CommandEncoder for super::CommandEncoder {
      }
      unsafe fn reset_all<I: Iterator<Item = super::CommandBuffer>>(&mut self, command_buffers: I) {
          self.intermediate_copy_bufs.clear();
@@ -91,9 +94,15 @@ index 9e90e266..dac895ca 100644
 +            return;
 +        };
 +        slot.lists.extend(command_buffers.map(|c| c.raw));
++        // One that failed to reset goes with its lists; the next encoder that needs one makes one.
 +        if let Err(e) = unsafe { slot.raw.Reset() } {
              log::error!("ID3D12CommandAllocator::Reset() failed with {e}");
++            return;
          }
++        // A cycle of one list is wgpu's pending writes (a copy list a submission); a frame records
++        // a list a pass and more. Filed by that, frames don't depend on the label surviving.
++        slot.pending_writes = slot.cycle <= 1;
++        slot.cycle = 0;
 +        self.shared.allocators.lock().push(slot);
      }
  
@@ -240,7 +249,7 @@ index fdb63bcb..5f64a804 100644
 +    }
 +}
 diff --git a/src/dx12/mod.rs b/src/dx12/mod.rs
-index 285d6356..eed13dd6 100644
+index 285d6356..922d3d4c 100644
 --- a/src/dx12/mod.rs
 +++ b/src/dx12/mod.rs
 @@ -615,6 +615,8 @@ struct SwapChain {
@@ -268,7 +277,7 @@ index 285d6356..eed13dd6 100644
      /// Returns the waitable handle associated with this swap chain, if any.
      /// Handle is only valid while the swap chain is alive.
      pub unsafe fn waitable_handle(&self) -> Option<Foundation::HANDLE> {
-@@ -756,6 +767,22 @@ struct DeviceShared {
+@@ -756,6 +767,24 @@ struct DeviceShared {
      heap_views: descriptor::GeneralHeap,
      sampler_heap: sampler::SamplerHeap,
      private_caps: PrivateCapabilities,
@@ -281,17 +290,19 @@ index 285d6356..eed13dd6 100644
 +    allocators: Mutex<Vec<AllocatorSlot>>,
 +}
 +
-+/// Rune: a command allocator, its lists, how many lists it has recorded, and whether wgpu's
-+/// pending writes use it (a list a submission) or frames (a list a pass and more).
++/// Rune: a command allocator, its lists, how many lists it has recorded in all and in the cycle
++/// it's in, and whether wgpu's pending writes use it (a list a submission) or frames (a list a pass
++/// and more).
 +struct AllocatorSlot {
 +    raw: Direct3D12::ID3D12CommandAllocator,
 +    lists: Vec<Direct3D12::ID3D12GraphicsCommandList>,
 +    recorded: u32,
++    cycle: u32,
 +    pending_writes: bool,
  }
  
  unsafe impl Send for DeviceShared {}
-@@ -980,7 +1007,8 @@ impl PassState {
+@@ -980,7 +1009,8 @@ impl PassState {
  // Any state in this struct that may be dirty after an abandoned encoding must
  // be reset for reused encoders in `begin_encoding`.
  pub struct CommandEncoder {
@@ -301,7 +312,7 @@ index 285d6356..eed13dd6 100644
      device: Direct3D12::ID3D12Device,
      shared: Arc<DeviceShared>,
      mem_allocator: Allocator,
-@@ -992,7 +1020,6 @@ pub struct CommandEncoder {
+@@ -992,7 +1022,6 @@ pub struct CommandEncoder {
  
      null_rtv_handle: descriptor::Handle,
      list: Option<Direct3D12::ID3D12GraphicsCommandList>,
@@ -309,7 +320,7 @@ index 285d6356..eed13dd6 100644
      pass: PassState,
      temp: Temp,
  
-@@ -1009,8 +1036,8 @@ unsafe impl Sync for CommandEncoder {}
+@@ -1009,8 +1038,8 @@ unsafe impl Sync for CommandEncoder {}
  impl fmt::Debug for CommandEncoder {
      fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
          f.debug_struct("CommandEncoder")
@@ -320,7 +331,7 @@ index 285d6356..eed13dd6 100644
              .finish()
      }
  }
-@@ -1535,7 +1562,9 @@ impl crate::Surface for Surface {
+@@ -1535,7 +1564,9 @@ impl crate::Surface for Surface {
                      BufferUsage: Dxgi::DXGI_USAGE_RENDER_TARGET_OUTPUT,
                      BufferCount: swap_chain_buffer,
                      Scaling: Dxgi::DXGI_SCALING_STRETCH,
@@ -331,7 +342,7 @@ index 285d6356..eed13dd6 100644
                      Flags: flags.0 as u32,
                  };
                  let swap_chain1 = match self.target {
-@@ -1702,6 +1731,7 @@ impl crate::Surface for Surface {
+@@ -1702,6 +1733,7 @@ impl crate::Surface for Surface {
              present_mode: config.present_mode,
              format: config.format,
              size: config.extent,
@@ -339,7 +350,7 @@ index 285d6356..eed13dd6 100644
          });
  
          Ok(())
-@@ -1838,9 +1868,22 @@ impl crate::Queue for Queue {
+@@ -1838,9 +1870,22 @@ impl crate::Queue for Queue {
          };
  
          profiling::scope!("IDXGISwapchain3::Present");

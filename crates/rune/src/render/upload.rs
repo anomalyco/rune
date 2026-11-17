@@ -212,12 +212,6 @@ impl Renderer {
         self.prepare_with_precision(device, queue, atlas, instances, viewport, false);
     }
 
-    /// Starts compiling, on a thread of its own, the pipelines a frame's first layer needs, for a
-    /// window's start-up warm-up (`window::cpu_frame::warm_window`). Nothing yet: the layer
-    /// pipelines are built by the first frame that draws a layer.
-    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-    pub(crate) fn warm_layer_pipelines(&mut self, _device: &wgpu::Device) {}
-
     /// The default UI pass draws the root into one known target. Its float intermediate layers
     /// have their own projection and keep their source precision in the shader.
     pub(crate) fn prepare_ui(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, atlas: &mut Atlas,

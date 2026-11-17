@@ -776,12 +776,14 @@ struct DeviceShared {
     allocators: Mutex<Vec<AllocatorSlot>>,
 }
 
-/// Rune: a command allocator, its lists, how many lists it has recorded, and whether wgpu's
-/// pending writes use it (a list a submission) or frames (a list a pass and more).
+/// Rune: a command allocator, its lists, how many lists it has recorded in all and in the cycle
+/// it's in, and whether wgpu's pending writes use it (a list a submission) or frames (a list a pass
+/// and more).
 struct AllocatorSlot {
     raw: Direct3D12::ID3D12CommandAllocator,
     lists: Vec<Direct3D12::ID3D12GraphicsCommandList>,
     recorded: u32,
+    cycle: u32,
     pending_writes: bool,
 }
 

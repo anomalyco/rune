@@ -103,7 +103,7 @@ impl super::CommandEncoder {
         drop(pool);
         let raw = unsafe { self.device.CreateCommandAllocator(Direct3D12::D3D12_COMMAND_LIST_TYPE_DIRECT) }
             .into_device_result("Command allocator creation")?;
-        Ok(super::AllocatorSlot { raw, lists: Vec::new(), recorded: 0, pending_writes })
+        Ok(super::AllocatorSlot { raw, lists: Vec::new(), recorded: 0, cycle: 0, pending_writes })
     }
 
     unsafe fn begin_pass(&mut self, kind: super::PassKind, label: crate::Label) {
@@ -409,10 +409,13 @@ impl crate::CommandEncoder for super::CommandEncoder {
 
     unsafe fn begin_encoding(&mut self, label: crate::Label) -> Result<(), crate::DeviceError> {
         if self.allocator.is_none() {
+            // wgpu-core's `PendingWrites::activate` (device/queue.rs) begins its encoder with this
+            // label. It's only a first guess: `reset_all` files the allocator by what it recorded.
             self.allocator = Some(self.take_allocator(label == Some("(wgpu internal) PendingWrites"))?);
         }
         let slot = self.allocator.as_mut().unwrap();
         slot.recorded = slot.recorded.saturating_add(1);
+        slot.cycle += 1;
         let list = loop {
             if let Some(list) = slot.lists.pop() {
                 // TODO: Is an error expected here and should we print it?
@@ -471,9 +474,15 @@ impl crate::CommandEncoder for super::CommandEncoder {
             return;
         };
         slot.lists.extend(command_buffers.map(|c| c.raw));
+        // One that failed to reset goes with its lists; the next encoder that needs one makes one.
         if let Err(e) = unsafe { slot.raw.Reset() } {
             log::error!("ID3D12CommandAllocator::Reset() failed with {e}");
+            return;
         }
+        // A cycle of one list is wgpu's pending writes (a copy list a submission); a frame records
+        // a list a pass and more. Filed by that, frames don't depend on the label surviving.
+        slot.pending_writes = slot.cycle <= 1;
+        slot.cycle = 0;
         self.shared.allocators.lock().push(slot);
     }
 

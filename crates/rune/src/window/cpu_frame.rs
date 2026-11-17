@@ -803,12 +803,10 @@ fn prepare(hwnd: isize, size: (u32, u32), srgb: bool, features: wgpu::Features, 
 
 /// The window's start-up warm-up, the one place it's ordered: on the GPU thread, before the
 /// hand-over, whatever the first GPU frames would otherwise create or compile on the UI thread,
-/// where they carry input. After the hand-over, only idle turns warm anything more.
-/// 1. The layer pipelines, started on their own thread and not waited for: the longest head start
-///    for a compile of hundreds of milliseconds (`Renderer::warm_layer_pipelines`).
-/// 2. The window's frame, and the command allocators the first frames record on (`warm_frame`).
+/// where they carry input. After the hand-over, only idle turns warm anything more. A step that
+/// starts work on a thread of its own and isn't waited for goes first, for the longest head start;
+/// then the window's frame and the command allocators the first frames record on (`warm_frame`).
 fn warm_window(gpu: &Gpu, renderer: &mut Renderer, format: wgpu::TextureFormat, size: (u32, u32), instances: &[crate::render::Instance]) {
-    renderer.warm_layer_pipelines(&gpu.device);
     warm_frame(gpu, renderer, format, size, instances);
 }
 
@@ -839,20 +837,29 @@ fn warm_frame(gpu: &Gpu, renderer: &mut Renderer, format: wgpu::TextureFormat, s
     let view = target.create_view(&Default::default());
     let mut atlas = crate::text::Atlas::new();
     for _ in 0..WARM_ROUNDS {
-        let encoders: Vec<_> = (0..WARM_ENCODERS).map(|_| gpu.device.create_command_encoder(&Default::default())).collect();
-        for mut enc in encoders {
+        // Every frame of a round is finished before any is submitted: wgpu records a frame's
+        // lists as it finishes it, and each holds its allocator until the GPU is done with its
+        // submission, so a round warms `WARM_ENCODERS` different allocators whatever order wgpu
+        // hands finished work back in.
+        let mut frames = Vec::with_capacity(WARM_ENCODERS);
+        for _ in 0..WARM_ENCODERS {
+            let mut enc = gpu.device.create_command_encoder(&Default::default());
             renderer.prepare_ui(&gpu.device, &gpu.queue, &mut atlas, instances, size);
             renderer.draw(&mut enc, &view, [0.0; 4]);
-            // The window's frames record one list more than this one (the swap chain's
-            // transition to present), and an allocator's first two cycles at a new size are slow
-            // again: an empty pass gives each allocator room for that list.
+            // A window's frame records one list this one doesn't: the swap chain texture's
+            // transition to present. A render pass records two (wgpu puts a barrier list before
+            // each pass), so with this empty pass the warm frame has one list more than a window's
+            // frame. An allocator is past its slow cycles for as many lists as it has had, not
+            // only for exactly that many.
             drop(enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: None,
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment { view: &view, depth_slice: None, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store } })],
                 ..Default::default()
             }));
-            renderer.submit(&gpu.queue, enc);
+            renderer.before_submit(&mut enc);
+            frames.push(enc.finish());
         }
+        for frame in frames { gpu.queue.submit([frame]); }
         let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
     }
     target.destroy();
