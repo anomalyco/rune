@@ -30,6 +30,7 @@ impl<S: 'static> Runtime<S> {
     /// Measures `view` at `size` (points) with this window's text system and scratch everything
     /// else, then drops it. Returns the layouts it added.
     pub(crate) fn prepare_text(&mut self, view: fn(&S, &mut Cx<S>) -> El, size: (f32, f32)) -> usize {
+        let t0 = std::time::Instant::now();
         let before = self.text.layout_keys();
         let (mut nodes, mut spare_nodes, mut layout) = (Vec::new(), Vec::new(), LayoutEngine::new());
         let (mut node_index, mut path_ids, mut memo) = (HashMap::default(), HashMap::default(), crate::memo::MemoCache::default());
@@ -85,6 +86,8 @@ impl<S: 'static> Runtime<S> {
             kept_lists: Vec::new(),
         };
         drop(m.finish(&Tx::default()));
-        self.text.keep_prepared(&before, PREPARE_BYTES)
+        let added = self.text.keep_prepared(&before, PREPARE_BYTES);
+        crate::text::probe_note(format_args!("prepare us={:.0} added={added} size={size:?}", t0.elapsed().as_secs_f64() * 1e6));
+        added
     }
 }
