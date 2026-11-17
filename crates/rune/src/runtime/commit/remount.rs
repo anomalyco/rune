@@ -422,6 +422,7 @@ impl<S: 'static> Measurement<'_, S> {
                             reused,
                             taken_paths: Vec::new(),
                             path_ids: &mut *self.path_ids,
+                            node_ids: &mut *self.node_ids,
                             next_id: &mut *self.next_id,
                             foreground: self.defaults.foreground,
                         };

@@ -138,55 +138,6 @@ fn push_segment(path: &mut String, key: Option<&str>, index: usize) {
     }
 }
 
-#[inline]
-fn can_take_old_path(old: &Node, path_buf: &str) -> bool {
-    !path_buf.is_empty()
-        && !old.is_moved_stub()
-        && old.path == path_buf
-        && old.input.is_none()
-        && old.focus.get().is_none_or(|f| f.return_to.is_none())
-}
-
-#[inline]
-fn resolve_path_and_id(
-    path_buf: &str,
-    new_idx: usize,
-    memo_ctx: &mut memo_reuse::MemoFlattenCtx<'_>,
-) -> (String, NodeId) {
-    let old_limit = memo_ctx.old_present_len.min(memo_ctx.old_nodes.len());
-    if memo_ctx.committing && memo_ctx.old_cursor < old_limit {
-        let oi = memo_ctx.old_cursor;
-        if can_take_old_path(&memo_ctx.old_nodes[oi], path_buf) {
-            let old = &mut memo_ctx.old_nodes[oi];
-            let id = old.id;
-            let path = std::mem::take(&mut old.path);
-            memo_ctx.taken_paths.push((oi as u32, new_idx as u32));
-            memo_ctx.old_cursor = oi + 1;
-            return (path, id);
-        }
-    }
-    if let Some(&id) = memo_ctx.path_ids.get(path_buf) {
-        if memo_ctx.committing
-            && let Some(&oi) = memo_ctx.old_node_index.get(&id)
-            && oi < old_limit
-            && memo_ctx.old_nodes[oi].id == id
-            && can_take_old_path(&memo_ctx.old_nodes[oi], path_buf)
-        {
-            let old = &mut memo_ctx.old_nodes[oi];
-            let path = std::mem::take(&mut old.path);
-            memo_ctx.taken_paths.push((oi as u32, new_idx as u32));
-            memo_ctx.old_cursor = oi + 1;
-            return (path, id);
-        }
-        return (path_buf.to_owned(), id);
-    }
-    let path = path_buf.to_owned();
-    let id = NodeId(*memo_ctx.next_id);
-    *memo_ctx.next_id += 1;
-    memo_ctx.path_ids.insert(path.clone(), id);
-    (path, id)
-}
-
 #[derive(Clone, Copy)]
 enum ScrollXChild {
     Single { vertical: bool },
@@ -422,7 +373,8 @@ fn flatten_owned(
     let prev_len = path_buf.len();
     push_segment(path_buf, el.key.as_deref(), index);
     let me = nodes.len();
-    let (path, id) = resolve_path_and_id(path_buf, me, memo_ctx);
+    let raw_parent_id = parent.map_or(NodeId(0), |p| nodes[p].id);
+    let (path, id, parent_id, local_key) = node_ids::resolve_flattened(raw_parent_id, prev_len, el.key.as_deref(), index, path_buf, me, true, memo_ctx);
     let own_motion = el.cold.motion;
     let motion = own_motion.unwrap_or(motion);
     let parent_is_stack = parent.is_some_and(|p| nodes[p].growth.is_some());
@@ -526,6 +478,8 @@ fn flatten_owned(
     };
     nodes.push(Node {
         id,
+        parent_id,
+        local_key,
         path,
         key,
         role,
@@ -564,6 +518,7 @@ fn flatten_owned(
         ime_cursor: flags.has(ElFlags::IME_CURSOR),
         ime_option_as_alt: option_as_alt,
         moved_stub: false,
+        subtree_end: 0,
         epoch: crate::runtime::paint_keep::next_epoch(),
     });
     let child_in_row = match in_row {
@@ -630,7 +585,8 @@ fn flatten_ref(
     let prev_len = path_buf.len();
     push_segment(path_buf, el.key.as_deref(), index);
     let me = nodes.len();
-    let (path, id) = resolve_path_and_id(path_buf, me, memo_ctx);
+    let raw_parent_id = parent.map_or(NodeId(0), |p| nodes[p].id);
+    let (path, id, parent_id, local_key) = node_ids::resolve_flattened(raw_parent_id, prev_len, el.key.as_deref(), index, path_buf, me, true, memo_ctx);
     let own_motion = el.cold.motion;
     let motion = own_motion.unwrap_or(motion);
     let parent_is_stack = parent.is_some_and(|p| nodes[p].growth.is_some());
@@ -731,6 +687,8 @@ fn flatten_ref(
     };
     nodes.push(Node {
         id,
+        parent_id,
+        local_key,
         path,
         key: el.key.clone(),
         role: el.role_name(),
@@ -769,6 +727,7 @@ fn flatten_ref(
         ime_cursor: flags.has(ElFlags::IME_CURSOR),
         ime_option_as_alt: el.cold.option_as_alt,
         moved_stub: false,
+        subtree_end: 0,
         epoch: crate::runtime::paint_keep::next_epoch(),
     });
     let child_in_row = match in_row {

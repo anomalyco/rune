@@ -80,6 +80,7 @@ impl<S: 'static> Runtime<S> {
             layout: &mut self.layout,
             node_index: &mut self.node_index,
             path_ids: &mut self.path_ids,
+            node_ids: &mut self.node_ids,
             memo: &mut self.memo,
             next_id: &mut self.next_id,
             scrolls: &mut self.scrolls,
@@ -103,20 +104,17 @@ impl<S: 'static> Runtime<S> {
     /// with that state as before.
     pub(super) fn prune_path_ids(&mut self) {
         if self.path_ids.len() <= self.node_index.len() { return; }
-        let Self { path_ids, node_index, scrolls, stacks, grows, reveals, .. } = self;
-        path_ids.retain(|_, id| {
-            node_index.contains_key(id) || scrolls.contains_key(id) || stacks.contains_key(id) || grows.contains_key(id) || reveals.contains_key(id)
-        });
+        let Self { path_ids, node_ids, node_index, scrolls, stacks, grows, reveals, .. } = self;
+        node_ids.prune(
+            |id| node_index.contains_key(id) || scrolls.contains_key(id) || stacks.contains_key(id) || grows.contains_key(id) || reveals.contains_key(id),
+            path_ids,
+        );
     }
 }
 
 impl<S: 'static> Measurement<'_, S> {
     pub(super) fn node_id(&mut self, path: &str) -> NodeId {
-        if let Some(&id) = self.path_ids.get(path) { return id; }
-        let id = NodeId(*self.next_id);
-        *self.next_id += 1;
-        self.path_ids.insert(path.to_owned(), id);
-        id
+        self.node_ids.intern_full_path(self.path_ids, self.next_id, path).0
     }
 
     /// Finishes all row measurements before scene/growth mutation. Newly measured estimates
@@ -561,6 +559,7 @@ impl<S: 'static> Measurement<'_, S> {
                 reused,
                 taken_paths,
                 path_ids: &mut *self.path_ids,
+                node_ids: &mut *self.node_ids,
                 next_id: &mut *self.next_id,
                 foreground: self.defaults.foreground,
             };

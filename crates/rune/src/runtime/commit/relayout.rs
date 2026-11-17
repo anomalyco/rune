@@ -257,6 +257,8 @@ impl<S: 'static> Measurement<'_, S> {
         #[cfg(debug_assertions)]
         layout_diagnostics::collapsed_scrolls(&taffy, &nodes);
 
+        let present_len = nodes.len();
+        node_ids::fill_subtree_ends(&mut nodes, present_len);
         self.place(&taffy, &mut nodes);
         if self.fit_anchored(&mut taffy, &nodes) {
             compute_layout(&mut taffy, root_id, room, &nodes, &mut self.text, scale);

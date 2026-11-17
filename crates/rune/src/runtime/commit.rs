@@ -80,6 +80,7 @@ pub(super) struct Measurement<'a, S: 'static> {
     pub(super) layout: &'a mut LayoutEngine,
     pub(super) node_index: &'a mut HashMap<NodeId, usize>,
     pub(super) path_ids: &'a mut HashMap<String, NodeId>,
+    pub(super) node_ids: &'a mut NodeIdTable,
     pub(super) memo: &'a mut crate::memo::MemoCache,
     pub(super) next_id: &'a mut u64,
     pub(super) scrolls: &'a mut HashMap<NodeId, ScrollState>,

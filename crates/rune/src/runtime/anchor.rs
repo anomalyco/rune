@@ -85,7 +85,10 @@ impl<S: 'static> Measurement<'_, S> {
                 debug_assert_eq!(self.path_ids.get(&nodes[i].path).copied(), Some(nodes[i].id));
                 nodes[i].id
             } else {
-                self.node_id(&nodes[i].path)
+                let (id, parent_id, local_key) = self.node_ids.intern_full_path(self.path_ids, self.next_id, &nodes[i].path);
+                nodes[i].parent_id = parent_id;
+                nodes[i].local_key = local_key;
+                id
             };
             nodes[i].id = id;
             self.node_index.insert(id, i);

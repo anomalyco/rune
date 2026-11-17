@@ -338,6 +338,9 @@ pub(crate) use text_layout::text_width;
 #[path = "runtime/commit/flatten.rs"]
 mod flatten;
 use flatten::*;
+#[path = "runtime/commit/node_ids.rs"]
+pub(crate) mod node_ids;
+pub(crate) use node_ids::{LocalKey, NodeIdTable};
 #[path = "runtime/commit/memo_reuse.rs"]
 pub(crate) mod memo_reuse;
 #[path = "runtime/commit/measure.rs"]
@@ -499,6 +502,7 @@ pub struct Runtime<S: 'static> {
     layout: LayoutEngine,
     node_index: HashMap<NodeId, usize>,
     path_ids: HashMap<String, NodeId>,
+    node_ids: NodeIdTable,
     pub(crate) memo: crate::memo::MemoCache,
     next_id: u64,
     commits: u64,
@@ -944,6 +948,7 @@ impl<S: 'static> Runtime<S> {
             layout: LayoutEngine::new(),
             node_index: HashMap::default(),
             path_ids: HashMap::default(),
+            node_ids: NodeIdTable::default(),
             memo: Default::default(),
             next_id: 1,
             commits: 0,

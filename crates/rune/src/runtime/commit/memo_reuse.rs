@@ -165,6 +165,7 @@ pub(super) struct MemoFlattenCtx<'a> {
     pub(super) reused: Vec<ReusedSpan>,
     pub(super) taken_paths: Vec<(u32, u32)>,
     pub(super) path_ids: &'a mut HashMap<String, NodeId>,
+    pub(super) node_ids: &'a mut NodeIdTable,
     pub(super) next_id: &'a mut u64,
     /// What text, icons and text fields without their own colour draw in (`Cx::foreground`).
     pub(super) foreground: Option<Color>,
@@ -626,27 +627,20 @@ pub(super) fn try_reuse_memo(
         }
         let mut new_ids = Vec::with_capacity(flat.len);
         for path in &rebased {
-            let id = match ctx.path_ids.get(path.as_str()) {
-                Some(&id) => id,
-                None => {
-                    let id = NodeId(*ctx.next_id);
-                    *ctx.next_id += 1;
-                    ctx.path_ids.insert(path.clone(), id);
-                    id
-                }
-            };
-            new_ids.push(id);
+            new_ids.push(ctx.node_ids.intern_full_path(ctx.path_ids, ctx.next_id, path));
         }
         taffy.rekey_and_reuse_batch(
             old_slice
                 .iter()
                 .zip(new_ids.iter())
                 .enumerate()
-                .map(|(k, (old, new_id))| (old.id.0, new_id.0, old.taffy, (new_start + k) as u32)),
+                .map(|(k, (old, (new_id, _, _)))| (old.id.0, new_id.0, old.taffy, (new_start + k) as u32)),
         );
-        for (k, ((old, path), id)) in old_slice.iter().zip(rebased).zip(new_ids).enumerate() {
+        for (k, ((old, path), (id, parent_id, local_key))) in old_slice.iter().zip(rebased).zip(new_ids).enumerate() {
             let mut n = Node {
                 id,
+                parent_id,
+                local_key,
                 path,
                 text_layout: None,
                 elided: None,
@@ -694,6 +688,7 @@ pub(super) fn restore_moved_nodes(
 ) {
     for &(oi, ni) in taken_paths {
         old_nodes[oi as usize].path = std::mem::take(&mut nodes[ni as usize].path);
+        old_nodes[oi as usize].local_key = nodes[ni as usize].local_key;
     }
     for span in reused.iter().filter(|s| s.moved) {
         for k in 0..span.len {

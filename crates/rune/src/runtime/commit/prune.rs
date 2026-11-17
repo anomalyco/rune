@@ -60,6 +60,7 @@ impl<S: 'static> Runtime<S> {
         }
         self.reveals_kept = gone;
         self.memo.on_prune(&remap);
+        node_ids::fill_subtree_ends(&mut self.nodes, self.memo.present_len);
         remap.clear();
         self.apply_scratch.remap = remap;
         self.virtuals.retain(|path, _| self.nodes.iter().any(|n| n.path == *path));

@@ -88,6 +88,8 @@ impl crate::cold::Empty for NodeCold {
 #[derive(Clone)]
 pub(crate) struct Node {
     pub id: NodeId,
+    pub(crate) parent_id: NodeId,
+    pub(crate) local_key: LocalKey,
     pub path: String,
     pub key: Option<String>,
     pub role: &'static str,
@@ -146,6 +148,8 @@ pub(crate) struct Node {
     pub(super) ime_option_as_alt: bool,
     /// Placeholder left in `self.nodes` after `try_reuse_memo` moves a node into the new pass.
     pub(super) moved_stub: bool,
+    /// Exclusive end index of this node's subtree inside `0..present_len` (DFS preorder).
+    pub(crate) subtree_end: u32,
     /// A new one each time it's built from its element; a node a region keeps keeps it
     /// (`paint_keep`).
     pub(super) epoch: u32,
@@ -178,6 +182,8 @@ impl Node {
     pub(super) fn moved_stub(old: &Self) -> Self {
         Node {
             id: old.id,
+            parent_id: NodeId(0),
+            local_key: LocalKey::NONE,
             path: String::new(),
             key: None,
             role: "group",
@@ -216,6 +222,7 @@ impl Node {
             ime_cursor: false,
             ime_option_as_alt: false,
             moved_stub: true,
+            subtree_end: 0,
             epoch: 0,
         }
     }
