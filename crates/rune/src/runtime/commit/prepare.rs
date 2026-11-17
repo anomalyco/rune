@@ -5,9 +5,10 @@
 //! shows it (then it is found, not shaped) or the cache lets it go: past [`PREPARE_BYTES`] of
 //! prepared layouts the oldest go first, and all of them at the window's next rest. One request is
 //! held at a time, the latest; it runs in the window's next idle turn after its first frame, and
-//! none while input waits. A pass shapes for at most [`PREPARE_TURN`] of one turn and lays out at
-//! most the request's share of [`PREPARE_BYTES`]; a pass its time cut short goes on in the next
-//! idle turn unless a newer request came, and one its bytes cut short ends there.
+//! none while input waits. Each idle turn works for one [`PREPARE_SLICE`]: the first measures the
+//! view and shapes what it can in its slice, queuing the rest (`text/prepare_budget.rs`); each
+//! later turn shapes queued texts for a slice, up to [`PREPARE_BYTES`] in all. A press or a key
+//! drops what is left.
 
 use super::*;
 
@@ -15,29 +16,33 @@ use super::*;
 /// (`LAYOUT_PER_BYTE`): about one transcript screen.
 pub(crate) const PREPARE_BYTES: usize = 1 << 20;
 
-/// How long one idle turn's pass may go on starting new layouts: half a 120 Hz frame, so input
-/// that arrives during it waits at most about that.
-pub(crate) const PREPARE_TURN: std::time::Duration = std::time::Duration::from_micros(4_000);
+/// How long one idle turn shapes for. A press that lands in a turn waits for the rest of it plus
+/// the text it was shaping: about a quarter of a 240 Hz frame (4,167 µs), so the press's own
+/// frame still fits. Shorter slices pay the idle turn's own overhead more often for nothing a
+/// person can see. A request's first turn also measures the view, which no slice cuts.
+pub(crate) const PREPARE_SLICE: std::time::Duration = std::time::Duration::from_micros(1_000);
 
 impl<S: 'static> Runtime<S> {
     /// Whether an idle turn has a view to prepare for this window.
     pub(crate) fn text_idle_owed(&self) -> bool {
-        Tx::prepare_owed::<S>()
+        Tx::prepare_owed::<S>() || crate::text::TextSystem::prepare_queued(std::any::TypeId::of::<S>())
     }
 
     /// One idle turn's text work: the view asked to be prepared, if any; true while more is owed.
     pub(crate) fn text_idle_turn(&mut self) -> bool {
-        if let Some((view, size, spent)) = Tx::take_prepared::<S>() {
-            let (bytes, cut) = self.prepare_text(view, size.unwrap_or(self.viewport), PREPARE_BYTES.saturating_sub(spent));
-            if cut == crate::text::PrepareCut::Time { Tx::resume_prepared(view, size, spent + bytes); }
+        if let Some((view, size)) = Tx::take_prepared::<S>() {
+            self.prepare_text(view, size.unwrap_or(self.viewport));
+        } else {
+            self.text.prepare_drain(std::time::Instant::now() + PREPARE_SLICE);
         }
         self.text_idle_owed()
     }
 
     /// Measures `view` at `size` (points) with this window's text system and scratch everything
-    /// else, then drops it, laying out at most `bytes` of new text for at most [`PREPARE_TURN`].
-    /// Returns the bytes it laid out and whether it stopped short.
-    pub(crate) fn prepare_text(&mut self, view: fn(&S, &mut Cx<S>) -> El, size: (f32, f32), bytes: usize) -> (usize, crate::text::PrepareCut) {
+    /// else, then drops it, shaping for one [`PREPARE_SLICE`] from the start and queuing the
+    /// rest. True when nothing was queued.
+    pub(crate) fn prepare_text(&mut self, view: fn(&S, &mut Cx<S>) -> El, size: (f32, f32)) -> bool {
+        self.text.prepare_open(std::time::Instant::now() + PREPARE_SLICE);
         let before = self.text.layout_keys();
         let (mut nodes, mut spare_nodes, mut layout) = (Vec::new(), Vec::new(), LayoutEngine::new());
         let (mut node_index, mut path_ids, mut memo) = (HashMap::default(), HashMap::default(), crate::memo::MemoCache::default());
@@ -92,10 +97,7 @@ impl<S: 'static> Runtime<S> {
             windowed: HashMap::default(),
             kept_lists: Vec::new(),
         };
-        let budget = crate::text::PrepareBudget::open(bytes, std::time::Instant::now() + PREPARE_TURN);
         drop(m.finish(&Tx::default()));
-        let used = budget.close();
-        self.text.keep_prepared(&before, PREPARE_BYTES);
-        used
+        self.text.prepare_close(std::any::TypeId::of::<S>(), PREPARE_BYTES, before)
     }
 }

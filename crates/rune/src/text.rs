@@ -120,7 +120,6 @@ use glyph_emit::Face;
 use hidden_axes::hidden_axes;
 use layout_cache::{Cache, Entry};
 pub(crate) use layout_cache::Keep;
-pub(crate) use prepare_budget::{Cut as PrepareCut, PrepareBudget};
 pub(crate) use paragraphs::{ParagraphLayout, Piece, TextFlow, TextLayout, common_end, common_start};
 #[cfg(test)]
 use layout_cache::STALE_BYTES;
@@ -646,7 +645,7 @@ impl TextSystem {
             self.shapes.entry(shape_key).or_insert(key);
             return l.clone();
         }
-        if cache && let Some(empty) = self.past_prepare_budget(text.len(), style, scale, align, base) {
+        if cache && let Some(empty) = self.prepare_defer(shape, text, spans, blocks, pills, style, scale, max_width, align, wrap_anywhere, pretty, base) {
             return empty;
         }
         // Each pill's label range, and the room before and after it in device px; boxes keep
