@@ -242,11 +242,12 @@ impl<S: 'static> Runtime<S> {
             }
         }
         // What a wheel chains up from, in the same paint order: what takes input, every scroll
-        // view, and every painted surface without a handler (a popover's body and padding, a
-        // sticky header's band), so a wheel over any of them starts there, not on what lies
-        // beneath. A box that paints nothing (a full-window layer) is never one.
+        // view, and the roots of what is drawn over others (an anchored overlay, a `raise()`d
+        // panel, a sticky element), whatever their fill, so a wheel over any of them starts there,
+        // not on what lies beneath. Other boxes without a handler let the wheel through, as an
+        // element with `pointer-events: none` does.
         let n = &self.nodes[i];
-        if (self.hits.len() > hits_before || n.scroll.is_some() || n.vis.fill.a > 0.0)
+        if (self.hits.len() > hits_before || n.scroll.is_some() || n.above.is_some() || n.vis_flags.raise() || n.sticky.is_some())
             && !self.subtree_exiting(i) && self.allowed(i) && effective_opacity > 0.001 && visible
         {
             let c = if n.parent.is_some() { pinh_clip } else { self.inh_scratch[0].clip };
