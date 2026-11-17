@@ -493,8 +493,7 @@ impl TextSystem {
     pub fn set_glyph_inks(&mut self, element: Color, spans: &[Span]) {
         self.apple.set_inks(element, spans);
         self.windows.set_inks(element, spans);
-        self.ink_spans.clear();
-        self.ink_spans.extend(spans.iter().enumerate().filter(|(_, s)| s.start < s.end && s.color.is_some()).map(|(i, s)| (s.start, s.end, i as u16 + 1)));
+        glyph_emit::set_ink_spans(&mut self.ink_spans, spans);
     }
 
     /// Whether glyphs rasterise with DirectWrite: `FontSmoothing::DirectWrite` where it exists.
@@ -856,7 +855,7 @@ impl TextSystem {
             }
             let mut layout_span = 0u16;
             for (i, s) in spans.iter().enumerate() {
-                if !s.affects_layout() {
+                if !(s.start < s.end && s.affects_layout()) {
                     continue;
                 }
                 layout_span += 1;

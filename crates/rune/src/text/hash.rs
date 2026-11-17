@@ -37,7 +37,7 @@ impl Hasher for KeyHasher {
 pub fn text_hash(text: &str, spans: &[Span], style: TextStyle, scale: f32, width: Option<f32>) -> u64 {
     let mut h = KeyHasher::default();
     text.hash(&mut h);
-    for s in spans.iter().filter(|s| s.affects_layout() && s.start < s.end) {
+    for s in super::span::layout_spans(spans) {
         s.hash_layout(&mut h);
     }
     (style.size.to_bits(), style.weight.to_bits(), style.family, style.line_height.to_bits(), style.tracking.to_bits())

@@ -254,13 +254,14 @@ impl TextSystem {
         }
         let mut table = std::mem::take(&mut self.cluster_scratch);
         let mut coords = std::mem::take(&mut self.coords_scratch);
+        let mut cursor = 0usize;
         let mut i = lo;
         while layout.get(i).is_some_and(|l| l.metrics().block_min_coord <= band.end) {
             if entry.lines[i].0 == UNFLAT {
                 entry.flatten(layout, i, &mut table, &mut coords);
                 cache.flattened += 1;
             }
-            self.replay(entry, i, origin, k, bytes, out);
+            self.replay(entry, i, origin, k, bytes, &mut cursor, out);
             i += 1;
         }
         self.cluster_scratch = table;
@@ -270,7 +271,8 @@ impl TextSystem {
     }
 
     /// Line `i`'s quads from `entry`, positioned as [`Self::glyphs_in_band`] positions them.
-    fn replay(&mut self, entry: &mut Entry, i: usize, origin: [f32; 2], k: f32, bytes: bool, out: &mut Vec<GlyphQuad>) {
+    #[allow(clippy::too_many_arguments)]
+    fn replay(&mut self, entry: &mut Entry, i: usize, origin: [f32; 2], k: f32, bytes: bool, cursor: &mut usize, out: &mut Vec<GlyphQuad>) {
         let (start, end) = entry.lines[i];
         let (mut face, mut baseline, mut size) = (u16::MAX, 0.0, 0.0);
         let quarters = self.quarter_pens();
@@ -288,7 +290,7 @@ impl TextSystem {
             let at = if k == 1.0 { [origin[0] + g.rel + g.x, baseline + g.y] }
                 else { [origin[0] + (g.rel + g.x) * k, baseline + g.y * k] };
             let ([fx, fy], sub) = place(at, size, self.glide, quarters);
-            let ink = if self.ink_spans.is_empty() { 0 } else { self.ink_at(g.byte) };
+            let ink = if self.ink_spans.is_empty() { 0 } else { self.ink_at(g.byte, cursor) };
             let out_byte = if bytes { g.byte } else { 0 };
             let bucket = entry.inks.get(ink as usize).or(entry.inks.first()).copied().unwrap_or(0);
             if g.sub == sub && g.bucket == bucket && g.state == PLACED {

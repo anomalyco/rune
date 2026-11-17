@@ -807,7 +807,7 @@ fn key_paragraphs(spec: &TextSpec, style_key: u64, a: usize, z: usize, start_flo
         let flow = forced.or_else(|| flow_of(words, &isolates)).unwrap_or(last_flow);
         let mut h = hash::KeyHasher::default();
         (words, style_key, flow == Flow::Rtl, spec.cold.blocks.get(k).copied().unwrap_or(Block::Paragraph)).hash(&mut h);
-        for s in spans_in(&spec.spans, a, b, &isolates).filter(|s| s.affects_layout() && s.start < s.end) {
+        for s in spans_in(&spec.spans, a, b, &isolates).filter(|s| s.start < s.end && s.affects_layout()) {
             s.hash_layout(&mut h);
         }
         for p in pills_in(&spec.cold.pills, a, b, &isolates) {

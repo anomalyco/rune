@@ -15,8 +15,38 @@ impl TextSystem {
     }
 
     /// The 1-based span index whose colour applies at `byte` (0 for the element's own colour).
-    pub(super) fn ink_at(&self, byte: u32) -> u16 {
-        self.ink_spans.iter().rev().find(|&&(a, b, _)| a <= byte && byte < b).map_or(0, |&(_, _, ink)| ink)
+    /// `ink_spans` holds sorted, non-overlapping intervals (`set_ink_spans`), so forward glyph
+    /// walks step `cursor` in O(1) and jumps fall back to binary search.
+    #[inline]
+    pub(super) fn ink_at(&self, byte: u32, cursor: &mut usize) -> u16 {
+        let spans = self.ink_spans.as_slice();
+        if let Some(&(a, b, ink)) = spans.get(*cursor) && byte >= a {
+            if byte < b {
+                return ink;
+            }
+            return match spans.get(*cursor + 1) {
+                None => 0,
+                Some(&(na, nb, nink)) if byte < na => 0,
+                Some(&(_, nb, nink)) if byte < nb => {
+                    *cursor += 1;
+                    nink
+                }
+                Some(_) => self.ink_search(byte, cursor),
+            };
+        }
+        self.ink_search(byte, cursor)
+    }
+
+    fn ink_search(&self, byte: u32, cursor: &mut usize) -> u16 {
+        let spans = self.ink_spans.as_slice();
+        let i = spans.partition_point(|&(a, _, _)| a <= byte);
+        if i == 0 {
+            *cursor = 0;
+            return 0;
+        }
+        *cursor = i - 1;
+        let (_, b, ink) = spans[i - 1];
+        if byte < b { ink } else { 0 }
     }
 
     /// Glyph quads for a cached [`Layout`] with its top-left at `origin` (device px). When
@@ -70,6 +100,7 @@ impl TextSystem {
             }
         }
         let need_bytes = bytes || !self.ink_spans.is_empty();
+        let mut cursor = 0usize;
         let lines = (lo..layout.len()).map_while(|i| layout.get(i).filter(|l| l.metrics().block_min_coord <= band.end));
         for line in lines {
             if need_bytes {
@@ -89,7 +120,7 @@ impl TextSystem {
                     } else {
                         0
                     };
-                    let ink = if self.ink_spans.is_empty() { 0 } else { self.ink_at(cluster_byte) };
+                    let ink = if self.ink_spans.is_empty() { 0 } else { self.ink_at(cluster_byte, &mut cursor) };
                     let byte = if bytes { cluster_byte } else { 0 };
                     let at = if k == 1.0 { [origin[0] + rel + g.x, baseline + g.y] }
                         else { [origin[0] + (rel + g.x) * k, baseline + g.y * k] };
@@ -116,7 +147,9 @@ impl TextSystem {
     pub(crate) fn glyphs_in_scaled(&mut self, run: &RunLayout, at: usize, origin: [f32; 2], k: f32, out: &mut Vec<GlyphQuad>) {
         let Some(i) = run.grapheme(at) else { return };
         let glyphs = run.graphemes[i].2 as usize..run.graphemes[i + 1].2 as usize;
-        let ink = if self.ink_spans.is_empty() { 0 } else { self.ink_at(at as u32) };
+        // `ink_spans` holds the cell's own spans, so byte 0 is the cell's grapheme.
+        let mut cursor = 0usize;
+        let ink = if self.ink_spans.is_empty() { 0 } else { self.ink_at(0, &mut cursor) };
         for g in &run.glyphs[glyphs] {
             let face = &run.faces[g.face as usize];
             let baseline = (origin[1] + face.face.baseline * k).round();
@@ -385,6 +418,45 @@ pub(super) fn atlas_quad(a: AtlasGlyph, fx: f32, gy: f32, ink: u16, byte: u32) -
         color: 0,
         outline: None,
         lcd: a.lcd,
+    }
+}
+
+/// Records coloured spans from `spans` into `out` as sorted, non-overlapping `(start, end, ink)`
+/// intervals where later spans win. Spans from `El` are already sorted and disjoint, so the
+/// common case is one linear pass with no allocation or sort.
+pub(super) fn set_ink_spans(out: &mut Vec<(u32, u32, u16)>, spans: &[Span]) {
+    out.clear();
+    let mut disjoint = true;
+    let mut last_end = 0u32;
+    for (i, s) in spans.iter().enumerate() {
+        if s.start < s.end && s.color.is_some() {
+            if s.start < last_end {
+                disjoint = false;
+            }
+            last_end = last_end.max(s.end);
+            out.push((s.start, s.end, i as u16 + 1));
+        }
+    }
+    if disjoint || out.len() <= 1 {
+        return;
+    }
+    let input = std::mem::take(out);
+    let mut bounds = Vec::with_capacity(input.len() * 2);
+    for &(a, b, _) in &input {
+        bounds.push(a);
+        bounds.push(b);
+    }
+    bounds.sort_unstable();
+    bounds.dedup();
+    for w in bounds.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        if let Some(&(_, _, ink)) = input.iter().rev().find(|&&(sa, sb, _)| sa <= a && b <= sb) {
+            if let Some(last) = out.last_mut().filter(|l| l.1 == a && l.2 == ink) {
+                last.1 = b;
+            } else {
+                out.push((a, b, ink));
+            }
+        }
     }
 }
 

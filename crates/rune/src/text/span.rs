@@ -101,6 +101,13 @@ impl Span {
     }
 }
 
+/// Non-empty spans in `spans` that change shaping, line metrics or painted decorations.
+/// Shared by the shaping key, Parley `Brush` ordinals, `decorations_into` and `synthetic_bold`,
+/// so a span gets a brush ordinal if and only if it entered the shaping key.
+pub(crate) fn layout_spans(spans: &[Span]) -> impl Iterator<Item = &Span> {
+    spans.iter().filter(|s| s.start < s.end && s.affects_layout())
+}
+
 /// An atomic pill drawn as a chip: byte range `start..end` of the content, and its leading icon.
 /// A `bare` one is an [`InlineIcon`](crate::InlineIcon): no chip, only the icon before the
 /// word it keeps to its line.
