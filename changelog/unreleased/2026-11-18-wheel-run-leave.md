@@ -1,0 +1,1 @@
+- A run of wheel notches keeps to its region when the pointer leaves the window and comes back near where it began within the run, as in Chromium; before, a pointer leave started a new run.
