@@ -133,6 +133,9 @@ impl GpuTimer {
                 }
             }
         }
+        // 25: runs of one kind in paint order (what #1140 splits a frame pass into, before batch boundaries).
+        kinds.resize(kinds.len().max(26), (0, 0.0, 0.0));
+        kinds[25].0 = instances.chunk_by(|a, b| a.params[1] == b.params[1]).count() as u32;
         *self.kinds.lock().unwrap_or_else(|e| e.into_inner()) = kinds;
     }
 
