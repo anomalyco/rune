@@ -264,6 +264,7 @@ impl<S: 'static> Measurement<'_, S> {
             self.layout_seen.clone(),
         );
         let view_time = crate::frame::profile::Scope::new(crate::frame::profile::Phase::View);
+        let _ib = crate::marks::gate_span("cpu-view");
         let state = playground_host::handler_states_ref(self.state, self.playground);
         let mut nested_virtual = false;
         for plan in &mut plans {

@@ -527,7 +527,10 @@ impl<S: 'static> Runtime<S> {
             let mut one = self.transaction();
             one.input_waiting = self.queue.has_input();
             // Scheduling does not imply a model change.
-            if self.idle_meter.polled(crate::tooling::perf_warn::timed("poll", || app_call!(poll, &mut self.state, self.clock, &mut one))) {
+            let ib_poll = crate::marks::gate_span("cpu-poll");
+            let polled_now = self.idle_meter.polled(crate::tooling::perf_warn::timed("poll", || app_call!(poll, &mut self.state, self.clock, &mut one)));
+            drop(ib_poll);
+            if polled_now {
                 ran = true;
                 why |= CommitWhy::POLL;
                 self.watch.meter.poll();

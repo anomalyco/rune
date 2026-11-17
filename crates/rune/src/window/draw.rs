@@ -70,6 +70,7 @@ impl<S: 'static> Host<S> {
     /// Draws a frame. `resizing` draws one for a size the user just dragged the window to, at
     /// once: AppKit shows the new size when the event returns, with or without it.
     pub(super) fn draw(&mut self, resizing: bool) {
+        let _m = crate::marks::gate_span("gpu-frame");
         // Windows: a window still on the CPU renderer draws there (`cpu_frame`).
         #[cfg(target_os = "windows")]
         {

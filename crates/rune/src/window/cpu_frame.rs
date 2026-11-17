@@ -849,19 +849,21 @@ fn warm_frame(gpu: &Gpu, renderer: &mut Renderer, format: wgpu::TextureFormat, s
     });
     let view = target.create_view(&Default::default());
     let mut atlas = crate::text::Atlas::new();
-    for _ in 0..WARM_ROUNDS {
-        let encoders: Vec<_> = (0..WARM_ENCODERS).map(|_| gpu.device.create_command_encoder(&Default::default())).collect();
+    let knob = |n: &str, d: usize| std::env::var(n).ok().and_then(|s| s.parse().ok()).unwrap_or(d);
+    let extra = knob("IB3_WARM_EXTRA", 1);
+    for _ in 0..knob("IB3_WARM_ROUNDS", WARM_ROUNDS) {
+        let encoders: Vec<_> = (0..knob("IB3_WARM_ENC", WARM_ENCODERS)).map(|_| gpu.device.create_command_encoder(&Default::default())).collect();
         for mut enc in encoders {
             renderer.prepare_ui(&gpu.device, &gpu.queue, &mut atlas, instances, size);
             renderer.draw(&mut enc, &view, [0.0; 4]);
             // The window's frames record one list more than this one (the swap chain's
             // transition to present), and an allocator's first two cycles at a new size are slow
             // again: an empty pass gives each allocator room for that list.
-            drop(enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+            for _ in 0..extra { drop(enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: None,
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment { view: &view, depth_slice: None, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store } })],
                 ..Default::default()
-            }));
+            })); }
             renderer.submit(&gpu.queue, enc);
         }
         let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
