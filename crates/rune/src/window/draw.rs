@@ -412,7 +412,11 @@ impl<S: 'static> Host<S> {
         let part = {
             let whole = if l.alpha.is_some() { Some("alpha") } else if images_changed { Some("image") }
                 else if !l.config.usage.contains(wgpu::TextureUsages::COPY_DST) { Some("no copies") } else { None };
-            let armed = looped.as_deref().filter(|_| whole.is_none()).and_then(|p| {
+            // A new swap chain (`rebind_alpha`, a replaced surface) draws its first frame whole,
+            // through `plan`, even when only a loop asked for it.
+            let fresh = !l.native.damage.current(size, rt.clear_color());
+            if fresh && looped.is_some() { loop_why = Some("a new swap chain"); }
+            let armed = looped.as_deref().filter(|_| whole.is_none() && !fresh).and_then(|p| {
                 match renderer.arm_loop(&gpu.device, &gpu.queue, rt.paint_count(), &rt.instances, p, rt.clear_color(), size, l.config.format) {
                     Ok(rects) => Some((p, rects)),
                     Err(why) => { loop_why = Some(why); None }

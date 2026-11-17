@@ -166,6 +166,8 @@ mod crop;
 mod eased_input;
 #[path = "tooling/headless.rs"]
 mod headless;
+#[path = "tooling/loop_check.rs"]
+mod loop_check;
 #[path = "tooling/html.rs"]
 pub(crate) mod html;
 #[path = "tooling/key_names.rs"]

@@ -61,8 +61,9 @@ impl CyclePaint {
 }
 
 /// `RUNE_LOOP_CHECK=1`: a frame a loop-only step could draw runs as an ordinary one, and the
-/// two are compared (`loop_checked`).
-fn checking() -> bool {
+/// two are compared (`loop_checked`). A headless run (`--frames`, on the virtual clock) asks
+/// too, before every frame no script event reached (`tooling::headless`), on any platform.
+pub(crate) fn checking() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("RUNE_LOOP_CHECK").is_some_and(|v| v == "1"))
 }
@@ -109,12 +110,14 @@ impl<S: 'static> Runtime<S> {
     /// else is due (input, a wake, a timer, a commit, other motion), a loop on screen is one a
     /// step can't draw, or a step would show or hide anything.
     pub(crate) fn loop_step(&mut self, dt: f64) -> Result<Vec<u32>, &'static str> {
-        let wall = self.now_clock();
+        // Checked on the virtual clock (headless), the step is due where the frame will be.
+        let virtual_check = checking() && self.wall_start.is_none();
+        let wall = if virtual_check { self.clock + dt } else { self.now_clock() };
         let keep = &self.paint_keep.cycles;
         let loops = keep.slots.len() + 2 * keep.slides.len();
         let why = if self.loops.is_empty() { "no loop" } else if loops != self.loops.len() { self.loop_refusal() }
             else if keep.mixed || keep.generation != self.commits { "other motion or a commit" }
-            else if self.wall_start.is_none() || self.reduced_motion || self.time_scale <= 0.0 || !self.live_visible() || self.tracing() { "not live" }
+            else if (self.wall_start.is_none() && !virtual_check) || self.reduced_motion || self.time_scale <= 0.0 || !self.live_visible() || self.tracing() { "not live" }
             else if !(0.0..=1.0 / 30.0).contains(&dt) { "late" }
             else if self.poll_wake_deadline().is_some_and(|d| d <= wall) { "timer due" }
             else if self.virtual_fill.resuming(wall) { "a list filling" }
@@ -158,6 +161,9 @@ impl<S: 'static> Runtime<S> {
         patched.sort_unstable();
         Ok(patched)
     }
+
+    /// `RUNE_LOOP_CHECK=1` is set (`checking`).
+    pub(crate) fn loop_check_on(&self) -> bool { checking() }
 
     /// Why a loop on screen has no slot or window (`loop_step`'s answer): the first such loop's
     /// reason, from what paint read.
@@ -212,11 +218,15 @@ impl<S: 'static> Runtime<S> {
         for s in &self.paint_keep.cycles.slots {
             let a = s.curve.sample(self.clock) * s.scale;
             let q = &mut self.instances[s.at];
-            q.fill = s.ink.map(|v| v * a);
+            let fill = s.ink.map(|v| v * a);
+            // A dot whose value didn't move (a stepped spinner between its steps, while the shine
+            // drives frames) is neither written nor redrawn.
+            let moved = q.fill != fill || q.params[3] != a;
+            q.fill = fill;
             q.params[3] = a;
             let inh = &mut self.inh_scratch[s.node];
             inh.opacity = a; inh.paint_opacity = a; inh.hit_opacity = a;
-            patched.push(s.at as u32);
+            if moved { patched.push(s.at as u32); }
         }
         if let (Some((due, phase)), Some(dt)) = (self.loop_wake, self.ambient.map(f64::from)) && self.clock >= due {
             self.loop_wake = Some((self.clock + dt, phase + (self.clock + dt - due) * f64::from(self.time_scale)));

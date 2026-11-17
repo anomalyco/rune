@@ -94,6 +94,11 @@ impl Damage {
     /// A new swap chain: the next frame draws whole.
     pub(super) fn reset(&mut self) { self.shape = None; }
 
+    /// The last frame drew into this swap chain at this size and clear colour: a frame may draw
+    /// and present only part of it. False after `reset` (a new swap chain), so its first frame,
+    /// loop-only or not, goes through `plan` and draws whole.
+    pub(super) fn current(&self, size: (u32, u32), clear: [f32; 4]) -> bool { self.shape == Some((size, clear)) }
+
     /// A loop-only frame changed only `patched` (ascending) and drew them where they were and
     /// are (`Renderer::arm_loop`): the next frame compares with them.
     pub(super) fn patched(&mut self, instances: &[Instance], patched: &[u32]) {

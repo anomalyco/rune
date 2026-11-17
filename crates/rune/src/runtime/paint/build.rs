@@ -438,7 +438,7 @@ impl<S: 'static> Runtime<S> {
             // A node the visibility test below culls paints nothing, and any clip it hands down is
             // off screen too, so it keeps its exact edges.
             let rigid = pinh.snap.rigid.map(|v| v * s);
-            let can_snap = !pinh.snap.off && !n.vis_flags.no_pixel_snap() && p.transform.rotate == 0.0 && !self.slide_glides(n);
+            let can_snap = !pinh.snap.off && !n.vis_flags.no_pixel_snap() && p.transform.rotate == 0.0 && !self.slide_glides(i);
             let snaps = can_snap && (pinh.in_cache || {
                 let m = filter_margin + 2.0;
                 r_exact[2].max(r_exact[0]) >= clip[0].max(vp[0]) - m && r_exact[0] <= clip[2].min(vp[2]) + m

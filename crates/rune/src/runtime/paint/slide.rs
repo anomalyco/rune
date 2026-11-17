@@ -51,6 +51,13 @@ fn slides(spec: Option<&rune_motion::LoopSpec>) -> bool {
     matches!(spec.map(|l| l.kind), Some(rune_motion::LoopKind::Slide { .. } | rune_motion::LoopKind::SlideEased { .. }))
 }
 
+/// A slide that moves only sideways. Text paints only the lines in its clip's band, plus two ems
+/// either side (`content.rs`), so a window moving up or down could uncover a line paint never
+/// drew, which no step can draw.
+fn sideways(spec: Option<&rune_motion::LoopSpec>) -> bool {
+    matches!(spec.map(|l| l.kind), Some(rune_motion::LoopKind::Slide { from, to } | rune_motion::LoopKind::SlideEased { from, to, .. }) if from[1] == 0.0 && to[1] == 0.0)
+}
+
 /// Paint's test for whether a box at `r` (x0, y0, x1, y1) under `clip` shows (`build`).
 fn shows(r: [f32; 4], clip: [f32; 4], vp: [f32; 4]) -> bool {
     let m = 2.0;
@@ -60,10 +67,27 @@ fn shows(r: [f32; 4], clip: [f32; 4], vp: [f32; 4]) -> bool {
 }
 
 impl<S: 'static> Runtime<S> {
-    /// A sliding node's loop glides: its edges land where the slide puts them, not on whole
-    /// pixels, as a browser's compositor moves a transformed layer. What it holds still snaps.
-    pub(in crate::runtime) fn slide_glides(&self, n: &Node) -> bool {
-        !self.reduced_motion && slides(n.looping.as_deref()) && self.loops.contains_key(&n.id)
+    /// Node `i`'s loop glides: its edges land where the slide puts them, not on whole pixels, as
+    /// a browser's compositor moves a transformed layer, so that a loop-only step (which moves
+    /// only the clip and soft edges) and an ordinary frame draw the same picture. Only for what a
+    /// step can move, on the platform that steps it (Windows): a window sliding sideways over
+    /// content that slides back inside it, and that content. What the content holds still snaps.
+    /// Any other slide, and every slide elsewhere, snaps as before.
+    pub(in crate::runtime) fn slide_glides(&self, i: usize) -> bool {
+        if !cfg!(target_os = "windows") || self.reduced_motion { return false; }
+        let n = &self.nodes[i];
+        if !slides(n.looping.as_deref()) || !self.loops.contains_key(&n.id) { return false; }
+        self.slide_pair(i) || n.parent.is_some_and(|p| p + 1 == i && self.slide_pair(p))
+    }
+
+    /// Node `i` is a window a step could move, by its shape alone: it clips and slides sideways,
+    /// and its only child holds everything under it and slides back, sideways.
+    fn slide_pair(&self, i: usize) -> bool {
+        let n = &self.nodes[i];
+        let (counter, end) = (i + 1, subtree_end(&self.nodes, i));
+        n.vis.clip.is_some() && counter < end && subtree_end(&self.nodes, counter) == end
+            && sideways(n.looping.as_deref()) && sideways(self.nodes[counter].looping.as_deref())
+            && self.loops.contains_key(&n.id) && self.loops.contains_key(&self.nodes[counter].id)
     }
 
     /// Paint reached node `i`: a window whose subtree it has passed is complete.
@@ -79,7 +103,7 @@ impl<S: 'static> Runtime<S> {
     /// from `rect` (points) at `k` points of rect per point of offset and ancestors' scale `sc`:
     /// recorded if it is a sliding window a loop-only step can move.
     pub(in crate::runtime) fn note_slide(&mut self, i: usize, outer: [[f32; 4]; 3], rect: [f32; 4], r: [f32; 4], (k, sc): (f32, f32)) {
-        if !self.slide_glides(&self.nodes[i]) { return; }
+        if !self.slide_glides(i) { return; }
         let s = self.env.scale;
         let vp = [0.0, 0.0, self.viewport.0 * s, self.viewport.1 * s];
         let (counter, end, f) = match self.slide_fits(i, r, outer[0], vp) {
@@ -126,6 +150,7 @@ impl<S: 'static> Runtime<S> {
         let Some(f) = n.vis.clip else { return Err("a slide that doesn't clip") };
         if counter >= end || subtree_end(&self.nodes, counter) != end || !slides(self.nodes[counter].looping.as_deref())
             || !self.loops.contains_key(&self.nodes[counter].id) { return Err("a slide whose child doesn't slide back"); }
+        if !sideways(n.looping.as_deref()) || !sideways(self.nodes[counter].looping.as_deref()) { return Err("a slide up or down"); }
         if n.scroll.is_some() || self.row_h[i] >= 0.0 || self.row_mask[i] >= 0.0 { return Err("a slide that scrolls or folds"); }
         let parent = n.parent.map_or_else(|| self.root_inh(), |p| self.inh_scratch[p]);
         if parent.in_cache || parent.skip_paint || parent.turn != 0 || parent.rounded.is_some() || parent.blur != 0.0 { return Err("a slide in a layer"); }
