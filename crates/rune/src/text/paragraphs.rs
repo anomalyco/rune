@@ -190,19 +190,19 @@ impl<'a> Piece<'a> {
 
     /// `spans` over its words, on its shaped text (a whole layout's own).
     pub(crate) fn spans<'s>(&self, spans: &'s [Span]) -> Cow<'s, [Span]> {
-        if self.whole { return Cow::Borrowed(spans); }
+        if self.whole || spans.is_empty() { return Cow::Borrowed(spans); }
         Cow::Owned(spans_in(spans, self.start, self.end, self.isolates, self.disjoint_spans).collect())
     }
 
     /// `pills` inside it, on its shaped text.
     pub(crate) fn pills<'s>(&self, pills: &'s [PillChip]) -> Cow<'s, [PillChip]> {
-        if self.whole { return Cow::Borrowed(pills); }
+        if self.whole || pills.is_empty() { return Cow::Borrowed(pills); }
         Cow::Owned(pills_in(pills, self.start, self.end, self.isolates).collect())
     }
 
     /// Strikethrough byte ranges over its words, on its shaped text.
     pub(crate) fn strikes<'s>(&self, strikes: &'s [(u32, u32, Option<Color>)]) -> Cow<'s, [(u32, u32, Option<Color>)]> {
-        if self.whole { return Cow::Borrowed(strikes); }
+        if self.whole || strikes.is_empty() { return Cow::Borrowed(strikes); }
         Cow::Owned(strikes.iter().filter_map(|&(a, b, c)| {
             let (a, b) = self.clip(a as usize, b as usize)?;
             Some((a as u32, b as u32, c))

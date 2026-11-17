@@ -418,12 +418,11 @@ impl<S: 'static> Runtime<S> {
             let base_d_origin = if scale_motion == ScaleMotion::Still && tk == 1.0 { base_rest } else { [0.0, 0.0] };
             let reveal = self.reveals.get(&n.id).filter(|_| spec.cold.advance_in.is_none()).and_then(RevealPhase::fade);
             let drawn_len = n.elided.map_or(spec.content.len(), |e| e.drawn_len(spec.content.len()));
-            let pieces: Vec<_> = flow.pieces_in(rows.start, rows.end).collect();
             self.deco_scratch.clear();
             let mut pill_icons = Vec::new();
             let mut bare_all = Vec::new();
             let pill_bg = spec.cold.pill_colors.map_or(spec.rich_style().link.alpha(0.2), |(bg, _)| bg);
-            for piece in &pieces {
+            for piece in flow.pieces_in(rows.start, rows.end) {
                 let layout = piece.layout;
                 let d_origin = [base_d_origin[0], base_d_origin[1] + piece.y];
                 let (spans_here, pills, strikes) = (piece.spans(&spec.spans), piece.pills(&spec.cold.pills), piece.strikes(&spec.cold.strikes));
@@ -438,7 +437,7 @@ impl<S: 'static> Runtime<S> {
                     let drawn = n.elided.map(|e| e.strikes(&strikes));
                     self.text.strike_decorations(layout, spans, drawn.as_deref().unwrap_or(&strikes), color, s, d_origin, &mut self.deco_scratch);
                 }
-                link_fx.decos_piece(piece, drawn_len, s, d_origin, &mut self.deco_scratch);
+                link_fx.decos_piece(&piece, drawn_len, s, d_origin, &mut self.deco_scratch);
                 if !piece.is_whole() {
                     for d in &mut self.deco_scratch[from..] {
                         d.byte = piece.content(d.byte as usize) as u32;
@@ -562,7 +561,7 @@ impl<S: 'static> Runtime<S> {
                     }
                 }
             }
-            for piece in &pieces {
+            for piece in flow.pieces_in(rows.start, rows.end) {
                 let layout = piece.layout;
                 let spans_here = piece.spans(&spec.spans);
                 self.glyph_scratch.clear();
