@@ -210,7 +210,11 @@ impl<S: 'static> Host<S> {
         let quiet = quiet && shown.is_none() && !l.native.materials.native();
         // Only the window's loops asked for this frame (`LoopFrame`): a step of them may stand
         // for the whole of it (`Runtime::loop_step`), drawn only where they draw (`arm_loop`).
+        // Why a frame wasn't loop-only (frame-profile).
+        #[allow(unused_mut, unused_assignments)]
+        let mut loop_why: Option<&'static str> = None;
         let only_loops = l.loop_frame.only_loops();
+        if !only_loops { loop_why = Some("something reached the window"); }
         #[cfg(target_os = "windows")]
         let only_loops = only_loops && !hidden && !live_resize && self.trace.is_none() && self.args.trace.is_none()
             && self.rt.window_frame.is_none() && !FrameMove::moving(&self.frame_move) && !composing(self.comp.as_deref());
@@ -221,12 +225,16 @@ impl<S: 'static> Host<S> {
             let now = Instant::now();
             self.rt.window_resting = true;
             let at = target.unwrap_or(now);
-            let (animating, dt) = match only_loops.then(|| loop_step(&mut self.clock, &mut self.rt, at)).flatten() {
-                Some((patched, dt)) => {
+            let step = if only_loops { loop_step(&mut self.clock, &mut self.rt, at) } else { Err("") };
+            let (animating, dt) = match step {
+                Ok((patched, dt)) => {
                     looped = Some(patched);
                     (self.rt.animating, dt)
                 }
-                None => self.clock.advance(&mut self.rt, at, false),
+                Err(why) => {
+                    if !why.is_empty() { loop_why = Some(why); }
+                    self.clock.advance(&mut self.rt, at, false)
+                }
             };
             let rt = &mut self.rt;
             #[cfg(target_os = "macos")]
@@ -298,13 +306,14 @@ impl<S: 'static> Host<S> {
         crate::marks::mark_once(&FIRST_BUILD, "frame.first.build");
         let rt = &mut self.rt;
         if hidden && l.first_frame.settles() { rt.settle_all(); }
-        let stepped = (built.is_none() && only_loops).then(|| loop_step(&mut self.clock, rt, frame_time)).flatten();
+        let stepped = if built.is_none() && only_loops { loop_step(&mut self.clock, rt, frame_time) } else { Err("") };
+        if let Err(why) = stepped && !why.is_empty() { loop_why = Some(why); }
         let (mut animating, dt) = if let Some((animating, dt, _)) = built {
             (animating, dt)
         } else if hidden {
             self.clock.hold(frame_time);
             (rt.frame(0.0), 0.0)
-        } else if let Some((patched, dt)) = stepped {
+        } else if let Ok((patched, dt)) = stepped {
             looped = Some(patched);
             (rt.animating, dt)
         } else {
@@ -400,8 +409,12 @@ impl<S: 'static> Host<S> {
         let part = {
             let whole = if l.alpha.is_some() { Some("alpha") } else if images_changed { Some("image") }
                 else if !l.config.usage.contains(wgpu::TextureUsages::COPY_DST) { Some("no copies") } else { None };
-            let armed = looped.as_deref().filter(|_| whole.is_none())
-                .and_then(|p| renderer.arm_loop(&gpu.device, &gpu.queue, rt.paint_count(), &rt.instances, p, rt.clear_color(), size, l.config.format).ok().map(|rects| (p, rects)));
+            let armed = looped.as_deref().filter(|_| whole.is_none()).and_then(|p| {
+                match renderer.arm_loop(&gpu.device, &gpu.queue, rt.paint_count(), &rt.instances, p, rt.clear_color(), size, l.config.format) {
+                    Ok(rects) => Some((p, rects)),
+                    Err(why) => { loop_why = Some(why); None }
+                }
+            });
             if let Some((p, present)) = armed {
                 l.native.damage.patched(&rt.instances, p);
                 Some(present)
@@ -492,6 +505,7 @@ impl<S: 'static> Host<S> {
                 #[cfg(not(target_os = "windows"))]
                 change: None,
                 looped: looped.as_ref().map(Vec::len),
+                loop_why,
             }),
             _ => None,
         };
@@ -595,14 +609,14 @@ impl<S: 'static> Host<S> {
 }
 
 /// A loop-only step for the frame presented at `at` (`Runtime::loop_step`): the instances it
-/// wrote and the seconds it stepped, or None for an ordinary frame. The frame clock takes the
-/// step only when the runtime does.
-fn loop_step<S: 'static>(clock: &mut FrameClock, rt: &mut Runtime<S>, at: Instant) -> Option<(Vec<u32>, f64)> {
+/// wrote and the seconds it stepped, or why it takes an ordinary frame. The frame clock takes
+/// the step only when the runtime does.
+fn loop_step<S: 'static>(clock: &mut FrameClock, rt: &mut Runtime<S>, at: Instant) -> Result<(Vec<u32>, f64), &'static str> {
     let dt = at.saturating_duration_since(clock.last()).as_secs_f64();
     let patched = rt.loop_step(dt)?;
     clock.frame_step(at, true);
     rt.frame_target = Some(at);
-    Some((patched, dt))
+    Ok((patched, dt))
 }
 
 /// The window's display refresh: its display link's on macOS, else the monitor's.

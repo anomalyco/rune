@@ -22,6 +22,8 @@ pub(in crate::runtime) struct CyclePaint {
     pub(super) opened: (usize, usize),
     /// The sliding window whose subtree paints now.
     pub(super) open: Option<usize>,
+    /// Why this paint recorded no window for a sliding loop it drew, if it didn't.
+    pub(super) missed: Option<&'static str>,
 }
 
 struct Slot {
@@ -39,6 +41,7 @@ impl CyclePaint {
         self.slots.clear();
         self.slides.clear();
         self.open = None;
+        self.missed = None;
         self.opened = (usize::MAX, 0);
         self.mixed = false;
     }
@@ -93,22 +96,33 @@ impl<S: 'static> Runtime<S> {
 
     /// A frame that only a window's loops asked for, `dt` seconds after the last: samples every
     /// loop into the instances it drew, and nothing else runs (no poll, view, layout or paint).
-    /// Returns the instances it wrote (ascending), or None for an ordinary frame: when anything
-    /// else is due (input, a wake, a timer, a commit, other motion), when a loop on screen is
-    /// one a step can't draw, or when a step would show or hide anything.
-    pub(crate) fn loop_step(&mut self, dt: f64) -> Option<Vec<u32>> {
+    /// Returns the instances it wrote (ascending), or why it takes an ordinary frame: anything
+    /// else is due (input, a wake, a timer, a commit, other motion), a loop on screen is one a
+    /// step can't draw, or a step would show or hide anything.
+    pub(crate) fn loop_step(&mut self, dt: f64) -> Result<Vec<u32>, &'static str> {
         let wall = self.now_clock();
         let keep = &self.paint_keep.cycles;
         let loops = keep.slots.len() + 2 * keep.slides.len();
-        if loops == 0 || loops != self.loops.len() || keep.mixed || keep.generation != self.commits || self.wall_start.is_none()
-            || self.reduced_motion || self.time_scale <= 0.0 || !self.live_visible() || self.tracing()
-            || !(0.0..=1.0 / 30.0).contains(&dt) || self.poll_wake_deadline().is_some_and(|d| d <= wall)
-            || self.virtual_fill.resuming(wall) || !self.rests_but_motion()
-        { return None; }
+        let why = if self.loops.is_empty() { "no loop" } else if loops != self.loops.len() { keep.missed.unwrap_or(if loops == 0 { "no loop it can draw" } else { "a loop it can't draw" }) }
+            else if keep.mixed || keep.generation != self.commits { "other motion or a commit" }
+            else if self.wall_start.is_none() || self.reduced_motion || self.time_scale <= 0.0 || !self.live_visible() || self.tracing() { "not live" }
+            else if !(0.0..=1.0 / 30.0).contains(&dt) { "late" }
+            else if self.poll_wake_deadline().is_some_and(|d| d <= wall) { "timer due" }
+            else if self.virtual_fill.resuming(wall) { "a list filling" }
+            else if let Some(work) = self.waiting_work() { work }
+            else { "" };
+        if !why.is_empty() { return Err(why); }
         // Running, only loops move; resting, a stepped cycle's wake is due.
         let due = self.loop_wake.is_some_and(|(due, _)| wall >= due);
-        if if self.animating { self.anim_sources != AnimSource::LOOP } else { !due } { return None; }
-        if !self.slots_hold() || (due && self.ambient.is_none()) { return None; }
+        if self.animating && self.anim_sources != AnimSource::LOOP {
+            let other = [(AnimSource::TRACKS, "motion: a track"), (AnimSource::GROWTH, "motion: growth"), (AnimSource::SCROLL, "motion: a scroll"),
+                (AnimSource::REVEAL, "motion: a reveal"), (AnimSource::LIVE, "motion: a live value"), (AnimSource::TEXT_FILL, "motion: text filling"),
+                (AnimSource::VIRTUAL_FILL, "motion: a list filling"), (AnimSource::SCALE_SETTLE, "motion: a scale settling"),
+                (AnimSource::VIDEO, "motion: a video"), (AnimSource::TEXT_FLIGHT, "motion: a text flight")];
+            return Err(other.iter().find(|(bit, _)| self.anim_sources & bit != 0).map_or("motion: unknown", |o| o.1));
+        }
+        if !self.animating && !due { return Err("no loop due"); }
+        if !self.slots_hold() || (due && self.ambient.is_none()) { return Err("a slot moved"); }
         let t = self.t + dt * f64::from(self.time_scale);
         let poses = self.slide_poses(t)?;
         self.clock = wall;
@@ -119,7 +133,7 @@ impl<S: 'static> Runtime<S> {
         self.sample_cycles(&mut patched);
         self.apply_slides(&poses, &mut patched);
         patched.sort_unstable();
-        Some(patched)
+        Ok(patched)
     }
 
     /// A layer may have folded a primitive after its slot was observed. Never patch a different

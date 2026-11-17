@@ -77,30 +77,16 @@ impl<S: 'static> Runtime<S> {
     /// from `rect` (points) at `k` points of rect per point of offset and ancestors' scale `sc`:
     /// recorded if it is a sliding window a loop-only step can move.
     pub(in crate::runtime) fn note_slide(&mut self, i: usize, outer: [[f32; 4]; 3], rect: [f32; 4], r: [f32; 4], (k, sc): (f32, f32)) {
-        let c = &self.paint_keep.cycles;
-        if !c.preorder || c.open.is_some() || c.opened != (i, self.instances.len()) || !self.slide_glides(&self.nodes[i]) { return; }
-        let n = &self.nodes[i];
-        let (counter, end) = (i + 1, subtree_end(&self.nodes, i));
-        let Some(f) = n.vis.clip else { return };
-        // Its only child slides back, and holds everything else under it.
-        if counter >= end || subtree_end(&self.nodes, counter) != end || !slides(self.nodes[counter].looping.as_deref()) { return; }
-        if n.scroll.is_some() || self.row_h[i] >= 0.0 || self.row_mask[i] >= 0.0 || !self.flying.is_empty() { return; }
-        let parent = n.parent.map_or_else(|| self.root_inh(), |p| self.inh_scratch[p]);
-        if parent.in_cache || parent.skip_paint || parent.turn != 0 || parent.rounded.is_some() || parent.blur != 0.0 { return; }
-        // Nothing under it takes input, clips, blurs, sticks or moves on its own.
-        let plain = (i..end).all(|j| {
-            let m = &self.nodes[j];
-            m.handlers.get().is_none() && m.focus.get().is_none() && !m.vis_flags.hit() && m.input.is_none() && m.sticky.is_none()
-                && m.vis.effect.is_none() && m.help.is_none() && m.above.is_none() && m.matched.is_none() && !m.vis_flags.raise()
-                && self.scene.presented(m.id).is_some_and(|p| p.blur == 0.0 && p.mask.is_none() && p.transform.rotate == 0.0)
-                && (j == i || (m.vis.clip.is_none() && m.scroll.is_none() && (j == counter || m.looping.is_none())))
-        });
-        if !plain || !self.loops.contains_key(&self.nodes[counter].id) { return; }
-        let off = |j: usize| self.scene.get(self.nodes[j].id, prop::OFFSET).unwrap_or(rune_motion::Vec2::ZERO);
-        let (ow, oc) = (off(i), off(counter));
+        if !self.slide_glides(&self.nodes[i]) { return; }
         let s = self.env.scale;
         let vp = [0.0, 0.0, self.viewport.0 * s, self.viewport.1 * s];
-        if !shows([r[0], r[1], r[2].max(r[0]), r[3].max(r[1])], outer[0], vp) { return; }
+        let (counter, end, f) = match self.slide_fits(i, r, outer[0], vp) {
+            Ok(fits) => fits,
+            Err(why) => { self.paint_keep.cycles.missed = Some(why); return; }
+        };
+        let n = &self.nodes[i];
+        let off = |j: usize| self.scene.get(self.nodes[j].id, prop::OFFSET).unwrap_or(rune_motion::Vec2::ZERO);
+        let (ow, oc) = (off(i), off(counter));
         let slide = Slide {
             window: i,
             counter,
@@ -122,6 +108,39 @@ impl<S: 'static> Runtime<S> {
         let c = &mut self.paint_keep.cycles;
         c.open = Some(c.slides.len());
         c.slides.push(slide);
+    }
+
+    /// Whether sliding node `i`, drawn at `r` under `clip`, is a window a step can move: its only
+    /// child slides back and holds everything under it, nothing under it takes input, clips,
+    /// blurs, sticks or moves on its own, and it shows. Its child, one past its subtree, and its
+    /// fade widths; or why not.
+    fn slide_fits(&self, i: usize, r: [f32; 4], clip: [f32; 4], vp: [f32; 4]) -> Result<(usize, usize, [f32; 4]), &'static str> {
+        let c = &self.paint_keep.cycles;
+        if !c.preorder || !self.flying.is_empty() { return Err("a slide painted out of tree order"); }
+        if c.open.is_some() { return Err("a slide inside a slide"); }
+        if c.opened != (i, self.instances.len()) { return Err("a slide that draws itself"); }
+        let n = &self.nodes[i];
+        let (counter, end) = (i + 1, subtree_end(&self.nodes, i));
+        let Some(f) = n.vis.clip else { return Err("a slide that doesn't clip") };
+        if counter >= end || subtree_end(&self.nodes, counter) != end || !slides(self.nodes[counter].looping.as_deref())
+            || !self.loops.contains_key(&self.nodes[counter].id) { return Err("a slide whose child doesn't slide back"); }
+        if n.scroll.is_some() || self.row_h[i] >= 0.0 || self.row_mask[i] >= 0.0 { return Err("a slide that scrolls or folds"); }
+        let parent = n.parent.map_or_else(|| self.root_inh(), |p| self.inh_scratch[p]);
+        if parent.in_cache || parent.skip_paint || parent.turn != 0 || parent.rounded.is_some() || parent.blur != 0.0 { return Err("a slide in a layer"); }
+        let plain = (i..end).all(|j| {
+            let m = &self.nodes[j];
+            m.handlers.get().is_none() && m.focus.get().is_none() && !m.vis_flags.hit() && m.input.is_none() && m.sticky.is_none()
+                && m.vis.effect.is_none() && m.help.is_none() && m.above.is_none() && m.matched.is_none() && !m.vis_flags.raise()
+        });
+        if !plain { return Err("a slide over input"); }
+        let still = (i..end).all(|j| {
+            let m = &self.nodes[j];
+            self.scene.presented(m.id).is_some_and(|p| p.blur == 0.0 && p.mask.is_none() && p.transform.rotate == 0.0)
+                && (j == i || (m.vis.clip.is_none() && m.scroll.is_none() && (j == counter || m.looping.is_none())))
+        });
+        if !still { return Err("a slide over clips or motion"); }
+        if !shows([r[0], r[1], r[2].max(r[0]), r[3].max(r[1])], clip, vp) { return Err("a slide out of sight"); }
+        Ok((counter, end, f))
     }
 
     /// The open window's subtree is painted: its instances, and what each node under it showed.
@@ -159,8 +178,8 @@ impl<S: 'static> Runtime<S> {
     }
 
     /// The pose each window's instances take at the loops' offsets at animation time `t`, or
-    /// None when a step can't draw one of them.
-    pub(super) fn slide_poses(&mut self, t: f64) -> Option<Vec<Pose>> {
+    /// why a step can't draw one of them.
+    pub(super) fn slide_poses(&mut self, t: f64) -> Result<Vec<Pose>, &'static str> {
         let at = |rt: &Self, j: usize| -> Option<[f32; 2]> {
             let n = &rt.nodes[j];
             let store = rt.scene.store();
@@ -170,14 +189,14 @@ impl<S: 'static> Runtime<S> {
         };
         let mut poses = Vec::with_capacity(self.paint_keep.cycles.slides.len());
         for k in 0..self.paint_keep.cycles.slides.len() {
-            if !self.slide_checked(k) { return None; }
+            if !self.slide_checked(k) { return Err("a slide drew otherwise"); }
             let sl = &self.paint_keep.cycles.slides[k];
-            let (ow, oc) = (at(self, sl.window)?, at(self, sl.counter)?);
+            let (ow, oc) = at(self, sl.window).zip(at(self, sl.counter)).ok_or("a slide stopped")?;
             // The content holds still only while the two offsets cancel as they did.
-            if (ow[0] + oc[0] - sl.net[0]).abs() > 1e-3 || (ow[1] + oc[1] - sl.net[1]).abs() > 1e-3 { return None; }
-            poses.push(Self::slide_pose(sl, ow)?);
+            if (ow[0] + oc[0] - sl.net[0]).abs() > 1e-3 || (ow[1] + oc[1] - sl.net[1]).abs() > 1e-3 { return Err("a slide's content moves"); }
+            poses.push(Self::slide_pose(sl, ow).ok_or("a slide shows or hides something")?);
         }
-        Some(poses)
+        Ok(poses)
     }
 
     /// Window `k`'s instances are what its record says: the pose it was painted at, the glyphs

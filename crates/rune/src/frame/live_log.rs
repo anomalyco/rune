@@ -103,6 +103,8 @@ pub(crate) struct Frame {
     pub(crate) change: Option<[u32; 4]>,
     /// Only its loops stepped (`Runtime::loop_step`): the instances it wrote, else None.
     pub(crate) looped: Option<usize>,
+    /// Why it wasn't loop-only, when only its loops might have asked for it.
+    pub(crate) loop_why: Option<&'static str>,
 }
 
 pub(crate) fn frame(f: Frame) {
@@ -122,7 +124,7 @@ pub(crate) fn frame(f: Frame) {
         "upload": d(f.built, f.uploaded), "encode": d(f.uploaded, f.encoded), "submit": d(f.encoded, f.submitted),
         "present": d(f.submitted, f.presented), "total": d(f.entry, f.presented),
         "cpu": f.presented.cpu.saturating_sub(f.entry.cpu), "build_cpu": f.built.cpu.saturating_sub(f.acquired.cpu), "acquire_cpu": f.acquired.cpu.saturating_sub(f.start.cpu), "encode_cpu": f.encoded.cpu.saturating_sub(f.uploaded.cpu), "submit_cpu": f.submitted.cpu.saturating_sub(f.encoded.cpu), "present_cpu": f.presented.cpu.saturating_sub(f.submitted.cpu),
-        "nodes": f.nodes, "shaped": f.shaped, "instances": f.instances, "animating": f.animating, "looped": f.looped,
+        "nodes": f.nodes, "shaped": f.shaped, "instances": f.instances, "animating": f.animating, "looped": f.looped, "loop_why": f.loop_why,
         "why": crate::runtime::CommitWhy::names(f.why),
         "next": next, "poll_due": f.poll_due, "loop_due": f.loop_due, "loops": f.loops, "damage": f.damage, "whole": f.whole, "change": f.change,
     });
