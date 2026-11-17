@@ -256,7 +256,8 @@ impl<S: 'static> Runtime<S> {
     }
 
     pub(super) fn node(&self, path: &str) -> Option<&Node> {
-        self.nodes.iter().enumerate().find(|(i, n)| n.path == path && !self.subtree_exiting(*i) && !self.subtree_unmounted(*i)).map(|(_, n)| n)
+        let i = self.index_at_path(path)?;
+        (!self.subtree_exiting(i) && !self.subtree_unmounted(i)).then_some(&self.nodes[i])
     }
 
     /// `El::on_key` handlers on the focused element and its ancestors, innermost first. A
@@ -287,8 +288,13 @@ impl<S: 'static> Runtime<S> {
 
     /// The focused element's index. Unlike [`Runtime::node`], this finds it while it exits.
     pub(super) fn focused_index(&self) -> Option<usize> {
+        if let Some(id) = self.focus.id_in(&self.path_ids)
+            && let Some(i) = self.index_of_id(id)
+        {
+            return Some(i);
+        }
         let path = self.focus.path()?;
-        self.nodes.iter().position(|n| n.path == path)
+        self.index_at_path(path)
     }
 
     pub fn key(&mut self, ev: KeyEvent) {

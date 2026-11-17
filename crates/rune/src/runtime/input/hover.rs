@@ -93,16 +93,24 @@ impl<S: 'static> Runtime<S> {
         self.apply_within(within.0, held);
     }
 
+    #[inline]
+    fn resolved_hovered_id(&self) -> Option<NodeId> {
+        let p = self.hovered.as_deref()?;
+        self.hovered_id.or_else(|| self.path_ids.get(p).copied())
+    }
+
     fn apply_hovered(&mut self, mut hovered: Option<usize>, held: bool) {
         // What's hovered stays; one that left the tree or turned inert lets go now.
         if held { hovered = self.hovered.as_deref().and_then(|p| self.hover_live(p)); }
-        if hovered.map(|i| self.nodes[i].path.as_str()) == self.hovered.as_deref() { return; }
+        let next_id = hovered.map(|i| self.nodes[i].id);
+        if next_id == self.resolved_hovered_id() && next_id.is_some() == self.hovered.is_some() { return; }
+        self.hovered_id = next_id;
         self.hovered = hovered.map(|i| self.nodes[i].path.clone());
         if let Some(path) = &self.hovered { self.queue.push(Action::Hover(path.clone())); }
         // A row never takes focus from a text field (a search field above its results).
         let row = hovered.and_then(|i| self.highlight_row(i)).filter(|_| self.focused_input().is_none());
         match row {
-            Some(i) if self.focus.path() != Some(&self.nodes[i].path) || !self.focus.hovered() =>
+            Some(i) if self.focus.id_in(&self.path_ids) != Some(self.nodes[i].id) || !self.focus.hovered() =>
                 self.queue.push(Action::HoverFocus(Some(self.nodes[i].path.clone()))),
             None if self.focus.hovered() => self.queue.push(Action::HoverFocus(None)),
             _ => {}
@@ -145,7 +153,7 @@ impl<S: 'static> Runtime<S> {
         // Held, the pointer stays inside what it was until that leaves the tree or turns inert.
         if held { inside = self.hover_within.iter().filter(|p| self.hover_live(p).is_some()).cloned().collect(); }
         // An element on its way out keeps its delays: only a shown hover hears its leave.
-        let delayed = |this: &Self, path: &str| this.nodes.iter().find(|n| n.path == path).map(|n| n.handlers.hover_delay).filter(|d| *d != [0.0; 2]);
+        let delayed = |this: &Self, path: &str| this.index_at_path(path).map(|i| this.nodes[i].handlers.hover_delay).filter(|d| *d != [0.0; 2]);
         for path in &self.hover_within {
             if !inside.contains(path) && delayed(self, path).is_none() { self.queue.push(Action::HoverChange(path.clone(), false)); }
         }
@@ -163,7 +171,8 @@ impl<S: 'static> Runtime<S> {
         if !self.hover_may_hold() { return false; }
         let carried = |i: usize| self.layout_carries(i);
         let was = |p: &str| self.hover_live(p).is_some_and(carried);
-        if hovered.map(|i| self.nodes[i].path.as_str()) != self.hovered.as_deref()
+        let next_id = hovered.map(|i| self.nodes[i].id);
+        if (next_id != self.resolved_hovered_id() || next_id.is_some() != self.hovered.is_some())
             && (hovered.is_some_and(carried) || self.hovered.as_deref().is_some_and(was))
         {
             return true;
@@ -253,9 +262,8 @@ impl<S: 'static> Runtime<S> {
 
     /// The element at `path`, while it's in the tree, not leaving it, and not inert.
     pub(crate) fn hover_live(&self, path: &str) -> Option<usize> {
-        (0..self.nodes.len())
-            .find(|&i| self.nodes[i].path == path && !self.subtree_exiting(i) && !self.subtree_unmounted(i))
-            .filter(|&i| self.allowed(i))
+        self.index_at_path(path)
+            .filter(|&i| !self.subtree_exiting(i) && !self.subtree_unmounted(i) && self.allowed(i))
     }
 
     fn captured(&self) -> Option<&str> {

@@ -249,7 +249,7 @@ impl<S: 'static> Runtime<S> {
         let r = self.drawn[i];
         let (x0, x1) = (r[0] + n.inset[0], r[0] + r[2] - n.inset[2]);
         let mut x = text_x(spec, x0, x1, layout.full_width() / s, layout.flow());
-        if let Some(input) = n.input.as_deref() && input.single_line {
+        if let Some(input) = n.input.as_deref() && input.single_line && !self.input_scroll.is_empty() {
             x -= self.input_scroll.get(&n.path).copied().unwrap_or(0.0);
         }
         let lines = lines(layout, &content, s, [x, r[1] + n.inset[1]]);

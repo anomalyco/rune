@@ -162,7 +162,7 @@ impl<S: 'static> Runtime<S> {
                 true
             }
             A11yAct::Scroll { x, y, pages } => {
-                let Some(i) = self.nodes.iter().position(|n| n.path == path) else { return false };
+                let Some(i) = self.index_at_path(&path) else { return false };
                 let Some(st) = self.scrolls.get(&self.nodes[i].id) else { return false };
                 if pages && x == 0 {
                     tx.scroll_page(path, y);

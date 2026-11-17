@@ -443,6 +443,7 @@ impl<S: 'static> Runtime<S> {
         if !self.pointer_captured() {
             self.pointer = None;
             self.hovered = None;
+            self.hovered_id = None;
             self.refresh_hover_within();
         } else {
             self.set_left(true);
@@ -577,7 +578,7 @@ impl<S: 'static> Runtime<S> {
     /// keeps its capture.
     pub(super) fn scroll_cancels_press(&mut self, id: NodeId) {
         let Some(path) = self.press.path() else { return };
-        let Some(i) = self.nodes.iter().position(|n| n.path == path) else { return };
+        let Some(i) = self.index_at_path(path) else { return };
         let inside = std::iter::successors(self.nodes[i].parent, |&p| self.nodes[p].parent).any(|p| self.nodes[p].id == id);
         if inside && self.nodes[i].handlers.on_drag.is_none() {
             if let Some(held) = self.press.held_mut() {

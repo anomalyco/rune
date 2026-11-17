@@ -130,6 +130,7 @@ impl<S: 'static> Runtime<S> {
                     self.drop_press();
                     self.secondary = capture::Secondary::Up;
                     self.hovered = None;
+                    self.hovered_id = None;
                 }
                 ModalEffect::FocusInitial => {
                     if let Some(target) = self.modal_initial_focus() {

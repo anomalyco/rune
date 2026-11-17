@@ -178,7 +178,7 @@ impl<S: 'static> Runtime<S> {
         }
     }
     pub(super) fn highlight_visible(&self, i: usize) -> bool {
-        self.focus.shown() && self.focus.is(&self.nodes[i].path)
+        self.focus.shown() && self.focus.id_in(&self.path_ids) == Some(self.nodes[i].id)
     }
     /// Focus is on node `i` or inside it (CSS `:focus-within`), however it got there.
     pub(super) fn focus_within(&self, i: usize) -> bool {
@@ -195,8 +195,9 @@ impl<S: 'static> Runtime<S> {
             }
         }
         if !self.focus.keyboard() { return false; }
+        let Some(fid) = self.focus.id_in(&self.path_ids) else { return false };
         loop {
-            if self.focus.is(&self.nodes[i].path) { return true; }
+            if self.nodes[i].id == fid { return true; }
             // A nested focusable owns its ring, never inherit another control's focus.
             if self.takes_focus(&self.nodes[i]) { return false; }
             let Some(p) = self.nodes[i].parent else { return false };
@@ -262,10 +263,15 @@ impl<S: 'static> Runtime<S> {
         {
             self.clear_text_selection();
         }
+        let target_id = path.as_deref().and_then(|p| self.path_ids.get(p).copied());
         let mut changed = moved && self.physical_focus_lost();
         for n in &mut self.nodes {
             if let Some(input) = &mut n.input {
-                changed |= sync_input_focus(input, states!(self), path.as_deref() == Some(n.path.as_str()));
+                let is_target = match target_id {
+                    Some(tid) => n.id == tid,
+                    None => path.as_deref() == Some(n.path.as_str()),
+                };
+                changed |= sync_input_focus(input, states!(self), is_target);
             }
         }
         for (p, input) in &mut self.virtual_inputs {
@@ -281,9 +287,9 @@ impl<S: 'static> Runtime<S> {
                 }
             }
         }
+        self.focus.set_cached_id(target_id);
         if let Some((mark, at)) = self.focused_index().and_then(|f| self.landmark_of(f).map(|m| (m, f))) {
-            let (mark, at) = (self.nodes[mark].path.clone(), self.nodes[at].path.clone());
-            self.focus.remember_scope(mark, at);
+            self.focus.remember_scope_str(&self.nodes[mark].path, &self.nodes[at].path);
         }
         self.sync_side_focus();
         // A hover group keyboard focus enters or leaves hovers or rests now (`El::hover_group`).
@@ -301,10 +307,14 @@ impl<S: 'static> Runtime<S> {
         let owed = self.focus_owed.take().map(|(key, ring)| (key, ring, crate::el::FocusAsk::WhenShown));
         let asked = self.focus_request.take().or(owed);
         let waits = asked.as_ref().filter(|(.., ask)| *ask == crate::el::FocusAsk::WhenShown).map(|(key, ring, _)| (key.clone(), *ring));
+        let in_new = |id: NodeId| -> Option<usize> {
+            self.node_index.get(&id).copied().filter(|&j| nodes.get(j).is_some_and(|n| n.id == id))
+        };
         for old in &self.nodes {
             if let Some(input) = &old.input
                 && input.edit.focused
-                && !nodes.iter().any(|n| n.path == old.path || n.input.as_ref().is_some_and(|i| i.edit.same_model(&input.edit)))
+                && in_new(old.id).is_none()
+                && !nodes.iter().any(|n| n.input.as_ref().is_some_and(|i| i.edit.same_model(&input.edit)))
                 && !self.virtual_inputs.values().any(|i| i.edit.same_model(&input.edit))
                 && !self.unmounted_focused.iter().any(|w| input.edit.matches_history(w))
             {
@@ -320,15 +330,15 @@ impl<S: 'static> Runtime<S> {
                 && std::iter::successors(n.parent, |&p| nodes[p].parent).all(|p| nodes[p].vis.opacity > 0.0)
         };
         let restore = self.nodes.iter().enumerate().rev().find_map(|(i, old)| {
-            let key = old.focus.return_to.as_deref()?;
-            if self.subtree_exiting(i) || nodes.iter().any(|n| n.path == old.path) { return None; }
+            let key = old.focus.get().and_then(|f| f.return_to.as_deref())?;
+            if self.subtree_exiting(i) || in_new(old.id).is_some() { return None; }
             let focused = self.focus.now_or_blurred()?;
             let has_children = self.nodes.iter().any(|m| m.parent == Some(i));
             let scope = if !has_children && !self.takes_focus(old) && old.input.is_none()
                 && old.local.w == 0.0 && old.local.h == 0.0 {
                 let p = self.nodes.get(old.parent?)?;
                 if p.is_moved_stub() || p.path.is_empty() {
-                    nodes.get(*self.node_index.get(&p.id)?)?.path.as_str()
+                    nodes.get(in_new(p.id)?)?.path.as_str()
                 } else {
                     p.path.as_str()
                 }
@@ -350,37 +360,49 @@ impl<S: 'static> Runtime<S> {
                 .find(|&j| shown(j) && (self.takes_focus(&nodes[j]) || nodes[j].input.as_ref().is_some_and(|i| i.access.is_some())))
                 .map(|j| (nodes[j].path.clone(), ring, ask))
         });
-        let input_focused = self.focus.path().is_some_and(|p| {
-            nodes.iter().any(|n| n.path == p && !n.inert && n.input.as_ref().is_some_and(|i| i.edit.focused))
-                || self.virtual_inputs.get(p).is_some_and(|i| i.edit.focused)
-        });
-        let was_focused = |edit: &crate::edit::TextEdit, path: &str| {
+        let focus_id = self.focus.id_in(&self.path_ids);
+        let input_focused = focus_id.and_then(&in_new)
+            .is_some_and(|j| !nodes[j].inert && nodes[j].input.as_ref().is_some_and(|i| i.edit.focused))
+            || self.focus.path().is_some_and(|p| self.virtual_inputs.get(p).is_some_and(|i| i.edit.focused));
+        let was_focused = |edit: &crate::edit::TextEdit, id: Option<NodeId>, path: &str| {
             self.nodes.iter().any(|old| {
-                old.input.as_ref().is_some_and(|i| i.edit.focused && (old.path == path || i.edit.same_model(edit)))
+                old.input.as_ref().is_some_and(|i| {
+                    i.edit.focused
+                        && (id.map_or_else(|| old.path == path, |nid| old.id == nid) || i.edit.same_model(edit))
+                })
             }) || (input_focused && self.unmounted_focused.iter().any(|w| edit.matches_history(w)))
         };
         let virtual_req = || self.virtual_inputs.iter()
             .filter(|(_, i)| i.edit.focused)
-            .map(|(p, i)| (p.as_str(), &i.edit));
+            .map(|(p, i)| (self.path_ids.get(p.as_str()).copied(), p.as_str(), &i.edit));
         // A newly requested text field wins; a focused control otherwise retains focus. Nothing
         // inside an `El::inert` subtree takes or keeps it.
         let requested = (0..nodes.len())
-            .filter(|&j| shown(j) && nodes[j].input.as_ref().is_some_and(|i| i.edit.focused))
-            .map(|j| (nodes[j].path.as_str(), &nodes[j].input.as_ref().unwrap().edit));
+            .filter(|&j| nodes[j].input.as_ref().is_some_and(|i| i.edit.focused) && shown(j))
+            .map(|j| (Some(nodes[j].id), nodes[j].path.as_str(), &nodes[j].input.as_ref().unwrap().edit));
         // Hash iteration must not decide between simultaneous offscreen requests. Select
         // only the winning path rather than allocating and sorting every focused field.
-        let newly_requested = |p: &str, edit: &crate::edit::TextEdit| {
-            !self.focus.is(p) && !was_focused(edit, p)
+        let newly_requested = |id: Option<NodeId>, p: &str, edit: &crate::edit::TextEdit| {
+            let is_cur = match (focus_id, id) {
+                (Some(fid), Some(nid)) => fid == nid,
+                _ => self.focus.is(p),
+            };
+            !is_cur && !was_focused(edit, id, p)
         };
-        let next = requested.clone().find(|&(p, edit)| newly_requested(p, edit))
-            .or_else(|| virtual_req().filter(|&(p, edit)| newly_requested(p, edit)).min_by_key(|&(p, _)| p))
-            .map(|(p, _)| p.to_owned())
+        let stays_focused = || {
+            self.focus.path().filter(|&p| {
+                focus_id.and_then(&in_new).is_some_and(|j| {
+                    shown(j) && (self.takes_focus(&nodes[j]) || nodes[j].input.as_ref().is_some_and(|i| i.edit.focused))
+                }) || self.virtual_inputs.get(p).is_some_and(|i| i.edit.focused)
+            }).map(str::to_owned)
+        };
+        let next = requested.clone().find(|&(id, p, edit)| newly_requested(id, p, edit))
+            .or_else(|| virtual_req().filter(|&(id, p, edit)| newly_requested(id, p, edit)).min_by_key(|&(_, p, _)| p))
+            .map(|(_, p, _)| p.to_owned())
             .or_else(|| asked.as_ref().map(|(p, ..)| p.clone()))
             .or(restore)
-            .or_else(|| self.focus.owned().filter(|p| (0..nodes.len()).any(|j| &nodes[j].path == p && shown(j)
-                && (self.takes_focus(&nodes[j]) || nodes[j].input.as_ref().is_some_and(|i| i.edit.focused)))
-                || self.virtual_inputs.get(p).is_some_and(|i| i.edit.focused)))
-            .or_else(|| requested.into_iter().next().or_else(|| virtual_req().min_by_key(|&(p, _)| p)).map(|(p, _)| p.to_owned()))
+            .or_else(stays_focused)
+            .or_else(|| requested.into_iter().next().or_else(|| virtual_req().min_by_key(|&(_, p, _)| p)).map(|(_, p, _)| p.to_owned()))
             .or_else(|| self.focus_fallback(nodes, &shown));
         // State may have deleted a row. Only the new view's accessors are valid now.
         // Use the same focus path as input events, then restore the old presentation
@@ -396,7 +418,11 @@ impl<S: 'static> Runtime<S> {
         let changed = self.set_focus(next, keyboard);
         std::mem::swap(&mut self.nodes, nodes);
         self.nodes_replaced();
-        if self.input_click.dragging_path().is_some_and(|p| !nodes.iter().any(|n| n.path == p && !n.inert && n.input.is_some())) {
+        if self.input_click.dragging_path().is_some_and(|p| {
+            !self.path_ids.get(p)
+                .and_then(|id| self.node_index.get(id).copied().filter(|&j| nodes.get(j).is_some_and(|n| n.id == *id)))
+                .is_some_and(|j| !nodes[j].inert && nodes[j].input.is_some())
+        }) {
             self.input_click.drop_drag();
         }
         if !self.press.is_held() {
@@ -423,25 +449,29 @@ impl<S: 'static> Runtime<S> {
         let gone = self.focus.path().or_else(|| self.focus.now_or_blurred().or(self.focus.tab_start()).filter(|_| self.focus.keyboard()))?;
         // `Tx::blur` says nothing has focus: it hands nothing on, unlike Escape or a deleted row.
         if self.focus.path().is_none() && !self.focus.handoff() { return None; }
-        let Some(at) = self.nodes.iter().position(|n| n.path == gone) else {
+        let gone_id = self.path_ids.get(gone).copied();
+        let in_new_by_id = |id: NodeId| -> Option<usize> {
+            self.node_index.get(&id).copied().filter(|&j| nodes.get(j).is_some_and(|m| m.id == id))
+        };
+        let Some(at) = gone_id
+            .and_then(|id| self.nodes.iter().position(|n| n.id == id && !n.is_moved_stub()))
+            .or_else(|| self.nodes.iter().position(|n| !n.is_moved_stub() && n.path == gone))
+        else {
             // An offscreen field had no layout node. Only a moved node lost its path.
-            let old = self.nodes.get(*self.node_index.get(self.path_ids.get(gone)?)?)?;
-            if !old.is_moved_stub() { return None; }
-            return self.fallback_in_new(gone, nodes);
+            if gone_id.is_some_and(|id| self.nodes.iter().any(|n| n.id == id && n.is_moved_stub())) {
+                return self.fallback_in_new(gone, nodes);
+            }
+            return None;
         };
         // The control that held it is still in the tree, even when a model cleared its flag or a
         // commit hid it: nothing takes its keyboard.
-        if nodes.iter().any(|n| n.path == gone) { return None; }
+        if gone_id.and_then(in_new_by_id).is_some() || nodes.iter().any(|n| n.path == gone) { return None; }
         if self.focus.path().is_none() && self.nodes[at].input.is_none() { return None; }
         if self.active_modal().is_some_and(|m| at >= m && self.modal_member(at)) { return None; }
-        let new: rustc_hash::FxHashMap<&str, usize> = nodes.iter().enumerate().map(|(j, n)| (n.path.as_str(), j)).collect();
         // Building the new tree hands an old node's path and id to the node that replaces it and
-        // leaves it without a path, so a control still here can look absent. Resolve those by id.
+        // leaves it without a path, so a control still here can look absent. Resolve by id.
         let at_new = |i: usize| -> Option<usize> {
-            let n = &self.nodes[i];
-            if !n.path.is_empty() { return new.get(n.path.as_str()).copied(); }
-            self.node_index.get(&n.id).copied()
-                .filter(|&j| nodes.get(j).is_some_and(|m| m.id == n.id))
+            in_new_by_id(self.nodes[i].id)
         };
         // A node built this commit may have no box yet, and is judged by the size its old node
         // had; one laid out keeps its own box, so a collapsed or hidden control takes no focus.
@@ -493,11 +523,12 @@ impl<S: 'static> Runtime<S> {
         None
     }
     pub(super) fn tab_order(&self) -> Vec<usize> {
+        let fid = self.focus.id_in(&self.path_ids);
         let all: Vec<_> = (0..self.nodes.len()).filter(|&i| self.can_focus(i) && self.nodes[i].focus.order >= 0).collect();
         let mut order: Vec<_> = all.iter().copied().filter(|&i| {
             let Some(g) = self.group(i) else { return true; };
             let chosen = all.iter().copied().filter(|&j| self.group(j) == Some(g))
-                .find(|&j| self.focus.is(&self.nodes[j].path))
+                .find(|&j| Some(self.nodes[j].id) == fid)
                 .or_else(|| all.iter().copied().find(|&j| self.group(j) == Some(g) && self.nodes[j].focus.selected))
                 .or_else(|| all.iter().copied().find(|&j| self.group(j) == Some(g)));
             chosen == Some(i)
@@ -526,7 +557,7 @@ impl<S: 'static> Runtime<S> {
         };
         let (mark, first) = marks[next];
         let remembered = self.focus.scope_memory(&self.nodes[mark].path)
-            .and_then(|p| order.iter().copied().find(|&j| self.nodes[j].path == p));
+            .and_then(|p| self.index_at_path(p).filter(|i| order.contains(i)));
         let path = self.nodes[remembered.unwrap_or(first)].path.clone();
         self.set_focus(Some(path.clone()), true);
         tx.scroll_to.push(crate::runtime::ScrollReveal::into_view(None, path));
@@ -585,11 +616,12 @@ impl<S: 'static> Runtime<S> {
                     || self.group(i).is_some_and(|g| LIST_ROLES.contains(&self.nodes[g].role)));
             }
             if order.is_empty() { return self.active_modal().is_some(); }
-            let current = order.iter().position(|&i| self.focus.is(&self.nodes[i].path));
+            let fid = self.focus.id_in(&self.path_ids);
+            let current = fid.and_then(|id| order.iter().position(|&i| self.nodes[i].id == id));
             // With nothing focused, Tab goes on from where focus was or the pointer pressed last;
             // from an element outside the Tab order (`tab_index(-1)`, a region a request focused),
             // it goes on from that element's place, as a browser's does.
-            let from = self.focus.tab_start().filter(|_| self.defaults.web_focus).and_then(|p| self.nodes.iter().position(|n| n.path == p))
+            let from = self.focus.tab_start().filter(|_| self.defaults.web_focus).and_then(|p| self.index_at_path(p))
                 .or_else(|| self.focused_index().filter(|_| current.is_none()));
             let next = match (current, from) {
                 (Some(i), _) if ev.mods.shift => (i + order.len() - 1) % order.len(),

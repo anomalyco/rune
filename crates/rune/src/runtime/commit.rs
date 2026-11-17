@@ -152,7 +152,9 @@ impl<S: 'static> Runtime<S> {
             self.discard_measured(measured);
             measured = self.measure_commit(tx);
         }
-        self.focus_before_commit = self.focus.owned();
+        if self.focus_before_commit.as_deref() != self.focus.path() {
+            self.focus_before_commit = self.focus.owned();
+        }
         // Settle layout reads first so a field that mounts once a rect is known is in `nodes`.
         measured = self.settle_layout_reads(measured, tx);
         if self.sync_requested_focus(&mut measured.nodes) {

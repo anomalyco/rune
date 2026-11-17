@@ -172,7 +172,7 @@ impl<S: 'static> Runtime<S> {
 
     /// Element `path` (not exiting or inert) and the handler `pick` takes from its canvas input.
     fn gesture_handler<F>(&self, path: &str, pick: impl Fn(&CanvasInput) -> Option<F>) -> Option<(usize, F)> {
-        let i = self.nodes.iter().enumerate().position(|(i, n)| n.path == path && !self.subtree_exiting(i) && self.allowed(i))?;
+        let i = self.index_at_path(path).filter(|&i| !self.subtree_exiting(i) && self.allowed(i))?;
         Some((i, pick(self.nodes[i].handlers.gestures.as_deref()?)?))
     }
 

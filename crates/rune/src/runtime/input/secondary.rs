@@ -32,7 +32,7 @@ impl<S: 'static> Runtime<S> {
         self.focus.step(focus_machine::FocusEvent::Pointed);
         self.dismiss_help();
         let path = self.secondary_target(x, y).map(str::to_owned);
-        let i = path.as_ref().and_then(|p| self.nodes.iter().position(|n| n.path == *p));
+        let i = path.as_ref().and_then(|p| self.index_at_path(p));
         self.secondary = match path {
             Some(path) => capture::Secondary::Held { path, link: i.and_then(|i| self.secondary_link_at(i, x, y)), left: false },
             None => capture::Secondary::Up,
@@ -62,7 +62,8 @@ impl<S: 'static> Runtime<S> {
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     pub(crate) fn secondary_claim(&self) -> &'static str {
         let capture::Secondary::Held { path, link, .. } = &self.secondary else { return "" };
-        let Some(n) = self.nodes.iter().find(|n| n.path == *path) else { return "" };
+        let Some(i) = self.index_at_path(path) else { return "" };
+        let n = &self.nodes[i];
         if link.is_some() || n.handlers.on_secondary_press.is_some() { return "app"; }
         // On a misspelled word, Rune's own field menu: it has the suggestions, the browser's
         // can't (its checker never sees the field).
@@ -101,7 +102,7 @@ impl<S: 'static> Runtime<S> {
         if let Some(path) = path
             && self.secondary_target(x, y) == Some(path.as_str())
         {
-            let i = self.nodes.iter().position(|n| n.path == path);
+            let i = self.index_at_path(&path);
             let point = i.map_or(PointerEvent { x, y, window_x: x, window_y: y }, |i| self.pointer_event(i, x, y));
             let link = i.and_then(|i| self.secondary_link_at(i, x, y));
             // Like a primary link press, it must end on the link it began on; one that moved

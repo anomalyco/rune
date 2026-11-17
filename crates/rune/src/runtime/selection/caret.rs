@@ -44,7 +44,7 @@ impl<S: 'static> Runtime<S> {
         let (x0, x1) = (t[0] + n.inset[0], t[2] - n.inset[2]);
         let mut x = text_x(spec, x0, x1, tw, layout.flow());
         if inp.single_line && let Some(l) = laid.single() {
-            let prev = self.input_scroll.get(&n.path).copied().unwrap_or(0.0);
+            let prev = if self.input_scroll.is_empty() { 0.0 } else { self.input_scroll.get(&n.path).copied().unwrap_or(0.0) };
             x -= single_line_offset(prev, inp, &spec.content, l, s, (x1 - x0) * s) / s;
         }
         let bb = layout.caret(caret_index(&inp.edit, &spec.content), inp.edit.affinity, 1.5 * s);
@@ -96,11 +96,15 @@ impl<S: 'static> Runtime<S> {
         let next = nodes.iter().position(|n| n.input.as_ref().is_some_and(|inp| inp.edit.focused))
             .and_then(|i| Some((i, self.caret_rect(nodes, i)?)));
         let same = match (&self.caret, next) {
-            (Some((path, rect)), Some((i, r))) => *path == nodes[i].path && *rect == r,
+            (Some((_, rect)), Some((i, r))) => {
+                let id_eq = self.caret_id.map_or_else(|| self.caret.as_ref().is_some_and(|(p, _)| *p == nodes[i].path), |cid| cid == nodes[i].id);
+                id_eq && *rect == r
+            }
             (None, None) => true,
             _ => false,
         };
         if same { return false; }
+        self.caret_id = next.map(|(i, _)| nodes[i].id);
         self.caret = next.map(|(i, r)| (nodes[i].path.clone(), r));
         true
     }

@@ -78,7 +78,8 @@ impl<S: 'static> Runtime<S> {
             let e = &input.edit;
             if !secure { e.text.hash(&mut h); }
             (e.anchor, e.focus, e.preedit().map(|p| (p.0.len(), p.1)), e.focused, &input.placeholder, input.single_line, input.access.is_some()).hash(&mut h);
-            self.input_scroll.get(&n.path).map(|v| v.to_bits()).hash(&mut h);
+            let scrolled = (!self.input_scroll.is_empty()).then(|| self.input_scroll.get(&n.path)).flatten().map(|v| v.to_bits());
+            scrolled.hash(&mut h);
         }
         let handlers = n.handlers.get();
         (handlers.is_some_and(|h| h.on_press.is_some()), handlers.is_some_and(|h| h.on_secondary_press.is_some()),

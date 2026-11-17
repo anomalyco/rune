@@ -197,9 +197,26 @@ impl<S: 'static> Runtime<S> {
         self.top_target(x, y).filter(|&i| self.is_selectable(i))
     }
 
+    /// Fast `O(1)` lookup of `path` via `path_ids` + `node_index`, with linear scan fallback.
+    #[inline]
+    pub(crate) fn index_at_path(&self, path: &str) -> Option<usize> {
+        if let Some(&id) = self.path_ids.get(path)
+            && let Some(&i) = self.node_index.get(&id)
+            && self.nodes.get(i).is_some_and(|n| n.id == id && n.path == path)
+        {
+            return Some(i);
+        }
+        self.nodes.iter().position(|n| n.path == path)
+    }
+
+    #[inline]
+    pub(crate) fn index_of_id(&self, id: NodeId) -> Option<usize> {
+        self.node_index.get(&id).copied().filter(|&i| self.nodes.get(i).is_some_and(|n| n.id == id))
+    }
+
     /// The node at `path`, unless it is on its way out.
     pub(crate) fn live_index(&self, path: &str) -> Option<usize> {
-        self.nodes.iter().enumerate().position(|(i, n)| n.path == path && !self.subtree_exiting(i))
+        self.index_at_path(path).filter(|&i| !self.subtree_exiting(i))
     }
 
     pub(super) fn in_viewport(&self, x: f32, y: f32) -> bool {

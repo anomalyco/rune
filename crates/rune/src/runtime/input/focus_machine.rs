@@ -10,6 +10,7 @@
 //!   so focus a closing modal hands back shows as it did.
 //! - [`TypeSelect`]: a list's typed prefix, which a pause ends.
 use crate::machine::Effects;
+use rune_motion::NodeId;
 
 /// Whether the keyboard drove focus last: then a focused control shows its ring.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -68,6 +69,7 @@ pub(crate) enum FocusEffect {
 pub(crate) struct FocusState {
     pub(crate) focus: Focus,
     pub(crate) modality: Modality,
+    cached_id: Option<NodeId>,
     /// Per landmark (by path), the element focused last inside it, most recent first: where F6
     /// lands when it comes back to that pane.
     scopes: Vec<(String, String)>,
@@ -84,6 +86,17 @@ impl FocusState {
         }
     }
 
+    #[inline]
+    pub(crate) fn set_cached_id(&mut self, id: Option<NodeId>) {
+        self.cached_id = if matches!(self.focus, Focus::On { .. }) { id } else { None };
+    }
+
+    #[inline]
+    pub(crate) fn id_in(&self, path_ids: &super::HashMap<String, super::NodeId>) -> Option<NodeId> {
+        let p = self.path()?;
+        self.cached_id.or_else(|| path_ids.get(p).copied())
+    }
+
     pub(crate) fn owned(&self) -> Option<String> { self.path().map(str::to_owned) }
 
     pub(crate) fn is(&self, path: &str) -> bool { self.path() == Some(path) }
@@ -96,11 +109,11 @@ impl FocusState {
     /// Focus shows, by the keyboard or the pointer's light on a row.
     pub(crate) fn shown(&self) -> bool { self.keyboard() || self.hovered() }
 
-    /// Notes that `path` has focus inside landmark `scope`.
-    pub(crate) fn remember_scope(&mut self, scope: String, path: String) {
-        if self.scopes.first().is_some_and(|(s, p)| *s == scope && *p == path) { return; }
-        self.scopes.retain(|(s, _)| *s != scope);
-        self.scopes.insert(0, (scope, path));
+    /// Notes that `path` has focus inside landmark `scope`, avoiding clones when unchanged.
+    pub(crate) fn remember_scope_str(&mut self, scope: &str, path: &str) {
+        if self.scopes.first().is_some_and(|(s, p)| s == scope && p == path) { return; }
+        self.scopes.retain(|(s, _)| s != scope);
+        self.scopes.insert(0, (scope.to_owned(), path.to_owned()));
         self.scopes.truncate(SCOPES);
     }
 
@@ -135,6 +148,7 @@ impl FocusState {
             FocusEvent::Set { path, keyboard } => {
                 self.modality = if keyboard { Modality::Keyboard } else { Modality::Pointer };
                 let moved = self.path() != path.as_deref();
+                if moved { self.cached_id = None; }
                 self.focus = match (std::mem::take(&mut self.focus), path) {
                     (Focus::On { path: old, hovered, .. }, Some(path)) if old == path => Focus::On { path, hovered, from: None },
                     (_, Some(path)) => Focus::On { path, hovered: false, from: None },
@@ -176,12 +190,16 @@ impl FocusState {
     /// moves, and [`Self::put_back`] restores it if nothing took focus meanwhile.
     pub(crate) fn set_aside(&mut self) -> Option<Focus> {
         let Focus::On { path, from, .. } = &self.focus else { return None };
+        self.cached_id = None;
         let rest = Focus::None { from: from.clone(), blurred: Some(path.clone()), handoff: false };
         Some(std::mem::replace(&mut self.focus, rest))
     }
 
     pub(crate) fn put_back(&mut self, aside: Focus) {
-        if matches!(self.focus, Focus::None { .. }) { self.focus = aside; }
+        if matches!(self.focus, Focus::None { .. }) {
+            self.cached_id = None;
+            self.focus = aside;
+        }
     }
 }
 

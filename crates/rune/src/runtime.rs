@@ -711,6 +711,7 @@ pub struct Runtime<S: 'static> {
     /// Shared host deadline: unscaled wake time and corresponding animation time.
     loop_wake: Option<(f64, f64)>,
     hovered: Option<String>,
+    hovered_id: Option<NodeId>,
     /// Elements with `on_hover_change` that the pointer is inside.
     hover_within: Vec<String>,
     /// `on_hover_change` handlers of elements that left the tree, owed their queued leave.
@@ -728,6 +729,7 @@ pub struct Runtime<S: 'static> {
     pub(crate) ime_option_as_alt: bool,
     /// The focused field's caret (path, window rect) the next view sees through `Cx::caret`.
     caret: Option<(String, [f32; 4])>,
+    caret_id: Option<NodeId>,
     /// The last view read the caret, so it re-runs when the caret moves.
     caret_watch: bool,
     /// Keys the last view read with `Cx::layout` or `Cx::layout_size`, and what each resolved to.
@@ -1070,6 +1072,7 @@ impl<S: 'static> Runtime<S> {
             time_scaled: false,
             loop_wake: None,
             hovered: None,
+            hovered_id: None,
             hover_within: Vec::new(),
             hover_gone: Vec::new(),
             hover_delays: Default::default(),
@@ -1079,6 +1082,7 @@ impl<S: 'static> Runtime<S> {
             ime_area: None,
             ime_option_as_alt: false,
             caret: None,
+            caret_id: None,
             caret_watch: false,
             layout_seen: Default::default(),
             layout_fired: HashMap::default(),

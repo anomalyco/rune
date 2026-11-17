@@ -83,6 +83,7 @@ impl<S: 'static> Runtime<S> {
         self.select_step(selectable::phase::Event::Release);
         self.input_click.clear();
         self.hovered = None;
+        self.hovered_id = None;
         self.hover_gone.clear();
         self.hover_within.clear();
         self.hover_delays.clear();
