@@ -67,7 +67,9 @@ impl GpuTimer {
 
     /// This frame's instances: count and covered device pixels by kind, clipped to their clip and the viewport.
     pub(super) fn instances(&self, instances: &[super::Instance], viewport: (u32, u32)) {
-        let mut kinds = vec![(0u32, 0f64, 0f64); 16];
+        // 0..16 by kind; rects (kind 0) also by class: 16 plain opaque (square, borderless, alpha 1, no fade or
+        // clip radius), 17 plain translucent, 18 rounded or bordered or faded.
+        let mut kinds = vec![(0u32, 0f64, 0f64); 19];
         for i in instances {
             let k = (i.params[1] as usize).min(15);
             // The quad `base_vs` rasterizes: grown past the rect, a band (`runtime/paint/bands.rs`) only its window.
@@ -83,6 +85,13 @@ impl GpuTimer {
             // Rasterized (the quad in the viewport: outside the clip a fragment still runs, then discards), and inside the clip.
             kinds[k].1 += area(lo[0], lo[1], hi[0], hi[1]);
             kinds[k].2 += area(lo[0].max(i.clip[0]), lo[1].max(i.clip[1]), hi[0].min(i.clip[2]), hi[1].min(i.clip[3]));
+            if k == 0 {
+                let plain = i.radii == [0.0; 4] && i.params[0] == 0.0 && i.fade == [0; 4];
+                let class = if !plain { 18 } else if i.fill[3] >= 1.0 { 16 } else { 17 };
+                kinds[class].0 += 1;
+                kinds[class].1 += area(lo[0], lo[1], hi[0], hi[1]);
+                kinds[class].2 += area(lo[0].max(i.clip[0]), lo[1].max(i.clip[1]), hi[0].min(i.clip[2]), hi[1].min(i.clip[3]));
+            }
         }
         *self.kinds.lock().unwrap_or_else(|e| e.into_inner()) = kinds;
     }

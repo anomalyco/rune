@@ -11,7 +11,12 @@ pub(super) struct Special {
     pub(super) generic: wgpu::RenderPipeline,
     /// By kind (`KIND_*`): the pinned pipeline, for the kinds that have one.
     pub(super) by_kind: Vec<Option<wgpu::RenderPipeline>>,
+    /// Plain opaque quads (kind code `PLAIN` in `special_kinds`) under `RUNE_CUT=special,plain`.
+    pub(super) plain: Option<wgpu::RenderPipeline>,
 }
+
+/// `special_kinds`' code for a plain opaque rect.
+pub(super) const PLAIN: u8 = 16;
 
 /// The kinds `special` pins: rect, shadow, glyph.
 const PINNED: [u32; 3] = [0, 1, 2];
@@ -35,15 +40,12 @@ impl Renderer {
             };
             let started = std::time::Instant::now();
             let generic = make(source);
-            let by_kind = (0..16).map(|k| PINNED.contains(&k).then(|| {
-                // Only the fragment entry's reads of the kind: the vertex stage still reads its own.
-                let (head, fs) = source.split_at(at);
-                let pinned = fs.replacen("if (i.params.y == 8.0) {", &format!("if ({k}.0 == 8.0) {{"), 1)
-                    .replacen("let kind = i.params.y;", &format!("let kind = {k}.0;"), 1);
-                make(&format!("{head}{pinned}"))
-            })).collect();
+            let by_kind = (0..16).map(|k| PINNED.contains(&k).then(|| make(&super::variant::pinned_wgsl(k).expect("PINNED_KIND marker")))).collect();
+            // GPUI's first switch on the timeline: plain opaque quads (square, borderless, no fade or clip radius)
+            // drawn as their fill under the soft clip, before any rounded-rect maths.
+            let plain = super::variant::pinned_wgsl(0).filter(|w| w.matches("    let kind = fragment_kind(i);\n").count() == 1).map(|w| w.replacen("    let kind = fragment_kind(i);\n", "    let kind = fragment_kind(i);\n    if (true) { return i.fill * clip_alpha(i.p, i.clip, i.fade); }\n", 1)).map(|w| make(&w));
             eprintln!("rune: RUNE_CUT measuring pipelines compiled in {:.0} ms", started.elapsed().as_secs_f64() * 1e3);
-            sent.send(Special { generic, by_kind }).ok();
+            sent.send(Special { generic, by_kind, plain }).ok();
         });
     }
 
@@ -58,7 +60,13 @@ impl Renderer {
 /// that draws it: the pinned one under `special`, else the generic one.
 pub(super) fn runs<'a>(special: &'a Special, kinds: &[u8], range: std::ops::Range<u32>) -> Vec<(std::ops::Range<u32>, &'a wgpu::RenderPipeline)> {
     let pin = Renderer::cut("special");
-    let pipeline = |k: u8| if pin { special.by_kind.get(usize::from(k)).and_then(Option::as_ref).unwrap_or(&special.generic) } else { &special.generic };
+    let plain = Renderer::cut("plain");
+    let pipeline = |k: u8| match k {
+        PLAIN if pin && plain => special.plain.as_ref().unwrap_or(&special.generic),
+        PLAIN => if pin { special.by_kind[0].as_ref().unwrap_or(&special.generic) } else { &special.generic },
+        _ if pin => special.by_kind.get(usize::from(k)).and_then(Option::as_ref).unwrap_or(&special.generic),
+        _ => &special.generic,
+    };
     let mut out: Vec<(std::ops::Range<u32>, &wgpu::RenderPipeline)> = Vec::new();
     for i in range {
         let p = pipeline(kinds.get(i as usize).copied().unwrap_or(255));

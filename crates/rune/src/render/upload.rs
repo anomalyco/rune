@@ -243,7 +243,7 @@ impl Renderer {
         #[cfg(feature = "frame-profile")]
         {
             self.build_special(device);
-            if self.special.is_some() { self.special_kinds = instances.iter().map(|i| i.params[1] as u8).collect(); }
+            if self.special.is_some() { self.special_kinds = instances.iter().map(|i| if i.params[1] == 0.0 && i.radii == [0.0; 4] && i.params[0] == 0.0 && i.fade == [0; 4] && i.fill[3] >= 1.0 { super::special::PLAIN } else { i.params[1] as u8 }).collect(); }
         }
         // The pinned pipelines (`variant::pinned_pipelines`): on Windows the first prepare is the warm frame, before the hand-over.
         if self.pinned.is_none() { self.pinned = Some(self.pinned_pipelines(device)); }
