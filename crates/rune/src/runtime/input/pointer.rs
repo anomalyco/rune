@@ -512,19 +512,23 @@ impl<S: 'static> Runtime<S> {
             .map(|(_, n)| n.id)
     }
 
-    /// The vertical viewport a delta `dy` at (x, y) starts a run on: the innermost there that can
-    /// still move that way, as Chromium starts a wheel's scroll on the nearest scroller with room
-    /// in its direction. One at its end passes the run to the one around it, so a short region
-    /// inside a page never traps the wheel.
+    /// The vertical viewport a delta `dy` at (x, y) starts a run on: the innermost viewport there,
+    /// or the nearest of its own scroll ancestors, that can still move that way, as Chromium
+    /// chains a wheel's scroll from the scroller under the pointer up its ancestors. One at its
+    /// end passes the run to the one around it, so a short region inside a page never traps the
+    /// wheel; a viewport that only lies beneath (the timeline under an open menu) never takes it.
     pub(super) fn wheel_target(&self, x: f32, y: f32, dy: f32) -> Option<NodeId> {
-        self.nodes
-            .iter()
-            .enumerate()
-            .rev()
-            .filter(|(i, n)| n.scroll.is_some() && n.scroll_axes.has(false) && !self.subtree_exiting(*i) && self.allowed(*i))
-            .filter(|(_, n)| self.scrolls.get(&n.id).is_some_and(|st| if dy > 0.0 { st.offset > 0.0 } else { st.offset < st.max }))
-            .find(|(i, _)| self.node_contains(*i, x, y))
-            .map(|(_, n)| n.id)
+        let viewport = |i: usize| {
+            let n = &self.nodes[i];
+            n.scroll.is_some() && n.scroll_axes.has(false) && !self.subtree_exiting(i) && self.allowed(i)
+        };
+        let room = |i: usize| self.scrolls.get(&self.nodes[i].id).is_some_and(|st| if dy > 0.0 { st.offset > 0.0 } else { st.offset < st.max });
+        let mut at = (0..self.nodes.len()).rev().find(|&i| viewport(i) && self.node_contains(i, x, y));
+        while let Some(i) = at {
+            if viewport(i) && room(i) { return Some(self.nodes[i].id); }
+            at = self.nodes[i].parent;
+        }
+        None
     }
 
     /// Wheel or trackpad delta in points (positive `dy` moves content down, like a browser's
