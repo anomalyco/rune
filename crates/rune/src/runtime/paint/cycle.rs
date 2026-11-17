@@ -29,6 +29,8 @@ struct Slot {
     at: usize,
     curve: crate::Cycle,
     ink: [f32; 4],
+    /// What else fades it: its own and its ancestors' opacity besides the cycle.
+    scale: f32,
     rect: [f32; 4],
 }
 
@@ -46,8 +48,8 @@ impl CyclePaint {
 
     pub(in crate::runtime) fn other_deadline(&mut self) { self.mixed = true; }
 
-    pub(in crate::runtime) fn record(&mut self, node: usize, at: usize, curve: crate::Cycle, ink: [f32; 4], rect: [f32; 4]) {
-        self.slots.push(Slot { node, at, curve, ink, rect });
+    pub(in crate::runtime) fn record(&mut self, node: usize, at: usize, curve: crate::Cycle, (ink, scale): ([f32; 4], f32), rect: [f32; 4]) {
+        self.slots.push(Slot { node, at, curve, ink, scale, rect });
     }
 
     /// A glyph at `quad` (x0, y0, x1, y1), drawn or left out: a sliding window over it notes it.
@@ -148,8 +150,7 @@ impl<S: 'static> Runtime<S> {
             return if !self.seen.get(i).copied().unwrap_or(false) { "a cycle out of sight" }
                 else if !n.a11y.hidden { "a cycle screen readers see" }
                 else if self.nodes.get(i + 1).is_some_and(|m| m.parent == Some(i)) { "a cycle with children" }
-                else if parent.paint_opacity != 1.0 || parent.hit_opacity != 1.0 || parent.opacity != 1.0 { "a cycle under a fade" }
-                else if n.vis.layer_opacity != 1.0 || n.vis.paint_alpha != 1.0 || self.scene.presented(n.id).is_none_or(|p| p.opacity != 1.0) { "a cycle that fades itself" }
+                else if n.vis.layer_opacity != 1.0 || n.vis.paint_alpha != 1.0 { "a cycle that fades itself" }
                 else if parent.in_cache || parent.skip_paint || parent.turn != 0 { "a cycle in a layer" }
                 else if n.handlers.get().is_some() || n.focus.get().is_some() || n.vis_flags.hit() { "a cycle that takes input" }
                 else { "a cycle paint didn't record" };
@@ -166,7 +167,7 @@ impl<S: 'static> Runtime<S> {
     /// Samples each cycle at the clock into its slot, and moves a stepped cycle's wake on.
     fn sample_cycles(&mut self, patched: &mut Vec<u32>) {
         for s in &self.paint_keep.cycles.slots {
-            let a = s.curve.sample(self.clock);
+            let a = s.curve.sample(self.clock) * s.scale;
             let q = &mut self.instances[s.at];
             q.fill = s.ink.map(|v| v * a);
             q.params[3] = a;

@@ -1088,8 +1088,8 @@ impl<S: 'static> Runtime<S> {
                     } else {
                         if let Some(rune_motion::LoopKind::OpacityCycle(curve)) = n.looping.as_ref().map(|l| l.kind)
                             && n.a11y.hidden && !next.is_some_and(|j| self.nodes[j].parent == Some(i))
-                            && !isolate && !in_cache && !skip_paint && loop_vis && base_opacity == 1.0
-                            && pinh.paint_opacity == 1.0 && pinh.hit_opacity == 1.0 && n.vis.layer_opacity == 1.0
+                            && !isolate && !in_cache && !skip_paint && loop_vis && base_opacity > 0.0
+                            && pinh.paint_opacity > 0.0 && loop_value.is_some_and(|v| v > 0.0) && n.vis.layer_opacity == 1.0
                             && n.vis.paint_alpha == 1.0 && bw == 0.0 && overlay == [0.0; 4]
                             && self.instances.len() == primitive_start && n.text.is_none() && n.input.is_none()
                             && n.vis.shape.is_none() && n.vis.pixels.is_none() && n.vis.effect.is_none()
@@ -1097,7 +1097,7 @@ impl<S: 'static> Runtime<S> {
                             && !n.vis_flags.hit() && node_turn.is_none() && cover.is_none() && n.help.is_none()
                             && curve.stops.iter().all(|&(_, a)| a.is_finite() && a > 0.001 && a <= 1.0 && base[3] * a > 0.0005)
                         {
-                            self.paint_keep.cycles.record(i, self.instances.len(), curve, base, ring.rect);
+                            self.paint_keep.cycles.record(i, self.instances.len(), curve, (base, o / loop_value.unwrap_or(1.0)), ring.rect);
                         }
                         self.instances.push(Instance { fill, ..ring });
                     }
