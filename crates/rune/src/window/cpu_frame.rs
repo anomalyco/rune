@@ -773,8 +773,8 @@ fn raise_priority(thread: &std::thread::JoinHandle<()>) {
 }
 
 /// How many frames the warm frame records at once, and how many times (warm_frame).
-const WARM_ENCODERS: usize = 4;
-const WARM_ROUNDS: usize = 3;
+const WARM_ENCODERS: usize = 3;
+const WARM_ROUNDS: usize = 2;
 
 static FIRST_CPU: AtomicBool = AtomicBool::new(false);
 static FIRST_LAYOUT: AtomicBool = AtomicBool::new(false);
@@ -812,8 +812,8 @@ fn prepare(hwnd: isize, size: (u32, u32), srgb: bool, features: wgpu::Features, 
 /// It draws the frame more than once: on D3D12 a command allocator's first two cycles at a given
 /// number of lists cost about 0.5 ms a list on the Iris Xe (a dozen lists a frame: 4-10 ms), and
 /// frames rotate through several allocators while earlier ones are on the GPU. So `WARM_ENCODERS` frames
-/// at once, `WARM_ROUNDS` times: as many allocators as frames keep in flight, each past its slow
-/// recordings, and the vendored wgpu-hal hands a frame the allocator that has recorded the most.
+/// at once, `WARM_ROUNDS` times: as many allocators as frames keep in flight, each past its two slow
+/// cycles, and the vendored wgpu-hal hands a frame the allocator that has recorded the most.
 fn warm_frame(gpu: &Gpu, renderer: &mut Renderer, format: wgpu::TextureFormat, size: (u32, u32), instances: &[crate::render::Instance]) {
     let target = gpu.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("rune warm frame"),
