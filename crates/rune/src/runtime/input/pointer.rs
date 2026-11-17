@@ -518,13 +518,13 @@ impl<S: 'static> Runtime<S> {
     /// passes the run to the one around it, so a short region inside a page never traps the wheel;
     /// a viewport that only lies beneath (the timeline under an open menu, with or without a list
     /// of its own, or under a raised panel) never takes it.
-    pub(super) fn wheel_target(&self, x: f32, y: f32, dy: f32) -> Option<NodeId> {
+    pub(super) fn wheel_target(&self, x: f32, y: f32, dy: f32, start: crate::runtime::gesture_dispatch::WheelStart) -> Option<NodeId> {
         let viewport = |i: usize| {
             let n = &self.nodes[i];
             n.scroll.is_some() && n.scroll_axes.has(false) && !self.subtree_exiting(i) && self.allowed(i)
         };
         let room = |i: usize| self.scrolls.get(&self.nodes[i].id).is_some_and(|st| if dy > 0.0 { st.offset > 0.0 } else { st.offset < st.max });
-        let mut at = self.chain_start(x, y);
+        let mut at = match start { crate::runtime::gesture_dispatch::WheelStart::At(s) => s, crate::runtime::gesture_dispatch::WheelStart::Unknown => self.chain_start(x, y) };
         while let Some(i) = at {
             if viewport(i) && room(i) { return Some(self.nodes[i].id); }
             at = self.nodes[i].parent;
@@ -536,6 +536,11 @@ impl<S: 'static> Runtime<S> {
     /// negative deltaY). Applied 1:1: the platform supplies its own momentum phases. A run of
     /// deltas keeps to the viewport it began on (`WheelLock::vertical_run`), even at its end.
     pub fn wheel(&mut self, x: f32, y: f32, dy: f32) {
+        self.wheel_from(x, y, dy, crate::runtime::gesture_dispatch::WheelStart::Unknown);
+    }
+
+    /// [`Self::wheel`], with where its chain starts when the caller already found it.
+    pub(super) fn wheel_from(&mut self, x: f32, y: f32, dy: f32, start: crate::runtime::gesture_dispatch::WheelStart) {
         self.release_hover_hold();
         self.drop_scroll_holds();
         self.dismiss_help();
@@ -543,7 +548,7 @@ impl<S: 'static> Runtime<S> {
         let held = self.wheel_lock.vertical_run(now, x, y, dy).filter(|id| {
             self.node_index.get(id).is_some_and(|&i| self.nodes[i].scroll.is_some() && !self.subtree_exiting(i) && self.allowed(i))
         });
-        let Some(id) = held.or_else(|| self.wheel_target(x, y, dy)) else {
+        let Some(id) = held.or_else(|| self.wheel_target(x, y, dy, start)) else {
             self.wheel_lock.end_vertical();
             return;
         };
