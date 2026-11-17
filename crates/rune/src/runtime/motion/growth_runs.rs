@@ -72,10 +72,10 @@ impl GrowthRun {
 
     /// Steps the block and gives each row its share: rows above the edge whole, the row at the
     /// edge its part and the feather, rows past it nothing. Returns how far the rows grew.
-    fn step(&mut self, steps: usize, spring: rune_motion::Spring, edge: &crate::growth::StreamEdge, grows: &mut HashMap<NodeId, GrowTrack>) -> f32 {
+    fn step(&mut self, steps: crate::growth::Substeps, spring: rune_motion::Spring, edge: &crate::growth::StreamEdge, grows: &mut HashMap<NodeId, GrowTrack>) -> f32 {
         let GrowthRun::Formed { rows, extents, track, .. } = self else { return 0.0 };
-        for _ in 0..steps {
-            track.step(spring, edge, false);
+        for dt in steps {
+            track.step_by(dt, spring, edge, false);
         }
         let (mut left, mut grown) = (track.h, 0.0);
         for (id, &extent) in rows.iter().zip(&*extents) {
@@ -126,7 +126,7 @@ impl<S: 'static> Runtime<S> {
 
     /// Steps a stack's blocks before its rows, and returns the rows they moved (which skip their
     /// own step this frame) and how far they grew.
-    pub(super) fn step_growth_runs(stack: &mut Stack, grows: &mut HashMap<NodeId, GrowTrack>, steps: usize, spec: crate::el::GrowthSpec) -> (Vec<NodeId>, f32) {
+    pub(super) fn step_growth_runs(stack: &mut Stack, grows: &mut HashMap<NodeId, GrowTrack>, steps: crate::growth::Substeps, spec: crate::el::GrowthSpec) -> (Vec<NodeId>, f32) {
         let (mut rows, mut grown) = (Vec::new(), 0.0);
         stack.runs.retain_mut(|run| {
             grown += run.step(steps, spec.spring, &spec.edge, grows);
