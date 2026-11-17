@@ -119,7 +119,14 @@ impl<S: 'static> Host<S> {
             // SAFETY: the object is the live swap chain's; `Slot` waits on its own copy.
             let waitable = l.surface.as_ref().and_then(|s| unsafe { s.as_hal::<wgpu::hal::api::Dx12>().and_then(|h| h.waitable_handle()) });
             let handle = self.native_handle.clone();
-            if l.native.slot.take(waitable.map(|h| h.0), move || handle.send(WakeEvent::FrameSlot)) == super::slot::Take::Later { return; }
+            let pre_empt = l.native.input_owed && l.native.depth.extra() > 0 && std::env::var_os("RUNE_RESTART").is_some_and(|v| v == "1");
+            if l.native.slot.take(waitable.map(|h| h.0), move || handle.send(WakeEvent::FrameSlot)) == super::slot::Take::Later {
+                if !pre_empt { return; }
+                // The swap chain holds a motion frame not yet shown, and a third buffer to draw
+                // into: this frame, carrying the input, replaces it rather than following it.
+                l.native.slot.reset();
+                l.native.restart = true;
+            }
         }
         let Some(l) = self.win.as_mut() else { return };
         #[cfg(target_os = "windows")]
@@ -432,6 +439,15 @@ impl<S: 'static> Host<S> {
             let rects: Vec<_> = rects.iter().map(|&[left, top, right, bottom]| windows::Win32::Foundation::RECT { left, top, right, bottom }).collect();
             hal.set_present_rects(&rects);
         }
+        #[cfg(target_os = "windows")]
+        if std::mem::take(&mut l.native.restart) && let Some(s) = l.surface.as_ref() {
+            // SAFETY: only sets a flag the next present reads.
+            unsafe { if let Some(h) = s.as_hal::<wgpu::hal::api::Dx12>() { h.restart_next_present(); } }
+            #[cfg(feature = "frame-profile")]
+            crate::frame::live_log::mark("present.restart");
+        }
+        #[cfg(target_os = "windows")]
+        { l.native.input_owed = false; }
         #[cfg(not(target_os = "macos"))]
         gpu.queue.present(frame);
         // Measuring only: the swap chain's own count of which present the display showed at which

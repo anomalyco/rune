@@ -86,6 +86,10 @@ pub(super) struct Native {
     pub(super) depth: super::depth::Depth,
     /// Whether the user works in it, for its third buffer (`depth`).
     pub(super) focus: super::depth::Focus,
+    /// Measuring (RUNE_RESTART=1): a key or press came since the last present; its frame may
+    /// replace a queued motion frame (`DXGI_PRESENT_RESTART`) instead of waiting behind it.
+    pub(super) input_owed: bool,
+    pub(super) restart: bool,
     /// Whether the CPU renderer or the GPU draws its frames (`cpu_frame`).
     pub(super) mode: super::cpu_frame::SurfaceMode,
     /// Whether its accessibility adapter waits for the first frame (`Host::a11y_after_frame`).
