@@ -18,7 +18,10 @@ use super::*;
 use crate::edit::Block;
 use crate::el::{Direction, Flow, TextSpec};
 
+mod keying;
 mod lazy;
+use keying::{Found, Runs, count_newlines, flow_of, key_paragraphs, next_line_start, reuse_keys, with_isolates};
+pub(crate) use keying::{LineScan, common_end, common_start};
 pub(crate) use lazy::{AsciiLine, Lazy};
 
 /// The bytes U+2068 and U+2069 each take.
@@ -71,16 +74,20 @@ impl TextLayout {
 /// A by-paragraph field's paragraphs, top to bottom, in device px.
 pub(crate) struct ParagraphLayout {
     pub(crate) paragraphs: Vec<Paragraph>,
-    width: f32,
+    pub(in crate::text) width: f32,
     full_width: f32,
     height: f32,
     /// What its lines were broken at; the next edit's paragraphs re-break theirs when it changed.
-    max_width: Option<f32>,
+    pub(in crate::text) max_width: Option<f32>,
     align: Alignment,
     /// Its text's shape key, which its layouts at other widths are cached under.
     whole: u64,
     /// The width a selected line break highlights, as a selection across a newline shows.
-    newline: f32,
+    pub(super) newline: f32,
+    /// `[baseline, ascent, descent]` of one line in the base font (device px), for blank lines.
+    pub(super) blank_box: [f32; 3],
+    /// Whether `spec.spans` is sorted and non-overlapping, allowing binary-search slicing.
+    pub(super) disjoint_spans: bool,
     /// What the next edit's keys start from (`Keys`): the text it laid out, when it had no
     /// spans or pills, in the style and starting direction its keys were made in.
     keyed: Option<Keyed>,
@@ -110,6 +117,8 @@ pub(crate) struct Paragraph {
     pub(crate) start: usize,
     pub(crate) end: usize,
     pub(crate) y: f32,
+    /// Fractional vertical phase (`y - y.floor()`) a wrapped paragraph's lines were broken from.
+    pub(super) y_frac: f32,
     pub(crate) height: f32,
     /// Its layout's width and full width, so a later edit that keeps it reads neither from it.
     widths: [f32; 2],
@@ -144,16 +153,17 @@ pub(crate) struct Piece<'a> {
     /// Its paragraph's index in the field, for its [`Block`].
     pub(crate) index: usize,
     isolates: &'a [(u32, u32)],
+    disjoint_spans: bool,
     whole: bool,
 }
 
 impl<'a> Piece<'a> {
-    fn of_paragraph(k: usize, p: &'a Paragraph) -> Piece<'a> {
-        Piece { layout: &p.layout, shared: Some(&p.layout), start: p.start, end: p.end, y: p.y, height: p.height, flow: p.flow, index: k, isolates: &p.isolates, whole: false }
+    pub(in crate::text) fn of_paragraph(k: usize, p: &'a Paragraph, disjoint_spans: bool) -> Piece<'a> {
+        Piece { layout: &p.layout, shared: Some(&p.layout), start: p.start, end: p.end, y: p.y, height: p.height, flow: p.flow, index: k, isolates: &p.isolates, disjoint_spans, whole: false }
     }
 
     fn whole(layout: &'a Layout<Ink>) -> Piece<'a> {
-        Piece { layout, shared: None, start: 0, end: usize::MAX, y: 0.0, height: layout.height(), flow: Flow::of_layout(layout), index: 0, isolates: &[], whole: true }
+        Piece { layout, shared: None, start: 0, end: usize::MAX, y: 0.0, height: layout.height(), flow: Flow::of_layout(layout), index: 0, isolates: &[], disjoint_spans: false, whole: true }
     }
 
     /// Whether it's a text's one layout rather than a paragraph of a field's.
@@ -181,7 +191,7 @@ impl<'a> Piece<'a> {
     /// `spans` over its words, on its shaped text (a whole layout's own).
     pub(crate) fn spans<'s>(&self, spans: &'s [Span]) -> Cow<'s, [Span]> {
         if self.whole { return Cow::Borrowed(spans); }
-        Cow::Owned(spans_in(spans, self.start, self.end, self.isolates).collect())
+        Cow::Owned(spans_in(spans, self.start, self.end, self.isolates, self.disjoint_spans).collect())
     }
 
     /// `pills` inside it, on its shaped text.
@@ -229,8 +239,15 @@ fn content(isolates: &[(u32, u32)], at: usize) -> usize {
 }
 
 /// `spans` meeting content bytes `a..b`, cut to them and moved onto the shaped text.
-fn spans_in<'s>(spans: &'s [Span], a: usize, b: usize, isolates: &'s [(u32, u32)]) -> impl Iterator<Item = Span> + 's {
-    spans.iter().filter(move |s| (s.start as usize) < b && a < s.end as usize).map(move |s| Span {
+pub(super) fn spans_in<'s>(spans: &'s [Span], a: usize, b: usize, isolates: &'s [(u32, u32)], disjoint: bool) -> impl Iterator<Item = Span> + 's {
+    let window = if disjoint && spans.len() > 8 {
+        let lo = spans.partition_point(|s| (s.end as usize) <= a);
+        let hi = lo + spans[lo..].partition_point(|s| (s.start as usize) < b);
+        &spans[lo..hi]
+    } else {
+        spans
+    };
+    window.iter().filter(move |s| (s.start as usize) < b && a < s.end as usize).map(move |s| Span {
         start: shaped(isolates, (s.start as usize).max(a) - a) as u32,
         end: shaped(isolates, (s.end as usize).min(b) - a) as u32,
         ..s.clone()
@@ -238,7 +255,7 @@ fn spans_in<'s>(spans: &'s [Span], a: usize, b: usize, isolates: &'s [(u32, u32)
 }
 
 /// `pills` inside content bytes `a..b`, each its label's shaped bytes.
-fn pills_in<'s>(pills: &'s [PillChip], a: usize, b: usize, isolates: &'s [(u32, u32)]) -> impl Iterator<Item = PillChip> + 's {
+pub(super) fn pills_in<'s>(pills: &'s [PillChip], a: usize, b: usize, isolates: &'s [(u32, u32)]) -> impl Iterator<Item = PillChip> + 's {
     pills.iter().filter(move |p| inside(p, a, b)).map(move |p| PillChip {
         start: (shaped(isolates, p.start as usize - a) + ISOLATE) as u32,
         end: (shaped(isolates, p.end as usize - a) - ISOLATE) as u32,
@@ -246,7 +263,7 @@ fn pills_in<'s>(pills: &'s [PillChip], a: usize, b: usize, isolates: &'s [(u32, 
     })
 }
 
-fn inside(p: &PillChip, a: usize, b: usize) -> bool {
+pub(super) fn inside(p: &PillChip, a: usize, b: usize) -> bool {
     a <= p.start as usize && p.end as usize <= b && p.start < p.end
 }
 
@@ -254,6 +271,7 @@ fn inside(p: &PillChip, a: usize, b: usize) -> bool {
 pub(crate) struct Pieces<'a> {
     whole: Option<Piece<'a>>,
     paragraphs: std::iter::Enumerate<std::slice::Iter<'a, Paragraph>>,
+    disjoint_spans: bool,
     bottom: f32,
 }
 
@@ -262,7 +280,7 @@ impl<'a> Iterator for Pieces<'a> {
     fn next(&mut self) -> Option<Piece<'a>> {
         if let Some(w) = self.whole.take() { return Some(w); }
         let (k, p) = self.paragraphs.next()?;
-        (p.y <= self.bottom).then(|| Piece::of_paragraph(k, p))
+        (p.y <= self.bottom).then(|| Piece::of_paragraph(k, p, self.disjoint_spans))
     }
 }
 
@@ -308,7 +326,24 @@ impl<'a> TextFlow<'a> {
     /// The direction its lines run in, for where an unwrapped line starts: a by-paragraph
     /// field wraps, so each paragraph aligns itself.
     pub(crate) fn flow(self) -> Flow {
-        match self { TextFlow::Single(l) => Flow::of_layout(l), TextFlow::Paragraphs(_) => Flow::Ltr }
+        match self { TextFlow::Single(l) => Flow::of_layout(l), TextFlow::Paragraphs(p) => p.paragraphs.first().map_or(Flow::Ltr, |q| q.flow) }
+    }
+
+    /// [`stream_height_lag`](super::stream_height_lag) of it.
+    pub(crate) fn stream_height_lag(self, width: f32, scale: f32) -> f32 {
+        match self {
+            TextFlow::Single(l) => super::stream_height_lag(l, width, scale),
+            TextFlow::Paragraphs(p) => {
+                let Some(last) = p.paragraphs.last() else { return 0.0 };
+                let Some(line) = last.layout.lines().next_back() else { return 0.0 };
+                let multi = p.paragraphs.len() > 1 || last.layout.len() > 1;
+                let cap = if multi { 0.82 } else { 0.52 };
+                let m = line.metrics();
+                let fill = ((m.advance - m.hanging_advance) / width.max(1.0)).clamp(0.0, 1.0);
+                let lag = m.line_height / scale * cap * (1.0 - fill);
+                (lag * 64.0).round() / 64.0
+            }
+        }
     }
 
     /// [`spec_height`](super::spec_height) of it.
@@ -325,12 +360,12 @@ impl<'a> TextFlow<'a> {
     /// Its pieces that meet device rows `top..bottom`, top to bottom.
     pub(crate) fn pieces_in(self, top: f32, bottom: f32) -> Pieces<'a> {
         match self {
-            TextFlow::Single(l) => Pieces { whole: Some(Piece::whole(l)), paragraphs: [].iter().enumerate(), bottom },
+            TextFlow::Single(l) => Pieces { whole: Some(Piece::whole(l)), paragraphs: [].iter().enumerate(), disjoint_spans: false, bottom },
             TextFlow::Paragraphs(p) => {
                 let from = p.paragraphs.partition_point(|q| q.y + q.height < top);
                 let mut paragraphs = p.paragraphs.iter().enumerate();
                 if from > 0 { paragraphs.nth(from - 1); }
-                Pieces { whole: None, paragraphs, bottom }
+                Pieces { whole: None, paragraphs, disjoint_spans: p.disjoint_spans, bottom }
             }
         }
     }
@@ -346,7 +381,7 @@ impl<'a> TextFlow<'a> {
             TextFlow::Single(l) => Piece::whole(l),
             TextFlow::Paragraphs(p) => {
                 let k = p.paragraphs.partition_point(|q| q.end < at).min(p.paragraphs.len() - 1);
-                Piece::of_paragraph(k, &p.paragraphs[k])
+                Piece::of_paragraph(k, &p.paragraphs[k], p.disjoint_spans)
             }
         }
     }
@@ -357,7 +392,7 @@ impl<'a> TextFlow<'a> {
             TextFlow::Single(l) => Piece::whole(l),
             TextFlow::Paragraphs(p) => {
                 let k = p.paragraphs.partition_point(|q| q.y + q.height <= y).min(p.paragraphs.len() - 1);
-                Piece::of_paragraph(k, &p.paragraphs[k])
+                Piece::of_paragraph(k, &p.paragraphs[k], p.disjoint_spans)
             }
         }
     }
@@ -435,7 +470,7 @@ impl<'a> TextFlow<'a> {
             false if p.index > 0 => (p.index - 1, pl.paragraphs[p.index - 1].layout.len().max(1) - 1),
             false => return Some((0, x)),
         };
-        let t = Piece::of_paragraph(k, &pl.paragraphs[k]);
+        let t = Piece::of_paragraph(k, &pl.paragraphs[k], pl.disjoint_spans);
         let Some(m) = t.layout.get(line).filter(|_| !t.is_blank()).map(|l| *l.metrics()) else { return Some((t.start, x)) };
         Some((t.content(cursor_from_point(t.layout, x, (m.block_min_coord + m.block_max_coord) * 0.5).index()), x))
     }
@@ -453,7 +488,7 @@ impl<'a> TextFlow<'a> {
         if a >= b { return out; }
         let from = pl.paragraphs.partition_point(|q| q.end < a);
         for (k, q) in pl.paragraphs.iter().enumerate().skip(from).take_while(|(_, q)| q.start <= b) {
-            let p = Piece::of_paragraph(k, q);
+            let p = Piece::of_paragraph(k, q, pl.disjoint_spans);
             let y = p.y as f64;
             let first = out.len();
             if let Some((sa, sb)) = p.clip(a, b) {
@@ -464,19 +499,22 @@ impl<'a> TextFlow<'a> {
                 }));
             }
             if k + 1 < pl.paragraphs.len() && a <= p.end && p.end < b {
-                let (top, bottom, base, start, end) = match p.layout.lines().last().filter(|_| !p.is_blank()) {
+                let (top, bottom, base, start, end, ws) = match p.layout.lines().last().filter(|_| !p.is_blank()) {
                     Some(line) => {
                         let m = line.metrics();
                         let x = m.inline_min_coord + m.offset;
-                        (m.block_min_coord.min(m.content_block_min_coord), m.block_max_coord.max(m.content_block_max_coord), m.baseline, x, x + m.advance)
+                        let ws = line.runs().last().map_or(pl.newline as f64, |r| {
+                            let fm = r.font_metrics();
+                            (fm.ascent as f64 + fm.descent as f64) * 0.25
+                        });
+                        (m.block_min_coord.min(m.content_block_min_coord), m.block_max_coord.max(m.content_block_max_coord), m.baseline, x, x + m.advance, ws)
                     }
                     None => {
                         let x = self.blank_start(&p, 0.0);
-                        (0.0, p.height, p.height * 0.8, x, x)
+                        (0.0, p.height, pl.blank_box[0], x, x, pl.newline as f64)
                     }
                 };
                 let (top, bottom) = (top as f64 + y, bottom as f64 + y);
-                let ws = pl.newline as f64;
                 let on_line = out[first..].iter_mut().filter(|(bb, _)| bb.y0 == top);
                 let rtl = p.flow == Flow::Rtl;
                 let edge = if rtl { on_line.min_by(|l, r| l.0.x0.total_cmp(&r.0.x0)) } else { on_line.max_by(|l, r| l.0.x1.total_cmp(&r.0.x1)) };
@@ -537,7 +575,7 @@ impl TextSystem {
         }
         let forced = spec.paragraphs_flow();
         // One paragraph and no pills, as most drafts are: one layout in its own direction.
-        if spec.cold.pills.is_empty() && !spec.content.contains('\n') {
+        if !spec.by_line && spec.cold.pills.is_empty() && !spec.content.contains('\n') {
             let base = forced.or_else(|| flow_of(&spec.content, &[])).unwrap_or(spec.plaintext_flow()).base();
             let shape = spec.shape_key(scale).map(|k| hash::directed(k, base));
             let style = (&spec.content, &spec.spans, &spec.cold.blocks);
@@ -588,32 +626,35 @@ impl TextSystem {
         // A plain text's edit keys only the paragraphs it touched: those before it and after it
         // keep their keys (`reuse_keys`), so a keystroke costs its own paragraph, not the draft.
         let plain = spec.spans.is_empty() && spec.cold.pills.is_empty() && spec.cold.blocks.iter().all(|&b| b == Block::Paragraph);
+        let disjoint_spans = spec.spans.len() <= 1 || spec.spans.windows(2).all(|w| w[0].start < w[0].end && w[0].end <= w[1].start);
         let forced = spec.paragraphs_flow();
         let start_flow = forced.unwrap_or(spec.plaintext_flow());
         let reused = prev.filter(|_| plain).and_then(|p| reuse_keys(p, content, style_key, start_flow, &mut self.last_diff));
         let (mut found, tail, entering) = reused.map_or((Vec::new(), Vec::new(), start_flow), |r| (r.head, r.tail, r.entering));
-        let at = found.last().map_or(0, |f| f.1 + 1);
+        let bytes = content.as_bytes();
+        let at = found.last().map_or(0, |f| next_line_start(bytes, f.1));
         // A long paste's plain ASCII lines that fit on one line, away from the edit's ends, wait
         // as runs: one record each, at their exact height, for `fill_paragraphs`.
         let edited = tail.first().map_or(content.len(), |t| t.0).saturating_sub(at);
         // A min-content measure of a text whose lines wait keys an edit's lines into runs too,
         // however few: none of them is shown, and its run held them as one record.
         let measuring = prev.is_some_and(|p| p.waiting()) && max_width.is_some_and(|m| m < style.line_px() * scale);
-        let ascii = (plain && (measuring || edited > LAZY_MIN * 8 && count_newlines(&content.as_bytes()[at..at + edited]) > LAZY_MIN))
+        let ascii = (!spec.by_line && plain && (measuring || edited > LAZY_MIN * 8 && count_newlines(&bytes[at..at + edited]) > LAZY_MIN))
             .then(|| self.ascii_line(style, scale, spec.wrap_anywhere)).flatten();
         let runs = ascii.as_deref().map(|m| Runs { ascii: m, max_width, edit: true });
         match tail.first().map(|t| t.0) {
             Some(t) => {
-                key_paragraphs(spec, style_key, at, t - 1, start_flow, forced, runs, &mut self.line_scan, &mut found);
+                let sep = if t >= 2 && bytes.get(t - 2) == Some(&b'\r') { 2 } else { 1 };
+                key_paragraphs(spec, style_key, disjoint_spans, at, t - sep, start_flow, forced, runs, &mut self.line_scan, &mut found);
                 // The paragraphs after the edit keep their keys if they start from the direction
                 // they were keyed in (a neutral one takes the one before it).
                 if found.last().map(|f| f.2) == Some(entering) {
                     found.extend(tail);
                 } else {
-                    key_paragraphs(spec, style_key, t, content.len(), start_flow, forced, None, &mut self.line_scan, &mut found);
+                    key_paragraphs(spec, style_key, disjoint_spans, t, content.len(), start_flow, forced, None, &mut self.line_scan, &mut found);
                 }
             }
-            None => key_paragraphs(spec, style_key, at, content.len(), start_flow, forced, runs, &mut self.line_scan, &mut found),
+            None => key_paragraphs(spec, style_key, disjoint_spans, at, content.len(), start_flow, forced, runs, &mut self.line_scan, &mut found),
         }
         // What the edit left alone: the paragraphs before it, and those after it.
         let old = prev.map_or(&[][..], |p| p.paragraphs.as_slice());
@@ -632,7 +673,7 @@ impl TextSystem {
                     let m = match &ascii { Some(m) => Some(m.clone()), None => self.ascii_line(style, scale, spec.wrap_anywhere) };
                     let mut again = Vec::new();
                     let from = items.last().map_or(start_flow, |(f, _)| f.2);
-                    key_paragraphs(spec, style_key, f.0, f.1, from, forced, m.as_deref().map(|m| Runs { ascii: m, max_width, edit: false }), &mut self.line_scan, &mut again);
+                    key_paragraphs(spec, style_key, disjoint_spans, f.0, f.1, from, forced, m.as_deref().map(|m| Runs { ascii: m, max_width, edit: false }), &mut self.line_scan, &mut again);
                     items.extend(again.into_iter().map(|f| (f, None)));
                 }
                 _ => items.push((f, kept)),
@@ -656,7 +697,7 @@ impl TextSystem {
             if let Some((height, w, lines, layout, run)) = wait {
                 waiting += 1;
                 (width, full_width) = (width.max(w), full_width.max(w));
-                paragraphs.push(Paragraph { start: a, end: b, y: y.round() as f32, height, widths: [w, w], flow, key, isolates, layout, shaped: false, lines, run });
+                paragraphs.push(Paragraph { start: a, end: b, y: y.round() as f32, y_frac: 0.0, height, widths: [w, w], flow, key, isolates, layout, shaped: false, lines, run });
                 y += f64::from(height);
                 continue;
             }
@@ -665,7 +706,7 @@ impl TextSystem {
             // A kept paragraph broken at another width, or this text's own paragraph at the
             // other width measuring asks for, breaks again here rather than shaping anew.
             let again = match kept { Some(o) if rebreak => Some(o), Some(_) => None, None => twin };
-            let layout = match (kept, again) {
+            let mut layout = match (kept, again) {
                 (_, Some(o)) => {
                     fresh += b - a;
                     let mut l = o.layout.clone();
@@ -679,23 +720,34 @@ impl TextSystem {
                     fresh += b - a;
                     let words = &content[a..b];
                     let text: Cow<str> = if isolates.is_empty() { Cow::Borrowed(words) } else { Cow::Owned(with_isolates(words, &isolates)) };
-                    let spans: Vec<Span> = spans_in(&spec.spans, a, b, &isolates).collect();
+                    let spans: Vec<Span> = spans_in(&spec.spans, a, b, &isolates, disjoint_spans).collect();
                     let pills: Vec<PillChip> = pills_in(&spec.cold.pills, a, b, &isolates).collect();
-                    self.layout_keyed(Some(key), &text, &spans, blocks, &pills, style, scale, max_width, align, spec.wrap_anywhere, false, Keep::Owned, flow.base())
+                    self.layout_keyed(Some(key), &text, &spans, blocks, &pills, style, scale, max_width, align, spec.wrap_anywhere, spec.pretty(), Keep::Owned, flow.base())
                 }
             };
             // A paragraph kept as it was keeps its measures too: touching 2,000 layouts to read
             // them again costs more than the edit.
-            let (height, widths) = match (kept, again) {
+            let (mut height, mut widths) = match (kept, again) {
                 (Some(o), None) => (o.height, o.widths),
                 _ => (if a == b { layout.height().max(line) } else { layout.height() }, [layout.width(), layout.full_width()]),
             };
+            let want_frac = if layout.len() > 1 { (y - y.floor()) as f32 } else { 0.0 };
+            let have_frac = match (kept, again) { (Some(o), None) => o.y_frac, _ => 0.0 };
+            if (want_frac - have_frac).abs() > 1e-5 {
+                line_break::rebreak_at_y(Rc::make_mut(&mut layout), blocks, style.size, scale, max_width, align, f64::from(want_frac));
+                self.layout_ids.build(&layout);
+                (height, widths) = (if a == b { layout.height().max(line) } else { layout.height() }, [layout.width(), layout.full_width()]);
+            }
+            let py = if want_frac != 0.0 { y.floor() as f32 } else { y.round() as f32 };
             (width, full_width) = (width.max(widths[0]), full_width.max(widths[1]));
-            paragraphs.push(Paragraph { start: a, end: b, y: y.round() as f32, height, widths, flow, key, isolates, layout, shaped: true, lines: 1, run: false });
+            paragraphs.push(Paragraph { start: a, end: b, y: py, y_frac: want_frac, height, widths, flow, key, isolates, layout, shaped: true, lines: 1, run: false });
             y += f64::from(height);
         }
         let (asc, desc) = self.primary_extents(style.family, style.weight, style.italic).unwrap_or((0.8, 0.2));
-        let newline = 0.25 * (asc + desc.abs()) * style.size * scale;
+        let (asc_px, desc_px) = (asc * style.size * scale, desc.abs() * style.size * scale);
+        let newline = 0.25 * (asc_px + desc_px);
+        let (qa, qd) = (asc_px.round(), desc_px.round());
+        let blank_box = [qa + ((line - (qa + qd)) * 0.5).floor(), asc_px, desc_px];
         // One copy of a long text for both widths a measure asks for, not one each.
         let shared = self.last_paragraphs.as_ref().and_then(|l| l.keyed.as_ref()).map(|k| k.content.clone()).filter(|c| **c == *content);
         let keyed = plain.then(|| Keyed { content: shared.unwrap_or_else(|| Rc::from(content)), style_key, start_flow });
@@ -703,213 +755,6 @@ impl TextSystem {
             content: keyed.as_ref().map_or_else(|| Rc::from(content), |k| k.content.clone()),
             style, scale, wrap_anywhere: spec.wrap_anywhere, cache_key, style_key, forced, start_flow, ascii,
         }));
-        (ParagraphLayout { paragraphs, width, full_width, height: y as f32, max_width, align, whole, newline, keyed, lazy }, fresh)
+        (ParagraphLayout { paragraphs, width, full_width, height: y as f32, max_width, align, whole, newline, blank_box, disjoint_spans, keyed, lazy }, fresh)
     }
-
-}
-
-
-/// A paragraph found in a field's text: its bytes, direction, key and isolated pills, and for a
-/// run of waiting lines its height, width and line count.
-type Found = (usize, usize, Flow, u64, Box<[(u32, u32)]>, Option<(f32, f32, u32)>);
-
-/// What lets lines wait as runs while they're keyed: printable ASCII's measures at the field's
-/// width, and whether the lines are an edit's (whose ends are shaped at once, as the caret's
-/// window) or a waiting run's keyed again at another width.
-#[derive(Clone, Copy)]
-struct Runs<'a> {
-    ascii: &'a AsciiLine,
-    max_width: Option<f32>,
-    edit: bool,
-}
-
-/// `\n` bytes in `s`, counted eight at a time.
-fn count_newlines(s: &[u8]) -> usize {
-    let mut chunks = s.chunks_exact(8);
-    let mut n = 0usize;
-    for c in &mut chunks {
-        let w = u64::from_le_bytes(c.try_into().unwrap()) ^ 0x0a0a_0a0a_0a0a_0a0a;
-        n += ((w.wrapping_sub(0x0101_0101_0101_0101) & !w & 0x8080_8080_8080_8080).count_ones()) as usize;
-    }
-    n + chunks.remainder().iter().filter(|&&b| b == b'\n').count()
-}
-
-/// Keys the paragraphs of `spec`'s content bytes `a..z` (a paragraph's start to a paragraph's
-/// end) onto `found`. A paragraph with no strong character reads the way the one before it
-/// does, the first `start_flow`; with `forced`, every paragraph reads that way. With `runs`, more
-/// than [`LAZY_MIN`] lines of an edit (or any number of a run keyed again) put the plain ASCII
-/// lines that fit on one line, away from the edit's ends, in runs: one record per run, keyed by
-/// its bytes, its height the sum of its lines'.
-fn key_paragraphs(spec: &TextSpec, style_key: u64, a: usize, z: usize, start_flow: Flow, forced: Option<Flow>, runs: Option<Runs<'_>>, scan: &mut Option<LineScan>, found: &mut Vec<Found>) {
-    // The other width's keying of these bytes, this layout pass, read them already.
-    let key = [spec.content.as_ptr() as usize, spec.content.len(), a, z];
-    let cache = scan.take_if(|s| runs.is_some() && s.key == key);
-    let lines = match (&cache, runs) {
-        (Some(c), _) => c.ends.len(),
-        (None, Some(_)) => count_newlines(&spec.content.as_bytes()[a..z]) + 1,
-        (None, None) => 0,
-    };
-    let runs = runs.filter(|r| !r.edit || lines > LAZY_MIN || r.ascii.narrow(r.max_width));
-    let mut record = (runs.is_some() && cache.is_none()).then(|| LineScan { key, ends: Vec::with_capacity(lines), flags: Vec::with_capacity(lines) });
-    let mut split = spec.content[a..z].split('\n');
-    // The run being gathered: its first byte, last byte, height, width, lines and last flow.
-    let mut run: Option<(usize, usize, f32, f32, u32, Flow)> = None;
-    let close = |run: &mut Option<(usize, usize, f32, f32, u32, Flow)>, found: &mut Vec<Found>| {
-        if let Some((a, b, height, w, n, flow)) = run.take() {
-            let mut h = hash::KeyHasher::default();
-            (&spec.content[a..b], style_key, flow == Flow::Rtl, n, "run").hash(&mut h);
-            found.push((a, b, flow, h.finish(), Box::default(), Some((height, w, n))));
-        }
-    };
-    let mut start = a;
-    for j in 0.. {
-        let (words, known) = match &cache {
-            Some(c) if j < c.ends.len() => (&spec.content[start..a + c.ends[j] as usize], Some(c.flags[j])),
-            Some(_) => break,
-            None => match split.next() {
-                Some(words) => (words, None),
-                None => break,
-            },
-        };
-        let (a, b, k) = (start, start + words.len(), found.len());
-        start = b + 1;
-        let last_flow = run.map(|r| r.5).or_else(|| found.last().map(|f| f.2)).unwrap_or(start_flow);
-        if let Some(r) = runs {
-            // A measure of the narrowest width is never shown: none of its lines needs shaping.
-            let near = r.edit && !r.ascii.narrow(r.max_width) && (j < EAGER_START || j + EAGER_END >= lines);
-            let floor = run.map_or(0.0, |r| r.3);
-            let printable = known.map(|f| f & PRINTABLE != 0);
-            let fits = if near || words.is_empty() || printable == Some(false) { None } else if r.ascii.narrow(r.max_width) { r.ascii.narrowest(words, floor) } else { r.ascii.one_line(words, r.max_width, floor, printable == Some(true)) };
-            // Printable ASCII: its letters are its only strong characters, all left to right.
-            let letter = || known.map_or_else(|| words.bytes().any(|b| b.is_ascii_alphabetic()), |f| f & LETTER != 0);
-            if let Some(rec) = &mut record {
-                // What the other width's keying reads: a line that fit is printable; one that didn't
-                // (or wasn't asked, near the edit's ends) is looked at here.
-                let shown = fits.is_some() || (!words.is_empty() && lazy::printable(words.as_bytes()));
-                rec.ends.push((b - key[2]) as u32);
-                rec.flags.push(if shown { PRINTABLE | if letter() { LETTER } else { 0 } } else { 0 });
-            }
-            if let Some((height, w)) = fits {
-                let flow = forced.or_else(|| letter().then_some(Flow::Ltr)).unwrap_or(last_flow);
-                match &mut run {
-                    Some(run) => { run.1 = b; run.2 += height; run.3 = run.3.max(w); run.4 += 1; run.5 = flow; }
-                    None => run = Some((a, b, height, w, 1, flow)),
-                }
-                // A run holds at most RUN_LINES: an edit inside one keys only its run again.
-                if run.is_some_and(|r| r.4 as usize >= RUN_LINES) {
-                    close(&mut run, found);
-                }
-                continue;
-            }
-            close(&mut run, found);
-        }
-        let isolates: Box<[(u32, u32)]> = spec.cold.pills.iter().filter(|p| inside(p, a, b)).map(|p| (p.start - a as u32, p.end - a as u32)).collect();
-        let flow = forced.or_else(|| flow_of(words, &isolates)).unwrap_or(last_flow);
-        let mut h = hash::KeyHasher::default();
-        (words, style_key, flow == Flow::Rtl, spec.cold.blocks.get(k).copied().unwrap_or(Block::Paragraph)).hash(&mut h);
-        for s in spans_in(&spec.spans, a, b, &isolates) {
-            (s.start, s.end, s.mono, s.weight.map(f32::to_bits), s.size.map(f32::to_bits), s.italic).hash(&mut h);
-        }
-        for p in pills_in(&spec.cold.pills, a, b, &isolates) {
-            (p.start, p.end, p.icon.is_some(), p.bare.as_ref().map(|b| (b.size.to_bits(), b.gap.to_bits()))).hash(&mut h);
-        }
-        found.push((a, b, flow, h.finish(), isolates, None));
-    }
-    close(&mut run, found);
-    *scan = record.or(cache);
-}
-
-/// A line of a [`LineScan`] is printable ASCII (not empty), and holds a letter.
-const PRINTABLE: u8 = 1;
-const LETTER: u8 = 2;
-
-/// A text's lines between two of its bytes as one width's keying read them (`key_paragraphs`):
-/// where each ends and what it holds, so the other width's keying of a long paste, in the same
-/// layout pass, reads these instead of the bytes. `key` is the text's address and length and the
-/// two bytes; `TextSystem::forget_diff` drops it when a pass begins.
-pub(crate) struct LineScan {
-    key: [usize; 4],
-    ends: Vec<u32>,
-    flags: Vec<u8>,
-}
-
-/// The paragraphs an edit left whole, with their keys: those before it (`head`) and after it
-/// (`tail`, moved to their new bytes), and the direction the paragraph before the tail had.
-struct Reuse {
-    head: Vec<Found>,
-    tail: Vec<Found>,
-    entering: Flow,
-}
-
-/// `prev`'s paragraphs that `content` keeps byte for byte, newline included, when `prev` was a
-/// plain text in the same style and starting direction. The edit is what lies between the
-/// texts' common start and common end.
-fn reuse_keys(prev: &ParagraphLayout, content: &str, style_key: u64, start_flow: Flow, last: &mut Option<([usize; 4], usize, usize)>) -> Option<Reuse> {
-    let keyed = prev.keyed.as_ref().filter(|k| k.style_key == style_key && k.start_flow == start_flow)?;
-    let (old, new) = (keyed.content.as_bytes(), content.as_bytes());
-    // The same two texts as the last comparison this commit (both are alive till it ends).
-    let texts = [old.as_ptr() as usize, old.len(), new.as_ptr() as usize, new.len()];
-    let (prefix, suffix) = match *last {
-        Some((t, p, s)) if t == texts => (p, s),
-        _ => {
-            let prefix = common_start(old, new);
-            let suffix = common_end(old, new).min(old.len().min(new.len()) - prefix);
-            *last = Some((texts, prefix, suffix));
-            (prefix, suffix)
-        }
-    };
-    let ps = &prev.paragraphs;
-    // Before the edit: its newline too. After it: the newline before it too.
-    let h = ps.partition_point(|p| p.end < prefix);
-    let t = ps.partition_point(|p| p.start + suffix <= old.len());
-    let moved = |at: usize| at + new.len() - old.len();
-    Some(Reuse {
-        head: ps[..h].iter().map(|p| (p.start, p.end, p.flow, p.key, Box::default(), p.run.then_some((p.height, p.widths[0], p.lines)))).collect(),
-        tail: ps[t..].iter().map(|p| (moved(p.start), moved(p.end), p.flow, p.key, Box::default(), p.run.then_some((p.height, p.widths[0], p.lines)))).collect(),
-        entering: t.checked_sub(1).map_or(start_flow, |i| ps[i].flow),
-    })
-}
-
-/// How many bytes two texts share from their start: compared 4 KB at a time (one memcmp each;
-/// a 1.7 MB paste in a few dozen), then byte by byte inside the first block that differs.
-pub(crate) fn common_start(a: &[u8], b: &[u8]) -> usize {
-    let n = a.len().min(b.len());
-    let mut at = 0;
-    while at + 4096 <= n && a[at..at + 4096] == b[at..at + 4096] { at += 4096; }
-    at + a[at..n].iter().zip(&b[at..n]).take_while(|(x, y)| x == y).count()
-}
-
-/// How many bytes two texts share at their end, as `common_start` counts.
-pub(crate) fn common_end(a: &[u8], b: &[u8]) -> usize {
-    let n = a.len().min(b.len());
-    let mut at = 0;
-    while at + 4096 <= n && a[a.len() - at - 4096..a.len() - at] == b[b.len() - at - 4096..b.len() - at] { at += 4096; }
-    at + a[..a.len() - at].iter().rev().zip(b[..b.len() - at].iter().rev()).take(n - at).take_while(|(x, y)| x == y).count()
-}
-
-/// A paragraph's direction: its first strong character's outside its pills, or None with none.
-fn flow_of(words: &str, isolates: &[(u32, u32)]) -> Option<Flow> {
-    let mut at = 0;
-    for &(a, b) in isolates.iter().chain([&(words.len() as u32, words.len() as u32)]) {
-        if let Some(d) = words.get(at..a as usize).and_then(Direction::of) {
-            return Some(if d == Direction::Rtl { Flow::Rtl } else { Flow::Ltr });
-        }
-        at = at.max(b as usize);
-    }
-    None
-}
-
-/// `words` with each isolated pill's label between FSI and PDI.
-fn with_isolates(words: &str, isolates: &[(u32, u32)]) -> String {
-    let mut out = String::with_capacity(words.len() + 2 * ISOLATE * isolates.len());
-    let mut at = 0;
-    for &(a, b) in isolates {
-        out.push_str(&words[at..a as usize]);
-        out.push('\u{2068}');
-        out.push_str(&words[a as usize..b as usize]);
-        out.push('\u{2069}');
-        at = b as usize;
-    }
-    out.push_str(&words[at..]);
-    out
 }

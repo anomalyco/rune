@@ -3,6 +3,16 @@
 use super::*;
 
 impl El {
+    /// Lays out each newline-ended line as its own [`Layout`](crate::text::Layout), reusing
+    /// unchanged lines across commits while staying one selectable text element in its own
+    /// direction.
+    pub fn by_line(mut self) -> El {
+        if let Some(t) = self.text.as_mut() {
+            t.by_line = true;
+        }
+        self
+    }
+
     /// Lays each paragraph of this text (a line a newline ends) out in the direction of its own
     /// first strong character, as CSS's `unicode-bidi: plaintext` does: right to left when that's
     /// Arabic or Hebrew, else left to right, left to right too when it has none, whatever

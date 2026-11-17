@@ -233,10 +233,10 @@ impl<S: 'static> Runtime<S> {
                     let mut end = j + 1;
                     while end < nodes.len() && nodes[end].parent.is_some_and(|p| p >= j) { end += 1; }
                     if let Some(n) = nodes[j..end].iter().rev().find(|n| n.text.as_ref().is_some_and(|t| t.wrap && t.reveal >= 0.0))
-                        && let Some(l) = n.text_layout.as_ref().and_then(TextLayout::single)
+                        && let Some(laid) = &n.text_layout
                     {
                         let width = (n.target[2] - n.target[0] - n.inset[0] - n.inset[2]) * scale;
-                        h = (h - crate::text::stream_height_lag(l, width, scale)).max(0.0);
+                        h = (h - laid.view().stream_height_lag(width, scale)).max(0.0);
                     }
                 }
                 let (duration, glide) = (tx.motion.map_or(0.0, |m| m.spring().duration * 1.15), nodes[j].glide.map(|s| (s, self.fold_limit(id))));

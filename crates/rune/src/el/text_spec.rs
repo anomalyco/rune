@@ -52,6 +52,8 @@ pub struct TextSpec {
     /// See [`El::exact_lines`](crate::El::exact_lines): the height is its lines' own, unrounded,
     /// unless [`El::rounded_lines`](crate::El::rounded_lines) rounds it to device pixels.
     pub(crate) exact_lines: bool,
+    /// See [`El::by_line`](crate::El::by_line): one shaped [`Layout`](crate::text::Layout) per line.
+    pub(crate) by_line: bool,
     /// The paragraph direction it lays out in (see [`TextDir`]).
     pub(crate) dir: TextDir,
 }
@@ -192,6 +194,7 @@ impl TextSpec {
             wrap_anywhere: false,
             greedy: false,
             exact_lines: true,
+            by_line: false,
             dir: TextDir::Auto,
         }
     }
@@ -285,9 +288,9 @@ impl TextSpec {
     /// one paragraph, or of any when each paragraph takes its own direction. Others stay one
     /// layout (a static text splits into one text per paragraph instead).
     pub(crate) fn by_paragraph(&self, input: bool) -> bool {
-        input && self.wrap && !self.redacted && !self.truncate && !self.truncate_fade
+        (input || self.by_line) && self.wrap && !self.redacted && !self.truncate && !self.truncate_fade
             && self.max_lines == 0 && self.cold.live.is_none() && self.cold.advance_in.is_none()
-            && (matches!(self.dir, TextDir::Plaintext(_)) || self.content.contains('\n'))
+            && (self.by_line || matches!(self.dir, TextDir::Plaintext(_)) || self.content.contains('\n'))
     }
 
     /// The direction every paragraph of a by-paragraph layout takes, or None when each takes

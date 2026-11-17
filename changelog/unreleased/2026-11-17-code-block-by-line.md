@@ -1,0 +1,1 @@
+- `Markdown` code blocks shape one `Layout` per line (`El::by_line`) and reuse unchanged lines across streaming commits while keeping selection, Find highlights, tabs, wrapping, left-to-right base direction, and copy identical.

@@ -13,8 +13,8 @@ pub(super) struct LinkState {
 
 /// Where node `n`'s text starts inside its border box `rect` (points, x0 y0 x1 y1), its text
 /// drawn `k` times its size.
-pub(super) fn origin(n: &Node, spec: &TextSpec, layout: &Layout<Ink>, rect: [f32; 4], s: f32, k: f32) -> [f32; 2] {
-    let x = text_x(spec, rect[0] + n.inset[0] * k, rect[2] - n.inset[2] * k, text_width(layout.full_width() * k) / s, crate::el::Flow::of_layout(layout));
+pub(super) fn origin(n: &Node, spec: &TextSpec, flow: TextFlow<'_>, rect: [f32; 4], s: f32, k: f32) -> [f32; 2] {
+    let x = text_x(spec, rect[0] + n.inset[0] * k, rect[2] - n.inset[2] * k, text_width(flow.full_width() * k) / s, flow.flow());
     [x, rect[1] + n.inset[1] * k]
 }
 
@@ -44,6 +44,16 @@ impl LinkFx {
 
     pub(super) fn glyph_color(&self, byte: u32) -> Option<Color> {
         self.0.iter().find(|(a, b, p, _, _)| byte >= *a && byte < *b && p.color.is_some()).and_then(|(_, _, p, _, _)| p.color)
+    }
+
+    pub(super) fn decos_piece(&self, piece: &crate::text::Piece<'_>, len: usize, s: f32, origin: [f32; 2], out: &mut Vec<PaintedDeco>) {
+        if self.is_empty() { return; }
+        if piece.is_whole() { return self.decos(piece.layout, len, s, origin, out); }
+        let clipped: Vec<_> = self.0.iter().filter_map(|&(a, b, p, pad, rings)| {
+            let (sa, sb) = piece.clip((a as usize).min(len), (b as usize).min(len))?;
+            Some((sa as u32, sb as u32, p, pad, rings))
+        }).collect();
+        if !clipped.is_empty() { LinkFx(clipped).decos(piece.layout, piece.shaped(piece.end), s, origin, out); }
     }
 
     /// Backgrounds and underlines (device px, layout top-left at `origin`).
@@ -133,15 +143,17 @@ impl<S: 'static> Runtime<S> {
     /// Node `i`'s link line boxes in window points (x0, y0, x1, y1) for border box `rect`.
     pub(super) fn link_boxes(&self, i: usize, rect: [f32; 4]) -> Vec<(usize, [f32; 4])> {
         let n = &self.nodes[i];
-        let (Some(spec), Some(layout)) = (&n.text, n.text_layout.as_ref().and_then(TextLayout::single)) else { return Vec::new() };
+        let (Some(spec), Some(laid)) = (&n.text, &n.text_layout) else { return Vec::new() };
+        let flow = laid.view();
         let s = self.env.scale;
         let z = self.drawn_scale.get(i).copied().unwrap_or(1.0);
-        let [ox, oy] = origin(n, spec, layout, rect, s, z);
+        let [ox, oy] = origin(n, spec, flow, rect, s, z);
         let px = s / z.max(1e-4);
+        let len = layout_len(n, spec);
         let mut out = Vec::new();
         for (k, l) in spec.cold.links.iter().enumerate() {
             let (a, b) = drawn(n, l.start, l.end);
-            for (bb, _) in boxes(layout, layout_len(n, spec), a, b) {
+            for (bb, _) in flow.range_boxes((a as usize).min(len), (b as usize).min(len), false) {
                 out.push((k, [ox + bb.x0 as f32 / px, oy + bb.y0 as f32 / px, ox + bb.x1 as f32 / px, oy + bb.y1 as f32 / px]));
             }
         }

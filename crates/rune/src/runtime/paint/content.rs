@@ -406,164 +406,168 @@ impl<S: 'static> Runtime<S> {
                     }
                 }
             }
-            // Each paragraph a by-paragraph field shows (or its one layout), in the rows the clip
-            // shows with two ems either side for ink past the line box.
-            let single = laid.single().is_some();
+            // Each paragraph a by-paragraph field or by-line block shows (or its one layout), in
+            // the rows the clip shows with two ems either side for ink past the line box.
             let em = spec.spans.iter().filter_map(|sp| sp.size).fold(spec.style.size.max(spec.style.line_px()), f32::max);
             let pad = 2.0 * em * s + 2.0 / raster.max(1e-4);
             let rows = if tk > 1e-4 { (shown[0] - rest_origin[1]) / tk - pad..(shown[1] - rest_origin[1]) / tk + pad } else { f32::NEG_INFINITY..f32::INFINITY };
             if let crate::text::TextLayout::Paragraphs(p) = laid && p.waiting() {
                 self.text_rows.insert(n.id, (rows.start, rows.end));
             }
-            for piece in flow.pieces_in(rows.start, rows.end) {
+            let (base_origin, base_rest) = (origin, rest_origin);
+            let base_d_origin = if scale_motion == ScaleMotion::Still && tk == 1.0 { base_rest } else { [0.0, 0.0] };
+            let reveal = self.reveals.get(&n.id).filter(|_| spec.cold.advance_in.is_none()).and_then(RevealPhase::fade);
+            let drawn_len = n.elided.map_or(spec.content.len(), |e| e.drawn_len(spec.content.len()));
+            let pieces: Vec<_> = flow.pieces_in(rows.start, rows.end).collect();
+            self.deco_scratch.clear();
+            let mut pill_icons = Vec::new();
+            let mut bare_all = Vec::new();
+            let pill_bg = spec.cold.pill_colors.map_or(spec.rich_style().link.alpha(0.2), |(bg, _)| bg);
+            for piece in &pieces {
                 let layout = piece.layout;
-                let (origin, rest_origin) = ([origin[0], origin[1] + piece.y * tk], [rest_origin[0], rest_origin[1] + piece.y * tk]);
+                let d_origin = [base_d_origin[0], base_d_origin[1] + piece.y];
                 let (spans_here, pills, strikes) = (piece.spans(&spec.spans), piece.pills(&spec.cold.pills), piece.strikes(&spec.cold.strikes));
-                // Span backgrounds (inline code), strikethroughs, a selection over them, then glyphs.
-                let reveal = self.reveals.get(&n.id).filter(|_| spec.cold.advance_in.is_none()).and_then(RevealPhase::fade);
-                self.deco_scratch.clear();
-                let mut pill_icons = Vec::new();
-                let pill_bg = spec.cold.pill_colors.map_or(spec.rich_style().link.alpha(0.2), |(bg, _)| bg);
-                let d_origin = if scale_motion == ScaleMotion::Still && tk == 1.0 { rest_origin } else { [0.0, 0.0] };
+                let from = self.deco_scratch.len();
                 crate::text::pill_chips(layout, &pills, spec.style.size, s, d_origin, pill_bg, &mut self.deco_scratch, &mut pill_icons);
                 // Elided text draws its decorations over the drawn string's offsets.
                 let drawn_spans = n.elided.map(|e| e.spans(&spans_here));
                 let spans = drawn_spans.as_deref().unwrap_or(&spans_here);
                 let drawn_rings = n.elided.map(|e| e.rings(&spec.cold.rings));
                 self.text.decorations_with_rings(layout, spans, drawn_rings.as_deref().unwrap_or(&spec.cold.rings), spec.cold.span_radius, s, d_origin, &mut self.deco_scratch);
-                let drawn_len = n.elided.map_or(spec.content.len(), |e| e.drawn_len(spec.content.len()));
-                if !spec.cold.highlights.is_empty() {
-                    let drawn = n.elided.map(|e| e.highlights(&spec.cold.highlights));
-                    let marks = drawn.as_deref().unwrap_or(&spec.cold.highlights);
-                    let local;
-                    let marks = if piece.is_whole() { marks } else {
-                        local = marks.iter().filter_map(|h| {
-                            let (a, b) = piece.clip(h.start as usize, h.end as usize)?;
-                            Some(crate::TextHighlight { start: a as u32, end: b as u32, ..h.clone() })
-                        }).collect::<Vec<_>>();
-                        &local
-                    };
-                    let len = if piece.is_whole() { drawn_len } else { piece.shaped(piece.end) };
-                    self.text.highlight_decorations(layout, marks, len, s, d_origin, &mut self.deco_scratch);
-                }
                 if !strikes.is_empty() {
                     let drawn = n.elided.map(|e| e.strikes(&strikes));
                     self.text.strike_decorations(layout, spans, drawn.as_deref().unwrap_or(&strikes), color, s, d_origin, &mut self.deco_scratch);
                 }
-                link_fx.decos(layout, drawn_len, s, d_origin, &mut self.deco_scratch);
-                if !spec.cold.rings.is_empty() || spec.cold.highlights.iter().any(|h| h.ring.is_some()) {
-                    // Adjacent backgrounds overlap by bg_pad. Paint ringed chips after
-                    // plain fills so a neighboring fill cannot erase an inset edge;
-                    // keep underlines above both. No sorting on the ringless path.
-                    self.deco_scratch.sort_by_key(|d| if d.radius == 0.0 { 2 } else { u8::from(d.ring.is_some()) });
-                }
-                if d_origin != rest_origin || tk != 1.0 {
-                    for d in &mut self.deco_scratch {
-                        d.rect = scale_about(d.rect, rest_origin, d_origin, tk);
-                        d.radius *= tk;
-                        if let Some((_, rw)) = &mut d.ring {
-                            *rw *= tk;
-                        }
+                link_fx.decos_piece(piece, drawn_len, s, d_origin, &mut self.deco_scratch);
+                if !piece.is_whole() {
+                    for d in &mut self.deco_scratch[from..] {
+                        d.byte = piece.content(d.byte as usize) as u32;
                     }
                 }
-                if glide != [0.0; 2] {
-                    for d in &mut self.deco_scratch {
-                        d.rect[0] += glide[0];
-                        d.rect[1] += glide[1];
+                if !pills.is_empty() {
+                    let mut bare = Vec::new();
+                    crate::text::bare_icons(layout, &pills, s, d_origin, &mut bare);
+                    bare_all.extend(bare.into_iter().map(|(k, at, px)| (pills[k].clone(), at, px)));
+                }
+            }
+            if !spec.cold.highlights.is_empty() {
+                let drawn = n.elided.map(|e| e.highlights(&spec.cold.highlights));
+                let marks = drawn.as_deref().unwrap_or(&spec.cold.highlights);
+                self.text.highlight_decorations_flow(flow, marks, drawn_len, s, base_d_origin, rows.clone(), &mut self.deco_scratch);
+            }
+            if !spec.cold.rings.is_empty() || spec.cold.highlights.iter().any(|h| h.ring.is_some()) {
+                // Adjacent backgrounds overlap by bg_pad. Paint ringed chips after
+                // plain fills so a neighboring fill cannot erase an inset edge;
+                // keep underlines above both. No sorting on the ringless path.
+                self.deco_scratch.sort_by_key(|d| if d.radius == 0.0 { 2 } else { u8::from(d.ring.is_some()) });
+            }
+            if base_d_origin != base_rest || tk != 1.0 {
+                for d in &mut self.deco_scratch {
+                    d.rect = scale_about(d.rect, base_rest, base_d_origin, tk);
+                    d.radius *= tk;
+                    if let Some((_, rw)) = &mut d.ring {
+                        *rw *= tk;
                     }
                 }
-                for d in &self.deco_scratch {
-                    let alpha = if d.ring.is_some() {
-                        reveal.map_or(1.0, |fade| fade.alpha(d.byte, self.scene.store().node_time(n.id)))
-                    } else { 1.0 };
-                    let c = premul(d.color, o * alpha, srgb);
-                    let mut inst = rect_inst(d.rect, c, d.radius, clip, fade);
-                    if let Some((rc, rw)) = d.ring {
-                        inst.border = premul(rc, o * alpha, srgb);
-                        inst.params[0] = rw;
-                        // The opacity the colours carry, so the ring hides the chip's fill by its own alpha.
-                        inst.params[3] = o * alpha;
-                    }
+            }
+            if glide != [0.0; 2] {
+                for d in &mut self.deco_scratch {
+                    d.rect[0] += glide[0];
+                    d.rect[1] += glide[1];
+                }
+            }
+            for d in &self.deco_scratch {
+                let alpha = if d.ring.is_some() {
+                    reveal.map_or(1.0, |fade| fade.alpha(d.byte, self.scene.store().node_time(n.id)))
+                } else { 1.0 };
+                let c = premul(d.color, o * alpha, srgb);
+                let mut inst = rect_inst(d.rect, c, d.radius, clip, fade);
+                if let Some((rc, rw)) = d.ring {
+                    inst.border = premul(rc, o * alpha, srgb);
+                    inst.params[0] = rw;
+                    // The opacity the colours carry, so the ring hides the chip's fill by its own alpha.
+                    inst.params[3] = o * alpha;
+                }
+                self.instances.push(inst);
+            }
+            let pill_fg = spec.cold.pill_colors.and_then(|(_, fg)| fg).unwrap_or(color);
+            for (icon, px, at, fg) in pill_icons {
+                let pill_fg = fg.unwrap_or(pill_fg);
+                let at = [
+                    base_rest[0] + (at[0] - base_d_origin[0]) * tk + glide[0],
+                    base_rest[1] + (at[1] - base_d_origin[1]) * tk + glide[1],
+                ];
+                let drawn = px as f32 * tk;
+                let px_r = (px as f32 * raster).round().max(1.0) as u32;
+                if let Some(q) = self.text.icon_quad(icon, px_r, at) {
+                    let inst = icon_inst(&q, at, drawn, 0.0, premul(pill_fg, o, srgb), clip, fade);
+                    if self.paint_rank.is_some() && inst.uv[2] > 0.0 { self.icon_aprons.push(apron_key(&inst)); }
                     self.instances.push(inst);
                 }
-                let pill_fg = spec.cold.pill_colors.and_then(|(_, fg)| fg).unwrap_or(color);
-                for (icon, px, at, fg) in pill_icons {
-                    let pill_fg = fg.unwrap_or(pill_fg);
-                    let at = [
-                        rest_origin[0] + (at[0] - d_origin[0]) * tk + glide[0],
-                        rest_origin[1] + (at[1] - d_origin[1]) * tk + glide[1],
-                    ];
-                    let drawn = px as f32 * tk;
-                    let px_r = (px as f32 * raster).round().max(1.0) as u32;
-                    if let Some(q) = self.text.icon_quad(icon, px_r, at) {
-                        let inst = icon_inst(&q, at, drawn, 0.0, premul(pill_fg, o, srgb), clip, fade);
-                        if self.paint_rank.is_some() && inst.uv[2] > 0.0 { self.icon_aprons.push(apron_key(&inst)); }
-                        self.instances.push(inst);
+            }
+            for (pill, at, px) in bare_all {
+                let Some(b) = pill.bare.as_deref() else { continue };
+                let at = [
+                    base_rest[0] + (at[0] - base_d_origin[0]) * tk + glide[0],
+                    base_rest[1] + (at[1] - base_d_origin[1]) * tk + glide[1],
+                ];
+                let drawn = px * tk;
+                // An image fits the square, keeping its shape; a glyph takes the text's colour.
+                if let Some(pixels) = &b.image
+                    && let (w, h) = pixels.size()
+                    && w > 0
+                    && h > 0
+                {
+                    let (w, h) = (w as f32, h as f32);
+                    let k = drawn / w.max(h);
+                    let rect = [at[0] + (drawn - w * k) * 0.5, at[1] + (drawn - h * k) * 0.5, w * k, h * k];
+                    if let Some(image) = self.images.place(pixels, [rect[2], rect[3]]) {
+                        self.instances.push(Instance {
+                            rect,
+                            radii: [(b.radius * s * tk).min(rect[2].min(rect[3]) * 0.5); 4],
+                            fill: [0.0, 0.0, 0.0, o],
+                            border: [0.0; 4],
+                            params: [image.page as f32, KIND_IMAGE, image.premultiplied as u8 as f32, 1.0],
+                            uv: image.rect.map(|v| v as f32),
+                            clip,
+                            fade: crate::render::pack_fade(fade, clip, clip),
+                        });
                     }
+                    continue;
                 }
-                let mut bare = Vec::new();
-                crate::text::bare_icons(layout, &pills, s, d_origin, &mut bare);
-                for (k, at, px) in bare {
-                    let pill = &pills[k];
-                    let Some(b) = pill.bare.as_deref() else { continue };
-                    let at = [
-                        rest_origin[0] + (at[0] - d_origin[0]) * tk + glide[0],
-                        rest_origin[1] + (at[1] - d_origin[1]) * tk + glide[1],
-                    ];
-                    let drawn = px * tk;
-                    // An image fits the square, keeping its shape; a glyph takes the text's colour.
-                    if let Some(pixels) = &b.image
-                        && let (w, h) = pixels.size()
-                        && w > 0
-                        && h > 0
-                    {
-                        let (w, h) = (w as f32, h as f32);
-                        let k = drawn / w.max(h);
-                        let rect = [at[0] + (drawn - w * k) * 0.5, at[1] + (drawn - h * k) * 0.5, w * k, h * k];
-                        if let Some(image) = self.images.place(pixels, [rect[2], rect[3]]) {
-                            self.instances.push(Instance {
-                                rect,
-                                radii: [(b.radius * s * tk).min(rect[2].min(rect[3]) * 0.5); 4],
-                                fill: [0.0, 0.0, 0.0, o],
-                                border: [0.0; 4],
-                                params: [image.page as f32, KIND_IMAGE, image.premultiplied as u8 as f32, 1.0],
-                                uv: image.rect.map(|v| v as f32),
-                                clip,
-                                fade: crate::render::pack_fade(fade, clip, clip),
-                            });
-                        }
-                        continue;
-                    }
-                    let Some(icon) = pill.icon else { continue };
-                    let px_r = (px * raster).round().max(1.0) as u32;
-                    if let Some(q) = self.text.icon_quad(icon, px_r, at) {
-                        let inst = icon_inst(&q, at, drawn, 0.0, premul(pill.fg.unwrap_or(color), o, srgb), clip, fade);
-                        if self.paint_rank.is_some() && inst.uv[2] > 0.0 { self.icon_aprons.push(apron_key(&inst)); }
-                        self.instances.push(inst);
-                    }
+                let Some(icon) = pill.icon else { continue };
+                let px_r = (px * raster).round().max(1.0) as u32;
+                if let Some(q) = self.text.icon_quad(icon, px_r, at) {
+                    let inst = icon_inst(&q, at, drawn, 0.0, premul(pill.fg.unwrap_or(color), o, srgb), clip, fade);
+                    if self.paint_rank.is_some() && inst.uv[2] > 0.0 { self.icon_aprons.push(apron_key(&inst)); }
+                    self.instances.push(inst);
                 }
-                if spec.selectable && single {
-                    // A mark keeps the active selection's highlight, whatever the window's focus, and
-                    // the glyphs their own ink, as a custom highlight's background does.
-                    let highlight = spec.cold.selection_style.map_or(spec.cold.selection, |st| st.pick(true).0);
-                    let fill = premul(highlight, o, srgb);
-                    for &(_, a, b) in mark_ranges.iter().filter(|m| m.0 == i) {
-                        let laid = |a, b| n.elided.map_or((a, b), |e| e.range(a, b));
-                        text_marks::push_mark(&mut self.instances, layout, &spec.content, (a, b), laid, origin, tk, fill, clip, fade);
-                    }
+            }
+            if spec.selectable && n.input.is_none() {
+                // A mark keeps the active selection's highlight, whatever the window's focus, and
+                // the glyphs their own ink, as a custom highlight's background does.
+                let highlight = spec.cold.selection_style.map_or(spec.cold.selection, |st| st.pick(true).0);
+                let fill = premul(highlight, o, srgb);
+                for &(_, a, b) in mark_ranges.iter().filter(|m| m.0 == i) {
+                    let map = |a, b| n.elided.map_or((a, b), |e| e.range(a, b));
+                    text_marks::push_mark(&mut self.instances, flow, &spec.content, (a, b), map, base_origin, tk, fill, clip, fade);
                 }
-                if spec.selectable && single && let Some((a, b)) = selectable::range_in(sel_ranges, i) {
+                if let Some((a, b)) = selectable::range_in(sel_ranges, i) {
                     let (a, b) = n.elided.map_or((a, b), |e| e.range(a, b));
                     // `::selection` with a colour recolours the selected glyphs, as a field's does.
                     let (highlight, ink) = spec.cold.selection_style.map_or((spec.cold.selection, None), |st| st.pick(self.window_focused != Some(false)));
-                    selectable::push_selection(&mut self.instances, layout, a, b, origin, tk, premul(highlight, o, srgb), s, clip, fade);
+                    selectable::push_selection(&mut self.instances, flow, a, b, base_origin, tk, premul(highlight, o, srgb), s, clip, fade);
                     if let Some(c) = ink {
                         selected_ink = Some((a, b, premul(c, o, srgb)));
                     }
                 }
+            }
+            for piece in &pieces {
+                let layout = piece.layout;
+                let spans_here = piece.spans(&spec.spans);
                 self.glyph_scratch.clear();
                 self.text.set_glyph_inks(color, &spans_here);
-                let origin = rest_origin;
+                let origin = [base_rest[0], base_rest[1] + piece.y * tk];
                 self.text.set_glide(glide);
                 let r_origin = if scale_motion == ScaleMotion::Still { origin } else { [0.0, 0.0] };
                 let has_hl_fg = spec.cold.highlights.iter().any(|h| h.fg.is_some());
@@ -666,24 +670,25 @@ impl<S: 'static> Runtime<S> {
                     {
                         f = premul(c, o, srgb);
                     }
+                    let cbyte = piece.content(q.byte as usize);
                     if let Some((a, b, c)) = selected_ink
-                        && (a..b).contains(&piece.content(q.byte as usize))
+                        && (a..b).contains(&cbyte)
                     {
                         f = c;
                     }
                     if has_hl_fg
                         && let Some(c) = spec.cold.highlights.iter().rev().find_map(|h| {
                             let (a, b) = n.elided.map_or((h.start as usize, h.end as usize), |e| e.mark(h.start as usize, h.end as usize, false));
-                            (a..b).contains(&piece.content(q.byte as usize)).then_some(h.fg).flatten()
+                            (a..b).contains(&cbyte).then_some(h.fg).flatten()
                         })
                     {
                         f = premul(c, o, srgb);
                     }
-                    if !link_fx.is_empty() && let Some(c) = link_fx.glyph_color(q.byte) {
+                    if !link_fx.is_empty() && let Some(c) = link_fx.glyph_color(cbyte as u32) {
                         f = premul(c, o, srgb);
                     }
                     if let Some(fade) = reveal {
-                        let a = fade.alpha(q.byte, self.scene.store().node_time(n.id));
+                        let a = fade.alpha(cbyte as u32, self.scene.store().node_time(n.id));
                         if a <= 0.0 {
                             continue;
                         }
@@ -784,28 +789,4 @@ impl<S: 'static> Runtime<S> {
             }
         }
     }
-}
-
-/// A misspelled word's marker: Chromium's red, on macOS a row of dots and elsewhere a wavy line.
-/// (Linear light: #FF3B30 on macOS, #FF0000 elsewhere.)
-const SPELLING: Color = if cfg!(target_os = "macos") { Color { r: 1.0, g: 0.0437, b: 0.0296, a: 1.0 } } else { Color { r: 1.0, g: 0.0, b: 0.0, a: 1.0 } };
-
-/// The spelling marker from device x `x0` to `x1`, its top at `y`, `k` device px a point: on
-/// macOS 3 pt dots every 4 pt, elsewhere Chromium's 1 pt line waving 2 pt down and back every 6 pt.
-#[allow(clippy::too_many_arguments)]
-fn push_spelling_marker(out: &mut Vec<Instance>, x0: f32, x1: f32, y: f32, k: f32, color: [f32; 4], clip: [f32; 4], fade: [f32; 4]) {
-    if cfg!(target_os = "macos") {
-        let (d, step) = (3.0 * k, 4.0 * k);
-        let count = ((x1 - x0 - d) / step).floor().max(0.0) as usize + 1;
-        let x = x0 + ((x1 - x0) - (count - 1) as f32 * step - d) / 2.0;
-        out.extend((0..count).map(|n| rect_inst([x + n as f32 * step, y, d, d], color, d / 2.0, clip, fade)));
-        return;
-    }
-    const WAVE: [f32; 6] = [0.0, 1.0, 2.0, 2.0, 1.0, 0.0];
-    let t = k.max(1.0).round();
-    let start = x0.round();
-    out.extend((0..(x1.round() - start).max(0.0) as usize).map(|n| {
-        let wave = WAVE[(n as f32 / k) as usize % WAVE.len()];
-        rect_inst([start + n as f32, (y + wave * k).round(), 1.0, t], color, 0.0, clip, fade)
-    }));
 }

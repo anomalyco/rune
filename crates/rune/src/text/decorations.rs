@@ -259,4 +259,113 @@ impl TextSystem {
             }
         }
     }
+
+    /// [`Self::highlight_decorations`] over a [`TextFlow`] in visible device rows `rows`,
+    /// preserving the trailing newline highlight box where a multi-line highlight crosses `\n`.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn highlight_decorations_flow(
+        &self,
+        flow: TextFlow<'_>,
+        highlights: &[TextHighlight],
+        len: usize,
+        scale: f32,
+        origin: [f32; 2],
+        rows: std::ops::Range<f32>,
+        out: &mut Vec<PaintedDeco>,
+    ) {
+        let pl = match flow {
+            TextFlow::Single(l) => return self.highlight_decorations(l, highlights, len, scale, origin, out),
+            TextFlow::Paragraphs(pl) => pl,
+        };
+        if highlights.is_empty() {
+            return;
+        }
+        let radius = 4.0 * scale;
+        for h in highlights {
+            let (a, b) = ((h.start as usize).min(len), (h.end as usize).min(len));
+            if a >= b || (h.bg.a <= 0.0 && h.ring.is_none()) {
+                continue;
+            }
+            let pad = h.pad * scale;
+            let ring = h.ring.map(|(c, rw)| (c, rw * scale));
+            let byte = (b as u32).saturating_sub(1);
+            let from = pl.paragraphs.partition_point(|q| q.end < a);
+            for (k, q) in pl.paragraphs.iter().enumerate().skip(from).take_while(|(_, q)| q.start <= b) {
+                if q.y + q.height < rows.start || q.y > rows.end {
+                    continue;
+                }
+                let p = Piece::of_paragraph(k, q, pl.disjoint_spans);
+                let py = origin[1] + p.y;
+                let clipped = p.clip(a, b);
+                let mut boxes = clipped.map_or_else(Vec::new, |(sa, sb)| range_boxes(p.layout, sa, sb, false));
+                if k + 1 < pl.paragraphs.len() && a <= p.end && p.end < b {
+                    if let Some((li, line)) = p.layout.lines().enumerate().last().filter(|_| !p.is_blank()) {
+                        let m = line.metrics();
+                        let (top, bot) = (m.block_min_coord.min(m.content_block_min_coord) as f64, m.block_max_coord.max(m.content_block_max_coord) as f64);
+                        let ws = line.runs().last().map_or(pl.newline as f64, |r| {
+                            let fm = r.font_metrics();
+                            (fm.ascent as f64 + fm.descent as f64) * 0.25
+                        });
+                        let rtl = p.flow == crate::el::Flow::Rtl;
+                        let on_line = boxes.iter_mut().filter(|(_, idx)| *idx == li);
+                        let edge = if rtl { on_line.min_by(|l, r| l.0.x0.total_cmp(&r.0.x0)) } else { on_line.max_by(|l, r| l.0.x1.total_cmp(&r.0.x1)) };
+                        let x = (m.inline_min_coord + m.offset) as f64;
+                        match (edge, rtl) {
+                            (Some((bb, _)), false) => bb.x1 += ws,
+                            (Some((bb, _)), true) => bb.x0 -= ws,
+                            (None, false) => boxes.push((parley::BoundingBox::new(x + m.advance as f64, top, x + m.advance as f64 + ws, bot), li)),
+                            (None, true) => boxes.push((parley::BoundingBox::new(x - ws, top, x, bot), li)),
+                        }
+                    } else {
+                        let x = if p.flow == crate::el::Flow::Rtl { (pl.max_width.unwrap_or(pl.width) - pl.newline).max(0.0) } else { 0.0 };
+                        let base = py + pl.blank_box[0];
+                        let (top, bot) = ((base - pl.blank_box[1] - 1.0 * scale).round(), (base + pl.blank_box[2] + 1.0 * scale).round());
+                        let rect = [origin[0] + x - pad, top, pl.newline + 2.0 * pad, (bot - top).max(0.0)];
+                        out.push(PaintedDeco::new(Deco { rect, color: h.bg, radius }, ring, byte));
+                        continue;
+                    }
+                }
+                let (sa, sb) = clipped.unwrap_or((p.shaped(p.end), p.shaped(p.end)));
+                let mut last: Option<(usize, usize)> = None;
+                for (bb, line_idx) in boxes {
+                    let w = (bb.x1 - bb.x0) as f32;
+                    if w <= 0.0 {
+                        continue;
+                    }
+                    let x0 = origin[0] + bb.x0 as f32;
+                    let (mut top, mut bot) = ((py + bb.y0 as f32).round(), (py + bb.y1 as f32).round());
+                    if let Some(l) = p.layout.get(line_idx) {
+                        let base = py + l.metrics().baseline;
+                        let (mut asc, mut desc) = (0.0f32, 0.0f32);
+                        for run in l.runs() {
+                            let r = run.text_range();
+                            if (r.start < sb && sa < r.end) || (sa == sb && r.end == sb) {
+                                let fm = run.font_metrics();
+                                (asc, desc) = (asc.max(fm.ascent), desc.max(fm.descent.abs()));
+                            }
+                        }
+                        if asc > 0.0 || desc > 0.0 {
+                            top = (base - asc - 1.0 * scale).round();
+                            bot = (base + desc + 1.0 * scale).round();
+                        }
+                    }
+                    let rect = [x0 - pad, top, w + 2.0 * pad, (bot - top).max(0.0)];
+                    let merge = last.filter(|&(li, _)| li == line_idx).is_some_and(|(_, idx)| {
+                        let (d, _) = out[idx].paint();
+                        (d.rect[0] + d.rect[2] - rect[0] - 2.0 * pad).abs() < 1.0
+                    });
+                    if merge {
+                        let (d, _) = out[last.unwrap().1].paint();
+                        if rect[3] > d.rect[3] {
+                            (d.rect[1], d.rect[3]) = (rect[1], rect[3]);
+                        }
+                        d.rect[2] = rect[0] + rect[2] - d.rect[0];
+                    } else {
+                        last = Some((line_idx, out.len()));
+                        out.push(PaintedDeco::new(Deco { rect, color: h.bg, radius }, ring, byte));
+                    }
+                }
+            }
+        }
+    }
 }

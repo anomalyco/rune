@@ -324,7 +324,10 @@ pub(super) fn release_kept_layouts(
         let Some(next) = nodes.get_mut(now_idx).filter(|n| n.id == o.id) else { continue };
         // A by-paragraph field lays its next text out from this one, keeping the paragraphs
         // they share; measuring reads it there, and laying the text out replaces it.
-        if next.text_layout.is_none() && next.input.is_some() && let Some(l @ TextLayout::Paragraphs(_)) = laid {
+        if next.text_layout.is_none()
+            && (next.input.is_some() || next.text.as_ref().is_some_and(|t| t.by_paragraph(false)))
+            && let Some(l @ TextLayout::Paragraphs(_)) = laid
+        {
             next.text_layout = Some(l);
         }
         if let (Some((_, shape)), Some(now)) = (was.shape, next.text.as_deref()) && now.shape != was.shape && edited(&was.content, &now.content) {
