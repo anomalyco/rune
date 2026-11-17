@@ -53,9 +53,9 @@ pub(super) fn run(name: String, work: Box<dyn FnOnce() + Send>) -> std::io::Resu
 
 fn worker() {
     let mut s = lock();
-    // Whether this thread has tidied up since its last task (`task::on_idle`): a kept thread
-    // then waits with no timer, so an idle app's kept threads don't wake every LINGER.
-    let mut tidied = false;
+    // Kept threads arm a tidy only after work while `task::on_idle` is set, at most once per
+    // `IDLE_MIN_GAP`, and otherwise wait with no timer. Overflow threads still exit after `LINGER`.
+    let mut tidy = super::Tidy::new();
     loop {
         if let Some((name, work)) = s.jobs.pop_front() {
             drop(s);
@@ -63,18 +63,27 @@ fn worker() {
             // A task that panics ends itself, not the thread (the panic hook has reported it).
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(work));
             describe("idle");
-            tidied = false;
+            tidy = tidy.on_work(crate::time::Instant::now());
             s = lock();
             continue;
         }
         s.idle += 1;
-        let timed_out = if tidied {
-            s = POOL.1.wait(s).unwrap_or_else(|e| e.into_inner());
-            false
-        } else {
-            let (next, wait) = POOL.1.wait_timeout(s, LINGER).unwrap_or_else(|e| e.into_inner());
-            s = next;
-            wait.timed_out()
+        let now = crate::time::Instant::now();
+        let wait = match (s.threads > KEEP, tidy.wait(now)) {
+            (true, Some(due)) => Some(LINGER.min(due)),
+            (true, None) => Some(LINGER),
+            (false, due) => due,
+        };
+        let timed_out = match wait {
+            Some(dur) => {
+                let (next, res) = POOL.1.wait_timeout(s, dur).unwrap_or_else(|e| e.into_inner());
+                s = next;
+                res.timed_out()
+            }
+            None => {
+                s = POOL.1.wait(s).unwrap_or_else(|e| e.into_inner());
+                false
+            }
         };
         s.idle -= 1;
         if timed_out && s.jobs.is_empty() {
@@ -82,10 +91,11 @@ fn worker() {
                 s.threads -= 1;
                 return;
             }
-            drop(s);
-            super::idle();
-            tidied = true;
-            s = lock();
+            if tidy.take_due(crate::time::Instant::now()) {
+                drop(s);
+                super::idle();
+                s = lock();
+            }
         }
     }
 }

@@ -19,6 +19,9 @@ pub(crate) const LARGE_BYTES: u64 = 8 << 20;
 /// How long the recorder waits with nothing to write before [`Config::on_idle`] runs.
 pub const IDLE: std::time::Duration = std::time::Duration::from_secs(10);
 
+/// Minimum gap between two [`Config::on_idle`] runs on the recorder thread.
+pub const IDLE_MIN_GAP: std::time::Duration = std::time::Duration::from_secs(180);
+
 /// One process/launch per directory. Use separate directories for dev and captures.
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -40,8 +43,9 @@ impl Config {
         self
     }
 
-    /// Runs once on the recorder's thread after it has waited [`IDLE`] with nothing to write (an
-    /// app's allocator giving back that thread's free pages), then the thread waits with no timer.
+    /// Runs once per idle spell (at least [`IDLE_MIN_GAP`] after the previous tidy) on the
+    /// recorder's thread after [`IDLE`] with no new samples or pending writes, then the thread
+    /// waits with no timer.
     pub fn on_idle(mut self, idle: fn()) -> Self {
         self.idle = Some(idle);
         self
