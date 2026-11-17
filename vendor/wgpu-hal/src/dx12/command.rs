@@ -87,17 +87,20 @@ impl Drop for super::CommandEncoder {
 }
 
 impl super::CommandEncoder {
-    /// Rune: the free allocator of this kind that has recorded the most; else one of the other
-    /// kind (for pending writes the least used frame allocator, for a frame the most used); else a
-    /// new one. wgpu's pending writes keep their own, so a frame's doesn't go to a list of copies
-    /// while there's another, and no allocator waits unused while a new one is made.
+    /// Rune: the free allocator of this kind that has recorded the most; for a frame, else a
+    /// pending-writes one; else a new one. wgpu's pending writes never take a frame's: wgpu-core
+    /// opens a new pending-writes encoder at every submission, often before the last one's
+    /// allocator is back, and one that took a warmed frame allocator would file it as pending for
+    /// good. If wgpu ever drops the label (`DISCARD_HAL_LABELS`), every take looks like a frame's
+    /// and the allocators `reset_all` files as pending are still taken before a new one is made.
     fn take_allocator(&self, pending_writes: bool) -> Result<super::AllocatorSlot, crate::DeviceError> {
         let mut pool = self.shared.allocators.lock();
-        let rank = |s: &super::AllocatorSlot| match (s.pending_writes == pending_writes, pending_writes) {
-            (true, _) | (false, false) => (s.pending_writes == pending_writes, s.recorded),
-            (false, true) => (false, u32::MAX - s.recorded),
-        };
-        let pick = pool.iter().enumerate().max_by_key(|(_, s)| rank(s)).map(|(i, _)| i);
+        let pick = pool
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| !pending_writes || s.pending_writes)
+            .max_by_key(|(_, s)| (s.pending_writes == pending_writes, s.recorded))
+            .map(|(i, _)| i);
         if let Some(i) = pick {
             return Ok(pool.swap_remove(i));
         }
