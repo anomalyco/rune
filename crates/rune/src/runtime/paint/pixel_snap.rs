@@ -113,10 +113,10 @@ pub(super) struct Inherit {
     /// The translation in points from scrolls, sticky shifts and growth rows above, which
     /// snaps as a whole.
     pub rigid: [f32; 2],
-    /// `rigid` less the growth rows' offsets (`row_dy`, which settle to zero) and the scrolls'. A
-    /// text lays out from its exact place against this, so while rows glide or a list scrolls it
-    /// moves in whole pixels with its box, as one piece with the lines and borders beside it, and
-    /// lands where it rests.
+    /// `rigid` less the scrolls' offsets and the growth offsets (`row_dy`: rows' and stacks'
+    /// windows'). A text lays out from its exact place against this, so while rows glide or a
+    /// list scrolls it moves in whole pixels with its box, as one piece with the lines and borders
+    /// beside it, and at rest it sits against its box the same way wherever the list is.
     pub steady: [f32; 2],
     /// The origin in points of the paint containment above (`El::paint_contained`), which is
     /// part of `rigid`: what draws from its own exact box rounds against it too.
@@ -151,11 +151,10 @@ impl Inherit {
         self.rigid[axis] += by;
     }
 
-    /// A growth offset `dy`: a stack's own (`stack`) is its virtual window's, which holds still
-    /// like a scroll's; a row's glides, which moves its boxes but not what its text lays out
-    /// against.
-    pub(super) fn grow(&mut self, dy: f32, stack: bool) {
-        if stack { self.shift(1, dy) } else { self.rigid[1] += dy }
+    /// A growth offset `dy`: a row's, which glides, or a stack's own, its virtual window's, which
+    /// moves as a scroll does. Either moves its boxes but not what its text lays out against.
+    pub(super) fn grow(&mut self, dy: f32) {
+        self.rigid[1] += dy;
     }
 
     /// `El::paint_contained` at `o` (points): its children snap against it, rounded on its own.

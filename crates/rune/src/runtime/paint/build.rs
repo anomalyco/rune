@@ -171,7 +171,7 @@ impl<S: 'static> Runtime<S> {
                 pinh.paint_opacity *= shown;
             }
             pinh.dy += self.row_dy[i];
-            pinh.snap.grow(self.row_dy[i], n.growth.is_some());
+            pinh.snap.grow(self.row_dy[i]);
             if let Some(a) = &n.above
                 && let Some(j) = anchor_index(&self.nodes, i, a)
             {
