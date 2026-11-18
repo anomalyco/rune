@@ -324,8 +324,10 @@ fn an_empty_field_answers_as_a_short_one() {
     #[cfg(target_os = "linux")]
     assert_selections_on_runs(&tree);
     // The first character typed moves the caret from the empty field into its run.
-    rt.state.edit = TextEdit::new("h");
-    rt.state.edit.focused = true;
+    rt.update(|s, _| {
+        s.edit = TextEdit::new("h");
+        s.edit.focused = true;
+    });
     rt.frame(0.0);
     let tree = rt.accessibility_tree();
     let (_, note) = tree.nodes.iter().find(|(_, n)| n.author_id() == Some("note")).unwrap();

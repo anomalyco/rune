@@ -973,14 +973,17 @@ impl<S: 'static> Runtime<S> {
                         if let Some(ln) = cp.layout.get(li)
                             && let Some(mut cl) = build_visual_line(&cp, ln, content, s, origin)
                         {
-                            let br = if content.as_bytes().get(cp.end..cp.end + 2) == Some(b"\r\n") {
+                            // A whole layout's piece ends at `usize::MAX`, past any break.
+                            let br = if cp.is_whole() {
+                                0
+                            } else if content.as_bytes().get(cp.end..cp.end + 2) == Some(b"\r\n") {
                                 2
                             } else if content.as_bytes().get(cp.end) == Some(&b'\n') {
                                 1
                             } else {
                                 0
                             };
-                            if !cp.is_whole() && li + 1 == total && br > 0 {
+                            if li + 1 == total && br > 0 {
                                 cl.range.end += br;
                                 cl.lengths.push(br as u8);
                                 cl.positions.push(if cl.rtl { 0.0 } else { cl.rect[2] });
