@@ -65,20 +65,43 @@ impl<S: 'static> Runtime<S> {
         }
         n.text_cut(self.env.scale).hash(&mut h);
         let secure = n.is_secure();
-        secure.hash(&mut h);
+        let long_field = self.a11y_uses_long_field(i);
+        (secure, long_field).hash(&mut h);
+        let long_key = long_field.then(|| {
+            n.text.as_deref().and_then(|t| t.shape.map(|(_, k)| k))
+                .or_else(|| n.text_layout.as_ref().and_then(crate::text::TextLayout::content_key))
+        }).flatten();
         if let Some(t) = n.text.as_deref() {
-            if !secure { t.content.hash(&mut h); }
+            if !secure {
+                match long_key {
+                    Some(k) => (k, t.content.len()).hash(&mut h),
+                    None => t.content.hash(&mut h),
+                }
+            }
             (t.redacted, t.selectable, t.cold.on_link.is_some(), t.cold.on_link_secondary.is_some(), t.cold.links.len()).hash(&mut h);
             for l in &t.cold.links { (l.start, l.end, &l.id, l.role, &l.label).hash(&mut h); }
         }
-        // A text's lines come from its layout and where it scrolled.
-        n.text_layout.as_ref().map(crate::text::TextLayout::address).hash(&mut h);
+        // A text's lines come from its layout and where it scrolled; a long field's drawn lines
+        // live under `lines_box_id`, whose own fingerprint tracks its layout and scroll band.
+        if !long_field {
+            n.text_layout.as_ref().map(crate::text::TextLayout::address).hash(&mut h);
+        }
         n.elided.map(|e| (e.head, e.tail)).hash(&mut h);
         if let Some(input) = n.input.as_deref() {
             let e = &input.edit;
-            if !secure { e.text.hash(&mut h); }
+            if !secure && (long_key.is_none() || e.preedit().is_some()) {
+                if long_field {
+                    // During IME composition on a long field, `t.content` is the display string and
+                    // `long_key` already hashed it; only hash `e.text.len()` + preedit metadata.
+                    e.text.len().hash(&mut h);
+                } else {
+                    e.text.hash(&mut h);
+                }
+            }
             (e.anchor, e.focus, e.preedit().map(|p| (p.0.len(), p.1)), e.focused, &input.placeholder, input.single_line, input.access.is_some()).hash(&mut h);
-            self.input_scroll.get(&n.path).map(|v| v.to_bits()).hash(&mut h);
+            if !long_field {
+                self.input_scroll.get(&n.path).map(|v| v.to_bits()).hash(&mut h);
+            }
         }
         let handlers = n.handlers.get();
         (handlers.is_some_and(|h| h.on_press.is_some()), handlers.is_some_and(|h| h.on_secondary_press.is_some()),
