@@ -19,9 +19,10 @@ pub(crate) fn export<S: 'static>(app: crate::app::App<S>, args: &Args) -> Result
         Some(path) => std::fs::read_to_string(path).map_err(|e| format!("--html-template {}: {e}", path.display()))?,
         None => DEFAULT_TEMPLATE.to_owned(),
     };
-    let (spec, state, _shared) = app.into_parts(args.scene.as_deref());
+    let (spec, state, _shared, runtime) = app.into_parts(args.scene.as_deref());
     let dark = args.theme.as_deref() != Some("light");
     let mut rt = runtime_for(&spec, state, (widths[0], height), Env::new(dark, scale), std::sync::Arc::new(|| {}));
+    rt.configure(runtime);
     rt.fit_height = fit_height;
     if document { rt.page_mode(); }
     let mut taken: Vec<(f32, Vec<ExportNode>)> = Vec::with_capacity(widths.len());

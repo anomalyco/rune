@@ -113,30 +113,19 @@ impl<S: 'static> Window<S> {
         if !selected { inherited.scene = None; inherited.playground = None; inherited.variant = None; }
         let own = app.resolve_args(inherited);
         let comp = app.compositor.take();
-        let (open, keep_running, on_close, on_focus, on_reopen) = (app.open, app.keep_running, app.on_close, app.on_focus, app.on_reopen);
-        let (on_mods, on_visibility) = (app.on_mods, app.on_visibility);
-        let on_ime = app.on_ime;
+        let (open, keep_running, on_close, on_reopen) = (app.open, app.keep_running, app.on_close, app.on_reopen);
         let native = std::mem::take(&mut app.macos_window);
-        let (modifier_keys, tab_visits_controls, srgb_blend) = (app.modifier_keys, app.tab_visits_controls, app.srgb_blend);
-        let font_smoothing = app.font_smoothing;
         let (chrome, titlebar) = (app.chrome, app.titlebar);
         let playground = app.playground.take();
-        let (spec, state, shared) = app.into_parts(own.scene.as_deref());
+        let (spec, state, shared, runtime) = app.into_parts(own.scene.as_deref());
         let shortcuts = crate::shortcuts::Guard::attach(&shared, Arc::new(|| {}), true, false);
         let menus = crate::native_menu::Guard::attach(&shared, true);
         let size = own.size.unwrap_or(spec.size);
         let dark = own.theme.as_deref() != Some("light");
         let mut rt = crate::tooling::runtime_for(&spec, state, size, Env::new(dark, scale), Arc::new(|| {}));
         crate::playground::attach(&mut rt, playground, &spec, own.playground.clone(), own.variant.clone(), false);
-        rt.on_focus = on_focus;
-        rt.on_mods = on_mods;
-        rt.on_visibility = on_visibility;
-        rt.app_ime.hook = on_ime;
-        rt.set_modifier_keys(modifier_keys);
-        rt.set_tab_visits_controls(tab_visits_controls);
+        rt.configure(runtime);
         if let Some(bars) = own.scroll_bars.or(args.scroll_bars) { rt.set_system_scroll_bars(bars); }
-        rt.set_srgb_blend(srgb_blend);
-        rt.set_font_smoothing(font_smoothing);
         rt.headless_chrome(chrome, titlebar, options.borderless);
         rt.transparent = options.transparent;
         rt.track_marks = comp.is_some();

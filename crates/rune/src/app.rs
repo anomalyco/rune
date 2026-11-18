@@ -67,11 +67,7 @@ pub struct App<S: 'static> {
     pub(crate) on_close: Option<fn(&mut S, &mut Tx)>,
     pub(crate) on_quit: Option<fn(&mut S, &mut Tx)>,
     pub(crate) turn_scope: Option<TurnScope<S>>,
-    pub(crate) on_focus: Option<fn(&mut S, bool, &mut Tx)>,
-    pub(crate) on_mods: Option<fn(&mut S, crate::Mods, &mut Tx)>,
-    pub(crate) on_visibility: Option<fn(&mut S, bool, &mut Tx)>,
     pub(crate) on_rest: Option<fn(&mut S, &mut Tx) -> bool>,
-    pub(crate) on_ime: Option<fn(&mut S, &crate::Ime, &mut Tx) -> bool>,
     pub(crate) on_reopen: Option<fn(&mut S, bool, &mut Tx) -> bool>,
     pub(crate) on_open_url: Option<crate::open_url::incoming::OnOpenUrl<S>>,
     pub(crate) shared: Arc<Shared<S>>,
@@ -101,11 +97,7 @@ pub struct App<S: 'static> {
     pub(crate) open_inactive: bool,
     /// `App::maximized`, `App::full_screen`: how the window's first open shows it.
     pub(crate) open_as: crate::windows::OpenAs,
-    pub(crate) modifier_keys: bool,
-    pub(crate) tab_visits_controls: bool,
-    pub(crate) srgb_blend: bool,
-    pub(crate) font_smoothing: crate::FontSmoothing,
-    pub(crate) dev_stats: Option<fn() -> String>,
+    pub(crate) runtime: RuntimeConfig<S>,
     pub(crate) playground: Option<crate::Playground<S>>,
     /// `playground::attach`, set by `App::playground`: a window calls it through this, so an app
     /// without a playground doesn't link it.
@@ -130,11 +122,7 @@ impl<S: 'static> App<S> {
             on_close: None,
             on_quit: None,
             turn_scope: None,
-            on_focus: None,
-            on_mods: None,
-            on_visibility: None,
             on_rest: None,
-            on_ime: None,
             on_reopen: None,
             on_open_url: None,
             shared,
@@ -159,11 +147,7 @@ impl<S: 'static> App<S> {
             float_on_open: false,
             open_inactive: false,
             open_as: crate::windows::OpenAs::Normal,
-            modifier_keys: false,
-            tab_visits_controls: false,
-            srgb_blend: true,
-            font_smoothing: crate::FontSmoothing::default(),
-            dev_stats: None,
+            runtime: RuntimeConfig::default(),
             playground: None,
             attach_playground: None,
         }
@@ -174,7 +158,7 @@ impl<S: 'static> App<S> {
     /// backgrounds, as CoreText does. On by default. With a `Compositor`, `Frame::srgb_blend`
     /// says which encoding its passes must match.
     pub fn srgb_blend(mut self, enabled: bool) -> Self {
-        self.srgb_blend = enabled;
+        self.runtime.srgb_blend = enabled;
         self
     }
 
@@ -183,7 +167,7 @@ impl<S: 'static> App<S> {
     /// without font smoothing's dilation, as `-webkit-font-smoothing: antialiased` draws).
     /// `Tx::set_font_smoothing` switches it while running.
     pub fn font_smoothing(mut self, mode: crate::FontSmoothing) -> Self {
-        self.font_smoothing = mode;
+        self.runtime.font_smoothing = mode;
         self
     }
 
@@ -254,7 +238,7 @@ impl<S: 'static> App<S> {
     /// to `on_key` and the focused input's key handler, for hold-to-talk on Fn or Right Option,
     /// or a Shift tap. Off by default, since handlers written without it may act on any key.
     pub fn modifier_keys(mut self) -> Self {
-        self.modifier_keys = true;
+        self.runtime.modifier_keys = true;
         self
     }
 
@@ -262,7 +246,7 @@ impl<S: 'static> App<S> {
     /// keyboard navigation setting. Off (the default), Tab follows macOS: with Keyboard
     /// navigation off it visits only text fields and lists.
     pub fn tab_visits_controls(mut self, on: bool) -> Self {
-        self.tab_visits_controls = on;
+        self.runtime.tab_visits_controls = on;
         self
     }
 
@@ -282,7 +266,7 @@ impl<S: 'static> App<S> {
     /// Called once per native focus transition, including while hidden or occluded.
     /// Headless scripts deliver the same callback with `{"focus": false}`.
     pub fn on_focus(mut self, f: fn(&mut S, bool, &mut Tx)) -> Self {
-        self.on_focus = Some(f);
+        self.runtime.on_focus = Some(f);
         self
     }
 
@@ -297,7 +281,7 @@ impl<S: 'static> App<S> {
     /// app.on_modifiers(|s: &mut App, mods, _| s.alt_held = mods.alt)
     /// ```
     pub fn on_modifiers(mut self, f: fn(&mut S, crate::Mods, &mut Tx)) -> Self {
-        self.on_mods = Some(f);
+        self.runtime.on_mods = Some(f);
         self
     }
 
@@ -307,7 +291,7 @@ impl<S: 'static> App<S> {
     /// one can see it, such as a notification's timer. Called once per change after the first
     /// frame. Native windows only.
     pub fn on_visibility(mut self, f: fn(&mut S, bool, &mut Tx)) -> Self {
-        self.on_visibility = Some(f);
+        self.runtime.on_visibility = Some(f);
         self
     }
 
@@ -333,7 +317,7 @@ impl<S: 'static> App<S> {
     /// CJK conversion, the emoji picker, dictation), as for `text_input`. While a composition
     /// is open, Return and Escape go to the input method, not `on_key`. Native windows only.
     pub fn on_ime(mut self, f: fn(&mut S, &crate::Ime, &mut Tx) -> bool) -> Self {
-        self.on_ime = Some(f);
+        self.runtime.on_ime = Some(f);
         self
     }
 
@@ -581,7 +565,7 @@ impl<S: 'static> App<S> {
     /// in a native trace's summary. Keep it cheap. For example, with the `procwatch`
     /// crate: `.dev_stats(|| procwatch::snapshot().map_or_else(String::new, |s| format!("{} MB, {} fds", s.footprint >> 20, s.fds)))`.
     pub fn dev_stats(mut self, stats: fn() -> String) -> Self {
-        self.dev_stats = Some(stats);
+        self.runtime.dev_stats = Some(stats);
         self
     }
 
@@ -655,12 +639,12 @@ impl<S: 'static> App<S> {
         self.canvas_id.is_some() && (self.fit_content_height || !self.full_viewport)
     }
 
-    pub(crate) fn into_parts(self, scene: Option<&str>) -> (AppSpec<S>, S, Arc<Shared<S>>) {
+    pub(crate) fn into_parts(self, scene: Option<&str>) -> (AppSpec<S>, S, Arc<Shared<S>>, RuntimeConfig<S>) {
         let state = crate::tooling::perf_warn::launch::init(|| match self.init {
             Some(init) => crate::tooling::with_scene(&self.spec, init(), scene),
             None => crate::tooling::initial_state(&self.spec, scene),
         });
-        (self.spec, state, self.shared)
+        (self.spec, state, self.shared, self.runtime)
     }
 }
 
@@ -808,6 +792,8 @@ impl<S: 'static> AppHandle<S> {
     }
 }
 
+mod config;
+pub(crate) use config::RuntimeConfig;
 mod requests;
 pub(crate) use requests::{window_request_order, Activation, Requests, Shared, WindowRequest};
 
@@ -894,9 +880,9 @@ mod tests {
         let mut spec = spec();
         spec.scenes = &[("big", |n| *n += 100)];
         let captured = 7;
-        let (_, state, _) = App::new(spec).init(move || captured).into_parts(Some("big"));
+        let (_, state, _, _) = App::new(spec).init(move || captured).into_parts(Some("big"));
         assert_eq!(state, 107);
-        let (_, state, _) = App::new(self::spec()).into_parts(None);
+        let (_, state, _, _) = App::new(self::spec()).into_parts(None);
         assert_eq!(state, 0);
     }
 

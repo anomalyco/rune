@@ -662,16 +662,13 @@ impl<S: 'static> Browser<S> {
         let mut app = self.app.take().expect("one canvas initialization");
         for bytes in fonts { app.spec.fonts = crate::app::with_font(app.spec.fonts, bytes); }
         let compositor = app.compositor.take();
-        let (on_focus, modifier_keys, srgb_blend) = (app.on_focus, app.modifier_keys, app.srgb_blend);
-        let on_mods = app.on_mods;
-        let (font_smoothing, fit_height) = (app.font_smoothing, app.fit_content_height);
-        let tab_visits_controls = app.tab_visits_controls;
+        let fit_height = app.fit_content_height;
         let playground = app.playground.take();
         let on_ready = app.on_ready.take();
         let late_fonts = std::mem::take(&mut app.late_font_urls);
         // A page brings its own fonts for its mirror; an app's are the page's (`page_fonts`).
         let page_fonts = if self.document { &[][..] } else { app.spec.fonts };
-        let (spec, state, shared) = app.into_parts(None);
+        let (spec, state, shared, runtime) = app.into_parts(None);
         let scale = window.scale_factor() as f32;
         let document = self.document;
         let max_dim = gpu.as_ref().map_or(CPU_MAX_DIM, |(gpu, _)| gpu.device.limits().max_texture_dimension_2d.max(1));
@@ -696,6 +693,7 @@ impl<S: 'static> Browser<S> {
         let wake: crate::Waker = Arc::new(move || { let _ = proxy.send_event(Wake::App); });
         let mut rt = crate::tooling::runtime_for(&spec, state, (size.width as f32 / scale, size.height as f32 / scale), Env::new(dark, scale), wake.clone());
         crate::playground::attach(&mut rt, playground, &spec, None, None, true);
+        rt.configure(runtime);
         if let Some((view, band)) = band {
             rt.page_mode();
             rt.set_band(band, view);
@@ -711,12 +709,6 @@ impl<S: 'static> Browser<S> {
                 let _ = canvas.style().set_property("height", &format!("{h}px"));
             }
         }
-        rt.on_focus = on_focus;
-        rt.on_mods = on_mods;
-        rt.set_modifier_keys(modifier_keys);
-        rt.set_tab_visits_controls(tab_visits_controls);
-        rt.set_srgb_blend(srgb_blend);
-        rt.set_font_smoothing(font_smoothing);
         rt.set_os_drag(false);
         let now = Instant::now();
         rt.wall_start = Some(now);
