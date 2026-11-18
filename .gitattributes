@@ -9,6 +9,11 @@
 *.vert text eol=lf
 *.frag text eol=lf
 *.sh text eol=lf
+# The vendored wgpu-hal and its patch, byte for byte as committed in every checkout: the crate as
+# published has a CRLF file among its LF ones, and scripts/vendor-wgpu-hal.sh --regenerate diffs the
+# source against it, so a converting checkout would write a whole-file patch.
+vendor/wgpu-hal/** -text
+*.patch -text
 
 # Precompiled shaders and raw pixel data, never converted.
 *.dxbc binary
