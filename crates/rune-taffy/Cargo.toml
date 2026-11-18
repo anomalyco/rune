@@ -3,6 +3,7 @@ name = "rune-taffy"
 version = "0.0.1"
 edition.workspace = true
 license.workspace = true
+description = "Compact retained layout store driving Taffy's Flexbox, Grid, and Block solvers for Rune."
 
 [features]
 default = []
@@ -11,7 +12,7 @@ default = []
 baseline-taffy = []
 
 [dependencies]
-taffy = { version = "0.15", default-features = false, features = ["std", "taffy_tree", "flexbox", "grid", "block_layout", "content_size"] }
+taffy = { workspace = true, features = ["std", "taffy_tree", "flexbox", "grid", "block_layout", "content_size"] }
 
 [target.'cfg(any(windows, target_os = "macos", target_os = "linux"))'.dependencies]
 stacker = "0.1"

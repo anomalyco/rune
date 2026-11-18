@@ -4,6 +4,7 @@
 //! crate then links on the web without flags of its own.
 
 fn main() {
+    println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=WASI_SDK_PATH");
     println!("cargo::rustc-check-cfg=cfg(luau_jit)");
     let var = |name: &str| std::env::var_os(name).map(|v| v.to_string_lossy().into_owned()).unwrap_or_default();

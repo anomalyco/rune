@@ -3,6 +3,7 @@ name = "rune"
 version = "0.0.1"
 edition.workspace = true
 license.workspace = true
+description = "GPU-rendered Rust UI framework (wgpu, winit) with keyed element trees, Taffy layout, analytic springs, and headless tooling."
 
 [features]
 default = ["accessibility", "dbus", "embedded-fonts", "metal-backend", "ogg-audio", "svg"]
@@ -78,46 +79,46 @@ baseline-taffy = ["rune-taffy/baseline-taffy"]
 [dependencies]
 # The accessibility tree's types; the platform adapters below come with `accessibility`.
 accesskit = "0.25.2"
-procwatch = { path = "../procwatch", optional = true }
+procwatch = { workspace = true, optional = true }
 subsecond = { version = "=0.7.10", optional = true }
 dioxus-devtools = { version = "=0.7.10", optional = true }
-rune-motion = { path = "../rune-motion" }
-rune-staging = { path = "../rune-staging" }
-rune-taffy = { path = "../rune-taffy" }
+rune-motion = { workspace = true }
+rune-staging = { workspace = true }
+rune-taffy = { workspace = true }
 # Allow backend patch fixes; headless pixel equivalence guards the precompiled Metal path.
-wgpu = { version = "~30.0.1", default-features = false, features = ["std", "parking_lot", "metal", "wgsl"] }
+wgpu = { workspace = true, features = ["std", "parking_lot", "wgsl"] }
 # Keep Wayland client-side frames/buttons without the title font's ab_glyph/ttf-parser.
-winit = { version = "0.30.13", default-features = false, features = ["rwh_06", "x11", "wayland", "wayland-dlopen", "wayland-csd-adwaita-notitle"] }
-taffy = { version = "0.15", default-features = false, features = ["std", "taffy_tree", "flexbox", "grid", "block_layout", "content_size"] }
+winit = { workspace = true, features = ["rwh_06", "x11", "wayland", "wayland-dlopen", "wayland-csd-adwaita-notitle"] }
+taffy = { workspace = true, features = ["std", "taffy_tree", "flexbox", "grid", "block_layout", "content_size"] }
 # Natively with `complex-scripts` (below): ICU4X's word and line dictionaries, as a browser's ICU
 # has them.
-parley = { version = "0.12", default-features = false, features = ["std"] }
+parley = { workspace = true, features = ["std"] }
 swash = "0.2.10"
 # Skia's paths and stroker, for icons covered as Chromium covers them (text/area.rs): tiny-skia-path
 # as published plus `vendor/tiny-skia-path.patch` (Skia's conic splitting and stroker steps), re-made
 # by `scripts/vendor-tiny-skia-path.sh <version>`. A path dependency, not a patch, so resvg keeps its own.
 tiny-skia-path = { path = "../../vendor/tiny-skia-path" }
 skrifa = "0.44"
-bytemuck = { version = "1.25", features = ["derive"] }
-png = "0.18"
-serde = "1"
-serde_json = "1"
+bytemuck = { workspace = true }
+png = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 portable-atomic = "1"
-image = { version = "0.25", default-features = false, features = ["png"] }
-blake3 = "1"
-rustc-hash = "2"
+image = { workspace = true, features = ["png"] }
+blake3 = { workspace = true }
+rustc-hash = { workspace = true }
 zeroize = "1.8"
-half = "2"
-unicode-segmentation = "1.13"
+half = { workspace = true }
+unicode-segmentation = { workspace = true }
 # Bidi classes for `Direction::Auto` (Parley already builds it, with its data).
 icu_properties = { version = "2.3", default-features = false, features = ["compiled_data"] }
 # Words for a double-click, natively with the dictionaries Parley's `complex-scripts` links.
 icu_segmenter = { version = "2.3", default-features = false, features = ["compiled_data"] }
-resvg = { version = "0.45", default-features = false, optional = true }
+resvg = { workspace = true, optional = true }
 
 [target.'cfg(all(unix, not(target_os = "linux")))'.dependencies]
 # The thread CPU clock for frame profiles and debug builds' stall warnings.
-libc = "0.2"
+libc = { workspace = true }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "windows")))'.dependencies]
 # `complex-scripts`: Chinese and Japanese words (2.0 MB) and Thai, Lao, Khmer and Burmese words and
@@ -125,12 +126,12 @@ libc = "0.2"
 # segmentation model. A browser has its own (`Intl.Segmenter`), which the page gives Parley
 # (`platform/web/segmenter.rs`), and Windows has its own (`icu.dll`, `platform/win32/segmenter.rs`);
 # neither links them.
-parley = { version = "0.12", default-features = false, features = ["std", "complex-scripts"] }
+parley = { workspace = true, features = ["std", "complex-scripts"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-pollster = "1"
+pollster = { workspace = true }
 # JPEG, GIF, WebP, BMP and ICO decoding; a web build hands them to the browser's codecs instead.
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "ico"] }
+image = { workspace = true, features = ["png", "jpeg", "gif", "webp", "bmp", "ico"] }
 avif-decode = { version = "3", optional = true }
 # Installed fonts by family name (`text::system_fonts::installed_family_files`): fontique's
 # DirectWrite, CoreText and fontconfig backends, in a collection apart from the app's, which
@@ -146,16 +147,16 @@ arboard = { version = "3.6", default-features = false, features = ["wayland-data
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # `dictionary::set_dictionary_segmenter` (vendor/parley_engine), for `Intl.Segmenter`'s words.
-parley_engine = { version = "0.12", default-features = false }
+parley_engine = { workspace = true }
 # A page's spell checker: Hunspell dictionaries, fetched when a field first checks (`spell/web.rs`).
 spellbook = "0.4"
 web-time = "1"
-wasm-bindgen = "0.2"
-wasm-bindgen-futures = "0.4"
-js-sys = "0.3"
+wasm-bindgen = { workspace = true }
+wasm-bindgen-futures = { workspace = true }
+js-sys = { workspace = true }
 console_error_panic_hook = "0.1"
-wgpu = { version = "30", default-features = false, features = ["webgpu"] }
-web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlElement", "HtmlCanvasElement", "CanvasRenderingContext2d", "ImageData", "CssStyleDeclaration", "MediaQueryList", "Node", "console"] }
+wgpu = { workspace = true, features = ["webgpu"] }
+web-sys = { workspace = true, features = ["Window", "Document", "Element", "HtmlElement", "HtmlCanvasElement", "CanvasRenderingContext2d", "ImageData", "CssStyleDeclaration", "MediaQueryList", "Node", "console"] }
 
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
 rfd = { version = "0.17", optional = true, default-features = false }
@@ -170,20 +171,20 @@ objc2-metal = "0.3"
 objc2-quartz-core = { version = "0.3.2", optional = true, default-features = false, features = ["std", "bitflags", "CALayer", "CAMetalLayer", "objc2-core-foundation", "objc2-core-graphics", "objc2-metal"] }
 parking_lot = { version = "0.12", optional = true }
 raw-window-metal = { version = "1.1", optional = true }
-wgpu-naga-bridge = { version = "~30.0.1", optional = true }
-# wgpu's `custom` backend, which `metal-backend` plugs into, on Apple targets alone: off them,
-# wgpu's calls dispatch to one backend with no branch.
-wgpu = { version = "~30.0.1", default-features = false, features = ["custom"] }
+wgpu-naga-bridge = { workspace = true, optional = true }
+# wgpu's Metal backend and `custom` backend (`metal-backend` plugs into it), on Apple targets alone:
+# off Apple, wgpu compiles neither `wgpu-hal/metal` nor `naga/msl-out`, and dispatches with no branch.
+wgpu = { workspace = true, features = ["metal", "custom"] }
 objc2-foundation-video = { package = "objc2-foundation", version = "0.3", default-features = false, features = ["std", "NSArray", "NSData", "NSDictionary", "NSError", "NSObject", "NSRange", "NSString", "NSURL", "NSURLConnection", "NSURLRequest", "NSURLResponse"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 accesskit_macos = { version = "0.27.2", optional = true }
 # Names for the interaction watchdog's stack samples (`tooling::interaction::stack`).
 rustc-demangle = "0.1"
-wgpu-hal = { version = "~30.0.1", default-features = false }
-wgpu-core = { version = "~30.0.1", default-features = false }
-objc2 = "0.5.2"
-block2 = "0.5"
+wgpu-hal = { workspace = true }
+wgpu-core = { workspace = true }
+objc2 = { workspace = true }
+block2 = { workspace = true }
 objc2-foundation = { version = "0.2.2", features = ["NSArray", "NSAttributedString", "NSData", "NSDictionary", "NSError", "NSGeometry", "NSObject", "NSRange", "NSValue", "NSProcessInfo", "NSString", "NSThread", "NSURL", "NSUserDefaults"] }
 objc2-app-kit = { version = "0.2.2", features = ["NSApplication", "NSButton", "NSCell", "NSControl", "NSEvent", "NSMenu", "NSMenuItem", "NSResponder", "NSRunningApplication", "NSView", "NSWindow", "NSColor", "NSGraphics", "NSPanel", "NSScreen", "NSPasteboard", "NSPasteboardItem", "NSDragging", "NSDraggingItem", "NSDraggingSession", "NSGraphicsContext", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSAttributedString", "NSSpellChecker"] }
 objc2-core-video = { version = "0.3", features = ["CVPixelBufferIOSurface", "objc2-io-surface"] }
@@ -211,56 +212,56 @@ xkbcommon = "0.9"
 # `dictionary::set_dictionary_segmenter` (vendor/parley_engine), for `icu.dll`'s words, and
 # `line-dictionaries`: Thai, Lao, Khmer and Burmese line breaks from ICU4X's baked line dictionaries,
 # so no line ever waits for `icu.dll`.
-parley_engine = { version = "0.12", default-features = false, features = ["line-dictionaries"] }
+parley_engine = { workspace = true, features = ["line-dictionaries"] }
 # D3D12 shared textures for `NativeSurface` (`native_surface::windows`), on wgpu-hal's version.
 # Media Foundation, D3D11 and WASAPI for video playback (`video::windows`): COM interfaces only;
 # their DLLs load on the first clip, through `GetProcAddress`, so the import table gains nothing.
 # OLE drag and drop, the shell's data object and drag image (`drag_out::windows`); the taskbar
 # button's progress and badge (`platform::win32::taskbar`).
-windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Globalization", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D11", "Win32_Graphics_Direct3D12", "Win32_Graphics_DirectComposition", "Win32_Graphics_DirectWrite", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_Graphics_Gdi", "Win32_Media_Audio", "Win32_Media_MediaFoundation", "Win32_Security", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_LibraryLoader", "Win32_System_Ole", "Win32_System_SystemServices", "Win32_System_Threading", "Win32_System_Variant", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_Shell_PropertiesSystem", "Win32_UI_WindowsAndMessaging"] }
+windows = { workspace = true, features = ["Win32_Foundation", "Win32_Globalization", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D11", "Win32_Graphics_Direct3D12", "Win32_Graphics_DirectComposition", "Win32_Graphics_DirectWrite", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_Graphics_Gdi", "Win32_Media_Audio", "Win32_Media_MediaFoundation", "Win32_Security", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_LibraryLoader", "Win32_System_Ole", "Win32_System_SystemServices", "Win32_System_Threading", "Win32_System_Variant", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_Shell_PropertiesSystem", "Win32_UI_WindowsAndMessaging"] }
 # `#[windows::core::implement]` (the OLE drop target, `platform::win32::drop_target`) names this crate.
-windows-core = "0.62"
+windows-core = { workspace = true }
 # D3D12 alone: a machine without a hardware D3D12 adapter draws on WARP, D3D12's own software
 # adapter. Vulkan was only that fallback here, and it compiled in `ash`, `libloading` and the
 # Vulkan backend.
-wgpu = { version = "30", default-features = false, features = ["dx12"] }
+wgpu = { workspace = true, features = ["dx12"] }
 accesskit_windows = { version = "0.35.2", optional = true }
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Accessibility", "Win32_UI_HiDpi", "Win32_UI_Input_Ime", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_LibraryLoader", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Performance", "Win32_System_Pipes", "Win32_System_RemoteDesktop", "Win32_System_StationsAndDesktops", "Win32_System_Threading", "Win32_System_WindowsProgramming", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_System_Time", "Win32_Globalization"] }
+windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Accessibility", "Win32_UI_HiDpi", "Win32_UI_Input_Ime", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_LibraryLoader", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Performance", "Win32_System_Pipes", "Win32_System_RemoteDesktop", "Win32_System_StationsAndDesktops", "Win32_System_Threading", "Win32_System_WindowsProgramming", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_System_Time", "Win32_Globalization"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # AT-SPI over D-Bus on its own async-io thread, started only when the desktop's accessibility bus is on.
 accesskit_unix = { version = "0.24.1", optional = true }
 # The window GPU's render node, for dmabuf producers (`native_surface::linux`): wgpu-hal's version.
 ash = "0.38"
-libc = "0.2"
+libc = { workspace = true }
 libloading = "0.8"
 zbus = { version = "6", default-features = false, features = ["tokio", "proxy", "service"], optional = true }
 tokio = { version = "1", features = ["rt", "net", "time", "sync", "macros"], optional = true }
 futures-util = { version = "0.3", optional = true }
 
-# wgpu's Vulkan backend everywhere but Windows (D3D12 there, below) and Apple (Metal).
+# wgpu's Vulkan backend everywhere but Windows (D3D12 above) and Apple (Metal above).
 [target.'cfg(all(not(target_vendor = "apple"), not(target_arch = "wasm32"), not(target_os = "windows")))'.dependencies]
-wgpu = { version = "30", default-features = false, features = ["vulkan"] }
+wgpu = { workspace = true, features = ["vulkan"] }
 
 # build.rs hashes the uber shader's WGSL; the portable code builds without a C compiler.
 [build-dependencies]
-blake3 = { version = "1", features = ["pure"] }
+blake3 = { workspace = true, features = ["pure"] }
 
 [dev-dependencies]
 # The HLSL wgpu generates, for the precompiled uber shader (`render/dxbc_tests.rs`).
 log = "0.4"
 # Live buffer counts (`Device::get_internal_counters`) for the upload tests.
-wgpu = { version = "~30.0.1", default-features = false, features = ["counters"] }
+wgpu = { workspace = true, features = ["counters"] }
 # Thread and process CPU clocks in the overlay cost example.
-libc = "0.2"
+libc = { workspace = true }
 
 # A UI Automation client for `tests/accessibility_windows.rs`.
 [target.'cfg(target_os = "windows")'.dev-dependencies]
-windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Com", "Win32_UI_Accessibility"] }
+windows = { workspace = true, features = ["Win32_Foundation", "Win32_System_Com", "Win32_UI_Accessibility"] }
 
 # A GPU-free device whose surfaces refuse every configuration, for `window::configure`'s test.
 [target.'cfg(target_os = "linux")'.dev-dependencies]
-wgpu = { version = "~30.0.1", default-features = false, features = ["noop"] }
+wgpu = { workspace = true, features = ["noop"] }
 
 [[example]]
 name = "metal_dispatch"

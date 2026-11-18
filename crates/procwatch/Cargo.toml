@@ -15,10 +15,10 @@ release-gauges = []
 alloc-sites = []
 
 [dependencies]
-libc = "0.2"
+libc = { workspace = true }
 
 [dev-dependencies]
-serde_json = "1"
+serde_json = { workspace = true }
 
 [lints]
 workspace = true

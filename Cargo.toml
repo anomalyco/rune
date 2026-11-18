@@ -54,6 +54,27 @@ members = [
     "examples/site-scenes",
     "examples/luau-panel",
 ]
+# Default cargo check/test targets: the core framework, libraries and theme.
+# Excludes examples/*, www/app, rune-luau (C++ Luau build via cc/mlua) and rune-notify/rune-mac
+# (WinRT features on `windows`); pass `--workspace` to check everything.
+default-members = [
+    "crates/rune",
+    "crates/rune-ref",
+    "crates/rune-motion",
+    "crates/rune-i18n",
+    "crates/rune-staging",
+    "crates/rune-kit",
+    "crates/rune-highlights",
+    "crates/rune-fx",
+    "crates/rune-light",
+    "crates/procwatch",
+    "crates/rune-register",
+    "crates/rune-knobs",
+    "crates/rune-mermaid",
+    "crates/rune-perf",
+    "crates/rune-taffy",
+    "themes/opencode",
+]
 exclude = ["tools/rune-dev-guard", "vendor/accesskit_macos", "vendor/accesskit_windows", "vendor/parley_engine", "vendor/tiny-skia-path", "vendor/wgpu-hal", "vendor/winit"]
 
 # wgpu-hal as published plus `vendor/wgpu-hal.patch`: `dx12::Instance::expose_adapter` (a `wgpu::Adapter` for the
@@ -98,6 +119,55 @@ accesskit_macos = { path = "vendor/accesskit_macos" }
 [workspace.package]
 edition = "2024"
 license = "MIT"
+
+[workspace.dependencies]
+# Internal workspace crates.
+procwatch = { path = "crates/procwatch" }
+rune = { path = "crates/rune", default-features = false }
+rune-fx = { path = "crates/rune-fx" }
+rune-highlights = { path = "crates/rune-highlights" }
+rune-kit = { path = "crates/rune-kit", default-features = false }
+rune-knobs = { path = "crates/rune-knobs" }
+rune-light = { path = "crates/rune-light" }
+rune-luau = { path = "crates/rune-luau" }
+rune-mermaid = { path = "crates/rune-mermaid" }
+rune-motion = { path = "crates/rune-motion" }
+rune-notify = { path = "crates/rune-notify" }
+rune-ref = { path = "crates/rune-ref" }
+rune-staging = { path = "crates/rune-staging" }
+rune-taffy = { path = "crates/rune-taffy" }
+rune-theme-opencode = { path = "themes/opencode" }
+
+# Shared external crates.
+blake3 = "1"
+block2 = "0.5"
+bytemuck = { version = "1.25", features = ["derive"] }
+half = "2"
+image = { version = "0.25", default-features = false }
+js-sys = "0.3"
+libc = "0.2"
+objc2 = "0.5.2"
+parley = { version = "0.12", default-features = false }
+parley_engine = { version = "0.12", default-features = false }
+png = "0.18"
+pollster = "1"
+resvg = { version = "0.45", default-features = false }
+rustc-hash = "2"
+serde = "1"
+serde_json = "1"
+taffy = { version = "0.15", default-features = false }
+unicode-segmentation = "1.13"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = "0.3"
+wgpu = { version = "~30.0.1", default-features = false }
+wgpu-core = { version = "~30.0.1", default-features = false }
+wgpu-hal = { version = "~30.0.1", default-features = false }
+wgpu-naga-bridge = "~30.0.1"
+windows = "0.62"
+windows-core = "0.62"
+windows-sys = "0.59"
+winit = { version = "0.30.13", default-features = false }
 
 # Full debug info for the workspace crates made a single `rune` test build use 18-23 GB of RAM;
 # line tables keep backtraces and file:line in panics at a fraction of that.
