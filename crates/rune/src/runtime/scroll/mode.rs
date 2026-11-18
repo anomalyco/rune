@@ -5,6 +5,7 @@
 //! combinations that mean nothing.
 use super::*;
 use crate::machine::Effects;
+use super::scroll_wheel::WheelCurve;
 
 /// What moves a viewport's vertical offset, one motion at a time, so it can't follow its
 /// bottom while it glides, or coast while a glide carries it, with the hand latches that belong
@@ -19,6 +20,8 @@ pub(super) enum ScrollMode {
     Momentum { v: f32, hand: Hand },
     /// Gliding on a spring (`ScrollState::glide_spring`) at `v` points a second.
     Glide { v: f32, to: GlideTo, hand: Hand },
+    /// Easing to where a notched mouse wheel sent it (`runtime/scroll/wheel.rs`).
+    Wheel { curve: WheelCurve, hand: Hand },
 }
 
 /// The hand latches a mode carries from frame to frame, whatever moves the offset.
@@ -71,14 +74,14 @@ impl ScrollMode {
     pub(super) fn hand(self) -> Hand {
         match self {
             ScrollMode::Rest(hand) | ScrollMode::Pinned(hand) => hand,
-            ScrollMode::Momentum { hand, .. } | ScrollMode::Glide { hand, .. } => hand,
+            ScrollMode::Momentum { hand, .. } | ScrollMode::Glide { hand, .. } | ScrollMode::Wheel { hand, .. } => hand,
         }
     }
 
     fn hand_mut(&mut self) -> &mut Hand {
         match self {
             ScrollMode::Rest(hand) | ScrollMode::Pinned(hand) => hand,
-            ScrollMode::Momentum { hand, .. } | ScrollMode::Glide { hand, .. } => hand,
+            ScrollMode::Momentum { hand, .. } | ScrollMode::Glide { hand, .. } | ScrollMode::Wheel { hand, .. } => hand,
         }
     }
 
@@ -108,6 +111,19 @@ impl ScrollMode {
         #[cfg(test)]
         note_write();
         ScrollMode::Glide { v, to, hand: self.hand() }
+    }
+
+    /// The same mode easing on a wheel's `curve`, keeping the hand's latches.
+    pub(super) fn to_wheel(self, curve: WheelCurve) -> Self {
+        ScrollMode::Wheel { curve, hand: self.hand() }
+    }
+
+    /// The wheel's ease, while one runs.
+    pub(super) fn wheel(self) -> Option<WheelCurve> {
+        match self {
+            ScrollMode::Wheel { curve, .. } => Some(curve),
+            _ => None,
+        }
     }
 
     /// Its momentum (points a second), 0 unless coasting.
@@ -320,6 +336,7 @@ mod tests {
             ScrollMode::Pinned(_) => DevMode::Pinned,
             ScrollMode::Momentum { v, .. } => DevMode::Momentum(v),
             ScrollMode::Glide { v, .. } => DevMode::Glide(v),
+            ScrollMode::Wheel { .. } => unreachable!("no act starts a wheel's ease"),
         }
     }
 

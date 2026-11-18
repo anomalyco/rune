@@ -76,10 +76,15 @@ impl Trace {
 
     /// Waits up to `wait` for the last frames' present times, then writes every held line.
     pub(crate) fn settle_presents(&mut self, wait: std::time::Duration) {
+        #[cfg(target_arch = "wasm32")]
+        let _ = wait;
         let Some(presents) = self.presents.as_mut() else { return };
-        let until = Instant::now() + wait;
-        while presents.waiting() && Instant::now() < until {
-            std::thread::sleep(std::time::Duration::from_millis(2));
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let until = Instant::now() + wait;
+            while presents.waiting() && Instant::now() < until {
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
         }
         presents.flush(&mut self.out);
     }

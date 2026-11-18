@@ -457,12 +457,17 @@ impl<S: 'static> Host<S> {
                 let points = crate::runtime::LINE_POINTS;
                 let (dx, dy) = crate::runtime::wheel_delta(delta, scale, shift, points);
                 let precise = matches!(delta, winit::event::MouseScrollDelta::PixelDelta(_));
+                // Whole lines are a notched wheel; a free-spinning wheel or a precision touchpad
+                // sends fractions. Proved against Chromium on Windows only so far: macOS scrolls a
+                // notch at once, as Chromium there does, and Linux waits for a run on Linux.
+                let notch = cfg!(target_os = "windows")
+                    && matches!(delta, winit::event::MouseScrollDelta::LineDelta(x, y) if x.fract() == 0.0 && y.fract() == 0.0);
                 let phase = gesture_phase(phase);
                 match rt.pointer() {
                     // Off macOS a trackpad pinch is a Ctrl + wheel.
                     Some((x, y)) if !cfg!(target_os = "macos") && self.mods.control_key() && rt.pinch_wheel(x, y, dy) => {}
                     Some((x, y)) => rt.wheel_event(crate::WheelEvent::new(dx / rt.zoom(), dy / rt.zoom()).at(x, y).mods(map_mods(self.mods))
-                        .phase(phase).precise(precise)),
+                        .phase(phase).precise(precise).notch(notch)),
                     None if phase == crate::GesturePhase::Began => rt.wheel_began(),
                     None if phase == crate::GesturePhase::Ended => rt.wheel_ended(),
                     None => {}

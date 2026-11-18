@@ -19,6 +19,8 @@
 //! macOS only for now; elsewhere [`snapshot`] returns `None`, [`usage`] has every field `None`,
 //! and [`watch`] does nothing.
 
+#![cfg_attr(target_arch = "wasm32", allow(dead_code))]
+
 pub mod alloc;
 pub mod gauge;
 
@@ -28,7 +30,9 @@ pub use gauge::gauges;
 
 use std::fmt::Write as _;
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Thread {
@@ -120,10 +124,17 @@ fn json_map(s: &mut String, entries: &[(&'static str, i64)]) {
 
 /// This process now.
 pub fn snapshot() -> Option<Snapshot> {
-    let mut s = snapshot_of(std::process::id() as i32)?;
-    s.heap = alloc::heap();
-    s.gauges = gauges();
-    Some(s)
+    #[cfg(target_arch = "wasm32")]
+    {
+        None
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let mut s = snapshot_of(std::process::id() as i32)?;
+        s.heap = alloc::heap();
+        s.gauges = gauges();
+        Some(s)
+    }
 }
 
 /// Another process of this user (or this one), read through `proc_pid_rusage` and
@@ -343,27 +354,35 @@ pub fn watch(config: Config) {
 /// [`watch`], and calls `on_warning` on the watcher thread for every warning (not the
 /// periodic report): to drop a cache, write a capture, or post the numbers somewhere.
 pub fn watch_with(config: Config, on_warning: impl Fn(&Event, &Snapshot) + Send + 'static) {
-    if snapshot().is_none() {
-        return;
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (config, on_warning);
     }
-    let _ = std::thread::Builder::new().name("procwatch".into()).spawn(move || {
-        let mut watcher = Watcher::new(config);
-        loop {
-            if let Some(s) = snapshot() {
-                for event in watcher.observe(Instant::now(), &s) {
-                    eprintln!("{event}");
-                    if event.is_warning() {
-                        on_warning(&event, &s);
-                    }
-                }
-                *LATEST.lock().unwrap_or_else(|e| e.into_inner()) = Some(s);
-            }
-            std::thread::sleep(watcher.config.every);
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        if snapshot().is_none() {
+            return;
         }
-    });
+        let _ = std::thread::Builder::new().name("procwatch".into()).spawn(move || {
+            let mut watcher = Watcher::new(config);
+            loop {
+                if let Some(s) = snapshot() {
+                    for event in watcher.observe(Instant::now(), &s) {
+                        eprintln!("{event}");
+                        if event.is_warning() {
+                            on_warning(&event, &s);
+                        }
+                    }
+                    *LATEST.lock().unwrap_or_else(|e| e.into_inner()) = Some(s);
+                }
+                std::thread::sleep(watcher.config.every);
+            }
+        });
+    }
 }
 
 /// The judging half of [`watch`], fed samples so tests can drive it.
+#[cfg(not(target_arch = "wasm32"))]
 pub struct Watcher {
     pub config: Config,
     history: Vec<(Instant, Snapshot)>,
@@ -375,11 +394,13 @@ pub struct Watcher {
 }
 
 /// One message of a kind per window: the first goes out at once, the next a window after it.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy, Debug, Default)]
 struct Gate {
     last: Option<Instant>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Gate {
     /// Whether a message may go out at `now`, `window` after the last; if so, it counts as sent.
     fn pass(&mut self, now: Instant, window: Duration) -> bool {
@@ -391,6 +412,7 @@ impl Gate {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Watcher {
     pub fn new(config: Config) -> Watcher {
         Watcher { config, history: Vec::new(), warned_footprint: 0, growth: Gate::default(), cpu: Gate::default(), report: Gate::default() }
