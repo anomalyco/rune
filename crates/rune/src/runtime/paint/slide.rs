@@ -70,7 +70,13 @@ fn posed(at: [f32; 4], offset: [f32; 2], k: f32, s: f32, size: [f32; 2], ow: [f3
             rect[axis + 2] = rect[axis] + size[axis];
         }
     }
-    rect.map(|v| grid(v, s) * s)
+    // It glides along the slide only: across it (a window slides sideways), its edges land on whole
+    // pixels, as a still box's do (`pixel_snap`), so the band's top and bottom cut glyphs where they
+    // always did.
+    let mut r = rect.map(|v| grid(v, s) * s);
+    r[1] = r[1].round();
+    r[3] = r[3].round();
+    r
 }
 
 /// One past node `i`'s subtree: nodes go depth first, so the first node after it whose parent
