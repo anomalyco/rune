@@ -1,10 +1,13 @@
 //! Latest-wins video frames. macOS imports IOSurface-backed CoreVideo buffers without a copy;
-//! Windows reads D3D shared textures from another process or API (`windows`).
+//! Windows reads D3D shared textures from another process or API (`windows`), Linux dmabufs
+//! (`linux`).
 //! CPU byte frames provide a portable source and a reference for headless verification.
 
 #[cfg(test)]
 #[path = "tests.rs"]
 mod gpu_tests;
+#[cfg(target_os = "linux")]
+pub mod linux;
 #[cfg(test)]
 mod place_tests;
 #[cfg(target_os = "macos")]
@@ -69,6 +72,8 @@ pub(crate) enum Source {
     /// A video decoder's NV12 picture and the fence value that marks it written.
     #[cfg(target_os = "windows")]
     Decoded(Arc<windows::DecodedPlanes>, u64),
+    #[cfg(target_os = "linux")]
+    Dmabuf(linux::Dmabuf),
 }
 pub(crate) struct Frame {
     pub id: u64,
@@ -297,6 +302,24 @@ impl NativeSurface {
         });
         Ok(())
     }
+    /// Shows the frame in a dmabuf (`linux::Dmabuf`), read on Rune's Vulkan device the first time
+    /// it draws.
+    #[cfg(target_os = "linux")]
+    pub fn push_dmabuf(&self, frame: linux::Dmabuf, frame_id: u64) -> Result<(), String> {
+        let size = frame.size();
+        if size.contains(&0) || size.iter().any(|v| *v > 16384) {
+            return Err("video size must be 1..16384".into());
+        }
+        self.replace(Frame {
+            id: frame_id,
+            size,
+            format: Format::Bgra,
+            color: ColorInfo::default(),
+            orient: Orient::UP,
+            source: Source::Dmabuf(frame),
+        });
+        Ok(())
+    }
     /// Shows a decoded NV12 picture (`video::windows`), sampled in place once its fence reaches
     /// `value`.
     #[cfg(target_os = "windows")]
@@ -344,14 +367,18 @@ impl NativeSurface {
     }
 }
 
-/// A device Rune made, `presented` when it draws a window: on Windows its adapter is the one
-/// shared-texture producers render on (`windows::adapter_luid`).
+/// A device Rune made, `presented` when it draws a window: its GPU is the one shared-texture
+/// producers render on (`windows::adapter_luid`, `linux::import_target`).
 pub(crate) fn note_device(device: &wgpu::Device, presented: bool) {
     #[cfg(target_os = "windows")]
     if presented {
         windows::note_adapter(device);
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "linux")]
+    if presented {
+        linux::note_device(device);
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     let _ = (device, presented);
 }
 

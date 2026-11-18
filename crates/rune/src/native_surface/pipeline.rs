@@ -113,6 +113,8 @@ pub struct SurfaceRenderer {
     importer: Option<macos::Importer>,
     #[cfg(target_os = "windows")]
     shared: Option<windows::Importer>,
+    #[cfg(target_os = "linux")]
+    dmabuf: Option<linux::Importer>,
 }
 impl SurfaceRenderer {
     #[cfg(target_arch = "wasm32")]
@@ -231,6 +233,8 @@ impl SurfaceRenderer {
             importer: None,
             #[cfg(target_os = "windows")]
             shared: None,
+            #[cfg(target_os = "linux")]
+            dmabuf: None,
         }
     }
 
@@ -447,6 +451,10 @@ impl SurfaceRenderer {
         if let Some(shared) = &mut self.shared {
             shared.forget_gone();
         }
+        #[cfg(target_os = "linux")]
+        if let Some(dmabuf) = &mut self.dmabuf {
+            dmabuf.forget_gone();
+        }
         #[cfg(target_os = "macos")]
         if let Some(i) = &self.importer {
             i.flush();
@@ -454,10 +462,13 @@ impl SurfaceRenderer {
     }
 
     fn import(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, frame: Arc<Frame>) -> Result<Imported, String> {
-        if frame.size.iter().any(|v| *v > device.limits().max_texture_dimension_2d) {
-            return Err("video dimensions exceed this GPU device's texture limit".into());
-        }
         let textures = match &frame.source {
+            // Checks the size itself, so every failure reaches the producer.
+            #[cfg(target_os = "linux")]
+            Source::Dmabuf(d) => linux::import(&mut self.dmabuf, device, queue, d)?,
+            _ if frame.size.iter().any(|v| *v > device.limits().max_texture_dimension_2d) => {
+                return Err("video dimensions exceed this GPU device's texture limit".into());
+            }
             Source::Bytes(b) => {
                 let a = upload(
                     device,

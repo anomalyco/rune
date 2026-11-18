@@ -98,6 +98,11 @@ pub(crate) fn free_features(adapter: &wgpu::Adapter) -> wgpu::Features {
         return crate::gpu::metal::FEATURES;
     }
     let _ = adapter;
+    // Dmabuf frames from other processes (`native_surface::linux`): extensions the device enables
+    // whenever the driver has them; the feature only lets wgpu import with them.
+    #[cfg(target_os = "linux")]
+    return wgpu::Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF;
+    #[cfg(not(target_os = "linux"))]
     wgpu::Features::empty()
 }
 
