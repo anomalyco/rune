@@ -423,8 +423,8 @@ impl Renderer {
     fn blocks_in_with_dirs(&self, root_blocks: &[Block], root_maps: &[BlockMap], keys: &[String], top_level: bool, in_item: bool, dirs: &bidi::Dirs) -> El {
         enum Frame<'a> {
             Blocks { blocks: &'a [Block], maps: &'a [BlockMap], names: Vec<String>, top_level: bool, in_item: bool, idx: usize, prev_mb: f32, after_heading: bool, last_dir: Option<rune::Direction>, col: El, pending: Option<(String, f32, bool, Option<rune::Direction>)> },
-            Quote { quote_block: &'a Block, inner: &'a [Block], saved_flow: Flow, first_task: usize },
-            List { list_block: &'a Block, start: Option<u64>, items: &'a [Vec<Block>], item_maps: &'a [Vec<BlockMap>], saved_flow: Flow, indent: f32, space: f32, idx: usize, col: El, pending_item: Option<(usize, f32, Option<(bool, usize)>)> },
+            Quote { quote_block: &'a Block, inner: &'a [Block], inner_maps: &'a [BlockMap], saved_flow: Flow, first_task: usize },
+            List { list_block: &'a Block, start: Option<u64>, items: &'a [Vec<Block>], item_maps: &'a [Vec<BlockMap>], saved_flow: Flow, indent: f32, space: f32, idx: usize, col: El, pending_item: Option<(usize, f32, Option<(bool, usize)>, bool)> },
         }
         let empty = BlockMap::None;
         let mut quote_plain_cache = plain::QuotePlainCache::default();
@@ -478,7 +478,7 @@ impl Renderer {
                                 let saved = self.flow.get();
                                 let first_task = self.next_task.get();
                                 self.flow.set(Flow { ink: q.text.or(saved.ink), inset: saved.inset + q.width + q.pad, ..saved });
-                                stack.push(Frame::Quote { quote_block: b, inner, saved_flow: saved, first_task });
+                                stack.push(Frame::Quote { quote_block: b, inner, inner_maps, saved_flow: saved, first_task });
                                 stack.push(Frame::Blocks { blocks: inner, maps: inner_maps, names: rendered_keys(inner.len(), &[]), top_level: false, in_item: false, idx: 0, prev_mb: 0.0, after_heading: false, last_dir: None, col: col().w_full(), pending: None });
                                 descended = true;
                                 break;
@@ -510,7 +510,7 @@ impl Renderer {
                     }
                 }
                 Frame::Quote { .. } => {
-                    let Some(Frame::Quote { quote_block, inner, saved_flow, first_task }) = stack.pop() else { unreachable!() };
+                    let Some(Frame::Quote { quote_block, inner, inner_maps, saved_flow, first_task }) = stack.pop() else { unreachable!() };
                     let drawn = ret.take().unwrap();
                     self.flow.set(saved_flow);
                     let q = self.s.quote;
@@ -522,7 +522,7 @@ impl Renderer {
                     );
                     ret = Some(match &self.quote_frame {
                         Some(f) => {
-                            let txt = self.plain_text_rc(inner, first_task, Flow { lead: None, ..saved_flow }, &mut quote_plain_cache);
+                            let txt = self.plain_text_rc(quote_block, inner, inner_maps, first_task, Flow { lead: None, ..saved_flow }, &mut quote_plain_cache);
                             f(quote, &QuoteFrame { text: &txt })
                         }
                         None => quote,
@@ -530,14 +530,19 @@ impl Renderer {
                 }
                 Frame::List { start, items, item_maps, saved_flow, indent, space, idx, col: list_col, pending_item, .. } => {
                     let n = items.len();
+                    let real_n = n - usize::from(n > 0 && matches!(item_maps.last().map(Vec::as_slice), Some([BlockMap::DeepTail { .. }])));
                     if let Some(item_body) = ret.take() {
-                        let (k, gap_mt, task) = pending_item.take().unwrap();
-                        if let Some((checked, marker_offset)) = task {
-                            *list_col = std::mem::replace(list_col, el()).child(self.task_item_body((k, n), *indent, &items[k], item_body, marker_offset, checked).mt(gap_mt));
+                        let (k, gap_mt, task, is_deep_tail) = pending_item.take().unwrap();
+                        if is_deep_tail {
+                            *list_col = std::mem::replace(list_col, el()).child(
+                                row().key(format!("i{k}")).w_full().mt(gap_mt).pl(*indent).child(item_body.grow(1.0).shrink()),
+                            );
+                        } else if let Some((checked, marker_offset)) = task {
+                            *list_col = std::mem::replace(list_col, el()).child(self.task_item_body((k, real_n), *indent, &items[k], item_body, marker_offset, checked).mt(gap_mt));
                         } else {
                             let marker = self.list_marker(*start, k, *indent, *space);
                             *list_col = std::mem::replace(list_col, el()).child(
-                                row().key(format!("i{k}")).role("listitem").position_in_set(k + 1, n).w_full().mt(gap_mt)
+                                row().key(format!("i{k}")).role("listitem").position_in_set(k + 1, real_n).w_full().mt(gap_mt)
                                     .child(self.with_reveal(marker).a11y_hidden())
                                     .child(item_body.grow(1.0).shrink()),
                             );
@@ -551,19 +556,25 @@ impl Renderer {
                         let imaps_slice = *item_maps;
                         let item = &items_slice[k];
                         let imap = imaps_slice.get(k).map_or(&[][..], Vec::as_slice);
+                        let is_deep_tail = matches!(imap, [BlockMap::DeepTail { .. }]);
                         let gap_mt = list_item_gap(&self.s, items_slice, k);
                         let task_idx = self.next_task.get();
                         self.next_task.set(task_idx + 1);
-                        let task = self.tasks.get(task_idx).copied().flatten();
-                        let lead = match (task, *start) {
-                            (Some((checked, _)), _) => Lead::Task(checked),
-                            (None, Some(num)) => Lead::Number(num + k as u64),
-                            (None, None) => Lead::Bullet,
-                        };
                         let sf = *saved_flow;
                         let ind = *indent;
-                        self.flow.set(Flow { lists: sf.lists + 1, inset: sf.inset + ind, cols: sf.cols + lead.width(), lead: Some((sf.cols, lead, if k == 0 && sf.lists == 0 { 2 } else { 1 })), ..sf });
-                        *pending_item = Some((k, gap_mt, task));
+                        if is_deep_tail {
+                            self.flow.set(Flow { lists: sf.lists + 1, inset: sf.inset + ind, cols: sf.cols, lead: None, ..sf });
+                            *pending_item = Some((k, gap_mt, None, true));
+                        } else {
+                            let task = self.tasks.get(task_idx).copied().flatten();
+                            let lead = match (task, *start) {
+                                (Some((checked, _)), _) => Lead::Task(checked),
+                                (None, Some(num)) => Lead::Number(num + k as u64),
+                                (None, None) => Lead::Bullet,
+                            };
+                            self.flow.set(Flow { lists: sf.lists + 1, inset: sf.inset + ind, cols: sf.cols + lead.width(), lead: Some((sf.cols, lead, if k == 0 && sf.lists == 0 { 2 } else { 1 })), ..sf });
+                            *pending_item = Some((k, gap_mt, task, false));
+                        }
                         stack.push(Frame::Blocks { blocks: item, maps: imap, names: rendered_keys(item.len(), &[]), top_level: false, in_item: true, idx: 0, prev_mb: 0.0, after_heading: false, last_dir: None, col: col().w_full(), pending: None });
                     } else {
                         let Some(Frame::List { list_block, saved_flow, col: done, .. }) = stack.pop() else { unreachable!() };
@@ -743,8 +754,73 @@ impl Renderer {
         }
     }
 
+    fn deep_tail(&self, inl: &Inline, lines: usize, map: &SpanMap) -> El {
+        const CHUNK_CAP: usize = 32 * 1024;
+        let s = &self.s;
+        let flow = self.flow.get();
+        let pad = " ".repeat(flow.cols);
+        let label = rune::labels::label(rune::Label::MoreNestedLines(lines));
+        let header = self
+            .select(self.with_reveal(text(label).font(s.code_block).color(s.muted)).w_full().copy_prefix(pad.clone()).copy_breaks(2, 1))
+            .key("more");
+        let all_hl = self.text_highlights_for(&inl.text, Some(map));
+        let ink = flow.ink.unwrap_or(s.text);
+        let mut card = col()
+            .key("deep-tail")
+            .w_full()
+            .gap(4.0)
+            .px(10.0)
+            .py(8.0)
+            .radius(6.0)
+            .fill(s.code_block_fill)
+            .border(0.5, s.code_block_border)
+            .border_layout()
+            .child(header);
+
+        let full = inl.text.as_str();
+        let mut start = 0usize;
+        let mut chunk_idx = 0usize;
+        while start < full.len() || chunk_idx == 0 {
+            let max_end = (start + CHUNK_CAP).min(full.len());
+            let end = if max_end == full.len() {
+                full.len()
+            } else {
+                full[start..max_end].rfind('\n').map_or(max_end, |d| start + d)
+            };
+            let slice = &full[start..end];
+            let chunk_hl: Vec<TextHighlight> = all_hl
+                .iter()
+                .filter_map(|h| {
+                    let r = h.range();
+                    let a = r.start.max(start);
+                    let b = r.end.min(end);
+                    (a < b).then(|| h.clone().with_range((a - start)..(b - start)))
+                })
+                .collect();
+            let is_last = end >= full.len();
+            let node = self
+                .select(
+                    self.with_reveal(tabbed(slice, Vec::new(), chunk_hl, s.code_block).font(s.code_block).color(ink).wrap())
+                        .w_full()
+                        .copy_prefix(pad.clone())
+                        .copy_breaks(1, if is_last { 2 } else { 1 }),
+                )
+                .key(format!("c{chunk_idx}"));
+            card = card.child(node);
+            chunk_idx += 1;
+            if is_last {
+                break;
+            }
+            start = if full.as_bytes().get(end) == Some(&b'\n') { end + 1 } else { end };
+        }
+        card
+    }
+
     fn leaf_block(&self, b: &Block, map: &BlockMap) -> El {
         let s = &self.s;
+        if let (Block::Para(inl), BlockMap::DeepTail { lines, map: tail_map }) = (b, map) {
+            return self.deep_tail(inl, *lines, tail_map);
+        }
         let inl_map = match map {
             BlockMap::Inline(m) => Some(m),
             _ => None,

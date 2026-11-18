@@ -5,21 +5,16 @@ use super::*;
 /// Estimated bytes of parsed documents kept beyond those on screen (see [`budget`]).
 const CACHE_BYTES: usize = 16 << 20;
 
-/// Maximum flattened sibling lines retained inside a single container block after crossing
-/// Blink's 511-element nesting bound, so a pathological streamed reply with thousands of
-/// 256-deep items never forces megabyte re-parses or multi-thousand-sibling relayouts per token.
-const MAX_FLATTENED_TAIL_LINES: usize = 64;
-
 pub(super) type Doc = (Rc<Vec<Block>>, Rc<[Source]>, Rc<[Option<(bool, usize)>]>, Rc<[usize]>, Rc<[BlockMap]>);
 
 #[derive(Clone)]
 pub(super) struct Parsed {
     pub(super) doc: Doc,
     pub(super) cuts: Rc<[Cut]>,
-    /// When `src` ended inside a capped past-bound container tail (`cut_end == src.len()`),
-    /// the byte offset of the last verified past-bound line start so appended tokens that stay
-    /// inside that tail reuse `doc` in `O(token_len)`.
-    pub(super) capped_tail_from: Option<usize>,
+    /// When `src` ended inside an active [`BlockMap::DeepTail`] at EOF, holds
+    /// `(cut_start, min_indent_cols)` so streamed tokens that continue that deep tail update only
+    /// the trailing `DeepTail` block without re-parsing the whole prefix.
+    pub(super) eof_deep_tail: Option<(usize, usize)>,
 }
 
 pub(super) struct Cache {
@@ -47,116 +42,99 @@ thread_local! {
     pub(super) static PARSES: Cell<(usize, usize)> = const { Cell::new((0, 0)) };
 }
 
-/// Returns `(is_blank, is_root, is_past_bound, prefix_only)` for a single line (without `\n`).
-#[inline]
-fn classify_line(line: &[u8]) -> (bool, bool, bool, bool) {
-    let mut i = 0usize;
-    let mut cols = 0usize;
-    let mut quotes = 0usize;
-    while i < line.len() {
-        match line[i] {
-            b' ' => {
-                cols += 1;
-                i += 1;
+fn detect_eof_deep_tail(src: &str, blocks: &[Block], maps: &[BlockMap]) -> Option<(usize, usize)> {
+    let mut b = blocks.last()?;
+    let mut m = maps.last()?;
+    loop {
+        match (b, m) {
+            (Block::List { items, .. }, BlockMap::List(imaps)) => {
+                b = items.last()?.last()?;
+                m = imaps.last()?.last()?;
             }
-            b'\t' => {
-                cols += 4;
-                i += 1;
+            (Block::Quote(inner), BlockMap::Quote(imaps)) => {
+                b = inner.last()?;
+                m = imaps.last()?;
             }
-            b'>' => {
-                quotes += 1;
-                i += 1;
-                if i < line.len() && line[i] == b' ' {
-                    i += 1;
+            (Block::Para(_), BlockMap::DeepTail { map, .. }) => {
+                let first_src = &map.0.first()?.0;
+                let last_src = &map.0.last()?.0;
+                if src[last_src.end..].bytes().any(|c| !c.is_ascii_whitespace()) {
+                    return None;
                 }
+                let cut_start = src[..first_src.start].rfind('\n').map_or(0, |i| i + 1);
+                let nl = src[cut_start..].find('\n').map_or(src.len(), |d| cut_start + d);
+                let (cols, blank, fence) = super::parser::line_indent_cols(&src.as_bytes()[cut_start..nl]);
+                return (!blank && !fence && cols >= 4).then_some((cut_start, cols));
             }
-            b'\r' => {
-                i += 1;
-            }
-            _ => break,
+            _ => return None,
         }
     }
-    let is_blank = i == line.len();
-    let prefix_only = is_blank && (cols > 0 || quotes > 0);
-    let is_root = !is_blank && cols == 0 && quotes == 0;
-    let max_quotes = if cfg!(target_arch = "wasm32") { 385 } else { 510 };
-    let is_past_bound = !is_blank && ((cols >= 2 && cols + quotes >= 510) || quotes > max_quotes);
-    (is_blank, is_root, is_past_bound, prefix_only)
 }
 
-/// Scans `src` (> 32 KiB) for a continuous run of > [`MAX_FLATTENED_TAIL_LINES`] lines nested
-/// past Blink's 511-element bound, returning `Some((cut_start, cut_end))` for the first excess
-/// run (`cut_end == src.len()` when the run reaches the end of `src`, or the byte start of the
-/// next root-level line otherwise).
-pub(super) fn find_deep_tail_cut(src: &str) -> Option<(usize, usize)> {
-    if src.len() <= 32 * 1024 {
+fn replace_eof_deep_tail(blocks: &mut [Block], maps: &mut [BlockMap], nb: Block, nm: BlockMap) -> bool {
+    let (Some(mut b), Some(mut m)) = (blocks.last_mut(), maps.last_mut()) else { return false };
+    loop {
+        match (b, m) {
+            (Block::List { items, .. }, BlockMap::List(imaps)) => {
+                let (Some(ib), Some(im)) = (items.last_mut().and_then(|v| v.last_mut()), imaps.last_mut().and_then(|v| v.last_mut())) else {
+                    return false;
+                };
+                b = ib;
+                m = im;
+            }
+            (Block::Quote(inner), BlockMap::Quote(imaps)) => {
+                let (Some(ib), Some(im)) = (inner.last_mut(), imaps.last_mut()) else { return false };
+                b = ib;
+                m = im;
+            }
+            (b_leaf @ Block::Para(_), m_leaf @ BlockMap::DeepTail { .. }) => {
+                *b_leaf = nb;
+                *m_leaf = nm;
+                return true;
+            }
+            _ => return false,
+        }
+    }
+}
+
+fn extend_eof_deep_tail(base: &Parsed, base_len: usize, src: &str) -> Option<Parsed> {
+    let (cut_start, min_cols) = base.eof_deep_tail?;
+    if cut_start > base_len || base_len > src.len() {
+        return None;
+    }
+    let check_from = src[..base_len].rfind('\n').map_or(cut_start, |i| (i + 1).max(cut_start));
+    if src[check_from..].contains("]:") {
         return None;
     }
     let bytes = src.as_bytes();
-    let mut pos = 0usize;
-    let mut deep_run = 0usize;
-    let mut cut_start: Option<usize> = None;
-
-    while pos < bytes.len() {
-        let nl = bytes[pos..].iter().position(|&b| b == b'\n').map_or(bytes.len(), |d| pos + d);
-        let line = &bytes[pos..nl];
-        let (is_blank, is_root, is_past_bound, prefix_only) = classify_line(line);
-        if let Some(cs) = cut_start {
-            if is_root {
-                return Some((cs, pos));
-            }
-        } else if is_past_bound {
-            deep_run += 1;
-            if deep_run > MAX_FLATTENED_TAIL_LINES {
-                cut_start = Some(pos);
-            }
-        } else if !is_blank && !prefix_only {
-            deep_run = 0;
-        }
-        pos = if nl < bytes.len() { nl + 1 } else { bytes.len() };
-    }
-    cut_start.map(|cs| (cs, bytes.len()))
-}
-
-/// When `base` ended inside an active capped deep tail at `from`, checks only `src[from..]` to
-/// verify no root-level line has started yet, returning the updated `from` watermark in
-/// `O(src.len() - from)`.
-fn extend_capped_tail(from: usize, src: &str) -> Option<usize> {
-    if from > src.len() {
-        return None;
-    }
-    let bytes = src.as_bytes();
-    let mut pos = from;
-    let mut next_from = from;
+    let mut pos = check_from;
     while pos < bytes.len() {
         if let Some(rel_nl) = bytes[pos..].iter().position(|&b| b == b'\n') {
             let nl = pos + rel_nl;
-            let (is_blank, _, is_past_bound, _) = classify_line(&bytes[pos..nl]);
-            if !is_blank && !is_past_bound {
+            let (cols, blank, fence) = super::parser::line_indent_cols(&bytes[pos..nl]);
+            if !blank && (fence || cols < min_cols) {
                 return None;
-            }
-            if is_past_bound {
-                next_from = nl + 1;
             }
             pos = nl + 1;
         } else {
-            // Trailing partial line with no newline yet: safe while blank/prefix-only or already past bound.
-            let (is_blank, _, is_past_bound, _) = classify_line(&bytes[pos..]);
-            if !is_blank && !is_past_bound {
+            let (cols, blank, fence) = super::parser::line_indent_cols(&bytes[pos..]);
+            if !blank && (fence || cols < min_cols) {
                 return None;
             }
             break;
         }
     }
-    Some(next_from)
-}
-
-fn tail_watermark(src: &str) -> Option<usize> {
-    let (_, cut_end) = find_deep_tail_cut(src)?;
-    if cut_end < src.len() {
+    let (nb, nm) = super::parser::build_deep_tail(src, cut_start..src.len());
+    let mut new_blocks = (*base.doc.0).clone();
+    let mut new_maps = base.doc.4.to_vec();
+    if !replace_eof_deep_tail(&mut new_blocks, &mut new_maps, nb, nm) {
         return None;
     }
-    Some(src.rfind('\n').map_or(0, |i| i + 1))
+    Some(Parsed {
+        doc: (Rc::new(new_blocks), base.doc.1.clone(), base.doc.2.clone(), base.doc.3.clone(), new_maps.into()),
+        cuts: base.cuts.clone(),
+        eof_deep_tail: Some((cut_start, min_cols)),
+    })
 }
 
 /// [`parse`] memoised by source on this thread. Every document the last two commits drew stays
@@ -166,37 +144,32 @@ pub fn parse_cached(src: &str) -> Rc<Vec<Block>> {
 }
 
 pub(super) fn doc_cached(src: &str) -> Doc {
-    CACHE.with_borrow_mut(|c| cached(c, src, parse_doc))
+    CACHE.with_borrow_mut(|c| cached(c, src, parse_doc, false))
 }
 
 /// [`doc_cached`] for a source still arriving.
 pub(super) fn stream_cached(src: &str) -> Doc {
-    STREAMS.with_borrow_mut(|c| cached(c, src, parse_streaming))
+    STREAMS.with_borrow_mut(|c| cached(c, src, parse_streaming, true))
 }
 
-fn try_extend(base: &Parsed, base_len: usize, src: &str, parse: fn(&str, bool) -> ParsedDoc) -> Option<Parsed> {
-    if let Some(from) = base.capped_tail_from
-        && let Some(next_from) = extend_capped_tail(from, src)
-    {
-        return Some(Parsed {
-            doc: base.doc.clone(),
-            cuts: base.cuts.clone(),
-            capped_tail_from: Some(next_from),
-        });
+fn try_extend(base: &Parsed, base_len: usize, src: &str, parse: fn(&str, bool) -> ParsedDoc, streaming: bool) -> Option<Parsed> {
+    if streaming && let Some(extended) = extend_eof_deep_tail(base, base_len, src) {
+        return Some(extended);
     }
     extend(base, base_len, src, parse)
 }
 
-fn cached(c: &mut Cache, src: &str, parse: fn(&str, bool) -> ParsedDoc) -> Doc {
+fn cached(c: &mut Cache, src: &str, parse: fn(&str, bool) -> ParsedDoc, streaming: bool) -> Doc {
     if let Some(hit) = c.docs.get(src) {
         return hit.doc.clone();
     }
     let grown = c.last.clone().filter(|last| src.len() > last.len() && src.starts_with(&**last));
-    let parsed = grown.as_ref().and_then(|last| try_extend(c.docs.peek(&**last)?, last.len(), src, parse)).unwrap_or_else(|| {
+    let parsed = grown.as_ref().and_then(|last| try_extend(c.docs.peek(&**last)?, last.len(), src, parse, streaming)).unwrap_or_else(|| {
         #[cfg(test)]
         PARSES.with(|p| p.set((p.get().0 + 1, p.get().1)));
         let (blocks, sources, tasks, cuts, starts, maps) = parse(src, true);
-        Parsed { doc: (Rc::new(blocks), sources.into(), tasks.into(), starts.into(), maps.into()), cuts: cuts.into(), capped_tail_from: tail_watermark(src) }
+        let eof_deep_tail = detect_eof_deep_tail(src, &blocks, &maps);
+        Parsed { doc: (Rc::new(blocks), sources.into(), tasks.into(), starts.into(), maps.into()), cuts: cuts.into(), eof_deep_tail }
     });
     // A stream's earlier string is dead once it grows, unless something drew it this
     // commit; left in, a long stream would fill the budget with its prefixes.
@@ -236,7 +209,7 @@ fn extend(base: &Parsed, base_len: usize, src: &str, parse: fn(&str, bool) -> Pa
     let tasks = base.doc.2[..cut.tasks].iter().copied()
         .chain(tasks.into_iter().map(|t| t.map(|(checked, at)| (checked, at + cut.at)))).collect();
     let starts = base.doc.3[..cut.blocks].iter().copied().chain(starts.into_iter().map(|at| at + cut.at)).collect();
-    let maps = base.doc.4[..cut.blocks].iter().cloned()
+    let maps: Rc<[BlockMap]> = base.doc.4[..cut.blocks].iter().cloned()
         .chain(maps.into_iter().map(|m| m.shift_src(cut.at))).collect();
     let cuts = base.cuts[..i]
         .iter()
@@ -248,6 +221,6 @@ fn extend(base: &Parsed, base_len: usize, src: &str, parse: fn(&str, bool) -> Pa
             tasks: c.tasks + cut.tasks,
         }))
         .collect();
-    let capped_tail_from = tail_watermark(tail_src).map(|off| cut.at + off);
-    Some(Parsed { doc: (Rc::new(blocks), sources, tasks, starts, maps), cuts, capped_tail_from })
+    let eof_deep_tail = detect_eof_deep_tail(&src, &blocks, &maps);
+    Some(Parsed { doc: (Rc::new(blocks), sources, tasks, starts, maps), cuts, eof_deep_tail })
 }

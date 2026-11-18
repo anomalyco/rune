@@ -45,6 +45,8 @@ pub enum Label<'a> {
     HideOthers,
     ShowAll,
     Quit(&'a str),
+    /// A Markdown block's marker before `n` lines nested past the container bound.
+    MoreNestedLines(usize),
 }
 
 type Namer = Arc<dyn Fn(Label<'_>) -> Option<String> + Send + Sync>;
@@ -84,7 +86,7 @@ pub(crate) fn rtl() -> bool {
 }
 
 /// What `label` reads now: the app's name for it, else Rune's English.
-pub(crate) fn label(label: Label<'_>) -> String {
+pub fn label(label: Label<'_>) -> String {
     named(label).unwrap_or_else(|| english(label))
 }
 
@@ -122,5 +124,7 @@ fn english(label: Label<'_>) -> String {
         Label::HideOthers => "Hide Others".into(),
         Label::ShowAll => "Show All".into(),
         Label::Quit(app) => format!("Quit {app}"),
+        Label::MoreNestedLines(1) => "1 more nested line".into(),
+        Label::MoreNestedLines(n) => format!("{n} more nested lines"),
     }
 }

@@ -13,11 +13,13 @@ struct Piece {
     text: String,
 }
 
-pub(super) type QuotePlainCache = HashMap<(usize, usize, u32), (usize, [u8; 2], Rc<str>)>;
+/// Keyed by `(quote_block_ptr, first_task, cols, lists) -> (task_delta, outer_breaks, text)`.
+pub(super) type QuotePlainCache = HashMap<(usize, usize, usize, u32), (usize, [u8; 2], Rc<str>)>;
 
 enum PlainFrame<'a> {
     Blocks {
         blocks: &'a [Block],
+        maps: &'a [BlockMap],
         idx: usize,
         cols: usize,
         lists: u32,
@@ -26,6 +28,7 @@ enum PlainFrame<'a> {
     List {
         start: Option<u64>,
         items: &'a [Vec<Block>],
+        item_maps: &'a [Vec<BlockMap>],
         idx: usize,
         cols: usize,
         lists: u32,
@@ -33,31 +36,39 @@ enum PlainFrame<'a> {
 }
 
 impl Renderer {
-    /// `blocks`, drawn with their first list item at `tasks[first_task]`, inside `flow`'s lists.
-    /// Since quotes finish innermost-first during rendering, nested quotes reuse their inner
-    /// quote's formatted `Rc<str>` without re-walking the subtree.
+    /// `inner`, drawn with its first list item at `tasks[first_task]`, inside `flow`'s lists.
+    /// Keyed by `quote_block`'s own address and `first_task` (with `task_delta` stored, and empty
+    /// quotes never cached) so empty slices never collide and `task` never rewinds.
     pub(super) fn plain_text_rc(
         &self,
-        blocks: &[Block],
+        quote_block: &Block,
+        inner: &[Block],
+        inner_maps: &[BlockMap],
         first_task: usize,
         flow: Flow,
         quote_plain_cache: &mut QuotePlainCache,
     ) -> Rc<str> {
-        let key = (blocks.as_ptr() as usize, flow.cols, flow.lists);
+        if inner.is_empty() {
+            return Rc::from("");
+        }
+        let key = (std::ptr::from_ref(quote_block) as usize, first_task, flow.cols, flow.lists);
         if let Some((_, _, cached)) = quote_plain_cache.get(&key) {
             return cached.clone();
         }
-        if let [Block::Quote(child)] = blocks {
-            let child_key = (child.as_ptr() as usize, flow.cols, flow.lists);
-            if let Some(&(end_task, breaks, ref cached)) = quote_plain_cache.get(&child_key) {
+        if let [child @ Block::Quote(grand)] = inner {
+            if grand.is_empty() {
+                return Rc::from("");
+            }
+            let child_key = (std::ptr::from_ref(child) as usize, first_task, flow.cols, flow.lists);
+            if let Some(&(task_delta, breaks, ref cached)) = quote_plain_cache.get(&child_key) {
                 let rc = cached.clone();
-                quote_plain_cache.insert(key, (end_task, breaks, rc.clone()));
+                quote_plain_cache.insert(key, (task_delta, breaks, rc.clone()));
                 return rc;
             }
         }
         let mut pieces = Vec::new();
         let mut task = first_task;
-        plain_iter(blocks, &self.tasks, &mut task, flow.cols, flow.lists, None, quote_plain_cache, &mut pieces);
+        plain_iter(inner, inner_maps, &self.tasks, &mut task, flow.cols, flow.lists, None, quote_plain_cache, &mut pieces);
         let bounds = match (pieces.first(), pieces.last()) {
             (Some(f), Some(l)) => [f.breaks[0], l.breaks[1]],
             _ => [0, 0],
@@ -73,16 +84,16 @@ impl Renderer {
             after = p.breaks[1];
         }
         let rc: Rc<str> = out.into();
-        quote_plain_cache.insert(key, (task, bounds, rc.clone()));
+        let task_delta = task.saturating_sub(first_task);
+        quote_plain_cache.insert(key, (task_delta, bounds, rc.clone()));
         rc
     }
 }
 
-/// Iterative walk producing the plain-text [`Piece`]s of `root_blocks`, consulting `cache` whenever
-/// a nested [`Block::Quote`] with no pending list marker was already formatted bottom-up.
 #[allow(clippy::too_many_arguments)]
 fn plain_iter(
     root_blocks: &[Block],
+    root_maps: &[BlockMap],
     tasks: &[Option<(bool, usize)>],
     task: &mut usize,
     root_cols: usize,
@@ -93,6 +104,7 @@ fn plain_iter(
 ) {
     let mut stack = vec![PlainFrame::Blocks {
         blocks: root_blocks,
+        maps: root_maps,
         idx: 0,
         cols: root_cols,
         lists: root_lists,
@@ -100,59 +112,94 @@ fn plain_iter(
     }];
     while let Some(top) = stack.last_mut() {
         match top {
-            PlainFrame::Blocks { blocks, idx, cols, lists, lead } => {
+            PlainFrame::Blocks { blocks, maps, idx, cols, lists, lead } => {
                 let blocks_slice = *blocks;
+                let maps_slice = *maps;
                 if *idx >= blocks_slice.len() {
                     stack.pop();
                     continue;
                 }
-                let b = &blocks_slice[*idx];
+                let i = *idx;
+                let b = &blocks_slice[i];
+                let m = maps_slice.get(i);
                 *idx += 1;
                 let here = lead.take();
-                match b {
-                    Block::Para(inl) | Block::Heading(_, inl) => {
+                match (b, m) {
+                    (Block::Para(inl), Some(BlockMap::DeepTail { lines, .. })) => {
+                        let header = rune::labels::label(rune::Label::MoreNestedLines(*lines));
+                        let pad = " ".repeat(*cols);
+                        let mut text = String::with_capacity(pad.len() + header.len() + 1 + inl.text.len());
+                        text.push_str(&pad);
+                        text.push_str(&header);
+                        for line in inl.text.lines() {
+                            text.push('\n');
+                            text.push_str(&pad);
+                            text.push_str(line);
+                        }
+                        out.push(Piece { breaks: [2, 2], text });
+                    }
+                    (Block::Para(inl) | Block::Heading(_, inl), _) => {
                         let text = unpadded(&inl.text);
                         out.push(match here {
                             Some((marker, before)) => Piece { breaks: [before, 1], text: marker + &text },
                             None => Piece { breaks: [2, 2], text },
                         });
                     }
-                    Block::Code(s) | Block::Diff(s) | Block::Mermaid(s) => {
+                    (Block::Code(s) | Block::Diff(s) | Block::Mermaid(s), _) => {
                         out.push(Piece { breaks: [2, 2], text: s.trim_end_matches('\n').to_owned() });
                     }
-                    Block::Quote(inner) => {
+                    (Block::Quote(inner), map_opt) => {
+                        if inner.is_empty() {
+                            continue;
+                        }
                         if here.is_none()
-                            && let Some(&(end_task, breaks, ref cached)) =
-                                cache.get(&(inner.as_ptr() as usize, *cols, *lists))
+                            && let Some(&(task_delta, breaks, ref cached)) =
+                                cache.get(&(std::ptr::from_ref(b) as usize, *task, *cols, *lists))
                         {
-                            *task = end_task;
+                            *task += task_delta;
                             if !cached.is_empty() {
                                 out.push(Piece { breaks, text: (**cached).to_owned() });
                             }
                             continue;
                         }
+                        let inner_maps = match map_opt {
+                            Some(BlockMap::Quote(im)) => im.as_slice(),
+                            _ => &[][..],
+                        };
                         let (c, l) = (*cols, *lists);
-                        stack.push(PlainFrame::Blocks { blocks: inner, idx: 0, cols: c, lists: l, lead: here });
+                        stack.push(PlainFrame::Blocks { blocks: inner, maps: inner_maps, idx: 0, cols: c, lists: l, lead: here });
                     }
-                    Block::List { start, items } => {
+                    (Block::List { start, items }, map_opt) => {
+                        let item_maps = match map_opt {
+                            Some(BlockMap::List(im)) => im.as_slice(),
+                            _ => &[][..],
+                        };
                         let (c, l) = (*cols, *lists);
-                        stack.push(PlainFrame::List { start: *start, items, idx: 0, cols: c, lists: l });
+                        stack.push(PlainFrame::List { start: *start, items, item_maps, idx: 0, cols: c, lists: l });
                     }
-                    Block::Table(t) => {
+                    (Block::Table(t), _) => {
                         let row = |cells: &[Inline]| cells.iter().map(|c| unpadded(&c.text)).collect::<Vec<_>>().join("\t");
                         let rows: Vec<String> = std::iter::once(row(&t.head)).chain(t.rows.iter().map(|r| row(r))).collect();
                         out.push(Piece { breaks: [1, 1], text: rows.join("\n") });
                     }
-                    Block::Image { .. } | Block::Rule => {}
+                    (Block::Image { .. } | Block::Rule, _) => {}
                 }
             }
-            PlainFrame::List { start, items, idx, cols, lists } => {
+            PlainFrame::List { start, items, item_maps, idx, cols, lists } => {
                 if *idx >= items.len() {
                     stack.pop();
                     continue;
                 }
                 let k = *idx;
                 *idx += 1;
+                let item_blocks = &(*items)[k];
+                let imap = (*item_maps).get(k).map_or(&[][..], Vec::as_slice);
+                if matches!(imap, [BlockMap::DeepTail { .. }]) {
+                    *task += 1;
+                    let (c, next_lists) = (*cols, *lists + 1);
+                    stack.push(PlainFrame::Blocks { blocks: item_blocks, maps: imap, idx: 0, cols: c, lists: next_lists, lead: None });
+                    continue;
+                }
                 let checked = tasks.get(*task).copied().flatten().map(|(checked, _)| checked);
                 *task += 1;
                 let mark = match (checked, *start) {
@@ -162,10 +209,10 @@ fn plain_iter(
                 };
                 let marker = format!("{}{}", " ".repeat(*cols), mark.marker());
                 let before = if k == 0 && *lists == 0 { 2 } else { 1 };
-                let item_blocks = &(*items)[k];
                 let (next_cols, next_lists) = (*cols + mark.width(), *lists + 1);
                 stack.push(PlainFrame::Blocks {
                     blocks: item_blocks,
+                    maps: imap,
                     idx: 0,
                     cols: next_cols,
                     lists: next_lists,
