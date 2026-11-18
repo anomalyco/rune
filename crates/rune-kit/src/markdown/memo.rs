@@ -95,6 +95,35 @@ pub(super) struct PreBlock {
     pub(super) table: Option<Box<PreTable>>,
 }
 
+impl PreRow {
+    fn heap_bytes(&self) -> usize {
+        const RC_HEADER: usize = 2 * std::mem::size_of::<usize>();
+        self.links.iter().map(|u| std::mem::size_of::<Rc<str>>() + RC_HEADER + u.len()).sum()
+    }
+}
+
+impl PreBlock {
+    /// Heap bytes owned beneath this top-level block (nested items, child blocks, table rows,
+    /// and copied link URLs); a plain top-level block with none of those adds `0`.
+    pub(super) fn heap_bytes(&self) -> usize {
+        use std::mem::size_of;
+        const RC_HEADER: usize = 2 * size_of::<usize>();
+        let child_cost = |c: &Rc<Self>| size_of::<Rc<Self>>() + RC_HEADER + size_of::<Self>() + c.heap_bytes();
+        let own_urls = self.items.is_empty() && self.inner.is_empty() && self.table.is_none();
+        let links = self.links.len() * size_of::<Rc<str>>()
+            + if own_urls { self.links.iter().map(|u| RC_HEADER + u.len()).sum::<usize>() } else { 0 };
+        let items: usize = self.items.iter().map(|it| {
+            size_of::<PreItem>() + it.links.len() * size_of::<Rc<str>>() + it.inner.iter().map(child_cost).sum::<usize>()
+        }).sum();
+        let inner: usize = self.inner.iter().map(child_cost).sum();
+        let table = self.table.as_ref().map_or(0, |t| {
+            size_of::<PreTable>() + t.head.heap_bytes() + t.rows.len() * size_of::<PreRow>()
+                + t.rows.iter().map(PreRow::heap_bytes).sum::<usize>()
+        });
+        links + items + inner + table
+    }
+}
+
 pub(super) fn source_count(b: &Block) -> usize {
     match b {
         Block::Code(_) | Block::Mermaid(_) => 1,

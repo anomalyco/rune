@@ -85,8 +85,9 @@ fn cached(c: &mut Cache, src: &str, parse: fn(&str, bool) -> ParsedDoc) -> (Doc,
         c.docs.remove(&*last);
     }
     let key: Rc<str> = src.into();
-    // Parsed text is about as long as its source, plus each block's bookkeeping.
-    let bytes = 2 * src.len() + 64 * parsed.cuts.len() + 128;
+    // Parsed text is about as long as its source, plus each block's bookkeeping and nested digests.
+    let meta_bytes: usize = parsed.meta.iter().map(|p| p.heap_bytes()).sum();
+    let bytes = 2 * src.len() + 64 * parsed.cuts.len() + meta_bytes + 128;
     c.docs.insert(key.clone(), parsed.clone(), bytes);
     c.last = Some(key);
     (parsed.doc, parsed.meta)
