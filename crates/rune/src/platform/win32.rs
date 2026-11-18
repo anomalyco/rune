@@ -426,9 +426,10 @@ pub(crate) fn work_area(monitor: &winit::monitor::MonitorHandle) -> Option<(i32,
 /// Destroys this thread's windows at once, for a fast exit: each gets the default window procedure
 /// first, so neither winit's nor a subclass runs while the process is ending.
 pub(crate) fn destroy_own_windows() {
-    use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM, TRUE};
+    use windows_sys::Win32::Foundation::{HWND, LPARAM, TRUE};
     use windows_sys::Win32::System::Threading::GetCurrentThreadId;
     use windows_sys::Win32::UI::WindowsAndMessaging::EnumThreadWindows;
+    use windows_sys::core::BOOL;
     unsafe extern "system" fn add(hwnd: HWND, list: LPARAM) -> BOOL {
         // SAFETY: `list` is the Vec `destroy_own_windows` passes, alive for the enumeration.
         unsafe { (*(list as *mut Vec<HWND>)).push(hwnd) };
