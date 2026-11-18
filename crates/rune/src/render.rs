@@ -1409,7 +1409,7 @@ fn report_gpu_allocations(device: wgpu::Device) {
 /// Frame-profile builds: `RUNE_PINNED` forcing the split on (`all`) or off (`off`), and the instances drawn
 /// unsplit and split since the last report (`report_pinned`).
 #[cfg(feature = "frame-profile")]
-fn pinned_forced() -> Option<bool> {
+pub(super) fn pinned_forced() -> Option<bool> {
     static FORCED: std::sync::OnceLock<Option<bool>> = std::sync::OnceLock::new();
     *FORCED.get_or_init(|| match std::env::var("RUNE_PINNED").as_deref() { Ok("all") => Some(true), Ok("off") => Some(false), _ => None })
 }

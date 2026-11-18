@@ -389,7 +389,13 @@ impl Renderer {
             let spawned = std::thread::Builder::new()
                 .name("rune-pinned-pipelines".into())
                 // A renderer dropped meanwhile has no receiver: nothing to tell.
-                .spawn(move || { sent.send(make_pinned(&device, &layout, format)).ok(); });
+                .spawn(move || {
+                    // Below normal, as the CPU frame's helpers are: on a two-core machine a cold driver cache makes this a
+                    // 150 ms compile, which mustn't compete with the first input.
+                    // SAFETY: this thread's pseudo-handle.
+                    unsafe { windows_sys::Win32::System::Threading::SetThreadPriority(windows_sys::Win32::System::Threading::GetCurrentThread(), windows_sys::Win32::System::Threading::THREAD_PRIORITY_BELOW_NORMAL) };
+                    sent.send(make_pinned(&device, &layout, format)).ok();
+                });
             if spawned.is_ok() {
                 self.pinned_building = Some((format, done));
                 return;
@@ -403,7 +409,13 @@ impl Renderer {
     /// renderer has since left is dropped, and that format's next use starts again).
     pub(super) fn take_pinned(&mut self) {
         let Some((format, done)) = &self.pinned_building else { return };
-        match done.try_recv() {
+        // Frame-profile builds with `RUNE_PINNED=all` wait for them, so a capture's every frame draws pinned (the
+        // screen comparison forces the split on); every other build never waits.
+        #[cfg(feature = "frame-profile")]
+        let got = if super::pinned_forced() == Some(true) { done.recv().map_err(|_| std::sync::mpsc::TryRecvError::Disconnected) } else { done.try_recv() };
+        #[cfg(not(feature = "frame-profile"))]
+        let got = done.try_recv();
+        match got {
             Ok(pinned) => {
                 if *format == self.format { self.pinned = Some(pinned); }
                 self.pinned_building = None;

@@ -136,8 +136,8 @@ pub(super) fn uber_pinned<T>(device: &wgpu::Device, kind: u32, make_pipeline: im
 /// Whether each pinned fragment (`PINNED` order) is the one `regen_dxbc` compiled from this build's WGSL beside this
 /// build's vertex stage: the WGSL hash and both files' BLAKE3 that build.rs takes (render/uber_wgsl.rs) against what
 /// `regen_dxbc` recorded with them (`uber/dxbc_pinned_hash.rs`). Settled at compile time, so nothing is hashed at run
-/// time. A fragment left by another shader, another wgpu or a regenerated vertex stage, a hand-edited hash or a
-/// swapped file all fail it, and the general shader draws that kind.
+/// time. A fragment left by another shader or beside a regenerated vertex stage (which is how a wgpu or Naga upgrade
+/// shows), a hand-edited hash or a swapped file all fail it, and the general shader draws that kind.
 #[cfg(target_os = "windows")]
 const PINNED_FRESH: [bool; 3] = {
     use super::uber_wgsl::same;

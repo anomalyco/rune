@@ -54,15 +54,23 @@ fn main() {
     };
     let pinned_fs: Vec<String> = [0, 1, 2].iter().map(|kind| file(&format!("uber.fs-k{kind}.dxbc"))).collect();
     let pinned_vs = file("uber.vs.dxbc");
-    let pinned_record = read("src/render/uber/dxbc_pinned_hash.rs");
+    // What regen_dxbc recorded, in `PINNED` order: a list's quoted entries, in place.
+    let recorded_list = |name: &str| {
+        let file = read("src/render/uber/dxbc_pinned_hash.rs");
+        let at = file.find(&format!("{name}: [&str; ")).unwrap_or_else(|| panic!("dxbc_pinned_hash.rs records no {name}"));
+        let list = &file[at..];
+        let list = &list[list.find("= [").map_or(0, |i| i + 3)..list.find("];").unwrap_or(list.len())];
+        list.split('"').skip(1).step_by(2).map(str::to_owned).collect::<Vec<_>>()
+    };
+    let (recorded_wgsl, recorded_fs) = (recorded_list("UBER_DXBC_PINNED_WGSL_BLAKE3"), recorded_list("UBER_DXBC_PINNED_FS_BLAKE3"));
+    let recorded_vs = recorded("src/render/uber/dxbc_pinned_hash.rs", "UBER_DXBC_PINNED_VS_BLAKE3");
     let stale_kinds: Vec<usize> = (0..3).filter(|&at| {
-        let wanted = [pinned_wgsl[at].as_str(), pinned_fs[at].as_str(), pinned_vs.as_str()];
-        wanted.iter().any(|hash| !pinned_record.contains(hash))
+        recorded_wgsl.get(at) != Some(&pinned_wgsl[at]) || recorded_fs.get(at) != Some(&pinned_fs[at]) || recorded_vs != pinned_vs
     }).collect();
     if !stale_kinds.is_empty() {
-        println!("cargo::warning=The precompiled DX12 fragments pinned to kinds {stale_kinds:?} (uber.fs-k*.dxbc) don't match this shader, \
-            this wgpu or this vertex stage, so they aren't used: Windows scrolling draws on the slow path (the general shader) until \
-            `cargo run -p rune --example regen_dxbc` is run on Windows");
+        println!("cargo::warning=The precompiled DX12 fragments pinned to kinds {stale_kinds:?} (uber.fs-k*.dxbc) weren't compiled from this \
+            shader beside this uber.vs.dxbc, or aren't the files regen_dxbc wrote, so they aren't used: Windows scrolling draws on the slow \
+            path (the general shader) until `cargo run -p rune --example regen_dxbc` is run on Windows");
     }
     stale("The precompiled Metal uber shader (uber.metallib)", recorded("src/render/uber/metallib_hash.rs", "UBER_WGSL_BLAKE3"),
         &classic_hash, "scripts/precompile-metal-shaders.sh on a Mac");
