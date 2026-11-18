@@ -3,7 +3,8 @@ use std::marker::PhantomData;
 use std::sync::{Arc, Weak, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU8, AtomicU64, Ordering};
 use portable_atomic::AtomicU128;
-use crate::{Color, Spring, Waker};
+use rune_motion::Spring;
+use crate::{Color, Waker};
 
 /// A linear, render-time track. Keep it in app state and bind it like a `Live` value.
 /// Starts on first attachment to each runtime; rebuilds and remounts retain elapsed time.
@@ -61,7 +62,7 @@ mod sealed { pub trait Sealed {} }
 /// Latest-wins text for a fixed layout box. Equal strings do not wake subscribers.
 /// Unlike numeric Live publication, text publication takes a short mutex and may allocate.
 #[derive(Clone)]
-pub struct LiveText { text: Arc<Mutex<Arc<str>>>, pub(crate) source: Arc<Source> }
+pub struct LiveText { text: Arc<Mutex<Arc<str>>>, #[doc(hidden)] pub source: Arc<Source> }
 impl std::fmt::Debug for LiveText {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LiveText").finish_non_exhaustive()
@@ -83,7 +84,8 @@ impl LiveText {
         self.source.notify();
         true
     }
-    pub(crate) fn read(&self, seen: &mut Option<u128>) -> Option<Arc<str>> {
+    #[doc(hidden)]
+    pub fn read(&self, seen: &mut Option<u128>) -> Option<Arc<str>> {
         if *seen == Some(self.source.value.load(Ordering::Acquire)) { return None; }
         let text = self.text.lock().unwrap();
         *seen = Some(self.source.value.load(Ordering::Acquire));
@@ -134,7 +136,7 @@ impl LiveValue for Color {
 /// NaN is ignored (`set` returns false; `new` starts at zero), ±inf clamps to ±`f32::MAX`. Opacity is clamped by presentation; scale must be nonnegative.
 /// Publication is lock-free on supported desktop CPUs. Window notification is coalesced;
 /// its platform callback is not a hard-real-time API.
-pub struct Live<T: LiveValue> { pub(crate) source: Arc<Source>, _t: PhantomData<T> }
+pub struct Live<T: LiveValue> { #[doc(hidden)] pub source: Arc<Source>, _t: PhantomData<T> }
 impl<T: LiveValue> Clone for Live<T> {
     fn clone(&self) -> Self { Self { source: self.source.clone(), _t: PhantomData } }
 }
@@ -216,23 +218,26 @@ const KIND_SET: u64 = 0;
 const KIND_SNAP: u64 = 1;
 const KIND_PULSE: u64 = 2;
 
+#[doc(hidden)]
 #[derive(Clone, Copy)]
-pub(crate) enum LatchOp {
+pub enum LatchOp {
     Snap(u128),
     Set(u128),
     Pulse { active: u128, rest: u128, hold: f64 },
 }
 
+#[doc(hidden)]
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Property { Opacity, Offset, Scale, Fill, Rect, Blur, Trim, TextColor, Border, Shadow, GradientTop, GradientBottom }
+pub enum Property { Opacity, Offset, Scale, Fill, Rect, Blur, Trim, TextColor, Border, Shadow, GradientTop, GradientBottom }
 impl Property {
     /// A colour: it moves paint only, never geometry.
-    pub(crate) fn is_color(self) -> bool {
+    pub fn is_color(self) -> bool {
         matches!(self, Property::Fill | Property::TextColor | Property::Border | Property::Shadow | Property::GradientTop | Property::GradientBottom)
     }
 }
+#[doc(hidden)]
 #[derive(Clone)]
-pub(crate) struct Bound {
+pub struct Bound {
     pub source: Arc<Source>,
     pub property: Property,
     pub spring: Option<Spring>,
@@ -280,7 +285,8 @@ impl Bound {
     }
 }
 
-pub(crate) struct Wake {
+#[doc(hidden)]
+pub struct Wake {
     // differs from dev: the writer that makes the state both visible and pending
     // owns the callback. Separate atomics let both writers see the other's change.
     flags: AtomicU8,
@@ -301,7 +307,7 @@ impl Wake {
         after_write();
         self.wake_after_visibility(visible, old);
     }
-    pub(crate) fn notify(&self) {
+    pub fn notify(&self) {
         self.publish(|| {});
     }
     fn publish(&self, after_write: impl FnOnce()) {
@@ -331,12 +337,12 @@ impl Wake {
 
     // Only the host changes visibility, and it checks visibility before taking a wake.
     #[inline]
-    pub(crate) fn take_visible(&self) -> bool {
+    pub fn take_visible(&self) -> bool {
         self.flags.swap(0, Ordering::AcqRel) != 0
     }
 
     #[inline]
-    pub(crate) fn visible_pending(&self) -> bool {
+    pub fn visible_pending(&self) -> bool {
         self.flags.load(Ordering::Acquire) == Self::PENDING
     }
 
@@ -347,14 +353,16 @@ impl Wake {
     }
 }
 
-pub(crate) struct Subscription {
+#[doc(hidden)]
+pub struct Subscription {
     pub source_id: u64,
     pub active: AtomicBool,
     wake: Weak<Wake>,
 }
 struct Listener { subscription: Arc<Subscription>, next: *mut Listener }
 
-pub(crate) struct Source {
+#[doc(hidden)]
+pub struct Source {
     linear: Option<Linear>,
     id: u64,
     value: AtomicU128,
@@ -364,7 +372,7 @@ pub(crate) struct Source {
     listeners: AtomicPtr<Listener>,
 }
 impl Source {
-    pub(crate) fn new(value: u128) -> Arc<Self> {
+    pub fn new(value: u128) -> Arc<Self> {
         static NEXT: AtomicU64 = AtomicU64::new(1);
         Arc::new(Self {
             id: NEXT.fetch_add(1, Ordering::Relaxed),
@@ -413,7 +421,7 @@ impl Source {
             }
         }
     }
-    pub(crate) fn notify(&self) {
+    pub fn notify(&self) {
         let mut p = self.listeners.load(Ordering::Acquire);
         while !p.is_null() {
             // SAFETY: this source is alive through the caller's Arc; list is immutable.

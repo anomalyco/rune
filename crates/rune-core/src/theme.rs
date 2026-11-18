@@ -54,10 +54,12 @@ pub fn with_blend<R>(srgb: bool, f: impl FnOnce() -> R) -> R {
 }
 
 /// Holds a blend mode for [`blends_srgb`] until dropped, then restores the one before it.
+#[doc(hidden)]
 #[must_use]
-pub(crate) struct Scope(bool);
+pub struct Scope(bool);
 
-pub(crate) fn scope(srgb: bool) -> Scope {
+#[doc(hidden)]
+pub fn scope(srgb: bool) -> Scope {
     Scope(SRGB.with(|c| c.replace(srgb)))
 }
 

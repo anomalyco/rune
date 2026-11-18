@@ -51,7 +51,8 @@ fn page_mark(name: &str) {
 }
 
 /// [`mark`] behind a flag of the call site's own, for a step that runs every frame.
-pub(crate) fn mark_once(flag: &AtomicBool, name: &'static str) {
+#[doc(hidden)]
+pub fn mark_once(flag: &AtomicBool, name: &'static str) {
     if !flag.swap(true, Ordering::Relaxed) {
         mark(name);
     }
@@ -78,12 +79,14 @@ pub fn notes() -> Vec<(&'static str, &'static str)> {
 }
 
 /// Whether totals are still being kept (the first frame hasn't presented).
-pub(crate) fn counting() -> bool {
+#[doc(hidden)]
+pub fn counting() -> bool {
     !TOTALS_DONE.load(Ordering::Relaxed)
 }
 
 /// Adds `amount` to total `name` while totals are kept.
-pub(crate) fn add(name: &'static str, amount: u64) {
+#[doc(hidden)]
+pub fn add(name: &'static str, amount: u64) {
     if !counting() {
         return;
     }
@@ -95,11 +98,13 @@ pub(crate) fn add(name: &'static str, amount: u64) {
 }
 
 /// Adds the time since `started` to total `name` (in nanoseconds) when it drops.
-pub(crate) struct Timed(Option<(&'static str, Instant)>);
+#[doc(hidden)]
+pub struct Timed(Option<(&'static str, Instant)>);
 
 impl Timed {
     /// Times until it drops, while totals are kept and `when` holds.
-    pub(crate) fn start(name: &'static str, when: bool) -> Timed {
+    #[doc(hidden)]
+    pub fn start(name: &'static str, when: bool) -> Timed {
         Timed((when && counting()).then(|| (name, Instant::now())))
     }
 }
@@ -113,7 +118,8 @@ impl Drop for Timed {
 }
 
 /// Keeps `value` for `key`, the first one given.
-pub(crate) fn note(key: &'static str, value: &'static str) {
+#[doc(hidden)]
+pub fn note(key: &'static str, value: &'static str) {
     let mut book = book();
     if !book.notes.iter().any(|(k, _)| *k == key) {
         book.notes.push((key, value));
@@ -121,7 +127,8 @@ pub(crate) fn note(key: &'static str, value: &'static str) {
 }
 
 /// A glyph this frame draws found no room in the atlas, so the frame lacks it.
-pub(crate) fn text_missed() {
+#[doc(hidden)]
+pub fn text_missed() {
     MISSED.store(true, Ordering::Relaxed);
 }
 
@@ -130,17 +137,18 @@ static TEXT_COMPLETE: AtomicBool = AtomicBool::new(false);
 static INPUT_READY: AtomicBool = AtomicBool::new(false);
 
 /// A frame presented: the first one marks `frame.first.presented` and stops the totals; the first
-/// that drew every glyph it laid out marks `text.complete`.
-pub(crate) fn presented() {
-    if !TOTALS_DONE.swap(true, Ordering::Relaxed) {
+/// that drew every glyph it laid out marks `text.complete`. Returns whether this was the first
+/// presented frame.
+#[doc(hidden)]
+pub fn presented() -> bool {
+    let first = !TOTALS_DONE.swap(true, Ordering::Relaxed);
+    if first {
         mark("frame.first.presented");
-        // Windows' word dictionaries load once the first frame is out (platform/win32/segmenter.rs).
-        #[cfg(all(target_os = "windows", not(feature = "segmenter-dictionaries")))]
-        crate::platform::win32::segmenter::first_frame_presented();
     }
     if !MISSED.swap(false, Ordering::Relaxed) {
         mark_once(&TEXT_COMPLETE, "text.complete");
     }
+    first
 }
 
 static KEY_ARRIVED: AtomicBool = AtomicBool::new(false);
@@ -151,23 +159,27 @@ static PRESS_HANDLED: AtomicBool = AtomicBool::new(false);
 /// The launch's first key press and first mouse button press: `input.key.arrived` and
 /// `input.press.arrived` as the window hears them, `input.key.handled` and `input.press.handled`
 /// as a frame runs them, so a trace says how long the first input waited.
-pub(crate) fn input_arrived(key: bool) {
+#[doc(hidden)]
+pub fn input_arrived(key: bool) {
     if key { mark_once(&KEY_ARRIVED, "input.key.arrived") } else { mark_once(&PRESS_ARRIVED, "input.press.arrived") }
 }
 
 /// See [`input_arrived`].
-pub(crate) fn input_handled(key: bool) {
+#[doc(hidden)]
+pub fn input_handled(key: bool) {
     if key { mark_once(&KEY_HANDLED, "input.key.handled") } else { mark_once(&PRESS_HANDLED, "input.press.handled") }
 }
 
 /// The event loop is about to wait for input: after the first present, `input.ready`.
-pub(crate) fn loop_waits() {
+#[doc(hidden)]
+pub fn loop_waits() {
     if !counting() {
         mark_once(&INPUT_READY, "input.ready");
     }
 }
 
 /// Whether `key` has a note.
-pub(crate) fn noted(key: &'static str) -> bool {
+#[doc(hidden)]
+pub fn noted(key: &'static str) -> bool {
     book().notes.iter().any(|(k, _)| *k == key)
 }

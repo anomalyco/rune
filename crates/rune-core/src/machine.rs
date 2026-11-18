@@ -5,8 +5,8 @@
 //! and out, and a combination of flags that means nothing can't be built.
 //!
 //! Timers are events too: a timed variant keeps its `Attempt` and due time on
-//! [`Tx::clock`](crate::Tx::clock), entering it returns an effect the caller turns into
-//! [`Tx::wake_at`](crate::Tx::wake_at), and `poll` feeds the timer back as an event when it
+//! `Tx::clock`, entering it returns an effect the caller turns into
+//! `Tx::wake_at`, and `poll` feeds the timer back as an event when it
 //! comes due. A timer, reply or dialog answer whose attempt the state no longer holds is stale
 //! and changes nothing.
 //!

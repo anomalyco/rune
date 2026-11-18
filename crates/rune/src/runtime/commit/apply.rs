@@ -243,7 +243,7 @@ impl<S: 'static> Runtime<S> {
                 let hidden = if glide.is_some() { self.fold_hidden_above(&nodes, j, h) } else { None };
                 if existed && !cut && !nodes[j].virtual_mount && nodes[j].glide.is_some() && !self.grows.contains_key(&id) { opened.push(id); }
                 let g = self.grows.entry(id).or_insert_with(|| {
-                    if existed && (!cut || live) && !nodes[j].virtual_mount { GrowTrack { duration, ..GrowTrack::settled(0.0) } } else { GrowTrack::settled(h) }
+                    if existed && (!cut || live) && !nodes[j].virtual_mount { GrowTrack::settled(0.0).with_duration(duration) } else { GrowTrack::settled(h) }
                 });
                 g.set_kind(streaming, whole, glide);
                 let snap_change = ((instant && !live) || resized) && !streaming && (h - g.target).abs() > 1e-4;

@@ -139,7 +139,8 @@ pub const SUBSTEP: f32 = 1.0 / 240.0;
 /// The steps that advance growth by `dt` seconds: whole `SUBSTEP`s, then what is left, so a
 /// frame shows the motion at its own time rather than at the last whole substep before it (at
 /// 144 or 165 Hz a frame would otherwise advance one substep or two, unevenly). At most a second.
-pub(crate) fn substeps(dt: f32) -> Substeps {
+#[doc(hidden)]
+pub fn substeps(dt: f32) -> Substeps {
     let dt = dt.clamp(0.0, 1.0);
     let whole = (dt / SUBSTEP + 1e-4).floor();
     let left = dt - whole * SUBSTEP;
@@ -147,8 +148,9 @@ pub(crate) fn substeps(dt: f32) -> Substeps {
 }
 
 /// [`substeps`]: a frame's growth steps, copied to each track that takes them.
+#[doc(hidden)]
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct Substeps {
+pub struct Substeps {
     whole: u32,
     left: f32,
 }
@@ -264,7 +266,8 @@ pub struct GrowTrack {
     /// Presented feather height (points).
     pub mask: f32,
     /// A live tail grows under a linear ramp (negative width in the renderer).
-    pub(crate) linear_edge: bool,
+    #[doc(hidden)]
+    pub linear_edge: bool,
     /// `El::streaming`: this row climbs on its stream's pace, which overrides its whole or fold
     /// kind until it rests off the stream.
     pub streaming: bool,
@@ -273,7 +276,8 @@ pub struct GrowTrack {
     /// fold's own spring takes precedence while the row is a fold.
     pub whole: bool,
     /// Commit spring duration floor (`Tx::motion`), so a slower transaction (`REFLOW`) slows the row too.
-    pub(crate) duration: f32,
+    #[doc(hidden)]
+    pub duration: f32,
     /// Points between the presented height and the target when it was last set (see [`WHOLE_REACH`]).
     pub(crate) span: f32,
     /// What moves the height.
@@ -284,10 +288,12 @@ pub struct GrowTrack {
     pub(crate) lift: Lift,
     /// Points of lifted contents put back above the row as its glide landed whole, for its
     /// viewport's offset to take up (`Runtime::restore_above`).
-    pub(crate) restore: f32,
+    #[doc(hidden)]
+    pub restore: f32,
     /// The share of each point it shuts by that a header held over it comes down, when the
     /// viewport's end will stop its bottom short (`Runtime::give_way`).
-    pub(crate) give: Option<f32>,
+    #[doc(hidden)]
+    pub give: Option<f32>,
     /// Whether it climbs on its stream's pace.
     pub(crate) pace: Pace,
     /// Points per second the target has been rising at, averaged over [`pace::WINDOW`].
@@ -306,6 +312,12 @@ const SETTLE_V: f32 = 1.5;
 impl GrowTrack {
     pub fn settled(h: f32) -> GrowTrack {
         GrowTrack { h, v: 0.0, target: h, age: 0.0, mask: 0.0, linear_edge: false, streaming: false, whole: false, duration: 0.0, span: 0.0, motion: Motion::Spring, stage: Stage::Free, lift: Lift::None, restore: 0.0, give: None, pace: Pace::Rest, rate: 0.0 }
+    }
+
+    #[doc(hidden)]
+    pub fn with_duration(mut self, duration: f32) -> GrowTrack {
+        self.duration = duration;
+        self
     }
 
     pub fn moving(&self) -> bool {
@@ -360,7 +372,8 @@ impl GrowTrack {
     }
 
     /// How far up from their layout the row's contents draw.
-    pub(crate) fn lift(&self) -> f32 {
+    #[doc(hidden)]
+    pub fn lift(&self) -> f32 {
         match self.lift {
             Lift::None => 0.0,
             Lift::Riding { pinned } => (pinned - self.h).max(0.0),
@@ -373,7 +386,8 @@ impl GrowTrack {
     /// bottom edge from here, so what shows slides up under the header on the fold's spring
     /// rather than racing past. Returns the points cut, which the viewport's offset drops by so
     /// nothing on screen moves.
-    pub(crate) fn hide_above(&mut self, above: f32) -> f32 {
+    #[doc(hidden)]
+    pub fn hide_above(&mut self, above: f32) -> f32 {
         let pinned = self.lift() + self.h;
         let cut = above.min(self.h - self.target).max(0.0);
         self.h -= cut;
@@ -386,7 +400,8 @@ impl GrowTrack {
     /// it grows from its bottom: its spring stops `rise` points on, where its header has risen
     /// back to the top and what its contents hid below has shown, its contents easing up as
     /// much on the way; the rest then lands at once, all of it lifted, which the end takes up.
-    pub(crate) fn ride_up(&mut self, rise: f32) {
+    #[doc(hidden)]
+    pub fn ride_up(&mut self, rise: f32) {
         let (from, h) = (self.lift(), self.h);
         let stage = (h + rise.max(0.0)).min(self.target);
         let (d, end) = (stage - h, self.target - stage);
@@ -397,23 +412,27 @@ impl GrowTrack {
     }
 
     /// A fold shutting over what it held, which its clip folds away (`El::fold_glide`).
-    pub(crate) fn shutting_fold(&self) -> bool {
+    #[doc(hidden)]
+    pub fn shutting_fold(&self) -> bool {
         matches!(self.motion, Motion::Fold { .. }) && self.h > self.target + 0.01
     }
 
     /// Whether a glide last retargeted shut: landed, it still lifts and clips what it folded
     /// away until that has gone.
-    pub(crate) fn shut(&self) -> bool {
+    #[doc(hidden)]
+    pub fn shut(&self) -> bool {
         matches!(self.motion, Motion::Fold { shut: true, .. })
     }
 
     /// Whether it climbs on a stream's pace.
-    pub(crate) fn paced(&self) -> bool {
+    #[doc(hidden)]
+    pub fn paced(&self) -> bool {
         matches!(self.pace, Pace::Climbing { .. })
     }
 
     /// What a shut fold held has left: let go of its lift and of the shut flag that kept it.
-    pub(crate) fn forget_folded(&mut self) {
+    #[doc(hidden)]
+    pub fn forget_folded(&mut self) {
         self.lift = Lift::None;
         if let Motion::Fold { shut, .. } = &mut self.motion {
             *shut = false;
@@ -421,7 +440,8 @@ impl GrowTrack {
     }
 
     /// The fold's own spring, when this row is a fold.
-    pub(crate) fn glide(&self) -> Option<Spring> {
+    #[doc(hidden)]
+    pub fn glide(&self) -> Option<Spring> {
         match self.motion {
             Motion::Fold { spring, .. } => Some(spring),
             Motion::Spring => None,
@@ -429,7 +449,8 @@ impl GrowTrack {
     }
 
     /// The fold's own edge depth, when it sets one.
-    pub(crate) fn feather(&self) -> Option<f32> {
+    #[doc(hidden)]
+    pub fn feather(&self) -> Option<f32> {
         match self.motion {
             Motion::Fold { feather, .. } => feather,
             Motion::Spring => None,
@@ -437,12 +458,14 @@ impl GrowTrack {
     }
 
     /// Whether the glide has stopped `Stage::StopAt` short of its target, still to land whole.
-    pub(crate) fn staged(&self) -> bool {
+    #[doc(hidden)]
+    pub fn staged(&self) -> bool {
         self.stage.is_set()
     }
 
     /// The same row kind, restarted at `h` with nothing else carried over.
-    pub(crate) fn restarted(&self, h: f32) -> GrowTrack {
+    #[doc(hidden)]
+    pub fn restarted(&self, h: f32) -> GrowTrack {
         GrowTrack {
             streaming: self.streaming,
             whole: self.whole,
@@ -456,7 +479,8 @@ impl GrowTrack {
 
     /// The row's `El::streaming`, `El::arrives_whole` and `El::fold_glide` (which streaming
     /// overrides) with the height at which its bottom leaves the window.
-    pub(crate) fn set_kind(&mut self, streaming: bool, whole: bool, glide: Option<(FoldGlide, f32)>) {
+    #[doc(hidden)]
+    pub fn set_kind(&mut self, streaming: bool, whole: bool, glide: Option<(FoldGlide, f32)>) {
         self.streaming = streaming;
         self.whole = whole;
         if streaming {
@@ -484,7 +508,8 @@ impl GrowTrack {
     }
 
     /// [`Self::step`] for `dt` seconds, at most a `SUBSTEP`.
-    pub(crate) fn step_by(&mut self, dt: f32, spring: Spring, edge: &StreamEdge, carrying_tail: bool) {
+    #[doc(hidden)]
+    pub fn step_by(&mut self, dt: f32, spring: Spring, edge: &StreamEdge, carrying_tail: bool) {
         let spring = spring.with_duration(spring.duration.max(self.duration) * edge.duration.max(0.05));
         let aim = self.stage.aim(self.target);
         let rem = aim - self.h;

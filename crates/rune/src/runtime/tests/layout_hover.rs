@@ -203,7 +203,9 @@ fn a_move_before_the_next_tick_sees_layout_just_set_moving() {
     // A growing element's height.
     let mut rt = resting(Rows::default());
     let id = rt.nodes.iter().find(|n| n.named("r3")).unwrap().id;
-    rt.grows.insert(id, crate::growth::GrowTrack { target: 100.0, ..Default::default() });
+    let mut grow = crate::growth::GrowTrack::default();
+    grow.target = 100.0;
+    rt.grows.insert(id, grow);
     rt.pointer_move(100.0, 111.0);
     assert!(rt.hover_hold.released(), "a growth");
 }

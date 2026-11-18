@@ -3,8 +3,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::time::Instant;
 
-use crate::{Cx, El, Env, Runtime, el, text};
-
 /// A waker that counts its calls.
 fn counter() -> (Waker, Arc<AtomicUsize>) {
     let wakes = Arc::new(AtomicUsize::new(0));
@@ -271,32 +269,6 @@ fn requests_reuse_a_few_threads_that_exit_when_idle() {
     assert_eq!(lists[197 % 3].take(), Some(197));
     assert!(pool.threads().1 <= 2, "started {} threads", pool.threads().1);
     eventually("the workers exit", || pool.threads().0 == 0);
-}
-
-/// A window's `poll` that takes the answer commits once per landed answer and stays idle
-/// between them.
-#[test]
-fn poll_changes_state_once_per_answer() {
-    struct Search { hits: String, results: Latest<String> }
-    fn view(s: &Search, _: &mut Cx<Search>) -> El { el().child(text(s.hits.clone())) }
-    let (waker, wakes) = counter();
-    let state = Search { hits: String::new(), results: Latest::on(pool(), Some(waker)) };
-    let mut rt = Runtime::new(state, view, (200.0, 100.0), Env::default());
-    rt.poll = Some(|s, _, _| {
-        let Some(hits) = s.results.take() else { return false };
-        s.hits = hits;
-        true
-    });
-    rt.frame(0.0);
-    let commits = rt.stats.commits;
-    rt.state.results.request("rune".to_owned(), |q| format!("{q}.md"));
-    eventually("the answer lands", || wakes.load(Ordering::SeqCst) == 1);
-    rt.frame(1.0 / 60.0);
-    assert_eq!(rt.state.hits, "rune.md");
-    assert_eq!(rt.stats.commits, commits + 1, "the landed answer commits");
-    rt.frame(2.0 / 60.0);
-    rt.frame(3.0 / 60.0);
-    assert_eq!(rt.stats.commits, commits + 1, "and nothing after it");
 }
 
 #[test]

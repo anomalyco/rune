@@ -475,7 +475,7 @@ impl<S: 'static> Host<S> {
             }
         }
         let encoded = self.frame_reports.stamp();
-        crate::marks::presented();
+        super::frame_presented();
         let Some(l) = self.win.as_mut() else { return };
         if painted.is_ok() {
             crate::marks::mark_once(&FIRST_CPU, "frame.first.cpu");

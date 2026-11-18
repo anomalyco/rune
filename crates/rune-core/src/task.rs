@@ -213,8 +213,9 @@ pub fn wait(promise: &js_sys::Promise) -> Option<Result<wasm_bindgen::JsValue, w
 }
 
 /// Runs what's waiting: the platform layer calls this after each batch of events on the web.
+#[doc(hidden)]
 #[cfg(target_arch = "wasm32")]
-pub(crate) fn pump() {
+pub fn pump() {
     web::pump();
 }
 

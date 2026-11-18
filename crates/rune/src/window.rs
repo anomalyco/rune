@@ -112,6 +112,14 @@ mod float_on_open;
 #[cfg(not(target_arch = "wasm32"))]
 pub use event_loop::run;
 pub(crate) use event_loop::run_windows;
+
+/// Records a presented frame and wakes Windows' deferred ICU word segmenter on the first one.
+pub(super) fn frame_presented() {
+    if crate::marks::presented() {
+        #[cfg(all(target_os = "windows", not(feature = "segmenter-dictionaries")))]
+        crate::platform::win32::segmenter::first_frame_presented();
+    }
+}
 #[cfg(test)]
 #[path = "window/covered_tests.rs"]
 mod covered;

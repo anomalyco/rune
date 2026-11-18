@@ -19,7 +19,9 @@ mod page_clock;
 pub use local::LocalTime;
 
 /// The same moment on winit's clock, for `ControlFlow::WaitUntil`.
+#[doc(hidden)]
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn for_winit(at: Instant) -> Instant { at }
+pub fn for_winit(at: Instant) -> Instant { at }
+#[doc(hidden)]
 #[cfg(target_arch = "wasm32")]
-pub(crate) fn for_winit(at: Instant) -> web_time::Instant { at.to_web_time() }
+pub fn for_winit(at: Instant) -> web_time::Instant { at.to_web_time() }

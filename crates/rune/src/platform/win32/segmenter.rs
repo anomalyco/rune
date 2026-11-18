@@ -25,7 +25,7 @@ pub(crate) fn install() {
     warm();
 }
 
-/// Wakes `warm`'s thread: the first frame is on screen (`marks::presented`).
+/// Wakes `warm`'s thread: the first frame is on screen (`window::frame_presented`).
 pub(crate) fn first_frame_presented() {
     let (shown, wake) = &*FIRST_FRAME;
     *shown.lock().unwrap_or_else(|e| e.into_inner()) = true;

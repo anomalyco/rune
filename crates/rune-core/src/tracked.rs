@@ -1,6 +1,6 @@
-//! [`Tracked`]: state a view reads that tells [`region`](crate::region)s when it changed.
+//! [`Tracked`]: state a view reads that tells `region`s when it changed.
 //!
-//! A region is a [`memo`](crate::memo) with no version of its own: what it read is its version.
+//! A region is a `memo` with no version of its own: what it read is its version.
 //! Each `Tracked` value has a cell id and a version. Reading it (`Deref`) while a region builds
 //! records the cell and its version with the region; writing it (`DerefMut`) bumps the version.
 //! The next build reuses the region, without calling its closure, while every cell it read keeps
@@ -32,7 +32,7 @@ thread_local! {
     static READS: RefCell<Vec<Vec<u32>>> = const { RefCell::new(Vec::new()) };
 }
 
-/// A value whose reads and writes [`region`](crate::region)s see. Use it like the value:
+/// A value whose reads and writes `region`s see. Use it like the value:
 /// it derefs to it. A `&mut` borrow counts as a write whether or not it changes anything, which
 /// only costs the regions that read it a rebuild. Assign through it (`*field = value`).
 pub struct Tracked<T> {
@@ -194,28 +194,33 @@ fn bump(id: u32) {
 }
 
 /// Cell `id`'s version now.
-pub(crate) fn version(id: u32) -> u64 {
+#[doc(hidden)]
+pub fn version(id: u32) -> u64 {
     VERSIONS.with_borrow(|v| v.get(id as usize).copied().unwrap_or(0))
 }
 
 /// A region starts building: its reads go to a frame of their own.
-pub(crate) fn begin() {
+#[doc(hidden)]
+pub fn begin() {
     RECORDING.set(RECORDING.get() + 1);
     READS.with_borrow_mut(|r| r.push(Vec::new()));
 }
 
 /// A memo that isn't a region starts building: reads inside it record nothing (until a region
 /// inside it begins). Returns what `resume` restores.
-pub(crate) fn pause() -> u32 {
+#[doc(hidden)]
+pub fn pause() -> u32 {
     RECORDING.replace(0)
 }
 
-pub(crate) fn resume(recording: u32) {
+#[doc(hidden)]
+pub fn resume(recording: u32) {
     RECORDING.set(recording);
 }
 
 /// The region that `begin` started finished: the cells it read, each once, with their versions.
-pub(crate) fn end() -> Vec<(u32, u64)> {
+#[doc(hidden)]
+pub fn end() -> Vec<(u32, u64)> {
     RECORDING.set(RECORDING.get().saturating_sub(1));
     let mut ids = READS.with_borrow_mut(|r| r.pop()).unwrap_or_default();
     ids.sort_unstable();
