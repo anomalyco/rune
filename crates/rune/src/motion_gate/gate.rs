@@ -1,6 +1,6 @@
 //! Running an app's cells and reporting their findings against its allowlist.
 
-use std::time::Instant;
+use crate::time::Instant;
 
 use super::check::{Finding, RULES, Recording, check, dump, sheet};
 
@@ -76,21 +76,33 @@ pub fn run(cells: Vec<(String, Job)>, filter: &str) -> Vec<Cell> {
     let jobs: Vec<(usize, (String, Job))> = cells.into_iter().filter(|c| c.0.contains(filter)).enumerate().collect();
     let jobs = std::sync::Mutex::new(jobs);
     let out = std::sync::Mutex::new(Vec::new());
-    let threads = std::thread::available_parallelism().map_or(4, |n| n.get()).min(12);
-    std::thread::scope(|scope| {
-        for _ in 0..threads {
-            std::thread::Builder::new()
-                .stack_size(64 << 20)
-                .spawn_scoped(scope, || loop {
-                    let Some((i, (name, job))) = jobs.lock().unwrap().pop() else { break };
-                    let rec = job();
-                    evidence(&name, &rec, std::env::var("MOTION_GATE_OUT").ok());
-                    let cell = Cell { skipped: rec.frames < 10, frames: rec.frames, findings: check(&rec), name };
-                    out.lock().unwrap().push((i, cell));
-                })
-                .unwrap();
+    #[cfg(target_arch = "wasm32")]
+    {
+        for (i, (name, job)) in jobs.into_inner().unwrap() {
+            let rec = job();
+            evidence(&name, &rec, std::env::var("MOTION_GATE_OUT").ok());
+            let cell = Cell { skipped: rec.frames < 10, frames: rec.frames, findings: check(&rec), name };
+            out.lock().unwrap().push((i, cell));
         }
-    });
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let threads = std::thread::available_parallelism().map_or(4, |n| n.get()).min(12);
+        std::thread::scope(|scope| {
+            for _ in 0..threads {
+                std::thread::Builder::new()
+                    .stack_size(64 << 20)
+                    .spawn_scoped(scope, || loop {
+                        let Some((i, (name, job))) = jobs.lock().unwrap().pop() else { break };
+                        let rec = job();
+                        evidence(&name, &rec, std::env::var("MOTION_GATE_OUT").ok());
+                        let cell = Cell { skipped: rec.frames < 10, frames: rec.frames, findings: check(&rec), name };
+                        out.lock().unwrap().push((i, cell));
+                    })
+                    .unwrap();
+            }
+        });
+    }
     let mut cells = out.into_inner().unwrap();
     cells.sort_by_key(|c| c.0);
     cells.into_iter().map(|c| c.1).collect()
@@ -113,6 +125,7 @@ pub(crate) fn evidence(cell: &str, rec: &Recording, out: Option<String>) {
             }
         }
     }
+    #[cfg(not(target_arch = "wasm32"))]
     if let Ok(spec) = std::env::var("MOTION_GATE_SHEET") {
         let mut p = spec.split('|');
         if let (Some(c), Some(Ok(at))) = (p.next(), p.next().map(str::parse))

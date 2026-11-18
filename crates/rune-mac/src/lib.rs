@@ -111,16 +111,18 @@ mod tests;
 /// progress, say). The marker is this process's pid in `~/Library/Caches/mac-app/busy/`, so only
 /// this process holds the swap and a crash can't hold it forever.
 pub fn busy(on: bool) {
-    if !cfg!(target_os = "macos") {
-        return;
-    }
-    let Some(home) = std::env::var_os("HOME") else { return };
-    let dir = std::path::PathBuf::from(home).join("Library/Caches/mac-app/busy");
-    let path = dir.join(std::process::id().to_string());
-    if on {
-        let _ = std::fs::create_dir_all(&dir);
-        let _ = std::fs::write(path, "");
-    } else {
-        let _ = std::fs::remove_file(path);
+    #[cfg(not(target_os = "macos"))]
+    let _ = on;
+    #[cfg(target_os = "macos")]
+    {
+        let Some(home) = std::env::var_os("HOME") else { return };
+        let dir = std::path::PathBuf::from(home).join("Library/Caches/mac-app/busy");
+        let path = dir.join(std::process::id().to_string());
+        if on {
+            let _ = std::fs::create_dir_all(&dir);
+            let _ = std::fs::write(path, "");
+        } else {
+            let _ = std::fs::remove_file(path);
+        }
     }
 }

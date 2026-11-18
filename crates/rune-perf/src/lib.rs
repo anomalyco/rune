@@ -1,9 +1,14 @@
 //! Bounded local diagnostics. Apps explicitly choose a directory and install their hooks.
 //! No network, global allocator installation, redraws, or per-frame formatting.
 
+#![cfg_attr(target_arch = "wasm32", allow(dead_code))]
+
+#[cfg(not(target_arch = "wasm32"))]
 mod incident;
 mod recorder;
+#[cfg(not(target_arch = "wasm32"))]
 mod stats;
+#[cfg(not(target_arch = "wasm32"))]
 mod store;
 
 pub use recorder::Recorder;

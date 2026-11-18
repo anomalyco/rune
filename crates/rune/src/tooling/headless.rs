@@ -53,6 +53,7 @@ pub(crate) fn try_headless<S: 'static>(mut app: crate::app::App<S>, args: Args) 
 
 pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args: Args, transparent: bool) {
     // RUNE_HEADLESS_WAIT=SECS holds the run before it starts, so a sampling profiler can attach.
+    #[cfg(not(target_arch = "wasm32"))]
     if let Some(secs) = std::env::var("RUNE_HEADLESS_WAIT").ok().and_then(|s| s.parse::<f64>().ok()) {
         std::thread::sleep(std::time::Duration::from_secs_f64(secs));
     }
@@ -241,6 +242,7 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
             (procwatch::alloc::thread_allocations(), rt.stats.commits, crate::frame::profile::cpu_ms())
         };
         let real_t = k as f64 * dt;
+        #[cfg(not(target_arch = "wasm32"))]
         if args.realtime {
             let ahead = real_t - wall.elapsed().as_secs_f64();
             if ahead > 0.0 { std::thread::sleep(std::time::Duration::from_secs_f64(ahead)); }

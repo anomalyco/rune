@@ -535,6 +535,9 @@ pub struct Runtime<S: 'static> {
     /// elements skip their fill and cut their shadows out of their interior.
     pub(crate) native_materials: bool,
     hits: Vec<(NodeId, [f32; 4])>,
+    /// What a wheel chains up from, in paint order: what takes input, every scroll view and every
+    /// painted surface (`Runtime::chain_start`).
+    wheel_hits: Vec<(NodeId, [f32; 4])>,
     overlay_hits: Vec<[f32; 4]>,
     glyph_scratch: Vec<GlyphQuad>,
     /// What the last paint painted, for subtrees that would paint it again (`paint_keep`).
@@ -966,6 +969,7 @@ impl<S: 'static> Runtime<S> {
             materials: Vec::new(),
             native_materials: false,
             hits: Vec::new(),
+            wheel_hits: Vec::new(),
             overlay_hits: Vec::new(),
             glyph_scratch: Vec::new(),
             paint_keep: Default::default(),

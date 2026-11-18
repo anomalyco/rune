@@ -423,7 +423,7 @@ impl<S: 'static> Runtime<S> {
     /// Scrolls by a delta no `on_wheel` handler took, on the axis the gesture locked to.
     /// `phased` is that delta's own gesture's policy, which a delta queued before a newer
     /// gesture began keeps.
-    pub(super) fn wheel_scroll_for(&mut self, gesture: Attempt, x: f32, y: f32, dx: f32, dy: f32, phased: bool) {
+    pub(super) fn wheel_scroll_for(&mut self, gesture: Attempt, x: f32, y: f32, dx: f32, dy: f32, phased: bool, start: crate::runtime::gesture_dispatch::WheelStart) {
         if dx == 0.0 && dy == 0.0 { return; }
         self.wheel_lock.sync_gesture(gesture);
         // Without phases, a delta wholly on the other axis is another wheel turning (Shift let
@@ -435,7 +435,7 @@ impl<S: 'static> Runtime<S> {
                 self.wheel_lock.repick(gesture, scroller)
             }
         };
-        if horizontal { if dx != 0.0 { self.wheel_x(gesture, x, y, dx); } } else if dy != 0.0 { self.wheel(x, y, dy); }
+        if horizontal { if dx != 0.0 { self.wheel_x(gesture, x, y, dx); } } else if dy != 0.0 { self.wheel_from(x, y, dy, start); }
     }
 
     /// The platform began a trackpad gesture (winit's `TouchPhase::Started` on a wheel event):

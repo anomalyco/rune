@@ -107,8 +107,16 @@ impl Prefs {
 
     fn save(&self) -> Result<(), PrefsError> {
         let Some(path) = &self.path else { return Ok(()) };
-        let json = serde_json::to_vec_pretty(&self.values).map_err(|e| PrefsError::Serialize(e.to_string()))?;
-        write_atomic(path, &json).map_err(PrefsError::Io)
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = path;
+            Err(PrefsError::Io(io::Error::new(io::ErrorKind::Unsupported, "prefs files are unsupported on web")))
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let json = serde_json::to_vec_pretty(&self.values).map_err(|e| PrefsError::Serialize(e.to_string()))?;
+            write_atomic(path, &json).map_err(PrefsError::Io)
+        }
     }
 }
 
@@ -124,6 +132,7 @@ fn load(path: &Path) -> BTreeMap<String, Value> {
     BTreeMap::new()
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     use io::Write;
     if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
