@@ -66,6 +66,13 @@ impl TextLayout {
             TextLayout::Paragraphs(p) => Rc::as_ptr(p) as usize,
         }
     }
+
+    pub(crate) fn content_key(&self) -> Option<u64> {
+        match self {
+            TextLayout::Single(_) => None,
+            TextLayout::Paragraphs(p) => Some(p.whole),
+        }
+    }
 }
 
 /// A by-paragraph field's paragraphs, top to bottom, in device px.
@@ -143,17 +150,18 @@ pub(crate) struct Piece<'a> {
     pub(crate) flow: Flow,
     /// Its paragraph's index in the field, for its [`Block`].
     pub(crate) index: usize,
+    pub(crate) shaped: bool,
     isolates: &'a [(u32, u32)],
     whole: bool,
 }
 
 impl<'a> Piece<'a> {
     fn of_paragraph(k: usize, p: &'a Paragraph) -> Piece<'a> {
-        Piece { layout: &p.layout, shared: Some(&p.layout), start: p.start, end: p.end, y: p.y, height: p.height, flow: p.flow, index: k, isolates: &p.isolates, whole: false }
+        Piece { layout: &p.layout, shared: Some(&p.layout), start: p.start, end: p.end, y: p.y, height: p.height, flow: p.flow, index: k, shaped: p.shaped, isolates: &p.isolates, whole: false }
     }
 
     fn whole(layout: &'a Layout<Ink>) -> Piece<'a> {
-        Piece { layout, shared: None, start: 0, end: usize::MAX, y: 0.0, height: layout.height(), flow: Flow::of_layout(layout), index: 0, isolates: &[], whole: true }
+        Piece { layout, shared: None, start: 0, end: usize::MAX, y: 0.0, height: layout.height(), flow: Flow::of_layout(layout), index: 0, shaped: true, isolates: &[], whole: true }
     }
 
     /// Whether it's a text's one layout rather than a paragraph of a field's.
@@ -807,8 +815,8 @@ fn key_paragraphs(spec: &TextSpec, style_key: u64, a: usize, z: usize, start_flo
         let flow = forced.or_else(|| flow_of(words, &isolates)).unwrap_or(last_flow);
         let mut h = hash::KeyHasher::default();
         (words, style_key, flow == Flow::Rtl, spec.cold.blocks.get(k).copied().unwrap_or(Block::Paragraph)).hash(&mut h);
-        for s in spans_in(&spec.spans, a, b, &isolates) {
-            (s.start, s.end, s.mono, s.weight.map(f32::to_bits), s.size.map(f32::to_bits), s.italic).hash(&mut h);
+        for s in spans_in(&spec.spans, a, b, &isolates).filter(|s| s.start < s.end && s.affects_layout()) {
+            s.hash_layout(&mut h);
         }
         for p in pills_in(&spec.cold.pills, a, b, &isolates) {
             (p.start, p.end, p.icon.is_some(), p.bare.as_ref().map(|b| (b.size.to_bits(), b.gap.to_bits()))).hash(&mut h);

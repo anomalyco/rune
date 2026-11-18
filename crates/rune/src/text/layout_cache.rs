@@ -37,12 +37,14 @@ pub(super) struct Entry<T> {
     pub(super) cost: u32,
     /// The [`shape_key`](super::shape_key) it lays out, or 0 for a run.
     shape: u64,
+    /// The `Tx::prepare_text` pass that made it, numbered from 1; 0 when a view made it.
+    prepared: u32,
 }
 
 impl<T> Entry<T> {
     pub(super) fn new(value: T, used: u32, text_len: usize, shape: u64) -> Self {
         let cost = (text_len * LAYOUT_PER_BYTE + LAYOUT_BASE).min(u32::MAX as usize) as u32;
-        Entry { value, used, cost, shape }
+        Entry { value, used, cost, shape, prepared: 0 }
     }
 }
 
@@ -140,6 +142,36 @@ impl TextSystem {
         let layouts = &self.layouts;
         self.shapes.retain(|_, key| layouts.contains_key(key));
         self.glyph_cache.drop_orphans();
+    }
+
+    /// The keys of the layouts held now, for [`Self::keep_prepared`].
+    pub(crate) fn layout_keys(&self) -> std::collections::HashSet<u64> {
+        self.layouts.keys().copied().collect()
+    }
+
+    /// Marks the layouts made since `before` was read as prepared, then keeps at most `budget`
+    /// bytes of prepared layouts no view holds, by the cache's own count: past it the oldest pass's
+    /// go first, and never one a mounted text holds. How many this pass added.
+    pub(crate) fn keep_prepared(&mut self, before: &std::collections::HashSet<u64>, budget: usize) -> usize {
+        thread_local! { static PASS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) }; }
+        let pass = PASS.with(|p| { p.set(p.get().wrapping_add(1).max(1)); p.get() });
+        let mut added = 0;
+        for (k, e) in self.layouts.iter_mut() {
+            if !before.contains(k) { e.prepared = pass; added += 1; }
+        }
+        let held = |e: &Entry<Rc<Layout<Ink>>>| Rc::strong_count(&e.value) > 1;
+        let mut loose: Vec<(u32, u64, usize)> = self.layouts.iter().filter(|(_, e)| e.prepared != 0 && !held(e)).map(|(k, e)| (pass.wrapping_sub(e.prepared), *k, e.cost as usize)).collect();
+        let mut total: usize = loose.iter().map(|l| l.2).sum();
+        // Oldest pass first: the largest age.
+        loose.sort_unstable_by(|a, b| b.0.cmp(&a.0).then(b.2.cmp(&a.2)));
+        for (_, k, cost) in loose {
+            if total <= budget { break; }
+            self.layouts.remove(&k);
+            total -= cost;
+        }
+        let layouts = &self.layouts;
+        self.shapes.retain(|_, key| layouts.contains_key(key));
+        added
     }
 
     #[inline]

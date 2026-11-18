@@ -1,0 +1,1 @@
+- A wheel at the end of a region passes to a region around it, never to one that only lies beneath it: the timeline under an open menu stays put, as in Chromium.

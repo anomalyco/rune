@@ -15,6 +15,42 @@ const QUIET: Duration = Duration::from_secs(2);
 /// Memory lines kept while nothing else is to be written; they go out only beside a finding.
 const MEMORY_LINES: usize = 20;
 
+#[derive(Clone, Copy)]
+enum IdleTidy {
+    Parked { last: Option<Instant> },
+    Armed { last: Option<Instant>, due: Instant },
+}
+
+impl IdleTidy {
+    fn on_work(self, now: Instant, hooked: bool) -> Self {
+        let last = match self {
+            Self::Parked { last } | Self::Armed { last, .. } => last,
+        };
+        if !hooked {
+            return Self::Parked { last };
+        }
+        let due = last.map_or(now + crate::IDLE, |prev| (prev + crate::IDLE_MIN_GAP).max(now + crate::IDLE));
+        Self::Armed { last, due }
+    }
+
+    fn wait(self, now: Instant) -> Option<Duration> {
+        match self {
+            Self::Parked { .. } => None,
+            Self::Armed { due, .. } => Some(due.saturating_duration_since(now)),
+        }
+    }
+
+    fn take_due(&mut self, now: Instant) -> bool {
+        match *self {
+            Self::Armed { due, .. } if now >= due => {
+                *self = Self::Parked { last: Some(now) };
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
 pub(crate) fn run(config: Config, rx: Receiver<Sample>, start: Instant, health: &Health) -> io::Result<()> {
     std::fs::create_dir_all(&config.directory)?;
     let lock = OpenOptions::new().create(true).truncate(false).read(true).write(true)
@@ -22,14 +58,29 @@ pub(crate) fn run(config: Config, rx: Receiver<Sample>, start: Instant, health: 
     if !acquire(&lock, health)? { return Ok(()); }
     let mut writer = Writer::new(&config, start, health);
     let mut checked: Option<Instant> = None;
+    let mut tidy = IdleTidy::Parked { last: None };
     loop {
         let got = match writer.due {
             Some(due) => rx.recv_timeout(due.saturating_duration_since(Instant::now())),
-            None => rx.recv().map_err(|_| RecvTimeoutError::Disconnected),
+            // Nothing due to flush: when a hook is armed after samples, tidy once per idle spell
+            // (at least IDLE_MIN_GAP apart), then wait with no timer.
+            None => match (config.idle, tidy.wait(Instant::now())) {
+                (Some(idle), Some(wait)) => match rx.recv_timeout(wait) {
+                    Err(RecvTimeoutError::Timeout) => {
+                        if tidy.take_due(Instant::now()) {
+                            idle();
+                        }
+                        continue;
+                    }
+                    got => got,
+                },
+                _ => rx.recv().map_err(|_| RecvTimeoutError::Disconnected),
+            },
         };
         match got {
             Ok(s) => {
                 writer.accept(s);
+                tidy = tidy.on_work(Instant::now(), config.idle.is_some());
                 if checked.is_none_or(|at| at.elapsed() >= CHECK_EVERY) {
                     writer.check();
                     checked = Some(Instant::now());

@@ -10,8 +10,83 @@
 //! page nothing while it waits.
 
 use std::ops::ControlFlow;
+use std::sync::OnceLock;
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
+
+/// How long a thread waits with nothing to do before it tidies up ([`on_idle`]).
+pub const IDLE: Duration = Duration::from_secs(10);
+
+/// Minimum gap between two idle tidies on one thread: bursts closer together than this share one
+/// tidy once the thread goes quiet, and periodic traffic slower than [`IDLE`] tidies at most once
+/// per [`IDLE_MIN_GAP`] instead of after every message.
+pub const IDLE_MIN_GAP: Duration = Duration::from_secs(180);
+
+static TIDY: OnceLock<fn()> = OnceLock::new();
+
+/// Sets what a thread that has waited [`IDLE`] with nothing to do runs, once per idle spell (at
+/// least [`IDLE_MIN_GAP`] after its previous tidy), before it waits again with no timer: an app's
+/// allocator giving back the pages that thread holds free (an allocator's per-thread heap gives
+/// back only when its own thread asks). Rune's task and service threads call it when set; an app's
+/// own long-lived threads call [`idle`]. Threads in an app that never sets a hook arm no tidy
+/// timer. The first call wins.
+pub fn on_idle(tidy: fn()) {
+    let _ = TIDY.set(tidy);
+}
+
+/// Runs what [`on_idle`] set, on this thread: for a thread of the app's own that has waited
+/// [`IDLE`] with nothing to do.
+pub fn idle() {
+    if let Some(tidy) = TIDY.get() {
+        tidy();
+    }
+}
+
+/// Per-thread idle-tidy schedule (`pool` and [`serve`]): explicit two-state machine so a thread
+/// never arms a timer before work or without a hook, and never purges after every close burst.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy)]
+pub(crate) enum Tidy {
+    /// Waiting with no tidy timer; `last` is when this thread last ran the hook.
+    Parked { last: Option<crate::time::Instant> },
+    /// Work ran while a hook was set; run the hook once nothing arrives before `due`.
+    Armed { last: Option<crate::time::Instant>, due: crate::time::Instant },
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Tidy {
+    pub(crate) const fn new() -> Self {
+        Self::Parked { last: None }
+    }
+
+    pub(crate) fn on_work(self, now: crate::time::Instant) -> Self {
+        let last = match self {
+            Self::Parked { last } | Self::Armed { last, .. } => last,
+        };
+        if TIDY.get().is_none() {
+            return Self::Parked { last };
+        }
+        let due = last.map_or(now + IDLE, |prev| (prev + IDLE_MIN_GAP).max(now + IDLE));
+        Self::Armed { last, due }
+    }
+
+    pub(crate) fn wait(self, now: crate::time::Instant) -> Option<Duration> {
+        match self {
+            Self::Parked { .. } => None,
+            Self::Armed { due, .. } => Some(due.saturating_duration_since(now)),
+        }
+    }
+
+    pub(crate) fn take_due(&mut self, now: crate::time::Instant) -> bool {
+        match *self {
+            Self::Armed { due, .. } if now >= due => {
+                *self = Self::Parked { last: Some(now) };
+                true
+            }
+            _ => false,
+        }
+    }
+}
 
 #[cfg(target_arch = "wasm32")]
 mod web;
@@ -65,10 +140,28 @@ pub fn serve<T: Send + 'static>(
     #[cfg(not(target_arch = "wasm32"))]
     {
         std::thread::Builder::new().name(name.into()).spawn(move || {
-            for message in rx {
+            use std::sync::mpsc::RecvTimeoutError;
+            let mut tidy = Tidy::new();
+            loop {
+                // Without a hook, or before the first message and after a tidy, wait untimed.
+                let got = match tidy.wait(crate::time::Instant::now()) {
+                    Some(wait) => rx.recv_timeout(wait),
+                    None => rx.recv().map_err(|_| RecvTimeoutError::Disconnected),
+                };
+                let message = match got {
+                    Ok(message) => message,
+                    Err(RecvTimeoutError::Timeout) => {
+                        if tidy.take_due(crate::time::Instant::now()) {
+                            idle();
+                        }
+                        continue;
+                    }
+                    Err(RecvTimeoutError::Disconnected) => return,
+                };
                 if each(message).is_break() {
                     return;
                 }
+                tidy = tidy.on_work(crate::time::Instant::now());
             }
         }).map(drop)
     }

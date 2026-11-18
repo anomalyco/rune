@@ -31,7 +31,7 @@ use windows::{
 use crate::{
     context::Context,
     filters::{filter, filter_with_root_exception},
-    long_text::{Text, long_text},
+    long_text::{Text, byte_at_point, long_text},
     text::PlatformRange as PlatformTextRange,
     util::*,
 };
@@ -839,6 +839,7 @@ fn enqueue_property_change(
     ISelectionItemProvider,
     ISelectionProvider,
     ITextProvider,
+    ITextProvider2,
     IExpandCollapseProvider,
     IWindowProvider
 )]
@@ -879,9 +880,12 @@ impl PlatformNode {
     where
         F: FnOnce(&Tree, &Arc<Context>) -> Result<T>,
     {
-        let context = self.upgrade_context()?;
-        let tree = context.read_tree();
-        f(&tree, &context)
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let context = self.upgrade_context()?;
+            let tree = context.read_tree();
+            f(&tree, &context)
+        }))
+        .unwrap_or_else(|_| Err(element_not_available()))
     }
 
     fn node<'a>(&self, tree: &'a Tree) -> Result<NodeRef<'a>> {
@@ -970,17 +974,20 @@ impl PlatformNode {
     where
         for<'a> F: FnOnce(NodeRef<'a>, NodeId, TreeId) -> Result<Option<ActionRequest>>,
     {
-        let context = self.upgrade_context()?;
-        if context.is_placeholder.load(Ordering::SeqCst) {
-            return Err(element_not_enabled());
-        }
-        let tree = context.read_tree();
-        let (node, target_node, target_tree) = self.node_with_location(&tree)?;
-        if let Some(request) = f(node, target_node, target_tree)? {
-            drop(tree);
-            context.do_action(request);
-        }
-        Ok(())
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let context = self.upgrade_context()?;
+            if context.is_placeholder.load(Ordering::SeqCst) {
+                return Err(element_not_enabled());
+            }
+            let tree = context.read_tree();
+            let (node, target_node, target_tree) = self.node_with_location(&tree)?;
+            if let Some(request) = f(node, target_node, target_tree)? {
+                drop(tree);
+                context.do_action(request);
+            }
+            Ok(())
+        }))
+        .unwrap_or_else(|_| Err(element_not_available()))
     }
 
     fn do_action<F>(&self, f: F) -> Result<()>
@@ -1516,8 +1523,19 @@ patterns! {
         },
 
         fn RangeFromPoint(&self, point: &UiaPoint) -> Result<ITextRangeProvider> {
-            // A long field's characters have no known places: its caret stands in.
-            if let Some(range) = self.long_range(|_, s| (s.focus.character_index, s.focus.character_index))? {
+            let hit = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                self.resolve_with_context(|node, context| {
+                    Ok(long_text(&node).map(|(text, s)| {
+                        let client_top_left = context.client_top_left();
+                        let pt = Point::new(point.x - client_top_left.x, point.y - client_top_left.y);
+                        let pt = node.transform().inverse() * pt;
+                        let at = byte_at_point(&node, text, pt, false).unwrap_or_else(|| text.clamp(s.focus.character_index));
+                        PlatformTextRange::new_long(&self.context, node.id(), at, at).into()
+                    }))
+                })
+            }))
+            .unwrap_or_else(|_| Err(element_not_available()))?;
+            if let Some(range) = hit {
                 return Ok(range);
             }
             self.resolve_with_context_for_text_pattern(|node, context| {
@@ -1551,6 +1569,36 @@ patterns! {
                     Ok(SupportedTextSelection_None)
                 }
             })
+        }
+    )),
+    (UIA_TextPattern2Id, ITextProvider2, ITextProvider2_Impl, is_text_pattern_supported, (), (
+        fn RangeFromAnnotation(&self, _annotation: Ref<IRawElementProviderSimple>) -> Result<ITextRangeProvider> {
+            Err(not_supported())
+        },
+
+        fn GetCaretRange(&self, is_active: *mut BOOL) -> Result<ITextRangeProvider> {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let long_caret = self.resolve(|node| {
+                    Ok(long_text(&node).map(|(text, s)| {
+                        if !is_active.is_null() {
+                            unsafe { *is_active = node.is_focused().into() };
+                        }
+                        let at = text.clamp(s.focus.character_index);
+                        PlatformTextRange::new_long(&self.context, node.id(), at, at).into()
+                    }))
+                })?;
+                if let Some(range) = long_caret {
+                    return Ok(range);
+                }
+                self.resolve_for_text_pattern(|node| {
+                    if !is_active.is_null() {
+                        unsafe { *is_active = node.is_focused().into() };
+                    }
+                    let pos = node.text_selection_focus().unwrap_or_else(|| node.document_start());
+                    Ok(PlatformTextRange::new(&self.context, pos.to_degenerate_range()).into())
+                })
+            }))
+            .unwrap_or_else(|_| Err(element_not_available()))
         }
     )),
     (UIA_ExpandCollapsePatternId, IExpandCollapseProvider, IExpandCollapseProvider_Impl, is_expand_collapse_pattern_supported, (

@@ -15,6 +15,14 @@ pub(super) enum Gesture {
     SmartMagnify(f32, f32),
 }
 
+/// Where a wheel delta's chain starts (`Runtime::chain_start`), when it was already found on the
+/// way to scrolling, so one delta looks it up once.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum WheelStart {
+    Unknown,
+    At(Option<usize>),
+}
+
 /// Points of Ctrl + wheel per unit of magnification, where a pinch arrives that way.
 const PINCH_WHEEL: f32 = 200.0;
 
@@ -29,17 +37,20 @@ impl<S: 'static> Runtime<S> {
             self.dismiss_help();
             self.wheel_delta_arrived(ev.dx, ev.dy);
         }
+        // A notch or not is the run's to decide, not each delta's.
+        let ev = if moved { WheelEvent { notch: self.wheel_lock.notched(self.now_clock(), ev.notch), ..ev } } else { ev };
         if moved || ev.phase != GesturePhase::Moved {
             let ev = WheelEvent { momentum: self.wheel_lock.momentum(), ..ev };
             let gesture = self.wheel_lock.gesture;
             let phased = self.wheel_lock.phased();
-            if !self.offer_wheel(gesture, ev) { self.wheel_scroll_for(gesture, ev.x, ev.y, ev.dx, ev.dy, phased); }
+            if let Some(start) = self.offer_wheel(gesture, ev) { self.wheel_scroll_for(gesture, ev, phased, start); }
         }
         if ev.phase == GesturePhase::Ended { self.wheel_ended(); }
     }
 
-    /// Queues `ev` for the `on_wheel` handlers it may go to; false leaves it to scrolling now.
-    fn offer_wheel(&mut self, gesture: Attempt, ev: WheelEvent) -> bool {
+    /// Queues `ev` for the `on_wheel` handlers it may go to (None), or leaves it to scrolling now,
+    /// with where its chain starts when that was already found on the way.
+    fn offer_wheel(&mut self, gesture: Attempt, ev: WheelEvent) -> Option<WheelStart> {
         let lock = &self.wheel_lock;
         // A delta queued this frame may yet be taken: later ones wait their turn behind it.
         let pending = self.wheel_queued(Some(gesture));
@@ -48,12 +59,13 @@ impl<S: 'static> Runtime<S> {
             WheelOwner::Handler(_) => (false, true),
             WheelOwner::Unpicked => (false, false),
         };
-        if scrolls && !pending { return false; }
-        let chain = if handled { Vec::new() } else { self.gesture_chain(ev.x, ev.y, |g| g.wheel.is_some(), true) };
-        if chain.is_empty() && !handled && !pending { return false; }
+        if scrolls && !pending { return Some(WheelStart::Unknown); }
+        let start = if handled { WheelStart::Unknown } else { WheelStart::At(self.chain_start(ev.x, ev.y)) };
+        let chain = match start { WheelStart::At(s) => self.gesture_chain_from(s, |g| g.wheel.is_some(), true), WheelStart::Unknown => Vec::new() };
+        if chain.is_empty() && !handled && !pending { return Some(start); }
         let phased = lock.phased();
         self.queue.push(Action::Wheel { gesture, chain, ev, phased });
-        true
+        None
     }
 
     /// A queued wheel delta: the handler holding its gesture hears it, else each handler
@@ -80,7 +92,8 @@ impl<S: 'static> Runtime<S> {
             _ => {}
         }
         if taken.is_none() {
-            self.wheel_scroll_for(gesture, ev.x, ev.y, ev.dx, ev.dy, phased);
+            // Queued from an earlier frame: what lies under the pointer may have moved since.
+            self.wheel_scroll_for(gesture, ev, phased, WheelStart::Unknown);
         }
         taken.unwrap_or(false)
     }
@@ -148,16 +161,11 @@ impl<S: 'static> Runtime<S> {
     /// from the topmost hit, and from a scroll view there inside it. With `stop_at_scroll`, the
     /// walk ends at the first scroll view, which scrolls what its handlers leave.
     fn gesture_chain(&self, x: f32, y: f32, has: impl Fn(&CanvasInput) -> bool, stop_at_scroll: bool) -> Vec<String> {
-        let hit = self.hits.iter().rev().find(|&&(id, r)| self.hit_contains(id, r, x, y)).and_then(|(id, _)| self.node_index.get(id).copied());
-        // A scroll view without handlers of its own isn't a hit: one inside the hit wins.
-        let scroll = (0..self.nodes.len()).rev().find(|&i| self.nodes[i].scroll.is_some() && !self.subtree_exiting(i)
-            && self.allowed(i) && self.node_contains(i, x, y));
-        let inside = |s: usize, h: usize| std::iter::successors(self.nodes[s].parent, |&p| self.nodes[p].parent).any(|p| p == h);
-        let start = match (hit, scroll) {
-            (Some(h), Some(s)) if inside(s, h) => Some(s),
-            (None, s) => s,
-            (h, _) => h,
-        };
+        self.gesture_chain_from(self.chain_start(x, y), has, stop_at_scroll)
+    }
+
+    /// [`Self::gesture_chain`] from a start already found.
+    fn gesture_chain_from(&self, start: Option<usize>, has: impl Fn(&CanvasInput) -> bool, stop_at_scroll: bool) -> Vec<String> {
         let mut chain = Vec::new();
         let mut at = start;
         while let Some(i) = at {
@@ -168,6 +176,19 @@ impl<S: 'static> Runtime<S> {
             at = n.parent;
         }
         chain
+    }
+
+    /// Where a wheel or gesture at window point (x, y) starts walking up the tree: the topmost of
+    /// what takes input, the scroll views and the painted surfaces there (`wheel_hits`, in paint
+    /// order; a row inside a list paints after the list, so it wins). Its ancestors are what
+    /// Chromium chains a scroll through: a viewport that only lies beneath (the timeline under an
+    /// open menu, a popover or a raised panel) is never one of them.
+    pub(super) fn chain_start(&self, x: f32, y: f32) -> Option<usize> {
+        self.wheel_hits.iter().rev().find_map(|&(id, r)| {
+            if !self.hit_contains(id, r, x, y) { return None; }
+            let i = *self.node_index.get(&id)?;
+            (!self.subtree_exiting(i) && self.allowed(i)).then_some(i)
+        })
     }
 
     /// Element `path` (not exiting or inert) and the handler `pick` takes from its canvas input.

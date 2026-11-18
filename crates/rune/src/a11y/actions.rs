@@ -52,11 +52,11 @@ impl<S: 'static> Runtime<S> {
                 Action::LinkSecondary(path, k, self.pointer_event(i, r[0], r[3]))
             }
             (Ak::Focus, Some(k)) if focusable => Action::A11y(path, A11yAct::Focus(Some(k))),
-            (Ak::Click, None) if pressable => Action::Press(path, crate::PointerButton::Primary),
+            (Ak::Click, None) if pressable => Action::Press(path, crate::PointerButton::Primary, false),
             (Ak::Click, None) if input => Action::A11y(path, A11yAct::Focus(None)),
             (Ak::Focus, None) if focusable => Action::A11y(path, A11yAct::Focus(None)),
             (Ak::Expand | Ak::Collapse, None) if pressable && expanded == Some(request.action == Ak::Collapse) => {
-                Action::Press(path, crate::PointerButton::Primary)
+                Action::Press(path, crate::PointerButton::Primary, false)
             }
             (Ak::ShowContextMenu, None) if secondary => {
                 let r = self.drawn_box(i);

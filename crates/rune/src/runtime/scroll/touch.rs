@@ -216,12 +216,12 @@ impl<S: 'static> Runtime<S> {
                     if let Some(st) = self.scrolls.get_mut(&id) { st.halt(); }
                 }
                 TouchEffect::StopAcross(id) => {
-                    if let Some(st) = self.scrolls.get_mut(&id) { st.x.v = 0.0; }
+                    if let Some(st) = self.scrolls.get_mut(&id) && matches!(st.x.motion, XMotion::Momentum(_) | XMotion::Wheel(_)) { st.x.motion = XMotion::Rest; }
                 }
                 TouchEffect::Fling { id, horizontal, velocity } => {
                     let Some(st) = self.scrolls.get_mut(&id) else { continue };
                     let v = f64::from(velocity.clamp(-8000.0, 8000.0));
-                    if horizontal { st.x.v = st.x.toward(v) as f32 } else { st.mode = st.mode.to_momentum(-v as f32) }
+                    if horizontal { st.x.set_coast(st.x.toward(v) as f32) } else { st.mode = st.mode.to_momentum(-v as f32) }
                 }
                 TouchEffect::Pan { id, origin, horizontal, d } => {
                     let Some(st) = self.scrolls.get_mut(&id) else { continue };
@@ -245,7 +245,7 @@ impl<S: 'static> Runtime<S> {
                     let moving = {
                         let Some(st) = self.scrolls.get_mut(&id) else { continue };
                         if horizontal { st.x.max = overflow.max(0.0); } else { st.max = overflow.max(0.0); }
-                        let mut v = if horizontal { st.x.v } else { st.coast() };
+                        let mut v = if horizontal { st.x.coast() } else { st.coast() };
                         let _ = mode::step(&mut st.mode, ModeEvent::Coast { moving: v.abs() > 1.0 });
                         let (offset, max) = st.axis(horizontal);
                         let edge = offset.clamp(0.0, max);
@@ -258,7 +258,7 @@ impl<S: 'static> Runtime<S> {
                             v *= decay;
                         }
                         let moving = v.abs() > 1.0 || *offset < 0.0 || *offset > max;
-                        if horizontal { st.x.v = v; } else if v != 0.0 { st.mode = st.mode.to_momentum(v); } else { st.halt(); }
+                        if horizontal { st.x.set_coast(v); } else if v != 0.0 { st.mode = st.mode.to_momentum(v); } else { st.halt(); }
                         moving
                     };
                     self.step_touch(TouchEvent::Settled { moving });

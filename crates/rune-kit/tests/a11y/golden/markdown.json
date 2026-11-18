@@ -41,13 +41,6 @@
                 "click",
                 "focus"
               ],
-              "children": [
-                {
-                  "key": "b0",
-                  "name": "tests pass",
-                  "role": "label"
-                }
-              ],
               "key": "i0",
               "name": "tests pass",
               "position": 1,
@@ -60,13 +53,6 @@
               "actions": [
                 "click",
                 "focus"
-              ],
-              "children": [
-                {
-                  "key": "b0",
-                  "name": "docs",
-                  "role": "label"
-                }
               ],
               "key": "i1",
               "name": "docs",

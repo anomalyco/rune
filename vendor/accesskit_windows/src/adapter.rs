@@ -474,7 +474,7 @@ impl Adapter {
             State::Placeholder(context) => {
                 let is_window_focused = context.read_tree().state().is_host_focused();
                 let tree = Tree::new(update_factory(), is_window_focused);
-                *context.tree.write().unwrap() = tree;
+                *context.tree.write().unwrap_or_else(|e| e.into_inner()) = tree;
                 context.is_placeholder.store(false, Ordering::SeqCst);
                 let result = context
                     .read_tree()
@@ -486,7 +486,7 @@ impl Adapter {
             }
             State::Active(context) => {
                 let mut handler = AdapterChangeHandler::new(context);
-                let mut tree = context.tree.write().unwrap();
+                let mut tree = context.tree.write().unwrap_or_else(|e| e.into_inner());
                 tree.update_and_process_changes(update_factory(), &mut handler);
                 handler.enqueue_selection_changes(&tree);
                 Some(QueuedEvents(handler.queue))
@@ -512,13 +512,13 @@ impl Adapter {
             }
             State::Placeholder(context) => {
                 let mut handler = AdapterChangeHandler::new(context);
-                let mut tree = context.tree.write().unwrap();
+                let mut tree = context.tree.write().unwrap_or_else(|e| e.into_inner());
                 tree.update_host_focus_state_and_process_changes(is_focused, &mut handler);
                 Some(QueuedEvents(handler.queue))
             }
             State::Active(context) => {
                 let mut handler = AdapterChangeHandler::new(context);
-                let mut tree = context.tree.write().unwrap();
+                let mut tree = context.tree.write().unwrap_or_else(|e| e.into_inner());
                 tree.update_host_focus_state_and_process_changes(is_focused, &mut handler);
                 Some(QueuedEvents(handler.queue))
             }

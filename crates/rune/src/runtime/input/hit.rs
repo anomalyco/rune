@@ -241,6 +241,21 @@ impl<S: 'static> Runtime<S> {
                 self.overlay_hits.push(self.hit_screen_rect(n.id, rect));
             }
         }
+        // What a wheel chains up from, in the same paint order: what takes input, every scroll
+        // view, and the roots of what is drawn over others (an anchored overlay, a `raise()`d
+        // panel, a sticky element), whatever their fill, so a wheel over any of them starts there,
+        // not on what lies beneath. Other boxes without a handler let the wheel through, as an
+        // element with `pointer-events: none` does.
+        let n = &self.nodes[i];
+        if (self.hits.len() > hits_before || n.scroll.is_some() || n.above.is_some() || n.vis_flags.raise() || n.sticky.is_some())
+            && !self.subtree_exiting(i) && self.allowed(i) && effective_opacity > 0.001 && visible
+        {
+            let c = if n.parent.is_some() { pinh_clip } else { self.inh_scratch[0].clip };
+            let r = if n.parent.is_some() {
+                [rect_pt[0].max(c[0] / s), rect_pt[1].max(c[1] / s), rect_pt[2].min(c[2] / s), rect_pt[3].min(c[3] / s)]
+            } else { rect_pt };
+            if r[2] > r[0] && r[3] > r[1] { self.wheel_hits.push((n.id, r)); }
+        }
         if self.nodes[i].cold.get().is_some_and(|c| c.help.is_some() && (!c.help_cut || self.nodes[i].text_cut(s))) && !self.subtree_exiting(i) && self.allowed(i) && effective_opacity > 0.001 && visible {
             let c = if self.nodes[i].parent.is_some() { pinh_clip } else { NO_CLIP };
             let r = [rect_pt[0].max(c[0] / s), rect_pt[1].max(c[1] / s), rect_pt[2].min(c[2] / s), rect_pt[3].min(c[3] / s)];
