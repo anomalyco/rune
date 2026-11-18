@@ -773,7 +773,7 @@ fn raise_priority(thread: &std::thread::JoinHandle<()>) {
 }
 
 /// How many frames the warm frame records at once, and how many times (warm_frame).
-const WARM_ENCODERS: usize = 3;
+const WARM_ENCODERS: usize = 1;
 const WARM_ROUNDS: usize = 2;
 
 static FIRST_CPU: AtomicBool = AtomicBool::new(false);
