@@ -49,6 +49,8 @@ use win::{SurfaceRetries, SurfaceStep, SURFACE_TRIES, Win};
 mod first_frame;
 use first_frame::FirstFrame;
 mod draw;
+mod loop_frame;
+use loop_frame::LoopFrame;
 mod redraw;
 #[cfg(target_os = "windows")]
 mod covered_draw;
@@ -464,6 +466,10 @@ impl ApplicationHandler<WakeEvent> for Windows {
 use file_drop::{DROP_SAMPLE, FileDrop, FileStep};
 
 struct Host<S: 'static> {
+    /// The app's waker ran and its event isn't handled yet (`WakeEvent::App`): work it brought (a
+    /// streamed token, a tool's result) may already be readable, so no frame is loop-only until
+    /// the event's `drain` has polled it.
+    app_woken: Arc<std::sync::atomic::AtomicBool>,
     /// `App::chrome`, as the app set it (`chrome::frame_chrome` lays a titlebar over it).
     chrome: Chrome,
     /// `App::titlebar`, unless the window is borderless.
@@ -563,7 +569,10 @@ impl<S: 'static> Host<S> {
         let live_proxy = proxy.clone();
         #[cfg(target_os = "macos")]
         let frame_proxy = proxy.clone();
+        let app_woken = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let woken = app_woken.clone();
         let waker: Waker = Arc::new(move || {
+            woken.store(true, std::sync::atomic::Ordering::Release);
             let _ = proxy.send_event(WakeEvent::App(slot));
         });
         let (open, keep_running, on_close, release_gpu) = (app.open, app.keep_running, app.on_close, app.release_gpu);
@@ -637,6 +646,7 @@ impl<S: 'static> Host<S> {
         let shortcuts = crate::shortcuts::Guard::attach(&shared, waker, false, wayland);
         let menus = crate::native_menu::Guard::attach(&shared, false);
         Host {
+            app_woken,
             chrome,
             titlebar,
             options,

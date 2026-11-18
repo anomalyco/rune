@@ -24,13 +24,44 @@ pub(crate) fn configure(surface: &wgpu::Surface, gpu: &Gpu, config: &wgpu::Surfa
     let error = pollster::block_on(internal.pop()).or(pollster::block_on(validation.pop()));
     if gpu.is_lost() { return Err(lost_device(config)); }
     match error {
-        None => Ok(()),
+        None => { configured(surface); Ok(()) }
         Some(error) => {
             let text = error.to_string();
             let cause = text.lines().map(str::trim).filter(|line| !line.is_empty() && *line != "Caused by:").collect::<Vec<_>>().join(": ");
             Err(format!("{cause} ({}x{}, {:?}, {:?}, {:?})", config.width, config.height, config.format, config.alpha_mode, config.present_mode))
         }
     }
+}
+
+/// Each surface's last successful configuration, numbered across all of them: a configure makes a
+/// new swap chain (new back buffers), so a frame that drew partly into the last one must draw
+/// whole into this one (`Damage`). Wherever the configure came from: a resize, a blend switch,
+/// a frame-latency change, or `acquire` retrying an outdated surface inside a frame.
+#[cfg(not(target_arch = "wasm32"))]
+static CONFIGURED: std::sync::Mutex<Vec<(usize, u64)>> = std::sync::Mutex::new(Vec::new());
+#[cfg(not(target_arch = "wasm32"))]
+static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+#[cfg(not(target_arch = "wasm32"))]
+fn configured(surface: &wgpu::Surface) {
+    let key = std::ptr::from_ref(surface) as usize;
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let mut all = CONFIGURED.lock().unwrap();
+    match all.iter_mut().find(|(k, _)| *k == key) {
+        Some(e) => e.1 = n,
+        None => all.push((key, n)),
+    }
+    // Surfaces long gone: their numbers are never read again.
+    if all.len() > 64 { all.remove(0); }
+}
+
+/// The number of `surface`'s last successful configuration (0 before any). A surface dropped and
+/// another made at its address configures before it draws, so it never reads the old number.
+#[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) fn generation(surface: &wgpu::Surface) -> u64 {
+    let key = std::ptr::from_ref(surface) as usize;
+    CONFIGURED.lock().unwrap().iter().find(|(k, _)| *k == key).map_or(0, |e| e.1)
 }
 
 /// A configuration that never reached the surface because its device is gone.

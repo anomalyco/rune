@@ -254,6 +254,7 @@ impl<S: 'static> Host<S> {
             cursor: crate::cursor::os::OsCursor::new(),
             alpha,
             timer_frame: TimerFrame::default(),
+            loop_frame: LoopFrame::default(),
             presented: None,
             #[cfg(target_os = "windows")]
             covered_draw: CoveredDraw::Current,

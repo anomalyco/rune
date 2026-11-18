@@ -234,6 +234,7 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
 
     #[cfg(feature = "frame-profile")]
     let mut profile = crate::frame::profile::Log::new(last_frame + 1);
+    let mut loop_check = super::loop_check::Tally::default();
     for k in 0..=last_frame {
         #[cfg(feature = "frame-profile")]
         let (alloc0, commits0, cpu0) = {
@@ -247,6 +248,7 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
             if ahead > 0.0 { std::thread::sleep(std::time::Duration::from_secs_f64(ahead)); }
         }
         let frame_start = Instant::now();
+        let script_before = next_ev;
         #[cfg(feature = "frame-profile")]
         let events0 = next_ev;
         while next_ev < script.len() && script[next_ev].t <= real_t + 1e-9 {
@@ -318,7 +320,13 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
         rt.window_resting = frame_anim.is_none() && rt.window_frame.is_none();
         let step = if k == 0 { 0.0 } else { dt };
         if let Some(g) = gate.as_mut() { g.before(&mut rt); }
+        // `RUNE_LOOP_CHECK=1`: every frame asks for a loop-only step first, and the step is
+        // compared with the ordinary frame that runs instead, or says why it wouldn't run. A
+        // window never asks after a script's kind of event (`LoopFrame::touched`); here the
+        // step's own refusal shows for those too, counted apart.
+        let asked = (rt.loop_check_on() && k > 0 && frame_anim.is_none()).then(|| rt.loop_step(step));
         let mut animating = rt.frame(step);
+        if let Some(asked) = asked { loop_check.add(real_t, next_ev != script_before, asked, rt.loop_checked()); }
         rt.open_popup_headless();
         // As on macOS, a frame change this commit asked for starts with the springs it
         // started, which have shown a step unless they held for the window.
@@ -467,6 +475,7 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
         let wall = wall.elapsed().as_secs_f64();
         eprintln!("rune: {} frames in {wall:.2} s wall ({:.1} frames/s)", last_frame + 1, (last_frame + 1) as f64 / wall);
     }
+    let loop_checked = loop_check.report();
     let q = |v: &mut Vec<f64>, p: f64| {
         v.sort_by(f64::total_cmp);
         if v.is_empty() { 0.0 } else { v[((v.len() - 1) as f64 * p).round() as usize] }
@@ -501,6 +510,7 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
     for url in rt.take_url_requests() {
         eprintln!("rune: open_url {url} (headless: not opened)");
     }
+    if !loop_checked { std::process::exit(3); }
 }
 
 /// Takes the size handlers asked for a headless window, inside the limits the app set; its
