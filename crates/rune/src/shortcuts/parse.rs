@@ -35,31 +35,28 @@ impl Shortcut {
         let mut key = None;
         for part in input.split('+') {
             let part = part.trim().to_ascii_lowercase();
-            let (name, modifier) = match part.as_str() {
-                "ctrl" | "control" => (CTRL, CTRL),
-                "alt" | "option" | "opt" => (ALT, ALT),
-                "shift" => (SHIFT, SHIFT),
-                "cmd" | "command" | "super" | "meta" | "logo" | "win" => (SUPER, SUPER),
-                "mod" | "primary" => (PRIMARY_NAME, if platform == crate::KeyPlatform::Mac { SUPER } else { CTRL }),
-                _ => (0, 0),
-            };
-            if modifier != 0 {
+            if let Some(m) = crate::input::key_table::modifier_named(&part) {
+                let (name, modifier) = match m {
+                    crate::ChordMod::Ctrl => (CTRL, CTRL),
+                    crate::ChordMod::Alt => (ALT, ALT),
+                    crate::ChordMod::Shift => (SHIFT, SHIFT),
+                    crate::ChordMod::Super => (SUPER, SUPER),
+                    crate::ChordMod::Primary => (PRIMARY_NAME, if platform == crate::KeyPlatform::Mac { SUPER } else { CTRL }),
+                };
                 if key.is_some() || named & name != 0 { return Err(invalid()); }
                 named |= name;
                 mods |= modifier;
             } else {
                 if key.is_some() { return Err(invalid()); }
                 let name = match part.as_str() {
-                    "esc" => "escape", "return" | "numpadenter" => "enter", "spacebar" => "space",
-                    "arrowleft" => "left", "arrowright" => "right", "arrowup" => "up", "arrowdown" => "down",
-                    "del" => "delete", "ins" => "insert", "pgup" => "pageup", "pgdn" => "pagedown",
-                    "-" => "minus", "=" | "plus" => "equal", "," => "comma", "." => "period", "/" => "slash",
-                    ";" => "semicolon", "'" => "quote", "[" => "bracketleft", "]" => "bracketright",
-                    "\\" => "backslash", "`" => "backquote",
-                    name => name
-                        .strip_prefix("key").filter(|s| s.len() == 1 && s.as_bytes()[0].is_ascii_lowercase())
-                        .or_else(|| name.strip_prefix("digit").filter(|s| s.len() == 1 && s.as_bytes()[0].is_ascii_digit()))
-                        .unwrap_or(name),
+                    "numpadenter" => "enter",
+                    "spacebar" => "space",
+                    "plus" => "equal",
+                    s => crate::input::key_table::canonical_named_alias(s)
+                        .or_else(|| crate::input::key_table::punctuation_name(s))
+                        .or_else(|| s.strip_prefix("key").filter(|s| s.len() == 1 && s.as_bytes()[0].is_ascii_lowercase()))
+                        .or_else(|| s.strip_prefix("digit").filter(|s| s.len() == 1 && s.as_bytes()[0].is_ascii_digit()))
+                        .unwrap_or(s),
                 };
                 key = Some(super::keys::named(name).ok_or_else(invalid)?);
             }

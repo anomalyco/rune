@@ -383,7 +383,7 @@ impl<S: 'static> Running<S> {
                 // a horizontal strip is being scrolled.
                 if self.input.fit_height && dx.abs() <= dy.abs() { return false; }
                 let precise = matches!(delta, winit::event::MouseScrollDelta::PixelDelta(_));
-                self.rt.wheel_event(crate::WheelEvent::new(dx, dy).at(x, y).mods(modifiers(self.input.mods)).precise(precise));
+                self.rt.wheel_event(crate::WheelEvent::new(dx, dy).at(x, y).mods(crate::window::map_mods(self.input.mods)).precise(precise));
             }
             // A page's Tab is the browser's, through the mirror's links and buttons.
             WindowEvent::KeyboardInput { event, .. }
@@ -391,19 +391,13 @@ impl<S: 'static> Running<S> {
             WindowEvent::KeyboardInput { event, is_synthetic: false, .. } => {
                 immediate = true;
                 let pressed = event.state == ElementState::Pressed;
-                let mut logical = (pressed || self.rt.wants_key_up()).then(|| crate::window::map_key_event(&event, self.input.mods)).flatten();
-                if let Some(key) = &mut logical {
-                    key.mods = modifiers(self.input.mods);
-                    if key.mods.cmd && let crate::Key::Text(text) = &key.key && text != " " && text.chars().count() == 1 {
-                        key.key = crate::Key::Command(text.chars().next().unwrap().to_ascii_lowercase());
-                    }
-                }
+                let logical = (pressed || self.rt.wants_key_up()).then(|| crate::window::map_key_event(&event, self.input.mods)).flatten();
                 // Any key that puts Rune's focus in a field (Tab, or a shortcut such as the
                 // prompt's) hands the page's own field the browser's focus, so a screen reader is
                 // in a real text field with its text, not on the canvas's stand-in for it.
                 activate = pressed;
                 if let winit::keyboard::PhysicalKey::Code(key) = event.physical_key {
-                    self.rt.physical_with_fallback(crate::PhysicalInput::Key { key, mods: modifiers(self.input.mods),
+                    self.rt.physical_with_fallback(crate::PhysicalInput::Key { key, mods: crate::window::map_mods(self.input.mods),
                         pressed: event.state == ElementState::Pressed, repeat: event.repeat }, logical);
                 } else if let Some(key) = logical {
                     if pressed { self.rt.key(key); } else { self.rt.key_up(key); }
@@ -438,8 +432,3 @@ impl<S: 'static> Running<S> {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum First { Unasked, Waiting, Built }
-
-fn modifiers(mods: ModifiersState) -> crate::Mods {
-    crate::Mods { shift: mods.shift_key(), alt: mods.alt_key(), ctrl: mods.control_key(),
-        logo: mods.super_key(), cmd: mods.super_key() || mods.control_key() }
-}

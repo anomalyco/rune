@@ -226,6 +226,25 @@ mod tests {
             (crate::Key::Command('k'), Some(KeyK), false),
         ]);
     }
+
+    #[test]
+    fn web_key_forwards_function_keys_f1_through_f24() {
+        type Seen = Vec<(crate::Key, Option<crate::PhysicalKeyCode>)>;
+        fn view(_: &Seen, _: &mut Cx<Seen>) -> El { crate::el() }
+        let mut rt = Runtime::new(Seen::new(), view, (100.0, 100.0), Env::default());
+        rt.on_key = Some(|s, ev, tx| { s.push((ev.key.clone(), tx.physical_key())); true });
+        rt.frame(0.0);
+        for (key, code) in [("F1", "F1"), ("F12", "F12"), ("F24", "F24"), ("F0", ""), ("F01", ""), ("F25", "")] {
+            rt.web_key(&json!({"kind":"key", "key":key, "code":code}));
+            rt.frame(0.0);
+        }
+        use crate::PhysicalKeyCode::*;
+        assert_eq!(rt.state, [
+            (crate::Key::Function(1), Some(F1)),
+            (crate::Key::Function(12), Some(F12)),
+            (crate::Key::Function(24), Some(F24)),
+        ]);
+    }
 }
 
 /// Reject offsets in the middle of a surrogate pair, rather than corrupting the Rust string.
@@ -295,20 +314,18 @@ impl<S: 'static> Runtime<S> {
 
     pub(crate) fn web_key(&mut self, event: &serde_json::Value) -> bool {
         let flag = |key: &str| event[key].as_bool().unwrap_or(false);
-        let (shift, ctrl, alt, logo) = (flag("shift"), flag("ctrl"), flag("alt"), flag("meta"));
-        let mods = crate::Mods { shift, alt, ctrl, logo, cmd: logo || ctrl };
-        let key = match event["key"].as_str().unwrap_or_default() {
-            "Enter" => crate::Key::Enter, "Tab" => crate::Key::Tab, "Escape" => crate::Key::Escape,
-            "ArrowLeft" => crate::Key::Left, "ArrowRight" => crate::Key::Right,
-            "ArrowUp" => crate::Key::Up, "ArrowDown" => crate::Key::Down,
-            "Home" => crate::Key::Home, "End" => crate::Key::End,
-            "PageUp" => crate::Key::PageUp, "PageDown" => crate::Key::PageDown,
-            "Backspace" => crate::Key::Backspace, "Delete" => crate::Key::Delete,
-            "ContextMenu" => crate::Key::ContextMenu,
-            "Insert" => crate::Key::Insert, "PrintScreen" => crate::Key::PrintScreen,
-            "ScrollLock" => crate::Key::ScrollLock, "Pause" => crate::Key::Pause,
-            name if name.chars().count() == 1 && mods.cmd => crate::Key::Command(name.chars().next().unwrap().to_ascii_lowercase()),
-            _ => return false,
+        let mods = crate::input::key_table::web_mods(flag("shift"), flag("ctrl"), flag("alt"), flag("meta"));
+        let name = event["key"].as_str().unwrap_or_default();
+        let key = match crate::input::key_table::named_key_from_str(name) {
+            Some(key) => key,
+            None if mods.cmd => {
+                let mut chars = name.chars();
+                match (chars.next(), chars.next()) {
+                    (Some(c), None) => crate::Key::Command(c.to_ascii_lowercase()),
+                    _ => return false,
+                }
+            }
+            None => return false,
         };
         let event_key = crate::KeyEvent { key, mods };
         let activate = event_key.key == crate::Key::Tab;

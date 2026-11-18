@@ -7,7 +7,8 @@
 use std::fmt::Write;
 
 use super::*;
-use crate::runtime::web_a11y::{anchor_id, aria_role, container_tag};
+use crate::a11y::roles;
+use crate::runtime::web_a11y::anchor_id;
 
 #[path = "export/css.rs"]
 mod css;
@@ -97,7 +98,7 @@ impl<S: 'static> Runtime<S> {
         let label = n.label.as_deref().filter(|s| !s.trim().is_empty());
         let pixels = n.vis.cold.pixels.as_ref().filter(|_| i + 1 == self.subtree_end(i));
         let pixels_url = pixels.and_then(|p| p.source_url());
-        let tag: &'static str = if let Some(t) = container_tag(n.role) {
+        let tag: &'static str = if let Some(t) = roles::container_tag(n.role) {
             t
         } else if href.is_some() {
             "a"
@@ -112,10 +113,10 @@ impl<S: 'static> Runtime<S> {
         } else {
             "div"
         };
-        if matches!(tag, "a" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6") || container_tag(n.role).is_some() {
+        if matches!(tag, "a" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6") || roles::container_tag(n.role).is_some() {
             if let Some(id) = anchor_id(n.key.as_deref()) { let _ = write!(attrs, " id=\"{id}\""); }
         }
-        if let Some(role) = aria_role(n.role) { let _ = write!(attrs, " role=\"{role}\""); }
+        if let Some(role) = roles::container_aria(n.role) { let _ = write!(attrs, " role=\"{role}\""); }
         if let Some(h) = &href { let _ = write!(attrs, " href=\"{}\"", escape(h)); }
         if let Some(url) = pixels_url {
             let [x0, y0, x1, y1] = n.target;

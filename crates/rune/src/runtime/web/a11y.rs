@@ -8,6 +8,7 @@ use std::hash::{Hash, Hasher};
 use serde_json::{Value, json};
 
 use super::*;
+use crate::a11y::roles;
 
 #[derive(Default)]
 pub(crate) struct A11yMirror {
@@ -128,62 +129,6 @@ impl A11yItem {
     }
 }
 
-/// The HTML element a landmark or list role stands for. These wrap their children in the
-/// mirror, so the page outline reads as the app built it.
-pub(crate) fn container_tag(role: &str) -> Option<&'static str> {
-    Some(match role {
-        "main" => "main",
-        "navigation" => "nav",
-        "banner" => "header",
-        "contentinfo" => "footer",
-        "region" => "section",
-        "article" => "article",
-        "complementary" => "aside",
-        "list" => "ul",
-        "listitem" => "li",
-        "figure" => "figure",
-        // A list of options (the palette's), and a dialog: role-carrying divs, so the options
-        // inside read as one list of places and the dialog by its name.
-        "listbox" | "dialog" | "alertdialog" => "div",
-        // A table's parts are divs with their ARIA roles: the mirror places every element itself,
-        // and an HTML table's semantics follow its CSS display.
-        "table" | "row" | "cell" | "columnheader" | "rowheader" => "div",
-        _ => return None,
-    })
-}
-
-/// The ARIA role a container carries (`container_tag`'s divs for a table's parts).
-pub(crate) fn aria_role(role: &str) -> Option<&'static str> {
-    Some(match role {
-        "table" => "table",
-        "row" => "row",
-        "cell" => "cell",
-        "columnheader" => "columnheader",
-        "rowheader" => "rowheader",
-        "listbox" => "listbox",
-        "dialog" => "dialog",
-        "alertdialog" => "alertdialog",
-        _ => return None,
-    })
-}
-
-/// The ARIA role a mirrored button carries when Rune's role is a control's: a palette's option,
-/// a tab, a switch, a checkbox, a radio, a menu's item, a tree's item.
-fn control_role(role: &str) -> Option<&'static str> {
-    Some(match role {
-        "option" => "option",
-        "tab" => "tab",
-        "switch" => "switch",
-        "checkbox" => "checkbox",
-        "radio" => "radio",
-        "menuitem" => "menuitem",
-        "menuitemcheckbox" => "menuitemcheckbox",
-        "menuitemradio" => "menuitemradio",
-        "treeitem" => "treeitem",
-        _ => return None,
-    })
-}
-
 /// An element id from a key, for anchors: letters, digits, `-` and `_`, starting with a letter.
 pub(crate) fn anchor_id(key: Option<&str>) -> Option<String> {
     let key = key?;
@@ -208,10 +153,6 @@ pub(crate) fn align_name(align: crate::el::Align) -> &'static str {
     }
 }
 
-/// Roles of controls a press works, which keep the pointer even without their own handler.
-const CONTROL_ROLES: [&str; 16] = ["button", "link", "tab", "checkbox", "switch", "radio", "combobox", "option",
-    "menuitem", "menuitemcheckbox", "menuitemradio", "slider", "spinbutton", "scrollbar", "textbox", "searchbox"];
-
 /// Node `n` takes the pointer: a press, drag, gesture or pointer handler, a control, or a field.
 /// Hover alone doesn't count; the page's mirror forwards hover to the canvas.
 pub(crate) fn takes_pointer(n: &Node) -> bool {
@@ -221,7 +162,7 @@ pub(crate) fn takes_pointer(n: &Node) -> bool {
         || h.gestures.as_ref().is_some_and(|g| g.takes_gestures())
         || n.input.is_some() || n.window_drag == crate::el::WindowDrag::Drag
         || n.a11y.more.as_ref().is_some_and(|m| m.href.is_some())
-        || CONTROL_ROLES.contains(&n.role)
+        || roles::takes_pointer(n.role)
 }
 
 fn round1(v: f32) -> f32 { (v * 10.0).round() / 10.0 }
@@ -429,10 +370,10 @@ impl<S: 'static> Runtime<S> {
             // A labelled `group` (a game's surface naming its keys, a set of controls) is a div
             // with the role and its label; an unlabelled one adds nothing a reader would say.
             let labelled_group = n.role == "group" && self.mirror_name(i).is_some();
-            if let Some(tag) = container_tag(n.role).or(labelled_group.then_some("div")) {
+            if let Some(tag) = roles::container_tag(n.role).or(labelled_group.then_some("div")) {
                 let mut item = A11yItem::new("group", &n.path, rect);
                 item.tag = Some(tag);
-                item.role = aria_role(n.role).or(labelled_group.then_some("group"));
+                item.role = roles::container_aria(n.role).or(labelled_group.then_some("group"));
                 item.id = anchor_id(n.key.as_deref());
                 item.text = self.mirror_name(i).unwrap_or_default();
                 item.description = self.mirror_description(i);
@@ -474,9 +415,9 @@ impl<S: 'static> Runtime<S> {
                     item.expanded = n.a11y.expanded;
                     item.text = label;
                     item.description = self.mirror_description(i);
-                    if let Some(role) = control_role(n.role) {
+                    if let Some(role) = roles::web_control_role(n.role) {
                         item.role = Some(role);
-                        if self.a11y_role(i).is_some_and(crate::a11y::roles::selectable_item) { item.selected = Some(n.focus.selected); }
+                        if self.a11y_role(i).is_some_and(roles::selectable_item) { item.selected = Some(n.focus.selected); }
                         item.checked = n.a11y.checked.map(|c| match c { crate::el::Checked::True => "true", crate::el::Checked::False => "false", crate::el::Checked::Mixed => "mixed" })
                             .or_else(|| (n.role == "radio").then_some(if n.focus.selected { "true" } else { "false" }));
                         item.set = n.a11y.more.as_ref().and_then(|m| m.set);
@@ -665,7 +606,7 @@ impl<S: 'static> Runtime<S> {
         let n = &self.nodes[i];
         let role = self.a11y_role(i);
         let mut o = serde_json::Map::new();
-        o.insert("o".into(), json!(role.map_or("group", focus_role)));
+        o.insert("o".into(), json!(role.map_or("group", roles::focus_role)));
         let name = self.mirror_name(i).unwrap_or_else(|| self.descendant_label(i, self.subtree_end(i)));
         o.insert("t".into(), json!(name));
         let description = self.mirror_description(i);
@@ -674,7 +615,7 @@ impl<S: 'static> Runtime<S> {
         if let Some(c) = checked {
             o.insert("c".into(), json!(match c { crate::el::Checked::True => "true", crate::el::Checked::False => "false", crate::el::Checked::Mixed => "mixed" }));
         }
-        if role.is_some_and(crate::a11y::roles::selectable_item) { o.insert("s".into(), json!(n.focus.selected)); }
+        if role.is_some_and(roles::selectable_item) { o.insert("s".into(), json!(n.focus.selected)); }
         if let Some(open) = n.a11y.expanded { o.insert("x".into(), json!(open)); }
         if let Some((pos, size)) = n.a11y.more.as_ref().and_then(|m| m.set) { o.insert("n".into(), json!([pos, size])); }
         if let Some(level) = n.a11y.level { o.insert("l".into(), json!(level)); }
@@ -789,33 +730,3 @@ fn join_inline(prev: &mut A11yItem, rect: [f32; 4], mut runs: Vec<A11yRun>, gap:
 #[cfg(test)]
 #[path = "a11y_tests.rs"]
 mod tests;
-
-/// The ARIA role a browser's reader knows for an AccessKit role, for the focus proxy.
-fn focus_role(role: accesskit::Role) -> &'static str {
-    use accesskit::Role as R;
-    match role {
-        R::Button | R::DefaultButton => "button",
-        R::CheckBox => "checkbox",
-        R::Switch => "switch",
-        R::RadioButton => "radio",
-        R::Tab => "tab",
-        R::ListBoxOption | R::MenuListOption => "option",
-        R::TreeItem => "treeitem",
-        R::MenuItem => "menuitem",
-        R::MenuItemCheckBox => "menuitemcheckbox",
-        R::MenuItemRadio => "menuitemradio",
-        R::Link => "link",
-        R::TextInput | R::MultilineTextInput | R::SearchInput | R::PasswordInput | R::Terminal => "textbox",
-        R::Slider => "slider",
-        R::ComboBox | R::EditableComboBox => "combobox",
-        R::Row => "row",
-        R::GridCell | R::Cell => "gridcell",
-        R::ListItem => "listitem",
-        R::Dialog => "dialog",
-        R::AlertDialog => "alertdialog",
-        R::Region => "region",
-        R::Heading => "heading",
-        R::Image => "img",
-        _ => "group",
-    }
-}
