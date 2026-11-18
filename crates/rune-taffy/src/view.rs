@@ -4,7 +4,11 @@ use taffy::compute::{
     compute_block_layout, compute_cached_layout, compute_flexbox_layout, compute_grid_layout, compute_hidden_layout,
     compute_oof_layout,
 };
-use taffy::style::{CoreStyle, Display, Style};
+use taffy::geometry::{Point, Rect, Size};
+use taffy::style::{
+    AlignSelf, BoxGenerationMode, BoxSizing, Contain, CoreStyle, Dimension, Direction, Display, ExpandedDimension,
+    ExpandedLengthPercentageAuto, FlexboxItemStyle, LengthPercentage, LengthPercentageAuto, Overflow, Position, Style,
+};
 use taffy::tree::{
     DetailedLayoutInfo, Layout, LayoutBlockContainer, LayoutContainingBlock, LayoutFlexboxContainer,
     LayoutGridContainer, LayoutInput, LayoutOutput, LayoutPartialTree, NodeId, RunMode, TraversePartialTree,
@@ -17,12 +21,107 @@ use crate::style::CompactStyle;
 
 const NONE_DETAIL: DetailedLayoutInfo = DetailedLayoutInfo::None;
 
+#[inline(always)]
+fn round_dim(d: Dimension) -> Dimension {
+    match d.expand() {
+        ExpandedDimension::Length(h) => Dimension::length((h + 0.5).floor()),
+        _ => d,
+    }
+}
+
+#[inline(always)]
+fn round_lpa(d: LengthPercentageAuto) -> LengthPercentageAuto {
+    match d.expand() {
+        ExpandedLengthPercentageAuto::Length(h) => LengthPercentageAuto::length((h + 0.5).floor()),
+        _ => d,
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct FlexChildStyle<'a> {
+    style: &'a CompactStyle,
+    round_height: bool,
+}
+
+impl CoreStyle for FlexChildStyle<'_> {
+    type CustomIdent = <CompactStyle as CoreStyle>::CustomIdent;
+    #[inline(always)]
+    fn box_generation_mode(&self) -> BoxGenerationMode { self.style.box_generation_mode() }
+    #[inline(always)]
+    fn is_block(&self) -> bool { self.style.is_block() }
+    #[inline(always)]
+    fn is_compressible_replaced(&self) -> bool { self.style.is_compressible_replaced() }
+    #[inline(always)]
+    fn is_replaced(&self) -> bool { self.style.is_replaced() }
+    #[inline(always)]
+    fn box_sizing(&self) -> BoxSizing { self.style.box_sizing() }
+    #[inline(always)]
+    fn direction(&self) -> Direction { self.style.direction() }
+    #[inline(always)]
+    fn overflow(&self) -> Point<Overflow> { self.style.overflow() }
+    #[inline(always)]
+    fn scrollbar_width(&self) -> f32 { self.style.scrollbar_width() }
+    #[inline(always)]
+    fn position(&self) -> Position { self.style.position() }
+    #[inline(always)]
+    fn inset(&self) -> Rect<LengthPercentageAuto> { self.style.inset() }
+    #[inline(always)]
+    fn size(&self) -> Size<Dimension> {
+        let mut s = self.style.size();
+        if self.round_height {
+            s.height = round_dim(s.height);
+        }
+        s
+    }
+    #[inline(always)]
+    fn min_size(&self) -> Size<LengthPercentageAuto> {
+        let mut s = self.style.min_size();
+        if self.round_height {
+            s.height = round_lpa(s.height);
+        }
+        s
+    }
+    #[inline(always)]
+    fn max_size(&self) -> Size<LengthPercentageAuto> {
+        let mut s = self.style.max_size();
+        if self.round_height {
+            s.height = round_lpa(s.height);
+        }
+        s
+    }
+    #[inline(always)]
+    fn aspect_ratio(&self) -> Option<f32> { self.style.aspect_ratio() }
+    #[inline(always)]
+    fn margin(&self) -> Rect<LengthPercentageAuto> { self.style.margin() }
+    #[inline(always)]
+    fn padding(&self) -> Rect<LengthPercentage> { self.style.padding() }
+    #[inline(always)]
+    fn border(&self) -> Rect<LengthPercentage> { self.style.border() }
+    #[inline(always)]
+    fn contain(&self) -> Contain { self.style.contain() }
+}
+
+impl FlexboxItemStyle for FlexChildStyle<'_> {
+    #[inline(always)]
+    fn flex_basis(&self) -> Dimension {
+        let b = self.style.flex_basis();
+        if self.round_height { round_dim(b) } else { b }
+    }
+    #[inline(always)]
+    fn flex_grow(&self) -> f32 { self.style.flex_grow() }
+    #[inline(always)]
+    fn flex_shrink(&self) -> f32 { self.style.flex_shrink() }
+    #[inline(always)]
+    fn align_self(&self) -> Option<AlignSelf> { self.style.align_self() }
+}
+
 pub(crate) struct LayoutStoreView<'s, F>
 where
     F: FnMut(LayoutInput, Option<usize>, &CompactStyle) -> LayoutOutput,
 {
     pub(crate) store: &'s mut LayoutStore,
     pub(crate) measure_leaf: F,
+    pub(crate) in_whole_rows_col: bool,
 }
 
 impl<F> LayoutStoreView<'_, F>
@@ -52,25 +151,44 @@ where
         inputs: LayoutInput,
         block_ctx: Option<&mut BlockContext<'_>>,
     ) -> LayoutOutput {
+        let round_for_parent = core::mem::replace(&mut self.in_whole_rows_col, false);
         if inputs.run_mode == RunMode::PerformHiddenLayout {
             self.slot_mut(node_id).box_layout = BoxLayout::ZERO;
-            return compute_hidden_layout(self, node_id);
+            let out = compute_hidden_layout(self, node_id);
+            self.in_whole_rows_col = round_for_parent;
+            return out;
         }
 
-        compute_cached_layout(self, node_id, inputs, |view, node_id, inputs| {
+        let mut out = compute_cached_layout(self, node_id, inputs, |view, node_id, inputs| {
             let idx = u64::from(node_id) as usize;
             // SAFETY: `node_id` is a live `SlotId` index into `slots`.
-            let (display_mode, has_children) = unsafe {
+            let (display_mode, has_children, whole_col) = unsafe {
                 let s = view.store.slots.get_unchecked(idx);
-                (s.style.display(), s.child_len() != 0)
+                (s.style.display(), s.child_len() != 0, s.style.whole_rows_column())
             };
 
-            let mut output = match (display_mode, has_children) {
+            match (display_mode, has_children) {
                 (Display::None, _) => compute_hidden_layout(view, node_id),
-                (Display::Block, true) => compute_block_layout(view, node_id, inputs, block_ctx),
-                (Display::FlowRoot, true) => compute_block_layout(view, node_id, inputs, None),
-                (Display::Flex, true) => compute_flexbox_layout(view, node_id, inputs),
-                (Display::Grid, true) => compute_grid_layout(view, node_id, inputs),
+                (Display::Block | Display::FlowRoot | Display::Flex | Display::Grid, true) => {
+                    crate::stack::maybe_grow(|| {
+                        let mut output = match display_mode {
+                            Display::Block => compute_block_layout(view, node_id, inputs, block_ctx),
+                            Display::FlowRoot => compute_block_layout(view, node_id, inputs, None),
+                            Display::Flex => {
+                                view.in_whole_rows_col = whole_col;
+                                let r = compute_flexbox_layout(view, node_id, inputs);
+                                view.in_whole_rows_col = false;
+                                r
+                            }
+                            Display::Grid => compute_grid_layout(view, node_id, inputs),
+                            Display::None => unreachable!(),
+                        };
+                        if inputs.run_mode == RunMode::PerformLayout {
+                            compute_oof_layout(view, node_id, &mut output);
+                        }
+                        output
+                    })
+                }
                 (_, false) => {
                     // SAFETY: `idx` is in bounds of both `slots` and `node_idx`.
                     let (ctx, style) = unsafe {
@@ -82,14 +200,13 @@ where
                     };
                     (view.measure_leaf)(inputs, ctx, style)
                 }
-            };
-
-            if inputs.run_mode == RunMode::PerformLayout {
-                compute_oof_layout(view, node_id, &mut output);
             }
-
-            output
-        })
+        });
+        self.in_whole_rows_col = round_for_parent;
+        if round_for_parent && (inputs.run_mode == RunMode::ComputeSize || inputs.known_dimensions.height.is_none_or(|h| h == h.floor())) {
+            out.size.height = (out.size.height + 0.5).floor();
+        }
+        out
     }
 }
 
@@ -252,7 +369,7 @@ where
     where
         Self: 'a;
     type FlexboxItemStyle<'a>
-        = &'a CompactStyle
+        = FlexChildStyle<'a>
     where
         Self: 'a;
 
@@ -263,7 +380,9 @@ where
 
     #[inline(always)]
     fn get_flexbox_child_style(&self, child_node_id: NodeId) -> Self::FlexboxItemStyle<'_> {
-        &self.slot(child_node_id).style
+        let style = &self.slot(child_node_id).style;
+        let round_height = self.in_whole_rows_col && !style.position().is_out_of_flow() && style.display() != Display::None;
+        FlexChildStyle { style, round_height }
     }
 }
 

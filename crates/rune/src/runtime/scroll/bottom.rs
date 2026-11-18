@@ -37,8 +37,8 @@ pub(super) struct Slack {
 enum SlackPhase {
     /// Held while the stack grows, and for `SLACK_WAIT` after a row last grew (`grew_at`).
     Held { grew_at: f64 },
-    /// Closing, with `acc` seconds of frame time not yet stepped in `SUBSTEP`s.
-    Closing { acc: f32 },
+    /// Closing, stepped by each frame's time.
+    Closing,
 }
 
 impl Default for SlackPhase {
@@ -67,19 +67,17 @@ impl Slack {
         }
         if self.track.h <= 1.0 / 128.0 {
             self.track = GrowTrack::default();
-            if matches!(self.phase, SlackPhase::Closing { .. }) { self.phase = WAITED; }
+            if matches!(self.phase, SlackPhase::Closing) { self.phase = WAITED; }
         } else if let SlackPhase::Held { grew_at } = self.phase && now - grew_at >= SLACK_WAIT {
-            self.phase = SlackPhase::Closing { acc: 0.0 };
+            self.phase = SlackPhase::Closing;
             self.track.age = 0.0;
             self.track.v = 0.0;
         }
-        if let SlackPhase::Closing { mut acc } = self.phase {
-            acc += dt;
-            while acc >= SUBSTEP {
-                self.track.step(spec.spring, &spec.edge, false);
-                acc -= SUBSTEP;
+        if let SlackPhase::Closing = self.phase {
+            for step in crate::growth::substeps(dt) {
+                self.track.step_by(step, spec.spring, &spec.edge, false);
             }
-            self.phase = if self.track.moving() { SlackPhase::Closing { acc } } else {
+            self.phase = if self.track.moving() { SlackPhase::Closing } else {
                 self.track = GrowTrack::default();
                 WAITED
             };

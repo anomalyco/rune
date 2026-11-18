@@ -1,5 +1,5 @@
 use super::*;
-use crate::growth::GROWTH;
+use crate::growth::{GROWTH, SUBSTEP};
 
 /// A row growth from `h` toward `target`.
 fn growth(h: f32, target: f32) -> GrowTrack {

@@ -223,10 +223,15 @@ impl CompactStyle {
 
     #[inline(always)]
     pub fn set_justify_content(&mut self, j: JustifyContent) {
-        self.justify_content_u8 = pack_align_content(j);
+        self.justify_content_u8 = (self.justify_content_u8 & JUSTIFY_WHOLE_ROWS) | pack_align_content(j);
         if let Some(s) = &mut self.extra {
             s.justify_content = j;
         }
+    }
+
+    #[inline(always)]
+    pub fn set_whole_rows(&mut self) {
+        self.justify_content_u8 |= JUSTIFY_WHOLE_ROWS;
     }
 
     #[inline(always)]
@@ -354,6 +359,7 @@ impl CompactStyle {
             self.align_self_u8 = ALIGN_SELF_NONE;
             return outer;
         }
+        let whole = self.whole_rows();
         let mut s = match self.extra.take() {
             Some(b) => *b,
             None => self.to_style(),
@@ -406,6 +412,9 @@ impl CompactStyle {
         s.grid_row = Line { start: GridPlacement::Auto, end: GridPlacement::Auto };
         s.grid_column = Line { start: GridPlacement::Auto, end: GridPlacement::Auto };
         *self = Self::from_style(s);
+        if whole {
+            self.justify_content_u8 |= JUSTIFY_WHOLE_ROWS;
+        }
         Self::from_style(outer)
     }
 }

@@ -21,7 +21,20 @@
 //! app's.
 
 mod cause;
+#[cfg(not(target_arch = "wasm32"))]
 mod export;
+#[cfg(target_arch = "wasm32")]
+mod export {
+    use super::*;
+    #[allow(dead_code)]
+    pub(crate) enum Message {
+        Slow(Box<Slow>),
+        Frame(Box<SlowFrame>),
+        Rollup { rolls: Vec<rollup::Roll>, from: Instant, to: Instant },
+    }
+    pub(crate) fn send(_: Message) -> bool { false }
+    pub(crate) fn flush(_: Duration) {}
+}
 mod frame;
 pub(crate) mod gate;
 mod names;
