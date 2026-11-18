@@ -17,6 +17,8 @@ impl<S: 'static> Host<S> {
     /// (`Backoff`), with its display link stopped so no tick redraws sooner. `stepped` when this
     /// frame already ran the runtime.
     pub(super) fn missed_frame(&mut self, missed: Missed, stepped: bool) {
+        #[cfg(feature = "frame-profile")]
+        crate::frame::live_log::missed(match missed { Missed::Occluded => 0, Missed::Timeout => 1, Missed::Outdated => 2, Missed::Unconfigured => 3 });
         let Some(l) = self.win.as_mut() else { return };
         l.timer_frame.drawn();
         l.presented = None;
