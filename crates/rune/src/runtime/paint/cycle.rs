@@ -24,6 +24,9 @@ pub(in crate::runtime) struct CyclePaint {
     pub(super) missed: Option<&'static str>,
     /// What the last step would have drawn, while `RUNE_LOOP_CHECK=1` runs ordinary frames instead.
     check: Option<Vec<Instance>>,
+    /// The last checked step's instances when they matched the ordinary frame's only within a
+    /// clip's grid step, for a headless run to draw both and compare their pixels.
+    grid_step: Option<Vec<Instance>>,
 }
 
 struct Slot {
@@ -165,6 +168,10 @@ impl<S: 'static> Runtime<S> {
     /// `RUNE_LOOP_CHECK=1` is set (`checking`).
     pub(crate) fn loop_check_on(&self) -> bool { checking() }
 
+    /// The last checked step's instances, when they matched the ordinary frame's only within a
+    /// clip's grid step (`loop_checked`): a headless run draws them beside the frame's.
+    pub(crate) fn take_loop_grid_step(&mut self) -> Option<Vec<Instance>> { self.paint_keep.cycles.grid_step.take() }
+
     /// Why a loop on screen has no slot or window (`loop_step`'s answer): the first such loop's
     /// reason, from what paint read.
     fn loop_refusal(&self) -> &'static str {
@@ -195,7 +202,7 @@ impl<S: 'static> Runtime<S> {
     pub(crate) fn loop_checked(&mut self) -> Option<(usize, f32)> {
         let predicted = self.paint_keep.cycles.check.take()?;
         if predicted.len() != self.instances.len() { return Some((usize::MAX, f32::INFINITY)); }
-        let (mut differ, mut worst) = (0, 0.0f32);
+        let (mut differ, mut worst, mut stepped) = (0, 0.0f32, false);
         for (p, q) in predicted.iter().zip(&self.instances) {
             if bytemuck::bytes_of(p) == bytemuck::bytes_of(q) { continue; }
             let fields = |i: &Instance| [i.rect, i.radii, i.fill, i.border, i.params, i.uv];
@@ -207,10 +214,11 @@ impl<S: 'static> Runtime<S> {
             // grid line's half they can land one grid step apart. That one step is the same picture;
             // anything more isn't.
             let clip = p.clip.iter().zip(&q.clip).map(|(a, b)| (a - b).abs()).fold(0.0, f32::max);
-            if d > 1e-3 || clip > 1.0 / 64.0 + 1e-4 { differ += 1; }
+            if d > 1e-3 || clip > 1.0 / 64.0 + 1e-4 { differ += 1; } else if clip > 0.0 { stepped = true; }
             let d = d.max(clip);
             worst = worst.max(d);
         }
+        if stepped && differ == 0 { self.paint_keep.cycles.grid_step = Some(predicted); }
         Some((differ, worst))
     }
 
