@@ -382,11 +382,11 @@ impl Renderer {
     /// sets the gap under it (CSS's `h2 + p { margin-top: 0 }`). In a list item (`in_item`) the
     /// first paragraph has no margins, a later one 8 above, and a nested list 4 above and below,
     /// as a web page spaces an `li`'s children.
-    pub(super) fn blocks_pre(&self, blocks: &[Block], pre: Option<&[super::memo::PreBlock]>, maps: &[BlockMap], keys: &[String], top_level: bool) -> El {
+    pub(super) fn blocks_pre(&self, blocks: &[Block], pre: Option<&[Rc<super::memo::PreBlock>]>, maps: &[BlockMap], keys: &[String], top_level: bool) -> El {
         self.blocks_in(blocks, pre, maps, keys, top_level, false)
     }
 
-    pub(super) fn blocks_in(&self, blocks: &[Block], pre: Option<&[super::memo::PreBlock]>, maps: &[BlockMap], keys: &[String], top_level: bool, in_item: bool) -> El {
+    pub(super) fn blocks_in(&self, blocks: &[Block], pre: Option<&[Rc<super::memo::PreBlock>]>, maps: &[BlockMap], keys: &[String], top_level: bool, in_item: bool) -> El {
         let mut c = col().w_full();
         let mut prev_mb = 0.0f32;
         let mut after_heading = false;
@@ -424,7 +424,7 @@ impl Renderer {
             let prose = !matches!(b, Block::Code(_) | Block::Diff(_) | Block::Mermaid(_) | Block::Image { .. } | Block::Rule);
             let dir = prose.then(|| own.or(last)).flatten();
             let map = maps.get(i).unwrap_or(&empty);
-            let pb = pre.and_then(|ps| ps.get(i));
+            let pb = pre.and_then(|ps| ps.get(i)).map(Rc::as_ref);
             let settled = !self.streaming || i + 1 < blocks.len();
             let (src_at, src_n) = (self.next_source.get(), pb.map_or_else(|| super::memo::source_count(b), |p| p.src_n as usize));
             let (task_at, task_n) = (self.next_task.get(), pb.map_or_else(|| super::memo::task_count(b), |p| p.task_n as usize));
@@ -566,7 +566,7 @@ impl Renderer {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn task_item(&self, (k, n): (usize, usize), indent: f32, item: &[Block], item_pre: Option<&[super::memo::PreBlock]>, item_maps: &[BlockMap], item_idx: usize, checked: bool) -> El {
+    fn task_item(&self, (k, n): (usize, usize), indent: f32, item: &[Block], item_pre: Option<&[Rc<super::memo::PreBlock>]>, item_maps: &[BlockMap], item_idx: usize, checked: bool) -> El {
         let t = &self.s.task;
         let interactive = self.on_task.is_some() && !self.tasks_read_only;
         let (fill, border) = if checked {

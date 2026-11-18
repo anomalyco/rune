@@ -81,10 +81,9 @@ pub(super) struct PreItem {
     pub(super) links: Box<[Rc<str>]>,
     pub(super) src_n: u32,
     pub(super) task_n: u32,
-    pub(super) inner: Box<[PreBlock]>,
+    pub(super) inner: Box<[Rc<PreBlock>]>,
 }
 
-#[derive(Clone)]
 pub(super) struct PreBlock {
     pub(super) digest: (u64, u64),
     pub(super) flags: u8,
@@ -92,7 +91,7 @@ pub(super) struct PreBlock {
     pub(super) src_n: u32,
     pub(super) task_n: u32,
     pub(super) items: Box<[PreItem]>,
-    pub(super) inner: Box<[PreBlock]>,
+    pub(super) inner: Box<[Rc<PreBlock>]>,
     pub(super) table: Option<Box<PreTable>>,
 }
 
@@ -134,7 +133,7 @@ fn precompute_row(cells: &[Inline]) -> PreRow {
     PreRow { digest: h.finish128(), flags, links: links.into_boxed_slice() }
 }
 
-pub(super) fn precompute_block(b: &Block) -> PreBlock {
+pub(super) fn precompute_block(b: &Block) -> Rc<PreBlock> {
     let mut h = PairHasher::new();
     let mut flags = 0u8;
     let mut links = Vec::new();
@@ -245,7 +244,7 @@ pub(super) fn precompute_block(b: &Block) -> PreBlock {
         Block::Quote(_) => inner_out.iter().map(|c| c.task_n).sum(),
         _ => 0,
     };
-    PreBlock {
+    Rc::new(PreBlock {
         digest: h.finish128(),
         flags,
         links: links.into_boxed_slice(),
@@ -254,7 +253,7 @@ pub(super) fn precompute_block(b: &Block) -> PreBlock {
         items: items_out.into_boxed_slice(),
         inner: inner_out.into_boxed_slice(),
         table: table_out,
-    }
+    })
 }
 
 thread_local! {

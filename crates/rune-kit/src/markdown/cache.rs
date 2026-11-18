@@ -7,11 +7,13 @@ const CACHE_BYTES: usize = 16 << 20;
 
 pub(super) type Doc = (Rc<Vec<Block>>, Rc<[Source]>, Rc<[Option<(bool, usize)>]>, Rc<[usize]>, Rc<[BlockMap]>);
 
+pub(super) type Meta = Rc<[Rc<super::memo::PreBlock>]>;
+
 #[derive(Clone)]
 pub(super) struct Parsed {
     pub(super) doc: Doc,
     pub(super) cuts: Rc<[Cut]>,
-    pub(super) meta: Rc<[super::memo::PreBlock]>,
+    pub(super) meta: Meta,
 }
 
 pub(super) struct Cache {
@@ -49,7 +51,7 @@ pub(super) fn doc_cached(src: &str) -> Doc {
     doc_cached_with_meta(src).0
 }
 
-pub(super) fn doc_cached_with_meta(src: &str) -> (Doc, Rc<[super::memo::PreBlock]>) {
+pub(super) fn doc_cached_with_meta(src: &str) -> (Doc, Meta) {
     CACHE.with_borrow_mut(|c| cached(c, src, parse_doc))
 }
 
@@ -59,11 +61,11 @@ pub(super) fn stream_cached(src: &str) -> Doc {
     stream_cached_with_meta(src).0
 }
 
-pub(super) fn stream_cached_with_meta(src: &str) -> (Doc, Rc<[super::memo::PreBlock]>) {
+pub(super) fn stream_cached_with_meta(src: &str) -> (Doc, Meta) {
     STREAMS.with_borrow_mut(|c| cached(c, src, parse_streaming))
 }
 
-fn cached(c: &mut Cache, src: &str, parse: fn(&str, bool) -> ParsedDoc) -> (Doc, Rc<[super::memo::PreBlock]>) {
+fn cached(c: &mut Cache, src: &str, parse: fn(&str, bool) -> ParsedDoc) -> (Doc, Meta) {
     if let Some(hit) = c.docs.get(src) {
         return (hit.doc.clone(), hit.meta.clone());
     }
@@ -72,7 +74,7 @@ fn cached(c: &mut Cache, src: &str, parse: fn(&str, bool) -> ParsedDoc) -> (Doc,
         #[cfg(test)]
         PARSES.with(|p| p.set((p.get().0 + 1, p.get().1)));
         let (blocks, sources, tasks, cuts, starts, maps) = parse(src, true);
-        let meta: Rc<[super::memo::PreBlock]> = blocks.iter().map(super::memo::precompute_block).collect();
+        let meta: Meta = blocks.iter().map(super::memo::precompute_block).collect();
         Parsed { doc: (Rc::new(blocks), sources.into(), tasks.into(), starts.into(), maps.into()), cuts: cuts.into(), meta }
     });
     // A stream's earlier string is dead once it grows, unless something drew it this
@@ -84,7 +86,7 @@ fn cached(c: &mut Cache, src: &str, parse: fn(&str, bool) -> ParsedDoc) -> (Doc,
     }
     let key: Rc<str> = src.into();
     // Parsed text is about as long as its source, plus each block's bookkeeping.
-    let bytes = 2 * src.len() + 128 * parsed.meta.len() + 64 * parsed.cuts.len() + 128;
+    let bytes = 2 * src.len() + 64 * parsed.cuts.len() + 128;
     c.docs.insert(key.clone(), parsed.clone(), bytes);
     c.last = Some(key);
     (parsed.doc, parsed.meta)
@@ -106,10 +108,10 @@ fn extend(base: &Parsed, base_len: usize, src: &str, parse: fn(&str, bool) -> Pa
     #[cfg(test)]
     PARSES.with(|p| p.set((p.get().0, p.get().1 + 1)));
     let (tail, sources, tasks, cuts, starts, maps) = parse(&src[cut.at..], true);
-    let tail_meta: Vec<super::memo::PreBlock> = tail.iter().map(super::memo::precompute_block).collect();
+    let tail_meta: Vec<Rc<super::memo::PreBlock>> = tail.iter().map(super::memo::precompute_block).collect();
     let mut blocks = base.doc.0[..cut.blocks].to_vec();
     blocks.extend(tail);
-    let meta: Rc<[super::memo::PreBlock]> = base.meta[..cut.blocks].iter().cloned().chain(tail_meta).collect();
+    let meta: Meta = base.meta[..cut.blocks].iter().cloned().chain(tail_meta).collect();
     let sources: Rc<[Source]> = base.doc.1[..cut.sources].iter().cloned().chain(sources).collect();
     let tasks = base.doc.2[..cut.tasks].iter().copied()
         .chain(tasks.into_iter().map(|t| t.map(|(checked, at)| (checked, at + cut.at)))).collect();

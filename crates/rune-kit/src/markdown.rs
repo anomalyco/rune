@@ -471,7 +471,7 @@ impl Markdown {
             (true, true) => stream_cached_with_meta(&self.src),
             (false, streaming) => {
                 let (b, s, t, _, st, m) = if streaming { parse_streaming(&self.src, false) } else { parse_doc(&self.src, false) };
-                let meta: Rc<[memo::PreBlock]> = b.iter().map(memo::precompute_block).collect();
+                let meta: Rc<[Rc<memo::PreBlock>]> = b.iter().map(memo::precompute_block).collect();
                 ((Rc::new(b), s.into(), t.into(), st.into(), m.into()), meta)
             }
         };
