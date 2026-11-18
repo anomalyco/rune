@@ -773,11 +773,14 @@ pub struct Renderer {
     /// Windfoil's subpixel pipeline for the window (`variant::Lcd`), and whether this frame's
     /// text draws subpixel masks.
     lcd: variant::Lcd,
-    /// The frame pass's pipelines pinned to one kind each (`variant::PINNED`), made at the first prepare and
-    /// again beside the frame pipeline when the shader or format changes; empty where there's no bytecode for them.
+    /// The frame pass's pipelines pinned to one kind each (`variant::PINNED`), once their thread has made them
+    /// (`variant::start_pinned`); empty where there's no bytecode for them, None until they arrive.
     pinned: Option<Vec<Option<wgpu::RenderPipeline>>>,
     /// Those of the formats `extra` keeps a frame pipeline for, so a switch back makes none.
     pinned_extra: Vec<(wgpu::TextureFormat, Vec<Option<wgpu::RenderPipeline>>)>,
+    /// The pinned pipelines being made on their thread (`variant::start_pinned`), for this format.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    pinned_building: Option<(wgpu::TextureFormat, std::sync::mpsc::Receiver<Vec<Option<wgpu::RenderPipeline>>>)>,
     /// Each instance's kind (`params[1]`), as batched: where a run of one kind starts and ends.
     kinds: Vec<u8>,
     lcd_frame: bool,

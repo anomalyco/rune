@@ -74,6 +74,7 @@ impl Renderer {
             lcd: variant::Lcd::Unbuilt,
             pinned: None,
             pinned_extra: Vec::new(),
+            pinned_building: None,
             kinds: Vec::new(),
             lcd_frame: false,
             frame_wake: None,
@@ -225,15 +226,14 @@ impl Renderer {
         };
         let old = std::mem::replace(&mut self.pipeline, next);
         self.extra.push((self.format, old));
-        // The pinned pipelines go with the frame pipeline: kept for the old format, made now for a new one
-        // (beside the frame pipeline made above), not on the next visible frame.
+        // The pinned pipelines go with the frame pipeline: kept for the old format, made on their thread for a new one.
         if let Some(pinned) = self.pinned.take() { self.pinned_extra.push((self.format, pinned)); }
         self.format = format;
         self.lcd = variant::Lcd::Unbuilt;
-        self.pinned = Some(match self.pinned_extra.iter().position(|(f, _)| *f == format) {
-            Some(i) => self.pinned_extra.swap_remove(i).1,
-            None => self.pinned_pipelines(device),
-        });
+        match self.pinned_extra.iter().position(|(f, _)| *f == format) {
+            Some(i) => self.pinned = Some(self.pinned_extra.swap_remove(i).1),
+            None => self.start_pinned(device),
+        }
         self.srgb_blend = !format.is_srgb();
         if self.layer_stats().targets > 0 { self.add_layer_format(device, format); }
         let [vw, vh] = self.target_frame(None).1;

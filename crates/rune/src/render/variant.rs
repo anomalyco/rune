@@ -373,32 +373,48 @@ impl Renderer {
         Ok(())
     }
 
-    /// The frame pass's pipelines pinned to one kind each (`PINNED`), from the shipped bytecode:
-    /// Windows renderers drawing Windfoil from its precompiled shader. Anywhere else, or when the
-    /// bytecode doesn't match, none: every kind draws with the one shader, as before. Never from
-    /// WGSL, which takes FXC tens of seconds each.
-    pub(super) fn pinned_pipelines(&self, device: &wgpu::Device) -> Vec<Option<wgpu::RenderPipeline>> {
+    /// Starts making the frame pass's pipelines pinned to one kind each (`PINNED`) from the shipped bytecode, on a
+    /// thread of their own, for Windows renderers drawing Windfoil from its precompiled shader: on a cold driver cache
+    /// (the first launch after an install or a driver update) the driver takes about 150 ms for the three, which no
+    /// frame should wait for. The general shader draws every kind until they arrive (`take_pinned`), the same picture.
+    /// Anywhere else, or when the bytecode doesn't match, none: every kind draws with the one shader, as before.
+    /// Never from WGSL, which takes FXC tens of seconds each.
+    pub(super) fn start_pinned(&mut self, device: &wgpu::Device) {
+        self.pinned = None;
+        self.pinned_building = None;
         #[cfg(target_os = "windows")]
         if matches!(self.uber, Uber::Windfoil { source: Source::Precompiled, .. }) && self.vertex_entry == "vs" {
-            #[cfg(feature = "frame-profile")]
-            let started = crate::time::Instant::now();
-            let pinned: Vec<_> = PINNED.iter().map(|&kind| dxbc::uber_pinned(device, kind, |shader| Self::pipeline(device, &self.layout, shader, self.format, "vs", Blend::SourceOver)).map(|(_, p)| p)).collect();
-            // Frame-profile builds: what making them costs where it lands (the warm frame, `set_format`, `adopt`),
-            // and what the run-time freshness check before `PINNED_FRESH` cost (three `pinned_wgsl` and their hashes).
-            #[cfg(feature = "frame-profile")]
-            {
-                let made = started.elapsed();
-                let checked = crate::time::Instant::now();
-                let old: usize = PINNED.iter().filter_map(|&kind| super::pinned_wgsl_blake3(kind)).map(|h| h.len()).sum();
-                eprintln!("rune-warm pinned pipelines: {:.0} us to make {} of 3 (the run-time check they replace: {:.0} us, {old} hex)", made.as_secs_f64() * 1e6, pinned.iter().filter(|p| p.is_some()).count(), checked.elapsed().as_secs_f64() * 1e6);
+            let (sent, done) = std::sync::mpsc::channel();
+            let (device, layout, format) = (device.clone(), self.layout.clone(), self.format);
+            let spawned = std::thread::Builder::new()
+                .name("rune-pinned-pipelines".into())
+                // A renderer dropped meanwhile has no receiver: nothing to tell.
+                .spawn(move || { sent.send(make_pinned(&device, &layout, format)).ok(); });
+            if spawned.is_ok() {
+                self.pinned_building = Some((format, done));
+                return;
             }
-            // None taken (refused, or every fragment stale): no split at all, as before.
-            if pinned.iter().any(Option::is_some) { return pinned; }
         }
         let _ = device;
-        Vec::new()
+        self.pinned = Some(Vec::new());
     }
 
+    /// Takes the pinned pipelines once their thread has made them for this format (one made for a format the
+    /// renderer has since left is dropped, and that format's next use starts again).
+    pub(super) fn take_pinned(&mut self) {
+        let Some((format, done)) = &self.pinned_building else { return };
+        match done.try_recv() {
+            Ok(pinned) => {
+                if *format == self.format { self.pinned = Some(pinned); }
+                self.pinned_building = None;
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.pinned = Some(Vec::new());
+                self.pinned_building = None;
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+        }
+    }
     /// Takes `built` as the renderer's shader: every pipeline again from it. Bind groups follow
     /// once the outline texture exists (`rebind_all`).
     fn adopt(&mut self, device: &wgpu::Device, built: Built) {
@@ -414,9 +430,9 @@ impl Renderer {
         // Built on the old bind layout; made again at the next backdrop blur and subpixel frame.
         self.backdrop_blur = None;
         self.lcd = Lcd::Unbuilt;
-        // The pinned pipelines again from the new shader, beside the frame pipeline, not on the next visible frame.
+        // The pinned pipelines again from the new shader, on their thread: the general shader draws until they're in.
         self.pinned_extra.clear();
-        self.pinned = Some(self.pinned_pipelines(device));
+        self.start_pinned(device);
     }
 }
 
@@ -461,4 +477,23 @@ fn compile(device: &wgpu::Device, wgsl: &str, make_pipeline: impl FnOnce(&dxbc::
         return Err(error.to_string());
     }
     Ok((shader, pipeline))
+}
+
+/// The pinned pipelines for `format` (`Renderer::start_pinned`'s thread): none taken (refused, or every fragment
+/// stale) is none at all, so nothing is split.
+#[cfg(target_os = "windows")]
+fn make_pinned(device: &wgpu::Device, layout: &wgpu::PipelineLayout, format: wgpu::TextureFormat) -> Vec<Option<wgpu::RenderPipeline>> {
+    #[cfg(feature = "frame-profile")]
+    let started = crate::time::Instant::now();
+    let pinned: Vec<_> = PINNED.iter().map(|&kind| dxbc::uber_pinned(device, kind, |shader| Renderer::pipeline(device, layout, shader, format, "vs", Blend::SourceOver)).map(|(_, p)| p)).collect();
+    // Frame-profile builds: what making them costs, and what the run-time freshness check before `PINNED_FRESH`
+    // cost (three `pinned_wgsl` and their hashes).
+    #[cfg(feature = "frame-profile")]
+    {
+        let made = started.elapsed();
+        let checked = crate::time::Instant::now();
+        let old: usize = PINNED.iter().filter_map(|&kind| super::pinned_wgsl_blake3(kind)).map(|h| h.len()).sum();
+        eprintln!("rune-warm pinned pipelines: {:.0} us to make {} of 3 on their thread (the run-time check they replace: {:.0} us, {old} hex)", made.as_secs_f64() * 1e6, pinned.iter().filter(|p| p.is_some()).count(), checked.elapsed().as_secs_f64() * 1e6);
+    }
+    if pinned.iter().any(Option::is_some) { pinned } else { Vec::new() }
 }
