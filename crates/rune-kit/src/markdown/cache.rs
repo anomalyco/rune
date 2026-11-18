@@ -54,7 +54,7 @@ pub(super) fn doc_cached_with_meta(src: &str) -> (Doc, Rc<[super::memo::PreBlock
 }
 
 /// [`doc_cached`] for a source still arriving.
-#[cfg(test)]
+#[allow(dead_code)]
 pub(super) fn stream_cached(src: &str) -> Doc {
     stream_cached_with_meta(src).0
 }

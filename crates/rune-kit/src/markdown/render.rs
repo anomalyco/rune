@@ -382,11 +382,6 @@ impl Renderer {
     /// sets the gap under it (CSS's `h2 + p { margin-top: 0 }`). In a list item (`in_item`) the
     /// first paragraph has no margins, a later one 8 above, and a nested list 4 above and below,
     /// as a web page spaces an `li`'s children.
-    #[cfg(test)]
-    pub(super) fn blocks(&self, blocks: &[Block], maps: &[BlockMap], keys: &[String], top_level: bool) -> El {
-        self.blocks_in(blocks, None, maps, keys, top_level, false)
-    }
-
     pub(super) fn blocks_pre(&self, blocks: &[Block], pre: Option<&[super::memo::PreBlock]>, maps: &[BlockMap], keys: &[String], top_level: bool) -> El {
         self.blocks_in(blocks, pre, maps, keys, top_level, false)
     }
@@ -613,11 +608,6 @@ impl Renderer {
             r = on_task(r.cursor(Cursor::Pointer), block_key, item_idx, !checked);
         }
         r
-    }
-
-    #[cfg(test)]
-    pub(super) fn block(&self, b: &Block, map: &BlockMap) -> El {
-        self.block_pre(b, None, map)
     }
 
     pub(super) fn block_pre(&self, b: &Block, pre: Option<&super::memo::PreBlock>, map: &BlockMap) -> El {
