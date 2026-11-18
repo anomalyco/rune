@@ -37,6 +37,8 @@ impl<S: 'static> Runtime<S> {
             self.dismiss_help();
             self.wheel_delta_arrived(ev.dx, ev.dy);
         }
+        // A notch or not is the run's to decide, not each delta's.
+        let ev = if moved { WheelEvent { notch: self.wheel_lock.notched(self.now_clock(), ev.notch), ..ev } } else { ev };
         if moved || ev.phase != GesturePhase::Moved {
             let ev = WheelEvent { momentum: self.wheel_lock.momentum(), ..ev };
             let gesture = self.wheel_lock.gesture;

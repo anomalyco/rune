@@ -601,16 +601,23 @@ impl<S: 'static> Runtime<S> {
         let Some((id, held)) = self.wheel_run(now, x, y, dy, start) else { return };
         // The ease's time follows the distance in device pixels, as Chromium measures it.
         let scale = f64::from(self.env.scale * self.zoom());
+        let stick = self.node_index.get(&id).and_then(|&i| self.nodes[i].scroll).is_some_and(|s| s.stick_bottom);
         let Some(st) = self.scrolls.get_mut(&id) else { return };
-        let mut curve = st.mode.wheel().unwrap_or_else(|| scroll_wheel::WheelCurve::new(st.offset, st.offset, scale));
+        let easing = st.mode.wheel().is_some();
+        let mut curve = st.mode.wheel().unwrap_or_else(|| scroll_wheel::WheelCurve::still(st.offset));
         curve.follow(st.offset);
         let to = (curve.target() - f64::from(dy)).clamp(0.0, st.max);
         let moved = curve.retarget(to, scale);
+        curve.aimed_at_end(to >= st.max);
         if moved {
             st.mode = st.mode.to_wheel(curve);
             st.moved();
             log_event!(self, "wheel-notch {dy:.1}");
             self.scroll_cancels_press(id);
+        } else if easing {
+            // Sent back to where it is (a flick back before the next frame): it stays put, as
+            // Chromium's does, rather than finishing the ease the notch before started.
+            st.land(stick);
         }
         self.wheel_lock.ran_vertical(id, now, x, y, dy, moved, held);
     }

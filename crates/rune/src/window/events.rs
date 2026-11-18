@@ -458,9 +458,12 @@ impl<S: 'static> Host<S> {
                 let (dx, dy) = crate::runtime::wheel_delta(delta, scale, shift, points);
                 let precise = matches!(delta, winit::event::MouseScrollDelta::PixelDelta(_));
                 // Whole lines are a notched wheel; a free-spinning wheel or a precision touchpad
-                // sends fractions. Proved against Chromium on Windows only so far: macOS scrolls a
-                // notch at once, as Chromium there does, and Linux waits for a run on Linux.
-                let notch = cfg!(target_os = "windows")
+                // sends fractions (the run decides, `WheelLock::notched`). On Linux winit gives a
+                // wheel's detents as whole lines too (X11's buttons 4-7 and XInput2's position over
+                // its increment, Wayland's discrete values) and a touchpad's as fractions (XInput2)
+                // or pixels (Wayland's finger and continuous sources). macOS scrolls a notch at once,
+                // as Chromium there does.
+                let notch = cfg!(any(target_os = "windows", target_os = "linux"))
                     && matches!(delta, winit::event::MouseScrollDelta::LineDelta(x, y) if x.fract() == 0.0 && y.fract() == 0.0);
                 let phase = gesture_phase(phase);
                 match rt.pointer() {

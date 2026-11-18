@@ -32,12 +32,21 @@ pub(crate) struct WheelCurve {
     /// The offset it last put the viewport at: one that differs when the ease next steps was
     /// moved under it (rows above measured or arrived, an anchor kept what's on screen).
     applied: f64,
+    /// Its target was the viewport's end when a notch set it: a stick-to-bottom viewport whose end
+    /// grows under it (a reply streaming) takes its target with the end, and lands pinned.
+    to_end: bool,
 }
 
 impl WheelCurve {
     /// An ease from `from` to `to`, `scale` device pixels to a point.
     pub(crate) fn new(from: f64, to: f64, scale: f64) -> Self {
-        WheelCurve { from, to, t: 0.0, duration: duration(to - from, scale), ease: CubicBezier::new(0.42, 0.0, 0.58, 1.0), fresh: true, applied: from }
+        WheelCurve { from, to, t: 0.0, duration: duration(to - from, scale), ease: CubicBezier::new(0.42, 0.0, 0.58, 1.0), fresh: true, applied: from, to_end: false }
+    }
+
+    /// No ease, at rest at `at`: where a notch's ease starts from when none is running. It is
+    /// finished, so a notch that sends it nowhere new moves nothing and changes no mode.
+    pub(crate) fn still(at: f64) -> Self {
+        WheelCurve { from: at, to: at, t: 0.0, duration: 0.0, ease: CubicBezier::new(0.42, 0.0, 0.58, 1.0), fresh: false, applied: at, to_end: false }
     }
 
     /// The viewport's offset is `offset` before the ease steps: whatever moved it since the ease
@@ -57,6 +66,12 @@ impl WheelCurve {
 
     /// Where it heads.
     pub(crate) fn target(&self) -> f64 { self.to }
+
+    /// Whether a notch sent it to the viewport's end (`Self::aimed_at_end`).
+    pub(crate) fn to_end(&self) -> bool { self.to_end }
+
+    /// A notch sent it to 	o: the viewport's end when `at_end`.
+    pub(crate) fn aimed_at_end(&mut self, at_end: bool) { self.to_end = at_end; }
 
     /// The offset now.
     pub(crate) fn value(&self) -> f64 {
@@ -78,8 +93,21 @@ impl WheelCurve {
     /// Steps it `dt` seconds on: a frame's own step, or (`catch_up`) the time a frame charges to
     /// motion already running, which a notch that came since then doesn't take.
     pub(crate) fn advance(&mut self, dt: f64, catch_up: bool) {
-        if catch_up && self.fresh { return; }
-        self.fresh = false;
+        // Landing at once (reduced motion, or an app that turned the glide off) lands whatever.
+        if dt.is_infinite() {
+            self.fresh = false;
+            self.t = self.duration.max(0.0);
+            return;
+        }
+        // A step of nothing (a commit's `step_scroll(0.0)`) isn't the first frame.
+        if dt == 0.0 { return; }
+        // An ease from rest starts at its first frame, as Chromium's does (the animation's start
+        // time is that frame's, and official's first frame after a notch draws where it was): that
+        // frame's catch-up and step both pass, and the next frame moves.
+        if self.fresh {
+            if !catch_up { self.fresh = false; }
+            return;
+        }
         self.t = (self.t + dt).min(self.duration.max(0.0));
     }
 
@@ -119,12 +147,22 @@ impl WheelCurve {
             *self = WheelCurve { from: to, to, t: 0.0, duration: 0.0, ..*self };
             return false;
         }
-        // The new segment starts at the old one's speed (`EaseInOutWithInitialSlope`).
+        // The new segment starts at the old one's speed (`EaseInOutWithInitialSlope`). It is the
+        // same motion going on, so it keeps the frame's catch-up: marking it fresh would make the
+        // frame after each stacked notch a half step at 60 Hz. Only an ease from rest is fresh.
         let slope = (v * duration / delta).clamp(-1000.0, 1000.0) as f32;
-        *self = WheelCurve { from: at, to, t: 0.0, duration, ease: CubicBezier::new(0.42, 0.42 * slope, 0.58, 1.0), fresh: true, ..*self };
+        *self = WheelCurve { from: at, to, t: 0.0, duration, ease: CubicBezier::new(0.42, 0.42 * slope, 0.58, 1.0), fresh: false, ..*self };
         true
     }
 
+}
+
+/// `offset` on the device grid (`device_pixel`), except within a device pixel of the end `max`:
+/// there the end wins, so a viewport the ease takes to its end reads as at its end (the room
+/// test hands the next run on, and a stick-to-bottom viewport pins) rather than a fraction short.
+pub(crate) fn on_grid_or_end(offset: f64, max: f64, scale: f64) -> f64 {
+    let v = device_pixel(offset, scale);
+    if (max - v) * scale < 1.0 { max } else { v.clamp(0.0, max) }
 }
 
 /// `offset` points on the nearest whole device pixel, `scale` of them to a point.

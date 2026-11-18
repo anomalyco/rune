@@ -45,7 +45,8 @@ impl<S: 'static> Runtime<S> {
             if glide.is_some() { st.spring = glide; }
             if let Some(x) = r.x.filter(|_| axes.x()) {
                 let to = f64::from(x).max(0.0);
-                let v = match st.x.motion { XMotion::Glide { v, .. } => v, _ => 0.0 };
+                // A glide that starts during a wheel's ease keeps the ease's speed.
+                let v = match st.x.motion { XMotion::Glide { v, .. } => v, XMotion::Wheel(c) => c.velocity() as f32, _ => 0.0 };
                 if let Some(spring) = glide && (to.min(st.x.max) - st.x.offset).abs() > 0.5 {
                     // A long trip cuts to a couple of viewports out first, as a glide to the bottom does.
                     let reach = scroll_bottom::GLIDE_REACH * view_w;
@@ -63,7 +64,7 @@ impl<S: 'static> Runtime<S> {
                     let reach = scroll_bottom::GLIDE_REACH * view_h;
                     let end = to.min(st.max);
                     st.offset = st.offset.clamp(end - reach, end + reach);
-                    let v = retarget_v(spring, st.offset, st.glide().unwrap_or(0.0), end);
+                    let v = retarget_v(spring, st.offset, st.glide().or_else(|| st.mode.wheel().map(|c| c.velocity() as f32)).unwrap_or(0.0), end);
                     st.mode = st.mode.to_glide(v, GlideTo::Offset(to));
                 } else {
                     st.halt();
@@ -273,6 +274,11 @@ impl ScrollState {
 
     /// A hand or an app put the offset where it is: momentum and any glide stop, and a
     /// stick-to-bottom viewport (`stick`) follows its end only if it sits there.
+    /// An app's keep moved the offset (rows above measured, an anchor held what's on screen): a
+    /// wheel's ease goes on, moved with it on its next step (`WheelCurve::follow`), as Chromium's
+    /// `ApplyAdjustment` moves a running smooth scroll; anything else lands as `Self::land` does.
+    pub(super) fn keep_land(&mut self, stick: bool) { if self.mode.wheel().is_none() { self.land(stick) } }
+
     pub(super) fn land(&mut self, stick: bool) {
         if stick && self.offset >= self.max - 0.5 { self.pin() } else { let _ = mode::step(&mut self.mode, mode::Event::Rest); }
     }

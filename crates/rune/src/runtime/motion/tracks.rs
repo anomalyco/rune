@@ -202,13 +202,15 @@ impl<S: 'static> Runtime<S> {
                 ScrollMode::Momentum { .. } => st.mode = st.mode.to_rest(),
                 ScrollMode::Wheel { mut curve, .. } => {
                     curve.follow(st.offset);
-                    // An end that shrank under the ease takes its target with it.
-                    if curve.target() > st.max { curve.retarget(st.max, scale); }
+                    // An end that shrank under the ease takes its target with it; one that grew does
+                    // too when the wheel was sent to the end of a viewport that follows its bottom
+                    // (a reply streaming in), so it lands there and pins.
+                    if curve.target() > st.max || (sp.stick_bottom && curve.to_end() && curve.target() < st.max) { curve.retarget(st.max, scale); }
                     if land_wheels { curve.advance(f64::INFINITY, false) } else { curve.advance(f64::from(dt), catch_up) }
                     // On whole device pixels, as Chromium's scroll offsets are: everything inside
                     // moves by the same whole pixels each frame and draws as it did, rather than
                     // landing at a new fraction of a pixel every frame.
-                    st.offset = scroll_wheel::device_pixel(curve.value(), scale).clamp(0.0, st.max);
+                    st.offset = scroll_wheel::on_grid_or_end(curve.value(), st.max, scale);
                     curve.applied(st.offset);
                     // The hand moved it: the app hears a wheel's ease as the wheel.
                     st.moved();
