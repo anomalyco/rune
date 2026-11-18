@@ -586,7 +586,9 @@ impl TextSystem {
         let whole = if forced.unwrap_or(spec.plaintext_flow()) == Flow::Rtl { whole ^ 0x3c6e_f372_fe94_f82b } else { whole };
         let blocks = &spec.cold.blocks;
         let indented = blocks.iter().any(|&b| b != Block::Paragraph).then_some(blocks.as_slice());
-        let key = hash::break_key(whole ^ PARAGRAPHS, max_width, align, indented);
+        let pretty = spec.by_line && spec.pretty() && !input && max_width.is_some() && !matches!(spec.style.family, Family::Mono | Family::SystemMono);
+        let pretty_bit = if pretty { 0x7072_6574_7479_0001 } else { 0 };
+        let key = hash::break_key(whole ^ PARAGRAPHS, max_width, align, indented) ^ pretty_bit;
         let g = self.generation;
         if let Some(e) = self.paragraphs.get_mut(&key) {
             e.used = g;
@@ -597,7 +599,7 @@ impl TextSystem {
         let prev = match prev {
             Some(TextLayout::Paragraphs(p)) if p.max_width == max_width && p.align == align => Some(p.clone()),
             Some(TextLayout::Paragraphs(p)) => {
-                let there = hash::break_key(p.whole ^ PARAGRAPHS, max_width, align, indented);
+                let there = hash::break_key(p.whole ^ PARAGRAPHS, max_width, align, indented) ^ pretty_bit;
                 Some(self.paragraphs.get(&there).map_or_else(|| p.clone(), |e| e.value.clone()))
             }
             _ => None,
@@ -686,6 +688,7 @@ impl TextSystem {
             }
         }
         let pretty = spec.by_line && spec.pretty() && !input;
+        let pretty_active = pretty && max_width.is_some() && !matches!(style.family, Family::Mono | Family::SystemMono);
         let mut waiting = 0;
         let (mut paragraphs, mut y) = (Vec::with_capacity(items.len()), 0.0f64);
         let (mut width, mut full_width, mut fresh) = (0.0f32, 0.0f32, 0);
@@ -709,7 +712,8 @@ impl TextSystem {
                 continue;
             }
             // The same paragraph at the other width (the same text, so the same index).
-            let twin = other.and_then(|o| o.paragraphs.get(k)).filter(|o| o.key == key && o.shaped);
+            let twin = other.and_then(|o| o.paragraphs.get(k)).filter(|o| !pretty_active && o.key == key && o.shaped);
+            let kept = kept.filter(|_| !(rebreak && pretty_active));
             // A kept paragraph broken at another width, or this text's own paragraph at the
             // other width measuring asks for, breaks again here rather than shaping anew.
             let again = match kept { Some(o) if rebreak => Some(o), Some(_) => None, None => twin };

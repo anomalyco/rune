@@ -88,6 +88,7 @@ impl<S: 'static> Runtime<S> {
         if let Some(g) = self.nodes[i].vis.grid.clone() {
             self.paint_grid(i, &g, r, r_exact, clip, fade, o, glyph_count);
         }
+        self.fill_visible_by_line(i, r, exact_off, sc, cover, scale_motion, rest, gliding, shown);
         let n = &self.nodes[i];
         let text_tint = |c: Color| paint_tracks::press_tint(paint_tracks::group_tint(n, c, group), press_to, pressed);
         if let Some(shape) = &n.vis.shape {

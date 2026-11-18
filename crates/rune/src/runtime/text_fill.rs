@@ -32,6 +32,45 @@ impl<S: 'static> Runtime<S> {
         })
     }
 
+    /// Before painting a `by_line` node (`input.is_none()`): shapes any waiting lines inside its
+    /// visible clip with no time budget, so a jump, scrollbar drag, `End` or restored session
+    /// never paints interior lines blank for a frame; `fill_text` keeps its budget for the margin.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn fill_visible_by_line(
+        &mut self,
+        i: usize,
+        r: [f32; 4],
+        exact_off: [f32; 2],
+        sc: f32,
+        cover: Option<(f32, [f32; 2])>,
+        scale_motion: ScaleMotion,
+        rest: f32,
+        gliding: bool,
+        shown: [f32; 2],
+    ) {
+        if self.nodes[i].input.is_some() { return; }
+        let (Some(spec), Some(crate::text::TextLayout::Paragraphs(p))) = (&self.nodes[i].text, &self.nodes[i].text_layout) else { return };
+        if !p.waiting() { return; }
+        let s = self.env.scale;
+        let tk = if cover.is_some() { 1.0 } else { sc };
+        let zk = match cover { Some((k, _)) => k, None => sc };
+        let raster = if cover.is_some() { 1.0 } else { scale_motion.raster(sc, rest) };
+        let still = scale_motion == ScaleMotion::Still;
+        let y_top = match cover { Some((_, c)) => r[1] + c[1] * s, None => r[1] }
+            + if still && (sc - 1.0).abs() < 1e-5 { exact_off[1] } else { 0.0 }
+            + self.nodes[i].inset[1] * zk * s;
+        let rest_y = y_top - if gliding && cover.is_none() && still { r[1] - r[1].round() } else { 0.0 };
+        let em = spec.spans.iter().filter_map(|sp| sp.size).fold(spec.style.size.max(spec.style.line_px()), f32::max);
+        let pad = 2.0 * em * s + 2.0 / raster.max(1e-4);
+        let rows = if tk > 1e-4 { ((shown[0] - rest_y) / tk - pad, (shown[1] - rest_y) / tk + pad) } else { (f32::NEG_INFINITY, f32::INFINITY) };
+        if !p.paragraphs.iter().any(|q| !q.shaped && q.y + q.height >= rows.0 && q.y <= rows.1) { return; }
+        let p = p.clone();
+        if let Some((built, moved)) = self.text.fill_paragraphs(&p, std::time::Duration::MAX, rows, 0.0) {
+            self.nodes[i].text_layout = Some(crate::text::TextLayout::Paragraphs(built));
+            if moved { self.dirty = true; }
+        }
+    }
+
     fn fill_text_within(&mut self, budget: std::time::Duration, reach: Option<f32>) -> bool {
         let mut more = false;
         for i in 0..self.nodes.len() {

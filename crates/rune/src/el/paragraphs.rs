@@ -9,9 +9,9 @@ impl El {
     /// while staying one selectable text element in its own direction.
     ///
     /// Silently falls back to a single layout when the text does not wrap, is truncated or
-    /// line-clamped, is live (`El::live` / `El::advance_in`), is redacted, is an input, or is a
-    /// shared-run cell; a text flight landing on a `by_line` node is dropped so the text appears
-    /// in place without flying.
+    /// line-clamped, is live (`El::live` / `El::advance_in`), is redacted, or is a shared-run
+    /// cell (multi-line inputs already lay out by paragraph with greedy wrapping); a text flight
+    /// landing on a `by_line` node is dropped so the text appears in place without flying.
     pub fn by_line(mut self) -> El {
         if let Some(t) = self.text.as_mut() {
             t.by_line = true;

@@ -122,9 +122,10 @@ impl<S: 'static> Runtime<S> {
         let me = out.len() - 1;
         let runs = n.input.is_some() || (spec.selectable && !n.is_secure());
         let found = self.a11y_lines(i).filter(|_| runs);
-        // A field's rows that wait to be shaped have no lines yet: runs for only the shaped ones
-        // would be a shorter document, so the field answers from its value instead, below.
-        let found = found.filter(|(content, lines)| n.input.is_none() || lines.iter().map(|l| l.range.len()).sum::<usize>() == content.len());
+        // A field's or `by_line` block's interior rows that wait to be shaped have no lines yet:
+        // runs for only the shaped ones would leave holes, so any node whose lines don't cover its
+        // drawn text answers from its value instead (as text past `RUN_MAX_BYTES` does).
+        let found = found.filter(|(content, lines)| lines.iter().map(|l| l.range.len()).sum::<usize>() == content.len());
         if let Some((content, lines)) = found {
             for (k, l) in lines.iter().enumerate() {
                 let id = line_id(n.id, k);
@@ -248,8 +249,11 @@ impl<S: 'static> Runtime<S> {
     /// walk's shift).
     pub(super) fn a11y_lines(&self, i: usize) -> Option<(Cow<'_, str>, Vec<Line>)> {
         let n = &self.nodes[i];
-        let (spec, layout) = (n.text.as_deref()?, n.text_layout.as_ref()?.view());
-        if n.elided.is_some() { return None; }
+        let (spec, tl) = (n.text.as_deref()?, n.text_layout.as_ref()?);
+        if n.elided.is_some() || matches!(tl, crate::text::TextLayout::Paragraphs(p) if p.waiting()) {
+            return None;
+        }
+        let layout = tl.view();
         let content = self.a11y_drawn_text(i)?;
         if content.len() > RUN_MAX_BYTES { return None; }
         let s = self.env.scale;
