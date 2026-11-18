@@ -166,7 +166,7 @@ wgpu-hal = { version = "~30.0.1", default-features = false }
 wgpu-naga-bridge = "~30.0.1"
 windows = "0.62"
 windows-core = "0.62"
-windows-sys = "0.59"
+windows-sys = "0.61"
 winit = { version = "0.30.13", default-features = false }
 
 # Full debug info for the workspace crates made a single `rune` test build use 18-23 GB of RAM;

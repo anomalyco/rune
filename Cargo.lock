@@ -2451,7 +2451,7 @@ version = "0.0.1"
 dependencies = [
  "libc",
  "procwatch",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3878,7 +3878,7 @@ dependencies = [
  "wgpu-naga-bridge",
  "windows",
  "windows-core",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
  "winit",
  "x11rb",
  "xkbcommon",
