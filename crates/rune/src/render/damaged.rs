@@ -235,7 +235,13 @@ impl Renderer {
                 multiview_mask: None,
             });
             let size = [dst.width(), dst.height()];
-            for (n, &rect) in rects.iter().enumerate() {
+            // frame-profile, `RUNE_LOOP_CHECK_SPOIL=1`: a loop-only frame skips its redraw, so the kept
+            // picture goes stale and `RUNE_LOOP_CHECK=2` must find it (its failing row).
+            #[cfg(feature = "frame-profile")]
+            let spoil = looped && super::pixel_check::spoiled();
+            #[cfg(not(feature = "frame-profile"))]
+            let spoil = false;
+            for (n, &rect) in rects.iter().enumerate().filter(|_| !spoil) {
                 let [x, y, w, h] = rect;
                 pass.set_scissor_rect(x, y, w, h);
                 pass.set_pipeline(self.draw_pipeline(self.format, None));

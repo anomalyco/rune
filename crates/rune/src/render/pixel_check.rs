@@ -9,10 +9,24 @@
 //! readback; a diagnostic only. Unset, it costs one `OnceLock` read per loop-only frame.
 //!
 //! Each check prints a line when any pixel differs (how many, by more than 2 of 255 in a channel,
-//! their bounds, and the frame's rectangles), and every 240 checks a running count. When the renderer
-//! goes (the window closes) after any differing check, the process exits 3.
+//! their bounds, and the frame's rectangles), and every 240 checks a running count. A differing check
+//! is noted for the whole process (`failed`): the process then ends with exit code 3, whether it
+//! exits fast or in order (`quit::end_process`, `event_loop::run_configured`).
 
 use super::*;
+
+/// A check found a differing picture, in any window, at any time in this process.
+static FAILED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// `RUNE_LOOP_CHECK=2` is set and a check found a differing picture: the process's exit code is 3.
+pub(crate) fn failed() -> bool { on() && FAILED.load(std::sync::atomic::Ordering::Relaxed) }
+
+/// frame-profile, `RUNE_LOOP_CHECK_SPOIL=1`: loop-only frames skip their redraw (`draw_armed`).
+#[cfg(feature = "frame-profile")]
+pub(super) fn spoiled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("RUNE_LOOP_CHECK_SPOIL").is_some_and(|v| v == "1"))
+}
 
 pub(super) fn on() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -87,6 +101,7 @@ impl Check {
         self.checks += 1;
         if any > 0 {
             self.differ += 1;
+            FAILED.store(true, std::sync::atomic::Ordering::Relaxed);
             eprintln!("rune: loop pixel check: {any} pixels differ from the whole frame, {far} by more than 2/255{}; the frame's rectangles {rects:?}",
                 if far > 0 { format!(" within {bounds:?}") } else { String::new() });
         }
@@ -108,8 +123,6 @@ impl Drop for Check {
     fn drop(&mut self) {
         self.resolve();
         if self.checks > 0 { eprintln!("rune: loop pixel check: {} loop-only frames compared with whole frames, {} differ (at the end)", self.checks, self.differ); }
-        // A differing picture fails the run, as `RUNE_LOOP_CHECK=1`'s headless check does.
-        if self.differ > 0 { eprintln!("rune: loop pixel check FAILED"); std::process::exit(3); }
     }
 }
 
