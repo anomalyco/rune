@@ -2,7 +2,8 @@
 //! loop-only step (`Runtime::loop_step`) before the ordinary frame, on the virtual clock, on any
 //! platform. A step that could run is compared with the ordinary frame that runs instead
 //! (`Runtime::loop_checked`: the instances that differ and by how much at most); a step that
-//! couldn't says why. The run ends with the tally on stderr, and `RUNE_LOOP_CHECK_LOG=<file>`
+//! couldn't says why. The run ends with the tally on stderr, and fails (exit 3) when it compared no step or any
+//! step differed. `RUNE_LOOP_CHECK_LOG=<file>`
 //! writes one line per frame asked (`{"t", "input", "why", "differ", "worst"}`).
 
 use std::collections::BTreeMap;
@@ -41,11 +42,21 @@ impl Tally {
         }
     }
 
-    pub(super) fn report(&mut self) {
-        if !self.opened { return; }
+    /// Prints the tally, and whether the check passed: it compared at least one step and none
+    /// differed. A run whose every frame was refused passes nothing. False when it failed (the
+    /// run then exits non-zero); true when nothing asked (`RUNE_LOOP_CHECK` unset).
+    pub(super) fn report(&mut self) -> bool {
+        if !self.opened { return true; }
         if let Some(log) = self.log.as_mut() { let _ = log.flush(); }
         let why: Vec<String> = self.why.iter().map(|((input, w), n)| format!("{}{w}: {n}", if *input { "after an event, " } else { "" })).collect();
         eprintln!("rune: loop check: {} steps checked against ordinary frames, {} differ (at most {} instances, largest difference {}); asked: {}",
             self.checked, self.differ, self.most, self.worst, why.join(", "));
+        let fail = if self.checked == 0 { Some("no step was checked (every frame was refused: see why above)".to_owned()) }
+            else if self.differ > 0 { Some(format!("{} steps differ from the ordinary frame", self.differ)) } else { None };
+        match &fail {
+            Some(why) => eprintln!("rune: loop check FAILED: {why}"),
+            None => eprintln!("rune: loop check passed"),
+        }
+        fail.is_none()
     }
 }

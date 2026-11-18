@@ -170,6 +170,7 @@ impl Renderer {
         let mut d = self.damage.lock().unwrap();
         d.armed.clear();
         d.looped = false;
+        if let Some(c) = d.pixel.as_mut() { c.frame_ended(); }
         let drawn = d.drawn.take().unwrap_or(Err("not armed"));
         if drawn.is_err() && let Some(r) = d.retained.as_mut() { r.current = false; }
         drawn

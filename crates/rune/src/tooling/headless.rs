@@ -475,7 +475,7 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
         let wall = wall.elapsed().as_secs_f64();
         eprintln!("rune: {} frames in {wall:.2} s wall ({:.1} frames/s)", last_frame + 1, (last_frame + 1) as f64 / wall);
     }
-    loop_check.report();
+    let loop_checked = loop_check.report();
     let q = |v: &mut Vec<f64>, p: f64| {
         v.sort_by(f64::total_cmp);
         if v.is_empty() { 0.0 } else { v[((v.len() - 1) as f64 * p).round() as usize] }
@@ -510,6 +510,7 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
     for url in rt.take_url_requests() {
         eprintln!("rune: open_url {url} (headless: not opened)");
     }
+    if !loop_checked { std::process::exit(3); }
 }
 
 /// Takes the size handlers asked for a headless window, inside the limits the app set; its
