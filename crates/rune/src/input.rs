@@ -6,6 +6,7 @@ pub(crate) mod drop_pointer;
 #[cfg(target_os = "macos")]
 pub(crate) mod fn_key;
 pub(crate) mod key_diagnostics;
+pub(crate) mod key_table;
 pub(crate) mod keycaps;
 pub(crate) mod physical_input;
 #[cfg(any(test, target_os = "windows", all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]

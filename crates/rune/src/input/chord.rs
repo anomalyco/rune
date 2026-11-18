@@ -5,7 +5,7 @@
 //! different ones (⌘B and ⌃B) on macOS. `Keybind` adds alternatives and per-platform chords.
 use std::{fmt, hash::{Hash, Hasher}, str::FromStr};
 
-use super::chord_label::{char_named, key_named_word, modifier_named, named};
+use super::key_table::{char_named, chord_key_from_key, chord_key_named, modifier_named, parse_function_key};
 use crate::{Key, KeyEvent, Mods, PhysicalKeyCode};
 
 pub(super) const PRIMARY: u8 = 1;
@@ -201,7 +201,7 @@ impl Chord {
 
     fn matches_with(&self, ev: &KeyEvent, base: Option<char>, physical: Option<PhysicalKeyCode>, platform: KeyPlatform) -> bool {
         let (want, held) = (fold(self.mods, platform), held(ev.mods, platform));
-        let ChordKey::Char(c) = self.key() else { return want == held && named(&ev.key) == Some(self.key) };
+        let ChordKey::Char(c) = self.key() else { return want == held && chord_key_from_key(&ev.key) == Some(self.key) };
         let Some(typed) = typed(&ev.key) else { return false };
         let base = base.map(lower);
         // Past the typed character, the key's own: its unmodified character when the layout
@@ -390,11 +390,9 @@ fn held(m: Mods, platform: KeyPlatform) -> u8 {
 }
 
 fn key_named(name: &str) -> Option<ChordKey> {
-    if let Some(key) = key_named_word(name) { return Some(key); }
+    if let Some(key) = chord_key_named(name) { return Some(key); }
     if let Some(c) = char_named(name) { return Some(ChordKey::Char(c)); }
-    if let Some(n) = name.strip_prefix('f').filter(|n| !n.starts_with(['0', '+'])).and_then(|n| n.parse::<u8>().ok()) {
-        return (1..=24).contains(&n).then_some(ChordKey::Function(n));
-    }
+    if let Some(n) = parse_function_key(name, 'f') { return Some(ChordKey::Function(n)); }
     let mut chars = name.chars();
     match (chars.next(), chars.next()) { (Some(c), None) => Some(ChordKey::Char(lower(c))), _ => None }
 }

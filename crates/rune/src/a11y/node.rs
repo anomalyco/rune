@@ -218,7 +218,7 @@ impl<S: 'static> Runtime<S> {
         // An item of a group reports whether it's the selected one; elsewhere only a selected
         // item says so (a tree whose container keeps focus).
         if roles::selectable_item(role) && (n.focus.selected || self.in_focus_group(i)) { node.set_selected(n.focus.selected); }
-        let live = n.a11y.live.or(match n.role { "status" | "log" => Some(crate::LiveRegion::Polite), "alert" => Some(crate::LiveRegion::Assertive), _ => None });
+        let live = n.a11y.live.or_else(|| roles::default_live(n.role));
         match live {
             Some(crate::LiveRegion::Polite) => node.set_live(Live::Polite),
             Some(crate::LiveRegion::Assertive) => node.set_live(Live::Assertive),
@@ -297,12 +297,10 @@ impl<S: 'static> Runtime<S> {
         static ON: OnceLock<bool> = OnceLock::new();
         static WARNED: Mutex<Option<HashSet<String>>> = Mutex::new(None);
         if !*ON.get_or_init(|| std::env::var_os("RUNE_A11Y_WARN").is_none_or(|v| v != "0")) { return; }
-        const NAMED: &[&str] = &["button", "toggle", "swatch", "sidebar-toggle", "checkbox", "switch", "radio", "segment", "link", "tab",
-            "menuitem", "menuitemcheckbox", "menuitemradio", "option", "treeitem", "slider", "combobox", "spinbutton"];
         for i in 0..self.nodes.len() {
             let n = &self.nodes[i];
             let field = n.input.is_some();
-            if n.path.is_empty() || n.a11y.hidden || n.inert || !(field || NAMED.contains(&n.role)) || !self.can_focus(i) { continue; }
+            if n.path.is_empty() || n.a11y.hidden || n.inert || !(field || roles::warn_nameless(n.role)) || !self.can_focus(i) { continue; }
             if n.label.as_deref().is_some_and(|l| !l.trim().is_empty()) { continue; }
             let more = n.a11y.more.as_deref();
             if more.and_then(|m| m.labelled_by.as_deref()).and_then(|k| self.a11y_keyed(i, k)).is_some_and(|j| !self.a11y_words(j).is_empty()) { continue; }
