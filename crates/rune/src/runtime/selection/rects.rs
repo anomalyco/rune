@@ -66,15 +66,16 @@ impl<S: 'static> Runtime<S> {
     /// Pushes the line boxes of bytes `a..b` of node `j`'s text onto `out`.
     fn text_boxes(&self, nodes: &[Node], j: usize, a: usize, b: usize, out: &mut Vec<[f32; 4]>) {
         let n = &nodes[j];
-        let (Some(spec), Some(layout)) = (&n.text, n.text_layout.as_ref().and_then(TextLayout::single)) else { return };
+        let (Some(spec), Some(laid)) = (&n.text, &n.text_layout) else { return };
+        let flow = laid.view();
         let len = spec.content.len();
         let (a, b) = (a.min(len), b.min(len));
         if a >= b { return; }
         let (a, b) = n.elided.map_or((a, b), |e| e.range(a, b));
         let [x, y, w, h] = self.laid_out(nodes, j);
         let s = self.env.scale;
-        let [ox, oy] = links::origin(n, spec, layout, [x, y, x + w, y + h], s, 1.0);
-        for (bb, _) in crate::text::range_boxes(layout, a, b, true) {
+        let [ox, oy] = links::origin(n, spec, flow, [x, y, x + w, y + h], s, 1.0);
+        for (bb, _) in flow.range_boxes(a, b, true) {
             let (x0, y0) = (ox + bb.x0 as f32 / s, oy + bb.y0 as f32 / s);
             out.push([x0, y0, (bb.x1 - bb.x0) as f32 / s, (bb.y1 - bb.y0) as f32 / s]);
         }

@@ -199,6 +199,7 @@ impl TextSystem {
     }
 
     /// Rounded background fills and rings for `highlights` in device px.
+    #[allow(dead_code)]
     pub(crate) fn highlight_decorations(
         &self,
         layout: &Layout<Ink>,
@@ -206,6 +207,22 @@ impl TextSystem {
         len: usize,
         scale: f32,
         origin: [f32; 2],
+        out: &mut Vec<PaintedDeco>,
+    ) {
+        self.highlight_decorations_flow(TextFlow::Single(layout), highlights, len, scale, origin, f32::NEG_INFINITY..f32::INFINITY, out);
+    }
+
+    /// [`Self::highlight_decorations`] over a [`TextFlow`] in visible device rows `rows`,
+    /// preserving the trailing newline highlight box where a multi-line highlight crosses `\n`.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn highlight_decorations_flow(
+        &self,
+        flow: TextFlow<'_>,
+        highlights: &[TextHighlight],
+        len: usize,
+        scale: f32,
+        origin: [f32; 2],
+        rows: std::ops::Range<f32>,
         out: &mut Vec<PaintedDeco>,
     ) {
         if highlights.is_empty() {
@@ -219,45 +236,113 @@ impl TextSystem {
             }
             let pad = h.pad * scale;
             let ring = h.ring.map(|(c, rw)| (c, rw * scale));
-            let mut last: Option<(usize, usize)> = None;
-            for (bb, line_idx) in range_boxes(layout, a, b, false) {
-                let w = (bb.x1 - bb.x0) as f32;
-                if w <= 0.0 {
-                    continue;
+            let byte = (b as u32).saturating_sub(1);
+            match flow {
+                TextFlow::Single(l) => {
+                    let boxes = range_boxes(l, a, b, false);
+                    push_highlight_boxes(l, boxes, a..b, origin, scale, pad, radius, h.bg, ring, byte, None, out);
                 }
-                let x0 = origin[0] + bb.x0 as f32;
-                let (mut top, mut bot) = ((origin[1] + bb.y0 as f32).round(), (origin[1] + bb.y1 as f32).round());
-                if let Some(l) = layout.get(line_idx) {
-                    let base = origin[1] + l.metrics().baseline;
-                    let (mut asc, mut desc) = (0.0f32, 0.0f32);
-                    for run in l.runs() {
-                        let r = run.text_range();
-                        if r.start < b && a < r.end {
-                            let fm = run.font_metrics();
-                            (asc, desc) = (asc.max(fm.ascent), desc.max(fm.descent.abs()));
+                TextFlow::Paragraphs(pl) => {
+                    let from = pl.paragraphs.partition_point(|q| q.end < a);
+                    for (k, q) in pl.paragraphs.iter().enumerate().skip(from).take_while(|(_, q)| q.start <= b) {
+                        if q.y + q.height < rows.start || q.y > rows.end {
+                            continue;
                         }
+                        let p = Piece::of_paragraph(k, q, pl.disjoint_spans);
+                        let clipped = p.clip(a, b);
+                        let mut boxes = clipped.map_or_else(Vec::new, |(sa, sb)| range_boxes(p.layout, sa, sb, false));
+                        if k + 1 < pl.paragraphs.len() && a <= p.end && p.end < b {
+                            if let Some((li, line)) = p.layout.lines().enumerate().last().filter(|_| !p.is_blank()) {
+                                let m = line.metrics();
+                                let (top, bot) = (m.block_min_coord.min(m.content_block_min_coord) as f64, m.block_max_coord.max(m.content_block_max_coord) as f64);
+                                let ws = line.runs().last().map_or(pl.newline as f64, |r| {
+                                    let fm = r.font_metrics();
+                                    (fm.ascent as f64 + fm.descent as f64) * 0.25
+                                });
+                                let rtl = p.flow == crate::el::Flow::Rtl;
+                                let on_line = boxes.iter_mut().filter(|(_, idx)| *idx == li);
+                                let edge = if rtl { on_line.min_by(|l, r| l.0.x0.total_cmp(&r.0.x0)) } else { on_line.max_by(|l, r| l.0.x1.total_cmp(&r.0.x1)) };
+                                let x = (m.inline_min_coord + m.offset) as f64;
+                                match (edge, rtl) {
+                                    (Some((bb, _)), false) => bb.x1 += ws,
+                                    (Some((bb, _)), true) => bb.x0 -= ws,
+                                    (None, false) => boxes.push((parley::BoundingBox::new(x + m.advance as f64, top, x + m.advance as f64 + ws, bot), li)),
+                                    (None, true) => boxes.push((parley::BoundingBox::new(x - ws, top, x, bot), li)),
+                                }
+                            } else {
+                                let x = if p.flow == crate::el::Flow::Rtl { (pl.max_width.unwrap_or(pl.width) - pl.newline).max(0.0) } else { 0.0 } as f64;
+                                boxes.push((parley::BoundingBox::new(x, 0.0, x + pl.newline as f64, p.height as f64), 0));
+                            }
+                        }
+                        let (sa, sb) = clipped.unwrap_or((p.shaped(p.end), p.shaped(p.end)));
+                        push_highlight_boxes(p.layout, boxes, sa..sb, [origin[0], origin[1] + p.y], scale, pad, radius, h.bg, ring, byte, Some(pl.blank_box), out);
                     }
-                    if asc > 0.0 || desc > 0.0 {
-                        top = (base - asc - 1.0 * scale).round();
-                        bot = (base + desc + 1.0 * scale).round();
-                    }
-                }
-                let rect = [x0 - pad, top, w + 2.0 * pad, (bot - top).max(0.0)];
-                let merge = last.filter(|&(li, _)| li == line_idx).is_some_and(|(_, k)| {
-                    let (d, _) = out[k].paint();
-                    (d.rect[0] + d.rect[2] - rect[0] - 2.0 * pad).abs() < 1.0
-                });
-                if merge {
-                    let (d, _) = out[last.unwrap().1].paint();
-                    if rect[3] > d.rect[3] {
-                        (d.rect[1], d.rect[3]) = (rect[1], rect[3]);
-                    }
-                    d.rect[2] = rect[0] + rect[2] - d.rect[0];
-                } else {
-                    last = Some((line_idx, out.len()));
-                    out.push(PaintedDeco::new(Deco { rect, color: h.bg, radius }, ring, (b as u32).saturating_sub(1)));
                 }
             }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_highlight_boxes(
+    layout: &Layout<Ink>,
+    boxes: Vec<(parley::BoundingBox, usize)>,
+    range: std::ops::Range<usize>,
+    origin: [f32; 2],
+    scale: f32,
+    pad: f32,
+    radius: f32,
+    color: Color,
+    ring: Option<(Color, f32)>,
+    byte: u32,
+    blank: Option<[f32; 3]>,
+    out: &mut Vec<PaintedDeco>,
+) {
+    let mut last: Option<(usize, usize)> = None;
+    for (bb, line_idx) in boxes {
+        let w = (bb.x1 - bb.x0) as f32;
+        if w <= 0.0 {
+            continue;
+        }
+        let x0 = origin[0] + bb.x0 as f32;
+        let (mut top, mut bot) = ((origin[1] + bb.y0 as f32).round(), (origin[1] + bb.y1 as f32).round());
+        if let Some(l) = layout.get(line_idx) {
+            let base = origin[1] + l.metrics().baseline;
+            let (mut asc, mut desc) = (0.0f32, 0.0f32);
+            for run in l.runs() {
+                let r = run.text_range();
+                if (r.start < range.end && range.start < r.end) || (range.is_empty() && r.end == range.end) {
+                    let fm = run.font_metrics();
+                    (asc, desc) = (asc.max(fm.ascent), desc.max(fm.descent.abs()));
+                }
+            }
+            if asc > 0.0 || desc > 0.0 {
+                top = (base - asc - 1.0 * scale).round();
+                bot = (base + desc + 1.0 * scale).round();
+            } else if let Some(b) = blank {
+                let bbase = origin[1] + b[0];
+                top = (bbase - b[1] - 1.0 * scale).round();
+                bot = (bbase + b[2] + 1.0 * scale).round();
+            }
+        } else if let Some(b) = blank {
+            let bbase = origin[1] + b[0];
+            top = (bbase - b[1] - 1.0 * scale).round();
+            bot = (bbase + b[2] + 1.0 * scale).round();
+        }
+        let rect = [x0 - pad, top, w + 2.0 * pad, (bot - top).max(0.0)];
+        let merge = last.filter(|&(li, _)| li == line_idx).is_some_and(|(_, idx)| {
+            let (d, _) = out[idx].paint();
+            (d.rect[0] + d.rect[2] - rect[0] - 2.0 * pad).abs() < 1.0
+        });
+        if merge {
+            let (d, _) = out[last.unwrap().1].paint();
+            if rect[3] > d.rect[3] {
+                (d.rect[1], d.rect[3]) = (rect[1], rect[3]);
+            }
+            d.rect[2] = rect[0] + rect[2] - d.rect[0];
+        } else {
+            last = Some((line_idx, out.len()));
+            out.push(PaintedDeco::new(Deco { rect, color, radius }, ring, byte));
         }
     }
 }

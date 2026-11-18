@@ -40,6 +40,7 @@ struct Stamp {
     commits: u64,
     scrolls: u64,
     text_fills: u64,
+    text_settled: u64,
     focus: u64,
     animating: bool,
     viewport: (u32, u32, u32),
@@ -402,9 +403,15 @@ impl<S: 'static> Runtime<S> {
             scrolls = scrolls.wrapping_add(id.0.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (s.drawn_x.to_bits() as u64) << 32 ^ s.drawn.y().to_bits() as u64);
         }
         let mut text_fills = 0u64;
+        let mut text_settled = 0u64;
         for n in &self.nodes {
-            if n.input.is_some() && let Some(tl) = &n.text_layout {
-                text_fills = mix(text_fills, tl.address() as u64);
+            if let Some(tl) = &n.text_layout {
+                if n.input.is_some() {
+                    text_fills = mix(text_fills, tl.address() as u64);
+                }
+                if let crate::text::TextLayout::Paragraphs(p) = tl {
+                    text_settled = mix(mix(text_settled, n.id.0), u64::from(p.waiting()));
+                }
             }
         }
         let focus = self.focus.path().map_or(0, hash_str) ^ self.link_focus().map_or(0, |k| k as u64 + 1) << 48;
@@ -412,6 +419,7 @@ impl<S: 'static> Runtime<S> {
             commits: self.commits,
             scrolls,
             text_fills,
+            text_settled,
             focus,
             animating: self.animating,
             viewport: (self.viewport.0.to_bits(), self.viewport.1.to_bits(), self.env.scale.to_bits()),

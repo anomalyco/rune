@@ -129,7 +129,7 @@ impl<S: 'static> Measurement<'_, S> {
         nodes.clear();
         nodes.reserve(len);
         for slot in self.nodes.iter_mut() {
-            if slot.input.is_some() || slot.is_secure() {
+            if slot.input.is_some() || slot.is_secure() || slot.text.as_ref().is_some_and(|t| t.by_paragraph(false)) {
                 // The new nodes lay their text out again; the cache then holds the only reference.
                 // A by-paragraph field's goes with it, to re-break its paragraphs from.
                 let kept = slot.text_layout.take().filter(|l| matches!(l, TextLayout::Paragraphs(_)));

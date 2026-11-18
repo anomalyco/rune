@@ -3,6 +3,22 @@
 use super::*;
 
 impl El {
+    /// Lays out each newline-ended line as its own [`Layout`](crate::text::Layout), reusing
+    /// unchanged lines across commits (shaping only changed lines; per-commit keying still hashes
+    /// each line when spans are present, and long plain/colour-only ASCII interiors wait as runs)
+    /// while staying one selectable text element in its own direction.
+    ///
+    /// Silently falls back to a single layout when the text does not wrap, is truncated or
+    /// line-clamped, is live (`El::live` / `El::advance_in`), is redacted, or is a shared-run
+    /// cell (multi-line inputs already lay out by paragraph with greedy wrapping); a text flight
+    /// landing on a `by_line` node is dropped so the text appears in place without flying.
+    pub fn by_line(mut self) -> El {
+        if let Some(t) = self.text.as_mut() {
+            t.by_line = true;
+        }
+        self
+    }
+
     /// Lays each paragraph of this text (a line a newline ends) out in the direction of its own
     /// first strong character, as CSS's `unicode-bidi: plaintext` does: right to left when that's
     /// Arabic or Hebrew, else left to right, left to right too when it has none, whatever
