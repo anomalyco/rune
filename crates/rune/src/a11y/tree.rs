@@ -179,79 +179,83 @@ impl<S: 'static> Runtime<S> {
         // containers change, with zero work proportional to a field's full text.
         let scrolled_only = !tree.full && !self.has_sticky
             && tree.stamp.as_ref().is_some_and(|s| Stamp { scrolls: stamp.scrolls, text_fills: stamp.text_fills, ..s.clone() } == stamp);
-        if scrolled_only { return self.a11y_scrolled(stamp); }
-        let found = self.a11y_walk();
-        let tree = self.a11y.as_ref()?;
-        let full = tree.full;
-        let hold = full && self.announcement.recent();
-        // Held words go out with the root, whose node carries the announcer.
-        let held = tree.held;
-        let changed: Vec<bool> = found.slots.iter().enumerate()
-            .map(|(k, s)| full || (held && k == 0) || tree.sent.get(&s.id.0).is_none_or(|old| old.print != s.print)).collect();
-        let mut nodes = self.a11y_build(&found, &changed, &tree.name, hold);
-        let mut kept_boxes: Vec<AkId> = Vec::new();
-        for &(i, w, box_print) in &found.long_fields {
-            let box_id = lines_box_id(self.nodes[i].id);
-            if full || tree.sent.get(&box_id.0).is_none_or(|old| old.print != box_print) {
-                for (id, node) in self.a11y_build_lines_box(i, &w) {
-                    nodes.push((id, node, box_print));
-                }
-            } else {
-                kept_boxes.push(box_id);
-            }
-        }
-        if hold { self.dirty = true; }
-        let tree = self.a11y.as_mut()?;
-        tree.stamp = Some(stamp);
-        tree.full = false;
-        tree.held = hold;
-        tree.pass = tree.pass.wrapping_add(1);
-        let pass = tree.pass;
-        for s in &found.slots {
-            if let Some(old) = tree.sent.get_mut(&s.id.0) { old.pass = pass; }
-        }
-        let mut out = Vec::with_capacity(nodes.len());
-        let (mut structure, mut moved) = (false, false);
-        for (id, node, print) in nodes {
-            // A text's lines and links come and go with it, and carry its fingerprint.
-            match tree.sent.get_mut(&id.0) {
-                Some(old) => {
-                    structure |= old.node.children() != node.children();
-                    moved |= old.node.bounds() != node.bounds() || old.node.transform() != node.transform();
-                    old.pass = pass;
-                    old.print = print;
-                    old.node = node.clone();
-                }
-                None => {
-                    structure = true;
-                    tree.sent.insert(id.0, Sent { print, pass, node: node.clone() });
+        let update = if scrolled_only {
+            self.a11y_scrolled(stamp)?
+        } else {
+            let found = self.a11y_walk();
+            let tree = self.a11y.as_ref()?;
+            let full = tree.full;
+            let hold = full && self.announcement.recent();
+            // Held words go out with the root, whose node carries the announcer.
+            let held = tree.held;
+            let changed: Vec<bool> = found.slots.iter().enumerate()
+                .map(|(k, s)| full || (held && k == 0) || tree.sent.get(&s.id.0).is_none_or(|old| old.print != s.print)).collect();
+            let mut nodes = self.a11y_build(&found, &changed, &tree.name, hold);
+            let mut kept_boxes: Vec<AkId> = Vec::new();
+            for &(i, w, box_print) in &found.long_fields {
+                let box_id = lines_box_id(self.nodes[i].id);
+                if full || tree.sent.get(&box_id.0).is_none_or(|old| old.print != box_print) {
+                    for (id, node) in self.a11y_build_lines_box(i, &w) {
+                        nodes.push((id, node, box_print));
+                    }
+                } else {
+                    kept_boxes.push(box_id);
                 }
             }
-            out.push((id, node));
-        }
-        // Lines and links of unchanged texts stay: mark them seen.
-        for s in found.slots.iter().zip(&changed).filter(|(_, c)| !**c).map(|(s, _)| s) {
-            let kids: Vec<u64> = tree.sent.get(&s.id.0).map(|o| o.node.children().iter().map(|c| c.0).collect()).unwrap_or_default();
-            for k in kids.into_iter().filter(|&k| split_id(AkId(k)).1 != 0) {
-                if let Some(old) = tree.sent.get_mut(&k) { old.pass = pass; }
+            if hold { self.dirty = true; }
+            let tree = self.a11y.as_mut()?;
+            tree.stamp = Some(stamp);
+            tree.full = false;
+            tree.held = hold;
+            tree.pass = tree.pass.wrapping_add(1);
+            let pass = tree.pass;
+            for s in &found.slots {
+                if let Some(old) = tree.sent.get_mut(&s.id.0) { old.pass = pass; }
             }
-        }
-        for box_id in kept_boxes {
-            let line_kids: Vec<u64> = tree.sent.get(&box_id.0).map(|o| o.node.children().iter().map(|c| c.0).collect()).unwrap_or_default();
-            if let Some(old) = tree.sent.get_mut(&box_id.0) { old.pass = pass; }
-            for k in line_kids {
-                if let Some(old) = tree.sent.get_mut(&k) { old.pass = pass; }
+            let mut out = Vec::with_capacity(nodes.len());
+            let (mut structure, mut moved) = (false, false);
+            for (id, node, print) in nodes {
+                // A text's lines and links come and go with it, and carry its fingerprint.
+                match tree.sent.get_mut(&id.0) {
+                    Some(old) => {
+                        structure |= old.node.children() != node.children();
+                        moved |= old.node.bounds() != node.bounds() || old.node.transform() != node.transform();
+                        old.pass = pass;
+                        old.print = print;
+                        old.node = node.clone();
+                    }
+                    None => {
+                        structure = true;
+                        tree.sent.insert(id.0, Sent { print, pass, node: node.clone() });
+                    }
+                }
+                out.push((id, node));
             }
-        }
-        let before = tree.sent.len();
-        tree.sent.retain(|_, s| s.pass == pass);
-        structure |= tree.sent.len() != before;
-        tree.changes = Changes { structure, moved };
-        tree.scrollers = found.scrollers;
-        tree.long_fields = found.long_fields.iter().map(|&(i, _, _)| i).collect();
+            // Lines and links of unchanged texts stay: mark them seen.
+            for s in found.slots.iter().zip(&changed).filter(|(_, c)| !**c).map(|(s, _)| s) {
+                let kids: Vec<u64> = tree.sent.get(&s.id.0).map(|o| o.node.children().iter().map(|c| c.0).collect()).unwrap_or_default();
+                for k in kids.into_iter().filter(|&k| split_id(AkId(k)).1 != 0) {
+                    if let Some(old) = tree.sent.get_mut(&k) { old.pass = pass; }
+                }
+            }
+            for box_id in kept_boxes {
+                let line_kids: Vec<u64> = tree.sent.get(&box_id.0).map(|o| o.node.children().iter().map(|c| c.0).collect()).unwrap_or_default();
+                if let Some(old) = tree.sent.get_mut(&box_id.0) { old.pass = pass; }
+                for k in line_kids {
+                    if let Some(old) = tree.sent.get_mut(&k) { old.pass = pass; }
+                }
+            }
+            let before = tree.sent.len();
+            tree.sent.retain(|_, s| s.pass == pass);
+            structure |= tree.sent.len() != before;
+            tree.changes = Changes { structure, moved };
+            tree.scrollers = found.scrollers;
+            tree.long_fields = found.long_fields.iter().map(|&(i, _, _)| i).collect();
+            TreeUpdate { nodes: out, tree: full.then(|| self.a11y_info()), tree_id: TreeId::ROOT, focus: found.focus }
+        };
         #[cfg(test)]
         self.a11y_check_sent();
-        Some(TreeUpdate { nodes: out, tree: full.then(|| self.a11y_info()), tree_id: TreeId::ROOT, focus: found.focus })
+        Some(update)
     }
 
     /// Tests: what was sent is what a whole build gives now.
@@ -334,8 +338,6 @@ impl<S: 'static> Runtime<S> {
         tree.stamp = Some(stamp);
         tree.changes = Changes { structure, moved };
         let focus = self.a11y_focus_now();
-        #[cfg(test)]
-        self.a11y_check_sent();
         Some(TreeUpdate { nodes: changed, tree: None, tree_id: TreeId::ROOT, focus })
     }
 
