@@ -2,11 +2,15 @@
 use super::*;
 use rune::PointerPress;
 
-pub(super) type LinkWire = Rc<dyn Fn(El) -> El>;
+pub(super) type LinkWire = (Rc<dyn Fn(El) -> El>, Option<std::any::TypeId>);
 pub(super) type LinkLook = Rc<dyn Fn(&str) -> Option<(Span, LinkPaint)>>;
 pub(super) type LinkRing = Rc<dyn Fn(&str) -> Option<(Color, f32)>>;
 pub(super) type LinkHelp = Rc<dyn Fn(&str) -> Option<String>>;
 pub(super) type CodeLink = (Rc<dyn Fn(&str) -> Option<String>>, Color);
+
+fn fn_tag<F: 'static>(_: &F) -> Option<std::any::TypeId> {
+    (std::mem::size_of::<F>() == 0).then(std::any::TypeId::of::<F>)
+}
 
 impl Markdown {
     /// Called with a link's destination when it is clicked, or pressed with Enter or Space
@@ -20,11 +24,15 @@ impl Markdown {
     /// or copies in the same commit (an app's own `scheme:id` links, say). Replaces any earlier
     /// `on_link` or `on_link_tx` handler (the later call wins).
     pub fn on_link_tx<S: 'static>(mut self, f: impl Fn(&mut S, &str, &mut Tx) + 'static) -> Self {
+        let tag = fn_tag(&f);
         let f = Rc::new(f);
-        self.on_link = Some(Rc::new(move |e: El| {
-            let f = f.clone();
-            e.on_link(move |s: &mut S, url, tx| f(s, url, tx))
-        }));
+        self.on_link = Some((
+            Rc::new(move |e: El| {
+                let f = f.clone();
+                e.on_link(move |s: &mut S, url, tx| f(s, url, tx))
+            }),
+            tag,
+        ));
         self
     }
     /// Called with a link's destination and the point (window points) when a right-click (or
@@ -32,11 +40,15 @@ impl Markdown {
     /// press from the menus of the elements around the Markdown, which still get right-clicks
     /// elsewhere in the text. Links show a hand and are Tab stops with this alone, too.
     pub fn on_link_secondary<S: 'static>(mut self, f: impl Fn(&mut S, &str, PointerPress, &mut Tx) + 'static) -> Self {
+        let tag = fn_tag(&f);
         let f = Rc::new(f);
-        self.on_link_secondary = Some(Rc::new(move |e: El| {
-            let f = f.clone();
-            e.on_link_secondary(move |s: &mut S, url, p, tx| f(s, url, p, tx))
-        }));
+        self.on_link_secondary = Some((
+            Rc::new(move |e: El| {
+                let f = f.clone();
+                e.on_link_secondary(move |s: &mut S, url, p, tx| f(s, url, p, tx))
+            }),
+            tag,
+        ));
         self
     }
     /// A look for some links by destination. `f` returns `None` for the default look
@@ -141,7 +153,7 @@ impl Renderer {
             None => hover(url),
         };
         let e = inl.links.iter().fold(e, |e, (a, b, url)| e.link(Link::new(*a..*b, url.clone()).hover(hover_at(*a, *b, url)).help(help(url))));
-        let e = match &self.on_link { Some(f) => f(e), None => e };
-        match &self.on_link_secondary { Some(f) => f(e), None => e }
+        let e = match &self.on_link { Some((f, _)) => f(e), None => e };
+        match &self.on_link_secondary { Some((f, _)) => f(e), None => e }
     }
 }

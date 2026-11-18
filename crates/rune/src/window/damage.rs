@@ -31,9 +31,10 @@ pub(super) const RECTS: usize = crate::render::MAX_RECTS;
 /// The last frames' changes.
 #[derive(Default)]
 pub(super) struct Damage {
-    /// The last frame's instances, size and clear colour.
+    /// The last frame's instances, and its size, clear colour and swap chain (the surface's
+    /// configuration, `configure::generation`).
     last: Vec<Instance>,
-    shape: Option<((u32, u32), [f32; 4])>,
+    shape: Option<((u32, u32), [f32; 4], u64)>,
     scratch: Scratch,
     /// The last change seen, however much was drawn (frame-profile).
     pub(super) seen: Option<[u32; 4]>,
@@ -60,12 +61,12 @@ pub(super) enum Plan {
 }
 
 impl Damage {
-    /// The frame about to draw `instances` into a `size` target cleared to `clear`; `in_place`
-    /// when nothing but its instances draws there.
-    pub(super) fn plan(&mut self, instances: &[Instance], size: (u32, u32), clear: [f32; 4], in_place: bool) -> Plan {
-        let (now, why) = match (in_place && !whole_frames(), self.shape == Some((size, clear))) {
+    /// The frame about to draw `instances` into a `size` target cleared to `clear`, on swap chain
+    /// `swap`; `in_place` when nothing but its instances draws there.
+    pub(super) fn plan(&mut self, instances: &[Instance], size: (u32, u32), clear: [f32; 4], swap: u64, in_place: bool) -> Plan {
+        let (now, why) = match (in_place && !whole_frames(), self.shape == Some((size, clear, swap))) {
             (false, _) => (Area::All, "not in place"),
-            (_, false) => (Area::All, "new size or colour"),
+            (_, false) => (Area::All, "new size, colour or swap chain"),
             _ => {
                 let now = changed(&self.last, instances, size, &mut self.scratch);
                 self.seen = match &now { Area::Rects(r) => r.iter().copied().reduce(join), Area::All | Area::Many => None };
@@ -79,7 +80,7 @@ impl Damage {
         };
         self.last.clear();
         self.last.extend_from_slice(instances);
-        self.shape = Some((size, clear));
+        self.shape = Some((size, clear, swap));
         match now {
             Area::All | Area::Many => Plan::All(why),
             // Nothing changed: one pixel keeps the present, which DWM composes again as is.
@@ -93,6 +94,18 @@ impl Damage {
 
     /// A new swap chain: the next frame draws whole.
     pub(super) fn reset(&mut self) { self.shape = None; }
+
+    /// The last frame drew into swap chain `swap` at this size and clear colour: a frame may draw
+    /// and present only part of it. False after `reset` or a configure (a new swap chain), so its
+    /// first frame, loop-only or not, goes through `plan` and draws whole.
+    pub(super) fn current(&self, size: (u32, u32), clear: [f32; 4], swap: u64) -> bool { self.shape == Some((size, clear, swap)) }
+
+    /// A loop-only frame changed only `patched` (ascending) and drew them where they were and
+    /// are (`Renderer::arm_loop`): the next frame compares with them.
+    pub(super) fn patched(&mut self, instances: &[Instance], patched: &[u32]) {
+        if self.last.len() != instances.len() { self.shape = None; return; }
+        for &i in patched { self.last[i as usize] = instances[i as usize]; }
+    }
 }
 /// `RUNE_WHOLE_FRAMES=1`: every frame draws whole, to check partial frames against.
 fn whole_frames() -> bool {

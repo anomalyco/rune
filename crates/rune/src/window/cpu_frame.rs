@@ -304,6 +304,7 @@ impl<S: 'static> Host<S> {
             cursor: crate::cursor::os::OsCursor::new(),
             alpha: None,
             timer_frame: TimerFrame::default(),
+            loop_frame: LoopFrame::default(),
             presented: None,
             covered_draw: CoveredDraw::Current,
             redraw: std::cell::Cell::new(Redraw::Idle),
