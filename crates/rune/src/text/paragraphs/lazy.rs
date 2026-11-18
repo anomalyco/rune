@@ -28,10 +28,12 @@ pub(crate) struct Lazy {
 /// (device px), read from one shaped line, and an empty layout to stand in for a paragraph not
 /// shaped yet.
 pub(crate) struct AsciiLine {
-    pub(super) advance: [f32; 95],
+    pub(crate) advance: [f32; 95],
     /// The widest character's advance: a line this many times its length that fits needs no sum.
     pub(super) widest: f32,
-    pub(super) height: f32,
+    pub(crate) height: f32,
+    /// True when every printable ASCII character has the same advance (a fixed-pitch face).
+    pub(crate) fixed_pitch: bool,
     pub(super) empty: Rc<Layout<Ink>>,
 }
 
@@ -165,7 +167,10 @@ impl TextSystem {
                 if r.len() != 1 || !(0x20..0x7f).contains(&b) { return None; }
                 advance[(b - 0x20) as usize] = cluster.advance();
             }
-            advance.iter().all(|a| a.is_finite()).then(|| Rc::new(AsciiLine { advance, widest: advance.iter().copied().fold(0.0, f32::max), height: l.height(), empty }))
+            advance.iter().all(|a| a.is_finite()).then(|| {
+                let (widest, narrowest) = (advance.iter().copied().fold(0.0, f32::max), advance.iter().copied().fold(f32::INFINITY, f32::min));
+                Rc::new(AsciiLine { advance, widest, height: l.height(), fixed_pitch: (widest - narrowest).abs() <= 1e-4, empty })
+            })
         })();
         self.ascii.insert(key, measured.clone());
         measured
@@ -218,7 +223,11 @@ impl TextSystem {
             }
             p.y = if want_frac != 0.0 { y.floor() as f32 } else { y.round() as f32 };
             p.y_frac = want_frac;
-            y += f64::from(p.height);
+            if p.shaped {
+                y += f64::from(p.height);
+            } else {
+                for _ in 0..p.lines { y += f64::from(lazy.ascii.height); }
+            }
             (width, full_width) = (width.max(p.widths[0]), full_width.max(p.widths[1]));
         }
         let left = paragraphs.iter().any(|p| !p.shaped);

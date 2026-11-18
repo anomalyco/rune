@@ -87,16 +87,22 @@ pub(super) fn key_paragraphs(spec: &TextSpec, layout_spans: &[Span], style_key: 
             let near = r.edit && !r.ascii.narrow(r.max_width) && (j < r.eager.0 || j + r.eager.1 >= lines);
             let floor = run.map_or(0.0, |r| r.3);
             let printable = known.map(|f| f & PRINTABLE != 0);
-            let fits = if near || words.is_empty() || printable == Some(false) { None } else if r.ascii.narrow(r.max_width) { r.ascii.narrowest(words, floor) } else { r.ascii.one_line(words, r.max_width, floor, printable == Some(true)) };
             // Printable ASCII: its letters are its only strong characters, all left to right.
             let letter = || known.map_or_else(|| words.bytes().any(|b| b.is_ascii_alphabetic()), |f| f & LETTER != 0);
+            let flow = forced.or_else(|| letter().then_some(Flow::Ltr)).unwrap_or(last_flow);
+            let fits = if near || words.is_empty() || printable == Some(false) || (spec.by_line && flow == Flow::Rtl) {
+                None
+            } else if r.ascii.narrow(r.max_width) {
+                r.ascii.narrowest(words, floor)
+            } else {
+                r.ascii.one_line(words, r.max_width, floor, printable == Some(true))
+            };
             if let Some(rec) = &mut record {
                 let shown = fits.is_some() || (!words.is_empty() && lazy::printable(words.as_bytes()));
                 rec.ends.push((start - 1 - key[2]) as u32);
                 rec.flags.push(if shown { PRINTABLE | if letter() { LETTER } else { 0 } } else { 0 });
             }
             if let Some((height, w)) = fits {
-                let flow = forced.or_else(|| letter().then_some(Flow::Ltr)).unwrap_or(last_flow);
                 match &mut run {
                     Some(run) => { run.1 = b; run.2 += height; run.3 = run.3.max(w); run.4 += 1; run.5 = flow; }
                     None => run = Some((a, b, height, w, 1, flow)),

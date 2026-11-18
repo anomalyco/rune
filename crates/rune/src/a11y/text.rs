@@ -34,10 +34,74 @@ pub(crate) struct Line {
 /// run's right edge) and links sibling runs of the same visual line with `continues_line`.
 pub(crate) fn lines(layout: TextFlow<'_>, content: &str, s: f32, origin: [f32; 2]) -> Vec<Line> {
     let mut out = Vec::new();
+    let waiting = match layout {
+        TextFlow::Paragraphs(pl) => pl.waiting_ascii(),
+        TextFlow::Single(_) => None,
+    };
+    let mut y_acc = 0.0f64;
     for p in layout.pieces() {
-        push_piece_runs(p, content, s, origin, &mut out);
+        if !p.shaped {
+            let Some(ascii) = waiting else { break };
+            let (mut at, mut ok) = (p.start, true);
+            for raw in content.get(p.start..p.end).unwrap_or_default().split('\n') {
+                let words = if at + raw.len() < p.end { raw.strip_suffix('\r').unwrap_or(raw) } else { raw };
+                let (ls, le, py) = (at, at + words.len(), y_acc.round() as f32);
+                at += raw.len() + 1;
+                y_acc += f64::from(ascii.height);
+                if !push_waiting_ascii_line(words, (ls, le), py, ascii, content, s, origin, &mut out) {
+                    ok = false;
+                    break;
+                }
+            }
+            if !ok { break; }
+        } else {
+            push_piece_runs(p, content, s, origin, &mut out);
+            y_acc += f64::from(p.height);
+        }
     }
     out
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_waiting_ascii_line(
+    words: &str, (line_start, line_end): (usize, usize), py: f32, ascii: &crate::text::AsciiLine,
+    content: &str, s: f32, origin: [f32; 2], out: &mut Vec<Line>,
+) -> bool {
+    let n = words.len();
+    let (mut lengths, mut positions, mut widths) = (Vec::with_capacity(n + 1), Vec::with_capacity(n + 1), Vec::with_capacity(n + 1));
+    let (mut cx, mut max_x) = (0.0f32, 0.0f32);
+    for b in words.bytes() {
+        if !(0x20..0x7f).contains(&b) { return false; }
+        let adv = ascii.advance[(b - 0x20) as usize];
+        let (vis_left, vis_w) = (cx / s, adv / s);
+        max_x = max_x.max(vis_left + vis_w.max(0.0));
+        lengths.push(1);
+        positions.push(vis_left.max(0.0));
+        widths.push(vis_w);
+        cx += adv;
+    }
+    let wb_seg = const {
+        icu_segmenter::WordSegmenter::new_for_non_complex_scripts(
+            icu_segmenter::options::WordBreakInvariantOptions::default(),
+        )
+    };
+    let word_starts = wb_seg.segment_str(words).filter(|&w| w > 0 && w < n && w < 256).map(|w| w as u8).collect();
+    let br = if content.as_bytes().get(line_end..line_end + 2) == Some(b"\r\n") {
+        2
+    } else {
+        usize::from(content.as_bytes().get(line_end) == Some(&b'\n'))
+    };
+    if br > 0 {
+        lengths.push(br as u8);
+        positions.push(max_x);
+        widths.push(0.0);
+    }
+    out.push(Line {
+        range: line_start..(line_end + br),
+        rect: [origin[0], origin[1] + py / s, max_x, ascii.height / s],
+        lengths, positions, widths, word_starts, rtl: false, continues_line: false,
+    });
+    true
 }
 
 fn push_span_chunks(
@@ -675,7 +739,9 @@ impl<S: 'static> Runtime<S> {
             return Some(0);
         }
         let p = layout.piece_at(usize::MAX);
-        let end = if p.is_blank() || p.layout.len() == 0 {
+        let end = if !p.shaped {
+            p.end
+        } else if p.is_blank() || p.layout.len() == 0 {
             if p.is_whole() { 0 } else { p.start }
         } else {
             let last_ln = p.layout.get(p.layout.len() - 1)?;
@@ -927,12 +993,15 @@ impl<S: 'static> Runtime<S> {
         if self.a11y_uses_long_field(i) { return None; }
         let n = &self.nodes[i];
         let (spec, tl) = (n.text.as_deref()?, n.text_layout.as_ref()?);
-        if n.elided.is_some() || matches!(tl, crate::text::TextLayout::Paragraphs(p) if p.waiting()) {
+        if n.elided.is_some() { return None; }
+        if !spec.by_line && matches!(tl, crate::text::TextLayout::Paragraphs(p) if p.waiting()) {
             return None;
         }
         let layout = tl.view();
         let content = self.a11y_drawn_text(i)?;
-        if content.len() > RUN_MAX_BYTES || Self::a11y_layout_end_byte(layout, &content) != Some(content.len()) {
+        if (!spec.by_line && content.len() > RUN_MAX_BYTES)
+            || Self::a11y_layout_end_byte(layout, &content) != Some(content.len())
+        {
             return None;
         }
         let s = self.env.scale;
@@ -943,9 +1012,11 @@ impl<S: 'static> Runtime<S> {
             x -= self.input_scroll.get(&n.path).copied().unwrap_or(0.0);
         }
         let lines = lines(layout, &content, s, [x, r[1] + n.inset[1]]);
-        // Non-input `by_line` blocks with unshaped interior runs (or any node whose runs don't
-        // cover `content`) publish their whole value/label without holey `TextRun` children.
-        if lines.iter().map(|l| l.range.len()).sum::<usize>() != content.len() {
+        // `line_id` holds up to `LINK_BASE - 2` (`32,766`) runs per node; if a block exceeds that
+        // or its runs don't cover `content`, publish its whole value/label without `TextRun`s.
+        if lines.len() > (super::a11y_tree::LINK_BASE as usize - 2)
+            || lines.iter().map(|l| l.range.len()).sum::<usize>() != content.len()
+        {
             return None;
         }
         Some((content, lines))

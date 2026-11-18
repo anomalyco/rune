@@ -5,6 +5,13 @@ use super::*;
 /// How long a frame shapes waiting paragraphs.
 const BUDGET: std::time::Duration = std::time::Duration::from_micros(1_500);
 
+/// Visible vertical row range (in unscaled layout device pixels) drawn by `paint_content` and `fill_visible_by_line`.
+pub(crate) fn visible_text_rows(spec: &crate::el::TextSpec, rest_y: f32, shown: [f32; 2], tk: f32, raster: f32, s: f32) -> std::ops::Range<f32> {
+    let em = spec.spans.iter().filter_map(|sp| sp.size).fold(spec.style.size.max(spec.style.line_px()), f32::max);
+    let pad = 2.0 * em * s + 2.0 / raster.max(1e-4);
+    if tk > 1e-4 { (shown[0] - rest_y) / tk - pad..(shown[1] - rest_y) / tk + pad } else { f32::NEG_INFINITY..f32::INFINITY }
+}
+
 impl<S: 'static> Runtime<S> {
     /// Shapes waiting paragraphs of each field for up to [`BUDGET`], the rows it drew last
     /// first. True while some still wait, so another frame comes.
@@ -60,9 +67,8 @@ impl<S: 'static> Runtime<S> {
             + if still && (sc - 1.0).abs() < 1e-5 { exact_off[1] } else { 0.0 }
             + self.nodes[i].inset[1] * zk * s;
         let rest_y = y_top - if gliding && cover.is_none() && still { r[1] - r[1].round() } else { 0.0 };
-        let em = spec.spans.iter().filter_map(|sp| sp.size).fold(spec.style.size.max(spec.style.line_px()), f32::max);
-        let pad = 2.0 * em * s + 2.0 / raster.max(1e-4);
-        let rows = if tk > 1e-4 { ((shown[0] - rest_y) / tk - pad, (shown[1] - rest_y) / tk + pad) } else { (f32::NEG_INFINITY, f32::INFINITY) };
+        let rows = visible_text_rows(spec, rest_y, shown, tk, raster, s);
+        let rows = (rows.start, rows.end);
         if !p.paragraphs.iter().any(|q| !q.shaped && q.y + q.height >= rows.0 && q.y <= rows.1) { return; }
         let p = p.clone();
         if let Some((built, moved)) = self.text.fill_paragraphs(&p, std::time::Duration::MAX, rows, 0.0) {

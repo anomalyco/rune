@@ -409,9 +409,7 @@ impl<S: 'static> Runtime<S> {
             }
             // Each paragraph a by-paragraph field or by-line block shows (or its one layout), in
             // the rows the clip shows with two ems either side for ink past the line box.
-            let em = spec.spans.iter().filter_map(|sp| sp.size).fold(spec.style.size.max(spec.style.line_px()), f32::max);
-            let pad = 2.0 * em * s + 2.0 / raster.max(1e-4);
-            let rows = if tk > 1e-4 { (shown[0] - rest_origin[1]) / tk - pad..(shown[1] - rest_origin[1]) / tk + pad } else { f32::NEG_INFINITY..f32::INFINITY };
+            let rows = crate::runtime::text_fill::visible_text_rows(spec, rest_origin[1], shown, tk, raster, s);
             if let crate::text::TextLayout::Paragraphs(p) = laid && p.waiting() {
                 self.text_rows.insert(n.id, (rows.start, rows.end));
             }

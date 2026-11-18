@@ -107,6 +107,11 @@ impl ParagraphLayout {
     pub(crate) fn waiting(&self) -> bool {
         self.lazy.is_some()
     }
+
+    /// Character advances for waiting start-aligned ASCII paragraphs (`a11y::text::lines`).
+    pub(crate) fn waiting_ascii(&self) -> Option<&AsciiLine> {
+        self.lazy.as_deref().filter(|_| self.align == Alignment::Start).map(|l| &*l.ascii)
+    }
 }
 
 
@@ -654,8 +659,11 @@ impl TextSystem {
         // A min-content measure of a text whose lines wait keys an edit's lines into runs too,
         // however few: none of them is shown, and its run held them as one record.
         let measuring = prev.is_some_and(|p| p.waiting()) && max_width.is_some_and(|m| m < style.line_px() * scale);
-        let ascii = (plain && (measuring || edited > LAZY_MIN * 8 && count_newlines(&bytes[at..at + edited]) > LAZY_MIN))
-            .then(|| self.ascii_line(style, scale, spec.wrap_anywhere)).flatten();
+        let can_defer = plain && (!spec.by_line || (matches!(style.family, Family::Mono | Family::SystemMono)
+            && align == Alignment::Start && start_flow == Flow::Ltr && forced != Some(Flow::Rtl)));
+        let ascii = (can_defer && (measuring || edited > LAZY_MIN * 8 && count_newlines(&bytes[at..at + edited]) > LAZY_MIN))
+            .then(|| self.ascii_line(style, scale, spec.wrap_anywhere)).flatten()
+            .filter(|a| !spec.by_line || a.fixed_pitch);
         let (eager_s, eager_e) = if spec.by_line { (48, 48) } else { (EAGER_START, EAGER_END) };
         let runs = ascii.as_deref().map(|m| Runs { ascii: m, max_width, edit: true, eager: (eager_s, eager_e) });
         match tail.first().map(|t| t.0) {
@@ -705,18 +713,17 @@ impl TextSystem {
             let blocks: &[Block] = if block == Block::Paragraph { &[] } else { std::slice::from_ref(&block) };
             // A waiting record kept at the same width stays as it was; a run found here waits.
             let wait = match (kept, run) {
-                (Some(o), _) if !o.shaped => Some((o.height, o.widths[0], o.lines, o.layout.clone(), o.run)),
-                (None, Some((height, w, lines))) => {
-                    let m = match &ascii { Some(m) => Some(m.clone()), None => self.ascii_line(style, scale, spec.wrap_anywhere) };
-                    m.map(|m| (height, w, lines, m.empty.clone(), true))
-                }
+                (Some(o), _) if !o.shaped => ascii.clone().or_else(|| self.ascii_line(style, scale, spec.wrap_anywhere).filter(|a| !spec.by_line || a.fixed_pitch))
+                    .map(|m| (m.height, o.height, o.widths[0], o.lines, o.layout.clone(), o.run)),
+                (None, Some((height, w, lines))) => ascii.clone().or_else(|| self.ascii_line(style, scale, spec.wrap_anywhere).filter(|a| !spec.by_line || a.fixed_pitch))
+                    .map(|m| (m.height, height, w, lines, m.empty.clone(), true)),
                 _ => None,
             };
-            if let Some((height, w, lines, layout, run)) = wait {
+            if let Some((line_h, height, w, lines, layout, run)) = wait {
                 waiting += 1;
                 (width, full_width) = (width.max(w), full_width.max(w));
                 paragraphs.push(Paragraph { start: a, end: b, y: y.round() as f32, y_frac: 0.0, height, widths: [w, w], flow, key, isolates, layout, shaped: false, lines, run });
-                y += f64::from(height);
+                for _ in 0..lines { y += f64::from(line_h); }
                 continue;
             }
             // The same paragraph at the other width (the same text, so the same index).
