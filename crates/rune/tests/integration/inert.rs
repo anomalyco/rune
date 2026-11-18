@@ -1,9 +1,8 @@
 //! `El::inert`: a subtree that draws and lays out while the pointer and keyboard pass through.
-mod support;
 
 use rune::tok::TextStyle;
 use rune::{Color, Cursor, Cx, El, Env, Key, KeyEvent, Mods, Runtime, TextEdit, el, text_input};
-use support::{click, find as info};
+use crate::support::{click, find as info};
 
 #[derive(Default)]
 struct S {

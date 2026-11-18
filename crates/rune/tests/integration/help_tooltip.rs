@@ -1,10 +1,9 @@
 //! `El::help` tooltips where Rune draws them: the pointer resting on an element for
 //! `help_delay` shows its tooltip under it; a press, scroll or key hides it until the pointer
 //! leaves; leaving hides it; it follows its element; and it takes no hover or press.
-mod support;
 
 use rune::{Cx, El, Env, Key, KeyEvent, Mods, Runtime, col, el, row};
-use support::find;
+use crate::support::{self, find};
 
 #[derive(Default)]
 struct S { presses: u32, hovered: bool, inset: f32 }

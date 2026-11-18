@@ -1,6 +1,5 @@
 //! Markdown tables on a card: `MarkdownStyle::table_frame`, `table_body`, `table_header_pad`,
 //! `table_full_width`, `table_margin` and the `table_card` preset.
-#![cfg(feature = "markdown")]
 
 use rune::runtime::ElementInfo;
 use rune::{Cx, El, Env, Key, KeyEvent, Mods, Runtime, col};

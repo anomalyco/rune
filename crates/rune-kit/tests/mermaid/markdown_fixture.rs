@@ -3,7 +3,7 @@
 //! document still streaming in. Rendered headless with the OpenCode theme's fonts and tokens
 //! in both appearances, then compared with `tests/golden/*.json`.
 //!
-//! Run: `cargo test -p rune-kit --features mermaid --test markdown_fixture`.
+//! Run: `cargo test -p rune-kit --features mermaid --test mermaid markdown_fixture::`.
 //! Accept an intended change by re-running with `RUNE_BLESS=1`, then review the golden diff.
 //! On a mismatch the fresh tree is written next to the build output (path in the failure).
 

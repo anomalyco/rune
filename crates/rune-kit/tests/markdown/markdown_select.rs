@@ -1,7 +1,6 @@
 //! `Markdown::selectable`: one selection across a message's paragraphs, list items and code
 //! blocks, copied as plain text (blank lines between paragraphs, `- ` before items, no fences), with links still opening on a
 //! click, inside memo'd rows and while the message streams in.
-#![cfg(feature = "markdown")]
 
 use rune::runtime::ElementInfo;
 use rune::{Cursor, Cx, El, Env, Key, KeyEvent, Mods, Runtime, col, memo};

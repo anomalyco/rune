@@ -1,4 +1,3 @@
-#![cfg(feature = "markdown")]
 
 use rune::{Color, Cx, El, Env, LinkPaint, Runtime, col};
 use rune_kit::markdown::{Block, Style, parse, parse_cached};

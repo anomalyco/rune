@@ -6,10 +6,9 @@
 //! further than the pointer, table rows select by band, inner groups stay their own, and a
 //! change to a text between the ends drops the selection. Elided texts select through their
 //! ellipsis, and a virtual row scrolling out drops the selection it holds.
-mod support;
 
 use rune::{Cursor, Cx, Drag, El, Env, GrowthSpec, Link, Mods, PhysicalInput, Runtime, ScrollSpec, TextStyle, col, rich, row, text};
-use support::{click, command, drag, find, glyphs, glyphs_at, tick, wait};
+use crate::support::{click, command, drag, find, glyphs, glyphs_at, tick, wait};
 
 const A: &str = "first paragraph here";
 const ITEM: &str = "list item";

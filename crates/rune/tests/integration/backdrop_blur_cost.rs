@@ -1,7 +1,7 @@
 //! Manual cost fixture for `El::backdrop_blur`: a full-width 60 pt frosted bar at 2x over a
 //! scrolling list, against the same bar with a plain fill.
 //!
-//! `cargo test -p rune --profile perf --test backdrop_blur_cost -- --ignored --nocapture`
+//! `cargo test -p rune --profile perf --test integration backdrop_blur_cost:: -- --ignored --nocapture`
 use std::time::Instant;
 
 use rune::render::{Gpu, OFFSCREEN_FORMAT, Offscreen, Renderer};

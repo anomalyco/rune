@@ -346,7 +346,7 @@ fn percentile(v: &mut [f64], p: f64) -> f64 {
 
 /// 50,000 files: building the model from paths, the first frame, scrolling at 120 Hz, a jump
 /// to the end, and a filter, in a 900 pt window.
-/// `cargo test --profile perf -p rune-kit --test tree -- --ignored --nocapture tree_time`
+/// `cargo test --profile perf -p rune-kit --test integration -- --ignored --nocapture tree::tree_time`
 #[test]
 #[ignore = "benchmark"]
 fn tree_time() {

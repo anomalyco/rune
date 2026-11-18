@@ -1,5 +1,3 @@
-#![allow(deprecated)]
-
 use rune::{Cx, El, Env, Runtime, col};
 use rune_kit::*;
 

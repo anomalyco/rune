@@ -294,7 +294,7 @@ fn percentile(v: &mut [f64], p: f64) -> f64 {
 }
 
 /// 100,000 rows: the first frame, scrolling at 120 Hz, a sort and a column resize, in a
-/// 900 pt window. `cargo test --profile perf -p rune-kit --test table -- --ignored --nocapture table_time`
+/// 900 pt window. `cargo test --profile perf -p rune-kit --test integration -- --ignored --nocapture table::table_time`
 #[test]
 #[ignore = "benchmark"]
 fn table_time() {

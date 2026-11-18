@@ -1,8 +1,8 @@
 use std::hash::{Hash, Hasher};
 use rune::{Family, OpticalSize, TextStyle, text::{Span, TextSystem}};
 
-const INTER: &[u8] = include_bytes!("../assets/Inter-Regular.ttf");
-const PLEX: &[u8] = include_bytes!("../../../themes/opencode/assets/fonts/IBMPlexMono-Regular.ttf");
+const INTER: &[u8] = include_bytes!("../../assets/Inter-Regular.ttf");
+const PLEX: &[u8] = include_bytes!("../../../../themes/opencode/assets/fonts/IBMPlexMono-Regular.ttf");
 const DISPLAY: TextStyle = TextStyle::new(13.0, 400.0).family(Family::Named("IBM Plex Mono"));
 
 // Exactly TextStyle's public fields. Deliberately exhaustive: alignment is an element builder,

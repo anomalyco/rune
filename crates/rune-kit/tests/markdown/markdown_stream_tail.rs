@@ -1,4 +1,3 @@
-#![cfg(feature = "markdown")]
 //! The tail of a [`Markdown`] still streaming draws as what it's about to become: an open
 //! emphasis never shows its markers, and a `| …` line never lays out as a paragraph before it's
 //! a table.
