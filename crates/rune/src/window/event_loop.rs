@@ -108,7 +108,7 @@ fn run_configured(factory: Factory, args: Args, accessory: bool) -> Result<(), S
     // An orderly exit: the windows and their renderers go here. `RUNE_LOOP_CHECK=2` found a
     // differing picture: the process ends with 3, as a fast exit does (`quit::end_process`).
     drop(windows);
-    if crate::render::pixel_check::failed() { std::process::exit(3); }
+    if crate::render::loop_pixel_check_failed() { std::process::exit(3); }
     result.map_err(|error| format!("run: {error}"))
 }
 

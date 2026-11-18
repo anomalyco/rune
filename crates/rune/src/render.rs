@@ -14,7 +14,18 @@ mod backdrop_blur;
 mod breaker;
 #[cfg(any(target_os = "windows", target_arch = "wasm32"))]
 mod damaged;
-pub(crate) mod pixel_check;
+// The kept frame it checks exists only where partial frames do (`damaged`).
+#[cfg(any(target_os = "windows", target_arch = "wasm32"))]
+mod pixel_check;
+
+/// `RUNE_LOOP_CHECK=2` found a picture that differed from the whole frame's (`pixel_check`), so the
+/// process's exit code is 3. Never on macOS and Linux, which have no loop-only frames.
+pub(crate) fn loop_pixel_check_failed() -> bool {
+    #[cfg(any(target_os = "windows", target_arch = "wasm32"))]
+    return pixel_check::failed();
+    #[cfg(not(any(target_os = "windows", target_arch = "wasm32")))]
+    false
+}
 #[cfg(target_os = "windows")]
 pub(crate) use damaged::MAX_RECTS;
 pub mod cpu_boot;

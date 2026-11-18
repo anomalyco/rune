@@ -159,7 +159,7 @@ pub(crate) fn end_fast(last: fn()) -> ! {
 #[cfg(not(target_arch = "wasm32"))]
 fn end_process() -> ! {
     crate::marks::mark("quit.end");
-    let code = if crate::render::pixel_check::failed() { 3 } else { 0 };
+    let code = if crate::render::loop_pixel_check_failed() { 3 } else { 0 };
     // A process ends once each of its threads has run to its end: an idle-priority one (D3D12's
     // shader threads) on a busy machine can hold it for seconds.
     #[cfg(target_os = "windows")]
