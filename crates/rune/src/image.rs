@@ -488,13 +488,48 @@ fn linux_icon(path: &std::path::Path, px: u32) -> Result<(u32, u32, Vec<u8>), Im
     Ok((image.width(), image.height(), image.into_raw()))
 }
 
+/// Options for `usvg` that resolve nothing outside the SVG's own bytes: non-`data:` `<image>` and
+/// `<feImage>` `href`s never touch the filesystem or UNC paths, and `data:` URLs accept raster
+/// formats only (`image/svg+xml` and `text/plain` SVG fall-through are refused).
+#[cfg(feature = "svg")]
+fn svg_options() -> resvg::usvg::Options<'static> {
+    use resvg::usvg::{ImageHrefResolver, ImageKind, Options};
+    let raster = |data: Arc<Vec<u8>>| {
+        if data.starts_with(b"\x89PNG\r\n\x1a\n") {
+            Some(ImageKind::PNG(data))
+        } else if data.starts_with(&[0xff, 0xd8, 0xff]) {
+            Some(ImageKind::JPEG(data))
+        } else if data.starts_with(b"GIF87a") || data.starts_with(b"GIF89a") {
+            Some(ImageKind::GIF(data))
+        } else if data.len() >= 12 && &data[..4] == b"RIFF" && &data[8..12] == b"WEBP" {
+            Some(ImageKind::WEBP(data))
+        } else {
+            None
+        }
+    };
+    Options {
+        image_href_resolver: ImageHrefResolver {
+            resolve_string: Box::new(|_, _| None),
+            resolve_data: Box::new(move |mime, data, _| match mime {
+                "image/png" => Some(ImageKind::PNG(data)),
+                "image/jpg" | "image/jpeg" => Some(ImageKind::JPEG(data)),
+                "image/gif" => Some(ImageKind::GIF(data)),
+                "image/webp" => Some(ImageKind::WEBP(data)),
+                "text/plain" => raster(data),
+                _ => None,
+            }),
+        },
+        ..Options::default()
+    }
+}
+
 /// An SVG scaled to fit `px` square, keeping its aspect ratio, as straight-alpha sRGB RGBA8.
 /// `px == 0` rasterizes at twice the drawing's own size, at most 4096 pixels per side.
 #[cfg(feature = "svg")]
 pub(crate) fn svg_rgba(bytes: &[u8], px: u32) -> Result<(u32, u32, Vec<u8>), ImageError> {
     use resvg::{tiny_skia, usvg};
     if bytes.len() > 32 << 20 { return Err(ImageError("SVG is too large".into())); }
-    let tree = usvg::Tree::from_data(bytes, &usvg::Options::default()).map_err(|e| ImageError(format!("SVG: {e}")))?;
+    let tree = usvg::Tree::from_data(bytes, &svg_options()).map_err(|e| ImageError(format!("SVG: {e}")))?;
     let size = tree.size();
     let px = if px == 0 { (size.width().max(size.height()) * 2.0).ceil().clamp(1.0, 4096.0) as u32 } else { px };
     let k = px as f32 / size.width().max(size.height());
