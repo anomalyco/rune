@@ -16,6 +16,11 @@ use crate::text::TextFlow;
 const RUN_MAX_BYTES: usize = 64 * 1024;
 /// Cap on drawn visual lines published for one long field, applied before building cluster arrays.
 const MAX_DRAWN_LINES: usize = 512;
+/// Whether a field without runs marks its selection on itself, in its value's bytes. Only the
+/// vendored Windows and macOS adapters read that. AccessKit's AT-SPI adapter takes every
+/// selection end to be a `TextRun` and panics on any other node, so on Linux such a field
+/// publishes no selection.
+const FIELD_SELECTION: bool = cfg!(any(target_os = "windows", target_os = "macos"));
 
 /// One laid-out run or visual line: its bytes in the drawn text and each character's place in points.
 pub(crate) struct Line {
@@ -615,10 +620,12 @@ impl<S: 'static> Runtime<S> {
             // selection in its value's bytes on the field itself, and one stable child container
             // (`lines_box_id`) holding its drawn visual lines so scrolling updates only that
             // container without rebuilding or copying the field's value.
-            let at = |character_index| TextPosition { node: element_id(n.id), character_index };
-            out[me].1.set_text_selection(TextSelection { anchor: at(input.edit.anchor), focus: at(input.edit.focus) });
+            if FIELD_SELECTION {
+                let at = |character_index| TextPosition { node: element_id(n.id), character_index };
+                out[me].1.set_text_selection(TextSelection { anchor: at(input.edit.anchor), focus: at(input.edit.focus) });
+            }
             out[me].1.push_child(lines_box_id(n.id));
-        } else if let Some(input) = n.input.as_deref() && !input.edit.is_secure() {
+        } else if FIELD_SELECTION && let Some(input) = n.input.as_deref() && !input.edit.is_secure() {
             let at = |character_index| TextPosition { node: element_id(n.id), character_index };
             out[me].1.set_text_selection(TextSelection { anchor: at(input.edit.anchor), focus: at(input.edit.focus) });
         }
@@ -735,7 +742,9 @@ impl<S: 'static> Runtime<S> {
     /// End byte in `content` of `layout`'s last laid-out line (mapped through [`Piece::content`],
     /// plus any paragraph-ending line break), in O(1) without building every line.
     fn a11y_layout_end_byte(layout: TextFlow<'_>, content: &str) -> Option<usize> {
-        if let TextFlow::Paragraphs(pl) = layout && pl.paragraphs.is_empty() {
+        // Parley shapes an empty text as one space, so its caret has a line: that line ends at
+        // byte 1 of nothing.
+        if content.is_empty() || matches!(layout, TextFlow::Paragraphs(pl) if pl.paragraphs.is_empty()) {
             return Some(0);
         }
         let p = layout.piece_at(usize::MAX);

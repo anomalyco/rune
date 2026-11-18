@@ -300,6 +300,51 @@ fn secure_fields_never_expose_their_text() {
     assert_eq!((pw["role"].as_str(), pw["name"].as_str()), (Some("password-input"), Some("Password")));
 }
 
+/// Every selection end in `tree` that AccessKit's AT-SPI adapter would read names a `TextRun`
+/// in it: the adapter unwraps that and takes the app down otherwise.
+#[cfg(target_os = "linux")]
+fn assert_selections_on_runs(tree: &accesskit::TreeUpdate) {
+    let role = |id| tree.nodes.iter().find(|(n, _)| *n == id).map(|(_, n)| n.role());
+    for (_, n) in &tree.nodes {
+        if let Some(sel) = n.text_selection() {
+            assert_eq!((role(sel.anchor.node), role(sel.focus.node)), (Some(Role::TextRun), Some(Role::TextRun)), "{sel:?}");
+        }
+    }
+}
+
+#[test]
+fn an_empty_field_answers_as_a_short_one() {
+    let mut edit = TextEdit::new("");
+    edit.focused = true;
+    let mut rt = Runtime::new(Field { edit }, field, (400.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let tree = rt.accessibility_tree();
+    // Parley shapes an empty text as one space; the field still has no visual lines box.
+    assert!(!tree.nodes.iter().any(|(_, n)| n.class_name() == Some(super::a11y_tree::LINES_BOX_CLASS)));
+    #[cfg(target_os = "linux")]
+    assert_selections_on_runs(&tree);
+    // The first character typed moves the caret from the empty field into its run.
+    rt.state.edit = TextEdit::new("h");
+    rt.state.edit.focused = true;
+    rt.frame(0.0);
+    let tree = rt.accessibility_tree();
+    let (_, note) = tree.nodes.iter().find(|(_, n)| n.author_id() == Some("note")).unwrap();
+    let sel = note.text_selection().expect("a caret");
+    assert_eq!(sel.focus.character_index, 1);
+    #[cfg(target_os = "linux")]
+    assert_selections_on_runs(&tree);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_long_field_marks_no_selection_on_itself_on_linux() {
+    let mut edit = TextEdit::new(&"word ".repeat(14_000));
+    edit.focused = true;
+    let mut rt = Runtime::new(Field { edit }, field, (400.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    assert_selections_on_runs(&rt.accessibility_tree());
+}
+
 #[derive(Default)]
 struct Linked {
     opened: Vec<String>,
