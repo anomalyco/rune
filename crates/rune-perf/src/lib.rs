@@ -21,6 +21,12 @@ pub(crate) const WINDOW_MS: u64 = 60_000;
 pub(crate) const SLOW_MS: f64 = 1000.0 / 60.0;
 pub(crate) const LARGE_BYTES: u64 = 8 << 20;
 
+/// How long the recorder waits with nothing to write before [`Config::on_idle`] runs.
+pub const IDLE: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Minimum gap between two [`Config::on_idle`] runs on the recorder thread.
+pub const IDLE_MIN_GAP: std::time::Duration = std::time::Duration::from_secs(180);
+
 /// One process/launch per directory. Use separate directories for dev and captures.
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -28,16 +34,25 @@ pub struct Config {
     app: String,
     build: String,
     incidents: Option<SyncSender<PathBuf>>,
+    idle: Option<fn()>,
 }
 
 impl Config {
     pub fn new(directory: impl Into<PathBuf>, app: impl Into<String>) -> Self {
-        Self { directory: directory.into(), app: app.into(), build: String::new(), incidents: None }
+        Self { directory: directory.into(), app: app.into(), build: String::new(), incidents: None, idle: None }
     }
 
     /// Build identity written into snapshots and incidents, such as a version or commit.
     pub fn build(mut self, build: impl Into<String>) -> Self {
         self.build = build.into();
+        self
+    }
+
+    /// Runs once per idle spell (at least [`IDLE_MIN_GAP`] after the previous tidy) on the
+    /// recorder's thread after [`IDLE`] with no new samples or pending writes, then the thread
+    /// waits with no timer.
+    pub fn on_idle(mut self, idle: fn()) -> Self {
+        self.idle = Some(idle);
         self
     }
 
