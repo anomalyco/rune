@@ -9,8 +9,44 @@ pub(crate) const GLIDE_PHASES: u8 = 4;
 impl TextSystem {
     /// Glyph quads for single-line `text` with its layout box's top-left at `origin` (device px).
     pub fn glyphs(&mut self, text: &str, style: TextStyle, scale: f32, origin: [f32; 2], out: &mut Vec<GlyphQuad>) {
+        self.ink_spans.clear();
         let l = self.layout_rich(text, &[], style, scale, None);
         self.glyphs_for_layout(&l, scale, origin, false, out);
+    }
+
+    /// The 1-based span index whose colour applies at `byte` (0 for the element's own colour).
+    /// `ink_spans` holds sorted, non-overlapping intervals (`set_ink_spans`), so forward glyph
+    /// walks step `cursor` in O(1) and jumps fall back to binary search.
+    #[inline]
+    pub(super) fn ink_at(&self, byte: u32, cursor: &mut usize) -> u16 {
+        let spans = self.ink_spans.as_slice();
+        if let Some(&(a, b, ink)) = spans.get(*cursor) && byte >= a {
+            if byte < b {
+                return ink;
+            }
+            return match spans.get(*cursor + 1) {
+                None => 0,
+                Some(&(na, nb, nink)) if byte < na => 0,
+                Some(&(_, nb, nink)) if byte < nb => {
+                    *cursor += 1;
+                    nink
+                }
+                Some(_) => self.ink_search(byte, cursor),
+            };
+        }
+        self.ink_search(byte, cursor)
+    }
+
+    fn ink_search(&self, byte: u32, cursor: &mut usize) -> u16 {
+        let spans = self.ink_spans.as_slice();
+        let i = spans.partition_point(|&(a, _, _)| a <= byte);
+        if i == 0 {
+            *cursor = 0;
+            return 0;
+        }
+        *cursor = i - 1;
+        let (_, b, ink) = spans[i - 1];
+        if byte < b { ink } else { 0 }
     }
 
     /// Glyph quads for a cached [`Layout`] with its top-left at `origin` (device px). When
@@ -63,36 +99,36 @@ impl TextSystem {
                 if layout.get(mid).is_some_and(|l| l.metrics().block_max_coord < band.start) { lo = mid + 1 } else { hi = mid }
             }
         }
+        let need_bytes = bytes || !self.ink_spans.is_empty();
+        let mut cursor = 0usize;
         let lines = (lo..layout.len()).map_while(|i| layout.get(i).filter(|l| l.metrics().block_min_coord <= band.end));
         for line in lines {
-            if bytes {
-                table.clear();
-                let mut x = line.metrics().offset;
-                for run in line.runs() {
-                    for cl in run.visual_clusters() {
-                        table.push((x, cl.text_range().start as u32));
-                        x += cl.advance();
-                    }
-                }
+            if need_bytes {
+                line_glyph_bytes(&line, &mut table);
             }
+            let mut gi = 0usize;
             for item in line.items() {
                 let PositionedLayoutItem::GlyphRun(glyph_run) = item else { continue };
                 let face = Face::of(&glyph_run, &mut coords);
                 let baseline = (origin[1] + face.baseline * k).round();
                 let mut rel = glyph_run.offset();
                 for g in glyph_run.glyphs() {
-                    let byte = if bytes {
-                        let i = table.partition_point(|&(x0, _)| x0 <= rel + 0.01);
-                        table.get(i.saturating_sub(1)).map_or(0, |e| e.1)
+                    let cluster_byte = if need_bytes {
+                        let b = table.get(gi).copied().unwrap_or(0);
+                        gi += 1;
+                        b
                     } else {
                         0
                     };
+                    let ink = if self.ink_spans.is_empty() { 0 } else { self.ink_at(cluster_byte, &mut cursor) };
+                    let byte = if bytes { cluster_byte } else { 0 };
                     let at = if k == 1.0 { [origin[0] + rel + g.x, baseline + g.y] }
                         else { [origin[0] + (rel + g.x) * k, baseline + g.y * k] };
-                    self.push_glyph(&face, &coords, g.id, at, k, byte, out);
+                    self.push_glyph(&face, &coords, g.id, at, k, ink, byte, out);
                     rel += g.advance;
                 }
             }
+            debug_assert!(!need_bytes || gi == table.len());
         }
         self.cluster_scratch = table;
         self.coords_scratch = coords;
@@ -111,27 +147,30 @@ impl TextSystem {
     pub(crate) fn glyphs_in_scaled(&mut self, run: &RunLayout, at: usize, origin: [f32; 2], k: f32, out: &mut Vec<GlyphQuad>) {
         let Some(i) = run.grapheme(at) else { return };
         let glyphs = run.graphemes[i].2 as usize..run.graphemes[i + 1].2 as usize;
+        // `ink_spans` holds the cell's own spans, so byte 0 is the cell's grapheme.
+        let mut cursor = 0usize;
+        let ink = if self.ink_spans.is_empty() { 0 } else { self.ink_at(0, &mut cursor) };
         for g in &run.glyphs[glyphs] {
             let face = &run.faces[g.face as usize];
             let baseline = (origin[1] + face.face.baseline * k).round();
             let pen = if k == 1.0 { [origin[0] + g.x, baseline + g.y] } else { [origin[0] + g.x * k, baseline + g.y * k] };
-            self.push_glyph(&face.face, &face.coords, g.id, pen, k, at as u32, out);
+            self.push_glyph(&face.face, &face.coords, g.id, pen, k, ink, at as u32, out);
         }
     }
 
     /// Rasterizes (once) and appends one glyph at device position `at`, `k` times its size.
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn push_glyph(&mut self, face: &Face, coords: &[i16], glyph: u32, at: [f32; 2], k: f32, byte: u32, out: &mut Vec<GlyphQuad>) -> Placed {
+    pub(super) fn push_glyph(&mut self, face: &Face, coords: &[i16], glyph: u32, at: [f32; 2], k: f32, ink: u16, byte: u32, out: &mut Vec<GlyphQuad>) -> Placed {
         #[cfg(target_arch = "wasm32")]
         if super::platform_face::is(&face.font) {
-            return self.push_platform_glyph(face, glyph, at, k, byte, out);
+            return self.push_platform_glyph(face, glyph, at, k, ink, byte, out);
         }
-        if self.emit == outline::Emit::Outline && let Some(placed) = self.push_outline(face, coords, glyph, at, k, byte, out) {
+        if self.emit == outline::Emit::Outline && let Some(placed) = self.push_outline(face, coords, glyph, at, k, ink, byte, out) {
             return placed;
         }
         let [gx, gy] = at;
         let glide = self.glide;
-        let (font, font_size, ink, skew) = (&face.font, face.size * k, face.ink, face.skew);
+        let (font, font_size, skew) = (&face.font, face.size * k, face.skew);
         let direct_write = self.direct_write();
         let windfoil = self.smoothing.look().is_some();
         let radius = if direct_write { 0.0 } else { self.apple.radius(ink, font_size) * if windfoil { outline::TEXT_WEIGHT } else { 1.0 } };
@@ -206,7 +245,7 @@ impl TextSystem {
                 // Windfoil masks place their own entries (GPU-filled ones are queued, not uploaded).
                 if windfoil {
                     self.note_mask_font(face);
-                    if let Some(placed) = self.windfoil_mask(key, face, coords, font_size, [subpx, subpy]) {
+                    if let Some(placed) = self.windfoil_mask(key, face, coords, font_size, ink, [subpx, subpy]) {
                         return landed(placed, out);
                     }
                 }
@@ -281,7 +320,8 @@ impl TextSystem {
     /// canvas once per size and quarter-pixel phase, into the atlas (text) or as a colour image
     /// (emoji). Asked for again each frame, as the glyph cache's phases are CoreGraphics'.
     #[cfg(target_arch = "wasm32")]
-    fn push_platform_glyph(&mut self, face: &Face, glyph: u32, at: [f32; 2], k: f32, byte: u32, out: &mut Vec<GlyphQuad>) -> Placed {
+    #[allow(clippy::too_many_arguments)]
+    fn push_platform_glyph(&mut self, face: &Face, glyph: u32, at: [f32; 2], k: f32, ink: u16, byte: u32, out: &mut Vec<GlyphQuad>) -> Placed {
         let size = face.size * k;
         let quarters = (at[0] * 4.0).round();
         let fx = (quarters / 4.0).floor();
@@ -291,13 +331,13 @@ impl TextSystem {
             subpx: phase, subpy: 0, dilation: 0, apple: 0, skew: 0, bold: false };
         if let Some(c) = self.color_glyphs.get_mut(&key) {
             c.used = true;
-            out.push(c.quad(fx, fy, self.glide, face.ink, byte));
+            out.push(c.quad(fx, fy, self.glide, ink, byte));
             return Placed::Other;
         }
         if let Some(entry) = self.atlas.map.get(&key) {
             if let Some(a) = entry.mask() {
                 self.atlas.touch(a.page, a.w * a.h);
-                out.push(atlas_quad(a, fx, fy, face.ink, byte));
+                out.push(atlas_quad(a, fx, fy, ink, byte));
             }
             return Placed::Other;
         }
@@ -313,13 +353,13 @@ impl TextSystem {
             self.color_placed += 1;
             let c = ColorGlyph { index: self.color_pixels.len() as u32, used: true, left: image.left, top: image.top, w: image.w, h: image.h };
             self.color_glyphs.insert(key, c);
-            out.push(c.quad(fx, fy, self.glide, face.ink, byte));
+            out.push(c.quad(fx, fy, self.glide, ink, byte));
             return Placed::Other;
         }
         match self.atlas.put(image.w, image.h, &image.data, image.left, image.top) {
             Some(a) => {
                 self.atlas.map.insert(key, Residency::Uploaded(a));
-                out.push(atlas_quad(a, fx, fy, face.ink, byte));
+                out.push(atlas_quad(a, fx, fy, ink, byte));
             }
             None => crate::marks::text_missed(),
         }
@@ -381,12 +421,64 @@ pub(super) fn atlas_quad(a: AtlasGlyph, fx: f32, gy: f32, ink: u16, byte: u32) -
     }
 }
 
+/// Records coloured spans from `spans` into `out` as sorted, non-overlapping `(start, end, ink)`
+/// intervals where later spans win. Spans from `El` are already sorted and disjoint, so the
+/// common case is one linear pass with no allocation or sort.
+pub(super) fn set_ink_spans(out: &mut Vec<(u32, u32, u16)>, spans: &[Span]) {
+    out.clear();
+    let mut disjoint = true;
+    let mut last_end = 0u32;
+    for (i, s) in spans.iter().enumerate() {
+        if s.start < s.end && s.color.is_some() {
+            if s.start < last_end {
+                disjoint = false;
+            }
+            last_end = last_end.max(s.end);
+            out.push((s.start, s.end, i as u16 + 1));
+        }
+    }
+    if disjoint || out.len() <= 1 {
+        return;
+    }
+    let input = std::mem::take(out);
+    let mut bounds = Vec::with_capacity(input.len() * 2);
+    for &(a, b, _) in &input {
+        bounds.push(a);
+        bounds.push(b);
+    }
+    bounds.sort_unstable();
+    bounds.dedup();
+    for w in bounds.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        if let Some(&(_, _, ink)) = input.iter().rev().find(|&&(sa, sb, _)| sa <= a && b <= sb) {
+            if let Some(last) = out.last_mut().filter(|l| l.1 == a && l.2 == ink) {
+                last.1 = b;
+            } else {
+                out.push((a, b, ink));
+            }
+        }
+    }
+}
+
+/// For each glyph that `line.items()`'s `GlyphRun`s yield on `line`, in visual order, the
+/// start byte of the cluster it was shaped in (the first byte of a ligature).
+pub(super) fn line_glyph_bytes<B: parley::Brush>(line: &parley::Line<'_, B>, out: &mut Vec<u32>) {
+    out.clear();
+    for run in line.runs() {
+        for cl in run.visual_clusters() {
+            let n = cl.glyphs().count();
+            if n > 0 {
+                out.resize(out.len() + n, cl.text_range().start as u32);
+            }
+        }
+    }
+}
+
 /// One glyph run's face, as the rasterizer needs it.
 pub(super) struct Face {
     pub(super) font: parley::FontData,
     pub(super) size: f32,
     pub(super) coords_key: u64,
-    pub(super) ink: u16,
     /// A face without italics leans by a fixed angle instead of fontique's 14°.
     pub(super) skew: u8,
     /// Drawn in synthetic bold ([`synthetic_bold`]).
@@ -404,7 +496,6 @@ impl Face {
             font: run.font().clone(),
             size: run.font_size(),
             coords_key: coords.iter().fold(0u64, |h, &c| h.wrapping_mul(31).wrapping_add(c as u16 as u64)),
-            ink: glyph_run.style().brush.0 & !synthetic_bold::SYNTHETIC_BOLD,
             skew: if run.synthesis().skew().is_some() { SYNTHETIC_OBLIQUE } else { 0 },
             bold: glyph_run.style().brush.0 & synthetic_bold::SYNTHETIC_BOLD != 0,
             baseline: glyph_run.baseline(),
