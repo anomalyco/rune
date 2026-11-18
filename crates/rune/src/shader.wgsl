@@ -356,9 +356,19 @@ fn layer_texel(t: vec2<i32>, size: vec2<f32>) -> vec4<f32> {
     return textureLoad(images, t, 0);
 }
 
+// The kind of shape a fragment draws: the instance's, or, in a pipeline built for one kind (render/variant.rs
+// `pinned_wgsl`), that kind, fixed when the shader compiles, so the compiler drops every other kind's code
+// and a fragment no longer pays for shapes it isn't. -1 is the shader every kind can draw with.
+const PINNED_KIND: f32 = -1.0;
+
+fn fragment_kind(i: Out) -> f32 {
+    if (PINNED_KIND >= 0.0) { return PINNED_KIND; }
+    return i.params.y;
+}
+
 @fragment
 fn fs(i: Out) -> @location(0) vec4<f32> {
-    if (i.params.y == 8.0) {
+    if (fragment_kind(i) == 8.0) {
         // Filters consume unmasked source pixels. Decode the same packed clip as primitives
         // only here, on the completed layer, including the radius in word 3.
         let screen = i.pos.xy + projection.xy;
@@ -396,7 +406,7 @@ fn fs(i: Out) -> @location(0) vec4<f32> {
         return select(color, clamp(color, vec4(0.0), vec4(1.0)), i.params.x == 1.0) * i.fill.a
             * clip_alpha(screen, i.clip, i.fade) * hole_alpha(screen, i.radii);
     }
-    let kind = i.params.y;
+    let kind = fragment_kind(i);
     if (kind > 11.5) { discard; }
     let half = i.rect.zw * 0.5;
     let center = i.rect.xy + half;

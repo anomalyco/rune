@@ -275,7 +275,7 @@ impl BackdropBlur {
         });
         #[cfg(target_os = "windows")]
         if self.composite_precompiled {
-            if let Some(pipeline) = super::dxbc::checked(device, "backdrop blur composite", || make(&self.composite)) {
+            if let Some(pipeline) = super::dxbc::checked(device, "backdrop blur composite", "compiling WGSL", || make(&self.composite)) {
                 self.composites.push((format, pipeline));
                 return;
             }
