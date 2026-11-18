@@ -71,8 +71,6 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
     }
     crate::tooling::interaction::gate::headless();
     let mut comp = app.compositor.take();
-    let (srgb_blend, font_smoothing) = (app.srgb_blend, app.font_smoothing);
-    let (on_focus, on_ime, on_mods) = (app.on_focus, app.on_ime, app.on_mods);
     let (on_reopen, on_open_url) = (app.on_reopen, app.on_open_url);
     // A `--realtime` run stands in for a window, so it starts the app's live work as one does.
     let mut on_ready = app.on_ready.take().filter(|_| args.realtime);
@@ -101,8 +99,8 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
     });
     let fit_height = app.fit_content_height;
     let app_options = app.window_options.clone();
-    let (modifier_keys, tab_visits_controls, playground) = (app.modifier_keys, app.tab_visits_controls, app.playground.take());
-    let (spec, state, shared) = app.into_parts(args.scene.as_deref());
+    let playground = app.playground.take();
+    let (spec, state, shared, runtime) = app.into_parts(args.scene.as_deref());
     let shortcuts = crate::shortcuts::Guard::attach(&shared, std::sync::Arc::new(|| {}), true, false);
     let mut menus = crate::native_menu::Guard::attach(&shared, true);
     let dark = args.theme.as_deref() != Some("light");
@@ -110,15 +108,9 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
     let mut rt = runtime_for(&spec, state, size, Env::new(dark, scale), std::sync::Arc::new(|| {}));
     crate::playground::attach(&mut rt, playground, &spec, args.playground.clone(), args.variant.clone(), false);
     let chrome = rt.headless_chrome(chrome, titlebar, app_options.borderless);
-    rt.on_focus = on_focus;
-    rt.on_mods = on_mods;
-    rt.app_ime.hook = on_ime;
+    rt.configure(runtime);
     rt.transparent = transparent;
     rt.fit_height = fit_height;
-    rt.set_srgb_blend(srgb_blend);
-    rt.set_font_smoothing(font_smoothing);
-    rt.set_modifier_keys(modifier_keys);
-    rt.set_tab_visits_controls(tab_visits_controls);
     if let Some(bars) = args.scroll_bars { rt.set_system_scroll_bars(bars); }
     // Only limits the app set: the canvas opens at any size, below the default minimum too.
     let limits = (app_options.min_size.or(spec.min_size).unwrap_or((0.0, 0.0)), app_options.max_size);
@@ -140,6 +132,7 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
     let t0 = Instant::now();
     let features = comp.as_ref().map_or(wgpu::Features::empty(), |c| c.features());
     let gpu = Gpu::try_with_features(Gpu::instance_for(features), None, features).unwrap_or_else(|e| die(&e));
+    let srgb_blend = rt.srgb_blend();
     let mut target_format = if srgb_blend { OFFSCREEN_FORMAT.remove_srgb_suffix() } else { OFFSCREEN_FORMAT };
     let mut renderer = Renderer::new(&gpu.device, target_format);
     renderer.set_srgb_blend(srgb_blend);

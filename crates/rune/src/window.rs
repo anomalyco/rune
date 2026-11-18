@@ -463,7 +463,8 @@ impl ApplicationHandler<WakeEvent> for Windows {
     }
 }
 
-use file_drop::{DROP_SAMPLE, FileDrop, FileStep};
+pub(crate) use file_drop::FileStep;
+use file_drop::{DROP_SAMPLE, FileDrop};
 
 struct Host<S: 'static> {
     /// The app's waker ran and its event isn't handled yet (`WakeEvent::App`): work it brought (a
@@ -582,25 +583,21 @@ impl<S: 'static> Host<S> {
         let present_log = args.trace.as_ref().map(|_| Arc::default());
         let mut app = app;
         let comp = app.compositor.take();
-        let (on_focus, on_ime, on_visibility) = (app.on_focus, app.on_ime, app.on_visibility);
         let titlebar = app.titlebar.filter(|_| !options.borderless);
         let chrome = app.chrome;
-        let (srgb_blend, font_smoothing) = (app.srgb_blend, app.font_smoothing);
-        let modifier_keys = app.modifier_keys;
-        let tab_visits_controls = app.tab_visits_controls;
         let fit_height = app.fit_content_height;
         let float_on_open = app.float_on_open;
         // `RUNE_OPEN_INACTIVE`: a tool's launch (an accessibility probe, a capture) leaves the user's
         // focus and keyboard where they are, as `App::open_inactive` does.
         let (open_inactive, open_as) = (app.open_inactive || std::env::var_os("RUNE_OPEN_INACTIVE").is_some(), app.open_as);
-        let app_stats = app.dev_stats;
         let (playground, attach_playground) = (app.playground.take(), app.attach_playground);
-        let (mut spec, state, shared) = app.into_parts(args.scene.as_deref());
+        let (mut spec, state, shared, runtime) = app.into_parts(args.scene.as_deref());
         let mut size = args.size.unwrap_or(spec.size);
         // The window reports the system appearance and scale when it opens.
         let env = Env::new(args.theme.as_deref() != Some("light"), 1.0);
         let mut rt = runtime_for(&spec, state, size, env, setup_waker(&shared));
         if let Some(attach) = attach_playground { attach(&mut rt, playground, &spec, args.playground.clone(), args.variant.clone(), true); }
+        rt.configure(runtime);
         if fit_height {
             spec.min_size = options.fit_min_size(spec.min_size);
             // Opens at the content's height; the first frame corrects any difference its
@@ -612,16 +609,10 @@ impl<S: 'static> Host<S> {
             spec.size = size;
             args.size = None;
         }
-        rt.on_focus = on_focus;
-        rt.on_visibility = on_visibility;
-        rt.app_ime.hook = on_ime;
-        rt.set_modifier_keys(modifier_keys);
-        rt.set_srgb_blend(srgb_blend); rt.set_font_smoothing(font_smoothing);
         rt.set_system_reduced_motion(crate::platform::preferences::reduced_motion());
         rt.set_system_contrast(crate::platform::preferences::contrast());
         rt.set_system_increased_contrast(crate::platform::preferences::increased_contrast());
         rt.set_full_keyboard_access(crate::platform::preferences::full_keyboard_access());
-        rt.set_tab_visits_controls(tab_visits_controls);
         crate::platform::accent::watch();
         rt.set_system_accent(crate::system_accent());
         crate::platform::scroll_bars::watch();
@@ -637,7 +628,6 @@ impl<S: 'static> Host<S> {
         rt.record_events = false;
         let meter = SurfaceMeter::new(native_handle.key(), native_handle.native.stats.clone());
         rt.surface_stats = Some(meter.shared());
-        rt.app_stats = app_stats;
         let mut clipboard = crate::clipboard::Client::default();
         clipboard.connect(waker.clone());
         shared.connect(waker.clone());

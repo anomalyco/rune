@@ -50,64 +50,50 @@ impl<S: 'static> Host<S> {
     /// changes the drop target. Runs even while the window is covered, as queued input does.
     pub(super) fn flush_files(&mut self, event_loop: &ActiveEventLoop) {
         #[cfg(target_os = "macos")]
-        let appkit = self.win.as_ref().map(|l| crate::platform::macos::drop::take(&l.window)).unwrap_or_default();
+        let native = self.win.as_ref().map(|l| crate::platform::macos::drop::take(&l.window)).unwrap_or_default();
         #[cfg(target_os = "windows")]
-        let ole = self.win.as_ref().map(|l| crate::platform::win32::drop_target::take(&l.window)).unwrap_or_default();
+        let native = self.win.as_ref().map(|l| crate::platform::win32::drop_target::take(&l.window)).unwrap_or_default();
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        let native: Vec<FileStep> = Vec::new();
         let Some(l) = self.win.as_ref().filter(|_| self.life.shown()) else {
             self.files = FileDrop::default();
             return;
         };
         let f = &mut self.files;
+        let zoom = self.rt.zoom();
+        let view_at = |(x, y): (f32, f32)| (x / zoom, y / zoom);
         let mut queued = false;
-        // AppKit's drags say where they are at every step (`macos_drop`), so nothing samples.
-        #[cfg(target_os = "macos")]
-        for step in appkit {
-            use crate::platform::macos::drop::Step;
+        // Native drop targets (AppKit, Win32 OLE) report each step in window points; winit's
+        // fallback events omit the position, so the host samples the pointer for them.
+        for step in native.into_iter().chain(std::mem::take(&mut f.steps)) {
             queued |= match step {
-                Step::Enter(paths, at) => { self.rt.drag_files(paths, Some(at)); true }
-                Step::Move(at) => self.rt.drag_files_to(Some(at)),
-                Step::Drop(paths, at) => { self.rt.drop_files(paths, Some(at)); true }
-                Step::Leave => { self.rt.drag_files_leave(); true }
-            };
-        }
-        // Rune's OLE target says where each step is too (`platform::win32::drop_target`).
-        #[cfg(target_os = "windows")]
-        for step in ole {
-            use crate::platform::win32::drop_target::Step;
-            // Window points, as the pointer's samples are, in the zoomed app's points.
-            let z = self.rt.zoom();
-            let at = |(x, y): (f32, f32)| Some((x / z, y / z));
-            queued |= match step {
-                Step::Enter(paths, p) => { self.rt.drag_files(paths, at(p)); true }
-                Step::Move(p) => self.rt.drag_files_to(at(p)),
-                Step::Drop(paths, p) => { self.rt.drop_files(paths, at(p)); true }
-                Step::Leave => { self.rt.drag_files_leave(); true }
-            };
-        }
-        for step in std::mem::take(&mut f.steps) {
-            queued = true;
-            match step {
-                FileStep::Enter(paths) => {
+                FileStep::Enter(paths, Some(p)) => { self.rt.drag_files(paths, Some(view_at(p))); true }
+                FileStep::Enter(paths, None) => {
                     let pointer = crate::input::drop_pointer::DropPointer::new();
-                    f.at = pointer.sample(&l.window, self.rt.zoom()).or_else(|| self.rt.pointer());
+                    f.at = pointer.sample(&l.window, zoom).or_else(|| self.rt.pointer());
                     f.pointer = Some(pointer);
                     self.rt.drag_files(paths, f.at);
+                    true
                 }
-                FileStep::Drop(paths) => {
+                FileStep::Move(p) => self.rt.drag_files_to(Some(view_at(p))),
+                FileStep::Drop(paths, Some(p)) => { self.rt.drop_files(paths, Some(view_at(p))); true }
+                FileStep::Drop(paths, None) => {
                     // A drop with no drag before it (Windows' WM_DROPFILES) samples too.
                     let pointer = f.pointer.take().unwrap_or_else(crate::input::drop_pointer::DropPointer::new);
-                    let at = pointer.sample(&l.window, self.rt.zoom()).or(f.at.take()).or_else(|| self.rt.pointer());
+                    let at = pointer.sample(&l.window, zoom).or(f.at.take()).or_else(|| self.rt.pointer());
                     self.rt.drop_files(paths, at);
+                    true
                 }
                 FileStep::Leave => {
                     f.pointer = None;
                     f.at = None;
                     self.rt.drag_files_leave();
+                    true
                 }
-            }
+            };
         }
         // Sampled even when still, which also notices a target that unmounted under the drag.
-        if !queued && let Some(at) = f.pointer.as_ref().and_then(|p| p.sample(&l.window, self.rt.zoom())) {
+        if !queued && let Some(at) = f.pointer.as_ref().and_then(|p| p.sample(&l.window, zoom)) {
             f.at = Some(at);
             queued = self.rt.drag_files_to(Some(at));
         }

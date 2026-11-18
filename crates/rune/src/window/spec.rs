@@ -222,6 +222,24 @@ impl ConfiguredWindowOptions {
     }
 }
 
+/// Forward per-window `App<S>` builder methods onto `WindowSpec<S>` so new builders don't drift.
+macro_rules! forward_app_builders {
+    ($(
+        $(#[$meta:meta])*
+        $name:ident $(=> $target:ident)? ($($arg:ident : $ty:ty),* $(,)?)
+    );* $(;)?) => {
+        $(
+            $(#[$meta])*
+            pub fn $name(mut self, $($arg: $ty),*) -> Self {
+                self.app = forward_app_builders!(@call self.app, $name $(, $target)?, ($($arg),*));
+                self
+            }
+        )*
+    };
+    (@call $app:expr, $name:ident, ($($arg:ident),*)) => { $app.$name($($arg),*) };
+    (@call $app:expr, $_name:ident, $target:ident, ($($arg:ident),*)) => { $app.$target($($arg),*) };
+}
+
 /// One independent retained tree and app state. Share Live handles or application services
 /// between states; events, focus, animation clocks and redraws remain window-local.
 pub struct WindowSpec<S: 'static> {
@@ -232,7 +250,7 @@ pub struct WindowSpec<S: 'static> {
     pub on_created: Option<Box<dyn FnOnce(crate::window::WindowHandle)>>,
 }
 
-impl<S> WindowSpec<S> {
+impl<S: 'static> WindowSpec<S> {
     pub fn new(key: impl Into<String>, app: AppSpec<S>) -> Self {
         Self::from_app(key, App::new(app))
     }
@@ -246,43 +264,74 @@ impl<S> WindowSpec<S> {
     pub fn from_app(key: impl Into<String>, app: App<S>) -> Self {
         Self { key: key.into(), options: app.window_options.clone(), app, on_created: None }
     }
-    /// Configure this window's frame, including headless traffic-light placement.
-    pub fn chrome(mut self, chrome: crate::Chrome) -> Self { self.app = self.app.chrome(chrome); self }
-    /// This window draws its own titlebar, like `App::titlebar`.
-    pub fn titlebar(mut self, titlebar: crate::Titlebar) -> Self { self.app = self.app.titlebar(titlebar); self }
-    /// Composite this window's translucent fills, blurs, shadows, images and video in sRGB
-    /// (gamma) space instead of linear light, matching CSS and Core Animation. With a
-    /// `Compositor`, `Frame::srgb_blend` says which encoding its passes must match.
-    pub fn srgb_blend(mut self, enabled: bool) -> Self { self.app = self.app.srgb_blend(enabled); self }
-    /// This window's font smoothing (`App::font_smoothing`).
-    pub fn font_smoothing(mut self, mode: crate::FontSmoothing) -> Self { self.app = self.app.font_smoothing(mode); self }
-    pub fn on_focus(mut self, f: fn(&mut S, bool, &mut crate::Tx)) -> Self { self.app = self.app.on_focus(f); self }
-    pub fn on_modifiers(mut self, f: fn(&mut S, crate::Mods, &mut crate::Tx)) -> Self { self.app = self.app.on_modifiers(f); self }
-    /// This window going off screen and back, like `App::on_visibility`.
-    pub fn on_visibility(mut self, f: fn(&mut S, bool, &mut crate::Tx)) -> Self { self.app = self.app.on_visibility(f); self }
-    /// This window's editor's input method events, like `App::on_ime`.
-    pub fn on_ime(mut self, f: fn(&mut S, &crate::Ime, &mut crate::Tx) -> bool) -> Self { self.app = self.app.on_ime(f); self }
-    /// This window's playground, like `App::playground`.
-    pub fn playground(mut self, playground: crate::Playground<S>) -> Self { self.app = self.app.playground(playground); self }
-    /// Runs in this window when the app starts to quit, like `App::on_quit`.
-    pub fn on_quit(mut self, f: fn(&mut S, &mut crate::Tx)) -> Self { self.app = self.app.on_quit(f); self }
-    /// Runs when the app is reopened, like `App::on_reopen`.
-    pub fn on_reopen(mut self, f: fn(&mut S, bool, &mut crate::Tx) -> bool) -> Self { self.app = self.app.on_reopen(f); self }
-    /// Receives links opened with the app, like `App::on_open_url`.
-    pub fn on_open_url(mut self, f: fn(&mut S, &str, &mut crate::Tx)) -> Self { self.app = self.app.on_open_url(f); self }
-    /// Send `Key::Modifier` presses and releases to this window, like `App::modifier_keys`.
-    pub fn modifier_keys(mut self) -> Self { self.app = self.app.modifier_keys(); self }
-    /// Tab visits every focusable control in this window, like `App::tab_visits_controls`.
-    pub fn tab_visits_controls(mut self, on: bool) -> Self { self.app = self.app.tab_visits_controls(on); self }
-    /// Called on the event thread after the first frame is ready, once per native creation.
-    pub fn on_ready(mut self, f: impl FnMut(&crate::WindowHandle) + 'static) -> Self {
-        self.app = self.app.on_ready(f); self
+    forward_app_builders! {
+        /// Configure this window's frame, including headless traffic-light placement.
+        chrome(chrome: crate::Chrome);
+        /// This window draws its own titlebar, like `App::titlebar`.
+        titlebar(titlebar: crate::Titlebar);
+        /// Composite this window's translucent fills, blurs, shadows, images and video in sRGB
+        /// (gamma) space instead of linear light, matching CSS and Core Animation. With a
+        /// `Compositor`, `Frame::srgb_blend` says which encoding its passes must match.
+        srgb_blend(enabled: bool);
+        /// This window's font smoothing (`App::font_smoothing`).
+        font_smoothing(mode: crate::FontSmoothing);
+        /// Size this window's height to its content, like `App::fit_content_height`.
+        fit_content_height();
+        /// Ask a tiling window manager to float this window when it opens, like `App::float_on_open`.
+        float_on_open();
+        /// Open this window without taking focus from the window that has it, such as a window a
+        /// tab is dragged into while the press stays with its strip. A later `open` or `focus`
+        /// activates it.
+        inactive => open_inactive();
+        /// Open this window maximized, like `App::maximized`.
+        maximized(maximized: bool);
+        /// Open this window full screen, like `App::full_screen`.
+        full_screen(full_screen: bool);
+        /// Send `Key::Modifier` presses and releases to this window, like `App::modifier_keys`.
+        modifier_keys();
+        /// Tab visits every focusable control in this window, like `App::tab_visits_controls`.
+        tab_visits_controls(on: bool);
+        /// Release this window's GPU device and renderer when it closes, like `App::release_gpu_when_closed`.
+        release_gpu_when_closed();
+        on_focus(f: fn(&mut S, bool, &mut crate::Tx));
+        on_modifiers(f: fn(&mut S, crate::Mods, &mut crate::Tx));
+        /// This window going off screen and back, like `App::on_visibility`.
+        on_visibility(f: fn(&mut S, bool, &mut crate::Tx));
+        /// Runs when this window rests, like `App::on_rest`.
+        on_rest(f: fn(&mut S, &mut crate::Tx) -> bool);
+        /// This window's editor's input method events, like `App::on_ime`.
+        on_ime(f: fn(&mut S, &crate::Ime, &mut crate::Tx) -> bool);
+        /// Runs whenever this window closes, like `App::on_close`.
+        on_close(f: fn(&mut S, &mut crate::Tx));
+        /// Runs in this window when the app starts to quit, like `App::on_quit`.
+        on_quit(f: fn(&mut S, &mut crate::Tx));
+        /// Runs `enter` before and `leave` after each event-handling turn of this window, like `App::turn_scope`.
+        turn_scope(enter: fn(&mut S), leave: fn(&mut S));
+        /// Runs when the app is reopened, like `App::on_reopen`.
+        on_reopen(f: fn(&mut S, bool, &mut crate::Tx) -> bool);
+        /// Receives links opened with the app, like `App::on_open_url`.
+        on_open_url(f: fn(&mut S, &str, &mut crate::Tx));
+        /// Runs on the UI thread each time the native window is created, like `App::on_window`.
+        on_window(f: impl FnMut(&crate::WindowHandle) + 'static);
+        /// Called on the event thread after the first frame is ready, once per native creation.
+        on_ready(f: impl FnMut(&crate::WindowHandle) + 'static);
+        /// Reports each of this window's frames, like `App::on_frame_encoded`. A spec made with
+        /// `WindowSpec::from_app` keeps its app's hook unless this replaces it; windows `App::window`
+        /// adds have their own.
+        on_frame_encoded(f: impl FnMut(&crate::FrameEncoded) + 'static);
+        /// Runs on the UI thread after each drawn frame of this window with its runtime, like `App::on_frame_drawn`.
+        on_frame_drawn(f: impl FnMut(&crate::Runtime<S>) + 'static);
+        /// Draw every frame of this window through `compositor`, like `App::compositor`.
+        compositor(compositor: impl crate::compose::Compositor<S>);
+        /// This window's own counters for native trace summaries, like `App::dev_stats`.
+        dev_stats(stats: fn() -> String);
+        /// This window's playground, like `App::playground`.
+        playground(playground: crate::Playground<S>);
     }
-    /// Reports each of this window's frames, like `App::on_frame_encoded`. A spec made with
-    /// `WindowSpec::from_app` keeps its app's hook unless this replaces it; windows `App::window`
-    /// adds have their own.
-    pub fn on_frame_encoded(mut self, f: impl FnMut(&crate::FrameEncoded) + 'static) -> Self {
-        self.app = self.app.on_frame_encoded(f); self
+    /// Configure the underlying `App` directly for any per-window builder not forwarded here.
+    pub fn map_app(mut self, f: impl FnOnce(App<S>) -> App<S>) -> Self {
+        self.app = f(self.app);
+        self
     }
     pub fn options(mut self, options: WindowOptions) -> Self {
         self.options = options;
@@ -300,19 +349,8 @@ impl<S> WindowSpec<S> {
         self.on_created = Some(Box::new(callback));
         self
     }
-}
-
-impl<S: 'static> WindowSpec<S> {
     /// Erase the state type, so one factory can return windows of different state types.
     pub fn boxed(self) -> AnyWindowSpec { self.into() }
-    /// Open this window without taking focus from the window that has it, such as a window a
-    /// tab is dragged into while the press stays with its strip. A later `open` or `focus`
-    /// activates it.
-    pub fn inactive(mut self) -> Self { self.app = self.app.open_inactive(); self }
-    /// Open this window maximized, like `App::maximized`.
-    pub fn maximized(mut self, maximized: bool) -> Self { self.app = self.app.maximized(maximized); self }
-    /// Open this window full screen, like `App::full_screen`.
-    pub fn full_screen(mut self, full_screen: bool) -> Self { self.app = self.app.full_screen(full_screen); self }
 }
 
 thread_local! {
@@ -630,5 +668,57 @@ mod tests {
         assert_eq!(WindowOptions::default().fit_min_size(Some((300.0, 200.0))), Some((300.0, 200.0)));
         let options = WindowOptions { min_size: Some((300.0, 500.0)), ..Default::default() };
         assert_eq!(options.size_limits(options.fit_min_size(None)), ((300.0, 500.0), None));
+    }
+
+    #[test]
+    fn forwarded_window_spec_builders_and_map_app_configure_the_inner_app() {
+        struct DummyCompositor;
+        impl crate::compose::Compositor<()> for DummyCompositor {
+            fn render(&mut self, f: &mut crate::compose::Frame<'_, ()>) { f.draw_ui(); }
+        }
+        fn stats() -> String { "stats".into() }
+        let spec = AppSpec::new("secondary", (300.0, 200.0), || (), |_, _| crate::el());
+        let window = WindowSpec::new("secondary", spec)
+            .srgb_blend(false)
+            .font_smoothing(crate::FontSmoothing::Off)
+            .fit_content_height()
+            .float_on_open()
+            .inactive()
+            .maximized(true)
+            .full_screen(true)
+            .modifier_keys()
+            .tab_visits_controls(true)
+            .release_gpu_when_closed()
+            .on_focus(|_, _, _| {})
+            .on_modifiers(|_, _, _| {})
+            .on_visibility(|_, _, _| {})
+            .on_rest(|_, _| false)
+            .on_ime(|_, _, _| false)
+            .on_close(|_, _| {})
+            .on_quit(|_, _| {})
+            .turn_scope(|_| {}, |_| {})
+            .on_reopen(|_, _, _| false)
+            .on_open_url(|_, _, _| {})
+            .on_window(|_| {})
+            .on_ready(|_| {})
+            .on_frame_encoded(|_| {})
+            .on_frame_drawn(|_| {})
+            .compositor(DummyCompositor)
+            .dev_stats(stats)
+            .map_app(|app| app.keep_running());
+        assert!(!window.app.runtime.srgb_blend);
+        assert_eq!(window.app.runtime.font_smoothing, crate::FontSmoothing::Off);
+        assert!(window.app.runtime.modifier_keys && window.app.runtime.tab_visits_controls);
+        assert!(window.app.runtime.on_focus.is_some() && window.app.runtime.on_mods.is_some());
+        assert!(window.app.runtime.on_visibility.is_some() && window.app.runtime.on_ime.is_some());
+        assert_eq!(window.app.runtime.dev_stats.map(|f| f()).as_deref(), Some("stats"));
+        assert!(window.app.fit_content_height && window.app.float_on_open && window.app.open_inactive);
+        assert!(window.app.open_as.maximizes() && window.app.open_as.full_screens());
+        assert!(window.app.release_gpu && window.app.keep_running);
+        assert!(window.app.on_rest.is_some() && window.app.on_close.is_some() && window.app.on_quit.is_some());
+        assert!(window.app.turn_scope.is_some() && window.app.on_reopen.is_some() && window.app.on_open_url.is_some());
+        assert!(window.app.on_window.is_some() && window.app.on_ready.is_some());
+        assert!(window.app.on_frame_encoded.is_some() && window.app.on_frame_drawn.is_some());
+        assert!(window.app.compositor.is_some());
     }
 }

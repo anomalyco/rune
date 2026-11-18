@@ -15,18 +15,11 @@ use objc2::{class, msg_send, msg_send_id, sel};
 use objc2_app_kit::{NSPasteboard, NSPasteboardItem, NSView};
 use objc2_foundation::{NSArray, NSDictionary, NSError, NSPoint, NSString, NSURL};
 
-/// One step of a drag over a content view, in points from its top-left.
-#[derive(Debug, PartialEq)]
-pub(crate) enum Step {
-    Enter(Vec<PathBuf>, (f32, f32)),
-    Move((f32, f32)),
-    Drop(Vec<PathBuf>, (f32, f32)),
-    Leave,
-}
+use crate::window::FileStep;
 
 #[derive(Default)]
 struct Dest {
-    steps: Vec<Step>,
+    steps: Vec<FileStep>,
     /// A drag this view takes is over it.
     over: bool,
 }
@@ -94,21 +87,21 @@ pub(crate) fn install(window: &winit::window::Window) {
 }
 
 /// The steps of drags over `window` since the last call.
-pub(crate) fn take(window: &winit::window::Window) -> Vec<Step> {
+pub(crate) fn take(window: &winit::window::Window) -> Vec<FileStep> {
     let Some(view) = crate::platform::macos::content_view(window) else { return Vec::new() };
     let key = Retained::as_ptr(&view) as usize;
     DESTS.with(|d| d.borrow_mut().get_mut(&key).map(|d| std::mem::take(&mut d.steps)).unwrap_or_default())
 }
 
-fn push(key: usize, step: Step) {
+fn push(key: usize, step: FileStep) {
     DESTS.with(|d| {
         let mut d = d.borrow_mut();
         let dest = d.entry(key).or_default();
         // A move replaces the move before it: the host wants only the latest position.
-        if matches!(step, Step::Move(_)) && matches!(dest.steps.last(), Some(Step::Move(_))) { dest.steps.pop(); }
+        if matches!(step, FileStep::Move(_)) && matches!(dest.steps.last(), Some(FileStep::Move(_))) { dest.steps.pop(); }
         match step {
-            Step::Enter(..) | Step::Move(_) => dest.over = true,
-            Step::Drop(..) | Step::Leave => dest.over = false,
+            FileStep::Enter(..) | FileStep::Move(_) => dest.over = true,
+            FileStep::Drop(..) | FileStep::Leave => dest.over = false,
         }
         dest.steps.push(step);
     });
@@ -256,16 +249,16 @@ unsafe fn update(this: &AnyObject, info: &AnyObject) -> usize {
         let op = operation(mask);
         let at = location(view(this), info);
         if op == 0 {
-            if over(key) { push(key, Step::Leave); }
+            if over(key) { push(key, FileStep::Leave); }
             return 0;
         }
         if over(key) {
-            push(key, Step::Move(at));
+            push(key, FileStep::Move(at));
             return op;
         }
         let paths: Vec<PathBuf> = items(&pasteboard(info)).iter().map(|(_, item)| item.hover_path()).collect();
         if paths.is_empty() { return 0; }
-        push(key, Step::Enter(paths, at));
+        push(key, FileStep::Enter(paths, Some(at)));
         op
     })
 }
@@ -275,13 +268,13 @@ unsafe extern "C" fn entered(this: &AnyObject, _: Sel, info: &AnyObject) -> usiz
 unsafe extern "C" fn updated(this: &AnyObject, _: Sel, info: &AnyObject) -> usize { unsafe { update(this, info) } }
 
 unsafe extern "C" fn exited(this: &AnyObject, _: Sel, _info: *mut AnyObject) {
-    if over(key(this)) { push(key(this), Step::Leave); }
+    if over(key(this)) { push(key(this), FileStep::Leave); }
 }
 
 unsafe extern "C" fn prepare(this: &AnyObject, _: Sel, _info: &AnyObject) -> Bool { Bool::new(over(key(this))) }
 
 /// The drop: files at once, image data once written, and file promises once their sources
-/// have written them, all in one `Step::Drop`.
+/// have written them, all in one `FileStep::Drop`.
 unsafe extern "C" fn perform(this: &AnyObject, _: Sel, info: &AnyObject) -> Bool {
     let key = key(this);
     autoreleasepool(|_| unsafe {
@@ -305,10 +298,10 @@ unsafe extern "C" fn perform(this: &AnyObject, _: Sel, info: &AnyObject) -> Bool
             return Bool::YES;
         }
         if paths.is_empty() {
-            push(key, Step::Leave);
+            push(key, FileStep::Leave);
             return Bool::NO;
         }
-        push(key, Step::Drop(paths, at));
+        push(key, FileStep::Drop(paths, Some(at)));
         Bool::YES
     })
 }
@@ -344,7 +337,7 @@ unsafe fn receive(key: usize, pb: &NSPasteboard, dir: &Path, paths: Vec<PathBuf>
                 let paths = std::mem::take(&mut p.1);
                 drop(p);
                 let deliver = block2::RcBlock::new(move || {
-                    if paths.is_empty() { push(key, Step::Leave) } else { push(key, Step::Drop(paths.clone(), at)) }
+                    if paths.is_empty() { push(key, FileStep::Leave) } else { push(key, FileStep::Drop(paths.clone(), Some(at))) }
                 });
                 let main: Retained<AnyObject> = msg_send_id![class!(NSOperationQueue), mainQueue];
                 let _: () = msg_send![&main, addOperationWithBlock: &*deliver];
@@ -517,13 +510,17 @@ mod tests {
     #[test]
     fn moves_coalesce_and_steps_track_the_drag() {
         let key = 0xd0d0;
-        push(key, Step::Enter(vec!["a".into()], (1.0, 1.0)));
-        push(key, Step::Move((2.0, 2.0)));
-        push(key, Step::Move((3.0, 3.0)));
+        push(key, FileStep::Enter(vec!["a".into()], Some((1.0, 1.0))));
+        push(key, FileStep::Move((2.0, 2.0)));
+        push(key, FileStep::Move((3.0, 3.0)));
         assert!(over(key));
-        push(key, Step::Drop(vec!["a".into()], (3.0, 3.0)));
+        push(key, FileStep::Drop(vec!["a".into()], Some((3.0, 3.0))));
         assert!(!over(key));
         let steps = DESTS.with(|d| std::mem::take(&mut d.borrow_mut().get_mut(&key).unwrap().steps));
-        assert_eq!(steps, [Step::Enter(vec!["a".into()], (1.0, 1.0)), Step::Move((3.0, 3.0)), Step::Drop(vec!["a".into()], (3.0, 3.0))]);
+        assert_eq!(steps, [
+            FileStep::Enter(vec!["a".into()], Some((1.0, 1.0))),
+            FileStep::Move((3.0, 3.0)),
+            FileStep::Drop(vec!["a".into()], Some((3.0, 3.0))),
+        ]);
     }
 }

@@ -384,12 +384,12 @@ pub(crate) struct Overlay<T: 'static> {
 
 impl<T: 'static> Overlay<T> {
     pub(crate) fn new<S>(configured: impl Into<ConfiguredOverlay<T>>, state: T, app: &AppSpec<S>) -> (Self, OverlayHandle<T>) {
-        let ConfiguredOverlay { spec, options, on_key, on_created, poll, on_focus, compositor, setup, srgb_blend, macos_level, modifier_keys, animate_reveal, release_after } = configured.into();
+        let ConfiguredOverlay { spec, options, on_key, on_created, poll, compositor, setup, runtime, macos_level, animate_reveal, release_after } = configured.into();
         let shared = Arc::new(Shared { native: Mutex::default(), requests: Mutex::default(), availability: AtomicU8::new(0), failure: Mutex::default(), surface: Mutex::default(), wake: Mutex::new(None), stats: Arc::default() });
         let meter = crate::frame::surface_stats::SurfaceMeter::new(spec.name, shared.stats.clone());
         let text = TextSystem::for_window(app.fonts, app.families);
         let mut rt = Runtime::with_text(state, spec.view, spec.size, Env::default(), text);
-        rt.set_srgb_blend(srgb_blend);
+        rt.configure(runtime);
         rt.set_system_reduced_motion(crate::platform::preferences::reduced_motion());
         crate::platform::accent::watch();
         rt.set_system_accent(crate::system_accent());
@@ -399,8 +399,6 @@ impl<T: 'static> Overlay<T> {
         rt.native_overlay = true;
         rt.set_os_drag(crate::drag_out::SUPPORTED);
         rt.on_key = on_key;
-        rt.set_modifier_keys(modifier_keys);
-        rt.on_focus = on_focus;
         rt.set_live_visible(false);
         rt.surface_stats = Some(meter.shared());
         // App and overlay may use different state types. Downcast the function pointer
