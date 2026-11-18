@@ -125,14 +125,13 @@ fn plain_iter(
                 *idx += 1;
                 let here = lead.take();
                 match (b, m) {
-                    (Block::Para(inl), Some(BlockMap::DeepTail { lines, .. })) => {
-                        let header = rune::labels::label(rune::Label::MoreNestedLines(*lines));
+                    (Block::Para(inl), Some(BlockMap::DeepTail { .. })) => {
                         let pad = " ".repeat(*cols);
-                        let mut text = String::with_capacity(pad.len() + header.len() + 1 + inl.text.len());
-                        text.push_str(&pad);
-                        text.push_str(&header);
-                        for line in inl.text.lines() {
-                            text.push('\n');
+                        let mut text = String::with_capacity(inl.text.len() + 16);
+                        for (j, line) in inl.text.lines().enumerate() {
+                            if j > 0 {
+                                text.push('\n');
+                            }
                             text.push_str(&pad);
                             text.push_str(line);
                         }

@@ -760,9 +760,12 @@ impl Renderer {
         let flow = self.flow.get();
         let pad = " ".repeat(flow.cols);
         let label = rune::labels::label(rune::Label::MoreNestedLines(lines));
-        let header = self
-            .select(self.with_reveal(text(label).font(s.code_block).color(s.muted)).w_full().copy_prefix(pad.clone()).copy_breaks(2, 1))
-            .key("more");
+        let header = el()
+            .key("more")
+            .role("note")
+            .label(label.clone())
+            .w_full()
+            .child(self.with_reveal(text(label)).font(s.code_block).color(s.muted).w_full().a11y_hidden());
         let all_hl = self.text_highlights_for(&inl.text, Some(map));
         let ink = flow.ink.unwrap_or(s.text);
         let mut card = col()
@@ -784,8 +787,22 @@ impl Renderer {
             let max_end = (start + CHUNK_CAP).min(full.len());
             let end = if max_end == full.len() {
                 full.len()
+            } else if let Some(rel_nl) = full.as_bytes()[start..max_end].iter().rposition(|&b| b == b'\n') {
+                start + rel_nl
             } else {
-                full[start..max_end].rfind('\n').map_or(max_end, |d| start + d)
+                let mut boundary = max_end;
+                while boundary > start && !full.is_char_boundary(boundary) {
+                    boundary -= 1;
+                }
+                if boundary > start {
+                    boundary
+                } else {
+                    let mut fwd = max_end + 1;
+                    while fwd < full.len() && !full.is_char_boundary(fwd) {
+                        fwd += 1;
+                    }
+                    fwd
+                }
             };
             let slice = &full[start..end];
             let chunk_hl: Vec<TextHighlight> = all_hl
@@ -803,7 +820,7 @@ impl Renderer {
                     self.with_reveal(tabbed(slice, Vec::new(), chunk_hl, s.code_block).font(s.code_block).color(ink).wrap())
                         .w_full()
                         .copy_prefix(pad.clone())
-                        .copy_breaks(1, if is_last { 2 } else { 1 }),
+                        .copy_breaks(if chunk_idx == 0 { 2 } else { 1 }, if is_last { 2 } else { 1 }),
                 )
                 .key(format!("c{chunk_idx}"));
             card = card.child(node);

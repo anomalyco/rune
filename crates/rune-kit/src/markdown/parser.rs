@@ -104,7 +104,7 @@ impl BlockMap {
 pub(super) struct Builder {
     /// Open containers: (kind, blocks so far, maps so far).
     stack: Vec<(Container, Vec<Block>, Vec<BlockMap>)>,
-    quote_nested: Vec<bool>,
+    quote_slots: Vec<QuoteSlot>,
     list_slots: Vec<ListSlot>,
     past_bound_items: usize,
     inline: Option<(InlineKind, Inline, Vec<Open>, SpanMap)>,
@@ -216,6 +216,12 @@ enum ListSlot {
     SiblingItems,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum QuoteSlot {
+    Nested,
+    Merged { stack_len: usize, list_slots_len: usize },
+}
+
 enum Container {
     Root,
     Quote,
@@ -271,6 +277,28 @@ impl Builder {
         } else {
             self.push(block, bmap);
         }
+    }
+
+    fn first_merged_quote(&self) -> Option<(usize, usize, usize)> {
+        self.quote_slots.iter().enumerate().find_map(|(i, q)| match *q {
+            QuoteSlot::Merged { stack_len, list_slots_len } => Some((i, stack_len, list_slots_len)),
+            QuoteSlot::Nested => None,
+        })
+    }
+
+    fn unwind_merged_quote(&mut self, q_idx: usize, stack_len: usize, list_slots_len: usize) -> usize {
+        self.flush_inline();
+        while self.stack.len() > stack_len {
+            if matches!(self.stack.last(), Some((Container::List(_, items, _), _, _)) if items.is_empty()) {
+                self.stack.pop();
+            } else {
+                self.pop_container();
+            }
+        }
+        self.list_slots.truncate(list_slots_len);
+        let open = self.quote_slots.len() - q_idx;
+        self.quote_slots.truncate(q_idx);
+        open
     }
 
     fn push(&mut self, b: Block, map: BlockMap) {
@@ -600,7 +628,7 @@ enum SkipMode {
 pub(super) fn parse_doc_tail(src: &str, autolink: bool) -> (ParsedDoc, Tail) {
     let mut b = Builder {
         stack: vec![(Container::Root, Vec::new(), Vec::new())],
-        quote_nested: Vec::new(),
+        quote_slots: Vec::new(),
         list_slots: Vec::new(),
         past_bound_items: 0,
         inline: None,
@@ -668,21 +696,19 @@ pub(super) fn parse_doc_tail(src: &str, autolink: bool) -> (ParsedDoc, Tail) {
             &ev,
             Event::Start(Tag::Paragraph | Tag::Heading { .. } | Tag::CodeBlock(_) | Tag::Table(_))
         ) && b.code.is_none()
-            && !b.list_slots.contains(&ListSlot::SiblingItems)
-            && b.quote_nested.last() == Some(&false)
+            && let Some((q_idx, stack_len, list_slots_len)) = b.first_merged_quote()
         {
-            b.past_bound_items += 1;
-            if b.past_bound_items > MAX_FLATTENED_TAIL_ITEMS {
-                b.flush_inline();
-                let mut open = 0usize;
-                while b.quote_nested.last() == Some(&false) {
-                    b.quote_nested.pop();
-                    open += 1;
+            let in_fresh_item = matches!(b.stack.last(), Some((Container::Item(_), blocks, _)) if blocks.is_empty())
+                && b.inline.is_none();
+            if !in_fresh_item {
+                b.past_bound_items += 1;
+                if b.past_bound_items > MAX_FLATTENED_TAIL_ITEMS {
+                    let open = b.unwind_merged_quote(q_idx, stack_len, list_slots_len);
+                    let cs = src[..range.start].rfind('\n').map_or(0, |i| i + 1);
+                    skip = Some(SkipMode::ExtraQuotes { start: cs, open });
+                    b.tail = Tail::None;
+                    continue;
                 }
-                let cs = src[..range.start].rfind('\n').map_or(0, |i| i + 1);
-                skip = Some(SkipMode::ExtraQuotes { start: cs, open });
-                b.tail = Tail::None;
-                continue;
             }
         }
         b.tail = match &ev {
@@ -732,10 +758,10 @@ pub(super) fn parse_doc_tail(src: &str, autolink: bool) -> (ParsedDoc, Tail) {
                 Tag::BlockQuote(_) => {
                     b.flush_inline();
                     if b.depth() + 2 <= MAX_ELEMENT_DEPTH && b.layout_fits(2) {
-                        b.quote_nested.push(true);
+                        b.quote_slots.push(QuoteSlot::Nested);
                         b.stack.push((Container::Quote, Vec::new(), Vec::new()));
                     } else {
-                        b.quote_nested.push(false);
+                        b.quote_slots.push(QuoteSlot::Merged { stack_len: b.stack.len(), list_slots_len: b.list_slots.len() });
                     }
                 }
                 Tag::List(start) => {
@@ -754,16 +780,20 @@ pub(super) fn parse_doc_tail(src: &str, autolink: bool) -> (ParsedDoc, Tail) {
                     if matches!(b.stack.last(), Some((Container::Item(_), _, _))) {
                         b.pop_container();
                     }
-                    if b.list_slots.contains(&ListSlot::SiblingItems) {
+                    let merged_quote = b.first_merged_quote();
+                    if merged_quote.is_some() || b.list_slots.contains(&ListSlot::SiblingItems) {
                         b.past_bound_items += 1;
                         if b.past_bound_items > MAX_FLATTENED_TAIL_ITEMS {
-                            let mut open = 0usize;
-                            while b.list_slots.last() == Some(&ListSlot::SiblingItems) {
-                                b.list_slots.pop();
-                                open += 1;
-                            }
                             let cs = src[..range.start].rfind('\n').map_or(0, |i| i + 1);
-                            skip = Some(SkipMode::SiblingLists { start: cs, open });
+                            skip = Some(if let Some((q_idx, stack_len, list_slots_len)) = merged_quote {
+                                let open = b.unwind_merged_quote(q_idx, stack_len, list_slots_len);
+                                SkipMode::ExtraQuotes { start: cs, open }
+                            } else {
+                                let first_sib = b.list_slots.iter().position(|s| *s == ListSlot::SiblingItems).unwrap();
+                                let open = b.list_slots.len() - first_sib;
+                                b.list_slots.truncate(first_sib);
+                                SkipMode::SiblingLists { start: cs, open }
+                            });
                             b.tail = Tail::None;
                             continue;
                         }
@@ -832,11 +862,11 @@ pub(super) fn parse_doc_tail(src: &str, autolink: bool) -> (ParsedDoc, Tail) {
                     }
                 }
                 TagEnd::BlockQuote(_) => {
-                    if b.quote_nested.pop().unwrap_or(false) {
+                    if matches!(b.quote_slots.pop(), Some(QuoteSlot::Nested)) {
                         b.pop_container();
                     } else {
                         b.flush_inline();
-                        if !b.quote_nested.contains(&false) && !b.list_slots.contains(&ListSlot::SiblingItems) {
+                        if b.first_merged_quote().is_none() && !b.list_slots.contains(&ListSlot::SiblingItems) {
                             b.past_bound_items = 0;
                         }
                     }
@@ -856,7 +886,7 @@ pub(super) fn parse_doc_tail(src: &str, autolink: bool) -> (ParsedDoc, Tail) {
                     }
                     ListSlot::SiblingItems => {
                         b.flush_inline();
-                        if !b.list_slots.contains(&ListSlot::SiblingItems) && !b.quote_nested.contains(&false) {
+                        if !b.list_slots.contains(&ListSlot::SiblingItems) && b.first_merged_quote().is_none() {
                             b.past_bound_items = 0;
                         }
                     }

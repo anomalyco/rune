@@ -111,8 +111,8 @@ fn extend_eof_deep_tail(base: &Parsed, base_len: usize, src: &str) -> Option<Par
     while pos < bytes.len() {
         if let Some(rel_nl) = bytes[pos..].iter().position(|&b| b == b'\n') {
             let nl = pos + rel_nl;
-            let (cols, blank, fence) = super::parser::line_indent_cols(&bytes[pos..nl]);
-            if !blank && (fence || cols < min_cols) {
+            let (cols, _, fence) = super::parser::line_indent_cols(&bytes[pos..nl]);
+            if fence || cols < min_cols {
                 return None;
             }
             pos = nl + 1;
@@ -180,7 +180,7 @@ fn cached(c: &mut Cache, src: &str, parse: fn(&str, bool) -> ParsedDoc, streamin
     }
     let key: Rc<str> = src.into();
     // Parsed text is about as long as its source, plus each block's bookkeeping.
-    let bytes = 2 * src.len().min(128 * 1024) + 64 * parsed.cuts.len() + 128;
+    let bytes = 2 * src.len() + 64 * parsed.cuts.len() + 128;
     c.docs.insert(key.clone(), parsed.clone(), bytes);
     c.last = Some(key);
     parsed.doc
