@@ -33,15 +33,26 @@ impl Presented {
     /// the running display link's next tick; `rests`: the window may rest on this frame (shown,
     /// and no trace counting frames). A frame that left work for the next one doesn't settle:
     /// a compositor may update or invalidate the state while it draws.
+    #[inline(always)]
     pub(super) fn settle<S: 'static>(this: &mut Option<Self>, rt: &Runtime<S>, config: &wgpu::SurfaceConfiguration,
         moving: bool, next_tick: Option<crate::time::Instant>, rests: bool, composed: bool) -> bool {
+        Self::settle_core(this, rt.core(), config, moving, next_tick, rests, composed)
+    }
+
+    fn settle_core(this: &mut Option<Self>, rt: &crate::runtime::RuntimeCore, config: &wgpu::SurfaceConfiguration,
+        moving: bool, next_tick: Option<crate::time::Instant>, rests: bool, composed: bool) -> bool {
         let idle = !(moving || rt.stale() || rt.live_pending() || rt.window_frame.is_some()
-            || super::timer_wants_frame(rt, next_tick));
-        if idle && rests { Self::record(this, rt, config, composed) } else { *this = None }
+            || super::pacing::timer_wants_frame_core(rt, next_tick));
+        if idle && rests { Self::record_core(this, rt, config, composed) } else { *this = None }
         idle
     }
 
+    #[inline(always)]
     pub(crate) fn record<S: 'static>(this: &mut Option<Self>, rt: &Runtime<S>, config: &wgpu::SurfaceConfiguration, composed: bool) {
+        Self::record_core(this, rt.core(), config, composed);
+    }
+
+    fn record_core(this: &mut Option<Self>, rt: &crate::runtime::RuntimeCore, config: &wgpu::SurfaceConfiguration, composed: bool) {
         let (clear, size, srgb, scale, transparent) = (rt.clear_color(), (config.width, config.height), rt.srgb_blend(), rt.env.scale, rt.transparent);
         let p = this.get_or_insert_with(|| Self {
             instances: Vec::new(), clear, size, format: config.format, srgb, scale, transparent, composed,
@@ -53,16 +64,28 @@ impl Presented {
     /// Whether a timer frame `rt` built before taking a drawable can go without one: nothing
     /// moves or waits, no timer wants the display link's next tick (`next_tick`), and it draws
     /// what this frame did.
+    #[inline(always)]
     pub(crate) fn unchanged<S: 'static>(&self, rt: &Runtime<S>, config: &wgpu::SurfaceConfiguration, animating: bool,
         next_tick: Option<crate::time::Instant>) -> bool {
+        self.unchanged_core(rt.core(), config, animating, next_tick)
+    }
+
+    fn unchanged_core(&self, rt: &crate::runtime::RuntimeCore, config: &wgpu::SurfaceConfiguration, animating: bool,
+        next_tick: Option<crate::time::Instant>) -> bool {
         !animating && !rt.has_pending_input() && !rt.live_pending() && rt.window_frame.is_none()
-            && !super::timer_wants_frame(rt, next_tick) && self.same(rt, config)
+            && !super::pacing::timer_wants_frame_core(rt, next_tick) && self.same_core(rt, config)
     }
 
     /// Whether `rt`'s built frame draws what this one did: the same instances into the same
     /// surface, with no glyph or image upload waiting, and nothing drawn outside the instances
     /// (a compositor, `SurfaceDraw` content, native materials).
+    #[cfg(test)]
+    #[inline(always)]
     pub(super) fn same<S: 'static>(&self, rt: &Runtime<S>, config: &wgpu::SurfaceConfiguration) -> bool {
+        self.same_core(rt.core(), config)
+    }
+
+    fn same_core(&self, rt: &crate::runtime::RuntimeCore, config: &wgpu::SurfaceConfiguration) -> bool {
         let atlas = &rt.text.atlas;
         !self.composed && self.size == (config.width, config.height) && self.format == config.format && self.srgb == rt.srgb_blend()
             && self.scale == rt.env.scale && self.clear == rt.clear_color() && self.transparent == rt.transparent

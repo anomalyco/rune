@@ -22,7 +22,7 @@ pub(crate) struct PrimarySelection {
     pub(crate) paste: Option<String>,
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// The primary button came up.
     pub(super) fn primary_released(&mut self) {
         self.primary.pending = true;
@@ -30,12 +30,12 @@ impl<S: 'static> Runtime<S> {
 
     /// After a frame's handlers, once the release's caret and selection landed: puts what's
     /// selected on the primary selection, if it changed.
-    pub(super) fn note_primary_selection(&mut self) {
+    pub(super) fn note_primary_selection(&mut self, app: &dyn ViewDriver) {
         if !std::mem::take(&mut self.primary.pending) { return; }
         let text = match self.focused_input() {
             Some(input) if input.edit.is_secure() => None,
             Some(input) => Some(input.edit.selected().to_owned()).filter(|t| !t.is_empty()),
-            None => self.selected_text(),
+            None => self.selected_text(app),
         };
         let Some(text) = text else { return };
         let hash = std::hash::BuildHasherDefault::<std::hash::DefaultHasher>::default().hash_one(&text);

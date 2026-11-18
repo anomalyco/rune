@@ -34,7 +34,7 @@ struct ListPlan {
     built_rows: Vec<(usize, El)>,
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// Whether a commit that resized nothing and changed nothing the view reads
     /// ([`Runtime::commit_kind`]) only shifts or fills `virtual_rows` windows, so `view` and
     /// already mounted subtrees need not rebuild.
@@ -146,7 +146,7 @@ fn build_indexed_row(
     row
 }
 
-impl<S: 'static> Measurement<'_, S> {
+impl Measurement<'_> {
     pub(in crate::runtime) fn remount_virtuals(mut self) -> RemountOutcome {
         self.virtual_culled.clear();
         self.virtual_inputs.clear();
@@ -264,7 +264,7 @@ impl<S: 'static> Measurement<'_, S> {
             self.layout_seen.clone(),
         );
         let view_time = crate::frame::profile::Scope::new(crate::frame::profile::Phase::View);
-        let state = playground_host::handler_states_ref(self.state, self.playground);
+        let state = self.app.states_ref();
         let mut nested_virtual = false;
         for plan in &mut plans {
             let v = self.virtuals.get_mut(&plan.path).unwrap();
@@ -550,6 +550,7 @@ impl<S: 'static> Runtime<S> {
     /// Runs one remount pass on its own and says whether it fell back, so a test can read what
     /// the fallback left in the lists before the full rebuild that follows it fills them again.
     pub(in crate::runtime) fn remount_falls_back(&mut self) -> bool {
-        matches!(self.measurement(true).remount_virtuals(), RemountOutcome::Fallback)
+        let (core, app) = self.split_mut();
+        matches!(core.measurement(&app, true).remount_virtuals(), RemountOutcome::Fallback)
     }
 }

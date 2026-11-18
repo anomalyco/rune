@@ -94,11 +94,17 @@ impl Trace {
         *self.ids.entry(key.to_owned()).or_insert(next)
     }
 
+    #[inline(always)]
     pub(crate) fn frame<S>(&mut self, rt: &mut Runtime<S>, t_ms: f64, cpu_ms: f64) {
-        self.frame_timed(rt, t_ms, cpu_ms, FrameTiming::default());
+        self.frame_timed_core(rt.core_mut(), t_ms, cpu_ms, FrameTiming::default());
     }
 
+    #[inline(always)]
     pub(crate) fn frame_timed<S>(&mut self, rt: &mut Runtime<S>, t_ms: f64, cpu_ms: f64, timing: FrameTiming) {
+        self.frame_timed_core(rt.core_mut(), t_ms, cpu_ms, timing);
+    }
+
+    fn frame_timed_core(&mut self, rt: &mut crate::runtime::RuntimeCore, t_ms: f64, cpu_ms: f64, timing: FrameTiming) {
         let els = rt.elements();
         let settled = rt.settled;
         let mut metas = Vec::new();
@@ -295,7 +301,12 @@ impl Drop for Trace {
     }
 }
 
+#[inline(always)]
 pub(crate) fn tree_json<S>(rt: &Runtime<S>, real_t: f64) -> Value {
+    tree_json_core(rt.core(), real_t)
+}
+
+fn tree_json_core(rt: &crate::runtime::RuntimeCore, real_t: f64) -> Value {
     let videos = rt.videos();
     let els: Vec<Value> = rt
         .elements()

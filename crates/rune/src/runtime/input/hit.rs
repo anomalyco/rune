@@ -2,7 +2,7 @@
 //! registration.
 use super::*;
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// Node `i`'s edges as drawn this frame (points, x0 y0 x1 y1), or its layout box before
     /// it draws.
     pub(super) fn drawn_edges(&self, i: usize) -> [f32; 4] {

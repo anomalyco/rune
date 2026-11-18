@@ -203,7 +203,7 @@ impl EdgeScroll {
 /// Points a second for a pointer `past` points beyond the edge.
 fn speed(past: f32) -> f32 { (RATE * past.max(MIN_PAST)).min(MAX_SPEED) }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// The held pointer moved to height `y`: step while it's at or past an edge the selection's
     /// viewport can still scroll past, and stop when it isn't.
     pub(in crate::runtime) fn edge_scroll_moved(&mut self, y: f32) {
@@ -229,33 +229,33 @@ impl<S: 'static> Runtime<S> {
     /// layout, and what changed is heard. True when the selection changed, so the frame paints
     /// again. Resting at the end of a list instead, it hears whether this layout changed the
     /// list's extent.
-    pub(in crate::runtime) fn laid_edge_scroll(&mut self) -> bool {
-        if !matches!(self.selectable.edge.state, State::Laying { .. }) { return self.edge_scroll_extent(); }
-        let changed = self.edge_step_heard(Event::Laid);
+    pub(in crate::runtime) fn laid_edge_scroll(&mut self, app: &dyn ViewDriver) -> bool {
+        if !matches!(self.selectable.edge.state, State::Laying { .. }) { return self.edge_scroll_extent(app); }
+        let changed = self.edge_step_heard(app, Event::Laid);
         // A step that reached the end, when this layout changed the extent it saw.
-        self.edge_scroll_extent() | changed
+        self.edge_scroll_extent(app) | changed
     }
 
     /// A press resting at the end of a list hears that this frame's layout changed the list's
     /// extent (rows arrived at its end, or left): it goes on scrolling if it now can, or the
     /// selection follows the pointer over what came in. True when the selection changed.
-    fn edge_scroll_extent(&mut self) -> bool {
+    fn edge_scroll_extent(&mut self, app: &dyn ViewDriver) -> bool {
         let State::AtEnd { scroll, max } = self.selectable.edge.state else { return false };
         if self.scrolls.get(&scroll).is_some_and(|st| st.max == max) { return false; }
         let edge = self.pointer.and_then(|(_, y)| self.edge_at(y));
-        self.edge_step_heard(Event::Extent { now: self.clock, edge })
+        self.edge_step_heard(app, Event::Extent { now: self.clock, edge })
     }
 
     /// Steps the edge scroll after a layout and carries out what it asks for; what that changed
     /// in the selection is heard. True when it changed, so the frame paints again.
-    fn edge_step_heard(&mut self, event: Event) -> bool {
+    fn edge_step_heard(&mut self, app: &dyn ViewDriver, event: Event) -> bool {
         let ends = |rt: &Self| rt.selectable.phase.selection().map(|s| (s.anchor, s.focus, s.far.as_ref().map(|f| f.path.clone())));
         let before = ends(self);
         let effects = self.selectable.edge.step(event);
         self.carry_edge_scroll(effects);
         let changed = ends(self) != before;
         if changed {
-            let heard = self.selection_changes();
+            let heard = self.selection_changes(app);
             self.queue.extend(heard);
         }
         changed

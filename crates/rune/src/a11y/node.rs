@@ -13,7 +13,7 @@ use crate::el::Checked;
 /// Text named from an element's content stops here.
 const NAME_MAX: usize = 400;
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// Node `i`'s role in the tree, or `None` when it joins its parent.
     pub(crate) fn a11y_role(&self, i: usize) -> Option<Role> {
         let n = &self.nodes[i];

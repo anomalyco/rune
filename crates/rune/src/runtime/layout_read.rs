@@ -211,6 +211,41 @@ pub(crate) fn seen_rect(rects: &LayoutRects, key: &str) -> Option<[f32; 4]> {
     rects.get(key).copied().flatten()
 }
 
+impl cx::CxCore {
+    #[track_caller]
+    pub(crate) fn layout(&self, key: &str) -> Option<[f32; 4]> {
+        note_read_at(&mut self.layout_reads.borrow_mut(), key, None, Some(std::panic::Location::caller()));
+        let rect = seen_rect(&self.layout, key);
+        crate::memo::read_layout(key, rect);
+        rect
+    }
+
+    #[track_caller]
+    pub(crate) fn layout_with<T: PartialEq + 'static>(&self, key: &str, f: impl Fn([f32; 4]) -> T + 'static) -> Option<T> {
+        let rect = seen_rect(&self.layout, key);
+        let value = rect.map(&f);
+        let same = Same::new(f);
+        crate::memo::read_layout_with(key, &same, rect);
+        note_read_at(&mut self.layout_reads.borrow_mut(), key, Some(same), Some(std::panic::Location::caller()));
+        value
+    }
+
+    #[track_caller]
+    pub(crate) fn layout_size(&self, key: &str) -> Option<[f32; 2]> {
+        self.layout_with(key, size)
+    }
+
+    #[track_caller]
+    pub(crate) fn window_layout(&self, key: &str) -> Option<[f32; 4]> {
+        self.layout(&window_key(key))
+    }
+
+    #[track_caller]
+    pub(crate) fn window_layout_with<T: PartialEq + 'static>(&self, key: &str, f: impl Fn([f32; 4]) -> T + 'static) -> Option<T> {
+        self.layout_with(&window_key(key), f)
+    }
+}
+
 impl<S> Cx<S> {
     /// The laid-out rect `[x, y, w, h]` of the element keyed `key` (or named by a key path such
     /// as `"msg-42/body"`, as `Tx::fly_text` takes), or `None` when there is none. It is where
@@ -236,11 +271,9 @@ impl<S> Cx<S> {
     /// A view that uses only part of the rect should read that part with [`Self::layout_size`]
     /// or [`Self::layout_with`], which don't re-run it while the part it uses holds.
     #[track_caller]
+    #[inline(always)]
     pub fn layout(&self, key: &str) -> Option<[f32; 4]> {
-        note_read_at(&mut self.layout_reads.borrow_mut(), key, None, Some(std::panic::Location::caller()));
-        let rect = seen_rect(&self.layout, key);
-        crate::memo::read_layout(key, rect);
-        rect
+        self.core.layout(key)
     }
 
     /// `f` of the rect [`Self::layout`] returns, re-running the view only when `f` of the new
@@ -256,21 +289,18 @@ impl<S> Cx<S> {
     /// `fn` pointer, isn't zero-sized: it costs an allocation per read, and each read counts
     /// (and is checked) separately, so keep those out of loops.
     #[track_caller]
+    #[inline(always)]
     pub fn layout_with<T: PartialEq + 'static>(&self, key: &str, f: impl Fn([f32; 4]) -> T + 'static) -> Option<T> {
-        let rect = seen_rect(&self.layout, key);
-        let value = rect.map(&f);
-        let same = Same::new(f);
-        crate::memo::read_layout_with(key, &same, rect);
-        note_read_at(&mut self.layout_reads.borrow_mut(), key, Some(same), Some(std::panic::Location::caller()));
-        value
+        self.core.layout_with(key, f)
     }
 
     /// `[w, h]` of the rect [`Self::layout`] returns: [`Self::layout_with`] the size. Prefer it
     /// whenever the view uses only the size: it re-runs when the width or height changes, not
     /// when the element only moves.
     #[track_caller]
+    #[inline(always)]
     pub fn layout_size(&self, key: &str) -> Option<[f32; 2]> {
-        self.layout_with(key, size)
+        self.core.layout_size(key)
     }
 
     /// [`Self::layout`] where the window shows the element now, after its viewports' scrolling.
@@ -278,16 +308,18 @@ impl<S> Cx<S> {
     /// point, so every frame of a scroll: read it only for what has to follow the scroll, and
     /// prefer [`Self::window_layout_with`] for a value that changes less often.
     #[track_caller]
+    #[inline(always)]
     pub fn window_layout(&self, key: &str) -> Option<[f32; 4]> {
-        self.layout(&window_key(key))
+        self.core.window_layout(key)
     }
 
     /// [`Self::layout_with`] of the rect [`Self::window_layout`] returns:
     /// `window_layout_with("r1", |r| r[1] < 0.0)` re-runs a header on the frames row 1 scrolls
     /// past the top of the window, not on every frame of the scroll.
     #[track_caller]
+    #[inline(always)]
     pub fn window_layout_with<T: PartialEq + 'static>(&self, key: &str, f: impl Fn([f32; 4]) -> T + 'static) -> Option<T> {
-        self.layout_with(&window_key(key), f)
+        self.core.window_layout_with(key, f)
     }
 }
 
@@ -320,7 +352,7 @@ pub(crate) fn moved(a: Option<[f32; 4]>, b: Option<[f32; 4]>) -> bool {
     }
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// Node `i`'s laid-out rect `[x, y, w, h]` in window points, after its viewports' scrolling.
     fn laid_out(&self, nodes: &[Node], i: usize) -> [f32; 4] {
         self.placed(nodes, i, true)
@@ -451,7 +483,7 @@ impl<S: 'static> Runtime<S> {
     /// the reads matching the final layout so a view that can't settle doesn't loop. Keys no
     /// pass read any more go only at the end, so one read behind a gate the next pass opens
     /// keeps its rect.
-    pub(super) fn settle_layout_reads(&mut self, mut measured: Measured, tx: &Tx) -> Measured {
+    pub(super) fn settle_layout_reads(&mut self, app: &dyn ViewDriver, mut measured: Measured, tx: &Tx) -> Measured {
         if measured.layout_reads.is_empty() {
             self.layout_seen = LayoutSeen::default();
             return measured;
@@ -463,7 +495,7 @@ impl<S: 'static> Runtime<S> {
                 break;
             }
             self.discard_measured(measured);
-            measured = self.measure(tx);
+            measured = self.measure(app, tx);
         }
         if !settled { self.layout_moved(Some(std::mem::take(&mut measured.layout_reads)), Some((&measured.nodes, &measured.selection)), true); }
         let LayoutSeen { rects, reads } = &mut self.layout_seen;

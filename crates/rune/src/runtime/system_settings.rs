@@ -20,7 +20,7 @@ impl Default for ScrollBarHost {
     }
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     pub fn set_system_dark(&mut self, dark: bool) {
         if dark != self.env.system_dark {
             self.env.system_dark = dark;

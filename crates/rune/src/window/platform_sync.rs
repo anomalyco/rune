@@ -5,7 +5,13 @@ use super::Win;
 
 /// What a built frame hands the window besides its pixels: secure input, the IME, the cursor,
 /// help tags and the clipboard.
+#[inline(always)]
 pub(super) fn sync_platform<S: 'static>(l: &mut Win, rt: &mut Runtime<S>, secure_input: &mut crate::input::secure_input::SecureInput,
+    ime: &mut bool, clipboard: &crate::clipboard::Client) {
+    sync_platform_core(l, rt.core_mut(), secure_input, ime, clipboard);
+}
+
+fn sync_platform_core(l: &mut Win, rt: &mut crate::runtime::RuntimeCore, secure_input: &mut crate::input::secure_input::SecureInput,
     ime: &mut bool, clipboard: &crate::clipboard::Client) {
     let focused = l.window.has_focus();
     secure_input.set(rt.has_secure_focus() && focused);
@@ -29,7 +35,7 @@ pub(super) fn sync_platform<S: 'static>(l: &mut Win, rt: &mut Runtime<S>, secure
             l.window.set_option_as_alt(want);
         }
     }
-    l.apply_cursor(rt, focused);
+    l.apply_cursor_core(rt, focused);
     #[cfg(target_os = "macos")]
     if rt.zoom() == 1.0 {
         l.native.help.sync(&l.window, rt.help_regions());
@@ -41,7 +47,7 @@ pub(super) fn sync_platform<S: 'static>(l: &mut Win, rt: &mut Runtime<S>, secure
     // The process has one menu theme: the active window's, so its window menu matches it.
     #[cfg(target_os = "windows")]
     if focused { crate::platform::win32::dark_mode::menus(rt.backdrop_dark().unwrap_or(rt.env.system_dark)); }
-    clipboard.flush(rt);
+    clipboard.flush_core(rt);
     // The focused field's text, for the input method to convert again or read around the caret.
     crate::platform::ime::sync(&l.window, if ime_allowed { rt.ime_text() } else { None });
     if let Some(a) = rt.ime_area.map(|a| rt.to_window(a)) {
@@ -55,7 +61,12 @@ pub(super) fn sync_platform<S: 'static>(l: &mut Win, rt: &mut Runtime<S>, secure
 impl Win {
     /// The runtime's cursor while the pointer is in the window, the arrow once it leaves.
     /// `Hidden` needs focus, so it can't outlive the window being active.
+    #[inline(always)]
     pub(super) fn apply_cursor<S>(&mut self, rt: &Runtime<S>, focused: bool) {
+        self.apply_cursor_core(rt.core(), focused);
+    }
+
+    fn apply_cursor_core(&mut self, rt: &crate::runtime::RuntimeCore, focused: bool) {
         let want = match rt.cursor() { crate::el::Cursor::Hidden if !focused => crate::el::Cursor::Default, c => c };
         self.cursor.apply(&self.window, want, rt.pointer().is_some());
     }

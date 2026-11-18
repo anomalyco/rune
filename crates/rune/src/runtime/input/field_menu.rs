@@ -21,10 +21,10 @@ pub(crate) struct FieldMenu {
     languages: Option<(Vec<String>, crate::el::LanguagesFn)>,
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// Opens field `path`'s menu at window point `at`, pressed at `local` in the field (points
     /// from its text's top-left), or from the keyboard (`None`).
-    pub(super) fn field_menu(&mut self, path: String, at: (f32, f32), local: Option<(f32, f32)>, one: &mut Tx) -> bool {
+    pub(super) fn field_menu(&mut self, app: &mut dyn AppDriver, path: String, at: (f32, f32), local: Option<(f32, f32)>, one: &mut Tx) -> bool {
         let Some(i) = self.live(&path) else { return false };
         let Some(input) = self.nodes[i].input.as_deref() else { return false };
         let Some(access) = input.access.clone() else { return false };
@@ -36,9 +36,9 @@ impl<S: 'static> Runtime<S> {
         let toggle = std::iter::successors(Some(i), |&j| self.nodes[j].parent).find_map(|j| self.nodes[j].handlers.on_spellcheck.clone());
         let keep = std::iter::successors(Some(i), |&j| self.nodes[j].parent).find_map(|j| self.nodes[j].handlers.on_spellcheck_languages.clone());
         if self.focus.path() != Some(path.as_str()) {
-            self.set_focus(Some(path.clone()), false);
+            self.set_focus(app, Some(path.clone()), false);
         }
-        let e = access(states!(self));
+        let e = access(app.states());
         e.set_single_line(single);
         if let (Some((x, y)), Some(l)) = (local, layout.as_ref().map(TextLayout::view))
             && e.preedit().is_none()
@@ -114,9 +114,9 @@ impl<S: 'static> Runtime<S> {
     }
 
     /// Does what `picked` in field menu `menu` asks, on its field.
-    pub(super) fn field_menu_pick(&mut self, menu: FieldMenu, picked: &str, one: &mut Tx) {
+    pub(super) fn field_menu_pick(&mut self, app: &mut dyn AppDriver, menu: FieldMenu, picked: &str, one: &mut Tx) {
         if self.focus.path() != Some(menu.path.as_str()) && self.live(&menu.path).is_some() {
-            self.set_focus(Some(menu.path.clone()), false);
+            self.set_focus(app, Some(menu.path.clone()), false);
         }
         let command = |c| KeyEvent { key: Key::Command(c), mods: Mods { cmd: true, ctrl: !cfg!(target_os = "macos"), ..Mods::default() } };
         match picked {
@@ -127,7 +127,7 @@ impl<S: 'static> Runtime<S> {
                     _ => 'a',
                 });
                 let layout = self.focused_layout();
-                self.with_focused(|e| e.key_in(&ev, layout.as_ref().map(TextLayout::view)), one);
+                self.with_focused(app, |e| e.key_in(&ev, layout.as_ref().map(TextLayout::view)), one);
             }
             "paste" => one.request_paste(),
             "learn-spelling" => {
@@ -138,7 +138,7 @@ impl<S: 'static> Runtime<S> {
             }
             "spellcheck" => {
                 if let Some((on, f)) = menu.toggle {
-                    f(states!(self), !on, one);
+                    f(app.states(), !on, one);
                 }
             }
             id if id.starts_with("language-") => {
@@ -148,7 +148,7 @@ impl<S: 'static> Runtime<S> {
                         None => current.push(tag.to_owned()),
                     }
                     crate::spell::set_languages(&current);
-                    keep(states!(self), current, one);
+                    keep(app.states(), current, one);
                     self.dirty = true;
                 }
             }
@@ -156,6 +156,7 @@ impl<S: 'static> Runtime<S> {
                 let n = id.strip_prefix("suggestion-").and_then(|n| n.parse::<usize>().ok());
                 if let (Some((a, b, _)), Some(suggestion)) = (menu.word, n.and_then(|n| menu.suggestions.get(n).cloned())) {
                     self.with_focused(
+                        app,
                         |e| {
                             e.set_selection(a, b);
                             e.paste(&suggestion)

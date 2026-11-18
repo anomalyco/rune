@@ -26,10 +26,10 @@ pub(super) enum Activation {
     Held { physical: Option<PhysicalKeyCode>, key: Option<crate::Key>, focus: Option<String> },
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// Queue physical input without a logical fallback (also useful for headless drivers).
     /// A modifier key still gets its `Key::Modifier` when modifier keys are on.
-    pub fn physical_input(&mut self, event: PhysicalInput) {
+    pub(crate) fn physical_input(&mut self, event: PhysicalInput) {
         self.observe_mods(&event);
         if self.cancel_drag_key(&event) { return; }
         if matches!(event, PhysicalInput::Key { pressed: true, .. }) && self.autoscroll_key() { return; }
@@ -52,23 +52,23 @@ impl<S: 'static> Runtime<S> {
     }
     /// Queue a key press with its physical code and logical key, as a native host sends them
     /// (a script's `{"type": "key", "code": …}`), and its `Tx::key_base`.
-    pub(crate) fn physical_key_input(&mut self, event: PhysicalInput, key: KeyEvent, base: Option<char>) {
+    pub(crate) fn physical_key_input(&mut self, app: &mut dyn AppDriver, event: PhysicalInput, key: KeyEvent, base: Option<char>) {
         self.observe_mods(&event);
-        self.physical_then(event, Some(key), base, None);
+        self.physical_then(app, event, Some(key), base, None);
     }
     /// Return whether the native host needs to request a frame for this event.
     #[cfg_attr(any(target_os = "windows", target_os = "ios", target_os = "android"), allow(dead_code))]
-    pub(crate) fn physical_with_fallback(&mut self, event: PhysicalInput, key: Option<KeyEvent>) -> bool {
-        self.physical_then(event, key, None, None)
+    pub(crate) fn physical_with_fallback(&mut self, app: &mut dyn AppDriver, event: PhysicalInput, key: Option<KeyEvent>) -> bool {
+        self.physical_then(app, event, key, None, None)
     }
     /// `physical_with_fallback`, with the key's unmodified character (`Tx::key_base`), and
     /// `unhandled` happens when no handler takes the logical key.
-    pub(crate) fn physical_then(&mut self, event: PhysicalInput, key: Option<KeyEvent>, base: Option<char>, unhandled: Option<Unhandled>) -> bool {
+    pub(crate) fn physical_then(&mut self, app: &mut dyn AppDriver, event: PhysicalInput, key: Option<KeyEvent>, base: Option<char>, unhandled: Option<Unhandled>) -> bool {
         if self.cancel_drag_key(&event) { return true; }
         // A key ends a middle-click autoscroll, and does nothing else.
         if matches!(event, PhysicalInput::Key { pressed: true, .. }) && self.autoscroll_key() { return true; }
         if key.is_none() && matches!(event, PhysicalInput::Modifiers(_) | PhysicalInput::Key { pressed: false, .. }) {
-            return self.physical_observation(event);
+            return self.physical_observation(app, event);
         }
         if !matches!(event, PhysicalInput::Key { pressed: false, .. }) { self.dismiss_help(); }
         self.queue.push(Action::Physical(event, key.map(|key| Fallback { key, base, unhandled })));
@@ -77,7 +77,7 @@ impl<S: 'static> Runtime<S> {
     /// Modifier/release events have no logical action. When input is already queued,
     /// its requested frame will process this observation in order after clicks/keys.
     /// At rest, only a consuming handler invalidates the view and requests a frame.
-    pub(crate) fn physical_observation(&mut self, event: PhysicalInput) -> bool {
+    pub(crate) fn physical_observation(&mut self, app: &mut dyn AppDriver, event: PhysicalInput) -> bool {
         let busy = !self.queue.is_empty();
         self.observe_mods(&event);
         // The release of a modifier key the app hears needs a frame, in order like a press.
@@ -88,9 +88,9 @@ impl<S: 'static> Runtime<S> {
             return !busy;
         }
         let mut tx = Tx::default();
-        let consumed = self.dispatch_physical(event, None, &mut tx);
+        let consumed = self.dispatch_physical(app, event, None, &mut tx);
         let live_only = std::mem::take(&mut tx.live_only);
-        self.latch_requests(&mut tx);
+        self.latch_requests(app, &mut tx);
         merge(&mut self.pending, tx);
         if consumed && live_only {
             self.live_only_skips += 1;
@@ -118,7 +118,7 @@ impl<S: 'static> Runtime<S> {
         let same = match physical { Some(code) => *held == Some(code), None => held_key.as_ref() == key };
         same && focus.as_deref() != self.focus.path()
     }
-    pub(super) fn dispatch_physical(&mut self, event: PhysicalInput, fallback: Option<Fallback>, tx: &mut Tx) -> bool {
+    pub(super) fn dispatch_physical(&mut self, app: &mut dyn AppDriver, event: PhysicalInput, fallback: Option<Fallback>, tx: &mut Tx) -> bool {
         tx.by_keys = true;
         use crate::PhysicalKeyCode as Code;
         let is_mod = |c: Code| matches!(c, Code::ShiftLeft | Code::ShiftRight | Code::ControlLeft
@@ -127,11 +127,11 @@ impl<S: 'static> Runtime<S> {
         match event {
             PhysicalInput::Key { key, pressed: true, repeat, .. } => {
                 if self.held_gate(Some(key), fallback.as_ref().map(|f| &f.key.key), repeat) { return false; }
-                if !is_mod(key) { self.note_key_down(repeat); }
+                if !is_mod(key) { self.note_key_down(app, repeat); }
             }
             PhysicalInput::Key { key, pressed: false, .. } => {
                 if matches!(&self.held, Activation::Held { physical, .. } if *physical == Some(key)) { self.held = Activation::Up; }
-                if fallback.is_none() && !is_mod(key) && self.composing() {
+                if fallback.is_none() && !is_mod(key) && self.composing(app) {
                     self.key_releases.composing_release();
                 }
             }
@@ -145,16 +145,16 @@ impl<S: 'static> Runtime<S> {
         // Live-only when every handler that took the event said so (`Tx::live_only`).
         let mut live = None;
         // Ctrl+Shift's direction chord sees every key, whoever takes it.
-        let chord = self.direction_chord(&event, tx);
+        let chord = self.direction_chord(app, &event, tx);
         // It changes the field, so the view builds again whatever else is live-only.
         if chord { live = Some(false); }
-        let consumed = self.offer_physical(&event, tx, &mut live);
-        let modifier = self.modifier_dispatch(&event, consumed, tx, &mut live);
+        let consumed = self.offer_physical(app, &event, tx, &mut live);
+        let modifier = self.modifier_dispatch(app, &event, consumed, tx, &mut live);
         let ran = consumed || chord || modifier | match fallback {
             // A release's logical key, for `on_key_up`.
             Some(Fallback { key, base, .. }) if matches!(event, PhysicalInput::Key { pressed: false, .. }) => {
-                let mut one = Tx { physical_key: code, key_base: base, ..self.transaction() };
-                let ran = self.route_key_up(&key, &mut one);
+                let mut one = Tx { physical_key: code, key_base: base, ..self.transaction(app) };
+                let ran = self.route_key_up(app, &key, &mut one);
                 fold_live(&mut live, ran, &one);
                 merge(tx, one);
                 ran
@@ -166,8 +166,8 @@ impl<S: 'static> Runtime<S> {
                     self.paste_request = Some(self.paste_target());
                     false
                 } else {
-                    let mut one = Tx { physical_key: code, key_base: base, ..self.transaction() };
-                    let ran = self.route_key(&key, repeat, &mut one);
+                    let mut one = Tx { physical_key: code, key_base: base, ..self.transaction(app) };
+                    let ran = self.route_key(app, &key, repeat, &mut one);
                     // A held key repeats a menu item, as AppKit's own equivalents do, but closes once.
                     let unhandled = unhandled.filter(|u| !ran && (!repeat || matches!(u, Unhandled::Menu(_))));
                     let fell = unhandled.is_some();
@@ -185,41 +185,36 @@ impl<S: 'static> Runtime<S> {
             }
             None => false,
         };
-        let ran = self.dispatch_mods(tx, &mut live) || ran;
+        let ran = self.dispatch_mods(app, tx, &mut live) || ran;
         tx.live_only = ran && live == Some(true);
         ran
     }
     /// `App::on_modifiers`, when the held modifiers changed since it last heard them.
-    fn dispatch_mods(&mut self, tx: &mut Tx, live: &mut Option<bool>) -> bool {
-        let Some(f) = self.on_mods.filter(|_| self.held_mods != self.mods_heard) else { return false };
+    fn dispatch_mods(&mut self, app: &mut dyn AppDriver, tx: &mut Tx, live: &mut Option<bool>) -> bool {
+        if !app.has_on_mods() || self.held_mods == self.mods_heard { return false; }
         self.mods_heard = self.held_mods;
-        let mut one = self.transaction();
-        let state = match &mut self.playground {
-            Some(playground) => playground.key_state(&mut self.state),
-            None => Some(&mut self.state),
-        };
-        let Some(state) = state else { return false };
-        f(state, self.mods_heard, &mut one);
+        let mut one = self.transaction(app);
+        if !app.on_mods(self.mods_heard, &mut one) { return false; }
         fold_live(live, true, &one);
         merge(tx, one);
         true
     }
     /// The focused element's `on_physical_input` handler; true if it consumed `event`.
-    fn offer_physical(&mut self, event: &PhysicalInput, tx: &mut Tx, live: &mut Option<bool>) -> bool {
+    fn offer_physical(&mut self, app: &mut dyn AppDriver, event: &PhysicalInput, tx: &mut Tx, live: &mut Option<bool>) -> bool {
         let Some(handler) = self.focus.path().and_then(|p| self.node(p))
             .and_then(|n| n.focus.physical.clone()) else { return false };
-        let mut one = Tx { key_repeat: matches!(event, PhysicalInput::Key { repeat: true, .. }), ..self.transaction() };
-        let consumed = Tx::took(handler(states!(self), event, &mut one), &mut one);
+        let mut one = Tx { key_repeat: matches!(event, PhysicalInput::Key { repeat: true, .. }), ..self.transaction(app) };
+        let consumed = Tx::took(handler(app.states(), event, &mut one), &mut one);
         fold_live(live, consumed, &one);
         merge(tx, one);
         consumed
     }
     /// Focus moving off an element inside the window: its handler hears `FocusLost`, and
     /// modifier keys stay held.
-    pub(super) fn physical_focus_lost(&mut self) -> bool {
+    pub(super) fn physical_focus_lost(&mut self, app: &mut dyn AppDriver) -> bool {
         let mut tx = Tx::default();
-        let changed = self.offer_physical(&PhysicalInput::FocusLost, &mut tx, &mut None);
-        self.latch_requests(&mut tx);
+        let changed = self.offer_physical(app, &PhysicalInput::FocusLost, &mut tx, &mut None);
+        self.latch_requests(app, &mut tx);
         merge(&mut self.pending, tx);
         changed
     }

@@ -2,7 +2,7 @@
 
 use super::*;
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// Put `sans` and `mono` behind the `Family::Sans` and `Family::Mono` slots, as
     /// `Tx::set_font_families` does from a handler. Every runtime on this thread follows on its
     /// next frame (all of an app's windows and overlays), and windows opened later start in

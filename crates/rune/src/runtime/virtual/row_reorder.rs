@@ -62,7 +62,7 @@ pub(super) struct LiveRow {
     pub joins: bool,
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     pub(super) fn live_row(&self, row: &Node, reorder: &Reorder, ink: bool, joins: bool, list: &crate::el::virtual_list::VirtualList, range: &std::ops::Range<usize>) -> Option<(NodeId, LiveRow)> {
         let jump = reorder.jump(row.id);
         let shift = (jump != 0.0 || ink && self.grows.get(&row.id).is_some_and(|g| g.moving())).then_some(jump);

@@ -11,7 +11,7 @@
 //! it grows from its bottom instead, the header rising back to the top (`ride_from_end`).
 use super::*;
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// Row `j` of the commit's `nodes`, a fold shutting to `to` points: how many of its points
     /// sit above the header held stuck in it, and that header's path, when it keeps no more
     /// than that header shows.

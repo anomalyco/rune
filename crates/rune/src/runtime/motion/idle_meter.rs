@@ -1,7 +1,7 @@
 //! The runtime's side of `perf_warn`'s idle meters: what woke a frame, and what it drew.
 use super::*;
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// Before a frame's poll. `timer`: a due `wake_after` woke it, or a resting wake's poll
     /// stands for it; `live`: a live value did.
     #[inline(always)]

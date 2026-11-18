@@ -133,7 +133,7 @@ fn step(seq: &mut Seq, state: &mut State, event: Event) -> (bool, Effects<Effect
     }
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     fn autoscroll_step(&mut self, event: Event) -> bool {
         let a = &mut self.autoscroll;
         let (took, effects) = step(&mut a.seq, &mut a.state, event);

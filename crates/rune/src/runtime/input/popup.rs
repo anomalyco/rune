@@ -65,14 +65,14 @@ impl Popups {
     }
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// The pop-up menu showing, or the next to show, from [`Tx::popup_menu`].
-    pub fn popup_menu(&self) -> Option<&PopupMenu> { self.popups.front().map(|r| &r.menu) }
+    pub(crate) fn popup_menu(&self) -> Option<&PopupMenu> { self.popups.front().map(|r| &r.menu) }
 
     /// Answers the pop-up menu showing (or next to show) as if the user picked `picked`, or
     /// dismissed it with `None`. Its callback runs now and the next frame commits it, as for
     /// [`Runtime::update`]. For tests and headless drivers; native menus answer themselves.
-    pub fn resolve_popup(&mut self, picked: Option<&str>) -> Result<(), PopupMenuError> {
+    pub(crate) fn resolve_popup(&mut self, app: &mut dyn AppDriver, picked: Option<&str>) -> Result<(), PopupMenuError> {
         let request = self.popups.front().ok_or(PopupMenuError::NotOpen)?;
         if let Some(id) = picked {
             let item = request.menu.find(id).ok_or_else(|| PopupMenuError::UnknownItem(id.into()))?;
@@ -83,12 +83,12 @@ impl<S: 'static> Runtime<S> {
             Some(id) => self.trace_event(format_args!("popup-menu:pick:{id}")),
             None => self.trace_event("popup-menu:cancel"),
         }
-        let mut one = self.transaction();
+        let mut one = self.transaction(app);
         if let (Some(field), Some(id)) = (request.field, picked) {
-            self.field_menu_pick(*field, id, &mut one);
+            self.field_menu_pick(app, *field, id, &mut one);
         }
-        (request.on_pick)(states!(self), picked, &mut one);
-        self.latch_requests(&mut one);
+        (request.on_pick)(app.states(), picked, &mut one);
+        self.latch_requests(app, &mut one);
         merge(&mut self.pending, one);
         self.dirty = true;
         Ok(())
@@ -140,9 +140,9 @@ impl<S: 'static> Runtime<S> {
 
     /// Answers every waiting menu with `None`, as its window goes away. A callback that asks
     /// for another menu is answered too, up to a bound against one that always asks again.
-    pub(crate) fn cancel_popups(&mut self) {
+    pub(crate) fn cancel_popups(&mut self, app: &mut dyn AppDriver) {
         for _ in 0..64 {
-            if self.resolve_popup(None).is_err() { return; }
+            if self.resolve_popup(app, None).is_err() { return; }
         }
         eprintln!("rune: pop-up menu callbacks kept asking for menus while their window went away; dropping {}", self.popups.len());
         self.popups = Popups::default();
@@ -150,9 +150,9 @@ impl<S: 'static> Runtime<S> {
 
     /// A headless run's stand-in for the window's menu: the next menu opens and waits for
     /// [`Runtime::resolve_popup`], and one that can't open answers `None` now.
-    pub(crate) fn open_popup_headless(&mut self) {
+    pub(crate) fn open_popup_headless(&mut self, app: &mut dyn AppDriver) {
         while let Some(None) = self.take_popup() {
-            let _ = self.resolve_popup(None);
+            let _ = self.resolve_popup(app, None);
         }
     }
 

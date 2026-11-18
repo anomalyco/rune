@@ -2,7 +2,7 @@
 //! mask, per node index, from its stack's tracks.
 use super::*;
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     pub(in crate::runtime) fn growth_feather(&self, i: usize) -> f32 {
         let width = self.row_mask[i] * self.env.scale;
         if self.grows.get(&self.nodes[i].id).is_some_and(|g| g.linear_edge) { -width } else { width }

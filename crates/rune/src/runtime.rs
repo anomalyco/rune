@@ -35,14 +35,6 @@ use crate::text::{Deco, PaintedDeco, GlyphQuad, Ink, TextFlow, TextLayout, TextS
 use crate::tok::motion;
 use event_log::log_event;
 
-/// The states a handler call can reach: the app's (`$self.state`), or while the playground is
-/// attached, its stage's beside its own controls.
-macro_rules! states {
-    ($self:ident) => {
-        crate::runtime::playground_host::handler_states(&mut $self.state, &mut $self.playground)
-    };
-}
-
 #[inline(always)]
 pub(crate) fn handler_state<S: 'static>(state: &mut S) -> &mut dyn Any {
     #[cfg(feature = "hot")]
@@ -73,6 +65,13 @@ pub(crate) fn handler_state_ref<S: 'static>(state: &S) -> &dyn Any {
     }
     state
 }
+
+pub(crate) mod driver;
+pub(crate) use driver::{AppDriver, AppRef, AppRefMut, RuntimeHooks, ViewDriver};
+mod init;
+mod api;
+#[path = "runtime/input/api.rs"]
+mod input_api;
 
 #[cfg(debug_assertions)]
 #[path = "runtime/commit/layout_diagnostics.rs"]
@@ -430,19 +429,45 @@ use tracks::{SCROLL_DECAY, mark_ancestors, scroll_offsets};
 mod commit;
 use commit::{Measured, Measurement, Pass, unwrapped_width};
 
-pub struct Runtime<S: 'static> {
-    pub state: S,
-    pub(crate) on_focus: Option<fn(&mut S, bool, &mut Tx)>,
-    /// `App::on_modifiers`, and the modifiers it last heard.
-    pub(crate) on_mods: Option<fn(&mut S, crate::Mods, &mut Tx)>,
+/// Zero-sized alignment barrier terminating `RuntimeCore` and the identical `#[repr(C)]`
+/// prefix of `Runtime<S>`, ensuring `Runtime<S>::state` always sits at or past
+/// `size_of::<RuntimeCore>()`.
+#[repr(align(16))]
+pub(crate) struct CoreEnd;
+
+macro_rules! runtime_core_fields {
+    ($($field:tt)*) => {
+        /// Non-generic retained tree, layout, scene, input, scroll, selection, and paint state
+        /// forming the exact `#[repr(C)]` prefix of [`Runtime<S>`].
+        #[repr(C)]
+        pub(crate) struct RuntimeCore {
+            $($field)*
+            pub(crate) _core_end: CoreEnd,
+        }
+
+        #[repr(C)]
+        pub struct Runtime<S: 'static> {
+            $($field)*
+            pub(crate) _core_end: CoreEnd,
+            pub state: S,
+            /// Called at the start of every frame with the clock; return true when state changed (new data).
+            pub poll: Option<fn(&mut S, f64, &mut Tx) -> bool>,
+            /// Called for keys unhandled by the focused control; return true to consume it.
+            pub on_key: Option<fn(&mut S, &KeyEvent, &mut Tx) -> bool>,
+            pub(crate) hooks: RuntimeHooks<S>,
+        }
+    };
+}
+
+runtime_core_fields! {
+    /// The modifiers `App::on_modifiers` last heard.
     mods_heard: crate::Mods,
-    /// `App::on_visibility`.
-    pub(crate) on_visibility: Option<fn(&mut S, bool, &mut Tx)>,
-    /// `App::on_ime` and the composition it has open.
-    pub(crate) app_ime: app_ime::AppIme<S>,
-    view: fn(&S, &mut Cx<S>) -> El,
-    /// `App::playground`, when this run shows it.
-    pub(crate) playground: Option<Box<crate::playground::Live<S>>>,
+    /// The composition `App::on_ime` currently has open.
+    pub(crate) app_ime_comp: app_ime::AppComposition,
+    /// The node index the app's view returned when the playground is attached.
+    pub(crate) app_root: usize,
+    /// Whether this runtime has an attached playground (`hooks.playground.is_some()`).
+    pub(crate) has_playground: bool,
     #[cfg(feature = "hot")]
     pub(crate) hot: Option<crate::hot::Session>,
     pub text: TextSystem,
@@ -478,8 +503,6 @@ pub struct Runtime<S: 'static> {
     /// The last view's `Cx::foreground` and `Cx::focus_ring`, for rows built after it and the
     /// rings painted until the next.
     defaults: cx::ViewDefaults,
-    /// Called at the start of every frame with the clock; return true when state changed (new data).
-    pub poll: Option<fn(&mut S, f64, &mut Tx) -> bool>,
     /// Seconds since the first frame, unscaled (virtual when headless).
     pub clock: f64,
     wake_deadlines: Vec<f64>,
@@ -490,8 +513,6 @@ pub struct Runtime<S: 'static> {
     pub wall_start: Option<crate::time::Instant>,
     #[cfg(test)]
     pub(crate) test_clock: Option<crate::Clock>,
-    /// Called for keys unhandled by the focused control; return true to consume it.
-    pub on_key: Option<fn(&mut S, &KeyEvent, &mut Tx) -> bool>,
     pub(crate) nodes: Vec<Node>,
     /// The last commit's node buffer, emptied, for the next flatten to fill: an app of a few
     /// thousand elements otherwise maps and faults in megabytes every commit.
@@ -896,280 +917,150 @@ pub struct Runtime<S: 'static> {
     a11y: Option<Box<a11y_tree::A11yTree>>,
 }
 
+#[inline(always)]
+const fn assert_prefix_layout<S: 'static>() {
+    const {
+        assert!(std::mem::align_of::<RuntimeCore>() <= 16);
+        assert!(std::mem::offset_of!(Runtime<S>, _core_end) == std::mem::offset_of!(RuntimeCore, _core_end));
+        assert!(std::mem::size_of::<RuntimeCore>() == std::mem::offset_of!(RuntimeCore, _core_end));
+        assert!(std::mem::offset_of!(Runtime<S>, state) >= std::mem::size_of::<RuntimeCore>());
+        assert!(std::mem::align_of::<Runtime<S>>() >= std::mem::align_of::<RuntimeCore>());
+    }
+}
+
 impl<S: 'static> Runtime<S> {
     pub fn new(state: S, view: fn(&S, &mut Cx<S>) -> El, viewport: (f32, f32), env: Env) -> Self {
         Self::with_text(state, view, viewport, env, TextSystem::default())
     }
 
     pub fn with_text(state: S, view: fn(&S, &mut Cx<S>) -> El, viewport: (f32, f32), env: Env, text: TextSystem) -> Self {
-        let mut scene = Scene::new();
-        scene.set_pixel_scale(env.scale);
-        crate::recorder::headless_reset();
-        crate::video::headless_reset();
-        Runtime {
-            state,
-            view,
-            playground: None,
-            #[cfg(feature = "hot")]
-            hot: None,
-            text,
-            images: Default::default(),
-            scene,
-            env,
-            viewport,
-            zoom: zoom::Zoom { k: 1.0, window: viewport, window_scale: env.scale },
-            transparent: false,
-            srgb_blend: false,
-            native_overlay: false,
-            surface_stats: None,
-            app_stats: None,
-            t: 0.0,
-            reduced_motion: false,
-            system_reduced_motion: false,
-            titlebar_inset: 0.0,
-            system_accent: crate::SystemAccent::DEFAULT,
-            system_contrast: None,
-            system_increased_contrast: false,
-            scroll_bars: Default::default(),
-            time_scale: 1.0,
-            defaults: Default::default(),
-            poll: None,
-            clock: 0.0,
-            wake_deadlines: Vec::new(),
-            timer_wake: Default::default(),
-            idle_meter: Default::default(),
-            watch: Default::default(),
-            wall_start: None,
-            #[cfg(test)]
-            test_clock: None,
-            on_key: None,
-            nodes: Vec::new(),
-            spare_nodes: Vec::new(),
-            apply_scratch: Default::default(),
-            layout: LayoutEngine::new(),
-            node_index: HashMap::default(),
-            path_ids: HashMap::default(),
-            memo: Default::default(),
-            next_id: 1,
-            commits: 0,
-            dirty: true,
-            relayout: false,
-            viewport_stepped: false,
-            settle: false,
-            queue: ActionQueue::default(),
-            pointer: None,
-            press: Default::default(),
-            secondary: Default::default(),
-            tint: Default::default(),
-            #[cfg(target_os = "linux")]
-            primary: Default::default(),
-            autoscroll: Default::default(),
-            drag_data: 0.0,
-            instances: Vec::new(),
-            marks: Vec::new(),
-            track_marks: false,
-            surfaces: Vec::new(),
-            materials: Vec::new(),
-            native_materials: false,
-            hits: Vec::new(),
-            wheel_hits: Vec::new(),
-            overlay_hits: Vec::new(),
-            glyph_scratch: Vec::new(),
-            paint_keep: Default::default(),
-            text_rows: HashMap::default(),
-            text_quads: HashMap::default(),
-            quads_frame: 0,
-            #[cfg(test)]
-            quads_copied: 0,
-            deco_scratch: Vec::new(),
-            inh_scratch: Vec::new(),
-            motion_scratch: Default::default(),
-            turn_scratch: Vec::new(),
-            unturned_drawn: Vec::new(),
-            layer_paint_order: Vec::new(),
-            matched: Vec::new(),
-            flying: Vec::new(),
-            built: false,
-            built_ids: Vec::new(),
-            #[cfg(debug_assertions)]
-            matched_warned: HashSet::default(),
-            layer_scratch: Vec::new(),
-            input_scroll: HashMap::default(),
-            dissolve_scratch: Vec::new(),
-            exit_mask: Default::default(),
-            key_index: Default::default(),
-            has_dissolve: false,
-            cache_live_scratch: Vec::new(),
-            cache_check_scratch: Vec::new(),
-            cache_paint_scratch: Vec::new(),
-            cache_inside_scratch: Vec::new(),
-            node_caches: HashMap::default(),
-            has_cache: false,
-            commit_gen: 0,
-            last_dt: 0.0,
-            has_pixel_aspect: false,
-            has_drawn_layout: false,
-            has_key_up: false,
-            has_sticky: false,
-            stuck: Vec::new(),
-            sticky_frame: Vec::new(),
-            sticky_bands: Vec::new(),
-            requests: Default::default(),
-            has_raise: false,
-            has_paint_order: false,
-            key_releases: Default::default(),
-            aspect_snap: Vec::new(),
-            drawn: Vec::new(),
-            drawn_scale: Vec::new(),
-            seen: Vec::new(),
-            scrolls: HashMap::default(),
-            wheel_lock: Default::default(),
-            wheel_glide: true,
-            touch: Default::default(),
-            grows: HashMap::default(),
-            stacks: HashMap::default(),
-            virtuals: HashMap::default(),
-            rewind: None,
-            virtual_culled: HashSet::default(),
-            memo_since: 0,
-            virtual_fill: virtual_fill::Fill::default(),
-            state_unchanged: false,
-            reuse: Default::default(),
-            virtual_inputs: HashMap::default(),
-            reveals: HashMap::default(),
-            reveals_kept: Vec::new(),
-            reveal_chain: RevealChain::default(),
-            flights: Vec::new(),
-            launches: Default::default(),
-            pixel_snap: Default::default(),
-            row_dy: Vec::new(),
-            row_h: Vec::new(),
-            row_mask: Vec::new(),
-            row_lifts: Vec::new(),
-            fold_headers: HashMap::default(),
-            landing_holds: Default::default(),
-            caught_up: 0.0,
-            slack_dt: 0.0,
-            focus: Default::default(),
-            type_select: Default::default(),
-            held: Default::default(),
-            modifier_keys: Default::default(),
-            full_keyboard_access: true,
-            tab_visits_controls: false,
-            modal_focus: modal_focus::ModalFocus::Closed,
-            focus_before_commit: None,
-            focus_request: None,
-            focus_owed: None,
-            focus_returned: false,
-            unmounted_focused: Vec::new(),
-            modal_scope: None,
-            loops: HashMap::default(),
-            loop_clock: Default::default(),
-            loops_active: false,
-            static_scales: HashMap::default(),
-            scale_frame: None,
-            time_scaled: false,
-            loop_wake: None,
-            hovered: None,
-            hover_within: Vec::new(),
-            hover_gone: Vec::new(),
-            hover_delays: Default::default(),
-            hover_paused: false,
-            hover_hold: Default::default(),
-            file_drag: Default::default(),
-            ime_area: None,
-            ime_option_as_alt: false,
-            caret: None,
-            caret_watch: false,
-            layout_seen: Default::default(),
-            layout_fired: HashMap::default(),
-            screen_fired: HashMap::default(),
-            drawn_fired: HashMap::default(),
-            visible_fired: HashMap::default(),
-            window_origin: (0.0, 0.0),
-            window_pixels: None,
-            feedback: Default::default(),
-            caret_follow: false,
-            links: Default::default(),
-            selectable: Default::default(),
-            sel_snapshot: Default::default(),
-            sel_heard: Default::default(),
-            input_click: Default::default(),
-            held_mods: Default::default(),
-            help: Default::default(),
-            help_delay: 0.5,
-            ime_reset: false,
-            copy_request: None,
-            paste_request: None,
-            read_requests: Vec::new(),
-            clipboard_reads: Vec::new(),
-            pill_copy: None,
-            next_clipboard_read: 0,
-            clear_secret_request: false,
-            clipboard: None,
-            shell_request: None,
-            minimize: Default::default(),
-            url_requests: Vec::new(),
-            open_urls_natively: false,
-            popups: Default::default(),
-            file_dialog: Default::default(),
-            file_dialog_answers: Vec::new(),
-            next_file_dialog: 0,
-            window_frame: None,
-            window_title: Default::default(),
-            announcement: Default::default(),
-            fit_height: false,
-            fit: Default::default(),
-            page: None,
-            window_resting: false,
-            pending: Tx::default(),
-            motion_needs_cause: false,
-            animating: false,
-            anim_sources: 0,
-            commit_why: 0,
-            paint_rank: None,
-            icon_aprons: Vec::new(),
-            settled: false,
-            events: Vec::new(),
-            record_events: true,
-            trace_channels: None,
-            stats: FrameStats::default(),
-            live: live_latch::LiveLane::new(Arc::new(|| {})),
-            live_clock: Arc::new(()),
-            frame_target: None,
-            videos_active: false,
-            video_signature: 0,
-            window_focused: None,
-            spell_watch: None,
-            keys_lost: false,
-            on_focus: None,
-            on_mods: None,
-            mods_heard: Default::default(),
-            on_visibility: None,
-            app_ime: Default::default(),
-            live_subscriptions: Vec::new(),
-            live_only_skips: 0,
-            last_commit_clock: f64::NEG_INFINITY,
-            #[cfg(debug_assertions)]
-            live_only_check: true,
-            #[cfg(debug_assertions)]
-            live_check: None,
-            #[cfg(debug_assertions)]
-            live_checks: 0,
-            #[cfg(debug_assertions)]
-            live_only_warnings: Vec::new(),
-            key_warnings: None,
-            ambient: None,
-            press_clicks: Default::default(),
-            press_repeat: Default::default(),
-            titlebar: Default::default(),
-            double_click_interval: 0.5,
-            os_drag: true,
-            drag_out_request: None,
-            drag_ends: Default::default(),
-            drags_open: 0,
-            a11y: None,
+        Self::from_core(RuntimeCore::new(viewport, env, text), state, view)
+    }
+
+    pub(crate) fn from_core(core: RuntimeCore, state: S, view: fn(&S, &mut Cx<S>) -> El) -> Self {
+        assert_prefix_layout::<S>();
+        let hooks = RuntimeHooks::new(view);
+        let mut uninit = std::mem::MaybeUninit::<Self>::uninit();
+        let ptr = uninit.as_mut_ptr();
+        // SAFETY: `Runtime<S>` and `RuntimeCore` are `#[repr(C)]` with an identical field prefix
+        // ending at `_core_end: CoreEnd`, verified at compile time by `assert_prefix_layout::<S>()`.
+        // `ptr.cast::<RuntimeCore>().write(core)` initializes the entire shared prefix, and the
+        // four trailing `write` calls initialize every remaining field (`state`, `poll`, `on_key`,
+        // `hooks`). None of these writes can panic, so `assume_init()` returns a fully initialized
+        // `Runtime<S>` with no custom `Drop` mismatch.
+        unsafe {
+            ptr.cast::<RuntimeCore>().write(core);
+            std::ptr::addr_of_mut!((*ptr).state).write(state);
+            std::ptr::addr_of_mut!((*ptr).poll).write(None);
+            std::ptr::addr_of_mut!((*ptr).on_key).write(None);
+            std::ptr::addr_of_mut!((*ptr).hooks).write(hooks);
+            uninit.assume_init()
         }
+    }
+
+    #[inline(always)]
+    pub(crate) fn core(&self) -> &RuntimeCore {
+        assert_prefix_layout::<S>();
+        // SAFETY: `Runtime<S>` begins with the identical `#[repr(C)]` prefix of `RuntimeCore`,
+        // with alignment >= `align_of::<RuntimeCore>()` proven at compile time by
+        // `assert_prefix_layout::<S>()`.
+        unsafe { &*std::ptr::from_ref(self).cast::<RuntimeCore>() }
+    }
+
+    #[inline(always)]
+    pub(crate) fn core_mut(&mut self) -> &mut RuntimeCore {
+        assert_prefix_layout::<S>();
+        // SAFETY: `Runtime<S>` begins with the identical `#[repr(C)]` prefix of `RuntimeCore`,
+        // with alignment >= `align_of::<RuntimeCore>()` proven at compile time by
+        // `assert_prefix_layout::<S>()`.
+        unsafe { &mut *std::ptr::from_mut(self).cast::<RuntimeCore>() }
+    }
+
+    #[inline(always)]
+    pub(crate) fn split(&self) -> (&RuntimeCore, AppRef<'_, S>) {
+        assert_prefix_layout::<S>();
+        let ptr = std::ptr::from_ref(self);
+        // SAFETY: `Runtime<S>` begins with the identical `#[repr(C)]` prefix of `RuntimeCore`,
+        // and shared references to the prefix and trailing fields may coexist.
+        unsafe {
+            let core = &*ptr.cast::<RuntimeCore>();
+            let app = AppRef {
+                state: &(*ptr).state,
+                hooks: &(*ptr).hooks,
+            };
+            (core, app)
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn split_mut(&mut self) -> (&mut RuntimeCore, AppRefMut<'_, S>) {
+        assert_prefix_layout::<S>();
+        let ptr = std::ptr::from_mut(self);
+        // SAFETY: `Runtime<S>` and `RuntimeCore` share an identical `#[repr(C)]` prefix ending
+        // at `_core_end: CoreEnd`. `assert_prefix_layout::<S>()` proves at compile time that
+        // `offset_of!(Runtime<S>, state) >= size_of::<RuntimeCore>()` and
+        // `align_of::<Runtime<S>>() >= align_of::<RuntimeCore>()`. Every projection below derives
+        // once from `ptr` and covers strictly disjoint byte ranges: `[0..size_of::<RuntimeCore>())`
+        // for `core` and `[offset_of!(Runtime<S>, state)..size_of::<Runtime<S>>())` for `app`.
+        unsafe {
+            let poll = *std::ptr::addr_of!((*ptr).poll);
+            let on_key = *std::ptr::addr_of!((*ptr).on_key);
+            let state = &mut *std::ptr::addr_of_mut!((*ptr).state);
+            let hooks = &mut *std::ptr::addr_of_mut!((*ptr).hooks);
+            let core = &mut *ptr.cast::<RuntimeCore>();
+            (core, AppRefMut { state, poll, on_key, hooks })
+        }
+    }
+
+    /// Attaches a live playground to this runtime and keeps `has_playground` in sync.
+    pub(crate) fn attach_playground(&mut self, live: crate::playground::Live<S>) {
+        self.hooks.playground = Some(Box::new(live));
+        self.has_playground = true;
+    }
+}
+
+#[cfg(test)]
+mod prefix_layout_tests {
+    use super::*;
+
+    #[repr(align(64))]
+    struct OverAligned(u8);
+
+    fn empty_view<S: 'static>(_: &S, _: &mut Cx<S>) -> El {
+        crate::el()
+    }
+
+    fn verify_layout<S: 'static>(state: S, bump: impl FnOnce(&mut S)) {
+        assert_prefix_layout::<S>();
+        assert!(std::mem::offset_of!(Runtime<S>, state) >= std::mem::size_of::<RuntimeCore>());
+        assert!(std::mem::align_of::<Runtime<S>>() >= std::mem::align_of::<RuntimeCore>());
+        let mut rt = Runtime::new(state, empty_view::<S>, (320.0, 240.0), Env::new(true, 2.0));
+        assert_eq!(rt.core().viewport, (320.0, 240.0));
+        assert_eq!(rt.core().env.scale, 2.0);
+        {
+            let (core, app) = rt.split_mut();
+            core.viewport = (640.0, 480.0);
+            core.t = 1.5;
+            bump(app.state);
+        }
+        assert_eq!(rt.viewport, (640.0, 480.0));
+        assert_eq!(rt.t, 1.5);
+        let (core, _) = rt.split();
+        assert_eq!(core.viewport, (640.0, 480.0));
+    }
+
+    #[test]
+    fn shared_prefix_layout_holds_across_state_alignments() {
+        verify_layout((), |_| {});
+        let mut seen_u8 = 0u8;
+        verify_layout(1u8, |s| { *s = 7; seen_u8 = *s; });
+        assert_eq!(seen_u8, 7);
+        let mut seen_u128 = 0u128;
+        verify_layout(1u128, |s| { *s = 0x1234_5678_9abc_def0; seen_u128 = *s; });
+        assert_eq!(seen_u128, 0x1234_5678_9abc_def0);
+        let mut seen_over = 0u8;
+        verify_layout(OverAligned(3), |s| { s.0 = 42; seen_over = s.0; });
+        assert_eq!(seen_over, 42);
     }
 }
 

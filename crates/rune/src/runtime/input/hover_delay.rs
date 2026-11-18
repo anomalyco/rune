@@ -125,7 +125,7 @@ impl HoverDelays {
     }
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// Steps `path`'s delayed report and carries out what it asks.
     pub(super) fn step_hover_delay(&mut self, path: &str, event: Event) {
         for effect in self.hover_delays.step(path, event) {

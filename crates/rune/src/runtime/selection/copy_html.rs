@@ -15,7 +15,7 @@ enum Block {
     Paragraph(usize),
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// The selection as HTML (`None` with nothing selected, or a selection reaching rows that
     /// aren't built). Each selected text sits in its block; its spans are `<strong>`, `<em>` and
     /// `<code>`, its links `<a href>` and its strikes `<s>`.

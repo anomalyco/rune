@@ -1,8 +1,8 @@
 //! Frame loop, clocks, wake deadlines, request latching and motion/paint-order stepping.
 use super::*;
 
-impl<S: 'static> Runtime<S> {
-    /// rame-profile: the paths of drawn nodes whose loop is running, which wake the window.
+impl RuntimeCore {
+    /// frame-profile: the paths of drawn nodes whose loop is running, which wake the window.
     #[cfg(feature = "frame-profile")]
     pub(crate) fn fp_loops(&self) -> Vec<String> {
         self.nodes.iter().enumerate()
@@ -66,7 +66,7 @@ impl<S: 'static> Runtime<S> {
 
     /// Queue a native focus transition. Repeated notifications do not repeat the callback.
     /// Losing focus is also `keys_lost`.
-    pub fn window_focus(&mut self, focused: bool) {
+    pub(crate) fn window_focus(&mut self, app: &mut dyn AppDriver, focused: bool) {
         // Every focus gain, even one a hide without blur left unreported.
         if focused { self.keys_lost = false; }
         if self.window_focused != Some(focused) {
@@ -80,7 +80,11 @@ impl<S: 'static> Runtime<S> {
                 self.dirty = true;
             }
             self.window_focused = Some(focused);
-            if let Some(f) = self.on_focus { self.update(|s, tx| f(s, focused, tx)); }
+            if app.has_on_focus() {
+                let mut one = self.begin_update(app);
+                crate::tooling::perf_warn::timed("an `update` closure", || app.on_focus(focused, &mut one));
+                self.finish_update(app, one, true, false);
+            }
             // Deliver the cancelled Up before FocusLost can commit a view that removes its
             // grip (or the focus callback clears the app's drag state).
             if !focused {
@@ -141,51 +145,32 @@ impl<S: 'static> Runtime<S> {
         self.dirty = true;
     }
 
-    /// Changes the state from outside any handler, for data another thread delivered
-    /// (`AppHandle::update`). Runs now, so it works while no window shows; the next frame commits
-    /// it with the motion `f` asked for.
-    pub fn update(&mut self, f: impl FnOnce(&mut S, &mut Tx)) {
-        self.update_if(|s, tx| { f(s, tx); true });
-    }
-
-    /// `update` for a change that may be no change: `f` returns whether it changed state the
-    /// view reads, as `poll` does. On false the view doesn't re-run and no frame is asked for,
-    /// while what `f` asked of its `Tx` still happens: clipboard, close and quit, menus and
-    /// window frames reach the shell, a scroll or text flight still takes a frame, and a
-    /// `wake_after` waits, like `update`'s, for the next frame or hidden poll to schedule it
-    /// (a host that runs neither calls `schedule_pending_wakes`). Returns whether the last frame
-    /// went out of date: `f` reported a change or asked for work only a frame does.
-    ///
-    /// Returning false after changing state the view reads leaves the screen stale until the
-    /// next change.
-    pub fn update_if(&mut self, f: impl FnOnce(&mut S, &mut Tx) -> bool) -> bool {
-        self.update_inner(f, false).0
-    }
-
-    /// `update_if` for an update a window drain runs: a minimize it asked for comes back instead
-    /// of reaching the minimize machine, so the drain can order it against the handle requests it
-    /// took. A pick callback that replaces its `Tx` discards the minimize, as running the
-    /// callbacks before reading `Tx::minimize` does; one the callback asks for itself still
-    /// latches. Returns stale, then the minimize's order when it survived.
-    pub(crate) fn update_if_ordered(&mut self, f: impl FnOnce(&mut S, &mut Tx) -> bool) -> (bool, Option<std::num::NonZeroU64>) {
-        self.update_inner(f, true)
-    }
-
-    fn update_inner(&mut self, f: impl FnOnce(&mut S, &mut Tx) -> bool, ordered: bool) -> (bool, Option<std::num::NonZeroU64>) {
+    /// Starts an [`Runtime::update`] transaction with the clock reading now.
+    pub(super) fn begin_update(&self, app: &dyn ViewDriver) -> Tx {
         // Its wakes count from now (`schedule_pending_wakes`), so its clock reads now too.
-        let mut one = Tx { clock: self.now_clock(), ..self.transaction() };
-        let changed = crate::tooling::perf_warn::timed("an `update` closure", || f(&mut self.state, &mut one));
+        Tx { clock: self.now_clock(), ..self.transaction(app) }
+    }
+
+    /// Finishes an [`Runtime::update`] / `update_if` / `update_if_ordered` call after its
+    /// closure ran against `app.state`.
+    pub(super) fn finish_update(
+        &mut self,
+        app: &mut dyn AppDriver,
+        mut one: Tx,
+        changed: bool,
+        ordered: bool,
+    ) -> (bool, Option<std::num::NonZeroU64>) {
         let stale = changed || one.frame_work() || one.window_frame.is_some() || one.srgb_blend.is_some_and(|b| b != self.srgb_blend) || one.font_smoothing.is_some_and(|m| m != self.text.font_smoothing())
             || self.changes_families(&one)
             || (one.blur && self.focus.path().is_some());
         let minimize = if ordered {
             let asked = one.minimize_order;
-            self.run_pick_reads(&mut one);
+            self.run_pick_reads(app, &mut one);
             let survived = if asked.is_some() && one.minimize_order == asked { one.minimize_order.take() } else { None };
-            self.latch_after_picks(&mut one);
+            self.latch_after_picks(app, &mut one);
             survived
         } else {
-            self.latch_requests(&mut one);
+            self.latch_requests(app, &mut one);
             None
         };
         merge(&mut self.pending, one);
@@ -205,19 +190,19 @@ impl<S: 'static> Runtime<S> {
     /// Latches a Tx's shell and clipboard requests for the shell, so `update`, a hidden poll
     /// and `on_close` reach the clipboard without a frame, and applies clipboard requests to a
     /// memory clipboard at once. A secret clear drops an earlier secret copy not yet written.
-    pub(super) fn latch_requests(&mut self, tx: &mut Tx) {
-        self.run_pick_reads(tx);
-        self.latch_after_picks(tx);
+    pub(super) fn latch_requests(&mut self, app: &mut dyn AppDriver, tx: &mut Tx) {
+        self.run_pick_reads(app, tx);
+        self.latch_after_picks(app, tx);
     }
 
     /// [`Self::latch_requests`] once the pick callbacks have run.
-    fn latch_after_picks(&mut self, tx: &mut Tx) {
+    fn latch_after_picks(&mut self, app: &mut dyn AppDriver, tx: &mut Tx) {
         self.shell_request = self.shell_request.max(tx.shell.take());
         if tx.minimize_order.take().is_some() { self.minimize_step(crate::window::MinimizeEvent::Asked); }
         self.titlebar.toggle_maximized |= std::mem::take(&mut tx.toggle_maximized);
         self.titlebar.toggle_full_screen |= std::mem::take(&mut tx.toggle_full_screen);
         for ev in std::mem::take(&mut tx.keys) { self.key(ev); }
-        self.latch_playground(tx);
+        self.latch_playground(app, tx);
         for prefix in std::mem::take(&mut tx.evict_memos) { self.invalidate_memos_by_prefix(&prefix); }
         if !tx.open_urls.is_empty() { self.open_urls(std::mem::take(&mut tx.open_urls)); }
         if std::mem::take(&mut tx.clear_secret) {
@@ -256,7 +241,7 @@ impl<S: 'static> Runtime<S> {
         if let Some(rewind) = tx.rewind.take() { self.rewind = rewind; }
         if std::mem::take(&mut tx.blur) {
             if self.focus.path().is_some() {
-                self.set_focus(None, self.focus.keyboard());
+                self.set_focus(app, None, self.focus.keyboard());
                 self.dirty = true;
             }
             // An explicit blur is not the temporary pointer-down blur of a scrim, and nothing
@@ -317,8 +302,8 @@ impl<S: 'static> Runtime<S> {
 
     pub fn tracing(&self) -> bool { self.trace_channels.is_some() || self.scene.tracing() }
 
-    pub(super) fn transaction(&self) -> Tx {
-        Tx { trace: self.tracing().then(crate::el::TraceCalls::default), mods: self.held_mods, selection: self.selection_snapshot(),
+    pub(super) fn transaction(&self, app: &dyn ViewDriver) -> Tx {
+        Tx { trace: self.tracing().then(crate::el::TraceCalls::default), mods: self.held_mods, selection: self.selection_snapshot(app),
             input_time: crate::input::time::current(), clock: self.clock, focus_visible: self.focus.keyboard(), focused: self.focused_key(), assistive: self.a11y.is_some() || cfg!(target_arch = "wasm32"), ..Tx::default() }
     }
 
@@ -375,23 +360,23 @@ impl<S: 'static> Runtime<S> {
     /// Advances animation time by `dt` real seconds, runs queued handlers, re-runs the view only
     /// if state changed, steps `Scene`, growth, scroll and reveals, and builds this frame's
     /// instances.
-    pub fn frame(&mut self, dt: f64) -> bool {
-        self.frame_split(0.0, dt)
+    pub(crate) fn frame(&mut self, app: &mut dyn AppDriver, dt: f64) -> bool {
+        self.frame_split(app, 0.0, dt)
     }
 
     /// A hidden or windowless host's due timer.
-    pub(crate) fn hidden_timer_frame(&mut self) {
-        self.frame(0.0);
+    pub(crate) fn hidden_timer_frame(&mut self, app: &mut dyn AppDriver) {
+        self.frame(app, 0.0);
     }
 
     /// Builds what changed while a window that fits its content was hidden, before the host
     /// shows it, so the content's height (`window_frame`, a jump) is known before the window
     /// is ordered in and its first drawable taken. Lands every track, as showing does.
     /// Returns whether it built; the first frame then has nothing left to build.
-    pub(crate) fn build_for_show(&mut self) -> bool {
+    pub(crate) fn build_for_show(&mut self, app: &mut dyn AppDriver) -> bool {
         if !self.fit_height || self.commits == 0 || !self.stale() { return false; }
         self.settle_all();
-        self.hidden_timer_frame();
+        self.hidden_timer_frame(app);
         true
     }
 
@@ -399,15 +384,15 @@ impl<S: 'static> Runtime<S> {
     /// and layout wait, dirty, for the frame that shows the host. Queued input and drag ends take a frame
     /// without drawing (`hidden_timer_frame`) so their handlers hear them now. Returns whether
     /// the last drawn frame went out of date.
-    pub(crate) fn hidden_wake(&mut self) -> bool {
+    pub(crate) fn hidden_wake(&mut self, app: &mut dyn AppDriver) -> bool {
         if self.has_pending_input() || self.drag_ends_pending() {
             let commits = self.stats.commits;
-            self.hidden_timer_frame();
+            self.hidden_timer_frame(app);
             // File steps held for that frame's build land in another.
-            if self.files_held() { self.hidden_timer_frame(); }
+            if self.files_held() { self.hidden_timer_frame(app); }
             return self.stats.commits != commits;
         }
-        self.poll_hidden()
+        self.poll_hidden(app)
     }
 
     /// [`Runtime::hidden_wake`] for a shown window that can't draw (covered, minimised, on a
@@ -415,9 +400,9 @@ impl<S: 'static> Runtime<S> {
     /// built at once, without drawing or motion, so the tree it reads and focus asked of what
     /// the change shows (a permission's card) are current whatever the window's motion does.
     /// Returns what `hidden_wake` does.
-    pub(crate) fn covered_wake(&mut self) -> bool {
-        let stale = self.hidden_wake();
-        if self.a11y.is_some() && self.needs_commit() { self.hidden_timer_frame(); }
+    pub(crate) fn covered_wake(&mut self, app: &mut dyn AppDriver) -> bool {
+        let stale = self.hidden_wake(app);
+        if self.a11y.is_some() && self.needs_commit() { self.hidden_timer_frame(app); }
         stale
     }
 
@@ -426,7 +411,7 @@ impl<S: 'static> Runtime<S> {
     /// the frame's time. Then everything, including what the commit started, steps `dt`. A late
     /// frame or a sleeping host's gap belongs to old tracks, never to targets first observed
     /// on this frame.
-    pub(crate) fn frame_split(&mut self, catch_up: f64, dt: f64) -> bool {
+    pub(crate) fn frame_split(&mut self, app: &mut dyn AppDriver, catch_up: f64, dt: f64) -> bool {
         // Like a native shell: the logical clock follows host time (timers, poll), while
         // animations step by the frame's own dt, so idle time never lands on a fresh commit.
         let elapsed = catch_up + dt;
@@ -444,14 +429,14 @@ impl<S: 'static> Runtime<S> {
                 let step = at - self.clock;
                 let old = step.min(catch_up);
                 catch_up -= old;
-                self.frame_step(step, old, step - old);
+                self.frame_step(app, step, old, step - old);
             }
             self.queue.extend(input);
             let step = target - self.clock;
             let old = step.min(catch_up);
-            return self.frame_step(step, old, step - old);
+            return self.frame_step(app, step, old, step - old);
         }
-        self.frame_step(elapsed, catch_up, dt)
+        self.frame_step(app, elapsed, catch_up, dt)
     }
 
     /// When a headless step toward `target` stops early for a timer: the next deadline, but no
@@ -465,7 +450,7 @@ impl<S: 'static> Runtime<S> {
 
     /// `elapsed` advances the logical clock when no wall clock drives it; `catch_up` steps
     /// running motion before the commit and `dt` steps all motion after it.
-    pub(super) fn frame_step(&mut self, elapsed: f64, catch_up: f64, dt: f64) -> bool {
+    pub(super) fn frame_step(&mut self, app: &mut dyn AppDriver, elapsed: f64, catch_up: f64, dt: f64) -> bool {
         // Each queued action runs with its own input's arrival time; nothing else has one.
         let _input = crate::input::time::scope(None);
         self.interaction_frame_begins();
@@ -478,7 +463,7 @@ impl<S: 'static> Runtime<S> {
             // Replace handler trait objects before queued input can call an old vtable.
             // A regular commit preserves keyed nodes, scrolls and spring velocities.
             self.memo.clear();
-            self.commit(&Tx::default());
+            self.commit(app, &Tx::default());
         }
         let mut tx = std::mem::take(&mut self.pending);
         let mut ran = false;
@@ -519,33 +504,33 @@ impl<S: 'static> Runtime<S> {
         self.fire_press_repeat();
         self.fire_edge_scroll();
         self.fire_autoscroll();
-        self.fire_touch_hold();
+        self.fire_touch_hold(app);
         // Marks are paint's (`paint::content`), and this frame paints: a pause that ends or words
         // the checker brought back show without the view running again.
         let (wake, _marked) = crate::spell::pause::tick(&mut self.spell_watch, self.clock);
         if let Some(at) = wake { self.schedule_wakes([std::time::Duration::from_secs_f64((at - self.clock).max(0.0))]); }
-        if let Some(poll) = self.poll.filter(|_| !polled) {
-            let mut one = self.transaction();
+        if !polled && app.has_poll() {
+            let mut one = self.transaction(app);
             one.input_waiting = self.queue.has_input();
             // Scheduling does not imply a model change.
-            if self.idle_meter.polled(crate::tooling::perf_warn::timed("poll", || app_call!(poll, &mut self.state, self.clock, &mut one))) {
+            if self.idle_meter.polled(crate::tooling::perf_warn::timed("poll", || app.poll(self.clock, &mut one))) {
                 ran = true;
                 why |= CommitWhy::POLL;
                 self.watch.meter.poll();
             }
             merge(&mut tx, one);
         }
-        if self.playground.as_ref().is_some_and(|p| p.polls()) {
-            let mut one = self.transaction();
+        if app.playground().is_some_and(|p| p.polls()) {
+            let mut one = self.transaction(app);
             let clock = self.clock;
-            if self.poll_playground(clock, &mut one) {
+            if self.poll_playground(app, clock, &mut one) {
                 ran = true;
                 why |= CommitWhy::POLL;
             }
             merge(&mut tx, one);
         }
         if self.commits == 0 && self.queue.iter().any(|a| matches!(a, Action::WindowFocus(_))) {
-            self.commit(&Tx::default());
+            self.commit(app, &Tx::default());
         }
         let mut ran_layout = false;
         self.report_visible_rows();
@@ -573,7 +558,7 @@ impl<S: 'static> Runtime<S> {
             // nothing until this).
             let routed = matches!(&action, Action::Key { .. } | Action::KeyUp(_) | Action::Physical(..) | Action::Ime(_) | Action::FinishIme | Action::Paste(..) | Action::Files(_));
             // So is a playground an earlier handler opened or moved.
-            if routed { self.latch_playground(&mut tx); }
+            if routed { self.latch_playground(app, &mut tx); }
             // Both callbacks see ordinary &mut S. After the next mutation a single view
             // cannot tell which one introduced a row. Observe the poll's tree now, without
             // drawing it or advancing time. A key already needed this same routing boundary.
@@ -581,7 +566,7 @@ impl<S: 'static> Runtime<S> {
             if split || (ran || self.dirty || !tx.scroll_to.is_empty()) && routed {
                 if split {
                     let links = std::mem::take(&mut tx.open_urls);
-                    self.latch_requests(&mut tx);
+                    self.latch_requests(app, &mut tx);
                     tx.open_urls = links;
                 }
                 if ran || self.dirty {
@@ -595,14 +580,14 @@ impl<S: 'static> Runtime<S> {
                     if split && tx.unprompted { tx.commit = tx.commit.without_input(); }
                     if routed { why |= CommitWhy::ROUTE; }
                     if self.dirty { why |= CommitWhy::DIRTY; }
-                    self.commit_for(&tx, std::mem::take(&mut why));
+                    self.commit_for(app, &tx, std::mem::take(&mut why));
                     #[cfg(debug_assertions)]
                     { let check = self.live_check.take(); self.compare_live_check(check); ran_other = false; }
-                    self.apply_keeps();
+                    self.apply_keeps(app);
                     ran = false;
                 }
                 if split {
-                    self.finish_scroll_requests(&mut tx, false);
+                    self.finish_scroll_requests(app, &mut tx, false);
                     // The poll's motion policy belongs to the tree just applied, not to
                     // the handler about to run. Shell requests and timers still go out once.
                     tx.commit = Commit::Animate;
@@ -616,54 +601,54 @@ impl<S: 'static> Runtime<S> {
                     ran_layout = false;
                 } else if !tx.scroll_to.is_empty() {
                     self.drop_scroll_holds();
-                    for r in tx.scroll_to.drain(..) { self.reveal_row(&r, tx.commit.snaps()); }
+                    for r in tx.scroll_to.drain(..) { self.reveal_row(app, &r, tx.commit.snaps()); }
                 }
             }
             let _input = crate::input::time::scope(at);
             // A selection an earlier handler asked for is what this key copies.
             if matches!(action, Action::Key { .. } | Action::Physical(..)) && let Some(request) = tx.select.take() {
                 let from_change = std::mem::take(&mut tx.select_from_change);
-                self.apply_select_request(request, from_change);
+                self.apply_select_request(app, request, from_change);
             }
             if matches!(action, Action::Layout(..) | Action::ScreenLayout(..) | Action::DrawnLayout(_, _, false) | Action::VisibleRows(..)) {
-                ran_layout |= self.run_action(action, &mut tx);
+                ran_layout |= self.run_action(app, action, &mut tx);
             } else {
                 #[cfg(debug_assertions)]
                 let checks = self.live_checks;
-                let r = self.run_action(action, &mut tx);
+                let r = self.run_action(app, action, &mut tx);
                 #[cfg(debug_assertions)]
                 { ran_other |= r && checks == self.live_checks; }
                 ran |= r;
                 if r { why |= if input { CommitWhy::INPUT } else { CommitWhy::DIRTY }; }
             }
-            self.run_pick_reads(&mut tx);
+            self.run_pick_reads(app, &mut tx);
         }
         // Once a frame, however often a drag moved the selection, and in time for this commit.
-        for action in self.selection_changes() {
+        for action in self.selection_changes(app) {
             #[cfg(debug_assertions)]
             let checks = self.live_checks;
-            let r = self.run_action(action, &mut tx);
+            let r = self.run_action(app, action, &mut tx);
             #[cfg(debug_assertions)]
             { ran_other |= r && checks == self.live_checks; }
             if r { ran = true; why |= CommitWhy::DIRTY; }
         }
         #[cfg(target_os = "linux")]
-        self.note_primary_selection();
+        self.note_primary_selection(app);
         let mut open_urls = std::mem::take(&mut tx.open_urls);
-        self.latch_requests(&mut tx);
+        self.latch_requests(app, &mut tx);
         // A handler asked for a menu: the hover it takes ends in this commit, not a frame later.
         if self.release_pointer_for_popup() {
             for queued in std::mem::take(&mut self.queue) {
                 if !matches!(queued.action, Action::HoverChange(..)) { self.queue.push_queued(queued); continue; }
                 #[cfg(debug_assertions)]
                 let checks = self.live_checks;
-                let r = self.run_action(queued.action, &mut tx);
+                let r = self.run_action(app, queued.action, &mut tx);
                 #[cfg(debug_assertions)]
                 { ran_other |= r && checks == self.live_checks; }
                 if r { ran = true; why |= if queued.input { CommitWhy::INPUT } else { CommitWhy::DIRTY }; }
             }
             open_urls.extend(std::mem::take(&mut tx.open_urls));
-            self.latch_requests(&mut tx);
+            self.latch_requests(app, &mut tx);
         }
         self.release_files();
         self.schedule_wakes(tx.wakes.drain(..));
@@ -695,11 +680,11 @@ impl<S: 'static> Runtime<S> {
             // Its layout lands too, as an instant change's does: a container that grows to fit what a
             // server brought doesn't ease to its height (motion already running keeps on).
             if tx.unprompted { tx.commit = tx.commit.without_input(); }
-            self.commit_for(&tx, why | flag(self.dirty, CommitWhy::DIRTY) | flag(self.relayout, CommitWhy::RELAYOUT) | flag(self.settle, CommitWhy::SETTLE)
+            self.commit_for(app, &tx, why | flag(self.dirty, CommitWhy::DIRTY) | flag(self.relayout, CommitWhy::RELAYOUT) | flag(self.settle, CommitWhy::SETTLE)
                 | flag(shifted, CommitWhy::VIRTUAL) | flag(ran_layout, CommitWhy::LAYOUT) | flag(read_moved, CommitWhy::READ));
             #[cfg(debug_assertions)]
             { let check = self.live_check.take(); self.compare_live_check(check); }
-            self.apply_keeps();
+            self.apply_keeps(app);
         }
         #[cfg(debug_assertions)]
         { self.live_check = None; }
@@ -716,15 +701,15 @@ impl<S: 'static> Runtime<S> {
         #[cfg(debug_assertions)]
         self.watch_frame(commits0, tx.scroll_offsets.iter().find(|r| tx.commit.snaps() || r.glide.is_none()).map(|r| r.key.as_str()));
         let follow = std::mem::take(&mut self.caret_follow);
-        self.finish_scroll_requests(&mut tx, follow);
+        self.finish_scroll_requests(app, &mut tx, follow);
         // Those scrolls moved the caret after the commit a view placed from it saw.
-        if self.caret_watch && self.caret_moved(None) { self.commit(&Tx { commit: Commit::Instant, ..Tx::default() }); }
+        if self.caret_watch && self.caret_moved(None) { self.commit(app, &Tx { commit: Commit::Instant, ..Tx::default() }); }
         if let Some(request) = tx.select.take() {
             let from_change = std::mem::take(&mut tx.select_from_change);
-            self.apply_select_request(request, from_change);
+            self.apply_select_request(app, request, from_change);
         }
         // What the commit or a `Tx::select_text` changed is heard next frame.
-        let changes = self.selection_changes();
+        let changes = self.selection_changes(app);
         self.queue.extend(changes);
         self.update_interaction(None);
         #[cfg(test)]
@@ -739,7 +724,7 @@ impl<S: 'static> Runtime<S> {
         }
         let dt = if self.fit_frame_holds() { 0.0 } else { dt };
         let instant_scroll = tx.commit.snaps() || self.settled;
-        let animating = self.step_motion(dt, instant_scroll) || live_animating;
+        let animating = self.step_motion(app, dt, instant_scroll) || live_animating;
         self.stats.shaped = self.text.shaped - shaped0;
         let filling = self.virtual_filling();
         if live_animating { self.anim_sources |= AnimSource::LIVE; }
@@ -779,7 +764,7 @@ impl<S: 'static> Runtime<S> {
         self.step_scroll_by(step as f32, true);
     }
 
-    pub(super) fn step_motion(&mut self, dt: f64, instant_scroll: bool) -> bool {
+    pub(super) fn step_motion(&mut self, app: &dyn ViewDriver, dt: f64, instant_scroll: bool) -> bool {
         self.loops_stepped();
         let step = dt * self.time_scale as f64;
         self.slack_dt = std::mem::take(&mut self.caught_up) + step as f32;
@@ -858,7 +843,7 @@ impl<S: 'static> Runtime<S> {
         self.finish_keeps();
         animating |= self.write_drawn_rects();
         // A selection's edge scroll stepped: it follows the pointer over this layout, and shows.
-        if self.laid_edge_scroll() { animating |= self.build(); }
+        if self.laid_edge_scroll(app) { animating |= self.build(); }
         self.report_at_bottom();
         animating |= self.report_visible_rows();
         self.report_layout();

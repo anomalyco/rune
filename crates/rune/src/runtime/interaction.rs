@@ -9,7 +9,7 @@ use crate::tooling::interaction::{self, Finished, Note, Slow};
 /// A keyed ancestor covering at least this share of the window is a page.
 const PAGE_AREA: f32 = 0.5;
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// What `action` was, when timing is on and a person caused it; `None` for everything else
     /// (layout reports, timers, clipboard and dialog answers).
     pub(super) fn interaction_note(&mut self, action: &Action) -> Option<Note> {

@@ -8,7 +8,7 @@ use super::*;
 /// leave.
 pub(super) const REVEALS_KEPT: usize = 64;
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     pub(super) fn prune_exited(&mut self) {
         // Fills last commit's spare buffer and keeps this one as the next spare: a few thousand
         // nodes would otherwise grow a fresh Vec, megabytes, on every frame a node exits.

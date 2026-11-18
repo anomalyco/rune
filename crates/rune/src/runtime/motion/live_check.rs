@@ -5,7 +5,7 @@ use super::*;
 #[cfg(debug_assertions)]
 const LIVE_ONLY_CHECK: f64 = 0.25;
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// Events whose handler called [`Tx::live_only`] and so didn't re-run the view, since the
     /// runtime started.
     pub fn live_only_events(&self) -> u64 {

@@ -4,9 +4,9 @@ use std::collections::hash_map::Entry;
 
 use super::*;
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// The mutation phase cannot accept an El or an unfinished measurement pass.
-    pub(super) fn apply(&mut self, measured: Measured, tx: &Tx) {
+    pub(super) fn apply(&mut self, app: &mut dyn AppDriver, measured: Measured, tx: &Tx) {
         let _apply_time = crate::frame::profile::Scope::new(crate::frame::profile::Phase::Apply);
         let Measured { layout: mut taffy, mut nodes, reduced_motion, time_scale, defaults, titlebar, caret_read, memo_flattened, memo_reused, taken_paths, .. } = measured;
         self.defaults = defaults;
@@ -910,8 +910,8 @@ impl<S: 'static> Runtime<S> {
         self.prune_path_ids();
         self.subscribe_live();
         self.refresh_modal_index();
-        self.sync_modals();
-        self.sync_follows();
+        self.sync_modals(app);
+        self.sync_follows(app);
         self.loops.retain(|id, _| self.scene.contains(*id));
         self.catch_loops_up();
         self.static_scales.retain(|id, _| self.scene.contains(*id));

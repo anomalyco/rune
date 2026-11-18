@@ -33,19 +33,19 @@ pub(super) fn place(center: bool, offset: f64, top: f64, height: f64, viewport: 
     }
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// Scrolls so row or highlight `r.key` shows, or sits centred when `r.center`. A virtual row
     /// placed by estimates may measure differently once mounted, along with the rows around it,
     /// so this places it again from what the commit measured until it stays put. Those commits
     /// are `instant` when the request's was, or when it glides: the glide then starts back
     /// where the viewport stood and runs to that place, keeping the speed of one already running.
-    pub(super) fn reveal_row(&mut self, r: &ScrollReveal, instant: bool) {
+    pub(super) fn reveal_row(&mut self, app: &mut dyn AppDriver, r: &ScrollReveal, instant: bool) {
         let (scope, key) = (r.scope.as_deref(), r.key.as_str());
         let glide = r.animated && !instant && !self.reduced_motion && !self.settled;
-        let (mut window, was) = self.reveal_row_once(scope, key, r.center, true, instant || glide);
+        let (mut window, was) = self.reveal_row_once(app, scope, key, r.center, true, instant || glide);
         for _ in 0..8 {
             if !window { break; }
-            window = self.reveal_row_once(scope, key, r.center, false, instant || glide).0;
+            window = self.reveal_row_once(app, scope, key, r.center, false, instant || glide).0;
         }
         if glide && let Some(Was { id, offset: start, glide: v, viewport }) = was
             && let Some(st) = self.scrolls.get_mut(&id)
@@ -59,7 +59,7 @@ impl<S: 'static> Runtime<S> {
             st.spring = None;
             st.moved();
             if self.virtual_window_changed() {
-                self.commit(&Tx { commit: Commit::Instant, ..Tx::default() });
+                self.commit(app, &Tx { commit: Commit::Instant, ..Tx::default() });
             }
         }
         self.reveal_row_x(scope, key);
@@ -68,7 +68,7 @@ impl<S: 'static> Runtime<S> {
     /// One placement of [`Self::reveal_row`]: whether it committed, and on the first, where the
     /// viewport stood before. After the first, it moves only when the row would land somewhere
     /// else.
-    fn reveal_row_once(&mut self, scope: Option<&str>, key: &str, center: bool, first: bool, instant: bool) -> (bool, Option<Was>) {
+    fn reveal_row_once(&mut self, app: &mut dyn AppDriver, scope: Option<&str>, key: &str, center: bool, first: bool, instant: bool) -> (bool, Option<Was>) {
         let target_node = self.nodes.iter().enumerate().find_map(|(i, row)| {
             if !row.named(key) || self.subtree_exiting(i) || !row.parent.is_none_or(|p| in_scope(&self.nodes[p].path, scope)) {
                 return None;
@@ -161,7 +161,7 @@ impl<S: 'static> Runtime<S> {
         }
         let window = self.virtual_window_changed();
         if window {
-            self.commit(&Tx { commit: if instant { Commit::Instant } else { Commit::Animate }, ..Tx::default() });
+            self.commit(app, &Tx { commit: if instant { Commit::Instant } else { Commit::Animate }, ..Tx::default() });
             // The commit measured rows that were estimates: the next placement clamps to the end
             // they make.
             if let Some(i) = self.nodes.iter().position(|n| n.id == id) {

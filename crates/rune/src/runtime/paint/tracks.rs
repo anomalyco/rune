@@ -150,7 +150,7 @@ pub(super) fn shadow_geo(sh: &crate::el::Shadow) -> rune_motion::Rect {
     rune_motion::Rect { x: sh.x, y: sh.y, w: sh.blur, h: sh.spread }
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// Commits `to` on paint property `p` of node `id`, which last drew `from` (None if it's
     /// new). Without a track a node draws its own value (`Runtime::color`, `shadow_at`), so it
     /// needs none until the value changes, and a commit that leaves it changes nothing.

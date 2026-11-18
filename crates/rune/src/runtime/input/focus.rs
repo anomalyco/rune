@@ -71,7 +71,7 @@ fn sync_input_focus(input: &mut crate::el::InputSpec, states: crate::states::Sta
     changed
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     pub(super) fn active_modal(&self) -> Option<usize> {
         self.modal_scope.as_ref().map(|m| m.index)
     }
@@ -142,20 +142,20 @@ impl<S: 'static> Runtime<S> {
     }
     /// Return with no modifiers presses the window's default button (`El::default_button`)
     /// unless the focused element takes Return itself. Text fields decide in `with_focused`.
-    pub(super) fn default_button_key(&mut self, ev: &KeyEvent, tx: &mut Tx) -> bool {
+    pub(super) fn default_button_key(&mut self, app: &mut dyn AppDriver, ev: &KeyEvent, tx: &mut Tx) -> bool {
         if ev.key != Key::Enter || ev.mods != crate::Mods::default() { return false; }
         if self.focused_input().is_some() || self.focused_index().is_some_and(|i| self.takes_return(i)) { return false; }
-        self.press_default_button(tx)
+        self.press_default_button(app, tx)
     }
     /// Presses the default button, if one is in reach; a held Return presses it once.
-    pub(super) fn press_default_button(&mut self, tx: &mut Tx) -> bool {
+    pub(super) fn press_default_button(&mut self, app: &mut dyn AppDriver, tx: &mut Tx) -> bool {
         let Some(i) = (0..self.nodes.len()).rev()
             .find(|&i| self.nodes[i].focus.default && self.nodes[i].handlers.on_press.is_some() && self.reachable(i))
         else { return false };
         if tx.key_repeat { return true; }
         let f = self.nodes[i].handlers.on_press.clone().unwrap();
         log_event!(self, "default {}", self.nodes[i].path);
-        f(states!(self), tx);
+        f(app.states(), tx);
         true
     }
     /// The focus group `i` is an item of. A control inside an item (a tab's close button) is
@@ -243,15 +243,15 @@ impl<S: 'static> Runtime<S> {
         self.defaults.focus_ring
             .unwrap_or(crate::el::Outline { width: 3.0, offset: 0.0, color: self.system_accent.focus(self.env.system_dark) })
     }
-    pub(super) fn set_focus(&mut self, path: Option<String>, keyboard: bool) -> bool {
+    pub(super) fn set_focus(&mut self, app: &mut dyn AppDriver, path: Option<String>, keyboard: bool) -> bool {
         self.input_click.on_focus_change(path.as_deref());
         let moved = self.focus.path() != path.as_deref();
         // A field left mid-composition keeps what it showed, as a browser's does (Tab the input
         // method let through, a click on another control, `Tx::focus`).
-        if moved && self.focused_input().is_some() && self.composing() {
-            let mut tx = self.transaction();
-            self.finish_field_composition(&mut tx);
-            self.latch_requests(&mut tx);
+        if moved && self.focused_input().is_some() && self.composing(app) {
+            let mut tx = self.transaction(app);
+            self.finish_field_composition(app, &mut tx);
+            self.latch_requests(app, &mut tx);
             merge(&mut self.pending, tx);
         }
         // Tabbing away or into a field takes the selection's keyboard; a hovered row doesn't.
@@ -262,14 +262,14 @@ impl<S: 'static> Runtime<S> {
         {
             self.clear_text_selection();
         }
-        let mut changed = moved && self.physical_focus_lost();
+        let mut changed = moved && self.physical_focus_lost(app);
         for n in &mut self.nodes {
             if let Some(input) = &mut n.input {
-                changed |= sync_input_focus(input, states!(self), path.as_deref() == Some(n.path.as_str()));
+                changed |= sync_input_focus(input, app.states(), path.as_deref() == Some(n.path.as_str()));
             }
         }
         for (p, input) in &mut self.virtual_inputs {
-            changed |= sync_input_focus(input, states!(self), path.as_deref() == Some(p.as_str()));
+            changed |= sync_input_focus(input, app.states(), path.as_deref() == Some(p.as_str()));
         }
         let shown = (self.focus.keyboard(), self.focus.shown());
         for effect in self.focus.step(focus_machine::FocusEvent::Set { path, keyboard }) {
@@ -285,7 +285,7 @@ impl<S: 'static> Runtime<S> {
             let (mark, at) = (self.nodes[mark].path.clone(), self.nodes[at].path.clone());
             self.focus.remember_scope(mark, at);
         }
-        self.sync_side_focus();
+        self.sync_side_focus(app);
         // A hover group keyboard focus enters or leaves hovers or rests now (`El::hover_group`).
         // Focus that stayed where it was, shown as it was (every commit's focus pass, most of
         // the time), moves no group: the frame's own interaction pass sees the rest.
@@ -295,7 +295,7 @@ impl<S: 'static> Runtime<S> {
         }
         changed
     }
-    pub(super) fn sync_requested_focus(&mut self, nodes: &mut Vec<Node>) -> bool {
+    pub(super) fn sync_requested_focus(&mut self, app: &mut dyn AppDriver, nodes: &mut Vec<Node>) -> bool {
         // A `Tx::focus_when_shown` still owed stands until the user's own input or another ask,
         // whatever focus did meanwhile (a closing palette leaves it nowhere, then on the prompt).
         let owed = self.focus_owed.take().map(|(key, ring)| (key, ring, crate::el::FocusAsk::WhenShown));
@@ -393,7 +393,7 @@ impl<S: 'static> Runtime<S> {
         if asked.is_none() && let Some(owed) = waits { self.focus_owed = Some(owed); }
         std::mem::swap(&mut self.nodes, nodes);
         self.nodes_replaced();
-        let changed = self.set_focus(next, keyboard);
+        let changed = self.set_focus(app, next, keyboard);
         std::mem::swap(&mut self.nodes, nodes);
         self.nodes_replaced();
         if self.input_click.dragging_path().is_some_and(|p| !nodes.iter().any(|n| n.path == p && !n.inert && n.input.is_some())) {
@@ -509,7 +509,7 @@ impl<S: 'static> Runtime<S> {
     /// `complementary`, `form`, `search`, a labelled `region`) that has a Tab stop, onto the
     /// control focused last inside it, else its first Tab stop, as browsers and Windows apps
     /// cycle panes. Inside a modal it does nothing: the modal is the only pane.
-    fn cycle_landmark(&mut self, back: bool, tx: &mut Tx) -> bool {
+    fn cycle_landmark(&mut self, app: &mut dyn AppDriver, back: bool, tx: &mut Tx) -> bool {
         if self.active_modal().is_some() { return false; }
         let order = self.tab_order();
         let marks: Vec<(usize, usize)> = (0..self.nodes.len())
@@ -528,7 +528,7 @@ impl<S: 'static> Runtime<S> {
         let remembered = self.focus.scope_memory(&self.nodes[mark].path)
             .and_then(|p| order.iter().copied().find(|&j| self.nodes[j].path == p));
         let path = self.nodes[remembered.unwrap_or(first)].path.clone();
-        self.set_focus(Some(path.clone()), true);
+        self.set_focus(app, Some(path.clone()), true);
         tx.scroll_to.push(crate::runtime::ScrollReveal::into_view(None, path));
         true
     }
@@ -561,7 +561,7 @@ impl<S: 'static> Runtime<S> {
         order.into_iter().find(|&j| label(j).starts_with(&prefix))
     }
     /// `shown`: the focus highlight was visible before this key arrived.
-    pub(super) fn focus_key(&mut self, ev: &KeyEvent, shown: bool, tx: &mut Tx) -> bool {
+    pub(super) fn focus_key(&mut self, app: &mut dyn AppDriver, ev: &KeyEvent, shown: bool, tx: &mut Tx) -> bool {
         if ev.mods.cmd || ev.mods.ctrl || ev.mods.alt || ev.mods.logo { return false; }
         // Activations (dismiss, press, open) fire once per press. Their repeats are consumed so
         // they reach nothing else; navigation below keeps repeating.
@@ -569,12 +569,12 @@ impl<S: 'static> Runtime<S> {
         if ev.key == Key::Escape && let Some(i) = self.active_modal() {
             if repeat { return true; }
             let f = self.nodes[i].handlers.modal.as_ref().unwrap().dismiss.clone();
-            self.set_focus(None, self.focus.keyboard());
-            f(states!(self), tx);
+            self.set_focus(app, None, self.focus.keyboard());
+            f(app.states(), tx);
             return true;
         }
         if ev.key == Key::Function(6) {
-            return self.cycle_landmark(ev.mods.shift, tx);
+            return self.cycle_landmark(app, ev.mods.shift, tx);
         }
         if ev.key == Key::Tab {
             if self.link_tab(ev.mods.shift) { return true; }
@@ -600,7 +600,7 @@ impl<S: 'static> Runtime<S> {
                 (None, None) => 0,
             };
             let path = self.nodes[order[next]].path.clone();
-            self.set_focus(Some(path.clone()), true);
+            self.set_focus(app, Some(path.clone()), true);
             tx.scroll_to.push(crate::runtime::ScrollReveal::into_view(None, path));
             self.enter_links(order[next], ev.mods.shift);
             return true;
@@ -620,10 +620,10 @@ impl<S: 'static> Runtime<S> {
                 Key::PageDown => Some(-10), Key::PageUp => Some(10),
                 _ => None,
             };
-            if let Some(delta) = delta { step(states!(self), delta, tx); return true; }
+            if let Some(delta) = delta { step(app.states(), delta, tx); return true; }
             if matches!(ev.key, Key::Home | Key::End) {
                 let Some(f) = self.nodes[i].focus.step_limit.clone() else { return false };
-                f(states!(self), ev.key == Key::End, tx);
+                f(app.states(), ev.key == Key::End, tx);
                 return true;
             }
         }
@@ -659,15 +659,15 @@ impl<S: 'static> Runtime<S> {
                 let follows = n.role == "radio" || n.role == "tab" || self.nodes[g].focus.follows;
                 let action = follows.then(|| n.handlers.on_press.clone()).flatten();
                 let path = n.path.clone();
-                self.set_focus(Some(path.clone()), true);
+                self.set_focus(app, Some(path.clone()), true);
                 tx.scroll_to.push(crate::runtime::ScrollReveal::into_view(None, path));
-                if let Some(f) = action { f(states!(self), tx); }
+                if let Some(f) = action { f(app.states(), tx); }
                 return true;
             }
         } else if self.nodes[i].role == "combobox" && self.nodes[i].input.is_none() && matches!(ev.key, Key::Up | Key::Down) {
             // A popup button opens on its arrows as well as Space (NSPopUpButton).
             if repeat { return true; }
-            if let Some(f) = self.nodes[i].handlers.on_press.clone() { f(states!(self), tx); }
+            if let Some(f) = self.nodes[i].handlers.on_press.clone() { f(app.states(), tx); }
             return true;
         }
         // Space presses the focused control. Return presses only rows and links; for a button
@@ -677,8 +677,8 @@ impl<S: 'static> Runtime<S> {
             // A row the user cannot see highlighted (the pointer left it) chooses nothing.
             if self.nodes[i].focus.highlight.is_some() && !shown { self.focus.step(focus_machine::FocusEvent::Pointed); return true; }
             if repeat { return true; }
-            if self.link_key(i, tx) { return true; }
-            if let Some(f) = self.nodes[i].handlers.on_press.clone() { f(states!(self), tx); }
+            if self.link_key(app, i, tx) { return true; }
+            if let Some(f) = self.nodes[i].handlers.on_press.clone() { f(app.states(), tx); }
             return true;
         }
         false
@@ -704,14 +704,14 @@ impl<S: 'static> Runtime<S> {
 
     /// In a group whose selection follows focus, focus follows selection too: when the app
     /// selects another item (a shortcut, say), focus in that group moves to it.
-    pub(super) fn sync_follows(&mut self) {
+    pub(super) fn sync_follows(&mut self, app: &mut dyn AppDriver) {
         let Some(i) = self.focused_index() else { return };
         if self.nodes[i].input.is_some() || self.nodes[i].focus.selected { return; }
         let Some(g) = self.group(i).filter(|&g| self.nodes[g].focus.follows) else { return };
         let Some(j) = (0..self.nodes.len())
             .find(|&j| self.nodes[j].focus.selected && self.group(j) == Some(g) && self.can_focus(j)) else { return };
         let path = self.nodes[j].path.clone();
-        self.set_focus(Some(path), self.focus.keyboard());
+        self.set_focus(app, Some(path), self.focus.keyboard());
     }
 }
 

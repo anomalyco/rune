@@ -190,7 +190,7 @@ impl Titlebar {
     }
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// The titlebar band, in window points from the top, that the system drags natively while
     /// the content view fills it (macOS full-size content without drag regions). Empty presses
     /// there take the titlebar double-click action. 0, the default, leaves them alone.

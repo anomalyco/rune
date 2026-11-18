@@ -62,7 +62,7 @@ pub(super) fn is_in_clean_spans(spans: &[CleanApplySpan], i: usize) -> bool {
     }
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     fn node_clean_for_apply(&self, new_n: &Node, old_n: &Node, any_animating: bool) -> bool {
         new_n.id == old_n.id
             && new_n.local == old_n.local

@@ -133,7 +133,7 @@ impl LinkFx {
     }
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// Node `i`'s border box as drawn this frame (points, x0 y0 x1 y1).
     pub(super) fn drawn_box(&self, i: usize) -> [f32; 4] {
         self.drawn.get(i).filter(|d| d[2] > 0.0 || d[3] > 0.0)
@@ -224,13 +224,13 @@ impl<S: 'static> Runtime<S> {
     }
 
     /// Runs the `on_link` handler of node `path` for link `k`.
-    pub(super) fn press_link(&mut self, path: &str, k: usize, tx: &mut Tx) -> bool {
+    pub(super) fn press_link(&mut self, app: &mut dyn AppDriver, path: &str, k: usize, tx: &mut Tx) -> bool {
         let Some((f, id)) = self.node(path).and_then(|n| {
             let t = n.text.as_ref()?;
             Some((t.cold.on_link.clone()?, t.cold.links.get(k)?.id.clone()))
         }) else { return false };
         log_event!(self, "link {path} {id}");
-        (f.0)(states!(self), &id, tx);
+        (f.0)(app.states(), &id, tx);
         true
     }
 
@@ -241,13 +241,13 @@ impl<S: 'static> Runtime<S> {
     }
 
     /// Runs the `on_link_secondary` handler of node `path` for link `k`.
-    pub(super) fn secondary_press_link(&mut self, path: &str, k: usize, point: PointerEvent, tx: &mut Tx) -> bool {
+    pub(super) fn secondary_press_link(&mut self, app: &mut dyn AppDriver, path: &str, k: usize, point: PointerEvent, tx: &mut Tx) -> bool {
         let Some((f, id)) = self.node(path).and_then(|n| {
             let t = n.text.as_ref()?;
             Some((t.cold.on_link_secondary.clone()?, t.cold.links.get(k)?.id.clone()))
         }) else { return false };
         log_event!(self, "link secondary {path} {id}");
-        (f.0)(states!(self), &id, point.window(), tx);
+        (f.0)(app.states(), &id, point.window(), tx);
         true
     }
 
@@ -304,20 +304,20 @@ impl<S: 'static> Runtime<S> {
 
     /// The Menu key on focused node `i`'s focused link: its `on_link_secondary`, at the
     /// bottom-left of its first line box.
-    pub(super) fn focused_link_menu(&mut self, i: usize, tx: &mut Tx) -> bool {
+    pub(super) fn focused_link_menu(&mut self, app: &mut dyn AppDriver, i: usize, tx: &mut Tx) -> bool {
         let Some(k) = self.links.focus.filter(|&k| k < self.link_count(i)) else { return false };
         if self.nodes[i].text.as_ref().is_none_or(|t| t.cold.on_link_secondary.is_none()) { return false; }
         let Some((_, r)) = self.link_boxes(i, self.drawn_box(i)).into_iter().find(|(j, _)| *j == k) else { return false };
         let path = self.nodes[i].path.clone();
         let point = self.pointer_event(i, r[0], r[3]);
-        self.secondary_press_link(&path, k, point, tx)
+        self.secondary_press_link(app, &path, k, point, tx)
     }
 
     /// Enter or Space on a focused link presses it.
-    pub(super) fn link_key(&mut self, i: usize, tx: &mut Tx) -> bool {
+    pub(super) fn link_key(&mut self, app: &mut dyn AppDriver, i: usize, tx: &mut Tx) -> bool {
         let Some(k) = self.links.focus.filter(|&k| k < self.link_count(i)) else { return false };
         let path = self.nodes[i].path.clone();
-        self.press_link(&path, k, tx);
+        self.press_link(app, &path, k, tx);
         true
     }
 

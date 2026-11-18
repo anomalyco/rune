@@ -48,7 +48,7 @@ pub(crate) fn escape(s: &str) -> String {
     out
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// The visible scene as `ExportNode`s: what `--html` writes for one width.
     pub(crate) fn export_nodes(&self) -> Vec<ExportNode> {
         let mut out = Vec::new();

@@ -263,7 +263,7 @@ impl Launched {
     }
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// Starts the text flights and launches handlers asked for this frame.
     pub(super) fn capture_flights(&mut self, tx: &mut Tx) {
         for (source, target) in std::mem::take(&mut tx.text_flights) {

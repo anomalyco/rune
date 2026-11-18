@@ -19,7 +19,7 @@ impl LandingHolds {
     }
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// Marks in `held`, per node of `nodes`, those this commit lands under an
     /// `El::hold_landing_width` element whose width changes, and returns each such element's
     /// index with how far it shifts so its anchor child stays where it was drawn. `held` stays

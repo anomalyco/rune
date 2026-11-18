@@ -36,7 +36,7 @@ impl Mask {
     }
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// Fills the mask for this frame's paint and reports. Call [`Self::end_exit_mask`] once
     /// they're done, so nothing reads it after a phase changes.
     pub(super) fn begin_exit_mask(&mut self) {

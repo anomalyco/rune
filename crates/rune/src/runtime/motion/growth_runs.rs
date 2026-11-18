@@ -92,7 +92,7 @@ impl GrowthRun {
     }
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// At a commit, after the stack's rows have their new targets: breaks blocks this commit
     /// changed and forms new ones from runs of rows in `order` that were `opened` (new fold rows
     /// growing from nothing) or `shut` (fold rows that left) by it.

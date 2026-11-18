@@ -839,9 +839,9 @@ mod tests {
     #[test]
     fn window_panel_focus_is_local_deduplicated_and_runs_without_frames() {
         let mut rt = Runtime::new(Vec::new(), |_: &Vec<bool>, _: &mut Cx<Vec<bool>>| el(), (100.0, 100.0), Env::default());
-        rt.on_focus = Some(|seen, focused, tx| { seen.push(focused); if !focused { tx.close_window(); } });
+        rt.hooks.on_focus = Some(|seen, focused, tx| { seen.push(focused); if !focused { tx.close_window(); } });
         let mut other = Runtime::new(Vec::new(), |_: &Vec<bool>, _: &mut Cx<Vec<bool>>| el(), (100.0, 100.0), Env::default());
-        other.on_focus = rt.on_focus;
+        other.hooks.on_focus = rt.hooks.on_focus;
         rt.window_focus(true);
         rt.window_focus(true);
         rt.window_focus(false);
@@ -851,7 +851,7 @@ mod tests {
         assert!(other.state.is_empty());
         other.window_focus(false);
         assert_eq!(other.state, [false]);
-        other.on_focus = None;
+        other.hooks.on_focus = None;
         other.frame(0.0);
         assert!(!other.stale());
         other.window_focus(true);
@@ -1005,7 +1005,7 @@ mod tests {
     #[test]
     fn minimize_reaches_the_shell_from_handlers_updates_and_handles() {
         let mut rt = Runtime::new(0u32, |_: &u32, _: &mut Cx<u32>| el(), (100.0, 100.0), Env::default());
-        rt.on_focus = Some(|_, focused, tx| if !focused { tx.minimize(); });
+        rt.hooks.on_focus = Some(|_, focused, tx| if !focused { tx.minimize(); });
         rt.window_focus(true);
         assert!(!rt.minimize.latched());
         rt.window_focus(false);

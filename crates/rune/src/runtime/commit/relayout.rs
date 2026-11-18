@@ -54,13 +54,13 @@ pub(super) enum CommitKind {
     Remount,
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// Which way this commit measures. Both shortcuts need everything the view reads to be as
     /// the last commit built it, checked here once for both.
     pub(super) fn commit_kind(&self, tx: &Tx) -> CommitKind {
         let unchanged = self.state_unchanged && !tx.commit.lands() && !self.reuse.read_moved
             && self.reuse.scale == self.env.scale && self.reuse.srgb == Some(self.srgb_blend)
-            && self.playground.is_none() && !self.patch_pending()
+            && !self.has_playground && !self.patch_pending()
             // Exiting nodes left the layout tree.
             && self.layout.live_count() == self.nodes.len();
         if !unchanged { return CommitKind::Rebuild; }
@@ -73,7 +73,7 @@ impl<S: 'static> Runtime<S> {
 
     /// Measures a commit: lays the last tree out again when only the viewport changed since it
     /// was built, remounts virtual rows alone when only their window moved, else runs the view.
-    pub(super) fn measure_commit(&mut self, tx: &Tx) -> Measured {
+    pub(super) fn measure_commit(&mut self, app: &dyn ViewDriver, tx: &Tx) -> Measured {
         let kind = self.commit_kind(tx);
         if kind == CommitKind::Relayout {
             // The view keeps what it last read; `settle_layout_reads` and the caret check run it
@@ -81,14 +81,14 @@ impl<S: 'static> Runtime<S> {
             let reads = self.layout_seen.reads.clone();
             let caret_read = self.caret_watch;
             let selection = self.selection_by_path();
-            let mut m = self.measurement(true);
+            let mut m = self.measurement(app, true);
             m.layout_reads = reads;
             m.caret_read = caret_read;
             return match m.relayout() {
                 Some(measured) => Measured { selection, ..measured },
                 None => {
                     self.refresh_layout_seen();
-                    self.measure(tx)
+                    self.measure(app, tx)
                 }
             };
         }
@@ -98,27 +98,27 @@ impl<S: 'static> Runtime<S> {
             let reads = self.layout_seen.reads.clone();
             let caret_read = self.caret_watch;
             let selection = self.selection_by_path();
-            let mut m = self.measurement(true);
+            let mut m = self.measurement(app, true);
             m.layout_reads = reads;
             m.caret_read = caret_read;
             return match m.remount_virtuals() {
                 commit::remount::RemountOutcome::Measured(measured) => Measured { selection, ..measured },
                 commit::remount::RemountOutcome::Retry => {
                     self.refresh_layout_seen();
-                    self.measure_retry(tx)
+                    self.measure_retry(app, tx)
                 }
                 commit::remount::RemountOutcome::Fallback => {
                     self.refresh_layout_seen();
-                    self.measure(tx)
+                    self.measure(app, tx)
                 }
             };
         }
         self.refresh_layout_seen();
-        self.measure(tx)
+        self.measure(app, tx)
     }
 }
 
-impl<S: 'static> Measurement<'_, S> {
+impl Measurement<'_> {
     /// Lays the last commit's nodes out again at the viewport, in its layout tree. None when a
     /// virtual list's window has to move, which only the view can build.
     fn relayout(mut self) -> Option<Measured> {

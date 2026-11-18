@@ -139,7 +139,7 @@ fn unit_at(e: &crate::edit::TextEdit, h: Hit, unit: Unit) -> (usize, usize) {
     (a, b)
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// A press at (x, y) on text field `ji`, down at `down_at`; `second` when it's the second
     /// of a double press.
     pub(super) fn input_down(&mut self, ji: usize, x: f32, y: f32, down_at: f64, second: bool) {
@@ -211,7 +211,7 @@ impl<S: 'static> Runtime<S> {
         self.queue.push(Action::Focus(path, ix, iy));
     }
 
-    pub(super) fn focus_input(&mut self, path: String, x: f32, y: f32, one: &mut Tx) -> bool {
+    pub(super) fn focus_input(&mut self, app: &mut dyn AppDriver, path: String, x: f32, y: f32, one: &mut Tx) -> bool {
         let step = if self.input_click.steps.front().is_some_and(|(p, _)| *p == path) {
             self.input_click.steps.pop_front().unwrap().1
         } else {
@@ -230,12 +230,12 @@ impl<S: 'static> Runtime<S> {
         let scroll = self.input_scroll.get(&path).copied().unwrap_or(0.0);
         match step {
             Step::Down { clicks, shift } => {
-                self.set_focus(Some(path), false);
+                self.set_focus(app, Some(path), false);
                 // A press mid-composition writes it into the text first, as a browser's field
                 // does, then puts the caret where it landed: the layout it hits already shows
                 // the composition in place.
-                self.finish_field_composition(one);
-                let e = access(states!(self));
+                self.finish_field_composition(app, one);
+                let e = access(app.states());
                 e.set_single_line(single);
                 e.break_history_group();
                 e.clear_typing_style();
@@ -273,7 +273,7 @@ impl<S: 'static> Runtime<S> {
                     self.input_click.drop_drag();
                     return false;
                 }
-                let e = access(states!(self));
+                let e = access(app.states());
                 e.set_single_line(single);
                 if e.preedit().is_some() {
                     self.input_click.clear();

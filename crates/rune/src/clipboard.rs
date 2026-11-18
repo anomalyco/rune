@@ -122,7 +122,7 @@ enum Request {
     Read { purpose: Purpose, reply: mpsc::Sender<Reply>, wake: Waker },
 }
 impl Purpose {
-    fn paste<S: 'static>(rt: &Runtime<S>, target: Option<String>) -> Self {
+    fn paste(rt: &crate::runtime::RuntimeCore, target: Option<String>) -> Self {
         let forms = rt.paste_forms(target.as_deref());
         Purpose::Paste(target, forms)
     }
@@ -162,7 +162,9 @@ impl Default for Client {
 }
 impl Client {
     pub fn connect(&mut self, wake: Waker) { self.wake = wake; }
-    pub fn read<S: 'static>(&self, rt: &Runtime<S>) {
+    #[inline(always)]
+    pub fn read<S: 'static>(&self, rt: &Runtime<S>) { self.read_core(rt.core()); }
+    pub(crate) fn read_core(&self, rt: &crate::runtime::RuntimeCore) {
         let purpose = Purpose::paste(rt, rt.paste_target());
         if let Some(m) = &rt.clipboard {
             if let Some(reply) = m.answer(purpose) && self.sender.send(reply).is_ok() { (self.wake)(); }
@@ -170,14 +172,16 @@ impl Client {
         }
         self.read_for(purpose);
     }
-    pub fn receive<S: 'static>(&self, rt: &mut Runtime<S>) -> bool {
+    #[inline(always)]
+    pub fn receive<S: 'static>(&self, rt: &mut Runtime<S>) -> bool { self.receive_core(rt.core_mut()) }
+    pub(crate) fn receive_core(&self, rt: &mut crate::runtime::RuntimeCore) -> bool {
         let mut received = self.changed.swap(false, Ordering::SeqCst);
         for reply in self.replies.try_iter() { deliver(rt, reply); received = true; }
         received
     }
 }
 
-fn deliver<S: 'static>(rt: &mut Runtime<S>, reply: Reply) {
+fn deliver(rt: &mut crate::runtime::RuntimeCore, reply: Reply) {
     match reply.purpose {
         Purpose::Paste(target, _) => rt.paste_result(target, reply.content),
         Purpose::Read(id) => rt.read_result(id, reply.content),
@@ -186,7 +190,7 @@ fn deliver<S: 'static>(rt: &mut Runtime<S>, reply: Reply) {
 
 /// Applies a runtime's clipboard requests to its memory clipboard, if it has one. Runs after
 /// every frame, so headless runtimes write too.
-pub(crate) fn flush_memory<S: 'static>(rt: &mut Runtime<S>) {
+pub(crate) fn flush_memory(rt: &mut crate::runtime::RuntimeCore) {
     let Some(m) = rt.clipboard.clone() else { return };
     if std::mem::take(&mut rt.clear_secret_request) { m.handle(Request::Clear(None)); }
     if let Some(copy) = rt.copy_request.take() {
@@ -200,10 +204,8 @@ pub(crate) fn flush_memory<S: 'static>(rt: &mut Runtime<S>) {
     }
 }
 
-impl<S: 'static> Runtime<S> {
-    /// Use a shared in-memory clipboard (`clipboard::memory()`) instead of the OS one: copies,
-    /// secret clears and pastes go to it, in headless runs too. For tests.
-    pub fn use_clipboard(&mut self, clipboard: &MemoryClipboard) { self.clipboard = Some(clipboard.clone()); }
+impl crate::runtime::RuntimeCore {
+    pub(crate) fn use_clipboard(&mut self, clipboard: &MemoryClipboard) { self.clipboard = Some(clipboard.clone()); }
 }
 
 /// An in-memory clipboard for tests, shared by its clones and by every runtime given it with

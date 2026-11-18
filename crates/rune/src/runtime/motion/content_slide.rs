@@ -105,7 +105,7 @@ impl ContentSlides {
     }
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// Before node `id`, a child of `parent` whose contents' top moved `dy` points down in its
     /// growth row (drawn less new), takes that slide: with the row's growth where it opens
     /// toward them. How far it still has to slide from where it was drawn.

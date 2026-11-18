@@ -80,7 +80,7 @@ pub(super) fn paint_pose_springing(store: &rune_motion::AnimationStore, id: Node
 /// Seconds a changed `El::scale` holds still before its text rasterizes at that size.
 pub(super) const STATIC_SCALE_SETTLE: f64 = 0.1;
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// Moves node `id`'s group-opacity rest to `group`'s on its opacity motion (the
     /// transaction's spring without one), or lands it when `quiet`: an instant change or motion,
     /// a mount, reduced motion. No group opacity draws at full, so an element that takes one on

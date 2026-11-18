@@ -1,7 +1,7 @@
 //! Frame paint pass: `Scene` presented poses, clips, layers and text → GPU `Instance`s.
 use super::*;
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     pub(super) fn build(&mut self) -> bool {
         let (_paint_time, _blend) = (crate::frame::profile::Scope::new(crate::frame::profile::Phase::Paint), crate::theme::scope(self.srgb_blend));
         let s = self.env.scale;

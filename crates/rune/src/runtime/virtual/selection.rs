@@ -10,7 +10,7 @@ use taffy::style::{Display, FlexDirection};
 use super::phase::{self, Far, Selection};
 use super::{SelectedText, kept, same_keyed_path, trim_uncopied};
 use crate::el::{El, SelectionCopy, TextSpec};
-use crate::runtime::Runtime;
+use crate::runtime::RuntimeCore;
 
 #[path = "pins.rs"]
 pub(crate) mod pins;
@@ -169,7 +169,7 @@ pub(super) fn offscreen_piece(t: &OffscreenText, range: Range<usize>, base: Opti
     SelectedText { path, key: t.key.clone(), range, len, whole, text, content }
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     pub(crate) fn virtual_list_allowed(&self, list_path: &str) -> bool {
         self.live(list_path).is_some()
             && !self.virtuals.get(list_path).is_some_and(|v| v.selection.scope.inert)

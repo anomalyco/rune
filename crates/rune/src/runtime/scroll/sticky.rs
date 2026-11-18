@@ -389,7 +389,7 @@ fn target_shift(nodes: &[Node], scrolls: &HashMap<NodeId, ScrollState>, j: usize
     total
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// Replay just one inherited fade edge without the nearest viewport's content-aware
     /// fade. Explicit clips inside it and fades outside it still apply. Recursion follows
     /// parents already painted this frame and needs no scratch allocation.
@@ -546,7 +546,7 @@ impl<S: 'static> Runtime<S> {
     /// Scrolls each kept element's viewport so the element's top lands where it showed before
     /// the commit, clamped to the content, re-pinning a `stick_bottom` end, and remounting any
     /// virtual rows the jump brings into view.
-    pub(super) fn apply_keeps(&mut self) {
+    pub(super) fn apply_keeps(&mut self, app: &mut dyn AppDriver) {
         if !self.requests.has_keeps() { return; }
         let mut keeps = self.requests.take_keeps();
         for pass in 0..4 {
@@ -585,7 +585,7 @@ impl<S: 'static> Runtime<S> {
                 moved = true;
             }
             if !moved || !self.virtual_window_changed() { break; }
-            self.commit(&Tx::default());
+            self.commit(app, &Tx::default());
         }
         self.requests.restore_keeps(keeps);
     }

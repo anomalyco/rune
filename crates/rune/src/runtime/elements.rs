@@ -134,7 +134,7 @@ impl Pose {
     pub fn moving(&self) -> bool { self.moving }
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// Authored geometry goals, before scroll and spring sampling, in parent space.
     pub(crate) fn trace_goals(&self) -> impl Iterator<Item = (&str, [f32; 7])> {
         self.nodes.iter().map(|n| (n.path.as_str(), [n.local.x, n.local.y, n.local.w, n.local.h, n.vis.offset[0], n.vis.offset[1], n.static_scale]))
@@ -430,11 +430,11 @@ impl<S: 'static> Runtime<S> {
         self.element_at_within(None, x, y, pick)
     }
 
-    pub(super) fn run_pick_reads(&mut self, tx: &mut Tx) {
+    pub(super) fn run_pick_reads(&mut self, app: &mut dyn AppDriver, tx: &mut Tx) {
         for read in std::mem::take(&mut tx.pick_reads) {
             let picked = self.element_at_within(read.within.as_deref(), read.x, read.y, read.pick);
             if let Some(f) = read.take() {
-                f(states!(self), picked, tx);
+                f(app.states(), picked, tx);
                 self.dirty = true;
             }
         }

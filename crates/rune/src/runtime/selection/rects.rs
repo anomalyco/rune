@@ -8,6 +8,14 @@ use super::*;
 /// The layout-read key `Cx::selection_rects` reads under.
 pub(crate) const SELECTION: &str = "\u{1}selection";
 
+impl cx::CxCore {
+    pub(crate) fn selection_rects(&self) -> Vec<[f32; 4]> {
+        layout_read::note_read(&mut self.layout_reads.borrow_mut(), SELECTION, None);
+        crate::memo::read_selection(&self.layout.selection);
+        self.layout.selection.to_vec()
+    }
+}
+
 impl<S> Cx<S> {
     /// The line boxes of the text selection, `[x, y, w, h]` each in window points after
     /// scrolling, in reading order: one per line of each selected text, as its highlight draws
@@ -23,10 +31,9 @@ impl<S> Cx<S> {
     /// so a toolbar that waits for the release
     /// ([`SelectionChange::dragging`](crate::SelectionChange::dragging)) should only read it
     /// once shown. A `memo` that reads it is rebuilt when the boxes move.
+    #[inline(always)]
     pub fn selection_rects(&self) -> Vec<[f32; 4]> {
-        layout_read::note_read(&mut self.layout_reads.borrow_mut(), SELECTION, None);
-        crate::memo::read_selection(&self.layout.selection);
-        self.layout.selection.to_vec()
+        self.core.selection_rects()
     }
 }
 
@@ -39,7 +46,7 @@ pub(crate) fn boxes_moved(a: &[[f32; 4]], b: &[[f32; 4]]) -> bool {
     a.len() != b.len() || a.iter().zip(b).any(|(x, y)| layout_read::moved(Some(*x), Some(*y)))
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// The selection's line boxes laid out in the last commit's nodes.
     pub(super) fn selection_boxes(&self) -> Vec<[f32; 4]> {
         let mut out = Vec::new();

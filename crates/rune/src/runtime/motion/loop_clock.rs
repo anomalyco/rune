@@ -22,7 +22,7 @@ pub(super) struct LoopClock {
     lead: f64,
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// Before a frame's commits, which then step `dt` more.
     pub(super) fn keep_loops_on_clock(&mut self, dt: f64) {
         self.loop_clock.lead = dt * f64::from(self.time_scale);

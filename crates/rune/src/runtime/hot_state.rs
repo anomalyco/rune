@@ -1,7 +1,7 @@
 //! What a live-edit reload reports about a running window: its scroll offsets and moving frames.
 use super::*;
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     pub(crate) fn hot_scrolls(&self) -> Vec<(String, f64)> {
         self.nodes.iter().filter_map(|n| self.scrolls.get(&n.id).map(|s| (n.path.clone(), s.offset))).collect()
     }

@@ -48,10 +48,8 @@ impl Pass {
 
 /// Measurement capabilities: text/layout caches and virtual geometry only. In particular this
 /// type has no Scene, growth tracks, reveal tracks, draw instances, or mutable app state.
-pub(super) struct Measurement<'a, S: 'static> {
-    pub(super) state: &'a S,
-    pub(super) view: fn(&S, &mut Cx<S>) -> El,
-    pub(super) playground: Option<&'a crate::playground::Live<S>>,
+pub(super) struct Measurement<'a> {
+    pub(super) app: &'a dyn ViewDriver,
     pub(super) env: Env,
     pub(super) viewport: (f32, f32),
     pub(super) fit_height: bool,
@@ -128,12 +126,12 @@ pub(super) struct Measured {
     pub(super) selection: Vec<layout_read::SelectedRange>,
 }
 
-impl<S: 'static> Runtime<S> {
-    pub(super) fn commit(&mut self, tx: &Tx) {
+impl RuntimeCore {
+    pub(super) fn commit(&mut self, app: &mut dyn AppDriver, tx: &Tx) {
         let _commit_time = crate::frame::profile::Scope::new(crate::frame::profile::Phase::Commit);
         let _first_view = crate::tooling::perf_warn::launch::FirstView::start(self.commits == 0);
         let budget = crate::tooling::perf_warn::budget::Commit::start();
-        self.apply_playground();
+        self.apply_playground(app);
         let _history = crate::memo::snapshot::enter();
         COMMITS.set(COMMITS.get() + 1);
         self.last_commit_clock = self.clock;
@@ -146,26 +144,26 @@ impl<S: 'static> Runtime<S> {
             }
         }
         self.note_drawn_rows();
-        let mut measured = self.measure_commit(tx);
+        let mut measured = self.measure_commit(app, tx);
         // A new zoom lays the view out again at the scale and size it gives, in this commit.
         if self.apply_zoom(measured.zoom) {
             self.discard_measured(measured);
-            measured = self.measure_commit(tx);
+            measured = self.measure_commit(app, tx);
         }
         self.focus_before_commit = self.focus.owned();
         // Settle layout reads first so a field that mounts once a rect is known is in `nodes`.
-        measured = self.settle_layout_reads(measured, tx);
-        if self.sync_requested_focus(&mut measured.nodes) {
+        measured = self.settle_layout_reads(app, measured, tx);
+        if self.sync_requested_focus(app, &mut measured.nodes) {
             self.discard_measured(measured);
-            measured = self.measure(tx);
-            measured = self.settle_layout_reads(measured, tx);
+            measured = self.measure(app, tx);
+            measured = self.settle_layout_reads(app, measured, tx);
         }
         if measured.caret_read && self.caret_moved(Some(&measured.nodes)) {
             self.discard_measured(measured);
-            measured = self.measure(tx);
-            measured = self.settle_layout_reads(measured, tx);
+            measured = self.measure(app, tx);
+            measured = self.settle_layout_reads(app, measured, tx);
         }
-        self.apply(measured, tx);
+        self.apply(app, measured, tx);
         self.scene.keep_flights(false);
         self.memo.keep_since(self.memo_since);
         self.track_focused_rows();

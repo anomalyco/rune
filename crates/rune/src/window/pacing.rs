@@ -4,7 +4,13 @@
 use super::*;
 
 /// The runtime's next timer, on the wall clock that started with the host.
+#[cfg(test)]
+#[inline(always)]
 pub(crate) fn wall_wake_deadline<S>(rt: &Runtime<S>) -> Option<Instant> {
+    wall_wake_deadline_core(rt.core())
+}
+
+fn wall_wake_deadline_core(rt: &crate::runtime::RuntimeCore) -> Option<Instant> {
     rt.wall_start?.checked_add(Duration::try_from_secs_f64(rt.wake_deadline()?).ok()?)
 }
 
@@ -14,7 +20,12 @@ pub(crate) fn wall_wake_deadline<S>(rt: &Runtime<S>) -> Option<Instant> {
 /// poll that keeps asking steps at most once per `TIMER_FRAME` and never spins the loop.
 /// Motion's own frames (a loop's step, a video's next picture) come when due: held a frame
 /// after each poll, they'd drift later every frame and drop one every half second.
+#[inline(always)]
 pub(crate) fn timer_deadline<S>(rt: &Runtime<S>) -> Option<Instant> {
+    timer_deadline_core(rt.core())
+}
+
+fn timer_deadline_core(rt: &crate::runtime::RuntimeCore) -> Option<Instant> {
     let wall = |t: f64| rt.wall_start?.checked_add(Duration::try_from_secs_f64(t).ok()?);
     let polled = wall(rt.polled_at());
     let timer = rt.poll_wake_deadline().and_then(wall).map(|due| polled.map_or(due, |polled| due.max(polled + TIMER_FRAME)));
@@ -105,8 +116,13 @@ impl HiddenPace {
 /// Whether a timer asks for the frame after one just presented. Only a surface whose display
 /// link paces it (`next_frame` is its next tick) takes a timer due by then as a frame request;
 /// anywhere else the timer waits in `timer_deadline`, so it never turns the loop by itself.
+#[inline(always)]
 pub(crate) fn timer_wants_frame<S>(rt: &Runtime<S>, next_frame: Option<Instant>) -> bool {
-    next_frame.is_some_and(|next| wall_wake_deadline(rt).is_some_and(|due| due <= next))
+    timer_wants_frame_core(rt.core(), next_frame)
+}
+
+pub(super) fn timer_wants_frame_core(rt: &crate::runtime::RuntimeCore, next_frame: Option<Instant>) -> bool {
+    next_frame.is_some_and(|next| wall_wake_deadline_core(rt).is_some_and(|due| due <= next))
 }
 
 /// How long a frame a due timer asked for may wait for the window to draw it. Wayland withholds

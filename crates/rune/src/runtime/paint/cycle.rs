@@ -84,7 +84,7 @@ pub(crate) fn checking() -> bool {
     *ON.get_or_init(|| std::env::var_os("RUNE_LOOP_CHECK").is_some_and(|v| v == "1"))
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// The paint the instances come from, and the instances a loop-only step changes (ascending).
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     pub(crate) fn cycle_paint(&self) -> (u64, Vec<u32>) {

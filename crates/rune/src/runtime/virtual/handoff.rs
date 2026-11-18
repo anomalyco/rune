@@ -9,7 +9,7 @@ pub(in crate::runtime) enum Handoff {
     Growing { row: NodeId, viewport: NodeId, frames: Vec<(NodeId, rune_motion::Rect, f32, f32)>, rows: Vec<(NodeId, f32, f32)> },
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     pub(super) fn tail_handoff(&self, nodes: &[Node], stack: usize, viewport: usize, row: &str, room: &str) -> Option<Handoff> {
         let (r, panel) = nodes.iter().enumerate().find(|(_, n)| n.named(room))?;
         let view = &nodes[viewport];

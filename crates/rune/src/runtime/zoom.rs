@@ -40,7 +40,7 @@ pub(crate) fn clamp(k: f32) -> f32 {
     if k.is_finite() { k.clamp(0.1, 10.0) } else { 1.0 }
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// The view's UI zoom ([`Cx::zoom`]), 1 unzoomed.
     pub fn zoom(&self) -> f32 {
         self.zoom.k

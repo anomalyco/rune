@@ -4,13 +4,13 @@ use super::*;
 /// How far (points, per axis) a click may travel and still pair into a double click.
 pub(super) const CLICK_SLOP: f32 = 4.0;
 
-impl<S: 'static> Runtime<S> {
-    pub fn pointer_move(&mut self, x: f32, y: f32) { self.move_pointer(x, y, true); }
+impl RuntimeCore {
+    pub(crate) fn pointer_move(&mut self, app: &dyn ViewDriver, x: f32, y: f32) { self.move_pointer(app, x, y, true); }
 
     /// `drag_move` false keeps a held drag from getting a `Phase::Move`: a release at the
     /// point the drag last saw has nothing new to report, and its instant transaction would
     /// cut short whatever the press started (a tapped slider's knob mid-spring).
-    pub(super) fn move_pointer(&mut self, x: f32, y: f32, drag_move: bool) {
+    pub(super) fn move_pointer(&mut self, app: &dyn ViewDriver, x: f32, y: f32, drag_move: bool) {
         let moved = self.pointer != Some((x, y));
         if moved { self.hover_paused = false; self.release_hover_hold(); }
         self.pointer = Some((x, y));
@@ -28,7 +28,7 @@ impl<S: 'static> Runtime<S> {
         self.refresh_hover(x, y);
         let Some(held) = self.press.held() else { return };
         let (path, d, at, button) = (held.path.clone(), held.drag, held.at, held.button);
-        if held.drag_out.is_some_and(|threshold| crate::drag_out::past_threshold(at, (x, y), threshold)) && self.start_drag_out(path.clone()) {
+        if held.drag_out.is_some_and(|threshold| crate::drag_out::past_threshold(at, (x, y), threshold)) && self.start_drag_out(app, path.clone()) {
             return;
         }
         if let Some(held) = self.press.held_mut() {
@@ -70,7 +70,7 @@ impl<S: 'static> Runtime<S> {
     }
 
     /// Overlay observation updates coordinates without presenting unchanged hover pixels.
-    pub(crate) fn observe_pointer(&mut self, x: f32, y: f32) -> bool {
+    pub(crate) fn observe_pointer(&mut self, app: &dyn ViewDriver, x: f32, y: f32) -> bool {
         if self.pointer == Some((x, y)) { return false; }
         let visual_changed = self.nodes.iter().enumerate().any(|(i, n)| {
             if n.vis.hover().a <= 0.0 && !n.vis.tracks_press() && n.handlers.get().is_none_or(|h| h.press_scale.is_none()) { return false; }
@@ -80,7 +80,7 @@ impl<S: 'static> Runtime<S> {
         // Reaching or leaving a help element starts or ends its tooltip's wait.
         let help_changed = self.help_target_changes(x, y);
         let (queued, capture_inside) = (self.queue.len(), self.press.inside());
-        self.pointer_move(x, y);
+        self.pointer_move(app, x, y);
         visual_changed || help_changed || self.queue.len() != queued || self.press.inside() != capture_inside
     }
 
@@ -166,13 +166,13 @@ impl<S: 'static> Runtime<S> {
     /// The held press crossed the drag threshold on a `drag_out` element: ask the host for an
     /// OS drag and hand it the pointer, so nothing stays pressed or hovered after the drop.
     /// False when the element offers nothing this time and the press stays a press.
-    pub(super) fn start_drag_out(&mut self, path: String) -> bool {
+    pub(super) fn start_drag_out(&mut self, app: &dyn ViewDriver, path: String) -> bool {
         let Some(held) = self.press.held_mut() else { return false };
         held.drag_out = None;
         let press = held.at;
         let Some(i) = self.live_index(&path) else { return false };
         let Some(f) = self.nodes[i].handlers.drag_out.clone() else { return false };
-        let Some(item) = f(playground_host::handler_states_ref(&self.state, self.playground.as_deref())).filter(|item| !item.is_empty()) else { return false };
+        let Some(item) = f(app.states_ref()).filter(|item| !item.is_empty()) else { return false };
         let n = &self.nodes[i];
         let r = self.drawn.get(i).copied().unwrap_or([n.target[0], n.target[1], n.target[2] - n.target[0], n.target[3] - n.target[1]]);
         let clip = self.screen_clip_of_parent(n.parent).map(|v| v / self.env.scale);
@@ -203,13 +203,13 @@ impl<S: 'static> Runtime<S> {
         }
     }
 
-    pub fn pointer_down(&mut self, x: f32, y: f32) {
-        self.press_down(x, y, false);
+    pub(crate) fn pointer_down(&mut self, app: &mut dyn AppDriver, x: f32, y: f32) {
+        self.press_down(app, x, y, false);
     }
 
     /// A primary press at (x, y); `touch`: a finger's, which never runs `on_press` on the way
     /// down (`El::press_on_down` is a mouse's).
-    pub(super) fn press_down(&mut self, x: f32, y: f32, touch: bool) {
+    pub(super) fn press_down(&mut self, app: &mut dyn AppDriver, x: f32, y: f32, touch: bool) {
         // A press ends a middle-click autoscroll, and does nothing else.
         if self.autoscroll_press(crate::PointerButton::Primary) { self.pointer = Some((x, y)); return; }
         if self.press.held().is_some_and(|h| h.button != crate::PointerButton::Primary) {
@@ -239,7 +239,7 @@ impl<S: 'static> Runtime<S> {
             }
             return;
         }
-        self.playground_pointer_down(x);
+        self.playground_pointer_down(app, x);
         self.press_selection(target, x, y);
         // Inside a draggable row, dragging drags the row; clicks still select words and lines.
         if target.is_some_and(|t| self.nodes[t].handlers.on_drag.is_some() || self.nodes[t].handlers.drag_out.is_some()) {
@@ -339,7 +339,7 @@ impl<S: 'static> Runtime<S> {
         self.press.hold(held);
     }
 
-    pub fn pointer_up(&mut self, x: f32, y: f32) {
+    pub(crate) fn pointer_up(&mut self, app: &dyn ViewDriver, x: f32, y: f32) {
         if self.autoscroll_release(crate::PointerButton::Primary) { self.pointer = Some((x, y)); return; }
         #[cfg(target_os = "linux")]
         self.primary_released();
@@ -347,27 +347,27 @@ impl<S: 'static> Runtime<S> {
             self.pointer = Some((x, y));
             return;
         }
-        self.release_capture(x, y);
+        self.release_capture(app, x, y);
     }
 
     /// The platform lost the release of a held press, so nothing was dropped: a held drag ends
     /// cancelled at (x, y), and any other press is released there.
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-    pub(crate) fn pointer_release_lost(&mut self, x: f32, y: f32) {
+    pub(crate) fn pointer_release_lost(&mut self, app: &dyn ViewDriver, x: f32, y: f32) {
         let held = self.press.held().filter(|h| h.button == crate::PointerButton::Primary)
             .map(|h| (h.left, h.moved || !press_run::within_slop(h.at, (x, y))));
         if let Some((left, moved)) = held && self.cancel_drag_at(Some((x, y))) {
             // As a normal release: a press that dragged ends the run of clicks.
             if moved { self.press_clicks.clear(); }
-            self.move_pointer(x, y, false);
+            self.move_pointer(app, x, y, false);
             self.leave_after_release(left);
         } else {
-            self.pointer_up(x, y);
+            self.pointer_up(app, x, y);
         }
     }
 
     /// What input has queued for handlers, emptied: each drag event, `None` for a press.
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "macos"))]
     pub(crate) fn take_queued_pointer(&mut self) -> Vec<Option<Drag>> {
         let heard = self.queue.iter().filter_map(|action| match action {
             Action::Drag(_, drag, _) => Some(Some(*drag)),
@@ -378,24 +378,24 @@ impl<S: 'static> Runtime<S> {
         heard
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "macos"))]
     pub(crate) fn end_click_run(&mut self) {
         self.press_clicks.clear();
         self.press.take_first();
     }
 
-    pub(super) fn release_capture(&mut self, x: f32, y: f32) {
+    pub(super) fn release_capture(&mut self, app: &dyn ViewDriver, x: f32, y: f32) {
         // Hosts release at the last position they saw, which a leave doesn't move.
         let left = self.press.held().is_some_and(|h| h.left);
-        self.release(x, y);
+        self.release(app, x, y);
         self.leave_after_release(left);
     }
 
-    pub(super) fn release(&mut self, x: f32, y: f32) {
+    pub(super) fn release(&mut self, app: &dyn ViewDriver, x: f32, y: f32) {
         // A release never starts a drag-out: the system session needs the button held.
         if let Some(held) = self.press.held_mut() { held.drag_out = None; }
         let moved = self.pointer != Some((x, y));
-        self.move_pointer(x, y, moved);
+        self.move_pointer(app, x, y, moved);
         // A drag that selected text is a selection, not a press.
         let selected = self.selected_by_drag();
         self.select_step(selectable::phase::Event::Release);

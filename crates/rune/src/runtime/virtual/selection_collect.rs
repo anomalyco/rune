@@ -7,10 +7,10 @@ use super::{
 use crate::el::{SelectRequest, SelectionCopy};
 use crate::runtime::selectable::phase::{self, Selection};
 use crate::runtime::selectable::{CopyJoin, SelectedText, TextSelection, floor_boundary};
-use crate::runtime::{Node, Runtime, playground_host};
+use crate::runtime::{Node, RuntimeCore, ViewDriver};
 
-impl<S: 'static> Runtime<S> {
-    pub(crate) fn copy_virtual_text(&self) -> Option<String> {
+impl RuntimeCore {
+    pub(crate) fn copy_virtual_text(&self, app: &dyn ViewDriver) -> Option<String> {
         let h = self.selection_holder_end()?;
         let f = self.focus_holder_end(h)?;
         let node_for = |e: EndRef| match e {
@@ -24,19 +24,20 @@ impl<S: 'static> Runtime<S> {
         if let Some(p) = provider
             && let Some(copy_fn) = self.nodes[p].handlers.selection_copy.clone()
         {
-            let sel = self.collect_virtual_selection(Some(p))?;
+            let sel = self.collect_virtual_selection(app, Some(p))?;
             if let Some(text) = copy_fn(&sel) {
                 return Some(text);
             }
             return Some(sel.text);
         }
-        self.collect_virtual_selection(None).map(|s| s.text)
+        self.collect_virtual_selection(app, None).map(|s| s.text)
     }
 
     /// Builds an unmounted row `r` of `list_path` on demand (view only, no layout/mount/GPU) and
     /// collects its selectable texts.
     pub(super) fn build_unmounted_row(
         &self,
+        app: &dyn ViewDriver,
         list_path: &str,
         r: usize,
         texts: &mut Vec<OffscreenText>,
@@ -47,7 +48,7 @@ impl<S: 'static> Runtime<S> {
         let (group_path, inert) = (v.selection.scope.group_path.as_deref(), v.selection.scope.inert);
         match v.selection.pins.source() {
             Some(Source::Rebuild(rows)) => {
-                let state = playground_host::handler_states_ref(&self.state, self.playground.as_deref());
+                let state = app.states_ref();
                 let mut row = (rows.build)(state, r).key(key.clone());
                 if !crate::input::key_diagnostics::clean(&row) {
                     let _ = crate::input::key_diagnostics::repair_at(&mut row, &format!("{list_path}/{key}"));
@@ -66,7 +67,7 @@ impl<S: 'static> Runtime<S> {
     }
 
     /// Pins row `r` of `list_path` and ensures its offscreen texts are kept.
-    pub(crate) fn pin_offscreen_row(&mut self, list_path: &str, r: usize) {
+    pub(crate) fn pin_offscreen_row(&mut self, app: &dyn ViewDriver, list_path: &str, r: usize) {
         let Some(v) = self.virtuals.get(list_path) else { return };
         if v.range.contains(&r) || r >= v.keys.len() {
             return;
@@ -75,7 +76,7 @@ impl<S: 'static> Runtime<S> {
         let already = v.selection.pins.has_text_row(&row_key);
         let (mut texts, mut providers) = (Vec::new(), Vec::new());
         if !already {
-            self.build_unmounted_row(list_path, r, &mut texts, &mut providers);
+            self.build_unmounted_row(app, list_path, r, &mut texts, &mut providers);
         }
         if let Some(v) = self.virtuals.get_mut(list_path) {
             v.selection.pins.sync(PinsEvent::Pin { key: row_key, texts, providers });
@@ -84,7 +85,7 @@ impl<S: 'static> Runtime<S> {
 
     /// Collects the full [`TextSelection`] when the selection touches offscreen or unbuilt rows,
     /// bounded by [`MAX_VIRTUAL_COPY_ROWS`] and [`MAX_VIRTUAL_COPY_BYTES`].
-    pub(crate) fn collect_virtual_selection(&self, base: Option<usize>) -> Option<TextSelection> {
+    pub(crate) fn collect_virtual_selection(&self, app: &dyn ViewDriver, base: Option<usize>) -> Option<TextSelection> {
         let h = self.selection_holder_end()?;
         let f = self.focus_holder_end(h)?;
         let sel = self.selectable.phase.selection()?;
@@ -230,7 +231,7 @@ impl<S: 'static> Runtime<S> {
                         }
                         unbuilt_rows += 1;
                         let mut ignored = Vec::new();
-                        self.build_unmounted_row(&list_path, r, &mut built_texts, &mut ignored);
+                        self.build_unmounted_row(app, &list_path, r, &mut built_texts, &mut ignored);
                         built_texts.iter().collect()
                     };
                     let mut first_in_row = true;
@@ -271,7 +272,7 @@ impl<S: 'static> Runtime<S> {
 
     /// Finds the first and last selectable texts inside mounted node `root` (including unbuilt rows
     /// of any virtual list under `root`), pinning offscreen end rows as needed.
-    pub(crate) fn virtual_span_under(&mut self, root: usize) -> Option<(EndRef, EndRef)> {
+    pub(crate) fn virtual_span_under(&mut self, app: &dyn ViewDriver, root: usize) -> Option<(EndRef, EndRef)> {
         let inside = |nodes: &[Node], j: usize| {
             j == root || std::iter::successors(nodes[j].parent, |&p| nodes[p].parent).any(|p| p == root)
         };
@@ -325,7 +326,7 @@ impl<S: 'static> Runtime<S> {
                     }
                 } else {
                     let (mut texts, mut providers) = (Vec::new(), Vec::new());
-                    self.build_unmounted_row(&list_path, r, &mut texts, &mut providers);
+                    self.build_unmounted_row(app, &list_path, r, &mut texts, &mut providers);
                     if let Some(t) = texts.iter().find(|t| match &g_path {
                         Some(gp) => t.group_path.as_deref() == Some(gp.as_str()),
                         None => true,
@@ -336,7 +337,7 @@ impl<S: 'static> Runtime<S> {
                 }
             }
             if let Some((r, path)) = first_row_pin {
-                self.pin_offscreen_row(&list_path, r);
+                self.pin_offscreen_row(app, &list_path, r);
                 found = self.resolve_end(&path, None);
             }
             found
@@ -383,7 +384,7 @@ impl<S: 'static> Runtime<S> {
                     }
                 } else {
                     let (mut texts, mut providers) = (Vec::new(), Vec::new());
-                    self.build_unmounted_row(&list_path, r, &mut texts, &mut providers);
+                    self.build_unmounted_row(app, &list_path, r, &mut texts, &mut providers);
                     if let Some(t) = texts.iter().rev().find(|t| t.group_path.as_deref() == Some(gp.as_str())) {
                         last_row_pin = Some((r, t.path.clone()));
                         break;
@@ -391,7 +392,7 @@ impl<S: 'static> Runtime<S> {
                 }
             }
             if let Some((r, path)) = last_row_pin {
-                self.pin_offscreen_row(&list_path, r);
+                self.pin_offscreen_row(app, &list_path, r);
                 found = self.resolve_end(&path, None);
             }
             found.unwrap_or(first_end)
@@ -403,13 +404,13 @@ impl<S: 'static> Runtime<S> {
     }
 
     /// Carries out a `Tx::select_text`, `select_all_text` or `clear_text_selection`.
-    pub(crate) fn select_request(&mut self, request: SelectRequest) {
+    pub(crate) fn select_request(&mut self, app: &dyn ViewDriver, request: SelectRequest) {
         let named = |key: &str| (0..self.nodes.len()).find(|&i| self.nodes[i].named(key) && !self.subtree_exiting(i) && self.allowed(i));
         match request {
             SelectRequest::Clear => self.clear_text_selection(),
             SelectRequest::Range(key, range) => {
                 let Some(i) = named(&key).filter(|&i| self.is_selectable(i)) else {
-                    self.select_unmounted_request(&SelectRequest::Range(key, range));
+                    self.select_unmounted_request(app, &SelectRequest::Range(key, range));
                     return;
                 };
                 let content = self.content_of(i).to_owned();
@@ -419,10 +420,10 @@ impl<S: 'static> Runtime<S> {
             }
             SelectRequest::All(key) => {
                 let Some(i) = named(&key) else {
-                    self.select_unmounted_request(&SelectRequest::All(key));
+                    self.select_unmounted_request(app, &SelectRequest::All(key));
                     return;
                 };
-                if let Some((first, last)) = self.virtual_span_under(i) {
+                if let Some((first, last)) = self.virtual_span_under(app, i) {
                     self.select_span_ends(first, last);
                     return;
                 }
@@ -448,16 +449,16 @@ impl<S: 'static> Runtime<S> {
 
     /// `select_request`, recording what an `El::on_selection_change` callback changed as already
     /// heard so it doesn't fire again on its own request.
-    pub(crate) fn apply_select_request(&mut self, request: SelectRequest, from_change: bool) {
-        self.select_request(request);
+    pub(crate) fn apply_select_request(&mut self, app: &dyn ViewDriver, request: SelectRequest, from_change: bool) {
+        self.select_request(app, request);
         if from_change {
-            let _ = self.selection_changes();
+            let _ = self.selection_changes(app);
         }
     }
 
     /// Handles `Tx::select_text` / `Tx::select_all_text` when `selector` names an element in an
     /// unbuilt virtual row.
-    pub(crate) fn select_unmounted_request(&mut self, request: &SelectRequest) -> bool {
+    pub(crate) fn select_unmounted_request(&mut self, app: &dyn ViewDriver, request: &SelectRequest) -> bool {
         let selector = match request {
             SelectRequest::Clear => return false,
             SelectRequest::Range(k, _) | SelectRequest::All(k) => k.as_str(),
@@ -485,7 +486,7 @@ impl<S: 'static> Runtime<S> {
             }
             for r in candidate_rows {
                 let (mut texts, mut providers) = (Vec::new(), Vec::new());
-                self.build_unmounted_row(&list_path, r, &mut texts, &mut providers);
+                self.build_unmounted_row(app, &list_path, r, &mut texts, &mut providers);
                 match request {
                     SelectRequest::Range(_, byte_range) => {
                         if let Some(t) = texts.iter().find(|t| t.path == selector || crate::flight::selects(selector, &t.path, t.key.as_deref())) {
@@ -495,7 +496,7 @@ impl<S: 'static> Runtime<S> {
                                 floor_boundary(&content, byte_range.start),
                                 floor_boundary(&content, byte_range.end.max(byte_range.start)),
                             );
-                            self.pin_offscreen_row(&list_path, r);
+                            self.pin_offscreen_row(app, &list_path, r);
                             let Some(end_ref) = self.resolve_end(&target_path, None) else { return false };
                             let mut sel = Selection::new(target_path, content, (a, b), (a, b));
                             sel.anchor_end = self.virtual_end_of(end_ref, a);
@@ -519,7 +520,7 @@ impl<S: 'static> Runtime<S> {
                                 None => first_t,
                             };
                             let (p0, p1) = (first_t.path.clone(), last_t.path.clone());
-                            self.pin_offscreen_row(&list_path, r);
+                            self.pin_offscreen_row(app, &list_path, r);
                             let (Some(e0), Some(e1)) = (self.resolve_end(&p0, None), self.resolve_end(&p1, None)) else { return false };
                             self.select_span_ends(e0, e1);
                             return true;

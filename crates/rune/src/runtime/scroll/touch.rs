@@ -153,7 +153,7 @@ fn rebound(offset: f64, velocity: f32, target: f64, dt: f32) -> (f64, f32) {
     (target + (displacement + b * dt) * decay, ((f64::from(velocity) - 14.0 * b * dt) * decay) as f32)
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// A touch went down: it stops the momentum of the viewports under it and holds the
     /// vertical one until the pan picks its axis (`touch_scroll_pan`). A horizontal one still
     /// settling from an earlier touch (momentum or its edge return) holds where the finger

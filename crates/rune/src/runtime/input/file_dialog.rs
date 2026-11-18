@@ -1,7 +1,7 @@
 use super::*;
 use crate::file_dialog::{DialogState, FileDialogError, FileDialogKind, FileDialogOptions, FileDialogResult, Pending, Request};
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// The file dialog showing, or about to show, from [`Tx::open_file`], [`Tx::save_file`] or
     /// [`Tx::open_folder`].
     pub fn file_dialog(&self) -> Option<(FileDialogKind, &FileDialogOptions)> {
@@ -56,30 +56,30 @@ impl<S: 'static> Runtime<S> {
         }
     }
 
-    pub(super) fn run_file_dialog(&mut self, id: u64, result: FileDialogResult, one: &mut Tx) -> bool {
+    pub(super) fn run_file_dialog(&mut self, app: &mut dyn AppDriver, id: u64, result: FileDialogResult, one: &mut Tx) -> bool {
         let Some(i) = self.file_dialog_answers.iter().position(|(dialog, _)| *dialog == id) else { return false };
         let (_, f) = self.file_dialog_answers.remove(i);
         self.trace_event(format_args!(
             "file-dialog:answer:{}",
             if result.as_ref().is_ok_and(Option::is_some) { "path" } else if result.is_ok() { "cancel" } else { "error" }
         ));
-        f(states!(self), result, one);
+        f(app.states(), result, one);
         true
     }
 
     /// Answers the open or waiting dialog with `Ok(None)`, and runs any queued file dialog
     /// callbacks now while the window's state is still alive. A callback that asks for another
     /// dialog is answered too, up to a bound against one that always asks again.
-    pub(crate) fn cancel_file_dialogs(&mut self) {
+    pub(crate) fn cancel_file_dialogs(&mut self, app: &mut dyn AppDriver) {
         for _ in 0..64 {
             if let Some(d) = self.file_dialog.take() {
                 self.queue.push(Action::FileDialog(d.id, Ok(None)));
             }
             let Some(pos) = self.queue.iter().position(|a| matches!(a, Action::FileDialog(..))) else { return };
             let Action::FileDialog(id, result) = self.queue.remove(pos) else { unreachable!() };
-            let mut one = self.transaction();
-            self.run_file_dialog(id, result, &mut one);
-            self.latch_requests(&mut one);
+            let mut one = self.transaction(app);
+            self.run_file_dialog(app, id, result, &mut one);
+            self.latch_requests(app, &mut one);
             merge(&mut self.pending, one);
             self.dirty = true;
         }

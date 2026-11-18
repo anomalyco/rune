@@ -152,7 +152,7 @@ pub(super) fn quiet_step<T: 'static>(rt: &mut Runtime<T>, clock: &mut FrameClock
 /// marked the overlay dirty since, and no input, live value, timer, playground or poll (which
 /// runs on every frame drawn) waits. An overlay without a compositor draws nothing then.
 pub(super) fn rests<T: 'static>(rt: &Runtime<T>, runtime_idle: bool, dirty: bool) -> bool {
-    runtime_idle && !dirty && rt.poll.is_none() && rt.playground.is_none() && rt.wake_deadline().is_none() && rt.rests()
+    runtime_idle && !dirty && rt.poll.is_none() && !rt.has_playground && rt.wake_deadline().is_none() && rt.rests()
 }
 
 /// `step` for a runtime that `rests`: its clocks (`clock`, `t`) move to the frame as a step

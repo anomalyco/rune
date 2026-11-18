@@ -7,7 +7,7 @@ use super::*;
 #[derive(Default)]
 pub(super) struct Pick(Option<String>);
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// The selection group of text `i`, or the text itself when it's in none.
     fn select_unit(&self, i: usize) -> usize {
         self.group_of(i).unwrap_or(i)
@@ -47,7 +47,7 @@ impl<S: 'static> Runtime<S> {
     }
 
     /// Cmd+A when nothing else took it: selects all of `select_all_target`.
-    pub(super) fn select_all_key(&mut self) -> bool {
+    pub(super) fn select_all_key(&mut self, app: &dyn ViewDriver) -> bool {
         if let Some(h @ selectable::virtual_selection::EndRef::Offscreen(vi, _)) = self.selection_holder_end() {
             match self.end_group_path(h).map(str::to_owned) {
                 None => {
@@ -72,7 +72,7 @@ impl<S: 'static> Runtime<S> {
         }
         let Some(u) = self.select_all_target() else { return false };
         if self.nodes[u].selection_group
-            && let Some((first, last)) = self.virtual_span_under(u)
+            && let Some((first, last)) = self.virtual_span_under(app, u)
         {
             let path = self.nodes[u].path.clone();
             self.select_span_ends(first, last);

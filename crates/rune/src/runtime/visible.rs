@@ -14,7 +14,7 @@ pub(crate) fn on_screen(rect: [f32; 4], view: (f32, f32)) -> bool {
     w * h >= need
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// Queues `on_visible` for elements that came on screen or left it since the last frame.
     /// True when it queued any.
     pub(super) fn report_visible(&mut self) -> bool {

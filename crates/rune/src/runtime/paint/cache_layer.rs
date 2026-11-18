@@ -118,7 +118,7 @@ impl NodeCache {
     }
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     pub(super) fn prepare_cache_layers(&mut self, sel_ranges: &[(usize, usize, usize)], mark_ranges: &[(usize, usize, usize)]) -> u64 {
         let (s, n_nodes) = (self.env.scale, self.nodes.len());
         self.cache_live_scratch.clear();

@@ -30,6 +30,14 @@ impl TextMark {
     pub fn text(&self) -> &str { &self.text }
 }
 
+impl cx::CxCore {
+    pub(crate) fn mark_texts(&mut self, marks: impl IntoIterator<Item = TextMark>) {
+        let mut all = self.defaults.marks.to_vec();
+        all.extend(marks);
+        self.defaults.marks = all.into();
+    }
+}
+
 impl<S> Cx<S> {
     /// Paints `marks` as the selection paints, in each text's own selection colour
     /// ([`El::selection_color`](crate::El::selection_color)), while the view keeps declaring
@@ -38,14 +46,13 @@ impl<S> Cx<S> {
     /// a text's line boxes. A mark whose text has gone, isn't mounted, or no longer holds the
     /// marked bytes there paints nothing. Set them on every run of the view; a later call adds
     /// to the earlier ones.
+    #[inline(always)]
     pub fn mark_texts(&mut self, marks: impl IntoIterator<Item = TextMark>) {
-        let mut all = self.defaults.marks.to_vec();
-        all.extend(marks);
-        self.defaults.marks = all.into();
+        self.core.mark_texts(marks);
     }
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// The marks the view declared, as (node, start, end) for each mounted text that still
     /// holds its marked bytes, in node order.
     pub(super) fn mark_ranges(&self) -> Vec<(usize, usize, usize)> {
