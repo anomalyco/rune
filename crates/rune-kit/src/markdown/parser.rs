@@ -197,6 +197,14 @@ pub(super) struct Open {
 /// (`<ul><li>` / `<ol><li>`), 1 quote + 255 nested lists, or 510 non-empty `<blockquote>`s.
 pub(super) const MAX_ELEMENT_DEPTH: usize = 511;
 
+/// Maximum nested flex containers on `wasm32`, where `stacker` cannot switch the browser engine's
+/// native call stack and V8's ~984 KiB WebAssembly call stack overflows around ~830 nested flex
+/// containers before the 2 MiB linear-memory shadow stack fills. `770` preserves all `255` nested
+/// lists (`765`), `1` quote + `255` lists (`767`), and `10` quotes + `250` lists (`770`), while
+/// capping pure `<blockquote>` nesting on `wasm32` at `385` (`770` flex containers).
+#[cfg(target_arch = "wasm32")]
+const MAX_WASM_LAYOUT_DEPTH: usize = 770;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ListSlot {
     Nested,
@@ -221,6 +229,29 @@ enum InlineKind {
 impl Builder {
     fn depth(&self) -> usize {
         self.stack.len() - 1
+    }
+
+    #[inline]
+    fn layout_fits(&self, add: usize) -> bool {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let cur: usize = self.stack[1..]
+                .iter()
+                .map(|(c, _, _)| match c {
+                    Container::Quote => 2,
+                    Container::List(..) => 1,
+                    Container::Item(_) => 2,
+                    Container::Table(..) => 2,
+                    Container::Root => 0,
+                })
+                .sum();
+            cur + add <= MAX_WASM_LAYOUT_DEPTH
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = add;
+            true
+        }
     }
 
     fn push(&mut self, b: Block, map: BlockMap) {
@@ -588,7 +619,7 @@ fn parse_doc_tail_raw(src: &str, autolink: bool) -> (ParsedDoc, Tail) {
                 }
                 Tag::BlockQuote(_) => {
                     b.flush_inline();
-                    if b.depth() + 2 <= MAX_ELEMENT_DEPTH {
+                    if b.depth() + 2 <= MAX_ELEMENT_DEPTH && b.layout_fits(2) {
                         b.quote_nested.push(true);
                         b.stack.push((Container::Quote, Vec::new(), Vec::new()));
                     } else {
@@ -597,7 +628,7 @@ fn parse_doc_tail_raw(src: &str, autolink: bool) -> (ParsedDoc, Tail) {
                 }
                 Tag::List(start) => {
                     b.flush_inline();
-                    if b.depth() + 2 <= MAX_ELEMENT_DEPTH
+                    if (b.depth() + 2 <= MAX_ELEMENT_DEPTH && b.layout_fits(3))
                         || !matches!(b.stack.last(), Some((Container::List(..) | Container::Item(_), _, _)))
                     {
                         b.list_slots.push(ListSlot::Nested);

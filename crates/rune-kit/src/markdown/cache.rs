@@ -79,7 +79,8 @@ fn classify_line(line: &[u8]) -> (bool, bool, bool, bool) {
     let is_blank = i == line.len();
     let prefix_only = is_blank && (cols > 0 || quotes > 0);
     let is_root = !is_blank && cols == 0 && quotes == 0;
-    let is_past_bound = !is_blank && ((cols >= 2 && cols + quotes >= 510) || quotes > 510);
+    let max_quotes = if cfg!(target_arch = "wasm32") { 385 } else { 510 };
+    let is_past_bound = !is_blank && ((cols >= 2 && cols + quotes >= 510) || quotes > max_quotes);
     (is_blank, is_root, is_past_bound, prefix_only)
 }
 
@@ -173,36 +174,30 @@ pub(super) fn stream_cached(src: &str) -> Doc {
     STREAMS.with_borrow_mut(|c| cached(c, src, parse_streaming))
 }
 
+fn try_extend(base: &Parsed, base_len: usize, src: &str, parse: fn(&str, bool) -> ParsedDoc) -> Option<Parsed> {
+    if let Some(from) = base.capped_tail_from
+        && let Some(next_from) = extend_capped_tail(from, src)
+    {
+        return Some(Parsed {
+            doc: base.doc.clone(),
+            cuts: base.cuts.clone(),
+            capped_tail_from: Some(next_from),
+        });
+    }
+    extend(base, base_len, src, parse)
+}
+
 fn cached(c: &mut Cache, src: &str, parse: fn(&str, bool) -> ParsedDoc) -> Doc {
     if let Some(hit) = c.docs.get(src) {
         return hit.doc.clone();
     }
     let grown = c.last.clone().filter(|last| src.len() > last.len() && src.starts_with(&**last));
-    let parsed = grown
-        .as_ref()
-        .and_then(|last| {
-            let base = c.docs.peek(&**last)?;
-            if let Some(from) = base.capped_tail_from
-                && let Some(next_from) = extend_capped_tail(from, src)
-            {
-                return Some(Parsed {
-                    doc: base.doc.clone(),
-                    cuts: base.cuts.clone(),
-                    capped_tail_from: Some(next_from),
-                });
-            }
-            extend(base, last.len(), src, parse)
-        })
-        .unwrap_or_else(|| {
-            #[cfg(test)]
-            PARSES.with(|p| p.set((p.get().0 + 1, p.get().1)));
-            let (blocks, sources, tasks, cuts, starts, maps) = parse(src, true);
-            Parsed {
-                doc: (Rc::new(blocks), sources.into(), tasks.into(), starts.into(), maps.into()),
-                cuts: cuts.into(),
-                capped_tail_from: tail_watermark(src),
-            }
-        });
+    let parsed = grown.as_ref().and_then(|last| try_extend(c.docs.peek(&**last)?, last.len(), src, parse)).unwrap_or_else(|| {
+        #[cfg(test)]
+        PARSES.with(|p| p.set((p.get().0 + 1, p.get().1)));
+        let (blocks, sources, tasks, cuts, starts, maps) = parse(src, true);
+        Parsed { doc: (Rc::new(blocks), sources.into(), tasks.into(), starts.into(), maps.into()), cuts: cuts.into(), capped_tail_from: tail_watermark(src) }
+    });
     // A stream's earlier string is dead once it grows, unless something drew it this
     // commit; left in, a long stream would fill the budget with its prefixes.
     if let Some(last) = grown

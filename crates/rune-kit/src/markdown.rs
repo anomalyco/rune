@@ -20,15 +20,18 @@
 //!
 //! **Nesting & stack.** Container nesting (`<blockquote>`, `<ul>`/`<ol>`, `<li>`) is bounded at
 //! `511` open elements (`255` nested lists, `1` quote + `255` nested lists, or `510` nested block
-//! quotes; deeper items flatten into the innermost list or quote, capped at `64` flattened tail
-//! lines per block), matching Blink's `DOMParser` HTML tree limit (`kMaximumHTMLParserDOMTreeDepth`
-//! = `512` including `<html>` and `<body>`). `Markdown`'s own parser, direction pre-pass, plain
-//! text formatter and element builder run iteratively (`O(1)` call stack), while Rune's commit
-//! flatten and `wasm32` layout recurse up to `~1,020` elements at `510` quotes (`~1.6 MiB` on
-//! `wasm32`, `~2.1 MiB` on 64-bit native without `rune-taffy` stack continuation, and `< 1 MiB`
-//! on Windows/macOS/Linux with `rune-taffy` segment continuation). Web builds should link with at
-//! least `-C link-arg=-zstack-size=2097152` (`2 MiB`), and native targets without `stacker`
-//! should reserve at least `4 MiB` of UI-thread stack.
+//! quotes on native; on `wasm32`, pure `<blockquote>` nesting caps at `385` = `770` flex
+//! containers so V8's fixed ~984 KiB native WebAssembly call stack never overflows while all `255`
+//! list levels still nest; deeper items flatten into the innermost list or quote, capped at `64`
+//! flattened tail lines per block), matching Blink's `DOMParser` HTML tree limit
+//! (`kMaximumHTMLParserDOMTreeDepth` = `512` including `<html>` and `<body>`). `Markdown`'s own
+//! parser, direction pre-pass, plain text formatter and element builder run iteratively (`O(1)`
+//! call stack), while Rune's commit flatten and layout recurse up to `~1,020` elements on native
+//! (`~2.7 MiB` on 64-bit native without `rune-taffy` stack continuation, `< 1 MiB` on
+//! Windows/macOS/Linux with `rune-taffy` segment continuation) and `~770` elements on `wasm32`
+//! (`~1.05 MiB` of WebAssembly shadow stack). Web builds should link with at least
+//! `-C link-arg=-zstack-size=2097152` (`2 MiB`), and native targets without `stacker` should
+//! reserve at least `4 MiB` of UI-thread stack.
 //!
 //! **Keys.** Top-level blocks are keyed `b{index}` (or by [`Markdown::block_keys`]), list items
 //! `i{index}` and their blocks by `b{index}` inside the item. Appending to a stream only ever
