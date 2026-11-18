@@ -87,6 +87,29 @@ impl Drop for super::CommandEncoder {
 }
 
 impl super::CommandEncoder {
+    /// Rune: the free allocator of this kind that has recorded the most; for a frame, else a
+    /// pending-writes one; else a new one. wgpu's pending writes never take a frame's: wgpu-core
+    /// opens a new pending-writes encoder at every submission, often before the last one's
+    /// allocator is back, and one that took a warmed frame allocator would file it as pending for
+    /// good. If wgpu ever drops the label (`DISCARD_HAL_LABELS`), every take looks like a frame's
+    /// and the allocators `reset_all` files as pending are still taken before a new one is made.
+    fn take_allocator(&self, pending_writes: bool) -> Result<super::AllocatorSlot, crate::DeviceError> {
+        let mut pool = self.shared.allocators.lock();
+        let pick = pool
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| !pending_writes || s.pending_writes)
+            .max_by_key(|(_, s)| (s.pending_writes == pending_writes, s.recorded))
+            .map(|(i, _)| i);
+        if let Some(i) = pick {
+            return Ok(pool.swap_remove(i));
+        }
+        drop(pool);
+        let raw = unsafe { self.device.CreateCommandAllocator(Direct3D12::D3D12_COMMAND_LIST_TYPE_DIRECT) }
+            .into_device_result("Command allocator creation")?;
+        Ok(super::AllocatorSlot { raw, lists: Vec::new(), recorded: 0, cycle: 0, pending_writes })
+    }
+
     unsafe fn begin_pass(&mut self, kind: super::PassKind, label: crate::Label) {
         let list = self.list.as_ref().unwrap();
         self.pass.kind = kind;
@@ -389,10 +412,18 @@ impl crate::CommandEncoder for super::CommandEncoder {
     type A = super::Api;
 
     unsafe fn begin_encoding(&mut self, label: crate::Label) -> Result<(), crate::DeviceError> {
+        if self.allocator.is_none() {
+            // wgpu-core's `PendingWrites::activate` (device/queue.rs) begins its encoder with this
+            // label. It's only a first guess: `reset_all` files the allocator by what it recorded.
+            self.allocator = Some(self.take_allocator(label == Some("(wgpu internal) PendingWrites"))?);
+        }
+        let slot = self.allocator.as_mut().unwrap();
+        slot.recorded = slot.recorded.saturating_add(1);
+        slot.cycle += 1;
         let list = loop {
-            if let Some(list) = self.free_lists.pop() {
+            if let Some(list) = slot.lists.pop() {
                 // TODO: Is an error expected here and should we print it?
-                let reset_result = unsafe { list.Reset(&self.allocator, None) };
+                let reset_result = unsafe { list.Reset(&slot.raw, None) };
                 if reset_result.is_ok() {
                     break Some(list);
                 }
@@ -408,7 +439,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
                 self.device.CreateCommandList(
                     0,
                     Direct3D12::D3D12_COMMAND_LIST_TYPE_DIRECT,
-                    &self.allocator,
+                    &slot.raw,
                     None,
                 )
             }
@@ -430,7 +461,9 @@ impl crate::CommandEncoder for super::CommandEncoder {
     unsafe fn discard_encoding(&mut self) {
         if let Some(list) = self.list.take() {
             if unsafe { list.Close() }.is_ok() {
-                self.free_lists.push(list);
+                if let Some(slot) = self.allocator.as_mut() {
+                    slot.lists.push(list);
+                }
             }
         }
     }
@@ -441,12 +474,20 @@ impl crate::CommandEncoder for super::CommandEncoder {
     }
     unsafe fn reset_all<I: Iterator<Item = super::CommandBuffer>>(&mut self, command_buffers: I) {
         self.intermediate_copy_bufs.clear();
-        for cmd_buf in command_buffers {
-            self.free_lists.push(cmd_buf.raw);
-        }
-        if let Err(e) = unsafe { self.allocator.Reset() } {
+        let Some(mut slot) = self.allocator.take() else {
+            return;
+        };
+        slot.lists.extend(command_buffers.map(|c| c.raw));
+        // One that failed to reset goes with its lists; the next encoder that needs one makes one.
+        if let Err(e) = unsafe { slot.raw.Reset() } {
             log::error!("ID3D12CommandAllocator::Reset() failed with {e}");
+            return;
         }
+        // A cycle of one list is wgpu's pending writes (a copy list a submission); a frame records
+        // a list a pass and more. Filed by that, frames don't depend on the label surviving.
+        slot.pending_writes = slot.cycle <= 1;
+        slot.cycle = 0;
+        self.shared.allocators.lock().push(slot);
     }
 
     unsafe fn transition_buffers<'a, T>(&mut self, barriers: T)

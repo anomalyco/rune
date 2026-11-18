@@ -179,6 +179,7 @@ impl super::Device {
             )?,
             sampler_heap: super::sampler::SamplerHeap::new(&raw, &private_caps)?,
             private_caps,
+            allocators: Mutex::new(Vec::new()),
         };
 
         let mut rtv_pool =
@@ -802,22 +803,12 @@ impl crate::Device for super::Device {
 
     unsafe fn create_command_encoder(
         &self,
-        desc: &crate::CommandEncoderDescriptor<super::Queue>,
+        _desc: &crate::CommandEncoderDescriptor<super::Queue>,
     ) -> Result<super::CommandEncoder, crate::DeviceError> {
-        let allocator: Direct3D12::ID3D12CommandAllocator = unsafe {
-            self.raw
-                .CreateCommandAllocator(Direct3D12::D3D12_COMMAND_LIST_TYPE_DIRECT)
-        }
-        .into_device_result("Command allocator creation")?;
-
-        if let Some(label) = desc.label {
-            allocator.set_name(label)?;
-        }
-
         self.counters.command_encoders.add(1);
 
         Ok(super::CommandEncoder {
-            allocator,
+            allocator: None,
             device: self.raw.clone(),
             shared: Arc::clone(&self.shared),
             mem_allocator: self.mem_allocator.clone(),
@@ -826,7 +817,6 @@ impl crate::Device for super::Device {
             intermediate_copy_bufs: Vec::new(),
             null_rtv_handle: self.null_rtv_handle,
             list: None,
-            free_lists: Vec::new(),
             pass: super::PassState::new(),
             temp: super::Temp::default(),
             end_of_pass_timer_query: None,
