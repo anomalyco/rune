@@ -190,18 +190,25 @@ impl<S: 'static> Runtime<S> {
     /// `RUNE_LOOP_CHECK=1`: what the last loop-only step would have drawn against what the
     /// ordinary frame that ran instead drew. The instances that differ, and by how much at most
     /// (the largest difference in any field, in pixels or colour; infinite when their number or
-    /// soft edges differ). None when no step was checked.
+    /// soft edges differ). A window's clip one step of paint's 1/64-pixel grid apart counts as the
+    /// same. None when no step was checked.
     pub(crate) fn loop_checked(&mut self) -> Option<(usize, f32)> {
         let predicted = self.paint_keep.cycles.check.take()?;
         if predicted.len() != self.instances.len() { return Some((usize::MAX, f32::INFINITY)); }
         let (mut differ, mut worst) = (0, 0.0f32);
         for (p, q) in predicted.iter().zip(&self.instances) {
             if bytemuck::bytes_of(p) == bytemuck::bytes_of(q) { continue; }
-            let fields = |i: &Instance| [i.rect, i.radii, i.fill, i.border, i.params, i.uv, i.clip];
+            let fields = |i: &Instance| [i.rect, i.radii, i.fill, i.border, i.params, i.uv];
             let d = if p.fade != q.fade { f32::INFINITY } else {
                 fields(p).iter().flatten().zip(fields(q).iter().flatten()).map(|(a, b)| (a - b).abs()).fold(0.0, f32::max)
             };
-            if d > 1e-3 { differ += 1; }
+            // A window's clip lands on paint's 1/64-pixel grid from the slide's offset: the step and
+            // the ordinary frame reach that offset by different float sums, so where it sits on a
+            // grid line's half they can land one grid step apart. That one step is the same picture;
+            // anything more isn't.
+            let clip = p.clip.iter().zip(&q.clip).map(|(a, b)| (a - b).abs()).fold(0.0, f32::max);
+            if d > 1e-3 || clip > 1.0 / 64.0 + 1e-4 { differ += 1; }
+            let d = d.max(clip);
             worst = worst.max(d);
         }
         Some((differ, worst))
