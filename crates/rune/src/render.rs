@@ -718,7 +718,7 @@ pub fn prewarm_gpu() {
 /// it before the first `embed::LayerHost` (and `embed::prewarm`). Elsewhere, or without
 /// `metal-backend`, it is `prewarm_gpu`.
 pub fn prewarm_gpu_on(backend: crate::GpuBackend) {
-    choose_then_start(backend, crate::gpu::backend::choose, prewarm::start);
+    choose_then_start(backend, choose_gpu_backend, prewarm::start);
 }
 
 /// `choose` before `start`: a thread started first would run on the old backend.
@@ -727,10 +727,16 @@ fn choose_then_start(backend: crate::GpuBackend, choose: impl FnOnce(crate::GpuB
     start();
 }
 
-/// Starts `prewarm_gpu`'s thread over if it's working, for a backend chosen after it started.
-#[cfg(all(target_os = "macos", feature = "metal-backend"))]
-pub(crate) fn restart_prewarm() {
-    prewarm::restart();
+/// Makes GPUs from now on with `backend`, process-wide, and restarts a `prewarm_gpu` thread
+/// running on the old backend.
+pub(crate) fn choose_gpu_backend(backend: crate::GpuBackend) {
+    let changed = crate::gpu::backend::choose(backend);
+    #[cfg(all(target_os = "macos", feature = "metal-backend"))]
+    if changed {
+        prewarm::restart();
+    }
+    #[cfg(not(all(target_os = "macos", feature = "metal-backend")))]
+    let _ = changed;
 }
 
 /// Drops what `prewarm_gpu` made if no window took it.

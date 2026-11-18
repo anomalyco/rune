@@ -22,7 +22,7 @@
 //! reason; a machine with more than one GPU prints it anyway, once per process.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Reason {
+pub enum Reason {
     EnvName,
     EnvPower,
     Compositor,
@@ -42,7 +42,7 @@ impl Reason {
     }
 }
 
-pub(crate) struct Pick {
+pub struct Pick {
     pub adapter: wgpu::Adapter,
     pub reason: Reason,
     /// The compositor's main device as a PCI address, when it told us one.
@@ -74,7 +74,7 @@ fn shows(compositor: Option<&str>, pci: &str) -> bool {
 
 /// The adapter for `surface` (or for offscreen work without one, unless it's for a surface not
 /// made yet: `presented`), by the order in the module docs.
-pub(crate) fn pick(instance: &wgpu::Instance, surface: Option<&wgpu::Surface<'_>>, presented: bool) -> Result<Pick, String> {
+pub fn pick(instance: &wgpu::Instance, surface: Option<&wgpu::Surface<'_>>, presented: bool) -> Result<Pick, String> {
     // DX12: the same order through DXGI's adapter list, and only the chosen adapter goes to wgpu.
     #[cfg(target_os = "windows")]
     if let Some((pick, adapters)) = dxgi::pick(instance, surface, presented) {
@@ -164,6 +164,7 @@ mod dxgi {
     /// `vendor/wgpu-hal`) gets wgpu-hal as published, which has no `expose_adapter`: the call then
     /// lands here (an inherent method wins over a trait's), and the pick falls back to wgpu's list.
     mod without_patch {
+        #[allow(dead_code)]
         pub(super) trait ExposeAdapter {
             unsafe fn expose_adapter(&self, _: &windows::Win32::Graphics::Dxgi::IDXGIAdapter1) -> Option<wgpu::hal::ExposedAdapter<wgpu::hal::api::Dx12>> {
                 None
@@ -231,7 +232,7 @@ fn by_display(displays: &[(u32, u32)], adapters: &[(wgpu::AdapterInfo, bool)]) -
 }
 
 /// `PowerPreference::LowPower`'s order; a software adapter comes last.
-pub(crate) fn power_rank(device: wgpu::DeviceType) -> u8 {
+pub fn power_rank(device: wgpu::DeviceType) -> u8 {
     match device {
         wgpu::DeviceType::IntegratedGpu => 0,
         wgpu::DeviceType::DiscreteGpu => 1,
@@ -244,7 +245,7 @@ pub(crate) fn power_rank(device: wgpu::DeviceType) -> u8 {
 /// The PCI vendor of the GPU driving the primary display, which `pick` chooses for a window:
 /// known before any GPU is made, for the CPU renderer that draws until then. Read once, at
 /// launch (`find_display_vendor_soon`): enumerating the display devices takes ~1,500 µs.
-pub(crate) fn display_vendor() -> Option<u32> {
+pub fn display_vendor() -> Option<u32> {
     *DISPLAY_VENDOR.get_or_init(|| display_devices().first().map(|ids| ids.0))
 }
 
@@ -253,7 +254,7 @@ static DISPLAY_VENDOR: std::sync::OnceLock<Option<u32>> = std::sync::OnceLock::n
 /// Starts reading [`display_vendor`] on a thread of its own once the event loop exists, so the
 /// first window needn't wait for it; a window that asks sooner waits for that thread.
 #[cfg(target_os = "windows")]
-pub(crate) fn find_display_vendor_soon() {
+pub fn find_display_vendor_soon() {
     let _ = std::thread::Builder::new().name("rune-display-vendor".into()).spawn(display_vendor);
 }
 
@@ -308,7 +309,7 @@ fn log(pick: Pick, adapters: Option<usize>) -> Pick {
             let info = pick.adapter.get_info();
             let pci = if info.device_pci_bus_id.is_empty() { String::new() } else { format!(", {}", info.device_pci_bus_id) };
             let compositor = pick.compositor.as_deref().map(|c| format!("; compositor on {c}")).unwrap_or_default();
-            eprintln!("rune: GPU {:?} ({}; {:?}, {:?}{pci}): {}{compositor}", info.name, crate::gpu::backend::label(&pick.adapter), info.backend, info.device_type, pick.reason.describe());
+            eprintln!("rune: GPU {:?} ({}; {:?}, {:?}{pci}): {}{compositor}", info.name, crate::backend::label(&pick.adapter), info.backend, info.device_type, pick.reason.describe());
         });
     }
     pick

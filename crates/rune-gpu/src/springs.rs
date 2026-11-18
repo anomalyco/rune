@@ -75,7 +75,8 @@ impl Node {
     }
 }
 
-pub(crate) struct Bindings {
+#[doc(hidden)]
+pub struct Bindings {
     pub group: wgpu::BindGroup,
     pub nodes: wgpu::Buffer,
     pub deadlines: Vec<f64>,

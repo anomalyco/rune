@@ -67,7 +67,7 @@ dbus = ["dep:zbus", "dep:tokio", "dep:futures-util"]
 # iOS apps keep wgpu unless they choose `GpuBackend::Metal`. It plugs in through wgpu's `custom`
 # backend, which Rune turns on for Apple targets alone. No effect on other platforms: its crates
 # are Apple-only dependencies.
-metal-backend = ["dep:objc2-quartz-core", "dep:parking_lot", "dep:raw-window-metal", "dep:wgpu-naga-bridge"]
+metal-backend = ["rune-gpu/metal-backend"]
 # Every window and overlay exposes its elements to the OS accessibility API through AccessKit:
 # UI Automation on Windows, NSAccessibility on macOS, AT-SPI on Linux (README, "Accessibility").
 # Nothing is built until an assistive client asks. Off, the platform adapters aren't compiled;
@@ -83,6 +83,7 @@ procwatch = { workspace = true, optional = true }
 subsecond = { version = "=0.7.10", optional = true }
 dioxus-devtools = { version = "=0.7.10", optional = true }
 rune-core = { workspace = true }
+rune-gpu = { workspace = true }
 rune-motion = { workspace = true }
 rune-staging = { workspace = true }
 rune-taffy = { workspace = true }
@@ -160,20 +161,16 @@ web-sys = { workspace = true, features = ["Window", "Document", "Element", "Html
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
 rfd = { version = "0.17", optional = true, default-features = false }
 
-# Metal on macOS and iOS: video and present timing on macOS, and the `metal-backend` feature on both.
+# Metal on macOS and iOS: video and present timing on macOS.
 [target.'cfg(target_vendor = "apple")'.dependencies]
 objc2-video = { package = "objc2", version = "0.6" }
 objc2-core-foundation = "0.3"
 # CoreText's font fallback and family lookups (`text/system_fonts/core_text.rs`); fontique already builds it.
 objc2-core-text = { version = "0.3.2", default-features = false, features = ["std", "CTFont", "CTFontDescriptor", "CTFontManager"] }
 objc2-metal = "0.3"
-objc2-quartz-core = { version = "0.3.2", optional = true, default-features = false, features = ["std", "bitflags", "CALayer", "CAMetalLayer", "objc2-core-foundation", "objc2-core-graphics", "objc2-metal"] }
-parking_lot = { version = "0.12", optional = true }
-raw-window-metal = { version = "1.1", optional = true }
-wgpu-naga-bridge = { workspace = true, optional = true }
-# wgpu's Metal backend and `custom` backend (`metal-backend` plugs into it), on Apple targets alone:
-# off Apple, wgpu compiles neither `wgpu-hal/metal` nor `naga/msl-out`, and dispatches with no branch.
-wgpu = { workspace = true, features = ["metal", "custom"] }
+# wgpu's Metal backend on Apple targets alone: off Apple, wgpu compiles neither `wgpu-hal/metal`
+# nor `naga/msl-out`.
+wgpu = { workspace = true, features = ["metal"] }
 objc2-foundation-video = { package = "objc2-foundation", version = "0.3", default-features = false, features = ["std", "NSArray", "NSData", "NSDictionary", "NSError", "NSObject", "NSRange", "NSString", "NSURL", "NSURLConnection", "NSURLRequest", "NSURLResponse"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]

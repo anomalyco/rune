@@ -10,7 +10,6 @@ mod a11y;
 mod app;
 mod flight;
 mod frame;
-mod gpu;
 mod input;
 mod native_menu;
 mod open_url;
@@ -53,6 +52,7 @@ pub(crate) use image::pixels;
 pub(crate) use input::cursor;
 pub(crate) use quit::relaunch;
 pub(crate) use rune_core::cold;
+pub(crate) use rune_gpu as gpu;
 pub(crate) use tooling::virtual_desktop as desktop;
 pub(crate) use window::titlebar;
 

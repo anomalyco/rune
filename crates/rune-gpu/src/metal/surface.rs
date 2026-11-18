@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use objc2_core_foundation::CGSize;
 use objc2_quartz_core::{CALayer, CAMetalDrawable, CAMetalLayer};
-use objc2_video::rc::{Retained, autoreleasepool};
+use objc2::rc::{Retained, autoreleasepool};
 use parking_lot::Mutex;
 use raw_window_metal::Layer;
 use wgpu::custom::*;
@@ -53,8 +53,8 @@ impl MetalSurface {
 /// The `NSWindow` hosting `layer`: the first ancestor layer with a delegate is the backing
 /// `NSView`, and its window is the one.
 #[cfg(target_os = "macos")]
-fn hosting_window(layer: &CALayer) -> Option<Retained<objc2_video::runtime::NSObject>> {
-    use objc2_video::{Message, msg_send};
+fn hosting_window(layer: &CALayer) -> Option<Retained<objc2::runtime::NSObject>> {
+    use objc2::{Message, msg_send};
     let mut current = Some(layer.retain());
     while let Some(layer) = current {
         if let Some(delegate) = layer.delegate() {
@@ -74,7 +74,7 @@ fn occluded(layer: &CALayer) -> bool {
     const VISIBLE: usize = 1 << 1;
     let Some(window) = hosting_window(layer) else { return false };
     // SAFETY: `occlusionState` is an NSWindow property returning NSWindowOcclusionState.
-    let state: usize = unsafe { objc2_video::msg_send![&*window, occlusionState] };
+    let state: usize = unsafe { objc2::msg_send![&*window, occlusionState] };
     state & VISIBLE == 0
 }
 

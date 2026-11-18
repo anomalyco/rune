@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/rune",
     "crates/rune-core",
+    "crates/rune-gpu",
     "crates/rune-ref",
     "crates/rune-motion",
     "crates/rune-i18n",
@@ -61,6 +62,7 @@ members = [
 default-members = [
     "crates/rune",
     "crates/rune-core",
+    "crates/rune-gpu",
     "crates/rune-ref",
     "crates/rune-motion",
     "crates/rune-i18n",
@@ -128,6 +130,7 @@ procwatch = { path = "crates/procwatch" }
 rune = { path = "crates/rune", default-features = false }
 rune-core = { path = "crates/rune-core" }
 rune-fx = { path = "crates/rune-fx" }
+rune-gpu = { path = "crates/rune-gpu", default-features = false }
 rune-highlights = { path = "crates/rune-highlights" }
 rune-kit = { path = "crates/rune-kit", default-features = false }
 rune-knobs = { path = "crates/rune-knobs" }

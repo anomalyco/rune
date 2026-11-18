@@ -394,7 +394,7 @@ impl<S: 'static> App<S> {
     /// `prewarm_gpu()` to avoid the restart. An iOS app, which embeds a `LayerHost` instead,
     /// calls `rune::prewarm_gpu_on`. Does nothing elsewhere.
     pub fn gpu_backend(self, backend: crate::GpuBackend) -> Self {
-        crate::gpu::backend::choose(backend);
+        crate::render::choose_gpu_backend(backend);
         self
     }
 
