@@ -705,7 +705,7 @@ Staying fast afterwards is "Fast apps" (`site/src/FastApps.tsx`) and "Smooth scr
   `Compositor::features` asks for more than the native backend offers (`TIMESTAMP_QUERY` and `IMMEDIATES`) draws
   with wgpu instead, every frame: log
   `rune::describe_gpu(frame.device)` once to see which backend a window got and why, or set `RUNE_GPU_LOG=1`.
-- **Precompiled Metal uber shader.** `crates/rune/src/uber.metallib` is loaded through wgpu's passthrough shaders,
+- **Precompiled Metal uber shader.** `crates/rune/src/shaders/uber.metallib` is loaded through wgpu's passthrough shaders,
   skipping WGSL translation and Metal's compile (`Renderer::new` 232 ms to 85 ms on a cold shader cache). The WGSL
   path is the fallback when the adapter lacks passthrough support, when `RUNE_DISABLE_METALLIB=1`, when the
   fingerprint doesn't match or when Metal rejects the library. Rune's own Metal backend (`metal-backend`) loads

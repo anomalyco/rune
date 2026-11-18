@@ -8,7 +8,7 @@ row is unmasked; the lower row uses `clip_rounded(20)`. Run from the repo root:
 
 ```sh
 cargo build -p overlay-lab --bin layer-filter-overlay -j 2
-python3 examples/overlay-lab/native/run-filter-probe.py crates/rune/artifacts/layer-filters/native-overlay
+python3 examples/overlay-lab/native/run-filter-probe.py examples/overlay-lab/artifacts/layer-filters/native-overlay
 ```
 
 Run it on a GUI test Mac, never on a developer's desk display. The runner holds the host's GUI lock, waits for visible alpha and positive Metal presentation,

@@ -9,7 +9,7 @@ use std::sync::OnceLock;
 use crate::FxBlend;
 use crate::pack::KINDS;
 
-const CLIP: &str = include_str!("../../rune/src/clip.wgsl");
+const CLIP: &str = include_str!("../../rune/src/shaders/clip.wgsl");
 const COMMON: &str = include_str!("shaders/common.wgsl");
 const SOURCES: [(&str, &str); KINDS] = [
     ("glow", include_str!("shaders/glow.wgsl")),

@@ -27,9 +27,9 @@
 include!("uber/metallib_hash.rs");
 
 #[cfg(any(test, target_os = "macos"))]
-const UBER_METALLIB: &[u8] = include_bytes!("../uber.metallib");
+const UBER_METALLIB: &[u8] = include_bytes!("../shaders/uber.metallib");
 #[cfg(all(target_os = "macos", feature = "metal-backend"))]
-const UBER_NATIVE_METALLIB: &[u8] = include_bytes!("../uber_native.metallib");
+const UBER_NATIVE_METALLIB: &[u8] = include_bytes!("../shaders/uber_native.metallib");
 
 pub(super) const UBER_VERTEX_ATTRS: [wgpu::VertexAttribute; 8] = wgpu::vertex_attr_array![
     0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4,
@@ -557,7 +557,7 @@ mod tests {
         assert_eq!(
             fnv1a64(UBER_METALLIB),
             UBER_METALLIB_FNV64,
-            "crates/rune/src/uber.metallib does not match recorded hash; run scripts/precompile-metal-shaders.sh"
+            "crates/rune/src/shaders/uber.metallib does not match recorded hash; run scripts/precompile-metal-shaders.sh"
         );
 
         #[cfg(target_os = "macos")]
@@ -595,7 +595,7 @@ pub(super) const UBER_WGSL_BLAKE3: &str = \"{wgsl_hash}\";", uber_abi_hash());
         {
             assert!(UBER_NATIVE_METALLIB.starts_with(b"MTLB") && UBER_NATIVE_METALLIB.len() > 1024);
             assert_eq!(fnv1a64(UBER_NATIVE_METALLIB), UBER_NATIVE_METALLIB_FNV64,
-                "crates/rune/src/uber_native.metallib does not match recorded hash; run scripts/precompile-metal-shaders.sh");
+                "crates/rune/src/shaders/uber_native.metallib does not match recorded hash; run scripts/precompile-metal-shaders.sh");
             assert_eq!(native_uber_msl_hash(&native_uber_msl(&wgsl)).to_hex().as_str(), UBER_NATIVE_MSL_BLAKE3,
                 "the Metal backend's MSL or its compile flags changed; run scripts/precompile-metal-shaders.sh");
         }

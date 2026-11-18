@@ -3,6 +3,12 @@
 //! inherit and whose `opacity` fades them as one; `transform` on groups and elements). What
 //! `defs`, `clipPath`, `mask` and the like hold doesn't paint.
 
+mod aaa;
+mod area;
+pub(in crate::text) mod color;
+mod convex;
+mod svg_path;
+
 use swash::zeno::{Cap, Fill, Join, Point, Transform};
 
 use super::{Atlas, Rasterized};
@@ -135,16 +141,16 @@ fn element_path(el: &str) -> Option<String> {
 
 /// An element Blink draws as the shape it is rather than as a path: a circle or ellipse
 /// (`drawOval`), or a rect (`drawRect`, or `addRRect` with round corners), in viewBox units.
-fn element_shape(el: &str) -> Option<super::area::Shape<'static>> {
+fn element_shape(el: &str) -> Option<area::Shape<'static>> {
     let tag = el.trim_start_matches('<').split_whitespace().next()?;
     match tag {
-        "circle" => Some(super::area::Shape::Oval { center: Point::new(num(el, "cx"), num(el, "cy")), radii: Point::new(num(el, "r"), num(el, "r")) }),
-        "ellipse" => Some(super::area::Shape::Oval { center: Point::new(num(el, "cx"), num(el, "cy")), radii: Point::new(num(el, "rx"), num(el, "ry")) }),
+        "circle" => Some(area::Shape::Oval { center: Point::new(num(el, "cx"), num(el, "cy")), radii: Point::new(num(el, "r"), num(el, "r")) }),
+        "ellipse" => Some(area::Shape::Oval { center: Point::new(num(el, "cx"), num(el, "cy")), radii: Point::new(num(el, "rx"), num(el, "ry")) }),
         "rect" => {
             let (x, y, w, h) = (num(el, "x"), num(el, "y"), num(el, "width"), num(el, "height"));
             let r = num(el, "rx").min(w / 2.0).min(h / 2.0);
             let ry = attr(el, "ry").map_or(r, |_| num(el, "ry").min(h / 2.0));
-            (r == 0.0 || ry == r).then(|| super::area::Shape::Rounded { lo: Point::new(x, y), hi: Point::new(x + w, y + h), r: r.max(0.0) })
+            (r == 0.0 || ry == r).then(|| area::Shape::Rounded { lo: Point::new(x, y), hi: Point::new(x + w, y + h), r: r.max(0.0) })
         }
         _ => None,
     }
@@ -266,7 +272,7 @@ fn icon_coverage_at(icon: &Icon, px: u32, size: f32, origin: Point) -> Vec<u8> {
         }
         let Some(d) = element_path(el) else { continue };
         // Skia's elements: an arc stays the conics Blink's `SkPath::arcTo` makes.
-        let d = super::convex::parse(&d);
+        let d = convex::parse(&d);
         // The element's own attribute, else the innermost group's that sets it.
         let get = |name: &str| {
             attr(el, name).or_else(|| {
@@ -277,20 +283,20 @@ fn icon_coverage_at(icon: &Icon, px: u32, size: f32, origin: Point) -> Vec<u8> {
         let fill = get("fill").map_or(!stroke, |v| v != "none");
         let whole = opacity(attr(el, "opacity"));
         let into = layers.last_mut().map_or(&mut acc, |l| &mut l.0);
-        let shape = element_shape(el).unwrap_or(super::area::Shape::Path(d.as_slice()));
-        // With the op Chromium's GPU raster picks for the shape (`super::area`).
-        let mut paint = |pen: Option<&super::area::Pen>, fill: Fill, alpha: f32| {
-            match super::area::op(&shape, ctm, pen) {
-                super::area::Op::Hairline(width) => {
+        let shape = element_shape(el).unwrap_or(area::Shape::Path(d.as_slice()));
+        // With the op Chromium's GPU raster picks for the shape (`area`).
+        let mut paint = |pen: Option<&area::Pen>, fill: Fill, alpha: f32| {
+            match area::op(&shape, ctm, pen) {
+                area::Op::Hairline(width) => {
                     let placed = Transform { x: ctm.x + origin.x, y: ctm.y + origin.y, ..ctm };
-                    super::convex::hairline(&super::area::elements(&shape), placed, width, [origin.x, origin.y], px, &mut buf);
+                    convex::hairline(&area::elements(&shape), placed, width, [origin.x, origin.y], px, &mut buf);
                 }
-                super::area::Op::Path => super::area::render_aaa(&shape, pen, fill, ctm, origin, px, &mut buf),
-                super::area::Op::ConvexStroke => {
+                area::Op::Path => area::render_aaa(&shape, pen, fill, ctm, origin, px, &mut buf),
+                area::Op::ConvexStroke => {
                     let placed = Transform { x: ctm.x + origin.x, y: ctm.y + origin.y, ..ctm };
-                    match pen.and_then(|p| super::convex::stroke(&super::area::elements(&shape), placed, p.width, p.join, p.miter_limit)) {
-                        Some(mesh) => super::convex::fill_triangles(&mesh, [origin.x, origin.y], px, &mut buf),
-                        None => super::area::render_aaa(&shape, pen, fill, ctm, origin, px, &mut buf),
+                    match pen.and_then(|p| convex::stroke(&area::elements(&shape), placed, p.width, p.join, p.miter_limit)) {
+                        Some(mesh) => convex::fill_triangles(&mesh, [origin.x, origin.y], px, &mut buf),
+                        None => area::render_aaa(&shape, pen, fill, ctm, origin, px, &mut buf),
                     }
                 }
                 op => op.render(px, &mut buf),
@@ -315,7 +321,7 @@ fn icon_coverage_at(icon: &Icon, px: u32, size: f32, origin: Point) -> Vec<u8> {
             };
             let miter_limit = get("stroke-miterlimit").and_then(|v| v.parse().ok()).unwrap_or(4.0);
             // The transform scales the width with the geometry.
-            let pen = super::area::Pen { width: w, cap, join, miter_limit };
+            let pen = area::Pen { width: w, cap, join, miter_limit };
             paint(Some(&pen), Fill::NonZero, whole * opacity(get("stroke-opacity")));
         }
     }
@@ -416,5 +422,4 @@ fn numbers(s: &str) -> Vec<f32> {
 
 
 #[cfg(test)]
-#[path = "icon_tests.rs"]
 mod tests;

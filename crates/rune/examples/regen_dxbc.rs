@@ -47,17 +47,19 @@ fn main() {
     let (_, wgsl, abi) = rune::render::uber_shader_identity();
     let hlsl = blake3::hash(format!("{vertex}\0{fragment}").as_bytes()).to_hex();
     let root = env!("CARGO_MANIFEST_DIR");
-    std::fs::write(format!("{root}/uber.vs.dxbc"), &vs).unwrap();
-    std::fs::write(format!("{root}/uber.fs.dxbc"), &fs).unwrap();
-    std::fs::write(format!("{root}/uber.vs-dual.dxbc"), &vs_dual).unwrap();
-    std::fs::write(format!("{root}/uber.fs-dual.dxbc"), &fs_dual).unwrap();
+    let dxbc_dir = format!("{root}/shaders/dxbc");
+    std::fs::create_dir_all(&dxbc_dir).unwrap();
+    std::fs::write(format!("{dxbc_dir}/uber.vs.dxbc"), &vs).unwrap();
+    std::fs::write(format!("{dxbc_dir}/uber.fs.dxbc"), &fs).unwrap();
+    std::fs::write(format!("{dxbc_dir}/uber.vs-dual.dxbc"), &vs_dual).unwrap();
+    std::fs::write(format!("{dxbc_dir}/uber.fs-dual.dxbc"), &fs_dual).unwrap();
     // Each pinned fragment beside the shared vertex stage (render/dxbc.rs `uber_pinned`), and its file's BLAKE3.
     let mut pinned_fs = Vec::new();
     for (n, &(kind, at)) in pinned_logged.iter().enumerate() {
         let end = pinned_logged.get(n + 1).map_or(logged.len(), |p| p.1);
         let started = std::time::Instant::now();
         let fs_pinned = fxc(&stage(&logged[at..end], "fs"), "fs", "ps_5_1");
-        std::fs::write(format!("{root}/uber.fs-k{kind}.dxbc"), &fs_pinned).unwrap();
+        std::fs::write(format!("{dxbc_dir}/uber.fs-k{kind}.dxbc"), &fs_pinned).unwrap();
         pinned_fs.push(format!("\"{}\"", blake3::hash(&fs_pinned).to_hex()));
         println!("uber.fs-k{kind}.dxbc {} bytes (FXC {:.1} s)", fs_pinned.len(), started.elapsed().as_secs_f64());
     }
@@ -89,9 +91,9 @@ fn main() {
     rune::render::make_straight_alpha(&gpu.device, wgpu::TextureFormat::Bgra8Unorm);
     let logged = HLSL.lock().unwrap();
     let (alpha_vs, alpha_fs) = (fxc(&stage(&logged[start..], "vs"), "vs", "vs_5_1"), fxc(&stage(&logged[start..], "fs"), "fs", "ps_5_1"));
-    std::fs::write(format!("{root}/alpha.vs.dxbc"), &alpha_vs).unwrap();
-    std::fs::write(format!("{root}/alpha.fs.dxbc"), &alpha_fs).unwrap();
-    let alpha_wgsl = blake3::hash(std::fs::read_to_string(format!("{root}/src/surface_alpha.wgsl")).unwrap().replace("\r\n", "\n").as_bytes()).to_hex();
+    std::fs::write(format!("{dxbc_dir}/alpha.vs.dxbc"), &alpha_vs).unwrap();
+    std::fs::write(format!("{dxbc_dir}/alpha.fs.dxbc"), &alpha_fs).unwrap();
+    let alpha_wgsl = blake3::hash(std::fs::read_to_string(format!("{root}/src/shaders/surface_alpha.wgsl")).unwrap().replace("\r\n", "\n").as_bytes()).to_hex();
     println!("alpha.vs.dxbc {} bytes, alpha.fs.dxbc {} bytes, WGSL {alpha_wgsl}", alpha_vs.len(), alpha_fs.len());
     drop(logged);
 
@@ -102,12 +104,12 @@ fn main() {
     let fragments: Vec<&String> = logged[start..].iter().filter(|text| text.starts_with("Naga generated shader for \"fs\"")).collect();
     assert_eq!(fragments.len(), 5, "the layer blur makes five pipelines");
     let blur_vs = fxc(&stage(&logged[start..], "vs"), "vs", "vs_5_1");
-    std::fs::write(format!("{root}/layer_blur.vs.dxbc"), &blur_vs).unwrap();
+    std::fs::write(format!("{dxbc_dir}/layer_blur.vs.dxbc"), &blur_vs).unwrap();
     for (i, text) in fragments.iter().enumerate() {
         let fs = fxc(text.split_once(":\n").unwrap().1, "fs", "ps_5_1");
-        std::fs::write(format!("{root}/layer_blur.fs{i}.dxbc"), &fs).unwrap();
+        std::fs::write(format!("{dxbc_dir}/layer_blur.fs{i}.dxbc"), &fs).unwrap();
     }
-    let blur_wgsl = blake3::hash(std::fs::read_to_string(format!("{root}/src/layer_blur.wgsl")).unwrap().replace("\r\n", "\n").as_bytes()).to_hex();
+    let blur_wgsl = blake3::hash(std::fs::read_to_string(format!("{root}/src/shaders/layer_blur.wgsl")).unwrap().replace("\r\n", "\n").as_bytes()).to_hex();
     println!("layer_blur.vs.dxbc {} bytes and 5 fragment variants, WGSL {blur_wgsl}", blur_vs.len());
 
     drop(logged);
@@ -125,9 +127,9 @@ fn main() {
         ("backdrop_blur.fs_up", fxc(&up[0], "fs_up", "ps_5_1")), ("backdrop_composite.vs", fxc(vertices.last().unwrap(), "vs", "vs_5_1")),
         ("backdrop_composite.fs", fxc(&fragments[0], "fs", "ps_5_1"))];
     for (name, blob) in &backdrop {
-        std::fs::write(format!("{root}/{name}.dxbc"), blob).unwrap();
+        std::fs::write(format!("{dxbc_dir}/{name}.dxbc"), blob).unwrap();
     }
-    let read = |path: &str| std::fs::read_to_string(format!("{root}/src/{path}")).unwrap().replace("\r\n", "\n");
+    let read = |path: &str| std::fs::read_to_string(format!("{root}/src/shaders/{path}")).unwrap().replace("\r\n", "\n");
     let blur_wgsl_hash = blake3::hash(read("backdrop_blur.wgsl").as_bytes()).to_hex();
     let composite_wgsl_hash = blake3::hash(format!("{}\n{}", read("clip.wgsl"), read("backdrop_composite.wgsl")).as_bytes()).to_hex();
     println!("backdrop blur: {} bytes in 5 stages, WGSL {blur_wgsl_hash} and {composite_wgsl_hash}", backdrop.iter().map(|(_, b)| b.len()).sum::<usize>());

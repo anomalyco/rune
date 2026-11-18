@@ -14,7 +14,7 @@ use wgpu::naga::{
     valid::{Capabilities, ValidationFlags, Validator},
 };
 
-const CLIP: &str = include_str!("../../clip.wgsl");
+const CLIP: &str = include_str!("../../shaders/clip.wgsl");
 const FX_COMMON: &str = include_str!("../../../../rune-fx/src/shaders/common.wgsl");
 const LIGHT_COMMON: &str = include_str!("../../../../rune-light/src/shaders/common.wgsl");
 const GI: &str = include_str!("../../../../rune-light/src/shaders/gi.wgsl");
@@ -62,14 +62,14 @@ fn reel_part(name: &str) -> String {
 
 fn cases() -> Vec<Case> {
     let mut cases = vec![
-        case("rune uber", &["rune/src/clip.wgsl", "rune/src/shader.wgsl", "rune/src/gpu/springs.wgsl"],
-            format!("{CLIP}\n{}\n{}", include_str!("../../shader.wgsl"), include_str!("../springs.wgsl"))),
-        case("rune backdrop blur", &["rune/src/backdrop_blur.wgsl"], include_str!("../../backdrop_blur.wgsl").into()),
-        case("rune backdrop composite", &["rune/src/clip.wgsl", "rune/src/backdrop_composite.wgsl"],
-            format!("{CLIP}\n{}", include_str!("../../backdrop_composite.wgsl"))),
+        case("rune uber", &["rune/src/shaders/clip.wgsl", "rune/src/shaders/shader.wgsl", "rune/src/gpu/springs.wgsl"],
+            format!("{CLIP}\n{}\n{}", include_str!("../../shaders/shader.wgsl"), include_str!("../springs.wgsl"))),
+        case("rune backdrop blur", &["rune/src/shaders/backdrop_blur.wgsl"], include_str!("../../shaders/backdrop_blur.wgsl").into()),
+        case("rune backdrop composite", &["rune/src/shaders/clip.wgsl", "rune/src/shaders/backdrop_composite.wgsl"],
+            format!("{CLIP}\n{}", include_str!("../../shaders/backdrop_composite.wgsl"))),
         case("rune video", &["rune/src/native_surface/video.wgsl"], include_str!("../../native_surface/video.wgsl").into()),
     ];
-    let mut blur = case("rune layer blur", &["rune/src/layer_blur.wgsl"], include_str!("../../layer_blur.wgsl").into());
+    let mut blur = case("rune layer blur", &["rune/src/shaders/layer_blur.wgsl"], include_str!("../../shaders/layer_blur.wgsl").into());
     blur.constants = [(0.0, 0.0), (0.0, 1.0), (2.0, 0.0), (2.0, 1.0), (3.0, 0.0)].iter().map(|&(m, a)| vec![("MODE", m), ("ADDITIVE", a)]).collect();
     cases.push(blur);
     let fx_effects: [(&str, &'static str, &str); 8] = [
@@ -83,7 +83,7 @@ fn cases() -> Vec<Case> {
         ("fill", "rune-fx/src/shaders/fill.wgsl", include_str!("../../../../rune-fx/src/shaders/fill.wgsl")),
     ];
     for (name, file, src) in fx_effects {
-        cases.push(case(&format!("fx {name}"), &["rune/src/clip.wgsl", "rune-fx/src/shaders/common.wgsl", file], format!("{CLIP}\n{FX_COMMON}\n{src}")));
+        cases.push(case(&format!("fx {name}"), &["rune/src/shaders/clip.wgsl", "rune-fx/src/shaders/common.wgsl", file], format!("{CLIP}\n{FX_COMMON}\n{src}")));
     }
     cases.extend([
         case("fx mip", &["rune-fx/src/shaders/mip.wgsl"], include_str!("../../../../rune-fx/src/shaders/mip.wgsl").into()),

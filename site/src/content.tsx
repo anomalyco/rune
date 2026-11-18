@@ -322,7 +322,7 @@ export const layers: Entry[] = [
     ],
     code: [
       at("crates/rune/src/render.rs"),
-      at("crates/rune/src/shader.wgsl", "one uber-quad pipeline"),
+      at("crates/rune/src/shaders/shader.wgsl", "one uber-quad pipeline"),
       at("crates/rune/src/shape.rs", "strokes and fills"),
     ],
   },

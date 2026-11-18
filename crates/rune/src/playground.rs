@@ -465,5 +465,4 @@ pub(crate) fn is_stage(key: &str) -> bool {
 }
 
 #[cfg(test)]
-#[path = "playground_tests.rs"]
 mod tests;

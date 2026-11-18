@@ -161,7 +161,7 @@ impl Default for LayerSpec {
 /// soft edges and rounded-clip radius, so a compositor shader cuts its effect with the same
 /// rectangle, feathers and circular or continuous corners as the primitives around it. Prepend it
 /// to the shader source.
-pub const CLIP_WGSL: &str = include_str!("clip.wgsl");
+pub const CLIP_WGSL: &str = include_str!("shaders/clip.wgsl");
 
 /// The WGSL the precompiled DX12 bytecode is compiled from (Windfoil's, CRLF read as LF), its
 /// BLAKE3 and the hash of its pipeline layout, as the bytecode records them;

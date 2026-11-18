@@ -1,7 +1,7 @@
 //! Convert Rune's premultiplied composition to the straight alpha required by
 //! wgpu's straight-alpha surfaces and PNG exports. Metal's CAMetalLayer stays premultiplied.
 /// The pass's shader (`surface_alpha.wgsl`).
-pub(crate) const WGSL: &str = include_str!("../surface_alpha.wgsl");
+pub(crate) const WGSL: &str = include_str!("../shaders/surface_alpha.wgsl");
 
 pub(crate) struct AlphaSurface {
     pub view: wgpu::TextureView,
