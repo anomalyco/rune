@@ -17,6 +17,8 @@ impl<S: 'static> Host<S> {
     /// (`Backoff`), with its display link stopped so no tick redraws sooner. `stepped` when this
     /// frame already ran the runtime.
     pub(super) fn missed_frame(&mut self, missed: Missed, stepped: bool) {
+        #[cfg(feature = "frame-profile")]
+        crate::frame::live_log::missed(match missed { Missed::Occluded => 0, Missed::Timeout => 1, Missed::Outdated => 2, Missed::Unconfigured => 3 });
         let Some(l) = self.win.as_mut() else { return };
         l.timer_frame.drawn();
         l.presented = None;
@@ -208,16 +210,43 @@ impl<S: 'static> Host<S> {
             && self.rt.window_frame.is_none() && !FrameMove::moving(&self.frame_move);
         #[cfg(target_os = "macos")]
         let quiet = quiet && shown.is_none() && !l.native.materials.native();
+        // Only the window's loops asked for this frame (`LoopFrame`): a step of them may stand
+        // for the whole of it (`Runtime::loop_step`), drawn only where they draw (`arm_loop`).
+        // Why a frame wasn't loop-only (frame-profile).
+        #[allow(unused_mut, unused_assignments)]
+        let mut loop_why: Option<&'static str> = None;
+        let only_loops = l.loop_frame.only_loops();
+        if !only_loops { loop_why = Some("something reached the window"); }
+        // The app's waker ran and its event is still on its way: what it brought may be readable now.
+        let only_loops = only_loops && !self.app_woken.load(std::sync::atomic::Ordering::Acquire);
+        if loop_why.is_none() && !only_loops { loop_why = Some("an app wake on its way"); }
+        #[cfg(target_os = "windows")]
+        let only_loops = only_loops && !hidden && !live_resize && self.trace.is_none() && self.args.trace.is_none()
+            && self.rt.window_frame.is_none() && !FrameMove::moving(&self.frame_move) && !composing(self.comp.as_deref());
+        #[cfg(not(target_os = "windows"))]
+        let only_loops = only_loops && false;
+        let mut looped: Option<Vec<u32>> = None;
         let built = if quiet {
             let now = Instant::now();
             self.rt.window_resting = true;
-            let (animating, dt) = self.clock.advance(&mut self.rt, target.unwrap_or(now), false);
+            let at = target.unwrap_or(now);
+            let step = if only_loops { loop_step(&mut self.clock, &mut self.rt, at) } else { Err("") };
+            let (animating, dt) = match step {
+                Ok((patched, dt)) => {
+                    looped = Some(patched);
+                    (self.rt.animating, dt)
+                }
+                Err(why) => {
+                    if !why.is_empty() { loop_why = Some(why); }
+                    self.clock.advance(&mut self.rt, at, false)
+                }
+            };
             let rt = &mut self.rt;
             #[cfg(target_os = "macos")]
             let next_tick = if deferred { l.native.pacing.as_ref().map(|p| p.tick_after(now)) } else { l.next_tick(now) };
             #[cfg(not(target_os = "macos"))]
             let next_tick = l.next_tick(now);
-            if renderer.srgb_blend() == rt.srgb_blend()
+            if looped.is_none() && renderer.srgb_blend() == rt.srgb_blend()
                 && l.presented.as_ref().is_some_and(|p| p.unchanged(rt, &l.config, animating, next_tick)) {
                 sync_platform(l, rt, &mut self.secure_input, &mut self.ime_allowed, &self.clipboard);
                 l.stop_pacing();
@@ -282,14 +311,30 @@ impl<S: 'static> Host<S> {
         crate::marks::mark_once(&FIRST_BUILD, "frame.first.build");
         let rt = &mut self.rt;
         if hidden && l.first_frame.settles() { rt.settle_all(); }
+        let stepped = if built.is_none() && only_loops { loop_step(&mut self.clock, rt, frame_time) } else { Err("") };
+        if let Err(why) = stepped && !why.is_empty() { loop_why = Some(why); }
         let (mut animating, dt) = if let Some((animating, dt, _)) = built {
             (animating, dt)
         } else if hidden {
             self.clock.hold(frame_time);
             (rt.frame(0.0), 0.0)
+        } else if let Ok((patched, dt)) = stepped {
+            looped = Some(patched);
+            (rt.animating, dt)
         } else {
             self.clock.advance(rt, frame_time, composing(self.comp.as_deref()))
         };
+        // `RUNE_LOOP_CHECK=1`: how the loop-only step this frame stood in for compares with it.
+        #[allow(unused_variables)]
+        let loop_check = rt.loop_checked();
+        // frame-profile, `RUNE_MISS_LOOP_FRAMES=<n>`: every nth loop-only frame ends here as if its
+        // drawable never came, after the step: what the next frame redraws (with
+        // `RUNE_LOOP_CHECK=2`, whether its picture is right).
+        #[cfg(feature = "frame-profile")]
+        if looped.is_some() && super::loop_frame::forced_miss() {
+            drop(frame);
+            return self.missed_frame(Missed::Timeout, true);
+        }
         #[cfg(target_os = "macos")]
         let frame = if l.surface.as_ref().is_some_and(|surface| l.native.materials.update(rt.transparent, !rt.materials.is_empty(), &l.window, surface)) {
             // This drawable presents without the views: build again natively into a new one.
@@ -371,20 +416,37 @@ impl<S: 'static> Host<S> {
         let target = l.alpha.as_ref().map_or(&view, |a| &a.view);
         renderer.set_frame_wake(rt.live_wake());
         let size = (l.config.width, l.config.height);
+        // The paint the instances come from, and on a loop-only frame the only ones it changed.
+        renderer.next_instances(rt.paint_count(), looped.clone());
         // Only what changed is redrawn and presented (`damage`): the renderer's `draw` takes the
         // armed rectangles when nothing but the instances draws there, a compositor's
-        // `Frame::draw_ui` included.
+        // `Frame::draw_ui` included. A loop-only frame knows what changed.
         #[cfg(target_os = "windows")]
         let part = {
             let whole = if l.alpha.is_some() { Some("alpha") } else if images_changed { Some("image") }
                 else if !l.config.usage.contains(wgpu::TextureUsages::COPY_DST) { Some("no copies") } else { None };
-            match l.native.damage.plan(&rt.instances, size, rt.clear_color(), whole.is_none()) {
+            // A new swap chain (`rebind_alpha`, a replaced surface, any configure: a resize, a blend
+            // switch, `acquire` retrying an outdated surface) draws its first frame whole, through
+            // `plan`, even when only a loop asked for it (the step has run; the frame draws it whole).
+            let swap = l.surface.as_ref().map_or(0, super::configure::generation);
+            let fresh = !l.native.damage.current(size, rt.clear_color(), swap);
+            if fresh && looped.is_some() { loop_why = Some("a new swap chain"); }
+            let armed = looped.as_deref().filter(|_| whole.is_none() && !fresh).and_then(|p| {
+                match renderer.arm_loop(&gpu.device, &gpu.queue, rt.paint_count(), &rt.instances, p, rt.clear_color(), size, l.config.format) {
+                    Ok(rects) => Some((p, rects)),
+                    Err(why) => { loop_why = Some(why); None }
+                }
+            });
+            if let Some((p, present)) = armed {
+                l.native.damage.patched(&rt.instances, p);
+                Some(present)
+            } else { match l.native.damage.plan(&rt.instances, size, rt.clear_color(), swap, whole.is_none()) {
                 super::damage::Plan::All(why) => { whole_why = Some(whole.unwrap_or(why)); None }
                 super::damage::Plan::Part { draw, present } => {
                     renderer.arm_damage(&gpu.device, &gpu.queue, &draw, rt.clear_color(), size, l.config.format);
                     Some(present)
                 }
-            }
+            } }
         };
         if let Some(c) = self.comp.as_mut() {
             let mut f = Frame {
@@ -464,6 +526,9 @@ impl<S: 'static> Host<S> {
                 change: l.native.damage.seen,
                 #[cfg(not(target_os = "windows"))]
                 change: None,
+                looped: looped.as_ref().map(Vec::len),
+                loop_why,
+                loop_check,
             }),
             _ => None,
         };
@@ -564,6 +629,17 @@ impl<S: 'static> Host<S> {
             self.take_frame_request(self.frame_secs(frame_time) - shown, true);
         }
     }
+}
+
+/// A loop-only step for the frame presented at `at` (`Runtime::loop_step`): the instances it
+/// wrote and the seconds it stepped, or why it takes an ordinary frame. The frame clock takes
+/// the step only when the runtime does.
+fn loop_step<S: 'static>(clock: &mut FrameClock, rt: &mut Runtime<S>, at: Instant) -> Result<(Vec<u32>, f64), &'static str> {
+    let dt = at.saturating_duration_since(clock.last()).as_secs_f64();
+    let patched = rt.loop_step(dt)?;
+    clock.frame_step(at, true);
+    rt.frame_target = Some(at);
+    Ok((patched, dt))
 }
 
 /// The window's display refresh: its display link's on macOS, else the monitor's.

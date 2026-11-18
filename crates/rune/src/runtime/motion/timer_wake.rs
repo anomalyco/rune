@@ -149,12 +149,27 @@ impl<S: 'static> Runtime<S> {
 
     /// `rests`, apart from a loop's own wake (`paint_cycle_tick`).
     pub(super) fn rests_except_loop(&self) -> bool {
+        !self.animating && self.rests_but_motion()
+    }
+
+    /// Nothing waits for a frame but motion: no commit, input, held work, live value or timer
+    /// due now (`loop_step` asks the motion apart).
+    pub(super) fn rests_but_motion(&self) -> bool {
+        self.waiting_work().is_none()
+    }
+
+    /// What waits for a frame besides motion, if anything (`rests_but_motion`).
+    pub(super) fn waiting_work(&self) -> Option<&'static str> {
         #[cfg(feature = "hot")]
-        if self.hot.is_some() { return false; }
-        !self.animating && !self.stale() && !self.settle && self.window_frame.is_none()
-            && !self.hover_delays.waiting() && !self.tooltip_waiting() && !self.press_repeat_waiting() && !self.drag_ends_pending()
-            && self.drag_out_request.is_none() && !self.files_held() && !self.live_pending()
-            && self.surfaces.is_empty() && !self.steps_frames()
+        if self.hot.is_some() { return Some("live edit"); }
+        if self.stale() { Some("a commit or input") }
+        else if self.settle || self.window_frame.is_some() { Some("a settle or window frame") }
+        else if self.hover_delays.waiting() || self.tooltip_waiting() || self.press_repeat_waiting() || self.drag_ends_pending() || self.drag_out_request.is_some() { Some("pointer work") }
+        else if self.files_held() { Some("files") }
+        else if self.live_pending() { Some("a live value") }
+        else if !self.surfaces.is_empty() { Some("a native surface") }
+        else if self.steps_frames() { Some("a poll that steps every frame") }
+        else { None }
     }
 
     /// The last poll asked for the next frame (`wake_after(ZERO)`, due at once): it steps

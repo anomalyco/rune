@@ -83,6 +83,8 @@ pub(super) struct Win {
     /// The frame a due timer asked for, until the window draws it, and whether only it asked
     /// (`TimerFrame`).
     pub(super) timer_frame: TimerFrame,
+    /// Whether only its loops asked for the next frame (`LoopFrame`).
+    pub(super) loop_frame: LoopFrame,
     /// The last frame presented, while the window rests.
     pub(super) presented: Option<Presented>,
     /// A frame asked for while other windows covered it, still to draw (`CoveredDraw`).

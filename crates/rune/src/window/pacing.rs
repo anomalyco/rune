@@ -263,6 +263,8 @@ pub(crate) fn acquire_checked(surface: &wgpu::Surface, gpu: &Gpu, config: &wgpu:
                     return Err(Missed::Unconfigured);
                 }
                 reconfigures -= 1;
+                #[cfg(feature = "frame-profile")]
+                crate::frame::live_log::reconfigured();
             }
             Err(Missed::Outdated) => {
                 return Err(match super::configure(surface, gpu, config) {
