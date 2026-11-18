@@ -653,16 +653,68 @@ impl<S: 'static> Runtime<S> {
         }
     }
 
+    fn a11y_drawn_len(&self, i: usize) -> Option<usize> {
+        let n = &self.nodes[i];
+        match n.input.as_deref() {
+            Some(input) if !input.edit.is_secure() => match input.edit.preedit() {
+                None => Some(input.edit.text.len()),
+                Some((pre, _)) => {
+                    let (a, b) = input.edit.range();
+                    Some(input.edit.text.len().saturating_sub(b.saturating_sub(a)) + pre.len())
+                }
+            },
+            Some(input) => Some(input.edit.display().0.len()),
+            None => n.text.as_deref().map(|t| t.content.len()),
+        }
+    }
+
+    /// End byte in `content` of `layout`'s last laid-out line (mapped through [`Piece::content`],
+    /// plus any paragraph-ending line break), in O(1) without building every line.
+    fn a11y_layout_end_byte(layout: TextFlow<'_>, content: &str) -> Option<usize> {
+        if let TextFlow::Paragraphs(pl) = layout && pl.paragraphs.is_empty() {
+            return Some(0);
+        }
+        let p = layout.piece_at(usize::MAX);
+        let end = if p.is_blank() || p.layout.len() == 0 {
+            if p.is_whole() { 0 } else { p.start }
+        } else {
+            let last_ln = p.layout.get(p.layout.len() - 1)?;
+            p.content(last_ln.text_range().end)
+        };
+        if end > content.len() { return None; }
+        let br = if p.is_whole() {
+            0
+        } else if content.as_bytes().get(p.end..p.end + 2) == Some(b"\r\n") {
+            2
+        } else if content.as_bytes().get(p.end) == Some(&b'\n') {
+            1
+        } else {
+            0
+        };
+        let total = end + br;
+        (total <= content.len()).then_some(total)
+    }
+
     /// Single O(1) shared predicate deciding whether node `i` is a non-secret text field answered
-    /// through the on-demand long-field path (past `RUN_MAX_BYTES` or waiting lazy paragraphs).
+    /// through the on-demand long-field path: past `RUN_MAX_BYTES`, waiting lazy paragraphs,
+    /// elided (`truncate` / `max_lines`), or laid-out lines whose end byte does not cover the
+    /// drawn text.
     pub(super) fn a11y_uses_long_field(&self, i: usize) -> bool {
         let n = &self.nodes[i];
         let (Some(spec), Some(tl), Some(input)) = (n.text.as_deref(), n.text_layout.as_ref(), n.input.as_deref()) else {
             return false;
         };
-        if input.edit.is_secure() || n.elided.is_some() { return false; }
+        if input.edit.is_secure() { return false; }
+        if n.elided.is_some() { return true; }
         let waiting = matches!(tl, crate::text::TextLayout::Paragraphs(p) if p.waiting());
-        waiting || input.edit.text.len() > RUN_MAX_BYTES || spec.content.len() > RUN_MAX_BYTES
+        if waiting || input.edit.text.len() > RUN_MAX_BYTES || spec.content.len() > RUN_MAX_BYTES {
+            return true;
+        }
+        let Some(drawn_len) = self.a11y_drawn_len(i) else { return false };
+        if drawn_len > RUN_MAX_BYTES || spec.content.len() != drawn_len {
+            return true;
+        }
+        Self::a11y_layout_end_byte(tl.view(), &spec.content) != Some(drawn_len)
     }
 
     fn a11y_long_content_key(&self, i: usize) -> u64 {
