@@ -767,6 +767,24 @@ struct DeviceShared {
     heap_views: descriptor::GeneralHeap,
     sampler_heap: sampler::SamplerHeap,
     private_caps: PrivateCapabilities,
+    /// Rune: the device's command allocators not in use, each with the lists recorded on it. An
+    /// allocator's first two cycles at a given number of lists are slow on some drivers (Intel Iris
+    /// Xe: about 0.5 ms a list, a dozen lists a frame) and later ones aren't; an allocator kept with
+    /// one encoder goes through them again whenever wgpu's pool of encoders grows or reorders.
+    /// So an encoder takes an allocator here as it begins, the most-used one, and gives it back
+    /// once the GPU is done with it: a frame records on allocators that frames already used.
+    allocators: Mutex<Vec<AllocatorSlot>>,
+}
+
+/// Rune: a command allocator, its lists, how many lists it has recorded in all and in the cycle
+/// it's in, and whether wgpu's pending writes use it (a list a submission) or frames (a list a pass
+/// and more).
+struct AllocatorSlot {
+    raw: Direct3D12::ID3D12CommandAllocator,
+    lists: Vec<Direct3D12::ID3D12GraphicsCommandList>,
+    recorded: u32,
+    cycle: u32,
+    pending_writes: bool,
 }
 
 unsafe impl Send for DeviceShared {}
@@ -991,7 +1009,8 @@ impl PassState {
 // Any state in this struct that may be dirty after an abandoned encoding must
 // be reset for reused encoders in `begin_encoding`.
 pub struct CommandEncoder {
-    allocator: Direct3D12::ID3D12CommandAllocator,
+    /// Rune: taken from `DeviceShared::allocators` as the encoder begins, given back by `reset_all`.
+    allocator: Option<AllocatorSlot>,
     device: Direct3D12::ID3D12Device,
     shared: Arc<DeviceShared>,
     mem_allocator: Allocator,
@@ -1003,7 +1022,6 @@ pub struct CommandEncoder {
 
     null_rtv_handle: descriptor::Handle,
     list: Option<Direct3D12::ID3D12GraphicsCommandList>,
-    free_lists: Vec<Direct3D12::ID3D12GraphicsCommandList>,
     pass: PassState,
     temp: Temp,
 
@@ -1020,8 +1038,8 @@ unsafe impl Sync for CommandEncoder {}
 impl fmt::Debug for CommandEncoder {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CommandEncoder")
-            .field("allocator", &self.allocator)
-            .field("device", &self.allocator)
+            .field("allocator", &self.allocator.as_ref().map(|a| &a.raw))
+            .field("device", &self.device)
             .finish()
     }
 }
