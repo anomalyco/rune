@@ -43,6 +43,9 @@ pub(super) struct DamageState {
     layers_reached: bool,
     clear: [f32; 4],
     drawn: Option<Drawn>,
+    /// The armed rectangles are a loop-only frame's (`arm_loop`), for `RUNE_LOOP_CHECK=2`.
+    pub(super) looped: bool,
+    pub(super) pixel: Option<super::pixel_check::Check>,
 }
 
 impl Renderer {
@@ -127,6 +130,11 @@ impl Renderer {
         self.redraws_in_place()?;
         let held = self.held_instances(paint, instances.len()).ok_or("buffer")?;
         let at = |i: &u32| *i as usize;
+        // Only what differs from what the buffer holds, which is what the last frame drew (a
+        // frame that missed its drawable uploaded nothing): a stepped spinner's dots between their
+        // steps, while the shine drives frames, aren't redrawn; a dot a missed frame stepped is.
+        let patched: Vec<u32> = patched.iter().copied().filter(|&i| bytemuck::bytes_of(&held[i as usize]) != bytemuck::bytes_of(&instances[i as usize])).collect();
+        let patched = &patched[..];
         let mut rects = gather(patched.iter().map(at).flat_map(|i| [&held[i], &instances[i]]), size);
         // Nothing on screen changed: one pixel keeps the present, which DWM composes again as is.
         if rects.is_empty() { rects.push([0, 0, 1, 1]); }
@@ -142,6 +150,7 @@ impl Renderer {
         };
         let (draw, runs, layers) = cull_runs(instances, &units, &rects, patched);
         self.arm_damage(device, queue, &draw, clear, size, format);
+        if super::pixel_check::on() { self.pixel_check_arm(device, size, format); }
         let mut d = self.damage.lock().unwrap();
         d.runs = runs;
         d.layers_reached = layers;
@@ -160,6 +169,7 @@ impl Renderer {
     pub(crate) fn damage_drawn(&self) -> Drawn {
         let mut d = self.damage.lock().unwrap();
         d.armed.clear();
+        d.looped = false;
         let drawn = d.drawn.take().unwrap_or(Err("not armed"));
         if drawn.is_err() && let Some(r) = d.retained.as_mut() { r.current = false; }
         drawn
@@ -185,7 +195,9 @@ impl Renderer {
     /// `draw`'s part, when armed: redraws the armed rectangles into the kept frame (all of it
     /// when it's behind) and copies it to `dst`. False when `draw` should draw whole.
     pub(crate) fn draw_armed(&self, encoder: &mut wgpu::CommandEncoder, dst: &wgpu::Texture) -> bool {
-        let mut d = self.damage.lock().unwrap();
+        let mut guard = self.damage.lock().unwrap();
+        let d = &mut *guard;
+        let looped = std::mem::take(&mut d.looped);
         if d.armed.is_empty() { return false; }
         if let Err(why) = self.redraws_in_place() {
             d.drawn = Some(Err(why));
@@ -200,6 +212,7 @@ impl Renderer {
             d.drawn = Some(Err("size"));
             return false;
         }
+        let partial = kept.current;
         if kept.current {
             // No layer reaches the rectangles: their targets aren't drawn from, nor made again.
             // The uploads go into this encoder ahead of the pass either way (`encode_layers_timed`
@@ -241,6 +254,8 @@ impl Renderer {
             self.draw_timed(encoder, &kept.view, clear, None);
             kept.current = true;
         }
+        // `RUNE_LOOP_CHECK=2`: this loop-only frame's picture, and the whole frame's beside it.
+        if looped && partial && let Some(c) = d.pixel.as_mut() { self.pixel_check_encode(encoder, c, &kept.texture, clear, &rects); }
         let whole = wgpu::Extent3d { width: dst.width(), height: dst.height(), depth_or_array_layers: 1 };
         encoder.copy_texture_to_texture(kept.texture.as_image_copy(), dst.as_image_copy(), whole);
         d.drawn = Some(Ok(()));

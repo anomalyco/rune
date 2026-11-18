@@ -218,15 +218,14 @@ impl<S: 'static> Runtime<S> {
         for s in &self.paint_keep.cycles.slots {
             let a = s.curve.sample(self.clock) * s.scale;
             let q = &mut self.instances[s.at];
-            let fill = s.ink.map(|v| v * a);
-            // A dot whose value didn't move (a stepped spinner between its steps, while the shine
-            // drives frames) is neither written nor redrawn.
-            let moved = q.fill != fill || q.params[3] != a;
-            q.fill = fill;
+            q.fill = s.ink.map(|v| v * a);
             q.params[3] = a;
             let inh = &mut self.inh_scratch[s.node];
             inh.opacity = a; inh.paint_opacity = a; inh.hit_opacity = a;
-            if moved { patched.push(s.at as u32); }
+            // Every dot, moved or not: what the screen shows is the renderer's to know (a frame
+            // that missed its drawable drew nothing), and `arm_loop` redraws only those that
+            // differ from what it holds.
+            patched.push(s.at as u32);
         }
         if let (Some((due, phase)), Some(dt)) = (self.loop_wake, self.ambient.map(f64::from)) && self.clock >= due {
             self.loop_wake = Some((self.clock + dt, phase + (self.clock + dt - due) * f64::from(self.time_scale)));

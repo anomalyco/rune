@@ -14,6 +14,7 @@ mod backdrop_blur;
 mod breaker;
 #[cfg(any(target_os = "windows", target_arch = "wasm32"))]
 mod damaged;
+mod pixel_check;
 #[cfg(target_os = "windows")]
 pub(crate) use damaged::MAX_RECTS;
 pub mod cpu_boot;

@@ -322,6 +322,14 @@ impl<S: 'static> Host<S> {
         // `RUNE_LOOP_CHECK=1`: how the loop-only step this frame stood in for compares with it.
         #[allow(unused_variables)]
         let loop_check = rt.loop_checked();
+        // frame-profile, `RUNE_MISS_LOOP_FRAMES=<n>`: every nth loop-only frame ends here as if its
+        // drawable never came, after the step: what the next frame redraws (with
+        // `RUNE_LOOP_CHECK=2`, whether its picture is right).
+        #[cfg(feature = "frame-profile")]
+        if looped.is_some() && super::loop_frame::forced_miss() {
+            drop(frame);
+            return self.missed_frame(Missed::Timeout, true);
+        }
         #[cfg(target_os = "macos")]
         let frame = if l.surface.as_ref().is_some_and(|surface| l.native.materials.update(rt.transparent, !rt.materials.is_empty(), &l.window, surface)) {
             // This drawable presents without the views: build again natively into a new one.
@@ -412,9 +420,11 @@ impl<S: 'static> Host<S> {
         let part = {
             let whole = if l.alpha.is_some() { Some("alpha") } else if images_changed { Some("image") }
                 else if !l.config.usage.contains(wgpu::TextureUsages::COPY_DST) { Some("no copies") } else { None };
-            // A new swap chain (`rebind_alpha`, a replaced surface) draws its first frame whole,
-            // through `plan`, even when only a loop asked for it.
-            let fresh = !l.native.damage.current(size, rt.clear_color());
+            // A new swap chain (`rebind_alpha`, a replaced surface, any configure: a resize, a blend
+            // switch, `acquire` retrying an outdated surface) draws its first frame whole, through
+            // `plan`, even when only a loop asked for it (the step has run; the frame draws it whole).
+            let swap = l.surface.as_ref().map_or(0, super::configure::generation);
+            let fresh = !l.native.damage.current(size, rt.clear_color(), swap);
             if fresh && looped.is_some() { loop_why = Some("a new swap chain"); }
             let armed = looped.as_deref().filter(|_| whole.is_none() && !fresh).and_then(|p| {
                 match renderer.arm_loop(&gpu.device, &gpu.queue, rt.paint_count(), &rt.instances, p, rt.clear_color(), size, l.config.format) {
@@ -425,7 +435,7 @@ impl<S: 'static> Host<S> {
             if let Some((p, present)) = armed {
                 l.native.damage.patched(&rt.instances, p);
                 Some(present)
-            } else { match l.native.damage.plan(&rt.instances, size, rt.clear_color(), whole.is_none()) {
+            } else { match l.native.damage.plan(&rt.instances, size, rt.clear_color(), swap, whole.is_none()) {
                 super::damage::Plan::All(why) => { whole_why = Some(whole.unwrap_or(why)); None }
                 super::damage::Plan::Part { draw, present } => {
                     renderer.arm_damage(&gpu.device, &gpu.queue, &draw, rt.clear_color(), size, l.config.format);

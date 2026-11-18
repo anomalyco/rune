@@ -81,7 +81,9 @@ impl<S: 'static> Runtime<S> {
     }
 
     /// Node `i` is a window a step could move, by its shape alone: it clips and slides sideways,
-    /// and its only child holds everything under it and slides back, sideways.
+    /// and its only child holds everything under it and slides back, sideways. Shape only, decided
+    /// before paint: a pair `slide_fits` then refuses (in a layer, over input, out of sight) still
+    /// glides, drawn by ordinary frames, so its picture doesn't change with whether a step ran.
     fn slide_pair(&self, i: usize) -> bool {
         let n = &self.nodes[i];
         let (counter, end) = (i + 1, subtree_end(&self.nodes, i));
