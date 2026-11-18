@@ -160,7 +160,7 @@ impl OutlineStore {
 
     pub(crate) fn set_support(&mut self, support: Support) {
         self.support = support;
-        super::super::support::note_outlines(support);
+        crate::text::raster::support::note_outlines(support);
     }
 
     /// Rows the texture needs.

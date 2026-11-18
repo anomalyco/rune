@@ -6,9 +6,9 @@
 
 include!("uber/windfoil_hash.rs");
 
-const LIBRARY: &[u8] = include_bytes!("../uber_windfoil.metallib");
+const LIBRARY: &[u8] = include_bytes!("../shaders/uber_windfoil.metallib");
 #[cfg(feature = "metal-backend")]
-const NATIVE_LIBRARY: &[u8] = include_bytes!("../uber_windfoil_native.metallib");
+const NATIVE_LIBRARY: &[u8] = include_bytes!("../shaders/uber_windfoil_native.metallib");
 
 /// Whether the libraries were built from the WGSL this build joined (render/uber_wgsl.rs).
 const WGSL_MATCHES: bool = super::uber_wgsl::same(super::uber_wgsl::WINDFOIL_BLAKE3, WINDFOIL_WGSL_BLAKE3);

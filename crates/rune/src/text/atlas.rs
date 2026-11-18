@@ -1,8 +1,15 @@
 //! The glyph atlas: shelf-packed greyscale pages of glyph and icon masks, aged and evicted by
 //! use, and the quads that sample them.
 
+pub(in crate::text) mod fill;
+#[doc(hidden)]
+pub mod fill_bench;
+pub(in crate::text) mod glyph_cache;
+pub(in crate::text) mod glyph_emit;
+pub mod mask_cache;
+
 use super::*;
-use super::atlas_fill::Residency;
+use fill::Residency;
 
 pub const ATLAS_SIZE: u32 = 2048;
 

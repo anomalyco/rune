@@ -24,10 +24,10 @@ fn main() {
         let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{path}: {e}"));
         text.replace("\r\n", "\n")
     };
-    let classic = format!("{}\n{}", read("src/clip.wgsl"), read("src/shader.wgsl"));
+    let classic = format!("{}\n{}", read("src/shaders/clip.wgsl"), read("src/shaders/shader.wgsl"));
     assert!(classic.matches(GLYPH_BRANCH).count() == 1,
-        "src/shader.wgsl must hold Windfoil's anchor `{GLYPH_BRANCH}` exactly once (build.rs puts outline.wgsl's glyph branch before it)");
-    let windfoil = format!("{}\n{}", classic.replacen(GLYPH_BRANCH, OUTLINE_BRANCH, 1), read("src/outline.wgsl"));
+        "src/shaders/shader.wgsl must hold Windfoil's anchor `{GLYPH_BRANCH}` exactly once (build.rs puts outline.wgsl's glyph branch before it)");
+    let windfoil = format!("{}\n{}", classic.replacen(GLYPH_BRANCH, OUTLINE_BRANCH, 1), read("src/shaders/outline.wgsl"));
     let (classic_hash, windfoil_hash) = (blake3::hash(classic.as_bytes()).to_hex(), blake3::hash(windfoil.as_bytes()).to_hex());
 
     let recorded = |path: &str, name: &str| {
@@ -45,15 +45,15 @@ fn main() {
     // fragment only while all three agree with what regen_dxbc recorded (uber/dxbc_pinned_hash.rs), so nothing is
     // hashed at run time, and a fragment left from another shader, another wgpu or another vertex stage isn't used.
     let pinned_wgsl: Vec<String> = [0, 1, 2].iter().map(|kind| {
-        assert!(windfoil.matches(PINNED_OFF).count() == 1, "src/shader.wgsl must hold `{PINNED_OFF}` exactly once");
+        assert!(windfoil.matches(PINNED_OFF).count() == 1, "src/shaders/shader.wgsl must hold `{PINNED_OFF}` exactly once");
         blake3::hash(windfoil.replacen(PINNED_OFF, &format!("const PINNED_KIND: f32 = {kind}.0;"), 1).as_bytes()).to_hex().to_string()
     }).collect();
     let file = |path: &str| {
         println!("cargo::rerun-if-changed={path}");
         blake3::hash(&std::fs::read(path).unwrap_or_else(|e| panic!("{path}: {e}"))).to_hex().to_string()
     };
-    let pinned_fs: Vec<String> = [0, 1, 2].iter().map(|kind| file(&format!("uber.fs-k{kind}.dxbc"))).collect();
-    let pinned_vs = file("uber.vs.dxbc");
+    let pinned_fs: Vec<String> = [0, 1, 2].iter().map(|kind| file(&format!("shaders/dxbc/uber.fs-k{kind}.dxbc"))).collect();
+    let pinned_vs = file("shaders/dxbc/uber.vs.dxbc");
     // What regen_dxbc recorded, in `PINNED` order: a list's quoted entries, in place.
     let recorded_list = |name: &str| {
         let file = read("src/render/uber/dxbc_pinned_hash.rs");

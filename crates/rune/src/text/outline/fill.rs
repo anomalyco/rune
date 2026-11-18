@@ -5,7 +5,7 @@ use std::cell::RefCell;
 use super::cover::{hint_y, integrate_x, moved, y_lanes_on};
 use super::lanes::{F4, Lanes};
 use super::store::OutlineStore;
-use crate::text::atlas_fill::{Fill, QueuedFill};
+use crate::text::atlas::fill::{Fill, QueuedFill};
 
 /// The bytes the GPU's atlas fill (render/fill.rs) writes for a `w` x `h` mask whose top-left texel
 /// is `at` on its page, into `out`, row by row: the fill instance's arithmetic for each texel's

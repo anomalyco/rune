@@ -6,7 +6,7 @@ use super::{ATLAS_START_ROWS, Blend, CLIP_WGSL, Renderer, dxbc, metallib, varian
 impl Renderer {
     pub(super) fn create(device: &wgpu::Device, format: wgpu::TextureFormat, properties: Option<(&[crate::gpu::springs::Node], &[u32])>, classic: bool) -> Renderer {
         let spring_shader = if properties.is_some() {
-            let source = format!("{CLIP_WGSL}\n{}\n{}", include_str!("../shader.wgsl"), crate::gpu::springs::SHADER);
+            let source = format!("{CLIP_WGSL}\n{}\n{}", include_str!("../shaders/shader.wgsl"), crate::gpu::springs::SHADER);
             Some(device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("uber"),
                 source: wgpu::ShaderSource::Wgsl(source.into()),

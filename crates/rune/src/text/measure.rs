@@ -103,14 +103,14 @@ fn apply_fonts(slot: &mut Option<Fonts>, fonts: &[&'static [u8]], families: (&st
 }
 
 /// Called by every [`TextSystem::new`]; the next measurement uses these fonts.
-pub(super) fn note_fonts(fonts: &[&'static [u8]], families: (&str, &str)) {
+pub(in crate::text) fn note_fonts(fonts: &[&'static [u8]], families: (&str, &str)) {
     with_state(|slot| apply_fonts(slot, fonts, families));
 }
 
 /// Called when faces a web app adds after its first frame arrive: the next measurement shapes
 /// with them.
 #[cfg(target_arch = "wasm32")]
-pub(super) fn note_faces_arrived() {
+pub(in crate::text) fn note_faces_arrived() {
     with_state(|slot| {
         if let Some(f) = slot.as_mut() {
             f.generation += 1;
@@ -120,7 +120,7 @@ pub(super) fn note_faces_arrived() {
 }
 
 /// Called by [`TextSystem::set_families`]; the next measurement uses these families.
-pub(super) fn note_families(sans: &str, mono: &str) {
+pub(in crate::text) fn note_families(sans: &str, mono: &str) {
     with_state(|slot| {
         let Some(f) = slot.as_mut() else { return };
         if f.families.0 != sans || f.families.1 != mono {

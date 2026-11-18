@@ -101,10 +101,10 @@ fn uber_dxbc_is_fresh() {
     let hlsl = hlsl_hash(&vertex, &fragment);
     if std::env::var_os("RUNE_REGENERATE_DXBC").is_some() {
         let root = env!("CARGO_MANIFEST_DIR");
-        std::fs::write(format!("{root}/uber.vs.dxbc"), &vs).unwrap();
-        std::fs::write(format!("{root}/uber.fs.dxbc"), &fs).unwrap();
-        std::fs::write(format!("{root}/uber.vs-dual.dxbc"), &vs_dual).unwrap();
-        std::fs::write(format!("{root}/uber.fs-dual.dxbc"), &fs_dual).unwrap();
+        std::fs::write(format!("{root}/shaders/dxbc/uber.vs.dxbc"), &vs).unwrap();
+        std::fs::write(format!("{root}/shaders/dxbc/uber.fs.dxbc"), &fs).unwrap();
+        std::fs::write(format!("{root}/shaders/dxbc/uber.vs-dual.dxbc"), &vs_dual).unwrap();
+        std::fs::write(format!("{root}/shaders/dxbc/uber.fs-dual.dxbc"), &fs_dual).unwrap();
         std::fs::write(format!("{root}/src/render/uber/dxbc_hash.rs"), format!(
             "// Written by `cargo run -p rune --example regen_dxbc` (or `RUNE_REGENERATE_DXBC=1 cargo test -p rune --lib uber_dxbc_is_fresh`) on Windows.\n\
              pub(super) const UBER_DXBC_WGSL_BLAKE3: &str = \"{wgsl}\";\n\

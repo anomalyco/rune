@@ -25,20 +25,24 @@ include!("uber/dxbc_hash.rs");
 include!("uber/dxbc_pinned_hash.rs");
 
 #[cfg(target_os = "windows")]
-const VERTEX: &[u8] = include_bytes!("../../uber.vs.dxbc");
+const VERTEX: &[u8] = include_bytes!("../../shaders/dxbc/uber.vs.dxbc");
 #[cfg(target_os = "windows")]
-const FRAGMENT: &[u8] = include_bytes!("../../uber.fs.dxbc");
+const FRAGMENT: &[u8] = include_bytes!("../../shaders/dxbc/uber.fs.dxbc");
 /// The subpixel variant's stages (render/variant.rs `dual_wgsl`), whose fragment blends by a
 /// second output. FXC takes about a minute for it, so a window drawing subpixel text froze that
 /// long compiling it.
 #[cfg(target_os = "windows")]
-const VERTEX_DUAL: &[u8] = include_bytes!("../../uber.vs-dual.dxbc");
+const VERTEX_DUAL: &[u8] = include_bytes!("../../shaders/dxbc/uber.vs-dual.dxbc");
 #[cfg(target_os = "windows")]
-const FRAGMENT_DUAL: &[u8] = include_bytes!("../../uber.fs-dual.dxbc");
+const FRAGMENT_DUAL: &[u8] = include_bytes!("../../shaders/dxbc/uber.fs-dual.dxbc");
 /// The fragment stage pinned to one kind each (render/variant.rs `pinned_wgsl`, `PINNED`), beside the
 /// shared vertex stage: the frame pass's pipelines for rects, shadows and glyphs.
 #[cfg(target_os = "windows")]
-const FRAGMENT_PINNED: [&[u8]; 3] = [include_bytes!("../../uber.fs-k0.dxbc"), include_bytes!("../../uber.fs-k1.dxbc"), include_bytes!("../../uber.fs-k2.dxbc")];
+const FRAGMENT_PINNED: [&[u8]; 3] = [
+    include_bytes!("../../shaders/dxbc/uber.fs-k0.dxbc"),
+    include_bytes!("../../shaders/dxbc/uber.fs-k1.dxbc"),
+    include_bytes!("../../shaders/dxbc/uber.fs-k2.dxbc"),
+];
 // `FRAGMENT_PINNED` is in `PINNED`'s order and its files are named by kind: the two must agree.
 #[cfg(target_os = "windows")]
 const _: () = assert!(super::variant::PINNED[0] == 0 && super::variant::PINNED[1] == 1 && super::variant::PINNED[2] == 2,
@@ -49,19 +53,30 @@ const _: () = assert!(super::variant::PINNED[0] == 0 && super::variant::PINNED[1
 #[cfg(target_os = "windows")]
 include!("uber/pass_dxbc_hash.rs");
 #[cfg(target_os = "windows")]
-const ALPHA_VERTEX: &[u8] = include_bytes!("../../alpha.vs.dxbc");
+const ALPHA_VERTEX: &[u8] = include_bytes!("../../shaders/dxbc/alpha.vs.dxbc");
 #[cfg(target_os = "windows")]
-const ALPHA_FRAGMENT: &[u8] = include_bytes!("../../alpha.fs.dxbc");
+const ALPHA_FRAGMENT: &[u8] = include_bytes!("../../shaders/dxbc/alpha.fs.dxbc");
 #[cfg(target_os = "windows")]
-const LAYER_BLUR_VERTEX: &[u8] = include_bytes!("../../layer_blur.vs.dxbc");
+const LAYER_BLUR_VERTEX: &[u8] = include_bytes!("../../shaders/dxbc/layer_blur.vs.dxbc");
 #[cfg(target_os = "windows")]
+const BACKDROP_BLUR: [&[u8]; 3] = [
+    include_bytes!("../../shaders/dxbc/backdrop_blur.vs.dxbc"),
+    include_bytes!("../../shaders/dxbc/backdrop_blur.fs_down.dxbc"),
+    include_bytes!("../../shaders/dxbc/backdrop_blur.fs_up.dxbc"),
+];
 #[cfg(target_os = "windows")]
-const BACKDROP_BLUR: [&[u8]; 3] = [include_bytes!("../../backdrop_blur.vs.dxbc"), include_bytes!("../../backdrop_blur.fs_down.dxbc"), include_bytes!("../../backdrop_blur.fs_up.dxbc")];
+const BACKDROP_COMPOSITE: [&[u8]; 2] = [
+    include_bytes!("../../shaders/dxbc/backdrop_composite.vs.dxbc"),
+    include_bytes!("../../shaders/dxbc/backdrop_composite.fs.dxbc"),
+];
 #[cfg(target_os = "windows")]
-const BACKDROP_COMPOSITE: [&[u8]; 2] = [include_bytes!("../../backdrop_composite.vs.dxbc"), include_bytes!("../../backdrop_composite.fs.dxbc")];
-#[cfg(target_os = "windows")]
-const LAYER_BLUR_FRAGMENTS: [&[u8]; 5] = [include_bytes!("../../layer_blur.fs0.dxbc"), include_bytes!("../../layer_blur.fs1.dxbc"),
-    include_bytes!("../../layer_blur.fs2.dxbc"), include_bytes!("../../layer_blur.fs3.dxbc"), include_bytes!("../../layer_blur.fs4.dxbc")];
+const LAYER_BLUR_FRAGMENTS: [&[u8]; 5] = [
+    include_bytes!("../../shaders/dxbc/layer_blur.fs0.dxbc"),
+    include_bytes!("../../shaders/dxbc/layer_blur.fs1.dxbc"),
+    include_bytes!("../../shaders/dxbc/layer_blur.fs2.dxbc"),
+    include_bytes!("../../shaders/dxbc/layer_blur.fs3.dxbc"),
+    include_bytes!("../../shaders/dxbc/layer_blur.fs4.dxbc"),
+];
 
 /// The uber shader's modules: one WGSL (or metallib) module for both stages, or one
 /// precompiled module per stage.

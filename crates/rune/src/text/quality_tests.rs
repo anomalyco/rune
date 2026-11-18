@@ -1,4 +1,5 @@
 use super::*;
+use crate::tok::OpticalSize;
 
 #[test]
 fn centred_wrapped_lines_centre_each_line_in_the_wrap_width() {
@@ -368,7 +369,7 @@ fn atlas_capacity_never_overwrites_current_or_pinned_placements() {
 fn atlas_eviction_preserves_cached_empty_outlines() {
     let mut atlas = Atlas::new();
     let key = GlyphKey { font: 0, index: 0, glyph: 0, size: 0, coords: 0, subpx: 0, subpy: 0, dilation: 0, apple: 0, skew: 0, bold: false };
-    atlas.map.insert(key, super::atlas_fill::Residency::Blank);
+    atlas.map.insert(key, super::atlas::fill::Residency::Blank);
     atlas.icons.insert((0, 0), None);
     atlas.evict_page(0);
     assert!(atlas.map.contains_key(&key));

@@ -60,8 +60,8 @@ pub mod text;
 pub mod theme;
 pub mod time;
 pub mod tok;
-pub mod tracked;
 pub mod tooling;
+pub mod tracked;
 pub mod tray;
 
 pub(crate) use image::pixels;
@@ -111,6 +111,7 @@ pub use el::Cycle;
 pub use el::Direction;
 pub use el::Drag;
 pub use el::El;
+pub use el::GridRow;
 pub use el::GrowthSpec;
 pub use el::InlineIcon;
 pub use el::LiveRegion;
@@ -130,11 +131,11 @@ pub use el::Tx;
 pub use el::anchor_rect;
 pub use el::auto_grow;
 pub use el::canvas;
-pub use el::{GridRow, grid};
 pub use el::col;
 pub use el::edit_access;
 pub use el::effect;
 pub use el::el;
+pub use el::grid;
 pub use el::icon;
 pub use el::layout_watch::ScrollPos;
 pub use el::motion::MotionIntent;
@@ -199,14 +200,16 @@ pub use latest::Latest;
 pub use live::Live;
 pub use live::LiveText;
 pub use live::Tween;
-pub use memo::{memo, region, region_with};
-pub use tracked::{Reads, Tracked, tracked_reads};
+pub use memo::memo;
+pub use memo::region;
+pub use memo::region_with;
 pub use native_menu::MenuError;
 pub use native_menu::MenuItem;
 pub use native_surface::NativeSurface;
 pub use native_surface::SurfaceFit;
 pub use open_url::OpenUrlError;
-pub use open_url::instance::{release_instance, single_instance};
+pub use open_url::instance::release_instance;
+pub use open_url::instance::single_instance;
 pub use overlay::Availability;
 pub use overlay::OverlayHandle;
 pub use overlay::OverlaySpec;
@@ -227,11 +230,6 @@ pub use pixels::Pixels;
 pub use platform::accent::SystemAccent;
 pub use platform::accent::system_accent;
 pub use platform::app_icon::set_app_icon;
-pub use platform::preferences::SystemContrast;
-/// Windows: raises this process's threads whose name passes the filter to a priority floor, walking
-/// only this process's threads.
-#[cfg(target_os = "windows")]
-pub use platform::win32::raise_threads;
 #[cfg(target_os = "windows")]
 pub use platform::app_icon::set_app_icon_resource;
 #[cfg(target_vendor = "apple")]
@@ -242,6 +240,7 @@ pub use platform::macos::appearance as macos_appearance;
 #[cfg(target_os = "macos")]
 #[doc(hidden)]
 pub use platform::macos::panel_bridge as macos_panel_bridge;
+pub use platform::preferences::SystemContrast;
 pub use platform::scroll_bars::ScrollBars;
 #[doc(hidden)]
 pub use platform::scroll_bars::current_runtime_id;
@@ -250,6 +249,10 @@ pub use platform::scroll_bars::system_scroller_jumps;
 pub use platform::scroll_bars::system_scroller_overlay;
 #[cfg(target_arch = "wasm32")]
 pub use platform::web;
+/// Windows: raises this process's threads whose name passes the filter to a priority floor, walking
+/// only this process's threads.
+#[cfg(target_os = "windows")]
+pub use platform::win32::raise_threads;
 pub use playground::Play;
 pub use playground::Playground;
 pub use playground::Stage;
@@ -260,10 +263,10 @@ pub use popup_menu::PopupItem;
 pub use popup_menu::PopupMenu;
 pub use popup_menu::PopupMenuError;
 pub use popup_menu::popup_menu_supported;
-pub use quit::fast_exit;
-pub use quit::orderly_exit;
 #[cfg(not(target_arch = "wasm32"))]
 pub use quit::exit_deadline;
+pub use quit::fast_exit;
+pub use quit::orderly_exit;
 pub use quit::quitting;
 pub use recorder::FakeMicrophone;
 pub use recorder::Level;
@@ -365,6 +368,9 @@ pub use tooling::run_with;
 pub use tooling::set_app_id;
 pub use tooling::try_run_windows_with;
 pub use tooling::try_run_windows_with_args;
+pub use tracked::Reads;
+pub use tracked::Tracked;
+pub use tracked::tracked_reads;
 pub use tray::Tray;
 pub use tray::TrayError;
 pub use tray::TrayEvent;
