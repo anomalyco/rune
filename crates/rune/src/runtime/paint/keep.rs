@@ -310,6 +310,7 @@ impl<S: 'static> Runtime<S> {
 
     /// Opens node `i`'s record, before it paints anything.
     pub(super) fn keep_open(&mut self, i: usize, glyphs: usize, sel: &[(usize, usize, usize)], marks: &[(usize, usize, usize)]) {
+        self.slide_node_opens(i);
         if !self.paint_keep.recording { return; }
         let rec = PaintRec {
             id: self.nodes[i].id,
@@ -494,6 +495,7 @@ impl<S: 'static> Runtime<S> {
 
     /// The end of a paint: what was moved is painted, and what wasn't kept is said.
     pub(super) fn keep_end(&mut self) {
+        self.close_slide();
         let k = &mut self.paint_keep;
         k.moved.clear();
         if !k.recording {
@@ -554,6 +556,8 @@ impl<S: 'static> Runtime<S> {
 
 #[path = "cycle.rs"]
 mod cycle;
+#[path = "slide.rs"]
+mod slide;
 
 /// `now` with room for as much as `was` holds room for.
 fn twin<T>(now: &mut Vec<T>, was: &Vec<T>) {

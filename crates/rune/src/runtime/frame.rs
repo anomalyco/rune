@@ -488,7 +488,8 @@ impl<S: 'static> Runtime<S> {
         let shaped0 = self.text.shaped;
         self.settled = false;
         self.landing_holds.clear();
-        self.clock = self.wall_clock().unwrap_or(self.clock + elapsed);
+        // `RUNE_LOOP_CHECK=1`: the frame that runs instead of a checked step samples at its clock.
+        self.clock = self.paint_keep.cycles.check_clock.take().unwrap_or_else(|| self.wall_clock().unwrap_or(self.clock + elapsed));
         if self.wall_start.is_none() {
             crate::video::headless_frame(self.clock);
             // Fake recorders publish this frame's level to bound meters, drawn this frame.
