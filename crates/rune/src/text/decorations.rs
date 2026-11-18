@@ -198,7 +198,7 @@ impl TextSystem {
     }
 
     /// Rounded background fills and rings for `highlights` in device px.
-    #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn highlight_decorations(
         &self,
         layout: &Layout<Ink>,
