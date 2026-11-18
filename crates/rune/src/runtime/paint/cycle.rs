@@ -73,6 +73,12 @@ impl CyclePaint {
 /// `RUNE_LOOP_CHECK=1`: a frame a loop-only step could draw runs as an ordinary one, and the
 /// two are compared (`loop_checked`). A headless run (`--frames`, on the virtual clock) asks
 /// too, before every frame no script event reached (`tooling::headless`), on any platform.
+/// `RUNE_LOOP_CHECK_DETAIL=1`: `loop_checked` prints each differing instance.
+fn detail() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("RUNE_LOOP_CHECK_DETAIL").is_some())
+}
+
 pub(crate) fn checking() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("RUNE_LOOP_CHECK").is_some_and(|v| v == "1"))
@@ -215,7 +221,7 @@ impl<S: 'static> Runtime<S> {
             if d > 1e-3 {
                 differ += 1;
                 // `RUNE_LOOP_CHECK_DETAIL=1`: which instance, and what the step and the frame had.
-                if std::env::var_os("RUNE_LOOP_CHECK_DETAIL").is_some() {
+                if detail() {
                     eprintln!("rune: loop check: instance {i} (kind {}) step {:?} frame {:?}", q.params[1], (p.rect, p.fill, p.params, p.clip, p.uv), (q.rect, q.fill, q.params, q.clip, q.uv));
                 }
             }
