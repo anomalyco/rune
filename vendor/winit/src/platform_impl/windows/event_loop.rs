@@ -18,8 +18,9 @@ use crate::utils::Lazy;
 
 use windows_sys::Win32::Devices::HumanInterfaceDevice::MOUSE_MOVE_RELATIVE;
 use windows_sys::Win32::Foundation::{
-    GetLastError, FALSE, HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, WAIT_FAILED, WPARAM,
+    GetLastError, BOOL, FALSE, HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, WAIT_FAILED, WPARAM,
 };
+use windows_sys::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_CLOAK};
 use windows_sys::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MonitorFromRect, MonitorFromWindow, RedrawWindow, ScreenToClient,
     ValidateRect, MONITORINFO, MONITOR_DEFAULTTONULL, RDW_INTERNALPAINT, SC_SCREENSAVE,
@@ -949,6 +950,17 @@ fn create_event_target_window() -> HWND {
             0,
             util::get_instance_handle(),
             ptr::null(),
+        );
+        // Rune: cloaked before it's made visible, so what walks the desktop's windows never meets
+        // it: UI Automation (screen readers) listed it as an unnamed 22x22 pane at 0,0, and window
+        // pickers that skip cloaked windows skip it. A cloaked window still gets WM_PAINT; a
+        // message-only or hidden one doesn't.
+        let cloak: BOOL = 1;
+        DwmSetWindowAttribute(
+            window,
+            DWMWA_CLOAK as u32,
+            &cloak as *const BOOL as *const c_void,
+            mem::size_of::<BOOL>() as u32,
         );
 
         super::set_window_long(

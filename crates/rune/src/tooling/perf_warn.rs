@@ -29,7 +29,9 @@ pub(crate) struct Watch {
 }
 
 #[cfg(debug_assertions)]
-use std::{collections::HashSet, sync::{Mutex, OnceLock}, time::Instant};
+use crate::time::Instant;
+#[cfg(debug_assertions)]
+use std::{collections::HashSet, sync::{Mutex, OnceLock}};
 
 /// Blocked wall time (ms; time waiting for a core doesn't count) a callback may take before it warns, and how many times its CPU time
 /// that wall time must also be. A callback that computes for 50 ms is slow but not blocked.

@@ -52,12 +52,13 @@ pub(crate) struct Held {
     /// It ran its element's `on_press` as it went down (`El::press_on_down`): its release
     /// runs nothing.
     pub(crate) pressed_on_down: bool,
+    pub(crate) touch: bool,
 }
 
 impl Held {
     /// A press that just went down at `at`, inside its element and still.
     pub(crate) fn new(path: String, drag: Drag, button: PointerButton, at: (f32, f32), down_at: f64, second: bool, drag_out: Option<f32>) -> Self {
-        Self { path, drag, button, at, down_at, hit: Hit::Inside, moved: false, second, drag_out, left: false, link: None, pressed_on_down: false }
+        Self { path, drag, button, at, down_at, hit: Hit::Inside, moved: false, second, drag_out, left: false, link: None, pressed_on_down: false, touch: false }
     }
 
     pub(crate) fn inside(&self) -> bool { self.hit == Hit::Inside }

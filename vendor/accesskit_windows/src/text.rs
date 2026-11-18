@@ -24,7 +24,7 @@ use windows::{
 
 use crate::{
     context::Context,
-    long_text::{Text, Unit, long_text},
+    long_text::{Text, Unit, bounding_boxes, drawn_lines, drawn_state, long_text},
     util::*,
 };
 
@@ -61,7 +61,8 @@ fn long_unit(unit: TextUnit) -> Result<Unit> {
     match unit {
         TextUnit_Character => Ok(Unit::Character),
         TextUnit_Word => Ok(Unit::Word),
-        TextUnit_Line | TextUnit_Paragraph => Ok(Unit::Line),
+        TextUnit_Line => Ok(Unit::Line),
+        TextUnit_Paragraph => Ok(Unit::Paragraph),
         TextUnit_Format | TextUnit_Page | TextUnit_Document => Ok(Unit::Document),
         _ => Err(invalid_arg()),
     }
@@ -274,46 +275,65 @@ impl PlatformRange {
         }
     }
 
+    fn read_state(&self) -> std::sync::RwLockReadGuard<'_, State> {
+        self.state.read().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn write_state(&self) -> std::sync::RwLockWriteGuard<'_, State> {
+        self.state.write().unwrap_or_else(|e| e.into_inner())
+    }
+
     fn is_long(&self) -> bool {
-        matches!(*self.state.read().unwrap(), State::Long { .. })
+        matches!(*self.read_state(), State::Long { .. })
     }
 
     /// Runs `f` on this long field range's text, node and endpoints, which it may move.
+    /// Computes without holding `self.state`'s lock and catches any panic so neither a poisoned
+    /// lock nor an unwind can reach UIA's `extern "system"` ABI.
     fn long<F, T>(&self, f: F) -> Result<T>
     where
         F: FnOnce(Text, NodeRef, &Arc<Context>, &mut usize, &mut usize) -> Result<T>,
     {
-        let context = self.upgrade_context()?;
-        let tree = context.read_tree();
-        let mut state = self.state.write().unwrap();
-        let State::Long { node, start, end } = &mut *state else {
-            return Err(invalid_arg());
-        };
-        let node = tree.state().node_by_id(*node).ok_or_else(element_not_available)?;
-        let (text, _) = long_text(&node).ok_or_else(element_not_available)?;
-        // The value may have changed since the range was made.
-        *start = text.clamp(*start);
-        *end = text.clamp(*end).max(*start);
-        f(text, node, &context, start, end)
+        uia_catch(|| {
+            let context = self.upgrade_context()?;
+            let tree = context.read_tree();
+            let (node_id, mut start, mut end) = match *self.read_state() {
+                State::Long { node, start, end } => (node, start, end),
+                State::Runs(_) => return Err(invalid_arg()),
+            };
+            let node = tree.state().node_by_id(node_id).ok_or_else(element_not_available)?;
+            let (text, _) = long_text(&node).ok_or_else(element_not_available)?;
+            // The value may have changed since the range was made.
+            start = text.clamp(start);
+            end = text.clamp(end).max(start);
+            let res = f(text, node, &context, &mut start, &mut end)?;
+            if let State::Long { start: s, end: e, .. } = &mut *self.write_state() {
+                *s = start;
+                *e = end;
+            }
+            Ok(res)
+        })
     }
 
     fn long_endpoints(&self) -> Option<(FullNodeId, usize, usize)> {
-        match *self.state.read().unwrap() {
+        match *self.read_state() {
             State::Long { node, start, end } => Some((node, start, end)),
             State::Runs(_) => None,
         }
     }
 
     fn long_action(&self, action: Action, data: impl FnOnce(NodeRef, usize, usize) -> Option<ActionData>) -> Result<()> {
-        let context = self.upgrade_context()?;
-        let tree = context.read_tree();
-        let (id, start, end) = self.long_endpoints().ok_or_else(invalid_arg)?;
-        let node = tree.state().node_by_id(id).ok_or_else(element_not_available)?;
-        let (target_node, target_tree) = node.locate();
-        let data = data(node, start, end);
-        drop(tree);
-        context.do_action(ActionRequest { action, target_tree, target_node, data });
-        Ok(())
+        uia_catch(|| {
+            let context = self.upgrade_context()?;
+            let tree = context.read_tree();
+            let (id, start, end) = self.long_endpoints().ok_or_else(invalid_arg)?;
+            let node = tree.state().node_by_id(id).ok_or_else(element_not_available)?;
+            let (target_node, target_tree) = node.locate();
+            let data = data(node, start, end);
+            drop(tree);
+            context.do_action(ActionRequest { action, target_tree, target_node, data });
+            Ok(())
+        })
     }
 
     fn upgrade_context(&self) -> Result<Arc<Context>> {
@@ -324,9 +344,11 @@ impl PlatformRange {
     where
         F: FnOnce(&TreeState, &Context) -> Result<T>,
     {
-        let context = self.upgrade_context()?;
-        let tree = context.read_tree();
-        f(tree.state(), &context)
+        uia_catch(|| {
+            let context = self.upgrade_context()?;
+            let tree = context.read_tree();
+            f(tree.state(), &context)
+        })
     }
 
     fn with_tree_state<F, T>(&self, f: F) -> Result<T>
@@ -337,12 +359,12 @@ impl PlatformRange {
     }
 
     fn upgrade_node<'a>(&self, tree_state: &'a TreeState) -> Result<NodeRef<'a>> {
-        let state = self.state.read().unwrap();
+        let state = self.read_state();
         upgrade_range_node(runs(&state)?, tree_state)
     }
 
     fn upgrade_for_read<'a>(&self, tree_state: &'a TreeState) -> Result<Range<'a>> {
-        let state = self.state.read().unwrap();
+        let state = self.read_state();
         upgrade_range(runs(&state)?, tree_state)
     }
 
@@ -368,7 +390,7 @@ impl PlatformRange {
         F: FnOnce(&mut Range) -> Result<T>,
     {
         self.with_tree_state(|tree_state| {
-            let mut state = self.state.write().unwrap();
+            let mut state = self.write_state();
             let mut range = upgrade_range(runs(&state)?, tree_state)?;
             let result = f(&mut range);
             *state = State::Runs(range.downgrade());
@@ -380,13 +402,15 @@ impl PlatformRange {
     where
         for<'a> F: FnOnce(Range<'a>, &Tree) -> ActionRequest,
     {
-        let context = self.upgrade_context()?;
-        let tree = context.read_tree();
-        let range = self.upgrade_for_read(tree.state())?;
-        let request = f(range, &tree);
-        drop(tree);
-        context.do_action(request);
-        Ok(())
+        uia_catch(|| {
+            let context = self.upgrade_context()?;
+            let tree = context.read_tree();
+            let range = self.upgrade_for_read(tree.state())?;
+            let request = f(range, &tree);
+            drop(tree);
+            context.do_action(request);
+            Ok(())
+        })
     }
 
     fn require_same_context(&self, other: &PlatformRange) -> Result<()> {
@@ -398,11 +422,16 @@ impl PlatformRange {
     }
 }
 
+fn uia_catch<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
+        .unwrap_or_else(|_| Err(element_not_available()))
+}
+
 impl Clone for PlatformRange {
     fn clone(&self) -> Self {
         PlatformRange {
             context: self.context.clone(),
-            state: RwLock::new(self.state.read().unwrap().clone()),
+            state: RwLock::new(self.read_state().clone()),
         }
     }
 }
@@ -415,14 +444,16 @@ impl Clone for PlatformRange {
 #[allow(non_snake_case)]
 impl ITextRangeProvider_Impl for PlatformRange_Impl {
     fn Clone(&self) -> Result<ITextRangeProvider> {
-        Ok(self.this.clone().into())
+        uia_catch(|| Ok(self.this.clone().into()))
     }
 
     fn Compare(&self, other: Ref<ITextRangeProvider>) -> Result<BOOL> {
-        let other = unsafe { required_param(&other)?.as_impl() };
-        Ok((self.context.ptr_eq(&other.context)
-            && *self.state.read().unwrap() == *other.state.read().unwrap())
-        .into())
+        uia_catch(|| {
+            let other = unsafe { required_param(&other)?.as_impl() };
+            Ok((self.context.ptr_eq(&other.context)
+                && *self.read_state() == *other.read_state())
+            .into())
+        })
     }
 
     fn CompareEndpoints(
@@ -431,54 +462,62 @@ impl ITextRangeProvider_Impl for PlatformRange_Impl {
         other: Ref<ITextRangeProvider>,
         other_endpoint: TextPatternRangeEndpoint,
     ) -> Result<i32> {
-        let other = unsafe { required_param(&other)?.as_impl() };
-        if self.is_long() || other.is_long() {
-            let (Some(mine), Some(theirs)) = (self.long_endpoints(), other.long_endpoints()) else {
-                return Err(invalid_arg());
-            };
-            let at = |e: TextPatternRangeEndpoint, (node, start, end): (FullNodeId, usize, usize)| match e {
-                _ if node != mine.0 => Err(invalid_arg()),
-                TextPatternRangeEndpoint_Start => Ok(start),
-                TextPatternRangeEndpoint_End => Ok(end),
-                _ => Err(invalid_arg()),
-            };
-            return Ok(at(endpoint, mine)?.cmp(&at(other_endpoint, theirs)?) as i32);
-        }
-        if std::ptr::eq(other as *const _, &self.this as *const _) {
-            // Comparing endpoints within the same range can be done
-            // safely without upgrading the range. This allows ATs
-            // to determine whether an old range is degenerate even if
-            // that range is no longer valid.
-            let state = self.state.read().unwrap();
-            let other_state = other.state.read().unwrap();
-            let pos = weak_comparable_position_from_endpoint(runs(&state)?, endpoint)?;
-            let other_pos = weak_comparable_position_from_endpoint(runs(&other_state)?, other_endpoint)?;
-            let result = pos.cmp(other_pos);
-            return Ok(result as i32);
-        }
-        self.require_same_context(other)?;
-        self.with_tree_state(|tree_state| {
-            let range = self.upgrade_for_read(tree_state)?;
-            let other_range = other.upgrade_for_read(tree_state)?;
-            if range.node().id() != other_range.node().id() {
-                return Err(invalid_arg());
+        uia_catch(|| {
+            let other = unsafe { required_param(&other)?.as_impl() };
+            if self.is_long() || other.is_long() {
+                let (Some(mine), Some(theirs)) = (self.long_endpoints(), other.long_endpoints()) else {
+                    return Err(invalid_arg());
+                };
+                let at = |e: TextPatternRangeEndpoint, (node, start, end): (FullNodeId, usize, usize)| match e {
+                    _ if node != mine.0 => Err(invalid_arg()),
+                    TextPatternRangeEndpoint_Start => Ok(start),
+                    TextPatternRangeEndpoint_End => Ok(end),
+                    _ => Err(invalid_arg()),
+                };
+                return Ok(at(endpoint, mine)?.cmp(&at(other_endpoint, theirs)?) as i32);
             }
-            let pos = position_from_endpoint(&range, endpoint)?;
-            let other_pos = position_from_endpoint(&other_range, other_endpoint)?;
-            let result = pos.partial_cmp(&other_pos).unwrap();
-            Ok(result as i32)
+            if std::ptr::eq(other as *const _, &self.this as *const _) {
+                // Comparing endpoints within the same range can be done
+                // safely without upgrading the range. This allows ATs
+                // to determine whether an old range is degenerate even if
+                // that range is no longer valid.
+                let state = self.read_state();
+                let other_state = other.read_state();
+                let pos = weak_comparable_position_from_endpoint(runs(&state)?, endpoint)?;
+                let other_pos = weak_comparable_position_from_endpoint(runs(&other_state)?, other_endpoint)?;
+                let result = pos.cmp(other_pos);
+                return Ok(result as i32);
+            }
+            self.require_same_context(other)?;
+            self.with_tree_state(|tree_state| {
+                let range = self.upgrade_for_read(tree_state)?;
+                let other_range = other.upgrade_for_read(tree_state)?;
+                if range.node().id() != other_range.node().id() {
+                    return Err(invalid_arg());
+                }
+                let pos = position_from_endpoint(&range, endpoint)?;
+                let other_pos = position_from_endpoint(&other_range, other_endpoint)?;
+                let result = pos.partial_cmp(&other_pos).ok_or_else(invalid_arg)?;
+                Ok(result as i32)
+            })
         })
     }
 
     fn ExpandToEnclosingUnit(&self, unit: TextUnit) -> Result<()> {
         if self.is_long() {
-            return self.long(|text, _, _, start, end| {
+            return self.long(|text, node, _, start, end| {
                 let unit = long_unit(unit)?;
                 if unit == Unit::Character && *start == text.len() {
                     return Ok(());
                 }
-                *start = text.start_of(*start, unit);
-                *end = if *start == text.len() { *start } else { text.next(*start, unit) };
+                if unit == Unit::Line {
+                    let state = drawn_state(&node, text);
+                    *start = text.start_of_in(*start, unit, &state);
+                    *end = if *start == text.len() { *start } else { text.next_in(*start, unit, &state.lines) };
+                } else {
+                    *start = text.start_of(*start, unit);
+                    *end = if *start == text.len() { *start } else { text.next(*start, unit) };
+                }
                 Ok(())
             });
         }
@@ -487,7 +526,7 @@ impl ITextRangeProvider_Impl for PlatformRange_Impl {
             // range even if the current endpoints are now invalid.
             // Based on observed behavior, Narrator needs this ability.
             return self.with_tree_state(|tree_state| {
-                let mut state = self.state.write().unwrap();
+                let mut state = self.write_state();
                 let node = upgrade_range_node(runs(&state)?, tree_state)?;
                 *state = State::Runs(node.document_range().downgrade());
                 Ok(())
@@ -542,11 +581,17 @@ impl ITextRangeProvider_Impl for PlatformRange_Impl {
                     UIA_IsReadOnlyAttributeId => node.is_read_only().into(),
                     UIA_CaretPositionAttributeId => {
                         let at = *start;
+                        let state = drawn_state(&node, text);
+                        let at_hard_end = at == text.len()
+                            || text.0.as_bytes().get(at) == Some(&b'\n')
+                            || text.0.as_bytes().get(at..at + 2) == Some(b"\r\n");
                         let value = if at != *end {
                             CaretPosition_Unknown
-                        } else if text.is_start(at, Unit::Line) {
+                        } else if text.is_start_in(at, Unit::Line, &state) {
                             CaretPosition_BeginningOfLine
-                        } else if at == text.len() || text.0.as_bytes()[at] == b'\n' {
+                        } else if at_hard_end
+                            || state.lines.iter().any(|d| d.end == at && d.start < at)
+                        {
                             CaretPosition_EndOfLine
                         } else {
                             CaretPosition_Unknown
@@ -633,8 +678,21 @@ impl ITextRangeProvider_Impl for PlatformRange_Impl {
 
     fn GetBoundingRectangles(&self) -> Result<*mut SAFEARRAY> {
         if self.is_long() {
-            // Where a long field's lines are isn't known without laying them out.
-            return Ok(std::ptr::null_mut());
+            return self.long(|text, node, context, start, end| {
+                let rects = bounding_boxes(&node, text, *start, *end);
+                if rects.is_empty() {
+                    return Ok(std::ptr::null_mut());
+                }
+                let client_top_left = context.client_top_left();
+                let mut result = Vec::<f64>::with_capacity(rects.len() * 4);
+                for rect in rects {
+                    result.push(rect.x0 + client_top_left.x);
+                    result.push(rect.y0 + client_top_left.y);
+                    result.push(rect.width());
+                    result.push(rect.height());
+                }
+                Ok(safe_array_from_f64_slice(&result))
+            });
         }
         self.read_with_context(|range, context| {
             let rects = range.bounding_boxes();
@@ -660,10 +718,12 @@ impl ITextRangeProvider_Impl for PlatformRange_Impl {
                 Ok(context.get_or_create_platform_node(node.id()).into_interface())
             });
         }
-        let context = self.upgrade_context()?;
-        let tree = context.read_tree();
-        let id = self.upgrade_node(tree.state())?.id();
-        Ok(context.get_or_create_platform_node(id).into_interface())
+        uia_catch(|| {
+            let context = self.upgrade_context()?;
+            let tree = context.read_tree();
+            let id = self.upgrade_node(tree.state())?.id();
+            Ok(context.get_or_create_platform_node(id).into_interface())
+        })
     }
 
     fn GetText(&self, max_length: i32) -> Result<BSTR> {
@@ -689,14 +749,22 @@ impl ITextRangeProvider_Impl for PlatformRange_Impl {
 
     fn Move(&self, unit: TextUnit, count: i32) -> Result<i32> {
         if self.is_long() {
-            return self.long(|text, _, _, start, end| {
+            return self.long(|text, node, _, start, end| {
                 let unit = long_unit(unit)?;
+                let state = (unit == Unit::Line).then(|| drawn_state(&node, text));
+                let drawn = state.as_ref().map_or(&[][..], |s| s.lines.as_slice());
                 let degenerate = start == end;
-                let from = if degenerate { *start } else { text.start_of(*start, unit) };
-                let (at, moved) = text.step(from, unit, count);
+                let from = if degenerate {
+                    *start
+                } else if let Some(st) = &state {
+                    text.start_of_in(*start, unit, st)
+                } else {
+                    text.start_of(*start, unit)
+                };
+                let (at, moved) = text.step_in(from, unit, count, drawn);
                 if moved != 0 {
                     *start = at;
-                    *end = if degenerate || at == text.len() { at } else { text.next(at, unit) };
+                    *end = if degenerate || at == text.len() { at } else { text.next_in(at, unit, drawn) };
                 }
                 Ok(moved)
             });
@@ -730,14 +798,15 @@ impl ITextRangeProvider_Impl for PlatformRange_Impl {
         count: i32,
     ) -> Result<i32> {
         if self.is_long() {
-            return self.long(|text, _, _, start, end| {
+            return self.long(|text, node, _, start, end| {
                 let unit = long_unit(unit)?;
+                let drawn = if unit == Unit::Line { drawn_lines(&node, text) } else { Vec::new() };
                 let at = match endpoint {
                     TextPatternRangeEndpoint_Start => *start,
                     TextPatternRangeEndpoint_End => *end,
                     _ => return Err(invalid_arg()),
                 };
-                let (at, moved) = text.step(at, unit, count);
+                let (at, moved) = text.step_in(at, unit, count, &drawn);
                 set_long_endpoint(start, end, endpoint, at);
                 Ok(moved)
             });
@@ -757,41 +826,43 @@ impl ITextRangeProvider_Impl for PlatformRange_Impl {
         other: Ref<ITextRangeProvider>,
         other_endpoint: TextPatternRangeEndpoint,
     ) -> Result<()> {
-        let other = unsafe { required_param(&other)?.as_impl() };
-        self.require_same_context(other)?;
-        if self.is_long() || other.is_long() {
-            // Read the other range first: it may be this one.
-            let (mine, theirs) = (self.long_endpoints(), other.long_endpoints());
-            let (Some(mine), Some((node, a, b))) = (mine, theirs) else {
-                return Err(invalid_arg());
-            };
-            if node != mine.0 {
-                return Err(invalid_arg());
+        uia_catch(|| {
+            let other = unsafe { required_param(&other)?.as_impl() };
+            self.require_same_context(other)?;
+            if self.is_long() || other.is_long() {
+                // Read the other range first: it may be this one.
+                let (mine, theirs) = (self.long_endpoints(), other.long_endpoints());
+                let (Some(mine), Some((node, a, b))) = (mine, theirs) else {
+                    return Err(invalid_arg());
+                };
+                if node != mine.0 {
+                    return Err(invalid_arg());
+                }
+                let at = match other_endpoint {
+                    TextPatternRangeEndpoint_Start => a,
+                    TextPatternRangeEndpoint_End => b,
+                    _ => return Err(invalid_arg()),
+                };
+                return self.long(|text, _, _, start, end| {
+                    set_long_endpoint(start, end, endpoint, text.clamp(at));
+                    Ok(())
+                });
             }
-            let at = match other_endpoint {
-                TextPatternRangeEndpoint_Start => a,
-                TextPatternRangeEndpoint_End => b,
-                _ => return Err(invalid_arg()),
-            };
-            return self.long(|text, _, _, start, end| {
-                set_long_endpoint(start, end, endpoint, text.clamp(at));
+            // We have to obtain the tree state and ranges manually to avoid
+            // lifetime issues, and work with the two locks in a specific order
+            // to avoid deadlock.
+            self.with_tree_state(|tree_state| {
+                let other_range = other.upgrade_for_read(tree_state)?;
+                let mut state = self.write_state();
+                let mut range = upgrade_range(runs(&state)?, tree_state)?;
+                if range.node().id() != other_range.node().id() {
+                    return Err(invalid_arg());
+                }
+                let pos = position_from_endpoint(&other_range, other_endpoint)?;
+                set_endpoint_position(&mut range, endpoint, pos)?;
+                *state = State::Runs(range.downgrade());
                 Ok(())
-            });
-        }
-        // We have to obtain the tree state and ranges manually to avoid
-        // lifetime issues, and work with the two locks in a specific order
-        // to avoid deadlock.
-        self.with_tree_state(|tree_state| {
-            let other_range = other.upgrade_for_read(tree_state)?;
-            let mut state = self.state.write().unwrap();
-            let mut range = upgrade_range(runs(&state)?, tree_state)?;
-            if range.node().id() != other_range.node().id() {
-                return Err(invalid_arg());
-            }
-            let pos = position_from_endpoint(&other_range, other_endpoint)?;
-            set_endpoint_position(&mut range, endpoint, pos)?;
-            *state = State::Runs(range.downgrade());
-            Ok(())
+            })
         })
     }
 

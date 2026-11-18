@@ -67,6 +67,7 @@ impl FillSet {
     /// Fills every mask, the biggest groups of masks that share rows first, on `threads` threads
     /// that are already running and spin until told to start (so no wake or spawn is timed): the
     /// wall time, ns. The grouping is timed too.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn time(&self, threads: usize, lanes: FillLanes) -> u64 {
         let (next, done, go) = (AtomicUsize::new(0), AtomicUsize::new(0), AtomicBool::new(false));
         let order = std::sync::OnceLock::new();

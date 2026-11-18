@@ -36,7 +36,9 @@ pub(crate) fn to_ns_range_for_character(pos: &TextPosition) -> NSRange {
 }
 
 pub(crate) fn from_ns_point(view: &NSView, node: &NodeRef, point: NSPoint) -> Point {
-    let window = view.window().unwrap();
+    let Some(window) = view.window() else {
+        return Point::ZERO;
+    };
     let point = window.convertPointFromScreen(point);
     let point = view.convertPoint_fromView(point, None);
     // AccessKit coordinates are in physical (DPI-dependent) pixels, but
@@ -55,7 +57,9 @@ pub(crate) fn from_ns_point(view: &NSView, node: &NodeRef, point: NSPoint) -> Po
 }
 
 pub(crate) fn to_ns_rect(view: &NSView, rect: Rect) -> NSRect {
-    let window = view.window().unwrap();
+    let Some(window) = view.window() else {
+        return NSRect::ZERO;
+    };
     // AccessKit coordinates are in physical (DPI-dependent)
     // pixels, but macOS expects logical (DPI-independent)
     // coordinates here.
