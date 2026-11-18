@@ -214,7 +214,10 @@ impl<S: 'static> Runtime<S> {
                     curve.applied(st.offset);
                     // The hand moved it: the app hears a wheel's ease as the wheel.
                     st.moved();
-                    if curve.done() { st.land(sp.stick_bottom) } else { st.mode = st.mode.to_wheel(curve); moving = true; }
+                    // An ease sent to a following viewport's end pins the frame it gets there, though
+                    // the end growing under it restarts its segment every frame a reply grows.
+                    let pins = sp.stick_bottom && curve.to_end() && st.offset == st.max;
+                    if curve.done() || pins { st.land(sp.stick_bottom) } else { st.mode = st.mode.to_wheel(curve); moving = true; }
                 }
                 ScrollMode::Pinned(_) | ScrollMode::Rest(_) => {}
             }

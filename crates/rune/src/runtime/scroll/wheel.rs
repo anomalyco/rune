@@ -148,10 +148,12 @@ impl WheelCurve {
             return false;
         }
         // The new segment starts at the old one's speed (`EaseInOutWithInitialSlope`). It is the
-        // same motion going on, so it keeps the frame's catch-up: marking it fresh would make the
-        // frame after each stacked notch a half step at 60 Hz. Only an ease from rest is fresh.
+        // same motion going on, so it keeps whether its first frame has come: an ease from rest
+        // that a second notch retargets before that frame still starts on it, and one already
+        // moving keeps the frame's catch-up (marking it fresh would make the frame after each
+        // stacked notch a half step at 60 Hz).
         let slope = (v * duration / delta).clamp(-1000.0, 1000.0) as f32;
-        *self = WheelCurve { from: at, to, t: 0.0, duration, ease: CubicBezier::new(0.42, 0.42 * slope, 0.58, 1.0), fresh: false, ..*self };
+        *self = WheelCurve { from: at, to, t: 0.0, duration, ease: CubicBezier::new(0.42, 0.42 * slope, 0.58, 1.0), ..*self };
         true
     }
 

@@ -46,10 +46,11 @@ pub(super) struct WheelLock {
     kind: DeltaKind,
 }
 
-/// What a run of wheel deltas is, decided by its first delta and kept while its deltas keep
-/// coming (within `RUN_IDLE`): a notched wheel's whole lines, or a precision touchpad's or a
-/// free-spinning wheel's fractions. A fast swipe's delta that happens to be a whole line stays
-/// precise, rather than starting an ease the next fraction throws away.
+/// What a run of wheel deltas is while its deltas keep coming (within `RUN_IDLE`): a notched
+/// wheel's whole lines, or a precision touchpad's or a free-spinning wheel's fractions. A run is
+/// notched while every delta is whole, and precise from its first fraction to its end: a fast
+/// swipe's delta that happens to be a whole line stays precise, rather than starting an ease the
+/// next fraction throws away.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 enum DeltaKind {
     #[default]
@@ -63,7 +64,9 @@ impl DeltaKind {
     fn step(&mut self, now: f64, whole: bool) -> bool {
         let notched = match *self {
             DeltaKind::Notched { at } | DeltaKind::Precise { at } if now - at > RUN_IDLE => whole,
-            DeltaKind::Notched { .. } => true,
+            // A fraction ends a run of whole lines' easing: a touchpad swipe whose first delta was
+            // exactly a line is precise from its first fraction on.
+            DeltaKind::Notched { .. } => whole,
             DeltaKind::Precise { .. } => false,
             DeltaKind::Idle => whole,
         };
