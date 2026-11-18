@@ -6,8 +6,8 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use objc2_metal::{MTLBlitCommandEncoder, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue, MTLDrawable, MTLEvent, MTLSharedEvent};
-use objc2_video::rc::autoreleasepool;
-use objc2_video::runtime::ProtocolObject;
+use objc2::rc::autoreleasepool;
+use objc2::runtime::ProtocolObject;
 use parking_lot::MutexGuard;
 use wgpu::custom::*;
 

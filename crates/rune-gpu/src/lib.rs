@@ -2,27 +2,30 @@
 //! default) Rune's native one (`metal`). A Mac app draws with the native one unless `GpuBackend::Wgpu` or
 //! `RUNE_GPU_BACKEND=wgpu` selects wgpu's; an iOS app draws with wgpu's unless it chooses `GpuBackend::Metal`.
 
-pub(crate) mod backend;
-pub(crate) mod health;
+pub mod backend;
+pub mod health;
 #[cfg(all(target_vendor = "apple", feature = "metal-backend"))]
-pub(crate) mod metal;
+pub mod metal;
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) mod pick;
+pub mod pick;
 pub mod springs;
 
+pub use backend::GpuBackend;
+pub use backend::describe as describe_gpu;
+
 #[cfg(target_os = "macos")]
-use objc2_video::runtime::AnyObject;
+use objc2::runtime::AnyObject;
 
 /// Runs `f` on the CAMetalLayer `surface` presents into, under wgpu-hal's lock on wgpu's Metal
 /// backend. `None` when the surface is on neither backend.
 #[cfg(target_os = "macos")]
-pub(crate) fn with_layer<R>(surface: &wgpu::Surface<'_>, f: impl FnOnce(&AnyObject) -> R) -> Option<R> {
+pub fn with_layer<R>(surface: &wgpu::Surface<'_>, f: impl FnOnce(&AnyObject) -> R) -> Option<R> {
     // SAFETY: the layer is only borrowed, under wgpu's lock.
     if let Some(hal) = unsafe { surface.as_hal::<wgpu::hal::api::Metal>() } {
         let layer = hal.render_layer().lock();
         // SAFETY: a live CAMetalLayer, which the lock keeps; wgpu's objc2 may be another version
         // than ours, the object is the same.
-        return Some(f(unsafe { &*objc2_video::rc::Retained::as_ptr(&*layer).cast::<AnyObject>() }));
+        return Some(f(unsafe { &*objc2::rc::Retained::as_ptr(&*layer).cast::<AnyObject>() }));
     }
     #[cfg(feature = "metal-backend")]
     if let Some(layer) = metal::layer(surface) {
@@ -34,7 +37,7 @@ pub(crate) fn with_layer<R>(surface: &wgpu::Surface<'_>, f: impl FnOnce(&AnyObje
 /// Whether `queue` is Rune's native Metal backend's, where a frame's submit and present commit
 /// one command buffer, too cheap to hand to a present thread.
 #[cfg(target_os = "macos")]
-pub(crate) fn native(queue: &wgpu::Queue) -> bool {
+pub fn native(queue: &wgpu::Queue) -> bool {
     #[cfg(feature = "metal-backend")]
     return metal::owns(queue);
     #[cfg(not(feature = "metal-backend"))]

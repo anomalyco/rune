@@ -29,10 +29,10 @@ static CHOSEN: AtomicU8 = AtomicU8::new(UNSET);
 /// The backend an app that chooses none draws with: the native one on macOS with the feature.
 const DEFAULT: GpuBackend = if cfg!(all(target_os = "macos", feature = "metal-backend")) { GpuBackend::Metal } else { GpuBackend::Wgpu };
 
-/// Makes GPUs from now on with `backend`, process-wide. A `prewarm_gpu` running on another
-/// backend starts over on this one.
+/// Makes GPUs from now on with `backend`, process-wide. Returns `true` when the active backend
+/// changed, so a caller with a prewarm running on the old backend can start it over.
 #[cfg_attr(not(target_vendor = "apple"), allow(unused_variables))]
-pub(crate) fn choose(backend: GpuBackend) {
+pub fn choose(backend: GpuBackend) -> bool {
     #[cfg(all(target_vendor = "apple", not(feature = "metal-backend")))]
     if backend == GpuBackend::Metal {
         eprintln!("rune: GpuBackend::Metal needs Rune's `metal-backend` feature; drawing with wgpu");
@@ -41,13 +41,10 @@ pub(crate) fn choose(backend: GpuBackend) {
     {
         let before = current();
         CHOSEN.store(match backend { GpuBackend::Wgpu => WGPU, GpuBackend::Metal => METAL }, Ordering::Relaxed);
-        #[cfg(target_os = "macos")]
-        if current() != before {
-            crate::render::restart_prewarm();
-        }
-        #[cfg(not(target_os = "macos"))]
-        let _ = before;
+        return current() != before;
     }
+    #[cfg(not(all(target_vendor = "apple", feature = "metal-backend")))]
+    false
 }
 
 fn chosen() -> Option<GpuBackend> {
@@ -62,17 +59,17 @@ fn env() -> Option<String> {
     std::env::var("RUNE_GPU_BACKEND").ok()
 }
 
-#[cfg_attr(not(all(target_vendor = "apple", feature = "metal-backend")), allow(dead_code))]
 /// The backend GPUs are made with: `RUNE_GPU_BACKEND` (`wgpu` or `metal`) over the app's
 /// choice, over the default.
-pub(crate) fn current() -> GpuBackend {
+pub fn current() -> GpuBackend {
     resolve(env().as_deref(), chosen())
 }
 
 /// What `RUNE_GPU_LOG` calls the backend `adapter` is on.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub(crate) fn label(adapter: &wgpu::Adapter) -> &'static str {
     #[cfg(all(target_vendor = "apple", feature = "metal-backend"))]
-    if crate::gpu::metal::owns_adapter(adapter) {
+    if crate::metal::owns_adapter(adapter) {
         return "rune backend";
     }
     let _ = adapter;
@@ -80,9 +77,9 @@ pub(crate) fn label(adapter: &wgpu::Adapter) -> &'static str {
 }
 
 /// Whether `device` is the native Metal backend's.
-pub(crate) fn native(device: &wgpu::Device) -> bool {
+pub fn native(device: &wgpu::Device) -> bool {
     #[cfg(all(target_vendor = "apple", feature = "metal-backend"))]
-    return crate::gpu::metal::raw_device(device).is_some();
+    return crate::metal::raw_device(device).is_some();
     #[cfg(not(all(target_vendor = "apple", feature = "metal-backend")))]
     {
         let _ = device;
@@ -92,10 +89,10 @@ pub(crate) fn native(device: &wgpu::Device) -> bool {
 
 /// Features a device on `adapter` gets whether or not a compositor asks: all the native backend
 /// offers, which cost it nothing, so a prewarmed device serves any compositor it can draw for.
-pub(crate) fn free_features(adapter: &wgpu::Adapter) -> wgpu::Features {
+pub fn free_features(adapter: &wgpu::Adapter) -> wgpu::Features {
     #[cfg(all(target_vendor = "apple", feature = "metal-backend"))]
-    if crate::gpu::metal::owns_adapter(adapter) {
-        return crate::gpu::metal::FEATURES;
+    if crate::metal::owns_adapter(adapter) {
+        return crate::metal::FEATURES;
     }
     let _ = adapter;
     // Dmabuf frames from other processes (`native_surface::linux`): extensions the device enables
@@ -114,10 +111,10 @@ static MISSING: std::sync::Mutex<wgpu::Features> = std::sync::Mutex::new(wgpu::F
 /// backend: only when the native backend is the default, neither the app nor the environment
 /// asked for it, and it lacks one of `wanted`'s features. Says so once.
 #[cfg_attr(not(all(target_vendor = "apple", feature = "metal-backend")), allow(unused_variables))]
-pub(crate) fn wgpu_for(wanted: wgpu::Features) -> bool {
+pub fn wgpu_for(wanted: wgpu::Features) -> bool {
     #[cfg(all(target_vendor = "apple", feature = "metal-backend"))]
     {
-        let missing = wanted - crate::gpu::metal::FEATURES;
+        let missing = wanted - crate::metal::FEATURES;
         if !missing.is_empty() && DEFAULT == GpuBackend::Metal && defaulted(env().as_deref(), chosen()) {
             *MISSING.lock().unwrap_or_else(|e| e.into_inner()) = missing;
             static SAID: std::sync::Once = std::sync::Once::new();
@@ -167,9 +164,9 @@ fn reason(native: bool) -> String {
 
 /// Whether a GPU on `device` serves a compositor that wants `wanted`: false for a native
 /// backend device when `wgpu_for(wanted)`.
-pub(crate) fn serves(device: &wgpu::Device, wanted: wgpu::Features) -> bool {
+pub fn serves(device: &wgpu::Device, wanted: wgpu::Features) -> bool {
     #[cfg(all(target_vendor = "apple", feature = "metal-backend"))]
-    if crate::gpu::metal::raw_device(device).is_some() {
+    if crate::metal::raw_device(device).is_some() {
         return !wgpu_for(wanted);
     }
     let _ = (device, wanted);

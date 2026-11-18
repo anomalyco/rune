@@ -11,11 +11,11 @@ use std::pin::Pin;
 use std::ptr::NonNull;
 use std::sync::OnceLock;
 
-use objc2_foundation_video::{NSError, NSString};
+use objc2_foundation::{NSError, NSString};
 use objc2_metal::{MTLCompileOptions, MTLDevice, MTLFunction, MTLLibrary};
-use objc2_video::msg_send;
-use objc2_video::rc::Retained;
-use objc2_video::runtime::{AnyObject, ProtocolObject};
+use objc2::msg_send;
+use objc2::rc::Retained;
+use objc2::runtime::{AnyObject, ProtocolObject};
 use wgpu::custom::*;
 use wgpu::naga::{
     self,
@@ -92,7 +92,6 @@ impl Ir {
         ir
     }
 
-    #[cfg(test)]
     pub(super) fn parse(label: &str, source: &str, checks: wgpu::ShaderRuntimeChecks) -> Self {
         let ir = Ir { label: label.into(), source: source.into(), hash: source_hash(source), parsed: OnceLock::new(), checks };
         ir.parsed();

@@ -27,11 +27,11 @@ use super::shader::{Compiled, Ir, Point, function, library, translate};
 include!("builtin_table.rs");
 
 #[cfg(target_os = "macos")]
-const LIBRARY: &[u8] = include_bytes!("../../shaders/builtin_native.metallib");
+const LIBRARY: &[u8] = include_bytes!("../shaders/builtin_native.metallib");
 #[cfg(all(target_os = "ios", not(target_abi = "sim")))]
-const LIBRARY: &[u8] = include_bytes!("../../shaders/builtin_native_ios.metallib");
+const LIBRARY: &[u8] = include_bytes!("../shaders/builtin_native_ios.metallib");
 #[cfg(all(target_os = "ios", target_abi = "sim"))]
-const LIBRARY: &[u8] = include_bytes!("../../shaders/builtin_native_ios_sim.metallib");
+const LIBRARY: &[u8] = include_bytes!("../shaders/builtin_native_ios_sim.metallib");
 #[cfg(not(any(target_os = "macos", target_os = "ios")))]
 const LIBRARY: &[u8] = &[];
 

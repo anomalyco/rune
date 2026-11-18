@@ -5,7 +5,7 @@ use std::ptr::NonNull;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicIsize, Ordering};
 
-use objc2_foundation_video::NSRange;
+use objc2_foundation::NSRange;
 use objc2_metal::{
     MTLBuffer, MTLCompareFunction, MTLDevice, MTLPixelFormat, MTLResourceOptions, MTLSamplerAddressMode, MTLSamplerBorderColor,
     MTLSamplerDescriptor, MTLSamplerMinMagFilter, MTLSamplerMipFilter, MTLSamplerState, MTLStorageMode, MTLTexture, MTLTextureDescriptor,

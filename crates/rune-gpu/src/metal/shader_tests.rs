@@ -3,9 +3,9 @@
 //! per entry point as wgpu-hal builds them. The question it answers: can a native backend keep
 //! WGSL as the one shader language, by translating with naga itself?
 
-use objc2_foundation_video::NSString;
+use objc2_foundation::NSString;
 use objc2_metal::{MTLCompileOptions, MTLCreateSystemDefaultDevice, MTLDevice};
-use objc2_video::runtime::ProtocolObject;
+use objc2::runtime::ProtocolObject;
 use super::device::msl_version;
 use wgpu::naga::{
     self,
@@ -14,12 +14,12 @@ use wgpu::naga::{
     valid::{Capabilities, ValidationFlags, Validator},
 };
 
-const CLIP: &str = include_str!("../../shaders/clip.wgsl");
-const FX_COMMON: &str = include_str!("../../../../rune-fx/src/shaders/common.wgsl");
-const LIGHT_COMMON: &str = include_str!("../../../../rune-light/src/shaders/common.wgsl");
-const GI: &str = include_str!("../../../../rune-light/src/shaders/gi.wgsl");
-const GLASS: &str = include_str!("../../../../rune-light/src/shaders/glass.wgsl");
-const REEL: &str = include_str!("../../../../rune-light/examples/reel/reel.wgsl");
+const CLIP: &str = include_str!("../../../rune/src/shaders/clip.wgsl");
+const FX_COMMON: &str = include_str!("../../../rune-fx/src/shaders/common.wgsl");
+const LIGHT_COMMON: &str = include_str!("../../../rune-light/src/shaders/common.wgsl");
+const GI: &str = include_str!("../../../rune-light/src/shaders/gi.wgsl");
+const GLASS: &str = include_str!("../../../rune-light/src/shaders/glass.wgsl");
+const REEL: &str = include_str!("../../../rune-light/examples/reel/reel.wgsl");
 
 /// One shader module as its crate builds it: the files it is made of, its source, and the
 /// pipeline constants it is built with (one module per set).
@@ -62,41 +62,41 @@ fn reel_part(name: &str) -> String {
 
 fn cases() -> Vec<Case> {
     let mut cases = vec![
-        case("rune uber", &["rune/src/shaders/clip.wgsl", "rune/src/shaders/shader.wgsl", "rune/src/gpu/springs.wgsl"],
-            format!("{CLIP}\n{}\n{}", include_str!("../../shaders/shader.wgsl"), include_str!("../springs.wgsl"))),
-        case("rune backdrop blur", &["rune/src/shaders/backdrop_blur.wgsl"], include_str!("../../shaders/backdrop_blur.wgsl").into()),
+        case("rune uber", &["rune/src/shaders/clip.wgsl", "rune/src/shaders/shader.wgsl", "rune-gpu/src/springs.wgsl"],
+            format!("{CLIP}\n{}\n{}", include_str!("../../../rune/src/shaders/shader.wgsl"), include_str!("../springs.wgsl"))),
+        case("rune backdrop blur", &["rune/src/shaders/backdrop_blur.wgsl"], include_str!("../../../rune/src/shaders/backdrop_blur.wgsl").into()),
         case("rune backdrop composite", &["rune/src/shaders/clip.wgsl", "rune/src/shaders/backdrop_composite.wgsl"],
-            format!("{CLIP}\n{}", include_str!("../../shaders/backdrop_composite.wgsl"))),
-        case("rune video", &["rune/src/native_surface/video.wgsl"], include_str!("../../native_surface/video.wgsl").into()),
+            format!("{CLIP}\n{}", include_str!("../../../rune/src/shaders/backdrop_composite.wgsl"))),
+        case("rune video", &["rune/src/native_surface/video.wgsl"], include_str!("../../../rune/src/native_surface/video.wgsl").into()),
     ];
-    let mut blur = case("rune layer blur", &["rune/src/shaders/layer_blur.wgsl"], include_str!("../../shaders/layer_blur.wgsl").into());
+    let mut blur = case("rune layer blur", &["rune/src/shaders/layer_blur.wgsl"], include_str!("../../../rune/src/shaders/layer_blur.wgsl").into());
     blur.constants = [(0.0, 0.0), (0.0, 1.0), (2.0, 0.0), (2.0, 1.0), (3.0, 0.0)].iter().map(|&(m, a)| vec![("MODE", m), ("ADDITIVE", a)]).collect();
     cases.push(blur);
     let fx_effects: [(&str, &'static str, &str); 8] = [
-        ("glow", "rune-fx/src/shaders/glow.wgsl", include_str!("../../../../rune-fx/src/shaders/glow.wgsl")),
-        ("pulse", "rune-fx/src/shaders/pulse.wgsl", include_str!("../../../../rune-fx/src/shaders/pulse.wgsl")),
-        ("electric", "rune-fx/src/shaders/electric.wgsl", include_str!("../../../../rune-fx/src/shaders/electric.wgsl")),
-        ("fire", "rune-fx/src/shaders/fire.wgsl", include_str!("../../../../rune-fx/src/shaders/fire.wgsl")),
-        ("distort", "rune-fx/src/shaders/distort.wgsl", include_str!("../../../../rune-fx/src/shaders/distort.wgsl")),
-        ("motion", "rune-fx/src/shaders/motion.wgsl", include_str!("../../../../rune-fx/src/shaders/motion.wgsl")),
-        ("extras", "rune-fx/src/shaders/extras.wgsl", include_str!("../../../../rune-fx/src/shaders/extras.wgsl")),
-        ("fill", "rune-fx/src/shaders/fill.wgsl", include_str!("../../../../rune-fx/src/shaders/fill.wgsl")),
+        ("glow", "rune-fx/src/shaders/glow.wgsl", include_str!("../../../rune-fx/src/shaders/glow.wgsl")),
+        ("pulse", "rune-fx/src/shaders/pulse.wgsl", include_str!("../../../rune-fx/src/shaders/pulse.wgsl")),
+        ("electric", "rune-fx/src/shaders/electric.wgsl", include_str!("../../../rune-fx/src/shaders/electric.wgsl")),
+        ("fire", "rune-fx/src/shaders/fire.wgsl", include_str!("../../../rune-fx/src/shaders/fire.wgsl")),
+        ("distort", "rune-fx/src/shaders/distort.wgsl", include_str!("../../../rune-fx/src/shaders/distort.wgsl")),
+        ("motion", "rune-fx/src/shaders/motion.wgsl", include_str!("../../../rune-fx/src/shaders/motion.wgsl")),
+        ("extras", "rune-fx/src/shaders/extras.wgsl", include_str!("../../../rune-fx/src/shaders/extras.wgsl")),
+        ("fill", "rune-fx/src/shaders/fill.wgsl", include_str!("../../../rune-fx/src/shaders/fill.wgsl")),
     ];
     for (name, file, src) in fx_effects {
         cases.push(case(&format!("fx {name}"), &["rune/src/shaders/clip.wgsl", "rune-fx/src/shaders/common.wgsl", file], format!("{CLIP}\n{FX_COMMON}\n{src}")));
     }
     cases.extend([
-        case("fx mip", &["rune-fx/src/shaders/mip.wgsl"], include_str!("../../../../rune-fx/src/shaders/mip.wgsl").into()),
-        case("fx blur", &["rune-fx/src/shaders/blur.wgsl"], include_str!("../../../../rune-fx/src/shaders/blur.wgsl").into()),
-        case("fx firesim", &["rune-fx/src/shaders/firesim.wgsl"], include_str!("../../../../rune-fx/src/shaders/firesim.wgsl").into()),
-        case("fx gallery ui", &["rune-fx/examples/gallery/ui.wgsl"], include_str!("../../../../rune-fx/examples/gallery/ui.wgsl").into()),
-        case("fx gallery resolve", &["rune-fx/examples/gallery/resolve.wgsl"], include_str!("../../../../rune-fx/examples/gallery/resolve.wgsl").into()),
+        case("fx mip", &["rune-fx/src/shaders/mip.wgsl"], include_str!("../../../rune-fx/src/shaders/mip.wgsl").into()),
+        case("fx blur", &["rune-fx/src/shaders/blur.wgsl"], include_str!("../../../rune-fx/src/shaders/blur.wgsl").into()),
+        case("fx firesim", &["rune-fx/src/shaders/firesim.wgsl"], include_str!("../../../rune-fx/src/shaders/firesim.wgsl").into()),
+        case("fx gallery ui", &["rune-fx/examples/gallery/ui.wgsl"], include_str!("../../../rune-fx/examples/gallery/ui.wgsl").into()),
+        case("fx gallery resolve", &["rune-fx/examples/gallery/resolve.wgsl"], include_str!("../../../rune-fx/examples/gallery/resolve.wgsl").into()),
     ]);
     let light: [(&str, &'static str, &str); 4] = [
-        ("gbuffer", "rune-light/src/shaders/gbuffer.wgsl", include_str!("../../../../rune-light/src/shaders/gbuffer.wgsl")),
-        ("field", "rune-light/src/shaders/field.wgsl", include_str!("../../../../rune-light/src/shaders/field.wgsl")),
-        ("shadow", "rune-light/src/shaders/shadow.wgsl", include_str!("../../../../rune-light/src/shaders/shadow.wgsl")),
-        ("composite", "rune-light/src/shaders/composite.wgsl", include_str!("../../../../rune-light/src/shaders/composite.wgsl")),
+        ("gbuffer", "rune-light/src/shaders/gbuffer.wgsl", include_str!("../../../rune-light/src/shaders/gbuffer.wgsl")),
+        ("field", "rune-light/src/shaders/field.wgsl", include_str!("../../../rune-light/src/shaders/field.wgsl")),
+        ("shadow", "rune-light/src/shaders/shadow.wgsl", include_str!("../../../rune-light/src/shaders/shadow.wgsl")),
+        ("composite", "rune-light/src/shaders/composite.wgsl", include_str!("../../../rune-light/src/shaders/composite.wgsl")),
     ];
     for (name, file, src) in light {
         cases.push(case(&format!("light {name}"), &["rune-light/src/shaders/common.wgsl", file], format!("{LIGHT_COMMON}\n{src}")));

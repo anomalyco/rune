@@ -29,7 +29,8 @@
 //! depth and multisampling are not implemented: they panic naming the way back to wgpu
 //! (`unsupported!`).
 
-pub(crate) mod bench;
+#[doc(hidden)]
+pub mod bench;
 mod builtin;
 mod compute;
 #[cfg(test)]
@@ -59,43 +60,38 @@ use std::future::ready;
 use std::pin::Pin;
 
 use objc2_metal::{MTLCopyAllDevices, MTLDevice};
-use objc2_video::rc::Retained;
-use objc2_video::runtime::ProtocolObject;
+use objc2::rc::Retained;
+use objc2::runtime::ProtocolObject;
 use wgpu::custom::*;
 
 pub(crate) use device::{MetalDevice, Shared};
 
-pub(crate) type Obj<P> = Retained<ProtocolObject<P>>;
+pub type Obj<P> = Retained<ProtocolObject<P>>;
 
 /// Keeps memory a texture made outside this backend reads valid, as long as the texture, its
 /// views, bind groups using them, or a command buffer using those is alive.
-pub(crate) type Owner = std::sync::Arc<dyn std::any::Any + Send + Sync>;
+pub type Owner = std::sync::Arc<dyn std::any::Any + Send + Sync>;
 
 /// The Metal device under `device`, when it's this backend's.
-// macOS-only callers: video, native surfaces and the precompiled metallib.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-pub(crate) fn raw_device(device: &wgpu::Device) -> Option<&ProtocolObject<dyn MTLDevice>> {
+pub fn raw_device(device: &wgpu::Device) -> Option<&ProtocolObject<dyn MTLDevice>> {
     device.as_custom::<MetalDevice>().map(|d| &*d.shared.device)
 }
 
 /// A texture over `raw`, made on `raw_device`'s device and matching `desc`, which `owner` keeps valid.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-pub(crate) fn texture_from_raw(raw: Obj<dyn objc2_metal::MTLTexture>, desc: &wgpu::TextureDescriptor<'_>, owner: Owner) -> wgpu::Texture {
+pub fn texture_from_raw(raw: Obj<dyn objc2_metal::MTLTexture>, desc: &wgpu::TextureDescriptor<'_>, owner: Owner) -> wgpu::Texture {
     wgpu::Texture::from_custom(resource::MetalTexture::from_raw(raw, desc, owner), desc)
 }
 
 /// Whether `module`, made on this backend, can make pipelines from all its entry points: false
 /// for a precompiled library Metal refused or that lacks one of them.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-pub(crate) fn module_ready(module: &wgpu::ShaderModule) -> bool {
+pub fn module_ready(module: &wgpu::ShaderModule) -> bool {
     module.as_custom::<shader::ShaderModule>().is_some_and(shader::ShaderModule::ready)
 }
 
 /// The MSL this backend compiles `wgsl`'s `vs` and `fs` to, in MSL `lang`, for a render
 /// pipeline whose one bind group has `entries`.
-#[cfg(test)]
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-pub(crate) fn render_msl(wgsl: &str, entries: &[wgpu::BindGroupLayoutEntry], lang: (u8, u8)) -> [String; 2] {
+#[doc(hidden)]
+pub fn render_msl(wgsl: &str, entries: &[wgpu::BindGroupLayoutEntry], lang: (u8, u8)) -> [String; 2] {
     let ir = shader::Ir::parse("render_msl", wgsl, wgpu::ShaderRuntimeChecks::checked());
     let group = layout::BindGroupLayout::new(&wgpu::BindGroupLayoutDescriptor { label: None, entries });
     let layout = layout::PipelineLayout::from_groups(&[Some(&group)], 0);
@@ -106,7 +102,8 @@ pub(crate) fn render_msl(wgsl: &str, entries: &[wgpu::BindGroupLayoutEntry], lan
 }
 
 /// How many pipelines compiled at runtime because the precompiled library lacked them.
-pub(crate) fn builtin_misses() -> usize { builtin::misses() }
+#[doc(hidden)]
+pub fn builtin_misses() -> usize { builtin::misses() }
 
 /// The wgpu features this backend can offer: a compositor that wants others draws with wgpu
 /// unless the app or `RUNE_GPU_BACKEND` asked for this backend (`backend::wgpu_for`).
@@ -120,11 +117,11 @@ pub(crate) fn owns_adapter(adapter: &wgpu::Adapter) -> bool { adapter.as_custom:
 
 /// Whether this backend draws: the default, unless `App::gpu_backend` or `RUNE_GPU_BACKEND`
 /// picks wgpu.
-pub(crate) fn enabled() -> bool {
-    crate::gpu::backend::current() == crate::GpuBackend::Metal
+pub fn enabled() -> bool {
+    crate::backend::current() == crate::GpuBackend::Metal
 }
 
-pub(crate) fn instance() -> wgpu::Instance {
+pub fn instance() -> wgpu::Instance {
     rune_staging::set_direct(write_in_place);
     wgpu::Instance::from_custom(MetalInstance)
 }
@@ -140,8 +137,8 @@ fn write_in_place(buffer: &wgpu::Buffer, offset: u64, data: &[u8]) -> bool {
 
 /// The CAMetalLayer a surface of this backend presents into.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-pub(crate) fn layer<'s>(surface: &'s wgpu::Surface<'_>) -> Option<&'s objc2_video::runtime::AnyObject> {
-    surface.as_custom::<surface::MetalSurface>().map(|s| -> &objc2_video::runtime::AnyObject { s.layer() })
+pub(crate) fn layer<'s>(surface: &'s wgpu::Surface<'_>) -> Option<&'s objc2::runtime::AnyObject> {
+    surface.as_custom::<surface::MetalSurface>().map(|s| -> &objc2::runtime::AnyObject { s.layer() })
 }
 
 macro_rules! send_sync {

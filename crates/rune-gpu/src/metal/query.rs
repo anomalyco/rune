@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use objc2_foundation_video::NSString;
+use objc2_foundation::NSString;
 use objc2_metal::{
     MTLCounterDontSample, MTLCounterSampleBuffer, MTLCounterSampleBufferDescriptor, MTLCounterSamplingPoint, MTLCounterSet, MTLDevice,
     MTLStorageMode,

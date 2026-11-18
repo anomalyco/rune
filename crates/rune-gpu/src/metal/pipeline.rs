@@ -126,7 +126,7 @@ fn topology(topology: wgpu::PrimitiveTopology) -> (MTLPrimitiveTopologyClass, MT
     }
 }
 
-fn vertex_descriptor(buffers: &[Option<wgpu::VertexBufferLayout<'_>>]) -> Option<objc2_video::rc::Retained<MTLVertexDescriptor>> {
+fn vertex_descriptor(buffers: &[Option<wgpu::VertexBufferLayout<'_>>]) -> Option<objc2::rc::Retained<MTLVertexDescriptor>> {
     if buffers.iter().all(Option::is_none) { return None }
     let d = MTLVertexDescriptor::new();
     for (i, vb) in buffers.iter().enumerate() {

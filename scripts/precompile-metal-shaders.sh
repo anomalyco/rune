@@ -3,7 +3,7 @@
 # (Rune's own, `metal-backend`) and crates/rune/src/render/uber/metallib_hash.rs from
 # crates/rune/src/shaders/{clip,shader}.wgsl using wgpu::naga and Xcode's Metal toolchain, the Windfoil
 # variant's crates/rune/src/shaders/uber_windfoil{,_native}.metallib and render/uber/windfoil_hash.rs, then
-# crates/rune/src/shaders/builtin_native{,_ios,_ios_sim}.metallib and crates/rune/src/gpu/metal/builtin_table.rs:
+# crates/rune-gpu/src/shaders/builtin_native{,_ios,_ios_sim}.metallib and crates/rune-gpu/src/metal/builtin_table.rs:
 # every other pipeline Rune, rune-fx and rune-light ship, captured from Rune's Metal backend.
 # App builds embed the committed libraries and do not run xcrun. Needs a Mac with a GPU.
 set -eu
@@ -129,7 +129,7 @@ printf '%s\n' \
     > crates/rune/src/render/uber/windfoil_hash.rs
 echo "wrote crates/rune/src/shaders/uber_windfoil.metallib and uber_windfoil_native.metallib"
 
-# Every other built-in pipeline (crates/rune/src/gpu/metal/builtin.rs), captured once and compiled
+# Every other built-in pipeline (crates/rune-gpu/src/metal/builtin.rs), captured once and compiled
 # for macOS, iOS and the iOS simulator. MSL 3.0 needs macOS 13 and iOS 16. RUNE_DISABLE_METALLIB
 # makes the uber shader compile from WGSL so it's captured too: iOS has no uber_native.metallib.
 cap="$tmp/capture"
@@ -147,10 +147,10 @@ for target in "macosx:$native_flags:builtin_native" "iphoneos:$ios_flags:builtin
     export sdk flags
     # shellcheck disable=SC2016
     find "$cap" -maxdepth 1 -name '*.metal' -print0 | xargs -0 -P 8 -n 1 sh -c 'xcrun -sdk "$sdk" metal $flags -Wno-unused-variable -c "$1" -o "$(dirname "$1")/$sdk/$(basename "${1%.metal}").air"' sh
-    xcrun -sdk "$sdk" metallib "$cap/$sdk"/*.air -o "crates/rune/src/shaders/$name.metallib"
+    xcrun -sdk "$sdk" metallib "$cap/$sdk"/*.air -o "crates/rune-gpu/src/shaders/$name.metallib"
 done
 
-python3 - "$cap" crates/rune/src/gpu/metal/builtin_table.rs <<'PY'
+python3 - "$cap" crates/rune-gpu/src/metal/builtin_table.rs <<'PY'
 import pathlib, sys
 
 cap = pathlib.Path(sys.argv[1])

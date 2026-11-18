@@ -5,10 +5,10 @@ use std::any::Any;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use objc2_foundation_video::NSRange;
+use objc2_foundation::NSRange;
 use objc2_metal::{MTLBlitCommandEncoder, MTLBuffer, MTLCommandBuffer, MTLCommandEncoder, MTLDevice, MTLOrigin, MTLResourceOptions, MTLSize, MTLTexture};
-use objc2_video::rc::autoreleasepool;
-use objc2_video::runtime::ProtocolObject;
+use objc2::rc::autoreleasepool;
+use objc2::runtime::ProtocolObject;
 use parking_lot::Mutex;
 use wgpu::custom::*;
 

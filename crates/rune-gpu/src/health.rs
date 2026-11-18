@@ -8,8 +8,7 @@ const DIFFERENT: usize = 4;
 
 /// What to do with an uncaptured error.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-pub(crate) enum Note {
+pub enum Note {
     /// The device's first error: log it with the adapter's description.
     First,
     /// An error not seen before: log it.
@@ -22,14 +21,12 @@ pub(crate) enum Note {
 
 /// The errors a device has reported.
 #[derive(Default)]
-#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-pub(crate) struct ErrorLog {
+pub struct ErrorLog {
     seen: Vec<String>,
 }
 
-#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 impl ErrorLog {
-    pub(crate) fn note(&mut self, message: &str) -> Note {
+    pub fn note(&mut self, message: &str) -> Note {
         if self.seen.len() > DIFFERENT || self.seen.iter().any(|m| m == message) { return Note::Quiet; }
         self.seen.push(message.to_owned());
         match self.seen.len() {

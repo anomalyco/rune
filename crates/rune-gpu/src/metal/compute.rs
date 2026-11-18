@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use objc2_metal::{MTLCommandBuffer, MTLCommandEncoder, MTLComputeCommandEncoder, MTLComputePassDescriptor, MTLComputePipelineState, MTLDevice, MTLSize};
-use objc2_video::rc::autoreleasepool;
+use objc2::rc::autoreleasepool;
 use parking_lot::Mutex;
 use wgpu::custom::*;
 use wgpu::naga;

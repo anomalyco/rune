@@ -11,7 +11,7 @@ use objc2_metal::{
     MTLClearColor, MTLCommandBuffer, MTLCommandEncoder, MTLCounterDontSample, MTLIndexType, MTLLoadAction, MTLRenderCommandEncoder, MTLRenderPassDescriptor,
     MTLScissorRect, MTLStoreAction, MTLViewport,
 };
-use objc2_video::rc::autoreleasepool;
+use objc2::rc::autoreleasepool;
 use parking_lot::Mutex;
 use wgpu::custom::*;
 
