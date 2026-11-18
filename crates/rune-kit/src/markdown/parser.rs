@@ -58,6 +58,7 @@ impl SpanMap {
 pub(super) enum BlockMap {
     Inline(SpanMap),
     Code(SpanMap),
+    DeepTail { lines: usize, map: SpanMap },
     List(Vec<Vec<BlockMap>>),
     Quote(Vec<BlockMap>),
     Table { head: Vec<SpanMap>, rows: Vec<Vec<SpanMap>> },
@@ -71,7 +72,7 @@ impl BlockMap {
             return self;
         }
         match &mut self {
-            BlockMap::Inline(m) | BlockMap::Code(m) => m.shift_src(offset),
+            BlockMap::Inline(m) | BlockMap::Code(m) | BlockMap::DeepTail { map: m, .. } => m.shift_src(offset),
             BlockMap::List(items) => {
                 for item in items {
                     for b in item {
@@ -103,6 +104,9 @@ impl BlockMap {
 pub(super) struct Builder {
     /// Open containers: (kind, blocks so far, maps so far).
     stack: Vec<(Container, Vec<Block>, Vec<BlockMap>)>,
+    quote_slots: Vec<QuoteSlot>,
+    list_slots: Vec<ListSlot>,
+    past_bound_items: usize,
     inline: Option<(InlineKind, Inline, Vec<Open>, SpanMap)>,
     code: Option<(String, Fence, SpanMap)>,
     /// The source range of the last paragraph started at the root.
@@ -189,6 +193,35 @@ pub(super) struct Open {
     url: Option<String>,
 }
 
+/// Maximum open HTML elements under `<body>` in Blink's HTML parser (`kMaximumHTMLParserDOMTreeDepth`
+/// = 512, where `AttachLater` reparents only once `StackDepth() > 512`, leaving 511 elements under
+/// `<html><body>` while text nodes still attach directly to the current element): 255 nested lists
+/// (`<ul><li>` / `<ol><li>`), 1 quote + 255 nested lists, or 510 non-empty `<blockquote>`s.
+pub(super) const MAX_ELEMENT_DEPTH: usize = 511;
+
+/// Maximum flattened items/blocks rendered individually inside a past-bound container before the
+/// remaining lines are grouped into one selectable, searchable plain block with a count marker.
+pub(super) const MAX_FLATTENED_TAIL_ITEMS: usize = 64;
+
+/// Maximum nested flex containers on targets without `rune-taffy` stack continuation (`wasm32`,
+/// `ios` 1 MiB main thread, `android` 2 MiB `NativeActivity` thread, etc.). `770` preserves all
+/// `255` nested lists (`765`), `1` quote + `255` lists (`767`), and `10` quotes + `250` lists
+/// (`770`), while capping pure `<blockquote>` nesting at `385` (`770` flex containers).
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
+const MAX_UNGUARDED_LAYOUT_DEPTH: usize = 770;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ListSlot {
+    Nested,
+    SiblingItems,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum QuoteSlot {
+    Nested,
+    Merged { stack_len: usize, list_slots_len: usize },
+}
+
 enum Container {
     Root,
     Quote,
@@ -205,11 +238,86 @@ enum InlineKind {
 }
 
 impl Builder {
+    fn depth(&self) -> usize {
+        self.stack.len() - 1
+    }
+
+    #[inline]
+    fn layout_fits(&self, add: usize) -> bool {
+        #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
+        {
+            let cur: usize = self.stack[1..]
+                .iter()
+                .map(|(c, _, _)| match c {
+                    Container::Quote => 2,
+                    Container::List(..) => 1,
+                    Container::Item(_) => 2,
+                    Container::Table(..) => 2,
+                    Container::Root => 0,
+                })
+                .sum();
+            cur + add <= MAX_UNGUARDED_LAYOUT_DEPTH
+        }
+        #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
+        {
+            let _ = add;
+            true
+        }
+    }
+
+    fn emit_deep_tail(&mut self, src: &str, range: Range<usize>) {
+        if range.start >= range.end {
+            return;
+        }
+        let (block, bmap) = build_deep_tail(src, range);
+        if let Some((Container::List(_, items, item_maps), _, _)) = self.stack.last_mut() {
+            self.tasks.push(None);
+            items.push(vec![block]);
+            item_maps.push(vec![bmap]);
+        } else {
+            self.push(block, bmap);
+        }
+    }
+
+    fn first_merged_quote(&self) -> Option<(usize, usize, usize)> {
+        self.quote_slots.iter().enumerate().find_map(|(i, q)| match *q {
+            QuoteSlot::Merged { stack_len, list_slots_len } => Some((i, stack_len, list_slots_len)),
+            QuoteSlot::Nested => None,
+        })
+    }
+
+    fn unwind_merged_quote(&mut self, q_idx: usize, stack_len: usize, list_slots_len: usize) -> usize {
+        self.flush_inline();
+        while self.stack.len() > stack_len {
+            if matches!(self.stack.last(), Some((Container::List(_, items, _), _, _)) if items.is_empty()) {
+                self.stack.pop();
+            } else {
+                self.pop_container();
+            }
+        }
+        self.list_slots.truncate(list_slots_len);
+        let open = self.quote_slots.len() - q_idx;
+        self.quote_slots.truncate(q_idx);
+        open
+    }
+
     fn push(&mut self, b: Block, map: BlockMap) {
         if self.stack.len() == 1 {
             self.block_starts.push(self.root_start);
         }
-        let top = self.stack.last_mut().unwrap();
+        let Self { stack, tasks, .. } = self;
+        let top = stack.last_mut().unwrap();
+        if let Container::List(_, items, item_maps) = &mut top.0 {
+            if let (Some(last_b), Some(last_m)) = (items.last_mut(), item_maps.last_mut()) {
+                last_b.push(b);
+                last_m.push(map);
+            } else {
+                tasks.push(None);
+                items.push(vec![b]);
+                item_maps.push(vec![map]);
+            }
+            return;
+        }
         top.1.push(b);
         top.2.push(map);
     }
@@ -445,10 +553,84 @@ pub(super) fn parse_doc(src: &str, autolink: bool) -> ParsedDoc {
     parse_doc_tail(src, autolink).0
 }
 
+/// Builds a single plain [`Block::Para`] and [`BlockMap::DeepTail`] covering `src[range]`,
+/// stripping each line's outer container indentation (`' '`, `'\t'`, `'>'`) while mapping every
+/// kept byte 1-to-1 back to `src` so Find, highlights, selection and copy preserve all lines.
+pub(super) fn build_deep_tail(src: &str, range: Range<usize>) -> (Block, BlockMap) {
+    let bytes = src.as_bytes();
+    let mut pos = range.start;
+    let end = range.end.min(bytes.len());
+    let mut out = String::new();
+    let mut map = SpanMap::default();
+    let mut lines = 0usize;
+
+    while pos < end {
+        let nl = bytes[pos..end].iter().position(|&b| b == b'\n').map_or(end, |d| pos + d);
+        let line_end = if nl > pos && bytes[nl - 1] == b'\r' { nl - 1 } else { nl };
+        let mut k = pos;
+        while k < line_end {
+            match bytes[k] {
+                b' ' | b'\t' => k += 1,
+                b'>' => {
+                    k += 1;
+                    if k < line_end && bytes[k] == b' ' {
+                        k += 1;
+                    }
+                }
+                _ => break,
+            }
+        }
+        if k < line_end {
+            lines += 1;
+            if !out.is_empty() {
+                let nl_out = out.len();
+                out.push('\n');
+                if pos > range.start && bytes[pos - 1] == b'\n' {
+                    map.push(pos - 1..pos, nl_out..nl_out + 1);
+                }
+            }
+            let o0 = out.len();
+            out.push_str(&src[k..line_end]);
+            map.push(k..line_end, o0..out.len());
+        }
+        pos = if nl < end { nl + 1 } else { end };
+    }
+    (Block::Para(Inline { text: out, spans: Vec::new(), links: Vec::new() }), BlockMap::DeepTail { lines: lines.max(1), map })
+}
+
+pub(super) fn line_indent_cols(line: &[u8]) -> (usize, bool, bool) {
+    let mut i = 0usize;
+    let mut cols = 0usize;
+    while i < line.len() {
+        match line[i] {
+            b' ' => { cols += 1; i += 1; }
+            b'\t' => { cols += 4; i += 1; }
+            b'>' => {
+                cols += 2;
+                i += 1;
+                if i < line.len() && line[i] == b' ' { i += 1; }
+            }
+            b'\r' => i += 1,
+            _ => break,
+        }
+    }
+    let rest = &line[i..];
+    let fence = rest.starts_with(b"```") || rest.starts_with(b"~~~");
+    (cols, i == line.len(), fence)
+}
+
+enum SkipMode {
+    SiblingLists { start: usize, open: usize },
+    ExtraQuotes { start: usize, open: usize },
+}
+
 /// [`parse_doc`], and what the source ends inside.
 pub(super) fn parse_doc_tail(src: &str, autolink: bool) -> (ParsedDoc, Tail) {
     let mut b = Builder {
         stack: vec![(Container::Root, Vec::new(), Vec::new())],
+        quote_slots: Vec::new(),
+        list_slots: Vec::new(),
+        past_bound_items: 0,
         inline: None,
         code: None,
         last_root_para: None,
@@ -465,7 +647,36 @@ pub(super) fn parse_doc_tail(src: &str, autolink: bool) -> (ParsedDoc, Tail) {
     };
     let opts = Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES | Options::ENABLE_TASKLISTS;
     let mut events = super::interrupt::list_interrupts(src, Parser::new_ext(src, opts).into_offset_iter());
+    let mut skip: Option<SkipMode> = None;
     while let Some((ev, range)) = events.next() {
+        if let Some(mode) = &mut skip {
+            match (mode, &ev) {
+                (SkipMode::SiblingLists { open, .. }, Event::Start(Tag::List(_))) => *open += 1,
+                (SkipMode::SiblingLists { start, open }, Event::End(TagEnd::List(_))) => {
+                    *open -= 1;
+                    if *open == 0 {
+                        let (cs, ce) = (*start, range.end);
+                        skip = None;
+                        b.past_bound_items = 0;
+                        b.tail = Tail::None;
+                        b.emit_deep_tail(src, cs..ce);
+                    }
+                }
+                (SkipMode::ExtraQuotes { open, .. }, Event::Start(Tag::BlockQuote(_))) => *open += 1,
+                (SkipMode::ExtraQuotes { start, open }, Event::End(TagEnd::BlockQuote(_))) => {
+                    *open -= 1;
+                    if *open == 0 {
+                        let (cs, ce) = (*start, range.end);
+                        skip = None;
+                        b.past_bound_items = 0;
+                        b.tail = Tail::None;
+                        b.emit_deep_tail(src, cs..ce);
+                    }
+                }
+                _ => {}
+            }
+            continue;
+        }
         let starts_block = matches!(
             ev,
             Event::Start(
@@ -473,11 +684,31 @@ pub(super) fn parse_doc_tail(src: &str, autolink: bool) -> (ParsedDoc, Tail) {
             ) | Event::Rule
         );
         if starts_block && b.stack.len() == 1 && b.code.is_none() {
+            b.past_bound_items = 0;
             b.flush_inline();
             let at = src[..range.start].rfind('\n').map_or(0, |i| i + 1);
             b.root_start = at;
             if !events.made() {
                 b.cuts.push(Cut { at, blocks: b.stack[0].1.len(), sources: b.sources.len(), tasks: b.tasks.len() });
+            }
+        }
+        if matches!(
+            &ev,
+            Event::Start(Tag::Paragraph | Tag::Heading { .. } | Tag::CodeBlock(_) | Tag::Table(_))
+        ) && b.code.is_none()
+            && let Some((q_idx, stack_len, list_slots_len)) = b.first_merged_quote()
+        {
+            let in_fresh_item = matches!(b.stack.last(), Some((Container::Item(_), blocks, _)) if blocks.is_empty())
+                && b.inline.is_none();
+            if !in_fresh_item {
+                b.past_bound_items += 1;
+                if b.past_bound_items > MAX_FLATTENED_TAIL_ITEMS {
+                    let open = b.unwind_merged_quote(q_idx, stack_len, list_slots_len);
+                    let cs = src[..range.start].rfind('\n').map_or(0, |i| i + 1);
+                    skip = Some(SkipMode::ExtraQuotes { start: cs, open });
+                    b.tail = Tail::None;
+                    continue;
+                }
             }
         }
         b.tail = match &ev {
@@ -526,14 +757,47 @@ pub(super) fn parse_doc_tail(src: &str, autolink: bool) -> (ParsedDoc, Tail) {
                 }
                 Tag::BlockQuote(_) => {
                     b.flush_inline();
-                    b.stack.push((Container::Quote, Vec::new(), Vec::new()));
+                    if b.depth() + 2 <= MAX_ELEMENT_DEPTH && b.layout_fits(2) {
+                        b.quote_slots.push(QuoteSlot::Nested);
+                        b.stack.push((Container::Quote, Vec::new(), Vec::new()));
+                    } else {
+                        b.quote_slots.push(QuoteSlot::Merged { stack_len: b.stack.len(), list_slots_len: b.list_slots.len() });
+                    }
                 }
                 Tag::List(start) => {
                     b.flush_inline();
-                    b.stack.push((Container::List(start, Vec::new(), Vec::new()), Vec::new(), Vec::new()));
+                    if (b.depth() + 2 <= MAX_ELEMENT_DEPTH && b.layout_fits(3))
+                        || !matches!(b.stack.last(), Some((Container::List(..) | Container::Item(_), _, _)))
+                    {
+                        b.list_slots.push(ListSlot::Nested);
+                        b.stack.push((Container::List(start, Vec::new(), Vec::new()), Vec::new(), Vec::new()));
+                    } else {
+                        b.list_slots.push(ListSlot::SiblingItems);
+                    }
                 }
                 Tag::Item => {
                     b.flush_inline();
+                    if matches!(b.stack.last(), Some((Container::Item(_), _, _))) {
+                        b.pop_container();
+                    }
+                    let merged_quote = b.first_merged_quote();
+                    if merged_quote.is_some() || b.list_slots.contains(&ListSlot::SiblingItems) {
+                        b.past_bound_items += 1;
+                        if b.past_bound_items > MAX_FLATTENED_TAIL_ITEMS {
+                            let cs = src[..range.start].rfind('\n').map_or(0, |i| i + 1);
+                            skip = Some(if let Some((q_idx, stack_len, list_slots_len)) = merged_quote {
+                                let open = b.unwind_merged_quote(q_idx, stack_len, list_slots_len);
+                                SkipMode::ExtraQuotes { start: cs, open }
+                            } else {
+                                let first_sib = b.list_slots.iter().position(|s| *s == ListSlot::SiblingItems).unwrap();
+                                let open = b.list_slots.len() - first_sib;
+                                b.list_slots.truncate(first_sib);
+                                SkipMode::SiblingLists { start: cs, open }
+                            });
+                            b.tail = Tail::None;
+                            continue;
+                        }
+                    }
                     let idx = b.tasks.len();
                     b.tasks.push(None);
                     b.stack.push((Container::Item(idx), Vec::new(), Vec::new()));
@@ -597,7 +861,37 @@ pub(super) fn parse_doc_tail(src: &str, autolink: bool) -> (ParsedDoc, Tail) {
                         rows.push(std::mem::take(cell_maps));
                     }
                 }
-                TagEnd::BlockQuote(_) | TagEnd::Item | TagEnd::List(_) | TagEnd::Table => b.pop_container(),
+                TagEnd::BlockQuote(_) => {
+                    if matches!(b.quote_slots.pop(), Some(QuoteSlot::Nested)) {
+                        b.pop_container();
+                    } else {
+                        b.flush_inline();
+                        if b.first_merged_quote().is_none() && !b.list_slots.contains(&ListSlot::SiblingItems) {
+                            b.past_bound_items = 0;
+                        }
+                    }
+                }
+                TagEnd::Item => {
+                    b.flush_inline();
+                    if matches!(b.stack.last(), Some((Container::Item(_), _, _))) {
+                        b.pop_container();
+                    }
+                }
+                TagEnd::List(_) => match b.list_slots.pop().unwrap_or(ListSlot::Nested) {
+                    ListSlot::Nested => {
+                        if matches!(b.stack.last(), Some((Container::Item(_), _, _))) {
+                            b.pop_container();
+                        }
+                        b.pop_container();
+                    }
+                    ListSlot::SiblingItems => {
+                        b.flush_inline();
+                        if !b.list_slots.contains(&ListSlot::SiblingItems) && b.first_merged_quote().is_none() {
+                            b.past_bound_items = 0;
+                        }
+                    }
+                },
+                TagEnd::Table => b.pop_container(),
                 TagEnd::Strong | TagEnd::Emphasis | TagEnd::Strikethrough | TagEnd::Link => close(&mut b),
                 TagEnd::Image => {
                     if let Some(start) = b.image_starts.pop() {
@@ -653,11 +947,8 @@ pub(super) fn parse_doc_tail(src: &str, autolink: bool) -> (ParsedDoc, Tail) {
                 inl.3.push(range, start..inl.1.text.len());
             }
             Event::TaskListMarker(checked) => {
-                if let Some(idx) = b.stack.iter().rev().find_map(|(c, _, _)| match c {
-                    Container::Item(idx) => Some(*idx),
-                    _ => None,
-                }) {
-                    b.tasks[idx] = Some((checked, range.start));
+                if let Some((Container::Item(idx), _, _)) = b.stack.last() {
+                    b.tasks[*idx] = Some((checked, range.start));
                 }
             }
             Event::Rule => {
@@ -666,6 +957,9 @@ pub(super) fn parse_doc_tail(src: &str, autolink: bool) -> (ParsedDoc, Tail) {
             }
             _ => {}
         }
+    }
+    if let Some(SkipMode::SiblingLists { start, .. } | SkipMode::ExtraQuotes { start, .. }) = skip.take() {
+        b.emit_deep_tail(src, start..src.len());
     }
     b.flush_inline();
     if let Some((text, fence, map)) = b.code.take() {
