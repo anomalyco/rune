@@ -223,6 +223,11 @@ impl Renderer {
     fn prepare_with_precision(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, atlas: &mut Atlas,
         instances: &[Instance], viewport: (u32, u32), byte_source: bool) {
         if self.springs.is_some() { assert_eq!(instances.len(), self.spring_instances); }
+        // The pinned pipelines (`variant::start_pinned`): asked for at the first prepare, taken once their thread has them.
+        if self.pinned.is_none() && self.pinned_building.is_none() { self.start_pinned(device); }
+        self.take_pinned();
+        #[cfg(feature = "frame-profile")]
+        super::report_pinned();
         let staging = self.uploads.staging(device, queue);
         if staging.lost() != self.uploads.lost.0 {
             self.uploads.lost.0 = staging.lost();
@@ -395,6 +400,8 @@ impl Renderer {
     /// and whether they hold a layer.
     fn batch(&mut self, instances: &[Instance]) {
         self.image_batches.clear();
+        self.kinds.clear();
+        self.kinds.extend(instances.iter().map(|i| i.params[1] as u8));
         let (mut start, mut bind) = (0, BatchBind::Image(0));
         let mut has_layers = false;
         self.effects.clear();

@@ -1,11 +1,15 @@
 //! Rewrites the precompiled DX12 uber shader (`uber.vs.dxbc`, `uber.fs.dxbc`, the subpixel
-//! variant's `uber.vs-dual.dxbc` and `uber.fs-dual.dxbc`, and
+//! variant's `uber.vs-dual.dxbc` and `uber.fs-dual.dxbc`, the fragments pinned to one kind each
+//! (`uber.fs-k0.dxbc`, `-k1`, `-k2`), and
 //! `src/render/uber/dxbc_hash.rs`), and the straight-alpha pass's `alpha.vs.dxbc`, `alpha.fs.dxbc` and
 //! `src/render/uber/pass_dxbc_hash.rs`, after `shader.wgsl`, `clip.wgsl`, `outline.wgsl`, the uber layout or wgpu
 //! changes, without building Rune's unit tests: `cargo run -p rune --example regen_dxbc` on
-//! Windows. It does what `RUNE_REGENERATE_DXBC=1 cargo test -p rune --lib uber_dxbc_is_fresh`
-//! does: makes the uber pipeline from WGSL on a DX12 device, takes the HLSL wgpu-hal logs, and
-//! compiles it with FXC as wgpu-hal does. `uber_dxbc_is_fresh` checks the result.
+//! Windows: the one way to regenerate them, since it writes every file, the pinned fragments and
+//! their hashes (`src/render/uber/dxbc_pinned_hash.rs`) included. It makes the uber pipeline from
+//! WGSL on a DX12 device, takes the HLSL wgpu-hal logs, and compiles it with FXC as wgpu-hal does.
+//! `uber_dxbc_is_fresh` checks the general and subpixel bytecode; the pinned fragments are checked
+//! by the build (render/dxbc.rs `PINNED_FRESH`): one compiled from other WGSL, or beside another vertex
+//! stage, isn't used.
 
 #[cfg(target_os = "windows")]
 fn main() {
@@ -19,6 +23,12 @@ fn main() {
     let uber_logged = HLSL.lock().unwrap().len();
     // The subpixel variant (render/variant.rs `dual_wgsl`): FXC takes about a minute for it.
     renderer.compile_subpixel_now(&gpu.device).expect("the subpixel pipeline compiles");
+    // The frame pass's pipelines pinned to one kind each (render/variant.rs `pinned_wgsl`).
+    let pinned_logged: Vec<(u32, usize)> = rune::render::PINNED_KINDS.iter().map(|&kind| {
+        let at = HLSL.lock().unwrap().len();
+        renderer.compile_pinned_now(&gpu.device, kind).expect("the pinned pipeline compiles");
+        (kind, at)
+    }).collect();
     drop(renderer);
     let logged = HLSL.lock().unwrap();
     let stage = |logged: &[String], name: &str| {
@@ -27,7 +37,8 @@ fn main() {
         text.split_once(":\n").unwrap().1.to_owned()
     };
     let (vertex, fragment) = (stage(&logged[..uber_logged], "vs"), stage(&logged[..uber_logged], "fs"));
-    let (dual_vertex, dual_fragment) = (stage(&logged[uber_logged..], "vs"), stage(&logged[uber_logged..], "fs"));
+    let dual_end = pinned_logged.first().map_or(logged.len(), |p| p.1);
+    let (dual_vertex, dual_fragment) = (stage(&logged[uber_logged..dual_end], "vs"), stage(&logged[uber_logged..dual_end], "fs"));
     let (vs, fs) = (fxc(&vertex, "vs", "vs_5_1"), fxc(&fragment, "fs", "ps_5_1"));
     let started = std::time::Instant::now();
     let (vs_dual, fs_dual) = (fxc(&dual_vertex, "vs", "vs_5_1"), fxc(&dual_fragment, "fs", "ps_5_1"));
@@ -40,13 +51,36 @@ fn main() {
     std::fs::write(format!("{root}/uber.fs.dxbc"), &fs).unwrap();
     std::fs::write(format!("{root}/uber.vs-dual.dxbc"), &vs_dual).unwrap();
     std::fs::write(format!("{root}/uber.fs-dual.dxbc"), &fs_dual).unwrap();
+    // Each pinned fragment beside the shared vertex stage (render/dxbc.rs `uber_pinned`), and its file's BLAKE3.
+    let mut pinned_fs = Vec::new();
+    for (n, &(kind, at)) in pinned_logged.iter().enumerate() {
+        let end = pinned_logged.get(n + 1).map_or(logged.len(), |p| p.1);
+        let started = std::time::Instant::now();
+        let fs_pinned = fxc(&stage(&logged[at..end], "fs"), "fs", "ps_5_1");
+        std::fs::write(format!("{root}/uber.fs-k{kind}.dxbc"), &fs_pinned).unwrap();
+        pinned_fs.push(format!("\"{}\"", blake3::hash(&fs_pinned).to_hex()));
+        println!("uber.fs-k{kind}.dxbc {} bytes (FXC {:.1} s)", fs_pinned.len(), started.elapsed().as_secs_f64());
+    }
     let dual = blake3::hash(format!("{dual_vertex}\0{dual_fragment}").as_bytes()).to_hex();
     std::fs::write(format!("{root}/src/render/uber/dxbc_hash.rs"), format!(
-        "// Written by `cargo run -p rune --example regen_dxbc` (or `RUNE_REGENERATE_DXBC=1 cargo test -p rune --lib uber_dxbc_is_fresh`) on Windows.\n\
+        "// Written by `cargo run -p rune --example regen_dxbc` on Windows, the one way to regenerate the uber bytecode:\n\
+         // it also writes the pinned fragments and their hashes (dxbc_pinned_hash.rs), which nothing else updates.\n\
          pub(super) const UBER_DXBC_WGSL_BLAKE3: &str = \"{wgsl}\";\n\
          pub(super) const UBER_DXBC_ABI_FNV64: u64 = {abi:#018x};\n\
          #[cfg(test)]\npub(super) const UBER_DXBC_HLSL_BLAKE3: &str = \"{hlsl}\";\n\
          #[cfg(test)]\npub(super) const UBER_DXBC_DUAL_HLSL_BLAKE3: &str = \"{dual}\";\n")).unwrap();
+    // What each pinned fragment was compiled from, and the bytes it was compiled beside: render/dxbc.rs uses one only
+    // while build.rs finds the same WGSL hash and the same two files (`PINNED_FRESH`).
+    let pinned_wgsl: Vec<String> = pinned_logged.iter()
+        .map(|&(kind, _)| format!("\"{}\"", rune::render::pinned_wgsl_blake3(kind).expect("shader.wgsl's PINNED_KIND"))).collect();
+    let pinned_vs = blake3::hash(&vs).to_hex();
+    std::fs::write(format!("{root}/src/render/uber/dxbc_pinned_hash.rs"), format!(
+        "// Written by `cargo run -p rune --example regen_dxbc` on Windows with uber.fs-k0/k1/k2.dxbc; nothing else writes them.\n\
+         /// BLAKE3 of the WGSL each pinned fragment was compiled from (render/variant.rs `pinned_wgsl`, `PINNED` order).\n\
+         pub(super) const UBER_DXBC_PINNED_WGSL_BLAKE3: [&str; {n}] = [{}];\n\
+         /// BLAKE3 of each pinned fragment's file, and of the `uber.vs.dxbc` it was compiled beside.\n\
+         pub(super) const UBER_DXBC_PINNED_FS_BLAKE3: [&str; {n}] = [{}];\n\
+         pub(super) const UBER_DXBC_PINNED_VS_BLAKE3: &str = \"{pinned_vs}\";\n", pinned_wgsl.join(", "), pinned_fs.join(", "), n = pinned_wgsl.len())).unwrap();
     println!("uber.vs.dxbc {} bytes, uber.fs.dxbc {} bytes, uber.fs-dual.dxbc {} bytes, WGSL {wgsl}", vs.len(), fs.len(), fs_dual.len());
     drop(logged);
 
