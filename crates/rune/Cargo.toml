@@ -82,6 +82,7 @@ accesskit = "0.25.2"
 procwatch = { workspace = true, optional = true }
 subsecond = { version = "=0.7.10", optional = true }
 dioxus-devtools = { version = "=0.7.10", optional = true }
+rune-core = { workspace = true }
 rune-motion = { workspace = true }
 rune-staging = { workspace = true }
 rune-taffy = { workspace = true }
@@ -103,7 +104,6 @@ bytemuck = { workspace = true }
 png = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-portable-atomic = "1"
 image = { workspace = true, features = ["png"] }
 blake3 = { workspace = true }
 rustc-hash = { workspace = true }
@@ -150,7 +150,6 @@ arboard = { version = "3.6", default-features = false, features = ["wayland-data
 parley_engine = { workspace = true }
 # A page's spell checker: Hunspell dictionaries, fetched when a field first checks (`spell/web.rs`).
 spellbook = "0.4"
-web-time = "1"
 wasm-bindgen = { workspace = true }
 wasm-bindgen-futures = { workspace = true }
 js-sys = { workspace = true }
@@ -226,7 +225,7 @@ windows-core = { workspace = true }
 # Vulkan backend.
 wgpu = { workspace = true, features = ["dx12"] }
 accesskit_windows = { version = "0.35.2", optional = true }
-windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Accessibility", "Win32_UI_HiDpi", "Win32_UI_Input_Ime", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_LibraryLoader", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Performance", "Win32_System_Pipes", "Win32_System_RemoteDesktop", "Win32_System_StationsAndDesktops", "Win32_System_Threading", "Win32_System_WindowsProgramming", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_System_Time", "Win32_Globalization"] }
+windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Accessibility", "Win32_UI_HiDpi", "Win32_UI_Input_Ime", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_LibraryLoader", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Performance", "Win32_System_Pipes", "Win32_System_RemoteDesktop", "Win32_System_StationsAndDesktops", "Win32_System_Threading", "Win32_System_WindowsProgramming", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_Globalization"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # AT-SPI over D-Bus on its own async-io thread, started only when the desktop's accessibility bus is on.

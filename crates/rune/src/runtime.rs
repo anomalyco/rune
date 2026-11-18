@@ -8,8 +8,7 @@
 
 use std::any::Any;
 // The runtime's maps hash node ids and paths every commit; SipHash's DoS resistance buys nothing here.
-pub(crate) type HashMap<K, V> = std::collections::HashMap<K, V, rustc_hash::FxBuildHasher>;
-pub(crate) type HashSet<K> = std::collections::HashSet<K, rustc_hash::FxBuildHasher>;
+pub(crate) use rune_core::{HashMap, HashSet};
 use std::marker::PhantomData;
 use std::rc::Rc;
 use std::sync::Arc;

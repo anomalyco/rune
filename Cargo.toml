@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "crates/rune",
+    "crates/rune-core",
     "crates/rune-ref",
     "crates/rune-motion",
     "crates/rune-i18n",
@@ -59,6 +60,7 @@ members = [
 # (WinRT features on `windows`); pass `--workspace` to check everything.
 default-members = [
     "crates/rune",
+    "crates/rune-core",
     "crates/rune-ref",
     "crates/rune-motion",
     "crates/rune-i18n",
@@ -124,6 +126,7 @@ license = "MIT"
 # Internal workspace crates.
 procwatch = { path = "crates/procwatch" }
 rune = { path = "crates/rune", default-features = false }
+rune-core = { path = "crates/rune-core" }
 rune-fx = { path = "crates/rune-fx" }
 rune-highlights = { path = "crates/rune-highlights" }
 rune-kit = { path = "crates/rune-kit", default-features = false }

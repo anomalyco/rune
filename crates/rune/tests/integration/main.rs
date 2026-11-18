@@ -39,6 +39,7 @@ mod inert;
 mod instant_keeps_flight;
 mod keep_stuck;
 mod key_paths;
+mod latest;
 mod launch;
 mod launch_ancestor_spring;
 mod layout_read;

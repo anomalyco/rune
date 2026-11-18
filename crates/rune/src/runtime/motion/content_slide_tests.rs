@@ -3,7 +3,9 @@ use crate::growth::{GROWTH, SUBSTEP};
 
 /// A row growth from `h` toward `target`.
 fn growth(h: f32, target: f32) -> GrowTrack {
-    GrowTrack { target, ..GrowTrack::settled(h) }
+    let mut g = GrowTrack::settled(h);
+    g.target = target;
+    g
 }
 
 #[test]

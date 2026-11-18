@@ -30,10 +30,10 @@ use pool::Pool;
 /// [`task::spawn`](crate::task::spawn) work after the debounce, where it can wait on the network.
 ///
 /// Dropping a `Latest` cancels it: nothing it asked for lands or wakes the window afterwards.
-/// State outlives a closed window (see [`App`](crate::App)), so an app that wants a close to stop
+/// State outlives a closed window (see `App`), so an app that wants a close to stop
 /// its requests calls `cancel` from `App::on_close`.
 ///
-/// ```no_run
+/// ```ignore
 /// use std::time::Duration;
 /// use rune::{AppSpec, Cx, El, Latest, TextEdit, TextStyle, Tx, col, text, text_input};
 ///
@@ -200,7 +200,7 @@ impl<T: Send + 'static> Default for Latest<T> {
 
 impl<T: Send + 'static> Latest<T> {
     /// A `Latest` that calls `waker` once each time an answer lands: the one `AppSpec::setup`
-    /// hands over, or `Arc::new(move || handle.wake())` with an [`AppHandle`](crate::AppHandle).
+    /// hands over, or `Arc::new(move || handle.wake())` with an `AppHandle`.
     pub fn new(waker: Waker) -> Self {
         Self::with(Some(waker))
     }

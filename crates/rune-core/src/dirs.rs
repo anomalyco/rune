@@ -2,7 +2,7 @@
 //! each platform expects, plus the user's home and Downloads folders.
 //!
 //! ```no_run
-//! let dirs = rune::dirs::AppDirs::new("com.example.notes").expect("a home folder");
+//! let dirs = rune_core::dirs::AppDirs::new("com.example.notes").expect("a home folder");
 //! let drafts = dirs.data().join("drafts.json");
 //! let crash_log = dirs.logs().join("crash.log");
 //! ```

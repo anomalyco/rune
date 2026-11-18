@@ -509,7 +509,7 @@ impl<S: 'static> Host<S> {
         }
         #[cfg(target_os = "windows")]
         l.native.video_layers.drawn(|key| renderer.surface_drew_isolated(key));
-        crate::marks::presented();
+        super::frame_presented();
         crate::render::gpu_events::presented();
         #[cfg(feature = "frame-profile")]
         let fp_frame = match (fp_start, fp_acquired, fp_built, fp_uploaded, fp_encoded, fp_submitted) {

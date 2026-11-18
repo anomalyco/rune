@@ -89,7 +89,7 @@ export const principles: Entry[] = [
     code: [
       at("crates/rune/src/edit.rs", "text input and IME"),
       at("crates/rune/src/a11y/tree.rs", "the accessibility tree (AccessKit)"),
-      at("crates/rune/src/theme.rs", "themes as data"),
+      at("crates/rune-core/src/theme.rs", "themes as data"),
       at("themes/opencode", "OpenCode's theme"),
     ],
   },
@@ -323,7 +323,7 @@ export const layers: Entry[] = [
     code: [
       at("crates/rune/src/render.rs"),
       at("crates/rune/src/shaders/shader.wgsl", "one uber-quad pipeline"),
-      at("crates/rune/src/shape.rs", "strokes and fills"),
+      at("crates/rune-core/src/shape.rs", "strokes and fills"),
     ],
   },
   {

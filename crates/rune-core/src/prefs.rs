@@ -2,7 +2,7 @@
 //! config directory, read and written with serde.
 //!
 //! ```no_run
-//! let mut prefs = rune::prefs::Prefs::open("com.example.notes");
+//! let mut prefs = rune_core::prefs::Prefs::open("com.example.notes");
 //! let size: f32 = prefs.get("text_size").unwrap_or(14.0);
 //! prefs.set("text_size", &(size + 1.0)).ok();
 //! ```
@@ -22,13 +22,15 @@ use std::{
     collections::BTreeMap,
     fmt, io,
     path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
 };
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
 const FILE: &str = "prefs.json";
+#[cfg(not(target_arch = "wasm32"))]
 static NEXT_TMP: AtomicU64 = AtomicU64::new(0);
 
 /// Why a change couldn't be saved. The value is still set in memory.

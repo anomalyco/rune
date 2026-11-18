@@ -32,8 +32,7 @@ pub(crate) struct ViewDefaults {
     pub(crate) marks: Rc<[super::TextMark]>,
 }
 
-/// Wakes the shell from another thread (new data arrived); a no-op headless.
-pub type Waker = Arc<dyn Fn() + Send + Sync>;
+pub use rune_core::Waker;
 
 thread_local! {
     pub(super) static COMMITS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };

@@ -20,8 +20,9 @@ pub enum LineCap {
     Round,
 }
 
+#[doc(hidden)]
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) enum Op {
+pub enum Op {
     Stroke {
         points: Vec<[f32; 2]>,
         closed: bool,
@@ -37,7 +38,7 @@ pub(crate) enum Op {
 
 /// A list of strokes and fills, painted in order over the element's fill and under its text.
 ///
-/// ```
+/// ```ignore
 /// use rune::{Color, Shape, canvas};
 /// let wave: Vec<[f32; 2]> = (0..64).map(|i| [i as f32 * 4.0, 20.0 + (i as f32 * 0.3).sin() * 16.0]).collect();
 /// let meter = Shape::new()
@@ -47,10 +48,12 @@ pub(crate) enum Op {
 /// ```
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Shape {
-    pub(crate) ops: Vec<Op>,
+    #[doc(hidden)]
+    pub ops: Vec<Op>,
     /// Coordinates span this box and stretch to the element's size (SVG `viewBox` with
     /// `preserveAspectRatio="none"`); stroke widths stay in points.
-    pub(crate) view_box: Option<[f32; 2]>,
+    #[doc(hidden)]
+    pub view_box: Option<[f32; 2]>,
 }
 
 impl Shape {
@@ -130,7 +133,8 @@ impl Shape {
     /// Whether it draws more than one piece, so two can overlap: a stroke of two or more
     /// segments (they meet at a joint), or more than one stroke or fill. Faded, overlapping
     /// pieces blend twice where they meet, so a fade paints such a shape through a layer.
-    pub(crate) fn overlaps(&self) -> bool {
+    #[doc(hidden)]
+    pub fn overlaps(&self) -> bool {
         let pieces = |op: &Op| match op {
             Op::Stroke { points, closed, .. } => if *closed { points.len() } else { points.len() - 1 },
             Op::Fill { .. } => 1,
@@ -142,7 +146,7 @@ impl Shape {
     /// trace in order along their combined length, the one in progress cut where the drawing has
     /// got to, and each fill fades in over the last [`DRAW_RAMP`] points of line before it (an
     /// arrowhead lands as its line arrives). With no strokes, the fills fade in together.
-    /// [`Transition::draw`](crate::Transition::draw) animates it.
+    /// `Transition::draw` animates it.
     pub fn drawn(&self, t: f32) -> Shape {
         self.trimmed(0.0, if t.is_nan() { 1.0 } else { t })
     }
@@ -151,7 +155,7 @@ impl Shape {
     /// Core Animation's `strokeStart` and `strokeEnd` trim a path: each stroke keeps the stretch
     /// of it inside that span, with its own caps at both cut ends, and each fill fades in as `end`
     /// reaches it, as under [`Self::drawn`]. Nothing of the strokes draws when `end` is at or
-    /// before `start`. [`El::live_trim`](crate::El::live_trim) moves it every frame.
+    /// before `start`. `El::live_trim` moves it every frame.
     pub fn trimmed(&self, start: f32, end: f32) -> Shape {
         let unit = |v: f32, nan: f32| if v.is_nan() { nan } else { v.clamp(0.0, 1.0) };
         let (start, t) = (unit(start, 0.0), unit(end, 1.0));
@@ -336,7 +340,8 @@ fn segments(length: f32) -> usize {
 
 /// Ear-clips a simple polygon. Each triangle is three vertex indices and a mask of which of its
 /// edges (a→b, b→c, c→a as bits 0, 1, 2) lie on the polygon's boundary.
-pub(crate) fn triangulate(points: &[[f32; 2]]) -> Vec<([usize; 3], u32)> {
+#[doc(hidden)]
+pub fn triangulate(points: &[[f32; 2]]) -> Vec<([usize; 3], u32)> {
     let n = points.len();
     if n < 3 {
         return Vec::new();

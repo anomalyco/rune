@@ -5,45 +5,45 @@
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 
-pub(crate) trait Empty: Clone + 'static {
+pub trait Empty: Clone + 'static {
     const EMPTY: &'static Self;
 }
 
 #[derive(Clone)]
-pub(crate) struct Cold<T: Empty>(Option<Rc<T>>);
+pub struct Cold<T: Empty>(Option<Rc<T>>);
 
 impl<T: Empty> Default for Cold<T> {
     fn default() -> Self { Cold(None) }
 }
 
 impl<T: Empty> Cold<T> {
-    pub(crate) const NONE: Self = Cold(None);
+    pub const NONE: Self = Cold(None);
 
     #[inline(always)]
-    pub(crate) fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.0.is_none()
     }
 
     /// The value, moved out when this was its only owner.
-    pub(crate) fn into_owned(self) -> T {
+    pub fn into_owned(self) -> T {
         self.0.map_or_else(|| T::EMPTY.clone(), Rc::unwrap_or_clone)
     }
 
     #[inline(always)]
-    pub(crate) fn get(&self) -> Option<&T> {
+    pub fn get(&self) -> Option<&T> {
         self.0.as_deref()
     }
 
     #[inline(always)]
-    pub(crate) fn get_mut_if_some(&mut self) -> Option<&mut T> {
+    pub fn get_mut_if_some(&mut self) -> Option<&mut T> {
         self.0.as_mut().map(Rc::make_mut)
     }
 
-    pub(crate) fn from_owned(value: T) -> Self {
+    pub fn from_owned(value: T) -> Self {
         Cold(Some(Rc::new(value)))
     }
 
-    pub(crate) fn ptr_eq(a: &Self, b: &Self) -> bool {
+    pub fn ptr_eq(a: &Self, b: &Self) -> bool {
         match (&a.0, &b.0) {
             (None, None) => true,
             (Some(x), Some(y)) => Rc::ptr_eq(x, y),
@@ -72,16 +72,15 @@ impl<T: Empty> DerefMut for Cold<T> {
 
 /// A heap-allocated value shared across `MemoCache`, `El` and `Node`, copied only when mutated.
 #[derive(Clone, Debug)]
-pub(crate) struct SharedBox<T: Clone>(Rc<T>);
+pub struct SharedBox<T: Clone>(Rc<T>);
 
 impl<T: Clone> SharedBox<T> {
-    pub(crate) fn new(value: T) -> Self { Self(Rc::new(value)) }
+    pub fn new(value: T) -> Self { Self(Rc::new(value)) }
 
     /// The value, copied only when something else shares it.
-    pub(crate) fn into_inner(self) -> T { Rc::unwrap_or_clone(self.0) }
+    pub fn into_inner(self) -> T { Rc::unwrap_or_clone(self.0) }
 
-    #[allow(dead_code)]
-    pub(crate) fn ptr_eq(a: &Self, b: &Self) -> bool { Rc::ptr_eq(&a.0, &b.0) }
+    pub fn ptr_eq(a: &Self, b: &Self) -> bool { Rc::ptr_eq(&a.0, &b.0) }
 }
 
 impl<T: Clone> Deref for SharedBox<T> {
