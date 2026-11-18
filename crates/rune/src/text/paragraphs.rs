@@ -685,10 +685,9 @@ impl TextSystem {
                 _ => items.push((f, kept)),
             }
         }
-        let items_len = items.len();
         let pretty = spec.by_line && spec.pretty() && !input;
         let mut waiting = 0;
-        let (mut paragraphs, mut y) = (Vec::with_capacity(items_len), 0.0f64);
+        let (mut paragraphs, mut y) = (Vec::with_capacity(items.len()), 0.0f64);
         let (mut width, mut full_width, mut fresh) = (0.0f32, 0.0f32, 0);
         for (k, ((a, b, flow, key, isolates, run), kept)) in items.into_iter().enumerate() {
             let block = spec.cold.blocks.get(k).copied().unwrap_or(Block::Paragraph);
@@ -733,20 +732,18 @@ impl TextSystem {
                     self.layout_keyed(Some(key), &text, &spans, blocks, &pills, style, scale, max_width, align, spec.wrap_anywhere, pretty, Keep::Owned, flow.base())
                 }
             };
-            // Parley leaves out an empty trailing line after `\n` in a single layout (`"a\n"` is 1 line tall).
-            let empty_h = if spec.by_line && items_len > 1 && k + 1 == items_len { 0.0 } else { layout.height().max(line) };
             // A paragraph kept as it was keeps its measures too: touching 2,000 layouts to read
             // them again costs more than the edit.
             let (mut height, mut widths) = match (kept, again) {
-                (Some(o), None) if !(a == b && (o.height == 0.0) != (empty_h == 0.0)) => (o.height, o.widths),
-                _ => (if a == b { empty_h } else { layout.height() }, [layout.width(), layout.full_width()]),
+                (Some(o), None) => (o.height, o.widths),
+                _ => (if a == b { layout.height().max(line) } else { layout.height() }, [layout.width(), layout.full_width()]),
             };
             let want_frac = if layout.len() > 1 { (y - y.floor()) as f32 } else { 0.0 };
             let have_frac = match (kept, again) { (Some(o), None) => o.y_frac, _ => 0.0 };
             if (want_frac - have_frac).abs() > 1e-5 {
                 line_break::rebreak_at_y(Rc::make_mut(&mut layout), blocks, style.size, scale, max_width, align, f64::from(want_frac));
                 self.layout_ids.build(&layout);
-                (height, widths) = (if a == b { empty_h } else { layout.height() }, [layout.width(), layout.full_width()]);
+                (height, widths) = (if a == b { layout.height().max(line) } else { layout.height() }, [layout.width(), layout.full_width()]);
             }
             let py = if want_frac != 0.0 { y.floor() as f32 } else { y.round() as f32 };
             (width, full_width) = (width.max(widths[0]), full_width.max(widths[1]));

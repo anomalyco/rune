@@ -8,11 +8,10 @@ impl El {
     /// each line when spans are present, and long plain/colour-only ASCII interiors wait as runs)
     /// while staying one selectable text element in its own direction.
     ///
-    /// An empty trailing slice after a final `\n` takes zero height so `"a\n"` matches a single
-    /// layout's height. Silently falls back to a single layout when the text does not wrap, is
-    /// truncated or line-clamped, is live (`El::live` / `El::advance_in`), is redacted, is an
-    /// input, or is a shared-run cell; a text flight landing on a `by_line` node is dropped so the
-    /// text appears in place without flying.
+    /// Silently falls back to a single layout when the text does not wrap, is truncated or
+    /// line-clamped, is live (`El::live` / `El::advance_in`), is redacted, is an input, or is a
+    /// shared-run cell; a text flight landing on a `by_line` node is dropped so the text appears
+    /// in place without flying.
     pub fn by_line(mut self) -> El {
         if let Some(t) = self.text.as_mut() {
             t.by_line = true;
