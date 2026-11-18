@@ -66,7 +66,7 @@ export const principles: Entry[] = [
     spec: [{ label: "Target", values: ["app work per animated frame: 0"], mono: true }],
     code: [
       at("crates/rune-motion/src/scene.rs", "spring tracks"),
-      at("crates/rune/tests/live.rs", "no view, layout or shaping"),
+      at("crates/rune/tests/integration/live.rs", "no view, layout or shaping"),
     ],
   },
   {
