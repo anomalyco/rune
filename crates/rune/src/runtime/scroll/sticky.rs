@@ -581,7 +581,7 @@ impl<S: 'static> Runtime<S> {
                 let to = (laid - f64::from(k.was)).clamp(0.0, st.max);
                 if pass > 0 && (to - st.offset).abs() < 0.5 { continue; }
                 st.offset = to;
-                st.land(stick);
+                st.keep_land(stick);
                 moved = true;
             }
             if !moved || !self.virtual_window_changed() { break; }
@@ -608,7 +608,7 @@ impl<S: 'static> Runtime<S> {
             let to = (st.offset + f64::from(delta)).clamp(0.0, st.max);
             if (to - st.offset).abs() < 1e-5 { continue; }
             st.offset = to;
-            st.land(stick && delta >= 0.0);
+            st.keep_land(stick && delta >= 0.0);
             st.moved();
             moved = true;
         }
@@ -650,7 +650,7 @@ impl<S: 'static> Runtime<S> {
                 continue;
             }
             st.offset = to;
-            st.land(stick && !growing);
+            st.keep_land(stick && !growing);
             st.moved();
             moved = true;
         }

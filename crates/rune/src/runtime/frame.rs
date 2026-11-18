@@ -775,7 +775,7 @@ impl<S: 'static> Runtime<S> {
         self.scene.set_time(self.t);
         self.caught_up += step as f32;
         self.step_growth(step as f32);
-        self.step_scroll(step as f32);
+        self.step_scroll_by(step as f32, true);
     }
 
     pub(super) fn step_motion(&mut self, dt: f64, instant_scroll: bool) -> bool {
