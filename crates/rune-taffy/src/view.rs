@@ -167,17 +167,28 @@ where
                 (s.style.display(), s.child_len() != 0, s.style.whole_rows_column())
             };
 
-            let mut output = match (display_mode, has_children) {
+            match (display_mode, has_children) {
                 (Display::None, _) => compute_hidden_layout(view, node_id),
-                (Display::Block, true) => compute_block_layout(view, node_id, inputs, block_ctx),
-                (Display::FlowRoot, true) => compute_block_layout(view, node_id, inputs, None),
-                (Display::Flex, true) => {
-                    view.in_whole_rows_col = whole_col;
-                    let r = compute_flexbox_layout(view, node_id, inputs);
-                    view.in_whole_rows_col = false;
-                    r
+                (Display::Block | Display::FlowRoot | Display::Flex | Display::Grid, true) => {
+                    crate::stack::maybe_grow(|| {
+                        let mut output = match display_mode {
+                            Display::Block => compute_block_layout(view, node_id, inputs, block_ctx),
+                            Display::FlowRoot => compute_block_layout(view, node_id, inputs, None),
+                            Display::Flex => {
+                                view.in_whole_rows_col = whole_col;
+                                let r = compute_flexbox_layout(view, node_id, inputs);
+                                view.in_whole_rows_col = false;
+                                r
+                            }
+                            Display::Grid => compute_grid_layout(view, node_id, inputs),
+                            Display::None => unreachable!(),
+                        };
+                        if inputs.run_mode == RunMode::PerformLayout {
+                            compute_oof_layout(view, node_id, &mut output);
+                        }
+                        output
+                    })
                 }
-                (Display::Grid, true) => compute_grid_layout(view, node_id, inputs),
                 (_, false) => {
                     // SAFETY: `idx` is in bounds of both `slots` and `node_idx`.
                     let (ctx, style) = unsafe {
@@ -189,13 +200,7 @@ where
                     };
                     (view.measure_leaf)(inputs, ctx, style)
                 }
-            };
-
-            if inputs.run_mode == RunMode::PerformLayout {
-                compute_oof_layout(view, node_id, &mut output);
             }
-
-            output
         });
         self.in_whole_rows_col = round_for_parent;
         if round_for_parent && (inputs.run_mode == RunMode::ComputeSize || inputs.known_dimensions.height.is_none_or(|h| h == h.floor())) {
