@@ -136,6 +136,42 @@ pub mod pace {
 
 pub const SUBSTEP: f32 = 1.0 / 240.0;
 
+/// The steps that advance growth by `dt` seconds: whole `SUBSTEP`s, then what is left, so a
+/// frame shows the motion at its own time rather than at the last whole substep before it (at
+/// 144 or 165 Hz a frame would otherwise advance one substep or two, unevenly). At most a second.
+pub(crate) fn substeps(dt: f32) -> Substeps {
+    let dt = dt.clamp(0.0, 1.0);
+    let whole = (dt / SUBSTEP + 1e-4).floor();
+    let left = dt - whole * SUBSTEP;
+    Substeps { whole: whole as u32, left: if left > 1e-6 { left } else { 0.0 } }
+}
+
+/// [`substeps`]: a frame's growth steps, copied to each track that takes them.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Substeps {
+    whole: u32,
+    left: f32,
+}
+
+/// `n` whole substeps.
+impl From<usize> for Substeps {
+    fn from(n: usize) -> Substeps { Substeps { whole: n as u32, left: 0.0 } }
+}
+
+impl Iterator for Substeps {
+    type Item = f32;
+    fn next(&mut self) -> Option<f32> {
+        if self.whole > 0 {
+            self.whole -= 1;
+            Some(SUBSTEP)
+        } else if self.left > 0.0 {
+            Some(std::mem::take(&mut self.left))
+        } else {
+            None
+        }
+    }
+}
+
 /// How fast a fold's feather deepens once its edge starts moving (points per second): 28 pt in
 /// under 50 ms, so the edge softens as the spring picks up rather than in its first frame.
 const FOLD_FEATHER_GROW: f32 = 600.0;
@@ -444,7 +480,11 @@ impl GrowTrack {
 
     /// Advance one fixed substep.
     pub fn step(&mut self, spring: Spring, edge: &StreamEdge, carrying_tail: bool) {
-        let dt = SUBSTEP;
+        self.step_by(SUBSTEP, spring, edge, carrying_tail);
+    }
+
+    /// [`Self::step`] for `dt` seconds, at most a `SUBSTEP`.
+    pub(crate) fn step_by(&mut self, dt: f32, spring: Spring, edge: &StreamEdge, carrying_tail: bool) {
         let spring = spring.with_duration(spring.duration.max(self.duration) * edge.duration.max(0.05));
         let aim = self.stage.aim(self.target);
         let rem = aim - self.h;
@@ -460,7 +500,7 @@ impl GrowTrack {
             self.h = self.target;
             self.v = 0.0;
         } else if matches!(self.pace, Pace::Climbing { .. }) && rem > 0.0 {
-            self.climb(rem, carrying_tail);
+            self.climb(rem, carrying_tail, dt);
         } else if !self.streaming && let Motion::Fold { spring: own, .. } = self.motion {
             // A fold: its own spring for its own time, however far, from the velocity it has.
             let (x, v) = own.sample(self.h, self.v, aim, dt);
@@ -540,8 +580,7 @@ impl GrowTrack {
     }
 
     /// One substep of a streaming row's climb `rem` points short of its target (see [`pace`]).
-    fn climb(&mut self, rem: f32, carrying_tail: bool) {
-        let dt = SUBSTEP;
+    fn climb(&mut self, rem: f32, carrying_tail: bool, dt: f32) {
         let Pace::Climbing { ended } = &mut self.pace else { return };
         *ended = if self.streaming { 0.0 } else { *ended + dt };
         let landing = (*ended / pace::LAND_RAMP).min(1.0);

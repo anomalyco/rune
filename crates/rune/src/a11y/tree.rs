@@ -20,10 +20,14 @@ const TOOLTIP: AkId = AkId(2);
 const ANNOUNCER: AkId = AkId(3);
 /// Bits under an element's id for the nodes it owns: its text's lines and links.
 const SUB: u32 = 16;
-const LINK_BASE: u64 = 0x8000;
+pub(crate) const LINK_BASE: u64 = 0x8000;
+pub(crate) const LINES_BOX_CLASS: &str = "\x1frune-lines";
+pub(crate) const LINE_CLASS: &str = "\x1frune-line";
 
 pub(crate) fn element_id(id: NodeId) -> AkId { AkId(id.0 << SUB) }
-pub(crate) fn line_id(id: NodeId, line: usize) -> AkId { AkId((id.0 << SUB) | (1 + line as u64).min(LINK_BASE - 1)) }
+pub(crate) fn line_id(id: NodeId, line: usize) -> AkId { AkId((id.0 << SUB) | (1 + line as u64).min(LINK_BASE - 2)) }
+pub(crate) fn lines_box_id(id: NodeId) -> AkId { AkId((id.0 << SUB) | (LINK_BASE - 1)) }
+pub(crate) fn drawn_line_id(id: NodeId, line: usize) -> AkId { AkId((id.0 << SUB) | (1 + line as u64).min(LINK_BASE - 2)) }
 pub(crate) fn link_id(id: NodeId, k: usize) -> AkId { AkId((id.0 << SUB) | (LINK_BASE + k as u64).min((1 << SUB) - 1)) }
 /// The runtime node an AccessKit id names, and which of its own nodes: 0 the element, a line
 /// `1..LINK_BASE`, a link from `LINK_BASE`.
@@ -35,6 +39,8 @@ pub(crate) fn sub_link(sub: u64) -> Option<usize> { (sub >= LINK_BASE).then(|| (
 struct Stamp {
     commits: u64,
     scrolls: u64,
+    text_fills: u64,
+    text_settled: u64,
     focus: u64,
     animating: bool,
     viewport: (u32, u32, u32),
@@ -53,6 +59,9 @@ pub(crate) struct A11yTree {
     /// The last walk's scroll viewports (node index and place), which a turn that only
     /// scrolled rebuilds alone.
     scrollers: Vec<(usize, Walk)>,
+    /// The last walk's long fields, whose `lines_box_id` containers rebuild on scroll or lazy fill
+    /// without rebuilding the field node or copying its value.
+    long_fields: Vec<usize>,
     stamp: Option<Stamp>,
     /// The next update must hold the whole tree (activation, or the adapter asked again).
     full: bool,
@@ -93,6 +102,9 @@ pub(super) struct Walk {
     pub(super) shift: [f32; 2],
     /// Inside a scroll viewport, so it can be scrolled into view.
     pub(super) scrolled: bool,
+    /// Vertical window-space clip band from clipping/scrolling ancestors, for a long field's
+    /// drawn-line geometry.
+    pub(super) clip_y: [f32; 2],
 }
 
 /// A node the walk found: the element it is (`None` for the root), where it is, and its
@@ -114,6 +126,7 @@ struct Found {
     kids: Vec<(usize, AkId)>,
     focus: AkId,
     scrollers: Vec<(usize, Walk)>,
+    long_fields: Vec<(usize, Walk, u64)>,
 }
 
 #[cfg(test)]
@@ -162,64 +175,88 @@ impl<S: 'static> Runtime<S> {
         let stamp = self.a11y_stamp();
         let tree = self.a11y.as_ref()?;
         if !tree.full && !tree.held && tree.stamp.as_ref() == Some(&stamp) { return None; }
-        // Only scrolled: the rows keep their bounds in their viewport's content space, so only
-        // the viewports' offsets change. Sticky elements move against the content; they don't.
+        // Only scrolled or lazily shaped waiting paragraphs: rows keep their bounds in their
+        // viewport's content space, so only scroll viewports and long fields' drawn-line
+        // containers change, with zero work proportional to a field's full text.
         let scrolled_only = !tree.full && !self.has_sticky
-            && tree.stamp.as_ref().is_some_and(|s| Stamp { scrolls: stamp.scrolls, ..s.clone() } == stamp);
-        if scrolled_only { return self.a11y_scrolled(stamp); }
-        let found = self.a11y_walk();
-        let tree = self.a11y.as_ref()?;
-        let full = tree.full;
-        let hold = full && self.announcement.recent();
-        // Held words go out with the root, whose node carries the announcer.
-        let held = tree.held;
-        let changed: Vec<bool> = found.slots.iter().enumerate()
-            .map(|(k, s)| full || (held && k == 0) || tree.sent.get(&s.id.0).is_none_or(|old| old.print != s.print)).collect();
-        let nodes = self.a11y_build(&found, &changed, &tree.name, hold);
-        if hold { self.dirty = true; }
-        let tree = self.a11y.as_mut()?;
-        tree.stamp = Some(stamp);
-        tree.full = false;
-        tree.held = hold;
-        tree.pass = tree.pass.wrapping_add(1);
-        let pass = tree.pass;
-        for s in &found.slots {
-            if let Some(old) = tree.sent.get_mut(&s.id.0) { old.pass = pass; }
-        }
-        let mut out = Vec::with_capacity(nodes.len());
-        let (mut structure, mut moved) = (false, false);
-        for (id, node, print) in nodes {
-            // A text's lines and links come and go with it, and carry its fingerprint.
-            match tree.sent.get_mut(&id.0) {
-                Some(old) => {
-                    structure |= old.node.children() != node.children();
-                    moved |= old.node.bounds() != node.bounds() || old.node.transform() != node.transform();
-                    old.pass = pass;
-                    old.print = print;
-                    old.node = node.clone();
-                }
-                None => {
-                    structure = true;
-                    tree.sent.insert(id.0, Sent { print, pass, node: node.clone() });
+            && tree.stamp.as_ref().is_some_and(|s| Stamp { scrolls: stamp.scrolls, text_fills: stamp.text_fills, ..s.clone() } == stamp);
+        let update = if scrolled_only {
+            self.a11y_scrolled(stamp)?
+        } else {
+            let found = self.a11y_walk();
+            let tree = self.a11y.as_ref()?;
+            let full = tree.full;
+            let hold = full && self.announcement.recent();
+            // Held words go out with the root, whose node carries the announcer.
+            let held = tree.held;
+            let changed: Vec<bool> = found.slots.iter().enumerate()
+                .map(|(k, s)| full || (held && k == 0) || tree.sent.get(&s.id.0).is_none_or(|old| old.print != s.print)).collect();
+            let mut nodes = self.a11y_build(&found, &changed, &tree.name, hold);
+            let mut kept_boxes: Vec<AkId> = Vec::new();
+            for &(i, w, box_print) in &found.long_fields {
+                let box_id = lines_box_id(self.nodes[i].id);
+                if full || tree.sent.get(&box_id.0).is_none_or(|old| old.print != box_print) {
+                    for (id, node) in self.a11y_build_lines_box(i, &w) {
+                        nodes.push((id, node, box_print));
+                    }
+                } else {
+                    kept_boxes.push(box_id);
                 }
             }
-            out.push((id, node));
-        }
-        // Lines and links of unchanged texts stay: mark them seen.
-        for s in found.slots.iter().zip(&changed).filter(|(_, c)| !**c).map(|(s, _)| s) {
-            let kids: Vec<u64> = tree.sent.get(&s.id.0).map(|o| o.node.children().iter().map(|c| c.0).collect()).unwrap_or_default();
-            for k in kids.into_iter().filter(|&k| split_id(AkId(k)).1 != 0) {
-                if let Some(old) = tree.sent.get_mut(&k) { old.pass = pass; }
+            if hold { self.dirty = true; }
+            let tree = self.a11y.as_mut()?;
+            tree.stamp = Some(stamp);
+            tree.full = false;
+            tree.held = hold;
+            tree.pass = tree.pass.wrapping_add(1);
+            let pass = tree.pass;
+            for s in &found.slots {
+                if let Some(old) = tree.sent.get_mut(&s.id.0) { old.pass = pass; }
             }
-        }
-        let before = tree.sent.len();
-        tree.sent.retain(|_, s| s.pass == pass);
-        structure |= tree.sent.len() != before;
-        tree.changes = Changes { structure, moved };
-        tree.scrollers = found.scrollers;
+            let mut out = Vec::with_capacity(nodes.len());
+            let (mut structure, mut moved) = (false, false);
+            for (id, node, print) in nodes {
+                // A text's lines and links come and go with it, and carry its fingerprint.
+                match tree.sent.get_mut(&id.0) {
+                    Some(old) => {
+                        structure |= old.node.children() != node.children();
+                        moved |= old.node.bounds() != node.bounds() || old.node.transform() != node.transform();
+                        old.pass = pass;
+                        old.print = print;
+                        old.node = node.clone();
+                    }
+                    None => {
+                        structure = true;
+                        tree.sent.insert(id.0, Sent { print, pass, node: node.clone() });
+                    }
+                }
+                out.push((id, node));
+            }
+            // Lines and links of unchanged texts stay: mark them seen.
+            for s in found.slots.iter().zip(&changed).filter(|(_, c)| !**c).map(|(s, _)| s) {
+                let kids: Vec<u64> = tree.sent.get(&s.id.0).map(|o| o.node.children().iter().map(|c| c.0).collect()).unwrap_or_default();
+                for k in kids.into_iter().filter(|&k| split_id(AkId(k)).1 != 0) {
+                    if let Some(old) = tree.sent.get_mut(&k) { old.pass = pass; }
+                }
+            }
+            for box_id in kept_boxes {
+                let line_kids: Vec<u64> = tree.sent.get(&box_id.0).map(|o| o.node.children().iter().map(|c| c.0).collect()).unwrap_or_default();
+                if let Some(old) = tree.sent.get_mut(&box_id.0) { old.pass = pass; }
+                for k in line_kids {
+                    if let Some(old) = tree.sent.get_mut(&k) { old.pass = pass; }
+                }
+            }
+            let before = tree.sent.len();
+            tree.sent.retain(|_, s| s.pass == pass);
+            structure |= tree.sent.len() != before;
+            tree.changes = Changes { structure, moved };
+            tree.scrollers = found.scrollers;
+            tree.long_fields = found.long_fields.iter().map(|&(i, _, _)| i).collect();
+            TreeUpdate { nodes: out, tree: full.then(|| self.a11y_info()), tree_id: TreeId::ROOT, focus: found.focus }
+        };
         #[cfg(test)]
         self.a11y_check_sent();
-        Some(TreeUpdate { nodes: out, tree: full.then(|| self.a11y_info()), tree_id: TreeId::ROOT, focus: found.focus })
+        Some(update)
     }
 
     /// Tests: what was sent is what a whole build gives now.
@@ -235,10 +272,13 @@ impl<S: 'static> Runtime<S> {
         }
     }
 
-    /// A turn that only scrolled: rebuilds the scroll viewports alone.
+    /// A turn that only scrolled or filled waiting paragraphs: rebuilds the scroll viewports and
+    /// any affected long field's `lines_box_id` container alone, never the field or its value.
     fn a11y_scrolled(&mut self, stamp: Stamp) -> Option<TreeUpdate> {
         let scrollers = std::mem::take(&mut self.a11y.as_mut()?.scrollers);
+        let long_fields = std::mem::take(&mut self.a11y.as_mut()?.long_fields);
         let mut changed = Vec::new();
+        let (mut structure, mut moved) = (false, false);
         for &(i, w) in &scrollers {
             let Some(role) = self.a11y_role(i) else { continue };
             let mut node = self.a11y_node(i, role, &w);
@@ -248,18 +288,81 @@ impl<S: 'static> Runtime<S> {
             node.set_children(old.node.children().to_vec());
             if let Some(size) = old.node.size_of_set() { node.set_size_of_set(size); }
             if old.node != node {
+                moved = true;
                 changed.push((id, node.clone()));
                 old.node = node;
             }
             // Its fingerprint no longer matches what was sent: the next walk rebuilds it.
             old.print = old.print.wrapping_add(1);
         }
+        for &i in &long_fields {
+            if i >= self.nodes.len() || !self.a11y_uses_long_field(i) { continue; }
+            let w = self.a11y_walk_at(i);
+            let box_print = self.a11y_lines_box_print(i, &w);
+            let box_id = lines_box_id(self.nodes[i].id);
+            let same = self.a11y.as_ref().is_some_and(|t| t.sent.get(&box_id.0).is_some_and(|o| o.print == box_print));
+            if same { continue; }
+            let built = self.a11y_build_lines_box(i, &w);
+            let Some(tree) = self.a11y.as_mut() else { break };
+            let old_kids: Vec<AkId> = tree.sent.get(&box_id.0).map(|o| o.node.children().to_vec()).unwrap_or_default();
+            let new_kids: Vec<AkId> = built.first().map(|(_, b)| b.children().to_vec()).unwrap_or_default();
+            for old_kid in old_kids {
+                if !new_kids.contains(&old_kid) {
+                    tree.sent.remove(&old_kid.0);
+                    structure = true;
+                }
+            }
+            let pass = tree.pass;
+            for (id, node) in built {
+                match tree.sent.get_mut(&id.0) {
+                    Some(old) => {
+                        if old.node != node {
+                            structure |= old.node.children() != node.children();
+                            moved |= old.node.bounds() != node.bounds();
+                            changed.push((id, node.clone()));
+                            old.node = node;
+                        }
+                        old.print = box_print;
+                        old.pass = pass;
+                    }
+                    None => {
+                        structure = true;
+                        tree.sent.insert(id.0, Sent { print: box_print, pass, node: node.clone() });
+                        changed.push((id, node));
+                    }
+                }
+            }
+        }
         let tree = self.a11y.as_mut()?;
         tree.scrollers = scrollers;
+        tree.long_fields = long_fields;
         tree.stamp = Some(stamp);
-        tree.changes = Changes { structure: false, moved: !changed.is_empty() };
+        tree.changes = Changes { structure, moved };
         let focus = self.a11y_focus_now();
         Some(TreeUpdate { nodes: changed, tree: None, tree_id: TreeId::ROOT, focus })
+    }
+
+    fn a11y_walk_at(&self, i: usize) -> Walk {
+        let mut ancs = Vec::new();
+        let mut cur = self.nodes[i].parent;
+        while let Some(p) = cur {
+            ancs.push(p);
+            cur = self.nodes[p].parent;
+        }
+        let mut w = Walk { clip_y: [0.0, self.viewport.1], ..Walk::default() };
+        for p in ancs.into_iter().rev() {
+            let pn = &self.nodes[p];
+            if pn.vis.clip.is_some() || pn.scroll.is_some() {
+                let pr = self.drawn[p];
+                w.clip_y = [w.clip_y[0].max(pr[1]), w.clip_y[1].min(pr[1] + pr[3].max(0.0))];
+            }
+            if let Some(st) = self.scrolls.get(&pn.id) {
+                let [x, y] = self.content_to_window(p, [st.drawn_x, st.drawn.y()]);
+                w.shift = [w.shift[0] + x, w.shift[1] + y];
+                w.scrolled = true;
+            }
+        }
+        w
     }
 
     /// The node holding keyboard focus, when it is in the sent tree.
@@ -276,7 +379,10 @@ impl<S: 'static> Runtime<S> {
     pub fn accessibility_tree(&self) -> TreeUpdate {
         let found = self.a11y_walk();
         let name = self.a11y.as_ref().map_or("", |t| t.name.as_str());
-        let nodes = self.a11y_build(&found, &vec![true; found.slots.len()], name, false).into_iter().map(|(id, n, _)| (id, n)).collect();
+        let mut nodes: Vec<(AkId, AkNode)> = self.a11y_build(&found, &vec![true; found.slots.len()], name, false).into_iter().map(|(id, n, _)| (id, n)).collect();
+        for &(i, w, _) in &found.long_fields {
+            nodes.extend(self.a11y_build_lines_box(i, &w));
+        }
         TreeUpdate { nodes, tree: Some(self.a11y_info()), tree_id: TreeId::ROOT, focus: found.focus }
     }
 
@@ -296,10 +402,24 @@ impl<S: 'static> Runtime<S> {
         for (id, s) in &self.scrolls {
             scrolls = scrolls.wrapping_add(id.0.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (s.drawn_x.to_bits() as u64) << 32 ^ s.drawn.y().to_bits() as u64);
         }
+        let mut text_fills = 0u64;
+        let mut text_settled = 0u64;
+        for n in &self.nodes {
+            if let Some(tl) = &n.text_layout {
+                if n.input.is_some() {
+                    text_fills = mix(text_fills, tl.address() as u64);
+                }
+                if let crate::text::TextLayout::Paragraphs(p) = tl {
+                    text_settled = mix(mix(text_settled, n.id.0), u64::from(p.waiting()));
+                }
+            }
+        }
         let focus = self.focus.path().map_or(0, hash_str) ^ self.link_focus().map_or(0, |k| k as u64 + 1) << 48;
         Stamp {
             commits: self.commits,
             scrolls,
+            text_fills,
+            text_settled,
             focus,
             animating: self.animating,
             viewport: (self.viewport.0.to_bits(), self.viewport.1.to_bits(), self.env.scale.to_bits()),
@@ -343,10 +463,12 @@ impl<S: 'static> Runtime<S> {
     fn a11y_walk(&self) -> Found {
         let n_nodes = self.nodes.len();
         let mut slots = Vec::with_capacity(n_nodes / 2 + 2);
-        slots.push(Slot { id: ROOT, element: None, walk: Walk::default(), role: Role::Window, print: 0, set_size: None });
+        let root_walk = Walk { clip_y: [0.0, self.viewport.1], ..Walk::default() };
+        slots.push(Slot { id: ROOT, element: None, walk: root_walk, role: Role::Window, print: 0, set_size: None });
         let mut kids = Vec::with_capacity(n_nodes / 2 + 2);
-        let mut walk = vec![Walk::default(); n_nodes];
+        let mut walk = vec![root_walk; n_nodes];
         let mut scrollers = Vec::new();
+        let mut long_fields = Vec::new();
         let mut focus = ROOT;
         let focused = self.focused_index();
         let content = self.a11y_content_prints();
@@ -366,12 +488,19 @@ impl<S: 'static> Runtime<S> {
         }
         for i in 0..n_nodes {
             let n = &self.nodes[i];
-            let up = n.parent.map(|p| walk[p]).unwrap_or_default();
-            let mut w = Walk { slot: up.slot, gone: up.gone, shift: up.shift, scrolled: up.scrolled };
-            if let Some(p) = n.parent && let Some(st) = self.scrolls.get(&self.nodes[p].id) {
-                let [x, y] = self.content_to_window(p, [st.drawn_x, st.drawn.y()]);
-                w.shift = [w.shift[0] + x, w.shift[1] + y];
-                w.scrolled = true;
+            let up = n.parent.map_or(root_walk, |p| walk[p]);
+            let mut w = Walk { slot: up.slot, gone: up.gone, shift: up.shift, scrolled: up.scrolled, clip_y: up.clip_y };
+            if let Some(p) = n.parent {
+                let pn = &self.nodes[p];
+                if pn.vis.clip.is_some() || pn.scroll.is_some() {
+                    let pr = self.drawn[p];
+                    w.clip_y = [w.clip_y[0].max(pr[1]), w.clip_y[1].min(pr[1] + pr[3].max(0.0))];
+                }
+                if let Some(st) = self.scrolls.get(&pn.id) {
+                    let [x, y] = self.content_to_window(p, [st.drawn_x, st.drawn.y()]);
+                    w.shift = [w.shift[0] + x, w.shift[1] + y];
+                    w.scrolled = true;
+                }
             }
             if !w.gone {
                 w.gone = n.is_moved_stub() || n.a11y.hidden || n.vis.opacity <= 0.01 || self.is_exiting(n.id)
@@ -383,6 +512,7 @@ impl<S: 'static> Runtime<S> {
                 let mut print = mix(self.a11y_print(i, role, &w), content.get(i).copied().unwrap_or(0));
                 if let Some(index) = self.a11y_index_in_list(i) { print = mix(print, index as u64 + 1); }
                 if n.scroll.is_some() && self.scrolls.contains_key(&n.id) { scrollers.push((i, w)); }
+                if self.a11y_uses_long_field(i) { long_fields.push((i, w, self.a11y_lines_box_print(i, &w))); }
                 if let Some((_, size)) = n.a11y.more.as_ref().and_then(|m| m.set) { slots[w.slot].set_size = Some(size); }
                 kids.push((w.slot, id));
                 if focused == Some(i) {
@@ -406,7 +536,7 @@ impl<S: 'static> Runtime<S> {
         for (k, s) in slots.iter_mut().enumerate() {
             s.print = mix(mix(s.print, kid_prints[k]), s.set_size.map_or(0, |n| n as u64 + 1));
         }
-        Found { slots, kids, focus, scrollers }
+        Found { slots, kids, focus, scrollers, long_fields }
     }
 
     /// The nodes of `found` whose `changed` flag is set, built, with their lines and links:

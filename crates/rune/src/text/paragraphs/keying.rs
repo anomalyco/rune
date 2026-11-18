@@ -42,7 +42,7 @@ pub(super) fn count_newlines(s: &[u8]) -> usize {
 /// lines that fit on one line, away from the edit's ends, in runs: one record per run, keyed by
 /// its bytes, its height the sum of its lines'.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn key_paragraphs(spec: &TextSpec, style_key: u64, disjoint_spans: bool, a: usize, z: usize, start_flow: Flow, forced: Option<Flow>, runs: Option<Runs<'_>>, scan: &mut Option<LineScan>, found: &mut Vec<Found>) {
+pub(super) fn key_paragraphs(spec: &TextSpec, layout_spans: &[Span], style_key: u64, disjoint_spans: bool, a: usize, z: usize, start_flow: Flow, forced: Option<Flow>, runs: Option<Runs<'_>>, scan: &mut Option<LineScan>, found: &mut Vec<Found>) {
     // The other width's keying of these bytes, this layout pass, read them already.
     let key = [spec.content.as_ptr() as usize, spec.content.len(), a, z];
     let cache = scan.take_if(|s| runs.is_some() && s.key == key);
@@ -60,8 +60,9 @@ pub(super) fn key_paragraphs(spec: &TextSpec, style_key: u64, disjoint_spans: bo
         if let Some((a, b, height, w, n, flow)) = run.take() {
             let mut h = hash::KeyHasher::default();
             (&spec.content[a..b], style_key, flow == Flow::Rtl, n, "run").hash(&mut h);
-            for s in spans_in(&spec.spans, a, b, &[], disjoint_spans) {
-                (s.start, s.end).hash(&mut h);
+            let run_spans: Vec<Span> = spans_in(layout_spans, a, b, &[], disjoint_spans).collect();
+            for s in span::layout_spans(&run_spans) {
+                s.hash_layout(&mut h);
             }
             found.push((a, b, flow, h.finish(), Box::default(), Some((height, w, n))));
         }
@@ -112,8 +113,9 @@ pub(super) fn key_paragraphs(spec: &TextSpec, style_key: u64, disjoint_spans: bo
         let flow = forced.or_else(|| flow_of(words, &isolates)).unwrap_or(last_flow);
         let mut h = hash::KeyHasher::default();
         (words, style_key, flow == Flow::Rtl, spec.cold.blocks.get(k).copied().unwrap_or(Block::Paragraph)).hash(&mut h);
-        for s in spans_in(&spec.spans, a, b, &isolates, disjoint_spans) {
-            (s.start, s.end, s.mono, s.weight.map(f32::to_bits), s.size.map(f32::to_bits), s.italic).hash(&mut h);
+        let line_spans: Vec<Span> = spans_in(layout_spans, a, b, &isolates, disjoint_spans).collect();
+        for s in span::layout_spans(&line_spans) {
+            s.hash_layout(&mut h);
         }
         for p in pills_in(&spec.cold.pills, a, b, &isolates) {
             (p.start, p.end, p.icon.is_some(), p.bare.as_ref().map(|b| (b.size.to_bits(), b.gap.to_bits()))).hash(&mut h);

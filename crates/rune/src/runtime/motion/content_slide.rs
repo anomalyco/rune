@@ -34,9 +34,10 @@ impl SlidePhase {
         match self { SlidePhase::Following { dy, .. } | SlidePhase::Settling { dy, .. } => dy }
     }
 
-    /// The phase after row growth `g` stepped `steps` substeps.
-    fn step(self, g: &GrowTrack, spring: Spring, steps: usize) -> SlidePhase {
-        let dt = steps as f32 * SUBSTEP;
+    /// The phase after row growth `g` took `steps`.
+    fn step(self, g: &GrowTrack, spring: Spring, steps: impl Into<crate::growth::Substeps>) -> SlidePhase {
+        let steps = steps.into();
+        let dt: f32 = steps.sum();
         let (mut dy, mut v) = match self {
             SlidePhase::Following { dy, v, at } => {
                 let (was, left) = (g.target - at, g.target - g.h);
@@ -49,8 +50,8 @@ impl SlidePhase {
             }
             SlidePhase::Settling { dy, v } => (dy, v),
         };
-        for _ in 0..steps {
-            (dy, v) = spring.sample(dy, v, 0.0, SUBSTEP);
+        for step in steps {
+            (dy, v) = spring.sample(dy, v, 0.0, step);
         }
         SlidePhase::Settling { dy, v }
     }
@@ -88,9 +89,9 @@ impl ContentSlides {
         self.0.retain(|s| s.row != row);
     }
 
-    /// Steps row `row`'s slides after its growth `g` stepped `steps` substeps. Whether any still
+    /// Steps row `row`'s slides after its growth `g` took `steps`. Whether any still
     /// moves.
-    pub(super) fn step(&mut self, row: NodeId, g: &GrowTrack, spring: Spring, steps: usize) -> bool {
+    pub(super) fn step(&mut self, row: NodeId, g: &GrowTrack, spring: Spring, steps: crate::growth::Substeps) -> bool {
         for s in self.0.iter_mut().filter(|s| s.row == row) {
             s.phase = s.phase.step(g, spring, steps);
         }

@@ -21,7 +21,8 @@ pub(crate) fn cpu_ms() -> Option<f64> {
 #[cfg(feature = "frame-profile")]
 mod enabled {
     use super::{PHASES, Phase, cpu_ms};
-    use std::{cell::Cell, time::Instant};
+    use crate::time::Instant;
+    use std::cell::Cell;
 
     thread_local! {
         static TIMES: Cell<[f64; 2 * PHASES]> = const { Cell::new([0.0; 2 * PHASES]) };

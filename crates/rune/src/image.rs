@@ -488,27 +488,96 @@ fn linux_icon(path: &std::path::Path, px: u32) -> Result<(u32, u32, Vec<u8>), Im
     Ok((image.width(), image.height(), image.into_raw()))
 }
 
+/// Options for `usvg` that resolve nothing outside the SVG's own bytes: non-`data:` `<image>` and
+/// `<feImage>` `href`s never touch the filesystem or UNC paths, and `data:` URLs accept raster
+/// formats only (`image/svg+xml` and `text/plain` SVG fall-through are refused).
+///
+/// Rune builds `resvg` with `raster-images` off, so those raster arms are resolved in the tree but
+/// never drawn today; they—and raster decoder pixel/memory bounds—become live if `raster-images` is
+/// ever enabled (for example via feature unification).
+#[cfg(feature = "svg")]
+fn svg_options() -> resvg::usvg::Options<'static> {
+    use resvg::usvg::{ImageHrefResolver, ImageKind, Options};
+    let raster = |data: Arc<Vec<u8>>| {
+        if data.starts_with(b"\x89PNG\r\n\x1a\n") {
+            Some(ImageKind::PNG(data))
+        } else if data.starts_with(&[0xff, 0xd8, 0xff]) {
+            Some(ImageKind::JPEG(data))
+        } else if data.starts_with(b"GIF87a") || data.starts_with(b"GIF89a") {
+            Some(ImageKind::GIF(data))
+        } else if data.len() >= 12 && &data[..4] == b"RIFF" && &data[8..12] == b"WEBP" {
+            Some(ImageKind::WEBP(data))
+        } else {
+            None
+        }
+    };
+    Options {
+        image_href_resolver: ImageHrefResolver {
+            resolve_string: Box::new(|_, _| None),
+            resolve_data: Box::new(move |mime, data, _| match mime {
+                "image/png" => Some(ImageKind::PNG(data)),
+                "image/jpg" | "image/jpeg" => Some(ImageKind::JPEG(data)),
+                "image/gif" => Some(ImageKind::GIF(data)),
+                "image/webp" => Some(ImageKind::WEBP(data)),
+                "text/plain" => raster(data),
+                _ => None,
+            }),
+        },
+        ..Options::default()
+    }
+}
+
+#[cfg(feature = "svg")]
+fn svg_tree(bytes: &[u8]) -> Result<resvg::usvg::Tree, ImageError> {
+    if bytes.len() > 32 << 20 { return Err(ImageError("SVG is too large".into())); }
+    resvg::usvg::Tree::from_data(bytes, &svg_options()).map_err(|e| ImageError(format!("SVG: {e}")))
+}
+
+#[cfg(feature = "svg")]
+fn demultiply_rgba(pixmap: &resvg::tiny_skia::Pixmap) -> Vec<u8> {
+    pixmap.pixels().iter().flat_map(|p| {
+        let c = p.demultiply();
+        [c.red(), c.green(), c.blue(), c.alpha()]
+    }).collect()
+}
+
 /// An SVG scaled to fit `px` square, keeping its aspect ratio, as straight-alpha sRGB RGBA8.
 /// `px == 0` rasterizes at twice the drawing's own size, at most 4096 pixels per side.
 #[cfg(feature = "svg")]
 pub(crate) fn svg_rgba(bytes: &[u8], px: u32) -> Result<(u32, u32, Vec<u8>), ImageError> {
-    use resvg::{tiny_skia, usvg};
-    if bytes.len() > 32 << 20 { return Err(ImageError("SVG is too large".into())); }
-    let tree = usvg::Tree::from_data(bytes, &usvg::Options::default()).map_err(|e| ImageError(format!("SVG: {e}")))?;
+    use resvg::tiny_skia;
+    let tree = svg_tree(bytes)?;
     let size = tree.size();
     let px = if px == 0 { (size.width().max(size.height()) * 2.0).ceil().clamp(1.0, 4096.0) as u32 } else { px };
     let k = px as f32 / size.width().max(size.height());
     let (w, h) = (((size.width() * k).round() as u32).clamp(1, px), ((size.height() * k).round() as u32).clamp(1, px));
     let mut pixmap = tiny_skia::Pixmap::new(w, h).ok_or_else(|| ImageError("empty SVG".into()))?;
     resvg::render(&tree, tiny_skia::Transform::from_scale(k, k), &mut pixmap.as_mut());
-    Ok((w, h, pixmap.pixels().iter().flat_map(|p| {
-        let c = p.demultiply();
-        [c.red(), c.green(), c.blue(), c.alpha()]
-    }).collect()))
+    Ok((w, h, demultiply_rgba(&pixmap)))
 }
 
 #[cfg(not(feature = "svg"))]
 pub(crate) fn svg_rgba(_: &[u8], _: u32) -> Result<(u32, u32, Vec<u8>), ImageError> {
+    Err(ImageError("SVG images need rune's `svg` feature".into()))
+}
+
+/// An SVG centre-cropped to fill `px` square (`object-fit: cover`), as straight-alpha sRGB RGBA8,
+/// decoded through the same sandboxed `usvg` options as [`ImageCache`].
+#[cfg(feature = "svg")]
+pub fn svg_rgba_cover(bytes: &[u8], px: u32) -> Result<Vec<u8>, ImageError> {
+    use resvg::tiny_skia;
+    if px == 0 || px > 4096 { return Err(ImageError("invalid SVG raster size".into())); }
+    let tree = svg_tree(bytes)?;
+    let size = tree.size();
+    let k = px as f32 / size.width().min(size.height());
+    let t = tiny_skia::Transform::from_row(k, 0.0, 0.0, k, (px as f32 - size.width() * k) / 2.0, (px as f32 - size.height() * k) / 2.0);
+    let mut pixmap = tiny_skia::Pixmap::new(px, px).ok_or_else(|| ImageError("empty SVG".into()))?;
+    resvg::render(&tree, t, &mut pixmap.as_mut());
+    Ok(demultiply_rgba(&pixmap))
+}
+
+#[cfg(not(feature = "svg"))]
+pub fn svg_rgba_cover(_: &[u8], _: u32) -> Result<Vec<u8>, ImageError> {
     Err(ImageError("SVG images need rune's `svg` feature".into()))
 }
 

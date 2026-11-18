@@ -53,9 +53,8 @@ impl<S: 'static> Runtime<S> {
         if self.stacks.is_empty() {
             return false;
         }
-        self.grow_acc += dt;
-        let steps = (self.grow_acc / SUBSTEP).floor() as usize;
-        self.grow_acc -= steps as f32 * SUBSTEP;
+        // Frame time, stepped in whole substeps and the rest (`growth::substeps`).
+        let steps = crate::growth::substeps(dt);
         let now = self.t;
         let mut moving = false;
         let mut placed = false;
@@ -66,7 +65,7 @@ impl<S: 'static> Runtime<S> {
             let n_rows = stack.order.len();
             let mut st_growing = !stack.pending_heights.is_empty();
             let mut st_moving = st_growing;
-            let (in_runs, run_grown) = Self::step_growth_runs(stack, &mut self.grows, steps.min(240), spec);
+            let (in_runs, run_grown) = Self::step_growth_runs(stack, &mut self.grows, steps, spec);
             stack.grown += run_grown;
             for (k, id) in stack.order.iter().enumerate() {
                 let Some(g) = self.grows.get_mut(id) else { continue };
@@ -83,14 +82,16 @@ impl<S: 'static> Runtime<S> {
                 }
                 // A row above the tail (the last row) carries it.
                 let carrying = k + 2 == n_rows;
-                for substep in 0..if in_run { 0 } else { steps.min(240) } {
+                let mut left = dt.min(1.0);
+                for step in steps.filter(|_| !in_run) {
                     if !stack.pending_heights.is_empty() {
-                        let at = now - f64::from(self.grow_acc) - f64::from((steps.min(240) - substep) as f32 * SUBSTEP);
+                        let at = now - f64::from(left);
                         if !stack.width_hold.defers(at) && let Some(height) = stack.pending_heights.remove(id) {
                             g.retarget(height);
                         }
                     }
-                    g.step(spec.spring, &spec.edge, carrying);
+                    g.step_by(step, spec.spring, &spec.edge, carrying);
+                    left -= step;
                 }
                 // A row nobody saw last frame draws no feather: it has none to ease, and grows one
                 // again as it comes into view.
@@ -106,7 +107,7 @@ impl<S: 'static> Runtime<S> {
                 stack.grown += (g.h - h0).max(0.0);
                 st_growing |= g.target > g.h + 1.0 / 128.0;
                 st_moving |= g.moving() || (g.h - h0).abs() > 1e-5;
-                st_moving |= stack.slides.step(*id, g, spec.spring, steps.min(240));
+                st_moving |= stack.slides.step(*id, g, spec.spring, steps);
             }
             stack.order.retain(|id| {
                 let keep = !stack.closing.contains_key(id) || self.grows.get(id).is_some_and(|g| g.h > 0.01 || g.target > 0.0);
@@ -152,15 +153,22 @@ impl<S: 'static> Runtime<S> {
         content_h - f64::from(view[3] - view[1])
     }
 
-    pub(super) fn step_scroll(&mut self, dt: f32) -> bool {
+    pub(super) fn step_scroll(&mut self, dt: f32) -> bool { self.step_scroll_by(dt, false) }
+
+    /// Steps every scroll viewport `dt` seconds on: a frame's own step, or (`catch_up`) the time
+    /// it charges to motion that was already running (`frame::clock::split`).
+    pub(super) fn step_scroll_by(&mut self, dt: f32, catch_up: bool) -> bool {
         let slack_dt = std::mem::take(&mut self.slack_dt);
+        let scale = f64::from(self.env.scale * self.zoom());
+        // Motion reduced mid-ease: a wheel's ease lands where it was going, at once.
+        let land_wheels = !self.wheel_glides();
         let mut moving = false;
         for i in 0..self.nodes.len() {
             let Some(sp) = self.nodes[i].scroll else { continue };
             if self.subtree_exiting(i) { continue; }
             let id = self.nodes[i].id;
             let axes = self.nodes[i].scroll_axes;
-            if axes.x() { moving |= self.step_scroll_x(i, dt); }
+            if axes.x() { moving |= self.step_scroll_x(i, dt, catch_up); }
             // A horizontal viewport doesn't move vertically, even with content taller than it.
             let overflow = if axes.y() { self.scroll_overflow(i) } else { 0.0 };
             if let Some(active) = self.step_touch_scroll(id, overflow, dt, false) {
@@ -174,7 +182,7 @@ impl<S: 'static> Runtime<S> {
             };
             let laid = if axes.y() { self.ease_to_shrunk_end(i, overflow) } else { None };
             let Some(st) = self.scrolls.get_mut(&id) else { continue };
-            let _ = scroll_mode::step(&mut st.mode, ModeEvent::Step { x_v: st.x.v });
+            let _ = scroll_mode::step(&mut st.mode, ModeEvent::Step { x_v: st.x.coast() });
             st.max = overflow.max(0.0);
             match st.mode {
                 ScrollMode::Pinned(_) if sp.stick_bottom => {
@@ -192,6 +200,25 @@ impl<S: 'static> Runtime<S> {
                     moving = true;
                 }
                 ScrollMode::Momentum { .. } => st.mode = st.mode.to_rest(),
+                ScrollMode::Wheel { mut curve, .. } => {
+                    curve.follow(st.offset);
+                    // An end that shrank under the ease takes its target with it; one that grew does
+                    // too when the wheel was sent to the end of a viewport that follows its bottom
+                    // (a reply streaming in), so it lands there and pins.
+                    if curve.target() > st.max || (sp.stick_bottom && curve.to_end() && curve.target() < st.max) { curve.retarget(st.max, scale); }
+                    if land_wheels { curve.advance(f64::INFINITY, false) } else { curve.advance(f64::from(dt), catch_up) }
+                    // On whole device pixels, as Chromium's scroll offsets are: everything inside
+                    // moves by the same whole pixels each frame and draws as it did, rather than
+                    // landing at a new fraction of a pixel every frame.
+                    st.offset = scroll_wheel::on_grid_or_end(curve.value(), st.max, scale);
+                    curve.applied(st.offset);
+                    // The hand moved it: the app hears a wheel's ease as the wheel.
+                    st.moved();
+                    // An ease sent to a following viewport's end pins the frame it gets there, though
+                    // the end growing under it restarts its segment every frame a reply grows.
+                    let pins = sp.stick_bottom && curve.to_end() && st.offset == st.max;
+                    if curve.done() || pins { st.land(sp.stick_bottom) } else { st.mode = st.mode.to_wheel(curve); moving = true; }
+                }
                 ScrollMode::Pinned(_) | ScrollMode::Rest(_) => {}
             }
             st.offset = st.offset.clamp(0.0, st.max);
@@ -199,7 +226,7 @@ impl<S: 'static> Runtime<S> {
             // of it, not while they're still short of it. A glide that reaches the end hands it
             // to the pin.
             let shrinking = laid.is_some_and(|end| end < st.max - 0.5 && st.offset < st.max - 1e-3);
-            if sp.stick_bottom && !held && !shrinking && st.glide().is_none() && st.offset >= st.max - 0.5 && st.coast().abs() <= 1.0 {
+            if sp.stick_bottom && !held && !shrinking && st.glide().is_none() && st.mode.wheel().is_none() && st.offset >= st.max - 0.5 && st.coast().abs() <= 1.0 {
                 st.pin();
             }
             let _ = scroll_mode::step(&mut st.mode, ModeEvent::Laid(laid));

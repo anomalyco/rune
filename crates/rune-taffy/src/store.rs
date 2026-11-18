@@ -590,6 +590,7 @@ impl LayoutStore {
         let mut view = LayoutStoreView {
             store: self,
             measure_leaf,
+            in_whole_rows_col: false,
         };
         compute_root_layout(&mut view, root.to_taffy(), available_space);
     }

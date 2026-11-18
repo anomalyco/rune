@@ -69,6 +69,13 @@ impl TextLayout {
             TextLayout::Paragraphs(p) => Rc::as_ptr(p) as usize,
         }
     }
+
+    pub(crate) fn content_key(&self) -> Option<u64> {
+        match self {
+            TextLayout::Single(_) => None,
+            TextLayout::Paragraphs(p) => Some(p.whole),
+        }
+    }
 }
 
 /// A by-paragraph field's paragraphs, top to bottom, in device px.
@@ -152,6 +159,7 @@ pub(crate) struct Piece<'a> {
     pub(crate) flow: Flow,
     /// Its paragraph's index in the field, for its [`Block`].
     pub(crate) index: usize,
+    pub(crate) shaped: bool,
     isolates: &'a [(u32, u32)],
     disjoint_spans: bool,
     whole: bool,
@@ -159,11 +167,11 @@ pub(crate) struct Piece<'a> {
 
 impl<'a> Piece<'a> {
     pub(in crate::text) fn of_paragraph(k: usize, p: &'a Paragraph, disjoint_spans: bool) -> Piece<'a> {
-        Piece { layout: &p.layout, shared: Some(&p.layout), start: p.start, end: p.end, y: p.y, height: p.height, flow: p.flow, index: k, isolates: &p.isolates, disjoint_spans, whole: false }
+        Piece { layout: &p.layout, shared: Some(&p.layout), start: p.start, end: p.end, y: p.y, height: p.height, flow: p.flow, index: k, shaped: p.shaped, isolates: &p.isolates, disjoint_spans, whole: false }
     }
 
     fn whole(layout: &'a Layout<Ink>) -> Piece<'a> {
-        Piece { layout, shared: None, start: 0, end: usize::MAX, y: 0.0, height: layout.height(), flow: Flow::of_layout(layout), index: 0, isolates: &[], disjoint_spans: false, whole: true }
+        Piece { layout, shared: None, start: 0, end: usize::MAX, y: 0.0, height: layout.height(), flow: Flow::of_layout(layout), index: 0, shaped: true, isolates: &[], disjoint_spans: false, whole: true }
     }
 
     /// Whether it's a text's one layout rather than a paragraph of a field's.
@@ -628,9 +636,11 @@ impl TextSystem {
             (hash::text_hash("", &[], style, scale, None), spec.wrap_anywhere).hash(&mut h);
             h.finish()
         };
-        // A plain text's edit keys only the paragraphs it touched: those before it and after it
-        // keep their keys (`reuse_keys`), so a keystroke costs its own paragraph, not the draft.
-        let plain = spec.spans.is_empty() && spec.cold.pills.is_empty() && spec.cold.blocks.iter().all(|&b| b == Block::Paragraph);
+        // A plain or colour-only text's edit keys only the paragraphs it touched: those before it
+        // and after it keep their keys (`reuse_keys`), so a keystroke or recolour costs no full scan.
+        let layout_spans: Vec<Span> = span::layout_spans(&spec.spans).cloned().collect();
+        let layout_disjoint = layout_spans.len() <= 1 || layout_spans.windows(2).all(|w| w[0].start < w[0].end && w[0].end <= w[1].start);
+        let plain = layout_spans.is_empty() && spec.cold.pills.is_empty() && spec.cold.blocks.iter().all(|&b| b == Block::Paragraph);
         let disjoint_spans = spec.spans.len() <= 1 || spec.spans.windows(2).all(|w| w[0].start < w[0].end && w[0].end <= w[1].start);
         let forced = spec.paragraphs_flow();
         let start_flow = forced.unwrap_or(spec.plaintext_flow());
@@ -644,25 +654,23 @@ impl TextSystem {
         // A min-content measure of a text whose lines wait keys an edit's lines into runs too,
         // however few: none of them is shown, and its run held them as one record.
         let measuring = prev.is_some_and(|p| p.waiting()) && max_width.is_some_and(|m| m < style.line_px() * scale);
-        let color_only = spec.spans.iter().all(|s| !s.mono && s.weight.is_none() && s.size.is_none() && !s.italic && s.bg.is_none() && s.underline.is_none());
-        let can_lazy = spec.cold.pills.is_empty() && spec.cold.blocks.iter().all(|&b| b == Block::Paragraph) && (plain || (spec.by_line && color_only));
-        let ascii = (can_lazy && (measuring || edited > LAZY_MIN * 8 && count_newlines(&bytes[at..at + edited]) > LAZY_MIN))
+        let ascii = (plain && (measuring || edited > LAZY_MIN * 8 && count_newlines(&bytes[at..at + edited]) > LAZY_MIN))
             .then(|| self.ascii_line(style, scale, spec.wrap_anywhere)).flatten();
         let (eager_s, eager_e) = if spec.by_line { (48, 48) } else { (EAGER_START, EAGER_END) };
         let runs = ascii.as_deref().map(|m| Runs { ascii: m, max_width, edit: true, eager: (eager_s, eager_e) });
         match tail.first().map(|t| t.0) {
             Some(t) => {
                 let sep = if t >= 2 && bytes.get(t - 2) == Some(&b'\r') { 2 } else { 1 };
-                key_paragraphs(spec, style_key, disjoint_spans, at, t - sep, start_flow, forced, runs, &mut self.line_scan, &mut found);
+                key_paragraphs(spec, &layout_spans, style_key, layout_disjoint, at, t - sep, start_flow, forced, runs, &mut self.line_scan, &mut found);
                 // The paragraphs after the edit keep their keys if they start from the direction
                 // they were keyed in (a neutral one takes the one before it).
                 if found.last().map(|f| f.2) == Some(entering) {
                     found.extend(tail);
                 } else {
-                    key_paragraphs(spec, style_key, disjoint_spans, t, content.len(), start_flow, forced, None, &mut self.line_scan, &mut found);
+                    key_paragraphs(spec, &layout_spans, style_key, layout_disjoint, t, content.len(), start_flow, forced, None, &mut self.line_scan, &mut found);
                 }
             }
-            None => key_paragraphs(spec, style_key, disjoint_spans, at, content.len(), start_flow, forced, runs, &mut self.line_scan, &mut found),
+            None => key_paragraphs(spec, &layout_spans, style_key, layout_disjoint, at, content.len(), start_flow, forced, runs, &mut self.line_scan, &mut found),
         }
         // What the edit left alone: the paragraphs before it, and those after it.
         let old = prev.map_or(&[][..], |p| p.paragraphs.as_slice());
@@ -681,7 +689,7 @@ impl TextSystem {
                     let m = match &ascii { Some(m) => Some(m.clone()), None => self.ascii_line(style, scale, spec.wrap_anywhere) };
                     let mut again = Vec::new();
                     let from = items.last().map_or(start_flow, |(f, _)| f.2);
-                    key_paragraphs(spec, style_key, disjoint_spans, f.0, f.1, from, forced, m.as_deref().map(|m| Runs { ascii: m, max_width, edit: false, eager: (eager_s, eager_e) }), &mut self.line_scan, &mut again);
+                    key_paragraphs(spec, &layout_spans, style_key, layout_disjoint, f.0, f.1, from, forced, m.as_deref().map(|m| Runs { ascii: m, max_width, edit: false, eager: (eager_s, eager_e) }), &mut self.line_scan, &mut again);
                     items.extend(again.into_iter().map(|f| (f, None)));
                 }
                 _ => items.push((f, kept)),
@@ -731,7 +739,7 @@ impl TextSystem {
                     fresh += b - a;
                     let words = &content[a..b];
                     let text: Cow<str> = if isolates.is_empty() { Cow::Borrowed(words) } else { Cow::Owned(with_isolates(words, &isolates)) };
-                    let spans: Vec<Span> = spans_in(&spec.spans, a, b, &isolates, disjoint_spans).collect();
+                    let spans: Vec<Span> = spans_in(&layout_spans, a, b, &isolates, layout_disjoint).collect();
                     let pills: Vec<PillChip> = pills_in(&spec.cold.pills, a, b, &isolates).collect();
                     self.layout_keyed(Some(key), &text, &spans, blocks, &pills, style, scale, max_width, align, spec.wrap_anywhere, pretty, Keep::Owned, flow.base())
                 }
@@ -764,8 +772,8 @@ impl TextSystem {
         let keyed = plain.then(|| Keyed { content: shared.unwrap_or_else(|| Rc::from(content)), style_key, start_flow });
         let lazy = (waiting > 0).then(|| self.ascii_line(style, scale, spec.wrap_anywhere)).flatten().map(|ascii| Rc::new(Lazy {
             content: keyed.as_ref().map_or_else(|| Rc::from(content), |k| k.content.clone()),
-            spans: if spec.spans.is_empty() { Rc::from(&[][..]) } else { Rc::from(spec.spans.as_slice()) },
-            disjoint_spans,
+            spans: if layout_spans.is_empty() { Rc::from(&[][..]) } else { Rc::from(layout_spans.as_slice()) },
+            disjoint_spans: layout_disjoint,
             style, scale, wrap_anywhere: spec.wrap_anywhere, cache_key, style_key, forced, start_flow, ascii,
         }));
         (ParagraphLayout { paragraphs, width, full_width, height: y as f32, max_width, align, whole, newline, blank_box, disjoint_spans, keyed, lazy }, fresh)

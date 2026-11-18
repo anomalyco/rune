@@ -76,6 +76,7 @@ impl TextSystem {
         if spans.iter().all(|s| s.bg.is_none() && s.underline.is_none()) {
             return;
         }
+        let layout_spans: Vec<&Span> = super::span::layout_spans(spans).collect();
         let radius = radius * scale;
         let mut last_bg = None;
         for line in layout.lines() {
@@ -86,7 +87,7 @@ impl TextSystem {
                 if ink == 0 {
                     continue;
                 }
-                let Some(s) = spans.get(ink as usize - 1) else { continue };
+                let Some(&s) = layout_spans.get(ink as usize - 1) else { continue };
                 let x0 = origin[0] + gr.offset();
                 let w = gr.advance();
                 if let Some(bg) = s.bg {

@@ -116,8 +116,7 @@ impl<S: 'static> Runtime<S> {
         let offset = f64::from(x.max(0.0)).min(st.x.max.max(0.0));
         if (st.x.offset - offset).abs() < 0.01 { return false; }
         st.x.offset = offset;
-        st.x.v = 0.0;
-        st.x.glide = None;
+        st.x.motion = XMotion::Rest;
         true
     }
 
@@ -126,7 +125,7 @@ impl<S: 'static> Runtime<S> {
         let mut inh = Inh::default();
         let dy = -self.page_offset();
         inh.dy = dy;
-        inh.snap.shift(1, dy);
+        inh.snap.scroll(1, dy);
         inh
     }
 

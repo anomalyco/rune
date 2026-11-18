@@ -569,8 +569,10 @@ impl<S: 'static> Runtime<S> {
             for piece in flow.pieces_in(rows.start, rows.end) {
                 let layout = piece.layout;
                 let spans_here = piece.spans(&spec.spans);
+                let drawn_spans = n.elided.map(|e| e.spans(&spans_here));
+                let spans = drawn_spans.as_deref().unwrap_or(&spans_here);
                 self.glyph_scratch.clear();
-                self.text.set_glyph_inks(color, &spans_here);
+                self.text.set_glyph_inks(color, spans);
                 let origin = [base_rest[0], base_rest[1] + piece.y * tk];
                 self.text.set_glide(glide);
                 let r_origin = if scale_motion == ScaleMotion::Still { origin } else { [0.0, 0.0] };
@@ -619,8 +621,9 @@ impl<S: 'static> Runtime<S> {
                         let mut h = rune_motion::Fx::default();
                         (origin.map(f32::to_bits), clip.map(f32::to_bits), fade.map(f32::to_bits), shown.map(f32::to_bits), [tk, raster, s].map(f32::to_bits)).hash(&mut h);
                         (premul(color, o, srgb).map(f32::to_bits), srgb, self.text.emit_key()).hash(&mut h);
-                        for sp in spans_here.iter() {
-                            sp.color.map(|c| premul(c, o, srgb).map(f32::to_bits)).hash(&mut h);
+                        spans.len().hash(&mut h);
+                        for sp in spans.iter() {
+                            (sp.start, sp.end, sp.color.map(|c| premul(c, o, srgb).map(f32::to_bits))).hash(&mut h);
                         }
                         let (id, key) = ((n.id, layout_id), h.finish());
                         match self.text_quads.get_mut(&id).filter(|(d, _)| d.key == key) {
@@ -670,7 +673,7 @@ impl<S: 'static> Runtime<S> {
                     }
                     let mut f = base;
                     if q.ink > 0
-                        && let Some(c) = spans_here.get(q.ink as usize - 1).and_then(|sp| sp.color)
+                        && let Some(c) = spans.get(q.ink as usize - 1).and_then(|sp| sp.color)
                     {
                         f = premul(c, o, srgb);
                     }

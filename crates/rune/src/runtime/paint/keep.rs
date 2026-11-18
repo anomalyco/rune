@@ -38,6 +38,8 @@ pub(super) struct PaintRec {
     end: u32,
     inst: [u32; 2],
     hits: [u32; 2],
+    /// Its range of `Runtime::wheel_hits`, kept with the hits so a reused subtree's wheel entries come back too.
+    wheel: [u32; 2],
     overlay: [u32; 2],
     help: [u32; 2],
     drop: [u32; 2],
@@ -50,7 +52,7 @@ pub(super) struct PaintRec {
 
 impl Default for PaintRec {
     fn default() -> Self {
-        PaintRec { id: NodeId(u64::MAX), epoch: 0, up: 0, own: 0, inh: 0, end: 0, inst: [0; 2], hits: [0; 2], overlay: [0; 2], help: [0; 2], drop: [0; 2], pages: [0; 2], glyphs: [0; 2], fits: false, keep: false }
+        PaintRec { id: NodeId(u64::MAX), epoch: 0, up: 0, own: 0, inh: 0, end: 0, inst: [0; 2], hits: [0; 2], wheel: [0; 2], overlay: [0; 2], help: [0; 2], drop: [0; 2], pages: [0; 2], glyphs: [0; 2], fits: false, keep: false }
     }
 }
 
@@ -62,6 +64,7 @@ pub(super) struct PaintKeep {
     instances: Vec<Instance>,
     marks: Vec<u32>,
     hits: Vec<(NodeId, [f32; 4])>,
+    wheel: Vec<(NodeId, [f32; 4])>,
     overlay: Vec<[f32; 4]>,
     help: Vec<(NodeId, [f32; 4], usize, Option<usize>)>,
     drop: Vec<(NodeId, [f32; 4], usize)>,
@@ -165,6 +168,7 @@ impl<S: 'static> Runtime<S> {
         self.instances.reserve_exact(k.instances.capacity());
         std::mem::swap(&mut self.marks, &mut k.marks);
         std::mem::swap(&mut self.hits, &mut k.hits);
+        std::mem::swap(&mut self.wheel_hits, &mut k.wheel);
         std::mem::swap(&mut self.overlay_hits, &mut k.overlay);
         std::mem::swap(&mut self.help.hits, &mut k.help);
         std::mem::swap(&mut self.file_drag.hits, &mut k.drop);
@@ -179,6 +183,7 @@ impl<S: 'static> Runtime<S> {
         // leave the frame after it to grow the other.
         twin(&mut self.marks, &k.marks);
         twin(&mut self.hits, &k.hits);
+        twin(&mut self.wheel_hits, &k.wheel);
         twin(&mut self.overlay_hits, &k.overlay);
         twin(&mut self.help.hits, &k.help);
         twin(&mut self.file_drag.hits, &k.drop);
@@ -315,6 +320,7 @@ impl<S: 'static> Runtime<S> {
             end: 0,
             inst: [self.instances.len() as u32; 2],
             hits: [self.hits.len() as u32; 2],
+            wheel: [self.wheel_hits.len() as u32; 2],
             overlay: [self.overlay_hits.len() as u32; 2],
             help: [self.help.hits.len() as u32; 2],
             drop: [self.file_drag.hits.len() as u32; 2],
@@ -370,6 +376,8 @@ impl<S: 'static> Runtime<S> {
             self.marks.extend_from_slice(&k.marks[range(r.inst)]);
         }
         self.hits.extend_from_slice(&k.hits[range(r.hits)]);
+        let at_wheel = self.wheel_hits.len();
+        self.wheel_hits.extend_from_slice(&k.wheel[range(r.wheel)]);
         self.overlay_hits.extend_from_slice(&k.overlay[range(r.overlay)]);
         let seq = |s: usize| s + at[1] - r.hits[0] as usize;
         let (at_help, at_drop) = (self.help.hits.len(), self.file_drag.hits.len());
@@ -398,6 +406,7 @@ impl<S: 'static> Runtime<S> {
                 end: p.end - o as u32 + i as u32,
                 inst: shift(p.inst, r.inst[0], at[0]),
                 hits: shift(p.hits, r.hits[0], at[1]),
+                wheel: shift(p.wheel, r.wheel[0], at_wheel),
                 overlay: shift(p.overlay, r.overlay[0], at[2]),
                 help: shift(p.help, r.help[0], at_help),
                 drop: shift(p.drop, r.drop[0], at_drop),
@@ -470,6 +479,7 @@ impl<S: 'static> Runtime<S> {
             (rec.help[1], rec.drop[1]) = (help, drop);
             rec.inst[1] = self.instances.len() as u32;
             rec.hits[1] = self.hits.len() as u32;
+            rec.wheel[1] = self.wheel_hits.len() as u32;
             rec.overlay[1] = self.overlay_hits.len() as u32;
             rec.pages[1] = k.pages.len() as u32;
             rec.glyphs[1] = *glyph_count as u32;
@@ -520,6 +530,7 @@ impl<S: 'static> Runtime<S> {
         let mut differ = Vec::new();
         if bytes(&self.instances[range(now.inst)]) != bytes(&k.instances[range(was.inst)]) { differ.push("instances"); }
         if self.hits[range(now.hits)] != k.hits[range(was.hits)] { differ.push("hits"); }
+        if self.wheel_hits[range(now.wheel)] != k.wheel[range(was.wheel)] { differ.push("wheel hits"); }
         // Rebased hits compared in place, as the bytes are: a debug frame's check allocates nothing.
         let help = |v: &[(NodeId, [f32; 4], usize, Option<usize>)], from: u32, at: usize| { let (id, rect, s, l) = v[at]; (id, rect, s - from as usize, l) };
         let (a, b) = (&self.help.hits[range(now.help)], &k.help[range(was.help)]);

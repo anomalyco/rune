@@ -275,8 +275,9 @@ fn split_run(lazy: &Lazy, max_width: Option<f32>, paragraphs: &[Paragraph], k: u
                 run = None;
                 let mut hs = hash::KeyHasher::default();
                 (&lazy.content[start..e], lazy.style_key, flow == Flow::Rtl, lines, "run").hash(&mut hs);
-                for sp in spans_in(&lazy.spans, start, e, &[], lazy.disjoint_spans) {
-                    (sp.start, sp.end).hash(&mut hs);
+                let run_spans: Vec<Span> = spans_in(&lazy.spans, start, e, &[], lazy.disjoint_spans).collect();
+                for sp in span::layout_spans(&run_spans) {
+                    sp.hash_layout(&mut hs);
                 }
                 let height = (f64::from(lines) * f64::from(h)) as f32;
                 out.push(Paragraph { start, end: e, y: y.round() as f32, y_frac: 0.0, height, widths: [widest, widest], flow, key: hs.finish(), isolates: Box::default(), layout: r.layout.clone(), shaped: false, lines, run: true });
@@ -286,8 +287,9 @@ fn split_run(lazy: &Lazy, max_width: Option<f32>, paragraphs: &[Paragraph], k: u
         }
         let mut hs = hash::KeyHasher::default();
         (words, lazy.style_key, flow == Flow::Rtl, Block::Paragraph).hash(&mut hs);
-        for sp in spans_in(&lazy.spans, s, e, &[], lazy.disjoint_spans) {
-            (sp.start, sp.end, sp.mono, sp.weight.map(f32::to_bits), sp.size.map(f32::to_bits), sp.italic).hash(&mut hs);
+        let line_spans: Vec<Span> = spans_in(&lazy.spans, s, e, &[], lazy.disjoint_spans).collect();
+        for sp in span::layout_spans(&line_spans) {
+            sp.hash_layout(&mut hs);
         }
         let (height, w) = lazy.ascii.one_line(words, max_width, 0.0, true).unwrap_or((h, 0.0));
         out.push(Paragraph { start: s, end: e, y: y.round() as f32, y_frac: 0.0, height, widths: [w, w], flow, key: hs.finish(), isolates: Box::default(), layout: r.layout.clone(), shaped: false, lines: 1, run: false });
