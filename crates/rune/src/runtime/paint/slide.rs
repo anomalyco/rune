@@ -16,10 +16,11 @@ pub(in crate::runtime) struct Slide {
     /// One past the window's subtree, in node order.
     pub(super) end: usize,
     pub(super) instances: Range<usize>,
-    /// The window's rect (points, its ancestors' scale applied) and slide offset as painted,
-    /// and its offset with its child's, which cancels it.
+    /// The window's anchor (`Anchor`: a rect in points, its ancestors' scale applied, at a slide
+    /// offset), the offset this paint drew it at, and that offset with its child's, which cancels it.
     rect: [f32; 4],
     offset: [f32; 2],
+    painted: [f32; 2],
     net: [f32; 2],
     /// The rect's points per offset point (an ancestor's scale), and the display scale.
     k: f32,
@@ -40,6 +41,37 @@ pub(in crate::runtime) struct Slide {
 
 /// What a step draws the window's instances with: their clip and packed fade.
 type Pose = ([f32; 4], [u32; 4]);
+
+/// Where a sliding window is posed from, kept across paints while its laid-out place holds: its
+/// rect (points) at a slide offset, and the rect's points per offset point, scale and grid size.
+/// Paint and a loop-only step both pose the window from it at the offset they draw (`pose_rect`),
+/// so the two reach one number for the same offset. Posed from each paint's own rect instead,
+/// they would reach it by different float sums (the scene's layout origin plus offset, then the
+/// ancestors' translation; against the last paint's rect plus the offset's change), which land a
+/// grid step apart where the offset sits on a grid line's half.
+#[derive(Clone, Copy, PartialEq)]
+pub(in crate::runtime) struct Anchor {
+    node: rune_motion::NodeId,
+    rect: [f32; 4],
+    offset: [f32; 2],
+    k: f32,
+    s: f32,
+    size: [f32; 2],
+}
+
+/// The window's rect in pixels on paint's grid at slide offset `ow` (points), posed from `a`.
+fn pose_rect(a: &Anchor, ow: [f32; 2]) -> [f32; 4] { posed(a.rect, a.offset, a.k, a.s, a.size, ow) }
+
+fn posed(at: [f32; 4], offset: [f32; 2], k: f32, s: f32, size: [f32; 2], ow: [f32; 2]) -> [f32; 4] {
+    let d = [(ow[0] - offset[0]) * k, (ow[1] - offset[1]) * k];
+    let mut rect = [at[0] + d[0], at[1] + d[1], at[2] + d[0], at[3] + d[1]];
+    for axis in 0..2 {
+        if ((rect[axis + 2] - rect[axis]) - size[axis]).abs() * s < 1.0 / 32.0 {
+            rect[axis + 2] = rect[axis] + size[axis];
+        }
+    }
+    rect.map(|v| grid(v, s) * s)
+}
 
 /// One past node `i`'s subtree: nodes go depth first, so the first node after it whose parent
 /// comes before `i`.
@@ -101,6 +133,25 @@ impl<S: 'static> Runtime<S> {
         if c.open.is_some_and(|k| i < c.slides[k].window || i >= c.slides[k].end) { self.close_slide(); }
     }
 
+    /// The rect, in pixels, that sliding window `i` drawn at `r` (from `rect` in points, `k` points
+    /// per offset point) clips and fades what it holds with: posed from its anchor, kept from an
+    /// earlier paint while this paint's own rect lands within a grid step of the anchor's pose
+    /// (its laid-out place held), else anchored here. Any other node keeps `r`.
+    pub(in crate::runtime) fn slide_anchor(&mut self, i: usize, rect: [f32; 4], r: [f32; 4], k: f32) -> [f32; 4] {
+        if !self.slide_glides(i) || !self.slide_pair(i) { return r; }
+        let s = self.env.scale;
+        let n = &self.nodes[i];
+        let ow = self.scene.get(n.id, prop::OFFSET).unwrap_or(rune_motion::Vec2::ZERO);
+        let ow = [ow.x, ow.y];
+        let here = Anchor { node: n.id, rect, offset: ow, k, s, size: [grid(n.local.w, s), grid(n.local.h, s)] };
+        let c = &mut self.paint_keep.cycles;
+        let kept = c.anchors.iter().copied().find(|a| a.node == here.node && (a.k, a.s, a.size) == (here.k, here.s, here.size)
+            && pose_rect(a, ow).iter().zip(&r).all(|(p, q)| (p - q).abs() <= 1.0 / 64.0 + 1e-4));
+        let a = kept.unwrap_or(here);
+        c.next_anchors.push(a);
+        c.anchor = Some((i, a));
+        pose_rect(&a, ow)
+    }
     /// Node `i` clipped what it holds to `r` under `outer` (clip, fade widths, fade origins),
     /// from `rect` (points) at `k` points of rect per point of offset and ancestors' scale `sc`:
     /// recorded if it is a sliding window a loop-only step can move.
@@ -115,13 +166,16 @@ impl<S: 'static> Runtime<S> {
         let n = &self.nodes[i];
         let off = |j: usize| self.scene.get(self.nodes[j].id, prop::OFFSET).unwrap_or(rune_motion::Vec2::ZERO);
         let (ow, oc) = (off(i), off(counter));
+        // Posed from its anchor (`slide_anchor`, this paint's), else from this paint's own rect.
+        let (rect, offset) = match self.paint_keep.cycles.anchor { Some((j, a)) if j == i => (a.rect, a.offset), _ => (rect, [ow.x, ow.y]) };
         let slide = Slide {
             window: i,
             counter,
             end,
             instances: self.instances.len()..self.instances.len(),
             rect,
-            offset: [ow.x, ow.y],
+            offset,
+            painted: [ow.x, ow.y],
             net: [ow.x + oc.x, ow.y + oc.y],
             k,
             s,
@@ -189,14 +243,7 @@ impl<S: 'static> Runtime<S> {
     /// None when the step can't move it alone (the content would move, or something under it
     /// would show or hide, or a glyph draw or not).
     fn slide_pose(sl: &Slide, ow: [f32; 2]) -> Option<Pose> {
-        let d = [(ow[0] - sl.offset[0]) * sl.k, (ow[1] - sl.offset[1]) * sl.k];
-        let mut rect = [sl.rect[0] + d[0], sl.rect[1] + d[1], sl.rect[2] + d[0], sl.rect[3] + d[1]];
-        for axis in 0..2 {
-            if ((rect[axis + 2] - rect[axis]) - sl.size[axis]).abs() * sl.s < 1.0 / 32.0 {
-                rect[axis + 2] = rect[axis] + sl.size[axis];
-            }
-        }
-        let r = rect.map(|v| grid(v, sl.s) * sl.s);
+        let r = posed(sl.rect, sl.offset, sl.k, sl.s, sl.size, ow);
         if !shows([r[0], r[1], r[2].max(r[0]), r[3].max(r[1])], sl.outer[0], sl.vp) { return None; }
         let clip = intersect(r, sl.outer[0]);
         let (mut fade, mut origin) = (sl.outer[1], sl.outer[2]);
@@ -234,7 +281,7 @@ impl<S: 'static> Runtime<S> {
         let sl = &self.paint_keep.cycles.slides[k];
         if let Some(ok) = sl.checked { return ok; }
         let range = sl.instances.clone();
-        let ok = range.end <= self.instances.len() && Self::slide_pose(sl, sl.offset).is_some_and(|(clip, fade)| {
+        let ok = range.end <= self.instances.len() && Self::slide_pose(sl, sl.painted).is_some_and(|(clip, fade)| {
             let here = &self.instances[range.clone()];
             here.iter().all(|q| q.clip == clip && q.fade == fade && q.params[1] != crate::render::KIND_LAYER && q.params[1] != crate::render::KIND_LAYER_END)
                 && here.iter().filter(|q| q.params[1] == KIND_GLYPH).count() == sl.glyphs.iter().filter(|g| g.1).count()

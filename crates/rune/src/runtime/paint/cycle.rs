@@ -24,9 +24,14 @@ pub(in crate::runtime) struct CyclePaint {
     pub(super) missed: Option<&'static str>,
     /// What the last step would have drawn, while `RUNE_LOOP_CHECK=1` runs ordinary frames instead.
     check: Option<Vec<Instance>>,
-    /// The last checked step's instances when they matched the ordinary frame's only within a
-    /// clip's grid step, for a headless run to draw both and compare their pixels.
-    grid_step: Option<Vec<Instance>>,
+    /// The clock the checked step sampled at: the ordinary frame that runs instead samples there
+    /// too (`Runtime::frame`), so the two compare one instant.
+    pub(in crate::runtime) check_clock: Option<f64>,
+    /// Sliding windows' anchors from the last paint, those this paint posed from, and the one it
+    /// posed last (`slide_anchor`).
+    pub(super) anchors: Vec<super::slide::Anchor>,
+    pub(super) next_anchors: Vec<super::slide::Anchor>,
+    pub(super) anchor: Option<(usize, super::slide::Anchor)>,
 }
 
 struct Slot {
@@ -49,6 +54,8 @@ impl CyclePaint {
         self.missed = None;
         self.opened = (usize::MAX, 0);
         self.mixed = false;
+        self.anchors = std::mem::take(&mut self.next_anchors);
+        self.anchor = None;
     }
 
     pub(in crate::runtime) fn other_deadline(&mut self) { self.mixed = true; }
@@ -152,6 +159,7 @@ impl<S: 'static> Runtime<S> {
                 for q in &mut predicted[sl.instances.clone()] { q.clip = clip; q.fade = fade; }
             }
             self.paint_keep.cycles.check = Some(predicted);
+            self.paint_keep.cycles.check_clock = Some(wall);
             return Err("checked against an ordinary frame");
         }
         self.clock = wall;
@@ -167,10 +175,6 @@ impl<S: 'static> Runtime<S> {
 
     /// `RUNE_LOOP_CHECK=1` is set (`checking`).
     pub(crate) fn loop_check_on(&self) -> bool { checking() }
-
-    /// The last checked step's instances, when they matched the ordinary frame's only within a
-    /// clip's grid step (`loop_checked`): a headless run draws them beside the frame's.
-    pub(crate) fn take_loop_grid_step(&mut self) -> Option<Vec<Instance>> { self.paint_keep.cycles.grid_step.take() }
 
     /// Why a loop on screen has no slot or window (`loop_step`'s answer): the first such loop's
     /// reason, from what paint read.
@@ -197,34 +201,26 @@ impl<S: 'static> Runtime<S> {
     /// `RUNE_LOOP_CHECK=1`: what the last loop-only step would have drawn against what the
     /// ordinary frame that ran instead drew. The instances that differ, and by how much at most
     /// (the largest difference in any field, in pixels or colour; infinite when their number or
-    /// soft edges differ). A window's clip one step of paint's 1/64-pixel grid apart counts as the
-    /// same. None when no step was checked.
+    /// soft edges differ). None when no step was checked.
     pub(crate) fn loop_checked(&mut self) -> Option<(usize, f32)> {
         let predicted = self.paint_keep.cycles.check.take()?;
         if predicted.len() != self.instances.len() { return Some((usize::MAX, f32::INFINITY)); }
-        let (mut differ, mut worst, mut stepped) = (0, 0.0f32, false);
+        let (mut differ, mut worst) = (0, 0.0f32);
         for (i, (p, q)) in predicted.iter().zip(&self.instances).enumerate() {
             if bytemuck::bytes_of(p) == bytemuck::bytes_of(q) { continue; }
-            let fields = |i: &Instance| [i.rect, i.radii, i.fill, i.border, i.params, i.uv];
+            let fields = |i: &Instance| [i.rect, i.radii, i.fill, i.border, i.params, i.uv, i.clip];
             let d = if p.fade != q.fade { f32::INFINITY } else {
                 fields(p).iter().flatten().zip(fields(q).iter().flatten()).map(|(a, b)| (a - b).abs()).fold(0.0, f32::max)
             };
-            // A window's clip lands on paint's 1/64-pixel grid from the slide's offset: the step and
-            // the ordinary frame reach that offset by different float sums, so where it sits on a
-            // grid line's half they can land one grid step apart. That one step is the same picture;
-            // anything more isn't.
-            let clip = p.clip.iter().zip(&q.clip).map(|(a, b)| (a - b).abs()).fold(0.0, f32::max);
-            if d > 1e-3 || clip > 1.0 / 64.0 + 1e-4 {
+            if d > 1e-3 {
                 differ += 1;
                 // `RUNE_LOOP_CHECK_DETAIL=1`: which instance, and what the step and the frame had.
                 if std::env::var_os("RUNE_LOOP_CHECK_DETAIL").is_some() {
                     eprintln!("rune: loop check: instance {i} (kind {}) step {:?} frame {:?}", q.params[1], (p.rect, p.fill, p.params, p.clip, p.uv), (q.rect, q.fill, q.params, q.clip, q.uv));
                 }
-            } else if clip > 0.0 { stepped = true; }
-            let d = d.max(clip);
+            }
             worst = worst.max(d);
         }
-        if stepped && differ == 0 { self.paint_keep.cycles.grid_step = Some(predicted); }
         Some((differ, worst))
     }
 

@@ -402,21 +402,6 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
             readback.copy(&mut enc, &target, shot);
         }
         renderer.submit(&gpu.queue, enc);
-        // `RUNE_LOOP_CHECK=1`: a step whose clips sat one grid step from the ordinary frame's is
-        // drawn too, beside this frame, and the two pictures are compared pixel by pixel.
-        if let Some(step_instances) = rt.take_loop_grid_step() && comp.is_none() && overlay.is_none() && alpha.is_none() {
-            let mut enc = gpu.device.create_command_encoder(&Default::default());
-            target.copy(&mut enc);
-            gpu.queue.submit([enc.finish()]);
-            let frame_px = target.read(&gpu.device);
-            let other = Offscreen::with_format(&gpu.device, wp, hp, target_format);
-            let mut enc = gpu.device.create_command_encoder(&Default::default());
-            renderer.prepare_ui(&gpu.device, &gpu.queue, &mut rt.text.atlas, &step_instances, (wp, hp));
-            renderer.draw(&mut enc, &other.view, rt.clear_color());
-            other.copy(&mut enc);
-            renderer.submit(&gpu.queue, enc);
-            loop_check.pixels(&frame_px, &other.read(&gpu.device));
-        }
         reports.drawn(reports.stamp(), None, frame_start, update_ms);
         rt.interaction_presented(Instant::now(), None);
         if want_pixels { readback.submitted(); }

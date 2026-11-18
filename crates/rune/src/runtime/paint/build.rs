@@ -1208,10 +1208,12 @@ impl<S: 'static> Runtime<S> {
             // A scroll viewport clips its content with a hard edge unless it sets soft ones.
             if let Some(f) = n.vis.clip.or(n.scroll.map(|_| [0.0; 4])) {
                 let outer = [clip, fade, fade_origin];
-                clip = intersect(r, clip);
-                let (own, origin) = self.scroll_edge_fade(i, f, r, sc * s, p.rect.edges()[3]);
+                // A sliding window a step moves clips from its anchor's pose (`slide_anchor`).
+                let rs = self.slide_anchor(i, rect_pt, r, if unscaled { 1.0 } else { sc });
+                clip = intersect(rs, clip);
+                let (own, origin) = self.scroll_edge_fade(i, f, rs, sc * s, p.rect.edges()[3]);
                 inherit_fade(&mut fade, &mut fade_origin, origin, own);
-                self.note_slide(i, outer, rect_pt, r, (if unscaled { 1.0 } else { sc }, sc));
+                self.note_slide(i, outer, rect_pt, rs, (if unscaled { 1.0 } else { sc }, sc));
             }
             let n = &self.nodes[i];
             let mask = self.row_mask[i];

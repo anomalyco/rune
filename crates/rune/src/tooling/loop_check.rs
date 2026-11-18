@@ -16,11 +16,6 @@ pub(super) struct Tally {
     most: usize,
     worst: f32,
     why: BTreeMap<(bool, &'static str), usize>,
-    /// Steps whose clips sat one grid step from the ordinary frame's, drawn and compared:
-    /// how many, how many of their pictures differed, and the largest channel difference.
-    drawn: usize,
-    drawn_differ: usize,
-    drawn_worst: u8,
     log: Option<std::io::BufWriter<std::fs::File>>,
     opened: bool,
 }
@@ -47,14 +42,6 @@ impl Tally {
         }
     }
 
-    /// A step's picture against the ordinary frame's, both read back (RGBA, the same padded rows).
-    pub(super) fn pixels(&mut self, frame: &[u8], step: &[u8]) {
-        self.drawn += 1;
-        let worst = frame.iter().zip(step).map(|(a, b)| a.abs_diff(*b)).max().unwrap_or(0);
-        if worst > 0 { self.drawn_differ += 1; }
-        self.drawn_worst = self.drawn_worst.max(worst);
-    }
-
     /// Prints the tally, and whether the check passed: it compared at least one step and none
     /// differed. A run whose every frame was refused passes nothing. False when it failed (the
     /// run then exits non-zero); true when nothing asked (`RUNE_LOOP_CHECK` unset).
@@ -64,13 +51,8 @@ impl Tally {
         let why: Vec<String> = self.why.iter().map(|((input, w), n)| format!("{}{w}: {n}", if *input { "after an event, " } else { "" })).collect();
         eprintln!("rune: loop check: {} steps checked against ordinary frames, {} differ (at most {} instances, largest difference {}); asked: {}",
             self.checked, self.differ, self.most, self.worst, why.join(", "));
-        if self.drawn > 0 {
-            eprintln!("rune: loop check: {} steps whose clips sat one 1/64-pixel grid step from the ordinary frame's were drawn beside it: {} pictures differ (largest channel difference {})",
-                self.drawn, self.drawn_differ, self.drawn_worst);
-        }
         let fail = if self.checked == 0 { Some("no step was checked (every frame was refused: see why above)".to_owned()) }
-            else if self.differ > 0 { Some(format!("{} steps differ from the ordinary frame", self.differ)) }
-            else if self.drawn_differ > 0 { Some(format!("{} steps' pictures differ from the ordinary frame's", self.drawn_differ)) } else { None };
+            else if self.differ > 0 { Some(format!("{} steps differ from the ordinary frame", self.differ)) } else { None };
         match &fail {
             Some(why) => eprintln!("rune: loop check FAILED: {why}"),
             None => eprintln!("rune: loop check passed"),
