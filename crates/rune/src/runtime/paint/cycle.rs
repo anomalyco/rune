@@ -203,7 +203,7 @@ impl<S: 'static> Runtime<S> {
         let predicted = self.paint_keep.cycles.check.take()?;
         if predicted.len() != self.instances.len() { return Some((usize::MAX, f32::INFINITY)); }
         let (mut differ, mut worst, mut stepped) = (0, 0.0f32, false);
-        for (p, q) in predicted.iter().zip(&self.instances) {
+        for (i, (p, q)) in predicted.iter().zip(&self.instances).enumerate() {
             if bytemuck::bytes_of(p) == bytemuck::bytes_of(q) { continue; }
             let fields = |i: &Instance| [i.rect, i.radii, i.fill, i.border, i.params, i.uv];
             let d = if p.fade != q.fade { f32::INFINITY } else {
@@ -214,7 +214,13 @@ impl<S: 'static> Runtime<S> {
             // grid line's half they can land one grid step apart. That one step is the same picture;
             // anything more isn't.
             let clip = p.clip.iter().zip(&q.clip).map(|(a, b)| (a - b).abs()).fold(0.0, f32::max);
-            if d > 1e-3 || clip > 1.0 / 64.0 + 1e-4 { differ += 1; } else if clip > 0.0 { stepped = true; }
+            if d > 1e-3 || clip > 1.0 / 64.0 + 1e-4 {
+                differ += 1;
+                // `RUNE_LOOP_CHECK_DETAIL=1`: which instance, and what the step and the frame had.
+                if std::env::var_os("RUNE_LOOP_CHECK_DETAIL").is_some() {
+                    eprintln!("rune: loop check: instance {i} (kind {}) step {:?} frame {:?}", q.params[1], (p.rect, p.fill, p.params, p.clip, p.uv), (q.rect, q.fill, q.params, q.clip, q.uv));
+                }
+            } else if clip > 0.0 { stepped = true; }
             let d = d.max(clip);
             worst = worst.max(d);
         }
