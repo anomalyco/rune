@@ -63,25 +63,28 @@ impl Collapsible {
             .opacity(if show { 1.0 } else { 0.0 })
             .child(icon(glyph, 14.0).color(c.icon_weaker));
         let enabled = self.state != State::Disabled;
-        let trigger = row()
-            .key("trigger")
-            .role("button")
-            .label(self.title.clone())
-            .expanded(self.open)
-            .focusable(enabled)
-            .focus_ring(2.0, 0.0, c.border_focus)
-            .disabled(!enabled)
-            .w_full()
-            .h(32.0)
-            .center_y()
-            .child(
-                row()
-                    .gap(8.0)
-                    .center_y()
-                    .child(text(self.title.clone()).key("title").font(k.ty.text_small_medium).color(c.std_text))
-                    .child(arrow)
-                    .a11y_hidden(),
-            );
+        let trigger = k.focus_ring(
+            row()
+                .key("trigger")
+                .role("button")
+                .label(self.title.clone())
+                .expanded(self.open)
+                .focusable(enabled)
+                .disabled(!enabled)
+                .w_full()
+                .h(32.0)
+                .center_y()
+                .child(
+                    row()
+                        .gap(8.0)
+                        .center_y()
+                        .child(text(self.title.clone()).key("title").font(k.ty.text_small_medium).color(c.std_text))
+                        .child(arrow)
+                        .a11y_hidden(),
+                ),
+            2.0,
+            0.0,
+        );
         let trigger = self.acts.apply(trigger, enabled);
         let mut root = col().role("group").w_full().radius(k.radius.md).child(trigger);
         if self.open {

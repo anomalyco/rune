@@ -1,8 +1,10 @@
 //! Toast and ToastRegion (`@opencode/ui` feedback/toast).
 
+pub mod stack;
+
 use rune::{Edge, El, Icon, TextStyle, Transition, Tx, col, el, icon, row, text};
 
-use crate::{Acts, Button, ButtonVariant, ControlSize, Kit, press_over, shadows};
+use crate::{Acts, Button, ButtonVariant, ControlSize, Kit};
 
 pub struct Toast {
     title: String,
@@ -76,18 +78,19 @@ impl Toast {
         }
         top = top.child(content);
         if let Some(a) = self.close {
-            let b = row()
-                .key("close")
-                .role("button")
-                .label("Close")
-                .size(20.0, 20.0)
-                .center()
-                .radius(4.0)
-                .focusable(true)
-                .focus_ring(2.0, 0.0, c.border_focus)
-                .hover(c.hover)
-                .press(press_over(c.hover, c.pressed))
-                .child(icon(k.glyph.close, 16.0).color(c.icon_muted));
+            let b = k.interactive(k.focus_ring(
+                row()
+                    .key("close")
+                    .role("button")
+                    .label("Close")
+                    .size(20.0, 20.0)
+                    .center()
+                    .radius(4.0)
+                    .focusable(true)
+                    .child(icon(k.glyph.close, 16.0).color(c.icon_muted)),
+                2.0,
+                0.0,
+            ));
             top = top.child(a.apply(b, true));
         }
         let mut root = col()
@@ -100,7 +103,7 @@ impl Toast {
             .gap(12.0)
             .radius(8.0)
             .fill(c.layer_01);
-        root = shadows(k, root, &k.elevation.floating).child(top);
+        root = k.elevate(root, &k.elevation.floating).child(top);
         if !self.actions.is_empty() {
             let indent = 16.0 + 12.0;
             root = root.child(row().key("actions").pl(indent).gap(8.0).flex_wrap().children(self.actions));

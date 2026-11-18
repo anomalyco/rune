@@ -211,10 +211,22 @@ impl<S: 'static> ShortcutRecorder<S> {
         let border = if self.state.error().is_some() { k.c.danger.border }
             else if self.state.is_recording() { k.c.border_focus } else { k.c.border_base };
         let keys = if labels.is_empty() { placeholder.to_owned() } else { labels.join(" ") };
-        let mut control = row().key(&self.key).role("button")
-            .w(self.width).h(32.0).px(8.0).center_y().radius(k.radius.md)
-            .fill(k.c.bg_base).border(1.0, border).focusable(!self.disabled).disabled(self.disabled)
-            .focus_ring(2.0, 2.0, k.c.border_focus);
+        let mut control = k.focus_ring(
+            row()
+                .key(&self.key)
+                .role("button")
+                .w(self.width)
+                .h(32.0)
+                .px(8.0)
+                .center_y()
+                .radius(k.radius.md)
+                .fill(k.c.bg_base)
+                .border(1.0, border)
+                .focusable(!self.disabled)
+                .disabled(self.disabled),
+            2.0,
+            2.0,
+        );
         control = match self.label {
             Some(name) => control.label(name).a11y_value(keys),
             None => control.label(keys),

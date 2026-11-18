@@ -3,7 +3,8 @@
 //! and editor modifiers left to the text field. Fuzzy scores are Rune's own ordering.
 use std::rc::Rc;
 use rune::machine::Effects;
-use rune::{El, Key, TextEdit, Tx, col, el, icon, row};
+use rune::{El, TextEdit, Tx, col, el, icon, row};
+use crate::list_nav::{NavAction, NavPolicy, page_size};
 use crate::{Kit, Placement, Popover, PopupItem, PopupList, Select, SelectAppearance, TextInput};
 
 #[derive(Clone, Debug)]
@@ -217,7 +218,7 @@ impl<S: 'static> Combobox<S> {
         let active = self.state.active_index(&self.options, &choices);
         let access = self.access.clone();
         let key_access = self.access.clone();
-        let page = ((self.max_height / 28.0) as usize).saturating_sub(1).max(1);
+        let page = page_size(self.max_height, 28.0);
         let options = self.options.clone();
         let choose = self.choose.clone();
         let change_access = self.access.clone();
@@ -242,61 +243,37 @@ impl<S: 'static> Combobox<S> {
             .on_key(move |s: &mut S, ev, tx| {
                 let state = key_access(s);
                 if state.search.preedit().is_some() { return false; }
-                if ev.key == Key::Escape {
+                let Some(action) = NavPolicy::search_list(state.search.text.is_empty()).decode(ev, page) else {
+                    return false;
+                };
+                if action == NavAction::Escape {
                     if !tx.key_repeat() { state.close(); }
                     return true;
                 }
-                if ev.mods.alt || ev.mods.logo { return false; }
                 let choices = filtered(&options, &state.search.text);
                 let enabled: Vec<_> = choices.into_iter().filter(|i| !options[*i].disabled).collect();
                 let active = state.active_index(&options, &enabled);
-                if ev.key == Key::Enter {
-                    if tx.key_repeat() { return true; }
-                    let selected = active.map(|i| options[i].id.clone());
-                    state.close();
-                    if let (Some(selected), Some(choose)) = (selected, &choose) { choose(s, &selected, tx); }
-                    return true;
-                }
-                let control = ev.mods.ctrl && !ev.mods.shift;
-                // Page Up and Down move by the rows the list shows, stopping at the ends; Home
-                // and End jump there while the search is empty, else they move the caret.
-                let jump = match &ev.key {
-                    Key::PageDown | Key::PageUp | Key::Home | Key::End if ev.mods.cmd || ev.mods.ctrl || ev.mods.shift => None,
-                    Key::PageDown => Some(page as isize),
-                    Key::PageUp => Some(-(page as isize)),
-                    Key::End if state.search.text.is_empty() => Some(isize::MAX),
-                    Key::Home if state.search.text.is_empty() => Some(isize::MIN),
-                    _ => None,
-                };
-                if let Some(jump) = jump {
-                    if !enabled.is_empty() {
-                        let index = active.and_then(|i| enabled.iter().position(|v| *v == i)).unwrap_or(0) as isize;
-                        let next = index.saturating_add(jump).clamp(0, enabled.len() as isize - 1) as usize;
-                        let id = options[enabled[next]].id.clone();
-                        for effect in state.step(ComboboxEvent::Highlight { id, reveal: true }) {
-                            match effect { ComboboxEffect::Reveal(id) => tx.scroll_into_view(format!("{key}-option-{id}")) }
+                match action {
+                    NavAction::Activate => {
+                        if tx.key_repeat() { return true; }
+                        let selected = active.map(|i| options[i].id.clone());
+                        state.close();
+                        if let (Some(selected), Some(choose)) = (selected, &choose) { choose(s, &selected, tx); }
+                        true
+                    }
+                    NavAction::Move { step, .. } => {
+                        if !enabled.is_empty() {
+                            let index = active.and_then(|i| enabled.iter().position(|v| *v == i));
+                            let next = step.target(index, enabled.len(), true).unwrap();
+                            let id = options[enabled[next]].id.clone();
+                            for effect in state.step(ComboboxEvent::Highlight { id, reveal: true }) {
+                                match effect { ComboboxEffect::Reveal(id) => tx.scroll_into_view(format!("{key}-option-{id}")) }
+                            }
                         }
+                        true
                     }
-                    return true;
+                    NavAction::Escape | NavAction::SelectAll => true,
                 }
-                let delta = match &ev.key {
-                    Key::Down if !ev.mods.cmd && !ev.mods.ctrl => 1,
-                    Key::Up if !ev.mods.cmd && !ev.mods.ctrl => -1,
-                    Key::Text(c) if control && c == "n" => 1,
-                    Key::Text(c) if control && c == "p" => -1,
-                    Key::Command('n') if control => 1,
-                    Key::Command('p') if control => -1,
-                    _ => return false,
-                };
-                if !enabled.is_empty() {
-                    let index = active.and_then(|i| enabled.iter().position(|v| *v == i)).unwrap_or(0);
-                    let next = (index as isize + delta).rem_euclid(enabled.len() as isize) as usize;
-                    let id = options[enabled[next]].id.clone();
-                    for effect in state.step(ComboboxEvent::Highlight { id, reveal: true }) {
-                        match effect { ComboboxEffect::Reveal(id) => tx.scroll_into_view(format!("{key}-option-{id}")) }
-                    }
-                }
-                true
             }).build(k).key("search");
         let active_pos = active.and_then(|orig| choices.iter().position(|&c| c == orig));
         let items: Vec<_> = choices.iter().map(|&i| {

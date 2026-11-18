@@ -28,10 +28,11 @@ use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-use rune::{Align, Color, Cursor, Drag, El, GrowthSpec, Key, KeyEvent, Phase, ScrollSpec, TextStyle, Tx, col, el, icon, row, text};
+use rune::{Align, Color, Cursor, Drag, El, GrowthSpec, KeyEvent, Phase, ScrollSpec, TextStyle, Tx, col, el, icon, row, text};
 
 use crate::Kit;
 use crate::grip::Grip;
+use crate::list_nav::{NavAction, NavPolicy, page_size};
 
 /// Which way a column sorts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -357,34 +358,27 @@ impl TableState {
 
     /// Applies a key to `len` rows named by `id_at`. Returns `Some(row)` for Return on a row.
     fn handle_key(&mut self, ev: &KeyEvent, len: usize, id_at: &IdAt<'_>, tx: &mut Tx) -> KeyOutcome {
-        let m = ev.mods;
-        if len == 0 || m.alt || m.ctrl && !m.cmd || m.logo && !m.cmd {
-            return KeyOutcome::Ignored;
-        }
-        if ev.is_command('a') && self.multi {
-            self.selected = (0..len).map(|i| id_at(i).into_owned()).collect();
-            return KeyOutcome::Handled;
-        }
-        if m.cmd {
+        if len == 0 {
             return KeyOutcome::Ignored;
         }
         let at = self.cursor_row(len, id_at);
-        let page = ((self.viewport / self.row_height.max(1.0)).floor() as usize).saturating_sub(1).max(1);
-        let target = match ev.key {
-            Key::Up => at.map_or(len - 1, |r| r.saturating_sub(1)),
-            Key::Down => at.map_or(0, |r| (r + 1).min(len - 1)),
-            Key::Home => 0,
-            Key::End => len - 1,
-            Key::PageUp => at.map_or(0, |r| r.saturating_sub(page)),
-            Key::PageDown => at.map_or(0, |r| (r + page).min(len - 1)),
-            Key::Enter => {
+        let page = page_size(self.viewport, self.row_height);
+        let Some(action) = NavPolicy::list(self.multi).decode(ev, page) else {
+            return KeyOutcome::Ignored;
+        };
+        let (target, extend) = match action {
+            NavAction::SelectAll => {
+                self.selected = (0..len).map(|i| id_at(i).into_owned()).collect();
+                return KeyOutcome::Handled;
+            }
+            NavAction::Activate => {
                 return match at {
                     Some(_) if tx.key_repeat() => KeyOutcome::Handled,
                     Some(r) => KeyOutcome::Open(r),
                     None => KeyOutcome::Ignored,
                 };
             }
-            Key::Escape if self.multi && self.selected.len() > 1 => {
+            NavAction::Escape if self.multi && self.selected.len() > 1 => {
                 if let Some(r) = at {
                     self.cursor_hint.set(r);
                     self.anchor_hint.set(r);
@@ -394,10 +388,11 @@ impl TableState {
                 }
                 return KeyOutcome::Handled;
             }
-            _ => return KeyOutcome::Ignored,
+            NavAction::Escape => return KeyOutcome::Ignored,
+            NavAction::Move { step, extend } => (step.target(at, len, false).unwrap(), extend),
         };
         let before = self.cursor.clone();
-        if m.shift && self.multi {
+        if extend && self.multi {
             self.extend(target, len, id_at);
         } else {
             self.cursor_hint.set(target);

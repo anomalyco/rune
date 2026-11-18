@@ -3,7 +3,7 @@
 use rune::{Icon, Spring};
 
 use super::*;
-use crate::palette::tint;
+use crate::tokens::palette::tint;
 
 /// How markdown looks. [`MarkdownStyle::from_kit`] takes every colour and font from the kit's
 /// tokens, [`MarkdownStyle::neutral`] needs no kit; each builder

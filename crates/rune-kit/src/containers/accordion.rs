@@ -83,24 +83,27 @@ impl Accordion {
             let bottom = if last && !item.expanded { r } else { 0.0 };
             let top = if first { r } else { 0.0 };
             let enabled = item.state != State::Disabled;
-            let mut trigger = row()
-                .key("trigger")
-                .role("button")
-                .label(item.title.clone())
-                .expanded(item.expanded)
-                .focusable(enabled)
-                .focus_ring(2.0, -2.0, c.border_focus)
-                .disabled(!enabled)
-                .h(32.0)
-                .px(12.0)
-                .py(8.0)
-                .center_y()
-                .justify_between()
-                .corners([top, top, bottom, bottom])
-                .fill(if item.state == State::Hover { c.hover } else { c.bg_base })
-                .border(1.0, c.border_base)
-                .token_motion(k.motion.control)
-                .child(text(item.title.clone()).key("title").font(k.ty.text_small).color(c.text_base).a11y_hidden());
+            let mut trigger = k.focus_ring(
+                row()
+                    .key("trigger")
+                    .role("button")
+                    .label(item.title.clone())
+                    .expanded(item.expanded)
+                    .focusable(enabled)
+                    .disabled(!enabled)
+                    .h(32.0)
+                    .px(12.0)
+                    .py(8.0)
+                    .center_y()
+                    .justify_between()
+                    .corners([top, top, bottom, bottom])
+                    .fill(if item.state == State::Hover { c.hover } else { c.bg_base })
+                    .border(1.0, c.border_base)
+                    .token_motion(k.motion.control)
+                    .child(text(item.title.clone()).key("title").font(k.ty.text_small).color(c.text_base).a11y_hidden()),
+                2.0,
+                -2.0,
+            );
             if item.state == State::Rest {
                 trigger = trigger.hover(c.hover);
             }

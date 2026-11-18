@@ -3,7 +3,7 @@
 
 use rune::{El, TextStyle, Tx, el, row, text};
 
-use crate::{Acts, ControlSize, Kit, State, over, shadows};
+use crate::{Acts, ControlSize, Kit, State};
 
 pub struct Switch {
     label: Option<String>,
@@ -91,12 +91,8 @@ impl Switch {
             (false, true) => self.web_control(k),
             (false, false) => self.compact_control(k),
         };
-        let control = if disabled && !self.standard { control.layer_opacity(0.5) } else { control };
-        let control = if self.state == State::Focus && !self.standard {
-            control.outline(2.0, 1.0, c.border_focus)
-        } else {
-            control
-        };
+        let control = k.disabled_dim(control, disabled && !self.standard);
+        let control = k.focus_ring_state(control, 2.0, 1.0, self.state == State::Focus && !self.standard);
         // The switch's label, description and on state say what its text and track show.
         let mut root = row().role("switch").checked(self.checked).gap(8.0).center_y();
         if let Some(l) = &self.label {
@@ -115,19 +111,11 @@ impl Switch {
                 .description(d.clone())
                 .child(text(d.clone()).key("description").font(k.ty.text_xsmall.lh(15.6)).color(c.std_text).a11y_hidden());
         }
-        root = root.child(control.key("control").focus_ring(2.0, 1.0, c.border_focus).a11y_hidden());
+        root = root.child(control.key("control").a11y_hidden());
         self.acts.apply(root.focusable(!disabled).disabled(disabled), !disabled)
     }
 
     fn compact_control(&self, k: &Kit) -> El {
-        let c = &k.c;
-        let hover = self.state == State::Hover;
-        let (base, sheen_bottom, elevation, knob) = if self.checked {
-            (c.bg_accent, k.light_on(0.1, c.bg_accent), &k.elevation.switch_on, c.knob_on)
-        } else {
-            (c.layer_04, k.light_on(0.2, c.layer_04), &k.elevation.switch_off, c.knob)
-        };
-        let overlay = if self.checked { k.on(c.contrast_hover, c.bg_accent) } else { c.hover };
         // NSSwitch's capsule track and pill knob, measured on macOS 27: (track w, h, knob w, h, inset).
         let (tw, th, kw, kh, inset) = match self.size {
             ControlSize::Mini => (36.0, 16.0, 21.0, 14.0, 1.0),
@@ -144,56 +132,45 @@ impl Switch {
         };
         let w = kw + stretch;
         let x = if self.checked { tw - inset - w } else { inset };
-        let thumb = shadows(
-            k,
-            el().key("thumb")
-                .size(w, kh)
-                .absolute(x, inset)
-                .radius(kh / 2.0)
-                .fill(knob)
-                .gradient(k.on(c.depth_top, knob), k.on(c.depth_bottom, knob))
-                .border(0.5, k.on(c.depth_top, knob)),
-            &k.elevation.elements,
-        )
-        .motion(k.motion.control);
-        let fill = if hover { over(overlay, base) } else { base };
-        let mut track = el().size(tw, th).radius(th / 2.0).fill(fill).gradient(k.light(0.0), sheen_bottom);
-        if !hover && self.state == State::Rest {
-            track = track.hover(overlay);
-        }
-        shadows(k, track, elevation).motion(k.motion.control).child(thumb)
+        self.raised_switch(k, (tw, th, th / 2.0), (w, kh, x, inset, kh / 2.0))
     }
 
     /// switch.css:20-61 at rest, :89-99 under the pointer, :106-140 on.
     fn web_control(&self, k: &Kit) -> El {
+        let (w, radius) = if self.state == State::Hover { (13.0, 3.0) } else { (12.0, 2.0) };
+        let x = 2.0 + if self.checked { 24.0 - 4.0 - w } else { 0.0 };
+        self.raised_switch(k, (24.0, 16.0, 4.0), (w, 12.0, x, 2.0, radius))
+    }
+
+    fn raised_switch(&self, k: &Kit, track_box: (f32, f32, f32), thumb_box: (f32, f32, f32, f32, f32)) -> El {
         let c = &k.c;
-        let hover = self.state == State::Hover;
         let (base, sheen_bottom, elevation, knob) = if self.checked {
             (c.bg_accent, k.light_on(0.1, c.bg_accent), &k.elevation.switch_on, c.knob_on)
         } else {
             (c.layer_04, k.light_on(0.2, c.layer_04), &k.elevation.switch_off, c.knob)
         };
         let overlay = if self.checked { k.on(c.contrast_hover, c.bg_accent) } else { c.hover };
-        let (w, radius) = if hover { (13.0, 3.0) } else { (12.0, 2.0) };
-        let x = 2.0 + if self.checked { 24.0 - 4.0 - w } else { 0.0 };
-        let thumb = shadows(
-            k,
+        let (tw, th, tr) = track_box;
+        let (w, h, x, y, r) = thumb_box;
+        let thumb = k.elevate(
             el().key("thumb")
-                .size(w, 12.0)
-                .absolute(x, 2.0)
-                .radius(radius)
+                .size(w, h)
+                .absolute(x, y)
+                .radius(r)
                 .fill(knob)
                 .gradient(k.on(c.depth_top, knob), k.on(c.depth_bottom, knob))
                 .border(0.5, k.on(c.depth_top, knob)),
             &k.elevation.elements,
         )
         .motion(k.motion.control);
-        let fill = if hover { over(overlay, base) } else { base };
-        let mut track = el().size(24.0, 16.0).radius(4.0).fill(fill).gradient(k.light(0.0), sheen_bottom);
-        if self.state == State::Rest {
-            track = track.hover(overlay);
-        }
-        shadows(k, track, elevation).motion(k.motion.control).child(thumb)
+        let track = k.hover_surface(
+            el().size(tw, th).radius(tr).gradient(k.light(0.0), sheen_bottom),
+            base,
+            overlay,
+            self.state == State::Hover,
+            self.state == State::Rest,
+        );
+        k.elevate(track, elevation).motion(k.motion.control).child(thumb)
     }
 
     fn standard_control(&self, k: &Kit, hover: bool) -> El {
@@ -219,7 +196,7 @@ impl Switch {
         } else {
             thumb.size(16.0 + stretch, 16.0).absolute(0.0, 0.0).radius(8.0).border(1.0, c.std_border)
         };
-        thumb = shadows(k, thumb, &k.elevation.knob).motion(k.motion.control);
+        thumb = k.elevate(thumb, &k.elevation.knob).motion(k.motion.control);
         el().size(28.0, 16.0).radius(8.0).fill(fill).border(1.0, border).motion(k.motion.control).child(thumb)
     }
 }

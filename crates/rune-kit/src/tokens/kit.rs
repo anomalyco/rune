@@ -263,6 +263,81 @@ impl Kit {
         e.hover(hover).press(crate::press_over(hover, pressed))
     }
 
+    /// Paints `base` or its forced `State::Hover`/`State::Pressed` composite (`crate::over`),
+    /// and wires live hover/press overlays when `state == State::Rest && interactive`.
+    pub(crate) fn surface_state(
+        &self,
+        e: El,
+        state: crate::State,
+        base: Color,
+        hover: Color,
+        pressed: Color,
+        interactive: bool,
+    ) -> El {
+        let fill = match state {
+            crate::State::Hover => crate::over(hover, base),
+            crate::State::Pressed => crate::over(pressed, base),
+            _ => base,
+        };
+        let e = e.fill(fill);
+        if state == crate::State::Rest && interactive {
+            self.interactive_with(e, hover, pressed)
+        } else {
+            e
+        }
+    }
+
+    /// Paints `base` (or `hover` composited over `base` when `forced_hover`) and attaches a live
+    /// `.hover(hover)` overlay when `live_hover` is true.
+    pub(crate) fn hover_surface(
+        &self,
+        e: El,
+        base: Color,
+        hover: Color,
+        forced_hover: bool,
+        live_hover: bool,
+    ) -> El {
+        let e = e.fill(if forced_hover { crate::over(hover, base) } else { base });
+        if live_hover { e.hover(hover) } else { e }
+    }
+
+    /// Transparent-base interactive state (inline triggers, segments): paints `c.hover` when
+    /// `forced_hover`, `c.pressed` when `state == State::Pressed`, or wires live hover/press
+    /// overlays when `live` is true.
+    pub(crate) fn overlay_state(&self, e: El, state: crate::State, forced_hover: bool, live: bool) -> El {
+        if forced_hover {
+            e.fill(self.c.hover)
+        } else if state == crate::State::Pressed {
+            e.fill(self.c.pressed)
+        } else if live {
+            self.interactive(e)
+        } else {
+            e
+        }
+    }
+
+    /// Attaches the kit's keyboard focus ring (`c.border_focus`) with exact `width` and `offset`.
+    pub(crate) fn focus_ring(&self, e: El, width: f32, offset: f32) -> El {
+        e.focus_ring(width, offset, self.c.border_focus)
+    }
+
+    /// Attaches the kit's keyboard focus ring and paints the matching forced outline when
+    /// `forced` is true (e.g. `State::Focus`).
+    pub(crate) fn focus_ring_state(&self, e: El, width: f32, offset: f32, forced: bool) -> El {
+        let e = self.focus_ring(e, width, offset);
+        if forced { e.outline(width, offset, self.c.border_focus) } else { e }
+    }
+
+    /// Dims a disabled control at the kit's standard 50% layer opacity when `disabled` is true.
+    pub(crate) fn disabled_dim(&self, e: El, disabled: bool) -> El {
+        self.disabled_dim_alpha(e, disabled, 0.5)
+    }
+
+    /// Dims a disabled control at `alpha` layer opacity when `disabled` is true.
+    pub(crate) fn disabled_dim_alpha(&self, e: El, disabled: bool, alpha: f32) -> El {
+        if disabled { e.layer_opacity(alpha) } else { e }
+    }
+
     /// Paints elevation layers on `e` as box shadows, e.g. `k.elevate(e, &k.elevation.floating)`.
     pub fn elevate(&self, e: El, layers: &[Shadow]) -> El {
         crate::shadows(self, e, layers)
@@ -342,5 +417,43 @@ mod tests {
         let ty = Type { ui: a.ty.ui.lh(a.ty.ui.line_height + 1.0), ..a.ty };
         assert_ne!(s.hash_one(a.ty), s.hash_one(ty));
         assert_eq!(s.hash_one(a.ty.ui.tracking(0.0)), s.hash_one(a.ty.ui.tracking(-0.0)));
+    }
+
+    #[test]
+    fn state_helpers_match_manual_elements_bit_for_bit() {
+        use rune::{Cx, Env, Runtime, col, el};
+        use rune::render::{KIND_LAYER, KIND_LAYER_END};
+
+        fn build_helpers(_: &(), _: &mut Cx<()>) -> El {
+            let k = Kit::neutral(true);
+            let hovered = k.surface_state(el().key("s").size(40.0, 20.0), crate::State::Hover, k.c.bg_base, k.c.hover, k.c.pressed, true);
+            let hovered_only = k.hover_surface(el().key("h").size(40.0, 20.0), k.c.bg_base, k.c.hover, true, false);
+            let overlay_pressed = k.overlay_state(el().key("o").size(40.0, 20.0), crate::State::Pressed, false, true);
+            let focused = k.focus_ring_state(el().key("f").size(40.0, 20.0).fill(k.c.bg_base), 2.0, 1.0, true);
+            let dimmed = k.disabled_dim(el().key("d").size(40.0, 20.0).fill(k.c.bg_base).child(el().size(10.0, 10.0).fill(k.c.text_base)), true);
+            col().child(hovered).child(hovered_only).child(overlay_pressed).child(focused).child(dimmed)
+        }
+
+        fn build_manual(_: &(), _: &mut Cx<()>) -> El {
+            let k = Kit::neutral(true);
+            let hovered = el().key("s").size(40.0, 20.0).fill(crate::over(k.c.hover, k.c.bg_base));
+            let hovered_only = el().key("h").size(40.0, 20.0).fill(crate::over(k.c.hover, k.c.bg_base));
+            let overlay_pressed = el().key("o").size(40.0, 20.0).fill(k.c.pressed);
+            let focused = el().key("f").size(40.0, 20.0).fill(k.c.bg_base).focus_ring(2.0, 1.0, k.c.border_focus).outline(2.0, 1.0, k.c.border_focus);
+            let dimmed = el().key("d").size(40.0, 20.0).fill(k.c.bg_base).child(el().size(10.0, 10.0).fill(k.c.text_base)).layer_opacity(0.5);
+            col().child(hovered).child(hovered_only).child(overlay_pressed).child(focused).child(dimmed)
+        }
+
+        let mut a = Runtime::new((), build_helpers, (200.0, 200.0), Env::new(true, 1.0));
+        let mut b = Runtime::new((), build_manual, (200.0, 200.0), Env::new(true, 1.0));
+        a.frame(0.0);
+        b.frame(0.0);
+        assert_eq!(a.instances.len(), b.instances.len());
+        for (ia, ib) in a.instances.iter().zip(&b.instances) {
+            assert_eq!((ia.rect, ia.fill, ia.border, ia.params), (ib.rect, ib.fill, ib.border, ib.params));
+        }
+        let opens = a.instances.iter().filter(|i| i.params[1] == KIND_LAYER).count();
+        let closes = a.instances.iter().filter(|i| i.params[1] == KIND_LAYER_END).count();
+        assert!(opens >= 1 && opens == closes, "disabled_dim balances compositing layers");
     }
 }
