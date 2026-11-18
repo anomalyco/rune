@@ -5,15 +5,24 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-rune = { path = "../../crates/rune", features = ["keys-overlay"] }
-rune-motion = { path = "../../crates/rune-motion" }
-rune-fx = { path = "../../crates/rune-fx" }
-rune-light = { path = "../../crates/rune-light" }
-wgpu = { version = "30", default-features = false, features = ["std", "parking_lot", "metal", "wgsl"] }
-bytemuck = { version = "1.25", features = ["derive"] }
+rune = { workspace = true, default-features = true, features = ["keys-overlay"] }
+rune-motion = { workspace = true }
+rune-fx = { workspace = true }
+rune-light = { workspace = true }
+wgpu = { workspace = true, features = ["std", "parking_lot", "wgsl"] }
+bytemuck = { workspace = true }
 
-[target.'cfg(not(target_os = "macos"))'.dependencies]
-wgpu = { version = "30", default-features = false, features = ["vulkan", "dx12"] }
+[target.'cfg(target_vendor = "apple")'.dependencies]
+wgpu = { workspace = true, features = ["metal"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+wgpu = { workspace = true, features = ["dx12"] }
+
+[target.'cfg(all(not(target_vendor = "apple"), not(target_arch = "wasm32"), not(target_os = "windows")))'.dependencies]
+wgpu = { workspace = true, features = ["vulkan"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wgpu = { workspace = true, features = ["webgpu"] }
 
 [lints]
 workspace = true

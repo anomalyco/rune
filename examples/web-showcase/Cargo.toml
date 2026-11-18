@@ -8,10 +8,10 @@ license.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-rune = { path = "../../crates/rune", features = ["keys-overlay"] }
+rune = { workspace = true, default-features = true, features = ["keys-overlay"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-wasm-bindgen = "0.2"
+wasm-bindgen = { workspace = true }
 
 [lints]
 workspace = true

@@ -2,6 +2,7 @@
 name = "rune-highlights"
 version = "0.0.1"
 edition.workspace = true
+# Crate code is MIT; vendored highlights.wasm (@pierre/highlights) is Apache-2.0.
 license = "MIT AND Apache-2.0"
 description = "Pierre's Highlights (the code highlighter OpenCode's desktop app draws with), translated from its WebAssembly to Rust at build time: 80 languages, the same tokens, no runtime."
 

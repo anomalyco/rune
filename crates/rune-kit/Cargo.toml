@@ -6,19 +6,24 @@ license.workspace = true
 description = "Generic, themable components for Rune. Components read only semantic tokens (`Kit`); a theme crate supplies them."
 
 [dependencies]
-rune = { path = "../rune", default-features = false }
+rune = { workspace = true }
 # The built-in syntax highlighter: Desktop's own lexers (syntax).
-rune-highlights = { path = "../rune-highlights" }
-rune-mermaid = { path = "../rune-mermaid", optional = true }
-rune-motion = { path = "../rune-motion" }
+rune-highlights = { workspace = true, optional = true }
+rune-mermaid = { workspace = true, optional = true }
+rune-motion = { workspace = true }
 # Search's accent folding (`search`): NFD, the data Parley already links.
 icu_normalizer = { version = "2", default-features = false, features = ["compiled_data"] }
-unicode-segmentation = "1.13"
+unicode-segmentation = { workspace = true }
 pulldown-cmark = { version = "0.13", default-features = false, optional = true }
 
 [features]
+default = ["syntax"]
+# Built-in syntax highlighting via `rune-highlights` (80 languages). Disable with
+# `default-features = false` to drop the lexers when an app provides its own highlighter or
+# draws no code.
+syntax = ["dep:rune-highlights"]
 # `Markdown` and `MarkdownStyle`.
-markdown = ["dep:pulldown-cmark"]
+markdown = ["syntax", "dep:pulldown-cmark"]
 # Native ```mermaid diagrams in `Markdown` (flowcharts, sequence and state diagrams), and `mermaid`.
 mermaid = ["markdown", "dep:rune-mermaid"]
 # Phase timings for the headless benches (`markdown_resize`).
@@ -42,16 +47,16 @@ required-features = ["markdown", "frame-profile"]
 
 [dev-dependencies]
 # The examples' headless runs (`--snap`, `--trace`, ...) in release builds.
-rune = { path = "../rune", default-features = false, features = ["keys-overlay"] }
-procwatch = { path = "../procwatch" }
+rune = { workspace = true, features = ["keys-overlay"] }
+procwatch = { workspace = true }
 # The accessibility tree tests read and write `Runtime::accessibility_json` (tests/a11y).
-serde_json = "1"
+serde_json = { workspace = true }
 # Reference rasteriser for the built-in glyphs (tests/integration/glyphs.rs).
-resvg = { version = "0.45", default-features = false }
+resvg = { workspace = true }
 # The scroll bar's fade test rasterises its frame with the reference renderer (tests/integration/scroll_bar_fade.rs).
-rune-ref = { path = "../rune-ref", features = ["gpu"] }
+rune-ref = { workspace = true, features = ["gpu"] }
 # The fixture goldens render with the OpenCode theme's tokens and fonts (tests/mermaid/markdown_fixture.rs).
-rune-theme-opencode = { path = "../../themes/opencode" }
+rune-theme-opencode = { workspace = true }
 
 [[test]]
 name = "markdown"
