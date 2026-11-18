@@ -217,6 +217,9 @@ impl<S: 'static> Host<S> {
         let mut loop_why: Option<&'static str> = None;
         let only_loops = l.loop_frame.only_loops();
         if !only_loops { loop_why = Some("something reached the window"); }
+        // The app's waker ran and its event is still on its way: what it brought may be readable now.
+        let only_loops = only_loops && !self.app_woken.load(std::sync::atomic::Ordering::Acquire);
+        if loop_why.is_none() && !only_loops { loop_why = Some("an app wake on its way"); }
         #[cfg(target_os = "windows")]
         let only_loops = only_loops && !hidden && !live_resize && self.trace.is_none() && self.args.trace.is_none()
             && self.rt.window_frame.is_none() && !FrameMove::moving(&self.frame_move) && !composing(self.comp.as_deref());

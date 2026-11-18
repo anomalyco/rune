@@ -125,6 +125,7 @@ impl<S: 'static> Host<S> {
         if !matches!(event, WakeEvent::DisplayTick(_) | WakeEvent::FrameSlot(_)) && let Some(w) = &mut self.win { w.loop_frame.touched(); }
         match event {
             WakeEvent::App(_) => {
+                self.app_woken.store(false, std::sync::atomic::Ordering::Relaxed);
                 self.drain(event_loop, true);
             }
             WakeEvent::DisplayTick(_) => {
