@@ -222,7 +222,7 @@ pub(crate) fn parse_script(list: Value) -> Vec<Ev> {
                 let d = |k: &str| e[k].as_f64().unwrap_or(0.0) as f32;
                 gesture_at(&mut out, &pos);
                 let ev = crate::WheelEvent::new(d("dx"), d("dy")).mods(script_mods(&e)).phase(script_phase(&e))
-                    .precise(e["precise"].as_bool().unwrap_or(true));
+                    .precise(e["precise"].as_bool().unwrap_or(true)).notch(e["notch"].as_bool().unwrap_or(false));
                 out.push(Ev { t, kind: Kind::WheelEvent(ev), pos });
             }
             "magnify" => {

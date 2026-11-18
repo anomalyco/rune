@@ -17,7 +17,7 @@ impl<S: 'static> Runtime<S> {
         let focused = self.focus.path();
         let editing = || focused.and_then(|p| self.index_of(p)).is_some_and(|i| self.nodes[i].input.is_some());
         let (name, rank, path): (&'static str, u8, Option<&str>) = match action {
-            Action::Press(p, _) => ("on_press", 3, Some(p)),
+            Action::Press(p, ..) => ("on_press", 3, Some(p)),
             Action::DoublePress(p) => ("on_double_press", 3, Some(p)),
             Action::SecondaryPress(p, _) => ("on_secondary_press", 3, Some(p)),
             Action::MiddlePress(p) => ("on_middle_press", 3, Some(p)),

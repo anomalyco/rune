@@ -1,0 +1,1 @@
+- Web: `rune-knobs`'s Random action and `frame-profile` phase scopes read `rune::time` instead of panicking on `std::time` in browsers, and native-only diagnostic/process modules are excluded from `wasm32` builds.

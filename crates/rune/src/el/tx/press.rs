@@ -6,6 +6,10 @@ use std::time::Duration;
 use crate::Tx;
 
 impl Tx {
+    /// Whether this `on_press` came from a touch tap. A mouse click, keyboard
+    /// activation or accessibility action returns false, including on touch-capable hosts.
+    pub fn touch_tap(&self) -> bool { self.touch_tap }
+
     /// From a drag handler: while this press stays held, send the handler the pointer again as
     /// a [`Phase::Move`](crate::Phase::Move) after `delay`, moved or not. [`Tx::drag_repeat`]
     /// tells that move from the hand's. Ask again from the repeat, with the repeat interval, to

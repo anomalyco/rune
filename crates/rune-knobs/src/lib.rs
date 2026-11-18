@@ -566,7 +566,7 @@ impl Knobs {
     pub fn random(&mut self, g: &Group) {
         self.checkpoint();
         if self.seed == 0 {
-            self.seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.as_nanos() as u64) | 1;
+            self.seed = rune::time::SystemTime::now().duration_since(rune::time::UNIX_EPOCH).map_or(1, |d| d.as_nanos() as u64) | 1;
         }
         for k in g.knobs {
             // xorshift64
