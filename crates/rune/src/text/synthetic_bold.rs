@@ -20,13 +20,14 @@ pub(super) const ADVANCE: f32 = 1.0;
 /// The brush bit of a glyph run in synthetic bold; the rest is its `Ink`.
 pub(crate) const SYNTHETIC_BOLD: u16 = 0x8000;
 
-/// The brushes `ranges` take: each piece's own ink (the last span over it) with
-/// [`SYNTHETIC_BOLD`], split where the spans over it change.
+/// The brushes `ranges` take: each piece's layout-span ordinal (the last layout-affecting span
+/// over it) with [`SYNTHETIC_BOLD`], split where those spans change.
 pub(super) fn inks(ranges: &[Range<usize>], spans: &[Span]) -> Vec<(Range<usize>, u16)> {
-    let ink_at = |at: usize| spans.iter().rposition(|s| (s.start as usize) <= at && at < s.end as usize).map_or(0, |i| i as u16 + 1);
+    let layout_spans: Vec<&Span> = super::span::layout_spans(spans).collect();
+    let ink_at = |at: usize| layout_spans.iter().rposition(|s| (s.start as usize) <= at && at < s.end as usize).map_or(0, |i| i as u16 + 1);
     let mut out = Vec::new();
     for r in ranges {
-        let mut cuts: Vec<usize> = spans.iter().flat_map(|s| [s.start as usize, s.end as usize]).filter(|&c| r.start < c && c < r.end).collect();
+        let mut cuts: Vec<usize> = layout_spans.iter().flat_map(|s| [s.start as usize, s.end as usize]).filter(|&c| r.start < c && c < r.end).collect();
         cuts.push(r.end);
         cuts.sort_unstable();
         cuts.dedup();
