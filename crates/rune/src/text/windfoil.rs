@@ -112,14 +112,14 @@ impl TextSystem {
     /// The dilation radius (device px) and hint record a glyph of `face` at `ppem` draws with,
     /// widened for synthetic bold; a TrueType-hinted outline (`tt_hinted`) takes CoreGraphics' hint
     /// no further.
-    fn outline_look(&mut self, face: &Face, coords: &[i16], ppem: f32, tt_hinted: bool) -> (f32, u32) {
+    fn outline_look(&mut self, face: &Face, coords: &[i16], ppem: f32, ink: u16, tt_hinted: bool) -> (f32, u32) {
         if self.direct_write() {
             return (0.0, 0);
         }
         let weight = if self.smoothing != FontSmoothing::Windfoil { 1.0 } else if tt_hinted { CJK_WEIGHT } else { outline::TEXT_WEIGHT };
         // Synthetic bold grows the outline by half Skia's stroke on every side (`synthetic_bold`).
         let bold = if face.bold { f64::from(synthetic_bold::stroke(ppem)) / 2.0 } else { 0.0 };
-        let radius = self.apple.radius(face.ink, ppem) * weight + bold;
+        let radius = self.apple.radius(ink, ppem) * weight + bold;
         let font = &face.font;
         let Some(font_ref) = FontRef::from_index(font.data.as_ref(), font.index as usize) else { return (radius as f32, 0) };
         let cg_hint = self.smoothing.look().is_none_or(|l| l.hint == coretext_match::OutlineHint::CoreGraphics);
@@ -132,7 +132,7 @@ impl TextSystem {
     /// [`Self::push_glyph`] from the glyph's outline, on the pen its atlas mask would sit at.
     /// None for a glyph outlines can't draw, which takes the atlas.
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn push_outline(&mut self, face: &Face, coords: &[i16], glyph: u32, at: [f32; 2], k: f32, byte: u32, out: &mut Vec<GlyphQuad>) -> Option<Placed> {
+    pub(super) fn push_outline(&mut self, face: &Face, coords: &[i16], glyph: u32, at: [f32; 2], k: f32, ink: u16, byte: u32, out: &mut Vec<GlyphQuad>) -> Option<Placed> {
         let ppem = face.size * k;
         let (g, tt_hinted) = match self.find_outline(face, coords, glyph, ppem) {
             Found::Draws(g, tt_hinted) => (g, tt_hinted),
@@ -141,14 +141,14 @@ impl TextSystem {
         };
         let quarters = self.quarter_pens();
         let ([fx, fy], [subpx, subpy]) = glyph_emit::place(at, ppem, self.glide, quarters);
-        let (radius, hint) = self.outline_look(face, coords, ppem, tt_hinted);
+        let (radius, hint) = self.outline_look(face, coords, ppem, ink, tt_hinted);
         let (phase_x, nudge) = pen_phase(self.whole_pens(tt_hinted), subpx);
         let shift_y = subpy as f32 / GLIDE_PHASES as f32;
         let mut o = Outline { pen: [phase_x, 0.0], scale: ppem / g.upem, zoom: 1.0, record: g.record, hint, radius, coverage: self.coverage_fn() };
         // The quad of the atlas mask it lands on, so nothing that reads quads sees it change.
         let [left, top, w, h] = mask_box(&o, g.bbox);
         o.pen = [fx + nudge + phase_x, fy + shift_y];
-        out.push(GlyphQuad { rect: [fx + nudge + left, fy + top, w, h], uv: [0.0; 2], ink: face.ink, byte, color: 0, outline: Some(o), lcd: false });
+        out.push(GlyphQuad { rect: [fx + nudge + left, fy + top, w, h], uv: [0.0; 2], ink, byte, color: 0, outline: Some(o), lcd: false });
         Some(Placed::Other)
     }
 
@@ -156,7 +156,7 @@ impl TextSystem {
     /// renderer's GPU fill when it draws outlines, filled here on the CPU otherwise, from the same
     /// coverage. Its box doesn't move with the y phase, which moves the ink down inside it. None
     /// for a glyph outlines can't draw.
-    pub(super) fn windfoil_mask(&mut self, key: GlyphKey, face: &Face, coords: &[i16], ppem: f32, phase: [u8; 2]) -> Option<Rasterized> {
+    pub(super) fn windfoil_mask(&mut self, key: GlyphKey, face: &Face, coords: &[i16], ppem: f32, ink: u16, phase: [u8; 2]) -> Option<Rasterized> {
         let (g, tt_hinted) = match self.find_outline(face, coords, key.glyph, ppem) {
             Found::Draws(g, tt_hinted) => (g, tt_hinted),
             Found::Blank => {
@@ -165,7 +165,7 @@ impl TextSystem {
             }
             Found::Elsewhere => return None,
         };
-        let (radius, hint) = self.outline_look(face, coords, ppem, tt_hinted);
+        let (radius, hint) = self.outline_look(face, coords, ppem, ink, tt_hinted);
         let (phase_x, nudge) = pen_phase(self.whole_pens(tt_hinted), phase[0]);
         let shift_y = phase[1] as f32 / GLIDE_PHASES as f32;
         let o = Outline { pen: [phase_x, 0.0], scale: ppem / g.upem, zoom: 1.0, record: g.record, hint, radius, coverage: self.coverage_fn() };

@@ -1,0 +1,1 @@
+- SVG decoding no longer resolves external file or UNC paths from `<image>` or `<feImage>` `href` attributes: `usvg` now resolves raster `data:` URLs (PNG, JPEG, GIF, WebP) only and refuses external paths and nested SVG `data:` URLs.

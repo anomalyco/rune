@@ -951,6 +951,17 @@ fn create_event_target_window() -> HWND {
             util::get_instance_handle(),
             ptr::null(),
         );
+        // Rune: cloaked before it's made visible, so what walks the desktop's windows never meets
+        // it: UI Automation (screen readers) listed it as an unnamed 22x22 pane at 0,0, and window
+        // pickers that skip cloaked windows skip it. A cloaked window still gets WM_PAINT; a
+        // message-only or hidden one doesn't.
+        let cloak: BOOL = 1;
+        DwmSetWindowAttribute(
+            window,
+            DWMWA_CLOAK as u32,
+            &cloak as *const BOOL as *const c_void,
+            mem::size_of::<BOOL>() as u32,
+        );
 
         super::set_window_long(
             window,
@@ -959,17 +970,6 @@ fn create_event_target_window() -> HWND {
             // used for delivering events during resizes), but it isn't displayed to
             // the user because of the LAYERED style.
             (WS_VISIBLE | WS_POPUP) as isize,
-        );
-        // Rune: cloaked, so what walks the desktop's windows doesn't meet it: UI Automation
-        // (screen readers) left it as an unnamed 22x22 pane at 0,0, and window pickers that skip
-        // cloaked windows skip it. A cloaked window still gets WM_PAINT; a message-only or hidden
-        // one doesn't.
-        let cloak: BOOL = 1;
-        DwmSetWindowAttribute(
-            window,
-            DWMWA_CLOAK as u32,
-            &cloak as *const BOOL as *const c_void,
-            mem::size_of::<BOOL>() as u32,
         );
         window
     }
