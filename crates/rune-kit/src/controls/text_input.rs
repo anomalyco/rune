@@ -3,7 +3,7 @@
 
 use rune::{Color, El, Icon, RichStyle, Span, TextEdit, TextStyle, Tx, col, el, icon, row, text, text_input};
 
-use crate::{Acts, Kit, State, over, shadows};
+use crate::{Acts, Kit, State};
 
 fn kit_rich_style(k: &Kit) -> RichStyle {
     RichStyle {
@@ -22,24 +22,23 @@ fn kit_rich_style(k: &Kit) -> RichStyle {
 fn shell(k: &Kit, e: El, state: State, invalid: bool, focused: bool) -> El {
     let c = &k.c;
     let hover = state == State::Hover && !invalid && !focused;
-    let mut e = e
-        .radius(k.radius.md)
-        .fill(if hover { over(c.hover, c.bg_base) } else { c.bg_base })
-        .token_motion(k.motion.control);
+    let e = k.hover_surface(
+        e.radius(k.radius.md).token_motion(k.motion.control),
+        c.bg_base,
+        c.hover,
+        hover,
+        state == State::Rest && !invalid && !focused,
+    );
     if state == State::Disabled {
-        return shadows(k, e, k.elevation.input()).layer_opacity(0.5);
+        return k.disabled_dim(k.elevate(e, k.elevation.input()), true);
     }
     if invalid {
-        e = e.outline(1.0, -1.0, c.danger.fg);
+        e.outline(1.0, -1.0, c.danger.fg)
     } else if focused || state == State::Focus {
-        e = e.outline(1.0, -1.0, c.border_focus);
+        e.outline(1.0, -1.0, c.border_focus)
     } else {
-        e = shadows(k, e, k.elevation.input());
-        if state == State::Rest {
-            e = e.hover(c.hover);
-        }
+        k.elevate(e, k.elevation.input())
     }
-    e
 }
 
 
@@ -375,12 +374,12 @@ impl TextInput {
                 b = b.mr(-8.0);
             }
             if !disabled {
-                b = self.copy_acts.apply(b.hit().hover(c.hover).press(crate::press_over(c.hover, c.pressed)), true);
+                b = self.copy_acts.apply(k.interactive(b.hit()), true);
             }
             e = e.child(b);
         }
         if self.plain {
-            return if disabled { e.layer_opacity(0.5) } else { e };
+            return k.disabled_dim(e, disabled);
         }
         shell(k, e, self.state, self.invalid && !disabled, self.edit.focused && !disabled)
     }
@@ -677,7 +676,7 @@ impl TextField {
                 .child(icon(k.glyph.copy, 16.0).color(c.std_icon))
                 .disabled(self.state == State::Disabled);
             if self.state != State::Disabled {
-                b = self.copy_acts.apply(b.hit().hover(c.hover).press(crate::press_over(c.hover, c.pressed)), true);
+                b = self.copy_acts.apply(k.interactive(b.hit()), true);
             }
             wrapper = wrapper.pr(4.0).child(b);
         }
@@ -691,6 +690,6 @@ impl TextField {
             root = root.child(text(e.clone()).key("error").font(k.ty.text_xsmall_medium).color(c.danger.fg)
                 .live_region(rune::LiveRegion::Assertive));
         }
-        if self.state == State::Disabled { root.layer_opacity(0.5) } else { root }
+        k.disabled_dim(root, self.state == State::Disabled)
     }
 }

@@ -3,7 +3,8 @@
 //! Desktop's dialog stack has it (`ui/src/context/dialog-machine.ts`): the top dialog holds the
 //! trap, opens on its content and hands focus back to where it was before it opened.
 use rune::{El, TextStyle, col, el, row, text};
-use crate::{ControlSize, IconButton, IconButtonVariant, Kit, shadows};
+use super::overlay::scrim_key;
+use crate::{ControlSize, IconButton, IconButtonVariant, Kit};
 
 pub struct Dialog {
     key: String,
@@ -54,13 +55,13 @@ impl Dialog {
         let body = col().key("body").w_full().children(self.body);
         let (panel, body) = if self.fit { (col(), body) } else { (col().h(368.0), body.grow(1.0)) };
         let panel = panel.description(self.description.unwrap_or_default());
-        let panel = shadows(k, panel.key(format!("{}-dialog", self.key)).role("dialog").label(self.title.clone())
+        let panel = k.elevate(panel.key(format!("{}-dialog", self.key)).role("dialog").label(self.title.clone())
             .w_full().max_w(self.width).radius(6.0).fill(k.c.layer_01)
             .child(row().key("header").w_full().padding(16.0).items_start().child(title).child(dismiss))
             .child(body)
             .token_motion(k.motion.overlay), &k.elevation.overlay);
         let panel = close(panel).modal_click_outside(self.outside);
-        layer.push(el().key(format!("{}-scrim", self.key)).absolute(0.0, 0.0).w_full().h_full()
+        layer.push(el().key(scrim_key(&self.key)).absolute(0.0, 0.0).w_full().h_full()
             .fill(k.c.scrim).token_motion(k.motion.overlay).a11y_hidden());
         layer.push(el().key(format!("{}-layer", self.key)).absolute(0.0, 0.0).w_full().h_full().padding(16.0).center().child(panel));
     }

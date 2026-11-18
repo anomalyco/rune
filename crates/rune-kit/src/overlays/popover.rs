@@ -6,7 +6,7 @@
 use rune::{Align, El, ScrollSpec, Side, Transition, col};
 use rune_motion::{Effect, Spring, SpringPair, tokens};
 
-use crate::{Kit, Placement, shadows};
+use crate::{Kit, Placement};
 
 /// Mounts `content` next to the element keyed `anchor_key`, `gap` points away, on the side
 /// and alignment of `placement`. It flips to the opposite side when it doesn't fit and is at
@@ -49,7 +49,7 @@ pub(crate) fn fit(content: El, anchor: &str, side: Side, align: Align, gap: f32)
 /// let surface = popover::raised(&kit, col().padding(8.0).child(body), kit.radius.md);
 /// ```
 pub fn raised(k: &Kit, el: El, radius: f32) -> El {
-    shadows(k, el.radius(radius).fill(k.c.surface_raised).border(1.0, k.alpha(k.c.std_border, 0.5)), &k.elevation.md)
+    k.elevate(el.radius(radius).fill(k.c.surface_raised).border(1.0, k.alpha(k.c.std_border, 0.5)), &k.elevation.md)
 }
 
 /// A list's rows in a scroll viewport that shrinks with the fitted surface from [`anchored`],
@@ -73,8 +73,12 @@ pub fn fit_scroll(rows: El) -> El {
         .child(rows)
 }
 
+pub(crate) fn scroll_area_key(key: &str) -> String {
+    format!("{key}-scroll-area")
+}
+
 pub(crate) fn fit_scroll_bar(k: &Kit, key: &str, rows: El) -> El {
-    crate::scroll_bar(k, &format!("{key}-scroll-area"), "scroll", fit_scroll(rows)).w_full().shrink().min_h(0.0)
+    crate::scroll_bar(k, &scroll_area_key(key), "scroll", fit_scroll(rows)).w_full().shrink().min_h(0.0)
 }
 
 /// Where a surface of `size` (width, height) goes next to `trigger` (x0, y0, x1, y1) in a

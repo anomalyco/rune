@@ -6,10 +6,12 @@
 //! [`crate::root`]. Content is `El::anchored` to the trigger, so it follows layout, flips when
 //! it doesn't fit, and paints above everything mounted before it.
 
+use std::rc::Rc;
+
 use rune::{Align, Color, El, Shadow, Side, TextStyle, Transition, col, el, row, text};
 use rune_motion::{Spring, Vec2};
 
-use crate::popover::{fit, raised};
+use super::popover::{fit, raised};
 use crate::{Acts, ControlSize, IconButton, IconButtonVariant, Kit};
 
 /// Where an overlay sits relative to its trigger (Kobalte/Floating UI placements).
@@ -75,6 +77,79 @@ fn anchor_with(motion: Spring, content: El, anchor: &str, placement: Placement, 
 /// A transparent full-window press target under an open overlay: pressing outside closes it.
 pub fn scrim<S: 'static>(key: impl Into<String>, close: impl Fn(&mut S) + 'static) -> El {
     el().key(key).role("none").absolute(0.0, 0.0).w_full().h_full().on_press(close)
+}
+
+/// Makes an open surface modal: it takes focus, Escape and outside presses dismiss it, and
+/// focus returns to the trigger when it closes.
+pub(crate) type Modal = Box<dyn FnOnce(El) -> El>;
+
+/// Standard overlay sub-element keys: `{key}-trigger`, `{key}-scrim`, `{key}-content`.
+pub(crate) fn trigger_key(key: &str) -> String {
+    format!("{key}-trigger")
+}
+
+pub(crate) fn scrim_key(key: &str) -> String {
+    format!("{key}-scrim")
+}
+
+pub(crate) fn content_key(key: &str) -> String {
+    format!("{key}-content")
+}
+
+/// Wraps an optional trigger element in its keyed anchor row (`{key}-trigger`).
+pub(crate) fn anchor_trigger(anchor_key: String, trigger: Option<El>) -> El {
+    row().key(anchor_key).children(trigger)
+}
+
+/// The outside-press scrim and the modal wrapper for a close request.
+pub(crate) fn dismissal<S: 'static>(key: String, close: impl Fn(&mut S) + 'static) -> (El, Modal) {
+    let close = Rc::new(close);
+    let outside = close.clone();
+    (scrim(key, move |s: &mut S| outside(s)), Box::new(move |e: El| e.modal(true, move |s: &mut S| close(s))))
+}
+
+/// Mounts a dismissal's scrim into `layer` and hands back its modal wrapper.
+fn mount_dismiss(dismiss: Option<(El, Modal)>, layer: &mut Vec<El>) -> Option<Modal> {
+    dismiss.map(|(scrim, modal)| {
+        layer.push(scrim);
+        modal
+    })
+}
+
+/// Mounts a modal dismissal's scrim, applies its modal trap to `surface`, and pushes the surface
+/// anchored with [`super::popover::anchored`] (instant open, fade close).
+pub(crate) fn push_anchored_modal(
+    k: &Kit,
+    layer: &mut Vec<El>,
+    dismiss: Option<(El, Modal)>,
+    mut surface: El,
+    anchor: &str,
+    placement: Placement,
+    gutter: f32,
+) {
+    if let Some(modal) = mount_dismiss(dismiss, layer) {
+        surface = modal(surface);
+    }
+    layer.push(super::popover::anchored(k, surface, anchor, placement, gutter));
+}
+
+/// Pushes an optional outside-press scrim and a raised surface anchored with [`anchor_at`]
+/// (scale-and-fade entrance).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn push_raised_anchored(
+    k: &Kit,
+    layer: &mut Vec<El>,
+    dismiss: Option<El>,
+    content: El,
+    anchor: &str,
+    side: Side,
+    align: Align,
+    gutter: f32,
+) {
+    if let Some(s) = dismiss {
+        layer.push(s);
+    }
+    layer.push(anchor_at(k, raised(k, content, k.radius.md), anchor, side, align, gutter));
 }
 
 /// `Popover::new("share").trigger(button).title("Share").open(s.open).build(&kit, &mut layer)`.
@@ -154,21 +229,21 @@ impl Popover {
     }
     /// Close requests: the close button and presses outside.
     pub fn on_close<S: 'static>(mut self, f: impl Fn(&mut S) + Clone + 'static) -> Self {
-        self.dismiss = Some(scrim(format!("{}-scrim", self.key), f.clone()));
+        self.dismiss = Some(scrim(scrim_key(&self.key), f.clone()));
         self.close.press(f);
         self
     }
 
     pub fn build(self, k: &Kit, layer: &mut Vec<El>) -> El {
         let c = &k.c;
-        let anchor_key = format!("{}-trigger", self.key);
+        let anchor_key = trigger_key(&self.key);
         // The trigger (a button) reads as open or closed; the wrapper only anchors the content.
         let open = self.open;
-        let trigger = row().key(anchor_key.clone()).children(self.trigger.map(|t| t.expanded(open)));
+        let trigger = anchor_trigger(anchor_key.clone(), self.trigger.map(|t| t.expanded(open)));
         if !self.open {
             return trigger;
         }
-        let mut content = col().key(format!("{}-content", self.key)).role("dialog")
+        let mut content = col().key(content_key(&self.key)).role("dialog")
             .description(self.description.clone().unwrap_or_default())
             .focus_return(&anchor_key).min_w(200.0).max_w(320.0);
         if let Some(l) = &self.label {
@@ -198,11 +273,8 @@ impl Popover {
             );
         }
         content = content.child(col().key("body").padding(self.padding).shrink().min_h(0.0).children(self.body));
-        if let Some(s) = self.dismiss {
-            layer.push(s);
-        }
         let (side, align) = self.placement.split();
-        layer.push(anchor_at(k, raised(k, content, k.radius.md), &anchor_key, side, align, self.gutter));
+        push_raised_anchored(k, layer, self.dismiss, content, &anchor_key, side, align, self.gutter);
         trigger
     }
 }
@@ -447,9 +519,9 @@ impl Tooltip {
 
     /// Builds with `style` instead of a kit's tokens (the appearance is then up to the style).
     pub fn render(self, style: &TooltipStyle, layer: &mut Vec<El>) -> El {
-        let anchor_key = format!("{}-trigger", self.key);
+        let anchor_key = trigger_key(&self.key);
         if !self.open {
-            return row().key(anchor_key).children(self.trigger);
+            return anchor_trigger(anchor_key, self.trigger);
         }
         // While it shows, the tooltip's text describes its trigger (ARIA `aria-describedby`).
         let words: Vec<&str> = self.value.iter().filter_map(|c| match c {
@@ -458,8 +530,10 @@ impl Tooltip {
         }).collect();
         let described = words.join(" ");
         let named = described.clone();
-        let trigger = row().key(anchor_key.clone())
-            .children(self.trigger.map(|t| if described.is_empty() { t } else { t.description(described) }));
+        let trigger = anchor_trigger(
+            anchor_key.clone(),
+            self.trigger.map(|t| if described.is_empty() { t } else { t.description(described) }),
+        );
         let value = self.value.into_iter().map(|c| match c {
             // Wrapping text may shrink below its one-line width, so it wraps inside the box.
             Content::El(e) if style.max_w.is_some() && e.wraps() => e.shrink(),
@@ -521,8 +595,8 @@ impl HoverCard {
     }
     /// Open on hover: the trigger reports entering (the app closes it on leaving or elsewhere).
     pub fn build(self, k: &Kit, layer: &mut Vec<El>) -> El {
-        let anchor_key = format!("{}-trigger", self.key);
-        let trigger = row().key(anchor_key.clone()).w_full().children(self.trigger);
+        let anchor_key = trigger_key(&self.key);
+        let trigger = anchor_trigger(anchor_key.clone(), self.trigger).w_full();
         if !self.open {
             return trigger;
         }
@@ -533,5 +607,28 @@ impl HoverCard {
             .child(col().padding(4.0).children(self.body));
         layer.push(anchor_with(k.motion.overlay, raised(k, content, k.radius.lg), &anchor_key, self.placement, 4.0));
         trigger
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn overlay_key_helpers_and_layer_order_stay_canonical() {
+        assert_eq!(trigger_key("menu"), "menu-trigger");
+        assert_eq!(scrim_key("menu"), "menu-scrim");
+        assert_eq!(content_key("menu"), "menu-content");
+
+        let k = Kit::neutral(true);
+        let mut layer = Vec::new();
+        let s = scrim(scrim_key("p"), |_: &mut ()| {});
+        push_raised_anchored(&k, &mut layer, Some(s), col().key(content_key("p")), "p-trigger", Side::Bottom, Align::Start, 4.0);
+        assert_eq!(layer.len(), 2, "scrim mounts before anchored surface");
+
+        let mut modal_layer = Vec::new();
+        let d = dismissal(scrim_key("m"), |_: &mut ()| {});
+        push_anchored_modal(&k, &mut modal_layer, Some(d), col().key("m-menu"), "m-trigger", Placement::BottomStart, 6.0);
+        assert_eq!(modal_layer.len(), 2, "modal scrim mounts before anchored modal surface");
     }
 }

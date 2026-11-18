@@ -28,6 +28,8 @@ use std::collections::HashMap;
 
 use rune::{Key, KeyEvent, Tx};
 
+use crate::list_nav::{self, NavAction, NavPolicy, TypeAhead, allows_list_mods, page_size};
+
 mod file_tree;
 mod view;
 
@@ -105,18 +107,6 @@ impl<T> Default for TreeModel<T> {
     fn default() -> Self {
         Self::new()
     }
-}
-
-/// Seconds of pause after which typing starts a new name (AppKit's type select).
-const TYPE_PAUSE: f64 = 1.0;
-
-/// The name being typed into the tree: nothing, or the prefix so far and the clock its last key
-/// came at, so a pause starts a new name.
-#[derive(Default)]
-enum TypeAhead {
-    #[default]
-    Idle,
-    Typing { prefix: String, at: f64 },
 }
 
 impl<T> TreeModel<T> {
@@ -576,37 +566,38 @@ impl<T> TreeModel<T> {
     /// [`Tree`] calls this from its key handler, and scrolls the cursor's row into view.
     pub fn handle_key(&mut self, ev: &KeyEvent, label: impl Fn(&T) -> &str, tx: &mut Tx) -> TreeKey {
         let m = ev.mods;
-        if m.ctrl && !m.cmd || m.alt || m.logo && !m.cmd {
+        if !allows_list_mods(m) {
             return TreeKey::Ignored;
         }
         let len = self.visible_len();
         if len == 0 {
             return TreeKey::Ignored;
         }
-        if ev.is_command('a') && self.multi {
-            let rows = self.rows().rows.clone();
-            for i in rows {
-                self.nodes[i].selected = true;
-            }
-            return TreeKey::Handled;
+        let at = self.cursor.map(|c| self.rows().row_of[c]).filter(|&r| r != usize::MAX);
+        let page = page_size(self.viewport, self.row_height);
+        if let Some(action) = NavPolicy::list(self.multi).space_activates().decode(ev, page) {
+            return match action {
+                NavAction::SelectAll => {
+                    let rows = self.rows().rows.clone();
+                    for i in rows {
+                        self.nodes[i].selected = true;
+                    }
+                    TreeKey::Handled
+                }
+                NavAction::Activate => self.activate(at, tx),
+                NavAction::Escape => TreeKey::Ignored,
+                NavAction::Move { step, extend } => self.go(step.target(at, len, false).unwrap(), extend, tx),
+            };
         }
         if m.cmd {
             return TreeKey::Ignored;
         }
-        let at = self.cursor.map(|c| self.rows().row_of[c]).filter(|&r| r != usize::MAX);
-        let page = ((self.viewport / self.row_height.max(1.0)).floor() as usize).saturating_sub(1).max(1);
         let key = match (&ev.key, self.rtl) {
             (Key::Left, true) => Key::Right,
             (Key::Right, true) => Key::Left,
             (k, _) => k.clone(),
         };
         let target = match &key {
-            Key::Up => Some(at.map_or(len - 1, |r| r.saturating_sub(1))),
-            Key::Down => Some(at.map_or(0, |r| (r + 1).min(len - 1))),
-            Key::Home => Some(0),
-            Key::End => Some(len - 1),
-            Key::PageUp => Some(at.map_or(0, |r| r.saturating_sub(page))),
-            Key::PageDown => Some(at.map_or(0, |r| (r + page).min(len - 1))),
             Key::Right | Key::Left if m.shift => None,
             Key::Right => {
                 let Some(r) = at else { return self.go(0, false, tx) };
@@ -632,8 +623,6 @@ impl<T> TreeModel<T> {
                     None => return TreeKey::Handled,
                 }
             }
-            Key::Enter => return self.activate(at, tx),
-            Key::Text(t) if t == " " => return self.activate(at, tx),
             Key::Text(t) if !t.trim().is_empty() => {
                 let prefix = self.type_ahead.step(t, tx.clock());
                 return match self.type_select(&prefix, &label) {
@@ -672,37 +661,9 @@ impl<T> TreeModel<T> {
     /// The row typing `prefix` jumps to: the next whose name starts with everything typed since
     /// the last pause, and the same letter again cycles through names starting with it.
     fn type_select(&self, prefix: &str, label: impl Fn(&T) -> &str) -> Option<usize> {
-        let first = prefix.chars().next()?;
-        let cycle = prefix.chars().all(|c| c == first);
-        let prefix = if cycle { first.to_string() } else { prefix.to_owned() };
         let v = self.rows();
-        let len = v.rows.len();
         let at = self.cursor.map(|c| v.row_of[c]).filter(|&r| r != usize::MAX);
-        // A longer name keeps matching the row it's on; a repeated letter moves on.
-        let start = match at {
-            Some(r) if cycle => r + 1,
-            Some(r) => r,
-            None => 0,
-        };
-        (0..len).map(|k| (start + k) % len).find(|&r| label(&self.nodes[v.rows[r]].data).to_lowercase().starts_with(&prefix))
-    }
-}
-
-impl TypeAhead {
-    /// Adds `text`, typed at `now`, to the prefix: a key more than [`TYPE_PAUSE`] after the last
-    /// starts a new name. Returns the prefix to jump to, lowercased.
-    fn step(&mut self, text: &str, now: f64) -> String {
-        let paused = match self {
-            TypeAhead::Typing { at, .. } => now - *at > TYPE_PAUSE,
-            TypeAhead::Idle => true,
-        };
-        let mut prefix = match self {
-            TypeAhead::Typing { prefix, .. } if !paused => std::mem::take(prefix),
-            _ => String::new(),
-        };
-        prefix.push_str(&text.to_lowercase());
-        *self = TypeAhead::Typing { prefix: prefix.clone(), at: now };
-        prefix
+        list_nav::type_select(prefix, at, v.rows.len(), |r| label(&self.nodes[v.rows[r]].data))
     }
 }
 

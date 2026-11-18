@@ -2,7 +2,7 @@
 
 use rune::{Color, El, Icon, TextStyle, Tx, icon, row, text};
 
-use crate::{Acts, ControlSize, Kit, RollingText, State, over, press_over, shadows};
+use crate::{Acts, ControlSize, Kit, RollingText, State};
 
 /// The older button sizes. A `Button` is 24, 28 or 32 points tall and an `IconButton` 20, 24
 /// or 28. For a `Button`, `Small` is `ControlSize::Regular`, `Normal` is `ControlSize::Large`
@@ -122,27 +122,21 @@ fn skin(k: &Kit, v: ButtonVariant) -> Skin {
 }
 
 /// Paints `skin` on `e` for `state`. Rest leaves hover/press to the runtime.
-fn paint(k: &Kit, mut e: El, s: Skin, state: State, interactive: bool) -> El {
-    e = e.focusable(interactive && state != State::Disabled).focus_ring(2.0, 2.5, k.c.border_focus);
-    let fill = match state {
-        State::Hover => over(s.hover, s.fill),
-        State::Pressed => over(s.pressed, s.fill),
-        _ => s.fill,
-    };
-    e = shadows(k, e.fill(fill), &s.shadows);
+fn paint(k: &Kit, e: El, s: Skin, state: State, interactive: bool) -> El {
+    let e = k.focus_ring_state(
+        e.focusable(interactive && state != State::Disabled),
+        2.0,
+        2.5,
+        state == State::Focus && interactive,
+    );
+    let mut e = k.elevate(k.surface_state(e, state, s.fill, s.hover, s.pressed, interactive), &s.shadows);
     if let Some([top, bottom]) = s.sheen {
         e = e.gradient(top, bottom);
     }
     if let Some((w, c)) = s.ring {
         e = e.box_shadow(rune::Shadow { spread: w, color: c, inset: true, ..rune::Shadow::default() });
     }
-    if state == State::Rest && interactive {
-        e = e.hover(s.hover).press(press_over(s.hover, s.pressed));
-    }
-    match state {
-        State::Focus if interactive => e.outline(2.0, 2.5, k.c.border_focus),
-        _ => e,
-    }
+    e
 }
 
 /// A size set with `control_size`, or with the deprecated `size`, which keeps its old metrics.
@@ -370,7 +364,7 @@ impl Button {
                 .child(RollingText::new(key, self.label).font(font).color(ink).build(k).a11y_hidden()),
             Label::Custom(f) => e.child(f(font, ink).a11y_hidden()),
         };
-        if self.state == State::Disabled { e = e.layer_opacity(disabled_alpha); }
+        e = k.disabled_dim_alpha(e, self.state == State::Disabled, disabled_alpha);
         self.acts.apply(e.disabled(!enabled), enabled)
     }
 }
@@ -523,7 +517,7 @@ impl IconButton {
             e = e.help(t);
         }
         e = paint(k, e, s, self.state, true).child(icon(self.icon, glyph).key("icon").color(ink).a11y_hidden());
-        if self.state == State::Disabled { e = e.layer_opacity(disabled_alpha); }
+        e = k.disabled_dim_alpha(e, self.state == State::Disabled, disabled_alpha);
         self.acts.apply(e.disabled(!enabled), enabled)
     }
 }

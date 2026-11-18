@@ -12,7 +12,7 @@ use rune::{Color, Cursor, Drag, El, GrowthSpec, Icon, Phase, ScrollSpec, Span, T
 use super::model::{FileStatus, LineKind, Side};
 use super::state::{Annotation, DiffMode, DiffState, EXPAND_STEP, Expand, GAP_H, HEADER_H, LINE_H, LineRange, LineRef, NOTE_H, Row};
 use crate::Kit;
-use crate::palette::tint;
+use crate::tokens::palette::tint;
 use crate::syntax::SyntaxTheme;
 
 mod line_info;

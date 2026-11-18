@@ -8,14 +8,13 @@
 
 use rune::{El, Icon, TextStyle, Tx, col, el, icon, row, text};
 
-use crate::menu::{Modal, dismissal, mount_dismiss};
-use crate::overlay::Placement;
-use crate::popover::{anchored, fit_scroll_bar};
+use super::overlay::{Modal, Placement, content_key, dismissal, push_anchored_modal, scrim_key, trigger_key};
+use super::popover::fit_scroll_bar;
+use crate::{Kit, State, over};
 
 /// The listbox's tallest: its 4-point padding, six 30-point rows (28 tall, 2 apart), and most
 /// of the seventh, whose label shows fading under the edge.
 const LISTBOX_MAX_HEIGHT: f32 = 4.0 + 6.0 * 30.0 + 22.0;
-use crate::{Kit, State, over, press_over, shadows};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum SelectAppearance {
@@ -137,7 +136,7 @@ impl Select {
     }
     /// Presses outside and Escape close the listbox. While open it holds keyboard focus.
     pub fn on_close<S: 'static>(mut self, f: impl Fn(&mut S) + 'static) -> Self {
-        self.dismiss = Some(dismissal(format!("{}-scrim", self.key), f));
+        self.dismiss = Some(dismissal(scrim_key(&self.key), f));
         self
     }
     /// Choosing an option: `f(state, option)`.
@@ -161,8 +160,7 @@ impl Select {
             return trigger;
         }
         let c = &k.c;
-        let anchor_key = format!("{}-trigger", self.key);
-        let modal = mount_dismiss(self.dismiss, layer);
+        let anchor_key = trigger_key(&self.key);
         // About six and three-quarter rows tall at most, so a longer list shows its next row's label
         // fading under the edge and reads as one that scrolls (hex#840); consecutive options
         // sit 2 points apart, headers flush.
@@ -219,10 +217,9 @@ impl Select {
             list = list.child(item);
             after_item = true;
         }
-        let mut content = shadows(
-            k,
+        let content = k.elevate(
             col()
-                .key(format!("{}-content", self.key))
+                .key(content_key(&self.key))
                 // Modal, so a reader hears a dialog: it's named as the select is.
                 .label(self.name.clone().unwrap_or_else(|| self.placeholder.clone()))
                 .focus_return(&anchor_key)
@@ -234,10 +231,7 @@ impl Select {
                     .focus_group().max_h(LISTBOX_MAX_HEIGHT).min_h(0.0).shrink().child(fit_scroll_bar(k, &self.key, list))),
             &k.elevation.floating,
         );
-        if let Some(modal) = modal {
-            content = modal(content);
-        }
-        layer.push(anchored(k, content, &anchor_key, self.placement, 2.0));
+        push_anchored_modal(k, layer, self.dismiss, content, &anchor_key, self.placement, 2.0);
         trigger
     }
 
@@ -245,7 +239,7 @@ impl Select {
     fn field(&mut self, k: &Kit) -> El {
         let c = &k.c;
         let disabled = self.state == State::Disabled;
-        let anchor_key = format!("{}-trigger", self.key);
+        let anchor_key = trigger_key(&self.key);
         let red = self.invalid && !disabled && k.invalid_text;
         let (label, ink) = match &self.current {
             Some(v) => (v.clone(), if red { c.danger.fg } else { c.text_base }),
@@ -266,7 +260,7 @@ impl Select {
                 let font = TextStyle { line_height: 16.0, ..k.ty.ui_medium };
                 let hover = self.state == State::Hover || self.open;
                 // `outline: none` (select.css:193-205): the inline trigger shows no ring.
-                let mut t = trigger
+                let t = trigger
                     .no_focus_ring()
                     .h(24.0)
                     .pl(8.0)
@@ -276,14 +270,7 @@ impl Select {
                     .radius(k.radius.sm)
                     .child(text(label).key("value").font(font).color(ink).truncate().a11y_hidden())
                     .child(icon(chevron, 16.0).key("chevron").color(c.icon_muted).a11y_hidden());
-                if hover {
-                    t = t.fill(c.hover);
-                } else if self.state == State::Pressed {
-                    t = t.fill(c.pressed);
-                } else if !disabled {
-                    t = t.hover(c.hover).press(press_over(c.hover, c.pressed));
-                }
-                t
+                k.overlay_state(t, self.state, hover, !disabled)
             }
             SelectAppearance::Field => {
                 let mut t = trigger
@@ -312,7 +299,7 @@ impl Select {
                 } else if self.state == State::Focus && !self.open {
                     t = t.outline(1.0, -1.0, c.border_focus).no_focus_ring();
                 } else {
-                    t = shadows(k, t, k.elevation.input());
+                    t = k.elevate(t, k.elevation.input());
                     // select.css:73,100-103: focus inside drops the shadow and the hover tint.
                     t = if self.open { t.no_focus_ring() } else { t.focus_within_ring(1.0, -1.0, c.border_focus).focus_within_flat() };
                     if self.state == State::Rest && !self.open {
@@ -323,7 +310,7 @@ impl Select {
             }
         };
         if disabled {
-            return trigger.layer_opacity(0.5);
+            return k.disabled_dim(trigger, true);
         }
         if let Some(f) = self.toggle.take() {
             trigger = f(trigger);

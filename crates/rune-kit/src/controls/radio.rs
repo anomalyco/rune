@@ -2,7 +2,7 @@
 
 use rune::{El, Shadow, TextStyle, Tx, col, el, row, text};
 
-use crate::{Acts, Kit, State, over};
+use crate::{Acts, Kit, State};
 
 pub struct RadioItem {
     label: String,
@@ -60,16 +60,20 @@ impl RadioItem {
         };
         let overlay = if self.checked { k.on(c.contrast_hover, c.bg_accent) } else { c.hover };
         let ring = if self.invalid && !self.checked { c.danger.border } else { c.border_strong };
-        let mut control = el()
-            .key("control")
-            .size(16.0, 16.0)
-            .absolute(0.0, 2.0)
-            .radius(8.0)
-            .fill(if hover { over(overlay, base) } else { base })
-            .gradient(sheen, k.light(0.0))
-            .box_shadow(Shadow { spread: 0.5, color: ring, inset: true, ..Shadow::default() })
-            .token_motion(k.motion.control);
-        control = control.focus_ring(2.0, 1.0, c.border_focus);
+        let mut control = k.hover_surface(
+            el().key("control")
+                .size(16.0, 16.0)
+                .absolute(0.0, 2.0)
+                .radius(8.0)
+                .gradient(sheen, k.light(0.0))
+                .box_shadow(Shadow { spread: 0.5, color: ring, inset: true, ..Shadow::default() })
+                .token_motion(k.motion.control),
+            base,
+            overlay,
+            hover,
+            self.state == State::Rest && !self.checked,
+        );
+        control = k.focus_ring_state(control, 2.0, 1.0, self.state == State::Focus);
         if self.checked {
             let dot = c.knob_on;
             control = control.child(
@@ -82,15 +86,7 @@ impl RadioItem {
                     .box_shadow(Shadow { y: 0.5, blur: 0.5, color: k.dark_a(0.4), ..Shadow::default() }),
             );
         }
-        if self.state == State::Rest && !self.checked {
-            control = control.hover(c.hover);
-        }
-        if disabled {
-            control = control.layer_opacity(0.5);
-        }
-        if self.state == State::Focus {
-            control = control.outline(2.0, 1.0, c.border_focus);
-        }
+        control = k.disabled_dim(control, disabled);
         let label_color = if disabled { c.text_muted } else { c.text_base };
         let mut words = col().key("text").gap(6.0).child(
             text(self.label.clone()).key("label").font(TextStyle { line_height: 20.0, ..k.ty.ui }).color(label_color),

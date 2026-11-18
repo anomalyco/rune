@@ -115,20 +115,26 @@ impl SegmentedControl {
             if hovers {
                 label = label.group_color(c.text_base);
             }
-            let mut seg = row()
-                .key(format!("segment{i}"))
-                .role("radio")
-                .focusable(st != State::Disabled).focus_selected(on).focus_ring(2.0, 1.0, c.border_focus)
-                .disabled(st == State::Disabled)
-                .label(l.clone())
-                .position_in_set(i + 1, n)
-                .grow(1.0)
-                .shrink()
-                .h(28.0)
-                .px(12.0)
-                .center()
-                .radius(6.0)
-                .child(label);
+            let mut seg = k.focus_ring_state(
+                row()
+                    .key(format!("segment{i}"))
+                    .role("radio")
+                    .focusable(st != State::Disabled)
+                    .focus_selected(on)
+                    .disabled(st == State::Disabled)
+                    .label(l.clone())
+                    .position_in_set(i + 1, n)
+                    .grow(1.0)
+                    .shrink()
+                    .h(28.0)
+                    .px(12.0)
+                    .center()
+                    .radius(6.0)
+                    .child(label),
+                2.0,
+                1.0,
+                st == State::Focus,
+            );
             if self.width == Width::Fit {
                 seg = seg.grid_cell(i);
             }
@@ -139,14 +145,12 @@ impl SegmentedControl {
                     ..Default::default()
                 });
             }
-            match st {
-                State::Focus => seg = seg.outline(2.0, 1.0, c.border_focus),
-                State::Disabled => seg = seg.layer_opacity(0.45),
-                State::Hover if !on => seg = seg.fill(c.hover),
-                _ => {}
+            seg = k.disabled_dim_alpha(seg, st == State::Disabled, 0.45);
+            if st == State::Hover && !on {
+                seg = seg.fill(c.hover);
             }
             if hovers {
-                seg = seg.hover(c.hover).press(crate::press_over(c.hover, c.pressed));
+                seg = k.interactive(seg);
             }
             if st != State::Disabled
                 && let Some(p) = &self.pick

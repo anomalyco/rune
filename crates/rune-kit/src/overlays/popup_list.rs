@@ -6,8 +6,8 @@ use std::rc::Rc;
 
 use rune::{Align, Color, El, GrowthSpec, Side, Transition, Tx, col, el, row, text};
 
-use crate::overlay::{Placement, anchor_at, scrim};
-use crate::popover::{fit_scroll, raised};
+use super::overlay::{Placement, content_key, push_raised_anchored, scrim, scrim_key};
+use super::popover::{fit_scroll, scroll_area_key};
 use crate::{ComboboxOption, Kit};
 
 /// One row in a [`PopupList`]: `PopupItem::new("review", "/review").description("Review changes")`.
@@ -266,7 +266,7 @@ impl<S: 'static> PopupList<S> {
                 item = item.child(trailing.clone());
             }
             if option.disabled {
-                item = item.layer_opacity(0.5).disabled(true).on_press(|_: &mut S| {});
+                item = k.disabled_dim(item, true).disabled(true).on_press(|_: &mut S| {});
             } else {
                 if let Some(on_active) = &self.on_active {
                     let on_active = on_active.clone();
@@ -300,7 +300,7 @@ impl<S: 'static> PopupList<S> {
             .w_full()
             .shrink()
             .min_h(0.0)
-            .child(crate::scroll_bar(k, &format!("{}-scroll-area", self.key), "viewport", viewport).w_full().shrink().min_h(0.0))
+            .child(crate::scroll_bar(k, &scroll_area_key(&self.key), "viewport", viewport).w_full().shrink().min_h(0.0))
             .child(
                 el().key("empty")
                     .h(if empty { 28.0 } else { 0.0 })
@@ -316,11 +316,11 @@ impl<S: 'static> PopupList<S> {
         if !self.open {
             return;
         }
-        if let Some(close) = &self.on_close {
+        let dismiss = self.on_close.as_ref().map(|close| {
             let close = close.clone();
-            layer.push(scrim(format!("{}-scrim", self.key), move |s: &mut S| close(s)));
-        }
-        let key = format!("{}-content", self.key);
+            scrim(scrim_key(&self.key), move |s: &mut S| close(s))
+        });
+        let key = content_key(&self.key);
         let anchor = self.anchor.clone();
         let side = self.side;
         let align = self.align;
@@ -339,6 +339,6 @@ impl<S: 'static> PopupList<S> {
         if instant {
             content = content.instant_changes();
         }
-        layer.push(anchor_at(k, raised(k, content, k.radius.md), &anchor, side, align, gutter));
+        push_raised_anchored(k, layer, dismiss, content, &anchor, side, align, gutter);
     }
 }
