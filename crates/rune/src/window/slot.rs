@@ -10,7 +10,7 @@
 
 use std::ffi::c_void;
 
-use windows_sys::Win32::Foundation::{BOOLEAN, CloseHandle, DUPLICATE_SAME_ACCESS, DuplicateHandle, HANDLE, INVALID_HANDLE_VALUE, WAIT_OBJECT_0};
+use windows_sys::Win32::Foundation::{CloseHandle, DUPLICATE_SAME_ACCESS, DuplicateHandle, HANDLE, INVALID_HANDLE_VALUE, WAIT_OBJECT_0};
 use windows_sys::Win32::System::Threading::{
     GetCurrentProcess, RegisterWaitForSingleObject, UnregisterWaitEx, WT_EXECUTEINWAITTHREAD, WT_EXECUTEONLYONCE, WaitForSingleObject,
 };
@@ -115,7 +115,7 @@ impl Drop for Wait {
     }
 }
 
-unsafe extern "system" fn came(context: *mut c_void, _timed_out: BOOLEAN) {
+unsafe extern "system" fn came(context: *mut c_void, _timed_out: bool) {
     // SAFETY: the `Box` `register` made, alive until the wait is unregistered.
     let wake = unsafe { &*(context as *const Box<dyn Fn() + Send>) };
     wake();
