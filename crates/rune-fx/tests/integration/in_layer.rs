@@ -654,7 +654,7 @@ fn fx_blend_modes_over_cream_paper_and_fallback_without_backdrop() {
 }
 
 /// Writes `demo/fx/in-layer.png`: a fill in a faded, rounded, clipped card, linear blend on the
-/// left and gamma blend on the right. `cargo test -p rune-fx --test in_layer -- --ignored`.
+/// left and gamma blend on the right. `cargo test -p rune-fx --test integration in_layer:: -- --ignored`.
 #[test]
 #[ignore]
 fn write_demo_still() {

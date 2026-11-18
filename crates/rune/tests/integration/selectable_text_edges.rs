@@ -1,12 +1,11 @@
 //! Selectable text in the places it meets the rest of the app: inside a clickable, draggable or
 //! context-menu row, with links beside a focused field, under app shortcuts, at line ends, and
 //! when the view changes the text under a live selection.
-mod support;
 
 use std::cell::Cell;
 
 use rune::{Color, Cursor, Cx, Drag, El, Env, Key, KeyEvent, Link, Mods, Runtime, TextEdit, TextStyle, col, rich, row, text, text_input};
-use support::{click, drag, find, glyphs, tick, wait};
+use crate::support::{click, drag, find, glyphs, tick, wait};
 
 const ROW: &str = "open the project";
 const DRAG: &str = "drag this card";

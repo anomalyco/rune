@@ -164,8 +164,8 @@ fn pair_view(s: &Pair, _: &mut Cx<Pair>) -> El {
 }
 
 fn pair(text: &str, font: TextStyle) -> Runtime<Pair> {
-    const INTER: &[u8] = include_bytes!("../../../themes/opencode/assets/fonts/InterVariable.ttf");
-    const PLEX: &[u8] = include_bytes!("../../../themes/opencode/assets/fonts/IBMPlexMono-Regular.ttf");
+    const INTER: &[u8] = include_bytes!("../../../../themes/opencode/assets/fonts/InterVariable.ttf");
+    const PLEX: &[u8] = include_bytes!("../../../../themes/opencode/assets/fonts/IBMPlexMono-Regular.ttf");
     let fonts = TextSystem::new(&[INTER, PLEX], ("Inter", "IBM Plex Mono"));
     let mut rt = Runtime::with_text(Pair { text: text.into(), font }, pair_view, (600.0, 120.0), Env::new(true, 2.0), fonts);
     rt.frame(0.0);

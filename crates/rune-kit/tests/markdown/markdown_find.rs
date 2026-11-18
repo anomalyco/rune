@@ -1,5 +1,4 @@
 //! Tests for `rune_kit::markdown::find` and `Case`.
-#![cfg(feature = "markdown")]
 
 use std::ops::Range;
 

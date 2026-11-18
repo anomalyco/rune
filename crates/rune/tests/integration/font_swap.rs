@@ -6,8 +6,8 @@ use std::cell::Cell;
 use rune::text::TextSystem;
 use rune::{App, AppSpec, El, Env, Runtime, TextStyle, col, memo, row, text};
 
-const INTER: &[u8] = include_bytes!("../assets/Inter-Regular.ttf");
-const PLEX: &[u8] = include_bytes!("../../../themes/opencode/assets/fonts/IBMPlexMono-Regular.ttf");
+const INTER: &[u8] = include_bytes!("../../assets/Inter-Regular.ttf");
+const PLEX: &[u8] = include_bytes!("../../../../themes/opencode/assets/fonts/IBMPlexMono-Regular.ttf");
 const LAUNCH: (&str, &str) = ("Inter", "IBM Plex Mono");
 static APP_FONTS: &[&[u8]] = &[INTER, PLEX];
 

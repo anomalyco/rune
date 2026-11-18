@@ -2,10 +2,9 @@
 //! triple-click a paragraph and Shift extends; Cmd+C copies, Cmd+A selects all and a right-click
 //! offers Copy. Selecting never moves layout, a press elsewhere clears it, links still open, and
 //! the highlight is drawn exactly as a text field's.
-mod support;
 
 use rune::{Color, Cursor, Cx, El, Env, Link, Mods, PhysicalInput, Runtime, Span, TextEdit, TextStyle, col, el, rich, text, text_input};
-use support::{centre, click, command, drag, find, glyphs, tick, wait};
+use crate::support::{centre, click, command, drag, find, glyphs, tick, wait};
 
 const CMD: &str = "opencode --port 4096";
 const PARA: &str = "first line\nsecond line that wraps around";

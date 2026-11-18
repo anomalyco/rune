@@ -1,7 +1,6 @@
 //! `Markdown::copy_source`: copying a selection copies the Markdown source of the top-level
 //! blocks it touches, the whole source verbatim for all of them, and the drawn text for part
 //! of one block; without it, the drawn text laid out as plain text. And an app's `on_key` sees Cmd+A before a selectable note does.
-#![cfg(feature = "markdown")]
 
 use rune::{Cx, El, Env, Key, KeyEvent, Mods, Runtime, col};
 use rune_kit::{Kit, Markdown};

@@ -1,4 +1,3 @@
-#![cfg(feature = "markdown")]
 
 use rune::{Color, Cx, El, Env, Runtime, ScrollSpec, col};
 use rune_kit::markdown::{Block, Highlight, Style, parse};

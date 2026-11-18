@@ -1,10 +1,9 @@
 //! `El::copy_breaks` and `El::copy_prefix`: a group's copy leaves the newlines its texts ask for
 //! between them, the larger of the two, and puts a text's prefix before it when the copy takes it
 //! from its start along with other texts. A copy of one text alone goes without its prefix.
-mod support;
 
 use rune::{Cx, El, Env, Runtime, TextStyle, col, text};
-use support::{command, drag, glyphs, wait};
+use crate::support::{command, drag, glyphs, wait};
 
 fn view(_: &(), _: &mut Cx<()>) -> El {
     let style = TextStyle::new(14.0, 400.0).lh(20.0);

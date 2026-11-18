@@ -1,11 +1,10 @@
 //! Pressable spans in rich text: only a link's shaped glyph boxes take the pointer; it shows a
 //! hand, paints its hover and pressed looks, is a Tab stop pressed by Enter or Space, and is
 //! reported to tools with its role.
-mod support;
 
 use rune::runtime::ElementInfo;
 use rune::{Color, Cursor, Cx, El, Env, Key, KeyEvent, Link, LinkPaint, Mods, Runtime, Span, TextEdit, TextStyle, col, rich, text_input};
-use support::{centre, click, find};
+use crate::support::{centre, click, find};
 
 const TEXT: &str = "Hi @kit see docs and notes.md ok";
 const WRAPS: &str = "go to a very long link that wraps";

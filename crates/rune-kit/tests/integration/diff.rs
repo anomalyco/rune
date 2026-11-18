@@ -743,7 +743,7 @@ fn a_live_only_event_while_hovering_scrolling_or_selecting_builds_nothing_new() 
     }
 }
 
-/// `cargo test -p rune-kit --profile perf --test diff diff_50k_time -- --ignored --nocapture`
+/// `cargo test -p rune-kit --profile perf --test integration diff::diff_50k_time -- --ignored --nocapture`
 #[test]
 #[ignore]
 fn diff_50k_time() {

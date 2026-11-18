@@ -1,6 +1,5 @@
 //! `Markdown::quote_frame`: each block quote comes to the app with its text as a selection of
 //! all of it copies, so a Copy button on the quote gives what Cmd+C would.
-#![cfg(feature = "markdown")]
 
 use std::cell::RefCell;
 use std::rc::Rc;

@@ -1,5 +1,4 @@
 //! Component roots with fixed inner keys can sit side by side without sibling-key repairs.
-#![cfg(feature = "markdown")]
 
 use rune::{Cx, El, Env, Runtime, col};
 use rune_kit::{Card, Kit, Markdown, MarkdownStyle};
