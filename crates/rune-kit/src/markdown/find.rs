@@ -109,6 +109,7 @@ fn each_text<'a>(blocks: &'a [Block], maps: &'a [BlockMap], f: &mut impl FnMut(&
     for (b, map) in blocks.iter().zip(maps.iter().chain(std::iter::repeat(empty))) {
         match (b, map) {
             (Block::Para(inl) | Block::Heading(_, inl), BlockMap::Inline(m)) => f(&inl.text, m),
+            (Block::Para(inl), BlockMap::DeepTail { map, .. }) => f(&inl.text, map),
             (Block::Image { alt, .. }, BlockMap::Inline(m)) => f(alt, m),
             (Block::Code(code) | Block::Diff(code), BlockMap::Code(m)) => f(code, m),
             (Block::Mermaid(code), BlockMap::Code(m)) => {
