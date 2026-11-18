@@ -20,6 +20,8 @@ pub(in crate::runtime) struct Slide {
     /// offset), the offset this paint drew it at, and that offset with its child's, which cancels it.
     rect: [f32; 4],
     offset: [f32; 2],
+    /// Its top and bottom (pixels), snapped as a still box's.
+    y: [f32; 2],
     painted: [f32; 2],
     net: [f32; 2],
     /// The rect's points per offset point (an ancestor's scale), and the display scale.
@@ -57,12 +59,17 @@ pub(in crate::runtime) struct Anchor {
     k: f32,
     s: f32,
     size: [f32; 2],
+    /// Its top and bottom as paint snapped them (pixels): across the slide it sits where a still
+    /// box does, on whole pixels, as on every other platform.
+    y: [f32; 2],
 }
 
-/// The window's rect in pixels on paint's grid at slide offset `ow` (points), posed from `a`.
-fn pose_rect(a: &Anchor, ow: [f32; 2]) -> [f32; 4] { posed(a.rect, a.offset, a.k, a.s, a.size, ow) }
+/// The window's rect in pixels at slide offset `ow` (points), posed from `a`.
+fn pose_rect(a: &Anchor, ow: [f32; 2]) -> [f32; 4] { posed(a.rect, a.offset, a.k, a.s, a.size, a.y, ow) }
 
-fn posed(at: [f32; 4], offset: [f32; 2], k: f32, s: f32, size: [f32; 2], ow: [f32; 2]) -> [f32; 4] {
+/// Along the slide, on paint's 1/64-pixel grid, moved by the offset's change from `at` (points);
+/// across it, `y`.
+fn posed(at: [f32; 4], offset: [f32; 2], k: f32, s: f32, size: [f32; 2], y: [f32; 2], ow: [f32; 2]) -> [f32; 4] {
     let d = [(ow[0] - offset[0]) * k, (ow[1] - offset[1]) * k];
     let mut rect = [at[0] + d[0], at[1] + d[1], at[2] + d[0], at[3] + d[1]];
     for axis in 0..2 {
@@ -70,13 +77,8 @@ fn posed(at: [f32; 4], offset: [f32; 2], k: f32, s: f32, size: [f32; 2], ow: [f3
             rect[axis + 2] = rect[axis] + size[axis];
         }
     }
-    // It glides along the slide only: across it (a window slides sideways), its edges land on whole
-    // pixels, as a still box's do (`pixel_snap`), so the band's top and bottom cut glyphs where they
-    // always did.
-    let mut r = rect.map(|v| grid(v, s) * s);
-    r[1] = r[1].round();
-    r[3] = r[3].round();
-    r
+    let r = rect.map(|v| grid(v, s) * s);
+    [r[0], y[0], r[2], y[1]]
 }
 
 /// One past node `i`'s subtree: nodes go depth first, so the first node after it whose parent
@@ -122,7 +124,7 @@ impl<S: 'static> Runtime<S> {
     /// and its only child holds everything under it and slides back, sideways. Shape only, decided
     /// before paint: a pair `slide_fits` then refuses (in a layer, over input, out of sight) still
     /// glides, drawn by ordinary frames, so its picture doesn't change with whether a step ran.
-    fn slide_pair(&self, i: usize) -> bool {
+    pub(in crate::runtime) fn slide_pair(&self, i: usize) -> bool {
         let n = &self.nodes[i];
         let (counter, end) = (i + 1, subtree_end(&self.nodes, i));
         n.vis.clip.is_some() && counter < end && subtree_end(&self.nodes, counter) == end
@@ -139,20 +141,22 @@ impl<S: 'static> Runtime<S> {
         if c.open.is_some_and(|k| i < c.slides[k].window || i >= c.slides[k].end) { self.close_slide(); }
     }
 
-    /// The rect, in pixels, that sliding window `i` drawn at `r` (from `rect` in points, `k` points
-    /// per offset point) clips and fades what it holds with: posed from its anchor, kept from an
-    /// earlier paint while this paint's own rect lands within a grid step of the anchor's pose
-    /// (its laid-out place held), else anchored here. Any other node keeps `r`.
-    pub(in crate::runtime) fn slide_anchor(&mut self, i: usize, rect: [f32; 4], r: [f32; 4], k: f32) -> [f32; 4] {
+    /// The rect, in pixels, that sliding window `i` clips and fades what it holds with: drawn at
+    /// `exact` (`rect` in points, `k` points per offset point) and snapped to `r` as a still box
+    /// is. Across the slide, `r`'s top and bottom; along it, posed from its anchor, kept from an
+    /// earlier paint while its top and bottom hold and this paint's exact edges land within a grid
+    /// step of the anchor's pose (its laid-out place held), else anchored here. Any other node
+    /// keeps `r`.
+    pub(in crate::runtime) fn slide_anchor(&mut self, i: usize, rect: [f32; 4], exact: [f32; 4], r: [f32; 4], k: f32) -> [f32; 4] {
         if !self.slide_glides(i) || !self.slide_pair(i) { return r; }
         let s = self.env.scale;
         let n = &self.nodes[i];
         let ow = self.scene.get(n.id, prop::OFFSET).unwrap_or(rune_motion::Vec2::ZERO);
         let ow = [ow.x, ow.y];
-        let here = Anchor { node: n.id, rect, offset: ow, k, s, size: [grid(n.local.w, s), grid(n.local.h, s)] };
+        let here = Anchor { node: n.id, rect, offset: ow, k, s, size: [grid(n.local.w, s), grid(n.local.h, s)], y: [r[1], r[3]] };
         let c = &mut self.paint_keep.cycles;
-        let kept = c.anchors.iter().copied().find(|a| a.node == here.node && (a.k, a.s, a.size) == (here.k, here.s, here.size)
-            && pose_rect(a, ow).iter().zip(&r).all(|(p, q)| (p - q).abs() <= 1.0 / 64.0 + 1e-4));
+        let kept = c.anchors.iter().copied().find(|a| a.node == here.node && (a.k, a.s, a.size, a.y) == (here.k, here.s, here.size, here.y)
+            && { let p = pose_rect(a, ow); [0, 2].iter().all(|&e| (p[e] - exact[e]).abs() <= 1.0 / 64.0 + 1e-4) });
         let a = kept.unwrap_or(here);
         c.next_anchors.push(a);
         c.anchor = Some((i, a));
@@ -173,7 +177,7 @@ impl<S: 'static> Runtime<S> {
         let off = |j: usize| self.scene.get(self.nodes[j].id, prop::OFFSET).unwrap_or(rune_motion::Vec2::ZERO);
         let (ow, oc) = (off(i), off(counter));
         // Posed from its anchor (`slide_anchor`, this paint's), else from this paint's own rect.
-        let (rect, offset) = match self.paint_keep.cycles.anchor { Some((j, a)) if j == i => (a.rect, a.offset), _ => (rect, [ow.x, ow.y]) };
+        let (rect, offset, y) = match self.paint_keep.cycles.anchor { Some((j, a)) if j == i => (a.rect, a.offset, a.y), _ => (rect, [ow.x, ow.y], [r[1], r[3]]) };
         let slide = Slide {
             window: i,
             counter,
@@ -181,6 +185,7 @@ impl<S: 'static> Runtime<S> {
             instances: self.instances.len()..self.instances.len(),
             rect,
             offset,
+            y,
             painted: [ow.x, ow.y],
             net: [ow.x + oc.x, ow.y + oc.y],
             k,
@@ -249,7 +254,7 @@ impl<S: 'static> Runtime<S> {
     /// None when the step can't move it alone (the content would move, or something under it
     /// would show or hide, or a glyph draw or not).
     fn slide_pose(sl: &Slide, ow: [f32; 2]) -> Option<Pose> {
-        let r = posed(sl.rect, sl.offset, sl.k, sl.s, sl.size, ow);
+        let r = posed(sl.rect, sl.offset, sl.k, sl.s, sl.size, sl.y, ow);
         if !shows([r[0], r[1], r[2].max(r[0]), r[3].max(r[1])], sl.outer[0], sl.vp) { return None; }
         let clip = intersect(r, sl.outer[0]);
         let (mut fade, mut origin) = (sl.outer[1], sl.outer[2]);

@@ -439,7 +439,9 @@ impl<S: 'static> Runtime<S> {
             // A node the visibility test below culls paints nothing, and any clip it hands down is
             // off screen too, so it keeps its exact edges.
             let rigid = pinh.snap.rigid.map(|v| v * s);
-            let can_snap = !pinh.snap.off && !n.vis_flags.no_pixel_snap() && p.transform.rotate == 0.0 && !self.slide_glides(i);
+            // What a stepped window holds glides with its slide; the window itself snaps as a still box,
+            // and its clip glides along the slide only (`slide_anchor`).
+            let can_snap = !pinh.snap.off && !n.vis_flags.no_pixel_snap() && p.transform.rotate == 0.0 && !(self.slide_glides(i) && !self.slide_pair(i));
             let snaps = can_snap && (pinh.in_cache || {
                 let m = filter_margin + 2.0;
                 r_exact[2].max(r_exact[0]) >= clip[0].max(vp[0]) - m && r_exact[0] <= clip[2].min(vp[2]) + m
@@ -1209,7 +1211,7 @@ impl<S: 'static> Runtime<S> {
             if let Some(f) = n.vis.clip.or(n.scroll.map(|_| [0.0; 4])) {
                 let outer = [clip, fade, fade_origin];
                 // A sliding window a step moves clips from its anchor's pose (`slide_anchor`).
-                let rs = self.slide_anchor(i, rect_pt, r, if unscaled { 1.0 } else { sc });
+                let rs = self.slide_anchor(i, rect_pt, r_exact, r, if unscaled { 1.0 } else { sc });
                 clip = intersect(rs, clip);
                 let (own, origin) = self.scroll_edge_fade(i, f, rs, sc * s, p.rect.edges()[3]);
                 inherit_fade(&mut fade, &mut fade_origin, origin, own);
