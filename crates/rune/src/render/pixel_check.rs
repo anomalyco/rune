@@ -9,7 +9,8 @@
 //! readback; a diagnostic only. Unset, it costs one `OnceLock` read per loop-only frame.
 //!
 //! Each check prints a line when any pixel differs (how many, by more than 2 of 255 in a channel,
-//! their bounds, and the frame's rectangles), and every 240 checks a running count.
+//! their bounds, and the frame's rectangles), and every 240 checks a running count. When the renderer
+//! goes (the window closes) after any differing check, the process exits 3.
 
 use super::*;
 
@@ -107,6 +108,8 @@ impl Drop for Check {
     fn drop(&mut self) {
         self.resolve();
         if self.checks > 0 { eprintln!("rune: loop pixel check: {} loop-only frames compared with whole frames, {} differ (at the end)", self.checks, self.differ); }
+        // A differing picture fails the run, as `RUNE_LOOP_CHECK=1`'s headless check does.
+        if self.differ > 0 { eprintln!("rune: loop pixel check FAILED"); std::process::exit(3); }
     }
 }
 
