@@ -32,6 +32,7 @@ const MODE_POS_MASK: u8 = 0b0001_1000;
 const MODE_GAP_W_PCT: u8 = 1 << 5;
 const MODE_GAP_H_PCT: u8 = 1 << 6;
 const MODE_BASIS_ZERO: u8 = 1 << 7;
+const JUSTIFY_WHOLE_ROWS: u8 = 1 << 7;
 
 const BASE_LEN_TAGS: u16 = 0b0000_1010_1010_1010;
 const ONE_BF16: u16 = 0x3F80;
@@ -529,12 +530,16 @@ impl CompactStyle {
     #[cold]
     #[inline(never)]
     pub fn modify_cold(&mut self, f: impl FnOnce(&mut Style)) {
+        let whole = self.whole_rows();
         let mut s = match self.extra.take() {
             Some(b) => *b,
             None => self.to_style(),
         };
         f(&mut s);
         *self = Self::from_style(s);
+        if whole {
+            self.justify_content_u8 |= JUSTIFY_WHOLE_ROWS;
+        }
     }
 
     #[inline(always)]
@@ -612,7 +617,18 @@ impl CompactStyle {
         unpack_align_self(self.align_self_u8)
     }
 
+    #[inline(always)]
+    pub const fn whole_rows(&self) -> bool {
+        (self.justify_content_u8 & JUSTIFY_WHOLE_ROWS) != 0
+    }
 
+    #[inline(always)]
+    pub const fn whole_rows_column(&self) -> bool {
+        self.whole_rows()
+            && matches!(decode_display(self.mode_flags), Display::Flex)
+            && matches!(decode_dir(self.box_flags), FlexDirection::Column)
+            && matches!(decode_wrap(self.box_flags >> 2), FlexWrap::NoWrap)
+    }
 }
 
 mod convert;
