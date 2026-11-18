@@ -119,7 +119,7 @@ use glyph_emit::Face;
 use hidden_axes::hidden_axes;
 use layout_cache::{Cache, Entry};
 pub(crate) use layout_cache::Keep;
-pub(crate) use paragraphs::{ParagraphLayout, Piece, TextFlow, TextLayout, common_end, common_start};
+pub(crate) use paragraphs::{AsciiLine, ParagraphLayout, Piece, TextFlow, TextLayout, common_end, common_start};
 #[cfg(test)]
 use layout_cache::STALE_BYTES;
 pub use icon::{Icon, icon_coverage, icon_coverage_placed, set_icon_swap, set_icon_swap_size};

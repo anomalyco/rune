@@ -802,7 +802,7 @@ impl Renderer {
             None => (s.code_block_fill, s.code_block_border, s.code_text.unwrap_or(s.text)),
         };
         let spans = if shell.is_some() { Vec::new() } else { self.syntax_spans(code, source) };
-        let body = self.with_reveal(tabbed(code, spans, highlights, s.code_block).font(s.code_block).color(ink)).copy_breaks(2, 2);
+        let body = self.with_reveal(tabbed(code, spans, highlights, s.code_block).font(s.code_block).color(ink).by_line()).copy_breaks(2, 2);
         // `.highlights`' `border: 0.5px` takes its device pixel each side, inside which the padding sits.
         // Code reads left to right in any document, as `markdown.css` isolates it.
         let frame = col().role("code").dir(rune::Direction::Ltr).w_full().radius(6.0).fill(fill).border(0.5, border).border_layout();

@@ -324,3 +324,27 @@ pub(super) fn rect_inst(rect: [f32; 4], fill: [f32; 4], radius: f32, clip: [f32;
         fade: crate::render::pack_fade(fade, clip, clip),
     }
 }
+
+/// A misspelled word's marker: Chromium's red, on macOS a row of dots and elsewhere a wavy line.
+/// (Linear light: #FF3B30 on macOS, #FF0000 elsewhere.)
+pub(super) const SPELLING: Color = if cfg!(target_os = "macos") { Color { r: 1.0, g: 0.0437, b: 0.0296, a: 1.0 } } else { Color { r: 1.0, g: 0.0, b: 0.0, a: 1.0 } };
+
+/// The spelling marker from device x `x0` to `x1`, its top at `y`, `k` device px a point: on
+/// macOS 3 pt dots every 4 pt, elsewhere Chromium's 1 pt line waving 2 pt down and back every 6 pt.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn push_spelling_marker(out: &mut Vec<Instance>, x0: f32, x1: f32, y: f32, k: f32, color: [f32; 4], clip: [f32; 4], fade: [f32; 4]) {
+    if cfg!(target_os = "macos") {
+        let (d, step) = (3.0 * k, 4.0 * k);
+        let count = ((x1 - x0 - d) / step).floor().max(0.0) as usize + 1;
+        let x = x0 + ((x1 - x0) - (count - 1) as f32 * step - d) / 2.0;
+        out.extend((0..count).map(|n| rect_inst([x + n as f32 * step, y, d, d], color, d / 2.0, clip, fade)));
+        return;
+    }
+    const WAVE: [f32; 6] = [0.0, 1.0, 2.0, 2.0, 1.0, 0.0];
+    let t = k.max(1.0).round();
+    let start = x0.round();
+    out.extend((0..(x1.round() - start).max(0.0) as usize).map(|n| {
+        let wave = WAVE[(n as f32 / k) as usize % WAVE.len()];
+        rect_inst([start + n as f32, (y + wave * k).round(), 1.0, t], color, 0.0, clip, fade)
+    }));
+}
