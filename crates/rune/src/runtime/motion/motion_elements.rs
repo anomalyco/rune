@@ -70,7 +70,7 @@ fn intent(n: &Node) -> bool {
     n.live.iter().any(|b| b.spring.is_none() && !b.property.is_color() && !matches!(b.property, crate::live::Property::Blur | crate::live::Property::Trim))
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// Clears `out` and fills it with the presented elements of the last frame, in tree order,
     /// as [`Self::elements`] lists them but without flight sources, links and highlights, and
     /// without the instant-hover-group rule that marks a group-opacity swap as live.

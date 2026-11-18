@@ -145,11 +145,11 @@ fn letter(rt: &mut Runtime<Real>, c: &str) {
 }
 
 fn selected(rt: &Runtime<Real>) -> usize {
-    rt.playground.as_ref().map_or(usize::MAX, |p| p.selected)
+    rt.hooks.playground.as_ref().map_or(usize::MAX, |p| p.selected)
 }
 
 fn header(rt: &Runtime<Real>) -> Option<&'static str> {
-    rt.playground.as_ref().and_then(|p| p.header)
+    rt.hooks.playground.as_ref().and_then(|p| p.header)
 }
 
 fn focused(rt: &Runtime<Real>) -> Option<String> {
@@ -178,11 +178,11 @@ fn escape(rt: &mut Runtime<Real>) {
 }
 
 fn region(rt: &Runtime<Real>) -> Region {
-    rt.playground.as_ref().map_or(Region::List, |p| p.region())
+    rt.hooks.playground.as_ref().map_or(Region::List, |p| p.region())
 }
 
 fn is_open(rt: &Runtime<Real>) -> bool {
-    rt.playground.as_ref().is_some_and(|p| p.is_open())
+    rt.hooks.playground.as_ref().is_some_and(|p| p.is_open())
 }
 
 #[test]
@@ -271,7 +271,7 @@ fn the_real_state_keeps_polling_while_open() {
     let before = rt.state.polls;
     for _ in 0..5 { rt.frame(1.0 / 60.0); }
     assert!(rt.state.polls >= before + 5);
-    let scene = rt.playground.as_ref().and_then(|p| p.scene()).map(|s| s.state.polls);
+    let scene = rt.hooks.playground.as_ref().and_then(|p| p.scene()).map(|s| s.state.polls);
     assert!(scene.is_some_and(|n| n >= 5), "the scene polls too");
 }
 
@@ -331,7 +331,7 @@ fn a_replay_runs_its_steps_on_the_logical_clock_the_same_every_time() {
         rt.frame(dt);
         assert_eq!(shows(&rt, "fade"), "[\"start\"]", "the replay made the state again");
         for _ in 0..(1.0 / dt) as usize { rt.frame(dt); }
-        let log = rt.playground.as_ref().and_then(|p| p.own()).map(|(own, stage)| {
+        let log = rt.hooks.playground.as_ref().and_then(|p| p.own()).map(|(own, stage)| {
             own.state_ref(stage).downcast_ref::<Fade>().unwrap().log.iter().map(|(n, t)| (*n, (t * 1e6).round() as i64)).collect::<Vec<_>>()
         });
         logs.push(log.unwrap());
@@ -397,12 +397,12 @@ fn center(rt: &Runtime<Real>, key: &str) -> (f32, f32) {
 }
 
 fn own_state<P: 'static>(rt: &Runtime<Real>) -> &P {
-    let (own, stage) = rt.playground.as_ref().and_then(|p| p.own()).expect("a story with its own state");
+    let (own, stage) = rt.hooks.playground.as_ref().and_then(|p| p.own()).expect("a story with its own state");
     own.state_ref(stage).downcast_ref().unwrap()
 }
 
 fn scene_state(rt: &Runtime<Real>) -> &Real {
-    &rt.playground.as_ref().and_then(|p| p.scene()).expect("a scene").state
+    &rt.hooks.playground.as_ref().and_then(|p| p.scene()).expect("a scene").state
 }
 
 #[cfg(feature = "hot")]
@@ -594,7 +594,7 @@ fn a_long_story_list_scrolls_and_reaches_what_was_off_screen() {
     }
     let mut rt = runtime_with(p, Some(None), true);
     rt.frame(DT);
-    let last = rt.playground.as_ref().unwrap().order.last().copied().unwrap();
+    let last = rt.hooks.playground.as_ref().unwrap().order.last().copied().unwrap();
     let item = format!("playground-item-{last}");
     let (_, y) = center(&rt, &item);
     assert!(y > 500.0, "the last story starts below the window");

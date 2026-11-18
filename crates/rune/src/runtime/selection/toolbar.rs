@@ -27,7 +27,7 @@ impl El {
     }
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// What a press on node `i` leaves as it is, from it and its ancestors.
     fn on_press_keeps(&self, i: usize) -> OnPress {
         std::iter::successors(Some(i), |&p| self.nodes[p].parent)

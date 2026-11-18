@@ -57,7 +57,7 @@ struct Target {
     rejected: Vec<PathBuf>,
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// A file drag from another app entered the window or moved over it, carrying `paths`; `at`
     /// is its position in points, or `None` when the platform doesn't say. The innermost
     /// [`El::on_drop_files`] under it that accepts the files hears `on_drop_hover(true)` next
@@ -224,14 +224,14 @@ impl<S: 'static> Runtime<S> {
 
     /// A hover at `at`: moves the drop hover to the target there, then tells a target that
     /// follows the drag where it is.
-    fn hover_files(&mut self, paths: &[PathBuf], at: Option<(f32, f32)>, tx: &mut Tx) -> bool {
+    fn hover_files(&mut self, app: &mut dyn AppDriver, paths: &[PathBuf], at: Option<(f32, f32)>, tx: &mut Tx) -> bool {
         let target = self.drop_aim(paths, at);
         if let Some(over) = &mut self.file_drag.over { over.aimed.clone_from(&target); }
-        let mut ran = self.set_drop_hover(target.clone(), at, tx);
+        let mut ran = self.set_drop_hover(app, target.clone(), at, tx);
         if let Some(aim) = target && let Some(f) = self.drop_move_fn(&aim) && let Some(p) = self.drop_point(&aim.0, at) {
             self.trace_event(format_args!("drop-move:{}", aim.0));
             tx.drop_point = Some(p);
-            f(states!(self), p, tx);
+            f(app.states(), p, tx);
             tx.drop_point = None;
             ran = true;
         }
@@ -239,7 +239,7 @@ impl<S: 'static> Runtime<S> {
     }
 
     /// Moves the drop hover to `target`, notifying the old and new elements.
-    fn set_drop_hover(&mut self, target: Option<Aim>, at: Option<(f32, f32)>, tx: &mut Tx) -> bool {
+    fn set_drop_hover(&mut self, app: &mut dyn AppDriver, target: Option<Aim>, at: Option<(f32, f32)>, tx: &mut Tx) -> bool {
         if self.file_drag.hovered.as_ref().map(|(aim, _)| aim) == target.as_ref() { return false; }
         let old = self.file_drag.hovered.take();
         let new = target.map(|aim| {
@@ -256,38 +256,38 @@ impl<S: 'static> Runtime<S> {
             let kind = if *accepted { "drop-hover" } else { "drop-rejected-hover" };
             self.trace_event(format_args!("{kind}:{over}:{path}"));
             tx.drop_point = if over { self.drop_point(path, at) } else { None };
-            f(states!(self), over, tx);
+            f(app.states(), over, tx);
             tx.drop_point = None;
             ran = true;
         }
         ran
     }
 
-    pub(super) fn run_files(&mut self, event: FileEvent, tx: &mut Tx) -> bool {
+    pub(super) fn run_files(&mut self, app: &mut dyn AppDriver, event: FileEvent, tx: &mut Tx) -> bool {
         match event {
-            FileEvent::Hover(paths, at) => self.hover_files(&paths, at, tx),
+            FileEvent::Hover(paths, at) => self.hover_files(app, &paths, at, tx),
             FileEvent::Move => {
                 let Some(over) = &mut self.file_drag.over else { return false };
                 over.move_queued = false;
                 let (paths, at) = (over.paths.clone(), over.at);
-                self.hover_files(&paths, at, tx)
+                self.hover_files(app, &paths, at, tx)
             }
-            FileEvent::Leave => self.set_drop_hover(None, None, tx),
+            FileEvent::Leave => self.set_drop_hover(app, None, None, tx),
             FileEvent::Drop(paths, at) => {
                 let target = self.drop_target(&paths, at);
-                let mut ran = self.set_drop_hover(None, None, tx);
+                let mut ran = self.set_drop_hover(app, None, None, tx);
                 let Some(Target { i, files, rejected }) = target else { return ran };
                 let Some(drop) = self.nodes[i].handlers.drop.as_deref().cloned() else { return ran };
                 let path = self.nodes[i].path.clone();
                 tx.drop_point = self.drop_point(&path, at);
                 if !files.is_empty() && let Some(f) = drop.on_drop {
                     self.trace_event(format_args!("drop-files:{}:{path}", files.len()));
-                    f(states!(self), &files, tx);
+                    f(app.states(), &files, tx);
                     ran = true;
                 }
                 if !rejected.is_empty() && let Some(f) = drop.on_reject {
                     self.trace_event(format_args!("drop-rejected:{}:{path}", rejected.len()));
-                    f(states!(self), &rejected, tx);
+                    f(app.states(), &rejected, tx);
                     ran = true;
                 }
                 tx.drop_point = None;

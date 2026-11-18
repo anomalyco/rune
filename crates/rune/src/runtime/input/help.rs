@@ -199,7 +199,7 @@ fn subtract(a: [f32; 4], b: [f32; 4]) -> Vec<[f32; 4]> {
         .into_iter().filter(|r| r[2] > r[0] && r[3] > r[1]).collect()
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// The host shows AppKit's tooltips: on macOS, while the view keeps the system look.
     fn native_help(&self) -> bool { self.help.native && self.defaults.help.is_none() }
 

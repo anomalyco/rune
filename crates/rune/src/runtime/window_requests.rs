@@ -116,7 +116,7 @@ impl FitWindow {
     }
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// Asks the window for the content's new height, on this commit's spring. The first
     /// commit, a viewport change and `Tx::instant` jump.
     pub(super) fn fit_window(&mut self, height: f32, tx: &Tx, first: bool) {
@@ -135,8 +135,8 @@ impl<S: 'static> Runtime<S> {
     /// The root's natural height at the current width, in window points (the view's times its
     /// zoom), measured without committing, so a window that fits its content can open at that
     /// height.
-    pub fn content_height(&mut self) -> f32 {
-        let measured = self.measure_pass(&Tx::default(), false);
+    pub(crate) fn content_height(&mut self, app: &dyn ViewDriver) -> f32 {
+        let measured = self.measure_pass(app, &Tx::default(), false);
         let height = measured.nodes.first().map_or(self.viewport.1, |root| root.local.h);
         self.discard_measured(measured);
         (height * self.zoom.k).ceil_to(self.zoom.window_scale).max(1.0)

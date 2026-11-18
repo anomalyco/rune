@@ -155,7 +155,7 @@ pub(super) fn inh_key(p: &Inh) -> u64 {
     h.finish()
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// Before a paint clears them: last paint's output and side tables become the record copies
     /// come from.
     pub(super) fn keep_swap(&mut self) {
@@ -567,7 +567,7 @@ fn twin<T>(now: &mut Vec<T>, was: &Vec<T>) {
 }
 
 /// The per-node rows paint reads besides the node.
-fn own_key<S: 'static>(rt: &Runtime<S>, i: usize) -> u64 {
+fn own_key(rt: &RuntimeCore, i: usize) -> u64 {
     let mut h = rune_motion::Fx::default();
     bits(&mut h, &[rt.row_dy[i], rt.row_h[i], rt.row_mask[i]]);
     h.write_u8((rt.has_dissolve && rt.dissolve_scratch.get(i).copied().unwrap_or(false)) as u8);
@@ -587,7 +587,7 @@ fn static_ok(n: &Node) -> bool {
 
 /// What the runtime holds for a node besides it: selection, marks, reveals, loops, scales
 /// settling and folds.
-fn dynamic_ok<S: 'static>(rt: &Runtime<S>, i: usize, sel: &[(usize, usize, usize)], marks: &[(usize, usize, usize)]) -> bool {
+fn dynamic_ok(rt: &RuntimeCore, i: usize, sel: &[(usize, usize, usize)], marks: &[(usize, usize, usize)]) -> bool {
     let id = rt.nodes[i].id;
     !sel.iter().any(|r| r.0 == i) && !marks.iter().any(|r| r.0 == i)
         && (rt.reveals.is_empty() || !rt.reveals.contains_key(&id))

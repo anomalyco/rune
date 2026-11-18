@@ -77,7 +77,7 @@ pub struct Run<S: 'static> {
 struct Raster(Option<(u64, Arc<check::raster::Grid>)>);
 
 impl Raster {
-    fn of<S>(&mut self, rt: &Runtime<S>, size: (f32, f32)) -> Arc<check::raster::Grid> {
+    fn of(&mut self, rt: &crate::runtime::RuntimeCore, size: (f32, f32)) -> Arc<check::raster::Grid> {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         bytemuck::cast_slice::<_, u8>(&rt.instances).hash(&mut hasher);
@@ -91,7 +91,7 @@ impl Raster {
 
 /// Samples a frame `rt` just took into `rec`: why it committed, its elements, what they paint
 /// and the composited window (`grid`, else the CPU raster).
-fn sample<S>(rt: &mut Runtime<S>, rec: &mut Recording, raster: &mut Raster, grid: Option<Arc<check::raster::Grid>>) {
+fn sample(rt: &mut crate::runtime::RuntimeCore, rec: &mut Recording, raster: &mut Raster, grid: Option<Arc<check::raster::Grid>>) {
     let why = std::mem::take(&mut rt.commit_why);
     rec.commits(rt.scrolling(), why);
     let els: Vec<ElementInfo> = rt.elements();
@@ -130,7 +130,7 @@ impl Sampler {
     /// Samples the frame `rt` just took; `awake` is what `rt.frame` returned.
     pub fn frame<S>(&mut self, rt: &mut Runtime<S>, awake: bool) {
         self.rec.awake.push(awake);
-        sample(rt, &mut self.rec, &mut self.raster, None);
+        sample(rt.core_mut(), &mut self.rec, &mut self.raster, None);
     }
 }
 
@@ -170,7 +170,7 @@ impl<S: 'static> Run<S> {
         let size = self.rec.size;
         let drawn = self.draw.as_mut().and_then(|draw| draw(&mut self.rt))
             .map(|(w, h, rgba)| Arc::new(check::raster::from_pixels(&rgba, w, h, size)));
-        sample(&mut self.rt, &mut self.rec, &mut self.raster, drawn);
+        sample(self.rt.core_mut(), &mut self.rec, &mut self.raster, drawn);
     }
 
     pub fn step_n(&mut self, n: usize) {

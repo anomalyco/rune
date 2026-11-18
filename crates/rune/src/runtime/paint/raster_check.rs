@@ -12,7 +12,7 @@ pub(super) fn on() -> bool {
     cfg!(debug_assertions) && *ON.get_or_init(|| std::env::var_os("RUNE_RASTER_CHECK").is_some_and(|v| v != "0"))
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// Paints the frame again with every text's raster path and cached glyph runs forgotten,
     /// and reports the glyphs that differ, then any resting glyph that magnifies its mask.
     pub(super) fn check_resting_raster(&mut self) {

@@ -60,7 +60,7 @@ impl TimerWake {
     fn asked(&self) -> bool { matches!(self, TimerWake::Asked { .. }) }
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// `poll` alone, for a hidden window's wake: its timers and inbox advance while nothing
     /// lays out, animates or draws. Like `update`, its changes wait, dirty, for the next frame.
     /// Returns whether the last frame went out of date: `poll` reported a change or asked for a
@@ -68,20 +68,20 @@ impl<S: 'static> Runtime<S> {
     ///
     /// A resting wake's poll still stands for a frame it asked for that runs covered or misses
     /// its drawable: its timers count from it, and nothing polls again unless another came due.
-    pub(crate) fn poll_hidden(&mut self) -> bool {
+    pub(crate) fn poll_hidden(&mut self, app: &mut dyn AppDriver) -> bool {
         let now = self.now_clock();
         if self.timer_wake.asked() && self.wake_deadlines.first().is_none_or(|t| *t > now) {
             self.cancel_timer_frame();
             return self.needs_commit();
         }
-        let stale = self.poll_alone();
+        let stale = self.poll_alone(app);
         let wakes = std::mem::take(&mut self.pending.wakes);
         self.schedule_wakes(wakes);
         stale
     }
 
     /// `poll_hidden`, leaving the poll's `wake_after`s in `pending`.
-    fn poll_alone(&mut self) -> bool {
+    fn poll_alone(&mut self, app: &mut dyn AppDriver) -> bool {
         self.timer_wake = self.timer_wake.step(TimerWakeEvent::PollAlone).0;
         if let Some(clock) = self.wall_clock() { self.clock = clock; }
         // An `update`'s `wake_after` counts from now; no frame may come to schedule it.
@@ -94,13 +94,13 @@ impl<S: 'static> Runtime<S> {
         // A glyph mask cache write that came due while nothing draws (`mask_cache`).
         let _ = self.text.mask_cache_frame(false);
         let patched = self.patch_pending();
-        let Some(poll) = self.poll else { return patched };
-        let mut one = self.transaction();
-        let changed = self.idle_meter.polled(crate::tooling::perf_warn::timed("poll", || app_call!(poll, &mut self.state, self.clock, &mut one)));
+        if !app.has_poll() { return patched; }
+        let mut one = self.transaction(app);
+        let changed = self.idle_meter.polled(crate::tooling::perf_warn::timed("poll", || app.poll(self.clock, &mut one)));
         self.dirty |= changed;
         self.pending.polled_change |= changed;
         let asks_frame = one.srgb_blend.is_some_and(|b| b != self.srgb_blend) || one.font_smoothing.is_some_and(|m| m != self.text.smoothing) || self.changes_families(&one) || (one.blur && self.focus.path().is_some());
-        self.latch_requests(&mut one);
+        self.latch_requests(app, &mut one);
         let stale = changed || one.frame_work() || patched || asks_frame;
         merge(&mut self.pending, one);
         stale
@@ -113,9 +113,9 @@ impl<S: 'static> Runtime<S> {
     /// then draws as any other: motion, scrolls or a window frame in flight, queued input, a
     /// hover or tooltip delay, a loop, a live value, `SurfaceDraw` content, or a poll stepping
     /// every frame.
-    pub(crate) fn resting_wake(&mut self) -> Option<bool> {
+    pub(crate) fn resting_wake(&mut self, app: &mut dyn AppDriver) -> Option<bool> {
         if !self.rests() { return None; }
-        let stale = self.poll_alone();
+        let stale = self.poll_alone(app);
         let steps = self.pending.wakes.iter().any(|d| d.is_zero());
         // A starved fill's wake draws the frame that resumes it; the poll alone never does.
         Some(stale || self.window_frame.is_some() || steps || self.virtual_fill.resuming(self.clock))

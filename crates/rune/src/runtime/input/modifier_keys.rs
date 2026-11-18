@@ -146,15 +146,15 @@ impl ModifierKeys {
     }
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// Send `Key::Modifier` presses and releases to `on_key` and the focused input's key
     /// handler. Off by default: handlers written before it may act on any key.
-    pub fn set_modifier_keys(&mut self, enabled: bool) {
+    pub(crate) fn set_modifier_keys(&mut self, enabled: bool) {
         if self.modifier_keys.enabled != enabled { self.modifier_keys.held = 0; }
         self.modifier_keys.enabled = enabled;
     }
 
-    pub fn modifier_keys(&self) -> bool { self.modifier_keys.enabled }
+    pub(crate) fn modifier_keys(&self) -> bool { self.modifier_keys.enabled }
 
     /// Whether `event` presses or releases a modifier key, which needs a frame to deliver.
     pub(super) fn modifier_pending(&self, event: &PhysicalInput) -> bool { self.modifier_keys.pending(event) }
@@ -165,7 +165,7 @@ impl<S: 'static> Runtime<S> {
 
     /// Ctrl+Left Shift and Ctrl+Right Shift: every physical key steps the chord (`edit::direction_keys`),
     /// and its release sets the focused field's direction. Any other key disarms it. True if it set one.
-    pub(super) fn direction_chord(&mut self, event: &PhysicalInput, tx: &mut Tx) -> bool {
+    pub(super) fn direction_chord(&mut self, app: &mut dyn AppDriver, event: &PhysicalInput, tx: &mut Tx) -> bool {
         let PhysicalInput::Key { key, mods, pressed, repeat: false } = *event else { return false };
         let Some(m) = modifier(key) else {
             if pressed { self.modifier_keys.chord = crate::edit::DirChord::Idle; }
@@ -175,18 +175,18 @@ impl<S: 'static> Runtime<S> {
         let (next, set) = crate::edit::step_dir_chord(self.modifier_keys.chord, m, pressed, after.ctrl, after.shift);
         self.modifier_keys.chord = next;
         let Some(flow) = set.filter(|_| self.focused_input().is_some()) else { return false };
-        self.with_focused(|e| { e.force_dir(flow); crate::edit::EditOutcome::default() }, tx)
+        self.with_focused(app, |e| { e.force_dir(flow); crate::edit::EditOutcome::default() }, tx)
     }
 
     /// After the focused physical handler saw `event` (and `consumed` it or not): route the
     /// modifier keys it presses and releases. True if a handler took one.
-    pub(super) fn modifier_dispatch(&mut self, event: &PhysicalInput, consumed: bool, tx: &mut Tx, live: &mut Option<bool>) -> bool {
+    pub(super) fn modifier_dispatch(&mut self, app: &mut dyn AppDriver, event: &PhysicalInput, consumed: bool, tx: &mut Tx, live: &mut Option<bool>) -> bool {
         let mut ran = false;
         let code = match *event { PhysicalInput::Key { key, .. } => Some(key), _ => None };
         for ev in self.modifier_keys.apply(event, consumed, ALTGR_CLEARS_FLAGS) {
-            let mut one = self.transaction();
+            let mut one = self.transaction(app);
             one.physical_key = code;
-            let took = self.route_modifier(&ev, &mut one);
+            let took = self.route_modifier(app, &ev, &mut one);
             fold_live(live, took, &one);
             ran |= took;
             merge(tx, one);
@@ -196,21 +196,21 @@ impl<S: 'static> Runtime<S> {
 
     /// A modifier key goes to the app and the focused input's key handler, in `route_key`'s
     /// order, and to nothing built in: no editing, selection, focus traversal or focus ring.
-    pub(super) fn route_modifier(&mut self, ev: &KeyEvent, one: &mut Tx) -> bool {
+    pub(super) fn route_modifier(&mut self, app: &mut dyn AppDriver, ev: &KeyEvent, one: &mut Tx) -> bool {
         if !self.modifier_keys.enabled { return false; }
         one.key_repeat = false;
         let app_first = self.focus.path().is_none();
-        if app_first && let Some(f) = self.on_key && Tx::took(self.app_key(f, ev, one), one) { return true; }
+        if app_first && app.has_on_key() && Tx::took(app.on_key(ev, one), one) { return true; }
         if let Some(f) = self.focused_input().and_then(|input| input.key.clone())
-            && Tx::took(f(states!(self), ev, one), one)
+            && Tx::took(f(app.states(), ev, one), one)
         {
             return true;
         }
-        if !app_first && let Some(f) = self.on_key && Tx::took(self.app_key(f, ev, one), one) {
+        if !app_first && app.has_on_key() && Tx::took(app.on_key(ev, one), one) {
             log_event!(self, "key {:?}", ev.key);
             return true;
         }
-        matches!(ev.key, Key::Modifier { pressed: false, .. }) && self.route_key_up(ev, one)
+        matches!(ev.key, Key::Modifier { pressed: false, .. }) && self.route_key_up(app, ev, one)
     }
 }
 

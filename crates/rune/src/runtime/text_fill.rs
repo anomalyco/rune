@@ -12,7 +12,7 @@ pub(crate) fn visible_text_rows(spec: &crate::el::TextSpec, rest_y: f32, shown: 
     if tk > 1e-4 { (shown[0] - rest_y) / tk - pad..(shown[1] - rest_y) / tk + pad } else { f32::NEG_INFINITY..f32::INFINITY }
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// Shapes waiting paragraphs of each field for up to [`BUDGET`], the rows it drew last
     /// first. True while some still wait, so another frame comes.
     pub(super) fn fill_text(&mut self) -> bool {

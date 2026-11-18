@@ -3,7 +3,7 @@
 use super::*;
 use super::virtual_fill::{FillEffect, FillEvent};
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     pub(super) fn virtual_window_changed(&self) -> bool {
         self.virtuals.iter().any(|(path, v)| self.wants_window(path, v))
     }

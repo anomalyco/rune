@@ -221,7 +221,7 @@ pub(super) fn same_keyed_path(a: &str, b: &str) -> bool {
     ta == tb && ka.split('/').filter(|s| !s.starts_with('#')).eq(kb.split('/').filter(|s| !s.starts_with('#')))
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     pub(super) fn is_selectable(&self, i: usize) -> bool {
         let n = &self.nodes[i];
         n.input.is_none() && n.text.as_ref().is_some_and(|t| t.selectable && !t.redacted)
@@ -345,18 +345,18 @@ impl<S: 'static> Runtime<S> {
     /// selectable text in tree order. On-demand collection is bounded to 10,000 unbuilt rows and
     /// 4 MiB of UTF-8 text; past either cap, collection stops building further unbuilt rows and
     /// truncates the returned string on a character boundary.
-    pub fn selected_text(&self) -> Option<String> {
+    pub(crate) fn selected_text(&self, app: &dyn ViewDriver) -> Option<String> {
         if self.selection_spans_unmounted() {
-            return self.collect_virtual_selection(None).map(|s| s.text);
+            return self.collect_virtual_selection(app, None).map(|s| s.text);
         }
         let out = self.joined(&self.selection_ranges());
         (!out.is_empty()).then_some(out)
     }
 
     /// The selection as [`Tx::text_selection`] reads it, `None` with nothing selected.
-    pub fn selection(&self) -> Option<TextSelection> {
+    pub(crate) fn selection(&self, app: &dyn ViewDriver) -> Option<TextSelection> {
         if self.selection_spans_unmounted() {
-            return self.collect_virtual_selection(None);
+            return self.collect_virtual_selection(app, None);
         }
         let ranges = self.selection_ranges();
         if ranges.is_empty() { return None; }
@@ -365,14 +365,14 @@ impl<S: 'static> Runtime<S> {
     }
 
     /// [`Runtime::selection`] for a handler's `Tx`, kept until a commit or the selection changes.
-    pub(super) fn selection_snapshot(&self) -> Option<Rc<TextSelection>> {
+    pub(super) fn selection_snapshot(&self, app: &dyn ViewDriver) -> Option<Rc<TextSelection>> {
         self.selectable.phase.selection()?;
         {
             let cache = self.sel_snapshot.borrow();
             if let Some(s) = cache.as_ref().filter(|s| self.same_from(&s.from)) { return s.selection.clone(); }
         }
         let from = self.selection_from();
-        let selection = self.selection().map(Rc::new);
+        let selection = self.selection(app).map(Rc::new);
         *self.sel_snapshot.borrow_mut() = Some(Snapshot { from, selection: selection.clone() });
         selection
     }
@@ -399,7 +399,7 @@ impl<S: 'static> Runtime<S> {
 
     /// The `El::on_selection_change` calls owed since the last check: each element whose part
     /// of the selection changed, started or cleared.
-    pub(super) fn selection_changes(&mut self) -> Vec<Action> {
+    pub(super) fn selection_changes(&mut self, app: &dyn ViewDriver) -> Vec<Action> {
         if self.sel_heard.from.as_ref().is_some_and(|f| self.same_from(f)) { return Vec::new(); }
         // A release is heard by whoever holds the selection, though it didn't change.
         let released = self.sel_heard.from.as_ref().is_some_and(|f| f.5 && !self.selectable.phase.dragging());
@@ -428,7 +428,7 @@ impl<S: 'static> Runtime<S> {
         if self.sel_heard.by_path.is_empty() && !watchers.iter().any(|&w| selected.iter().any(|&j| inside(w, j))) {
             return Vec::new();
         }
-        let sel = (!selected.is_empty()).then(|| self.selection_snapshot()).flatten();
+        let sel = (!selected.is_empty()).then(|| self.selection_snapshot(app)).flatten();
         let (mut out, mut heard) = (Vec::new(), HashMap::default());
         for w in watchers {
             let path = self.nodes[w].path.clone();
@@ -483,9 +483,9 @@ impl<S: 'static> Runtime<S> {
 
     /// What copying the selection puts on the clipboard: the nearest [`El::selection_copy`]
     /// around it says, else the text as drawn.
-    pub(crate) fn copy_text(&self) -> Option<String> {
+    pub(crate) fn copy_text(&self, app: &dyn ViewDriver) -> Option<String> {
         if self.selection_spans_unmounted() {
-            return self.copy_virtual_text();
+            return self.copy_virtual_text(app);
         }
         let ranges = self.selection_ranges();
         let (&(first, ..), &(last, ..)) = (ranges.first()?, ranges.last()?);
@@ -687,17 +687,17 @@ impl<S: 'static> Runtime<S> {
     /// holding it, or all of its selection group (a click on it makes it the holder, as it makes
     /// an AppKit text view first responder), unless a text field has the keyboard. Only the plain
     /// chord: with Shift, Option (Alt) or Control added it's the app's shortcut.
-    pub(super) fn selection_key(&mut self, ev: &KeyEvent, tx: &mut Tx) -> bool {
+    pub(super) fn selection_key(&mut self, app: &dyn ViewDriver, ev: &KeyEvent, tx: &mut Tx) -> bool {
         let crate::Key::Command(c @ ('c' | 'a')) = ev.key else { return false };
         let m = ev.mods;
         let plain = m.cmd && !m.shift && !m.alt && !(m.ctrl && m.logo);
         if !plain || self.focused_input().is_some() || (c == 'c' && self.selectable.phase.selection().is_none()) { return false; }
         let holder = self.selection_holder_end();
         if holder.is_none() { self.clear_text_selection(); }
-        if c == 'a' { return self.select_all_key(); }
+        if c == 'a' { return self.select_all_key(app); }
         let Some(h) = holder else { return false };
         let path = self.end_path(h).to_owned();
-        let Some(text) = self.copy_text() else { return false };
+        let Some(text) = self.copy_text(app) else { return false };
         log_event!(self, "copy {path}");
         // Its formatting too, as a browser copies a page's selection.
         match self.copy_html() {
@@ -711,7 +711,7 @@ impl<S: 'static> Runtime<S> {
     /// Copy menu. On macOS it selects the word under the pointer first when the click is outside
     /// the selection, as AppKit text does; elsewhere the selection stays as it is, as Chromium's
     /// does on Windows and Linux. False when the app's handler should run instead.
-    pub(super) fn selection_menu(&mut self, path: &str, x: f32, y: f32) -> bool {
+    pub(super) fn selection_menu(&mut self, app: &dyn ViewDriver, path: &str, x: f32, y: f32) -> bool {
         let Some(i) = self.live(path) else { return false };
         if !self.is_selectable(i) || self.nodes[i].handlers.on_secondary_press.is_some() { return false; }
         if SECONDARY_SELECTS_WORD
@@ -723,7 +723,7 @@ impl<S: 'static> Runtime<S> {
             self.selectable.presses = Default::default();
             self.select_step(phase::Event::Select(phase::Selection::new(path.to_owned(), content, (a, b), (a, b))));
         }
-        let text = self.copy_text();
+        let text = self.copy_text(app);
         let html = text.as_ref().and_then(|_| self.copy_html());
         let mut copy = crate::PopupItem::new("copy", crate::labels::label(crate::Label::Copy)).enabled(text.is_some());
         // The primary modifier, as the copy key handler takes it: ⌘C on macOS, Ctrl+C elsewhere.

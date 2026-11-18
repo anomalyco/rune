@@ -2,7 +2,7 @@
 
 use super::*;
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// A drag-out the pointer move just delivered asked for. The shell must start the OS
     /// session before returning from that move event.
     /// The drag to start, its rects and press in window points (the view's times its zoom).

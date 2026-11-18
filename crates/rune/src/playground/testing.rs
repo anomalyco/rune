@@ -16,7 +16,7 @@ impl<S: 'static> App<S> {
         let (spec, state, _, runtime) = self.into_parts(None);
         let mut rt = crate::tooling::runtime_for(&spec, state, size, env, std::sync::Arc::new(|| {}));
         if let Some(playground) = playground.filter(Playground::is_enabled) {
-            rt.playground = Some(Box::new(Live::new(playground, &spec, false)));
+            rt.attach_playground(Live::new(playground, &spec, false));
         }
         rt.headless_chrome(chrome, titlebar, borderless);
         rt.configure(runtime);
@@ -37,7 +37,7 @@ impl<S: 'static> Runtime<S> {
     /// Panics without a playground (see [`App::headless_runtime`]), or when it has no such
     /// story or variant, listing those it has.
     pub fn open_playground(&mut self, story: &str, variant: Option<&str>) {
-        let live = self.playground.as_mut().expect(NO_PLAYGROUND);
+        let live = self.hooks.playground.as_mut().expect(NO_PLAYGROUND);
         live.open_at(Some(story), variant).unwrap_or_else(|e| panic!("{e}"));
         self.settle_playground(Request::Open(Some(story.to_owned())));
     }
@@ -48,7 +48,7 @@ impl<S: 'static> Runtime<S> {
     ///
     /// Panics when the playground isn't open, or its story has no trigger on `key`.
     pub fn playground_trigger(&mut self, key: char) {
-        let live = self.playground.as_ref().filter(|p| p.is_open()).unwrap_or_else(|| panic!("the playground isn't open: call Runtime::open_playground first"));
+        let live = self.hooks.playground.as_ref().filter(|p| p.is_open()).unwrap_or_else(|| panic!("the playground isn't open: call Runtime::open_playground first"));
         let Some(request) = live.trigger_request(key) else {
             let keys: Vec<String> = live.triggers().iter().map(|(k, label)| format!("{k:?} ({label})")).collect();
             panic!("{:?} has no trigger on {key:?}; it has: {}", live.path(live.selected), keys.join(", "));
@@ -69,14 +69,14 @@ impl<S: 'static> Runtime<S> {
     /// `self.state`), or when `P` isn't the stage's type. `self.state` stays the app's real
     /// state throughout.
     pub fn playground_state<P: 'static>(&self) -> Option<&P> {
-        self.playground.as_ref()?.stage_state()?.downcast_ref()
+        self.hooks.playground.as_ref()?.stage_state()?.downcast_ref()
     }
 
     /// The element keyed or pathed `key` on the open story's stage, as of the last frame: its
     /// rect, text, role and the rest. The playground's list and side column aren't searched;
     /// [`Runtime::find`] and [`Runtime::elements`] see the whole window.
     pub fn playground_element(&self, key: &str) -> Option<ElementInfo> {
-        if !self.playground.as_ref().is_some_and(|p| p.is_open()) { return None; }
+        if !self.hooks.playground.as_ref().is_some_and(|p| p.is_open()) { return None; }
         let all = self.elements();
         let i = stage_element(&all, key)?;
         all.into_iter().nth(i)

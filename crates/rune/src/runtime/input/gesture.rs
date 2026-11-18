@@ -26,7 +26,7 @@ pub(crate) enum WheelStart {
 /// Points of Ctrl + wheel per unit of magnification, where a pinch arrives that way.
 const PINCH_WHEEL: f32 = 200.0;
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// A wheel or trackpad scroll at window point (`ev.x`, `ev.y`), with its modifiers and
     /// phase. The innermost [`El::on_wheel`] handler there hears it first, up to the nearest
     /// scroll view; what none takes scrolls as [`Self::wheel_xy`] does.
@@ -72,17 +72,17 @@ impl<S: 'static> Runtime<S> {
     /// under the pointer until one takes it, else it scrolls. Each queued delta keeps its own
     /// gesture's turn and axis policy, so one queued before a newer gesture began still reaches
     /// the owner its own gesture picked.
-    pub(super) fn run_wheel(&mut self, gesture: Attempt, chain: Vec<String>, ev: WheelEvent, phased: bool, tx: &mut Tx) -> bool {
+    pub(super) fn run_wheel(&mut self, app: &mut dyn AppDriver, gesture: Attempt, chain: Vec<String>, ev: WheelEvent, phased: bool, tx: &mut Tx) -> bool {
         self.wheel_lock.sync_gesture(gesture);
         let mut taken = None;
         match self.wheel_lock.owner_of(gesture).cloned() {
             Some(WheelOwner::Handler(path)) => {
-                taken = self.call_wheel(&path, ev, tx);
+                taken = self.call_wheel(app, &path, ev, tx);
                 if taken.is_none() { self.wheel_lock.set_owner(gesture, WheelOwner::Unpicked); }
             }
             Some(WheelOwner::Unpicked) => {
                 for path in chain {
-                    if self.call_wheel(&path, ev, tx) == Some(true) {
+                    if self.call_wheel(app, &path, ev, tx) == Some(true) {
                         self.wheel_lock.set_owner(gesture, WheelOwner::Handler(path));
                         taken = Some(true);
                         break;
@@ -99,10 +99,10 @@ impl<S: 'static> Runtime<S> {
     }
 
     /// Element `path`'s `on_wheel` on `ev`, in its own points; None when it's gone.
-    fn call_wheel(&mut self, path: &str, ev: WheelEvent, tx: &mut Tx) -> Option<bool> {
+    fn call_wheel(&mut self, app: &mut dyn AppDriver, path: &str, ev: WheelEvent, tx: &mut Tx) -> Option<bool> {
         let (i, f) = self.gesture_handler(path, |g| g.wheel.clone())?;
         let [x, y] = self.to_local(i, ev.x, ev.y);
-        Some(Tx::took(f(states!(self), WheelEvent { x, y, ..ev }, tx), tx))
+        Some(Tx::took(f(app.states(), WheelEvent { x, y, ..ev }, tx), tx))
     }
 
     /// A trackpad pinch at window point (`ev.x`, `ev.y`) for the [`El::on_magnify`] handlers
@@ -136,20 +136,20 @@ impl<S: 'static> Runtime<S> {
         if !chain.is_empty() { self.queue.push(Action::Gesture(chain, gesture)); }
     }
 
-    pub(super) fn run_gesture(&mut self, chain: Vec<String>, gesture: Gesture, tx: &mut Tx) -> bool {
+    pub(super) fn run_gesture(&mut self, app: &mut dyn AppDriver, chain: Vec<String>, gesture: Gesture, tx: &mut Tx) -> bool {
         for path in chain {
             let taken = match gesture {
                 Gesture::Magnify(ev) => self.gesture_handler(&path, |g| g.magnify.clone()).map(|(i, f)| {
                     let [x, y] = self.to_local(i, ev.x, ev.y);
-                    Tx::took(f(states!(self), MagnifyEvent { x, y, ..ev }, tx), tx)
+                    Tx::took(f(app.states(), MagnifyEvent { x, y, ..ev }, tx), tx)
                 }),
                 Gesture::Rotate(ev) => self.gesture_handler(&path, |g| g.rotate.clone()).map(|(i, f)| {
                     let [x, y] = self.to_local(i, ev.x, ev.y);
-                    Tx::took(f(states!(self), RotateEvent { x, y, ..ev }, tx), tx)
+                    Tx::took(f(app.states(), RotateEvent { x, y, ..ev }, tx), tx)
                 }),
                 Gesture::SmartMagnify(x, y) => self.gesture_handler(&path, |g| g.smart_magnify.clone()).map(|(i, f)| {
                     let [x, y] = self.to_local(i, x, y);
-                    Tx::took(f(states!(self), x, y, tx), tx)
+                    Tx::took(f(app.states(), x, y, tx), tx)
                 }),
             };
             if taken == Some(true) { return true; }
@@ -203,9 +203,9 @@ impl<S: 'static> Runtime<S> {
     /// and `on_press` follow as for the primary button; for the middle button, also a link of a
     /// text with `on_link`, or an element with [`El::on_middle_press`], each clicked when the
     /// button comes up over it.
-    pub fn button_down(&mut self, x: f32, y: f32, button: PointerButton) {
+    pub(crate) fn button_down(&mut self, app: &mut dyn AppDriver, x: f32, y: f32, button: PointerButton) {
         match button {
-            PointerButton::Primary => return self.pointer_down(x, y),
+            PointerButton::Primary => return self.pointer_down(app, x, y),
             PointerButton::Secondary => return self.secondary_down(x, y),
             _ => {}
         }
@@ -262,13 +262,13 @@ impl<S: 'static> Runtime<S> {
     }
 
     /// A mouse button came up at (x, y): the release of [`Self::button_down`].
-    pub fn button_up(&mut self, x: f32, y: f32, button: PointerButton) {
+    pub(crate) fn button_up(&mut self, app: &dyn ViewDriver, x: f32, y: f32, button: PointerButton) {
         self.tint.release(button);
         if !matches!(button, PointerButton::Primary | PointerButton::Secondary) && self.autoscroll_release(button) { self.pointer = Some((x, y)); return; }
         match button {
-            PointerButton::Primary => self.pointer_up(x, y),
-            PointerButton::Secondary => self.secondary_up(x, y),
-            _ if self.press.held().is_some_and(|h| h.button == button) => self.release_capture(x, y),
+            PointerButton::Primary => self.pointer_up(app, x, y),
+            PointerButton::Secondary => self.secondary_up(app, x, y),
+            _ if self.press.held().is_some_and(|h| h.button == button) => self.release_capture(app, x, y),
             _ => {}
         }
     }
@@ -276,9 +276,9 @@ impl<S: 'static> Runtime<S> {
     /// A key came up, for the [`El::on_key_up`] handlers: true when one is there to hear it,
     /// and a frame is needed. A host with physical keys passes the release's logical key to
     /// `physical_then` instead, so the focused `on_physical_input` hears it first.
-    pub fn key_up(&mut self, ev: KeyEvent) -> bool {
+    pub(crate) fn key_up(&mut self, app: &mut dyn AppDriver, ev: KeyEvent) -> bool {
         if !self.wants_key_up() { return false; }
-        if self.queue.is_empty() && !self.dirty && self.eat_ime_key_up() { return false; }
+        if self.queue.is_empty() && !self.dirty && self.eat_ime_key_up(app) { return false; }
         self.queue.push(Action::KeyUp(ev));
         true
     }
@@ -295,24 +295,24 @@ impl<S: 'static> Runtime<S> {
 
     /// Records a key press for [`Self::route_key_up`]: whether it belongs to an open IME
     /// composition, or which focused element should still hear its release if focus moves.
-    pub(super) fn note_key_down(&mut self, repeat: bool) {
-        let composing = self.composing();
+    pub(super) fn note_key_down(&mut self, app: &mut dyn AppDriver, repeat: bool) {
+        let composing = self.composing(app);
         let focus = &self.focus;
         self.key_releases.down(composing, repeat, || focus.owned());
     }
 
     /// Suppresses key releases that belong to an IME composition (while preedit is open, or
     /// the release of the key that confirmed or cancelled it).
-    pub(super) fn eat_ime_key_up(&mut self) -> bool {
-        let composing = self.composing();
+    pub(super) fn eat_ime_key_up(&mut self, app: &mut dyn AppDriver) -> bool {
+        let composing = self.composing(app);
         self.key_releases.eat(composing)
     }
 
     /// A key release goes to the focused element and up through its ancestors, else to every
     /// element with a handler (deepest first), inside the open modal if there is one. If focus moved since the key went down, the element that had
     /// focus on the press (and its ancestors) hears the release first.
-    pub(super) fn route_key_up(&mut self, ev: &KeyEvent, tx: &mut Tx) -> bool {
-        if self.eat_ime_key_up() { return false; }
+    pub(super) fn route_key_up(&mut self, app: &mut dyn AppDriver, ev: &KeyEvent, tx: &mut Tx) -> bool {
+        if self.eat_ime_key_up(app) { return false; }
         tx.focused = self.focused_key();
         let pressed = self.key_releases.route().and_then(|p| self.live_index(&p));
         let focused = self.focus.path().and_then(|p| self.live_index(p));
@@ -345,7 +345,7 @@ impl<S: 'static> Runtime<S> {
             chain.sort_by_key(|i| shared.iter().position(|s| s == i).map_or(0, |p| p + 1));
         }
         for i in chain {
-            if let Some(f) = self.nodes[i].focus.key_up.clone() && Tx::took(f(states!(self), ev, tx), tx) {
+            if let Some(f) = self.nodes[i].focus.key_up.clone() && Tx::took(f(app.states(), ev, tx), tx) {
                 if secure { log_event!(self, "key-up [redacted]") } else { log_event!(self, "key-up {:?}", ev.key) }
                 return true;
             }

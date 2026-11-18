@@ -165,26 +165,28 @@ impl LiveLane {
     }
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// The window's live wake: another thread tells it to get the window's next frame drawn.
     pub(crate) fn live_wake(&self) -> &Arc<crate::live::Wake> { self.live.waker() }
 
     /// Install before the first frame. Live updates use this separate coalesced wake lane.
-    pub fn set_live_waker(&mut self, waker: Waker) {
+    pub(crate) fn set_live_waker(&mut self, waker: Waker) {
         for sub in &self.live_subscriptions { sub.active.store(false, Ordering::Release); }
         self.live_subscriptions.clear();
         self.live.replace_waker(waker);
         self.subscribe_live();
     }
 
-    pub fn set_live_visible(&mut self, visible: bool) {
+    pub(crate) fn set_live_visible(&mut self, app: &mut dyn AppDriver, visible: bool) {
         let changed = visible != self.live.visible();
         self.live.set_visible(visible);
         if !visible { self.loop_wake = None; }
         // The window's own setup shows and hides it before the first frame; the app hears the
         // changes after that (`App::on_visibility`).
-        if changed && self.commits > 0 && let Some(f) = self.on_visibility {
-            self.update(|s, tx| f(s, visible, tx));
+        if changed && self.commits > 0 && app.has_on_visibility() {
+            let mut one = self.begin_update(app);
+            crate::tooling::perf_warn::timed("an `update` closure", || app.on_visibility(visible, &mut one));
+            self.finish_update(app, one, true, false);
         }
     }
     /// What asks for this runtime's next frame as a live value does, from any thread.

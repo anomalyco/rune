@@ -106,7 +106,7 @@ fn shows(r: [f32; 4], clip: [f32; 4], vp: [f32; 4]) -> bool {
         && r[3] >= clip[1].max(vp[1]) - m && r[1] <= clip[3].min(vp[3]) + m
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// Node `i`'s loop glides: its edges land where the slide puts them, not on whole pixels, as
     /// a browser's compositor moves a transformed layer, so that a loop-only step (which moves
     /// only the clip and soft edges) and an ordinary frame draw the same picture. Only for what a

@@ -2,13 +2,13 @@
 //! frame log and `RUNE_COMMIT_BUDGET_MS`, and what the commit warnings hear once a frame.
 use super::*;
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// A frame's commit for `why` (`CommitWhy` bits).
-    pub(super) fn commit_for(&mut self, tx: &Tx, why: u16) {
+    pub(super) fn commit_for(&mut self, app: &mut dyn AppDriver, tx: &Tx, why: u16) {
         self.commit_why |= why;
         if crate::tooling::interaction::on() { self.watch.interaction.committed(why); }
         self.watch.cause = why;
-        self.commit(tx);
+        self.commit(app, tx);
         self.watch.cause = 0;
     }
 

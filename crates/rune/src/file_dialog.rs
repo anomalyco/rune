@@ -298,7 +298,12 @@ impl Presenter {
     }
 
     /// Queues the answer of a dialog that closed. True when one did.
+    #[inline(always)]
     pub(crate) fn answer<S: 'static>(&mut self, rt: &mut crate::Runtime<S>) -> bool {
+        self.answer_core(rt.core_mut())
+    }
+
+    fn answer_core(&mut self, rt: &mut crate::runtime::RuntimeCore) -> bool {
         let Some((id, future)) = &mut self.showing else { return false };
         let Poll::Ready(result) = future.as_mut().poll(&mut Context::from_waker(&self.wake)) else { return false };
         let id = *id;
@@ -314,7 +319,12 @@ impl Presenter {
     /// Shows the runtime's dialog over `window`, starting it before this returns, so nothing
     /// blocks the event loop. A dialog asked for while the window is hidden waits for it to
     /// show. True when an answer was queued.
+    #[inline(always)]
     pub(crate) fn open<S: 'static>(&mut self, rt: &mut crate::Runtime<S>, window: Option<&winit::window::Window>) -> bool {
+        self.open_core(rt.core_mut(), window)
+    }
+
+    fn open_core(&mut self, rt: &mut crate::runtime::RuntimeCore, window: Option<&winit::window::Window>) -> bool {
         let Some(window) = window.filter(|_| self.showing.is_none()) else { return false };
         let Some((id, kind, options)) = rt.take_file_dialog() else { return false };
         #[cfg(all(feature = "native-file-dialog", target_os = "macos"))]
@@ -322,11 +332,12 @@ impl Presenter {
             self.sheet_parent = crate::platform::macos::ns_window(window);
         }
         self.showing = Some((id, show_over(kind, options, window)));
-        self.answer(rt)
+        self.answer_core(rt)
     }
 
     /// The window is going away (hidden, closed or quitting): any attached sheet is ended and
     /// the open or waiting dialog is answered `Ok(None)` while its state is alive.
+    #[inline(always)]
     pub(crate) fn cancel<S: 'static>(&mut self, rt: &mut crate::Runtime<S>) {
         self.stop();
         rt.cancel_file_dialogs();

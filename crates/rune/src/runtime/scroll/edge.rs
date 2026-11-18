@@ -29,7 +29,7 @@ pub(super) fn reveal(offset: f64, top: f64, height: f64, viewport: f64, margin: 
     else { offset }
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// Node `i`'s own soft-clip widths `f` (points) as a device-pixel fade and the rect its ramps
     /// start from. With `scroll_edge_fade`, top and bottom follow the content hidden under them:
     /// the ramp starts outside `r` so the edge itself only partly fades. `bottom` is the

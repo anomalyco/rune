@@ -4,7 +4,7 @@
 //! layout springs too; a commit that changes nothing above the row moves nothing.
 use super::*;
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// Before a commit: puts each anchored viewport's top row ahead of the app's own
     /// `Tx::keep_on_screen` keys, which win when they name a row in the same viewport.
     pub(super) fn anchor_keeps(&self, tx: &mut Tx) {

@@ -70,7 +70,7 @@ fn holds(outer: &str, inner: &str) -> bool {
     inner == outer || inner.len() > outer.len() && inner.starts_with(outer) && inner.as_bytes()[outer.len()] == b'/'
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// Hover under the pointer at (x, y): what's hovered and what it's inside. Returns whether
     /// moving layout holds hover this pass, for the `update_interaction` that follows.
     pub(super) fn refresh_hover(&mut self, x: f32, y: f32) -> bool {

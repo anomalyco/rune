@@ -9,7 +9,7 @@
 use super::*;
 use crate::el::Flow;
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// Per node of the last build: neither it nor anything under it drew. Empty before the first
     /// build and after a commit, until the next one draws.
     pub(super) fn drew_nothing(&self) -> Vec<bool> {

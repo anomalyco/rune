@@ -80,7 +80,7 @@ pub(crate) fn step(state: &mut Minimize, event: MinimizeEvent) -> Effects<Minimi
     }
 }
 
-impl<S> Runtime<S> {
+impl crate::runtime::RuntimeCore {
     /// Steps the minimize the app asked for, saying whether this shell carries it out now. The
     /// one effect is a minimize, run once the window is as the turn leaves it.
     pub(crate) fn minimize_step(&mut self, event: MinimizeEvent) -> bool {
@@ -104,17 +104,17 @@ impl HiddenPoll {
 
     /// Before its shell: the ask is out of the shell's hands; only an ask that arrives during
     /// the shell (a pop-up's callback) is in them.
-    pub(crate) fn enter<S>(&self, rt: &mut Runtime<S>) {
-        if self.shows { rt.minimize_step(MinimizeEvent::HeldForShow); }
+    pub(crate) fn enter<S: 'static>(&self, rt: &mut Runtime<S>) {
+        if self.shows { rt.core_mut().minimize_step(MinimizeEvent::HeldForShow); }
     }
 
     /// After it: the held ask is due again, so the shell after the show takes it.
-    pub(crate) fn leave<S>(&self, rt: &mut Runtime<S>) {
-        if self.shows { rt.minimize_step(MinimizeEvent::Returned); }
+    pub(crate) fn leave<S: 'static>(&self, rt: &mut Runtime<S>) {
+        if self.shows { rt.core_mut().minimize_step(MinimizeEvent::Returned); }
     }
 }
 
 /// A shell step: take what waits, saying whether the window minimizes now.
-pub(crate) fn shell_take<S>(rt: &mut Runtime<S>) -> bool {
-    rt.minimize_step(MinimizeEvent::Taken)
+pub(crate) fn shell_take<S: 'static>(rt: &mut Runtime<S>) -> bool {
+    rt.core_mut().minimize_step(MinimizeEvent::Taken)
 }

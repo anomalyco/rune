@@ -381,7 +381,7 @@ pub(crate) fn wheel_delta(delta: winit::event::MouseScrollDelta, scale: f32, shi
 pub(crate) const LINE_POINTS: f32 = if cfg!(target_os = "linux") { 120.0 } else { 40.0 };
 
 #[cfg(target_os = "windows")]
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     pub(crate) fn windows_wheel_points(&self, delta: winit::event::MouseScrollDelta, shift: bool) -> f32 {
         use windows_sys::Win32::UI::WindowsAndMessaging::{SystemParametersInfoW, SPI_GETWHEELSCROLLCHARS, SPI_GETWHEELSCROLLLINES};
         let winit::event::MouseScrollDelta::LineDelta(x, y) = delta else { return 0.0 };
@@ -416,7 +416,7 @@ impl ScrollState {
     }
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// A wheel or trackpad delta in points on both axes (positive moves content right and
     /// down). The gesture's first delta picks the axis and the rest of the gesture keeps it:
     /// mostly horizontal scrolls the innermost [`El::scroll_x`] or [`El::scroll_xy`] viewport

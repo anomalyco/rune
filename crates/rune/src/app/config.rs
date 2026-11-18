@@ -73,6 +73,23 @@ impl<S: 'static> RuntimeConfig<S> {
     }
 }
 
+impl crate::runtime::RuntimeCore {
+    pub(crate) fn configure_core(
+        &mut self,
+        modifier_keys: bool,
+        tab_visits_controls: bool,
+        srgb_blend: bool,
+        font_smoothing: crate::FontSmoothing,
+        dev_stats: Option<fn() -> String>,
+    ) {
+        self.set_modifier_keys(modifier_keys);
+        self.set_tab_visits_controls(tab_visits_controls);
+        self.set_srgb_blend(srgb_blend);
+        self.set_font_smoothing(font_smoothing);
+        self.app_stats = dev_stats;
+    }
+}
+
 impl<S: 'static> Runtime<S> {
     /// Applies every runtime-level setting and callback collected by `App` or `ConfiguredOverlay`.
     pub(crate) fn configure(&mut self, config: RuntimeConfig<S>) {
@@ -87,15 +104,11 @@ impl<S: 'static> Runtime<S> {
             font_smoothing,
             dev_stats,
         } = config;
-        self.on_focus = on_focus;
-        self.on_mods = on_mods;
-        self.on_visibility = on_visibility;
-        self.app_ime.hook = on_ime;
-        self.set_modifier_keys(modifier_keys);
-        self.set_tab_visits_controls(tab_visits_controls);
-        self.set_srgb_blend(srgb_blend);
-        self.set_font_smoothing(font_smoothing);
-        self.app_stats = dev_stats;
+        self.hooks.on_focus = on_focus;
+        self.hooks.on_mods = on_mods;
+        self.hooks.on_visibility = on_visibility;
+        self.hooks.on_ime = on_ime;
+        self.core_mut().configure_core(modifier_keys, tab_visits_controls, srgb_blend, font_smoothing, dev_stats);
     }
 }
 
@@ -132,10 +145,10 @@ mod tests {
     #[test]
     fn headless_runtime_applies_every_runtime_config_field() {
         let mut rt = configured_app().headless_runtime((200.0, 120.0), Env::default());
-        assert!(rt.on_focus.is_some());
-        assert!(rt.on_mods.is_some());
-        assert!(rt.on_visibility.is_some());
-        assert!(rt.app_ime.hook.is_some());
+        assert!(rt.hooks.on_focus.is_some());
+        assert!(rt.hooks.on_mods.is_some());
+        assert!(rt.hooks.on_visibility.is_some());
+        assert!(rt.hooks.on_ime.is_some());
         assert!(rt.modifier_keys());
         assert!(!rt.srgb_blend());
         assert_eq!(rt.font_smoothing(), FontSmoothing::Off);

@@ -4,7 +4,7 @@
 use super::*;
 use crate::text::FontSmoothing;
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// Enable or disable gamma-space (sRGB) blending for translucent fills, shadows, blurs,
     /// images and video, as `App::srgb_blend` does for a window. Every colour the next frame
     /// builds, hover and press tints included, is premultiplied in sRGB encoding

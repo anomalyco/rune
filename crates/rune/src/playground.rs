@@ -417,7 +417,7 @@ pub(crate) fn attach<S: 'static>(rt: &mut crate::Runtime<S>, playground: Option<
         live.open_at(name.as_deref(), variant.as_deref()).unwrap_or_else(|e| crate::tooling::die(&e));
         live.pending.push(Request::Open(name));
     }
-    rt.playground = Some(Box::new(live));
+    rt.attach_playground(live);
 }
 
 /// `--playground [NAME]`'s optional story name, taking it when the next argument isn't a flag.

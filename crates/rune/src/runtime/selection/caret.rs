@@ -3,7 +3,7 @@
 //! is re-measured in the same commit when an edit moves it.
 use super::*;
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// Any vertical shift from ancestor growth rows whose presented height has not settled to layout.
     pub(super) fn stack_row_dy(&self, nodes: &[Node], i: usize) -> f32 {
         let mut dy = 0.0;
@@ -55,7 +55,7 @@ impl<S: 'static> Runtime<S> {
     /// After an edit, scrolls the focused field's nearest scroll viewport on each axis just far
     /// enough to show the caret line, as a browser does for a textarea, leaving the viewport's
     /// `El::scroll_margin` like CSS `scroll-padding`.
-    pub(super) fn follow_caret(&mut self) {
+    pub(super) fn follow_caret(&mut self, app: &mut dyn AppDriver) {
         let Some(i) = self.focused_index() else { return };
         let Some(r) = self.caret_rect(&self.nodes, i) else { return };
         let mut scrolled = false;
@@ -83,7 +83,7 @@ impl<S: 'static> Runtime<S> {
             st.moved();
         }
         if scrolled && self.virtual_window_changed() {
-            self.commit(&Tx::default());
+            self.commit(app, &Tx::default());
             self.step_scroll(0.0);
         }
     }

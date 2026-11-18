@@ -41,7 +41,7 @@ fn on_grid(v: f32, c: f32) -> f32 {
     round(v - c) + round(c)
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     pub(super) fn paint_content(
         &mut self,
         i: usize,

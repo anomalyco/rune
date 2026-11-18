@@ -17,11 +17,11 @@ pub(crate) struct ScrollRequest {
     pub anchor: bool,
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// Each request moves the viewport keyed (or pathed) by its key, or the nearest one around
     /// it that scrolls an axis it asks for, clamped to its content. Axes the viewport doesn't
     /// scroll are left alone.
-    pub(super) fn scroll_to_offsets(&mut self, requests: Vec<ScrollRequest>) {
+    pub(super) fn scroll_to_offsets(&mut self, app: &mut dyn AppDriver, requests: Vec<ScrollRequest>) {
         // This frame's commit may have changed the content: measure the extent first.
         self.step_scroll(0.0);
         let animate = !self.reduced_motion && !self.settled;
@@ -77,7 +77,7 @@ impl<S: 'static> Runtime<S> {
         for _ in 0..3 {
             if !self.virtual_window_changed() { break; }
             // A jump is at once, and so are the rows it mounts: none fades in where it lands.
-            self.commit(&Tx { commit: Commit::Instant, ..Tx::default() });
+            self.commit(app, &Tx { commit: Commit::Instant, ..Tx::default() });
             self.step_scroll(0.0);
             for (j, key, at) in &anchors {
                 if let Some((_, to)) = self.anchor_offset(key, *at) { jumps[*j].2 = to; }
@@ -288,7 +288,7 @@ impl ScrollState {
     pub(super) fn hold_at(&self, now: f64) -> bool { self.nudge.hold_at(now) }
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// Steps the holds an app's instant scrolls armed, and returns the earliest due one still
     /// pending: the frame that carries it resolves hover at the pointer. A held nudge asks for
     /// no frame itself, so the frame's end wakes for that one, however often the app re-armed it.

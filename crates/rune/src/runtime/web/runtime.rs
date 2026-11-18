@@ -257,7 +257,7 @@ fn byte_at(text: &str, utf16: usize) -> Option<usize> {
     (units == utf16).then_some(text.len())
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// An action whose handler may ask for what a browser allows only inside the input's event
     /// (the clipboard, a new tab, a menu, a dialog) or that routes keys and focus: it runs in a
     /// frame inside that event. The rest (a move's hover, enter and leave, what a frame reports
@@ -279,13 +279,14 @@ impl<S: 'static> Runtime<S> {
     /// focus inside the press and the next key goes to it; the rest of the queue and the frame
     /// wait for the display's. False, with nothing run, when any other such action is queued or
     /// a focus is already asked for.
-    pub(crate) fn web_focus_field(&mut self) -> bool {
+    pub(crate) fn web_focus_field(&mut self, app: &mut dyn AppDriver) -> bool {
         if self.relayout || self.focus_request.is_some() || self.pending.focus_to.is_some() { return false; }
         let needs: Vec<usize> = self.queue.iter().enumerate().filter(|(_, a)| Self::web_needs_event(a)).map(|(i, _)| i).collect();
         let [pos] = needs[..] else { return false };
-        if !matches!(self.queue.iter().nth(pos), Some(Action::Focus(..))) { return false; }        let mut tx = self.transaction();
+        if !matches!(self.queue.iter().nth(pos), Some(Action::Focus(..))) { return false; }
+        let mut tx = self.transaction(app);
         let action = self.queue.remove(pos);
-        let changed = self.run_action(action, &mut tx);
+        let changed = self.run_action(app, action, &mut tx);
         self.dirty |= changed;
         merge(&mut self.pending, tx);
         true
@@ -294,7 +295,7 @@ impl<S: 'static> Runtime<S> {
     /// The focused field's context from the model, which an edit or a focus just changed, for
     /// the page's field before its next key; None when what's pending needs a whole frame now
     /// (a handler that asked for the clipboard, a link, focus or a selection).
-    pub(crate) fn web_edit_context(&mut self, mirror: &mut Mirror) -> Option<bool> {
+    pub(crate) fn web_edit_context(&mut self, app: &mut dyn AppDriver, mirror: &mut Mirror) -> Option<bool> {
         let tx = &self.pending;
         if self.web_release_needs_frame() || self.focus_request.is_some() || tx.blur || tx.focus_to.is_some() || tx.select.is_some() || !tx.keys.is_empty()
             || tx.copy.is_some() || tx.paste || !tx.clipboard_reads.is_empty() || !tx.pick_reads.is_empty()
@@ -303,7 +304,7 @@ impl<S: 'static> Runtime<S> {
         }
         let access = self.focused_input()?.access.clone()?;
         let key = self.focus.path()?;
-        Some(mirror.update(key, Some(access(states!(self)))))
+        Some(mirror.update(key, Some(access(app.states()))))
     }
     pub(crate) fn web_context(&self, mirror: &mut Mirror) -> bool {
         match self.focused_input().filter(|i| i.access.is_some()) {
@@ -312,7 +313,7 @@ impl<S: 'static> Runtime<S> {
         }
     }
 
-    pub(crate) fn web_key(&mut self, event: &serde_json::Value) -> bool {
+    pub(crate) fn web_key(&mut self, app: &mut dyn AppDriver, event: &serde_json::Value) -> bool {
         let flag = |key: &str| event[key].as_bool().unwrap_or(false);
         let mods = crate::input::key_table::web_mods(flag("shift"), flag("ctrl"), flag("alt"), flag("meta"));
         let name = event["key"].as_str().unwrap_or_default();
@@ -334,7 +335,7 @@ impl<S: 'static> Runtime<S> {
             .and_then(|c| c.parse::<crate::Shortcut>().ok())
             .map(|s| s.physical_key());
         if let Some(key) = code {
-            self.physical_with_fallback(crate::PhysicalInput::Key { key, mods, pressed: true, repeat }, Some(event_key));
+            self.physical_with_fallback(app, crate::PhysicalInput::Key { key, mods, pressed: true, repeat }, Some(event_key));
         } else if repeat {
             self.repeat_key(event_key);
         } else {
@@ -350,15 +351,15 @@ impl<S: 'static> Runtime<S> {
         }
     }
 
-    pub(crate) fn web_edit(&mut self, event: &serde_json::Value) {
+    pub(crate) fn web_edit(&mut self, app: &mut dyn AppDriver, event: &serde_json::Value) {
         let Some(key) = event["key"].as_str() else { return };
         if self.focus.path() != Some(key) || self.has_secure_focus() { return; }
         let number = |key: &str| event[key].as_u64().and_then(|n| usize::try_from(n).ok());
         let Some(base) = number("base") else { return };
         let Some(expected) = event["expected"].as_str() else { return };
-        let mut tx = self.transaction();
-        let composing_before = self.composing();
-        let changed = self.with_focused(|edit| {
+        let mut tx = self.transaction(app);
+        let composing_before = self.composing(app);
+        let changed = self.with_focused(app, |edit| {
             // Browser edits belong to the snapshot from which its context was mirrored.
             if !edit.text.get(base..).is_some_and(|s| s.starts_with(expected)) { return EditOutcome::default(); }
             if event["kind"] == "edit" || event["kind"] == "preedit" {

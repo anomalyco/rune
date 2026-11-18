@@ -93,16 +93,16 @@ impl ModalFocus {
     }
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// Feeds the modal focus machine what this commit shows: modals that went (innermost first),
     /// a modal that opened, and focus that left the top modal.
-    pub(super) fn sync_modals(&mut self) {
+    pub(super) fn sync_modals(&mut self, app: &mut dyn AppDriver) {
         let returned = std::mem::take(&mut self.focus_returned);
         // Exiting visuals are already inert, so a closing modal counts as gone.
         while let Some(top) = self.modal_focus.top().map(str::to_owned).filter(|p| self.node(p).is_none()) {
             let inside = |f: &str| f.strip_prefix(top.as_str()).is_some_and(|rest| rest.is_empty() || rest.starts_with('/'));
             let kept = self.focus.path().is_some_and(|f| !inside(f) && self.node(f).is_some());
-            self.modal_step(ModalEvent::TopRemoved { kept });
+            self.modal_step(app, ModalEvent::TopRemoved { kept });
         }
         let Some(i) = self.active_modal() else { return };
         let path = self.nodes[i].path.clone();
@@ -115,13 +115,13 @@ impl<S: 'static> Runtime<S> {
         let menu = |j: usize| MENU_ROLES.contains(&self.nodes[j].role);
         let is_menu = menu(i) || (i + 1..self.nodes.len()).take_while(|&j| self.nodes[j].parent.is_some_and(|p| p >= i)).any(|j| self.nodes[j].parent == Some(i) && menu(j));
         let opened = if is_menu && !self.focus.keyboard() { Opened::PointerMenu } else { Opened::Dialog };
-        self.modal_step(ModalEvent::Opened { path, restore, opened });
+        self.modal_step(app, ModalEvent::Opened { path, restore, opened });
         if !self.focused_index().is_some_and(|j| self.allowed(j)) {
-            self.modal_step(ModalEvent::FocusOutside);
+            self.modal_step(app, ModalEvent::FocusOutside);
         }
     }
 
-    fn modal_step(&mut self, event: ModalEvent) {
+    fn modal_step(&mut self, app: &mut dyn AppDriver, event: ModalEvent) {
         let (state, effects) = std::mem::take(&mut self.modal_focus).step(event);
         self.modal_focus = state;
         for effect in effects {
@@ -133,12 +133,12 @@ impl<S: 'static> Runtime<S> {
                 }
                 ModalEffect::FocusInitial => {
                     if let Some(target) = self.modal_initial_focus() {
-                        self.set_focus(Some(target), self.focus.keyboard());
+                        self.set_focus(app, Some(target), self.focus.keyboard());
                     }
                 }
                 ModalEffect::Return { restore, ring } => {
                     let restore = restore.filter(|p| self.node(p).is_some());
-                    self.set_focus(restore, ring && self.focus.keyboard());
+                    self.set_focus(app, restore, ring && self.focus.keyboard());
                 }
             }
         }

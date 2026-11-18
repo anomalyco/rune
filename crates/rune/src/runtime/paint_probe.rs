@@ -3,7 +3,7 @@
 use super::*;
 use crate::motion_gate::check::paint::{C_BORDER, C_FILL, C_GRADIENT, C_OUTLINE, C_SHADOW, C_TEXT, Paint, S_BACKDROP, S_BLUR, S_BORDER, S_RADIUS, S_SHADOW};
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// Every presented node's paint, keyed by its path and whether it's leaving. Paint ranks come
     /// from the last frame built once [`Runtime::paint_rank`] is on.
     pub(crate) fn paints(&self) -> HashMap<(String, bool), Paint> {

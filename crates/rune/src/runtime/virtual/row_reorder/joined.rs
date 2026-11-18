@@ -25,7 +25,7 @@ pub(in crate::runtime) struct Seam {
     boundary: Boundary,
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     pub(in crate::runtime) fn join_live_rows(
         &self,
         stack: &mut Stack,

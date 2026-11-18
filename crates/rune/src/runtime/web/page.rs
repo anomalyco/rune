@@ -27,7 +27,7 @@ pub(crate) struct Page {
     pub view: f32,
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// Lay the root out at its natural height and draw the band of it the host scrolls to
     /// with [`Self::set_page_scroll`]. The viewport stays the band's size.
     pub(crate) fn page_mode(&mut self) {

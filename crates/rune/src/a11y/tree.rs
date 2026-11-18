@@ -152,7 +152,7 @@ pub(super) fn rect(r: [f32; 4], shift: [f32; 2]) -> AkRect {
     AkRect { x0: x, y0: y, x1: x + round(r[2].max(0.0)), y1: y + round(r[3].max(0.0)) }
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// An assistive client asked for this surface's tree: the next update holds all of it.
     pub(crate) fn a11y_activate(&mut self, name: &str) {
         let tree = self.a11y.get_or_insert_with(Default::default);

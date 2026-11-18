@@ -1,7 +1,7 @@
 //! Text flights drawn as an overlay of glyph instances, from their source text to their landed text.
 use super::*;
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// All destination rectangles below come from this frame's completed growth/scroll build.
     /// The overlay only writes draw instances, never layout or app state.
     pub(super) fn draw_text_flights(&mut self) -> bool {

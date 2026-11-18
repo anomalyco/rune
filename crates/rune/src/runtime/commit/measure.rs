@@ -25,32 +25,30 @@ pub(super) fn collect_virtual_inputs(el: &El, parent: &str, index: usize, inert:
     }
 }
 
-impl<S: 'static> Runtime<S> {
-    pub(super) fn measure(&mut self, tx: &Tx) -> Measured {
-        self.measure_pass(tx, true)
+impl RuntimeCore {
+    pub(super) fn measure(&mut self, app: &dyn ViewDriver, tx: &Tx) -> Measured {
+        self.measure_pass(app, tx, true)
     }
 
-    pub(super) fn measure_retry(&mut self, tx: &Tx) -> Measured {
+    pub(super) fn measure_retry(&mut self, app: &dyn ViewDriver, tx: &Tx) -> Measured {
         let _blend = crate::theme::scope(self.srgb_blend);
         let _bars = crate::platform::scroll_bars::scope(self.scroll_bars.state, self.scroll_bars.runtime_id);
         let selection = self.selection_by_path();
-        Measured { selection, ..self.measurement(true).finish_from(tx, 1) }
+        Measured { selection, ..self.measurement(app, true).finish_from(tx, 1) }
     }
 
     /// `committing` when the result is applied, so the last commit's text layouts can go.
-    pub(super) fn measure_pass(&mut self, tx: &Tx, committing: bool) -> Measured {
+    pub(super) fn measure_pass(&mut self, app: &dyn ViewDriver, tx: &Tx, committing: bool) -> Measured {
         let _blend = crate::theme::scope(self.srgb_blend);
         let _bars = crate::platform::scroll_bars::scope(self.scroll_bars.state, self.scroll_bars.runtime_id);
         let selection = self.selection_by_path();
-        Measured { selection, ..self.measurement(committing).finish(tx) }
+        Measured { selection, ..self.measurement(app, committing).finish(tx) }
     }
 
-    pub(super) fn measurement(&mut self, committing: bool) -> Measurement<'_, S> {
+    pub(super) fn measurement<'a>(&'a mut self, app: &'a dyn ViewDriver, committing: bool) -> Measurement<'a> {
         let hold_windows = self.checking_live_only();
         Measurement {
-            state: &self.state,
-            view: self.view,
-            playground: self.playground.as_deref(),
+            app,
             env: self.env,
             viewport: self.viewport,
             fit_height: self.fit_height,
@@ -110,7 +108,7 @@ impl<S: 'static> Runtime<S> {
     }
 }
 
-impl<S: 'static> Measurement<'_, S> {
+impl Measurement<'_> {
     pub(super) fn node_id(&mut self, path: &str) -> NodeId {
         if let Some(&id) = self.path_ids.get(path) { return id; }
         let id = NodeId(*self.next_id);
@@ -179,20 +177,17 @@ impl<S: 'static> Measurement<'_, S> {
 
     /// The app's view, or with the playground attached, the view it composes (the bar, or the
     /// playground around its stage).
-    fn root_view(&self, cx: &mut Cx<S>) -> El {
-        let root = match self.playground {
-            Some(playground) => playground.view(self.state, self.view, cx, self.viewport),
-            None => crate::playground::call(self.view, self.state, cx),
-        };
+    fn root_view(&self, cx: cx::CxCore) -> (El, cx::CxCore) {
+        let (root, cx) = self.app.view(cx, self.viewport);
         // The Windows caption buttons go over everything the view drew, in a frame around it.
-        let Some(caption) = &self.caption else { return root };
+        let Some(caption) = &self.caption else { return (root, cx) };
         let symbol = cx.caption_color.unwrap_or(if self.env.system_dark { Color::WHITE } else { Color::BLACK });
         // At the height this run sets (`Cx::titlebar_height`, a zoom's), in this commit: the
         // window's frame takes it after, and drawing the old one first would spring the buttons
         // to the new one, at launch and on every zoom step.
         let height = cx.titlebar.height.or(cx.titlebar.titlebar.map(|t| t.height())).unwrap_or(caption.height);
         let caption = crate::titlebar::Caption { height, ..*caption };
-        crate::titlebar::frame(root, &caption, symbol, (self.env.scale, self.zoom), self.fit_height)
+        (crate::titlebar::frame(root, &caption, symbol, (self.env.scale, self.zoom), self.fit_height), cx)
     }
 
     /// What a memo scope hashes of the window's controls (`Cx::titlebar_inset`,
@@ -337,7 +332,7 @@ impl<S: 'static> Measurement<'_, S> {
         let (list_offset, pinned) = v.locate(offset, held);
         offset = list_offset;
         let source = el.cold.virtual_rows.as_ref();
-        let state = playground_host::handler_states_ref(self.state, self.playground);
+        let state = self.app.states_ref();
         if source.is_some() {
             assert!(el.children.is_empty(), "`.virtual_rows(..)` at {path:?} builds its own rows; it takes no children");
         }
@@ -464,7 +459,7 @@ impl<S: 'static> Measurement<'_, S> {
     }
     fn measure_view(&mut self, tx: &Tx, force_all: bool) -> (LayoutEngine, Vec<Node>, Vec<memo_reuse::PendingFlat>, Vec<memo_reuse::ReusedSpan>, Vec<(u32, u32)>) {
         let scale = self.env.scale;
-        let fresh_cx = |this: &Self| Cx::<S> {
+        let fresh_cx = |this: &Self| cx::CxCore {
             env: this.env,
             titlebar_inset: this.titlebar_inset,
             chrome: this.chrome,
@@ -483,9 +478,8 @@ impl<S: 'static> Measurement<'_, S> {
             caret_read: std::cell::Cell::new(false),
             layout: this.layout_seen.clone(),
             layout_reads: Default::default(),
-            _s: PhantomData,
         };
-        let mut cx = fresh_cx(self);
+        let cx = fresh_cx(self);
         #[cfg(feature = "hot")]
         let emptied = self.memo.emptied();
         let memo = crate::memo::enter(std::mem::take(self.memo), self.env, self.system_accent, self.system_reduced_motion, crate::theme::blends_srgb(), self.chrome_bits(), cx.caret.clone(), cx.layout.clone());
@@ -494,17 +488,20 @@ impl<S: 'static> Measurement<'_, S> {
         let text: *mut TextSystem = &mut *self.text;
         #[cfg(not(feature = "hot"))]
         // SAFETY: nothing here uses `self.text` until `lend` returns.
-        let mut root = crate::text::lend(unsafe { &mut *text }, || { let root = self.root_view(&mut cx); self.build_tree(root, tx, force_all) });
+        let (mut root, cx) = crate::text::lend(unsafe { &mut *text }, || {
+            let (root, cx) = self.root_view(cx);
+            (self.build_tree(root, tx, force_all), cx)
+        });
         // Index-built rows run the app's closures in `build_tree`, so a patch's panic there
         // falls back like one in the view.
         #[cfg(feature = "hot")]
-        let (mut root, memo) = {
+        let (mut root, cx, memo) = {
             // SAFETY: as above.
             match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| crate::text::lend(unsafe { &mut *text }, || {
-                let root = self.root_view(&mut cx);
-                self.build_tree(root, tx, force_all)
+                let (root, cx) = self.root_view(cx);
+                (self.build_tree(root, tx, force_all), cx)
             }))) {
-                Ok(root) => (root, memo),
+                Ok((root, cx)) => (root, cx, memo),
                 Err(_) => {
                     eprintln!("rune-hot: view panicked; rendering the original view");
                     // The failed build's memo scope, cache and context writes go; the startup
@@ -512,10 +509,10 @@ impl<S: 'static> Measurement<'_, S> {
                     drop(memo);
                     self.virtual_culled.clear();
                     self.virtual_inputs.clear();
-                    cx = fresh_cx(self);
+                    let cx = fresh_cx(self);
                     let memo = crate::memo::enter(emptied, self.env, self.system_accent, self.system_reduced_motion, crate::theme::blends_srgb(), self.chrome_bits(), cx.caret.clone(), cx.layout.clone());
-                    let root = crate::hot::original_only(|| self.root_view(&mut cx));
-                    (crate::hot::original_only(|| self.build_tree(root, tx, force_all)), memo)
+                    let (root, cx) = crate::hot::original_only(|| self.root_view(cx));
+                    (crate::hot::original_only(|| self.build_tree(root, tx, force_all)), cx, memo)
                 }
             }
         };
@@ -592,7 +589,7 @@ impl<S: 'static> Measurement<'_, S> {
         inert: bool,
         group: Option<&str>,
     ) {
-        let state = playground_host::handler_states_ref(self.state, self.playground);
+        let state = self.app.states_ref();
         let v = self.virtuals.get_mut(path).unwrap();
         let list_group = if el.flags.has(ElFlags::SELECTION_GROUP) { Some(path.to_owned()) } else { group.map(str::to_owned) };
         v.selection.scope = selectable::virtual_selection::Scope { group_path: list_group.clone(), inert };
@@ -690,7 +687,7 @@ impl<S: 'static> Measurement<'_, S> {
     }
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// Records which row of each virtual list holds focus, by key, so the row is still built
     /// after it scrolls out. Walks the node tree, since a key may itself contain `/`.
     pub(super) fn track_focused_rows(&mut self) {

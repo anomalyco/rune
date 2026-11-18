@@ -345,12 +345,8 @@ impl MemoCache {
     }
 }
 
-impl<S: 'static> crate::Runtime<S> {
-    /// Drops this window's cached subtrees whose memo id starts with `prefix`, wherever they
-    /// nest, and those built inside them, then re-runs the view. A library that built them
-    /// can unload once the commit after this drops its handlers. A memo enclosing a dropped
-    /// one still reuses its own subtree, so it keeps what changed in its version.
-    pub fn invalidate_memos_by_prefix(&mut self, prefix: &str) {
+impl crate::runtime::RuntimeCore {
+    pub(crate) fn invalidate_memos_by_prefix(&mut self, prefix: &str) {
         self.memo.evict_prefix(prefix);
         self.invalidate();
     }

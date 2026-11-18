@@ -278,14 +278,14 @@ pub(super) fn order_drag_ends(queue: ActionQueue, ended: Vec<(String, crate::Dra
     ActionQueue(out)
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// Runs `action`'s handlers; debug builds warn when they block the main thread.
-    pub(super) fn run_action(&mut self, action: Action, tx: &mut Tx) -> bool {
+    pub(super) fn run_action(&mut self, app: &mut dyn AppDriver, action: Action, tx: &mut Tx) -> bool {
         #[cfg(debug_assertions)]
         let (name, path, at) = (handler_name(&action), stall_path(&action).map(str::to_owned), self.handler_location(&action));
         let stall = crate::tooling::perf_warn::Stall::start();
         let timed = self.interaction_note(&action).map(|note| (note, crate::time::Instant::now()));
-        let ran = self.dispatch_action(action, tx);
+        let ran = self.dispatch_action(app, action, tx);
         if ran && let Some((note, started)) = timed { self.interaction_ran(note, started); }
         #[cfg(debug_assertions)]
         if ran && name.starts_with("on_") { self.watch.meter.handler(name, path.as_deref(), at); }
@@ -314,11 +314,11 @@ impl<S: 'static> Runtime<S> {
         }
     }
 
-    fn dispatch_action(&mut self, action: Action, tx: &mut Tx) -> bool {
+    fn dispatch_action(&mut self, app: &mut dyn AppDriver, action: Action, tx: &mut Tx) -> bool {
         // A caret key or a press reads the field's layout where it lands: a long paste's
         // paragraphs still waiting there are shaped first. Typing at the caret needs none.
         if !self.text_rows.is_empty() && reads_text_layout(&action) { self.fill_text_near(); }
-        let mut one = self.transaction();
+        let mut one = self.transaction(app);
         // Debug builds name the element too, for the stale-view warning.
         #[cfg(debug_assertions)]
         let live_label = live_only_handler(&action).map(|h| match action_path(&action) {
@@ -332,23 +332,23 @@ impl<S: 'static> Runtime<S> {
             Action::WindowFocus(focused) => {
                 if !focused { self.held = physical_dispatch::Activation::Up; }
                 let Some(f) = self.nodes.get(self.app_root()).and_then(|n| n.handlers.on_window_focus.clone()) else { return false };
-                f(states!(self), focused, &mut one);
+                f(app.states(), focused, &mut one);
                 true
             }
             Action::Physical(event, fallback) => {
                 // The window lost key focus (an internal focus move also notifies handlers).
                 if matches!(event, crate::PhysicalInput::FocusLost) { self.held = physical_dispatch::Activation::Up; }
-                let ran = self.dispatch_physical(event, fallback, tx);
+                let ran = self.dispatch_physical(app, event, fallback, tx);
                 let live_only = std::mem::take(&mut tx.live_only);
                 return if ran && live_only { self.skip_view("a key handler") } else { ran };
             }
             Action::FocusControl(path) => {
-                self.set_focus(Some(path), false);
+                self.set_focus(app, Some(path), false);
                 true
             }
             Action::HoverFocus(path) => match path {
                 Some(path) => {
-                    self.set_focus(Some(path), false);
+                    self.set_focus(app, Some(path), false);
                     self.focus.step(focus_machine::FocusEvent::Hover(true));
                     one.commit = one.commit.instant();
                     true
@@ -361,50 +361,50 @@ impl<S: 'static> Runtime<S> {
             },
             Action::Dismiss(path) => {
                 let Some(f) = self.node(&path).and_then(|n| n.handlers.modal.as_ref().map(|m| m.dismiss.clone())) else { return false };
-                self.set_focus(None, self.focus.keyboard());
-                f(states!(self), &mut one);
+                self.set_focus(app, None, self.focus.keyboard());
+                f(app.states(), &mut one);
                 true
             }
             Action::PointerMove(path, point) => {
                 let Some(f) = self.node(&path).and_then(|n| n.handlers.on_pointer_move.clone()) else { return false };
-                f(states!(self), point, &mut one);
+                f(app.states(), point, &mut one);
                 true
             }
             Action::AtBottom(path, at) => {
                 let Some(f) = self.node(&path).and_then(|n| n.handlers.on_at_bottom.clone()) else { return false };
-                f(states!(self), at)
+                f(app.states(), at)
             }
             Action::FarFromBottom(path, far) => {
                 let Some((_, _, f)) = self.node(&path).and_then(|n| n.handlers.on_far_from_bottom.clone()) else { return false };
-                f(states!(self), far)
+                f(app.states(), far)
             }
             Action::VisibleRows(path, range) => {
                 let Some(f) = self.node(&path).and_then(|n| n.handlers.on_visible_rows.clone()) else { return false };
-                f(states!(self), range)
+                f(app.states(), range)
             }
             Action::Layout(path, rect) => {
                 let Some(f) = self.node(&path).and_then(|n| n.handlers.on_layout.clone()) else { return false };
-                f(states!(self), rect, &mut one);
+                f(app.states(), rect, &mut one);
                 true
             }
             Action::ScreenLayout(path, rect) => {
                 let Some(f) = self.node(&path).and_then(|n| n.handlers.on_screen_layout.clone()) else { return false };
-                f(states!(self), rect);
+                f(app.states(), rect);
                 true
             }
             Action::DrawnLayout(path, rect, _) => {
                 let Some(f) = self.node(&path).and_then(|n| n.handlers.on_drawn_layout.clone()) else { return false };
-                f(states!(self), rect, &mut one);
+                f(app.states(), rect, &mut one);
                 true
             }
             Action::Visible(path, on) => {
                 let Some(f) = self.node(&path).and_then(|n| n.handlers.on_visible.clone()) else { return false };
-                f(states!(self), on, &mut one);
+                f(app.states(), on, &mut one);
                 true
             }
             Action::Hover(path) => {
                 let Some(f) = self.node(&path).and_then(|n| n.handlers.on_hover.clone()) else { return false };
-                f(states!(self), &mut one);
+                f(app.states(), &mut one);
                 true
             }
             Action::HoverChange(path, inside) => {
@@ -412,12 +412,12 @@ impl<S: 'static> Runtime<S> {
                 // A leave still reaches an element on its way out.
                 let exiting = || self.nodes.iter().find(|n| !inside && n.path == path).and_then(|n| n.handlers.on_hover_change.clone());
                 let Some(f) = self.node(&path).and_then(|n| n.handlers.on_hover_change.clone()).or(gone).or_else(exiting) else { return false };
-                f(states!(self), inside, &mut one);
+                f(app.states(), inside, &mut one);
                 true
             }
             Action::SelectionChange(path, change) => {
                 let Some(f) = self.node(&path).and_then(|n| n.handlers.on_selection_change.clone()) else { return false };
-                f(states!(self), &change, &mut one);
+                f(app.states(), &change, &mut one);
                 one.select_from_change = one.select.is_some();
                 true
             }
@@ -426,32 +426,32 @@ impl<S: 'static> Runtime<S> {
                 log_event!(self, "press {path}");
                 one.button = button;
                 one.touch_tap = touch;
-                f(states!(self), &mut one);
+                f(app.states(), &mut one);
                 true
             }
             Action::DoublePress(path) => {
                 let Some(f) = self.node(&path).and_then(|n| n.handlers.on_double_press.clone()) else { return false };
                 log_event!(self, "double press {path}");
-                f(states!(self), &mut one);
+                f(app.states(), &mut one);
                 true
             }
             Action::MiddlePress(path) => {
                 let Some(f) = self.node(&path).and_then(|n| n.handlers.on_middle_press.clone()) else { return false };
                 log_event!(self, "middle press {path}");
                 one.button = crate::PointerButton::Middle;
-                f(states!(self), &mut one);
+                f(app.states(), &mut one);
                 true
             }
             Action::Link(path, k, button) => {
                 one.button = button;
-                self.press_link(&path, k, &mut one)
+                self.press_link(app, &path, k, &mut one)
             }
-            Action::LinkSecondary(path, k, point) => self.secondary_press_link(&path, k, point, &mut one),
+            Action::LinkSecondary(path, k, point) => self.secondary_press_link(app, &path, k, point, &mut one),
             Action::SecondaryPress(path, point) => {
                 let Some(n) = self.node(&path).filter(|n| !self.is_exiting(n.id)) else { return false };
                 let Some(f) = n.handlers.on_secondary_press.clone() else { return false };
                 log_event!(self, "secondary press {path}");
-                f(states!(self), point, &mut one);
+                f(app.states(), point, &mut one);
                 true
             }
             Action::Drag(path, mut d, button) | Action::DragRepeat(path, mut d, button) => {
@@ -462,7 +462,7 @@ impl<S: 'static> Runtime<S> {
                 one.button = button;
                 one.drag_repeat = repeat;
                 d.data = if d.phase == Phase::Down { 0.0 } else { self.drag_data };
-                f(states!(self), &mut d, &mut one);
+                f(app.states(), &mut d, &mut one);
                 self.drag_data = d.data;
                 if let Some(after) = one.drag_repeat_after.take() {
                     self.arm_press_repeat(&path, after);
@@ -474,26 +474,26 @@ impl<S: 'static> Runtime<S> {
             }
             Action::DragStart(path) => {
                 let Some(f) = self.node(&path).and_then(|n| n.handlers.on_drag_start.clone()) else { return false };
-                f(states!(self), &mut one);
+                f(app.states(), &mut one);
                 true
             }
             Action::DragEnd(path, outcome) => {
                 log_event!(self, "drag-end {outcome:?} {path}");
                 let Some(f) = self.node(&path).and_then(|n| n.handlers.on_drag_end.clone()) else { return false };
-                f(states!(self), outcome, &mut one);
+                f(app.states(), outcome, &mut one);
                 true
             }
-            Action::Files(event) => self.run_files(event, &mut one),
+            Action::Files(event) => self.run_files(app, event, &mut one),
             Action::Key { ev, repeat, stage } => {
                 if self.held_gate(None, Some(&ev.key), repeat) { return false; }
-                if ! matches!(ev.key, crate::Key::Modifier { .. }) { self.note_key_down(repeat); }
-                if stage { self.route_stage_key(&ev, &mut one) } else { self.route_key(&ev, repeat, &mut one) }
+                if ! matches!(ev.key, crate::Key::Modifier { .. }) { self.note_key_down(app, repeat); }
+                if stage { self.route_stage_key(app, &ev, &mut one) } else { self.route_key(app, &ev, repeat, &mut one) }
             }
-            Action::KeyUp(ev) => self.route_key_up(&ev, &mut one),
-            Action::Wheel { gesture, chain, ev, phased } => self.run_wheel(gesture, chain, ev, phased, &mut one),
-            Action::Gesture(chain, gesture) => self.run_gesture(chain, gesture, &mut one),
-            Action::Ime(ev) => self.run_ime(ev, &mut one),
-            Action::FinishIme => self.finish_ime(&mut one),
+            Action::KeyUp(ev) => self.route_key_up(app, &ev, &mut one),
+            Action::Wheel { gesture, chain, ev, phased } => self.run_wheel(app, gesture, chain, ev, phased, &mut one),
+            Action::Gesture(chain, gesture) => self.run_gesture(app, chain, gesture, &mut one),
+            Action::Ime(ev) => self.run_ime(app, ev, &mut one),
+            Action::FinishIme => self.finish_ime(app, &mut one),
             Action::Paste(content, target) => {
                 if target.is_some_and(|target| target != self.paste_target()) { return false; }
                 let hook = self.focused_input().and_then(|i| i.paste.clone());
@@ -520,10 +520,10 @@ impl<S: 'static> Runtime<S> {
                     if !content.has_plain() { return EditOutcome::default(); }
                     edit.paste(content.text())
                 };
-                if self.with_focused_state(into_field, &mut one) {
+                if self.with_focused_state(app, into_field, &mut one) {
                     log_event!(self, "paste field");
                     true
-                } else if let Some(f) = self.app_paste_handler() && (f.call)(states!(self), &content, &mut one) {
+                } else if let Some(f) = self.app_paste_handler() && (f.call)(app.states(), &content, &mut one) {
                     log_event!(self, "paste window");
                     true
                 } else { false }
@@ -531,18 +531,18 @@ impl<S: 'static> Runtime<S> {
             Action::ClipboardRead(id, content) => {
                 let Some(i) = self.clipboard_reads.iter().position(|(read, _)| *read == id) else { return false };
                 let (_, f) = self.clipboard_reads.remove(i);
-                f(states!(self), &content, &mut one);
+                f(app.states(), &content, &mut one);
                 true
             }
-            Action::FileDialog(id, result) => self.run_file_dialog(id, result, &mut one),
-            Action::Focus(path, x, y) => self.focus_input(path, x, y, &mut one),
-            Action::FieldMenu(path, at, local) => self.field_menu(path, at, local, &mut one),
+            Action::FileDialog(id, result) => self.run_file_dialog(app, id, result, &mut one),
+            Action::Focus(path, x, y) => self.focus_input(app, path, x, y, &mut one),
+            Action::FieldMenu(path, at, local) => self.field_menu(app, path, at, local, &mut one),
             Action::Blur => {
                 if self.focus.path().is_none() { return false; }
-                self.set_focus(None, self.focus.keyboard());
+                self.set_focus(app, None, self.focus.keyboard());
                 true
             }
-            Action::A11y(path, act) => self.run_a11y(path, act, &mut one),
+            Action::A11y(path, act) => self.run_a11y(app, path, act, &mut one),
         };
         let live_only = std::mem::take(&mut one.live_only);
         if live_only && live_label.is_some() {

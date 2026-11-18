@@ -280,6 +280,6 @@ fn mac_meta_copy_and_select_all_work_on_selectable_text() {
     assert_eq!(rt.copy_text().as_deref(), Some("First paragraph\nSecond paragraph"));
     rt.web_key(&json!({"kind":"key", "key":"c", "code":"KeyC", "meta":true, "ctrl":false, "shift":false, "alt":false}));
     rt.frame(0.0);
-    crate::clipboard::flush_memory(&mut rt);
+    crate::clipboard::flush_memory(rt.core_mut());
     assert_eq!(board.text().as_deref().map(String::as_str), Some("First paragraph\nSecond paragraph"));
 }

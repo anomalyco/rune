@@ -72,27 +72,27 @@ impl Mode {
     fn horizontal(self) -> bool { matches!(self, Mode::Pan { horizontal: true, .. }) }
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// One touch event at (x, y) in window points, `time` in seconds on any steady clock. A
     /// host with touches calls this for every one; `id` tells fingers apart.
-    pub fn touch(&mut self, id: u64, phase: TouchPhase, x: f32, y: f32, time: f64) {
+    pub(crate) fn touch(&mut self, app: &mut dyn AppDriver, id: u64, phase: TouchPhase, x: f32, y: f32, time: f64) {
         match phase {
-            TouchPhase::Started => self.touch_down(id, x, y, time),
-            TouchPhase::Moved => self.touch_move(id, x, y, time),
-            TouchPhase::Ended | TouchPhase::Cancelled => self.touch_up(id, x, y, time, phase == TouchPhase::Cancelled),
+            TouchPhase::Started => self.touch_down(app, id, x, y, time),
+            TouchPhase::Moved => self.touch_move(app, id, x, y, time),
+            TouchPhase::Ended | TouchPhase::Cancelled => self.touch_up(app, id, x, y, time, phase == TouchPhase::Cancelled),
         }
     }
 
     /// Whether a finger is down: a host ignores the mouse events its system makes up from it.
-    pub fn touching(&self) -> bool {
+    pub(crate) fn touching(&self) -> bool {
         self.touch.finger.is_some()
     }
 
-    fn touch_down(&mut self, id: u64, x: f32, y: f32, time: f64) {
+    fn touch_down(&mut self, app: &mut dyn AppDriver, id: u64, x: f32, y: f32, time: f64) {
         if self.touch.finger.is_some() { return; }
         let scroll = self.touch_scroll_start(x, y);
-        self.pointer_move(x, y);
-        self.press_down(x, y, true);
+        self.pointer_move(app, x, y);
+        self.press_down(app, x, y, true);
         // `El::touch_drags_at_once`: a drag from the first move, and no long press to cut it.
         if self.press_drags_at_once() {
             self.touch_scroll_end(scroll, 0.0);
@@ -104,7 +104,7 @@ impl<S: 'static> Runtime<S> {
         self.touch.finger = Some(Finger { id, origin: (x, y), last: 0.0, at: time, velocity: 0.0, mode: Mode::Pending { scroll }, hold_due });
     }
 
-    fn touch_move(&mut self, id: u64, x: f32, y: f32, time: f64) {
+    fn touch_move(&mut self, app: &dyn ViewDriver, id: u64, x: f32, y: f32, time: f64) {
         let Some(f) = self.touch.finger.as_ref().filter(|f| f.id == id) else { return };
         let (dx, dy) = (x - f.origin.0, y - f.origin.1);
         if let Mode::Pending { scroll } = f.mode && dx.hypot(dy) > TOUCH_SLOP {
@@ -122,12 +122,12 @@ impl<S: 'static> Runtime<S> {
         (f.last, f.at) = (along, time);
         match f.mode {
             Mode::Pan { scroll, .. } => self.touch_scroll_move(scroll, along),
-            Mode::Drag => self.pointer_move(x, y),
+            Mode::Drag => self.pointer_move(app, x, y),
             Mode::Pending { .. } | Mode::Menu => {}
         }
     }
 
-    fn touch_up(&mut self, id: u64, x: f32, y: f32, time: f64, cancelled: bool) {
+    fn touch_up(&mut self, app: &dyn ViewDriver, id: u64, x: f32, y: f32, time: f64, cancelled: bool) {
         let Some(f) = self.touch.finger.take_if(|f| f.id == id) else { return };
         let pan = matches!(f.mode, Mode::Pan { .. });
         let velocity = if pan && !cancelled && time - f.at < FLING_HOLD { f.velocity } else { 0.0 };
@@ -142,8 +142,8 @@ impl<S: 'static> Runtime<S> {
         }
         // A pan cancelled the press, so its release clicks nothing.
         let (x, y) = if pan { f.origin } else { (x, y) };
-        if f.mode == Mode::Drag { self.pointer_move(x, y); }
-        self.pointer_up(x, y);
+        if f.mode == Mode::Drag { self.pointer_move(app, x, y); }
+        self.pointer_up(app, x, y);
         // No hover is left under a lifted finger.
         self.pointer_leave();
     }
@@ -151,13 +151,13 @@ impl<S: 'static> Runtime<S> {
     /// A finger still within the slop when its long press is due: the press it began lets go
     /// without a click (a drag it started hears a cancelled `Phase::Up`), and a secondary click
     /// lands where it went down.
-    pub(super) fn fire_touch_hold(&mut self) {
+    pub(super) fn fire_touch_hold(&mut self, app: &dyn ViewDriver) {
         let Some(f) = self.touch.finger.as_ref().filter(|f| matches!(f.mode, Mode::Pending { .. }) && self.clock >= f.hold_due) else { return };
         let ((x, y), scroll) = (f.origin, f.mode.scroll());
         self.touch_scroll_end(scroll, 0.0);
         if !self.cancel_drag() { self.drop_press(); }
         self.secondary_down(x, y);
-        self.secondary_up(x, y);
+        self.secondary_up(app, x, y);
         if let Some(f) = self.touch.finger.as_mut() { f.mode = Mode::Menu; }
     }
 

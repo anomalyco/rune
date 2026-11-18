@@ -159,7 +159,7 @@ fn a_script_key_can_be_a_held_keys_repeat() {
 fn window_panel_headless_focus_steps_preserve_false_and_event_order() {
     let script = parse_script(serde_json::json!([{"focus":true}, {"t":0.1,"focus":false}, {"t":0.2,"focus":false}]));
     let mut rt = Runtime::new(Vec::new(), |_: &Vec<bool>, _: &mut crate::Cx<Vec<bool>>| crate::el(), (100.0, 100.0), Env::default());
-    rt.on_focus = Some(|s, focused, _| s.push(focused));
+    rt.hooks.on_focus = Some(|s, focused, _| s.push(focused));
     assert_eq!(script.len(), 3);
     for event in script {
         let Kind::Focus(focused) = event.kind else { panic!("focus parsed as pointer action") };

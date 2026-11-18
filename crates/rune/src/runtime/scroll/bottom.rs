@@ -106,9 +106,9 @@ pub(super) fn glide(st: &mut ScrollState, dt: f32) -> bool {
     moving
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// The scroll viewport `key` names (`Node::named`), or the nearest one containing it.
-    fn scroll_viewport(&self, key: &str) -> Option<usize> {
+    pub(super) fn scroll_viewport(&self, key: &str) -> Option<usize> {
         let mut i = self.nodes.iter().enumerate()
             .position(|(i, n)| n.named(key) && !self.subtree_exiting(i))?;
         loop {
@@ -117,7 +117,7 @@ impl<S: 'static> Runtime<S> {
         }
     }
 
-    pub(super) fn scroll_to_bottom(&mut self, requests: Vec<(String, bool)>) {
+    pub(super) fn scroll_to_bottom(&mut self, app: &mut dyn AppDriver, requests: Vec<(String, bool)>) {
         // This frame's commit may have changed the content: measure the extent first.
         self.step_scroll(0.0);
         let mut targets = Vec::new();
@@ -133,7 +133,7 @@ impl<S: 'static> Runtime<S> {
         }
         for _ in 0..3 {
             if !self.virtual_window_changed() { break; }
-            self.commit(&Tx::default());
+            self.commit(app, &Tx::default());
             self.step_scroll(0.0);
             for (id, ..) in &targets {
                 if let Some(st) = self.scrolls.get_mut(id) { st.offset = st.max; }
@@ -152,13 +152,13 @@ impl<S: 'static> Runtime<S> {
             }
         }
         if self.virtual_window_changed() {
-            self.commit(&Tx::default());
+            self.commit(app, &Tx::default());
             self.step_scroll(0.0);
         }
     }
 
     /// `Tx::scroll_page`: each viewport moves by its requested pages.
-    pub(super) fn scroll_pages(&mut self, requests: Vec<(String, i32)>) {
+    pub(super) fn scroll_pages(&mut self, app: &mut dyn AppDriver, requests: Vec<(String, i32)>) {
         // This frame's commit may have changed the content: measure the extent first.
         self.step_scroll(0.0);
         for (key, pages) in requests {
@@ -166,7 +166,7 @@ impl<S: 'static> Runtime<S> {
             self.page_to(i, |offset, _, page| offset + page * f64::from(pages));
         }
         if self.virtual_window_changed() {
-            self.commit(&Tx::default());
+            self.commit(app, &Tx::default());
             self.step_scroll(0.0);
         }
     }

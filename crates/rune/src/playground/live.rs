@@ -66,8 +66,6 @@ pub(crate) struct Live<S: 'static> {
     /// Bumped by every select and replay, so the new stage's elements start fresh: scroll
     /// offsets, focus and animations don't carry over from the last one.
     pub(super) generation: u32,
-    /// The node the app's view returned, which holds the window's root handlers.
-    pub(crate) root: usize,
     /// The time scale the app had when the playground opened, which every new stage starts
     /// from and Back restores.
     pub(crate) app_time_scale: f32,
@@ -75,6 +73,10 @@ pub(crate) struct Live<S: 'static> {
     /// that makes a playground (`Live::new`) links the playground's views and requests.
     compose: fn(&Self, &S, fn(&S, &mut Cx<S>) -> El, &mut Cx<S>, (f32, f32)) -> El,
     apply_requests: fn(&mut Self, f64, &mut S) -> bool,
+    /// Trait-object casts initialized only in `Live::new`, keeping `Live<S>: PlaygroundDriver`
+    /// dead-code-eliminated for apps without a playground.
+    as_driver: fn(&Self) -> &dyn crate::runtime::driver::PlaygroundDriver,
+    as_driver_mut: fn(&mut Self) -> &mut dyn crate::runtime::driver::PlaygroundDriver,
 }
 
 impl<S: 'static> Live<S> {
@@ -118,10 +120,11 @@ impl<S: 'static> Live<S> {
             played: 0,
             now: 0.0,
             generation: 0,
-            root: 0,
             app_time_scale: 1.0,
             compose: Self::compose,
             apply_requests: Self::apply_requests,
+            as_driver: |live| live,
+            as_driver_mut: |live| live,
         };
         // Scene names as `find` takes them: a path or a name, matching case if it can.
         let scene = |live: &Self, name: &str| {
@@ -387,4 +390,37 @@ impl<S: 'static> Live<S> {
     pub(crate) fn is_shortcut(&self, ev: &KeyEvent) -> bool {
         !self.menu && self.shortcut.as_ref().is_some_and(|s| s.matches_key(ev))
     }
+
+    pub(crate) fn driver(&self) -> &dyn crate::runtime::driver::PlaygroundDriver {
+        (self.as_driver)(self)
+    }
+
+    pub(crate) fn driver_mut(&mut self) -> &mut dyn crate::runtime::driver::PlaygroundDriver {
+        (self.as_driver_mut)(self)
+    }
+}
+
+impl<S: 'static> crate::runtime::driver::PlaygroundDriver for Live<S> {
+    fn is_open(&self) -> bool { Live::is_open(self) }
+    fn is_shortcut(&self, ev: &KeyEvent) -> bool { Live::is_shortcut(self, ev) }
+    fn request(&mut self, requests: Vec<Request>) { Live::request(self, requests); }
+    fn has_pending(&self) -> bool { Live::has_pending(self) }
+    fn pending_swaps_stage(&self) -> bool { Live::pending_swaps_stage(self) }
+    fn pending_replays_only(&self) -> bool { Live::pending_replays_only(self) }
+    fn polls(&self) -> bool { Live::polls(self) }
+    fn poll_stage(&mut self, clock: f64, tx: &mut Tx) -> bool { Live::poll_stage(self, clock, tx) }
+    fn take_pressed(&mut self) -> Vec<KeyEvent> { Live::take_pressed(self) }
+    fn pressing(&self) -> bool { self.pressing }
+    fn set_pressing(&mut self, pressing: bool) { self.pressing = pressing; }
+    fn app_time_scale(&self) -> f32 { self.app_time_scale }
+    fn set_app_time_scale(&mut self, scale: f32) { self.app_time_scale = scale; }
+    fn region(&self) -> Region { Live::region(self) }
+    fn region_at(&self, x: f32, width: f32) -> Region { Live::region_at(self, x, width) }
+    fn saw_focus(&self, focus: Option<&str>) -> bool { Live::saw_focus(self, focus) }
+    fn moved(&mut self, moved: Moved) -> bool { Live::moved(self, moved) }
+    fn nav(&self, ev: &KeyEvent, region: Region) -> Nav { Live::nav(self, ev, region) }
+    fn side_key(&mut self, ev: &KeyEvent, tx: &mut Tx) -> bool { Live::side_key(self, ev, tx) }
+    fn clear_filter(&mut self) -> bool { Live::clear_filter(self) }
+    fn first_shown(&self) -> Option<usize> { Live::first_shown(self) }
+    fn first_match(&self) -> Option<usize> { Live::first_match(self) }
 }

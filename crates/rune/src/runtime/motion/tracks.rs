@@ -25,7 +25,7 @@ pub(super) fn mark_ancestors(nodes: &[Node], marked: &mut [bool]) {
     }
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     pub(super) fn set_or_anim<T: rune_motion::Animatable>(&mut self, id: NodeId, p: Prop<T>, val: T, s: Spring, instant: bool) {
         if instant {
             self.scene.set(id, p, val);

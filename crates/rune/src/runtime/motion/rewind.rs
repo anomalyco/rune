@@ -3,7 +3,7 @@
 
 use super::*;
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     pub(crate) fn record_rewind(&mut self) {
         let Some(rewind) = &self.rewind else { return };
         let mut tape = rewind.lock();

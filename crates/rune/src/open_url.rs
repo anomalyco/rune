@@ -7,8 +7,7 @@
 //! itself happens once the handler's frame is done.
 //!
 //! macOS asks `NSWorkspace`, Windows `ShellExecuteW`, Linux runs `xdg-open`. Headless runs and
-//! tests never open anything: they keep the requests for [`Runtime::take_url_requests`].
-use crate::Runtime;
+//! tests never open anything: they keep the requests for [`crate::Runtime::take_url_requests`].
 
 pub(crate) mod incoming;
 pub(crate) mod instance;
@@ -139,10 +138,10 @@ fn valid_authority(authority: &str) -> bool {
     port.is_none_or(|p| !p.is_empty() && p.parse::<u16>().is_ok())
 }
 
-impl<S: 'static> Runtime<S> {
+impl crate::runtime::RuntimeCore {
     /// Takes the links handlers asked to open that this runtime didn't open: all of them in a
     /// headless run or test, none in a window. Each was already checked.
-    pub fn take_url_requests(&mut self) -> Vec<String> { std::mem::take(&mut self.url_requests) }
+    pub(crate) fn take_url_requests(&mut self) -> Vec<String> { std::mem::take(&mut self.url_requests) }
 
     pub(crate) fn open_urls(&mut self, links: Vec<Link>) {
         for link in links {

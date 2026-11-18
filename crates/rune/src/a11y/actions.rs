@@ -26,7 +26,7 @@ pub(super) enum A11yAct {
 /// One scroll "item" in points: about a line of body text.
 const LINE: f32 = 40.0;
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// Queues what `request` asks for its frame, if it names an element that can do it. Returns
     /// whether it queued anything (the host then draws a frame).
     pub(crate) fn a11y_action(&mut self, request: &ActionRequest) -> bool {
@@ -132,27 +132,27 @@ impl<S: 'static> Runtime<S> {
     }
 
     /// Runs a queued accessibility action in its frame.
-    pub(super) fn run_a11y(&mut self, path: String, act: A11yAct, tx: &mut Tx) -> bool {
+    pub(super) fn run_a11y(&mut self, app: &mut dyn AppDriver, path: String, act: A11yAct, tx: &mut Tx) -> bool {
         match act {
             A11yAct::Focus(link) => {
                 log_event!(self, "a11y focus {path}");
-                self.set_focus(Some(path), true);
+                self.set_focus(app, Some(path), true);
                 if let Some(k) = link { self.set_link_focus(k); }
                 true
             }
             A11yAct::Step(delta) => {
                 let Some(f) = self.node(&path).and_then(|n| n.focus.step.clone()) else { return false };
                 log_event!(self, "a11y step {delta} {path}");
-                f(states!(self), delta, tx);
+                f(app.states(), delta, tx);
                 true
             }
-            A11yAct::SetValue(value) => self.a11y_edit(path, tx, move |e| {
+            A11yAct::SetValue(value) => self.a11y_edit(app, path, tx, move |e| {
                 let len = e.text.len();
                 e.set_selection(0, len);
                 e.paste(&value)
             }),
-            A11yAct::Replace(value) => self.a11y_edit(path, tx, move |e| e.paste(&value)),
-            A11yAct::Select(a, b) => self.a11y_edit(path, tx, move |e| {
+            A11yAct::Replace(value) => self.a11y_edit(app, path, tx, move |e| e.paste(&value)),
+            A11yAct::Select(a, b) => self.a11y_edit(app, path, tx, move |e| {
                 let (a, b) = (e.model_index(a), e.model_index(b));
                 e.set_selection(a, b);
                 crate::edit::EditOutcome::default()
@@ -184,9 +184,9 @@ impl<S: 'static> Runtime<S> {
 
     /// Focuses field `path` (as a reader focuses it first) and edits it through its editor, so
     /// its change and submit handlers run as for typing.
-    fn a11y_edit(&mut self, path: String, tx: &mut Tx, f: impl FnOnce(&mut crate::edit::TextEdit) -> crate::edit::EditOutcome) -> bool {
-        if self.focus.path() != Some(path.as_str()) { self.set_focus(Some(path.clone()), true); }
+    fn a11y_edit(&mut self, app: &mut dyn AppDriver, path: String, tx: &mut Tx, f: impl FnOnce(&mut crate::edit::TextEdit) -> crate::edit::EditOutcome) -> bool {
+        if self.focus.path() != Some(path.as_str()) { self.set_focus(app, Some(path.clone()), true); }
         log_event!(self, "a11y edit {path}");
-        self.with_focused(f, tx)
+        self.with_focused(app, f, tx)
     }
 }

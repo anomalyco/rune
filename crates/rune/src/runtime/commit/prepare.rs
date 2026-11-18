@@ -13,6 +13,23 @@ use super::*;
 /// (`LAYOUT_PER_BYTE`): about one transcript screen.
 pub(crate) const PREPARE_BYTES: usize = 1 << 20;
 
+struct PrepareView<'a, S: 'static> {
+    state: &'a S,
+    view: fn(&S, &mut Cx<S>) -> El,
+}
+
+impl<S: 'static> ViewDriver for PrepareView<'_, S> {
+    fn states_ref(&self) -> crate::states::StatesRef<'_> {
+        crate::states::StatesRef::one(handler_state_ref(self.state))
+    }
+
+    fn view(&self, cx: cx::CxCore, _viewport: (f32, f32)) -> (El, cx::CxCore) {
+        let mut cx = Cx { core: cx, _s: PhantomData };
+        let root = crate::playground::call(self.view, self.state, &mut cx);
+        (root, cx.core)
+    }
+}
+
 impl<S: 'static> Runtime<S> {
     /// Whether an idle turn has a view to prepare for this window.
     pub(crate) fn text_idle_owed(&self) -> bool {
@@ -30,15 +47,21 @@ impl<S: 'static> Runtime<S> {
     /// Measures `view` at `size` (points) with this window's text system and scratch everything
     /// else, then drops it. Returns the layouts it added.
     pub(crate) fn prepare_text(&mut self, view: fn(&S, &mut Cx<S>) -> El, size: (f32, f32)) -> usize {
+        let (core, app) = self.split_mut();
+        let prepare = PrepareView { state: &*app.state, view };
+        core.prepare_text_with(&prepare, size)
+    }
+}
+
+impl RuntimeCore {
+    pub(super) fn prepare_text_with(&mut self, app: &dyn ViewDriver, size: (f32, f32)) -> usize {
         let before = self.text.layout_keys();
         let (mut nodes, mut spare_nodes, mut layout) = (Vec::new(), Vec::new(), LayoutEngine::new());
         let (mut node_index, mut path_ids, mut memo) = (HashMap::default(), HashMap::default(), crate::memo::MemoCache::default());
         let (mut next_id, mut scrolls, mut virtuals) = (0u64, HashMap::default(), HashMap::default());
         let (mut virtual_culled, mut virtual_inputs, mut stats, mut key_warnings) = (HashSet::default(), HashMap::default(), FrameStats::default(), None);
         let m = Measurement {
-            state: &self.state,
-            view,
-            playground: None,
+            app,
             env: self.env,
             viewport: size,
             fit_height: false,

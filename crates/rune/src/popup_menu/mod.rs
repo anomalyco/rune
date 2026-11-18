@@ -393,15 +393,21 @@ impl Presenter {
     /// Runs the callback of a menu that closed since the last event. True when one ran. The
     /// pointer the menu released is back where the menu left it, so a click that doesn't move
     /// it first still lands.
+    #[inline(always)]
     pub(crate) fn answer<S: 'static>(&mut self, rt: &mut Runtime<S>) -> bool {
+        let (core, mut app) = rt.split_mut();
+        self.answer_core(core, &mut app)
+    }
+
+    fn answer_core(&mut self, rt: &mut crate::runtime::RuntimeCore, app: &mut dyn crate::runtime::AppDriver) -> bool {
         let Some((picked, pointer)) = self.session.as_ref().and_then(|s| s.take_answer()) else { return false };
         self.session = None;
-        if let Err(error) = rt.resolve_popup(picked.as_deref()) {
+        if let Err(error) = rt.resolve_popup(app, picked.as_deref()) {
             eprintln!("rune: {error}");
-            let _ = rt.resolve_popup(None);
+            let _ = rt.resolve_popup(app, None);
         }
         // In window points; the view's are over its zoom.
-        if let Some((x, y)) = pointer && rt.pointer().is_none() { rt.pointer_move(x / rt.zoom(), y / rt.zoom()); }
+        if let Some((x, y)) = pointer && rt.pointer().is_none() { rt.pointer_move(app, x / rt.zoom(), y / rt.zoom()); }
         true
     }
 
@@ -410,7 +416,13 @@ impl Presenter {
     /// the runtime has changes to commit, so the next frame places it from the new layout.
     /// True when the window should draw: a callback ran, the pointer was released, or a menu
     /// waits for that frame.
+    #[inline(always)]
     pub(crate) fn open<S: 'static>(&mut self, rt: &mut Runtime<S>, window: Option<&Arc<Window>>, paints: bool) -> bool {
+        let (core, mut app) = rt.split_mut();
+        self.open_core(core, &mut app, window, paints)
+    }
+
+    fn open_core(&mut self, rt: &mut crate::runtime::RuntimeCore, app: &mut dyn crate::runtime::AppDriver, window: Option<&Arc<Window>>, paints: bool) -> bool {
         let mut redraw = false;
         loop {
             if window.is_some() && paints && rt.popup_waits_for_layout() { return true; }
@@ -425,7 +437,7 @@ impl Presenter {
                     return true;
                 }
             }
-            let _ = rt.resolve_popup(None);
+            let _ = rt.resolve_popup(app, None);
         }
     }
 

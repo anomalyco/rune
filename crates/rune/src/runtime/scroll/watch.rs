@@ -20,7 +20,7 @@ pub fn scroll_watch_state() -> (bool, bool, f64) {
     SCROLL_WATCH_STATE.get()
 }
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// Calls each viewport's `on_scroll_offset` whose offset or extent moved, that is new, or
     /// whose handler is; true when it called any.
     pub(super) fn tell_scroll_offsets(&mut self, instant: bool) -> bool {

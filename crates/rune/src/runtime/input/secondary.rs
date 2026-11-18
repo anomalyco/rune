@@ -2,7 +2,7 @@
 //! which element's menu it opens.
 use super::*;
 
-impl<S: 'static> Runtime<S> {
+impl RuntimeCore {
     /// The nearest element with `on_secondary_press` (or a link with `on_link_secondary`) at
     /// (x, y), else the selectable text there (its Copy menu): an app's context menu on a row
     /// wins over its text's.
@@ -89,7 +89,7 @@ impl<S: 'static> Runtime<S> {
         self.secondary = capture::Secondary::Up;
     }
 
-    pub fn secondary_up(&mut self, x: f32, y: f32) {
+    pub(crate) fn secondary_up(&mut self, app: &dyn ViewDriver, x: f32, y: f32) {
         self.pointer = Some((x, y));
         self.tint.release(crate::PointerButton::Secondary);
         if self.autoscroll_release(crate::PointerButton::Secondary) { return; }
@@ -108,7 +108,7 @@ impl<S: 'static> Runtime<S> {
             // onto, off or between links opens nothing.
             match (link, down_link) {
                 (Some(k), Some(d)) if k == d => self.queue.push(Action::LinkSecondary(path, k, point)),
-                (None, None) if !self.selection_menu(&path, x, y) && !self.queue_field_menu(&path, x, y) => self.queue.push(Action::SecondaryPress(path, point)),
+                (None, None) if !self.selection_menu(app, &path, x, y) && !self.queue_field_menu(&path, x, y) => self.queue.push(Action::SecondaryPress(path, point)),
                 _ => {}
             }
         }
@@ -131,7 +131,7 @@ impl<S: 'static> Runtime<S> {
     /// menu. That is its focused link's `on_link_secondary`, else its own or its nearest
     /// ancestor's `on_secondary_press`, at the bottom-left of the focused link or element, where
     /// a menu opens below it as AppKit's and Windows' keyboard menus do.
-    pub(super) fn context_menu_key(&mut self, ev: &KeyEvent, tx: &mut Tx) -> bool {
+    pub(super) fn context_menu_key(&mut self, app: &mut dyn AppDriver, ev: &KeyEvent, tx: &mut Tx) -> bool {
         let m = ev.mods;
         let plain = !m.cmd && !m.ctrl && !m.alt && !m.logo;
         let menu_key = match ev.key {
@@ -140,11 +140,11 @@ impl<S: 'static> Runtime<S> {
             _ => false,
         };
         let Some(focused) = self.focused_index().filter(|&i| menu_key && self.can_focus(i)) else { return false };
-        if self.focused_link_menu(focused, tx) { return true; }
+        if self.focused_link_menu(app, focused, tx) { return true; }
         let [x, _, _, y] = self.drawn_box(focused);
         let n = &self.nodes[focused];
         if n.handlers.on_secondary_press.is_none() && n.input.as_ref().is_some_and(|i| i.access.is_some()) {
-            return self.field_menu(n.path.clone(), (x, y), None, tx);
+            return self.field_menu(app, n.path.clone(), (x, y), None, tx);
         }
         let mut index = focused;
         loop {
@@ -154,7 +154,7 @@ impl<S: 'static> Runtime<S> {
                 let path = n.path.clone();
                 let point = self.pointer_event(index, x, y);
                 log_event!(self, "secondary press {path}");
-                f(states!(self), point, tx);
+                f(app.states(), point, tx);
                 return true;
             }
             let Some(p) = n.parent else { return false };
