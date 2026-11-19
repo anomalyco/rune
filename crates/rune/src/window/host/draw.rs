@@ -149,6 +149,10 @@ impl Host {
         if crate::tooling::proof_removal::since().is_some() {
             eprintln!("proof: the surface check took {} us; the frame draws on {:?}", replaced.elapsed().as_micros(), self.gpu.as_ref().map(|(g, _)| g.adapter.get_info().name));
             crate::tooling::proof_removal::probe_new_device("after the frame's surface check");
+            if let Some(name) = self.gpu.as_ref().map(|(g, _)| g.adapter.get_info().name).filter(|n| !n.contains("Microsoft Basic Render Driver")) {
+                eprintln!("proof: the replacement device is on {name:?}, not WARP: ending the run here (proofs stay on WARP)");
+                std::process::exit(4);
+            }
         }
         // The radius a client-side frame rounds this window's bottom corners to, in device
         // pixels: zero unless it draws one, now and with a surface that composites alpha
