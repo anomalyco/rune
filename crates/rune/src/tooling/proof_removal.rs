@@ -10,7 +10,9 @@ pub(crate) static REMOVED: OnceLock<Instant> = OnceLock::new();
 /// Whether this run asked for the removal named `what` (`RUNE_PROOF_REMOVE=<what>`).
 pub(crate) fn asked(what: &str) -> bool {
     #[allow(clippy::disallowed_methods)]
-    let asked = std::env::var("RUNE_PROOF_REMOVE").is_ok_and(|v| v == what);
+    let asked = std::env::var("RUNE_PROOF_REMOVE").is_ok_and(|v| v == what)
+        // Or the example's own name: `gpu_safe_window`, `gpu_safe_uiwait`, `gpu_safe_snap`.
+        || std::env::current_exe().ok().and_then(|e| e.file_stem().map(|s| s.to_string_lossy().into_owned())).is_some_and(|s| s == format!("gpu_safe_{what}"));
     asked
 }
 
