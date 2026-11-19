@@ -1,6 +1,6 @@
 //! The platform's spell checker for text fields that ask for it (`El::spellcheck`): Windows'
 //! spell checking API (`ISpellChecker`), AppKit's `NSSpellChecker` on macOS, Hunspell
-//! dictionaries a page fetches in a browser (`spell/web.rs`), none elsewhere.
+//! dictionaries a page fetches in a browser (`web.rs`), none elsewhere.
 //! A field's misspelled words get a red marker under them and their suggestions in its menu.
 //!
 //! Where the platform checks one language at a time (Windows), an app picks the dictionaries:
@@ -13,16 +13,16 @@ use std::rc::Rc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-#[path = "spell/pause.rs"]
-pub(crate) mod pause;
-#[cfg(target_os = "windows")]
-#[path = "spell/windows.rs"]
-mod platform;
+#[doc(hidden)]
+pub mod pause;
 #[cfg(target_os = "macos")]
-#[path = "spell/macos.rs"]
+#[path = "macos.rs"]
 mod platform;
 #[cfg(target_arch = "wasm32")]
-#[path = "spell/web.rs"]
+#[path = "web.rs"]
+mod platform;
+#[cfg(target_os = "windows")]
+#[path = "windows.rs"]
 mod platform;
 #[cfg(not(any(target_os = "windows", target_os = "macos", target_arch = "wasm32")))]
 mod platform {
@@ -41,7 +41,8 @@ mod platform {
 const MAX_SUGGESTIONS: usize = 5;
 
 /// A text's misspelled words, as byte ranges.
-type Ranges = Rc<Vec<(usize, usize)>>;
+#[doc(hidden)]
+pub type Ranges = Rc<Vec<(usize, usize)>>;
 
 /// The dictionaries [`set_languages`] chose; empty follows the system languages.
 static CHOSEN: Mutex<Vec<String>> = Mutex::new(Vec::new());
@@ -108,13 +109,15 @@ pub fn language_name(tag: &str) -> String {
 /// A language tag's name in `locale`'s language as a browser's `Intl.DisplayNames(locale)`
 /// gives it, from the platform's ICU: `en-US` in `de` is "Amerikanisches Englisch". `None`
 /// where the platform has no ICU to ask (only Windows has dictionaries to name).
-pub(crate) fn language_name_in(tag: &str, locale: &str) -> Option<String> {
+#[doc(hidden)]
+pub fn language_name_in(tag: &str, locale: &str) -> Option<String> {
     platform::name_in(tag, locale)
 }
 
 /// Sorts `items` by their names as `locale` sorts text (`String.localeCompare`), else by their
 /// lowercased names.
-pub(crate) fn sort_names_in<T>(items: &mut [(String, T)], locale: &str) {
+#[doc(hidden)]
+pub fn sort_names_in<T>(items: &mut [(String, T)], locale: &str) {
     if !platform::sort_in(items, locale) {
         items.sort_by_cached_key(|(name, _)| name.to_lowercase());
     }
@@ -172,7 +175,8 @@ pub(crate) fn generation() -> u64 { GENERATION.load(Ordering::Relaxed) }
 /// (Windows' answers from another process, a cross-process call per misspelled word), the words
 /// it hasn't seen go to a thread of its own and show marked once they're back: the frame never
 /// waits on it. `wake` is the window to draw again then.
-pub(crate) fn misspelled(text: &str, wake: Option<&std::sync::Arc<crate::live::Wake>>) -> Ranges {
+#[doc(hidden)]
+pub fn misspelled(text: &str, wake: Option<&std::sync::Arc<rune_core::live::Wake>>) -> Ranges {
     if text.trim().is_empty() {
         return Rc::default();
     }
@@ -218,7 +222,7 @@ pub(crate) fn misspelled(text: &str, wake: Option<&std::sync::Arc<crate::live::W
 /// nothing across it, and repeated words, its only check that reads neighbours, go unmarked. A
 /// line's answer is kept once all its words have one, so a key in a long draft looks up the
 /// lines it didn't change, not their words.
-fn by_words(text: &str, wake: Option<&std::sync::Arc<crate::live::Wake>>) -> (Vec<(usize, usize)>, bool) {
+fn by_words(text: &str, wake: Option<&std::sync::Arc<rune_core::live::Wake>>) -> (Vec<(usize, usize)>, bool) {
     use std::hash::{Hash, Hasher};
     let line_key = |line: &str| {
         let mut h = rustc_hash::FxHasher::default();
@@ -330,7 +334,7 @@ mod worker {
     pub(super) struct Job {
         generation: u64,
         words: Vec<String>,
-        wake: Option<Weak<crate::live::Wake>>,
+        wake: Option<Weak<rune_core::live::Wake>>,
     }
 
     /// Words checked and not taken in yet: generation, word, its misspelled parts.
@@ -338,7 +342,7 @@ mod worker {
     pub(super) static ARRIVED: AtomicU64 = AtomicU64::new(0);
     static JOBS: OnceLock<Option<mpsc::Sender<Job>>> = OnceLock::new();
 
-    pub(super) fn ask(generation: u64, words: Vec<String>, wake: Option<&Arc<crate::live::Wake>>) {
+    pub(super) fn ask(generation: u64, words: Vec<String>, wake: Option<&Arc<rune_core::live::Wake>>) {
         let jobs = JOBS.get_or_init(|| {
             let (send, take) = mpsc::channel::<Job>();
             std::thread::Builder::new().name("rune-spell".into()).spawn(move || run(take)).ok().map(|_| send)
@@ -380,11 +384,13 @@ mod worker {
 }
 
 /// The misspelled word of `text` at byte `at` (in it or at its end), once its words are checked.
-pub(crate) fn misspelled_at(text: &str, at: usize) -> Option<(usize, usize)> {
+#[doc(hidden)]
+pub fn misspelled_at(text: &str, at: usize) -> Option<(usize, usize)> {
     misspelled(text, None).iter().copied().find(|&(a, b)| a <= at && at <= b)
 }
 /// The checker's suggestions for misspelled `word`, best first.
-pub(crate) fn suggest(word: &str) -> Vec<String> {
+#[doc(hidden)]
+pub fn suggest(word: &str) -> Vec<String> {
     let mut found = platform::suggest(word);
     found.retain(|s| s != word);
     found.truncate(MAX_SUGGESTIONS);
@@ -392,7 +398,8 @@ pub(crate) fn suggest(word: &str) -> Vec<String> {
 }
 
 /// Adds `word` to the user's dictionary, so it's no longer marked anywhere.
-pub(crate) fn learn(word: &str) {
+#[doc(hidden)]
+pub fn learn(word: &str) {
     platform::learn(word);
     CHECKED.with_borrow_mut(|(_, checked)| checked.clear());
     WORDS.with_borrow_mut(|w| *w = Words::default());

@@ -13,20 +13,15 @@ mod place_tests;
 #[cfg(target_os = "macos")]
 pub mod macos;
 mod pipeline;
-pub(crate) mod place;
 #[cfg(target_os = "windows")]
 pub mod windows;
 pub use pipeline::SurfaceRenderer;
 pub(crate) use pipeline::Building;
+pub(crate) use rune_image::place;
+pub use rune_image::place::SurfaceFit;
 use std::sync::{Arc, Mutex};
 use crate::time::Instant;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum SurfaceFit {
-    #[default]
-    Fit,
-    Fill,
-}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Matrix {
     Bt601,

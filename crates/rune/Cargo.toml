@@ -48,12 +48,12 @@ macos-background-cursor = []
 ogg-audio = ["dep:symphonia", "dep:opuscule"]
 # SVG and SVGZ images (`ImageCache::svg`, `file`, `load_mime`, and `load` on sniffed SVG bytes), and
 # scalable Linux app icons, rasterized by resvg. Off, those images resolve to `Image::error`.
-svg = ["dep:resvg"]
+svg = ["rune-image/svg"]
 # AVIF images (`ImageCache::load` on AVIF bytes), decoded natively by rav1d, a Rust port of
 # dav1d; an animated AVIF shows its first frame. Building it for x86 needs NASM on the PATH for
 # rav1d's assembly. Off, AVIF bytes resolve to `Image::error`. No effect on web, where the
 # browser decodes AVIF.
-avif = ["dep:avif-decode"]
+avif = ["rune-image/avif"]
 # Linux desktop services over D-Bus (zbus, with a tokio runtime on each service's thread): the
 # desktop's light or dark preference (the Settings portal), the system tray (`Tray`), global
 # shortcuts on Wayland (the GlobalShortcuts portal) and, with `native-file-dialog`, the
@@ -84,7 +84,9 @@ subsecond = { version = "=0.7.10", optional = true }
 dioxus-devtools = { version = "=0.7.10", optional = true }
 rune-core = { workspace = true }
 rune-gpu = { workspace = true }
+rune-image = { workspace = true }
 rune-motion = { workspace = true }
+rune-spell = { workspace = true }
 rune-staging = { workspace = true }
 rune-taffy = { workspace = true }
 # Allow backend patch fixes; headless pixel equivalence guards the precompiled Metal path.
@@ -115,7 +117,6 @@ unicode-segmentation = { workspace = true }
 icu_properties = { version = "2.3", default-features = false, features = ["compiled_data"] }
 # Words for a double-click, natively with the dictionaries Parley's `complex-scripts` links.
 icu_segmenter = { version = "2.3", default-features = false, features = ["compiled_data"] }
-resvg = { workspace = true, optional = true }
 
 [target.'cfg(all(unix, not(target_os = "linux")))'.dependencies]
 # The thread CPU clock for frame profiles and debug builds' stall warnings.
@@ -131,9 +132,6 @@ parley = { workspace = true, features = ["std", "complex-scripts"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 pollster = { workspace = true }
-# JPEG, GIF, WebP, BMP and ICO decoding; a web build hands them to the browser's codecs instead.
-image = { workspace = true, features = ["png", "jpeg", "gif", "webp", "bmp", "ico"] }
-avif-decode = { version = "3", optional = true }
 # Installed fonts by family name (`text::system_fonts::installed_family_files`): fontique's
 # DirectWrite, CoreText and fontconfig backends, in a collection apart from the app's, which
 # keeps system fonts off. Fontconfig opens at run time, so a build needs no headers for it.
@@ -149,8 +147,6 @@ arboard = { version = "3.6", default-features = false, features = ["wayland-data
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # `dictionary::set_dictionary_segmenter` (vendor/parley_engine), for `Intl.Segmenter`'s words.
 parley_engine = { workspace = true }
-# A page's spell checker: Hunspell dictionaries, fetched when a field first checks (`spell/web.rs`).
-spellbook = "0.4"
 wasm-bindgen = { workspace = true }
 wasm-bindgen-futures = { workspace = true }
 js-sys = { workspace = true }
@@ -182,7 +178,7 @@ wgpu-core = { workspace = true }
 objc2 = { workspace = true }
 block2 = { workspace = true }
 objc2-foundation = { version = "0.2.2", features = ["NSArray", "NSAttributedString", "NSData", "NSDictionary", "NSError", "NSGeometry", "NSObject", "NSRange", "NSValue", "NSProcessInfo", "NSString", "NSThread", "NSURL", "NSUserDefaults"] }
-objc2-app-kit = { version = "0.2.2", features = ["NSApplication", "NSButton", "NSCell", "NSControl", "NSEvent", "NSMenu", "NSMenuItem", "NSResponder", "NSRunningApplication", "NSView", "NSWindow", "NSColor", "NSGraphics", "NSPanel", "NSScreen", "NSPasteboard", "NSPasteboardItem", "NSDragging", "NSDraggingItem", "NSDraggingSession", "NSGraphicsContext", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSAttributedString", "NSSpellChecker"] }
+objc2-app-kit = { version = "0.2.2", features = ["NSApplication", "NSButton", "NSCell", "NSControl", "NSEvent", "NSMenu", "NSMenuItem", "NSResponder", "NSRunningApplication", "NSView", "NSWindow", "NSColor", "NSGraphics", "NSPanel", "NSScreen", "NSPasteboard", "NSPasteboardItem", "NSDragging", "NSDraggingItem", "NSDraggingSession", "NSGraphicsContext", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSAttributedString"] }
 objc2-core-video = { version = "0.3", features = ["CVPixelBufferIOSurface", "objc2-io-surface"] }
 # Unused by name: its default features give IOSurfaceRef the CF `Type` impl objc2-core-video needs.
 objc2-io-surface = "0.3"

@@ -55,13 +55,15 @@ pub(crate) fn waiting(state: Pause) -> Option<usize> {
 
 /// What the runtime last saw of the focused spellchecked field: its path, text (hashed) and
 /// selection, the machine, and a wake the paint asked for, which the next frame schedules.
+#[doc(hidden)]
 #[derive(Clone, Debug)]
-pub(crate) struct Watch {
+pub struct Watch {
     path: String,
     text: u64,
     range: (usize, usize),
     pause: Pause,
-    pub(crate) wake: Option<f64>,
+    #[doc(hidden)]
+    pub wake: Option<f64>,
     /// The checker thread's deliveries it has drawn (`super::arrivals`).
     seen: u64,
 }
@@ -69,7 +71,8 @@ pub(crate) struct Watch {
 /// Steps the focused field `path`'s machine by what changed since the last paint, and returns
 /// the byte whose word waits unmarked. A field just focused starts settled, as the selection
 /// change that focuses it checks it.
-pub(crate) fn observe(watch: &mut Option<Watch>, path: &str, text: &str, range: (usize, usize), now: f64) -> Option<usize> {
+#[doc(hidden)]
+pub fn observe(watch: &mut Option<Watch>, path: &str, text: &str, range: (usize, usize), now: f64) -> Option<usize> {
     let hash = {
         use std::hash::{Hash, Hasher};
         let mut h = rustc_hash::FxHasher::default();
@@ -100,7 +103,8 @@ pub(crate) fn observe(watch: &mut Option<Watch>, path: &str, text: &str, range: 
 
 /// The frame's turn: hands over the wake the paint asked for, and ends a pause that's due.
 /// Returns whether the field must draw again: also when the checker thread brought words back.
-pub(crate) fn tick(watch: &mut Option<Watch>, now: f64) -> (Option<f64>, bool) {
+#[doc(hidden)]
+pub fn tick(watch: &mut Option<Watch>, now: f64) -> (Option<f64>, bool) {
     let Some(w) = watch else { return (None, false) };
     let wake = w.wake.take();
     let (next, effect) = step(w.pause, Event::Tick { now });
