@@ -129,3 +129,34 @@ fn a_released_hold_holds_nothing_until_layout_settles() {
     h.release(false);
     assert!(!h.held() && !h.released(), "with layout still, a move just ends the hold");
 }
+
+#[test]
+fn children_of_an_exiting_parent_stop_hovering_and_pressing() {
+    fn view(show: &bool, _: &mut Cx<bool>) -> El {
+        let mut root = col().key("root").size(200.0, 100.0);
+        if *show {
+            root = root.child(
+                col().key("panel").size(120.0, 60.0).transition(crate::Transition::opacity())
+                    .child(el().key("btn").size(80.0, 40.0).hover(Color::WHITE).hover_alone()
+                        .hover_group_shared("shared-exit").on_press(|_: &mut bool| {})),
+            );
+        }
+        root
+    }
+    let mut rt = Runtime::new(true, view, (200.0, 100.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.update(|show, _| *show = false);
+    rt.frame(1.0 / 60.0);
+
+    // Move pointer onto the child of the exiting panel while the panel is mid-exit.
+    let btn_idx = rt.nodes.iter().position(|n| n.key.as_deref() == Some("btn")).expect("child still in exiting subtree");
+    assert!(rt.core().subtree_exiting(btn_idx) && !rt.core().is_exiting(rt.nodes[btn_idx].id), "only parent holds Exiting phase");
+    rt.pointer_move(20.0, 20.0);
+    rt.frame(1.0 / 60.0);
+
+    let btn_id = rt.nodes[btn_idx].id;
+    let target = rt.scene.store().target(btn_id, P_HOVER).unwrap_or(0.0);
+    assert_eq!(target, 0.0, "child of exiting parent must not light hover");
+    assert!(rt.core().hovered_alone().is_none(), "child of exiting parent must not claim hover_alone");
+    assert!(rt.core().shared_hovered().is_empty(), "child of exiting parent must not light hover_group_shared");
+}

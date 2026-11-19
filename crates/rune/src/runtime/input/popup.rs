@@ -158,9 +158,7 @@ impl RuntimeCore {
 
     /// Drawn rect of the element a menu anchors to, matched as [`Runtime::find`] matches.
     fn anchor_rect(&self, key: &str) -> Option<[f32; 4]> {
-        let suffix = format!("/{key}");
-        let matches = |n: &Node| if key.contains('/') { n.path == key || n.path.ends_with(&suffix) } else { n.key.as_deref() == Some(key) };
-        let i = (0..self.nodes.len()).find(|&i| matches(&self.nodes[i]) && !self.subtree_exiting(i))?;
+        let i = self.live_named(None, key)?;
         self.drawn.get(i).copied()
     }
 

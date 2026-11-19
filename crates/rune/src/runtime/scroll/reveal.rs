@@ -69,15 +69,12 @@ impl RuntimeCore {
     /// viewport stood before. After the first, it moves only when the row would land somewhere
     /// else.
     fn reveal_row_once(&mut self, app: &mut dyn AppDriver, scope: Option<&str>, key: &str, center: bool, first: bool, instant: bool) -> (bool, Option<Was>) {
-        let target_node = self.nodes.iter().enumerate().find_map(|(i, row)| {
-            if !row.named(key) || self.subtree_exiting(i) || !row.parent.is_none_or(|p| in_scope(&self.nodes[p].path, scope)) {
-                return None;
-            }
-            Some((i, row.target[1], row.local.h, true))
-        }).or_else(|| {
-            let (i, [_, y0, _, y1]) = self.highlight_target_in(&self.nodes, scope, key)?;
-            (!self.subtree_exiting(i)).then_some((i, y0, (y1 - y0).max(0.0), false))
-        });
+        let target_node = self.live_named(scope, key)
+            .map(|i| (i, self.nodes[i].target[1], self.nodes[i].local.h, true))
+            .or_else(|| {
+                let (i, [_, y0, _, y1]) = self.highlight_target_in(&self.nodes, scope, key)?;
+                (!self.subtree_exiting(i)).then_some((i, y0, (y1 - y0).max(0.0), false))
+            });
         let geometry = target_node.and_then(|(i, target_top, target_h, is_whole_node)| {
             let s = self.viewport_of(i)?;
             let parent = &self.nodes[s];

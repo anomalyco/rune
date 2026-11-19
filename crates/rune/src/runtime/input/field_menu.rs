@@ -22,16 +22,16 @@ pub(crate) struct FieldMenu {
 }
 
 impl RuntimeCore {
-    /// Opens field `path`'s menu at window point `at`, pressed at `local` in the field (points
-    /// from its text's top-left), or from the keyboard (`None`).
-    pub(super) fn field_menu(&mut self, app: &mut dyn AppDriver, path: String, at: (f32, f32), local: Option<(f32, f32)>, one: &mut Tx) -> bool {
+    /// Opens field `path`'s menu at window point `at`, pressed at window point `hit_at`, or from
+    /// the keyboard (`None`).
+    pub(super) fn field_menu(&mut self, app: &mut dyn AppDriver, path: String, at: (f32, f32), hit_at: Option<(f32, f32)>, one: &mut Tx) -> bool {
         let Some(i) = self.live(&path) else { return false };
         let Some(input) = self.nodes[i].input.as_deref() else { return false };
         let Some(access) = input.access.clone() else { return false };
         let (single, secure) = (input.single_line, input.edit.is_secure());
         let spell = input.spellcheck && !secure;
         let layout = self.nodes[i].text_layout.clone();
-        let scroll = self.input_scroll.get(&path).copied().unwrap_or(0.0);
+        let point = hit_at.and_then(|(x, y)| self.input_text_point(i, x, y));
         let s = self.env.scale;
         let toggle = std::iter::successors(Some(i), |&j| self.nodes[j].parent).find_map(|j| self.nodes[j].handlers.on_spellcheck.clone());
         let keep = std::iter::successors(Some(i), |&j| self.nodes[j].parent).find_map(|j| self.nodes[j].handlers.on_spellcheck_languages.clone());
@@ -40,10 +40,10 @@ impl RuntimeCore {
         }
         let e = access(app.states());
         e.set_single_line(single);
-        if let (Some((x, y)), Some(l)) = (local, layout.as_ref().map(TextLayout::view))
+        if let (Some([tx, ty]), Some(l)) = (point, layout.as_ref().map(TextLayout::view))
             && e.preedit().is_none()
         {
-            let caret = hit(e, l, x + scroll, y, s, single).caret;
+            let caret = hit(e, l, tx, ty, s, single).caret;
             let (a, b) = e.range();
             // A press in the selection keeps it for Cut and Copy. Elsewhere it moves the caret
             // there, and on a misspelled word selects the word, as Chromium does.

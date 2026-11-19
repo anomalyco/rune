@@ -380,6 +380,21 @@ impl RuntimeCore {
         elements
     }
 
+    /// Index of the first live (non-exiting, mounted) node matching `key` within optional ancestor
+    /// `scope`. Matches [`Node::named`] (key, full path, or keyed-ancestor suffix such as
+    /// `slider/knob`) and `/`-separated path suffixes.
+    pub(crate) fn live_named(&self, scope: Option<&str>, key: &str) -> Option<usize> {
+        if key.is_empty() { return None; }
+        let has_slash = key.contains('/');
+        (0..self.nodes.len()).find(|&i| {
+            let n = &self.nodes[i];
+            let matched = n.named(key)
+                || (has_slash && (n.path.strip_suffix(key).is_some_and(|head| head.ends_with('/')) || keyed_suffix(&n.path, key)));
+            matched && !self.subtree_exiting(i) && !self.subtree_unmounted(i)
+                && n.parent.is_none_or(|p| in_scope(&self.nodes[p].path, scope))
+        })
+    }
+
     /// Centre of the first element whose key is `key`, or whose path ends with `key` when it
     /// contains a `/` (e.g. `slider/knob`), in points. Elements without keys between them don't
     /// count, so `slider/knob` finds a knob inside unkeyed rows inside the slider. Failing that,
@@ -387,16 +402,7 @@ impl RuntimeCore {
     /// `key`. Exiting elements and their children are gone here; [`Runtime::presented`] still
     /// reads them.
     pub fn find(&self, key: &str) -> Option<(f32, f32)> {
-        let suffix = format!("/{key}");
-        let matches = |n: &Node| {
-            if key.contains('/') {
-                n.path == key || n.path.ends_with(&suffix) || keyed_suffix(&n.path, key)
-            } else {
-                n.key.as_deref() == Some(key)
-            }
-        };
-        let i = (0..self.nodes.len()).find(|&i| matches(&self.nodes[i]) && !self.subtree_exiting(i));
-        let Some(i) = i else { return self.find_link(key).or_else(|| self.find_highlight(key)) };
+        let Some(i) = self.live_named(None, key) else { return self.find_link(key).or_else(|| self.find_highlight(key)) };
         let r = self.drawn.get(i).copied()?;
         Some((r[0] + r[2] * 0.5, r[1] + r[3] * 0.5))
     }

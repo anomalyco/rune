@@ -77,9 +77,8 @@ impl RuntimeCore {
         let n = &self.nodes[i];
         let (Some(input), Some((x, y)), Some(layout)) = (n.input.as_deref(), self.pointer, n.text_layout.as_ref()) else { return false };
         if !input.spellcheck || input.edit.is_secure() { return false; }
-        let [lx, ly] = self.to_local(i, x, y);
-        let scroll = self.input_scroll.get(path).copied().unwrap_or(0.0);
-        let caret = super::input_click::hit(&input.edit, layout.view(), lx - n.inset[0] + scroll, ly - n.inset[1], self.env.scale, input.single_line).caret;
+        let Some([tx, ty]) = self.input_text_point(i, x, y) else { return false };
+        let caret = super::input_click::hit(&input.edit, layout.view(), tx, ty, self.env.scale, input.single_line).caret;
         crate::spell::misspelled_at(&input.edit.text, caret).is_some()
     }
 
@@ -121,9 +120,7 @@ impl RuntimeCore {
         let Some(i) = self.live(path) else { return false };
         let n = &self.nodes[i];
         if n.handlers.on_secondary_press.is_some() || n.input.as_ref().is_none_or(|i| i.access.is_none()) { return false; }
-        let [lx, ly] = self.to_local(i, x, y);
-        let local = (lx - n.inset[0], ly - n.inset[1]);
-        self.queue.push(Action::FieldMenu(path.to_owned(), (x, y), Some(local)));
+        self.queue.push(Action::FieldMenu(path.to_owned(), (x, y), Some((x, y))));
         true
     }
 

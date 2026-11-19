@@ -363,28 +363,9 @@ impl RuntimeCore {
     fn placed(&self, nodes: &[Node], i: usize, scrolled: bool) -> [f32; 4] {
         let unscrolled;
         let scrolls = if scrolled { &self.scrolls } else { unscrolled = HashMap::default(); &unscrolled };
-        let t = nodes[i].target;
-        let (mut dx, mut dy) = (0.0, 0.0);
-        let mut up = nodes[i].parent.filter(|_| nodes[i].above.is_none() && scrolled);
-        while let Some(p) = up {
-            if let Some(st) = scrolls.get(&nodes[p].id) {
-                dy += st.offset as f32;
-                dx += st.x.shift() as f32;
-            }
-            up = nodes[p].parent.filter(|_| nodes[p].above.is_none());
-        }
-        if let Some(anc) = std::iter::successors(Some(i), |&p| nodes[p].parent).find(|&p| nodes[p].above.is_some())
-            && let Some(a) = &nodes[anc].above
-            && let Some(k) = anchor_index(&nodes, anc, a)
-        {
-            let at = sticky::anchored_target(nodes, scrolls, k, self.viewport);
-            let (w, h) = (nodes[anc].target[2] - nodes[anc].target[0], nodes[anc].target[3] - nodes[anc].target[1]);
-            let (ax, ay) = anchor_position(a, at, (w, h), self.viewport);
-            dx -= ax - nodes[anc].target[0];
-            dy -= ay - nodes[anc].target[1];
-        }
+        let t = sticky::anchored_target(nodes, scrolls, i, self.viewport);
         // Layout's own size, not the edges' difference, which rounds differently where it sits.
-        [t[0] - dx, t[1] - dy, nodes[i].local.w, nodes[i].local.h]
+        [t[0], t[1], nodes[i].local.w, nodes[i].local.h]
     }
 
     /// Node `i`'s unscrolled layout rect, under its own and its ancestors' static `El::scale`,

@@ -186,6 +186,20 @@ impl RuntimeCore {
         }
     }
 
+    /// Node `i`'s text origin in drawn points and its layout-px-per-drawn-point scale `s / z`,
+    /// using the same `text_x` and single-line scroll rule as paint and `links::origin`.
+    pub(super) fn a11y_text_origin(&self, i: usize, spec: &TextSpec, layout: TextFlow<'_>) -> ([f32; 2], f32) {
+        let n = &self.nodes[i];
+        let s = self.env.scale;
+        let z = self.drawn_scale.get(i).copied().unwrap_or(1.0).max(1e-4);
+        let r = self.drawn[i];
+        let [mut x, y] = links::origin(n, spec, layout, [r[0], r[1], r[0] + r[2], r[1] + r[3]], s, z);
+        if n.input.as_deref().is_some_and(|inp| inp.single_line) {
+            x -= self.input_scroll.get(&n.path).copied().unwrap_or(0.0) * z;
+        }
+        ([x, y], s / z)
+    }
+
     /// Node `i`'s laid-out lines, in points in its scroll viewport's content space (before the
     /// walk's shift).
     pub(super) fn a11y_lines(&self, i: usize) -> Option<(Cow<'_, str>, Vec<Line>)> {
@@ -203,14 +217,8 @@ impl RuntimeCore {
         {
             return None;
         }
-        let s = self.env.scale;
-        let r = self.drawn[i];
-        let (x0, x1) = (r[0] + n.inset[0], r[0] + r[2] - n.inset[2]);
-        let mut x = text_x(spec, x0, x1, layout.full_width() / s, layout.flow());
-        if let Some(input) = n.input.as_deref() && input.single_line {
-            x -= self.input_scroll.get(&n.path).copied().unwrap_or(0.0);
-        }
-        let lines = lines(layout, &content, s, [x, r[1] + n.inset[1]]);
+        let (origin, px) = self.a11y_text_origin(i, spec, layout);
+        let lines = lines(layout, &content, px, origin);
         // `line_id` holds up to `LINK_BASE - 2` (`32,766`) runs per node; if a block exceeds that
         // or its runs don't cover `content`, publish its whole value/label without `TextRun`s.
         if lines.len() > (super::a11y_tree::LINK_BASE as usize - 2)

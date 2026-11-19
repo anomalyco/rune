@@ -140,24 +140,35 @@ impl RuntimeCore {
             .map_or(self.nodes[i].target, |d| [d[0], d[1], d[0] + d[2], d[1] + d[3]])
     }
 
-    /// Node `i`'s link line boxes in window points (x0, y0, x1, y1) for border box `rect`.
-    pub(super) fn link_boxes(&self, i: usize, rect: [f32; 4]) -> Vec<(usize, [f32; 4])> {
-        let n = &self.nodes[i];
+    /// Line boxes in window points `(x0, y0, x1, y1)` for each `(start, end)` byte span in `spans`
+    /// of node `n`, inside border box `rect` drawn at scale `z`.
+    fn span_boxes(&self, n: &Node, rect: [f32; 4], z: f32, spans: impl IntoIterator<Item = (u32, u32)>) -> Vec<(usize, [f32; 4])> {
         let (Some(spec), Some(laid)) = (&n.text, &n.text_layout) else { return Vec::new() };
         let flow = laid.view();
         let s = self.env.scale;
-        let z = self.drawn_scale.get(i).copied().unwrap_or(1.0);
         let [ox, oy] = origin(n, spec, flow, rect, s, z);
         let px = s / z.max(1e-4);
         let len = layout_len(n, spec);
         let mut out = Vec::new();
-        for (k, l) in spec.cold.links.iter().enumerate() {
-            let (a, b) = drawn(n, l.start, l.end);
+        for (k, (start, end)) in spans.into_iter().enumerate() {
+            let (a, b) = drawn(n, start, end);
             for (bb, _) in flow.range_boxes((a as usize).min(len), (b as usize).min(len), false) {
                 out.push((k, [ox + bb.x0 as f32 / px, oy + bb.y0 as f32 / px, ox + bb.x1 as f32 / px, oy + bb.y1 as f32 / px]));
             }
         }
         out
+    }
+
+    /// Node `i`'s link line boxes in window points (x0, y0, x1, y1) for border box `rect`.
+    pub(super) fn link_boxes(&self, i: usize, rect: [f32; 4]) -> Vec<(usize, [f32; 4])> {
+        self.link_boxes_in(&self.nodes, i, rect, self.drawn_scale.get(i).copied().unwrap_or(1.0))
+    }
+
+    fn link_boxes_in(&self, nodes: &[Node], i: usize, rect: [f32; 4], z: f32) -> Vec<(usize, [f32; 4])> {
+        let n = &nodes[i];
+        let Some(spec) = n.text.as_deref() else { return Vec::new() };
+        if spec.cold.links.is_empty() { return Vec::new(); }
+        self.span_boxes(n, rect, z, spec.cold.links.iter().map(|l| (l.start, l.end)))
     }
 
     /// The link of node `i` under window point (x, y).
@@ -334,7 +345,7 @@ impl RuntimeCore {
             let (hovered, pressed, _) = self.link_states(i);
             let focused = self.links.focus.filter(|_| self.focus.path() == Some(&n.path));
             let boxes = self.link_boxes(i, self.drawn_box(i));
-            let targets = self.link_boxes(i, n.target);
+            let targets = self.link_boxes_in(&self.nodes, i, n.target, 1.0);
             let union = |k: usize, bs: &[(usize, [f32; 4])]| bs.iter().filter(|(j, _)| *j == k).fold(None, |u: Option<[f32; 4]>, (_, r)| {
                 Some(u.map_or(*r, |u| [u[0].min(r[0]), u[1].min(r[1]), u[2].max(r[2]), u[3].max(r[3])]))
             });
@@ -380,22 +391,9 @@ impl RuntimeCore {
 
     pub(super) fn highlight_boxes_in(&self, nodes: &[Node], i: usize, rect: [f32; 4], z: f32) -> Vec<(usize, [f32; 4])> {
         let n = &nodes[i];
-        let (Some(spec), Some(layout)) = (&n.text, &n.text_layout) else { return Vec::new() };
+        let Some(spec) = n.text.as_deref() else { return Vec::new() };
         if spec.cold.highlights.is_empty() || n.is_secure() { return Vec::new(); }
-        let s = self.env.scale;
-        let flow = layout.view();
-        let ox = text_x(spec, rect[0] + n.inset[0] * z, rect[2] - n.inset[2] * z, text_width(flow.full_width() * z) / s, flow.flow());
-        let oy = rect[1] + n.inset[1] * z;
-        let px = s / z.max(1e-4);
-        let len = layout_len(n, spec);
-        let mut out = Vec::new();
-        for (k, h) in spec.cold.highlights.iter().enumerate() {
-            let (a, b) = drawn(n, h.start, h.end);
-            for (bb, _) in flow.range_boxes((a as usize).min(len), (b as usize).min(len), false) {
-                out.push((k, [ox + bb.x0 as f32 / px, oy + bb.y0 as f32 / px, ox + bb.x1 as f32 / px, oy + bb.y1 as f32 / px]));
-            }
-        }
-        out
+        self.span_boxes(n, rect, z, spec.cold.highlights.iter().map(|h| (h.start, h.end)))
     }
 
     /// Unscrolled target rect `[x0, y0, x1, y1]` (in window points) and first node index for
@@ -455,7 +453,7 @@ impl RuntimeCore {
             let Some(&at) = text_elements.get(&n.path) else { continue };
             let text = elements[at].clone();
             let boxes = self.highlight_boxes(i, self.drawn_box(i));
-            let targets = self.highlight_boxes(i, n.target);
+            let targets = self.highlight_boxes_in(&self.nodes, i, n.target, 1.0);
             let unions = |bs: &[(usize, [f32; 4])]| {
                 let mut out = vec![None; spec.cold.highlights.len()];
                 for &(k, r) in bs {

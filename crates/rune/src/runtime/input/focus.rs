@@ -26,6 +26,23 @@ pub(super) struct ModalScope {
     members: Vec<bool>,
 }
 
+/// Whether node `i` in `nodes` is not inert and has positive opacity along its ancestor chain.
+fn node_visible(nodes: &[Node], i: usize) -> bool {
+    let n = &nodes[i];
+    !n.inert && n.vis.opacity > 0.0
+        && std::iter::successors(n.parent, |&p| nodes[p].parent).all(|p| !nodes[p].inert && nodes[p].vis.opacity > 0.0)
+}
+
+/// Whether node `i` in `nodes` has a non-zero laid-out box.
+fn node_sized(nodes: &[Node], i: usize) -> bool {
+    nodes[i].local.w > 0.0 && nodes[i].local.h > 0.0
+}
+
+/// Whether node `i` in `nodes` is visible and has a non-zero laid-out box.
+fn node_shown(nodes: &[Node], i: usize) -> bool {
+    node_sized(nodes, i) && node_visible(nodes, i)
+}
+
 /// Whether `ev` navigates (Tab, an arrow, Home, End, Page Up or Page Down, unmodified but for
 /// Shift), which shows focus from then on, as CSS `:focus-visible` after keyboard navigation.
 /// Other keys keep whatever showed: Space on a clicked button, Escape, or typing shows no ring.
@@ -118,19 +135,16 @@ impl RuntimeCore {
     pub(super) fn takes_focus(&self, n: &Node) -> bool {
         n.focus.enabled || (self.defaults.web_focus && !n.focus.opt_out && n.handlers.on_press.is_some() && PRESSABLE_ROLES.contains(&n.role))
     }
+    /// Whether `n` can take keyboard focus itself or is an editable text field.
+    fn can_take_focus(&self, n: &Node) -> bool {
+        self.takes_focus(n) || n.input.as_ref().is_some_and(|s| s.access.is_some())
+    }
     pub(super) fn can_focus(&self, i: usize) -> bool {
-        let n = &self.nodes[i];
-        (self.takes_focus(n) || n.input.as_ref().is_some_and(|s| s.access.is_some())) && self.reachable(i)
+        self.can_take_focus(&self.nodes[i]) && self.reachable(i)
     }
     /// Shown, sized, not exiting and not behind a modal.
     fn reachable(&self, i: usize) -> bool {
-        let n = &self.nodes[i];
-        let mut parent = n.parent;
-        while let Some(p) = parent {
-            if self.nodes[p].vis.opacity <= 0.0 { return false; }
-            parent = self.nodes[p].parent;
-        }
-        self.allowed(i) && !self.subtree_exiting(i) && n.vis.opacity > 0.0 && n.local.w > 0.0 && n.local.h > 0.0
+        self.allowed(i) && !self.subtree_exiting(i) && node_shown(&self.nodes, i)
     }
     /// Whether Return goes to focused element `i` rather than the default button: a focused
     /// link, a `focus_highlight` row, or an item of a menu, list, tree or grid group.
@@ -138,7 +152,7 @@ impl RuntimeCore {
     fn takes_return(&self, i: usize) -> bool {
         self.link_focused(i) || self.nodes[i].focus.highlight.is_some()
             || (self.defaults.web_focus && self.nodes[i].handlers.on_press.is_some() && self.takes_focus(&self.nodes[i]))
-            || self.group(i).is_some_and(|g| LIST_ROLES.contains(&self.nodes[g].role) || VERTICAL_ROLES.contains(&self.nodes[g].role))
+            || self.focus_group(i).is_some_and(|g| LIST_ROLES.contains(&self.nodes[g].role) || VERTICAL_ROLES.contains(&self.nodes[g].role))
     }
     /// Return with no modifiers presses the window's default button (`El::default_button`)
     /// unless the focused element takes Return itself. Text fields decide in `with_focused`.
@@ -160,7 +174,7 @@ impl RuntimeCore {
     }
     /// The focus group `i` is an item of. A control inside an item (a tab's close button) is
     /// no item: it's a Tab stop of its own, as an HTML button inside a roving `tablist` is.
-    fn group(&self, i: usize) -> Option<usize> {
+    pub(super) fn focus_group(&self, i: usize) -> Option<usize> {
         let mut p = self.nodes[i].parent;
         while let Some(i) = p {
             if self.nodes[i].focus.group { return Some(i); }
@@ -211,7 +225,7 @@ impl RuntimeCore {
         // A focused link shows its focus with its own hover look.
         // A modal that holds focus itself (`Cx::web_focus`) shows none, as a web dialog doesn't.
         if n.input.is_some() || n.focus.highlight.is_some() || self.link_focused(i) || !self.can_focus(i) { return None; }
-        if self.group(i).is_some_and(|g| LIST_ROLES.contains(&self.nodes[g].role) || VERTICAL_ROLES.contains(&self.nodes[g].role)) {
+        if self.focus_group(i).is_some_and(|g| LIST_ROLES.contains(&self.nodes[g].role) || VERTICAL_ROLES.contains(&self.nodes[g].role)) {
             return None;
         }
         let own = self.nodes.iter().enumerate()
@@ -225,7 +239,7 @@ impl RuntimeCore {
         if !self.defaults.force_focus_rings || !self.can_focus(i) { return false; }
         let n = &self.nodes[i];
         if n.input.is_some() || n.focus.highlight.is_some() || self.link_count(i) > 0 { return false; }
-        if self.group(i).is_some_and(|g| LIST_ROLES.contains(&self.nodes[g].role) || VERTICAL_ROLES.contains(&self.nodes[g].role)) {
+        if self.focus_group(i).is_some_and(|g| LIST_ROLES.contains(&self.nodes[g].role) || VERTICAL_ROLES.contains(&self.nodes[g].role)) {
             return false;
         }
         // A part's own ring belongs to its nearest focusable ancestor-or-self.
@@ -314,11 +328,7 @@ impl RuntimeCore {
         let within = |path: &str, root: &str| {
             path == root || (path.len() > root.len() && path.starts_with(root) && path.as_bytes()[root.len()] == b'/')
         };
-        let shown = |idx: usize| {
-            let n = &nodes[idx];
-            !n.inert && n.vis.opacity > 0.0 && n.local.w > 0.0 && n.local.h > 0.0
-                && std::iter::successors(n.parent, |&p| nodes[p].parent).all(|p| nodes[p].vis.opacity > 0.0)
-        };
+        let shown = |idx: usize| node_shown(nodes, idx);
         let restore = self.nodes.iter().enumerate().rev().find_map(|(i, old)| {
             let key = old.focus.return_to.as_deref()?;
             if self.subtree_exiting(i) || nodes.iter().any(|n| n.path == old.path) { return None; }
@@ -338,7 +348,7 @@ impl RuntimeCore {
             if !within(focused, scope) { return None; }
             let anchor = nodes.iter().find(|n| n.key.as_deref() == Some(key))?;
             let candidates = (0..nodes.len()).filter(|&j| within(&nodes[j].path, &anchor.path) && shown(j)
-                && (self.takes_focus(&nodes[j]) || nodes[j].input.as_ref().is_some_and(|i| i.access.is_some())));
+                && self.can_take_focus(&nodes[j]));
             candidates.clone().find(|&j| nodes[j].focus.selected)
                 .or_else(|| candidates.into_iter().next())
                 .map(|j| nodes[j].path.clone())
@@ -347,7 +357,7 @@ impl RuntimeCore {
         let asked = asked.and_then(|(key, ring, ask)| {
             let anchor = (0..nodes.len()).find(|&j| nodes[j].key.as_deref() == Some(key.as_str()) && shown(j))?;
             (anchor..nodes.len()).take_while(|&j| within(&nodes[j].path, &nodes[anchor].path))
-                .find(|&j| shown(j) && (self.takes_focus(&nodes[j]) || nodes[j].input.as_ref().is_some_and(|i| i.access.is_some())))
+                .find(|&j| shown(j) && self.can_take_focus(&nodes[j]))
                 .map(|j| (nodes[j].path.clone(), ring, ask))
         });
         let input_focused = self.focus.path().is_some_and(|p| {
@@ -381,7 +391,7 @@ impl RuntimeCore {
                 && (self.takes_focus(&nodes[j]) || nodes[j].input.as_ref().is_some_and(|i| i.edit.focused)))
                 || self.virtual_inputs.get(p).is_some_and(|i| i.edit.focused)))
             .or_else(|| requested.into_iter().next().or_else(|| virtual_req().min_by_key(|&(p, _)| p)).map(|(p, _)| p.to_owned()))
-            .or_else(|| self.focus_fallback(nodes, &shown));
+            .or_else(|| self.focus_fallback(nodes));
         // State may have deleted a row. Only the new view's accessors are valid now.
         // Use the same focus path as input events, then restore the old presentation
         // tree so apply can retain its exit visuals.
@@ -417,7 +427,7 @@ impl RuntimeCore {
     /// Elements out of the Tab order count (a roving list's other rows take focus by arrows). Focus otherwise fell to
     /// nothing: a screen reader went back to the window and Tab started over at its top. A
     /// modal's own focus is left to the modal machine, which returns it where it was.
-    fn focus_fallback(&self, nodes: &[Node], shown: &dyn Fn(usize) -> bool) -> Option<String> {
+    fn focus_fallback(&self, nodes: &[Node]) -> Option<String> {
         // A field that Escape blurred and that then closed (a comment box cancelled, gone once
         // its exit ends) counts as focused: the keyboard was on it, and nothing took focus since.
         let gone = self.focus.path().or_else(|| self.focus.now_or_blurred().or(self.focus.tab_start()).filter(|_| self.focus.keyboard()))?;
@@ -445,12 +455,10 @@ impl RuntimeCore {
         };
         // A node built this commit may have no box yet, and is judged by the size its old node
         // had; one laid out keeps its own box, so a collapsed or hidden control takes no focus.
-        let sized = |i: usize| self.nodes[i].local.w > 0.0 && self.nodes[i].local.h > 0.0;
         let unlaid = |j: usize| nodes[j].local.w <= 0.0 && nodes[j].local.h <= 0.0;
-        let visible = |j: usize| !nodes[j].inert && nodes[j].vis.opacity > 0.0
-            && std::iter::successors(nodes[j].parent, |&p| nodes[p].parent).all(|p| nodes[p].vis.opacity > 0.0);
         let survivor = |i: usize| at_new(i)
-            .filter(|&j| (shown(j) || (unlaid(j) && sized(i) && visible(j))) && (self.takes_focus(&nodes[j]) || nodes[j].input.as_ref().is_some_and(|i| i.access.is_some())));
+            .filter(|&j| (node_shown(nodes, j) || (unlaid(j) && node_sized(&self.nodes, i) && node_visible(nodes, j)))
+                && self.can_take_focus(&nodes[j]));
         let within = |j: usize, s: usize| {
             // Compare in the new tree where both ends are in it; a node that left keeps its old
             // path, so the scan still reaches the siblings after it.
@@ -480,9 +488,7 @@ impl RuntimeCore {
     /// control.
     fn fallback_in_new(&self, gone: &str, nodes: &[Node]) -> Option<String> {
         if self.active_modal().is_some() || nodes.iter().any(|n| n.path == gone) { return None; }
-        let can = |j: usize| !nodes[j].inert && nodes[j].vis.opacity > 0.0
-            && std::iter::successors(nodes[j].parent, |&p| nodes[p].parent).all(|p| !nodes[p].inert && nodes[p].vis.opacity > 0.0)
-            && (self.takes_focus(&nodes[j]) || nodes[j].input.as_ref().is_some_and(|i| i.access.is_some()));
+        let can = |j: usize| node_shown(nodes, j) && self.can_take_focus(&nodes[j]);
         let mut p = gone;
         while let Some(k) = p.rfind('/') {
             p = &p[..k];
@@ -495,11 +501,11 @@ impl RuntimeCore {
     pub(super) fn tab_order(&self) -> Vec<usize> {
         let all: Vec<_> = (0..self.nodes.len()).filter(|&i| self.can_focus(i) && self.nodes[i].focus.order >= 0).collect();
         let mut order: Vec<_> = all.iter().copied().filter(|&i| {
-            let Some(g) = self.group(i) else { return true; };
-            let chosen = all.iter().copied().filter(|&j| self.group(j) == Some(g))
+            let Some(g) = self.focus_group(i) else { return true; };
+            let chosen = all.iter().copied().filter(|&j| self.focus_group(j) == Some(g))
                 .find(|&j| self.focus.is(&self.nodes[j].path))
-                .or_else(|| all.iter().copied().find(|&j| self.group(j) == Some(g) && self.nodes[j].focus.selected))
-                .or_else(|| all.iter().copied().find(|&j| self.group(j) == Some(g)));
+                .or_else(|| all.iter().copied().find(|&j| self.focus_group(j) == Some(g) && self.nodes[j].focus.selected))
+                .or_else(|| all.iter().copied().find(|&j| self.focus_group(j) == Some(g)));
             chosen == Some(i)
         }).collect();
         order.sort_by_key(|&i| { let n = self.nodes[i].focus.order; (if n > 0 { n } else { i32::MAX }, i) });
@@ -582,7 +588,7 @@ impl RuntimeCore {
             if !self.full_keyboard_access && !self.tab_visits_controls {
                 // A control that owns its keyboard (`El::on_key`) is a list of its own.
                 order.retain(|&i| self.nodes[i].input.is_some() || self.nodes[i].focus.key.is_some()
-                    || self.group(i).is_some_and(|g| LIST_ROLES.contains(&self.nodes[g].role)));
+                    || self.focus_group(i).is_some_and(|g| LIST_ROLES.contains(&self.nodes[g].role)));
             }
             if order.is_empty() { return self.active_modal().is_some(); }
             let current = order.iter().position(|&i| self.focus.is(&self.nodes[i].path));
@@ -628,13 +634,13 @@ impl RuntimeCore {
             }
         }
         // A focused field inside a list row (an inline rename) keeps its letters and arrows.
-        if self.nodes[i].input.is_none() && let Some(g) = self.group(i) {
+        if self.nodes[i].input.is_none() && let Some(g) = self.focus_group(i) {
             let vertical = VERTICAL_ROLES.contains(&self.nodes[g].role);
             // A right-to-left row's first item is at its right: Left goes on to the next.
             let (back, ahead) = if self.nodes[g].flow == crate::el::Flow::Rtl { (Key::Right, Key::Left) } else { (Key::Left, Key::Right) };
             let backward = matches!(ev.key, Key::Up) || (!vertical && ev.key == back);
             let forward = matches!(ev.key, Key::Down) || (!vertical && ev.key == ahead);
-            let items: Vec<_> = (0..self.nodes.len()).filter(|&j| self.can_focus(j) && self.group(j) == Some(g)).collect();
+            let items: Vec<_> = (0..self.nodes.len()).filter(|&j| self.can_focus(j) && self.focus_group(j) == Some(g)).collect();
             let pos = items.iter().position(|&j| j == i).unwrap();
             let page = matches!(ev.key, Key::PageUp | Key::PageDown) && PAGED_ROLES.contains(&self.nodes[g].role);
             let next = if backward || forward || page || matches!(ev.key, Key::Home | Key::End) {
@@ -707,9 +713,9 @@ impl RuntimeCore {
     pub(super) fn sync_follows(&mut self, app: &mut dyn AppDriver) {
         let Some(i) = self.focused_index() else { return };
         if self.nodes[i].input.is_some() || self.nodes[i].focus.selected { return; }
-        let Some(g) = self.group(i).filter(|&g| self.nodes[g].focus.follows) else { return };
+        let Some(g) = self.focus_group(i).filter(|&g| self.nodes[g].focus.follows) else { return };
         let Some(j) = (0..self.nodes.len())
-            .find(|&j| self.nodes[j].focus.selected && self.group(j) == Some(g) && self.can_focus(j)) else { return };
+            .find(|&j| self.nodes[j].focus.selected && self.focus_group(j) == Some(g) && self.can_focus(j)) else { return };
         let path = self.nodes[j].path.clone();
         self.set_focus(app, Some(path), self.focus.keyboard());
     }
@@ -1670,5 +1676,21 @@ mod tests {
         assert!(!rt.has_focus(), "Tx::blur says nothing has focus, even as the field leaves");
         assert!(!rt.state.b.focused && !rt.state.c.focused);
         assert_eq!(rt.focus.tab_start(), was.as_deref(), "Tab still starts from where the keyboard was");
+    }
+
+    #[test]
+    fn fallback_in_new_skips_collapsed_zero_size_controls() {
+        fn view(_: &(), _: &mut Cx<()>) -> El {
+            col().key("line").size(200.0, 40.0)
+                .child(el().key("collapsed").size(0.0, 0.0).focusable(true))
+                .child(el().key("visible").size(40.0, 20.0).focusable(true))
+        }
+        let mut rt = Runtime::new((), view, (200.0, 40.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        let line = rt.nodes.iter().find(|n| n.key.as_deref() == Some("line")).unwrap().path.clone();
+        let visible = rt.nodes.iter().find(|n| n.key.as_deref() == Some("visible")).unwrap().path.clone();
+        let gone = format!("{line}/comment");
+        let picked = rt.core().fallback_in_new(&gone, &rt.nodes);
+        assert_eq!(picked.as_deref(), Some(visible.as_str()), "fallback_in_new must skip collapsed zero-size controls");
     }
 }
