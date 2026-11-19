@@ -94,6 +94,7 @@ impl Trace {
         *self.ids.entry(key.to_owned()).or_insert(next)
     }
 
+    #[cfg(test)]
     #[inline(always)]
     pub(crate) fn frame<S>(&mut self, rt: &mut Runtime<S>, t_ms: f64, cpu_ms: f64) {
         self.frame_timed_core(rt.core_mut(), t_ms, cpu_ms, FrameTiming::default());
@@ -302,6 +303,7 @@ impl Drop for Trace {
     }
 }
 
+#[cfg(any(test, feature = "hot"))]
 #[inline(always)]
 pub(crate) fn tree_json<S>(rt: &Runtime<S>, real_t: f64) -> Value {
     tree_json_core(rt.core(), real_t)

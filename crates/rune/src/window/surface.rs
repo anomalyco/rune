@@ -1,7 +1,9 @@
 //! Window GPU surface configuration, pacing, backoff, presentation tracking and platform handles.
 
 use crate::render::{Gpu, Renderer};
-use crate::runtime::{Runtime, RuntimeCore};
+#[cfg(any(feature = "hot", target_arch = "wasm32"))]
+use crate::runtime::Runtime;
+use crate::runtime::RuntimeCore;
 
 pub(in crate::window) mod backoff;
 pub(in crate::window) mod configure;
@@ -111,6 +113,7 @@ pub(crate) fn rebuild_renderer_core(device: &wgpu::Device, renderer: &mut Render
     renderer.attach_text(&mut rt.text.atlas);
 }
 
+#[cfg(any(feature = "hot", target_arch = "wasm32"))]
 #[inline(always)]
 pub(crate) fn rebuild_renderer<S: 'static>(device: &wgpu::Device, renderer: &mut Renderer, target: wgpu::TextureFormat, rt: &mut Runtime<S>) {
     rebuild_renderer_core(device, renderer, target, rt.core_mut());

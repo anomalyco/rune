@@ -195,7 +195,7 @@ impl Host {
         let stale_before = self.app.rt().needs_commit();
         let clipboard = self.clipboard.receive_core(self.app.rt_mut());
         let answered = self.app.popup_answer(&mut self.popup) | self.file_dialog.answer_core(self.app.rt_mut());
-        let (requests, had_updates, updated) = self.app.drain_window(&self.shortcuts);
+        let (requests, had_updates, updated) = self.app.drain_window(&self.shortcuts, &mut self.menus);
         let changed = clipboard || answered || updated || self.app.rt().drag_ends_pending();
         // Only updates that changed nothing (`AppHandle::update_if`), or an empty startup drain
         // after `try_create` already drew the first frame, ran: no poll, no frame.
@@ -493,7 +493,7 @@ impl Host {
         if let Err(error) = &result {
             eprintln!("rune: could not create the window {}: {error}", self.native_handle.key());
         }
-        self.app.set_window_error(result.err());
+        self.shared.set_window_error(result.err());
     }
 
     /// `cover` starts or stops covering the window. Covered, it stops pacing and rests, and is

@@ -57,12 +57,13 @@ fn each_window_takes_its_tab_opt_in_and_titlebar_inset() {
         let spec = WindowSpec::new("w", AppSpec::new("W", (300.0, 100.0), || (), view)).tab_visits_controls(tab);
         let spec = WindowSpec { options: crate::WindowOptions { borderless, ..Default::default() }, ..spec };
         let mut w = Window::new(spec, None, &Args::default(), true, true, 1.0);
-        w.rt.frame(0.0);
-        w.rt.set_full_keyboard_access(false);
-        w.rt.key(KeyEvent { key: Key::Tab, mods: Default::default() });
-        w.rt.frame(0.1);
-        let focused = w.rt.elements().into_iter().find(|e| e.focused).and_then(|e| e.key);
-        (focused, w.rt.presented("inset").unwrap().0[2])
+        let rt = w.rt_mut::<()>();
+        rt.frame(0.0);
+        rt.set_full_keyboard_access(false);
+        rt.key(KeyEvent { key: Key::Tab, mods: Default::default() });
+        rt.frame(0.1);
+        let focused = rt.elements().into_iter().find(|e| e.focused).and_then(|e| e.key);
+        (focused, rt.presented("inset").unwrap().0[2])
     };
     assert_eq!(window(true, false), (Some("button".into()), 67.0));
     assert_eq!(window(false, false).0, None, "keyboard navigation off skips buttons");
@@ -188,8 +189,8 @@ fn a_finished_window_runs_its_close_hook_once() {
     let app = App::new(AppSpec::new("W", (100.0, 100.0), || 0u32, |_: &u32, _: &mut crate::Cx<u32>| -> El { el() })).on_close(close);
     let mut w = Window::new(WindowSpec::from_app("w", app), None, &Args::default(), true, true, 1.0);
     let desktop = VirtualDesktop::from_script(None, 2.0).unwrap();
-    w.rt.update(|_, tx| tx.close_window());
+    w.rt_mut::<u32>().update(|_, tx| tx.close_window());
     w.drain(&desktop, 0.0);
-    assert_eq!(w.rt.state, 1);
+    assert_eq!(w.rt_mut::<u32>().state, 1);
     assert!(!w.visible() && !w.reopen_candidate().reopenable);
 }

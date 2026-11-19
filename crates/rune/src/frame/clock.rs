@@ -15,7 +15,7 @@
 use crate::machine::Effects;
 use crate::time::Instant;
 use rune_motion::TrackId;
-#[cfg(any(test, target_arch = "wasm32", target_vendor = "apple"))]
+#[cfg(any(test, target_arch = "wasm32"))]
 use crate::runtime::Runtime;
 use crate::runtime::{AppDriver, RuntimeCore};
 
@@ -163,7 +163,7 @@ impl FrameClock {
     /// Steps `rt` to the frame presented at `at`, in one runtime pass. `compositing`: a
     /// compositor's own animation was still running after the previous frame. Returns whether
     /// anything still animates and the seconds stepped.
-    #[cfg(any(test, target_arch = "wasm32", target_vendor = "apple"))]
+    #[cfg(any(test, target_arch = "wasm32"))]
     #[inline(always)]
     pub(crate) fn advance<S: 'static>(&mut self, rt: &mut Runtime<S>, at: Instant, compositing: bool) -> (bool, f64) {
         let (core, mut app) = rt.split_mut();

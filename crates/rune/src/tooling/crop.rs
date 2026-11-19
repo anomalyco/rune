@@ -6,12 +6,7 @@ use super::*;
 /// element, else the playground's stage when `--playground` opened it without
 /// `--whole-window`. On the stage, `KEY` is looked up there only. Rounded out to whole pixels
 /// and clipped to the `w` by `h` frame.
-#[inline(always)]
-pub(crate) fn snap_rect<S: 'static>(rt: &Runtime<S>, args: &Args, scale: f32, size: (u32, u32)) -> Option<[u32; 4]> {
-    snap_rect_core(rt.core(), args, scale, size)
-}
-
-fn snap_rect_core(rt: &crate::runtime::RuntimeCore, args: &Args, scale: f32, (w, h): (u32, u32)) -> Option<[u32; 4]> {
+pub(crate) fn snap_rect(rt: &crate::runtime::RuntimeCore, args: &Args, scale: f32, (w, h): (u32, u32)) -> Option<[u32; 4]> {
     let all = rt.elements();
     let stage = if args.playground.is_some() && !args.whole_window {
         all.iter().position(|e| !e.exiting && e.key.as_deref().is_some_and(crate::playground::is_stage))

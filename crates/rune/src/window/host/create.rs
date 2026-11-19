@@ -542,7 +542,7 @@ impl Host {
         self.wind_down();
         self.release();
         self.idle = true;
-        self.app.set_window_error(Some(reason));
+        self.shared.set_window_error(Some(reason));
         false
     }
 }

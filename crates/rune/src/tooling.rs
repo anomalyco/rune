@@ -9,7 +9,7 @@ use crate::compose::Compositor;
 use crate::edit::{Key, KeyEvent, Mods};
 use crate::el::{El, Tx};
 use crate::render::write_png;
-use crate::runtime::{Cx, Env, Runtime, Waker};
+use crate::runtime::{Cx, Env, Runtime, RuntimeCore, Waker};
 use crate::text::TextSystem;
 
 pub use crate::tooling::headless_run::{HeadlessRun, PointerAction, ScriptEvent, ScriptPoint, TimedEvent, WindowFrame, headless_run};
@@ -186,9 +186,9 @@ pub(crate) use headless::*;
 pub(crate) use key_names::{key_named, script_key_base, script_mods};
 use script::parse_script;
 pub(crate) use strip::*;
-pub(crate) use trace::{FrameTiming, Trace, tree_json};
-#[cfg(feature = "hot")]
-pub(crate) use trace::tree_json_core;
+#[cfg(test)]
+pub(crate) use trace::tree_json;
+pub(crate) use trace::{FrameTiming, Trace, tree_json_core};
 use trace::r2;
 
 /// Opens the app's window and quits when it closes (`App` for other lifetimes), or renders
@@ -396,13 +396,7 @@ impl Kind {
 
 /// The canvas input of a script (`canvas_input.rs`) at window point (x, y); false for any
 /// other kind.
-#[inline]
-pub(crate) fn canvas_input<S: 'static>(rt: &mut Runtime<S>, kind: &Kind, at: (f32, f32)) -> bool {
-    let (core, mut app) = rt.split_mut();
-    canvas_input_core(core, &mut app, kind, at)
-}
-
-fn canvas_input_core(
+pub(crate) fn canvas_input(
     core: &mut crate::runtime::RuntimeCore,
     app: &mut dyn crate::runtime::AppDriver,
     kind: &Kind,
@@ -431,7 +425,7 @@ pub(crate) enum FileStep {
 
 /// A scripted wheel delta: vertical-only ones take the plain vertical path, unless an
 /// `on_wheel` handler may take them.
-pub(crate) fn wheel<S: 'static>(rt: &mut Runtime<S>, (x, y): (f32, f32), dx: f32, dy: f32) {
+pub(crate) fn wheel(rt: &mut RuntimeCore, (x, y): (f32, f32), dx: f32, dy: f32) {
     if dx == 0.0 && !rt.hears_wheel() { rt.wheel(x, y, dy) } else { rt.wheel_xy(x, y, dx, dy) }
 }
 
@@ -445,7 +439,7 @@ fn script_phase(e: &Value) -> crate::GesturePhase {
 }
 
 /// A scripted release velocity: vertical-only ones take the plain vertical path.
-pub(crate) fn fling<S: 'static>(rt: &mut Runtime<S>, (x, y): (f32, f32), vx: f32, vy: f32) {
+pub(crate) fn fling(rt: &mut RuntimeCore, (x, y): (f32, f32), vx: f32, vy: f32) {
     if vx == 0.0 { rt.fling(x, y, vy) } else { rt.fling_xy(x, y, vx, vy) }
 }
 
@@ -535,12 +529,7 @@ pub(crate) fn desktop(args: &Args, script: Option<&Value>) -> crate::desktop::di
 }
 
 /// Feeds a script's file drag step to `rt`, at `at` in window points.
-#[inline]
-pub(crate) fn file_input<S: 'static>(rt: &mut Runtime<S>, step: &FileStep, at: (f32, f32)) {
-    file_input_core(rt.core_mut(), step, at);
-}
-
-fn file_input_core(core: &mut crate::runtime::RuntimeCore, step: &FileStep, at: (f32, f32)) {
+pub(crate) fn file_input(core: &mut crate::runtime::RuntimeCore, step: &FileStep, at: (f32, f32)) {
     match step {
         FileStep::Hover(paths) => core.drag_files(paths.clone(), Some(at)),
         FileStep::Drop(paths) => core.drop_files(paths.clone(), Some(at)),
