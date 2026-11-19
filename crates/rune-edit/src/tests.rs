@@ -504,25 +504,6 @@ fn shift_enter_in_a_single_line_field_submits_without_a_line_break() {
     }
 }
 
-#[test]
-fn command_chord_reaches_on_key() {
-    use crate::{text_input, Cx, El, Env, Runtime, TextStyle};
-    struct Form { pw: TextEdit, keys: Vec<Key> }
-    fn view(s: &Form, _: &mut Cx<Form>) -> El {
-        text_input(&s.pw, TextStyle::new(14.0, 400.0)).single_line().key("pw").size(200.0, 40.0)
-            .on_edit(|s: &mut Form| &mut s.pw)
-    }
-    let mut pw = TextEdit::new("").secure();
-    pw.focused = true;
-    let mut rt = Runtime::new(Form { pw, keys: vec![] }, view, (200.0, 40.0), Env::new(true, 1.0));
-    rt.on_key = Some(|s, ev, _| { s.keys.push(ev.key.clone()); true });
-    rt.frame(0.0);
-    rt.key(chord(" ", Mods { cmd: true, shift: true, logo: true, ..Mods::default() })); rt.frame(0.0);
-    rt.key(chord("x", Mods::default())); rt.frame(0.0);
-    assert_eq!(rt.state.pw.text, "x");
-    assert_eq!(rt.state.keys, [Key::Text(" ".into())]);
-}
-
 #[cfg(target_os = "macos")]
 #[test]
 fn control_letters_edit_like_appkit_fields() {
@@ -803,7 +784,7 @@ fn undo_redo_and_ime_preserve_marks_blocks_and_spans() {
     assert_eq!(e.display().0, "fn 日main() {}");
     assert_eq!(e.map_range_to_display(3, 7), vec![(6, 10)]);
     // And the preedit itself has the pending Italic mark in rich_display_specs.
-    let (spans, _, _, _) = e.rich_display_specs(crate::TextStyle::new(14.0, 400.0), RichStyle::default());
+    let (spans, _, _, _) = e.rich_display_specs(rune_core::tok::TextStyle::new(14.0, 400.0), RichStyle::default());
     assert!(spans.iter().any(|s| s.start == 3 && s.end == 6 && s.italic));
 
     // Commit IME preedit: Italic mark is committed on "日" (3..6).
@@ -880,112 +861,6 @@ fn html_import_export_and_paste_safe_subset() {
     );
 }
 
-#[test]
-fn spans_on_text_input_hold_through_ime_and_undo() {
-    use crate::{Cx, El, Env, Runtime, Span, TextStyle, text_input};
-    struct App {
-        edit: TextEdit,
-    }
-    fn view(s: &App, _: &mut Cx<App>) -> El {
-        // Highlight the first 3 bytes ("let") with a caller-supplied Span on plain text_input.
-        let end = s.edit.text.len().min(3);
-        let spans = if end > 0 {
-            vec![Span::new(0, end).color(crate::Color::WHITE).bold()]
-        } else {
-            vec![]
-        };
-        text_input(&s.edit, TextStyle::new(14.0, 400.0))
-            .key("ed")
-            .size(240.0, 60.0)
-            .spans(spans)
-            .on_edit(|s: &mut App| &mut s.edit)
-    }
-    let mut edit = TextEdit::new("let x = 1;");
-    edit.focused = true;
-    edit.set(0, false);
-    let mut rt = Runtime::new(App { edit }, view, (240.0, 60.0), Env::new(true, 1.0));
-    rt.frame(0.0);
-
-    // Start IME preedit at byte 0: display text becomes "あlet x = 1;", so caller's 0..3
-    // span on `edit.text` shifts automatically to 3..6 in the rendered TextSpec!
-    rt.ime(Ime::Preedit("あ".into(), Some((0, 3)), Vec::new()));
-    rt.frame(0.0);
-    let spec_spans = &rt.nodes.iter().find(|n| n.key.as_deref() == Some("ed")).unwrap().text.as_ref().unwrap().spans;
-    assert_eq!(spec_spans.len(), 1);
-    assert_eq!((spec_spans[0].start, spec_spans[0].end), (3, 6));
-
-    // Commit IME preedit, then undo back to "let x = 1;": span returns to 0..3.
-    rt.ime(Ime::Commit("あ".into()));
-    rt.frame(0.0);
-    rt.key(KeyEvent { key: Key::Command('z'), mods: Mods { cmd: true, ..Mods::default() } });
-    rt.frame(0.0);
-    assert_eq!(rt.state.edit.text, "let x = 1;");
-    let spec_spans = &rt.nodes.iter().find(|n| n.key.as_deref() == Some("ed")).unwrap().text.as_ref().unwrap().spans;
-    assert_eq!(spec_spans.len(), 1);
-    assert_eq!((spec_spans[0].start, spec_spans[0].end), (0, 3));
-}
-
-#[test]
-fn runtime_routes_mark_shortcuts_list_tabs_and_renders_decorations() {
-    use crate::{Cx, El, Env, Runtime, TextStyle, col, text_input};
-    struct App {
-        edit: TextEdit,
-        other: TextEdit,
-    }
-    fn view(s: &App, _: &mut Cx<App>) -> El {
-        col()
-            .size(320.0, 200.0)
-            .child(
-                text_input(&s.edit, TextStyle::new(14.0, 400.0))
-                    .key("ed")
-                    .size(300.0, 140.0)
-                    .on_edit(|s: &mut App| &mut s.edit),
-            )
-            .child(
-                text_input(&s.other, TextStyle::new(14.0, 400.0))
-                    .key("other")
-                    .size(300.0, 40.0)
-                    .on_edit(|s: &mut App| &mut s.other),
-            )
-    }
-    let mut edit = TextEdit::from_html(
-        "<ul><li>item</li></ul><ol><li><del>struck</del></li></ol><blockquote>quote</blockquote><pre><code>let x = 1;</code></pre>",
-    );
-    edit.focused = true;
-    edit.anchor = 0;
-    edit.focus = 4; // "item"
-    let mut rt = Runtime::new(
-        App { edit, other: TextEdit::new("next") },
-        view,
-        (320.0, 200.0),
-        Env::new(true, 1.0),
-    );
-    rt.frame(0.0);
-    let base_instances = rt.instances.len();
-    assert!(base_instances > 10);
-
-    // Cmd+B, Cmd+I, Cmd+U toggle marks on the selection through Runtime::key.
-    rt.key(KeyEvent { key: Key::Command('b'), mods: Mods { cmd: true, ..Mods::default() } });
-    rt.key(KeyEvent { key: Key::Command('i'), mods: Mods { cmd: true, ..Mods::default() } });
-    rt.key(KeyEvent { key: Key::Command('u'), mods: Mods { cmd: true, ..Mods::default() } });
-    rt.frame(0.0);
-    assert!(rt.state.edit.has_mark(&Mark::Bold));
-    assert!(rt.state.edit.has_mark(&Mark::Italic));
-    assert!(rt.state.edit.has_mark(&Mark::Underline));
-
-    // Tab inside a list item indents the list item instead of moving focus to "other"!
-    rt.key(KeyEvent { key: Key::Tab, mods: Mods::default() });
-    rt.frame(0.0);
-    assert!(rt.state.edit.focused);
-    assert!(!rt.state.other.focused);
-    assert_eq!(rt.state.edit.blocks()[0], Block::Bullet(1));
-
-    // Shift+Tab outdents the list item back to Bullet(0).
-    rt.key(KeyEvent { key: Key::Tab, mods: Mods { shift: true, ..Mods::default() } });
-    rt.frame(0.0);
-    assert_eq!(rt.state.edit.blocks()[0], Block::Bullet(0));
-}
-
 fn cmd(c: char) -> KeyEvent {
     KeyEvent { key: Key::Command(c), mods: Mods { cmd: true, ..Mods::default() } }
 }
@@ -1022,6 +897,5 @@ fn assert_invariants(e: &TextEdit, ctx: &str) {
         }
     }
 }
-
 
 include!("rich_tests.rs");

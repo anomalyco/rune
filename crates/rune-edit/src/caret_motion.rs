@@ -5,7 +5,7 @@
 
 use parley::{Affinity, Cursor, Layout};
 
-use crate::text::Ink;
+use rune_text::Ink;
 
 use super::{TextEdit, next_char, prev_char};
 
@@ -201,7 +201,7 @@ pub(super) enum Landing {
 /// with the direction of the paragraph it's in; `None` where it moves in the text's order (a
 /// paragraph of only left-to-right runs, or a `hidden` secret). A pill's isolate marks are
 /// stops of their own that leave the caret on the same byte, so it steps on past them.
-pub(super) fn visual_in(text: crate::text::TextFlow<'_>, at: usize, side: Affinity, arrow: Arrow, hidden: bool) -> Option<(Landing, crate::el::Flow)> {
+pub(super) fn visual_in(text: rune_text::TextFlow<'_>, at: usize, side: Affinity, arrow: Arrow, hidden: bool) -> Option<(Landing, rune_text::Flow)> {
     let p = text.piece_at(at);
     if CaretMotion::of(p.layout, hidden) == CaretMotion::Logical {
         return None;
@@ -220,7 +220,7 @@ pub(super) fn visual_in(text: crate::text::TextFlow<'_>, at: usize, side: Affini
 /// Whether the cluster just `right` (else left) of the caret at display byte `at` (on `side`
 /// of it) is a space the text runs on into that way: in a left-to-right run to the right, in a
 /// right-to-left run to the left. A word forward goes on past it off macOS.
-pub(super) fn space_ahead(text: crate::text::TextFlow<'_>, at: usize, side: Affinity, right: bool) -> bool {
+pub(super) fn space_ahead(text: rune_text::TextFlow<'_>, at: usize, side: Affinity, right: bool) -> bool {
     let p = text.piece_at(at);
     let c = Cursor::from_byte_index(p.layout, p.shaped(at), side);
     c.visual_clusters(p.layout)[usize::from(right)].as_ref().is_some_and(|cl| cl.is_space_or_nbsp() && cl.is_rtl() != right)

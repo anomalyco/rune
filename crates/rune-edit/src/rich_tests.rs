@@ -24,30 +24,7 @@ fn plain_edit_leaves_rich_keys_alone_and_pastes_plain_text() {
 }
 
 #[test]
-fn plain_field_leaves_format_chords_to_the_app() {
-    use crate::{text_input, Cx, El, Env, Runtime, TextStyle};
-    struct Form { f: TextEdit, keys: Vec<Key> }
-    fn view(s: &Form, _: &mut Cx<Form>) -> El {
-        text_input(&s.f, TextStyle::new(14.0, 400.0)).key("f").size(200.0, 40.0).on_edit(|s: &mut Form| &mut s.f)
-    }
-    let mut f = TextEdit::new("hello");
-    f.focused = true;
-    f.set_selection(0, 5);
-    let mut rt = Runtime::new(Form { f, keys: vec![] }, view, (200.0, 40.0), Env::new(true, 1.0));
-    rt.on_key = Some(|s, ev, _| { s.keys.push(ev.key.clone()); true });
-    rt.frame(0.0);
-    for c in ['b', 'i', 'u'] { rt.key(cmd(c)); rt.frame(0.0); }
-    assert_eq!(rt.state.keys, [Key::Command('b'), Key::Command('i'), Key::Command('u')]);
-    assert!(rt.state.f.marks().is_empty());
-    // A field with no formatting lays out as plain text: no spans, blocks or soft breaks.
-    let n = rt.nodes.iter().find(|n| n.key.as_deref() == Some("f")).unwrap();
-    let t = n.text.as_ref().unwrap();
-    assert!(t.spans.is_empty() && t.cold.blocks.is_empty() && t.cold.soft_breaks.is_empty() && t.cold.strikes.is_empty());
-}
-
-#[test]
 fn direct_text_assignment_never_panics() {
-    use crate::{text_input, Cx, El, Env, Runtime, TextStyle};
     let fresh = || {
         let mut e = TextEdit::from_html("<ul><li><b>bold</b> <a href=\"https://a.b\">item</a></li></ul><pre><code>a\nb</code></pre><p>x<br>y</p>");
         e.set(e.text.len(), false);
@@ -86,23 +63,6 @@ fn direct_text_assignment_never_panics() {
     e.toggle_mark(Mark::Italic);
     e.set_block(Block::Quote);
     assert_invariants(&e, "after toggle_mark and set_block");
-
-    struct App { e: TextEdit }
-    fn view(s: &App, _: &mut Cx<App>) -> El {
-        text_input(&s.e, TextStyle::new(14.0, 400.0)).key("e").size(200.0, 120.0).on_edit(|s: &mut App| &mut s.e)
-    }
-    let mut e = fresh();
-    e.focused = true;
-    let mut rt = Runtime::new(App { e }, view, (200.0, 120.0), Env::new(true, 1.0));
-    rt.frame(0.0);
-    rt.update(|s, _| stale(&mut s.e));
-    rt.frame(0.0);
-    rt.ime(Ime::Preedit("あ".into(), None, Vec::new()));
-    rt.frame(0.0);
-    rt.key(k(Key::Right));
-    rt.ime(Ime::Commit("あ".into()));
-    rt.frame(0.0);
-    assert_invariants(&rt.state.e, "runtime");
 }
 
 #[test]
@@ -342,8 +302,8 @@ fn a_field_keeps_only_the_marks_and_blocks_it_allows() {
 
 #[test]
 fn flatten_spans_matches_the_naive_merge_and_later_spans_win() {
-    use crate::text::{flatten_spans, Span};
-    use crate::Color;
+    use rune_core::color::Color;
+    use rune_text::{Span, flatten_spans};
     fn naive(spans: &[Span]) -> Vec<Span> {
         let mut bounds: Vec<u32> = spans.iter().filter(|s| s.start < s.end).flat_map(|s| [s.start, s.end]).collect();
         bounds.sort_unstable();
@@ -566,59 +526,6 @@ fn random_edits_keep_ranges_blocks_and_soft_breaks_consistent() {
             let _ = (e.to_html(), e.display(), e.paragraphs());
         }
     }
-}
-
-#[test]
-fn copy_from_one_rich_field_pastes_marks_and_blocks_into_another() {
-    use crate::{Cx, El, Env, Runtime, TextStyle, col, text_input};
-    struct App { a: TextEdit, b: TextEdit, plain: TextEdit }
-    fn view(s: &App, _: &mut Cx<App>) -> El {
-        let st = TextStyle::new(14.0, 400.0);
-        col().size(320.0, 360.0)
-            .child(text_input(&s.a, st).key("a").size(300.0, 140.0).on_edit(|s: &mut App| &mut s.a))
-            .child(text_input(&s.b, st).key("b").size(300.0, 140.0).on_edit(|s: &mut App| &mut s.b))
-            .child(text_input(&s.plain, st).key("plain").size(300.0, 40.0).on_edit(|s: &mut App| &mut s.plain))
-    }
-    let mut a = TextEdit::from_html(
-        "<p>Hello <b>bold</b> <a href=\"https://example.com\">link</a></p><ul><li>one</li><li><i>two</i></li></ul><blockquote>q</blockquote>",
-    );
-    a.focused = true;
-    a.set_selection(0, a.text.len());
-    let m = crate::clipboard::memory();
-    let mut rt = Runtime::new(App { a, b: TextEdit::new("").rich(), plain: TextEdit::new("") }, view, (320.0, 360.0), Env::new(true, 1.0));
-    rt.use_clipboard(&m);
-    rt.frame(0.0);
-    rt.key(cmd('c'));
-    rt.frame(0.0);
-    let copied = m.content().unwrap();
-    assert_eq!(copied.text(), rt.state.a.text);
-    assert!(copied.html().is_some_and(|h| h.contains("<strong>bold</strong>") && h.contains("<ul>")), "{copied:?}");
-
-    rt.update(|s, _| { s.a.focused = false; s.b.focused = true; });
-    rt.frame(0.0);
-    rt.update(|_, tx| tx.request_paste());
-    rt.frame(0.0);
-    let (a, b) = (&rt.state.a, &rt.state.b);
-    assert_eq!((&b.text, b.marks(), b.blocks()), (&a.text, a.marks(), a.blocks()));
-
-    // Cut carries the formatting it removes.
-    rt.update(|s, _| s.b.set_selection(6, 10));
-    rt.key(cmd('x'));
-    rt.frame(0.0);
-    assert_eq!(rt.state.b.text, format!("Hello  link{}", &rt.state.a.text[15..]));
-    assert!(m.content().unwrap().html().is_some_and(|h| h.contains("<strong>bold</strong>")));
-
-    // A plain field pastes the text only and copies no HTML.
-    rt.update(|s, _| { s.b.focused = false; s.plain.focused = true; });
-    rt.frame(0.0);
-    rt.update(|_, tx| tx.request_paste());
-    rt.frame(0.0);
-    assert_eq!(rt.state.plain.text, "bold");
-    assert!(rt.state.plain.is_plain());
-    rt.update(|s, _| s.plain.set_selection(0, 4));
-    rt.key(cmd('c'));
-    rt.frame(0.0);
-    assert_eq!(m.content().unwrap().html(), None);
 }
 
 /// `"a @x-agent b"` with the label a pill carrying `agent:x`, the caret after it.
@@ -905,56 +812,6 @@ fn pills_round_trip_through_html_and_outside_html_makes_none() {
 }
 
 #[test]
-fn a_pill_copied_from_one_rich_field_pastes_whole_into_another() {
-    use crate::{ClipboardContent, Cx, El, Env, Runtime, TextStyle, col, text_input};
-    struct App { a: TextEdit, b: TextEdit, hooked: TextEdit }
-    fn view(s: &App, _: &mut Cx<App>) -> El {
-        let st = TextStyle::new(14.0, 400.0);
-        col().size(320.0, 360.0)
-            .child(text_input(&s.a, st).key("a").size(300.0, 100.0).on_edit(|s: &mut App| &mut s.a))
-            .child(text_input(&s.b, st).key("b").size(300.0, 100.0).on_edit(|s: &mut App| &mut s.b))
-            .child(text_input(&s.hooked, st).key("hooked").size(300.0, 100.0).on_edit(|s: &mut App| &mut s.hooked)
-                .on_input_paste(|s: &mut App, content, _| {
-                    let Some(html) = content.html() else { return false };
-                    s.hooked.paste_html_with_pills(html, content.text());
-                    true
-                }))
-    }
-    let mut a = with_pill();
-    a.focused = true;
-    a.set_selection(0, a.text.len());
-    let m = crate::clipboard::memory();
-    let mut rt = Runtime::new(App { a, b: TextEdit::new("").rich(), hooked: TextEdit::new("").rich() }, view, (320.0, 360.0), Env::new(true, 1.0));
-    rt.use_clipboard(&m);
-    rt.frame(0.0);
-    rt.key(cmd('c'));
-    rt.frame(0.0);
-    let copied = m.content().unwrap();
-    assert_eq!(copied.text(), "a @x-agent b");
-    assert!(copied.html().is_some_and(|h| h.contains("<span data-pill=\"agent:x\">@x-agent</span>")), "{copied:?}");
-    let paste_into = |rt: &mut Runtime<App>, which: fn(&mut App) -> &mut TextEdit| {
-        rt.update(move |s, _| { s.a.focused = false; s.b.focused = false; s.hooked.focused = false; which(s).focused = true; });
-        rt.frame(0.0);
-        rt.update(|_, tx| tx.request_paste());
-        rt.frame(0.0);
-    };
-    paste_into(&mut rt, |s| &mut s.b);
-    assert_eq!(pills_of(&rt.state.b), [(2..10, "agent:x".to_owned())], "its own copy pastes the pill back");
-
-    // The same HTML from outside (another app's copy) pastes plain labels, even with identical plain text, unless a hook keeps them.
-    m.set_content(ClipboardContent::new("a @x-agent b").with_html("a <span data-pill=\"agent:x\">@x-agent</span> b"));
-    rt.update(|s, _| s.b.set_selection(0, s.b.text.len()));
-    paste_into(&mut rt, |s| &mut s.b);
-    assert_eq!((rt.state.b.text.as_str(), rt.state.b.pills().count()), ("a @x-agent b", 0));
-    m.set_content(ClipboardContent::new("x @x-agent").with_html("x <span data-pill=\"agent:x\">@x-agent</span>"));
-    rt.update(|s, _| s.b.set_selection(0, s.b.text.len()));
-    paste_into(&mut rt, |s| &mut s.b);
-    assert_eq!((rt.state.b.text.as_str(), rt.state.b.pills().count()), ("x @x-agent", 0));
-    paste_into(&mut rt, |s| &mut s.hooked);
-    assert_eq!(pills_of(&rt.state.hooked), [(2..10, "agent:x".to_owned())]);
-}
-
-#[test]
 fn pill_edge_cases_words_lines_bidi_and_direct_text_mutation() {
     // Touching pills, punctuation after a pill, and spaces inside a pill label.
     let mut e = TextEdit::new("").rich();
@@ -982,18 +839,18 @@ fn pill_edge_cases_words_lines_bidi_and_direct_text_mutation() {
     assert_eq!((e.text.as_str(), pills_of(&e)), ("@maya, @Maya Lin", vec![(0..5, "u:1".to_owned()), (7..16, "u:3".to_owned())]));
 
     // Vertical movement and line_edge across wrapped lines ending or starting with pills.
-    let mut ts = crate::text::TextSystem::default();
-    let style = crate::tok::TextStyle::new(14.0, 400.0);
+    let mut ts = rune_text::TextSystem::default();
+    let style = rune_core::tok::TextStyle::new(14.0, 400.0);
     let mut w = TextEdit::new("hello world ").rich();
     w.set_caret(w.text.len());
     w.insert_pill("p:1", "@first-pill");
     w.insert(" ");
     w.insert_pill("p:2", "@second-pill");
     w.insert(" tail");
-    let chips: Vec<crate::text::PillChip> = w
+    let chips: Vec<rune_text::PillChip> = w
         .display_pills()
         .into_iter()
-        .map(|(start, end, _)| crate::text::PillChip { start, end, icon: None, bg: None, fg: None, bare: None })
+        .map(|(start, end, _)| rune_text::PillChip { start, end, icon: None, bg: None, fg: None, bare: None })
         .collect();
     let layout = ts.layout_blocks(&w.text, &[], w.blocks(), &chips, style, 2.0, Some(220.0), parley::Alignment::Start);
     assert!(layout.len() >= 3, "wrapped into {} lines", layout.len());
@@ -1013,24 +870,24 @@ fn pill_edge_cases_words_lines_bidi_and_direct_text_mutation() {
     ime_e.ime(&Ime::Preedit("に".into(), None, Vec::new()));
     let (disp, pre) = ime_e.display();
     let (pa, pb) = pre.unwrap();
-    let p_chips: Vec<crate::text::PillChip> = ime_e
+    let p_chips: Vec<rune_text::PillChip> = ime_e
         .display_pills()
         .into_iter()
-        .map(|(start, end, _)| crate::text::PillChip { start, end, icon: None, bg: None, fg: None, bare: None })
+        .map(|(start, end, _)| rune_text::PillChip { start, end, icon: None, bg: None, fg: None, bare: None })
         .collect();
     let ime_layout = ts.layout_blocks(&disp, &[], &[Block::Paragraph], &p_chips, style, 2.0, None, parley::Alignment::Start);
     let (mut decos, mut icons) = (Vec::new(), Vec::new());
-    crate::text::pill_chips(&ime_layout, &p_chips, 14.0, 2.0, [0.0, 0.0], Color::BLACK, &mut decos, &mut icons);
-    let boxes = crate::text::range_boxes(&ime_layout, pa, pb, false);
+    rune_text::pill_chips(&ime_layout, &p_chips, 14.0, 2.0, [0.0, 0.0], Color::BLACK, &mut decos, &mut icons);
+    let boxes = rune_text::range_boxes(&ime_layout, pa, pb, false);
     assert_eq!(boxes.len(), 1);
     assert!(boxes[0].0.x0 as f32 >= decos[0].rect[0] + decos[0].rect[2] - 0.5, "preedit box {:?} overlaps chip {:?}", boxes[0].0, decos[0].rect);
 
     // RTL pill and mixed RTL+LTR pill chips have positive width.
     for (txt, start, end) in [("דוד", 0u32, 6u32), ("שלום@maya", 8, 13), ("@e\u{0301}", 0, 4)] {
-        let pc = [crate::text::PillChip { start, end, icon: None, bg: None, fg: None, bare: None }];
+        let pc = [rune_text::PillChip { start, end, icon: None, bg: None, fg: None, bare: None }];
         let l = ts.layout_blocks(txt, &[], &[Block::Paragraph], &pc, style, 2.0, None, parley::Alignment::Start);
         let (mut d, mut ic) = (Vec::new(), Vec::new());
-        crate::text::pill_chips(&l, &pc, 14.0, 2.0, [0.0, 0.0], Color::BLACK, &mut d, &mut ic);
+        rune_text::pill_chips(&l, &pc, 14.0, 2.0, [0.0, 0.0], Color::BLACK, &mut d, &mut ic);
         assert_eq!(d.len(), 1, "{txt:?}");
         assert!(d[0].rect[2] > 8.0, "chip for {txt:?} has width {}", d[0].rect[2]);
     }

@@ -2,12 +2,13 @@
 //! links, pills and blocks mapped onto it.
 
 use super::*;
-use crate::text::Span;
+use rune_text::Span;
 
 impl TextEdit {
     /// Map a model byte range `start..end` (in `self.text`) onto `self.display().0` byte ranges,
     /// shifting or splitting around any active IME `preedit` splice.
-    pub(crate) fn map_range_to_display(&self, start: usize, end: usize) -> Vec<(u32, u32)> {
+    #[doc(hidden)]
+    pub fn map_range_to_display(&self, start: usize, end: usize) -> Vec<(u32, u32)> {
         if self.is_masked() || start >= end {
             return Vec::new();
         }
@@ -40,9 +41,10 @@ impl TextEdit {
 
     /// Build the [`Span`]s, strikethrough ranges, [`Link`]s, and per-line [`Block`]s for
     /// `self.display()` so `text_input` renders inline marks, pending IME style, and blocks.
-    pub(crate) fn rich_display_specs(
+    #[doc(hidden)]
+    pub fn rich_display_specs(
         &self,
-        base_style: crate::tok::TextStyle,
+        base_style: rune_core::tok::TextStyle,
         style: RichStyle,
     ) -> (Vec<Span>, Vec<(u32, u32, Option<Color>)>, Vec<Link>, Vec<Block>) {
         if self.secure {
@@ -169,7 +171,8 @@ impl TextEdit {
     }
 
     /// Each [`Mark::Pill`]'s byte range in `self.display().0`, with its id.
-    pub(crate) fn display_pills(&self) -> Vec<(u32, u32, &str)> {
+    #[doc(hidden)]
+    pub fn display_pills(&self) -> Vec<(u32, u32, &str)> {
         if self.secure {
             return Vec::new();
         }

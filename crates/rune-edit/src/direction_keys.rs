@@ -6,10 +6,9 @@
 //! such gesture. The runtime steps the chord on every physical key (`direction_chord`), whoever
 //! takes the key, so it works in any field.
 
-use crate::el::Flow;
-use crate::{KeySide, Modifier};
+use rune_text::Flow;
 
-use super::TextEdit;
+use super::{KeySide, Modifier, TextEdit};
 
 /// The direction a field's lines read in.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -22,8 +21,9 @@ pub(crate) enum FieldDir {
 }
 
 /// How far the Ctrl+Shift chord has gone.
+#[doc(hidden)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum DirChord {
+pub enum DirChord {
     #[default]
     Idle,
     /// Ctrl is down, nothing else.
@@ -34,7 +34,8 @@ pub(crate) enum DirChord {
 
 /// One modifier key going down or up (`ctrl` and `shift` the flags after it): the next state,
 /// and the direction a release sets.
-pub(crate) fn step_dir_chord(state: DirChord, modifier: Modifier, pressed: bool, ctrl: bool, shift: bool) -> (DirChord, Option<Flow>) {
+#[doc(hidden)]
+pub fn step_dir_chord(state: DirChord, modifier: Modifier, pressed: bool, ctrl: bool, shift: bool) -> (DirChord, Option<Flow>) {
     use Modifier::*;
     match (state, modifier, pressed) {
         (_, _, _) if cfg!(target_os = "macos") => (DirChord::Idle, None),
@@ -55,7 +56,8 @@ pub(crate) fn step_dir_chord(state: DirChord, modifier: Modifier, pressed: bool,
 
 impl TextEdit {
     /// The direction Ctrl+Shift set, if it set one.
-    pub(crate) fn forced_dir(&self) -> Option<Flow> {
+    #[doc(hidden)]
+    pub fn forced_dir(&self) -> Option<Flow> {
         match self.dir {
             FieldDir::Natural => None,
             FieldDir::Forced(flow) => Some(flow),
@@ -63,7 +65,8 @@ impl TextEdit {
     }
 
     /// Sets every line's direction, as Ctrl+Shift does.
-    pub(crate) fn force_dir(&mut self, flow: Flow) {
+    #[doc(hidden)]
+    pub fn force_dir(&mut self, flow: Flow) {
         self.dir = FieldDir::Forced(flow);
     }
 }

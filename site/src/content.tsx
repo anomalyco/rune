@@ -87,7 +87,7 @@ export const principles: Entry[] = [
       { label: "Themed", values: ["controls, type, motion, materials"] },
     ],
     code: [
-      at("crates/rune/src/edit.rs", "text input and IME"),
+      at("crates/rune-edit/src/lib.rs", "text input and IME"),
       at("crates/rune/src/a11y/tree.rs", "the accessibility tree (AccessKit)"),
       at("crates/rune-core/src/theme.rs", "themes as data"),
       at("themes/opencode", "OpenCode's theme"),

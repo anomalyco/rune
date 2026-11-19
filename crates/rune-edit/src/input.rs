@@ -3,7 +3,7 @@
 use parley::Layout;
 
 use super::*;
-use crate::text::{Ink, TextFlow};
+use rune_text::{Flow, Ink, TextFlow};
 
 impl TextEdit {
     fn insert_newline(&mut self, block_for_new_line: Block, soft: bool) {
@@ -56,7 +56,7 @@ impl TextEdit {
         if (ca.y0 - cb.y0).abs() < 1.0 {
             return if (ca.x0 <= cb.x0) != right { a } else { b };
         }
-        let forward = right == (l.piece_at(self.display_index(self.focus)).flow == crate::el::Flow::Ltr);
+        let forward = right == (l.piece_at(self.display_index(self.focus)).flow == Flow::Ltr);
         if forward { b } else { a }
     }
 
@@ -66,7 +66,8 @@ impl TextEdit {
     }
 
     /// [`Self::key`] with the field's layout as it draws it, one paragraph's or a by-paragraph field's.
-    pub(crate) fn key_in(&mut self, ev: &KeyEvent, layout: Option<TextFlow<'_>>) -> EditOutcome {
+    #[doc(hidden)]
+    pub fn key_in(&mut self, ev: &KeyEvent, layout: Option<TextFlow<'_>>) -> EditOutcome {
         let mut out = EditOutcome::default();
         if matches!(ev.key, Key::Modifier { .. }) { return out; }
         // Any key but Up and Down lets the column go.
@@ -333,7 +334,7 @@ impl TextEdit {
     }
 
     /// Where Left (Right when `right`) moves the caret, by a character or a `word`, when the
-    /// text moves visually ([`CaretMotion`]): across the line as it's drawn, and at the line's
+    /// text moves visually (`CaretMotion`): across the line as it's drawn, and at the line's
     /// edge on the way its paragraph runs, so Left leaves a right-to-left line forward. `None`
     /// when it moves by the logical order.
     fn visual_step(&self, layout: Option<TextFlow<'_>>, right: bool, word: bool) -> Option<(usize, parley::Affinity)> {
@@ -362,7 +363,7 @@ impl TextEdit {
             }
             Landing::At(j, side) => (self.model_index(j), side),
             Landing::Edge => {
-                let forward = right == (flow == crate::el::Flow::Ltr);
+                let forward = right == (flow == Flow::Ltr);
                 let i = match (forward, word) {
                     (true, false) => next_char(&self.text, self.focus),
                     (true, true) => self.next_word(self.focus),
@@ -373,6 +374,7 @@ impl TextEdit {
             }
         })
     }
+
     fn line_edge(&self, layout: Option<TextFlow<'_>>, end: bool) -> usize {
         if self.is_masked() {
             return if end { self.text.len() } else { 0 };

@@ -5,7 +5,8 @@ use super::*;
 
 impl TextEdit {
     /// Synchronize `blocks`, `soft_breaks`, and `marks` with `self.text`.
-    pub(crate) fn sync_invariants(&mut self) {
+    #[doc(hidden)]
+    pub fn sync_invariants(&mut self) {
         self.anchor = Self::clamp_char_boundary(&self.text, self.anchor);
         self.focus = Self::clamp_char_boundary(&self.text, self.focus);
         if self.secure {
