@@ -38,11 +38,26 @@ pub use ime::Clause;
 pub use ime::Ime;
 #[doc(hidden)]
 pub use ime::ImeText;
+#[doc(hidden)]
+pub use keys::ALT;
+#[doc(hidden)]
+pub use keys::CTRL;
 pub use keys::Key;
 pub use keys::KeyEvent;
+pub use keys::KeyPlatform;
 pub use keys::KeySide;
 pub use keys::Modifier;
 pub use keys::Mods;
+#[doc(hidden)]
+pub use keys::PRIMARY;
+#[doc(hidden)]
+pub use keys::SHIFT;
+#[doc(hidden)]
+pub use keys::SUPER;
+#[doc(hidden)]
+pub use keys::fold;
+#[doc(hidden)]
+pub use keys::held;
 pub use model::Block;
 pub use model::MAX_LIST_LEVEL;
 pub use model::Mark;

@@ -1,6 +1,54 @@
 //! Key events as the shell hands them to handlers and the focused field.
 use zeroize::Zeroize;
 
+#[doc(hidden)]
+pub const PRIMARY: u8 = 1;
+#[doc(hidden)]
+pub const CTRL: u8 = 2;
+#[doc(hidden)]
+pub const ALT: u8 = 4;
+#[doc(hidden)]
+pub const SHIFT: u8 = 8;
+#[doc(hidden)]
+pub const SUPER: u8 = 16;
+
+/// The platform whose keyboard conventions a chord resolves and draws with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum KeyPlatform {
+    /// ⌘ is the primary modifier; Control is a separate key. Glyph labels: "⇧⌘T".
+    Mac,
+    /// Ctrl is the primary modifier. Word labels: "Ctrl+Shift+T", the logo key is "Win".
+    Windows,
+    /// Ctrl is the primary modifier. Word labels, the logo key is "Super". The web uses this
+    /// in a browser that isn't on an Apple device.
+    Linux,
+}
+
+impl KeyPlatform {
+    /// The platform this build runs on.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub const fn current() -> Self {
+        if cfg!(any(target_os = "macos", target_os = "ios")) { return Self::Mac; }
+        if cfg!(target_os = "windows") { return Self::Windows; }
+        Self::Linux
+    }
+
+    /// The platform the browser runs on: `Mac` when `navigator.platform` names an Apple
+    /// device (as the browser's own shortcuts do), else `Linux`.
+    #[cfg(target_arch = "wasm32")]
+    pub fn current() -> Self {
+        static PLATFORM: std::sync::OnceLock<KeyPlatform> = std::sync::OnceLock::new();
+        *PLATFORM.get_or_init(|| {
+            let platform = js_sys::Reflect::get(&js_sys::global(), &"navigator".into())
+                .and_then(|navigator| js_sys::Reflect::get(&navigator, &"platform".into()))
+                .ok().and_then(|p| p.as_string()).unwrap_or_default();
+            if ["Mac", "iPod", "iPhone", "iPad"].iter().any(|apple| platform.contains(apple)) { Self::Mac } else { Self::Linux }
+        })
+    }
+
+    fn mac(self) -> bool { matches!(self, Self::Mac) }
+}
+
 /// The modifiers held with a key. `shift`, `alt`, `ctrl` and `logo` are keys; `cmd` is the
 /// platform's primary shortcut modifier, reported alongside its key: ⌘ on macOS (with `logo`)
 /// and Ctrl elsewhere (with `ctrl`), so Ctrl+W on Windows is `{ cmd, ctrl }`. A test of
@@ -21,40 +69,44 @@ pub struct Mods {
 impl Mods {
     /// Whether the platform's primary shortcut modifier is held: `cmd`.
     pub fn primary(self) -> bool { self.cmd }
-
-    /// Whether `self` holds the primary modifier and no other but Shift, or none at all (a
-    /// script's `Key::Command`): ⌘ alone on macOS, Ctrl alone elsewhere. For the edit commands a
-    /// text field takes (copy, paste, undo), which another modifier turns into an app's chord.
-    #[doc(hidden)]
-    pub fn primary_alone(self) -> bool {
-        let bare = self.cmd && !self.ctrl && !self.logo;
-        let (ctrl, logo) = if bare || cfg!(target_arch = "wasm32") {
-            (self.ctrl, self.logo)
-        } else if cfg!(target_os = "macos") {
-            (self.ctrl, self.logo || self.cmd)
-        } else {
-            (self.ctrl || self.cmd, self.logo)
-        };
-        !self.alt && if is_apple_key_platform() { !ctrl } else { !logo }
-    }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-const fn is_apple_key_platform() -> bool {
-    cfg!(any(target_os = "macos", target_os = "ios"))
+/// `bits` with the modifiers that are one key on `platform` merged: Ctrl into the primary
+/// off macOS, the logo key into it on macOS.
+#[doc(hidden)]
+pub fn fold(bits: u8, platform: KeyPlatform) -> u8 {
+    let same = if platform.mac() { SUPER } else { CTRL };
+    if bits & same != 0 { bits & !same | PRIMARY } else { bits }
 }
 
-#[cfg(target_arch = "wasm32")]
-fn is_apple_key_platform() -> bool {
-    static APPLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *APPLE.get_or_init(|| {
-        let platform = js_sys::Reflect::get(&js_sys::global(), &"navigator".into())
-            .and_then(|navigator| js_sys::Reflect::get(&navigator, &"platform".into()))
-            .ok()
-            .and_then(|p| p.as_string())
-            .unwrap_or_default();
-        ["Mac", "iPod", "iPhone", "iPad"].iter().any(|apple| platform.contains(apple))
-    })
+/// The keys `m` says are held, as chord bits for `platform`. `cmd` repeats the key this build
+/// reports as primary: ⌘ (`logo`) on macOS, Ctrl elsewhere (iOS too), Ctrl or ⌘ on the web. A `Mods`
+/// with `cmd` and neither key (a script, a test) holds `platform`'s primary.
+#[doc(hidden)]
+pub fn held(m: Mods, platform: KeyPlatform) -> u8 {
+    let bare = m.cmd && !m.ctrl && !m.logo;
+    let (ctrl, logo) = if bare || cfg!(target_arch = "wasm32") {
+        (m.ctrl, m.logo)
+    } else if cfg!(target_os = "macos") {
+        (m.ctrl, m.logo || m.cmd)
+    } else {
+        (m.ctrl || m.cmd, m.logo)
+    };
+    let (ctrl_bit, logo_bit) = if platform.mac() { (CTRL, PRIMARY) } else { (PRIMARY, SUPER) };
+    [(bare, PRIMARY), (ctrl, ctrl_bit), (logo, logo_bit), (m.alt, ALT), (m.shift, SHIFT)]
+        .into_iter().filter(|(on, _)| *on).fold(0, |bits, (_, bit)| bits | bit)
+}
+
+/// Whether `m` holds `platform`'s primary modifier and no other but Shift, or none at all (a
+/// script's `Key::Command`): ⌘ alone on macOS, Ctrl alone elsewhere. For the edit commands a
+/// text field takes (copy, paste, undo), which another modifier turns into an app's chord.
+pub(crate) fn primary_alone_on(m: Mods, platform: KeyPlatform) -> bool {
+    matches!(held(m, platform) & !SHIFT, 0 | PRIMARY)
+}
+
+/// [`primary_alone_on`] for [`KeyPlatform::current`].
+pub(crate) fn primary_alone(m: Mods) -> bool {
+    primary_alone_on(m, KeyPlatform::current())
 }
 
 /// A logical key. More keys may come, so a `match` needs a `_` arm.
@@ -181,7 +233,7 @@ impl KeyEvent {
     #[doc(hidden)]
     pub fn edit_command(&self) -> Option<char> {
         let Key::Command(c) = self.key else { return None };
-        (self.mods.primary_alone() && (c == 'z' || !self.mods.shift)).then_some(c)
+        (primary_alone(self.mods) && (c == 'z' || !self.mods.shift)).then_some(c)
     }
 
     /// Alt+Space off macOS: the window menu's key. It never types a space, and on Windows opens
@@ -214,3 +266,7 @@ impl Drop for KeyEvent {
         if let Key::Text(text) = &mut self.key { text.zeroize(); }
     }
 }
+
+#[cfg(test)]
+#[path = "keys_tests.rs"]
+mod tests;
