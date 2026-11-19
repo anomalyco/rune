@@ -256,6 +256,24 @@ impl super::Device {
         signature.ok_or(crate::DeviceError::Unexpected)
     }
 
+    /// Rune: `value`, read from a fence, unless the device was removed. A removed device's fence
+    /// reads `u64::MAX` (a GPU reset after a timeout, a driver update, a GPU unplugged), which
+    /// wgpu-core would take as every submission finished: each pending work-done callback fired
+    /// as if its work had run, and the device-lost callback never ran. No submission signals
+    /// `u64::MAX`, so that value with a removal reason is the loss, reported as one.
+    fn unless_removed(&self, value: crate::FenceValue) -> Result<crate::FenceValue, crate::DeviceError> {
+        if value != u64::MAX {
+            return Ok(value);
+        }
+        match unsafe { self.raw.GetDeviceRemovedReason() } {
+            Ok(()) => Ok(value),
+            Err(error) => {
+                log::error!("The D3D12 device was removed: {error}");
+                Err(crate::DeviceError::Lost)
+            }
+        }
+    }
+
     // Blocks until the dedicated present queue is finished with all of its work.
     //
     // Once this method completes, the surface is able to be resized or deleted.
@@ -2356,7 +2374,7 @@ impl crate::Device for super::Device {
         &self,
         fence: &super::Fence,
     ) -> Result<crate::FenceValue, crate::DeviceError> {
-        Ok(unsafe { fence.raw.GetCompletedValue() })
+        self.unless_removed(unsafe { fence.raw.GetCompletedValue() })
     }
     unsafe fn wait(
         &self,
@@ -2367,7 +2385,7 @@ impl crate::Device for super::Device {
         let timeout = timeout.unwrap_or(Duration::MAX);
 
         // We first check if the fence has already reached the value we're waiting for.
-        let mut fence_value = unsafe { fence.raw.GetCompletedValue() };
+        let mut fence_value = self.unless_removed(unsafe { fence.raw.GetCompletedValue() })?;
         if fence_value >= value {
             return Ok(true);
         }
@@ -2429,7 +2447,10 @@ impl crate::Device for super::Device {
                 }
             };
 
-            fence_value = unsafe { fence.raw.GetCompletedValue() };
+            fence_value = match self.unless_removed(unsafe { fence.raw.GetCompletedValue() }) {
+                Ok(value) => value,
+                Err(error) => break Err(error),
+            };
             log::trace!("Wait complete! Fence actual value: {fence_value}");
 
             if fence_value >= value {
