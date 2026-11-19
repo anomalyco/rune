@@ -444,6 +444,8 @@ fn completion_worker_preserves_cpu_gpu_overlap() {
             gpu.device.poll(wgpu::PollType::Poll).unwrap();
             match completed.try_recv() {
                 Err(TryRecvError::Empty) => {
+                    #[cfg(target_os = "windows")]
+                    remove_device_for_proof(&gpu.adapter, &gpu.device);
                     let at = gpu.wait(&completed, Duration::from_secs(30));
                     ("overlapped", at.unwrap_or_else(|| panic!("{chunks} submissions planned at {} us never completed", planned.as_micros())))
                 }
@@ -965,4 +967,76 @@ fn rotated_clip_buffers_draw_upright_like_its_poster_on(gpu: Gpu) {
             assert_eq!(colours.len(), 4, "four distinct quadrants: {colours:?}");
         }
     }
+}
+
+/// PROOF ONLY, never merged (rune-proof: device-removal): removes this D3D12 device as a GPU
+/// reset does, and only on WARP, the software adapter: anything else ends the test first.
+#[cfg(target_os = "windows")]
+fn remove_device_for_proof(adapter: &wgpu::Adapter, device: &wgpu::Device) {
+    use ::windows::core::Interface;
+    let info = adapter.get_info();
+    assert!(
+        info.device_type == wgpu::DeviceType::Cpu && info.name.contains("Microsoft Basic Render Driver"),
+        "refusing to remove a device on {:?} ({:?}): proofs remove devices on WARP only",
+        info.name,
+        info.device_type
+    );
+    let hal = unsafe { device.as_hal::<wgpu::hal::api::Dx12>() }.expect("a D3D12 device");
+    let device5: ::windows::Win32::Graphics::Direct3D12::ID3D12Device5 = hal.raw_device().cast().expect("ID3D12Device5");
+    unsafe { device5.RemoveDevice() };
+    eprintln!("proof: ID3D12Device5::RemoveDevice called on {:?}", info.name);
+}
+
+/// PROOF ONLY, never merged: a removed device with work in flight, then its drop: how long
+/// each step takes, and whether the work's callback ever fires.
+#[cfg(target_os = "windows")]
+#[test]
+fn proof_a_removed_device_with_work_in_flight_drops_in_bounded_time() {
+    use std::time::{Duration, Instant};
+    let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+    desc.backends = wgpu::Backends::DX12;
+    let instance = wgpu::Instance::new(desc);
+    let pick = rune_gpu::pick::pick(&instance, None, false).expect("adapter");
+    let (device, queue) = pollster::block_on(pick.adapter.request_device(&Default::default())).expect("device");
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: None,
+        source: wgpu::ShaderSource::Wgsl(
+            "@group(0) @binding(0) var<storage, read_write> r: array<u32>;
+            @compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+                var x = id.x; for (var i = 0u; i < 256u; i++) { x = (x ^ (x >> 13u)) * 1664525u + 1013904223u; } r[id.x] = x; }"
+                .into(),
+        ),
+    });
+    let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor { label: None, layout: None, module: &shader, entry_point: Some("main"), compilation_options: Default::default(), cache: None });
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 65536 * 4, usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false });
+    let bind = device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &pipeline.get_bind_group_layout(0), entries: &[wgpu::BindGroupEntry { binding: 0, resource: buffer.as_entire_binding() }] });
+    let (done, fired) = std::sync::mpsc::channel();
+    for i in 0..8 {
+        let mut encoder = device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &bind, &[]);
+            pass.dispatch_workgroups(1024, 1, 1);
+        }
+        if i == 7 {
+            let done = done.clone();
+            encoder.on_submitted_work_done(move || drop(done.send(Instant::now())));
+        }
+        queue.submit([encoder.finish()]);
+    }
+    remove_device_for_proof(&pick.adapter, &device);
+    let removed_at = Instant::now();
+    let polled = rune_gpu::health::poll(&device, wgpu::PollType::wait_indefinitely());
+    eprintln!("proof: poll(wait_indefinitely) after the removal: {polled:?} in {} us", removed_at.elapsed().as_micros());
+    let raw = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| device.poll(wgpu::PollType::Wait { submission_index: None, timeout: Some(Duration::from_secs(2)) }))).map_err(|_| "panicked");
+    eprintln!("proof: wgpu's own poll(Wait, 2 s): {raw:?} at {} us", removed_at.elapsed().as_micros());
+    eprintln!("proof: work-done callback before the drop: {:?}", fired.try_recv().ok().map(|at| (at - removed_at).as_micros()));
+    let t = Instant::now();
+    drop((bind, buffer, pipeline, shader));
+    drop(queue);
+    eprintln!("proof: queue dropped in {} us; callback after: {:?}", t.elapsed().as_micros(), fired.try_recv().ok().map(|at| (at - removed_at).as_micros()));
+    let t = Instant::now();
+    drop(device);
+    eprintln!("proof: device dropped in {} us; {} us after the removal", t.elapsed().as_micros(), removed_at.elapsed().as_micros());
 }
