@@ -188,3 +188,62 @@ fn a_second_configure_replaces_the_size_nobody_read() {
     assert!(state.closed());
     assert_eq!(state.take_size(), None);
 }
+
+#[test]
+fn keyboard_focus_emits_focus_edges_and_releases_on_seat_loss_or_other_surface() {
+    use super::keyboard::{FocusEffect, FocusEvent, FocusState, step};
+    let mut state = FocusState::default();
+    assert!(step(&mut state, FocusEvent::LeaveOurs).is_empty(), "leave while unfocused is a no-op");
+    assert_eq!(
+        step(&mut state, FocusEvent::EnterOurs).into_iter().collect::<Vec<_>>(),
+        [FocusEffect::Focus(true)]
+    );
+    assert!(step(&mut state, FocusEvent::EnterOurs).is_empty(), "duplicate enter emits nothing");
+    assert_eq!(
+        step(&mut state, FocusEvent::EnterOther).into_iter().collect::<Vec<_>>(),
+        [FocusEffect::Focus(false)],
+        "entering another surface loses focus on ours"
+    );
+    assert_eq!(
+        step(&mut state, FocusEvent::EnterOurs).into_iter().collect::<Vec<_>>(),
+        [FocusEffect::Focus(true)]
+    );
+    assert_eq!(
+        step(&mut state, FocusEvent::KeyboardGone).into_iter().collect::<Vec<_>>(),
+        [FocusEffect::Focus(false)],
+        "seat losing keyboard capability notifies focus loss"
+    );
+    assert!(step(&mut state, FocusEvent::LeaveOurs).is_empty());
+}
+
+#[test]
+fn layer_shell_key_translation_handles_ctrl_modifiers_space_and_non_ascii_layouts() {
+    use super::keyboard::{can_request_keys, key_event_from, supports_keys};
+    use crate::{Key, KeyPolicy, Mods, PhysicalKeyCode};
+
+    let ctrl = Mods { ctrl: true, cmd: true, ..Default::default() };
+    // Holding Ctrl and pressing Shift/Alt yields utf32 == 0 -> must return None, never Command('\0').
+    assert_eq!(key_event_from(None, 0, String::new(), ctrl, Some(PhysicalKeyCode::ShiftLeft)), None);
+    // Ctrl+Space stays text space, matching window/keys.rs.
+    assert_eq!(
+        key_event_from(None, ' ' as u32, " ".into(), ctrl, Some(PhysicalKeyCode::Space)).map(|e| e.key.clone()),
+        Some(Key::Text(" ".into()))
+    );
+    // Ctrl+V on Russian layout ('м' on KeyV) maps to US Command('v'), matching window/keys.rs.
+    assert_eq!(
+        key_event_from(None, 'м' as u32, "м".into(), ctrl, Some(PhysicalKeyCode::KeyV)).map(|e| e.key.clone()),
+        Some(Key::Command('v'))
+    );
+    // Plain Ctrl+C maps to Command('c').
+    assert_eq!(
+        key_event_from(None, 'C' as u32, "C".into(), ctrl, Some(PhysicalKeyCode::KeyC)).map(|e| e.key.clone()),
+        Some(Key::Command('c'))
+    );
+    // KeyPolicy::None must never report or request keyboard interactivity even with a seat.
+    assert!(!can_request_keys(KeyPolicy::None, 4));
+    assert!(!supports_keys(KeyPolicy::None, 4, true));
+    assert!(can_request_keys(KeyPolicy::OnDemand, 4));
+    assert!(supports_keys(KeyPolicy::OnDemand, 4, true));
+    assert!(!supports_keys(KeyPolicy::OnDemand, 3, true));
+    assert!(!supports_keys(KeyPolicy::OnDemand, 4, false));
+}

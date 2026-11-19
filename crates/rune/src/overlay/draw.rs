@@ -41,6 +41,14 @@ impl OverlayCore {
                 if down { app.pointer_down(x, y); } else { app.pointer_up(x, y); }
             },
             Input::Secondary(down) => if let Some((x, y)) = app.rt().pointer() { if down { app.rt_mut().secondary_down(x, y) } else { app.secondary_up(x, y) } },
+            Input::Focus(focused) => {
+                app.window_focus(focused);
+                app.rt_mut().ignore_minimize("an overlay");
+                if matches!(app.rt_mut().shell_request.take(), Some(crate::el::Shell::Close)) {
+                    self.hide(app);
+                    return;
+                }
+            }
             Input::Key(key) => app.rt_mut().key(key),
             Input::KeyUp(key) => {
                 self.dirty |= app.key_up(key);

@@ -139,6 +139,111 @@ pub(crate) mod readiness {
     }
 }
 
+/// Layer-shell keyboard focus transitions, persisted modifier masks, command-chord translation,
+/// and `KeyPolicy` capability checks, kept cross-platform so they compile and run tests on every
+/// host.
+pub(crate) mod keyboard {
+    use crate::machine::Effects;
+
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub(crate) enum FocusState {
+        #[default]
+        Unfocused,
+        Focused,
+    }
+
+    impl FocusState {
+        #[cfg_attr(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))), allow(dead_code))]
+        pub(crate) fn focused(self) -> bool { matches!(self, FocusState::Focused) }
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(crate) enum FocusEvent {
+        EnterOurs,
+        EnterOther,
+        LeaveOurs,
+        KeyboardGone,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(crate) enum FocusEffect {
+        Focus(bool),
+    }
+
+    /// Transitions keyboard focus and emits `Focus(true)` / `Focus(false)` only on real edges.
+    pub(crate) fn step(state: &mut FocusState, event: FocusEvent) -> Effects<FocusEffect> {
+        match (*state, event) {
+            (FocusState::Unfocused, FocusEvent::EnterOurs) => {
+                *state = FocusState::Focused;
+                Effects::one(FocusEffect::Focus(true))
+            }
+            (FocusState::Focused, FocusEvent::EnterOther | FocusEvent::LeaveOurs | FocusEvent::KeyboardGone) => {
+                *state = FocusState::Unfocused;
+                Effects::one(FocusEffect::Focus(false))
+            }
+            _ => Effects::none(),
+        }
+    }
+
+    /// Last modifier mask sent by `wl_keyboard.modifiers`, reapplied whenever a new `keymap`
+    /// replaces the XKB state (e.g. layout switch or `Modifiers` arriving before `Keymap`).
+    #[cfg_attr(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))), allow(dead_code))]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(crate) struct ModState {
+        pub(crate) depressed: u32,
+        pub(crate) latched: u32,
+        pub(crate) locked: u32,
+        pub(crate) group: u32,
+    }
+
+    /// Translates an XKB key press into Rune's logical `KeyEvent`, matching `window/keys.rs`:
+    /// ignores NUL/control characters under `Ctrl` (such as pressing Shift while holding Ctrl),
+    /// keeps `Ctrl+Space` as `Key::Text(" ")`, and maps non-ASCII layout chords (such as Russian
+    /// `Ctrl+М`) through `us_char` to their US physical command key (`Command('v')`).
+    pub(crate) fn key_event_from(
+        named: Option<crate::Key>,
+        utf32: u32,
+        text: String,
+        mods: crate::Mods,
+        physical: Option<crate::PhysicalKeyCode>,
+    ) -> Option<crate::KeyEvent> {
+        let key = match named {
+            Some(key) => key,
+            None if mods.cmd => {
+                let ch = char::from_u32(utf32).filter(|c| !c.is_control())?;
+                if ch == ' ' {
+                    crate::Key::Text(" ".to_owned())
+                } else if !ch.is_ascii()
+                    && let Some(us) = physical.and_then(crate::shortcuts::us_char)
+                {
+                    crate::Key::Command(us)
+                } else {
+                    crate::Key::Command(ch.to_ascii_lowercase())
+                }
+            }
+            None => {
+                if !text.is_empty() && !text.chars().any(char::is_control) {
+                    crate::Key::Text(text)
+                } else {
+                    return None;
+                }
+            }
+        };
+        Some(crate::KeyEvent { key, mods })
+    }
+
+    /// Whether a layer-shell overlay with `policy` may request keyboard interactivity on
+    /// `zwlr_layer_surface_v1` `layer_version`.
+    pub(crate) fn can_request_keys(policy: crate::KeyPolicy, layer_version: u32) -> bool {
+        policy == crate::KeyPolicy::OnDemand && layer_version >= 4
+    }
+
+    /// Whether a layer-shell overlay reports `nonactivating_keys` support.
+    pub(crate) fn supports_keys(policy: crate::KeyPolicy, layer_version: u32, has_seat: bool) -> bool {
+        can_request_keys(policy, layer_version) && has_seat
+    }
+}
+
 #[cfg(test)]
 #[path = "layer_shell_machine_tests.rs"]
 mod tests;
