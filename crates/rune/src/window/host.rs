@@ -26,6 +26,7 @@ pub(in crate::window) mod create;
 pub(in crate::window) mod draw;
 pub(in crate::window) mod events;
 pub(in crate::window) mod lifecycle;
+mod render;
 pub(in crate::window) mod shell_requests;
 pub(in crate::window) mod stepping;
 
