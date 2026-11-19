@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use crate::el::Tx;
 
-use super::Overlay;
+use super::OverlayCore;
 
 pub(super) type Update<T> = Box<dyn FnOnce(&mut T, &mut Tx) -> bool + Send>;
 
@@ -17,7 +17,8 @@ pub(super) enum Visibility {
     Hide(Duration),
 }
 
-pub(super) struct Requests<T> {
+#[derive(Default)]
+pub(super) struct Requests {
     pub input: Option<crate::OverlayInput>,
     pub follow_pointer: Option<bool>,
     pub placement: Option<Option<crate::OverlayPlacement>>,
@@ -36,25 +37,15 @@ pub(super) struct Requests<T> {
     pub xwayland_input: Option<bool>,
     /// The `setup` waker fired.
     pub woken: bool,
-    pub updates: Vec<Update<T>>,
-}
-
-impl<T> Default for Requests<T> {
-    fn default() -> Self {
-        Requests {
-            input: None, follow_pointer: None, placement: None, display: None, request_keys: false, refollow: false, visibility: None, edge: None,
-            margin: None, align: None, size: None, macos_level: None, exclude_from_capture: None, xwayland_input: None, woken: false, updates: Vec::new(),
-        }
-    }
 }
 
 #[cfg(test)]
-impl<T> Requests<T> {
+impl Requests {
     /// Whether the latest request shows (`Some(true)`) or hides the overlay.
     pub fn visible(&self) -> Option<bool> { self.visibility.map(|v| matches!(v, Visibility::Show(_))) }
 }
 
-impl<T: 'static> Overlay<T> {
+impl OverlayCore {
     /// Keeps the window out of screen recordings, or lets recorders see it again. A window
     /// made later (Wayland recreates on hide) starts from the same option.
     pub(super) fn set_capture_exclusion(&mut self, exclude: bool) {

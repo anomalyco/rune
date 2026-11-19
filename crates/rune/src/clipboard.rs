@@ -15,7 +15,9 @@ use std::time::Duration;
 use crate::time::Instant;
 use zeroize::Zeroizing;
 use crate::machine::Seq;
-use crate::{Runtime, Waker};
+#[cfg(any(test, target_arch = "wasm32"))]
+use crate::Runtime;
+use crate::Waker;
 
 mod content;
 mod html;
@@ -162,8 +164,6 @@ impl Default for Client {
 }
 impl Client {
     pub fn connect(&mut self, wake: Waker) { self.wake = wake; }
-    #[inline(always)]
-    pub fn read<S: 'static>(&self, rt: &Runtime<S>) { self.read_core(rt.core()); }
     pub(crate) fn read_core(&self, rt: &crate::runtime::RuntimeCore) {
         let purpose = Purpose::paste(rt, rt.paste_target());
         if let Some(m) = &rt.clipboard {
@@ -172,6 +172,7 @@ impl Client {
         }
         self.read_for(purpose);
     }
+    #[cfg(target_arch = "wasm32")]
     #[inline(always)]
     pub fn receive<S: 'static>(&self, rt: &mut Runtime<S>) -> bool { self.receive_core(rt.core_mut()) }
     pub(crate) fn receive_core(&self, rt: &mut crate::runtime::RuntimeCore) -> bool {

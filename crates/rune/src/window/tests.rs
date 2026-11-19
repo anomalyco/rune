@@ -218,7 +218,7 @@ struct CompHost {
     comp_animates: std::rc::Rc<std::cell::Cell<bool>>,
     frames: u32,
     /// Called where `draw` calls it.
-    reports: crate::frame::encoded::FrameReports<u32>,
+    reports: crate::frame::encoded::FrameReports,
 }
 
 impl CompHost {
@@ -536,7 +536,7 @@ fn a_shortcut_pressed_before_launch_runs_before_the_updates_queued_after_it() {
     std::thread::spawn(move || handle.update(|s: &mut S, _| { let seen = s.len(); s.push(format!("saw {seen}")); })).join().unwrap();
     // As Host::resume.
     let mut state = S::new();
-    events::startup_updates(&app.shared, &shortcuts, |f| { f(&mut state, &mut Tx::default()); });
+    host::events::startup_updates(&app.shared, &shortcuts, |f| { f(&mut state, &mut Tx::default()); });
     assert_eq!(state, ["pressed", "saw 1"], "the press ran first, in the startup batch");
     assert!(app.shared.take().updates.is_empty(), "nothing waits for a later drain");
 }
@@ -651,7 +651,7 @@ fn a_destroyed_device_that_has_not_reported_its_loss_is_not_configured() {
 /// frame must not ask again forever.
 #[test]
 fn surface_replacements_give_up_after_a_bounded_number_of_tries() {
-    use super::win::{SurfaceStep, SURFACE_TRIES};
+    use super::surface::win::{SurfaceStep, SURFACE_TRIES};
     let now = Instant::now();
     let mut retries = SurfaceRetries::default();
     let mut waits = Vec::new();
@@ -680,7 +680,7 @@ fn surface_replacements_give_up_after_a_bounded_number_of_tries() {
 /// calls `worked`.
 #[test]
 fn a_surface_lost_after_every_replacement_gives_up_after_the_tries() {
-    use super::win::{SurfaceStep, SURFACE_TRIES};
+    use super::surface::win::{SurfaceStep, SURFACE_TRIES};
     let mut retries = SurfaceRetries::default();
     let mut replaced = 0;
     while retries.attempt() == SurfaceStep::Replace {

@@ -265,12 +265,7 @@ impl Adapter {
     /// Runs what the adapter heard on `rt`, then sends the tree's changes. Returns whether
     /// actions were queued, which need a frame. `name` names the root when the runtime has no
     /// window title.
-    #[inline(always)]
-    pub(crate) fn service<S: 'static>(&mut self, rt: &mut Runtime<S>, name: &str) -> bool {
-        self.service_core(rt.core_mut(), name)
-    }
-
-    fn service_core(&mut self, rt: &mut crate::runtime::RuntimeCore, name: &str) -> bool {
+    pub(crate) fn service_core(&mut self, rt: &mut crate::runtime::RuntimeCore, name: &str) -> bool {
         let queued = self.receive_core(rt, name);
         self.sync_core(rt);
         queued
@@ -279,12 +274,7 @@ impl Adapter {
     /// Runs what the adapter heard on `rt`: activation, deactivation and actions. True when
     /// an action was queued for the next frame. Windows hosts call it from the wake, not from
     /// `about_to_wait`, where a redraw request would wait for the loop's next wake.
-    #[inline(always)]
-    pub(crate) fn receive<S: 'static>(&mut self, rt: &mut Runtime<S>, name: &str) -> bool {
-        self.receive_core(rt.core_mut(), name)
-    }
-
-    fn receive_core(&mut self, rt: &mut crate::runtime::RuntimeCore, name: &str) -> bool {
+    pub(crate) fn receive_core(&mut self, rt: &mut crate::runtime::RuntimeCore, name: &str) -> bool {
         self.link.receive(rt, name)
     }
 
@@ -296,12 +286,7 @@ impl Adapter {
     }
 
     /// Sends the tree's changes since the last update, when a client listens.
-    #[inline(always)]
-    pub(crate) fn sync<S: 'static>(&mut self, rt: &mut Runtime<S>) {
-        self.sync_core(rt.core_mut());
-    }
-
-    fn sync_core(&mut self, rt: &mut crate::runtime::RuntimeCore) {
+    pub(crate) fn sync_core(&mut self, rt: &mut crate::runtime::RuntimeCore) {
         if let Some(update) = self.link.update(rt) {
             self.send(update);
             #[cfg(all(feature = "accessibility", target_os = "windows"))]

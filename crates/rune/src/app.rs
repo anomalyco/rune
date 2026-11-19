@@ -326,7 +326,7 @@ impl<S: 'static> App<S> {
     /// `OverlaySpec::options` selects displays, placement and native input policy.
     /// Uses this app's fonts. Headless runs don't draw overlays.
     pub fn overlay<T: 'static>(&mut self, spec: impl Into<crate::ConfiguredOverlay<T>>, state: T) -> crate::overlay::OverlayHandle<T> {
-        let (overlay, handle) = crate::overlay::Overlay::new(spec.into(), state, &self.spec);
+        let (overlay, handle) = crate::overlay::OverlayHost::new(spec.into(), state, &self.spec);
         self.overlays.push(Box::new(overlay));
         handle
     }
@@ -795,7 +795,7 @@ impl<S: 'static> AppHandle<S> {
 mod config;
 pub(crate) use config::RuntimeConfig;
 mod requests;
-pub(crate) use requests::{window_request_order, Activation, Requests, Shared, WindowRequest};
+pub(crate) use requests::{window_request_order, Activation, Requests, Shared, WindowRequest, WindowRequests};
 
 #[cfg(test)]
 mod tests {

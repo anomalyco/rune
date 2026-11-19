@@ -29,6 +29,33 @@ pub(crate) enum Activation {
     Minimize,
 }
 
+/// The non-generic part of [`Requests<S>`], drained by the window host.
+#[derive(Default)]
+pub(crate) struct WindowRequests {
+    pub window: Option<WindowRequest>,
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub dock: Option<bool>,
+    /// `AppHandle::focus` or `AppHandle::minimize`; last-wins (`cancel_minimize`).
+    pub activation: Option<Activation>,
+    pub position: Option<(i32, i32)>,
+    pub place: Option<crate::windows::PlaceRequest>,
+    /// `AppHandle::quit` or `AppHandle::relaunch`, and what follows the exit.
+    pub quit: Option<crate::quit::After>,
+    /// `AppHandle::wake` asked for `poll`.
+    pub woken: bool,
+}
+
+impl WindowRequests {
+    fn asks_window(&self) -> bool {
+        self.window.is_some() || self.activation.is_some() || self.position.is_some() || self.place.is_some()
+    }
+
+    /// Nothing but updates: no wake for `poll`, no window, focus or geometry request.
+    pub(crate) fn only_updates(&self) -> bool {
+        !self.woken && !self.asks_window()
+    }
+}
+
 pub(crate) struct Requests<S> {
     last_cancel: Option<NonZeroU64>,
     pub window: Option<WindowRequest>,
@@ -59,8 +86,21 @@ impl<S> Requests<S> {
     }
 
     /// Nothing but updates: no wake for `poll`, no window, focus or geometry request.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn only_updates(&self) -> bool {
         !self.woken && !self.asks_window()
+    }
+
+    pub(crate) fn into_window(self) -> WindowRequests {
+        WindowRequests {
+            window: self.window,
+            dock: self.dock,
+            activation: self.activation,
+            position: self.position,
+            place: self.place,
+            quit: self.quit,
+            woken: self.woken,
+        }
     }
 }
 
@@ -140,7 +180,7 @@ impl<S> Shared<S> {
     }
 
     /// Drain a native window's updates, running `after` (menu callbacks) after each update.
-    pub(crate) fn drain_window(&self, rt: &mut crate::runtime::Runtime<S>, mut after: impl FnMut(bool)) -> Requests<S>
+    pub(crate) fn drain_window(&self, rt: &mut crate::runtime::Runtime<S>, mut after: impl FnMut(bool)) -> WindowRequests
     where S: 'static {
         // Only these updates’ minimizes, and only those that survive their pick callbacks, are
         // ordered here; a minimize a handler or nested callback latched is already in the machine.
@@ -151,7 +191,7 @@ impl<S> Shared<S> {
             after(changed);
         });
         if minimize > batch.last_cancel { rt.minimize_step(crate::window::MinimizeEvent::Asked); }
-        batch
+        batch.into_window()
     }
 
     /// Queues `f` for the next `take`, as `AppHandle::update_if` does, without waking the loop.

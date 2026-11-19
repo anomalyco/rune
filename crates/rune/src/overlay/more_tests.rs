@@ -50,7 +50,7 @@ fn overlay_input_switch_waits_for_owned_drag_release() {
     overlay.rt.pointer_down(10.0, 10.0);
     handle.set_input(OverlayInput::Regions);
     handle.set_input(OverlayInput::None);
-    overlay.pending_input = overlay.shared.requests.lock().unwrap().input.take();
+    overlay.core.pending_input = overlay.shared.core.requests.lock().unwrap().input.take();
     overlay.apply_input();
     assert_eq!(overlay.options.input, OverlayInput::All, "an owned gesture retains its old native mode");
     overlay.rt.pointer_move(150.0, 150.0);
@@ -214,7 +214,7 @@ fn overlay_drag_past_the_threshold_with_the_button_down_starts_an_os_drag() {
 
 #[test]
 fn handle_requests_collapse_and_updates_keep_their_order() {
-    let shared = Arc::new(Shared::<u32> { native: Mutex::default(), requests: Mutex::default(), availability: AtomicU8::new(0), failure: Mutex::default(), surface: Mutex::default(), wake: Mutex::new(None), stats: Arc::default() });
+    let shared = Arc::new(Shared::<u32>::default());
     let handle = OverlayHandle { shared: shared.clone() };
     assert_eq!(handle.availability(), Availability::Unknown);
     handle.show();
@@ -224,16 +224,17 @@ fn handle_requests_collapse_and_updates_keep_their_order() {
     handle.resize((300.0, 80.0));
     handle.update(|n, _| *n *= 3);
     handle.hide();
-    let q = std::mem::take(&mut *shared.requests.lock().unwrap());
+    let q = std::mem::take(&mut *shared.core.requests.lock().unwrap());
+    let updates = std::mem::take(&mut *shared.updates.lock().unwrap());
     assert_eq!(q.visible(), Some(false), "the latest show/hide wins");
     assert_eq!((q.edge, q.margin), (Some(ScreenEdge::Bottom), Some(24.0)));
     assert_eq!((q.align, q.size), (Some((Align::End, 12.0)), Some((300.0, 80.0))));
     let mut n = 0;
-    for f in q.updates {
+    for f in updates {
         f(&mut n, &mut Tx::default());
     }
     assert_eq!(n, 3);
-    shared.availability.store(2, Ordering::Release);
+    shared.core.availability.store(2, Ordering::Release);
     assert_eq!(handle.availability(), Availability::Unavailable);
 }
 
@@ -250,7 +251,7 @@ fn hidden_overlay_update_wakes_once_without_a_surface() {
     // The runtime's virtual clock makes scheduling exact; the host maps it to wall time.
     overlay.rt.wall_start = None;
     handle.update(|_, tx| tx.wake_after(Duration::from_millis(250)));
-    let updates = std::mem::take(&mut overlay.shared.requests.lock().unwrap().updates);
+    let updates = std::mem::take(&mut *overlay.shared.updates.lock().unwrap());
     overlay.apply_wake(false, updates);
     assert_eq!(overlay.rt.state, [0.0]);
     assert_eq!(overlay.rt.wake_deadline(), Some(0.25));
@@ -295,8 +296,9 @@ fn a_hidden_overlay_builds_nothing_until_it_shows() {
     let (builds, commits) = (BUILDS.get(), overlay.rt.stats.commits);
     for k in 1..=10 {
         handle.update(|n, tx| { *n += 1; tx.wake_after(Duration::from_millis(50)); });
-        let requests = std::mem::take(&mut *overlay.shared.requests.lock().unwrap());
-        overlay.apply_wake(requests.woken, requests.updates);
+        let requests = std::mem::take(&mut *overlay.shared.core.requests.lock().unwrap());
+        let updates = std::mem::take(&mut *overlay.shared.updates.lock().unwrap());
+        overlay.apply_wake(requests.woken, updates);
         // Its timer comes due before the next update.
         overlay.rt.wall_start = Some(Instant::now() - k * Duration::from_millis(100));
         overlay.wake_due(Instant::now());
@@ -326,8 +328,9 @@ fn updates_that_change_nothing_leave_an_overlay_alone() {
     overlay.rt.frame(0.0);
     let (builds, commits) = (BUILDS.get(), overlay.rt.stats.commits);
     let apply = |overlay: &mut Overlay<u32>| {
-        let requests = std::mem::take(&mut *overlay.shared.requests.lock().unwrap());
-        overlay.apply_wake(requests.woken, requests.updates);
+        let requests = std::mem::take(&mut *overlay.shared.core.requests.lock().unwrap());
+        let updates = std::mem::take(&mut *overlay.shared.updates.lock().unwrap());
+        overlay.apply_wake(requests.woken, updates);
     };
     for visible in [false, true] {
         overlay.presence = if visible { Presence::Shown { occluded: false } } else { Presence::default() };
@@ -477,7 +480,7 @@ fn overlay_occluded_runs_due_timers_without_frames() {
     overlay.dirty = false;
     overlay.wake_due(Instant::now());
     assert_eq!(overlay.rt.state.polls, 2, "the due timer runs without waiting for a drawable");
-    assert_eq!(handle.shared.requests.lock().unwrap().visible(), Some(false), "and its hide() goes through");
+    assert_eq!(handle.shared.core.requests.lock().unwrap().visible(), Some(false), "and its hide() goes through");
     assert_eq!(overlay.wake_deadline(), None);
 
     // Each missed frame waits, longer while it stays occluded; a timeout waits for the
@@ -603,7 +606,10 @@ fn a_live_edit_patch_wakes_a_hidden_overlay_and_its_next_frame_rebuilds_the_view
     let hub: &'static crate::hot::Hub = Box::leak(Box::default());
     overlay.rt.hot.as_mut().expect("connect attaches the overlay to live edits").move_to(hub);
     while rx.try_recv().is_ok() {}
-    let take = |overlay: &mut Overlay<u8>| std::mem::take(&mut *overlay.shared.requests.lock().unwrap());
+    let take = |overlay: &mut Overlay<u8>| (
+        std::mem::take(&mut *overlay.shared.core.requests.lock().unwrap()),
+        std::mem::take(&mut *overlay.shared.updates.lock().unwrap()),
+    );
     let _ = take(&mut overlay);
     overlay.rt.frame(0.0);
     let built = BUILDS.get();
@@ -612,9 +618,9 @@ fn a_live_edit_patch_wakes_a_hidden_overlay_and_its_next_frame_rebuilds_the_view
     assert_eq!(BUILDS.get(), built, "an unchanged memo is reused");
     hub.patched();
     rx.recv_timeout(Duration::from_secs(5)).expect("the patch wakes the event loop");
-    let requests = take(&mut overlay);
+    let (requests, updates) = take(&mut overlay);
     assert!(requests.woken);
-    overlay.apply_wake(requests.woken, requests.updates);
+    overlay.apply_wake(requests.woken, updates);
     assert!(overlay.dirty && overlay.rt.needs_commit(), "hidden, the patch waits for the frame that shows it");
     overlay.presence = Presence::Shown { occluded: false };
     overlay.advance();
@@ -646,7 +652,10 @@ fn overlay_setup_runs_once_with_a_waker_that_redraws_the_overlay() {
     overlay.connect(wake, Arc::new(|| {}), Arc::new(|| {}), Rc::default());
     assert_eq!(overlay.rt.state.setups, 1, "setup runs once");
     while rx.try_recv().is_ok() {}
-    let take = |overlay: &mut Overlay<State>| std::mem::take(&mut *overlay.shared.requests.lock().unwrap());
+    let take = |overlay: &mut Overlay<State>| (
+        std::mem::take(&mut *overlay.shared.core.requests.lock().unwrap()),
+        std::mem::take(&mut *overlay.shared.updates.lock().unwrap()),
+    );
     let _ = take(&mut overlay);
 
     // Hidden: a background decode wakes the loop, and the overlay polls; the view waits
@@ -656,9 +665,9 @@ fn overlay_setup_runs_once_with_a_waker_that_redraws_the_overlay() {
     let state = &mut overlay.rt.state;
     state.icon = Some(state.cache.as_ref().unwrap().rgba(1, 1, vec![20, 40, 60, 255]));
     rx.recv_timeout(Duration::from_secs(5)).expect("the decode wakes the event loop");
-    let requests = take(&mut overlay);
+    let (requests, updates) = take(&mut overlay);
     assert!(requests.woken);
-    overlay.apply_wake(requests.woken, requests.updates);
+    overlay.apply_wake(requests.woken, updates);
     assert!(!overlay.rt.state.saw_icon.get(), "a hidden overlay's view doesn't run");
     assert!(overlay.dirty && overlay.rt.needs_commit());
     let polls = overlay.rt.state.polls;
@@ -677,8 +686,8 @@ fn overlay_setup_runs_once_with_a_waker_that_redraws_the_overlay() {
     let state = &mut overlay.rt.state;
     state.icon = Some(state.cache.as_ref().unwrap().rgba(1, 1, vec![60, 40, 20, 255]));
     rx.recv_timeout(Duration::from_secs(5)).expect("the decode wakes the event loop");
-    let requests = take(&mut overlay);
-    overlay.apply_wake(requests.woken, requests.updates);
+    let (requests, updates) = take(&mut overlay);
+    overlay.apply_wake(requests.woken, updates);
     assert!(overlay.dirty, "a shown overlay draws a frame");
     assert_eq!(overlay.rt.state.polls, polls_shown, "the drawn frame owns the poll");
     overlay.advance(); // the drawn frame
@@ -695,7 +704,7 @@ fn overlay_setup_runs_once_with_a_waker_that_redraws_the_overlay() {
     rx.recv_timeout(Duration::from_secs(5)).expect("the decodes wake the event loop");
     std::thread::sleep(Duration::from_millis(100));
     assert_eq!(loop_wakes.load(Ordering::SeqCst), before + 1, "one loop wake until the overlay takes it");
-    assert!(take(&mut overlay).woken);
+    assert!(take(&mut overlay).0.woken);
     assert!(loop_wakes.load(Ordering::SeqCst) >= 2);
 }
 
@@ -732,16 +741,11 @@ fn overlay_compositor_observes_prewarm_and_each_rendered_frame() {
     for (width, more) in [(12.0, true), (20.0, false)] {
         overlay.rt.update(|s, tx| { *s = width; tx.instant(); });
         overlay.rt.frame(1.0 / 60.0);
-        let renderer = &mut overlay.renderer.as_mut().unwrap();
         let mut enc = gpu.device.create_command_encoder(&Default::default());
-        let animating = render_frame(&mut Frame {
-            device: &gpu.device, queue: &gpu.queue, encoder: &mut enc, target: &target.view,
-            format: OFFSCREEN_FORMAT, size: (32, 16), dt: 1.0 / 60.0, update_ms: 0.0,
-            rt: &mut overlay.rt, ui: renderer,
-        }, &mut overlay.compositor);
+        let animating = overlay.render_offscreen(&gpu, &mut enc, &target.view, OFFSCREEN_FORMAT, (32, 16), 1.0 / 60.0);
         assert_eq!(animating, more, "honour compositor-driven animation and stop when it settles");
         target.copy(&mut enc);
-        renderer.submit(&gpu.queue, enc);
+        overlay.renderer.as_mut().unwrap().submit(&gpu.queue, enc);
         let pixels = target.read(&gpu.device);
         assert_eq!(&pixels[4..8], &[255; 4], "draw_ui renders the overlay content");
         assert_eq!(&pixels[(15*32+31)*4..(15*32+32)*4], &[0; 4], "draw_ui preserves the transparent clear");
@@ -842,26 +846,26 @@ fn a_runtime_at_rest_builds_nothing_while_its_compositor_animates() {
     let mut overlay = width_overlay("resting runtime");
     overlay.compositor = Some(Box::new(Spin));
     let start = Instant::now();
-    let (animating, _) = step(&mut overlay.rt, &mut overlay.clock, &overlay.compositor, start, false);
-    let idle = idle_after(&overlay.rt, animating, Some(start + FRAME));
-    assert!(idle && frame::rests(&overlay.rt, idle, false));
+    let (animating, _) = overlay.step_frame(start, false);
+    let idle = idle_after(overlay.rt.core(), animating, Some(start + FRAME));
+    assert!(idle && overlay.rests_now(idle, false));
     let (commits, instances, t) = (overlay.rt.stats.commits, overlay.rt.instances.len(), overlay.rt.t);
-    let (animating, dt) = frame::rest(&mut overlay.rt, &mut overlay.clock, &overlay.compositor, start + FRAME);
+    let (animating, dt) = overlay.rest_frame(start + FRAME);
     assert!(!animating);
     assert!((dt - FRAME.as_secs_f64()).abs() < 1e-6, "the compositor still steps the frame's time: {dt}");
     assert_eq!((overlay.rt.stats.commits, overlay.rt.instances.len()), (commits, instances));
     assert!((overlay.rt.t - t - FRAME.as_secs_f64()).abs() < 1e-6, "a compositor reading `t` sees it move");
-    assert!(!frame::rests(&overlay.rt, false, false), "the runtime asked for the frame");
-    assert!(!frame::rests(&overlay.rt, idle, true), "something marked the overlay dirty");
+    assert!(!overlay.rests_now(false, false), "the runtime asked for the frame");
+    assert!(!overlay.rests_now(idle, true), "something marked the overlay dirty");
     overlay.rt.update(|width, _| *width = 20.0);
-    assert!(!frame::rests(&overlay.rt, idle, false), "state changed");
+    assert!(!overlay.rests_now(idle, false), "state changed");
     overlay.rt.frame(0.0);
     overlay.rt.poll = Some(|_, _, _| false);
-    assert!(!frame::rests(&overlay.rt, idle, false), "a poll runs on every frame drawn");
+    assert!(!overlay.rests_now(idle, false), "a poll runs on every frame drawn");
     overlay.rt.poll = None;
     overlay.rt.update(|_, tx| tx.wake_after(std::time::Duration::from_secs(1)));
     overlay.rt.frame(0.0);
-    assert!(!frame::rests(&overlay.rt, idle, false), "a timer is pending");
+    assert!(!overlay.rests_now(idle, false), "a timer is pending");
 }
 
 #[cfg(target_os = "macos")]
