@@ -459,3 +459,128 @@ fn mouse_button_core_handles_macos_ctrl_click_left_down_mods_and_middle_buttons(
     rt.frame(0.0);
     assert_eq!(rt.state.middle, 1);
 }
+
+#[test]
+fn hide_reset_cancels_drag_commits_ime_releases_keys_and_clears_host_state() {
+    #[derive(Default)]
+    struct S {
+        edit: crate::TextEdit,
+        drag_cancelled: bool,
+        focus_lost: usize,
+    }
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        crate::col().size(200.0, 200.0)
+            .child(el().key("drag").size(100.0, 50.0).focusable(true)
+                .on_drag(|s: &mut S, d: &mut crate::Drag, _| {
+                    if d.cancelled { s.drag_cancelled = true; }
+                })
+                .on_physical_input(|s: &mut S, ev, _| {
+                    if matches!(ev, crate::PhysicalInput::FocusLost) { s.focus_lost += 1; return true; }
+                    false
+                }))
+            .child(crate::text_input(&s.edit, crate::TextStyle::new(14.0, 400.0))
+                .key("field").size(160.0, 40.0).on_edit(|s: &mut S| &mut s.edit))
+    }
+    let mut rt = Runtime::new(S::default(), view, (200.0, 200.0), Env::default());
+    rt.frame(0.0);
+
+    // Focus field and open an IME composition.
+    let (fx, fy) = rt.find("field").unwrap();
+    rt.pointer_down(fx, fy);
+    rt.pointer_up(fx, fy);
+    rt.frame(0.0);
+    ime_core(rt.core_mut(), None, Ime::Preedit("nihon".into(), Some((5, 5)), Vec::new()));
+    rt.frame(0.0);
+    assert_eq!(rt.state.edit.preedit().map(|(s, _)| s), Some("nihon"));
+
+    // Start a drag on "drag" (moves focus there, holds pointer capture).
+    let (dx, dy) = rt.find("drag").unwrap();
+    rt.pointer_move(dx, dy);
+    rt.pointer_down(dx, dy);
+    rt.frame(0.0);
+    assert!(rt.pointer_captured());
+
+    let mut mods = ModifiersState::SHIFT | ModifiersState::CONTROL;
+    let mut control_click = true;
+    hide_reset(rt.core_mut(), &mut mods, &mut control_click);
+    assert!(mods.is_empty() && !control_click);
+    let (reset, _) = ime_sync_state(rt.core_mut());
+    assert!(reset, "finish_composition sets ime_reset for the host");
+    rt.frame(0.0);
+
+    assert!(rt.state.drag_cancelled, "hide cancels active drag with cancelled = true");
+    assert_eq!(rt.state.focus_lost, 1, "hide delivers FocusLost to release held keys");
+    assert!(!rt.pointer_captured());
+    assert_eq!(rt.pointer(), None);
+}
+
+#[test]
+fn pointer_cancel_distinguishes_lost_capture_at_rest_from_active_capture_and_cancel() {
+    #[derive(Default)]
+    struct S { cancelled: usize }
+    fn view(_: &S, _: &mut Cx<S>) -> El {
+        el().key("drag").size(100.0, 100.0)
+            .on_drag(|s: &mut S, d: &mut crate::Drag, _| {
+                if d.cancelled { s.cancelled += 1; }
+            })
+    }
+    let mut rt = Runtime::new(S::default(), view, (100.0, 100.0), Env::default());
+    rt.frame(0.0);
+    rt.pointer_move(50.0, 50.0);
+    rt.frame(0.0);
+
+    // At rest (no capture held, e.g. lostpointercapture after a normal pointerup): no-op, hover preserved.
+    let mut control_click = false;
+    assert!(!pointer_cancel(rt.core_mut(), &mut control_click, true));
+    assert_eq!(rt.pointer(), Some((50.0, 50.0)));
+
+    // With an active drag capture, lostpointercapture cancels the drag and drops pointer.
+    rt.pointer_down(50.0, 50.0);
+    rt.frame(0.0);
+    assert!(rt.pointer_captured());
+    assert!(pointer_cancel(rt.core_mut(), &mut control_click, true));
+    rt.frame(0.0);
+    assert_eq!(rt.state.cancelled, 1);
+    assert!(!rt.pointer_captured() && rt.pointer().is_none());
+
+    // Unconditional pointercancel (only_if_captured = false) ends hover even at rest.
+    rt.pointer_move(40.0, 40.0);
+    rt.frame(0.0);
+    assert!(pointer_cancel(rt.core_mut(), &mut control_click, false));
+    assert_eq!(rt.pointer(), None);
+}
+
+#[test]
+fn ime_sync_state_reset_preserves_mirror_diff_when_empty_field_blurs() {
+    #[derive(Default)]
+    struct S { edit: crate::TextEdit }
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        crate::col().size(200.0, 120.0)
+            .child(el().key("btn").size(100.0, 40.0).focusable(true))
+            .child(crate::text_input(&s.edit, crate::TextStyle::new(14.0, 400.0))
+                .key("field").size(160.0, 40.0).on_edit(|s: &mut S| &mut s.edit))
+    }
+    let mut rt = Runtime::new(S::default(), view, (200.0, 120.0), Env::default());
+    rt.frame(0.0);
+    let mut mirror = crate::runtime::web_runtime::Mirror::default();
+
+    // Focus empty text field and sync mirror.
+    let (fx, fy) = rt.find("field").unwrap();
+    rt.pointer_down(fx, fy);
+    rt.pointer_up(fx, fy);
+    rt.frame(0.0);
+    assert!(rt.core().web_context(&mut mirror));
+    assert!(!mirror.key.is_empty());
+
+    // Blurring the empty field sets ime_reset and leaves focused_input() == None.
+    // web_context must still report a change (key -> "") when mirror.key is not cleared first.
+    let (bx, by) = rt.find("btn").unwrap();
+    rt.pointer_down(bx, by);
+    rt.pointer_up(bx, by);
+    rt.frame(0.0);
+    let (reset, area) = ime_sync_state(rt.core_mut());
+    assert!(area.is_none());
+    let changed = rt.core().web_context(&mut mirror);
+    assert!(changed || reset, "mirror must sync back to empty key so DOM focus returns to canvas");
+    assert!(mirror.key.is_empty());
+}

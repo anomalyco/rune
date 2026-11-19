@@ -250,6 +250,17 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         if (file.type.startsWith('text/') || file.size < 1048576 && !file.type) send({ kind: 'paste', text: await file.text(), html: '', image: false });
     });
     listen(canvas, 'pointerdown', event => event.preventDefault(), { capture: true });
+    // winit's web backend ignores pointercancel for mouse/pen and does not listen to
+    // lostpointercapture; forward non-touch cancellations so held presses and drags never stick.
+    listen(canvas, 'pointercancel', event => {
+        if (event.pointerType !== 'touch') send({ kind: 'pointer_cancel', lost_capture: false });
+    }, { passive: true });
+    listen(canvas, 'lostpointercapture', event => {
+        if (event.pointerType !== 'touch') send({ kind: 'pointer_cancel', lost_capture: true });
+    }, { passive: true });
+    listen(a11y, 'pointerleave', event => {
+        if (event.pointerType !== 'touch' && event.relatedTarget !== canvas) send({ kind: 'leave' });
+    }, { passive: true });
     listen(canvas, 'keydown', event => {
         if (page && !h.focused && SCROLL_KEYS.includes(event.key) && !event.metaKey && !event.ctrlKey) return;
         if (!browserShortcut(event)) event.preventDefault();
@@ -373,6 +384,12 @@ export function sync(h, key, text, base, anchor, focus, secure) {
         if (editing && document.activeElement !== h.field) activate(h);
     }
     h.syncing = false;
+}
+
+// Drops browser composition tracking after Rune finished/cancelled composition (e.g. on blur or hide).
+export function cancelIme(h) {
+    h.composing = false;
+    h.composition = '';
 }
 
 export function syncCopy(h, text) {

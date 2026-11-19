@@ -464,11 +464,43 @@ pub(crate) fn ime_area_window(rt: &RuntimeCore) -> Option<[f32; 4]> {
 }
 
 /// Takes any pending IME reset flag and returns the current IME cursor area in window points.
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub(crate) fn ime_sync_state(rt: &mut RuntimeCore) -> (bool, Option<[f32; 4]>) {
     let reset = std::mem::take(&mut rt.ime_reset);
     let area = ime_area_window(rt);
     (reset, area)
+}
+
+/// Releases held keys, cancels active pointer/drag capture, finishes open IME composition,
+/// and clears host modifier/control-click tracking when a host hides without a blur.
+#[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
+pub(crate) fn hide_reset(
+    rt: &mut RuntimeCore,
+    mods: &mut ModifiersState,
+    control_click: &mut bool,
+) {
+    *mods = ModifiersState::empty();
+    *control_click = false;
+    rt.cancel_pointer();
+    rt.finish_composition();
+    rt.keys_lost();
+}
+
+/// Cancels active pointer/drag/secondary capture on pointer cancel or abnormal capture loss.
+/// When `only_if_captured` is true (e.g. `lostpointercapture`, which also fires after a
+/// normal `pointerup`), does nothing if no pointer capture is currently held, so hover is
+/// preserved. Returns whether anything was cancelled and needs a frame.
+#[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
+pub(crate) fn pointer_cancel(
+    rt: &mut RuntimeCore,
+    control_click: &mut bool,
+    only_if_captured: bool,
+) -> bool {
+    if only_if_captured && !rt.pointer_captured() && !*control_click {
+        return false;
+    }
+    *control_click = false;
+    rt.cancel_pointer();
+    true
 }
 
 /// Synchronizes a window's OS IME allowance, cursor area, and published text with the runtime.

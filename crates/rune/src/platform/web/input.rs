@@ -37,10 +37,14 @@ extern "C" {
     fn sync_wheel(handle: &JsValue, used: bool);
     #[wasm_bindgen(js_name = syncCaret)]
     fn sync_caret(handle: &JsValue, x: f32, y: f32, w: f32, h: f32);
+    #[wasm_bindgen(js_name = cancelIme)]
+    fn cancel_ime(handle: &JsValue);
     #[wasm_bindgen(js_name = syncFamilies)]
     fn sync_families(handle: &JsValue, sans: &str, mono: &str);
     #[wasm_bindgen(js_name = showMenu)]
     fn show_menu(handle: &JsValue, json: &str, x: f32, y: f32, min_width: f32, dark: bool);
+    #[wasm_bindgen(js_name = hideMenu)]
+    fn hide_menu(handle: &JsValue);
 }
 
 /// How the canvas sits in the page.
@@ -128,7 +132,11 @@ impl Drop for Bridge {
 
 impl Running {
     pub(super) fn sync_input(&mut self, focus: bool) {
-        if self.app.rt().web_context(&mut self.input.mirror) {
+        let (reset, caret) = crate::input::host_events::ime_sync_state(self.app.rt_mut());
+        if reset {
+            cancel_ime(&self.input.handle);
+        }
+        if self.app.rt().web_context(&mut self.input.mirror) || reset {
             let m = &self.input.mirror;
             sync(&self.input.handle, &m.key, &m.text, m.base, m.anchor, m.focus, m.secure);
         }
@@ -140,7 +148,6 @@ impl Running {
         let rt = self.app.rt();
         // The page's text field sits at the caret in window points, so an input method's
         // candidates open beside it at any zoom.
-        let caret = crate::input::host_events::ime_area_window(rt);
         if self.input.caret != caret {
             self.input.caret = caret;
             if let Some([x, y, w, h]) = self.input.caret { sync_caret(&self.input.handle, x, y, w, h); }
@@ -225,6 +232,23 @@ impl Running {
             if redraw { self.full_redraw = true; }
             return redraw;
         }
+        if event["kind"].as_str() == Some("pointer_cancel") {
+            let lost_capture = event["lost_capture"].as_bool().unwrap_or(false);
+            if !crate::input::host_events::pointer_cancel(
+                self.app.rt_mut(),
+                &mut self.input.control_click,
+                lost_capture,
+            ) {
+                return false;
+            }
+            self.full_redraw = true;
+            self.cursor.apply(window, crate::el::Cursor::Default, false);
+            self.app.frame(0.0);
+            self.apply_frame_requests(window);
+            self.clipboard.flush_core(self.app.rt_mut());
+            self.sync_input(false);
+            return true;
+        }
         self.full_redraw = true;
         let mut activate = false;
         // What a person typed or pressed through the page's own elements is input too, for
@@ -272,9 +296,44 @@ impl Running {
                 });
                 self.app.rt_mut().set_system_contrast(contrast);
             }
-            Some("focus") => self.app.window_focus(event["focused"].as_bool().unwrap_or(false)),
+            Some("focus") => {
+                let focused = event["focused"].as_bool().unwrap_or(false);
+                self.app.window_focus(focused);
+                if !focused {
+                    self.input.mods = ModifiersState::empty();
+                    self.input.control_click = false;
+                    self.cursor.apply(window, crate::el::Cursor::Default, false);
+                }
+            }
             Some("visibility") => {
-                self.shared.set_visible(event["visible"].as_bool().unwrap_or(false));
+                let visible = event["visible"].as_bool().unwrap_or(false);
+                self.shared.set_visible(visible);
+                if !visible {
+                    crate::input::host_events::hide_reset(
+                        self.app.rt_mut(),
+                        &mut self.input.mods,
+                        &mut self.input.control_click,
+                    );
+                    hide_menu(&self.input.handle);
+                    let _ = self.app.resolve_popup(None);
+                    self.cursor.apply(window, crate::el::Cursor::Default, false);
+                    // Commit cancellation, FocusLost, FinishIme and poll now: browsers pause rAF
+                    // while the tab is hidden.
+                    self.app.frame(0.0);
+                    self.apply_frame_requests(window);
+                    self.clipboard.flush_core(self.app.rt_mut());
+                    self.sync_input(false);
+                    return false;
+                }
+                if event["focused"].as_bool().unwrap_or(false) {
+                    self.app.window_focus(true);
+                }
+                return true;
+            }
+            Some("leave") => {
+                if self.app.rt().touching() { return false; }
+                self.app.rt_mut().pointer_leave();
+                self.cursor.apply(window, crate::el::Cursor::Default, false);
                 return true;
             }
             Some(kind @ ("edit" | "selection" | "preedit")) => {
