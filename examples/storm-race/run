@@ -1,0 +1,10 @@
+#!/bin/sh
+# Open the storm window with N cells (default 1000), built with the release profile.
+#   examples/storm-race/run [N]
+# STORM_AT=x,y places the window's top-left corner at x, y points.
+set -eu
+here=$(cd "$(dirname "$0")" && pwd -P)
+root=$(cd "$here/../.." && pwd -P)
+cd "$root"
+cargo build -q -p storm-race --release --bin storm-race
+exec "$root/target/release/storm-race" "${1:-1000}"
