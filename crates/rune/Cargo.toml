@@ -76,7 +76,8 @@ accessibility = ["dep:accesskit_windows", "dep:accesskit_macos", "dep:accesskit_
 # Use upstream `taffy::TaffyTree` instead of `rune_taffy::LayoutStore` for A/B benchmarks and parity checks.
 baseline-taffy = ["rune-taffy/baseline-taffy"]
 # Test builds of crates that use Rune (their dev-dependency turns it on): a GPU submission that holds
-# the GPU past `rune_gpu::budget::BUDGET` ends the test program, as it does in Rune's own unit tests.
+# the GPU past `rune_gpu::budget::BUDGET` fails the test whose `Gpu` it was, when that `Gpu` drops, as in
+# Rune's own unit tests. Not loss: a lost device shows as `poll`'s and maps' errors either way.
 test-strict = []
 # Live GPU resource counters (`Device::get_internal_counters`) for upload tests and `upload_bench`.
 test-gpu-counters = ["wgpu/counters"]

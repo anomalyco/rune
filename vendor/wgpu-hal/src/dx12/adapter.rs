@@ -1106,6 +1106,7 @@ impl crate::Adapter for super::Adapter {
                 idle_fence_value: AtomicU64::new(0),
                 pending_waits: Mutex::new(Vec::new()),
                 pending_signals: Mutex::new(Vec::new()),
+                #[cfg(debug_assertions)]
                 watch: Default::default(),
             },
         })

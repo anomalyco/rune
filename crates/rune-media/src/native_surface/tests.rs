@@ -26,6 +26,8 @@ impl Drop for Gpu {
         if !std::thread::panicking() {
             self.assert_alive();
         }
+        // A later test's queue never inherits this one's overrun.
+        rune_gpu::budget::forget(&self.queue);
     }
 }
 
@@ -53,7 +55,7 @@ impl Gpu {
             ..Default::default()
         }))
         .expect("request GPU device");
-        rune_gpu::budget::watch(false);
+        rune_gpu::budget::watch();
         let lost = Arc::new(std::sync::Mutex::new(None));
         let heard = lost.clone();
         device.set_device_lost_callback(move |reason, message| {
