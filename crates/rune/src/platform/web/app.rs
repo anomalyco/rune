@@ -130,24 +130,12 @@ impl dyn WebApp + '_ {
         self.driver(|rt, app| rt.pointer_move(app, x, y));
     }
 
-    pub(super) fn pointer_down(&mut self, x: f32, y: f32) {
-        self.driver(|rt, app| rt.pointer_down(app, x, y));
-    }
-
-    pub(super) fn pointer_up(&mut self, x: f32, y: f32) {
-        self.driver(|rt, app| rt.pointer_up(app, x, y));
-    }
-
-    pub(super) fn secondary_up(&mut self, x: f32, y: f32) {
-        self.driver(|rt, app| rt.secondary_up(app, x, y));
-    }
-
-    pub(super) fn button_down(&mut self, x: f32, y: f32, button: crate::PointerButton) {
-        self.driver(|rt, app| rt.button_down(app, x, y, button));
-    }
-
-    pub(super) fn button_up(&mut self, x: f32, y: f32, button: crate::PointerButton) {
-        self.driver(|rt, app| rt.button_up(app, x, y, button));
+    pub(super) fn mouse_button(
+        &mut self,
+        input: crate::input::host_events::MouseButtonInput,
+        control_click: &mut bool,
+    ) -> crate::input::host_events::ButtonAction {
+        self.driver(|rt, app| crate::input::host_events::mouse_button_core(rt, app, input, control_click))
     }
 
     pub(super) fn sync_modifiers(&mut self, mods: &mut winit::keyboard::ModifiersState, next: winit::keyboard::ModifiersState) -> bool {

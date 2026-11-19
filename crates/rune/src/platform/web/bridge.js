@@ -264,7 +264,7 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         listen(window, 'touchcancel', () => { h.touchDown = false; deferStatic(h); }, { passive: true });
         // Mirrored text and links take the pointer from the canvas; hover still reaches Rune.
         listen(a11y, 'pointermove', event => {
-            if (event.pointerType === 'mouse') send({ kind: 'hover', x: event.clientX, y: event.clientY });
+            if (event.pointerType !== 'touch') send({ kind: 'hover', x: event.clientX, y: event.clientY });
         }, { passive: true });
         queueMicrotask(() => { if (!h.disposed) scrolled(); });
     }
@@ -312,25 +312,26 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         // A web link takes the pointer while it's over it, as a page's would: the status bar
         // shows where it goes, and middle-click, Ctrl+click and its own menu open it.
         listen(canvas, 'pointermove', event => {
-            if (event.pointerType !== 'mouse' || event.buttons) return;
+            if (event.pointerType === 'touch' || event.buttons) return;
             const a = linkAt(h, event.clientX, event.clientY);
             if (a && a !== h.hoverLink) armLink(h, a);
         }, { passive: true });
         // The pointer over a link (or anything else of the mirror's that took it) still hovers Rune.
         listen(a11y, 'pointermove', event => {
-            if (event.pointerType === 'mouse') {
+            if (event.pointerType !== 'touch') {
                 const r = canvas.getBoundingClientRect();
                 send({ kind: 'hover', x: event.clientX - r.left, y: event.clientY - r.top });
             }
         }, { passive: true });
     }
-    // Right-click: Rune draws an element's own menu; anywhere else the browser opens its own over
-    // what a page would have there (the selection, a link, text, a text field), never the
-    // canvas's image menu; Shift+right-click always opens the browser's. Armed before the menu's
-    // event, which on Windows and Linux follows the release; macOS's follows the press, which
-    // Rune has just heard (`syncSecondary`).
+    // Right-click (and Ctrl+click on macOS): Rune draws an element's own menu; anywhere else the
+    // browser opens its own over what a page would have there (the selection, a link, text, a text
+    // field), never the canvas's image menu; Shift+right-click always opens the browser's. Armed
+    // before the menu's event, which on Windows and Linux follows the release; macOS's follows the
+    // press, which Rune has just heard (`syncSecondary`).
+    const isSecondaryPress = event => event.button === 2 || (MAC && event.button === 0 && event.ctrlKey);
     const armAt = event => {
-        if (event.button !== 2 || event.pointerType !== 'mouse' || event.target !== canvas) return;
+        if (!isSecondaryPress(event) || event.pointerType === 'touch' || event.target !== canvas) return;
         if (armMenu(h, event.clientX, event.clientY, event.shiftKey)) send({ kind: 'secondary_browser' });
     };
     if (MAC) listen(canvas, 'pointerdown', armAt);
@@ -340,7 +341,7 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         if (h.menu === 'rune') h.menu = '';
     }, { capture: true });
     for (const name of ['pointerdown', 'keydown', 'wheel']) {
-        listen(window, name, event => { if (name !== 'pointerdown' || event.button !== 2) disarmMenu(h); }, { capture: true, passive: true });
+        listen(window, name, event => { if (name !== 'pointerdown' || !isSecondaryPress(event)) disarmMenu(h); }, { capture: true, passive: true });
     }
     queueMicrotask(() => {
         if (!h.disposed && !embedded && !page && document.activeElement === document.body) canvas.focus({ preventScroll: true });

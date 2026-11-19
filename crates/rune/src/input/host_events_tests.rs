@@ -365,3 +365,97 @@ fn keyboard_core_handles_unidentified_repeat_paste_fallback_and_release_gating()
     rt.frame(0.0);
     assert_eq!(rt.state.ups, [crate::Key::Escape]);
 }
+
+#[test]
+fn mouse_button_core_handles_macos_ctrl_click_left_down_mods_and_middle_buttons() {
+    #[derive(Default)]
+    struct S {
+        primary: Vec<crate::Mods>,
+        secondary: usize,
+        middle: usize,
+        physical_mods: Vec<crate::Mods>,
+    }
+    fn view(_: &S, _: &mut Cx<S>) -> El {
+        el().key("target").size(100.0, 100.0).focusable(true)
+            .on_press_tx(|s: &mut S, tx| s.primary.push(tx.mods()))
+            .on_secondary_press(|s: &mut S, _, _| s.secondary += 1)
+            .on_middle_press(|s: &mut S, _| s.middle += 1)
+            .on_physical_input(|s: &mut S, ev, _| {
+                if let crate::PhysicalInput::Modifiers(m) = ev {
+                    s.physical_mods.push(*m);
+                    return true;
+                }
+                false
+            })
+    }
+    let mut rt = Runtime::new(S::default(), view, (100.0, 100.0), Env::default());
+    rt.frame(0.0);
+    rt.pointer_move(50.0, 50.0);
+
+    let ctrl = crate::Mods { ctrl: true, cmd: true, ..Default::default() };
+    let mut control_click = false;
+
+    // On macOS (ctrl_click_is_secondary = true), Ctrl+Left is secondary even if Ctrl lifts before mouse-up.
+    let down = {
+        let (core, mut app) = rt.split_mut();
+        mouse_button_core(core, &mut app, MouseButtonInput {
+            x: 50.0, y: 50.0, button: crate::PointerButton::Primary, pressed: true,
+            mods: ctrl, ctrl_click_is_secondary: true, queue_mods_on_primary_down: true,
+        }, &mut control_click)
+    };
+    assert_eq!(down, ButtonAction::SecondaryDown);
+    assert!(control_click);
+    let up = {
+        let (core, mut app) = rt.split_mut();
+        mouse_button_core(core, &mut app, MouseButtonInput {
+            x: 50.0, y: 50.0, button: crate::PointerButton::Primary, pressed: false,
+            mods: crate::Mods::default(), ctrl_click_is_secondary: true, queue_mods_on_primary_down: true,
+        }, &mut control_click)
+    };
+    assert_eq!(up, ButtonAction::SecondaryUp);
+    assert!(!control_click);
+    rt.frame(0.0);
+    assert_eq!((rt.state.primary.len(), rt.state.secondary), (0, 1));
+
+    // Off macOS (ctrl_click_is_secondary = false), Ctrl+Left stays primary and queues modifiers for the newly focused element.
+    let down = {
+        let (core, mut app) = rt.split_mut();
+        mouse_button_core(core, &mut app, MouseButtonInput {
+            x: 50.0, y: 50.0, button: crate::PointerButton::Primary, pressed: true,
+            mods: ctrl, ctrl_click_is_secondary: false, queue_mods_on_primary_down: true,
+        }, &mut control_click)
+    };
+    assert_eq!(down, ButtonAction::PrimaryDown);
+    let up = {
+        let (core, mut app) = rt.split_mut();
+        mouse_button_core(core, &mut app, MouseButtonInput {
+            x: 50.0, y: 50.0, button: crate::PointerButton::Primary, pressed: false,
+            mods: ctrl, ctrl_click_is_secondary: false, queue_mods_on_primary_down: true,
+        }, &mut control_click)
+    };
+    assert_eq!(up, ButtonAction::PrimaryUp);
+    rt.frame(0.0);
+    assert_eq!((rt.state.primary.len(), rt.state.secondary), (1, 1));
+    assert!(rt.state.primary[0].ctrl);
+    assert!(rt.state.physical_mods.last().is_some_and(|m| m.ctrl));
+
+    // Middle button routes through button_down / button_up.
+    let down = {
+        let (core, mut app) = rt.split_mut();
+        mouse_button_core(core, &mut app, MouseButtonInput {
+            x: 50.0, y: 50.0, button: crate::PointerButton::Middle, pressed: true,
+            mods: crate::Mods::default(), ctrl_click_is_secondary: false, queue_mods_on_primary_down: false,
+        }, &mut control_click)
+    };
+    assert_eq!(down, ButtonAction::OtherDown(crate::PointerButton::Middle));
+    let up = {
+        let (core, mut app) = rt.split_mut();
+        mouse_button_core(core, &mut app, MouseButtonInput {
+            x: 50.0, y: 50.0, button: crate::PointerButton::Middle, pressed: false,
+            mods: crate::Mods::default(), ctrl_click_is_secondary: false, queue_mods_on_primary_down: false,
+        }, &mut control_click)
+    };
+    assert_eq!(up, ButtonAction::OtherUp(crate::PointerButton::Middle));
+    rt.frame(0.0);
+    assert_eq!(rt.state.middle, 1);
+}

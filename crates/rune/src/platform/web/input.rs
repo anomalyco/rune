@@ -1,6 +1,6 @@
 use super::*;
 use wasm_bindgen::{JsCast, JsValue, prelude::*};
-use winit::event::{ElementState, MouseButton, TouchPhase};
+use winit::event::{ElementState, TouchPhase};
 use winit::keyboard::ModifiersState;
 
 #[wasm_bindgen(module = "/src/platform/web/bridge.js")]
@@ -60,6 +60,7 @@ pub(super) struct Bridge {
     dispose_viewport: js_sys::Function,
     mods: ModifiersState,
     is_mac: bool,
+    control_click: bool,
     mirror: crate::runtime::web_runtime::Mirror,
     a11y: crate::runtime::web_a11y::A11yMirror,
     copy_cache: String,
@@ -105,7 +106,7 @@ impl Bridge {
         // around the notch itself.
         let dispose_viewport = platform::viewport(canvas, callback.as_ref().unchecked_ref(), embedded || document);
         let handle = mount(canvas, callback.as_ref().unchecked_ref(), embedded, fit_height, document);
-        Self { handle, _callback: callback, dispose_viewport, mods: ModifiersState::empty(), is_mac: is_mac(),
+        Self { handle, _callback: callback, dispose_viewport, mods: ModifiersState::empty(), is_mac: is_mac(), control_click: false,
             mirror: Default::default(), a11y: Default::default(),
             copy_cache: String::new(), fit_height, document, page: None, scroll_x: Vec::new(), caret: None, a11y_at: None, announced: 0, a11y_first: First::Unasked, families: Default::default() }
     }
@@ -403,33 +404,46 @@ impl Running {
             WindowEvent::MouseInput { button, state, .. } if !self.app.rt().touching() => {
                 immediate = true;
                 let Some((x, y)) = self.app.rt().pointer() else { return false };
-                match (button, state) {
-                    (MouseButton::Left, ElementState::Pressed) => {
-                        self.app.pointer_down(x, y);
+                let mods = crate::window::map_mods(self.input.mods);
+                let action = self.app.mouse_button(
+                    crate::input::host_events::MouseButtonInput {
+                        x,
+                        y,
+                        button: crate::window::pointer_button(*button),
+                        pressed: *state == ElementState::Pressed,
+                        mods,
+                        ctrl_click_is_secondary: self.input.is_mac,
+                        // Queued after `web_focus_field` below so the text-field fast path still
+                        // sees `Action::Focus` as its sole activation-sensitive action.
+                        queue_mods_on_primary_down: false,
+                    },
+                    &mut self.input.control_click,
+                );
+                match action {
+                    crate::input::host_events::ButtonAction::PrimaryDown => {
                         activate = true;
                         // A press into a text field: the field takes focus now (a key may follow
                         // before the next frame, and a phone's keyboard opens only inside the
                         // press); the frame waits for the display's.
                         if self.app.web_focus_field() && self.sync_live_edit() {
+                            self.app.rt_mut().physical_input(crate::PhysicalInput::Modifiers(mods));
                             super::input::activate(&self.input.handle);
                             return true;
                         }
+                        self.app.rt_mut().physical_input(crate::PhysicalInput::Modifiers(mods));
                     }
-                    (MouseButton::Left, ElementState::Released) => {
-                        self.app.pointer_up(x, y);
+                    crate::input::host_events::ButtonAction::PrimaryUp => {
                         // Only a release with a handler runs its frame inside the event. A field's
                         // own selection step (a move while held) runs as a press into it does.
                         immediate = self.app.rt().web_release_needs_frame() && !(self.app.web_focus_field() && self.sync_live_edit());
                     }
-                    (MouseButton::Right, ElementState::Pressed) => {
-                        let rt = self.app.rt_mut();
-                        rt.secondary_down(x, y);
+                    crate::input::host_events::ButtonAction::SecondaryDown => {
                         // The browser's own menu opens where Rune's doesn't (bridge.js).
-                        sync_secondary(&self.input.handle, rt.secondary_claim());
+                        sync_secondary(&self.input.handle, self.app.rt().secondary_claim());
                     }
-                    (MouseButton::Right, ElementState::Released) => self.app.secondary_up(x, y),
-                    (&button, ElementState::Pressed) => self.app.button_down(x, y, crate::window::pointer_button(button)),
-                    (&button, ElementState::Released) => self.app.button_up(x, y, crate::window::pointer_button(button)),
+                    crate::input::host_events::ButtonAction::SecondaryUp
+                    | crate::input::host_events::ButtonAction::OtherDown(_)
+                    | crate::input::host_events::ButtonAction::OtherUp(_) => {}
                 }
             }
             WindowEvent::MouseWheel { delta, phase, .. } => {

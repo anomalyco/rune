@@ -50,6 +50,31 @@ pub(crate) enum WheelOutcome {
     Ignored,
 }
 
+/// Host-neutral mouse button input at view point `(x, y)`.
+#[derive(Clone, Copy, Debug)]
+#[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
+pub(crate) struct MouseButtonInput {
+    pub x: f32,
+    pub y: f32,
+    pub button: crate::PointerButton,
+    pub pressed: bool,
+    pub mods: crate::Mods,
+    pub ctrl_click_is_secondary: bool,
+    pub queue_mods_on_primary_down: bool,
+}
+
+/// Resolved mouse button action after macOS Ctrl+click mapping.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
+pub(crate) enum ButtonAction {
+    PrimaryDown,
+    PrimaryUp,
+    SecondaryDown,
+    SecondaryUp,
+    OtherDown(crate::PointerButton),
+    OtherUp(crate::PointerButton),
+}
+
 /// Converts physical surface pixels into view points (dividing by `rt.input_scale()` = scale × zoom).
 #[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
 pub(crate) fn physical_point(rt: &RuntimeCore, x: f64, y: f64) -> (f32, f32) {
@@ -62,6 +87,73 @@ pub(crate) fn physical_point(rt: &RuntimeCore, x: f64, y: f64) -> (f32, f32) {
 pub(crate) fn window_point(rt: &RuntimeCore, x: f32, y: f32) -> (f32, f32) {
     let zoom = rt.zoom();
     (x / zoom, y / zoom)
+}
+
+/// Classifies a mouse button press/release, turning primary Ctrl+click into a secondary click
+/// when `ctrl_click_is_secondary` is true (macOS) and pairing its release via `control_click`.
+#[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
+pub(crate) fn mouse_button_action(
+    button: crate::PointerButton,
+    pressed: bool,
+    ctrl_held: bool,
+    ctrl_click_is_secondary: bool,
+    control_click: &mut bool,
+) -> ButtonAction {
+    match button {
+        crate::PointerButton::Primary => {
+            if pressed {
+                *control_click = ctrl_click_is_secondary && ctrl_held;
+            }
+            let secondary = *control_click;
+            if !pressed {
+                *control_click = false;
+            }
+            match (pressed, secondary) {
+                (true, true) => ButtonAction::SecondaryDown,
+                (false, true) => ButtonAction::SecondaryUp,
+                (true, false) => ButtonAction::PrimaryDown,
+                (false, false) => ButtonAction::PrimaryUp,
+            }
+        }
+        crate::PointerButton::Secondary => {
+            if pressed { ButtonAction::SecondaryDown } else { ButtonAction::SecondaryUp }
+        }
+        other => {
+            if pressed { ButtonAction::OtherDown(other) } else { ButtonAction::OtherUp(other) }
+        }
+    }
+}
+
+/// Dispatches a host-neutral mouse button event through the runtime, returning the resolved
+/// [`ButtonAction`] so callers can run host-specific side effects.
+#[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
+pub(crate) fn mouse_button_core(
+    rt: &mut RuntimeCore,
+    app: &mut dyn AppDriver,
+    input: MouseButtonInput,
+    control_click: &mut bool,
+) -> ButtonAction {
+    let action = mouse_button_action(
+        input.button,
+        input.pressed,
+        input.mods.ctrl,
+        input.ctrl_click_is_secondary,
+        control_click,
+    );
+    match action {
+        ButtonAction::PrimaryDown => {
+            rt.pointer_down(app, input.x, input.y);
+            if input.queue_mods_on_primary_down {
+                rt.physical_input(crate::PhysicalInput::Modifiers(input.mods));
+            }
+        }
+        ButtonAction::PrimaryUp => rt.pointer_up(app, input.x, input.y),
+        ButtonAction::SecondaryDown => rt.secondary_down(input.x, input.y),
+        ButtonAction::SecondaryUp => rt.secondary_up(app, input.x, input.y),
+        ButtonAction::OtherDown(b) => rt.button_down(app, input.x, input.y, b),
+        ButtonAction::OtherUp(b) => rt.button_up(app, input.x, input.y, b),
+    }
+    action
 }
 
 /// Maps a winit touch/gesture phase to Rune's `GesturePhase`.
