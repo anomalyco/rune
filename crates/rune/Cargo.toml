@@ -83,6 +83,7 @@ procwatch = { workspace = true, optional = true }
 subsecond = { version = "=0.7.10", optional = true }
 dioxus-devtools = { version = "=0.7.10", optional = true }
 rune-core = { workspace = true }
+rune-edit = { workspace = true }
 rune-gpu = { workspace = true }
 rune-image = { workspace = true }
 rune-media = { workspace = true }

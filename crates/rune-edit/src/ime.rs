@@ -5,7 +5,7 @@ use std::ops::Range;
 
 use zeroize::Zeroize;
 
-use crate::machine::Effects;
+use rune_core::machine::Effects;
 
 /// One input method event. Plain typing arrives as keys (`Key::Text`); these carry what an
 /// input method composed.
@@ -71,19 +71,20 @@ impl Clause {
 /// A field's text around its selection, which the platform's input method reads to convert
 /// committed text again (reconversion) and to convert with the context around the caret
 /// (Windows' document feed). One paragraph, at most a KiB either side of the selection.
+#[doc(hidden)]
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct ImeText {
-    pub(crate) text: String,
+pub struct ImeText {
+    pub text: String,
     /// Where `text` starts in the field's text, in bytes.
-    pub(crate) start: usize,
+    pub start: usize,
     /// The selection, a byte range of `text`.
-    pub(crate) selection: Range<usize>,
+    pub selection: Range<usize>,
 }
 
 impl ImeText {
     /// The word (UAX #29) around byte `at` of `text`, for reconversion with no selection.
-    #[cfg_attr(not(windows), allow(dead_code))]
-    pub(crate) fn word_at(&self, at: usize) -> Range<usize> {
+    #[doc(hidden)]
+    pub fn word_at(&self, at: usize) -> Range<usize> {
         use unicode_segmentation::UnicodeSegmentation;
         self.text.split_word_bound_indices().map(|(i, w)| i..i + w.len()).find(|r| r.start <= at && at < r.end && !self.text[r.clone()].trim().is_empty())
             .unwrap_or(at..at)

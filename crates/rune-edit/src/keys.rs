@@ -5,7 +5,7 @@ use zeroize::Zeroize;
 /// platform's primary shortcut modifier, reported alongside its key: ⌘ on macOS (with `logo`)
 /// and Ctrl elsewhere (with `ctrl`), so Ctrl+W on Windows is `{ cmd, ctrl }`. A test of
 /// `cmd && !ctrl` therefore never passes off macOS. Match shortcuts with a
-/// [`Chord`](crate::Chord) ("mod+w", "ctrl+tab") rather than by comparing flags.
+/// `Chord` ("mod+w", "ctrl+tab") rather than by comparing flags.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Mods {
     pub shift: bool,
@@ -21,6 +21,40 @@ pub struct Mods {
 impl Mods {
     /// Whether the platform's primary shortcut modifier is held: `cmd`.
     pub fn primary(self) -> bool { self.cmd }
+
+    /// Whether `self` holds the primary modifier and no other but Shift, or none at all (a
+    /// script's `Key::Command`): ⌘ alone on macOS, Ctrl alone elsewhere. For the edit commands a
+    /// text field takes (copy, paste, undo), which another modifier turns into an app's chord.
+    #[doc(hidden)]
+    pub fn primary_alone(self) -> bool {
+        let bare = self.cmd && !self.ctrl && !self.logo;
+        let (ctrl, logo) = if bare || cfg!(target_arch = "wasm32") {
+            (self.ctrl, self.logo)
+        } else if cfg!(target_os = "macos") {
+            (self.ctrl, self.logo || self.cmd)
+        } else {
+            (self.ctrl || self.cmd, self.logo)
+        };
+        !self.alt && if is_apple_key_platform() { !ctrl } else { !logo }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+const fn is_apple_key_platform() -> bool {
+    cfg!(any(target_os = "macos", target_os = "ios"))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn is_apple_key_platform() -> bool {
+    static APPLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *APPLE.get_or_init(|| {
+        let platform = js_sys::Reflect::get(&js_sys::global(), &"navigator".into())
+            .and_then(|navigator| js_sys::Reflect::get(&navigator, &"platform".into()))
+            .ok()
+            .and_then(|p| p.as_string())
+            .unwrap_or_default();
+        ["Mac", "iPod", "iPhone", "iPad"].iter().any(|apple| platform.contains(apple))
+    })
 }
 
 /// A logical key. More keys may come, so a `match` needs a `_` arm.
@@ -66,7 +100,7 @@ pub enum Key {
     /// A function key, F1 through F24. Text fields ignore it; apps can bind it.
     Function(u8),
     /// The Menu (Application) key. Unclaimed, it opens the focused element's context menu, as
-    /// Shift+F10 does: see [`El::on_secondary_press`](crate::El::on_secondary_press).
+    /// Shift+F10 does: see `El::on_secondary_press`.
     ContextMenu,
     /// A modifier key going down (`pressed`) or up on its own, sent only where the app opts in
     /// with `App::modifier_keys` (or `Runtime::set_modifier_keys`). `mods` holds the modifiers
@@ -134,7 +168,8 @@ impl KeyEvent {
     /// Text typed with Cmd (macOS) or Ctrl held, such as an unclaimed Shift-Cmd-Space. It never
     /// inserts, matching browsers and AppKit, but still reaches key handlers. Ctrl+Alt is AltGr
     /// on Windows and Linux, so text typed with both still inserts there; Option alone types.
-    pub(crate) fn is_command_chord(&self) -> bool {
+    #[doc(hidden)]
+    pub fn is_command_chord(&self) -> bool {
         let m = self.mods;
         matches!(self.key, Key::Text(_)) && (m.cmd || m.ctrl) && (cfg!(target_os = "macos") || !m.alt)
     }
@@ -143,18 +178,23 @@ impl KeyEvent {
     /// `Key::Command(c)` with the primary modifier alone, ⌘ on macOS and Ctrl elsewhere, or
     /// Shift too for ⇧⌘Z. Another modifier (Ctrl+Alt+V, ⌃⌘C, Ctrl+Shift+V) makes it an
     /// app's chord, which reaches `on_key` instead.
-    pub(crate) fn edit_command(&self) -> Option<char> {
+    #[doc(hidden)]
+    pub fn edit_command(&self) -> Option<char> {
         let Key::Command(c) = self.key else { return None };
-        (crate::input::chord::primary_alone(self.mods) && (c == 'z' || !self.mods.shift)).then_some(c)
+        (self.mods.primary_alone() && (c == 'z' || !self.mods.shift)).then_some(c)
     }
+
     /// Alt+Space off macOS: the window menu's key. It never types a space, and on Windows opens
     /// the window menu when no handler takes it. (Option+Space types on macOS.)
-    pub(crate) fn is_window_menu_chord(&self) -> bool {
+    #[doc(hidden)]
+    pub fn is_window_menu_chord(&self) -> bool {
         let m = self.mods;
         !cfg!(target_os = "macos") && matches!(&self.key, Key::Text(t) if t == " ") && m.alt && !m.ctrl && !m.cmd && !m.logo
     }
+
     /// A macOS Control-letter text binding (Ctrl-A, Ctrl-E, Ctrl-K, …), as in every AppKit field.
-    pub(crate) fn control_binding(&self) -> Option<char> {
+    #[doc(hidden)]
+    pub fn control_binding(&self) -> Option<char> {
         let m = self.mods;
         let Key::Text(s) = &self.key else { return None };
         let c = s.chars().next().filter(|_| s.chars().count() == 1)?.to_ascii_lowercase();

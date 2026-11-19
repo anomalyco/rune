@@ -226,8 +226,9 @@ fn diff(a: &str, b: &str) -> (usize, usize, usize) {
 }
 
 // Rendering clones TextEdit. Share immutable history so a view never copies the undo stack.
+#[doc(hidden)]
 #[derive(Clone, Debug, Default, PartialEq)]
-pub(crate) struct History {
+pub struct History {
     pub(super) undo: VecDeque<Change>,
     pub(super) redo: Vec<Change>,
     pub(super) bytes: usize,
@@ -383,10 +384,10 @@ impl TextEdit {
         }
         // The bytes the replacement really changed, as a diff of the two documents finds them.
         let (x, y) = (r.removed.as_bytes(), inserted.as_bytes());
-        let mut p = crate::text::common_start(x, y);
+        let mut p = rune_text::common_start(x, y);
         while !r.removed.is_char_boundary(p) || !inserted.is_char_boundary(p) { p -= 1; }
         let room = x.len().min(y.len()) - p;
-        let mut q = crate::text::common_end(x, y).min(room);
+        let mut q = rune_text::common_end(x, y).min(room);
         while !r.removed.is_char_boundary(x.len() - q) || !inserted.is_char_boundary(y.len() - q) { q -= 1; }
         let change = Change {
             at: r.at + p,
@@ -440,7 +441,7 @@ impl TextEdit {
     /// Picking a mention is one step, trailing space included:
     ///
     /// ```
-    /// # use rune::TextEdit;
+    /// # use rune_edit::TextEdit;
     /// let mut e = TextEdit::default();
     /// e.insert("hi @ag");
     /// e.undo_group(|e| {

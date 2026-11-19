@@ -2,12 +2,12 @@
 
 use std::ops::Range;
 
-use crate::color::{oklch, oklcha, Color};
+use rune_core::color::{Color, oklch, oklcha};
 
 pub use rune_text::{Block, MAX_LIST_LEVEL};
 
-/// An inline formatting mark stored alongside [`TextEdit::text`]. More marks may come, so a
-/// `match` needs a `_` arm.
+/// An inline formatting mark stored alongside [`TextEdit::text`](super::TextEdit::text). More
+/// marks may come, so a `match` needs a `_` arm.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Mark {
@@ -20,8 +20,8 @@ pub enum Mark {
     /// An atomic inline object (an `@file` or `@agent` mention, an attachment) carrying the
     /// app's id; its text is the label. The caret steps over it, deleting takes it whole, a
     /// selection that touches it covers it, and typing never extends it. A field draws it as a
-    /// chip ([`El::pill_style`](crate::El::pill_style), [`El::pill_colors`](crate::El::pill_colors),
-    /// [`El::pill_icon`](crate::El::pill_icon)). Insert one with [`TextEdit::insert_pill`].
+    /// chip (`El::pill_style`, `El::pill_colors`, `El::pill_icon`). Insert one with
+    /// [`TextEdit::insert_pill`](super::TextEdit::insert_pill).
     Pill(String),
 }
 
@@ -73,7 +73,8 @@ impl Mark {
     }
 }
 
-/// A non-empty byte range `[start, end)` in [`TextEdit::text`] carrying an inline [`Mark`].
+/// A non-empty byte range `[start, end)` in [`TextEdit::text`](super::TextEdit::text) carrying an
+/// inline [`Mark`].
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct MarkRange {
     pub start: usize,
@@ -91,7 +92,8 @@ impl MarkRange {
     }
 }
 
-/// A paragraph slice of [`TextEdit`], returned by [`TextEdit::paragraphs`].
+/// A paragraph slice of [`TextEdit`](super::TextEdit), returned by
+/// [`TextEdit::paragraphs`](super::TextEdit::paragraphs).
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ParagraphInfo {
@@ -102,7 +104,7 @@ pub struct ParagraphInfo {
     pub soft_break: bool,
 }
 
-/// Visual palette for rich marks and block attributes inside [`text_input`](crate::text_input).
+/// Visual palette for rich marks and block attributes inside `text_input`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RichStyle {
     pub code_fg: Option<Color>,

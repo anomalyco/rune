@@ -3833,6 +3833,7 @@ dependencies = [
  "raw-window-handle",
  "rfd",
  "rune-core",
+ "rune-edit",
  "rune-gpu",
  "rune-image",
  "rune-media",
@@ -3886,6 +3887,19 @@ dependencies = [
  "web-sys",
  "web-time",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "rune-edit"
+version = "0.0.1"
+dependencies = [
+ "js-sys",
+ "parley",
+ "rune-core",
+ "rune-text",
+ "serde_json",
+ "unicode-segmentation",
+ "zeroize",
 ]
 
 [[package]]

@@ -361,8 +361,9 @@ fn parse_list(spec: &str) -> Result<Vec<Chord>, ChordError> {
 /// Whether `m` holds the primary modifier and no other but Shift, or none at all (a script's
 /// `Key::Command`): ⌘ alone on macOS, Ctrl alone elsewhere. For the edit commands a text
 /// field takes (copy, paste, undo), which another modifier turns into an app's chord.
+#[allow(dead_code)]
 pub(crate) fn primary_alone(m: Mods) -> bool {
-    matches!(held(m, KeyPlatform::current()) & !SHIFT, 0 | PRIMARY)
+    m.primary_alone()
 }
 
 /// `bits` with the modifiers that are one key on `platform` merged: Ctrl into the primary

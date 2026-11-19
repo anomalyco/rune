@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/rune",
     "crates/rune-core",
+    "crates/rune-edit",
     "crates/rune-gpu",
     "crates/rune-image",
     "crates/rune-media",
@@ -66,6 +67,7 @@ members = [
 default-members = [
     "crates/rune",
     "crates/rune-core",
+    "crates/rune-edit",
     "crates/rune-gpu",
     "crates/rune-image",
     "crates/rune-media",
@@ -147,6 +149,7 @@ license = "MIT"
 procwatch = { path = "crates/procwatch" }
 rune = { path = "crates/rune", default-features = false }
 rune-core = { path = "crates/rune-core" }
+rune-edit = { path = "crates/rune-edit" }
 rune-fx = { path = "crates/rune-fx" }
 rune-gpu = { path = "crates/rune-gpu", default-features = false }
 rune-highlights = { path = "crates/rune-highlights" }
