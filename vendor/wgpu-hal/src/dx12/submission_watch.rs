@@ -48,13 +48,18 @@ pub(super) struct Timed {
 
 pub(super) struct Watch {
     pub(super) serial: u64,
+    /// WARP and other software adapters: not timed (see `Watch::new`).
+    software: bool,
     /// `None` until the first timed submission; then the timer, or `None` if timestamps can't be had.
     timer: Mutex<Option<Option<Timer>>>,
 }
 
-impl Default for Watch {
-    fn default() -> Self {
-        Watch { serial: SERIAL.fetch_add(1, Ordering::Relaxed), timer: Mutex::new(None) }
+impl Watch {
+    /// A queue on a software adapter isn't timed: on WARP, a compute submission run between the
+    /// watch's timestamp lists removed the device (`DXGI_ERROR_DRIVER_INTERNAL_ERROR`, 19 Nov,
+    /// adais), while an empty one ran. A software adapter has no GPU for Windows to reset.
+    pub(super) fn new(software: bool) -> Self {
+        Watch { serial: SERIAL.fetch_add(1, Ordering::Relaxed), software, timer: Mutex::new(None) }
     }
 }
 
@@ -83,8 +88,9 @@ impl Watch {
     pub(super) fn before(&self, queue: &Direct3D12::ID3D12CommandQueue, fence: &Direct3D12::ID3D12Fence) -> Option<Timed> {
         let &(budget, report) = HOOK.get()?;
         let mut timer = self.timer.lock();
+        let software = self.software;
         let timer = timer
-            .get_or_insert_with(|| match Timer::new(queue, fence, budget, report, self.serial) {
+            .get_or_insert_with(|| match if software { Err("a software adapter (WARP) has no GPU to reset, and timing a submission there removed the device".into()) } else { Timer::new(queue, fence, budget, report, self.serial) } {
                 Ok(timer) => Some(timer),
                 Err(why) => {
                     eprintln!("wgpu-hal (Rune): GPU submission timing is off on this D3D12 queue: {why}");

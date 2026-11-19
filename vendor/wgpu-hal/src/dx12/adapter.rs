@@ -1107,7 +1107,10 @@ impl crate::Adapter for super::Adapter {
                 pending_waits: Mutex::new(Vec::new()),
                 pending_signals: Mutex::new(Vec::new()),
                 #[cfg(debug_assertions)]
-                watch: Default::default(),
+                watch: super::submission_watch::Watch::new(
+                    unsafe { self.raw.GetDesc2() }
+                        .is_ok_and(|d| Dxgi::DXGI_ADAPTER_FLAG(d.Flags as i32).contains(Dxgi::DXGI_ADAPTER_FLAG_SOFTWARE)),
+                ),
             },
         })
     }
