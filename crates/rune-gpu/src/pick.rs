@@ -5,9 +5,17 @@
 //! drives its panel from the integrated GPU and offloads to the discrete one gets the integrated
 //! GPU, as before.
 //!
-//! On Windows, a window's or overlay's surface gets the adapter that drives the primary display
-//! (the one with the taskbar), else the next display's; offscreen work keeps the lowest-power
-//! one. On a hybrid laptop whose monitors hang off the discrete GPU, that's the discrete GPU,
+//! On Windows, every device gets the adapter that drives the primary display (the one with the
+//! taskbar), else the next display's: a window's or overlay's surface, and offscreen and test
+//! work alike, which runs on the GPU a window would get. Offscreen work for one window (its
+//! snapshots, its drag image, its video) uses that window's own device, whichever display it is
+//! on. Only when no display's GPU has an adapter (a headless server, a remote session, a VM) does
+//! Rune take the lowest-power one. Offscreen work used to take the lowest-power adapter: on a
+//! desktop that is often an integrated GPU no monitor uses, 113 times slower than the discrete
+//! card beside it on one machine, where a test's single submission ran past Windows' 2-second
+//! limit and reset it. On a hybrid laptop whose panel is on the integrated GPU, that GPU drives
+//! the primary display, so nothing changes there and the discrete GPU stays asleep.
+//! On a hybrid laptop whose monitors hang off the discrete GPU, that's the discrete GPU,
 //! for the main window and the HUD alike: an AMD integrated GPU presenting the HUD across to
 //! them grew the process by gigabytes over an hour of dictation (hex#1268). A swapchain on a GPU
 //! that drives none (a desktop's unused integrated GPU beside the discrete card the monitors
@@ -27,6 +35,8 @@ pub enum Reason {
     EnvPower,
     Compositor,
     Display,
+    /// Offscreen or test work, on the GPU driving the primary display.
+    WindowGpu,
     LowPower,
 }
 
@@ -37,6 +47,7 @@ impl Reason {
             Reason::EnvPower => "WGPU_POWER_PREF",
             Reason::Compositor => "the compositor's GPU",
             Reason::Display => "the GPU driving the primary display",
+            Reason::WindowGpu => "the GPU a window would get (it drives the primary display)",
             Reason::LowPower => "lowest power",
         }
     }
@@ -106,15 +117,16 @@ pub fn pick(instance: &wgpu::Instance, surface: Option<&wgpu::Surface<'_>>, pres
             return Ok(log(Pick { adapter, reason: Reason::Compositor, compositor }, enumerated));
         }
     }
-    // Only a surface is presented; offscreen work (tests, snapshots) keeps the lowest-power GPU.
-    let displays = if surface.is_some() || presented { display_devices() } else { Vec::new() };
+    // Every device takes the GPU a window would get; presented only names the reason.
+    let displays = display_devices();
     if !displays.is_empty() {
         let adapters = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()));
         let infos: Vec<_> = adapters.iter().map(|a| (a.get_info(), usable(a))).collect();
         enumerated = Some(infos.iter().filter(|(info, _)| info.device_type != wgpu::DeviceType::Cpu).count());
         if let Some(index) = by_display(&displays, &infos) {
             let adapter = adapters.into_iter().nth(index).expect("index from this list");
-            return Ok(log(Pick { adapter, reason: Reason::Display, compositor }, enumerated));
+            let reason = if surface.is_some() || presented { Reason::Display } else { Reason::WindowGpu };
+            return Ok(log(Pick { adapter, reason, compositor }, enumerated));
         }
     }
     let adapter = request(instance, surface, wgpu::PowerPreference::LowPower)?;
@@ -180,11 +192,11 @@ mod dxgi {
         let hal = unsafe { instance.as_hal::<wgpu::hal::api::Dx12>() }?;
         // SAFETY: a DXGI factory and its adapters, asked for their descriptions.
         let factory = unsafe { CreateDXGIFactory1::<IDXGIFactory1>() }.ok()?;
-        let hardware: Vec<(IDXGIAdapter1, DXGI_ADAPTER_DESC1)> = (0..)
+        let all: Vec<(IDXGIAdapter1, DXGI_ADAPTER_DESC1)> = (0..)
             .map_while(|i| unsafe { factory.EnumAdapters1(i) }.ok())
             .filter_map(|a| unsafe { a.GetDesc1() }.ok().map(|d| (a, d)))
-            .filter(|(_, d)| d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 == 0)
             .collect();
+        let hardware: Vec<&(IDXGIAdapter1, DXGI_ADAPTER_DESC1)> = all.iter().filter(|(_, d)| d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 == 0).collect();
         let count = hardware.len();
         let by_preference = |preference: DXGI_GPU_PREFERENCE| -> Option<IDXGIAdapter1> {
             let factory6 = factory.cast::<IDXGIFactory6>().ok()?;
@@ -197,18 +209,18 @@ mod dxgi {
             String::from_utf16_lossy(&d.Description[..len]).to_lowercase()
         };
         let (adapter, reason) = if let Some(wanted) = std::env::var("WGPU_ADAPTER_NAME").ok().map(|n| n.to_lowercase()) {
-            let found = hardware.iter().find(|(_, d)| name(d).contains(&wanted))?;
+            // Software adapters too: `Microsoft Basic Render Driver` names WARP.
+            let found = all.iter().find(|(_, d)| name(d).contains(&wanted))?;
             (found.0.clone(), Reason::EnvName)
         } else if let Some(power) = wgpu::PowerPreference::from_env() {
             let preference = if power == wgpu::PowerPreference::HighPerformance { DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE } else { DXGI_GPU_PREFERENCE_MINIMUM_POWER };
             (by_preference(preference)?, Reason::EnvPower)
-        } else if let Some(found) = (surface.is_some() || presented)
-            .then(super::display_devices)
-            .unwrap_or_default()
+        } else if let Some(found) = super::display_devices()
             .iter()
             .find_map(|ids| hardware.iter().find(|(_, d)| (d.VendorId, d.DeviceId) == *ids))
         {
-            (found.0.clone(), Reason::Display)
+            // Every device takes the GPU a window would get; `presented` only names the reason.
+            (found.0.clone(), if surface.is_some() || presented { Reason::Display } else { Reason::WindowGpu })
         } else {
             (by_preference(DXGI_GPU_PREFERENCE_MINIMUM_POWER).or_else(|| hardware.first().map(|h| h.0.clone()))?, Reason::LowPower)
         };
