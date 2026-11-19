@@ -7,6 +7,7 @@ use std::ptr::NonNull;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
+use objc2_foundation::NSString;
 use objc2_metal::{
     MTLClearColor, MTLCommandBuffer, MTLCommandEncoder, MTLCounterDontSample, MTLIndexType, MTLLoadAction, MTLRenderCommandEncoder, MTLRenderPassDescriptor,
     MTLScissorRect, MTLStoreAction, MTLViewport,
@@ -15,6 +16,7 @@ use objc2::rc::autoreleasepool;
 use parking_lot::Mutex;
 use wgpu::custom::*;
 
+use super::device::debug_labels;
 use super::encode::Rec;
 use super::layout::{Counts, GroupRaw};
 use super::pipeline::{PipelineRaw, RenderPipeline, vertex_slot};
@@ -96,6 +98,10 @@ impl MetalPass {
             let cb = rec.pass_buffer();
             autoreleasepool(|_| cb.renderCommandEncoderWithDescriptor(&d)).expect("a Metal render encoder")
         };
+        if debug_labels() {
+            let label = desc.label.unwrap_or("rune metal render pass");
+            raw.setLabel(Some(&NSString::from_str(label)));
+        }
         MetalPass {
             rec, raw, keep, pipeline: None, groups: Default::default(), dirty: 0, sizes_dirty: false,
             immediates: Vec::new(), immediates_dirty: false, index: None, vertex: Vec::new(), swaps: SWAPS.load(Ordering::Relaxed),

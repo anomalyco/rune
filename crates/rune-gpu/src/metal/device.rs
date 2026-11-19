@@ -5,7 +5,8 @@ use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
 use std::sync::atomic::{AtomicIsize, AtomicUsize, Ordering};
 
-use objc2_metal::{MTLCommandQueue, MTLDevice, MTLLanguageVersion, MTLLibrary, MTLSharedEvent};
+use objc2_foundation::NSString;
+use objc2_metal::{MTLCommandQueue, MTLDevice, MTLEvent, MTLLanguageVersion, MTLLibrary, MTLSharedEvent};
 use parking_lot::Mutex;
 use wgpu::custom::*;
 
@@ -47,10 +48,27 @@ pub(crate) struct MetalDevice {
     limits: wgpu::Limits,
 }
 
+/// Whether to attach debug labels to per-frame command buffers and encoders: on in debug builds
+/// or when Metal API validation / GPU capture is enabled, off in release/perf frames so steady
+/// frames do no `NSString` allocations.
+pub(super) fn debug_labels() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| {
+        cfg!(debug_assertions)
+            || std::env::var_os("MTL_DEBUG_LAYER").is_some()
+            || std::env::var_os("METAL_DEVICE_WRAPPER_TYPE").is_some()
+            || std::env::var_os("METAL_CAPTURE_ENABLED").is_some()
+    })
+}
+
 pub(super) fn new(device: Obj<dyn MTLDevice>, desc: &wgpu::DeviceDescriptor<'_>) -> (MetalDevice, MetalQueue) {
+    let queue = device.newCommandQueue().expect("a Metal command queue");
+    let event = device.newSharedEvent().expect("a Metal shared event");
+    queue.setLabel(Some(&NSString::from_str("rune metal queue")));
+    event.setLabel(Some(&NSString::from_str("rune metal event")));
     let shared = Arc::new(Shared {
-        queue: device.newCommandQueue().expect("a Metal command queue"),
-        event: device.newSharedEvent().expect("a Metal shared event"),
+        queue,
+        event,
         msl: msl_version(),
         state: Mutex::new(State::default()),
         buffers: Arc::default(),
@@ -112,7 +130,7 @@ impl DeviceInterface for MetalDevice {
     }
     unsafe fn create_pipeline_cache(&self, _: &wgpu::PipelineCacheDescriptor<'_>) -> DispatchPipelineCache { DispatchPipelineCache::custom(Inert) }
     fn create_buffer(&self, desc: &wgpu::BufferDescriptor<'_>) -> DispatchBuffer {
-        DispatchBuffer::custom(MetalBuffer::new(&self.shared, desc.size))
+        DispatchBuffer::custom(MetalBuffer::new(&self.shared, desc.size, desc.label))
     }
     fn create_texture(&self, desc: &wgpu::TextureDescriptor<'_>) -> DispatchTexture {
         let texture = MetalTexture::new(&self.shared.device, desc, Live::new(&self.shared.textures));
@@ -134,8 +152,8 @@ impl DeviceInterface for MetalDevice {
     fn create_query_set(&self, desc: &wgpu::QuerySetDescriptor<'_>) -> DispatchQuerySet {
         DispatchQuerySet::custom(super::query::QuerySet::new(&self.shared.device, desc))
     }
-    fn create_command_encoder(&self, _: &wgpu::CommandEncoderDescriptor<'_>) -> DispatchCommandEncoder {
-        DispatchCommandEncoder::custom(MetalEncoder::new(self.shared.clone()))
+    fn create_command_encoder(&self, desc: &wgpu::CommandEncoderDescriptor<'_>) -> DispatchCommandEncoder {
+        DispatchCommandEncoder::custom(MetalEncoder::new(self.shared.clone(), desc.label))
     }
     fn create_render_bundle_encoder(&self, _: &wgpu::RenderBundleEncoderDescriptor<'_>) -> DispatchRenderBundleEncoder {
         super::unsupported!("render bundles")

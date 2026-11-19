@@ -5,12 +5,14 @@ use std::any::Any;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
+use objc2_foundation::NSString;
 use objc2_metal::{MTLBlitCommandEncoder, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue, MTLDrawable, MTLEvent, MTLSharedEvent};
 use objc2::rc::autoreleasepool;
 use objc2::runtime::ProtocolObject;
 use parking_lot::MutexGuard;
 use wgpu::custom::*;
 
+use super::device::debug_labels;
 use super::encode::{MetalCommandBuffer, buffer_to_texture};
 use super::resource::{BufferRaw, MetalBuffer, MetalTexture};
 use super::surface::MetalOutput;
@@ -108,6 +110,10 @@ impl Shared {
         let uploads = st.uploads.get_or_insert_with(|| {
             let cb = self.command_buffer();
             let blit = autoreleasepool(|_| cb.blitCommandEncoder()).expect("a Metal blit encoder");
+            if debug_labels() {
+                cb.setLabel(Some(&NSString::from_str("rune metal uploads")));
+                blit.setLabel(Some(&NSString::from_str("rune metal uploads blit")));
+            }
             Uploads { cb, blit, keep: Vec::new() }
         });
         encode(&uploads.blit);
@@ -224,7 +230,7 @@ impl QueueInterface for MetalQueue {
         let idle = || self.0.recording.load(std::sync::atomic::Ordering::Acquire) == 0;
         if store.write_ahead(&self.0, offset, data, idle) { return }
         let target = store.gpu_write();
-        let staging = Arc::new(BufferRaw::with_bytes(&self.0, data));
+        let staging = Arc::new(BufferRaw::with_bytes(&self.0, data, Some("rune metal write_buffer")));
         self.0.upload(|blit| {
             // SAFETY: both ranges are in bounds; wgpu checked the target's.
             unsafe { blit.copyFromBuffer_sourceOffset_toBuffer_destinationOffset_size(&staging.raw, 0, &target.raw, offset as usize, data.len()) }
@@ -239,7 +245,7 @@ impl QueueInterface for MetalQueue {
         let data = &data[layout.offset as usize..];
         if data.is_empty() || size.width == 0 || size.height == 0 || size.depth_or_array_layers == 0 { return }
         let texture = dst.texture.as_custom::<MetalTexture>().expect("a Metal texture").raw.clone();
-        let staging = Arc::new(BufferRaw::with_bytes(&self.0, data));
+        let staging = Arc::new(BufferRaw::with_bytes(&self.0, data, Some("rune metal write_texture")));
         let layout = wgpu::TexelCopyBufferLayout { offset: 0, ..layout };
         self.0.upload(|blit| buffer_to_texture(blit, &staging.raw, layout, &texture, dst.mip_level, dst.origin, size), [staging.clone(), texture.clone()]);
     }
@@ -272,6 +278,7 @@ impl QueueInterface for MetalQueue {
             Some(held) => held,
             None => {
                 let cb = self.0.command_buffer();
+                if debug_labels() { cb.setLabel(Some(&NSString::from_str("rune metal present"))); }
                 let value = self.0.stamp(&mut st, &cb, Vec::new());
                 (cb, value)
             }

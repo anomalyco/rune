@@ -6,13 +6,18 @@ use std::ptr::NonNull;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use objc2_metal::{MTLCommandBuffer, MTLCommandEncoder, MTLComputeCommandEncoder, MTLComputePassDescriptor, MTLComputePipelineState, MTLDevice, MTLSize};
+use objc2_foundation::NSString;
+use objc2_metal::{
+    MTLCommandBuffer, MTLCommandEncoder, MTLComputeCommandEncoder, MTLComputePassDescriptor, MTLComputePipelineDescriptor,
+    MTLComputePipelineState, MTLDevice, MTLPipelineOption, MTLSize,
+};
 use objc2::rc::autoreleasepool;
 use parking_lot::Mutex;
 use wgpu::custom::*;
 use wgpu::naga;
 
 use super::derive::{self, Use};
+use super::device::debug_labels;
 use super::encode::Rec;
 use super::layout::{COMPUTE, GroupRaw, LayoutRaw, PipelineLayout};
 use super::shader::{Stage, compile};
@@ -48,7 +53,12 @@ pub(super) fn create(shared: &Shared, desc: &wgpu::ComputePipelineDescriptor<'_>
     let stage = Stage { module: desc.module, entry: desc.entry_point, constants: desc.compilation_options.constants,
         kind: naga::ShaderStage::Compute };
     let cs = compile(shared, &stage, &layout.stages[COMPUTE], false).unwrap_or_else(|e| panic!("{label}: {e}"));
-    let state = shared.device.newComputePipelineStateWithFunction_error(&cs.function).unwrap_or_else(|e| panic!("{label}: {}", e.localizedDescription()));
+    let d = MTLComputePipelineDescriptor::new();
+    d.setComputeFunction(Some(&cs.function));
+    if let Some(label) = desc.label { d.setLabel(Some(&NSString::from_str(label))); }
+    let state = shared.device
+        .newComputePipelineStateWithDescriptor_options_reflection_error(&d, MTLPipelineOption::empty(), None)
+        .unwrap_or_else(|e| panic!("{label}: {}", e.localizedDescription()));
     let [x, y, z] = cs.workgroup.map(|n| n as usize);
     let workgroup_memory = cs.workgroup_memory.into_iter().map(|size| size.next_multiple_of(16)).collect();
     ComputePipeline {
@@ -105,6 +115,10 @@ impl MetalComputePass {
             let cb = rec.pass_buffer();
             autoreleasepool(|_| cb.computeCommandEncoderWithDescriptor(&d)).expect("a Metal compute encoder")
         };
+        if debug_labels() {
+            let label = desc.label.unwrap_or("rune metal compute pass");
+            raw.setLabel(Some(&NSString::from_str(label)));
+        }
         MetalComputePass {
             rec, raw, keep, pipeline: None, groups: Default::default(), dirty: 0, sizes_dirty: false,
             immediates: Vec::new(), immediates_dirty: false, swaps: SWAPS.load(Ordering::Relaxed),

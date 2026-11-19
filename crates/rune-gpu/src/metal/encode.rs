@@ -5,14 +5,15 @@ use std::any::Any;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use objc2_foundation::NSRange;
-use objc2_metal::{MTLBlitCommandEncoder, MTLBuffer, MTLCommandBuffer, MTLCommandEncoder, MTLDevice, MTLOrigin, MTLResourceOptions, MTLSize, MTLTexture};
+use objc2_foundation::{NSRange, NSString};
+use objc2_metal::{MTLBlitCommandEncoder, MTLBuffer, MTLCommandBuffer, MTLCommandEncoder, MTLDevice, MTLOrigin, MTLResource, MTLResourceOptions, MTLSize, MTLTexture};
 use objc2::rc::autoreleasepool;
 use objc2::runtime::ProtocolObject;
 use parking_lot::Mutex;
 use wgpu::custom::*;
 
 use super::compute::MetalComputePass;
+use super::device::debug_labels;
 use super::pass::MetalPass;
 use super::query::QuerySet;
 use super::resource::{MetalBuffer, MetalTexture, TextureRaw};
@@ -27,6 +28,8 @@ pub(super) struct Rec {
     pub(super) keep: Keep,
     /// Whether a pass drew into a drawable, so the buffer waits for its present.
     pub(super) drawable: bool,
+    /// Set only when `debug_labels()` is on, so release frames do no label allocation.
+    label: Option<Box<str>>,
 }
 
 /// The command buffer as recorded so far.
@@ -83,7 +86,12 @@ impl Rec {
     fn cb(&mut self) -> &ProtocolObject<dyn MTLCommandBuffer> {
         if let Open::Empty = self.open {
             self.shared.recording.fetch_add(1, Ordering::AcqRel);
-            self.open = Open::Buffer(self.shared.command_buffer());
+            let cb = self.shared.command_buffer();
+            if debug_labels() {
+                let label = self.label.as_deref().unwrap_or("rune metal encoder");
+                cb.setLabel(Some(&NSString::from_str(label)));
+            }
+            self.open = Open::Buffer(cb);
         }
         match &self.open {
             Open::Buffer(cb) | Open::Blit(cb, _) => cb,
@@ -107,6 +115,7 @@ impl Rec {
             self.cb();
             let Open::Buffer(cb) = std::mem::take(&mut self.open) else { unreachable!("opened above") };
             let blit = autoreleasepool(|_| cb.blitCommandEncoder()).expect("a Metal blit encoder");
+            if debug_labels() { blit.setLabel(Some(&NSString::from_str("rune metal blit"))); }
             self.open = Open::Blit(cb, blit);
         }
         match &self.open {
@@ -130,9 +139,10 @@ impl Drop for Rec {
 }
 
 impl MetalEncoder {
-    pub(crate) fn new(shared: Arc<Shared>) -> Self {
+    pub(crate) fn new(shared: Arc<Shared>, label: Option<&str>) -> Self {
         let keep = shared.keep_list();
-        MetalEncoder { rec: Arc::new(Mutex::new(Rec { shared, open: Open::Empty, keep, drawable: false })) }
+        let label = debug_labels().then(|| label.map(Box::from)).flatten();
+        MetalEncoder { rec: Arc::new(Mutex::new(Rec { shared, open: Open::Empty, keep, drawable: false, label })) }
     }
 }
 
@@ -190,7 +200,9 @@ send_sync!(Zeros);
 
 impl Zeros {
     pub(super) fn new(shared: &Shared) -> Self {
-        Zeros(shared.device.newBufferWithLength_options(ZEROS, MTLResourceOptions::StorageModeShared).expect("a Metal buffer"))
+        let raw = shared.device.newBufferWithLength_options(ZEROS, MTLResourceOptions::StorageModeShared).expect("a Metal buffer");
+        raw.setLabel(Some(&NSString::from_str("rune metal zeros")));
+        Zeros(raw)
     }
 }
 
