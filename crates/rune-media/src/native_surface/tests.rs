@@ -358,12 +358,7 @@ fn completion_worker_preserves_cpu_gpu_overlap() {
         pass.set_bind_group(0, &bind, &[]);
         pass.dispatch_workgroups((INVOCATIONS / 64) as u32, 1, 1);
     };
-    // The adapter's speed, from submissions that grow 16 times a step from 16.8 million loop
-    // iterations until one takes 4 ms: no step runs more than 16 times the one before it, so
-    // none can pass 64 ms on an adapter that ran the step before in under 4.
-    let (mut iterations, mut took) = (256u32, Duration::ZERO);
-    while took < Duration::from_millis(4) && iterations < 1 << 26 {
-        iterations = if took.is_zero() { iterations } else { iterations * 16 };
+    let time = |iterations: u32| {
         let mut encoder = gpu.device.create_command_encoder(&Default::default());
         workload(&mut encoder, iterations);
         let started = Instant::now();
@@ -372,10 +367,22 @@ fn completion_worker_preserves_cpu_gpu_overlap() {
             gpu.assert_alive();
             panic!("a calibration submission of {iterations} iterations didn't complete in 5 s");
         }
-        took = started.elapsed();
+        started.elapsed()
+    };
+    // The first submission also pays for the pipeline's first use; it times nothing.
+    time(1);
+    // The adapter's speed, from submissions that grow 16 times a step from 16.8 million loop
+    // iterations until one takes 4 ms: no step runs more than 16 times the one before it, so
+    // none can pass 64 ms on an adapter that ran the step before in under 4.
+    let (mut iterations, mut took) = (256u32, Duration::ZERO);
+    while took < Duration::from_millis(4) && iterations < 1 << 26 {
+        iterations = if took.is_zero() { iterations } else { iterations * 16 };
+        took = time(iterations);
     }
     gpu.assert_alive();
-    let per_iteration = took.as_secs_f64() / iterations as f64;
+    // Seconds per iteration, never below what a whole submission measured: submit to done
+    // includes the GPU's time, so a plan from it can only come out shorter than planned.
+    let mut per_iteration = took.as_secs_f64() / iterations as f64;
     eprintln!("overlap probe: on {}, {iterations} iterations took {} us", gpu.adapter.get_info().name, took.as_micros());
     let target = Offscreen::new(&gpu.device, 16, 16);
     let mut outcomes = Vec::new();
@@ -427,6 +434,7 @@ fn completion_worker_preserves_cpu_gpu_overlap() {
         if outcome == "overlapped" {
             return;
         }
+        per_iteration = per_iteration.min((finished - submitted).as_secs_f64() / iterations as f64);
         outcomes.push(outcome);
     }
     panic!("the snatch write lock never returned while GPU work was pending: {outcomes:?}");
