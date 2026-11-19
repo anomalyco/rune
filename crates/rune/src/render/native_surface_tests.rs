@@ -149,3 +149,114 @@ fn video_interleaves_with_renderer_springs_and_external_timing_on(gpu: Gpu) {
         }
     }
 }
+
+#[test]
+fn video_continuous_corners_match_uber_shader() {
+    use crate::render::{Instance, KIND_RECT, NO_CLIP, pack_clip_radii};
+
+    let gpu = Gpu::headless();
+    let (w, h) = (96u32, 80u32);
+    let surface = NativeSurface::new();
+    surface
+        .push_bytes(
+            ByteFrame {
+                width: 80,
+                height: 64,
+                format: Format::Bgra,
+                color: ColorInfo::default(),
+                planes: [vec![255; 80 * 64 * 4], vec![]],
+            },
+            1,
+        )
+        .unwrap();
+
+    let cases: [(&str, [f32; 4], [f32; 4], [f32; 4], Option<[f32; 4]>); 3] = [
+        ("uniform-continuous", [8.0, 8.0, 80.0, 64.0], [-20.0; 4], NO_CLIP, None),
+        ("mixed-continuous", [8.0, 8.0, 80.0, 64.0], [-20.0, 12.0, -10.0, 0.0], NO_CLIP, None),
+        (
+            "continuous-clip",
+            [8.0, 8.0, 80.0, 64.0],
+            [0.0; 4],
+            [12.0, 12.0, 84.0, 68.0],
+            Some([-16.0, -10.0, -16.0, 0.0]),
+        ),
+    ];
+
+    for (name, box_rect, radii, clip, clip_radii) in cases {
+        let mut fade = [0u32; 4];
+        if let Some(cr) = clip_radii {
+            fade[3] = pack_clip_radii(clip, cr);
+        }
+
+        // Reference: uber shader (`shader.wgsl`) solid white KIND_RECT with the same geometry.
+        let inst = Instance {
+            rect: box_rect,
+            radii,
+            fill: [1.0; 4],
+            border: [0.0; 4],
+            params: [0.0, KIND_RECT, 0.0, 1.0],
+            uv: [0.0; 4],
+            clip,
+            fade,
+        };
+        let mut atlas = crate::text::Atlas::new();
+        let mut uber = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+        uber.prepare(&gpu.device, &gpu.queue, &mut atlas, &[inst], (w, h));
+        let uber_target = Offscreen::new(&gpu.device, w, h);
+        let mut enc = gpu.device.create_command_encoder(&Default::default());
+        uber.draw(&mut enc, &uber_target.view, [0.0; 4]);
+        uber_target.copy(&mut enc);
+        uber.submit(&gpu.queue, enc);
+        let uber_px = uber_target.read(&gpu.device);
+
+        // Video shader (`video.wgsl`) with a solid white frame and the exact same rect/radii/clip/fade.
+        let draw = crate::native_surface::SurfaceDraw {
+            surface: surface.clone(),
+            fit: SurfaceFit::Fill,
+            before_instance: 0,
+            rect: box_rect,
+            radii,
+            clip,
+            fade,
+            opacity: 1.0,
+        };
+        let mut video = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+        video.prepare(&gpu.device, &gpu.queue, &mut atlas, &[], (w, h));
+        video.prepare_surfaces(&gpu.device, &gpu.queue, &[draw], (w, h));
+        let video_target = Offscreen::new(&gpu.device, w, h);
+        let mut enc = gpu.device.create_command_encoder(&Default::default());
+        video.draw(&mut enc, &video_target.view, [0.0; 4]);
+        video_target.copy(&mut enc);
+        video.submit(&gpu.queue, enc);
+        let video_px = video_target.read(&gpu.device);
+
+        let mut max_diff = 0u8;
+        let mut worst = None;
+        let (x0, y0, x1, y1) = (
+            box_rect[0] as u32,
+            box_rect[1] as u32,
+            (box_rect[0] + box_rect[2]) as u32,
+            (box_rect[1] + box_rect[3]) as u32,
+        );
+        for y in 0..h {
+            for x in 0..w {
+                let i = ((y * w + x) * 4) as usize;
+                let u = [uber_px[i], uber_px[i + 1], uber_px[i + 2], uber_px[i + 3]];
+                let v = [video_px[i], video_px[i + 1], video_px[i + 2], video_px[i + 3]];
+                if x < x0 || x >= x1 || y < y0 || y >= y1 {
+                    assert_eq!(v, [0, 0, 0, 0], "{name}: video drew outside its rect at ({x},{y}): {v:?}");
+                    continue;
+                }
+                let d = (0..4).map(|k| u[k].abs_diff(v[k])).max().unwrap();
+                if d > max_diff {
+                    max_diff = d;
+                    worst = Some((x, y, u, v));
+                }
+            }
+        }
+        assert!(
+            max_diff <= 1,
+            "{name}: video.wgsl drifted from shader.wgsl: max_diff={max_diff} worst={worst:?}"
+        );
+    }
+}
