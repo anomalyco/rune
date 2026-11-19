@@ -16,10 +16,14 @@
 //! about 100 MB per full-screen surface on each GPU, and takes 50 to 160 ms to make instead of
 //! 6 ms. A laptop whose panel is on its integrated GPU still gets the integrated GPU.
 //!
-//! `WGPU_ADAPTER_NAME` (a case-insensitive part of the adapter's name) and `WGPU_POWER_PREF`
-//! (`low`, `high` or `none`) override the choice. Without them, and without a compositor device
-//! or a display's GPU to match, Rune takes the lowest-power adapter. `RUNE_GPU_LOG=1` prints the choice and its
-//! reason; a machine with more than one GPU prints it anyway, once per process.
+//! `WGPU_ADAPTER_NAME` (a case-insensitive part of the adapter's name, software adapters
+//! included: `Microsoft Basic Render Driver` is WARP) and `WGPU_POWER_PREF` (`low`, `high` or
+//! `none`) override the choice. A name that matches no adapter, or names one that can't make a
+//! device now, is an error: Rune never falls through to another GPU, since whoever names an
+//! adapter means it (a replacement device after a loss would otherwise land on a GPU the work
+//! wasn't sized for). Without them, and without a compositor device or a display's GPU to
+//! match, Rune takes the lowest-power adapter. `RUNE_GPU_LOG=1` prints every choice and its
+//! reason; a machine with more than one GPU prints the first anyway, once per process.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Reason {
@@ -77,7 +81,8 @@ fn shows(compositor: Option<&str>, pci: &str) -> bool {
 pub fn pick(instance: &wgpu::Instance, surface: Option<&wgpu::Surface<'_>>, presented: bool) -> Result<Pick, String> {
     // DX12: the same order through DXGI's adapter list, and only the chosen adapter goes to wgpu.
     #[cfg(target_os = "windows")]
-    if let Some((pick, adapters)) = dxgi::pick(instance, surface, presented) {
+    if let Some(picked) = dxgi::pick(instance, surface, presented) {
+        let (pick, adapters) = picked.inspect_err(|error| log_failure(error))?;
         return Ok(log(pick, Some(adapters)));
     }
     let usable = |adapter: &wgpu::Adapter| surface.is_none_or(|s| adapter.is_surface_supported(s));
@@ -88,10 +93,12 @@ pub fn pick(instance: &wgpu::Instance, surface: Option<&wgpu::Surface<'_>>, pres
         let infos: Vec<_> = adapters.iter().map(|a| (a.get_info(), usable(a))).collect();
         let found = by_name(&name, &infos);
         enumerated = Some(infos.len());
-        match found {
-            Some(index) => return Ok(log(Pick { adapter: adapters.into_iter().nth(index).expect("index from this list"), reason: Reason::EnvName, compositor }, enumerated)),
-            None => eprintln!("rune: no GPU adapter matches WGPU_ADAPTER_NAME={name:?}; choosing as usual"),
-        }
+        let Some(index) = found else {
+            let error = format!("no GPU adapter matches WGPU_ADAPTER_NAME={name:?}");
+            log_failure(&error);
+            return Err(error);
+        };
+        return Ok(log(Pick { adapter: adapters.into_iter().nth(index).expect("index from this list"), reason: Reason::EnvName, compositor }, enumerated));
     }
     if let Some(power) = wgpu::PowerPreference::from_env() {
         let adapter = request(instance, surface, power)?;
@@ -175,16 +182,18 @@ mod dxgi {
 
     /// The pick and how many hardware adapters DXGI lists; None when the instance isn't DX12's,
     /// or the adapter chosen can't run D3D12 or present to `surface` (the caller then asks wgpu).
-    pub(super) fn pick(instance: &wgpu::Instance, surface: Option<&wgpu::Surface<'_>>, presented: bool) -> Option<(Pick, usize)> {
+    /// For `WGPU_ADAPTER_NAME` the answer is final: the adapter it names, or the error saying why
+    /// not, without making a device on any other adapter.
+    pub(super) fn pick(instance: &wgpu::Instance, surface: Option<&wgpu::Surface<'_>>, presented: bool) -> Option<Result<(Pick, usize), String>> {
         // SAFETY: wgpu's DX12 instance, borrowed for this call.
         let hal = unsafe { instance.as_hal::<wgpu::hal::api::Dx12>() }?;
         // SAFETY: a DXGI factory and its adapters, asked for their descriptions.
         let factory = unsafe { CreateDXGIFactory1::<IDXGIFactory1>() }.ok()?;
-        let hardware: Vec<(IDXGIAdapter1, DXGI_ADAPTER_DESC1)> = (0..)
+        let all: Vec<(IDXGIAdapter1, DXGI_ADAPTER_DESC1)> = (0..)
             .map_while(|i| unsafe { factory.EnumAdapters1(i) }.ok())
             .filter_map(|a| unsafe { a.GetDesc1() }.ok().map(|d| (a, d)))
-            .filter(|(_, d)| d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 == 0)
             .collect();
+        let hardware: Vec<&(IDXGIAdapter1, DXGI_ADAPTER_DESC1)> = all.iter().filter(|(_, d)| d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 == 0).collect();
         let count = hardware.len();
         let by_preference = |preference: DXGI_GPU_PREFERENCE| -> Option<IDXGIAdapter1> {
             let factory6 = factory.cast::<IDXGIFactory6>().ok()?;
@@ -196,10 +205,21 @@ mod dxgi {
             let len = d.Description.iter().position(|&c| c == 0).unwrap_or(d.Description.len());
             String::from_utf16_lossy(&d.Description[..len]).to_lowercase()
         };
-        let (adapter, reason) = if let Some(wanted) = std::env::var("WGPU_ADAPTER_NAME").ok().map(|n| n.to_lowercase()) {
-            let found = hardware.iter().find(|(_, d)| name(d).contains(&wanted))?;
-            (found.0.clone(), Reason::EnvName)
-        } else if let Some(power) = wgpu::PowerPreference::from_env() {
+        if let Ok(wanted) = std::env::var("WGPU_ADAPTER_NAME") {
+            let Some((adapter, desc)) = all.iter().find(|(_, d)| name(d).contains(&wanted.to_lowercase())) else {
+                return Some(Err(format!("no GPU adapter matches WGPU_ADAPTER_NAME={wanted:?}")));
+            };
+            // SAFETY: as below.
+            let Some(exposed) = (unsafe { hal.expose_adapter(adapter) }) else {
+                return Some(Err(format!("WGPU_ADAPTER_NAME={wanted:?} names {:?}, which can't make a D3D12 device now", name(desc))));
+            };
+            let adapter = unsafe { instance.create_adapter_from_hal(exposed) };
+            if surface.is_some_and(|s| !adapter.is_surface_supported(s)) {
+                return Some(Err(format!("WGPU_ADAPTER_NAME={wanted:?} names {:?}, which can't present to this window", name(desc))));
+            }
+            return Some(Ok((Pick { adapter, reason: Reason::EnvName, compositor: None }, count)));
+        }
+        let (adapter, reason) = if let Some(power) = wgpu::PowerPreference::from_env() {
             let preference = if power == wgpu::PowerPreference::HighPerformance { DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE } else { DXGI_GPU_PREFERENCE_MINIMUM_POWER };
             (by_preference(preference)?, Reason::EnvPower)
         } else if let Some(found) = (surface.is_some() || presented)
@@ -219,7 +239,7 @@ mod dxgi {
         if surface.is_some_and(|s| !adapter.is_surface_supported(s)) {
             return None;
         }
-        Some((Pick { adapter, reason, compositor: None }, count))
+        Some(Ok((Pick { adapter, reason, compositor: None }, count)))
     }
 }
 
@@ -303,16 +323,24 @@ fn same_pci(a: &str, b: &str) -> bool {
 }
 
 fn log(pick: Pick, adapters: Option<usize>) -> Pick {
-    static ONCE: std::sync::Once = std::sync::Once::new();
-    if std::env::var_os("RUNE_GPU_LOG").is_some_and(|v| v != "0") || adapters.is_some_and(|n| n > 1) {
-        ONCE.call_once(|| {
-            let info = pick.adapter.get_info();
-            let pci = if info.device_pci_bus_id.is_empty() { String::new() } else { format!(", {}", info.device_pci_bus_id) };
-            let compositor = pick.compositor.as_deref().map(|c| format!("; compositor on {c}")).unwrap_or_default();
-            eprintln!("rune: GPU {:?} ({}; {:?}, {:?}{pci}): {}{compositor}", info.name, crate::backend::label(&pick.adapter), info.backend, info.device_type, pick.reason.describe());
-        });
+    static FIRST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+    let first = FIRST.swap(false, std::sync::atomic::Ordering::Relaxed);
+    if gpu_log() || (first && adapters.is_some_and(|n| n > 1)) {
+        let info = pick.adapter.get_info();
+        let pci = if info.device_pci_bus_id.is_empty() { String::new() } else { format!(", {}", info.device_pci_bus_id) };
+        let compositor = pick.compositor.as_deref().map(|c| format!("; compositor on {c}")).unwrap_or_default();
+        eprintln!("rune: GPU {:?} ({}; {:?}, {:?}{pci}): {}{compositor}", info.name, crate::backend::label(&pick.adapter), info.backend, info.device_type, pick.reason.describe());
     }
     pick
+}
+
+/// A pick that found no adapter, said always: the device it was for won't be made.
+fn log_failure(error: &str) {
+    eprintln!("rune: no GPU: {error}");
+}
+
+fn gpu_log() -> bool {
+    std::env::var_os("RUNE_GPU_LOG").is_some_and(|v| v != "0")
 }
 
 /// The compositor's main device as a PCI address, asked once per process.
