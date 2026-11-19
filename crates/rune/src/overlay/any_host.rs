@@ -153,9 +153,8 @@ impl AnyHost for OverlayHost {
             app.window_focus(*focused);
             if !*focused {
                 core.control_click = false;
-                #[allow(irrefutable_let_patterns)]
                 if core.options.keys == KeyPolicy::OnDemand
-                    && let Some(Backing::Window(window)) = core.surface.live().map(|l| &l.backing)
+                    && let Some(window) = core.surface.live().and_then(|l| l.backing.window())
                 {
                     crate::platform::ime::cancel(window);
                     window.set_ime_allowed(false);
@@ -191,8 +190,7 @@ impl AnyHost for OverlayHost {
         let input_enabled = core.options.input.resolved(core.interactive) != OverlayInput::None;
         match event {
             WindowEvent::Moved(_) => {
-                #[allow(irrefutable_let_patterns)]
-                if let Some(live) = core.surface.live() && let Backing::Window(w) = &live.backing {
+                if let Some(live) = core.surface.live() && let Some(w) = live.backing.window() {
                     let scale = crate::window::backing_scale(w);
                     if (scale - live.scale).abs() > f32::EPSILON && let Some(gpu) = core.gpu.clone() {
                         core.rescale(app, &gpu, scale);
@@ -250,8 +248,7 @@ impl AnyHost for OverlayHost {
                 core.dirty |= app.keyboard(&core.clipboard, &event, core.mods);
             }
             WindowEvent::Ime(ime) if core.options.keys == KeyPolicy::OnDemand => {
-                #[allow(irrefutable_let_patterns)]
-                if let Some(Backing::Window(window)) = core.surface.live().map(|l| &l.backing) {
+                if let Some(window) = core.surface.live().and_then(|l| l.backing.window()) {
                     host_events::ime(app.rt_mut(), window, ime);
                     core.dirty = true;
                 }

@@ -272,9 +272,8 @@ impl OverlayCore {
         let update_ms = if app.has_compositor() { now.elapsed().as_secs_f64() * 1000.0 } else { 0.0 };
         super::input::drop_window_requests(app.rt_mut());
         self.clipboard.flush_core(app.rt_mut());
-        #[allow(irrefutable_let_patterns)]
         if self.options.keys == KeyPolicy::OnDemand
-            && let Backing::Window(window) = &live.backing
+            && let Some(window) = live.backing.window()
         {
             #[cfg(target_os = "macos")]
             let focused = self.panel.as_ref().map_or_else(|| window.has_focus(), |p| p.is_key());

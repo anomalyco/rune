@@ -493,7 +493,7 @@ fn destroy(hwnd: windows_sys::Win32::Foundation::HWND) {
     use windows_sys::Win32::UI::WindowsAndMessaging::{DefWindowProcW, DestroyWindow, GWLP_WNDPROC, SetWindowLongPtrW};
     // SAFETY: a window of this thread's; nothing of this process's uses it after.
     unsafe {
-        SetWindowLongPtrW(hwnd, GWLP_WNDPROC, DefWindowProcW as usize as isize);
+        SetWindowLongPtrW(hwnd, GWLP_WNDPROC, DefWindowProcW as *const () as usize as isize);
         DestroyWindow(hwnd);
     }
 }

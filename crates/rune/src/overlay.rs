@@ -350,6 +350,16 @@ enum Backing {
     Xwayland(crate::platform::x11::xwayland::XwaylandSurface),
 }
 
+impl Backing {
+    fn window(&self) -> Option<&Arc<Window>> {
+        match self {
+            Backing::Window(w) => Some(w),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+            Backing::Layer(_) | Backing::Xwayland(_) => None,
+        }
+    }
+}
+
 /// A shown overlay. The wgpu surface drops before what it draws into.
 struct Live {
     /// The OS accessibility adapter for this surface.
