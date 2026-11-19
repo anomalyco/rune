@@ -421,4 +421,15 @@ impl El {
         }
         self
     }
+    /// Reserves room for `n` more children. A view that rebuilds a large subtree from state
+    /// every frame reads the last one's child count with [`Cx::view_children`] and passes it
+    /// here before its first `child` or `extend_children`, so the fold lands at the full size
+    /// in one allocation instead of doubling from zero each frame.
+    ///
+    /// [`Cx::view_children`]: crate::Cx::view_children
+    #[inline]
+    pub fn reserve_children(&mut self, n: usize) -> &mut Self {
+        self.children.reserve(n);
+        self
+    }
 }

@@ -69,6 +69,9 @@ pub(crate) struct CxCore {
     pub(super) zoom: f32,
     pub(super) caret: Option<(String, [f32; 4])>,
     pub(super) caret_read: std::cell::Cell<bool>,
+    /// The root child count of the last view, for [`Cx::view_children`]; the root view
+    /// overwrites it with this one's once the app's view returns.
+    pub(super) view_children: std::cell::Cell<usize>,
     pub(super) layout: layout_read::LayoutRects,
     pub(super) layout_reads: std::cell::RefCell<layout_read::LayoutReads>,
 }
@@ -154,6 +157,9 @@ impl CxCore {
         let rect = caret_of(&self.caret, key);
         crate::memo::read_caret(key, rect);
         rect
+    }
+    pub(crate) fn view_children(&self) -> usize {
+        self.view_children.get()
     }
 }
 
@@ -353,6 +359,16 @@ impl<S> Cx<S> {
     /// popup placed from it lands the frame after each edit.
     #[inline(always)]
     pub fn caret(&self, key: &str) -> Option<[f32; 4]> { self.core.caret(key) }
+    /// The root child count of the last view. A view that rebuilds a large `root` from state
+    /// every frame passes it to [`El::reserve_children`] before its first
+    /// [`El::child`](crate::El::child) or [`El::extend_children`], so the children `Vec`
+    /// reaches its full size in one allocation instead of doubling from zero each frame. On the
+    /// first view it is 0.
+    ///
+    /// [`El::reserve_children`]: crate::El::reserve_children
+    /// [`El::extend_children`]: crate::El::extend_children
+    #[inline(always)]
+    pub fn view_children(&self) -> usize { self.core.view_children() }
 }
 
 /// [`Cx::caret`] for the caret `caret` (the focused field's path and rect).

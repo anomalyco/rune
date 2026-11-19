@@ -32,6 +32,7 @@ members = [
     "examples/web-showcase",
     "www/app",
     "examples/todo",
+    "examples/storm-race",
     "examples/settings",
     "examples/playground",
     "examples/knobs",

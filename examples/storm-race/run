@@ -1,0 +1,22 @@
+#!/bin/sh
+# Open the storm window with N cells (default 1000), built with the perf profile (the one the
+# benches use, so it is already built).
+#   examples/storm-race/run [N]
+# STORM_AT=x,y places the window's top-left corner at x, y points.
+# Builds only when a source is newer than the program: a build is queued through HiveMind and a
+# cold one takes minutes, which is why the window used to seem never to open.
+set -eu
+here=$(cd "$(dirname "$0")" && pwd -P)
+root=$(cd "$here/../.." && pwd -P)
+bin="$root/target/perf/storm-race"
+stale=no
+if [ ! -x "$bin" ]; then
+    stale=yes
+elif [ -n "$(find "$here/src" "$here/Cargo.toml" -newer "$bin" | head -1)" ]; then
+    stale=yes
+fi
+if [ "$stale" = yes ]; then
+    echo "storm-race: building (perf profile); the window opens when it finishes" >&2
+    (cd "$root" && cargo build -q -p storm-race --profile perf --bin storm-race)
+fi
+exec "$bin" "${1:-1000}"

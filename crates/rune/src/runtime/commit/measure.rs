@@ -74,6 +74,7 @@ impl RuntimeCore {
             nodes: &mut self.tree.nodes,
             committing,
             spare_nodes: &mut self.tree.spare_nodes,
+            view_children: &mut self.commit.view_children,
             text: &mut self.text,
             layout: &mut self.commit.layout,
             node_index: &mut self.tree.node_index,
@@ -166,7 +167,10 @@ impl Measurement<'_> {
     /// The app's view, or with the playground attached, the view it composes (the bar, or the
     /// playground around its stage).
     fn root_view(&self, cx: cx::CxCore) -> (El, cx::CxCore) {
-        let (root, cx) = self.app.view(cx, self.viewport);
+        let (root, mut cx) = self.app.view(cx, self.viewport);
+        // The next view's `Cx::view_children` hint: this view's root child count, before any
+        // window or caption frames it.
+        cx.view_children.set(root.children.len());
         // The Windows caption buttons go over everything the view drew, in a frame around it.
         let Some(caption) = &self.caption else { return (root, cx) };
         let symbol = cx.caption_color.unwrap_or(if self.env.system_dark { Color::WHITE } else { Color::BLACK });
@@ -464,6 +468,7 @@ impl Measurement<'_> {
             defaults: Default::default(),
             caret: this.caret.clone(),
             caret_read: std::cell::Cell::new(false),
+            view_children: std::cell::Cell::new(*this.view_children),
             layout: this.layout_seen.clone(),
             layout_reads: Default::default(),
         };
@@ -513,6 +518,8 @@ impl Measurement<'_> {
         self.zoom = cx.zoom;
         self.defaults = cx.defaults;
         self.titlebar = cx.titlebar;
+        // The count `root_view` recorded once the app's view returned: the next pass's hint.
+        *self.view_children = cx.view_children.get();
         // Reads made by memos this build reused count as made again.
         self.caret_read = cx.caret_read.get() || replayed.caret;
         self.layout_reads = cx.layout_reads.take();

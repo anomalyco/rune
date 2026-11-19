@@ -1,0 +1,20 @@
+[package]
+name = "storm-race"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+rune = { workspace = true, default-features = true }
+procwatch = { workspace = true }
+libc = { workspace = true }
+
+[features]
+frame-profile = ["rune/frame-profile"]
+
+[[bin]]
+name = "storm-race-bench"
+required-features = ["frame-profile"]
+
+[lints]
+workspace = true
