@@ -8,6 +8,8 @@ use std::ops::Range;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
+#[cfg(debug_assertions)]
+use objc2_metal::MTLResource;
 use parking_lot::Mutex;
 
 use super::Shared;
@@ -113,7 +115,12 @@ impl Store {
         let size = slots.current.size;
         let (next, held) = match slots.spares.iter().position(|(raw, _)| idle(raw)) {
             Some(i) => slots.spares.remove(i).expect("a spare"),
-            None => (Arc::new(BufferRaw::new(shared, size)), u64::MAX),
+            None => {
+                let fresh = BufferRaw::new(shared, size, None);
+                #[cfg(debug_assertions)]
+                if let Some(label) = slots.current.raw.label() { fresh.raw.setLabel(Some(&label)); }
+                (Arc::new(fresh), u64::MAX)
+            }
         };
         let missed = if held == u64::MAX { 0..size } else { slots.missed(held) };
         let end = offset + data.len() as u64;
