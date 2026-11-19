@@ -83,3 +83,29 @@ pub(crate) fn ui_wait(gpu: &crate::render::Gpu) {
         REMOVED.get().map(|at| returned.saturating_duration_since(*at).as_micros() as i128 - at.saturating_duration_since(returned).as_micros() as i128)
     );
 }
+
+/// Whether D3D12 would make a new device on WARP now: a removed device still referenced in the
+/// process is returned again (D3D12 keeps one device per adapter), so a replacement can't start.
+pub(crate) fn probe_new_device(at: &str) {
+    if REMOVED.get().is_none() {
+        return;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use windows::Win32::Graphics::{Direct3D::D3D_FEATURE_LEVEL_11_0, Direct3D12::{D3D12CreateDevice, ID3D12Device}, Dxgi::{CreateDXGIFactory1, IDXGIAdapter, IDXGIFactory4}};
+        let started = Instant::now();
+        let answer = (|| -> Result<String, windows::core::Error> {
+            let factory: IDXGIFactory4 = unsafe { CreateDXGIFactory1() }?;
+            let warp: IDXGIAdapter = unsafe { factory.EnumWarpAdapter() }?;
+            let mut device: Option<ID3D12Device> = None;
+            unsafe { D3D12CreateDevice(&warp, D3D_FEATURE_LEVEL_11_0, &mut device) }?;
+            let device = device.expect("D3D12CreateDevice gave no device");
+            Ok(match unsafe { device.GetDeviceRemovedReason() } {
+                Ok(()) => "a working device".into(),
+                Err(e) => format!("the removed device again ({e})"),
+            })
+        })()
+        .unwrap_or_else(|e| format!("an error ({e})"));
+        eprintln!("proof: {at}, {} us after the removal: D3D12CreateDevice on WARP gives {answer} in {} us", since().unwrap_or(0), started.elapsed().as_micros());
+    }
+}

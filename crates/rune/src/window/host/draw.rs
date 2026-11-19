@@ -134,6 +134,7 @@ impl Host {
                 } else if n == 2 && let Some((gpu, _)) = self.gpu.as_ref() {
                     crate::tooling::proof_removal::remove(gpu, "before the window's frame 2");
                 }
+                if n < 8 && let Some(w) = self.win.as_ref() { w.request_redraw(); }
             } else if crate::tooling::proof_removal::asked("uiwait") {
                 if let Some(us) = crate::tooling::proof_removal::since() {
                     eprintln!("proof: frame {n} starts {us} us after the removal; lost {}", self.gpu.as_ref().is_none_or(|(g, _)| g.is_lost()));
@@ -141,13 +142,13 @@ impl Host {
                     crate::tooling::proof_removal::ui_wait(gpu);
                 }
                 if n < 8 && let Some(w) = self.win.as_ref() { w.request_redraw(); }
-                if n < 8 && let Some(w) = self.win.as_ref() { w.request_redraw(); }
             }
         }
         let replaced = std::time::Instant::now();
         if !self.replace_lost_surface() { return; }
         if crate::tooling::proof_removal::since().is_some() {
             eprintln!("proof: the surface check took {} us; the frame draws on {:?}", replaced.elapsed().as_micros(), self.gpu.as_ref().map(|(g, _)| g.adapter.get_info().name));
+            crate::tooling::proof_removal::probe_new_device("after the frame's surface check");
         }
         // The radius a client-side frame rounds this window's bottom corners to, in device
         // pixels: zero unless it draws one, now and with a surface that composites alpha
