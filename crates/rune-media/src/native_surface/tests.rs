@@ -241,8 +241,11 @@ pub(super) fn render(gpu: &Gpu, renderer: &mut SurfaceRenderer, draws: &[Surface
         }
     }
     target.copy(&mut encoder);
+    // PROOF ONLY: a sentinel the copy must overwrite.
+    gpu.queue.write_buffer(&target.buffer, 0, &vec![0x5Au8; target.buffer.size() as usize]);
     renderer.submit(&gpu.queue, encoder);
     let pixels = target.read(&gpu.device);
+    PROOF_FRAME.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     for _ in draws {
         gpu.wait(&completion, std::time::Duration::from_secs(10)).expect("frame completion");
     }
@@ -550,6 +553,8 @@ fn video_gpu_colour_sharpness_geometry_and_lifetime_on(gpu: Gpu) {
     let mut renderer = SurfaceRenderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let surface = NativeSurface::new();
     let mut id = 0;
+    let mut proof_wrong = 0;
+    eprintln!("proof colour: adapter {:?}", gpu.adapter.get_info());
     for native in [false, cfg!(target_os = "macos")] {
         for format in [Format::Nv12Video, Format::Nv12Full] {
             for matrix in [Matrix::Bt601, Matrix::Bt709] {
@@ -580,19 +585,16 @@ fn video_gpu_colour_sharpness_geometry_and_lifetime_on(gpu: Gpu) {
                         );
                         let pixels = render(&gpu, &mut renderer, &[draw(&surface, [0.0, 0.0, 8.0, 8.0])], (8, 8));
                         let reference = nv12_reference(codes[0], codes[1], codes[2], format, color).map(srgb);
-                        for pixel in pixels.chunks_exact(4) {
-                            for c in 0..3 {
-                                assert!(
-                                    pixel[c].abs_diff(reference[c]) <= 1,
-                                    "native={native} {format:?} {matrix:?} {transfer:?} {codes:?}: {pixel:?} != {reference:?}"
-                                );
-                            }
-                            assert_eq!(pixel[3], 255);
-                        }
+                        let first = &pixels[0..4];
+                        let same = pixels.chunks_exact(4).all(|p| p == first);
+                        let ok = (0..3).all(|c| first[c].abs_diff(reference[c]) <= 1) && first[3] == 255;
+                        eprintln!("proof colour: frame {} id {id} native={native} {format:?} {matrix:?} {transfer:?} {codes:?}: got {first:?} uniform={same} want {reference:?} {}", PROOF_FRAME.load(std::sync::atomic::Ordering::Relaxed), if ok { "ok" } else { "WRONG" });
+                        if !ok { proof_wrong += 1; }
                     }
                 }
             }
         }
+        assert_eq!(proof_wrong, 0, "PROOF: wrong colour frames");
         // At matching device size every one-pixel stroke survives exactly. sRGB NV12 full
         // neutral chroma is an identity; BGRA checks all 256 code values in all channels.
         for format in [Format::Nv12Full, Format::Bgra] {
@@ -966,3 +968,6 @@ fn rotated_clip_buffers_draw_upright_like_its_poster_on(gpu: Gpu) {
         }
     }
 }
+
+/// PROOF ONLY: frames rendered through `render` so far.
+static PROOF_FRAME: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
