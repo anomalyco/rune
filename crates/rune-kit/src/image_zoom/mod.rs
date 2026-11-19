@@ -204,33 +204,135 @@ impl ImageZoom {
             _ => None,
         }
     }
+
+    fn wheel(&mut self, e: rune::WheelEvent, tx: &mut Tx) -> bool {
+        let v = self.view();
+        let b = self.bounds.get();
+        let to = if e.mods.ctrl || e.mods.cmd {
+            // Off macOS a pinch is a Ctrl + wheel; a browser's wheel runs the other way.
+            math::zoom_at(v, v.scale * math::wheel_zoom_factor(-e.dy), self.centred([e.x, e.y]), &b)
+        } else {
+            math::pan_by(v, [e.dx, e.dy], &b)
+        };
+        self.follow(to, tx);
+        true
+    }
+
+    fn magnify(&mut self, e: rune::MagnifyEvent, tx: &mut Tx) -> bool {
+        let v = self.view();
+        let factor = math::wheel_zoom_factor(-100.0 * (1.0 + e.delta).max(0.01).ln());
+        let to = math::zoom_at(v, v.scale * factor, self.centred([e.x, e.y]), &self.bounds.get());
+        self.follow(to, tx);
+        true
+    }
+
+    /// A press on the body (`on_body`, where a zoomed image pans) or the band around it.
+    /// Returns true when the gesture asks to close the preview.
+    fn press(&mut self, d: &Drag, on_body: bool, tx: &mut Tx) -> bool {
+        let at = [d.x, d.y];
+        match d.phase {
+            Phase::Down => {
+                tx.focus(KEY, false);
+                let on_backdrop = !on_body || !self.hits_image(at);
+                self.run(Event::PointerDown { on_body, on_backdrop, zoomed: self.zoomed(), at }, tx);
+            }
+            Phase::Move => { self.run(Event::PointerMoved { at }, tx); }
+            Phase::Up if d.cancelled() => { self.run(Event::PointerCancel, tx); }
+            Phase::Up => {
+                self.run(Event::PointerUp, tx);
+                let on_backdrop = !on_body || !self.hits_image(at);
+                if self.run(Event::Click { on_backdrop }, tx) { return true; }
+                if on_body && d.clicks == 2 { self.detail(self.centred(at), tx); }
+            }
+        }
+        if matches!(self.state, State::Still(Gesture::Panning { .. })) { tx.instant(); }
+        false
+    }
 }
 
 type Lens<S> = fn(&mut S) -> &mut ImageZoom;
 type OnClose<S> = Rc<dyn Fn(&mut S, &mut Tx)>;
 
-/// The full-window preview over the app's scrim: the image fitted between the bands and the
-/// zoom bar under it.
-pub struct Preview<S> {
+trait PreviewBind {
+    fn body(&self, e: El) -> El;
+    fn root(&self, e: El) -> El;
+    fn zoom_out(&self, b: IconButton) -> IconButton;
+    fn zoom_in(&self, b: IconButton) -> IconButton;
+    fn fit(&self, b: Button) -> Button;
+    fn close(&self, b: IconButton) -> IconButton;
+}
+
+struct PreviewHandlers<S> {
     lens: Lens<S>,
+    close: Option<OnClose<S>>,
+}
+
+impl<S: 'static> PreviewBind for PreviewHandlers<S> {
+    fn body(&self, e: El) -> El {
+        let (lens, close) = (self.lens, self.close.clone());
+        let mut e = e
+            .on_drag(move |s: &mut S, d: &mut Drag, tx: &mut Tx| {
+                if lens(s).press(d, true, tx) && let Some(c) = &close { c(s, tx); }
+            })
+            .on_wheel(move |s: &mut S, ev, tx| lens(s).wheel(ev, tx));
+        if cfg!(target_os = "macos") {
+            e = e.on_magnify(move |s: &mut S, ev, tx| lens(s).magnify(ev, tx));
+        }
+        e
+    }
+
+    fn root(&self, e: El) -> El {
+        let lens = self.lens;
+        let (dismiss, close, key_close) = (self.close.clone(), self.close.clone(), self.close.clone());
+        e.modal_tx(false, move |s: &mut S, tx: &mut Tx| {
+            if lens(s).owns_escape() { lens(s).fit(tx) } else if let Some(c) = &dismiss { c(s, tx) }
+        })
+        .on_drag(move |s: &mut S, d: &mut Drag, tx: &mut Tx| {
+            if lens(s).press(d, false, tx) && let Some(c) = &close { c(s, tx); }
+        })
+        .on_wheel(|_: &mut S, _, _: &mut Tx| true)
+        .on_key(move |s: &mut S, ev: &KeyEvent, tx: &mut Tx| match lens(s).key(ev, tx) {
+            Some(true) => { if let Some(c) = &key_close { c(s, tx); } true }
+            Some(false) => true,
+            None => false,
+        })
+    }
+
+    fn zoom_out(&self, b: IconButton) -> IconButton {
+        let lens = self.lens;
+        b.on_press_tx(move |s: &mut S, tx: &mut Tx| lens(s).zoom_out(tx))
+    }
+
+    fn zoom_in(&self, b: IconButton) -> IconButton {
+        let lens = self.lens;
+        b.on_press_tx(move |s: &mut S, tx: &mut Tx| lens(s).zoom_in(tx))
+    }
+
+    fn fit(&self, b: Button) -> Button {
+        let lens = self.lens;
+        b.on_press_tx(move |s: &mut S, tx: &mut Tx| lens(s).fit(tx))
+    }
+
+    fn close(&self, b: IconButton) -> IconButton {
+        let close = self.close.clone();
+        b.on_press_tx(move |s: &mut S, tx: &mut Tx| if let Some(c) = &close { c(s, tx); })
+    }
+}
+
+struct PreviewCore {
     natural: [f32; 2],
     image: El,
-    close: OnClose<S>,
     icons: Option<[&'static Icon; 2]>,
     labels: [String; 4],
     format: fn(u32) -> String,
     controls: Option<rune::Transition>,
 }
 
-impl<S: 'static> Preview<S> {
-    /// `image` (the app's element drawing the picture, with its key and shared-element id) is
-    /// placed and sized here; `natural` is its size in pixels.
-    pub fn new(lens: Lens<S>, natural: [f32; 2], image: El) -> Preview<S> {
-        Preview {
-            lens,
+impl PreviewCore {
+    fn new(natural: [f32; 2], image: El) -> PreviewCore {
+        PreviewCore {
             natural,
             image,
-            close: Rc::new(|_, _| {}),
             icons: None,
             labels: ["Zoom out".into(), "Zoom to fit".into(), "Zoom in".into(), "Close".into()],
             format: |n| format!("{n}%"),
@@ -238,75 +340,15 @@ impl<S: 'static> Preview<S> {
         }
     }
 
-    /// How the zoom bar comes and goes (as the image flies, or with the scrim).
-    pub fn controls_transition(mut self, t: rune::Transition) -> Self {
-        self.controls = Some(t);
-        self
-    }
-
-    pub fn on_close(mut self, f: impl Fn(&mut S, &mut Tx) + 'static) -> Self {
-        self.close = Rc::new(f);
-        self
-    }
-
-    /// The − and + glyphs (the close button takes the kit's).
-    pub fn icons(mut self, minus: &'static Icon, plus: &'static Icon) -> Self {
-        self.icons = Some([minus, plus]);
-        self
-    }
-
-    /// Accessible names: zoom out, zoom to fit (also the level's tooltip), zoom in and close.
-    pub fn labels(mut self, zoom_out: impl Into<String>, fit: impl Into<String>, zoom_in: impl Into<String>, close: impl Into<String>) -> Self {
-        self.labels = [zoom_out.into(), fit.into(), zoom_in.into(), close.into()];
-        self
-    }
-
-    /// How the level reads, from a whole percentage (`141%` unless set).
-    pub fn format_level(mut self, f: fn(u32) -> String) -> Self {
-        self.format = f;
-        self
-    }
-
-    /// The preview over a `window` of points. `reduced_motion` makes steps land at once.
-    pub fn build(self, zoom: &ImageZoom, k: &Kit, window: [f32; 2], reduced_motion: bool) -> El {
+    fn build(self, zoom: &ImageZoom, k: &Kit, window: [f32; 2], reduced_motion: bool, bind: &dyn PreviewBind) -> El {
         zoom.reduced_motion.set(reduced_motion);
         let (body, fitted) = zoom.measure(window, self.natural);
         let [x, y, w, h] = zoom.image_rect(body, fitted);
-        let lens = self.lens;
-        let bar = self.bar(zoom, k);
+        let bar = self.bar(zoom, k, bind);
         let scale = zoom.view().scale;
         // A glide's frames, a pinch and a pan move it to exactly where the view says.
         let image = self.image.absolute(x, y).size(w, h).radius(k.radius.md * scale).instant_changes();
-        let close = self.close.clone();
-        let mut body_el = el()
-            .key("image-preview-body")
-            .absolute(body[0], body[1])
-            .size(body[2], body[3])
-            .on_drag(move |s: &mut S, d: &mut Drag, tx: &mut Tx| press(s, lens, d, true, &close, tx))
-            .on_wheel(move |s: &mut S, e: rune::WheelEvent, tx: &mut Tx| {
-                let z = lens(s);
-                let v = z.view();
-                let b = z.bounds.get();
-                let to = if e.mods.ctrl || e.mods.cmd {
-                    // Off macOS a pinch is a Ctrl + wheel; a browser's wheel runs the other way.
-                    math::zoom_at(v, v.scale * math::wheel_zoom_factor(-e.dy), z.centred([e.x, e.y]), &b)
-                } else {
-                    math::pan_by(v, [e.dx, e.dy], &b)
-                };
-                z.follow(to, tx);
-                true
-            })
-            .child(image);
-        if cfg!(target_os = "macos") {
-            body_el = body_el.on_magnify(move |s: &mut S, e: rune::MagnifyEvent, tx: &mut Tx| {
-                let z = lens(s);
-                let v = z.view();
-                let factor = math::wheel_zoom_factor(-100.0 * (1.0 + e.delta).max(0.01).ln());
-                let to = math::zoom_at(v, v.scale * factor, z.centred([e.x, e.y]), &z.bounds.get());
-                z.follow(to, tx);
-                true
-            });
-        }
+        let mut body_el = bind.body(el().key("image-preview-body").absolute(body[0], body[1]).size(body[2], body[3])).child(image);
         if zoom.zoomed() {
             // A zoomed image fades out across the padding instead of being cut at the edge; a
             // fitted one never reaches it.
@@ -314,85 +356,88 @@ impl<S: 'static> Preview<S> {
                 .clip_fade_linear(PAD, PAD, PAD, PAD)
                 .cursor(if zoom.dragging() { Cursor::Grabbing } else { Cursor::Grab });
         }
-        let close = self.close.clone();
-        let dismiss = self.close.clone();
         // The preview holds focus, so its keys reach it before the app's (which zoom the window
         // on the same shortcuts) wherever the pointer pressed.
-        el().key(KEY)
-            .absolute(0.0, 0.0)
-            .w_full()
-            .h_full()
-            .focusable(true)
-            .no_focus_ring()
-            .modal_tx(false, move |s: &mut S, tx: &mut Tx| {
-                if lens(s).owns_escape() { lens(s).fit(tx) } else { dismiss(s, tx) }
-            })
-            .on_drag(move |s: &mut S, d: &mut Drag, tx: &mut Tx| press(s, lens, d, false, &close, tx))
-            .on_wheel(|_: &mut S, _, _: &mut Tx| true)
-            .on_key({
-                let close = self.close.clone();
-                move |s: &mut S, ev: &KeyEvent, tx: &mut Tx| match lens(s).key(ev, tx) {
-                    Some(true) => { close(s, tx); true }
-                    Some(false) => true,
-                    None => false,
-                }
-            })
+        bind.root(el().key(KEY).absolute(0.0, 0.0).w_full().h_full().focusable(true).no_focus_ring())
             .child(body_el)
             .child(row().pin(Some(0.0), None, Some(0.0), Some(PAD)).justify_center().child(bar))
     }
 
     /// The zoom bar (`image-preview-controls`): −, the level (which fits it), +, a divider and
     /// close, on the first layer with the floating shadow.
-    fn bar(&self, zoom: &ImageZoom, k: &Kit) -> El {
-        let lens = self.lens;
+    fn bar(&self, zoom: &ImageZoom, k: &Kit, bind: &dyn PreviewBind) -> El {
         let [out, fit, into, close_label] = self.labels.clone();
         let level = (self.format)(zoom.level());
         let mut bar = row().key("image-preview-controls").gap(2.0).padding(2.0).center_y().radius(8.0).fill(k.c.layer_01);
         if let Some(t) = self.controls.clone() { bar = bar.transition(t); }
         bar = crate::shadows(k, bar, &k.elevation.floating);
         let glyphs = self.icons.unwrap_or([k.glyph.dash, k.glyph.dash]);
-        let close = self.close.clone();
         let tnum = k.ty.ui.features("'tnum' 1");
         #[allow(deprecated)]
-        let level = Button::new(fit.clone())
-            .variant(crate::ButtonVariant::GhostMuted)
-            .size(crate::ButtonSize::Small)
-            .help(fit)
-            .label_with(move |_, ink| text(level).font(tnum).color(ink))
-            .on_press_tx(move |s: &mut S, tx: &mut Tx| lens(s).fit(tx))
-            .build(k)
-            .key("image-preview-zoom-level")
-            // Three tabular digits, so the bar holds still as the level passes 100%.
-            .min_w(58.0);
-        bar.child(IconButton::new(glyphs[0]).variant(IconButtonVariant::Ghost).label(out)
-                .on_press_tx(move |s: &mut S, tx: &mut Tx| lens(s).zoom_out(tx)).build(k).key("image-preview-zoom-out"))
+        let level = bind.fit(
+            Button::new(fit.clone())
+                .variant(crate::ButtonVariant::GhostMuted)
+                .size(crate::ButtonSize::Small)
+                .help(fit)
+                .label_with(move |_, ink| text(level).font(tnum).color(ink)),
+        )
+        .build(k)
+        .key("image-preview-zoom-level")
+        // Three tabular digits, so the bar holds still as the level passes 100%.
+        .min_w(58.0);
+        bar.child(bind.zoom_out(IconButton::new(glyphs[0]).variant(IconButtonVariant::Ghost).label(out)).build(k).key("image-preview-zoom-out"))
             .child(level)
-            .child(IconButton::new(glyphs[1]).variant(IconButtonVariant::Ghost).label(into)
-                .on_press_tx(move |s: &mut S, tx: &mut Tx| lens(s).zoom_in(tx)).build(k).key("image-preview-zoom-in"))
+            .child(bind.zoom_in(IconButton::new(glyphs[1]).variant(IconButtonVariant::Ghost).label(into)).build(k).key("image-preview-zoom-in"))
             .child(el().key("image-preview-divider").size(1.0, 16.0).mx(2.0).fill(k.c.border_base))
-            .child(IconButton::new(k.glyph.close).variant(IconButtonVariant::Ghost).label(close_label)
-                .on_press_tx(move |s: &mut S, tx: &mut Tx| close(s, tx)).build(k).key(CLOSE_KEY))
+            .child(bind.close(IconButton::new(k.glyph.close).variant(IconButtonVariant::Ghost).label(close_label)).build(k).key(CLOSE_KEY))
     }
 }
 
-/// A press on the body (`on_body`, where a zoomed image pans) or the band around it.
-fn press<S>(s: &mut S, lens: Lens<S>, d: &mut Drag, on_body: bool, close: &OnClose<S>, tx: &mut Tx) {
-    let z = lens(s);
-    let at = [d.x, d.y];
-    match d.phase {
-        Phase::Down => {
-            tx.focus(KEY, false);
-            let on_backdrop = !on_body || !z.hits_image(at);
-            z.run(Event::PointerDown { on_body, on_backdrop, zoomed: z.zoomed(), at }, tx);
-        }
-        Phase::Move => { z.run(Event::PointerMoved { at }, tx); }
-        Phase::Up if d.cancelled() => { z.run(Event::PointerCancel, tx); }
-        Phase::Up => {
-            z.run(Event::PointerUp, tx);
-            let on_backdrop = !on_body || !z.hits_image(at);
-            if z.run(Event::Click { on_backdrop }, tx) { return close(s, tx); }
-            if on_body && d.clicks == 2 { z.detail(z.centred(at), tx); }
-        }
+/// The full-window preview over the app's scrim: the image fitted between the bands and the
+/// zoom bar under it.
+pub struct Preview<S> {
+    core: PreviewCore,
+    handlers: PreviewHandlers<S>,
+}
+
+impl<S: 'static> Preview<S> {
+    /// `image` (the app's element drawing the picture, with its key and shared-element id) is
+    /// placed and sized here; `natural` is its size in pixels.
+    pub fn new(lens: Lens<S>, natural: [f32; 2], image: El) -> Preview<S> {
+        Preview { core: PreviewCore::new(natural, image), handlers: PreviewHandlers { lens, close: None } }
     }
-    if matches!(z.state, State::Still(Gesture::Panning { .. })) { tx.instant(); }
+
+    /// How the zoom bar comes and goes (as the image flies, or with the scrim).
+    pub fn controls_transition(mut self, t: rune::Transition) -> Self {
+        self.core.controls = Some(t);
+        self
+    }
+
+    pub fn on_close(mut self, f: impl Fn(&mut S, &mut Tx) + 'static) -> Self {
+        self.handlers.close = Some(Rc::new(f));
+        self
+    }
+
+    /// The − and + glyphs (the close button takes the kit's).
+    pub fn icons(mut self, minus: &'static Icon, plus: &'static Icon) -> Self {
+        self.core.icons = Some([minus, plus]);
+        self
+    }
+
+    /// Accessible names: zoom out, zoom to fit (also the level's tooltip), zoom in and close.
+    pub fn labels(mut self, zoom_out: impl Into<String>, fit: impl Into<String>, zoom_in: impl Into<String>, close: impl Into<String>) -> Self {
+        self.core.labels = [zoom_out.into(), fit.into(), zoom_in.into(), close.into()];
+        self
+    }
+
+    /// How the level reads, from a whole percentage (`141%` unless set).
+    pub fn format_level(mut self, f: fn(u32) -> String) -> Self {
+        self.core.format = f;
+        self
+    }
+
+    /// The preview over a `window` of points. `reduced_motion` makes steps land at once.
+    pub fn build(self, zoom: &ImageZoom, k: &Kit, window: [f32; 2], reduced_motion: bool) -> El {
+        self.core.build(zoom, k, window, reduced_motion, &self.handlers)
+    }
 }

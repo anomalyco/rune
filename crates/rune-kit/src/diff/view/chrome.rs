@@ -1,6 +1,8 @@
 //! Structural rows around diff lines: file headers, folded unchanged-range summaries, and
 //! empty/binary file notes.
 
+use std::any::Any;
+
 use rune::{Color, Cursor, El, Icon, col, icon, row, text};
 
 use super::{CODE_PAD, View};
@@ -23,7 +25,7 @@ static EXPAND_ALL: Icon = Icon {
     body: r#"<path d="M5 5.5L8 2.5L11 5.5M5 10.5L8 13.5L11 10.5" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round" fill="none"/>"#,
 };
 
-impl<S: 'static> View<S> {
+impl View {
     /// The unchanged lines between two hunks, folded: buttons to show more, and the next
     /// hunk's header.
     pub(super) fn gap(&self, st: &DiffState, f: usize, gap: usize) -> El {
@@ -35,20 +37,17 @@ impl<S: 'static> View<S> {
         let mut buttons = Vec::new();
         if expandable {
             let mut add = |how: Expand, glyph: &'static Icon, label: String| {
-                let get = self.d.get_mut.clone();
-                buttons.push(
-                    row()
-                        .key(format!("{how:?}"))
-                        .size(24.0, 24.0)
-                        .center()
-                        .radius(6.0)
-                        .hover(l.hover)
-                        .cursor(Cursor::Pointer)
-                        .role("button")
-                        .label(label)
-                        .child(icon(glyph, 16.0).color(l.muted))
-                        .on_press_tx(move |s: &mut S, _| get(s).expand(f, gap, how)),
-                );
+                let btn = row()
+                    .key(format!("{how:?}"))
+                    .size(24.0, 24.0)
+                    .center()
+                    .radius(6.0)
+                    .hover(l.hover)
+                    .cursor(Cursor::Pointer)
+                    .role("button")
+                    .label(label)
+                    .child(icon(glyph, 16.0).color(l.muted));
+                buttons.push(self.bind.bind_expand(btn, f, gap, how, false));
             };
             let step = hidden.min(EXPAND_STEP);
             if hidden <= EXPAND_STEP {
@@ -70,8 +69,8 @@ impl<S: 'static> View<S> {
         if hidden > 0 {
             let count = text(if hidden == 1 { "1 unchanged line".to_owned() } else { format!("{hidden} unchanged lines") }).font(l.small).color(l.muted).key("count");
             let count = if expandable && hidden > EXPAND_STEP {
-                let get = self.d.get_mut.clone();
-                row().key("all").px(6.0).h(24.0).items_center().radius(6.0).hover(l.hover).cursor(Cursor::Pointer).role("button").label(format!("Show all {hidden} lines")).on_press_tx(move |s: &mut S, _| get(s).expand(f, gap, Expand::All)).child(count)
+                let all = row().key("all").px(6.0).h(24.0).items_center().radius(6.0).hover(l.hover).cursor(Cursor::Pointer).role("button").label(format!("Show all {hidden} lines"));
+                self.bind.bind_expand(all, f, gap, Expand::All, false).child(count)
             } else {
                 row().key("all").px(6.0).child(count)
             };
@@ -109,11 +108,10 @@ impl<S: 'static> View<S> {
         row().w_full().h(NOTE_H).fill(l.bg).role("note").label(msg).child(inner)
     }
 
-    pub(super) fn file_header(&self, s: &S, st: &DiffState, f: usize, sticky: bool) -> El {
+    pub(super) fn file_header(&self, s: &dyn Any, st: &DiffState, f: usize, sticky: bool) -> El {
         let l = &self.look;
         let file = &st.files()[f];
         let collapsed = st.collapsed(f);
-        let get = self.d.get_mut.clone();
         let toggle = row()
             .key("toggle")
             .size(24.0, 24.0)
@@ -123,14 +121,8 @@ impl<S: 'static> View<S> {
             .cursor(Cursor::Pointer)
             .role("button")
             .label(if collapsed { "Expand file" } else { "Collapse file" }).expanded(!collapsed)
-            .child(icon(if collapsed { l.triangle_right } else { l.triangle_down }, 16.0).color(l.muted))
-            .on_press_tx(move |s: &mut S, tx| {
-                let st = get(s);
-                st.set_collapsed(f, !st.collapsed(f));
-                if sticky {
-                    st.scroll_to_file(f, tx);
-                }
-            });
+            .child(icon(if collapsed { l.triangle_right } else { l.triangle_down }, 16.0).color(l.muted));
+        let toggle = self.bind.bind_toggle_file(toggle, f, sticky);
         let path = |p: &str, c: Color| text(p.to_owned()).font(l.label).color(c).truncate_head().min_w(0.0).shrink();
         let mut name = row().key("path").items_center().gap(6.0).min_w(0.0).shrink();
         let (old, new) = (file.old_path.as_deref(), file.new_path.as_deref());
@@ -164,8 +156,8 @@ impl<S: 'static> View<S> {
         if dels > 0 {
             inner = inner.child(text(format!("−{dels}")).font(l.small).color(l.del.count).key("dels"));
         }
-        if let Some(h) = &self.d.header {
-            inner = inner.child(h(s, f).key("actions"));
+        if let Some(actions) = self.bind.header_action(s, f) {
+            inner = inner.child(actions.key("actions"));
         }
         let mut label = file.path().to_owned();
         if let (FileStatus::Renamed, Some(a)) = (file.status, old) {
