@@ -92,7 +92,7 @@ impl Keyboard {
     }
 }
 
-impl<S: 'static> Live<S> {
+impl LiveCore {
     pub(crate) fn region(&self) -> Region {
         self.keyboard.region()
     }

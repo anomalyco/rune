@@ -43,8 +43,8 @@ mod variants;
 mod view;
 mod widths;
 
-pub(crate) use live::Live;
-use live::Showing;
+pub(crate) use live::{Live, LiveCore};
+use live::{SceneOps, TypedStage};
 use folds::Folds;
 use widths::Widths;
 pub use open::slug;
@@ -409,14 +409,9 @@ pub(crate) type Attach<S> = fn(&mut crate::Runtime<S>, Option<Playground<S>>, &c
 pub(crate) fn attach<S: 'static>(rt: &mut crate::Runtime<S>, playground: Option<Playground<S>>, spec: &crate::AppSpec<S>, open: Option<Option<String>>, variant: Option<String>, windowed: bool) {
     let Some(mut playground) = playground.filter(Playground::is_enabled) else { return };
     if open.is_none() && (!windowed || hidden_by_env()) { return; }
-    if windowed && !cfg!(test) && playground.widths.load.is_none() && playground.widths.save.is_none() {
-        playground.widths = Widths::prefs(crate::tooling::app_id().unwrap_or(spec.title));
-    }
+    playground.widths.attach_prefs(windowed, spec.title);
     let mut live = Live::new(playground, spec, windowed && cfg!(target_os = "macos"));
-    if let Some(name) = open {
-        live.open_at(name.as_deref(), variant.as_deref()).unwrap_or_else(|e| crate::tooling::die(&e));
-        live.pending.push(Request::Open(name));
-    }
+    live.core.queue_launch(open, variant);
     rt.attach_playground(live);
 }
 
