@@ -135,13 +135,19 @@ fn set(window: &winit::window::Window, cloaked: bool) -> bool {
 /// in the background keeps the user's window in front.
 fn activate(window: &winit::window::Window) {
     let Some(hwnd) = super::hwnd(window) else { return };
-    if launch_asks_no_activation() { return; }
+    if launch_asks_no_activation() || !take_foreground(hwnd) { return; }
+    crate::marks::mark("window.activated");
+}
+
+/// Brings `hwnd` to the foreground and gives it the focus when this process may take the
+/// foreground, and otherwise leaves it where it is (see `activate`). False when it may not.
+pub(super) fn take_foreground(hwnd: windows_sys::Win32::Foundation::HWND) -> bool {
     // SAFETY: plain calls on this process's id and a window this thread owns.
     unsafe {
-        if windows_sys::Win32::UI::WindowsAndMessaging::AllowSetForegroundWindow(windows_sys::Win32::System::Threading::GetCurrentProcessId()) == 0 { return; }
+        if windows_sys::Win32::UI::WindowsAndMessaging::AllowSetForegroundWindow(windows_sys::Win32::System::Threading::GetCurrentProcessId()) == 0 { return false; }
         windows_sys::Win32::UI::WindowsAndMessaging::SetForegroundWindow(hwnd);
     }
-    crate::marks::mark("window.activated");
+    true
 }
 
 /// Whether this is the launch's first activation and the launch asked for none (see `activate`).

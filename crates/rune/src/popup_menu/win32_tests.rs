@@ -7,7 +7,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     PM_REMOVE, PeekMessageW, RegisterClassW, WNDCLASSW,
 };
 
-use super::{start, turn, turns, wide};
+use super::{hands_back, start, turn, turns, wide};
 
 unsafe extern "system" fn test_wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
     // SAFETY: plain default window procedure for a test message-only window.
@@ -97,4 +97,16 @@ fn modal_menu_guard_prevents_reentrant_menu_loops_and_turns_handles_destroyed_hw
     // SAFETY: destroys the message-only window created above.
     unsafe { DestroyWindow(hwnd); }
     drop(guard);
+}
+
+/// An overlay's menu gives the foreground back to the window that had it, whatever the overlay's
+/// `KeyPolicy`: the decision reads only whether the owner is an overlay, not its styles.
+#[test]
+fn an_overlay_menu_hands_the_foreground_back() {
+    let (owner, other, third): (HWND, HWND, HWND) = (std::ptr::without_provenance_mut(1), std::ptr::without_provenance_mut(2), std::ptr::without_provenance_mut(3));
+    assert!(hands_back(true, other, owner, owner), "took it for the menu");
+    assert!(!hands_back(false, other, owner, owner), "an ordinary window keeps what it took");
+    assert!(!hands_back(true, owner, owner, owner), "had it before the menu (an OnDemand overlay the user clicked)");
+    assert!(!hands_back(true, std::ptr::null_mut(), owner, owner), "nothing to give it back to");
+    assert!(!hands_back(true, other, owner, third), "the foreground moved on meanwhile");
 }
