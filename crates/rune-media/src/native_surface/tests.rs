@@ -973,3 +973,119 @@ fn rotated_clip_buffers_draw_upright_like_its_poster_on(gpu: Gpu) {
         }
     }
 }
+
+/// PROOF ONLY, never merged: WARP only (no GPU to reset), a compute pass sized to hold it about
+/// `ms`, in one submission or behind a queue wait the CPU releases after `wait_ms`.
+#[cfg(target_os = "windows")]
+fn proof_budget_work(gpu: &Gpu, ms: u32, wait_ms: u32) -> std::time::Duration {
+    use std::time::{Duration, Instant};
+    let info = gpu.adapter.get_info();
+    assert!(
+        info.device_type == wgpu::DeviceType::Cpu && info.name.contains("Microsoft Basic Render Driver"),
+        "refusing to hold {:?} ({:?}) on purpose: this proof runs on WARP only",
+        info.name,
+        info.device_type
+    );
+    let device = &gpu.device;
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: None,
+        source: wgpu::ShaderSource::Wgsl(
+            "@group(0) @binding(0) var<storage, read_write> r: array<u32>;
+            @group(0) @binding(1) var<uniform> n: vec4<u32>;
+            @compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+                var x = id.x; for (var i = 0u; i < n.x; i++) { x = (x ^ (x >> 13u)) * 1664525u + 1013904223u; } r[id.x] = x; }"
+                .into(),
+        ),
+    });
+    let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor { label: None, layout: None, module: &shader, entry_point: Some("main"), compilation_options: Default::default(), cache: None });
+    let out = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 65536 * 4, usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false });
+    let run = |iterations: u32, wait: Option<u64>| {
+        let n = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 16, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+        gpu.queue.write_buffer(&n, 0, bytemuck::cast_slice(&[iterations, 0, 0, 0]));
+        let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: out.as_entire_binding() }, wgpu::BindGroupEntry { binding: 1, resource: n.as_entire_binding() }],
+        });
+        let mut encoder = device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &bind, &[]);
+            pass.dispatch_workgroups(1024, 1, 1);
+        }
+        // The queue waits on a fence the CPU signals `wait` ms from now, as it waits on a video
+        // decoder's.
+        let release = wait.map(|ms| {
+            let hal = unsafe { gpu.queue.as_hal::<wgpu::hal::api::Dx12>() }.expect("a D3D12 queue");
+            let mut device = None::<::windows::Win32::Graphics::Direct3D12::ID3D12Device>;
+            unsafe { hal.as_raw().GetDevice(&mut device) }.expect("its device");
+            let fence: ::windows::Win32::Graphics::Direct3D12::ID3D12Fence =
+                unsafe { device.expect("a device").CreateFence(0, ::windows::Win32::Graphics::Direct3D12::D3D12_FENCE_FLAG_NONE) }.expect("a fence");
+            unsafe { hal.as_raw().Wait(&fence, 1) }.expect("a queue wait");
+            struct Send(::windows::Win32::Graphics::Direct3D12::ID3D12Fence);
+            unsafe impl std::marker::Send for Send {}
+            let fence = Send(fence);
+            std::thread::spawn(move || {
+                let fence = fence;
+                std::thread::sleep(Duration::from_millis(ms));
+                let _ = unsafe { fence.0.Signal(1) };
+            })
+        });
+        let (done, heard) = std::sync::mpsc::channel();
+        encoder.on_submitted_work_done(move || drop(done.send(Instant::now())));
+        let t = Instant::now();
+        gpu.queue.submit([encoder.finish()]);
+        while heard.try_recv().is_err() {
+            let _ = rune_gpu::health::poll(device, wgpu::PollType::Poll);
+            std::thread::sleep(Duration::from_millis(1));
+            assert!(t.elapsed() < Duration::from_secs(20), "the proof's submission never finished");
+        }
+        if let Some(release) = release {
+            let _ = release.join();
+        }
+        t.elapsed()
+    };
+    let probe = 4096;
+    let took = run(probe, None);
+    let iterations = ((f64::from(ms) / (took.as_secs_f64() * 1000.0).max(0.001)) * f64::from(probe)).clamp(1.0, 4.0e9) as u32;
+    let held = run(iterations, (wait_ms > 0).then_some(u64::from(wait_ms)));
+    eprintln!("proof budget: {probe} iterations took {} us; {iterations} iterations behind a {wait_ms} ms queue wait: submit to done {} us", took.as_micros(), held.as_micros());
+    held
+}
+
+/// PROOF ONLY: one submission that holds WARP about 400 ms fails this test, by name, at its next
+/// check.
+#[cfg(target_os = "windows")]
+#[test]
+fn proof_budget_a_submission_over_budget_fails_its_own_test() {
+    let gpu = Gpu::headless_wgpu();
+    proof_budget_work(&gpu, 400, 0);
+    // The watcher reports from its own thread once the submission is done.
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    gpu.assert_alive();
+    eprintln!("proof budget: no overrun reported");
+}
+
+/// PROOF ONLY: a short submission that waits 400 ms on a fence (as on a video decoder) first is
+/// not over budget.
+#[cfg(target_os = "windows")]
+#[test]
+fn proof_budget_a_queue_wait_is_not_counted() {
+    let gpu = Gpu::headless_wgpu();
+    proof_budget_work(&gpu, 5, 400);
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    gpu.assert_alive();
+    eprintln!("proof budget: the waited submission passed");
+}
+
+/// PROOF ONLY: a test after the overrunning one, in the same binary, passes.
+#[cfg(target_os = "windows")]
+#[test]
+fn proof_budget_zz_a_later_test_inherits_nothing() {
+    let gpu = Gpu::headless_wgpu();
+    proof_budget_work(&gpu, 5, 0);
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    gpu.assert_alive();
+    eprintln!("proof budget: the later test passed");
+}
