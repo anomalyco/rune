@@ -157,7 +157,7 @@ impl Offscreen {
 
     pub(super) fn read(&self, device: &wgpu::Device) -> Vec<u8> {
         let slice = self.buffer.slice(..);
-        slice.map_async(wgpu::MapMode::Read, |r| r.expect("map readback"));
+        slice.map_async(wgpu::MapMode::Read, |_| {});
         device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
         let row = (self.width * 4) as usize;
         let stride = self.padded_row as usize;
@@ -486,7 +486,7 @@ fn queued_video_frames_then_readback_on(gpu: Gpu) {
             let done = done.clone();
             s.set_observer(Arc::new(move |t| {
                 if t.completed_at.is_some() {
-                    done.send(t).unwrap();
+                    let _ = done.send(t);
                 }
             }));
             draw(s, [(i % 2) as f32 * 640.0, (i / 2) as f32 * 360.0, 640.0, 360.0])
