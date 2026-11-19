@@ -677,5 +677,114 @@ fn a_timer_frame_that_changes_nothing_on_screen_draws_nothing() {
         "a poll that changes what's on screen draws");
 }
 
+#[test]
+fn quiet_timer_frame_that_misses_its_drawable_steps_only_once() {
+    #[derive(Default)]
+    struct S { polls: u32, width: f32 }
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        crate::el().child(crate::el().key("box").size(10.0 + s.width, 8.0).fill(crate::Color::WHITE))
+    }
+    fn poll(s: &mut S, _: f64, tx: &mut Tx) -> bool {
+        s.polls += 1;
+        s.width += 1.0;
+        tx.wake_after(Duration::from_millis(33));
+        true
+    }
+    let app = AppSpec { poll: Some(poll), ..AppSpec::new("quiet miss", (100.0, 40.0), S::default, view) };
+    let (mut overlay, _) = Overlay::new(OverlaySpec::new("quiet miss", app.size, view).options(Default::default()), S::default(), &app);
+    overlay.presence = Presence::Shown { occluded: false };
+    overlay.rt.wall_start = None;
+    let config = wgpu::SurfaceConfiguration {
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        format: wgpu::TextureFormat::Bgra8UnormSrgb,
+        width: 200,
+        height: 80,
+        present_mode: wgpu::PresentMode::AutoVsync,
+        desired_maximum_frame_latency: 2,
+        alpha_mode: wgpu::CompositeAlphaMode::PreMultiplied,
+        view_formats: vec![],
+        color_space: Default::default(),
+    };
+    let start = Instant::now();
+    present(&mut overlay, start);
+    overlay.core.quiet.presented_frame(true, |slot| crate::window::Presented::record(slot, &overlay.rt, &config, false));
+    let mut presented = None;
+    crate::window::Presented::record(&mut presented, &overlay.rt, &config, false);
+    let presented = presented.unwrap();
+
+    let polls_before = overlay.rt.state.polls;
+    let at = start + Duration::from_millis(33);
+    let built = overlay.quiet_step_frame(&presented, &config, at, Some(at + FRAME));
+    assert!(built.is_some(), "quiet_step stepped the runtime once");
+    assert_eq!(overlay.rt.state.polls, polls_before + 1);
+
+    // Drawable acquisition now fails after quiet_step already stepped the runtime.
+    overlay.acquire_missed(crate::window::Missed::Timeout, false, false, built.is_some());
+    assert_eq!(
+        overlay.rt.state.polls,
+        polls_before + 1,
+        "a missed drawable after quiet_step must not advance the runtime a second time"
+    );
+    assert!(overlay.quiet.presented().is_none(), "a missed frame forgets what it rested on");
+}
+
+#[test]
+fn missed_frame_in_turn_prevents_second_step_in_same_turn() {
+    use frame::{Gate, Turn, TurnEvent};
+    #[derive(Default)]
+    struct S { polls: u32 }
+    fn view(_: &S, _: &mut Cx<S>) -> El { crate::el() }
+    fn poll(s: &mut S, _: f64, tx: &mut Tx) -> bool {
+        s.polls += 1;
+        tx.wake_after(Duration::from_millis(250));
+        false
+    }
+    let app = AppSpec { poll: Some(poll), ..AppSpec::new("turn guard", (40.0, 20.0), S::default, view) };
+    let (mut overlay, _) = Overlay::new(OverlaySpec::new("turn guard", app.size, view).options(Default::default()), S::default(), &app);
+    overlay.presence = Presence::Shown { occluded: true };
+    overlay.rt.wall_start = None;
+    overlay.advance();
+    assert_eq!(overlay.rt.state.polls, 1);
+
+    // Same turn: both a timer and the backoff retry are due while occluded.
+    let now = Instant::now();
+    overlay.rt.wall_start = Some(now - Duration::from_millis(300));
+    overlay.backoff_step(crate::window::BackoffEvent::At(now));
+    overlay.core.turn_frame.step(TurnEvent::NewEvents);
+    overlay.wake_due(now);
+    assert_eq!(overlay.rt.state.polls, 2, "wake_due steps the due timer once");
+    assert!(overlay.core.turn_frame.stepped(), "turn records that wake_due stepped");
+
+    // Occluded recheck in the same turn sees `stepped() == true` and does not step again.
+    let stepped = overlay.core.turn_frame.stepped();
+    overlay.missed(crate::window::Missed::Occluded, false, stepped);
+    assert_eq!(overlay.rt.state.polls, 2, "occluded recheck must not step a second time in the same turn");
+    assert!(overlay.core.turn_frame.missed());
+
+    // A paced timeout miss in `DisplayTick` clears backoff, so `about_to_wait` in the same turn
+    // must back off via `missed_this_turn` rather than retrying immediately.
+    let decided = frame::turn(Gate {
+        prewarm: false,
+        occluded: false,
+        dirty: true,
+        idle: false,
+        retry: None,
+        missed_this_turn: overlay.core.turn_frame.missed(),
+    }, || now);
+    assert_eq!(decided, Turn::BackedOff);
+
+    // Next turn resets the per-turn guard and allows drawing again.
+    overlay.core.turn_frame.step(TurnEvent::NewEvents);
+    let next = frame::turn(Gate {
+        prewarm: false,
+        occluded: false,
+        dirty: true,
+        idle: false,
+        retry: None,
+        missed_this_turn: overlay.core.turn_frame.missed(),
+    }, || now);
+    assert_eq!(next, Turn::Draw);
+}
+
 
 include!("more_tests.rs");

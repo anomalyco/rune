@@ -142,12 +142,12 @@ pub(super) fn scan_first(nodes: &[Node], selector: &str) -> Option<usize> {
 impl RuntimeCore {
     /// The kept index, when `nodes` are the current nodes it describes.
     pub(super) fn key_index_for(&self, nodes: &[Node]) -> Option<&KeyIndex> {
-        self.key_index.get(nodes, self.commit_gen)
+        self.tree.key_index.get(nodes, self.commit.commit_gen)
     }
 
     /// `self.nodes` changed without a commit: kept per-node answers no longer hold.
     pub(super) fn nodes_replaced(&mut self) {
-        self.key_index.forget();
-        self.exit_mask.forget();
+        self.tree.key_index.forget();
+        self.tree.exit_mask.forget();
     }
 }

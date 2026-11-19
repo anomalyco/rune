@@ -21,11 +21,11 @@ use crate::el::grid::{DrawnRow, Grid, GridRow, LaidRow};
 impl RuntimeCore {
     /// Paints node `i`'s grid inside its snapped box `r` (exact `r_exact`, device px edges).
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn paint_grid(&mut self, i: usize, g: &Grid, r: [f32; 4], r_exact: [f32; 4], clip: [f32; 4], fade: [f32; 4], o: f32, glyph_count: &mut usize) {
+    pub(in crate::runtime) fn paint_grid(&mut self, i: usize, g: &Grid, r: [f32; 4], r_exact: [f32; 4], clip: [f32; 4], fade: [f32; 4], o: f32, glyph_count: &mut usize) {
         let s = self.env.scale;
-        let srgb = self.srgb_blend;
-        let flow = self.nodes[i].flow;
-        let node = self.nodes[i].id;
+        let srgb = self.paint.srgb_blend;
+        let flow = self.tree.nodes[i].flow;
+        let node = self.tree.nodes[i].id;
         // The device grid an element's edges land on, and how far the box's own snap moved it
         // past plain rounding (a translation that snaps as a whole).
         let round = |v: f32| (v + 0.5).floor();
@@ -155,22 +155,22 @@ impl RuntimeCore {
     #[allow(clippy::too_many_arguments)]
     fn paint_grid_text(&mut self, spec: &crate::el::TextSpec, layout: &Rc<parley::Layout<crate::text::Ink>>, origin: [f32; 2], clip: [f32; 4], text_clip: Option<[f32; 4]>, fade: [f32; 4], o: f32, glyph_count: &mut usize, pages: &mut Option<Vec<(u16, u32)>>) {
         let s = self.env.scale;
-        let srgb = self.srgb_blend;
-        self.deco_scratch.clear();
-        self.text.decorations_with_rings(layout, &spec.spans, &[], spec.cold.span_radius, s, origin, &mut self.deco_scratch);
-        for d in &self.deco_scratch {
+        let srgb = self.paint.srgb_blend;
+        self.paint.deco_scratch.clear();
+        self.text.decorations_with_rings(layout, &spec.spans, &[], spec.cold.span_radius, s, origin, &mut self.paint.deco_scratch);
+        for d in &self.paint.deco_scratch {
             self.instances.push(rect_inst(d.rect, premul(d.color, o, srgb), d.radius, clip, fade));
         }
-        self.glyph_scratch.clear();
+        self.paint.glyph_scratch.clear();
         self.text.set_glyph_inks(spec.color, &spec.spans);
         self.text.set_glide([0.0; 2]);
         let em = spec.spans.iter().filter_map(|sp| sp.size).fold(spec.style.size.max(spec.style.line_px()), f32::max);
         let pad = 2.0 * em * s + 2.0;
         let band = (clip[1] - origin[1]) - pad..(clip[3] - origin[1]) + pad;
-        self.text.glyphs_in_band_cached(layout, origin, 1.0, false, band, &mut self.glyph_scratch);
+        self.text.glyphs_in_band_cached(layout, origin, 1.0, false, band, &mut self.paint.glyph_scratch);
         let base = premul(spec.color, o, srgb);
         let glyph_clip = text_clip.unwrap_or(clip);
-        for q in &self.glyph_scratch {
+        for q in &self.paint.glyph_scratch {
             let [x0, y0] = [q.rect[0], q.rect[1]];
             let (x1, y1) = (x0 + q.rect[2], y0 + q.rect[3]);
             if y0 > clip[3] || y1 < clip[1] || x0 > clip[2] || x1 < clip[0] {

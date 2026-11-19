@@ -22,7 +22,7 @@ use crate::render::{Gpu, Renderer};
 use crate::time::Instant;
 use crate::window::WakeEvent;
 use crate::window::host::{CompositorFrame, Host};
-use crate::window::surface::{Win, acquire, configure, rebuild_renderer_core, surface_config};
+use crate::window::surface::{Win, acquire, configure, reblend_core, rebuild_renderer_core, surface_config};
 
 /// Where a window's frames go. Windows that need the GPU from their first frame (a compositor,
 /// a translucent window, an overlay) are `Gpu` from the start, as on every other platform.
@@ -198,10 +198,16 @@ impl Host {
             Err(error) => return self.fail_gpu(error, tries),
         };
         crate::marks::mark("gpu.window.ready");
-        let Prepared { gpu, mut renderer, surface, config, handover } = prepared;
+        let Prepared { gpu, mut renderer, surface, mut config, handover } = prepared;
         let gpu = Arc::new(gpu);
-        let target_format = if self.app.rt().srgb_blend() { config.format.remove_srgb_suffix() } else { config.format };
-        rebuild_renderer_core(&gpu.device, &mut renderer, target_format, self.app.rt_mut());
+        if renderer.srgb_blend() != self.app.rt().srgb_blend() {
+            if !reblend_core(&surface, &gpu, &mut config, &mut renderer, &mut w.alpha, self.app.rt_mut()) {
+                return self.fail_gpu("couldn't reconfigure the surface for the window's blend mode".into(), tries);
+            }
+        } else {
+            let target_format = if self.app.rt().srgb_blend() { config.format.remove_srgb_suffix() } else { config.format };
+            rebuild_renderer_core(&gpu.device, &mut renderer, target_format, self.app.rt_mut());
+        }
         *self.gpu_pool.borrow_mut() = Arc::downgrade(&gpu);
         crate::render::surface_gpu(&gpu);
         let size = w.window.inner_size();
@@ -227,14 +233,25 @@ impl Host {
     /// on the uncommitted visual.
     pub(super) fn gpu_draws_same_frame(&mut self) {
         let (Some(l), Some((gpu, renderer))) = (self.win.as_mut(), self.gpu.as_mut()) else { return };
+        if !matches!(l.native.mode, SurfaceMode::HandingOver { paused: false, .. }) { return; }
+        if renderer.srgb_blend() != self.app.rt().srgb_blend() {
+            let Some(surface) = l.surface.as_ref() else { return };
+            l.native.slot.reset();
+            if !reblend_core(surface, gpu, &mut l.config, renderer, &mut l.alpha, self.app.rt_mut()) {
+                l.surface_ok = false;
+                return;
+            }
+        }
         let SurfaceMode::HandingOver { done, readback, paused: false, .. } = &mut l.native.mode else { return };
         let Some(surface) = l.surface.as_ref() else { return };
         let Ok(frame) = acquire(surface, gpu, &l.config, l.surface_ok, 1, &mut self.meter) else { return };
         let target_format = if self.app.rt().srgb_blend() { l.config.format.remove_srgb_suffix() } else { l.config.format };
+        debug_assert_eq!(renderer.format(), target_format);
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor { format: (target_format != l.config.format).then_some(target_format), ..Default::default() });
         {
             let rt = self.app.rt_mut();
             renderer.upload_images(&gpu.device, &gpu.queue, &mut rt.images);
+            renderer.build_surfaces(&gpu.device, &rt.surfaces, rt.live_notifier());
             renderer.prepare_surfaces(&gpu.device, &gpu.queue, &rt.surfaces, (l.config.width, l.config.height));
             renderer.set_frame_wake(rt.live_wake());
         }
@@ -271,7 +288,9 @@ impl Host {
         });
         renderer.submit(&gpu.queue, enc);
         gpu.queue.present(frame);
-        l.native.slot.presented();
+        if let Some(surface) = l.surface.as_ref() {
+            l.native.slot.presented_surface(surface);
+        }
         let flag = Arc::new(AtomicBool::new(false));
         let set = flag.clone();
         gpu.queue.on_submitted_work_done(move || set.store(true, Ordering::Release));
@@ -345,6 +364,7 @@ impl Host {
         w.native.mode = SurfaceMode::Cpu { cpu, job };
         // From a hand-over: its swap chain and GPU go. DWM kept the window's own content, which
         // the CPU goes on drawing.
+        w.native.slot.reset();
         w.surface = None;
         self.gpu = None;
         w.request_redraw();
@@ -429,7 +449,7 @@ fn prepare(hwnd: isize, size: (u32, u32), srgb: bool, features: wgpu::Features, 
     let target_format = if srgb { config.format.remove_srgb_suffix() } else { config.format };
     let mut renderer = renderer.unwrap_or_else(|| Renderer::new(&gpu.device, target_format));
     let instances = std::mem::take(&mut *latest.lock().unwrap_or_else(|e| e.into_inner()));
-    warm_frame(&gpu, &mut renderer, target_format, (config.width, config.height), &instances);
+    warm_frame(&gpu, &mut renderer, target_format, srgb, (config.width, config.height), &instances);
     crate::marks::mark("gpu.window.warmed");
     Ok(Prepared { gpu, renderer, surface, config, handover })
 }
@@ -441,7 +461,10 @@ fn prepare(hwnd: isize, size: (u32, u32), srgb: bool, features: wgpu::Features, 
 /// frame's, or nearly), the staging space and the instance buffer. Its own target goes as soon as
 /// the GPU is done with it. The atlas is an empty one: the glyphs land with the hand-over frame's
 /// own prepare.
-fn warm_frame(gpu: &Gpu, renderer: &mut Renderer, format: wgpu::TextureFormat, size: (u32, u32), instances: &[crate::render::Instance]) {
+fn warm_frame(gpu: &Gpu, renderer: &mut Renderer, format: wgpu::TextureFormat, srgb: bool, size: (u32, u32), instances: &[crate::render::Instance]) {
+    renderer.set_format(&gpu.device, format);
+    renderer.set_srgb_blend(srgb);
+    debug_assert_eq!(renderer.format(), format);
     let target = gpu.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("rune warm frame"),
         size: wgpu::Extent3d { width: size.0.max(1), height: size.1.max(1), depth_or_array_layers: 1 },
@@ -467,15 +490,15 @@ fn warm_frame(gpu: &Gpu, renderer: &mut Renderer, format: wgpu::TextureFormat, s
 /// image's slot, a glyph's atlas page, a compositor's effect) draws as a plain box, so the frame
 /// needs nothing but the renderer.
 pub(super) fn warm_instances(instances: &[crate::render::Instance]) -> Vec<crate::render::Instance> {
-    use crate::render::{KIND_EFFECT, KIND_GLYPH, KIND_IMAGE, KIND_RECT};
+    use crate::render::{KIND_RECT, Kind};
     instances
         .iter()
         .map(|i| {
             let mut i = *i;
-            if i.params[1] == KIND_IMAGE || i.params[1] == KIND_EFFECT {
-                i.params[1] = KIND_RECT;
-            } else if i.params[1] == KIND_GLYPH {
-                i.params[2] = 0.0;
+            match i.kind() {
+                Some(Kind::Image | Kind::Effect) => i.params[1] = KIND_RECT,
+                Some(Kind::Glyph) => i.params[2] = 0.0,
+                _ => {}
             }
             i
         })
@@ -512,3 +535,7 @@ fn lower_priority() {
 /// presents, and nothing while it rests. A fixed-rate display (blade's Iris panel) needs nothing:
 /// its refresh doesn't depend on who presents.
 fn vrr_guard(vendor: u32) -> bool { vendor == 0x10DE }
+
+#[cfg(test)]
+#[path = "handover_tests.rs"]
+mod tests;

@@ -318,11 +318,7 @@ pub(crate) fn fragment(i: &Primitive, atlas: &Atlas, screen: [f32; 2]) -> [f32; 
 }
 
 pub(crate) fn layer_clip_coverage(i: &Primitive, screen: [f32; 2]) -> f32 {
-    let clip = clip_coverage(i, screen) * if i.params[3] == 0.0 { hole_alpha(screen, i.radii) } else { 1.0 };
-    if i.border == [0.0; 4] { return clip; }
-    let half = [(i.clip[2] - i.clip[0]) * 0.5, (i.clip[3] - i.clip[1]) * 0.5];
-    let p = [screen[0] - i.clip[0] - half[0], screen[1] - i.clip[1] - half[1]];
-    clip * clamp(0.5 - sd(p, half, i.border))
+    clip_coverage(i, screen) * if i.params[3] == 0.0 { hole_alpha(screen, i.radii) } else { 1.0 }
 }
 
 /// A layer's round hole (`El::cutout_circle`): centre `h[0..2]`, clear within `h[2]`, whole from
@@ -337,7 +333,7 @@ fn clip_coverage(i: &Primitive, screen: [f32; 2]) -> f32 {
     let origin = i.fade_origin.unwrap_or(i.clip);
     let p = screen;
     let hard = [p[0] - i.clip[0], p[1] - i.clip[1], i.clip[2] - p[0], i.clip[3] - p[1]];
-    (0..4).map(|edge| {
+    let mut alpha: f32 = (0..4).map(|edge| {
         let width = half::f16::from_f32(i.fade[edge].clamp(-65504.0, 65504.0)).to_f32();
         let distance = if edge < 2 { i.clip[edge] - origin[edge] } else { origin[edge] - i.clip[edge] };
         let w = i.fade[edge].abs();
@@ -346,7 +342,14 @@ fn clip_coverage(i: &Primitive, screen: [f32; 2]) -> f32 {
         if offset >= 1.0 { ramp(hard[edge], 0.0) }
         else if offset > 0.0 { ramp(hard[edge], 0.0).min(ramp(hard[edge] + offset * width.abs(), width)) }
         else { ramp(hard[edge], width) }
-    }).product()
+    }).product();
+    let radii = if i.params[1] == 8.0 { i.clip_radii.unwrap_or(i.border) } else { i.clip_radii.unwrap_or([0.0; 4]) };
+    if radii != [0.0; 4] {
+        let half = [(i.clip[2] - i.clip[0]) * 0.5, (i.clip[3] - i.clip[1]) * 0.5];
+        let q = [p[0] - i.clip[0] - half[0], p[1] - i.clip[1] - half[1]];
+        alpha *= clamp(0.5 - sd(q, half, radii));
+    }
+    alpha
 }
 
 #[cfg(test)]

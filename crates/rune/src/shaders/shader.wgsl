@@ -350,10 +350,18 @@ fn hole_alpha(p: vec2<f32>, h: vec4<f32>) -> f32 {
     return clamp((length(p - h.xy) - (h.z + h.w) * 0.5) / max(h.w - h.z, 1.0) + 0.5, 0.0, 1.0);
 }
 
+// A texel of a layer, clamped to [0, 1] when `clamp_unit` is set (`Blend::PlusLighter`), so
+// bilinear filtering saturates each accumulated source texel before interpolation (as
+// `layer_blur.wgsl` does before convolution).
+fn layer_load(t: vec2<i32>, clamp_unit: bool) -> vec4<f32> {
+    let c = textureLoad(images, t, 0);
+    return select(c, clamp(c, vec4<f32>(0.0), vec4<f32>(1.0)), clamp_unit);
+}
+
 // A texel of a layer `size` pixels across; transparent outside it.
-fn layer_texel(t: vec2<i32>, size: vec2<f32>) -> vec4<f32> {
+fn layer_texel(t: vec2<i32>, size: vec2<f32>, clamp_unit: bool) -> vec4<f32> {
     if (any(t < vec2<i32>(0)) || any(t >= vec2<i32>(size))) { return vec4<f32>(0.0); }
-    return textureLoad(images, t, 0);
+    return layer_load(t, clamp_unit);
 }
 
 // The kind of shape a fragment draws: the instance's, or, in a pipeline built for one kind (render/variant.rs
@@ -373,6 +381,10 @@ fn fs(i: Out) -> @location(0) vec4<f32> {
         // only here, on the completed layer, including the radius in word 3.
         let screen = i.pos.xy + projection.xy;
         var p = screen - i.rect.xy;
+        // Float intermediates accumulate One/One without saturation. Saturate each texel before
+        // bilinear filtering and before applying this scope's opacity so resampling and nesting
+        // preserve plus-lighter's bounded coverage.
+        let additive = i.params.x == 1.0;
         var color: vec4<f32>;
         if (i.border.y != 0.0) {
             // Turned: sample the upright contents where this pixel turns back to, bilinearly,
@@ -385,8 +397,8 @@ fn fs(i: Out) -> @location(0) vec4<f32> {
             let base = floor(local);
             let f = local - base;
             let t0 = vec2<i32>(base);
-            color = mix(mix(layer_texel(t0, i.rect.zw), layer_texel(t0 + vec2<i32>(1, 0), i.rect.zw), f.x),
-                        mix(layer_texel(t0 + vec2<i32>(0, 1), i.rect.zw), layer_texel(t0 + vec2<i32>(1, 1), i.rect.zw), f.x), f.y);
+            color = mix(mix(layer_texel(t0, i.rect.zw, additive), layer_texel(t0 + vec2<i32>(1, 0), i.rect.zw, additive), f.x),
+                        mix(layer_texel(t0 + vec2<i32>(0, 1), i.rect.zw, additive), layer_texel(t0 + vec2<i32>(1, 1), i.rect.zw, additive), f.x), f.y);
         } else if (any(p < vec2<f32>(0.0)) || any(p >= i.rect.zw)) {
             discard;
         } else if (i.uv.z > 0.0) {
@@ -396,15 +408,12 @@ fn fs(i: Out) -> @location(0) vec4<f32> {
             let f = local - base;
             let t0 = clamp(vec2<i32>(base), vec2<i32>(0), hi);
             let t1 = clamp(vec2<i32>(base) + vec2<i32>(1, 1), vec2<i32>(0), hi);
-            color = mix(mix(textureLoad(images, t0, 0), textureLoad(images, vec2<i32>(t1.x, t0.y), 0), f.x),
-                        mix(textureLoad(images, vec2<i32>(t0.x, t1.y), 0), textureLoad(images, t1, 0), f.x), f.y);
+            color = mix(mix(layer_load(t0, additive), layer_load(vec2<i32>(t1.x, t0.y), additive), f.x),
+                        mix(layer_load(vec2<i32>(t0.x, t1.y), additive), layer_load(t1, additive), f.x), f.y);
         } else {
-            color = textureLoad(images, vec2<i32>(floor(p)), 0);
+            color = layer_load(vec2<i32>(floor(p)), additive);
         }
-        // Float intermediates accumulate One/One without saturation. Clamp before applying
-        // this scope's opacity so nesting preserves plus-lighter's bounded coverage.
-        return select(color, clamp(color, vec4(0.0), vec4(1.0)), i.params.x == 1.0) * i.fill.a
-            * clip_alpha(screen, i.clip, i.fade) * hole_alpha(screen, i.radii);
+        return color * i.fill.a * clip_alpha(screen, i.clip, i.fade) * hole_alpha(screen, i.radii);
     }
     let kind = fragment_kind(i);
     if (kind > 11.5) { discard; }

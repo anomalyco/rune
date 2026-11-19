@@ -29,7 +29,7 @@ impl RuntimeCore {
     /// Node `i`'s text as AccessKit sees it: the lines of a field or selectable text, and the
     /// links of any text, pushed after it as its children.
     pub(super) fn a11y_text_nodes(&self, i: usize, w: &a11y_tree::Walk, out: &mut Vec<(AkId, AkNode)>) {
-        let n = &self.nodes[i];
+        let n = &self.tree.nodes[i];
         if let Some(g) = n.vis.grid.as_deref() {
             return self.a11y_grid_rows(i, g, w, out);
         }
@@ -110,9 +110,9 @@ impl RuntimeCore {
     /// cells in their columns) with every character's place on the cell grid, so a reader moves
     /// through the screen by character, word and line.
     fn a11y_grid_rows(&self, i: usize, g: &crate::el::grid::Grid, w: &a11y_tree::Walk, out: &mut Vec<(AkId, AkNode)>) {
-        let n = &self.nodes[i];
+        let n = &self.tree.nodes[i];
         let me = out.len() - 1;
-        let r = self.drawn[i];
+        let r = self.paint.drawn[i];
         let [cw, ch] = g.cell;
         let shown = g.rows.len().min((r[3] / ch.max(1.0)).ceil() as usize);
         for (k, row) in g.rows.iter().take(shown).enumerate() {
@@ -163,7 +163,7 @@ impl RuntimeCore {
     /// What node `i` draws as text: a field's display text (its mask when secure), else its
     /// content.
     fn a11y_drawn_text(&self, i: usize) -> Option<Cow<'_, str>> {
-        let n = &self.nodes[i];
+        let n = &self.tree.nodes[i];
         match n.input.as_deref() {
             Some(input) if !input.edit.is_secure() && input.edit.preedit().is_none() => Some(Cow::Borrowed(input.edit.text.as_str())),
             Some(input) => Some(Cow::Owned(input.edit.display().0)),
@@ -172,7 +172,7 @@ impl RuntimeCore {
     }
 
     fn a11y_drawn_len(&self, i: usize) -> Option<usize> {
-        let n = &self.nodes[i];
+        let n = &self.tree.nodes[i];
         match n.input.as_deref() {
             Some(input) if !input.edit.is_secure() => match input.edit.preedit() {
                 None => Some(input.edit.text.len()),
@@ -186,11 +186,25 @@ impl RuntimeCore {
         }
     }
 
+    /// Node `i`'s text origin in drawn points and its layout-px-per-drawn-point scale `s / z`,
+    /// using the same `text_x` and single-line scroll rule as paint and `links::origin`.
+    pub(super) fn a11y_text_origin(&self, i: usize, spec: &TextSpec, layout: TextFlow<'_>) -> ([f32; 2], f32) {
+        let n = &self.tree.nodes[i];
+        let s = self.env.scale;
+        let z = self.paint.drawn_scale.get(i).copied().unwrap_or(1.0).max(1e-4);
+        let r = self.paint.drawn[i];
+        let [mut x, y] = links::origin(n, spec, layout, [r[0], r[1], r[0] + r[2], r[1] + r[3]], s, z);
+        if n.input.as_deref().is_some_and(|inp| inp.single_line) {
+            x -= self.edit.input_scroll.get(&n.path).copied().unwrap_or(0.0) * z;
+        }
+        ([x, y], s / z)
+    }
+
     /// Node `i`'s laid-out lines, in points in its scroll viewport's content space (before the
     /// walk's shift).
     pub(super) fn a11y_lines(&self, i: usize) -> Option<(Cow<'_, str>, Vec<Line>)> {
         if self.a11y_uses_long_field(i) { return None; }
-        let n = &self.nodes[i];
+        let n = &self.tree.nodes[i];
         let (spec, tl) = (n.text.as_deref()?, n.text_layout.as_ref()?);
         if n.elided.is_some() { return None; }
         if !spec.by_line && matches!(tl, crate::text::TextLayout::Paragraphs(p) if p.waiting()) {
@@ -203,14 +217,8 @@ impl RuntimeCore {
         {
             return None;
         }
-        let s = self.env.scale;
-        let r = self.drawn[i];
-        let (x0, x1) = (r[0] + n.inset[0], r[0] + r[2] - n.inset[2]);
-        let mut x = text_x(spec, x0, x1, layout.full_width() / s, layout.flow());
-        if let Some(input) = n.input.as_deref() && input.single_line {
-            x -= self.input_scroll.get(&n.path).copied().unwrap_or(0.0);
-        }
-        let lines = lines(layout, &content, s, [x, r[1] + n.inset[1]]);
+        let (origin, px) = self.a11y_text_origin(i, spec, layout);
+        let lines = lines(layout, &content, px, origin);
         // `line_id` holds up to `LINK_BASE - 2` (`32,766`) runs per node; if a block exceeds that
         // or its runs don't cover `content`, publish its whole value/label without `TextRun`s.
         if lines.len() > (super::a11y_tree::LINK_BASE as usize - 2)
@@ -223,7 +231,7 @@ impl RuntimeCore {
 
     /// A field's caret or selection, in its lines.
     fn a11y_selection(&self, i: usize, content: &str, lines: &[Line]) -> Option<TextSelection> {
-        let n = &self.nodes[i];
+        let n = &self.tree.nodes[i];
         let input = n.input.as_deref()?;
         let edit = &input.edit;
         let (anchor, focus) = if edit.preedit().is_some() {

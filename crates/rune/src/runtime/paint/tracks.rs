@@ -7,7 +7,7 @@ use super::*;
 /// them together, and once a node is out of step it walks together no more: it finds every
 /// later one in a map built on that first miss.
 #[derive(Debug)]
-pub(super) enum Finder {
+pub(in crate::runtime) enum Finder {
     /// Both trees agree on every node so far: the next one to compare sits at `next`.
     InStep { next: usize },
     /// The first node out of step built `map` of the last build, from `next` on.
@@ -19,7 +19,7 @@ impl Default for Finder {
 }
 
 impl Finder {
-    pub(super) fn find(&mut self, old: &[Node], id: NodeId) -> Option<usize> {
+    pub(in crate::runtime) fn find(&mut self, old: &[Node], id: NodeId) -> Option<usize> {
         let at = match self {
             Finder::InStep { next } => match old.get(*next) {
                 Some(n) if n.id == id => *next,
@@ -39,7 +39,7 @@ impl Finder {
         Some(at)
     }
 
-    pub(super) fn advance(&mut self, next: usize) {
+    pub(in crate::runtime) fn advance(&mut self, next: usize) {
         match self {
             Finder::InStep { next: at } | Finder::Mapped { next: at, .. } => *at = next,
         }
@@ -49,18 +49,18 @@ impl Finder {
 /// Resolves `old` against `old_nodes`, falling back to `nodes[i]` when `old` was moved out of
 /// `old_nodes` by a `same_path` memo reuse (leaving its paint and text fields unchanged on `nodes[i]`).
 #[inline]
-pub(super) fn prev_node<'a>(old_nodes: &'a [Node], nodes: &'a [Node], old: Option<usize>, i: usize) -> Option<&'a Node> {
+pub(in crate::runtime) fn prev_node<'a>(old_nodes: &'a [Node], nodes: &'a [Node], old: Option<usize>, i: usize) -> Option<&'a Node> {
     old.map(|o| if old_nodes[o].is_moved_stub() { &nodes[i] } else { &old_nodes[o] })
 }
 
 /// The colour a node's text or icon draws in.
-pub(super) fn text_color(n: &Node) -> Option<Color> {
+pub(in crate::runtime) fn text_color(n: &Node) -> Option<Color> {
     n.text.as_ref().map(|t| t.color).or(n.vis.icon.map(|(_, c)| c))
 }
 
 /// Text or icon colour `c` as it paints while its hover group is `group` hovered (0 to 1):
 /// mixed toward its `El::group_color`.
-pub(super) fn group_tint(n: &Node, c: Color, group: f32) -> Color {
+pub(in crate::runtime) fn group_tint(n: &Node, c: Color, group: f32) -> Color {
     match n.vis.group_color {
         Some(g) if group > 0.0 => c.mix(g, group),
         _ => c,
@@ -69,7 +69,7 @@ pub(super) fn group_tint(n: &Node, c: Color, group: f32) -> Color {
 
 /// Text or icon colour `c` while a press on the nearest `El::press_color` element is held (`pressed`,
 /// 0 to 1): mixed toward that colour.
-pub(super) fn press_tint(c: Color, to: Option<Color>, pressed: f32) -> Color {
+pub(in crate::runtime) fn press_tint(c: Color, to: Option<Color>, pressed: f32) -> Color {
     match to {
         Some(p) if pressed > 0.0 => c.mix(p, pressed),
         _ => c,
@@ -78,22 +78,22 @@ pub(super) fn press_tint(c: Color, to: Option<Color>, pressed: f32) -> Color {
 
 /// Which of a node's colours a live value owns. A commit leaves those tracks to the latch.
 #[derive(Clone, Copy, Default)]
-pub(super) struct LiveColors {
-    pub(super) fill: bool,
-    pub(super) text: bool,
-    pub(super) border: bool,
-    pub(super) shadow: bool,
-    pub(super) gradient: [bool; 2],
+pub(in crate::runtime) struct LiveColors {
+    pub(in crate::runtime) fill: bool,
+    pub(in crate::runtime) text: bool,
+    pub(in crate::runtime) border: bool,
+    pub(in crate::runtime) shadow: bool,
+    pub(in crate::runtime) gradient: [bool; 2],
 }
 
-pub(super) fn live_colors(n: &Node) -> LiveColors {
+pub(in crate::runtime) fn live_colors(n: &Node) -> LiveColors {
     let mut c = LiveColors::default();
     for b in n.live.iter() { c.add(b.property); }
     c
 }
 
 impl LiveColors {
-    pub(super) fn add(&mut self, p: crate::live::Property) {
+    pub(in crate::runtime) fn add(&mut self, p: crate::live::Property) {
         use crate::live::Property;
         match p {
             Property::Fill => self.fill = true,
@@ -108,7 +108,7 @@ impl LiveColors {
 
     /// Puts back on `new` the colours `old` last latched for the bindings it kept, since the
     /// view authored its own placeholder colour.
-    pub(super) fn carry(self, old: &Node, new: &mut Node) {
+    pub(in crate::runtime) fn carry(self, old: &Node, new: &mut Node) {
         if self.fill { new.vis.fill = old.vis.fill; }
         if self.border { new.vis.set_border_color(old.vis.border()); }
         if self.text && let Some(c) = text_color(old) {
@@ -134,7 +134,7 @@ impl LiveColors {
 /// Readies `p` (hover, press, press scale), which reads `rest` without a track, to move to
 /// `to`: false when it has no track and `to` is `rest`, so there's nothing to do; otherwise it
 /// has a track, made at `rest` if it had none.
-pub(super) fn ready_from_rest(scene: &mut Scene, id: NodeId, p: Prop<f32>, rest: f32, to: f32) -> bool {
+pub(in crate::runtime) fn ready_from_rest(scene: &mut Scene, id: NodeId, p: Prop<f32>, rest: f32, to: f32) -> bool {
     if scene.store().has(id, p) {
         return true;
     }
@@ -146,7 +146,7 @@ pub(super) fn ready_from_rest(scene: &mut Scene, id: NodeId, p: Prop<f32>, rest:
 }
 
 /// A shadow's geometry as its track holds it.
-pub(super) fn shadow_geo(sh: &crate::el::Shadow) -> rune_motion::Rect {
+pub(in crate::runtime) fn shadow_geo(sh: &crate::el::Shadow) -> rune_motion::Rect {
     rune_motion::Rect { x: sh.x, y: sh.y, w: sh.blur, h: sh.spread }
 }
 
@@ -155,7 +155,7 @@ impl RuntimeCore {
     /// new). Without a track a node draws its own value (`Runtime::color`, `shadow_at`), so it
     /// needs none until the value changes, and a commit that leaves it changes nothing.
     #[inline]
-    pub(super) fn commit_paint<T: rune_motion::Animatable + PartialEq>(&mut self, id: NodeId, p: Prop<T>, from: Option<T>, to: T, s: Spring, instant: bool) {
+    pub(in crate::runtime) fn commit_paint<T: rune_motion::Animatable + PartialEq>(&mut self, id: NodeId, p: Prop<T>, from: Option<T>, to: T, s: Spring, instant: bool) {
         if !instant && from == Some(to) {
             // Its track, if any, already heads to `to`: nothing else moves this property.
             return;
@@ -173,7 +173,7 @@ impl RuntimeCore {
         self.set_or_anim(id, p, to, s, instant);
     }
 
-    pub(super) fn commit_cold_paint(
+    pub(in crate::runtime) fn commit_cold_paint(
         &mut self,
         id: NodeId,
         vis: &Visual,
@@ -188,7 +188,7 @@ impl RuntimeCore {
             Some(if old_nodes[o].is_moved_stub() { vis } else { &old_nodes[o].vis })
         }
         for (k, sh) in vis.shadows.iter().take(P_SHADOWS.len()).enumerate() {
-            let was = prev_vis(&self.nodes, vis, old).and_then(|o| o.shadows.get(k).copied());
+            let was = prev_vis(&self.tree.nodes, vis, old).and_then(|o| o.shadows.get(k).copied());
             // An inset ring where a drop shadow was (or the other way) is another shadow, not this
             // one changing: it lands rather than morphing between the two.
             let instant = instant || was.is_some_and(|w| w.inset != sh.inset);
@@ -197,13 +197,13 @@ impl RuntimeCore {
             }
             self.commit_paint(id, P_SHADOW_GEO[k], was.map(|w| shadow_geo(&w)), shadow_geo(sh), spring_l, instant);
         }
-        let prev_shadows = prev_vis(&self.nodes, vis, old).map_or(0, |o| o.shadows.len()).min(P_SHADOWS.len());
+        let prev_shadows = prev_vis(&self.tree.nodes, vis, old).map_or(0, |o| o.shadows.len()).min(P_SHADOWS.len());
         for k in vis.shadows.len()..prev_shadows {
             self.scene.store_mut().remove(id, P_SHADOWS[k]);
             self.scene.store_mut().remove(id, P_SHADOW_GEO[k]);
         }
         if let Some(&g) = vis.gradient.as_deref() {
-            let was = prev_vis(&self.nodes, vis, old).and_then(|o| o.gradient.as_deref().copied());
+            let was = prev_vis(&self.tree.nodes, vis, old).and_then(|o| o.gradient.as_deref().copied());
             for k in 0..2 {
                 if !live.gradient[k] {
                     self.commit_paint(id, P_GRADIENT[k], was.map(|w| w[k]), g[k], spring_c, instant);
@@ -212,19 +212,19 @@ impl RuntimeCore {
         }
         if let Some(rg) = &vis.radial {
             for (k, &(_, c)) in rg.stops.iter().take(P_RADIAL.len()).enumerate() {
-                let was = prev_vis(&self.nodes, vis, old).and_then(|o| o.radial.as_ref()?.stops.get(k).map(|s| s.1));
+                let was = prev_vis(&self.tree.nodes, vis, old).and_then(|o| o.radial.as_ref()?.stops.get(k).map(|s| s.1));
                 self.commit_paint(id, P_RADIAL[k], was, c, spring_c, instant);
             }
         }
         if let Some(ol) = vis.outline {
-            let was = prev_vis(&self.nodes, vis, old).and_then(|o| o.outline.map(|w| w.color));
+            let was = prev_vis(&self.tree.nodes, vis, old).and_then(|o| o.outline.map(|w| w.color));
             self.commit_paint(id, P_OUTLINE, was, ol.color, spring_c, instant);
         }
     }
 
     /// True when `nodes[i]` has the same parent, frame, visual, text colour, transition and
     /// resting scene state as `self.nodes[old]`, so `apply`'s per-node diff has nothing to move.
-    pub(super) fn unchanged_node_resting(
+    pub(in crate::runtime) fn unchanged_node_resting(
         &self,
         nodes: &[Node],
         i: usize,
@@ -233,7 +233,7 @@ impl RuntimeCore {
         parent_virtual: Option<&crate::el::virtual_list::VirtualList>,
     ) -> bool {
         let Some(o_idx) = old else { return false };
-        let o = &self.nodes[o_idx];
+        let o = &self.tree.nodes[o_idx];
         if o.is_moved_stub() {
             return false;
         }
@@ -251,19 +251,19 @@ impl RuntimeCore {
             && !o.scale_track
             && n.static_scale == 1.0
             && !o.group_fade
-            && n.parent.map(|p| nodes[p].id) == o.parent.map(|p| self.nodes[p].id)
+            && n.parent.map(|p| nodes[p].id) == o.parent.map(|p| self.tree.nodes[p].id)
             && plain_cold(n)
             && plain_cold(o)
-            && (self.flying.is_empty() || !self.flying.iter().any(|f| f.0 == n.id))
-            && (self.aspect_snap.is_empty() || !self.aspect_snap.contains(&n.id))
+            && (self.motion.flying.is_empty() || !self.motion.flying.iter().any(|f| f.0 == n.id))
+            && (self.tree.aspect_snap.is_empty() || !self.tree.aspect_snap.contains(&n.id))
             && !parent_virtual.is_some_and(crate::el::virtual_list::VirtualList::replaced_view)
             && memo_reuse::same_visual(&n.vis, &o.vis)
             && text_color(n) == text_color(o)
             && n.text.as_ref().is_none_or(|t| {
-                t.reveal < 0.0 || self.reveals.get(&n.id).is_some_and(|r| r.caught_up(t.content.len()))
+                t.reveal < 0.0 || self.motion.reveals.get(&n.id).is_some_and(|r| r.caught_up(t.content.len()))
             })
             && self.scene.is_resting_at(n.id, scene_rect)
-            && (self.stacks.is_empty()
+            && (self.motion.stacks.is_empty()
                 || n.parent.is_none_or(|p| nodes[p].growth.is_none())
                 || self.reorder_jump(nodes, i) == 0.0)
     }

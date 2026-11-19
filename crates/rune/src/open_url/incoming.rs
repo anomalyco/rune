@@ -90,8 +90,14 @@ impl Inbox {
 
     /// Sends links to `app`'s hook while the returned guard lives, after the links kept so far,
     /// if the app has the hook. Installs the handler if `prepare` didn't.
+    #[inline]
     pub(crate) fn listen<S: 'static>(&'static self, app: &App<S>, glue: &dyn Glue) -> Option<Listening> {
         let hook = app.on_open_url?;
+        let handle: AppHandle<S> = app.handle();
+        self.listen_sink(glue, Arc::new(move |url: String| handle.update(move |s, tx| hook(s, &url, tx))))
+    }
+
+    fn listen_sink(&'static self, glue: &dyn Glue, sink: Sink) -> Option<Listening> {
         let mut state = self.state.lock().unwrap();
         let (mut listeners, kept) = match std::mem::replace(&mut state.funnel, Funnel::Closed) {
             // `Listening` and `Launch` already have the handler; `Unprepared` and `Closed`
@@ -113,8 +119,6 @@ impl Inbox {
                 (Vec::new(), Vec::new())
             }
         };
-        let handle: AppHandle<S> = app.handle();
-        let sink: Sink = Arc::new(move |url: String| handle.update(move |s, tx| hook(s, &url, tx)));
         let id = state.next;
         state.next += 1;
         listeners.push((id, sink.clone()));

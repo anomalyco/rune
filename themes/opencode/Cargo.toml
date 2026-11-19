@@ -10,5 +10,9 @@ rune = { workspace = true }
 rune-kit = { workspace = true }
 serde_json = { workspace = true }
 
+[dev-dependencies]
+rune = { workspace = true, default-features = true }
+rune-kit = { workspace = true, default-features = true }
+
 [lints]
 workspace = true

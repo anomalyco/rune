@@ -507,7 +507,7 @@ fn lists() -> crate::Runtime<Lists> {
 
 fn list_path(rt: &crate::Runtime<Lists>, name: &str) -> String {
     let suffix = format!("/{name}");
-    rt.virtuals.keys().find(|p| p.ends_with(&suffix)).expect("a mounted list").clone()
+    rt.commit.virtuals.keys().find(|p| p.ends_with(&suffix)).expect("a mounted list").clone()
 }
 
 /// Selects all of list `name`, pinning its first and last rows, and wheels it (at height `y`)
@@ -517,7 +517,7 @@ fn select_all_and_scroll(rt: &mut crate::Runtime<Lists>, name: &'static str, y: 
     rt.frame(1.0 / 60.0);
     let path = list_path(rt, name);
     for _ in 0..40 {
-        if rt.virtuals[&path].range.start > 40 {
+        if rt.commit.virtuals[&path].range.start > 40 {
             break;
         }
         rt.wheel(320.0, y, -200.0);
@@ -528,15 +528,15 @@ fn select_all_and_scroll(rt: &mut crate::Runtime<Lists>, name: &'static str, y: 
             break;
         }
     }
-    let range = rt.virtuals[&path].range.clone();
+    let range = rt.commit.virtuals[&path].range.clone();
     assert!(range.start > 1 && range.end < NESTED, "{name} scrolled to the middle: {range:?}");
 }
 
 /// Moves list `name` straight into its nested rows and runs the real remount on its own.
 fn remount_into_nested(rt: &mut crate::Runtime<Lists>, name: &str) -> bool {
-    let scroll = rt.virtuals[&list_path(rt, name)].scroll_path.clone();
-    let id = rt.path_ids[&scroll];
-    rt.scrolls.get_mut(&id).expect("the list's scroll").offset = ((NESTED + 20) as f32 * ROW_H) as f64;
+    let scroll = rt.commit.virtuals[&list_path(rt, name)].scroll_path.clone();
+    let id = rt.tree.path_ids[&scroll];
+    rt.scroll.scrolls.get_mut(&id).expect("the list's scroll").offset = ((NESTED + 20) as f32 * ROW_H) as f64;
     rt.remount_falls_back()
 }
 
@@ -565,11 +565,11 @@ fn the_real_remount_collects_this_lists_pins_before_it_falls_back() {
     for event in [Ev::Select(Some("a"), Some("r399")), Ev::Commit(Kind::Remount, None)] {
         dev.apply(event);
     }
-    assert_eq!(kept(&rt.virtuals[&path].selection.pins), dev_kept(&dev), "before the fallback");
+    assert_eq!(kept(&rt.commit.virtuals[&path].selection.pins), dev_kept(&dev), "before the fallback");
 
     assert!(remount_into_nested(&mut rt, "one"), "a nested list entering falls back");
     dev.apply(Ev::Fallback(Boundary::Here(None)));
-    assert_eq!(kept(&rt.virtuals[&path].selection.pins), dev_kept(&dev), "after the fallback");
+    assert_eq!(kept(&rt.commit.virtuals[&path].selection.pins), dev_kept(&dev), "after the fallback");
 }
 
 /// A list after the one that falls back keeps its pins, and its texts are cleared in place,
@@ -583,13 +583,13 @@ fn the_real_remount_clears_later_lists_in_place_when_an_earlier_one_falls_back()
     for event in [Ev::Select(Some("a"), Some("r399")), Ev::Commit(Kind::Remount, None)] {
         dev.apply(event);
     }
-    assert_eq!(kept(&rt.virtuals[&path].selection.pins), dev_kept(&dev), "before the fallback");
-    let pins = &mut rt.virtuals.get_mut(&path).expect("list two").selection.pins;
+    assert_eq!(kept(&rt.commit.virtuals[&path].selection.pins), dev_kept(&dev), "before the fallback");
+    let pins = &mut rt.commit.virtuals.get_mut(&path).expect("list two").selection.pins;
     let capacity = pins.text_buffers().expect("a committed list").0.capacity();
 
     assert!(remount_into_nested(&mut rt, "one"), "a nested list entering list one falls back");
     dev.apply(Ev::Fallback(Boundary::Earlier));
-    let pins = &mut rt.virtuals.get_mut(&path).expect("list two").selection.pins;
+    let pins = &mut rt.commit.virtuals.get_mut(&path).expect("list two").selection.pins;
     assert_eq!(kept(pins), dev_kept(&dev), "after the fallback");
     assert!(pins.text_buffers().expect("a committed list").0.capacity() >= capacity, "cleared in place");
 }

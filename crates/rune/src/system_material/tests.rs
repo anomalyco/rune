@@ -52,7 +52,7 @@ fn one_card(_: &u8, _: &mut Cx<u8>) -> El {
 
 fn runtime(view: fn(&u8, &mut Cx<u8>) -> El, native: bool) -> Runtime<u8> {
     let mut rt = Runtime::new(0, view, (200.0, 120.0), Env { scale: 2.0, system_dark: true });
-    rt.native_materials = native;
+    rt.paint.native_materials = native;
     rt.frame(0.0);
     rt
 }
@@ -64,8 +64,8 @@ fn kind(rt: &Runtime<u8>, kind: f32) -> Vec<Instance> {
 #[test]
 fn material_elements_report_physical_rects_and_clamped_radii() {
     let rt = runtime(one_card, false);
-    assert_eq!(rt.materials.len(), 1);
-    let m = rt.materials[0];
+    assert_eq!(rt.paint.materials.len(), 1);
+    let m = rt.paint.materials[0];
     assert_eq!(m.material, SystemMaterial::Glass);
     assert_eq!(m.rect, [60.0, 40.0, 240.0, 120.0]);
     assert_eq!(m.radius, 36.0);
@@ -107,7 +107,7 @@ fn glass_rounds_continuously_and_popover_follows_the_flag() {
             .child(popover(110.0).continuous_corners())
     }
     let rt = runtime(cards, false);
-    assert_eq!(rt.materials.iter().map(|m| m.continuous).collect::<Vec<_>>(), [true, false, true]);
+    assert_eq!(rt.paint.materials.iter().map(|m| m.continuous).collect::<Vec<_>>(), [true, false, true]);
     // The fallback fills take the same curve: negative radii draw continuous corners.
     let fill = |x: f32| kind(&rt, KIND_RECT).into_iter().find(|q| q.rect[0] == x * 2.0).unwrap().radii[0];
     assert_eq!([fill(10.0), fill(60.0), fill(110.0)], [-20.0, 20.0, -20.0]);
@@ -122,8 +122,8 @@ fn a_dimmed_out_material_takes_no_native_view() {
             .child(card(MAX_NATIVE_MATERIALS))
     }
     let rt = runtime(dimmed, true);
-    assert_eq!(rt.materials.len(), 1, "only the visible element takes a view");
-    assert_eq!(rt.materials[0].rect[0], MAX_NATIVE_MATERIALS as f32 * 60.0);
+    assert_eq!(rt.paint.materials.len(), 1, "only the visible element takes a view");
+    assert_eq!(rt.paint.materials[0].rect[0], MAX_NATIVE_MATERIALS as f32 * 60.0);
 }
 
 #[test]
@@ -221,7 +221,7 @@ fn materials_past_the_limit_draw_their_fallback() {
         }))
     }
     let rt = runtime(many, true);
-    assert_eq!(rt.materials.len(), MAX_NATIVE_MATERIALS);
+    assert_eq!(rt.paint.materials.len(), MAX_NATIVE_MATERIALS);
     let white = kind(&rt, KIND_RECT).into_iter().filter(|q| q.fill[3] > 0.99).count();
     assert_eq!(white, 1, "only the element past the limit paints its fill");
 }
@@ -232,13 +232,13 @@ fn material_opacity_includes_ancestors() {
         el().size(200.0, 120.0).child(el().size(200.0, 120.0).opacity(0.5).child(card().opacity(0.5)))
     }
     let rt = runtime(faded, true);
-    assert!((rt.materials[0].opacity - 0.25).abs() < 1e-6);
+    assert!((rt.paint.materials[0].opacity - 0.25).abs() < 1e-6);
 }
 
 #[test]
 fn headless_runtimes_never_host_native_views_and_build_identically() {
     let a = Runtime::new(0u8, one_card, (200.0, 120.0), Env { scale: 2.0, system_dark: true });
-    assert!(!a.native_materials);
+    assert!(!a.paint.native_materials);
     let (a, b) = (runtime(one_card, false), runtime(one_card, false));
     assert_eq!(bytemuck::cast_slice::<Instance, u8>(&a.instances), bytemuck::cast_slice::<Instance, u8>(&b.instances));
 }
@@ -286,7 +286,7 @@ fn srgb_blend_frost_over_a_native_material_reads_as_core_animation() {
     let gpu = Gpu::headless();
     let read = |srgb: bool, frost: u8, clear: [f32; 4]| {
         let mut rt = Runtime::new(frost, frosted, (200.0, 120.0), Env { scale: 2.0, system_dark: true });
-        rt.native_materials = true;
+        rt.paint.native_materials = true;
         rt.set_srgb_blend(srgb);
         rt.frame(0.0);
         let format = if srgb { crate::render::OFFSCREEN_FORMAT.remove_srgb_suffix() } else { crate::render::OFFSCREEN_FORMAT };

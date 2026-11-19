@@ -1,0 +1,1 @@
+- **`--desktop` captures composite a translucent wallpaper at the right brightness.** The backdrop image was premultiplied on encoded sRGB bytes, which darkened its translucent regions; it is now premultiplied in linear light.

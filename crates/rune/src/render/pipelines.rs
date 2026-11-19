@@ -1,7 +1,7 @@
 //! Building the renderer and its uber pipelines: the pipeline for each target format and blend,
 //! the sampled textures the CPU fills, and the bind group the uber shader reads.
 
-use super::{ATLAS_START_ROWS, Blend, CLIP_WGSL, Renderer, dxbc, metallib, variant};
+use super::{ATLAS_START_ROWS, Blend, CLIP_WGSL, Globals, Instance, Renderer, dxbc, metallib, variant};
 
 impl Renderer {
     pub(super) fn create(device: &wgpu::Device, format: wgpu::TextureFormat, properties: Option<(&[crate::gpu::springs::Node], &[u32])>, classic: bool) -> Renderer {
@@ -16,7 +16,7 @@ impl Renderer {
         };
         let globals = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
-            size: u64::from(device.limits().min_uniform_buffer_offset_alignment).max(32) + 16,
+            size: u64::from(device.limits().min_uniform_buffer_offset_alignment).max(std::mem::size_of::<Globals>() as u64) + 16,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -53,8 +53,14 @@ impl Renderer {
             }
         };
         let bind_group = Self::bind_group(device, &bgl, &globals, uber.outlines(), &atlas, &stand_in, None);
-        let capacity = 256;
-        let instances = Self::instance_buffer(device, capacity);
+        let instances = rune_staging::GrowBuffer::new(
+            device,
+            "instances",
+            wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            std::mem::size_of::<Instance>(),
+            256,
+            0,
+        );
         let spring_instances = properties.map_or(0, |(_, ids)| ids.len());
         let springs = properties.map(|(nodes, ids)| crate::gpu::springs::Bindings::new(device, spring_layout.as_ref().unwrap(), nodes, ids));
         Renderer {
@@ -83,7 +89,6 @@ impl Renderer {
             images: Vec::new(),
             image_batches: Vec::new(),
             instances,
-            capacity,
             count: 0,
             springs,
             spring_instances,
@@ -176,7 +181,7 @@ impl Renderer {
             wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&image_view) },
             wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                 buffer: target.unwrap_or(globals),
-                offset: if target.is_some() { 0 } else { u64::from(device.limits().min_uniform_buffer_offset_alignment).max(32) },
+                offset: if target.is_some() { 0 } else { u64::from(device.limits().min_uniform_buffer_offset_alignment).max(std::mem::size_of::<Globals>() as u64) },
                 size: std::num::NonZeroU64::new(16),
             }) },
         ];

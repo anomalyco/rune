@@ -4,20 +4,20 @@ use super::*;
 
 impl RuntimeCore {
     /// A frame's commit for `why` (`CommitWhy` bits).
-    pub(super) fn commit_for(&mut self, app: &mut dyn AppDriver, tx: &Tx, why: u16) {
-        self.commit_why |= why;
-        if crate::tooling::interaction::on() { self.watch.interaction.committed(why); }
-        self.watch.cause = why;
+    pub(in crate::runtime) fn commit_for(&mut self, app: &mut dyn AppDriver, tx: &Tx, why: u16) {
+        self.commit.commit_why |= why;
+        if crate::tooling::interaction::on() { self.commit.watch.interaction.committed(why); }
+        self.commit.watch.cause = why;
         self.commit(app, tx);
-        self.watch.cause = 0;
+        self.commit.watch.cause = 0;
     }
 
     /// After a frame's commits, before its scroll requests run: whether it committed since the
     /// `commits0`th commit, while a viewport scrolled; `instant` is the viewport an instant scroll
     /// it asked for moves.
     #[cfg(debug_assertions)]
-    pub(super) fn watch_frame(&mut self, commits0: u64, instant: Option<&str>) {
+    pub(in crate::runtime) fn watch_frame(&mut self, commits0: u64, instant: Option<&str>) {
         let scrolling = self.scrolling();
-        self.watch.meter.frame_ends(scrolling, self.commits != commits0, instant);
+        self.commit.watch.meter.frame_ends(scrolling, self.commit.commits != commits0, instant);
     }
 }

@@ -2,20 +2,14 @@
 
 use super::*;
 
-impl<S: 'static> Live<S> {
+impl LiveCore {
     /// The open story's variants' names, in key order.
-    pub(super) fn variants(&self) -> Vec<&'static str> {
+    pub(super) fn variants(&self) -> &[&'static str] {
         self.variants_of(self.selected)
     }
 
-    fn variants_of(&self, i: usize) -> Vec<&'static str> {
-        if i < self.scenes.len() {
-            return self.variants.iter().filter(|(s, _, _)| *s == i).map(|(_, name, _)| *name).collect();
-        }
-        match self.pages.get(i - self.scenes.len()) {
-            Some(Page { kind: Kind::Own(own), .. }) => own.variants(),
-            _ => Vec::new(),
-        }
+    fn variants_of(&self, i: usize) -> &[&'static str] {
+        self.stories.get(i).map_or(&[], |s| &s.variants)
     }
 
     /// `--variant`: story `name` (else the first) opens on the variant `variant` names, by
@@ -31,7 +25,7 @@ impl<S: 'static> Live<S> {
             None => return Err(format!("no variant {variant:?} of {:?}; it has: {}", self.path(i), names.join(", "))),
         }
         // A story's stage outlives a switch away; made again, it takes the variant.
-        if let Some(page) = i.checked_sub(self.scenes.len()) && let Some(stage) = self.owned.get_mut(page) { *stage = None; }
+        if let Some(own) = self.own_slot_mut(i) { own.stage = None; }
         Ok(())
     }
 
@@ -40,14 +34,16 @@ impl<S: 'static> Live<S> {
         self.variant.get(self.selected).copied().unwrap_or(0)
     }
 
-    /// The open scene's variant's fn, if it has variants.
-    pub(super) fn scene_variant(&self) -> Option<&dyn Fn(&mut S)> {
-        self.variants.iter().filter(|(s, _, _)| *s == self.selected).nth(self.variant_at()).map(|(_, _, apply)| apply.as_ref())
-    }
-
     /// What a digit key does: the open story's variant it names, if it has that many.
     pub(super) fn variant_key(&self, c: char) -> Option<Request> {
         let n = c.to_digit(10).filter(|d| (1..=9).contains(d))? as usize;
         (n <= self.variants().len()).then_some(Request::Variant(n - 1))
+    }
+}
+
+impl<S: 'static> TypedStage<S> {
+    /// Scene `selected`'s variant fn at `at`, if it has variants.
+    pub(super) fn scene_variant(&self, selected: usize, at: usize) -> Option<&dyn Fn(&mut S)> {
+        self.variants.iter().filter(|(s, _)| *s == selected).nth(at).map(|(_, apply)| apply.as_ref())
     }
 }

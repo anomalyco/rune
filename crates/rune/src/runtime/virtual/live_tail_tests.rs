@@ -46,41 +46,41 @@ fn poll(s: &mut Feed, t: f64, tx: &mut Tx) -> bool {
 
 fn record(case: Case) -> Recording {
     let mut rt = Runtime::new(Feed { case, phase: Phase::Waiting }, view, (300.0, 180.0), Env::new(true, 1.0));
-    rt.motion_needs_cause = true;
+    rt.motion.motion_needs_cause = true;
     rt.poll = Some(poll);
     let mut run = Run::new(rt, 120.0);
     run.idle(0.45);
     run.step();
     let growing = matches!(case, Case::Delivery | Case::GeometryOnly | Case::InstantChild);
     while run.rt.state.phase != Phase::Delivered { assert!(run.rt.t < 0.6, "delivery did not poll"); run.step(); }
-    let row = run.rt.nodes.iter().find(|n| n.key.as_deref() == Some("pending"));
+    let row = run.rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("pending"));
     if case == Case::Room {
-        let room = run.rt.nodes.iter().position(|n| n.key.as_deref() == Some("room")).unwrap();
-        let first = run.rt.drawn[room][3];
+        let room = run.rt.tree.nodes.iter().position(|n| n.key.as_deref() == Some("room")).unwrap();
+        let first = run.rt.paint.drawn[room][3];
         assert!(first > 0.0 && first < 40.0, "room snapped to {first}");
-        let row = run.rt.nodes.iter().find(|n| n.key.as_deref() == Some("arrival")).unwrap();
-        let remaining = 1.0 - run.rt.grows[&row.id].h / 64.0;
+        let row = run.rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("arrival")).unwrap();
+        let remaining = 1.0 - run.rt.motion.grows[&row.id].h / 64.0;
         assert!((first - 40.0 * remaining).abs() < 1.0 / 64.0, "room {first} must follow the drawn row on the first frame");
     }
     if growing {
-        let h = run.rt.grows[&row.unwrap().id].h;
+        let h = run.rt.motion.grows[&row.unwrap().id].h;
         assert!((48.0..64.0).contains(&h), "live row started at {h}");
         if case == Case::Delivery {
-            let badge = run.rt.nodes.iter().find(|n| n.named("badge")).expect("the visible badge fades on its row");
+            let badge = run.rt.tree.nodes.iter().find(|n| n.named("badge")).expect("the visible badge fades on its row");
             assert!(run.rt.is_exiting(badge.id));
-            let label = run.rt.nodes.iter().find(|n| n.named("label")).unwrap();
+            let label = run.rt.tree.nodes.iter().find(|n| n.named("label")).unwrap();
             assert!(run.rt.scene.store().is_animating(label.id, P_FILL));
         }
         if case == Case::GeometryOnly {
-            assert!(!run.rt.nodes.iter().any(|n| n.named("badge")), "geometry-only growth lands child exits");
+            assert!(!run.rt.tree.nodes.iter().any(|n| n.named("badge")), "geometry-only growth lands child exits");
         }
         if case == Case::InstantChild {
-            let label = run.rt.nodes.iter().position(|n| n.key.as_deref() == Some("label")).unwrap();
-            let group = run.rt.nodes[label].parent.unwrap();
-            assert!((run.rt.drawn[label][1] - run.rt.drawn[group][1] - 12.0).abs() < 0.01, "explicitly instant contents must land within the moving row");
+            let label = run.rt.tree.nodes.iter().position(|n| n.key.as_deref() == Some("label")).unwrap();
+            let group = run.rt.tree.nodes[label].parent.unwrap();
+            assert!((run.rt.paint.drawn[label][1] - run.rt.paint.drawn[group][1] - 12.0).abs() < 0.01, "explicitly instant contents must land within the moving row");
         }
     } else if let Some(row) = row {
-        let g = &run.rt.grows[&row.id];
+        let g = &run.rt.motion.grows[&row.id];
         assert_eq!(g.h, 64.0, "{case:?}: the row should land whole");
         assert!(!g.moving(), "{case:?}: no tail growth work");
     }
@@ -117,7 +117,7 @@ fn live_tail_motion_gate_joined_corner_retargets_on_adjacent_deliveries() {
             .growth(GrowthSpec::default()).virtualize(30.0).child(el().key("earlier").w_full().h(240.0)).children(order))
     }
     let mut rt = Runtime::new(0, grouped, (280.0, 180.0), Env::new(true, 1.0));
-    rt.motion_needs_cause = true;
+    rt.motion.motion_needs_cause = true;
     rt.poll = Some(|accepted, t, tx| {
         if t < 0.5 || *accepted == 2 { return false; }
         *accepted += 1;
@@ -126,7 +126,7 @@ fn live_tail_motion_gate_joined_corner_retargets_on_adjacent_deliveries() {
     });
     let mut run = Run::new(rt, 60.0);
     while run.rt.state == 0 { assert!(run.rt.t < 0.6); run.step(); }
-    let id = run.rt.nodes.iter().find(|n| n.named("second")).unwrap().id;
+    let id = run.rt.tree.nodes.iter().find(|n| n.named("second")).unwrap().id;
     let radii = |rt: &Runtime<usize>| rt.scene.presented(id).unwrap().radius.0;
     let [tl, first, br, bl] = radii(&run.rt);
     assert_eq!([tl, br, bl], [10.0; 3]);
@@ -154,12 +154,12 @@ fn live_tail_motion_gate_joined_faces_share_their_drawn_and_interactive_seam() {
             .growth(GrowthSpec::default()).virtualize(40.0).child(el().key("older").w_full().h(300.0)).children(order))
     }
     let mut rt = Runtime::new((0,0), view, (280.0,180.0), Env::new(true,1.0));
-    rt.motion_needs_cause = true;
+    rt.motion.motion_needs_cause = true;
     rt.poll = Some(|s,t,tx| { if t < 0.5 || s.0 == 2 { return false; } s.0 += 1; tx.grow_visible_tail("rows"); true });
     let mut run = Run::new(rt,60.0);
     while run.rt.state.0 == 0 { assert!(run.rt.t < 0.6); run.step(); }
     for step in 0..36 {
-        let rect = |key| run.rt.drawn[run.rt.nodes.iter().position(|n| n.named(key)).unwrap()];
+        let rect = |key| run.rt.paint.drawn[run.rt.tree.nodes.iter().position(|n| n.named(key)).unwrap()];
         let (a,b) = (rect("top"),rect("bottom"));
         assert!((b[1]-a[1]-a[3]-4.0).abs()<0.05, "step {step}: {a:?} {b:?}");
         if step == 4 {

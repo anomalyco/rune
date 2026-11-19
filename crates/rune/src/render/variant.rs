@@ -45,7 +45,7 @@ fn fs(i: Out) -> DualOut {
 
 /// The kinds the frame pass has a pipeline of its own for (`KIND_RECT`, `KIND_SHADOW`, `KIND_GLYPH`):
 /// what most of a frame's fragments draw.
-pub(crate) const PINNED: [u32; 3] = [0, 1, 2];
+pub(crate) const PINNED: [u32; 3] = [Kind::Rect.as_u32(), Kind::Shadow.as_u32(), Kind::Glyph.as_u32()];
 
 /// shader.wgsl's marker for the kind a fragment draws: -1, every kind.
 const PINNED_OFF: &str = "const PINNED_KIND: f32 = -1.0;";

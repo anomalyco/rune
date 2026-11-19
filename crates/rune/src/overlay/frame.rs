@@ -131,6 +131,46 @@ pub(super) enum Turn {
     Draw,
 }
 
+/// Whether this event-loop turn has already stepped or missed a frame for this overlay, so
+/// `wake_due` + occluded recheck or a paced `DisplayTick` miss + `about_to_wait` never advance
+/// the runtime twice in one turn.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum TurnFrame {
+    #[default]
+    Idle,
+    /// `wake_due` already stepped the runtime for a due timer this turn.
+    WakeStepped,
+    /// A frame missed in this turn: wait for the next turn or tick instead of retrying in
+    /// `about_to_wait`.
+    Missed,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum TurnEvent {
+    NewEvents,
+    WakeStepped,
+    FrameMissed,
+}
+
+impl TurnFrame {
+    pub(super) fn step(&mut self, event: TurnEvent) {
+        *self = match (*self, event) {
+            (_, TurnEvent::NewEvents) => TurnFrame::Idle,
+            (TurnFrame::Idle, TurnEvent::WakeStepped) => TurnFrame::WakeStepped,
+            (state, TurnEvent::WakeStepped) => state,
+            (_, TurnEvent::FrameMissed) => TurnFrame::Missed,
+        };
+    }
+
+    pub(super) fn stepped(self) -> bool {
+        !matches!(self, TurnFrame::Idle)
+    }
+
+    pub(super) fn missed(self) -> bool {
+        matches!(self, TurnFrame::Missed)
+    }
+}
+
 /// What `turn` decides from. `occluded` is the panel's reading this turn (macOS).
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Gate {
@@ -139,12 +179,16 @@ pub(super) struct Gate {
     pub(super) dirty: bool,
     pub(super) idle: bool,
     pub(super) retry: Option<Instant>,
+    pub(super) missed_this_turn: bool,
 }
 
 /// Until it's uncovered, only the retry (or a due timer, in `wake_due`) steps an occluded
 /// overlay, however often other windows turn the loop; input waits for the retry too. A
 /// prewarm frame draws regardless of both. `now` is read only where a retry is compared.
 pub(super) fn turn(gate: Gate, now: impl Fn() -> Instant) -> Turn {
+    if !gate.prewarm && gate.missed_this_turn {
+        return Turn::BackedOff;
+    }
     if !gate.prewarm && gate.occluded {
         return Turn::Occluded { recheck: gate.retry.is_none_or(|retry| retry <= now()) };
     }
@@ -168,7 +212,7 @@ pub(super) fn quiet_step(app: &mut dyn OverlayApp, clock: &mut FrameClock, prese
 /// runs on every frame drawn) waits. An overlay without a compositor draws nothing then.
 pub(super) fn rests(app: &dyn OverlayApp, runtime_idle: bool, dirty: bool) -> bool {
     let rt = app.rt();
-    runtime_idle && !dirty && !app.has_poll() && !rt.has_playground && rt.wake_deadline().is_none() && rt.rests()
+    runtime_idle && !dirty && !app.has_poll() && !rt.tree.has_playground && rt.wake_deadline().is_none() && rt.rests()
 }
 
 /// `step` for a runtime that `rests`: its clocks (`clock`, `t`) move to the frame as a step
@@ -176,7 +220,7 @@ pub(super) fn rests(app: &dyn OverlayApp, runtime_idle: bool, dirty: bool) -> bo
 pub(super) fn rest(app: &mut dyn OverlayApp, clock: &mut FrameClock, frame_time: Instant) -> (bool, f64) {
     let elapsed = clock.frame_step(frame_time, app.compositor_animating()).total();
     let rt = app.rt_mut();
-    rt.frame_target = Some(frame_time);
+    rt.frame.frame_target = Some(frame_time);
     rt.clock = rt.wall_start.map_or(rt.clock + elapsed, |t0| t0.elapsed().as_secs_f64());
     rt.t += elapsed * rt.time_scale as f64;
     rt.scene.set_time(rt.t);
@@ -237,7 +281,7 @@ pub(super) fn submit_and_present(live: &mut Live, renderer: &Renderer, gpu: &Gpu
             }
         }
         renderer.submit(&gpu.queue, encoder);
-        live.materials.present(&rt.materials, rt.env.scale, || gpu.queue.present(frame));
+        live.materials.present(&rt.paint.materials, rt.env.scale, || gpu.queue.present(frame));
     }
     #[cfg(not(target_os = "macos"))]
     {

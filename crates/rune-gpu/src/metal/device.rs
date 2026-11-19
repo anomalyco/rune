@@ -5,6 +5,10 @@ use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
 use std::sync::atomic::{AtomicIsize, AtomicUsize, Ordering};
 
+#[cfg(debug_assertions)]
+use objc2_foundation::NSString;
+#[cfg(debug_assertions)]
+use objc2_metal::MTLEvent;
 use objc2_metal::{MTLCommandQueue, MTLDevice, MTLLanguageVersion, MTLLibrary, MTLSharedEvent};
 use parking_lot::Mutex;
 use wgpu::custom::*;
@@ -48,9 +52,16 @@ pub(crate) struct MetalDevice {
 }
 
 pub(super) fn new(device: Obj<dyn MTLDevice>, desc: &wgpu::DeviceDescriptor<'_>) -> (MetalDevice, MetalQueue) {
+    let queue = device.newCommandQueue().expect("a Metal command queue");
+    let event = device.newSharedEvent().expect("a Metal shared event");
+    #[cfg(debug_assertions)]
+    {
+        queue.setLabel(Some(&NSString::from_str("rune metal queue")));
+        event.setLabel(Some(&NSString::from_str("rune metal event")));
+    }
     let shared = Arc::new(Shared {
-        queue: device.newCommandQueue().expect("a Metal command queue"),
-        event: device.newSharedEvent().expect("a Metal shared event"),
+        queue,
+        event,
         msl: msl_version(),
         state: Mutex::new(State::default()),
         buffers: Arc::default(),
@@ -112,13 +123,13 @@ impl DeviceInterface for MetalDevice {
     }
     unsafe fn create_pipeline_cache(&self, _: &wgpu::PipelineCacheDescriptor<'_>) -> DispatchPipelineCache { DispatchPipelineCache::custom(Inert) }
     fn create_buffer(&self, desc: &wgpu::BufferDescriptor<'_>) -> DispatchBuffer {
-        DispatchBuffer::custom(MetalBuffer::new(&self.shared, desc.size))
+        DispatchBuffer::custom(MetalBuffer::new(&self.shared, desc.size, desc.label))
     }
     fn create_texture(&self, desc: &wgpu::TextureDescriptor<'_>) -> DispatchTexture {
         let texture = MetalTexture::new(&self.shared.device, desc, Live::new(&self.shared.textures));
         let raw = texture.raw.clone();
         let zeros = self.shared.zeros.get_or_init(|| Zeros::new(&self.shared));
-        self.shared.upload(|blit| zero_texture(blit, zeros, &raw), [raw.clone(), raw.clone()]);
+        self.shared.upload(|blit| zero_texture(blit, zeros, &raw), [raw.clone() as _]);
         DispatchTexture::custom(texture)
     }
     fn create_external_texture(&self, _: &wgpu::ExternalTextureDescriptor<'_>, _: &[&wgpu::TextureView]) -> DispatchExternalTexture {
@@ -134,8 +145,8 @@ impl DeviceInterface for MetalDevice {
     fn create_query_set(&self, desc: &wgpu::QuerySetDescriptor<'_>) -> DispatchQuerySet {
         DispatchQuerySet::custom(super::query::QuerySet::new(&self.shared.device, desc))
     }
-    fn create_command_encoder(&self, _: &wgpu::CommandEncoderDescriptor<'_>) -> DispatchCommandEncoder {
-        DispatchCommandEncoder::custom(MetalEncoder::new(self.shared.clone()))
+    fn create_command_encoder(&self, desc: &wgpu::CommandEncoderDescriptor<'_>) -> DispatchCommandEncoder {
+        DispatchCommandEncoder::custom(MetalEncoder::new(self.shared.clone(), desc.label))
     }
     fn create_render_bundle_encoder(&self, _: &wgpu::RenderBundleEncoderDescriptor<'_>) -> DispatchRenderBundleEncoder {
         super::unsupported!("render bundles")

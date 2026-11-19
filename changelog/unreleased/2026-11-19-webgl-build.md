@@ -1,0 +1,1 @@
+- **Web: the `webgl` feature builds again.** Building `rune` for `wasm32-unknown-unknown` with `--features webgl` had failed since 2026-11-05 (`6fa2aaf6`) because the per-backend `wgpu::Instance` cache lived in a `static` while `wgpu/webgl`'s wasm handles are single-threaded. The cache is now thread-local on `wasm32`, leaving native multi-threaded builds unchanged.

@@ -3,6 +3,8 @@
 
 use std::sync::Arc;
 
+#[cfg(debug_assertions)]
+use objc2_foundation::NSString;
 use objc2_metal::{
     MTLBlendFactor, MTLBlendOperation, MTLColorWriteMask, MTLCullMode, MTLDevice, MTLPixelFormat, MTLPrimitiveTopologyClass,
     MTLPrimitiveType, MTLRenderPipelineDescriptor, MTLRenderPipelineState, MTLTriangleFillMode, MTLVertexDescriptor, MTLVertexFormat,
@@ -172,6 +174,8 @@ pub(super) fn create(shared: &Shared, desc: &wgpu::RenderPipelineDescriptor<'_>)
     let (class, primitive) = topology(desc.primitive.topology);
     let points = class == MTLPrimitiveTopologyClass::Point;
     let d = MTLRenderPipelineDescriptor::new();
+    #[cfg(debug_assertions)]
+    if let Some(label) = desc.label { d.setLabel(Some(&NSString::from_str(label))); }
     let vertex = Stage { module: desc.vertex.module, entry: desc.vertex.entry_point, constants: desc.vertex.compilation_options.constants,
         kind: naga::ShaderStage::Vertex };
     let vs = compile(shared, &vertex, &layout.stages[0], points).unwrap_or_else(|e| panic!("{label}: {e}"));

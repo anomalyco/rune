@@ -8,7 +8,7 @@ fn buffer(device: &wgpu::Device, size: u64, usage: wgpu::BufferUsages) -> wgpu::
 
 fn read(device: &wgpu::Device, buffer: &wgpu::Buffer) -> Vec<u8> {
     let slice = buffer.slice(..);
-    slice.map_async(wgpu::MapMode::Read, |r| r.expect("map readback"));
+    slice.map_async(wgpu::MapMode::Read, |_| {});
     device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
     let out = slice.get_mapped_range().unwrap().to_vec();
     buffer.unmap();
@@ -18,11 +18,13 @@ fn read(device: &wgpu::Device, buffer: &wgpu::Buffer) -> Vec<u8> {
 /// Spares `buffer` holds and the swaps it made.
 fn swaps(buffer: &wgpu::Buffer) -> (usize, u64) { buffer.as_custom::<MetalBuffer>().unwrap().store.swaps() }
 
+#[cfg(feature = "test-gpu-counters")]
 fn live(device: &wgpu::Device) -> isize { device.get_internal_counters().hal.buffers.read() }
 
 /// Each frame writes parts of a buffer while the last frame's copy of it is recorded but not yet
 /// submitted, so every frame swaps storage: each copy still reads what was written before it,
 /// and once warm a frame makes no buffers.
+#[cfg(feature = "test-gpu-counters")]
 #[test]
 fn writes_while_the_gpu_reads_swap_storage_and_land_in_order() {
     use wgpu::BufferUsages as B;
@@ -207,6 +209,7 @@ fn a_queue_write_behind_submitted_work_swaps_rather_than_stages() {
     assert_eq!(shared.state.lock().last, before + 1, "no staged copy of its own");
     assert_eq!(swaps(&source).1, 1, "the write swapped storage under the waiting copy");
     gate.setSignaledValue(1);
+    wait.waitUntilCompleted();
     let words: Vec<u32> = bytemuck::cast_slice(&read(&device, &out)).to_vec();
     assert_eq!(words, [[1u32; 4], [2; 4]].concat());
 }

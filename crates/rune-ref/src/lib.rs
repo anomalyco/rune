@@ -34,6 +34,10 @@ pub struct Primitive {
     /// clockwise about the pivot (device pixels).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn: Option<[f32; 3]>,
+    /// Signed per-corner rounded-clip radii `[tl, tr, br, bl]` (`Instance::fade[3]`). Layers
+    /// also carry theirs in `border` for saved replays.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clip_radii: Option<[f32; 4]>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -115,9 +119,11 @@ impl Scene {
                 || p.rect[2] < 0.0
                 || p.rect[3] < 0.0
                 // A negative fade width is a linear ramp.
+                // Negative corner radii select Apple continuous corners (`sd_continuous`).
                 // A layer's `radii` are its hole, whose centre may lie anywhere.
-                || (p.params[1] != 8.0 && p.radii.iter().any(|v| *v < 0.0))
                 || (p.params[1] == 8.0 && p.params[3] == 0.0 && (p.radii[2] < 0.0 || p.radii[3] < p.radii[2]))
+                // Kinds 5 (segment), 6 (triangle), 7 (image) and 13 (backdrop blur) are not
+                // implemented in the scalar oracle and stay rejected.
                 || !(0..=4).chain([8, 9, 10, 11, 12]).any(|k| p.params[1] == k as f32)
                 // A glyph's params[0] is a signed turn; negative is counter-clockwise.
                 || (p.params[0] < 0.0 && p.params[1] != 2.0)
@@ -127,6 +133,10 @@ impl Scene {
                     p.border.iter().any(|&v| v < 0.0) && p.border.iter().any(|&v| v > 0.0)
                 } else {
                     !color(&p.border)
+                })
+                || p.clip_radii.is_some_and(|r| {
+                    r.iter().any(|v| !v.is_finite() || v.abs() > 1e6)
+                        || (r.iter().any(|&v| v < 0.0) && r.iter().any(|&v| v > 0.0))
                 })
                 || p.turn.is_some_and(|t| {
                     p.params[1] != 8.0
@@ -179,25 +189,24 @@ impl Frame {
             ids.fill(None);
         }
         Self::render_range(
-            self.width,
-            self.height,
-            &mut self.rgba,
+            (self.width, self.height),
+            Target::Srgb(&mut self.rgba),
             self.owners.as_deref_mut(),
             scene,
-            0,
-            scene.primitives.len(),
+            0..scene.primitives.len(),
+            false,
         );
     }
 
     fn render_range(
-        width: u32,
-        height: u32,
-        rgba: &mut [u8],
+        (width, height): (u32, u32),
+        mut target: Target<'_>,
         mut owners: Option<&mut [Option<usize>]>,
         scene: &Scene,
-        mut cursor: usize,
-        end: usize,
+        range: std::ops::Range<usize>,
+        additive: bool,
     ) {
+        let (mut cursor, end) = (range.start, range.end);
         while cursor < end {
             let p = &scene.primitives[cursor];
             if p.params[1] == 8.0 {
@@ -213,15 +222,19 @@ impl Frame {
                         close += 1;
                     }
                 }
-                if p.params[3] == 0.0 && p.fill[3] == 1.0 && p.params[0] == 0.0 && p.params[2] == 0.0 && p.clip == NO_CLIP && p.border == [0.0; 4]
+                let clip_radii = p.clip_radii.unwrap_or(p.border);
+                if !additive && p.params[3] == 0.0 && p.fill[3] == 1.0 && p.params[0] == 0.0 && p.params[2] == 0.0 && p.clip == NO_CLIP && clip_radii == [0.0; 4]
                     && p.radii[3] == 0.0
                     && p.turn.is_none()
                 {
-                    Self::render_range(width, height, rgba, owners.as_deref_mut(), scene, cursor + 1, close);
+                    Self::render_range((width, height), target.reborrow(), owners.as_deref_mut(), scene, cursor + 1..close, false);
                 } else if p.fill[3] > 0.0 {
-                    let mut layer_rgba = vec![0u8; (width * height * 4) as usize];
+                    // Isolated layers accumulate in linear float (matching GPU Rgba16Float);
+                    // PlusLighter blends children additively inside and saturates before compositing.
+                    let layer_additive = p.params[0] == 1.0;
+                    let mut layer_buf = vec![[0.0f32; 4]; (width * height) as usize];
                     let mut layer_owners = owners.as_ref().map(|o| vec![None; o.len()]);
-                    Self::render_range(width, height, &mut layer_rgba, layer_owners.as_deref_mut(), scene, cursor + 1, close);
+                    Self::render_range((width, height), Target::Linear(&mut layer_buf), layer_owners.as_deref_mut(), scene, cursor + 1..close, layer_additive);
                     let turn = p.turn.filter(|t| t[0] != 0.0).map(|[a, px, py]| (libm::sinf(a), libm::cosf(a), [px, py]));
                     // A turned layer can reach anywhere; its contents fill the frame-sized buffer.
                     let (x0, y0, x1, y1) = if turn.is_some() {
@@ -249,8 +262,8 @@ impl Frame {
                                         if tx < 0.0 || ty < 0.0 || tx >= width as f32 || ty >= height as f32 {
                                             return [0.0; 4];
                                         }
-                                        let at = (ty as u32 * width + tx as u32) as usize;
-                                        decode(layer_rgba[at * 4..at * 4 + 4].try_into().unwrap())
+                                        let c = layer_buf[(ty as u32 * width + tx as u32) as usize];
+                                        if layer_additive { c.map(|v| v.clamp(0.0, 1.0)) } else { c }
                                     };
                                     let (a, b) = (texel(bx, by), texel(bx + 1.0, by));
                                     let (c, d) = (texel(bx, by + 1.0), texel(bx + 1.0, by + 1.0));
@@ -260,19 +273,16 @@ impl Frame {
                                         top * (1.0 - fy) + bottom * fy
                                     })
                                 }
-                                None => decode(layer_rgba[at * 4..at * 4 + 4].try_into().unwrap()),
+                                None => {
+                                    let c = layer_buf[at];
+                                    if layer_additive { c.map(|v| v.clamp(0.0, 1.0)) } else { c }
+                                }
                             };
                             let col = src.map(|c| c * cov);
                             if col[3] <= 0.0 {
                                 continue;
                             }
-                            let dst = decode(rgba[at * 4..at * 4 + 4].try_into().unwrap());
-                            let out = if p.params[0] == 1.0 {
-                                std::array::from_fn(|c| col[c] + dst[c])
-                            } else {
-                                std::array::from_fn(|c| col[c] + dst[c] * (1.0 - col[3]))
-                            };
-                            rgba[at * 4..at * 4 + 4].copy_from_slice(&encode(out));
+                            target.blend(at, col, additive);
                             if let (Some(ids), Some(l_ids)) = (owners.as_deref_mut(), layer_owners.as_ref()) {
                                 ids[at] = l_ids[at].or(Some(cursor));
                             }
@@ -293,9 +303,7 @@ impl Frame {
                         continue;
                     }
                     let at = (y * width + x) as usize;
-                    let dst = decode(rgba[at * 4..at * 4 + 4].try_into().unwrap());
-                    let out = std::array::from_fn(|c| col[c] + dst[c] * (1.0 - col[3]));
-                    rgba[at * 4..at * 4 + 4].copy_from_slice(&encode(out));
+                    target.blend(at, col, additive);
                     if let Some(ids) = owners.as_deref_mut() {
                         ids[at] = Some(cursor);
                     }
@@ -315,6 +323,39 @@ impl Frame {
         }
         let index = self.owners.as_ref()?[(y * self.width + x) as usize]?;
         scene.primitives.get(index)
+    }
+}
+
+enum Target<'a> {
+    Srgb(&'a mut [u8]),
+    Linear(&'a mut [[f32; 4]]),
+}
+
+impl Target<'_> {
+    fn reborrow(&mut self) -> Target<'_> {
+        match self {
+            Target::Srgb(s) => Target::Srgb(s),
+            Target::Linear(l) => Target::Linear(l),
+        }
+    }
+
+    fn blend(&mut self, at: usize, col: [f32; 4], additive: bool) {
+        let combine = |dst: [f32; 4]| -> [f32; 4] {
+            if additive {
+                std::array::from_fn(|c| col[c] + dst[c])
+            } else {
+                std::array::from_fn(|c| col[c] + dst[c] * (1.0 - col[3]))
+            }
+        };
+        match self {
+            Target::Srgb(rgba) => {
+                let dst = decode(rgba[at * 4..at * 4 + 4].try_into().unwrap());
+                rgba[at * 4..at * 4 + 4].copy_from_slice(&encode(combine(dst)));
+            }
+            Target::Linear(buf) => {
+                buf[at] = combine(buf[at]);
+            }
+        }
     }
 }
 

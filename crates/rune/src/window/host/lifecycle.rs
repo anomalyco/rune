@@ -195,7 +195,7 @@ impl Host {
         let stale_before = self.app.rt().needs_commit();
         let clipboard = self.clipboard.receive_core(self.app.rt_mut());
         let answered = self.app.popup_answer(&mut self.popup) | self.file_dialog.answer_core(self.app.rt_mut());
-        let (requests, had_updates, updated) = self.app.drain_window(&self.shortcuts);
+        let (requests, had_updates, updated) = self.app.drain_window(&self.shortcuts, &mut self.menus);
         let changed = clipboard || answered || updated || self.app.rt().drag_ends_pending();
         // Only updates that changed nothing (`AppHandle::update_if`), or an empty startup drain
         // after `try_create` already drew the first frame, ran: no poll, no frame.
@@ -341,7 +341,7 @@ impl Host {
             }
             let paints = self.shown_win().is_some_and(|w| !self.life.covered() && !w.minimized());
             // A painting macOS window moves its frame over its next frames (`redraw`).
-            if self.app.rt().window_frame.is_some() && !(paints && cfg!(target_os = "macos")) {
+            if self.app.rt().host.window_frame.is_some() && !(paints && cfg!(target_os = "macos")) {
                 self.take_frame_request(self.frame_secs(Instant::now()), false);
             }
             let shown = self.win.as_ref().filter(|_| self.life.shown());
@@ -350,7 +350,7 @@ impl Host {
             if self.file_dialog.open_core(self.app.rt_mut(), window.map(|w| &**w)) && let Some(w) = shown { w.request_redraw(); }
             // A callback that ran (a menu that couldn't open) may have asked to close, quit or
             // minimize.
-            if self.app.rt().shell_request.is_none() && !self.app.rt().minimize.field() { return; }
+            if self.app.rt().shell_request.is_none() && !self.app.rt().host.minimize.field() { return; }
         }
     }
 
@@ -493,7 +493,7 @@ impl Host {
         if let Err(error) = &result {
             eprintln!("rune: could not create the window {}: {error}", self.native_handle.key());
         }
-        self.app.set_window_error(result.err());
+        self.shared.set_window_error(result.err());
     }
 
     /// `cover` starts or stops covering the window. Covered, it stops pacing and rests, and is

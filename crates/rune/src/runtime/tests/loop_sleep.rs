@@ -51,7 +51,7 @@ fn cycles_share_deadlines_and_sleep_when_hidden_by_hover_groups() {
     let mut rt = Runtime::new(false, view, (100.0, 100.0), Env::new(true, 1.0));
     assert!(!rt.frame(0.0), "cycles must sleep rather than request continuous frames");
     assert!((rt.wake_deadline().unwrap() - 1.0 / 30.0).abs() < 1e-7);
-    assert_eq!(rt.loops.len(), 1);
+    assert_eq!(rt.motion.loops.len(), 1);
     let commits = rt.stats.commits;
     rt.frame(0.5);
     assert_eq!(rt.stats.commits, commits);

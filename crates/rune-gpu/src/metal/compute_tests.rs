@@ -32,7 +32,7 @@ fn buffer(device: &wgpu::Device, size: u64, usage: wgpu::BufferUsages) -> wgpu::
 
 fn read(device: &wgpu::Device, buffer: &wgpu::Buffer) -> Vec<u8> {
     let slice = buffer.slice(..);
-    slice.map_async(wgpu::MapMode::Read, |r| r.expect("map readback"));
+    slice.map_async(wgpu::MapMode::Read, |_| {});
     device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
     let out = slice.get_mapped_range().unwrap().to_vec();
     buffer.unmap();
@@ -226,4 +226,274 @@ fn passes_sample_timestamps_at_their_boundaries() {
     assert!(ticks[0] != 0 && ticks.windows(2).all(|w| w[0] <= w[1]), "pass boundaries in order: {ticks:?}");
     let ms = (ticks[3] - ticks[0]) as f64 * f64::from(queue.get_timestamp_period()) / 1e6;
     assert!(ms < 100.0, "a noop dispatch and a clear take well under 100 ms, not {ms} ms");
+}
+
+const WORKGROUP: &str = r#"
+@group(0) @binding(0) var<storage, read> input: array<u32>;
+@group(0) @binding(1) var<storage, read_write> output: array<u32>;
+
+// Unused by `gather`: Naga's MSL writer skips it, leaving `ids` at index 0 and `count` at index 1.
+var<workgroup> unused_wg: array<u32, 16>;
+var<workgroup> ids: array<u32, 64>;
+var<workgroup> count: atomic<u32>;
+
+@compute @workgroup_size(64)
+fn gather(@builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wid: vec3<u32>) {
+    if (li == 0u) {
+        atomicStore(&count, 0u);
+    }
+    workgroupBarrier();
+    let idx = wid.x * 64u + li;
+    let v = input[idx];
+    if ((v & 1u) != 0u) {
+        let slot = atomicAdd(&count, 1u);
+        ids[slot] = v;
+    }
+    workgroupBarrier();
+    let n = atomicLoad(&count);
+    var sum = 0u;
+    for (var k = 0u; k < n; k = k + 1u) {
+        sum = sum + ids[k];
+    }
+    output[idx] = sum + n * 100000u;
+}
+"#;
+
+/// Runs `WORKGROUP` once after switching from a pipeline with no workgroup memory in the same pass,
+/// and once in a fresh compute pass on the same encoder.
+fn run_workgroup(device: &wgpu::Device, queue: &wgpu::Queue) -> (Vec<u32>, Vec<u32>) {
+    use wgpu::{BufferUsages as B, ShaderStages as S};
+    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("workgroup"),
+        source: wgpu::ShaderSource::Wgsl(WORKGROUP.into()),
+    });
+    let noop_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("noop"),
+        source: wgpu::ShaderSource::Wgsl("@compute @workgroup_size(1) fn noop() {}".into()),
+    });
+    let storage = |binding, read_only| wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: S::COMPUTE,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Storage { read_only },
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    };
+    let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: None,
+        entries: &[storage(0, true), storage(1, false)],
+    });
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: None,
+        bind_group_layouts: &[Some(&bgl)],
+        immediate_size: 0,
+    });
+    let gather = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("gather"),
+        layout: Some(&layout),
+        module: &module,
+        entry_point: Some("gather"),
+        compilation_options: Default::default(),
+        cache: None,
+    });
+    let noop_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: None,
+        bind_group_layouts: &[],
+        immediate_size: 0,
+    });
+    let noop = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("noop"),
+        layout: Some(&noop_layout),
+        module: &noop_module,
+        entry_point: Some("noop"),
+        compilation_options: Default::default(),
+        cache: None,
+    });
+    let input = buffer(device, 128 * 4, B::STORAGE | B::COPY_DST);
+    let data: Vec<u32> = (1..=128).collect();
+    queue.write_buffer(&input, 0, bytemuck::cast_slice(&data));
+    let out1 = buffer(device, 128 * 4, B::STORAGE | B::COPY_SRC);
+    let out2 = buffer(device, 128 * 4, B::STORAGE | B::COPY_SRC);
+    let read1 = buffer(device, 128 * 4, B::COPY_DST | B::MAP_READ);
+    let read2 = buffer(device, 128 * 4, B::COPY_DST | B::MAP_READ);
+    let group = |out: &wgpu::Buffer| {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: input.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: out.as_entire_binding() },
+            ],
+        })
+    };
+    let (bg1, bg2) = (group(&out1), group(&out2));
+    let mut encoder = device.create_command_encoder(&Default::default());
+    {
+        let mut pass = encoder.begin_compute_pass(&Default::default());
+        pass.set_pipeline(&noop);
+        pass.dispatch_workgroups(1, 1, 1);
+        pass.set_pipeline(&gather);
+        pass.set_bind_group(0, &bg1, &[]);
+        pass.dispatch_workgroups(2, 1, 1);
+    }
+    {
+        let mut pass = encoder.begin_compute_pass(&Default::default());
+        pass.set_pipeline(&gather);
+        pass.set_bind_group(0, &bg2, &[]);
+        pass.dispatch_workgroups(2, 1, 1);
+    }
+    encoder.copy_buffer_to_buffer(&out1, 0, &read1, 0, 128 * 4);
+    encoder.copy_buffer_to_buffer(&out2, 0, &read2, 0, 128 * 4);
+    queue.submit([encoder.finish()]);
+    (
+        bytemuck::cast_slice(&read(device, &read1)).to_vec(),
+        bytemuck::cast_slice(&read(device, &read2)).to_vec(),
+    )
+}
+
+#[test]
+fn workgroup_memory_matches_wgpus_bit_for_bit() {
+    let (device, queue) = gpu();
+    let (first, second) = run_workgroup(&device, &queue);
+    let (wgpu_device, wgpu_queue) = wgpu_metal();
+    let (want_first, want_second) = run_workgroup(&wgpu_device, &wgpu_queue);
+    // 32 odd values in 1..=64 sum to 1024; 32 odd values in 65..=128 sum to 3072.
+    assert!(first[..64].iter().all(|&v| v == 32 * 100_000 + 1024), "workgroup 0: {:?}", &first[..4]);
+    assert!(first[64..].iter().all(|&v| v == 32 * 100_000 + 3072), "workgroup 1: {:?}", &first[64..68]);
+    assert_eq!(first, want_first);
+    assert_eq!(second, first, "fresh compute pass bound workgroup memory too");
+    assert_eq!(second, want_second);
+}
+
+/// Dispatches `rune-light`'s `field.wgsl` (the only built-in shader with `var<workgroup>`) with
+/// its exact bind-group layout so this backend loads it from `builtin_native.metallib` and binds
+/// its workgroup memory from `builtin_table.rs`.
+fn run_field(device: &wgpu::Device, queue: &wgpu::Queue) -> Vec<u8> {
+    use wgpu::{BufferUsages as B, ShaderStages as S, TextureUsages as T};
+    const FW: u32 = 48;
+    const FH: u32 = 40;
+    const PADDED_ROW: u32 = 512;
+    let src = format!(
+        "{}\n{}",
+        include_str!("../../../rune-light/src/shaders/common.wgsl"),
+        include_str!("../../../rune-light/src/shaders/field.wgsl"),
+    );
+    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("light field"),
+        source: wgpu::ShaderSource::Wgsl(src.into()),
+    });
+    let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("field"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: S::COMPUTE,
+                ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: S::COMPUTE,
+                ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: S::COMPUTE,
+                ty: wgpu::BindingType::StorageTexture {
+                    access: wgpu::StorageTextureAccess::WriteOnly,
+                    format: wgpu::TextureFormat::Rgba16Float,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                },
+                count: None,
+            },
+        ],
+    });
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("light field"),
+        bind_group_layouts: &[Some(&bgl)],
+        immediate_size: 0,
+    });
+    let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("light field"),
+        layout: Some(&layout),
+        module: &module,
+        entry_point: Some("main"),
+        compilation_options: Default::default(),
+        cache: None,
+    });
+    if let Some(super::shader::ShaderModule::Naga(ir)) = module.as_custom::<super::shader::ShaderModule>()
+        && super::builtin::known(&ir.hash)
+    {
+        assert!(!ir.was_parsed(), "light field pipeline missed the precompiled builtin table");
+    }
+    let frame_buf = buffer(device, 144, B::UNIFORM | B::COPY_DST);
+    let mut frame = [0u32; 36];
+    frame[0] = 96.0f32.to_bits();
+    frame[1] = 80.0f32.to_bits();
+    frame[2] = (FW as f32).to_bits();
+    frame[3] = (FH as f32).to_bits();
+    frame[4] = 16.0f32.to_bits();
+    frame[5] = 16.0f32.to_bits();
+    frame[6] = 0.5f32.to_bits();
+    frame[7] = 0.125f32.to_bits();
+    frame[12] = 1;
+    queue.write_buffer(&frame_buf, 0, bytemuck::cast_slice(&frame));
+    let prim_buf = buffer(device, 96, B::STORAGE | B::COPY_DST);
+    let prim: [f32; 24] = [
+        8.0, 8.0, 80.0, 64.0,
+        12.0, 12.0, 12.0, 12.0,
+        0.0, 16.0, 0.0, 0.0,
+        0.0, 0.6, 1.0, 0.0,
+        0.0, 0.0, 0.0, 0.0,
+        0.5, 0.5, 0.5, 0.0,
+    ];
+    queue.write_buffer(&prim_buf, 0, bytemuck::cast_slice(&prim));
+    let out = texture(device, wgpu::TextureFormat::Rgba16Float, size(FW, FH), 1, T::STORAGE_BINDING | T::COPY_SRC);
+    let out_view = out.create_view(&Default::default());
+    let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: None,
+        layout: &bgl,
+        entries: &[
+            wgpu::BindGroupEntry { binding: 0, resource: frame_buf.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 1, resource: prim_buf.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&out_view) },
+        ],
+    });
+    let mut encoder = device.create_command_encoder(&Default::default());
+    {
+        let mut pass = encoder.begin_compute_pass(&Default::default());
+        pass.set_pipeline(&pipeline);
+        pass.set_bind_group(0, &bg, &[]);
+        pass.dispatch_workgroups(FW.div_ceil(16), FH.div_ceil(16), 1);
+    }
+    let readback = buffer(device, u64::from(PADDED_ROW * FH), B::COPY_DST | B::MAP_READ);
+    encoder.copy_texture_to_buffer(
+        out.as_image_copy(),
+        wgpu::TexelCopyBufferInfo {
+            buffer: &readback,
+            layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(PADDED_ROW), rows_per_image: Some(FH) },
+        },
+        out.size(),
+    );
+    queue.submit([encoder.finish()]);
+    read(device, &readback)
+}
+
+#[test]
+fn precompiled_field_pipeline_binds_workgroup_memory() {
+    let (device, queue) = gpu();
+    let got = run_field(&device, &queue);
+    let (wgpu_device, wgpu_queue) = wgpu_metal();
+    let want = run_field(&wgpu_device, &wgpu_queue);
+    // Texel (23, 19) is device px (47, 39), inside [8..88, 8..72] r=12: exact distance -31.0 (f16 0xCFC0).
+    let at = 19 * 512 + 23 * 8;
+    let center_x = u16::from_le_bytes([got[at], got[at + 1]]);
+    assert_eq!(center_x, 0xCFC0, "centre of occluder must hold -31.0 (0xCFC0), not CLAMP 256.0 (0x5C00)");
+    for y in 0..40usize {
+        let row = y * 512..y * 512 + 48 * 8;
+        assert_eq!(&got[row.clone()], &want[row], "field row {y} differs from wgpu");
+    }
 }

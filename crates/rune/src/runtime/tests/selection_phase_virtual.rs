@@ -227,9 +227,9 @@ impl Walk {
 
     fn reset(&mut self) {
         self.rt.cancel_pointer();
-        self.rt.selectable = Default::default();
+        self.rt.edit.selectable = Default::default();
         self.rt.sync_selection_pins();
-        self.rt.queue.retain(|_| false);
+        self.rt.frame.queue.retain(|_| false);
         if !self.top { self.scroll(true); }
         self.rt.clock = 0.0;
         self.dev = Dev::new();
@@ -278,8 +278,8 @@ impl Walk {
 
     fn compare(&self, letter: Letter) -> Result<(), String> {
         let dev = &self.dev;
-        match (&self.rt.selectable.phase, &dev.path) {
-            (Phase::Empty, None) if !dev.dragging && self.rt.selectable.mounted_between.is_empty() => {}
+        match (&self.rt.edit.selectable.phase, &dev.path) {
+            (Phase::Empty, None) if !dev.dragging && self.rt.edit.selectable.mounted_between.is_empty() => {}
             (phase @ (Phase::Placed(sel) | Phase::Dragging { selection: sel, .. }), Some(path)) => {
                 let unit = match phase {
                     Phase::Dragging { unit, .. } => Some(match unit { Unit::Char => U::Char, Unit::Word => U::Word, Unit::Paragraph => U::Paragraph }),
@@ -304,7 +304,7 @@ impl Walk {
                 }
                 let (h, f) = (row_of(path), dev.far.as_ref().map_or(row_of(path), |(p, _)| row_of(p)));
                 let between: HashSet<String> = (h.min(f) + 1..h.max(f)).map(|r| format!("r{r}")).collect();
-                if let Some(k) = self.rt.selectable.mounted_between.keys().find(|k| !between.contains(*k)) {
+                if let Some(k) = self.rt.edit.selectable.mounted_between.keys().find(|k| !between.contains(*k)) {
                     return Err(format!("after {letter:?}: row {k} hashed as between rows {h} and {f}"));
                 }
             }
@@ -383,11 +383,11 @@ fn the_virtual_reference_knows_which_row_each_spot_is_on() {
         }
     }
     walk.reset();
-    assert!(walk.rt.virtuals[LIST].range.contains(&0));
+    assert!(walk.rt.commit.virtuals[LIST].range.contains(&0));
     walk.scroll(false);
-    assert!(!walk.rt.virtuals[LIST].range.contains(&0) && !walk.rt.virtuals[LIST].range.contains(&2), "{:?}", walk.rt.virtuals[LIST].range);
+    assert!(!walk.rt.commit.virtuals[LIST].range.contains(&0) && !walk.rt.commit.virtuals[LIST].range.contains(&2), "{:?}", walk.rt.commit.virtuals[LIST].range);
     walk.scroll(true);
-    assert!(!walk.rt.virtuals[LIST].range.contains(&(ROWS - 1)), "{:?}", walk.rt.virtuals[LIST].range);
+    assert!(!walk.rt.commit.virtuals[LIST].range.contains(&(ROWS - 1)), "{:?}", walk.rt.commit.virtuals[LIST].range);
 }
 
 /// A selection made again over the same rows reuses the buckets of the map that hashes the
@@ -395,14 +395,14 @@ fn the_virtual_reference_knows_which_row_each_spot_is_on() {
 #[test]
 fn a_repeated_drag_across_virtual_rows_keeps_the_mounted_row_map() {
     let mut walk = Walk::new();
-    let capacity = |walk: &Walk| walk.rt.selectable.mounted_between.capacity();
+    let capacity = |walk: &Walk| walk.rt.edit.selectable.mounted_between.capacity();
     for letter in [Letter::Press(Spot::HiStart), Letter::Drag(Spot::LoEnd), Letter::Up] { walk.play(letter).unwrap(); }
-    assert!(walk.rt.selectable.mounted_between.contains_key("r1"), "row 1 lies between rows 0 and 2");
+    assert!(walk.rt.edit.selectable.mounted_between.contains_key("r1"), "row 1 lies between rows 0 and 2");
     let warm = capacity(&walk);
     assert!(warm > 0);
     for letter in [Letter::Press(Spot::HiStart), Letter::Drag(Spot::LoEnd), Letter::Up, Letter::Clear, Letter::Press(Spot::HiStart), Letter::Drag(Spot::LoEnd)] {
         walk.play(letter).unwrap();
         assert_eq!(capacity(&walk), warm, "after {letter:?}");
     }
-    assert!(walk.rt.selectable.mounted_between.contains_key("r1"));
+    assert!(walk.rt.edit.selectable.mounted_between.contains_key("r1"));
 }

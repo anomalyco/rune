@@ -29,6 +29,6 @@ impl Host {
     /// `Tx::set_title`: shows a title set since the window last showed one, hidden or covered
     /// as it may be. A window created later opens with the current title (`try_create`).
     pub(in crate::window) fn show_title(&mut self) {
-        if let Some(title) = self.app.rt_mut().window_title.take_change() && let Some(w) = &self.win { w.window.set_title(title); }
+        if let Some(title) = self.app.rt_mut().host.window_title.take_change() && let Some(w) = &self.win { w.window.set_title(title); }
     }
 }

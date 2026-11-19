@@ -13,7 +13,7 @@ impl RuntimeCore {
     pub(super) fn tail_handoff(&self, nodes: &[Node], stack: usize, viewport: usize, row: &str, room: &str) -> Option<Handoff> {
         let (r, panel) = nodes.iter().enumerate().find(|(_, n)| n.named(room))?;
         let view = &nodes[viewport];
-        let old = |id| self.nodes.iter().find(|n| n.id == id);
+        let old = |id| self.tree.nodes.iter().find(|n| n.id == id);
         let (a, b) = (old(view.id)?.target, old(panel.id)?.target);
         let close = |x: f32, y: f32| (x - y).abs() < 1.0 / 64.0;
         if panel.target[1] <= b[1] || !close(a[3], b[1]) || !close(view.target[3], panel.target[1])
@@ -33,7 +33,7 @@ impl RuntimeCore {
         // A kept row can lose its footer to the arriving row. Tie that height to the same
         // progress too: independent whole-row springs land at different absolute tolerances.
         let rows = nodes.iter().filter(|n| n.parent == Some(stack) && n.whole && !n.streaming && n.id != row.id)
-            .filter_map(|n| { let from = self.grows.get(&n.id)?.h;
+            .filter_map(|n| { let from = self.motion.grows.get(&n.id)?.h;
                 (from != n.local.h).then_some((n.id, from, n.local.h)) }).collect();
         Some(Handoff::Growing { row: row.id, viewport: view.id, frames, rows })
     }

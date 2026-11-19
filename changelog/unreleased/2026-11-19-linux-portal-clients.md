@@ -1,0 +1,1 @@
+- Linux: with no desktop portal running, the appearance watcher exits instead of holding a thread for the life of the app, and global shortcuts report `ShortcutError::Unsupported`. File dialogs share one worker thread instead of starting a thread and a runtime per dialog, a dialog can be cancelled while its request is in flight, and portal requests use tokens that cannot collide.

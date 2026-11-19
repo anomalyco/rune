@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/rune",
     "crates/rune-core",
+    "crates/rune-edit",
     "crates/rune-gpu",
     "crates/rune-image",
     "crates/rune-media",
@@ -61,19 +62,20 @@ members = [
     "examples/luau-panel",
 ]
 # Default cargo check/test targets: the core framework, libraries and theme.
-# Excludes examples/*, www/app, rune-luau (C++ Luau build via cc/mlua) and rune-notify/rune-mac
-# (WinRT features on `windows`); pass `--workspace` to check everything.
+# Excludes examples/*, www/app, rune-luau (C++ Luau build via cc/mlua), rune-notify/rune-mac
+# (WinRT features on `windows`), rune-ref (`libm/force-soft-floats` and `serde/derive`), and
+# rune-i18n (`icu_provider/sync`, `writeable/default`, `smallvec/const_generics`); pass
+# `--workspace` to check everything.
 default-members = [
     "crates/rune",
     "crates/rune-core",
+    "crates/rune-edit",
     "crates/rune-gpu",
     "crates/rune-image",
     "crates/rune-media",
     "crates/rune-spell",
     "crates/rune-text",
-    "crates/rune-ref",
     "crates/rune-motion",
-    "crates/rune-i18n",
     "crates/rune-staging",
     "crates/rune-kit",
     "crates/rune-highlights",
@@ -148,6 +150,7 @@ license = "MIT"
 procwatch = { path = "crates/procwatch" }
 rune = { path = "crates/rune", default-features = false }
 rune-core = { path = "crates/rune-core" }
+rune-edit = { path = "crates/rune-edit" }
 rune-fx = { path = "crates/rune-fx" }
 rune-gpu = { path = "crates/rune-gpu", default-features = false }
 rune-highlights = { path = "crates/rune-highlights" }
@@ -176,10 +179,10 @@ image = { version = "0.25", default-features = false }
 js-sys = "0.3"
 libc = "0.2"
 objc2 = "0.5.2"
-objc2-core-foundation = "0.3"
+objc2-core-foundation = { version = "0.3", default-features = false }
 objc2-core-graphics = { version = "0.3", default-features = false }
-objc2-core-video = "0.3"
-objc2-metal = "0.3"
+objc2-core-video = { version = "0.3", default-features = false }
+objc2-metal = { version = "0.3", default-features = false }
 parley = { version = "0.12", default-features = false }
 parley_engine = { version = "0.12", default-features = false }
 png = "0.18"
@@ -195,8 +198,6 @@ wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 web-sys = "0.3"
 wgpu = { version = "~30.0.1", default-features = false }
-wgpu-core = { version = "~30.0.1", default-features = false }
-wgpu-hal = { version = "~30.0.1", default-features = false }
 wgpu-naga-bridge = "~30.0.1"
 windows = "0.62"
 windows-core = "0.62"

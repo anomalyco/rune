@@ -434,13 +434,7 @@ pub fn nv12_reference(y: u8, cb: u8, cr: u8, format: Format, color: ColorInfo) -
 }
 pub fn linear(x: f32, transfer: Transfer) -> f32 {
     match transfer {
-        Transfer::Srgb => {
-            if x <= 0.04045 {
-                x / 12.92
-            } else {
-                ((x + 0.055) / 1.055).powf(2.4)
-            }
-        }
+        Transfer::Srgb => rune_core::color::srgb_decode(x),
         Transfer::Bt709 => {
             if x < 0.081 {
                 x / 4.5
@@ -532,6 +526,17 @@ mod tests {
                 }
                 assert_eq!(nv12_reference(0, 128, 128, Format::Nv12Full, c), [0.0; 3]);
             }
+        }
+    }
+    #[test]
+    fn srgb_linear_matches_reference_formula_bit_for_bit() {
+        let reference = |x: f32| if x <= 0.04045 { x / 12.92 } else { ((x + 0.055) / 1.055).powf(2.4) };
+        for v in 0..=255u8 {
+            let x = v as f32 / 255.0;
+            assert_eq!(linear(x, Transfer::Srgb).to_bits(), reference(x).to_bits(), "byte {v}");
+        }
+        for x in [-0.5, -0.0, 0.0, 0.04044, 0.04045, 0.04046, 0.5, 1.0, 1.5] {
+            assert_eq!(linear(x, Transfer::Srgb).to_bits(), reference(x).to_bits(), "float {x}");
         }
     }
 }

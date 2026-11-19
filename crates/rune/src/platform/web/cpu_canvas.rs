@@ -8,8 +8,8 @@ use std::cell::Cell;
 
 use wasm_bindgen::{JsCast, JsValue};
 
-use crate::Runtime;
 use crate::render::cpu_boot::{CpuPainter, HalfRounding, NeedsGpu, Scene, Target};
+use crate::runtime::RuntimeCore;
 
 pub(super) struct CpuCanvas {
     canvas: web_sys::HtmlCanvasElement,
@@ -68,7 +68,7 @@ impl CpuCanvas {
 
     /// Paints the runtime's last frame at `size` physical pixels and puts what changed on the
     /// canvas. A frame only the GPU can draw (`Scene::needs_gpu`) leaves the last one up.
-    pub(super) fn paint<S: 'static>(&mut self, rt: &mut Runtime<S>, size: (u32, u32)) -> Result<Cost, NeedsGpu> {
+    pub(super) fn paint(&mut self, rt: &mut RuntimeCore, size: (u32, u32)) -> Result<Cost, NeedsGpu> {
         let (w, h) = (size.0.max(1), size.1.max(1));
         if self.size != (w, h) {
             // A new size clears the canvas, and the buffer starts again: every tile paints.

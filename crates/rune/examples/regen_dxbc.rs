@@ -7,9 +7,9 @@
 //! Windows: the one way to regenerate them, since it writes every file, the pinned fragments and
 //! their hashes (`src/render/uber/dxbc_pinned_hash.rs`) included. It makes the uber pipeline from
 //! WGSL on a DX12 device, takes the HLSL wgpu-hal logs, and compiles it with FXC as wgpu-hal does.
-//! `uber_dxbc_is_fresh` checks the general and subpixel bytecode; the pinned fragments are checked
-//! by the build (render/dxbc.rs `PINNED_FRESH`): one compiled from other WGSL, or beside another vertex
-//! stage, isn't used.
+//! `uber_dxbc_is_fresh` and `pass_dxbc_is_fresh` check the full set of bytecode and hashes;
+//! the build also checks pinned fragments (`render/dxbc.rs` `PINNED_FRESH`) so one compiled from
+//! other WGSL, or beside another vertex stage, isn't used.
 
 #[cfg(target_os = "windows")]
 fn main() {

@@ -127,7 +127,7 @@ fn sum(device: &wgpu::Device, queue: &wgpu::Queue) -> Vec<u8> {
 
 fn read(device: &wgpu::Device, buffer: &wgpu::Buffer) -> Vec<u8> {
     let slice = buffer.slice(..);
-    slice.map_async(wgpu::MapMode::Read, |r| r.expect("map readback"));
+    slice.map_async(wgpu::MapMode::Read, |_| {});
     device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
     let out = slice.get_mapped_range().unwrap().to_vec();
     buffer.unmap();

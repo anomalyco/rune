@@ -1,0 +1,1 @@
+- Linux layer-shell overlays: keyboard focus arriving and leaving (and a seat losing its keyboard) reach the app as focus changes, so `on_focus` and dismissing on focus loss work; held modifiers survive a keymap reload; Ctrl chords on non-Latin layouts map through the physical key; and an overlay asks for keys only when its `KeyPolicy` is `OnDemand`.

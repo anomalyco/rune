@@ -107,7 +107,7 @@ pub(crate) fn ns_cursor(d: &Decoded) -> Result<Retained<NSObject>, String> {
 
 /// `[NSCursor set]` with winit's shape for each cursor. Main thread.
 pub(crate) fn set_ns_cursor(cursor: Cursor) {
-    use Cursor as C;
+    use crate::cursor::{MacCursor as M, mac_cursor};
     thread_local! {
         static TRANSPARENT: Option<Retained<NSObject>> = image_cursor(None);
         static MOVE: Option<Retained<NSObject>> = image_cursor(Some("move"));
@@ -118,30 +118,37 @@ pub(crate) fn set_ns_cursor(cursor: Cursor) {
     sets_cursor_in_background();
     // SAFETY: NSCursor class methods and -set on the main thread.
     unsafe {
-        let image = match cursor {
-            C::Hidden => TRANSPARENT.with(Clone::clone),
-            C::Move => MOVE.with(Clone::clone),
-            C::Cell => CELL.with(Clone::clone),
-            C::Image(image) => native(image),
-            _ => None,
-        };
-        let ns: Option<Retained<NSObject>> = match (image, cursor) {
-            (Some(image), _) => Some(image),
-            (None, C::Pointer) => msg_send_id![class, pointingHandCursor],
-            (None, C::Text) => msg_send_id![class, IBeamCursor],
-            (None, C::Grab) => msg_send_id![class, openHandCursor],
-            (None, C::Grabbing) => msg_send_id![class, closedHandCursor],
-            (None, C::NotAllowed) => msg_send_id![class, operationNotAllowedCursor],
-            (None, C::ResizeColumn) => msg_send_id![class, resizeLeftRightCursor],
-            (None, C::ResizeRow) => msg_send_id![class, resizeUpDownCursor],
-            (None, C::Crosshair) => msg_send_id![class, crosshairCursor],
+        let ns: Option<Retained<NSObject>> = match mac_cursor(cursor) {
+            M::Arrow => arrow(class),
+            M::PointingHand => msg_send_id![class, pointingHandCursor],
+            M::IBeam => msg_send_id![class, IBeamCursor],
+            M::OpenHand => msg_send_id![class, openHandCursor],
+            M::ClosedHand => msg_send_id![class, closedHandCursor],
+            M::NotAllowed => msg_send_id![class, operationNotAllowedCursor],
+            M::ResizeLeftRight => msg_send_id![class, resizeLeftRightCursor],
+            M::ResizeUpDown => msg_send_id![class, resizeUpDownCursor],
+            M::Crosshair => msg_send_id![class, crosshairCursor],
             // Public from macOS 15; before that only as the private selectors winit uses.
-            (None, C::ZoomIn) => named(class, &[objc2::sel!(zoomInCursor), objc2::sel!(_zoomInCursor)]),
-            (None, C::ZoomOut) => named(class, &[objc2::sel!(zoomOutCursor), objc2::sel!(_zoomOutCursor)]),
-            (None, _) => msg_send_id![class, arrowCursor],
+            M::ZoomIn => named(class, &[objc2::sel!(zoomInCursor), objc2::sel!(_zoomInCursor)]),
+            M::ZoomOut => named(class, &[objc2::sel!(zoomOutCursor), objc2::sel!(_zoomOutCursor)]),
+            // No built-in NSCursor class method: loaded from the system/app image, falling back to
+            // the arrow if unavailable.
+            M::Transparent => TRANSPARENT.with(Clone::clone).or_else(|| unsafe { arrow(class) }),
+            M::MoveImage => MOVE.with(Clone::clone).or_else(|| unsafe { arrow(class) }),
+            M::CellImage => CELL.with(Clone::clone).or_else(|| unsafe { arrow(class) }),
+            M::Custom(image) => native(image).or_else(|| unsafe { arrow(class) }),
         };
         if let Some(ns) = ns { let _: () = msg_send![&*ns, set]; }
     }
+}
+
+/// `[NSCursor arrowCursor]`.
+///
+/// # Safety
+/// Main thread; `class` is `NSCursor`.
+unsafe fn arrow(class: &objc2::runtime::AnyClass) -> Option<Retained<NSObject>> {
+    // SAFETY: caller guarantees main thread and `NSCursor` class.
+    unsafe { msg_send_id![class, arrowCursor] }
 }
 
 /// The first of `selectors` NSCursor answers, else the arrow.

@@ -1,0 +1,1 @@
+- Spellcheck: a regional or differently written language tag (`en-AU`, `en_US`) finds the dictionary for its language instead of nothing, and on web a language removed with `spell::set_languages` stops being checked at once.

@@ -6,7 +6,7 @@ license.workspace = true
 description = "GPU-rendered Rust UI framework (wgpu, winit) with keyed element trees, Taffy layout, analytic springs, and headless tooling."
 
 [features]
-default = ["accessibility", "dbus", "embedded-fonts", "metal-backend", "ogg-audio", "svg"]
+default = ["accessibility", "dbus", "embedded-fonts", "metal-backend", "ogg-audio", "svg", "rune-gpu/default", "rune-image/default", "rune-media/default", "rune-text/default"]
 # Bundle Inter (Regular, Medium, SemiBold; on web also IBM Plex Mono) as the fonts text falls back
 # to when the app registers none. Disable when AppSpec::fonts supplies the app's own fonts to omit
 # the bytes (about 1.25 MB native).
@@ -60,7 +60,7 @@ avif = ["rune-image/avif"]
 # FileChooser portal. Off, neither crate is compiled: a window winit gives no theme draws dark,
 # `Tray::new` returns `TrayError::Unsupported` on Linux and a Wayland session's global shortcuts
 # return `ShortcutError::Unsupported`; X11 shortcuts keep working. No effect on other platforms.
-dbus = ["dep:zbus", "dep:tokio", "dep:futures-util"]
+dbus = ["dep:serde", "dep:zbus", "dep:tokio", "dep:futures-util"]
 # macOS and iOS: Rune's native Metal backend (research/34). Mac apps draw with it by default; an
 # app opts out with `App::gpu_backend(GpuBackend::Wgpu)`, or a launch with `RUNE_GPU_BACKEND=wgpu`,
 # and an app built with `default-features = false` draws with wgpu unless it adds this feature.
@@ -75,6 +75,10 @@ metal-backend = ["rune-gpu/metal-backend", "rune-media/metal-backend"]
 accessibility = ["dep:accesskit_windows", "dep:accesskit_macos", "dep:accesskit_unix"]
 # Use upstream `taffy::TaffyTree` instead of `rune_taffy::LayoutStore` for A/B benchmarks and parity checks.
 baseline-taffy = ["rune-taffy/baseline-taffy"]
+# Live GPU resource counters (`Device::get_internal_counters`) for upload tests and `upload_bench`.
+test-gpu-counters = ["wgpu/counters"]
+# GPU-free wgpu noop backend for Linux surface-failure and device-loss tests.
+test-gpu-noop = ["wgpu/noop"]
 
 [dependencies]
 # The accessibility tree's types; the platform adapters below come with `accessibility`.
@@ -83,6 +87,7 @@ procwatch = { workspace = true, optional = true }
 subsecond = { version = "=0.7.10", optional = true }
 dioxus-devtools = { version = "=0.7.10", optional = true }
 rune-core = { workspace = true }
+rune-edit = { workspace = true }
 rune-gpu = { workspace = true }
 rune-image = { workspace = true }
 rune-media = { workspace = true }
@@ -99,7 +104,6 @@ taffy = { workspace = true, features = ["std", "taffy_tree", "flexbox", "grid", 
 parley = { workspace = true, features = ["std"] }
 bytemuck = { workspace = true }
 png = { workspace = true }
-serde = { workspace = true }
 serde_json = { workspace = true }
 image = { workspace = true, features = ["png"] }
 blake3 = { workspace = true }
@@ -136,24 +140,22 @@ rfd = { version = "0.17", optional = true, default-features = false }
 # Metal on macOS and iOS: present timing and system materials on macOS.
 [target.'cfg(target_vendor = "apple")'.dependencies]
 objc2-video = { package = "objc2", version = "0.6" }
-objc2-core-foundation = { workspace = true }
-objc2-metal = { workspace = true }
+objc2-core-foundation = { workspace = true, features = ["std", "CFArray", "CFCGTypes", "CFDictionary", "CFNumber", "CFPreferences", "CFString", "objc2"] }
+objc2-metal = { workspace = true, features = ["std", "MTLDrawable", "block2", "objc2-core-foundation"] }
 # wgpu's Metal backend on Apple targets alone: off Apple, wgpu compiles neither `wgpu-hal/metal`
 # nor `naga/msl-out`.
 wgpu = { workspace = true, features = ["metal"] }
-objc2-foundation-video = { package = "objc2-foundation", version = "0.3", default-features = false, features = ["std", "NSArray", "NSData", "NSDictionary", "NSError", "NSObject", "NSRange", "NSString", "NSURL", "NSURLConnection", "NSURLRequest", "NSURLResponse"] }
+objc2-foundation-video = { package = "objc2-foundation", version = "0.3", default-features = false, features = ["std", "NSString"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 accesskit_macos = { version = "0.27.2", optional = true }
 # Names for the interaction watchdog's stack samples (`tooling::interaction::stack`).
 rustc-demangle = "0.1"
-wgpu-hal = { workspace = true }
-wgpu-core = { workspace = true }
 objc2 = { workspace = true }
 block2 = { workspace = true }
 objc2-foundation = { version = "0.2.2", features = ["NSArray", "NSAttributedString", "NSData", "NSDictionary", "NSError", "NSGeometry", "NSObject", "NSRange", "NSValue", "NSProcessInfo", "NSString", "NSThread", "NSURL", "NSUserDefaults"] }
 objc2-app-kit = { version = "0.2.2", features = ["NSApplication", "NSButton", "NSCell", "NSControl", "NSEvent", "NSMenu", "NSMenuItem", "NSResponder", "NSRunningApplication", "NSView", "NSWindow", "NSColor", "NSGraphics", "NSPanel", "NSScreen", "NSPasteboard", "NSPasteboardItem", "NSDragging", "NSDraggingItem", "NSDraggingSession", "NSGraphicsContext", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSAttributedString"] }
-objc2-core-video = { workspace = true }
+objc2-core-video = { workspace = true, features = ["std", "CVBase", "CVDisplayLink", "CVHostTime", "CVReturn", "objc2-core-graphics"] }
 block2-metal = { package = "block2", version = "0.6" }
 objc2-core-graphics = { workspace = true, features = ["std", "CGColorSpace"] }
 
@@ -185,6 +187,7 @@ windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_UI_Wind
 accesskit_unix = { version = "0.24.1", optional = true }
 libc = { workspace = true }
 libloading = "0.8"
+serde = { workspace = true, optional = true }
 zbus = { version = "6", default-features = false, features = ["tokio", "proxy", "service"], optional = true }
 tokio = { version = "1", features = ["rt", "net", "time", "sync", "macros"], optional = true }
 futures-util = { version = "0.3", optional = true }
@@ -193,27 +196,23 @@ futures-util = { version = "0.3", optional = true }
 [target.'cfg(all(not(target_vendor = "apple"), not(target_arch = "wasm32"), not(target_os = "windows")))'.dependencies]
 wgpu = { workspace = true, features = ["vulkan"] }
 
-# build.rs hashes the uber shader's WGSL; the portable code builds without a C compiler.
+# build.rs hashes the uber shader's WGSL; share the same feature set as the normal dependency.
 [build-dependencies]
-blake3 = { workspace = true, features = ["pure"] }
+blake3 = { workspace = true }
 
 [dev-dependencies]
 # The HLSL wgpu generates, for the precompiled uber shader (`render/dxbc_tests.rs`).
 log = "0.4"
 # Experimental swash oracle in `examples/text_quality.rs`.
 swash = { workspace = true }
-# Live buffer counts (`Device::get_internal_counters`) for the upload tests.
-wgpu = { workspace = true, features = ["counters"] }
-# Thread and process CPU clocks in the overlay cost example.
-libc = { workspace = true }
 
 # A UI Automation client for `tests/accessibility_windows.rs`.
 [target.'cfg(target_os = "windows")'.dev-dependencies]
 windows = { workspace = true, features = ["Win32_Foundation", "Win32_System_Com", "Win32_UI_Accessibility"] }
 
-# A GPU-free device whose surfaces refuse every configuration, for `window::configure`'s test.
-[target.'cfg(target_os = "linux")'.dev-dependencies]
-wgpu = { workspace = true, features = ["noop"] }
+[[example]]
+name = "upload_bench"
+required-features = ["test-gpu-counters"]
 
 [[example]]
 name = "metal_dispatch"

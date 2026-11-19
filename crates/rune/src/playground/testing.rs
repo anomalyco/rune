@@ -38,7 +38,7 @@ impl<S: 'static> Runtime<S> {
     /// story or variant, listing those it has.
     pub fn open_playground(&mut self, story: &str, variant: Option<&str>) {
         let live = self.hooks.playground.as_mut().expect(NO_PLAYGROUND);
-        live.open_at(Some(story), variant).unwrap_or_else(|e| panic!("{e}"));
+        live.core.open_at(Some(story), variant).unwrap_or_else(|e| panic!("{e}"));
         self.settle_playground(Request::Open(Some(story.to_owned())));
     }
 
@@ -48,11 +48,8 @@ impl<S: 'static> Runtime<S> {
     ///
     /// Panics when the playground isn't open, or its story has no trigger on `key`.
     pub fn playground_trigger(&mut self, key: char) {
-        let live = self.hooks.playground.as_ref().filter(|p| p.is_open()).unwrap_or_else(|| panic!("the playground isn't open: call Runtime::open_playground first"));
-        let Some(request) = live.trigger_request(key) else {
-            let keys: Vec<String> = live.triggers().iter().map(|(k, label)| format!("{k:?} ({label})")).collect();
-            panic!("{:?} has no trigger on {key:?}; it has: {}", live.path(live.selected), keys.join(", "));
-        };
+        let live = self.hooks.playground.as_ref().expect("the playground isn't open: call Runtime::open_playground first");
+        let request = live.core.require_trigger(key);
         self.settle_playground(request);
     }
 
@@ -95,8 +92,8 @@ pub(crate) fn stage_element(all: &[ElementInfo], key: &str) -> Option<usize> {
 impl<S: 'static> Live<S> {
     /// The open stage's own state: a scene's, or a story's.
     fn stage_state(&self) -> Option<&dyn Any> {
-        if !self.is_open() { return None; }
+        if !self.core.open { return None; }
         if let Some(scene) = self.scene() { return Some(&scene.state); }
-        self.own().map(|(own, stage)| own.state_ref(stage))
+        self.core.own().map(|(own, stage)| own.state_ref(stage))
     }
 }

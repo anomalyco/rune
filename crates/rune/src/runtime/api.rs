@@ -13,7 +13,10 @@ impl<S: 'static> Runtime<S> {
     /// it with the motion `f` asked for.
     #[inline(always)]
     pub fn update(&mut self, f: impl FnOnce(&mut S, &mut Tx)) {
-        self.update_if(|s, tx| { f(s, tx); true });
+        let (core, mut app) = self.split_mut();
+        let (mut one, stall) = core.begin_update(&app);
+        f(app.state, &mut one);
+        core.finish_update(&mut app, stall, one, true, false);
     }
 
     /// `update` for a change that may be no change: `f` returns whether it changed state the
@@ -32,9 +35,9 @@ impl<S: 'static> Runtime<S> {
     #[inline(always)]
     fn update_inner(&mut self, f: impl FnOnce(&mut S, &mut Tx) -> bool, ordered: bool) -> (bool, Option<std::num::NonZeroU64>) {
         let (core, mut app) = self.split_mut();
-        let mut one = core.begin_update(&app);
-        let changed = crate::tooling::perf_warn::timed("an `update` closure", || f(app.state, &mut one));
-        core.finish_update(&mut app, one, changed, ordered)
+        let (mut one, stall) = core.begin_update(&app);
+        let changed = f(app.state, &mut one);
+        core.finish_update(&mut app, stall, one, changed, ordered)
     }
 
     // ── Frame & lifecycle ──────────────────────────────────────────────────────────────────────
@@ -141,7 +144,7 @@ impl<S: 'static> Runtime<S> {
     /// Queues an app marker once for each attached writer. Formatting is skipped when off.
     #[inline(always)]
     pub fn trace_event(&mut self, event: impl std::fmt::Display) {
-        self.core_mut().trace_event(event);
+        self.core_mut().trace_event_dyn(&event);
     }
 
     #[cfg(feature = "frame-profile")]
@@ -352,7 +355,10 @@ impl<S: 'static> Runtime<S> {
     pub(crate) fn paints(&self) -> HashMap<(String, bool), crate::motion_gate::check::paint::Paint> { self.core().paints() }
     #[inline(always)]
     pub(crate) fn played_keys(&self) -> u64 {
-        self.hooks.playground.as_deref().map_or(0, |p| p.played)
+        match self.hooks.playground.as_deref() {
+            Some(p) => p.played,
+            None => 0,
+        }
     }
     #[inline(always)]
     pub(crate) fn interaction_presented(&mut self, submitted: crate::time::Instant, presents_at: Option<crate::time::Instant>) {

@@ -23,7 +23,7 @@ fn updates_that_change_nothing_ask_no_window_for_a_frame() {
     handle.wake();
     assert!(!shared.take().only_updates(), "`wake` still runs a shown window's poll");
     handle.update_if(|_, _| false);
-    setup_waker(&shared)();
+    setup_waker(&shared.core)();
     assert!(!shared.take().only_updates(), "so does `setup`'s waker");
     assert_eq!(WakeWork::of(WakeFacts { window: true, visible: true, was_shown: true, ..WakeFacts::default() }, || false), WakeWork::Paint);
     assert_eq!(WakeWork::of(WakeFacts { window: true, launcher: true, changed: true, ..WakeFacts::default() }, || false), WakeWork::HiddenFrame);
@@ -226,7 +226,7 @@ impl CompHost {
     fn new(comp: Option<bool>, poll: fn(&mut u32, f64, &mut Tx) -> bool) -> Self {
         fn view(_: &u32, _: &mut crate::Cx<u32>) -> crate::El { crate::el().key("box").size(20.0, 20.0).fill(crate::Color::WHITE) }
         let mut rt = Runtime::new(0u32, view, (20.0, 20.0), crate::Env::default());
-        rt.test_clock = Some(crate::Clock::manual(1.0 / crate::frame::clock::RESUME_STEP));
+        rt.frame.test_clock = Some(crate::Clock::manual(1.0 / crate::frame::clock::RESUME_STEP));
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: wgpu::TextureFormat::Bgra8UnormSrgb,
@@ -251,7 +251,7 @@ impl CompHost {
     /// nothing, unless a compositor draws it. Returns whether it presented.
     fn frame(&mut self, quiet: bool) -> bool {
         let started = Instant::now();
-        self.rt.test_clock.as_mut().unwrap().step();
+        self.rt.frame.test_clock.as_mut().unwrap().step();
         let animating = self.rt.frame(crate::frame::clock::RESUME_STEP);
         let update_ms = started.elapsed().as_secs_f64() * 1000.0;
         if quiet && self.comp.is_none() && self.presented.as_ref().is_some_and(|p| p.unchanged(&self.rt, &self.config, animating, None)) {
@@ -271,7 +271,7 @@ impl CompHost {
     fn timer_wake(&mut self) -> bool {
         let due = self.rt.wake_deadline().expect("a timer is armed");
         // Advance host time, not rt.clock: rests() still examines the last poll's time.
-        let clock = self.rt.test_clock.as_mut().unwrap();
+        let clock = self.rt.frame.test_clock.as_mut().unwrap();
         clock.seek(clock.now().max(due));
         let rests = self.idle && !composing(self.comp.as_deref()) && self.presented.is_some();
         let frame = match rests.then(|| self.rt.resting_wake()).flatten() {
@@ -513,7 +513,7 @@ fn a_window_s_first_updates_can_register_on_a_later_window() {
     // As Host::new and Host::resumed: attach the guards, then drain the first updates.
     let hosts = start_all(apps.into(), |_, app| {
         let shortcuts = crate::shortcuts::Guard::attach(&app.shared, Arc::new(|| {}), true, false);
-        let menus = crate::native_menu::Guard::attach(&app.shared, true);
+        let menus = crate::native_menu::MenuGuard::attach(&app.shared, true);
         Some((app, shortcuts, menus, S::new()))
     }, |(app, _, _, state)| for f in app.shared.take().updates { f(state, &mut Tx::default()); });
     assert_eq!(hosts[0].as_ref().unwrap().3, ["Ok(())", "Ok(())"]);
@@ -555,7 +555,7 @@ fn drag_region_policy_preserves_titled_windows_and_panels() {
 }
 
 /// A GPU-free wgpu instance.
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "test-gpu-noop"))]
 fn noop_instance() -> wgpu::Instance {
     let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
     descriptor.backends = wgpu::Backends::NOOP;
@@ -564,7 +564,7 @@ fn noop_instance() -> wgpu::Instance {
 }
 
 /// A GPU on wgpu's noop backend: its device takes anything and refuses every surface.
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "test-gpu-noop"))]
 fn noop_gpu(instance: &wgpu::Instance) -> (Gpu, wgpu::Surface<'static>) {
     use std::num::NonZeroU32;
     use std::ptr::NonNull;
@@ -583,7 +583,7 @@ fn noop_gpu(instance: &wgpu::Instance) -> (Gpu, wgpu::Surface<'static>) {
 }
 
 /// What the noop backend takes for a surface: the format the test configures it in.
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "test-gpu-noop"))]
 fn noop_config() -> wgpu::SurfaceConfiguration {
     wgpu::SurfaceConfiguration {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -600,7 +600,7 @@ fn noop_config() -> wgpu::SurfaceConfiguration {
 
 /// A surface that refuses its configuration reports it as an error its owner can drop, not a
 /// panic in wgpu's default handler that takes the app's every window with it (hex#979).
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "test-gpu-noop"))]
 #[test]
 fn a_refused_surface_configuration_is_an_error_not_a_panic() {
     let instance = noop_instance();
@@ -615,7 +615,7 @@ fn a_refused_surface_configuration_is_an_error_not_a_panic() {
 /// ("Surface is not configured for presentation") on the drawable Rune would ask it for. The
 /// acquire reports the miss instead, and the window makes a surface and device before its next
 /// frame (hex's Modern Standby panic).
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "test-gpu-noop"))]
 #[test]
 fn a_surface_with_no_presentation_is_never_asked_for_a_drawable() {
     let instance = noop_instance();
@@ -631,7 +631,7 @@ fn a_surface_with_no_presentation_is_never_asked_for_a_drawable() {
 /// maintains itself, which `configure` does with a poll. Without that poll the surface gets no
 /// presentation while `is_lost` still reads false, `configure` says Ok, and the drawable the next
 /// frame asks for panics ("Surface is not configured for presentation").
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "test-gpu-noop"))]
 #[test]
 fn a_destroyed_device_that_has_not_reported_its_loss_is_not_configured() {
     let instance = noop_instance();
@@ -698,7 +698,7 @@ fn a_surface_lost_after_every_replacement_gives_up_after_the_tries() {
 /// A device that went away (a driver reset, a GPU removed, Windows' Modern Standby) configures
 /// nothing, and wgpu drops the `DeviceLost` that would say so: `configure` reports the lost
 /// device itself, and no drawable is ever asked of it.
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "test-gpu-noop"))]
 #[test]
 fn a_lost_device_is_reported_and_never_drawn_with() {
     let instance = noop_instance();
@@ -719,7 +719,7 @@ fn a_lost_device_is_reported_and_never_drawn_with() {
 /// Each Rune GPU has its own wgpu instance, and wgpu compares devices by an id each instance
 /// numbers from the start, so a new GPU's device equals the old one's. A renderer's device key
 /// tells them apart, so a compositor keeping resources by it remakes them (hex#982).
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "test-gpu-noop"))]
 #[test]
 fn a_new_gpus_device_equals_the_old_one_but_its_key_differs() {
     let device = || {

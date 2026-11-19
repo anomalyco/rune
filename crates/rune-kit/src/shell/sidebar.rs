@@ -3,7 +3,7 @@
 
 use std::borrow::Cow;
 
-use rune::{Anim, Color, Drag, El, GrowthSpec, Icon, Key, Phase, ScrollSpec, TextEdit, TextStyle, Tx, col, el, icon, row, text, text_input};
+use rune::{Anim, Color, Drag, El, GrowthSpec, Icon, Key, Phase, PointerEvent, ScrollSpec, TextEdit, TextStyle, Tx, col, el, icon, row, text, text_input};
 
 use super::reorder::Reorder;
 use crate::{ControlSize, IconButton, IconButtonVariant, Kit, Spinner};
@@ -473,7 +473,7 @@ impl SidebarRow {
     /// (it unmounted mid-drag). `access` finds the [`Reorder`] in the app's state. A press that
     /// doesn't move is still a select.
     pub fn reorder<S: 'static>(
-        mut self,
+        self,
         state: &Reorder,
         index: usize,
         count: usize,
@@ -481,45 +481,25 @@ impl SidebarRow {
         drop: impl Fn(&mut S, usize, usize) + 'static,
     ) -> Self {
         let held = state.held();
-        let bind = Box::new(move |e: El| {
+        let bind = Box::new(move |mut e: El| {
             // While a row is held, every row hears where the pointer goes: a move its drag never
             // hears means the release was lost (the row unmounted, or a modal took the pointer).
-            let e = if held {
-                e.on_pointer_move_local(move |s: &mut S, p, tx: &mut Tx| {
-                    if access(s).pointer([p.window_x, p.window_y]) {
-                        tx.animated();
-                    } else {
-                        tx.live_only();
-                    }
-                })
-            } else {
-                e
-            };
+            if held {
+                e = e.on_pointer_move_local(move |s: &mut S, p, tx: &mut Tx| reorder_pointer(access(s), p, tx));
+            }
             e.on_drag(move |s: &mut S, d: &mut Drag, tx: &mut Tx| {
-                let r = access(s);
-                match d.phase {
-                    Phase::Down => r.press(index, d.window_point()),
-                    Phase::Move => {
-                        // The rows it passes spring aside; it follows the pointer exactly.
-                        tx.animated();
-                        r.drag(index, count, d.window_point(), d.dy, d.h);
-                    }
-                    Phase::Up => {
-                        if let Some((from, to)) = r.end(d.cancelled()) {
-                            drop(s, from, to);
-                        }
-                    }
+                if let Some((from, to)) = reorder_drag(access(s), index, count, d, tx) {
+                    drop(s, from, to);
                 }
             })
         });
-        self.reorder = Some(Reordering { state: *state, index, count, bind });
-        self
+        self.set_reorder(*state, index, count, bind)
     }
     /// Edits the label in place, in the field bound to `edit` (`access` finds it in the app's
     /// state). Set `edit.focused` and its text when renaming starts. Return calls `commit`,
     /// Escape calls `cancel`; both should end the rename.
     pub fn renaming<S: 'static>(
-        mut self,
+        self,
         edit: &TextEdit,
         access: fn(&mut S) -> &mut TextEdit,
         commit: impl Fn(&mut S, &mut Tx) + 'static,
@@ -527,13 +507,20 @@ impl SidebarRow {
     ) -> Self {
         let bind: Apply = Box::new(move |e: El| {
             e.on_edit(access).on_submit(commit).on_input_key(move |s: &mut S, ev, tx| {
-                if ev.key == Key::Escape {
-                    cancel(s, tx);
-                    return true;
-                }
-                false
+                let esc = ev.key == Key::Escape;
+                if esc { cancel(s, tx); }
+                esc
             })
         });
+        self.set_rename(edit, bind)
+    }
+
+    fn set_reorder(mut self, state: Reorder, index: usize, count: usize, bind: Apply) -> Self {
+        self.reorder = Some(Reordering { state, index, count, bind });
+        self
+    }
+
+    fn set_rename(mut self, edit: &TextEdit, bind: Apply) -> Self {
         self.rename = Some((edit.clone(), bind));
         self
     }
@@ -670,5 +657,26 @@ impl SidebarRow {
         }
         // After the handlers, which would make it a button.
         r.role("listitem")
+    }
+}
+
+fn reorder_pointer(r: &mut Reorder, p: PointerEvent, tx: &mut Tx) {
+    if r.pointer([p.window_x, p.window_y]) {
+        tx.animated();
+    } else {
+        tx.live_only();
+    }
+}
+
+fn reorder_drag(r: &mut Reorder, index: usize, count: usize, d: &Drag, tx: &mut Tx) -> Option<(usize, usize)> {
+    match d.phase {
+        Phase::Down => { r.press(index, d.window_point()); None }
+        Phase::Move => {
+            // The rows it passes spring aside; it follows the pointer exactly.
+            tx.animated();
+            r.drag(index, count, d.window_point(), d.dy, d.h);
+            None
+        }
+        Phase::Up => r.end(d.cancelled()),
     }
 }

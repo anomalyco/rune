@@ -34,9 +34,9 @@ impl RuntimeCore {
             return false;
         }
         let (id, sub) = split_id(request.target_node);
-        let Some(i) = self.nodes.iter().position(|n| n.id == id) else { return false };
+        let Some(i) = self.tree.nodes.iter().position(|n| n.id == id) else { return false };
         if !self.allowed(i) || self.subtree_exiting(i) { return false; }
-        let n = &self.nodes[i];
+        let n = &self.tree.nodes[i];
         let path = n.path.clone();
         let link = sub_link(sub);
         let handlers = n.handlers.get();
@@ -89,7 +89,7 @@ impl RuntimeCore {
                 if let Some(input) = n.input.as_deref() && split_id(sel.anchor.node) == (id, 0) && split_id(sel.focus.node) == (id, 0) {
                     let at = |b: usize| input.edit.display_index(input.edit.text.floor_char_boundary(b.min(input.edit.text.len())));
                     let (a, b) = (at(sel.anchor.character_index), at(sel.focus.character_index));
-                    self.queue.push(Action::A11y(path, A11yAct::Select(a, b)));
+                    self.frame.queue.push(Action::A11y(path, A11yAct::Select(a, b)));
                     return true;
                 }
                 let Some((_, lines)) = self.a11y_lines(i) else { return false };
@@ -118,7 +118,7 @@ impl RuntimeCore {
             },
             _ => return false,
         };
-        self.queue.push(action);
+        self.frame.queue.push(action);
         true
     }
 
@@ -162,14 +162,14 @@ impl RuntimeCore {
                 true
             }
             A11yAct::Scroll { x, y, pages } => {
-                let Some(i) = self.nodes.iter().position(|n| n.path == path) else { return false };
-                let Some(st) = self.scrolls.get(&self.nodes[i].id) else { return false };
+                let Some(i) = self.tree.nodes.iter().position(|n| n.path == path) else { return false };
+                let Some(st) = self.scroll.scrolls.get(&self.tree.nodes[i].id) else { return false };
                 if pages && x == 0 {
                     tx.scroll_page(path, y);
                 } else {
-                    let r = self.drawn[i];
+                    let r = self.paint.drawn[i];
                     let (dx, dy) = if pages { (r[2] * 0.9, r[3] * 0.9) } else { (LINE, LINE) };
-                    let nx = st.x.offset as f32 + dx * x as f32;
+                    let nx = (st.x.offset + st.x.toward(-f64::from(dx) * f64::from(x))) as f32;
                     let ny = st.offset as f32 + dy * y as f32;
                     tx.scroll_to_instant(path, nx, ny);
                 }
@@ -185,7 +185,7 @@ impl RuntimeCore {
     /// Focuses field `path` (as a reader focuses it first) and edits it through its editor, so
     /// its change and submit handlers run as for typing.
     fn a11y_edit(&mut self, app: &mut dyn AppDriver, path: String, tx: &mut Tx, f: impl FnOnce(&mut crate::edit::TextEdit) -> crate::edit::EditOutcome) -> bool {
-        if self.focus.path() != Some(path.as_str()) { self.set_focus(app, Some(path.clone()), true); }
+        if self.kbd.focus.path() != Some(path.as_str()) { self.set_focus(app, Some(path.clone()), true); }
         log_event!(self, "a11y edit {path}");
         self.with_focused(app, f, tx)
     }

@@ -70,7 +70,7 @@ fn inherited_hover_curves_leave_descendants_visuals_shared() {
     rt.frame(0.0);
     rt.update(|s, _| s.rows += 1);
     rt.frame(1.0 / 120.0);
-    let rows: Vec<_> = rt.nodes.iter().filter(|n| n.path.rsplit('/').next().is_some_and(|k| k.starts_with("row-"))).collect();
+    let rows: Vec<_> = rt.tree.nodes.iter().filter(|n| n.path.rsplit('/').next().is_some_and(|k| k.starts_with("row-"))).collect();
     assert_eq!(rows.len(), 4);
     for n in rows {
         assert!(n.hover_motion().is_some(), "{} goes by its group's curves", n.path);
@@ -94,7 +94,7 @@ fn a_hover_alone_child_keeps_the_row_around_it_unlit() {
     }
     let mut rt = Runtime::new(S, view, (240.0, 100.0), Env::new(true, 1.0));
     rt.frame(0.0);
-    let id = |rt: &Runtime<S>, key: &str| rt.nodes.iter().find(|n| n.path.rsplit('/').next() == Some(key)).map(|n| n.id).unwrap();
+    let id = |rt: &Runtime<S>, key: &str| rt.tree.nodes.iter().find(|n| n.path.rsplit('/').next() == Some(key)).map(|n| n.id).unwrap();
     let lit = |rt: &Runtime<S>, key: &str| rt.scene.store().target(id(rt, key), P_HOVER).unwrap_or(0.0);
     let commits = rt.stats.commits;
 
@@ -128,4 +128,35 @@ fn a_released_hold_holds_nothing_until_layout_settles() {
     assert!(h.held() && !h.released());
     h.release(false);
     assert!(!h.held() && !h.released(), "with layout still, a move just ends the hold");
+}
+
+#[test]
+fn children_of_an_exiting_parent_stop_hovering_and_pressing() {
+    fn view(show: &bool, _: &mut Cx<bool>) -> El {
+        let mut root = col().key("root").size(200.0, 100.0);
+        if *show {
+            root = root.child(
+                col().key("panel").size(120.0, 60.0).transition(crate::Transition::opacity())
+                    .child(el().key("btn").size(80.0, 40.0).hover(Color::WHITE).hover_alone()
+                        .hover_group_shared("shared-exit").on_press(|_: &mut bool| {})),
+            );
+        }
+        root
+    }
+    let mut rt = Runtime::new(true, view, (200.0, 100.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.update(|show, _| *show = false);
+    rt.frame(1.0 / 60.0);
+
+    // Move pointer onto the child of the exiting panel while the panel is mid-exit.
+    let btn_idx = rt.tree.nodes.iter().position(|n| n.key.as_deref() == Some("btn")).expect("child still in exiting subtree");
+    assert!(rt.core().subtree_exiting(btn_idx) && !rt.core().is_exiting(rt.tree.nodes[btn_idx].id), "only parent holds Exiting phase");
+    rt.pointer_move(20.0, 20.0);
+    rt.frame(1.0 / 60.0);
+
+    let btn_id = rt.tree.nodes[btn_idx].id;
+    let target = rt.scene.store().target(btn_id, P_HOVER).unwrap_or(0.0);
+    assert_eq!(target, 0.0, "child of exiting parent must not light hover");
+    assert!(rt.core().hovered_alone().is_none(), "child of exiting parent must not claim hover_alone");
+    assert!(rt.core().shared_hovered().is_empty(), "child of exiting parent must not light hover_group_shared");
 }

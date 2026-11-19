@@ -86,9 +86,9 @@ impl crate::runtime::RuntimeCore {
     /// Steps the minimize the app asked for, saying whether this shell carries it out now. The
     /// one effect is a minimize, run once the window is as the turn leaves it.
     pub(crate) fn minimize_step(&mut self, event: MinimizeEvent) -> bool {
-        let mut state = self.minimize;
+        let mut state = self.host.minimize;
         let effects = step(&mut state, event);
-        self.minimize = state;
+        self.host.minimize = state;
         effects.into_iter().any(|effect| effect == MinimizeEffect::Minimize)
     }
 }

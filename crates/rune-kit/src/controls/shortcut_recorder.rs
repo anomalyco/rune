@@ -135,9 +135,38 @@ impl ShortcutRecorderState {
     fn refuse(&mut self, error: ShortcutError, chord: Option<Shortcut>) {
         if let Some(refusal) = self.phase.refusal_mut() { *refusal = Some(Refusal { error, chord }); }
     }
+
+    fn prepare_change(&mut self, event: &PhysicalInput, disabled: bool, unmodified: bool) -> PhysicalStep {
+        if disabled && !matches!(event, PhysicalInput::FocusLost) {
+            return PhysicalStep::Pass;
+        }
+        match self.input(event) {
+            Outcome::Pass => PhysicalStep::Pass,
+            Outcome::Consumed => PhysicalStep::Consumed,
+            Outcome::Change(next) => {
+                if let Some(Err(error)) = next.as_ref().filter(|_| !unmodified).map(Shortcut::require_modifier) {
+                    self.refuse(error, next);
+                    return PhysicalStep::Consumed;
+                }
+                if self.shortcut == next && !self.unregistered {
+                    self.finish_change(next, Ok(()));
+                    return PhysicalStep::Consumed;
+                }
+                PhysicalStep::Propose(next)
+            }
+        }
+    }
+
+    fn finish_change(&mut self, next: Option<Shortcut>, result: Result<(), ShortcutError>) {
+        match result {
+            Ok(()) => { self.shortcut = next; self.unregistered = false; self.cancel(); }
+            Err(error) => self.refuse(error, next),
+        }
+    }
 }
 
 enum Outcome { Pass, Consumed, Change(Option<Shortcut>) }
+enum PhysicalStep { Pass, Consumed, Propose(Option<Shortcut>) }
 fn is_modifier(key: PhysicalKeyCode) -> bool {
     use PhysicalKeyCode::*;
     matches!(key, ShiftLeft | ShiftRight | ControlLeft | ControlRight | AltLeft | AltRight | SuperLeft | SuperRight | Fn | FnLock)
@@ -165,47 +194,59 @@ pub fn shortcut_error_message(error: &ShortcutError, shortcut: Option<&Shortcut>
     }
 }
 
-/// Click (or activate with Enter/Space) to record. Escape cancels; Backspace clears.
-/// `on_change` must register the proposed binding before releasing the previous registration:
-/// returning an error keeps the old value and shows the refused chord with a message
-/// (`error_message` words it). An unchanged chord is a no-op unless the state was marked
-/// unregistered (`ShortcutRecorderState::mark_unregistered`). A chord without ⌘, ⌃ or ⌥ (Ctrl,
-/// Alt or Super elsewhere) other than F1–F24 is refused before `on_change` unless
-/// `allow_unmodified`.
-pub struct ShortcutRecorder<S> {
-    key: String,
-    state: ShortcutRecorderState,
+trait RecorderBind {
+    fn bind_control(&self, control: El, disabled: bool, unmodified: bool) -> El;
+}
+
+struct RecorderHandlers<S> {
     access: Access<S>,
     change: Option<Change<S>>,
+}
+
+impl<S: 'static> RecorderBind for RecorderHandlers<S> {
+    fn bind_control(&self, mut control: El, disabled: bool, unmodified: bool) -> El {
+        if !disabled {
+            let access = self.access.clone();
+            control = control.on_press(move |s: &mut S| access(s).begin());
+        }
+        let access = self.access.clone();
+        let change = self.change.clone();
+        control.on_physical_input(move |s: &mut S, event, tx| match access(s).prepare_change(event, disabled, unmodified) {
+            PhysicalStep::Pass => false,
+            PhysicalStep::Consumed => true,
+            PhysicalStep::Propose(next) => {
+                let result = change.as_ref().map_or(Ok(()), |f| f(s, next.as_ref(), tx));
+                access(s).finish_change(next, result);
+                true
+            }
+        })
+    }
+}
+
+struct RecorderCore {
+    key: String,
+    state: ShortcutRecorderState,
     message: Message,
     width: f32,
     disabled: bool,
     unmodified: bool,
     label: Option<String>,
 }
-impl<S: 'static> ShortcutRecorder<S> {
-    pub fn new(key: impl Into<String>, state: &ShortcutRecorderState,
-        access: impl for<'a> Fn(&'a mut S) -> &'a mut ShortcutRecorderState + 'static) -> Self {
-        Self { key: key.into(), state: state.clone(), access: Rc::new(access), change: None, message: Box::new(shortcut_error_message), width: 240.0, disabled: false, unmodified: false, label: None }
+
+impl RecorderCore {
+    fn new(key: String, state: &ShortcutRecorderState) -> Self {
+        Self {
+            key,
+            state: state.clone(),
+            message: Box::new(shortcut_error_message),
+            width: 240.0,
+            disabled: false,
+            unmodified: false,
+            label: None,
+        }
     }
-    /// The accessible name: what the shortcut does ("Show window"). Assistive technology then
-    /// reads the recorded keys as its value. Without it the keys (or "Record shortcut") name it.
-    pub fn label(mut self, l: impl Into<String>) -> Self { self.label = Some(l.into()); self }
-    pub fn on_change(mut self, change: impl Fn(&mut S, Option<&Shortcut>, &mut Tx) -> Result<(), ShortcutError> + 'static) -> Self {
-        self.change = Some(Rc::new(change)); self
-    }
-    /// Words the error shown under the recorder, given the refused chord (None when clearing
-    /// was refused). The default, `shortcut_error_message`, is sentence-case and names the
-    /// chord: "⌃J is already in use."
-    pub fn error_message(mut self, message: impl Fn(&ShortcutError, Option<&Shortcut>) -> String + 'static) -> Self {
-        self.message = Box::new(message); self
-    }
-    /// Propose chords without a modifier too, such as Space or ⇧A. Registering one globally
-    /// also needs `App::allow_unmodified_shortcuts`.
-    pub fn allow_unmodified(mut self) -> Self { self.unmodified = true; self }
-    pub fn width(mut self, width: f32) -> Self { self.width = width; self }
-    pub fn disabled(mut self, disabled: bool) -> Self { self.disabled = disabled; self }
-    pub fn build(self, k: &Kit) -> El {
+
+    fn build(self, k: &Kit, bind: &dyn RecorderBind) -> El {
         let labels = self.state.keycaps();
         let placeholder = if self.state.is_recording() { "Press shortcut" } else { "Record shortcut" };
         let border = if self.state.error().is_some() { k.c.danger.border }
@@ -236,34 +277,7 @@ impl<S: 'static> ShortcutRecorder<S> {
         }
         control = control.child((if labels.is_empty() { text(placeholder).font(k.ty.ui_compact).color(k.c.text_faint) }
             else { Keybind::new(&labels).build(k) }).a11y_hidden());
-        if !self.disabled {
-            let access = self.access.clone();
-            control = control.on_press(move |s: &mut S| access(s).begin());
-        }
-        {
-            let access = self.access;
-            let change = self.change;
-            let (disabled, unmodified) = (self.disabled, self.unmodified);
-            control = control.on_physical_input(move |s: &mut S, event, tx| {
-                if disabled && !matches!(event, PhysicalInput::FocusLost) { return false; }
-                match access(s).input(event) {
-                    Outcome::Pass => false,
-                    Outcome::Consumed => true,
-                    Outcome::Change(next) => {
-                        let bare = next.as_ref().filter(|_| !unmodified).map(Shortcut::require_modifier);
-                        let result = if let Some(Err(error)) = bare { Err(error) }
-                            else if access(s).shortcut == next && !access(s).unregistered { Ok(()) }
-                            else { change.as_ref().map_or(Ok(()), |f| f(s, next.as_ref(), tx)) };
-                        let state = access(s);
-                        match result {
-                            Ok(()) => { state.shortcut = next; state.unregistered = false; state.cancel(); }
-                            Err(error) => state.refuse(error, next),
-                        }
-                        true
-                    }
-                }
-            });
-        }
+        control = bind.bind_control(control, self.disabled, self.unmodified);
         let mut root = col().key(format!("{}-field", self.key)).gap(4.0).child(control);
         if let Some(error) = self.state.error() {
             root = root.child(text((self.message)(error, self.state.refused())).key("error").role("alert")
@@ -271,4 +285,40 @@ impl<S: 'static> ShortcutRecorder<S> {
         }
         root
     }
+}
+
+/// Click (or activate with Enter/Space) to record. Escape cancels; Backspace clears.
+/// `on_change` must register the proposed binding before releasing the previous registration:
+/// returning an error keeps the old value and shows the refused chord with a message
+/// (`error_message` words it). An unchanged chord is a no-op unless the state was marked
+/// unregistered (`ShortcutRecorderState::mark_unregistered`). A chord without ⌘, ⌃ or ⌥ (Ctrl,
+/// Alt or Super elsewhere) other than F1–F24 is refused before `on_change` unless
+/// `allow_unmodified`.
+pub struct ShortcutRecorder<S> {
+    core: RecorderCore,
+    handlers: RecorderHandlers<S>,
+}
+impl<S: 'static> ShortcutRecorder<S> {
+    pub fn new(key: impl Into<String>, state: &ShortcutRecorderState,
+        access: impl for<'a> Fn(&'a mut S) -> &'a mut ShortcutRecorderState + 'static) -> Self {
+        Self { core: RecorderCore::new(key.into(), state), handlers: RecorderHandlers { access: Rc::new(access), change: None } }
+    }
+    /// The accessible name: what the shortcut does ("Show window"). Assistive technology then
+    /// reads the recorded keys as its value. Without it the keys (or "Record shortcut") name it.
+    pub fn label(mut self, l: impl Into<String>) -> Self { self.core.label = Some(l.into()); self }
+    pub fn on_change(mut self, change: impl Fn(&mut S, Option<&Shortcut>, &mut Tx) -> Result<(), ShortcutError> + 'static) -> Self {
+        self.handlers.change = Some(Rc::new(change)); self
+    }
+    /// Words the error shown under the recorder, given the refused chord (None when clearing
+    /// was refused). The default, `shortcut_error_message`, is sentence-case and names the
+    /// chord: "⌃J is already in use."
+    pub fn error_message(mut self, message: impl Fn(&ShortcutError, Option<&Shortcut>) -> String + 'static) -> Self {
+        self.core.message = Box::new(message); self
+    }
+    /// Propose chords without a modifier too, such as Space or ⇧A. Registering one globally
+    /// also needs `App::allow_unmodified_shortcuts`.
+    pub fn allow_unmodified(mut self) -> Self { self.core.unmodified = true; self }
+    pub fn width(mut self, width: f32) -> Self { self.core.width = width; self }
+    pub fn disabled(mut self, disabled: bool) -> Self { self.core.disabled = disabled; self }
+    pub fn build(self, k: &Kit) -> El { self.core.build(k, &self.handlers) }
 }

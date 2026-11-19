@@ -43,7 +43,7 @@ fn runtime(smooth: bool) -> Runtime<State> {
 }
 
 fn paint(rt: &Runtime<State>, key: &str) -> crate::motion_gate::check::paint::Paint {
-    let n = rt.nodes.iter().find(|n| n.key.as_deref() == Some(key)).unwrap();
+    let n = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some(key)).unwrap();
     rt.paints().remove(&(n.path.clone(), false)).unwrap()
 }
 

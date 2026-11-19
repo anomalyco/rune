@@ -2,7 +2,7 @@
 //! colour for each instance kind `cpu_boot` draws. The names are the shader's, so a change there
 //! has one obvious place to land here.
 
-use crate::render::{CONTINUOUS_K, Instance, unpack_clip_radii};
+use crate::render::{CONTINUOUS_K, Instance, Kind, unpack_clip_radii};
 
 fn clamp01(x: f32) -> f32 { x.clamp(0.0, 1.0) }
 
@@ -367,14 +367,14 @@ pub(super) fn has_sides(i: &Instance) -> bool {
 /// The colour (premultiplied, before the clip) of one of the box kinds (`KIND_RECT`,
 /// `KIND_SHADOW`, `KIND_INSET`, `KIND_GRADIENT`, `KIND_SEGMENT`, `KIND_TRIANGLE`, `KIND_DASHED`,
 /// `KIND_RADIAL`) at pixel centre `p`: the `fs` branch for its kind.
-pub(super) fn boxes(i: &Instance, kind: u32, p: [f32; 2]) -> [f32; 4] {
+pub(super) fn boxes(i: &Instance, kind: Kind, p: [f32; 2]) -> [f32; 4] {
     let half = [i.rect[2] * 0.5, i.rect[3] * 0.5];
     let center = [i.rect[0] + half[0], i.rect[1] + half[1]];
     let q = [p[0] - center[0], p[1] - center[1]];
     let soft = i.params[2].max(0.5);
     let t_y = || clamp01((p[1] - i.rect[1]) / i.rect[3].max(1.0));
     match kind {
-        0 => {
+        Kind::Rect => {
             let d = sd_rounded(q, half, i.radii);
             let bw = i.params[0];
             if bw <= 0.0 { return scale4(i.fill, clamp01(0.5 - d / (soft * 2.0))); }
@@ -387,7 +387,7 @@ pub(super) fn boxes(i: &Instance, kind: u32, p: [f32; 2]) -> [f32; 4] {
             };
             border_over(i.fill, i.border, d, inner_d, soft, bw, i.params[3], !sides && i.radii != [0.0; 4])
         }
-        1 => {
+        Kind::Shadow => {
             let sigma = i.params[2].max(0.01);
             let corner = i.radii[0].abs().min(half[0].min(half[1]));
             let mut cov = shadow(q, half, sigma, corner);
@@ -398,7 +398,7 @@ pub(super) fn boxes(i: &Instance, kind: u32, p: [f32; 2]) -> [f32; 4] {
             }
             scale4(i.fill, cov)
         }
-        3 => {
+        Kind::Inset => {
             let spread = i.params[0];
             let ih = half.map(|v| (v - spread).max(0.0));
             let qs = [q[0] - i.uv[0], q[1] - i.uv[1]];
@@ -409,7 +409,7 @@ pub(super) fn boxes(i: &Instance, kind: u32, p: [f32; 2]) -> [f32; 4] {
             };
             scale4(i.fill, box_cov(q, half, i.radii) * (1.0 - clamp01(lit)))
         }
-        4 => {
+        Kind::Gradient => {
             let d = sd_rounded(q, half, i.radii);
             let t = t_y();
             let bw = i.params[0];
@@ -419,17 +419,17 @@ pub(super) fn boxes(i: &Instance, kind: u32, p: [f32; 2]) -> [f32; 4] {
                 scale4(mix4(i.fill, i.uv, t), clamp01(0.5 - d / (soft * 2.0)))
             }
         }
-        5 => scale4(i.fill, segment(p, [i.radii[0], i.radii[1]], [i.radii[2], i.radii[3]], i.params[0], i.params[2] > 0.5)),
-        6 => scale4(i.fill, triangle(p, [i.radii[0], i.radii[1]], [i.radii[2], i.radii[3]], [i.uv[0], i.uv[1]], (i.params[0] + 0.5) as u32)),
-        10 => {
+        Kind::Segment => scale4(i.fill, segment(p, [i.radii[0], i.radii[1]], [i.radii[2], i.radii[3]], i.params[0], i.params[2] > 0.5)),
+        Kind::Triangle => scale4(i.fill, triangle(p, [i.radii[0], i.radii[1]], [i.radii[2], i.radii[3]], [i.uv[0], i.uv[1]], (i.params[0] + 0.5) as u32)),
+        Kind::Dashed => {
             let d = sd_rounded(q, half, i.radii);
             let bw = i.params[0];
             let ring = clamp01(0.5 - d / (soft * 2.0)) - clamp01(0.5 - (d + bw) / (soft * 2.0));
             let (s, total) = ring_arc([p[0] - i.rect[0], p[1] - i.rect[1]], [i.rect[2], i.rect[3]], i.radii, bw);
             scale4(mix4(i.fill, i.border, t_y()), ring * dash_cov(s, total, [i.uv[0], i.uv[1], i.uv[2]]))
         }
-        11 => radial(i, p, false),
-        _ => [0.0; 4],
+        Kind::Radial => radial(i, p, false),
+        Kind::Glyph | Kind::Image | Kind::Layer | Kind::LayerEnd | Kind::Effect | Kind::BackdropBlur => [0.0; 4],
     }
 }
 

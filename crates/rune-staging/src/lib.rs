@@ -12,8 +12,15 @@
 //! whose buffers the CPU can write in place registers a `Direct` writer, and buffer writes it
 //! takes skip the staging.
 
+mod buffer;
+
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
+
+pub use buffer::GrowBuffer;
+pub use buffer::Readback;
+pub use buffer::padded_row_bytes;
+pub use buffer::unpad_rows;
 
 /// Writes `data` to `buffer` at `offset` in place, for the commands recorded after it, or
 /// returns false to have it staged. Commands recorded before it keep reading what they would

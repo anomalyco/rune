@@ -67,6 +67,7 @@ pub(crate) trait AppDriver: ViewDriver {
     fn playground_mut(&mut self) -> Option<&mut dyn PlaygroundDriver>;
     fn playground_apply(&mut self, clock: f64) -> bool;
     fn playground_typing(&self) -> bool;
+    fn playground_played(&self) -> u64;
 }
 
 /// The non-public `S`-dependent hooks owned by [`super::Runtime<S>`] after the shared prefix.
@@ -106,15 +107,15 @@ pub(crate) struct AppRefMut<'a, S: 'static> {
     pub(crate) hooks: &'a mut RuntimeHooks<S>,
 }
 
-impl<S: 'static> ViewDriver for AppRef<'_, S> {
-    fn states_ref(&self) -> StatesRef<'_> {
+impl<'a, S: 'static> AppRef<'a, S> {
+    fn states_ref_inner(self) -> StatesRef<'a> {
         match self.hooks.playground.as_deref() {
             Some(playground) => playground.states_ref(self.state),
             None => StatesRef::one(handler_state_ref(self.state)),
         }
     }
 
-    fn view(&self, cx: cx::CxCore, viewport: (f32, f32)) -> (El, cx::CxCore) {
+    fn view_inner(self, cx: cx::CxCore, viewport: (f32, f32)) -> (El, cx::CxCore) {
         let mut cx = Cx { core: cx, _s: PhantomData };
         let root = match self.hooks.playground.as_deref() {
             Some(playground) => playground.view(self.state, self.hooks.view, &mut cx, viewport),
@@ -124,21 +125,23 @@ impl<S: 'static> ViewDriver for AppRef<'_, S> {
     }
 }
 
-impl<S: 'static> ViewDriver for AppRefMut<'_, S> {
+impl<S: 'static> ViewDriver for AppRef<'_, S> {
     fn states_ref(&self) -> StatesRef<'_> {
-        match self.hooks.playground.as_deref() {
-            Some(playground) => playground.states_ref(self.state),
-            None => StatesRef::one(handler_state_ref(self.state)),
-        }
+        AppRef { state: self.state, hooks: self.hooks }.states_ref_inner()
     }
 
     fn view(&self, cx: cx::CxCore, viewport: (f32, f32)) -> (El, cx::CxCore) {
-        let mut cx = Cx { core: cx, _s: PhantomData };
-        let root = match self.hooks.playground.as_deref() {
-            Some(playground) => playground.view(self.state, self.hooks.view, &mut cx, viewport),
-            None => crate::playground::call(self.hooks.view, self.state, &mut cx),
-        };
-        (root, cx.core)
+        AppRef { state: self.state, hooks: self.hooks }.view_inner(cx, viewport)
+    }
+}
+
+impl<S: 'static> ViewDriver for AppRefMut<'_, S> {
+    fn states_ref(&self) -> StatesRef<'_> {
+        AppRef { state: self.state, hooks: self.hooks }.states_ref_inner()
+    }
+
+    fn view(&self, cx: cx::CxCore, viewport: (f32, f32)) -> (El, cx::CxCore) {
+        AppRef { state: self.state, hooks: self.hooks }.view_inner(cx, viewport)
     }
 }
 
@@ -235,5 +238,12 @@ impl<S: 'static> AppDriver for AppRefMut<'_, S> {
 
     fn playground_typing(&self) -> bool {
         self.hooks.playground.as_deref().is_some_and(|p| p.typing(self.state))
+    }
+
+    fn playground_played(&self) -> u64 {
+        match self.hooks.playground.as_deref() {
+            Some(p) => p.played,
+            None => 0,
+        }
     }
 }

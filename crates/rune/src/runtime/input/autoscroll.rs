@@ -17,7 +17,7 @@ use super::*;
 
 /// The platforms whose browsers autoscroll on a middle click: Chromium on Windows and Linux.
 /// macOS has no such gesture.
-pub(super) const ENABLED: bool = cfg!(any(target_os = "windows", target_os = "linux"));
+pub(in crate::runtime) const ENABLED: bool = cfg!(any(target_os = "windows", target_os = "linux"));
 /// Points from where the press landed, per axis, that don't scroll (Blink's
 /// `kNoMiddleClickAutoscrollRadius`).
 const RADIUS: f32 = 15.0;
@@ -28,7 +28,7 @@ const EXPONENT: f32 = 2.2;
 const MAX_STEP: f64 = 0.05;
 
 #[derive(Debug, Default)]
-pub(super) struct Autoscroll {
+pub(in crate::runtime) struct Autoscroll {
     seq: Seq,
     state: State,
 }
@@ -135,7 +135,7 @@ fn step(seq: &mut Seq, state: &mut State, event: Event) -> (bool, Effects<Effect
 
 impl RuntimeCore {
     fn autoscroll_step(&mut self, event: Event) -> bool {
-        let a = &mut self.autoscroll;
+        let a = &mut self.pointer.autoscroll;
         let (took, effects) = step(&mut a.seq, &mut a.state, event);
         for effect in effects {
             match effect {
@@ -143,7 +143,7 @@ impl RuntimeCore {
                 // nothing and says nothing about the ends.
                 Effect::Scroll { views, by } => {
                     if by != (0.0, 0.0) && !self.autoscroll_by(views, by) {
-                        let a = &mut self.autoscroll;
+                        let a = &mut self.pointer.autoscroll;
                         let _ = step(&mut a.seq, &mut a.state, Event::Stuck);
                     }
                 }
@@ -155,9 +155,9 @@ impl RuntimeCore {
 
     /// A middle press at (x, y) that no element took: autoscroll the viewports there, if one can
     /// scroll. True when it started.
-    pub(super) fn autoscroll_down(&mut self, x: f32, y: f32) -> bool {
+    pub(in crate::runtime) fn autoscroll_down(&mut self, x: f32, y: f32) -> bool {
         if !ENABLED { return false; }
-        let views = (self.autoscroll_viewport(x, y, true), self.autoscroll_viewport(x, y, false));
+        let views = (self.scroll_at_axis(x, y, true), self.scroll_at_axis(x, y, false));
         if views == (None, None) { return false; }
         let now = self.now_clock();
         self.autoscroll_step(Event::Down { views, origin: (x, y), now })
@@ -165,37 +165,37 @@ impl RuntimeCore {
 
     /// A press of `button` while it runs: it ends, and the press goes nowhere. True when it took
     /// the press.
-    pub(super) fn autoscroll_press(&mut self, button: PointerButton) -> bool {
+    pub(in crate::runtime) fn autoscroll_press(&mut self, button: PointerButton) -> bool {
         self.autoscroll_step(Event::Press(button))
     }
 
     /// A release of `button`: the middle button that started it (which stops it once the pointer
     /// has left the radius), or the press that ended it. True when it took the release.
-    pub(super) fn autoscroll_release(&mut self, button: PointerButton) -> bool {
+    pub(in crate::runtime) fn autoscroll_release(&mut self, button: PointerButton) -> bool {
         self.autoscroll_step(Event::Release(button))
     }
 
     /// A key went down while it runs: it ends, and the key goes nowhere. True when it took it.
-    pub(super) fn autoscroll_key(&mut self) -> bool {
+    pub(in crate::runtime) fn autoscroll_key(&mut self) -> bool {
         self.autoscroll_step(Event::Key)
     }
 
-    pub(super) fn autoscroll_moved(&mut self, x: f32, y: f32) {
-        if !matches!(self.autoscroll.state, State::Active { .. }) { return; }
+    pub(in crate::runtime) fn autoscroll_moved(&mut self, x: f32, y: f32) {
+        if !matches!(self.pointer.autoscroll.state, State::Active { .. }) { return; }
         let now = self.now_clock();
         self.autoscroll_step(Event::Moved { at: (x, y), now });
     }
 
     /// The window lost its focus or the pointer's capture.
-    pub(super) fn autoscroll_cancel(&mut self) {
+    pub(in crate::runtime) fn autoscroll_cancel(&mut self) {
         self.autoscroll_step(Event::Cancel);
     }
 
     /// Takes the step due by this frame.
-    pub(super) fn fire_autoscroll(&mut self) {
-        let State::Active { views, attempt: Some(attempt), .. } = self.autoscroll.state else { return };
+    pub(in crate::runtime) fn fire_autoscroll(&mut self) {
+        let State::Active { views, attempt: Some(attempt), .. } = self.pointer.autoscroll.state else { return };
         // The viewports went: nothing to scroll.
-        if [views.0, views.1].into_iter().flatten().all(|id| !self.scrolls.contains_key(&id)) {
+        if [views.0, views.1].into_iter().flatten().all(|id| !self.scroll.scrolls.contains_key(&id)) {
             self.autoscroll_cancel();
             return;
         }
@@ -203,18 +203,10 @@ impl RuntimeCore {
     }
 
     /// The pan cursor while it runs: which way it scrolls, or the axes it can.
-    pub(super) fn autoscroll_cursor(&self) -> Option<crate::el::Cursor> {
-        let State::Active { views, origin, at, .. } = self.autoscroll.state else { return None };
-        let v = velocity(views, origin, self.pointer.unwrap_or(at));
+    pub(in crate::runtime) fn autoscroll_cursor(&self) -> Option<crate::el::Cursor> {
+        let State::Active { views, origin, at, .. } = self.pointer.autoscroll.state else { return None };
+        let v = velocity(views, origin, self.pointer.pos.unwrap_or(at));
         Some(crate::el::Cursor::Image(crate::cursor::pan((views.0.is_some(), views.1.is_some()), v)))
-    }
-
-    /// The innermost viewport at (x, y) that can scroll on the horizontal axis or the vertical.
-    fn autoscroll_viewport(&self, x: f32, y: f32, horizontal: bool) -> Option<NodeId> {
-        self.nodes.iter().enumerate().rev()
-            .filter(|(i, n)| n.scroll.is_some() && n.scroll_axes.has(horizontal) && !self.subtree_exiting(*i) && self.allowed(*i) && self.node_contains(*i, x, y))
-            .find(|(_, n)| self.scrolls.get(&n.id).is_some_and(|st| if horizontal { st.x.max > 0.0 } else { st.max > 0.0 }))
-            .map(|(_, n)| n.id)
     }
 
     /// Scrolls `views` by `by` (horizontal, vertical) points, as the wheel does. True when one
@@ -222,7 +214,7 @@ impl RuntimeCore {
     fn autoscroll_by(&mut self, views: Viewports, by: (f64, f64)) -> bool {
         let mut moved = false;
         if let Some(id) = views.0
-            && let Some(st) = self.scrolls.get_mut(&id)
+            && let Some(st) = self.scroll.scrolls.get_mut(&id)
         {
             let before = st.x.offset;
             st.x.offset = (st.x.offset + st.x.toward(by.0)).clamp(0.0, st.x.max);
@@ -234,8 +226,8 @@ impl RuntimeCore {
             }
         }
         if let Some(id) = views.1 {
-            let stick = self.node_index.get(&id).and_then(|&i| self.nodes[i].scroll).is_some_and(|s| s.stick_bottom);
-            if let Some(st) = self.scrolls.get_mut(&id) {
+            let stick = self.tree.node_index.get(&id).and_then(|&i| self.tree.nodes[i].scroll).is_some_and(|s| s.stick_bottom);
+            if let Some(st) = self.scroll.scrolls.get_mut(&id) {
                 let before = st.offset;
                 st.offset = (st.offset + by.1).clamp(0.0, st.max);
                 st.moved();

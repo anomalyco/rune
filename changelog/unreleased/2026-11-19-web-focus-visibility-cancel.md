@@ -1,0 +1,1 @@
+- On web, blurring the window, hiding the tab (`visibilitychange`), or losing a mouse/pen gesture (`pointercancel`, `lostpointercapture`, or leaving mirrored text) cancels active presses and drags, releases held keys and modifiers, finishes open IME composition, dismisses pop-up menus and resets the cursor without waiting for a paused animation frame.
