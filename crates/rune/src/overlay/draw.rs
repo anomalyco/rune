@@ -110,12 +110,19 @@ impl OverlayCore {
         // notification that should uncover it may never come.
         #[cfg(target_os = "macos")]
         if !prewarm { self.sync_occlusion(app); }
-        let gate = frame::Gate { prewarm, occluded: cfg!(target_os = "macos") && self.presence.occluded(), dirty: self.dirty, idle: self.idle, retry: self.backoff.deadline() };
+        let gate = frame::Gate {
+            prewarm,
+            occluded: cfg!(target_os = "macos") && self.presence.occluded(),
+            dirty: self.dirty,
+            idle: self.idle,
+            retry: self.backoff.deadline(),
+            missed_this_turn: self.turn_frame.missed(),
+        };
         match frame::turn(gate, Instant::now) {
             frame::Turn::Occluded { recheck } => {
                 if recheck {
                     self.meter.skipped();
-                    self.missed(app, crate::window::Missed::Occluded, false, false);
+                    self.missed(app, crate::window::Missed::Occluded, false, self.turn_frame.stepped());
                 }
                 return false;
             }
@@ -143,6 +150,16 @@ impl OverlayCore {
             && !app.rt().has_pending_input() && renderer.srgb_blend() == app.rt().srgb_blend());
         #[cfg(target_os = "macos")]
         let quiet = quiet.filter(|_| live.pacing.as_ref().is_none_or(|p| p.defers_start(Instant::now())));
+        // Claim display pacing before any step when not deferring a quiet timer frame, matching
+        // `window/host/draw.rs` so a Wait never discards a frame `quiet_step` already stepped.
+        #[cfg(target_os = "macos")]
+        let target = if quiet.is_some() {
+            None
+        } else {
+            let opportunity = if prewarm { None } else { live.pacing.as_mut().map(|p| p.next_frame()) };
+            let Some(target) = frame::claim(opportunity, || live.settle()) else { return false };
+            target
+        };
         let built = match quiet {
             Some(presented) => {
                 let now = Instant::now();
@@ -160,11 +177,10 @@ impl OverlayCore {
             None => None,
         };
         #[cfg(target_os = "macos")]
-        let target = {
-            let opportunity = if prewarm { None } else { live.pacing.as_mut().map(|p| p.next_frame()) };
-            let Some(target) = frame::claim(opportunity, || live.settle()) else { return false };
-            target
-        };
+        if built.is_some() {
+            if let Some(pacing) = live.pacing.as_mut() { let _ = pacing.next_frame(); }
+            live.settle();
+        }
         #[cfg(not(target_os = "macos"))]
         live.settle();
         #[cfg(target_os = "macos")]
@@ -181,12 +197,7 @@ impl OverlayCore {
         let frame = match crate::window::acquire_checked(&live.surface, gpu, &live.config, true, if prewarm { 2 } else { 1 }, &mut self.meter, !read_occlusion) {
             Ok(frame) => frame,
             Err(missed) => {
-                if missed == crate::window::Missed::Unconfigured { self.surface_refused(app, "its GPU surface refused a new configuration".into()); return false; }
-                if !prewarm {
-                    #[cfg(target_os = "macos")]
-                    if missed == crate::window::Missed::Occluded { self.set_occluded(app, true); }
-                    self.missed(app, missed, paced, false);
-                }
+                self.acquire_missed(app, missed, paced, prewarm, built.is_some());
                 return false;
             }
         };
@@ -321,6 +332,23 @@ impl OverlayCore {
         {
             if !prewarm { self.meter.set_pacing(if self.idle { crate::Pacing::Idle } else { crate::Pacing::Vsync }); }
             !self.idle
+        }
+    }
+
+    /// Handles a failed drawable acquisition during `draw_frame`.
+    pub(super) fn acquire_missed(&mut self, app: &mut dyn OverlayApp, missed: crate::window::Missed, paced: bool, prewarm: bool, built: bool) {
+        if missed == crate::window::Missed::Unconfigured {
+            if built {
+                super::input::drop_window_requests(app.rt_mut());
+                self.clipboard.flush_core(app.rt_mut());
+            }
+            self.surface_refused(app, "its GPU surface refused a new configuration".into());
+            return;
+        }
+        if !prewarm {
+            #[cfg(target_os = "macos")]
+            if missed == crate::window::Missed::Occluded { self.set_occluded(app, true); }
+            self.missed(app, missed, paced, built);
         }
     }
 

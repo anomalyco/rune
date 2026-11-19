@@ -375,6 +375,9 @@ impl<T: 'static> Overlay<T> {
     pub(super) fn left_button(&mut self, pressed: bool, point: Option<(f32, f32)>) { with_app!(self, |core, app| core.left_button(&mut app, pressed, point)) }
     pub(super) fn drag_ends_due(&mut self) { with_app!(self, |core, app| core.drag_ends_due(&mut app)) }
     pub(super) fn missed(&mut self, missed: crate::window::Missed, paced: bool, stepped: bool) { with_app!(self, |core, app| core.missed(&mut app, missed, paced, stepped)) }
+    pub(super) fn acquire_missed(&mut self, missed: crate::window::Missed, paced: bool, prewarm: bool, built: bool) {
+        with_app!(self, |core, app| core.acquire_missed(&mut app, missed, paced, prewarm, built))
+    }
     pub(super) fn apply_wake(&mut self, woken: bool, updates: Vec<Update<T>>) {
         let queued = !updates.is_empty();
         let mut updated = false;

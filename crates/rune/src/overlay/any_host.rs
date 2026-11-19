@@ -82,6 +82,7 @@ impl OverlayCore {
 impl AnyHost for OverlayHost {
     fn new_events(&mut self, _event_loop: &ActiveEventLoop, cause: StartCause) {
         self.core.meter.turn(matches!(cause, StartCause::ResumeTimeReached { .. } | StartCause::Poll), crate::frame::surface_stats::slept(cause));
+        self.core.turn_frame.step(frame::TurnEvent::NewEvents);
         #[cfg(target_os = "macos")]
         { self.core.occlusion_read = false; }
         if matches!(cause, StartCause::ResumeTimeReached { .. } | StartCause::Poll) {

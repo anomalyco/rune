@@ -417,6 +417,8 @@ pub(in crate::overlay) struct OverlayCore {
     /// After the last frame the runtime asked for no other; only the compositor animates.
     runtime_idle: bool,
     quiet: frame::Quiet,
+    /// Whether this event-loop turn already stepped or missed a frame (`frame::TurnFrame`).
+    turn_frame: frame::TurnFrame,
     clock: FrameClock,
     /// This loop turn already read the panel's occlusion (`sync_occlusion`).
     #[cfg(target_os = "macos")]
@@ -493,6 +495,7 @@ impl OverlayCore {
             idle: true,
             runtime_idle: false,
             quiet: Default::default(),
+            turn_frame: Default::default(),
             clock: FrameClock::new(Instant::now()),
             #[cfg(target_os = "macos")]
             occlusion_read: false,
