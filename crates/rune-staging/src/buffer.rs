@@ -192,19 +192,25 @@ impl Readback {
     /// Blocks until `copy_from` finishes, maps the buffer, unpads rows, and unmaps.
     /// Returns `None` if polling or mapping fails.
     pub fn try_read(&self, device: &wgpu::Device) -> Option<Vec<u8>> {
+        // A callback never panics: one that did while a failed wait unwinds (wgpu aborts the map
+        // then) would abort the process. A failed map shows as `try_take_mapped`'s `None`.
         self.buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
-        device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
+        wait(device).then_some(())?;
         self.try_take_mapped()
     }
 
     /// Blocks until `copy_from` finishes, maps the buffer, unpads rows, and unmaps.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn read(&self, device: &wgpu::Device) -> Vec<u8> {
-        let slice = self.buffer.slice(..);
-        slice.map_async(wgpu::MapMode::Read, |r| r.expect("map readback"));
-        device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
+        self.buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+        assert!(wait(device), "poll: the GPU device is lost");
         self.take_mapped()
     }
+}
+
+/// Waits for the device's work; false on a lost or removed device (`crate::health::poll`).
+fn wait(device: &wgpu::Device) -> bool {
+    crate::health::poll(device, wgpu::PollType::wait_indefinitely()).is_ok()
 }
 
 #[cfg(test)]

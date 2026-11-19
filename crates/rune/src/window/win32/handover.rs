@@ -298,7 +298,7 @@ impl Host {
         // A thread waits for the GPU and wakes the loop, which commits (`hand_over_if_done`).
         let (waiting, handle) = (gpu.clone(), self.native_handle.clone());
         let spawned = std::thread::Builder::new().name("rune-gpu-wait".into()).spawn(move || {
-            let _ = waiting.device.poll(wgpu::PollType::wait_indefinitely());
+            let _ = rune_gpu::health::poll(&waiting.device, wgpu::PollType::wait_indefinitely());
             handle.send(WakeEvent::GpuReady);
         });
         if let Err(error) = spawned { eprintln!("rune: could not wait for the GPU's frame: {error}"); }
@@ -315,7 +315,7 @@ impl Host {
         match &mut w.native.mode {
             SurfaceMode::HandingOver { done: Some((done, _)), tries, .. } => {
                 let tries = *tries;
-                let _ = gpu.device.poll(wgpu::PollType::Poll);
+                let _ = rune_gpu::health::poll(&gpu.device, wgpu::PollType::Poll);
                 let lost = gpu.is_lost();
                 if !lost && !done.load(Ordering::Acquire) { return; }
                 let committed = if lost { Err("its device was lost".to_owned()) } else if let SurfaceMode::HandingOver { handover, .. } = &w.native.mode { handover.commit() } else { unreachable!() };
@@ -481,9 +481,9 @@ fn warm_frame(gpu: &Gpu, renderer: &mut Renderer, format: wgpu::TextureFormat, s
     renderer.prepare_ui(&gpu.device, &gpu.queue, &mut atlas, instances, size);
     renderer.draw(&mut enc, &view, [0.0; 4]);
     renderer.submit(&gpu.queue, enc);
-    let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+    let _ = rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely());
     target.destroy();
-    let _ = gpu.device.poll(wgpu::PollType::Poll);
+    let _ = rune_gpu::health::poll(&gpu.device, wgpu::PollType::Poll);
 }
 
 /// A CPU frame's instances as the warm frame draws them: what reads the app's own state (an
@@ -511,7 +511,7 @@ fn count_drift(gpu: Arc<Gpu>, readback: Readback, mut dib: Dib) {
     let spawned = std::thread::Builder::new().name("rune-drift".into()).spawn(move || {
         let slice = readback.buffer.slice(..);
         slice.map_async(wgpu::MapMode::Read, |_| {});
-        if gpu.device.poll(wgpu::PollType::wait_indefinitely()).is_err() { return; }
+        if rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely()).is_err() { return; }
         let (width, height) = readback.size;
         let stride = dib.stride();
         let Ok(gpu_px) = slice.get_mapped_range() else { return };

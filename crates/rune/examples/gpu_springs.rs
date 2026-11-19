@@ -13,7 +13,7 @@ fn buffer(device: &wgpu::Device, size: u64, usage: wgpu::BufferUsages) -> wgpu::
     device.create_buffer(&wgpu::BufferDescriptor { label: None, size, usage, mapped_at_creation: false })
 }
 fn read(device: &wgpu::Device, b: &wgpu::Buffer) -> Vec<u8> {
-    b.slice(..).map_async(wgpu::MapMode::Read, |r| r.unwrap());
+    b.slice(..).map_async(wgpu::MapMode::Read, |_| {});
     device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
     let bytes = b.slice(..).get_mapped_range().unwrap().to_vec();
     b.unmap();
