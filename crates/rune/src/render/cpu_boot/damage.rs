@@ -35,6 +35,8 @@ pub(super) fn instance(scene: &Scene<'_>, bins: &Bins, n: usize) -> u64 {
     let words: &[u32; 32] = bytemuck::cast_ref(i);
     let mut h = 0;
     for w in words.chunks_exact(2) { h = mix(h, u64::from(w[0]) | u64::from(w[1]) << 32); }
+    let b = bins.bounds[n];
+    h = mix(mix(h, (b[0] as u32 as u64) | (b[1] as u32 as u64) << 32), (b[2] as u32 as u64) | (b[3] as u32 as u64) << 32);
     let kind = i.params[1];
     if kind == KIND_LAYER || kind == KIND_LAYER_END {
         if let Some(&p) = bins.scope.get(&(n as u32)) {
@@ -89,12 +91,16 @@ fn tile<'f>(scene: &Scene<'_>, bins: &Bins, each: &[u64], t: usize, flat_of: imp
     let r = [(tx * TILE_W) as f32, (ty * TILE_H) as f32, ((tx + 1) * TILE_W).min(w) as f32, ((ty + 1) * TILE_H).min(h) as f32];
     for &n in bins.tile(t) {
         let token = match flat_of(n) {
-            Some(f) if inside(r, f.sure) || covers(Some(&f.solid), &f.clip, r) => f.token,
+            Some(f) if bounds_cover(bins.bounds[n as usize], r) && (inside(r, f.sure) || covers(Some(&f.solid), &f.clip, r)) => f.token,
             _ => each[n as usize],
         };
         hash = mix(hash, token);
     }
     hash
+}
+
+fn bounds_cover(b: [i32; 4], r: [f32; 4]) -> bool {
+    (b[0] as f32) <= r[0] && (b[1] as f32) <= r[1] && (b[2] as f32) >= r[2] && (b[3] as f32) >= r[3]
 }
 
 fn inside(r: [f32; 4], o: [f32; 4]) -> bool { r[0] >= o[0] && r[1] >= o[1] && r[2] <= o[2] && r[3] <= o[3] }

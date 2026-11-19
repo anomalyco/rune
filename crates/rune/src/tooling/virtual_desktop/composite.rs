@@ -335,8 +335,15 @@ pub(super) fn fit_backdrop(path: &Path, (w, h): (u32, u32)) -> Result<Vec<u8>, S
     let mut out = Vec::with_capacity(len);
     for p in image.pixels() {
         let [r, g, b, a] = p.0;
-        let over = |c: u8| (u32::from(c) * u32::from(a) / 255) as u8;
-        out.extend([over(r), over(g), over(b), 255]);
+        if a == 255 {
+            out.extend([r, g, b, 255]);
+        } else if a == 0 {
+            out.extend([0, 0, 0, 255]);
+        } else {
+            let alpha = f32::from(a) / 255.0;
+            let over = |c: u8| (crate::color::srgb_encode(crate::color::srgb_decode(f32::from(c) / 255.0) * alpha) * 255.0).round() as u8;
+            out.extend([over(r), over(g), over(b), 255]);
+        }
     }
     Ok(out)
 }

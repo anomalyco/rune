@@ -21,6 +21,27 @@ fn backdrop_is_cropped_to_the_output_aspect_then_scaled() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+#[test]
+fn translucent_backdrop_premultiplies_in_linear_light() {
+    let dir = std::env::temp_dir().join(format!("rune-backdrop-alpha-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("alpha.png");
+    let pixels_in = [
+        [255u8, 255, 255, 128], // 50% white -> srgb_encode(1.0 * 128/255) = 188
+        [188, 188, 188, 128],   // 50% of ~0.5 linear -> srgb_encode(0.5 * 0.5) = 137
+        [12, 34, 56, 255],      // opaque: unchanged
+        [255, 0, 0, 0],         // transparent: black
+    ];
+    ::image::RgbaImage::from_fn(4, 1, |x, _| ::image::Rgba(pixels_in[x as usize]))
+        .save(&path).unwrap();
+    let px = fit_backdrop(&path, (4, 1)).unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(&px[0..4], &[188, 188, 188, 255], "half white over black in linear light");
+    assert!((px[4] as i32 - 137).abs() <= 1 && px[4] == px[5] && px[5] == px[6] && px[7] == 255, "half mid-grey: {:?}", &px[4..8]);
+    assert_eq!(&px[8..12], &[12, 34, 56, 255], "opaque pixel stays exact");
+    assert_eq!(&px[12..16], &[0, 0, 0, 255], "transparent pixel becomes black");
+}
+
 /// Each window of a headless multi-window run takes its own Tab opt-in and titlebar inset,
 /// and a borderless window has no traffic lights to inset for.
 #[test]

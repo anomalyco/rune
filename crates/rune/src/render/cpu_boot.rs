@@ -43,6 +43,9 @@ pub mod record;
 mod shade;
 pub(crate) mod tool;
 
+#[cfg(test)]
+mod tests;
+
 pub use drift::{Drift, Pixels, drift, drift_wanted, last_drift};
 pub use fill::{FillReport, attach_text, fill_masks};
 pub use painter::{CpuPainter, Painted};

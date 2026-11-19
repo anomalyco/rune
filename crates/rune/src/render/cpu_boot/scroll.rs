@@ -12,7 +12,7 @@
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use super::Scene;
-use super::bin::{Bins, Show, Solid, TILE_H, TILE_W, covers, interior};
+use super::bin::{Bins, Show, Solid, TILE_H, TILE_W, covers, cut, interior};
 use super::shade::{Clip, has_sides};
 use crate::render::{Instance, KIND_LAYER, KIND_LAYER_END};
 
@@ -135,7 +135,14 @@ fn tile_moved(prev: &Prev, scene: &Scene<'_>, bins: &Bins, t: usize, r: [u32; 4]
         if reaches(m) { return Some(m); }
     });
     let both = [r[0] as f32, r[1].min(back[1] as u32) as f32, r[2] as f32, r[3].max(back[3] as u32) as f32];
-    bins.tile(t).iter().all(|&n| olds.next().is_some_and(|m| same(scene, bins, prev, n, m, dy, both))) && olds.next().is_none()
+    let tile = [r[0] as i32, r[1] as i32, r[2] as i32, r[3] as i32];
+    bins.tile(t).iter().all(|&n| {
+        olds.next().is_some_and(|m| {
+            let new_r = cut(bins.bounds[n as usize], tile);
+            let old_r = cut(prev.bins.bounds[m as usize], back);
+            new_r == [old_r[0], old_r[1] + dy, old_r[2], old_r[3] + dy] && same(scene, bins, prev, n, m, dy, both)
+        })
+    }) && olds.next().is_none()
 }
 
 /// Whether new instance `n` draws over the tile what old instance `m` drew `dy` rows back:

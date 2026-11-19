@@ -119,6 +119,12 @@ pub(super) enum Move {
     Drop(Kept),
 }
 
+/// Whether a layer's clip can be applied as a hardware scissor without isolating into an
+/// offscreen target: unclipped, or an integer-aligned square rectangle with no fade.
+pub(in crate::render) fn is_scissor_clip(clip: [f32; 4], fade: [u32; 4]) -> bool {
+    clip == NO_CLIP || (fade == [0; 4] && clip.iter().all(|v| (v - v.round()).abs() < 1e-3))
+}
+
 /// A layer's bounds, from the edges of what it draws.
 pub(super) fn rect_of(edges: [f32; 4]) -> [f32; 4] {
     [edges[0], edges[1], (edges[2] - edges[0]).max(0.0), (edges[3] - edges[1]).max(0.0)]
@@ -365,7 +371,7 @@ impl Planner {
             // A clip of whole pixels with square corners and no fade is a scissor, exactly: such a
             // group draws straight into its parent too (`Renderer::draw_layer_range`). That keeps a
             // clipped pane's video in the window's own pass, where its own layer can show it.
-            let scissor_clip = layer.clip == NO_CLIP || (layer.fade == [0; 4] && layer.clip.iter().all(|v| (v - v.round()).abs() < 1e-3));
+            let scissor_clip = is_scissor_clip(layer.clip, layer.fade);
             if cache.is_none() && layer.opacity == 1.0 && layer.blend == Blend::SourceOver && !additive_parent
                 && layer.blur == 0.0 && layer.fade[3] == 0 && scissor_clip
                 && layer.turn.is_none() && layer.hole[3] == 0.0 {

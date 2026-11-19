@@ -22,8 +22,9 @@ impl Primitive {
             uv: p.uv,
             clip: p.clip,
             fade,
-            fade_origin: Some(std::array::from_fn(|e| p.clip[e] + offset[e] * fade[e] * if e < 2 { -1.0 } else { 1.0 })),
+            fade_origin: Some(std::array::from_fn(|e| p.clip[e] + offset[e] * fade[e].abs() * if e < 2 { -1.0 } else { 1.0 })),
             turn: (p.params[1] == 8.0 && p.border[1] != 0.0).then_some([p.border[1], p.border[2], p.border[3]]),
+            clip_radii: (p.params[1] != 8.0 && p.fade[3] != 0).then(|| rune::render::unpack_clip_radii(p.fade[3])),
         }
     }
 }
@@ -46,7 +47,9 @@ impl From<&Primitive> for Instance {
             fade: rune::render::pack_fade(p.fade, p.fade_origin.unwrap_or(p.clip), p.clip),
         };
         if p.params[1] == 8.0 {
-            instance.fade[3] = rune::render::pack_clip_radii(p.clip, p.border);
+            instance.fade[3] = rune::render::pack_clip_radii(p.clip, p.clip_radii.unwrap_or(p.border));
+        } else if let Some(radii) = p.clip_radii {
+            instance.fade[3] = rune::render::pack_clip_radii(p.clip, radii);
         }
         instance
     }
@@ -142,6 +145,7 @@ pub fn text_run(scene: &mut Scene, seed: u64) {
             fade: [0.0; 4],
             fade_origin: None,
             turn: None,
+            clip_radii: None,
         });
     }
     scene.atlas = crate::Atlas {

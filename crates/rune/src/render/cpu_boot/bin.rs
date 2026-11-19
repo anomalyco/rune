@@ -6,7 +6,8 @@ use std::collections::HashMap;
 
 use super::Scene;
 use super::shade::{Clip, has_sides, sides_inner};
-use crate::render::{Instance, KIND_BACKDROP_BLUR, KIND_DASHED, KIND_EFFECT, KIND_GLYPH, KIND_GRADIENT, KIND_LAYER, KIND_LAYER_END, KIND_RADIAL, KIND_RECT, KIND_SHADOW, NO_CLIP, corner_extent};
+use crate::render::layers::is_scissor_clip;
+use crate::render::{Instance, KIND_BACKDROP_BLUR, KIND_DASHED, KIND_EFFECT, KIND_GLYPH, KIND_GRADIENT, KIND_LAYER, KIND_LAYER_END, KIND_RADIAL, KIND_RECT, KIND_SHADOW, MAX_BACKDROP_BLURS, NO_CLIP, corner_extent};
 
 pub(super) const TILE_W: u32 = 64;
 /// `Bins::within` for an instance that draws straight into the window.
@@ -80,7 +81,8 @@ fn plan_layers(instances: &[Instance], viewport: (u32, u32)) -> (Vec<Layer>, Has
             let additive = i.params[0] == 1.0;
             let additive_parent = parent.is_some_and(|p| plans[p].additive);
             let hole = if cache { [0.0; 4] } else { i.radii };
-            let flat = !cache && opacity == 1.0 && !additive && !additive_parent && i.fade[3] == 0 && i.clip == NO_CLIP && hole[3] == 0.0;
+            let flat = !cache && opacity == 1.0 && !additive && !additive_parent && i.fade[3] == 0
+                && is_scissor_clip(i.clip, i.fade) && hole[3] == 0.0;
             let show = if hidden { Show::Hidden } else if flat { Show::Flat } else { Show::Render };
             scope.insert(index as u32, plans.len() as u32);
             open.push(Open { at: plans.len(), edges: [i.rect[0], i.rect[1], i.rect[0] + i.rect[2], i.rect[1] + i.rect[3]], clip: i.clip, limit, cache });
@@ -124,7 +126,7 @@ pub(super) fn region_tiles(reg: [f32; 4], cols: u32, rows: u32) -> impl Iterator
     ((reg[1] as u32 / TILE_H)..(reg[3].ceil() as u32).div_ceil(TILE_H).min(rows)).flat_map(move |ty| (tx0..tx1).map(move |tx| (ty * cols + tx) as usize))
 }
 
-fn cut(a: [i32; 4], b: [i32; 4]) -> [i32; 4] {
+pub(super) fn cut(a: [i32; 4], b: [i32; 4]) -> [i32; 4] {
     let r = [a[0].max(b[0]), a[1].max(b[1]), a[2].min(b[2]), a[3].min(b[3])];
     if r[2] > r[0] && r[3] > r[1] { r } else { [0; 4] }
 }
@@ -136,8 +138,8 @@ impl Bins {
         let tiles = (cols * rows) as usize;
         let mut bounds: Vec<[i32; 4]> = scene.instances.iter().map(|i| pixel_bounds(i, w as i32, h as i32)).collect();
         let (layers, scope) = plan_layers(scene.instances, (w, h));
-        // Within a layer drawn to its own target, nothing reaches past the layer's bounds, and
-        // nothing there can stand in for what's under the layer.
+        // Within a layer drawn to its own target or scissored flat, nothing reaches past its
+        // bounds; inside a target of its own, nothing stands in for what's under the layer.
         let mut within = vec![TOP; scene.instances.len()];
         let mut stack: Vec<([i32; 4], u32)> = Vec::new();
         let mut n = 0;
@@ -153,17 +155,32 @@ impl Bins {
                             n = l.end as usize + 1;
                             continue;
                         }
-                        Show::Flat => bounds[n] = [0; 4],
+                        Show::Flat => {
+                            bounds[n] = [0; 4];
+                            let i = &scene.instances[n];
+                            let scissor = if i.clip == NO_CLIP {
+                                inside.unwrap_or([0, 0, w as i32, h as i32])
+                            } else {
+                                let s = [
+                                    i.clip[0].floor().clamp(0.0, w as f32) as i32,
+                                    i.clip[1].floor().clamp(0.0, h as f32) as i32,
+                                    i.clip[2].ceil().clamp(0.0, w as f32) as i32,
+                                    i.clip[3].ceil().clamp(0.0, h as f32) as i32,
+                                ];
+                                let s = if s[2] > s[0] && s[3] > s[1] { s } else { [0; 4] };
+                                inside.map_or(s, |o| cut(s, o))
+                            };
+                            stack.push((scissor, within[n]));
+                        }
                         Show::Render => {
                             bounds[n] = inside.map_or(l.bounds, |o| cut(l.bounds, o));
                             stack.push((bounds[n], p));
                         }
                     }
-                } else if l.show == Show::Render {
-                    bounds[n] = stack.pop().map_or([0; 4], |s| s.0);
-                    within[n] = stack.last().map_or(TOP, |s| s.1);
                 } else {
-                    bounds[n] = [0; 4];
+                    let popped = stack.pop();
+                    bounds[n] = if l.show == Show::Render { popped.map_or([0; 4], |s| s.0) } else { [0; 4] };
+                    within[n] = stack.last().map_or(TOP, |s| s.1);
                 }
             } else if let Some(o) = inside {
                 bounds[n] = cut(bounds[n], o);
@@ -172,7 +189,7 @@ impl Bins {
         }
         let mut blurs = Vec::new();
         let mut quiet = vec![false; tiles];
-        for (n, i) in scene.instances.iter().enumerate().filter(|(_, i)| i.params[1] == KIND_BACKDROP_BLUR) {
+        for (n, i) in scene.instances.iter().enumerate().filter(|(_, i)| i.params[1] == KIND_BACKDROP_BLUR).take(MAX_BACKDROP_BLURS) {
             bounds[n] = super::backdrop::bounds(i, (w, h));
             let Some(rec) = super::backdrop::plan(i, (w, h)) else { continue };
             for t in region_tiles(rec.region, cols, rows) { quiet[t] = true; }
