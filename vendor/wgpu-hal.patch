@@ -424,24 +424,27 @@ index 63fb313..97b5f38 100644
  
              if fence_value >= value {
 diff --git a/src/dx12/adapter.rs b/src/dx12/adapter.rs
-index 621eea4..cb560ca 100644
+index 621eea4..2f14e6c 100644
 --- a/src/dx12/adapter.rs
 +++ b/src/dx12/adapter.rs
-@@ -1106,6 +1106,8 @@ impl crate::Adapter for super::Adapter {
+@@ -1106,6 +1106,11 @@ impl crate::Adapter for super::Adapter {
                  idle_fence_value: AtomicU64::new(0),
                  pending_waits: Mutex::new(Vec::new()),
                  pending_signals: Mutex::new(Vec::new()),
 +                #[cfg(debug_assertions)]
-+                watch: Default::default(),
++                watch: super::submission_watch::Watch::new(
++                    unsafe { self.raw.GetDesc2() }
++                        .is_ok_and(|d| Dxgi::DXGI_ADAPTER_FLAG(d.Flags as i32).contains(Dxgi::DXGI_ADAPTER_FLAG_SOFTWARE)),
++                ),
              },
          })
      }
 diff --git a/src/dx12/submission_watch.rs b/src/dx12/submission_watch.rs
 new file mode 100644
-index 0000000..3208071
+index 0000000..adc93a7
 --- /dev/null
 +++ b/src/dx12/submission_watch.rs
-@@ -0,0 +1,245 @@
+@@ -0,0 +1,251 @@
 +//! Rune: how long each submission holds the GPU, in debug builds, reported to a hook when one
 +//! passes a budget. Windows resets a GPU whose one submission runs 2 s (TDR), and some GPUs
 +//! (AMD's) preempt nothing smaller than a submission, so a test or a frame that asks for too
@@ -492,13 +495,18 @@ index 0000000..3208071
 +
 +pub(super) struct Watch {
 +    pub(super) serial: u64,
++    /// WARP and other software adapters: not timed (see `Watch::new`).
++    software: bool,
 +    /// `None` until the first timed submission; then the timer, or `None` if timestamps can't be had.
 +    timer: Mutex<Option<Option<Timer>>>,
 +}
 +
-+impl Default for Watch {
-+    fn default() -> Self {
-+        Watch { serial: SERIAL.fetch_add(1, Ordering::Relaxed), timer: Mutex::new(None) }
++impl Watch {
++    /// A queue on a software adapter isn't timed: on WARP, a compute submission run between the
++    /// watch's timestamp lists removed the device (`DXGI_ERROR_DRIVER_INTERNAL_ERROR`, 19 Nov,
++    /// adais), while an empty one ran. A software adapter has no GPU for Windows to reset.
++    pub(super) fn new(software: bool) -> Self {
++        Watch { serial: SERIAL.fetch_add(1, Ordering::Relaxed), software, timer: Mutex::new(None) }
 +    }
 +}
 +
@@ -527,8 +535,9 @@ index 0000000..3208071
 +    pub(super) fn before(&self, queue: &Direct3D12::ID3D12CommandQueue, fence: &Direct3D12::ID3D12Fence) -> Option<Timed> {
 +        let &(budget, report) = HOOK.get()?;
 +        let mut timer = self.timer.lock();
++        let software = self.software;
 +        let timer = timer
-+            .get_or_insert_with(|| match Timer::new(queue, fence, budget, report, self.serial) {
++            .get_or_insert_with(|| match if software { Err("a software adapter (WARP) has no GPU to reset, and timing a submission there removed the device".into()) } else { Timer::new(queue, fence, budget, report, self.serial) } {
 +                Ok(timer) => Some(timer),
 +                Err(why) => {
 +                    eprintln!("wgpu-hal (Rune): GPU submission timing is off on this D3D12 queue: {why}");
