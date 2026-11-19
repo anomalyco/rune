@@ -490,15 +490,15 @@ fn warm_frame(gpu: &Gpu, renderer: &mut Renderer, format: wgpu::TextureFormat, s
 /// image's slot, a glyph's atlas page, a compositor's effect) draws as a plain box, so the frame
 /// needs nothing but the renderer.
 pub(super) fn warm_instances(instances: &[crate::render::Instance]) -> Vec<crate::render::Instance> {
-    use crate::render::{KIND_EFFECT, KIND_GLYPH, KIND_IMAGE, KIND_RECT};
+    use crate::render::{KIND_RECT, Kind};
     instances
         .iter()
         .map(|i| {
             let mut i = *i;
-            if i.params[1] == KIND_IMAGE || i.params[1] == KIND_EFFECT {
-                i.params[1] = KIND_RECT;
-            } else if i.params[1] == KIND_GLYPH {
-                i.params[2] = 0.0;
+            match i.kind() {
+                Some(Kind::Image | Kind::Effect) => i.params[1] = KIND_RECT,
+                Some(Kind::Glyph) => i.params[2] = 0.0,
+                _ => {}
             }
             i
         })

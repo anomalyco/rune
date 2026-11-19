@@ -388,6 +388,20 @@ fn instance_bounds_contain_exact_drawn_pixels_across_all_kinds() {
             assert!(contains(lb_px, target_exact), "{name}: layer_bounds {lb_px:?} missed exact {target_exact:?}");
             assert!(contains(lb_px, painted_box), "{name}: layer_bounds {lb_px:?} missed CPU-painted {painted_box:?}");
 
+            // CPU boot's layer planner (`cpu_boot::bin::plan_layers`) must agree with
+            // `Instance::layer_bounds` and contain every exact and painted pixel.
+            let seed = [lb[0], lb[1], 0.0, 0.0];
+            let stream = [
+                Instance::begin_layer(seed, NO_CLIP, LayerSpec { opacity: 0.5, ..Default::default() }),
+                *inst,
+                Instance::end_layer(),
+            ];
+            let (plans, _) = cpu_boot::bin::plan_layers(&stream, (w as u32, h as u32));
+            assert_eq!(plans.len(), 1, "{name}: one planned layer");
+            assert_eq!(plans[0].bounds, lb_px, "{name}: cpu_boot plan_layers bounds match Instance::layer_bounds");
+            assert!(contains(plans[0].bounds, target_exact), "{name}: cpu_boot plan_layers {:?} missed exact {target_exact:?}", plans[0].bounds);
+            assert!(contains(plans[0].bounds, painted_box), "{name}: cpu_boot plan_layers {:?} missed CPU-painted {painted_box:?}", plans[0].bounds);
+
             let old_lb = old_layer_bounds(inst);
             let old_px = [
                 old_lb[0].max(0.0).floor() as i32,
@@ -404,6 +418,16 @@ fn instance_bounds_contain_exact_drawn_pixels_across_all_kinds() {
 
     assert!(tighter_layer_sites.contains(&"rect_banded"), "expected tighter layer bounds on banded rect: {tighter_layer_sites:?}");
     assert!(tighter_layer_sites.contains(&"shadow_banded"), "expected tighter layer bounds on banded shadow: {tighter_layer_sites:?}");
+
+    // A clipped-away child inside an isolated layer must not pull `plan_layers` bounds outward.
+    let clipped_away = Instance { clip: [200.0, 200.0, 220.0, 220.0], ..base(Kind::Rect, [10.0, 10.0, 20.0, 20.0]) };
+    let stream = [
+        Instance::begin_layer([100.0, 100.0, 20.0, 20.0], NO_CLIP, LayerSpec { opacity: 0.5, ..Default::default() }),
+        clipped_away,
+        Instance::end_layer(),
+    ];
+    let (plans, _) = cpu_boot::bin::plan_layers(&stream, (w as u32, h as u32));
+    assert_eq!(plans[0].bounds, [100, 100, 120, 120], "clipped-away child must not bloat layer bounds");
 }
 
 #[test]

@@ -357,16 +357,11 @@ const KIND_SLOT_LUT: [u8; 30] = {
     table
 };
 
-/// Decodes `Instance::params[1]` to a dense index `0..=Kind::COUNT` (`Kind::COUNT` = `None`)
-/// without branching on individual kinds, so `layer_bounds` stays a single compact block when
-/// inlined into `render/layers.rs::prepare_layers`.
+/// Decodes non-zero `Instance::params[1]` bits to a dense index `0..=Kind::COUNT`
+/// (`Kind::COUNT` = `None`). Caller has already handled `±0.0` (`Kind::Rect`).
 #[inline(always)]
-const fn kind_index(v: f32) -> usize {
+const fn kind_index_nonzero(bits: u32) -> usize {
     const ONE: u32 = KIND_SHADOW.to_bits();
-    let bits = v.to_bits();
-    if (bits & 0x7FFF_FFFF) == 0 {
-        return Kind::Rect.as_u8() as usize;
-    }
     let slot = bits.wrapping_sub(ONE).rotate_left(12);
     if slot < 30 {
         KIND_SLOT_LUT[slot as usize] as usize
@@ -579,25 +574,43 @@ impl Instance {
     }
 
     /// [`Self::layer_bounds`] when the caller has already ruled out `Kind::Layer` and
-    /// `Kind::LayerEnd` (`render/layers.rs`), kept as one compact branchless block so inlining
-    /// into `prepare_layers` stays in the uOP cache.
+    /// `Kind::LayerEnd` (`render/layers.rs`, `render/cpu_boot/bin.rs`). Fast-paths the two
+    /// dominant kinds (`Glyph` and `Rect`) without LUT loads or `uv` reads on glyphs.
     #[inline(always)]
     pub(crate) fn layer_bounds_non_scope(&self) -> (f32, f32, f32, f32) {
-        let k = kind_index(self.params[1]);
-        let (x0, y0, x1, y1) = if k == Kind::Glyph.as_u8() as usize && self.params[0] != 0.0 {
-            let [a, b, c, d] = turned_glyph_bounds(self.rect, self.params[0]);
-            (a, b, c, d)
-        } else {
-            let grow = Self::grow_from(&LAYER_GROW, k, self.params[2]);
+        let bits = self.params[1].to_bits();
+        if bits == KIND_GLYPH.to_bits() {
+            let (x0, y0, x1, y1) = if self.params[0] != 0.0 {
+                let [a, b, c, d] = turned_glyph_bounds(self.rect, self.params[0]);
+                (a, b, c, d)
+            } else {
+                (self.rect[0], self.rect[1], self.rect[0] + self.rect[2], self.rect[1] + self.rect[3])
+            };
+            return (x0.max(self.clip[0]), y0.max(self.clip[1]), x1.min(self.clip[2]), y1.min(self.clip[3]));
+        }
+        if (bits & 0x7FFF_FFFF) == 0 {
+            let grow = 1.0 + self.params[2] * 2.0;
             let lo0 = self.rect[0] - grow;
             let lo1 = self.rect[1] - grow;
             let hi0 = self.rect[0] + self.rect[2] + grow;
             let hi1 = self.rect[1] + self.rect[3] + grow;
-            if k <= Kind::Shadow.as_u8() as usize && self.uv[2] < 0.0 {
+            let (x0, y0, x1, y1) = if self.uv[2] < 0.0 {
                 clamp_band(self.rect, self.uv, lo0, lo1, hi0, hi1)
             } else {
                 (lo0, lo1, hi0, hi1)
-            }
+            };
+            return (x0.max(self.clip[0]), y0.max(self.clip[1]), x1.min(self.clip[2]), y1.min(self.clip[3]));
+        }
+        let k = kind_index_nonzero(bits);
+        let grow = Self::grow_from(&LAYER_GROW, k, self.params[2]);
+        let lo0 = self.rect[0] - grow;
+        let lo1 = self.rect[1] - grow;
+        let hi0 = self.rect[0] + self.rect[2] + grow;
+        let hi1 = self.rect[1] + self.rect[3] + grow;
+        let (x0, y0, x1, y1) = if k == Kind::Shadow.as_u8() as usize && self.uv[2] < 0.0 {
+            clamp_band(self.rect, self.uv, lo0, lo1, hi0, hi1)
+        } else {
+            (lo0, lo1, hi0, hi1)
         };
         (x0.max(self.clip[0]), y0.max(self.clip[1]), x1.min(self.clip[2]), y1.min(self.clip[3]))
     }

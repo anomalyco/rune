@@ -340,33 +340,12 @@ pub(crate) fn snapshot(gpu: &crate::render::Gpu, renderer: &crate::render::Rende
         view_formats: &[],
     });
     let view = texture.create_view(&Default::default());
-    let padded_row = (w * 4).div_ceil(256) * 256;
-    let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("drag image readback"),
-        size: u64::from(padded_row * h),
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
+    let readback = rune_staging::Readback::new(&gpu.device, "drag image readback", w, h, 4);
     let mut enc = gpu.device.create_command_encoder(&Default::default());
     renderer.draw(&mut enc, &view, clear);
-    enc.copy_texture_to_buffer(
-        wgpu::TexelCopyTextureInfo { texture: &texture, mip_level: 0, origin: wgpu::Origin3d { x, y, z: 0 }, aspect: wgpu::TextureAspect::All },
-        wgpu::TexelCopyBufferInfo { buffer: &buffer, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(padded_row), rows_per_image: Some(h) } },
-        wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-    );
+    readback.copy_from_origin(&mut enc, &texture, wgpu::Origin3d { x, y, z: 0 });
     gpu.queue.submit([enc.finish()]);
-    let slice = buffer.slice(..);
-    slice.map_async(wgpu::MapMode::Read, |_| {});
-    gpu.device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
-    let mut rgba = Vec::with_capacity((w * h * 4) as usize);
-    {
-        let data = slice.get_mapped_range().ok()?;
-        for row in 0..h {
-            let start = (row * padded_row) as usize;
-            rgba.extend_from_slice(&data[start..start + (w * 4) as usize]);
-        }
-    }
-    buffer.unmap();
+    let mut rgba = readback.try_read(&gpu.device)?;
     to_straight_rgba(&mut rgba, bgra, format.is_srgb());
     let mut image = DragImage::rgba(w, h, &rgba)?.size(w as f32 / scale, h as f32 / scale);
     // The crop rounds out to whole pixels, so the image sits exactly over what was drawn.
