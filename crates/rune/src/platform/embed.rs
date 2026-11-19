@@ -162,7 +162,7 @@ impl<S: 'static> LayerHost<S> {
         let t0 = Instant::now();
         let (animating, dt) = self.clock.advance(&mut self.rt, t0, false);
         let update_ms = t0.elapsed().as_secs_f64() * 1000.0;
-        crate::clipboard::flush_memory(&mut self.rt);
+        crate::clipboard::flush_memory(self.rt.core_mut());
         if self.rt.popup_menu().is_some() {
             self.rt.cancel_popups();
         }

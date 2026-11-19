@@ -44,6 +44,7 @@ pub use handle::WindowHandle;
 #[cfg(not(target_arch = "wasm32"))]
 pub use event_loop::run;
 pub(crate) use event_loop::run_windows;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 pub(crate) use file_drop::FileStep;
 pub(crate) use keys::{key_base, map_key_event, map_mods};
 pub(crate) use state::frame;
