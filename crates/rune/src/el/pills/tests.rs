@@ -50,17 +50,17 @@ fn a_pill_label_stays_on_one_line_and_takes_room() {
     let mut ts = TextSystem::default();
     let plain = text(body).wrap();
     let pilled = text(body).wrap().pill(at..end, PillStyle::new());
-    let mut width = |e: &crate::El, w| ts.layout_for_spec(e.text.as_ref().unwrap(), 1.0, w, Alignment::Start).full_width();
+    let mut width = |e: &crate::El, w| ts.layout_for_spec(&e.text.as_ref().unwrap().as_text_input(1.0, false), 1.0, w, Alignment::Start).full_width();
     let (wide_plain, wide_pill) = (width(&plain, None), width(&pilled, None));
     assert!(wide_pill > wide_plain + 4.0, "the chip's padding takes room: {wide_plain} vs {wide_pill}");
     // Narrow enough that plain text breaks at the label's hyphens, wide enough for the pill.
-    let layout = ts.layout_for_spec(pilled.text.as_ref().unwrap(), 1.0, Some(210.0), Alignment::Start);
+    let layout = ts.layout_for_spec(&pilled.text.as_ref().unwrap().as_text_input(1.0, false), 1.0, Some(210.0), Alignment::Start);
     let split = layout.lines().any(|l| {
         let r = l.text_range();
         r.start > at && r.start < end
     });
     assert!(!split, "a label that fits a line never splits across lines");
-    let narrow = ts.layout_for_spec(pilled.text.as_ref().unwrap(), 1.0, Some(110.0), Alignment::Start);
+    let narrow = ts.layout_for_spec(&pilled.text.as_ref().unwrap().as_text_input(1.0, false), 1.0, Some(110.0), Alignment::Start);
     assert!(narrow.width() <= 110.5, "one wider than the line wraps inside it: {}", narrow.width());
 }
 

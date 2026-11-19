@@ -7,6 +7,7 @@ members = [
     "crates/rune-image",
     "crates/rune-media",
     "crates/rune-spell",
+    "crates/rune-text",
     "crates/rune-ref",
     "crates/rune-motion",
     "crates/rune-i18n",
@@ -69,6 +70,7 @@ default-members = [
     "crates/rune-image",
     "crates/rune-media",
     "crates/rune-spell",
+    "crates/rune-text",
     "crates/rune-ref",
     "crates/rune-motion",
     "crates/rune-i18n",
@@ -161,6 +163,7 @@ rune-ref = { path = "crates/rune-ref" }
 rune-spell = { path = "crates/rune-spell" }
 rune-staging = { path = "crates/rune-staging" }
 rune-taffy = { path = "crates/rune-taffy" }
+rune-text = { path = "crates/rune-text", default-features = false }
 rune-theme-opencode = { path = "themes/opencode" }
 
 # Shared external crates.
@@ -184,6 +187,7 @@ resvg = { version = "0.45", default-features = false }
 rustc-hash = "2"
 serde = "1"
 serde_json = "1"
+swash = "0.2.10"
 taffy = { version = "0.15", default-features = false }
 unicode-segmentation = "1.13"
 wasm-bindgen = "0.2"
@@ -197,6 +201,7 @@ windows = "0.62"
 windows-core = "0.62"
 windows-sys = "0.61"
 winit = { version = "0.30.13", default-features = false }
+zeroize = "1.8"
 
 # Full debug info for the workspace crates made a single `rune` test build use 18-23 GB of RAM;
 # line tables keep backtraces and file:line in panics at a fraction of that.

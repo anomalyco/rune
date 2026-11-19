@@ -181,7 +181,7 @@ impl RuntimeCore {
         }
         let (mut spec, w) = (n.text.clone()?, n.target[2] - n.target[0] - n.inset[0] - n.inset[2]);
         spec.replace_content(n.input.as_ref()?.edit.display().0);
-        Some(TextLayout::Single(self.text.layout_for_spec(&spec, s, spec.wrap.then_some(w * s), line_alignment(&spec))))
+        Some(TextLayout::Single(self.text.layout_for_spec(&spec.as_text_input(s, false), s, spec.wrap.then_some(w * s), line_alignment(&spec))))
     }
 
     pub(super) fn with_focused(&mut self, app: &mut dyn AppDriver, f: impl FnOnce(&mut crate::edit::TextEdit) -> EditOutcome, tx: &mut Tx) -> bool {

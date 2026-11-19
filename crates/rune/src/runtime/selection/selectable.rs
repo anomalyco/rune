@@ -107,15 +107,7 @@ pub(crate) fn unit_at(text: &str, i: usize, unit: Unit) -> (usize, usize) {
 /// natively, the browser's (`Intl.Segmenter`) in a page and Windows' own (`icu.dll`) on Windows,
 /// which link none.
 fn word_ends(text: &str) -> impl Iterator<Item = usize> {
-    #[cfg(all(target_os = "windows", not(feature = "segmenter-dictionaries")))]
-    return crate::platform::win32::segmenter::words(text).into_iter();
-    #[cfg(not(any(target_arch = "wasm32", all(target_os = "windows", not(feature = "segmenter-dictionaries")))))]
-    {
-        use icu_segmenter::{WordSegmenter, options::WordBreakInvariantOptions};
-        WordSegmenter::new_dictionary(WordBreakInvariantOptions::default()).segment_str(text).filter(|&b| b > 0)
-    }
-    #[cfg(target_arch = "wasm32")]
-    crate::platform::web::segmenter::words(text).into_iter()
+    rune_text::segmenter::words(text).into_iter()
 }
 
 /// The selection a drag from unit range `origin` to unit range `at` makes: (anchor, focus).

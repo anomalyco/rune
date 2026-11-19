@@ -136,12 +136,12 @@ impl RuntimeCore {
         let mut shape = |spec: &crate::el::TextSpec, wrap: Option<f32>| {
             let dir = crate::el::step_text_dir(spec.dir, crate::el::TextDirEvent::Flatten(Some(flow)));
             if spec.dir == dir && spec.shape.is_none() {
-                return self.text.layout_for_spec(spec, s, wrap, line_alignment(spec));
+                return self.text.layout_for_spec(&spec.as_text_input(s, false), s, wrap, line_alignment(spec));
             }
             let mut spec = spec.clone();
             spec.dir = dir;
             spec.shape = None;
-            self.text.layout_for_spec(&spec, s, wrap, line_alignment(&spec))
+            self.text.layout_for_spec(&spec.as_text_input(s, false), s, wrap, line_alignment(&spec))
         };
         let line = shape(&row.line, row.line.wrap.then_some(width_pt * s));
         let cells: Vec<_> = row.cells.iter().map(|c| shape(&c.spec, None)).collect();
