@@ -99,7 +99,10 @@ impl<T> Readback<T> {
             if !wait { return None; }
             while !ready.load(Ordering::Acquire) {
                 match rune_gpu::health::poll(device, wgpu::PollType::wait_indefinitely()) {
-                    Err(error) => crate::tooling::args::die(&format!("{error} while a frame was read back; no image was written")),
+                    Err(error) => {
+                        eprintln!("proof: the readback ended {:?} us after the removal", crate::tooling::proof_removal::since());
+                        crate::tooling::args::die(&format!("{error} while a frame was read back; no image was written"))
+                    }
                     // Nothing left to wait for, and the map failed.
                     Ok(wgpu::PollStatus::QueueEmpty) if !ready.load(Ordering::Acquire) => crate::tooling::args::die("a frame's readback failed; no image was written"),
                     Ok(_) => {}

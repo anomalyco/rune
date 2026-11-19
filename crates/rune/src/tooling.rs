@@ -536,6 +536,7 @@ include!("tooling/parser_tests.rs");
 pub(crate) mod headless_run;
 pub(crate) mod interaction;
 pub(crate) mod perf_warn;
+pub(crate) mod proof_removal;
 pub(crate) mod record;
 // Only headless runs use it; a release build without `tooling` keeps the module but not its callers.
 #[cfg_attr(not(any(feature = "tooling", debug_assertions)), allow(dead_code, unused_imports))]
