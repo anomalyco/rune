@@ -1,16 +1,14 @@
-//! xdg-desktop-portal FileChooser over zbus. Each dialog runs on its own thread with a
-//! current-thread tokio runtime, so any executor can poll it and the event loop never blocks.
-//! Dropping the future closes the portal request.
+//! xdg-desktop-portal FileChooser over zbus. Dialog tasks run on the shared portal worker
+//! runtime (`platform::portal::spawn`), so any executor can poll them, the event loop never
+//! blocks, and no thread is leaked per call. Dropping the future closes the portal request.
 use super::{FileDialogError, FileDialogKind, FileDialogOptions};
 use super::portal_format::{filters, outcome, parent_window, path_bytes};
-use futures_util::StreamExt;
-use std::{collections::HashMap, path::PathBuf, sync::atomic::{AtomicU32, AtomicU64, Ordering}, time::Duration};
+use crate::platform::portal::{self, DEST, PATH, RequestError, RequestTimeouts};
+use std::{collections::HashMap, path::PathBuf, sync::atomic::{AtomicU32, Ordering}, time::Duration};
 use tokio::sync::oneshot;
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
-use zbus::{Connection, OwnedObjectPath, OwnedVariant, Proxy, Variant, fdo};
+use zbus::{Connection, OwnedVariant, Proxy, Variant};
 
-const DEST: &str = "org.freedesktop.portal.Desktop";
-const PATH: &str = "/org/freedesktop/portal/desktop";
 const INTERFACE: &str = "org.freedesktop.portal.FileChooser";
 /// Connecting, D-Bus activation of the portal and the method call. The user's choice itself
 /// has no timeout.
@@ -18,7 +16,6 @@ const RPC_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The focused X11 window, the dialog's parent. 0 is none, and Wayland windows stay 0.
 static PARENT: AtomicU32 = AtomicU32::new(0);
-static TOKEN: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) fn window_focus(window: &winit::window::Window, focused: bool) {
     let Ok(handle) = window.window_handle() else { return };
@@ -34,11 +31,7 @@ pub(crate) fn window_focus(window: &winit::window::Window, focused: bool) {
 
 fn unavailable() -> FileDialogError { FileDialogError("no XDG desktop portal FileChooser is available".into()) }
 fn dbus_error(e: zbus::Error) -> FileDialogError {
-    if let zbus::Error::FDO(fdo) = &e
-        && matches!(**fdo, fdo::Error::ServiceUnknown(_) | fdo::Error::NameHasNoOwner(_) | fdo::Error::UnknownInterface(_)
-            | fdo::Error::UnknownMethod(_) | fdo::Error::UnknownObject(_)
-            | fdo::Error::SpawnExecFailed(_) | fdo::Error::SpawnForkFailed(_) | fdo::Error::SpawnChildExited(_)
-            | fdo::Error::SpawnChildSignaled(_) | fdo::Error::SpawnFailed(_) | fdo::Error::SpawnServiceNotFound(_)) {
+    if portal::is_unavailable(&e) {
         return unavailable();
     }
     FileDialogError(e.to_string())
@@ -65,69 +58,62 @@ fn uris(results: &HashMap<String, OwnedVariant>) -> Vec<String> {
 pub(super) async fn show(kind: FileDialogKind, options: FileDialogOptions) -> Result<Option<PathBuf>, FileDialogError> {
     let (reply, result) = oneshot::channel();
     let parent = parent_window(PARENT.load(Ordering::Relaxed));
-    std::thread::Builder::new().name("rune-file-dialog".into()).spawn(move || {
-        let runtime = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
-            Ok(r) => r,
-            Err(e) => { let _ = reply.send(Err(FileDialogError(e.to_string()))); return; }
-        };
-        runtime.block_on(run(kind, options, parent, reply));
-    }).map_err(|e| FileDialogError(e.to_string()))?;
+    portal::spawn(move || run(kind, options, parent, reply)).map_err(FileDialogError)?;
     result.await.unwrap_or_else(|_| Err(FileDialogError("file dialog worker stopped".into())))
 }
 
 async fn run(kind: FileDialogKind, options: FileDialogOptions, parent: String, mut reply: oneshot::Sender<Result<Option<PathBuf>, FileDialogError>>) {
-    let token = format!("rune_file_dialog_{}", TOKEN.fetch_add(1, Ordering::Relaxed));
-    let started = tokio::time::timeout(RPC_TIMEOUT, async {
+    let token = portal::next_token("file_dialog");
+    let conn = match tokio::time::timeout(RPC_TIMEOUT, async {
         // No session bus means this desktop cannot supply the portal.
-        let conn = tokio::select! {
-            conn = Connection::session() => conn.map_err(|_| unavailable())?,
-            _ = reply.closed() => return Ok(None),
-        };
-        let portal = Proxy::new(&conn, DEST, PATH, INTERFACE).await.map_err(dbus_error)?;
-        let sender = conn.unique_name().ok_or_else(unavailable)?.trim_start_matches(':').replace('.', "_");
-        let path = format!("{PATH}/request/{sender}/{token}");
-        let mut request = Proxy::new(&conn, DEST, path.clone(), "org.freedesktop.portal.Request").await.map_err(dbus_error)?;
-        // Subscribe before calling: the portal can respond before the method returns.
-        let mut responses = tokio::select! {
-            res = request.receive_signal("Response") => res.map_err(dbus_error)?,
-            _ = reply.closed() => { let _ = conn.close().await; return Ok(None); }
-        };
-        // A folder is OpenFile's `directory` choice (portal version 3).
-        let method = match kind { FileDialogKind::Open | FileDialogKind::Folder => "OpenFile", FileDialogKind::Save => "SaveFile" };
-        let body = (parent.as_str(), options.title.as_str(), request_options(kind, &options, &token));
-        let handle: OwnedObjectPath = portal.call(method, &body).await.map_err(dbus_error)?;
-        if handle.as_str() != path {
-            // A portal older than handle_token support picks its own path.
-            request = Proxy::new(&conn, DEST, handle.as_str().to_owned(), "org.freedesktop.portal.Request").await.map_err(dbus_error)?;
-            responses = request.receive_signal("Response").await.map_err(dbus_error)?;
+        tokio::select! {
+            conn = Connection::session() => conn.map(Some).map_err(|_| unavailable()),
+            _ = reply.closed() => Ok(None),
         }
-        Ok::<_, FileDialogError>(Some((conn, request, responses)))
-    }).await.unwrap_or_else(|_| Err(FileDialogError("file dialog portal timed out".into())));
-    let (conn, request, mut responses) = match started {
-        Ok(Some(v)) => v,
-        Ok(None) => return,
-        Err(e) => { let _ = reply.send(Err(e)); return; }
+    }).await {
+        Ok(Ok(Some(conn))) => conn,
+        Ok(Ok(None)) => return,
+        Ok(Err(e)) => { let _ = reply.send(Err(e)); return; }
+        Err(_) => { let _ = reply.send(Err(FileDialogError("file dialog portal timed out".into()))); return; }
     };
-    tokio::select! {
-        response = responses.next() => {
-            let result = match response {
-                Some(message) => message.body().deserialize::<(u32, HashMap<String, OwnedVariant>)>()
-                    .map_err(|e| FileDialogError(e.to_string()))
-                    .and_then(|(status, results)| outcome(status, &uris(&results))),
-                None => Err(FileDialogError("file dialog portal disconnected".into())),
-            };
-            let _ = reply.send(result);
+    let portal_proxy = match tokio::time::timeout(RPC_TIMEOUT, async {
+        tokio::select! {
+            proxy = Proxy::new(&conn, DEST, PATH, INTERFACE) => proxy.map(Some).map_err(dbus_error),
+            _ = reply.closed() => Ok(None),
         }
-        _ = reply.closed() => {
-            let _ = tokio::time::timeout(RPC_TIMEOUT, request.call::<_, _, ()>("Close", &())).await;
-        }
-    }
+    }).await {
+        Ok(Ok(Some(proxy))) => proxy,
+        Ok(Ok(None)) => { let _ = conn.close().await; return; }
+        Ok(Err(e)) => { let _ = conn.close().await; let _ = reply.send(Err(e)); return; }
+        Err(_) => { let _ = conn.close().await; let _ = reply.send(Err(FileDialogError("file dialog portal timed out".into()))); return; }
+    };
+    // A folder is OpenFile's `directory` choice (portal version 3).
+    let method = match kind { FileDialogKind::Open | FileDialogKind::Folder => "OpenFile", FileDialogKind::Save => "SaveFile" };
+    let body = (parent.as_str(), options.title.as_str(), request_options(kind, &options, &token));
+    let response = portal::request(
+        &conn,
+        &portal_proxy,
+        &token,
+        method,
+        &body,
+        RequestTimeouts { rpc: RPC_TIMEOUT, response: None },
+        reply.closed(),
+    ).await;
     let _ = conn.close().await;
+    match response {
+        Ok((status, results)) => { let _ = reply.send(outcome(status, &uris(&results))); }
+        Err(RequestError::Cancelled) => {}
+        Err(RequestError::Dbus(e)) => { let _ = reply.send(Err(dbus_error(e))); }
+        Err(RequestError::Unavailable) => { let _ = reply.send(Err(unavailable())); }
+        Err(RequestError::TimedOut) => { let _ = reply.send(Err(FileDialogError("file dialog portal timed out".into()))); }
+        Err(RequestError::Disconnected) => { let _ = reply.send(Err(FileDialogError("file dialog portal disconnected".into()))); }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use zbus::fdo;
     #[test]
     fn reply_uris_are_read_from_the_results_map() {
         let list = vec!["file:///tmp/a%20b".to_string(), "file:///tmp/c".to_string()];

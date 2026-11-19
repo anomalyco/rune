@@ -17,6 +17,8 @@ pub(crate) mod layer_shell_machine;
 pub(crate) mod macos;
 #[cfg(target_os = "macos")]
 pub(crate) use rune_core::main_queue;
+#[cfg(any(test, all(target_os = "linux", feature = "dbus")))]
+pub(crate) mod portal;
 #[cfg(all(target_os = "linux", feature = "dbus"))]
 pub(crate) mod portal_appearance;
 pub(crate) mod preferences;
