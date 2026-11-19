@@ -4,6 +4,7 @@ use super::*;
 use std::ops::Range;
 
 mod plan;
+pub(super) use plan::is_scissor_clip;
 use plan::{Describe, Disposition, Held, Kept, Layer, Move, Planned, Planner, Pools};
 
 // Linear premultiplied intermediates preserve HDR colours and avoid accumulating 8-bit

@@ -241,14 +241,19 @@ impl Renderer {
             self.rebind_all(device);
             atlas.invalidate();
         }
-        // The first page's texture grows with what its shelves hold; a new one starts empty, so
-        // every placed row goes up again and every GPU-filled mask is filled again (`invalidate`).
-        let rows = atlas.page_rows(0);
+        // The first page's texture grows with what its shelves hold (or explicit dirty rows); a
+        // new one starts empty, so every placed row goes up again and every GPU-filled mask is
+        // filled again (`invalidate`).
+        let dirty_rows = atlas.dirty;
+        let rows = atlas.page_rows(0).max(dirty_rows.map_or(0, |(_, y1)| y1));
         if rows > self.atlas.height() {
             let height = rows.next_power_of_two().clamp(ATLAS_START_ROWS, ATLAS_SIZE);
             self.atlas = Self::atlas_texture(device, self.uber.outlines().is_some(), height);
             self.rebind_all(device);
             atlas.invalidate();
+            if let Some((a, b)) = dirty_rows {
+                atlas.dirty = Some(atlas.dirty.map_or((a, b), |(c, d)| (a.min(c), b.max(d))));
+            }
         }
         atlas.outlines.set_support(self.uber.support());
         self.lcd_frame = self.lcd_ready(device, atlas.lcd_wanted) && atlas.lcd;

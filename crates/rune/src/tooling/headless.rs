@@ -8,20 +8,8 @@ use crate::time::Instant;
 
 use super::*;
 
-// Render targets contain sRGB-encoded premultiplied linear colour. PNG uses straight
-// colour, so unpremultiply in linear space, not in the encoded byte domain.
 #[cfg(test)]
-pub(crate) fn straight_alpha(pixels: &mut [u8]) {
-    for pixel in pixels.chunks_exact_mut(4) {
-        let alpha = f32::from(pixel[3]) / 255.0;
-        if alpha == 0.0 { pixel[..3].fill(0); }
-        else if alpha < 1.0 {
-            for c in &mut pixel[..3] {
-                *c = (crate::color::srgb_encode((crate::color::srgb_decode(f32::from(*c) / 255.0) / alpha).clamp(0.0, 1.0)) * 255.0).round() as u8;
-            }
-        }
-    }
-}
+pub(crate) use crate::render::surface_alpha::straight_alpha;
 
 pub fn headless<S: 'static>(app: crate::app::App<S>, args: Args) {
     started(try_headless(app, args));

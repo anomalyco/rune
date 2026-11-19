@@ -367,7 +367,7 @@ pub(crate) fn snapshot(gpu: &crate::render::Gpu, renderer: &crate::render::Rende
         }
     }
     buffer.unmap();
-    to_straight_rgba(&mut rgba, bgra);
+    to_straight_rgba(&mut rgba, bgra, format.is_srgb());
     let mut image = DragImage::rgba(w, h, &rgba)?.size(w as f32 / scale, h as f32 / scale);
     // The crop rounds out to whole pixels, so the image sits exactly over what was drawn.
     image.placement = Placement::At(x as f32 / scale, y as f32 / scale);
@@ -383,13 +383,27 @@ fn crop(rect: [f32; 4], scale: f32, size: (u32, u32)) -> Option<[u32; 4]> {
     (x1 > x0 && y1 > y0).then_some([x0, y0, x1 - x0, y1 - y0])
 }
 
-/// Frame pixels are premultiplied, in the surface's channel order.
-fn to_straight_rgba(pixels: &mut [u8], bgra: bool) {
-    for p in pixels.chunks_exact_mut(4) {
-        if bgra { p.swap(0, 2); }
-        let a = p[3];
-        if a != 0 && a != 255 {
-            for c in &mut p[..3] { *c = ((*c as u32 * 255 + a as u32 / 2) / a as u32).min(255) as u8; }
+/// Frame pixels are premultiplied, in the surface's channel order. On `*Srgb` targets the bytes
+/// hold `srgb_encode(linear_rgb * a)` and must be un-premultiplied in linear light; on non-sRGB
+/// targets (`srgb_blend`) they hold `srgb_encode(linear_rgb) * a` and divide directly.
+fn to_straight_rgba(pixels: &mut [u8], bgra: bool, srgb_target: bool) {
+    if bgra {
+        for p in pixels.chunks_exact_mut(4) {
+            p.swap(0, 2);
+        }
+    }
+    if srgb_target {
+        crate::render::surface_alpha::straight_alpha(pixels);
+    } else {
+        for p in pixels.chunks_exact_mut(4) {
+            let a = p[3];
+            if a == 0 {
+                p[..3].fill(0);
+            } else if a != 255 {
+                for c in &mut p[..3] {
+                    *c = ((*c as u32 * 255 + a as u32 / 2) / a as u32).min(255) as u8;
+                }
+            }
         }
     }
 }
@@ -520,8 +534,88 @@ mod tests {
 
     #[test]
     fn readback_unpremultiplies_and_swaps_bgra() {
-        let mut p = [0, 0, 128, 128, 10, 20, 30, 255];
-        to_straight_rgba(&mut p, true);
-        assert_eq!(p, [255, 0, 0, 128, 30, 20, 10, 255]);
+        let mut unorm = [0, 0, 128, 128, 10, 20, 30, 255, 50, 60, 70, 0];
+        to_straight_rgba(&mut unorm, true, false);
+        assert_eq!(unorm, [255, 0, 0, 128, 30, 20, 10, 255, 0, 0, 0, 0]);
+
+        // Straight linear (0.25, 0.5, 0.125) tested at multiple alphas on both sRGB and non-sRGB targets.
+        let lin = [0.25_f32, 0.5, 0.125];
+        let straight = lin.map(|v| (srgb_encode(v) * 255.0).round() as u8);
+        for a_u8 in [64u8, 128, 192, 255] {
+            let a = f32::from(a_u8) / 255.0;
+            // *Srgb target bytes: srgb_encode(linear_rgb * a), in BGRA and RGBA order.
+            let srgb_rgba = [
+                (srgb_encode(lin[0] * a) * 255.0).round() as u8,
+                (srgb_encode(lin[1] * a) * 255.0).round() as u8,
+                (srgb_encode(lin[2] * a) * 255.0).round() as u8,
+                a_u8,
+            ];
+            let mut from_rgba = srgb_rgba;
+            to_straight_rgba(&mut from_rgba, false, true);
+            let mut from_bgra = [srgb_rgba[2], srgb_rgba[1], srgb_rgba[0], srgb_rgba[3]];
+            to_straight_rgba(&mut from_bgra, true, true);
+            assert_eq!(from_rgba, from_bgra);
+            for c in 0..3 {
+                assert!(from_rgba[c].abs_diff(straight[c]) <= 2, "srgb alpha {a_u8} ch {c}: got {} expected {}", from_rgba[c], straight[c]);
+            }
+            assert_eq!(from_rgba[3], a_u8);
+
+            // Non-sRGB target bytes (`srgb_blend`): srgb_encode(linear_rgb) * a.
+            let unorm_rgba = [
+                (srgb_encode(lin[0]) * a * 255.0).round() as u8,
+                (srgb_encode(lin[1]) * a * 255.0).round() as u8,
+                (srgb_encode(lin[2]) * a * 255.0).round() as u8,
+                a_u8,
+            ];
+            let mut from_unorm = [unorm_rgba[2], unorm_rgba[1], unorm_rgba[0], unorm_rgba[3]];
+            to_straight_rgba(&mut from_unorm, true, false);
+            for c in 0..3 {
+                assert!(from_unorm[c].abs_diff(straight[c]) <= 2, "unorm alpha {a_u8} ch {c}: got {} expected {}", from_unorm[c], straight[c]);
+            }
+            assert_eq!(from_unorm[3], a_u8);
+        }
+        let mut zero_srgb = [99, 137, 71, 0];
+        to_straight_rgba(&mut zero_srgb, true, true);
+        assert_eq!(zero_srgb, [0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn snapshot_unpremultiplies_correctly_on_srgb_and_unorm_targets() {
+        use crate::render::{Gpu, Instance, KIND_RECT, NO_CLIP, Renderer};
+        let gpu = Gpu::headless();
+        let expected_rgb = [0.25_f32, 0.5, 0.125].map(|v| (srgb_encode(v) * 255.0).round() as u8);
+        let expected_a = (0.5_f32 * 255.0).round() as u8;
+        for (format, srgb_blend) in [
+            (wgpu::TextureFormat::Bgra8UnormSrgb, false),
+            (wgpu::TextureFormat::Bgra8Unorm, true),
+        ] {
+            let mut renderer = Renderer::new(&gpu.device, format);
+            renderer.set_srgb_blend(srgb_blend);
+            let color = Color { r: 0.25, g: 0.5, b: 0.125, a: 0.5 };
+            let fill = if srgb_blend { color.premul_srgb(1.0) } else { color.premul(1.0) };
+            let inst = Instance {
+                rect: [0.0, 0.0, 8.0, 8.0],
+                radii: [0.0; 4],
+                fill,
+                border: [0.0; 4],
+                params: [0.0, KIND_RECT, 0.0, 1.0],
+                uv: [0.0; 4],
+                clip: NO_CLIP,
+                fade: [0; 4],
+            };
+            let mut atlas = crate::text::Atlas::new();
+            renderer.prepare_ui(&gpu.device, &gpu.queue, &mut atlas, &[inst], (8, 8));
+            let shot = snapshot(&gpu, &renderer, (8, 8), 1.0, [0.0; 4], [0.0, 0.0, 8.0, 8.0]).expect("snapshot");
+            let rgba = crate::image::png_rgba8(shot.png_data()).expect("valid png");
+            let px = rgba.get_pixel(4, 4).0;
+            for c in 0..3 {
+                assert!(
+                    px[c].abs_diff(expected_rgb[c]) <= 2,
+                    "{format:?}: channel {c} got {}, expected {} (pixel {px:?})",
+                    px[c], expected_rgb[c],
+                );
+            }
+            assert!(px[3].abs_diff(expected_a) <= 1, "{format:?}: alpha got {}, expected {expected_a}", px[3]);
+        }
     }
 }
