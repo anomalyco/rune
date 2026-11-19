@@ -1,0 +1,1 @@
+- **Windows DirectComposition handover loads `dcomp.dll` from System32 only.** `dcomp.dll` was previously loaded with bare `LoadLibraryW` using the default DLL search order; it now loads with `LoadLibraryExW(..., LOAD_LIBRARY_SEARCH_SYSTEM32)`, matching Rune's other Windows system DLL loaders.

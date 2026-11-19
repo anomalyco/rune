@@ -39,6 +39,19 @@ pub(crate) use frame::request_inner_size;
 pub(crate) use frame::window_menu;
 pub(crate) use placement::restore_frame;
 
+/// Loads a Windows system DLL from System32 only, never from the application directory or CWD.
+/// Rejects names containing path separators or drive prefixes.
+pub(crate) fn load_system_dll(name: &str) -> windows_sys::Win32::Foundation::HMODULE {
+    use windows_sys::Win32::System::LibraryLoader::{LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW};
+    if name.is_empty() || name.contains(['\\', '/', ':']) {
+        return std::ptr::null_mut();
+    }
+    let wide: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
+    // SAFETY: `wide` is NUL-terminated and `LOAD_LIBRARY_SEARCH_SYSTEM32` restricts the search
+    // path to System32.
+    unsafe { LoadLibraryExW(wide.as_ptr(), std::ptr::null_mut(), LOAD_LIBRARY_SEARCH_SYSTEM32) }
+}
+
 pub(crate) fn hwnd(window: &winit::window::Window) -> Option<HWND> {
     let RawWindowHandle::Win32(h) = window.window_handle().ok()?.as_raw() else { return None };
     Some(h.hwnd.get() as HWND)
