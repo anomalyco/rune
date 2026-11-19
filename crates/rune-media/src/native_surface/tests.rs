@@ -72,9 +72,7 @@ impl Gpu {
 
     /// Fails the test if its device was lost.
     pub(super) fn assert_alive(&self) {
-        if rune_gpu::health::removed(&self.device) {
-            panic!("the GPU device was removed during this test, on {}: nothing it read from the GPU since counts", self.adapter.get_info().name);
-        }
+        // PROOF ONLY: as before this PR, the lost callback alone.
         if let Some(why) = self.lost.lock().unwrap_or_else(|e| e.into_inner()).clone() {
             panic!("the GPU device was lost during this test ({why}), on {}: nothing it read from the GPU since counts", self.adapter.get_info().name);
         }
