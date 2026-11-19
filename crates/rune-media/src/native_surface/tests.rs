@@ -852,3 +852,35 @@ fn rotated_clip_buffers_draw_upright_like_its_poster_on(gpu: Gpu) {
         }
     }
 }
+
+/// PROOF ONLY, never merged: which GPU drivers this process loads when it picks WARP by name
+/// (`WGPU_ADAPTER_NAME`, as the farm sets it), and when it makes the device. AMD's user-mode
+/// drivers mean the process reached the integrated Radeon. No work is submitted.
+#[cfg(target_os = "windows")]
+#[test]
+fn proof_pick_loads_which_drivers() {
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetModuleHandleW(name: *const u16) -> *mut core::ffi::c_void;
+    }
+    let loaded = || -> Vec<&'static str> {
+        ["amdxc64.dll", "amdxx64.dll", "atidxx64.dll", "amdxn64.dll", "aticfx64.dll", "nvwgf2umx.dll", "nvldumdx.dll", "igd12umd64.dll", "igdumdim64.dll", "d3d10warp.dll", "d3d12core.dll"]
+            .into_iter()
+            .filter(|name| {
+                let wide: Vec<u16> = name.encode_utf16().chain([0]).collect();
+                !unsafe { GetModuleHandleW(wide.as_ptr()) }.is_null()
+            })
+            .collect()
+    };
+    eprintln!("proof pick: WGPU_ADAPTER_NAME={:?}; before the pick: {:?}", std::env::var("WGPU_ADAPTER_NAME").ok(), loaded());
+    let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+    desc.backends = wgpu::Backends::DX12;
+    let instance = wgpu::Instance::new(desc);
+    eprintln!("proof pick: after the instance: {:?}", loaded());
+    let picked = rune_gpu::pick::pick(&instance, None, false);
+    eprintln!("proof pick: pick gave {:?}; after it: {:?}", picked.as_ref().map(|p| p.adapter.get_info().name).map_err(|e| e.clone()), loaded());
+    let adapter = picked.expect("a pick").adapter;
+    let (device, _queue) = pollster::block_on(adapter.request_device(&Default::default())).expect("device");
+    eprintln!("proof pick: after the device: {:?}", loaded());
+    drop(device);
+}
