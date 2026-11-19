@@ -257,7 +257,7 @@ impl Running {
             }
             Some("focus") => self.app.window_focus(event["focused"].as_bool().unwrap_or(false)),
             Some("visibility") => {
-                self.app.set_visible(event["visible"].as_bool().unwrap_or(false));
+                self.shared.set_visible(event["visible"].as_bool().unwrap_or(false));
                 return true;
             }
             Some(kind @ ("edit" | "selection" | "preedit")) => {
