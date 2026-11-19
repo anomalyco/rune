@@ -123,7 +123,25 @@ impl Host {
         // surface that refused its configuration can draw nothing: the window makes both again
         // before this frame, or waits out a retry of its own (`SurfaceRetries`) and then gives
         // them up. Neither can give a drawable, and wgpu panics asking one for it.
+        // PROOF ONLY (rune-proof: device-removal): `RUNE_PROOF_REMOVE=window` removes the
+        // window's device after its second GPU frame and asks for the frames after it.
+        {
+            static FRAMES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let n = FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if crate::tooling::proof_removal::asked("window") {
+                if let Some(us) = crate::tooling::proof_removal::since() {
+                    eprintln!("proof: frame {n} starts {us} us after the removal; lost {}", self.gpu.as_ref().is_none_or(|(g, _)| g.is_lost()));
+                } else if n == 2 && let Some((gpu, _)) = self.gpu.as_ref() {
+                    crate::tooling::proof_removal::remove(gpu, "before the window's frame 2");
+                }
+                if n < 8 && let Some(w) = self.win.as_ref() { w.request_redraw(); }
+            }
+        }
+        let replaced = std::time::Instant::now();
         if !self.replace_lost_surface() { return; }
+        if crate::tooling::proof_removal::since().is_some() {
+            eprintln!("proof: the surface check took {} us; the frame draws on {:?}", replaced.elapsed().as_micros(), self.gpu.as_ref().map(|(g, _)| g.adapter.get_info().name));
+        }
         // The radius a client-side frame rounds this window's bottom corners to, in device
         // pixels: zero unless it draws one, now and with a surface that composites alpha
         // (`corners`). Asked every frame, so a maximize or a tile that arrives with a configure
