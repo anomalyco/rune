@@ -42,8 +42,8 @@ impl Gpu {
         });
         if draws_surfaces && !cfg!(test) { log_uncaptured(&device); }
         // Debug builds report a submission that holds the GPU past `rune_gpu::budget::BUDGET`;
-        // Rune's own tests end there, since their GPUs have no test to fail.
-        if cfg!(debug_assertions) { rune_gpu::budget::watch(cfg!(test)); }
+        // Rune's own tests (and `test-strict` builds) end there: their GPUs have no test to fail.
+        if cfg!(debug_assertions) { rune_gpu::budget::watch(cfg!(test) || cfg!(feature = "test-strict")); }
         Gpu { instance, adapter, device, queue, lost }
     }
 

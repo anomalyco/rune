@@ -47,7 +47,7 @@ required-features = ["markdown", "frame-profile"]
 
 [dev-dependencies]
 # The examples' headless runs (`--snap`, `--trace`, ...) in release builds.
-rune = { workspace = true, features = ["keys-overlay"] }
+rune = { workspace = true, features = ["keys-overlay", "test-strict"] }
 procwatch = { workspace = true }
 # The accessibility tree tests read and write `Runtime::accessibility_json` (tests/a11y).
 serde_json = { workspace = true }

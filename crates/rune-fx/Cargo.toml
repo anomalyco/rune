@@ -25,7 +25,7 @@ wgpu = { workspace = true, features = ["webgpu"] }
 
 [dev-dependencies]
 # The examples' headless runs (`--snap`, `--trace`, ...) in release builds.
-rune = { workspace = true, features = ["keys-overlay"] }
+rune = { workspace = true, features = ["keys-overlay", "test-strict"] }
 rune-ref = { workspace = true }
 ab_glyph = "0.2.32"
 png = { workspace = true }

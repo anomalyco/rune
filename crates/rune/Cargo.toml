@@ -75,6 +75,9 @@ metal-backend = ["rune-gpu/metal-backend", "rune-media/metal-backend"]
 accessibility = ["dep:accesskit_windows", "dep:accesskit_macos", "dep:accesskit_unix"]
 # Use upstream `taffy::TaffyTree` instead of `rune_taffy::LayoutStore` for A/B benchmarks and parity checks.
 baseline-taffy = ["rune-taffy/baseline-taffy"]
+# Test builds of crates that use Rune (their dev-dependency turns it on): a GPU submission that holds
+# the GPU past `rune_gpu::budget::BUDGET` ends the test program, as it does in Rune's own unit tests.
+test-strict = []
 
 [dependencies]
 # The accessibility tree's types; the platform adapters below come with `accessibility`.
