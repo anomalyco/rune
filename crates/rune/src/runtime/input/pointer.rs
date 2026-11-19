@@ -502,14 +502,40 @@ impl RuntimeCore {
 
     /// Walks up from `start` through ancestors to the first live, reachable scroll viewport on
     /// `horizontal` whose scroll state satisfies `has_room`.
+    ///
+    /// An element that names the viewport it scrolls (`El::wheel_scrolls`, an overlay scroll bar's
+    /// track beside the viewport it follows) hands the wheel to that viewport first, then chains on
+    /// up from it as a wheel over the viewport itself does. One hand-off, so it can't loop.
     fn scroll_in_chain(&self, mut at: Option<usize>, horizontal: bool, has_room: impl Fn(&ScrollState) -> bool) -> Option<NodeId> {
+        let mut handed = false;
         while let Some(i) = at {
             if self.is_scroll_viewport(i, horizontal)
                 && self.scrolls.get(&self.nodes[i].id).is_some_and(&has_room)
             {
                 return Some(self.nodes[i].id);
             }
-            at = self.nodes[i].parent;
+            let hand = (!handed).then(|| self.nodes[i].wheel_scrolls.as_deref()).flatten()
+                .and_then(|key| self.wheel_scroll_viewport(i, key)).filter(|&j| j != i);
+            handed |= hand.is_some();
+            at = hand.or_else(|| self.nodes[i].parent);
+        }
+        None
+    }
+
+    /// The element keyed `key` that a wheel over element `from` naming it (`El::wheel_scrolls`)
+    /// scrolls: `key` looked up inside `from` itself, then inside each of its ancestors, innermost
+    /// first, so a wheel over a bar finds the viewport beside it rather than the first element
+    /// keyed alike elsewhere (two panes, or every wide markdown table, can key their viewport
+    /// `scroll`). The first scope that holds one decides: a match on its way out or inert hands
+    /// the wheel nowhere rather than to another pane's. Named as `Tx::scroll_into_view` names one.
+    fn wheel_scroll_viewport(&self, from: usize, key: &str) -> Option<usize> {
+        let mut at = Some(from);
+        while let Some(a) = at {
+            let scope = &self.nodes[a].path;
+            if let Some(i) = self.nodes.iter().position(|n| n.named(key) && within(&n.path, scope)) {
+                return (!self.subtree_exiting(i) && self.allowed(i)).then_some(i);
+            }
+            at = self.nodes[a].parent;
         }
         None
     }
@@ -665,4 +691,10 @@ impl RuntimeCore {
             }
         }
     }
+}
+
+/// Whether `path` is the element at `scope` or one inside it, by the paths' own segments (so
+/// `area/list` isn't inside `area/listx`).
+fn within(path: &str, scope: &str) -> bool {
+    path.strip_prefix(scope).is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
 }

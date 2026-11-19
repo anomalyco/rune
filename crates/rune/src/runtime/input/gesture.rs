@@ -616,3 +616,7 @@ mod tests {
         assert_eq!(rt.scrolls[&id].offset, 10.0, "only the third gesture's own delta scrolled");
     }
 }
+
+#[cfg(test)]
+#[path = "gesture_tests.rs"]
+mod gesture_tests;
