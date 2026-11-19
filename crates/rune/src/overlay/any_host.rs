@@ -184,6 +184,10 @@ impl AnyHost for OverlayHost {
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         if matches!(event, WindowEvent::Moved(_) | WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. })
             && let Some(x11) = &core.x11 { x11.update_geometry(); }
+        // A click gives an overlay that may take keys the focus, as it does the macOS panel; the
+        // window manager gives an override-redirect window none.
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        if let WindowEvent::MouseInput { state: winit::event::ElementState::Pressed, .. } = event && let Some(x11) = &core.x11 { x11.request_keys(); }
         use crate::input::host_events;
         if matches!(event, WindowEvent::CursorMoved { .. } | WindowEvent::CursorLeft { .. } | WindowEvent::MouseInput { .. })
             && (app.rt().touching() || host_events::touch_promoted()) { return; }

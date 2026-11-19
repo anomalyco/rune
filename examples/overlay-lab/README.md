@@ -41,9 +41,10 @@ capture request while grounding input coordinates; omit it for the exclusion che
 
 Linux capture exclusion is unavailable. Wayland only observes pointer movement inside its
 input region, and the compositor chooses an output for UnderPointer. It cannot follow the
-global pointer. OnDemand permits click-to-focus on layer-shell v4; Windows/X11 do not offer
-nonactivating key focus. Capture requests on macOS must be supplemented with an explicit
-ScreenCaptureKit window-ID filter when the OS capture path ignores NSWindow sharingType.
+global pointer. OnDemand permits click-to-focus on layer-shell v4, X11 and Windows (where
+`request_keys` takes the foreground only when Windows lets the process); XWayland has no key
+focus. Capture requests on macOS must be supplemented with an explicit ScreenCaptureKit
+window-ID filter when the OS capture path ignores NSWindow sharingType.
 Wayland keeps all three levels on the compositor's overlay layer; it has no higher layer and
 does not guarantee ordering among peers. Native status/status+1 levels are macOS-specific.
 

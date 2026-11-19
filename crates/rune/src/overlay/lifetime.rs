@@ -314,7 +314,7 @@ impl OverlayCore {
             let panel = self.panel.as_ref().unwrap();
             if let Some(level) = self.macos_level { panel.set_level(level); }
             let native = (Some(panel.window_number()), crate::OverlayCapabilities {
-                capture_exclusion: panel.capture_exclusion(), nonactivating_keys: OverlaySupport::Supported, global_pointer: OverlaySupport::Supported,
+                capture_exclusion: panel.capture_exclusion(), nonactivating_keys: super::keys::keys_support(self.options.keys, true), global_pointer: OverlaySupport::Supported,
             });
             *self.shared.native.lock().unwrap() = native;
         }
@@ -323,10 +323,10 @@ impl OverlayCore {
             let _ = window.set_cursor_hittest(self.options.input.resolved(self.interactive) == OverlayInput::All);
             #[cfg(all(unix, not(target_os = "ios"), not(target_os = "android")))]
             {
-                self.x11 = crate::platform::x11::overlay::InputWindow::new(&window, self.shared.wake.lock().unwrap().clone(), self.options.input.resolved(self.interactive), self.options.follow_pointer);
+                self.x11 = crate::platform::x11::overlay::InputWindow::new(&window, self.shared.wake.lock().unwrap().clone(), self.options.input.resolved(self.interactive), self.options.follow_pointer, self.options.keys);
                 if self.options.input == OverlayInput::Regions && self.x11.is_none() { return None; }
                 self.shared.native.lock().unwrap().1 = crate::OverlayCapabilities {
-                    capture_exclusion: OverlaySupport::Unsupported, nonactivating_keys: OverlaySupport::Unsupported, global_pointer: OverlaySupport::Supported,
+                    capture_exclusion: OverlaySupport::Unsupported, nonactivating_keys: super::keys::keys_support(self.options.keys, self.x11.is_some()), global_pointer: OverlaySupport::Supported,
                 };
             }
             #[cfg(target_os = "windows")]
@@ -340,7 +340,7 @@ impl OverlayCore {
                     }
                 }
                 self.shared.native.lock().unwrap().1 = crate::OverlayCapabilities {
-                    capture_exclusion: self.native.as_ref().unwrap().capture_exclusion(), nonactivating_keys: OverlaySupport::Unsupported, global_pointer: OverlaySupport::Supported,
+                    capture_exclusion: self.native.as_ref().unwrap().capture_exclusion(), nonactivating_keys: super::keys::keys_support(self.options.keys, true), global_pointer: OverlaySupport::Supported,
                 };
             }
         }
