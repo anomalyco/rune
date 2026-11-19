@@ -77,7 +77,7 @@ impl Browser {
         // The browser compiles the renderer's pipelines in its GPU process, in order: a submit
         // made after them is answered once they're built.
         side.gpu.queue.submit([]);
-        let built = gpu::when_done(&side.gpu.queue, &self.proxy);
+        let built = gpu::when_done(&side, &self.proxy);
         let Draw::Cpu { mut cpu, .. } = std::mem::replace(&mut r.draw, Draw::Moving) else { unreachable!("checked above") };
         cpu.half = crate::render::cpu_boot::HalfRounding::of_vendor(side.gpu.adapter.get_info().vendor);
         r.draw = Draw::HandingOver { cpu, side, built, done: None, since: Instant::now() };

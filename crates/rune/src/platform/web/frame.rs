@@ -177,7 +177,7 @@ impl Browser {
                         Ok(_) if side.renderer.checking_gpu() => crate::marks::mark("web.handover.warming"),
                         Ok(copy) => {
                             if let Some(copy) = copy { copy.count(cpu.pixels().to_vec()); }
-                            *done = Some(gpu::when_done(&side.gpu.queue, &self.proxy));
+                            *done = Some(gpu::when_done(side, &self.proxy));
                             *since = Instant::now();
                             let proxy = self.proxy.clone();
                             after(FINISH_LIMIT + Duration::from_millis(50), move || { let _ = proxy.send_event(Wake::App); });

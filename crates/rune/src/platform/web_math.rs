@@ -106,6 +106,13 @@ pub(crate) fn surface_usage(
     usage
 }
 
+/// Whether `backend` requires explicit `Device::poll` calls to deliver `on_submitted_work_done`
+/// and `map_async` callbacks. WebGPU delivers them from browser promises (and `Device::poll` is a
+/// no-op there); `wgpu-core`'s WebGL2 backend only fires them when polled.
+pub(crate) fn needs_device_poll(backend: wgpu::Backend) -> bool {
+    backend != wgpu::Backend::BrowserWebGpu
+}
+
 #[cfg(test)]
 #[path = "web_math_tests.rs"]
 mod tests;

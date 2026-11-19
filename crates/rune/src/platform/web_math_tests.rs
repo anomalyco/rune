@@ -129,3 +129,10 @@ fn webgl_surface_usage_never_adds_unsupported_copy_flags() {
         TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC,
     );
 }
+
+#[test]
+fn only_non_webgpu_backends_need_device_polling() {
+    use wgpu::Backend;
+    assert!(!needs_device_poll(Backend::BrowserWebGpu));
+    assert!(needs_device_poll(Backend::Gl));
+}

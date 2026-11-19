@@ -13,6 +13,7 @@ pub(super) struct GpuSide {
     pub(super) surface: wgpu::Surface<'static>,
     pub(super) config: wgpu::SurfaceConfiguration,
     pub(super) renderer: Renderer,
+    pub(super) backend: wgpu::Backend,
 }
 
 /// Who draws the page's frames, and how far the GPU is (the native CPU-first window's
@@ -103,7 +104,8 @@ pub(super) fn gpu_side(gpu: Gpu, surface: wgpu::Surface<'static>, size: (u32, u3
     let mut renderer = Renderer::new(&gpu.device, format);
     renderer.set_srgb_blend(!format.is_srgb());
     renderer.attach_text(&mut rt.text.atlas);
-    Ok(GpuSide { gpu, surface, config, renderer })
+    let backend = gpu.adapter.get_info().backend;
+    Ok(GpuSide { gpu, surface, config, renderer, backend })
 }
 
 /// The canvas's configuration for `size`, and the format the renderer draws in: the canvas's,
@@ -203,7 +205,8 @@ pub(super) fn gpu_frame(side: &mut GpuSide, app: &mut dyn WebApp, now: Instant, 
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
         encoder.copy_texture_to_buffer(frame.texture.as_image_copy(), wgpu::TexelCopyBufferInfo { buffer: &buffer, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(height) } },
             wgpu::Extent3d { width, height, depth_or_array_layers: 1 });
-        Readback { buffer, row, size: (width, height), rgba: matches!(side.config.format, wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Rgba8UnormSrgb) }
+        let poll_device = super::web_math::needs_device_poll(side.backend).then(|| side.gpu.device.clone());
+        Readback { buffer, row, size: (width, height), rgba: matches!(side.config.format, wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Rgba8UnormSrgb), poll_device }
     });
     // Every frame: one drawn whole leaves the kept frame behind.
     let _ = side.renderer.damage_drawn();
@@ -219,16 +222,21 @@ pub(super) struct Readback {
     size: (u32, u32),
     /// The canvas's format is RGBA (the CPU paints BGRA).
     rgba: bool,
+    /// Present only on backends whose `map_async` needs explicit `Device::poll` (WebGL2).
+    poll_device: Option<wgpu::Device>,
 }
 
 impl Readback {
     /// Counts the pixels of `cpu` (BGRA, `size.0 * 4` bytes a row) this frame drew otherwise, and
     /// appends `[differing, of, max]` to `globalThis.__runeDrift` once the copy is mapped.
     pub(super) fn count(self, cpu: Vec<u8>) {
-        let Readback { buffer, row, size: (w, h), rgba } = self;
+        let Readback { buffer, row, size: (w, h), rgba, poll_device } = self;
         let buffer = Rc::new(buffer);
         let mapped = buffer.clone();
+        let done = Rc::new(Cell::new(false));
+        let mark_done = done.clone();
         buffer.slice(..).map_async(wgpu::MapMode::Read, move |result| {
+            mark_done.set(true);
             if result.is_err() { return; }
             let (mut differing, mut max) = (0u32, 0u8);
             let mut bbox = [u32::MAX, u32::MAX, 0u32, 0u32];
@@ -258,6 +266,9 @@ impl Readback {
             for v in bbox.into_iter().chain(worst) { row.push(&v.into()); }
             list.push(&row);
         });
+        if let Some(device) = poll_device {
+            poll_until_done(device, &done, Instant::now() + FINISH_LIMIT);
+        }
     }
 }
 
@@ -267,15 +278,37 @@ pub(super) fn drift_wanted() -> bool {
 }
 
 /// A flag the GPU's queue sets once the work submitted so far is done, waking the loop.
-pub(super) fn when_done(queue: &wgpu::Queue, proxy: &EventLoopProxy<Wake>) -> Rc<Cell<bool>> {
+/// On WebGL2 (`wgpu-core`), schedules lightweight non-blocking `Device::poll` ticks until the
+/// callback fires or `FINISH_LIMIT` passes; on WebGPU the browser resolves it from its task queue.
+pub(super) fn when_done(side: &GpuSide, proxy: &EventLoopProxy<Wake>) -> Rc<Cell<bool>> {
     let flag = Rc::new(Cell::new(false));
     let set = PageOnly((flag.clone(), proxy.clone()));
-    queue.on_submitted_work_done(move || {
+    side.gpu.queue.on_submitted_work_done(move || {
         let PageOnly((flag, proxy)) = &set;
         flag.set(true);
         let _ = proxy.send_event(Wake::App);
     });
+    if super::web_math::needs_device_poll(side.backend) {
+        poll_until_done(side.gpu.device.clone(), &flag, Instant::now() + FINISH_LIMIT);
+    }
     flag
+}
+
+/// Interval between WebGL2 `Device::poll` checks while an async wgpu callback is pending.
+const POLL_INTERVAL: Duration = Duration::from_millis(8);
+
+/// Drives `wgpu-core` callbacks on WebGL2 after yielding to the browser event loop (WebGL2 sync
+/// objects only transition to `SIGNALED` across turns). Stops as soon as `flag` flips, is dropped,
+/// the device reports an error, or `deadline` passes.
+fn poll_until_done(device: wgpu::Device, flag: &Rc<Cell<bool>>, deadline: Instant) {
+    fn step(device: wgpu::Device, weak: std::rc::Weak<Cell<bool>>, deadline: Instant) {
+        let Some(flag) = weak.upgrade() else { return };
+        if flag.get() || Instant::now() >= deadline { return; }
+        if device.poll(wgpu::PollType::Poll).is_err() || flag.get() { return; }
+        super::after(POLL_INTERVAL, move || step(device, weak, deadline));
+    }
+    let weak = Rc::downgrade(flag);
+    super::after(Duration::ZERO, move || step(device, weak, deadline));
 }
 
 /// A value moved into a callback wgpu wants `Send`. In a page that callback runs on the page's
