@@ -274,7 +274,10 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         }, { passive: true });
         // The pointer over a link (or anything else of the mirror's that took it) still hovers Rune.
         listen(a11y, 'pointermove', event => {
-            if (event.pointerType === 'mouse') send({ kind: 'hover', x: event.clientX, y: event.clientY });
+            if (event.pointerType === 'mouse') {
+                const r = canvas.getBoundingClientRect();
+                send({ kind: 'hover', x: event.clientX - r.left, y: event.clientY - r.top });
+            }
         }, { passive: true });
     }
     // Right-click: Rune draws an element's own menu; anywhere else the browser opens its own over

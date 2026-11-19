@@ -50,8 +50,21 @@ pub(crate) enum WheelOutcome {
     Ignored,
 }
 
+/// Converts physical surface pixels into view points (dividing by `rt.input_scale()` = scale × zoom).
+#[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
+pub(crate) fn physical_point(rt: &RuntimeCore, x: f64, y: f64) -> (f32, f32) {
+    let scale = rt.input_scale();
+    (x as f32 / scale, y as f32 / scale)
+}
+
+/// Converts logical window points (CSS pixels on web) into view points (dividing by `rt.zoom()`).
+#[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
+pub(crate) fn window_point(rt: &RuntimeCore, x: f32, y: f32) -> (f32, f32) {
+    let zoom = rt.zoom();
+    (x / zoom, y / zoom)
+}
+
 /// Maps a winit touch/gesture phase to Rune's `GesturePhase`.
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub(crate) fn gesture_phase(phase: TouchPhase) -> crate::GesturePhase {
     match phase {
         TouchPhase::Started => crate::GesturePhase::Began,
@@ -168,7 +181,6 @@ pub(crate) fn keyboard(
 
 /// Translates a host-neutral wheel input (window points) into runtime pinch-wheel, `WheelEvent`,
 /// or pointer-less phase begin/end notifications, scaled into view points.
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub(crate) fn wheel_core(rt: &mut RuntimeCore, input: WheelInput) -> WheelOutcome {
     match rt.pointer() {
         // Off macOS a trackpad pinch is a Ctrl + wheel.
@@ -195,6 +207,40 @@ pub(crate) fn wheel_core(rt: &mut RuntimeCore, input: WheelInput) -> WheelOutcom
         }
         None => WheelOutcome::Ignored,
     }
+}
+
+/// Translates a browser wheel delta in window points through [`wheel_core`], applying browser
+/// policies: Ctrl+wheel only pinches outside document mode (unclaimed Ctrl+wheel stays with
+/// browser zoom), and `fit_height` canvases leave vertical wheel to the page.
+/// Returns `(redraw, sync_wheel_used)`.
+#[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
+pub(crate) fn web_wheel(
+    rt: &mut RuntimeCore,
+    dx: f32,
+    dy: f32,
+    mods: crate::Mods,
+    phase: crate::GesturePhase,
+    precise: bool,
+    document: bool,
+    fit_height: bool,
+) -> (bool, Option<bool>) {
+    let Some((x, y)) = rt.pointer() else { return (false, None) };
+    // A page's pinch is the browser's zoom; elsewhere unclaimed Ctrl+wheel stays with browser
+    // zoom instead of falling through to scroll.
+    if mods.ctrl {
+        let used = !document && rt.pinch_wheel(x, y, dy);
+        return (used, Some(used));
+    }
+    // On a content-sized embedded canvas, vertical wheel belongs to the page unless a
+    // horizontal strip is being scrolled.
+    if fit_height && dx.abs() <= dy.abs() {
+        return (false, None);
+    }
+    let outcome = wheel_core(
+        rt,
+        WheelInput { dx, dy, mods, phase, precise, notch: false, pinch: false },
+    );
+    (outcome != WheelOutcome::Ignored, None)
 }
 
 /// Translates a winit `MouseWheel` event into runtime pinch-wheel, `WheelEvent`, or
@@ -287,11 +333,16 @@ pub(crate) fn ime(rt: &mut RuntimeCore, window: &Window, ime: WIme) {
     ime_core(rt, select, event);
 }
 
+/// Returns the current IME cursor area converted to window points.
+pub(crate) fn ime_area_window(rt: &RuntimeCore) -> Option<[f32; 4]> {
+    rt.ime_area.map(|a| rt.to_window(a))
+}
+
 /// Takes any pending IME reset flag and returns the current IME cursor area in window points.
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub(crate) fn ime_sync_state(rt: &mut RuntimeCore) -> (bool, Option<[f32; 4]>) {
     let reset = std::mem::take(&mut rt.ime_reset);
-    let area = rt.ime_area.map(|a| rt.to_window(a));
+    let area = ime_area_window(rt);
     (reset, area)
 }
 

@@ -134,9 +134,11 @@ impl Running {
             sync_copy(&self.input.handle, &self.input.copy_cache);
         }
         let rt = self.app.rt();
-        // The page's text field sits at the caret, so an input method's candidates open beside it.
-        if self.input.caret != rt.ime_area {
-            self.input.caret = rt.ime_area;
+        // The page's text field sits at the caret in window points, so an input method's
+        // candidates open beside it at any zoom.
+        let caret = crate::input::host_events::ime_area_window(rt);
+        if self.input.caret != caret {
+            self.input.caret = caret;
             if let Some([x, y, w, h]) = self.input.caret { sync_caret(&self.input.handle, x, y, w, h); }
         }
         let (sans, mono) = rt.font_families();
@@ -318,13 +320,17 @@ impl Running {
             }
             // The pointer is over mirrored text or a link, which takes it from the canvas.
             Some("hover") => {
-                let offset = {
+                let (x, y, offset) = {
                     let rt = self.app.rt();
                     if rt.touching() { return false; }
-                    rt.page_window().0
+                    let (x, y) = crate::input::host_events::window_point(
+                        rt,
+                        event["x"].as_f64().unwrap_or(0.0) as f32,
+                        event["y"].as_f64().unwrap_or(0.0) as f32,
+                    );
+                    (x, y, rt.page_window().0)
                 };
                 // The mirror's pointer is in window points; the canvas draws the band.
-                let (x, y) = (event["x"].as_f64().unwrap_or(0.0) as f32, event["y"].as_f64().unwrap_or(0.0) as f32);
                 self.app.pointer_move(x, y + offset);
                 return true;
             }
@@ -345,7 +351,8 @@ impl Running {
         match event {
             WindowEvent::ModifiersChanged(mods) => { self.input.mods = mods.state(); return false; }
             WindowEvent::CursorMoved { position, .. } if !self.app.rt().touching() => {
-                self.app.pointer_move(position.x as f32 / scale, position.y as f32 / scale);
+                let (x, y) = crate::input::host_events::physical_point(self.app.rt(), position.x, position.y);
+                self.app.pointer_move(x, y);
                 self.cursor.apply(window, self.app.rt().cursor(), true);
             }
             WindowEvent::CursorLeft { .. } if !self.app.rt().touching() => {
@@ -384,22 +391,24 @@ impl Running {
                     (&button, ElementState::Released) => self.app.button_up(x, y, crate::window::pointer_button(button)),
                 }
             }
-            WindowEvent::MouseWheel { delta, .. } => {
-                let rt = self.app.rt_mut();
-                let Some((x, y)) = rt.pointer() else { return false };
+            WindowEvent::MouseWheel { delta, phase, .. } => {
                 let (dx, dy) = crate::runtime::wheel_delta(*delta, scale, self.input.mods.shift_key(), crate::runtime::LINE_POINTS);
-                // A page's pinch is the browser's zoom.
-                // Where nothing of Rune's pinches, it's the browser's zoom (bridge.js).
-                if self.input.mods.control_key() {
-                    let used = !self.input.document && rt.pinch_wheel(x, y, dy);
-                    sync_wheel(&self.input.handle, used);
-                    return used;
-                }
-                // On a content-sized embedded canvas, vertical wheel belongs to the page unless
-                // a horizontal strip is being scrolled.
-                if self.input.fit_height && dx.abs() <= dy.abs() { return false; }
                 let precise = matches!(delta, winit::event::MouseScrollDelta::PixelDelta(_));
-                rt.wheel_event(crate::WheelEvent::new(dx, dy).at(x, y).mods(crate::window::map_mods(self.input.mods)).precise(precise));
+                // Browsers give WheelEvent no gesture phase (always Moved), matching unphased
+                // desktop mouse wheels so WheelLock uses its idle timeout.
+                let phase = crate::input::host_events::gesture_phase(*phase);
+                let (redraw, wheel_used) = crate::input::host_events::web_wheel(
+                    self.app.rt_mut(),
+                    dx,
+                    dy,
+                    crate::window::map_mods(self.input.mods),
+                    phase,
+                    precise,
+                    self.input.document,
+                    self.input.fit_height,
+                );
+                if let Some(used) = wheel_used { sync_wheel(&self.input.handle, used); }
+                if !redraw { return false; }
             }
             // A page's Tab is the browser's, through the mirror's links and buttons.
             WindowEvent::KeyboardInput { event, .. }

@@ -74,3 +74,76 @@ fn shared_modifiers_updates_state_and_notifies_physical_handlers() {
     rt.frame(0.0);
     assert_eq!(rt.state.seen.last().map(|m| (m.shift, m.alt)), Some((true, true)));
 }
+
+#[test]
+fn pointer_wheel_hover_and_ime_area_scale_by_view_zoom() {
+    #[derive(Default)]
+    struct S { clicks: Vec<&'static str>, wheels: Vec<WheelEvent>, pinches: Vec<f32>, edit: crate::TextEdit }
+    fn view(s: &S, cx: &mut Cx<S>) -> El {
+        cx.zoom(1.5);
+        crate::col().size(200.0, 200.0)
+            .on_wheel(|s: &mut S, ev, _| { s.wheels.push(ev); true })
+            .on_magnify(|s: &mut S, ev, _| { s.pinches.push(ev.delta); true })
+            .child(el().key("top").size(100.0, 50.0).on_press(|s: &mut S| s.clicks.push("top")))
+            .child(el().key("mid").size(100.0, 50.0).on_press(|s: &mut S| s.clicks.push("mid")))
+            .child(crate::text_input(&s.edit, crate::TextStyle::new(14.0, 400.0))
+                .key("field").size(100.0, 40.0).on_edit(|s: &mut S| &mut s.edit))
+    }
+    // Scale 2.0, zoom 1.5 -> input_scale = 3.0.
+    // "mid" sits at view y in [50, 100), i.e. window y in [75, 150), physical y in [150, 300).
+    let mut rt = Runtime::new(S::default(), view, (300.0, 300.0), Env::new(true, 2.0));
+    rt.frame(0.0);
+
+    // Physical (120, 180) -> window (60, 90) -> view (40, 60) which hits "mid" (not "top").
+    let (vx, vy) = physical_point(rt.core(), 120.0, 180.0);
+    assert!((vx - 40.0).abs() < 1e-4 && (vy - 60.0).abs() < 1e-4);
+    rt.pointer_move(vx, vy);
+    rt.pointer_down(vx, vy);
+    rt.pointer_up(vx, vy);
+    rt.frame(0.0);
+    assert_eq!(rt.state.clicks, ["mid"]);
+
+    // Window point (45, 30) -> view (30, 20) which hits "top".
+    let (hx, hy) = window_point(rt.core(), 45.0, 30.0);
+    assert!((hx - 30.0).abs() < 1e-4 && (hy - 20.0).abs() < 1e-4);
+    rt.pointer_move(hx, hy);
+    rt.pointer_down(hx, hy);
+    rt.pointer_up(hx, hy);
+    rt.frame(0.0);
+    assert_eq!(rt.state.clicks, ["mid", "top"]);
+
+    // Wheel delta -30 window points -> -20 view points at zoom 1.5.
+    let (redraw, used) = web_wheel(
+        rt.core_mut(), 0.0, -30.0, crate::Mods::default(), GesturePhase::Moved, true, false, false,
+    );
+    assert!(redraw && used.is_none());
+    rt.frame(0.0);
+    assert_eq!(rt.state.wheels.len(), 1);
+    assert!((rt.state.wheels[0].dy - (-20.0)).abs() < 1e-4);
+
+    // Ctrl+wheel pinches in un-zoomed window points; document mode leaves it to the browser.
+    let ctrl = crate::Mods { ctrl: true, cmd: true, ..crate::Mods::default() };
+    let (redraw, used) = web_wheel(rt.core_mut(), 0.0, -40.0, ctrl, GesturePhase::Moved, true, false, false);
+    assert!(redraw && used == Some(true));
+    rt.frame(0.0);
+    assert_eq!(rt.state.pinches.len(), 1);
+    let (redraw, used) = web_wheel(rt.core_mut(), 0.0, -40.0, ctrl, GesturePhase::Moved, true, true, false);
+    assert!(!redraw && used == Some(false));
+
+    // fit_height leaves vertical wheel to the page, while keeping horizontal wheel.
+    let (redraw, used) = web_wheel(rt.core_mut(), 0.0, -30.0, crate::Mods::default(), GesturePhase::Moved, true, false, true);
+    assert!(!redraw && used.is_none());
+    let (redraw, used) = web_wheel(rt.core_mut(), -30.0, 0.0, crate::Mods::default(), GesturePhase::Moved, true, false, true);
+    assert!(redraw && used.is_none());
+
+    // IME area in window points scales by zoom (1.5x view ime_area).
+    let (fx, fy) = rt.find("field").unwrap();
+    rt.pointer_down(fx, fy);
+    rt.pointer_up(fx, fy);
+    rt.frame(0.0);
+    let view_ime = rt.ime_area.expect("focused field sets ime_area");
+    let win_ime = ime_area_window(rt.core()).expect("window ime_area");
+    for i in 0..4 {
+        assert!((win_ime[i] - view_ime[i] * 1.5).abs() < 1e-3);
+    }
+}
