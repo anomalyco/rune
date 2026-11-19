@@ -1,6 +1,7 @@
 //! Foundation primitives for Rune: colour, design tokens, themes, vector shapes, state
 //! machines, clocks, off-UI tasks, tracked state reads, growth curves, live values, latest-wins
-//! background requests, launch marks, app directories, and preferences.
+//! background requests, launch marks, app directories, and preferences, with no GPU or windowing
+//! dependencies. Apps normally reach these modules and types through `rune`, which re-exports them.
 
 #[doc(hidden)]
 pub mod cold;

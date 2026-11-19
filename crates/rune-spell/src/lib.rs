@@ -7,6 +7,8 @@
 //! [`available_languages`], [`set_languages`] and the fields' Spellcheck Languages menu
 //! (`El::on_spellcheck_languages`). A word is misspelled when every chosen dictionary says so,
 //! as Chromium's multilingual checking does. macOS picks each text's language itself.
+//! Apps normally reach this crate through `rune::spell`.
+
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;

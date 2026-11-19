@@ -1,5 +1,7 @@
-//! Parley layout (wrapping, rich spans, registered families) over embedded fonts, swash rasterising
-//! glyphs and SVG icons into one greyscale atlas.
+//! Text shaping, layout, font discovery, glyph rasterization, outline filling and icon rendering
+//! for Rune: Parley layout (wrapping, rich spans, registered families) over embedded and system
+//! fonts, with swash and platform pipelines rasterising glyphs and SVG icons into one greyscale
+//! atlas. Apps normally reach this crate through `rune::text`.
 //!
 //! Invariants: layouts are in device pixels; every layout is cached by a 64-bit hash of
 //! (text, spans, style, scale, width), kept for two commits unused and then while a budget of

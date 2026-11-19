@@ -90,7 +90,7 @@ default-members = [
 exclude = ["tools/rune-dev-guard", "vendor/accesskit_macos", "vendor/accesskit_windows", "vendor/parley_engine", "vendor/sctk-adwaita", "vendor/tiny-skia-path", "vendor/wgpu-hal", "vendor/winit"]
 
 # wgpu-hal as published plus `vendor/wgpu-hal.patch`: `dx12::Instance::expose_adapter` (a `wgpu::Adapter` for the
-# one adapter Rune picks through DXGI, with no device made on the others, `gpu/pick.rs`) and FXC loaded on
+# one adapter Rune picks through DXGI, with no device made on the others, `crates/rune-gpu/src/pick.rs`) and FXC loaded on
 # the first compile rather than with the instance (Rune's uber shader is precompiled), and partial presents
 # (`Surface::set_present_rects`: `Present1` dirty rectangles on a sequential flip-model swap chain, for
 # `render::damaged`). Re-made by

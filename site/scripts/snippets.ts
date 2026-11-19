@@ -124,7 +124,7 @@ const specs: Record<string, Spec> = {
   "rune-deps": {
     lang: "toml",
     label: "TOML",
-    pieces: [{ file: "crates/rune/Cargo.toml", from: "rune-motion = ", to: "parley = " }],
+    pieces: [{ file: "crates/rune/Cargo.toml", from: "rune-core = ", to: "parley = " }],
   },
 }
 
