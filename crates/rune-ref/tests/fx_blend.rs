@@ -1,3 +1,4 @@
+#![cfg(feature = "gpu")]
 use rune::color::{srgb_decode, srgb_encode};
 use rune::render::{Gpu, Offscreen};
 use rune_fx::*;

@@ -25,7 +25,6 @@ wgpu = { workspace = true, features = ["webgpu"] }
 
 [dev-dependencies]
 rune = { workspace = true, default-features = true }
-rune-ref = { workspace = true }
 ab_glyph = "0.2.32"
 png = { workspace = true }
 
