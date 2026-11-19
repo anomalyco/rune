@@ -2430,17 +2430,23 @@ impl crate::Device for super::Device {
 
             log::trace!("Waiting for fence value {value} for {remaining_wait_duration:?}");
 
+            // Rune: in slices of at most 100 ms, reading the fence again after each. A fence can
+            // read `u64::MAX` a moment before D3D12 reports the removal; `reached` then gives the
+            // last real value, and the auto-reset event, already fired by that `u64::MAX`, never
+            // fires again: one wait for the whole timeout (`INFINITE` for `wait_indefinitely`)
+            // would never return. A slice that ends without the event costs a re-read
+            // (`GetCompletedValue`, and `GetDeviceRemovedReason` once the fence reads `u64::MAX`);
+            // a wait the GPU answers returns on the event, as before.
+            let slice = remaining_wait_duration.min(Duration::from_millis(100));
             match unsafe {
-                Threading::WaitForSingleObject(
-                    event.0,
-                    remaining_wait_duration.as_millis().min(u32::MAX as u128) as u32,
-                )
+                Threading::WaitForSingleObject(event.0, slice.as_millis().min(u32::MAX as u128) as u32)
             } {
                 Foundation::WAIT_OBJECT_0 => {}
                 Foundation::WAIT_ABANDONED | Foundation::WAIT_FAILED => {
                     log::error!("Wait failed!");
                     break Err(crate::DeviceError::Lost);
                 }
+                Foundation::WAIT_TIMEOUT if slice < remaining_wait_duration => {}
                 Foundation::WAIT_TIMEOUT => {
                     log::trace!("Wait timed out!");
                     break Ok(false);

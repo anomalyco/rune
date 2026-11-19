@@ -13,6 +13,7 @@
 //! takes skip the staging.
 
 mod buffer;
+pub mod health;
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
