@@ -531,12 +531,24 @@ impl CompactStyle {
     #[inline(never)]
     pub fn modify_cold(&mut self, f: impl FnOnce(&mut Style)) {
         let whole = self.whole_rows();
-        let mut s = match self.extra.take() {
-            Some(b) => *b,
-            None => self.to_style(),
-        };
-        f(&mut s);
-        *self = Self::from_style(s);
+        match self.extra.take() {
+            Some(mut b) => {
+                // The Box already holds the full style: mutate it where it is, repack the inline
+                // mirror from it, and keep it. Only a style that became hot-packable drops it,
+                // which is exactly what `from_style` would have decided.
+                f(&mut b);
+                let (mut packed, needs_extra) = Self::pack_hot(&b);
+                if needs_extra {
+                    packed.extra = Some(b);
+                }
+                *self = packed;
+            }
+            None => {
+                let mut s = self.to_style();
+                f(&mut s);
+                *self = Self::from_style(s);
+            }
+        }
         if whole {
             self.justify_content_u8 |= JUSTIFY_WHOLE_ROWS;
         }
