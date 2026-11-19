@@ -70,15 +70,6 @@ export function setCursor(canvas, css) {
     if (!canvas.style.cursor) canvas.style.cursor = `-webkit-${css}`;
 }
 
-export function browserPlatform() {
-    const nav = globalThis.navigator;
-    return nav ? (nav.userAgentData?.platform || nav.platform || '') : undefined;
-}
-
-export function touchPoints() {
-    return globalThis.navigator?.maxTouchPoints || 0;
-}
-
 // Resolves in the page's next idle time, or after `timeout` ms at the latest.
 export function nextIdle(timeout) {
     return new Promise((resolve) => globalThis.requestIdleCallback ? requestIdleCallback(() => resolve(), { timeout }) : setTimeout(resolve, timeout));

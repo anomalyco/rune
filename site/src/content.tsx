@@ -269,7 +269,7 @@ export const layers: Entry[] = [
       { label: "Not", values: ["CoreText only, cosmic-text"] },
     ],
     code: [
-      at("crates/rune/src/text.rs", "Parley, swash, the atlas"),
+      at("crates/rune-text/src/lib.rs", "Parley, swash, the atlas"),
       at("research/23-text-quality.md", "against CoreText"),
     ],
   },

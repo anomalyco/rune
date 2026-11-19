@@ -18,7 +18,7 @@ mod input;
 mod page;
 mod pipelines;
 pub(crate) mod platform;
-pub(crate) mod segmenter;
+pub(crate) use rune_text::segmenter;
 
 thread_local! {
     static INSETS: std::cell::Cell<[f32; 4]> = const { std::cell::Cell::new([0.0; 4]) };

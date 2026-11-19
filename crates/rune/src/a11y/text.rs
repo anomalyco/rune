@@ -85,12 +85,7 @@ fn push_waiting_ascii_line(
         widths.push(vis_w);
         cx += adv;
     }
-    let wb_seg = const {
-        icu_segmenter::WordSegmenter::new_for_non_complex_scripts(
-            icu_segmenter::options::WordBreakInvariantOptions::default(),
-        )
-    };
-    let word_starts = wb_seg.segment_str(words).filter(|&w| w > 0 && w < n && w < 256).map(|w| w as u8).collect();
+    let word_starts = rune_text::segmenter::non_complex_word_starts(words, n);
     let br = if content.as_bytes().get(line_end..line_end + 2) == Some(b"\r\n") {
         2
     } else {

@@ -819,7 +819,7 @@ impl RuntimeCore {
                         let scale = self.env.scale;
                         let w = (old.local.w - old.inset[0] - old.inset[2]).max(0.0);
                         let wrap = spec.wrap.then_some(w * scale);
-                        old.text_layout = Some(TextLayout::Single(self.text.layout_for_spec(spec, scale, wrap, line_alignment(spec))));
+                        old.text_layout = Some(TextLayout::Single(self.text.layout_for_spec(&spec.as_text_input(scale, false), scale, wrap, line_alignment(spec))));
                         old.elided = None;
                     }
                 } else if let Some(spec) = &mut old.text
@@ -830,7 +830,7 @@ impl RuntimeCore {
                     let scale = self.env.scale;
                     let w = (old.local.w - old.inset[0] - old.inset[2]).max(0.0);
                     let wrap = spec.wrap.then_some(w * scale);
-                    let mut layout = self.text.layout_for_spec(spec, scale, wrap, line_alignment(spec));
+                    let mut layout = self.text.layout_for_spec(&spec.as_text_input(scale, false), scale, wrap, line_alignment(spec));
                     let mut elided = None;
                     if spec.truncate && layout.full_width() > w * scale + 0.5 {
                         let (cut, e) = truncated(&mut self.text, spec, scale, w * scale);

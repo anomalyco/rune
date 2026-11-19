@@ -606,9 +606,9 @@ impl<S: 'static> App<S> {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub fn try_run(mut self) -> Result<(), String> {
-        // Windows' word dictionaries start loading now, on their own thread (platform/win32/segmenter.rs).
+        // Windows' word dictionaries start loading now, on their own thread (`rune_text::segmenter`).
         #[cfg(all(target_os = "windows", not(feature = "segmenter-dictionaries")))]
-        crate::platform::win32::segmenter::install();
+        rune_text::segmenter::install();
         let args = match self.argv.take() {
             Some(argv) => Args::parse_from(argv),
             None => Args::parse(),

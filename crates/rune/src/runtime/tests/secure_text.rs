@@ -409,8 +409,8 @@ fn wrap_anywhere_wraps_unbroken_tokens_keeps_word_breaks_and_lowers_min_content_
     }
 
     // Min-content width (max_width = Some(0.0)) shrinks from the full token width to a single character's width.
-    let min_def = rt.text.layout_for_spec(node("default_wrap").text.as_ref().unwrap(), 1.0, Some(0.0), parley::Alignment::Start);
-    let min_any = rt.text.layout_for_spec(any_node.text.as_ref().unwrap(), 1.0, Some(0.0), parley::Alignment::Start);
+    let min_def = rt.text.layout_for_spec(&node("default_wrap").text.as_ref().unwrap().as_text_input(1.0, false), 1.0, Some(0.0), parley::Alignment::Start);
+    let min_any = rt.text.layout_for_spec(&any_node.text.as_ref().unwrap().as_text_input(1.0, false), 1.0, Some(0.0), parley::Alignment::Start);
     assert!(min_def.full_width() > 400.0);
     assert!(min_any.full_width() < 20.0, "wrap_anywhere min-content width is a single grapheme (got {})", min_any.full_width());
 

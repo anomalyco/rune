@@ -1,6 +1,7 @@
 //! `El::dir_by_paragraph`: each paragraph of a text in the direction of its own words, as CSS's
 //! `unicode-bidi: plaintext` lays a block's paragraphs out.
 use super::*;
+use rune_text::paragraph_ranges as paragraphs;
 
 impl El {
     /// Lays out each newline-ended line as its own [`Layout`](crate::text::Layout), reusing
@@ -80,32 +81,6 @@ impl El {
         self.children = pieces.into_iter().chain(kept).collect();
         self
     }
-}
-
-/// The byte ranges of `content`'s paragraphs, the separators between them left out: a UAX #9
-/// paragraph separator (a newline) ends each but the last, CR LF as one.
-fn paragraphs(content: &str) -> Vec<(usize, usize)> {
-    use icu_properties::{CodePointMapData, props::BidiClass};
-    let classes = CodePointMapData::<BidiClass>::new();
-    let mut out = Vec::new();
-    let mut start = 0;
-    let mut chars = content.char_indices().peekable();
-    while let Some((i, c)) = chars.next() {
-        if classes.get(c) != BidiClass::ParagraphSeparator {
-            continue;
-        }
-        let end = match chars.peek() {
-            Some(&(j, '\n')) if c == '\r' => {
-                chars.next();
-                j + 1
-            }
-            _ => i + c.len_utf8(),
-        };
-        out.push((start, i));
-        start = end;
-    }
-    out.push((start, content.len()));
-    out
 }
 
 /// Fills `e` with paragraph `k` of `t`, bytes `a..b`: its words and the spans, links, pills,

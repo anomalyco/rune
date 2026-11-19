@@ -11,12 +11,7 @@ impl CeilTo for f32 {
     }
 }
 
-/// `px` device pixels rounded up to a 64th of one, the unit Chromium's layout keeps a text
-/// run's width in (`LayoutUnit`): a label is as wide as its glyphs, so what follows it sits
-/// where Chromium puts it, never up to a pixel further on.
-pub(crate) fn text_width(px: f32) -> f32 {
-    ((px - 1e-3) * 64.0).ceil().max(0.0) / 64.0
-}
+pub(crate) use crate::text::text_width;
 
 /// Device px a text may run past the width it wraps at and still fit: [`text_width`] can round
 /// a box up to 1e-3 px under its text, and points to device px and back loses a little more, so
@@ -238,17 +233,18 @@ pub(super) fn truncated(text: &mut TextSystem, spec: &TextSpec, scale: f32, max_
     };
     let mut str_buf = if spec.redacted { String::new() } else { String::with_capacity(content.len() + Elision::ELLIPSIS.len()) };
     let mut span_buf = Vec::new();
+    let input = spec.as_text_input(scale, false);
     let mut make = |text: &mut TextSystem, e: Elision| {
         e.spans_into(&spec.spans, &mut span_buf);
         if spec.redacted {
             let s = zeroize::Zeroizing::new([&content[..e.head], Elision::ELLIPSIS, &content[e.tail..]].concat());
-            text.layout_cut(spec, &s, &span_buf, scale, None, parley::Alignment::Start, false)
+            text.layout_cut(&input, &s, &span_buf, scale, None, parley::Alignment::Start, false)
         } else {
             str_buf.clear();
             str_buf.push_str(&content[..e.head]);
             str_buf.push_str(Elision::ELLIPSIS);
             str_buf.push_str(&content[e.tail..]);
-            text.layout_cut(spec, &str_buf, &span_buf, scale, None, parley::Alignment::Start, true)
+            text.layout_cut(&input, &str_buf, &span_buf, scale, None, parley::Alignment::Start, true)
         }
     };
     let (mut lo, mut hi) = (0usize, n);
@@ -376,7 +372,8 @@ pub(super) fn compute_layout(taffy: &mut LayoutEngine, root: SlotId, room: Size<
                     };
                 }
             }
-            let laid = text.layout_text(spec, nodes[i].input.is_some(), scale, w.map(|w| w * scale + FIT_SLACK), parley::Alignment::Start, nodes[i].text_layout.as_ref());
+            let is_input = nodes[i].input.is_some();
+            let laid = text.layout_text(&spec.as_text_input(scale, is_input), is_input, scale, w.map(|w| w * scale + FIT_SLACK), parley::Alignment::Start, nodes[i].text_layout.as_ref());
             let l = laid.view();
             // Spaces hanging past a wrapped line's end take no room, as in CSS.
             let mut lw = text_width(if w.is_some() { l.width() } else { l.full_width() }) / scale;
@@ -452,16 +449,17 @@ pub(super) fn clamped(text: &mut TextSystem, spec: &TextSpec, scale: f32, max_w:
     };
     let mut str_buf = if spec.redacted { String::new() } else { String::with_capacity(end + Elision::ELLIPSIS.len()) };
     let mut span_buf = Vec::new();
+    let input = spec.as_text_input(scale, false);
     let mut make = |text: &mut TextSystem, e: Elision| {
         e.spans_into(&spec.spans, &mut span_buf);
         if spec.redacted {
             let s = zeroize::Zeroizing::new([&content[..e.head], Elision::ELLIPSIS].concat());
-            text.layout_cut(spec, &s, &span_buf, scale, Some(max_w), align, false)
+            text.layout_cut(&input, &s, &span_buf, scale, Some(max_w), align, false)
         } else {
             str_buf.clear();
             str_buf.push_str(&content[..e.head]);
             str_buf.push_str(Elision::ELLIPSIS);
-            text.layout_cut(spec, &str_buf, &span_buf, scale, Some(max_w), align, true)
+            text.layout_cut(&input, &str_buf, &span_buf, scale, Some(max_w), align, true)
         }
     };
     let fits = |l: &Layout<Ink>| l.len() <= lines && last_line_width(l, lines) <= max_w + 0.5;
