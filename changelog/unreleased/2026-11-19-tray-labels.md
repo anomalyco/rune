@@ -1,0 +1,1 @@
+- **Tray menu labels and tooltips match across Windows and Linux.** Windows tray menu items now escape `&` and tabs so labels show literally instead of underlining mnemonics or splitting shortcut columns, Linux `dbusmenu` tray items now escape `_` so underscores show literally, and Windows tray tooltips truncate on UTF-16 character boundaries instead of splitting surrogate pairs.
