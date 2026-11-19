@@ -5,6 +5,7 @@ use std::any::Any;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
+#[cfg(debug_assertions)]
 use objc2_foundation::NSString;
 use objc2_metal::{
     MTLBlitCommandEncoder, MTLCommandBuffer, MTLCommandBufferStatus, MTLCommandEncoder, MTLCommandQueue, MTLDrawable, MTLEvent, MTLSharedEvent,
@@ -15,7 +16,6 @@ use objc2::runtime::ProtocolObject;
 use parking_lot::MutexGuard;
 use wgpu::custom::*;
 
-use super::device::debug_labels;
 use super::encode::{MetalCommandBuffer, buffer_to_texture};
 use super::resource::{BufferRaw, MetalBuffer, MetalTexture};
 use super::surface::MetalOutput;
@@ -151,7 +151,8 @@ impl Shared {
         let uploads = uploads.get_or_insert_with(|| {
             let cb = self.command_buffer();
             let blit = autoreleasepool(|_| cb.blitCommandEncoder()).expect("a Metal blit encoder");
-            if debug_labels() {
+            #[cfg(debug_assertions)]
+            {
                 cb.setLabel(Some(&NSString::from_str("rune metal uploads")));
                 blit.setLabel(Some(&NSString::from_str("rune metal uploads blit")));
             }
@@ -171,34 +172,54 @@ impl Shared {
     /// Releases what completed command buffers used and runs the callbacks waiting on them.
     /// One at a time, outside the lock: callbacks may call back into the device. Returns the
     /// value it retired up to.
-    pub(super) fn retire(&self) -> u64 {
-        loop {
-            let next = {
+    pub(super) fn retire(&self) -> u64 { self.retire_inner(false) }
+
+    /// Retires completed command buffers from the front of `st.retire`. When `check_unsignaled`
+    /// is false, skips `cb.status()` on command buffers whose shared-event value has not yet
+    /// signaled (a command buffer cannot complete before its signal); after `waitUntilCompleted`
+    /// it checks every entry so an errored buffer that skipped its signal still retires.
+    fn retire_inner(&self, check_unsignaled: bool) -> u64 {
+        let signaled = if check_unsignaled { u64::MAX } else { self.event.signaledValue() };
+        let mut emptied: Option<Keep> = None;
+        let (done, has_callbacks) = loop {
+            let pending = {
                 let mut st = self.lock();
-                if st.retire.front().is_some_and(|p| completed(&p.cb)) {
-                    let p = st.retire.pop_front();
-                    if let Some(ref p) = p { st.retired = st.retired.max(p.value); }
-                    p
+                if let Some(keep) = emptied.take()
+                    && st.spare.len() < SPARE_KEEPS
+                {
+                    st.spare.push(keep);
+                }
+                if st.retire.front().is_some_and(|p| p.value <= signaled && completed(&p.cb)) {
+                    if let Some(p) = st.retire.pop_front() {
+                        st.retired = st.retired.max(p.value);
+                        Some(p)
+                    } else {
+                        None
+                    }
                 } else {
-                    None
+                    let done = st.retired;
+                    let has_cb = st.callbacks.front().is_some_and(|(at, _)| *at <= done);
+                    break (done, has_cb);
                 }
             };
-            let Some(Pending { cb, keep, drawable, .. }) = next else { break };
+            let Some(Pending { cb, mut keep, drawable, .. }) = pending else { continue };
             // Drop the completed command buffer before any object it referenced without retaining.
             drop(cb);
             drop(drawable);
-            self.recycle(keep);
-        }
-        let done = self.lock().retired;
-        loop {
-            let next = {
-                let mut st = self.lock();
-                if st.callbacks.front().is_some_and(|(at, _)| *at <= done) { st.callbacks.pop_front() } else { None }
-            };
-            match next {
-                Some((_, Callback::Map(f))) => f(Ok(())),
-                Some((_, Callback::Done(f))) => f(),
-                None => break,
+            keep.clear();
+            if keep.capacity() > 0 { emptied = Some(keep); }
+        };
+        if has_callbacks {
+            loop {
+                let next = {
+                    let mut st = self.lock();
+                    if st.callbacks.front().is_some_and(|(at, _)| *at <= done) { st.callbacks.pop_front() } else { None }
+                };
+                match next {
+                    Some((_, Callback::Map(f))) => f(Ok(())),
+                    Some((_, Callback::Done(f))) => f(),
+                    None => break,
+                }
             }
         }
         done
@@ -244,7 +265,7 @@ impl Shared {
             let Some(cb) = cb else { break };
             cb.waitUntilCompleted();
         }
-        self.retire();
+        self.retire_inner(true);
         let st = self.lock();
         let empty = st.retire.is_empty() && st.held.is_none() && st.callbacks.is_empty();
         Ok(if empty { wgpu::PollStatus::QueueEmpty } else { wgpu::PollStatus::WaitSucceeded })
@@ -302,7 +323,7 @@ impl Drop for Shared {
             let Some(cb) = cb else { break };
             cb.waitUntilCompleted();
         }
-        self.retire();
+        self.retire_inner(true);
     }
 }
 
@@ -376,7 +397,8 @@ impl QueueInterface for MetalQueue {
                 Some(held) => held,
                 None => {
                     let cb = self.0.command_buffer();
-                    if debug_labels() { cb.setLabel(Some(&NSString::from_str("rune metal present"))); }
+                    #[cfg(debug_assertions)]
+                    cb.setLabel(Some(&NSString::from_str("rune metal present")));
                     st.last += 1;
                     Held { cb, value: st.last, keep: Vec::new() }
                 }

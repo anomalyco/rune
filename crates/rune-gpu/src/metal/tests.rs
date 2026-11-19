@@ -375,14 +375,14 @@ fn resources_stay_alive_until_command_buffer_completes() {
 
     let pending = sh.pending_cbs();
     assert_eq!(pending.len(), 2, "upload and render command buffers are both tracked");
-    let (upload_cb, render_cb) = (pending[0].1.clone(), pending[1].1.clone());
+    let (upload_cb, (render_val, render_cb)) = (pending[0].1.clone(), (pending[1].0, pending[1].1.clone()));
     assert!(tex_weak.strong_count() > 0, "upload CB keeps the texture alive while gated");
     assert!(view_weak.strong_count() > 0, "render CB keeps the view alive while gated");
 
     gate.setSignaledValue(1);
-    // Spin through the window where the GPU event has signaled `index` before Metal marks the
+    // Spin through the window where the GPU event has signaled `render_val` before Metal marks the
     // command buffers completed: neither resource may drop before its command buffer completes.
-    while sh.event.signaledValue() < index {
+    while sh.event.signaledValue() < render_val {
         std::hint::spin_loop();
     }
     for _ in 0..256 {

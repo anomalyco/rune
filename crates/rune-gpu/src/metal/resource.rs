@@ -5,9 +5,13 @@ use std::ptr::NonNull;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicIsize, Ordering};
 
-use objc2_foundation::{NSRange, NSString};
+use objc2_foundation::NSRange;
+#[cfg(debug_assertions)]
+use objc2_foundation::NSString;
+#[cfg(debug_assertions)]
+use objc2_metal::MTLResource;
 use objc2_metal::{
-    MTLBuffer, MTLCompareFunction, MTLDevice, MTLPixelFormat, MTLResource, MTLResourceOptions, MTLSamplerAddressMode, MTLSamplerBorderColor,
+    MTLBuffer, MTLCompareFunction, MTLDevice, MTLPixelFormat, MTLResourceOptions, MTLSamplerAddressMode, MTLSamplerBorderColor,
     MTLSamplerDescriptor, MTLSamplerMinMagFilter, MTLSamplerMipFilter, MTLSamplerState, MTLStorageMode, MTLTexture, MTLTextureDescriptor,
     MTLTextureType, MTLTextureUsage,
 };
@@ -150,7 +154,10 @@ impl BufferRaw {
     /// A shared buffer of `size` zeroed bytes.
     pub(super) fn new(shared: &Shared, size: u64, label: Option<&str>) -> Self {
         let raw = shared.device.newBufferWithLength_options(size.max(4) as usize, MTLResourceOptions::StorageModeShared).expect("a Metal buffer");
+        #[cfg(debug_assertions)]
         if let Some(label) = label { raw.setLabel(Some(&NSString::from_str(label))); }
+        #[cfg(not(debug_assertions))]
+        let _ = label;
         Self::from(shared, raw, size)
     }
 
@@ -160,7 +167,10 @@ impl BufferRaw {
         let raw = unsafe {
             shared.device.newBufferWithBytes_length_options(NonNull::from(data).cast(), data.len(), MTLResourceOptions::StorageModeShared)
         }.expect("a Metal buffer");
+        #[cfg(debug_assertions)]
         if let Some(label) = label { raw.setLabel(Some(&NSString::from_str(label))); }
+        #[cfg(not(debug_assertions))]
+        let _ = label;
         Self::from(shared, raw, data.len() as u64)
     }
 
@@ -289,6 +299,7 @@ fn device_texture(device: &Obj<dyn MTLDevice>, desc: &wgpu::TextureDescriptor<'_
     d.setUsage(usage);
     d.setStorageMode(MTLStorageMode::Private);
     let raw = device.newTextureWithDescriptor(&d).expect("a Metal texture");
+    #[cfg(debug_assertions)]
     if let Some(label) = desc.label { raw.setLabel(Some(&NSString::from_str(label))); }
     raw
 }
@@ -310,6 +321,7 @@ impl TextureInterface for MetalTexture {
             // SAFETY: the ranges are within the texture, as wgpu's validation would require.
             let view = unsafe { t.raw.newTextureViewWithPixelFormat_textureType_levels_slices(pixel_format(format), texture_type(dimension), levels, slices) }
                 .expect("a Metal texture view");
+            #[cfg(debug_assertions)]
             if let Some(label) = desc.label {
                 view.setLabel(Some(&NSString::from_str(label)));
             } else if let Some(label) = t.raw.label() {
@@ -375,6 +387,7 @@ impl MetalSampler {
             Some(wgpu::SamplerBorderColor::OpaqueWhite) => MTLSamplerBorderColor::OpaqueWhite,
             _ => MTLSamplerBorderColor::TransparentBlack,
         });
+        #[cfg(debug_assertions)]
         if let Some(label) = desc.label { d.setLabel(Some(&NSString::from_str(label))); }
         MetalSampler { raw: Arc::new(SamplerRaw(device.newSamplerStateWithDescriptor(&d).expect("a Metal sampler"))) }
     }

@@ -8,6 +8,7 @@ use std::ops::Range;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
+#[cfg(debug_assertions)]
 use objc2_metal::MTLResource;
 use parking_lot::Mutex;
 
@@ -116,6 +117,7 @@ impl Store {
             Some(i) => slots.spares.remove(i).expect("a spare"),
             None => {
                 let fresh = BufferRaw::new(shared, size, None);
+                #[cfg(debug_assertions)]
                 if let Some(label) = slots.current.raw.label() { fresh.raw.setLabel(Some(&label)); }
                 (Arc::new(fresh), u64::MAX)
             }
