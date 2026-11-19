@@ -25,10 +25,12 @@ pub(crate) enum Slot {
     /// No frame of ours is queued (none yet, or the swap chain was made again).
     #[default]
     Free,
-    /// A frame was presented: the next one waits until the object says the queue has room.
-    Owed,
-    /// Owed, and the wait that asks for the next frame is registered (dropping it unregisters it).
-    Waiting(#[allow(dead_code)] Wait),
+    /// A frame was presented on swap chain `generation`: the next one waits until the object says
+    /// the queue has room.
+    Owed { generation: u64 },
+    /// Owed on `generation` and `source`, and the wait that asks for the next frame is registered
+    /// (dropping it unregisters it).
+    Waiting { #[allow(dead_code)] wait: Wait, generation: u64, source: usize },
 }
 
 /// What the surface's next frame does (`Slot::take`).
@@ -41,13 +43,40 @@ pub(crate) enum Take {
 }
 
 impl Slot {
-    /// The frame about to draw takes the swap chain's room, or waits for it. `waitable` is the
-    /// swap chain's object; `wake` asks the loop for the frame from the thread-pool thread.
-    pub(crate) fn take(&mut self, waitable: Option<HANDLE>, wake: impl Fn() + Send + 'static) -> Take {
-        match self {
+    /// Whether a thread-pool wait is currently registered for swap-chain room.
+    pub(crate) fn waiting(&self) -> bool {
+        matches!(self, Slot::Waiting { .. })
+    }
+
+    /// Takes room on `surface`'s swap chain, using its configure generation and DX12 waitable
+    /// handle so any reconfiguration or replacement automatically invalidates stale state.
+    pub(crate) fn take_surface(&mut self, surface: &wgpu::Surface, wake: impl Fn() + Send + 'static) -> Take {
+        let generation = crate::window::surface::configure::generation(surface);
+        // SAFETY: the object is the live swap chain's; `Slot` waits on its own duplicated copy.
+        let waitable = unsafe { surface.as_hal::<wgpu::hal::api::Dx12>().and_then(|h| h.waitable_handle()) };
+        self.take(generation, waitable.map(|h| h.0), wake)
+    }
+
+    /// The frame about to draw takes the swap chain's room, or waits for it. `generation` is the
+    /// surface's last successful configure number; `waitable` is the swap chain's object; `wake`
+    /// asks the loop for the frame from the thread-pool thread.
+    pub(crate) fn take(&mut self, generation: u64, waitable: Option<HANDLE>, wake: impl Fn() + Send + 'static) -> Take {
+        match *self {
             Slot::Free => Take::Draw,
-            Slot::Waiting(_) => Take::Later,
-            Slot::Owed => {
+            Slot::Waiting { generation: waited, source, .. } => {
+                if waited == generation && waitable.is_some_and(|h| h as usize == source) {
+                    Take::Later
+                } else {
+                    // The swap chain was reconfigured, replaced, or lost since the wait started.
+                    *self = Slot::Free;
+                    Take::Draw
+                }
+            }
+            Slot::Owed { generation: owed } => {
+                if owed != generation {
+                    *self = Slot::Free;
+                    return Take::Draw;
+                }
                 let Some(object) = waitable else { *self = Slot::Free; return Take::Draw };
                 // SAFETY: the swap chain's live object; a zero timeout only polls it (and takes its
                 // count when it's signalled).
@@ -56,7 +85,10 @@ impl Slot {
                     return Take::Draw;
                 }
                 match Wait::register(object, Box::new(wake)) {
-                    Some(wait) => { *self = Slot::Waiting(wait); Take::Later }
+                    Some(wait) => {
+                        *self = Slot::Waiting { wait, generation, source: object as usize };
+                        Take::Later
+                    }
                     // No thread-pool wait: draw, and let `acquire` find what it finds.
                     None => { *self = Slot::Free; Take::Draw }
                 }
@@ -66,11 +98,18 @@ impl Slot {
 
     /// The registered wait came back: the swap chain has room (its count is ours now).
     pub(crate) fn came_back(&mut self) {
-        if matches!(self, Slot::Waiting(_)) { *self = Slot::Free; }
+        if matches!(self, Slot::Waiting { .. }) { *self = Slot::Free; }
     }
 
-    /// A frame was presented.
-    pub(crate) fn presented(&mut self) { *self = Slot::Owed; }
+    /// A frame was presented on `surface`.
+    pub(crate) fn presented_surface(&mut self, surface: &wgpu::Surface) {
+        self.presented(crate::window::surface::configure::generation(surface));
+    }
+
+    /// A frame was presented on swap chain `generation`.
+    pub(crate) fn presented(&mut self, generation: u64) {
+        *self = Slot::Owed { generation };
+    }
 
     /// The swap chain was configured again or replaced: nothing of ours is queued on it.
     pub(crate) fn reset(&mut self) { *self = Slot::Free; }
@@ -120,3 +159,7 @@ unsafe extern "system" fn came(context: *mut c_void, _timed_out: bool) {
     let wake = unsafe { &*(context as *const Box<dyn Fn() + Send>) };
     wake();
 }
+
+#[cfg(test)]
+#[path = "slot_tests.rs"]
+mod tests;

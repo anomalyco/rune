@@ -387,6 +387,9 @@ impl Host {
         // A pass made on the device that went with it draws nothing: it goes too.
         w.corners = None;
         w.presented = None;
+        // Unregister any swap-chain wait before dropping the surface, even if replacement fails.
+        #[cfg(target_os = "windows")]
+        { w.native.slot.reset(); w.native.damage.reset(); }
         drop(w.surface.take());
         self.gpu = None;
         {
@@ -478,6 +481,8 @@ impl Host {
         }
         // The old surface goes first: a DX12 surface takes the visual's content, and the
         // committed tree keeps showing its last frame until the new one commits.
+        w.native.slot.reset();
+        w.native.damage.reset();
         drop(w.surface.take());
         // SAFETY: the window keeps the visual's `Handover` as long as it keeps this surface.
         let surface = unsafe { gpu.instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::CompositionVisual(visual)) }.map_err(|e| e.to_string())?;

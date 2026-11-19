@@ -236,6 +236,7 @@ impl Host {
         if !matches!(l.native.mode, SurfaceMode::HandingOver { paused: false, .. }) { return; }
         if renderer.srgb_blend() != self.app.rt().srgb_blend() {
             let Some(surface) = l.surface.as_ref() else { return };
+            l.native.slot.reset();
             if !reblend_core(surface, gpu, &mut l.config, renderer, &mut l.alpha, self.app.rt_mut()) {
                 l.surface_ok = false;
                 return;
@@ -287,7 +288,9 @@ impl Host {
         });
         renderer.submit(&gpu.queue, enc);
         gpu.queue.present(frame);
-        l.native.slot.presented();
+        if let Some(surface) = l.surface.as_ref() {
+            l.native.slot.presented_surface(surface);
+        }
         let flag = Arc::new(AtomicBool::new(false));
         let set = flag.clone();
         gpu.queue.on_submitted_work_done(move || set.store(true, Ordering::Release));
@@ -361,6 +364,7 @@ impl Host {
         w.native.mode = SurfaceMode::Cpu { cpu, job };
         // From a hand-over: its swap chain and GPU go. DWM kept the window's own content, which
         // the CPU goes on drawing.
+        w.native.slot.reset();
         w.surface = None;
         self.gpu = None;
         w.request_redraw();

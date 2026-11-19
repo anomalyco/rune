@@ -140,11 +140,9 @@ impl Host {
         // The swap chain still holds a frame the compositor hasn't shown: this one draws when it
         // has room, built from the input that came by then (`slot`).
         #[cfg(target_os = "windows")]
-        if !hidden && let Some(l) = self.win.as_mut() {
-            // SAFETY: the object is the live swap chain's; `Slot` waits on its own copy.
-            let waitable = l.surface.as_ref().and_then(|s| unsafe { s.as_hal::<wgpu::hal::api::Dx12>().and_then(|h| h.waitable_handle()) });
+        if !hidden && let Some(l) = self.win.as_mut() && let Some(surface) = l.surface.as_ref() {
             let handle = self.native_handle.clone();
-            if l.native.slot.take(waitable.map(|h| h.0), move || handle.send(WakeEvent::FrameSlot)) == slot::Take::Later { return; }
+            if l.native.slot.take_surface(surface, move || handle.send(WakeEvent::FrameSlot)) == slot::Take::Later { return; }
         }
         let Some(l) = self.win.as_mut() else { return };
         #[cfg(target_os = "windows")]
@@ -215,6 +213,8 @@ impl Host {
         l.backoff_step(BackoffEvent::Lapsed);
         if renderer.srgb_blend() != self.app.rt().srgb_blend() {
             let Some(surface) = l.surface.as_ref() else { return };
+            #[cfg(target_os = "windows")]
+            l.native.slot.reset();
             if !reblend_core(surface, gpu, &mut l.config, renderer, &mut l.alpha, self.app.rt_mut()) {
                 // A surface that won't take the new format is replaced before the next frame.
                 l.surface_ok = false;
@@ -382,6 +382,8 @@ impl Host {
         let frame = if renderer.srgb_blend() != self.app.rt().srgb_blend() {
             drop(frame);
             let Some(surface) = l.surface.as_ref() else { return };
+            #[cfg(target_os = "windows")]
+            l.native.slot.reset();
             if !reblend_core(surface, gpu, &mut l.config, renderer, &mut l.alpha, self.app.rt_mut()) {
                 l.surface_ok = false;
                 return;
@@ -536,7 +538,9 @@ impl Host {
         #[cfg(not(target_os = "macos"))]
         gpu.queue.present(frame);
         #[cfg(target_os = "windows")]
-        l.native.slot.presented();
+        if let Some(surface) = l.surface.as_ref() {
+            l.native.slot.presented_surface(surface);
+        }
         // A swap chain made again on a handed-over window's visual takes over now (`cpu_frame`).
         #[cfg(target_os = "windows")]
         if matches!(l.native.mode, handover::SurfaceMode::Rebinding { .. }) {

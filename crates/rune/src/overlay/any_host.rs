@@ -8,7 +8,7 @@ impl OverlayCore {
     /// (`slot`).
     fn waits_for_slot(&self) -> bool {
         #[cfg(target_os = "windows")]
-        return self.surface.live().is_some_and(|l| matches!(l.slot, Slot::Waiting(_)));
+        return self.surface.live().is_some_and(|l| l.slot.waiting());
         #[cfg(not(target_os = "windows"))]
         false
     }
@@ -107,7 +107,7 @@ impl AnyHost for OverlayHost {
             // The frame that waited for room in the swap chain draws now, after what changed
             // meanwhile. It waited from a turn `frame::turn` said had a frame to draw, and that
             // turn left `dirty` and `idle` as they were, so the gate still does.
-            if let Some(live) = self.core.surface.live_mut() && matches!(live.slot, Slot::Waiting(_)) {
+            if let Some(live) = self.core.surface.live_mut() && live.slot.waiting() {
                 live.slot.came_back();
             }
         }

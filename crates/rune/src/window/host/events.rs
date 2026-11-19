@@ -22,8 +22,6 @@ use crate::window::state::{Cover, RestEvent};
 #[cfg(not(target_os = "macos"))]
 use crate::window::surface::RedrawEvent;
 use crate::window::surface::Win;
-#[cfg(target_os = "windows")]
-use crate::window::win32::slot;
 use crate::window::{WakeEvent, gesture_phase, pointer_button, sync_screen_origin_core};
 
 impl Host {
@@ -169,7 +167,7 @@ impl Host {
             WakeEvent::FrameSlot(_) => {
                 // The frame that waited for room in the swap chain draws now, after the input
                 // that came meanwhile.
-                if let Some(w) = &mut self.win && matches!(w.native.slot, slot::Slot::Waiting(_)) {
+                if let Some(w) = &mut self.win && w.native.slot.waiting() {
                     w.native.slot.came_back();
                     w.request_redraw();
                 }

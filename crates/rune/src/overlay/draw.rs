@@ -127,9 +127,7 @@ impl OverlayCore {
         // has room, built from what changed by then (`slot`).
         #[cfg(target_os = "windows")]
         if let Some(wake) = self.slot_wake.clone() && let Some(live) = self.surface.live_mut() {
-            // SAFETY: the object is the live swap chain's; `Slot` waits on its own copy.
-            let waitable = unsafe { live.surface.as_hal::<wgpu::hal::api::Dx12>().and_then(|h| h.waitable_handle()) };
-            if live.slot.take(waitable.map(|h| h.0), move || wake()) == Take::Later {
+            if live.slot.take_surface(&live.surface, move || wake()) == Take::Later {
                 // The registered wait asks for this frame (`WakeEvent::FrameSlot`): not a miss,
                 // and no timer of its own to turn the loop with (`waits_for_slot`).
                 return false;
@@ -176,6 +174,8 @@ impl OverlayCore {
         // The present queue's vsync paces redraws where no display link does.
         if !prewarm { self.meter.redraw(paced || !cfg!(target_os = "macos")); }
         if renderer.srgb_blend() != app.rt().srgb_blend() {
+            #[cfg(target_os = "windows")]
+            live.slot.reset();
             if !crate::window::reblend_core(&live.surface, gpu, &mut live.config, renderer, &mut live.alpha, app.rt_mut()) { self.surface_refused(app, "its GPU surface refused a new configuration".into()); return false }
         }
         let frame = match crate::window::acquire_checked(&live.surface, gpu, &live.config, true, if prewarm { 2 } else { 1 }, &mut self.meter, !read_occlusion) {
@@ -230,6 +230,8 @@ impl OverlayCore {
         // A handler switched blending (`Tx::set_srgb_blend`): this drawable has the old format.
         let frame = if renderer.srgb_blend() != app.rt().srgb_blend() {
             drop(frame);
+            #[cfg(target_os = "windows")]
+            live.slot.reset();
             if !crate::window::reblend_core(&live.surface, gpu, &mut live.config, renderer, &mut live.alpha, app.rt_mut()) { self.surface_refused(app, "its GPU surface refused a new configuration".into()); return false }
             match crate::window::acquire_checked(&live.surface, gpu, &live.config, true, if prewarm { 2 } else { 1 }, &mut self.meter, !read_occlusion) {
                 Ok(frame) => frame,
@@ -282,7 +284,7 @@ impl OverlayCore {
         frame::submit_and_present(live, renderer, gpu, app.rt(), enc, frame, prewarm);
         // The next frame waits for the room this one took (`slot`).
         #[cfg(target_os = "windows")]
-        live.slot.presented();
+        live.slot.presented_surface(&live.surface);
         crate::render::gpu_events::presented();
         self.clock.presented_core(app.rt_mut(), Instant::now());
         if !prewarm { self.meter.presented(); }
