@@ -1,1 +1,0 @@
-- **Exhaustive macOS cursor mapping.** Removed wildcard fallback arms from AppKit's `NSCursor` mapping so every `Cursor` variant maps explicitly and future variants cannot silently fall back to the arrow cursor.
