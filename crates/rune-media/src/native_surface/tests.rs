@@ -367,7 +367,7 @@ fn completion_worker_preserves_cpu_gpu_overlap() {
         })
     };
     // The only two sizes a submission of this test has.
-    let (small, chunk) = (bind_for(CHUNK / 64), bind_for(CHUNK));
+    let (small, full) = (bind_for(CHUNK / 64), bind_for(CHUNK));
     let submit = |bind: &wgpu::BindGroup| {
         let mut encoder = gpu.device.create_command_encoder(&Default::default());
         {
@@ -392,16 +392,19 @@ fn completion_worker_preserves_cpu_gpu_overlap() {
     time(&small);
     let name = gpu.adapter.get_info().name;
     let floor = time(&small);
-    // A software adapter (WARP) runs on the CPU: there is no GPU to reset.
+    // A software adapter (WARP) runs the work on the CPU: there is no GPU to reset, and a full
+    // chunk could take seconds there, so it queues the small size.
+    let software = gpu.adapter.get_info().device_type == wgpu::DeviceType::Cpu;
+    let (chunk, size) = if software { (&small, CHUNK / 64) } else { (&full, CHUNK) };
     assert!(
-        floor <= BUDGET / 64 || gpu.adapter.get_info().device_type == wgpu::DeviceType::Cpu,
+        floor <= BUDGET / 64 || software,
         "{name} ran {} iterations in {} us: a submission of {CHUNK} per invocation could pass {} us, so this test queues none",
         u64::from(CHUNK / 64) * u64::from(INVOCATIONS),
         floor.as_micros(),
         BUDGET.as_micros()
     );
-    let mut per_chunk = time(&chunk);
-    eprintln!("overlap probe: on {name}, {} iterations took {} us, {} took {} us", u64::from(CHUNK / 64) * u64::from(INVOCATIONS), floor.as_micros(), u64::from(CHUNK) * u64::from(INVOCATIONS), per_chunk.as_micros());
+    let mut per_chunk = time(chunk);
+    eprintln!("overlap probe: on {name}, {} iterations took {} us; each queued submission is {} iterations and took {} us", u64::from(CHUNK / 64) * u64::from(INVOCATIONS), floor.as_micros(), u64::from(size) * u64::from(INVOCATIONS), per_chunk.as_micros());
     let target = Offscreen::new(&gpu.device, 16, 16);
     let mut outcomes = Vec::new();
     for planned in [25, 50, 100, 100, 100].map(Duration::from_millis) {
@@ -416,7 +419,7 @@ fn completion_worker_preserves_cpu_gpu_overlap() {
         });
         let submitted = Instant::now();
         for _ in 0..chunks {
-            submit(&chunk);
+            submit(chunk);
         }
         let mut encoder = gpu.device.create_command_encoder(&Default::default());
         {

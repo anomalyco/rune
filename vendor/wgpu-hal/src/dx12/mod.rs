@@ -1891,7 +1891,16 @@ impl crate::Queue for Queue {
                 .SetEventOnCompletion(value, self.idle_event.0)
         }
         .into_device_result("SetEventOnCompletion")?;
-        unsafe { Threading::WaitForSingleObject(self.idle_event.0, Threading::INFINITE) };
+        // Rune: a removed device's work never finishes, so the wait asks after the device every
+        // 100 ms instead of waiting forever (wgpu-core waits here when it drops the queue).
+        while unsafe { Threading::WaitForSingleObject(self.idle_event.0, 100) } == Foundation::WAIT_TIMEOUT {
+            let mut device: Option<Direct3D12::ID3D12Device> = None;
+            let removed = unsafe { self.raw.GetDevice(&mut device) }.is_ok()
+                && device.is_some_and(|device| unsafe { device.GetDeviceRemovedReason() }.is_err());
+            if removed {
+                return Err(crate::DeviceError::Lost);
+            }
+        }
         Ok(())
     }
 }
