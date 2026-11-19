@@ -219,6 +219,13 @@ impl RuntimeCore {
         let ended: Vec<_> = self.pointer.drag_ends.borrow_mut().drain(..).collect();
         let queue = order_drag_ends(std::mem::take(&mut self.frame.queue), ended, &mut self.pointer.drags_open);
         let queue = self.hold_files(queue, ran || self.commit.dirty);
+        // A host settle (an uncover, a restore, a shown window) lands the tree the frame began
+        // with, before this frame's input runs. The input's own commit below then animates, so
+        // a dialog the first press closes still plays its exit.
+        if self.commit.settle && queue.has_input_action() {
+            self.settle_before_input(app, &mut tx, &mut why);
+            ran = false;
+        }
         // Something besides a checked live-only event wants this frame's commit, so a change
         // it makes isn't the live-only handler's.
         #[cfg(debug_assertions)]
@@ -415,6 +422,36 @@ impl RuntimeCore {
         self.interaction_built();
         if !open_urls.is_empty() { self.open_urls(open_urls); }
         self.animating
+    }
+
+    /// Lands a host settle for the tree as it stands before this frame's input, then lets the
+    /// input's own commit animate what it changes. `apply` clears the settle latch as this
+    /// commit applies it: the settle is spent here, so nothing is deferred or dropped.
+    fn settle_before_input(&mut self, app: &mut dyn AppDriver, tx: &mut Tx, why: &mut u16) {
+        let links = std::mem::take(&mut tx.open_urls);
+        self.latch_requests(app, tx);
+        tx.open_urls = links;
+        self.capture_flights(tx);
+        tx.settle();
+        self.settled |= tx.commit.lands();
+        self.capture_keeps(tx);
+        // `settle_all` marks the tree dirty too, and this commit carries that change.
+        self.commit_for(app, tx, *why | CommitWhy::SETTLE | CommitWhy::DIRTY);
+        self.apply_keeps(app);
+        // Scroll requests queued before the input resolve under the settle, as the poll split's
+        // do, rather than gliding on the input's own animated commit.
+        self.finish_scroll_requests(app, tx, false);
+        // The input below starts from the settled tree, as it would on any other frame.
+        tx.commit = Commit::Animate;
+        tx.unprompted = false;
+        tx.asked_motion = false;
+        tx.live_growth.clear();
+        tx.tail_rooms.clear();
+        tx.motion = None;
+        tx.color_motion = None;
+        tx.follow_edge = false;
+        tx.unclipped_flights = false;
+        *why = 0;
     }
 
     /// A picture sizing a side from its image changed shape (decoded, or a stream resized).
