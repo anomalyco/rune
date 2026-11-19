@@ -62,7 +62,7 @@ parley_engine = { workspace = true }
 wasm-bindgen = { workspace = true }
 
 [target.'cfg(target_vendor = "apple")'.dependencies]
-objc2-core-foundation = { workspace = true }
+objc2-core-foundation = { workspace = true, features = ["std", "CFArray", "CFDictionary", "CFLocale", "CFNumber", "CFPreferences", "CFString", "CFURL"] }
 # CoreText's font fallback and family lookups (`fonts/system_fonts/core_text.rs`); fontique already builds it.
 objc2-core-text = { version = "0.3.2", default-features = false, features = ["std", "CTFont", "CTFontDescriptor", "CTFontManager"] }
 

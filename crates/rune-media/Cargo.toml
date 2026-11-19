@@ -38,14 +38,14 @@ block2 = "0.6"
 objc2 = "0.6"
 # Video playback (`Player`) and recording (`Recorder`): AVFoundation, CoreVideo, CoreMedia and CoreGraphics.
 objc2-av-foundation = { version = "0.3", default-features = false, features = ["std", "AVAsset", "AVAssetImageGenerator", "AVAssetTrack", "AVMediaFormat", "AVPlayer", "AVPlayerItem", "AVPlayerItemOutput", "objc2-core-foundation", "objc2-core-graphics", "objc2-core-media", "objc2-core-video"] }
-objc2-core-foundation = { workspace = true }
+objc2-core-foundation = { workspace = true, features = ["std", "CFCGTypes", "CFDictionary", "CFNumber", "CFString", "objc2"] }
 objc2-core-graphics = { workspace = true, features = ["std", "CGBitmapContext", "CGColorSpace", "CGContext", "CGImage"] }
 objc2-core-media = { version = "0.3", default-features = false, features = ["std", "CMTime"] }
-objc2-core-video = { workspace = true, features = ["CVPixelBufferIOSurface", "objc2-io-surface"] }
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSData", "NSDictionary", "NSError", "NSObject", "NSRange", "NSString", "NSURL", "NSURLConnection", "NSURLRequest", "NSURLResponse"] }
-# Unused by name: its default features give IOSurfaceRef the CF `Type` impl objc2-core-video needs.
-objc2-io-surface = "0.3"
-objc2-metal = { workspace = true }
+objc2-core-video = { workspace = true, features = ["std", "CVBase", "CVBuffer", "CVHostTime", "CVImageBuffer", "CVMetalTexture", "CVMetalTextureCache", "CVPixelBuffer", "CVPixelBufferIOSurface", "CVReturn", "objc2", "objc2-io-surface", "objc2-metal"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSData", "NSDictionary", "NSError", "NSObject", "NSString", "NSURL", "NSURLConnection", "NSURLRequest", "NSURLResponse"] }
+# Unused by name: `objc2-core-foundation` gives IOSurfaceRef the CF `Type` impl objc2-core-video needs.
+objc2-io-surface = { version = "0.3", default-features = false, features = ["std", "IOSurfaceRef", "objc2-core-foundation"] }
+objc2-metal = { workspace = true, features = ["std", "MTLAllocation", "MTLDevice", "MTLPixelFormat", "MTLResource", "MTLTexture"] }
 # Ogg and WebM audio (`ogg-audio`): pure-Rust demuxers and decoders.
 symphonia = { version = "0.5.5", optional = true, default-features = false, features = ["ogg", "vorbis", "mkv"] }
 opuscule = { version = "0.2.2", optional = true }

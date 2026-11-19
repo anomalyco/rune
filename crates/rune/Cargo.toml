@@ -140,12 +140,12 @@ rfd = { version = "0.17", optional = true, default-features = false }
 # Metal on macOS and iOS: present timing and system materials on macOS.
 [target.'cfg(target_vendor = "apple")'.dependencies]
 objc2-video = { package = "objc2", version = "0.6" }
-objc2-core-foundation = { workspace = true }
-objc2-metal = { workspace = true }
+objc2-core-foundation = { workspace = true, features = ["std", "CFArray", "CFCGTypes", "CFDictionary", "CFNumber", "CFPreferences", "CFString", "objc2"] }
+objc2-metal = { workspace = true, features = ["std", "MTLDrawable", "block2", "objc2-core-foundation"] }
 # wgpu's Metal backend on Apple targets alone: off Apple, wgpu compiles neither `wgpu-hal/metal`
 # nor `naga/msl-out`.
 wgpu = { workspace = true, features = ["metal"] }
-objc2-foundation-video = { package = "objc2-foundation", version = "0.3", default-features = false, features = ["std", "NSArray", "NSData", "NSDictionary", "NSError", "NSObject", "NSRange", "NSString", "NSURL", "NSURLConnection", "NSURLRequest", "NSURLResponse"] }
+objc2-foundation-video = { package = "objc2-foundation", version = "0.3", default-features = false, features = ["std", "NSString"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 accesskit_macos = { version = "0.27.2", optional = true }
@@ -155,7 +155,7 @@ objc2 = { workspace = true }
 block2 = { workspace = true }
 objc2-foundation = { version = "0.2.2", features = ["NSArray", "NSAttributedString", "NSData", "NSDictionary", "NSError", "NSGeometry", "NSObject", "NSRange", "NSValue", "NSProcessInfo", "NSString", "NSThread", "NSURL", "NSUserDefaults"] }
 objc2-app-kit = { version = "0.2.2", features = ["NSApplication", "NSButton", "NSCell", "NSControl", "NSEvent", "NSMenu", "NSMenuItem", "NSResponder", "NSRunningApplication", "NSView", "NSWindow", "NSColor", "NSGraphics", "NSPanel", "NSScreen", "NSPasteboard", "NSPasteboardItem", "NSDragging", "NSDraggingItem", "NSDraggingSession", "NSGraphicsContext", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSAttributedString"] }
-objc2-core-video = { workspace = true }
+objc2-core-video = { workspace = true, features = ["std", "CVBase", "CVDisplayLink", "CVHostTime", "CVReturn", "objc2-core-graphics"] }
 block2-metal = { package = "block2", version = "0.6" }
 objc2-core-graphics = { workspace = true, features = ["std", "CGColorSpace"] }
 
