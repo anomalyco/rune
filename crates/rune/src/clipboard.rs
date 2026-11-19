@@ -172,9 +172,6 @@ impl Client {
         }
         self.read_for(purpose);
     }
-    #[cfg(target_arch = "wasm32")]
-    #[inline(always)]
-    pub fn receive<S: 'static>(&self, rt: &mut Runtime<S>) -> bool { self.receive_core(rt.core_mut()) }
     pub(crate) fn receive_core(&self, rt: &mut crate::runtime::RuntimeCore) -> bool {
         let mut received = self.changed.swap(false, Ordering::SeqCst);
         for reply in self.replies.try_iter() { deliver(rt, reply); received = true; }
