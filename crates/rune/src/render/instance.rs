@@ -88,27 +88,35 @@ impl Kind {
 
     /// Lossless conversion from the `f32` stored in `Instance::params[1]`.
     ///
-    /// Matches IEEE-754 bit patterns directly so per-instance loops compile to integer compares
-    /// with no float-to-int saturating cast, and non-integer or out-of-range values return `None`.
-    #[inline]
+    /// Matches IEEE-754 bit patterns directly so per-instance loops compile to integer ops with
+    /// no float-to-int saturating cast, and non-integer or out-of-range values return `None`.
+    /// All non-zero kinds (`1.0..=13.0`) have zero low 20 bits and span `0..=29` after
+    /// `(bits - 1.0_f32.to_bits()).rotate_left(12)`, letting LLVM lower full matches to a dense
+    /// lookup/jump table while still folding single-kind checks to one immediate compare.
+    #[inline(always)]
     pub const fn from_f32(v: f32) -> Option<Kind> {
-        const RECT: u32 = KIND_RECT.to_bits();
-        const NEG_ZERO: u32 = (-0.0f32).to_bits();
-        const SHADOW: u32 = KIND_SHADOW.to_bits();
-        const GLYPH: u32 = KIND_GLYPH.to_bits();
-        const INSET: u32 = KIND_INSET.to_bits();
-        const GRADIENT: u32 = KIND_GRADIENT.to_bits();
-        const SEGMENT: u32 = KIND_SEGMENT.to_bits();
-        const TRIANGLE: u32 = KIND_TRIANGLE.to_bits();
-        const IMAGE: u32 = KIND_IMAGE.to_bits();
-        const LAYER: u32 = KIND_LAYER.to_bits();
-        const LAYER_END: u32 = KIND_LAYER_END.to_bits();
-        const DASHED: u32 = KIND_DASHED.to_bits();
-        const RADIAL: u32 = KIND_RADIAL.to_bits();
-        const EFFECT: u32 = KIND_EFFECT.to_bits();
-        const BACKDROP_BLUR: u32 = KIND_BACKDROP_BLUR.to_bits();
-        match v.to_bits() {
-            RECT | NEG_ZERO => Some(Kind::Rect),
+        const ONE: u32 = KIND_SHADOW.to_bits();
+        const fn slot(k: Kind) -> u32 {
+            k.as_f32().to_bits().wrapping_sub(ONE).rotate_left(12)
+        }
+        const SHADOW: u32 = slot(Kind::Shadow);
+        const GLYPH: u32 = slot(Kind::Glyph);
+        const INSET: u32 = slot(Kind::Inset);
+        const GRADIENT: u32 = slot(Kind::Gradient);
+        const SEGMENT: u32 = slot(Kind::Segment);
+        const TRIANGLE: u32 = slot(Kind::Triangle);
+        const IMAGE: u32 = slot(Kind::Image);
+        const LAYER: u32 = slot(Kind::Layer);
+        const LAYER_END: u32 = slot(Kind::LayerEnd);
+        const DASHED: u32 = slot(Kind::Dashed);
+        const RADIAL: u32 = slot(Kind::Radial);
+        const EFFECT: u32 = slot(Kind::Effect);
+        const BACKDROP_BLUR: u32 = slot(Kind::BackdropBlur);
+        let bits = v.to_bits();
+        if (bits << 1) == 0 {
+            return Some(Kind::Rect);
+        }
+        match bits.wrapping_sub(ONE).rotate_left(12) {
             SHADOW => Some(Kind::Shadow),
             GLYPH => Some(Kind::Glyph),
             INSET => Some(Kind::Inset),
@@ -328,7 +336,112 @@ pub fn unpack_clip_radii(w: u32) -> [f32; 4] {
     })
 }
 
+/// Sentinel index for `None` (invalid `params[1]` with `<= 11.5` or NaN) in the 15-entry `Kind`
+/// tables. Every `KIND_NONE` entry inside `KIND_SLOT_LUT[0..30]` sits at `slot <= 23` (`<= 7.5`),
+/// so any `None` with `params[1] > 11.5` always falls outside `0..30`.
+const KIND_NONE: usize = Kind::COUNT;
+
+/// Maps `(bits - 1.0_f32.to_bits()).rotate_left(12)` in `0..30` to `Kind as u8` (`0..14`) or
+/// `KIND_NONE` (`14`). Derived solely from [`Kind::from_u8`] and [`Kind::as_f32`].
+const KIND_SLOT_LUT: [u8; 30] = {
+    const ONE: u32 = KIND_SHADOW.to_bits();
+    let mut table = [KIND_NONE as u8; 30];
+    let mut k = 1u8;
+    while (k as usize) < Kind::COUNT {
+        let Some(kind) = Kind::from_u8(k) else { panic!("dense Kind discriminants") };
+        let slot = kind.as_f32().to_bits().wrapping_sub(ONE).rotate_left(12) as usize;
+        assert!(slot < 30);
+        table[slot] = k;
+        k += 1;
+    }
+    table
+};
+
+/// Decodes `Instance::params[1]` to a dense index `0..=Kind::COUNT` (`Kind::COUNT` = `None`)
+/// without branching on individual kinds, so `layer_bounds` stays a single compact block when
+/// inlined into `render/layers.rs::prepare_layers`.
+#[inline(always)]
+const fn kind_index(v: f32) -> usize {
+    const ONE: u32 = KIND_SHADOW.to_bits();
+    let bits = v.to_bits();
+    if (bits & 0x7FFF_FFFF) == 0 {
+        return Kind::Rect.as_u8() as usize;
+    }
+    let slot = bits.wrapping_sub(ONE).rotate_left(12);
+    if slot < 30 {
+        KIND_SLOT_LUT[slot as usize] as usize
+    } else {
+        KIND_NONE
+    }
+}
+
+/// Bit-exact integer predicate for `f32::from_bits(bits) > 11.5` (positive finite floats `> 11.5`
+/// and `+inf`; false for negatives, `<= 11.5`, and `NaN`). Keeps `bounds_core` purely in integer
+/// registers with no XMM-to-GPR transfer.
+#[inline(always)]
+const fn bits_gt_11_5(bits: u32) -> bool {
+    const LIMIT: u32 = 11.5f32.to_bits();
+    const INF: u32 = f32::INFINITY.to_bits();
+    bits > LIMIT && bits <= INF
+}
+
+/// Bitmask of `Kind` indices (`0..=Kind::COUNT`) that draw no uber-shader quad (`quad_bounds` is
+/// `None`, except `KIND_NONE` which only skips when `params[1] > 11.5`).
+const NO_UBER_QUAD_MASK: u32 =
+    (1 << Kind::LayerEnd.as_u8()) | (1 << Kind::Effect.as_u8()) | (1 << Kind::BackdropBlur.as_u8());
+
+#[derive(Clone, Copy)]
+enum GrowMode {
+    Quad,
+    Layer,
+    Damage,
+}
+
+const fn grow_spec(kind: Option<Kind>, mode: GrowMode) -> (f32, f32) {
+    match (mode, kind) {
+        (GrowMode::Layer | GrowMode::Damage, Some(Kind::Effect)) => (1.0, 1.0),
+        (GrowMode::Layer, Some(Kind::BackdropBlur) | None) => (1.0, 0.0),
+        (GrowMode::Damage, Some(Kind::BackdropBlur)) => (1.0, 0.0),
+        (_, Some(Kind::Shadow)) => (1.0, 3.0),
+        (_, Some(Kind::Glyph)) => (0.0, 0.0),
+        (_, Some(Kind::Inset | Kind::Segment | Kind::Triangle | Kind::Image | Kind::Layer)) => (1.0, 0.0),
+        (_, Some(Kind::Rect | Kind::Gradient | Kind::Dashed | Kind::Radial) | None) => (1.0, 2.0),
+        (_, Some(Kind::LayerEnd | Kind::Effect | Kind::BackdropBlur)) => (0.0, 0.0),
+    }
+}
+
+struct GrowTable {
+    base: [f32; Kind::COUNT + 1],
+    scale: [f32; Kind::COUNT + 1],
+    /// Bit `k` is set when `scale[k] != 0.0`, so `params[2]` is masked to `0.0` for other kinds
+    /// (preserving exact IEEE-754 results even if `params[2]` were NaN or infinite).
+    uses_p2: u32,
+}
+
+const fn build_grow_table(mode: GrowMode) -> GrowTable {
+    let mut base = [0.0f32; Kind::COUNT + 1];
+    let mut scale = [0.0f32; Kind::COUNT + 1];
+    let mut uses_p2 = 0u32;
+    let mut k = 0usize;
+    while k <= Kind::COUNT {
+        let (b, s) = grow_spec(Kind::from_u8(k as u8), mode);
+        base[k] = b;
+        scale[k] = s;
+        if s != 0.0 {
+            uses_p2 |= 1u32 << k;
+        }
+        k += 1;
+    }
+    GrowTable { base, scale, uses_p2 }
+}
+
+const QUAD_GROW: GrowTable = build_grow_table(GrowMode::Quad);
+const LAYER_GROW: GrowTable = build_grow_table(GrowMode::Layer);
+const DAMAGE_GROW: GrowTable = build_grow_table(GrowMode::Damage);
+
 /// The upright bounds of edges `r` (`[x0, y0, x1, y1]`) turned `angle` radians clockwise about `p`.
+#[cold]
+#[inline(never)]
 pub(crate) fn turned_bounds(r: [f32; 4], angle: f32, p: [f32; 2]) -> [f32; 4] {
     let (sn, c) = angle.sin_cos();
     let mut out = [f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY];
@@ -340,11 +453,110 @@ pub(crate) fn turned_bounds(r: [f32; 4], angle: f32, p: [f32; 2]) -> [f32; 4] {
     out
 }
 
+/// The upright bounds of a glyph rect `[x, y, w, h]` turned `angle` radians about its centre.
+#[cold]
+#[inline(never)]
+fn turned_glyph_bounds(rect: [f32; 4], angle: f32) -> [f32; 4] {
+    let (sin, cos) = angle.sin_cos();
+    let (w, h) = (cos.abs() * rect[2] + sin.abs() * rect[3], sin.abs() * rect[2] + cos.abs() * rect[3]);
+    let lo = [rect[0] + (rect[2] - w) * 0.5, rect[1] + (rect[3] - h) * 0.5];
+    [lo[0], lo[1], lo[0] + w, lo[1] + h]
+}
+
+/// Band window clamp for a big shadow or border ring (`runtime/bands.rs`, `uv[2] < 0`).
+/// Kept inline: it makes no calls (no extra XMM spills) and fires on banded rects/shadows.
+#[inline(always)]
+fn clamp_band(rect: [f32; 4], uv: [f32; 4], lo0: f32, lo1: f32, hi0: f32, hi1: f32) -> (f32, f32, f32, f32) {
+    let lo0 = lo0.max(rect[0] + uv[0]);
+    let lo1 = lo1.max(rect[1] + uv[1]);
+    let hi0 = hi0.min(rect[0] - uv[2]).max(lo0);
+    let hi1 = hi1.min(rect[1] + uv[3]).max(lo1);
+    (lo0, lo1, hi0, hi1)
+}
+
 impl Instance {
     /// Decodes the primitive kind stored in `params[1]`.
-    #[inline]
+    #[inline(always)]
     pub const fn kind(&self) -> Option<Kind> {
         Kind::from_f32(self.params[1])
+    }
+
+    #[inline(always)]
+    fn grow_from(table: &GrowTable, k: usize, p2: f32) -> f32 {
+        let p2 = if ((table.uses_p2 >> k) & 1) != 0 { p2 } else { 0.0 };
+        table.base[k] + p2 * table.scale[k]
+    }
+
+    #[inline(always)]
+    fn bounds_core<const DAMAGE: bool>(&self, glyph_rot_pad: f32) -> Option<(f32, f32, f32, f32)> {
+        let bits = self.params[1].to_bits();
+        // Fast path for the two dominant kinds (`Rect` and `Glyph`): pure integer tests, no LUT
+        // load, no `uv` load for glyphs, and zero extra kind checks.
+        if (bits & 0x7FFF_FFFF) == 0 {
+            let grow = 1.0 + self.params[2] * 2.0;
+            let lo0 = self.rect[0] - grow;
+            let lo1 = self.rect[1] - grow;
+            let (hi0, hi1) = if DAMAGE {
+                (self.rect[0] + self.rect[2] + grow, self.rect[1] + self.rect[3] + grow)
+            } else {
+                (lo0 + self.rect[2] + 2.0 * grow, lo1 + self.rect[3] + 2.0 * grow)
+            };
+            return Some(if self.uv[2] < 0.0 {
+                clamp_band(self.rect, self.uv, lo0, lo1, hi0, hi1)
+            } else {
+                (lo0, lo1, hi0, hi1)
+            });
+        }
+        if bits == KIND_GLYPH.to_bits() {
+            if self.params[0] != 0.0 {
+                let [x0, y0, x1, y1] = turned_glyph_bounds(self.rect, self.params[0]);
+                return Some((x0 - glyph_rot_pad, y0 - glyph_rot_pad, x1 + glyph_rot_pad, y1 + glyph_rot_pad));
+            }
+            return Some((self.rect[0], self.rect[1], self.rect[0] + self.rect[2], self.rect[1] + self.rect[3]));
+        }
+
+        // Remaining kinds (`1.0..=13.0` and invalid): branchless 30-entry LUT + affine grow table.
+        const ONE: u32 = KIND_SHADOW.to_bits();
+        let slot = bits.wrapping_sub(ONE).rotate_left(12);
+        let k = if slot < 30 {
+            KIND_SLOT_LUT[slot as usize] as usize
+        } else if bits_gt_11_5(bits) {
+            return None;
+        } else {
+            KIND_NONE
+        };
+
+        if !DAMAGE && ((NO_UBER_QUAD_MASK >> k) & 1) != 0 {
+            return None;
+        }
+        if DAMAGE && k == Kind::LayerEnd.as_u8() as usize {
+            return None;
+        }
+
+        let p2 = if DAMAGE && k == Kind::Effect.as_u8() as usize {
+            self.params[2].max(0.0)
+        } else {
+            self.params[2]
+        };
+        let table = if DAMAGE { &DAMAGE_GROW } else { &QUAD_GROW };
+        let grow = Self::grow_from(table, k, p2);
+        let lo0 = self.rect[0] - grow;
+        let lo1 = self.rect[1] - grow;
+        let (hi0, hi1) = if DAMAGE {
+            (self.rect[0] + self.rect[2] + grow, self.rect[1] + self.rect[3] + grow)
+        } else {
+            (lo0 + self.rect[2] + 2.0 * grow, lo1 + self.rect[3] + 2.0 * grow)
+        };
+        // A band of a big shadow draws only its window (`runtime/bands.rs`; Rect handled above).
+        if k == Kind::Shadow.as_u8() as usize && self.uv[2] < 0.0 {
+            return Some(clamp_band(self.rect, self.uv, lo0, lo1, hi0, hi1));
+        }
+        // A turned layer composite (`Instance::turned`) turns about `border[2..4]`.
+        if k == Kind::Layer.as_u8() as usize && self.border[1] != 0.0 {
+            let [x0, y0, x1, y1] = turned_bounds([lo0, lo1, hi0, hi1], self.border[1], [self.border[2], self.border[3]]);
+            return Some((x0, y0, x1, y1));
+        }
+        Some((lo0, lo1, hi0, hi1))
     }
 
     /// Axis-aligned device-pixel bounds `[x0, y0, x1, y1]` of the quad the uber vertex shader
@@ -352,76 +564,72 @@ impl Instance {
     ///
     /// Returns `None` for records that rasterize no uber-shader quad (`Kind::LayerEnd`,
     /// `Kind::Effect`, `Kind::BackdropBlur`, and out-of-range values with `params[1] > 11.5`).
+    #[inline]
     pub fn quad_bounds(&self) -> Option<[f32; 4]> {
-        let kind = self.kind();
-        let grow = match kind {
-            Some(Kind::LayerEnd | Kind::Effect | Kind::BackdropBlur) => return None,
-            None if self.params[1] > 11.5 => return None,
-            Some(Kind::Shadow) => self.params[2] * 3.0 + 1.0,
-            Some(Kind::Glyph) => 0.0,
-            Some(Kind::Inset | Kind::Segment | Kind::Triangle | Kind::Image | Kind::Layer) => 1.0,
-            Some(Kind::Rect | Kind::Gradient | Kind::Dashed | Kind::Radial) | None => 1.0 + self.params[2] * 2.0,
+        let (x0, y0, x1, y1) = self.bounds_core::<false>(0.0)?;
+        Some([x0, y0, x1, y1])
+    }
+
+    /// Pre-clip bounds for Windows damage (`window/win32/damage.rs`): `quad_bounds` plus
+    /// `Kind::Effect` (`params[2].max(0) + 1`) and `Kind::BackdropBlur` (`1`).
+    #[cfg(target_os = "windows")]
+    #[inline(always)]
+    pub(crate) fn damage_quad_bounds(&self) -> Option<(f32, f32, f32, f32)> {
+        self.bounds_core::<true>(0.0)
+    }
+
+    /// [`Self::layer_bounds`] when the caller has already ruled out `Kind::Layer` and
+    /// `Kind::LayerEnd` (`render/layers.rs`), kept as one compact branchless block so inlining
+    /// into `prepare_layers` stays in the uOP cache.
+    #[inline(always)]
+    pub(crate) fn layer_bounds_non_scope(&self) -> (f32, f32, f32, f32) {
+        let k = kind_index(self.params[1]);
+        let (x0, y0, x1, y1) = if k == Kind::Glyph.as_u8() as usize && self.params[0] != 0.0 {
+            let [a, b, c, d] = turned_glyph_bounds(self.rect, self.params[0]);
+            (a, b, c, d)
+        } else {
+            let grow = Self::grow_from(&LAYER_GROW, k, self.params[2]);
+            let lo0 = self.rect[0] - grow;
+            let lo1 = self.rect[1] - grow;
+            let hi0 = self.rect[0] + self.rect[2] + grow;
+            let hi1 = self.rect[1] + self.rect[3] + grow;
+            if k <= Kind::Shadow.as_u8() as usize && self.uv[2] < 0.0 {
+                clamp_band(self.rect, self.uv, lo0, lo1, hi0, hi1)
+            } else {
+                (lo0, lo1, hi0, hi1)
+            }
         };
-        let mut lo = [self.rect[0] - grow, self.rect[1] - grow];
-        let mut hi = [lo[0] + self.rect[2] + 2.0 * grow, lo[1] + self.rect[3] + 2.0 * grow];
-        // A band of a big shadow or border ring draws only its window (`runtime/bands.rs`).
-        if matches!(kind, Some(Kind::Rect | Kind::Shadow)) && self.uv[2] < 0.0 {
-            lo = [lo[0].max(self.rect[0] + self.uv[0]), lo[1].max(self.rect[1] + self.uv[1])];
-            hi = [hi[0].min(self.rect[0] - self.uv[2]).max(lo[0]), hi[1].min(self.rect[1] + self.uv[3]).max(lo[1])];
-        }
-        // A turned icon's quad turns about its centre: its bounds are the turned quad's.
-        if kind == Some(Kind::Glyph) && self.params[0] != 0.0 {
-            let (sin, cos) = self.params[0].sin_cos();
-            let (w, h) = (cos.abs() * self.rect[2] + sin.abs() * self.rect[3], sin.abs() * self.rect[2] + cos.abs() * self.rect[3]);
-            lo = [self.rect[0] + (self.rect[2] - w) * 0.5, self.rect[1] + (self.rect[3] - h) * 0.5];
-            hi = [lo[0] + w, lo[1] + h];
-        }
-        // A turned layer composite (`Instance::turned`) turns about `border[2..4]`.
-        if kind == Some(Kind::Layer) && self.border[1] != 0.0 {
-            return Some(turned_bounds([lo[0], lo[1], hi[0], hi[1]], self.border[1], [self.border[2], self.border[3]]));
-        }
-        Some([lo[0], lo[1], hi[0], hi[1]])
+        (x0.max(self.clip[0]), y0.max(self.clip[1]), x1.min(self.clip[2]), y1.min(self.clip[3]))
     }
 
     /// Device-pixel bounds `[x0, y0, x1, y1]` this instance contributes to an enclosing isolated
     /// layer (`render/layers.rs`), intersected with `self.clip`. Includes non-uber records painted
     /// in the layer pass (`Kind::Effect` with bleed `params[2] + 1`, `Kind::BackdropBlur` with `1`).
+    #[inline]
     pub fn layer_bounds(&self) -> [f32; 4] {
-        let [x0, y0, x1, y1] = match self.kind() {
-            Some(Kind::Effect) => {
-                let grow = self.params[2] + 1.0;
-                [self.rect[0] - grow, self.rect[1] - grow, self.rect[0] + self.rect[2] + grow, self.rect[1] + self.rect[3] + grow]
-            }
-            Some(Kind::BackdropBlur) => [self.rect[0] - 1.0, self.rect[1] - 1.0, self.rect[0] + self.rect[2] + 1.0, self.rect[1] + self.rect[3] + 1.0],
-            Some(Kind::Layer | Kind::LayerEnd) => return [0.0; 4],
-            Some(_) => match self.quad_bounds() {
-                Some(b) => b,
-                None => return [0.0; 4],
-            },
-            None => [self.rect[0] - 1.0, self.rect[1] - 1.0, self.rect[0] + self.rect[2] + 1.0, self.rect[1] + self.rect[3] + 1.0],
-        };
-        [x0.max(self.clip[0]), y0.max(self.clip[1]), x1.min(self.clip[2]), y1.min(self.clip[3])]
+        if matches!(self.kind(), Some(Kind::Layer | Kind::LayerEnd)) {
+            return [0.0; 4];
+        }
+        let (x0, y0, x1, y1) = self.layer_bounds_non_scope();
+        [x0, y0, x1, y1]
     }
 
     /// The pixels `[x0, y0, x1, y1)` whose centres lie in the quad `shader.wgsl` (`base_vs`) draws
     /// for this instance, within the reach of its clip and a `w × h` target. Empty (`[0; 4]`) for
     /// records that rasterize nothing in the uber shader.
     pub(crate) fn pixel_bounds(&self, w: i32, h: i32) -> [i32; 4] {
-        let Some([mut x0, mut y0, mut x1, mut y1]) = self.quad_bounds() else { return [0; 4] };
         // A rotated glyph gets a 1 px margin for trig rounding between CPU and GPU.
-        if self.kind() == Some(Kind::Glyph) && self.params[0] != 0.0 {
-            x0 -= 1.0;
-            y0 -= 1.0;
-            x1 += 1.0;
-            y1 += 1.0;
-        }
+        let Some((x0, y0, x1, y1)) = self.bounds_core::<false>(1.0) else { return [0; 4] };
         // Centres in [lo, hi): the rasterizer's top-left rule.
-        let first = |v: f32| (v - 0.5).ceil();
+        // `ceil(a).min(ceil(b)) == ceil(a.min(b))` for all floats (including NaN), and when
+        // `x0 >= c[0]` or `c[0] <= 0.5` the clip floor cannot exceed `ceil(x0 - 0.5).max(0.0)`.
         let c = self.clip;
-        let px0 = first(x0).max((c[0] - 0.5).floor()).max(0.0);
-        let py0 = first(y0).max((c[1] - 0.5).floor()).max(0.0);
-        let px1 = first(x1).min((c[2] + 0.5).ceil()).min(w as f32);
-        let py1 = first(y1).min((c[3] + 0.5).ceil()).min(h as f32);
+        let x0_ceil = (x0 - 0.5).ceil();
+        let y0_ceil = (y0 - 0.5).ceil();
+        let px0 = if x0 >= c[0] || c[0] <= 0.5 { x0_ceil } else { x0_ceil.max((c[0] - 0.5).floor()) }.max(0.0);
+        let py0 = if y0 >= c[1] || c[1] <= 0.5 { y0_ceil } else { y0_ceil.max((c[1] - 0.5).floor()) }.max(0.0);
+        let px1 = (x1 - 0.5).min(c[2] + 0.5).ceil().min(w as f32);
+        let py1 = (y1 - 0.5).min(c[3] + 0.5).ceil().min(h as f32);
         if !(px1 > px0 && py1 > py0) {
             return [0; 4];
         }

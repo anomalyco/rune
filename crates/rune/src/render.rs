@@ -1189,12 +1189,19 @@ fn few_runs(kinds: &[Option<Kind>], span: std::ops::Range<u32>) -> bool {
 
 /// `span` split into runs of instances of one kind (`kinds` by instance).
 fn kind_runs(kinds: &[Option<Kind>], span: std::ops::Range<u32>) -> impl Iterator<Item = std::ops::Range<u32>> + '_ {
-    let mut at = span.start;
+    let mut at = span.start as usize;
+    let end = span.end as usize;
+    let slice = &kinds[..end.min(kinds.len())];
     std::iter::from_fn(move || {
-        if at >= span.end { return None; }
-        let kind = kinds.get(at as usize).copied();
+        if at >= end { return None; }
         let start = at;
-        while at < span.end && kinds.get(at as usize).copied() == kind { at += 1; }
-        Some(start..at)
+        let Some(&first) = slice.get(at) else {
+            at = end;
+            return Some(start as u32..end as u32);
+        };
+        let mut cur = at + 1;
+        while let Some(&k) = slice.get(cur) && k == first { cur += 1; }
+        at = cur;
+        Some(start as u32..cur as u32)
     })
 }

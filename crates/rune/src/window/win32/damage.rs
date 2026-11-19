@@ -16,7 +16,7 @@
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
 
-use crate::render::{INSTANCE_WORDS, Instance, Kind};
+use crate::render::{INSTANCE_WORDS, Instance};
 
 /// Above this share of the window, a frame draws all of it.
 const MOST: f32 = 0.6;
@@ -172,7 +172,15 @@ fn changed(old: &[Instance], new: &[Instance], size: (u32, u32), s: &mut Scratch
     }
     // The instances both lists have, in order: drawn in another order, anything may have changed.
     let counts = &s.counts;
-    if !s.old.iter().filter(|h| counts[h].0 == 0).eq(s.new.iter().filter(|h| counts[h].0 == 0)) { return Area::All; }
+    let mut j = 0;
+    for &h in &s.old {
+        if counts[&h].0 != 0 { continue; }
+        if j < s.new.len() && s.new[j] == h { j += 1; continue; }
+        while j < s.new.len() && counts[&s.new[j]].0 != 0 { j += 1; }
+        if j >= s.new.len() || s.new[j] != h { return Area::All; }
+        j += 1;
+    }
+    if s.new[j..].iter().any(|h| counts[h].0 == 0) { return Area::All; }
     // In reading order, so neighbours gather before rectangles run out.
     s.each.clear();
     s.each.extend(counts.values().filter(|(n, _)| *n != 0)
@@ -210,22 +218,7 @@ fn join(a: [u32; 4], b: [u32; 4]) -> [u32; 4] { [a[0].min(b[0]), a[1].min(b[1]),
 
 /// The pixels an instance can touch: its quad as the shader grows it, inside its clip.
 fn bounds(i: &Instance, size: (u32, u32)) -> Option<[u32; 4]> {
-    let [x0, y0, x1, y1] = match i.kind() {
-        // A scope's end draws nothing.
-        Some(Kind::LayerEnd) => return None,
-        // Effects and backdrop blurs draw outside the uber shader; if the previous frame held one
-        // and this frame removed it, the damage rect must still cover where it painted.
-        Some(Kind::Effect) => {
-            let grow = i.params[2].max(0.0) + 1.0;
-            [i.rect[0] - grow, i.rect[1] - grow, i.rect[0] + i.rect[2] + grow, i.rect[1] + i.rect[3] + grow]
-        }
-        Some(Kind::BackdropBlur) => [i.rect[0] - 1.0, i.rect[1] - 1.0, i.rect[0] + i.rect[2] + 1.0, i.rect[1] + i.rect[3] + 1.0],
-        Some(
-            Kind::Rect | Kind::Shadow | Kind::Glyph | Kind::Inset | Kind::Gradient
-            | Kind::Segment | Kind::Triangle | Kind::Image | Kind::Layer | Kind::Dashed | Kind::Radial,
-        ) => i.quad_bounds()?,
-        None => i.quad_bounds()?,
-    };
+    let (x0, y0, x1, y1) = i.damage_quad_bounds()?;
     if x1 <= x0 || y1 <= y0 { return None; }
     let c = i.clip;
     let (x0, y0) = ((x0.max(c[0]) - 1.0).floor().max(0.0), (y0.max(c[1]) - 1.0).floor().max(0.0));
@@ -240,7 +233,7 @@ mod tests {
     use bytemuck::Zeroable;
 
     use super::*;
-    use crate::render::{KIND_BACKDROP_BLUR, KIND_DASHED, KIND_EFFECT, KIND_GLYPH, KIND_GRADIENT, KIND_IMAGE, KIND_INSET, KIND_RADIAL, KIND_RECT, KIND_SEGMENT, KIND_SHADOW, KIND_TRIANGLE, LayerSpec, NO_CLIP, cpu_boot};
+    use crate::render::{KIND_BACKDROP_BLUR, KIND_DASHED, KIND_EFFECT, KIND_GLYPH, KIND_GRADIENT, KIND_IMAGE, KIND_INSET, KIND_RADIAL, KIND_RECT, KIND_SEGMENT, KIND_SHADOW, KIND_TRIANGLE, Kind, LayerSpec, NO_CLIP, cpu_boot};
 
     fn old_bounds(i: &Instance, size: (u32, u32)) -> Option<[u32; 4]> {
         let kind = i.params[1];
@@ -355,5 +348,33 @@ mod tests {
         assert!(tighter.contains(&"shadow_banded"), "tighter: {tighter:?}");
         assert!(tighter.contains(&"glyph_rot_15deg"), "tighter: {tighter:?}");
         assert!(tighter.contains(&"effect_bleed16"), "tighter: {tighter:?}");
+    }
+
+    #[test]
+    fn changed_order_check_handles_inserts_deletes_duplicates_and_reorders() {
+        let r = |x: f32| Instance {
+            rect: [x, 10.0, 20.0, 20.0],
+            fill: [1.0; 4],
+            params: [0.0, KIND_RECT, 0.0, 1.0],
+            clip: NO_CLIP,
+            ..Instance::zeroed()
+        };
+        let mut s = Scratch::default();
+        let size = (256, 256);
+
+        // Partial in-place update keeps order.
+        let old = [r(0.0), r(30.0), r(60.0), r(90.0)];
+        let mut new = old;
+        new[2] = r(65.0);
+        assert!(matches!(changed(&old, &new, size, &mut s), Area::Rects(ref rs) if !rs.is_empty()));
+
+        // Insert and delete with duplicates preserve order of remaining items.
+        let old_dup = [r(0.0), r(30.0), r(30.0), r(60.0), r(90.0)];
+        let new_dup = [r(0.0), r(15.0), r(30.0), r(30.0), r(90.0)];
+        assert!(matches!(changed(&old_dup, &new_dup, size, &mut s), Area::Rects(ref rs) if !rs.is_empty()));
+
+        // Swapping two unchanged instances triggers full redraw (`Area::All`).
+        let swapped = [r(0.0), r(60.0), r(30.0), r(90.0)];
+        assert_eq!(changed(&old, &swapped, size, &mut s), Area::All);
     }
 }

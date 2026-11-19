@@ -352,8 +352,7 @@ impl Renderer {
         self.layers.plan.clear();
         self.layers.stack.clear();
         for (index, i) in instances.iter().enumerate() {
-            match i.kind() {
-                Some(Kind::Layer) => {
+            if i.kind() == Some(Kind::Layer) {
                     let parent = self.layers.stack.last().copied();
                     let parent_cached_hit = parent.is_some_and(|p| {
                         self.layers.plan[p].cache.is_some_and(|key| {
@@ -416,8 +415,7 @@ impl Renderer {
                         // A cached scope's `radii` name its node instead.
                         hole: if cache.is_some() { [0.0; 4] } else { i.radii },
                     });
-                }
-                Some(Kind::LayerEnd) => {
+            } else if i.kind() == Some(Kind::LayerEnd) {
                     let at = self.layers.stack.pop().expect("unbalanced layer end");
                     let l = &mut self.layers.plan[at];
                     l.end = index as u32;
@@ -450,15 +448,10 @@ impl Renderer {
                     if let Some(parent) = l.parent.filter(|&p| self.layers.plan[p].cache.is_none()) {
                         union(&mut self.layers.plan[parent].edges, edges);
                     }
-                }
-                Some(
-                    Kind::Rect | Kind::Shadow | Kind::Glyph | Kind::Inset | Kind::Gradient
-                    | Kind::Segment | Kind::Triangle | Kind::Image | Kind::Dashed | Kind::Radial
-                    | Kind::Effect | Kind::BackdropBlur,
-                ) | None => if let Some(&at) = self.layers.stack.last() {
-                    if self.layers.plan[at].cache.is_some() { continue; }
-                    union(&mut self.layers.plan[at].edges, i.layer_bounds());
-                },
+            } else if let Some(&at) = self.layers.stack.last() {
+                if self.layers.plan[at].cache.is_some() { continue; }
+                let (x0, y0, x1, y1) = i.layer_bounds_non_scope();
+                union(&mut self.layers.plan[at].edges, [x0, y0, x1, y1]);
             }
         }
         assert!(self.layers.stack.is_empty(), "unclosed layer scope");

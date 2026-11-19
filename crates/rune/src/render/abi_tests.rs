@@ -405,3 +405,130 @@ fn instance_bounds_contain_exact_drawn_pixels_across_all_kinds() {
     assert!(tighter_layer_sites.contains(&"rect_banded"), "expected tighter layer bounds on banded rect: {tighter_layer_sites:?}");
     assert!(tighter_layer_sites.contains(&"shadow_banded"), "expected tighter layer bounds on banded shadow: {tighter_layer_sites:?}");
 }
+
+#[test]
+fn from_f32_and_bounds_handle_edge_floats_and_nans() {
+    let reference_from_f32 = |v: f32| -> Option<Kind> {
+        if v.is_nan() || v.fract() != 0.0 || !(0.0..=13.0).contains(&v) {
+            return None;
+        }
+        Kind::from_u8(v as u8)
+    };
+
+    // Every 1/8 step in [-2, 18], plus bit perturbations of every valid kind, subnormals, inf, NaN.
+    let mut probe = vec![
+        -0.0f32,
+        0.0,
+        f32::MIN_POSITIVE,
+        f32::from_bits(1),
+        f32::from_bits(0x8000_0001),
+        11.5f32,
+        f32::from_bits(11.5f32.to_bits() + 1),
+        f32::from_bits(11.5f32.to_bits() - 1),
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        f32::NAN,
+        f32::from_bits(0x7fc0_0001),
+        f32::from_bits(0xffc0_0001),
+        f32::from_bits(0x7f80_0001),
+        f32::MAX,
+        f32::MIN,
+    ];
+    for step in -16..=144 {
+        probe.push(step as f32 * 0.125);
+    }
+    for k in 0..Kind::COUNT {
+        let bits = Kind::from_u8(k as u8).unwrap().as_f32().to_bits();
+        probe.push(f32::from_bits(bits));
+        probe.push(f32::from_bits(bits.wrapping_add(1)));
+        probe.push(f32::from_bits(bits.wrapping_sub(1)));
+        probe.push(f32::from_bits(bits | 0x8000_0000));
+    }
+
+    for v in probe {
+        assert_eq!(Kind::from_f32(v), reference_from_f32(v), "from_f32({v:?}, bits={:#010x})", v.to_bits());
+        let inst = Instance {
+            rect: [20.0, 30.0, 40.0, 25.0],
+            params: [0.0, v, 2.0, 1.0],
+            clip: NO_CLIP,
+            ..Instance::zeroed()
+        };
+        let qb = inst.quad_bounds();
+        let expected_none = matches!(Kind::from_f32(v), Some(Kind::LayerEnd | Kind::Effect | Kind::BackdropBlur))
+            || (Kind::from_f32(v).is_none() && v > 11.5);
+        assert_eq!(qb.is_none(), expected_none, "quad_bounds none mismatch for {v:?}");
+        if Kind::from_f32(v).is_none() {
+            let lb = inst.layer_bounds();
+            assert_eq!(lb, [19.0, 29.0, 61.0, 56.0], "layer_bounds fallback for {v:?}");
+        }
+    }
+
+    // Kinds whose growth does not depend on `params[2]` ignore non-finite `params[2]`.
+    for kind in [Kind::Glyph, Kind::Inset, Kind::Segment, Kind::Triangle, Kind::Image, Kind::Layer] {
+        let inst = Instance {
+            rect: [10.0, 12.0, 20.0, 15.0],
+            params: [0.0, kind.as_f32(), f32::NAN, 1.0],
+            clip: NO_CLIP,
+            ..Instance::zeroed()
+        };
+        let b = inst.quad_bounds().expect("valid quad");
+        assert!(b.iter().all(|v| v.is_finite()), "{kind:?} quad_bounds leaked NaN p2: {b:?}");
+    }
+
+    // Verify `pixel_bounds` matches the un-simplified 8-round reference across clip edge cases.
+    let ref_pixel_bounds = |i: &Instance, w: i32, h: i32| -> [i32; 4] {
+        let Some([mut x0, mut y0, mut x1, mut y1]) = i.quad_bounds() else { return [0; 4] };
+        if i.kind() == Some(Kind::Glyph) && i.params[0] != 0.0 {
+            x0 -= 1.0; y0 -= 1.0; x1 += 1.0; y1 += 1.0;
+        }
+        let first = |v: f32| (v - 0.5).ceil();
+        let c = i.clip;
+        let px0 = first(x0).max((c[0] - 0.5).floor()).max(0.0);
+        let py0 = first(y0).max((c[1] - 0.5).floor()).max(0.0);
+        let px1 = first(x1).min((c[2] + 0.5).ceil()).min(w as f32);
+        let py1 = first(y1).min((c[3] + 0.5).ceil()).min(h as f32);
+        if !(px1 > px0 && py1 > py0) { return [0; 4]; }
+        [px0 as i32, py0 as i32, px1 as i32, py1 as i32]
+    };
+
+    let clips = [
+        NO_CLIP,
+        [0.0, 0.0, 256.0, 256.0],
+        [0.4, 0.5, 100.2, 80.7],
+        [15.2, 18.8, 45.6, 55.1],
+        [40.0, 40.0, 40.0, 40.0],
+        [-5.0, 0.51, 200.5, 120.49],
+        [f32::NAN, 10.0, 100.0, f32::NAN],
+    ];
+    for clip in clips {
+        for rect in [[10.3, 12.7, 30.0, 20.0], [0.2, 0.3, 10.0, 10.0], [35.0, 35.0, 50.0, 40.0], [f32::NAN, 10.0, 20.0, 20.0]] {
+            for kind in [KIND_RECT, KIND_SHADOW, KIND_GLYPH, KIND_LAYER, KIND_LAYER_END, KIND_EFFECT, 14.0, -1.0] {
+                let inst = Instance { rect, clip, params: [0.0, kind, 2.0, 1.0], ..Instance::zeroed() };
+                assert_eq!(inst.pixel_bounds(256, 256), ref_pixel_bounds(&inst, 256, 256), "clip={clip:?} rect={rect:?} kind={kind}");
+            }
+        }
+    }
+}
+
+#[test]
+fn kind_runs_matches_reference_across_valid_none_and_out_of_bounds_spans() {
+    let reference = |kinds: &[Option<Kind>], span: std::ops::Range<u32>| -> Vec<std::ops::Range<u32>> {
+        let mut at = span.start;
+        let mut out = Vec::new();
+        while at < span.end {
+            let kind = kinds.get(at as usize).copied();
+            let start = at;
+            while at < span.end && kinds.get(at as usize).copied() == kind { at += 1; }
+            out.push(start..at);
+        }
+        out
+    };
+    let kinds = [
+        Some(Kind::Rect), Some(Kind::Rect), Some(Kind::Glyph), None, None,
+        Some(Kind::Shadow), Some(Kind::Rect), None,
+    ];
+    for span in [0..0, 0..1, 0..8, 2..6, 3..5, 6..12, 8..12, 10..10] {
+        let got: Vec<_> = kind_runs(&kinds, span.clone()).collect();
+        assert_eq!(got, reference(&kinds, span.clone()), "span {span:?}");
+    }
+}
