@@ -28,7 +28,7 @@ fn create_icon(spec: &TraySpec) -> HICON {
     unsafe { CreateIcon(ptr::null_mut(), spec.icon.width as i32, spec.icon.height as i32, 1, 32, mask.as_ptr(), bgra.as_ptr()) }
 }
 
-fn data(hwnd: HWND, flags: u32) -> NOTIFYICONDATAW {
+pub(super) fn data(hwnd: HWND, flags: u32) -> NOTIFYICONDATAW {
     // SAFETY: NOTIFYICONDATAW is plain data; zero is its documented empty value.
     let mut data: NOTIFYICONDATAW = unsafe { std::mem::zeroed() };
     data.cbSize = size_of::<NOTIFYICONDATAW>() as u32;
@@ -37,8 +37,8 @@ fn data(hwnd: HWND, flags: u32) -> NOTIFYICONDATAW {
     data.uFlags = flags;
     data
 }
-fn set_tip(data: &mut NOTIFYICONDATAW, tooltip: &str) {
-    let tip: Vec<u16> = tooltip.encode_utf16().take(data.szTip.len() - 1).collect();
+pub(super) fn set_tip(data: &mut NOTIFYICONDATAW, tooltip: &str) {
+    let tip = super::truncate_utf16(tooltip, data.szTip.len() - 1);
     data.szTip[..tip.len()].copy_from_slice(&tip);
     data.szTip[tip.len()] = 0;
 }
@@ -61,8 +61,9 @@ fn pick(hwnd: HWND, context: &Context) -> Option<String> {
         for (index, item) in menu.iter().enumerate() {
             match item {
                 TrayItem::Action { label, enabled, .. } => {
+                    let Ok(command) = u16::try_from(index + 1) else { break };
                     let flags = if *enabled { MF_STRING } else { MF_STRING | MF_GRAYED };
-                    AppendMenuW(popup, flags, index + 1, wide(label).as_ptr());
+                    AppendMenuW(popup, flags, usize::from(command), wide(&super::win32_menu_label(label)).as_ptr());
                 }
                 TrayItem::Separator => { AppendMenuW(popup, MF_SEPARATOR, 0, ptr::null()); }
             }

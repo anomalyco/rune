@@ -8,7 +8,7 @@ use crate::compose::{Compositor, Frame};
 use crate::el::Tx;
 use crate::render::Renderer;
 use crate::runtime::{AppDriver, Runtime, RuntimeCore};
-use crate::tooling::{Kind, canvas_input};
+use crate::tooling::{Kind, script_input};
 
 pub(super) struct HeadlessRenderArgs<'a> {
     pub device: &'a wgpu::Device,
@@ -54,13 +54,8 @@ impl dyn HeadlessApp + '_ {
     pub(super) fn resolve_popup(&mut self, picked: Option<&str>) -> Result<(), crate::PopupMenuError> {
         self.driver(|rt, app| rt.resolve_popup(app, picked))
     }
-    pub(super) fn window_focus(&mut self, focused: bool) { self.driver(|rt, app| rt.window_focus(app, focused)); }
-    pub(super) fn pointer_move(&mut self, x: f32, y: f32) { self.driver(|rt, app| rt.pointer_move(app, x, y)); }
-    pub(super) fn pointer_down(&mut self, x: f32, y: f32) { self.driver(|rt, app| rt.pointer_down(app, x, y)); }
-    pub(super) fn pointer_up(&mut self, x: f32, y: f32) { self.driver(|rt, app| rt.pointer_up(app, x, y)); }
-    pub(super) fn secondary_up(&mut self, x: f32, y: f32) { self.driver(|rt, app| rt.secondary_up(app, x, y)); }
-    pub(super) fn canvas_input(&mut self, kind: &Kind, at: (f32, f32)) {
-        self.driver(|rt, app| { canvas_input(rt, app, kind, at); });
+    pub(super) fn script_input(&mut self, kind: &Kind, at: (f32, f32)) {
+        self.driver(|rt, app| { script_input(rt, app, kind, at); });
     }
 }
 

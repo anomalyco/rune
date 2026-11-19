@@ -350,6 +350,16 @@ enum Backing {
     Xwayland(crate::platform::x11::xwayland::XwaylandSurface),
 }
 
+impl Backing {
+    fn window(&self) -> Option<&Arc<Window>> {
+        match self {
+            Backing::Window(w) => Some(w),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+            Backing::Layer(_) | Backing::Xwayland(_) => None,
+        }
+    }
+}
+
 /// A shown overlay. The wgpu surface drops before what it draws into.
 struct Live {
     /// The OS accessibility adapter for this surface.
@@ -408,6 +418,8 @@ pub(in crate::overlay) struct OverlayCore {
     release: Release,
     cursor: Option<crate::cursor::os::OsCursor>,
     mods: winit::keyboard::ModifiersState,
+    control_click: bool,
+    ime_allowed: bool,
     renderer: Option<Renderer>,
     gpu: Option<Arc<Gpu>>,
     gpu_pool: Rc<RefCell<Weak<Gpu>>>,
@@ -417,6 +429,8 @@ pub(in crate::overlay) struct OverlayCore {
     /// After the last frame the runtime asked for no other; only the compositor animates.
     runtime_idle: bool,
     quiet: frame::Quiet,
+    /// Whether this event-loop turn already stepped or missed a frame (`frame::TurnFrame`).
+    turn_frame: frame::TurnFrame,
     clock: FrameClock,
     /// This loop turn already read the panel's occlusion (`sync_occlusion`).
     #[cfg(target_os = "macos")]
@@ -485,6 +499,8 @@ impl OverlayCore {
             #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
             x11: None,
             mods: Default::default(),
+            control_click: false,
+            ime_allowed: false,
             renderer: None,
             gpu: None,
             gpu_pool: Rc::default(),
@@ -493,6 +509,7 @@ impl OverlayCore {
             idle: true,
             runtime_idle: false,
             quiet: Default::default(),
+            turn_frame: Default::default(),
             clock: FrameClock::new(Instant::now()),
             #[cfg(target_os = "macos")]
             occlusion_read: false,

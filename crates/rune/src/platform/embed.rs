@@ -6,8 +6,9 @@ use std::sync::{Arc, OnceLock};
 
 use crate::compose::{Compositor, Frame};
 use crate::frame::clock::FrameClock;
+use crate::platform::embed_frame::{self, FrameSummary};
 use crate::render::{Gpu, Renderer};
-use crate::runtime::{AppDriver, Env, Runtime, RuntimeCore, Waker};
+use crate::runtime::{Env, Runtime, RuntimeCore, Waker};
 use crate::time::Instant;
 use crate::tooling::{AppSpec, runtime_for};
 
@@ -45,6 +46,17 @@ pub struct EmbedFrame {
     pub cpu_us: u64,
 }
 
+impl From<FrameSummary> for EmbedFrame {
+    fn from(s: FrameSummary) -> Self {
+        Self {
+            drew: s.drew,
+            animating: s.animating,
+            wake_after_secs: s.wake_after_secs,
+            cpu_us: s.cpu_us,
+        }
+    }
+}
+
 struct PreparedEmbedFrame {
     frame: wgpu::SurfaceTexture,
     target: wgpu::TextureView,
@@ -80,7 +92,7 @@ impl LayerHostCore {
         let srgb_blend = true;
         let (config, _) = crate::window::surface_config(&surface, &gpu.adapter, (px_w, px_h), srgb_blend)
             .ok_or_else(|| "CAMetalLayer has no supported wgpu surface configuration".to_owned())?;
-        surface.configure(&gpu.device, &config);
+        crate::window::configure(&surface, &gpu, &config)?;
         let target_format = config.format.remove_srgb_suffix();
         let mut renderer = Renderer::new(&gpu.device, target_format);
         renderer.set_srgb_blend(true);
@@ -97,11 +109,13 @@ impl LayerHostCore {
         Ok((core, size, scale, now))
     }
 
-    fn configure_runtime(rt: &mut RuntimeCore, now: Instant) {
+    fn configure_runtime(&mut self, rt: &mut RuntimeCore, now: Instant) {
         rt.set_srgb_blend(true);
         rt.set_os_drag(false);
         rt.wall_start = Some(now);
         rt.record_events = false;
+        let target_format = if rt.srgb_blend() { self.config.format.remove_srgb_suffix() } else { self.config.format };
+        crate::window::rebuild_renderer_core(&self.gpu.device, &mut self.renderer, target_format, rt);
     }
 
     fn resize(&mut self, rt: &mut RuntimeCore, viewport: (f32, f32), scale: f32) {
@@ -117,40 +131,51 @@ impl LayerHostCore {
         if self.config.width != px_w || self.config.height != px_h {
             self.config.width = px_w;
             self.config.height = px_h;
-            self.surface.configure(&self.gpu.device, &self.config);
+            if let Err(error) = crate::window::configure(&self.surface, &self.gpu, &self.config) {
+                eprintln!("rune: embedded layer surface refused its new size: {error}");
+            }
         }
         rt.set_viewport((px_w as f32 / scale, px_h as f32 / scale), scale);
     }
 
-    fn step(&mut self, rt: &mut RuntimeCore, app: &mut dyn AppDriver, t0: Instant) -> (bool, f64, f64) {
-        let (animating, dt) = self.clock.advance_core(rt, app, t0, false);
-        let update_ms = t0.elapsed().as_secs_f64() * 1000.0;
-        crate::clipboard::flush_memory(rt);
-        if rt.popup_menu().is_some() {
-            rt.cancel_popups(app);
+    /// Acquires the next drawable, reconfiguring and retrying once on `Outdated`/`Lost`.
+    /// Returns `Err(retry_now)` when no drawable could be acquired.
+    fn acquire(&mut self) -> Result<wgpu::SurfaceTexture, bool> {
+        let mut retries = 1u8;
+        loop {
+            match self.surface.get_current_texture() {
+                wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => return Ok(f),
+                wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
+                    if let Err(error) = crate::window::configure(&self.surface, &self.gpu, &self.config) {
+                        eprintln!("rune: embedded layer surface refused reconfiguration: {error}");
+                        return Err(false);
+                    }
+                    if retries == 0 { return Err(true); }
+                    retries -= 1;
+                }
+                _ => return Err(false),
+            }
         }
-        rt.refuse_file_dialog("native file dialogs are unsupported in embedded views");
-        (animating, dt, update_ms)
     }
 
-    fn begin_draw(&mut self, rt: &mut RuntimeCore, animating: bool, comp_animating: bool) -> Result<PreparedEmbedFrame, EmbedFrame> {
-        let frame = match self.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
-            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
-                self.surface.configure(&self.gpu.device, &self.config);
-                return Err(EmbedFrame { animating: true, ..EmbedFrame::default() });
-            }
-            _ => return Err(EmbedFrame { animating: animating || comp_animating, ..EmbedFrame::default() }),
-        };
-        let format = self.renderer.format();
+    fn reblend(&mut self, rt: &mut RuntimeCore) -> bool {
+        let mut alpha = None;
+        crate::window::reblend_core(&self.surface, &self.gpu, &mut self.config, &mut self.renderer, &mut alpha, rt)
+    }
+
+    fn prepare_draw(&mut self, rt: &mut RuntimeCore, frame: wgpu::SurfaceTexture) -> PreparedEmbedFrame {
+        let target_format = if rt.srgb_blend() { self.config.format.remove_srgb_suffix() } else { self.config.format };
         let target = frame.texture.create_view(&wgpu::TextureViewDescriptor {
-            format: Some(format),
+            format: (target_format != self.config.format).then_some(target_format),
             ..Default::default()
         });
-        self.renderer.upload_images(&self.gpu.device, &self.gpu.queue, &mut rt.images);
-        let encoder = self.gpu.device.create_command_encoder(&Default::default());
         let size = (self.config.width, self.config.height);
-        Ok(PreparedEmbedFrame { frame, target, encoder, size, format })
+        self.renderer.upload_images(&self.gpu.device, &self.gpu.queue, &mut rt.images);
+        self.renderer.build_surfaces(&self.gpu.device, &rt.surfaces, rt.live_notifier());
+        self.renderer.prepare_surfaces(&self.gpu.device, &self.gpu.queue, &rt.surfaces, size);
+        self.renderer.set_frame_wake(rt.live_wake());
+        let encoder = self.gpu.device.create_command_encoder(&Default::default());
+        PreparedEmbedFrame { frame, target, encoder, size, format: target_format }
     }
 
     fn draw_default(&mut self, rt: &mut RuntimeCore, prepared: &mut PreparedEmbedFrame) {
@@ -164,22 +189,11 @@ impl LayerHostCore {
         self.renderer.draw(&mut prepared.encoder, &prepared.target, rt.clear_color());
     }
 
-    fn finish_draw(&mut self, rt: &RuntimeCore, prepared: PreparedEmbedFrame, t0: Instant, animating: bool, comp_animating: bool) -> EmbedFrame {
+    fn finish_draw(&mut self, rt: &mut RuntimeCore, prepared: PreparedEmbedFrame, t0: Instant, animating: bool, comp_animating: bool) -> EmbedFrame {
         self.renderer.submit(&self.gpu.queue, prepared.encoder);
         self.gpu.queue.present(prepared.frame);
-
-        let cpu_us = t0.elapsed().as_micros() as u64;
-        let wake_after_secs = rt.wake_deadline().and_then(|d| {
-            let elapsed = rt.wall_start?.elapsed().as_secs_f64();
-            Some((d - elapsed).max(0.0))
-        });
-        let keep_ticking = animating || comp_animating || rt.has_pending_input() || rt.live_pending();
-        EmbedFrame {
-            drew: true,
-            animating: keep_ticking,
-            wake_after_secs,
-            cpu_us,
-        }
+        crate::render::gpu_events::presented();
+        embed_frame::post_present(&mut self.clock, rt, Instant::now(), t0, animating, comp_animating).into()
     }
 }
 
@@ -209,9 +223,9 @@ impl<S: 'static> LayerHost<S> {
         dark: bool,
         wake: Waker,
     ) -> Result<Self, String> {
-        let (core, size, scale, now) = unsafe { LayerHostCore::new(layer, viewport, scale) }?;
+        let (mut core, size, scale, now) = unsafe { LayerHostCore::new(layer, viewport, scale) }?;
         let mut rt = runtime_for(spec, state, size, Env::new(dark, scale), wake);
-        LayerHostCore::configure_runtime(rt.core_mut(), now);
+        core.configure_runtime(rt.core_mut(), now);
         Ok(Self { core, compositor: None, rt })
     }
 
@@ -237,21 +251,63 @@ impl<S: 'static> LayerHost<S> {
         self.core.resize(self.rt.core_mut(), viewport, scale);
     }
 
-    /// Steps animations and layout to `Instant::now()` and presents one Metal frame.
+    /// Steps animations and layout to `Instant::now()` and presents one Metal frame, following
+    /// the same acquire → step → prepare → draw → submit/present → clock-presented order as the
+    /// desktop window host.
     pub fn frame(&mut self) -> EmbedFrame {
         if self.core.suspended {
             return EmbedFrame::default();
         }
+        let _ = self.rt.core_mut().follow_font_families();
+        let comp_animating = self.compositor.as_ref().is_some_and(|c| c.animating());
+        if self.core.renderer.srgb_blend() != self.rt.core().srgb_blend()
+            && !self.core.reblend(self.rt.core_mut())
+        {
+            let t0 = Instant::now();
+            let (rt, mut app) = self.rt.split_mut();
+            return embed_frame::missed_step(rt, &mut app, t0, comp_animating, false).into();
+        }
+        // Acquire before stepping so a drawable wait cannot age input and a failed acquire
+        // never advances the frame clock without presenting.
+        let frame = match self.core.acquire() {
+            Ok(frame) => frame,
+            Err(retry_now) => {
+                let t0 = Instant::now();
+                let (rt, mut app) = self.rt.split_mut();
+                return embed_frame::missed_step(rt, &mut app, t0, comp_animating, retry_now).into();
+            }
+        };
         let t0 = Instant::now();
         let (animating, dt, update_ms) = {
             let (rt, mut app) = self.rt.split_mut();
-            self.core.step(rt, &mut app, t0)
+            embed_frame::step_and_flush(&mut self.core.clock, rt, &mut app, t0, comp_animating)
         };
-        let comp_animating = self.compositor.as_ref().is_some_and(|c| c.animating());
-        let mut prepared = match self.core.begin_draw(self.rt.core_mut(), animating, comp_animating) {
-            Ok(prepared) => prepared,
-            Err(early) => return early,
+        // A handler switched blending (`Tx::set_srgb_blend`): re-acquire in the new format.
+        let frame = if self.core.renderer.srgb_blend() != self.rt.core().srgb_blend() {
+            drop(frame);
+            if !self.core.reblend(self.rt.core_mut()) {
+                return EmbedFrame {
+                    drew: false,
+                    animating: animating || comp_animating,
+                    wake_after_secs: embed_frame::wake_after_secs(self.rt.core()),
+                    cpu_us: t0.elapsed().as_micros() as u64,
+                };
+            }
+            match self.core.acquire() {
+                Ok(frame) => frame,
+                Err(retry_now) => {
+                    return EmbedFrame {
+                        drew: false,
+                        animating: retry_now || animating || comp_animating,
+                        wake_after_secs: embed_frame::wake_after_secs(self.rt.core()),
+                        cpu_us: t0.elapsed().as_micros() as u64,
+                    };
+                }
+            }
+        } else {
+            frame
         };
+        let mut prepared = self.core.prepare_draw(self.rt.core_mut(), frame);
         if let Some(comp) = &mut self.compositor {
             let mut f = Frame {
                 device: &self.core.gpu.device,
@@ -270,7 +326,7 @@ impl<S: 'static> LayerHost<S> {
             self.core.draw_default(self.rt.core_mut(), &mut prepared);
         }
         let comp_animating = self.compositor.as_ref().is_some_and(|c| c.animating());
-        self.core.finish_draw(self.rt.core(), prepared, t0, animating, comp_animating)
+        self.core.finish_draw(self.rt.core_mut(), prepared, t0, animating, comp_animating)
     }
 }
 

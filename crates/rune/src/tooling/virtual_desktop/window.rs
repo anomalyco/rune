@@ -50,6 +50,8 @@ pub(crate) trait Member {
     fn stale(&self) -> bool;
     fn advance(&mut self, dt: f64);
     fn focus(&mut self, focused: bool);
+    /// Resizes the window by `(dw, dh)` from the size where `(0, 0)` started.
+    fn resize_by(&mut self, dw: f32, dh: f32);
     /// Pointer and keyboard input; pointer kinds at `at`, in window points.
     fn input(&mut self, kind: &Kind, at: (f32, f32));
     fn leave(&mut self);
@@ -122,12 +124,8 @@ impl dyn DesktopApp + '_ {
     }
     fn frame(&mut self, dt: f64) { self.driver(|rt, app| { rt.frame(app, dt); }); }
     fn window_focus(&mut self, focused: bool) { self.driver(|rt, app| rt.window_focus(app, focused)); }
-    fn pointer_move(&mut self, x: f32, y: f32) { self.driver(|rt, app| rt.pointer_move(app, x, y)); }
-    fn pointer_down(&mut self, x: f32, y: f32) { self.driver(|rt, app| rt.pointer_down(app, x, y)); }
-    fn pointer_up(&mut self, x: f32, y: f32) { self.driver(|rt, app| rt.pointer_up(app, x, y)); }
-    fn secondary_up(&mut self, x: f32, y: f32) { self.driver(|rt, app| rt.secondary_up(app, x, y)); }
-    fn canvas_input(&mut self, kind: &Kind, at: (f32, f32)) {
-        self.driver(|rt, app| { crate::tooling::canvas_input(rt, app, kind, at); });
+    fn script_input(&mut self, kind: &Kind, at: (f32, f32)) {
+        self.driver(|rt, app| { crate::tooling::script_input(rt, app, kind, at); });
     }
 }
 
@@ -239,6 +237,7 @@ pub(crate) struct Window {
     /// `WindowOptions::physical_size`, in pixels of the display the window opens on.
     physical: Option<(u32, u32)>,
     frame: [f32; 4],
+    resize_from: (f32, f32),
     life: Life,
     placed: Option<Value>,
 }
@@ -322,6 +321,7 @@ impl Window {
             position: options.position,
             physical: options.physical_size,
             frame: [0.0, 0.0, size.0, size.1],
+            resize_from: size,
             life: if visible { Life::Shown { sight: crate::window::Sight::Seen } } else { Life::Unopened },
             placed: None,
         }
@@ -367,6 +367,7 @@ impl Window {
     fn hide(&mut self) {
         if !self.life.shown() { return; }
         self.life.hide(crate::platform::reopen::stamp);
+        self.app.rt_mut().keys_lost();
         self.app.cancel_popups();
         self.app.cancel_file_dialogs();
         self.app.rt_mut().cancel_pointer();
@@ -403,6 +404,7 @@ impl Window {
 
     fn resize(&mut self, frame: [f32; 4]) {
         self.frame = frame;
+        self.resize_from = (frame[2], frame[3]);
         let rt = self.app.rt_mut();
         let scale = rt.window_scale();
         rt.set_viewport((frame[2], frame[3]), scale);
@@ -483,30 +485,31 @@ impl Member for Window {
     fn advance(&mut self, dt: f64) { self.app.frame(dt); }
     fn focus(&mut self, focused: bool) { self.app.window_focus(focused); }
 
+    fn resize_by(&mut self, dw: f32, dh: f32) {
+        let rt = self.app.rt_mut();
+        let scale = rt.window_scale();
+        crate::tooling::step_resize(rt, &mut self.resize_from, (dw, dh), scale);
+        let (w, h) = rt.window_viewport();
+        self.frame[2] = w;
+        self.frame[3] = h;
+    }
+
     fn input(&mut self, kind: &Kind, (x, y): (f32, f32)) {
-        match kind {
-            Kind::Focus(focused) => self.app.window_focus(*focused),
-            Kind::Move => self.app.pointer_move(x, y),
-            Kind::Down => self.app.pointer_down(x, y),
-            Kind::Up => self.app.pointer_up(x, y),
-            Kind::SecondaryDown => self.app.rt_mut().secondary_down(x, y),
-            Kind::SecondaryUp => self.app.secondary_up(x, y),
-            Kind::Key(k, false) => self.app.rt_mut().key(k.clone()),
-            Kind::Key(k, true) => self.app.rt_mut().repeat_key(k.clone()),
-            Kind::Physical(event) => self.app.rt_mut().physical_input(*event),
-            Kind::Paste(content) => self.app.rt_mut().paste_content(content.clone()),
-            Kind::Ime(ime) => self.app.rt_mut().ime(ime.clone()),
-            Kind::Wheel(dx, dy) => crate::tooling::wheel(self.app.rt_mut(), (x, y), *dx, *dy),
-            Kind::Fling(vx, vy) => crate::tooling::fling(self.app.rt_mut(), (x, y), *vx, *vy),
-            Kind::Files(step) => crate::tooling::file_input(self.app.rt_mut(), step, (x, y)),
-            Kind::Mark(_) | Kind::Reopen | Kind::OpenUrl(_) | Kind::Menu(_) | Kind::PopupMenu(_) | Kind::FileDialog(_) | Kind::Shortcut(_) => {}
-            kind => { self.app.canvas_input(kind, (x, y)); }
-        }
+        let zoom = self.app.rt().zoom();
+        self.app.script_input(kind, (x / zoom, y / zoom));
     }
 
     fn leave(&mut self) { self.app.rt_mut().pointer_leave(); }
-    fn find(&self, key: &str) -> Option<(f32, f32)> { self.app.rt().find(key) }
-    fn pointer(&self) -> Option<(f32, f32)> { self.app.rt().pointer() }
+    fn find(&self, key: &str) -> Option<(f32, f32)> {
+        let rt = self.app.rt();
+        let zoom = rt.zoom();
+        rt.find(key).map(|(x, y)| (x * zoom, y * zoom))
+    }
+    fn pointer(&self) -> Option<(f32, f32)> {
+        let rt = self.app.rt();
+        let zoom = rt.zoom();
+        rt.pointer().map(|(x, y)| (x * zoom, y * zoom))
+    }
     fn shortcut(&self, shortcut: &crate::Shortcut) -> Result<(), crate::ShortcutError> { self.shortcuts_core.fire(shortcut) }
 
     fn reopen_candidate(&self) -> crate::platform::reopen::Candidate {

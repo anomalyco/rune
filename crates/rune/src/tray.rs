@@ -123,6 +123,53 @@ impl Tray {
     }
 }
 
+/// Escapes a tray menu label so Win32 `AppendMenuW` shows it literally: `&` would underline the
+/// next character as a mnemonic, `\t` would start a right-aligned shortcut column, and `\0`
+/// would truncate the wide string.
+#[cfg_attr(not(any(target_os = "windows", test)), allow(dead_code))]
+pub(super) fn win32_menu_label(label: &str) -> String {
+    let mut out = String::with_capacity(label.len());
+    for c in label.chars() {
+        match c {
+            '&' => out.push_str("&&"),
+            '\t' => out.push(' '),
+            '\0' => {}
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Escapes a tray menu label so `com.canonical.dbusmenu` shows it literally: a single `_` marks
+/// a keyboard mnemonic and is stripped by tray hosts unless doubled.
+#[cfg_attr(not(any(all(target_os = "linux", feature = "dbus"), test)), allow(dead_code))]
+pub(super) fn dbusmenu_label(label: &str) -> String {
+    let mut out = String::with_capacity(label.len());
+    for c in label.chars() {
+        match c {
+            '_' => out.push_str("__"),
+            '\0' => {}
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Encodes `text` as UTF-16 code units fitting in `max_units` without splitting a surrogate pair
+/// or embedding interior NULs.
+#[cfg_attr(not(any(target_os = "windows", test)), allow(dead_code))]
+pub(super) fn truncate_utf16(text: &str, max_units: usize) -> Vec<u16> {
+    let mut out = Vec::with_capacity(text.len().min(max_units));
+    let mut buf = [0u16; 2];
+    for c in text.chars() {
+        if c == '\0' { continue; }
+        let encoded = c.encode_utf16(&mut buf);
+        if out.len() + encoded.len() > max_units { break; }
+        out.extend_from_slice(encoded);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -137,5 +184,43 @@ mod tests {
     fn a_short_icon_is_refused() {
         let spec = TraySpec::new("t", "T", TrayIcon::rgba(2, 2, vec![0; 3]));
         assert!(matches!(Tray::new(spec, |_| {}), Err(TrayError::Backend(_))));
+    }
+
+    #[test]
+    fn tray_menu_labels_escape_platform_mnemonics_and_control_markers() {
+        assert_eq!(win32_menu_label("Save & Quit"), "Save && Quit");
+        assert_eq!(win32_menu_label("A\tB\0C"), "A BC");
+        assert_eq!(win32_menu_label("open_file"), "open_file");
+        assert_eq!(win32_menu_label(""), "");
+
+        assert_eq!(dbusmenu_label("open_file"), "open__file");
+        assert_eq!(dbusmenu_label("Save & Quit"), "Save & Quit");
+        assert_eq!(dbusmenu_label("A\0B"), "AB");
+        assert_eq!(dbusmenu_label(""), "");
+    }
+
+    #[test]
+    fn utf16_truncation_never_splits_a_surrogate_pair() {
+        let tip = format!("{}\u{1F600}", "a".repeat(126));
+        let units = truncate_utf16(&tip, 127);
+        assert_eq!(units.len(), 126);
+        assert_eq!(String::from_utf16(&units).unwrap(), "a".repeat(126));
+
+        let fits = format!("{}\u{1F600}", "a".repeat(125));
+        let units = truncate_utf16(&fits, 127);
+        assert_eq!(units.len(), 127);
+        assert_eq!(String::from_utf16(&units).unwrap(), fits);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_tooltip_truncation_keeps_utf16_surrogate_pairs_intact() {
+        // 126 ASCII chars (126 UTF-16 units) + 1 emoji (2 UTF-16 units = 128 > 127 max).
+        let tip = format!("{}\u{1F600}", "a".repeat(126));
+        let mut d = native::data(std::ptr::null_mut(), 0);
+        native::set_tip(&mut d, &tip);
+        let len = d.szTip.iter().position(|&c| c == 0).unwrap();
+        assert!(String::from_utf16(&d.szTip[..len]).is_ok(), "tooltip split a UTF-16 surrogate pair: {:?}", &d.szTip[len.saturating_sub(2)..len]);
+        assert_eq!(len, 126);
     }
 }

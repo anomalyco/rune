@@ -164,6 +164,7 @@ mod args;
 mod crop;
 #[path = "tooling/eased_input.rs"]
 mod eased_input;
+pub(crate) use eased_input::step_resize;
 #[path = "tooling/headless.rs"]
 mod headless;
 #[path = "tooling/loop_check.rs"]
@@ -394,16 +395,39 @@ impl Kind {
     }
 }
 
-/// The canvas input of a script (`canvas_input.rs`) at window point (x, y); false for any
-/// other kind.
-pub(crate) fn canvas_input(
+/// Shared script input translation for both headless (`headless.rs`) and virtual-desktop
+/// (`virtual_desktop`) hosts. `(x, y)` is in view points; scroll/wheel/fling deltas are in
+/// window points and divided by `core.zoom()`, matching the desktop window host. Returns false
+/// for orchestration-only kinds (`Mark`, `Reopen`, `OpenUrl`, `Shortcut`, `Menu`, `PopupMenu`,
+/// `FileDialog`, `Resize`).
+pub(crate) fn script_input(
     core: &mut crate::runtime::RuntimeCore,
     app: &mut dyn crate::runtime::AppDriver,
     kind: &Kind,
     (x, y): (f32, f32),
 ) -> bool {
     match kind {
-        Kind::WheelEvent(ev) => core.wheel_event(ev.at(x, y)),
+        Kind::Focus(focused) => core.window_focus(app, *focused),
+        Kind::Move => core.pointer_move(app, x, y),
+        Kind::Down => core.pointer_down(app, x, y),
+        Kind::Up => core.pointer_up(app, x, y),
+        Kind::SecondaryDown => core.secondary_down(x, y),
+        Kind::SecondaryUp => core.secondary_up(app, x, y),
+        Kind::Key(k, false) => core.key(k.clone()),
+        Kind::Key(k, true) => core.repeat_key(k.clone()),
+        Kind::Physical(event) => core.physical_input(*event),
+        Kind::Paste(content) => core.paste_content(content.clone()),
+        Kind::Ime(ime) => core.ime(ime.clone()),
+        Kind::Wheel(dx, dy) => { let z = core.zoom(); wheel(core, (x, y), *dx / z, *dy / z); }
+        Kind::Fling(vx, vy) => { let z = core.zoom(); fling(core, (x, y), *vx / z, *vy / z); }
+        Kind::Files(step) => file_input(core, step, (x, y)),
+        Kind::WheelEvent(ev) => {
+            let z = core.zoom();
+            let mut ev = ev.at(x, y);
+            ev.dx /= z;
+            ev.dy /= z;
+            core.wheel_event(ev);
+        }
         Kind::Magnify(ev) => core.magnify_event(ev.at(x, y)),
         Kind::Rotate(ev) => core.rotate_event(ev.at(x, y)),
         Kind::SmartMagnify => core.smart_magnify(x, y),
@@ -411,9 +435,28 @@ pub(crate) fn canvas_input(
         Kind::ButtonUp(b) => core.button_up(app, x, y, *b),
         Kind::KeyUp(k) => { core.key_up(app, k.clone()); }
         Kind::PhysicalKey(event, k, base) => core.physical_key_input(app, *event, k.clone(), *base),
-        _ => return false,
+        Kind::Mark(_) | Kind::Reopen | Kind::OpenUrl(_) | Kind::Menu(_) | Kind::PopupMenu(_)
+        | Kind::FileDialog(_) | Kind::Shortcut(_) | Kind::Resize(..) => return false,
     }
     true
+}
+
+/// The canvas input of a script (`canvas_input.rs`) at window point (x, y); false for any
+/// other kind.
+#[cfg(test)]
+pub(crate) fn canvas_input(
+    core: &mut crate::runtime::RuntimeCore,
+    app: &mut dyn crate::runtime::AppDriver,
+    kind: &Kind,
+    (x, y): (f32, f32),
+) -> bool {
+    match kind {
+        Kind::WheelEvent(_) | Kind::Magnify(_) | Kind::Rotate(_) | Kind::SmartMagnify
+        | Kind::ButtonDown(_) | Kind::ButtonUp(_) | Kind::KeyUp(_) | Kind::PhysicalKey(..) => {
+            script_input(core, app, kind, (x, y))
+        }
+        _ => false,
+    }
 }
 
 #[derive(Clone, Debug)]

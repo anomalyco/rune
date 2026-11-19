@@ -112,7 +112,7 @@ impl Win {
     /// Windows: its next frame waits for room in the swap chain, and comes when there is (`slot`).
     pub(in crate::window) fn waits_for_slot(&self) -> bool {
         #[cfg(target_os = "windows")]
-        return matches!(self.native.slot, crate::window::win32::slot::Slot::Waiting(_));
+        return self.native.slot.waiting();
         #[cfg(not(target_os = "windows"))]
         false
     }
@@ -141,6 +141,10 @@ impl Win {
         // No surface: `Host::reattach` is between the old one and the new, and takes this size
         // from the window itself; or the CPU renderer draws it, whose buffer follows this size.
         let (Some(surface), Some(gpu)) = (&self.surface, gpu) else { return true };
+        // `configure` drains the present queue and reconfigures the swap chain; unregister any
+        // outstanding wait before it touches the swap chain.
+        #[cfg(target_os = "windows")]
+        self.native.slot.reset();
         if let Err(error) = super::configure(surface, gpu, &self.config) {
             eprintln!("rune: a window's surface refused its new size: {error}");
             self.surface_ok = false;

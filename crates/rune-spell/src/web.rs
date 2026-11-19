@@ -48,7 +48,7 @@ pub(super) fn prepare(wake: Option<&Arc<rune_core::live::Wake>>) -> bool {
     STATE.with_borrow_mut(|s| {
         let mut ready = true;
         for tag in &tags {
-            match s.dicts.iter().find(|(t, _)| t == tag) {
+            match s.dicts.iter().find(|(t, _)| super::tags_match(t, tag)) {
                 Some((_, Dict::Loading)) => ready = false,
                 Some(_) => {}
                 None => {
@@ -79,7 +79,7 @@ fn load(tag: String) {
             _ => { web_sys::console::warn_1(&format!("rune: the {tag} dictionary didn't load").into()); Dict::Failed }
         };
         let waiting = STATE.with_borrow_mut(|s| {
-            if let Some((_, slot)) = s.dicts.iter_mut().find(|(t, _)| *t == tag) { *slot = dict; }
+            if let Some((_, slot)) = s.dicts.iter_mut().find(|(t, _)| super::tags_match(t, &tag)) { *slot = dict; }
             std::mem::take(&mut s.waiting)
         });
         super::GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -87,10 +87,14 @@ fn load(tag: String) {
     });
 }
 
-/// Calls `f` with the dictionaries loaded, if any.
+/// Calls `f` with the active loaded dictionaries, if any.
 fn with_ready<R>(f: impl FnOnce(&[&spellbook::Dictionary]) -> R) -> Option<R> {
+    let active = super::languages();
     STATE.with_borrow(|s| {
-        let ready: Vec<&spellbook::Dictionary> = s.dicts.iter().filter_map(|(_, d)| match d { Dict::Ready(d) => Some(&**d), _ => None }).collect();
+        let ready: Vec<&spellbook::Dictionary> = super::active_dicts(&s.dicts, &active)
+            .into_iter()
+            .filter_map(|d| match d { Dict::Ready(d) => Some(&**d), _ => None })
+            .collect();
         (!ready.is_empty()).then(|| f(&ready))
     })
 }
@@ -135,9 +139,14 @@ pub(super) fn suggest(word: &str) -> Vec<String> {
 }
 
 pub(super) fn learn(word: &str) {
+    let active = super::languages();
     STATE.with_borrow_mut(|s| {
-        for (_, d) in &mut s.dicts {
-            if let Dict::Ready(d) = d { let _ = d.add(word); }
+        for (tag, d) in &mut s.dicts {
+            if active.iter().any(|wanted| super::tags_match(tag, wanted))
+                && let Dict::Ready(d) = d
+            {
+                let _ = d.add(word);
+            }
         }
     });
 }

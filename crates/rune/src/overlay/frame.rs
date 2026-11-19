@@ -131,6 +131,46 @@ pub(super) enum Turn {
     Draw,
 }
 
+/// Whether this event-loop turn has already stepped or missed a frame for this overlay, so
+/// `wake_due` + occluded recheck or a paced `DisplayTick` miss + `about_to_wait` never advance
+/// the runtime twice in one turn.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum TurnFrame {
+    #[default]
+    Idle,
+    /// `wake_due` already stepped the runtime for a due timer this turn.
+    WakeStepped,
+    /// A frame missed in this turn: wait for the next turn or tick instead of retrying in
+    /// `about_to_wait`.
+    Missed,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum TurnEvent {
+    NewEvents,
+    WakeStepped,
+    FrameMissed,
+}
+
+impl TurnFrame {
+    pub(super) fn step(&mut self, event: TurnEvent) {
+        *self = match (*self, event) {
+            (_, TurnEvent::NewEvents) => TurnFrame::Idle,
+            (TurnFrame::Idle, TurnEvent::WakeStepped) => TurnFrame::WakeStepped,
+            (state, TurnEvent::WakeStepped) => state,
+            (_, TurnEvent::FrameMissed) => TurnFrame::Missed,
+        };
+    }
+
+    pub(super) fn stepped(self) -> bool {
+        !matches!(self, TurnFrame::Idle)
+    }
+
+    pub(super) fn missed(self) -> bool {
+        matches!(self, TurnFrame::Missed)
+    }
+}
+
 /// What `turn` decides from. `occluded` is the panel's reading this turn (macOS).
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Gate {
@@ -139,12 +179,16 @@ pub(super) struct Gate {
     pub(super) dirty: bool,
     pub(super) idle: bool,
     pub(super) retry: Option<Instant>,
+    pub(super) missed_this_turn: bool,
 }
 
 /// Until it's uncovered, only the retry (or a due timer, in `wake_due`) steps an occluded
 /// overlay, however often other windows turn the loop; input waits for the retry too. A
 /// prewarm frame draws regardless of both. `now` is read only where a retry is compared.
 pub(super) fn turn(gate: Gate, now: impl Fn() -> Instant) -> Turn {
+    if !gate.prewarm && gate.missed_this_turn {
+        return Turn::BackedOff;
+    }
     if !gate.prewarm && gate.occluded {
         return Turn::Occluded { recheck: gate.retry.is_none_or(|retry| retry <= now()) };
     }

@@ -1,0 +1,1 @@
+- An overlay whose frame could not be shown (it was covered, or the display gave it no drawable) advances its animations once for that frame. It advanced them twice, so a timer or spring in a resting overlay jumped ahead.

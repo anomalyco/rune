@@ -147,25 +147,27 @@ impl dyn WindowApp + '_ {
         self.driver(|rt, app| rt.button_up(app, x, y, button));
     }
 
-    pub(in crate::window) fn key_up(&mut self, ev: crate::KeyEvent) -> bool {
-        self.driver(|rt, app| rt.key_up(app, ev))
-    }
-
     pub(in crate::window) fn touch(&mut self, touch: &winit::event::Touch) {
         self.driver(|rt, app| crate::window::touch_core(rt, app, touch));
+    }
+
+    pub(in crate::window) fn modifiers(&mut self, mods: &mut winit::keyboard::ModifiersState, next: winit::keyboard::ModifiersState) -> bool {
+        self.driver(|rt, app| crate::input::host_events::modifiers(rt, app, mods, next))
+    }
+
+    pub(in crate::window) fn keyboard(
+        &mut self,
+        clipboard: &crate::clipboard::Client,
+        event: &winit::event::KeyEvent,
+        mods: winit::keyboard::ModifiersState,
+        unhandled: Option<crate::runtime::Unhandled>,
+    ) -> bool {
+        self.driver(|rt, app| crate::input::host_events::keyboard(rt, app, clipboard, event, mods, unhandled))
     }
 
     #[cfg(target_os = "macos")]
     pub(in crate::window) fn physical_with_fallback(&mut self, event: crate::PhysicalInput, key: Option<crate::KeyEvent>) -> bool {
         self.driver(|rt, app| rt.physical_with_fallback(app, event, key))
-    }
-
-    pub(in crate::window) fn physical_then(&mut self, event: crate::PhysicalInput, key: Option<crate::KeyEvent>, base: Option<char>, unhandled: Option<crate::runtime::Unhandled>) -> bool {
-        self.driver(|rt, app| rt.physical_then(app, event, key, base, unhandled))
-    }
-
-    pub(in crate::window) fn physical_observation(&mut self, event: crate::PhysicalInput) -> bool {
-        self.driver(|rt, app| rt.physical_observation(app, event))
     }
 }
 
