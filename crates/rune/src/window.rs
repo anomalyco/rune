@@ -54,8 +54,6 @@ pub(crate) use surface::{
     acquire_checked, configure, reblend_core, rebuild_renderer_core,
     surface_config, timer_deadline_core, timer_wants_frame_core,
 };
-#[cfg(any(feature = "hot", target_arch = "wasm32"))]
-pub(crate) use surface::rebuild_renderer;
 #[cfg(test)]
 pub(crate) use surface::{
     HIDDEN_REFRESH, OCCLUDED_MAX, OCCLUDED_RETRY, TIMEOUT_RETRY, TIMER_FRAME_STALL, TimerFrame,
@@ -507,11 +505,4 @@ pub(crate) fn touch_core(rt: &mut RuntimeCore, app: &mut dyn AppDriver, touch: &
     };
     let time = START.get_or_init(crate::time::Instant::now).elapsed().as_secs_f64();
     rt.touch(app, touch.id, phase, touch.location.x as f32 / scale, touch.location.y as f32 / scale, time);
-}
-
-#[cfg(target_arch = "wasm32")]
-#[inline(always)]
-pub(crate) fn touch<S: 'static>(rt: &mut crate::Runtime<S>, touch: &winit::event::Touch) {
-    let (core, mut app) = rt.split_mut();
-    touch_core(core, &mut app, touch);
 }

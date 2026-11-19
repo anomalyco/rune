@@ -48,8 +48,6 @@ impl Client {
             if let Some(reply) = purpose.reply(Some(content)) && sender.send(reply).is_ok() { wake(); }
         });
     }
-    #[inline(always)]
-    pub fn flush<S: 'static>(&self, rt: &mut Runtime<S>) { self.flush_core(rt.core_mut()); }
     pub(crate) fn flush_core(&self, rt: &mut crate::runtime::RuntimeCore) {
         if rt.clipboard.is_some() { return flush_memory(rt); }
         rt.clear_secret_request = false;

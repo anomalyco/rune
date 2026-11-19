@@ -10,7 +10,9 @@
 //! RTF-only clipboard (TextEdit, Notes, Pages) is converted to HTML there too.
 use std::hash::{BuildHasher, RandomState};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock, mpsc};
+use std::sync::{Arc, Mutex, MutexGuard, mpsc};
+#[cfg(any(test, not(target_arch = "wasm32")))]
+use std::sync::OnceLock;
 use std::time::Duration;
 use crate::time::Instant;
 use zeroize::Zeroizing;
@@ -172,9 +174,6 @@ impl Client {
         }
         self.read_for(purpose);
     }
-    #[cfg(target_arch = "wasm32")]
-    #[inline(always)]
-    pub fn receive<S: 'static>(&self, rt: &mut Runtime<S>) -> bool { self.receive_core(rt.core_mut()) }
     pub(crate) fn receive_core(&self, rt: &mut crate::runtime::RuntimeCore) -> bool {
         let mut received = self.changed.swap(false, Ordering::SeqCst);
         for reply in self.replies.try_iter() { deliver(rt, reply); received = true; }

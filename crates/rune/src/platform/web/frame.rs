@@ -12,7 +12,7 @@ const SKIRT: f32 = 256.0;
 /// The largest texture side a canvas may have before a GPU says: WebGPU's default limit.
 pub(super) const CPU_MAX_DIM: u32 = 8192;
 
-impl<S: 'static> Running<S> {
+impl Running {
     fn max_dim(&self) -> u32 {
         self.draw.gpu().map_or(CPU_MAX_DIM, |side| side.gpu.device.limits().max_texture_dimension_2d.max(1))
     }
@@ -23,7 +23,7 @@ impl<S: 'static> Running<S> {
             // The canvas covers a band of the page: size it before the box is measured.
             let (view, band) = band_css(window, scale, max_dim);
             set_band_height(window, band);
-            self.rt.set_band(band, view);
+            self.app.rt_mut().set_band(band, view);
         }
         let size = window.canvas().map_or(size, |c| canvas_physical(&c, size, scale));
         self.suspended = size.width == 0 || size.height == 0;
@@ -41,7 +41,7 @@ impl<S: 'static> Running<S> {
         } else {
             self.size = next;
         }
-        self.rt.set_viewport((next.0 as f32 / scale, next.1 as f32 / scale), scale);
+        self.app.rt_mut().set_viewport((next.0 as f32 / scale, next.1 as f32 / scale), scale);
     }
 
     /// Puts a page's canvas where the band it just drew starts in the document. The browser's
@@ -49,7 +49,7 @@ impl<S: 'static> Running<S> {
     /// edge and the next frame draws a new one.
     fn sync_band(&mut self, window: &Window) {
         if !self.document { return; }
-        let top = self.rt.page_offset();
+        let top = self.app.rt().page_offset();
         if self.band == Some(top) { return; }
         self.band = Some(top);
         if let Some(canvas) = window.canvas() {
@@ -58,16 +58,17 @@ impl<S: 'static> Running<S> {
     }
 
     pub(super) fn apply_frame_requests(&mut self, window: &Window) {
+        let rt = self.app.rt_mut();
         if !self.embedded
-            && let Some(title) = self.rt.window_title.take_change()
+            && let Some(title) = rt.window_title.take_change()
             && let Some(doc) = web_sys::window().and_then(|w| w.document())
         {
             doc.set_title(title);
         }
         // A page's height is the mirror's, which `sync_input` keeps; the canvas stays the band.
         if self.document {
-            self.rt.window_frame = None;
-        } else if let Some(req) = self.rt.window_frame.take()
+            rt.window_frame = None;
+        } else if let Some(req) = rt.window_frame.take()
             && let Some((_, h)) = req.size
             && let Some(canvas) = window.canvas()
         {
@@ -110,7 +111,7 @@ fn canvas_physical(canvas: &web_sys::HtmlCanvasElement, reported: winit::dpi::Ph
     winit::dpi::PhysicalSize::new(fix(reported.width, w), fix(reported.height, h))
 }
 
-impl<S: 'static> Browser<S> {
+impl Browser {
     /// Draws a frame: the runtime steps, then the CPU paints it, the GPU draws it, or both while
     /// handing over.
     pub(super) fn redraw(&mut self, event_loop: &ActiveEventLoop) {
@@ -119,44 +120,56 @@ impl<S: 'static> Browser<S> {
         let (Some(window), Some(r)) = (&self.window, &mut *running) else { return };
         if r.suspended || r.draw.waiting_for_gpu() { return; }
         let now = Instant::now();
-        let (commits, input) = (r.rt.stats.commits, r.rt.has_pending_input());
+        let (commits, input) = {
+            let rt = r.app.rt();
+            (rt.stats.commits, rt.has_pending_input())
+        };
         let tick = !std::mem::take(&mut r.full_redraw) && matches!(&r.draw, Draw::Gpu(side) if !side.renderer.checking_gpu())
-            && r.compositor.as_ref().is_none_or(|c| !c.animating() && !c.draws_own()) && r.rt.paint_cycle_tick();
+            && !r.app.compositor_animating() && !r.app.compositor_draws_own() && r.app.rt_mut().paint_cycle_tick();
         let (animating, dt) = if tick {
             let dt = now.saturating_duration_since(r.clock.last()).as_secs_f64();
             r.clock.hold(now);
             (false, dt)
-        } else { r.clock.advance(&mut r.rt, now, r.compositor.as_ref().is_some_and(|c| c.animating())) };
+        } else {
+            let compositing = r.app.compositor_animating();
+            r.app.clock_advance(&mut r.clock, now, compositing)
+        };
         r.apply_frame_requests(window);
-        r.clipboard.flush(&mut r.rt);
+        r.clipboard.flush_core(r.app.rt_mut());
         // A menu asked for opens as the page's own elements (bridge.js `showMenu`), once the frame
         // that asked has laid out what it anchors to.
-        if !r.rt.popup_waits_for_layout() {
-            match r.rt.take_popup() {
-                Some(Some(show)) => r.input.show_menu(&show, r.rt.backdrop_dark().unwrap_or(r.rt.env.system_dark)),
-                Some(None) => { let _ = r.rt.resolve_popup(None); }
+        if !r.app.rt().popup_waits_for_layout() {
+            match r.app.rt_mut().take_popup() {
+                Some(Some(show)) => {
+                    let rt = r.app.rt();
+                    r.input.show_menu(&show, rt.backdrop_dark().unwrap_or(rt.env.system_dark));
+                }
+                Some(None) => { let _ = r.app.resolve_popup(None); }
                 None => {}
             }
         }
-        r.rt.refuse_file_dialog("native file dialogs are unsupported on web");
+        r.app.rt_mut().refuse_file_dialog("native file dialogs are unsupported on web");
         if !tick { r.sync_input(false); }
-        r.cursor.apply(window, r.rt.cursor(), r.rt.pointer().is_some());
-        if !r.rt.surfaces.is_empty() {
-            error("native video surfaces are unsupported on web", window.canvas().as_ref(), r.embedded, r.document);
-            drop(running);
-            self.end(event_loop);
-            return;
+        {
+            let rt = r.app.rt();
+            r.cursor.apply(window, rt.cursor(), rt.pointer().is_some());
+            if !rt.surfaces.is_empty() {
+                error("native video surfaces are unsupported on web", window.canvas().as_ref(), r.embedded, r.document);
+                drop(running);
+                self.end(event_loop);
+                return;
+            }
         }
         let size = r.size;
         let drawn = match &mut r.draw {
             // A frame only the GPU draws (`Scene::needs_gpu`) leaves the last one up.
-            Draw::Cpu { cpu, .. } => Ok(cpu.paint(&mut r.rt, size).is_ok()),
+            Draw::Cpu { cpu, .. } => Ok(cpu.paint(r.app.rt_mut(), size).is_ok()),
             Draw::HandingOver { cpu, side, built, done, since } => {
-                let painted = cpu.paint(&mut r.rt, size).is_ok();
+                let painted = cpu.paint(r.app.rt_mut(), size).is_ok();
                 // Both renderers draw this frame once the browser has compiled the GPU's
                 // pipelines; the GPU's canvas stays see-through until its frame is done.
                 if built.get() {
-                    match gpu::gpu_frame(side, &mut r.rt, &mut r.compositor, now, dt, gpu::drift_wanted(), false) {
+                    match gpu::gpu_frame(side, &mut *r.app, now, dt, gpu::drift_wanted(), false) {
                         // That frame made pipelines its draw needed and drew a fallback for each
                         // while the browser checks it (the renderer hears the answers as it
                         // draws): frames go on drawing into the see-through canvas, and the
@@ -177,7 +190,7 @@ impl<S: 'static> Browser<S> {
             }
             Draw::Gpu(side) => {
                 window.pre_present_notify();
-                gpu::gpu_frame(side, &mut r.rt, &mut r.compositor, now, dt, false, tick).map(|_| true)
+                gpu::gpu_frame(side, &mut *r.app, now, dt, false, tick).map(|_| true)
             }
             Draw::Moving => Ok(false),
         };
@@ -193,7 +206,10 @@ impl<S: 'static> Browser<S> {
         // In the same commit as the frame: the canvas moves to where this frame drew it.
         r.sync_band(window);
         // Only an ambient loop's step (a frame its wake asked for, no commit, nothing else moving).
-        let ambient = !input && !animating && r.rt.stats.commits == commits && r.rt.ambient.is_some();
+        let ambient = {
+            let rt = r.app.rt();
+            !input && !animating && rt.stats.commits == commits && rt.ambient.is_some()
+        };
         if drawn && !ambient { self.drawn_at = Some(now); }
         if drawn && !r.presented {
             r.presented = true;
@@ -212,7 +228,7 @@ impl<S: 'static> Browser<S> {
             let proxy = self.proxy.clone();
             full_faces::fetch(std::mem::take(&mut r.late_fonts), !r.document, move || { let _ = proxy.send_event(Wake::App); });
         }
-        if r.rt.shell_request.take().is_some() {
+        if r.app.rt_mut().shell_request.take().is_some() {
             drop(running);
             self.end(event_loop);
             return;
@@ -221,7 +237,11 @@ impl<S: 'static> Browser<S> {
         // answers, and so is a hand-over waiting on that check.
         let checking = r.draw.gpu().is_some_and(|side| side.renderer.checking_gpu());
         let handing = matches!(r.draw, Draw::HandingOver { done: None, .. });
-        if animating || r.rt.has_pending_input() || r.rt.live_pending() || r.compositor.as_ref().is_some_and(|c| c.animating()) || checking {
+        let wants_frame = {
+            let rt = r.app.rt();
+            animating || rt.has_pending_input() || rt.live_pending() || r.app.compositor_animating() || checking
+        };
+        if wants_frame {
             window.request_redraw();
         }
         let presented = r.presented;
