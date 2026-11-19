@@ -94,7 +94,15 @@ fn run_configured(factory: Factory, args: Args, accessory: bool) -> Result<(), S
     crate::platform::app_icon::launched();
     let proxy = event_loop.create_proxy();
     let turn = proxy.clone();
-    crate::popup_menu::start(std::sync::Arc::new(move || { let _ = turn.send_event(WakeEvent::Turn); }));
+    crate::popup_menu::start(std::sync::Arc::new(move || {
+        // Coalesce pending turns while a modal loop's timer fires so at most one `WakeEvent::Turn`
+        // waits in the queue at a time.
+        if !TURN_QUEUED.swap(true, std::sync::atomic::Ordering::AcqRel)
+            && turn.send_event(WakeEvent::Turn).is_err()
+        {
+            TURN_QUEUED.store(false, std::sync::atomic::Ordering::Release);
+        }
+    }));
     let mut windows = Windows { factory: Some(factory), args, proxy, hosts: Vec::new(), gpu: Rc::default() };
     crate::open_url::incoming::prepare();
     crate::marks::mark("loop.run");
@@ -113,12 +121,28 @@ fn run_configured(factory: Factory, args: Args, accessory: bool) -> Result<(), S
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+static TURN_QUEUED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(not(target_arch = "wasm32"))]
 impl Windows {
     /// The idle turn winit runs between its message loops, run while a native menu's modal
     /// loop holds winit's (`WakeEvent::Turn`): hosts whose timers are due resume, then
     /// `about_to_wait` draws overlays, answers assistive clients and sets the next wake.
     pub(super) fn turn(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+        use std::cell::Cell;
         use winit::application::ApplicationHandler;
+        thread_local! {
+            static RUNNING: Cell<bool> = const { Cell::new(false) };
+        }
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) { RUNNING.with(|r| r.set(false)); }
+        }
+        TURN_QUEUED.store(false, std::sync::atomic::Ordering::Release);
+        if RUNNING.with(|r| r.replace(true)) {
+            return;
+        }
+        let _reset = Reset;
         let now = std::time::Instant::now();
         for host in self.hosts.iter_mut().flatten() {
             if let Some(due) = host.wake_deadline().filter(|&due| due <= now) {

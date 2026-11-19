@@ -247,8 +247,23 @@ thread_local! {
 }
 
 unsafe extern "system" fn subclass(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM, _: usize, data: usize) -> LRESULT {
-    // The owner removes this callback before releasing Input or the winit window.
-    let input = unsafe { &*(data as *const Input) };
+    let ptr = data as *const Input;
+    if message == WM_NCDESTROY {
+        // SAFETY: removes this subclass; if it was still installed, reclaims the ref `new` gave it.
+        unsafe {
+            if RemoveWindowSubclass(hwnd, Some(subclass), 0x52554e45) != 0 {
+                drop(Rc::from_raw(ptr));
+            }
+            return DefSubclassProc(hwnd, message, wparam, lparam);
+        }
+    }
+    // Hold a strong ref across `DefSubclassProc` so dropping `OverlayWindow` re-entrantly
+    // cannot free `Input` while this frame is still on the stack.
+    // SAFETY: `ptr` is the live `Rc<Input>` owned by the subclass until removal.
+    let input: Rc<Input> = unsafe {
+        Rc::increment_strong_count(ptr);
+        Rc::from_raw(ptr)
+    };
     match message {
         WM_NCHITTEST => {
             let p = POINT { x: lparam as i16 as i32, y: (lparam >> 16) as i16 as i32 };
@@ -283,7 +298,11 @@ impl OverlayWindow {
             if unsafe { SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE) } != 0 { OverlaySupport::Requested } else { OverlaySupport::Failed }
         } else { OverlaySupport::Unknown };
         let input = Rc::new(Input { hwnd, regions: RefCell::default(), scale: Cell::new(window.scale_factor() as f32), clicks: RefCell::default(), captured: Cell::new(false), visible: Cell::new(false), input: Cell::new(mode), follow: Cell::new(options.follow_pointer), level: options.level, fading: Cell::new(false) });
-        if unsafe { SetWindowSubclass(hwnd, Some(subclass), 0x52554e45, Rc::as_ptr(&input) as usize) } == 0 {
+        let data = Rc::into_raw(input.clone());
+        // SAFETY: `data` is reclaimed exactly once, either by `Drop` or by `WM_NCDESTROY`,
+        // whichever succeeds in removing the subclass.
+        if unsafe { SetWindowSubclass(hwnd, Some(subclass), 0x52554e45, data as usize) } == 0 {
+            unsafe { drop(Rc::from_raw(data)); }
             return Err(format!("SetWindowSubclass failed: {}", last_error()));
         }
         Ok(Self { input, observing: false, exclusion, watch: None, wake })
@@ -382,7 +401,13 @@ impl OverlayWindow {
 impl Drop for OverlayWindow {
     fn drop(&mut self) {
         self.hide();
-        unsafe { RemoveWindowSubclass(self.input.hwnd, Some(subclass), 0x52554e45); }
+        // SAFETY: removes the subclass installed in `new`; if it was still installed (not already
+        // removed by `WM_NCDESTROY`), reclaims the `Rc` reference owned by the subclass.
+        unsafe {
+            if RemoveWindowSubclass(self.input.hwnd, Some(subclass), 0x52554e45) != 0 {
+                drop(Rc::from_raw(Rc::as_ptr(&self.input)));
+            }
+        }
     }
 }
 
