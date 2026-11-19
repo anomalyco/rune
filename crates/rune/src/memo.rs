@@ -425,23 +425,29 @@ pub(crate) fn virtual_row_tag(list_path: &str, row_key: &str) -> u64 {
     hash_of(&(list_path, row_key)).max(1)
 }
 
-pub(crate) fn in_virtual_row<R>(tag: u64, f: impl FnOnce() -> R) -> R {
-    struct Reset(Option<u64>);
-    impl Drop for Reset {
-        fn drop(&mut self) {
-            if let Some(prev) = self.0 {
-                SCOPES.with_borrow_mut(|scopes| {
-                    if let Some(s) = scopes.last_mut() {
-                        s.virtual_row = prev;
-                    }
-                });
-            }
+struct VirtualRowGuard(Option<u64>);
+
+impl Drop for VirtualRowGuard {
+    fn drop(&mut self) {
+        if let Some(prev) = self.0 {
+            SCOPES.with_borrow_mut(|scopes| {
+                if let Some(s) = scopes.last_mut() {
+                    s.virtual_row = prev;
+                }
+            });
         }
     }
-    let prev = SCOPES.with_borrow_mut(|scopes| {
+}
+
+fn enter_virtual_row(tag: u64) -> VirtualRowGuard {
+    VirtualRowGuard(SCOPES.with_borrow_mut(|scopes| {
         scopes.last_mut().map(|s| std::mem::replace(&mut s.virtual_row, tag))
-    });
-    let _reset = Reset(prev);
+    }))
+}
+
+#[inline]
+pub(crate) fn in_virtual_row<R>(tag: u64, f: impl FnOnce() -> R) -> R {
+    let _reset = enter_virtual_row(tag);
     f()
 }
 
@@ -596,17 +602,22 @@ fn keyed(el: El, key: String) -> El {
     el.key(key)
 }
 
-/// Runs `f` inside the view build in progress as if it were the next build, and the rest of the
-/// build carries on as that one: memos used so far may be used once more, as the following frame
-/// would use them. For tooling that measures what a rebuild costs a frame: a surface rebuilt
-/// many times in one build to time it, its unchanged inner memos reused each time. Outside a
-/// view build it just runs `f`.
-pub fn as_next_build<R>(f: impl FnOnce() -> R) -> R {
+fn bump_pass() {
     SCOPES.with_borrow_mut(|s| {
         if let Some(s) = s.last_mut() {
             s.cache.pass += 1;
         }
     });
+}
+
+/// Runs `f` inside the view build in progress as if it were the next build, and the rest of the
+/// build carries on as that one: memos used so far may be used once more, as the following frame
+/// would use them. For tooling that measures what a rebuild costs a frame: a surface rebuilt
+/// many times in one build to time it, its unchanged inner memos reused each time. Outside a
+/// view build it just runs `f`.
+#[inline]
+pub fn as_next_build<R>(f: impl FnOnce() -> R) -> R {
+    bump_pass();
     f()
 }
 
@@ -624,6 +635,7 @@ pub fn as_next_build<R>(f: impl FnOnce() -> R) -> R {
 /// `Cx::layout_with`, `Cx::layout_size` and `Cx::caret`, which are tracked; see the
 /// [module docs](crate::memo) for handlers, live values and what else invalidates. Outside a view (a test calling a view function directly)
 /// it just builds.
+#[inline]
 #[cfg_attr(debug_assertions, track_caller)]
 pub fn memo(id: impl Into<String>, version: impl Hash, build: impl FnOnce() -> El) -> El {
     memo_with_hash(id, hash_of(&version), build)
@@ -632,17 +644,18 @@ pub fn memo(id: impl Into<String>, version: impl Hash, build: impl FnOnce() -> E
 /// [`memo`] with a version already hashed to a `u64`, for a caller that keeps its own
 /// hashes (a plugin across a C ABI, where `impl Hash` can't cross). The window's environment
 /// still joins it, as it does `memo`'s.
+#[inline]
 #[cfg_attr(debug_assertions, track_caller)]
 pub fn memo_with_hash(id: impl Into<String>, version: u64, build: impl FnOnce() -> El) -> El {
-    memo_inner(id, version, false, build)
+    let mut build = Some(build);
+    memo_inner(id.into(), version, false, &mut || build.take().expect("memo builds once")())
 }
 
 /// A memo, or with `region` a [`region`]: a region's reads of [`Tracked`](crate::Tracked)
 /// values join its reads. A memo's don't: its version says when it builds again, as it always
 /// has, so a cell that moves every frame (a clock) it reads doesn't rebuild it.
 #[cfg_attr(debug_assertions, track_caller)]
-fn memo_inner(id: impl Into<String>, version: u64, region: bool, build: impl FnOnce() -> El) -> El {
-    let key = id.into();
+fn memo_inner(key: String, version: u64, region: bool, build: &mut dyn FnMut() -> El) -> El {
     enum Step {
         Reuse(Rc<Built>),
         Build { id: Rc<str>, version: u64, store: bool },
@@ -779,6 +792,7 @@ const REGION: u64 = 0x7265_6769_6f6e_0001;
 /// A region must read the state it shows through `Tracked` values: anything else it reads (a
 /// plain field, a global, a `Cell`) can change without it noticing. Debug builds build every
 /// reused region again and print the first element that differs, naming the region.
+#[inline]
 #[cfg_attr(debug_assertions, track_caller)]
 pub fn region(id: impl Into<String>, build: impl FnOnce() -> El) -> El {
     region_with(id, (), build)
@@ -787,33 +801,47 @@ pub fn region(id: impl Into<String>, build: impl FnOnce() -> El) -> El {
 /// [`region`] that also rebuilds when `inputs` change: values the closure uses that aren't
 /// [`Tracked`](crate::Tracked) or read inside it, such as a palette or a size computed by the
 /// caller. Debug builds check its reuse as `region`'s.
+#[inline]
 #[cfg_attr(debug_assertions, track_caller)]
 pub fn region_with(id: impl Into<String>, inputs: impl Hash, build: impl FnOnce() -> El) -> El {
-    let key = id.into();
-    #[cfg(debug_assertions)]
-    let check = key.clone();
-    let build = std::cell::Cell::new(Some(build));
-    let el = memo_inner(key, hash_of(&(REGION, inputs)), true, || build.take().expect("a region builds once")());
-    // Reused: debug builds build it again to show it was right to.
-    #[cfg(debug_assertions)]
-    if let Some(build) = build.take() {
-        let fresh = build();
-        let (mut a, mut b) = (Vec::new(), Vec::new());
-        print_el(&el, "", &mut a);
-        print_el(&fresh, "", &mut b);
-        if let Some(i) = (0..a.len().max(b.len())).find(|&i| a.get(i) != b.get(i)) {
-            REGION_WARNINGS.with_borrow_mut(|w| {
-                if w.iter().any(|x: &String| x.starts_with(&format!("rune: region {check:?} "))) { return; }
-                let warning = format!(
-                    "rune: region {check:?} was reused, but building it again gives something else at element {i}: \
-                     reused {:?}, built {:?}. It reads state that isn't Tracked.",
-                    a.get(i).map_or("(none)", String::as_str), b.get(i).map_or("(none)", String::as_str));
-                eprintln!("{warning}");
-                w.push(warning);
-            });
-        }
+    let mut build = Some(build);
+    region_inner(id.into(), hash_of(&(REGION, inputs)), &mut || build.take().expect("a region builds once")())
+}
+
+#[cfg_attr(debug_assertions, track_caller)]
+fn region_inner(key: String, version: u64, build: &mut dyn FnMut() -> El) -> El {
+    #[cfg(not(debug_assertions))]
+    {
+        memo_inner(key, version, true, build)
     }
-    el
+    #[cfg(debug_assertions)]
+    {
+        let check = key.clone();
+        let mut called = false;
+        let el = memo_inner(key, version, true, &mut || {
+            called = true;
+            build()
+        });
+        // Reused: debug builds build it again to show it was right to.
+        if !called {
+            let fresh = build();
+            let (mut a, mut b) = (Vec::new(), Vec::new());
+            print_el(&el, "", &mut a);
+            print_el(&fresh, "", &mut b);
+            if let Some(i) = (0..a.len().max(b.len())).find(|&i| a.get(i) != b.get(i)) {
+                REGION_WARNINGS.with_borrow_mut(|w| {
+                    if w.iter().any(|x: &String| x.starts_with(&format!("rune: region {check:?} "))) { return; }
+                    let warning = format!(
+                        "rune: region {check:?} was reused, but building it again gives something else at element {i}: \
+                         reused {:?}, built {:?}. It reads state that isn't Tracked.",
+                        a.get(i).map_or("(none)", String::as_str), b.get(i).map_or("(none)", String::as_str));
+                    eprintln!("{warning}");
+                    w.push(warning);
+                });
+            }
+        }
+        el
+    }
 }
 
 #[cfg(debug_assertions)]
@@ -851,8 +879,14 @@ pub fn digest(input: &(impl Hash + ?Sized)) -> (u64, u64) {
 
 /// Caches a pure-data subtree by a 128-bit [`digest`] and its occurrence ordinal in the
 /// current view pass (or `virtual_rows` row), preserving `el.key` (`None` when unkeyed).
+#[inline]
 #[doc(hidden)]
-pub fn cached((h1, h2): (u64, u64), build: impl FnOnce() -> El) -> El {
+pub fn cached(digest: (u64, u64), build: impl FnOnce() -> El) -> El {
+    let mut build = Some(build);
+    cached_inner(digest, &mut || build.take().expect("cached builds once")())
+}
+
+fn cached_inner((h1, h2): (u64, u64), build: &mut dyn FnMut() -> El) -> El {
     enum Step {
         Reuse(Rc<Built>, Option<String>),
         Build { id: Rc<str>, version: u64 },
@@ -997,17 +1031,27 @@ impl Reads {
     }
 }
 
-/// Runs `f` recording what it reads, for a caller that reuses what `f` built while the reads hold.
-pub(crate) fn recording<R>(f: impl FnOnce() -> R) -> (R, Reads) {
+fn begin_recording() -> bool {
     let framed = SCOPES.with_borrow_mut(|scopes| scopes.last_mut().map(|s| s.reads.push(Vec::new())).is_some());
     crate::tracked::begin();
-    let out = f();
+    framed
+}
+
+fn end_recording(framed: bool) -> Reads {
     let states = crate::tracked::end();
     let mut reads = SCOPES.with_borrow_mut(|scopes| scopes.last_mut().filter(|_| framed).and_then(|s| s.reads.pop())).unwrap_or_default();
     reads.extend(states.into_iter().map(|(id, version)| Read::State(id, version)));
     dedup_states(&mut reads);
     SCOPES.with_borrow_mut(|scopes| if let Some(s) = scopes.last_mut() { s.note(&reads) });
-    (out, Reads(reads))
+    Reads(reads)
+}
+
+/// Runs `f` recording what it reads, for a caller that reuses what `f` built while the reads hold.
+#[inline]
+pub(crate) fn recording<R>(f: impl FnOnce() -> R) -> (R, Reads) {
+    let framed = begin_recording();
+    let out = f();
+    (out, end_recording(framed))
 }
 
 /// Whether the memo built as `id` is in the last commit's nodes, so its subtree can be reused.

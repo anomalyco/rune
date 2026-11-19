@@ -81,9 +81,9 @@ impl RuntimeCore {
             }
             self.window_focused = Some(focused);
             if app.has_on_focus() {
-                let mut one = self.begin_update(app);
-                crate::tooling::perf_warn::timed("an `update` closure", || app.on_focus(focused, &mut one));
-                self.finish_update(app, one, true, false);
+                let (mut one, stall) = self.begin_update(app);
+                app.on_focus(focused, &mut one);
+                self.finish_update(app, stall, one, true, false);
             }
             // Deliver the cancelled Up before FocusLost can commit a view that removes its
             // grip (or the focus callback clears the app's drag state).
@@ -145,10 +145,12 @@ impl RuntimeCore {
         self.dirty = true;
     }
 
-    /// Starts an [`Runtime::update`] transaction with the clock reading now.
-    pub(super) fn begin_update(&self, app: &dyn ViewDriver) -> Tx {
+    /// Starts an [`Runtime::update`] transaction with the clock reading now and begins its
+    /// stall timer right before the app callback runs.
+    pub(super) fn begin_update(&self, app: &dyn ViewDriver) -> (Tx, crate::tooling::perf_warn::Stall) {
         // Its wakes count from now (`schedule_pending_wakes`), so its clock reads now too.
-        Tx { clock: self.now_clock(), ..self.transaction(app) }
+        let one = Tx { clock: self.now_clock(), ..self.transaction(app) };
+        (one, crate::tooling::perf_warn::Stall::start())
     }
 
     /// Finishes an [`Runtime::update`] / `update_if` / `update_if_ordered` call after its
@@ -156,10 +158,12 @@ impl RuntimeCore {
     pub(super) fn finish_update(
         &mut self,
         app: &mut dyn AppDriver,
+        stall: crate::tooling::perf_warn::Stall,
         mut one: Tx,
         changed: bool,
         ordered: bool,
     ) -> (bool, Option<std::num::NonZeroU64>) {
+        stall.end_named("an `update` closure");
         let stale = changed || one.frame_work() || one.window_frame.is_some() || one.srgb_blend.is_some_and(|b| b != self.srgb_blend) || one.font_smoothing.is_some_and(|m| m != self.text.font_smoothing())
             || self.changes_families(&one)
             || (one.blur && self.focus.path().is_some());
@@ -315,7 +319,12 @@ impl RuntimeCore {
     }
 
     /// Queues an app marker once for each attached writer. Formatting is skipped when off.
+    #[inline]
     pub fn trace_event(&mut self, event: impl std::fmt::Display) {
+        self.trace_event_dyn(&event);
+    }
+
+    pub(crate) fn trace_event_dyn(&mut self, event: &dyn std::fmt::Display) {
         if self.trace_channels.is_some() { event_log::push(&mut self.events, event.to_string()); }
         if let Some(trace) = self.scene.trace_mut() { trace.event(event); }
     }

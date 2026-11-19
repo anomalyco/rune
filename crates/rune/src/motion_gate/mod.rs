@@ -134,15 +134,48 @@ impl Sampler {
     }
 }
 
+fn run_init(core: &mut crate::runtime::RuntimeCore, app: &mut dyn crate::runtime::AppDriver, hz: f64) -> (Recording, f64) {
+    core.paint_rank = Some(Vec::new());
+    core.frame(app, 0.0);
+    (Recording::new(core.viewport, hz), 1.0 / hz)
+}
+
+fn run_idle(core: &mut crate::runtime::RuntimeCore, app: &mut dyn crate::runtime::AppDriver, dt: f64, secs: f64) {
+    for _ in 0..(secs / dt).round() as usize {
+        core.frame(app, dt);
+    }
+}
+
+fn run_step_frame(core: &mut crate::runtime::RuntimeCore, app: &mut dyn crate::runtime::AppDriver, rec: &mut Recording, dt: f64) {
+    core.commit_why = 0;
+    let played = app.playground_played();
+    let awake = core.frame(app, dt);
+    if app.playground_played() > played { rec.input("a story step's key"); }
+    rec.awake.push(awake);
+}
+
+fn run_step_sample(core: &mut crate::runtime::RuntimeCore, rec: &mut Recording, raster: &mut Raster, pixels: Option<Pixels>) {
+    let size = rec.size;
+    let drawn = pixels.map(|(w, h, rgba)| Arc::new(check::raster::from_pixels(&rgba, w, h, size)));
+    sample(core, rec, raster, drawn);
+}
+
+fn run_tap(core: &mut crate::runtime::RuntimeCore, app: &mut dyn crate::runtime::AppDriver, key: &str) {
+    let (x, y) = core.find(key).unwrap_or_else(|| panic!("no {key}"));
+    core.pointer_move(app, x, y);
+    core.pointer_down(app, x, y);
+    core.pointer_up(app, x, y);
+}
+
 impl<S: 'static> Run<S> {
     /// Records `rt` at `hz` frames a second, after its first frame. Settle it with
     /// [`idle`](Run::idle) and set the scene up, then the first [`step`](Run::step) is the settled
     /// start the first action changes.
+    #[inline]
     pub fn new(mut rt: Runtime<S>, hz: f64) -> Self {
-        rt.paint_rank = Some(Vec::new());
-        rt.frame(0.0);
-        let rec = Recording::new(rt.viewport, hz);
-        Run { rt, rec, dt: 1.0 / hz, draw: None, raster: Raster::default() }
+        let (core, mut app) = rt.split_mut();
+        let (rec, dt) = run_init(core, &mut app, hz);
+        Run { rt, rec, dt, draw: None, raster: Raster::default() }
     }
 
     /// Reads each recorded frame's pixels with `draw` (a GPU render of the runtime) for the
@@ -153,24 +186,20 @@ impl<S: 'static> Run<S> {
     }
 
     /// Steps `secs` unrecorded (setting up, before the run).
+    #[inline]
     pub fn idle(&mut self, secs: f64) {
-        for _ in 0..(secs / self.dt).round() as usize {
-            self.rt.frame(self.dt);
-        }
+        let (core, mut app) = self.rt.split_mut();
+        run_idle(core, &mut app, self.dt, secs);
     }
 
     /// Records one frame. A key a playground story's step pressed on it (`Play::press`) is an
     /// input there, as [`act`](Run::act)'s are.
+    #[inline]
     pub fn step(&mut self) {
-        self.rt.commit_why = 0;
-        let played = self.rt.played_keys();
-        let awake = self.rt.frame(self.dt);
-        if self.rt.played_keys() > played { self.rec.input("a story step's key"); }
-        self.rec.awake.push(awake);
-        let size = self.rec.size;
-        let drawn = self.draw.as_mut().and_then(|draw| draw(&mut self.rt))
-            .map(|(w, h, rgba)| Arc::new(check::raster::from_pixels(&rgba, w, h, size)));
-        sample(self.rt.core_mut(), &mut self.rec, &mut self.raster, drawn);
+        let (core, mut app) = self.rt.split_mut();
+        run_step_frame(core, &mut app, &mut self.rec, self.dt);
+        let pixels = self.draw.as_mut().and_then(|draw| draw(&mut self.rt));
+        run_step_sample(self.rt.core_mut(), &mut self.rec, &mut self.raster, pixels);
     }
 
     pub fn step_n(&mut self, n: usize) {
@@ -199,11 +228,10 @@ impl<S: 'static> Run<S> {
     }
 
     /// A click at the middle of the element keyed `key`.
+    #[inline]
     pub fn tap(rt: &mut Runtime<S>, key: &str) {
-        let (x, y) = rt.find(key).unwrap_or_else(|| panic!("no {key}"));
-        rt.pointer_move(x, y);
-        rt.pointer_down(x, y);
-        rt.pointer_up(x, y);
+        let (core, mut app) = rt.split_mut();
+        run_tap(core, &mut app, key);
     }
 
     /// What the checker finds in the recording.

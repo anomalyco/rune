@@ -187,6 +187,8 @@ pub(crate) use key_names::{key_named, script_key_base, script_mods};
 use script::parse_script;
 pub(crate) use strip::*;
 pub(crate) use trace::{FrameTiming, Trace, tree_json};
+#[cfg(feature = "hot")]
+pub(crate) use trace::tree_json_core;
 use trace::r2;
 
 /// Opens the app's window and quits when it closes (`App` for other lifetimes), or renders
@@ -394,16 +396,27 @@ impl Kind {
 
 /// The canvas input of a script (`canvas_input.rs`) at window point (x, y); false for any
 /// other kind.
-pub(crate) fn canvas_input<S: 'static>(rt: &mut Runtime<S>, kind: &Kind, (x, y): (f32, f32)) -> bool {
+#[inline]
+pub(crate) fn canvas_input<S: 'static>(rt: &mut Runtime<S>, kind: &Kind, at: (f32, f32)) -> bool {
+    let (core, mut app) = rt.split_mut();
+    canvas_input_core(core, &mut app, kind, at)
+}
+
+fn canvas_input_core(
+    core: &mut crate::runtime::RuntimeCore,
+    app: &mut dyn crate::runtime::AppDriver,
+    kind: &Kind,
+    (x, y): (f32, f32),
+) -> bool {
     match kind {
-        Kind::WheelEvent(ev) => rt.wheel_event(ev.at(x, y)),
-        Kind::Magnify(ev) => rt.magnify_event(ev.at(x, y)),
-        Kind::Rotate(ev) => rt.rotate_event(ev.at(x, y)),
-        Kind::SmartMagnify => rt.smart_magnify(x, y),
-        Kind::ButtonDown(b) => rt.button_down(x, y, *b),
-        Kind::ButtonUp(b) => rt.button_up(x, y, *b),
-        Kind::KeyUp(k) => { rt.key_up(k.clone()); }
-        Kind::PhysicalKey(event, k, base) => rt.physical_key_input(*event, k.clone(), *base),
+        Kind::WheelEvent(ev) => core.wheel_event(ev.at(x, y)),
+        Kind::Magnify(ev) => core.magnify_event(ev.at(x, y)),
+        Kind::Rotate(ev) => core.rotate_event(ev.at(x, y)),
+        Kind::SmartMagnify => core.smart_magnify(x, y),
+        Kind::ButtonDown(b) => core.button_down(app, x, y, *b),
+        Kind::ButtonUp(b) => core.button_up(app, x, y, *b),
+        Kind::KeyUp(k) => { core.key_up(app, k.clone()); }
+        Kind::PhysicalKey(event, k, base) => core.physical_key_input(app, *event, k.clone(), *base),
         _ => return false,
     }
     true
@@ -522,11 +535,16 @@ pub(crate) fn desktop(args: &Args, script: Option<&Value>) -> crate::desktop::di
 }
 
 /// Feeds a script's file drag step to `rt`, at `at` in window points.
+#[inline]
 pub(crate) fn file_input<S: 'static>(rt: &mut Runtime<S>, step: &FileStep, at: (f32, f32)) {
+    file_input_core(rt.core_mut(), step, at);
+}
+
+fn file_input_core(core: &mut crate::runtime::RuntimeCore, step: &FileStep, at: (f32, f32)) {
     match step {
-        FileStep::Hover(paths) => rt.drag_files(paths.clone(), Some(at)),
-        FileStep::Drop(paths) => rt.drop_files(paths.clone(), Some(at)),
-        FileStep::Leave => rt.drag_files_leave(),
+        FileStep::Hover(paths) => core.drag_files(paths.clone(), Some(at)),
+        FileStep::Drop(paths) => core.drop_files(paths.clone(), Some(at)),
+        FileStep::Leave => core.drag_files_leave(),
     }
 }
 

@@ -442,18 +442,32 @@ use commit::{Measured, Measurement, Pass, unwrapped_width};
 pub(crate) struct CoreEnd;
 
 macro_rules! runtime_core_fields {
-    ($($field:tt)*) => {
+    (
+        $(
+            $(#[doc = $doc:expr])*
+            $(#[cfg($($cfg:tt)*)])*
+            $vis:vis $name:ident : $ty:ty
+        ),* $(,)?
+    ) => {
         /// Non-generic retained tree, layout, scene, input, scroll, selection, and paint state
         /// forming the exact `#[repr(C)]` prefix of [`Runtime<S>`].
         #[repr(C)]
         pub(crate) struct RuntimeCore {
-            $($field)*
+            $(
+                $(#[doc = $doc])*
+                $(#[cfg($($cfg)*)])*
+                $vis $name: $ty,
+            )*
             pub(crate) _core_end: CoreEnd,
         }
 
         #[repr(C)]
         pub struct Runtime<S: 'static> {
-            $($field)*
+            $(
+                $(#[doc = $doc])*
+                $(#[cfg($($cfg)*)])*
+                $vis $name: $ty,
+            )*
             pub(crate) _core_end: CoreEnd,
             pub state: S,
             /// Called at the start of every frame with the clock; return true when state changed (new data).
@@ -461,6 +475,27 @@ macro_rules! runtime_core_fields {
             /// Called for keys unhandled by the focused control; return true to consume it.
             pub on_key: Option<fn(&mut S, &KeyEvent, &mut Tx) -> bool>,
             pub(crate) hooks: RuntimeHooks<S>,
+        }
+
+        impl<S: 'static> Runtime<S> {
+            /// Builds a `Runtime<S>` from an initialized `RuntimeCore` and its `S`-dependent tail
+            /// fields. Generated from the shared field list as an exhaustive struct literal so
+            /// adding any field without initializing it is a compile error.
+            pub(crate) fn from_core(core: RuntimeCore, state: S, view: fn(&S, &mut Cx<S>) -> El) -> Self {
+                assert_prefix_layout::<S>();
+                let hooks = RuntimeHooks::new(view);
+                Self {
+                    $(
+                        $(#[cfg($($cfg)*)])*
+                        $name: core.$name,
+                    )*
+                    _core_end: core._core_end,
+                    state,
+                    poll: None,
+                    on_key: None,
+                    hooks,
+                }
+            }
         }
     };
 }
@@ -923,13 +958,25 @@ runtime_core_fields! {
     a11y: Option<Box<a11y_tree::A11yTree>>,
 }
 
+// Moving a non-Copy field out fails with E0509 if `RuntimeCore` or `Runtime<S>` ever implements `Drop`.
+const _: () = {
+    fn check<S: 'static>(core: RuntimeCore, rt: Runtime<S>) -> (Vec<Node>, Vec<Node>) {
+        (core.nodes, rt.nodes)
+    }
+    let _ = check::<()>;
+};
+
 #[inline(always)]
 const fn assert_prefix_layout<S: 'static>() {
     const {
+        assert!(std::mem::size_of::<CoreEnd>() == 0);
         assert!(std::mem::align_of::<RuntimeCore>() <= 16);
         assert!(std::mem::offset_of!(Runtime<S>, _core_end) == std::mem::offset_of!(RuntimeCore, _core_end));
         assert!(std::mem::size_of::<RuntimeCore>() == std::mem::offset_of!(RuntimeCore, _core_end));
         assert!(std::mem::offset_of!(Runtime<S>, state) >= std::mem::size_of::<RuntimeCore>());
+        assert!(std::mem::offset_of!(Runtime<S>, poll) >= std::mem::size_of::<RuntimeCore>());
+        assert!(std::mem::offset_of!(Runtime<S>, on_key) >= std::mem::size_of::<RuntimeCore>());
+        assert!(std::mem::offset_of!(Runtime<S>, hooks) >= std::mem::size_of::<RuntimeCore>());
         assert!(std::mem::align_of::<Runtime<S>>() >= std::mem::align_of::<RuntimeCore>());
     }
 }
@@ -943,42 +990,30 @@ impl<S: 'static> Runtime<S> {
         Self::from_core(RuntimeCore::new(viewport, env, text), state, view)
     }
 
-    pub(crate) fn from_core(core: RuntimeCore, state: S, view: fn(&S, &mut Cx<S>) -> El) -> Self {
-        assert_prefix_layout::<S>();
-        let hooks = RuntimeHooks::new(view);
-        let mut uninit = std::mem::MaybeUninit::<Self>::uninit();
-        let ptr = uninit.as_mut_ptr();
-        // SAFETY: `Runtime<S>` and `RuntimeCore` are `#[repr(C)]` with an identical field prefix
-        // ending at `_core_end: CoreEnd`, verified at compile time by `assert_prefix_layout::<S>()`.
-        // `ptr.cast::<RuntimeCore>().write(core)` initializes the entire shared prefix, and the
-        // four trailing `write` calls initialize every remaining field (`state`, `poll`, `on_key`,
-        // `hooks`). None of these writes can panic, so `assume_init()` returns a fully initialized
-        // `Runtime<S>` with no custom `Drop` mismatch.
-        unsafe {
-            ptr.cast::<RuntimeCore>().write(core);
-            std::ptr::addr_of_mut!((*ptr).state).write(state);
-            std::ptr::addr_of_mut!((*ptr).poll).write(None);
-            std::ptr::addr_of_mut!((*ptr).on_key).write(None);
-            std::ptr::addr_of_mut!((*ptr).hooks).write(hooks);
-            uninit.assume_init()
-        }
-    }
-
     #[inline(always)]
     pub(crate) fn core(&self) -> &RuntimeCore {
         assert_prefix_layout::<S>();
-        // SAFETY: `Runtime<S>` begins with the identical `#[repr(C)]` prefix of `RuntimeCore`,
-        // with alignment >= `align_of::<RuntimeCore>()` proven at compile time by
-        // `assert_prefix_layout::<S>()`.
+        // SAFETY: `Runtime<S>` and `RuntimeCore` are `#[repr(C)]` with an identical field prefix
+        // ending at zero-sized `_core_end: CoreEnd`, and neither implements custom `Drop` (guarded
+        // at compile time above). `assert_prefix_layout::<S>()` proves `size_of::<CoreEnd>() == 0`,
+        // identical `_core_end` offsets equal to `size_of::<RuntimeCore>()`, and
+        // `align_of::<Runtime<S>>() >= align_of::<RuntimeCore>()`.
         unsafe { &*std::ptr::from_ref(self).cast::<RuntimeCore>() }
     }
 
+    /// Mutable view of the shared non-generic prefix.
+    ///
+    /// Mutate fields through the returned reference only; never replace the whole value
+    /// (`std::mem::swap`, `std::mem::replace`, `*core = ...`), which would pair this
+    /// `Runtime<S>`'s tail fields with another runtime's core.
     #[inline(always)]
     pub(crate) fn core_mut(&mut self) -> &mut RuntimeCore {
         assert_prefix_layout::<S>();
-        // SAFETY: `Runtime<S>` begins with the identical `#[repr(C)]` prefix of `RuntimeCore`,
-        // with alignment >= `align_of::<RuntimeCore>()` proven at compile time by
-        // `assert_prefix_layout::<S>()`.
+        // SAFETY: `Runtime<S>` and `RuntimeCore` are `#[repr(C)]` with an identical field prefix
+        // ending at zero-sized `_core_end: CoreEnd`, and neither implements custom `Drop` (guarded
+        // at compile time above). `assert_prefix_layout::<S>()` proves `size_of::<CoreEnd>() == 0`,
+        // identical `_core_end` offsets equal to `size_of::<RuntimeCore>()`, and
+        // `align_of::<Runtime<S>>() >= align_of::<RuntimeCore>()`.
         unsafe { &mut *std::ptr::from_mut(self).cast::<RuntimeCore>() }
     }
 
@@ -986,8 +1021,11 @@ impl<S: 'static> Runtime<S> {
     pub(crate) fn split(&self) -> (&RuntimeCore, AppRef<'_, S>) {
         assert_prefix_layout::<S>();
         let ptr = std::ptr::from_ref(self);
-        // SAFETY: `Runtime<S>` begins with the identical `#[repr(C)]` prefix of `RuntimeCore`,
-        // and shared references to the prefix and trailing fields may coexist.
+        // SAFETY: `Runtime<S>` and `RuntimeCore` share an identical `#[repr(C)]` prefix ending at
+        // zero-sized `_core_end: CoreEnd`, and neither implements custom `Drop`. `assert_prefix_layout::<S>()`
+        // proves `state` and `hooks` sit at offsets `>= size_of::<RuntimeCore>()`, so shared
+        // references to the prefix (preserving any interior `UnsafeCell` bytes at identical offsets)
+        // and the trailing fields may coexist.
         unsafe {
             let core = &*ptr.cast::<RuntimeCore>();
             let app = AppRef {
@@ -998,16 +1036,23 @@ impl<S: 'static> Runtime<S> {
         }
     }
 
+    /// Disjoint mutable borrow of the shared prefix and the `S`-dependent tail.
+    ///
+    /// As with [`Self::core_mut`], mutate fields on the returned `&mut RuntimeCore` rather than
+    /// replacing the whole value.
     #[inline(always)]
     pub(crate) fn split_mut(&mut self) -> (&mut RuntimeCore, AppRefMut<'_, S>) {
         assert_prefix_layout::<S>();
         let ptr = std::ptr::from_mut(self);
         // SAFETY: `Runtime<S>` and `RuntimeCore` share an identical `#[repr(C)]` prefix ending
-        // at `_core_end: CoreEnd`. `assert_prefix_layout::<S>()` proves at compile time that
-        // `offset_of!(Runtime<S>, state) >= size_of::<RuntimeCore>()` and
-        // `align_of::<Runtime<S>>() >= align_of::<RuntimeCore>()`. Every projection below derives
-        // once from `ptr` and covers strictly disjoint byte ranges: `[0..size_of::<RuntimeCore>())`
-        // for `core` and `[offset_of!(Runtime<S>, state)..size_of::<Runtime<S>>())` for `app`.
+        // at zero-sized `_core_end: CoreEnd`, and neither implements custom `Drop`.
+        // `assert_prefix_layout::<S>()` proves at compile time that `size_of::<CoreEnd>() == 0`,
+        // `size_of::<RuntimeCore>() == offset_of!(RuntimeCore, _core_end)`,
+        // `align_of::<Runtime<S>>() >= align_of::<RuntimeCore>()`, and every tail field (`state`,
+        // `poll`, `on_key`, `hooks`) sits at an offset `>= size_of::<RuntimeCore>()`. Every
+        // projection below derives from `ptr` and covers strictly disjoint byte ranges:
+        // `[0..size_of::<RuntimeCore>())` for `core` and distinct tail fields at offsets
+        // `>= size_of::<RuntimeCore>()` for `app`.
         unsafe {
             let poll = *std::ptr::addr_of!((*ptr).poll);
             let on_key = *std::ptr::addr_of!((*ptr).on_key);
@@ -1027,22 +1072,45 @@ impl<S: 'static> Runtime<S> {
 
 #[cfg(test)]
 mod prefix_layout_tests {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
     use super::*;
 
     #[repr(align(64))]
     struct OverAligned(u8);
 
+    struct ZeroSized;
+
+    struct DropCounter(Rc<Cell<usize>>);
+
+    impl Drop for DropCounter {
+        fn drop(&mut self) {
+            self.0.set(self.0.get() + 1);
+        }
+    }
+
     fn empty_view<S: 'static>(_: &S, _: &mut Cx<S>) -> El {
         crate::el()
     }
 
-    fn verify_layout<S: 'static>(state: S, bump: impl FnOnce(&mut S)) {
+    fn verify_layout<S: 'static>(state: S, bump: impl FnOnce(&mut S), check: impl FnOnce(&S)) {
         assert_prefix_layout::<S>();
+        assert_eq!(std::mem::size_of::<CoreEnd>(), 0);
         assert!(std::mem::offset_of!(Runtime<S>, state) >= std::mem::size_of::<RuntimeCore>());
+        assert!(std::mem::offset_of!(Runtime<S>, poll) >= std::mem::size_of::<RuntimeCore>());
+        assert!(std::mem::offset_of!(Runtime<S>, on_key) >= std::mem::size_of::<RuntimeCore>());
+        assert!(std::mem::offset_of!(Runtime<S>, hooks) >= std::mem::size_of::<RuntimeCore>());
         assert!(std::mem::align_of::<Runtime<S>>() >= std::mem::align_of::<RuntimeCore>());
+
         let mut rt = Runtime::new(state, empty_view::<S>, (320.0, 240.0), Env::new(true, 2.0));
         assert_eq!(rt.core().viewport, (320.0, 240.0));
         assert_eq!(rt.core().env.scale, 2.0);
+
+        rt.core_mut().viewport = (400.0, 300.0);
+        assert_eq!(rt.viewport, (400.0, 300.0));
+        assert_eq!(rt.core().viewport, (400.0, 300.0));
+
         {
             let (core, app) = rt.split_mut();
             core.viewport = (640.0, 480.0);
@@ -1051,22 +1119,64 @@ mod prefix_layout_tests {
         }
         assert_eq!(rt.viewport, (640.0, 480.0));
         assert_eq!(rt.t, 1.5);
-        let (core, _) = rt.split();
-        assert_eq!(core.viewport, (640.0, 480.0));
+
+        {
+            let (core, app) = rt.split();
+            assert_eq!(core.viewport, (640.0, 480.0));
+            assert_eq!(core.t, 1.5);
+            check(app.state);
+        }
+
+        // Reading through `split()` while an interior `RefCell` field of the core is mutably
+        // borrowed must preserve `UnsafeCell` aliasing semantics.
+        {
+            let mut scratch = rt.motion_scratch.borrow_mut();
+            scratch.push((7, 3, true));
+            let (core, app) = rt.split();
+            assert_eq!(core.viewport, (640.0, 480.0));
+            assert!(core.motion_scratch.try_borrow().is_err());
+            let _ = std::ptr::from_ref(app.state);
+        }
+        assert_eq!(rt.core().motion_scratch.borrow().as_slice(), &[(7, 3, true)]);
     }
 
     #[test]
     fn shared_prefix_layout_holds_across_state_alignments() {
-        verify_layout((), |_| {});
+        verify_layout((), |_| {}, |_| {});
+
         let mut seen_u8 = 0u8;
-        verify_layout(1u8, |s| { *s = 7; seen_u8 = *s; });
+        verify_layout(
+            1u8,
+            |s| { *s = 7; seen_u8 = *s; },
+            |s| assert_eq!(*s, 7),
+        );
         assert_eq!(seen_u8, 7);
+
         let mut seen_u128 = 0u128;
-        verify_layout(1u128, |s| { *s = 0x1234_5678_9abc_def0; seen_u128 = *s; });
+        verify_layout(
+            1u128,
+            |s| { *s = 0x1234_5678_9abc_def0; seen_u128 = *s; },
+            |s| assert_eq!(*s, 0x1234_5678_9abc_def0),
+        );
         assert_eq!(seen_u128, 0x1234_5678_9abc_def0);
+
         let mut seen_over = 0u8;
-        verify_layout(OverAligned(3), |s| { s.0 = 42; seen_over = s.0; });
+        verify_layout(
+            OverAligned(3),
+            |s| { s.0 = 42; seen_over = s.0; },
+            |s| assert_eq!(s.0, 42),
+        );
         assert_eq!(seen_over, 42);
+
+        verify_layout(ZeroSized, |_| {}, |_| {});
+
+        let drops = Rc::new(Cell::new(0));
+        verify_layout(
+            DropCounter(drops.clone()),
+            |s| assert_eq!(s.0.get(), 0),
+            |s| assert_eq!(s.0.get(), 0),
+        );
+        assert_eq!(drops.get(), 1, "state with Drop must drop exactly once");
     }
 }
 

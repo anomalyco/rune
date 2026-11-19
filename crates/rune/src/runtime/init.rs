@@ -2,7 +2,7 @@
 use super::*;
 
 impl RuntimeCore {
-    pub(crate) fn new(viewport: (f32, f32), env: Env, text: TextSystem) -> Self {
+    pub(super) fn new(viewport: (f32, f32), env: Env, text: TextSystem) -> Self {
         crate::frame::profile::install_text_hook();
         let mut scene = Scene::new();
         scene.set_pixel_scale(env.scale);
