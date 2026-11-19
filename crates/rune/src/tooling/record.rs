@@ -78,7 +78,7 @@ impl<T> Readback<T> {
 
     /// Finished frames in submission order, without waiting.
     pub(crate) fn ready(&mut self, device: &wgpu::Device) -> Vec<(T, Vec<u8>)> {
-        let _ = rune_gpu::health::poll(&device, wgpu::PollType::Poll);
+        let _ = rune_gpu::health::poll(device, wgpu::PollType::Poll);
         let mut done = Vec::new();
         while let Some(frame) = self.pop(device, false) { done.push(frame); }
         done
@@ -98,7 +98,7 @@ impl<T> Readback<T> {
         if !ready.load(Ordering::Acquire) {
             if !wait { return None; }
             while !ready.load(Ordering::Acquire) {
-                rune_gpu::health::poll(&device, wgpu::PollType::wait_indefinitely()).expect("poll");
+                rune_gpu::health::poll(device, wgpu::PollType::wait_indefinitely()).expect("poll");
             }
         }
         let (slot, tag, _) = self.pending.pop_front().unwrap();

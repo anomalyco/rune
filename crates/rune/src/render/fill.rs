@@ -240,7 +240,7 @@ impl Renderer {
             queue.submit([encoder.finish()]);
             let slice = buffer.slice(..);
             slice.map_async(wgpu::MapMode::Read, |r| r.expect("map fill drift"));
-            rune_gpu::health::poll(&device, wgpu::PollType::wait_indefinitely()).expect("poll");
+            rune_gpu::health::poll(device, wgpu::PollType::wait_indefinitely()).expect("poll");
             let out = slice.get_mapped_range().expect("mapped").to_vec();
             buffer.unmap();
             out
