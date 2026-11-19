@@ -51,3 +51,110 @@ fn other_windows_reconfigure_on_every_size_change() {
     // A window hidden to nothing keeps its surface until it has a size again.
     assert_eq!(should_reconfigure_surface((800, 600), (0, 0), false), ((800, 600), false));
 }
+
+#[test]
+fn webgl_picks_non_srgb_surface_format_directly_for_srgb_blend() {
+    use wgpu::{Backend, TextureFormat};
+    // wgpu-core sorts sRGB formats first, so WebGL2's default config prefers Rgba8UnormSrgb
+    // while advertising both Rgba8UnormSrgb and Rgba8Unorm.
+    let caps = [TextureFormat::Rgba8UnormSrgb, TextureFormat::Rgba8Unorm];
+    let srgb_on = select_surface_formats(TextureFormat::Rgba8UnormSrgb, &caps, Backend::Gl, true);
+    assert_eq!(srgb_on, SurfaceFormats {
+        surface: TextureFormat::Rgba8Unorm,
+        view_format: None,
+        render: TextureFormat::Rgba8Unorm,
+    });
+    assert!(srgb_on.srgb_blend());
+
+    // Switching back to linear blending (srgb_blend == false) selects Rgba8UnormSrgb directly.
+    let srgb_off = select_surface_formats(TextureFormat::Rgba8Unorm, &caps, Backend::Gl, false);
+    assert_eq!(srgb_off, SurfaceFormats {
+        surface: TextureFormat::Rgba8UnormSrgb,
+        view_format: None,
+        render: TextureFormat::Rgba8UnormSrgb,
+    });
+    assert!(!srgb_off.srgb_blend());
+}
+
+#[test]
+fn webgpu_uses_view_format_for_linear_blend_and_direct_for_srgb_blend() {
+    use wgpu::{Backend, TextureFormat};
+    let caps = [TextureFormat::Bgra8Unorm, TextureFormat::Rgba8Unorm];
+    let srgb_on = select_surface_formats(TextureFormat::Bgra8Unorm, &caps, Backend::BrowserWebGpu, true);
+    assert_eq!(srgb_on, SurfaceFormats {
+        surface: TextureFormat::Bgra8Unorm,
+        view_format: None,
+        render: TextureFormat::Bgra8Unorm,
+    });
+    assert!(srgb_on.srgb_blend());
+
+    let srgb_off = select_surface_formats(TextureFormat::Bgra8Unorm, &caps, Backend::BrowserWebGpu, false);
+    assert_eq!(srgb_off, SurfaceFormats {
+        surface: TextureFormat::Bgra8Unorm,
+        view_format: Some(TextureFormat::Bgra8UnormSrgb),
+        render: TextureFormat::Bgra8UnormSrgb,
+    });
+    assert!(!srgb_off.srgb_blend());
+}
+
+#[test]
+fn webgl_without_srgb_twin_keeps_supported_format_without_view_formats() {
+    use wgpu::{Backend, TextureFormat};
+    let caps = [TextureFormat::Rgba8Unorm];
+    let linear_asked = select_surface_formats(TextureFormat::Rgba8Unorm, &caps, Backend::Gl, false);
+    assert_eq!(linear_asked, SurfaceFormats {
+        surface: TextureFormat::Rgba8Unorm,
+        view_format: None,
+        render: TextureFormat::Rgba8Unorm,
+    });
+    assert!(linear_asked.srgb_blend());
+}
+
+#[test]
+fn webgl_surface_usage_never_adds_unsupported_copy_flags() {
+    use wgpu::{Backend, TextureUsages};
+    let render_only = TextureUsages::RENDER_ATTACHMENT;
+    assert_eq!(surface_usage(render_only, Backend::Gl, false), TextureUsages::RENDER_ATTACHMENT);
+    assert_eq!(surface_usage(render_only, Backend::Gl, true), TextureUsages::RENDER_ATTACHMENT);
+    assert_eq!(
+        surface_usage(render_only, Backend::BrowserWebGpu, false),
+        TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_DST,
+    );
+    assert_eq!(
+        surface_usage(render_only, Backend::BrowserWebGpu, true),
+        TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_DST | TextureUsages::COPY_SRC,
+    );
+    assert_eq!(
+        surface_usage(render_only | TextureUsages::COPY_SRC, Backend::Gl, false),
+        TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC,
+    );
+}
+
+#[test]
+fn only_non_webgpu_backends_need_device_polling() {
+    use wgpu::Backend;
+    assert!(!needs_device_poll(Backend::BrowserWebGpu));
+    assert!(needs_device_poll(Backend::Gl));
+}
+
+#[test]
+fn backend_order_skips_webgpu_when_navigator_gpu_is_absent() {
+    assert_eq!(backend_order(true, true), &[WebBackend::WebGpu, WebBackend::WebGl2]);
+    assert_eq!(backend_order(true, false), &[WebBackend::WebGpu]);
+    assert_eq!(backend_order(false, true), &[WebBackend::WebGl2]);
+    assert_eq!(backend_order(false, false), &[]);
+}
+
+#[test]
+fn webgl_context_loss_recovers_instead_of_terminating_the_app() {
+    // WebGL2 full-window (CPU-first or ?cpu-first=off): immediate CPU fallback, recoverable on restore.
+    assert_eq!(loss_action(true, false, false, false), LossAction::FallbackToCpu { recoverable: true });
+    assert_eq!(loss_action(true, true, false, false), LossAction::FallbackToCpu { recoverable: true });
+    // WebGL2 inline or document: pause until webglcontextrestored instead of showing a fatal overlay.
+    assert_eq!(loss_action(true, true, true, false), LossAction::PauseForRestore);
+    assert_eq!(loss_action(true, true, false, true), LossAction::PauseForRestore);
+    // WebGPU keeps its existing policy: permanent CPU fallback on CPU-first, fatal on GPU-first.
+    assert_eq!(loss_action(false, false, false, false), LossAction::FallbackToCpu { recoverable: false });
+    assert_eq!(loss_action(false, true, false, false), LossAction::Fatal);
+    assert_eq!(loss_action(false, true, true, false), LossAction::Fatal);
+}

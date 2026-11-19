@@ -1,0 +1,1 @@
+- Web, `webgl` feature: a browser that offers a WebGPU canvas context but no usable adapter (WebGPU disabled by a flag, an insecure origin) falls back to WebGL2. Rune took the canvas for WebGPU first, which left WebGL2 unable to use it, and the app showed an error or stayed on the CPU painter.
