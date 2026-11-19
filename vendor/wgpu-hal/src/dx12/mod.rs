@@ -1220,6 +1220,8 @@ unsafe impl Sync for QuerySet {}
 #[derive(Debug)]
 pub struct Fence {
     raw: Direct3D12::ID3D12Fence,
+    /// Rune: the highest value read from it (`Device::reached`).
+    reached: AtomicU64,
 }
 
 impl crate::DynFence for Fence {}

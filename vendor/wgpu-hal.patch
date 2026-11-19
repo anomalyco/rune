@@ -1,5 +1,5 @@
 diff --git a/src/auxil/dxgi/factory.rs b/src/auxil/dxgi/factory.rs
-index ac050bcd..6e3c74ef 100644
+index ac050bc..6e3c74e 100644
 --- a/src/auxil/dxgi/factory.rs
 +++ b/src/auxil/dxgi/factory.rs
 @@ -9,7 +9,7 @@ use super::result::HResult as _;
@@ -12,7 +12,7 @@ index ac050bcd..6e3c74ef 100644
  
      // The Intel Haswell family of iGPUs had support for the D3D12 API but it was later
 diff --git a/src/dx12/instance.rs b/src/dx12/instance.rs
-index fdb63bcb..5f64a804 100644
+index fdb63bc..5f64a80 100644
 --- a/src/dx12/instance.rs
 +++ b/src/dx12/instance.rs
 @@ -187,3 +187,37 @@ impl crate::Instance for super::Instance {
@@ -54,7 +54,7 @@ index fdb63bcb..5f64a804 100644
 +    }
 +}
 diff --git a/src/dx12/mod.rs b/src/dx12/mod.rs
-index 285d635..36e8b82 100644
+index 285d635..5d1a65a 100644
 --- a/src/dx12/mod.rs
 +++ b/src/dx12/mod.rs
 @@ -615,6 +615,8 @@ struct SwapChain {
@@ -82,7 +82,16 @@ index 285d635..36e8b82 100644
      /// Returns the waitable handle associated with this swap chain, if any.
      /// Handle is only valid while the swap chain is alive.
      pub unsafe fn waitable_handle(&self) -> Option<Foundation::HANDLE> {
-@@ -1535,7 +1546,9 @@ impl crate::Surface for Surface {
+@@ -1209,6 +1220,8 @@ unsafe impl Sync for QuerySet {}
+ #[derive(Debug)]
+ pub struct Fence {
+     raw: Direct3D12::ID3D12Fence,
++    /// Rune: the highest value read from it (`Device::reached`).
++    reached: AtomicU64,
+ }
+ 
+ impl crate::DynFence for Fence {}
+@@ -1535,7 +1548,9 @@ impl crate::Surface for Surface {
                      BufferUsage: Dxgi::DXGI_USAGE_RENDER_TARGET_OUTPUT,
                      BufferCount: swap_chain_buffer,
                      Scaling: Dxgi::DXGI_SCALING_STRETCH,
@@ -93,7 +102,7 @@ index 285d635..36e8b82 100644
                      Flags: flags.0 as u32,
                  };
                  let swap_chain1 = match self.target {
-@@ -1702,6 +1715,7 @@ impl crate::Surface for Surface {
+@@ -1702,6 +1717,7 @@ impl crate::Surface for Surface {
              present_mode: config.present_mode,
              format: config.format,
              size: config.extent,
@@ -101,7 +110,7 @@ index 285d635..36e8b82 100644
          });
  
          Ok(())
-@@ -1838,9 +1852,22 @@ impl crate::Queue for Queue {
+@@ -1838,9 +1854,22 @@ impl crate::Queue for Queue {
          };
  
          profiling::scope!("IDXGISwapchain3::Present");
@@ -128,7 +137,7 @@ index 285d635..36e8b82 100644
          Ok(())
      }
 diff --git a/src/dx12/shader_compilation.rs b/src/dx12/shader_compilation.rs
-index ff41e503..7961cbf9 100644
+index ff41e50..7961cbf 100644
 --- a/src/dx12/shader_compilation.rs
 +++ b/src/dx12/shader_compilation.rs
 @@ -17,7 +17,8 @@ pub(super) enum CompilerContainer {
@@ -162,7 +171,7 @@ index ff41e503..7961cbf9 100644
              CompilerContainer::DynamicDxc(CompilerDynamicDxc { compiler, .. })
              | CompilerContainer::StaticDxc(CompilerStaticDxc { compiler, .. }) => compile_dxc(
 diff --git a/src/dx12/descriptor.rs b/src/dx12/descriptor.rs
-index f57ba46e..475a9e31 100644
+index f57ba46..475a9e3 100644
 --- a/src/dx12/descriptor.rs
 +++ b/src/dx12/descriptor.rs
 @@ -37,6 +37,10 @@ pub(super) struct GeneralHeap {
@@ -216,60 +225,68 @@ index f57ba46e..475a9e31 100644
  }
  
 diff --git a/src/dx12/device.rs b/src/dx12/device.rs
-index 63fb313..14aaaea 100644
+index 63fb313..2355771 100644
 --- a/src/dx12/device.rs
 +++ b/src/dx12/device.rs
-@@ -256,6 +256,24 @@ impl super::Device {
+@@ -256,6 +256,22 @@ impl super::Device {
          signature.ok_or(crate::DeviceError::Unexpected)
      }
  
-+    /// Rune: `value`, read from a fence, unless the device was removed. A removed device's fence
-+    /// reads `u64::MAX` (a GPU reset after a timeout, a driver update, a GPU unplugged), which
-+    /// wgpu-core would take as every submission finished: each pending work-done callback fired
-+    /// as if its work had run, and the device-lost callback never ran. No submission signals
-+    /// `u64::MAX`, so that value with a removal reason is the loss, reported as one.
-+    fn unless_removed(&self, value: crate::FenceValue) -> Result<crate::FenceValue, crate::DeviceError> {
-+        if value != u64::MAX {
-+            return Ok(value);
++    /// Rune: the highest value `fence` has reached, or None once the device is removed. A
++    /// removed device's fence reads `u64::MAX` (a GPU reset after a timeout, a driver update, a
++    /// GPU unplugged), which wgpu-core would take as every submission finished: each pending
++    /// work-done callback and buffer map would complete as if its work had run. Reporting the
++    /// value the fence last really reached leaves them pending, which they are: they will never
++    /// finish. An error here instead would make wgpu's `Device::poll` panic ("Parent device is
++    /// lost"). The removal itself is seen by the caller (Rune's `rune_gpu::health::removed`) and
++    /// by wgpu at the device's next submission, whose signal fails.
++    fn reached(&self, fence: &super::Fence) -> Option<crate::FenceValue> {
++        let value = unsafe { fence.raw.GetCompletedValue() };
++        if value == u64::MAX && unsafe { self.raw.GetDeviceRemovedReason() }.is_err() {
++            return None;
 +        }
-+        match unsafe { self.raw.GetDeviceRemovedReason() } {
-+            Ok(()) => Ok(value),
-+            Err(error) => {
-+                log::error!("The D3D12 device was removed: {error}");
-+                Err(crate::DeviceError::Lost)
-+            }
-+        }
++        Some(fence.reached.fetch_max(value, core::sync::atomic::Ordering::Relaxed).max(value))
 +    }
 +
      // Blocks until the dedicated present queue is finished with all of its work.
      //
      // Once this method completes, the surface is able to be resized or deleted.
-@@ -2356,7 +2374,7 @@ impl crate::Device for super::Device {
+@@ -2346,7 +2362,7 @@ impl crate::Device for super::Device {
+ 
+         self.counters.fences.add(1);
+ 
+-        Ok(super::Fence { raw })
++        Ok(super::Fence { raw, reached: Default::default() })
+     }
+     unsafe fn destroy_fence(&self, _fence: super::Fence) {
+         self.counters.fences.sub(1);
+@@ -2356,7 +2372,7 @@ impl crate::Device for super::Device {
          &self,
          fence: &super::Fence,
      ) -> Result<crate::FenceValue, crate::DeviceError> {
 -        Ok(unsafe { fence.raw.GetCompletedValue() })
-+        self.unless_removed(unsafe { fence.raw.GetCompletedValue() })
++        Ok(self.reached(fence).unwrap_or_else(|| fence.reached.load(core::sync::atomic::Ordering::Relaxed)))
      }
      unsafe fn wait(
          &self,
-@@ -2367,7 +2385,7 @@ impl crate::Device for super::Device {
+@@ -2367,7 +2383,8 @@ impl crate::Device for super::Device {
          let timeout = timeout.unwrap_or(Duration::MAX);
  
          // We first check if the fence has already reached the value we're waiting for.
 -        let mut fence_value = unsafe { fence.raw.GetCompletedValue() };
-+        let mut fence_value = self.unless_removed(unsafe { fence.raw.GetCompletedValue() })?;
++        // A removed device's fence never reaches `value`.
++        let Some(mut fence_value) = self.reached(fence) else { return Ok(false) };
          if fence_value >= value {
              return Ok(true);
          }
-@@ -2429,7 +2447,10 @@ impl crate::Device for super::Device {
+@@ -2429,7 +2446,10 @@ impl crate::Device for super::Device {
                  }
              };
  
 -            fence_value = unsafe { fence.raw.GetCompletedValue() };
-+            fence_value = match self.unless_removed(unsafe { fence.raw.GetCompletedValue() }) {
-+                Ok(value) => value,
-+                Err(error) => break Err(error),
++            fence_value = match self.reached(fence) {
++                Some(value) => value,
++                None => break Ok(false),
 +            };
              log::trace!("Wait complete! Fence actual value: {fence_value}");
  

@@ -37,6 +37,24 @@ impl ErrorLog {
     }
 }
 
+/// Whether `device`'s GPU was removed (a reset after a timeout, a driver update, a GPU
+/// unplugged). D3D12 says so before wgpu does: Rune's wgpu-hal keeps a removed device's work
+/// pending, never finished (`vendor/wgpu-hal`, `Device::reached`), and wgpu hears of the
+/// removal only at the device's next submission. False on other backends, whose loss reaches
+/// wgpu's lost callback.
+pub fn removed(device: &wgpu::Device) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        // SAFETY: the device's D3D12 interface, asked whether it was removed.
+        unsafe { device.as_hal::<wgpu::hal::api::Dx12>() }.is_some_and(|d| unsafe { d.raw_device().GetDeviceRemovedReason() }.is_err())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = device;
+        false
+    }
+}
+
 #[cfg(test)]
 #[path = "health_tests.rs"]
 mod tests;

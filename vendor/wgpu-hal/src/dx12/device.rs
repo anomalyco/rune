@@ -256,22 +256,20 @@ impl super::Device {
         signature.ok_or(crate::DeviceError::Unexpected)
     }
 
-    /// Rune: `value`, read from a fence, unless the device was removed. A removed device's fence
-    /// reads `u64::MAX` (a GPU reset after a timeout, a driver update, a GPU unplugged), which
-    /// wgpu-core would take as every submission finished: each pending work-done callback fired
-    /// as if its work had run, and the device-lost callback never ran. No submission signals
-    /// `u64::MAX`, so that value with a removal reason is the loss, reported as one.
-    fn unless_removed(&self, value: crate::FenceValue) -> Result<crate::FenceValue, crate::DeviceError> {
-        if value != u64::MAX {
-            return Ok(value);
+    /// Rune: the highest value `fence` has reached, or None once the device is removed. A
+    /// removed device's fence reads `u64::MAX` (a GPU reset after a timeout, a driver update, a
+    /// GPU unplugged), which wgpu-core would take as every submission finished: each pending
+    /// work-done callback and buffer map would complete as if its work had run. Reporting the
+    /// value the fence last really reached leaves them pending, which they are: they will never
+    /// finish. An error here instead would make wgpu's `Device::poll` panic ("Parent device is
+    /// lost"). The removal itself is seen by the caller (Rune's `rune_gpu::health::removed`) and
+    /// by wgpu at the device's next submission, whose signal fails.
+    fn reached(&self, fence: &super::Fence) -> Option<crate::FenceValue> {
+        let value = unsafe { fence.raw.GetCompletedValue() };
+        if value == u64::MAX && unsafe { self.raw.GetDeviceRemovedReason() }.is_err() {
+            return None;
         }
-        match unsafe { self.raw.GetDeviceRemovedReason() } {
-            Ok(()) => Ok(value),
-            Err(error) => {
-                log::error!("The D3D12 device was removed: {error}");
-                Err(crate::DeviceError::Lost)
-            }
-        }
+        Some(fence.reached.fetch_max(value, core::sync::atomic::Ordering::Relaxed).max(value))
     }
 
     // Blocks until the dedicated present queue is finished with all of its work.
@@ -2364,7 +2362,7 @@ impl crate::Device for super::Device {
 
         self.counters.fences.add(1);
 
-        Ok(super::Fence { raw })
+        Ok(super::Fence { raw, reached: Default::default() })
     }
     unsafe fn destroy_fence(&self, _fence: super::Fence) {
         self.counters.fences.sub(1);
@@ -2374,7 +2372,7 @@ impl crate::Device for super::Device {
         &self,
         fence: &super::Fence,
     ) -> Result<crate::FenceValue, crate::DeviceError> {
-        self.unless_removed(unsafe { fence.raw.GetCompletedValue() })
+        Ok(self.reached(fence).unwrap_or_else(|| fence.reached.load(core::sync::atomic::Ordering::Relaxed)))
     }
     unsafe fn wait(
         &self,
@@ -2385,7 +2383,8 @@ impl crate::Device for super::Device {
         let timeout = timeout.unwrap_or(Duration::MAX);
 
         // We first check if the fence has already reached the value we're waiting for.
-        let mut fence_value = self.unless_removed(unsafe { fence.raw.GetCompletedValue() })?;
+        // A removed device's fence never reaches `value`.
+        let Some(mut fence_value) = self.reached(fence) else { return Ok(false) };
         if fence_value >= value {
             return Ok(true);
         }
@@ -2447,9 +2446,9 @@ impl crate::Device for super::Device {
                 }
             };
 
-            fence_value = match self.unless_removed(unsafe { fence.raw.GetCompletedValue() }) {
-                Ok(value) => value,
-                Err(error) => break Err(error),
+            fence_value = match self.reached(fence) {
+                Some(value) => value,
+                None => break Ok(false),
             };
             log::trace!("Wait complete! Fence actual value: {fence_value}");
 
