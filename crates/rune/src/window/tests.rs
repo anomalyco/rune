@@ -732,3 +732,70 @@ fn a_new_gpus_device_equals_the_old_one_but_its_key_differs() {
     let (old, new) = (crate::render::Renderer::new(&old, format), crate::render::Renderer::new(&new, format));
     assert_ne!(old.device_key(), new.device_key());
 }
+
+/// The surface alpha mode is the one a window had before the frame existed, unless only a frame's
+/// corner pixels need it: then it takes premultiplied alpha alone, or stays opaque.
+#[test]
+fn the_surface_alpha_mode_follows_what_the_window_asked_for() {
+    use crate::window::host::create::alpha_mode;
+    use wgpu::CompositeAlphaMode::{Inherit, Opaque, PostMultiplied, PreMultiplied};
+
+    // An app that asked for a translucent window keeps every mode it always had, straight alpha
+    // included — Metal offers only `PostMultiplied` — and a surface with none draws it opaque.
+    for (supports, want) in [
+        (Some(PreMultiplied), PreMultiplied),
+        (Some(PostMultiplied), PostMultiplied),
+        (Some(Inherit), Inherit),
+        (None, Opaque),
+    ] {
+        assert_eq!(alpha_mode(true, false, supports), want, "transparent, {supports:?}");
+        assert_eq!(alpha_mode(true, true, supports), want, "transparent with a frame, {supports:?}");
+    }
+
+    // A window that only needs its frame's corner pixels transparent takes premultiplied alpha,
+    // and is square rather than straight-alpha when the surface has nothing else.
+    assert_eq!(alpha_mode(false, true, Some(PreMultiplied)), PreMultiplied);
+    for supports in [Some(PostMultiplied), Some(Inherit), Some(Opaque), None] {
+        assert_eq!(alpha_mode(false, true, supports), Opaque, "corners only, {supports:?}");
+    }
+
+    // No frame and no transparency: nothing to keep alpha for.
+    for supports in [Some(PreMultiplied), Some(PostMultiplied), None] {
+        assert_eq!(alpha_mode(false, false, supports), Opaque, "opaque window, {supports:?}");
+    }
+}
+
+/// A square window (maximized, tiled or fullscreen) never asks the corner pass to draw, whatever
+/// state the pass is in.
+#[test]
+fn a_square_window_never_fades_its_corners() {
+    use crate::render::{Gpu, Offscreen, OFFSCREEN_FORMAT};
+    let gpu = Gpu::new(Gpu::instance(), None);
+    let size = (8, 8);
+    let target = Offscreen::new(&gpu.device, size.0, size.1);
+    let mut enc = gpu.device.create_command_encoder(&Default::default());
+    {
+        let _clear = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: None,
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &target.view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::RED), store: wgpu::StoreOp::Store },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+    }
+    let mut pass = crate::render::csd_corners::CsdCorners::new(&gpu.device, OFFSCREEN_FORMAT);
+    pass.prepare(&gpu.queue, size, 0.);
+    surface::corners::draw(Some(&pass), &mut enc, &target.view, 0.);
+    target.copy(&mut enc);
+    gpu.queue.submit([enc.finish()]);
+    let pixels = target.read(&gpu.device);
+    for (i, pixel) in pixels.chunks_exact(4).enumerate() {
+        assert_eq!(pixel[3], 255, "pixel {i} faded with no radius");
+    }
+}

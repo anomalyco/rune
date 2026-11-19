@@ -181,11 +181,16 @@ impl Host {
             .ok_or("the GPU adapter can't present to this window")?;
         #[cfg(target_os = "macos")]
         let launch_drawables = LaunchDrawables::cap(&mut config);
+        // A window with a client-side frame keeps its pixels' alpha for the frame's corner arcs;
+        // one under a compositor that draws the decorations itself keeps the surface it always had.
+        let client_frame = self.client_frame(&window);
+        if self.options.transparent || client_frame {
+            config.alpha_mode = alpha_mode(self.options.transparent, client_frame, translucent);
+        }
         if self.options.transparent {
-            config.alpha_mode = translucent.unwrap_or_else(|| {
+            if config.alpha_mode == wgpu::CompositeAlphaMode::Opaque {
                 eprintln!("transparency unavailable for {}; using an opaque window", self.native_handle.key());
-                wgpu::CompositeAlphaMode::Opaque
-            });
+            }
             self.app.rt_mut().transparent = config.alpha_mode != wgpu::CompositeAlphaMode::Opaque;
         }
         let target_format = if srgb_blend { config.format.remove_srgb_suffix() } else { config.format };
@@ -288,6 +293,7 @@ impl Host {
             hidden_pace: HiddenPace::default(),
             cursor: crate::cursor::os::OsCursor::new(),
             alpha,
+            corners: None,
             timer_frame: TimerFrame::default(),
             loop_frame: LoopFrame::default(),
             presented: None,
@@ -378,6 +384,8 @@ impl Host {
         // (`Dx12SwapchainKind::DxgiFromVisual`), so the replacement can only be configured once
         // the old swapchain has let go of it.
         w.alpha = None;
+        // A pass made on the device that went with it draws nothing: it goes too.
+        w.corners = None;
         w.presented = None;
         drop(w.surface.take());
         self.gpu = None;
@@ -406,9 +414,12 @@ impl Host {
         let srgb_blend = self.app.rt().srgb_blend();
         let (mut config, translucent) = surface_config(&surface, &gpu.adapter, (size.width, size.height), srgb_blend)
             .ok_or("the GPU adapter can't present to this window")?;
-        if transparent {
-            config.alpha_mode = translucent.unwrap_or(wgpu::CompositeAlphaMode::Opaque);
+        let client_frame = self.client_frame(&window);
+        if transparent || client_frame {
+            config.alpha_mode = alpha_mode(transparent, client_frame, translucent);
         }
+        // A surface that fell back to opaque draws an opaque window, as the first one did.
+        self.app.rt_mut().transparent = transparent && config.alpha_mode != wgpu::CompositeAlphaMode::Opaque;
         if let Err(error) = configure(&surface, &gpu, &config) {
             return Err(format!("the new GPU surface refused its configuration: {error}"));
         }
@@ -533,6 +544,32 @@ impl Host {
         self.idle = true;
         self.app.set_window_error(Some(reason));
         false
+    }
+}
+
+/// The surface alpha mode for a window that asked for `transparent`, and/or has a client-side frame
+/// whose corner arcs the content fades out of, given the modes the surface `supports` (the first
+/// that composites translucent pixels, or none).
+///
+/// An app that asked for a translucent window takes whatever the surface offers, straight alpha
+/// included: that is the mode it had before the frame existed, and Metal offers only
+/// `PostMultiplied`, which `alpha_pass` converts. A window that only needs its corner pixels
+/// transparent takes `PreMultiplied` alone, the one mode the in-place fade can scale, and is
+/// `Opaque` — square corners — when the surface has nothing else.
+pub(crate) fn alpha_mode(
+    transparent: bool,
+    client_frame: bool,
+    supports: Option<wgpu::CompositeAlphaMode>,
+) -> wgpu::CompositeAlphaMode {
+    if transparent {
+        return supports.unwrap_or(wgpu::CompositeAlphaMode::Opaque);
+    }
+    if !client_frame {
+        return wgpu::CompositeAlphaMode::Opaque;
+    }
+    match supports {
+        Some(wgpu::CompositeAlphaMode::PreMultiplied) => wgpu::CompositeAlphaMode::PreMultiplied,
+        _ => wgpu::CompositeAlphaMode::Opaque,
     }
 }
 

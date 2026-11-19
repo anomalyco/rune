@@ -124,6 +124,11 @@ impl Host {
         // before this frame, or waits out a retry of its own (`SurfaceRetries`) and then gives
         // them up. Neither can give a drawable, and wgpu panics asking one for it.
         if !self.replace_lost_surface() { return; }
+        // The radius a client-side frame rounds this window's bottom corners to, in device
+        // pixels: zero unless it draws one, now and with a surface that composites alpha
+        // (`corners`). Asked every frame, so a maximize or a tile that arrives with a configure
+        // squares the next one.
+        let corners = self.win.as_ref().map_or(0., |l| self.corner_radius(l));
         // A clip's layer began or stopped showing: the UI's swap chain composites premultiplied
         // only while one does (`video_layer`), made again before this frame draws.
         #[cfg(target_os = "windows")]
@@ -407,6 +412,11 @@ impl Host {
             format: (target_format != l.config.format).then_some(target_format),
             ..Default::default()
         });
+        // A client-side frame's rounded bottom corners: the content outside them is cleared off
+        // this drawable, right after everything else that draws there.
+        if corners > 0. {
+            crate::window::surface::corners::prepare(&mut l.corners, &gpu.device, &gpu.queue, (l.config.width, l.config.height), target_format, corners);
+        }
         // An image's pixels changed where its instances didn't: the whole frame draws (`damage`).
         #[cfg(target_os = "windows")]
         let images_changed = self.app.rt().images.pages.iter().any(|p| p.dirty.is_some());
@@ -499,6 +509,9 @@ impl Host {
         }
         #[cfg(not(feature = "frame-profile"))]
         let _ = whole_why;
+        // A client-side frame's rounded bottom corners: faded off the premultiplied composition,
+        // before a surface that takes straight alpha converts it.
+        crate::window::surface::corners::draw(l.corners.as_ref(), &mut enc, target, corners);
         if let Some(alpha) = &l.alpha { alpha.draw(&mut enc, &view); }
         #[cfg(feature = "frame-profile")]
         let fp_encoded = fp_start.map(|_| crate::frame::live_log::Stamp::now());

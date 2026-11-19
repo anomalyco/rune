@@ -83,7 +83,7 @@ default-members = [
     "crates/rune-taffy",
     "themes/opencode",
 ]
-exclude = ["tools/rune-dev-guard", "vendor/accesskit_macos", "vendor/accesskit_windows", "vendor/parley_engine", "vendor/tiny-skia-path", "vendor/wgpu-hal", "vendor/winit"]
+exclude = ["tools/rune-dev-guard", "vendor/accesskit_macos", "vendor/accesskit_windows", "vendor/parley_engine", "vendor/sctk-adwaita", "vendor/tiny-skia-path", "vendor/wgpu-hal", "vendor/winit"]
 
 # wgpu-hal as published plus `vendor/wgpu-hal.patch`: `dx12::Instance::expose_adapter` (a `wgpu::Adapter` for the
 # one adapter Rune picks through DXGI, with no device made on the others, `gpu/pick.rs`) and FXC loaded on
@@ -97,9 +97,19 @@ wgpu-hal = { path = "vendor/wgpu-hal" }
 # winit as published plus `vendor/winit.patch`: on Windows a new window isn't added again to the
 # taskbar it's already on (that took CoInitializeEx and a TaskbarList COM object, about 7,800 µs
 # and nine shell DLLs, before every window's first frame), and a window given a position is made there, so it is
-# born at that display's scale instead of crossing to it and being resized. Re-made by
+# born at that display's scale instead of crossing to it and being resized; and
+# `WindowExtWayland::content_corner_radius` tells an app the radius its content leaves its bottom
+# corners to while a client-side frame rounds the window (see `vendor/sctk-adwaita`). Re-made by
 # `scripts/vendor-winit.sh <version>` when winit is bumped; apps that build Rune patch it too.
 winit = { path = "vendor/winit" }
+# sctk-adwaita as published plus `vendor/sctk-adwaita.patch`: the visible one-point border a
+# Wayland client-side frame draws follows the window's rounded bottom corners, as the headerbar it
+# draws above them rounds the top two, instead of drawing a square L over the shadow's rounded
+# cut-out; and `AdwaitaFrame::content_corner_radius` says what radius the content's own bottom
+# corners take, for the app to clear outside (`window/corners.rs`). Re-made by
+# `scripts/vendor-sctk-adwaita.sh <version>` when sctk-adwaita is bumped; apps that build Rune
+# patch it too.
+sctk-adwaita = { path = "vendor/sctk-adwaita" }
 # parley_engine as published plus `vendor/parley_engine.patch`: UAX #9 rule L1 for a paragraph's
 # trailing whitespace and isolates (BidiTest.txt 770,241 of 770,241; 644,283 without it), and
 # shaping that stops redoing work from the same inputs: an analyzer keeps the ICU segmenters it

@@ -398,6 +398,10 @@ impl WindowState {
             self.resize(new_size);
             true
         } else {
+            // Rune: the frame may have appeared or gone, or turned square, and no resize follows to
+            // tell the compositor: the opaque region follows it now that it knows this configure's
+            // state.
+            self.reload_transparency_hint();
             false
         }
     }
@@ -599,6 +603,38 @@ impl WindowState {
         }
     }
 
+    /// Rune: whether a client-side frame draws the window's decorations, whatever state it is in:
+    /// a maximized, tiled or fullscreen window keeps its frame (it draws square corners there),
+    /// which only hides parts of itself. False when the compositor draws the decorations, when
+    /// decorations are off, and when the frame could not be made (no subcompositor, or a frame that
+    /// failed to build).
+    #[inline]
+    pub fn has_client_side_frame(&self) -> bool {
+        self.decorate
+            && self
+                .last_configure
+                .as_ref()
+                .is_some_and(|configure| configure.decoration_mode == DecorationMode::Client)
+            && self.frame.is_some()
+    }
+
+    /// Rune: the radius, in logical points, of the arc the window's content takes at its bottom
+    /// corners, which the client-side frame leaves it (the frame's visible border lies just
+    /// outside it). Zero when no client-side frame is drawn, and when the frame draws the window
+    /// square: maximized, tiled or fullscreen.
+    #[inline]
+    pub fn content_corner_radius(&self) -> f32 {
+        #[cfg(feature = "sctk-adwaita")]
+        if let Some(frame) = self
+            .frame
+            .as_ref()
+            .filter(|frame| self.decorate && !frame.is_hidden())
+        {
+            return frame.content_corner_radius();
+        }
+        0.
+    }
+
     /// Get the outer size of the window.
     #[inline]
     pub fn outer_size(&self) -> LogicalSize<u32> {
@@ -655,17 +691,31 @@ impl WindowState {
     }
 
     /// Reissue the transparency hint to the compositor.
+    ///
+    /// Rune: a client-side frame that rounds the content's bottom corners leaves the two corner
+    /// squares to the compositor, so an opaque window keeps the rest of itself opaque instead of
+    /// blending all of it.
     pub fn reload_transparency_hint(&self) {
         let surface = self.window.wl_surface();
 
         if self.transparent {
             surface.set_opaque_region(None);
-        } else if let Ok(region) = Region::new(&*self.compositor) {
-            region.add(0, 0, i32::MAX, i32::MAX);
-            surface.set_opaque_region(Some(region.wl_region()));
-        } else {
-            warn!("Failed to mark window opaque.");
+            return;
         }
+        let Ok(region) = Region::new(&*self.compositor) else {
+            warn!("Failed to mark window opaque.");
+            return;
+        };
+        let radius = self.content_corner_radius() as i32;
+        let (width, height) = (self.size.width as i32, self.size.height as i32);
+        if radius <= 0 || width <= 2 * radius || height <= radius {
+            region.add(0, 0, i32::MAX, i32::MAX);
+        } else {
+            // Everything but the two squares the frame's arcs cross at the window's foot.
+            region.add(0, 0, width, height - radius);
+            region.add(radius, height - radius, width - 2 * radius, radius);
+        }
+        surface.set_opaque_region(Some(region.wl_region()));
     }
 
     /// Try to resize the window when the user can do so.

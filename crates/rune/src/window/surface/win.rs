@@ -91,6 +91,9 @@ pub(in crate::window) struct Win {
     pub(in crate::window) hidden_pace: HiddenPace,
     pub(in crate::window) cursor: crate::cursor::os::OsCursor,
     pub(in crate::window) alpha: Option<crate::render::surface_alpha::AlphaSurface>,
+    /// The pass that fades the content outside the arcs a Wayland client-side frame leaves its
+    /// bottom corners (`surface::corners`), once a surface here composites alpha.
+    pub(in crate::window) corners: Option<crate::render::csd_corners::CsdCorners>,
     /// The frame a due timer asked for, until the window draws it, and whether only it asked
     /// (`TimerFrame`).
     pub(in crate::window) timer_frame: TimerFrame,
