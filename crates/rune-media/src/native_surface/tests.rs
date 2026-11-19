@@ -555,6 +555,10 @@ fn video_gpu_colour_sharpness_geometry_and_lifetime_on(gpu: Gpu) {
     let mut id = 0;
     let mut proof_wrong = 0;
     eprintln!("proof colour: adapter {:?}", gpu.adapter.get_info());
+    // PROOF ONLY: three arms. shared: one renderer, as the test is; idle: the GPU idle before each
+    // frame is published; fresh: a new renderer for each frame.
+    for arm in ["shared", "idle", "fresh"] {
+    let mut arm_wrong = 0;
     for native in [false, cfg!(target_os = "macos")] {
         for format in [Format::Nv12Video, Format::Nv12Full] {
             for matrix in [Matrix::Bt601, Matrix::Bt709] {
@@ -571,6 +575,12 @@ fn video_gpu_colour_sharpness_geometry_and_lifetime_on(gpu: Gpu) {
                         [128, 128, 128],
                     ] {
                         id += 1;
+                        if arm == "idle" {
+                            let _ = gpu.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: Some(std::time::Duration::from_secs(5)) });
+                        }
+                        if arm == "fresh" {
+                            renderer = SurfaceRenderer::new(&gpu.device, OFFSCREEN_FORMAT);
+                        }
                         publish(
                             &surface,
                             ByteFrame {
@@ -588,12 +598,16 @@ fn video_gpu_colour_sharpness_geometry_and_lifetime_on(gpu: Gpu) {
                         let first = &pixels[0..4];
                         let same = pixels.chunks_exact(4).all(|p| p == first);
                         let ok = (0..3).all(|c| first[c].abs_diff(reference[c]) <= 1) && first[3] == 255;
-                        eprintln!("proof colour: frame {} id {id} native={native} {format:?} {matrix:?} {transfer:?} {codes:?}: got {first:?} uniform={same} want {reference:?} {}", PROOF_FRAME.load(std::sync::atomic::Ordering::Relaxed), if ok { "ok" } else { "WRONG" });
-                        if !ok { proof_wrong += 1; }
+                        eprintln!("proof colour: arm {arm} frame {} id {id} native={native} {format:?} {matrix:?} {transfer:?} {codes:?}: got {first:?} uniform={same} want {reference:?} {}", PROOF_FRAME.load(std::sync::atomic::Ordering::Relaxed), if ok { "ok" } else { "WRONG" });
+                        if !ok { proof_wrong += 1; arm_wrong += 1; }
                     }
                 }
             }
         }
+    }
+    eprintln!("proof colour: arm {arm}: {arm_wrong} wrong");
+    }
+    for native in [false, cfg!(target_os = "macos")] {
         assert_eq!(proof_wrong, 0, "PROOF: wrong colour frames");
         // At matching device size every one-pixel stroke survives exactly. sRGB NV12 full
         // neutral chroma is an identity; BGRA checks all 256 code values in all channels.
