@@ -1142,3 +1142,137 @@ fn proof_crash_device_first() {
 fn proof_crash_together() {
     proof_crash("together", std::time::Duration::ZERO);
 }
+
+/// PROOF ONLY, never merged (rune-proof: device-removal): does WARP still run a removed device's
+/// queued work? After each queued submission the queue also runs a list of ours that writes the
+/// submission's number to CPU-visible memory (`WriteBufferImmediate`), which a fence can't tell
+/// once D3D12 has set every fence to `u64::MAX`. Then the device is removed, the marker read every
+/// 1 ms, and (with `release_at_drain`) everything released once it shows the last submission.
+#[cfg(target_os = "windows")]
+fn proof_marker(release_at_drain: bool) {
+    use ::windows::Win32::Graphics::{Direct3D12 as d3d, Dxgi};
+    use ::windows::core::Interface;
+    use std::time::{Duration, Instant};
+    proof_crash::install();
+    let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+    desc.backends = wgpu::Backends::DX12;
+    let instance = wgpu::Instance::new(desc);
+    let adapter = rune_gpu::pick::pick(&instance, None, false).expect("adapter").adapter;
+    let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).expect("device");
+    let raw_queue = unsafe { queue.as_hal::<wgpu::hal::api::Dx12>() }.expect("a D3D12 queue").as_raw().clone();
+    let raw_device = unsafe { device.as_hal::<wgpu::hal::api::Dx12>() }.expect("a D3D12 device").raw_device().clone();
+    let mut marker = None::<d3d::ID3D12Resource>;
+    unsafe {
+        raw_device.CreateCommittedResource(
+            &d3d::D3D12_HEAP_PROPERTIES { Type: d3d::D3D12_HEAP_TYPE_READBACK, ..Default::default() },
+            d3d::D3D12_HEAP_FLAG_NONE,
+            &d3d::D3D12_RESOURCE_DESC {
+                Dimension: d3d::D3D12_RESOURCE_DIMENSION_BUFFER,
+                Alignment: 0,
+                Width: 256,
+                Height: 1,
+                DepthOrArraySize: 1,
+                MipLevels: 1,
+                Format: Dxgi::Common::DXGI_FORMAT_UNKNOWN,
+                SampleDesc: Dxgi::Common::DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+                Layout: d3d::D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+                Flags: d3d::D3D12_RESOURCE_FLAG_NONE,
+            },
+            d3d::D3D12_RESOURCE_STATE_COPY_DEST,
+            None,
+            &mut marker,
+        )
+    }
+    .expect("a marker buffer");
+    let marker = marker.expect("a marker buffer");
+    let mut mapped = std::ptr::null_mut();
+    unsafe { marker.Map(0, None, Some(&mut mapped)) }.expect("its mapping");
+    let mapped = mapped.cast::<u32>();
+    unsafe { mapped.write_volatile(0) };
+    let read = || unsafe { mapped.read_volatile() };
+    let allocator: d3d::ID3D12CommandAllocator = unsafe { raw_device.CreateCommandAllocator(d3d::D3D12_COMMAND_LIST_TYPE_DIRECT) }.expect("an allocator");
+    let marker_list = |value: u32| -> d3d::ID3D12CommandList {
+        let list: d3d::ID3D12GraphicsCommandList2 = unsafe { raw_device.CreateCommandList(0, d3d::D3D12_COMMAND_LIST_TYPE_DIRECT, &allocator, None) }.expect("a list");
+        let param = d3d::D3D12_WRITEBUFFERIMMEDIATE_PARAMETER { Dest: unsafe { marker.GetGPUVirtualAddress() }, Value: value };
+        unsafe {
+            list.WriteBufferImmediate(1, &param, None);
+            list.Close().expect("close");
+        }
+        list.cast().expect("a command list")
+    };
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: None,
+        source: wgpu::ShaderSource::Wgsl(
+            "@group(0) @binding(0) var<storage, read_write> r: array<u32>;
+            @compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+                var x = id.x; for (var i = 0u; i < 256u; i++) { x = (x ^ (x >> 13u)) * 1664525u + 1013904223u; } r[id.x] = x; }"
+                .into(),
+        ),
+    });
+    let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor { label: None, layout: None, module: &shader, entry_point: Some("main"), compilation_options: Default::default(), cache: None });
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 65536 * 4, usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false });
+    let bind = device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &pipeline.get_bind_group_layout(0), entries: &[wgpu::BindGroupEntry { binding: 0, resource: buffer.as_entire_binding() }] });
+    let submit_one = || {
+        let mut encoder = device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &bind, &[]);
+            pass.dispatch_workgroups(1024, 1, 1);
+        }
+        queue.submit([encoder.finish()]);
+    };
+    let t = Instant::now();
+    submit_one();
+    let _ = device.poll(wgpu::PollType::wait_indefinitely());
+    let one = t.elapsed();
+    let n = (Duration::from_millis(80).as_micros() / one.as_micros().max(1)).clamp(4, 400) as u32;
+    let lists: Vec<_> = (1..=n).map(marker_list).collect();
+    for list in &lists {
+        submit_one();
+        unsafe { raw_queue.ExecuteCommandLists(&[Some(list.clone())]) };
+    }
+    let before = read();
+    remove_device_for_proof(&adapter, &device);
+    let removed = Instant::now();
+    let at_removal = read();
+    let mut seen = vec![(0u128, at_removal)];
+    while removed.elapsed() < Duration::from_secs(3) {
+        let value = read();
+        if seen.last().is_some_and(|(_, v)| *v != value) {
+            seen.push((removed.elapsed().as_micros(), value));
+        }
+        if release_at_drain && value == n {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    eprintln!(
+        "proof marker: one submission {} us; {n} queued; marker {before} just before the removal, {at_removal} at it; then (us after the removal, marker): {:?}",
+        one.as_micros(),
+        seen.iter().skip(1).collect::<Vec<_>>()
+    );
+    let t = Instant::now();
+    drop((bind, buffer, pipeline, shader));
+    drop(queue);
+    drop(device);
+    drop(adapter);
+    eprintln!("proof marker: released at {} us after the removal, in {} us", (t - removed).as_micros(), t.elapsed().as_micros());
+    std::thread::sleep(Duration::from_millis(500));
+    eprintln!("proof marker: still alive 500 ms later");
+    drop((lists, allocator, marker, raw_queue, raw_device));
+}
+
+/// Whether the marker moves after the removal: 3 s of reads, then the release.
+#[cfg(target_os = "windows")]
+#[test]
+fn proof_marker_after_removal() {
+    proof_marker(false);
+}
+
+/// The release as soon as the marker shows the last queued submission ran.
+#[cfg(target_os = "windows")]
+#[test]
+fn proof_marker_release_at_drain() {
+    proof_marker(true);
+}
