@@ -136,3 +136,11 @@ fn only_non_webgpu_backends_need_device_polling() {
     assert!(!needs_device_poll(Backend::BrowserWebGpu));
     assert!(needs_device_poll(Backend::Gl));
 }
+
+#[test]
+fn backend_order_skips_webgpu_when_navigator_gpu_is_absent() {
+    assert_eq!(backend_order(true, true), &[WebBackend::WebGpu, WebBackend::WebGl2]);
+    assert_eq!(backend_order(true, false), &[WebBackend::WebGpu]);
+    assert_eq!(backend_order(false, true), &[WebBackend::WebGl2]);
+    assert_eq!(backend_order(false, false), &[]);
+}

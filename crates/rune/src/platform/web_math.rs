@@ -113,6 +113,30 @@ pub(crate) fn needs_device_poll(backend: wgpu::Backend) -> bool {
     backend != wgpu::Backend::BrowserWebGpu
 }
 
+/// GPU backends the web host can attempt for a canvas.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WebBackend {
+    WebGpu,
+    WebGl2,
+}
+
+/// Backends to attempt in order, given whether `navigator.gpu` is exposed and whether the
+/// `webgl` cargo feature is enabled.
+///
+/// When `navigator.gpu` is absent (insecure origin, WebGPU disabled by flag while
+/// `canvas.getContext("webgpu")` still exists, or a browser without WebGPU), WebGPU is skipped
+/// so the canvas is never locked to a `"webgpu"` context before WebGL2 runs. When `navigator.gpu`
+/// is present, WebGPU probes for an adapter and device before creating a canvas surface, leaving
+/// the canvas free for WebGL2 if either fails.
+pub(crate) fn backend_order(has_navigator_gpu: bool, webgl_enabled: bool) -> &'static [WebBackend] {
+    match (has_navigator_gpu, webgl_enabled) {
+        (true, true) => &[WebBackend::WebGpu, WebBackend::WebGl2],
+        (true, false) => &[WebBackend::WebGpu],
+        (false, true) => &[WebBackend::WebGl2],
+        (false, false) => &[],
+    }
+}
+
 #[cfg(test)]
 #[path = "web_math_tests.rs"]
 mod tests;

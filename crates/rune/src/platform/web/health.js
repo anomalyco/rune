@@ -2,6 +2,12 @@
 // GPUInternalError into a panic (an `unreachable` trap that ends the app), so Rune never asks
 // wgpu for them on the web.
 
+// Whether `navigator.gpu` is exposed on this page (false on insecure origins or when WebGPU is
+// disabled by flag, even when `canvas.getContext('webgpu')` still returns a context).
+export function hasNavigatorGpu() {
+    return typeof globalThis.navigator?.gpu === 'object' && globalThis.navigator.gpu !== null;
+}
+
 // The adapter a device runs on, as far as the browser says: vendor, architecture, device and
 // description (each may be empty), whether it is a fallback adapter, and its texture limit.
 export function gpuSummary(device) {

@@ -1,0 +1,1 @@
+- **Web: WebGL2 fallback works when WebGPU is half-present or declines an adapter.** The web host now checks `navigator.gpu` before attempting WebGPU and requests the WebGPU adapter and device before creating the canvas surface, so `canvas.getContext("webgpu")` never permanently locks the canvas when WebGPU is disabled by flag, on an insecure origin, or returns no adapter.

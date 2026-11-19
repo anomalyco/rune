@@ -10,6 +10,8 @@ use crate::gpu::health::{ErrorLog, Note};
 
 #[wasm_bindgen(module = "/src/platform/web/health.js")]
 extern "C" {
+    #[wasm_bindgen(js_name = hasNavigatorGpu)]
+    fn has_navigator_gpu_js() -> bool;
     #[wasm_bindgen(js_name = gpuSummary)]
     fn gpu_summary(device: &JsValue) -> String;
     #[wasm_bindgen(js_name = watchGpu)]
@@ -19,6 +21,11 @@ extern "C" {
     /// Resolves to the first error the scopes caught, as `kind: message`, or null.
     #[wasm_bindgen(js_name = popScopes)]
     fn pop_scopes(device: &JsValue) -> js_sys::Promise;
+}
+
+/// Whether `navigator.gpu` is exposed on this page.
+pub(super) fn has_navigator_gpu() -> bool {
+    has_navigator_gpu_js()
 }
 
 /// The JS `GPUDevice` under `device`; none on WebGL2.

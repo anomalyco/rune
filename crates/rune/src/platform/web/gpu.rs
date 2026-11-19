@@ -54,21 +54,54 @@ impl Draw {
     }
 }
 
-async fn try_backend(canvas: &web_sys::HtmlCanvasElement, backends: wgpu::Backends, features: wgpu::Features, webgl: bool)
+/// Probes WebGPU for an adapter and device before touching `canvas`.
+///
+/// Calling `canvas.getContext("webgpu")` permanently locks the canvas to WebGPU even if
+/// `requestAdapter` or `requestDevice` then fails, blocking any WebGL2 fallback on the same
+/// canvas. wgpu's WebGPU backend does not need a surface to request an adapter or device, so
+/// the canvas surface is created only after both succeed.
+async fn try_webgpu(canvas: &web_sys::HtmlCanvasElement, features: wgpu::Features)
     -> Result<(Gpu, wgpu::Surface<'static>), String> {
     let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
-    descriptor.backends = backends;
+    descriptor.backends = wgpu::Backends::BROWSER_WEBGPU;
+    let instance = wgpu::Instance::new(descriptor);
+    let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::LowPower, compatible_surface: None,
+        force_fallback_adapter: false, apply_limit_buckets: false,
+    }).await.map_err(|e| e.to_string())?;
+    let required_limits = wgpu::Limits::default().using_resolution(adapter.limits());
+    let (device, queue) = adapter.request_device(&wgpu::DeviceDescriptor {
+        label: Some("rune web"), required_features: adapter.features() & features,
+        required_limits, experimental_features: Default::default(),
+        memory_hints: Default::default(), trace: Default::default(),
+    }).await.map_err(|e| format!("GPU device: {e}"))?;
+    let surface = match instance.create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone())) {
+        Ok(surface) => surface,
+        Err(e) => {
+            device.destroy();
+            return Err(e.to_string());
+        }
+    };
+    Ok((Gpu::from_device(instance, adapter, device, queue), surface))
+}
+
+/// Creates a WebGL2 surface and device on `canvas`. Unlike WebGPU, `wgpu-hal`'s WebGL2 backend
+/// discovers its adapter from the surface's `WebGL2RenderingContext`, so the surface comes first.
+#[cfg(feature = "webgl")]
+pub(super) async fn try_webgl2(canvas: &web_sys::HtmlCanvasElement, features: wgpu::Features)
+    -> Result<(Gpu, wgpu::Surface<'static>), String> {
+    let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+    descriptor.backends = wgpu::Backends::GL;
     let instance = wgpu::Instance::new(descriptor);
     let surface = instance.create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone())).map_err(|e| e.to_string())?;
     let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::LowPower, compatible_surface: Some(&surface),
         force_fallback_adapter: false, apply_limit_buckets: false,
     }).await.map_err(|e| e.to_string())?;
-    let required_limits = if webgl {
-        wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits())
-    } else {
-        wgpu::Limits::default().using_resolution(adapter.limits())
-    };
+    let adapter_limits = adapter.limits();
+    let required_limits = wgpu::Limits::downlevel_webgl2_defaults()
+        .using_resolution(adapter_limits.clone())
+        .using_alignment(adapter_limits);
     let (device, queue) = adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("rune web"), required_features: adapter.features() & features,
         required_limits, experimental_features: Default::default(),
@@ -78,15 +111,27 @@ async fn try_backend(canvas: &web_sys::HtmlCanvasElement, backends: wgpu::Backen
 }
 
 pub(super) async fn gpu(canvas: web_sys::HtmlCanvasElement, features: wgpu::Features) -> Result<(Gpu, wgpu::Surface<'static>), String> {
-    match try_backend(&canvas, wgpu::Backends::BROWSER_WEBGPU, features, false).await {
-        Ok(pair) => Ok(pair),
-        #[cfg(feature = "webgl")]
-        Err(webgpu_err) => try_backend(&canvas, wgpu::Backends::GL, features, true)
-            .await
-            .map_err(|gl_err| format!("WebGPU ({webgpu_err}) and WebGL2 ({gl_err}) unavailable")),
-        #[cfg(not(feature = "webgl"))]
-        Err(e) => Err(format!("WebGPU adapter unavailable (HTTPS and WebGPU are required): {e}")),
+    let mut webgpu_err = None;
+    for &backend in super::web_math::backend_order(health::has_navigator_gpu(), cfg!(feature = "webgl")) {
+        match backend {
+            super::web_math::WebBackend::WebGpu => match try_webgpu(&canvas, features).await {
+                Ok(pair) => return Ok(pair),
+                Err(err) => webgpu_err = Some(err),
+            },
+            super::web_math::WebBackend::WebGl2 => {
+                #[cfg(feature = "webgl")]
+                match try_webgl2(&canvas, features).await {
+                    Ok(pair) => return Ok(pair),
+                    Err(gl_err) => {
+                        let webgpu = webgpu_err.as_deref().unwrap_or("navigator.gpu unavailable");
+                        return Err(format!("WebGPU ({webgpu}) and WebGL2 ({gl_err}) unavailable"));
+                    }
+                }
+            }
+        }
     }
+    let why = webgpu_err.unwrap_or_else(|| "navigator.gpu unavailable".into());
+    Err(format!("WebGPU adapter unavailable (HTTPS and WebGPU are required): {why}"))
 }
 
 /// The GPU's side for a canvas of `size`: the surface configured, the renderer made, and the
