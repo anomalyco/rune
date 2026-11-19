@@ -14,6 +14,7 @@ mod app;
 #[path = "headless/frame.rs"]
 mod frame;
 use app::{HeadlessApp, TypedHeadlessApp};
+pub(in crate::tooling) use frame::{step_window_frame, take_window_frame};
 use frame::{HeadlessFrame, HeadlessLoop};
 
 #[cfg(test)]

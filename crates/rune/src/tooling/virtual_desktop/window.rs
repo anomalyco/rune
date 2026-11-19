@@ -9,9 +9,13 @@ use crate::compose::{Compositor, Frame};
 use crate::desktop::Slot;
 use crate::desktop::displays::VirtualDesktop;
 use crate::el::Shell;
+use crate::frame::clock::FrameClock;
+use crate::frame::encoded::{FrameReports, OnFrameEncoded};
+use crate::frame::host_step::{self, Acquire, FrameHost, Gate, RenderPrep, StepInfo, draw_ui, prepare_gpu_resources};
 use crate::render::{Gpu, OFFSCREEN_FORMAT, Renderer};
 use crate::runtime::{AppDriver, Env, Runtime, RuntimeCore};
-use crate::tooling::{Args, FrameTiming, Kind, Trace};
+use crate::time::Instant;
+use crate::tooling::{Args, FrameTiming, Kind, Trace, headless::{step_window_frame, take_window_frame}};
 use crate::window::{Life, WakeEvent};
 use crate::{WindowHandle, WindowSpec};
 
@@ -70,7 +74,8 @@ pub(crate) trait Member {
     fn file_dialog_open(&self) -> bool;
     fn resolve_file_dialog(&mut self, path: Option<std::path::PathBuf>) -> Result<(), crate::FileDialogError>;
     /// Draws its frame into `slot`, `px` device pixels.
-    fn render(&mut self, gpu: &Gpu, slot: &Slot, px: (u32, u32), dt: f64, update_ms: f64);
+    fn render(&mut self, gpu: &Gpu, slot: &Slot, px: (u32, u32), dt: f64, update_ms: f64, frame_start: Instant);
+    fn flush_interaction(&mut self);
     fn backdrop_dark(&self) -> Option<bool>;
     fn tree(&self, t: f64) -> Value;
     fn trace(&mut self, trace: &mut Trace, t_ms: f64, cpu_ms: f64);
@@ -99,7 +104,7 @@ trait DesktopApp {
     fn has_updates(&self) -> bool;
     fn has_compositor(&self) -> bool;
     fn compositor_features(&self) -> wgpu::Features;
-    fn render_compositor(&mut self, args: DesktopRenderArgs<'_>);
+    fn render_compositor(&mut self, args: DesktopRenderArgs<'_>) -> bool;
     fn compositor_summary(&mut self, device: &wgpu::Device) -> Option<String>;
     #[cfg(test)]
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
@@ -115,6 +120,7 @@ impl dyn DesktopApp + '_ {
         out.unwrap()
     }
 
+    fn content_height(&mut self) -> f32 { self.driver(|rt, app| rt.content_height(app)) }
     fn set_live_visible(&mut self, visible: bool) { self.driver(|rt, app| rt.set_live_visible(app, visible)); }
     fn cancel_popups(&mut self) { self.driver(|rt, app| rt.cancel_popups(app)); }
     fn cancel_file_dialogs(&mut self) { self.driver(|rt, app| rt.cancel_file_dialogs(app)); }
@@ -122,7 +128,7 @@ impl dyn DesktopApp + '_ {
     fn resolve_popup(&mut self, picked: Option<&str>) -> Result<(), crate::PopupMenuError> {
         self.driver(|rt, app| rt.resolve_popup(app, picked))
     }
-    fn frame(&mut self, dt: f64) { self.driver(|rt, app| { rt.frame(app, dt); }); }
+    fn frame(&mut self, dt: f64) -> bool { self.driver(|rt, app| rt.frame(app, dt)) }
     fn window_focus(&mut self, focused: bool) { self.driver(|rt, app| rt.window_focus(app, focused)); }
     fn script_input(&mut self, kind: &Kind, at: (f32, f32)) {
         self.driver(|rt, app| { crate::tooling::script_input(rt, app, kind, at); });
@@ -164,8 +170,8 @@ impl<S: 'static> DesktopApp for TypedDesktopApp<S> {
     fn compositor_features(&self) -> wgpu::Features {
         self.comp.as_ref().map_or(wgpu::Features::empty(), |c| c.features())
     }
-    fn render_compositor(&mut self, args: DesktopRenderArgs<'_>) {
-        let Some(c) = self.comp.as_mut() else { return };
+    fn render_compositor(&mut self, args: DesktopRenderArgs<'_>) -> bool {
+        let Some(c) = self.comp.as_mut() else { return false };
         let mut f = Frame {
             device: args.device,
             queue: args.queue,
@@ -179,6 +185,7 @@ impl<S: 'static> DesktopApp for TypedDesktopApp<S> {
             ui: args.ui,
         };
         c.render(&mut f);
+        c.animating()
     }
     fn compositor_summary(&mut self, device: &wgpu::Device) -> Option<String> {
         self.comp.as_mut().and_then(|c| c.summary(device))
@@ -206,6 +213,10 @@ struct WindowInit {
     native: crate::MacWindowOptions,
     chrome: crate::Chrome,
     titlebar: Option<crate::Titlebar>,
+    fit_height: bool,
+    min_size: Option<(f32, f32)>,
+    on_frame_encoded: Option<OnFrameEncoded>,
+    fps: f64,
     scroll_bars: Option<crate::platform::scroll_bars::ScrollBars>,
     key_warnings: bool,
     open: bool,
@@ -223,12 +234,18 @@ pub(crate) struct Window {
     menus: crate::native_menu::MenuGuard,
     handle: Option<WindowHandle>,
     renderer: Option<Renderer>,
+    reports: FrameReports,
     keep_running: bool,
     launcher: bool,
     /// A nonactivating panel, launcher or not: reopening never brings it back.
     panel: bool,
     /// The app's own window, not one `App::window` added.
     main: bool,
+    fit_height: bool,
+    limits: ((f32, f32), Option<(f32, f32)>),
+    frame_anim: Option<crate::window::frame::FrameAnim>,
+    idle: bool,
+    virtual_t: f64,
     shadow: bool,
     click_through: bool,
     on_top: bool,
@@ -247,7 +264,10 @@ impl Window {
         let WindowSpec { key, mut app, options, .. } = spec;
         let own = app.resolve_args(inherited_window_args(args, selected));
         let comp = app.compositor.take();
-        let (open, keep_running, on_close, on_reopen) = (app.open, app.keep_running, app.on_close, app.on_reopen);
+        let on_frame_encoded = app.on_frame_encoded.take();
+        let (open, keep_running, fit_height, on_close, on_reopen) = (
+            app.open, app.keep_running, app.fit_content_height, app.on_close, app.on_reopen,
+        );
         let native = std::mem::take(&mut app.macos_window);
         let (chrome, titlebar) = (app.chrome, app.titlebar);
         let (playground, attach_playground) = (app.playground.take(), app.attach_playground);
@@ -255,6 +275,7 @@ impl Window {
         let shortcuts = crate::shortcuts::Guard::attach(&shared, Arc::new(|| {}), true, false);
         let menus = crate::native_menu::MenuGuard::attach(&shared, true);
         let size = own.size.unwrap_or(spec.size);
+        let min_size = spec.min_size;
         let dark = own.theme.as_deref() != Some("light");
         let mut rt = crate::tooling::runtime_for(&spec, state, size, Env::new(dark, scale), Arc::new(|| {}));
         if let Some(attach) = attach_playground {
@@ -274,6 +295,10 @@ impl Window {
             native,
             chrome,
             titlebar,
+            fit_height,
+            min_size,
+            on_frame_encoded,
+            fps: args.fps.max(1.0),
             scroll_bars: own.scroll_bars.or(args.scroll_bars),
             key_warnings: selected && args.tree.is_some(),
             open,
@@ -286,7 +311,8 @@ impl Window {
     fn from_app(mut app: Box<dyn DesktopApp>, init: WindowInit) -> Self {
         let WindowInit {
             key, shared_core, shortcuts_core, shortcuts, menus, handle, options, native,
-            chrome, titlebar, scroll_bars, key_warnings, open, keep_running, main, size,
+            chrome, titlebar, fit_height, min_size, on_frame_encoded, fps, scroll_bars,
+            key_warnings, open, keep_running, main, size,
         } = init;
         let has_comp = app.has_compositor();
         {
@@ -294,9 +320,13 @@ impl Window {
             if let Some(bars) = scroll_bars { rt.set_system_scroll_bars(bars); }
             rt.headless_chrome(chrome, titlebar, options.borderless);
             rt.transparent = options.transparent;
+            rt.host.fit_height = fit_height;
             rt.track_marks = has_comp;
             if key_warnings { rt.commit.key_warnings = Some(Vec::new()); }
         }
+        let mut reports = FrameReports::new(on_frame_encoded, Some(&key));
+        reports.set_refresh(Some(fps));
+        let limits = (options.min_size.or(min_size).unwrap_or((0.0, 0.0)), options.max_size);
         let visible = options.visible && open;
         app.set_live_visible(visible);
         shared_core.set_visible(visible);
@@ -310,10 +340,16 @@ impl Window {
             menus,
             handle,
             renderer: None,
+            reports,
             keep_running,
             launcher: native.launcher,
             panel: native.nonactivating_panel,
             main,
+            fit_height,
+            limits,
+            frame_anim: None,
+            idle: true,
+            virtual_t: 0.0,
             shadow: native.shadow != Some(false),
             click_through: options.click_through,
             on_top: options.always_on_top,
@@ -424,10 +460,15 @@ impl Member for Window {
 
     fn start(&mut self, desktop: &VirtualDesktop) {
         let display = desktop.display_at(self.position);
-        let (w, h) = match self.physical {
+        let (w, mut h) = match self.physical {
             Some((w, h)) => ((f64::from(w) / display.scale) as f32, (f64::from(h) / display.scale) as f32),
             None => (self.frame[2], self.frame[3]),
         };
+        if self.fit_height {
+            let scale = self.app.rt().window_scale();
+            self.app.rt_mut().set_viewport((w, h), scale);
+            h = crate::window::frame::clamp_size((w, self.app.content_height()), self.limits.0, self.limits.1).1;
+        }
         self.resize(desktop.open_at(self.position, (w, h)));
     }
 
@@ -455,6 +496,11 @@ impl Member for Window {
                 WakeEvent::Place(_, place) => self.place(desktop, &place, t),
                 WakeEvent::Position(_, p) => self.move_to(desktop.to_points(p)),
                 WakeEvent::Focus(_) if self.life.shown() => { changes.front = true; changes.keys = true; }
+                WakeEvent::Frame(_, mut request) => {
+                    let rt = self.app.rt_mut();
+                    request.spring = (request.animate && !rt.reduced_motion).then_some(crate::tok::motion::DEFAULT);
+                    rt.host.window_frame = Some(rt.host.window_frame.unwrap_or_default().merge(request));
+                }
                 _ => {}
             }
         }
@@ -482,7 +528,30 @@ impl Member for Window {
     }
 
     fn stale(&self) -> bool { self.app.rt().stale() || self.app.rt().text.families_behind() }
-    fn advance(&mut self, dt: f64) { self.app.frame(dt); }
+    fn advance(&mut self, dt: f64) {
+        self.virtual_t += dt;
+        take_window_frame(self.app.rt_mut(), &mut self.frame_anim, self.virtual_t, self.limits);
+        if !self.idle {
+            let scale = self.app.rt().window_scale();
+            step_window_frame(self.app.rt_mut(), &mut self.frame_anim, self.virtual_t, scale);
+            let (w, h) = self.app.rt().window_viewport();
+            if (self.frame[2], self.frame[3]) != (w, h) {
+                self.frame[2] = w;
+                self.frame[3] = h;
+                self.resize_from = (w, h);
+            }
+        }
+        {
+            let rt = self.app.rt_mut();
+            rt.host.window_resting = self.frame_anim.is_none() && rt.host.window_frame.is_none();
+        }
+        let animating = self.app.frame(dt);
+        if self.app.rt().host.window_frame.is_some() {
+            let shown = if self.app.rt_mut().host.fit.take_held() { 0.0 } else { dt };
+            take_window_frame(self.app.rt_mut(), &mut self.frame_anim, self.virtual_t - shown, self.limits);
+        }
+        self.idle = !animating && self.frame_anim.is_none();
+    }
     fn focus(&mut self, focused: bool) { self.app.window_focus(focused); }
 
     fn resize_by(&mut self, dw: f32, dh: f32) {
@@ -539,46 +608,21 @@ impl Member for Window {
     fn file_dialog_open(&self) -> bool { self.app.rt().file_dialog().is_some() }
     fn resolve_file_dialog(&mut self, path: Option<std::path::PathBuf>) -> Result<(), crate::FileDialogError> { self.app.rt_mut().resolve_file_dialog(path) }
 
-    fn render(&mut self, gpu: &Gpu, slot: &Slot, px: (u32, u32), dt: f64, update_ms: f64) {
-        let srgb = self.app.rt().srgb_blend();
-        let format = if srgb { OFFSCREEN_FORMAT.remove_srgb_suffix() } else { OFFSCREEN_FORMAT };
-        let view = if srgb { &slot.srgb_blend_view } else { &slot.view };
-        let renderer = match &mut self.renderer {
-            Some(renderer) => {
-                crate::window::rebuild_renderer_core(&gpu.device, renderer, format, self.app.rt_mut());
-                renderer
-            }
-            None => {
-                let mut renderer = Renderer::new(&gpu.device, format);
-                renderer.set_srgb_blend(srgb);
-                self.renderer.insert(renderer)
-            }
+    fn render(&mut self, gpu: &Gpu, slot: &Slot, px: (u32, u32), dt: f64, update_ms: f64, frame_start: Instant) {
+        let mut frame = DesktopFrame {
+            window: self,
+            gpu,
+            slot,
+            px,
+            dt,
+            update_ms,
+            frame_start,
+            encoded_stamp: None,
         };
-        {
-            let rt = self.app.rt_mut();
-            renderer.upload_images(&gpu.device, &gpu.queue, &mut rt.images);
-            renderer.prepare_surfaces(&gpu.device, &gpu.queue, &rt.surfaces, px);
-        }
-        let mut enc = gpu.device.create_command_encoder(&Default::default());
-        if self.app.has_compositor() {
-            self.app.render_compositor(DesktopRenderArgs {
-                device: &gpu.device,
-                queue: &gpu.queue,
-                encoder: &mut enc,
-                target: view,
-                format,
-                size: px,
-                dt,
-                update_ms,
-                ui: renderer,
-            });
-        } else {
-            let rt = self.app.rt_mut();
-            renderer.prepare_ui(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, px);
-            renderer.draw(&mut enc, view, rt.clear_color());
-        }
-        renderer.submit(&gpu.queue, enc);
+        host_step::run(&mut frame);
     }
+
+    fn flush_interaction(&mut self) { self.app.rt_mut().interaction_flush(); }
 
     fn backdrop_dark(&self) -> Option<bool> { self.app.rt().backdrop_dark() }
 
@@ -593,4 +637,114 @@ impl Member for Window {
     }
     fn summary(&mut self, device: &wgpu::Device) -> Option<String> { self.app.compositor_summary(device) }
 }
+
+struct DesktopFrame<'a> {
+    window: &'a mut Window,
+    gpu: &'a Gpu,
+    slot: &'a Slot,
+    px: (u32, u32),
+    dt: f64,
+    update_ms: f64,
+    frame_start: Instant,
+    encoded_stamp: Option<Instant>,
+}
+
+impl DesktopFrame<'_> {
+    #[inline]
+    fn target_format(&self) -> wgpu::TextureFormat {
+        if self.window.app.rt().srgb_blend() { OFFSCREEN_FORMAT.remove_srgb_suffix() } else { OFFSCREEN_FORMAT }
+    }
+}
+
+impl FrameHost for DesktopFrame<'_> {
+    type Drawable = ();
+    type Prepared = wgpu::CommandEncoder;
+
+    #[inline]
+    fn gate(&mut self) -> Gate {
+        let animating = self.window.app.rt().animating;
+        Gate::PreStepped(StepInfo {
+            runtime_animating: animating,
+            animating,
+            dt: self.dt,
+            update_ms: self.update_ms,
+            presents_at: None,
+        })
+    }
+
+    #[inline]
+    fn needs_reblend(&self) -> bool {
+        let srgb = self.window.app.rt().srgb_blend();
+        let format = self.target_format();
+        self.window.renderer.as_ref().is_none_or(|r| r.srgb_blend() != srgb || r.format() != format)
+    }
+
+    #[inline]
+    fn reblend(&mut self) -> bool {
+        let format = self.target_format();
+        let renderer = self.window.renderer.get_or_insert_with(|| Renderer::new(&self.gpu.device, format));
+        crate::window::rebuild_renderer_core(&self.gpu.device, renderer, format, self.window.app.rt_mut());
+        true
+    }
+
+    #[inline]
+    fn acquire(&mut self) -> Acquire<()> { Acquire::Ready(()) }
+
+    #[inline]
+    fn step_runtime(&mut self) -> StepInfo {
+        unreachable!("virtual desktop renders through Gate::PreStepped")
+    }
+
+    #[inline]
+    fn prepare_render(&mut self, _drawable: (), _info: &mut StepInfo) -> RenderPrep<wgpu::CommandEncoder> {
+        let renderer = self.window.renderer.as_mut().expect("renderer ensured by pre-reblend");
+        prepare_gpu_resources(renderer, self.gpu, self.window.app.rt_mut(), self.px, false);
+        RenderPrep::Ready(self.gpu.device.create_command_encoder(&Default::default()))
+    }
+
+    #[inline]
+    fn render(&mut self, encoder: &mut wgpu::CommandEncoder, info: &StepInfo) -> bool {
+        let srgb = self.window.app.rt().srgb_blend();
+        let format = self.target_format();
+        let view = if srgb { &self.slot.srgb_blend_view } else { &self.slot.view };
+        let renderer = self.window.renderer.as_mut().expect("renderer ensured by pre-reblend");
+        if self.window.app.has_compositor() {
+            self.window.app.render_compositor(DesktopRenderArgs {
+                device: &self.gpu.device,
+                queue: &self.gpu.queue,
+                encoder,
+                target: view,
+                format,
+                size: self.px,
+                dt: info.dt,
+                update_ms: info.update_ms,
+                ui: renderer,
+            })
+        } else {
+            let rt = self.window.app.rt_mut();
+            let clear = rt.clear_color();
+            draw_ui(renderer, self.gpu, encoder, view, rt, self.px, clear);
+            false
+        }
+    }
+
+    #[inline]
+    fn submit_and_present(&mut self, encoder: wgpu::CommandEncoder, _info: &StepInfo) -> Instant {
+        let renderer = self.window.renderer.as_mut().expect("renderer ensured by pre-reblend");
+        renderer.submit(&self.gpu.queue, encoder);
+        self.encoded_stamp = self.window.reports.stamp();
+        Instant::now()
+    }
+
+    #[inline]
+    fn present_targets(&mut self) -> (Option<&mut FrameClock>, &mut RuntimeCore) {
+        (None, self.window.app.rt_mut())
+    }
+
+    #[inline]
+    fn settle(&mut self, _submitted: Instant, info: &StepInfo) {
+        self.window.reports.drawn(self.encoded_stamp, None, self.frame_start, info.update_ms);
+    }
+}
+
 

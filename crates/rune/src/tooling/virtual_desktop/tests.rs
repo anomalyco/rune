@@ -105,7 +105,8 @@ impl Member for Fake {
     fn resolve_popup(&mut self, _: Option<&str>) -> Result<(), crate::PopupMenuError> { Ok(()) }
     fn file_dialog_open(&self) -> bool { false }
     fn resolve_file_dialog(&mut self, _: Option<std::path::PathBuf>) -> Result<(), crate::FileDialogError> { Ok(()) }
-    fn render(&mut self, _: &Gpu, _: &Slot, _: (u32, u32), _: f64, _: f64) {}
+    fn render(&mut self, _: &Gpu, _: &Slot, _: (u32, u32), _: f64, _: f64, _: Instant) {}
+    fn flush_interaction(&mut self) {}
     fn backdrop_dark(&self) -> Option<bool> { None }
     fn tree(&self, _: f64) -> serde_json::Value { serde_json::Value::Null }
     fn trace(&mut self, _: &mut Trace, _: f64, _: f64) {}
@@ -284,3 +285,60 @@ fn uniform_layout_matches_wgsl() {
         assert_eq!(member.offset as usize, offset, "W.{field} offset");
     }
 }
+
+#[test]
+fn virtual_desktop_window_follows_fit_content_height_and_resize_window() {
+    use crate::{App, AppSpec, El, WindowSpec, col, el};
+    fn view(rows: &usize, _: &mut crate::Cx<usize>) -> El {
+        col().key("root").w_full()
+            .child(el().key("head").size(50.0, 50.0))
+            .children((0..*rows).map(|i| el().key(format!("row{i}")).size(100.0, 40.0)))
+    }
+    let app = App::new(AppSpec::new("fit", (300.0, 400.0), || 1usize, view)).fit_content_height();
+    let mut w = Window::new(WindowSpec::from_app("fit", app), None, &Args::default(), true, true, 1.0);
+    let desktop = VirtualDesktop::from_script(None, 1.0).unwrap();
+    w.start(&desktop);
+    assert_eq!(w.frame()[2..4], [300.0, 90.0], "opens at content height");
+
+    w.advance(0.0);
+    w.rt_mut::<usize>().update(|rows, _| *rows = 2);
+    // Run 2 seconds of virtual time so the fit-height spring settles.
+    for _ in 0..120 {
+        w.advance(1.0 / 60.0);
+    }
+    assert_eq!(w.frame()[2..4], [300.0, 130.0], "grows to match new content height");
+
+    // Explicit Tx::resize_window_instant updates the window frame too.
+    w.rt_mut::<usize>().update(|_, tx| tx.resize_window_instant((360.0, 130.0)));
+    w.advance(1.0 / 60.0);
+    w.advance(1.0 / 60.0);
+    assert_eq!(w.frame()[2..4], [360.0, 130.0], "Tx::resize_window_instant resizes virtual desktop window");
+}
+
+#[test]
+fn virtual_desktop_reports_frames_to_on_frame_encoded() {
+    let dir = std::env::temp_dir().join(format!("rune-desktop-encoded-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let backdrop = dir.join("backdrop.png");
+    ::image::RgbaImage::from_pixel(64, 64, ::image::Rgba([64, 64, 64, 255])).save(&backdrop).unwrap();
+    let snap = dir.join("out.png");
+    let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let log = seen.clone();
+    let app = crate::App::new(crate::AppSpec::new("enc", (20.0, 20.0), || (), |_, _| crate::el()))
+        .on_frame_encoded(move |f| {
+            log.borrow_mut().push((f.seq(), f.outcome(), f.window().map(str::to_owned), f.refresh_hz()));
+        });
+    let args = [
+        "--desktop", backdrop.to_str().unwrap(),
+        "--at", "0.1", "--fps", "30", "--scale", "1",
+        "--snap", snap.to_str().unwrap(),
+    ];
+    crate::tooling::headless(app, Args::parse_from(args.map(String::from).into()));
+    std::fs::remove_dir_all(&dir).unwrap();
+    let seen = seen.borrow();
+    assert_eq!(seen.len(), 4, "frames 0..=3 at 30 fps must report to on_frame_encoded: {seen:?}");
+    for (i, (seq, outcome, window, hz)) in seen.iter().enumerate() {
+        assert_eq!((*seq, *outcome, window.as_deref(), *hz), (i as u64, crate::FrameOutcome::Drawn, Some("main"), Some(30.0)));
+    }
+}
+
