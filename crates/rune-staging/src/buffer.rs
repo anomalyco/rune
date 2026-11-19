@@ -208,21 +208,9 @@ impl Readback {
     }
 }
 
-/// Waits for the device's work; false on a lost device. Rune's wgpu-hal returns at once on a
-/// removed D3D12 device; on a lost Vulkan device wgpu 30 panics in `poll` ("Error in
-/// Device::poll"), which reads as false here (any other panic goes on). `rune_gpu::health::poll`
-/// does the same, but `rune-gpu` depends on this crate.
+/// Waits for the device's work; false on a lost or removed device (`crate::health::poll`).
 fn wait(device: &wgpu::Device) -> bool {
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| device.poll(wgpu::PollType::wait_indefinitely()))) {
-        Ok(polled) => polled.is_ok(),
-        Err(panic) => {
-            let message = panic.downcast_ref::<String>().map(String::as_str).or_else(|| panic.downcast_ref::<&str>().copied()).unwrap_or("");
-            if message.starts_with("Error in Device::poll") {
-                return false;
-            }
-            std::panic::resume_unwind(panic)
-        }
-    }
+    crate::health::poll(device, wgpu::PollType::wait_indefinitely()).is_ok()
 }
 
 #[cfg(test)]
