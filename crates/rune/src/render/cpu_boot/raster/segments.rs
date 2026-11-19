@@ -1,5 +1,5 @@
 use super::Painter;
-use super::super::bin::{EMPTY, Solid, clip_span, intersect, opaque_box};
+use super::super::bin::{EMPTY, Solid, TOP, clip_span, intersect, opaque_box};
 use super::super::shade::Clip;
 
 #[derive(Clone, Copy)]
@@ -87,11 +87,15 @@ impl Painter<'_, '_> {
     pub(super) fn occluders(&mut self, list: &[u32]) {
         self.occ.clear();
         for &n in list {
+            let within = self.bins.within[n as usize];
+            // Inside a PlusLighter layer every primitive adds to what came before it; an opaque
+            // box never hides an earlier sibling.
+            if within != TOP && self.bins.layers[within as usize].additive { continue; }
             let i = &self.scene.instances[n as usize];
             let Some(solid) = opaque_box(i) else { continue };
             let (b, tile) = (self.bins.bounds[n as usize], self.tile);
             let r = [(b[0] as u32).max(tile[0]), (b[1] as u32).max(tile[1]), (b[2] as u32).min(tile[2]), (b[3] as u32).min(tile[3])];
-            if r[2] > r[0] && r[3] > r[1] { self.occ.push(Occluder { n, within: self.bins.within[n as usize], solid, clip: Clip::of(i), r }); }
+            if r[2] > r[0] && r[3] > r[1] { self.occ.push(Occluder { n, within, solid, clip: Clip::of(i), r }); }
         }
     }
 

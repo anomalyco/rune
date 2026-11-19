@@ -174,3 +174,155 @@ fn scissor_clipped_layer_flattens_and_matches_gpu() {
     painter.paint(&Scene::new(&frame2, &atlas, &images, (w, h), clear).srgb_blend(true), &mut Target::new(&mut retained, w, h)).unwrap();
     assert_eq!(at(&retained, 60, 30), bg_px, "frame 2 must repaint pixel exposed when flat scissor shrinks");
 }
+
+#[test]
+fn plus_lighter_overlapping_opaque_rects_match_gpu() {
+    use crate::render::Blend;
+
+    let (w, h) = (64u32, 48u32);
+    let clear = Color { r: 0.04, g: 0.06, b: 0.1, a: 1.0 }.premul_srgb(1.0);
+    let instances = [
+        rect([0.0, 0.0, w as f32, h as f32], [0.05, 0.1, 0.2, 1.0], NO_CLIP),
+        Instance::begin_layer(
+            [4.0, 4.0, 56.0, 40.0],
+            NO_CLIP,
+            LayerSpec { opacity: 0.7, blend: Blend::PlusLighter, ..Default::default() },
+        ),
+        // Two overlapping opaque primaries inside a PlusLighter layer: red + blue must sum to
+        // magenta [1, 0, 1, 2] -> clamped [1, 0, 1, 1], never let the second rect occlude the first.
+        rect([8.0, 8.0, 28.0, 24.0], [1.0, 0.0, 0.0, 1.0], NO_CLIP),
+        rect([20.0, 12.0, 28.0, 24.0], [0.0, 0.0, 1.0, 1.0], NO_CLIP),
+        // Two overlapping translucent bright rects whose sum saturates past 1.0.
+        rect([10.0, 28.0, 24.0, 12.0], [0.8, 0.25, 0.0, 0.8], NO_CLIP),
+        rect([18.0, 28.0, 24.0, 12.0], [0.8, 0.25, 0.0, 0.8], NO_CLIP),
+        Instance::end_layer(),
+    ];
+
+    let atlas = Atlas::new();
+    let images = ImageAtlas::default();
+    let gpu = Gpu::headless();
+    let half = HalfRounding::of_vendor(gpu.adapter.get_info().vendor);
+    let scene = Scene::new(&instances, &atlas, &images, (w, h), clear).srgb_blend(true).half_rounding(half);
+    let mut cpu_px = vec![0u8; (w * h * 4) as usize];
+    paint(&scene, &mut Target::new(&mut cpu_px, w, h), 1).expect("CPU paints PlusLighter layers");
+    let gpu_px = render_gpu_bgra(&gpu, &instances, (w, h), clear);
+
+    let at = |buf: &[u8], x: u32, y: u32| -> [u8; 4] {
+        let i = ((y * w + x) * 4) as usize;
+        [buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]
+    };
+    let mut max_diff = 0u8;
+    let mut worst = None;
+    for y in 0..h {
+        for x in 0..w {
+            let (c, g) = (at(&cpu_px, x, y), at(&gpu_px, x, y));
+            let d = (0..4).map(|k| c[k].abs_diff(g[k])).max().unwrap();
+            if d > max_diff {
+                max_diff = d;
+                worst = Some((x, y, c, g));
+            }
+        }
+    }
+    assert!(
+        max_diff <= 1,
+        "CPU boot and GPU drifted on PlusLighter layer: max_diff={max_diff} worst={worst:?} (overlap (24,20) cpu={:?} gpu={:?})",
+        at(&cpu_px, 24, 20),
+        at(&gpu_px, 24, 20),
+    );
+}
+
+#[test]
+fn plus_lighter_turned_and_scaled_layers_saturate_before_interpolation() {
+    use crate::render::{Blend, OFFSCREEN_FORMAT, pack_u64_f32};
+
+    let (w, h) = (64u32, 48u32);
+    let gpu = Gpu::headless();
+    let render = |renderer: &mut Renderer, instances: &[Instance]| -> Vec<u8> {
+        let mut atlas = Atlas::new();
+        renderer.prepare(&gpu.device, &gpu.queue, &mut atlas, instances, (w, h));
+        let target = Offscreen::with_format(&gpu.device, w, h, OFFSCREEN_FORMAT);
+        let mut enc = gpu.device.create_command_encoder(&Default::default());
+        renderer.draw(&mut enc, &target.view, [0.0; 4]);
+        target.copy(&mut enc);
+        renderer.submit(&gpu.queue, enc);
+        target.read(&gpu.device)
+    };
+    let max_diff = |a: &[u8], b: &[u8]| -> (u8, Option<(u32, u32, [u8; 4], [u8; 4])>) {
+        let mut max_d = 0u8;
+        let mut worst = None;
+        for y in 0..h {
+            for x in 0..w {
+                let i = ((y * w + x) * 4) as usize;
+                let pa = [a[i], a[i + 1], a[i + 2], a[i + 3]];
+                let pb = [b[i], b[i + 1], b[i + 2], b[i + 3]];
+                let d = (0..4).map(|k| pa[k].abs_diff(pb[k])).max().unwrap();
+                if d > max_d {
+                    max_d = d;
+                    worst = Some((x, y, pa, pb));
+                }
+            }
+        }
+        (max_d, worst)
+    };
+
+    // 1. Turned PlusLighter layer: two overlapping [0.8, 0.2, 0.0, 0.8] rects saturate to
+    //    [1.0, 0.4, 0.0, 1.0], so rotating the layer must match a single [1.0, 0.4, 0.0, 1.0] rect.
+    let box_rect = [16.0, 12.0, 24.0, 24.0];
+    let turned_open = Instance::begin_layer(
+        box_rect,
+        NO_CLIP,
+        LayerSpec { opacity: 0.8, blend: Blend::PlusLighter, ..Default::default() },
+    )
+    .turned(0.4, [28.0, 24.0]);
+    let single_turned = [turned_open, rect(box_rect, [1.0, 0.4, 0.0, 1.0], NO_CLIP), Instance::end_layer()];
+    let doubled_turned = [
+        turned_open,
+        rect(box_rect, [0.8, 0.2, 0.0, 0.8], NO_CLIP),
+        rect(box_rect, [0.8, 0.2, 0.0, 0.8], NO_CLIP),
+        Instance::end_layer(),
+    ];
+    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    let a = render(&mut renderer, &single_turned);
+    let b = render(&mut renderer, &doubled_turned);
+    let (diff_turned, worst_turned) = max_diff(&a, &b);
+
+    // 2. Scaled cached PlusLighter layer (`uv.z > 0`): frame 1 renders a 20x20 cache with a 12x12
+    //    inner saturated shape and transparent border; frame 2 composites the cached target scaled
+    //    to 36x36 so bilinear resampling crosses the shape's boundary.
+    let cache_frame = |node: u64, bounds: [f32; 4], children: &[Instance]| -> Vec<Instance> {
+        let mut open = Instance::begin_layer(
+            bounds,
+            NO_CLIP,
+            LayerSpec { opacity: 0.8, blend: Blend::PlusLighter, ..Default::default() },
+        );
+        open.params[3] = 1.0;
+        open.radii = pack_u64_f32(node);
+        open.uv = pack_u64_f32(1);
+        let mut out = vec![open];
+        out.extend_from_slice(children);
+        out.push(Instance::end_layer());
+        out
+    };
+    let inner = [12.0, 12.0, 12.0, 12.0];
+    let base_bounds = [8.0, 8.0, 20.0, 20.0];
+    let scaled_bounds = [8.0, 8.0, 36.0, 36.0];
+    let mut r_single = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    let _ = render(&mut r_single, &cache_frame(1, base_bounds, &[rect(inner, [1.0, 0.4, 0.0, 1.0], NO_CLIP)]));
+    let scaled_single = render(&mut r_single, &cache_frame(1, scaled_bounds, &[]));
+
+    let mut r_doubled = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    let _ = render(
+        &mut r_doubled,
+        &cache_frame(
+            2,
+            base_bounds,
+            &[rect(inner, [0.8, 0.2, 0.0, 0.8], NO_CLIP), rect(inner, [0.8, 0.2, 0.0, 0.8], NO_CLIP)],
+        ),
+    );
+    let scaled_doubled = render(&mut r_doubled, &cache_frame(2, scaled_bounds, &[]));
+    let (diff_scaled, worst_scaled) = max_diff(&scaled_single, &scaled_doubled);
+    assert!(
+        diff_turned <= 1 && diff_scaled <= 1,
+        "PlusLighter layer interpolated unclamped texels: turned max={diff_turned} worst={worst_turned:?}; scaled max={diff_scaled} worst={worst_scaled:?}",
+    );
+}
