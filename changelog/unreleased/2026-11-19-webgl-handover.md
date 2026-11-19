@@ -1,1 +1,1 @@
-- **Web: CPU-first pages hand over to WebGL2 instead of stalling.** `Queue::on_submitted_work_done` and `BufferSlice::map_async` on `wgpu-core`'s WebGL2 backend only fire from `Device::poll`; the web host now drives non-blocking `PollType::Poll` ticks while waiting for handover or readback callbacks on WebGL2 (stopping once complete, dropped, or timed out), leaving WebGPU completely unpolled.
+- Web, `webgl` feature: a page that starts on the CPU painter hands over to WebGL2. It stayed on the CPU painter for good, because WebGL2 reports finished work only when it is polled.
