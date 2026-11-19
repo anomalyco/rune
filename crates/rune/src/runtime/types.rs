@@ -33,6 +33,9 @@ pub(crate) struct NodeCold {
     pub(super) scroll: Option<ScrollSpec>,
     pub(super) scroll_axes: crate::el::ScrollAxes,
     pub(super) scroll_edges: crate::el::ScrollEdges,
+    /// `El::wheel_scrolls`: the viewport a wheel over this node scrolls, in place of what it
+    /// starts on.
+    pub(super) wheel_scrolls: Option<Box<str>>,
     /// `El::sticky_top`, `El::sticky_bottom` and `El::stuck_shadow`.
     pub(super) sticky: Option<Box<crate::el::Sticky>>,
     pub(super) growth: Option<Box<GrowthSpec>>,
@@ -70,6 +73,7 @@ impl crate::cold::Empty for NodeCold {
         scroll: None,
         scroll_axes: crate::el::ScrollAxes::Y,
         scroll_edges: crate::el::ScrollEdges { fade: 0.0, fade_style: crate::el::FadeStyle::SMOOTH, margin: 0.0, anchor: false },
+        wheel_scrolls: None,
         sticky: None,
         growth: None,
         glide: None,
