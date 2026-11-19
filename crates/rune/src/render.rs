@@ -380,12 +380,30 @@ impl Gpu {
     /// One instance per set of backends for the whole process: a new one per device was a new
     /// DXGI factory and adapter list each time a window or overlay made a device (hex#1268).
     fn wgpu_instance_on(backends: wgpu::Backends) -> wgpu::Instance {
-        static MADE: std::sync::Mutex<Vec<(wgpu::Backends, wgpu::Instance)>> = std::sync::Mutex::new(Vec::new());
-        let mut made = MADE.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some((_, instance)) = made.iter().find(|(made, _)| *made == backends) { return instance.clone(); }
-        let instance = Self::new_wgpu_instance(backends);
-        made.push((backends, instance.clone()));
-        instance
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            static MADE: std::sync::Mutex<Vec<(wgpu::Backends, wgpu::Instance)>> = std::sync::Mutex::new(Vec::new());
+            let mut made = MADE.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some((_, instance)) = made.iter().find(|(made, _)| *made == backends) { return instance.clone(); }
+            let instance = Self::new_wgpu_instance(backends);
+            made.push((backends, instance.clone()));
+            instance
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            // With `wgpu/webgl`, wgpu's wasm handles are single-threaded (`!Send + !Sync`), so
+            // keep the per-backend instance cache in thread-local storage.
+            thread_local! {
+                static MADE: std::cell::RefCell<Vec<(wgpu::Backends, wgpu::Instance)>> = const { std::cell::RefCell::new(Vec::new()) };
+            }
+            MADE.with(|made| {
+                let mut made = made.borrow_mut();
+                if let Some((_, instance)) = made.iter().find(|(made, _)| *made == backends) { return instance.clone(); }
+                let instance = Self::new_wgpu_instance(backends);
+                made.push((backends, instance.clone()));
+                instance
+            })
+        }
     }
 
     fn new_wgpu_instance(backends: wgpu::Backends) -> wgpu::Instance {
