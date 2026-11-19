@@ -64,7 +64,7 @@ fn post_present_delays_overrunning_new_motion_and_reports_stale_and_requests_dro
             let (core, mut app) = rt.split_mut();
             let (anim, _, _) = step_and_flush(&mut clock, core, &mut app, f1, false);
             assert!(core.shell_request.is_none(), "unsupported shell request must be cleared");
-            assert!(!core.minimize.field(), "unsupported minimize request must be cleared");
+            assert!(!core.host.minimize.field(), "unsupported minimize request must be cleared");
             if with_present { post_present(&mut clock, core, f1 + overrun, f1, anim, false); }
         }
         // Next frame arrives 1 frame after presentation finished.

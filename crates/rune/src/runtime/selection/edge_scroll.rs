@@ -207,21 +207,21 @@ impl RuntimeCore {
     /// The held pointer moved to height `y`: step while it's at or past an edge the selection's
     /// viewport can still scroll past, and stop when it isn't.
     pub(in crate::runtime) fn edge_scroll_moved(&mut self, y: f32) {
-        if !self.selectable.phase.dragging() && self.selectable.edge.state == State::Idle { return; }
+        if !self.edit.selectable.phase.dragging() && self.edit.selectable.edge.state == State::Idle { return; }
         let edge = self.edge_at(y);
         let now = self.now_clock();
-        let effects = self.selectable.edge.step(Event::Moved { now, edge });
+        let effects = self.edit.selectable.edge.step(Event::Moved { now, edge });
         self.carry_edge_scroll(effects);
     }
 
     /// The drag ended.
-    pub(in crate::runtime) fn stop_edge_scroll(&mut self) { let _ = self.selectable.edge.step(Event::Stop); }
+    pub(in crate::runtime) fn stop_edge_scroll(&mut self) { let _ = self.edit.selectable.edge.step(Event::Stop); }
 
     /// Takes the step due by this frame.
     pub(in crate::runtime) fn fire_edge_scroll(&mut self) {
-        let Some(attempt) = self.selectable.edge.attempt() else { return };
-        let edge = self.pointer.and_then(|(_, y)| self.edge_at(y));
-        let effects = self.selectable.edge.step(Event::Due { attempt, now: self.clock, edge });
+        let Some(attempt) = self.edit.selectable.edge.attempt() else { return };
+        let edge = self.pointer.pos.and_then(|(_, y)| self.edge_at(y));
+        let effects = self.edit.selectable.edge.step(Event::Due { attempt, now: self.clock, edge });
         self.carry_edge_scroll(effects);
     }
 
@@ -230,7 +230,7 @@ impl RuntimeCore {
     /// again. Resting at the end of a list instead, it hears whether this layout changed the
     /// list's extent.
     pub(in crate::runtime) fn laid_edge_scroll(&mut self, app: &dyn ViewDriver) -> bool {
-        if !matches!(self.selectable.edge.state, State::Laying { .. }) { return self.edge_scroll_extent(app); }
+        if !matches!(self.edit.selectable.edge.state, State::Laying { .. }) { return self.edge_scroll_extent(app); }
         let changed = self.edge_step_heard(app, Event::Laid);
         // A step that reached the end, when this layout changed the extent it saw.
         self.edge_scroll_extent(app) | changed
@@ -240,23 +240,23 @@ impl RuntimeCore {
     /// extent (rows arrived at its end, or left): it goes on scrolling if it now can, or the
     /// selection follows the pointer over what came in. True when the selection changed.
     fn edge_scroll_extent(&mut self, app: &dyn ViewDriver) -> bool {
-        let State::AtEnd { scroll, max } = self.selectable.edge.state else { return false };
-        if self.scrolls.get(&scroll).is_some_and(|st| st.max == max) { return false; }
-        let edge = self.pointer.and_then(|(_, y)| self.edge_at(y));
+        let State::AtEnd { scroll, max } = self.edit.selectable.edge.state else { return false };
+        if self.scroll.scrolls.get(&scroll).is_some_and(|st| st.max == max) { return false; }
+        let edge = self.pointer.pos.and_then(|(_, y)| self.edge_at(y));
         self.edge_step_heard(app, Event::Extent { now: self.clock, edge })
     }
 
     /// Steps the edge scroll after a layout and carries out what it asks for; what that changed
     /// in the selection is heard. True when it changed, so the frame paints again.
     fn edge_step_heard(&mut self, app: &dyn ViewDriver, event: Event) -> bool {
-        let ends = |rt: &Self| rt.selectable.phase.selection().map(|s| (s.anchor, s.focus, s.far.as_ref().map(|f| f.path.clone())));
+        let ends = |rt: &Self| rt.edit.selectable.phase.selection().map(|s| (s.anchor, s.focus, s.far.as_ref().map(|f| f.path.clone())));
         let before = ends(self);
-        let effects = self.selectable.edge.step(event);
+        let effects = self.edit.selectable.edge.step(event);
         self.carry_edge_scroll(effects);
         let changed = ends(self) != before;
         if changed {
             let heard = self.selection_changes(app);
-            self.queue.extend(heard);
+            self.frame.queue.extend(heard);
         }
         changed
     }
@@ -265,7 +265,7 @@ impl RuntimeCore {
         for effect in effects {
             match effect {
                 Effect::Scroll { scroll, by } => self.edge_scroll_by(scroll, by),
-                Effect::Extend => if let Some((x, y)) = self.pointer { self.selection_drag(x, y) },
+                Effect::Extend => if let Some((x, y)) = self.pointer.pos { self.selection_drag(x, y) },
                 Effect::WakeAt(due) => self.wake_at(due),
             }
         }
@@ -274,7 +274,7 @@ impl RuntimeCore {
     /// Scrolls viewport `id` by `by` points, as the wheel does, except that a list stuck to its
     /// bottom lets go of it even when the step leaves it within the half point the wheel pins in.
     fn edge_scroll_by(&mut self, id: NodeId, by: f64) {
-        let Some(st) = self.scrolls.get_mut(&id) else { return };
+        let Some(st) = self.scroll.scrolls.get_mut(&id) else { return };
         let before = st.offset;
         st.offset = (st.offset + by).clamp(0.0, st.max);
         st.moved();
@@ -286,13 +286,13 @@ impl RuntimeCore {
     /// held press is extending: at or past its top or bottom (as drawn, inside its clips and the
     /// window), how fast that scrolls, and how far it still can.
     fn edge_at(&self, y: f32) -> Option<Edge> {
-        if !self.selectable.phase.dragging() || !self.press.is_held() { return None; }
+        if !self.edit.selectable.phase.dragging() || !self.pointer.press.is_held() { return None; }
         let holder = self.selection_holder()?;
-        let i = std::iter::successors(Some(holder), |&p| self.nodes[p].parent)
-            .find(|&p| self.nodes[p].scroll.is_some() && self.nodes[p].scroll_axes.has(false))?;
-        let id = self.nodes[i].id;
-        let st = self.scrolls.get(&id)?;
-        let clip = self.screen_clip_of_parent(self.nodes[i].parent).map(|v| v / self.env.scale);
+        let i = std::iter::successors(Some(holder), |&p| self.tree.nodes[p].parent)
+            .find(|&p| self.tree.nodes[p].scroll.is_some() && self.tree.nodes[p].scroll_axes.has(false))?;
+        let id = self.tree.nodes[i].id;
+        let st = self.scroll.scrolls.get(&id)?;
+        let clip = self.screen_clip_of_parent(self.tree.nodes[i].parent).map(|v| v / self.env.scale);
         let [_, top, _, bottom] = intersect(intersect(self.drawn_edges(i), clip), [0.0, 0.0, self.viewport.0, self.viewport.1]);
         if bottom - top <= 2.0 * AT { return None; }
         let (speed, room) = if y >= bottom - AT {

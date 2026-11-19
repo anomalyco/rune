@@ -60,15 +60,15 @@ impl Running {
     pub(super) fn apply_frame_requests(&mut self, window: &Window) {
         let rt = self.app.rt_mut();
         if !self.embedded
-            && let Some(title) = rt.window_title.take_change()
+            && let Some(title) = rt.host.window_title.take_change()
             && let Some(doc) = web_sys::window().and_then(|w| w.document())
         {
             doc.set_title(title);
         }
         // A page's height is the mirror's, which `sync_input` keeps; the canvas stays the band.
         if self.document {
-            rt.window_frame = None;
-        } else if let Some(req) = rt.window_frame.take()
+            rt.host.window_frame = None;
+        } else if let Some(req) = rt.host.window_frame.take()
             && let Some((_, h)) = req.size
             && let Some(canvas) = window.canvas()
         {

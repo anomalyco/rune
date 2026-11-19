@@ -96,7 +96,7 @@ mod live {
 
     /// Each line's byte range in the text's layout.
     fn lines(rt: &Runtime<S>) -> Vec<Range<usize>> {
-        let n = rt.nodes.iter().find(|n| n.key.as_deref() == Some("t")).unwrap();
+        let n = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("t")).unwrap();
         n.text_layout.as_ref().and_then(crate::text::TextLayout::single).unwrap().lines().map(|l| l.text_range()).collect()
     }
 
@@ -132,7 +132,7 @@ mod live {
         let rt = runtime(body, &pills, 260.0);
         let ls = lines(&rt);
         assert!(ls.len() >= 2, "narrow enough to wrap: {ls:?}");
-        let n = rt.nodes.iter().find(|n| n.key.as_deref() == Some("t")).unwrap();
+        let n = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("t")).unwrap();
         let t = n.text.as_ref().unwrap();
         for (authored, chip) in pills.iter().zip(&t.cold.pills) {
             // Layout ranges include each pill's bidi isolate marks.
@@ -146,7 +146,7 @@ mod live {
     fn pills_survive_streaming_appends_and_bad_ranges_are_ignored() {
         let mut rt = runtime("ask @reviewer", &[4..13], 400.0);
         let pilled = |rt: &Runtime<S>| {
-            let n = rt.nodes.iter().find(|n| n.key.as_deref() == Some("t")).unwrap();
+            let n = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("t")).unwrap();
             let t = n.text.as_ref().unwrap();
             t.cold.pills.iter().map(|p| (p.start..p.end, t.content[p.start as usize..p.end as usize].to_owned())).collect::<Vec<_>>()
         };

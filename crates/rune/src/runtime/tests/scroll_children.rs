@@ -202,7 +202,7 @@ fn header_before_virtual_stack_reveals_unmounted_row_and_keeps_header_at_origin(
     // Revealing an initially unmounted row accounts for the header height and does not shift the header by `before`.
     rt.update(|_, tx| tx.scroll_into_view("r35"));
     rt.frame(1.0 / 60.0);
-    assert!(rt.virtuals["scroll/rows"].before > 0.0, "earlier virtual rows were culled");
+    assert!(rt.commit.virtuals["scroll/rows"].before > 0.0, "earlier virtual rows were culled");
     let r35 = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("r35")).expect("r35 mounted and revealed");
     assert!((r35.rect[1] + r35.rect[3] - 200.0).abs() < 0.05, "r35 bottom {} != 200.0", r35.rect[1] + r35.rect[3]);
     let header = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("header")).unwrap();
@@ -281,7 +281,7 @@ fn raised_and_anchored_overlays_occlude_horizontal_wheel_touch_fling_and_autoscr
     }
     let mut rt = Runtime::new((), view, (300.0, 200.0), Env::new(true, 1.0));
     rt.frame(0.0);
-    let bg = rt.nodes.iter().find(|n| n.key.as_deref() == Some("bg")).unwrap().id;
+    let bg = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("bg")).unwrap().id;
 
     // Clear of overlays, bg is found on both axes.
     assert_eq!(rt.scroll_at_axis(260.0, 160.0, true), Some(bg));
@@ -294,8 +294,8 @@ fn raised_and_anchored_overlays_occlude_horizontal_wheel_touch_fling_and_autoscr
         rt.wheel_xy(x, y, -60.0, 0.0);
         rt.fling(x, y, -400.0);
         rt.frame(1.0 / 60.0);
-        assert_eq!(rt.scrolls[&bg].x.offset, 0.0, "horizontal wheel over {label} must not scroll bg");
-        assert_eq!(rt.scrolls[&bg].offset, 0.0, "fling over {label} must not scroll bg");
+        assert_eq!(rt.scroll.scrolls[&bg].x.offset, 0.0, "horizontal wheel over {label} must not scroll bg");
+        assert_eq!(rt.scroll.scrolls[&bg].offset, 0.0, "fling over {label} must not scroll bg");
     }
 
     // Touch pan over the raised panel must not scroll bg.
@@ -304,7 +304,7 @@ fn raised_and_anchored_overlays_occlude_horizontal_wheel_touch_fling_and_autoscr
     rt.touch(1, crate::TouchPhase::Moved, 10.0, 10.0, 0.04);
     rt.touch(1, crate::TouchPhase::Ended, 10.0, 10.0, 0.06);
     rt.frame(1.0 / 60.0);
-    assert_eq!((rt.scrolls[&bg].x.offset, rt.scrolls[&bg].offset), (0.0, 0.0), "touch over panel must not scroll bg");
+    assert_eq!((rt.scroll.scrolls[&bg].x.offset, rt.scroll.scrolls[&bg].offset), (0.0, 0.0), "touch over panel must not scroll bg");
 
     // Middle-click autoscroll over the raised panel must not latch onto bg.
     if cfg!(any(target_os = "windows", target_os = "linux")) {

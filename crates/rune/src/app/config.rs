@@ -86,7 +86,7 @@ impl crate::runtime::RuntimeCore {
         self.set_tab_visits_controls(tab_visits_controls);
         self.set_srgb_blend(srgb_blend);
         self.set_font_smoothing(font_smoothing);
-        self.app_stats = dev_stats;
+        self.host.app_stats = dev_stats;
     }
 }
 
@@ -152,7 +152,7 @@ mod tests {
         assert!(rt.modifier_keys());
         assert!(!rt.srgb_blend());
         assert_eq!(rt.font_smoothing(), FontSmoothing::Off);
-        assert_eq!(rt.app_stats.map(|f| f()).as_deref(), Some("ok"));
+        assert_eq!(rt.host.app_stats.map(|f| f()).as_deref(), Some("ok"));
 
         // tab_visits_controls overrides full_keyboard_access(false) so Tab reaches a focusable control.
         rt.set_full_keyboard_access(false);

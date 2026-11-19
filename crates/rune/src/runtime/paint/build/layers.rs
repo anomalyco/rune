@@ -37,26 +37,26 @@ impl RuntimeCore {
     // Phases of `build`'s single paint loop; keep them inlined into it.
     #[inline(always)]
     pub(super) fn prepare_dissolve(&mut self) {
-        let n_nodes = self.nodes.len();
+        let n_nodes = self.tree.nodes.len();
         // One linear pass, including retained exits, Live opacity, presence and loops. Reuse
         // inherited scratch for hover groups so activation samples exactly the paint values.
-        self.dissolve_scratch.clear();
-        if self.has_dissolve { self.dissolve_scratch.resize(n_nodes, false); }
-        for index in 0..if self.has_dissolve { n_nodes } else { 0 } {
-            let i = self.layer_paint_order.get(index).copied().unwrap_or(index);
-            let n = &self.nodes[i];
-            let inherited_group = n.parent.map_or(0.0, |p| self.inh_scratch[p].group);
-            self.inh_scratch[i].group = if n.vis.hover().a > 0.0 || n.vis_flags.hover_group() {
+        self.paint.dissolve_scratch.clear();
+        if self.tree.has_dissolve { self.paint.dissolve_scratch.resize(n_nodes, false); }
+        for index in 0..if self.tree.has_dissolve { n_nodes } else { 0 } {
+            let i = self.paint.layer_paint_order.get(index).copied().unwrap_or(index);
+            let n = &self.tree.nodes[i];
+            let inherited_group = n.parent.map_or(0.0, |p| self.paint.inh_scratch[p].group);
+            self.paint.inh_scratch[i].group = if n.vis.hover().a > 0.0 || n.vis_flags.hover_group() {
                 self.scene.get(n.id, P_HOVER).unwrap_or(0.0).clamp(0.0, 1.0)
             } else { inherited_group };
-            let Some(parent) = n.parent.filter(|&p| self.nodes[p].vis_flags.blend() == crate::render::Blend::PlusLighter) else { continue };
+            let Some(parent) = n.parent.filter(|&p| self.tree.nodes[p].vis_flags.blend() == crate::render::Blend::PlusLighter) else { continue };
             let Some(p) = self.scene.presented(n.id) else { continue };
             let mut opacity = p.opacity * n.vis.layer_opacity;
             opacity *= self.group_factor(n, inherited_group);
-            if fades(n.looping.as_deref().copied()) && let Some(track) = self.loops.get(&n.id) {
+            if fades(n.looping.as_deref().copied()) && let Some(track) = self.motion.loops.get(&n.id) {
                 opacity *= track.sample_at(self.scene.store().node_time(n.id), self.clock, self.reduced_motion);
             }
-            self.dissolve_scratch[parent] |= opacity > 0.001 && opacity < 1.0;
+            self.paint.dissolve_scratch[parent] |= opacity > 0.001 && opacity < 1.0;
         }
     }
 
@@ -65,9 +65,9 @@ impl RuntimeCore {
         // Exiting descendants are appended to storage. Bring them back into their subtree
         // only when isolation requires it; the ordinary painter stream stays byte-identical.
         // Matched flights paint last (see `update_layer_paint_order`).
-        ((flying || self.has_sticky || self.has_raise || self.has_paint_order) && !self.layer_paint_order.is_empty()) || self.layer_paint_order.windows(2).any(|pair| {
-            let n = &self.nodes[pair[0]];
-            self.nodes[pair[1]].parent == Some(pair[0]) && ((self.has_dissolve && self.dissolve_scratch[pair[0]]) || n.vis_flags.cache() || n.vis.clip_radius.is_some() || n.vis.group_opacity.is_some() || n.group_fade
+        ((flying || self.tree.has_sticky || self.tree.has_raise || self.tree.has_paint_order) && !self.paint.layer_paint_order.is_empty()) || self.paint.layer_paint_order.windows(2).any(|pair| {
+            let n = &self.tree.nodes[pair[0]];
+            self.tree.nodes[pair[1]].parent == Some(pair[0]) && ((self.tree.has_dissolve && self.paint.dissolve_scratch[pair[0]]) || n.vis_flags.cache() || n.vis.clip_radius.is_some() || n.vis.group_opacity.is_some() || n.group_fade
                 || n.vis.layer_opacity < 1.0 || fades(n.looping.as_deref().copied())
                 || self.scene.presented(n.id).is_some_and(|p| (p.opacity > 0.0 && p.opacity < 1.0) || p.blur > 0.0 || p.transform.rotate.abs() > 1e-6))
         })
@@ -100,7 +100,7 @@ impl RuntimeCore {
     ) {
         while let Some(&(ancestor, start, surface_start)) = layers.last() {
             let mut parent = node_parent;
-            while parent.is_some_and(|p| p != ancestor) { parent = self.nodes[parent.unwrap()].parent; }
+            while parent.is_some_and(|p| p != ancestor) { parent = self.tree.nodes[parent.unwrap()].parent; }
             if parent == Some(ancestor) { break; }
             if active_cache.is_some_and(|ac| ac.instance_start == start) {
                 let ac = active_cache.take().unwrap();
@@ -134,27 +134,27 @@ impl RuntimeCore {
         let mut parent = node_parent;
         while let Some(p) = parent {
             chain.push(p);
-            parent = self.nodes[p].parent;
+            parent = self.tree.nodes[p].parent;
         }
         for &p in chain.iter().rev() {
-            let ancestor = &self.nodes[p];
-            let k = self.inh_scratch[p].turn;
-            if k != 0 && ancestor.parent.map_or(0, |pp| self.inh_scratch[pp].turn) != k {
-                let t = self.turn_scratch[k as usize - 1];
+            let ancestor = &self.tree.nodes[p];
+            let k = self.paint.inh_scratch[p].turn;
+            if k != 0 && ancestor.parent.map_or(0, |pp| self.paint.inh_scratch[pp].turn) != k {
+                let t = self.paint.turn_scratch[k as usize - 1];
                 let start = self.instances.len();
                 let marker = Instance::begin_layer(t.rect, t.outer_clip, Default::default()).turned(t.angle, t.pivot);
                 self.instances.push(marker);
                 layers.push((p, start, self.surfaces.len()));
             }
             if let Some(radius) = ancestor.vis.clip_radius {
-                let [x, y, w, h] = self.unturned_drawn.get(p).filter(|_| k != 0)
-                    .map_or_else(|| self.drawn[p].map(|v| v * s), |&(b, _)| [b[0] * s, b[1] * s, (b[2] - b[0]) * s, (b[3] - b[1]) * s]);
+                let [x, y, w, h] = self.paint.unturned_drawn.get(p).filter(|_| k != 0)
+                    .map_or_else(|| self.paint.drawn[p].map(|v| v * s), |&(b, _)| [b[0] * s, b[1] * s, (b[2] - b[0]) * s, (b[3] - b[1]) * s]);
                 let radii = ancestor.vis.clip_corners.unwrap_or_else(|| {
                     if ancestor.vis.radii() != [0.0; 4] {
                         self.scene.presented(ancestor.id).map_or(ancestor.vis.radii(), |p| p.radius.0)
                     } else { [radius; 4] }
                 }).map(|radius| {
-                    let radius = (radius.max(0.0) * self.inh_scratch[p].scale * s).min(w.min(h) * 0.5);
+                    let radius = (radius.max(0.0) * self.paint.inh_scratch[p].scale * s).min(w.min(h) * 0.5);
                     if ancestor.vis_flags.continuous_corners() { -radius } else { radius }
                 });
                 let start = self.instances.len();
@@ -203,9 +203,9 @@ impl RuntimeCore {
         layers: &mut Vec<(usize, usize, usize)>,
         active_cache: &mut Option<ActiveCache>,
     ) -> LayerScope {
-        let n = &self.nodes[i];
-        if n.vis_flags.cache() && self.cache_live_scratch[i] {
-            if let Some(entry) = self.node_caches.get_mut(&n.id) {
+        let n = &self.tree.nodes[i];
+        if n.vis_flags.cache() && self.paint.cache_live_scratch[i] {
+            if let Some(entry) = self.paint.node_caches.get_mut(&n.id) {
                 entry.phase = RasterPhase::Live;
             }
         }
@@ -216,19 +216,19 @@ impl RuntimeCore {
         // live until it rests instead of trusting a partial content hash or allocating a
         // new raster on each commit. Live-only transforms still composite the old raster.
         let mut committed_scale_moving = false;
-        if n.vis_flags.cache() && let Some(entry) = self.node_caches.get_mut(&n.id)
-            && entry.commit_gen != self.commit_gen
+        if n.vis_flags.cache() && let Some(entry) = self.paint.node_caches.get_mut(&n.id)
+            && entry.commit_gen != self.commit.commit_gen
             && let Some(frame) = entry.committed_scale(sc * s, now)
         {
             committed_scale_moving = true;
-            self.scale_frame = Some(frame);
+            self.paint.scale_frame = Some(frame);
         }
-        if n.vis_flags.cache() && active_cache.is_none() && !lift && !skip_paint && !self.cache_live_scratch[i]
+        if n.vis_flags.cache() && active_cache.is_none() && !lift && !skip_paint && !self.paint.cache_live_scratch[i]
             && !committed_scale_moving && own_turn.is_none()
             && effective_opacity > 0.001 && w > 0.0 && h > 0.0
         {
             let eff_scale = sc * s;
-            let est_bounds = if let Some(entry) = self.node_caches.get(&n.id) {
+            let est_bounds = if let Some(entry) = self.paint.node_caches.get(&n.id) {
                 let k = eff_scale / entry.raster_scale.max(1e-4);
                 [
                     r[0] + entry.rel_bounds[0] * k,
@@ -355,7 +355,7 @@ impl RuntimeCore {
             && in_fade([r[0], r[1], r[0] + w, r[1] + h], *clip, *fade, *fade_origin)
         {
             let paints = own_paints(n);
-            let parent = next.is_some_and(|j| self.nodes[j].parent == Some(i));
+            let parent = next.is_some_and(|j| self.tree.nodes[j].parent == Some(i));
             *isolate = paints >= 2 || (paints == 1 && parent);
         }
         let o = if *isolate { 1.0 } else { (paint_own * pinh.paint_opacity).clamp(0.0, 1.0) };
@@ -378,19 +378,19 @@ impl RuntimeCore {
                     use std::hash::Hasher;
                     let mut h = rune_motion::Fx::default();
                     h.write_u64(paint_state_hash);
-                    h.write_u64(self.cache_paint_scratch[i]);
+                    h.write_u64(self.paint.cache_paint_scratch[i]);
                     h.write_u32(pinh.group.to_bits());
                     h.finish()
                 };
                 let (scale, pass, frame) =
-                    if let Some(entry) = self.node_caches.get(&n.id) {
+                    if let Some(entry) = self.paint.node_caches.get(&n.id) {
                         let is_resident = self.text.atlas.resident_caches.get(&n.id.0) == Some(&entry.signature);
-                        entry.open(eff_scale, s, self.settled, now, self.commit_gen, is_resident,
-                            scale_motion, paint_hash, || self.cache_check_scratch[i], glyph_count)
+                        entry.open(eff_scale, s, self.settled, now, self.commit.commit_gen, is_resident,
+                            scale_motion, paint_hash, || self.paint.cache_check_scratch[i], glyph_count)
                     } else {
                         (ScaleSettle::Still(eff_scale), RasterPass::Paint { glyph_start: glyph_count }, None)
                     };
-                if frame.is_some() { self.scale_frame = frame; }
+                if frame.is_some() { self.paint.scale_frame = frame; }
                 if matches!(pass, RasterPass::Elide { .. }) {
                     skip_paint = true;
                 }

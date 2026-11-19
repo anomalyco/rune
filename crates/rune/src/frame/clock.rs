@@ -172,7 +172,7 @@ impl FrameClock {
 
     pub(crate) fn advance_core(&mut self, rt: &mut RuntimeCore, app: &mut dyn AppDriver, at: Instant, compositing: bool) -> (bool, f64) {
         let (step, starts) = self.begin(at, rt.animating || compositing);
-        rt.frame_target = Some(at);
+        rt.frame.frame_target = Some(at);
         let animating = rt.frame_split(app, step.catch_up, step.dt);
         starts.extend_from_slice(rt.scene.store().started());
         (animating, step.total())

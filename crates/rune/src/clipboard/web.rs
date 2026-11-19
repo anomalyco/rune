@@ -49,8 +49,8 @@ impl Client {
         });
     }
     pub(crate) fn flush_core(&self, rt: &mut crate::runtime::RuntimeCore) {
-        if rt.clipboard.is_some() { return flush_memory(rt); }
-        rt.clear_secret_request = false;
+        if rt.edit.clipboard.is_some() { return flush_memory(rt); }
+        rt.edit.clear_secret_request = false;
         if let Some(copy) = rt.copy_request.take() {
             if copy.is_secret() {
                 if let Some(slot) = copy.slot() {
@@ -70,8 +70,8 @@ impl Client {
                 });
             }
         }
-        if let Some(target) = rt.paste_request.take() { self.read_for(Purpose::paste(rt, target)); }
-        for id in std::mem::take(&mut rt.read_requests) { self.read_for(Purpose::Read(id)); }
+        if let Some(target) = rt.edit.paste_request.take() { self.read_for(Purpose::paste(rt, target)); }
+        for id in std::mem::take(&mut rt.edit.read_requests) { self.read_for(Purpose::Read(id)); }
     }
 }
 

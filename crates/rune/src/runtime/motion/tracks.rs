@@ -3,17 +3,98 @@ use super::*;
 use crate::runtime::scroll_mode::{self, Event as ModeEvent};
 
 /// Scroll momentum decay (iOS normal: 0.998 per ms).
-pub(super) const SCROLL_DECAY: f32 = 2.002;
+pub(in crate::runtime) const SCROLL_DECAY: f32 = 2.002;
+
+/// Retained render-side motion state: growth stacks, streaming word reveals, matched/launch/text
+/// flights, loops and rewind capture. Ordered hot-first under `#[repr(C)]` so `flying`, `flights`,
+/// frame flags and `loops` read during the paint walk sit together and first.
+#[repr(C)]
+pub(crate) struct MotionState {
+    /// Elements flying from a matched one, with their scene target. They paint last.
+    pub(in crate::runtime) flying: Vec<(NodeId, MRect)>,
+    pub(in crate::runtime) flights: Vec<TextFlight>,
+    pub(in crate::runtime) caught_up: f32,
+    pub(in crate::runtime) slack_dt: f32,
+    /// Why the last frame was animating, as [`AnimSource`] bits, for traces.
+    pub(crate) anim_sources: u16,
+    pub(in crate::runtime) loops_active: bool,
+    /// Some node ran on a scaled clock (`El::time_scale`) at the last commit.
+    pub(in crate::runtime) time_scaled: bool,
+    /// Motion has a cause (`Tx::unprompted`): a commit no input in this window caused mounts and
+    /// unmounts at once. On for every window an app opens (`tooling::runtime_for`); a bare
+    /// `Runtime` keeps every commit's motion.
+    pub(crate) motion_needs_cause: bool,
+    pub(in crate::runtime) loops: HashMap<NodeId, rune_motion::LoopTrack>,
+    /// Shared host deadline: unscaled wake time and corresponding animation time.
+    pub(in crate::runtime) loop_wake: Option<(f64, f64)>,
+    /// `Tx::launch` flights, waiting for their commit or in the air.
+    pub(in crate::runtime) launches: flights::Launches,
+    pub(in crate::runtime) grows: HashMap<NodeId, GrowTrack>,
+    pub(in crate::runtime) stacks: HashMap<NodeId, Stack>,
+    /// The header each lifted fold shuts under, by the fold's id, which draws where it's laid out.
+    pub(in crate::runtime) fold_headers: HashMap<NodeId, String>,
+    /// What this frame's commits held at their landing width (`El::hold_landing_width`).
+    pub(in crate::runtime) landing_holds: landing_hold::LandingHolds,
+    pub(in crate::runtime) reveals: HashMap<NodeId, RevealPhase>,
+    /// The reveal states `reveals` keeps for texts that have left the tree, newest first, at
+    /// most `prune::REVEALS_KEPT` of them (see `prune_exited`).
+    pub(in crate::runtime) reveals_kept: Vec<NodeId>,
+    /// The newest streamed word of any text, which the next text's words queue behind.
+    pub(in crate::runtime) reveal_chain: RevealChain,
+    /// The last commit's `El::matched` ids, one present element each (the last in tree order).
+    pub(in crate::runtime) matched: Vec<(Rc<str>, NodeId)>,
+    pub(in crate::runtime) loop_clock: loop_clock::LoopClock,
+    /// `motion_elements`' per-node scratch, kept so a frame doesn't allocate.
+    pub(in crate::runtime) motion_scratch: std::cell::RefCell<Vec<(u32, u16, bool)>>,
+    /// The recorder `Tx::record_rewind` attached (`runtime/motion/rewind.rs`).
+    pub(in crate::runtime) rewind: Option<crate::rewind::Rewind>,
+    #[cfg(debug_assertions)]
+    pub(in crate::runtime) matched_warned: HashSet<Rc<str>>,
+}
+
+impl MotionState {
+    // Single-caller constructor for `RuntimeCore::new`; inlined so it stays in its caller's
+    // codegen unit instead of shifting partitioning and dropping inlining in the paint walk.
+    #[inline]
+    pub(in crate::runtime) fn new() -> Self {
+        Self {
+            flying: Vec::new(),
+            flights: Vec::new(),
+            caught_up: 0.0,
+            slack_dt: 0.0,
+            anim_sources: 0,
+            loops_active: false,
+            time_scaled: false,
+            motion_needs_cause: false,
+            loops: HashMap::default(),
+            loop_wake: None,
+            launches: Default::default(),
+            grows: HashMap::default(),
+            stacks: HashMap::default(),
+            fold_headers: HashMap::default(),
+            landing_holds: Default::default(),
+            reveals: HashMap::default(),
+            reveals_kept: Vec::new(),
+            reveal_chain: RevealChain::default(),
+            matched: Vec::new(),
+            loop_clock: Default::default(),
+            motion_scratch: Default::default(),
+            rewind: None,
+            #[cfg(debug_assertions)]
+            matched_warned: HashSet::default(),
+        }
+    }
+}
 
 /// The (x, y) scroll offsets of node `i`'s scroll viewports, innermost first.
-pub(super) fn scroll_offsets<'a>(scrolls: &'a HashMap<NodeId, ScrollState>, nodes: &'a [Node], i: usize) -> impl Iterator<Item = [f32; 2]> + 'a {
+pub(in crate::runtime) fn scroll_offsets<'a>(scrolls: &'a HashMap<NodeId, ScrollState>, nodes: &'a [Node], i: usize) -> impl Iterator<Item = [f32; 2]> + 'a {
     std::iter::successors(Some(i), |&p| nodes[p].parent.filter(|_| nodes[p].above.is_none()))
         .skip(1)
         .filter_map(|p| scrolls.get(&nodes[p].id).map(|st| [st.x.shift() as f32, st.offset as f32]))
 }
 
 /// Marks every ancestor of a marked node.
-pub(super) fn mark_ancestors(nodes: &[Node], marked: &mut [bool]) {
+pub(in crate::runtime) fn mark_ancestors(nodes: &[Node], marked: &mut [bool]) {
     for i in 0..nodes.len() {
         if !marked[i] { continue; }
         let mut p = nodes[i].parent;
@@ -26,7 +107,7 @@ pub(super) fn mark_ancestors(nodes: &[Node], marked: &mut [bool]) {
 }
 
 impl RuntimeCore {
-    pub(super) fn set_or_anim<T: rune_motion::Animatable>(&mut self, id: NodeId, p: Prop<T>, val: T, s: Spring, instant: bool) {
+    pub(in crate::runtime) fn set_or_anim<T: rune_motion::Animatable>(&mut self, id: NodeId, p: Prop<T>, val: T, s: Spring, instant: bool) {
         if instant {
             self.scene.set(id, p, val);
         } else {
@@ -34,12 +115,12 @@ impl RuntimeCore {
         }
     }
 
-    pub(super) fn color(&self, id: NodeId, prop: Prop<Color>, rest: Color) -> Color {
+    pub(in crate::runtime) fn color(&self, id: NodeId, prop: Prop<Color>, rest: Color) -> Color {
         if self.scene.store().is_animating(id, prop) { self.scene.get(id, prop).unwrap_or(rest) } else { rest }
     }
 
     /// Shadow `k` of node `id` with its geometry where its spring has it.
-    pub(super) fn shadow_at(&self, id: NodeId, k: usize, sh: &crate::el::Shadow) -> crate::el::Shadow {
+    pub(in crate::runtime) fn shadow_at(&self, id: NodeId, k: usize, sh: &crate::el::Shadow) -> crate::el::Shadow {
         match P_SHADOW_GEO.get(k) {
             Some(&prop) if self.scene.store().active_len() > 0 && self.scene.store().is_animating(id, prop) => match self.scene.get(id, prop) {
                 Some(g) => crate::el::Shadow { x: g.x, y: g.y, blur: g.w.max(0.0), spread: g.h, ..*sh },
@@ -49,8 +130,8 @@ impl RuntimeCore {
         }
     }
 
-    pub(super) fn step_growth(&mut self, dt: f32) -> bool {
-        if self.stacks.is_empty() {
+    pub(in crate::runtime) fn step_growth(&mut self, dt: f32) -> bool {
+        if self.motion.stacks.is_empty() {
             return false;
         }
         // Frame time, stepped in whole substeps and the rest (`growth::substeps`).
@@ -59,16 +140,16 @@ impl RuntimeCore {
         let mut moving = false;
         let mut placed = false;
         let (mut restored, mut gave) = (Vec::new(), Vec::new());
-        for (cid, stack) in self.stacks.iter_mut() {
-            let Some(&ci) = self.node_index.get(cid) else { continue };
-            let Some(spec) = self.nodes[ci].growth.as_deref().copied() else { continue };
+        for (cid, stack) in self.motion.stacks.iter_mut() {
+            let Some(&ci) = self.tree.node_index.get(cid) else { continue };
+            let Some(spec) = self.tree.nodes[ci].growth.as_deref().copied() else { continue };
             let n_rows = stack.order.len();
             let mut st_growing = !stack.pending_heights.is_empty();
             let mut st_moving = st_growing;
-            let (in_runs, run_grown) = Self::step_growth_runs(stack, &mut self.grows, steps, spec);
+            let (in_runs, run_grown) = Self::step_growth_runs(stack, &mut self.motion.grows, steps, spec);
             stack.grown += run_grown;
             for (k, id) in stack.order.iter().enumerate() {
-                let Some(g) = self.grows.get_mut(id) else { continue };
+                let Some(g) = self.motion.grows.get_mut(id) else { continue };
                 let h0 = g.h;
                 let in_run = in_runs.contains(id);
                 if let Some(&at) = stack.closing.get(id)
@@ -95,8 +176,8 @@ impl RuntimeCore {
                 }
                 // A row nobody saw last frame draws no feather: it has none to ease, and grows one
                 // again as it comes into view.
-                if g.mask > 0.0 && self.built
-                    && self.node_index.get(id).is_some_and(|&i| !self.seen.get(i).copied().unwrap_or(true))
+                if g.mask > 0.0 && self.tree.built
+                    && self.tree.node_index.get(id).is_some_and(|&i| !self.paint.seen.get(i).copied().unwrap_or(true))
                 {
                     g.mask = 0.0;
                 }
@@ -110,9 +191,9 @@ impl RuntimeCore {
                 st_moving |= stack.slides.step(*id, g, spec.spring, steps);
             }
             stack.order.retain(|id| {
-                let keep = !stack.closing.contains_key(id) || self.grows.get(id).is_some_and(|g| g.h > 0.01 || g.target > 0.0);
+                let keep = !stack.closing.contains_key(id) || self.motion.grows.get(id).is_some_and(|g| g.h > 0.01 || g.target > 0.0);
                 if !keep {
-                    self.grows.remove(id);
+                    self.motion.grows.remove(id);
                 }
                 keep
             });
@@ -120,7 +201,7 @@ impl RuntimeCore {
             stack.slides.keep(&stack.order);
             stack.growing = st_growing;
             stack.moving = st_moving;
-            placed |= stack.handoff.place(&mut self.grows, &mut self.scene, &self.nodes, &self.node_index, &mut self.scrolls);
+            placed |= stack.handoff.place(&mut self.motion.grows, &mut self.scene, &self.tree.nodes, &self.tree.node_index, &mut self.scroll.scrolls);
             // Keep the shared clock awake through the hold. No timer thread or remeasurement.
             moving |= st_moving;
         }
@@ -133,41 +214,41 @@ impl RuntimeCore {
     }
 
     /// Presented content extent of node `c` if it is a growth stack (points).
-    pub(super) fn stack_extent(&self, c: usize) -> Option<f64> {
-        let n = &self.nodes[c];
+    pub(in crate::runtime) fn stack_extent(&self, c: usize) -> Option<f64> {
+        let n = &self.tree.nodes[c];
         n.growth.as_ref()?;
-        let stack = self.stacks.get(&n.id)?;
+        let stack = self.motion.stacks.get(&n.id)?;
         let mut count = 0usize;
-        let rows: f64 = stack.order.iter().filter_map(|id| self.grows.get(id)).map(|g| { count += 1; f64::from(g.h) }).sum();
+        let rows: f64 = stack.order.iter().filter_map(|id| self.motion.grows.get(id)).map(|g| { count += 1; f64::from(g.h) }).sum();
         let gaps = f64::from(stack.gap) * count.saturating_sub(1) as f64;
         Some(f64::from(stack.pad_top) + rows + gaps + f64::from(stack.pad_bottom))
     }
 
     /// How far scroll viewport `i`'s content reaches past its bottom, negative while it fits.
-    pub(super) fn scroll_overflow(&self, i: usize) -> f64 {
-        let view = self.nodes[i].target;
+    pub(in crate::runtime) fn scroll_overflow(&self, i: usize) -> f64 {
+        let view = self.tree.nodes[i].target;
         let content_h = self.scroll_children(i).map(|c| {
-            let n = &self.nodes[c];
+            let n = &self.tree.nodes[c];
             f64::from(n.target[1] - view[1]) + self.stack_extent(c).unwrap_or(f64::from(n.target[3] - n.target[1]))
         }).reduce(f64::max).unwrap_or(0.0);
         content_h - f64::from(view[3] - view[1])
     }
 
-    pub(super) fn step_scroll(&mut self, dt: f32) -> bool { self.step_scroll_by(dt, false) }
+    pub(in crate::runtime) fn step_scroll(&mut self, dt: f32) -> bool { self.step_scroll_by(dt, false) }
 
     /// Steps every scroll viewport `dt` seconds on: a frame's own step, or (`catch_up`) the time
     /// it charges to motion that was already running (`frame::clock::split`).
-    pub(super) fn step_scroll_by(&mut self, dt: f32, catch_up: bool) -> bool {
-        let slack_dt = std::mem::take(&mut self.slack_dt);
+    pub(in crate::runtime) fn step_scroll_by(&mut self, dt: f32, catch_up: bool) -> bool {
+        let slack_dt = std::mem::take(&mut self.motion.slack_dt);
         let scale = f64::from(self.env.scale * self.zoom());
         // Motion reduced mid-ease: a wheel's ease lands where it was going, at once.
         let land_wheels = !self.wheel_glides();
         let mut moving = false;
-        for i in 0..self.nodes.len() {
-            let Some(sp) = self.nodes[i].scroll else { continue };
+        for i in 0..self.tree.nodes.len() {
+            let Some(sp) = self.tree.nodes[i].scroll else { continue };
             if self.subtree_exiting(i) { continue; }
-            let id = self.nodes[i].id;
-            let axes = self.nodes[i].scroll_axes;
+            let id = self.tree.nodes[i].id;
+            let axes = self.tree.nodes[i].scroll_axes;
             if axes.x() { moving |= self.step_scroll_x(i, dt, catch_up); }
             // A horizontal viewport doesn't move vertically, even with content taller than it.
             let overflow = if axes.y() { self.scroll_overflow(i) } else { 0.0 };
@@ -175,13 +256,13 @@ impl RuntimeCore {
                 moving |= active;
                 continue;
             }
-            let held = !self.requests.is_empty() && {
-                let path = &self.nodes[i].path;
-                self.requests.owns(path)
-                    && self.scroll_stack(i).and_then(|c| self.stacks.get(&self.nodes[c].id)).is_some_and(|s| s.growing)
+            let held = !self.scroll.requests.is_empty() && {
+                let path = &self.tree.nodes[i].path;
+                self.scroll.requests.owns(path)
+                    && self.scroll_stack(i).and_then(|c| self.motion.stacks.get(&self.tree.nodes[c].id)).is_some_and(|s| s.growing)
             };
             let laid = if axes.y() { self.ease_to_shrunk_end(i, overflow) } else { None };
-            let Some(st) = self.scrolls.get_mut(&id) else { continue };
+            let Some(st) = self.scroll.scrolls.get_mut(&id) else { continue };
             let _ = scroll_mode::step(&mut st.mode, ModeEvent::Step { x_v: st.x.coast() });
             st.max = overflow.max(0.0);
             match st.mode {
@@ -235,10 +316,10 @@ impl RuntimeCore {
         moving
     }
 
-    pub(super) fn reveals_active(&mut self) -> bool {
+    pub(in crate::runtime) fn reveals_active(&mut self) -> bool {
         let store = self.scene.store();
         let mut any = false;
-        for (id, st) in self.reveals.iter_mut() {
+        for (id, st) in self.motion.reveals.iter_mut() {
             let now = store.node_time(*id);
             st.step(RevealEvent::Tick { now });
             any |= st.fading() && store.node_time_scale(*id) > 0.0;

@@ -52,7 +52,7 @@ fn dvorak_paste_uses_the_logical_character_not_the_physical_period() {
         key: PhysicalKeyCode::Period, mods: logical.mods, pressed: true, repeat: false,
     }, Some(logical));
     rt.frame(0.0);
-    let target = rt.paste_request.take().expect("Dvorak Command-V requests the clipboard");
+    let target = rt.edit.paste_request.take().expect("Dvorak Command-V requests the clipboard");
     rt.paste_result(target, crate::ClipboardContent::new("Dictated reply"));
     rt.frame(0.0);
     assert_eq!(rt.state.edit.text, "Dictated reply");

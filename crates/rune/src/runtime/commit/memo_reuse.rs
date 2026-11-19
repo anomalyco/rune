@@ -5,56 +5,56 @@ use super::*;
 
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) struct InheritedFlatten {
-    pub(super) motion: Spring,
-    pub(super) in_row: RowLayout,
-    pub(super) parent_is_stack: bool,
-    pub(super) instant_changes: bool,
-    pub(super) inert: bool,
+    pub(in crate::runtime) motion: Spring,
+    pub(in crate::runtime) in_row: RowLayout,
+    pub(in crate::runtime) parent_is_stack: bool,
+    pub(in crate::runtime) instant_changes: bool,
+    pub(in crate::runtime) inert: bool,
     /// The parent's flow (`El::dir`).
-    pub(super) flow: crate::el::Flow,
-    pub(super) directed: bool,
-    pub(super) trace_namespace: Option<(&'static str, &'static str)>,
-    pub(super) scale_bits: u32,
+    pub(in crate::runtime) flow: crate::el::Flow,
+    pub(in crate::runtime) directed: bool,
+    pub(in crate::runtime) trace_namespace: Option<(&'static str, &'static str)>,
+    pub(in crate::runtime) scale_bits: u32,
     /// The window's foreground (`Cx::foreground`), which a memo's uncoloured text took.
-    pub(super) foreground: Option<Color>,
+    pub(in crate::runtime) foreground: Option<Color>,
 }
 
 pub(crate) struct FlattenedMemo {
-    pub(super) start: usize,
-    pub(super) len: usize,
-    pub(super) root_id: NodeId,
-    pub(super) last_id: NodeId,
-    pub(super) inherited: InheritedFlatten,
-    pub(super) hover_within: Option<Rc<(Anim, Anim)>>,
+    pub(in crate::runtime) start: usize,
+    pub(in crate::runtime) len: usize,
+    pub(in crate::runtime) root_id: NodeId,
+    pub(in crate::runtime) last_id: NodeId,
+    pub(in crate::runtime) inherited: InheritedFlatten,
+    pub(in crate::runtime) hover_within: Option<Rc<(Anim, Anim)>>,
 }
 
 pub(crate) struct PendingFlat {
-    pub(super) built_id: u64,
-    pub(super) start: usize,
-    pub(super) len: usize,
-    pub(super) inherited: InheritedFlatten,
-    pub(super) hover_within: Option<Rc<(Anim, Anim)>>,
+    pub(in crate::runtime) built_id: u64,
+    pub(in crate::runtime) start: usize,
+    pub(in crate::runtime) len: usize,
+    pub(in crate::runtime) inherited: InheritedFlatten,
+    pub(in crate::runtime) hover_within: Option<Rc<(Anim, Anim)>>,
 }
 
 #[derive(Clone, Copy)]
 pub(crate) struct ReusedSpan {
-    pub(super) new_start: usize,
-    pub(super) old_start: usize,
-    pub(super) len: usize,
-    pub(super) same_path: bool,
-    pub(super) moved: bool,
+    pub(in crate::runtime) new_start: usize,
+    pub(in crate::runtime) old_start: usize,
+    pub(in crate::runtime) len: usize,
+    pub(in crate::runtime) same_path: bool,
+    pub(in crate::runtime) moved: bool,
 }
 
 /// A contiguous sub-range of `nodes` (`new_start .. new_start + len`, from `old_start`) whose
 /// per-node `apply` diff is a guaranteed no-op.
 #[derive(Clone, Copy)]
 pub(crate) struct CleanApplySpan {
-    pub(super) new_start: usize,
-    pub(super) old_start: usize,
-    pub(super) len: usize,
+    pub(in crate::runtime) new_start: usize,
+    pub(in crate::runtime) old_start: usize,
+    pub(in crate::runtime) len: usize,
 }
 
-pub(super) fn is_in_clean_spans(spans: &[CleanApplySpan], i: usize) -> bool {
+pub(in crate::runtime) fn is_in_clean_spans(spans: &[CleanApplySpan], i: usize) -> bool {
     let idx = spans.partition_point(|s| s.new_start <= i);
     idx > 0 && {
         let s = &spans[idx - 1];
@@ -70,15 +70,15 @@ impl RuntimeCore {
             && self.scene.phase(new_n.id) == Some(PresencePhase::Present)
             && !old_n.group_fade
             && new_n.cold.get().is_none_or(|c| c.matched.is_none() && c.looping.is_none())
-            && (self.flying.is_empty() || !self.flying.iter().any(|f| f.0 == new_n.id))
-            && (self.aspect_snap.is_empty() || !self.aspect_snap.contains(&new_n.id))
+            && (self.motion.flying.is_empty() || !self.motion.flying.iter().any(|f| f.0 == new_n.id))
+            && (self.tree.aspect_snap.is_empty() || !self.tree.aspect_snap.contains(&new_n.id))
             && new_n.text.as_ref().is_none_or(|t| {
-                t.reveal < 0.0 || self.reveals.get(&new_n.id).is_some_and(|r| r.caught_up(t.content.len()))
+                t.reveal < 0.0 || self.motion.reveals.get(&new_n.id).is_some_and(|r| r.caught_up(t.content.len()))
             })
     }
 
     /// Fills `out` with the reused memo slices that can skip `apply`'s per-node diff loop.
-    pub(super) fn clean_apply_spans(
+    pub(in crate::runtime) fn clean_apply_spans(
         &self,
         nodes: &[Node],
         reused: &[ReusedSpan],
@@ -92,17 +92,17 @@ impl RuntimeCore {
         out.reserve(reused.len());
         let any_animating = self.scene.store().active_len() > 0;
         for span in reused {
-            if !span.same_path || span.len == 0 || span.old_start + span.len > self.nodes.len() || span.new_start + span.len > nodes.len() {
+            if !span.same_path || span.len == 0 || span.old_start + span.len > self.tree.nodes.len() || span.new_start + span.len > nodes.len() {
                 continue;
             }
             let r_new = &nodes[span.new_start];
-            let r_old = &self.nodes[span.old_start];
+            let r_old = &self.tree.nodes[span.old_start];
             if !self.scene.contains(r_new.id) || self.is_exiting(r_new.id) {
                 continue;
             }
             let mut scene_rect = r_new.local;
-            if !self.virtuals.is_empty()
-                && let Some(v) = r_new.parent.and_then(|p| self.virtuals.get(&nodes[p].path))
+            if !self.commit.virtuals.is_empty()
+                && let Some(v) = r_new.parent.and_then(|p| self.commit.virtuals.get(&nodes[p].path))
             {
                 scene_rect.y -= v.before;
             }
@@ -110,8 +110,8 @@ impl RuntimeCore {
                 || r_new.parent.is_none_or(|p| {
                     nodes.get(p + 1).is_none_or(|first_sib| {
                         let mut sr = first_sib.local;
-                        if !self.virtuals.is_empty()
-                            && let Some(v) = self.virtuals.get(&nodes[p].path)
+                        if !self.commit.virtuals.is_empty()
+                            && let Some(v) = self.commit.virtuals.get(&nodes[p].path)
                         {
                             sr.y -= v.before;
                         }
@@ -120,14 +120,14 @@ impl RuntimeCore {
                 });
             let root_clean = self.node_clean_for_apply(r_new, r_old, any_animating)
                 && parent_top_clean
-                && r_new.parent.map(|p| nodes[p].id) == r_old.parent.map(|p| self.nodes[p].id)
-                && (self.virtuals.is_empty() || !self.virtuals.contains_key(&r_new.path))
+                && r_new.parent.map(|p| nodes[p].id) == r_old.parent.map(|p| self.tree.nodes[p].id)
+                && (self.commit.virtuals.is_empty() || !self.commit.virtuals.contains_key(&r_new.path))
                 && self.scene.is_resting_at(r_new.id, scene_rect)
-                && (self.stacks.is_empty() || self.reorder_jump(nodes, span.new_start) == 0.0)
-                && (self.virtuals.is_empty()
-                    || !r_new.parent.and_then(|p| self.virtuals.get(&nodes[p].path)).is_some_and(crate::el::virtual_list::VirtualList::replaced_view));
+                && (self.motion.stacks.is_empty() || self.reorder_jump(nodes, span.new_start) == 0.0)
+                && (self.commit.virtuals.is_empty()
+                    || !r_new.parent.and_then(|p| self.commit.virtuals.get(&nodes[p].path)).is_some_and(crate::el::virtual_list::VirtualList::replaced_view));
 
-            if !root_clean && !self.flying.is_empty() {
+            if !root_clean && !self.motion.flying.is_empty() {
                 continue;
             }
             let offset = if root_clean { 0 } else { 1 };
@@ -135,7 +135,7 @@ impl RuntimeCore {
                 continue;
             }
             let interior_clean = (offset..span.len).all(|k| {
-                self.node_clean_for_apply(&nodes[span.new_start + k], &self.nodes[span.old_start + k], any_animating)
+                self.node_clean_for_apply(&nodes[span.new_start + k], &self.tree.nodes[span.old_start + k], any_animating)
             });
             if interior_clean {
                 let new_start = span.new_start + offset;
@@ -154,20 +154,20 @@ impl RuntimeCore {
     }
 }
 
-pub(super) struct MemoFlattenCtx<'a> {
-    pub(super) old_nodes: &'a mut [Node],
-    pub(super) old_present_len: usize,
-    pub(super) old_node_index: &'a HashMap<NodeId, usize>,
-    pub(super) old_cursor: usize,
-    pub(super) committing: bool,
-    pub(super) committed: &'a HashMap<u64, FlattenedMemo>,
-    pub(super) pending: Vec<PendingFlat>,
-    pub(super) reused: Vec<ReusedSpan>,
-    pub(super) taken_paths: Vec<(u32, u32)>,
-    pub(super) path_ids: &'a mut HashMap<String, NodeId>,
-    pub(super) next_id: &'a mut u64,
+pub(in crate::runtime) struct MemoFlattenCtx<'a> {
+    pub(in crate::runtime) old_nodes: &'a mut [Node],
+    pub(in crate::runtime) old_present_len: usize,
+    pub(in crate::runtime) old_node_index: &'a HashMap<NodeId, usize>,
+    pub(in crate::runtime) old_cursor: usize,
+    pub(in crate::runtime) committing: bool,
+    pub(in crate::runtime) committed: &'a HashMap<u64, FlattenedMemo>,
+    pub(in crate::runtime) pending: Vec<PendingFlat>,
+    pub(in crate::runtime) reused: Vec<ReusedSpan>,
+    pub(in crate::runtime) taken_paths: Vec<(u32, u32)>,
+    pub(in crate::runtime) path_ids: &'a mut HashMap<String, NodeId>,
+    pub(in crate::runtime) next_id: &'a mut u64,
     /// What text, icons and text fields without their own colour draw in (`Cx::foreground`).
-    pub(super) foreground: Option<Color>,
+    pub(in crate::runtime) foreground: Option<Color>,
 }
 
 fn opt_rc_eq<T: ?Sized>(a: &Option<Rc<T>>, b: &Option<Rc<T>>) -> bool {
@@ -237,7 +237,7 @@ fn same_visual_cold(a: &crate::el::VisualCold, b: &crate::el::VisualCold) -> boo
         && a.blur == *blur && a.rotate == *rotate && a.mark == *mark && a.mirror_rtl == *mirror_rtl && a.paint_order == *paint_order
 }
 
-pub(super) fn same_visual(a: &Visual, b: &Visual) -> bool {
+pub(in crate::runtime) fn same_visual(a: &Visual, b: &Visual) -> bool {
     let Visual { fill, radius, opacity, box_paint, cold } = b;
     a.fill == *fill && a.radius.to_bits() == radius.to_bits() && a.opacity == *opacity
         && (crate::cold::Cold::ptr_eq(&a.box_paint, box_paint) || *a.box_paint == **box_paint)
@@ -431,7 +431,7 @@ fn same_handlers(
 /// Exhaustively checks that `el` has not been mutated by builders after `Built::placeholder`
 /// returned it (apart from `key` and `virtual_mount`, which flattening handles explicitly).
 /// `expanded`: `el` is the placeholder after `El::expand_memo` copied the shared children in.
-pub(super) fn same_root_el(el: &El, built: &crate::memo::Built, expanded: bool) -> bool {
+pub(in crate::runtime) fn same_root_el(el: &El, built: &crate::memo::Built, expanded: bool) -> bool {
     let base = &built.root;
     let El {
         style,
@@ -474,7 +474,7 @@ pub(super) fn same_root_el(el: &El, built: &crate::memo::Built, expanded: bool) 
         && (crate::cold::Cold::ptr_eq(&el.cold, cold) || same_el_cold(&el.cold, cold))
 }
 
-pub(super) fn inherited_for(
+pub(in crate::runtime) fn inherited_for(
     parent: Option<usize>,
     nodes: &[Node],
     motion: Spring,
@@ -520,7 +520,7 @@ fn path_matches(old_path: &str, parent_path: &str, key: Option<&str>, index: usi
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn try_reuse_memo(
+pub(in crate::runtime) fn try_reuse_memo(
     el: &El,
     parent: Option<usize>,
     parent_path: &str,
@@ -687,7 +687,7 @@ pub(super) fn try_reuse_memo(
 
 /// Puts `moved` slices and individually taken paths back into `old_nodes` with their pre-pass
 /// geometry and flags before a virtual-window retry or a layout-read, focus or caret re-measure.
-pub(super) fn restore_moved_nodes(
+pub(in crate::runtime) fn restore_moved_nodes(
     old_nodes: &mut [Node],
     nodes: &mut [Node],
     reused: &[ReusedSpan],

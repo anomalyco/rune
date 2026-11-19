@@ -2,12 +2,11 @@ use std::borrow::Cow;
 use crate::el::ElFlags;
 
 use super::*;
-mod device;
 
 /// An `aspect_fit` element's first layout: it takes the free space along its parent's main axis
 /// and the whole cross side, within its max sizes, as the room its fitted box must fit. Its
 /// content never sizes the room: with no max along the main axis it starts from 0 and grows.
-pub(super) fn fit_room(own: &CompactStyle, parent_row: bool) -> CompactStyle {
+pub(in crate::runtime) fn fit_room(own: &CompactStyle, parent_row: bool) -> CompactStyle {
     let raw = own.to_style();
     let zero = |d: LengthPercentageAuto| if d.is_auto() { length(0.0) } else { d };
     let main_max = if parent_row { raw.max_size.width } else { raw.max_size.height };
@@ -25,7 +24,7 @@ pub(super) fn fit_room(own: &CompactStyle, parent_row: bool) -> CompactStyle {
 
 /// The largest box at `ratio` inside `room`, as the fixed size an `aspect_fit` element lays
 /// out at once its room is known.
-pub(super) fn fitted(ratio: f32, own: &CompactStyle, room: Size<f32>) -> CompactStyle {
+pub(in crate::runtime) fn fitted(ratio: f32, own: &CompactStyle, room: Size<f32>) -> CompactStyle {
     let w = room.width.min(room.height * ratio).max(0.0);
     CompactStyle::from_style(Style {
         size: Size { width: length(w), height: length(w / ratio) },
@@ -38,7 +37,7 @@ pub(super) fn fitted(ratio: f32, own: &CompactStyle, room: Size<f32>) -> Compact
 }
 
 /// Width over height of the image in `pixels`, or 0 while it's empty.
-pub(super) fn pixel_ratio(pixels: &crate::Pixels) -> f32 {
+pub(in crate::runtime) fn pixel_ratio(pixels: &crate::Pixels) -> f32 {
     let (w, h) = pixels.size();
     if w > 0 && h > 0 { w as f32 / h as f32 } else { 0.0 }
 }
@@ -85,7 +84,7 @@ pub(crate) fn in_scope(path: &str, scope: Option<&str>) -> bool {
     scope.is_none_or(|s| path.split('/').any(|seg| seg == s))
 }
 
-pub(super) fn node_path(parent: &str, key: Option<&str>, index: usize) -> String {
+pub(in crate::runtime) fn node_path(parent: &str, key: Option<&str>, index: usize) -> String {
     match (parent.is_empty(), key) {
         (true, Some(key)) => key.to_owned(),
         (true, None) => format!("#{index}"),
@@ -601,7 +600,7 @@ impl<'e> FlattenEl for &'e El {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn flatten_with_buf(
+pub(in crate::runtime) fn flatten_with_buf(
     el: El, parent: Option<usize>, path_buf: &mut String, index: usize, motion: Spring,
     in_row: RowLayout,
     // The parent lays its children out in a row (its main axis is horizontal).
@@ -783,4 +782,5 @@ fn flatten_node<E: FlattenEl>(
 }
 
 #[cfg(test)]
+#[path = "flatten_tests.rs"]
 mod flatten_tests;

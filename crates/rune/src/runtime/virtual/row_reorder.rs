@@ -65,7 +65,7 @@ pub(super) struct LiveRow {
 impl RuntimeCore {
     pub(super) fn live_row(&self, row: &Node, reorder: &Reorder, ink: bool, joins: bool, list: &crate::el::virtual_list::VirtualList, range: &std::ops::Range<usize>) -> Option<(NodeId, LiveRow)> {
         let jump = reorder.jump(row.id);
-        let shift = (jump != 0.0 || ink && self.grows.get(&row.id).is_some_and(|g| g.moving())).then_some(jump);
+        let shift = (jump != 0.0 || ink && self.motion.grows.get(&row.id).is_some_and(|g| g.moving())).then_some(jump);
         if shift.is_none() && !joins { return None; }
         let key = row.key.as_deref()?;
         (range.contains(&list.index_of(key)?) && list.drawn.iter().any(|old| old == key)).then_some((row.id, LiveRow { ink, shift, joins }))
@@ -77,9 +77,9 @@ impl RuntimeCore {
     pub(super) fn live_tail(&self, nodes: &[Node], i: usize, tx: &Tx, stack: &mut Stack) -> Option<std::ops::Range<usize>> {
         let node = &nodes[i];
         if tx.commit != Commit::Unprompted || node.instant_changes || !tx.live_growth.iter().any(|(key, _)| node.named(key)) { return None; }
-        let list = self.virtuals.get(&node.path)?;
-        let scroll = self.path_ids.get(&list.scroll_path)?;
-        if list.nested || list.replaced_view() || list.drawn.is_empty() || !self.scrolls.get(scroll)?.pinned() { return None; }
+        let list = self.commit.virtuals.get(&node.path)?;
+        let scroll = self.tree.path_ids.get(&list.scroll_path)?;
+        if list.nested || list.replaced_view() || list.drawn.is_empty() || !self.scroll.scrolls.get(scroll)?.pinned() { return None; }
         // The list's own tail is the viewport's tail only if nothing extends below it.
         // A toolbar *after* the list may cover even its last overscanned rows.
         let parent = node.parent?;
@@ -96,7 +96,7 @@ impl RuntimeCore {
 
     /// How far node `i`, a growth row, jumped because its stack's rows changed order this commit.
     pub(super) fn reorder_jump(&self, nodes: &[Node], i: usize) -> f32 {
-        nodes[i].parent.and_then(|p| self.stacks.get(&nodes[p].id)).map_or(0.0, |s| s.reorder.jump(nodes[i].id))
+        nodes[i].parent.and_then(|p| self.motion.stacks.get(&nodes[p].id)).map_or(0.0, |s| s.reorder.jump(nodes[i].id))
     }
 
     /// Starts row `id`'s offset `jump` points down from where it shows, so it stays where it was

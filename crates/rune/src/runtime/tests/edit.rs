@@ -106,7 +106,7 @@ fn spans_on_text_input_hold_through_ime_and_undo() {
     // span on `edit.text` shifts automatically to 3..6 in the rendered TextSpec!
     rt.ime(Ime::Preedit("あ".into(), Some((0, 3)), Vec::new()));
     rt.frame(0.0);
-    let spec_spans = &rt.nodes.iter().find(|n| n.key.as_deref() == Some("ed")).unwrap().text.as_ref().unwrap().spans;
+    let spec_spans = &rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("ed")).unwrap().text.as_ref().unwrap().spans;
     assert_eq!(spec_spans.len(), 1);
     assert_eq!((spec_spans[0].start, spec_spans[0].end), (3, 6));
 
@@ -116,7 +116,7 @@ fn spans_on_text_input_hold_through_ime_and_undo() {
     rt.key(KeyEvent { key: Key::Command('z'), mods: Mods { cmd: true, ..Mods::default() } });
     rt.frame(0.0);
     assert_eq!(rt.state.edit.text, "let x = 1;");
-    let spec_spans = &rt.nodes.iter().find(|n| n.key.as_deref() == Some("ed")).unwrap().text.as_ref().unwrap().spans;
+    let spec_spans = &rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("ed")).unwrap().text.as_ref().unwrap().spans;
     assert_eq!(spec_spans.len(), 1);
     assert_eq!((spec_spans[0].start, spec_spans[0].end), (0, 3));
 }
@@ -197,7 +197,7 @@ fn plain_field_leaves_format_chords_to_the_app() {
     assert_eq!(rt.state.keys, [Key::Command('b'), Key::Command('i'), Key::Command('u')]);
     assert!(rt.state.f.marks().is_empty());
     // A field with no formatting lays out as plain text: no spans, blocks or soft breaks.
-    let n = rt.nodes.iter().find(|n| n.key.as_deref() == Some("f")).unwrap();
+    let n = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("f")).unwrap();
     let t = n.text.as_ref().unwrap();
     assert!(t.spans.is_empty() && t.cold.blocks.is_empty() && t.cold.soft_breaks.is_empty() && t.cold.strikes.is_empty());
 }

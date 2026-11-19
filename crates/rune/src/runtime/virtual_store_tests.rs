@@ -62,7 +62,7 @@ fn stored_rows_drop_before_the_row_builders_run() {
     let mut rt = Runtime::new(List::new(), list, (400.0, 200.0), Env::new(true, 2.0));
     rt.frame(0.0);
     while rt.frame(1.0 / 120.0) {}
-    let kept = &rt.virtuals["#0/scroll/stack"].selection.stored;
+    let kept = &rt.commit.virtuals["#0/scroll/stack"].selection.stored;
     assert!(kept.contains_key(&HELD_ROW), "a row below the viewport is kept: {:?}", kept.keys().collect::<Vec<_>>());
     assert_eq!(Rc::strong_count(&rt.state.held), 2, "the kept row holds the resource");
     rt.update(|s, _| s.indexed = true);

@@ -102,7 +102,7 @@ fn rect_of(rt: &Runtime<Form>, key: &str) -> [f32; 4] {
 
 /// Window point `(x, y)` at `frac` (`0.0..1.0`) across the glyph cluster at `byte` in `key`.
 fn point_in_cluster(rt: &Runtime<Form>, key: &str, byte: usize, frac: f32) -> (f32, f32) {
-    let n = rt.nodes.iter().find(|n| n.key.as_deref() == Some(key)).unwrap();
+    let n = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some(key)).unwrap();
     let piece = n.text_layout.as_ref().unwrap().view().piece_at(byte);
     let (l, byte) = (piece.layout, piece.shaped(byte));
     let s = rt.env.scale;
@@ -140,7 +140,7 @@ fn double_and_triple_click_select_word_and_line_in_single_line_input() {
     rt.pointer_up(x, y);
     rt.frame(1.0 / 60.0);
     assert!(rt.state.single.focused);
-    assert!(!rt.focus.keyboard(), "pointer focus does not turn on keyboard focus ring");
+    assert!(!rt.kbd.focus.keyboard(), "pointer focus does not turn on keyboard focus ring");
     assert_eq!(rt.state.single.anchor, rt.state.single.focus);
     assert!(rt.state.single.focus > 0 && rt.state.single.focus < 4);
 
@@ -374,7 +374,7 @@ fn right_half_of_char_and_pill_trailing_padding_select_the_hit_word_and_pill() {
     assert_eq!(rt.state.single.selected(), "make");
 
     // In "pills" ("@maya hello" where 0..5 is a pill), find the trailing inline box of "@maya".
-    let n = rt.nodes.iter().find(|n| n.key.as_deref() == Some("pills")).unwrap();
+    let n = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("pills")).unwrap();
     let l = n.text_layout.as_ref().and_then(crate::text::TextLayout::single).unwrap();
     let s = rt.env.scale;
     let line = l.get(0).unwrap();
@@ -435,13 +435,13 @@ fn focus_loss_and_input_removal_clear_active_drag_and_drop_queued_drag_steps() {
     rt.physical_input(PhysicalInput::Modifiers(Mods::default()));
     let after_shift = (rt.state.single.anchor, rt.state.single.focus);
     assert_eq!(after_shift.0, anchor);
-    assert!(rt.input_click.dragging_path().is_some());
+    assert!(rt.edit.input_click.dragging_path().is_some());
 
     // Queue a drag move, then lose focus before the frame drains the queue: the queued drag step is dropped.
     rt.pointer_move(p_smaller.0, p_smaller.1);
     rt. set_focus(None, false);
     rt.frame(1.0 / 60.0);
-    assert!(rt.input_click.dragging_path().is_none());
+    assert!(rt.edit.input_click.dragging_path().is_none());
     assert_eq!((rt.state.single.anchor, rt.state.single.focus), after_shift);
     rt.pointer_up(p_smaller.0, p_smaller.1);
     rt.frame(1.0 / 60.0);
@@ -460,7 +460,7 @@ fn focus_loss_and_input_removal_clear_active_drag_and_drop_queued_drag_steps() {
         tx.instant();
     });
     rt.frame(1.0 / 60.0);
-    assert!(rt.input_click.dragging_path().is_none(), "unmounting the dragged input clears dragging");
+    assert!(rt.edit.input_click.dragging_path().is_none(), "unmounting the dragged input clears dragging");
 
     rt.update(|s, tx| {
         s.show_single = true;
@@ -585,8 +585,8 @@ fn clicking_centered_end_aligned_rtl_and_multiline_inputs_hits_drawn_glyphs() {
 
     // Drawn window coordinates of byte `byte` inside field `key`, computed by the canonical paint rule.
     let drawn_byte_pt = |rt: &Runtime<AlignForm>, key: &str, byte: usize| -> (f32, f32) {
-        let i = rt.nodes.iter().position(|n| n.key.as_deref() == Some(key)).unwrap();
-        let n = &rt.nodes[i];
+        let i = rt.tree.nodes.iter().position(|n| n.key.as_deref() == Some(key)).unwrap();
+        let n = &rt.tree.nodes[i];
         let spec = n.text.as_ref().unwrap();
         let flow = n.text_layout.as_ref().unwrap().view();
         let s = rt.env.scale;
@@ -631,8 +631,8 @@ fn clicking_centered_end_aligned_rtl_and_multiline_inputs_hits_drawn_glyphs() {
     assert_eq!(rt.state.rtl.focus, rtl_byte, "RTL single-line click at drawn byte {rtl_byte}");
 
     // Multi-line input ignores any single-line `input_scroll` entry for its path.
-    let multi_path = rt.nodes.iter().find(|n| n.key.as_deref() == Some("multi")).unwrap().path.clone();
-    rt.input_scroll.insert(multi_path, 150.0);
+    let multi_path = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("multi")).unwrap().path.clone();
+    rt.edit.input_scroll.insert(multi_path, 150.0);
     let pt = drawn_byte_pt(&rt, "multi", 2);
     rt.pointer_move(pt.0, pt.1);
     rt.pointer_down(pt.0, pt.1);

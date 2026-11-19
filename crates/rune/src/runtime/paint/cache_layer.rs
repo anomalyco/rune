@@ -8,19 +8,19 @@ use crate::machine::Effects;
 mod tests;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) enum ScaleSettle {
+pub(in crate::runtime) enum ScaleSettle {
     Still(f32),
     Settling { scale: f32, since: f64 },
 }
 
 #[derive(Clone, Copy)]
-pub(super) struct AnotherFrame;
+pub(in crate::runtime) struct AnotherFrame;
 
 impl ScaleSettle {
     /// Paint samples the animation clock, not a wall-clock deadline. Continue to
     /// request frames during the interval, including when the clock is slowed.
     #[inline]
-    pub(super) fn step(&mut self, scale: f32, now: f64, reset: bool, epsilon: f32, poll: bool) -> Effects<AnotherFrame> {
+    pub(in crate::runtime) fn step(&mut self, scale: f32, now: f64, reset: bool, epsilon: f32, poll: bool) -> Effects<AnotherFrame> {
         let (seen, since) = match *self {
             Self::Still(seen) => (seen, f64::NEG_INFINITY),
             Self::Settling { scale, since } => (scale, since),
@@ -44,48 +44,48 @@ impl ScaleSettle {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(super) enum RasterPhase {
+pub(in crate::runtime) enum RasterPhase {
     Live,
     Raster { paint_hash: u64 },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) enum RasterPass {
+pub(in crate::runtime) enum RasterPass {
     Paint { glyph_start: usize },
     Elide { glyphs: usize },
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct NodeCache {
-    pub(super) signature: u64,
-    pub(super) raster_scale: f32,
-    pub(super) scale: ScaleSettle,
-    pub(super) env_scale: f32,
-    pub(super) phase: RasterPhase,
-    pub(super) rel_bounds: [f32; 4],
-    pub(super) glyphs: usize,
-    pub(super) commit_gen: u64,
+pub(in crate::runtime) struct NodeCache {
+    pub(in crate::runtime) signature: u64,
+    pub(in crate::runtime) raster_scale: f32,
+    pub(in crate::runtime) scale: ScaleSettle,
+    pub(in crate::runtime) env_scale: f32,
+    pub(in crate::runtime) phase: RasterPhase,
+    pub(in crate::runtime) rel_bounds: [f32; 4],
+    pub(in crate::runtime) glyphs: usize,
+    pub(in crate::runtime) commit_gen: u64,
 }
 
 #[derive(Clone, Copy)]
-pub(super) struct ActiveCache {
-    pub(super) node_index: usize,
-    pub(super) node_id: NodeId,
-    pub(super) instance_start: usize,
-    pub(super) origin: [f32; 2],
-    pub(super) size: [f32; 2],
-    pub(super) cur_scale: f32,
-    pub(super) scale: ScaleSettle,
-    pub(super) env_scale: f32,
+pub(in crate::runtime) struct ActiveCache {
+    pub(in crate::runtime) node_index: usize,
+    pub(in crate::runtime) node_id: NodeId,
+    pub(in crate::runtime) instance_start: usize,
+    pub(in crate::runtime) origin: [f32; 2],
+    pub(in crate::runtime) size: [f32; 2],
+    pub(in crate::runtime) cur_scale: f32,
+    pub(in crate::runtime) scale: ScaleSettle,
+    pub(in crate::runtime) env_scale: f32,
     /// Everything outside commits that paints the subtree: hover, press, links, an outside
     /// hover group and the window-wide state in `build`'s paint hash.
-    pub(super) paint_hash: u64,
-    pub(super) pass: RasterPass,
+    pub(in crate::runtime) paint_hash: u64,
+    pub(in crate::runtime) pass: RasterPass,
 }
 
 impl NodeCache {
     #[inline]
-    pub(super) fn committed_scale(&mut self, scale: f32, now: f64) -> Option<AnotherFrame> {
+    pub(in crate::runtime) fn committed_scale(&mut self, scale: f32, now: f64) -> Option<AnotherFrame> {
         if (scale - self.raster_scale).abs() > 1e-4
             && matches!(self.scale.step(scale, now, false, 1e-4, true), Effects::One(_))
         {
@@ -95,7 +95,7 @@ impl NodeCache {
     }
 
     #[inline]
-    pub(super) fn open(&self, eff_scale: f32, s: f32, settled: bool, now: f64, commit_gen: u64,
+    pub(in crate::runtime) fn open(&self, eff_scale: f32, s: f32, settled: bool, now: f64, commit_gen: u64,
         is_resident: bool, scale_motion: ScaleMotion, paint_hash: u64, check: impl FnOnce() -> bool,
         glyph_start: usize) -> (ScaleSettle, RasterPass, Option<AnotherFrame>) {
         let env_same = (s - self.env_scale).abs() <= 1e-4 && !settled;
@@ -119,36 +119,36 @@ impl NodeCache {
 }
 
 impl RuntimeCore {
-    pub(super) fn prepare_cache_layers(&mut self, sel_ranges: &[(usize, usize, usize)], mark_ranges: &[(usize, usize, usize)]) -> u64 {
-        let (s, n_nodes) = (self.env.scale, self.nodes.len());
-        self.cache_live_scratch.clear();
-        self.cache_check_scratch.clear();
-        self.cache_paint_scratch.clear();
-        self.cache_inside_scratch.clear();
+    pub(in crate::runtime) fn prepare_cache_layers(&mut self, sel_ranges: &[(usize, usize, usize)], mark_ranges: &[(usize, usize, usize)]) -> u64 {
+        let (s, n_nodes) = (self.env.scale, self.tree.nodes.len());
+        self.paint.cache_live_scratch.clear();
+        self.paint.cache_check_scratch.clear();
+        self.paint.cache_paint_scratch.clear();
+        self.paint.cache_inside_scratch.clear();
         let mut paint_state_hash = 0u64;
-        if self.has_cache {
+        if self.tree.has_cache {
             use std::hash::{Hash, Hasher};
             let mut h = rune_motion::Fx::default();
-            self.hovered.hash(&mut h);
-            self.hover_within.hash(&mut h);
-            self.focus.path().hash(&mut h);
-            self.focus.keyboard().hash(&mut h);
-            self.focus.hovered().hash(&mut h);
-            self.defaults.force_focus_rings.hash(&mut h);
-            if let Some(ring) = self.defaults.focus_ring {
+            self.pointer.hovered.hash(&mut h);
+            self.pointer.hover_within.hash(&mut h);
+            self.kbd.focus.path().hash(&mut h);
+            self.kbd.focus.keyboard().hash(&mut h);
+            self.kbd.focus.hovered().hash(&mut h);
+            self.commit.defaults.force_focus_rings.hash(&mut h);
+            if let Some(ring) = self.commit.defaults.focus_ring {
                 let c = ring.color;
                 [ring.width, ring.offset, c.r, c.g, c.b, c.a].map(f32::to_bits).hash(&mut h);
             }
-            (self.srgb_blend, self.text.smoothing, self.text.families(), crate::text::icon::swap_id()).hash(&mut h);
+            (self.paint.srgb_blend, self.text.smoothing, self.text.families(), crate::text::icon::swap_id()).hash(&mut h);
             h.write_u32(s.to_bits());
             sel_ranges.hash(&mut h);
             // A selection's colours follow the window's focus (`El::selection_style`).
             if !sel_ranges.is_empty() {
-                self.window_focused.hash(&mut h);
+                self.host.window_focused.hash(&mut h);
             }
             mark_ranges.hash(&mut h);
             let mut scroll_mix = 0u64;
-            for (&id, st) in &self.scrolls {
+            for (&id, st) in &self.scroll.scrolls {
                 let mut sh = rune_motion::Fx::default();
                 sh.write_u64(id.0);
                 sh.write_u64(st.offset.to_bits());
@@ -157,7 +157,7 @@ impl RuntimeCore {
                 sh.write_u32(st.slack.height().to_bits());
                 scroll_mix = scroll_mix.wrapping_add(sh.finish());
             }
-            for (path, &off) in &self.input_scroll {
+            for (path, &off) in &self.edit.input_scroll {
                 let mut sh = rune_motion::Fx::default();
                 path.hash(&mut sh);
                 sh.write_u32(off.to_bits());
@@ -166,43 +166,43 @@ impl RuntimeCore {
             h.write_u64(scroll_mix);
             paint_state_hash = h.finish();
 
-            self.cache_live_scratch.resize(n_nodes, false);
-            self.cache_check_scratch.resize(n_nodes, false);
-            self.cache_paint_scratch.resize(n_nodes, 0);
+            self.paint.cache_live_scratch.resize(n_nodes, false);
+            self.paint.cache_check_scratch.resize(n_nodes, false);
+            self.paint.cache_paint_scratch.resize(n_nodes, 0);
             // Only cached subtrees read these, so skip everything outside them.
-            self.cache_inside_scratch.resize(n_nodes, false);
+            self.paint.cache_inside_scratch.resize(n_nodes, false);
             for i in 0..n_nodes {
-                let n = &self.nodes[i];
-                self.cache_inside_scratch[i] = n.vis_flags.cache() || n.parent.is_some_and(|p| self.cache_inside_scratch[p]);
+                let n = &self.tree.nodes[i];
+                self.paint.cache_inside_scratch[i] = n.vis_flags.cache() || n.parent.is_some_and(|p| self.paint.cache_inside_scratch[p]);
             }
             let store = self.scene.store();
             for i in (0..n_nodes).rev() {
-                if !self.cache_inside_scratch[i] { continue; }
-                let n = &self.nodes[i];
+                if !self.paint.cache_inside_scratch[i] { continue; }
+                let n = &self.tree.nodes[i];
                 let live = store.is_node_animating(n.id)
                     // Sticky and anchored descendants move within a raster without motion tracks.
                     || self.sticky_of(i).is_some()
                     || n.above.is_some()
-                    || (!self.reduced_motion && self.loops.get(&n.id).is_some_and(|l| l.active(store.node_time(n.id))))
-                    || self.grows.get(&n.id).is_some_and(|g| g.moving())
-                    || self.scrolls.get(&n.id).is_some_and(|st| st.slack.height() > 0.0)
-                    || self.reveals.get(&n.id).is_some_and(|r| r.fading())
+                    || (!self.reduced_motion && self.motion.loops.get(&n.id).is_some_and(|l| l.active(store.node_time(n.id))))
+                    || self.motion.grows.get(&n.id).is_some_and(|g| g.moving())
+                    || self.scroll.scrolls.get(&n.id).is_some_and(|st| st.slack.height() > 0.0)
+                    || self.motion.reveals.get(&n.id).is_some_and(|r| r.fading())
                     || self.subtree_exiting(i)
-                    || (!self.flights.is_empty() && self.flights.iter().any(|f| f.departs(&n.path, n.key.as_deref()) || f.lands(&n.path, n.key.as_deref())))
+                    || (!self.motion.flights.is_empty() && self.motion.flights.iter().any(|f| f.departs(&n.path, n.key.as_deref()) || f.lands(&n.path, n.key.as_deref())))
                     || n.vis.effect.is_some()
                     // A publication can replace texels without moving the atlas slot, so
                     // identical image primitives do not imply identical raster contents.
                     || n.vis.pixels.is_some()
                     || n.vis.surface.is_some()
-                    || (n.material.is_some() && self.native_materials)
+                    || (n.material.is_some() && self.paint.native_materials)
                     // Never retain a raster of a secret, even when the field is unfocused.
                     || n.text.as_ref().is_some_and(|t| t.redacted)
                     || n.input.as_ref().is_some_and(|inp| inp.edit.focused || inp.edit.is_secure())
                     || n.text.as_ref().is_some_and(|t| t.cold.advance_in.is_some());
                 let check = n.text.as_ref().is_some_and(|t| t.cold.live.is_some())
                     || n.live.iter().any(|b| !n.vis_flags.cache() || !matches!(b.property, crate::live::Property::Offset | crate::live::Property::Scale));
-                self.cache_live_scratch[i] |= live;
-                self.cache_check_scratch[i] |= check;
+                self.paint.cache_live_scratch[i] |= live;
+                self.paint.cache_check_scratch[i] |= check;
                 // Hover, press and link paint land without a commit (an instant track or a
                 // pointer move inside one text), so hash what this frame samples.
                 let links = n.text.as_ref().is_some_and(|t| !t.cold.links.is_empty());
@@ -213,20 +213,20 @@ impl RuntimeCore {
                         ph.write_u32(self.scene.get(n.id, prop).unwrap_or(0.0).to_bits());
                     }
                     if links { self.link_states(i).hash(&mut ph); }
-                    self.cache_paint_scratch[i] = self.cache_paint_scratch[i].wrapping_add(ph.finish());
+                    self.paint.cache_paint_scratch[i] = self.paint.cache_paint_scratch[i].wrapping_add(ph.finish());
                 }
                 if let Some(p) = n.parent {
-                    self.cache_paint_scratch[p] = self.cache_paint_scratch[p].wrapping_add(self.cache_paint_scratch[i]);
+                    self.paint.cache_paint_scratch[p] = self.paint.cache_paint_scratch[p].wrapping_add(self.paint.cache_paint_scratch[i]);
                     // A lifted descendant draws outside this raster; don't elide its inputs.
-                    self.cache_live_scratch[p] |= self.cache_live_scratch[i] || n.vis_flags.raise();
-                    self.cache_check_scratch[p] |= self.cache_check_scratch[i] || !n.live.is_empty();
+                    self.paint.cache_live_scratch[p] |= self.paint.cache_live_scratch[i] || n.vis_flags.raise();
+                    self.paint.cache_check_scratch[p] |= self.paint.cache_check_scratch[i] || !n.live.is_empty();
                 }
             }
         }
         paint_state_hash
     }
 
-    pub(super) fn close_cached_layer(
+    pub(in crate::runtime) fn close_cached_layer(
         &mut self,
         ac: ActiveCache,
         start: usize,
@@ -238,7 +238,7 @@ impl RuntimeCore {
         let glyph_start = match ac.pass {
             RasterPass::Paint { glyph_start } => glyph_start,
             RasterPass::Elide { glyphs } => {
-                let entry = self.node_caches.get_mut(&ac.node_id).expect("elided cache entry");
+                let entry = self.paint.node_caches.get_mut(&ac.node_id).expect("elided cache entry");
                 entry.scale = ac.scale;
                 let k = if (ac.cur_scale - entry.raster_scale).abs() <= 1e-4 {
                     1.0
@@ -270,11 +270,11 @@ impl RuntimeCore {
         h.write_u64(ac.node_id.0);
         // Blur is baked into the target, unlike opacity and clipping on the composite.
         h.write_u32(self.instances[start].params[2].to_bits());
-        h.write_u8(self.srgb_blend as u8 | (self.text.smoothing as u8) << 1);
+        h.write_u8(self.paint.srgb_blend as u8 | (self.text.smoothing as u8) << 1);
         h.write_u32(ac.cur_scale.to_bits());
         h.write_u32(ac.size[0].to_bits());
         h.write_u32(ac.size[1].to_bits());
-        if let Some(key) = self.nodes[ac.node_index].vis.cache_key {
+        if let Some(key) = self.tree.nodes[ac.node_index].vis.cache_key {
             h.write_u8(1);
             h.write_u64(key);
         } else {
@@ -373,7 +373,7 @@ impl RuntimeCore {
         let rel_bounds = [b0 - ac.origin[0], b1 - ac.origin[1], b2 - ac.origin[0], b3 - ac.origin[1]];
         let glyphs = *glyph_count - glyph_start;
         let is_resident = self.text.atlas.resident_caches.get(&ac.node_id.0) == Some(&sig);
-        self.node_caches.insert(ac.node_id, NodeCache {
+        self.paint.node_caches.insert(ac.node_id, NodeCache {
             signature: sig,
             raster_scale: ac.cur_scale,
             scale: ac.scale,
@@ -381,7 +381,7 @@ impl RuntimeCore {
             phase: RasterPhase::Raster { paint_hash: ac.paint_hash },
             rel_bounds,
             glyphs,
-            commit_gen: self.commit_gen,
+            commit_gen: self.commit.commit_gen,
         });
         if is_resident && self.surfaces.len() == surface_start {
             self.instances.truncate(start + 1);
@@ -405,7 +405,7 @@ impl RuntimeCore {
     }
 
     fn evict_cache(&mut self, id: NodeId) {
-        self.node_caches.remove(&id);
+        self.paint.node_caches.remove(&id);
         self.text.atlas.resident_caches.remove(&id.0);
     }
 }

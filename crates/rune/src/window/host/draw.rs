@@ -222,7 +222,7 @@ impl Host {
             }
         }
         #[cfg(target_os = "macos")]
-        { self.app.rt_mut().native_materials = l.native.materials.native(); }
+        { self.app.rt_mut().paint.native_materials = l.native.materials.native(); }
         if self.frame_reports.wanted() { self.frame_reports.set_refresh(display_hz(l)); }
         // Only a timer woke the resting window: build the frame first, and take no drawable
         // when it draws what's on screen.
@@ -230,7 +230,7 @@ impl Host {
         let fp_entry = crate::frame::live_log::on().then(crate::frame::live_log::Stamp::now);
         let quiet = l.timer_frame.take_quiet() && !hidden && !live_resize && l.presented.is_some() && !self.app.compositor_draws_own()
             && self.trace.is_none() && self.args.trace.is_none() && self.app.rt().live_visible()
-            && self.app.rt().window_frame.is_none() && !FrameMove::moving(&self.frame_move);
+            && self.app.rt().host.window_frame.is_none() && !FrameMove::moving(&self.frame_move);
         #[cfg(target_os = "macos")]
         let quiet = quiet && shown.is_none() && !l.native.materials.native();
         // Only the window's loops asked for this frame (`LoopFrame`): a step of them may stand
@@ -245,13 +245,13 @@ impl Host {
         if loop_why.is_none() && !only_loops { loop_why = Some("an app wake on its way"); }
         #[cfg(target_os = "windows")]
         let only_loops = only_loops && !hidden && !live_resize && self.trace.is_none() && self.args.trace.is_none()
-            && self.app.rt().window_frame.is_none() && !FrameMove::moving(&self.frame_move) && !self.app.compositor_animating();
+            && self.app.rt().host.window_frame.is_none() && !FrameMove::moving(&self.frame_move) && !self.app.compositor_animating();
         #[cfg(not(target_os = "windows"))]
         let only_loops = only_loops && false;
         let mut looped: Option<Vec<u32>> = None;
         let built = if quiet {
             let now = Instant::now();
-            self.app.rt_mut().window_resting = true;
+            self.app.rt_mut().host.window_resting = true;
             let at = target.unwrap_or(now);
             let step = if only_loops { loop_step(&mut self.clock, self.app.rt_mut(), at) } else { Err("") };
             let (animating, dt) = match step {
@@ -322,14 +322,14 @@ impl Host {
             trace.all = self.args.trace_all;
             #[cfg(target_os = "macos")]
             if let Some(log) = self.present_log.clone() && l.native.present.is_some() { trace.record_presents(log, now); }
-            trace.record_surface(self.meter.shared(), rt.app_stats);
+            trace.record_surface(self.meter.shared(), rt.host.app_stats);
             self.trace = Some(trace);
             self.trace_start = Some(now);
             rt.scene.store_mut().audit_retargets(true);
         }
         let frame_time = target.unwrap_or(now);
         let presents_at = target;
-        self.app.rt_mut().window_resting = !FrameMove::moving(&self.frame_move) && self.app.rt().window_frame.is_none();
+        self.app.rt_mut().host.window_resting = !FrameMove::moving(&self.frame_move) && self.app.rt().host.window_frame.is_none();
         let target_ms = target.zip(self.trace_start).map(|(target, start)| crate::frame::present_time::ms_since(start, target));
         crate::marks::mark_once(&FIRST_BUILD, "frame.first.build");
         if hidden && l.first_frame.settles() { self.app.rt_mut().settle_all(); }
@@ -359,10 +359,10 @@ impl Host {
             return self.missed_frame(Missed::Timeout, true);
         }
         #[cfg(target_os = "macos")]
-        let frame = if l.surface.as_ref().is_some_and(|surface| l.native.materials.update(self.app.rt().transparent, !self.app.rt().materials.is_empty(), &l.window, surface)) {
+        let frame = if l.surface.as_ref().is_some_and(|surface| l.native.materials.update(self.app.rt().transparent, !self.app.rt().paint.materials.is_empty(), &l.window, surface)) {
             // This drawable presents without the views: build again natively into a new one.
             drop(frame);
-            self.app.rt_mut().native_materials = true;
+            self.app.rt_mut().paint.native_materials = true;
             animating |= self.app.frame(0.0);
             let Some(surface) = l.surface.as_ref() else { return };
             let frame = match acquire(surface, gpu, &l.config, l.surface_ok, 1, &mut self.meter) {
@@ -526,7 +526,7 @@ impl Host {
         #[cfg(target_os = "macos")]
         {
             let rt = self.app.rt();
-            l.native.materials.present(&rt.materials, rt.env.scale, || gpu.queue.present(frame));
+            l.native.materials.present(&rt.paint.materials, rt.env.scale, || gpu.queue.present(frame));
         }
         #[cfg(target_os = "windows")]
         if let (Some(rects), Some(surface)) = (&present_rect, l.surface.as_ref())
@@ -560,8 +560,8 @@ impl Host {
                 let rt = self.app.rt_mut();
                 Some(crate::frame::live_log::Frame {
                     entry: fp_entry.unwrap_or(start), start, acquired, built, uploaded, encoded, submitted, presented: crate::frame::live_log::Stamp::now(),
-                    phases: crate::frame::profile::take(), nodes: rt.nodes.len(), shaped: rt.stats.shaped, instances: rt.instances.len(),
-                    animating, why: std::mem::take(&mut rt.commit_why), next: 0, poll_due: None, loop_due: None, loops: Vec::new(),
+                    phases: crate::frame::profile::take(), nodes: rt.tree.nodes.len(), shaped: rt.stats.shaped, instances: rt.instances.len(),
+                    animating, why: std::mem::take(&mut rt.commit.commit_why), next: 0, poll_due: None, loop_due: None, loops: Vec::new(),
                     #[cfg(target_os = "windows")]
                     damage: present_rect,
                     #[cfg(not(target_os = "windows"))]
@@ -637,7 +637,7 @@ impl Host {
         let fp_next = {
             let rt = self.app.rt();
             [animating, FrameMove::moving(&self.frame_move), rt.needs_commit(), rt.stale() && !rt.needs_commit(), rt.has_pending_input(), rt.live_pending(),
-                rt.window_frame.is_some(), crate::window::surface::timer_wants_frame_core(rt, next_tick)]
+                rt.host.window_frame.is_some(), crate::window::surface::timer_wants_frame_core(rt, next_tick)]
                 .iter().enumerate().fold(0u16, |bits, (i, on)| bits | (u16::from(*on) << i))
         };
         #[cfg(target_os = "macos")]
@@ -674,8 +674,8 @@ impl Host {
         // started, which have shown a step unless they held for the window; the next frame
         // moves it. While the user drags the edge, it waits until they let go.
         #[cfg(target_os = "macos")]
-        if !hidden && !live_resize && self.app.rt().window_frame.is_some() {
-            let shown = if self.app.rt_mut().fit.take_held() { 0.0 } else { crate::frame::clock::RESUME_STEP };
+        if !hidden && !live_resize && self.app.rt().host.window_frame.is_some() {
+            let shown = if self.app.rt_mut().host.fit.take_held() { 0.0 } else { crate::frame::clock::RESUME_STEP };
             self.take_frame_request(self.frame_secs(frame_time) - shown, true);
         }
     }
@@ -688,7 +688,7 @@ fn loop_step(clock: &mut FrameClock, rt: &mut RuntimeCore, at: Instant) -> Resul
     let dt = at.saturating_duration_since(clock.last()).as_secs_f64();
     let patched = rt.loop_step(dt)?;
     clock.frame_step(at, true);
-    rt.frame_target = Some(at);
+    rt.frame.frame_target = Some(at);
     Ok((patched, dt))
 }
 

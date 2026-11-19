@@ -158,7 +158,7 @@ impl Host {
             WakeEvent::Frame(_, mut request) => {
                 let rt = self.app.rt_mut();
                 request.spring = (request.animate && !rt.reduced_motion).then_some(crate::tok::motion::DEFAULT);
-                rt.window_frame = Some(rt.window_frame.unwrap_or_default().merge(request));
+                rt.host.window_frame = Some(rt.host.window_frame.unwrap_or_default().merge(request));
                 if let Some(w) = self.shown_win() { w.request_redraw(); }
                 self.shell(event_loop);
             }
@@ -402,10 +402,10 @@ impl Host {
                     // A minimized or occluded window skips redraw.
                     l.apply_cursor_core(rt, false);
                 } else if rt.stale() {
-                    rt.ime_reset = true;
+                    rt.edit.ime_reset = true;
                 } else {
                     let ime_allowed = rt.ime_area.is_some() && !rt.has_secure_focus();
-                    if std::mem::take(&mut rt.ime_reset) || ime_allowed != self.ime_allowed {
+                    if std::mem::take(&mut rt.edit.ime_reset) || ime_allowed != self.ime_allowed {
                         l.window.set_ime_allowed(false);
                         l.window.set_ime_allowed(ime_allowed);
                         self.ime_allowed = ime_allowed;

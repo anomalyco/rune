@@ -183,7 +183,7 @@ fn a_held_press_scale_keeps_its_hover_and_a_scroll_cancels_it() {
     }
     let mut rt = Runtime::new(State { pressed: Vec::new() }, view, (200.0, 200.0), Env::new(true, 2.0));
     rt.frame(0.0);
-    let id = rt.nodes.iter().find(|n| n.key.as_deref() == Some("b0")).unwrap().id;
+    let id = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("b0")).unwrap().id;
     // Held at its right edge, which the shrunk row no longer covers: still hovered.
     rt.pointer_move(199.0, 20.0);
     rt.pointer_down(199.0, 20.0);
@@ -241,7 +241,7 @@ fn press_scale_shrinks_while_held_and_springs_back() {
     assert_eq!(held.target, rest.target, "layout keeps the resting size");
     assert!((held.rect[0] - 2.0).abs() < 0.05 && (held.rect[2] - 96.0).abs() < 0.05, "shrinks about its centre: {:?}", held.rect);
     assert!((info(&rt, "dot").scale - 0.96).abs() < 1e-4, "children shrink with it");
-    assert!(rt.press.inside(), "a press near the edge stays inside the resting rect");
+    assert!(rt.pointer.press.inside(), "a press near the edge stays inside the resting rect");
     rt.pointer_move(150.0, 50.0);
     settle(&mut rt);
     assert!((info(&rt, "tile").scale - 1.0).abs() < 1e-4, "leaving springs back");
@@ -315,9 +315,9 @@ fn a_picture_with_one_side_sizes_the_other_from_its_image() {
     px.set(2, 4, vec![255; 4 * 2 * 4]);
     rt.frame(1.0 / 120.0);
     assert_eq!(size(&rt, "w"), [120.0, 240.0], "a stream that changes shape relays out");
-    let commits = rt.commits;
+    let commits = rt.commit.commits;
     for _ in 0..4 { rt.frame(1.0 / 120.0); }
-    assert_eq!(rt.commits, commits, "an unchanged image costs no commits");
+    assert_eq!(rt.commit.commits, commits, "an unchanged image costs no commits");
 
     // The image lands on a frame that also re-runs the view (`Pixels::set`, then the
     // handle's `update`, or a hover that frame): it still appears at its size.

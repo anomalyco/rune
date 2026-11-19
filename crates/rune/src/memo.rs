@@ -347,7 +347,7 @@ impl MemoCache {
 
 impl crate::runtime::RuntimeCore {
     pub(crate) fn invalidate_memos_by_prefix(&mut self, prefix: &str) {
-        self.memo.evict_prefix(prefix);
+        self.commit.memo.evict_prefix(prefix);
         self.invalidate();
     }
 }
@@ -1119,7 +1119,7 @@ mod tests {
         let mut rt = Runtime::new(S { version: 0, ticks: 0, presses: 0 }, view, (200.0, 200.0), Env::new(true, 1.0));
         rt.frame(0.0);
         assert_eq!(BUILDS.get(), 1);
-        let id = |rt: &Runtime<S>| rt.nodes.iter().find(|n| n.key.as_deref() == Some("button")).unwrap().id;
+        let id = |rt: &Runtime<S>| rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("button")).unwrap().id;
         let first = id(&rt);
         for _ in 0..3 {
             rt.state.ticks += 1;
@@ -1142,7 +1142,7 @@ mod tests {
         rt.set_viewport((200.0, 200.0), 2.0);
         rt.frame(1.0 / 60.0);
         assert_eq!(BUILDS.get(), 4, "a scale change builds");
-        rt.memo.clear();
+        rt.commit.memo.clear();
         commit(&mut rt);
         assert_eq!(BUILDS.get(), 5, "a cleared cache (hot patch, tunables) builds");
         assert!(rt.elements().iter().any(|e| e.key.as_deref() == Some("button")), "tools see reused nodes");
@@ -1233,7 +1233,7 @@ mod tests {
         let mut rt = Runtime::new(Rows { n: 500, tick: 0, memo: true }, rows, (400.0, 600.0), Env::default());
         rt.frame(0.0);
         assert_eq!(BUILDS.get(), 500, "a miss builds in the view, mounted or not");
-        assert!(rt.nodes.len() < 200, "offscreen rows' children never reach the element tree: {}", rt.nodes.len());
+        assert!(rt.tree.nodes.len() < 200, "offscreen rows' children never reach the element tree: {}", rt.tree.nodes.len());
         for _ in 0..5 {
             rt.state.tick += 1;
             commit(&mut rt);
@@ -1449,17 +1449,17 @@ mod tests {
         }
         BUILDS.set(0);
         let mut rt = Runtime::new(0u32, view, (200.0, 200.0), Env::new(true, 1.0));
-        rt.key_warnings = Some(Vec::new());
+        rt.commit.key_warnings = Some(Vec::new());
         rt.frame(0.0);
         assert_eq!(BUILDS.get(), 3);
-        assert!(rt.key_warnings.as_ref().unwrap().is_empty(), "{:?}", rt.key_warnings);
+        assert!(rt.commit.key_warnings.as_ref().unwrap().is_empty(), "{:?}", rt.commit.key_warnings);
         let paths: Vec<_> = rt.elements().into_iter().map(|e| e.path).collect();
         assert_eq!(paths, vec!["#0", "#0/#0", "#0/#1", "#0/named"]);
 
         rt.update(|t, _| *t += 1);
         rt.frame(1.0 / 120.0);
         assert_eq!(BUILDS.get(), 3, "reused all three cached subtrees");
-        assert!(rt.key_warnings.as_ref().unwrap().is_empty());
+        assert!(rt.commit.key_warnings.as_ref().unwrap().is_empty());
     }
 
     /// `cargo test -p rune --profile perf --lib memo_build_time -- --ignored --nocapture`

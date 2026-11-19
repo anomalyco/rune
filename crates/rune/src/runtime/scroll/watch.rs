@@ -23,13 +23,13 @@ pub fn scroll_watch_state() -> (bool, bool, f64) {
 impl RuntimeCore {
     /// Calls each viewport's `on_scroll_offset` whose offset or extent moved, that is new, or
     /// whose handler is; true when it called any.
-    pub(super) fn tell_scroll_offsets(&mut self, instant: bool) -> bool {
+    pub(in crate::runtime) fn tell_scroll_offsets(&mut self, instant: bool) -> bool {
         let now = self.t;
         let mut calls = Vec::new();
-        for n in &self.nodes {
+        for n in &self.tree.nodes {
             let Some(h) = n.handlers.get() else { continue };
             let Some(f) = h.on_scroll_offset.as_ref() else { continue };
-            let Some(st) = self.scrolls.get_mut(&n.id) else { continue };
+            let Some(st) = self.scroll.scrolls.get_mut(&n.id) else { continue };
             let viewport = [n.local.w, n.local.h];
             // The presented rect is snapped to the pixel grid; only a spring moves it further.
             let drawn = self.scene.presented(n.id).map_or(viewport, |p| {
@@ -56,7 +56,7 @@ impl RuntimeCore {
 
 /// What a viewport's `El::on_scroll_offset` has been told, and which of its handlers heard it.
 #[derive(Clone, Debug, Default)]
-pub(super) struct Watch {
+pub(in crate::runtime) struct Watch {
     /// Where the viewport stood when the handler was last told.
     told: Option<crate::ScrollPos>,
     /// The handler that was told, held weakly: a rebuilt view's new handler hears where the
@@ -65,21 +65,21 @@ pub(super) struct Watch {
     handler: Option<std::rc::Weak<dyn Fn(crate::ScrollPos)>>,
 }
 
-pub(super) enum Event<'a> {
+pub(in crate::runtime) enum Event<'a> {
     /// The viewport stands at `at`, its handler is `handler` (None when it has none), and a
     /// hand or an app's instant jump moved it since the last tell (`by_hand`).
     Seen { at: crate::ScrollPos, handler: Option<&'a std::rc::Rc<dyn Fn(crate::ScrollPos)>>, by_hand: bool },
 }
 
 #[derive(Debug, PartialEq)]
-pub(super) enum Effect {
+pub(in crate::runtime) enum Effect {
     /// Call the handler with `at`; `scrolled` says a hand moved it since the last tell.
     Tell { at: crate::ScrollPos, scrolled: bool },
 }
 
 /// Calls the handler when where the viewport stands changed, or when it is a new one that has
 /// not heard it: the effect says what to tell it.
-pub(super) fn step(watch: &mut Watch, event: Event<'_>) -> Effects<Effect> {
+pub(in crate::runtime) fn step(watch: &mut Watch, event: Event<'_>) -> Effects<Effect> {
     let Event::Seen { at, handler, by_hand } = event;
     let Some(f) = handler else { return Effects::none() };
     let prev = watch.told.replace(at);

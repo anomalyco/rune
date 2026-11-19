@@ -176,7 +176,7 @@ impl OverlayCore {
             Some(presented) => {
                 let now = Instant::now();
                 #[cfg(target_os = "macos")]
-                { app.rt_mut().native_materials = live.materials.native(); }
+                { app.rt_mut().paint.native_materials = live.materials.native(); }
                 #[cfg(target_os = "macos")]
                 let next_tick = live.pacing.as_ref().map(|p| p.tick_after(now));
                 #[cfg(not(target_os = "macos"))]
@@ -219,7 +219,7 @@ impl OverlayCore {
         #[cfg(target_os = "macos")]
         let frame_time = target.unwrap_or(now);
         #[cfg(target_os = "macos")]
-        { app.rt_mut().native_materials = live.materials.native(); }
+        { app.rt_mut().paint.native_materials = live.materials.native(); }
         let (mut animating, dt) = if let Some((animating, dt, _)) = built {
             (animating, dt)
         } else if !prewarm && frame::rests(app, self.runtime_idle, self.dirty) {
@@ -230,11 +230,11 @@ impl OverlayCore {
         #[cfg(target_os = "macos")]
         let frame = {
             let Backing::Window(window) = &live.backing;
-            if live.materials.update(app.rt().transparent, !app.rt().materials.is_empty(), window, &live.surface) {
+            if live.materials.update(app.rt().transparent, !app.rt().paint.materials.is_empty(), window, &live.surface) {
                 // This drawable presents without the views: build again natively into a new one,
                 // so prewarm and reveal show the material from this frame.
                 drop(frame);
-                app.rt_mut().native_materials = true;
+                app.rt_mut().paint.native_materials = true;
                 animating |= app.frame(0.0);
                 match crate::window::acquire_checked(&live.surface, gpu, &live.config, true, if prewarm { 2 } else { 1 }, &mut self.meter, !read_occlusion) {
                     Ok(frame) => frame,

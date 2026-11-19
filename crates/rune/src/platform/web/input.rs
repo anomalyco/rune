@@ -182,9 +182,9 @@ impl Running {
             focus_a11y(&self.input.handle, focus);
         }
         // `Tx::announce`: the page's own live regions say it, as the native tree's announcer does.
-        if rt.announcement.said() != self.input.announced {
-            self.input.announced = rt.announcement.said();
-            if let Some((words, how)) = rt.announcement.words() {
+        if rt.host.announcement.said() != self.input.announced {
+            self.input.announced = rt.host.announcement.said();
+            if let Some((words, how)) = rt.host.announcement.words() {
                 announce_a11y(&self.input.handle, &words, how == crate::LiveRegion::Assertive);
             }
         }

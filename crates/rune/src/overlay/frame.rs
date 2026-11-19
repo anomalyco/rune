@@ -212,7 +212,7 @@ pub(super) fn quiet_step(app: &mut dyn OverlayApp, clock: &mut FrameClock, prese
 /// runs on every frame drawn) waits. An overlay without a compositor draws nothing then.
 pub(super) fn rests(app: &dyn OverlayApp, runtime_idle: bool, dirty: bool) -> bool {
     let rt = app.rt();
-    runtime_idle && !dirty && !app.has_poll() && !rt.has_playground && rt.wake_deadline().is_none() && rt.rests()
+    runtime_idle && !dirty && !app.has_poll() && !rt.tree.has_playground && rt.wake_deadline().is_none() && rt.rests()
 }
 
 /// `step` for a runtime that `rests`: its clocks (`clock`, `t`) move to the frame as a step
@@ -220,7 +220,7 @@ pub(super) fn rests(app: &dyn OverlayApp, runtime_idle: bool, dirty: bool) -> bo
 pub(super) fn rest(app: &mut dyn OverlayApp, clock: &mut FrameClock, frame_time: Instant) -> (bool, f64) {
     let elapsed = clock.frame_step(frame_time, app.compositor_animating()).total();
     let rt = app.rt_mut();
-    rt.frame_target = Some(frame_time);
+    rt.frame.frame_target = Some(frame_time);
     rt.clock = rt.wall_start.map_or(rt.clock + elapsed, |t0| t0.elapsed().as_secs_f64());
     rt.t += elapsed * rt.time_scale as f64;
     rt.scene.set_time(rt.t);
@@ -281,7 +281,7 @@ pub(super) fn submit_and_present(live: &mut Live, renderer: &Renderer, gpu: &Gpu
             }
         }
         renderer.submit(&gpu.queue, encoder);
-        live.materials.present(&rt.materials, rt.env.scale, || gpu.queue.present(frame));
+        live.materials.present(&rt.paint.materials, rt.env.scale, || gpu.queue.present(frame));
     }
     #[cfg(not(target_os = "macos"))]
     {
