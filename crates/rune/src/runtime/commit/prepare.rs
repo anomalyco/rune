@@ -60,6 +60,8 @@ impl RuntimeCore {
         let (mut node_index, mut path_ids, mut memo) = (HashMap::default(), HashMap::default(), crate::memo::MemoCache::default());
         let (mut next_id, mut scrolls, mut virtuals) = (0u64, HashMap::default(), HashMap::default());
         let (mut virtual_culled, mut virtual_inputs, mut stats, mut key_warnings) = (HashSet::default(), HashMap::default(), FrameStats::default(), None);
+        // A scratch hint, not the runtime's: this measure is pre-launch, and nothing reads it after.
+        let mut view_children = 0usize;
         let m = Measurement {
             app,
             env: self.env,
@@ -88,6 +90,7 @@ impl RuntimeCore {
             nodes: &mut nodes,
             committing: false,
             spare_nodes: &mut spare_nodes,
+            view_children: &mut view_children,
             text: &mut self.text,
             layout: &mut layout,
             node_index: &mut node_index,

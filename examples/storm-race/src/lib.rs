@@ -165,6 +165,9 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
     let (off, on, knob_c, well_c, num_c) = (c(58, 62, 70), c(48, 209, 88), c(245, 245, 247), c(30, 33, 38), c(155, 161, 170));
     let digits = TextStyle::new(gh * 0.26, 400.0);
     let mut root = el().key("root").w_full().h_full().fill(c(16, 18, 22));
+    // The whole-view fold lands at its full size in one allocation instead of doubling from
+    // zero each frame.
+    root.reserve_children(cx.view_children());
     root.extend_children(s.cells.iter().enumerate().flat_map(|(i, cell)| {
         let x = (i % cols) as f32 * gw;
         let y = TOP + (i / cols) as f32 * gh;

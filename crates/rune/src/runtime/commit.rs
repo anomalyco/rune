@@ -44,6 +44,9 @@ pub(crate) struct CommitState {
     /// The last view's `Cx::foreground` and `Cx::focus_ring`, for rows built after it and the
     /// rings painted until the next.
     pub(in crate::runtime) defaults: cx::ViewDefaults,
+    /// The last view's root child count, for the next view's `Cx::view_children` reservation
+    /// hint.
+    pub(in crate::runtime) view_children: usize,
     pub(in crate::runtime) reuse: relayout::Reuse,
     pub(in crate::runtime) layout: LayoutEngine,
     pub(crate) memo: crate::memo::MemoCache,
@@ -93,6 +96,7 @@ impl CommitState {
             watch: Default::default(),
             key_warnings: None,
             defaults: Default::default(),
+            view_children: 0,
             virtuals: HashMap::default(),
             virtual_culled: HashSet::default(),
             virtual_inputs: HashMap::default(),
@@ -179,6 +183,9 @@ pub(super) struct Measurement<'a> {
     pub(super) nodes: &'a mut [Node],
     pub(super) committing: bool,
     pub(super) spare_nodes: &'a mut Vec<Node>,
+    /// The root child count the view's `Cx::view_children` hands out, and the next pass's hint:
+    /// `measure_view` writes this view's back once it returns.
+    pub(super) view_children: &'a mut usize,
     pub(super) text: &'a mut TextSystem,
     pub(super) layout: &'a mut LayoutEngine,
     pub(super) node_index: &'a mut HashMap<NodeId, usize>,
