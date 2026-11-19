@@ -328,6 +328,82 @@ fn what_a_buffer_used_lives_until_it_completes() {
     assert_eq!(Arc::strong_count(&raw), 1, "retired once the GPU finished");
 }
 
+/// Unretained command buffers require every referenced Metal object to stay alive until Metal
+/// marks the command buffer completed — not merely until its GPU-side shared event signals.
+#[test]
+fn resources_stay_alive_until_command_buffer_completes() {
+    use objc2_metal::{MTLCommandBuffer, MTLCommandBufferStatus, MTLDevice, MTLEvent, MTLSharedEvent};
+    let completed = |cb: &Obj<dyn MTLCommandBuffer>| {
+        matches!(cb.status(), MTLCommandBufferStatus::Completed | MTLCommandBufferStatus::Error)
+    };
+    let (device, queue) = gpu();
+    let sh = shared(&device);
+    // Gate the queue so both the zeroing upload CB and the render CB stay in flight while we
+    // grab handles to them and drop the caller's own texture and view handles.
+    let gate = sh.device.newSharedEvent().unwrap();
+    let wait = sh.command_buffer();
+    wait.encodeWaitForEvent_value(ProtocolObject::<dyn MTLEvent>::from_ref(&*gate), 1);
+    wait.commit();
+
+    let target = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("lifetime target"),
+        size: wgpu::Extent3d { width: W, height: H, depth_or_array_layers: 2 },
+        mip_level_count: 2,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba16Float,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let view = target.create_view(&wgpu::TextureViewDescriptor {
+        label: Some("lifetime view"),
+        dimension: Some(wgpu::TextureViewDimension::D2),
+        base_mip_level: 0,
+        mip_level_count: Some(1),
+        base_array_layer: 0,
+        array_layer_count: Some(1),
+        ..Default::default()
+    });
+    let tex_weak = Arc::downgrade(&target.as_custom::<super::resource::MetalTexture>().unwrap().raw);
+    let view_weak = Arc::downgrade(&view.as_custom::<super::resource::MetalView>().unwrap().raw);
+
+    let mut encoder = device.create_command_encoder(&Default::default());
+    drop(clear(&mut encoder, &view));
+    let recorded = encoder.finish();
+    drop((view, target));
+    let index = queue.submit([recorded]);
+
+    let pending = sh.pending_cbs();
+    assert_eq!(pending.len(), 2, "upload and render command buffers are both tracked");
+    let (upload_cb, render_cb) = (pending[0].1.clone(), pending[1].1.clone());
+    assert!(tex_weak.strong_count() > 0, "upload CB keeps the texture alive while gated");
+    assert!(view_weak.strong_count() > 0, "render CB keeps the view alive while gated");
+
+    gate.setSignaledValue(1);
+    // Spin through the window where the GPU event has signaled `index` before Metal marks the
+    // command buffers completed: neither resource may drop before its command buffer completes.
+    while sh.event.signaledValue() < index {
+        std::hint::spin_loop();
+    }
+    for _ in 0..256 {
+        sh.retire();
+        if tex_weak.strong_count() == 0 {
+            assert!(completed(&upload_cb), "texture dropped before upload CB reached Completed ({:?})", upload_cb.status());
+        }
+        if view_weak.strong_count() == 0 {
+            assert!(completed(&render_cb), "view dropped before render CB reached Completed ({:?})", render_cb.status());
+            break;
+        }
+        std::hint::spin_loop();
+    }
+    device.poll(wgpu::PollType::Wait { submission_index: Some(index), timeout: None }).unwrap();
+    assert!(completed(&upload_cb), "poll(Wait) left upload CB uncompleted: {:?}", upload_cb.status());
+    assert!(completed(&render_cb), "poll(Wait) left render CB uncompleted: {:?}", render_cb.status());
+    assert_eq!(tex_weak.strong_count(), 0, "upload texture retired once upload CB completed");
+    assert_eq!(view_weak.strong_count(), 0, "render view retired once render CB completed");
+    wait.waitUntilCompleted();
+}
+
 /// Metal ends a dropped buffer's open passes when it frees the buffer, which reads their
 /// attachments; a thread's exit used to free it after its attachments were gone.
 #[test]

@@ -6,7 +6,10 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use objc2_foundation::NSString;
-use objc2_metal::{MTLBlitCommandEncoder, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue, MTLDrawable, MTLEvent, MTLSharedEvent};
+use objc2_metal::{
+    MTLBlitCommandEncoder, MTLCommandBuffer, MTLCommandBufferStatus, MTLCommandEncoder, MTLCommandQueue, MTLDrawable, MTLEvent, MTLSharedEvent,
+};
+use objc2_quartz_core::CAMetalDrawable;
 use objc2::rc::autoreleasepool;
 use objc2::runtime::ProtocolObject;
 use parking_lot::MutexGuard;
@@ -32,16 +35,32 @@ enum Callback {
     Done(BoxSubmittedWorkDoneCallback),
 }
 
+/// A committed command buffer and the resources it references without retaining.
+struct Pending {
+    value: u64,
+    cb: Obj<dyn MTLCommandBuffer>,
+    keep: Keep,
+    drawable: Option<Obj<dyn CAMetalDrawable>>,
+}
+
+/// A frame's command buffer waiting for `present` so `presentDrawable` lands on the same buffer.
+struct Held {
+    cb: Obj<dyn MTLCommandBuffer>,
+    value: u64,
+    keep: Keep,
+}
+
 #[derive(Default)]
 pub(crate) struct State {
-    /// The value the last stamped command buffer signals when it completes. Buffers commit in
-    /// value order, so the event's value says how many have completed.
+    /// The value the last submitted command buffer signals when it completes.
     pub(super) last: u64,
-    /// A frame's stamped command buffer waiting for its drawable's present. While one is held it
-    /// is the last stamped, and every other commit commits it first.
-    held: Option<(Obj<dyn MTLCommandBuffer>, u64)>,
+    /// The highest value whose command buffer has reached `Completed` or `Error` and been retired.
+    retired: u64,
+    /// A frame's command buffer waiting for its drawable's present. While one is held it is the
+    /// last assigned value, and every other commit commits it first.
+    held: Option<Held>,
     uploads: Option<Uploads>,
-    retire: VecDeque<(u64, Keep)>,
+    retire: VecDeque<Pending>,
     callbacks: VecDeque<(u64, Callback)>,
     frames: VecDeque<u64>,
     pub(super) spare: Vec<Keep>,
@@ -49,9 +68,13 @@ pub(crate) struct State {
 
 /// Writes staged since the last submit, committed ahead of it.
 struct Uploads {
-    cb: Obj<dyn MTLCommandBuffer>,
     blit: Obj<dyn MTLBlitCommandEncoder>,
+    cb: Obj<dyn MTLCommandBuffer>,
     keep: Keep,
+}
+
+fn completed(cb: &ProtocolObject<dyn MTLCommandBuffer>) -> bool {
+    matches!(cb.status(), MTLCommandBufferStatus::Completed | MTLCommandBufferStatus::Error)
 }
 
 impl std::fmt::Debug for State {
@@ -82,39 +105,58 @@ impl Shared {
         if st.spare.len() < SPARE_KEEPS { st.spare.push(keep); }
     }
 
-    /// Hands `cb` the next value and keeps `keep` alive until the event reaches it.
-    fn stamp(&self, st: &mut State, cb: &ProtocolObject<dyn MTLCommandBuffer>, keep: Keep) -> u64 {
-        st.last += 1;
-        cb.encodeSignalEvent_value(ProtocolObject::<dyn MTLEvent>::from_ref(&*self.event), st.last);
-        if !keep.is_empty() { st.retire.push_back((st.last, keep)); }
-        st.last
+    /// Signals `value` on the shared event, commits `cb`, and tracks `cb` with its unretained
+    /// resources until Metal marks `cb` completed.
+    fn commit_pending(
+        &self,
+        st: &mut State,
+        value: u64,
+        cb: Obj<dyn MTLCommandBuffer>,
+        keep: Keep,
+        drawable: Option<Obj<dyn CAMetalDrawable>>,
+    ) {
+        cb.encodeSignalEvent_value(ProtocolObject::<dyn MTLEvent>::from_ref(&*self.event), value);
+        cb.commit();
+        st.retire.push_back(Pending { value, cb, keep, drawable });
     }
 
-    fn flush_held(st: &mut State) {
-        if let Some((cb, _)) = st.held.take() { cb.commit(); }
+    fn flush_held(&self, st: &mut State) {
+        if let Some(Held { cb, value, keep }) = st.held.take() {
+            self.commit_pending(st, value, cb, keep, None);
+        }
     }
 
     /// Commits a held buffer whose drawable was dropped or never presented.
-    pub(super) fn flush(&self) { Self::flush_held(&mut self.lock()); }
+    pub(super) fn flush(&self) {
+        let mut st = self.lock();
+        self.flush_held(&mut st);
+    }
 
     fn commit_uploads(&self, st: &mut State) {
-        let Some(Uploads { cb, blit, keep }) = st.uploads.take() else { return };
+        let Some(Uploads { blit, cb, keep }) = st.uploads.take() else { return };
         blit.endEncoding();
-        self.stamp(st, &cb, keep);
-        cb.commit();
+        st.last += 1;
+        let value = st.last;
+        self.commit_pending(st, value, cb, keep, None);
     }
 
     /// Encodes a staged write into the blit buffer the next submit commits first.
-    pub(super) fn upload(&self, encode: impl FnOnce(&ProtocolObject<dyn MTLBlitCommandEncoder>), keep: [Arc<dyn Any + Send + Sync>; 2]) {
+    pub(super) fn upload(
+        &self,
+        encode: impl FnOnce(&ProtocolObject<dyn MTLBlitCommandEncoder>),
+        keep: impl IntoIterator<Item = Arc<dyn Any + Send + Sync>>,
+    ) {
         let mut st = self.lock();
-        let uploads = st.uploads.get_or_insert_with(|| {
+        let State { uploads, spare, .. } = &mut *st;
+        let uploads = uploads.get_or_insert_with(|| {
             let cb = self.command_buffer();
             let blit = autoreleasepool(|_| cb.blitCommandEncoder()).expect("a Metal blit encoder");
             if debug_labels() {
                 cb.setLabel(Some(&NSString::from_str("rune metal uploads")));
                 blit.setLabel(Some(&NSString::from_str("rune metal uploads blit")));
             }
-            Uploads { cb, blit, keep: Vec::new() }
+            let keep = spare.pop().unwrap_or_else(|| Vec::with_capacity(8));
+            Uploads { blit, cb, keep }
         });
         encode(&uploads.blit);
         uploads.keep.extend(keep);
@@ -130,15 +172,24 @@ impl Shared {
     /// One at a time, outside the lock: callbacks may call back into the device. Returns the
     /// value it retired up to.
     pub(super) fn retire(&self) -> u64 {
-        let done = self.event.signaledValue();
         loop {
             let next = {
                 let mut st = self.lock();
-                if st.retire.front().is_some_and(|(at, _)| *at <= done) { st.retire.pop_front() } else { None }
+                if st.retire.front().is_some_and(|p| completed(&p.cb)) {
+                    let p = st.retire.pop_front();
+                    if let Some(ref p) = p { st.retired = st.retired.max(p.value); }
+                    p
+                } else {
+                    None
+                }
             };
-            let Some((_, keep)) = next else { break };
+            let Some(Pending { cb, keep, drawable, .. }) = next else { break };
+            // Drop the completed command buffer before any object it referenced without retaining.
+            drop(cb);
+            drop(drawable);
             self.recycle(keep);
         }
+        let done = self.lock().retired;
         loop {
             let next = {
                 let mut st = self.lock();
@@ -159,22 +210,44 @@ impl Shared {
             // still has callbacks to run, so the caller polls again.
             let done = self.retire();
             let st = self.lock();
-            let idle = done >= st.last && st.callbacks.is_empty();
+            let idle = done >= st.last && st.retire.is_empty() && st.held.is_none() && st.callbacks.is_empty();
             return Ok(if idle { wgpu::PollStatus::QueueEmpty } else { wgpu::PollStatus::Poll });
         };
         let last = {
             let mut st = self.lock();
-            Self::flush_held(&mut st);
+            self.flush_held(&mut st);
             st.last
         };
         let target = submission_index.unwrap_or(last);
         if target > last { return Err(wgpu::PollError::WrongSubmissionIndex(target, last)); }
-        let ms = timeout.map_or(u64::MAX, |t| u64::try_from(t.as_millis()).unwrap_or(u64::MAX));
-        if self.event.signaledValue() < target && !self.event.waitUntilSignaledValue_timeoutMS(target, ms) {
-            return Err(wgpu::PollError::Timeout);
+        if let Some(t) = timeout {
+            if t.is_zero() {
+                let done = self.retire();
+                if done < target { return Err(wgpu::PollError::Timeout); }
+                let st = self.lock();
+                let empty = st.retire.is_empty() && st.held.is_none() && st.callbacks.is_empty();
+                return Ok(if empty { wgpu::PollStatus::QueueEmpty } else { wgpu::PollStatus::WaitSucceeded });
+            }
+            let ms = u64::try_from(t.as_millis()).unwrap_or(u64::MAX).max(1);
+            if self.event.signaledValue() < target && !self.event.waitUntilSignaledValue_timeoutMS(target, ms) {
+                return Err(wgpu::PollError::Timeout);
+            }
+        }
+        // Wait until Metal marks every command buffer through `target` completed: the shared event
+        // signals on the GPU before Metal finishes completing the command buffer, so retiring or
+        // dropping resources on the event alone frees them while the command buffer still tracks them.
+        loop {
+            let cb = {
+                let st = self.lock();
+                st.retire.iter().find(|p| p.value <= target && !completed(&p.cb)).map(|p| p.cb.clone())
+            };
+            let Some(cb) = cb else { break };
+            cb.waitUntilCompleted();
         }
         self.retire();
-        Ok(if target == last { wgpu::PollStatus::QueueEmpty } else { wgpu::PollStatus::WaitSucceeded })
+        let st = self.lock();
+        let empty = st.retire.is_empty() && st.held.is_none() && st.callbacks.is_empty();
+        Ok(if empty { wgpu::PollStatus::QueueEmpty } else { wgpu::PollStatus::WaitSucceeded })
     }
 
     /// Waits until at most `IN_FLIGHT - 1` presented frames are still on the GPU.
@@ -192,26 +265,44 @@ impl Shared {
     pub(super) fn map_after_work(&self, callback: BufferMapCallback) { self.after(Callback::Map(callback)); }
 
     /// Stamps and commits a buffer recorded outside an encoder, as a submit would.
-    pub(super) fn commit(&self, cb: &ProtocolObject<dyn MTLCommandBuffer>) {
-        let mut st = self.lock();
-        Self::flush_held(&mut st);
-        self.commit_uploads(&mut st);
-        self.stamp(&mut st, cb, Vec::new());
-        cb.commit();
+    pub(super) fn commit(&self, cb: Obj<dyn MTLCommandBuffer>) {
+        {
+            let mut st = self.lock();
+            self.flush_held(&mut st);
+            self.commit_uploads(&mut st);
+            st.last += 1;
+            let value = st.last;
+            self.commit_pending(&mut st, value, cb, Vec::new(), None);
+        }
+        self.retire();
+    }
+
+    /// Pending command buffers waiting for completion, for tests.
+    #[cfg(test)]
+    pub(super) fn pending_cbs(&self) -> Vec<(u64, Obj<dyn MTLCommandBuffer>)> {
+        self.lock().retire.iter().map(|p| (p.value, p.cb.clone())).collect()
     }
 }
 
 impl Drop for Shared {
-    /// Runs what was recorded and waits for the GPU to finish with it, since command buffers
-    /// don't retain what they use.
+    /// Runs what was recorded and waits for Metal to complete every command buffer before
+    /// releasing their resources and the device's own buffers, since command buffers don't
+    /// retain what they use.
     fn drop(&mut self) {
-        let last = {
+        {
             let mut st = self.lock();
-            Self::flush_held(&mut st);
+            self.flush_held(&mut st);
             self.commit_uploads(&mut st);
-            st.last
-        };
-        if self.event.signaledValue() < last { self.event.waitUntilSignaledValue_timeoutMS(last, 10_000); }
+        }
+        loop {
+            let cb = {
+                let st = self.lock();
+                st.retire.iter().find(|p| !completed(&p.cb)).map(|p| p.cb.clone())
+            };
+            let Some(cb) = cb else { break };
+            cb.waitUntilCompleted();
+        }
+        self.retire();
     }
 }
 
@@ -234,7 +325,7 @@ impl QueueInterface for MetalQueue {
         self.0.upload(|blit| {
             // SAFETY: both ranges are in bounds; wgpu checked the target's.
             unsafe { blit.copyFromBuffer_sourceOffset_toBuffer_destinationOffset_size(&staging.raw, 0, &target.raw, offset as usize, data.len()) }
-        }, [staging.clone(), target.clone()]);
+        }, [staging.clone() as _, target.clone() as _]);
     }
     fn create_staging_buffer(&self, _: wgpu::BufferSize) -> Option<DispatchQueueWriteBuffer> { None }
     fn validate_write_buffer(&self, _: &DispatchBuffer, _: wgpu::BufferAddress, _: wgpu::BufferSize) -> Option<()> { Some(()) }
@@ -247,20 +338,25 @@ impl QueueInterface for MetalQueue {
         let texture = dst.texture.as_custom::<MetalTexture>().expect("a Metal texture").raw.clone();
         let staging = Arc::new(BufferRaw::with_bytes(&self.0, data, Some("rune metal write_texture")));
         let layout = wgpu::TexelCopyBufferLayout { offset: 0, ..layout };
-        self.0.upload(|blit| buffer_to_texture(blit, &staging.raw, layout, &texture, dst.mip_level, dst.origin, size), [staging.clone(), texture.clone()]);
+        self.0.upload(|blit| buffer_to_texture(blit, &staging.raw, layout, &texture, dst.mip_level, dst.origin, size), [staging.clone() as _, texture.clone() as _]);
     }
     fn submit(&self, command_buffers: &mut dyn Iterator<Item = DispatchCommandBuffer>) -> u64 {
         let last = {
             let mut st = self.0.lock();
-            Shared::flush_held(&mut st);
+            self.0.flush_held(&mut st);
             self.0.commit_uploads(&mut st);
             for buffer in command_buffers {
                 let Some(recorded) = buffer.as_custom::<MetalCommandBuffer>().and_then(MetalCommandBuffer::take) else { continue };
-                Shared::flush_held(&mut st);
+                self.0.flush_held(&mut st);
                 let drawable = recorded.drawable;
                 let (cb, keep) = recorded.close();
-                let value = self.0.stamp(&mut st, &cb, keep);
-                if drawable { st.held = Some((cb, value)); } else { cb.commit(); }
+                st.last += 1;
+                let value = st.last;
+                if drawable {
+                    st.held = Some(Held { cb, value, keep });
+                } else {
+                    self.0.commit_pending(&mut st, value, cb, keep, None);
+                }
             }
             st.last
         };
@@ -273,25 +369,29 @@ impl QueueInterface for MetalQueue {
     fn present(&self, detail: &DispatchSurfaceOutputDetail) {
         let Some(output) = detail.as_custom::<MetalOutput>() else { return };
         let Some(drawable) = &output.drawable else { return };
-        let mut st = self.0.lock();
-        let (cb, value) = match st.held.take() {
-            Some(held) => held,
-            None => {
-                let cb = self.0.command_buffer();
-                if debug_labels() { cb.setLabel(Some(&NSString::from_str("rune metal present"))); }
-                let value = self.0.stamp(&mut st, &cb, Vec::new());
-                (cb, value)
+        let mtl_drawable = ProtocolObject::<dyn MTLDrawable>::from_ref(&**drawable);
+        let wait_cb = {
+            let mut st = self.0.lock();
+            let Held { cb, value, keep } = match st.held.take() {
+                Some(held) => held,
+                None => {
+                    let cb = self.0.command_buffer();
+                    if debug_labels() { cb.setLabel(Some(&NSString::from_str("rune metal present"))); }
+                    st.last += 1;
+                    Held { cb, value: st.last, keep: Vec::new() }
+                }
+            };
+            if !output.transaction {
+                cb.presentDrawable(mtl_drawable);
             }
+            let wait_cb = output.transaction.then(|| cb.clone());
+            self.0.commit_pending(&mut st, value, cb, keep, Some(drawable.clone()));
+            st.frames.push_back(value);
+            wait_cb
         };
-        let drawable = ProtocolObject::<dyn MTLDrawable>::from_ref(&**drawable);
-        if output.transaction {
-            cb.commit();
+        if let Some(cb) = wait_cb {
             cb.waitUntilScheduled();
-            drawable.present();
-        } else {
-            cb.presentDrawable(drawable);
-            cb.commit();
+            mtl_drawable.present();
         }
-        st.frames.push_back(value);
     }
 }

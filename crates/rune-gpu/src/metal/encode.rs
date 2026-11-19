@@ -283,6 +283,7 @@ impl CommandEncoderInterface for MetalEncoder {
         rec.cb();
         let (src, dst) = (source.buffer.as_custom::<MetalBuffer>().expect("a Metal buffer").raw(), texture(&destination));
         buffer_to_texture(rec.blit(), &src.raw, source.layout, &dst, destination.mip_level, destination.origin, size);
+        rec.drawable |= dst.drawable;
         rec.keep([src as _, dst as _]);
     }
     fn copy_texture_to_buffer(&self, source: wgpu::TexelCopyTextureInfo<'_>, destination: wgpu::TexelCopyBufferInfo<'_>, size: wgpu::Extent3d) {
@@ -305,6 +306,7 @@ impl CommandEncoderInterface for MetalEncoder {
                     &dst.raw, to_slice, destination.mip_level as usize, origin(destination.origin, to_z))
             }
         }
+        rec.drawable |= dst.drawable;
         rec.keep([src as _, dst as _]);
     }
     fn begin_compute_pass(&self, desc: &wgpu::ComputePassDescriptor<'_>) -> DispatchComputePass {

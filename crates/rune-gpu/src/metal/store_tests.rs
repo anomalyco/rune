@@ -209,6 +209,7 @@ fn a_queue_write_behind_submitted_work_swaps_rather_than_stages() {
     assert_eq!(shared.state.lock().last, before + 1, "no staged copy of its own");
     assert_eq!(swaps(&source).1, 1, "the write swapped storage under the waiting copy");
     gate.setSignaledValue(1);
+    wait.waitUntilCompleted();
     let words: Vec<u32> = bytemuck::cast_slice(&read(&device, &out)).to_vec();
     assert_eq!(words, [[1u32; 4], [2; 4]].concat());
 }

@@ -136,7 +136,7 @@ impl DeviceInterface for MetalDevice {
         let texture = MetalTexture::new(&self.shared.device, desc, Live::new(&self.shared.textures));
         let raw = texture.raw.clone();
         let zeros = self.shared.zeros.get_or_init(|| Zeros::new(&self.shared));
-        self.shared.upload(|blit| zero_texture(blit, zeros, &raw), [raw.clone(), raw.clone()]);
+        self.shared.upload(|blit| zero_texture(blit, zeros, &raw), [raw.clone() as _]);
         DispatchTexture::custom(texture)
     }
     fn create_external_texture(&self, _: &wgpu::ExternalTextureDescriptor<'_>, _: &[&wgpu::TextureView]) -> DispatchExternalTexture {
