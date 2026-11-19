@@ -48,7 +48,7 @@ pub(super) fn area(r: [f32; 4], s: f32) -> [f32; 4] {
 impl RuntimeCore {
     /// Whether the app's own editor currently holds an open composition.
     pub(super) fn app_ime_composing(&self, app: &dyn AppDriver) -> bool {
-        app.has_on_ime() && self.app_ime_comp.composing()
+        app.has_on_ime() && self.edit.app_ime_comp.composing()
     }
 
     /// An input method event goes to the focused text field, else to `App::on_ime`. A
@@ -59,7 +59,7 @@ impl RuntimeCore {
         let active = self.composing(app) || matches!(&ev, Ime::Preedit(s, ..) | Ime::Commit(s) if !s.is_empty());
         let ran = if app_target { self.app_ime_event(app, &ev, one) } else { self.with_focused(app, |e| e.ime(&ev), one) };
         // The key that confirmed or cancelled a composition comes back up unheard.
-        if ran && active { self.key_releases.ime_took_key(); }
+        if ran && active { self.kbd.key_releases.ime_took_key(); }
         ran
     }
 
@@ -67,7 +67,7 @@ impl RuntimeCore {
     /// app's editor hears its last preedit committed.
     pub(super) fn finish_ime(&mut self, app: &mut dyn AppDriver, one: &mut Tx) -> bool {
         if self.app_ime_composing(app) {
-            let Some(text) = self.app_ime_comp.take_composing() else { return false };
+            let Some(text) = self.edit.app_ime_comp.take_composing() else { return false };
             return self.app_ime_event(app, &Ime::Commit(text), one);
         }
         self.finish_field_composition(app, one)
@@ -79,13 +79,13 @@ impl RuntimeCore {
         if !self.focused_input().is_some_and(|i| i.access.is_some()) || !self.composing(app) { return false; }
         let mut finished = false;
         self.with_focused(app, |e| { finished = e.finish_composition(); EditOutcome::default() }, one);
-        if finished { self.ime_reset = true; }
+        if finished { self.edit.ime_reset = true; }
         finished
     }
 
     fn app_ime_event(&mut self, app: &mut dyn AppDriver, ev: &Ime, one: &mut Tx) -> bool {
         if !app.has_on_ime() { return false; }
-        self.app_ime_comp.step(ev);
+        self.edit.app_ime_comp.step(ev);
         app.on_ime(ev, one)
     }
 }

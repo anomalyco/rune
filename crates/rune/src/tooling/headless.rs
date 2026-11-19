@@ -174,7 +174,7 @@ fn run_headless(prep: HeadlessPrep, config: HeadlessConfig, app: &mut dyn Headle
     let mut reports = crate::frame::encoded::FrameReports::new(on_frame_encoded, Some("main"));
     let chrome = app.rt_mut().headless_chrome(chrome, titlebar, app_options.borderless);
     app.rt_mut().transparent = transparent;
-    app.rt_mut().fit_height = fit_height;
+    app.rt_mut().host.fit_height = fit_height;
     if let Some(bars) = args.scroll_bars { app.rt_mut().set_system_scroll_bars(bars); }
     // Only limits the app set: the canvas opens at any size, below the default minimum too.
     let limits = (app_options.min_size.or(min_size).unwrap_or((0.0, 0.0)), app_options.max_size);
@@ -182,7 +182,7 @@ fn run_headless(prep: HeadlessPrep, config: HeadlessConfig, app: &mut dyn Headle
         let height = crate::window::frame::clamp_size((size.0, app.content_height()), limits.0, limits.1).1;
         app.rt_mut().set_viewport((size.0, height), scale);
     }
-    if args.tree.is_some() { app.rt_mut().key_warnings = Some(Vec::new()); }
+    if args.tree.is_some() { app.rt_mut().commit.key_warnings = Some(Vec::new()); }
     let has_comp = app.has_compositor();
     app.rt_mut().track_marks = has_comp;
     let runtime_ms = launched.elapsed().as_secs_f64() * 1000.0 - state_ms;
@@ -220,7 +220,7 @@ fn run_headless(prep: HeadlessPrep, config: HeadlessConfig, app: &mut dyn Headle
         trace.all = args.trace_all;
         trace
     });
-    app.rt_mut().trace_channels = trace.as_ref().map(|_| Default::default());
+    app.rt_mut().frame.trace_channels = trace.as_ref().map(|_| Default::default());
     let gate_out = std::env::var_os("RUNE_MOTION_GATE").map(std::path::PathBuf::from);
     let mut gate = gate_out.as_ref().map(|_| app.new_gate(fps as f64));
     app.rt_mut().scene.store_mut().audit_retargets(trace.is_some());
@@ -356,7 +356,7 @@ fn run_headless(prep: HeadlessPrep, config: HeadlessConfig, app: &mut dyn Headle
         if !idle { step_window_frame(app.rt_mut(), &mut frame_anim, real_t, scale); }
         {
             let rt = app.rt_mut();
-            rt.window_resting = frame_anim.is_none() && rt.window_frame.is_none();
+            rt.host.window_resting = frame_anim.is_none() && rt.host.window_frame.is_none();
         }
         let step = if k == 0 { 0.0 } else { dt };
         if let Some(g) = gate.as_mut() { app.gate_before(g); }
@@ -370,8 +370,8 @@ fn run_headless(prep: HeadlessPrep, config: HeadlessConfig, app: &mut dyn Headle
         app.open_popup_headless();
         // As on macOS, a frame change this commit asked for starts with the springs it
         // started, which have shown a step unless they held for the window.
-        if app.rt().window_frame.is_some() {
-            let shown = if app.rt_mut().fit.take_held() { 0.0 } else { step };
+        if app.rt().host.window_frame.is_some() {
+            let shown = if app.rt_mut().host.fit.take_held() { 0.0 } else { step };
             take_window_frame(app.rt_mut(), &mut frame_anim, real_t - shown, limits);
         }
         idle = !animating && frame_anim.is_none();
@@ -454,7 +454,7 @@ fn run_headless(prep: HeadlessPrep, config: HeadlessConfig, app: &mut dyn Headle
             profile.push(crate::frame::profile::Row {
                 phases: crate::frame::profile::take(), update_ms, encode_ms: ms - update_ms, events: next_ev - events0,
                 allocations: procwatch::alloc::thread_allocations() - alloc0, commits: rt.stats.commits - commits0,
-                why: std::mem::take(&mut rt.commit_why), shaped: rt.stats.shaped, animating, cpu_ms: cpu0.map(|start| crate::frame::profile::cpu_ms().unwrap() - start),
+                why: std::mem::take(&mut rt.commit.commit_why), shaped: rt.stats.shaped, animating, cpu_ms: cpu0.map(|start| crate::frame::profile::cpu_ms().unwrap() - start),
             });
         }
         cpu_ms.push(ms);
@@ -563,8 +563,8 @@ fn run_headless(prep: HeadlessPrep, config: HeadlessConfig, app: &mut dyn Headle
 fn take_window_frame(rt: &mut RuntimeCore, anim: &mut Option<crate::window::frame::FrameAnim>, start: f64,
     (min, max): ((f32, f32), Option<(f32, f32)>)) {
     use crate::window::frame::{FrameAnim, clamp_size};
-    rt.fit.take_held();
-    let Some(request) = rt.window_frame.take() else { return };
+    rt.host.fit.take_held();
+    let Some(request) = rt.host.window_frame.take() else { return };
     let Some(size) = request.size else { return };
     let (w, h) = clamp_size(size, min, max);
     let from = [0.0, 0.0, rt.window_viewport().0, rt.window_viewport().1];

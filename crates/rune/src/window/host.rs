@@ -321,7 +321,7 @@ impl Host {
             geometry.min_size = options.fit_min_size(geometry.min_size);
             // Opens at the content's height; the first frame corrects any difference its
             // real scale makes.
-            app.rt_mut().fit_height = true;
+            app.rt_mut().host.fit_height = true;
             let (min, max) = options.size_limits(geometry.min_size);
             let fitted = crate::window::frame::clamp_size((size.0, app.content_height()), min, max);
             app.rt_mut().set_viewport(fitted, 1.0);
@@ -342,15 +342,15 @@ impl Host {
             rt.set_system_accent(crate::system_accent());
             crate::platform::scroll_bars::watch();
             rt.set_system_scroll_bars_state(crate::platform::scroll_bars::current().with_override(args.scroll_bars));
-            rt.trace_channels = args.trace.as_ref().map(|_| Default::default());
+            rt.frame.trace_channels = args.trace.as_ref().map(|_| Default::default());
             rt.set_live_waker(Arc::new(move || { let _ = live_proxy.send_event(WakeEvent::Live(slot)); }));
             rt.set_os_drag(crate::drag_out::SUPPORTED);
             rt.transparent = options.transparent;
             rt.track_marks = has_comp;
             rt.wall_start = Some(Instant::now());
-            rt.open_urls_natively = args.script.is_none() && args.trace.is_none() && args.frames.is_none();
-            rt.record_events = false;
-            rt.surface_stats = Some(meter.shared());
+            rt.host.open_urls_natively = args.script.is_none() && args.trace.is_none() && args.frames.is_none();
+            rt.frame.record_events = false;
+            rt.host.surface_stats = Some(meter.shared());
         }
         app.set_live_visible(false);
         let mut clipboard = crate::clipboard::Client::default();

@@ -97,7 +97,7 @@ impl RuntimeCore {
     /// changed and forms new ones from runs of rows in `order` that were `opened` (new fold rows
     /// growing from nothing) or `shut` (fold rows that left) by it.
     pub(super) fn link_growth_runs(&mut self, stack: &mut Stack, order: &[NodeId], opened: &[NodeId], shut: &[NodeId]) {
-        let grows = &mut self.grows;
+        let grows = &mut self.motion.grows;
         stack.runs.retain_mut(|run| run.commit(order, grows));
         for id in shut {
             if let Some(g) = grows.get_mut(id) { g.retarget(0.0); }

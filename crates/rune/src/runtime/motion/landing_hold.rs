@@ -44,12 +44,12 @@ impl RuntimeCore {
             let present: Vec<usize> = (i + 1..end)
                 .filter(|&c| nodes[c].parent == Some(i) && self.scene.contains(nodes[c].id) && !self.is_exiting(nodes[c].id))
                 .collect();
-            let anchor = present.iter().copied().find(|&c| last.find(&self.nodes, nodes[c].id).is_some_and(|o| self.drew(o))).or(present.first().copied());
+            let anchor = present.iter().copied().find(|&c| last.find(&self.tree.nodes, nodes[c].id).is_some_and(|o| self.drew(o))).or(present.first().copied());
             let jump = anchor.and_then(|c| self.scene.get(nodes[c].id, prop::FRAME).map(|r| r.x - nodes[c].local.x)).unwrap_or(0.0);
             held.resize(nodes.len(), false);
             for (j, h) in held.iter_mut().enumerate().take(end).skip(i) {
                 *h = true;
-                self.landing_holds.0.insert(nodes[j].id);
+                self.motion.landing_holds.0.insert(nodes[j].id);
             }
             out.push((i, drawn.x - n.local.x + jump));
         }
@@ -58,7 +58,7 @@ impl RuntimeCore {
 
     /// Whether old node `o`, or anything under it, drew in the last build.
     fn drew(&self, o: usize) -> bool {
-        self.seen.len() == self.nodes.len() && (o..subtree_end(&self.nodes, o)).any(|j| self.seen[j])
+        self.paint.seen.len() == self.tree.nodes.len() && (o..subtree_end(&self.tree.nodes, o)).any(|j| self.paint.seen[j])
     }
 }
 

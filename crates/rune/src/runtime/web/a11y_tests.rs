@@ -253,8 +253,8 @@ fn a_row_of_token_texts_mirrors_as_one_line() {
 #[test]
 fn href_presses_open_absolute_urls() {    let mut rt = Runtime::new((), page, (480.0, 300.0), Env::default());
     rt.frame(0.0);
-    let gh = rt.nodes.iter().find(|n| n.key.as_deref() == Some("gh")).unwrap().path.clone();
-    assert_eq!(rt.nodes.iter().find(|n| n.key.as_deref() == Some("gh")).unwrap().role, "link");
+    let gh = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("gh")).unwrap().path.clone();
+    assert_eq!(rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("gh")).unwrap().role, "link");
     assert!(rt.web_a11y_action(&json!({"kind": "a11y_press", "path": gh})));
     rt.frame(0.0);
     assert_eq!(rt.take_url_requests(), ["https://github.com/example/rune"]);
@@ -307,7 +307,7 @@ fn exiting_children_do_not_swallow_or_misparent_live_siblings() {
     rt.frame(0.0);
     rt.update(|s, _| *s = false);
     rt.frame(1.0 / 60.0);
-    assert!(rt.nodes.iter().enumerate().any(|(i, _)| rt.core().subtree_exiting(i)), "exiting tail must be active");
+    assert!(rt.tree.nodes.iter().enumerate().any(|(i, _)| rt.core().subtree_exiting(i)), "exiting tail must be active");
 
     let items = rt.web_a11y_items();
     let after = items.iter().find(|it| it.text == "Live sibling after button")
@@ -333,8 +333,8 @@ fn rtl_horizontal_scroller_mirror_undoes_rtl_shift() {
     let x0 = rt.web_a11y_items().into_iter().find(|it| it.text == "مرحبا").unwrap().rect[0];
     rt.wheel_xy(100.0, 30.0, 80.0, 0.0);
     rt.frame(0.0);
-    let strip = rt.nodes.iter().find(|n| n.key.as_deref() == Some("strip")).unwrap().id;
-    assert!((rt.scrolls[&strip].x.offset - 80.0).abs() < 0.5, "RTL horizontal scroll moved offset");
+    let strip = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("strip")).unwrap().id;
+    assert!((rt.scroll.scrolls[&strip].x.offset - 80.0).abs() < 0.5, "RTL horizontal scroll moved offset");
     let x1 = rt.web_a11y_items().into_iter().find(|it| it.text == "مرحبا").unwrap().rect[0];
     assert!((x1 - x0).abs() < 0.2, "mirror rect must stay in scroller content coordinates across RTL scroll: {x0} -> {x1}");
 }

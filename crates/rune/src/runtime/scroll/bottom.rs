@@ -109,11 +109,11 @@ pub(super) fn glide(st: &mut ScrollState, dt: f32) -> bool {
 impl RuntimeCore {
     /// The scroll viewport `key` names (`Node::named`), or the nearest one containing it.
     pub(super) fn scroll_viewport(&self, key: &str) -> Option<usize> {
-        let mut i = self.nodes.iter().enumerate()
+        let mut i = self.tree.nodes.iter().enumerate()
             .position(|(i, n)| n.named(key) && !self.subtree_exiting(i))?;
         loop {
-            if self.nodes[i].scroll.is_some() && self.nodes[i].scroll_axes.y() { return Some(i); }
-            i = self.nodes[i].parent?;
+            if self.tree.nodes[i].scroll.is_some() && self.tree.nodes[i].scroll_axes.y() { return Some(i); }
+            i = self.tree.nodes[i].parent?;
         }
     }
 
@@ -123,8 +123,8 @@ impl RuntimeCore {
         let mut targets = Vec::new();
         for (key, animated) in requests {
             let Some(i) = self.scroll_viewport(&key) else { continue };
-            let (id, sticky, view_h) = (self.nodes[i].id, self.nodes[i].scroll.is_some_and(|s| s.stick_bottom), f64::from(self.nodes[i].local.h));
-            let Some(st) = self.scrolls.get_mut(&id) else { continue };
+            let (id, sticky, view_h) = (self.tree.nodes[i].id, self.tree.nodes[i].scroll.is_some_and(|s| s.stick_bottom), f64::from(self.tree.nodes[i].local.h));
+            let Some(st) = self.scroll.scrolls.get_mut(&id) else { continue };
             targets.push((id, animated, sticky, view_h, st.offset, st.glide()));
             // Stand at the bottom first so a virtual list mounts and measures its tail rows,
             // which can differ from the estimate: the trip below then ends at the true bottom.
@@ -136,11 +136,11 @@ impl RuntimeCore {
             self.commit(app, &Tx::default());
             self.step_scroll(0.0);
             for (id, ..) in &targets {
-                if let Some(st) = self.scrolls.get_mut(id) { st.offset = st.max; }
+                if let Some(st) = self.scroll.scrolls.get_mut(id) { st.offset = st.max; }
             }
         }
         for (id, animated, sticky, view_h, start, glide) in targets {
-            let Some(st) = self.scrolls.get_mut(&id) else { continue };
+            let Some(st) = self.scroll.scrolls.get_mut(&id) else { continue };
             // A settled frame (a window showing or uncovering) lands at the end.
             if animated && !self.reduced_motion && !self.settled && st.max - start > 0.5 {
                 st.offset = start.max(st.max - GLIDE_REACH * view_h);
@@ -181,8 +181,8 @@ impl RuntimeCore {
     /// would carry them above it, after which they ride the content's top. The offset goes
     /// negative while fitting rows sit low in a box that has not shrunk yet.
     pub(super) fn stuck_offset(&self, i: usize, bottom: f32) -> Option<f64> {
-        let n = &self.nodes[i];
-        let st = self.scrolls.get(&n.id).filter(|st| st.pinned())?;
+        let n = &self.tree.nodes[i];
+        let st = self.scroll.scrolls.get(&n.id).filter(|st| st.pinned())?;
         if !n.scroll.is_some_and(|s| s.stick_bottom) { return None; }
         let c = self.scroll_content(i)?;
         let lag = self.stuck_lag(i, c, bottom)?;
@@ -190,8 +190,8 @@ impl RuntimeCore {
         // stack's own bottom padding and border.
         let content_bottom = self.scroll_children(i)
             .map(|k| {
-                let pad = self.stacks.get(&self.nodes[k].id).map_or(0.0, |s| (s.pad_bottom - self.nodes[k].inset[3]).max(0.0));
-                self.nodes[k].target[3] - pad
+                let pad = self.motion.stacks.get(&self.tree.nodes[k].id).map_or(0.0, |s| (s.pad_bottom - self.tree.nodes[k].inset[3]).max(0.0));
+                self.tree.nodes[k].target[3] - pad
             })
             .reduce(f32::max)?;
         let short = f64::from(n.target[3] - content_bottom);
@@ -218,18 +218,18 @@ impl RuntimeCore {
 
     /// Scroll viewport `i`'s present direct children.
     pub(super) fn scroll_children(&self, i: usize) -> impl Iterator<Item = usize> + '_ {
-        (i + 1..self.nodes.len())
-            .take_while(move |&j| self.nodes[j].parent >= Some(i))
-            .filter(move |&j| self.nodes[j].parent == Some(i) && !self.is_exiting(self.nodes[j].id) && self.scene.contains(self.nodes[j].id))
+        (i + 1..self.tree.nodes.len())
+            .take_while(move |&j| self.tree.nodes[j].parent >= Some(i))
+            .filter(move |&j| self.tree.nodes[j].parent == Some(i) && !self.is_exiting(self.tree.nodes[j].id) && self.scene.contains(self.tree.nodes[j].id))
     }
 
     /// Scroll viewport `i`'s growth-stack child, or the child that supplies its content end.
     pub(super) fn scroll_content(&self, i: usize) -> Option<usize> {
-        let view = self.nodes[i].target;
+        let view = self.tree.nodes[i].target;
         self.scroll_stack(i).or_else(|| {
             self.scroll_children(i).max_by(|&a, &b| {
                 let end = |c: usize| {
-                    let n = &self.nodes[c];
+                    let n = &self.tree.nodes[c];
                     f64::from(n.target[1] - view[1]) + self.stack_extent(c).unwrap_or(f64::from(n.target[3] - n.target[1]))
                 };
                 end(a).total_cmp(&end(b))
@@ -239,39 +239,39 @@ impl RuntimeCore {
 
     /// Scroll viewport `i`'s growth-stack child, if any.
     pub(super) fn scroll_stack(&self, i: usize) -> Option<usize> {
-        self.scroll_children(i).find(|&c| self.nodes[c].growth.is_some())
+        self.scroll_children(i).find(|&c| self.tree.nodes[c].growth.is_some())
     }
 
     /// How much further content `c` of viewport `i` has to travel to its layout than the
     /// viewport's presented bottom `bottom` has.
     fn stuck_lag(&self, i: usize, c: usize, bottom: f32) -> Option<f64> {
-        let top = self.scene.presented(self.nodes[c].id)?.rect.edges()[1];
-        Some(f64::from((top - self.nodes[c].target[1]) - (bottom - self.nodes[i].target[3])))
+        let top = self.scene.presented(self.tree.nodes[c].id)?.rect.edges()[1];
+        Some(f64::from((top - self.tree.nodes[c].target[1]) - (bottom - self.tree.nodes[i].target[3])))
     }
 
     /// Steps stick-to-bottom viewport `i`'s `Slack` after its offset. Returns whether any is left.
     pub(super) fn step_slack(&mut self, i: usize, dt: f32) -> bool {
-        let id = self.nodes[i].id;
-        if self.scrolls.get(&id).is_some_and(|st| !st.pinned() && !st.slack.moving()) {
-            if let Some(st) = self.scrolls.get_mut(&id) { st.slack.edges = None; }
+        let id = self.tree.nodes[i].id;
+        if self.scroll.scrolls.get(&id).is_some_and(|st| !st.pinned() && !st.slack.moving()) {
+            if let Some(st) = self.scroll.scrolls.get_mut(&id) { st.slack.edges = None; }
             return false;
         }
         let Some(c) = self.scroll_content(i) else { return false };
-        let stack = self.nodes[c].growth.as_deref().copied().and_then(|spec| Some((spec, self.stacks.get_mut(&self.nodes[c].id)?)));
+        let stack = self.tree.nodes[c].growth.as_deref().copied().and_then(|spec| Some((spec, self.motion.stacks.get_mut(&self.tree.nodes[c].id)?)));
         let view = self.scene.presented(id).map(|p| p.rect.edges());
         let (Some((spec, stack)), Some(view), false) = (stack, view, self.reduced_motion) else {
-            if let Some(st) = self.scrolls.get_mut(&id) { st.slack = Slack::landed(st.slack.window); }
+            if let Some(st) = self.scroll.scrolls.get_mut(&id) { st.slack = Slack::landed(st.slack.window); }
             return false;
         };
         let grown = std::mem::take(&mut stack.grown);
         let growing = stack.growing;
-        let pad = (stack.pad_bottom - self.nodes[c].inset[3]).max(0.0);
-        let short = self.nodes[i].target[3] - (self.nodes[c].target[3] - pad);
-        let top_c = self.scene.presented(self.nodes[c].id).map_or(view[1], |p| p.rect.edges()[1]);
-        let limit = top_c + (self.nodes[c].target[3] - self.nodes[c].target[1] - pad);
+        let pad = (stack.pad_bottom - self.tree.nodes[c].inset[3]).max(0.0);
+        let short = self.tree.nodes[i].target[3] - (self.tree.nodes[c].target[3] - pad);
+        let top_c = self.scene.presented(self.tree.nodes[c].id).map_or(view[1], |p| p.rect.edges()[1]);
+        let limit = top_c + (self.tree.nodes[c].target[3] - self.tree.nodes[c].target[1] - pad);
         let now = self.t;
-        let target = self.nodes[i].target;
-        let Some(st) = self.scrolls.get_mut(&id) else { return false };
+        let target = self.tree.nodes[i].target;
+        let Some(st) = self.scroll.scrolls.get_mut(&id) else { return false };
         let pinned = st.pinned();
         let s = &mut st.slack;
         let h0 = s.track.h;
@@ -296,22 +296,22 @@ impl RuntimeCore {
     /// Queues `on_at_bottom` and `on_far_from_bottom` for viewports whose state changed this
     /// frame.
     pub(super) fn report_at_bottom(&mut self) {
-        for i in 0..self.nodes.len() {
-            let n = &self.nodes[i];
+        for i in 0..self.tree.nodes.len() {
+            let n = &self.tree.nodes[i];
             let Some(h) = n.handlers.get().filter(|h| h.on_at_bottom.is_some() || h.on_far_from_bottom.is_some()) else { continue };
             if self.subtree_exiting(i) { continue; }
-            let Some(st) = self.scrolls.get_mut(&n.id) else { continue };
+            let Some(st) = self.scroll.scrolls.get_mut(&n.id) else { continue };
             if h.on_at_bottom.is_some() {
                 let at = st.offset >= st.max - AT_BOTTOM;
                 if st.at_bottom != Some(at) {
                     st.at_bottom = Some(at);
-                    self.queue.push(Action::AtBottom(n.path.clone(), at));
+                    self.frame.queue.push(Action::AtBottom(n.path.clone(), at));
                 }
             }
             if let Some((min, under, _)) = &h.on_far_from_bottom {
                 // Under a frame, its height counts: the nearest ancestor with that key.
                 let tall = under.as_deref().and_then(|k| {
-                    self.nodes.iter().filter(|m| m.key.as_deref() == Some(k) && n.path.starts_with(&m.path) && n.path[m.path.len()..].starts_with('/'))
+                    self.tree.nodes.iter().filter(|m| m.key.as_deref() == Some(k) && n.path.starts_with(&m.path) && n.path[m.path.len()..].starts_with('/'))
                         .max_by_key(|m| m.path.len()).map(|m| m.local.h)
                 }).unwrap_or(n.local.h);
                 // Rows collapsing measure from the end they head for, glide or not.
@@ -319,7 +319,7 @@ impl RuntimeCore {
                 let far = end - st.offset > f64::from(min.max(tall));
                 if st.far_from_bottom != Some(far) {
                     st.far_from_bottom = Some(far);
-                    self.queue.push(Action::FarFromBottom(n.path.clone(), far));
+                    self.frame.queue.push(Action::FarFromBottom(n.path.clone(), far));
                 }
             }
         }
@@ -329,7 +329,7 @@ impl RuntimeCore {
     /// as of the last frame.
     pub fn scroll_at_bottom(&self, key: &str) -> Option<bool> {
         let i = self.scroll_viewport(key)?;
-        self.scrolls.get(&self.nodes[i].id).map(|st| st.offset >= st.max - AT_BOTTOM)
+        self.scroll.scrolls.get(&self.tree.nodes[i].id).map(|st| st.offset >= st.max - AT_BOTTOM)
     }
 }
 
@@ -615,7 +615,7 @@ mod tests {
             rt.wheel(100.0, 100.0, 2000.0);
             rt.frame(1.0 / 120.0);
         }
-        assert!(rt.nodes.iter().all(|n| n.key.as_deref() != Some("r599")), "the tail is unmounted while reading the top");
+        assert!(rt.tree.nodes.iter().all(|n| n.key.as_deref() != Some("r599")), "the tail is unmounted while reading the top");
         press(&mut rt, "jump");
         for _ in 0..240 { rt.frame(1.0 / 120.0); }
         assert!(bottom_gap(&rt).abs() < 0.05, "{}", bottom_gap(&rt));
@@ -625,7 +625,7 @@ mod tests {
 
     fn max(rt: &Runtime<Chat>) -> f64 {
         let i = rt.scroll_viewport("scroll").unwrap();
-        rt.scrolls[&rt.nodes[i].id].max
+        rt.scroll.scrolls[&rt.tree.nodes[i].id].max
     }
 
     /// Reads far up a virtual list whose unmounted tail rows are much taller than the estimate.
@@ -636,7 +636,7 @@ mod tests {
             rt.frame(1.0 / 120.0);
         }
         for _ in 0..30 { rt.frame(1.0 / 120.0); }
-        assert!(rt.nodes.iter().all(|n| n.key.as_deref() != Some("r599")), "the tail is unmounted");
+        assert!(rt.tree.nodes.iter().all(|n| n.key.as_deref() != Some("r599")), "the tail is unmounted");
         rt
     }
 
@@ -673,11 +673,11 @@ mod tests {
 
     fn scroll_state<'a>(rt: &'a Runtime<Chat>, key: &str) -> &'a ScrollState {
         let i = rt.scroll_viewport(key).unwrap();
-        &rt.scrolls[&rt.nodes[i].id]
+        &rt.scroll.scrolls[&rt.tree.nodes[i].id]
     }
 
     fn page_height(rt: &Runtime<Chat>, key: &str) -> f64 {
-        f64::from(rt.nodes[rt.scroll_viewport(key).unwrap()].local.h * 0.9)
+        f64::from(rt.tree.nodes[rt.scroll_viewport(key).unwrap()].local.h * 0.9)
     }
 
     fn key(rt: &mut Runtime<Chat>, key: crate::Key) {
@@ -753,7 +753,7 @@ mod tests {
     fn tx_scroll_page_finds_the_list_of_a_key_inside_a_virtual_row() {
         let mut rt = chat(Chat { rows: 600, virtualized: true, ..Default::default() });
         let (bottom, page) = (max(&rt), page_height(&rt, "scroll"));
-        assert!(rt.nodes.iter().all(|n| n.key.as_deref() != Some("r0")), "the head is unmounted");
+        assert!(rt.tree.nodes.iter().all(|n| n.key.as_deref() != Some("r0")), "the head is unmounted");
         rt.update_if(|_, tx| { tx.scroll_page("r599", -3); false });
         rt.frame(1.0 / 120.0);
         // Rows mounting on the way measure against their estimate, which moves the extent a little.
@@ -790,7 +790,7 @@ mod tests {
     }
 
     fn growing(rt: &Runtime<Chat>) -> bool {
-        rt.grows.values().any(|g| g.target > g.h + 1.0 / 128.0)
+        rt.motion.grows.values().any(|g| g.target > g.h + 1.0 / 128.0)
     }
 
     fn sending(lines: usize) -> Runtime<Chat> {

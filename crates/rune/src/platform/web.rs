@@ -316,7 +316,7 @@ impl Browser {
             let w = (size.width as f32 / scale).max(1.0);
             {
                 let rt = app.rt_mut();
-                rt.fit_height = true;
+                rt.host.fit_height = true;
                 rt.set_viewport((w, spec_size.1), scale);
             }
             let h = app.content_height();
@@ -331,8 +331,8 @@ impl Browser {
             let rt = app.rt_mut();
             rt.set_os_drag(false);
             rt.wall_start = Some(now);
-            rt.open_urls_natively = true;
-            rt.record_events = false;
+            rt.host.open_urls_natively = true;
+            rt.frame.record_events = false;
         }
         let mut clipboard = crate::clipboard::Client::default();
         clipboard.connect(wake);

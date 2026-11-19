@@ -604,7 +604,7 @@ fn a_live_edit_patch_wakes_a_hidden_overlay_and_its_next_frame_rebuilds_the_view
     let (tx, rx) = std::sync::mpsc::channel();
     overlay.connect(Arc::new(move || { let _ = tx.send(()); }), Arc::new(|| {}), Arc::new(|| {}), Rc::default());
     let hub: &'static crate::hot::Hub = Box::leak(Box::default());
-    overlay.rt.hot.as_mut().expect("connect attaches the overlay to live edits").move_to(hub);
+    overlay.rt.frame.hot.as_mut().expect("connect attaches the overlay to live edits").move_to(hub);
     while rx.try_recv().is_ok() {}
     let take = |overlay: &mut Overlay<u8>| (
         std::mem::take(&mut *overlay.shared.core.requests.lock().unwrap()),

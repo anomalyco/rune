@@ -16,7 +16,7 @@ const NAME_MAX: usize = 400;
 impl RuntimeCore {
     /// Node `i`'s role in the tree, or `None` when it joins its parent.
     pub(crate) fn a11y_role(&self, i: usize) -> Option<Role> {
-        let n = &self.nodes[i];
+        let n = &self.tree.nodes[i];
         let handlers = n.handlers.get();
         let input = n.input.as_deref();
         let text = n.text.as_deref().filter(|_| input.is_none());
@@ -30,7 +30,7 @@ impl RuntimeCore {
             input: input.is_some(),
             multiline: input.is_some_and(|i| !i.single_line),
             secure: n.is_secure(),
-            scrolls: n.scroll.is_some() && self.scrolls.contains_key(&n.id),
+            scrolls: n.scroll.is_some() && self.scroll.scrolls.contains_key(&n.id),
             modal: handlers.is_some_and(|h| h.modal.is_some()),
             default_button: n.focus.default,
             labelled: n.label.as_deref().is_some_and(|l| !l.trim().is_empty()),
@@ -45,7 +45,7 @@ impl RuntimeCore {
     /// A hash of everything [`Self::a11y_node`] and its text's lines and links read of node
     /// `i`, besides its children and the text inside it ([`Self::a11y_content_prints`]).
     pub(super) fn a11y_print(&self, i: usize, role: Role, w: &Walk) -> u64 {
-        let n = &self.nodes[i];
+        let n = &self.tree.nodes[i];
         let mut h = rustc_hash::FxHasher::default();
         (role as u8).hash(&mut h);
         n.role.hash(&mut h);
@@ -61,7 +61,7 @@ impl RuntimeCore {
             (&m.description, &m.value, &m.set, &m.shortcut, m.invalid, m.read_only, m.sorted, m.busy).hash(&mut h);
             [m.labelled_by.as_deref(), m.described_by.as_deref()].map(|k| k.and_then(|k| self.a11y_keyed(i, k)).map(|j| self.a11y_words(j))).hash(&mut h);
             if let Some(r) = m.range { [r.value, r.min, r.max, r.step.unwrap_or(f64::NAN)].map(f64::to_bits).hash(&mut h); }
-            self.a11y_active_descendant(i).map(|j| self.nodes[j].id.0).hash(&mut h);
+            self.a11y_active_descendant(i).map(|j| self.tree.nodes[j].id.0).hash(&mut h);
         }
         n.text_cut(self.env.scale).hash(&mut h);
         let secure = n.is_secure();
@@ -100,7 +100,7 @@ impl RuntimeCore {
             }
             (e.anchor, e.focus, e.preedit().map(|p| (p.0.len(), p.1)), e.focused, &input.placeholder, input.single_line, input.access.is_some()).hash(&mut h);
             if !long_field {
-                self.input_scroll.get(&n.path).map(|v| v.to_bits()).hash(&mut h);
+                self.edit.input_scroll.get(&n.path).map(|v| v.to_bits()).hash(&mut h);
             }
         }
         let handlers = n.handlers.get();
@@ -108,16 +108,16 @@ impl RuntimeCore {
             handlers.is_some_and(|h| h.modal.is_some()), handlers.is_some_and(|h| h.has_primary())).hash(&mut h);
         (n.focus.selected, n.focus.step.is_some(), n.focus.default, self.focus_group(i).is_some()).hash(&mut h);
         (self.allowed(i), self.can_focus(i), n.inert).hash(&mut h);
-        if let Some(st) = self.scrolls.get(&n.id).filter(|_| n.scroll.is_some()) {
+        if let Some(st) = self.scroll.scrolls.get(&n.id).filter(|_| n.scroll.is_some()) {
             [st.offset.to_bits(), st.max.to_bits(), st.x.offset.to_bits(), st.x.max.to_bits()].hash(&mut h);
             [st.drawn_x, st.drawn.y()].map(f32::to_bits).hash(&mut h);
         }
         // Its box in its viewport's content space, which scrolling leaves alone.
-        let r = rect(self.drawn[i], w.shift);
+        let r = rect(self.paint.drawn[i], w.shift);
         [r.x0, r.y0, r.x1, r.y1].map(f64::to_bits).hash(&mut h);
         w.scrolled.hash(&mut h);
         self.env.scale.to_bits().hash(&mut h);
-        self.drawn_scale.get(i).map(|v| v.to_bits()).hash(&mut h);
+        self.paint.drawn_scale.get(i).map(|v| v.to_bits()).hash(&mut h);
         (n.vis.pixels.is_some(), n.vis.surface.is_some()).hash(&mut h);
         // A grid's rows, each kept while unchanged.
         if let Some(g) = n.vis.grid.as_deref() {
@@ -131,9 +131,9 @@ impl RuntimeCore {
     /// own text or label, and its descendants', folded bottom-up. Zero for nodes whose role
     /// doesn't read it.
     pub(super) fn a11y_content_prints(&self) -> Vec<u64> {
-        let mut sub = vec![0u64; self.nodes.len()];
-        for j in (0..self.nodes.len()).rev() {
-            let n = &self.nodes[j];
+        let mut sub = vec![0u64; self.tree.nodes.len()];
+        for j in (0..self.tree.nodes.len()).rev() {
+            let n = &self.tree.nodes[j];
             let own = if n.a11y.hidden || n.vis.opacity <= 0.01 || n.is_secure() { 0 }
                 else if let Some(l) = n.label.as_deref() { hash_str(l) }
                 else { n.text.as_deref().filter(|_| n.input.is_none()).map_or(0, |t| hash_str(&t.content)) };
@@ -145,12 +145,12 @@ impl RuntimeCore {
 
     /// Node `i` as an AccessKit node of `role`, without its children.
     pub(super) fn a11y_node(&self, i: usize, role: Role, w: &Walk) -> AkNode {
-        let n = &self.nodes[i];
+        let n = &self.tree.nodes[i];
         let handlers = n.handlers.get();
         let input = n.input.as_deref();
         let secure = n.is_secure();
         let text = n.text.as_deref().filter(|_| input.is_none());
-        let scroll = self.scrolls.get(&n.id).filter(|_| n.scroll.is_some());
+        let scroll = self.scroll.scrolls.get(&n.id).filter(|_| n.scroll.is_some());
         let modal = handlers.is_some_and(|h| h.modal.is_some());
         let focusable = self.can_focus(i);
         let mut node = AkNode::new(role);
@@ -197,7 +197,7 @@ impl RuntimeCore {
                 Some(false) => node.set_sort_direction(accesskit::SortDirection::Descending),
                 None => {}
             }
-            if let Some(j) = self.a11y_active_descendant(i) { node.set_active_descendant(super::a11y_tree::element_id(self.nodes[j].id)); }
+            if let Some(j) = self.a11y_active_descendant(i) { node.set_active_descendant(super::a11y_tree::element_id(self.tree.nodes[j].id)); }
             if m.busy { node.set_busy(); }
         }
         if let Some(v) = more.and_then(|m| m.value.as_deref()) { node.set_value(v); }
@@ -242,7 +242,7 @@ impl RuntimeCore {
                 node.set_scroll_x_max(st.x.max);
             }
         }
-        node.set_bounds(rect(self.drawn[i], shift));
+        node.set_bounds(rect(self.paint.drawn[i], shift));
         // What a pointer or keyboard user can do to it, routed to the same handlers.
         if actionable {
             if handlers.is_some_and(|h| h.on_press.is_some()) || input.is_some() { node.add_action(Ak::Click); }
@@ -278,12 +278,12 @@ impl RuntimeCore {
 
     /// The element node `i`'s `El::active_descendant` names, if it is in the tree.
     pub(crate) fn a11y_active_descendant(&self, i: usize) -> Option<usize> {
-        let key = self.nodes[i].a11y.more.as_deref()?.active.as_deref()?;
+        let key = self.tree.nodes[i].a11y.more.as_deref()?.active.as_deref()?;
         // Its own rows first: a row id may also key something elsewhere.
-        let inside = |j: &usize| std::iter::successors(self.nodes[*j].parent, |&p| self.nodes[p].parent).any(|p| p == i);
-        let own = (i + 1..self.nodes.len())
+        let inside = |j: &usize| std::iter::successors(self.tree.nodes[*j].parent, |&p| self.tree.nodes[p].parent).any(|p| p == i);
+        let own = (i + 1..self.tree.nodes.len())
             .take_while(inside)
-            .find(|&j| self.nodes[j].named(key) && !self.subtree_exiting(j));
+            .find(|&j| self.tree.nodes[j].named(key) && !self.subtree_exiting(j));
         own.or_else(|| self.live_named(None, key))
     }
 
@@ -299,8 +299,8 @@ impl RuntimeCore {
         static ON: OnceLock<bool> = OnceLock::new();
         static WARNED: Mutex<Option<HashSet<String>>> = Mutex::new(None);
         if !*ON.get_or_init(|| std::env::var_os("RUNE_A11Y_WARN").is_none_or(|v| v != "0")) { return; }
-        for i in 0..self.nodes.len() {
-            let n = &self.nodes[i];
+        for i in 0..self.tree.nodes.len() {
+            let n = &self.tree.nodes[i];
             let field = n.input.is_some();
             if n.path.is_empty() || n.a11y.hidden || n.inert || !(field || roles::warn_nameless(n.role)) || !self.can_focus(i) { continue; }
             if n.label.as_deref().is_some_and(|l| !l.trim().is_empty()) { continue; }
@@ -317,23 +317,23 @@ impl RuntimeCore {
     /// parent, else inside its grandparent, and so on out, as a component's own `"title"` is
     /// the one a control inside it means. What `El::labelled_by` and `El::described_by` name.
     pub(crate) fn a11y_keyed(&self, i: usize, key: &str) -> Option<usize> {
-        let mut scope = self.nodes[i].parent;
+        let mut scope = self.tree.nodes[i].parent;
         while let Some(s) = scope {
-            let inside = |j: &usize| std::iter::successors(self.nodes[*j].parent, |&p| self.nodes[p].parent).any(|p| p == s);
-            if let Some(j) = (s + 1..self.nodes.len())
+            let inside = |j: &usize| std::iter::successors(self.tree.nodes[*j].parent, |&p| self.tree.nodes[p].parent).any(|p| p == s);
+            if let Some(j) = (s + 1..self.tree.nodes.len())
                 .take_while(inside)
-                .find(|&j| j != i && self.nodes[j].named(key) && !self.subtree_exiting(j))
+                .find(|&j| j != i && self.tree.nodes[j].named(key) && !self.subtree_exiting(j))
             {
                 return Some(j);
             }
-            scope = self.nodes[s].parent;
+            scope = self.tree.nodes[s].parent;
         }
         None
     }
 
     /// Node `j`'s words as a name: its label, else its text, else the text inside it.
     pub(crate) fn a11y_words(&self, j: usize) -> String {
-        let n = &self.nodes[j];
+        let n = &self.tree.nodes[j];
         if n.is_secure() { return String::new(); }
         n.label.as_deref().filter(|l| !l.trim().is_empty()).map(str::to_owned)
             .or_else(|| n.text.as_deref().filter(|_| n.input.is_none()).map(|t| t.source_text().trim().to_owned()))
@@ -347,12 +347,12 @@ impl RuntimeCore {
         let mut skip: Option<usize> = None;
         // Its subtree is contiguous: a node after it is inside it while its parent is.
         let mut inside = vec![i];
-        while j < self.nodes.len() {
-            let Some(p) = self.nodes[j].parent else { break };
+        while j < self.tree.nodes.len() {
+            let Some(p) = self.tree.nodes[j].parent else { break };
             while inside.last().is_some_and(|&a| a != p) { inside.pop(); }
             if inside.is_empty() { break; }
             inside.push(j);
-            let n = &self.nodes[j];
+            let n = &self.tree.nodes[j];
             if skip.is_some_and(|s| inside.contains(&s)) { j += 1; continue; }
             skip = None;
             if n.a11y.hidden || n.vis.opacity <= 0.01 || n.is_secure() {

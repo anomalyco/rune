@@ -111,14 +111,14 @@ impl RuntimeCore {
     pub(super) fn land_group_fades(&mut self) {
         let landed: Vec<usize> = self.scene.store().events().iter()
             .filter_map(|e| match *e {
-                rune_motion::MotionEvent::Settled { node, prop, .. } if prop == P_GROUP_REST.id => self.node_index.get(&node).copied(),
+                rune_motion::MotionEvent::Settled { node, prop, .. } if prop == P_GROUP_REST.id => self.tree.node_index.get(&node).copied(),
                 _ => None,
             })
-            .filter(|&i| self.nodes[i].group_fade && !self.scene.store().is_animating(self.nodes[i].id, P_GROUP_REST))
+            .filter(|&i| self.tree.nodes[i].group_fade && !self.scene.store().is_animating(self.tree.nodes[i].id, P_GROUP_REST))
             .collect();
         for i in landed {
-            self.nodes[i].group_fade = false;
-            self.scene.store_mut().remove(self.nodes[i].id, P_GROUP_REST);
+            self.tree.nodes[i].group_fade = false;
+            self.scene.store_mut().remove(self.tree.nodes[i].id, P_GROUP_REST);
         }
     }
 
@@ -133,7 +133,7 @@ impl RuntimeCore {
         let rest = self.scene.get(n.id, P_GROUP_REST).unwrap_or(rest);
         // A control the keyboard reached shows as if hovered, as CSS reveals a hover-only button
         // on `:focus-visible` (or `:focus-within` around it): focus is never on something unseen.
-        let focused = self.focus.keyboard() && self.focus.path().is_some_and(|f| {
+        let focused = self.kbd.focus.keyboard() && self.kbd.focus.path().is_some_and(|f| {
             f.strip_prefix(n.path.as_str()).is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
         });
         let group = if focused { 1.0 } else { group };

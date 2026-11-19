@@ -4,6 +4,95 @@ use super::*;
 mod prepare;
 pub(super) mod remount;
 
+/// View commit, Taffy layout, memoization, virtual list windows and layout/visibility callback
+/// tracking owned by [`RuntimeCore`]. Ordered hot-first under `#[repr(C)]` so per-frame flags
+/// (`dirty`, `relayout`, `settle`) sit directly adjacent to [`FrameState`]'s `queue`/`live`.
+#[repr(C)]
+pub(crate) struct CommitState {
+    pub(in crate::runtime) dirty: bool,
+    pub(in crate::runtime) relayout: bool,
+    /// Every viewport change since the last commit came from the window's own resize
+    /// animation (`step_viewport`), not the user or the system.
+    pub(in crate::runtime) viewport_stepped: bool,
+    pub(in crate::runtime) settle: bool,
+    /// True when the commit in flight is for scroll/layout only (`self.state` wasn't mutated).
+    pub(in crate::runtime) state_unchanged: bool,
+    /// Why this frame committed, as [`commit_why::CommitWhy`] bits, until the frame log takes them.
+    pub(crate) commit_why: u16,
+    pub(in crate::runtime) commits: u64,
+    pub(in crate::runtime) commit_gen: u64,
+    /// The memo pass the current commit's first view build was. Memos none of its builds used
+    /// go once it applies.
+    pub(in crate::runtime) memo_since: u64,
+    /// The clock at the last commit.
+    pub(in crate::runtime) last_commit_clock: f64,
+    /// The last view's `Cx::foreground` and `Cx::focus_ring`, for rows built after it and the
+    /// rings painted until the next.
+    pub(in crate::runtime) defaults: cx::ViewDefaults,
+    pub(in crate::runtime) reuse: relayout::Reuse,
+    pub(in crate::runtime) layout: LayoutEngine,
+    pub(crate) memo: crate::memo::MemoCache,
+    pub(in crate::runtime) apply_scratch: apply_scratch::ApplyScratch,
+    pub(in crate::runtime) watch: crate::tooling::perf_warn::Watch,
+    /// Opt-in tooling checks. None keeps release commits free of key traversal/allocation.
+    pub(crate) key_warnings: Option<Vec<String>>,
+    pub(crate) virtuals: HashMap<String, crate::el::virtual_list::VirtualList>,
+    pub(crate) virtual_culled: HashSet<String>,
+    /// Fresh view accessors for focused text fields omitted by virtualization.
+    pub(in crate::runtime) virtual_inputs: HashMap<String, Box<InputSpec>>,
+    /// Whether an index-built list still fills its overscan, and for how many frames.
+    pub(in crate::runtime) virtual_fill: virtual_fill::Fill,
+    /// Keys the last view read with `Cx::layout` or `Cx::layout_size`, and what each resolved to.
+    pub(in crate::runtime) layout_seen: layout_read::LayoutSeen,
+    /// Rect last sent to each element's `El::on_layout`.
+    pub(in crate::runtime) layout_fired: HashMap<NodeId, [f32; 4]>,
+    /// Rect last sent to each element's `El::on_screen_layout`.
+    pub(in crate::runtime) screen_fired: HashMap<NodeId, [f32; 4]>,
+    /// (Drawn rect, laid-out rect) last sent to each element's `El::on_drawn_layout`.
+    pub(in crate::runtime) drawn_fired: HashMap<NodeId, ([f32; 4], [f32; 4])>,
+    /// Whether each element with `El::on_visible` was last on screen.
+    pub(in crate::runtime) visible_fired: HashMap<NodeId, bool>,
+    /// Whether layout feedback may still cause a commit (see `layout_read`).
+    pub(in crate::runtime) feedback: layout_read::Feedback,
+}
+
+impl CommitState {
+    // Single-caller constructor for `RuntimeCore::new`; inlined so it stays in its caller's
+    // codegen unit instead of shifting partitioning and dropping inlining in the paint walk.
+    #[inline]
+    pub(in crate::runtime) fn new() -> Self {
+        Self {
+            layout: LayoutEngine::new(),
+            memo: Default::default(),
+            memo_since: 0,
+            apply_scratch: Default::default(),
+            commits: 0,
+            commit_gen: 0,
+            dirty: true,
+            relayout: false,
+            viewport_stepped: false,
+            settle: false,
+            state_unchanged: false,
+            reuse: Default::default(),
+            commit_why: 0,
+            watch: Default::default(),
+            key_warnings: None,
+            defaults: Default::default(),
+            virtuals: HashMap::default(),
+            virtual_culled: HashSet::default(),
+            virtual_inputs: HashMap::default(),
+            virtual_fill: virtual_fill::Fill::default(),
+            layout_seen: Default::default(),
+            layout_fired: HashMap::default(),
+            screen_fired: HashMap::default(),
+            drawn_fired: HashMap::default(),
+            visible_fired: HashMap::default(),
+            feedback: Default::default(),
+            last_commit_clock: f64::NEG_INFINITY,
+        }
+    }
+}
+
 /// Which measurement pass a commit is on. The first pass trusts the last commit's geometry; a
 /// retry measures again because a virtual window fell short; past eight retries the pass is
 /// forced, mounting every row so a degenerate transcript can't loop forever.
@@ -129,16 +218,16 @@ pub(super) struct Measured {
 impl RuntimeCore {
     pub(super) fn commit(&mut self, app: &mut dyn AppDriver, tx: &Tx) {
         let _commit_time = crate::frame::profile::Scope::new(crate::frame::profile::Phase::Commit);
-        let _first_view = crate::tooling::perf_warn::launch::FirstView::start(self.commits == 0);
+        let _first_view = crate::tooling::perf_warn::launch::FirstView::start(self.commit.commits == 0);
         let budget = crate::tooling::perf_warn::budget::Commit::start();
         self.apply_playground(app);
         let _history = crate::memo::snapshot::enter();
         COMMITS.set(COMMITS.get() + 1);
-        self.last_commit_clock = self.clock;
-        self.memo_since = self.memo.next_pass();
-        for r in self.requests.reveals() {
-            if r.at_end && let Some(&id) = self.path_ids.get(&r.viewport)
-                && let Some(scroll) = self.scrolls.get_mut(&id)
+        self.commit.last_commit_clock = self.clock;
+        self.commit.memo_since = self.commit.memo.next_pass();
+        for r in self.scroll.requests.reveals() {
+            if r.at_end && let Some(&id) = self.tree.path_ids.get(&r.viewport)
+                && let Some(scroll) = self.scroll.scrolls.get_mut(&id)
             {
                 scroll.pin();
             }
@@ -150,7 +239,7 @@ impl RuntimeCore {
             self.discard_measured(measured);
             measured = self.measure_commit(app, tx);
         }
-        self.focus_before_commit = self.focus.owned();
+        self.kbd.focus_before_commit = self.kbd.focus.owned();
         // Settle layout reads first so a field that mounts once a rect is known is in `nodes`.
         measured = self.settle_layout_reads(app, measured, tx);
         if self.sync_requested_focus(app, &mut measured.nodes) {
@@ -165,29 +254,29 @@ impl RuntimeCore {
         }
         self.apply(app, measured, tx);
         self.scene.keep_flights(false);
-        self.memo.keep_since(self.memo_since);
+        self.commit.memo.keep_since(self.commit.memo_since);
         self.track_focused_rows();
         #[cfg(debug_assertions)]
         if COMMITS.get() % 16 == 1 { self.a11y_warn_nameless(); }
         self.prune_text_selection();
-        budget.end(self.watch.cause);
+        budget.end(self.commit.watch.cause);
     }
 
     /// Restores any nodes moved out of `self.nodes` and recycles `measured`'s buffers before a
     /// commit pass re-measures.
     pub(super) fn discard_measured(&mut self, mut measured: Measured) {
-        memo_reuse::restore_moved_nodes(&mut self.nodes, &mut measured.nodes, &measured.memo_reused, &measured.taken_paths);
+        memo_reuse::restore_moved_nodes(&mut self.tree.nodes, &mut measured.nodes, &measured.memo_reused, &measured.taken_paths);
         measured.nodes.clear();
-        self.spare_nodes = measured.nodes;
+        self.tree.spare_nodes = measured.nodes;
         if let Some(mut pending) = measured.memo_flattened {
             pending.clear();
-            self.memo.pending_scratch = pending;
+            self.commit.memo.pending_scratch = pending;
         }
         measured.memo_reused.clear();
-        self.memo.reused_scratch = measured.memo_reused;
+        self.commit.memo.reused_scratch = measured.memo_reused;
         measured.taken_paths.clear();
-        self.memo.taken_paths_scratch = measured.taken_paths;
-        self.layout = measured.layout;
+        self.commit.memo.taken_paths_scratch = measured.taken_paths;
+        self.commit.layout = measured.layout;
     }
 }
 

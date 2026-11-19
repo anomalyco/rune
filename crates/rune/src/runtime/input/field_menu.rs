@@ -26,16 +26,16 @@ impl RuntimeCore {
     /// the keyboard (`None`).
     pub(super) fn field_menu(&mut self, app: &mut dyn AppDriver, path: String, at: (f32, f32), hit_at: Option<(f32, f32)>, one: &mut Tx) -> bool {
         let Some(i) = self.live(&path) else { return false };
-        let Some(input) = self.nodes[i].input.as_deref() else { return false };
+        let Some(input) = self.tree.nodes[i].input.as_deref() else { return false };
         let Some(access) = input.access.clone() else { return false };
         let (single, secure) = (input.single_line, input.edit.is_secure());
         let spell = input.spellcheck && !secure;
-        let layout = self.nodes[i].text_layout.clone();
+        let layout = self.tree.nodes[i].text_layout.clone();
         let point = hit_at.and_then(|(x, y)| self.input_text_point(i, x, y));
         let s = self.env.scale;
-        let toggle = std::iter::successors(Some(i), |&j| self.nodes[j].parent).find_map(|j| self.nodes[j].handlers.on_spellcheck.clone());
-        let keep = std::iter::successors(Some(i), |&j| self.nodes[j].parent).find_map(|j| self.nodes[j].handlers.on_spellcheck_languages.clone());
-        if self.focus.path() != Some(path.as_str()) {
+        let toggle = std::iter::successors(Some(i), |&j| self.tree.nodes[j].parent).find_map(|j| self.tree.nodes[j].handlers.on_spellcheck.clone());
+        let keep = std::iter::successors(Some(i), |&j| self.tree.nodes[j].parent).find_map(|j| self.tree.nodes[j].handlers.on_spellcheck_languages.clone());
+        if self.kbd.focus.path() != Some(path.as_str()) {
             self.set_focus(app, Some(path.clone()), false);
         }
         let e = access(app.states());
@@ -104,7 +104,7 @@ impl RuntimeCore {
         }
         one.commit = one.commit.instant();
         log_event!(self, "field menu {path}");
-        self.popups.push_back(Request {
+        self.host.popups.push_back(Request {
             menu,
             anchor: PopupAnchor::Point(at.0, at.1),
             on_pick: Box::new(|_, _, _| {}),
@@ -115,7 +115,7 @@ impl RuntimeCore {
 
     /// Does what `picked` in field menu `menu` asks, on its field.
     pub(super) fn field_menu_pick(&mut self, app: &mut dyn AppDriver, menu: FieldMenu, picked: &str, one: &mut Tx) {
-        if self.focus.path() != Some(menu.path.as_str()) && self.live(&menu.path).is_some() {
+        if self.kbd.focus.path() != Some(menu.path.as_str()) && self.live(&menu.path).is_some() {
             self.set_focus(app, Some(menu.path.clone()), false);
         }
         let command = |c| KeyEvent { key: Key::Command(c), mods: Mods { cmd: true, ctrl: !cfg!(target_os = "macos"), ..Mods::default() } };
@@ -133,7 +133,7 @@ impl RuntimeCore {
             "learn-spelling" => {
                 if let Some((_, _, word)) = &menu.word {
                     crate::spell::learn(word);
-                    self.dirty = true;
+                    self.commit.dirty = true;
                 }
             }
             "spellcheck" => {
@@ -149,7 +149,7 @@ impl RuntimeCore {
                     }
                     crate::spell::set_languages(&current);
                     keep(app.states(), current, one);
-                    self.dirty = true;
+                    self.commit.dirty = true;
                 }
             }
             id => {

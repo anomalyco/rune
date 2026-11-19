@@ -16,7 +16,7 @@ fn view(_: &(), _: &mut Cx<()>) -> El {
 }
 
 fn offset(rt: &Runtime<()>) -> f64 {
-    rt.scrolls.values().next().unwrap().offset
+    rt.scroll.scrolls.values().next().unwrap().offset
 }
 
 fn runtime() -> Runtime<()> {
@@ -129,7 +129,7 @@ fn another_glide_after_a_springed_one_runs_on_glide_again() {
     assert_eq!(offset(&rt), 500.0);
     rt.update(|_, tx| tx.scroll_to_bottom("scroll"));
     rt.frame(DT);
-    assert!(rt.scrolls.values().next().unwrap().spring.is_none(), "a glide to the bottom takes the default spring");
+    assert!(rt.scroll.scrolls.values().next().unwrap().spring.is_none(), "a glide to the bottom takes the default spring");
 }
 
 /// The viewport's offset each of 120 frames of the request `ask` makes.

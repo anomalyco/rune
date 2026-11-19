@@ -51,30 +51,30 @@ impl RuntimeCore {
         video_signature: &mut u64,
         glyph_count: &mut usize,
     ) -> Option<usize> {
-        let n = &self.nodes[i];
+        let n = &self.tree.nodes[i];
         let mut faded_slot = None;
         // Disabled styling is distributed to each authored paint leaf at build time.
         // Keep this local to emission: it neither propagates to children nor opens scopes.
         let o = o * n.vis.paint_alpha;
-        let srgb = self.srgb_blend;
+        let srgb = self.paint.srgb_blend;
         // Subtree blur runs once after rasterization, never on each primitive as well.
         let blur = 0.0;
         let k_px = sc * s;
         let native_material = match n.material {
             // A dimmed-out element takes no native view: its fallback draws nothing.
-            Some(material) if self.materials.len() < crate::MAX_NATIVE_MATERIALS
+            Some(material) if self.paint.materials.len() < crate::MAX_NATIVE_MATERIALS
                 && effective_opacity * n.vis.paint_alpha > 0.001 => {
                 let radius = crate::system_material::clamp_radius(radii, w, h);
                 let continuous = n.vis_flags.continuous_corners();
-                self.materials.push(crate::system_material::MaterialDraw {
+                self.paint.materials.push(crate::system_material::MaterialDraw {
                     id: n.id, material, rect: [r[0], r[1], w, h], radius, continuous,
                     opacity: effective_opacity * n.vis.paint_alpha,
                 });
-                self.native_materials.then_some(if continuous { -radius } else { radius })
+                self.paint.native_materials.then_some(if continuous { -radius } else { radius })
             }
             _ => None,
         };
-        let stuck_k = if self.has_sticky { (self.stuck[i].abs() / sticky::SHADOW_RAMP).min(1.0) } else { 0.0 };
+        let stuck_k = if self.tree.has_sticky { (self.scroll.stuck[i].abs() / sticky::SHADOW_RAMP).min(1.0) } else { 0.0 };
         let stuck_shadows: (f32, &[crate::el::Shadow]) = match &n.sticky {
             Some(s) if stuck_k > 0.0 => (stuck_k, &s.shadows),
             _ => (0.0, &[]),
@@ -282,19 +282,19 @@ impl RuntimeCore {
                 }
             }
             if let Some((surface, fit)) = &n.vis.surface {
-                if let Some(pulled) = surface.pull_video(video_clock, self.live.waker()) {
+                if let Some(pulled) = surface.pull_video(video_clock, self.frame.live.waker()) {
                     // A clip whose next picture isn't due for a while wakes the window
                     // then, instead of drawing every refresh in between.
                     let wait = pulled.due.map(|due| due.saturating_duration_since(crate::time::Instant::now()).as_secs_f64());
                     match wait {
                         Some(wait) if pulled.active && wait > crate::video::WAKE_MIN => {
                             let wake = self.clock + wait;
-                            self.paint_keep.cycles.other_deadline();
-                            if self.loop_wake.is_none_or(|w| wake < w.0) {
-                                self.loop_wake = Some((wake, now + wait * self.time_scale as f64));
+                            self.paint.keep.cycles.other_deadline();
+                            if self.motion.loop_wake.is_none_or(|w| wake < w.0) {
+                                self.motion.loop_wake = Some((wake, now + wait * self.time_scale as f64));
                             }
                         }
-                        _ => self.videos_active |= pulled.active,
+                        _ => self.paint.videos_active |= pulled.active,
                     }
                     *video_signature = crate::video::fold(*video_signature, pulled.generation, surface.key());
                 }
@@ -316,7 +316,7 @@ impl RuntimeCore {
                 bands::push_ring(&mut self.instances, ring);
             } else {
                 if let Some(rune_motion::LoopKind::OpacityCycle(curve)) = n.looping.as_ref().map(|l| l.kind)
-                    && n.a11y.hidden && !next.is_some_and(|j| self.nodes[j].parent == Some(i))
+                    && n.a11y.hidden && !next.is_some_and(|j| self.tree.nodes[j].parent == Some(i))
                     && !isolate && !in_cache && !skip_paint && loop_vis && base_opacity > 0.0
                     && pinh.paint_opacity > 0.0 && loop_value.is_some_and(|v| v > 0.0) && n.vis.layer_opacity == 1.0
                     && n.vis.paint_alpha == 1.0 && bw == 0.0 && overlay == [0.0; 4]
@@ -326,7 +326,7 @@ impl RuntimeCore {
                     && !n.vis_flags.hit() && !turned && cover.is_none() && n.help.is_none()
                     && curve.stops.iter().all(|&(_, a)| a.is_finite() && a > 0.001 && a <= 1.0 && base[3] * a > 0.0005)
                 {
-                    self.paint_keep.cycles.record(i, self.instances.len(), curve, (base, o / loop_value.unwrap_or(1.0)), ring.rect);
+                    self.paint.keep.cycles.record(i, self.instances.len(), curve, (base, o / loop_value.unwrap_or(1.0)), ring.rect);
                 }
                 self.instances.push(Instance { fill, ..ring });
             }

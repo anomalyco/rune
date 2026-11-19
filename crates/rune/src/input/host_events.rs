@@ -465,7 +465,7 @@ pub(crate) fn ime_area_window(rt: &RuntimeCore) -> Option<[f32; 4]> {
 
 /// Takes any pending IME reset flag and returns the current IME cursor area in window points.
 pub(crate) fn ime_sync_state(rt: &mut RuntimeCore) -> (bool, Option<[f32; 4]>) {
-    let reset = std::mem::take(&mut rt.ime_reset);
+    let reset = std::mem::take(&mut rt.edit.ime_reset);
     let area = ime_area_window(rt);
     (reset, area)
 }
@@ -517,7 +517,7 @@ pub(crate) fn sync_ime(window: &Window, rt: &mut RuntimeCore, ime_state: &mut bo
     #[cfg(target_os = "macos")]
     {
         use winit::platform::macos::{OptionAsAlt, WindowExtMacOS};
-        let want = if ime_allowed && rt.ime_option_as_alt { OptionAsAlt::Both } else { OptionAsAlt::None };
+        let want = if ime_allowed && rt.edit.ime_option_as_alt { OptionAsAlt::Both } else { OptionAsAlt::None };
         if window.option_as_alt() != want {
             window.set_option_as_alt(want);
         }

@@ -26,10 +26,10 @@ impl RuntimeCore {
     pub(super) fn tell_scroll_offsets(&mut self, instant: bool) -> bool {
         let now = self.t;
         let mut calls = Vec::new();
-        for n in &self.nodes {
+        for n in &self.tree.nodes {
             let Some(h) = n.handlers.get() else { continue };
             let Some(f) = h.on_scroll_offset.as_ref() else { continue };
-            let Some(st) = self.scrolls.get_mut(&n.id) else { continue };
+            let Some(st) = self.scroll.scrolls.get_mut(&n.id) else { continue };
             let viewport = [n.local.w, n.local.h];
             // The presented rect is snapped to the pixel grid; only a spring moves it further.
             let drawn = self.scene.presented(n.id).map_or(viewport, |p| {

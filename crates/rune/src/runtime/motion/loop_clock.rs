@@ -25,7 +25,7 @@ pub(super) struct LoopClock {
 impl RuntimeCore {
     /// Before a frame's commits, which then step `dt` more.
     pub(super) fn keep_loops_on_clock(&mut self, dt: f64) {
-        self.loop_clock.lead = dt * f64::from(self.time_scale);
+        self.motion.loop_clock.lead = dt * f64::from(self.time_scale);
         self.catch_loops_up();
     }
 
@@ -33,27 +33,27 @@ impl RuntimeCore {
     /// Commits call it too, so a loop a hidden wake starts isn't given time from before it.
     pub(super) fn catch_loops_up(&mut self) {
         let k = f64::from(self.time_scale);
-        let end = self.t + self.loop_clock.lead;
-        let c = &mut self.loop_clock;
+        let end = self.t + self.motion.loop_clock.lead;
+        let c = &mut self.motion.loop_clock;
         if let Some((clock, t)) = c.last {
             c.owed = (c.owed + (self.clock - clock) * k - (end - t)).max(-JITTER);
         }
         c.last = Some((self.clock, end));
         if c.owed <= JITTER { return; }
         let owed = std::mem::take(&mut c.owed);
-        for (id, track) in &mut self.loops {
+        for (id, track) in &mut self.motion.loops {
             track.advance(owed * f64::from(self.scene.store().node_time_scale(*id)));
         }
     }
 
     /// Where a loop a commit starts at node time `t` begins.
     pub(super) fn loop_start(&self, id: NodeId, t: f64) -> f64 {
-        t + self.loop_clock.lead * f64::from(self.scene.store().node_time_scale(id))
+        t + self.motion.loop_clock.lead * f64::from(self.scene.store().node_time_scale(id))
     }
 
     /// The frame's step: commits after it start their loops where they are.
     pub(super) fn loops_stepped(&mut self) {
-        self.loop_clock.lead = 0.0;
+        self.motion.loop_clock.lead = 0.0;
     }
 
     /// Runs each of `nodes` from `scales.len()` on at its `El::time_scale` times its parent's,
@@ -73,10 +73,10 @@ impl RuntimeCore {
             store.set_node_time_scale(n.id, k);
             let shift = store.node_time(n.id) - before;
             if shift != 0.0 {
-                if let Some(st) = self.reveals.get_mut(&n.id) {
+                if let Some(st) = self.motion.reveals.get_mut(&n.id) {
                     st.step(RevealEvent::Shift { shift });
                 }
-                if let Some(l) = self.loops.get_mut(&n.id) { l.shift(shift); }
+                if let Some(l) = self.motion.loops.get_mut(&n.id) { l.shift(shift); }
             }
         }
     }

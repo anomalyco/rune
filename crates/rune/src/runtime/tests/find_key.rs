@@ -92,10 +92,10 @@ fn keyed_lookups_skip_exiting_nodes_and_popup_anchors_match_keyed_suffix() {
             tx.scroll_into_view("gone");
         });
         rt.frame(1.0 / 60.0);
-        let gone_idx = rt.nodes.iter().position(|n| n.key.as_deref() == Some("gone")).expect("gone plays its exit");
+        let gone_idx = rt.tree.nodes.iter().position(|n| n.key.as_deref() == Some("gone")).expect("gone plays its exit");
         assert!(rt.core().subtree_exiting(gone_idx), "gone must be actively exiting");
-        let hx = rt.nodes.iter().find(|n| n.key.as_deref() == Some("hx")).unwrap().id;
-        assert_eq!(rt.scrolls[&hx].x.offset, 0.0, "reveal_row_x must ignore exiting target");
+        let hx = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("hx")).unwrap().id;
+        assert_eq!(rt.scroll.scrolls[&hx].x.offset, 0.0, "reveal_row_x must ignore exiting target");
     }
 
     // 3. stuck_cover matches keyed suffixes via Node::named and ignores exiting nodes.
@@ -116,7 +116,7 @@ fn keyed_lookups_skip_exiting_nodes_and_popup_anchors_match_keyed_suffix() {
         rt.wheel(50.0, 50.0, -80.0);
         rt.update(|show, _| *show = false);
         rt.frame(1.0 / 60.0);
-        let sc_path = rt.nodes.iter().find(|n| n.key.as_deref() == Some("sc")).unwrap().path.clone();
+        let sc_path = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("sc")).unwrap().path.clone();
         assert_eq!(rt.core().stuck_cover(&sc_path, "hdr/pin"), None, "stuck_cover must match keyed suffix inside stuck header");
         assert!(rt.core().stuck_cover(&sc_path, "leaving").is_some_and(|c| c > 0.0), "stuck_cover must ignore exiting node");
     }

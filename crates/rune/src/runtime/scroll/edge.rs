@@ -35,10 +35,10 @@ impl RuntimeCore {
     /// the ramp starts outside `r` so the edge itself only partly fades. `bottom` is the
     /// presented bottom edge (see `stuck_offset`).
     pub(super) fn scroll_edge_fade(&self, i: usize, f: [f32; 4], r: [f32; 4], k: f32, bottom: f32) -> ([f32; 4], [f32; 4]) {
-        let n = &self.nodes[i];
+        let n = &self.tree.nodes[i];
         let mut own = f.map(|v| v * k);
         let width = n.scroll_edges.fade;
-        let Some(st) = self.scrolls.get(&n.id).filter(|_| width > 0.0 && n.scroll.is_some()) else { return (own, r) };
+        let Some(st) = self.scroll.scrolls.get(&n.id).filter(|_| width > 0.0 && n.scroll.is_some()) else { return (own, r) };
         let stuck = self.stuck_offset(i, bottom);
         let offset = stuck.unwrap_or(st.offset) + f64::from(st.slack.height());
         let below = if stuck.is_some() { 0.0 } else { st.max - offset };
@@ -69,28 +69,28 @@ impl RuntimeCore {
     /// the clip it had (`sticky_bands`).
     pub(in crate::runtime) fn fade_below_header(&mut self, section: usize, s: f32) {
         let h = section + 1;
-        if self.nodes.get(h).is_none_or(|c| c.parent != Some(section)) { return; }
+        if self.tree.nodes.get(h).is_none_or(|c| c.parent != Some(section)) { return; }
         let Some((crate::el::StickyEdge::Top, inset, false)) = self.sticky_of(h) else { return };
         let (frame, Some(viewport)) = self.sticky_frame_of(h, crate::el::StickyEdge::Top) else { return };
-        let edges = self.nodes[viewport].scroll_edges;
+        let edges = self.tree.nodes[viewport].scroll_edges;
         if !edges.fade_style.below_sticky || edges.fade <= 0.0 { return; }
-        let n = &self.nodes[h];
+        let n = &self.tree.nodes[h];
         let Some(p) = self.scene.presented(n.id) else { return };
         let own = self.scene.get(n.id, prop::OFFSET).unwrap_or(rune_motion::Vec2::ZERO);
-        let inh = self.inh_scratch[section];
-        let top = p.rect.y - own.y + inh.dy + self.row_dy[h];
+        let inh = self.paint.inh_scratch[section];
+        let top = p.rect.y - own.y + inh.dy + self.paint.row_dy[h];
         let left = p.rect.x - own.x + inh.dx;
-        let height = if self.row_h[h] >= 0.0 { self.row_h[h] } else { p.rect.h };
+        let height = if self.paint.row_h[h] >= 0.0 { self.paint.row_h[h] } else { p.rect.h };
         let shift = sticky::shift(crate::el::StickyEdge::Top, inset, [top, top + height, left, left + p.rect.w], frame);
         let (band, hidden) = (frame[0] + inset, frame[0] + inset - top);
-        let next_top = frame[3] + self.nodes[section].inset[3];
+        let next_top = frame[3] + self.tree.nodes[section].inset[3];
         if shift <= 0.0 || next_top - band < height { return; }
         let k = inh.scale * s;
         let (w, o) = edge_ramp(edges.fade_style, edges.fade * k, f64::from(hidden), k);
         if w == 0.0 { return; }
         let bottom = (inh.anchor_to[1] + (top + shift + height - inh.anchor[1]) * inh.scale) * s;
-        let inh = &mut self.inh_scratch[section];
-        self.sticky_bands.push((section, inh.paint_clip[1]));
+        let inh = &mut self.paint.inh_scratch[section];
+        self.scroll.sticky_bands.push((section, inh.paint_clip[1]));
         inh.paint_clip[1] = inh.paint_clip[1].max(bottom);
         inh.paint_fade[1] = w;
         inh.paint_fade_origin[1] = bottom - o * w.abs();

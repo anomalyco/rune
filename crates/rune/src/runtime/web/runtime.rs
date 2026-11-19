@@ -93,7 +93,7 @@ mod tests {
         }
         let mut rt = Runtime::new((crate::TextEdit::new("a🦀c"), 0), view, (300.0, 100.0), Env::default());
         rt.frame(0.0);
-        let key = rt.nodes.iter().find(|n| n.key.as_deref() == Some("input")).unwrap().path.clone();
+        let key = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("input")).unwrap().path.clone();
         rt.set_focus(Some(key.clone()), true);
         let event = json!({"kind":"edit", "key":key, "base":0, "expected":"a🦀c",
             "start":1, "end":3, "text":"é", "anchor":2, "focus":2});
@@ -162,7 +162,7 @@ mod tests {
         }
         let mut rt = Runtime::new(crate::TextEdit::new("🦀 hello "), view, (300.0, 100.0), Env::default());
         rt.frame(0.0);
-        let key = rt.nodes.iter().find(|n| n.key.as_deref() == Some("input")).unwrap().path.clone();
+        let key = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("input")).unwrap().path.clone();
         rt.set_focus(Some(key.clone()), true);
         let mut event = json!({"kind":"preedit", "key":key, "base":5, "expected":"hello ",
             "start":0, "end":6, "text":"hello", "anchor":5, "focus":5});
@@ -192,7 +192,7 @@ mod tests {
         }
         let mut rt = Runtime::new(crate::TextEdit::new("é🦀 tail"), view, (300.0, 100.0), Env::default());
         rt.frame(0.0);
-        let key = rt.nodes.iter().find(|n| n.key.as_deref() == Some("input")).unwrap().path.clone();
+        let key = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("input")).unwrap().path.clone();
         rt.set_focus(Some(key.clone()), true);
         let mut event = json!({"kind":"edit", "key":key, "base":2, "expected":"🦀 ",
             "start":1, "end":2, "text":"x", "anchor":1, "focus":1});
@@ -288,7 +288,7 @@ impl RuntimeCore {
 
     /// Whether a release (or an edit) left a handler that has to run inside the input's event.
     pub(crate) fn web_release_needs_frame(&self) -> bool {
-        self.queue.iter().any(Self::web_needs_event)
+        self.frame.queue.iter().any(Self::web_needs_event)
     }
 
     /// A press whose only such action focuses a text field runs that action now, as a frame
@@ -297,15 +297,15 @@ impl RuntimeCore {
     /// wait for the display's. False, with nothing run, when any other such action is queued or
     /// a focus is already asked for.
     pub(crate) fn web_focus_field(&mut self, app: &mut dyn AppDriver) -> bool {
-        if self.relayout || self.focus_request.is_some() || self.pending.focus_to.is_some() { return false; }
-        let needs: Vec<usize> = self.queue.iter().enumerate().filter(|(_, a)| Self::web_needs_event(a)).map(|(i, _)| i).collect();
+        if self.commit.relayout || self.kbd.focus_request.is_some() || self.frame.pending.focus_to.is_some() { return false; }
+        let needs: Vec<usize> = self.frame.queue.iter().enumerate().filter(|(_, a)| Self::web_needs_event(a)).map(|(i, _)| i).collect();
         let [pos] = needs[..] else { return false };
-        if !matches!(self.queue.iter().nth(pos), Some(Action::Focus(..))) { return false; }
+        if !matches!(self.frame.queue.iter().nth(pos), Some(Action::Focus(..))) { return false; }
         let mut tx = self.transaction(app);
-        let action = self.queue.remove(pos);
+        let action = self.frame.queue.remove(pos);
         let changed = self.run_action(app, action, &mut tx);
-        self.dirty |= changed;
-        merge(&mut self.pending, tx);
+        self.commit.dirty |= changed;
+        merge(&mut self.frame.pending, tx);
         true
     }
 
@@ -313,19 +313,19 @@ impl RuntimeCore {
     /// the page's field before its next key; None when what's pending needs a whole frame now
     /// (a handler that asked for the clipboard, a link, focus or a selection).
     pub(crate) fn web_edit_context(&mut self, app: &mut dyn AppDriver, mirror: &mut Mirror) -> Option<bool> {
-        let tx = &self.pending;
-        if self.web_release_needs_frame() || self.focus_request.is_some() || tx.blur || tx.focus_to.is_some() || tx.select.is_some() || !tx.keys.is_empty()
+        let tx = &self.frame.pending;
+        if self.web_release_needs_frame() || self.kbd.focus_request.is_some() || tx.blur || tx.focus_to.is_some() || tx.select.is_some() || !tx.keys.is_empty()
             || tx.copy.is_some() || tx.paste || !tx.clipboard_reads.is_empty() || !tx.pick_reads.is_empty()
             || !tx.open_urls.is_empty() || !tx.file_dialogs.is_empty() || !tx.popups.is_empty() || tx.clear_secret {
             return None;
         }
         let access = self.focused_input()?.access.clone()?;
-        let key = self.focus.path()?;
+        let key = self.kbd.focus.path()?;
         Some(mirror.update(key, Some(access(app.states()))))
     }
     pub(crate) fn web_context(&self, mirror: &mut Mirror) -> bool {
         match self.focused_input().filter(|i| i.access.is_some()) {
-            Some(input) => mirror.update(self.focus.path().unwrap_or_default(), Some(&input.edit)),
+            Some(input) => mirror.update(self.kbd.focus.path().unwrap_or_default(), Some(&input.edit)),
             None => mirror.update("", None),
         }
     }
@@ -367,14 +367,14 @@ impl RuntimeCore {
 
     pub(crate) fn web_secure(&mut self, key: &str, text: String) {
         let event = crate::KeyEvent { key: crate::Key::Text(text), mods: crate::Mods::default() };
-        if self.focus.path() == Some(key) && self.has_secure_focus() {
+        if self.kbd.focus.path() == Some(key) && self.has_secure_focus() {
             self.key(event);
         }
     }
 
     pub(crate) fn web_edit(&mut self, app: &mut dyn AppDriver, event: &serde_json::Value) {
         let Some(key) = event["key"].as_str() else { return };
-        if self.focus.path() != Some(key) || self.has_secure_focus() { return; }
+        if self.kbd.focus.path() != Some(key) || self.has_secure_focus() { return; }
         let number = |key: &str| event[key].as_u64().and_then(|n| usize::try_from(n).ok());
         let Some(base) = number("base") else { return };
         let Some(expected) = event["expected"].as_str() else { return };
@@ -407,8 +407,8 @@ impl RuntimeCore {
             }
             EditOutcome::default()
         }, &mut tx);
-        if composing_before || event["kind"] == "preedit" { self.key_releases.ime_took_key(); }
-        if changed { self.dirty = true; }
-        merge(&mut self.pending, tx);
+        if composing_before || event["kind"] == "preedit" { self.kbd.key_releases.ime_took_key(); }
+        if changed { self.commit.dirty = true; }
+        merge(&mut self.frame.pending, tx);
     }
 }

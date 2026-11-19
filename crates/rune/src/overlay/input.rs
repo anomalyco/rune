@@ -8,7 +8,7 @@ pub(super) fn drop_window_requests(rt: &mut RuntimeCore) {
     rt.shell_request = None;
     rt.ignore_minimize("an overlay");
     // Overlays size through `OverlayHandle::resize`, not `Tx::resize_window`.
-    rt.window_frame = None;
+    rt.host.window_frame = None;
 }
 
 impl OverlayCore {

@@ -149,7 +149,7 @@ fn memo_children_and_plain_children_flatten_to_matching_node_tables() {
     let mut memoed = Runtime::new(S { edit: TextEdit::new("hello"), px: sample_pixels(), use_memo: true }, view, (320.0, 240.0), env);
     plain.frame(0.0);
     memoed.frame(0.0);
-    assert_nodes_match(&plain.nodes, &memoed.nodes, None, None);
+    assert_nodes_match(&plain.tree.nodes, &memoed.tree.nodes, None, None);
 }
 
 #[test]

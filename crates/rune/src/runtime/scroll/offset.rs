@@ -32,15 +32,15 @@ impl RuntimeCore {
         for r in requests {
             if r.anchor {
                 let Some((i, to)) = self.anchor_offset(&r.key, r.y.unwrap_or(0.0)) else { continue };
-                jumps.push((self.nodes[i].id, false, to));
+                jumps.push((self.tree.nodes[i].id, false, to));
                 anchors.push((jumps.len() - 1, r.key, r.y.unwrap_or(0.0)));
-                if let Some(st) = self.scrolls.get_mut(&self.nodes[i].id) { st.halt(); }
+                if let Some(st) = self.scroll.scrolls.get_mut(&self.tree.nodes[i].id) { st.halt(); }
                 continue;
             }
             let Some(i) = self.scroll_viewport_on(&r.key, r.x.is_some(), r.y.is_some()) else { continue };
-            let (id, axes) = (self.nodes[i].id, self.nodes[i].scroll_axes);
-            let (view_w, view_h) = (f64::from(self.nodes[i].local.w), f64::from(self.nodes[i].local.h));
-            let Some(st) = self.scrolls.get_mut(&id) else { continue };
+            let (id, axes) = (self.tree.nodes[i].id, self.tree.nodes[i].scroll_axes);
+            let (view_w, view_h) = (f64::from(self.tree.nodes[i].local.w), f64::from(self.tree.nodes[i].local.h));
+            let Some(st) = self.scroll.scrolls.get_mut(&id) else { continue };
             let glide = r.glide.filter(|_| animate);
             if glide.is_some() { st.spring = glide; }
             if let Some(x) = r.x.filter(|_| axes.x()) {
@@ -89,8 +89,8 @@ impl RuntimeCore {
     fn apply_jumps(&mut self, jumps: &[(NodeId, bool, f64)]) {
         let now = self.clock;
         for &(id, horizontal, to) in jumps {
-            let stick = self.nodes.iter().find(|n| n.id == id).and_then(|n| n.scroll).is_some_and(|s| s.stick_bottom);
-            let Some(st) = self.scrolls.get_mut(&id) else { continue };
+            let stick = self.tree.nodes.iter().find(|n| n.id == id).and_then(|n| n.scroll).is_some_and(|s| s.stick_bottom);
+            let Some(st) = self.scroll.scrolls.get_mut(&id) else { continue };
             st.moved();
             let was = if horizontal { st.x.offset } else { st.offset };
             if horizontal {
@@ -116,24 +116,24 @@ impl RuntimeCore {
     fn anchor_offset(&self, key: &str, at: f32) -> Option<(usize, f64)> {
         let found = |scope: Option<&str>, key: &str| {
             self.live_named(scope, key)
-                .map(|i| (i, self.nodes[i].target[1]))
+                .map(|i| (i, self.tree.nodes[i].target[1]))
                 .or_else(|| {
-                    let (i, [_, y0, _, _]) = self.highlight_target_in(&self.nodes, scope, key)?;
+                    let (i, [_, y0, _, _]) = self.highlight_target_in(&self.tree.nodes, scope, key)?;
                     (!self.subtree_exiting(i)).then_some((i, y0))
                 })
         };
         // `"row/mark"`: element or highlight `mark` anywhere inside the element keyed `row`.
         let top = found(None, key).or_else(|| key.split_once('/').and_then(|(row, mark)| found(Some(row), mark)));
         if let Some((i, top)) = top {
-            let v = std::iter::successors(Some(i), |&p| self.nodes[p].parent).find(|&p| self.nodes[p].scroll.is_some() && self.nodes[p].scroll_axes.y())?;
-            return Some((v, f64::from(top - self.nodes[v].target[1] - at).max(0.0)));
+            let v = std::iter::successors(Some(i), |&p| self.tree.nodes[p].parent).find(|&p| self.tree.nodes[p].scroll.is_some() && self.tree.nodes[p].scroll_axes.y())?;
+            return Some((v, f64::from(top - self.tree.nodes[v].target[1] - at).max(0.0)));
         }
-        self.nodes.iter().find_map(|n| {
-            let list = self.virtuals.get(&n.path)?;
+        self.tree.nodes.iter().find_map(|n| {
+            let list = self.commit.virtuals.get(&n.path)?;
             // A row that isn't mounted stands where the estimates put it; the jump mounts it and
             // `scroll_to_offsets` places `mark` once it has.
             let index = list.index_of(key).or_else(|| list.index_of(key.split_once('/')?.0))?;
-            let v = *self.node_index.get(self.path_ids.get(&list.scroll_path)?)?;
+            let v = *self.tree.node_index.get(self.tree.path_ids.get(&list.scroll_path)?)?;
             Some((v, f64::from(list.top + list.pad_top + list.prefix(index) - at).max(0.0)))
         })
     }
@@ -141,11 +141,11 @@ impl RuntimeCore {
     /// The viewport keyed (or pathed) `key`, or the nearest one around it, that scrolls
     /// horizontally (`x`) or vertically (`y`).
     fn scroll_viewport_on(&self, key: &str, x: bool, y: bool) -> Option<usize> {
-        let i = self.nodes.iter().enumerate()
+        let i = self.tree.nodes.iter().enumerate()
             .position(|(i, n)| n.named(key) && !self.subtree_exiting(i))
-            .or_else(|| self.highlight_target_in(&self.nodes, None, key).map(|(i, _)| i))?;
-        std::iter::successors(Some(i), |&p| self.nodes[p].parent).find(|&p| {
-            let n = &self.nodes[p];
+            .or_else(|| self.highlight_target_in(&self.tree.nodes, None, key).map(|(i, _)| i))?;
+        std::iter::successors(Some(i), |&p| self.tree.nodes[p].parent).find(|&p| {
+            let n = &self.tree.nodes[p];
             n.scroll.is_some() && ((x && n.scroll_axes.x()) || (y && n.scroll_axes.y()))
         })
     }
@@ -163,14 +163,14 @@ impl RuntimeCore {
     /// doesn't lift it back up.
     pub(super) fn ease_to_shrunk_end(&mut self, i: usize, overflow: f64) -> Option<f64> {
         let c = self.scroll_stack(i)?;
-        let stack = self.stacks.get(&self.nodes[c].id)?;
+        let stack = self.motion.stacks.get(&self.tree.nodes[c].id)?;
         let moving = stack.moving || !stack.closing.is_empty();
-        let path = &self.nodes[i].path;
-        let owned = self.requests.owns(path);
-        let bottom = self.scroll_children(i).map(|k| self.nodes[k].target[3]).reduce(f32::max).unwrap_or(self.nodes[c].target[3]);
-        let end = f64::from(bottom - self.nodes[i].target[3]).max(0.0);
+        let path = &self.tree.nodes[i].path;
+        let owned = self.scroll.requests.owns(path);
+        let bottom = self.scroll_children(i).map(|k| self.tree.nodes[k].target[3]).reduce(f32::max).unwrap_or(self.tree.nodes[c].target[3]);
+        let end = f64::from(bottom - self.tree.nodes[i].target[3]).max(0.0);
         let held = self.reduced_motion || owned;
-        let st = self.scrolls.get_mut(&self.nodes[i].id)?;
+        let st = self.scroll.scrolls.get_mut(&self.tree.nodes[i].id)?;
         let _ = mode::step(&mut st.mode, ModeEvent::Growth { moving });
         match st.mode {
             ScrollMode::Glide { to: GlideTo::ShrunkEnd(_), .. } if held || st.shrink_cut() || end >= st.offset => st.mode = st.mode.to_rest(),
@@ -295,7 +295,7 @@ impl RuntimeCore {
     pub(super) fn step_nudges(&mut self) -> Option<f64> {
         let now = self.clock;
         let mut due: Option<f64> = None;
-        for st in self.scrolls.values_mut() {
+        for st in self.scroll.scrolls.values_mut() {
             st.nudge.tick(now);
             if let Some(at) = st.nudge.due() { due = Some(due.map_or(at, |d: f64| d.min(at))); }
         }

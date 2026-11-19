@@ -58,15 +58,15 @@ impl RuntimeCore {
     /// Which way this commit measures. Both shortcuts need everything the view reads to be as
     /// the last commit built it, checked here once for both.
     pub(super) fn commit_kind(&self, tx: &Tx) -> CommitKind {
-        let unchanged = self.state_unchanged && !tx.commit.lands() && !self.reuse.read_moved
-            && self.reuse.scale == self.env.scale && self.reuse.srgb == Some(self.srgb_blend)
-            && !self.has_playground && !self.patch_pending()
+        let unchanged = self.commit.state_unchanged && !tx.commit.lands() && !self.commit.reuse.read_moved
+            && self.commit.reuse.scale == self.env.scale && self.commit.reuse.srgb == Some(self.paint.srgb_blend)
+            && !self.tree.has_playground && !self.patch_pending()
             // Exiting nodes left the layout tree.
-            && self.layout.live_count() == self.nodes.len();
+            && self.commit.layout.live_count() == self.tree.nodes.len();
         if !unchanged { return CommitKind::Rebuild; }
-        if self.relayout {
+        if self.commit.relayout {
             // The nodes it built are all there, in the layout tree's order.
-            return if self.nodes.iter().all(reusable) { CommitKind::Relayout } else { CommitKind::Rebuild };
+            return if self.tree.nodes.iter().all(reusable) { CommitKind::Relayout } else { CommitKind::Rebuild };
         }
         if self.virtual_only() { CommitKind::Remount } else { CommitKind::Rebuild }
     }
@@ -78,8 +78,8 @@ impl RuntimeCore {
         if kind == CommitKind::Relayout {
             // The view keeps what it last read; `settle_layout_reads` and the caret check run it
             // when the new layout moves them.
-            let reads = self.layout_seen.reads.clone();
-            let caret_read = self.caret_watch;
+            let reads = self.commit.layout_seen.reads.clone();
+            let caret_read = self.edit.caret_watch;
             let selection = self.selection_by_path();
             let mut m = self.measurement(app, true);
             m.layout_reads = reads;
@@ -93,10 +93,10 @@ impl RuntimeCore {
             };
         }
         if kind == CommitKind::Remount {
-            let _blend = crate::theme::scope(self.srgb_blend);
-            let _bars = crate::platform::scroll_bars::scope(self.scroll_bars.state, self.scroll_bars.runtime_id);
-            let reads = self.layout_seen.reads.clone();
-            let caret_read = self.caret_watch;
+            let _blend = crate::theme::scope(self.paint.srgb_blend);
+            let _bars = crate::platform::scroll_bars::scope(self.host.scroll_bars.state, self.host.scroll_bars.runtime_id);
+            let reads = self.commit.layout_seen.reads.clone();
+            let caret_read = self.edit.caret_watch;
             let selection = self.selection_by_path();
             let mut m = self.measurement(app, true);
             m.layout_reads = reads;

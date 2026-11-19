@@ -372,18 +372,18 @@ fn headless_core(
             requested = true;
         }
         let timer_due = core.wake_deadline().is_some_and(|deadline| deadline <= core.clock + elapsed);
-        if !first && !requested && !core.hot.as_ref().unwrap().pending() && (paused || (!woken && !core.animating && !timer_due)) {
+        if !first && !requested && !core.frame.hot.as_ref().unwrap().pending() && (paused || (!woken && !core.animating && !timer_due)) {
             // Paused/idle sessions must not compete with their own patch compiler.
             if !paused { core.clock += elapsed; }
             woken = sleep.recv_timeout(Duration::from_millis(16)).is_ok();
             continue;
         }
-        let before = core.hot.as_ref().unwrap().seen;
+        let before = core.frame.hot.as_ref().unwrap().seen;
         match fixed {
             Some(dt) => { core.frame(app, dt); }
             None => { crate::frame::clock::advance_by_core(core, app, elapsed); }
         }
-        let generation = core.hot.as_ref().unwrap().seen;
+        let generation = core.frame.hot.as_ref().unwrap().seen;
         if first || requested || before != generation {
             if renderer.srgb_blend() != core.srgb_blend() {
                 let format = if core.srgb_blend() { OFFSCREEN_FORMAT.remove_srgb_suffix() } else { OFFSCREEN_FORMAT };
@@ -571,7 +571,7 @@ mod tests {
     fn a_pending_patch_keeps_a_window_stale_until_a_frame_rebuilds_it() {
         let hub: &'static Hub = Box::leak(Box::default());
         let mut rt = crate::Runtime::new(0u8, |_: &u8, _: &mut Cx<u8>| el().size(10.0, 10.0), (100.0, 100.0), Env::new(true, 1.0));
-        rt.hot = Some(Session::join(hub, Arc::new(|| {})));
+        rt.frame.hot = Some(Session::join(hub, Arc::new(|| {})));
         rt.frame(0.0);
         assert!(!rt.needs_commit() && !rt.stale());
         hub.patched();

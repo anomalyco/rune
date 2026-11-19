@@ -10,16 +10,16 @@ fn static_scales_entry_is_pruned_when_exit_finishes() {
     }
     let mut rt = Runtime::new(true, view, (200.0, 200.0), Env::new(true, 1.0));
     rt.frame(0.0);
-    let id = rt.nodes.iter().find(|n| n.key.as_deref() == Some("scaled")).unwrap().id;
-    assert!(rt.static_scales.contains_key(&id), "scaled node is tracked in static_scales");
+    let id = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("scaled")).unwrap().id;
+    assert!(rt.paint.static_scales.contains_key(&id), "scaled node is tracked in static_scales");
 
     rt.update(|on, _| *on = false);
     for _ in 0..180 {
         rt.frame(1.0 / 60.0);
-        if !rt.nodes.iter().any(|n| n.id == id) { break; }
+        if !rt.tree.nodes.iter().any(|n| n.id == id) { break; }
     }
-    assert!(!rt.nodes.iter().any(|n| n.id == id), "scaled node finished exiting");
-    assert!(!rt.static_scales.contains_key(&id), "exited node's static_scales entry must be pruned without waiting for another commit");
+    assert!(!rt.tree.nodes.iter().any(|n| n.id == id), "scaled node finished exiting");
+    assert!(!rt.paint.static_scales.contains_key(&id), "exited node's static_scales entry must be pruned without waiting for another commit");
 }
 
 #[test]
@@ -40,24 +40,24 @@ fn launch_for_exited_flight_is_dropped_when_exit_finishes() {
         tx.launch("src", "dst");
     });
     rt.frame(1.0 / 60.0);
-    let dst_id = rt.nodes.iter().find(|n| n.key.as_deref() == Some("dst")).unwrap().id;
-    assert!(rt.flying.iter().any(|f| f.0 == dst_id), "launched node is flying");
-    assert!(rt.launches.flying(dst_id), "launch state tracks airborne flight");
+    let dst_id = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("dst")).unwrap().id;
+    assert!(rt.motion.flying.iter().any(|f| f.0 == dst_id), "launched node is flying");
+    assert!(rt.motion.launches.flying(dst_id), "launch state tracks airborne flight");
 
     // Remove the flying destination with an animated exit while still airborne.
     rt.update(|s, _| s.show_target = false);
     rt.frame(1.0 / 60.0);
-    assert!(rt.nodes.iter().any(|n| n.id == dst_id), "destination stays mounted while exiting");
-    assert!(rt.flying.iter().any(|f| f.0 == dst_id), "exiting flight stays lifted");
+    assert!(rt.tree.nodes.iter().any(|n| n.id == dst_id), "destination stays mounted while exiting");
+    assert!(rt.motion.flying.iter().any(|f| f.0 == dst_id), "exiting flight stays lifted");
 
     // Let the exit finish with no further commit.
     for _ in 0..180 {
         rt.frame(1.0 / 60.0);
-        if !rt.nodes.iter().any(|n| n.id == dst_id) { break; }
+        if !rt.tree.nodes.iter().any(|n| n.id == dst_id) { break; }
     }
-    assert!(!rt.nodes.iter().any(|n| n.id == dst_id), "destination finished exiting");
-    assert!(!rt.flying.iter().any(|f| f.0 == dst_id), "exited flight left flying");
-    assert!(!rt.launches.flying(dst_id), "airborne launch entry must be dropped when its exiting flight is pruned");
+    assert!(!rt.tree.nodes.iter().any(|n| n.id == dst_id), "destination finished exiting");
+    assert!(!rt.motion.flying.iter().any(|f| f.0 == dst_id), "exited flight left flying");
+    assert!(!rt.motion.launches.flying(dst_id), "airborne launch entry must be dropped when its exiting flight is pruned");
 }
 
 #[test]
@@ -71,7 +71,7 @@ fn reveals_stay_bounded_across_instant_unmounts_in_commit_apply() {
     }
     let mut rt = Runtime::new(S::default(), view, (300.0, 200.0), Env::new(true, 1.0));
     rt.frame(0.0);
-    let mounted = rt.path_ids.len();
+    let mounted = rt.tree.path_ids.len();
     let mut instant_tx = Tx::default();
     instant_tx.instant();
     let count = REVEALS_KEPT * 2;
@@ -82,10 +82,10 @@ fn reveals_stay_bounded_across_instant_unmounts_in_commit_apply() {
         rt.state.present = false;
         rt.commit(&instant_tx);
     }
-    assert_eq!(rt.reveals.len(), REVEALS_KEPT, "commit apply must cap orphan reveals even without prune_exited");
-    assert!(rt.reveals_kept.len() <= REVEALS_KEPT, "{} orphans tracked", rt.reveals_kept.len());
+    assert_eq!(rt.motion.reveals.len(), REVEALS_KEPT, "commit apply must cap orphan reveals even without prune_exited");
+    assert!(rt.motion.reveals_kept.len() <= REVEALS_KEPT, "{} orphans tracked", rt.motion.reveals_kept.len());
     // At most the mounted paths, the REVEALS_KEPT orphan reveal paths, and the last unmounted parent still waiting for prune_exited.
-    assert!(rt.path_ids.len() <= mounted + REVEALS_KEPT + 1, "{} paths kept", rt.path_ids.len());
+    assert!(rt.tree.path_ids.len() <= mounted + REVEALS_KEPT + 1, "{} paths kept", rt.tree.path_ids.len());
 }
 
 #[test]
@@ -100,21 +100,21 @@ fn resident_caches_and_node_flags_clear_when_exit_finishes() {
     }
     let mut rt = Runtime::new(true, view, (200.0, 200.0), Env::new(true, 1.0));
     rt.frame(0.0);
-    let hdr_id = rt.nodes.iter().find(|n| n.key.as_deref() == Some("hdr")).unwrap().id;
-    assert!(rt.has_sticky, "sticky header sets has_sticky");
-    assert!(rt.has_cache, "cached header sets has_cache");
+    let hdr_id = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("hdr")).unwrap().id;
+    assert!(rt.tree.has_sticky, "sticky header sets has_sticky");
+    assert!(rt.tree.has_cache, "cached header sets has_cache");
     // Simulate a resident GPU cache entry with no CPU-side node_caches entry.
-    rt.node_caches.clear();
+    rt.paint.node_caches.clear();
     rt.text.atlas.resident_caches.insert(hdr_id.0, 42);
 
     rt.update(|on, _| *on = false);
     for _ in 0..180 {
         rt.frame(1.0 / 60.0);
-        if !rt.nodes.iter().any(|n| n.id == hdr_id) { break; }
+        if !rt.tree.nodes.iter().any(|n| n.id == hdr_id) { break; }
     }
-    assert!(!rt.nodes.iter().any(|n| n.id == hdr_id), "section finished exiting");
-    assert!(!rt.has_sticky, "has_sticky clears when the last sticky node finishes exiting");
-    assert!(!rt.has_cache, "has_cache clears when the last cached node finishes exiting");
+    assert!(!rt.tree.nodes.iter().any(|n| n.id == hdr_id), "section finished exiting");
+    assert!(!rt.tree.has_sticky, "has_sticky clears when the last sticky node finishes exiting");
+    assert!(!rt.tree.has_cache, "has_cache clears when the last cached node finishes exiting");
     assert!(!rt.text.atlas.resident_caches.contains_key(&hdr_id.0), "resident_caches clears even if node_caches was empty");
 }
 
@@ -133,17 +133,17 @@ fn virtual_list_stays_during_exit_and_prunes_when_exit_finishes() {
     let mut rt = Runtime::new(true, view, (200.0, 200.0), Env::new(true, 1.0));
     rt.frame(0.0);
     let list_path = "root/vp/list";
-    assert!(rt.virtuals.contains_key(list_path), "virtual list registered");
+    assert!(rt.commit.virtuals.contains_key(list_path), "virtual list registered");
 
     rt.update(|on, _| *on = false);
     rt.frame(1.0 / 60.0);
-    assert!(rt.nodes.iter().any(|n| n.path == list_path), "list stays in nodes mid-exit");
-    assert!(rt.virtuals.contains_key(list_path), "virtual metadata stays while exiting");
+    assert!(rt.tree.nodes.iter().any(|n| n.path == list_path), "list stays in nodes mid-exit");
+    assert!(rt.commit.virtuals.contains_key(list_path), "virtual metadata stays while exiting");
 
     for _ in 0..180 {
         rt.frame(1.0 / 60.0);
-        if !rt.nodes.iter().any(|n| n.path == list_path) { break; }
+        if !rt.tree.nodes.iter().any(|n| n.path == list_path) { break; }
     }
-    assert!(!rt.nodes.iter().any(|n| n.path == list_path), "list finished exiting");
-    assert!(rt.virtuals.is_empty(), "virtual metadata pruned when exit finishes");
+    assert!(!rt.tree.nodes.iter().any(|n| n.path == list_path), "list finished exiting");
+    assert!(rt.commit.virtuals.is_empty(), "virtual metadata pruned when exit finishes");
 }

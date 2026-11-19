@@ -213,3 +213,79 @@ impl TypeSelect {
     /// A key that moves by position (an arrow, Home, End) ends the prefix.
     pub(crate) fn reset(&mut self) { *self = Self::Idle; }
 }
+
+/// Keyboard focus, modal focus/scope, type-select, held keys and modifier tracking owned by
+/// [`crate::runtime::RuntimeCore`]. Ordered hot-first under `#[repr(C)]` so `modal_scope`
+/// (checked per interactive node in `register_node_hits`) sits at offset 0.
+#[repr(C)]
+pub(in crate::runtime) struct KeyboardState {
+    /// The innermost open modal this commit shows and what input may reach inside it, worked
+    /// out from the nodes at each commit; none while no modal shows.
+    pub(in crate::runtime) modal_scope: Option<crate::runtime::focus::ModalScope>,
+    /// What has focus, how it shows and where Tab starts (`runtime/input/focus_machine.rs`).
+    pub(in crate::runtime) focus: FocusState,
+    /// Type-select's typed prefix and when its last key arrived (`now_clock`).
+    pub(in crate::runtime) type_select: TypeSelect,
+    /// The activation key (Enter, Escape, Space) held down and the focus it was first pressed
+    /// on. Its repeats are dropped once focus has moved, so a held key that closed something
+    /// can't act again on whatever took focus next.
+    pub(in crate::runtime) held: crate::runtime::physical_dispatch::Activation,
+    /// Modifier keys down, for `Key::Modifier` (off unless the app opts in).
+    pub(in crate::runtime) modifier_keys: crate::runtime::modifier_keys::ModifierKeys,
+    /// Key releases an input method takes, and the focus where the held non-IME key(s) went
+    /// down, so a release after focus moves still reaches that element first.
+    pub(in crate::runtime) key_releases: crate::runtime::key_releases::KeyReleases,
+    /// The open modals and where focus returns as each closes (`modal_focus`).
+    pub(in crate::runtime) modal_focus: crate::runtime::modal_focus::ModalFocus,
+    /// Focus when the running commit began, before a new view's focus request applied: what a
+    /// modal that opens in this commit returns focus to.
+    pub(in crate::runtime) focus_before_commit: Option<String>,
+    /// `Tx::focus`: the key the next commit focuses, and whether its ring shows.
+    pub(in crate::runtime) focus_request: Option<(String, bool, crate::el::FocusAsk)>,
+    /// `Tx::focus_when_shown` still waiting for its element: the key and whether its ring shows.
+    pub(in crate::runtime) focus_owed: Option<(String, bool)>,
+    /// Focused text fields that unmounted without being blurred: while another field holds focus,
+    /// remounting one with its old `focused = true` flag does not steal focus back.
+    pub(in crate::runtime) unmounted_focused: Vec<std::sync::Weak<crate::edit::History>>,
+    /// The modifiers `App::on_modifiers` last heard.
+    pub(in crate::runtime) mods_heard: crate::Mods,
+    /// Modifier keys held now, as the window last reported them (`Tx::mods`).
+    pub(in crate::runtime) held_mods: crate::Mods,
+    /// `keys_lost` queued its `FocusLost` since the window last had focus.
+    pub(in crate::runtime) keys_lost: bool,
+    /// Tab visits every control; off, only text fields and lists (macOS Full Keyboard
+    /// Access off). Native hosts sample the system setting; headless runtimes default on.
+    pub(in crate::runtime) full_keyboard_access: bool,
+    /// `App::tab_visits_controls`: Tab visits every control whatever `full_keyboard_access` says.
+    pub(in crate::runtime) tab_visits_controls: bool,
+    /// This commit's focus is a `Tx::return_focus` hand-back, which a modal opening in it
+    /// doesn't take as where focus was.
+    pub(in crate::runtime) focus_returned: bool,
+}
+
+impl KeyboardState {
+    // Single-caller constructor for `RuntimeCore::new`; inlined so it stays in its caller's
+    // codegen unit instead of shifting partitioning and dropping inlining in the paint walk.
+    #[inline]
+    pub(in crate::runtime) fn new() -> Self {
+        Self {
+            focus: Default::default(),
+            type_select: Default::default(),
+            held: Default::default(),
+            modifier_keys: Default::default(),
+            mods_heard: Default::default(),
+            held_mods: Default::default(),
+            key_releases: Default::default(),
+            keys_lost: false,
+            full_keyboard_access: true,
+            tab_visits_controls: false,
+            modal_focus: crate::runtime::modal_focus::ModalFocus::Closed,
+            focus_before_commit: None,
+            focus_request: None,
+            focus_owed: None,
+            focus_returned: false,
+            unmounted_focused: Vec::new(),
+            modal_scope: None,
+        }
+    }
+}

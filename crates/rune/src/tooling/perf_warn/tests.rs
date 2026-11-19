@@ -105,7 +105,7 @@ fn rows_of_one_list_share_a_handler_site() {
 
 fn titled<S: 'static>(state: S, view: fn(&S, &mut Cx<S>) -> El, title: &str, poll: fn(&mut S, f64, &mut crate::Tx) -> bool) -> Runtime<S> {
     let mut rt = Runtime::new(state, view, (200.0, 200.0), Env::new(true, 1.0));
-    rt.window_title.start(title);
+    rt.host.window_title.start(title);
     rt.poll = Some(poll);
     rt
 }

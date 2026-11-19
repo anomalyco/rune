@@ -9,7 +9,7 @@ fn view(_: &(), _: &mut Cx<()>) -> El {
 }
 
 fn offset(rt: &Runtime<()>) -> f64 {
-    rt.scrolls.values().next().unwrap().offset
+    rt.scroll.scrolls.values().next().unwrap().offset
 }
 
 /// The offset each frame until the glide stops.
@@ -18,7 +18,7 @@ fn glide(rt: &mut Runtime<()>) -> Vec<f64> {
     for _ in 0..240 {
         rt.frame(DT);
         path.push(offset(rt));
-        if rt.scrolls.values().all(|s| s.glide().is_none()) { break; }
+        if rt.scroll.scrolls.values().all(|s| s.glide().is_none()) { break; }
     }
     path
 }

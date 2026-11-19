@@ -18,7 +18,7 @@ impl RuntimeCore {
     pub(super) fn check_resting_raster(&mut self) {
         let settled = glyphs(&self.instances);
         self.text.forget_raster_state();
-        self.paint_keep.off_once = true;
+        self.paint.keep.off_once = true;
         self.build();
         let fresh = glyphs(&self.instances);
         let differ: Vec<_> = settled.iter().zip(&fresh).filter(|(a, b)| a != b).collect();

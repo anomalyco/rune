@@ -72,19 +72,19 @@ impl RuntimeCore {
         // `El::stuck_fade`: how much of a stuck header's title shows.
         let mut kids_fade = 1.0f32;
         if let Some((edge, inset, tail)) = self.sticky_of(i) {
-            let n = &self.nodes[i];
+            let n = &self.tree.nodes[i];
             // Worked out from this frame's offsets, which the viewport above already applied.
             // Exclude this node's own `prop::OFFSET` (`live_offset`) so it translates from the
             // stuck place rather than being clamped away by the sticky edge.
             let (frame, viewport) = self.sticky_frame_of(i, edge);
             let own_off = self.scene.get(n.id, prop::OFFSET).unwrap_or(rune_motion::Vec2::ZERO);
             let (top, left) = (p.rect.y - own_off.y + pinh.dy, p.rect.x - own_off.x + pinh.dx);
-            let h = if self.row_h[i] >= 0.0 { self.row_h[i] } else { p.rect.h };
+            let h = if self.paint.row_h[i] >= 0.0 { self.paint.row_h[i] } else { p.rect.h };
             let shift = sticky::shift(edge, if tail { inset - h } else { inset }, [top, top + h, left, left + p.rect.w], frame);
-            self.stuck[i] = shift;
+            self.scroll.stuck[i] = shift;
             if edge == crate::el::StickyEdge::Top { kids_fade = self.stuck_fade(i, top + shift, pinh.dy); }
             // A header whose section's rows fade under it keeps the clip they lost.
-            if let Some(&(_, top)) = self.sticky_bands.iter().find(|b| Some(b.0) == node_parent) {
+            if let Some(&(_, top)) = self.scroll.sticky_bands.iter().find(|b| Some(b.0) == node_parent) {
                 pinh.paint_clip[1] = top;
             }
             if edge == crate::el::StickyEdge::Left { pinh.dx += shift } else { pinh.dy += shift }
@@ -96,7 +96,7 @@ impl RuntimeCore {
                 crate::el::StickyEdge::Top => 1,
                 crate::el::StickyEdge::Bottom => 3,
             };
-            if let Some(viewport) = viewport.filter(|&v| self.nodes[v].scroll_edges.fade > 0.0) {
+            if let Some(viewport) = viewport.filter(|&v| self.tree.nodes[v].scroll_edges.fade > 0.0) {
                 let (width, origin) = self.sticky_fade(n.parent.unwrap(), viewport, slot, false);
                 pinh.fade[slot] = width;
                 pinh.fade_origin[slot] = origin;
@@ -115,7 +115,7 @@ impl RuntimeCore {
         // otherwise hide the flight or jump it off the rect it was seen at. The scales
         // holding still above that parent (an app-wide zoom) stay, so it flies at the size
         // it lands at. Inside another flight, also drop that flight's cover offset and clip.
-        let [clip, fade, fade_origin] = if self.launches.flying(node_id) {
+        let [clip, fade, fade_origin] = if self.motion.launches.flying(node_id) {
             // A launch leaves where its clips don't reach.
             [crate::render::NO_CLIP, [0.0; 4], pinh.fade_origin]
         } else {
@@ -129,7 +129,7 @@ impl RuntimeCore {
             paint_fade_origin: fade_origin, rounded: None, scale, anchor, anchor_to, blur: 0.0,
             dx: pinh.dx - pinh.cover[0], dy: pinh.dy - pinh.cover[1], cover: [0.0; 2], outer: None,
             scale_motion: ScaleMotion::Still, in_cache: false, skip_paint: false, turn: 0, snap: pixel_snap::Inherit { layer: 0, parent: None, ..pinh.snap }, ..*pinh };
-        let fix = self.launches.offset_fix(&self.scene, node_id, [pinh.dx, pinh.dy], self.commit_gen);
+        let fix = self.motion.launches.offset_fix(&self.scene, node_id, [pinh.dx, pinh.dy], self.commit.commit_gen);
         (pinh.dx, pinh.dy) = (pinh.dx + fix[0], pinh.dy + fix[1]);
     }
 
@@ -141,22 +141,22 @@ impl RuntimeCore {
         now: f64,
         ambient: &mut Option<f32>,
     ) {
-        if let Some(track) = self.loops.get(&node_id) {
+        if let Some(track) = self.motion.loops.get(&node_id) {
             let node_k = self.scene.store().node_time_scale(node_id) as f64;
             if let Some(dt) = track.frame_interval().filter(|_| track.active(lnow)) {
                 *ambient = Some(ambient.map_or(dt as f32, |a| a.min(dt as f32)));
                 let wake = self.clock + dt;
-                if self.loop_wake.is_none_or(|w| wake < w.0) {
-                    self.loop_wake = Some((wake, now + dt * self.time_scale as f64));
+                if self.motion.loop_wake.is_none_or(|w| wake < w.0) {
+                    self.motion.loop_wake = Some((wake, now + dt * self.time_scale as f64));
                 }
             } else if self.time_scale > 0.0 && node_k > 0.0 {
-                self.loops_active |= track.active(lnow);
+                self.motion.loops_active |= track.active(lnow);
             }
             if self.time_scale > 0.0 && node_k > 0.0 && let Some(start) = track.pending_start(lnow) {
                 let window_start = now + (start - lnow) / node_k;
-                self.paint_keep.cycles.other_deadline();
+                self.paint.keep.cycles.other_deadline();
                 let wake = self.clock + (window_start - now) / self.time_scale as f64;
-                if self.loop_wake.is_none_or(|w| wake < w.0) { self.loop_wake = Some((wake, window_start)); }
+                if self.motion.loop_wake.is_none_or(|w| wake < w.0) { self.motion.loop_wake = Some((wake, window_start)); }
             }
         }
     }

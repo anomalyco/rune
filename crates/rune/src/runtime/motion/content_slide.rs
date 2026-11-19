@@ -114,7 +114,7 @@ impl RuntimeCore {
             .find(|&r| nodes[r].parent.is_some_and(|c| nodes[c].growth.is_some()))
         else { return dy };
         let Some(c) = nodes[row].parent else { return dy };
-        let (Some(stack), Some(g)) = (self.stacks.get_mut(&nodes[c].id), self.grows.get(&nodes[row].id)) else { return dy };
+        let (Some(stack), Some(g)) = (self.motion.stacks.get_mut(&nodes[c].id), self.motion.grows.get(&nodes[row].id)) else { return dy };
         stack.slides.follow(id, nodes[row].id, g, dy)
     }
 }

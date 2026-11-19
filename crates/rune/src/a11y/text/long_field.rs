@@ -98,7 +98,7 @@ impl RuntimeCore {
     /// elided (`truncate` / `max_lines`), or laid-out lines whose end byte does not cover the
     /// drawn text.
     pub(in crate::runtime) fn a11y_uses_long_field(&self, i: usize) -> bool {
-        let n = &self.nodes[i];
+        let n = &self.tree.nodes[i];
         let (Some(spec), Some(tl), Some(input)) = (n.text.as_deref(), n.text_layout.as_ref(), n.input.as_deref()) else {
             return false;
         };
@@ -116,7 +116,7 @@ impl RuntimeCore {
     }
 
     fn a11y_long_content_key(&self, i: usize) -> u64 {
-        let n = &self.nodes[i];
+        let n = &self.tree.nodes[i];
         n.text.as_deref().and_then(|t| t.shape.map(|(_, k)| k))
             .or_else(|| n.text_layout.as_ref().and_then(crate::text::TextLayout::content_key))
             .or_else(|| n.text_layout.as_ref().map(|tl| tl.address() as u64))
@@ -125,17 +125,17 @@ impl RuntimeCore {
 
     /// Lightweight O(1) fingerprint for long field `i`'s `lines_box_id` container (zero text hashing).
     pub(in crate::runtime) fn a11y_lines_box_print(&self, i: usize, w: &a11y_tree::Walk) -> u64 {
-        let n = &self.nodes[i];
+        let n = &self.tree.nodes[i];
         let mut h = rustc_hash::FxHasher::default();
         n.text_layout.as_ref().map(crate::text::TextLayout::address).hash(&mut h);
         self.a11y_long_content_key(i).hash(&mut h);
         n.text.as_deref().map_or(0, |t| t.content.len()).hash(&mut h);
-        self.drawn[i].map(f32::to_bits).hash(&mut h);
+        self.paint.drawn[i].map(f32::to_bits).hash(&mut h);
         w.shift.map(f32::to_bits).hash(&mut h);
         w.clip_y.map(f32::to_bits).hash(&mut h);
         self.env.scale.to_bits().hash(&mut h);
-        self.drawn_scale.get(i).map(|v| v.to_bits()).hash(&mut h);
-        self.input_scroll.get(&n.path).map(|v| v.to_bits()).hash(&mut h);
+        self.paint.drawn_scale.get(i).map(|v| v.to_bits()).hash(&mut h);
+        self.edit.input_scroll.get(&n.path).map(|v| v.to_bits()).hash(&mut h);
         if let Some(input) = n.input.as_deref() {
             let e = &input.edit;
             let upstream = e.focused && e.anchor == e.focus && e.affinity == parley::Affinity::Upstream;
@@ -146,7 +146,7 @@ impl RuntimeCore {
 
     /// Builds `(lines_box_id, box_node)` followed by its drawn `(drawn_line_id, line_node)`s.
     pub(in crate::runtime) fn a11y_build_lines_box(&self, i: usize, w: &a11y_tree::Walk) -> Vec<(AkId, AkNode)> {
-        let n = &self.nodes[i];
+        let n = &self.tree.nodes[i];
         let box_id = lines_box_id(n.id);
         let mut box_node = AkNode::new(Role::GenericContainer);
         box_node.set_class_name(LINES_BOX_CLASS);
@@ -228,7 +228,7 @@ impl RuntimeCore {
     /// focused caret visual line when outside `clip_y`, kept intentionally so Windows Magnifier
     /// can locate an off-screen caret), in points in its content space.
     fn a11y_drawn_lines(&self, i: usize, clip_y: [f32; 2]) -> Vec<Line> {
-        let n = &self.nodes[i];
+        let n = &self.tree.nodes[i];
         let (Some(spec), Some(tl), Some(input)) = (n.text.as_deref(), n.text_layout.as_ref(), n.input.as_deref()) else {
             return Vec::new();
         };

@@ -377,6 +377,8 @@ mod hit;
 mod build;
 #[path = "runtime/paint/keep.rs"]
 mod paint_keep;
+#[path = "runtime/paint/state.rs"]
+mod paint_state;
 mod text_fill;
 #[path = "runtime/input/keys.rs"]
 mod keys;
@@ -469,489 +471,116 @@ macro_rules! runtime_core_fields {
                 }
             }
         }
+
+        #[inline(always)]
+        const fn assert_prefix_layout<S: 'static>() {
+            const {
+                assert!(std::mem::size_of::<CoreEnd>() == 0);
+                assert!(std::mem::align_of::<RuntimeCore>() <= 16);
+                $(
+                    $(#[cfg($($cfg)*)])*
+                    assert!(std::mem::offset_of!(Runtime<S>, $name) == std::mem::offset_of!(RuntimeCore, $name));
+                )*
+                assert!(std::mem::offset_of!(Runtime<S>, _core_end) == std::mem::offset_of!(RuntimeCore, _core_end));
+                assert!(std::mem::size_of::<RuntimeCore>() == std::mem::offset_of!(RuntimeCore, _core_end));
+                assert!(std::mem::offset_of!(Runtime<S>, state) >= std::mem::size_of::<RuntimeCore>());
+                assert!(std::mem::offset_of!(Runtime<S>, poll) >= std::mem::size_of::<RuntimeCore>());
+                assert!(std::mem::offset_of!(Runtime<S>, on_key) >= std::mem::size_of::<RuntimeCore>());
+                assert!(std::mem::offset_of!(Runtime<S>, hooks) >= std::mem::size_of::<RuntimeCore>());
+                assert!(std::mem::align_of::<Runtime<S>>() >= std::mem::align_of::<RuntimeCore>());
+            }
+        }
     };
 }
 
+// Field order is load-bearing under `#[repr(C)]`: the leading `Env`/clock scalars, `tree`,
+// `instances`/`marks`, `hit`, `paint`, `motion`, `scroll`, `scene`, `frame` and `commit` are read
+// per node or per frame during paint, commit and idle walks, so they are kept together and first
+// ahead of colder input, text and host state.
 runtime_core_fields! {
-    /// The modifiers `App::on_modifiers` last heard.
-    mods_heard: crate::Mods,
-    /// The composition `App::on_ime` currently has open.
-    pub(crate) app_ime_comp: app_ime::AppComposition,
-    /// The node index the app's view returned when the playground is attached.
-    pub(crate) app_root: usize,
-    /// Whether this runtime has an attached playground (`hooks.playground.is_some()`).
-    pub(crate) has_playground: bool,
-    #[cfg(feature = "hot")]
-    pub(crate) hot: Option<crate::hot::Session>,
-    pub text: TextSystem,
-    /// RGBA images elements show (`El::pixels`), uploaded by the renderer.
-    pub images: crate::pixels::ImageAtlas,
-    pub scene: Scene,
     pub env: Env,
     /// Viewport in points: the view's, the window's over the zoom.
     pub viewport: (f32, f32),
-    /// The view's UI zoom and the window it applies to (`Cx::zoom`).
-    zoom: zoom::Zoom,
-    /// Transparent native surfaces/headless exports clear to transparent black.
-    pub transparent: bool,
-    /// Opt-in gamma-space (sRGB) blending for translucent fills, shadows and blurs.
-    pub(crate) srgb_blend: bool,
-    pub(crate) native_overlay: bool,
-    /// The window or overlay surface's frame counts, published by its host.
-    pub(crate) surface_stats: Option<std::sync::Arc<std::sync::Mutex<crate::SurfaceStats>>>,
-    /// `App::dev_stats`.
-    pub(crate) app_stats: Option<fn() -> String>,
     /// Animation time (seconds, scaled by the time scale).
     pub t: f64,
-    pub reduced_motion: bool,
-    system_reduced_motion: bool,
-    titlebar_inset: f32,
-    system_accent: crate::SystemAccent,
-    /// What [`Cx::system_contrast`] reports.
-    pub(crate) system_contrast: Option<crate::SystemContrast>,
-    /// What [`Cx::system_increased_contrast`] reports.
-    pub(crate) system_increased_contrast: bool,
-    scroll_bars: system_settings::ScrollBarHost,
-    pub time_scale: f32,
-    /// The last view's `Cx::foreground` and `Cx::focus_ring`, for rows built after it and the
-    /// rings painted until the next.
-    defaults: cx::ViewDefaults,
     /// Seconds since the first frame, unscaled (virtual when headless).
     pub clock: f64,
-    wake_deadlines: Vec<f64>,
-    timer_wake: timer_wake::TimerWake,
-    idle_meter: crate::tooling::perf_warn::IdleMeter,
-    watch: crate::tooling::perf_warn::Watch,
-    /// Windowed runs read the clock from the wall instead of summing frame steps.
-    pub wall_start: Option<crate::time::Instant>,
-    #[cfg(test)]
-    pub(crate) test_clock: Option<crate::Clock>,
-    pub(crate) nodes: Vec<Node>,
-    /// The last commit's node buffer, emptied, for the next flatten to fill: an app of a few
-    /// thousand elements otherwise maps and faults in megabytes every commit.
-    spare_nodes: Vec<Node>,
-    apply_scratch: apply_scratch::ApplyScratch,
-    layout: LayoutEngine,
-    node_index: HashMap<NodeId, usize>,
-    path_ids: HashMap<String, NodeId>,
-    pub(crate) memo: crate::memo::MemoCache,
-    next_id: u64,
-    commits: u64,
-    dirty: bool,
-    relayout: bool,
-    /// Every viewport change since the last commit came from the window's own resize
-    /// animation (`step_viewport`), not the user or the system.
-    viewport_stepped: bool,
-    settle: bool,
-    queue: ActionQueue,
-    pointer: Option<(f32, f32)>,
-    /// The press the pointer holds, or the click a next press may pair with
-    /// (`runtime/input/capture.rs`).
-    press: capture::Press,
-    /// The secondary button's press, held beside it.
-    secondary: capture::Secondary,
-    /// The middle or secondary button's pressed look (`capture::Tint`).
-    tint: capture::Tint,
-    /// Linux's primary selection (`runtime/input/primary_selection.rs`).
-    #[cfg(target_os = "linux")]
-    pub(crate) primary: primary_selection::PrimarySelection,
-    /// The middle button's autoscroll (`runtime/input/autoscroll.rs`).
-    autoscroll: autoscroll::Autoscroll,
-    drag_data: f32,
+    pub ime_area: Option<[f32; 4]>,
+    pub time_scale: f32,
+    pub reduced_motion: bool,
+    pub track_marks: bool,
+    pub animating: bool,
+    /// This frame's commit landed every track (`Tx::settle`): a deliberate cut.
+    pub settled: bool,
+    /// Transparent native surfaces/headless exports clear to transparent black.
+    pub transparent: bool,
+
+    /// Retained node tree, id/key lookup tables and per-commit capability flags.
+    pub(crate) tree: types::TreeState,
+    /// Seconds until the next frame while only [`Cycle`](crate::el::Cycle)s move on screen
+    /// (the shell sleeps until then instead of drawing every display frame).
+    pub ambient: Option<f32>,
     pub instances: Vec<Instance>,
     /// Per instance, the `El::mark` of its nearest marked node (0 for none). Filled only while
     /// `track_marks` is set (a compositor is attached).
     pub marks: Vec<u32>,
-    pub track_marks: bool,
-    pub surfaces: Vec<crate::native_surface::SurfaceDraw>,
-    /// `El::system_material` elements built this frame, in paint order.
-    pub(crate) materials: Vec<crate::system_material::MaterialDraw>,
-    /// The shell shows native views for the first `MAX_NATIVE_MATERIALS` of `materials`; their
-    /// elements skip their fill and cut their shadows out of their interior.
-    pub(crate) native_materials: bool,
-    hits: Vec<(NodeId, [f32; 4])>,
-    /// What a wheel chains up from, in paint order: what takes input, every scroll view and every
-    /// painted surface (`Runtime::chain_start`).
-    wheel_hits: Vec<(NodeId, [f32; 4])>,
-    overlay_hits: Vec<[f32; 4]>,
-    glyph_scratch: Vec<GlyphQuad>,
-    /// What the last paint painted, for subtrees that would paint it again (`paint_keep`).
-    paint_keep: paint_keep::PaintKeep,
-    /// The device rows of each field with waiting paragraphs its last paint showed (`text_fill`).
-    text_rows: HashMap<NodeId, (f32, f32)>,
-    /// Each still text's quads as it drew them, by node and layout id, and the paint they were
-    /// last used in (`paint_content`): a frame that draws it the same copies them.
-    text_quads: HashMap<(NodeId, crate::text::LayoutId), (crate::el::grid::DrawnRow, u64)>,
-    quads_frame: u64,
-    /// Still texts that copied their quads, for tests.
-    #[cfg(test)]
-    quads_copied: u64,
-    deco_scratch: Vec<PaintedDeco>,
-    inh_scratch: Vec<Inh>,
-    /// `motion_elements`' per-node scratch, kept so a frame doesn't allocate.
-    motion_scratch: std::cell::RefCell<Vec<(u32, u16, bool)>>,
-    /// The composed turns `Inh::turn` points into, rebuilt each paint.
-    turn_scratch: Vec<Turn>,
-    /// For nodes inside a turned layer: `(unturned_rect_pt, unturned_clip_px)`. Empty unless a
-    /// node turns.
-    unturned_drawn: Vec<([f32; 4], [f32; 4])>,
-    /// Only nonempty when retained exit nodes or matched flights make storage order differ
-    /// from paint order.
-    layer_paint_order: Vec<usize>,
-    /// The last commit's `El::matched` ids, one present element each (the last in tree order).
-    matched: Vec<(Rc<str>, NodeId)>,
-    /// Elements flying from a matched one, with their scene target. They paint last.
-    flying: Vec<(NodeId, MRect)>,
-    /// `Tx::launch` flights, waiting for their commit or in the air.
-    launches: flights::Launches,
-    pixel_snap: pixel_snap::Glides,
-    /// `inh_scratch` and `row_dy` index `nodes`: no commit since the last build.
-    built: bool,
-    /// The node ids the last build indexed its scratch by.
-    built_ids: Vec<NodeId>,
-    #[cfg(debug_assertions)]
-    matched_warned: HashSet<Rc<str>>,
-    layer_scratch: Vec<(usize, usize, usize)>,
-    /// Sideways scroll of focused single-line fields, in points, keyed by node path.
-    input_scroll: HashMap<String, f32>,
-    dissolve_scratch: Vec<bool>,
-    exit_mask: exit_mask::Mask,
-    key_index: key_index::KeyIndex,
-    has_dissolve: bool,
-    cache_live_scratch: Vec<bool>,
-    cache_check_scratch: Vec<bool>,
-    cache_paint_scratch: Vec<u64>,
-    cache_inside_scratch: Vec<bool>,
-    node_caches: HashMap<NodeId, NodeCache>,
-    has_cache: bool,
-    commit_gen: u64,
-    last_dt: f64,
-    /// Some picture sizes a side from its image's ratio (`pixel_aspect`).
-    has_pixel_aspect: bool,
-    has_drawn_layout: bool,
-    has_key_up: bool,
-    /// Some element is `El::sticky_top` or `El::sticky_bottom` (see `runtime/scroll/sticky.rs`).
-    has_sticky: bool,
-    /// Each node's sticky shift this frame (points), while `has_sticky`.
-    stuck: Vec<f32>,
-    /// Per node, what its children stick within: the nearest vertical viewport's top and
-    /// bottom, then the node's own content box top and bottom (unscaled points), while
-    /// `has_sticky`.
-    sticky_frame: Vec<[f32; 8]>,
-    /// Sections whose rows fade under their stuck header this frame (`ScrollFade::below_sticky`),
-    /// with the paint clip top the header keeps.
-    sticky_bands: Vec<(usize, f32)>,
-    /// `Tx::keep_on_screen` across the commit underway, and `Tx::scroll_into_view` requests that
-    /// follow their target while growth/layout springs run.
-    requests: requests::Requests,
-    /// Some element is `El::raise`d: paint order isn't tree order.
-    has_raise: bool,
-    /// Some element sets `El::paint_order`: its siblings paint out of tree order.
-    has_paint_order: bool,
-    /// Key releases an input method takes, and the focus where the held non-IME key(s) went
-    /// down, so a release after focus moves still reaches that element first.
-    key_releases: key_releases::KeyReleases,
-    /// Pictures whose image changed shape since the last commit, which lays them out at once.
-    aspect_snap: Vec<NodeId>,
-    /// Drawn rect per node (points, root space), for tools and hit tests.
-    drawn: Vec<[f32; 4]>,
-    /// The scale each node's text drew at (its own and its ancestors'), for text hit tests.
-    drawn_scale: Vec<f32>,
-    /// Per node: it drew inside its clip and the window in the last build.
-    seen: Vec<bool>,
-    scrolls: HashMap<NodeId, ScrollState>,
-    /// The axis the current wheel or trackpad gesture scrolls (`runtime/scroll/x.rs`).
-    wheel_lock: scroll_x::WheelLock,
-    /// Whole notches of a mouse wheel ease where the platform's browsers do (`Runtime::set_wheel_glide`).
-    wheel_glide: bool,
-    /// The finger that is down and the viewport a touch holds (`runtime/input/touch.rs`).
-    touch: touch_input::Touch,
-    grows: HashMap<NodeId, GrowTrack>,
-    stacks: HashMap<NodeId, Stack>,
-    pub(crate) virtuals: HashMap<String, crate::el::virtual_list::VirtualList>,
-    /// The recorder `Tx::record_rewind` attached (`runtime/motion/rewind.rs`).
-    rewind: Option<crate::rewind::Rewind>,
-    /// The memo pass the current commit's first view build was. Memos none of its builds used
-    /// go once it applies.
-    memo_since: u64,
-    /// Whether an index-built list still fills its overscan, and for how many frames.
-    virtual_fill: virtual_fill::Fill,
-    /// True when the commit in flight is for scroll/layout only (`self.state` wasn't mutated).
-    state_unchanged: bool,
-    reuse: relayout::Reuse,
-    pub(crate) virtual_culled: HashSet<String>,
-    /// Fresh view accessors for focused text fields omitted by virtualization.
-    virtual_inputs: HashMap<String, Box<InputSpec>>,
-    reveals: HashMap<NodeId, RevealPhase>,
-    /// The reveal states `reveals` keeps for texts that have left the tree, newest first, at
-    /// most `prune::REVEALS_KEPT` of them (see `prune_exited`).
-    reveals_kept: Vec<NodeId>,
-    /// The newest streamed word of any text, which the next text's words queue behind.
-    reveal_chain: RevealChain,
-    flights: Vec<TextFlight>,
-    /// Per node index this frame: presented row top dy, row height override, and bottom feather mask.
-    row_dy: Vec<f32>,
-    row_h: Vec<f32>,
-    row_mask: Vec<f32>,
-    /// Growth rows whose contents draw lifted this frame (`GrowTrack::hide_above`): index, points.
-    row_lifts: Vec<(usize, f32)>,
-    /// The header each lifted fold shuts under, by the fold's id, which draws where it's laid out.
-    fold_headers: HashMap<NodeId, String>,
-    /// What this frame's commits held at their landing width (`El::hold_landing_width`).
-    landing_holds: landing_hold::LandingHolds,
-    caught_up: f32,
-    slack_dt: f32,
-    /// What has focus, how it shows and where Tab starts (`runtime/input/focus_machine.rs`).
-    focus: focus_machine::FocusState,
-    /// Type-select's typed prefix and when its last key arrived (`now_clock`).
-    type_select: focus_machine::TypeSelect,
-    /// The activation key (Enter, Escape, Space) held down and the focus it was first pressed
-    /// on. Its repeats are dropped once focus has moved, so a held key that closed something
-    /// can't act again on whatever took focus next.
-    held: physical_dispatch::Activation,
-    /// Modifier keys down, for `Key::Modifier` (off unless the app opts in).
-    modifier_keys: modifier_keys::ModifierKeys,
-    /// Tab visits every control; off, only text fields and lists (macOS Full Keyboard
-    /// Access off). Native hosts sample the system setting; headless runtimes default on.
-    full_keyboard_access: bool,
-    /// `App::tab_visits_controls`: Tab visits every control whatever `full_keyboard_access` says.
-    tab_visits_controls: bool,
-    /// The open modals and where focus returns as each closes (`modal_focus`).
-    modal_focus: modal_focus::ModalFocus,
-    /// Focus when the running commit began, before a new view's focus request applied: what a
-    /// modal that opens in this commit returns focus to.
-    focus_before_commit: Option<String>,
-    /// `Tx::focus`: the key the next commit focuses, and whether its ring shows.
-    focus_request: Option<(String, bool, crate::el::FocusAsk)>,
-    /// `Tx::focus_when_shown` still waiting for its element: the key and whether its ring shows.
-    focus_owed: Option<(String, bool)>,
-    /// This commit's focus is a `Tx::return_focus` hand-back, which a modal opening in it
-    /// doesn't take as where focus was.
-    focus_returned: bool,
-    /// Focused text fields that unmounted without being blurred: while another field holds focus,
-    /// remounting one with its old `focused = true` flag does not steal focus back.
-    unmounted_focused: Vec<std::sync::Weak<crate::edit::History>>,
-    /// The innermost open modal this commit shows and what input may reach inside it, worked
-    /// out from the nodes at each commit; none while no modal shows.
-    modal_scope: Option<focus::ModalScope>,
-    loops: HashMap<NodeId, rune_motion::LoopTrack>,
-    loop_clock: loop_clock::LoopClock,
-    loops_active: bool,
-    /// Last scale observation per node that has a scale or had one. See [`ScaleMotion`].
-    static_scales: HashMap<NodeId, ScaleSettle>,
-    /// Frame requested by scale settling or pixel snapping in the last paint.
-    scale_frame: Option<AnotherFrame>,
-    /// Some node ran on a scaled clock (`El::time_scale`) at the last commit.
-    time_scaled: bool,
-    /// Shared host deadline: unscaled wake time and corresponding animation time.
-    loop_wake: Option<(f64, f64)>,
-    hovered: Option<String>,
-    /// Elements with `on_hover_change` that the pointer is inside.
-    hover_within: Vec<String>,
-    /// `on_hover_change` handlers of elements that left the tree, owed their queued leave.
-    hover_gone: Vec<(String, crate::el::WindowFocusFn)>,
-    /// Elements with `hover_delays`: which heard the enter, and which wait out a delay.
-    hover_delays: hover_delay::HoverDelays,
-    /// A press or blur stopped the waits to report an enter; the pointer's next move restarts them.
-    hover_paused: bool,
-    /// Hover waiting out layout motion under a still pointer.
-    hover_hold: hover::HoverHold,
-    /// Files dragged over the window from another app (`drop_dispatch`).
-    file_drag: drop_dispatch::FileDrag,
-    pub ime_area: Option<[f32; 4]>,
-    /// The `El::ime_cursor` that has the input method asks for Option as Alt (`El::ime_option_as_alt`).
-    pub(crate) ime_option_as_alt: bool,
-    /// The focused field's caret (path, window rect) the next view sees through `Cx::caret`.
-    caret: Option<(String, [f32; 4])>,
-    /// The last view read the caret, so it re-runs when the caret moves.
-    caret_watch: bool,
-    /// Keys the last view read with `Cx::layout` or `Cx::layout_size`, and what each resolved to.
-    layout_seen: layout_read::LayoutSeen,
-    /// Rect last sent to each element's `El::on_layout`.
-    layout_fired: HashMap<NodeId, [f32; 4]>,
-    /// Rect last sent to each element's `El::on_screen_layout`.
-    screen_fired: HashMap<NodeId, [f32; 4]>,
-    /// (Drawn rect, laid-out rect) last sent to each element's `El::on_drawn_layout`.
-    drawn_fired: HashMap<NodeId, ([f32; 4], [f32; 4])>,
-    /// Whether each element with `El::on_visible` was last on screen.
-    visible_fired: HashMap<NodeId, bool>,
-    /// The window's content top-left in global screen points, as its host last saw it.
-    window_origin: (f32, f32),
-    /// The window's content top-left in desktop pixels, as its host last saw it (`Drag::screen_point`).
-    window_pixels: Option<(i32, i32)>,
-    /// Whether layout feedback may still cause a commit (see `layout_read`).
-    feedback: layout_read::Feedback,
-    /// An edit ran this frame: keep the caret in its scroll viewport after the commit.
-    caret_follow: bool,
-    links: links::LinkState,
-    /// The selection in `El::selectable` text.
-    selectable: selectable::phase::TextSel,
-    /// `Tx::text_selection`'s snapshot, kept while neither a commit nor the selection changed.
-    sel_snapshot: std::cell::RefCell<Option<selectable::Snapshot>>,
-    /// What each `El::on_selection_change` element (by path) last heard.
-    sel_heard: selectable::Heard,
-    /// Multi-click and drag selection state for `text_input`.
-    input_click: input_click::InputClick,
-    /// Modifier keys held now, as the window last reported them (`Tx::mods`).
-    held_mods: crate::Mods,
-    /// `El::help` tooltips.
-    help: help::HelpState,
-    /// The shell cancels native composition before enabling the new text focus.
-    pub(crate) ime_reset: bool,
-    /// Text the focused field asked to copy (the shell writes it to the clipboard).
-    pub copy_request: Option<crate::ClipboardWrite>,
-    // Outer None: no read; inner None: app-level paste rather than a focused editor.
-    pub(crate) paste_request: Option<Option<String>>,
-    /// `Tx::read_clipboard` reads for the shell to start, by id.
-    pub(crate) read_requests: Vec<u64>,
-    /// Their callbacks, until the clipboard answers.
-    clipboard_reads: Vec<(u64, crate::el::ReadFn)>,
-    /// The plain text and pill ranges of this runtime's last copy that held pills, for web
-    /// clipboard pastes where the OS worker does not own the pasteboard.
-    pill_copy: Option<(zeroize::Zeroizing<String>, Vec<(std::ops::Range<usize>, String)>)>,
-    next_clipboard_read: u64,
-    pub(crate) clear_secret_request: bool,
-    /// `Runtime::use_clipboard`: a test clipboard that replaces the OS one.
-    pub(crate) clipboard: Option<crate::clipboard::MemoryClipboard>,
-    /// A handler or `update` asked to close the window or quit (the shell takes it).
-    pub shell_request: Option<Shell>,
-    /// A handler or `update` asked to minimize the window (`Tx::minimize`); the shell takes it,
-    /// after a show the same turn asked for (`window::Minimize`).
-    pub(crate) minimize: crate::window::Minimize,
-    /// Links handlers asked to open that this runtime left unopened (`Runtime::take_url_requests`).
-    pub(crate) url_requests: Vec<String>,
-    /// True when attached to a live window, overlay or web canvas, not a headless or scripted run.
-    pub(crate) open_urls_natively: bool,
-    /// Pop-up menus asked for (`Tx::popup_menu`) and not yet answered, oldest first.
-    pub(crate) popups: popup_dispatch::Popups,
-    /// The file dialog asked for (`Tx::open_file`, `Tx::save_file`) and not yet answered.
-    pub(crate) file_dialog: crate::file_dialog::DialogState,
-    /// File dialog callbacks, by id, until their answer runs.
-    file_dialog_answers: Vec<(u64, crate::file_dialog::AnswerFn)>,
-    next_file_dialog: u64,
-    /// A frame change for the window (`Tx::resize_window`), with its spring resolved.
-    pub(crate) window_frame: Option<crate::window::frame::FrameRequest>,
-    /// The window's title (`Tx::set_title`), from `AppSpec`'s.
-    pub(crate) window_title: window_requests::Title,
-    /// `Tx::announce`'s last words, for the accessibility tree's live region.
-    pub(crate) announcement: crate::a11y::Announcement,
-    /// The window's height follows the root's natural height (`App::fit_content_height`).
-    pub(crate) fit_height: bool,
-    /// The height a window that fits its content last asked for, and the frame its move
-    /// starts with. The host takes the hold as it starts the move.
-    pub(crate) fit: window_requests::FitWindow,
-    /// The band of a taller document the window draws (`App::web_document`).
-    pub(crate) page: Option<web_page::Page>,
-    /// The host's window frame isn't moving or about to: set by the host before each frame.
-    pub(crate) window_resting: bool,
-    /// What `update` asked of the next commit.
-    pending: Tx,
-    /// Motion has a cause (`Tx::unprompted`): a commit no input in this window caused mounts and
-    /// unmounts at once. On for every window an app opens (`tooling::runtime_for`); a bare
-    /// `Runtime` keeps every commit's motion.
-    pub(crate) motion_needs_cause: bool,
-    pub animating: bool,
-    /// Why the last frame was animating, as [`AnimSource`] bits, for traces.
-    pub(crate) anim_sources: u16,
-    /// Why this frame committed, as [`commit_why::CommitWhy`] bits, until the frame log takes them.
-    pub(crate) commit_why: u16,
-    /// Each node's place in the paint order, kept by the frame build while `Some` (the motion
-    /// gate's `z-order`).
-    pub(crate) paint_rank: Option<Vec<u32>>,
-    /// While `paint_rank` is kept: this frame's icons drawn through their transparent one-texel
-    /// apron (`icon_inst` off the pixel grid), by atlas place (`apron_key`), for the gate's raster.
-    pub(crate) icon_aprons: Vec<[u32; 3]>,
-    /// This frame's commit landed every track (`Tx::settle`): a deliberate cut.
-    pub settled: bool,
-    /// Input markers for traces and headless tests, at most `event_log::CAP` of them unread.
-    pub events: Vec<String>,
-    /// Record `events` without a trace: headless runs. Live hosts turn it off.
-    pub(crate) record_events: bool,
-    /// Tooling opts in before any callbacks. Absent in ordinary app runs.
-    pub(crate) trace_channels: Option<HashMap<&'static str, (&'static str, f32)>>,
-    /// Counters for perf gates.
-    pub stats: FrameStats,
-    live: live_latch::LiveLane,
-    live_clock: Arc<()>,
-    window_focused: Option<bool>,
-    /// The focused spellchecked field's word at the caret (`spell::pause`).
-    spell_watch: Option<crate::spell::pause::Watch>,
-    /// `keys_lost` queued its `FocusLost` since the window last had focus.
-    keys_lost: bool,
-    live_subscriptions: Vec<Arc<crate::live::Subscription>>,
-    /// Events whose handler said `Tx::live_only`, and so didn't commit.
-    live_only_skips: u64,
-    /// The clock at the last commit.
-    last_commit_clock: f64,
-    /// Debug builds check `Tx::live_only` events (`skip_view`).
-    #[cfg(debug_assertions)]
-    live_only_check: bool,
-    /// The live-only event this frame's commit checks: its handler, and what the view had built.
-    #[cfg(debug_assertions)]
-    live_check: Option<(String, live_check::ViewPrint)>,
-    /// Live-only events checked (and so committed) so far.
-    #[cfg(debug_assertions)]
-    live_checks: u64,
-    /// Stale-view warnings printed for `Tx::live_only` handlers, each once.
-    #[cfg(debug_assertions)]
-    pub(crate) live_only_warnings: Vec<String>,
-    /// When the frame being built will present; videos pull the picture for it.
-    pub(crate) frame_target: Option<crate::time::Instant>,
-    /// A drawn video is playing or seeking: keep drawing frames.
-    videos_active: bool,
-    /// Drawn videos' state generations; a change re-runs the view.
-    video_signature: u64,
-    /// Opt-in tooling checks. None keeps release commits free of key traversal/allocation.
-    pub(crate) key_warnings: Option<Vec<String>>,
-    /// Seconds until the next frame while only [`Cycle`](crate::el::Cycle)s move on screen
-    /// (the shell sleeps until then instead of drawing every display frame).
-    pub ambient: Option<f32>,
-    /// The presses counted into `Drag::clicks`.
-    press_clicks: press_run::PressRun,
-    /// The held press's drag repeat (`Tx::drag_repeat_after`).
-    press_repeat: press_repeat::PressRepeat,
-    titlebar: titlebar::Titlebar,
+
+    /// Per-frame hit-test lists built in paint order.
+    hit: hit::HitState,
     /// Two presses closer than this (seconds) are a double press: the system setting on macOS
     /// and Windows, 0.5 elsewhere and headless.
     pub double_click_interval: f64,
+
+    /// Paint scratch buffers, reuse record, layer caches, text quads and paint outputs.
+    pub(crate) paint: paint_state::PaintState,
+    /// Render-side growth stacks, reveals, flights, loops and rewind capture.
+    pub(crate) motion: tracks::MotionState,
+    /// Scroll viewports, wheel axis locking, scroll requests and sticky headers.
+    scroll: requests::ScrollTables,
+    pub scene: Scene,
+    /// Action queue, pending `Tx`, wake deadlines, live latch, tracing and hot reload.
+    pub(crate) frame: timer_wake::FrameState,
+    /// View commit, Taffy layout, memo cache, virtual lists and layout callback state.
+    pub(crate) commit: commit::CommitState,
+    /// Pointer position, capture, hover/tooltip tracking, touch, autoscroll and file/OS drags.
+    pointer: capture::PointerState,
+    /// Keyboard focus, modal focus/scope, type-select, held keys and modifier tracking.
+    kbd: focus_machine::KeyboardState,
+
+    pub surfaces: Vec<crate::native_surface::SurfaceDraw>,
+    /// RGBA images elements show (`El::pixels`), uploaded by the renderer.
+    pub images: crate::pixels::ImageAtlas,
+    pub text: TextSystem,
+
+    /// Selectable text, links, field click/scroll, caret, IME, spellcheck and clipboard state.
+    pub(crate) edit: caret::TextInputState,
+    /// Window/host settings, zoom, titlebar, window requests, popups, dialogs, a11y and web page.
+    pub(crate) host: window_requests::HostState,
+
+    /// Text the focused field asked to copy (the shell writes it to the clipboard).
+    pub copy_request: Option<crate::ClipboardWrite>,
+    /// A handler or `update` asked to close the window or quit (the shell takes it).
+    pub shell_request: Option<Shell>,
+    /// Windowed runs read the clock from the wall instead of summing frame steps.
+    pub wall_start: Option<crate::time::Instant>,
+    /// Input markers for traces and headless tests, at most `event_log::CAP` of them unread.
+    pub events: Vec<String>,
+    /// Counters for perf gates.
+    pub stats: FrameStats,
     /// How long (seconds) the pointer rests on an `El::help` element before its tooltip shows:
     /// the system's hover time on Windows, 0.5 elsewhere and headless. macOS windows use
     /// AppKit's own tooltips, unless the view sets its own look (`Cx::help_look`), whose delay
     /// may replace this one.
     pub help_delay: f64,
-    /// The host starts OS drags, so `drag_out` elements start one (headless tools act as one).
-    os_drag: bool,
-    drag_out_request: Option<crate::drag_out::DragOutStart>,
-    /// How OS drags ended, filled by the host's session callbacks between frames.
-    drag_ends: crate::drag_out::DragEnds,
-    /// Drag-outs whose `on_drag_start` ran and whose `on_drag_end` hasn't yet.
-    drags_open: usize,
-    /// The accessibility tree, while an assistive client listens (`a11y/tree.rs`).
-    a11y: Option<Box<a11y_tree::A11yTree>>,
 }
 
 // Moving a non-Copy field out fails with E0509 if `RuntimeCore` or `Runtime<S>` ever implements `Drop`.
 const _: () = {
     fn check<S: 'static>(core: RuntimeCore, rt: Runtime<S>) -> (Vec<Node>, Vec<Node>) {
-        (core.nodes, rt.nodes)
+        (core.tree.nodes, rt.tree.nodes)
     }
     let _ = check::<()>;
 };
-
-#[inline(always)]
-const fn assert_prefix_layout<S: 'static>() {
-    const {
-        assert!(std::mem::size_of::<CoreEnd>() == 0);
-        assert!(std::mem::align_of::<RuntimeCore>() <= 16);
-        assert!(std::mem::offset_of!(Runtime<S>, _core_end) == std::mem::offset_of!(RuntimeCore, _core_end));
-        assert!(std::mem::size_of::<RuntimeCore>() == std::mem::offset_of!(RuntimeCore, _core_end));
-        assert!(std::mem::offset_of!(Runtime<S>, state) >= std::mem::size_of::<RuntimeCore>());
-        assert!(std::mem::offset_of!(Runtime<S>, poll) >= std::mem::size_of::<RuntimeCore>());
-        assert!(std::mem::offset_of!(Runtime<S>, on_key) >= std::mem::size_of::<RuntimeCore>());
-        assert!(std::mem::offset_of!(Runtime<S>, hooks) >= std::mem::size_of::<RuntimeCore>());
-        assert!(std::mem::align_of::<Runtime<S>>() >= std::mem::align_of::<RuntimeCore>());
-    }
-}
 
 impl<S: 'static> Runtime<S> {
     pub fn new(state: S, view: fn(&S, &mut Cx<S>) -> El, viewport: (f32, f32), env: Env) -> Self {
@@ -1038,7 +667,7 @@ impl<S: 'static> Runtime<S> {
     /// Attaches a live playground to this runtime and keeps `has_playground` in sync.
     pub(crate) fn attach_playground(&mut self, live: crate::playground::Live<S>) {
         self.hooks.playground = Some(Box::new(live));
-        self.has_playground = true;
+        self.tree.has_playground = true;
     }
 }
 
@@ -1069,6 +698,17 @@ mod prefix_layout_tests {
     fn verify_layout<S: 'static>(state: S, bump: impl FnOnce(&mut S), check: impl FnOnce(&S)) {
         assert_prefix_layout::<S>();
         assert_eq!(std::mem::size_of::<CoreEnd>(), 0);
+        assert_eq!(std::mem::offset_of!(Runtime<S>, tree), std::mem::offset_of!(RuntimeCore, tree));
+        assert_eq!(std::mem::offset_of!(Runtime<S>, hit), std::mem::offset_of!(RuntimeCore, hit));
+        assert_eq!(std::mem::offset_of!(Runtime<S>, motion), std::mem::offset_of!(RuntimeCore, motion));
+        assert_eq!(std::mem::offset_of!(Runtime<S>, scroll), std::mem::offset_of!(RuntimeCore, scroll));
+        assert_eq!(std::mem::offset_of!(Runtime<S>, paint), std::mem::offset_of!(RuntimeCore, paint));
+        assert_eq!(std::mem::offset_of!(Runtime<S>, pointer), std::mem::offset_of!(RuntimeCore, pointer));
+        assert_eq!(std::mem::offset_of!(Runtime<S>, kbd), std::mem::offset_of!(RuntimeCore, kbd));
+        assert_eq!(std::mem::offset_of!(Runtime<S>, commit), std::mem::offset_of!(RuntimeCore, commit));
+        assert_eq!(std::mem::offset_of!(Runtime<S>, edit), std::mem::offset_of!(RuntimeCore, edit));
+        assert_eq!(std::mem::offset_of!(Runtime<S>, frame), std::mem::offset_of!(RuntimeCore, frame));
+        assert_eq!(std::mem::offset_of!(Runtime<S>, host), std::mem::offset_of!(RuntimeCore, host));
         assert!(std::mem::offset_of!(Runtime<S>, state) >= std::mem::size_of::<RuntimeCore>());
         assert!(std::mem::offset_of!(Runtime<S>, poll) >= std::mem::size_of::<RuntimeCore>());
         assert!(std::mem::offset_of!(Runtime<S>, on_key) >= std::mem::size_of::<RuntimeCore>());
@@ -1078,6 +718,8 @@ mod prefix_layout_tests {
         let mut rt = Runtime::new(state, empty_view::<S>, (320.0, 240.0), Env::new(true, 2.0));
         assert_eq!(rt.core().viewport, (320.0, 240.0));
         assert_eq!(rt.core().env.scale, 2.0);
+        assert_eq!(rt.core().tree.next_id, 1);
+        assert!(rt.core().commit.dirty);
 
         rt.core_mut().viewport = (400.0, 300.0);
         assert_eq!(rt.viewport, (400.0, 300.0));
@@ -1102,14 +744,14 @@ mod prefix_layout_tests {
         // Reading through `split()` while an interior `RefCell` field of the core is mutably
         // borrowed must preserve `UnsafeCell` aliasing semantics.
         {
-            let mut scratch = rt.motion_scratch.borrow_mut();
+            let mut scratch = rt.motion.motion_scratch.borrow_mut();
             scratch.push((7, 3, true));
             let (core, app) = rt.split();
             assert_eq!(core.viewport, (640.0, 480.0));
-            assert!(core.motion_scratch.try_borrow().is_err());
+            assert!(core.motion.motion_scratch.try_borrow().is_err());
             let _ = std::ptr::from_ref(app.state);
         }
-        assert_eq!(rt.core().motion_scratch.borrow().as_slice(), &[(7, 3, true)]);
+        assert_eq!(rt.core().motion.motion_scratch.borrow().as_slice(), &[(7, 3, true)]);
     }
 
     #[test]

@@ -424,16 +424,16 @@ fn a11y_cost() {
     let scroll: Vec<f64> = (1..=30).map(|k| {
         rt.wheel_event(crate::WheelEvent::new(0.0, -24.0).precise(true).at(100.0, 100.0));
         rt.frame(10.0 + k as f64 / 60.0);
-        let commits = rt.commits;
+        let commits = rt.commit.commits;
         let mut sent = None;
         let t = time(&mut || { sent = rt.a11y_update().map(|u| u.nodes.len()); });
-        assert_eq!(rt.commits, commits);
+        assert_eq!(rt.commit.commits, commits);
         assert!(sent.is_some_and(|n| n > 0), "a scroll sends its viewports");
         t
     }).collect();
     let nodes = rt.accessibility_tree().nodes.len();
     println!("a11y_cost elements={} nodes={nodes} commit_us={:.0} commit_active_us={:.0} full_us={:.0} incremental_us={:.0} scroll_us={:.1} idle_turn_us={:.2}",
-        rt.nodes.len(), median(off), median(on), median(full), median(incremental), median(scroll), median(idle));
+        rt.tree.nodes.len(), median(off), median(on), median(full), median(incremental), median(scroll), median(idle));
 }
 
 #[test]
@@ -500,7 +500,7 @@ fn scaled_text_and_long_field_lines_use_drawn_scale_and_invalidate() {
     let make_text = |scale: f32| {
         let mut rt = Runtime::new(scale, scaled_text_view, (500.0, 200.0), Env::new(true, 1.0));
         rt.frame(0.0);
-        let i = rt.nodes.iter().position(|n| n.key.as_deref() == Some("t")).unwrap();
+        let i = rt.tree.nodes.iter().position(|n| n.key.as_deref() == Some("t")).unwrap();
         rt.core().a11y_lines(i).unwrap().1
     };
     let l1 = make_text(1.0);
@@ -524,7 +524,7 @@ fn scaled_text_and_long_field_lines_use_drawn_scale_and_invalidate() {
     let big_text = "long line for a11y scaling test\n".repeat(2500);
     let mut rt = Runtime::new(LongScaled { edit: TextEdit::new(big_text), scale: 1.0 }, long_view, (600.0, 400.0), Env::new(true, 1.0));
     rt.frame(0.0);
-    let i = rt.nodes.iter().position(|n| n.key.as_deref() == Some("big")).unwrap();
+    let i = rt.tree.nodes.iter().position(|n| n.key.as_deref() == Some("big")).unwrap();
     assert!(rt.core().a11y_uses_long_field(i), "fixture must use the long-field path");
     rt.a11y_activate("Long");
     let first = rt.a11y_update().expect("initial tree");
@@ -539,7 +539,7 @@ fn scaled_text_and_long_field_lines_use_drawn_scale_and_invalidate() {
 
     rt.update(|s, tx| { s.scale = 2.0; tx.instant(); });
     rt.frame(1.0 / 60.0);
-    let i = rt.nodes.iter().position(|n| n.key.as_deref() == Some("big")).unwrap();
+    let i = rt.tree.nodes.iter().position(|n| n.key.as_deref() == Some("big")).unwrap();
     let print2 = rt.core().a11y_lines_box_print(i, &walk);
     assert_ne!(print1, print2, "a11y_lines_box_print must change when drawn_scale changes");
     let update = rt.a11y_update().expect("scale change emits updated long-field lines");
@@ -561,19 +561,19 @@ fn rtl_a11y_scroll_left_and_right_step_in_visual_direction() {
     }
     let mut rt = Runtime::new((), view, (200.0, 60.0), Env::new(true, 1.0));
     rt.frame(0.0);
-    let id = rt.nodes.iter().find(|n| n.key.as_deref() == Some("rtl_x")).unwrap().id;
-    assert_eq!(rt.scrolls[&id].x.offset, 0.0);
+    let id = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("rtl_x")).unwrap().id;
+    assert_eq!(rt.scroll.scrolls[&id].x.offset, 0.0);
 
     // In RTL, content overflows to the left: ScrollLeft reveals it (offset increases).
     assert!(rt.accessibility_action("rtl_x", accesskit::Action::ScrollLeft, Some(accesskit::ActionData::ScrollUnit(accesskit::ScrollUnit::Item))));
     rt.frame(0.0);
-    let after_left = rt.scrolls[&id].x.offset;
+    let after_left = rt.scroll.scrolls[&id].x.offset;
     assert!(after_left > 20.0, "RTL ScrollLeft must increase offset toward left content, got {after_left}");
 
     // ScrollRight returns toward the right start edge (offset decreases).
     assert!(rt.accessibility_action("rtl_x", accesskit::Action::ScrollRight, Some(accesskit::ActionData::ScrollUnit(accesskit::ScrollUnit::Item))));
     rt.frame(0.0);
-    assert!(rt.scrolls[&id].x.offset < after_left - 20.0, "RTL ScrollRight must decrease offset: {after_left} -> {}", rt.scrolls[&id].x.offset);
+    assert!(rt.scroll.scrolls[&id].x.offset < after_left - 20.0, "RTL ScrollRight must decrease offset: {after_left} -> {}", rt.scroll.scrolls[&id].x.offset);
 }
 
 #[test]
@@ -595,8 +595,8 @@ fn a11y_active_descendant_and_labelled_by_skip_exiting_shadow() {
     rt.frame(0.0);
     rt.update(|s, _| *s = false);
     rt.frame(1.0 / 60.0);
-    let list_idx = rt.nodes.iter().position(|n| n.key.as_deref() == Some("list")).unwrap();
-    let live_item = rt.nodes.iter().enumerate().position(|(i, n)| n.key.as_deref() == Some("item") && !rt.core().subtree_exiting(i)).unwrap();
+    let list_idx = rt.tree.nodes.iter().position(|n| n.key.as_deref() == Some("list")).unwrap();
+    let live_item = rt.tree.nodes.iter().enumerate().position(|(i, n)| n.key.as_deref() == Some("item") && !rt.core().subtree_exiting(i)).unwrap();
     assert_eq!(rt.core().a11y_active_descendant(list_idx), Some(live_item), "exiting child must not shadow live active_descendant");
 
     // 2. a11y_keyed (labelled_by): exiting local key must not shadow live outer key.
@@ -614,8 +614,8 @@ fn a11y_active_descendant_and_labelled_by_skip_exiting_shadow() {
     rt.frame(0.0);
     rt.update(|s, _| *s = false);
     rt.frame(1.0 / 60.0);
-    let btn_idx = rt.nodes.iter().position(|n| n.key.as_deref() == Some("btn")).unwrap();
-    let outer_title = rt.nodes.iter().enumerate().position(|(i, n)| n.key.as_deref() == Some("title") && !rt.core().subtree_exiting(i)).unwrap();
+    let btn_idx = rt.tree.nodes.iter().position(|n| n.key.as_deref() == Some("btn")).unwrap();
+    let outer_title = rt.tree.nodes.iter().enumerate().position(|(i, n)| n.key.as_deref() == Some("title") && !rt.core().subtree_exiting(i)).unwrap();
     assert_eq!(rt.core().a11y_keyed(btn_idx, "title"), Some(outer_title), "exiting inner key must not shadow live outer key");
 }
 

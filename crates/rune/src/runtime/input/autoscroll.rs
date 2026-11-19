@@ -135,7 +135,7 @@ fn step(seq: &mut Seq, state: &mut State, event: Event) -> (bool, Effects<Effect
 
 impl RuntimeCore {
     fn autoscroll_step(&mut self, event: Event) -> bool {
-        let a = &mut self.autoscroll;
+        let a = &mut self.pointer.autoscroll;
         let (took, effects) = step(&mut a.seq, &mut a.state, event);
         for effect in effects {
             match effect {
@@ -143,7 +143,7 @@ impl RuntimeCore {
                 // nothing and says nothing about the ends.
                 Effect::Scroll { views, by } => {
                     if by != (0.0, 0.0) && !self.autoscroll_by(views, by) {
-                        let a = &mut self.autoscroll;
+                        let a = &mut self.pointer.autoscroll;
                         let _ = step(&mut a.seq, &mut a.state, Event::Stuck);
                     }
                 }
@@ -181,7 +181,7 @@ impl RuntimeCore {
     }
 
     pub(super) fn autoscroll_moved(&mut self, x: f32, y: f32) {
-        if !matches!(self.autoscroll.state, State::Active { .. }) { return; }
+        if !matches!(self.pointer.autoscroll.state, State::Active { .. }) { return; }
         let now = self.now_clock();
         self.autoscroll_step(Event::Moved { at: (x, y), now });
     }
@@ -193,9 +193,9 @@ impl RuntimeCore {
 
     /// Takes the step due by this frame.
     pub(super) fn fire_autoscroll(&mut self) {
-        let State::Active { views, attempt: Some(attempt), .. } = self.autoscroll.state else { return };
+        let State::Active { views, attempt: Some(attempt), .. } = self.pointer.autoscroll.state else { return };
         // The viewports went: nothing to scroll.
-        if [views.0, views.1].into_iter().flatten().all(|id| !self.scrolls.contains_key(&id)) {
+        if [views.0, views.1].into_iter().flatten().all(|id| !self.scroll.scrolls.contains_key(&id)) {
             self.autoscroll_cancel();
             return;
         }
@@ -204,8 +204,8 @@ impl RuntimeCore {
 
     /// The pan cursor while it runs: which way it scrolls, or the axes it can.
     pub(super) fn autoscroll_cursor(&self) -> Option<crate::el::Cursor> {
-        let State::Active { views, origin, at, .. } = self.autoscroll.state else { return None };
-        let v = velocity(views, origin, self.pointer.unwrap_or(at));
+        let State::Active { views, origin, at, .. } = self.pointer.autoscroll.state else { return None };
+        let v = velocity(views, origin, self.pointer.pos.unwrap_or(at));
         Some(crate::el::Cursor::Image(crate::cursor::pan((views.0.is_some(), views.1.is_some()), v)))
     }
 
@@ -214,7 +214,7 @@ impl RuntimeCore {
     fn autoscroll_by(&mut self, views: Viewports, by: (f64, f64)) -> bool {
         let mut moved = false;
         if let Some(id) = views.0
-            && let Some(st) = self.scrolls.get_mut(&id)
+            && let Some(st) = self.scroll.scrolls.get_mut(&id)
         {
             let before = st.x.offset;
             st.x.offset = (st.x.offset + st.x.toward(by.0)).clamp(0.0, st.x.max);
@@ -226,8 +226,8 @@ impl RuntimeCore {
             }
         }
         if let Some(id) = views.1 {
-            let stick = self.node_index.get(&id).and_then(|&i| self.nodes[i].scroll).is_some_and(|s| s.stick_bottom);
-            if let Some(st) = self.scrolls.get_mut(&id) {
+            let stick = self.tree.node_index.get(&id).and_then(|&i| self.tree.nodes[i].scroll).is_some_and(|s| s.stick_bottom);
+            if let Some(st) = self.scroll.scrolls.get_mut(&id) {
                 let before = st.offset;
                 st.offset = (st.offset + by.1).clamp(0.0, st.max);
                 st.moved();

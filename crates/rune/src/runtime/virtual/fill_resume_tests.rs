@@ -77,27 +77,27 @@ fn draw_while_asked<S: 'static>(rt: &mut Runtime<S>, mut drew: bool) -> usize {
 fn draw_to_wait<S: 'static>(rt: &mut Runtime<S>) -> f64 {
     let mut drew = true;
     for _ in 0..400 {
-        if matches!(rt.virtual_fill.state(), State::Waiting { .. }) {
+        if matches!(rt.commit.virtual_fill.state(), State::Waiting { .. }) {
             return rt.wake_deadline().expect("the wait armed a deadline");
         }
         if drew {
             drew = rt.frame(1.0 / 120.0);
             continue;
         }
-        let Some(due) = rt.wake_deadline() else { panic!("the fill stopped before its bound: {:?}", rt.virtual_fill.state()) };
+        let Some(due) = rt.wake_deadline() else { panic!("the fill stopped before its bound: {:?}", rt.commit.virtual_fill.state()) };
         drew = rt.frame((due - rt.clock).max(1.0 / 120.0));
     }
     panic!("the fill never reached its bound");
 }
 
 fn list_path<S>(rt: &Runtime<S>) -> String {
-    rt.virtuals.keys().next().expect("a virtual list").clone()
+    rt.commit.virtuals.keys().next().expect("a virtual list").clone()
 }
 
 /// The list's offset within its viewport, and whether the viewport is pinned to its end.
 fn offset<S>(rt: &Runtime<S>, path: &str) -> (f32, bool) {
-    let v = &rt.virtuals[path];
-    let s = rt.path_ids.get(&v.scroll_path).and_then(|id| rt.scrolls.get(id));
+    let v = &rt.commit.virtuals[path];
+    let s = rt.tree.path_ids.get(&v.scroll_path).and_then(|id| rt.scroll.scrolls.get(id));
     s.map_or((0.0, false), |s| ((s.offset as f32 - v.top).max(0.0), s.pinned()))
 }
 
@@ -107,7 +107,7 @@ fn heights_that_keep_changing_still_fill_every_visible_row() {
     let frames = draw_while_asked(&mut rt, true);
     let path = list_path(&rt);
     let (offset, pinned) = offset(&rt, &path);
-    let v = &rt.virtuals[&path];
+    let v = &rt.commit.virtuals[&path];
     let visible = v.visible_range(offset, pinned);
     assert!(
         v.range.start <= visible.start && v.range.end >= visible.end,
@@ -150,8 +150,8 @@ fn a_wake_after_the_list_unmounts_draws_nothing() {
     let dt = (due - rt.clock).max(1.0 / 120.0);
     rt.frame(dt);
     assert!(rt.clock >= due - 1e-9, "the deadline came due");
-    assert_eq!(rt.virtual_fill.state(), State::Idle, "the unmounted list retires the wait, not resuming it");
-    assert_eq!(rt.anim_sources & AnimSource::VIRTUAL_FILL, 0, "and the fill adds no frame");
+    assert_eq!(rt.commit.virtual_fill.state(), State::Idle, "the unmounted list retires the wait, not resuming it");
+    assert_eq!(rt.motion.anim_sources & AnimSource::VIRTUAL_FILL, 0, "and the fill adds no frame");
     assert_eq!(rt.wake_deadline(), None, "nothing is left armed");
 }
 
@@ -164,12 +164,12 @@ fn a_replacement_list_draws_its_first_fill_frame() {
     rt.update(|s, _| s.gone = true);
     // The frame the wake comes due in is also the one the list unmounts in.
     rt.frame((due - rt.clock).max(1.0 / 120.0));
-    assert_eq!(rt.virtual_fill.state(), State::Idle, "the unmounted list retires the wait");
+    assert_eq!(rt.commit.virtual_fill.state(), State::Idle, "the unmounted list retires the wait");
     // The replacement starts exactly as a list that was never here: its first frame fills.
     rt.update(|s, _| s.gone = false);
     rt.frame(1.0 / 120.0);
-    assert_ne!(rt.anim_sources & AnimSource::VIRTUAL_FILL, 0, "the replacement's first fill frame draws");
-    assert!(matches!(rt.virtual_fill.state(), State::Filling { .. }), "and starts a run: {:?}", rt.virtual_fill.state());
+    assert_ne!(rt.motion.anim_sources & AnimSource::VIRTUAL_FILL, 0, "the replacement's first fill frame draws");
+    assert!(matches!(rt.commit.virtual_fill.state(), State::Filling { .. }), "and starts a run: {:?}", rt.commit.virtual_fill.state());
 }
 
 /// r372: another viewport scrolling is not this list's invalidation, so the fill keeps the budget
@@ -182,9 +182,9 @@ fn an_unrelated_scroller_does_not_reset_the_fill() {
     rt.frame(1.0 / 120.0);
     assert!(rt.clock < due, "the frame is before the fill's deadline");
     assert!(
-        matches!(rt.virtual_fill.state(), State::Waiting { .. }),
+        matches!(rt.commit.virtual_fill.state(), State::Waiting { .. }),
         "another scroller leaves the wait alone: {:?}",
-        rt.virtual_fill.state()
+        rt.commit.virtual_fill.state()
     );
     let frames = draw_while_asked(&mut rt, false);
     assert!(frames < 4_000, "the fill still stops: {frames} frames");
@@ -201,7 +201,7 @@ fn a_wake_after_the_fill_completes_draws_nothing() {
     let dt = (due - rt.clock).max(1.0 / 120.0);
     rt.frame(dt);
     assert!(rt.clock >= due - 1e-9, "the deadline came due");
-    assert_eq!(rt.virtual_fill.state(), State::Idle, "the filled list retires the wait, not resuming it");
-    assert_eq!(rt.anim_sources & AnimSource::VIRTUAL_FILL, 0, "and the fill adds no frame");
+    assert_eq!(rt.commit.virtual_fill.state(), State::Idle, "the filled list retires the wait, not resuming it");
+    assert_eq!(rt.motion.anim_sources & AnimSource::VIRTUAL_FILL, 0, "and the fill adds no frame");
     assert_eq!(rt.wake_deadline(), None, "nothing is left armed");
 }

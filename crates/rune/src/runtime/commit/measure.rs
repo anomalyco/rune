@@ -31,16 +31,16 @@ impl RuntimeCore {
     }
 
     pub(super) fn measure_retry(&mut self, app: &dyn ViewDriver, tx: &Tx) -> Measured {
-        let _blend = crate::theme::scope(self.srgb_blend);
-        let _bars = crate::platform::scroll_bars::scope(self.scroll_bars.state, self.scroll_bars.runtime_id);
+        let _blend = crate::theme::scope(self.paint.srgb_blend);
+        let _bars = crate::platform::scroll_bars::scope(self.host.scroll_bars.state, self.host.scroll_bars.runtime_id);
         let selection = self.selection_by_path();
         Measured { selection, ..self.measurement(app, true).finish_from(tx, 1) }
     }
 
     /// `committing` when the result is applied, so the last commit's text layouts can go.
     pub(super) fn measure_pass(&mut self, app: &dyn ViewDriver, tx: &Tx, committing: bool) -> Measured {
-        let _blend = crate::theme::scope(self.srgb_blend);
-        let _bars = crate::platform::scroll_bars::scope(self.scroll_bars.state, self.scroll_bars.runtime_id);
+        let _blend = crate::theme::scope(self.paint.srgb_blend);
+        let _bars = crate::platform::scroll_bars::scope(self.host.scroll_bars.state, self.host.scroll_bars.runtime_id);
         let selection = self.selection_by_path();
         Measured { selection, ..self.measurement(app, committing).finish(tx) }
     }
@@ -51,43 +51,43 @@ impl RuntimeCore {
             app,
             env: self.env,
             viewport: self.viewport,
-            fit_height: self.fit_height,
-            system_reduced_motion: self.system_reduced_motion,
+            fit_height: self.host.fit_height,
+            system_reduced_motion: self.host.system_reduced_motion,
             // The window's controls are in its points; the view's are over the zoom.
-            titlebar_inset: self.titlebar_inset / self.zoom.k,
-            chrome: self.titlebar.insets.zoomed(self.zoom.k),
-            caption: self.titlebar.caption,
-            system_accent: self.system_accent,
-            system_contrast: self.system_contrast,
-            system_increased_contrast: self.system_increased_contrast,
-            system_scroll_bars: self.scroll_bars.state,
+            titlebar_inset: self.host.titlebar_inset / self.host.zoom.k,
+            chrome: self.host.titlebar.insets.zoomed(self.host.zoom.k),
+            caption: self.host.titlebar.caption,
+            system_accent: self.host.system_accent,
+            system_contrast: self.host.system_contrast,
+            system_increased_contrast: self.host.system_increased_contrast,
+            system_scroll_bars: self.host.scroll_bars.state,
             reduced_motion: self.reduced_motion,
             time_scale: self.time_scale,
-            zoom: self.zoom.k,
-            defaults: self.defaults.clone(),
+            zoom: self.host.zoom.k,
+            defaults: self.commit.defaults.clone(),
             titlebar: self.titlebar_set(),
-            caret: self.caret.clone(),
+            caret: self.edit.caret.clone(),
             caret_read: false,
-            layout_seen: self.layout_seen.rects.clone(),
+            layout_seen: self.commit.layout_seen.rects.clone(),
             layout_reads: Vec::new(),
-            commits: self.commits,
-            nodes: &mut self.nodes,
+            commits: self.commit.commits,
+            nodes: &mut self.tree.nodes,
             committing,
-            spare_nodes: &mut self.spare_nodes,
+            spare_nodes: &mut self.tree.spare_nodes,
             text: &mut self.text,
-            layout: &mut self.layout,
-            node_index: &mut self.node_index,
-            path_ids: &mut self.path_ids,
-            memo: &mut self.memo,
-            next_id: &mut self.next_id,
-            scrolls: &mut self.scrolls,
-            virtuals: &mut self.virtuals,
-            virtual_culled: &mut self.virtual_culled,
-            virtual_inputs: &mut self.virtual_inputs,
+            layout: &mut self.commit.layout,
+            node_index: &mut self.tree.node_index,
+            path_ids: &mut self.tree.path_ids,
+            memo: &mut self.commit.memo,
+            next_id: &mut self.tree.next_id,
+            scrolls: &mut self.scroll.scrolls,
+            virtuals: &mut self.commit.virtuals,
+            virtual_culled: &mut self.commit.virtual_culled,
+            virtual_inputs: &mut self.commit.virtual_inputs,
             stats: &mut self.stats,
-            key_warnings: &mut self.key_warnings,
-            focused: self.focus.path(),
-            state_unchanged: std::mem::take(&mut self.state_unchanged),
+            key_warnings: &mut self.commit.key_warnings,
+            focused: self.kbd.focus.path(),
+            state_unchanged: std::mem::take(&mut self.commit.state_unchanged),
             pass: Pass::First,
             hold_windows,
             windowed: HashMap::default(),
@@ -679,17 +679,17 @@ impl RuntimeCore {
     /// Records which row of each virtual list holds focus, by key, so the row is still built
     /// after it scrolls out. Walks the node tree, since a key may itself contain `/`.
     pub(super) fn track_focused_rows(&mut self) {
-        if self.virtuals.is_empty() { return; }
-        let focused = self.focus.path().and_then(|f| self.nodes.iter().position(|n| n.path == f));
-        for (path, v) in self.virtuals.iter_mut() {
-            let Some(rest) = self.focus.path().and_then(|f| f.strip_prefix(path.as_str())).and_then(|r| r.strip_prefix('/')) else {
+        if self.commit.virtuals.is_empty() { return; }
+        let focused = self.kbd.focus.path().and_then(|f| self.tree.nodes.iter().position(|n| n.path == f));
+        for (path, v) in self.commit.virtuals.iter_mut() {
+            let Some(rest) = self.kbd.focus.path().and_then(|f| f.strip_prefix(path.as_str())).and_then(|r| r.strip_prefix('/')) else {
                 v.focused_row = None;
                 continue;
             };
             if let Some(mut i) = focused {
-                while let Some(p) = self.nodes[i].parent {
-                    if self.nodes[p].path == *path {
-                        v.focused_row = self.nodes[i].key.clone();
+                while let Some(p) = self.tree.nodes[i].parent {
+                    if self.tree.nodes[p].path == *path {
+                        v.focused_row = self.tree.nodes[i].key.clone();
                         break;
                     }
                     i = p;

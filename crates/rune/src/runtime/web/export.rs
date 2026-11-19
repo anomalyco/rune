@@ -56,8 +56,8 @@ impl RuntimeCore {
         let mut stack: Vec<(usize, &'static str)> = Vec::new();
         let selects = self.page_text_selects();
         let mut i = 0;
-        while i < self.nodes.len() {
-            let n = &self.nodes[i];
+        while i < self.tree.nodes.len() {
+            let n = &self.tree.nodes[i];
             let end = self.subtree_end(i);
             while stack.last().is_some_and(|&(e, _)| i >= e) { stack.pop(); }
             if !self.allowed(i) || self.subtree_exiting(i) || n.vis.opacity <= 0.01 || n.input.is_some() {
@@ -91,7 +91,7 @@ impl RuntimeCore {
     }
 
     fn export_node(&self, i: usize, depth: usize, inline: bool) -> ExportNode {
-        let n = &self.nodes[i];
+        let n = &self.tree.nodes[i];
         let mut attrs = String::new();
         let mut inner = String::new();
         let href = n.a11y.more.as_ref().and_then(|m| m.href.clone());
@@ -131,7 +131,7 @@ impl RuntimeCore {
             let _ = write!(attrs, "{role} aria-label=\"{}\"", escape(l));
         }
         if n.a11y.hidden { attrs.push_str(" aria-hidden=\"true\""); }
-        let mut decls = css::layout(&self.layout.style(n.taffy).to_style(), i == 0);
+        let mut decls = css::layout(&self.commit.layout.style(n.taffy).to_style(), i == 0);
         let [x0, y0, x1, y1] = n.target;
         css::paint(&n.vis, (x1 - x0, y1 - y0), &mut decls);
         if let Some(spec) = n.text.as_deref() {

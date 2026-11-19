@@ -215,21 +215,21 @@ pub(super) fn same_keyed_path(a: &str, b: &str) -> bool {
 
 impl RuntimeCore {
     pub(super) fn is_selectable(&self, i: usize) -> bool {
-        let n = &self.nodes[i];
+        let n = &self.tree.nodes[i];
         n.input.is_none() && n.text.as_ref().is_some_and(|t| t.selectable && !t.redacted)
     }
 
     pub(super) fn live(&self, path: &str) -> Option<usize> {
-        (0..self.nodes.len()).find(|&i| self.nodes[i].path == path && !self.subtree_exiting(i) && self.allowed(i))
+        (0..self.tree.nodes.len()).find(|&i| self.tree.nodes[i].path == path && !self.subtree_exiting(i) && self.allowed(i))
     }
 
     pub(super) fn content_of(&self, i: usize) -> &str {
-        self.nodes[i].text.as_ref().map_or("", |t| t.content.as_str())
+        self.tree.nodes[i].text.as_ref().map_or("", |t| t.content.as_str())
     }
 
     /// The selection group node `i` is in: its nearest `El::selection_group` ancestor.
     pub(super) fn group_of(&self, i: usize) -> Option<usize> {
-        std::iter::successors(self.nodes[i].parent, |&p| self.nodes[p].parent).find(|&p| self.nodes[p].selection_group)
+        std::iter::successors(self.tree.nodes[i].parent, |&p| self.tree.nodes[p].parent).find(|&p| self.tree.nodes[p].selection_group)
     }
 
     /// Node `j` is a selectable text of group `g` (not of a group inside it).
@@ -240,14 +240,14 @@ impl RuntimeCore {
     /// Group `g`'s selectable texts, in tree order.
     pub(crate) fn group_texts(&self, g: usize) -> Vec<usize> {
         // Nodes are in tree order, so a subtree is the run after its root.
-        let inside = |j: usize| std::iter::successors(self.nodes[j].parent, |&p| self.nodes[p].parent).any(|p| p == g);
-        (g + 1..self.nodes.len()).take_while(|&j| inside(j)).filter(|&j| self.member(j, g)).collect()
+        let inside = |j: usize| std::iter::successors(self.tree.nodes[j].parent, |&p| self.tree.nodes[p].parent).any(|p| p == g);
+        (g + 1..self.tree.nodes.len()).take_while(|&j| inside(j)).filter(|&j| self.member(j, g)).collect()
     }
 
     /// The range of `unit` at byte `at` of node `i`'s text, a word without uncopied ends.
     pub(super) fn unit_in(&self, i: usize, at: usize, unit: Unit) -> (usize, usize) {
         let r = unit_at(self.content_of(i), at, unit);
-        match (unit, &self.nodes[i].text) {
+        match (unit, &self.tree.nodes[i].text) {
             (Unit::Word, Some(t)) if !t.cold.uncopied.is_empty() => trim_uncopied(&t.cold.uncopied, r),
             _ => r,
         }
@@ -272,7 +272,7 @@ impl RuntimeCore {
         use virtual_selection::EndRef;
         let Some(h) = self.selection_holder_end() else { return Vec::new() };
         let Some(f) = self.focus_holder_end(h) else { return Vec::new() };
-        let Some(sel) = self.selectable.phase.selection() else { return Vec::new() };
+        let Some(sel) = self.edit.selectable.phase.selection() else { return Vec::new() };
         if f == h {
             let EndRef::Mounted(i) = h else { return Vec::new() };
             let (a, b) = (sel.anchor.min(sel.focus), sel.anchor.max(sel.focus));
@@ -307,7 +307,7 @@ impl RuntimeCore {
     /// single click), for tests and tools.
     pub fn text_selection(&self) -> Option<(&str, std::ops::Range<usize>)> {
         let h = self.selection_holder_end()?;
-        let sel = self.selectable.phase.selection()?;
+        let sel = self.edit.selectable.phase.selection()?;
         let range = match &sel.far {
             None => sel.anchor.min(sel.focus)..sel.anchor.max(sel.focus),
             Some(_) => {
@@ -358,23 +358,23 @@ impl RuntimeCore {
 
     /// [`Runtime::selection`] for a handler's `Tx`, kept until a commit or the selection changes.
     pub(super) fn selection_snapshot(&self, app: &dyn ViewDriver) -> Option<Rc<TextSelection>> {
-        self.selectable.phase.selection()?;
+        self.edit.selectable.phase.selection()?;
         {
-            let cache = self.sel_snapshot.borrow();
+            let cache = self.edit.sel_snapshot.borrow();
             if let Some(s) = cache.as_ref().filter(|s| self.same_from(&s.from)) { return s.selection.clone(); }
         }
         let from = self.selection_from();
         let selection = self.selection(app).map(Rc::new);
-        *self.sel_snapshot.borrow_mut() = Some(Snapshot { from, selection: selection.clone() });
+        *self.edit.sel_snapshot.borrow_mut() = Some(Snapshot { from, selection: selection.clone() });
         selection
     }
 
     /// With nothing selected the basis reads ends of 0: nothing that compares it can change its
     /// answer, since any selection made since differs in its path.
     fn same_from(&self, from: &Basis) -> bool {
-        let phase = &self.selectable.phase;
+        let phase = &self.edit.selectable.phase;
         let sel = phase.selection();
-        from.0 == self.commits
+        from.0 == self.commit.commits
             && from.1.as_deref() == sel.map(|s| s.path.as_str())
             && from.2 == sel.map_or(0, |s| s.anchor)
             && from.3 == sel.map_or(0, |s| s.focus)
@@ -383,26 +383,26 @@ impl RuntimeCore {
     }
 
     fn selection_from(&self) -> Basis {
-        let phase = &self.selectable.phase;
+        let phase = &self.edit.selectable.phase;
         let sel = phase.selection();
-        (self.commits, sel.map(|s| s.path.clone()), sel.map_or(0, |s| s.anchor), sel.map_or(0, |s| s.focus),
+        (self.commit.commits, sel.map(|s| s.path.clone()), sel.map_or(0, |s| s.anchor), sel.map_or(0, |s| s.focus),
             sel.and_then(|s| s.far.as_ref()).map(|f| f.path.clone()), phase.dragging())
     }
 
     /// The `El::on_selection_change` calls owed since the last check: each element whose part
     /// of the selection changed, started or cleared.
     pub(super) fn selection_changes(&mut self, app: &dyn ViewDriver) -> Vec<Action> {
-        if self.sel_heard.from.as_ref().is_some_and(|f| self.same_from(f)) { return Vec::new(); }
+        if self.edit.sel_heard.from.as_ref().is_some_and(|f| self.same_from(f)) { return Vec::new(); }
         // A release is heard by whoever holds the selection, though it didn't change.
-        let released = self.sel_heard.from.as_ref().is_some_and(|f| f.5 && !self.selectable.phase.dragging());
-        self.sel_heard.from = Some(self.selection_from());
-        if self.sel_heard.by_path.is_empty() && !self.nodes.iter().any(|n| n.handlers.get().is_some_and(|h| h.on_selection_change.is_some())) {
+        let released = self.edit.sel_heard.from.as_ref().is_some_and(|f| f.5 && !self.edit.selectable.phase.dragging());
+        self.edit.sel_heard.from = Some(self.selection_from());
+        if self.edit.sel_heard.by_path.is_empty() && !self.tree.nodes.iter().any(|n| n.handlers.get().is_some_and(|h| h.on_selection_change.is_some())) {
             return Vec::new();
         }
-        let watchers: Vec<usize> = (0..self.nodes.len())
-            .filter(|&i| self.nodes[i].handlers.get().is_some_and(|h| h.on_selection_change.is_some()) && !self.subtree_exiting(i) && self.allowed(i))
+        let watchers: Vec<usize> = (0..self.tree.nodes.len())
+            .filter(|&i| self.tree.nodes[i].handlers.get().is_some_and(|h| h.on_selection_change.is_some()) && !self.subtree_exiting(i) && self.allowed(i))
             .collect();
-        if watchers.is_empty() && self.sel_heard.by_path.is_empty() { return Vec::new(); }
+        if watchers.is_empty() && self.edit.sel_heard.by_path.is_empty() { return Vec::new(); }
         let mut selected: Vec<usize> = self.selection_ranges().into_iter().filter(|r| r.1 < r.2).map(|r| r.0).collect();
         if self.has_nonempty_selection()
             && let Some(h) = self.selection_holder_end()
@@ -416,18 +416,18 @@ impl RuntimeCore {
                 }
             }
         }
-        let inside = |w: usize, j: usize| std::iter::successors(Some(j), |&p| self.nodes[p].parent).any(|p| p == w);
-        if self.sel_heard.by_path.is_empty() && !watchers.iter().any(|&w| selected.iter().any(|&j| inside(w, j))) {
+        let inside = |w: usize, j: usize| std::iter::successors(Some(j), |&p| self.tree.nodes[p].parent).any(|p| p == w);
+        if self.edit.sel_heard.by_path.is_empty() && !watchers.iter().any(|&w| selected.iter().any(|&j| inside(w, j))) {
             return Vec::new();
         }
         let sel = (!selected.is_empty()).then(|| self.selection_snapshot(app)).flatten();
         let (mut out, mut heard) = (Vec::new(), HashMap::default());
         for w in watchers {
-            let path = self.nodes[w].path.clone();
+            let path = self.tree.nodes[w].path.clone();
             let now = sel.clone().filter(|_| selected.iter().any(|&j| inside(w, j)));
-            let before = self.sel_heard.by_path.remove(&path).or_else(|| {
-                let k = self.sel_heard.by_path.keys().find(|k| same_keyed_path(k, &path))?.clone();
-                self.sel_heard.by_path.remove(&k)
+            let before = self.edit.sel_heard.by_path.remove(&path).or_else(|| {
+                let k = self.edit.sel_heard.by_path.keys().find(|k| same_keyed_path(k, &path))?.clone();
+                self.edit.sel_heard.by_path.remove(&k)
             });
             let same = match (&before, &now) {
                 (Some(a), Some(b)) => {
@@ -447,21 +447,21 @@ impl RuntimeCore {
                 (a, b) => a.is_none() && b.is_none(),
             };
             if !same || (released && now.is_some()) {
-                let change = SelectionChange { selection: now.clone(), was: before.is_some(), dragging: self.selectable.phase.dragging() };
+                let change = SelectionChange { selection: now.clone(), was: before.is_some(), dragging: self.edit.selectable.phase.dragging() };
                 out.push(Action::SelectionChange(path.clone(), change));
             }
             if let Some(now) = now { heard.insert(path, now); }
         }
-        self.sel_heard.by_path = heard;
+        self.edit.sel_heard.by_path = heard;
         out
     }
 
     /// Node `i` as a [`SelectedText`] with `range` selected, its path relative to `base`'s.
     pub(super) fn selected_piece(&self, i: usize, range: Range<usize>, base: Option<usize>) -> SelectedText {
-        let n = &self.nodes[i];
+        let n = &self.tree.nodes[i];
         let path = match base {
             Some(b) if b == i => String::new(),
-            Some(b) => n.path.strip_prefix(&self.nodes[b].path).and_then(|p| p.strip_prefix('/')).unwrap_or(&n.path).to_owned(),
+            Some(b) => n.path.strip_prefix(&self.tree.nodes[b].path).and_then(|p| p.strip_prefix('/')).unwrap_or(&n.path).to_owned(),
             None => n.path.clone(),
         };
         let len = self.content_of(i).len();
@@ -482,12 +482,12 @@ impl RuntimeCore {
         let ranges = self.selection_ranges();
         let (&(first, ..), &(last, ..)) = (ranges.first()?, ranges.last()?);
         let drawn = self.joined(&ranges);
-        let around = |a: usize, j: usize| std::iter::successors(Some(j), |&p| self.nodes[p].parent).any(|p| p == a);
-        let provider = std::iter::successors(Some(first), |&p| self.nodes[p].parent)
-            .find(|&p| self.nodes[p].handlers.selection_copy.is_some() && around(p, last));
-        if let Some(p) = provider && let Some(f) = self.nodes[p].handlers.selection_copy.clone() {
+        let around = |a: usize, j: usize| std::iter::successors(Some(j), |&p| self.tree.nodes[p].parent).any(|p| p == a);
+        let provider = std::iter::successors(Some(first), |&p| self.tree.nodes[p].parent)
+            .find(|&p| self.tree.nodes[p].handlers.selection_copy.is_some() && around(p, last));
+        if let Some(p) = provider && let Some(f) = self.tree.nodes[p].handlers.selection_copy.clone() {
             let g = self.group_of(first);
-            let texts = (p..self.nodes.len())
+            let texts = (p..self.tree.nodes.len())
                 .take_while(|&j| around(p, j))
                 .filter(|&j| self.is_selectable(j) && !self.subtree_exiting(j) && self.allowed(j))
                 .filter(|&j| match g { Some(g) => self.group_of(j) == Some(g), None => j == first })
@@ -503,7 +503,7 @@ impl RuntimeCore {
         let mut out = CopyJoin::default();
         let mut prev: Option<usize> = None;
         for &(i, a, b) in ranges {
-            let Some(spec) = self.nodes[i].text.as_ref() else { continue };
+            let Some(spec) = self.tree.nodes[i].text.as_ref() else { continue };
             let Some(piece) = spec.copy_slice(a as u32, b as u32) else { continue };
             out.push(spec, a..b, &piece, prev.is_some_and(|p| self.beside(p, i)), usize::MAX);
             prev = Some(i);
@@ -527,7 +527,7 @@ impl RuntimeCore {
 
     /// The held press is selecting text by dragging, and has selected some.
     pub(super) fn selected_by_drag(&self) -> bool {
-        self.selectable.phase.dragging() && self.press.held().is_some_and(|h| h.moved) && (!self.selection_ranges().is_empty() || self.has_nonempty_selection())
+        self.edit.selectable.phase.dragging() && self.pointer.press.held().is_some_and(|h| h.moved) && (!self.selection_ranges().is_empty() || self.has_nonempty_selection())
     }
 
     pub(super) fn clear_text_selection(&mut self) {
@@ -538,7 +538,7 @@ impl RuntimeCore {
     pub(super) fn select_step(&mut self, event: phase::Event<'_>) {
         // Only the held press's own drag keeps the list scrolling at its edge.
         if !matches!(event, phase::Event::Drag { .. }) { self.stop_edge_scroll(); }
-        let effects = phase::step(&mut self.selectable.phase, event);
+        let effects = phase::step(&mut self.edit.selectable.phase, event);
         self.carry_select(effects);
     }
 
@@ -553,10 +553,10 @@ impl RuntimeCore {
 
     /// Byte offset of node `i`'s text under window point (x, y), where it was drawn this frame.
     fn text_index_at(&self, i: usize, x: f32, y: f32) -> Option<usize> {
-        let n = &self.nodes[i];
+        let n = &self.tree.nodes[i];
         let (spec, flow) = (n.text.as_ref()?, n.text_layout.as_ref()?.view());
         let s = self.env.scale;
-        let z = self.drawn_scale.get(i).copied().unwrap_or(1.0).max(1e-4);
+        let z = self.paint.drawn_scale.get(i).copied().unwrap_or(1.0).max(1e-4);
         let (rect, x, y) = self.unturned_box_and_point(i, x, y);
         let [ox, oy] = links::origin(n, spec, flow, rect, s, z);
         let px = s / z;
@@ -603,7 +603,7 @@ impl RuntimeCore {
     /// selected everything between it and the press.
     fn shown_box(&self, j: usize) -> Option<[f32; 4]> {
         let r = self.drawn_box(j);
-        if self.inh_scratch.len() != self.nodes.len() || self.drawn.get(j).is_none_or(|d| d[2] <= 0.0 && d[3] <= 0.0) {
+        if self.paint.inh_scratch.len() != self.tree.nodes.len() || self.paint.drawn.get(j).is_none_or(|d| d[2] <= 0.0 && d[3] <= 0.0) {
             return Some(r);
         }
         let c = self.screen_clip_of_parent(Some(j)).map(|v| v / self.env.scale);
@@ -619,19 +619,19 @@ impl RuntimeCore {
         use virtual_selection::EndRef;
         let Some(i) = target.filter(|&i| self.is_selectable(i) && self.link_at(i, x, y).is_none()) else {
             self.clear_text_selection();
-            self.selectable.presses.clear();
+            self.edit.selectable.presses.clear();
             return;
         };
         let Some(at) = self.text_index_at(i, x, y) else { return };
-        let path = self.nodes[i].path.clone();
+        let path = self.tree.nodes[i].path.clone();
         let content = self.content_of(i).to_owned();
         let now = self.now_clock();
-        let clicks = self.selectable.presses.press(&path, now, (x, y), self.double_click_interval).min(3);
+        let clicks = self.edit.selectable.presses.press(&path, now, (x, y), self.double_click_interval).min(3);
         let i_end = EndRef::Mounted(i);
         let holder = self.selection_holder_end().filter(|&h| h == i_end || self.end_same_group(h, i_end));
         match holder {
             // Keep the anchor; the focus follows the pointer from here.
-            Some(h) if clicks == 1 && self.selectable.shift => {
+            Some(h) if clicks == 1 && self.edit.selectable.shift => {
                 self.select_step(phase::Event::Extend { focus: at, far: (h != i_end).then(|| phase::Far::new(path, content)) });
             }
             _ => {
@@ -647,7 +647,7 @@ impl RuntimeCore {
     /// clickable row), so this follows the selection's own text.
     pub(super) fn selection_drag(&mut self, x: f32, y: f32) {
         use virtual_selection::EndRef;
-        let phase::Phase::Dragging { unit, selection } = &self.selectable.phase else { return };
+        let phase::Phase::Dragging { unit, selection } = &self.edit.selectable.phase else { return };
         let (unit, origin) = (*unit, selection.origin);
         let Some(h) = self.selection_holder_end() else { self.clear_text_selection(); return };
         let g = self.end_group_path(h).and_then(|gp| self.live(gp));
@@ -668,10 +668,10 @@ impl RuntimeCore {
         let reach = if j_end == h {
             phase::Reach::Anchor
         } else {
-            let n = &self.nodes[j];
+            let n = &self.tree.nodes[j];
             phase::Reach::Far { path: &n.path, content: n.text.as_ref().map_or("", |t| t.content.as_str()) }
         };
-        let effects = phase::step(&mut self.selectable.phase, phase::Event::Drag { anchor, focus, reach });
+        let effects = phase::step(&mut self.edit.selectable.phase, phase::Event::Drag { anchor, focus, reach });
         self.carry_select(effects);
     }
 
@@ -683,7 +683,7 @@ impl RuntimeCore {
         let crate::Key::Command(c @ ('c' | 'a')) = ev.key else { return false };
         let m = ev.mods;
         let plain = m.cmd && !m.shift && !m.alt && !(m.ctrl && m.logo);
-        if !plain || self.focused_input().is_some() || (c == 'c' && self.selectable.phase.selection().is_none()) { return false; }
+        if !plain || self.focused_input().is_some() || (c == 'c' && self.edit.selectable.phase.selection().is_none()) { return false; }
         let holder = self.selection_holder_end();
         if holder.is_none() { self.clear_text_selection(); }
         if c == 'a' { return self.select_all_key(app); }
@@ -705,14 +705,14 @@ impl RuntimeCore {
     /// does on Windows and Linux. False when the app's handler should run instead.
     pub(super) fn selection_menu(&mut self, app: &dyn ViewDriver, path: &str, x: f32, y: f32) -> bool {
         let Some(i) = self.live(path) else { return false };
-        if !self.is_selectable(i) || self.nodes[i].handlers.on_secondary_press.is_some() { return false; }
+        if !self.is_selectable(i) || self.tree.nodes[i].handlers.on_secondary_press.is_some() { return false; }
         if SECONDARY_SELECTS_WORD
             && let Some(at) = self.text_index_at(i, x, y)
             && range_in(&self.selection_ranges(), i).is_none_or(|(a, b)| at < a || at >= b)
         {
             let content = self.content_of(i).to_owned();
             let (a, b) = self.unit_in(i, at, Unit::Word);
-            self.selectable.presses = Default::default();
+            self.edit.selectable.presses = Default::default();
             self.select_step(phase::Event::Select(phase::Selection::new(path.to_owned(), content, (a, b), (a, b))));
         }
         let text = self.copy_text(app);
@@ -721,7 +721,7 @@ impl RuntimeCore {
         // The primary modifier, as the copy key handler takes it: ⌘C on macOS, Ctrl+C elsewhere.
         if let Ok(shortcut) = "mod+c".parse::<crate::Shortcut>() { copy = copy.key_equivalent(shortcut); }
         log_event!(self, "selection menu {path}");
-        self.popups.push_back(crate::popup_menu::Request {
+        self.host.popups.push_back(crate::popup_menu::Request {
             menu: crate::PopupMenu::new().item(copy),
             anchor: crate::PopupAnchor::Point(x, y),
             on_pick: Box::new(move |_, picked, tx| {

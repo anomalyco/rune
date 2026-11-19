@@ -288,7 +288,7 @@ impl RuntimeCore {
         let ran = self.dispatch_action(app, action, tx);
         if ran && let Some((note, started)) = timed { self.interaction_ran(note, started); }
         #[cfg(debug_assertions)]
-        if ran && name.starts_with("on_") { self.watch.meter.handler(name, path.as_deref(), at); }
+        if ran && name.starts_with("on_") { self.commit.watch.meter.handler(name, path.as_deref(), at); }
         #[cfg(debug_assertions)]
         stall.end(|| match path {
             Some(path) => (crate::tooling::perf_warn::handler_site(name, &path), format!("`{name}` on {path:?}")),
@@ -317,7 +317,7 @@ impl RuntimeCore {
     fn dispatch_action(&mut self, app: &mut dyn AppDriver, action: Action, tx: &mut Tx) -> bool {
         // A caret key or a press reads the field's layout where it lands: a long paste's
         // paragraphs still waiting there are shaped first. Typing at the caret needs none.
-        if !self.text_rows.is_empty() && reads_text_layout(&action) { self.fill_text_near(); }
+        if !self.paint.text_rows.is_empty() && reads_text_layout(&action) { self.fill_text_near(); }
         let mut one = self.transaction(app);
         // Debug builds name the element too, for the stale-view warning.
         #[cfg(debug_assertions)]
@@ -330,14 +330,14 @@ impl RuntimeCore {
         let repeat = matches!(action, Action::DragRepeat(..));
         let ran = match action {
             Action::WindowFocus(focused) => {
-                if !focused { self.held = physical_dispatch::Activation::Up; }
-                let Some(f) = self.nodes.get(self.app_root()).and_then(|n| n.handlers.on_window_focus.clone()) else { return false };
+                if !focused { self.kbd.held = physical_dispatch::Activation::Up; }
+                let Some(f) = self.tree.nodes.get(self.app_root()).and_then(|n| n.handlers.on_window_focus.clone()) else { return false };
                 f(app.states(), focused, &mut one);
                 true
             }
             Action::Physical(event, fallback) => {
                 // The window lost key focus (an internal focus move also notifies handlers).
-                if matches!(event, crate::PhysicalInput::FocusLost) { self.held = physical_dispatch::Activation::Up; }
+                if matches!(event, crate::PhysicalInput::FocusLost) { self.kbd.held = physical_dispatch::Activation::Up; }
                 let ran = self.dispatch_physical(app, event, fallback, tx);
                 let live_only = std::mem::take(&mut tx.live_only);
                 return if ran && live_only { self.skip_view("a key handler") } else { ran };
@@ -349,19 +349,19 @@ impl RuntimeCore {
             Action::HoverFocus(path) => match path {
                 Some(path) => {
                     self.set_focus(app, Some(path), false);
-                    self.focus.step(focus_machine::FocusEvent::Hover(true));
+                    self.kbd.focus.step(focus_machine::FocusEvent::Hover(true));
                     one.commit = one.commit.instant();
                     true
                 }
                 None => {
-                    let lit = self.focus.hovered();
-                    self.focus.step(focus_machine::FocusEvent::Hover(false));
+                    let lit = self.kbd.focus.hovered();
+                    self.kbd.focus.step(focus_machine::FocusEvent::Hover(false));
                     lit
                 }
             },
             Action::Dismiss(path) => {
                 let Some(f) = self.node(&path).and_then(|n| n.handlers.modal.as_ref().map(|m| m.dismiss.clone())) else { return false };
-                self.set_focus(app, None, self.focus.keyboard());
+                self.set_focus(app, None, self.kbd.focus.keyboard());
                 f(app.states(), &mut one);
                 true
             }
@@ -408,9 +408,9 @@ impl RuntimeCore {
                 true
             }
             Action::HoverChange(path, inside) => {
-                let gone = self.hover_gone.iter().position(|g| g.0 == path).map(|i| self.hover_gone.remove(i).1);
+                let gone = self.pointer.hover_gone.iter().position(|g| g.0 == path).map(|i| self.pointer.hover_gone.remove(i).1);
                 // A leave still reaches an element on its way out.
-                let exiting = || self.nodes.iter().find(|n| !inside && n.path == path).and_then(|n| n.handlers.on_hover_change.clone());
+                let exiting = || self.tree.nodes.iter().find(|n| !inside && n.path == path).and_then(|n| n.handlers.on_hover_change.clone());
                 let Some(f) = self.node(&path).and_then(|n| n.handlers.on_hover_change.clone()).or(gone).or_else(exiting) else { return false };
                 f(app.states(), inside, &mut one);
                 true
@@ -461,9 +461,9 @@ impl RuntimeCore {
                 }
                 one.button = button;
                 one.drag_repeat = repeat;
-                d.data = if d.phase == Phase::Down { 0.0 } else { self.drag_data };
+                d.data = if d.phase == Phase::Down { 0.0 } else { self.pointer.drag_data };
                 f(app.states(), &mut d, &mut one);
-                self.drag_data = d.data;
+                self.pointer.drag_data = d.data;
                 if let Some(after) = one.drag_repeat_after.take() {
                     self.arm_press_repeat(&path, after);
                 }
@@ -497,10 +497,10 @@ impl RuntimeCore {
             Action::Paste(content, target) => {
                 if target.is_some_and(|target| target != self.paste_target()) { return false; }
                 let hook = self.focused_input().and_then(|i| i.paste.clone());
-                let own_pills = if cfg!(not(target_arch = "wasm32")) || self.clipboard.is_some() {
+                let own_pills = if cfg!(not(target_arch = "wasm32")) || self.edit.clipboard.is_some() {
                     content.has_own_pills()
                 } else {
-                    self.pill_copy.as_ref().is_some_and(|(t, pills)| {
+                    self.edit.pill_copy.as_ref().is_some_and(|(t, pills)| {
                         t.as_str() == content.text()
                             && content.html().is_some_and(|h| {
                                 let frag = crate::TextEdit::from_html(h);
@@ -529,8 +529,8 @@ impl RuntimeCore {
                 } else { false }
             }
             Action::ClipboardRead(id, content) => {
-                let Some(i) = self.clipboard_reads.iter().position(|(read, _)| *read == id) else { return false };
-                let (_, f) = self.clipboard_reads.remove(i);
+                let Some(i) = self.edit.clipboard_reads.iter().position(|(read, _)| *read == id) else { return false };
+                let (_, f) = self.edit.clipboard_reads.remove(i);
                 f(app.states(), &content, &mut one);
                 true
             }
@@ -538,8 +538,8 @@ impl RuntimeCore {
             Action::Focus(path, x, y) => self.focus_input(app, path, x, y, &mut one),
             Action::FieldMenu(path, at, local) => self.field_menu(app, path, at, local, &mut one),
             Action::Blur => {
-                if self.focus.path().is_none() { return false; }
-                self.set_focus(app, None, self.focus.keyboard());
+                if self.kbd.focus.path().is_none() { return false; }
+                self.set_focus(app, None, self.kbd.focus.keyboard());
                 true
             }
             Action::A11y(path, act) => self.run_a11y(app, path, act, &mut one),

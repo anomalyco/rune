@@ -56,11 +56,11 @@ impl RuntimeCore {
     /// The marks the view declared, as (node, start, end) for each mounted text that still
     /// holds its marked bytes, in node order.
     pub(super) fn mark_ranges(&self) -> Vec<(usize, usize, usize)> {
-        if self.defaults.marks.is_empty() { return Vec::new(); }
+        if self.commit.defaults.marks.is_empty() { return Vec::new(); }
         let mut by_path: HashMap<&str, Vec<&TextMark>> = HashMap::default();
-        for m in self.defaults.marks.iter() { by_path.entry(m.path.as_str()).or_default().push(m); }
+        for m in self.commit.defaults.marks.iter() { by_path.entry(m.path.as_str()).or_default().push(m); }
         let mut out = Vec::new();
-        for (i, n) in self.nodes.iter().enumerate() {
+        for (i, n) in self.tree.nodes.iter().enumerate() {
             let Some(marks) = by_path.get(n.path.as_str()) else { continue };
             if self.subtree_exiting(i) { continue; }
             let content = self.content_of(i);

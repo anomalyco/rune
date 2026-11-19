@@ -984,13 +984,13 @@ mod tests {
         let mut rt = Runtime::new(0u32, |_: &u32, _: &mut Cx<u32>| el(), (100.0, 100.0), Env::default());
         rt.hooks.on_focus = Some(|_, focused, tx| if !focused { tx.minimize(); });
         rt.window_focus(true);
-        assert!(!rt.minimize.latched());
+        assert!(!rt.host.minimize.latched());
         rt.window_focus(false);
-        assert!(rt.minimize.field() && rt.shell_request.is_none(), "a handler's minimize is latched for the shell");
+        assert!(rt.host.minimize.field() && rt.shell_request.is_none(), "a handler's minimize is latched for the shell");
         rt.ignore_minimize("a test");
-        assert!(!rt.minimize.latched(), "a shell that can't minimize takes the request");
+        assert!(!rt.host.minimize.latched(), "a shell that can't minimize takes the request");
         rt.update(|_, tx| tx.minimize());
-        assert!(rt.minimize.field());
+        assert!(rt.host.minimize.field());
         let app = App::new(spec());
         app.handle().minimize();
         let requests = app.shared.take();
@@ -1034,7 +1034,7 @@ mod tests {
         assert_eq!((rt.state, rt.shell_request), (1, None), "the app's own ⌘W wins, once");
         press(&mut rt, Code::KeyM, 'm', Unhandled::Minimize);
         assert_eq!(rt.state, 2, "the app saw ⌘M first");
-        assert!(rt.minimize.latched(), "and didn't take it");
+        assert!(rt.host.minimize.latched(), "and didn't take it");
     }
 
     thread_local! { static BUILDS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) }; }

@@ -3,6 +3,83 @@
 //! always on a hidden window, and on a shown one while it rests.
 use super::*;
 
+/// Frame loop, timer wake deadlines, action queue, pending transaction, live value latch,
+/// tracing and hot-reload session state owned by [`RuntimeCore`]. Under `#[repr(C)]`, the
+/// cold `pending: Tx` buffer precedes the hot per-frame fields (`wake_deadlines`, `timer_wake`,
+/// `queue`, `live`) so they sit directly adjacent to [`CommitState`]'s `dirty`/`relayout` flags.
+#[repr(C)]
+pub(crate) struct FrameState {
+    /// What `update` asked of the next commit.
+    pub(in crate::runtime) pending: Tx,
+    pub(in crate::runtime) idle_meter: crate::tooling::perf_warn::IdleMeter,
+    /// When the frame being built will present; videos pull the picture for it.
+    pub(crate) frame_target: Option<crate::time::Instant>,
+    #[cfg(test)]
+    pub(crate) test_clock: Option<crate::Clock>,
+    /// Tooling opts in before any callbacks. Absent in ordinary app runs.
+    pub(crate) trace_channels: Option<HashMap<&'static str, (&'static str, f32)>>,
+    #[cfg(feature = "hot")]
+    pub(crate) hot: Option<crate::hot::Session>,
+    /// The live-only event this frame's commit checks: its handler, and what the view had built.
+    #[cfg(debug_assertions)]
+    pub(in crate::runtime) live_check: Option<(String, live_check::ViewPrint)>,
+    /// Live-only events checked (and so committed) so far.
+    #[cfg(debug_assertions)]
+    pub(in crate::runtime) live_checks: u64,
+    /// Stale-view warnings printed for `Tx::live_only` handlers, each once.
+    #[cfg(debug_assertions)]
+    pub(crate) live_only_warnings: Vec<String>,
+    pub(in crate::runtime) live_clock: Arc<()>,
+    pub(in crate::runtime) live_subscriptions: Vec<Arc<crate::live::Subscription>>,
+    /// Events whose handler said `Tx::live_only`, and so didn't commit.
+    pub(in crate::runtime) live_only_skips: u64,
+    pub(in crate::runtime) last_dt: f64,
+    /// Record `events` without a trace: headless runs. Live hosts turn it off.
+    pub(crate) record_events: bool,
+    /// Debug builds check `Tx::live_only` events (`skip_view`).
+    #[cfg(debug_assertions)]
+    pub(in crate::runtime) live_only_check: bool,
+    pub(in crate::runtime) wake_deadlines: Vec<f64>,
+    pub(in crate::runtime) timer_wake: TimerWake,
+    pub(in crate::runtime) queue: ActionQueue,
+    pub(in crate::runtime) live: live_latch::LiveLane,
+}
+
+impl FrameState {
+    // Single-caller constructor for `RuntimeCore::new`; inlined so it stays in its caller's
+    // codegen unit instead of shifting partitioning and dropping inlining in the paint walk.
+    #[inline]
+    pub(in crate::runtime) fn new() -> Self {
+        Self {
+            queue: ActionQueue::default(),
+            pending: Tx::default(),
+            wake_deadlines: Vec::new(),
+            timer_wake: Default::default(),
+            idle_meter: Default::default(),
+            last_dt: 0.0,
+            frame_target: None,
+            #[cfg(test)]
+            test_clock: None,
+            live: live_latch::LiveLane::new(Arc::new(|| {})),
+            live_clock: Arc::new(()),
+            live_subscriptions: Vec::new(),
+            live_only_skips: 0,
+            #[cfg(debug_assertions)]
+            live_only_check: true,
+            #[cfg(debug_assertions)]
+            live_check: None,
+            #[cfg(debug_assertions)]
+            live_checks: 0,
+            #[cfg(debug_assertions)]
+            live_only_warnings: Vec::new(),
+            record_events: true,
+            trace_channels: None,
+            #[cfg(feature = "hot")]
+            hot: None,
+        }
+    }
+}
+
 /// A resting window's timer poll, and the frame it asked for.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(super) enum TimerWake {
@@ -70,39 +147,39 @@ impl RuntimeCore {
     /// its drawable: its timers count from it, and nothing polls again unless another came due.
     pub(crate) fn poll_hidden(&mut self, app: &mut dyn AppDriver) -> bool {
         let now = self.now_clock();
-        if self.timer_wake.asked() && self.wake_deadlines.first().is_none_or(|t| *t > now) {
+        if self.frame.timer_wake.asked() && self.frame.wake_deadlines.first().is_none_or(|t| *t > now) {
             self.cancel_timer_frame();
             return self.needs_commit();
         }
         let stale = self.poll_alone(app);
-        let wakes = std::mem::take(&mut self.pending.wakes);
+        let wakes = std::mem::take(&mut self.frame.pending.wakes);
         self.schedule_wakes(wakes);
         stale
     }
 
     /// `poll_hidden`, leaving the poll's `wake_after`s in `pending`.
     fn poll_alone(&mut self, app: &mut dyn AppDriver) -> bool {
-        self.timer_wake = self.timer_wake.step(TimerWakeEvent::PollAlone).0;
+        self.frame.timer_wake = self.frame.timer_wake.step(TimerWakeEvent::PollAlone).0;
         if let Some(clock) = self.wall_clock() { self.clock = clock; }
         // An `update`'s `wake_after` counts from now; no frame may come to schedule it.
-        let wakes = std::mem::take(&mut self.pending.wakes);
+        let wakes = std::mem::take(&mut self.frame.pending.wakes);
         self.schedule_wakes(wakes);
         // Due timers are spent with or without a poll, as a frame spends them; one left due
         // would wake the host again every frame interval.
-        let due = self.wake_deadlines.partition_point(|t| *t <= self.clock);
-        self.wake_deadlines.drain(..due);
+        let due = self.frame.wake_deadlines.partition_point(|t| *t <= self.clock);
+        self.frame.wake_deadlines.drain(..due);
         // A glyph mask cache write that came due while nothing draws (`mask_cache`).
         let _ = self.text.mask_cache_frame(false);
         let patched = self.patch_pending();
         if !app.has_poll() { return patched; }
         let mut one = self.transaction(app);
-        let changed = self.idle_meter.polled(crate::tooling::perf_warn::timed("poll", || app.poll(self.clock, &mut one)));
-        self.dirty |= changed;
-        self.pending.polled_change |= changed;
-        let asks_frame = one.srgb_blend.is_some_and(|b| b != self.srgb_blend) || one.font_smoothing.is_some_and(|m| m != self.text.smoothing) || self.changes_families(&one) || (one.blur && self.focus.path().is_some());
+        let changed = self.frame.idle_meter.polled(crate::tooling::perf_warn::timed("poll", || app.poll(self.clock, &mut one)));
+        self.commit.dirty |= changed;
+        self.frame.pending.polled_change |= changed;
+        let asks_frame = one.srgb_blend.is_some_and(|b| b != self.paint.srgb_blend) || one.font_smoothing.is_some_and(|m| m != self.text.smoothing) || self.changes_families(&one) || (one.blur && self.kbd.focus.path().is_some());
         self.latch_requests(app, &mut one);
         let stale = changed || one.frame_work() || patched || asks_frame;
-        merge(&mut self.pending, one);
+        merge(&mut self.frame.pending, one);
         stale
     }
 
@@ -116,18 +193,18 @@ impl RuntimeCore {
     pub(crate) fn resting_wake(&mut self, app: &mut dyn AppDriver) -> Option<bool> {
         if !self.rests() { return None; }
         let stale = self.poll_alone(app);
-        let steps = self.pending.wakes.iter().any(|d| d.is_zero());
+        let steps = self.frame.pending.wakes.iter().any(|d| d.is_zero());
         // A starved fill's wake draws the frame that resumes it; the poll alone never does.
-        Some(stale || self.window_frame.is_some() || steps || self.virtual_fill.resuming(self.clock))
+        Some(stale || self.host.window_frame.is_some() || steps || self.commit.virtual_fill.resuming(self.clock))
     }
 
     /// Whether the host asked for a frame after `resting_wake`. That frame doesn't poll again
     /// and its timers count from it; without one they count from the poll.
     pub(crate) fn resting_wake_frame(&mut self, frame: bool) {
         if frame {
-            self.timer_wake = self.timer_wake.step(TimerWakeEvent::Asked { at: self.clock }).0;
+            self.frame.timer_wake = self.frame.timer_wake.step(TimerWakeEvent::Asked { at: self.clock }).0;
         } else {
-            let wakes = std::mem::take(&mut self.pending.wakes);
+            let wakes = std::mem::take(&mut self.frame.pending.wakes);
             self.schedule_wakes(wakes);
         }
     }
@@ -135,16 +212,16 @@ impl RuntimeCore {
     /// The frame a resting wake asked for won't stand for its poll: the window hid or showed,
     /// or an `AppHandle::wake` asks the next frame to poll. The poll's timers count from it.
     pub(crate) fn cancel_timer_frame(&mut self) {
-        let (next, polled) = self.timer_wake.step(TimerWakeEvent::Cancel);
-        self.timer_wake = next;
+        let (next, polled) = self.frame.timer_wake.step(TimerWakeEvent::Cancel);
+        self.frame.timer_wake = next;
         let Some(polled) = polled else { return };
-        let wakes = std::mem::take(&mut self.pending.wakes);
+        let wakes = std::mem::take(&mut self.frame.pending.wakes);
         self.schedule_wakes_from(polled, wakes);
     }
 
     /// Nothing but a timer asks this runtime for a frame.
     pub(crate) fn rests(&self) -> bool {
-        self.loop_wake.is_none() && self.rests_except_loop()
+        self.motion.loop_wake.is_none() && self.rests_except_loop()
     }
 
     /// `rests`, apart from a loop's own wake (`paint_cycle_tick`).
@@ -161,10 +238,10 @@ impl RuntimeCore {
     /// What waits for a frame besides motion, if anything (`rests_but_motion`).
     pub(super) fn waiting_work(&self) -> Option<&'static str> {
         #[cfg(feature = "hot")]
-        if self.hot.is_some() { return Some("live edit"); }
+        if self.frame.hot.is_some() { return Some("live edit"); }
         if self.stale() { Some("a commit or input") }
-        else if self.settle || self.window_frame.is_some() { Some("a settle or window frame") }
-        else if self.hover_delays.waiting() || self.tooltip_waiting() || self.press_repeat_waiting() || self.drag_ends_pending() || self.drag_out_request.is_some() { Some("pointer work") }
+        else if self.commit.settle || self.host.window_frame.is_some() { Some("a settle or window frame") }
+        else if self.pointer.hover_delays.waiting() || self.tooltip_waiting() || self.press_repeat_waiting() || self.drag_ends_pending() || self.pointer.drag_out_request.is_some() { Some("pointer work") }
         else if self.files_held() { Some("files") }
         else if self.live_pending() { Some("a live value") }
         else if !self.surfaces.is_empty() { Some("a native surface") }
@@ -175,6 +252,6 @@ impl RuntimeCore {
     /// The last poll asked for the next frame (`wake_after(ZERO)`, due at once): it steps
     /// something every frame.
     fn steps_frames(&self) -> bool {
-        self.wake_deadlines.first().is_some_and(|t| *t <= self.clock)
+        self.frame.wake_deadlines.first().is_some_and(|t| *t <= self.clock)
     }
 }

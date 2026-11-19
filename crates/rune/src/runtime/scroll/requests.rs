@@ -10,8 +10,48 @@
 //! Events that test every request on every frame are types of their own, generic over what
 //! they measure, so a caller's measurements compile into the loop with no indirect call.
 use super::sticky::{Keep, Reveal};
-use super::{AppDriver, RuntimeCore, Tx};
+use super::{AppDriver, HashMap, NodeId, RuntimeCore, ScrollState, Tx, scroll_x};
 use crate::machine::Effects;
+
+/// Retained scroll viewports, wheel gesture locking, scroll requests and per-frame sticky state.
+/// Ordered hot-first under `#[repr(C)]` so per-node sticky vectors and `scrolls` stay contiguous.
+#[repr(C)]
+pub(in crate::runtime) struct ScrollTables {
+    /// Each node's sticky shift this frame (points), while `has_sticky`.
+    pub(in crate::runtime) stuck: Vec<f32>,
+    /// Per node, what its children stick within: the nearest vertical viewport's top and
+    /// bottom, then the node's own content box top and bottom (unscaled points), while
+    /// `has_sticky`.
+    pub(in crate::runtime) sticky_frame: Vec<[f32; 8]>,
+    /// Sections whose rows fade under their stuck header this frame (`ScrollFade::below_sticky`),
+    /// with the paint clip top the header keeps.
+    pub(in crate::runtime) sticky_bands: Vec<(usize, f32)>,
+    pub(in crate::runtime) scrolls: HashMap<NodeId, ScrollState>,
+    /// `Tx::keep_on_screen` across the commit underway, and `Tx::scroll_into_view` requests that
+    /// follow their target while growth/layout springs run.
+    pub(in crate::runtime) requests: Requests,
+    /// The axis the current wheel or trackpad gesture scrolls (`runtime/scroll/x.rs`).
+    pub(in crate::runtime) wheel_lock: scroll_x::WheelLock,
+    /// Whole notches of a mouse wheel ease where the platform's browsers do (`Runtime::set_wheel_glide`).
+    pub(in crate::runtime) wheel_glide: bool,
+}
+
+impl ScrollTables {
+    // Single-caller constructor for `RuntimeCore::new`; inlined so it stays in its caller's
+    // codegen unit instead of shifting partitioning and dropping inlining in the paint walk.
+    #[inline]
+    pub(in crate::runtime) fn new() -> Self {
+        Self {
+            stuck: Vec::new(),
+            sticky_frame: Vec::new(),
+            sticky_bands: Vec::new(),
+            scrolls: HashMap::default(),
+            requests: Default::default(),
+            wheel_lock: Default::default(),
+            wheel_glide: true,
+        }
+    }
+}
 
 /// One request outliving the commit that made it.
 pub(super) enum Request {
@@ -210,7 +250,7 @@ impl RuntimeCore {
         if !tx.scroll_bottom.is_empty() { self.scroll_to_bottom(app, std::mem::take(&mut tx.scroll_bottom)); }
         if !tx.scroll_pages.is_empty() { self.scroll_pages(app, std::mem::take(&mut tx.scroll_pages)); }
         if !tx.scroll_offsets.is_empty() { self.scroll_to_offsets(app, std::mem::take(&mut tx.scroll_offsets)); }
-        if destination { self.requests.step(Event::Destination); }
+        if destination { self.scroll.requests.step(Event::Destination); }
     }
 }
 

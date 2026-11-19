@@ -280,9 +280,9 @@ impl RuntimeCore {
     pub(super) fn landing_flights(&self) -> Vec<NodeId> {
         let near = 0.25 / self.env.scale.max(1.0);
         let within = |v: rune_motion::Vec2| v.x.abs().max(v.y.abs()) <= near;
-        self.flying.iter().map(|f| f.0).filter(|&id| {
+        self.motion.flying.iter().map(|f| f.0).filter(|&id| {
             let Some([p, v]) = self.scene.path_lead(id) else { return false };
-            let [bp, bv] = self.launches.lead(&self.scene, id);
+            let [bp, bv] = self.motion.launches.lead(&self.scene, id);
             let add = |a: rune_motion::Vec2, b: rune_motion::Vec2| rune_motion::Vec2::new(a.x + b.x, a.y + b.y);
             let v = add(v, bv);
             within(add(p, bp)) && within(rune_motion::Vec2::new(v.x / 60.0, v.y / 60.0))
@@ -291,8 +291,8 @@ impl RuntimeCore {
 
     /// Lands flight `id` at its layout, as if it had landed: it rides its parent from here.
     pub(super) fn land_flight(&mut self, id: NodeId) {
-        self.flying.retain(|f| f.0 != id);
-        self.launches.keep(&self.flying);
+        self.motion.flying.retain(|f| f.0 != id);
+        self.motion.launches.keep(&self.motion.flying);
         self.scene.land_path(id);
     }
 
@@ -307,7 +307,7 @@ impl RuntimeCore {
         }
         let mut current: Vec<(Rc<str>, NodeId)> = by_id.iter().map(|(key, &(i, _))| (key.clone(), nodes[i].id)).collect();
         current.sort_unstable_by_key(|(key, _)| by_id[key].0);
-        let old = std::mem::replace(&mut self.matched, current);
+        let old = std::mem::replace(&mut self.motion.matched, current);
         // Under Reduce Motion the old one exits and the new one enters, each by its own
         // transition (a crossfade in place) and with the parents it leaves or enters with.
         if instant || tx.commit.lands() || self.reduced_motion { return; }
@@ -317,22 +317,22 @@ impl RuntimeCore {
         for (key, from) in old.into_iter().rev() {
             let Some(&(i, true)) = by_id.get(&key) else { continue };
             let to = nodes[i].id;
-            if from == to || self.node_index.contains_key(&from) || !self.scene.contains(from) || self.is_exiting(from) { continue; }
-            let index = old_index.get_or_insert_with(|| self.nodes.iter().enumerate().map(|(k, n)| (n.id, k)).collect());
+            if from == to || self.tree.node_index.contains_key(&from) || !self.scene.contains(from) || self.is_exiting(from) { continue; }
+            let index = old_index.get_or_insert_with(|| self.tree.nodes.iter().enumerate().map(|(k, n)| (n.id, k)).collect());
             let Some(&from_i) = index.get(&from) else { continue };
             // Scroll offsets live outside the scene: start where `from` was seen on screen. They
             // come from the last build, which a commit earlier in the same frame (a glide's poll
             // before the key that closes it) leaves in place, so look nodes up by id.
-            let built = &*built_index.get_or_insert_with(|| self.built_ids.iter().enumerate().map(|(k, &id)| (id, k)).collect());
+            let built = &*built_index.get_or_insert_with(|| self.tree.built_ids.iter().enumerate().map(|(k, &id)| (id, k)).collect());
             // Flights drop the cover offsets of flights around them.
-            let shift = |id: NodeId| built.get(&id).and_then(|&k| self.inh_scratch.get(k)).map_or([0.0; 2], |h| [h.dx - h.cover[0], h.dy - h.cover[1]]);
-            let source = self.nodes[from_i].parent.map_or([0.0; 2], |p| shift(self.nodes[p].id));
-            let row = built.get(&from).and_then(|&k| self.row_dy.get(k)).copied().unwrap_or(0.0);
+            let shift = |id: NodeId| built.get(&id).and_then(|&k| self.paint.inh_scratch.get(k)).map_or([0.0; 2], |h| [h.dx - h.cover[0], h.dy - h.cover[1]]);
+            let source = self.tree.nodes[from_i].parent.map_or([0.0; 2], |p| shift(self.tree.nodes[p].id));
+            let row = built.get(&from).and_then(|&k| self.paint.row_dy.get(k)).copied().unwrap_or(0.0);
             let dest = std::iter::successors(nodes[i].parent, |&p| nodes[p].parent)
                 .map(|p| nodes[p].id).find(|id| built.contains_key(id)).map_or([0.0; 2], shift);
             let offset = rune_motion::Vec2::new(source[0] - dest[0], source[1] + row - dest[1]);
             let spring = tx.motion.map(MotionSource::spring).or(nodes[i].matched.as_ref().and_then(|m| m.1)).unwrap_or(motion::REFLOW);
-            let fill = self.color(from, P_FILL, self.nodes[from_i].vis.fill);
+            let fill = self.color(from, P_FILL, self.tree.nodes[from_i].vis.fill);
             let opacity = self.scene.get(from, prop::OPACITY);
             self.scene.match_geometry_offset(from, to, offset, LayoutAnim::new(spring).screen());
             let live = |p: crate::live::Property| nodes[i].live.iter().any(|b| b.property == p);
@@ -350,15 +350,15 @@ impl RuntimeCore {
                 if !std::iter::successors(nodes[j].parent, |&p| nodes[p].parent).any(|p| p == i) { break; }
                 self.scene.enter_now(nodes[j].id);
             }
-            self.flying.retain(|f| f.0 != to);
-            self.flying.push((to, nodes[i].local));
-            self.launches.unclip(to, tx.unclipped_flights);
+            self.motion.flying.retain(|f| f.0 != to);
+            self.motion.flying.push((to, nodes[i].local));
+            self.motion.launches.unclip(to, tx.unclipped_flights);
         }
     }
 
     pub(super) fn capture_text_flight(&mut self, source: String, target: String) {
-        let Some((i, n)) = self.nodes.iter().enumerate().find(|(_, n)| crate::flight::selects(&source, &n.path, n.key.as_deref())) else { return };
-        let (Some(spec), Some(laid), Some(r)) = (&n.text, &n.text_layout, self.drawn.get(i)) else { return };
+        let Some((i, n)) = self.tree.nodes.iter().enumerate().find(|(_, n)| crate::flight::selects(&source, &n.path, n.key.as_deref())) else { return };
+        let (Some(spec), Some(laid), Some(r)) = (&n.text, &n.text_layout, self.paint.drawn.get(i)) else { return };
         if spec.redacted || spec.content.is_empty() { return; }
         let scale = self.env.scale;
         let (rect, origin) = text_extent(n, spec, laid.view(), *r, scale);
@@ -366,50 +366,50 @@ impl RuntimeCore {
         let clip = [rect.x.max(clip[0]).max(0.0), rect.y.max(clip[1]).max(0.0),
             (rect.x + rect.w).min(clip[2]).min(self.viewport.0), (rect.y + rect.h).min(clip[3]).min(self.viewport.1)];
         if rect.w <= 0.0 || clip[2] <= clip[0] || clip[3] <= clip[1] { return; }
-        self.glyph_scratch.clear();
+        self.paint.glyph_scratch.clear();
         self.text.set_glyph_inks(spec.color, &[]);
         // From outlines where text draws them, which a flight's zoom magnifies without blurring.
         self.text.set_emit(self.text.moving_emit());
         for p in laid.view().pieces() {
-            self.text.glyphs_for_layout(p.layout, scale, [origin[0] * scale, origin[1] * scale + p.y], false, &mut self.glyph_scratch);
+            self.text.glyphs_for_layout(p.layout, scale, [origin[0] * scale, origin[1] * scale + p.y], false, &mut self.paint.glyph_scratch);
         }
         self.text.set_emit(crate::text::outline::Emit::Atlas);
         let color = spec.color;
-        let srgb = self.srgb_blend;
+        let srgb = self.paint.srgb_blend;
         // Colour glyphs live in the image atlas, which may move them before the flight ends.
-        let glyphs = self.glyph_scratch.iter().filter(|q| q.color == 0 && q.rect[1] < clip[3] * scale && q.rect[1] + q.rect[3] > clip[1] * scale)
+        let glyphs = self.paint.glyph_scratch.iter().filter(|q| q.color == 0 && q.rect[1] < clip[3] * scale && q.rect[1] + q.rect[3] > clip[1] * scale)
             .map(|q| glyph(q, premul(color, 1.0, srgb), clip.map(|v| v * scale), [0.0; 4])).collect();
-        self.flights.push(TextFlight::new(source, target, rect, clip, glyphs, scale, self.t));
+        self.motion.flights.push(TextFlight::new(source, target, rect, clip, glyphs, scale, self.t));
     }
 
     /// `Tx::launch`, before the commit: where the source's text starts on screen.
     pub(super) fn capture_launch(&mut self, source: String, target: String) {
-        let Some((i, n)) = self.nodes.iter().enumerate().find(|(_, n)| crate::flight::selects(&source, &n.path, n.key.as_deref())) else { return };
-        let (Some(spec), Some(laid), Some(r)) = (&n.text, &n.text_layout, self.drawn.get(i)) else { return };
+        let Some((i, n)) = self.tree.nodes.iter().enumerate().find(|(_, n)| crate::flight::selects(&source, &n.path, n.key.as_deref())) else { return };
+        let (Some(spec), Some(laid), Some(r)) = (&n.text, &n.text_layout, self.paint.drawn.get(i)) else { return };
         let (_, origin) = text_extent(n, spec, laid.view(), *r, self.env.scale);
-        self.launches.wait(target, origin);
+        self.motion.launches.wait(target, origin);
     }
 
     /// `Tx::launch`, in the commit: each destination that just mounted starts with its first
     /// text where its source's text was seen, at its own size, and flies to its place unclipped.
     pub(super) fn launch_elements(&mut self, nodes: &[Node], tx: &Tx, instant: bool) {
-        let mounts = self.launches.commit();
+        let mounts = self.motion.launches.commit();
         if instant || tx.commit.lands() || self.reduced_motion {
-            for LaunchEffect::Mount { attempt, .. } in mounts { self.launches.miss(attempt); }
+            for LaunchEffect::Mount { attempt, .. } in mounts { self.motion.launches.miss(attempt); }
             return;
         }
-        let index: HashMap<NodeId, usize> = self.nodes.iter().enumerate().map(|(k, n)| (n.id, k)).collect();
-        let built: HashMap<NodeId, usize> = self.built_ids.iter().enumerate().map(|(k, &id)| (id, k)).collect();
+        let index: HashMap<NodeId, usize> = self.tree.nodes.iter().enumerate().map(|(k, n)| (n.id, k)).collect();
+        let built: HashMap<NodeId, usize> = self.tree.built_ids.iter().enumerate().map(|(k, &id)| (id, k)).collect();
         let scale = self.env.scale;
         for mount in mounts {
             let LaunchEffect::Mount { attempt, target, from } = mount;
             let Some(i) = nodes.iter().position(|n| crate::flight::selects(&target, &n.path, n.key.as_deref())) else {
-                self.launches.miss(attempt);
+                self.motion.launches.miss(attempt);
                 continue;
             };
             let to = nodes[i].id;
             if index.contains_key(&to) && !self.is_exiting(to) {
-                self.launches.miss(attempt);
+                self.motion.launches.miss(attempt);
                 continue;
             }
             let within = |mut j: usize| loop {
@@ -433,7 +433,7 @@ impl RuntimeCore {
             let (mut shift, mut zoom) = ([0.0; 2], (1.0, [0.0; 2], [0.0; 2]));
             if let Some(h) = std::iter::successors(nodes[i].parent, |&p| nodes[p].parent)
                 .find_map(|p| built.get(&nodes[p].id).copied())
-                .and_then(|k| self.inh_scratch.get(k))
+                .and_then(|k| self.paint.inh_scratch.get(k))
             {
                 shift = [h.dx - h.cover[0], h.dy - h.cover[1]];
                 zoom = h.still;
@@ -444,17 +444,17 @@ impl RuntimeCore {
             let start = MRect::new(at(0), at(1), w, h);
             let spring = tx.motion.map_or(motion::REFLOW, MotionSource::spring);
             self.scene.launch(to, start, LayoutAnim::new(spring).screen());
-            self.flying.retain(|f| f.0 != to);
-            self.flying.push((to, nodes[i].local));
-            self.launches.take_off(attempt, Launched { id: to, shift, drawn: None, drift: [0.0; 2], folded: [0.0; 2], folded_at: [0.0; 2] });
+            self.motion.flying.retain(|f| f.0 != to);
+            self.motion.flying.push((to, nodes[i].local));
+            self.motion.launches.take_off(attempt, Launched { id: to, shift, drawn: None, drift: [0.0; 2], folded: [0.0; 2], folded_at: [0.0; 2] });
         }
     }
 
     fn warn_duplicate_match(&mut self, key: &Rc<str>) {
         let message = || format!("duplicate matched id {key:?}: the last element in tree order is matched; give each element its own id");
-        if let Some(warnings) = self.key_warnings.as_mut() { warnings.push(message()); }
+        if let Some(warnings) = self.commit.key_warnings.as_mut() { warnings.push(message()); }
         #[cfg(debug_assertions)]
-        if self.matched_warned.insert(key.clone()) { eprintln!("rune: {}", message()); }
+        if self.motion.matched_warned.insert(key.clone()) { eprintln!("rune: {}", message()); }
     }
 }
 

@@ -397,7 +397,7 @@ impl RuntimeCore {
             // uses the smaller of the scroller and the window. Clamp after applying the ticks.
             const PAGE_FRACTION: f32 = 0.875;
             let viewport = self.pointer().and_then(|(x, y)| self.scroll_at_axis(x, y, shift))
-                .and_then(|id| self.node_index.get(&id)).map(|&i| self.nodes[i].local);
+                .and_then(|id| self.tree.node_index.get(&id)).map(|&i| self.tree.nodes[i].local);
             let (window, scroller) = if shift { (self.viewport.0, viewport.map(|r| r.w)) } else { (self.viewport.1, viewport.map(|r| r.h)) };
             let page = scroller.unwrap_or(window).min(window) * self.zoom() * PAGE_FRACTION;
             if y == 0.0 { 0.0 } else { page.max(1.0 / y.abs()) }
@@ -436,13 +436,13 @@ impl RuntimeCore {
         self.drop_scroll_holds();
         let now = self.now_clock();
         let pending = self.wheel_pending();
-        self.wheel_lock.delta(now, dx, dy, pending);
+        self.scroll.wheel_lock.delta(now, dx, dy, pending);
     }
 
     /// The gesture the oldest wheel delta still waiting for `on_wheel` handlers belongs to: the
     /// only owner a new gesture can hand over to, since the queue runs in order.
     pub(super) fn wheel_pending(&self) -> Option<Attempt> {
-        self.queue.iter().find_map(|a| match a {
+        self.frame.queue.iter().find_map(|a| match a {
             Action::Wheel { gesture, .. } => Some(*gesture),
             _ => None,
         })
@@ -451,7 +451,7 @@ impl RuntimeCore {
     /// Whether a wheel delta waits in the queue for `on_wheel` handlers: one of gesture `of`,
     /// or of any gesture.
     pub(super) fn wheel_queued(&self, of: Option<Attempt>) -> bool {
-        self.queue.iter().any(|a| matches!(a, Action::Wheel { gesture: g, .. } if of.is_none_or(|of| *g == of)))
+        self.frame.queue.iter().any(|a| matches!(a, Action::Wheel { gesture: g, .. } if of.is_none_or(|of| *g == of)))
     }
 
     /// Scrolls by a delta no `on_wheel` handler took, on the axis the gesture locked to.
@@ -460,14 +460,14 @@ impl RuntimeCore {
     pub(super) fn wheel_scroll_for(&mut self, gesture: Attempt, ev: crate::WheelEvent, phased: bool, start: crate::runtime::gesture_dispatch::WheelStart) {
         let (x, y, dx, dy) = (ev.x, ev.y, ev.dx, ev.dy);
         if dx == 0.0 && dy == 0.0 { return; }
-        self.wheel_lock.sync_gesture(gesture);
+        self.scroll.wheel_lock.sync_gesture(gesture);
         // Without phases, a delta wholly on the other axis is another wheel turning (Shift let
         // go, a tilt, a second device), so it picks afresh rather than being dropped.
-        let horizontal = match self.wheel_lock.keeps_axis(gesture, dx, dy, phased) {
+        let horizontal = match self.scroll.wheel_lock.keeps_axis(gesture, dx, dy, phased) {
             Some(h) => h,
             None => {
                 let scroller = (dx.abs() > dy.abs()).then(|| self.scroll_at_axis_from(x, y, true, start)).flatten();
-                self.wheel_lock.repick(gesture, scroller)
+                self.scroll.wheel_lock.repick(gesture, scroller)
             }
         };
         if horizontal {
@@ -481,24 +481,24 @@ impl RuntimeCore {
     /// its first delta picks the axis afresh, unless it is the momentum of one that just ended.
     pub fn wheel_began(&mut self) {
         let now = self.now_clock();
-        let gesture = self.wheel_lock.gesture;
+        let gesture = self.scroll.wheel_lock.gesture;
         // A delta queued for `on_wheel` handlers hasn't picked who has the gesture yet.
         let queued = self.wheel_queued(Some(gesture));
         let pending = self.wheel_pending();
-        let active = self.wheel_lock.owner() != &WheelOwner::Unpicked;
-        self.wheel_lock.began(now, active, queued, pending);
+        let active = self.scroll.wheel_lock.owner() != &WheelOwner::Unpicked;
+        self.scroll.wheel_lock.began(now, active, queued, pending);
     }
 
     /// The platform ended a trackpad gesture (`TouchPhase::Ended` or `Cancelled`).
     pub fn wheel_ended(&mut self) {
         let now = self.now_clock();
-        self.wheel_lock.ended_at(now);
+        self.scroll.wheel_lock.ended_at(now);
     }
 
     /// The window lost the pointer or focus: a gesture in progress won't report its end here.
     pub(super) fn wheel_lost(&mut self) {
         let pending = self.wheel_pending();
-        self.wheel_lock.lost(pending);
+        self.scroll.wheel_lock.lost(pending);
     }
 
     /// Scrolls the horizontal viewport latched for `gesture` (or the innermost one at (x, y)) by
@@ -507,13 +507,13 @@ impl RuntimeCore {
     fn wheel_x(&mut self, gesture: Attempt, x: f32, y: f32, dx: f32, notch: bool, start: crate::runtime::gesture_dispatch::WheelStart) {
         self.release_hover_hold();
         self.dismiss_help();
-        let latched = match self.wheel_lock.owner_of(gesture) { Some(WheelOwner::Horizontal(id)) => Some(*id), _ => None }.filter(|id| {
-            self.node_index.get(id).is_some_and(|&i| self.is_scroll_viewport(i, true))
+        let latched = match self.scroll.wheel_lock.owner_of(gesture) { Some(WheelOwner::Horizontal(id)) => Some(*id), _ => None }.filter(|id| {
+            self.tree.node_index.get(id).is_some_and(|&i| self.is_scroll_viewport(i, true))
         });
         let Some(id) = latched.or_else(|| self.scroll_at_axis_from(x, y, true, start)) else { return };
         let glides = notch && self.wheel_glides();
         let scale = f64::from(self.env.scale * self.zoom());
-        let Some(st) = self.scrolls.get_mut(&id) else { return };
+        let Some(st) = self.scroll.scrolls.get_mut(&id) else { return };
         let before = st.x.offset;
         if glides {
             let easing = matches!(st.x.motion, XMotion::Wheel(_));
@@ -549,7 +549,7 @@ impl RuntimeCore {
         self.release_hover_hold();
         self.dismiss_help();
         let Some(id) = self.scroll_at_axis(x, y, true) else { return };
-        if let Some(st) = self.scrolls.get_mut(&id) {
+        if let Some(st) = self.scroll.scrolls.get_mut(&id) {
             st.x.motion = XMotion::Momentum(st.x.toward(f64::from(vx)) as f32);
             log_event!(self, "fling-x {vx:.0}");
             if vx != 0.0 { self.scroll_cancels_press(id); }
@@ -559,10 +559,10 @@ impl RuntimeCore {
     /// How far horizontal viewport `i`'s content reaches past its end edge (its right, or its
     /// left right to left), negative while it fits.
     fn scroll_overflow_x(&self, i: usize) -> f64 {
-        let view = self.nodes[i].target;
-        let reach = |c: usize| match self.nodes[i].flow {
-            crate::el::Flow::Ltr => self.nodes[c].target[2] - view[0],
-            crate::el::Flow::Rtl => view[2] - self.nodes[c].target[0],
+        let view = self.tree.nodes[i].target;
+        let reach = |c: usize| match self.tree.nodes[i].flow {
+            crate::el::Flow::Ltr => self.tree.nodes[c].target[2] - view[0],
+            crate::el::Flow::Rtl => view[2] - self.tree.nodes[c].target[0],
         };
         let content_w = self.scroll_children(i).map(|c| f64::from(reach(c))).reduce(f64::max).unwrap_or(0.0);
         content_w - f64::from(view[2] - view[0])
@@ -570,12 +570,12 @@ impl RuntimeCore {
 
     /// Steps viewport `i`'s horizontal limit and momentum, as `step_scroll` does the vertical.
     pub(super) fn step_scroll_x(&mut self, i: usize, dt: f32, catch_up: bool) -> bool {
-        let id = self.nodes[i].id;
+        let id = self.tree.nodes[i].id;
         let overflow = self.scroll_overflow_x(i);
         if let Some(active) = self.step_touch_scroll(id, overflow, dt, true) { return active; }
         let scale = f64::from(self.env.scale * self.zoom());
         let land_wheel = !self.wheel_glides();
-        let Some(st) = self.scrolls.get_mut(&id) else { return false };
+        let Some(st) = self.scroll.scrolls.get_mut(&id) else { return false };
         st.x.max = overflow.max(0.0);
         let mut moving = false;
         match st.x.motion {
@@ -611,15 +611,15 @@ impl RuntimeCore {
     /// just far enough to show it, leaving its `El::scroll_margin`.
     pub(super) fn reveal_row_x(&mut self, scope: Option<&str>, key: &str) {
         let target = self.live_named(scope, key)
-            .map(|i| (i, self.nodes[i].target[0], self.nodes[i].local.w))
+            .map(|i| (i, self.tree.nodes[i].target[0], self.tree.nodes[i].local.w))
             .or_else(|| {
-                let (i, [x0, _, x1, _]) = self.highlight_target_in(&self.nodes, scope, key)?;
+                let (i, [x0, _, x1, _]) = self.highlight_target_in(&self.tree.nodes, scope, key)?;
                 (!self.subtree_exiting(i)).then_some((i, x0, (x1 - x0).max(0.0)))
             });
         let Some((i, target_x, target_w)) = target else { return };
-        let Some(v) = std::iter::successors(self.nodes[i].parent, |&p| self.nodes[p].parent)
-            .find(|&p| self.nodes[p].scroll.is_some() && self.nodes[p].scroll_axes.x()) else { return };
-        let view = &self.nodes[v];
+        let Some(v) = std::iter::successors(self.tree.nodes[i].parent, |&p| self.tree.nodes[p].parent)
+            .find(|&p| self.tree.nodes[p].scroll.is_some() && self.tree.nodes[p].scroll_axes.x()) else { return };
+        let view = &self.tree.nodes[v];
         // From the viewport's start edge: its right, right to left.
         let start = match view.flow {
             crate::el::Flow::Ltr => target_x - view.target[0],
@@ -629,7 +629,7 @@ impl RuntimeCore {
         let (margin, id) = (f64::from(view.scroll_edges.margin), view.id);
         // A vertical reveal may have just mounted rows (virtual ones) that widened the content.
         let max = self.scroll_overflow_x(v).max(0.0);
-        let Some(st) = self.scrolls.get_mut(&id) else { return };
+        let Some(st) = self.scroll.scrolls.get_mut(&id) else { return };
         st.x.max = max;
         let offset = scroll_edge::reveal(st.x.offset, left, width, viewport, margin).clamp(0.0, max);
         if offset == st.x.offset { return; }
@@ -656,25 +656,25 @@ mod tests {
         rt.frame(0.0);
         let wheel = |rt: &mut Runtime<()>, phase| rt.wheel_event(WheelEvent::new(0.0, -10.0).at(100.0, 100.0).phase(phase));
         wheel(&mut rt, GesturePhase::Began);
-        let first = rt.wheel_lock.gesture;
-        assert_eq!((rt.wheel_lock.owner().clone(), rt.wheel_lock.momentum()), (WheelOwner::Vertical, false));
+        let first = rt.scroll.wheel_lock.gesture;
+        assert_eq!((rt.scroll.wheel_lock.owner().clone(), rt.scroll.wheel_lock.momentum()), (WheelOwner::Vertical, false));
         wheel(&mut rt, GesturePhase::Ended);
         wheel(&mut rt, GesturePhase::Began);
-        assert!(rt.wheel_lock.momentum(), "began right as one ended: its momentum");
-        assert_eq!((rt.wheel_lock.gesture, rt.wheel_lock.owner().clone()), (first, WheelOwner::Vertical), "keeping the gesture");
+        assert!(rt.scroll.wheel_lock.momentum(), "began right as one ended: its momentum");
+        assert_eq!((rt.scroll.wheel_lock.gesture, rt.scroll.wheel_lock.owner().clone()), (first, WheelOwner::Vertical), "keeping the gesture");
         wheel(&mut rt, GesturePhase::Ended);
         wheel(&mut rt, GesturePhase::Began);
-        assert!(!rt.wheel_lock.momentum(), "a finger caught the momentum: a new gesture");
-        let second = rt.wheel_lock.gesture;
+        assert!(!rt.scroll.wheel_lock.momentum(), "a finger caught the momentum: a new gesture");
+        let second = rt.scroll.wheel_lock.gesture;
         assert_ne!(second, first);
 
         rt.wheel_lost();
-        assert_ne!(rt.wheel_lock.gesture, second);
-        assert_eq!((rt.wheel_lock.owner().clone(), rt.wheel_lock.momentum()), (WheelOwner::Unpicked, false));
+        assert_ne!(rt.scroll.wheel_lock.gesture, second);
+        assert_eq!((rt.scroll.wheel_lock.owner().clone(), rt.scroll.wheel_lock.momentum()), (WheelOwner::Unpicked, false));
         rt.wheel_xy(100.0, 100.0, 0.0, -10.0);
-        let wheel_gesture = rt.wheel_lock.gesture;
+        let wheel_gesture = rt.scroll.wheel_lock.gesture;
         rt.wheel_xy(100.0, 100.0, -10.0, 0.0);
-        assert_ne!(rt.wheel_lock.gesture, wheel_gesture, "without phases, a delta wholly on the other axis starts another");
+        assert_ne!(rt.scroll.wheel_lock.gesture, wheel_gesture, "without phases, a delta wholly on the other axis starts another");
     }
 
     /// A viewport whose content fits is passed over: the wheel over a section that is its own
@@ -690,13 +690,13 @@ mod tests {
         let mut rt = Runtime::new((), view, (300.0, 300.0), Env::default());
         rt.frame(0.0);
         rt.frame(1.0 / 60.0);
-        let id = |rt: &Runtime<()>, key: &str| rt.nodes.iter().find(|n| n.key.as_deref() == Some(key)).unwrap().id;
+        let id = |rt: &Runtime<()>, key: &str| rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some(key)).unwrap().id;
         let (list, section) = (id(&rt, "list"), id(&rt, "section"));
         // The strip that fits sideways is no horizontal viewport for the wheel, and over it the list scrolls.
         assert_eq!(rt.scroll_at_axis(100.0, 20.0, true), None);
         assert_eq!(rt.scroll_at(100.0, 20.0), Some(list));
         rt.wheel_xy(100.0, 100.0, 0.0, -30.0);
-        assert_eq!((rt.scrolls[&list].offset, rt.scrolls[&section].offset), (30.0, 0.0));
+        assert_eq!((rt.scroll.scrolls[&list].offset, rt.scroll.scrolls[&section].offset), (30.0, 0.0));
     }
 
     #[test]
@@ -765,8 +765,8 @@ mod tests {
         rt.wheel_event(WheelEvent::new(0.0, -20.0).at(100.0, 100.0));
         rt.wheel_ended();
         rt.frame(1.0 / 60.0);
-        let id = rt.nodes.iter().find(|n| n.key.as_deref() == Some("xy")).unwrap().id;
-        assert_eq!((rt.scrolls[&id].x.offset, rt.scrolls[&id].offset), (10.0, 20.0), "each queued delta scrolls the axis it picks");
+        let id = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("xy")).unwrap().id;
+        assert_eq!((rt.scroll.scrolls[&id].x.offset, rt.scroll.scrolls[&id].offset), (10.0, 20.0), "each queued delta scrolls the axis it picks");
     }
 
     /// A phased gesture beginning while an unphased one's deltas wait keeps each delta's own
@@ -788,8 +788,8 @@ mod tests {
         rt.wheel_event(WheelEvent::new(0.0, -20.0).at(100.0, 100.0));
         rt.wheel_began();
         rt.frame(1.0 / 60.0);
-        let id = rt.nodes.iter().find(|n| n.key.as_deref() == Some("xy")).unwrap().id;
-        assert_eq!((rt.scrolls[&id].x.offset, rt.scrolls[&id].offset), (10.0, 20.0), "the queued cross-axis delta keeps its own policy");
+        let id = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("xy")).unwrap().id;
+        assert_eq!((rt.scroll.scrolls[&id].x.offset, rt.scroll.scrolls[&id].offset), (10.0, 20.0), "the queued cross-axis delta keeps its own policy");
     }
 
     /// origin/dev's wheel lock, transcribed from this file: when its last delta came (`at`),

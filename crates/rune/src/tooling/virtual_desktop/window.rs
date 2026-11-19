@@ -295,7 +295,7 @@ impl Window {
             rt.headless_chrome(chrome, titlebar, options.borderless);
             rt.transparent = options.transparent;
             rt.track_marks = has_comp;
-            if key_warnings { rt.key_warnings = Some(Vec::new()); }
+            if key_warnings { rt.commit.key_warnings = Some(Vec::new()); }
         }
         let visible = options.visible && open;
         app.set_live_visible(visible);
@@ -433,7 +433,7 @@ impl Member for Window {
 
     fn trace_on(&mut self) {
         let rt = self.app.rt_mut();
-        rt.trace_channels = Some(Default::default());
+        rt.frame.trace_channels = Some(Default::default());
         rt.scene.store_mut().audit_retargets(true);
     }
 

@@ -181,8 +181,8 @@ impl Host {
     /// opens at it.
     pub(in crate::window) fn take_frame_request(&mut self, start: f64, painting: bool) {
         let rt = self.app.rt_mut();
-        rt.fit.take_held();
-        let Some(mut request) = rt.window_frame.take() else { return };
+        rt.host.fit.take_held();
+        let Some(mut request) = rt.host.window_frame.take() else { return };
         let (min, max) = self.options.size_limits(self.geometry.min_size);
         request.size = request.size.map(|size| crate::window::frame::clamp_size(size, min, max));
         if let Some(size) = request.size {

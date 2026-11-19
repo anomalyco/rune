@@ -188,7 +188,7 @@ impl RuntimeCore {
             Some(if old_nodes[o].is_moved_stub() { vis } else { &old_nodes[o].vis })
         }
         for (k, sh) in vis.shadows.iter().take(P_SHADOWS.len()).enumerate() {
-            let was = prev_vis(&self.nodes, vis, old).and_then(|o| o.shadows.get(k).copied());
+            let was = prev_vis(&self.tree.nodes, vis, old).and_then(|o| o.shadows.get(k).copied());
             // An inset ring where a drop shadow was (or the other way) is another shadow, not this
             // one changing: it lands rather than morphing between the two.
             let instant = instant || was.is_some_and(|w| w.inset != sh.inset);
@@ -197,13 +197,13 @@ impl RuntimeCore {
             }
             self.commit_paint(id, P_SHADOW_GEO[k], was.map(|w| shadow_geo(&w)), shadow_geo(sh), spring_l, instant);
         }
-        let prev_shadows = prev_vis(&self.nodes, vis, old).map_or(0, |o| o.shadows.len()).min(P_SHADOWS.len());
+        let prev_shadows = prev_vis(&self.tree.nodes, vis, old).map_or(0, |o| o.shadows.len()).min(P_SHADOWS.len());
         for k in vis.shadows.len()..prev_shadows {
             self.scene.store_mut().remove(id, P_SHADOWS[k]);
             self.scene.store_mut().remove(id, P_SHADOW_GEO[k]);
         }
         if let Some(&g) = vis.gradient.as_deref() {
-            let was = prev_vis(&self.nodes, vis, old).and_then(|o| o.gradient.as_deref().copied());
+            let was = prev_vis(&self.tree.nodes, vis, old).and_then(|o| o.gradient.as_deref().copied());
             for k in 0..2 {
                 if !live.gradient[k] {
                     self.commit_paint(id, P_GRADIENT[k], was.map(|w| w[k]), g[k], spring_c, instant);
@@ -212,12 +212,12 @@ impl RuntimeCore {
         }
         if let Some(rg) = &vis.radial {
             for (k, &(_, c)) in rg.stops.iter().take(P_RADIAL.len()).enumerate() {
-                let was = prev_vis(&self.nodes, vis, old).and_then(|o| o.radial.as_ref()?.stops.get(k).map(|s| s.1));
+                let was = prev_vis(&self.tree.nodes, vis, old).and_then(|o| o.radial.as_ref()?.stops.get(k).map(|s| s.1));
                 self.commit_paint(id, P_RADIAL[k], was, c, spring_c, instant);
             }
         }
         if let Some(ol) = vis.outline {
-            let was = prev_vis(&self.nodes, vis, old).and_then(|o| o.outline.map(|w| w.color));
+            let was = prev_vis(&self.tree.nodes, vis, old).and_then(|o| o.outline.map(|w| w.color));
             self.commit_paint(id, P_OUTLINE, was, ol.color, spring_c, instant);
         }
     }
@@ -233,7 +233,7 @@ impl RuntimeCore {
         parent_virtual: Option<&crate::el::virtual_list::VirtualList>,
     ) -> bool {
         let Some(o_idx) = old else { return false };
-        let o = &self.nodes[o_idx];
+        let o = &self.tree.nodes[o_idx];
         if o.is_moved_stub() {
             return false;
         }
@@ -251,19 +251,19 @@ impl RuntimeCore {
             && !o.scale_track
             && n.static_scale == 1.0
             && !o.group_fade
-            && n.parent.map(|p| nodes[p].id) == o.parent.map(|p| self.nodes[p].id)
+            && n.parent.map(|p| nodes[p].id) == o.parent.map(|p| self.tree.nodes[p].id)
             && plain_cold(n)
             && plain_cold(o)
-            && (self.flying.is_empty() || !self.flying.iter().any(|f| f.0 == n.id))
-            && (self.aspect_snap.is_empty() || !self.aspect_snap.contains(&n.id))
+            && (self.motion.flying.is_empty() || !self.motion.flying.iter().any(|f| f.0 == n.id))
+            && (self.tree.aspect_snap.is_empty() || !self.tree.aspect_snap.contains(&n.id))
             && !parent_virtual.is_some_and(crate::el::virtual_list::VirtualList::replaced_view)
             && memo_reuse::same_visual(&n.vis, &o.vis)
             && text_color(n) == text_color(o)
             && n.text.as_ref().is_none_or(|t| {
-                t.reveal < 0.0 || self.reveals.get(&n.id).is_some_and(|r| r.caught_up(t.content.len()))
+                t.reveal < 0.0 || self.motion.reveals.get(&n.id).is_some_and(|r| r.caught_up(t.content.len()))
             })
             && self.scene.is_resting_at(n.id, scene_rect)
-            && (self.stacks.is_empty()
+            && (self.motion.stacks.is_empty()
                 || n.parent.is_none_or(|p| nodes[p].growth.is_none())
                 || self.reorder_jump(nodes, i) == 0.0)
     }

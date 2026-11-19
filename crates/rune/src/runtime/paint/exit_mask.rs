@@ -40,28 +40,28 @@ impl RuntimeCore {
     /// Fills the mask for this frame's paint and reports. Call [`Self::end_exit_mask`] once
     /// they're done, so nothing reads it after a phase changes.
     pub(super) fn begin_exit_mask(&mut self) {
-        let mut exiting = std::mem::take(&mut self.exit_mask).into_flags();
+        let mut exiting = std::mem::take(&mut self.tree.exit_mask).into_flags();
         exiting.clear();
-        exiting.reserve(self.nodes.len());
-        for i in 0..self.nodes.len() {
-            let n = &self.nodes[i];
+        exiting.reserve(self.tree.nodes.len());
+        for i in 0..self.tree.nodes.len() {
+            let n = &self.tree.nodes[i];
             let up = n.parent.is_some_and(|p| if p < i { exiting[p] } else { self.subtree_exiting(p) });
             exiting.push(up || self.is_exiting(n.id));
         }
-        self.exit_mask = Mask::Fresh { exiting, commit: self.commit_gen };
+        self.tree.exit_mask = Mask::Fresh { exiting, commit: self.commit.commit_gen };
     }
 
     pub(super) fn end_exit_mask(&mut self) {
-        self.exit_mask.forget();
+        self.tree.exit_mask.forget();
     }
 
     pub(super) fn subtree_exiting(&self, mut i: usize) -> bool {
-        if let Some(exiting) = self.exit_mask.get(i, self.nodes.len(), self.commit_gen) {
+        if let Some(exiting) = self.tree.exit_mask.get(i, self.tree.nodes.len(), self.commit.commit_gen) {
             return exiting;
         }
         loop {
-            if self.is_exiting(self.nodes[i].id) { return true; }
-            let Some(parent) = self.nodes[i].parent else { return false };
+            if self.is_exiting(self.tree.nodes[i].id) { return true; }
+            let Some(parent) = self.tree.nodes[i].parent else { return false };
             i = parent;
         }
     }

@@ -54,8 +54,8 @@ impl OverlayCore {
         {
             let rt = app.rt_mut();
             rt.set_live_waker(wake.clone());
-            rt.open_urls_natively = true;
-            rt.record_events = false;
+            rt.host.open_urls_natively = true;
+            rt.frame.record_events = false;
         }
         self.clipboard.connect(wake.clone());
         self.popup.connect(wake.clone());
@@ -70,8 +70,8 @@ impl OverlayCore {
         };
         // A live-edit patch re-runs the view like new data does, shown or hidden.
         #[cfg(feature = "hot")]
-        if crate::hot::enabled() && app.rt().hot.is_none() {
-            app.rt_mut().hot = Some(crate::hot::Session::connect(rerun()));
+        if crate::hot::enabled() && app.rt().frame.hot.is_none() {
+            app.rt_mut().frame.hot = Some(crate::hot::Session::connect(rerun()));
         }
         app.run_setup(rerun());
         // Requests made before the loop existed.

@@ -7,18 +7,18 @@ impl Client {
         let _ = worker().send(Request::Read { purpose, reply: self.sender.clone(), wake: self.wake.clone() });
     }
     pub(crate) fn flush_core(&self, rt: &mut crate::runtime::RuntimeCore) {
-        if rt.clipboard.is_some() { return flush_memory(rt); }
+        if rt.edit.clipboard.is_some() { return flush_memory(rt); }
         #[cfg(target_os = "linux")]
         self.flush_primary(rt);
         // Nothing to clear before the first write.
-        if std::mem::take(&mut rt.clear_secret_request) && let Some(w) = WORKER.get() { let _ = w.sender.send(Request::Clear(None)); }
+        if std::mem::take(&mut rt.edit.clear_secret_request) && let Some(w) = WORKER.get() { let _ = w.sender.send(Request::Clear(None)); }
         if let Some(copy) = rt.copy_request.take() {
             let worker = worker();
             copy.bind(Route::System(worker.clone()));
             let _ = worker.send(Request::Write(copy, Some(Notify { changed: self.changed.clone(), wake: self.wake.clone() })));
         }
-        if let Some(target) = rt.paste_request.take() { self.read_for(Purpose::paste(rt, target)); }
-        for id in std::mem::take(&mut rt.read_requests) { self.read_for(Purpose::Read(id)); }
+        if let Some(target) = rt.edit.paste_request.take() { self.read_for(Purpose::paste(rt, target)); }
+        for id in std::mem::take(&mut rt.edit.read_requests) { self.read_for(Purpose::Read(id)); }
     }
 }
 

@@ -25,7 +25,7 @@ pub(crate) fn flush_requests(rt: &mut RuntimeCore, app: &mut dyn AppDriver) {
     rt.refuse_file_dialog("native file dialogs are unsupported in embedded views");
     rt.shell_request = None;
     rt.ignore_minimize("an embedded layer");
-    rt.window_frame = None;
+    rt.host.window_frame = None;
 }
 
 /// Advances the runtime on `clock` for a frame whose drawable has already been acquired, passing

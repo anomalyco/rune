@@ -6,8 +6,8 @@ use crate::{Env, ScrollSpec, col, el};
 
 /// The offset of the element at `path`.
 fn offset(rt: &Runtime<()>, path: &str) -> f64 {
-    let id = rt.nodes.iter().find(|n| n.path == path).unwrap_or_else(|| panic!("{path}")).id;
-    rt.scrolls[&id].offset
+    let id = rt.tree.nodes.iter().find(|n| n.path == path).unwrap_or_else(|| panic!("{path}")).id;
+    rt.scroll.scrolls[&id].offset
 }
 
 /// A bar beside its viewport, as `rune-kit`'s scroll bar is: in an `area` column with the
@@ -156,9 +156,9 @@ fn a_sideways_wheel_over_a_bar_scrolls_the_viewport_it_follows() {
     across.wheel_xy(293.0, 100.0, -40.0, 0.0);
     across.frame(0.0);
     {
-        let id = across.nodes.iter().find(|n| n.path == "root/area/list").unwrap().id;
-        assert_eq!(across.scrolls[&id].x.offset, 40.0, "the sideways wheel over the pane's bar scrolled it across");
-        assert_eq!(across.scrolls[&id].offset, 0.0, "and left it where it was down");
+        let id = across.tree.nodes.iter().find(|n| n.path == "root/area/list").unwrap().id;
+        assert_eq!(across.scroll.scrolls[&id].x.offset, 40.0, "the sideways wheel over the pane's bar scrolled it across");
+        assert_eq!(across.scroll.scrolls[&id].offset, 0.0, "and left it where it was down");
     }
 
     // A horizontal bar under the table it belongs to.
@@ -167,7 +167,7 @@ fn a_sideways_wheel_over_a_bar_scrolls_the_viewport_it_follows() {
     along.wheel_xy(150.0, 106.0, -40.0, 0.0);
     along.frame(0.0);
     {
-        let id = along.nodes.iter().find(|n| n.path == "root/area/table").unwrap().id;
-        assert_eq!(along.scrolls[&id].x.offset, 40.0, "the sideways wheel over the table's own bar scrolled the table");
+        let id = along.tree.nodes.iter().find(|n| n.path == "root/area/table").unwrap().id;
+        assert_eq!(along.scroll.scrolls[&id].x.offset, 40.0, "the sideways wheel over the table's own bar scrolled the table");
     }
 }

@@ -63,7 +63,7 @@ fn physical_keys_and_their_releases_can_be_live_only() {
     rt.physical_with_fallback(ev, fallback);
     rt.frame(1.0 / 120.0);
     rt.frame(1.0 / 120.0);
-    assert_eq!((rt.stats.commits - before, rt.live_only_skips), (0, 2), "on_key, then on_key_up");
+    assert_eq!((rt.stats.commits - before, rt.frame.live_only_skips), (0, 2), "on_key, then on_key_up");
     assert_eq!(camera_x(&rt), 20.0, "the frames drew both");
 
     // A key the app declines goes on to Rune's own handling and commits as before.
@@ -85,7 +85,7 @@ fn a_physical_release_heard_at_rest_can_be_live_only() {
     // No logical key: the focused handler hears it at once, outside a frame.
     let event = PhysicalInput::Key { key: PhysicalKeyCode::ShiftLeft, mods: Mods::default(), pressed: false, repeat: false };
     assert!(rt.physical_with_fallback(event, None), "it still asks for a frame to draw");
-    assert!(!rt.dirty);
+    assert!(!rt.commit.dirty);
     rt.frame(1.0 / 120.0);
     assert_eq!((rt.state.physical, rt.stats.commits - before), (1, 0));
     assert_eq!(camera_x(&rt), 10.0);
@@ -99,8 +99,8 @@ fn debug_builds_warn_when_a_live_only_handler_changed_what_the_view_reads() {
     rt.frame(0.5);
     rt.key(KeyEvent { key: Key::Right, mods: Mods::default() });
     rt.frame(1.0 / 120.0);
-    assert_eq!(rt.live_only_warnings.len(), 1, "{:?}", rt.live_only_warnings);
-    assert!(rt.live_only_warnings[0].contains("on_key"), "{}", rt.live_only_warnings[0]);
+    assert_eq!(rt.frame.live_only_warnings.len(), 1, "{:?}", rt.frame.live_only_warnings);
+    assert!(rt.frame.live_only_warnings[0].contains("on_key"), "{}", rt.frame.live_only_warnings[0]);
 
     // Used as meant, the check commits and stays quiet; events between checks skip the view.
     let mut rt = app(false);
@@ -110,8 +110,8 @@ fn debug_builds_warn_when_a_live_only_handler_changed_what_the_view_reads() {
         rt.key_up(KeyEvent { key: Key::Right, mods: Mods::default() });
         rt.frame(1.0 / 120.0);
     }
-    assert!(rt.live_only_warnings.is_empty(), "{:?}", rt.live_only_warnings);
-    assert_eq!((rt.stats.commits - before, rt.live_checks, rt.live_only_skips), (1, 1, 9));
+    assert!(rt.frame.live_only_warnings.is_empty(), "{:?}", rt.frame.live_only_warnings);
+    assert_eq!((rt.stats.commits - before, rt.frame.live_checks, rt.frame.live_only_skips), (1, 1, 9));
 }
 
 #[test]
@@ -124,8 +124,8 @@ fn the_check_ignores_a_change_another_event_made_in_the_same_frame() {
     rt.pointer_down(x, y);
     rt.pointer_up(x, y);
     rt.frame(1.0 / 120.0);
-    assert_eq!((rt.state.count, rt.live_checks), (1, 1));
-    assert!(rt.live_only_warnings.is_empty(), "{:?}", rt.live_only_warnings);
+    assert_eq!((rt.state.count, rt.frame.live_checks), (1, 1));
+    assert!(rt.frame.live_only_warnings.is_empty(), "{:?}", rt.frame.live_only_warnings);
 }
 
 #[test]
@@ -164,7 +164,7 @@ fn live_only_does_not_cancel_poll_update_or_later_event_commits() {
         rt.frame(0.0);
         assert_eq!(rt.state.count, 1);
         assert!(rt.stats.commits > before);
-        assert_eq!(rt.nodes.iter().find(|n| n.key.as_deref() == Some("count")).unwrap().text.as_ref().unwrap().content, "1");
+        assert_eq!(rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("count")).unwrap().text.as_ref().unwrap().content, "1");
     }
 }
 
@@ -204,19 +204,19 @@ fn debug_check_does_not_blame_live_only_for_layout_feedback_before_a_key() {
     rt.frame(0.5);
     // A layout callback changed view state, then a checked event, then another key
     // forces the queue's mid-frame commit rather than the final commit.
-    rt.nodes[0].handlers.on_layout = Some(Rc::new(|s, _, _| s.cast::<S>().unwrap().count += 1));
-    rt.queue.push(Action::Layout(rt.nodes[0].path.clone(), [0.0; 4]));
+    rt.tree.nodes[0].handlers.on_layout = Some(Rc::new(|s, _, _| s.cast::<S>().unwrap().count += 1));
+    rt.frame.queue.push(Action::Layout(rt.tree.nodes[0].path.clone(), [0.0; 4]));
     rt.key_up(KeyEvent { key: Key::Right, mods: Mods::default() });
     rt.key(KeyEvent { key: Key::Left, mods: Mods::default() });
     rt.frame(0.0);
-    assert!(rt.live_only_warnings.is_empty(), "{:?}", rt.live_only_warnings);
+    assert!(rt.frame.live_only_warnings.is_empty(), "{:?}", rt.frame.live_only_warnings);
 }
 
 #[test]
 fn retained_exit_pruning_does_not_change_the_view_print() {
     let mut rt = app(false);
     let before = rt.view_print();
-    let id = rt.nodes.last().unwrap().id;
+    let id = rt.tree.nodes.last().unwrap().id;
     rt.scene.remove(id);
     let exiting = rt.view_print();
     assert!(before.first_difference(&exiting).is_some());
@@ -241,8 +241,8 @@ fn live_only_keeps_clipboard_scroll_and_wake_requests() {
     rt.key(KeyEvent { key: Key::Right, mods: Mods::default() }); rt.frame(0.0);
     assert_eq!(rt.stats.commits, before);
     assert_eq!(rt.copy_request.as_ref().unwrap().content().text(), "copied");
-    let id = rt.nodes.iter().find(|n| n.key.as_deref() == Some("scroll")).unwrap().id;
-    assert_eq!(rt.scrolls[&id].offset, 300.0);
+    let id = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("scroll")).unwrap().id;
+    assert_eq!(rt.scroll.scrolls[&id].offset, 300.0);
     // The scroll armed a 33 ms hover hold whose wake comes first; the 1 s request stands after it.
     rt.frame(1.0 / 20.0);
     assert_eq!(rt.wake_deadline(), Some(1.0));
@@ -256,11 +256,11 @@ fn local_points_follow_scroll_offsets_in_windows_and_overlays() {
     }
     for overlay in [false, true] {
         let mut rt = Runtime::new((), view, (400.0, 400.0), Env::new(true, 2.0));
-        rt.native_overlay = overlay;
+        rt.host.native_overlay = overlay;
         rt.frame(0.0);
         rt.update(|_, tx| tx.scroll_to_y("scroll", 100.0)); rt.frame(0.0);
-        let i = rt.nodes.iter().position(|n| n.key.as_deref() == Some("target")).unwrap();
-        let r = rt.drawn[i];
+        let i = rt.tree.nodes.iter().position(|n| n.key.as_deref() == Some("target")).unwrap();
+        let r = rt.paint.drawn[i];
         let p = rt.pointer_event(i, r[0] + 15.0, r[1] + 30.0);
         assert_eq!((p.x, p.y), (10.0, 20.0));
         assert_eq!((p.window_x, p.window_y), (r[0] + 15.0, r[1] + 30.0));
@@ -276,7 +276,7 @@ fn live_transform_refreshes_hover_paint_without_a_handler() {
     rt.frame(0.0); rt.pointer_move(20.0, 20.0); rt.frame(0.0);
     rt.state.set([0.0, 0.0]);
     assert!(rt.frame(0.0), "changed hover paint must schedule its sample frame");
-    let id = rt.nodes.iter().find(|n| n.key.as_deref() == Some("moving")).unwrap().id;
+    let id = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("moving")).unwrap().id;
     rt.frame(1.0 / 120.0);
     assert_eq!(rt.scene.get(id, P_HOVER), Some(1.0));
 }
@@ -287,16 +287,16 @@ fn a_commit_records_why_for_the_frame_log() {
         let mut rt = app(false);
         rt.check_live_only(false);
         rt.frame(0.0);
-        rt.commit_why = 0;
+        rt.commit.commit_why = 0;
         rt.key_up(KeyEvent { key: Key::Right, mods: Mods::default() });
         rt.frame(0.0);
-        assert_eq!(rt.commit_why, 0, "a live-only key commits nothing");
+        assert_eq!(rt.commit.commit_why, 0, "a live-only key commits nothing");
         if source == 0 { rt.poll = Some(|s, _, _| { s.count += 1; true }); }
         if source == 1 {
             let (x, y) = rt.find("camera").unwrap();
             rt.pointer_down(x, y); rt.pointer_up(x, y);
         }
         rt.frame(0.0);
-        assert_eq!(rt.commit_why & want, want, "source {source}: {:?}", CommitWhy::names(rt.commit_why));
+        assert_eq!(rt.commit.commit_why & want, want, "source {source}: {:?}", CommitWhy::names(rt.commit.commit_why));
     }
 }

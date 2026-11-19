@@ -159,9 +159,9 @@ impl RuntimeCore {
     /// settling from an earlier touch (momentum or its edge return) holds where the finger
     /// caught it instead.
     pub(super) fn touch_scroll_start(&mut self, x: f32, y: f32) -> Option<NodeId> {
-        let across = self.scroll_at_axis(x, y, true).and_then(|id| self.scrolls.get(&id).map(|st| (id, st.x.offset)));
+        let across = self.scroll_at_axis(x, y, true).and_then(|id| self.scroll.scrolls.get(&id).map(|st| (id, st.x.offset)));
         let vertical = self.scroll_at(x, y);
-        let held = vertical.and_then(|id| self.scrolls.get(&id).map(|st| (id, st.offset)));
+        let held = vertical.and_then(|id| self.scroll.scrolls.get(&id).map(|st| (id, st.offset)));
         self.step_touch(TouchEvent::Down { across, vertical: held });
         vertical
     }
@@ -173,8 +173,8 @@ impl RuntimeCore {
         let across = horizontal
             .then(|| self.scroll_at_axis(x, y, true))
             .flatten()
-            .and_then(|id| self.scrolls.get(&id).map(|st| (id, st.x.offset)));
-        let held = vertical.and_then(|id| self.scrolls.get(&id).map(|st| (id, st.offset)));
+            .and_then(|id| self.scroll.scrolls.get(&id).map(|st| (id, st.x.offset)));
+        let held = vertical.and_then(|id| self.scroll.scrolls.get(&id).map(|st| (id, st.offset)));
         self.step_touch(TouchEvent::Pan { horizontal, across, vertical: held });
         match across {
             Some((id, _)) => (Some(id), true),
@@ -196,13 +196,13 @@ impl RuntimeCore {
     /// Own the touched viewport's panned axis through momentum and its edge return. Other
     /// viewports use the native wheel path, including native clamping and stick-to-bottom.
     pub(super) fn step_touch_scroll(&mut self, id: NodeId, overflow: f64, dt: f32, horizontal: bool) -> Option<bool> {
-        let effects = step(&mut self.touch.scroll, TouchEvent::Tick { id, horizontal, overflow, dt });
+        let effects = step(&mut self.pointer.touch.scroll, TouchEvent::Tick { id, horizontal, overflow, dt });
         self.apply_touch(effects)
     }
 
     /// Step the pan and carry out what the transition asked for.
     fn step_touch(&mut self, event: TouchEvent) {
-        let effects = step(&mut self.touch.scroll, event);
+        let effects = step(&mut self.pointer.touch.scroll, event);
         let _ = self.apply_touch(effects);
     }
 
@@ -213,18 +213,18 @@ impl RuntimeCore {
         for effect in effects {
             match effect {
                 TouchEffect::Halt(id) => {
-                    if let Some(st) = self.scrolls.get_mut(&id) { st.halt(); }
+                    if let Some(st) = self.scroll.scrolls.get_mut(&id) { st.halt(); }
                 }
                 TouchEffect::StopAcross(id) => {
-                    if let Some(st) = self.scrolls.get_mut(&id) && matches!(st.x.motion, XMotion::Momentum(_) | XMotion::Wheel(_)) { st.x.motion = XMotion::Rest; }
+                    if let Some(st) = self.scroll.scrolls.get_mut(&id) && matches!(st.x.motion, XMotion::Momentum(_) | XMotion::Wheel(_)) { st.x.motion = XMotion::Rest; }
                 }
                 TouchEffect::Fling { id, horizontal, velocity } => {
-                    let Some(st) = self.scrolls.get_mut(&id) else { continue };
+                    let Some(st) = self.scroll.scrolls.get_mut(&id) else { continue };
                     let v = f64::from(velocity.clamp(-8000.0, 8000.0));
                     if horizontal { st.x.set_coast(st.x.toward(v) as f32) } else { st.mode = st.mode.to_momentum(-v as f32) }
                 }
                 TouchEffect::Pan { id, origin, horizontal, d } => {
-                    let Some(st) = self.scrolls.get_mut(&id) else { continue };
+                    let Some(st) = self.scroll.scrolls.get_mut(&id) else { continue };
                     let toward = if horizontal { st.x.toward(f64::from(d)) } else { -f64::from(d) };
                     let (offset, max) = st.axis(horizontal);
                     let to = origin + toward;
@@ -236,14 +236,14 @@ impl RuntimeCore {
                     self.scroll_cancels_press(id);
                 }
                 TouchEffect::Hold { id, horizontal, overflow } => {
-                    let Some(st) = self.scrolls.get_mut(&id) else { continue };
+                    let Some(st) = self.scroll.scrolls.get_mut(&id) else { continue };
                     if horizontal { st.x.max = overflow.max(0.0); } else { st.max = overflow.max(0.0); }
                     let _ = mode::step(&mut st.mode, ModeEvent::Hold);
                     active = Some(false);
                 }
                 TouchEffect::Coast { id, horizontal, overflow, dt } => {
                     let moving = {
-                        let Some(st) = self.scrolls.get_mut(&id) else { continue };
+                        let Some(st) = self.scroll.scrolls.get_mut(&id) else { continue };
                         if horizontal { st.x.max = overflow.max(0.0); } else { st.max = overflow.max(0.0); }
                         let mut v = if horizontal { st.x.coast() } else { st.coast() };
                         let _ = mode::step(&mut st.mode, ModeEvent::Coast { moving: v.abs() > 1.0 });
@@ -285,28 +285,28 @@ mod tests {
         }
         let mut rt = Runtime::new((), view, (300.0, 300.0), Env::default());
         rt.frame(0.0);
-        let id = |rt: &Runtime<()>, key: &str| rt.nodes.iter().find(|n| n.key.as_deref() == Some(key)).unwrap().id;
+        let id = |rt: &Runtime<()>, key: &str| rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some(key)).unwrap().id;
         let (page, strip) = (id(&rt, "page"), id(&rt, "strip"));
 
         let vertical = rt.touch_scroll_start(150.0, 50.0);
         assert_eq!(vertical, Some(page));
         assert_eq!(rt.touch_scroll_pan(150.0, 50.0, true, vertical), (Some(strip), true));
         rt.touch_scroll_move(strip, -50.0);
-        assert_eq!((rt.scrolls[&strip].x.offset, rt.scrolls[&page].offset), (50.0, 0.0));
+        assert_eq!((rt.scroll.scrolls[&strip].x.offset, rt.scroll.scrolls[&page].offset), (50.0, 0.0));
         rt.touch_scroll_end(Some(strip), 0.0);
 
         // A vertical pan over the strip passes through to the page.
         let vertical = rt.touch_scroll_start(150.0, 50.0);
         assert_eq!(rt.touch_scroll_pan(150.0, 50.0, false, vertical), (Some(page), false));
         rt.touch_scroll_move(page, -30.0);
-        assert_eq!((rt.scrolls[&strip].x.offset, rt.scrolls[&page].offset), (50.0, 30.0));
+        assert_eq!((rt.scroll.scrolls[&strip].x.offset, rt.scroll.scrolls[&page].offset), (50.0, 30.0));
         rt.touch_scroll_end(Some(page), 0.0);
 
         // A touch on the strip while it springs back past its left edge holds it there, until a
         // tap lets it go or a sideways pan carries on from where it was caught.
-        let held = |rt: &Runtime<()>| rt.touch.scroll.map(|t| (t.id(), t.horizontal(), !t.coasting(), t.origin()));
-        rt.scrolls.get_mut(&strip).unwrap().x.offset = -20.0;
-        rt.touch.scroll = Some(TouchScroll::Coasting { id: strip, horizontal: true });
+        let held = |rt: &Runtime<()>| rt.pointer.touch.scroll.map(|t| (t.id(), t.horizontal(), !t.coasting(), t.origin()));
+        rt.scroll.scrolls.get_mut(&strip).unwrap().x.offset = -20.0;
+        rt.pointer.touch.scroll = Some(TouchScroll::Coasting { id: strip, horizontal: true });
         let vertical = rt.touch_scroll_start(150.0, 50.0);
         assert_eq!(held(&rt), Some((strip, true, true, Some(-20.0))), "caught, not handed to the page");
         rt.touch_scroll_end(vertical, 0.0);
@@ -314,7 +314,7 @@ mod tests {
         let vertical = rt.touch_scroll_start(150.0, 50.0);
         assert_eq!(rt.touch_scroll_pan(150.0, 50.0, true, vertical), (Some(strip), true));
         rt.touch_scroll_move(strip, 10.0);
-        assert!(rt.scrolls[&strip].x.offset < -20.0 * 0.55, "still rubber-banding: {}", rt.scrolls[&strip].x.offset);
+        assert!(rt.scroll.scrolls[&strip].x.offset < -20.0 * 0.55, "still rubber-banding: {}", rt.scroll.scrolls[&strip].x.offset);
         rt.touch_scroll_end(Some(strip), 0.0);
 
         // Caught there, a vertical pan lets the strip go and moves the page.

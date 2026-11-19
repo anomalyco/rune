@@ -70,10 +70,10 @@ impl RuntimeCore {
             && self.scene.phase(new_n.id) == Some(PresencePhase::Present)
             && !old_n.group_fade
             && new_n.cold.get().is_none_or(|c| c.matched.is_none() && c.looping.is_none())
-            && (self.flying.is_empty() || !self.flying.iter().any(|f| f.0 == new_n.id))
-            && (self.aspect_snap.is_empty() || !self.aspect_snap.contains(&new_n.id))
+            && (self.motion.flying.is_empty() || !self.motion.flying.iter().any(|f| f.0 == new_n.id))
+            && (self.tree.aspect_snap.is_empty() || !self.tree.aspect_snap.contains(&new_n.id))
             && new_n.text.as_ref().is_none_or(|t| {
-                t.reveal < 0.0 || self.reveals.get(&new_n.id).is_some_and(|r| r.caught_up(t.content.len()))
+                t.reveal < 0.0 || self.motion.reveals.get(&new_n.id).is_some_and(|r| r.caught_up(t.content.len()))
             })
     }
 
@@ -92,17 +92,17 @@ impl RuntimeCore {
         out.reserve(reused.len());
         let any_animating = self.scene.store().active_len() > 0;
         for span in reused {
-            if !span.same_path || span.len == 0 || span.old_start + span.len > self.nodes.len() || span.new_start + span.len > nodes.len() {
+            if !span.same_path || span.len == 0 || span.old_start + span.len > self.tree.nodes.len() || span.new_start + span.len > nodes.len() {
                 continue;
             }
             let r_new = &nodes[span.new_start];
-            let r_old = &self.nodes[span.old_start];
+            let r_old = &self.tree.nodes[span.old_start];
             if !self.scene.contains(r_new.id) || self.is_exiting(r_new.id) {
                 continue;
             }
             let mut scene_rect = r_new.local;
-            if !self.virtuals.is_empty()
-                && let Some(v) = r_new.parent.and_then(|p| self.virtuals.get(&nodes[p].path))
+            if !self.commit.virtuals.is_empty()
+                && let Some(v) = r_new.parent.and_then(|p| self.commit.virtuals.get(&nodes[p].path))
             {
                 scene_rect.y -= v.before;
             }
@@ -110,8 +110,8 @@ impl RuntimeCore {
                 || r_new.parent.is_none_or(|p| {
                     nodes.get(p + 1).is_none_or(|first_sib| {
                         let mut sr = first_sib.local;
-                        if !self.virtuals.is_empty()
-                            && let Some(v) = self.virtuals.get(&nodes[p].path)
+                        if !self.commit.virtuals.is_empty()
+                            && let Some(v) = self.commit.virtuals.get(&nodes[p].path)
                         {
                             sr.y -= v.before;
                         }
@@ -120,14 +120,14 @@ impl RuntimeCore {
                 });
             let root_clean = self.node_clean_for_apply(r_new, r_old, any_animating)
                 && parent_top_clean
-                && r_new.parent.map(|p| nodes[p].id) == r_old.parent.map(|p| self.nodes[p].id)
-                && (self.virtuals.is_empty() || !self.virtuals.contains_key(&r_new.path))
+                && r_new.parent.map(|p| nodes[p].id) == r_old.parent.map(|p| self.tree.nodes[p].id)
+                && (self.commit.virtuals.is_empty() || !self.commit.virtuals.contains_key(&r_new.path))
                 && self.scene.is_resting_at(r_new.id, scene_rect)
-                && (self.stacks.is_empty() || self.reorder_jump(nodes, span.new_start) == 0.0)
-                && (self.virtuals.is_empty()
-                    || !r_new.parent.and_then(|p| self.virtuals.get(&nodes[p].path)).is_some_and(crate::el::virtual_list::VirtualList::replaced_view));
+                && (self.motion.stacks.is_empty() || self.reorder_jump(nodes, span.new_start) == 0.0)
+                && (self.commit.virtuals.is_empty()
+                    || !r_new.parent.and_then(|p| self.commit.virtuals.get(&nodes[p].path)).is_some_and(crate::el::virtual_list::VirtualList::replaced_view));
 
-            if !root_clean && !self.flying.is_empty() {
+            if !root_clean && !self.motion.flying.is_empty() {
                 continue;
             }
             let offset = if root_clean { 0 } else { 1 };
@@ -135,7 +135,7 @@ impl RuntimeCore {
                 continue;
             }
             let interior_clean = (offset..span.len).all(|k| {
-                self.node_clean_for_apply(&nodes[span.new_start + k], &self.nodes[span.old_start + k], any_animating)
+                self.node_clean_for_apply(&nodes[span.new_start + k], &self.tree.nodes[span.old_start + k], any_animating)
             });
             if interior_clean {
                 let new_start = span.new_start + offset;
