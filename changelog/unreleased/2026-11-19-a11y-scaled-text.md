@@ -1,0 +1,1 @@
+- Accessibility: text inside `El::scale` reports its line and character bounds at the drawn size, and reports them again when the scale changes, so a screen reader's highlight and a magnifier follow the text as drawn.

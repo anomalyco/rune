@@ -1,0 +1,1 @@
+- A horizontal wheel, a touch pan, a fling, middle-click autoscroll and keyboard scrolling under the pointer no longer scroll a viewport that lies beneath a raised panel or an anchored popover.

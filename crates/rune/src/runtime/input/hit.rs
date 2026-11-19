@@ -214,14 +214,13 @@ impl RuntimeCore {
         rect_pt: [f32; 4],
         (press_k, press_anchor): (f32, [f32; 2]),
     ) {
-        if !visible || effective_opacity <= 0.001 || !self.allowed(i) || self.subtree_exiting(i) {
-            return;
-        }
         let s = self.env.scale;
         let n = &self.nodes[i];
         let hits_before = self.hits.len();
-        if n.vis_flags.hit() || n.handlers.get().is_some_and(crate::el::Handlers::takes_hit) || n.input.is_some() || n.role == "textbox" || n.window_drag != crate::el::WindowDrag::None || n.focus.get().is_some_and(|f| f.enabled)
-            || n.text.as_ref().is_some_and(|t| t.selectable)
+        if (n.vis_flags.hit() || n.handlers.get().is_some_and(crate::el::Handlers::takes_hit) || n.input.is_some() || n.role == "textbox" || n.window_drag != crate::el::WindowDrag::None || n.focus.get().is_some_and(|f| f.enabled)
+            || n.text.as_ref().is_some_and(|t| t.selectable))
+            && !self.subtree_exiting(i)
+            && self.allowed(i) && effective_opacity > 0.001 && visible
         {
             let c = if n.parent.is_some() { pinh_clip } else { self.inh_scratch[0].clip };
             let rect_pt = if (press_k - 1.0).abs() > 1e-5 {
@@ -238,7 +237,7 @@ impl RuntimeCore {
             let rect = if n.parent.is_some() { cr } else { rect_pt };
             if !self.push_link_hits(i, rect_pt, rect) { self.hits.push((self.nodes[i].id, rect)); }
             let n = &self.nodes[i];
-            if n.vis_flags.hit() && rect[2] > rect[0] && rect[3] > rect[1] {
+            if n.vis_flags.hit() && effective_opacity > 0.0 && rect[2] > rect[0] && rect[3] > rect[1] {
                 self.overlay_hits.push(self.hit_screen_rect(n.id, rect));
             }
         }
@@ -248,23 +247,25 @@ impl RuntimeCore {
         // not on what lies beneath. Other boxes without a handler let the wheel through, as an
         // element with `pointer-events: none` does.
         let n = &self.nodes[i];
-        if self.hits.len() > hits_before || n.scroll.is_some() || n.above.is_some() || n.vis_flags.raise() || n.sticky.is_some() {
+        if (self.hits.len() > hits_before || n.scroll.is_some() || n.above.is_some() || n.vis_flags.raise() || n.sticky.is_some())
+            && !self.subtree_exiting(i) && self.allowed(i) && effective_opacity > 0.001 && visible
+        {
             let c = if n.parent.is_some() { pinh_clip } else { self.inh_scratch[0].clip };
             let r = if n.parent.is_some() {
                 [rect_pt[0].max(c[0] / s), rect_pt[1].max(c[1] / s), rect_pt[2].min(c[2] / s), rect_pt[3].min(c[3] / s)]
             } else { rect_pt };
             if r[2] > r[0] && r[3] > r[1] { self.wheel_hits.push((n.id, r)); }
         }
-        if self.nodes[i].cold.get().is_some_and(|c| c.help.is_some() && (!c.help_cut || self.nodes[i].text_cut(s))) {
+        if self.nodes[i].cold.get().is_some_and(|c| c.help.is_some() && (!c.help_cut || self.nodes[i].text_cut(s))) && !self.subtree_exiting(i) && self.allowed(i) && effective_opacity > 0.001 && visible {
             let c = if self.nodes[i].parent.is_some() { pinh_clip } else { NO_CLIP };
             let r = [rect_pt[0].max(c[0] / s), rect_pt[1].max(c[1] / s), rect_pt[2].min(c[2] / s), rect_pt[3].min(c[3] / s)];
             self.push_help_hit(i, r, hits_before);
         }
-        if self.nodes[i].text.as_ref().is_some_and(|t| t.cold.links.iter().any(|l| l.help.is_some())) {
+        if self.nodes[i].text.as_ref().is_some_and(|t| t.cold.links.iter().any(|l| l.help.is_some())) && !self.subtree_exiting(i) && self.allowed(i) && effective_opacity > 0.001 && visible {
             let c = if self.nodes[i].parent.is_some() { pinh_clip } else { NO_CLIP };
             self.push_link_help_hits(i, rect_pt, [c[0] / s, c[1] / s, c[2] / s, c[3] / s], hits_before);
         }
-        if self.nodes[i].handlers.get().is_some_and(|h| h.drop.is_some()) {
+        if self.nodes[i].handlers.get().is_some_and(|h| h.drop.is_some()) && !self.subtree_exiting(i) && self.allowed(i) && effective_opacity > 0.001 && visible {
             let c = if self.nodes[i].parent.is_some() { pinh_clip } else { NO_CLIP };
             let r = [rect_pt[0].max(c[0] / s), rect_pt[1].max(c[1] / s), rect_pt[2].min(c[2] / s), rect_pt[3].min(c[3] / s)];
             self.push_drop_hit(i, r, hits_before);

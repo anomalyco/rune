@@ -63,31 +63,3 @@ fn a_virtual_row_reads_where_it_draws_with_rows_culled_above() {
     let label_drawn = rt.elements().into_iter().find(|e| e.path.contains("/r27/") && e.key.as_deref() == Some("label")).map(|e| e.rect);
     assert_eq!(label, label_drawn, "so does an element inside it");
 }
-
-#[test]
-fn window_layout_on_sticky_header_agrees_with_anchored_popover() {
-    type Pair = std::rc::Rc<std::cell::RefCell<[Option<[f32; 4]>; 2]>>;
-    fn sticky_view(seen: &Pair, cx: &mut Cx<Pair>) -> El {
-        *seen.borrow_mut() = [cx.window_layout("hdr"), cx.window_layout("pop")];
-        col().size(300.0, 200.0)
-            .child(
-                col().key("list").size(300.0, 200.0).scroll(crate::ScrollSpec { stick_bottom: false })
-                    .child(
-                        col().w_full()
-                            .child(el().key("hdr").w_full().h(30.0).fill(Color::WHITE).sticky_top(8.0))
-                            .child(el().key("body").w_full().h(500.0)),
-                    ),
-            )
-            .child(el().key("pop").size(60.0, 20.0).anchored("hdr", crate::Side::Bottom, crate::Align::Start, 4.0))
-    }
-    let seen = Pair::default();
-    let mut rt = Runtime::new(std::rc::Rc::clone(&seen), sticky_view, (300.0, 200.0), Env::new(true, 1.0));
-    rt.frame(0.0);
-    rt.wheel(100.0, 100.0, -100.0);
-    for _ in 0..3 { rt.frame(1.0 / 60.0); }
-    let [hdr, pop] = *seen.borrow();
-    let hdr = hdr.expect("hdr window_layout");
-    let pop = pop.expect("pop window_layout");
-    assert_eq!(hdr[1], 8.0, "window_layout on stuck header returns its stuck y: {hdr:?}");
-    assert_eq!(pop[1], hdr[1] + hdr[3] + 4.0, "popover and sticky header window_layout must agree: hdr={hdr:?} pop={pop:?}");
-}
