@@ -421,6 +421,8 @@ fn completion_worker_preserves_cpu_gpu_overlap() {
             gpu.device.poll(wgpu::PollType::Poll).unwrap();
             match completed.try_recv() {
                 Err(TryRecvError::Empty) => {
+                    #[cfg(target_os = "windows")]
+                    remove_device_for_proof(&gpu.device);
                     let at = gpu.wait(&completed, Duration::from_secs(10));
                     ("overlapped", at.unwrap_or_else(|| panic!("the GPU workload planned at {} us never completed", planned.as_micros())))
                 }
@@ -941,4 +943,14 @@ fn rotated_clip_buffers_draw_upright_like_its_poster_on(gpu: Gpu) {
             assert_eq!(colours.len(), 4, "four distinct quadrants: {colours:?}");
         }
     }
+}
+
+/// PROOF ONLY, never merged: removes this D3D12 device as a GPU reset does, with no timeout.
+#[cfg(target_os = "windows")]
+fn remove_device_for_proof(device: &wgpu::Device) {
+    use ::windows::core::Interface;
+    let hal = unsafe { device.as_hal::<wgpu::hal::api::Dx12>() }.expect("a D3D12 device");
+    let device5: ::windows::Win32::Graphics::Direct3D12::ID3D12Device5 = hal.raw_device().cast().expect("ID3D12Device5");
+    unsafe { device5.RemoveDevice() };
+    eprintln!("proof: ID3D12Device5::RemoveDevice called while the overlap workload was pending");
 }
