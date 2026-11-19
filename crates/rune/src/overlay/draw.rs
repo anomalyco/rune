@@ -86,7 +86,9 @@ impl OverlayCore {
                 }
             }
             if self.surface.live().is_some_and(|l| l.scale == 0.0) && let Some(gpu) = self.gpu.clone() {
-                self.rescale(app, &gpu, app.rt().env.scale);
+                // Read before `app` is reborrowed for `rescale`.
+                let scale = app.rt().env.scale;
+                self.rescale(app, &gpu, scale);
             }
         }
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]

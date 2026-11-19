@@ -2441,11 +2441,17 @@ rune = { git = "https://github.com/anomalyco/rune", rev = "<rev>" }
 
 [patch.crates-io]
 winit = { git = "https://github.com/anomalyco/rune", rev = "<rev>" }
+sctk-adwaita = { git = "https://github.com/anomalyco/rune", rev = "<rev>" }
 parley_engine = { git = "https://github.com/anomalyco/rune", rev = "<rev>" }
 wgpu-hal = { git = "https://github.com/anomalyco/rune", rev = "<rev>" }
 accesskit_windows = { git = "https://github.com/anomalyco/rune", rev = "<rev>" }
 accesskit_macos = { git = "https://github.com/anomalyco/rune", rev = "<rev>" }
 ```
+
+Patch both `winit` and `sctk-adwaita`, and from the same revision: Rune's winit calls
+`AdwaitaFrame::content_corner_radius`, which only the vendored frame has, so a workspace that
+patches winit without sctk-adwaita doesn't compile. With both, a decorated Wayland window's
+buttons, titlebar and rounded bottom corners are drawn by the vendored frame.
 
 When you update Rune, check its [root `Cargo.toml`](../../Cargo.toml) at the new revision and
 use that same `rev` for Rune and every patch.

@@ -29,6 +29,7 @@ pub(crate) fn loop_pixel_check_failed() -> bool {
 #[cfg(target_os = "windows")]
 pub(crate) use damaged::MAX_RECTS;
 pub mod cpu_boot;
+pub(crate) mod csd_corners;
 mod dxbc;
 mod fill;
 #[doc(hidden)]

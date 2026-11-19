@@ -5,6 +5,7 @@ use crate::runtime::{Runtime, RuntimeCore};
 
 pub(in crate::window) mod backoff;
 pub(in crate::window) mod configure;
+pub(in crate::window) mod corners;
 #[cfg(target_os = "macos")]
 pub(in crate::window) mod launch_drawables;
 pub(in crate::window) mod loop_frame;
