@@ -319,7 +319,13 @@ mod anchored_grow_tests;
 #[cfg(test)]
 mod pixel_snap_tests;
 #[cfg(test)]
+#[path = "runtime/recorder_tests.rs"]
+mod recorder;
+#[cfg(test)]
 mod size_tests;
+#[cfg(test)]
+#[path = "runtime/video_tests.rs"]
+mod video;
 
 #[cfg(any(test, target_arch = "wasm32"))]
 #[path = "runtime/web/runtime.rs"]

@@ -131,7 +131,7 @@ impl Renderer {
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
-                    blend: Some(blend.state()),
+                    blend: Some(super::blend_state(blend)),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),

@@ -67,7 +67,7 @@ fn cases() -> Vec<Case> {
         case("rune backdrop blur", &["rune/src/shaders/backdrop_blur.wgsl"], include_str!("../../../rune/src/shaders/backdrop_blur.wgsl").into()),
         case("rune backdrop composite", &["rune/src/shaders/clip.wgsl", "rune/src/shaders/backdrop_composite.wgsl"],
             format!("{CLIP}\n{}", include_str!("../../../rune/src/shaders/backdrop_composite.wgsl"))),
-        case("rune video", &["rune/src/native_surface/video.wgsl"], include_str!("../../../rune/src/native_surface/video.wgsl").into()),
+        case("rune video", &["rune-media/src/native_surface/video.wgsl"], include_str!("../../../rune-media/src/native_surface/video.wgsl").into()),
     ];
     let mut blur = case("rune layer blur", &["rune/src/shaders/layer_blur.wgsl"], include_str!("../../../rune/src/shaders/layer_blur.wgsl").into());
     blur.constants = [(0.0, 0.0), (0.0, 1.0), (2.0, 0.0), (2.0, 1.0), (3.0, 0.0)].iter().map(|&(m, a)| vec![("MODE", m), ("ADDITIVE", a)]).collect();

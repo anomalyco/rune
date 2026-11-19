@@ -45,7 +45,7 @@ macos-background-cursor = []
 # macOS: play Ogg (Vorbis, Opus) and WebM/Matroska audio, which AVFoundation can't read, by
 # decoding it in Rust (symphonia, opuscule) and handing AVPlayer the PCM. Off, those clips
 # fail at once with a clear message.
-ogg-audio = ["dep:symphonia", "dep:opuscule"]
+ogg-audio = ["rune-media/ogg-audio"]
 # SVG and SVGZ images (`ImageCache::svg`, `file`, `load_mime`, and `load` on sniffed SVG bytes), and
 # scalable Linux app icons, rasterized by resvg. Off, those images resolve to `Image::error`.
 svg = ["rune-image/svg"]
@@ -67,7 +67,7 @@ dbus = ["dep:zbus", "dep:tokio", "dep:futures-util"]
 # iOS apps keep wgpu unless they choose `GpuBackend::Metal`. It plugs in through wgpu's `custom`
 # backend, which Rune turns on for Apple targets alone. No effect on other platforms: its crates
 # are Apple-only dependencies.
-metal-backend = ["rune-gpu/metal-backend"]
+metal-backend = ["rune-gpu/metal-backend", "rune-media/metal-backend"]
 # Every window and overlay exposes its elements to the OS accessibility API through AccessKit:
 # UI Automation on Windows, NSAccessibility on macOS, AT-SPI on Linux (README, "Accessibility").
 # Nothing is built until an assistive client asks. Off, the platform adapters aren't compiled;
@@ -85,6 +85,7 @@ dioxus-devtools = { version = "=0.7.10", optional = true }
 rune-core = { workspace = true }
 rune-gpu = { workspace = true }
 rune-image = { workspace = true }
+rune-media = { workspace = true }
 rune-motion = { workspace = true }
 rune-spell = { workspace = true }
 rune-staging = { workspace = true }
@@ -157,13 +158,13 @@ web-sys = { workspace = true, features = ["Window", "Document", "Element", "Html
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
 rfd = { version = "0.17", optional = true, default-features = false }
 
-# Metal on macOS and iOS: video and present timing on macOS.
+# Metal on macOS and iOS: present timing and system materials on macOS.
 [target.'cfg(target_vendor = "apple")'.dependencies]
 objc2-video = { package = "objc2", version = "0.6" }
-objc2-core-foundation = "0.3"
+objc2-core-foundation = { workspace = true }
 # CoreText's font fallback and family lookups (`text/system_fonts/core_text.rs`); fontique already builds it.
 objc2-core-text = { version = "0.3.2", default-features = false, features = ["std", "CTFont", "CTFontDescriptor", "CTFontManager"] }
-objc2-metal = "0.3"
+objc2-metal = { workspace = true }
 # wgpu's Metal backend on Apple targets alone: off Apple, wgpu compiles neither `wgpu-hal/metal`
 # nor `naga/msl-out`.
 wgpu = { workspace = true, features = ["metal"] }
@@ -179,17 +180,9 @@ objc2 = { workspace = true }
 block2 = { workspace = true }
 objc2-foundation = { version = "0.2.2", features = ["NSArray", "NSAttributedString", "NSData", "NSDictionary", "NSError", "NSGeometry", "NSObject", "NSRange", "NSValue", "NSProcessInfo", "NSString", "NSThread", "NSURL", "NSUserDefaults"] }
 objc2-app-kit = { version = "0.2.2", features = ["NSApplication", "NSButton", "NSCell", "NSControl", "NSEvent", "NSMenu", "NSMenuItem", "NSResponder", "NSRunningApplication", "NSView", "NSWindow", "NSColor", "NSGraphics", "NSPanel", "NSScreen", "NSPasteboard", "NSPasteboardItem", "NSDragging", "NSDraggingItem", "NSDraggingSession", "NSGraphicsContext", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSAttributedString"] }
-objc2-core-video = { version = "0.3", features = ["CVPixelBufferIOSurface", "objc2-io-surface"] }
-# Unused by name: its default features give IOSurfaceRef the CF `Type` impl objc2-core-video needs.
-objc2-io-surface = "0.3"
+objc2-core-video = { workspace = true }
 block2-metal = { package = "block2", version = "0.6" }
-# Video playback (`Video`): AVPlayer, its video output and the poster/headless image generator.
-objc2-av-foundation = { version = "0.3", default-features = false, features = ["std", "AVAsset", "AVAssetImageGenerator", "AVAssetTrack", "AVMediaFormat", "AVPlayer", "AVPlayerItem", "AVPlayerItemOutput", "objc2-core-foundation", "objc2-core-graphics", "objc2-core-media", "objc2-core-video"] }
-objc2-core-media = { version = "0.3", default-features = false, features = ["std", "CMTime"] }
-objc2-core-graphics = { version = "0.3", default-features = false, features = ["std", "CGBitmapContext", "CGColorSpace", "CGContext", "CGImage"] }
-# Ogg and WebM audio (`ogg-audio`): pure-Rust demuxers and decoders.
-symphonia = { version = "0.5.5", optional = true, default-features = false, features = ["ogg", "vorbis", "mkv"] }
-opuscule = { version = "0.2.2", optional = true }
+objc2-core-graphics = { workspace = true, features = ["std", "CGColorSpace"] }
 
 [target.'cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))'.dependencies]
 raw-window-handle = "0.6"
@@ -205,12 +198,10 @@ xkbcommon = "0.9"
 # `line-dictionaries`: Thai, Lao, Khmer and Burmese line breaks from ICU4X's baked line dictionaries,
 # so no line ever waits for `icu.dll`.
 parley_engine = { workspace = true, features = ["line-dictionaries"] }
-# D3D12 shared textures for `NativeSurface` (`native_surface::windows`), on wgpu-hal's version.
-# Media Foundation, D3D11 and WASAPI for video playback (`video::windows`): COM interfaces only;
-# their DLLs load on the first clip, through `GetProcAddress`, so the import table gains nothing.
-# OLE drag and drop, the shell's data object and drag image (`drag_out::windows`); the taskbar
-# button's progress and badge (`platform::win32::taskbar`).
-windows = { workspace = true, features = ["Win32_Foundation", "Win32_Globalization", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D11", "Win32_Graphics_Direct3D12", "Win32_Graphics_DirectComposition", "Win32_Graphics_DirectWrite", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_Graphics_Gdi", "Win32_Media_Audio", "Win32_Media_MediaFoundation", "Win32_Security", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_LibraryLoader", "Win32_System_Ole", "Win32_System_SystemServices", "Win32_System_Threading", "Win32_System_Variant", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_Shell_PropertiesSystem", "Win32_UI_WindowsAndMessaging"] }
+# DirectComposition handover (`platform::win32::dcomp_handover`), DirectWrite fonts and rasterizer,
+# OLE drag and drop (`drag_out::windows`, `platform::win32::drop_target`), jump lists and the
+# taskbar button's progress and badge (`platform::win32::{jump_list,taskbar}`).
+windows = { workspace = true, features = ["Win32_Foundation", "Win32_Globalization", "Win32_Graphics_DirectComposition", "Win32_Graphics_DirectWrite", "Win32_Graphics_Gdi", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Ole", "Win32_System_SystemServices", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_Shell_PropertiesSystem", "Win32_UI_WindowsAndMessaging"] }
 # `#[windows::core::implement]` (the OLE drop target, `platform::win32::drop_target`) names this crate.
 windows-core = { workspace = true }
 # D3D12 alone: a machine without a hardware D3D12 adapter draws on WARP, D3D12's own software
@@ -223,8 +214,6 @@ windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_UI_Wind
 [target.'cfg(target_os = "linux")'.dependencies]
 # AT-SPI over D-Bus on its own async-io thread, started only when the desktop's accessibility bus is on.
 accesskit_unix = { version = "0.24.1", optional = true }
-# The window GPU's render node, for dmabuf producers (`native_surface::linux`): wgpu-hal's version.
-ash = "0.38"
 libc = { workspace = true }
 libloading = "0.8"
 zbus = { version = "6", default-features = false, features = ["tokio", "proxy", "service"], optional = true }

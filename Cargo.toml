@@ -5,6 +5,7 @@ members = [
     "crates/rune-core",
     "crates/rune-gpu",
     "crates/rune-image",
+    "crates/rune-media",
     "crates/rune-spell",
     "crates/rune-ref",
     "crates/rune-motion",
@@ -66,6 +67,7 @@ default-members = [
     "crates/rune-core",
     "crates/rune-gpu",
     "crates/rune-image",
+    "crates/rune-media",
     "crates/rune-spell",
     "crates/rune-ref",
     "crates/rune-motion",
@@ -151,6 +153,7 @@ rune-kit = { path = "crates/rune-kit", default-features = false }
 rune-knobs = { path = "crates/rune-knobs" }
 rune-light = { path = "crates/rune-light" }
 rune-luau = { path = "crates/rune-luau" }
+rune-media = { path = "crates/rune-media", default-features = false }
 rune-mermaid = { path = "crates/rune-mermaid" }
 rune-motion = { path = "crates/rune-motion" }
 rune-notify = { path = "crates/rune-notify" }
@@ -169,6 +172,10 @@ image = { version = "0.25", default-features = false }
 js-sys = "0.3"
 libc = "0.2"
 objc2 = "0.5.2"
+objc2-core-foundation = "0.3"
+objc2-core-graphics = { version = "0.3", default-features = false }
+objc2-core-video = "0.3"
+objc2-metal = "0.3"
 parley = { version = "0.12", default-features = false }
 parley_engine = { version = "0.12", default-features = false }
 png = "0.18"
