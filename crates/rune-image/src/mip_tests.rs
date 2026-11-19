@@ -1,5 +1,47 @@
+use std::alloc::{GlobalAlloc, Layout, System};
+use std::cell::Cell;
+
 use super::*;
-use crate::color::{srgb_decode, srgb_encode};
+use rune_core::color::{srgb_decode, srgb_encode};
+
+struct Counting;
+thread_local! {
+    static LIVE: Cell<isize> = const { Cell::new(0) };
+    static PEAK: Cell<isize> = const { Cell::new(0) };
+}
+fn track(bytes: isize) {
+    let _ = LIVE.try_with(|live| {
+        live.set(live.get() + bytes);
+        let _ = PEAK.try_with(|peak| peak.set(peak.get().max(live.get())));
+    });
+}
+// SAFETY: forwards to the system allocator, counting live and peak bytes on this thread.
+unsafe impl GlobalAlloc for Counting {
+    unsafe fn alloc(&self, l: Layout) -> *mut u8 {
+        track(l.size() as isize);
+        // SAFETY: delegates allocation with the caller's layout to `System`.
+        unsafe { System.alloc(l) }
+    }
+    unsafe fn dealloc(&self, p: *mut u8, l: Layout) {
+        track(-(l.size() as isize));
+        // SAFETY: delegates deallocation of `p` and `l` to `System`.
+        unsafe { System.dealloc(p, l) }
+    }
+    unsafe fn realloc(&self, p: *mut u8, l: Layout, n: usize) -> *mut u8 {
+        track(n as isize - l.size() as isize);
+        // SAFETY: delegates reallocation of `p`, `l` and `n` to `System`.
+        unsafe { System.realloc(p, l, n) }
+    }
+}
+#[global_allocator]
+static COUNTING: Counting = Counting;
+
+fn peak<T>(f: impl FnOnce() -> T) -> (T, usize) {
+    let start = LIVE.with(Cell::get);
+    PEAK.with(|p| p.set(start));
+    let out = f();
+    (out, (PEAK.with(Cell::get) - start).max(0) as usize)
+}
 
 /// The float mip chain `mip_chain` replaced: every level kept as linear premultiplied `f32`s
 /// at full size, encoded with `powf`.
@@ -75,7 +117,7 @@ fn the_byte_mip_chain_matches_the_float_one_within_one_per_channel() {
 fn the_mip_chain_allocates_little_beyond_its_output() {
     let (w, h) = (512, 256);
     let src = synthetic(w, h);
-    let (mips, peak) = crate::tooling::test_alloc::peak(|| mip_chain(w, h, &src).unwrap());
+    let (mips, peak) = peak(|| mip_chain(w, h, &src).unwrap());
     let output: usize = mips.mips.iter().map(|m| m.pixels.len()).sum();
     assert!(peak < output + output / 8, "peak {peak} bytes for {output} bytes of mips");
 }

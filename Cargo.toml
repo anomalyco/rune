@@ -4,6 +4,8 @@ members = [
     "crates/rune",
     "crates/rune-core",
     "crates/rune-gpu",
+    "crates/rune-image",
+    "crates/rune-spell",
     "crates/rune-ref",
     "crates/rune-motion",
     "crates/rune-i18n",
@@ -63,6 +65,8 @@ default-members = [
     "crates/rune",
     "crates/rune-core",
     "crates/rune-gpu",
+    "crates/rune-image",
+    "crates/rune-spell",
     "crates/rune-ref",
     "crates/rune-motion",
     "crates/rune-i18n",
@@ -132,6 +136,7 @@ rune-core = { path = "crates/rune-core" }
 rune-fx = { path = "crates/rune-fx" }
 rune-gpu = { path = "crates/rune-gpu", default-features = false }
 rune-highlights = { path = "crates/rune-highlights" }
+rune-image = { path = "crates/rune-image", default-features = false }
 rune-kit = { path = "crates/rune-kit", default-features = false }
 rune-knobs = { path = "crates/rune-knobs" }
 rune-light = { path = "crates/rune-light" }
@@ -140,6 +145,7 @@ rune-mermaid = { path = "crates/rune-mermaid" }
 rune-motion = { path = "crates/rune-motion" }
 rune-notify = { path = "crates/rune-notify" }
 rune-ref = { path = "crates/rune-ref" }
+rune-spell = { path = "crates/rune-spell" }
 rune-staging = { path = "crates/rune-staging" }
 rune-taffy = { path = "crates/rune-taffy" }
 rune-theme-opencode = { path = "themes/opencode" }

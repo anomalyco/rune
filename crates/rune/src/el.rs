@@ -116,13 +116,7 @@ impl Default for GrowthSpec {
 /// The selection highlight until [`El::selection_color`] or [`El::caret`] sets one.
 pub(crate) const DEFAULT_SELECTION: Color = Color { r: 1.0, g: 1.0, b: 1.0, a: 0.2 };
 
-#[derive(Clone, Copy, Debug, PartialEq, Default)]
-pub enum Align {
-    #[default]
-    Start,
-    Center,
-    End,
-}
+pub use rune_image::Align;
 
 /// [`El::on_link`]'s handler.
 #[derive(Clone)]

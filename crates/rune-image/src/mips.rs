@@ -125,10 +125,10 @@ struct Srgb {
 }
 const STEPS: usize = 4096;
 static SRGB: std::sync::LazyLock<Srgb> = std::sync::LazyLock::new(|| {
-    let mut up: [f32; 256] = std::array::from_fn(|k| crate::color::srgb_decode((k as f32 + 0.5) / 255.0));
+    let mut up: [f32; 256] = std::array::from_fn(|k| rune_core::color::srgb_decode((k as f32 + 0.5) / 255.0));
     up[255] = f32::INFINITY;
     Srgb {
-        decode: std::array::from_fn(|i| crate::color::srgb_decode(i as f32 / 255.0)),
+        decode: std::array::from_fn(|i| rune_core::color::srgb_decode(i as f32 / 255.0)),
         coarse: std::array::from_fn(|i| up.partition_point(|&t| t <= i as f32 / STEPS as f32) as u8),
         up,
     }

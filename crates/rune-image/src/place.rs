@@ -1,11 +1,24 @@
-//! Where a frame sits inside its element: which edge a spare or cropped side is shared from, and
-//! whether the frame is scaled at all.
-use super::SurfaceFit;
-use crate::el::Align;
+//! Alignment and aspect-preserving placement for surfaces and pixel buffers: which edge a spare
+//! or cropped side is shared from, and whether the frame is scaled at all.
+
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub enum Align {
+    #[default]
+    Start,
+    Center,
+    End,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SurfaceFit {
+    #[default]
+    Fit,
+    Fill,
+}
 
 /// `El::surface_anchor` and `El::surface_unscaled`. The default centres and scales by `SurfaceFit`.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct SurfacePlace {
+pub struct SurfacePlace {
     pub anchor: [Align; 2],
     pub unscaled: bool,
 }
@@ -31,7 +44,7 @@ impl SurfacePlace {
 
 /// The image's rect in device pixels inside `node` ([x, y, w, h]); it may overflow the node, which
 /// then crops it. `unscaled` draws one texel per device pixel and ignores `fit`.
-pub(crate) fn image_rect(node: [f32; 4], source: [u32; 2], fit: SurfaceFit, place: SurfacePlace) -> [f32; 4] {
+pub fn image_rect(node: [f32; 4], source: [u32; 2], fit: SurfaceFit, place: SurfacePlace) -> [f32; 4] {
     let (sw, sh) = (source[0] as f32, source[1] as f32);
     let scale = if place.unscaled {
         1.0

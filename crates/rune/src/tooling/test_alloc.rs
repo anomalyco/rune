@@ -33,6 +33,7 @@ pub(crate) fn allocs() -> usize { ALLOCS.with(Cell::get) }
 
 /// Runs `f`, returning its result and the most bytes it held allocated at once on this thread
 /// beyond what was live when it started.
+#[allow(dead_code)]
 pub(crate) fn peak<T>(f: impl FnOnce() -> T) -> (T, usize) {
     let start = LIVE.with(Cell::get);
     PEAK.with(|p| p.set(start));

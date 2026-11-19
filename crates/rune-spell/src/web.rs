@@ -7,6 +7,15 @@
 use std::cell::RefCell;
 use std::sync::{Arc, Weak};
 
+use wasm_bindgen::prelude::wasm_bindgen;
+
+#[wasm_bindgen(module = "/src/web.js")]
+extern "C" {
+    /// Resolves to the `Uint8Array` body of `url`, relative to the page.
+    #[wasm_bindgen(js_name = fetchBytes)]
+    fn fetch_bytes(url: &str) -> js_sys::Promise;
+}
+
 pub(super) const OFF_THREAD: bool = false;
 
 enum Dict {
@@ -21,7 +30,7 @@ struct State {
     tags: Vec<String>,
     dicts: Vec<(String, Dict)>,
     /// Windows that asked while a dictionary was on its way.
-    waiting: Vec<Weak<crate::live::Wake>>,
+    waiting: Vec<Weak<rune_core::live::Wake>>,
 }
 
 thread_local! {
@@ -34,7 +43,7 @@ pub(super) fn set_tags(tags: Vec<String>) {
 
 /// Whether every dictionary checking text now is in; one not asked for yet is fetched, and the
 /// window asking (`wake`) is woken once it arrives.
-pub(super) fn prepare(wake: Option<&Arc<crate::live::Wake>>) -> bool {
+pub(super) fn prepare(wake: Option<&Arc<rune_core::live::Wake>>) -> bool {
     let tags = super::languages();
     STATE.with_borrow_mut(|s| {
         let mut ready = true;
@@ -56,8 +65,8 @@ pub(super) fn prepare(wake: Option<&Arc<crate::live::Wake>>) -> bool {
 
 /// Fetches `tag`'s dictionary; once it's in, every text is checked again.
 fn load(tag: String) {
-    let aff = crate::platform::web::platform::fetch_bytes(&format!("spell/{tag}.aff"));
-    let dic = crate::platform::web::platform::fetch_bytes(&format!("spell/{tag}.dic"));
+    let aff = fetch_bytes(&format!("spell/{tag}.aff"));
+    let dic = fetch_bytes(&format!("spell/{tag}.dic"));
     wasm_bindgen_futures::spawn_local(async move {
         let text = |v: Result<wasm_bindgen::JsValue, wasm_bindgen::JsValue>| v.ok().and_then(|b| String::from_utf8(js_sys::Uint8Array::new(&b).to_vec()).ok());
         let aff = text(wasm_bindgen_futures::JsFuture::from(aff).await);

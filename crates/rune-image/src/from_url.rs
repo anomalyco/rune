@@ -4,6 +4,21 @@
 //! is a path and a `file:` URL names one; both load like `ImageCache::file`.
 use super::{Decoded, Image, ImageCache, ImageError, Input, icon_pixels, mip_chain, svg_rgba};
 
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen(module = "/src/from_url.js")]
+extern "C" {
+    /// Resolves to `[width, height, Uint8Array]`: straight sRGB RGBA, or `[0, 0, svg bytes]`.
+    #[wasm_bindgen(js_name = fetchImage)]
+    fn fetch_image(url: &str, max_side: u32) -> js_sys::Promise;
+    /// Resolves to `[width, height, Uint8Array]`, straight sRGB RGBA the browser decoded from
+    /// encoded image bytes (JPEG, WebP, AVIF, GIF's first frame).
+    #[wasm_bindgen(js_name = decodeImage)]
+    fn decode_image(bytes: &[u8], max_side: u32) -> js_sys::Promise;
+    /// Resolves in a later task, letting the browser draw and handle input in between.
+    #[wasm_bindgen(js_name = nextTask)]
+    fn next_task() -> js_sys::Promise;
+}
+
 /// The largest side a fetched image may have, as for decoded files: 8192 pixels, so at most
 /// 256 MiB of decoded RGBA before mips.
 #[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
@@ -86,7 +101,7 @@ pub(super) async fn land_in_slices(url: &str, fetched: Fetched, px: u32) -> Resu
     };
     let mut steps = super::mips::MipSteps::new(w, h, &bytes).map_err(named)?;
     while !steps.step(SLICE) {
-        let _ = wasm_bindgen_futures::JsFuture::from(crate::platform::web::platform::next_task()).await;
+        let _ = wasm_bindgen_futures::JsFuture::from(next_task()).await;
     }
     Ok(steps.finish())
 }
@@ -95,14 +110,14 @@ pub(super) async fn land_in_slices(url: &str, fetched: Fetched, px: u32) -> Resu
 /// are a separate piece of main-thread work.
 #[cfg(target_arch = "wasm32")]
 pub(super) async fn fetch(url: &str) -> Result<Fetched, ImageError> {
-    browser_reply(url, crate::platform::web::platform::fetch_image(url, MAX_SIDE)).await
+    browser_reply(url, fetch_image(url, MAX_SIDE)).await
 }
 
 /// Encoded image bytes decoded by the browser's own codecs, off the main thread, so a web build
 /// carries no JPEG decoder of its own.
 #[cfg(target_arch = "wasm32")]
 pub(super) async fn decode_in_browser(bytes: &[u8]) -> Result<Fetched, ImageError> {
-    browser_reply("image", crate::platform::web::platform::decode_image(bytes, MAX_SIDE)).await
+    browser_reply("image", decode_image(bytes, MAX_SIDE)).await
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -143,7 +158,8 @@ pub(super) fn file_path(url: &str) -> Result<std::path::PathBuf, ImageError> {
 
 /// The bytes of the font file a native `url` names (`App::font_url`).
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn font_file(url: &str) -> Result<Vec<u8>, ImageError> {
+#[doc(hidden)]
+pub fn font_file(url: &str) -> Result<Vec<u8>, ImageError> {
     let path = file_path(url)?;
     std::fs::read(&path).map_err(|e| ImageError(format!("{}: {e}", path.display())))
 }
