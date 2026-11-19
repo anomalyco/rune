@@ -8,7 +8,7 @@ publish = false
 [dependencies]
 rune = { workspace = true, default-features = true, features = ["keys-overlay"] }
 rune-motion = { workspace = true }
-rune-kit = { workspace = true }
+rune-kit = { workspace = true, default-features = true }
 rune-theme-opencode = { workspace = true }
 rune-fx = { workspace = true }
 rune-light = { workspace = true }

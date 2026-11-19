@@ -46,7 +46,7 @@ impl Presented {
 
     pub(crate) fn settle_core(this: &mut Option<Self>, rt: &RuntimeCore, config: &wgpu::SurfaceConfiguration,
         moving: bool, next_tick: Option<crate::time::Instant>, rests: bool, composed: bool) -> bool {
-        let idle = !(moving || rt.stale() || rt.live_pending() || rt.window_frame.is_some()
+        let idle = !(moving || rt.stale() || rt.live_pending() || rt.host.window_frame.is_some()
             || super::pacing::timer_wants_frame_core(rt, next_tick));
         if idle && rests { Self::record_core(this, rt, config, composed) } else { *this = None }
         idle
@@ -79,7 +79,7 @@ impl Presented {
 
     pub(crate) fn unchanged_core(&self, rt: &RuntimeCore, config: &wgpu::SurfaceConfiguration, animating: bool,
         next_tick: Option<crate::time::Instant>) -> bool {
-        !animating && !rt.has_pending_input() && !rt.live_pending() && rt.window_frame.is_none()
+        !animating && !rt.has_pending_input() && !rt.live_pending() && rt.host.window_frame.is_none()
             && !super::pacing::timer_wants_frame_core(rt, next_tick) && self.same_core(rt, config)
     }
 
@@ -96,7 +96,7 @@ impl Presented {
         let atlas = &rt.text.atlas;
         !self.composed && self.size == (config.width, config.height) && self.format == config.format && self.srgb == rt.srgb_blend()
             && self.scale == rt.env.scale && self.clear == rt.clear_color() && self.transparent == rt.transparent
-            && rt.surfaces.is_empty() && rt.materials.is_empty()
+            && rt.surfaces.is_empty() && rt.paint.materials.is_empty()
             && atlas.dirty.is_none() && atlas.pages.iter().all(|p| p.dirty.is_none())
             && rt.images.pages.iter().all(|p| p.dirty.is_none())
             && bytemuck::cast_slice::<_, u8>(&self.instances) == bytemuck::cast_slice::<_, u8>(&rt.instances)

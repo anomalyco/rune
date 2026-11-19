@@ -61,16 +61,14 @@ struct Control {
     generation: AtomicU64,
 }
 
-pub(crate) struct Hub<S> {
+pub(crate) struct HubCore {
     control: Arc<Control>,
-    pending: Mutex<Vec<Pending<S>>>,
-    handlers: Arc<Mutex<HashMap<ShortcutId, (Stamp, Handler<S>)>>>,
     errors: Mutex<Vec<ShortcutError>>,
     title: OnceLock<&'static str>,
     unmodified: AtomicBool,
 }
 
-impl<S> Default for Hub<S> {
+impl Default for HubCore {
     fn default() -> Self {
         Self {
             control: Arc::new(Control {
@@ -82,9 +80,28 @@ impl<S> Default for Hub<S> {
                 hosts: AtomicU64::new(0),
                 generation: AtomicU64::new(0),
             }),
-            pending: Mutex::default(), handlers: Arc::default(), errors: Mutex::default(), title: OnceLock::new(), unmodified: AtomicBool::new(false),
+            errors: Mutex::default(),
+            title: OnceLock::new(),
+            unmodified: AtomicBool::new(false),
         }
     }
+}
+
+pub(crate) struct Hub<S> {
+    pub(crate) core: Arc<HubCore>,
+    pending: Mutex<Vec<Pending<S>>>,
+    handlers: Arc<Mutex<HashMap<ShortcutId, (Stamp, Handler<S>)>>>,
+}
+
+impl<S> Default for Hub<S> {
+    fn default() -> Self {
+        Self { core: Arc::default(), pending: Mutex::default(), handlers: Arc::default() }
+    }
+}
+
+impl<S> std::ops::Deref for Hub<S> {
+    type Target = HubCore;
+    fn deref(&self) -> &HubCore { &self.core }
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -219,6 +236,15 @@ impl Control {
 
     /// Runs a call, stamping it with the latest host while routing can't change.
     fn call_stamped<T: Send + 'static>(&self, stamp: Option<Stamp>, f: impl FnOnce(&mut Engine) -> Result<T, ShortcutError> + Send + 'static) -> Result<T, ShortcutError> {
+        let slot = Arc::new(Mutex::new(None));
+        let out = slot.clone();
+        self.call_erased(stamp, Box::new(move |engine| {
+            *out.lock().unwrap() = Some(f(engine));
+        }))?;
+        slot.lock().unwrap().take().unwrap_or(Err(ShortcutError::NotRunning))
+    }
+
+    fn call_erased(&self, stamp: Option<Stamp>, run: Box<dyn FnOnce(&mut Engine) + Send>) -> Result<(), ShortcutError> {
         let mut route = self.attachment.lock().unwrap();
         let call = AttachEvent::Call { from: std::thread::current().id(), shared: cfg!(target_os = "linux") };
         let effect = step_attachment(&mut route, call).into_iter().next();
@@ -238,62 +264,63 @@ impl Control {
             // Acquire the engine before releasing routing, so shutdown cannot race a new call.
             let mut engine = shared.lock().unwrap();
             drop(route);
-            let result = f(&mut engine);
+            run(&mut engine);
             drop(engine);
             // A finished call must not keep a replaced engine, and its backend's grabs, alive.
             drop(shared);
             wake();
-            result
+            Ok(())
         }
         #[cfg(not(target_os = "linux"))]
         match effect {
             Some(AttachEffect::Run { wake }) => {
                 drop(route);
                 let engine = ENGINES.with(|engines| engines.borrow().get(&self.key).map(|(_, engine)| engine.clone())).ok_or(ShortcutError::NotRunning)?;
-                let result = f(&mut engine.borrow_mut());
+                run(&mut engine.borrow_mut());
                 wake();
-                result
+                Ok(())
             }
             Some(AttachEffect::Wait) => {
-                let (tx, rx) = mpsc::sync_channel(1);
-                let posted = step_attachment(&mut route, AttachEvent::Post(Box::new(move |engine| { let _ = tx.send(f(engine)); })));
+                let (done_tx, done_rx) = mpsc::sync_channel(1);
+                let posted = step_attachment(&mut route, AttachEvent::Post(Box::new(move |engine| {
+                    run(engine);
+                    let _ = done_tx.send(());
+                })));
                 drop(route);
                 for effect in posted { if let AttachEffect::Wake(wake) = effect { wake(); } }
-                rx.recv().unwrap_or(Err(ShortcutError::NotRunning))
+                done_rx.recv().map_err(|_| ShortcutError::NotRunning)
             }
             _ => Err(ShortcutError::NotRunning),
         }
     }
 }
 
-impl<S: 'static> Hub<S> {
-    pub(super) fn pending(&self, shortcut: Result<Shortcut, ShortcutError>, handler: Handler<S>) {
-        self.pending.lock().unwrap().push((shortcut, handler));
-    }
-
-    pub(super) fn register(&self, shortcut: Shortcut, handler: Handler<S>) -> Result<ShortcutId, ShortcutError> {
+impl HubCore {
+    fn prepare_register(&self, shortcut: &Shortcut) -> Result<(ShortcutId, Stamp), ShortcutError> {
         if !self.unmodified.load(Ordering::Relaxed) { shortcut.require_modifier()?; }
         let id = NEXT_ID.try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
             .map(ShortcutId).map_err(|_| ShortcutError::Backend("shortcut id space exhausted".into()))?;
-        let stamp = Stamp::default();
-        self.handlers.lock().unwrap().insert(id, (stamp.clone(), handler));
-        if let Err(e) = self.control.call_stamped(Some(stamp), move |engine| engine.register(id, shortcut)) {
-            self.handlers.lock().unwrap().remove(&id);
-            return Err(e);
-        }
-        Ok(id)
+        Ok((id, Stamp::default()))
     }
 
-    pub(super) fn unregister(&self, id: ShortcutId) -> Result<(), ShortcutError> {
-        let handlers = self.handlers.clone();
+    fn commit_register(&self, id: ShortcutId, shortcut: Shortcut, stamp: Stamp) -> Result<(), ShortcutError> {
+        self.control.call_stamped(Some(stamp), move |engine| engine.register(id, shortcut))
+    }
+
+    fn unregister_engine(&self, id: ShortcutId, remove: Box<dyn FnOnce() + Send>) -> Result<(), ShortcutError> {
         self.control.call(move |engine| {
             engine.unregister(id)?;
-            handlers.lock().unwrap().remove(&id);
+            remove();
             Ok(())
         })
     }
 
     pub(super) fn errors(&self) -> Vec<ShortcutError> { std::mem::take(&mut self.errors.lock().unwrap()) }
+
+    fn record_error(&self, error: ShortcutError) {
+        eprintln!("rune: {error}");
+        self.errors.lock().unwrap().push(error);
+    }
 
     pub(crate) fn named(&self, title: &'static str) { let _ = self.title.set(title); }
 
@@ -313,6 +340,35 @@ impl<S: 'static> Hub<S> {
         // Pressed as a backend would, holding nothing, so the press's wake runs under no lock.
         sink(id, None);
         Ok(())
+    }
+}
+
+impl<S: 'static> Hub<S> {
+    pub(super) fn pending(&self, shortcut: Result<Shortcut, ShortcutError>, handler: Handler<S>) {
+        self.pending.lock().unwrap().push((shortcut, handler));
+    }
+
+    pub(super) fn register(&self, shortcut: Shortcut, handler: Handler<S>) -> Result<ShortcutId, ShortcutError> {
+        let (id, stamp) = self.core.prepare_register(&shortcut)?;
+        self.handlers.lock().unwrap().insert(id, (stamp.clone(), handler));
+        if let Err(e) = self.core.commit_register(id, shortcut, stamp) {
+            self.handlers.lock().unwrap().remove(&id);
+            return Err(e);
+        }
+        Ok(id)
+    }
+
+    pub(super) fn unregister(&self, id: ShortcutId) -> Result<(), ShortcutError> {
+        let handlers = self.handlers.clone();
+        self.core.unregister_engine(id, Box::new(move || { handlers.lock().unwrap().remove(&id); }))
+    }
+
+    fn register_pending(&self) {
+        for (shortcut, handler) in std::mem::take(&mut *self.pending.lock().unwrap()) {
+            if let Err(error) = shortcut.and_then(|s| self.register(s, handler)) {
+                self.core.record_error(error);
+            }
+        }
     }
 }
 
@@ -421,15 +477,28 @@ impl Guard {
     /// The first half of an attach: a new engine, with the next generation, replaces the one this
     /// thread (or, on Linux, the App) had.
     fn install<S: 'static>(shared: &Arc<Shared<S>>, wake: Waker, headless: bool, wayland: bool, connect: Connect) -> Attaching {
-        let control = shared.shortcuts.control.clone();
-        let title = shared.shortcuts.title.get().copied().unwrap_or_default();
+        Self::install_core(&shared.shortcuts.core, wake, headless, wayland, connect, &mut |generation, wake, live| {
+            sink(Arc::new(Delivery { shared: Arc::downgrade(shared), generation, wake, live, pressed: Mutex::default() }))
+        })
+    }
+
+    fn install_core(
+        core: &HubCore,
+        wake: Waker,
+        headless: bool,
+        wayland: bool,
+        connect: Connect,
+        make_sink: &mut dyn FnMut(u64, Waker, Weak<()>) -> Sink,
+    ) -> Attaching {
+        let control = core.control.clone();
+        let title = core.title.get().copied().unwrap_or_default();
         let bindings = if headless { Bindings::Virtual(HashMap::new()) } else { Bindings::Disconnected };
         let live = Arc::new(());
         // Everything below wakes the host through this, so its close ends them all.
         let (wake, closes_wake) = HostWake::new(wake);
         let engine = |generation| {
-            let delivery = Delivery { shared: Arc::downgrade(shared), generation, wake: wake.clone(), live: Arc::downgrade(&live), pressed: Mutex::default() };
-            Engine { title, wayland, sink: sink(Arc::new(delivery)), connect, bindings }
+            let sink = make_sink(generation, wake.clone(), Arc::downgrade(&live));
+            Engine { title, wayland, sink, connect, bindings }
         };
         // Published when this host takes routing.
         #[cfg(not(target_os = "linux"))]
@@ -515,6 +584,15 @@ impl Guard {
 impl Attaching {
     /// The second half of an attach: this host takes routing, then registers what waited for it.
     fn route<S: 'static>(self, shared: &Arc<Shared<S>>) -> Guard {
+        let handlers = shared.shortcuts.handlers.clone();
+        // A host that attached after the close took routing keeps its handlers.
+        let cleanup = Box::new(move |ended: u64| handlers.lock().unwrap().retain(|_, (stamp, _)| stamp.load(Ordering::Relaxed) > ended));
+        let guard = self.route_core(cleanup);
+        shared.shortcuts.register_pending();
+        guard
+    }
+
+    fn route_core(self, cleanup: Box<dyn FnOnce(u64)>) -> Guard {
         let Self { control, generation, wake, closes_wake, live, .. } = self;
         let routed = {
             let mut route = control.attachment.lock().unwrap();
@@ -526,17 +604,7 @@ impl Attaching {
         };
         // Calls this host inherited wait for it, so it is woken for them, once routing is free.
         for effect in routed { if let AttachEffect::Wake(wake) = effect { wake(); } }
-        let handlers = shared.shortcuts.handlers.clone();
-        // A host that attached after the close took routing keeps its handlers.
-        let cleanup = move |ended: u64| handlers.lock().unwrap().retain(|_, (stamp, _)| stamp.load(Ordering::Relaxed) > ended);
-        let guard = Guard { control, generation, cleanup: Some(Box::new(cleanup)), _live: live, closes_wake, _thread: std::marker::PhantomData };
-        for (shortcut, handler) in std::mem::take(&mut *shared.shortcuts.pending.lock().unwrap()) {
-            if let Err(error) = shortcut.and_then(|s| shared.shortcuts.register(s, handler)) {
-                eprintln!("rune: {error}");
-                shared.shortcuts.errors.lock().unwrap().push(error);
-            }
-        }
-        guard
+        Guard { control, generation, cleanup: Some(cleanup), _live: live, closes_wake, _thread: std::marker::PhantomData }
     }
 }
 

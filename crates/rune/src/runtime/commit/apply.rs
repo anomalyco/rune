@@ -6,41 +6,41 @@ use super::*;
 
 impl RuntimeCore {
     /// The mutation phase cannot accept an El or an unfinished measurement pass.
-    pub(super) fn apply(&mut self, app: &mut dyn AppDriver, measured: Measured, tx: &Tx) {
+    pub(in crate::runtime) fn apply(&mut self, app: &mut dyn AppDriver, measured: Measured, tx: &Tx) {
         let _apply_time = crate::frame::profile::Scope::new(crate::frame::profile::Phase::Apply);
         let Measured { layout: mut taffy, mut nodes, reduced_motion, time_scale, defaults, titlebar, caret_read, memo_flattened, memo_reused, taken_paths, .. } = measured;
-        self.defaults = defaults;
+        self.commit.defaults = defaults;
         if crate::tooling::interaction::active() { self.interaction_reused(&memo_reused); }
-        let mut scratch = std::mem::take(&mut self.apply_scratch);
-        self.caret_watch = caret_read;
+        let mut scratch = std::mem::take(&mut self.commit.apply_scratch);
+        self.edit.caret_watch = caret_read;
         let reduced_motion_unchanged = reduced_motion == self.reduced_motion;
         if !reduced_motion_unchanged {
             self.reduced_motion = reduced_motion;
             self.scene.set_reduced_motion(reduced_motion);
         }
         self.time_scale = time_scale;
-        if tx.commit.lands() { self.flights.clear(); }
+        if tx.commit.lands() { self.motion.flights.clear(); }
         let scale = self.env.scale;
         // Culling is not a model removal. Retire offscreen scene/growth state immediately;
         // re-entering historical rows mount settled and don't replay streaming words.
-        if !self.virtual_culled.is_empty() {
+        if !self.commit.virtual_culled.is_empty() {
             scratch.culled.clear();
-            scratch.culled.resize(self.nodes.len(), false);
-            for (i, n) in self.nodes.iter().enumerate() {
-                if self.virtual_culled.contains(&n.path) || n.parent.is_some_and(|p| scratch.culled[p]) {
+            scratch.culled.resize(self.tree.nodes.len(), false);
+            for (i, n) in self.tree.nodes.iter().enumerate() {
+                if self.commit.virtual_culled.contains(&n.path) || n.parent.is_some_and(|p| scratch.culled[p]) {
                     scratch.culled[i] = true;
                     self.scene.unmount(n.id);
-                    self.grows.remove(&n.id);
+                    self.motion.grows.remove(&n.id);
                 }
             }
-            for path in &self.virtual_culled {
-                if let Some(id) = self.path_ids.get(path) {
+            for path in &self.commit.virtual_culled {
+                if let Some(id) = self.tree.path_ids.get(path) {
                     self.scene.unmount(*id);
-                    self.grows.remove(id);
+                    self.motion.grows.remove(id);
                 }
             }
         }
-        for v in self.virtuals.values_mut() {
+        for v in self.commit.virtuals.values_mut() {
             v.shown = v.keys[v.range.clone()].iter().cloned().collect();
             v.mounted = v.indexed.then(|| crate::el::virtual_list::Mounted::of(v));
         }
@@ -52,12 +52,12 @@ impl RuntimeCore {
                 nodes[i].virtual_mount |= nodes[p].virtual_mount && !self.scene.contains(nodes[p].id);
             }
         }
-        let first = self.commits == 0;
-        self.commits += 1;
-        self.stats.commits = self.commits;
+        let first = self.commit.commits == 0;
+        self.commit.commits += 1;
+        self.stats.commits = self.commit.commits;
         // Concealing is a security boundary: old geometry must not disclose the revealed
         // line count through a height spring, displaced siblings, or a lingering scroll glide.
-        let revealed: HashSet<_> = self.nodes.iter()
+        let revealed: HashSet<_> = self.tree.nodes.iter()
             .filter(|n| {
                 n.input.as_ref().is_some_and(|input| input.edit.masking() == crate::edit::Masking::Shown)
                     || (n.input.is_none() && n.text.as_ref().is_some_and(|t| t.redacted && t.cold.secure_revealed))
@@ -83,21 +83,21 @@ impl RuntimeCore {
         // What this commit mounts or unmounts, and rows new to a growth stack, appear and go at
         // once when no input caused it (`Tx::unprompted`); what stays keeps its motion.
         let cut = instant || tx.unprompted;
-        if tx.commit.snaps() && !first { self.commit_why |= crate::runtime::CommitWhy::INSTANT; }
+        if tx.commit.snaps() && !first { self.commit.commit_why |= crate::runtime::CommitWhy::INSTANT; }
         // An instant change lands what it changes; motion an earlier change set going keeps on.
         let keeps_flights = tx.commit.snaps() && !tx.commit.lands() && !first && !concealing;
         self.scene.keep_flights(keeps_flights);
         let now = self.t;
-        if self.fit_height && let Some(root) = nodes.first() { self.fit_window(root.local.h, tx, first); }
+        if self.host.fit_height && let Some(root) = nodes.first() { self.fit_window(root.local.h, tx, first); }
         let mut held = std::mem::take(&mut scratch.held);
         let holds = self.landing_holds(&nodes, !instant && !tx.relayout && !tx.window_step, &mut held);
 
         // What drew nothing last frame has no exit to show (`unseen_presence.rs`).
-        let any_gone = self.nodes.iter().any(|o| !self.node_index.contains_key(&o.id));
-        let any_replaced = self.virtuals.values().any(crate::el::virtual_list::VirtualList::replaced_view);
+        let any_gone = self.tree.nodes.iter().any(|o| !self.tree.node_index.contains_key(&o.id));
+        let any_replaced = self.commit.virtuals.values().any(crate::el::virtual_list::VirtualList::replaced_view);
         let drew_nothing = if any_gone || any_replaced { self.drew_nothing() } else { Vec::new() };
-        let unseen_ids: HashSet<NodeId> = if self.virtuals.is_empty() || drew_nothing.is_empty() { HashSet::default() } else {
-            self.nodes.iter().zip(&drew_nothing).filter(|&(_, &u)| u).map(|(n, _)| n.id).collect()
+        let unseen_ids: HashSet<NodeId> = if self.commit.virtuals.is_empty() || drew_nothing.is_empty() { HashSet::default() } else {
+            self.tree.nodes.iter().zip(&drew_nothing).filter(|&(_, &u)| u).map(|(n, _)| n.id).collect()
         };
 
         // Growth stacks: rows of a stack that existed before grow; a new stack mounts settled.
@@ -114,9 +114,9 @@ impl RuntimeCore {
             // whose size springs too, the two springs carry them past their slots.
             // So does a reveal in this commit for rows new to the stack: rows inserted above an
             // anchored first row and revealed at once land whole instead of growing from zero.
-            let revealing = self.virtuals.get(&nodes[c].path)
-                .is_some_and(|v| self.requests.reveals().any(|r| r.viewport == v.scroll_path));
-            let revealed_now = self.virtuals.get(&nodes[c].path).is_some_and(|v| {
+            let revealing = self.commit.virtuals.get(&nodes[c].path)
+                .is_some_and(|v| self.scroll.requests.reveals().any(|r| r.viewport == v.scroll_path));
+            let revealed_now = self.commit.virtuals.get(&nodes[c].path).is_some_and(|v| {
                 tx.scroll_to.iter().any(|r| {
                     nodes.iter().enumerate().find(|(_, n)| n.named(&r.key)
                         && n.parent.is_none_or(|p| in_scope(&nodes[p].path, r.scope.as_deref())))
@@ -127,16 +127,16 @@ impl RuntimeCore {
                         })
                 })
             });
-            let reader = self.virtuals.get(&nodes[c].path)
-                .filter(|v| !self.requests.keeps().any(|k| k.viewport == v.scroll_path))
-                .and_then(|v| self.path_ids.get(&v.scroll_path))
-                .and_then(|id| self.scrolls.get(id)).is_some_and(|s| !s.pinned());
+            let reader = self.commit.virtuals.get(&nodes[c].path)
+                .filter(|v| !self.scroll.requests.keeps().any(|k| k.viewport == v.scroll_path))
+                .and_then(|v| self.tree.path_ids.get(&v.scroll_path))
+                .and_then(|id| self.scroll.scrolls.get(id)).is_some_and(|s| !s.pinned());
             let reading = reader && !revealed_now;
             scratch.rows.clear();
             scratch.rows.extend((c + 1..nodes.len()).filter(|&j| nodes[j].parent == Some(c)));
             let rows = &scratch.rows;
-            let existed = self.stacks.contains_key(&cid) && !tx.commit.lands();
-            let mut stack = self.stacks.remove(&cid).unwrap_or_default();
+            let existed = self.motion.stacks.contains_key(&cid) && !tx.commit.lands();
+            let mut stack = self.motion.stacks.remove(&cid).unwrap_or_default();
             scratch.new_ids.clear();
             scratch.new_ids.extend(rows.iter().map(|&j| nodes[j].id));
             let new_ids = &scratch.new_ids;
@@ -147,7 +147,7 @@ impl RuntimeCore {
             // nothing, or any row when the change keeps none the reader could see (a filter),
             // leaves no space to close: the list's anchor already holds what shows (`set_keys`),
             // and the space would only push the rows the change brings in down, out of view.
-            let list = self.virtuals.get(&nodes[c].path);
+            let list = self.commit.virtuals.get(&nodes[c].path);
             let is_virtual = list.is_some();
             let replaced = list.is_some_and(crate::el::virtual_list::VirtualList::replaced_view);
             let (mut opened, mut shut) = (Vec::new(), Vec::new());
@@ -167,7 +167,7 @@ impl RuntimeCore {
                         order.push(old);
                     }
                     ni += 1;
-                } else if let Some(g) = self.grows.get(&old).filter(|g| g.h > 0.01) && existed && !cut && !replaced && !(is_virtual && unseen_ids.contains(&old)) {
+                } else if let Some(g) = self.motion.grows.get(&old).filter(|g| g.h > 0.01) && existed && !cut && !replaced && !(is_virtual && unseen_ids.contains(&old)) {
                     // A row fades in place before its space closes, except a fold, which shuts
                     // at once on its own spring under its feather, as it would fold shut in place.
                     let hold = if g.glide().is_some() { 0.0 } else { 0.15 };
@@ -175,7 +175,7 @@ impl RuntimeCore {
                     stack.closing.entry(old).or_insert(now + hold);
                     order.push(old);
                 } else {
-                    self.grows.remove(&old);
+                    self.motion.grows.remove(&old);
                     stack.closing.remove(&old);
                 }
             }
@@ -188,7 +188,7 @@ impl RuntimeCore {
             let width = nodes[c].local.w;
             let revealing_moving = revealing && rows.iter().any(|&j| {
                 let id = nodes[j].id;
-                self.grows.get(&id).is_some_and(|g| g.moving()) || stack.pending_heights.contains_key(&id)
+                self.motion.grows.get(&id).is_some_and(|g| g.moving()) || stack.pending_heights.contains_key(&id)
             });
             // A person resizing the window holds the content: rewrapped rows land in the frame,
             // so a pinned tail stays where it is instead of sliding back after the drag. A
@@ -221,8 +221,8 @@ impl RuntimeCore {
                 stack.tops.insert(id, nodes[j].target[1] - ctop);
                 let streaming = nodes[j].streaming;
                 let whole = nodes[j].whole && !streaming;
-                let g_moving = self.grows.get(&id).is_some_and(|g| g.moving()) || stack.pending_heights.contains_key(&id);
-                let entering = revealed_now && reader && !self.grows.contains_key(&id);
+                let g_moving = self.motion.grows.get(&id).is_some_and(|g| g.moving()) || stack.pending_heights.contains_key(&id);
+                let entering = revealed_now && reader && !self.motion.grows.contains_key(&id);
                 let row_reading = (reading && !(revealing && g_moving)) || entering;
                 let live = !row_reading && live_rows.as_ref().is_some_and(|range| {
                     nodes[j].key.as_deref().and_then(|key| list?.index_of(key)).is_some_and(|index| range.contains(&index))
@@ -241,8 +241,8 @@ impl RuntimeCore {
                 }
                 let (duration, glide) = (tx.motion.map_or(0.0, |m| m.spring().duration * 1.15), nodes[j].glide.map(|s| (s, self.fold_limit(id))));
                 let hidden = if glide.is_some() { self.fold_hidden_above(&nodes, j, h) } else { None };
-                if existed && !cut && !nodes[j].virtual_mount && nodes[j].glide.is_some() && !self.grows.contains_key(&id) { opened.push(id); }
-                let g = self.grows.entry(id).or_insert_with(|| {
+                if existed && !cut && !nodes[j].virtual_mount && nodes[j].glide.is_some() && !self.motion.grows.contains_key(&id) { opened.push(id); }
+                let g = self.motion.grows.entry(id).or_insert_with(|| {
                     if existed && (!cut || live) && !nodes[j].virtual_mount { GrowTrack::settled(0.0).with_duration(duration) } else { GrowTrack::settled(h) }
                 });
                 g.set_kind(streaming, whole, glide);
@@ -254,7 +254,7 @@ impl RuntimeCore {
                 } else {
                     // Only a width/scale rewrap may shrink an active streaming row, including
                     // when fresh text arrives in the same frame as the resize.
-                    let t = if streaming && !self.relayout && stack.width_hold.may_shrink(now) { h.max(g.h.min(g.target)) } else { h };
+                    let t = if streaming && !self.commit.relayout && stack.width_hold.may_shrink(now) { h.max(g.h.min(g.target)) } else { h };
                     if stack.width_hold.defers(now) {
                         stack.pending_heights.insert(id, t);
                     } else {
@@ -270,7 +270,7 @@ impl RuntimeCore {
                         if let Some((above, header)) = hidden.filter(|_| shutting && g.shutting_fold()) {
                             held.push((id, before - g.h));
                             hidden_cut += g.hide_above(above);
-                            self.fold_headers.insert(id, header);
+                            self.motion.fold_headers.insert(id, header);
                         }
                     }
                 }
@@ -284,18 +284,18 @@ impl RuntimeCore {
                 && let Some(s) = std::iter::successors(nodes[c].parent, |&p| nodes[p].parent)
                     .find(|&p| nodes[p].scroll.is_some() && nodes[p].scroll_axes.y())
             {
-                self.requests.step(requests::Event::NewTail { viewport: &nodes[s].path, key: &nodes[last].path });
+                self.scroll.requests.step(requests::Event::NewTail { viewport: &nodes[s].path, key: &nodes[last].path });
             }
             stack.growing = !stack.pending_heights.is_empty()
-                || order.iter().any(|r| self.grows.get(r).is_some_and(|g| g.target > g.h + 1.0 / 128.0));
+                || order.iter().any(|r| self.motion.grows.get(r).is_some_and(|g| g.target > g.h + 1.0 / 128.0));
             stack.moving = stack.growing
-                || order.iter().any(|r| self.grows.get(r).is_some_and(|g| g.moving()));
+                || order.iter().any(|r| self.motion.grows.get(r).is_some_and(|g| g.moving()));
             // Order holds the rows this commit brought and the ones still closing; no others.
             stack.tops.retain(|id, _| new_set.contains(id) || stack.closing.contains_key(id));
             let animates = existed && (!instant || live_rows.is_some()) && !tx.relayout && !self.reduced_motion;
-            stack.reorder.measure(animates, &stack.order, &order, stack.gap, |id| self.grows.get(&id).map(|g| g.h));
+            stack.reorder.measure(animates, &stack.order, &order, stack.gap, |id| self.motion.grows.get(&id).map(|g| g.h));
             if first || self.reduced_motion || concealing || resized || reader || nodes[c].instant_changes || tx.commit.lands() || (stack.order != order && live_rows.is_none()) { stack.seams.clear(); }
-            if let Some(range) = live_rows && let Some(v) = self.virtuals.get(&nodes[c].path) && stack.order != order {
+            if let Some(range) = live_rows && let Some(v) = self.commit.virtuals.get(&nodes[c].path) && stack.order != order {
                 self.join_live_rows(&mut stack, &nodes, rows, v, &range);
                 let ink = tx.live_growth.iter().any(|(key, ink)| *ink && nodes[c].named(key));
                 live_by_id.extend(rows.iter().enumerate().filter_map(|(k, &j)| {
@@ -305,17 +305,17 @@ impl RuntimeCore {
                 }));
             }
             scratch.order = std::mem::replace(&mut stack.order, order);
-            self.stacks.insert(cid, stack);
+            self.motion.stacks.insert(cid, stack);
         }
 
         // Put nodes on their subtree's clock before this commit animates them.
-        let time_scaled = self.time_scaled || nodes.iter().any(|n| n.time_scale != 1.0);
+        let time_scaled = self.motion.time_scaled || nodes.iter().any(|n| n.time_scale != 1.0);
         let mut time_scales = std::mem::take(&mut scratch.time_scales);
         time_scales.clear();
         if time_scaled { self.sync_time_scales(&nodes, &mut time_scales, false); }
 
         let can_skip_apply = !first && !tx.commit.lands() && !concealing && reduced_motion_unchanged && !self.scene.tracing();
-        let mut skip_spans = std::mem::take(&mut self.memo.skip_scratch);
+        let mut skip_spans = std::mem::take(&mut self.commit.memo.skip_scratch);
         self.clean_apply_spans(&nodes, &memo_reused, can_skip_apply, &mut skip_spans);
         let unseen = self.unseen_before_and_after(&nodes, &skip_spans);
         // `El::matched` elements of this tree: (id, index, newly mounted).
@@ -325,7 +325,7 @@ impl RuntimeCore {
         mounted.clear();
         // A flight this commit would re-aim that has as good as landed lands instead and rides
         // its parent, rather than set off again on a path that doesn't.
-        let landing = if self.flying.is_empty() { Vec::new() } else { self.landing_flights() };
+        let landing = if self.motion.flying.is_empty() { Vec::new() } else { self.landing_flights() };
         let mut landed = false;
         // Nodes this commit slid from where they were drawn, or under an ancestor that slid.
         let mut slid = std::mem::take(&mut scratch.slid);
@@ -333,7 +333,7 @@ impl RuntimeCore {
         // How far the top of each node's contents moved down in its growth row (drawn less new).
         let mut top_moved = std::mem::take(&mut scratch.top_moved);
         top_moved.clear();
-        let has_virtuals = !self.virtuals.is_empty();
+        let has_virtuals = !self.commit.virtuals.is_empty();
         let mut last = paint_tracks::Finder::default();
         let mut skip_cursor = 0usize;
         // A crossing carries its paint and exits; a resizing row carries its inset. Its
@@ -347,7 +347,7 @@ impl RuntimeCore {
             }
             if let Some(span) = skip_spans.get(skip_cursor).filter(|s| s.new_start == i) {
                 for k in 0..span.len {
-                    nodes[span.new_start + k].scale_track = self.nodes[span.old_start + k].scale_track;
+                    nodes[span.new_start + k].scale_track = self.tree.nodes[span.old_start + k].scale_track;
                 }
                 last.advance(span.old_start + span.len);
                 i += span.len;
@@ -360,7 +360,7 @@ impl RuntimeCore {
             let id = nodes[i].id;
             let mut scene_rect = nodes[i].local;
             let parent_virtual = if has_virtuals {
-                nodes[i].parent.and_then(|p| self.virtuals.get(&nodes[p].path))
+                nodes[i].parent.and_then(|p| self.commit.virtuals.get(&nodes[p].path))
             } else {
                 None
             };
@@ -371,7 +371,7 @@ impl RuntimeCore {
             let shift = live_row.and_then(|(_, row)| row.shift);
             let riding = live_row.is_some_and(|(_, row)| row.ink && row.shift.is_some_and(|jump| jump != 0.0)) && !nodes[i].instant_changes;
             if riding && nodes[i].vis.child_exit.is_some() { exit_parents.insert(id); }
-            let old = last.find(&self.nodes, id);
+            let old = last.find(&self.tree.nodes, id);
             if can_skip_apply
                 && slid.is_empty()
                 && top_moved.is_empty()
@@ -379,7 +379,7 @@ impl RuntimeCore {
             {
                 continue;
             }
-            let is_virtual = has_virtuals && self.virtuals.contains_key(&nodes[i].path);
+            let is_virtual = has_virtuals && self.commit.virtuals.contains_key(&nodes[i].path);
             let parent_id = nodes[i].parent.map(|p| nodes[p].id);
             let (spring_l, anim_l) = tx.motion.map_or_else(
                 || { let spring = nodes[i].motion; (spring, spring.into()) },
@@ -396,7 +396,7 @@ impl RuntimeCore {
             let enters_at_once = cut || (nodes[i].parent.is_some_and(|p| nodes[p].instant_changes) && nodes[i].instant_changes);
             let lands = instant || nodes[i].instant_changes;
             let layout_instant = lands || row_like || tx.relayout || is_virtual
-                || (!self.aspect_snap.is_empty() && self.aspect_snap.contains(&id));
+                || (!self.tree.aspect_snap.is_empty() && self.tree.aspect_snap.contains(&id));
 
             let was_present = self.scene.contains(id);
             let was_exiting = self.is_exiting(id);
@@ -440,7 +440,7 @@ impl RuntimeCore {
             let (mut row_jump, mut reorder_jump) = (0.0, 0.0);
             if was_present && !was_exiting && !lands
                 && landing.contains(&id)
-                && self.flying.iter().any(|f| f.0 == id && (f.1 != nodes[i].local || nodes[i].parent.is_some_and(|p| slid.get(p).copied().unwrap_or(false))))
+                && self.motion.flying.iter().any(|f| f.0 == id && (f.1 != nodes[i].local || nodes[i].parent.is_some_and(|p| slid.get(p).copied().unwrap_or(false))))
             {
                 self.land_flight(id);
                 landed = true;
@@ -451,14 +451,14 @@ impl RuntimeCore {
                     self.scene.set_transition(id, nodes[i].transition.as_deref().copied().unwrap_or_else(Transition::opacity));
                 }
                 let stack_row = nodes[i].parent.is_some_and(|p| nodes[p].growth.is_some()) || is_virtual
-                    || (nodes[i].in_row == RowLayout::Horizontal && (self.aspect_snap.is_empty() || !self.aspect_snap.contains(&id)));
+                    || (nodes[i].in_row == RowLayout::Horizontal && (self.tree.aspect_snap.is_empty() || !self.tree.aspect_snap.contains(&id)));
                 // A window's own resize step moves content at rest with the window; motion
                 // already running retargets on its spring.
-                let follows_window = tx.window_step && !self.flying.iter().any(|f| f.0 == id)
+                let follows_window = tx.window_step && !self.motion.flying.iter().any(|f| f.0 == id)
                     && !self.scene.store().is_animating(id, prop::FRAME);
                 // Out of sight before and after: nobody would see it move.
                 let out_of_sight = unseen.get(i).copied().unwrap_or(false) && nodes[i].matched.is_none()
-                    && !self.flying.iter().any(|f| f.0 == id);
+                    && !self.motion.flying.iter().any(|f| f.0 == id);
                 if !out_of_sight && !nodes[i].instant_changes && live_row.is_some_and(|(root, _)| root == i) {
                     reorder_jump = shift.unwrap_or(0.0);
                 }
@@ -469,7 +469,7 @@ impl RuntimeCore {
                     // still springs, or a re-centred column jumps against its moving parent. So
                     // do `animate_layout` contents inside the row.
                     // A flying row's path restarts from where it is drawn, with no slide on top.
-                    if !self.flying.iter().any(|f| f.0 == id) {
+                    if !self.motion.flying.iter().any(|f| f.0 == id) {
                         if let Some(drawn) = self.scene.get(id, prop::FRAME) { row_jump = drawn.y - scene_rect.y; }
                         reorder_jump = self.reorder_jump(&nodes, i);
                     }
@@ -494,9 +494,9 @@ impl RuntimeCore {
                 // An instant change that leaves a flying node's own layout as it was (a click
                 // placing a caret elsewhere, say) keeps its flight on its path, as it keeps
                 // other motion an earlier change set going.
-                let flying = if self.flying.is_empty() { None }
-                    else if lands { self.flying.iter().position(|f| f.0 == id && f.1 == nodes[i].local).filter(|_| keeps_flights && !nodes[i].instant_changes) }
-                    else { self.flying.iter().position(|f| f.0 == id) };
+                let flying = if self.motion.flying.is_empty() { None }
+                    else if lands { self.motion.flying.iter().position(|f| f.0 == id && f.1 == nodes[i].local).filter(|_| keeps_flights && !nodes[i].instant_changes) }
+                    else { self.motion.flying.iter().position(|f| f.0 == id) };
                 // A growth row lays out its contents at once. When the top of a parent's contents
                 // moves in it (a padding, gap or margin above its first child changed), they all
                 // slide from where they were drawn; a sibling's new size still moves the ones
@@ -526,11 +526,11 @@ impl RuntimeCore {
                     // Keep a matched flight on its one screen path, even where a growth row
                     // owns its place; retarget it only if its layout moved, or an ancestor's
                     // under a slide its path doesn't ride, so an unrelated commit doesn't re-time it.
-                    if self.flying[f].1 != nodes[i].local || nodes[i].parent.is_some_and(|p| slid.get(p).copied().unwrap_or(false)) {
-                        self.flying[f].1 = nodes[i].local;
+                    if self.motion.flying[f].1 != nodes[i].local || nodes[i].parent.is_some_and(|p| slid.get(p).copied().unwrap_or(false)) {
+                        self.motion.flying[f].1 = nodes[i].local;
                         // A growth row's instant vertical place would land the whole flight.
                         let la = if layout_anim.x == Anim::INSTANT || layout_anim.y == Anim::INSTANT { LayoutAnim::new(spring_l) } else { layout_anim };
-                        let [drawn, speed] = self.launches.restart(&self.scene, id);
+                        let [drawn, speed] = self.motion.launches.restart(&self.scene, id);
                         self.scene.retarget_drawn(id, scene_rect, la.screen(), drawn, speed);
                     }
                 } else if !nodes[i].live.iter().any(|b| b.property == crate::live::Property::Rect) {
@@ -615,25 +615,25 @@ impl RuntimeCore {
             }
             let live_colors = paint_tracks::live_colors(&nodes[i]);
             if !live_colors.fill {
-                self.commit_paint(id, P_FILL, paint_tracks::prev_node(&self.nodes, &nodes, old, i).map(|o| o.vis.fill), vis.fill, spring_c, instant);
+                self.commit_paint(id, P_FILL, paint_tracks::prev_node(&self.tree.nodes, &nodes, old, i).map(|o| o.vis.fill), vis.fill, spring_c, instant);
             }
             if vis.border_width() > 0.0 {
                 let had_bottom = self.scene.store().has(id, P_BORDER_BOTTOM);
                 if vis.border_bottom.is_some() && !had_bottom
-                    && let Some(c) = self.scene.get(id, P_BORDER).or(paint_tracks::prev_node(&self.nodes, &nodes, old, i).map(|o| o.vis.border()))
+                    && let Some(c) = self.scene.get(id, P_BORDER).or(paint_tracks::prev_node(&self.tree.nodes, &nodes, old, i).map(|o| o.vis.border()))
                 {
                     // A solid border's bottom springs into the gradient rather than jumping.
                     self.scene.set(id, P_BORDER_BOTTOM, c);
                 }
                 if !live_colors.border {
-                    self.commit_paint(id, P_BORDER, paint_tracks::prev_node(&self.nodes, &nodes, old, i).map(|o| o.vis.border()), vis.border(), spring_c, instant);
+                    self.commit_paint(id, P_BORDER, paint_tracks::prev_node(&self.tree.nodes, &nodes, old, i).map(|o| o.vis.border()), vis.border(), spring_c, instant);
                 }
                 if vis.border_bottom.is_some() || had_bottom {
                     self.set_or_anim(id, P_BORDER_BOTTOM, vis.border_bottom.unwrap_or(vis.border()), spring_c, instant);
                 }
             }
             if !live_colors.text && let Some(c) = paint_tracks::text_color(&nodes[i]) {
-                self.commit_paint(id, P_TEXT, paint_tracks::prev_node(&self.nodes, &nodes, old, i).and_then(paint_tracks::text_color), c, spring_tc, instant);
+                self.commit_paint(id, P_TEXT, paint_tracks::prev_node(&self.tree.nodes, &nodes, old, i).and_then(paint_tracks::text_color), c, spring_tc, instant);
             }
             if nodes[i].vis.icon.is_some() && (nodes[i].vis.icon_turn != 0.0 || self.scene.store().has(id, P_ICON_TURN)) {
                 if was_present && !self.scene.store().has(id, P_ICON_TURN) {
@@ -642,12 +642,12 @@ impl RuntimeCore {
                 self.set_or_anim(id, P_ICON_TURN, nodes[i].vis.icon_turn, spring_l, instant || !was_present);
             }
             if vis.hover().a > 0.0 || self.scene.store().has(id, P_HOVER_C) {
-                self.commit_paint(id, P_HOVER_C, paint_tracks::prev_node(&self.nodes, &nodes, old, i).map(|o| o.vis.hover()), vis.hover(), spring_c, instant);
+                self.commit_paint(id, P_HOVER_C, paint_tracks::prev_node(&self.tree.nodes, &nodes, old, i).map(|o| o.vis.hover()), vis.hover(), spring_c, instant);
             }
             if vis.press().a > 0.0 || self.scene.store().has(id, P_PRESS_C) {
-                self.commit_paint(id, P_PRESS_C, paint_tracks::prev_node(&self.nodes, &nodes, old, i).map(|o| o.vis.press()), vis.press(), spring_c, instant);
+                self.commit_paint(id, P_PRESS_C, paint_tracks::prev_node(&self.tree.nodes, &nodes, old, i).map(|o| o.vis.press()), vis.press(), spring_c, instant);
             }
-            if !vis.cold.is_empty() || paint_tracks::prev_node(&self.nodes, &nodes, old, i).is_some_and(|o| !o.vis.cold.is_empty()) {
+            if !vis.cold.is_empty() || paint_tracks::prev_node(&self.tree.nodes, &nodes, old, i).is_some_and(|o| !o.vis.cold.is_empty()) {
                 self.commit_cold_paint(id, vis, old, live_colors, spring_c, spring_l, instant);
             }
 
@@ -662,7 +662,7 @@ impl RuntimeCore {
                 // it is entering. A state that outlived its node (an instant parent unmount keeps
                 // the reveal, and its path, for the child's return) keeps its words.
                 let mounted_late = !was_present && !instant && !tx.unprompted && !nodes[i].virtual_mount;
-                let (st, vacant) = match self.reveals.entry(id) {
+                let (st, vacant) = match self.motion.reveals.entry(id) {
                     Entry::Occupied(st) => (st.into_mut(), false),
                     Entry::Vacant(st) => {
                         let shown = if mounted_late { 0 } else { content.len() };
@@ -678,7 +678,7 @@ impl RuntimeCore {
                 } else {
                     Arrival::Landed
                 };
-                let chain = if time_scaled { None } else { Some(&self.reveal_chain) };
+                let chain = if time_scaled { None } else { Some(&self.motion.reveal_chain) };
                 let effects = st.step(RevealEvent::Commit {
                     content,
                     fade,
@@ -689,24 +689,24 @@ impl RuntimeCore {
                 });
                 for effect in effects {
                     match effect {
-                        RevealEffect::Started(at) => self.reveal_chain.started(at),
+                        RevealEffect::Started(at) => self.motion.reveal_chain.started(at),
                     }
                 }
             }
         }
 
-        if !arrivals.is_empty() || !self.matched.is_empty() {
+        if !arrivals.is_empty() || !self.motion.matched.is_empty() {
             self.match_elements(&nodes, &arrivals, tx, instant);
         }
         arrivals.clear();
-        if self.launches.pending() {
+        if self.motion.launches.pending() {
             self.launch_elements(&nodes, tx, instant);
         }
 
         // Scroll viewports: a new sticky viewport opens at the end.
         for (i, n) in nodes.iter().enumerate() {
             if let Some(sp) = n.cold.get().and_then(|c| c.scroll) {
-                let e = self.scrolls.entry(n.id).or_insert(ScrollState { mode: if sp.stick_bottom { ScrollMode::following() } else { ScrollMode::rest() }, ..ScrollState::default() });
+                let e = self.scroll.scrolls.entry(n.id).or_insert(ScrollState { mode: if sp.stick_bottom { ScrollMode::following() } else { ScrollMode::rest() }, ..ScrollState::default() });
                 e.x.flow = n.flow;
                 if concealed.get(i).copied().unwrap_or(false) {
                     e.offset = 0.0;
@@ -729,7 +729,7 @@ impl RuntimeCore {
 
         // Removed nodes stay mounted in `Scene` until their exit transition settles at opacity 0.
         let present_len = nodes.len();
-        let mut old_nodes = std::mem::take(&mut self.nodes);
+        let mut old_nodes = std::mem::take(&mut self.tree.nodes);
         // A node reused from the last commit keeps its bindings' latches, which a commit that
         // lands drops as a rebuilt node's are (below).
         if tx.commit.lands() {
@@ -739,7 +739,7 @@ impl RuntimeCore {
         }
         for old in &old_nodes {
             if old.cold.get().is_none_or(|c| c.live.is_empty()) { continue; }
-            if let Some(&i) = self.node_index.get(&old.id) {
+            if let Some(&i) = self.tree.node_index.get(&old.id) {
                 let mut kept = paint_tracks::LiveColors::default();
                 if let Some(cold) = nodes[i].cold.get_mut_if_some() {
                     for bound in &mut cold.live {
@@ -776,7 +776,7 @@ impl RuntimeCore {
                     std::mem::forget(old);
                     continue;
                 }
-                if self.node_index.contains_key(&old.id) {
+                if self.tree.node_index.contains_key(&old.id) {
                     continue;
                 }
                 if !self.scene.contains(old.id) {
@@ -785,23 +785,23 @@ impl RuntimeCore {
                 }
                 let old_parent_id = old.parent.and_then(|p| old_ids.get(p).copied());
                 let parent_remained_present =
-                    old_parent_id.is_none_or(|pid| self.node_index.get(&pid).is_some_and(|&i| i < present_len));
+                    old_parent_id.is_none_or(|pid| self.tree.node_index.get(&pid).is_some_and(|&i| i < present_len));
                 if parent_remained_present {
-                    let instant = instant || (old.instant_changes && old_parent_id.and_then(|pid| self.node_index.get(&pid)).is_some_and(|&p| nodes[p].instant_changes));
+                    let instant = instant || (old.instant_changes && old_parent_id.and_then(|pid| self.tree.node_index.get(&pid)).is_some_and(|&p| nodes[p].instant_changes));
                     let rides_parent = old_parent_id.is_some_and(|p| exit_parents.contains(&p));
                     if tx.commit.lands() || ((instant || tx.unprompted) && !rides_parent && !self.is_exiting(old.id)) || drew_nothing.get(oi).copied().unwrap_or(false) {
                         self.scene.unmount(old.id);
                     } else {
-                        if let Some(t) = old_parent_id.and_then(|pid| self.node_index.get(&pid)).and_then(|&p| nodes[p].vis.child_exit.as_deref().copied()) {
+                        if let Some(t) = old_parent_id.and_then(|pid| self.tree.node_index.get(&pid)).and_then(|&p| nodes[p].vis.child_exit.as_deref().copied()) {
                             self.scene.set_transition(old.id, t);
                         }
                         self.scene.remove(old.id);
                     }
-                } else if !tx.commit.lands() && self.flying.iter().any(|f| f.0 == old.id) {
+                } else if !tx.commit.lands() && self.motion.flying.iter().any(|f| f.0 == old.id) {
                     // A flight paints outside its ancestors, so it can't fade with an exiting one.
                     self.scene.remove(old.id);
                 }
-                old.parent = old_parent_id.and_then(|pid| self.node_index.get(&pid).copied());
+                old.parent = old_parent_id.and_then(|pid| self.tree.node_index.get(&pid).copied());
                 if let Some(cold) = old.cold.get_mut_if_some() { cold.live.clear(); }
                 // Exit visuals outlive their model. Never call an accessor captured by
                 // a deleted row while normalizing a later focus change.
@@ -841,17 +841,17 @@ impl RuntimeCore {
                 }
                 // A resize that laid the tree out again took the text layouts before the view ran.
                 if old.text_layout.is_none() { relayout::lay_out_text_in_place(&mut self.text, &mut old, self.env.scale); }
-                self.node_index.insert(old.id, nodes.len());
+                self.tree.node_index.insert(old.id, nodes.len());
                 nodes.push(old);
             }
         }
-        self.spare_nodes = old_nodes;
+        self.tree.spare_nodes = old_nodes;
 
         if time_scaled {
             // Exits keep following their present ancestors' scale, so one under a frozen subtree
             // finishes once it resumes.
             self.sync_time_scales(&nodes, &mut time_scales, true);
-            self.time_scaled = time_scales.iter().any(|&k| k != 1.0);
+            self.motion.time_scaled = time_scales.iter().any(|&k| k != 1.0);
         }
         scratch.concealed = concealed;
         scratch.time_scales = time_scales;
@@ -860,83 +860,43 @@ impl RuntimeCore {
         scratch.slid = slid;
         scratch.top_moved = top_moved;
         scratch.held = held;
-        self.apply_scratch = scratch;
-        self.nodes = nodes;
-        self.memo.commit_flattened(&self.nodes, present_len, memo_flattened, memo_reused, taken_paths);
+        self.commit.apply_scratch = scratch;
+        self.tree.nodes = nodes;
+        self.commit.memo.commit_flattened(&self.tree.nodes, present_len, memo_flattened, memo_reused, taken_paths);
         skip_spans.clear();
-        self.memo.skip_scratch = skip_spans;
+        self.commit.memo.skip_scratch = skip_spans;
         self.find_app_root();
-        self.commit_gen = self.commit_gen.wrapping_add(1);
-        let (mut dissolve, mut cache, mut pix, mut drawn_ly, mut key_up, mut sticky, mut raise, mut any_loop) =
-            (false, false, false, false, false, false, false, false);
-        let mut ordered = false;
-        for n in &self.nodes {
-            dissolve |= n.vis_flags.blend() == crate::render::Blend::PlusLighter;
-            cache |= n.vis_flags.cache();
-            if let Some(c) = n.cold.get() {
-                pix |= c.pixel_aspect.is_some();
-                sticky |= c.sticky.as_ref().is_some_and(|s| s.edge.is_some());
-                any_loop |= c.looping.is_some();
-            }
-            drawn_ly |= n.handlers.get().is_some_and(|h| h.on_drawn_layout.is_some() || h.on_visible.is_some() || h.drawn_rect.is_some());
-            key_up |= n.focus.get().is_some_and(|f| f.key_up.is_some());
-            raise |= n.vis_flags.raise();
-            ordered |= n.vis.paint_order != 0;
-        }
-        self.has_dissolve = dissolve;
-        self.has_cache = cache;
-        if !self.has_cache {
-            if !self.node_caches.is_empty() { self.node_caches.clear(); }
-            if !self.text.atlas.resident_caches.is_empty() { self.text.atlas.resident_caches.clear(); }
-        } else if !self.node_caches.is_empty() {
-            self.node_caches.retain(|id, _| self.scene.contains(*id));
-            self.text.atlas.resident_caches.retain(|id, _| self.scene.contains(NodeId(*id)));
-        }
-        self.has_pixel_aspect = pix;
-        self.has_drawn_layout = drawn_ly;
-        self.has_key_up = key_up;
-        self.has_sticky = self.holding() || sticky;
-        self.has_raise = raise;
-        self.has_paint_order = ordered;
-        // A flight that left the tree stays lifted and covered while it exits, so it doesn't pop.
-        self.flying.retain(|(id, _)| self.node_index.contains_key(id));
-        self.launches.keep(&self.flying);
-        if self.nodes.len() > present_len || !self.flying.is_empty() || landed || self.has_sticky || self.has_raise || self.has_paint_order { self.update_layer_paint_order(); }
-        else { self.layer_paint_order.clear(); }
-        self.built = false;
-        if !self.virtuals.is_empty() {
-            self.virtuals.retain(|path, _| self.nodes.iter().any(|n| n.path == *path));
-        }
-        self.prune_path_ids();
+        self.commit.commit_gen = self.commit.commit_gen.wrapping_add(1);
+        let any_loop = self.prune_detached_tables(true);
+        if self.tree.nodes.len() > present_len || !self.motion.flying.is_empty() || landed || self.tree.has_sticky || self.tree.has_raise || self.tree.has_paint_order { self.update_layer_paint_order(); }
+        else { self.paint.layer_paint_order.clear(); }
+        self.tree.built = false;
         self.subscribe_live();
-        self.refresh_modal_index();
         self.sync_modals(app);
         self.sync_follows(app);
-        self.loops.retain(|id, _| self.scene.contains(*id));
         self.catch_loops_up();
-        self.static_scales.retain(|id, _| self.scene.contains(*id));
-        if any_loop || !self.loops.is_empty() {
-            for n in &self.nodes {
+        if any_loop || !self.motion.loops.is_empty() {
+            for n in &self.tree.nodes {
                 let t = if time_scaled { self.scene.store().node_time(n.id) } else { self.t };
                 if let Some(&spec) = n.looping.as_deref() {
                     let start = self.loop_start(n.id, t);
-                    let track = self.loops.entry(n.id).and_modify(|l| { l.retime(spec, t); l.enabled(true, t); })
+                    let track = self.motion.loops.entry(n.id).and_modify(|l| { l.retime(spec, t); l.enabled(true, t); })
                         .or_insert_with(|| rune_motion::LoopTrack::new(spec, start));
                     if tx.commit.lands() || self.reduced_motion { track.finish(); }
-                } else if let Some(l) = self.loops.get_mut(&n.id) {
+                } else if let Some(l) = self.motion.loops.get_mut(&n.id) {
                     l.enabled(false, t);
                 }
             }
         }
-        taffy.compact_if_sparse(|me, slot| self.nodes[me as usize].taffy = slot);
-        self.layout = taffy;
-        self.reuse.built(self.env.scale, self.srgb_blend);
+        taffy.compact_if_sparse(|me, slot| self.tree.nodes[me as usize].taffy = slot);
+        self.commit.layout = taffy;
+        self.commit.reuse.built(self.env.scale, self.paint.srgb_blend);
         self.text.end_commit();
-        self.dirty = false;
-        self.relayout = false;
-        self.aspect_snap.clear();
-        self.viewport_stepped = false;
-        self.settle = false;
+        self.commit.dirty = false;
+        self.commit.relayout = false;
+        self.tree.aspect_snap.clear();
+        self.commit.viewport_stepped = false;
+        self.commit.settle = false;
         // After the commit: a new height changes the insets, which the next frame's view reads.
         self.set_titlebar(titlebar);
     }

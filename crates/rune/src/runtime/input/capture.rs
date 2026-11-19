@@ -177,3 +177,80 @@ impl Secondary {
 
     pub(crate) fn is_held(&self) -> bool { matches!(self, Self::Held { .. }) }
 }
+
+/// Pointer position, button capture, hover/tooltip tracking, touch, autoscroll, file drops and OS
+/// drag-out sessions owned by [`crate::runtime::RuntimeCore`]. Ordered hot-first under
+/// `#[repr(C)]` so pointer position, press capture and hover state sit together at offset 0.
+#[repr(C)]
+pub(in crate::runtime) struct PointerState {
+    pub(in crate::runtime) pos: Option<(f32, f32)>,
+    /// A press or blur stopped the waits to report an enter; the pointer's next move restarts them.
+    pub(in crate::runtime) hover_paused: bool,
+    /// The host starts OS drags, so `drag_out` elements start one (headless tools act as one).
+    pub(in crate::runtime) os_drag: bool,
+    pub(in crate::runtime) hovered: Option<String>,
+    /// Elements with `on_hover_change` that the pointer is inside.
+    pub(in crate::runtime) hover_within: Vec<String>,
+    /// Hover waiting out layout motion under a still pointer.
+    pub(in crate::runtime) hover_hold: crate::runtime::hover::HoverHold,
+    /// The press the pointer holds, or the click a next press may pair with
+    /// (`runtime/input/capture.rs`).
+    pub(in crate::runtime) press: Press,
+    /// The secondary button's press, held beside it.
+    pub(in crate::runtime) secondary: Secondary,
+    /// The middle or secondary button's pressed look (`capture::Tint`).
+    pub(in crate::runtime) tint: Tint,
+    /// Elements with `hover_delays`: which heard the enter, and which wait out a delay.
+    pub(in crate::runtime) hover_delays: crate::runtime::hover_delay::HoverDelays,
+    /// `on_hover_change` handlers of elements that left the tree, owed their queued leave.
+    pub(in crate::runtime) hover_gone: Vec<(String, crate::el::WindowFocusFn)>,
+    /// The presses counted into `Drag::clicks`.
+    pub(in crate::runtime) press_clicks: crate::runtime::press_run::PressRun,
+    /// The held press's drag repeat (`Tx::drag_repeat_after`).
+    pub(in crate::runtime) press_repeat: crate::runtime::press_repeat::PressRepeat,
+    pub(in crate::runtime) drag_data: f32,
+    /// The middle button's autoscroll (`runtime/input/autoscroll.rs`).
+    pub(in crate::runtime) autoscroll: crate::runtime::autoscroll::Autoscroll,
+    /// The finger that is down and the viewport a touch holds (`runtime/input/touch.rs`).
+    pub(in crate::runtime) touch: crate::runtime::touch_input::Touch,
+    /// `El::help` tooltips.
+    pub(in crate::runtime) help: crate::runtime::help::HelpState,
+    /// Files dragged over the window from another app (`drop_dispatch`).
+    pub(in crate::runtime) file_drag: crate::runtime::drop_dispatch::FileDrag,
+    pub(in crate::runtime) drag_out_request: Option<crate::drag_out::DragOutStart>,
+    /// How OS drags ended, filled by the host's session callbacks between frames.
+    pub(in crate::runtime) drag_ends: crate::drag_out::DragEnds,
+    /// Drag-outs whose `on_drag_start` ran and whose `on_drag_end` hasn't yet.
+    pub(in crate::runtime) drags_open: usize,
+}
+
+impl PointerState {
+    // Single-caller constructor for `RuntimeCore::new`; inlined so it stays in its caller's
+    // codegen unit instead of shifting partitioning and dropping inlining in the paint walk.
+    #[inline]
+    pub(in crate::runtime) fn new() -> Self {
+        Self {
+            pos: None,
+            press: Default::default(),
+            secondary: Default::default(),
+            tint: Default::default(),
+            press_clicks: Default::default(),
+            press_repeat: Default::default(),
+            drag_data: 0.0,
+            autoscroll: Default::default(),
+            touch: Default::default(),
+            hovered: None,
+            hover_within: Vec::new(),
+            hover_gone: Vec::new(),
+            hover_delays: Default::default(),
+            hover_paused: false,
+            hover_hold: Default::default(),
+            help: Default::default(),
+            file_drag: Default::default(),
+            os_drag: true,
+            drag_out_request: None,
+            drag_ends: Default::default(),
+            drags_open: 0,
+        }
+    }
+}

@@ -63,8 +63,8 @@ fn at_zoom_one_point_six_the_overlay_draws_at_the_zoom_beside_the_drawn_anchor()
     assert_eq!(rect(&rt, "pop"), [160.0, 200.0, 192.0, 96.0]);
     assert_eq!(rect(&rt, "btn"), [176.0, 216.0, 160.0, 48.0]);
     // Its text rasterizes at the zoom, as the page's does.
-    let label = rt.nodes.iter().position(|n| n.key.as_deref() == Some("label")).unwrap();
-    assert!(rt.inh_scratch[label].scale == 1.6 && rt.inh_scratch[label].scale_motion == ScaleMotion::Still);
+    let label = rt.tree.nodes.iter().position(|n| n.key.as_deref() == Some("label")).unwrap();
+    assert!(rt.paint.inh_scratch[label].scale == 1.6 && rt.paint.inh_scratch[label].scale_motion == ScaleMotion::Still);
 }
 
 #[test]

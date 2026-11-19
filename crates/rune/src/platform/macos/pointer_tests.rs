@@ -13,7 +13,7 @@ fn overlay_handlerless_hit_releases_native_ownership_in_every_input_mode() {
     }
     for mode in [OverlayInput::Regions, OverlayInput::None] {
         let mut rt = crate::Runtime::new((), view, (100.0, 100.0), crate::Env::default());
-        rt.native_overlay = true;
+        rt.host.native_overlay = true;
         rt.frame(0.0);
         let pointer = PointerState { input: Cell::new(OverlayInput::Regions), ..Default::default() };
         pointer.regions.borrow_mut().extend_from_slice(rt.hit_regions());

@@ -158,10 +158,8 @@ pub struct FxRenderer {
     backdrop_encoding: [wgpu::Buffer; 4],
     bg0: Option<wgpu::BindGroup>,
     globals: wgpu::Buffer,
-    insts: wgpu::Buffer,
-    inst_cap: usize,
-    xforms: wgpu::Buffer,
-    xform_cap: usize,
+    insts: rune_staging::GrowBuffer,
+    xforms: rune_staging::GrowBuffer,
     sampler: wgpu::Sampler,
     dummy: wgpu::TextureView,
     binds: BindSet<Fx1Key>,
@@ -183,10 +181,25 @@ pub struct FxRenderer {
     opts: FxOptions,
     sims: Option<crate::sim::Sims>,
     /// Upload staging, made by the first `prepare`, and the globals it last wrote.
-    staging: Option<(rune_staging::Staging, [f32; 4])>,
+    staging: Option<(rune_staging::Staging, Globals)>,
 }
 
 const INST_SIZE: usize = std::mem::size_of::<InstRaw>();
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub(crate) struct Globals {
+    pub viewport: [f32; 2],
+    pub dither: f32,
+    pub srgb: f32,
+}
+
+const _: () = {
+    assert!(std::mem::size_of::<Globals>() == 16);
+    assert!(std::mem::offset_of!(Globals, viewport) == 0);
+    assert!(std::mem::offset_of!(Globals, dither) == 8);
+    assert!(std::mem::offset_of!(Globals, srgb) == 12);
+};
 
 impl FxRenderer {
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat, opts: FxOptions) -> FxRenderer {
@@ -244,7 +257,7 @@ impl FxRenderer {
         let pipes = Pipes::new(device, layout, format);
         let globals = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("fx globals"),
-            size: 16,
+            size: std::mem::size_of::<Globals>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -306,8 +319,7 @@ impl FxRenderer {
             mapped_at_creation: false,
         });
 
-        let inst_cap = 64;
-        let xform_cap = 4096;
+        let storage_usage = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST;
         FxRenderer {
             pipes,
             format,
@@ -317,10 +329,8 @@ impl FxRenderer {
             backdrop_encoding,
             bg0: None,
             globals,
-            insts: Self::buffer(device, "fx insts", inst_cap * INST_SIZE),
-            inst_cap,
-            xforms: Self::buffer(device, "fx xforms", xform_cap * 16),
-            xform_cap,
+            insts: rune_staging::GrowBuffer::new(device, "fx insts", storage_usage, INST_SIZE, 64, 256),
+            xforms: rune_staging::GrowBuffer::new(device, "fx xforms", storage_usage, 16, 4096, 256),
             sampler,
             dummy,
             binds: BindSet::new(),
@@ -376,15 +386,6 @@ impl FxRenderer {
     fn set_format(&mut self, format: wgpu::TextureFormat) {
         self.pipes.add(format);
         self.format = format;
-    }
-
-    fn buffer(device: &wgpu::Device, label: &str, size: usize) -> wgpu::Buffer {
-        device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some(label),
-            size: size.max(256) as u64,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        })
     }
 
     /// Simulate fire and smoke (styles `Top` and `Heat`) as small fluid grids instead of noise.
@@ -503,7 +504,7 @@ impl FxRenderer {
         // Tell the lens shader the pyramid is ready (xf.x), and how much of it to use (xf.y).
         let xf = [1.0f32, (p.blur_px / 3.0).min(1.0), 0.0, 0.0];
         let off = p.instance as usize * INST_SIZE + std::mem::offset_of!(InstRaw, xf);
-        staging.write_buffer(&self.insts, off as u64, bytemuck::cast_slice(&xf));
+        staging.write_buffer(self.insts.buffer(), off as u64, bytemuck::cast_slice(&xf));
         staging.flush(encoder);
         let scissor = |m: usize| {
             let k = (2u32 << m) as f32;

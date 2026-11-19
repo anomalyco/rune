@@ -379,3 +379,68 @@ fn link_help_gives_each_link_its_own_tooltip() {
         (Some("notes".into()), None),
     ]);
 }
+
+/// A wheel over a wide table's scroll bar scrolls the pane around that table, though every wide
+/// table keys its viewport `scroll` (`table::Renderer::wide_frame`): the wheel names the viewport
+/// in the pane that holds the bar, not the first element keyed alike in the window, and a
+/// sideways table's own bar hands a vertical wheel to the pane as it did before the bar existed.
+#[test]
+fn a_wheel_over_a_table_s_scroll_bar_scrolls_its_own_pane() {
+    use std::cell::Cell;
+    use rune::{Cx, Env, Runtime, ScrollPos, ScrollSpec};
+    thread_local! {
+        static LEFT: Cell<f32> = const { Cell::new(0.0) };
+        static RIGHT: Cell<f32> = const { Cell::new(0.0) };
+    }
+    const DOC: &str = "| one | two | three |
+| --- | --- | --- |
+| alpha beta gamma delta | epsilon zeta eta theta | iota kappa lambda mu |
+| aaaa bbbb cccc dddd | eeee ffff gggg hhhh | iiii jjjj kkkk llll |
+
+Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor.
+
+Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi.
+
+Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore.
+
+Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia.
+
+Sed ut perspiciatis unde omnis iste natus error sit voluptatem accusantium.
+
+Nemo enim ipsam voluptatem quia voluptas sit aspernatur aut odit aut fugit.
+
+Neque porro quisquam est, qui dolorem ipsum quia dolor sit amet, consectetur.
+
+Ut enim ad minima veniam, quis nostrum exercitationem ullam corporis suscipit.
+
+Quis autem vel eum iure reprehenderit qui in ea voluptate velit esse quam.";
+
+    fn panes(_: &(), _: &mut Cx<()>) -> El {
+        let style = MarkdownStyle::neutral(true).text_width(120.0).table_scroll_bar(Color::BLACK, Color::BLACK);
+        let pane = |key: &str, at: fn(ScrollPos)| col().key(key.to_owned()).w(200.0).h(400.0)
+            .child(col().key("list").w_full().h_full().scroll(ScrollSpec { stick_bottom: false })
+                .on_scroll_offset(at)
+                .child(Markdown::new(DOC).scroll_wide(true).render(&style)));
+        row().key("root").w_full().h_full()
+            .child(pane("left", |p| LEFT.with(|c| c.set(p.offset[1]))))
+            .child(pane("right", |p| RIGHT.with(|c| c.set(p.offset[1]))))
+    }
+    let mut rt = Runtime::new((), panes, (400.0, 400.0), Env::new(true, 1.0));
+    let (left, right) = (|| LEFT.with(Cell::get), || RIGHT.with(Cell::get));
+    rt.frame(0.0);
+    // The right pane's table bar: the strip under its rows, in the pane that holds it.
+    let bars = |rt: &Runtime<()>| -> Vec<([f32; 4], f32)> {
+        rt.elements().into_iter().filter(|e| e.key.as_deref() == Some("scroll-bar")).map(|e| (e.rect, e.opacity)).collect()
+    };
+    let bar = bars(&rt).iter().filter(|(r, _)| r[0] > 200.0).max_by(|a, b| a.0[0].total_cmp(&b.0[0]))
+        .map(|(r, _)| *r).unwrap_or_else(|| panic!("both tables scroll sideways: {:?}", bars(&rt)));
+    // An overlay bar shows while the pointer is over its table, which is when a wheel there
+    // reaches its track at all.
+    rt.pointer_move(bar[0] + bar[2] / 2.0, bar[1] + bar[3] / 2.0);
+    for _ in 0..30 { rt.frame(1.0 / 60.0); }
+    assert!(bars(&rt).iter().all(|(_, o)| *o > 0.9), "the bars are up under the pointer: {:?}", bars(&rt));
+    rt.wheel(bar[0] + bar[2] / 2.0, bar[1] + bar[3] / 2.0, -30.0);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(right(), 30.0, "the wheel over the right pane's table bar scrolled its own pane");
+    assert_eq!(left(), 0.0, "the left pane, keyed alike, stayed where it was");
+}

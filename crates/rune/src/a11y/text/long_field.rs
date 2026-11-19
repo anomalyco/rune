@@ -98,7 +98,7 @@ impl RuntimeCore {
     /// elided (`truncate` / `max_lines`), or laid-out lines whose end byte does not cover the
     /// drawn text.
     pub(in crate::runtime) fn a11y_uses_long_field(&self, i: usize) -> bool {
-        let n = &self.nodes[i];
+        let n = &self.tree.nodes[i];
         let (Some(spec), Some(tl), Some(input)) = (n.text.as_deref(), n.text_layout.as_ref(), n.input.as_deref()) else {
             return false;
         };
@@ -116,7 +116,7 @@ impl RuntimeCore {
     }
 
     fn a11y_long_content_key(&self, i: usize) -> u64 {
-        let n = &self.nodes[i];
+        let n = &self.tree.nodes[i];
         n.text.as_deref().and_then(|t| t.shape.map(|(_, k)| k))
             .or_else(|| n.text_layout.as_ref().and_then(crate::text::TextLayout::content_key))
             .or_else(|| n.text_layout.as_ref().map(|tl| tl.address() as u64))
@@ -125,16 +125,17 @@ impl RuntimeCore {
 
     /// Lightweight O(1) fingerprint for long field `i`'s `lines_box_id` container (zero text hashing).
     pub(in crate::runtime) fn a11y_lines_box_print(&self, i: usize, w: &a11y_tree::Walk) -> u64 {
-        let n = &self.nodes[i];
+        let n = &self.tree.nodes[i];
         let mut h = rustc_hash::FxHasher::default();
         n.text_layout.as_ref().map(crate::text::TextLayout::address).hash(&mut h);
         self.a11y_long_content_key(i).hash(&mut h);
         n.text.as_deref().map_or(0, |t| t.content.len()).hash(&mut h);
-        self.drawn[i].map(f32::to_bits).hash(&mut h);
+        self.paint.drawn[i].map(f32::to_bits).hash(&mut h);
         w.shift.map(f32::to_bits).hash(&mut h);
         w.clip_y.map(f32::to_bits).hash(&mut h);
         self.env.scale.to_bits().hash(&mut h);
-        self.input_scroll.get(&n.path).map(|v| v.to_bits()).hash(&mut h);
+        self.paint.drawn_scale.get(i).map(|v| v.to_bits()).hash(&mut h);
+        self.edit.input_scroll.get(&n.path).map(|v| v.to_bits()).hash(&mut h);
         if let Some(input) = n.input.as_deref() {
             let e = &input.edit;
             let upstream = e.focused && e.anchor == e.focus && e.affinity == parley::Affinity::Upstream;
@@ -145,7 +146,7 @@ impl RuntimeCore {
 
     /// Builds `(lines_box_id, box_node)` followed by its drawn `(drawn_line_id, line_node)`s.
     pub(in crate::runtime) fn a11y_build_lines_box(&self, i: usize, w: &a11y_tree::Walk) -> Vec<(AkId, AkNode)> {
-        let n = &self.nodes[i];
+        let n = &self.tree.nodes[i];
         let box_id = lines_box_id(n.id);
         let mut box_node = AkNode::new(Role::GenericContainer);
         box_node.set_class_name(LINES_BOX_CLASS);
@@ -227,7 +228,7 @@ impl RuntimeCore {
     /// focused caret visual line when outside `clip_y`, kept intentionally so Windows Magnifier
     /// can locate an off-screen caret), in points in its content space.
     fn a11y_drawn_lines(&self, i: usize, clip_y: [f32; 2]) -> Vec<Line> {
-        let n = &self.nodes[i];
+        let n = &self.tree.nodes[i];
         let (Some(spec), Some(tl), Some(input)) = (n.text.as_deref(), n.text_layout.as_ref(), n.input.as_deref()) else {
             return Vec::new();
         };
@@ -236,24 +237,17 @@ impl RuntimeCore {
         // copy of a multi-megabyte buffer is ever made here.
         let content = spec.content.as_str();
         let layout = tl.view();
-        let s = self.env.scale;
-        let r = self.drawn[i];
-        let (x0, x1) = (r[0] + n.inset[0], r[0] + r[2] - n.inset[2]);
-        let mut x = text_x(spec, x0, x1, layout.full_width() / s, layout.flow());
-        if input.single_line {
-            x -= self.input_scroll.get(&n.path).copied().unwrap_or(0.0);
-        }
-        let origin = [x, r[1] + n.inset[1]];
-        let layout_h = layout.spec_height(spec.style, s, spec.exact_lines);
-        let raw_top = (clip_y[0] - origin[1]) * s;
-        let raw_bot = (clip_y[1] - origin[1]) * s;
+        let (origin, px) = self.a11y_text_origin(i, spec, layout);
+        let layout_h = layout.spec_height(spec.style, self.env.scale, spec.exact_lines);
+        let raw_top = (clip_y[0] - origin[1]) * px;
+        let raw_bot = (clip_y[1] - origin[1]) * px;
         let mut out = Vec::new();
         if clip_y[1] > clip_y[0] && raw_bot >= 0.0 && raw_top <= layout_h {
             let top_px = raw_top.max(0.0);
             let bot_px = raw_bot.max(top_px);
             for p in layout.pieces_in(top_px, bot_px).filter(|p| p.shaped) {
                 if out.len() >= MAX_DRAWN_LINES { break; }
-                push_piece_lines_in(p, content, s, origin, Some((top_px, bot_px)), MAX_DRAWN_LINES, &mut out);
+                push_piece_lines_in(p, content, px, origin, Some((top_px, bot_px)), MAX_DRAWN_LINES, &mut out);
             }
         }
         if input.edit.focused && out.len() < MAX_DRAWN_LINES {
@@ -276,7 +270,7 @@ impl RuntimeCore {
                     let total = cp.layout.len();
                     if (cp.is_blank() || total == 0) && !cp.is_whole() {
                         let mut single = Vec::new();
-                        push_piece_lines_in(cp, content, s, origin, None, 1, &mut single);
+                        push_piece_lines_in(cp, content, px, origin, None, 1, &mut single);
                         if let Some(cl) = single.pop() {
                             let pos = out.partition_point(|l| l.range.start < cl.range.start);
                             out.insert(pos, cl);
@@ -294,7 +288,7 @@ impl RuntimeCore {
                         }
                         let li = lo;
                         if let Some(ln) = cp.layout.get(li)
-                            && let Some(mut cl) = build_visual_line(&cp, ln, content, s, origin)
+                            && let Some(mut cl) = build_visual_line(&cp, ln, content, px, origin)
                         {
                             // A whole layout's piece ends at `usize::MAX`, past any break.
                             let br = if cp.is_whole() {

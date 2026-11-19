@@ -7,6 +7,8 @@ use std::ptr::NonNull;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
+#[cfg(debug_assertions)]
+use objc2_foundation::NSString;
 use objc2_metal::{
     MTLClearColor, MTLCommandBuffer, MTLCommandEncoder, MTLCounterDontSample, MTLIndexType, MTLLoadAction, MTLRenderCommandEncoder, MTLRenderPassDescriptor,
     MTLScissorRect, MTLStoreAction, MTLViewport,
@@ -96,6 +98,11 @@ impl MetalPass {
             let cb = rec.pass_buffer();
             autoreleasepool(|_| cb.renderCommandEncoderWithDescriptor(&d)).expect("a Metal render encoder")
         };
+        #[cfg(debug_assertions)]
+        {
+            let label = desc.label.unwrap_or("rune metal render pass");
+            raw.setLabel(Some(&NSString::from_str(label)));
+        }
         MetalPass {
             rec, raw, keep, pipeline: None, groups: Default::default(), dirty: 0, sizes_dirty: false,
             immediates: Vec::new(), immediates_dirty: false, index: None, vertex: Vec::new(), swaps: SWAPS.load(Ordering::Relaxed),

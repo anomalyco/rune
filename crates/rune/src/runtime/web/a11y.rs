@@ -229,8 +229,8 @@ impl RuntimeCore {
         // A page hands horizontal scrolling to the DOM, whose container scrolls its own children:
         // its offset changes nothing in the mirror, and hashing it would rewrite the whole page's
         // items on every frame of a horizontal flick.
-        let mut entries: Vec<_> = self.scrolls.iter()
-            .map(|(id, s)| (id.0, s.offset.to_bits(), if self.page.is_some() { 0 } else { s.x.offset.to_bits() }))
+        let mut entries: Vec<_> = self.scroll.scrolls.iter()
+            .map(|(id, s)| (id.0, s.offset.to_bits(), if self.host.page.is_some() { 0 } else { s.x.offset.to_bits() }))
             .collect();
         entries.sort_unstable_by_key(|e| e.0);
         entries.hash(&mut h);
@@ -239,8 +239,8 @@ impl RuntimeCore {
 
     pub(crate) fn subtree_end(&self, root: usize) -> usize {
         let mut j = root + 1;
-        while j < self.nodes.len() {
-            if std::iter::successors(self.nodes[j].parent, |&p| self.nodes[p].parent).any(|p| p == root) {
+        while j < self.tree.nodes.len() {
+            if std::iter::successors(self.tree.nodes[j].parent, |&p| self.tree.nodes[p].parent).any(|p| p == root) {
                 j += 1;
             } else {
                 break;
@@ -249,14 +249,28 @@ impl RuntimeCore {
         j
     }
 
-    /// Every node's [`Self::subtree_end`], in one reverse pass: a node's children always come
-    /// after it, so each subtree's end is known before the parent that extends to it. Walking the
-    /// parent chain per node instead costs a page's depth per node on every mirror build.
+    /// Every live node's contiguous subtree end, in one pass. Exiting nodes sit after the live
+    /// tree with `parent` pointing back into it, so they must not stretch a live ancestor's span
+    /// past its later live siblings.
     fn subtree_ends(&self) -> Vec<usize> {
-        let mut ends: Vec<usize> = (1..=self.nodes.len()).collect();
-        for i in (0..self.nodes.len()).rev() {
-            if let Some(p) = self.nodes[i].parent { ends[p] = ends[p].max(ends[i]); }
+        let mut ends: Vec<usize> = (1..=self.tree.nodes.len()).collect();
+        let mut open: Vec<usize> = Vec::new();
+        for (i, n) in self.tree.nodes.iter().enumerate() {
+            if self.is_exiting(n.id) || !self.scene.contains(n.id) {
+                for done in open.drain(..) { ends[done] = i; }
+                continue;
+            }
+            while open.last().is_some_and(|&a| Some(a) != n.parent) {
+                let done = open.pop().unwrap();
+                ends[done] = i;
+            }
+            // A descendant of an exiting or unmounted node has no live parent on `open`; leave it
+            // unopened so it cannot pull later nodes into a span.
+            if n.parent.is_none() || open.last() == n.parent.as_ref() {
+                open.push(i);
+            }
         }
+        for done in open { ends[done] = self.tree.nodes.len(); }
         ends
     }
 
@@ -265,9 +279,9 @@ impl RuntimeCore {
     /// takes the pointer from the canvas, so it would swallow that control's press) or inside
     /// `El::unselectable`. Empty outside a page. A parent always comes before its children.
     pub(crate) fn page_text_selects(&self) -> Vec<bool> {
-        if self.page.is_none() { return Vec::new(); }
-        let mut out = vec![false; self.nodes.len()];
-        for (i, n) in self.nodes.iter().enumerate() {
+        if self.host.page.is_none() { return Vec::new(); }
+        let mut out = vec![false; self.tree.nodes.len()];
+        for (i, n) in self.tree.nodes.iter().enumerate() {
             let inherited = n.parent.is_none_or(|p| out[p]);
             out[i] = inherited && !n.a11y.unselectable && !takes_pointer(n);
         }
@@ -277,12 +291,12 @@ impl RuntimeCore {
     pub(crate) fn descendant_label(&self, root: usize, end: usize) -> String {
         let mut parts = Vec::new();
         for j in root..end {
-            if !self.allowed(j) || self.subtree_exiting(j) || self.nodes[j].vis.opacity <= 0.01 { continue; }
-            if let Some(lbl) = self.nodes[j].label.as_deref().filter(|s| !s.trim().is_empty()) {
+            if !self.allowed(j) || self.subtree_exiting(j) || self.tree.nodes[j].vis.opacity <= 0.01 { continue; }
+            if let Some(lbl) = self.tree.nodes[j].label.as_deref().filter(|s| !s.trim().is_empty()) {
                 parts.push(lbl.trim().to_owned());
                 continue;
             }
-            if let Some(spec) = self.nodes[j].text.as_deref().filter(|t| !t.redacted && self.nodes[j].input.is_none()) {
+            if let Some(spec) = self.tree.nodes[j].text.as_deref().filter(|t| !t.redacted && self.tree.nodes[j].input.is_none()) {
                 let s = clean_slice(spec, 0, spec.content.len());
                 if !s.trim().is_empty() { parts.push(s.trim().to_owned()); }
             }
@@ -320,11 +334,11 @@ impl RuntimeCore {
         // mirrors where it sits inside them rather than where the scroll puts it.
         let mut scrollers: Vec<(usize, f64)> = Vec::new();
         let mut i = 0;
-        while i < self.nodes.len() {
+        while i < self.tree.nodes.len() {
             while open.last().is_some_and(|&(end, _)| i >= end) { open.pop(); }
             while scrollers.last().is_some_and(|&(end, _)| i >= end) { scrollers.pop(); }
             let parent = open.last().map(|&(_, item)| item);
-            let n = &self.nodes[i];
+            let n = &self.tree.nodes[i];
             let end = ends[i];
             // An open modal's ancestors (the root among them) are outside its scope but hold it:
             // go into them, saying nothing of them, so the modal is mirrored and the rest isn't.
@@ -347,15 +361,15 @@ impl RuntimeCore {
             }
             // A page hands every horizontal viewport to the DOM: iOS scrolls it natively, at the
             // compositor's rate, with axis locking, momentum and text selection.
-            if self.page.is_some() && n.scroll_axes == crate::el::ScrollAxes::X {
+            if self.host.page.is_some() && n.scroll_axes == crate::el::ScrollAxes::X {
                 let rect = self.mirror_rect(i, 0.0);
-                let offset = self.scrolls.get(&n.id).map_or(0.0, |st| st.x.offset);
+                let shift = self.scroll.scrolls.get(&n.id).map_or(0.0, |st| st.x.shift());
                 let mut item = A11yItem::new("scroll_x", &n.path, rect);
                 item.tag = Some("div");
                 item.parent = parent;
                 out.push(item);
                 open.push((end, out.len() - 1));
-                scrollers.push((end, offset));
+                scrollers.push((end, shift));
                 last_flow_parent = None;
                 i += 1;
                 continue;
@@ -407,7 +421,7 @@ impl RuntimeCore {
             let button_like = (n.role == "button" || n.handlers.on_press.is_some()) && n.window_drag != crate::el::WindowDrag::Drag;
             // Only collapse a pressable container into one button when it doesn't wrap an entire
             // multi-block section with independent buttons inside.
-            let nested_press = (i + 1..end).any(|j| self.nodes[j].handlers.on_press.is_some() || self.nodes[j].role == "button");
+            let nested_press = (i + 1..end).any(|j| self.tree.nodes[j].handlers.on_press.is_some() || self.tree.nodes[j].role == "button");
             if button_like && !nested_press && rect[2] > 0.0 && rect[3] > 0.0 {
                 let label = self.mirror_name(i).unwrap_or_else(|| self.descendant_label(i, end));
                 if !label.is_empty() {
@@ -437,11 +451,11 @@ impl RuntimeCore {
                     // wrapper rows) inside one flex-wrap line row: merge consecutive inline text runs
                     // sharing that flow container so screen readers and Find-in-page see whole sentences.
                     let flow_group = n.parent.and_then(|p| {
-                        if self.nodes[p].key.as_deref().is_none() && self.nodes[p].parent.is_some()
-                            && self.nodes[i].key.as_deref().is_some_and(|k| k.starts_with("flow-"))
+                        if self.tree.nodes[p].key.as_deref().is_none() && self.tree.nodes[p].parent.is_some()
+                            && self.tree.nodes[i].key.as_deref().is_some_and(|k| k.starts_with("flow-"))
                         {
-                            self.nodes[p].parent
-                        } else if self.nodes[i].key.as_deref().is_some_and(|k| k.starts_with("flow-")) {
+                            self.tree.nodes[p].parent
+                        } else if self.tree.nodes[i].key.as_deref().is_some_and(|k| k.starts_with("flow-")) {
                             Some(p)
                         } else {
                             None
@@ -488,7 +502,7 @@ impl RuntimeCore {
                         italic: style.italic,
                         align: align_name(spec.align),
                     });
-                    if self.page.is_some() {
+                    if self.host.page.is_some() {
                         item.selectable = selectable;
                     }
                     push(&mut out, item);
@@ -520,7 +534,7 @@ impl RuntimeCore {
     /// Node `i`'s name in the mirror, as the native tree names it: its label, else the words of
     /// the element `El::labelled_by` names.
     fn mirror_name(&self, i: usize) -> Option<String> {
-        let n = &self.nodes[i];
+        let n = &self.tree.nodes[i];
         n.label.as_deref().filter(|s| !s.trim().is_empty()).map(str::to_owned).or_else(|| {
             let key = n.a11y.more.as_deref()?.labelled_by.as_deref()?;
             Some(self.a11y_words(self.a11y_keyed(i, key)?)).filter(|w| !w.trim().is_empty())
@@ -530,7 +544,7 @@ impl RuntimeCore {
     /// Node `i`'s description in the mirror: `El::description`, else the words of the element
     /// `El::described_by` names.
     fn mirror_description(&self, i: usize) -> String {
-        let Some(more) = self.nodes[i].a11y.more.as_deref() else { return String::new() };
+        let Some(more) = self.tree.nodes[i].a11y.more.as_deref() else { return String::new() };
         more.description.as_deref().map(str::to_owned)
             .or_else(|| more.described_by.as_deref().and_then(|k| self.a11y_keyed(i, k)).map(|j| self.a11y_words(j)))
             .filter(|w| !w.trim().is_empty())
@@ -540,10 +554,10 @@ impl RuntimeCore {
     /// The page's horizontal scroll viewports: their paths and how far each is scrolled right.
     /// The browser's mirror holds the containers, so the DOM keeps an offset Rune scrolls too.
     pub(crate) fn page_scroll_x(&self) -> Vec<(String, f32)> {
-        if self.page.is_none() { return Vec::new(); }
-        self.nodes.iter()
+        if self.host.page.is_none() { return Vec::new(); }
+        self.tree.nodes.iter()
             .filter(|n| n.scroll_axes == crate::el::ScrollAxes::X)
-            .filter_map(|n| self.scrolls.get(&n.id).map(|st| (n.path.clone(), st.x.offset as f32)))
+            .filter_map(|n| self.scroll.scrolls.get(&n.id).map(|st| (n.path.clone(), st.x.offset as f32)))
             .collect()
     }
 
@@ -552,21 +566,21 @@ impl RuntimeCore {
     /// viewport is the same.
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     pub(crate) fn web_a11y_scrolled_only(&self, mirror: &A11yMirror) -> bool {
-        mirror.commits == self.commits && !mirror.json.is_empty() && mirror.scroll_digest != self.scroll_digest()
+        mirror.commits == self.commit.commits && !mirror.json.is_empty() && mirror.scroll_digest != self.scroll_digest()
     }
 
     pub(crate) fn web_a11y<'a>(&self, mirror: &'a mut A11yMirror) -> Option<&'a str> {
-        let vp = (self.viewport.0.to_bits(), if self.page.is_some() { 0 } else { self.viewport.1.to_bits() });
+        let vp = (self.viewport.0.to_bits(), if self.host.page.is_some() { 0 } else { self.viewport.1.to_bits() });
         let sd = self.scroll_digest();
         // Motion moves drawn boxes without a commit: follow it while it runs, and once more where it stops.
         let moving = self.animating;
         let follow = moving != mirror.moving || (moving && self.clock - mirror.built_at >= MOVING_EVERY);
-        if mirror.commits == self.commits && mirror.viewport == vp && mirror.scroll_digest == sd && !follow && !mirror.json.is_empty() {
+        if mirror.commits == self.commit.commits && mirror.viewport == vp && mirror.scroll_digest == sd && !follow && !mirror.json.is_empty() {
             return None;
         }
         mirror.moving = moving;
         mirror.built_at = self.clock;
-        mirror.commits = self.commits;
+        mirror.commits = self.commit.commits;
         mirror.viewport = vp;
         mirror.scroll_digest = sd;
         let values: Vec<Value> = self.web_a11y_items().iter().map(A11yItem::to_json).collect();
@@ -584,7 +598,7 @@ impl RuntimeCore {
     /// element's ARIA role, name, description and states; empty when nothing has focus. `None`
     /// when unchanged since the last call.
     pub(crate) fn web_a11y_focus<'a>(&self, mirror: &'a mut A11yMirror) -> Option<&'a str> {
-        let at = (self.commits, self.focus.path().unwrap_or_default().to_owned());
+        let at = (self.commit.commits, self.kbd.focus.path().unwrap_or_default().to_owned());
         if mirror.focus_at == at { return None; }
         mirror.focus_at = at;
         // A field naming a highlighted row (`El::active_descendant`, the palette's): the row is
@@ -603,7 +617,7 @@ impl RuntimeCore {
     }
 
     fn web_focus_item(&self, i: usize) -> Value {
-        let n = &self.nodes[i];
+        let n = &self.tree.nodes[i];
         let role = self.a11y_role(i);
         let mut o = serde_json::Map::new();
         o.insert("o".into(), json!(role.map_or("group", roles::focus_role)));
@@ -628,15 +642,15 @@ impl RuntimeCore {
         match event["kind"].as_str() {
             Some("a11y_press") => {
                 let Some(i) = self.live(path) else { return false };
-                if self.nodes[i].handlers.on_press.is_none() { return false; }
-                self.queue.push(Action::Press(path.to_owned(), crate::PointerButton::Primary, false));
+                if self.tree.nodes[i].handlers.on_press.is_none() { return false; }
+                self.frame.queue.push(Action::Press(path.to_owned(), crate::PointerButton::Primary, false));
                 true
             }
             Some("a11y_link") => {
                 let Some(k) = event["link"].as_u64().and_then(|n| usize::try_from(n).ok()) else { return false };
                 let Some(i) = self.live(path) else { return false };
-                if self.nodes[i].text.as_ref().is_none_or(|t| k >= t.cold.links.len()) { return false; }
-                self.queue.push(Action::Link(path.to_owned(), k, crate::PointerButton::Primary));
+                if self.tree.nodes[i].text.as_ref().is_none_or(|t| k >= t.cold.links.len()) { return false; }
+                self.frame.queue.push(Action::Link(path.to_owned(), k, crate::PointerButton::Primary));
                 true
             }
             _ => false,

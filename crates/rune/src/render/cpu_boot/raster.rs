@@ -18,7 +18,7 @@ use super::backdrop;
 use super::blend::{self, Src, q};
 use super::shade::{self, Clip};
 use super::{HalfRounding, Report, Scene, Target};
-use crate::render::{Instance, KIND_LAYER, KIND_LAYER_END};
+use crate::render::{Instance, Kind};
 
 const TILE_PX: usize = (TILE_W * TILE_H) as usize;
 
@@ -302,18 +302,28 @@ impl Painter<'_, '_> {
     fn draw(&mut self, n: u32, r: [u32; 4]) {
         let i = &self.scene.instances[n as usize];
         self.n = n;
-        if i.params[1] == KIND_LAYER { return self.open(n); }
-        if i.params[1] == KIND_LAYER_END { return self.close(i, r); }
-        let clip = Clip::of(i);
-        match i.params[1] as u32 {
-            2 => self.glyph(i, r, &clip),
-            7 => self.image(i, r, &clip),
-            kind @ (0 | 4) => self.shaded(i, kind, r, &clip, interior(i)),
-            1 => self.shadow(i, r, &clip),
-            11 => self.shaded(i, 11, r, &clip, Some(Solid { edges: [i.rect[0], i.rect[1], i.rect[0] + i.rect[2], i.rect[1] + i.rect[3]], radii: i.radii, inset: i.params[2].max(0.5) })),
-            kind @ (3 | 5 | 6 | 10) => self.shaded(i, kind, r, &clip, None),
-            13 => self.backdrop(i, r, &clip),
-            _ => {}
+        match i.kind() {
+            Some(Kind::Layer) => self.open(n),
+            Some(Kind::LayerEnd) => self.close(i, r),
+            Some(Kind::Glyph) => { let clip = Clip::of(i); self.glyph(i, r, &clip); }
+            Some(Kind::Image) => { let clip = Clip::of(i); self.image(i, r, &clip); }
+            Some(kind @ (Kind::Rect | Kind::Gradient)) => { let clip = Clip::of(i); self.shaded(i, kind, r, &clip, interior(i)); }
+            Some(Kind::Shadow) => { let clip = Clip::of(i); self.shadow(i, r, &clip); }
+            Some(Kind::Radial) => {
+                let clip = Clip::of(i);
+                let solid = Solid {
+                    edges: [i.rect[0], i.rect[1], i.rect[0] + i.rect[2], i.rect[1] + i.rect[3]],
+                    radii: i.radii,
+                    inset: i.params[2].max(0.5),
+                };
+                self.shaded(i, Kind::Radial, r, &clip, Some(solid));
+            }
+            Some(kind @ (Kind::Inset | Kind::Segment | Kind::Triangle | Kind::Dashed)) => {
+                let clip = Clip::of(i);
+                self.shaded(i, kind, r, &clip, None);
+            }
+            Some(Kind::BackdropBlur) => { let clip = Clip::of(i); self.backdrop(i, r, &clip); }
+            Some(Kind::Effect) | None => {}
         }
     }
 
@@ -394,8 +404,8 @@ impl Painter<'_, '_> {
 
     /// A box kind pixel by pixel through `shade::boxes`, with `solid`'s interior in one colour per
     /// row where the clip is whole.
-    fn shaded(&mut self, i: &Instance, kind: u32, r: [u32; 4], clip: &Clip, solid: Option<Solid>) {
-        let gradient_row = kind == 4 && i.params[0] <= 0.0;
+    fn shaded(&mut self, i: &Instance, kind: Kind, r: [u32; 4], clip: &Clip, solid: Option<Solid>) {
+        let gradient_row = kind == Kind::Gradient && i.params[0] <= 0.0;
         let segs = self.segments(r, solid, clip);
         let mut k = 0;
         for y in r[1]..r[3] {
@@ -406,10 +416,10 @@ impl Painter<'_, '_> {
                 let t = ((py - i.rect[1]) / i.rect[3].max(1.0)).clamp(0.0, 1.0);
                 std::array::from_fn(|ch| i.fill[ch] * (1.0 - t) + i.uv[ch] * t)
             } else { i.fill };
-            if kind == 11 && shade::linear_row_outside(i, py, r[0] as f32 + 0.5, r[2] as f32 - 0.5) { continue; }
+            if kind == Kind::Radial && shade::linear_row_outside(i, py, r[0] as f32 + 0.5, r[2] as f32 - 0.5) { continue; }
             for (va, vb) in segs[k].vis.iter() {
                 for x in va..ia.clamp(va, vb) { self.pixel(i, kind, clip, whole, x, y); }
-                if kind == 11 {
+                if kind == Kind::Radial {
                     // A gradient's colour moves along the span; only its coverage is whole there.
                     for x in ia.max(va)..ib.min(vb) {
                         let c = shade::radial(i, [x as f32 + 0.5, py], true);
@@ -472,7 +482,7 @@ impl Painter<'_, '_> {
     }
 
     #[inline]
-    fn pixel(&mut self, i: &Instance, kind: u32, clip: &Clip, whole: (f32, f32), x: u32, y: u32) {
+    fn pixel(&mut self, i: &Instance, kind: Kind, clip: &Clip, whole: (f32, f32), x: u32, y: u32) {
         let p = [x as f32 + 0.5, y as f32 + 0.5];
         let c = shade::boxes(i, kind, p);
         if c == [0.0; 4] { return; }

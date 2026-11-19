@@ -10,6 +10,14 @@ pub(crate) fn with_font(fonts: &'static [&'static [u8]], bytes: Vec<u8>) -> &'st
     Box::leak(all.into_boxed_slice())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn load_font_url(fonts: &mut &'static [&'static [u8]], url: &str) {
+    match crate::image::font_file(url) {
+        Ok(bytes) => *fonts = with_font(*fonts, bytes),
+        Err(e) => eprintln!("rune: font {url}: {e}"),
+    }
+}
+
 impl<S: 'static> App<S> {
     /// Mount onto an existing `<canvas id="…">` in the web document instead of appending a
     /// full-viewport canvas and locking `document.body`. The canvas sits inline in the page at
@@ -54,10 +62,7 @@ impl<S: 'static> App<S> {
         #[cfg(target_arch = "wasm32")]
         self.font_urls.push(url.to_owned());
         #[cfg(not(target_arch = "wasm32"))]
-        match crate::image::font_file(url) {
-            Ok(bytes) => self.spec.fonts = with_font(self.spec.fonts, bytes),
-            Err(e) => eprintln!("rune: font {url}: {e}"),
-        }
+        load_font_url(&mut self.spec.fonts, url);
         self
     }
 

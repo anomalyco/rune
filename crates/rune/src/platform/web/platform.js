@@ -128,7 +128,7 @@ export function viewport(canvas, callback, embedded) {
         callback(JSON.stringify({ kind: 'contrast', colors }));
     };
     const focus = () => callback(JSON.stringify({ kind: 'focus', focused: document.hasFocus() }));
-    const visibility = () => callback(JSON.stringify({ kind: 'visibility', visible: !document.hidden }));
+    const visibility = () => callback(JSON.stringify({ kind: 'visibility', visible: !document.hidden, focused: document.hasFocus() }));
     let dprMedia = null;
     const watchDpr = () => {
         dprMedia?.removeEventListener('change', onDpr);

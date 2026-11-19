@@ -40,29 +40,29 @@ impl RuntimeCore {
     /// already mounted subtrees need not rebuild.
     pub(in crate::runtime) fn virtual_only(&self) -> bool {
         #[cfg(feature = "hot")]
-        if self.hot.is_some() {
+        if self.frame.hot.is_some() {
             return false;
         }
-        if self.checking_live_only() || self.virtuals.is_empty() || self.nodes.is_empty() {
+        if self.checking_live_only() || self.commit.virtuals.is_empty() || self.tree.nodes.is_empty() {
             return false;
         }
-        if !self.nodes.iter().all(|n| {
+        if !self.tree.nodes.iter().all(|n| {
             relayout::reusable(n) && n.text.as_ref().is_none_or(|t| !t.redacted && t.cold.live.is_none())
         }) {
             return false;
         }
-        for (path, v) in &self.virtuals {
+        for (path, v) in &self.commit.virtuals {
             if !v.indexed || !v.selection.pins.source().and_then(|s| s.rebuild()).is_some_and(|s| s.count == v.keys.len()) {
                 return false;
             }
-            let Some(&list_id) = self.path_ids.get(path) else { return false };
-            let Some(&list_idx) = self.node_index.get(&list_id) else { return false };
-            if !self.nodes.get(list_idx).is_some_and(|n| n.id == list_id && n.path == *path && n.growth.is_some()) {
+            let Some(&list_id) = self.tree.path_ids.get(path) else { return false };
+            let Some(&list_idx) = self.tree.node_index.get(&list_id) else { return false };
+            if !self.tree.nodes.get(list_idx).is_some_and(|n| n.id == list_id && n.path == *path && n.growth.is_some()) {
                 return false;
             }
-            let Some(&scroll_id) = self.path_ids.get(&v.scroll_path) else { return false };
-            let Some(&scroll_idx) = self.node_index.get(&scroll_id) else { return false };
-            if !self.nodes.get(scroll_idx).is_some_and(|n| {
+            let Some(&scroll_id) = self.tree.path_ids.get(&v.scroll_path) else { return false };
+            let Some(&scroll_idx) = self.tree.node_index.get(&scroll_id) else { return false };
+            if !self.tree.nodes.get(scroll_idx).is_some_and(|n| {
                 n.id == scroll_id
                     && n.path == v.scroll_path
                     && n.scroll.is_some()
@@ -71,7 +71,7 @@ impl RuntimeCore {
             }) {
                 return false;
             }
-            if self.virtuals.keys().any(|other| {
+            if self.commit.virtuals.keys().any(|other| {
                 other != path && other.strip_prefix(path.as_str()).is_some_and(|r| r.starts_with('/'))
             }) {
                 return false;

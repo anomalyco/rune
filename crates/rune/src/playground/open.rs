@@ -22,14 +22,24 @@ pub fn slug(path: &str) -> String {
     out
 }
 
-impl<S: 'static> Live<S> {
+/// Matches `name` against `scenes` as [`LiveCore::find`] does, logging if none matches.
+pub(super) fn resolve_scene(scenes: &[&'static str], name: &str) -> Option<usize> {
+    let exact = |i: &usize| scenes[*i] == name || split(scenes[*i], "").1 == name;
+    let loose = |i: &usize| scenes[*i].eq_ignore_ascii_case(name) || split(scenes[*i], "").1.eq_ignore_ascii_case(name);
+    let slugged = |i: &usize| slug(scenes[*i]) == name;
+    let at = (0..scenes.len()).find(exact).or_else(|| (0..scenes.len()).find(loose)).or_else(|| (0..scenes.len()).find(slugged));
+    if at.is_none() { eprintln!("rune: the playground has a trigger, side column or stage for {name:?}, which isn't one of AppSpec::scenes"); }
+    at
+}
+
+impl LiveCore {
     /// The listed story called `name`: its path or just its name, matching case only if need
     /// be, or its path's [`slug`]. Where two match, the first in the list.
     pub(super) fn find(&self, name: &str) -> Option<usize> {
         self.find_in(name, &self.order)
     }
 
-    /// [`Live::find`] among `ids`, in order.
+    /// [`LiveCore::find`] among `ids`, in order.
     pub(super) fn find_in(&self, name: &str, ids: &[usize]) -> Option<usize> {
         let exact = |i: &&usize| self.path(**i) == name || self.name(**i) == name;
         let loose = |i: &&usize| self.path(**i).eq_ignore_ascii_case(name) || self.name(**i).eq_ignore_ascii_case(name);
@@ -49,6 +59,14 @@ impl<S: 'static> Live<S> {
         }
     }
 
+    /// Validates `--playground`/`--variant` at launch and queues the initial open request.
+    pub(super) fn queue_launch(&mut self, open: Option<Option<String>>, variant: Option<String>) {
+        if let Some(name) = open {
+            self.open_at(name.as_deref(), variant.as_deref()).unwrap_or_else(|e| crate::tooling::die(&e));
+            self.pending.push(Request::Open(name));
+        }
+    }
+
     /// [`Tx::open_playground_at`]'s story, once checked. An app can't stop over a bad link, so
     /// what's wrong is logged: an unknown story opens the list where it was, and a story's
     /// unknown variant opens the story on the variant it was on.
@@ -59,13 +77,13 @@ impl<S: 'static> Live<S> {
     }
 
     /// Opens the playground, on story `name` if it's there; open already, it moves there.
-    pub(super) fn open_story(&mut self, name: Option<&str>, real: &mut S) {
+    pub(super) fn open_story(&mut self, name: Option<&str>, ops: &mut dyn SceneOps) {
         let at = name.and_then(|n| self.find(n));
-        if !self.is_open() || at.is_some() {
+        if !self.open || at.is_some() {
             // Open already on a scene, `select` keeps its stage before replacing it.
-            if !self.is_open() { self.showing = Showing::Open; }
+            if !self.open { self.open = true; }
             if let Some(i) = at.or(self.folds.start.then_some(self.selected)) { self.reveal(i); }
-            self.select(at.unwrap_or(self.selected), real);
+            self.select(at.unwrap_or(self.selected), ops);
         }
     }
 }

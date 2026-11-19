@@ -29,11 +29,11 @@ impl RuntimeCore {
     /// every waiting paragraph for an input field, or those within a viewport's height of the
     /// painted clip for a read-only `by_line` block (whose off-screen lines stay compact runs).
     pub(super) fn text_fill_due(&self) -> bool {
-        self.text_rows.iter().any(|(&id, &(r0, r1))| {
-            let Some(&i) = self.node_index.get(&id) else { return false };
-            let Some(crate::text::TextLayout::Paragraphs(p)) = &self.nodes[i].text_layout else { return false };
+        self.paint.text_rows.iter().any(|(&id, &(r0, r1))| {
+            let Some(&i) = self.tree.node_index.get(&id) else { return false };
+            let Some(crate::text::TextLayout::Paragraphs(p)) = &self.tree.nodes[i].text_layout else { return false };
             if !p.waiting() { return false; }
-            if self.nodes[i].input.is_some() { return true; }
+            if self.tree.nodes[i].input.is_some() { return true; }
             let reach = (r1 - r0).max(0.0) + 1.0;
             p.paragraphs.iter().any(|q| !q.shaped && q.y + q.height >= r0 - reach && q.y <= r1 + reach)
         })
@@ -55,8 +55,8 @@ impl RuntimeCore {
         gliding: bool,
         shown: [f32; 2],
     ) {
-        if self.nodes[i].input.is_some() { return; }
-        let (Some(spec), Some(crate::text::TextLayout::Paragraphs(p))) = (&self.nodes[i].text, &self.nodes[i].text_layout) else { return };
+        if self.tree.nodes[i].input.is_some() { return; }
+        let (Some(spec), Some(crate::text::TextLayout::Paragraphs(p))) = (&self.tree.nodes[i].text, &self.tree.nodes[i].text_layout) else { return };
         if !p.waiting() { return; }
         let s = self.env.scale;
         let tk = if cover.is_some() { 1.0 } else { sc };
@@ -65,26 +65,26 @@ impl RuntimeCore {
         let still = scale_motion == ScaleMotion::Still;
         let y_top = match cover { Some((_, c)) => r[1] + c[1] * s, None => r[1] }
             + if still && (sc - 1.0).abs() < 1e-5 { exact_off[1] } else { 0.0 }
-            + self.nodes[i].inset[1] * zk * s;
+            + self.tree.nodes[i].inset[1] * zk * s;
         let rest_y = y_top - if gliding && cover.is_none() && still { r[1] - r[1].round() } else { 0.0 };
         let rows = visible_text_rows(spec, rest_y, shown, tk, raster, s);
         let rows = (rows.start, rows.end);
         if !p.paragraphs.iter().any(|q| !q.shaped && q.y + q.height >= rows.0 && q.y <= rows.1) { return; }
         let p = p.clone();
         if let Some((built, moved)) = self.text.fill_paragraphs(&p, std::time::Duration::MAX, rows, 0.0) {
-            self.nodes[i].text_layout = Some(crate::text::TextLayout::Paragraphs(built));
-            if moved { self.dirty = true; }
+            self.tree.nodes[i].text_layout = Some(crate::text::TextLayout::Paragraphs(built));
+            if moved { self.commit.dirty = true; }
         }
     }
 
     fn fill_text_within(&mut self, budget: std::time::Duration, reach: Option<f32>) -> bool {
         let mut more = false;
-        for i in 0..self.nodes.len() {
-            let is_input = self.nodes[i].input.is_some();
-            let Some(crate::text::TextLayout::Paragraphs(p)) = &self.nodes[i].text_layout else { continue };
+        for i in 0..self.tree.nodes.len() {
+            let is_input = self.tree.nodes[i].input.is_some();
+            let Some(crate::text::TextLayout::Paragraphs(p)) = &self.tree.nodes[i].text_layout else { continue };
             if !p.waiting() { continue; }
-            let id = self.nodes[i].id;
-            let rows = match (is_input, self.text_rows.get(&id).copied()) {
+            let id = self.tree.nodes[i].id;
+            let rows = match (is_input, self.paint.text_rows.get(&id).copied()) {
                 (true, r) => r.unwrap_or((0.0, 0.0)),
                 (false, Some(r)) => r,
                 (false, None) => continue,
@@ -100,19 +100,19 @@ impl RuntimeCore {
             } else {
                 more |= built.paragraphs.iter().any(|q| !q.shaped && q.y + q.height >= rows.0 - eff_reach && q.y <= rows.1 + eff_reach);
             }
-            let n = &mut self.nodes[i];
+            let n = &mut self.tree.nodes[i];
             n.text_layout = Some(crate::text::TextLayout::Paragraphs(built));
             n.epoch = paint_keep::next_epoch();
             // A waiting height is exact; should one not be, the field lays out again.
             if moved {
                 #[cfg(debug_assertions)]
-                eprintln!("rune: text fill: a waiting paragraph of {} wasn't the height it waited at", self.nodes[i].path);
-                self.dirty = true;
+                eprintln!("rune: text fill: a waiting paragraph of {} wasn't the height it waited at", self.tree.nodes[i].path);
+                self.commit.dirty = true;
             }
         }
-        let nodes = &self.nodes;
-        let idx = &self.node_index;
-        self.text_rows.retain(|id, _| {
+        let nodes = &self.tree.nodes;
+        let idx = &self.tree.node_index;
+        self.paint.text_rows.retain(|id, _| {
             idx.get(id)
                 .and_then(|&i| nodes[i].text_layout.as_ref())
                 .is_some_and(|l| matches!(l, crate::text::TextLayout::Paragraphs(p) if p.waiting()))

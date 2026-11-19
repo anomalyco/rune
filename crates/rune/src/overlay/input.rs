@@ -8,7 +8,7 @@ pub(super) fn drop_window_requests(rt: &mut RuntimeCore) {
     rt.shell_request = None;
     rt.ignore_minimize("an overlay");
     // Overlays size through `OverlayHandle::resize`, not `Tx::resize_window`.
-    rt.window_frame = None;
+    rt.host.window_frame = None;
 }
 
 impl OverlayCore {
@@ -327,6 +327,7 @@ impl OverlayCore {
                 // No frame will come to run it in time: a hidden, occluded or backing-off
                 // overlay steps without drawing, so its timers fire (and may hide it) on time.
                 self.advance(app);
+                self.turn_frame.step(frame::TurnEvent::WakeStepped);
             }
         }
         // A hidden retained overlay's paced commit of what changed since its last.
@@ -342,6 +343,8 @@ impl OverlayCore {
     /// waits, with the display link stopped so no tick tries sooner.
     pub(super) fn missed(&mut self, app: &mut dyn OverlayApp, missed: crate::window::Missed, paced: bool, stepped: bool) {
         let now = Instant::now();
+        self.quiet.step(frame::QuietEvent::Forget);
+        self.turn_frame.step(frame::TurnEvent::FrameMissed);
         if stepped {
             drop_window_requests(app.rt_mut());
             self.clipboard.flush_core(app.rt_mut());

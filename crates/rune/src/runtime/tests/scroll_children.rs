@@ -115,6 +115,7 @@ fn growth_stack_child_after_a_header_child_grows_and_stays_pinned() {
 
 #[test]
 fn scroll_xy_with_direct_children_scrolls_both_axes_and_warns_on_trailing_growth_sibling() {
+    let _warnings = layout_diagnostics::scope();
     fn view(bad: &bool, _: &mut Cx<bool>) -> El {
         if *bad {
             return col()
@@ -201,7 +202,7 @@ fn header_before_virtual_stack_reveals_unmounted_row_and_keeps_header_at_origin(
     // Revealing an initially unmounted row accounts for the header height and does not shift the header by `before`.
     rt.update(|_, tx| tx.scroll_into_view("r35"));
     rt.frame(1.0 / 60.0);
-    assert!(rt.virtuals["scroll/rows"].before > 0.0, "earlier virtual rows were culled");
+    assert!(rt.commit.virtuals["scroll/rows"].before > 0.0, "earlier virtual rows were culled");
     let r35 = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("r35")).expect("r35 mounted and revealed");
     assert!((r35.rect[1] + r35.rect[3] - 200.0).abs() < 0.05, "r35 bottom {} != 200.0", r35.rect[1] + r35.rect[3]);
     let header = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("header")).unwrap();
@@ -262,4 +263,95 @@ fn scroll_into_view_of_a_virtual_row_taller_than_the_viewport_lands_its_end_from
             r30.rect
         );
     }
+}
+
+#[test]
+fn raised_and_anchored_overlays_occlude_horizontal_wheel_touch_fling_and_autoscroll() {
+    fn view(_: &(), _: &mut Cx<()>) -> El {
+        col().size(300.0, 200.0)
+            .child(
+                col().key("bg").size(300.0, 200.0)
+                    .scroll(ScrollSpec { stick_bottom: false }).scroll_xy()
+                    .child(el().size(1000.0, 1000.0)),
+            )
+            .child(el().key("panel").absolute(0.0, 0.0).size(150.0, 150.0).raise().fill(Color::WHITE))
+            .child(el().key("anchor").absolute(160.0, 0.0).size(20.0, 20.0))
+            .child(el().key("pop").size(80.0, 80.0).fill(Color::WHITE)
+                .anchored("anchor", crate::Side::Bottom, crate::Align::Start, 0.0))
+    }
+    let mut rt = Runtime::new((), view, (300.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let bg = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("bg")).unwrap().id;
+
+    // Clear of overlays, bg is found on both axes.
+    assert_eq!(rt.scroll_at_axis(260.0, 160.0, true), Some(bg));
+    assert_eq!(rt.scroll_at_axis(260.0, 160.0, false), Some(bg));
+
+    // Over the raised panel (50, 50) and anchored popover (180, 50), bg is occluded.
+    for (x, y, label) in [(50.0, 50.0, "raised panel"), (180.0, 50.0, "anchored popover")] {
+        assert_eq!(rt.scroll_at_axis(x, y, true), None, "horizontal scroll_at_axis over {label}");
+        assert_eq!(rt.scroll_at_axis(x, y, false), None, "vertical scroll_at_axis over {label}");
+        rt.wheel_xy(x, y, -60.0, 0.0);
+        rt.fling(x, y, -400.0);
+        rt.frame(1.0 / 60.0);
+        assert_eq!(rt.scroll.scrolls[&bg].x.offset, 0.0, "horizontal wheel over {label} must not scroll bg");
+        assert_eq!(rt.scroll.scrolls[&bg].offset, 0.0, "fling over {label} must not scroll bg");
+    }
+
+    // Touch pan over the raised panel must not scroll bg.
+    rt.touch(1, crate::TouchPhase::Started, 50.0, 50.0, 0.0);
+    rt.touch(1, crate::TouchPhase::Moved, 10.0, 50.0, 0.02);
+    rt.touch(1, crate::TouchPhase::Moved, 10.0, 10.0, 0.04);
+    rt.touch(1, crate::TouchPhase::Ended, 10.0, 10.0, 0.06);
+    rt.frame(1.0 / 60.0);
+    assert_eq!((rt.scroll.scrolls[&bg].x.offset, rt.scroll.scrolls[&bg].offset), (0.0, 0.0), "touch over panel must not scroll bg");
+
+    // Middle-click autoscroll over the raised panel must not latch onto bg.
+    if cfg!(any(target_os = "windows", target_os = "linux")) {
+        rt.button_down(50.0, 50.0, crate::PointerButton::Middle);
+        assert!(rt.core().autoscroll_cursor().is_none(), "autoscroll over raised panel must not start on occluded bg");
+    }
+}
+
+#[test]
+fn keep_on_screen_virtual_row_in_scaled_viewport_holds_its_position() {
+    fn view(inserted: &usize, _: &mut Cx<usize>) -> El {
+        let ins = *inserted;
+        let n = 60 + ins;
+        let stack = col().key("rows").w_full().growth(GrowthSpec::default())
+            .virtual_rows(n, 50.0, move |_: &usize, i| {
+                if i < 2 { format!("r{i}").into() }
+                else if i < 2 + ins { format!("ins-{}", i - 2).into() }
+                else { format!("r{}", i - ins).into() }
+            }, |_: &usize, _| el().w_full().h(50.0));
+        col().size(1200.0, 1200.0).child(
+            col().key("scroll").size(200.0, 200.0).scale(4.0).origin(0.0, 0.0)
+                .scroll(ScrollSpec { stick_bottom: false })
+                .child(stack),
+        )
+    }
+    let mut rt = Runtime::new(0usize, view, (1200.0, 1200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    // r4 is at layout y = 200. Scroll to 50 so r1 is the virtual reading anchor while r4 sits
+    // 150 unscaled points (= 600 scaled points) below the viewport top.
+    rt.update(|_, tx| tx.scroll_to_instant("scroll", 0.0, 50.0));
+    rt.frame(1.0 / 60.0);
+    let rel_y = |rt: &Runtime<usize>| {
+        let s = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("scroll")).unwrap().rect[1];
+        rt.elements().into_iter().find(|e| e.key.as_deref() == Some("r4")).map(|e| e.rect[1] - s)
+    };
+    let before = rel_y(&rt).expect("r4 mounted before commit");
+    assert!((before - 600.0).abs() < 0.5, "r4 at 150 unscaled = 600 scaled: {before}");
+
+    // Insert 40 rows after r1 (keeping r1 as the virtual anchor while pushing r4 to index 44,
+    // outside the mounted window) and ask to keep r4 on screen: `apply_keeps` must restore r4 via
+    // `virtual_row` using unscaled viewport points.
+    rt.update(|ins, tx| {
+        *ins = 40;
+        tx.instant();
+        tx.keep_on_screen("r4");
+    });
+    rt.frame(1.0 / 60.0);
+    let after = rel_y(&rt).expect("r4 must remain mounted in view after keep_on_screen");
+    assert!((after - before).abs() < 0.5, "scaled keep_on_screen jumped: before={before}, after={after}");
 }

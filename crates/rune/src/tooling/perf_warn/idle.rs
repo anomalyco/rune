@@ -121,7 +121,13 @@ impl IdleMeter {
     /// The frame drew `drawn` at `clock` seconds, leaving motion running if `animating`. `name`
     /// names the window, when it has a title.
     #[cfg(debug_assertions)]
+    #[inline]
     pub(crate) fn ends(&mut self, clock: f64, animating: bool, drawn: Drawn, name: impl Fn() -> Option<String>) {
+        self.ends_dyn(clock, animating, drawn, &name);
+    }
+
+    #[cfg(debug_assertions)]
+    fn ends_dyn(&mut self, clock: f64, animating: bool, drawn: Drawn, name: &dyn Fn() -> Option<String>) {
         let m = &mut self.meter;
         let Some(start) = m.frame.take() else { return };
         let polled = std::mem::take(&mut m.polled);

@@ -22,7 +22,7 @@ struct Held {
 }
 
 #[derive(Default)]
-pub(super) struct KeyReleases {
+pub(in crate::runtime) struct KeyReleases {
     eat: Eat,
     held: Option<Held>,
 }
@@ -30,7 +30,7 @@ pub(super) struct KeyReleases {
 impl KeyReleases {
     /// A key other than a modifier went down, while a composition is open or not; `focus` is
     /// the focus it went down in.
-    pub(super) fn down(&mut self, composing: bool, repeat: bool, focus: impl FnOnce() -> Option<String>) {
+    pub(in crate::runtime) fn down(&mut self, composing: bool, repeat: bool, focus: impl FnOnce() -> Option<String>) {
         if composing {
             self.eat = match (self.eat, repeat) {
                 (Eat::Keys(n), false) => Eat::Keys(n.saturating_add(1)),
@@ -46,18 +46,18 @@ impl KeyReleases {
     }
 
     /// The input method took a key: its release comes back up unheard.
-    pub(super) fn ime_took_key(&mut self) {
+    pub(in crate::runtime) fn ime_took_key(&mut self) {
         if self.eat == Eat::None { self.eat = Eat::One; }
     }
 
     /// A key came up while a composition is open, with no release to route after it. The
     /// release of the key that ends the composition is still the input method's.
-    pub(super) fn composing_release(&mut self) {
+    pub(in crate::runtime) fn composing_release(&mut self) {
         if let Eat::Keys(n) = self.eat { self.eat = NonZeroU32::new(n.get() - 1).map_or(Eat::One, Eat::Keys); }
     }
 
     /// A key came up: whether the input method takes its release.
-    pub(super) fn eat(&mut self, composing: bool) -> bool {
+    pub(in crate::runtime) fn eat(&mut self, composing: bool) -> bool {
         if composing {
             self.composing_release();
             return true;
@@ -72,7 +72,7 @@ impl KeyReleases {
 
     /// A release the input method didn't take: the focus its key went down in, if a key is
     /// held. The last release ends the hold.
-    pub(super) fn route(&mut self) -> Option<String> {
+    pub(in crate::runtime) fn route(&mut self) -> Option<String> {
         let held = self.held.as_mut()?;
         let focus = held.focus.clone();
         match NonZeroU32::new(held.keys.get() - 1) {
@@ -83,7 +83,7 @@ impl KeyReleases {
     }
 
     /// The window gets no more keys: nothing is held, and the input method takes nothing.
-    pub(super) fn lost(&mut self) { *self = Self::default(); }
+    pub(in crate::runtime) fn lost(&mut self) { *self = Self::default(); }
 }
 
 #[cfg(test)]

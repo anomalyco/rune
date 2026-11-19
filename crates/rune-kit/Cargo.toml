@@ -46,15 +46,13 @@ name = "layout_text_cost"
 required-features = ["markdown", "frame-profile"]
 
 [dev-dependencies]
-# The examples' headless runs (`--snap`, `--trace`, ...) in release builds.
-rune = { workspace = true, features = ["keys-overlay", "test-strict"] }
+# A GPU submission over Rune's budget ends a test program here too (`test-strict`).
+rune = { workspace = true, default-features = true, features = ["test-strict"] }
 procwatch = { workspace = true }
 # The accessibility tree tests read and write `Runtime::accessibility_json` (tests/a11y).
 serde_json = { workspace = true }
 # Reference rasteriser for the built-in glyphs (tests/integration/glyphs.rs).
 resvg = { workspace = true }
-# The scroll bar's fade test rasterises its frame with the reference renderer (tests/integration/scroll_bar_fade.rs).
-rune-ref = { workspace = true, features = ["gpu"] }
 # The fixture goldens render with the OpenCode theme's tokens and fonts (tests/mermaid/markdown_fixture.rs).
 rune-theme-opencode = { workspace = true }
 

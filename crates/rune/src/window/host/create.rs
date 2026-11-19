@@ -42,7 +42,7 @@ impl Host {
         let launcher = self.launcher();
         let visible = !launcher && (self.started || self.options.visible);
         #[allow(unused_mut)]
-        let mut attrs = self.options.attributes(self.app.rt().window_title.current().unwrap_or(self.geometry.title), size, self.geometry.min_size, visible).with_active(focus);
+        let mut attrs = self.options.attributes(self.app.rt().host.window_title.current().unwrap_or(self.geometry.title), size, self.geometry.min_size, visible).with_active(focus);
         #[cfg(target_os = "macos")]
         if self.macos_window.nonactivating_panel { attrs = attrs.with_visible(false).with_active(false); }
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
@@ -122,7 +122,7 @@ impl Host {
             eprintln!("click-through unavailable for {}: {error}", self.native_handle.key());
         }
         window.set_ime_allowed(false);
-        self.app.rt_mut().ime_reset = true;
+        self.app.rt_mut().edit.ime_reset = true;
         #[cfg(target_os = "macos")]
         if uses_drag_regions(chrome, self.options.borderless, false) {
             mac::own_window_dragging(&window);
@@ -329,7 +329,7 @@ impl Host {
         #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
         let mut drew = false;
         #[cfg(target_os = "macos")]
-        if visible && !self.app.rt().minimize.field() && !self.life.finished() && !event_loop.exiting()
+        if visible && !self.app.rt().host.minimize.field() && !self.life.finished() && !event_loop.exiting()
             && self.win.as_ref().is_some_and(|w| w.native.panel.is_none() && w.window.is_minimized() != Some(true))
         {
             let presents = self.meter.totals().presents;
@@ -387,6 +387,9 @@ impl Host {
         // A pass made on the device that went with it draws nothing: it goes too.
         w.corners = None;
         w.presented = None;
+        // Unregister any swap-chain wait before dropping the surface, even if replacement fails.
+        #[cfg(target_os = "windows")]
+        { w.native.slot.reset(); w.native.damage.reset(); }
         drop(w.surface.take());
         self.gpu = None;
         {
@@ -478,6 +481,8 @@ impl Host {
         }
         // The old surface goes first: a DX12 surface takes the visual's content, and the
         // committed tree keeps showing its last frame until the new one commits.
+        w.native.slot.reset();
+        w.native.damage.reset();
         drop(w.surface.take());
         // SAFETY: the window keeps the visual's `Handover` as long as it keeps this surface.
         let surface = unsafe { gpu.instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::CompositionVisual(visual)) }.map_err(|e| e.to_string())?;
@@ -542,7 +547,7 @@ impl Host {
         self.wind_down();
         self.release();
         self.idle = true;
-        self.app.set_window_error(Some(reason));
+        self.shared.set_window_error(Some(reason));
         false
     }
 }

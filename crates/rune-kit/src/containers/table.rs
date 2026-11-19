@@ -26,13 +26,16 @@
 
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
-use std::rc::Rc;
 
-use rune::{Align, Color, Cursor, Drag, El, GrowthSpec, KeyEvent, Phase, ScrollSpec, TextStyle, Tx, col, el, icon, row, text};
+use rune::{Align, Color, Drag, El, KeyEvent, Phase, TextStyle, Tx};
 
 use crate::Kit;
 use crate::grip::Grip;
 use crate::list_nav::{NavAction, NavPolicy, page_size};
+
+mod view;
+
+pub use view::Table;
 
 /// Which way a column sorts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -406,6 +409,47 @@ impl TableState {
             KeyOutcome::Handled
         }
     }
+
+    fn report_column_width(&mut self, id: &str, width: f32, tx: &mut Tx) {
+        if self.laid_out.get(id).copied() == Some(width) {
+            tx.live_only();
+        } else {
+            self.laid_out.insert(id.to_owned(), width);
+        }
+    }
+
+    fn sort_click(&mut self, id: &str) -> SortDir {
+        let dir = self.next_sort(id);
+        self.set_sort(id, dir);
+        dir
+    }
+
+    fn update_viewport(&mut self, height: f32, row_height: f32, tx: &mut Tx) {
+        if self.viewport == height && self.row_height == row_height {
+            tx.live_only();
+        }
+        self.viewport = height;
+        self.row_height = row_height;
+    }
+
+    fn resize_drag(&mut self, c: &TableColumn, d: &Drag) {
+        let id = &c.id;
+        match d.phase {
+            Phase::Down => {
+                let (restore, laid_out) = (self.column_width(id), self.laid_out.get(id).copied());
+                self.resize.press(ColumnDrag { restore, from: restore.or(laid_out).unwrap_or(c.min) }, Some(d.window_point()));
+            }
+            Phase::Move => if let Some(drag) = self.resize.moved(d.window_point()).copied() {
+                self.set_column_width(id.clone(), c.clamp(drag.from + d.dx));
+            },
+            Phase::Up => match self.resize.release() {
+                Some(ColumnDrag { restore: Some(w), .. }) if d.cancelled() => self.set_column_width(id.clone(), w),
+                Some(_) if d.cancelled() => self.reset_column_width(id),
+                Some(drag) => self.set_column_width(id.clone(), c.clamp(drag.from + d.dx)),
+                None => {}
+            },
+        }
+    }
 }
 
 enum KeyOutcome {
@@ -414,6 +458,11 @@ enum KeyOutcome {
     Moved,
     Open(usize),
 }
+
+/// A drag on a column's edge: the width a cancel puts back (`None`: none of its own), and the
+/// width it started from.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ColumnDrag { restore: Option<f32>, from: f32 }
 
 /// A table's metrics and colours. [`TableStyle::from_kit`] takes them from the theme;
 /// `MarkdownStyle::table_like` draws Markdown tables with the same font, padding and rules.
@@ -458,339 +507,6 @@ impl TableStyle {
 
 /// Names row `i`.
 type IdAt<'a> = dyn Fn(usize) -> Cow<'a, str> + 'a;
-type CellFn<S> = Rc<dyn Fn(&S, usize, &str) -> Cell>;
-type RowIdFn<S> = for<'a> fn(&'a S, usize) -> Cow<'a, str>;
-
-/// A virtualised table over the app's rows in its state `S`.
-pub struct Table<S> {
-    get: fn(&S) -> &TableState,
-    get_mut: fn(&mut S) -> &mut TableState,
-    len: fn(&S) -> usize,
-    row_id: RowIdFn<S>,
-    columns: Vec<TableColumn>,
-    cell: Option<CellFn<S>>,
-    on_sort: Option<Rc<dyn Fn(&mut S, &str, SortDir, &mut Tx)>>,
-    on_select: Option<Rc<dyn Fn(&mut S, &str, &mut Tx)>>,
-    on_open: Option<Rc<dyn Fn(&mut S, &str, &mut Tx)>>,
-    zebra: bool,
-    style: Option<TableStyle>,
-    name: Option<String>,
-}
-
-impl<S: 'static> Table<S> {
-    /// `get` and `get_mut` find the [`TableState`]; `len` counts the rows and `row_id` names
-    /// row `i` (in the app's current order) with an id unique among them.
-    pub fn new(get: fn(&S) -> &TableState, get_mut: fn(&mut S) -> &mut TableState, len: fn(&S) -> usize, row_id: RowIdFn<S>) -> Self {
-        Table { get, get_mut, len, row_id, columns: Vec::new(), cell: None, on_sort: None, on_select: None, on_open: None, zebra: false, style: None, name: None }
-    }
-    pub fn column(mut self, c: TableColumn) -> Self {
-        self.columns.push(c);
-        self
-    }
-    /// What row `i` shows in column `col` (the column's id).
-    pub fn cell(mut self, f: impl Fn(&S, usize, &str) -> Cell + 'static) -> Self {
-        self.cell = Some(Rc::new(f));
-        self
-    }
-    /// A sortable column's header was clicked: the table already shows the new sort; reorder
-    /// the rows to match.
-    pub fn on_sort(mut self, f: impl Fn(&mut S, &str, SortDir, &mut Tx) + 'static) -> Self {
-        self.on_sort = Some(Rc::new(f));
-        self
-    }
-    /// The cursor moved to row `id`, by click or key.
-    pub fn on_select(mut self, f: impl Fn(&mut S, &str, &mut Tx) + 'static) -> Self {
-        self.on_select = Some(Rc::new(f));
-        self
-    }
-    /// A row was double-clicked, or Return pressed on it.
-    pub fn on_open(mut self, f: impl Fn(&mut S, &str, &mut Tx) + 'static) -> Self {
-        self.on_open = Some(Rc::new(f));
-        self
-    }
-    /// Fill every other row.
-    pub fn zebra(mut self, on: bool) -> Self {
-        self.zebra = on;
-        self
-    }
-    pub fn style(mut self, s: TableStyle) -> Self {
-        self.style = Some(s);
-        self
-    }
-    /// The table's accessibility label.
-    pub fn name(mut self, n: impl Into<String>) -> Self {
-        self.name = Some(n.into());
-        self
-    }
-
-    /// The table, filling the height its parent gives it.
-    pub fn build(self, s: &S, k: &Kit) -> El {
-        let Table { get, get_mut, len, row_id, columns, cell, on_sort, on_select, on_open, zebra, style, name } = self;
-        let style = style.unwrap_or_else(|| TableStyle::from_kit(k));
-        let state = get(s);
-        let count = len(s);
-        let columns = Rc::new(columns);
-        let sizes: Rc<Vec<Width>> = Rc::new(columns.iter().map(|c| state.column_width(&c.id).map_or(c.width, |w| Width::Fixed(c.clamp(w)))).collect());
-
-        let header = header_row(k, state, &columns, &sizes, &style, on_sort.clone(), get, get_mut);
-
-        let cols = columns.clone();
-        let sz = sizes.clone();
-        let sel = on_select.clone();
-        let open = on_open.clone();
-        let focus = k.c.border_focus;
-        let build_row = move |s: &S, i: usize| -> El {
-            let st = get(s);
-            let id = row_id(s, i);
-            let selected = st.is_selected(&id);
-            let mut r = row()
-                .key(id.to_string())
-                .role("row")
-                .focus_selected(selected)
-                .w_full()
-                .h(style.row_height)
-                .center_y();
-            r = if selected {
-                r.fill(style.selected)
-            } else if zebra && i % 2 == 1 {
-                r.fill(style.stripe).hover(style.stripe.mix(style.selected, 0.5))
-            } else {
-                r.hover(style.stripe.mix(style.selected, 0.5))
-            };
-            if st.multi && st.cursor.as_deref() == Some(id.as_ref()) {
-                r = r.outline(1.0, -1.0, focus);
-            }
-            for (j, c) in cols.iter().enumerate() {
-                let content = cell.as_ref().map_or_else(|| Cell::text(""), |f| f(s, i, &c.id));
-                r = r.child(cell_el(c, sz[j], content, &style).key(c.id.clone()));
-            }
-            let sel = sel.clone();
-            r = r.on_press_tx(move |s: &mut S, tx: &mut Tx| {
-                let n = len(s);
-                if i >= n {
-                    return;
-                }
-                let mods = tx.mods();
-                // Row ids borrow `s`; work on a copy of the state's selection, then store it.
-                let mut st = std::mem::take(get_mut(s));
-                st.click(i, n, mods, &|j| row_id(s, j));
-                *get_mut(s) = st;
-                if let Some(f) = &sel {
-                    let id = row_id(s, i).into_owned();
-                    f(s, &id, tx);
-                }
-            });
-            if let Some(f) = open.clone() {
-                r = r.on_double_press_tx(move |s: &mut S, tx: &mut Tx| {
-                    if i < len(s) {
-                        let id = row_id(s, i).into_owned();
-                        f(s, &id, tx);
-                    }
-                });
-            }
-            r
-        };
-        let rows = col()
-            .key("rows")
-            .w_full()
-            .growth(GrowthSpec::default())
-            .virtual_rows(count, style.row_height, move |s: &S, i| row_id(s, i), build_row);
-        let viewport = col()
-            .key("viewport")
-            .w_full()
-            .grow(1.0)
-            .min_h(0.0)
-            .scroll(ScrollSpec { stick_bottom: false })
-            // Inside a scrolling page this reports every frame of the scroll; only a new height
-            // changes what the view reads.
-            .on_layout_tx(move |s: &mut S, r: [f32; 4], tx: &mut Tx| {
-                let st = get_mut(s);
-                if st.viewport == r[3] && st.row_height == style.row_height { tx.live_only(); }
-                st.viewport = r[3];
-                st.row_height = style.row_height;
-            })
-            .child(rows);
-        let mut root = col()
-            .key(state.key.clone())
-            .role("grid")
-            .focusable(true)
-            .w_full()
-            .clip_soft(0.0);
-        if let Some(n) = name {
-            root = root.label(n);
-        }
-        // Focus stays on the table; the row under the cursor is what a screen reader follows.
-        if let Some(id) = &state.cursor {
-            root = root.active_descendant(id.clone());
-        }
-        root
-            .on_key(move |s: &mut S, ev: &KeyEvent, tx: &mut Tx| {
-                let n = len(s);
-                let mut st = std::mem::take(get_mut(s));
-                let out = st.handle_key(ev, n, &|j| row_id(s, j), tx);
-                let cursor = st.cursor.clone();
-                *get_mut(s) = st;
-                match out {
-                    KeyOutcome::Ignored => false,
-                    KeyOutcome::Handled => true,
-                    KeyOutcome::Moved => {
-                        if let (Some(f), Some(id)) = (&on_select, cursor) {
-                            f(s, &id, tx);
-                        }
-                        true
-                    }
-                    KeyOutcome::Open(r) => {
-                        if let Some(f) = &on_open {
-                            let id = row_id(s, r).into_owned();
-                            f(s, &id, tx);
-                        }
-                        true
-                    }
-                }
-            })
-            .child(header)
-            .child(viewport)
-    }
-}
-
-/// Sizes a header or body cell to its column.
-fn sized(e: El, c: &TableColumn, w: Width) -> El {
-    let e = match w {
-        Width::Fixed(w) => e.w(w),
-        Width::Flex(g) => e.w(0.0).grow(g).shrink(),
-    };
-    let e = e.min_w(c.min);
-    if c.max.is_finite() { e.max_w(c.max) } else { e }
-}
-
-fn justify(e: El, a: Align) -> El {
-    match a {
-        Align::Start => e,
-        Align::Center => e.justify_center(),
-        Align::End => e.justify_end(),
-    }
-}
-
-fn cell_el(c: &TableColumn, w: Width, cell: Cell, style: &TableStyle) -> El {
-    let inner = match cell.content {
-        CellContent::Text(t) => {
-            let color = cell.color.unwrap_or(if cell.muted { style.muted } else { style.text });
-            text(t.clone())
-                .font(if cell.mono { style.mono } else { style.font })
-                .color(color)
-                .align(c.align)
-                .truncate()
-                .shrink()
-                .min_w(0.0)
-                .help_when_truncated(t)
-        }
-        CellContent::El(e) => e,
-    };
-    justify(sized(row().role("gridcell").h_full().px(style.cell_pad).center_y().clip_soft(0.0), c, w), c.align).child(inner)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn header_row<S: 'static>(
-    k: &Kit,
-    state: &TableState,
-    columns: &Rc<Vec<TableColumn>>,
-    sizes: &Rc<Vec<Width>>,
-    style: &TableStyle,
-    on_sort: Option<Rc<dyn Fn(&mut S, &str, SortDir, &mut Tx)>>,
-    get: fn(&S) -> &TableState,
-    get_mut: fn(&mut S) -> &mut TableState,
-) -> El {
-    let _ = get;
-    let mut h = row()
-        .key("header")
-        .role("row")
-        .w_full()
-        .h(style.header_height)
-        .child(el().key("rule").pin(Some(0.0), None, Some(0.0), Some(0.0)).h(1.0).fill(style.rule).a11y_hidden());
-    let last = columns.len().saturating_sub(1);
-    for (j, c) in columns.iter().enumerate() {
-        let sorted = state.sort().filter(|(id, _)| *id == c.id).map(|(_, d)| d);
-        let title = text(c.title.clone())
-            .key("title")
-            .font(style.header_font)
-            .color(if sorted.is_some() { style.text } else { style.header_text })
-            .truncate()
-            .shrink()
-            .min_w(0.0)
-            .help_when_truncated(c.title.clone());
-        let mut inner = row().key("inner").gap(2.0).center_y().min_w(0.0).shrink().child(title).a11y_hidden();
-        if let Some(d) = sorted {
-            let glyph = if d == SortDir::Ascending { k.glyph.chevron_up } else { k.glyph.chevron_down };
-            inner = inner.child(icon(glyph, 14.0).key("sort").color(style.text));
-        }
-        let mut cell = justify(sized(row().role("columnheader").label(c.title.clone()).sorted(sorted.map(|d| d == SortDir::Ascending)).h_full().px(style.cell_pad).center_y(), c, sizes[j]), c.align)
-            .key(c.id.clone())
-            .child(inner);
-        let id = c.id.clone();
-        cell = cell.on_layout_tx(move |s: &mut S, r: [f32; 4], tx: &mut Tx| {
-            if get_mut(s).laid_out.insert(id.clone(), r[2]) == Some(r[2]) { tx.live_only(); }
-        });
-        if c.sortable {
-            let id = c.id.clone();
-            let on_sort = on_sort.clone();
-            cell = cell.cursor(Cursor::Pointer).hover(k.c.hover).on_press_tx(move |s: &mut S, tx: &mut Tx| {
-                let st = get_mut(s);
-                let dir = st.next_sort(&id);
-                st.set_sort(id.clone(), dir);
-                if let Some(f) = &on_sort {
-                    f(s, &id, dir, tx);
-                }
-            });
-        }
-        if c.resizable {
-            cell = cell.child(resize_handle(c.clone(), get_mut, style.rule, j == last));
-        } else if j != last {
-            cell = cell.child(el().key("rule").pin(None, Some(8.0), Some(0.0), Some(8.0)).w(1.0).fill(style.rule).a11y_hidden());
-        }
-        h = h.child(cell);
-    }
-    h
-}
-
-/// A drag on a column's edge: the width a cancel puts back (`None`: none of its own), and the
-/// width it started from.
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct ColumnDrag { restore: Option<f32>, from: f32 }
-
-/// The drag target on a header cell's right edge: a hairline that widens the column as it's
-/// dragged, clamped to its bounds. A double click puts the column back.
-fn resize_handle<S: 'static>(c: TableColumn, get_mut: fn(&mut S) -> &mut TableState, rule: Color, last: bool) -> El {
-    let id = c.id.clone();
-    let reset = c.id.clone();
-    let line = el().key("line").w(1.0).h_full().fill(if last { Color::TRANSPARENT } else { rule }).a11y_hidden();
-    row()
-        .key("resize").role("separator")
-        .label(format!("Resize {}", c.title))
-        .pin(None, Some(6.0), Some(-4.0), Some(6.0))
-        .w(9.0)
-        .justify_center()
-        .cursor(Cursor::ResizeColumn)
-        .on_drag(move |s: &mut S, d: &mut Drag, _tx: &mut Tx| {
-            let st = get_mut(s);
-            match d.phase {
-                Phase::Down => {
-                    let (restore, laid_out) = (st.column_width(&id), st.laid_out.get(&id).copied());
-                    st.resize.press(ColumnDrag { restore, from: restore.or(laid_out).unwrap_or(c.min) }, Some(d.window_point()));
-                }
-                Phase::Move => if let Some(drag) = st.resize.moved(d.window_point()).copied() {
-                    st.set_column_width(id.clone(), c.clamp(drag.from + d.dx));
-                },
-                Phase::Up => match st.resize.release() {
-                    Some(ColumnDrag { restore: Some(w), .. }) if d.cancelled() => st.set_column_width(id.clone(), w),
-                    Some(_) if d.cancelled() => st.reset_column_width(&id),
-                    Some(drag) => st.set_column_width(id.clone(), c.clamp(drag.from + d.dx)),
-                    None => {}
-                },
-            }
-        })
-        .on_double_press(move |s: &mut S| get_mut(s).reset_column_width(&reset))
-        .child(line)
-}
 
 #[cfg(test)]
 mod tests {

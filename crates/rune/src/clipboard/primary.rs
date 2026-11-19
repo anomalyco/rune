@@ -41,8 +41,8 @@ fn run(requests: mpsc::Receiver<Request>) {
 impl Client {
     /// Hands the worker what the runtime asked of the primary selection.
     pub(super) fn flush_primary(&self, rt: &mut crate::runtime::RuntimeCore) {
-        if let Some(text) = rt.primary.write.take() { let _ = worker().send(Request::Write(text)); }
-        if let Some(target) = rt.primary.paste.take() {
+        if let Some(text) = rt.edit.primary.write.take() { let _ = worker().send(Request::Write(text)); }
+        if let Some(target) = rt.edit.primary.paste.take() {
             let _ = worker().send(Request::Read { target, reply: self.sender.clone(), wake: self.wake.clone() });
         }
     }

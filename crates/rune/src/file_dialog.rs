@@ -486,7 +486,7 @@ mod tests {
     #[test]
     fn an_overlay_refuses_file_dialogs() {
         let mut rt = Runtime::new(Import::default(), import, (200.0, 100.0), Env::new(true, 1.0));
-        rt.native_overlay = true;
+        rt.host.native_overlay = true;
         rt.frame(0.0);
         press(&mut rt);
         assert!(rt.file_dialog().is_none(), "overlays never leave a dialog pending");

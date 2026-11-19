@@ -10,7 +10,7 @@ use super::{Browser, Start, Wake, after, cpu_canvas, error, gpu::{self, Draw, FI
 pub(super) const QUIET: Duration = Duration::from_millis(250);
 const QUIET_LIMIT: Duration = Duration::from_secs(3);
 
-impl<S: 'static> Browser<S> {
+impl Browser {
     /// The browser lost the GPU device. A page with a CPU renderer goes back to it: the next
     /// frame paints whole, and the glyph masks the device held fill again on the CPU. A page that
     /// started on the GPU ends, as nothing more can draw. True when the app ended.
@@ -43,8 +43,9 @@ impl<S: 'static> Browser<S> {
         web_sys::console::warn_1(&format!("rune: the GPU device was lost ({why}); the page draws on the CPU").into());
         crate::marks::mark("web.gpu.lost");
         side.gpu.device.destroy();
-        crate::render::cpu_boot::attach_text(&mut r.rt.text.atlas);
-        r.rt.text.atlas.refill_gpu_masks();
+        let atlas = &mut r.app.rt_mut().text.atlas;
+        crate::render::cpu_boot::attach_text(atlas);
+        atlas.refill_gpu_masks();
         if let Some(c) = &canvas { let _ = c.style().set_property("opacity", "0"); }
         window.request_redraw();
         false
@@ -60,8 +61,7 @@ impl<S: 'static> Browser<S> {
         if !r.presented || !matches!(r.draw, Draw::Cpu { failed: false, .. }) { return; }
         let Some(made) = self.pending.borrow_mut().take() else { return };
         let side = made.and_then(|(gpu, surface)| {
-            let (lost, proxy) = (self.lost.clone(), self.proxy.clone());
-            gpu::gpu_side(gpu, surface, r.size, &mut r.rt, move |why| { *lost.borrow_mut() = Some(why); let _ = proxy.send_event(Wake::App); })
+            gpu::gpu_side(gpu, surface, r.size, r.app.rt_mut(), self.lost.clone(), self.proxy.clone())
         });
         // The renderer is made: the pipelines compiled ahead for it can go.
         self.warmed.borrow_mut().take();
@@ -99,8 +99,9 @@ impl<S: 'static> Browser<S> {
             web_sys::console::warn_1(&"rune: the GPU didn't finish its first frame; the page draws on the CPU".into());
             crate::marks::mark("web.handover.failed");
             side.gpu.device.destroy();
-            crate::render::cpu_boot::attach_text(&mut r.rt.text.atlas);
-            r.rt.text.atlas.refill_gpu_masks();
+            let atlas = &mut r.app.rt_mut().text.atlas;
+            crate::render::cpu_boot::attach_text(atlas);
+            atlas.refill_gpu_masks();
             r.draw = Draw::Cpu { cpu, failed: true };
             return;
         }
@@ -127,13 +128,13 @@ impl<S: 'static> Browser<S> {
         self.gpu_asked = true;
         crate::marks::mark("web.gpu.asked");
         // A page that started on the CPU asks after its first frame, when the running app holds the compositor.
-        let features = match self.app.as_ref().and_then(|a| a.compositor.as_ref()) {
-            Some(c) => c.features(),
-            None => self.running.borrow().as_ref().and_then(|r| r.compositor.as_ref()).map_or(wgpu::Features::empty(), |c| c.features()),
+        let features = match &self.app {
+            Some(app) => app.compositor_features,
+            None => self.running.borrow().as_ref().map_or(wgpu::Features::empty(), |r| r.app.compositor_features()),
         };
         // The renderer's pipelines are compiled ahead for the running app's canvas and blend, so
         // making its renderer at the hand-over finds them built (`pipelines::warm`).
-        let canvas_now = self.running.borrow().as_ref().map(|r| (r.size, r.rt.srgb_blend()));
+        let canvas_now = self.running.borrow().as_ref().map(|r| (r.size, r.app.rt().srgb_blend()));
         let (pending, warmed, proxy) = (self.pending.clone(), self.warmed.clone(), self.proxy.clone());
         wasm_bindgen_futures::spawn_local(async move {
             let result = gpu::gpu(canvas, features).await;

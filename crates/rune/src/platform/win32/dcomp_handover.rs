@@ -81,14 +81,17 @@ impl Handover {
 
 }
 
+fn load_dll(name: &str) -> windows_sys::Win32::Foundation::HMODULE {
+    super::load_system_dll(name)
+}
+
 /// `DCompositionCreateDevice2(NULL, ...)`, from `dcomp.dll` loaded now rather than imported.
 fn create_device() -> Result<IDCompositionDevice, String> {
     type Create = unsafe extern "system" fn(*mut std::ffi::c_void, *const GUID, *mut *mut std::ffi::c_void) -> HRESULT;
-    let name: Vec<u16> = "dcomp.dll\0".encode_utf16().collect();
     // SAFETY: a system DLL by name; the entry point has the signature dcomp.h declares, and the
     // pointer it writes is an owned reference to the interface asked for.
     unsafe {
-        let lib = windows_sys::Win32::System::LibraryLoader::LoadLibraryW(name.as_ptr());
+        let lib = load_dll("dcomp.dll");
         if lib.is_null() { return Err("dcomp.dll did not load".into()); }
         let Some(create) = windows_sys::Win32::System::LibraryLoader::GetProcAddress(lib, c"DCompositionCreateDevice2".as_ptr().cast()) else {
             return Err("dcomp.dll has no DCompositionCreateDevice2".into());
@@ -99,3 +102,7 @@ fn create_device() -> Result<IDCompositionDevice, String> {
         Ok(IDCompositionDevice::from_raw(raw))
     }
 }
+
+#[cfg(test)]
+#[path = "dcomp_handover_tests.rs"]
+mod tests;

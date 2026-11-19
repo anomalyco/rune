@@ -13,7 +13,7 @@ use crate::time::Instant;
 use serde_json::json;
 
 use super::{CpuPainter, Pixels, Scene, Target};
-use crate::runtime::Runtime;
+use crate::runtime::RuntimeCore;
 
 pub(crate) struct Tool {
     dir: PathBuf,
@@ -40,7 +40,7 @@ impl Tool {
 
     /// Before the renderer prepares frame `k`, which `rt` laid out in `update_ns`: fills its
     /// queued masks and paints it, and at the snapshot frame records it.
-    pub(crate) fn frame<S: 'static>(&mut self, rt: &mut Runtime<S>, size: (u32, u32), k: usize, update_ns: u64, snap: bool) {
+    pub(crate) fn frame(&mut self, rt: &mut RuntimeCore, size: (u32, u32), k: usize, update_ns: u64, snap: bool) {
         let started = Instant::now();
         let fills = self.painter.fill_masks(&mut rt.text.atlas);
         let scene = Scene::new(&rt.instances, &rt.text.atlas, &rt.images, size, rt.clear_color())
@@ -71,7 +71,13 @@ impl Tool {
         if let Some(log) = self.log.as_mut() { let _ = writeln!(log, "{out}"); }
         if !snap { return; }
         let mut kinds = [0u32; 16];
-        for i in &rt.instances { kinds[(i.params[1].max(0.0) as usize).min(15)] += 1; }
+        for i in &rt.instances {
+            let slot = match i.kind() {
+                Some(k) => k.as_u8() as usize,
+                None => (i.params[1].max(0.0) as usize).min(15),
+            };
+            kinds[slot] += 1;
+        }
         out["kinds"] = json!(kinds);
         let _ = std::fs::write(self.dir.join("draw.bin"), super::record::encode(&scene));
         // The frame's rows, tightly packed.

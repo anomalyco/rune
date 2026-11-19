@@ -126,7 +126,7 @@ fn a_dropped_group_opacity_leaves_nothing_once_it_lands() {
         col().size(200.0, 100.0).child(crate::row().key("row").size(200.0, 40.0).hover_group().child(act))
     }
     let left = |rt: &Runtime<(bool, bool)>| {
-        let n = rt.nodes.iter().find(|n| n.key.as_deref() == Some("act")).unwrap();
+        let n = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("act")).unwrap();
         (n.vis.group_opacity, rt.scene.store().has(n.id, P_GROUP_REST), n.group_fade)
     };
     let mut rt = Runtime::new((true, false), view, (200.0, 100.0), Env::new(true, 1.0));

@@ -9,8 +9,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use serde_json::{Value, json};
 
 use crate::render::{Gpu, OFFSCREEN_FORMAT, Offscreen, Renderer};
-use crate::runtime::{Env, Waker};
-use crate::tooling::{AppSpec, Args, initial_state, runtime_for, tree_json};
+use crate::runtime::{AppDriver, Env, RuntimeCore, Waker};
+use crate::tooling::{AppSpec, Args, initial_state, runtime_for, tree_json_core};
 use crate::{Cx, El, KeyEvent, Tx};
 use std::any::Any;
 
@@ -287,19 +287,26 @@ fn atomic_write(path: &Path, bytes: &[u8]) {
     std::fs::rename(temp, path).unwrap();
 }
 
+#[cfg(test)]
+#[inline]
 fn control_input<S: 'static>(rt: &mut crate::Runtime<S>, command: &Value) {
+    let (core, mut app) = rt.split_mut();
+    control_input_core(core, &mut app, command);
+}
+
+fn control_input_core(core: &mut RuntimeCore, app: &mut dyn AppDriver, command: &Value) {
     if let Some(tap) = command.get("tap") {
-        if let Some((x, y)) = tap.as_str().and_then(|key| rt.find(key)) {
-            rt.pointer_move(x, y);
-            rt.pointer_down(x, y);
-            rt.pointer_up(x, y);
+        if let Some((x, y)) = tap.as_str().and_then(|key| core.find(key)) {
+            core.pointer_move(app, x, y);
+            core.pointer_down(app, x, y);
+            core.pointer_up(app, x, y);
         } else {
             eprintln!("rune-hot: skipping tap: expected an existing element key");
         }
     }
     if let Some(scroll) = command.get("scroll") {
         match serde_json::from_value::<[f32; 3]>(scroll.clone()) {
-            Ok([x, y, dy]) if [x, y, dy].iter().all(|v| v.is_finite()) => rt.wheel(x, y, dy),
+            Ok([x, y, dy]) if [x, y, dy].iter().all(|v| v.is_finite()) => core.wheel(x, y, dy),
             _ => eprintln!("rune-hot: skipping scroll: expected three finite numbers [x,y,dy]"),
         }
     }
@@ -309,6 +316,7 @@ fn control_input<S: 'static>(rt: &mut crate::Runtime<S>, command: &Value) {
 /// `{"id":1,"tap":"login"}`, `{"id":2,"scroll":[800,400,100]}`,
 /// `{"id":3,"pause":true}`, `{"id":4,"step":0.05}`, or `{"id":5,"quit":true}`.
 /// Every request and patch publishes a PNG + JSON tree, then a flushed completion marker.
+#[inline]
 fn headless<S: 'static>(spec: &AppSpec<S>, state: S, args: Args, runtime: crate::app::RuntimeConfig<S>) {
     assert!(enabled(), "--snap-on-patch requires --hot or RUNE_HOT=1 (use scripts/rune-dev)");
     let size = args.size.unwrap_or(spec.size);
@@ -316,9 +324,23 @@ fn headless<S: 'static>(spec: &AppSpec<S>, state: S, args: Args, runtime: crate:
     let (wake, sleep) = std::sync::mpsc::channel();
     let mut rt = runtime_for(spec, state, size, Env { system_dark: args.theme.as_deref() != Some("light"), scale }, Arc::new(move || { let _ = wake.send(()); }));
     rt.configure(runtime);
-    if let Some(bars) = args.scroll_bars { rt.set_system_scroll_bars(bars); }
+    let state_addr = format!("{:p}", crate::runtime::handler_state_ref(&rt.state) as *const dyn Any as *const ());
+    let (core, mut app) = rt.split_mut();
+    headless_core(core, &mut app, state_addr, size, scale, args, sleep);
+}
+
+fn headless_core(
+    core: &mut RuntimeCore,
+    app: &mut dyn AppDriver,
+    state_addr: String,
+    size: (f32, f32),
+    scale: f32,
+    args: Args,
+    sleep: std::sync::mpsc::Receiver<()>,
+) {
+    if let Some(bars) = args.scroll_bars { core.set_system_scroll_bars(bars); }
     let gpu = Gpu::new(Gpu::instance(), None);
-    let srgb_blend = rt.srgb_blend();
+    let srgb_blend = core.srgb_blend();
     let target_format = if srgb_blend { OFFSCREEN_FORMAT.remove_srgb_suffix() } else { OFFSCREEN_FORMAT };
     let mut renderer = Renderer::new(&gpu.device, target_format);
     renderer.set_srgb_blend(srgb_blend);
@@ -346,33 +368,33 @@ fn headless<S: 'static>(spec: &AppSpec<S>, state: S, args: Args, runtime: crate:
             if command["quit"] == true { break; }
             if let Some(pause) = command["pause"].as_bool() { paused = pause; fixed = Some(0.0); }
             if let Some(step) = command["step"].as_f64() { fixed = Some(step.clamp(0.0, 10.0)); }
-            control_input(&mut rt, &command);
+            control_input_core(core, app, &command);
             requested = true;
         }
-        let timer_due = rt.wake_deadline().is_some_and(|deadline| deadline <= rt.clock + elapsed);
-        if !first && !requested && !rt.hot.as_ref().unwrap().pending() && (paused || (!woken && !rt.animating && !timer_due)) {
+        let timer_due = core.wake_deadline().is_some_and(|deadline| deadline <= core.clock + elapsed);
+        if !first && !requested && !core.frame.hot.as_ref().unwrap().pending() && (paused || (!woken && !core.animating && !timer_due)) {
             // Paused/idle sessions must not compete with their own patch compiler.
-            if !paused { rt.clock += elapsed; }
+            if !paused { core.clock += elapsed; }
             woken = sleep.recv_timeout(Duration::from_millis(16)).is_ok();
             continue;
         }
-        let before = rt.hot.as_ref().unwrap().seen;
+        let before = core.frame.hot.as_ref().unwrap().seen;
         match fixed {
-            Some(dt) => { rt.frame(dt); }
-            None => { crate::frame::clock::advance_by(&mut rt, elapsed); }
+            Some(dt) => { core.frame(app, dt); }
+            None => { crate::frame::clock::advance_by_core(core, app, elapsed); }
         }
-        let generation = rt.hot.as_ref().unwrap().seen;
+        let generation = core.frame.hot.as_ref().unwrap().seen;
         if first || requested || before != generation {
-            if renderer.srgb_blend() != rt.srgb_blend() {
-                let format = if rt.srgb_blend() { OFFSCREEN_FORMAT.remove_srgb_suffix() } else { OFFSCREEN_FORMAT };
-                crate::window::rebuild_renderer(&gpu.device, &mut renderer, format, &mut rt);
+            if renderer.srgb_blend() != core.srgb_blend() {
+                let format = if core.srgb_blend() { OFFSCREEN_FORMAT.remove_srgb_suffix() } else { OFFSCREEN_FORMAT };
+                crate::window::rebuild_renderer_core(&gpu.device, &mut renderer, format, core);
                 target = Offscreen::with_format(&gpu.device, w, h, format);
             }
-            renderer.upload_images(&gpu.device, &gpu.queue, &mut rt.images);
-            renderer.prepare_surfaces(&gpu.device, &gpu.queue, &rt.surfaces, (w, h));
-            renderer.prepare_ui(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, (w, h));
+            renderer.upload_images(&gpu.device, &gpu.queue, &mut core.images);
+            renderer.prepare_surfaces(&gpu.device, &gpu.queue, &core.surfaces, (w, h));
+            renderer.prepare_ui(&gpu.device, &gpu.queue, &mut core.text.atlas, &core.instances, (w, h));
             let mut enc = gpu.device.create_command_encoder(&Default::default());
-            renderer.draw(&mut enc, &target.view, rt.clear_color());
+            renderer.draw(&mut enc, &target.view, core.clear_color());
             target.copy(&mut enc);
             gpu.queue.submit([enc.finish()]);
             let pixels = target.read(&gpu.device);
@@ -385,8 +407,8 @@ fn headless<S: 'static>(spec: &AppSpec<S>, state: S, args: Args, runtime: crate:
             encoder.set_compression(png::Compression::Fastest);
             encoder.write_header().unwrap().write_image_data(&pixels).expect("hot snapshot");
             std::fs::rename(temp, png).expect("publish hot snapshot");
-            let mut tree = tree_json(&rt, rt.clock);
-            tree["hot"] = json!({"generation": generation, "pid": std::process::id(), "state": format!("{:p}", crate::runtime::handler_state_ref(&rt.state) as *const dyn Any as *const ()), "request": command["id"], "pixels_ns": pixels_ns, "scrolls": rt.hot_scrolls(), "motion": rt.hot_motion()});
+            let mut tree = tree_json_core(core, core.clock);
+            tree["hot"] = json!({"generation": generation, "pid": std::process::id(), "state": state_addr, "request": command["id"], "pixels_ns": pixels_ns, "scrolls": core.hot_scrolls(), "motion": core.hot_motion()});
             atomic_write(&png.with_extension("json"), &serde_json::to_vec_pretty(&tree).unwrap());
             println!("rune-hot-pixels {}", tree["hot"]);
             use std::io::Write;
@@ -549,7 +571,7 @@ mod tests {
     fn a_pending_patch_keeps_a_window_stale_until_a_frame_rebuilds_it() {
         let hub: &'static Hub = Box::leak(Box::default());
         let mut rt = crate::Runtime::new(0u8, |_: &u8, _: &mut Cx<u8>| el().size(10.0, 10.0), (100.0, 100.0), Env::new(true, 1.0));
-        rt.hot = Some(Session::join(hub, Arc::new(|| {})));
+        rt.frame.hot = Some(Session::join(hub, Arc::new(|| {})));
         rt.frame(0.0);
         assert!(!rt.needs_commit() && !rt.stale());
         hub.patched();

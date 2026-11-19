@@ -5,17 +5,21 @@
 use std::borrow::Cow;
 use std::rc::Rc;
 
-use rune::{Color, El, Icon, ScrollFade, ScrollSpec, Spring, Tx, col, el, row};
+use rune::{Color, Drag, El, Icon, Phase, Spring, Tx};
 
-use crate::{Kit, Spinner};
+use crate::{IconButton, Kit};
 
 mod auto_scroll;
 mod drag;
+mod layout;
 mod tab;
 #[cfg(test)]
 mod tests;
 
 pub use drag::{TabDragMode, TabDragPhase, TabDragState, TearOutSpec};
+
+use drag::Release;
+use layout::{TabBind, TabBindCtx, TabItemCore, TabStripCore};
 
 /// Which way a [`TabStrip`] runs.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -80,7 +84,7 @@ impl TabOverflow {
         ((available - pinned as f32 * pinned_width - gaps) / unpinned as f32).clamp(min_width, max_width)
     }
 
-    fn fade(&self) -> f32 {
+    pub(super) fn fade(&self) -> f32 {
         match *self {
             Self::ShrinkThenScroll { fade_width, .. } | Self::Scroll { fade_width } => fade_width,
         }
@@ -140,12 +144,6 @@ pub struct TabTearMove {
     pub screen_point: Option<(i32, i32)>,
 }
 
-type Each<S> = Rc<dyn Fn(&mut S, &str, &mut Tx)>;
-type Hover<S> = Rc<dyn Fn(&mut S, &str, bool, &mut Tx)>;
-type Commit<S, T> = Rc<dyn Fn(&mut S, T, &mut Tx)>;
-type Access<S> = fn(&mut S) -> &mut TabDragState;
-type Wrap<'a> = Box<dyn FnOnce(El, TabDensity) -> El + 'a>;
-
 /// What a strip knows of a tab it may not build ([`TabStrip::lazy_tabs`]): its id, and what
 /// sets its length along the strip and keeps it built.
 #[derive(Clone, Debug)]
@@ -156,109 +154,6 @@ pub struct TabSlot<'a> {
     pub two_line: bool,
     /// Built wherever the strip has scrolled: its menu is open, or it's being renamed.
     pub keep: bool,
-}
-
-type Build<'a, S> = Box<dyn FnMut(usize) -> TabItem<'a, S> + 'a>;
-
-/// One tab: `TabItem::new(id, title).avatar(..).status(..)`.
-pub struct TabItem<'a, S: 'static> {
-    id: Cow<'a, str>,
-    title: Cow<'a, str>,
-    subtitle: Option<Cow<'a, str>>,
-    avatar: Option<El>,
-    icon: Option<&'static Icon>,
-    status: Option<TabItemStatus>,
-    pinned: bool,
-    closable: bool,
-    marked: bool,
-    pulse_seq: u32,
-    editor: Option<El>,
-    wrap: Option<Wrap<'a>>,
-    _s: std::marker::PhantomData<fn(&mut S)>,
-}
-
-impl<'a, S: 'static> TabItem<'a, S> {
-    pub fn new(id: impl Into<Cow<'a, str>>, title: impl Into<Cow<'a, str>>) -> Self {
-        TabItem {
-            id: id.into(),
-            title: title.into(),
-            subtitle: None,
-            avatar: None,
-            icon: None,
-            status: None,
-            pinned: false,
-            closable: true,
-            marked: false,
-            pulse_seq: 0,
-            editor: None,
-            wrap: None,
-            _s: std::marker::PhantomData,
-        }
-    }
-    /// A second, muted line under the title in a vertical strip (a project's name); the row
-    /// grows to 45 points.
-    pub fn subtitle(mut self, subtitle: impl Into<Cow<'a, str>>) -> Self {
-        self.subtitle = Some(subtitle.into());
-        self
-    }
-    /// A 16 point leading element: a project's avatar.
-    pub fn avatar(mut self, avatar: El) -> Self {
-        self.avatar = Some(avatar);
-        self
-    }
-    /// A 16 point leading icon in place of an avatar (a draft's pencil), muted until active.
-    pub fn icon(mut self, icon: &'static Icon) -> Self {
-        self.icon = Some(icon);
-        self
-    }
-    /// Its status mark. The strip shows what it's given; OpenCode leaves the dots off the
-    /// active tab and keeps the busy ring.
-    pub fn status(mut self, status: Option<TabItemStatus>) -> Self {
-        self.status = status;
-        self
-    }
-    /// Pinned tabs come first in the strip, keep [`TabOverflow`]'s `pinned_width` as icons,
-    /// have no close button and reorder only among themselves.
-    pub fn pinned(mut self, pinned: bool) -> Self {
-        self.pinned = pinned;
-        self
-    }
-    /// Whether the close button and a middle click close it (default true).
-    pub fn closable(mut self, closable: bool) -> Self {
-        self.closable = closable;
-        self
-    }
-    /// Highlights the tab while its context menu is open.
-    pub fn marked(mut self, marked: bool) -> Self {
-        self.marked = marked;
-        self
-    }
-    /// Raise it to ring a background tab once (900 ms), as a prompt arriving does.
-    pub fn pulse(mut self, seq: u32) -> Self {
-        self.pulse_seq = seq;
-        self
-    }
-    /// A field in place of the title while renaming in place. The tab doesn't drag meanwhile.
-    pub fn editor(mut self, field: El) -> Self {
-        self.editor = Some(field);
-        self
-    }
-    /// Wraps the built tab: a context menu handler, a hover card's anchor.
-    pub fn decorate(mut self, f: impl FnOnce(El, TabDensity) -> El + 'a) -> Self {
-        self.wrap = Some(Box::new(f));
-        self
-    }
-}
-
-#[derive(Default)]
-struct Handlers<S> {
-    select: Option<Each<S>>,
-    close: Option<Each<S>>,
-    double: Option<Each<S>>,
-    hover: Option<Hover<S>>,
-    reorder: Option<Commit<S, TabReorder>>,
-    tear_out: Option<Commit<S, TabTearOut>>,
-    tear_move: Option<Commit<S, TabTearMove>>,
 }
 
 /// A tab strip's words for assistive technology ([`TabStrip::words`]): the close button's name
@@ -278,42 +173,174 @@ impl Default for TabWords {
     }
 }
 
-/// What every tab of one strip shares while it builds.
-struct Strip<S> {
-    handlers: Handlers<S>,
-    drag: TabDragState,
-    access: Option<Access<S>>,
-    base: Color,
-    separator: Color,
-    gap: f32,
-    row_height: f32,
-    two_line_height: f32,
-    link_inset: f32,
-    count: usize,
-    spring: Spring,
-    select_on_drag_start: bool,
-    /// A pointer close locks the remaining tabs' width (horizontal strips).
-    horizontal_lock: bool,
-    matched: Option<String>,
-    close_icon: Option<&'static Icon>,
-    /// `TabStrip::close_tab_stop`.
-    close_tab_stop: bool,
-    /// `TabStrip::hover_none`.
-    hover_none: bool,
-    busy: fn(&Kit) -> El,
-    words: TabWords,
-    scroll_key: String,
-    list_key: String,
-    /// A torn-out tab floats in the caller's layer ([`TabStrip::build_layered`]).
-    layered: bool,
-    /// Where the scroll viewport is, for scrolling it while a tab is dragged near an end.
-    auto: Rc<auto_scroll::View>,
+/// Past this many tabs a strip builds only those near what it shows ([`TabStrip::lazy_tabs`]).
+pub const BAND_PAST: usize = 40;
+
+type Each<S> = Rc<dyn Fn(&mut S, &str, &mut Tx)>;
+type Hover<S> = Rc<dyn Fn(&mut S, &str, bool, &mut Tx)>;
+type Commit<S, T> = Rc<dyn Fn(&mut S, T, &mut Tx)>;
+type Access<S> = fn(&mut S) -> &mut TabDragState;
+
+/// One tab: `TabItem::new(id, title).avatar(..).status(..)`.
+pub struct TabItem<'a, S: 'static> {
+    core: TabItemCore<'a>,
+    _s: std::marker::PhantomData<fn(&mut S)>,
 }
 
-/// OpenCode's activity ring: the kit's spinner at 14 points in the muted icon colour, the
-/// base one in dark mode, where the dim cells vanish.
-fn busy_ring(k: &Kit) -> El {
-    Spinner::new().size(14.0).color(if k.dark { k.c.icon_base } else { k.c.icon_muted }).build(k)
+impl<'a, S: 'static> TabItem<'a, S> {
+    pub fn new(id: impl Into<Cow<'a, str>>, title: impl Into<Cow<'a, str>>) -> Self {
+        TabItem { core: TabItemCore::new(id.into(), title.into()), _s: std::marker::PhantomData }
+    }
+    /// A second, muted line under the title in a vertical strip (a project's name); the row
+    /// grows to 45 points.
+    pub fn subtitle(mut self, subtitle: impl Into<Cow<'a, str>>) -> Self { self.core.subtitle = Some(subtitle.into()); self }
+    /// A 16 point leading element: a project's avatar.
+    pub fn avatar(mut self, avatar: El) -> Self { self.core.avatar = Some(avatar); self }
+    /// A 16 point leading icon in place of an avatar (a draft's pencil), muted until active.
+    pub fn icon(mut self, icon: &'static Icon) -> Self { self.core.icon = Some(icon); self }
+    /// Its status mark. The strip shows what it's given; OpenCode leaves the dots off the
+    /// active tab and keeps the busy ring.
+    pub fn status(mut self, status: Option<TabItemStatus>) -> Self { self.core.status = status; self }
+    /// Pinned tabs come first in the strip, keep [`TabOverflow`]'s `pinned_width` as icons,
+    /// have no close button and reorder only among themselves.
+    pub fn pinned(mut self, pinned: bool) -> Self { self.core.pinned = pinned; self }
+    /// Whether the close button and a middle click close it (default true).
+    pub fn closable(mut self, closable: bool) -> Self { self.core.closable = closable; self }
+    /// Highlights the tab while its context menu is open.
+    pub fn marked(mut self, marked: bool) -> Self { self.core.marked = marked; self }
+    /// Raise it to ring a background tab once (900 ms), as a prompt arriving does.
+    pub fn pulse(mut self, seq: u32) -> Self { self.core.pulse_seq = seq; self }
+    /// A field in place of the title while renaming in place. The tab doesn't drag meanwhile.
+    pub fn editor(mut self, field: El) -> Self { self.core.editor = Some(field); self }
+    /// Wraps the built tab: a context menu handler, a hover card's anchor.
+    pub fn decorate(mut self, f: impl FnOnce(El, TabDensity) -> El + 'a) -> Self { self.core.wrap = Some(Box::new(f)); self }
+}
+
+struct TabHandlers<S> {
+    access: Option<Access<S>>,
+    select: Option<Each<S>>,
+    close: Option<Each<S>>,
+    double: Option<Each<S>>,
+    hover: Option<Hover<S>>,
+    reorder: Option<Commit<S, TabReorder>>,
+    tear_out: Option<Commit<S, TabTearOut>>,
+    tear_move: Option<Commit<S, TabTearMove>>,
+}
+
+impl<S: 'static> TabBind for TabHandlers<S> {
+    fn has_close(&self) -> bool { self.close.is_some() }
+    fn has_access(&self) -> bool { self.access.is_some() }
+
+    fn bind_root_hover(&self, root: El) -> El {
+        let Some(access) = self.access else { return root };
+        root.on_hover_change(move |s: &mut S, inside, tx: &mut Tx| {
+            // Only letting go of the width lock a close left changes what the strip draws.
+            if inside || !access(s).leave() {
+                tx.live_only();
+            }
+        })
+    }
+
+    fn bind_torn_anchor(&self, place: El) -> El {
+        let Some(access) = self.access else { return place };
+        place.on_layout_tx(move |s: &mut S, r, tx: &mut Tx| {
+            access(s).report_rect(r);
+            tx.live_only();
+        })
+    }
+
+    fn bind_close_button(&self, button: IconButton, id: String, lock: f32) -> IconButton {
+        let (access, on_close) = (self.access, self.close.clone());
+        button.on_press_tx(move |s: &mut S, tx: &mut Tx| {
+            if let Some(a) = access.filter(|_| lock > 0.0) {
+                a(s).width_lock = Some(lock);
+            }
+            if let Some(f) = &on_close {
+                f(s, &id, tx);
+            }
+        })
+    }
+
+    fn bind_tab(&self, mut slot: El, ctx: TabBindCtx<'_>) -> El {
+        let (access, lane, vertical, lock) = (self.access, ctx.lane, ctx.vertical, ctx.lock);
+        let (select_early, active) = (ctx.select_early, ctx.active);
+        let reveal = (ctx.scroll_key.to_owned(), format!("t-{}", ctx.id));
+        if let Some(close) = self.close.clone().filter(|_| ctx.closable) {
+            let id = ctx.id.to_owned();
+            slot = slot.on_middle_press(move |s: &mut S, tx: &mut Tx| {
+                if let Some(a) = access.filter(|_| lock > 0.0) {
+                    a(s).width_lock = Some(lock);
+                }
+                close(s, &id, tx);
+            });
+        }
+        {
+            let (id, select, reveal) = (ctx.id.to_owned(), self.select.clone(), reveal.clone());
+            slot = slot.on_press_tx(move |s: &mut S, tx: &mut Tx| {
+                if let Some(a) = access && a(s).take_swallowed_click() {
+                    tx.live_only();
+                    return;
+                }
+                if let Some(f) = &select {
+                    f(s, &id, tx);
+                    tx.scroll_into_view_in(reveal.0.clone(), reveal.1.clone());
+                }
+            });
+        }
+        if let Some(f) = self.double.clone() {
+            let id = ctx.id.to_owned();
+            slot = slot.on_double_press_tx(move |s: &mut S, tx: &mut Tx| f(s, &id, tx));
+        }
+        if access.is_some() || self.hover.is_some() {
+            let (id, hover) = (ctx.id.to_owned(), self.hover.clone());
+            slot = slot.on_hover_change(move |s: &mut S, inside, tx: &mut Tx| {
+                if let Some(a) = access {
+                    a(s).set_hovered(&id, inside);
+                }
+                // The strip draws nothing from it (its hover groups do): only the app's handler can
+                // change what the view draws, and it says so.
+                match &hover {
+                    Some(f) => f(s, &id, inside, tx),
+                    None => tx.live_only(),
+                }
+            });
+        }
+        let Some(access) = access else { return slot };
+
+        let (id, select, reorder, tear, tear_move) = (ctx.id.to_owned(), self.select.clone(), self.reorder.clone(), self.tear_out.clone(), self.tear_move.clone());
+        let target = tab::DragTarget { lane, vertical, select_early, active, scroll: ctx.scroll_key.to_owned(), auto: ctx.auto.clone() };
+        slot.on_drag(move |s: &mut S, d: &mut Drag, tx: &mut Tx| match d.phase {
+            Phase::Down => {
+                if tab::drag_down(access(s), &target, d, select.is_some(), tx)
+                    && let Some(f) = &select
+                {
+                    f(s, &id, tx);
+                    tx.scroll_into_view_in(reveal.0.clone(), reveal.1.clone());
+                }
+            }
+            Phase::Move => {
+                if let Some(mv) = tab::drag_move(access(s), &target, d, &id, reorder.is_some(), tear_move.is_some(), tx)
+                    && let Some(f) = &tear_move
+                {
+                    f(s, mv, tx);
+                }
+            }
+            Phase::Up => match tab::drag_up(access(s), d, target.select_early, tx) {
+                Release::Click | Release::None => {}
+                Release::Reorder { from, to } => {
+                    if let Some(f) = &reorder {
+                        f(s, TabReorder { id: id.clone(), from, to }, tx);
+                    }
+                    access(s).dropped();
+                }
+                Release::TearOut { from, offset } => {
+                    if let Some(f) = &tear {
+                        f(s, TabTearOut { id: id.clone(), index: from, offset, window_point: Some(d.window_point()), screen_point: d.screen_point() }, tx);
+                    }
+                }
+            },
+        })
+    }
 }
 
 /// A keyed strip of tabs: `TabStrip::new("tabs", TabOrientation::Horizontal).tabs(..)
@@ -332,434 +359,106 @@ fn busy_ring(k: &Kit) -> El {
 /// the strip reorders, Escape puts the tab back, and with [`Self::tear_out`] dragging it off
 /// the strip tears it out. A middle click closes a tab.
 pub struct TabStrip<'a, S: 'static> {
-    key: String,
-    orientation: TabOrientation,
-    items: Vec<TabItem<'a, S>>,
-    lazy: Option<(Vec<TabSlot<'a>>, Build<'a, S>)>,
-    active: Option<&'a str>,
-    viewport: Option<f32>,
-    overflow: Option<TabOverflow>,
-    gap: Option<f32>,
-    row_height: f32,
-    select_on_drag_start: Option<bool>,
-    tear: Option<TearOutSpec>,
-    matched: Option<&'a str>,
-    spring: Spring,
-    trailing: Option<El>,
-    trailing_width: f32,
-    drag: Option<(TabDragState, Access<S>)>,
-    fill: Option<Color>,
-    close_icon: Option<&'static Icon>,
-    close_tab_stop: bool,
-    hover_none: bool,
-    busy: fn(&Kit) -> El,
-    label: String,
-    words: TabWords,
-    handlers: Handlers<S>,
+    core: TabStripCore<'a>,
+    handlers: TabHandlers<S>,
 }
 
 impl<'a, S: 'static> TabStrip<'a, S> {
     pub fn new(key: impl Into<String>, orientation: TabOrientation) -> Self {
         TabStrip {
-            key: key.into(),
-            orientation,
-            items: Vec::new(),
-            lazy: None,
-            active: None,
-            viewport: None,
-            overflow: None,
-            gap: None,
-            row_height: 28.0,
-            select_on_drag_start: None,
-            tear: None,
-            matched: None,
-            spring: rune_motion::motion::SNAP,
-            trailing: None,
-            trailing_width: 28.0,
-            drag: None,
-            fill: None,
-            close_icon: None,
-            close_tab_stop: false,
-            hover_none: false,
-            busy: busy_ring,
-            label: "Tabs".into(),
-            words: TabWords::default(),
-            handlers: Handlers { select: None, close: None, double: None, hover: None, reorder: None, tear_out: None, tear_move: None },
+            core: TabStripCore::new(key.into(), orientation),
+            handlers: TabHandlers { access: None, select: None, close: None, double: None, hover: None, reorder: None, tear_out: None, tear_move: None },
         }
     }
     pub fn tabs(mut self, tabs: impl IntoIterator<Item = TabItem<'a, S>>) -> Self {
-        self.items.extend(tabs);
+        self.core.items.extend(tabs.into_iter().map(|t| t.core));
         self
     }
     /// The tabs, of which the strip builds only those it shows (`build(index)`), when there are
     /// more than [`BAND_PAST`]: the rest stand as empty space their length, so a strip of
     /// hundreds of tabs costs a frame what a screenful does. In place of [`Self::tabs`].
-    pub fn lazy_tabs(mut self, slots: Vec<TabSlot<'a>>, build: impl FnMut(usize) -> TabItem<'a, S> + 'a) -> Self {
-        self.lazy = Some((slots, Box::new(build)));
+    pub fn lazy_tabs(mut self, slots: Vec<TabSlot<'a>>, mut build: impl FnMut(usize) -> TabItem<'a, S> + 'a) -> Self {
+        self.core.lazy = Some((slots, Box::new(move |i| build(i).core)));
         self
     }
     /// The selected tab, by id.
-    pub fn active(mut self, active_id: Option<&'a str>) -> Self {
-        self.active = active_id;
-        self
-    }
+    pub fn active(mut self, active_id: Option<&'a str>) -> Self { self.core.active = active_id; self }
     /// The points a horizontal strip has, trailing action included: `cx.layout_size(key)`'s
     /// width (the strip's root grows into the space it's given). It sets the tabs' shared
     /// width and density; without it they take their widest.
-    pub fn viewport_width(mut self, width: Option<f32>) -> Self {
-        self.viewport = width;
-        self
-    }
+    pub fn viewport_width(mut self, width: Option<f32>) -> Self { self.core.viewport = width; self }
     /// The overflow policy (default [`TabOverflow::HORIZONTAL_DEFAULT`] or
     /// [`TabOverflow::VERTICAL_DEFAULT`]).
-    pub fn overflow(mut self, policy: TabOverflow) -> Self {
-        self.overflow = Some(policy);
-        self
-    }
+    pub fn overflow(mut self, policy: TabOverflow) -> Self { self.core.overflow = Some(policy); self }
     /// Points between tabs (default 6 horizontal, 3 vertical).
-    pub fn gap(mut self, points: f32) -> Self {
-        self.gap = Some(points.max(0.0));
-        self
-    }
+    pub fn gap(mut self, points: f32) -> Self { self.core.gap = Some(points.max(0.0)); self }
     /// A tab's height (default 28).
-    pub fn row_height(mut self, points: f32) -> Self {
-        self.row_height = points.max(1.0);
-        self
-    }
+    pub fn row_height(mut self, points: f32) -> Self { self.core.row_height = points.max(1.0); self }
     /// Whether a press selects the tab as the button goes down, so a drag selects it too (default
-    /// true, as 	ab-nav.tsx's onMouseDown does in either orientation), or the release does and
+    /// true, as tab-nav.tsx's onMouseDown does in either orientation), or the release does and
     /// a drag leaves the selection (for touch, where a long press opens a menu).
-    pub fn select_on_drag_start(mut self, on: bool) -> Self {
-        self.select_on_drag_start = Some(on);
-        self
-    }
+    pub fn select_on_drag_start(mut self, on: bool) -> Self { self.core.select_on_drag_start = Some(on); self }
     /// Lets a drag across the strip tear a tab out ([`Self::on_tear_out`]). Off by default, and
     /// never for the only tab unless [`TearOutSpec::lone`].
-    pub fn tear_out(mut self, spec: Option<TearOutSpec>) -> Self {
-        self.tear = spec;
-        self
-    }
+    pub fn tear_out(mut self, spec: Option<TearOutSpec>) -> Self { self.core.tear = spec; self }
     /// Gives each tab `El::matched("{prefix}-{id}")`, so a tab flies between strips when the
     /// layout swaps one for another.
-    pub fn matched_prefix(mut self, prefix: Option<&'a str>) -> Self {
-        self.matched = prefix;
-        self
-    }
+    pub fn matched_prefix(mut self, prefix: Option<&'a str>) -> Self { self.core.matched = prefix; self }
     /// The spring tabs step aside on during a drag (default `SNAP`, 0.25 s). Drops, tabs opening and
     /// closing, and widths changing reflow on `REFLOW`.
-    pub fn reorder_spring(mut self, spring: Spring) -> Self {
-        self.spring = spring;
-        self
-    }
+    pub fn reorder_spring(mut self, spring: Spring) -> Self { self.core.spring = spring; self }
     /// An element right after the last horizontal tab (the new-tab button), outside the
     /// scrolling, with the space past it left bare.
-    pub fn trailing_action(mut self, action: El) -> Self {
-        self.trailing = Some(action);
-        self
-    }
+    pub fn trailing_action(mut self, action: El) -> Self { self.core.trailing = Some(action); self }
     /// The trailing action's width, which the tabs leave it (default 28, a large icon button).
-    pub fn trailing_width(mut self, points: f32) -> Self {
-        self.trailing_width = points.max(0.0);
-        self
-    }
+    pub fn trailing_width(mut self, points: f32) -> Self { self.core.trailing_width = points.max(0.0); self }
     /// The strip's gestures, kept in the app's state; `access` finds them there. Without it the
     /// tabs select and close but don't drag, and closing doesn't lock their width.
     pub fn drag_state(mut self, state: &TabDragState, access: fn(&mut S) -> &mut TabDragState) -> Self {
-        self.drag = Some((state.clone(), access));
+        self.core.drag = Some(state.clone());
+        self.handlers.access = Some(access);
         self
     }
     /// The colour under the strip (default `bg_deep`), which a dragged tab and the close slot
     /// paint opaque.
-    pub fn fill(mut self, color: Color) -> Self {
-        self.fill = Some(color);
-        self
-    }
+    pub fn fill(mut self, color: Color) -> Self { self.core.fill = Some(color); self }
     /// The close button's glyph (default the kit's close glyph).
-    pub fn close_icon(mut self, icon: &'static Icon) -> Self {
-        self.close_icon = Some(icon);
-        self
-    }
+    pub fn close_icon(mut self, icon: &'static Icon) -> Self { self.core.close_icon = Some(icon); self }
     /// Each tab's close button is a Tab stop after its tab with the kit's focus ring, as a web
     /// page's `<button>` is. Off, it's pointer only: the strip's arrows move between tabs.
     /// A primary pointer that can't hover (`@media (hover: none)`, `tab-nav.css`): every tab shows
     /// its close button on its painted slot, its status mark 16 points before it, and its title
     /// fades clear of both, as a hover shows them.
-    pub fn hover_none(mut self, on: bool) -> Self {
-        self.hover_none = on;
-        self
-    }
-    pub fn close_tab_stop(mut self, on: bool) -> Self {
-        self.close_tab_stop = on;
-        self
-    }
+    pub fn hover_none(mut self, on: bool) -> Self { self.core.hover_none = on; self }
+    pub fn close_tab_stop(mut self, on: bool) -> Self { self.core.close_tab_stop = on; self }
     /// What a busy tab shows (default the kit's spinner at 14 points).
-    pub fn busy_indicator(mut self, f: fn(&Kit) -> El) -> Self {
-        self.busy = f;
-        self
-    }
+    pub fn busy_indicator(mut self, f: fn(&Kit) -> El) -> Self { self.core.busy = f; self }
     /// The tab list's accessible name (default "Tabs").
     /// What a screen reader hears of each tab beyond its title, in the app's language: its
     /// close button's name and its status. English by default.
-    pub fn words(mut self, words: TabWords) -> Self {
-        self.words = words;
-        self
-    }
-    pub fn label(mut self, label: impl Into<String>) -> Self {
-        self.label = label.into();
-        self
-    }
-    pub fn on_select(mut self, f: impl Fn(&mut S, &str, &mut Tx) + 'static) -> Self {
-        self.handlers.select = Some(Rc::new(f));
-        self
-    }
+    pub fn words(mut self, words: TabWords) -> Self { self.core.words = words; self }
+    pub fn label(mut self, label: impl Into<String>) -> Self { self.core.label = label.into(); self }
+    pub fn on_select(mut self, f: impl Fn(&mut S, &str, &mut Tx) + 'static) -> Self { self.handlers.select = Some(Rc::new(f)); self }
     /// The close button, a middle click.
-    pub fn on_close(mut self, f: impl Fn(&mut S, &str, &mut Tx) + 'static) -> Self {
-        self.handlers.close = Some(Rc::new(f));
-        self
-    }
-    pub fn on_double_click(mut self, f: impl Fn(&mut S, &str, &mut Tx) + 'static) -> Self {
-        self.handlers.double = Some(Rc::new(f));
-        self
-    }
+    pub fn on_close(mut self, f: impl Fn(&mut S, &str, &mut Tx) + 'static) -> Self { self.handlers.close = Some(Rc::new(f)); self }
+    pub fn on_double_click(mut self, f: impl Fn(&mut S, &str, &mut Tx) + 'static) -> Self { self.handlers.double = Some(Rc::new(f)); self }
     /// The pointer entering (`true`) and leaving a tab. The strip draws its hover by hover
     /// groups, so a handler that changes nothing the view draws says `tx.live_only()`, and the
     /// hover runs no view; without a handler it never does.
-    pub fn on_hover(mut self, f: impl Fn(&mut S, &str, bool, &mut Tx) + 'static) -> Self {
-        self.handlers.hover = Some(Rc::new(f));
-        self
-    }
-    pub fn on_reorder(mut self, f: impl Fn(&mut S, TabReorder, &mut Tx) + 'static) -> Self {
-        self.handlers.reorder = Some(Rc::new(f));
-        self
-    }
-    pub fn on_tear_out(mut self, f: impl Fn(&mut S, TabTearOut, &mut Tx) + 'static) -> Self {
-        self.handlers.tear_out = Some(Rc::new(f));
-        self
-    }
+    pub fn on_hover(mut self, f: impl Fn(&mut S, &str, bool, &mut Tx) + 'static) -> Self { self.handlers.hover = Some(Rc::new(f)); self }
+    pub fn on_reorder(mut self, f: impl Fn(&mut S, TabReorder, &mut Tx) + 'static) -> Self { self.handlers.reorder = Some(Rc::new(f)); self }
+    pub fn on_tear_out(mut self, f: impl Fn(&mut S, TabTearOut, &mut Tx) + 'static) -> Self { self.handlers.tear_out = Some(Rc::new(f)); self }
     /// Each move of a torn-out tab, and its return to the strip, while the button is down.
-    pub fn on_tear_move(mut self, f: impl Fn(&mut S, TabTearMove, &mut Tx) + 'static) -> Self {
-        self.handlers.tear_move = Some(Rc::new(f));
-        self
-    }
+    pub fn on_tear_move(mut self, f: impl Fn(&mut S, TabTearMove, &mut Tx) + 'static) -> Self { self.handlers.tear_move = Some(Rc::new(f)); self }
 
     /// The strip. A torn-out tab stays inside the strip's clip; [`Self::build_layered`] lifts it out.
     pub fn build(self, k: &Kit) -> El {
-        self.assemble(k, None)
+        self.core.assemble(k, None, &self.handlers)
     }
 
     /// The strip, with a torn-out tab floating over the window in `layer`, which the view mounts
     /// at its root with [`crate::root`] as it does popovers and menus.
     pub fn build_layered(self, k: &Kit, layer: &mut Vec<El>) -> El {
-        self.assemble(k, Some(layer))
+        self.core.assemble(k, Some(layer), &self.handlers)
     }
-
-    fn assemble(mut self, k: &Kit, mut layer: Option<&mut Vec<El>>) -> El {
-        let vertical = self.orientation == TabOrientation::Vertical;
-        let overflow = self.overflow.unwrap_or(if vertical { TabOverflow::VERTICAL_DEFAULT } else { TabOverflow::HORIZONTAL_DEFAULT });
-        let gap = self.gap.unwrap_or(if vertical { 3.0 } else { 6.0 });
-        // Tabs given whole take the lazy path too: each is built once, in order.
-        let (slots, mut build): (Vec<TabSlot<'a>>, Build<'a, S>) = match self.lazy.take() {
-            Some(lazy) => lazy,
-            None => {
-                let slots = self.items.iter().map(|t| TabSlot { id: t.id.clone(), pinned: t.pinned, two_line: t.subtitle.is_some(), keep: t.marked || t.editor.is_some() }).collect();
-                let mut items: Vec<Option<TabItem<'a, S>>> = std::mem::take(&mut self.items).into_iter().map(Some).collect();
-                (slots, Box::new(move |i| items[i].take().expect("a tab builds once")))
-            }
-        };
-        let count = slots.len();
-        let pinned = slots.iter().filter(|t| t.pinned).count();
-        let mut drag = self.drag.as_ref().map(|d| d.0.clone()).unwrap_or_default();
-        let access = self.drag.as_ref().map(|d| d.1);
-        let trailing = if self.trailing.is_some() { self.trailing_width + gap } else { 0.0 };
-        // A tab coming in from another strip takes its share already, so it lands in its gap as is.
-        let incoming = usize::from(drag.incoming().is_some());
-        let (tab_w, pinned_w) = match overflow {
-            TabOverflow::ShrinkThenScroll { max_width, pinned_width, min_width, .. } => {
-                let w = self.viewport.map_or(max_width, |v| overflow.tab_width(v - trailing, count - pinned + incoming, pinned, gap));
-                (drag.width_lock.map_or(w, |l| l.max(min_width)), pinned_width)
-            }
-            TabOverflow::Scroll { .. } => (f32::INFINITY, f32::INFINITY),
-        };
-        // Each tab's length along the strip with the gap after it: its width across, its row down.
-        let two_line_height = 45.0;
-        let pitch = |pin: bool, two_line: bool| match (vertical, pin) {
-            (false, true) => pinned_w + gap,
-            (false, false) => tab_w + gap,
-            (true, _) => (if two_line { two_line_height } else { self.row_height }) + gap,
-        };
-        let pitches: Vec<f32> = slots.iter().map(|t| pitch(t.pinned, t.two_line)).collect();
-        let auto = auto_scroll::view(&format!("{}-scroll", self.key));
-        let mut landing = None;
-        if let Some(point) = drag.incoming() {
-            let slot = landing_slot(&pitches, pinned, point, &auto, vertical);
-            landing = Some(slot);
-            drag.open_gap(slot, pitch(false, false));
-        }
-        let st = Strip {
-            handlers: self.handlers,
-            access,
-            base: self.fill.unwrap_or(k.c.bg_deep),
-            separator: if k.dark { k.c.layer_02 } else { k.c.layer_03 },
-            gap,
-            row_height: self.row_height,
-            two_line_height,
-            link_inset: 8.0,
-            count,
-            spring: self.spring,
-            select_on_drag_start: self.select_on_drag_start.unwrap_or(true),
-            horizontal_lock: !vertical,
-            matched: self.matched.map(str::to_owned),
-            close_icon: self.close_icon,
-            close_tab_stop: self.close_tab_stop,
-            hover_none: self.hover_none,
-            busy: self.busy,
-            words: self.words,
-            auto,
-            scroll_key: format!("{}-scroll", self.key),
-            list_key: format!("{}-list", self.key),
-            layered: layer.is_some(),
-            drag,
-        };
-        let active = self.active;
-        // A hover hides its tab's separators by hover groups (`tab::build`); the active tab has none.
-        let quiet = |i: usize| active == Some(slots[i].id.as_ref());
-        let tear = self.tear.filter(|t| count > 1 || t.lone);
-        // Which tabs are built: past `BAND_PAST`, those near what the strip shows, and the ones a
-        // gesture, a key or a menu is on wherever they are.
-        let shown = (count > BAND_PAST).then(|| {
-            let along = if vertical { (self.row_height + gap) * 6.0 } else { (tab_w + gap) * 4.0 };
-            let fallback = if vertical { 1200.0 } else { self.viewport.unwrap_or(2000.0) };
-            let (lo, hi) = band(&st.list_key, &st.scroll_key, vertical, along.max(64.0), fallback);
-            let mut start = 0.0;
-            let mut built: Vec<bool> = pitches
-                .iter()
-                .map(|p| {
-                    let near = start < hi && start + p > lo;
-                    start += p;
-                    near
-                })
-                .collect();
-            let keep = [Some(0), Some(count - 1), slots.iter().position(|t| active == Some(t.id.as_ref())), st.drag.dragging()];
-            let near_landing = landing.map(|s| [s.checked_sub(1), Some(s)]).unwrap_or_default();
-            for i in keep.into_iter().chain(near_landing).flatten().chain(slots.iter().enumerate().filter(|(_, t)| t.keep || t.pinned).map(|(i, _)| i)) {
-                if let Some(b) = built.get_mut(i) {
-                    *b = true;
-                }
-            }
-            built
-        });
-        let mut tabs: Vec<El> = Vec::with_capacity(count.min(BAND_PAST * 2));
-        // Where each built tab's element is in `tabs`.
-        let mut at_child: Vec<Option<usize>> = vec![None; count];
-        // A run of tabs not built: where it starts, and its length along the strip.
-        let mut run: Option<(usize, f32)> = None;
-        let space = |tabs: &mut Vec<El>, run: &mut Option<(usize, f32)>, end: usize| {
-            let Some((from, len)) = run.take() else { return };
-            let el = el().key(format!("{}-unbuilt-{from}", st.list_key)).a11y_hidden();
-            tabs.push(if vertical {
-                // A row reaches half the gap past each neighbour, but the first and last don't.
-                let ends = (if from == 0 { gap / 2.0 } else { 0.0 }) + (if end == count { gap / 2.0 } else { 0.0 });
-                el.w_full().h(len - ends)
-            } else {
-                // The row's own gap stands after it, as after a tab.
-                el.w(len - gap).h(st.row_height)
-            });
-        };
-        for i in 0..count {
-            if shown.as_ref().is_some_and(|b| !b[i]) {
-                let (from, len) = run.unwrap_or((i, 0.0));
-                run = Some((from, len + pitches[i]));
-                continue;
-            }
-            space(&mut tabs, &mut run, i);
-            let item = build(i);
-            let pin = slots[i].pinned;
-            let width = (!vertical).then_some(if pin { pinned_w } else { tab_w });
-            let (lo, hi) = if pin { (0, pinned) } else { (pinned, count) };
-            let at = tab::Place {
-                index: i,
-                lane: drag::Lane { index: i, lo, hi, pitch: pitches[i], pinned: pin, tear },
-                width,
-                density: if pin { TabDensity::IconOnly } else { width.map_or(TabDensity::Full, TabOverflow::density_for) },
-                active: quiet(i),
-                separator: !vertical && i > 0 && !quiet(i) && !quiet(i - 1),
-            };
-            let (tab, ghost) = tab::build(item, at, (i > 0).then(|| slots[i - 1].id.as_ref()), &st, k);
-            if let (Some(layer), Some(ghost)) = (layer.as_deref_mut(), ghost) {
-                layer.push(ghost);
-            }
-            at_child[i] = Some(tabs.len());
-            tabs.push(tab);
-        }
-        space(&mut tabs, &mut run, count);
-        // The incoming tab's place: an empty slot its own length, which the tabs after it make
-        // room for on the reorder spring and the tab takes when it's let go.
-        if let Some((slot, pitch)) = st.drag.gap() {
-            let place = el().key(format!("{}-incoming", st.list_key)).a11y_hidden();
-            let place = if vertical { place.w_full().h(pitch) } else { place.w(pitch - gap).h(st.row_height) };
-            let child = at_child.get(slot).copied().flatten().unwrap_or(tabs.len());
-            tabs.insert(child, place);
-        }
-        let fade = overflow.fade();
-        let mut root = if vertical {
-            let list = col().key(st.list_key.clone()).role("tablist").label(self.label).focus_group().w_full().pb(fade).children(tabs);
-            let scroll = col()
-                .key(st.scroll_key.clone())
-                .w_full()
-                .grow(1.0)
-                .min_h(0.0)
-                .scroll(ScrollSpec { stick_bottom: false })
-                .scroll_fade(ScrollFade::feather(fade))
-                .scroll_margin(fade)
-                .child(list);
-            let scroll = auto_scroll::watch(scroll, &st.auto);
-            col().key(self.key).w_full().grow(1.0).min_h(0.0).child(scroll).children(self.trailing)
-        } else {
-            let list = row().key(st.list_key.clone()).role("tablist").label(self.label).focus_group().gap(gap).center_y().children(tabs);
-            let scroll = row().key(st.scroll_key.clone()).h(st.row_height).shrink().min_w(0.0).scroll_x().scroll_fade(ScrollFade::strength(fade).linear().full_at(0.1)).child(list);
-            let scroll = auto_scroll::watch(scroll, &st.auto);
-            // It grows into the space it's given, so its width is what the tabs may share.
-            row().key(self.key).grow(1.0).shrink().min_w(0.0).gap(gap).center_y().child(scroll).children(self.trailing)
-        };
-        if let Some(access) = access {
-            root = root.on_hover_change(move |s: &mut S, inside, tx: &mut Tx| {
-                // Only letting go of the width lock a close left changes what the strip draws.
-                if inside || !access(s).leave() {
-                    tx.live_only();
-                }
-            });
-        }
-        root
-    }
-}
-
-/// Past this many tabs a strip builds only those near what it shows ([`TabStrip::lazy_tabs`]).
-pub const BAND_PAST: usize = 40;
-
-/// The stretch of the strip whose tabs are built, in points along it from its first tab: what
-/// the scroll viewport shows, rounded out to whole steps of `step` and a step more each side. The
-/// view reads where the list is scrolled to in those steps, so a scroll runs it once a step, not
-/// every frame; before the first layout it's the strip's start and `fallback` long.
-fn band(list_key: &str, scroll_key: &str, vertical: bool, step: f32, fallback: f32) -> (f32, f32) {
-    let a = usize::from(vertical);
-    let start = rune::memo::layout_with(list_key, move |r| r[a]);
-    let at = start.and_then(|start| rune::memo::window_layout_with(list_key, move |w| ((start - w[a]) / step).floor() as i32)).unwrap_or(0);
-    let shows = rune::memo::layout_with(scroll_key, move |r| (r[2 + a] / step).ceil() as i32).unwrap_or((fallback / step).ceil() as i32);
-    ((at - 1) as f32 * step, (at + 2 + shows) as f32 * step)
-}
-
-/// The slot a tab dragged in from another strip lands in at `point` (view points): after each
-/// unpinned tab whose middle the point has passed, measured with each tab's own length (`pitches`)
-/// from where the strip's viewport drew and how far it has scrolled.
-fn landing_slot(pitches: &[f32], pinned: usize, point: [f32; 2], auto: &auto_scroll::View, vertical: bool) -> usize {
-    let a = usize::from(vertical);
-    let along = point[a] - auto_scroll::rect(auto)[a] + auto_scroll::offset(auto, vertical);
-    let mut start = 0.0;
-    for (i, pitch) in pitches.iter().enumerate() {
-        if i >= pinned && along < start + pitch / 2.0 {
-            return i;
-        }
-        start += pitch;
-    }
-    pitches.len()
 }

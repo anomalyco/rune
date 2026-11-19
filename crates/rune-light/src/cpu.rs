@@ -7,15 +7,33 @@
 
 use crate::{FLAG_OCCLUDER, Light, Prim};
 
+const CONTINUOUS_K: f32 = 1.528_664_8;
+
+fn sd_continuous(p: [f32; 2], half: [f32; 2], r: f32) -> f32 {
+    let e = CONTINUOUS_K * r;
+    let q = [half[0] - p[0].abs(), half[1] - p[1].abs()];
+    let v = [e - q[0], e - q[1]];
+    if v[0] <= 0.0 || v[1] <= 0.0 {
+        return (-q[0]).max(-q[1]);
+    }
+    let u = v[1].atan2(v[0]) * (4.0 / std::f32::consts::PI) - 1.0;
+    let u2 = u * u;
+    (v[0] * v[0] + v[1] * v[1]).sqrt() - e * (1.146_022_95 + u2 * (-0.375_731_61 + u2 * (0.307_966_09 - 0.077_243_54 * u2)))
+}
+
 fn sd_rrect(p: [f32; 2], half: [f32; 2], radii: [f32; 4]) -> f32 {
-    let mut r = if p[0] > 0.0 {
+    let r = if p[0] > 0.0 {
         if p[1] > 0.0 { radii[2] } else { radii[1] }
     } else if p[1] > 0.0 {
         radii[3]
     } else {
         radii[0]
     };
-    r = r.min(half[0].min(half[1]));
+    let m = half[0].min(half[1]);
+    if r < 0.0 {
+        return sd_continuous(p, half, (-r).min(m));
+    }
+    let r = r.min(m);
     let q = [p[0].abs() - half[0] + r, p[1].abs() - half[1] + r];
     q[0].max(q[1]).min(0.0) + (q[0].max(0.0).hypot(q[1].max(0.0))) - r
 }

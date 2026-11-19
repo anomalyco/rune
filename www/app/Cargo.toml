@@ -15,7 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 rune = { workspace = true }
-rune-kit = { workspace = true, features = ["syntax"] }
+rune-kit = { workspace = true, default-features = true }
 rune-motion = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

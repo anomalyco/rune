@@ -168,7 +168,7 @@ fn a_poll_that_holds_a_minimize_lets_the_shell_after_the_show_take_it() {
     assert!(!rt.minimize_step(MinimizeEvent::Taken));
     assert!(!rt.minimize_step(MinimizeEvent::Returned), "nothing to carry out at the return");
     assert!(rt.minimize_step(MinimizeEvent::Taken), "the shell after the show takes it");
-    assert_eq!(rt.minimize, Minimize::None);
+    assert_eq!(rt.host.minimize, Minimize::None);
 }
 
 #[test]
@@ -203,14 +203,14 @@ fn a_hidden_polls_minimize_survives_its_popup_callback_asking_again() {
     loop {
         took.push(shell_take(&mut rt));
         let opened = popup.open(&mut rt, None, false);
-        if !opened && !rt.minimize.field() { break; }
+        if !opened && !rt.host.minimize.field() { break; }
     }
     // The show happens, and the shell after it takes what the poll held.
     poll.leave(&mut rt);
     took.push(shell_take(&mut rt));
 
     assert_eq!(took, [false, true, true], "the retry takes the callback's ask, the show's shell the poll's");
-    assert_eq!(rt.minimize, Minimize::None);
+    assert_eq!(rt.host.minimize, Minimize::None);
 }
 
 #[test]

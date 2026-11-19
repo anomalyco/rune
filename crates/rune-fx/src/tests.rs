@@ -248,3 +248,83 @@ fn zero_amplitude_electricity_is_a_straight_finite_line() {
         }
     }
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn wgsl_uniform_and_storage_layouts_match_rust() {
+    use crate::pack::InstRaw;
+    use crate::renderer::Globals;
+    use crate::sim::SimUniform;
+    use wgpu::naga::{TypeInner, front::wgsl, proc::Layouter, valid::{Capabilities, ValidationFlags, Validator}};
+
+    let check = |label: &str, source: &str, structs: &[(&str, usize, &[(&str, usize)])]| {
+        let module = wgsl::parse_str(source).unwrap_or_else(|e| panic!("{label}: {}", e.emit_to_string(source)));
+        Validator::new(ValidationFlags::all(), Capabilities::default() | Capabilities::SHADER_FLOAT16_IN_FLOAT32)
+            .validate(&module)
+            .unwrap_or_else(|e| panic!("{label}: {e}"));
+        let mut layouter = Layouter::default();
+        layouter.update(module.to_ctx()).unwrap_or_else(|e| panic!("{label}: {e}"));
+        for &(name, size, expected) in structs {
+            let (handle, ty) = module
+                .types
+                .iter()
+                .find(|(_, t)| t.name.as_deref() == Some(name))
+                .unwrap_or_else(|| panic!("{label}: WGSL struct {name} not found"));
+            assert_eq!(layouter[handle].size as usize, size, "{label} {name} size");
+            let TypeInner::Struct { members, span } = &ty.inner else { panic!("{label}: {name} is not a struct") };
+            assert_eq!(*span as usize, size, "{label} {name} span");
+            assert_eq!(members.len(), expected.len(), "{label} {name} member count");
+            for (member, &(field, offset)) in members.iter().zip(expected) {
+                assert_eq!(member.name.as_deref(), Some(field), "{label} {name}.{field} name");
+                assert_eq!(member.offset as usize, offset, "{label} {name}.{field} offset");
+            }
+        }
+    };
+
+    let inst_fields: &[(&str, usize)] = &[
+        ("rect", std::mem::offset_of!(InstRaw, rect)),
+        ("shape", std::mem::offset_of!(InstRaw, shape)),
+        ("bounds", std::mem::offset_of!(InstRaw, bounds)),
+        ("c0", std::mem::offset_of!(InstRaw, c0)),
+        ("c1", std::mem::offset_of!(InstRaw, c1)),
+        ("c2", std::mem::offset_of!(InstRaw, c2)),
+        ("p0", std::mem::offset_of!(InstRaw, p0)),
+        ("p1", std::mem::offset_of!(InstRaw, p1)),
+        ("p2", std::mem::offset_of!(InstRaw, p2)),
+        ("p3", std::mem::offset_of!(InstRaw, p3)),
+        ("t", std::mem::offset_of!(InstRaw, t)),
+        ("aux", std::mem::offset_of!(InstRaw, aux)),
+        ("aux2", std::mem::offset_of!(InstRaw, aux2)),
+        ("xf", std::mem::offset_of!(InstRaw, xf)),
+        ("clip", std::mem::offset_of!(InstRaw, clip)),
+        ("fade", std::mem::offset_of!(InstRaw, fade)),
+    ];
+    let globals_fields: &[(&str, usize)] = &[
+        ("viewport", std::mem::offset_of!(Globals, viewport)),
+        ("dither", std::mem::offset_of!(Globals, dither)),
+        ("srgb", std::mem::offset_of!(Globals, srgb)),
+    ];
+    let fx_src = format!("{}\n{}\n{}", crate::pipes::CLIP, crate::pipes::COMMON, crate::pipes::SOURCES[0].1);
+    check(
+        "common+glow.wgsl",
+        &fx_src,
+        &[
+            ("Globals", std::mem::size_of::<Globals>(), globals_fields),
+            ("Inst", std::mem::size_of::<InstRaw>(), inst_fields),
+        ],
+    );
+
+    let sim_fields: &[(&str, usize)] = &[
+        ("dims", std::mem::offset_of!(SimUniform, dims)),
+        ("origin", std::mem::offset_of!(SimUniform, origin)),
+        ("shape", std::mem::offset_of!(SimUniform, shape)),
+        ("shape2", std::mem::offset_of!(SimUniform, shape2)),
+        ("fire", std::mem::offset_of!(SimUniform, fire)),
+        ("fire2", std::mem::offset_of!(SimUniform, fire2)),
+    ];
+    check(
+        "firesim.wgsl",
+        include_str!("shaders/firesim.wgsl"),
+        &[("P", std::mem::size_of::<SimUniform>(), sim_fields)],
+    );
+}

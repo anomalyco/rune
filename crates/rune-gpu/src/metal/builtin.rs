@@ -75,11 +75,11 @@ pub(super) fn find(shared: &Shared, key: &str) -> Option<Compiled> {
         MISSES.fetch_add(1, Ordering::Relaxed);
         return None;
     };
-    let (_, name, sized, workgroup) = FUNCTIONS[at];
+    let (_, name, sized, workgroup, workgroup_memory) = FUNCTIONS[at];
     let library = shared.builtin.get_or_init(|| library(shared, LIBRARY).ok()).as_ref()?;
     let function = function(library, name).ok()?;
     let sized = sized.iter().map(|&(group, binding)| naga::ResourceBinding { group, binding }).collect();
-    Some(Compiled { function, sized, workgroup })
+    Some(Compiled { function, sized, workgroup, workgroup_memory: workgroup_memory.to_vec() })
 }
 
 /// How many pipelines compiled at runtime because the table lacked them.
@@ -95,11 +95,20 @@ pub(super) fn capture(ir: &Ir, point: &Point<'_>, resources: &msl::EntryPointRes
     let split = msl.source.rfind("#include").and_then(|at| msl.source[at..].find('\n').map(|n| at + n + 1)).unwrap_or(0);
     let (head, body) = msl.source.split_at(split);
     let sized: Vec<String> = msl.sized.iter().map(|b| format!("({}, {})", b.group, b.binding)).collect();
+    let workgroup_memory: Vec<String> = msl.workgroup_memory.iter().map(|n| n.to_string()).collect();
     let [x, y, z] = msl.workgroup;
     // Pipelines whose MSL is the same share one function.
     let space = format!("m{}", short(&blake3::hash(body.as_bytes())));
     let write = |name: String, text: String| std::fs::write(dir.join(name), text).expect("RUNE_METAL_CAPTURE: write");
     write(format!("{space}.metal"), format!("{head}namespace {space} {{\n{body}\n}}\n"));
-    write(format!("{key}.row"), format!("    (\"{key}\", \"{space}::{}\", &[{}], [{x}, {y}, {z}]),\n", msl.function, sized.join(", ")));
+    write(
+        format!("{key}.row"),
+        format!(
+            "    (\"{key}\", \"{space}::{}\", &[{}], [{x}, {y}, {z}], &[{}]),\n",
+            msl.function,
+            sized.join(", "),
+            workgroup_memory.join(", "),
+        ),
+    );
     write(format!("{}.source", short(&ir.hash)), String::new());
 }

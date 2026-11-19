@@ -6,7 +6,7 @@ license.workspace = true
 description = "Scalar CPU reference renderer for Rune's device-pixel instance stream."
 
 [features]
-gpu = ["dep:rune"]
+gpu = ["dep:rune", "dep:rune-fx", "dep:wgpu"]
 
 [dependencies]
 libm = { version = "=0.2.16", default-features = false, features = ["force-soft-floats"] }
@@ -15,6 +15,8 @@ half = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 rune = { workspace = true, default-features = true, optional = true }
+rune-fx = { workspace = true, optional = true }
+wgpu = { workspace = true, optional = true }
 
 [dev-dependencies]
 proptest = "1"

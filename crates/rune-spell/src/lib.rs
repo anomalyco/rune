@@ -71,16 +71,12 @@ pub fn available_languages() -> Vec<String> {
 }
 
 /// The dictionaries checking text now: those [`set_languages`] chose that the platform has, else
-/// one per system language (matched exactly or by base language, `de-AT` to `de`), with US
-/// English added when none of them is English, as Desktop's `defaultSpellcheckLanguages`.
+/// one per system language (matched exactly or by base language, `de-AT` to `de` or `de-DE`),
+/// with US English added when none of them is English, as Desktop's `defaultSpellcheckLanguages`.
 pub fn languages() -> Vec<String> {
     let available = platform::available();
     let chosen = CHOSEN.lock().map(|c| c.clone()).unwrap_or_default();
-    let chosen: Vec<String> = available.iter().filter(|tag| chosen.contains(tag)).cloned().collect();
-    if !chosen.is_empty() {
-        return chosen;
-    }
-    default_languages(&available, &platform::preferred())
+    resolve_languages(&available, &chosen, &platform::preferred())
 }
 
 /// In a browser, the Hunspell dictionaries the page has beside it, as `spell/<tag>.aff` and
@@ -105,7 +101,7 @@ pub fn set_languages(tags: &[String]) {
 /// A language tag's English name as a browser's `Intl.DisplayNames` gives it: `en-US` is
 /// "American English", `fr-FR` "French (France)".
 pub fn language_name(tag: &str) -> String {
-    DIALECTS.iter().find(|(t, _)| t.eq_ignore_ascii_case(tag)).map_or_else(|| platform::english_name(tag), |(_, name)| (*name).to_owned())
+    DIALECTS.iter().find(|(t, _)| tags_match(t, tag)).map_or_else(|| platform::english_name(tag), |(_, name)| (*name).to_owned())
 }
 
 /// A language tag's name in `locale`'s language as a browser's `Intl.DisplayNames(locale)`
@@ -149,24 +145,80 @@ const DIALECTS: &[(&str, &str)] = &[
     ("zh-Hant", "Traditional Chinese"),
 ];
 
+/// Primary language subtag of a BCP 47 / POSIX tag (`en-AU` and `en_AU` both yield `en`).
+fn base_language(tag: &str) -> &str {
+    let tag = tag.trim();
+    tag.split(['-', '_']).next().unwrap_or(tag)
+}
+
+/// Exact tag equality ignoring ASCII case and `-` vs `_` separators.
+pub(crate) fn tags_match(a: &str, b: &str) -> bool {
+    let (a, b) = (a.trim().as_bytes(), b.trim().as_bytes());
+    let norm = |c: u8| if c == b'_' { b'-' } else { c.to_ascii_lowercase() };
+    a.len() == b.len() && a.iter().zip(b).all(|(&x, &y)| norm(x) == norm(y))
+}
+
+/// Finds the best available dictionary for `requested`: exact match (case/`_`-insensitive),
+/// then a bare base-language dictionary (`de`), then any regional dictionary sharing the
+/// exact primary language subtag (`de-DE`), never matching unrelated languages by prefix.
+fn match_tag(available: &[String], requested: &str) -> Option<String> {
+    let base = base_language(requested);
+    if base.is_empty() {
+        return None;
+    }
+    available
+        .iter()
+        .find(|a| tags_match(a, requested))
+        .or_else(|| available.iter().find(|a| tags_match(a, base)))
+        .or_else(|| available.iter().find(|a| base_language(a).eq_ignore_ascii_case(base)))
+        .cloned()
+}
+
+/// Resolves active dictionaries from explicit `chosen` overrides, falling back to `preferred`.
+fn resolve_languages(available: &[String], chosen: &[String], preferred: &[String]) -> Vec<String> {
+    let mut resolved = Vec::new();
+    for tag in chosen {
+        if let Some(matched) = match_tag(available, tag)
+            && !resolved.iter().any(|existing: &String| tags_match(existing, &matched))
+        {
+            resolved.push(matched);
+        }
+    }
+    if !resolved.is_empty() {
+        return resolved;
+    }
+    default_languages(available, preferred)
+}
+
+/// Filters loaded dictionaries to only those in `active`, so deselected web dictionaries stop
+/// being consulted without needing to unload them.
+#[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
+pub(crate) fn active_dicts<'a, T>(loaded: &'a [(String, T)], active: &[String]) -> Vec<&'a T> {
+    loaded
+        .iter()
+        .filter(|(tag, _)| active.iter().any(|wanted| tags_match(tag, wanted)))
+        .map(|(_, dict)| dict)
+        .collect()
+}
+
 /// Desktop's `defaultSpellcheckLanguages` (spellcheck-languages.ts): one dictionary per preferred
 /// language, then US English when none of them is English, as prompts mix prose with English
 /// code terms.
 fn default_languages(available: &[String], preferred: &[String]) -> Vec<String> {
-    let base = |tag: &str| tag.split('-').next().unwrap_or(tag).to_ascii_lowercase();
-    let find = |tag: &str| available.iter().find(|a| a.eq_ignore_ascii_case(tag)).cloned();
     let mut found: Vec<String> = Vec::new();
     for tag in preferred {
-        if let Some(language) = find(tag).or_else(|| find(&base(tag)))
-            && !found.iter().any(|f| base(f) == base(&language))
+        if let Some(language) = match_tag(available, tag)
+            && !found.iter().any(|f| base_language(f).eq_ignore_ascii_case(base_language(&language)))
         {
             found.push(language);
         }
     }
-    if found.iter().any(|f| base(f) == "en") || !available.iter().any(|a| a == "en-US") {
+    if found.iter().any(|f| base_language(f).eq_ignore_ascii_case("en")) {
         return found;
     }
-    found.push("en-US".to_owned());
+    if let Some(us) = available.iter().find(|a| tags_match(a, "en-US")) {
+        found.push(us.clone());
+    }
     found
 }
 
@@ -406,3 +458,6 @@ pub fn learn(word: &str) {
     CHECKED.with_borrow_mut(|(_, checked)| checked.clear());
     WORDS.with_borrow_mut(|w| *w = Words::default());
 }
+
+#[cfg(test)]
+mod tests;

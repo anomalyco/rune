@@ -24,6 +24,21 @@ pub struct Track {
     pad: f32,
 }
 
+const _: () = {
+    assert!(std::mem::size_of::<Track>() == 48);
+    assert!(std::mem::offset_of!(Track, abcd) == 0);
+    assert!(std::mem::offset_of!(Track, rates) == 16);
+    assert!(std::mem::offset_of!(Track, target) == 24);
+    assert!(std::mem::offset_of!(Track, kind) == 28);
+    assert!(std::mem::offset_of!(Track, start) == 32);
+    assert!(std::mem::offset_of!(Track, duration) == 40);
+    assert!(std::mem::offset_of!(Track, pad) == 44);
+    assert!(std::mem::size_of::<Node>() == 144);
+    assert!(std::mem::offset_of!(Node, x) == 0);
+    assert!(std::mem::offset_of!(Node, y) == 48);
+    assert!(std::mem::offset_of!(Node, opacity) == 96);
+};
+
 impl Track {
     pub fn new(spring: Spring, time: f64, from: f32, target: f32, velocity: f32, epsilon: f32) -> Self {
         assert!([from, target, velocity].iter().all(|v| v.is_finite()));
@@ -149,5 +164,73 @@ mod tests {
             }
         }
         assert_eq!(Track::constant(1.0).settle_at(), 0.0);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn wgsl_spring_layouts_match_rust() {
+        use wgpu::naga::{TypeInner, front::wgsl, proc::Layouter, valid::{Capabilities, ValidationFlags, Validator}};
+
+        // `springs.wgsl` is concatenated after `shader.wgsl`; stub the vertex interface it references.
+        const STUB: &str = r#"
+struct Globals { viewport: vec2<f32>, pad: vec2<f32>, flags: vec4<f32> };
+@group(0) @binding(0) var<uniform> g: Globals;
+struct In {
+    @location(0) rect: vec4<f32>,
+    @location(1) radii: vec4<f32>,
+    @location(2) fill: vec4<f32>,
+    @location(3) border: vec4<f32>,
+    @location(4) params: vec4<f32>,
+    @location(5) uv: vec4<f32>,
+};
+struct Out { @builtin(position) pos: vec4<f32> };
+fn base_vs(i: In) -> Out { var o: Out; o.pos = vec4<f32>(0.0); return o; }
+"#;
+        let source = format!("{STUB}\n{SHADER}");
+        let module = wgsl::parse_str(&source).unwrap_or_else(|e| panic!("{}", e.emit_to_string(&source)));
+        Validator::new(ValidationFlags::all(), Capabilities::default())
+            .validate(&module)
+            .expect("validate springs.wgsl");
+        let mut layouter = Layouter::default();
+        layouter.update(module.to_ctx()).expect("layout springs.wgsl");
+
+        let check = |name: &str, size: usize, expected: &[(&str, usize)]| {
+            let (handle, ty) = module
+                .types
+                .iter()
+                .find(|(_, t)| t.name.as_deref() == Some(name))
+                .unwrap_or_else(|| panic!("WGSL struct {name} not found"));
+            assert_eq!(layouter[handle].size as usize, size, "{name} size");
+            let TypeInner::Struct { members, span } = &ty.inner else { panic!("{name} is not a struct") };
+            assert_eq!(*span as usize, size, "{name} span");
+            assert_eq!(members.len(), expected.len(), "{name} member count");
+            for (member, &(field, offset)) in members.iter().zip(expected) {
+                assert_eq!(member.name.as_deref(), Some(field), "{name}.{field} name");
+                assert_eq!(member.offset as usize, offset, "{name}.{field} offset");
+            }
+        };
+
+        check(
+            "SpringTrack",
+            std::mem::size_of::<Track>(),
+            &[
+                ("abcd", std::mem::offset_of!(Track, abcd)),
+                ("rates", std::mem::offset_of!(Track, rates)),
+                ("goal", std::mem::offset_of!(Track, target)),
+                ("kind", std::mem::offset_of!(Track, kind)),
+                ("start", std::mem::offset_of!(Track, start)),
+                ("duration", std::mem::offset_of!(Track, duration)),
+                ("pad", std::mem::offset_of!(Track, pad)),
+            ],
+        );
+        check(
+            "SpringNode",
+            std::mem::size_of::<Node>(),
+            &[
+                ("x", std::mem::offset_of!(Node, x)),
+                ("y", std::mem::offset_of!(Node, y)),
+                ("opacity", std::mem::offset_of!(Node, opacity)),
+            ],
+        );
     }
 }

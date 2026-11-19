@@ -23,14 +23,14 @@ use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_manager_v1:
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::{Layer, ZwlrLayerShellV1};
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::{self, Anchor, KeyboardInteractivity, ZwlrLayerSurfaceV1};
 
-use super::layer_shell_machine::{readiness, touch};
+use super::layer_shell_machine::{keyboard, readiness, touch};
 use crate::el::Align;
 use crate::overlay::{Placement, ScreenEdge};
 use crate::runtime::Waker;
 use crate::{OverlayInput, OverlayOptions, OverlayPlacement};
 
 pub(crate) enum Input {
-    Move(f32, f32), Leave, Button(bool), Secondary(bool), Key(crate::KeyEvent), KeyUp(crate::KeyEvent),
+    Move(f32, f32), Leave, Button(bool), Secondary(bool), Focus(bool), Key(crate::KeyEvent), KeyUp(crate::KeyEvent),
     Physical(crate::PhysicalInput, Option<crate::KeyEvent>),
 }
 
@@ -55,7 +55,7 @@ struct State {
     input: Vec<Input>,
     surface: Option<WlSurface>,
     over: Over,
-    keyboard_focus: bool,
+    keyboard_focus: keyboard::FocusState,
     want_pointer: bool,
     want_keys: bool,
     capabilities: Option<wl_seat::Capability>,
@@ -68,6 +68,7 @@ struct State {
     shape: Option<WpCursorShapeDeviceV1>,
     keyboard: Option<WlKeyboard>,
     xkb: Option<xkbcommon::xkb::State>,
+    mod_state: Option<keyboard::ModState>,
 }
 
 impl Dispatch<WlOutput, ()> for State {
@@ -82,9 +83,12 @@ impl Dispatch<WlSeat, ()> for State {
     }
 }
 impl State {
-    /// The keyboard's focus on our surface. One writer: a focus can't outlive the keyboard this
-    /// side took away.
-    fn set_keyboard_focus(&mut self, focused: bool) { self.keyboard_focus = focused; }
+    fn step_keyboard_focus(&mut self, event: keyboard::FocusEvent) {
+        for effect in keyboard::step(&mut self.keyboard_focus, event) {
+            let keyboard::FocusEffect::Focus(focused) = effect;
+            self.input.push(Input::Focus(focused));
+        }
+    }
 
     fn update_seat(&mut self, seat: &WlSeat, qh: &QueueHandle<Self>) {
         let caps = self.capabilities.unwrap_or_else(wl_seat::Capability::empty);
@@ -110,7 +114,8 @@ impl State {
         if !keyboard && let Some(k) = self.keyboard.take() {
             if k.version() >= 3 { k.release(); }
             self.xkb = None;
-            self.set_keyboard_focus(false);
+            self.mod_state = None;
+            self.step_keyboard_focus(keyboard::FocusEvent::KeyboardGone);
         }
     }
 }
@@ -167,32 +172,49 @@ impl Dispatch<WlKeyboard, ()> for State {
     fn event(state: &mut Self, _: &WlKeyboard, event: wl_keyboard::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
         use xkbcommon::xkb;
         match event {
-            wl_keyboard::Event::Enter { surface, .. } => state.set_keyboard_focus(state.surface.as_ref() == Some(&surface)),
+            wl_keyboard::Event::Enter { surface, .. } => {
+                let focus_event = if state.surface.as_ref() == Some(&surface) {
+                    keyboard::FocusEvent::EnterOurs
+                } else {
+                    keyboard::FocusEvent::EnterOther
+                };
+                state.step_keyboard_focus(focus_event);
+            }
             wl_keyboard::Event::Leave { surface, .. } if state.surface.as_ref() == Some(&surface) => {
-                state.set_keyboard_focus(false);
-                state.input.push(Input::Physical(crate::PhysicalInput::FocusLost, None));
+                state.step_keyboard_focus(keyboard::FocusEvent::LeaveOurs);
             }
             wl_keyboard::Event::Keymap { format: wayland_client::WEnum::Value(wl_keyboard::KeymapFormat::XkbV1), fd, size } => {
                 use std::io::Read;
                 let mut map = String::new();
                 if size <= 16 * 1024 * 1024 && std::fs::File::from(fd).take(u64::from(size)).read_to_string(&mut map).is_ok() {
                     let context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
-                    state.xkb = xkb::Keymap::new_from_string(&context, map.trim_end_matches('\0').to_owned(), xkb::KEYMAP_FORMAT_TEXT_V1, xkb::COMPILE_NO_FLAGS).map(|map| xkb::State::new(&map));
+                    state.xkb = xkb::Keymap::new_from_string(&context, map.trim_end_matches('\0').to_owned(), xkb::KEYMAP_FORMAT_TEXT_V1, xkb::COMPILE_NO_FLAGS).map(|map| {
+                        let mut xkb_state = xkb::State::new(&map);
+                        if let Some(m) = state.mod_state {
+                            xkb_state.update_mask(m.depressed, m.latched, m.locked, 0, 0, m.group);
+                        }
+                        xkb_state
+                    });
                 }
             }
             wl_keyboard::Event::Modifiers { mods_depressed, mods_latched, mods_locked, group, .. } => {
+                state.mod_state = Some(keyboard::ModState { depressed: mods_depressed, latched: mods_latched, locked: mods_locked, group });
                 if let Some(xkb) = &mut state.xkb {
                     xkb.update_mask(mods_depressed, mods_latched, mods_locked, 0, 0, group);
                     state.input.push(Input::Physical(crate::PhysicalInput::Modifiers(key_mods(xkb)), None));
                 }
             }
-            wl_keyboard::Event::Key { key, state: wayland_client::WEnum::Value(pressed), .. } if state.keyboard_focus => {
+            wl_keyboard::Event::Key { key, state: wayland_client::WEnum::Value(pressed), .. } if state.keyboard_focus.focused() => {
                 use winit::platform::scancode::PhysicalKeyExtScancode;
                 if let Some(xkb) = &state.xkb {
                     let pressed = pressed == wl_keyboard::KeyState::Pressed;
-                    let fallback = key_event(xkb, key);
-                    if let winit::keyboard::PhysicalKey::Code(key) = crate::PhysicalKeyCode::from_scancode(key) {
-                        state.input.push(Input::Physical(crate::PhysicalInput::Key { key, mods: key_mods(xkb), pressed, repeat: false }, fallback));
+                    let physical = match crate::PhysicalKeyCode::from_scancode(key) {
+                        winit::keyboard::PhysicalKey::Code(code) => Some(code),
+                        _ => None,
+                    };
+                    let fallback = key_event(xkb, key, physical);
+                    if let Some(code) = physical {
+                        state.input.push(Input::Physical(crate::PhysicalInput::Key { key: code, mods: key_mods(xkb), pressed, repeat: false }, fallback));
                     } else if let Some(key) = fallback {
                         state.input.push(if pressed { Input::Key(key) } else { Input::KeyUp(key) });
                     }
@@ -206,23 +228,16 @@ impl Dispatch<WlKeyboard, ()> for State {
 fn key_mods(state: &xkbcommon::xkb::State) -> crate::Mods {
     use xkbcommon::xkb;
     let active = |name: &str| state.mod_name_is_active(name, xkb::STATE_MODS_EFFECTIVE);
-    crate::Mods { shift: active(xkb::MOD_NAME_SHIFT), ctrl: active(xkb::MOD_NAME_CTRL), cmd: active(xkb::MOD_NAME_CTRL), alt: active(xkb::MOD_NAME_ALT), logo: active(xkb::MOD_NAME_LOGO) }
+    crate::input::key_table::mods_from_keys(active(xkb::MOD_NAME_SHIFT), active(xkb::MOD_NAME_CTRL), active(xkb::MOD_NAME_ALT), active(xkb::MOD_NAME_LOGO))
 }
 
-fn key_event(state: &xkbcommon::xkb::State, key: u32) -> Option<crate::KeyEvent> {
+fn key_event(state: &xkbcommon::xkb::State, key: u32, physical: Option<crate::PhysicalKeyCode>) -> Option<crate::KeyEvent> {
     use xkbcommon::xkb;
     let code = xkb::Keycode::new(key + 8);
-    let symbol = state.key_get_one_sym(code).raw();
+    let sym = state.key_get_one_sym(code);
     let mods = key_mods(state);
-    let key = match named_keysym(symbol) {
-        Some(key) => key,
-        None => {
-            let text = state.key_get_utf8(code);
-            if mods.cmd { crate::Key::Command(char::from_u32(xkb::keysym_to_utf32(state.key_get_one_sym(code)))?.to_ascii_lowercase()) }
-            else if !text.is_empty() && !text.chars().any(char::is_control) { crate::Key::Text(text) } else { return None; }
-        }
-    };
-    Some(crate::KeyEvent { key, mods })
+    let text = state.key_get_utf8(code);
+    keyboard::key_event_from(named_keysym(sym.raw()), xkb::keysym_to_utf32(sym), text, mods, physical)
 }
 
 /// The named key an XKB keysym is, or None for one that types (or nothing Rune names).
@@ -500,14 +515,16 @@ impl LayerSurface {
     }
 
     pub fn request_keys(&self) -> bool {
-        if self.layer.version() < 4 { return false; }
+        if !keyboard::can_request_keys(self.options.keys, self.layer.version()) { return false; }
         self.layer.set_keyboard_interactivity(KeyboardInteractivity::OnDemand);
         self.surface.commit();
         let _ = self.queue.flush();
         true
     }
 
-    pub fn supports_keys(&self) -> bool { self.layer.version() >= 4 && self.seat.is_some() }
+    pub fn supports_keys(&self) -> bool {
+        keyboard::supports_keys(self.options.keys, self.layer.version(), self.seat.is_some())
+    }
 
     /// Shows `want` while the pointer is over the surface, once per change. Without
     /// cursor-shape-v1 only `Cursor::Hidden` applies; others keep the cursor the pointer

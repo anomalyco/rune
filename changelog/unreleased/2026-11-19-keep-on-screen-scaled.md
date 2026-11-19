@@ -1,0 +1,1 @@
+- `Tx::keep_on_screen` holds a virtual row in place inside a scaled viewport. The row's saved position was measured in drawn points and restored in layout points, so the scroll jumped and could push the row off screen.

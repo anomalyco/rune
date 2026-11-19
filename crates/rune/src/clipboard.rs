@@ -10,7 +10,9 @@
 //! RTF-only clipboard (TextEdit, Notes, Pages) is converted to HTML there too.
 use std::hash::{BuildHasher, RandomState};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock, mpsc};
+use std::sync::{Arc, Mutex, MutexGuard, mpsc};
+#[cfg(any(test, not(target_arch = "wasm32")))]
+use std::sync::OnceLock;
 use std::time::Duration;
 use crate::time::Instant;
 use zeroize::Zeroizing;
@@ -166,15 +168,12 @@ impl Client {
     pub fn connect(&mut self, wake: Waker) { self.wake = wake; }
     pub(crate) fn read_core(&self, rt: &crate::runtime::RuntimeCore) {
         let purpose = Purpose::paste(rt, rt.paste_target());
-        if let Some(m) = &rt.clipboard {
+        if let Some(m) = &rt.edit.clipboard {
             if let Some(reply) = m.answer(purpose) && self.sender.send(reply).is_ok() { (self.wake)(); }
             return;
         }
         self.read_for(purpose);
     }
-    #[cfg(target_arch = "wasm32")]
-    #[inline(always)]
-    pub fn receive<S: 'static>(&self, rt: &mut Runtime<S>) -> bool { self.receive_core(rt.core_mut()) }
     pub(crate) fn receive_core(&self, rt: &mut crate::runtime::RuntimeCore) -> bool {
         let mut received = self.changed.swap(false, Ordering::SeqCst);
         for reply in self.replies.try_iter() { deliver(rt, reply); received = true; }
@@ -192,21 +191,21 @@ fn deliver(rt: &mut crate::runtime::RuntimeCore, reply: Reply) {
 /// Applies a runtime's clipboard requests to its memory clipboard, if it has one. Runs after
 /// every frame, so headless runtimes write too.
 pub(crate) fn flush_memory(rt: &mut crate::runtime::RuntimeCore) {
-    let Some(m) = rt.clipboard.clone() else { return };
-    if std::mem::take(&mut rt.clear_secret_request) { m.handle(Request::Clear(None)); }
+    let Some(m) = rt.edit.clipboard.clone() else { return };
+    if std::mem::take(&mut rt.edit.clear_secret_request) { m.handle(Request::Clear(None)); }
     if let Some(copy) = rt.copy_request.take() {
         copy.bind(Route::Memory(m.clone()));
         m.handle(Request::Write(copy, None));
     }
-    let paste = rt.paste_request.take().map(|target| Purpose::paste(rt, target));
-    let reads = paste.into_iter().chain(std::mem::take(&mut rt.read_requests).into_iter().map(Purpose::Read));
+    let paste = rt.edit.paste_request.take().map(|target| Purpose::paste(rt, target));
+    let reads = paste.into_iter().chain(std::mem::take(&mut rt.edit.read_requests).into_iter().map(Purpose::Read));
     for purpose in reads.collect::<Vec<_>>() {
         if let Some(reply) = m.answer(purpose) { deliver(rt, reply); }
     }
 }
 
 impl crate::runtime::RuntimeCore {
-    pub(crate) fn use_clipboard(&mut self, clipboard: &MemoryClipboard) { self.clipboard = Some(clipboard.clone()); }
+    pub(crate) fn use_clipboard(&mut self, clipboard: &MemoryClipboard) { self.edit.clipboard = Some(clipboard.clone()); }
 }
 
 /// An in-memory clipboard for tests, shared by its clones and by every runtime given it with
@@ -698,7 +697,7 @@ mod tests {
         let mut rt = Runtime::new(None, view, (100.0, 100.0), Env::new(true, 1.0));
         rt.update(|s, tx| *s = Some(tx.copy_secret("stale", LONG)));
         rt.update(|_, tx| tx.clear_secret_clipboard());
-        assert!(rt.copy_request.is_none() && rt.clear_secret_request);
+        assert!(rt.copy_request.is_none() && rt.edit.clear_secret_request);
         assert_eq!(rt.state.as_ref().unwrap().state(), SecretState::Replaced);
 
         // The same in one handler, and with a memory clipboard on the next flush.

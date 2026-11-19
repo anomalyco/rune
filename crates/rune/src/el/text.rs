@@ -254,7 +254,7 @@ impl El {
         t.spans = flat;
         t.cold.strikes = strikes;
         t.cold.blocks = blocks;
-        t.cold.soft_breaks = inp.edit.soft_breaks.clone();
+        t.cold.soft_breaks = inp.edit.soft_breaks().to_vec();
         // Replace links generated from `Mark::Link` while keeping any explicit `.link(...)` calls.
         t.cold.links = rich_links;
     }

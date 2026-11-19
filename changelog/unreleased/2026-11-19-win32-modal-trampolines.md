@@ -1,0 +1,1 @@
+- Windows: a frame timer that fires while a menu or a drag is already running a frame no longer re-enters it, nested menus keep separate timers, and window subclasses (custom frame, overlay window, accessibility, IME) stay alive through nested calls and are removed when their window is destroyed. These could run a handler twice or touch a destroyed window's state.

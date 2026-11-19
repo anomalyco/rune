@@ -73,7 +73,7 @@ pub fn dispatch_overhead() {
         color.setStoreAction(MTLStoreAction::Store);
         cb.renderCommandEncoderWithDescriptor(&pass).unwrap().endEncoding();
         for _ in 0..writes { raw_uniforms.write(0, bytes); }
-        shared.commit(&cb);
+        shared.commit(cb);
     };
     let measure = |f: &dyn Fn(usize), writes| {
         for _ in 0..200 { f(writes); }

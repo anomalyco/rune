@@ -1,0 +1,1 @@
+- Accessibility: a selectable control nested inside a focusable item of a focus group (a button inside a tab) is no longer announced as an unselected member of that group, and focus that falls back after its element is removed skips collapsed controls with no size.

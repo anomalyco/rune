@@ -3,10 +3,11 @@
 //! open shown, so this subclasses with `SetWindowSubclass` instead, which works at any time.
 
 use std::cell::RefCell;
+use std::rc::Rc;
 
 use accesskit_windows::{HWND, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
-use windows_sys::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, WM_GETOBJECT, WM_KILLFOCUS, WM_SETFOCUS, WM_SETTINGCHANGE, WM_SYSCOLORCHANGE, WM_THEMECHANGED};
+use windows_sys::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, WM_GETOBJECT, WM_KILLFOCUS, WM_NCDESTROY, WM_SETFOCUS, WM_SETTINGCHANGE, WM_SYSCOLORCHANGE, WM_THEMECHANGED};
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 use super::{Actions, Activation};
@@ -20,13 +21,27 @@ struct State {
 
 pub(super) struct Adapter {
     hwnd: isize,
-    state: Box<RefCell<State>>,
+    state: Rc<RefCell<State>>,
 }
 
 unsafe extern "system" fn subclass(hwnd: windows_sys::Win32::Foundation::HWND, message: u32, wparam: usize, lparam: isize, _: usize, data: usize) -> isize {
-    // SAFETY: `data` is the `RefCell<State>` the owner boxed; the owner removes this callback
-    // before dropping it.
-    let state = unsafe { &*(data as *const RefCell<State>) };
+    let ptr = data as *const RefCell<State>;
+    if message == WM_NCDESTROY {
+        // SAFETY: removes this subclass; if it was still installed, reclaims the ref `new` gave it.
+        unsafe {
+            if RemoveWindowSubclass(hwnd, Some(subclass), SUBCLASS_ID) != 0 {
+                drop(Rc::from_raw(ptr));
+            }
+            return DefSubclassProc(hwnd, message, wparam, lparam);
+        }
+    }
+    // Hold a strong ref across UIA callbacks and `DefSubclassProc` so dropping `Adapter`
+    // re-entrantly cannot free `State` while this frame is still on the stack.
+    // SAFETY: `ptr` is the live `Rc<RefCell<State>>` owned by the subclass until removal.
+    let state: Rc<RefCell<State>> = unsafe {
+        Rc::increment_strong_count(ptr);
+        Rc::from_raw(ptr)
+    };
     match message {
         WM_GETOBJECT => {
             // The answer calls into UIA, which may send a nested WM_GETOBJECT: borrow only to
@@ -59,11 +74,16 @@ impl Adapter {
         // SAFETY: reads which window has focus; `hwnd` belongs to this thread.
         let focused = unsafe { GetForegroundWindow() } as isize == hwnd;
         let adapter = accesskit_windows::Adapter::new(HWND(hwnd as *mut _), focused, actions);
-        let state = Box::new(RefCell::new(State { adapter, activation }));
-        // SAFETY: the window is live and owned by this thread; `state` outlives the subclass,
-        // which `Drop` removes first.
-        let ok = unsafe { SetWindowSubclass(hwnd as _, Some(subclass), SUBCLASS_ID, &*state as *const RefCell<State> as usize) };
-        (ok != 0).then_some(Adapter { hwnd, state })
+        let state = Rc::new(RefCell::new(State { adapter, activation }));
+        let data = Rc::into_raw(state.clone());
+        // SAFETY: `data` is reclaimed exactly once, either by `Drop` or by `WM_NCDESTROY`,
+        // whichever succeeds in removing the subclass.
+        let ok = unsafe { SetWindowSubclass(hwnd as _, Some(subclass), SUBCLASS_ID, data as usize) };
+        if ok == 0 {
+            unsafe { drop(Rc::from_raw(data)); }
+            return None;
+        }
+        Some(Adapter { hwnd, state })
     }
 
     /// Announces what UIA events from AccessKit don't: children added, removed or reordered
@@ -88,7 +108,12 @@ impl Adapter {
 
 impl Drop for Adapter {
     fn drop(&mut self) {
-        // SAFETY: removes the callback installed in `new` before its state goes.
-        unsafe { RemoveWindowSubclass(self.hwnd as _, Some(subclass), SUBCLASS_ID); }
+        // SAFETY: removes the callback installed in `new`; if it was still installed (not already
+        // removed by `WM_NCDESTROY`), reclaims the `Rc` ref owned by the subclass.
+        unsafe {
+            if RemoveWindowSubclass(self.hwnd as _, Some(subclass), SUBCLASS_ID) != 0 {
+                drop(Rc::from_raw(Rc::as_ptr(&self.state)));
+            }
+        }
     }
 }

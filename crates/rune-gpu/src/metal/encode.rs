@@ -6,6 +6,10 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use objc2_foundation::NSRange;
+#[cfg(debug_assertions)]
+use objc2_foundation::NSString;
+#[cfg(debug_assertions)]
+use objc2_metal::MTLResource;
 use objc2_metal::{MTLBlitCommandEncoder, MTLBuffer, MTLCommandBuffer, MTLCommandEncoder, MTLDevice, MTLOrigin, MTLResourceOptions, MTLSize, MTLTexture};
 use objc2::rc::autoreleasepool;
 use objc2::runtime::ProtocolObject;
@@ -27,6 +31,8 @@ pub(super) struct Rec {
     pub(super) keep: Keep,
     /// Whether a pass drew into a drawable, so the buffer waits for its present.
     pub(super) drawable: bool,
+    #[cfg(debug_assertions)]
+    label: Option<Box<str>>,
 }
 
 /// The command buffer as recorded so far.
@@ -83,7 +89,13 @@ impl Rec {
     fn cb(&mut self) -> &ProtocolObject<dyn MTLCommandBuffer> {
         if let Open::Empty = self.open {
             self.shared.recording.fetch_add(1, Ordering::AcqRel);
-            self.open = Open::Buffer(self.shared.command_buffer());
+            let cb = self.shared.command_buffer();
+            #[cfg(debug_assertions)]
+            {
+                let label = self.label.as_deref().unwrap_or("rune metal encoder");
+                cb.setLabel(Some(&NSString::from_str(label)));
+            }
+            self.open = Open::Buffer(cb);
         }
         match &self.open {
             Open::Buffer(cb) | Open::Blit(cb, _) => cb,
@@ -107,6 +119,8 @@ impl Rec {
             self.cb();
             let Open::Buffer(cb) = std::mem::take(&mut self.open) else { unreachable!("opened above") };
             let blit = autoreleasepool(|_| cb.blitCommandEncoder()).expect("a Metal blit encoder");
+            #[cfg(debug_assertions)]
+            blit.setLabel(Some(&NSString::from_str("rune metal blit")));
             self.open = Open::Blit(cb, blit);
         }
         match &self.open {
@@ -130,9 +144,20 @@ impl Drop for Rec {
 }
 
 impl MetalEncoder {
-    pub(crate) fn new(shared: Arc<Shared>) -> Self {
+    pub(crate) fn new(shared: Arc<Shared>, label: Option<&str>) -> Self {
         let keep = shared.keep_list();
-        MetalEncoder { rec: Arc::new(Mutex::new(Rec { shared, open: Open::Empty, keep, drawable: false })) }
+        #[cfg(not(debug_assertions))]
+        let _ = label;
+        MetalEncoder {
+            rec: Arc::new(Mutex::new(Rec {
+                shared,
+                open: Open::Empty,
+                keep,
+                drawable: false,
+                #[cfg(debug_assertions)]
+                label: label.map(Box::from),
+            })),
+        }
     }
 }
 
@@ -190,7 +215,10 @@ send_sync!(Zeros);
 
 impl Zeros {
     pub(super) fn new(shared: &Shared) -> Self {
-        Zeros(shared.device.newBufferWithLength_options(ZEROS, MTLResourceOptions::StorageModeShared).expect("a Metal buffer"))
+        let raw = shared.device.newBufferWithLength_options(ZEROS, MTLResourceOptions::StorageModeShared).expect("a Metal buffer");
+        #[cfg(debug_assertions)]
+        raw.setLabel(Some(&NSString::from_str("rune metal zeros")));
+        Zeros(raw)
     }
 }
 
@@ -271,6 +299,7 @@ impl CommandEncoderInterface for MetalEncoder {
         rec.cb();
         let (src, dst) = (source.buffer.as_custom::<MetalBuffer>().expect("a Metal buffer").raw(), texture(&destination));
         buffer_to_texture(rec.blit(), &src.raw, source.layout, &dst, destination.mip_level, destination.origin, size);
+        rec.drawable |= dst.drawable;
         rec.keep([src as _, dst as _]);
     }
     fn copy_texture_to_buffer(&self, source: wgpu::TexelCopyTextureInfo<'_>, destination: wgpu::TexelCopyBufferInfo<'_>, size: wgpu::Extent3d) {
@@ -293,6 +322,7 @@ impl CommandEncoderInterface for MetalEncoder {
                     &dst.raw, to_slice, destination.mip_level as usize, origin(destination.origin, to_z))
             }
         }
+        rec.drawable |= dst.drawable;
         rec.keep([src as _, dst as _]);
     }
     fn begin_compute_pass(&self, desc: &wgpu::ComputePassDescriptor<'_>) -> DispatchComputePass {
