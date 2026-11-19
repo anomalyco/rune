@@ -1,5 +1,7 @@
 // Browser text services and semantic DOM accessibility mirror.
+const MAC = /Mac|iP/.test(navigator.platform);
 const coarse = () => matchMedia('(pointer: coarse)').matches;
+export function isMac() { return MAC; }
 const high = n => n >= 0xd800 && n <= 0xdbff;
 const low = n => n >= 0xdc00 && n <= 0xdfff;
 function boundary(text, at, forward) {
@@ -241,16 +243,33 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         }, { passive: true });
         queueMicrotask(() => { if (!h.disposed) scrolled(); });
     }
+    // winit's web backend drops WheelEvent.DOM_DELTA_PAGE (deltaMode === 2); forward page
+    // deltas to Rune before checking wheelUsed / preventDefault.
+    const forwardPageWheel = event => {
+        if (event.deltaMode !== 2) return;
+        send({
+            kind: 'wheel_page',
+            dx: -event.deltaX,
+            dy: -event.deltaY,
+            shift: event.shiftKey,
+            ctrl: event.ctrlKey,
+            alt: event.altKey,
+            meta: event.metaKey,
+        });
+    };
     if (!fitHeight) {
         // Ctrl+wheel (a touchpad's pinch) is the browser's zoom unless Rune pinched something with
         // it: Rune hears the wheel first (winit's listener is older) and says so (`syncWheel`).
         listen(canvas, 'wheel', event => {
+            forwardPageWheel(event);
             const used = h.wheelUsed;
             h.wheelUsed = false;
             if (event.ctrlKey && !used) return;
             event.preventDefault();
         }, { passive: false });
         listen(document, 'gesturestart', event => event.preventDefault(), { passive: false });
+    } else {
+        listen(canvas, 'wheel', forwardPageWheel, { passive: true });
     }
     if (!page && !embedded) {
         // Printing prints what's on screen (the canvas, and the mirror's text over it, which the
@@ -289,7 +308,7 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         if (event.button !== 2 || event.pointerType !== 'mouse' || event.target !== canvas) return;
         if (armMenu(h, event.clientX, event.clientY, event.shiftKey)) send({ kind: 'secondary_browser' });
     };
-    if (/Mac|iP/.test(navigator.platform)) listen(canvas, 'pointerdown', armAt);
+    if (MAC) listen(canvas, 'pointerdown', armAt);
     else listen(window, 'pointerup', armAt, { capture: true });
     listen(document, 'contextmenu', event => {
         if (h.menu === 'rune' || event.target === canvas) event.preventDefault();

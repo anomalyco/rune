@@ -209,6 +209,19 @@ pub(crate) fn wheel_core(rt: &mut RuntimeCore, input: WheelInput) -> WheelOutcom
     }
 }
 
+/// Converts browser `WheelEvent.DOM_DELTA_PAGE` page counts (positive moving content right and
+/// down) into window points, matching Chromium's 0.875 page fraction and Shift-axis turn.
+#[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
+pub(crate) fn wheel_page_delta(rt: &RuntimeCore, dx_pages: f32, dy_pages: f32, shift: bool) -> (f32, f32) {
+    const PAGE_FRACTION: f32 = 0.875;
+    let (w, h) = rt.window_viewport();
+    if shift && dx_pages == 0.0 {
+        (dy_pages * w * PAGE_FRACTION, 0.0)
+    } else {
+        (dx_pages * w * PAGE_FRACTION, dy_pages * h * PAGE_FRACTION)
+    }
+}
+
 /// Translates a browser wheel delta in window points through [`wheel_core`], applying browser
 /// policies: Ctrl+wheel only pinches outside document mode (unclaimed Ctrl+wheel stays with
 /// browser zoom), and `fit_height` canvases leave vertical wheel to the page.

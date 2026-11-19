@@ -5,6 +5,8 @@ use winit::keyboard::ModifiersState;
 
 #[wasm_bindgen(module = "/src/platform/web/bridge.js")]
 extern "C" {
+    #[wasm_bindgen(js_name = isMac)]
+    fn is_mac() -> bool;
     fn mount(canvas: &web_sys::HtmlCanvasElement, callback: &js_sys::Function, embedded: bool, fit_height: bool, document: bool) -> JsValue;
     fn sync(handle: &JsValue, key: &str, text: &str, base: usize, anchor: u32, focus: u32, secure: bool);
     #[wasm_bindgen(js_name = syncCopy)]
@@ -57,6 +59,7 @@ pub(super) struct Bridge {
     _callback: Closure<dyn FnMut(String)>,
     dispose_viewport: js_sys::Function,
     mods: ModifiersState,
+    is_mac: bool,
     mirror: crate::runtime::web_runtime::Mirror,
     a11y: crate::runtime::web_a11y::A11yMirror,
     copy_cache: String,
@@ -102,7 +105,7 @@ impl Bridge {
         // around the notch itself.
         let dispose_viewport = platform::viewport(canvas, callback.as_ref().unchecked_ref(), embedded || document);
         let handle = mount(canvas, callback.as_ref().unchecked_ref(), embedded, fit_height, document);
-        Self { handle, _callback: callback, dispose_viewport, mods: ModifiersState::empty(),
+        Self { handle, _callback: callback, dispose_viewport, mods: ModifiersState::empty(), is_mac: is_mac(),
             mirror: Default::default(), a11y: Default::default(),
             copy_cache: String::new(), fit_height, document, page: None, scroll_x: Vec::new(), caret: None, a11y_at: None, announced: 0, a11y_first: First::Unasked, families: Default::default() }
     }
@@ -318,6 +321,31 @@ impl Running {
                 let x = event["x"].as_f64().unwrap_or(0.0) as f32;
                 return self.app.rt_mut().set_page_scroll_x(path, x);
             }
+            // `WheelEvent.DOM_DELTA_PAGE` (deltaMode === 2), which winit's web backend drops.
+            Some("wheel_page") => {
+                let mods = crate::input::key_table::web_mods(
+                    event["shift"].as_bool().unwrap_or(false),
+                    event["ctrl"].as_bool().unwrap_or(false),
+                    event["alt"].as_bool().unwrap_or(false),
+                    event["meta"].as_bool().unwrap_or(false),
+                );
+                let dx_pages = event["dx"].as_f64().unwrap_or(0.0) as f32;
+                let dy_pages = event["dy"].as_f64().unwrap_or(0.0) as f32;
+                let shift = !self.input.is_mac && mods.shift;
+                let (dx, dy) = crate::input::host_events::wheel_page_delta(self.app.rt(), dx_pages, dy_pages, shift);
+                let (redraw, wheel_used) = crate::input::host_events::web_wheel(
+                    self.app.rt_mut(),
+                    dx,
+                    dy,
+                    mods,
+                    crate::GesturePhase::Moved,
+                    false,
+                    self.input.document,
+                    self.input.fit_height,
+                );
+                if let Some(used) = wheel_used { sync_wheel(&self.input.handle, used); }
+                return redraw;
+            }
             // The pointer is over mirrored text or a link, which takes it from the canvas.
             Some("hover") => {
                 let (x, y, offset) = {
@@ -392,7 +420,12 @@ impl Running {
                 }
             }
             WindowEvent::MouseWheel { delta, phase, .. } => {
-                let (dx, dy) = crate::runtime::wheel_delta(*delta, scale, self.input.mods.shift_key(), crate::runtime::LINE_POINTS);
+                // On macOS, AppKit swaps Shift+mouse-wheel before the browser sees it while
+                // leaving Shift+trackpad vertical. Elsewhere, browsers that keep deltaX == 0
+                // rely on wheel_delta to swap vertical into horizontal (it never double-swaps
+                // when dx != 0).
+                let shift = !self.input.is_mac && self.input.mods.shift_key();
+                let (dx, dy) = crate::runtime::wheel_delta(*delta, scale, shift, crate::runtime::LINE_POINTS);
                 let precise = matches!(delta, winit::event::MouseScrollDelta::PixelDelta(_));
                 // Browsers give WheelEvent no gesture phase (always Moved), matching unphased
                 // desktop mouse wheels so WheelLock uses its idle timeout.

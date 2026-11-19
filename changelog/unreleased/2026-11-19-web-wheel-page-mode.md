@@ -1,0 +1,1 @@
+- Web wheel scrolling handles page-mode (`DOM_DELTA_PAGE`) wheel events—such as Windows' "One screen at a time" mouse wheel setting—which were previously dropped, and follows macOS Shift+wheel conventions so Shift+trackpad stays vertical while browsers that do not pre-swap Shift+wheel scroll horizontally without double-swapping.

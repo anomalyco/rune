@@ -147,3 +147,47 @@ fn pointer_wheel_hover_and_ime_area_scale_by_view_zoom() {
         assert!((win_ime[i] - view_ime[i] * 1.5).abs() < 1e-3);
     }
 }
+
+#[test]
+fn web_page_wheel_scales_by_viewport_zoom_and_respects_shift_without_double_swapping() {
+    #[derive(Default)]
+    struct S { wheels: Vec<WheelEvent> }
+    fn view(_: &S, cx: &mut Cx<S>) -> El {
+        cx.zoom(2.0);
+        el().size(200.0, 100.0).hit().on_wheel(|s: &mut S, ev, _| { s.wheels.push(ev); true })
+    }
+    // Window viewport 400x200 at zoom 2.0 -> view viewport 200x100.
+    let mut rt = Runtime::new(S::default(), view, (400.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.pointer_move(50.0, 50.0);
+
+    // 1 vertical page down -> -1.0 * 200 * 0.875 = -175 window pt -> -87.5 view pt.
+    let (dx, dy) = wheel_page_delta(rt.core(), 0.0, -1.0, false);
+    assert!((dx - 0.0).abs() < 1e-4 && (dy - (-175.0)).abs() < 1e-4);
+    let (redraw, _) = web_wheel(rt.core_mut(), dx, dy, crate::Mods::default(), GesturePhase::Moved, false, false, false);
+    assert!(redraw);
+    rt.frame(0.0);
+    assert_eq!(rt.state.wheels.len(), 1);
+    assert!((rt.state.wheels[0].dy - (-87.5)).abs() < 1e-4);
+    assert!(!rt.state.wheels[0].precise && rt.state.wheels[0].phase == GesturePhase::Moved);
+
+    // Shift + vertical page when browser kept dx == 0 turns horizontal using window width (400 * 0.875 = 350 -> 175 view pt).
+    let (dx, dy) = wheel_page_delta(rt.core(), 0.0, -1.0, true);
+    assert!((dx - (-350.0)).abs() < 1e-4 && dy == 0.0);
+    let shift = crate::Mods { shift: true, ..crate::Mods::default() };
+    let (redraw, _) = web_wheel(rt.core_mut(), dx, dy, shift, GesturePhase::Moved, false, false, false);
+    assert!(redraw);
+    rt.frame(0.0);
+    assert!((rt.state.wheels[1].dx - (-175.0)).abs() < 1e-4 && rt.state.wheels[1].dy == 0.0);
+
+    // When the browser already swapped axes (dx != 0, dy == 0), Shift must not double-swap.
+    let (dx, dy) = wheel_page_delta(rt.core(), -1.0, 0.0, true);
+    assert!((dx - (-350.0)).abs() < 1e-4 && dy == 0.0);
+    let (dx_px, dy_px) = crate::runtime::wheel_delta(
+        MouseScrollDelta::PixelDelta(PhysicalPosition::new(-40.0, 0.0)),
+        1.0,
+        true,
+        40.0,
+    );
+    assert_eq!((dx_px, dy_px), (-40.0, 0.0));
+}
