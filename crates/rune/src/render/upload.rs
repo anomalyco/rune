@@ -74,7 +74,7 @@ impl Uploads {
         self.staging.as_ref().map(Staging::stats).unwrap_or_default()
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "test-gpu-counters"))]
     pub(super) fn frame_write_stats(&self) -> rune_staging::Stats {
         self.frame_writes.as_ref().map(Staging::stats).unwrap_or_default()
     }
