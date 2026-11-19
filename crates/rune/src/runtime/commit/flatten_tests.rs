@@ -64,8 +64,7 @@ fn run_flatten<E: FlattenEl>(el: E, foreground: Option<Color>) -> (Vec<Node>, La
         next_id: &mut next_id,
         foreground,
     };
-    let mut w = Walk { path_buf: &mut path_buf, taffy: &mut taffy, nodes: &mut nodes, scale: 2.0, memo_ctx: &mut memo_ctx };
-    let _ = flatten_node(el, None, 0, motion::DEFAULT, RowLayout::Free, true, None, &mut w);
+    let _ = flatten_node(el, None, &mut path_buf, 0, motion::DEFAULT, RowLayout::Free, true, None, &mut taffy, &mut nodes, 2.0, &mut memo_ctx);
     taffy.finish_flatten();
     (nodes, taffy)
 }
@@ -151,4 +150,42 @@ fn memo_children_and_plain_children_flatten_to_matching_node_tables() {
     plain.frame(0.0);
     memoed.frame(0.0);
     assert_nodes_match(&plain.nodes, &memoed.nodes, None, None);
+}
+
+#[test]
+fn cold_packing_handles_el_only_cold_meta_only_and_shared_clones() {
+    let px = sample_pixels();
+    let own_spring = Spring::new(0.15, 0.0);
+    let tree = col().key("root").size(200.0, 120.0)
+        // Plain node: empty ElCold, no metadata -> empty NodeCold.
+        .child(el().key("plain").size(20.0, 20.0))
+        // Non-empty ElCold containing only fields that do not live in NodeCold -> still empty NodeCold.
+        .child(el().key("el-only").size(20.0, 20.0).motion(own_spring).animated_changes().time_scale(0.5).focusable(true).ime_option_as_alt(true))
+        // Empty ElCold with pixel_aspect metadata only -> packs NodeCold from metadata alone.
+        .child(el().key("pic-only").w(40.0).pixels(&px))
+        // Matched element with its own motion override -> preserves (id, Some(own_spring)).
+        .child(el().key("matched-motion").size(20.0, 20.0).motion(own_spring).matched("card").label("Card").help("Open card"));
+
+    let cloned = tree.clone();
+    let (borrowed, taffy_borrowed) = run_flatten(&tree, None);
+    let (owned_shared, taffy_shared) = run_flatten(cloned, None);
+    let (owned_unique, taffy_unique) = run_flatten(tree, None);
+
+    assert_nodes_match(&owned_shared, &borrowed, Some(&taffy_shared), Some(&taffy_borrowed));
+    assert_nodes_match(&owned_unique, &borrowed, Some(&taffy_unique), Some(&taffy_borrowed));
+
+    fn by_key<'a>(nodes: &'a [Node], k: &str) -> &'a Node {
+        nodes.iter().find(|n| n.key.as_deref() == Some(k)).unwrap()
+    }
+    assert!(by_key(&owned_unique, "plain").cold.is_empty());
+    assert!(by_key(&owned_unique, "el-only").cold.is_empty());
+    assert_eq!(by_key(&owned_unique, "el-only").motion, own_spring);
+    assert_eq!(by_key(&owned_unique, "el-only").time_scale, 0.5);
+    assert!(by_key(&owned_unique, "el-only").ime_option_as_alt);
+    assert!(!by_key(&owned_unique, "pic-only").cold.is_empty());
+    assert_eq!(by_key(&owned_unique, "pic-only").pixel_aspect, Some(2.0));
+    let matched = by_key(&owned_unique, "matched-motion");
+    assert_eq!(matched.matched.as_ref().map(|(id, m)| (&**id, *m)), Some(("card", Some(own_spring))));
+    assert_eq!(matched.label.as_deref(), Some("Card"));
+    assert_eq!(matched.help.as_deref(), Some("Open card"));
 }

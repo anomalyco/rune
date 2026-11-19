@@ -115,6 +115,7 @@ fn growth_stack_child_after_a_header_child_grows_and_stays_pinned() {
 
 #[test]
 fn scroll_xy_with_direct_children_scrolls_both_axes_and_warns_on_trailing_growth_sibling() {
+    let _warnings = layout_diagnostics::scope();
     fn view(bad: &bool, _: &mut Cx<bool>) -> El {
         if *bad {
             return col()

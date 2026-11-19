@@ -319,7 +319,21 @@ fn take_foreground(
 
 /// The `El::hover_motion_within` pair a node goes by: its own, else its anchor's, else its
 /// parent's.
+#[inline(always)]
 fn inherit_hover_within(
+    vis: &Visual,
+    above: Option<&crate::el::Anchor>,
+    parent: Option<usize>,
+    nodes: &[Node],
+) -> Option<Rc<(Anim, Anim)>> {
+    if vis.hover_within.is_none() && above.is_none() && parent.is_none_or(|p| nodes[p].hover_within.is_none()) {
+        return None;
+    }
+    inherit_hover_within_slow(vis, above, parent, nodes)
+}
+
+#[inline(never)]
+fn inherit_hover_within_slow(
     vis: &Visual,
     above: Option<&crate::el::Anchor>,
     parent: Option<usize>,
@@ -333,43 +347,41 @@ fn inherit_hover_within(
     })
 }
 
-#[inline]
-fn node_cold_needed(c: &NodeCold) -> bool {
-    let base = c.trace_name.is_some()
-        || c.trace_namespace.is_some()
-        || c.label.is_some()
-        || !c.live.is_empty()
-        || c.looping.is_some()
-        || c.opacity_motion.is_some()
-        || c.lead.is_some()
-        || c.transition.is_some()
-        || c.matched.is_some()
-        || c.above.is_some()
-        || c.scroll.is_some()
+#[inline(always)]
+fn needs_node_cold(c: &crate::el::ElCold, meta: &ColdMeta) -> bool {
+    let base = meta.trace_namespace.is_some() || meta.pixel_aspect.is_some() || meta.aspect_fit.is_some()
+        || c.label.is_some() || c.help.is_some() || c.transition.is_some()
+        || !c.live.is_empty() || c.scroll.is_some() || c.matched.is_some()
+        || c.above.is_some() || c.growth.is_some() || c.sticky.is_some()
+        || c.trace_name.is_some() || c.looping.is_some() || c.opacity_motion.is_some()
+        || c.lead.is_some() || c.glide.is_some() || c.material.is_some()
+        || c.help_cut || c.help_side.is_some()
         || c.scroll_axes != crate::el::ScrollAxes::Y
         || c.scroll_edges != crate::el::ScrollEdges::default()
-        || c.sticky.is_some()
-        || c.growth.is_some()
-        || c.glide.is_some()
-        || c.a11y != crate::el::A11y::default()
-        || c.pixel_aspect.is_some()
-        || c.aspect_fit.is_some()
-        || c.material.is_some()
-        || c.help.is_some()
-        || c.help_cut
-        || c.help_side.is_some();
+        || c.a11y != crate::el::A11y::default();
     #[cfg(debug_assertions)]
     let base = base || c.scroll_source.is_some();
     base
 }
 
-#[inline]
-fn pack_node_cold(c: NodeCold) -> crate::cold::Cold<NodeCold> {
-    if node_cold_needed(&c) {
-        crate::cold::Cold::from_owned(c)
-    } else {
-        crate::cold::Cold::default()
+#[inline(always)]
+fn node_cold_meta_only(meta: ColdMeta) -> NodeCold {
+    NodeCold {
+        trace_name: None, trace_namespace: meta.trace_namespace, label: None, live: Vec::new(),
+        run_layout: None, live_text_seen: None, looping: None, opacity_motion: None, lead: None,
+        transition: None, matched: None, above: None, scroll: None, scroll_axes: crate::el::ScrollAxes::Y,
+        scroll_edges: crate::el::ScrollEdges::default(), sticky: None, growth: None, glide: None,
+        a11y: crate::el::A11y::EMPTY, pixel_aspect: meta.pixel_aspect, aspect_fit: meta.aspect_fit,
+        material: None, help: None, help_cut: false, help_side: None,
+        #[cfg(debug_assertions)]
+        scroll_source: None,
     }
+}
+
+#[cold]
+#[inline(never)]
+fn take_cold_input(cold: &mut crate::cold::Cold<crate::el::ElCold>) -> Option<Box<InputSpec>> {
+    cold.get_mut_if_some().and_then(|c| c.input.take())
 }
 
 mod sealed {
@@ -380,69 +392,32 @@ mod sealed {
 
 trait StyleBuf {
     fn as_ref(&self) -> &CompactStyle;
-    fn as_mut(&mut self) -> &mut CompactStyle;
-    fn replace_owned(&mut self, style: CompactStyle) -> CompactStyle;
     fn into_owned(self) -> CompactStyle;
 }
 
 impl StyleBuf for CompactStyle {
-    #[inline(always)]
-    fn as_ref(&self) -> &CompactStyle { self }
-    #[inline(always)]
-    fn as_mut(&mut self) -> &mut CompactStyle { self }
-    #[inline(always)]
-    fn replace_owned(&mut self, style: CompactStyle) -> CompactStyle { std::mem::replace(self, style) }
-    #[inline(always)]
-    fn into_owned(self) -> CompactStyle { self }
+    #[inline(always)] fn as_ref(&self) -> &CompactStyle { self }
+    #[inline(always)] fn into_owned(self) -> CompactStyle { self }
 }
 
 impl StyleBuf for Cow<'_, CompactStyle> {
-    #[inline(always)]
-    fn as_ref(&self) -> &CompactStyle { self }
-    #[inline(always)]
-    fn as_mut(&mut self) -> &mut CompactStyle { self.to_mut() }
-    #[inline(always)]
-    fn replace_owned(&mut self, style: CompactStyle) -> CompactStyle {
-        std::mem::replace(self, Cow::Owned(style)).into_owned()
+    #[inline(always)] fn as_ref(&self) -> &CompactStyle { self }
+    #[inline(always)] fn into_owned(self) -> CompactStyle {
+        match self { Cow::Borrowed(s) => s.clone(), Cow::Owned(s) => s }
     }
-    #[inline(always)]
-    fn into_owned(self) -> CompactStyle { Cow::into_owned(self) }
-}
-
-struct Walk<'a, 'b> {
-    path_buf: &'a mut String,
-    taffy: &'a mut LayoutEngine,
-    nodes: &'a mut Vec<Node>,
-    scale: f32,
-    memo_ctx: &'a mut memo_reuse::MemoFlattenCtx<'b>,
 }
 
 #[derive(Clone, Copy)]
-struct ChildEnv {
-    me: usize,
-    motion: Spring,
-    in_row: RowLayout,
-    row: bool,
-    sx: Option<ScrollXChild>,
-}
+struct ChildEnv { me: usize, motion: Spring, in_row: RowLayout, row: bool, sx: Option<ScrollXChild> }
 
-struct FlatParts<S, C, K> {
-    style: S,
+struct RefScratch<'a> {
+    style: Cow<'a, CompactStyle>,
     vis: Visual,
-    vis_flags: crate::el::VisualFlags,
     text: Option<crate::cold::SharedBox<TextSpec>>,
-    input: Option<Box<InputSpec>>,
-    key: Option<String>,
-    focus: crate::cold::Cold<crate::el::FocusSpec>,
-    handlers: crate::cold::Cold<crate::el::Handlers>,
-    static_scale: f32,
-    cold: C,
-    children: K,
 }
 
 struct ColdMeta {
     trace_namespace: Option<(&'static str, &'static str)>,
-    own_motion: Option<Spring>,
     mirror: bool,
     pixel_aspect: Option<f32>,
     aspect_fit: Option<Box<(f32, CompactStyle)>>,
@@ -454,157 +429,169 @@ macro_rules! take_field {
 }
 
 macro_rules! node_cold_from {
-    ($mode:ident, $c:expr, $m:expr) => {{
-        let (c, m) = ($c, $m);
-        let mut above = take_field!($mode, c.above);
-        if m.mirror && let Some(a) = &mut above { crate::el::mirror_anchor(a); }
-        pack_node_cold(NodeCold {
-            trace_name: c.trace_name,
-            trace_namespace: m.trace_namespace,
-            label: take_field!($mode, c.label),
-            live: take_field!($mode, c.live),
-            run_layout: None,
-            live_text_seen: None,
-            looping: take_field!($mode, c.looping),
-            opacity_motion: take_field!($mode, c.opacity_motion),
-            lead: c.lead,
-            transition: take_field!($mode, c.transition),
-            matched: take_field!($mode, c.matched).map(|id| (id, m.own_motion)),
-            above,
-            scroll: c.scroll,
-            scroll_axes: c.scroll_axes,
-            scroll_edges: c.scroll_edges,
-            sticky: take_field!($mode, c.sticky),
-            growth: take_field!($mode, c.growth),
-            glide: c.glide,
-            a11y: take_field!($mode, c.a11y),
-            pixel_aspect: m.pixel_aspect,
-            aspect_fit: m.aspect_fit,
-            material: c.material,
-            help: take_field!($mode, c.help),
-            help_cut: c.help_cut,
-            help_side: c.help_side,
+    ($mode:ident, $c:ident, $m:ident) => {{
+        let mut above = take_field!($mode, $c.above);
+        if $m.mirror && let Some(a) = &mut above { crate::el::mirror_anchor(a); }
+        let matched = take_field!($mode, $c.matched).map(|id| (id, $c.motion));
+        NodeCold {
+            trace_name: $c.trace_name, trace_namespace: $m.trace_namespace,
+            label: take_field!($mode, $c.label), live: take_field!($mode, $c.live),
+            run_layout: None, live_text_seen: None,
+            looping: take_field!($mode, $c.looping), opacity_motion: take_field!($mode, $c.opacity_motion),
+            lead: $c.lead, transition: take_field!($mode, $c.transition), matched, above,
+            scroll: $c.scroll, scroll_axes: $c.scroll_axes, scroll_edges: $c.scroll_edges,
+            sticky: take_field!($mode, $c.sticky), growth: take_field!($mode, $c.growth),
+            glide: $c.glide, a11y: take_field!($mode, $c.a11y),
+            pixel_aspect: $m.pixel_aspect, aspect_fit: $m.aspect_fit, material: $c.material,
+            help: take_field!($mode, $c.help), help_cut: $c.help_cut, help_side: $c.help_side,
             #[cfg(debug_assertions)]
-            scroll_source: c.scroll_source,
-        })
+            scroll_source: $c.scroll_source,
+        }
     }};
 }
 
+#[inline(never)]
+fn pack_cold_owned(cold: crate::cold::Cold<crate::el::ElCold>, meta: ColdMeta) -> crate::cold::Cold<NodeCold> {
+    let Some(c_ref) = cold.get() else { return crate::cold::Cold::from_owned(node_cold_meta_only(meta)); };
+    if !needs_node_cold(c_ref, &meta) { return crate::cold::Cold::default(); }
+    let c = cold.into_owned();
+    crate::cold::Cold::from_owned(node_cold_from!(move, c, meta))
+}
+
+#[inline(never)]
+fn pack_cold_ref(c: Option<&crate::el::ElCold>, meta: ColdMeta) -> crate::cold::Cold<NodeCold> {
+    let Some(c) = c else { return crate::cold::Cold::from_owned(node_cold_meta_only(meta)); };
+    if !needs_node_cold(c, &meta) { return crate::cold::Cold::default(); }
+    crate::cold::Cold::from_owned(node_cold_from!(clone, c, meta))
+}
+
+type FinishedWork<S, C, K> = (
+    Option<String>,
+    crate::cold::Cold<crate::el::Handlers>,
+    Option<crate::cold::SharedBox<TextSpec>>,
+    Visual,
+    C,
+    S,
+    K,
+);
+
 trait FlattenEl: sealed::Sealed {
+    type Scratch;
     type Style: StyleBuf;
     type Cold;
     type Children;
 
     fn as_el(&self) -> &El;
-    fn into_parts(self) -> FlatParts<Self::Style, Self::Cold, Self::Children>;
-    fn cold_ref(cold: &Self::Cold) -> &crate::el::ElCold;
+    fn new_scratch(&mut self) -> (Self::Scratch, Option<Box<InputSpec>>);
+    fn style<'a>(&'a self, s: &'a Self::Scratch) -> &'a CompactStyle;
+    fn style_mut<'a>(&'a mut self, s: &'a mut Self::Scratch) -> &'a mut CompactStyle;
+    fn replace_style(&mut self, s: &mut Self::Scratch, style: CompactStyle) -> CompactStyle;
+    fn vis<'a>(&'a self, s: &'a Self::Scratch) -> &'a Visual;
+    fn vis_mut<'a>(&'a mut self, s: &'a mut Self::Scratch) -> &'a mut Visual;
+    fn text_mut<'a>(&'a mut self, s: &'a mut Self::Scratch) -> &'a mut Option<crate::cold::SharedBox<TextSpec>>;
+    fn text_and_vis_mut<'a>(&'a mut self, s: &'a mut Self::Scratch) -> (&'a mut Option<crate::cold::SharedBox<TextSpec>>, &'a mut Visual);
+    fn style_mut_and_vis<'a>(&'a mut self, s: &'a mut Self::Scratch) -> (&'a mut CompactStyle, &'a Visual);
+    fn finish(self, s: Self::Scratch) -> FinishedWork<Self::Style, Self::Cold, Self::Children>;
     fn cold_is_empty(cold: &Self::Cold) -> bool;
     fn pack_cold(cold: Self::Cold, meta: ColdMeta) -> crate::cold::Cold<NodeCold>;
-    fn child_count(children: &Self::Children) -> usize;
-    fn flatten_children(children: Self::Children, env: ChildEnv, w: &mut Walk<'_, '_>) -> bool;
+    #[allow(clippy::too_many_arguments)]
+    fn flatten_children(
+        children: Self::Children, env: ChildEnv, path_buf: &mut String,
+        taffy: &mut LayoutEngine, nodes: &mut Vec<Node>, scale: f32,
+        memo_ctx: &mut memo_reuse::MemoFlattenCtx<'_>,
+    ) -> bool;
 }
 
 impl FlattenEl for El {
+    type Scratch = ();
     type Style = CompactStyle;
     type Cold = crate::cold::Cold<crate::el::ElCold>;
     type Children = (Option<Rc<crate::memo::Built>>, Vec<El>);
 
-    #[inline(always)]
-    fn as_el(&self) -> &El { self }
-
-    #[inline(always)]
-    fn into_parts(self) -> FlatParts<Self::Style, Self::Cold, Self::Children> {
-        let El { handlers, key, style, vis, vis_flags, text, children, memo, mut cold, scale: static_scale, .. } = self;
-        let focus = cold.focus.clone();
+    #[inline(always)] fn as_el(&self) -> &El { self }
+    #[inline(always)] fn new_scratch(&mut self) -> ((), Option<Box<InputSpec>>) {
         // Only a text field's element has to own its cold fields here; a memo placeholder shares them.
-        let input = if cold.input.is_some() { cold.get_mut_if_some().and_then(|c| c.input.take()) } else { None };
-        FlatParts { style, vis, vis_flags, text, input, key, focus, handlers, static_scale, cold, children: (memo, children) }
+        let input = if self.cold.input.is_some() { take_cold_input(&mut self.cold) } else { None };
+        ((), input)
     }
+    #[inline(always)] fn style<'a>(&'a self, _: &'a ()) -> &'a CompactStyle { &self.style }
+    #[inline(always)] fn style_mut<'a>(&'a mut self, _: &'a mut ()) -> &'a mut CompactStyle { &mut self.style }
+    #[inline(always)] fn replace_style(&mut self, _: &mut (), style: CompactStyle) -> CompactStyle { std::mem::replace(&mut self.style, style) }
+    #[inline(always)] fn vis<'a>(&'a self, _: &'a ()) -> &'a Visual { &self.vis }
+    #[inline(always)] fn vis_mut<'a>(&'a mut self, _: &'a mut ()) -> &'a mut Visual { &mut self.vis }
+    #[inline(always)] fn text_mut<'a>(&'a mut self, _: &'a mut ()) -> &'a mut Option<crate::cold::SharedBox<TextSpec>> { &mut self.text }
+    #[inline(always)] fn text_and_vis_mut<'a>(&'a mut self, _: &'a mut ()) -> (&'a mut Option<crate::cold::SharedBox<TextSpec>>, &'a mut Visual) { (&mut self.text, &mut self.vis) }
+    #[inline(always)] fn style_mut_and_vis<'a>(&'a mut self, _: &'a mut ()) -> (&'a mut CompactStyle, &'a Visual) { (&mut self.style, &self.vis) }
+    #[inline(always)] fn finish(self, _: ()) -> FinishedWork<Self::Style, Self::Cold, Self::Children> {
+        let El { key, handlers, text, vis, cold, style, memo, children, .. } = self;
+        (key, handlers, text, vis, cold, style, (memo, children))
+    }
+    #[inline(always)] fn cold_is_empty(cold: &Self::Cold) -> bool { cold.is_empty() }
+    #[inline(always)] fn pack_cold(cold: Self::Cold, meta: ColdMeta) -> crate::cold::Cold<NodeCold> { pack_cold_owned(cold, meta) }
 
     #[inline(always)]
-    fn cold_ref(cold: &Self::Cold) -> &crate::el::ElCold { cold }
-
-    #[inline(always)]
-    fn cold_is_empty(cold: &Self::Cold) -> bool { cold.is_empty() }
-
-    #[inline]
-    fn pack_cold(cold: Self::Cold, meta: ColdMeta) -> crate::cold::Cold<NodeCold> {
-        node_cold_from!(move, cold.into_owned(), meta)
-    }
-
-    #[inline(always)]
-    fn child_count((memo, children): &Self::Children) -> usize {
-        memo.as_ref().map_or(0, |b| b.children.children.len()) + children.len()
-    }
-
-    #[inline]
-    fn flatten_children((memo, children): Self::Children, env: ChildEnv, w: &mut Walk<'_, '_>) -> bool {
+    #[allow(clippy::too_many_arguments)]
+    fn flatten_children(
+        (memo, children): Self::Children, env: ChildEnv, path_buf: &mut String,
+        taffy: &mut LayoutEngine, nodes: &mut Vec<Node>, scale: f32,
+        memo_ctx: &mut memo_reuse::MemoFlattenCtx<'_>,
+    ) -> bool {
         let mut children_dirty = false;
         let shared_len = memo.as_ref().map_or(0, |b| b.children.children.len());
         if let Some(built) = &memo {
             for (i, c) in built.children.children.iter().enumerate() {
-                let (kid, kid_dirty) = flatten_node(c, Some(env.me), i, env.motion, env.in_row, env.row, env.sx, w);
-                w.taffy.push_child(kid);
+                let (kid, kid_dirty) = flatten_ref(c, Some(env.me), path_buf, i, env.motion, env.in_row, env.row, env.sx, taffy, nodes, scale, memo_ctx);
+                taffy.push_child(kid);
                 children_dirty |= kid_dirty;
             }
         }
         for (j, c) in children.into_iter().enumerate() {
-            let (kid, kid_dirty) = flatten_node(c, Some(env.me), shared_len + j, env.motion, env.in_row, env.row, env.sx, w);
-            w.taffy.push_child(kid);
+            let (kid, kid_dirty) = flatten_owned(c, Some(env.me), path_buf, shared_len + j, env.motion, env.in_row, env.row, env.sx, taffy, nodes, scale, memo_ctx);
+            taffy.push_child(kid);
             children_dirty |= kid_dirty;
         }
         children_dirty
     }
 }
 
-impl<'a> FlattenEl for &'a El {
-    type Style = Cow<'a, CompactStyle>;
-    type Cold = &'a crate::cold::Cold<crate::el::ElCold>;
-    type Children = &'a El;
+impl<'e> FlattenEl for &'e El {
+    type Scratch = RefScratch<'e>;
+    type Style = Cow<'e, CompactStyle>;
+    type Cold = Option<&'e crate::el::ElCold>;
+    type Children = &'e El;
 
-    #[inline(always)]
-    fn as_el(&self) -> &El { self }
-
-    #[inline(always)]
-    fn into_parts(self) -> FlatParts<Self::Style, Self::Cold, Self::Children> {
-        let c = &*self.cold;
-        FlatParts {
-            style: Cow::Borrowed(&self.style),
-            vis: self.vis.clone(),
-            vis_flags: self.vis_flags,
-            text: self.text.clone(),
-            input: c.input.clone(),
-            key: self.key.clone(),
-            focus: c.focus.clone(),
-            handlers: self.handlers.clone(),
-            static_scale: self.scale,
-            cold: &self.cold,
-            children: self,
-        }
+    #[inline(always)] fn as_el(&self) -> &El { self }
+    #[inline(always)] fn new_scratch(&mut self) -> (RefScratch<'e>, Option<Box<InputSpec>>) {
+        let input = self.cold.input.clone();
+        (RefScratch { style: Cow::Borrowed(&self.style), vis: self.vis.clone(), text: self.text.clone() }, input)
     }
-
-    #[inline(always)]
-    fn cold_ref(cold: &Self::Cold) -> &crate::el::ElCold { cold }
-
-    #[inline(always)]
-    fn cold_is_empty(cold: &Self::Cold) -> bool { cold.is_empty() }
-
-    #[inline]
-    fn pack_cold(cold: Self::Cold, meta: ColdMeta) -> crate::cold::Cold<NodeCold> {
-        node_cold_from!(clone, &**cold, meta)
+    #[inline(always)] fn style<'a>(&'a self, s: &'a RefScratch<'e>) -> &'a CompactStyle { &s.style }
+    #[inline(always)] fn style_mut<'a>(&'a mut self, s: &'a mut RefScratch<'e>) -> &'a mut CompactStyle { s.style.to_mut() }
+    #[inline(always)] fn replace_style(&mut self, s: &mut RefScratch<'e>, style: CompactStyle) -> CompactStyle {
+        std::mem::replace(&mut s.style, Cow::Owned(style)).into_owned()
     }
+    #[inline(always)] fn vis<'a>(&'a self, s: &'a RefScratch<'e>) -> &'a Visual { &s.vis }
+    #[inline(always)] fn vis_mut<'a>(&'a mut self, s: &'a mut RefScratch<'e>) -> &'a mut Visual { &mut s.vis }
+    #[inline(always)] fn text_mut<'a>(&'a mut self, s: &'a mut RefScratch<'e>) -> &'a mut Option<crate::cold::SharedBox<TextSpec>> { &mut s.text }
+    #[inline(always)] fn text_and_vis_mut<'a>(&'a mut self, s: &'a mut RefScratch<'e>) -> (&'a mut Option<crate::cold::SharedBox<TextSpec>>, &'a mut Visual) { (&mut s.text, &mut s.vis) }
+    #[inline(always)] fn style_mut_and_vis<'a>(&'a mut self, s: &'a mut RefScratch<'e>) -> (&'a mut CompactStyle, &'a Visual) { (s.style.to_mut(), &s.vis) }
+    #[inline(always)] fn finish(self, s: RefScratch<'e>) -> FinishedWork<Self::Style, Self::Cold, Self::Children> {
+        (self.key.clone(), self.handlers.clone(), s.text, s.vis, self.cold.get(), s.style, self)
+    }
+    #[inline(always)] fn cold_is_empty(cold: &Self::Cold) -> bool { cold.is_none() }
+    #[inline(always)] fn pack_cold(cold: Self::Cold, meta: ColdMeta) -> crate::cold::Cold<NodeCold> { pack_cold_ref(cold, meta) }
 
     #[inline(always)]
-    fn child_count(el: &Self::Children) -> usize {
-        el.memo.as_ref().map_or(0, |m| m.children.children.len()) + el.children.len()
-    }
-
-    #[inline]
-    fn flatten_children(el: Self::Children, env: ChildEnv, w: &mut Walk<'_, '_>) -> bool {
+    #[allow(clippy::too_many_arguments)]
+    fn flatten_children(
+        el: Self::Children, env: ChildEnv, path_buf: &mut String,
+        taffy: &mut LayoutEngine, nodes: &mut Vec<Node>, scale: f32,
+        memo_ctx: &mut memo_reuse::MemoFlattenCtx<'_>,
+    ) -> bool {
         let mut children_dirty = false;
         for (i, c) in el.all_children().enumerate() {
-            let (kid, kid_dirty) = flatten_node(c, Some(env.me), i, env.motion, env.in_row, env.row, env.sx, w);
-            w.taffy.push_child(kid);
+            let (kid, kid_dirty) = flatten_ref(c, Some(env.me), path_buf, i, env.motion, env.in_row, env.row, env.sx, taffy, nodes, scale, memo_ctx);
+            taffy.push_child(kid);
             children_dirty |= kid_dirty;
         }
         children_dirty
@@ -613,56 +600,68 @@ impl<'a> FlattenEl for &'a El {
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn flatten_with_buf(
-    el: El,
-    parent: Option<usize>,
-    path_buf: &mut String,
-    index: usize,
-    motion: Spring,
+    el: El, parent: Option<usize>, path_buf: &mut String, index: usize, motion: Spring,
     in_row: RowLayout,
     // The parent lays its children out in a row (its main axis is horizontal).
     parent_row: bool,
-    taffy: &mut LayoutEngine,
-    nodes: &mut Vec<Node>,
-    scale: f32,
+    taffy: &mut LayoutEngine, nodes: &mut Vec<Node>, scale: f32,
     memo_ctx: &mut memo_reuse::MemoFlattenCtx<'_>,
 ) -> (SlotId, bool) {
-    if path_buf.capacity() < path_buf.len() + 128 {
-        path_buf.reserve(128);
-    }
-    let mut w = Walk { path_buf, taffy, nodes, scale, memo_ctx };
-    flatten_node(el, parent, index, motion, in_row, parent_row, None, &mut w)
+    if path_buf.capacity() < path_buf.len() + 128 { path_buf.reserve(128); }
+    flatten_owned(el, parent, path_buf, index, motion, in_row, parent_row, None, taffy, nodes, scale, memo_ctx)
 }
 
+// Keep both monomorphizations in this module's codegen unit alongside its private helpers
+// (`push_segment`, `prepare_text`, `take_foreground`, `inherit_hover_within`, `pack_cold_*`)
+// so LLVM retains intra-CGU attributes and layout under `codegen-units = 16, lto = false`.
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn flatten_owned(
+    el: El, parent: Option<usize>, path_buf: &mut String, index: usize, motion: Spring,
+    in_row: RowLayout, parent_row: bool, parent_sx: Option<ScrollXChild>,
+    taffy: &mut LayoutEngine, nodes: &mut Vec<Node>, scale: f32,
+    memo_ctx: &mut memo_reuse::MemoFlattenCtx<'_>,
+) -> (SlotId, bool) {
+    flatten_node(el, parent, path_buf, index, motion, in_row, parent_row, parent_sx, taffy, nodes, scale, memo_ctx)
+}
+
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn flatten_ref(
+    el: &El, parent: Option<usize>, path_buf: &mut String, index: usize, motion: Spring,
+    in_row: RowLayout, parent_row: bool, parent_sx: Option<ScrollXChild>,
+    taffy: &mut LayoutEngine, nodes: &mut Vec<Node>, scale: f32,
+    memo_ctx: &mut memo_reuse::MemoFlattenCtx<'_>,
+) -> (SlotId, bool) {
+    flatten_node(el, parent, path_buf, index, motion, in_row, parent_row, parent_sx, taffy, nodes, scale, memo_ctx)
+}
+
+#[inline(always)]
 #[allow(clippy::too_many_arguments)]
 fn flatten_node<E: FlattenEl>(
-    el: E,
-    parent: Option<usize>,
-    index: usize,
-    motion: Spring,
-    in_row: RowLayout,
-    parent_row: bool,
-    parent_sx: Option<ScrollXChild>,
-    w: &mut Walk<'_, '_>,
+    mut el: E, parent: Option<usize>, path_buf: &mut String, index: usize, motion: Spring,
+    in_row: RowLayout, parent_row: bool, parent_sx: Option<ScrollXChild>,
+    taffy: &mut LayoutEngine, nodes: &mut Vec<Node>, scale: f32,
+    memo_ctx: &mut memo_reuse::MemoFlattenCtx<'_>,
 ) -> (SlotId, bool) {
     let el_ref = el.as_el();
     if parent_sx.is_none()
-        && let Some(slot) = memo_reuse::try_reuse_memo(el_ref, parent, w.path_buf, index, motion, in_row, w.scale, w.taffy, w.nodes, w.memo_ctx)
+        && let Some(slot) = memo_reuse::try_reuse_memo(el_ref, parent, path_buf, index, motion, in_row, scale, taffy, nodes, memo_ctx)
     {
         return (slot, false);
     }
     let record_built = parent_sx.is_none().then(|| {
         let built = el_ref.memo_built().filter(|b| b.reusable && memo_reuse::same_root_el(el_ref, b, false))
             .or_else(|| el_ref.cold.expanded_memo.as_ref().filter(|b| b.reusable && memo_reuse::same_root_el(el_ref, b, true)))?;
-        let (inherited, hover_within) = memo_reuse::inherited_for(parent, w.nodes, motion, in_row, w.scale, w.memo_ctx.foreground);
+        let (inherited, hover_within) = memo_reuse::inherited_for(parent, nodes, motion, in_row, scale, memo_ctx.foreground);
         Some((built.id, inherited, hover_within))
     }).flatten();
-    let prev_len = w.path_buf.len();
-    push_segment(w.path_buf, el_ref.key.as_deref(), index);
-    let me = w.nodes.len();
-    let (path, id) = resolve_path_and_id(w.path_buf, me, w.memo_ctx);
-    let own_motion = el_ref.cold.motion;
-    let motion = own_motion.unwrap_or(motion);
-    let parent_is_stack = parent.is_some_and(|p| w.nodes[p].growth.is_some());
+    let prev_len = path_buf.len();
+    push_segment(path_buf, el_ref.key.as_deref(), index);
+    let me = nodes.len();
+    let (path, id) = resolve_path_and_id(path_buf, me, memo_ctx);
+    let motion = el_ref.cold.motion.unwrap_or(motion);
+    let parent_is_stack = parent.is_some_and(|p| nodes[p].growth.is_some());
     let flags = el_ref.flags;
     let animate_layout = flags.has(ElFlags::ANIMATE_LAYOUT);
     let in_row = if el_ref.cold.above.is_some() && (animate_layout || in_row == RowLayout::Horizontal) {
@@ -672,95 +671,88 @@ fn flatten_node<E: FlattenEl>(
     } else {
         in_row
     };
-    let instant_changes = flags.has(ElFlags::INSTANT_CHANGES) || (parent.is_some_and(|p| w.nodes[p].instant_changes) && !el_ref.cold.animated_changes);
-    let trace_namespace = el_ref.cold.trace_namespace.or_else(|| parent.and_then(|p| w.nodes[p].trace_namespace));
-    let role = el_ref.role_name();
-    let parent_flow = parent.map_or(crate::el::Flow::Ltr, |p| w.nodes[p].flow);
+    let instant_changes = flags.has(ElFlags::INSTANT_CHANGES) || (parent.is_some_and(|p| nodes[p].instant_changes) && !el_ref.cold.animated_changes);
+    let trace_namespace = el_ref.cold.trace_namespace.or_else(|| parent.and_then(|p| nodes[p].trace_namespace));
+    let parent_flow = parent.map_or(crate::el::Flow::Ltr, |p| nodes[p].flow);
     let (flow, dir_effect) = crate::el::step_direction(parent_flow, crate::el::DirEvent::of(el_ref));
-    let directed = flags.dir().is_some() || parent.is_some_and(|p| w.nodes[p].directed);
-    let pin = crate::el::Pin::of(el_ref);
-    let inert = flags.has(ElFlags::INERT) || parent.is_some_and(|p| w.nodes[p].inert);
+    let directed = flags.dir().is_some() || parent.is_some_and(|p| nodes[p].directed);
+    let inert = flags.has(ElFlags::INERT) || parent.is_some_and(|p| nodes[p].inert);
     let mirror = dir_effect == crate::el::DirEffect::Mirror;
-    let FlatParts { mut style, mut vis, vis_flags, mut text, mut input, key, focus, handlers, static_scale, cold, children } = el.into_parts();
-    let cold_r = E::cold_ref(&cold);
-    let option_as_alt = cold_r.option_as_alt;
-    let time_scale = cold_r.time_scale;
-    if let Some(sx) = parent_sx {
-        apply_scroll_x_child(style.as_mut(), sx);
+    let (mut s, mut input) = el.new_scratch();
+    if let Some(sx) = parent_sx { apply_scroll_x_child(el.style_mut(&mut s), sx); }
+    let (measure, secure_measure) = {
+        let text = el.text_mut(&mut s);
+        if text.is_some() { prepare_text(text, input.as_deref(), scale, directed.then_some(flow)) } else { (None, false) }
+    };
+    if memo_ctx.foreground.is_some() {
+        let (text_m, vis_m) = el.text_and_vis_mut(&mut s);
+        take_foreground(text_m, input.as_deref_mut(), vis_m, memo_ctx.foreground);
     }
-    let (measure, secure_measure) = prepare_text(&mut text, input.as_deref(), w.scale, directed.then_some(flow));
-    take_foreground(&mut text, input.as_deref_mut(), &mut vis, w.memo_ctx.foreground);
-    if vis.border_layout { device::border(style.as_mut(), &vis, w.scale); }
-    if let Some(metrics) = cold_r.list_disc { device::disc(style.as_mut(), metrics, w.scale); }
-    if mirror { crate::el::mirror_visual(&mut vis); }
-    let hover_within = inherit_hover_within(&vis, cold_r.above.as_ref(), parent, w.nodes);
-    let pixel_aspect = vis.pixels.as_ref()
+    if el.vis(&s).border_layout {
+        let (style, vis) = el.style_mut_and_vis(&mut s);
+        device::border(style, vis, scale);
+    }
+    if let Some(metrics) = el.as_el().cold.list_disc { device::disc(el.style_mut(&mut s), metrics, scale); }
+    if mirror { crate::el::mirror_visual(el.vis_mut(&mut s)); }
+    let hover_within = inherit_hover_within(el.vis(&s), el.as_el().cold.above.as_ref(), parent, nodes);
+    let pixel_aspect = el.vis(&s).pixels.as_ref()
         .filter(|_| {
-            let sz = style.as_ref().size();
-            style.as_ref().aspect_ratio().is_none() && sz.width.is_auto() != sz.height.is_auto()
+            let st = el.style(&s);
+            let sz = st.size();
+            st.aspect_ratio().is_none() && sz.width.is_auto() != sz.height.is_auto()
         })
         .map(pixel_ratio);
-    let picture = pixel_aspect.filter(|&r| r > 0.0).map(|ratio| (ratio, picture_side(style.as_mut())));
-    if let Some((ratio, Picture::Styled)) = picture { style.as_mut().set_aspect_ratio(Some(ratio)); }
+    let picture = pixel_aspect.filter(|&r| r > 0.0).map(|ratio| (ratio, picture_side(el.style_mut(&mut s))));
+    if let Some((ratio, Picture::Styled)) = picture { el.style_mut(&mut s).set_aspect_ratio(Some(ratio)); }
     let measure = measure.or(picture.filter(|p| p.1 == Picture::Measured).map(|p| picture_key(p.0)));
-    let aspect_fit = (cold_r.aspect_fit > 0.0).then(|| {
-        let room = fit_room(style.as_ref(), parent_row);
-        Box::new((cold_r.aspect_fit, style.replace_owned(room)))
-    });
-    let total_children = E::child_count(&children);
-    let child_sx = if cold_r.scroll.is_some() && cold_r.scroll_axes.x() {
-        let scroll_axes = cold_r.scroll_axes;
-        if total_children == 1 {
-            style.as_mut().set_flex_direction(FlexDirection::Row);
-            Some(ScrollXChild::Single { vertical: scroll_axes.y() })
-        } else {
-            if !scroll_axes.y() {
-                style.as_mut().set_flex_direction(FlexDirection::Row);
-            }
-            Some(ScrollXChild::Many { vertical: scroll_axes.y() })
-        }
-    } else {
-        None
+    let aspect_fit = {
+        let af = el.as_el().cold.aspect_fit;
+        (af > 0.0).then(|| {
+            let room = fit_room(el.style(&s), parent_row);
+            Box::new((af, el.replace_style(&mut s, room)))
+        })
     };
+    let child_sx = {
+        let r = el.as_el();
+        let c = &*r.cold;
+        if c.scroll.is_some() && c.scroll_axes.x() {
+            let scroll_axes = c.scroll_axes;
+            let total_children = r.memo.as_ref().map_or(0, |b| b.children.children.len()) + r.children.len();
+            if total_children == 1 {
+                el.style_mut(&mut s).set_flex_direction(FlexDirection::Row);
+                Some(ScrollXChild::Single { vertical: scroll_axes.y() })
+            } else {
+                if !scroll_axes.y() { el.style_mut(&mut s).set_flex_direction(FlexDirection::Row); }
+                Some(ScrollXChild::Many { vertical: scroll_axes.y() })
+            }
+        } else {
+            None
+        }
+    };
+    let el_r = el.as_el();
+    let role = el_r.role_name();
+    let pin = crate::el::Pin::of(el_r);
+    let vis_flags = el_r.vis_flags;
+    let static_scale = el_r.scale;
+    let time_scale = el_r.cold.time_scale;
+    let option_as_alt = el_r.cold.option_as_alt;
+    let focus = el_r.cold.focus.clone();
+    let (key, handlers, text, vis, cold, style, children) = el.finish(s);
     let cold = if E::cold_is_empty(&cold) && trace_namespace.is_none() && pixel_aspect.is_none() && aspect_fit.is_none() {
         crate::cold::Cold::default()
     } else {
-        E::pack_cold(cold, ColdMeta { trace_namespace, own_motion, mirror, pixel_aspect, aspect_fit })
+        E::pack_cold(cold, ColdMeta { trace_namespace, mirror, pixel_aspect, aspect_fit })
     };
-    w.nodes.push(Node {
-        id,
-        path,
-        key,
-        role,
-        parent,
-        taffy: SlotId(0),
-        text,
-        text_layout: None,
-        elided: None,
-        input,
-        focus,
-        handlers,
-        cold,
-        vis,
-        vis_flags,
-        hover_within,
-        target: [0.0; 4],
-        local: MRect::ZERO,
-        inset: [0.0; 4],
-        motion,
-        static_scale,
-        time_scale,
-        in_row,
+    nodes.push(Node {
+        id, path, key, role, parent, taffy: SlotId(0), text, text_layout: None, elided: None,
+        input, focus, handlers, cold, vis, vis_flags, hover_within,
+        target: [0.0; 4], local: MRect::ZERO, inset: [0.0; 4],
+        motion, static_scale, time_scale, in_row,
         width_leads: flags.has(ElFlags::WIDTH_LEADS),
         instant_changes,
         streaming: flags.has(ElFlags::STREAMING),
         whole: flags.has(ElFlags::WHOLE),
-        inert,
-        flow,
-        directed,
-        pin,
-        scale_track: false,
-        group_fade: false,
+        inert, flow, directed, pin, scale_track: false, group_fade: false,
         virtual_mount: flags.has(ElFlags::VIRTUAL_MOUNT),
         selection_group: flags.has(ElFlags::SELECTION_GROUP),
         window_drag: flags.window_drag(),
@@ -774,18 +766,15 @@ fn flatten_node<E: FlattenEl>(
         r => r,
     };
     let row = matches!(style.as_ref().flex_direction(), FlexDirection::Row | FlexDirection::RowReverse);
-    let child_mark = w.taffy.begin_children();
-    let children_dirty = E::flatten_children(children, ChildEnv { me, motion, in_row: child_in_row, row, sx: child_sx }, w);
-    w.path_buf.truncate(prev_len);
-    let (slot, dirty) = w.taffy.sync_node(id.0, me as u32, style.into_owned(), measure, secure_measure, child_mark, children_dirty);
-    w.nodes[me].taffy = slot;
+    let child_mark = taffy.begin_children();
+    let env = ChildEnv { me, motion, in_row: child_in_row, row, sx: child_sx };
+    let children_dirty = E::flatten_children(children, env, path_buf, taffy, nodes, scale, memo_ctx);
+    path_buf.truncate(prev_len);
+    let (slot, dirty) = taffy.sync_node(id.0, me as u32, style.into_owned(), measure, secure_measure, child_mark, children_dirty);
+    nodes[me].taffy = slot;
     if let Some((built_id, inherited, hover_within)) = record_built {
-        w.memo_ctx.pending.push(memo_reuse::PendingFlat {
-            built_id,
-            start: me,
-            len: w.nodes.len() - me,
-            inherited,
-            hover_within,
+        memo_ctx.pending.push(memo_reuse::PendingFlat {
+            built_id, start: me, len: nodes.len() - me, inherited, hover_within,
         });
     }
     (slot, dirty)
