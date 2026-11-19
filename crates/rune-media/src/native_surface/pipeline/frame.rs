@@ -355,13 +355,24 @@ impl SurfaceRenderer {
             let seconds_per_tick = queue.get_timestamp_period() as f64 * 1e-9;
             let queries = queries.clone();
             let device = self.device.clone();
-            let queue = queue.clone();
+            // Weak: the queue keeps this closure until it runs, and a queue held by it would keep
+            // the queue (and the closure) alive for good if its device is lost first.
+            let queue = Arc::downgrade(self.timing_queue.get_or_init(|| Arc::new(queue.clone())));
             let completion = self.completion.clone();
             // Metal counter resolves can race the render pass's final fragment sample when
             // encoded into the same command buffer. Resolve after its completion fence; this
             // is timestamp metadata only, never a readback or wait on the video pixel path.
             encoder.on_submitted_work_done(move || {
                 let completed_at = Instant::now();
+                // The renderer is gone (its device lost and replaced, or the app closing): nothing
+                // resolves the times.
+                let Some(queue) = queue.upgrade() else {
+                    for (s, _, mut t) in frames {
+                        t.completed_at = Some(completed_at);
+                        s.report(t);
+                    }
+                    return;
+                };
                 let mut timestamps = device.create_command_encoder(&Default::default());
                 timestamps.resolve_query_set(&queries.pool.queries, queries.start..queries.start + 2, &resolve, 0);
                 timestamps.copy_buffer_to_buffer(&resolve, 0, &readback, 0, 16);

@@ -44,14 +44,15 @@ impl Gpu {
         // Debug builds report a submission that holds the GPU past `rune_gpu::budget::BUDGET`;
         // Rune's own tests (and `test-strict` builds) end there: their GPUs have no test to fail.
         if cfg!(debug_assertions) { rune_gpu::budget::watch(cfg!(test) || cfg!(feature = "test-strict")); }
-        Gpu { instance, adapter, device, queue, lost }
+        let removal = rune_gpu::health::Removal::watch(&device);
+        Gpu { instance, adapter, device, queue, lost, removal }
     }
 
     /// Whether the device went away: a driver reset, a GPU removed, a resume from Modern Standby.
     /// Nothing can be drawn with it, and its surfaces can't be configured, so its owner makes a
     /// new GPU and surface instead (`Host::reattach`).
     /// On D3D12 the device is asked too: wgpu hears of a removal only at the next submission.
-    pub fn is_lost(&self) -> bool { self.lost.load(Ordering::Acquire) || rune_gpu::health::removed(&self.device) }
+    pub fn is_lost(&self) -> bool { self.lost.load(Ordering::Acquire) || self.removal.removed() }
 }
 
 /// What `log_uncaptured` has printed: each distinct message once, up to `PRINTED`, then one

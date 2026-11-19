@@ -687,8 +687,21 @@ impl LightRenderer {
     pub fn read_timings(&self, device: &wgpu::Device) -> Option<Timings> {
         let (_, _, read) = self.query.as_ref()?;
         let slice = read.slice(..);
-        slice.map_async(wgpu::MapMode::Read, |r| r.expect("map timestamps"));
-        device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
+        // A map that failed (a lost device) shows as `get_mapped_range`'s error below. The poll
+        // returns at once on a removed D3D12 device (Rune's wgpu-hal); on a lost Vulkan device
+        // wgpu 30 panics in `poll` ("Parent device is lost"), which is no answer either. Both
+        // read as no timings; any other panic in the poll (a callback's) goes on.
+        slice.map_async(wgpu::MapMode::Read, |_| {});
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| device.poll(wgpu::PollType::wait_indefinitely()))) {
+            Ok(polled) => polled.ok()?,
+            Err(panic) => {
+                let message = panic.downcast_ref::<String>().map(String::as_str).or_else(|| panic.downcast_ref::<&str>().copied()).unwrap_or("");
+                if message.starts_with("Error in Device::poll") {
+                    return None;
+                }
+                std::panic::resume_unwind(panic)
+            }
+        };
         let ticks: Vec<u64> = {
             let data = slice.get_mapped_range().ok()?;
             bytemuck::cast_slice(&data).to_vec()

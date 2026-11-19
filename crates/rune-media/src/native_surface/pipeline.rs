@@ -92,6 +92,9 @@ pub struct SurfaceRenderer {
     queries_used: std::sync::atomic::AtomicBool,
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(super) completion: std::sync::mpsc::SyncSender<()>,
+    /// The queue timestamp resolves go to, held here so their callbacks hold it weakly.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    timing_queue: std::sync::OnceLock<Arc<wgpu::Queue>>,
     pipeline: wgpu::RenderPipeline,
     format: wgpu::TextureFormat,
     extra: Vec<(wgpu::TextureFormat, wgpu::RenderPipeline)>,
@@ -221,6 +224,7 @@ impl SurfaceRenderer {
             queries: None,
             queries_used: std::sync::atomic::AtomicBool::new(false),
             completion,
+            timing_queue: std::sync::OnceLock::new(),
             pipeline,
             format,
             extra: Vec::new(),
