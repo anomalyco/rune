@@ -72,6 +72,8 @@ pub struct LayerStatus {
 
 /// The window asks for the clip's layer at `ask` device pixels (None: it draws the pictures),
 /// and hears what the decoder has done.
+pub(crate) use gpu::release_removed_device;
+
 pub(crate) fn layer(shared: &Arc<Shared>, ask: Option<(u32, u32)>) -> LayerStatus {
     let mut native = shared.native.lock().unwrap();
     let running = matches!(native.phase, Phase::Playing { .. });

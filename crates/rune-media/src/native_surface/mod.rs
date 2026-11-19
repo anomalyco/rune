@@ -389,6 +389,19 @@ pub fn note_device(device: &wgpu::Device, presented: bool) {
     let _ = (device, presented);
 }
 
+/// Lets go of a removed D3D12 device that video decoding still holds (the last window's, and
+/// the decoders' D3D11 device on it), so a new device can be made on its adapter: D3D12 gives
+/// a process one device per adapter, and the removed one again while anything holds it. Rune
+/// calls it before it makes a device. Nothing off Windows.
+#[doc(hidden)]
+pub fn release_removed_device() {
+    #[cfg(target_os = "windows")]
+    {
+        windows::release_removed_device();
+        crate::video::release_removed_device();
+    }
+}
+
 /// A node's video draw in painter order. Geometry is already in device pixels.
 #[derive(Clone, Debug)]
 pub struct SurfaceDraw {
