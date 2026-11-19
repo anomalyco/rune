@@ -87,7 +87,9 @@ pub(in crate::window) struct Host {
     pub(in crate::window) open_inactive: bool,
     /// `App::maximized`, `App::full_screen`.
     pub(in crate::window) open_as: crate::windows::OpenAs,
+    pub(in crate::window) shared: Arc<crate::app::SharedCore>,
     pub(in crate::window) shortcuts: crate::shortcuts::Guard,
+    pub(in crate::window) menus: crate::native_menu::MenuGuard,
     pub(in crate::window) popup: crate::popup_menu::Presenter,
     pub(in crate::window) file_dialog: crate::file_dialog::Presenter,
     pub(in crate::window) app: Box<dyn WindowApp>,
@@ -124,55 +126,31 @@ pub(in crate::window) struct Host {
     pub(in crate::window) frame_wake: Waker,
 }
 
-struct HostInit {
+struct HostWaker {
     app_woken: Arc<AtomicBool>,
-    chrome: Chrome,
-    titlebar: Option<crate::Titlebar>,
-    options: WindowOptions,
-    macos_window: crate::MacWindowOptions,
-    native_handle: WindowHandle,
-    on_created: Option<Box<dyn FnOnce(WindowHandle)>>,
-    on_window: Option<crate::app::OnWindow>,
-    on_ready: Option<crate::app::OnWindow>,
-    frame_reports: crate::frame::encoded::FrameReports,
-    geometry: WindowGeometry,
-    args: Args,
-    keep_running: bool,
-    release_gpu: bool,
-    open_at_start: bool,
-    float_on_open: bool,
-    open_inactive: bool,
-    open_as: crate::windows::OpenAs,
-    shortcuts: crate::shortcuts::Guard,
     waker: Waker,
     live_proxy: EventLoopProxy<WakeEvent>,
     #[cfg(target_os = "macos")]
     frame_proxy: EventLoopProxy<WakeEvent>,
-    slot: usize,
-    gpu_pool: Rc<RefCell<Weak<Gpu>>>,
-    wayland: bool,
 }
 
-impl Host {
-    pub(in crate::window) fn new<S: 'static>(
-        window_spec: WindowSpec<S>,
-        native_handle: WindowHandle,
-        args: Args,
-        proxy: EventLoopProxy<WakeEvent>,
-        slot: usize,
-        gpu_pool: Rc<RefCell<Weak<Gpu>>>,
-        wayland: bool,
-    ) -> Self {
-        let WindowSpec { mut app, options, key: _, on_created } = window_spec;
-        let mut args = app.resolve_args(args);
-        let on_window = app.on_window.take();
-        let on_ready = app.on_ready.take();
-        let frame_reports = crate::frame::encoded::FrameReports::new(app.on_frame_encoded.take(), Some(native_handle.key()));
-        let on_frame_drawn = app.on_frame_drawn.take();
-        let macos_window = std::mem::take(&mut app.macos_window);
+impl HostWaker {
+    fn prepare(
+        key: &str,
+        handle: Option<WindowHandle>,
+        overlays: &mut Vec<Box<dyn crate::overlay::PendingOverlay>>,
+        cx: super::Start<'_>,
+        standard_menus: bool,
+    ) -> (Self, WindowHandle, usize, Rc<RefCell<Weak<Gpu>>>, bool) {
+        crate::video::enable_playback();
+        cx.overlays.append(overlays);
+        let native_handle = handle.unwrap_or_else(|| WindowHandle::new(key));
+        let super::Start { proxy, slot, gpu: gpu_pool, wayland, .. } = cx;
         // Before the menu guard, so custom items in Edit or Window join these menus.
         #[cfg(target_os = "macos")]
-        crate::native_menu::install_standard_menus(app.standard_menus);
+        crate::native_menu::install_standard_menus(standard_menus);
+        #[cfg(not(target_os = "macos"))]
+        let _ = standard_menus;
         native_handle.bind(proxy.clone(), slot);
         let live_proxy = proxy.clone();
         #[cfg(target_os = "macos")]
@@ -183,54 +161,92 @@ impl Host {
             woken.store(true, Ordering::Release);
             let _ = proxy.send_event(WakeEvent::App(slot));
         });
-        let (open, keep_running, on_close, release_gpu) = (app.open, app.keep_running, app.on_close, app.release_gpu);
-        let on_rest = app.on_rest;
-        let (on_reopen, on_quit, turn_scope) = (app.on_reopen, app.on_quit, app.turn_scope);
+        let prepared = Self {
+            app_woken,
+            waker,
+            live_proxy,
+            #[cfg(target_os = "macos")]
+            frame_proxy,
+        };
+        (prepared, native_handle, slot, gpu_pool, wayland)
+    }
+}
+
+struct HostInit {
+    prepared: HostWaker,
+    shared: Arc<crate::app::SharedCore>,
+    chrome: Chrome,
+    titlebar: Option<crate::Titlebar>,
+    options: WindowOptions,
+    macos_window: crate::MacWindowOptions,
+    native_handle: WindowHandle,
+    on_created: Option<Box<dyn FnOnce(WindowHandle)>>,
+    on_window: Option<crate::app::OnWindow>,
+    on_ready: Option<crate::app::OnWindow>,
+    on_frame_encoded: Option<crate::frame::encoded::OnFrameEncoded>,
+    geometry: WindowGeometry,
+    args: Args,
+    keep_running: bool,
+    release_gpu: bool,
+    open_at_start: bool,
+    fit_height: bool,
+    float_on_open: bool,
+    open_inactive: bool,
+    open_as: crate::windows::OpenAs,
+    shortcuts: crate::shortcuts::Guard,
+    menus: crate::native_menu::MenuGuard,
+    slot: usize,
+    gpu_pool: Rc<RefCell<Weak<Gpu>>>,
+    wayland: bool,
+    keeps_loop: bool,
+    open_urls: Option<crate::open_url::incoming::Listening>,
+}
+
+impl Host {
+    pub(in crate::window) fn new<S: 'static>(
+        window_spec: WindowSpec<S>,
+        handle: Option<WindowHandle>,
+        args: Args,
+        cx: super::Start<'_>,
+        keeps_loop: bool,
+        open_urls: Option<crate::open_url::incoming::Listening>,
+    ) -> Self {
+        let WindowSpec { mut app, options, key, on_created } = window_spec;
+        let args = app.resolve_args(args);
+        let (prepared, native_handle, slot, gpu_pool, wayland) =
+            HostWaker::prepare(&key, handle, &mut app.overlays, cx, app.standard_menus);
+        let (on_window, on_ready, on_frame_encoded, on_frame_drawn) = (
+            app.on_window.take(),
+            app.on_ready.take(),
+            app.on_frame_encoded.take(),
+            app.on_frame_drawn.take(),
+        );
+        let macos_window = std::mem::take(&mut app.macos_window);
+        let (open, keep_running, release_gpu, fit_height, float_on_open) = (
+            app.open, app.keep_running, app.release_gpu, app.fit_content_height, app.float_on_open,
+        );
+        let (open_inactive, open_as, chrome, titlebar) = (app.open_inactive, app.open_as, app.chrome, app.titlebar);
+        let (on_close, on_rest, on_reopen, on_quit, turn_scope) = (app.on_close, app.on_rest, app.on_reopen, app.on_quit, app.turn_scope);
         let comp = app.compositor.take();
-        let titlebar = app.titlebar.filter(|_| !options.borderless);
-        let chrome = app.chrome;
-        let fit_height = app.fit_content_height;
-        let float_on_open = app.float_on_open;
-        // `RUNE_OPEN_INACTIVE`: a tool's launch (an accessibility probe, a capture) leaves the user's
-        // focus and keyboard where they are, as `App::open_inactive` does.
-        let (open_inactive, open_as) = (app.open_inactive || std::env::var_os("RUNE_OPEN_INACTIVE").is_some(), app.open_as);
         let (playground, attach_playground) = (app.playground.take(), app.attach_playground);
-        let (mut spec, state, shared, runtime) = app.into_parts(args.scene.as_deref());
-        let mut size = args.size.unwrap_or(spec.size);
+        let (spec, state, shared, runtime) = app.into_parts(args.scene.as_deref());
+        let size = args.size.unwrap_or(spec.size);
         // The window reports the system appearance and scale when it opens.
         let env = Env::new(args.theme.as_deref() != Some("light"), 1.0);
-        let mut rt = runtime_for(&spec, state, size, env, setup_waker(&shared));
+        let mut rt = runtime_for(&spec, state, size, env, setup_waker(&shared.core));
         if let Some(attach) = attach_playground { attach(&mut rt, playground, &spec, args.playground.clone(), args.variant.clone(), true); }
         rt.configure(runtime);
-        if fit_height {
-            spec.min_size = options.fit_min_size(spec.min_size);
-            // Opens at the content's height; the first frame corrects any difference its
-            // real scale makes.
-            rt.fit_height = true;
-            let (min, max) = options.size_limits(spec.min_size);
-            size = crate::window::frame::clamp_size((size.0, rt.content_height()), min, max);
-            rt.set_viewport(size, env.scale);
-            spec.size = size;
-            args.size = None;
-        }
-        shared.connect(waker.clone());
-        let shortcuts = crate::shortcuts::Guard::attach(&shared, waker.clone(), false, wayland);
-        let menus = crate::native_menu::Guard::attach(&shared, false);
+        shared.core.connect(prepared.waker.clone());
+        let shortcuts = crate::shortcuts::Guard::attach(&shared, prepared.waker.clone(), false, wayland);
+        let menus = crate::native_menu::MenuGuard::attach(&shared, false);
+        let shared_core = shared.core.clone();
         let geometry = WindowGeometry { title: spec.title, size: spec.size, min_size: spec.min_size };
         let typed = Box::new(TypedWindowApp {
-            rt,
-            shared,
-            menus,
-            comp,
-            on_frame_drawn,
-            on_close,
-            on_rest,
-            on_quit,
-            on_reopen,
-            turn_scope,
+            rt, shared, comp, on_frame_drawn, on_close, on_rest, on_quit, on_reopen, turn_scope,
         });
         Self::from_app(typed, HostInit {
-            app_woken,
+            prepared,
+            shared: shared_core,
             chrome,
             titlebar,
             options,
@@ -239,29 +255,36 @@ impl Host {
             on_created,
             on_window,
             on_ready,
-            frame_reports,
+            on_frame_encoded,
             geometry,
             args,
             keep_running,
             release_gpu,
             open_at_start: open,
+            fit_height,
             float_on_open,
             open_inactive,
             open_as,
             shortcuts,
-            waker,
-            live_proxy,
-            #[cfg(target_os = "macos")]
-            frame_proxy,
+            menus,
             slot,
             gpu_pool,
             wayland,
+            keeps_loop,
+            open_urls,
         })
     }
 
     fn from_app(mut app: Box<dyn WindowApp>, init: HostInit) -> Self {
         let HostInit {
-            app_woken,
+            prepared: HostWaker {
+                app_woken,
+                waker,
+                live_proxy,
+                #[cfg(target_os = "macos")]
+                frame_proxy,
+            },
+            shared,
             chrome,
             titlebar,
             options,
@@ -270,24 +293,41 @@ impl Host {
             on_created,
             on_window,
             on_ready,
-            frame_reports,
-            geometry,
-            args,
+            on_frame_encoded,
+            mut geometry,
+            mut args,
             keep_running,
             release_gpu,
             open_at_start,
+            fit_height,
             float_on_open,
             open_inactive,
             open_as,
             shortcuts,
-            waker,
-            live_proxy,
-            #[cfg(target_os = "macos")]
-            frame_proxy,
+            menus,
             slot,
             gpu_pool,
             wayland,
+            keeps_loop,
+            open_urls,
         } = init;
+        let titlebar = titlebar.filter(|_| !options.borderless);
+        // `RUNE_OPEN_INACTIVE`: a tool's launch (an accessibility probe, a capture) leaves the user's
+        // focus and keyboard where they are, as `App::open_inactive` does.
+        let open_inactive = open_inactive || std::env::var_os("RUNE_OPEN_INACTIVE").is_some();
+        let frame_reports = crate::frame::encoded::FrameReports::new(on_frame_encoded, Some(native_handle.key()));
+        if fit_height {
+            let size = args.size.unwrap_or(geometry.size);
+            geometry.min_size = options.fit_min_size(geometry.min_size);
+            // Opens at the content's height; the first frame corrects any difference its
+            // real scale makes.
+            app.rt_mut().fit_height = true;
+            let (min, max) = options.size_limits(geometry.min_size);
+            let fitted = crate::window::frame::clamp_size((size.0, app.content_height()), min, max);
+            app.rt_mut().set_viewport(fitted, 1.0);
+            geometry.size = fitted;
+            args.size = None;
+        }
         #[cfg(target_os = "macos")]
         let present_log = args.trace.as_ref().map(|_| Arc::default());
         let has_comp = app.has_compositor();
@@ -330,7 +370,7 @@ impl Host {
             on_ready,
             frame_reports,
             life: Life::Unopened,
-            keeps_loop: true,
+            keeps_loop,
             geometry,
             args,
             keep_running,
@@ -338,13 +378,15 @@ impl Host {
             chores: Default::default(),
             ends_app: false,
             turn: any_host::Turn::Between,
-            _open_urls: None,
+            _open_urls: open_urls,
             release_gpu,
             open_at_start,
             float_on_open,
             open_inactive,
             open_as,
+            shared,
             shortcuts,
+            menus,
             popup,
             file_dialog,
             app,
@@ -387,13 +429,13 @@ impl Host {
     /// Publishes what `AppHandle::is_visible` reports.
     pub(in crate::window) fn publish(&self) {
         let visible = self.life.shown() && self.win.is_some();
-        self.app.set_visible(visible);
+        self.shared.set_visible(visible);
     }
 }
 
 /// `setup`'s waker: `AppHandle::wake`, so a drain that also holds updates that changed nothing
 /// still polls and redraws for it.
-pub(in crate::window) fn setup_waker<S: 'static>(shared: &Arc<crate::app::Shared<S>>) -> Waker {
-    let handle = crate::AppHandle { shared: shared.clone() };
-    Arc::new(move || handle.wake())
+pub(in crate::window) fn setup_waker(shared: &Arc<crate::app::SharedCore>) -> Waker {
+    let shared = shared.clone();
+    Arc::new(move || shared.wake_app())
 }

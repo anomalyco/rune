@@ -22,8 +22,7 @@
 //! app.run();
 //! ```
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use crate::el::Tx;
 use crate::tooling::{AppSpec, Args};
@@ -665,70 +664,60 @@ impl<S> Clone for AppHandle<S> {
 impl<S: 'static> AppHandle<S> {
     /// Wake the event loop so `AppSpec::poll` runs, also while the window is hidden; for a
     /// background thread that queued work for `poll` to drain.
-    pub fn wake(&self) {
-        self.request(|q| q.woken = true);
-    }
+    #[inline]
+    pub fn wake(&self) { self.shared.core.wake_app(); }
 
     /// Show the window (creating it if needed), restore it if minimized, and activate the app
     /// with it in front, including the first open of a window that doesn't exist yet. A
     /// nonactivating panel takes keys without activating. The window open at launch doesn't
     /// activate the app beyond what the platform does at launch.
-    pub fn open(&self) {
-        self.request(|q| { q.window = Some(WindowRequest::Open(None)); q.cancel_minimize(); });
-    }
+    #[inline]
+    pub fn open(&self) { self.shared.core.open(); }
 
     /// Show or recreate the window without requesting focus. A minimized window stays minimized;
     /// open() also restores and activates it. Window-manager policy still applies.
-    pub fn show(&self) {
-        self.request(|q| q.window = Some(WindowRequest::Show));
-    }
+    #[inline]
+    pub fn show(&self) { self.shared.core.show(); }
 
     /// Hide the window, retaining its host and state. Does not invoke the close callback.
-    pub fn hide(&self) {
-        self.request(|q| { q.window = Some(WindowRequest::Hide); q.cancel_minimize(); });
-    }
+    #[inline]
+    pub fn hide(&self) { self.shared.core.hide(); }
 
     /// Focus/activate an already-visible window, restoring it if minimized.
     /// On Wayland this requests attention; use activate(token) for compositor-authorized focus.
-    pub fn focus(&self) {
-        self.request(|q| { q.cancel_minimize(); q.activation = Some(Activation::Focus); });
-    }
+    #[inline]
+    pub fn focus(&self) { self.shared.core.focus(); }
 
     /// Set the outer position in physical desktop pixels (negative coordinates are valid).
     /// Retained across recreation. Wayland does not support application window placement.
-    pub fn set_position(&self, position: (i32, i32)) {
-        self.request(|q| { q.position = Some(position); q.place = None; });
-    }
+    #[inline]
+    pub fn set_position(&self, position: (i32, i32)) { self.shared.core.set_position(position); }
 
     /// Place in display-local points. UnderPointer samples the pointer at this call;
     /// disconnected displays fall back to primary when the UI thread applies the request.
     /// Wayland does not permit application placement.
+    #[inline]
     pub fn place(&self, display: crate::DisplayTarget, placement: crate::OverlayPlacement) {
-        let place = crate::windows::PlaceRequest::new(display, placement);
-        self.request(|q| { q.place = Some(place); q.position = None; });
+        self.shared.core.place(display, placement);
     }
 
     /// Show and focus the window with an activation token another process forwarded
     /// (`XDG_ACTIVATION_TOKEN` on Wayland, `DESKTOP_STARTUP_ID` on X11), so the compositor
     /// lets it take focus. Where tokens don't exist this is `open`.
-    pub fn activate(&self, token: impl Into<String>) {
-        let token = token.into();
-        self.request(|q| { q.window = Some(WindowRequest::Open(Some(token).filter(|t| !t.is_empty()))); q.cancel_minimize(); });
-    }
+    #[inline]
+    pub fn activate(&self, token: impl Into<String>) { self.shared.core.activate(token.into()); }
 
     /// Close the window as the close button would (`App::on_close` runs; without
     /// `keep_running` the app quits).
-    pub fn close(&self) {
-        self.request(|q| { q.window = Some(WindowRequest::Close); q.cancel_minimize(); });
-    }
+    #[inline]
+    pub fn close(&self) { self.shared.core.close(); }
 
     /// Minimize the window, as `Tx::minimize` does from a handler. Does nothing for a hidden
     /// window, a panel or launcher, or one that can't minimize. After a `show` it minimizes
     /// the shown window; a later `open`, `focus`, `hide` or `close` cancels it, and it cancels
     /// an earlier `focus`.
-    pub fn minimize(&self) {
-        self.request(|q| { q.activation = Some(Activation::Minimize); });
-    }
+    #[inline]
+    pub fn minimize(&self) { self.shared.core.minimize(); }
 
     /// Quit the app: every open window's `App::on_quit` runs, the window closes without
     /// `on_close`, and `run` returns.
@@ -738,35 +727,28 @@ impl<S: 'static> AppHandle<S> {
     /// is removed, while one passed in with [`App::canvas_id`] stays, restyled as it was, for
     /// its owner. Another app may start straight away; it mounts once this one has gone. An
     /// app quit before it mounts never does.
-    pub fn quit(&self) {
-        self.shared.quitting.store(true, Ordering::Release);
-        self.request(|q| q.quit = q.quit.max(Some(crate::quit::After::Exit)));
-    }
+    #[inline]
+    pub fn quit(&self) { self.shared.core.quit(); }
 
     /// Quit the app as [`AppHandle::quit`] does, then start it again with the same arguments
     /// once this process has exited ([`Tx::relaunch`]). Web: as `quit`.
-    pub fn relaunch(&self) {
-        self.shared.quitting.store(true, Ordering::Release);
-        self.request(|q| q.quit = Some(crate::quit::After::Relaunch));
-    }
+    #[inline]
+    pub fn relaunch(&self) { self.shared.core.relaunch(); }
 
     /// macOS: show or hide the app's Dock icon (and app menu) while it runs, switching between
     /// the regular and accessory activation policies. Does nothing elsewhere.
-    pub fn set_dock_icon(&self, visible: bool) {
-        self.request(|q| q.dock = Some(visible));
-    }
+    #[inline]
+    pub fn set_dock_icon(&self, visible: bool) { self.shared.core.set_dock_icon(visible); }
 
     /// Whether the window is on screen (shown, not hidden or closed). Minimized and occluded
     /// windows count as shown.
-    pub fn is_visible(&self) -> bool {
-        self.shared.visible.load(Ordering::Acquire)
-    }
+    #[inline]
+    pub fn is_visible(&self) -> bool { self.shared.core.is_visible() }
 
     /// Why the window couldn't be created the last time it was asked for (no display, no GPU
     /// adapter or device), until a later creation succeeds. The app keeps running windowless.
-    pub fn window_error(&self) -> Option<String> {
-        self.shared.window_error.lock().unwrap().clone()
-    }
+    #[inline]
+    pub fn window_error(&self) -> Option<String> { self.shared.core.window_error() }
 
     /// Change the state from this thread: `f` runs on the UI thread, in call order, even while no
     /// window shows, and the next frame commits it with the motion its `Tx` asks for.
@@ -783,19 +765,14 @@ impl<S: 'static> AppHandle<S> {
     /// Returning false after changing state the view reads leaves the screen stale until the
     /// next change.
     pub fn update_if(&self, f: impl FnOnce(&mut S, &mut Tx) -> bool + Send + 'static) {
-        self.request(|q| q.updates.push(Box::new(f)));
-    }
-
-    fn request(&self, f: impl FnOnce(&mut Requests<S>)) {
-        f(&mut self.shared.requests.lock().unwrap());
-        self.shared.wake();
+        self.shared.push_update(Box::new(f));
     }
 }
 
 mod config;
 pub(crate) use config::RuntimeConfig;
 mod requests;
-pub(crate) use requests::{window_request_order, Activation, Requests, Shared, WindowRequest, WindowRequests};
+pub(crate) use requests::{window_request_order, Activation, Shared, SharedCore, WindowRequest, WindowRequests};
 
 #[cfg(test)]
 mod tests {
@@ -828,7 +805,7 @@ mod tests {
         handle.place(crate::DisplayTarget::Primary, crate::OverlayPlacement::FullScreen);
         let q = app.shared.take();
         assert!(q.position.is_none());
-        assert_eq!(q.place.unwrap().placement, crate::OverlayPlacement::FullScreen);
+        assert_eq!(q.place.as_ref().unwrap().placement, crate::OverlayPlacement::FullScreen);
         handle.place(crate::DisplayTarget::Primary, crate::OverlayPlacement::FullScreen);
         handle.set_position((-10, 20));
         let q = app.shared.take();
@@ -1024,7 +1001,7 @@ mod tests {
     fn a_handles_minimize_and_focus_are_last_wins_and_hide_close_or_open_cancel_it() {
         let app = App::new(spec());
         let h = app.handle();
-        let after = |calls: &dyn Fn()| { calls(); let r = app.shared.take(); (r.window, r.activation) };
+        let after = |calls: &dyn Fn()| { calls(); let r = app.shared.take(); (r.window_requests.window, r.window_requests.activation) };
         assert_eq!(after(&|| { h.focus(); h.minimize(); }), (None, Some(Activation::Minimize)), "focus then minimize stays minimized");
         assert_eq!(after(&|| { h.minimize(); h.focus(); }), (None, Some(Activation::Focus)));
         assert_eq!(after(&|| { h.show(); h.minimize(); }), (Some(WindowRequest::Show), Some(Activation::Minimize)), "shows, then minimizes");

@@ -103,7 +103,7 @@ impl Host {
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         if self.float_on_open && !w.first_frame.notified() { float_on_open::release(&w.window, &self.options, self.geometry.min_size); }
         self.native_handle.native.ready.store(true, Ordering::Release);
-        self.app.set_window_error(None);
+        self.shared.set_window_error(None);
         crate::tooling::perf_warn::launch::first_frame();
         w.first_frame.notify();
         if w.first_frame.take_ready() { self.ready_owed(); }

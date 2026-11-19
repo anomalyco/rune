@@ -32,7 +32,7 @@ impl Host {
             return;
         }
         // Updates queued before launch (the link that launched the app) show in the first frame.
-        self.app.drain_startup(&self.shortcuts);
+        self.app.drain_startup(&self.shortcuts, &mut self.menus);
         if self.launcher() {
             self.create(event_loop, None, false);
             if self.open_at_start && self.options.visible { self.reveal_launcher(event_loop); }
@@ -253,7 +253,7 @@ impl Host {
                 // Deliver independently of drawable availability, including hide/occlusion.
                 self.app.window_focus(focused);
                 // The key window's App takes the menu bar, so its items act in this window.
-                if focused { self.app.claim_menus(); }
+                if focused { self.menus.claim(); }
                 self.shell(event_loop);
                 if self.life.finished() || self.win.is_none() { return; }
             }

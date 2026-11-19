@@ -501,25 +501,26 @@ impl<S: 'static> ErasedWindow for Erased<S> {
     fn desktop(self: Box<Self>, _: &crate::tooling::Args, _: bool, _: f32) -> Box<dyn crate::desktop::Member> { unreachable!("{}", crate::tooling::WITHOUT_TOOLING) }
     #[cfg(any(feature = "tooling", debug_assertions))]
     fn headless(self: Box<Self>, args: crate::tooling::Args, scale: f32) {
-        let WindowSpec { mut app, options, .. } = self.spec;
-        if let Some((w, h)) = options.physical_size { app.spec.size = (w as f32 / scale, h as f32 / scale); }
-        let transparent = options.transparent;
-        app.window_options = options;
-        crate::tooling::headless_configured(app, args, transparent);
+        crate::tooling::headless_window_spec(self.spec.app, self.spec.options, args, scale);
     }
     #[cfg(any(feature = "tooling", debug_assertions))]
     fn desktop(self: Box<Self>, args: &crate::tooling::Args, selected: bool, scale: f32) -> Box<dyn crate::desktop::Member> {
         let Erased { spec, handle, secondary } = *self;
         Box::new(crate::desktop::Window::new(spec, handle, args, selected, !secondary, scale))
     }
-    fn start(self: Box<Self>, mut inherited: crate::tooling::Args, cx: crate::window::Start<'_>) -> Option<Box<dyn crate::window::AnyHost>> {
-        // A secondary window is not what --scene or --size describe unless --window selects it.
-        if self.secondary && inherited.window.as_deref() != Some(self.spec.key.as_str()) {
-            inherited.scene = None;
-            inherited.size = None;
-        }
+    fn start(self: Box<Self>, inherited: crate::tooling::Args, cx: crate::window::Start<'_>) -> Option<Box<dyn crate::window::AnyHost>> {
+        let inherited = secondary_args(self.secondary, &self.spec.key, inherited);
         crate::window::start(self.spec, self.handle, !self.secondary, inherited, cx)
     }
+}
+
+fn secondary_args(secondary: bool, key: &str, mut inherited: crate::tooling::Args) -> crate::tooling::Args {
+    // A secondary window is not what --scene or --size describe unless --window selects it.
+    if secondary && inherited.window.as_deref() != Some(key) {
+        inherited.scene = None;
+        inherited.size = None;
+    }
+    inherited
 }
 
 /// Each window followed by those its app added with `App::window`, depth first.

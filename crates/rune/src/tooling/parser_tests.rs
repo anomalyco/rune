@@ -94,7 +94,10 @@ fn a_script_key_with_a_code_reaches_handlers_with_its_physical_key() {
         match event.kind {
             Kind::Key(k, _) => rt.key(k),
             Kind::Physical(input) => rt.physical_input(input),
-            kind => assert!(canvas_input(&mut rt, &kind, (0.0, 0.0)), "unexpected {kind:?}"),
+            kind => {
+                let (core, mut app) = rt.split_mut();
+                assert!(canvas_input(core, &mut app, &kind, (0.0, 0.0)), "unexpected {kind:?}");
+            }
         }
         rt.frame(0.0);
     }
@@ -119,7 +122,10 @@ fn a_script_key_with_a_code_reaches_handlers_with_its_unmodified_character() {
         match event.kind {
             Kind::Key(k, _) => rt.key(k),
             Kind::Physical(input) => rt.physical_input(input),
-            kind => assert!(canvas_input(&mut rt, &kind, (0.0, 0.0)), "unexpected {kind:?}"),
+            kind => {
+                let (core, mut app) = rt.split_mut();
+                assert!(canvas_input(core, &mut app, &kind, (0.0, 0.0)), "unexpected {kind:?}");
+            }
         }
         rt.frame(0.0);
     }

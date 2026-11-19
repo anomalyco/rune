@@ -163,7 +163,7 @@ impl Host {
     }
 
     fn apply_pending_in_turn(&mut self, event_loop: &ActiveEventLoop) {
-        if !self.started || self.life.finished() || !self.app.window_pending() { return; }
+        if !self.started || self.life.finished() || (!self.shared.asks_window() && !self.app.has_updates()) { return; }
         self.drain(event_loop, false);
         self.publish();
     }
@@ -201,7 +201,7 @@ impl Host {
                     if let Some(w) = &self.win { w.request_redraw(); }
                     self.publish();
                 } else if !notified {
-                    self.app.set_window_error(Some("launcher first frame was not ready within two seconds".into()));
+                    self.shared.set_window_error(Some("launcher first frame was not ready within two seconds".into()));
                 }
             } else {
                 // Bounded retries while the frame prepares, whatever stops each one (occlusion,

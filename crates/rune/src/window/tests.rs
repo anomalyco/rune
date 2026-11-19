@@ -23,7 +23,7 @@ fn updates_that_change_nothing_ask_no_window_for_a_frame() {
     handle.wake();
     assert!(!shared.take().only_updates(), "`wake` still runs a shown window's poll");
     handle.update_if(|_, _| false);
-    setup_waker(&shared)();
+    setup_waker(&shared.core)();
     assert!(!shared.take().only_updates(), "so does `setup`'s waker");
     assert_eq!(WakeWork::of(WakeFacts { window: true, visible: true, was_shown: true, ..WakeFacts::default() }, || false), WakeWork::Paint);
     assert_eq!(WakeWork::of(WakeFacts { window: true, launcher: true, changed: true, ..WakeFacts::default() }, || false), WakeWork::HiddenFrame);
@@ -513,7 +513,7 @@ fn a_window_s_first_updates_can_register_on_a_later_window() {
     // As Host::new and Host::resumed: attach the guards, then drain the first updates.
     let hosts = start_all(apps.into(), |_, app| {
         let shortcuts = crate::shortcuts::Guard::attach(&app.shared, Arc::new(|| {}), true, false);
-        let menus = crate::native_menu::Guard::attach(&app.shared, true);
+        let menus = crate::native_menu::MenuGuard::attach(&app.shared, true);
         Some((app, shortcuts, menus, S::new()))
     }, |(app, _, _, state)| for f in app.shared.take().updates { f(state, &mut Tx::default()); });
     assert_eq!(hosts[0].as_ref().unwrap().3, ["Ok(())", "Ok(())"]);
