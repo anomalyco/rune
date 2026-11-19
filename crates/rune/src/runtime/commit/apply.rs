@@ -867,54 +867,14 @@ impl RuntimeCore {
         self.memo.skip_scratch = skip_spans;
         self.find_app_root();
         self.commit_gen = self.commit_gen.wrapping_add(1);
-        let (mut dissolve, mut cache, mut pix, mut drawn_ly, mut key_up, mut sticky, mut raise, mut any_loop) =
-            (false, false, false, false, false, false, false, false);
-        let mut ordered = false;
-        for n in &self.nodes {
-            dissolve |= n.vis_flags.blend() == crate::render::Blend::PlusLighter;
-            cache |= n.vis_flags.cache();
-            if let Some(c) = n.cold.get() {
-                pix |= c.pixel_aspect.is_some();
-                sticky |= c.sticky.as_ref().is_some_and(|s| s.edge.is_some());
-                any_loop |= c.looping.is_some();
-            }
-            drawn_ly |= n.handlers.get().is_some_and(|h| h.on_drawn_layout.is_some() || h.on_visible.is_some() || h.drawn_rect.is_some());
-            key_up |= n.focus.get().is_some_and(|f| f.key_up.is_some());
-            raise |= n.vis_flags.raise();
-            ordered |= n.vis.paint_order != 0;
-        }
-        self.has_dissolve = dissolve;
-        self.has_cache = cache;
-        if !self.has_cache {
-            if !self.node_caches.is_empty() { self.node_caches.clear(); }
-            if !self.text.atlas.resident_caches.is_empty() { self.text.atlas.resident_caches.clear(); }
-        } else if !self.node_caches.is_empty() {
-            self.node_caches.retain(|id, _| self.scene.contains(*id));
-            self.text.atlas.resident_caches.retain(|id, _| self.scene.contains(NodeId(*id)));
-        }
-        self.has_pixel_aspect = pix;
-        self.has_drawn_layout = drawn_ly;
-        self.has_key_up = key_up;
-        self.has_sticky = self.holding() || sticky;
-        self.has_raise = raise;
-        self.has_paint_order = ordered;
-        // A flight that left the tree stays lifted and covered while it exits, so it doesn't pop.
-        self.flying.retain(|(id, _)| self.node_index.contains_key(id));
-        self.launches.keep(&self.flying);
+        let any_loop = self.prune_detached_tables(true);
         if self.nodes.len() > present_len || !self.flying.is_empty() || landed || self.has_sticky || self.has_raise || self.has_paint_order { self.update_layer_paint_order(); }
         else { self.layer_paint_order.clear(); }
         self.built = false;
-        if !self.virtuals.is_empty() {
-            self.virtuals.retain(|path, _| self.nodes.iter().any(|n| n.path == *path));
-        }
-        self.prune_path_ids();
         self.subscribe_live();
-        self.refresh_modal_index();
         self.sync_modals(app);
         self.sync_follows(app);
-        self.loops.retain(|id, _| self.scene.contains(*id));
         self.catch_loops_up();
-        self.static_scales.retain(|id, _| self.scene.contains(*id));
         if any_loop || !self.loops.is_empty() {
             for n in &self.nodes {
                 let t = if time_scaled { self.scene.store().node_time(n.id) } else { self.t };

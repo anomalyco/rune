@@ -84,19 +84,14 @@ mod commit_watch;
 mod commit_why;
 #[path = "runtime/interaction.rs"]
 mod interaction_timing;
-#[path = "runtime/drag_out_host.rs"]
 mod drag_out_host;
 #[path = "runtime/paint/exit_mask.rs"]
 mod exit_mask;
 #[path = "runtime/paint/raster_check.rs"]
 mod raster_check;
-#[path = "runtime/font_families.rs"]
 mod font_families;
-#[path = "runtime/key_index.rs"]
 mod key_index;
-#[path = "runtime/system_settings.rs"]
 mod system_settings;
-#[path = "runtime/zoom.rs"]
 mod zoom;
 #[path = "runtime/commit/prune.rs"]
 mod prune;
@@ -128,11 +123,8 @@ mod playground_host;
 mod scroll_bottom;
 #[path = "runtime/selection/caret.rs"]
 mod caret;
-#[path = "runtime/event_log.rs"]
 pub(crate) mod event_log;
-#[path = "runtime/layout_read.rs"]
 pub(crate) mod layout_read;
-#[path = "runtime/visible.rs"]
 mod visible;
 #[path = "runtime/selection/links.rs"]
 mod links;
@@ -162,7 +154,6 @@ mod requests;
 mod scroll_anchor;
 #[path = "runtime/scroll/sticky.rs"]
 mod sticky;
-#[path = "runtime/anchor.rs"]
 mod anchor;
 pub(crate) use anchor::anchor_position;
 use anchor::{anchor_index, step_up};
@@ -219,7 +210,6 @@ mod timer_wake;
 #[path = "runtime/motion/idle_meter.rs"]
 mod idle_meter;
 #[cfg(feature = "hot")]
-#[path = "runtime/hot_state.rs"]
 mod hot_state;
 #[path = "runtime/motion/props.rs"]
 mod props;
@@ -236,7 +226,6 @@ mod press_repeat;
 #[path = "runtime/input/titlebar.rs"]
 mod titlebar;
 pub(crate) use titlebar::WindowMenu;
-#[path = "runtime/window_requests.rs"]
 mod window_requests;
 #[path = "runtime/paint/tracks.rs"]
 mod paint_tracks;
@@ -267,40 +256,28 @@ pub(crate) use scroll_offset::ScrollRequest;
 pub(crate) use reveal::ScrollReveal;
 pub use selectable::{SelectedText, SelectionChange, TextSelection};
 #[cfg(test)]
-#[path = "runtime/timer_wake_tests.rs"]
 mod timer_wake_tests;
 #[cfg(test)]
-#[path = "runtime/grid_tests.rs"]
 mod grid_tests;
 #[cfg(test)]
-#[path = "runtime/truncate_tests.rs"]
 mod truncate_tests;
 #[cfg(test)]
-#[path = "runtime/truncate_fade_tests.rs"]
 mod truncate_fade_tests;
 #[cfg(test)]
-#[path = "runtime/line_clamp_tests.rs"]
 mod line_clamp_tests;
 #[cfg(test)]
-#[path = "runtime/aspect_fit_tests.rs"]
 mod aspect_fit_tests;
 #[cfg(test)]
-#[path = "runtime/anchor_fit_tests.rs"]
 mod anchor_fit_tests;
 #[cfg(test)]
-#[path = "drop_tests.rs"]
 mod drop_tests;
 #[cfg(test)]
-#[path = "runtime/on_key_tests.rs"]
 mod on_key_tests;
 #[cfg(test)]
-#[path = "live_only_tests.rs"]
 mod live_only_tests;
 #[cfg(test)]
-#[path = "runtime/live_check_tests.rs"]
 mod live_check_tests;
 #[cfg(test)]
-#[path = "runtime/virtual_store_tests.rs"]
 mod virtual_store_tests;
 #[cfg(test)]
 #[path = "runtime/virtual/fill_resume_tests.rs"]
@@ -308,13 +285,10 @@ mod fill_resume_tests;
 #[path = "runtime/selection/select_all.rs"]
 mod select_all;
 #[cfg(test)]
-#[path = "runtime/select_all_tests.rs"]
 mod select_all_tests;
 #[cfg(test)]
-#[path = "runtime/selection_api_tests.rs"]
 mod selection_api_tests;
 #[cfg(test)]
-#[path = "runtime/anchored_grow_tests.rs"]
 mod anchored_grow_tests;
 #[cfg(test)]
 mod pixel_snap_tests;
@@ -385,7 +359,6 @@ use a11y_actions::A11yAct;
 #[cfg(test)]
 #[path = "a11y/tests.rs"]
 mod a11y_tests;
-#[path = "runtime/paint_probe.rs"]
 mod paint_probe;
 pub use elements::{ElementInfo, Pick, Picked, Pose};
 #[path = "runtime/paint/cache_layer.rs"]
@@ -404,7 +377,6 @@ mod hit;
 mod build;
 #[path = "runtime/paint/keep.rs"]
 mod paint_keep;
-#[path = "runtime/text_fill.rs"]
 mod text_fill;
 #[path = "runtime/input/keys.rs"]
 mod keys;
@@ -1181,5 +1153,4 @@ mod prefix_layout_tests {
 }
 
 #[cfg(test)]
-#[path = "runtime/tests/mod.rs"]
 mod tests;
