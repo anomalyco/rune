@@ -389,6 +389,7 @@ impl Host {
         w.presented = None;
         drop(w.surface.take());
         self.gpu = None;
+        crate::tooling::proof_removal::probe_new_device("reattach, once the window's device and surface are dropped");
         {
             let rt = self.app.rt_mut();
             rt.text.atlas.invalidate();
