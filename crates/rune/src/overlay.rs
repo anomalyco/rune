@@ -408,6 +408,8 @@ pub(in crate::overlay) struct OverlayCore {
     release: Release,
     cursor: Option<crate::cursor::os::OsCursor>,
     mods: winit::keyboard::ModifiersState,
+    control_click: bool,
+    ime_allowed: bool,
     renderer: Option<Renderer>,
     gpu: Option<Arc<Gpu>>,
     gpu_pool: Rc<RefCell<Weak<Gpu>>>,
@@ -487,6 +489,8 @@ impl OverlayCore {
             #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
             x11: None,
             mods: Default::default(),
+            control_click: false,
+            ime_allowed: false,
             renderer: None,
             gpu: None,
             gpu_pool: Rc::default(),

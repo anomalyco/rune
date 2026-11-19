@@ -187,6 +187,9 @@ impl OverlayCore {
         // A hide need not report a blur, and a hidden overlay hears none: what it held is
         // released.
         if self.options.keys == KeyPolicy::OnDemand { app.rt_mut().keys_lost(); }
+        self.mods = Default::default();
+        self.control_click = false;
+        self.ime_allowed = false;
         app.popup_cancel(&mut self.popup);
         app.rt_mut().cancel_pointer();
         self.apply_cursor(app.rt());
@@ -194,6 +197,10 @@ impl OverlayCore {
         let Some(live) = self.surface.live() else { return };
         match &live.backing {
             Backing::Window(window) => {
+                if self.options.keys == KeyPolicy::OnDemand {
+                    crate::platform::ime::cancel(window);
+                    window.set_ime_allowed(false);
+                }
                 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
                 if let Some(x11) = &self.x11 { x11.hide(); }
                 #[cfg(target_os = "windows")]

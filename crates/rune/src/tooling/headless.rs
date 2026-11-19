@@ -324,7 +324,6 @@ fn run_headless(prep: HeadlessPrep, config: HeadlessConfig, app: &mut dyn Headle
                     let _ = std::io::stdout().flush();
                 }
                 Kind::Mark(_) => {}
-                Kind::Focus(focused) => app.window_focus(*focused),
                 // The one window always shows here.
                 Kind::Reopen => app.run_reopen(),
                 Kind::OpenUrl(url) => app.run_open_url(url),
@@ -332,27 +331,10 @@ fn run_headless(prep: HeadlessPrep, config: HeadlessConfig, app: &mut dyn Headle
                 Kind::Menu(item) => menus.fire(item).unwrap_or_else(|e| die(&format!("script menu: {e}"))),
                 Kind::PopupMenu(picked) => app.resolve_popup(picked.as_deref()).unwrap_or_else(|e| die(&format!("script pop-up menu: {e}"))),
                 Kind::FileDialog(path) => app.rt_mut().resolve_file_dialog(path.clone()).unwrap_or_else(|e| die(&format!("script file dialog: {e}"))),
-                Kind::Move => app.pointer_move(x, y),
-                Kind::Down => {
-                    last_down = (x, y);
-                    app.pointer_down(x, y);
-                }
-                Kind::Up => app.pointer_up(x, y),
-                Kind::SecondaryDown => { last_down = (x, y); app.rt_mut().secondary_down(x, y); }
-                Kind::SecondaryUp => app.secondary_up(x, y),
-                Kind::Key(k, false) => app.rt_mut().key(k.clone()),
-                Kind::Key(k, true) => app.rt_mut().repeat_key(k.clone()),
-                Kind::Physical(event) => app.rt_mut().physical_input(*event),
-                Kind::Paste(content) => app.rt_mut().paste_content(content.clone()),
-                Kind::Ime(ime) => app.rt_mut().ime(ime.clone()),
-                // A wheel turns as far on screen at any zoom, as Chromium's does.
-                Kind::Wheel(dx, dy) => { let rt = app.rt_mut(); let z = rt.zoom(); wheel(rt, (x, y), *dx / z, *dy / z) }
-                Kind::Fling(vx, vy) => { let rt = app.rt_mut(); let z = rt.zoom(); fling(rt, (x, y), *vx / z, *vy / z) }
-                Kind::Files(step) => file_input(app.rt_mut(), step, (x, y)),
                 &Kind::Resize(dw, dh) => eased_input::step_resize(app.rt_mut(), &mut resize_from, (dw, dh), scale),
                 kind => {
                     if kind.is_down() { last_down = (x, y); }
-                    app.canvas_input(kind, (x, y));
+                    app.script_input(kind, (x, y));
                 }
             }
             if let Some((ov, _)) = overlay.as_mut() {

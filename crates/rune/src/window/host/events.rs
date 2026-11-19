@@ -4,20 +4,20 @@
 use std::sync::atomic::Ordering;
 
 use winit::dpi::{LogicalPosition, LogicalSize};
-use winit::event::{ElementState, Ime as WIme, MouseButton, WindowEvent};
+use winit::event::{ElementState, MouseButton, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
 use winit::window::{Theme, Window, WindowId};
 
 use super::stepping::FrameMove;
 use super::{Host, WindowApp};
 use crate::app::Shared;
-use crate::edit::Ime;
+use crate::input::host_events;
 use crate::runtime::TitlebarAction;
 use crate::window::chrome::{self, sync_chrome_core, titlebar_double_click};
 #[cfg(target_os = "macos")]
 use crate::window::chrome::mac;
 use crate::window::file_drop::{FileDrop, FileStep};
-use crate::window::keys::{key_base, map_key_event, map_mods};
+use crate::window::keys::{map_key_event, map_mods};
 use crate::window::state::{Cover, RestEvent};
 #[cfg(not(target_os = "macos"))]
 use crate::window::surface::RedrawEvent;
@@ -293,7 +293,7 @@ impl Host {
         // A finger presses through `WindowEvent::Touch`; the mouse events a system makes up
         // from it (Windows promotes touches) would press a second time.
         if matches!(event, WindowEvent::CursorMoved { .. } | WindowEvent::CursorLeft { .. } | WindowEvent::MouseInput { .. })
-            && (app.rt().touching() || touch_promoted()) { return; }
+            && (app.rt().touching() || host_events::touch_promoted()) { return; }
         match event {
             WindowEvent::Moved(_) => {
                 // winit queues `ScaleFactorChanged` in `kCFRunLoopDefaultMode`, which waits
@@ -385,18 +385,13 @@ impl Host {
                 }
             }
             WindowEvent::ModifiersChanged(m) => {
-                self.mods = m.state();
-                if app.physical_observation(crate::PhysicalInput::Modifiers(map_mods(self.mods))) {
+                if app.modifiers(&mut self.mods, m.state()) {
                     l.request_redraw();
                 }
             }
             WindowEvent::Focused(focused) => {
                 let rt = app.rt_mut();
-                rt.set_system_reduced_motion(crate::platform::preferences::reduced_motion());
-                rt.set_system_contrast(crate::platform::preferences::contrast());
-                rt.set_system_increased_contrast(crate::platform::preferences::increased_contrast());
-                rt.set_full_keyboard_access(crate::platform::preferences::full_keyboard_access());
-                rt.set_system_scroll_bars_state(crate::platform::scroll_bars::reread().with_override(self.args.scroll_bars));
+                host_events::refresh_focus_preferences(rt, self.args.scroll_bars);
                 self.secure_input.set(focused && self.life.uncovered() && rt.has_secure_focus());
                 sync_chrome_core(rt, l, chrome, titlebar);
                 if !focused {
@@ -428,93 +423,37 @@ impl Host {
             WindowEvent::KeyboardInput { event, is_synthetic: false, .. } => {
                 let pressed = event.state == ElementState::Pressed;
                 if pressed { crate::marks::input_arrived(true); }
-                // A release's logical key only matters to `on_key_up` handlers.
-                let logical = (pressed || app.rt().wants_key_up()).then(|| map_key_event(&event, self.mods)).flatten();
-                let mut redraw = false;
                 // A menu item handing Rune its key: it acts after, if no handler takes it. So does
                 // the window menu's Alt+Space, posted rather than run inside the key's message.
-                let unhandled = crate::native_menu::take_unhandled(logical.as_ref().filter(|_| pressed)).or_else(|| {
-                    logical.as_ref().filter(|ev| pressed && ev.is_window_menu_chord() && chrome::has_window_menu(&l.window))
+                let logical = pressed.then(|| map_key_event(&event, self.mods)).flatten();
+                let unhandled = crate::native_menu::take_unhandled(logical.as_ref()).or_else(|| {
+                    logical.as_ref().filter(|ev| ev.is_window_menu_chord() && chrome::has_window_menu(&l.window))
                         .map(|_| crate::runtime::Unhandled::WindowMenu)
                 });
-                if let winit::keyboard::PhysicalKey::Code(key) = event.physical_key {
-                    redraw = app.physical_then(crate::PhysicalInput::Key {
-                        key, mods: map_mods(self.mods), pressed, repeat: event.repeat,
-                    }, logical, key_base(&event), unhandled);
-                } else if let Some(ev) = logical {
-                    if !pressed { redraw = app.key_up(ev); }
-                    else if ev.edit_command() == Some('v') && app.rt().accepts_paste() { self.clipboard.read_core(app.rt()); }
-                    else if event.repeat { app.rt_mut().repeat_key(ev); }
-                    else { app.rt_mut().key(ev); }
-                    redraw |= pressed;
+                if app.keyboard(&self.clipboard, &event, self.mods, unhandled) {
+                    l.request_redraw();
                 }
-                if redraw { l.request_redraw(); }
             }
             WindowEvent::Ime(ime) => {
-                let rt = app.rt_mut();
-                // A reconversion the input method confirmed comes first: the composition it
-                // starts replaces that range.
-                if let Some(range) = crate::platform::ime::take_select(&l.window) { rt.ime(Ime::Select(range)); }
-                match ime {
-                    WIme::Preedit(s, cur) => {
-                        let clauses = crate::platform::ime::take_clauses(&l.window, &s);
-                        rt.ime(Ime::Preedit(s, cur, clauses))
-                    }
-                    WIme::Commit(s) => rt.ime(Ime::Commit(s)),
-                    WIme::Enabled => rt.ime(Ime::Enabled),
-                    WIme::Disabled => rt.ime(Ime::Disabled),
-                }
+                host_events::ime(app.rt_mut(), &l.window, ime);
                 l.request_redraw();
             }
             WindowEvent::MouseWheel { delta, phase, .. } => {
-                let rt = app.rt_mut();
-                let shift = crate::runtime::SHIFT_TURNS_WHEEL && self.mods.shift_key();
-                // In window points: a wheel turns as far on screen at any zoom, as Chromium's does,
-                // and a pinch is the same gesture whatever the zoom.
-                #[cfg(target_os = "windows")]
-                let points = rt.windows_wheel_points(delta, shift);
-                #[cfg(not(target_os = "windows"))]
-                let points = crate::runtime::LINE_POINTS;
-                let (dx, dy) = crate::runtime::wheel_delta(delta, scale, shift, points);
-                let precise = matches!(delta, winit::event::MouseScrollDelta::PixelDelta(_));
-                // Whole lines are a notched wheel; a free-spinning wheel or a precision touchpad
-                // sends fractions (the run decides, `WheelLock::notched`). On Linux winit gives a
-                // wheel's detents as whole lines too (X11's buttons 4-7 and XInput2's position over
-                // its increment, Wayland's discrete values) and a touchpad's as fractions (XInput2)
-                // or pixels (Wayland's finger and continuous sources). macOS scrolls a notch at once,
-                // as Chromium there does.
-                let notch = cfg!(any(target_os = "windows", target_os = "linux"))
-                    && matches!(delta, winit::event::MouseScrollDelta::LineDelta(x, y) if x.fract() == 0.0 && y.fract() == 0.0);
-                let phase = gesture_phase(phase);
-                match rt.pointer() {
-                    // Off macOS a trackpad pinch is a Ctrl + wheel.
-                    Some((x, y)) if !cfg!(target_os = "macos") && self.mods.control_key() && rt.pinch_wheel(x, y, dy) => {}
-                    Some((x, y)) => rt.wheel_event(crate::WheelEvent::new(dx / rt.zoom(), dy / rt.zoom()).at(x, y).mods(map_mods(self.mods))
-                        .phase(phase).precise(precise).notch(notch)),
-                    None if phase == crate::GesturePhase::Began => rt.wheel_began(),
-                    None if phase == crate::GesturePhase::Ended => rt.wheel_ended(),
-                    None => {}
-                }
+                host_events::wheel(app.rt_mut(), delta, gesture_phase(phase), scale, self.mods);
                 l.request_redraw();
             }
             WindowEvent::PinchGesture { delta, phase, .. } => {
-                let rt = app.rt_mut();
-                if let Some((x, y)) = rt.pointer() {
-                    rt.magnify_event(crate::MagnifyEvent::new(delta as f32).at(x, y).phase(gesture_phase(phase)));
+                if host_events::magnify(app.rt_mut(), delta, gesture_phase(phase)) {
                     l.request_redraw();
                 }
             }
             WindowEvent::RotationGesture { delta, phase, .. } => {
-                let rt = app.rt_mut();
-                if let Some((x, y)) = rt.pointer() {
-                    rt.rotate_event(crate::RotateEvent::new(delta).at(x, y).phase(gesture_phase(phase)));
+                if host_events::rotate(app.rt_mut(), delta, gesture_phase(phase)) {
                     l.request_redraw();
                 }
             }
             WindowEvent::DoubleTapGesture { .. } => {
-                let rt = app.rt_mut();
-                if let Some((x, y)) = rt.pointer() {
-                    rt.smart_magnify(x, y);
+                if host_events::smart_magnify(app.rt_mut()) {
                     l.request_redraw();
                 }
             }
@@ -608,21 +547,6 @@ pub(in crate::window) fn startup_updates<S: 'static>(shared: &Shared<S>, shortcu
     let _receiving = shortcuts.receiving();
     shared.take_updates().into_iter().for_each(run);
 }
-
-/// Whether the mouse message being handled is one Windows made up from a touch or a pen
-/// (`GetMessageExtraInfo` carries `MI_WP_SIGNATURE`). winit handles the message inside the
-/// window procedure, so the extra info is still the message's own.
-#[cfg(target_os = "windows")]
-fn touch_promoted() -> bool {
-    const MI_WP_SIGNATURE: u32 = 0xFF51_5700;
-    // SAFETY: reads the calling thread's current message info; no pointers involved.
-    let info = unsafe { windows_sys::Win32::UI::WindowsAndMessaging::GetMessageExtraInfo() } as u32;
-    info & 0xFFFF_FF00 == MI_WP_SIGNATURE
-}
-
-#[cfg(not(target_os = "windows"))]
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-fn touch_promoted() -> bool { false }
 
 /// Where a mouse button acts. On Windows, the point its message carries
 /// (`platform::win32::press_point`). Elsewhere, where the runtime last saw the pointer, else

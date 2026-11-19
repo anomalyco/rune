@@ -31,7 +31,11 @@ impl OverlayCore {
     fn surface_input(&mut self, app: &mut dyn OverlayApp, input: crate::platform::layer_shell::Input) {
         use crate::platform::layer_shell::Input;
         match input {
-            Input::Move(x, y) => { self.dirty |= app.observe_pointer(x, y); return; }
+            Input::Move(x, y) => {
+                let zoom = app.rt().zoom();
+                self.dirty |= app.observe_pointer(x / zoom, y / zoom);
+                return;
+            }
             Input::Leave => app.rt_mut().pointer_leave(),
             Input::Button(down) => if let Some((x, y)) = app.rt().pointer() {
                 if down { app.pointer_down(x, y); } else { app.pointer_up(x, y); }
@@ -260,6 +264,16 @@ impl OverlayCore {
         let update_ms = if app.has_compositor() { now.elapsed().as_secs_f64() * 1000.0 } else { 0.0 };
         super::input::drop_window_requests(app.rt_mut());
         self.clipboard.flush_core(app.rt_mut());
+        #[allow(irrefutable_let_patterns)]
+        if self.options.keys == KeyPolicy::OnDemand
+            && let Backing::Window(window) = &live.backing
+        {
+            #[cfg(target_os = "macos")]
+            let focused = self.panel.as_ref().map_or_else(|| window.has_focus(), |p| p.is_key());
+            #[cfg(not(target_os = "macos"))]
+            let focused = window.has_focus();
+            crate::input::host_events::sync_ime(window, app.rt_mut(), &mut self.ime_allowed, focused);
+        }
         // Publish the geometry just rendered, never a layout cached from the preceding frame.
         {
             let regions = app.rt().hit_regions();

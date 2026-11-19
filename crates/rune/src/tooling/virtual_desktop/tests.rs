@@ -91,6 +91,7 @@ impl Member for Fake {
     fn stale(&self) -> bool { false }
     fn advance(&mut self, _: f64) {}
     fn focus(&mut self, _: bool) {}
+    fn resize_by(&mut self, _: f32, _: f32) {}
     fn input(&mut self, kind: &Kind, _: (f32, f32)) { self.log.borrow_mut().push((self.i, format!("{kind:?}"))); }
     fn leave(&mut self) { self.log.borrow_mut().push((self.i, "Leave".into())); }
     fn find(&self, _: &str) -> Option<(f32, f32)> { None }
@@ -193,4 +194,52 @@ fn a_finished_window_runs_its_close_hook_once() {
     w.drain(&desktop, 0.0);
     assert_eq!(w.rt_mut::<u32>().state, 1);
     assert!(!w.visible() && !w.reopen_candidate().reopenable);
+}
+
+#[test]
+fn virtual_desktop_window_scales_input_by_zoom_and_releases_keys_on_hide() {
+    use crate::{App, AppSpec, El, PhysicalInput, WindowSpec, el};
+    #[derive(Default)]
+    struct S { wheel_dy: Vec<f32>, focus_lost: u32 }
+    fn view(_: &S, cx: &mut crate::Cx<S>) -> El {
+        cx.zoom(2.0);
+        el().key("root").size(200.0, 100.0).focusable(true)
+            .child(
+                el().key("btn")
+                    .absolute(20.0, 10.0)
+                    .size(40.0, 20.0)
+                    .hit()
+                    .on_wheel(|s: &mut S, ev, _| { s.wheel_dy.push(ev.dy); true }),
+            )
+            .on_physical_input(|s: &mut S, ev, _| {
+                if matches!(ev, PhysicalInput::FocusLost) { s.focus_lost += 1; }
+                true
+            })
+    }
+    let app = App::new(AppSpec::new("Z", (200.0, 100.0), S::default, view)).keep_running();
+    let mut w = Window::new(WindowSpec::from_app("z", app), None, &Args::default(), true, true, 1.0);
+    let desktop = VirtualDesktop::from_script(None, 1.0).unwrap();
+    w.start(&desktop);
+    w.advance(0.0);
+    w.rt_mut::<S>().update(|_, tx| tx.focus("root", false));
+    w.advance(0.0);
+
+    // Element at view (20..60, 10..30) -> centre at view (40, 20) -> window (80, 40) at 2x zoom.
+    assert_eq!(w.find("btn"), Some((80.0, 40.0)), "find reports window points, scaled by zoom");
+
+    // Pointer move and wheel arrive in window points; runtime must receive view points and zoomed delta.
+    w.input(&Kind::Move, (80.0, 40.0));
+    assert_eq!(w.rt_mut::<S>().pointer(), Some((40.0, 20.0)), "pointer in view points");
+    assert_eq!(w.pointer(), Some((80.0, 40.0)), "Window::pointer reports window points");
+    w.input(&Kind::Wheel(0.0, -40.0), (80.0, 40.0));
+    w.advance(0.0);
+    assert_eq!(w.rt_mut::<S>().state.wheel_dy, [-20.0], "wheel delta divides by zoom like window and headless hosts");
+
+    // Hiding releases keys via FocusLost, matching window/host::wind_down.
+    w.focus(true);
+    w.advance(0.0);
+    w.rt_mut::<S>().update(|_, tx| tx.close_window());
+    w.drain(&desktop, 0.0);
+    w.advance(0.0);
+    assert_eq!(w.rt_mut::<S>().state.focus_lost, 1, "hiding a virtual desktop window must emit keys_lost");
 }
