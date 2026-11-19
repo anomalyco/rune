@@ -1,6 +1,5 @@
 //! Paint layer scoping: dissolve pre-pass, tree-order check, layer stack closing, raised ancestor
 //! reopening, `El::cache` eligibility/opening, rounded clips, backdrop blur, cutouts and isolation.
-use super::pose::NodePose;
 use super::*;
 
 #[derive(Clone, Copy)]
@@ -18,8 +17,25 @@ pub(super) struct LayerScope {
     pub(super) surface_start: usize,
 }
 
+#[inline(always)]
+fn strip_round_mask(clip: &mut [f32; 4], round: &mut Option<([f32; 4], [f32; 4])>) {
+    if let Some((mask, radii)) = *round {
+        let e = radii.map(crate::render::corner_extent);
+        let (left, right, top, bottom) = (e[0].max(e[3]), e[1].max(e[2]), e[0].max(e[1]), e[2].max(e[3]));
+        let cut = intersect(*clip, mask);
+        if cut[2] <= cut[0] || cut[3] <= cut[1]
+            || (cut[0] >= mask[0] + left && cut[2] <= mask[2] - right)
+            || (cut[1] >= mask[1] + top && cut[3] <= mask[3] - bottom)
+        {
+            *clip = cut;
+            *round = None;
+        }
+    }
+}
+
 impl RuntimeCore {
-    #[inline]
+    // Phases of `build`'s single paint loop; keep them inlined into it.
+    #[inline(always)]
     pub(super) fn prepare_dissolve(&mut self) {
         let n_nodes = self.nodes.len();
         // One linear pass, including retained exits, Live opacity, presence and loops. Reuse
@@ -44,7 +60,7 @@ impl RuntimeCore {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     pub(super) fn needs_tree_order(&self, flying: bool) -> bool {
         // Exiting descendants are appended to storage. Bring them back into their subtree
         // only when isolation requires it; the ordinary painter stream stays byte-identical.
@@ -74,7 +90,7 @@ impl RuntimeCore {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     pub(super) fn close_layers_to_parent(
         &mut self,
         node_parent: Option<usize>,
@@ -96,7 +112,7 @@ impl RuntimeCore {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     pub(super) fn reopen_raised_layers(
         &mut self,
         node_parent: Option<usize>,
@@ -150,29 +166,44 @@ impl RuntimeCore {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     #[allow(clippy::too_many_arguments)]
     pub(super) fn open_node_layers(
         &mut self,
         i: usize,
+        s: f32,
+        now: f64,
         p: &rune_motion::Presented,
         pinh: &Inh,
-        pose: &mut NodePose,
-        vp: [f32; 4],
+        r: [f32; 4],
+        r_exact: [f32; 4],
+        radii: [f32; 4],
+        w: f32,
+        h: f32,
+        sc: f32,
+        m: f32,
+        effective_opacity: f32,
+        paint_own: f32,
+        visible: bool,
+        dissolve: bool,
         lift: bool,
+        own_turn: Option<f32>,
+        node_turn: Option<&Turn>,
+        next: Option<usize>,
+        scale_motion: ScaleMotion,
+        vp: [f32; 4],
         paint_state_hash: u64,
         glyph_count: usize,
+        clip: &mut [f32; 4],
+        fade: &mut [f32; 4],
+        fade_origin: &mut [f32; 4],
+        rounded: &mut Option<([f32; 4], [f32; 4])>,
+        isolate: &mut bool,
         backdrop_blurs: &mut usize,
         layers: &mut Vec<(usize, usize, usize)>,
         active_cache: &mut Option<ActiveCache>,
     ) -> LayerScope {
-        let s = self.env.scale;
-        let now = self.t;
         let n = &self.nodes[i];
-        let r = pose.r;
-        let (w, h) = (pose.w, pose.h);
-        let sc = pose.sc;
-        let m = pose.m;
         if n.vis_flags.cache() && self.cache_live_scratch[i] {
             if let Some(entry) = self.node_caches.get_mut(&n.id) {
                 entry.phase = RasterPhase::Live;
@@ -193,8 +224,8 @@ impl RuntimeCore {
             self.scale_frame = Some(frame);
         }
         if n.vis_flags.cache() && active_cache.is_none() && !lift && !skip_paint && !self.cache_live_scratch[i]
-            && !committed_scale_moving && pose.own_turn.is_none()
-            && pose.effective_opacity > 0.001 && w > 0.0 && h > 0.0
+            && !committed_scale_moving && own_turn.is_none()
+            && effective_opacity > 0.001 && w > 0.0 && h > 0.0
         {
             let eff_scale = sc * s;
             let est_bounds = if let Some(entry) = self.node_caches.get(&n.id) {
@@ -212,13 +243,13 @@ impl RuntimeCore {
                 });
                 [r[0] - sh, r[1] - sh, r[2] + sh, r[3] + sh]
             };
-            let cache_vis = match pose.node_turn {
-                None => est_bounds[2] >= pose.clip[0].max(vp[0]) - m
-                    && est_bounds[0] <= pose.clip[2].min(vp[2]) + m
-                    && est_bounds[3] >= pose.clip[1].max(vp[1]) - m
-                    && est_bounds[1] <= pose.clip[3].min(vp[3]) + m,
+            let cache_vis = match node_turn {
+                None => est_bounds[2] >= clip[0].max(vp[0]) - m
+                    && est_bounds[0] <= clip[2].min(vp[2]) + m
+                    && est_bounds[3] >= clip[1].max(vp[1]) - m
+                    && est_bounds[1] <= clip[3].min(vp[3]) + m,
                 Some(t) => {
-                    let lc = intersect(pinh.clip, pose.clip);
+                    let lc = intersect(pinh.clip, *clip);
                     let sb = t.bbox(est_bounds);
                     let oc = t.outer_clip;
                     est_bounds[2] >= lc[0] - m && est_bounds[0] <= lc[2] + m
@@ -254,102 +285,92 @@ impl RuntimeCore {
             });
             (r, radii)
         });
-        let mut hit_clip = intersect(pinh.clip, pose.clip);
+        let mut hit_clip = intersect(pinh.clip, *clip);
         if let Some((rect, _)) = own_round { hit_clip = intersect(hit_clip, rect); }
         let (mut hit_fade, mut hit_origin) = (pinh.fade, pinh.fade_origin);
-        inherit_fade(&mut hit_fade, &mut hit_origin, pose.fade_origin, pose.fade);
+        inherit_fade(&mut hit_fade, &mut hit_origin, *fade_origin, *fade);
         // A rectangle wholly in either central strip misses all four corner squares.
         // Its hard edges already exclude everything the rounded mask would remove.
-        for (idx, round) in [&mut pose.rounded, &mut own_round].into_iter().enumerate() {
-            if open_cache && idx == 1 { continue; }
-            if let Some((mask, radii)) = *round {
-                let e = radii.map(crate::render::corner_extent);
-                let (left, right, top, bottom) = (e[0].max(e[3]), e[1].max(e[2]), e[0].max(e[1]), e[2].max(e[3]));
-                let cut = intersect(pose.clip, mask);
-                if cut[2] <= cut[0] || cut[3] <= cut[1]
-                    || (cut[0] >= mask[0] + left && cut[2] <= mask[2] - right)
-                    || (cut[1] >= mask[1] + top && cut[3] <= mask[3] - bottom) {
-                    pose.clip = cut;
-                    *round = None;
-                }
-            }
+        strip_round_mask(clip, rounded);
+        if !open_cache {
+            strip_round_mask(clip, &mut own_round);
         }
         // A backdrop blur samples what is drawn before it, so it goes ahead of any layer this
         // element opens (a fade still blurs the window) and of its shadows, which skip it.
-        let blur_hole = (n.vis.backdrop_blur > 0.0 && !skip_paint && pose.visible && *backdrop_blurs < crate::MAX_BACKDROP_BLURS
-            && pose.effective_opacity > 0.001 && pose.paint_own * pinh.paint_opacity * n.vis.paint_alpha > 0.001)
-            .then(|| paint_slots::push_backdrop_blur(&mut self.instances, n.vis.backdrop_blur, ([r[0], r[1], w, h], pose.radii, n.vis_flags.continuous_corners()),
-                (pose.clip, pose.fade, pose.fade_origin), pose.rounded, sc * s, (pose.paint_own * pinh.paint_opacity * n.vis.paint_alpha).clamp(0.0, 1.0)));
+        let blur_hole = (n.vis.backdrop_blur > 0.0 && !skip_paint && visible && *backdrop_blurs < crate::MAX_BACKDROP_BLURS
+            && effective_opacity > 0.001 && paint_own * pinh.paint_opacity * n.vis.paint_alpha > 0.001)
+            .then(|| paint_slots::push_backdrop_blur(&mut self.instances, n.vis.backdrop_blur, ([r[0], r[1], w, h], radii, n.vis_flags.continuous_corners()),
+                (*clip, *fade, *fade_origin), *rounded, sc * s, (paint_own * pinh.paint_opacity * n.vis.paint_alpha).clamp(0.0, 1.0)));
         *backdrop_blurs += blur_hole.is_some() as usize;
         // The packed ABI carries one clip rectangle. Preserve a rectangular cut through
         // a rounded corner on a separate outer scope, never recenter the rounded mask.
-        if !skip_paint && let Some((mask, _)) = pose.rounded.or(own_round)
-            && intersect(pose.clip, mask) != mask {
-            let mut marker = Instance::begin_layer([r[0], r[1], w, h], pose.clip, Default::default());
-            marker.fade = crate::render::pack_fade(pose.fade, pose.fade_origin, pose.clip);
+        if !skip_paint && let Some((mask, _)) = rounded.or(own_round)
+            && intersect(*clip, mask) != mask {
+            let mut marker = Instance::begin_layer([r[0], r[1], w, h], *clip, Default::default());
+            marker.fade = crate::render::pack_fade(*fade, *fade_origin, *clip);
             layers.push((i, self.instances.len(), self.surfaces.len()));
             self.instances.push(marker);
-            pose.clip = NO_CLIP; pose.fade = [0.0; 4]; pose.fade_origin = NO_CLIP;
+            *clip = NO_CLIP; *fade = [0.0; 4]; *fade_origin = NO_CLIP;
         }
         // Two rounded rectangles cannot generally be represented by one rounded rectangle.
         // Consume the ancestor on an outer composite, retaining both original corner centres.
-        if !skip_paint && pose.rounded.is_some() && own_round.is_some() && pose.rounded != own_round {
-            let (mask, radii) = pose.rounded.take().unwrap();
+        if !skip_paint && rounded.is_some() && own_round.is_some() && *rounded != own_round {
+            let (mask, radii) = rounded.take().unwrap();
             let mut marker = Instance::begin_layer([r[0], r[1], w, h], mask, Default::default());
-            marker.fade = crate::render::pack_fade(pose.fade, pose.fade_origin, mask);
+            marker.fade = crate::render::pack_fade(*fade, *fade_origin, mask);
             marker.round_clip_corners(radii);
             layers.push((i, self.instances.len(), self.surfaces.len()));
             self.instances.push(marker);
-            pose.clip = NO_CLIP; pose.fade = [0.0; 4]; pose.fade_origin = NO_CLIP;
+            *clip = NO_CLIP; *fade = [0.0; 4]; *fade_origin = NO_CLIP;
         }
-        if let Some(mask) = own_round { pose.rounded = Some(mask); }
-        if let Some((mask, _)) = pose.rounded {
-            pose.clip = intersect(pose.clip, mask);
+        if let Some(mask) = own_round { *rounded = Some(mask); }
+        if let Some((mask, _)) = *rounded {
+            *clip = intersect(*clip, mask);
         }
         // `El::cutout_circle`: the subtree draws in a layer whose composite cuts the hole,
         // after the clips from above, which it takes.
         if !skip_paint && let Some(c) = n.vis.cutout {
             let k = sc * s;
-            let mut marker = Instance::begin_layer([r[0], r[1], w, h], pose.clip, Default::default());
-            marker.fade = crate::render::pack_fade(pose.fade, pose.fade_origin, pose.clip);
-            if let Some((_, radii)) = pose.rounded { marker.round_clip_corners(radii); }
+            let mut marker = Instance::begin_layer([r[0], r[1], w, h], *clip, Default::default());
+            marker.fade = crate::render::pack_fade(*fade, *fade_origin, *clip);
+            if let Some((_, radii)) = *rounded { marker.round_clip_corners(radii); }
             marker.radii = [r[0] + c[0] * k, r[1] + c[1] * k, c[2] * k, c[3] * k];
             layers.push((i, self.instances.len(), self.surfaces.len()));
             self.instances.push(marker);
-            pose.clip = NO_CLIP; pose.fade = [0.0; 4]; pose.fade_origin = NO_CLIP; pose.rounded = None;
+            *clip = NO_CLIP; *fade = [0.0; 4]; *fade_origin = NO_CLIP; *rounded = None;
         }
         // Live/truncated text adds a glyph-only rectangle below. Consume the inherited
         // rounded mask first so the text clip cannot move its corner centres, unless that
         // rectangle sits clear of the corners and the glyphs can skip the mask.
-        let glyphs_clear = pose.rounded.is_some_and(|(mask, radii)| {
-            self.text_clip(i, (r, pose.r_exact), sc, pose.clip).is_some_and(|(text, ..)| inside_rounded(text, mask, radii))
+        let glyphs_clear = rounded.is_some_and(|(mask, radii)| {
+            self.text_clip(i, (r, r_exact), sc, *clip).is_some_and(|(text, ..)| inside_rounded(text, mask, radii))
         });
-        pose.isolate |= open_cache || (pose.rounded.is_some() && (n.text.as_ref().is_some_and(|t| (t.truncate_fade || t.cold.live.is_some()) && !glyphs_clear)
+        *isolate |= open_cache || (rounded.is_some() && (n.text.as_ref().is_some_and(|t| (t.truncate_fade || t.cold.live.is_some()) && !glyphs_clear)
             || n.input.as_ref().is_some_and(|i| i.single_line)));
         // A soft clip fades each primitive on its own, so where one paints over another (an
         // image over its placeholder fill, a label over its bubble) the one beneath shows
         // through the fade, and the stack brightens or darkens towards the edge. A stack that
         // reaches into a soft edge composites as one layer, which takes the fade once.
-        if !pose.isolate && pose.visible && pose.effective_opacity > 0.001 && pose.fade.iter().any(|&f| f != 0.0)
-            && in_fade([r[0], r[1], r[0] + w, r[1] + h], pose.clip, pose.fade, pose.fade_origin)
+        if !*isolate && visible && effective_opacity > 0.001 && fade.iter().any(|&f| f != 0.0)
+            && in_fade([r[0], r[1], r[0] + w, r[1] + h], *clip, *fade, *fade_origin)
         {
             let paints = own_paints(n);
-            let parent = pose.next.is_some_and(|j| self.nodes[j].parent == Some(i));
-            pose.isolate = paints >= 2 || (paints == 1 && parent);
+            let parent = next.is_some_and(|j| self.nodes[j].parent == Some(i));
+            *isolate = paints >= 2 || (paints == 1 && parent);
         }
-        let o = if pose.isolate { 1.0 } else { (pose.paint_own * pinh.paint_opacity).clamp(0.0, 1.0) };
-        if !skip_paint && pose.isolate {
+        let o = if *isolate { 1.0 } else { (paint_own * pinh.paint_opacity).clamp(0.0, 1.0) };
+        if !skip_paint && *isolate {
             let start_idx = self.instances.len();
             layers.push((i, start_idx, self.surfaces.len()));
-            let mut marker = Instance::begin_layer([r[0], r[1], w, h], pose.clip,
-                crate::render::LayerSpec { opacity: pose.paint_own * pinh.paint_opacity,
-                    blend: if pose.dissolve { crate::render::Blend::PlusLighter } else { crate::render::Blend::SourceOver },
+            let mut marker = Instance::begin_layer([r[0], r[1], w, h], *clip,
+                crate::render::LayerSpec { opacity: paint_own * pinh.paint_opacity,
+                    blend: if dissolve { crate::render::Blend::PlusLighter } else { crate::render::Blend::SourceOver },
                     blur: p.blur * sc * s, clip_radius: 0.0 });
-            marker.fade = crate::render::pack_fade(pose.fade, pose.fade_origin, pose.clip);
-            if let Some((_, radii)) = pose.rounded { marker.round_clip_corners(radii); }
+            marker.fade = crate::render::pack_fade(*fade, *fade_origin, *clip);
+            if let Some((_, radii)) = *rounded { marker.round_clip_corners(radii); }
             self.instances.push(marker);
             // Clip the completed layer, never its inputs (including off-wall blur taps).
-            pose.clip = NO_CLIP; pose.fade = [0.0; 4]; pose.fade_origin = NO_CLIP; pose.rounded = None;
+            *clip = NO_CLIP; *fade = [0.0; 4]; *fade_origin = NO_CLIP; *rounded = None;
             if open_cache {
                 in_cache = true;
                 let eff_scale = sc * s;
@@ -365,7 +386,7 @@ impl RuntimeCore {
                     if let Some(entry) = self.node_caches.get(&n.id) {
                         let is_resident = self.text.atlas.resident_caches.get(&n.id.0) == Some(&entry.signature);
                         entry.open(eff_scale, s, self.settled, now, self.commit_gen, is_resident,
-                            pose.scale_motion, paint_hash, || self.cache_check_scratch[i], glyph_count)
+                            scale_motion, paint_hash, || self.cache_check_scratch[i], glyph_count)
                     } else {
                         (ScaleSettle::Still(eff_scale), RasterPass::Paint { glyph_start: glyph_count }, None)
                     };
@@ -393,8 +414,8 @@ impl RuntimeCore {
         if !skip_paint && n.vis.surface.is_some() {
             for &(_, at, _) in layers.iter() {
                 let b = &mut self.instances[at].rect;
-                let hi = [(b[0] + b[2]).max(r[2].min(pose.clip[2])), (b[1] + b[3]).max(r[3].min(pose.clip[3]))];
-                b[0] = b[0].min(r[0].max(pose.clip[0])); b[1] = b[1].min(r[1].max(pose.clip[1]));
+                let hi = [(b[0] + b[2]).max(r[2].min(clip[2])), (b[1] + b[3]).max(r[3].min(clip[3]))];
+                b[0] = b[0].min(r[0].max(clip[0])); b[1] = b[1].min(r[1].max(clip[1]));
                 b[2] = hi[0] - b[0]; b[3] = hi[1] - b[1];
             }
         }

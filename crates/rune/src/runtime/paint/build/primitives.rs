@@ -1,21 +1,49 @@
 //! Per-node GPU primitive emission: native materials, outer and inset shadows, fills, gradients,
 //! video/native surfaces, borders, effect slots, focus rings/outlines and leaf content.
-use super::layers::LayerScope;
-use super::pose::NodePose;
 use super::*;
 
 impl RuntimeCore {
-    #[inline]
+    #[inline(always)]
     #[allow(clippy::too_many_arguments)]
     pub(super) fn paint_node_box(
         &mut self,
         i: usize,
+        s: f32,
+        now: f64,
         pinh: &Inh,
-        pose: &NodePose,
-        scope: &LayerScope,
+        r: [f32; 4],
+        r_exact: [f32; 4],
+        raw_edges: [f32; 4],
+        radii: [f32; 4],
+        w: f32,
+        h: f32,
+        sc: f32,
+        o: f32,
+        effective_opacity: f32,
+        base_opacity: f32,
         draw: f32,
+        m: f32,
+        clip: [f32; 4],
+        fade: [f32; 4],
+        fade_origin: [f32; 4],
         vp: [f32; 4],
+        pressed: f32,
+        press_to: Option<Color>,
+        loop_value: Option<f32>,
+        blur_hole: Option<f32>,
+        cover: Option<(f32, [f32; 2])>,
+        scale_motion: ScaleMotion,
+        snap_rest: Option<&pixel_snap::Parent>,
+        next: Option<usize>,
         default_ring: Option<usize>,
+        primitive_start: usize,
+        mark: u32,
+        isolate: bool,
+        in_cache: bool,
+        skip_paint: bool,
+        loop_vis: bool,
+        gliding: bool,
+        turned: bool,
         caret: Option<[f32; 4]>,
         video_clock: crate::video::Clock,
         sel_ranges: &[(usize, usize, usize)],
@@ -23,18 +51,11 @@ impl RuntimeCore {
         video_signature: &mut u64,
         glyph_count: &mut usize,
     ) -> Option<usize> {
-        let s = self.env.scale;
-        let now = self.t;
         let n = &self.nodes[i];
-        let r = pose.r;
-        let (w, h) = (pose.w, pose.h);
-        let sc = pose.sc;
-        let clip = pose.clip;
-        let fade = pose.fade;
         let mut faded_slot = None;
         // Disabled styling is distributed to each authored paint leaf at build time.
         // Keep this local to emission: it neither propagates to children nor opens scopes.
-        let o = scope.o * n.vis.paint_alpha;
+        let o = o * n.vis.paint_alpha;
         let srgb = self.srgb_blend;
         // Subtree blur runs once after rasterization, never on each primitive as well.
         let blur = 0.0;
@@ -42,12 +63,12 @@ impl RuntimeCore {
         let native_material = match n.material {
             // A dimmed-out element takes no native view: its fallback draws nothing.
             Some(material) if self.materials.len() < crate::MAX_NATIVE_MATERIALS
-                && pose.effective_opacity * n.vis.paint_alpha > 0.001 => {
-                let radius = crate::system_material::clamp_radius(pose.radii, w, h);
+                && effective_opacity * n.vis.paint_alpha > 0.001 => {
+                let radius = crate::system_material::clamp_radius(radii, w, h);
                 let continuous = n.vis_flags.continuous_corners();
                 self.materials.push(crate::system_material::MaterialDraw {
                     id: n.id, material, rect: [r[0], r[1], w, h], radius, continuous,
-                    opacity: pose.effective_opacity * n.vis.paint_alpha,
+                    opacity: effective_opacity * n.vis.paint_alpha,
                 });
                 self.native_materials.then_some(if continuous { -radius } else { radius })
             }
@@ -60,7 +81,7 @@ impl RuntimeCore {
         };
         // `El::focus_within_flat`: focus inside drops its own shadows and hover fill.
         let focus_flat = n.focus.flat_within && self.focus_within(i);
-        let casts = !n.vis.shadows.is_empty() && native_material.is_none() && scope.blur_hole.is_none() && n.material.is_none();
+        let casts = !n.vis.shadows.is_empty() && native_material.is_none() && blur_hole.is_none() && n.material.is_none();
         let fill_a = if casts { self.color(n.id, P_FILL, n.vis.fill).a } else { 0.0 };
         let solid = casts && fill_a >= 1.0;
         // A box that paints itself solid hides the middle of its shadows (bands.rs). Dimmed
@@ -69,10 +90,10 @@ impl RuntimeCore {
         // under it, not its own shadows.
         let opaque = solid && o >= 1.0 && n.vis.gradient.is_none() && n.vis.radial.is_none() && n.vis.surface.is_none();
         let see_through = casts && fill_a > 0.0 && fill_a < 1.0;
-        let dim_hole = ((solid && o < 1.0) || see_through).then(|| crate::system_material::clamp_radius(pose.radii, w, h) * if n.vis_flags.continuous_corners() { -1.0 } else { 1.0 });
+        let dim_hole = ((solid && o < 1.0) || see_through).then(|| crate::system_material::clamp_radius(radii, w, h) * if n.vis_flags.continuous_corners() { -1.0 } else { 1.0 });
         let cast = shadow_paint::Caster {
-            rect: [r[0], r[1], w, h], radii: pose.radii, shape: if n.vis_flags.continuous_corners() { pose.radii.map(|v| -v) } else { pose.radii },
-            k_px, scale: s, opacity: o, srgb, clip, fade, hole: native_material.or(scope.blur_hole).or(dim_hole), opaque,
+            rect: [r[0], r[1], w, h], radii, shape: if n.vis_flags.continuous_corners() { radii.map(|v| -v) } else { radii },
+            k_px, scale: s, opacity: o, srgb, clip, fade, hole: native_material.or(blur_hole).or(dim_hole), opaque,
         };
         for (k, sh) in n.vis.shadows.iter().chain(stuck_shadows.1).enumerate() {
             let c = if k >= n.vis.shadows.len() { sh.color.alpha(sh.color.a * stuck_shadows.0) }
@@ -85,7 +106,7 @@ impl RuntimeCore {
         }
         // Shadows keep circular corners; the element's own shapes take the sign, and
         // negative radii draw continuous corners (shader.wgsl `sd_rounded`).
-        let radii = if n.vis_flags.continuous_corners() { pose.radii.map(|v| -v) } else { pose.radii };
+        let radii = if n.vis_flags.continuous_corners() { radii.map(|v| -v) } else { radii };
         let mut overlay = [0.0f32; 4];
         if let Some(c) = n.focus.highlight && self.highlight_visible(i) {
             overlay = over(premul(c, 1.0, srgb), overlay);
@@ -279,7 +300,7 @@ impl RuntimeCore {
                 }
                 self.surfaces.push(crate::native_surface::SurfaceDraw {
                     surface: surface.placed(n.vis.surface_place), fit: *fit, before_instance: self.instances.len() as u32,
-                    rect: [r[0], r[1], w, h], radii, clip, fade: crate::render::pack_fade(fade, pose.fade_origin, clip), opacity: o,
+                    rect: [r[0], r[1], w, h], radii, clip, fade: crate::render::pack_fade(fade, fade_origin, clip), opacity: o,
                 });
             }
             let ov = overlay.map(|c| c * o);
@@ -295,17 +316,17 @@ impl RuntimeCore {
                 bands::push_ring(&mut self.instances, ring);
             } else {
                 if let Some(rune_motion::LoopKind::OpacityCycle(curve)) = n.looping.as_ref().map(|l| l.kind)
-                    && n.a11y.hidden && !pose.next.is_some_and(|j| self.nodes[j].parent == Some(i))
-                    && !pose.isolate && !scope.in_cache && !scope.skip_paint && pose.loop_vis && pose.base_opacity > 0.0
-                    && pinh.paint_opacity > 0.0 && pose.loop_value.is_some_and(|v| v > 0.0) && n.vis.layer_opacity == 1.0
+                    && n.a11y.hidden && !next.is_some_and(|j| self.nodes[j].parent == Some(i))
+                    && !isolate && !in_cache && !skip_paint && loop_vis && base_opacity > 0.0
+                    && pinh.paint_opacity > 0.0 && loop_value.is_some_and(|v| v > 0.0) && n.vis.layer_opacity == 1.0
                     && n.vis.paint_alpha == 1.0 && bw == 0.0 && overlay == [0.0; 4]
-                    && self.instances.len() == scope.primitive_start && n.text.is_none() && n.input.is_none()
+                    && self.instances.len() == primitive_start && n.text.is_none() && n.input.is_none()
                     && n.vis.shape.is_none() && n.vis.pixels.is_none() && n.vis.effect.is_none()
                     && n.vis.shadows.is_empty() && n.handlers.get().is_none() && n.focus.get().is_none()
-                    && !n.vis_flags.hit() && pose.node_turn.is_none() && pose.cover.is_none() && n.help.is_none()
+                    && !n.vis_flags.hit() && !turned && cover.is_none() && n.help.is_none()
                     && curve.stops.iter().all(|&(_, a)| a.is_finite() && a > 0.001 && a <= 1.0 && base[3] * a > 0.0005)
                 {
-                    self.paint_keep.cycles.record(i, self.instances.len(), curve, (base, o / pose.loop_value.unwrap_or(1.0)), ring.rect);
+                    self.paint_keep.cycles.record(i, self.instances.len(), curve, (base, o / loop_value.unwrap_or(1.0)), ring.rect);
                 }
                 self.instances.push(Instance { fill, ..ring });
             }
@@ -330,7 +351,7 @@ impl RuntimeCore {
         self.instances.extend(dashed);
         if let Some(effect) = n.vis.effect {
             let fade = crate::render::pack_fade(fade, clip, clip);
-            faded_slot = paint_slots::push_effect(&mut self.instances, (effect, pose.mark), ([r[0], r[1], w, h], radii, clip, fade), k_px, o);
+            faded_slot = paint_slots::push_effect(&mut self.instances, (effect, mark), ([r[0], r[1], w, h], radii, clip, fade), k_px, o);
         }
         let focus_ring = if default_ring == Some(i) || self.forced_default_ring(i) { Some(self.default_focus_ring()) }
             else if n.focus.within { n.focus.ring.filter(|_| self.focus_within(i)) }
@@ -356,18 +377,18 @@ impl RuntimeCore {
             i,
             paint_content::LeafBox {
                 r,
-                r_exact: pose.r_exact,
+                r_exact,
                 // Its exact resting place against its snapped one, inside its containment's
                 // own rounding (`LeafBox::exact_off`).
                 // Under an offset (`El::offset`, a translation as CSS transforms are) it moves
                 // with its box, as it did before this: a glide toward a moving offset keeps
                 // the text on its card, and lands as a card that never moved draws.
                 exact_off: if pinh.snap.shifted || n.vis.offset != [0.0; 2] { [0.0; 2] } else {
-                    let o = pose.snap_rest.map_or([0.0; 2], |p| p.exact_off(pinh.snap.steady.map(|v| v * s)));
+                    let o = snap_rest.map_or([0.0; 2], |p| p.exact_off(pinh.snap.steady.map(|v| v * s)));
                     let c = pinh.snap.contain.map(|v| v * s);
                     [o[0] + (c[0] + 0.5).floor() - c[0], o[1] + (c[1] + 0.5).floor() - c[1]]
                 },
-                raw_size: [pose.raw_edges[2] - pose.raw_edges[0], pose.raw_edges[3] - pose.raw_edges[1]],
+                raw_size: [raw_edges[2] - raw_edges[0], raw_edges[3] - raw_edges[1]],
                 contain: pinh.snap.contain.map(|v| v * s),
                 radii,
                 sc,
@@ -376,15 +397,15 @@ impl RuntimeCore {
                 clip,
                 fade,
                 group: pinh.group,
-                pressed: pose.pressed,
-                press_to: pose.press_to,
-                loop_value: pose.loop_value,
-                cover: pose.cover,
-                scale_motion: pose.scale_motion,
+                pressed,
+                press_to,
+                loop_value,
+                cover,
+                scale_motion,
                 rest: pinh.still.0,
-                gliding: pose.gliding,
+                gliding,
                 caret,
-                shown: if pose.node_turn.is_none() && !pinh.in_cache { [clip[1].max(vp[1] - pose.m), clip[3].min(vp[3] + pose.m)] } else { [clip[1], clip[3]] },
+                shown: if !turned && !pinh.in_cache { [clip[1].max(vp[1] - m), clip[3].min(vp[3] + m)] } else { [clip[1], clip[3]] },
             },
             sel_ranges,
             mark_ranges,
