@@ -17,7 +17,7 @@ impl Host {
     /// KDE, sway and Hyprland) never has one, and its windows keep exactly the surface they had.
     ///
     /// A frame's window keeps its surface's pixels' alpha for the corner arcs the content clears
-    /// (`window/create.rs`), and is still opaque to Rune: its clear colour, its root fill and its
+    /// (`window/host/create.rs`), and is still opaque to Rune: its clear colour, its root fill and its
     /// device are an opaque window's, and only those corner pixels are transparent (`winit` keeps
     /// the rest of the window an opaque region).
     #[cfg_attr(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))), allow(unused_variables))]

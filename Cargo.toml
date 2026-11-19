@@ -106,7 +106,7 @@ winit = { path = "vendor/winit" }
 # Wayland client-side frame draws follows the window's rounded bottom corners, as the headerbar it
 # draws above them rounds the top two, instead of drawing a square L over the shadow's rounded
 # cut-out; and `AdwaitaFrame::content_corner_radius` says what radius the content's own bottom
-# corners take, for the app to clear outside (`window/corners.rs`). Re-made by
+# corners take, for the app to clear outside (`window/surface/corners.rs`). Re-made by
 # `scripts/vendor-sctk-adwaita.sh <version>` when sctk-adwaita is bumped; apps that build Rune
 # patch it too.
 sctk-adwaita = { path = "vendor/sctk-adwaita" }
