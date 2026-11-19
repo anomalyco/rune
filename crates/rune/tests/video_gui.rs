@@ -61,7 +61,8 @@ fn main() {
         std::process::exit(2)
     });
     clip().surface().set_observer(Arc::new(|t| {
-        FRAMES.lock().unwrap().insert(t.frame_id);
+        // Runs in wgpu's work-done callback: no panic there, even on a poisoned lock.
+        FRAMES.lock().unwrap_or_else(|e| e.into_inner()).insert(t.frame_id);
     }));
     let app = App::new(AppSpec::new("video gui", (320.0, 180.0), || Gui, view)).args(Vec::new());
     let main = app.handle();

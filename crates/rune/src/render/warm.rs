@@ -116,7 +116,7 @@ fn wait_for_surface(mut state: std::sync::MutexGuard<'_, State>) {
 /// already waits in the slot, this one goes; so does a device that died while it was hidden.
 pub(crate) fn park(gpu: Gpu, renderer: Renderer, linger: Duration) {
     if gpu.is_lost() { return; }
-    let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+    let _ = rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely());
     if renderer.surfaces.is_some() { return; }
     let mut state = lock(&SLOT.state);
     if !matches!(*state, State::Idle) { return; }
@@ -145,7 +145,7 @@ fn make(features: wgpu::Features) -> Option<Warmed> {
         ..Default::default()
     }));
     gpu.queue.submit([encoder.finish()]);
-    let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+    let _ = rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely());
     super::gpu_events::presented();
     Some(Warmed(gpu, renderer))
 }

@@ -26,7 +26,7 @@ fn read_rgba8(device: &wgpu::Device, queue: &wgpu::Queue, tex: &wgpu::Texture, w
     );
     queue.submit([enc.finish()]);
     let slice = buf.slice(..);
-    slice.map_async(wgpu::MapMode::Read, |r| r.expect("map"));
+    slice.map_async(wgpu::MapMode::Read, |_| {});
     device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
     let data = slice.get_mapped_range().expect("mapped");
     let mut out = Vec::with_capacity((w * h * 4) as usize);
@@ -58,7 +58,7 @@ fn read_rgba16f(device: &wgpu::Device, queue: &wgpu::Queue, tex: &wgpu::Texture,
     );
     queue.submit([enc.finish()]);
     let slice = buf.slice(..);
-    slice.map_async(wgpu::MapMode::Read, |r| r.expect("map"));
+    slice.map_async(wgpu::MapMode::Read, |_| {});
     device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
     let data = slice.get_mapped_range().expect("mapped");
     let mut out = Vec::with_capacity((w * h) as usize);
