@@ -8,5 +8,8 @@ description = "Native Mermaid diagrams for Rune: flowcharts, sequence diagrams a
 [dependencies]
 rune = { workspace = true }
 
+[dev-dependencies]
+rune = { workspace = true, default-features = true }
+
 [lints]
 workspace = true

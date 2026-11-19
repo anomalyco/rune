@@ -2,7 +2,7 @@
 //! not handed to the next one: a lost device configures nothing, and wgpu panics on the drawable
 //! its surface is asked for.
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "test-gpu-noop"))]
 mod lost {
     use crate::render::prewarm::{PARKED, discard, park, take};
     use crate::render::{Gpu, Renderer};
