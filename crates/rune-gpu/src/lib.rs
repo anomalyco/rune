@@ -1,6 +1,8 @@
-//! The GPU under a surface. On macOS and iOS, the Metal backend: wgpu's own, or with `metal-backend` (on by
-//! default) Rune's native one (`metal`). A Mac app draws with the native one unless `GpuBackend::Wgpu` or
-//! `RUNE_GPU_BACKEND=wgpu` selects wgpu's; an iOS app draws with wgpu's unless it chooses `GpuBackend::Metal`.
+//! GPU adapter selection, backend dispatch, device error logging, analytic GPU springs and
+//! Rune's native Apple Metal backend. On macOS and iOS, `metal-backend` (on by default) provides
+//! the native Metal backend (`metal`) alongside wgpu's: a Mac app draws with the native one
+//! unless `GpuBackend::Wgpu` or `RUNE_GPU_BACKEND=wgpu` selects wgpu's, and an iOS app draws with
+//! wgpu's unless it chooses `GpuBackend::Metal`. Apps normally reach this crate through `rune`.
 
 pub mod backend;
 pub mod health;

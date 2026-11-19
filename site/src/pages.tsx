@@ -473,8 +473,8 @@ export function HowItWorksView() {
       <section className="doc-section">
         <SectionHead id="crates" title="Where the code lives">
           <p>
-            The workspace is a few crates. <code>rune</code> holds most of the framework and builds on these
-            foundations.
+            The workspace is layered by responsibility. <code>rune</code> brings together the view tree, runtime,
+            renderer, windows and tooling, and re-exports the crates below it so apps depend on <code>rune</code> alone.
           </p>
         </SectionHead>
         <CrateMap />

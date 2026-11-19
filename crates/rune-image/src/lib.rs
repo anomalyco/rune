@@ -1,5 +1,8 @@
-//! Content-addressed raster images. Decode and linear-light mip generation run on one
-//! sleeping worker per cache, never in a view or a render frame.
+//! Content-addressed image decoding, linear-light mip generation, dynamic pixel buffers
+//! (`pixels`), SVG and AVIF codecs, OS app icon rasterization and surface placement math. Decode
+//! and mip generation run off the UI thread on shared decoder workers, never in a view or a render
+//! frame. Apps normally reach this crate through `rune` (`rune::image`, `rune::Pixels`).
+
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 #[cfg(not(target_arch = "wasm32"))]

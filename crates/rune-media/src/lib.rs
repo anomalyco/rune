@@ -1,4 +1,5 @@
-//! Media playback, zero-copy native video surfaces and audio recording for Rune.
+//! Media playback, zero-copy native video surfaces and audio recording for Rune. Apps normally
+//! reach these types through `rune`, which re-exports them.
 
 pub mod native_surface;
 pub mod recorder;
