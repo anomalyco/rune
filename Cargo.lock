@@ -4147,6 +4147,7 @@ name = "rune-staging"
 version = "0.0.1"
 dependencies = [
  "wgpu",
+ "windows",
 ]
 
 [[package]]
