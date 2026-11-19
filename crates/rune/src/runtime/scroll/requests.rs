@@ -54,7 +54,7 @@ impl ScrollTables {
 }
 
 /// One request outliving the commit that made it.
-pub(super) enum Request {
+pub(in crate::runtime) enum Request {
     /// A `Tx::keep_on_screen` element: it and any reveal on its viewport give way to it.
     Capture(Keep),
     /// The row below a fold's header, held where it shows: it takes the viewport's earlier
@@ -65,12 +65,12 @@ pub(super) enum Request {
 }
 
 #[derive(Default, Clone)]
-pub(super) struct Requests {
+pub(in crate::runtime) struct Requests {
     keeps: Vec<Keep>,
     reveals: Vec<Reveal>,
 }
 
-pub(super) enum Event<'a> {
+pub(in crate::runtime) enum Event<'a> {
     Arrive(Request),
     /// A reveal placed its target: `from` and `to` are its viewport's offset before and after,
     /// and `first` says whether this is the placement that created it.
@@ -87,18 +87,18 @@ pub(super) enum Event<'a> {
 
 /// What placing a reveal asks of its viewport.
 #[derive(Debug, PartialEq)]
-pub(super) enum Effect { Rest, Move(f64) }
+pub(in crate::runtime) enum Effect { Rest, Move(f64) }
 
 /// A fold starts opening: the keeps on its viewport above its end give way. `index` is a path's
 /// position in the commit's nodes.
-pub(super) struct FoldOpens<'a, I> { pub viewport: &'a str, pub end: usize, pub index: I }
+pub(in crate::runtime) struct FoldOpens<'a, I> { pub viewport: &'a str, pub end: usize, pub index: I }
 
 /// Folds nearly shut have left their viewports' ends to take over: a keep holding one of the
 /// `giving` headers on a `pinned` viewport gives way.
-pub(super) struct EndTakesOver<'a, P> { pub giving: &'a [&'a String], pub pinned: P }
+pub(in crate::runtime) struct EndTakesOver<'a, P> { pub giving: &'a [&'a String], pub pinned: P }
 
 /// Where a keep's element shows, for [`EndClamps`].
-pub(super) enum Shown {
+pub(in crate::runtime) enum Shown {
     /// Not in the tree: the keep waits for it.
     Unmounted,
     /// In the tree with no vertical viewport around it.
@@ -111,14 +111,14 @@ pub(super) enum Shown {
 
 /// A frame followed its keeps: one the content's end pushed down, or that lost its viewport,
 /// gives way to stick-bottom.
-pub(super) struct EndClamps<F> { pub shown: F }
+pub(in crate::runtime) struct EndClamps<F> { pub shown: F }
 
 /// A frame ended: keeps last while their viewport's subtree moves, reveals while their viewport
 /// glides or moves with their target mounted in it.
-pub(super) struct Finish<G, A, M> { pub gliding: G, pub animating: A, pub mounted: M }
+pub(in crate::runtime) struct Finish<G, A, M> { pub gliding: G, pub animating: A, pub mounted: M }
 
 /// Anything [`Requests::step`] takes.
-pub(super) trait Transition {
+pub(in crate::runtime) trait Transition {
     fn apply(self, requests: &mut Requests) -> Effects<Effect>;
 }
 
@@ -235,7 +235,7 @@ where G: Fn(&str) -> bool, A: Fn(&str) -> bool, M: Fn(&Reveal) -> bool {
 
 impl RuntimeCore {
     /// Resolve reveals and destinations against the tree from the update that requested them.
-    pub(super) fn finish_scroll_requests(&mut self, app: &mut dyn AppDriver, tx: &mut Tx, follow: bool) {
+    pub(in crate::runtime) fn finish_scroll_requests(&mut self, app: &mut dyn AppDriver, tx: &mut Tx, follow: bool) {
         let destination = !tx.scroll_bottom.is_empty() || !tx.scroll_pages.is_empty() || !tx.scroll_offsets.is_empty();
         if tx.scroll_to.is_empty() && !destination && !follow { return; }
         self.drop_scroll_holds();

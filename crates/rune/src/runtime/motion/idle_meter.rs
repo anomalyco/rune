@@ -6,14 +6,14 @@ impl RuntimeCore {
     /// stands for it; `live`: a live value did.
     #[inline(always)]
     #[cfg_attr(not(debug_assertions), allow(unused_variables))]
-    pub(super) fn idle_frame_begins(&mut self, timer: bool, live: bool) {
+    pub(in crate::runtime) fn idle_frame_begins(&mut self, timer: bool, live: bool) {
         #[cfg(debug_assertions)]
         self.frame.idle_meter.begins(self.frame.queue.is_empty() && !self.animating, timer, live);
     }
 
     /// After a frame built its instances.
     #[inline(always)]
-    pub(super) fn idle_frame_ends(&mut self) {
+    pub(in crate::runtime) fn idle_frame_ends(&mut self) {
         #[cfg(debug_assertions)]
         {
             use std::hash::{Hash, Hasher};

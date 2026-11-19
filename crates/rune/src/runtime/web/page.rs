@@ -121,7 +121,7 @@ impl RuntimeCore {
     }
 
     /// What the root hands its subtree in the paint pass: the band's offset as a rigid scroll.
-    pub(super) fn root_inh(&self) -> Inh {
+    pub(in crate::runtime) fn root_inh(&self) -> Inh {
         let mut inh = Inh::default();
         let dy = -self.page_offset();
         inh.dy = dy;

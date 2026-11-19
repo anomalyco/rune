@@ -3,7 +3,7 @@ use super::*;
 use crate::runtime::scroll_mode::{self, Event as ModeEvent};
 
 /// Scroll momentum decay (iOS normal: 0.998 per ms).
-pub(super) const SCROLL_DECAY: f32 = 2.002;
+pub(in crate::runtime) const SCROLL_DECAY: f32 = 2.002;
 
 /// Retained render-side motion state: growth stacks, streaming word reveals, matched/launch/text
 /// flights, loops and rewind capture. Ordered hot-first under `#[repr(C)]` so `flying`, `flights`,
@@ -87,14 +87,14 @@ impl MotionState {
 }
 
 /// The (x, y) scroll offsets of node `i`'s scroll viewports, innermost first.
-pub(super) fn scroll_offsets<'a>(scrolls: &'a HashMap<NodeId, ScrollState>, nodes: &'a [Node], i: usize) -> impl Iterator<Item = [f32; 2]> + 'a {
+pub(in crate::runtime) fn scroll_offsets<'a>(scrolls: &'a HashMap<NodeId, ScrollState>, nodes: &'a [Node], i: usize) -> impl Iterator<Item = [f32; 2]> + 'a {
     std::iter::successors(Some(i), |&p| nodes[p].parent.filter(|_| nodes[p].above.is_none()))
         .skip(1)
         .filter_map(|p| scrolls.get(&nodes[p].id).map(|st| [st.x.shift() as f32, st.offset as f32]))
 }
 
 /// Marks every ancestor of a marked node.
-pub(super) fn mark_ancestors(nodes: &[Node], marked: &mut [bool]) {
+pub(in crate::runtime) fn mark_ancestors(nodes: &[Node], marked: &mut [bool]) {
     for i in 0..nodes.len() {
         if !marked[i] { continue; }
         let mut p = nodes[i].parent;
@@ -107,7 +107,7 @@ pub(super) fn mark_ancestors(nodes: &[Node], marked: &mut [bool]) {
 }
 
 impl RuntimeCore {
-    pub(super) fn set_or_anim<T: rune_motion::Animatable>(&mut self, id: NodeId, p: Prop<T>, val: T, s: Spring, instant: bool) {
+    pub(in crate::runtime) fn set_or_anim<T: rune_motion::Animatable>(&mut self, id: NodeId, p: Prop<T>, val: T, s: Spring, instant: bool) {
         if instant {
             self.scene.set(id, p, val);
         } else {
@@ -115,12 +115,12 @@ impl RuntimeCore {
         }
     }
 
-    pub(super) fn color(&self, id: NodeId, prop: Prop<Color>, rest: Color) -> Color {
+    pub(in crate::runtime) fn color(&self, id: NodeId, prop: Prop<Color>, rest: Color) -> Color {
         if self.scene.store().is_animating(id, prop) { self.scene.get(id, prop).unwrap_or(rest) } else { rest }
     }
 
     /// Shadow `k` of node `id` with its geometry where its spring has it.
-    pub(super) fn shadow_at(&self, id: NodeId, k: usize, sh: &crate::el::Shadow) -> crate::el::Shadow {
+    pub(in crate::runtime) fn shadow_at(&self, id: NodeId, k: usize, sh: &crate::el::Shadow) -> crate::el::Shadow {
         match P_SHADOW_GEO.get(k) {
             Some(&prop) if self.scene.store().active_len() > 0 && self.scene.store().is_animating(id, prop) => match self.scene.get(id, prop) {
                 Some(g) => crate::el::Shadow { x: g.x, y: g.y, blur: g.w.max(0.0), spread: g.h, ..*sh },
@@ -130,7 +130,7 @@ impl RuntimeCore {
         }
     }
 
-    pub(super) fn step_growth(&mut self, dt: f32) -> bool {
+    pub(in crate::runtime) fn step_growth(&mut self, dt: f32) -> bool {
         if self.motion.stacks.is_empty() {
             return false;
         }
@@ -214,7 +214,7 @@ impl RuntimeCore {
     }
 
     /// Presented content extent of node `c` if it is a growth stack (points).
-    pub(super) fn stack_extent(&self, c: usize) -> Option<f64> {
+    pub(in crate::runtime) fn stack_extent(&self, c: usize) -> Option<f64> {
         let n = &self.tree.nodes[c];
         n.growth.as_ref()?;
         let stack = self.motion.stacks.get(&n.id)?;
@@ -225,7 +225,7 @@ impl RuntimeCore {
     }
 
     /// How far scroll viewport `i`'s content reaches past its bottom, negative while it fits.
-    pub(super) fn scroll_overflow(&self, i: usize) -> f64 {
+    pub(in crate::runtime) fn scroll_overflow(&self, i: usize) -> f64 {
         let view = self.tree.nodes[i].target;
         let content_h = self.scroll_children(i).map(|c| {
             let n = &self.tree.nodes[c];
@@ -234,11 +234,11 @@ impl RuntimeCore {
         content_h - f64::from(view[3] - view[1])
     }
 
-    pub(super) fn step_scroll(&mut self, dt: f32) -> bool { self.step_scroll_by(dt, false) }
+    pub(in crate::runtime) fn step_scroll(&mut self, dt: f32) -> bool { self.step_scroll_by(dt, false) }
 
     /// Steps every scroll viewport `dt` seconds on: a frame's own step, or (`catch_up`) the time
     /// it charges to motion that was already running (`frame::clock::split`).
-    pub(super) fn step_scroll_by(&mut self, dt: f32, catch_up: bool) -> bool {
+    pub(in crate::runtime) fn step_scroll_by(&mut self, dt: f32, catch_up: bool) -> bool {
         let slack_dt = std::mem::take(&mut self.motion.slack_dt);
         let scale = f64::from(self.env.scale * self.zoom());
         // Motion reduced mid-ease: a wheel's ease lands where it was going, at once.
@@ -316,7 +316,7 @@ impl RuntimeCore {
         moving
     }
 
-    pub(super) fn reveals_active(&mut self) -> bool {
+    pub(in crate::runtime) fn reveals_active(&mut self) -> bool {
         let store = self.scene.store();
         let mut any = false;
         for (id, st) in self.motion.reveals.iter_mut() {

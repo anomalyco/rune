@@ -4,7 +4,7 @@ use super::*;
 impl RuntimeCore {
     /// All destination rectangles below come from this frame's completed growth/scroll build.
     /// The overlay only writes draw instances, never layout or app state.
-    pub(super) fn draw_text_flights(&mut self) -> bool {
+    pub(in crate::runtime) fn draw_text_flights(&mut self) -> bool {
         let s = self.env.scale;
         let srgb = self.paint.srgb_blend;
         let now = self.t;

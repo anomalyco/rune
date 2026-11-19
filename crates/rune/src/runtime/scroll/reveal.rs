@@ -25,7 +25,7 @@ impl ScrollReveal {
 
 /// The offset that centres `[top, top + height)` in the viewport, or that scrolls it into view
 /// from `offset`, before clamping.
-pub(super) fn place(center: bool, offset: f64, top: f64, height: f64, viewport: f64, margin: f64) -> f64 {
+pub(in crate::runtime) fn place(center: bool, offset: f64, top: f64, height: f64, viewport: f64, margin: f64) -> f64 {
     if center {
         (top - ((viewport - height) * 0.5).max(0.0)).max(0.0)
     } else {
@@ -39,7 +39,7 @@ impl RuntimeCore {
     /// so this places it again from what the commit measured until it stays put. Those commits
     /// are `instant` when the request's was, or when it glides: the glide then starts back
     /// where the viewport stood and runs to that place, keeping the speed of one already running.
-    pub(super) fn reveal_row(&mut self, app: &mut dyn AppDriver, r: &ScrollReveal, instant: bool) {
+    pub(in crate::runtime) fn reveal_row(&mut self, app: &mut dyn AppDriver, r: &ScrollReveal, instant: bool) {
         let (scope, key) = (r.scope.as_deref(), r.key.as_str());
         let glide = r.animated && !instant && !self.reduced_motion && !self.settled;
         let (mut window, was) = self.reveal_row_once(app, scope, key, r.center, true, instant || glide);
@@ -55,7 +55,7 @@ impl RuntimeCore {
             let end = st.offset;
             let reach = scroll_bottom::GLIDE_REACH * viewport;
             st.offset = start.clamp(end - reach, end + reach);
-            st.mode = st.mode.to_glide(scroll_offset::retarget_v(motion::GLIDE, st.offset, v.unwrap_or(0.0), end), GlideTo::Offset(end));
+            st.mode = st.mode.to_glide(scroll_offset::retarget_v(crate::tok::motion::GLIDE, st.offset, v.unwrap_or(0.0), end), GlideTo::Offset(end));
             st.spring = None;
             st.moved();
             if self.virtual_window_changed() {

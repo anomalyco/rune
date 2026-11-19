@@ -5,7 +5,7 @@ use super::*;
 
 /// The group (or ungrouped text) the selection last touched, by path.
 #[derive(Default)]
-pub(super) struct Pick(Option<String>);
+pub(in crate::runtime) struct Pick(Option<String>);
 
 impl RuntimeCore {
     /// The selection group of text `i`, or the text itself when it's in none.
@@ -14,7 +14,7 @@ impl RuntimeCore {
     }
 
     /// Remembers the unit of the text holding the selection.
-    pub(super) fn remember_pick(&mut self) {
+    pub(in crate::runtime) fn remember_pick(&mut self) {
         let unit = self.selection_holder_end().map(|h| {
             self.end_group_path(h).unwrap_or_else(|| self.end_path(h)).to_owned()
         });
@@ -47,7 +47,7 @@ impl RuntimeCore {
     }
 
     /// Cmd+A when nothing else took it: selects all of `select_all_target`.
-    pub(super) fn select_all_key(&mut self, app: &dyn ViewDriver) -> bool {
+    pub(in crate::runtime) fn select_all_key(&mut self, app: &dyn ViewDriver) -> bool {
         if let Some(h @ selectable::virtual_selection::EndRef::Offscreen(vi, _)) = self.selection_holder_end() {
             match self.end_group_path(h).map(str::to_owned) {
                 None => {

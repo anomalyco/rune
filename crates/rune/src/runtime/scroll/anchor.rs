@@ -7,7 +7,7 @@ use super::*;
 impl RuntimeCore {
     /// Before a commit: puts each anchored viewport's top row ahead of the app's own
     /// `Tx::keep_on_screen` keys, which win when they name a row in the same viewport.
-    pub(super) fn anchor_keeps(&self, tx: &mut Tx) {
+    pub(in crate::runtime) fn anchor_keeps(&self, tx: &mut Tx) {
         if !self.tree.built || self.paint.drawn.len() != self.tree.nodes.len() { return; }
         let rows: Vec<String> = (0..self.tree.nodes.len())
             .filter(|&s| self.tree.nodes[s].scroll_edges.anchor && self.tree.nodes[s].scroll_axes.y())

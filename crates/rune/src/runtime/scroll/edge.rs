@@ -20,7 +20,7 @@ fn partial(width: f32, strength: f32) -> (f32, f32) {
 /// The scroll offset that shows `[top, top + height)` with `margin` to spare, moving as little
 /// as possible from `offset` (unclamped). A row taller than the viewport that already fills it
 /// stays put, so placing it again doesn't flip it from its end to its start.
-pub(super) fn reveal(offset: f64, top: f64, height: f64, viewport: f64, margin: f64) -> f64 {
+pub(in crate::runtime) fn reveal(offset: f64, top: f64, height: f64, viewport: f64, margin: f64) -> f64 {
     let margin = margin.min(((viewport - height) / 2.0).max(0.0));
     let (start, end) = (top - margin, top + height + margin);
     if start <= offset && end >= offset + viewport { offset }
@@ -34,7 +34,7 @@ impl RuntimeCore {
     /// start from. With `scroll_edge_fade`, top and bottom follow the content hidden under them:
     /// the ramp starts outside `r` so the edge itself only partly fades. `bottom` is the
     /// presented bottom edge (see `stuck_offset`).
-    pub(super) fn scroll_edge_fade(&self, i: usize, f: [f32; 4], r: [f32; 4], k: f32, bottom: f32) -> ([f32; 4], [f32; 4]) {
+    pub(in crate::runtime) fn scroll_edge_fade(&self, i: usize, f: [f32; 4], r: [f32; 4], k: f32, bottom: f32) -> ([f32; 4], [f32; 4]) {
         let n = &self.tree.nodes[i];
         let mut own = f.map(|v| v * k);
         let width = n.scroll_edges.fade;

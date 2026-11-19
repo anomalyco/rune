@@ -27,8 +27,8 @@ pub enum TouchPhase {
 
 /// What touches are doing: the finger that is down, and the viewport a touch holds or flung.
 #[derive(Default)]
-pub(super) struct Touch {
-    pub(super) scroll: Option<scroll_touch::TouchScroll>,
+pub(in crate::runtime) struct Touch {
+    pub(in crate::runtime) scroll: Option<scroll_touch::TouchScroll>,
     finger: Option<Finger>,
 }
 
@@ -151,7 +151,7 @@ impl RuntimeCore {
     /// A finger still within the slop when its long press is due: the press it began lets go
     /// without a click (a drag it started hears a cancelled `Phase::Up`), and a secondary click
     /// lands where it went down.
-    pub(super) fn fire_touch_hold(&mut self, app: &dyn ViewDriver) {
+    pub(in crate::runtime) fn fire_touch_hold(&mut self, app: &dyn ViewDriver) {
         let Some(f) = self.pointer.touch.finger.as_ref().filter(|f| matches!(f.mode, Mode::Pending { .. }) && self.clock >= f.hold_due) else { return };
         let ((x, y), scroll) = (f.origin, f.mode.scroll());
         self.touch_scroll_end(scroll, 0.0);

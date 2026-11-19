@@ -10,14 +10,14 @@ const MIN_HOLE: f32 = 96.0;
 
 /// Pushes the outer shadow `inst` of an opaque box at `caster` (device px, x y w h) with
 /// corner `radii` (negative for continuous corners): the box hides the shadow inside it.
-pub(super) fn push_shadow(out: &mut Vec<Instance>, inst: Instance, caster: [f32; 4], radii: [f32; 4]) {
+pub(in crate::runtime) fn push_shadow(out: &mut Vec<Instance>, inst: Instance, caster: [f32; 4], radii: [f32; 4]) {
     let e = radii.map(corner_extent).into_iter().fold(0.0, f32::max) + 1.0;
     let (x, y) = (caster[0] - inst.rect[0], caster[1] - inst.rect[1]);
     push(out, inst, [x + e, y + e, x + caster[2] - e, y + caster[3] - e], inst.params[2] * 3.0 + 1.0);
 }
 
 /// Pushes the border-only `inst` (its fill clear): nothing draws past its ring.
-pub(super) fn push_ring(out: &mut Vec<Instance>, inst: Instance) {
+pub(in crate::runtime) fn push_ring(out: &mut Vec<Instance>, inst: Instance) {
     let e = inst.radii.map(corner_extent).into_iter().fold(0.0, f32::max) + inst.params[0] + inst.params[2].max(0.5) + 1.0;
     let [_, _, w, h] = inst.rect;
     push(out, inst, [e, e, w - e, h - e], 1.0 + inst.params[2] * 2.0);

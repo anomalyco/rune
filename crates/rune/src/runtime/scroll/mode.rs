@@ -11,7 +11,7 @@ use super::scroll_wheel::WheelCurve;
 /// bottom while it glides, or coast while a glide carries it, with the hand latches that belong
 /// to the frame.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) enum ScrollMode {
+pub(in crate::runtime) enum ScrollMode {
     /// At rest where a hand, an app or a glide left it.
     Rest(Hand),
     /// A stick-to-bottom viewport following its content's end.
@@ -26,19 +26,19 @@ pub(super) enum ScrollMode {
 
 /// The hand latches a mode carries from frame to frame, whatever moves the offset.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub(super) struct Hand {
+pub(in crate::runtime) struct Hand {
     /// A hand (the wheel, keys, a drag, a touch) or an app's instant jump moved the offset
     /// since the last step. The step clears it.
-    pub(super) direct: bool,
+    pub(in crate::runtime) direct: bool,
     /// It moved in the last step: a hand, its momentum or a glide (derived there).
-    pub(super) scrolling: bool,
+    pub(in crate::runtime) scrolling: bool,
     /// A hand or an app's instant jump moved it since `El::on_scroll_offset` was last told,
     /// across the frame's steps; taken once at the frame's end.
-    pub(super) by_hand: bool,
+    pub(in crate::runtime) by_hand: bool,
     /// A hand scrolled while the growth stack moved: no shrink glide until it settles.
-    pub(super) shrink_cut: bool,
+    pub(in crate::runtime) shrink_cut: bool,
     /// The growth stack's layout end while its rows still move (see `ease_to_shrunk_end`).
-    pub(super) laid: Option<f64>,
+    pub(in crate::runtime) laid: Option<f64>,
 }
 
 impl Default for ScrollMode {
@@ -64,14 +64,14 @@ use writes::note as note_write;
 
 impl ScrollMode {
     /// At rest, with no hand data: a viewport nobody has moved.
-    pub(super) fn rest() -> Self { ScrollMode::Rest(Hand::default()) }
+    pub(in crate::runtime) fn rest() -> Self { ScrollMode::Rest(Hand::default()) }
 
     /// Following its content's end, with no hand data: a stick-to-bottom viewport that opens at
     /// the bottom.
-    pub(super) fn following() -> Self { ScrollMode::Pinned(Hand::default()) }
+    pub(in crate::runtime) fn following() -> Self { ScrollMode::Pinned(Hand::default()) }
 
     /// The hand latches this mode carries.
-    pub(super) fn hand(self) -> Hand {
+    pub(in crate::runtime) fn hand(self) -> Hand {
         match self {
             ScrollMode::Rest(hand) | ScrollMode::Pinned(hand) => hand,
             ScrollMode::Momentum { hand, .. } | ScrollMode::Glide { hand, .. } | ScrollMode::Wheel { hand, .. } => hand,
@@ -86,40 +86,40 @@ impl ScrollMode {
     }
 
     /// The same mode at rest, keeping the hand's latches.
-    pub(super) fn to_rest(self) -> Self {
+    pub(in crate::runtime) fn to_rest(self) -> Self {
         #[cfg(test)]
         note_write();
         ScrollMode::Rest(self.hand())
     }
 
     /// The same mode following its bottom, keeping the hand's latches.
-    pub(super) fn to_pinned(self) -> Self {
+    pub(in crate::runtime) fn to_pinned(self) -> Self {
         #[cfg(test)]
         note_write();
         ScrollMode::Pinned(self.hand())
     }
 
     /// The same mode coasting at `v`, keeping the hand's latches.
-    pub(super) fn to_momentum(self, v: f32) -> Self {
+    pub(in crate::runtime) fn to_momentum(self, v: f32) -> Self {
         #[cfg(test)]
         note_write();
         ScrollMode::Momentum { v, hand: self.hand() }
     }
 
     /// The same mode gliding at `v` toward `to`, keeping the hand's latches.
-    pub(super) fn to_glide(self, v: f32, to: GlideTo) -> Self {
+    pub(in crate::runtime) fn to_glide(self, v: f32, to: GlideTo) -> Self {
         #[cfg(test)]
         note_write();
         ScrollMode::Glide { v, to, hand: self.hand() }
     }
 
     /// The same mode easing on a wheel's `curve`, keeping the hand's latches.
-    pub(super) fn to_wheel(self, curve: WheelCurve) -> Self {
+    pub(in crate::runtime) fn to_wheel(self, curve: WheelCurve) -> Self {
         ScrollMode::Wheel { curve, hand: self.hand() }
     }
 
     /// The wheel's ease, while one runs.
-    pub(super) fn wheel(self) -> Option<WheelCurve> {
+    pub(in crate::runtime) fn wheel(self) -> Option<WheelCurve> {
         match self {
             ScrollMode::Wheel { curve, .. } => Some(curve),
             _ => None,
@@ -127,7 +127,7 @@ impl ScrollMode {
     }
 
     /// Its momentum (points a second), 0 unless coasting.
-    pub(super) fn coast(self) -> f32 {
+    pub(in crate::runtime) fn coast(self) -> f32 {
         match self {
             ScrollMode::Momentum { v, .. } => v,
             _ => 0.0,
@@ -135,10 +135,10 @@ impl ScrollMode {
     }
 
     /// It follows its content's bottom.
-    pub(super) fn pinned(self) -> bool { matches!(self, ScrollMode::Pinned(_)) }
+    pub(in crate::runtime) fn pinned(self) -> bool { matches!(self, ScrollMode::Pinned(_)) }
 
     /// The running glide's speed (points a second), while one runs.
-    pub(super) fn glide(self) -> Option<f32> {
+    pub(in crate::runtime) fn glide(self) -> Option<f32> {
         match self {
             ScrollMode::Glide { v, .. } => Some(v),
             _ => None,
@@ -147,7 +147,7 @@ impl ScrollMode {
 }
 
 /// What a frame did to a viewport.
-pub(super) enum Event {
+pub(in crate::runtime) enum Event {
     /// A hand or an app put the offset where it is.
     Moved,
     /// A touch holds the viewport (`El::scroll` under a finger).
@@ -177,13 +177,13 @@ pub(super) enum Event {
 }
 
 #[derive(Debug, PartialEq)]
-pub(super) enum Effect {
+pub(in crate::runtime) enum Effect {
     /// `El::on_scroll_offset`'s handler hears of a hand move at the frame's end.
     Tell,
 }
 
 /// Folds `event` into `mode`, returning what the caller should carry out.
-pub(super) fn step(mode: &mut ScrollMode, event: Event) -> Effects<Effect> {
+pub(in crate::runtime) fn step(mode: &mut ScrollMode, event: Event) -> Effects<Effect> {
     match event {
         Event::Moved => mode.hand_mut().direct = true,
         Event::Hold => {

@@ -21,7 +21,7 @@ const LANDMARK_ROLES: [&str; 6] = ["banner", "navigation", "main", "complementar
 const PRESSABLE_ROLES: [&str; 9] = ["button", "link", "tab", "checkbox", "switch", "radio", "combobox", "treeitem", "gridcell"];
 /// The innermost open modal and the nodes input may reach while it shows: its subtree, the
 /// popovers anchored inside it, and the window's caption buttons.
-pub(super) struct ModalScope {
+pub(in crate::runtime) struct ModalScope {
     index: usize,
     members: Vec<bool>,
 }
@@ -47,7 +47,7 @@ fn node_shown(nodes: &[Node], i: usize) -> bool {
 /// Shift), which shows focus from then on, as CSS `:focus-visible` after keyboard navigation.
 /// Other keys keep whatever showed: Space on a clicked button, Escape, or typing shows no ring.
 /// Type-select shows it when it moves focus.
-pub(super) fn navigates(ev: &KeyEvent) -> bool {
+pub(in crate::runtime) fn navigates(ev: &KeyEvent) -> bool {
     !(ev.mods.cmd || ev.mods.ctrl || ev.mods.alt || ev.mods.logo)
         && matches!(ev.key, Key::Tab | Key::Up | Key::Down | Key::Left | Key::Right | Key::Home | Key::End | Key::PageUp | Key::PageDown)
 }
@@ -89,7 +89,7 @@ fn sync_input_focus(input: &mut crate::el::InputSpec, states: crate::states::Sta
 }
 
 impl RuntimeCore {
-    pub(super) fn active_modal(&self) -> Option<usize> {
+    pub(in crate::runtime) fn active_modal(&self) -> Option<usize> {
         self.kbd.modal_scope.as_ref().map(|m| m.index)
     }
     /// Node `i` (its subtree ending before `end`) holds the open modal.
@@ -100,7 +100,7 @@ impl RuntimeCore {
     pub(crate) fn modal_member(&self, i: usize) -> bool {
         self.kbd.modal_scope.as_ref().is_none_or(|m| m.members.get(i).copied().unwrap_or(false))
     }
-    pub(super) fn refresh_modal_index(&mut self) {
+    pub(in crate::runtime) fn refresh_modal_index(&mut self) {
         let Some(index) = self.tree.nodes.iter().enumerate().rev()
             .find(|(i, n)| n.handlers.get().is_some_and(|h| h.modal.is_some()) && !self.subtree_exiting(*i) && !self.subtree_unmounted(*i)).map(|(i, _)| i)
         else {
@@ -128,18 +128,18 @@ impl RuntimeCore {
         self.kbd.modal_scope = Some(ModalScope { index, members });
     }
     /// Input may reach node `i`: it's outside any `El::inert` subtree and not behind a modal.
-    pub(super) fn allowed(&self, i: usize) -> bool {
+    pub(in crate::runtime) fn allowed(&self, i: usize) -> bool {
         !self.tree.nodes.get(i).is_some_and(|n| n.inert) && self.modal_member(i)
     }
     /// `El::focusable`, or under `Cx::web_focus` a pressable control that didn't opt out.
-    pub(super) fn takes_focus(&self, n: &Node) -> bool {
+    pub(in crate::runtime) fn takes_focus(&self, n: &Node) -> bool {
         n.focus.enabled || (self.commit.defaults.web_focus && !n.focus.opt_out && n.handlers.on_press.is_some() && PRESSABLE_ROLES.contains(&n.role))
     }
     /// Whether `n` can take keyboard focus itself or is an editable text field.
     fn can_take_focus(&self, n: &Node) -> bool {
         self.takes_focus(n) || n.input.as_ref().is_some_and(|s| s.access.is_some())
     }
-    pub(super) fn can_focus(&self, i: usize) -> bool {
+    pub(in crate::runtime) fn can_focus(&self, i: usize) -> bool {
         self.can_take_focus(&self.tree.nodes[i]) && self.reachable(i)
     }
     /// Shown, sized, not exiting and not behind a modal.
@@ -156,13 +156,13 @@ impl RuntimeCore {
     }
     /// Return with no modifiers presses the window's default button (`El::default_button`)
     /// unless the focused element takes Return itself. Text fields decide in `with_focused`.
-    pub(super) fn default_button_key(&mut self, app: &mut dyn AppDriver, ev: &KeyEvent, tx: &mut Tx) -> bool {
+    pub(in crate::runtime) fn default_button_key(&mut self, app: &mut dyn AppDriver, ev: &KeyEvent, tx: &mut Tx) -> bool {
         if ev.key != Key::Enter || ev.mods != crate::Mods::default() { return false; }
         if self.focused_input().is_some() || self.focused_index().is_some_and(|i| self.takes_return(i)) { return false; }
         self.press_default_button(app, tx)
     }
     /// Presses the default button, if one is in reach; a held Return presses it once.
-    pub(super) fn press_default_button(&mut self, app: &mut dyn AppDriver, tx: &mut Tx) -> bool {
+    pub(in crate::runtime) fn press_default_button(&mut self, app: &mut dyn AppDriver, tx: &mut Tx) -> bool {
         let Some(i) = (0..self.tree.nodes.len()).rev()
             .find(|&i| self.tree.nodes[i].focus.default && self.tree.nodes[i].handlers.on_press.is_some() && self.reachable(i))
         else { return false };
@@ -174,7 +174,7 @@ impl RuntimeCore {
     }
     /// The focus group `i` is an item of. A control inside an item (a tab's close button) is
     /// no item: it's a Tab stop of its own, as an HTML button inside a roving `tablist` is.
-    pub(super) fn focus_group(&self, i: usize) -> Option<usize> {
+    pub(in crate::runtime) fn focus_group(&self, i: usize) -> Option<usize> {
         let mut p = self.tree.nodes[i].parent;
         while let Some(i) = p {
             if self.tree.nodes[i].focus.group { return Some(i); }
@@ -184,22 +184,22 @@ impl RuntimeCore {
         None
     }
     /// The `focus_highlight` row that `i` (a pointer target) belongs to.
-    pub(super) fn highlight_row(&self, mut i: usize) -> Option<usize> {
+    pub(in crate::runtime) fn highlight_row(&self, mut i: usize) -> Option<usize> {
         loop {
             let n = &self.tree.nodes[i];
             if self.takes_focus(n) { return (n.focus.highlight.is_some() && self.can_focus(i)).then_some(i); }
             i = n.parent?;
         }
     }
-    pub(super) fn highlight_visible(&self, i: usize) -> bool {
+    pub(in crate::runtime) fn highlight_visible(&self, i: usize) -> bool {
         self.kbd.focus.shown() && self.kbd.focus.is(&self.tree.nodes[i].path)
     }
     /// Focus is on node `i` or inside it (CSS `:focus-within`), however it got there.
-    pub(super) fn focus_within(&self, i: usize) -> bool {
+    pub(in crate::runtime) fn focus_within(&self, i: usize) -> bool {
         let path = self.tree.nodes[i].path.as_str();
         self.kbd.focus.path().is_some_and(|f| f.strip_prefix(path).is_some_and(|rest| rest.is_empty() || rest.starts_with('/')))
     }
-    pub(super) fn focus_ring_visible(&self, mut i: usize) -> bool {
+    pub(in crate::runtime) fn focus_ring_visible(&self, mut i: usize) -> bool {
         // `Cx::force_focus_rings`: the ring of whichever control owns node `i`.
         if self.commit.defaults.force_focus_rings {
             loop {
@@ -218,7 +218,7 @@ impl RuntimeCore {
         }
     }
     /// The focused element that draws the default ring, if any (see `El::no_focus_ring`).
-    pub(super) fn default_ring_owner(&self) -> Option<usize> {
+    pub(in crate::runtime) fn default_ring_owner(&self) -> Option<usize> {
         if !self.kbd.focus.keyboard() { return None; }
         let i = self.focused_index()?;
         let n = &self.tree.nodes[i];
@@ -235,7 +235,7 @@ impl RuntimeCore {
     /// Under `Cx::force_focus_rings`, whether node `i` draws the default ring: a control that
     /// can take focus and would draw it when focused (see [`Self::default_ring_owner`]), with no
     /// ring of its own on it or on a part of it.
-    pub(super) fn forced_default_ring(&self, i: usize) -> bool {
+    pub(in crate::runtime) fn forced_default_ring(&self, i: usize) -> bool {
         if !self.commit.defaults.force_focus_rings || !self.can_focus(i) { return false; }
         let n = &self.tree.nodes[i];
         if n.input.is_some() || n.focus.highlight.is_some() || self.link_count(i) > 0 { return false; }
@@ -253,11 +253,11 @@ impl RuntimeCore {
         }
     }
     /// The view's `Cx::focus_ring`, else AppKit's: 3 points just outside the border box.
-    pub(super) fn default_focus_ring(&self) -> crate::el::Outline {
+    pub(in crate::runtime) fn default_focus_ring(&self) -> crate::el::Outline {
         self.commit.defaults.focus_ring
             .unwrap_or(crate::el::Outline { width: 3.0, offset: 0.0, color: self.host.system_accent.focus(self.env.system_dark) })
     }
-    pub(super) fn set_focus(&mut self, app: &mut dyn AppDriver, path: Option<String>, keyboard: bool) -> bool {
+    pub(in crate::runtime) fn set_focus(&mut self, app: &mut dyn AppDriver, path: Option<String>, keyboard: bool) -> bool {
         self.edit.input_click.on_focus_change(path.as_deref());
         let moved = self.kbd.focus.path() != path.as_deref();
         // A field left mid-composition keeps what it showed, as a browser's does (Tab the input
@@ -309,7 +309,7 @@ impl RuntimeCore {
         }
         changed
     }
-    pub(super) fn sync_requested_focus(&mut self, app: &mut dyn AppDriver, nodes: &mut Vec<Node>) -> bool {
+    pub(in crate::runtime) fn sync_requested_focus(&mut self, app: &mut dyn AppDriver, nodes: &mut Vec<Node>) -> bool {
         // A `Tx::focus_when_shown` still owed stands until the user's own input or another ask,
         // whatever focus did meanwhile (a closing palette leaves it nowhere, then on the prompt).
         let owed = self.kbd.focus_owed.take().map(|(key, ring)| (key, ring, crate::el::FocusAsk::WhenShown));
@@ -498,7 +498,7 @@ impl RuntimeCore {
         }
         None
     }
-    pub(super) fn tab_order(&self) -> Vec<usize> {
+    pub(in crate::runtime) fn tab_order(&self) -> Vec<usize> {
         let all: Vec<_> = (0..self.tree.nodes.len()).filter(|&i| self.can_focus(i) && self.tree.nodes[i].focus.order >= 0).collect();
         let mut order: Vec<_> = all.iter().copied().filter(|&i| {
             let Some(g) = self.focus_group(i) else { return true; };
@@ -567,7 +567,7 @@ impl RuntimeCore {
         order.into_iter().find(|&j| label(j).starts_with(&prefix))
     }
     /// `shown`: the focus highlight was visible before this key arrived.
-    pub(super) fn focus_key(&mut self, app: &mut dyn AppDriver, ev: &KeyEvent, shown: bool, tx: &mut Tx) -> bool {
+    pub(in crate::runtime) fn focus_key(&mut self, app: &mut dyn AppDriver, ev: &KeyEvent, shown: bool, tx: &mut Tx) -> bool {
         if ev.mods.cmd || ev.mods.ctrl || ev.mods.alt || ev.mods.logo { return false; }
         // Activations (dismiss, press, open) fire once per press. Their repeats are consumed so
         // they reach nothing else; navigation below keeps repeating.
@@ -710,7 +710,7 @@ impl RuntimeCore {
 
     /// In a group whose selection follows focus, focus follows selection too: when the app
     /// selects another item (a shortcut, say), focus in that group moves to it.
-    pub(super) fn sync_follows(&mut self, app: &mut dyn AppDriver) {
+    pub(in crate::runtime) fn sync_follows(&mut self, app: &mut dyn AppDriver) {
         let Some(i) = self.focused_index() else { return };
         if self.tree.nodes[i].input.is_some() || self.tree.nodes[i].focus.selected { return; }
         let Some(g) = self.focus_group(i).filter(|&g| self.tree.nodes[g].focus.follows) else { return };

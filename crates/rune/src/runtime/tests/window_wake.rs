@@ -8,8 +8,8 @@ fn window_frame_requests_take_the_change_spring() {
         rt.update(move |_, tx| f(tx));
         rt.host.window_frame.take().unwrap().spring
     };
-    assert_eq!(spring(&mut rt, |tx| tx.resize_window((1.0, 2.0))), Some(motion::DEFAULT));
-    assert_eq!(spring(&mut rt, |tx| { tx.motion(motion::SNAP); tx.resize_window((1.0, 2.0)) }), Some(motion::SNAP));
+    assert_eq!(spring(&mut rt, |tx| tx.resize_window((1.0, 2.0))), Some(crate::tok::motion::DEFAULT));
+    assert_eq!(spring(&mut rt, |tx| { tx.motion(crate::tok::motion::SNAP); tx.resize_window((1.0, 2.0)) }), Some(crate::tok::motion::SNAP));
     assert_eq!(spring(&mut rt, |tx| { tx.instant(); tx.resize_window((1.0, 2.0)) }), None);
     assert_eq!(spring(&mut rt, |tx| tx.resize_window_instant((1.0, 2.0))), None);
     rt.set_system_reduced_motion(true);

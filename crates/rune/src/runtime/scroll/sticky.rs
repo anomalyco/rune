@@ -9,14 +9,14 @@ use super::*;
 use crate::el::StickyEdge;
 
 /// No viewport band and no parent box: nothing to stick within.
-pub(super) const UNBOUNDED: [f32; 8] = [f32::NEG_INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::INFINITY];
+pub(in crate::runtime) const UNBOUNDED: [f32; 8] = [f32::NEG_INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::INFINITY];
 
 /// Points of shift over which `El::stuck_shadow` fades in.
-pub(super) const SHADOW_RAMP: f32 = 8.0;
+pub(in crate::runtime) const SHADOW_RAMP: f32 = 8.0;
 
 /// One `Tx::keep_on_screen` anchor captured before a commit.
 #[derive(Clone)]
-pub(super) struct Keep {
+pub(in crate::runtime) struct Keep {
     pub path: String,
     pub viewport: String,
     pub was: f32,
@@ -31,7 +31,7 @@ pub(super) struct Keep {
 /// bounded by the bottom of the growth row it's drawn in rather than its parent's new layout, so
 /// the rows under it fold up to it before the scroll moves, on the same frame.
 #[derive(Clone)]
-pub(super) struct Hold {
+pub(in crate::runtime) struct Hold {
     pub path: String,
     pub inset: f32,
 }
@@ -39,7 +39,7 @@ pub(super) struct Hold {
 /// One `Tx::scroll_into_view` or `Tx::scroll_center` request that follows its target while the
 /// viewport's subtree moves.
 #[derive(Clone)]
-pub(super) struct Reveal {
+pub(in crate::runtime) struct Reveal {
     pub scope: Option<String>,
     pub key: String,
     pub viewport: String,
@@ -293,7 +293,7 @@ mod tests {
 }
 
 /// Node `i`'s drawn top below viewport `s`'s top, in unscaled viewport points.
-pub(super) fn keep_y(drawn: &[[f32; 4]], drawn_scale: &[f32], i: usize, s: usize) -> f32 {
+pub(in crate::runtime) fn keep_y(drawn: &[[f32; 4]], drawn_scale: &[f32], i: usize, s: usize) -> f32 {
     let scale = drawn_scale.get(s).copied().unwrap_or(1.0).max(1e-4);
     (drawn[i][1] - drawn[s][1]) / scale
 }
@@ -307,7 +307,7 @@ fn vertical_viewport(nodes: &[Node], i: usize) -> Option<usize> {
 /// How far a sticky box with edges `top`, `bottom`, `left` and `right` moves from where
 /// scrolling put it, along the edge's axis. `frame` holds its viewport's top and bottom, then
 /// its parent's content box top and bottom, then the same four for the horizontal axis.
-pub(super) fn shift(edge: StickyEdge, inset: f32, [top, bottom, left, right]: [f32; 4], frame: [f32; 8]) -> f32 {
+pub(in crate::runtime) fn shift(edge: StickyEdge, inset: f32, [top, bottom, left, right]: [f32; 4], frame: [f32; 8]) -> f32 {
     let [band_top, band_bottom, box_top, box_bottom, band_left, _, _, box_right] = frame;
     let d = match edge {
         StickyEdge::Left => (band_left + inset - left).min(box_right - right).max(0.0),
@@ -319,7 +319,7 @@ pub(super) fn shift(edge: StickyEdge, inset: f32, [top, bottom, left, right]: [f
 
 /// Target rect of node `j` after its scroll viewports' offsets and any sticky shift on `j` or
 /// its ancestors, for `El::anchored`.
-pub(super) fn anchored_target(nodes: &[Node], scrolls: &HashMap<NodeId, ScrollState>, j: usize, viewport: (f32, f32)) -> [f32; 4] {
+pub(in crate::runtime) fn anchored_target(nodes: &[Node], scrolls: &HashMap<NodeId, ScrollState>, j: usize, viewport: (f32, f32)) -> [f32; 4] {
     let mut t = nodes[j].target;
     for [ox, oy] in scroll_offsets(scrolls, nodes, j) {
         t[0] -= ox;
@@ -399,7 +399,7 @@ impl RuntimeCore {
     /// Replay just one inherited fade edge without the nearest viewport's content-aware
     /// fade. Explicit clips inside it and fades outside it still apply. Recursion follows
     /// parents already painted this frame and needs no scratch allocation.
-    pub(super) fn sticky_fade(&self, i: usize, viewport: usize, slot: usize, paint: bool) -> (f32, f32) {
+    pub(in crate::runtime) fn sticky_fade(&self, i: usize, viewport: usize, slot: usize, paint: bool) -> (f32, f32) {
         if i == viewport {
             let up = self.tree.nodes[i].parent.map_or(Inh::default(), |p| self.paint.inh_scratch[p]);
             return if paint { (up.paint_fade[slot], up.paint_fade_origin[slot]) }
@@ -426,13 +426,13 @@ impl RuntimeCore {
     }
 
     /// The nearest vertical scroll viewport around node `i`.
-    pub(super) fn viewport_of(&self, i: usize) -> Option<usize> {
+    pub(in crate::runtime) fn viewport_of(&self, i: usize) -> Option<usize> {
         vertical_viewport(&self.tree.nodes, i)
     }
 
     /// Records where each `Tx::keep_on_screen` element showed on the last frame, before the
     /// commit moves it.
-    pub(super) fn capture_keeps(&mut self, tx: &mut Tx) {
+    pub(in crate::runtime) fn capture_keeps(&mut self, tx: &mut Tx) {
         self.anchor_keeps(tx);
         if tx.keep_on_screen.is_empty() { return; }
         let keys = std::mem::take(&mut tx.keep_on_screen);
@@ -474,7 +474,7 @@ impl RuntimeCore {
     }
 
     /// Whether a `Tx::keep_on_screen` holds a stuck header (`Hold`).
-    pub(super) fn holding(&self) -> bool {
+    pub(in crate::runtime) fn holding(&self) -> bool {
         self.scroll.requests.keeps().any(|k| k.hold.is_some())
     }
 
@@ -486,7 +486,7 @@ impl RuntimeCore {
 
     /// Node `i`'s sticky edge, inset and whether the inset counts from its bottom: a `Hold`'s,
     /// else its own.
-    pub(super) fn sticky_of(&self, i: usize) -> Option<(StickyEdge, f32, bool)> {
+    pub(in crate::runtime) fn sticky_of(&self, i: usize) -> Option<(StickyEdge, f32, bool)> {
         if let Some(h) = self.hold_of(i) { return Some((StickyEdge::Top, h.inset, false)); }
         self.tree.nodes[i].sticky.as_ref().and_then(|s| Some((s.edge?, s.inset, s.tail)))
     }
@@ -494,7 +494,7 @@ impl RuntimeCore {
     /// `El::stuck_fade`: how much of node `i`'s children show, drawn with its top at `drawn`
     /// (a frame point, `dy` the offset its siblings draw at): whole until the next sticky-top
     /// sibling's top comes within `lead + span` of it, gone at `lead`.
-    pub(super) fn stuck_fade(&self, i: usize, drawn: f32, dy: f32) -> f32 {
+    pub(in crate::runtime) fn stuck_fade(&self, i: usize, drawn: f32, dy: f32) -> f32 {
         let n = &self.tree.nodes[i];
         let Some([lead, span]) = n.sticky.as_ref().and_then(|s| s.fade) else { return 1.0 };
         let next = (i + 1..self.tree.nodes.len())
@@ -509,7 +509,7 @@ impl RuntimeCore {
 
     /// The bands and box node `i` sticks within along `edge` (see `shift`), from its ancestors'
     /// drawn places this frame, and the viewport it sticks to.
-    pub(super) fn sticky_frame_of(&self, i: usize, edge: StickyEdge) -> ([f32; 8], Option<usize>) {
+    pub(in crate::runtime) fn sticky_frame_of(&self, i: usize, edge: StickyEdge) -> ([f32; 8], Option<usize>) {
         let n = &self.tree.nodes[i];
         let mut frame = n.parent.map_or(UNBOUNDED, |pr| self.scroll.sticky_frame[pr]);
         let horizontal = edge == StickyEdge::Left;
@@ -548,7 +548,7 @@ impl RuntimeCore {
     /// Scrolls each kept element's viewport so the element's top lands where it showed before
     /// the commit, clamped to the content, re-pinning a `stick_bottom` end, and remounting any
     /// virtual rows the jump brings into view.
-    pub(super) fn apply_keeps(&mut self, app: &mut dyn AppDriver) {
+    pub(in crate::runtime) fn apply_keeps(&mut self, app: &mut dyn AppDriver) {
         if !self.scroll.requests.has_keeps() { return; }
         let mut keeps = self.scroll.requests.take_keeps();
         for pass in 0..4 {
@@ -594,7 +594,7 @@ impl RuntimeCore {
 
     /// Compensate this frame's drawn displacement, in viewport coordinates. Sticky
     /// clamping may absorb part of a correction; the caller permits a bounded repaint.
-    pub(super) fn follow_keeps(&mut self) -> bool {
+    pub(in crate::runtime) fn follow_keeps(&mut self) -> bool {
         if self.scroll.requests.is_empty() { return false; }
         self.end_takes_over();
         let mut moved = false;
@@ -668,12 +668,12 @@ impl RuntimeCore {
     }
 
     /// A user or explicit scroll ends the holds and reveals that would pull the view back.
-    pub(super) fn drop_scroll_holds(&mut self) {
+    pub(in crate::runtime) fn drop_scroll_holds(&mut self) {
         self.scroll.requests.step(requests::Event::Cancel);
     }
 
     /// Colour, hover or decorative motion must not extend the anchor's lifetime.
-    pub(super) fn finish_keeps(&mut self) {
+    pub(in crate::runtime) fn finish_keeps(&mut self) {
         if self.scroll.requests.is_empty() { return; }
         let mut requests = std::mem::take(&mut self.scroll.requests);
         let animating = |viewport: &str| self.tree.nodes.iter().any(|n| {
@@ -711,7 +711,7 @@ impl RuntimeCore {
     /// What a reveal of row `key` in viewport `path` must leave to stuck headers: `None` when
     /// the row is, or is inside, a header stuck in view (it shows already), else the height
     /// stuck headers cover at the viewport's top, which the reveal keeps the row clear of.
-    pub(super) fn stuck_cover(&self, path: &str, key: &str) -> Option<f64> {
+    pub(in crate::runtime) fn stuck_cover(&self, path: &str, key: &str) -> Option<f64> {
         if !self.tree.has_sticky || self.scroll.stuck.len() != self.tree.nodes.len() || self.paint.drawn.len() != self.tree.nodes.len() { return Some(0.0) }
         let Some(s) = self.tree.nodes.iter().position(|n| n.path == path) else { return Some(0.0) };
         let view = self.paint.drawn[s];

@@ -20,14 +20,14 @@ use super::*;
 static EPOCH: AtomicU32 = AtomicU32::new(1);
 
 /// A new commit epoch for a node built from its element.
-pub(super) fn next_epoch() -> u32 {
+pub(in crate::runtime) fn next_epoch() -> u32 {
     EPOCH.fetch_add(1, Ordering::Relaxed)
 }
 
 const NONE: u32 = u32::MAX;
 
 #[derive(Clone, Copy)]
-pub(super) struct PaintRec {
+pub(in crate::runtime) struct PaintRec {
     id: NodeId,
     epoch: u32,
     /// Its index less its parent's (0 for a root).
@@ -57,8 +57,8 @@ impl Default for PaintRec {
 }
 
 #[derive(Default)]
-pub(super) struct PaintKeep {
-    pub(super) cycles: cycle::CyclePaint,
+pub(in crate::runtime) struct PaintKeep {
+    pub(in crate::runtime) cycles: cycle::CyclePaint,
     recs: Vec<PaintRec>,
     prev: Vec<PaintRec>,
     instances: Vec<Instance>,
@@ -76,7 +76,7 @@ pub(super) struct PaintKeep {
     pages: Vec<(u16, u32)>,
     prev_pages: Vec<(u16, u32)>,
     /// Nodes presented again since the last paint.
-    pub(super) moved: Vec<NodeId>,
+    pub(in crate::runtime) moved: Vec<NodeId>,
     moved_at: Vec<bool>,
     /// The window's shared paint state at the last paint, when it could be kept from.
     key: Option<u64>,
@@ -84,7 +84,7 @@ pub(super) struct PaintKeep {
     on: bool,
     recording: bool,
     /// Frames stepped, and the one the last paint ran in: a second paint in a frame paints all.
-    pub(super) frame: u64,
+    pub(in crate::runtime) frame: u64,
     painted: u64,
     /// This paint's nodes: last paint's index of each, one past each subtree, whether each
     /// subtree is as it was.
@@ -102,7 +102,7 @@ pub(super) struct PaintKeep {
     kept: usize,
     why: [usize; 6],
     /// The next paint paints everything (the raster check's fresh paint).
-    pub(super) off_once: bool,
+    pub(in crate::runtime) off_once: bool,
 }
 
 fn disabled() -> bool {
@@ -128,7 +128,7 @@ fn bits(h: &mut rune_motion::Fx, v: &[f32]) {
 }
 
 /// The bits of what a node inherits.
-pub(super) fn inh_key(p: &Inh) -> u64 {
+pub(in crate::runtime) fn inh_key(p: &Inh) -> u64 {
     let mut h = rune_motion::Fx::default();
     bits(&mut h, &[p.opacity, p.paint_opacity, p.first_fade, p.scale, p.blur, p.dy, p.dx, p.group, p.hit_opacity]);
     for a in [p.clip, p.fade, p.fade_origin, p.paint_clip, p.paint_fade, p.paint_fade_origin, p.group_rect] {
@@ -158,7 +158,7 @@ pub(super) fn inh_key(p: &Inh) -> u64 {
 impl RuntimeCore {
     /// Before a paint clears them: last paint's output and side tables become the record copies
     /// come from.
-    pub(super) fn keep_swap(&mut self) {
+    pub(in crate::runtime) fn keep_swap(&mut self) {
         let k = &mut self.paint.keep;
         k.cycles.begin(self.commit.commits);
         std::mem::swap(&mut self.instances, &mut k.instances);
@@ -197,7 +197,7 @@ impl RuntimeCore {
 
     /// Whether this paint copies what it can, from the window's shared state, and if so which
     /// of its subtrees are as last paint left them.
-    pub(super) fn keep_begin(&mut self, tree_order: bool, vp: [f32; 4], default_ring: Option<usize>, sel: &[(usize, usize, usize)], marks: &[(usize, usize, usize)]) {
+    pub(in crate::runtime) fn keep_begin(&mut self, tree_order: bool, vp: [f32; 4], default_ring: Option<usize>, sel: &[(usize, usize, usize)], marks: &[(usize, usize, usize)]) {
         let second = self.paint.keep.painted == self.paint.keep.frame;
         self.paint.keep.painted = self.paint.keep.frame;
         // Paint goes depth first, siblings in paint order (`update_layer_paint_order`), so a subtree
@@ -309,7 +309,7 @@ impl RuntimeCore {
     }
 
     /// Opens node `i`'s record, before it paints anything.
-    pub(super) fn keep_open(&mut self, i: usize, glyphs: usize, sel: &[(usize, usize, usize)], marks: &[(usize, usize, usize)]) {
+    pub(in crate::runtime) fn keep_open(&mut self, i: usize, glyphs: usize, sel: &[(usize, usize, usize)], marks: &[(usize, usize, usize)]) {
         self.slide_node_opens(i);
         if !self.paint.keep.recording { return; }
         let rec = PaintRec {
@@ -336,7 +336,7 @@ impl RuntimeCore {
 
     /// Node `i` inherits `pinh`: copies its subtree from the last paint when that's what it would
     /// paint, and returns how many nodes it holds.
-    pub(super) fn keep_or_paint(&mut self, i: usize, pinh: &Inh, glyph_count: &mut usize) -> Option<usize> {
+    pub(in crate::runtime) fn keep_or_paint(&mut self, i: usize, pinh: &Inh, glyph_count: &mut usize) -> Option<usize> {
         // Only a node that can be copied needs what it inherits.
         if !self.paint.keep.recording || !self.paint.keep.recs[i].keep { return None; }
         let inh = inh_key(pinh);
@@ -421,7 +421,7 @@ impl RuntimeCore {
 
     /// Node `i` painted itself (not yet its children): what it emitted, and what painting it
     /// found, say whether it can be copied.
-    pub(super) fn keep_painted(&mut self, i: usize, painted_ok: bool) {
+    pub(in crate::runtime) fn keep_painted(&mut self, i: usize, painted_ok: bool) {
         let k = &mut self.paint.keep;
         if !k.recording { return; }
         let start = k.recs[i].inst[0] as usize;
@@ -444,7 +444,7 @@ impl RuntimeCore {
 
     /// Closes the records of the open subtrees node `next`'s parent isn't inside (all of them
     /// for None), with the layers they opened.
-    pub(super) fn keep_close(&mut self, parent: Option<Option<usize>>, layers: &mut Vec<(usize, usize, usize)>, active_cache: &mut Option<ActiveCache>, glyph_count: &mut usize) {
+    pub(in crate::runtime) fn keep_close(&mut self, parent: Option<Option<usize>>, layers: &mut Vec<(usize, usize, usize)>, active_cache: &mut Option<ActiveCache>, glyph_count: &mut usize) {
         if !self.paint.keep.recording { return; }
         while let Some(&r) = self.paint.keep.open.last() {
             if let Some(Some(p)) = parent && r <= p {
@@ -494,7 +494,7 @@ impl RuntimeCore {
 
 
     /// The end of a paint: what was moved is painted, and what wasn't kept is said.
-    pub(super) fn keep_end(&mut self) {
+    pub(in crate::runtime) fn keep_end(&mut self) {
         self.close_slide();
         let k = &mut self.paint.keep;
         k.moved.clear();

@@ -21,7 +21,7 @@ impl RuntimeCore {
     /// Each request moves the viewport keyed (or pathed) by its key, or the nearest one around
     /// it that scrolls an axis it asks for, clamped to its content. Axes the viewport doesn't
     /// scroll are left alone.
-    pub(super) fn scroll_to_offsets(&mut self, app: &mut dyn AppDriver, requests: Vec<ScrollRequest>) {
+    pub(in crate::runtime) fn scroll_to_offsets(&mut self, app: &mut dyn AppDriver, requests: Vec<ScrollRequest>) {
         // This frame's commit may have changed the content: measure the extent first.
         self.step_scroll(0.0);
         let animate = !self.reduced_motion && !self.settled;
@@ -161,7 +161,7 @@ impl RuntimeCore {
     /// Returns the layout's end while rows are still moving, which a viewport landed there
     /// waits for before it sticks to the end, so the presented end's last fraction of a point
     /// doesn't lift it back up.
-    pub(super) fn ease_to_shrunk_end(&mut self, i: usize, overflow: f64) -> Option<f64> {
+    pub(in crate::runtime) fn ease_to_shrunk_end(&mut self, i: usize, overflow: f64) -> Option<f64> {
         let c = self.scroll_stack(i)?;
         let stack = self.motion.stacks.get(&self.tree.nodes[c].id)?;
         let moving = stack.moving || !stack.closing.is_empty();
@@ -190,7 +190,7 @@ impl RuntimeCore {
 /// end faster than ω times the distance left overshoots), so a glide sent somewhere nearer
 /// stops there on one path instead of bouncing. Retargets that keep their speed, as key
 /// repeat sending a glide one row on at a time does, run as one motion rather than steps.
-pub(super) fn retarget_v(spring: Spring, offset: f64, v: f32, to: f64) -> f32 {
+pub(in crate::runtime) fn retarget_v(spring: Spring, offset: f64, v: f32, to: f64) -> f32 {
     let d = (offset - to) as f32;
     let most = spring.omega() * d.abs();
     if v * d < 0.0 && v.abs() > most { -d.signum() * most } else { v }
@@ -200,7 +200,7 @@ pub(super) fn retarget_v(spring: Spring, offset: f64, v: f32, to: f64) -> f32 {
 const LAND: f32 = 0.1;
 
 /// Steps a glide on one axis toward `to` on `spring`. Returns whether it is still moving.
-pub(super) fn glide_axis(spring: Spring, offset: &mut f64, glide: &mut Option<f32>, to: f64, dt: f32) -> bool {
+pub(in crate::runtime) fn glide_axis(spring: Spring, offset: &mut f64, glide: &mut Option<f32>, to: f64, dt: f32) -> bool {
     let Some(v) = *glide else { return false };
     // Sample the displacement, not the absolute offset: f32 loses sub-point precision far down.
     let (d, v) = spring.sample((*offset - to) as f32, v, 0.0, dt);
@@ -217,8 +217,8 @@ pub(super) fn glide_axis(spring: Spring, offset: &mut f64, glide: &mut Option<f3
 
 impl ScrollState {
     /// The spring the running glide steps on.
-    pub(super) fn glide_spring(&self) -> Spring {
-        self.spring.unwrap_or(motion::GLIDE)
+    pub(in crate::runtime) fn glide_spring(&self) -> Spring {
+        self.spring.unwrap_or(crate::tok::motion::GLIDE)
     }
 
     /// A hand, its momentum or a glide is moving the content this frame: what
@@ -228,14 +228,14 @@ impl ScrollState {
     }
 
     /// It follows its content's bottom.
-    pub(super) fn pinned(&self) -> bool { self.mode.pinned() }
+    pub(in crate::runtime) fn pinned(&self) -> bool { self.mode.pinned() }
 
     /// The running glide's speed (points a second), while one runs.
-    pub(super) fn glide(&self) -> Option<f32> { self.mode.glide() }
+    pub(in crate::runtime) fn glide(&self) -> Option<f32> { self.mode.glide() }
 
     /// Where the running glide heads, when that isn't the bottom.
     #[cfg(test)]
-    pub(super) fn glide_to(&self) -> Option<f64> {
+    pub(in crate::runtime) fn glide_to(&self) -> Option<f64> {
         match self.mode {
             ScrollMode::Glide { to, .. } => to.offset(),
             _ => None,
@@ -243,56 +243,56 @@ impl ScrollState {
     }
 
     /// Its momentum (points a second), 0 unless coasting.
-    pub(super) fn coast(&self) -> f32 { self.mode.coast() }
+    pub(in crate::runtime) fn coast(&self) -> f32 { self.mode.coast() }
 
     /// A hand or its momentum moved it in the last step.
-    pub(super) fn scrolling(&self) -> bool { self.mode.hand().scrolling }
+    pub(in crate::runtime) fn scrolling(&self) -> bool { self.mode.hand().scrolling }
 
     /// A hand or an app moved it since the last step.
-    pub(super) fn direct(&self) -> bool { self.mode.hand().direct }
+    pub(in crate::runtime) fn direct(&self) -> bool { self.mode.hand().direct }
 
     /// A hand scrolled while the growth stack moved.
-    pub(super) fn shrink_cut(&self) -> bool { self.mode.hand().shrink_cut }
+    pub(in crate::runtime) fn shrink_cut(&self) -> bool { self.mode.hand().shrink_cut }
 
     /// The growth stack's layout end while its rows still move.
-    pub(super) fn laid(&self) -> Option<f64> { self.mode.hand().laid }
+    pub(in crate::runtime) fn laid(&self) -> Option<f64> { self.mode.hand().laid }
 
     /// A hand or an app put the offset where it is.
-    pub(super) fn moved(&mut self) { let _ = mode::step(&mut self.mode, mode::Event::Moved); }
+    pub(in crate::runtime) fn moved(&mut self) { let _ = mode::step(&mut self.mode, mode::Event::Moved); }
 
     /// The viewport was concealed: nothing moved it, whatever a hand did before.
-    pub(super) fn still(&mut self) { let _ = mode::step(&mut self.mode, mode::Event::Still); }
+    pub(in crate::runtime) fn still(&mut self) { let _ = mode::step(&mut self.mode, mode::Event::Still); }
 
     /// Follow the bottom from here (a pinned viewport keeps how its end last stepped).
-    pub(super) fn pin(&mut self) { let _ = mode::step(&mut self.mode, mode::Event::Pin); }
+    pub(in crate::runtime) fn pin(&mut self) { let _ = mode::step(&mut self.mode, mode::Event::Pin); }
 
     /// Stop following the bottom, where it stands.
-    pub(super) fn unpin(&mut self) { let _ = mode::step(&mut self.mode, mode::Event::Unpin); }
+    pub(in crate::runtime) fn unpin(&mut self) { let _ = mode::step(&mut self.mode, mode::Event::Unpin); }
 
     /// Momentum and any glide stop; a pinned viewport stays pinned.
-    pub(super) fn halt(&mut self) { let _ = mode::step(&mut self.mode, mode::Event::Halt); }
+    pub(in crate::runtime) fn halt(&mut self) { let _ = mode::step(&mut self.mode, mode::Event::Halt); }
 
     /// A hand or an app put the offset where it is: momentum and any glide stop, and a
     /// stick-to-bottom viewport (`stick`) follows its end only if it sits there.
     /// An app's keep moved the offset (rows above measured, an anchor held what's on screen): a
     /// wheel's ease goes on, moved with it on its next step (`WheelCurve::follow`), as Chromium's
     /// `ApplyAdjustment` moves a running smooth scroll; anything else lands as `Self::land` does.
-    pub(super) fn keep_land(&mut self, stick: bool) { if self.mode.wheel().is_none() { self.land(stick) } }
+    pub(in crate::runtime) fn keep_land(&mut self, stick: bool) { if self.mode.wheel().is_none() { self.land(stick) } }
 
-    pub(super) fn land(&mut self, stick: bool) {
+    pub(in crate::runtime) fn land(&mut self, stick: bool) {
         if stick && self.offset >= self.max - 0.5 { self.pin() } else { let _ = mode::step(&mut self.mode, mode::Event::Rest); }
     }
 
     /// An app's instant scroll landed less than `scroll_nudge::NUDGE_HOLD` ago: content moved
     /// under a still pointer, so hover waits as it does for a glide it stepped itself.
-    pub(super) fn hold_at(&self, now: f64) -> bool { self.nudge.hold_at(now) }
+    pub(in crate::runtime) fn hold_at(&self, now: f64) -> bool { self.nudge.hold_at(now) }
 }
 
 impl RuntimeCore {
     /// Steps the holds an app's instant scrolls armed, and returns the earliest due one still
     /// pending: the frame that carries it resolves hover at the pointer. A held nudge asks for
     /// no frame itself, so the frame's end wakes for that one, however often the app re-armed it.
-    pub(super) fn step_nudges(&mut self) -> Option<f64> {
+    pub(in crate::runtime) fn step_nudges(&mut self) -> Option<f64> {
         let now = self.clock;
         let mut due: Option<f64> = None;
         for st in self.scroll.scrolls.values_mut() {

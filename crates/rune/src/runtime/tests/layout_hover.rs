@@ -197,7 +197,7 @@ fn a_move_before_the_next_tick_sees_layout_just_set_moving() {
     // A spring a commit between frames started (a scroll's), not yet ticked.
     let mut rt = resting(Rows::default());
     let id = rt.tree.nodes.iter().find(|n| n.named("r3")).unwrap().id;
-    rt.scene.animate(id, prop::OFFSET, rune_motion::Vec2::new(0.0, 40.0), motion::SNAPPY);
+    rt.scene.animate(id, prop::OFFSET, rune_motion::Vec2::new(0.0, 40.0), crate::tok::motion::SNAPPY);
     rt.pointer_move(100.0, 111.0);
     assert!(rt.pointer.hover_hold.released(), "an untouched spring");
     // A growing element's height.

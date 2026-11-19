@@ -7,13 +7,13 @@ use crate::text::LinkPaint;
 /// The focused text element's focused link. A press's link is the press's
 /// (`capture::Held::link`, `capture::Secondary::Held`).
 #[derive(Default)]
-pub(super) struct LinkState {
+pub(in crate::runtime) struct LinkState {
     focus: Option<usize>,
 }
 
 /// Where node `n`'s text starts inside its border box `rect` (points, x0 y0 x1 y1), its text
 /// drawn `k` times its size.
-pub(super) fn origin(n: &Node, spec: &TextSpec, flow: TextFlow<'_>, rect: [f32; 4], s: f32, k: f32) -> [f32; 2] {
+pub(in crate::runtime) fn origin(n: &Node, spec: &TextSpec, flow: TextFlow<'_>, rect: [f32; 4], s: f32, k: f32) -> [f32; 2] {
     let x = text_x(spec, rect[0] + n.inset[0] * k, rect[2] - n.inset[2] * k, text_width(flow.full_width() * k) / s, flow.flow());
     [x, rect[1] + n.inset[1] * k]
 }
@@ -37,16 +37,16 @@ fn boxes(layout: &Layout<Ink>, len: usize, start: u32, end: u32) -> Vec<(parley:
 }
 
 /// The link paints to draw this frame, by byte range, with the resting span's `bg_pad`.
-pub(super) struct LinkFx(Vec<(u32, u32, LinkPaint, f32, bool)>);
+pub(in crate::runtime) struct LinkFx(Vec<(u32, u32, LinkPaint, f32, bool)>);
 
 impl LinkFx {
-    pub(super) fn is_empty(&self) -> bool { self.0.is_empty() }
+    pub(in crate::runtime) fn is_empty(&self) -> bool { self.0.is_empty() }
 
-    pub(super) fn glyph_color(&self, byte: u32) -> Option<Color> {
+    pub(in crate::runtime) fn glyph_color(&self, byte: u32) -> Option<Color> {
         self.0.iter().find(|(a, b, p, _, _)| byte >= *a && byte < *b && p.color.is_some()).and_then(|(_, _, p, _, _)| p.color)
     }
 
-    pub(super) fn decos_piece(&self, piece: &crate::text::Piece<'_>, len: usize, s: f32, origin: [f32; 2], out: &mut Vec<PaintedDeco>) {
+    pub(in crate::runtime) fn decos_piece(&self, piece: &crate::text::Piece<'_>, len: usize, s: f32, origin: [f32; 2], out: &mut Vec<PaintedDeco>) {
         if self.is_empty() { return; }
         if piece.is_whole() { return self.decos(piece.layout, len, s, origin, out); }
         let clipped: Vec<_> = self.0.iter().filter_map(|&(a, b, p, pad, rings)| {
@@ -57,7 +57,7 @@ impl LinkFx {
     }
 
     /// Backgrounds and underlines (device px, layout top-left at `origin`).
-    pub(super) fn decos(&self, layout: &Layout<Ink>, len: usize, s: f32, origin: [f32; 2], out: &mut Vec<PaintedDeco>) {
+    pub(in crate::runtime) fn decos(&self, layout: &Layout<Ink>, len: usize, s: f32, origin: [f32; 2], out: &mut Vec<PaintedDeco>) {
         for &(a, b, p, bg_pad, has_rings) in &self.0 {
             for (bb, line) in boxes(layout, len, a, b) {
                 let (x0, w) = (origin[0] + bb.x0 as f32, (bb.x1 - bb.x0) as f32);
@@ -135,7 +135,7 @@ impl LinkFx {
 
 impl RuntimeCore {
     /// Node `i`'s border box as drawn this frame (points, x0 y0 x1 y1).
-    pub(super) fn drawn_box(&self, i: usize) -> [f32; 4] {
+    pub(in crate::runtime) fn drawn_box(&self, i: usize) -> [f32; 4] {
         self.paint.drawn.get(i).filter(|d| d[2] > 0.0 || d[3] > 0.0)
             .map_or(self.tree.nodes[i].target, |d| [d[0], d[1], d[0] + d[2], d[1] + d[3]])
     }
@@ -160,7 +160,7 @@ impl RuntimeCore {
     }
 
     /// Node `i`'s link line boxes in window points (x0, y0, x1, y1) for border box `rect`.
-    pub(super) fn link_boxes(&self, i: usize, rect: [f32; 4]) -> Vec<(usize, [f32; 4])> {
+    pub(in crate::runtime) fn link_boxes(&self, i: usize, rect: [f32; 4]) -> Vec<(usize, [f32; 4])> {
         self.link_boxes_in(&self.tree.nodes, i, rect, self.paint.drawn_scale.get(i).copied().unwrap_or(1.0))
     }
 
@@ -172,7 +172,7 @@ impl RuntimeCore {
     }
 
     /// The link of node `i` under window point (x, y).
-    pub(super) fn link_at(&self, i: usize, x: f32, y: f32) -> Option<usize> {
+    pub(in crate::runtime) fn link_at(&self, i: usize, x: f32, y: f32) -> Option<usize> {
         if self.tree.nodes[i].text.as_ref().is_none_or(|t| t.cold.links.is_empty()) { return None; }
         let (rect, x, y) = self.unturned_box_and_point(i, x, y);
         self.link_boxes(i, rect).into_iter()
@@ -181,7 +181,7 @@ impl RuntimeCore {
 
     /// Hit rects for node `i`: only its links' boxes, clipped like `clipped`. False when it
     /// has no links, or is selectable (it takes its whole box).
-    pub(super) fn push_link_hits(&mut self, i: usize, rect: [f32; 4], clipped: [f32; 4]) -> bool {
+    pub(in crate::runtime) fn push_link_hits(&mut self, i: usize, rect: [f32; 4], clipped: [f32; 4]) -> bool {
         if self.tree.nodes[i].text.as_ref().is_none_or(|t| t.cold.links.is_empty() || t.selectable) { return false; }
         let id = self.tree.nodes[i].id;
         for (_, r) in self.link_boxes(i, rect) {
@@ -192,7 +192,7 @@ impl RuntimeCore {
     }
 
     /// Which of node `i`'s links are hovered, pressed and keyboard-focused.
-    pub(super) fn link_states(&self, i: usize) -> (Option<usize>, Option<usize>, Option<usize>) {
+    pub(in crate::runtime) fn link_states(&self, i: usize) -> (Option<usize>, Option<usize>, Option<usize>) {
         let path = &self.tree.nodes[i].path;
         let hovered = self.pointer.pos.filter(|_| self.pointer.hovered.as_deref() == Some(path))
             .and_then(|(x, y)| self.link_at(i, x, y));
@@ -202,7 +202,7 @@ impl RuntimeCore {
     }
 
     /// The paints node `i`'s links show this frame.
-    pub(super) fn link_fx(&self, i: usize) -> LinkFx {
+    pub(in crate::runtime) fn link_fx(&self, i: usize) -> LinkFx {
         let Some(spec) = self.tree.nodes[i].text.as_ref().filter(|t| !t.cold.links.is_empty()) else { return LinkFx(Vec::new()) };
         let (hovered, pressed, focused) = self.link_states(i);
         let mut fx = Vec::new();
@@ -227,7 +227,7 @@ impl RuntimeCore {
 
     /// Pointer up on text `path` of a press with `button` that began on its link `k`: ending on
     /// the same link activates it.
-    pub(super) fn link_up(&mut self, path: &str, k: usize, x: f32, y: f32, button: crate::PointerButton) {
+    pub(in crate::runtime) fn link_up(&mut self, path: &str, k: usize, x: f32, y: f32, button: crate::PointerButton) {
         let Some(i) = self.tree.nodes.iter().position(|n| n.path == path) else { return };
         if self.link_at(i, x, y) == Some(k) {
             self.frame.queue.push(Action::Link(path.to_owned(), k, button));
@@ -235,7 +235,7 @@ impl RuntimeCore {
     }
 
     /// Runs the `on_link` handler of node `path` for link `k`.
-    pub(super) fn press_link(&mut self, app: &mut dyn AppDriver, path: &str, k: usize, tx: &mut Tx) -> bool {
+    pub(in crate::runtime) fn press_link(&mut self, app: &mut dyn AppDriver, path: &str, k: usize, tx: &mut Tx) -> bool {
         let Some((f, id)) = self.node(path).and_then(|n| {
             let t = n.text.as_ref()?;
             Some((t.cold.on_link.clone()?, t.cold.links.get(k)?.id.clone()))
@@ -246,13 +246,13 @@ impl RuntimeCore {
     }
 
     /// Node `i`'s link under (x, y), if its text takes secondary presses on links.
-    pub(super) fn secondary_link_at(&self, i: usize, x: f32, y: f32) -> Option<usize> {
+    pub(in crate::runtime) fn secondary_link_at(&self, i: usize, x: f32, y: f32) -> Option<usize> {
         self.tree.nodes[i].text.as_ref()?.cold.on_link_secondary.as_ref()?;
         self.link_at(i, x, y)
     }
 
     /// Runs the `on_link_secondary` handler of node `path` for link `k`.
-    pub(super) fn secondary_press_link(&mut self, app: &mut dyn AppDriver, path: &str, k: usize, point: PointerEvent, tx: &mut Tx) -> bool {
+    pub(in crate::runtime) fn secondary_press_link(&mut self, app: &mut dyn AppDriver, path: &str, k: usize, point: PointerEvent, tx: &mut Tx) -> bool {
         let Some((f, id)) = self.node(path).and_then(|n| {
             let t = n.text.as_ref()?;
             Some((t.cold.on_link_secondary.clone()?, t.cold.links.get(k)?.id.clone()))
@@ -263,7 +263,7 @@ impl RuntimeCore {
     }
 
     /// Centre of the first drawn line box of the link whose id is `id`, in points.
-    pub(super) fn find_link(&self, id: &str) -> Option<(f32, f32)> {
+    pub(in crate::runtime) fn find_link(&self, id: &str) -> Option<(f32, f32)> {
         (0..self.tree.nodes.len()).filter(|&i| !self.subtree_exiting(i)).find_map(|i| {
             let k = self.tree.nodes[i].text.as_ref()?.cold.links.iter().position(|l| l.id == id)?;
             let (_, r) = self.link_boxes(i, self.drawn_box(i)).into_iter().find(|(j, _)| *j == k)?;
@@ -271,13 +271,13 @@ impl RuntimeCore {
         })
     }
 
-    pub(super) fn link_count(&self, i: usize) -> usize {
+    pub(in crate::runtime) fn link_count(&self, i: usize) -> usize {
         self.tree.nodes[i].text.as_ref().map_or(0, |t| t.cold.links.len())
     }
 
     /// Tab inside the focused text's links: moves to its next (or previous) link and returns
     /// true, or false at its last (first) link so Tab leaves it.
-    pub(super) fn link_tab(&mut self, backward: bool) -> bool {
+    pub(in crate::runtime) fn link_tab(&mut self, backward: bool) -> bool {
         let Some(i) = self.focused_index() else { return false };
         let count = self.link_count(i);
         let Some(k) = self.edit.links.focus.filter(|_| count > 0) else { return false };
@@ -287,35 +287,35 @@ impl RuntimeCore {
     }
 
     /// Tab focused node `i`: start at its first link, or its last going backward.
-    pub(super) fn enter_links(&mut self, i: usize, backward: bool) {
+    pub(in crate::runtime) fn enter_links(&mut self, i: usize, backward: bool) {
         let count = self.link_count(i);
         self.edit.links.focus = (count > 0).then(|| if backward { count - 1 } else { 0 });
     }
 
-    pub(super) fn blur_links(&mut self) {
+    pub(in crate::runtime) fn blur_links(&mut self) {
         self.edit.links.focus = None;
     }
 
     /// The focused text's focused link, if any (it may not be in range for that text).
-    pub(super) fn link_focus(&self) -> Option<usize> { self.edit.links.focus }
+    pub(in crate::runtime) fn link_focus(&self) -> Option<usize> { self.edit.links.focus }
 
     /// Focuses link `k` of the text about to take focus, as Tab into it does.
-    pub(super) fn set_link_focus(&mut self, k: usize) { self.edit.links.focus = Some(k); }
+    pub(in crate::runtime) fn set_link_focus(&mut self, k: usize) { self.edit.links.focus = Some(k); }
 
     /// Whether focused node `i` has a link focused, which takes Return.
-    pub(super) fn link_focused(&self, i: usize) -> bool {
+    pub(in crate::runtime) fn link_focused(&self, i: usize) -> bool {
         self.edit.links.focus.is_some_and(|k| k < self.link_count(i))
     }
 
     /// The id of focused node `i`'s focused link, which tools list as its own element.
-    pub(super) fn focused_link_id(&self, i: usize) -> Option<String> {
+    pub(in crate::runtime) fn focused_link_id(&self, i: usize) -> Option<String> {
         let k = self.edit.links.focus?;
         self.tree.nodes[i].text.as_ref()?.cold.links.get(k).map(|l| l.id.clone())
     }
 
     /// The Menu key on focused node `i`'s focused link: its `on_link_secondary`, at the
     /// bottom-left of its first line box.
-    pub(super) fn focused_link_menu(&mut self, app: &mut dyn AppDriver, i: usize, tx: &mut Tx) -> bool {
+    pub(in crate::runtime) fn focused_link_menu(&mut self, app: &mut dyn AppDriver, i: usize, tx: &mut Tx) -> bool {
         let Some(k) = self.edit.links.focus.filter(|&k| k < self.link_count(i)) else { return false };
         if self.tree.nodes[i].text.as_ref().is_none_or(|t| t.cold.on_link_secondary.is_none()) { return false; }
         let Some((_, r)) = self.link_boxes(i, self.drawn_box(i)).into_iter().find(|(j, _)| *j == k) else { return false };
@@ -325,7 +325,7 @@ impl RuntimeCore {
     }
 
     /// Enter or Space on a focused link presses it.
-    pub(super) fn link_key(&mut self, app: &mut dyn AppDriver, i: usize, tx: &mut Tx) -> bool {
+    pub(in crate::runtime) fn link_key(&mut self, app: &mut dyn AppDriver, i: usize, tx: &mut Tx) -> bool {
         let Some(k) = self.edit.links.focus.filter(|&k| k < self.link_count(i)) else { return false };
         let path = self.tree.nodes[i].path.clone();
         self.press_link(app, &path, k, tx);
@@ -333,7 +333,7 @@ impl RuntimeCore {
     }
 
     /// Reports each link as its own element after its text, which hands it its focus.
-    pub(super) fn link_elements(&self, elements: &mut Vec<ElementInfo>) {
+    pub(in crate::runtime) fn link_elements(&self, elements: &mut Vec<ElementInfo>) {
         for i in 0..self.tree.nodes.len() {
             let n = &self.tree.nodes[i];
             let Some(spec) = n.text.as_ref().filter(|t| !t.cold.links.is_empty()) else { continue };
@@ -385,11 +385,11 @@ impl RuntimeCore {
     }
 
     /// Node `i`'s highlight line boxes in window points (x0, y0, x1, y1) for border box `rect`.
-    pub(super) fn highlight_boxes(&self, i: usize, rect: [f32; 4]) -> Vec<(usize, [f32; 4])> {
+    pub(in crate::runtime) fn highlight_boxes(&self, i: usize, rect: [f32; 4]) -> Vec<(usize, [f32; 4])> {
         self.highlight_boxes_in(&self.tree.nodes, i, rect, self.paint.drawn_scale.get(i).copied().unwrap_or(1.0))
     }
 
-    pub(super) fn highlight_boxes_in(&self, nodes: &[Node], i: usize, rect: [f32; 4], z: f32) -> Vec<(usize, [f32; 4])> {
+    pub(in crate::runtime) fn highlight_boxes_in(&self, nodes: &[Node], i: usize, rect: [f32; 4], z: f32) -> Vec<(usize, [f32; 4])> {
         let n = &nodes[i];
         let Some(spec) = n.text.as_deref() else { return Vec::new() };
         if spec.cold.highlights.is_empty() || n.is_secure() { return Vec::new(); }
@@ -398,12 +398,12 @@ impl RuntimeCore {
 
     /// Unscrolled target rect `[x0, y0, x1, y1]` (in window points) and first node index for
     /// the highlight keyed `key` (or scoped `path/key`).
-    pub(super) fn highlight_target_in(&self, nodes: &[Node], scope: Option<&str>, key: &str) -> Option<(usize, [f32; 4])> {
+    pub(in crate::runtime) fn highlight_target_in(&self, nodes: &[Node], scope: Option<&str>, key: &str) -> Option<(usize, [f32; 4])> {
         self.highlight_target_with(nodes, self.key_index_for(nodes), scope, key)
     }
 
     /// [`Self::highlight_target_in`], looking only at the nodes `index` lists for `key`.
-    pub(super) fn highlight_target_with(&self, nodes: &[Node], index: Option<&super::key_index::KeyIndex>, scope: Option<&str>, key: &str) -> Option<(usize, [f32; 4])> {
+    pub(in crate::runtime) fn highlight_target_with(&self, nodes: &[Node], index: Option<&super::key_index::KeyIndex>, scope: Option<&str>, key: &str) -> Option<(usize, [f32; 4])> {
         let mut first_node = None;
         let mut union: Option<[f32; 4]> = None;
         let mut visit = |i: usize| {
@@ -432,7 +432,7 @@ impl RuntimeCore {
     }
 
     /// Centre of the first drawn line box of the highlight keyed `key`, in points.
-    pub(super) fn find_highlight(&self, key: &str) -> Option<(f32, f32)> {
+    pub(in crate::runtime) fn find_highlight(&self, key: &str) -> Option<(f32, f32)> {
         (0..self.tree.nodes.len()).filter(|&i| !self.subtree_exiting(i)).find_map(|i| {
             let n = &self.tree.nodes[i];
             let k = n.text.as_ref()?.cold.highlights.iter().position(|h| {
@@ -444,7 +444,7 @@ impl RuntimeCore {
     }
 
     /// Reports each text highlight as its own `"mark"` element after its text.
-    pub(super) fn highlight_elements(&self, elements: &mut Vec<ElementInfo>) {
+    pub(in crate::runtime) fn highlight_elements(&self, elements: &mut Vec<ElementInfo>) {
         if !self.tree.nodes.iter().any(|n| n.text.as_ref().is_some_and(|t| !t.cold.highlights.is_empty())) { return; }
         let text_elements: std::collections::HashMap<_, _> = elements.iter().enumerate().map(|(i, e)| (e.path.clone(), i)).collect();
         for i in 0..self.tree.nodes.len() {

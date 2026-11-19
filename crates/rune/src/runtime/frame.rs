@@ -260,7 +260,7 @@ impl RuntimeCore {
         if let Some(title) = tx.title.take() { self.host.window_title.set(title); }
         if let Some((text, how)) = tx.announce.take() { self.host.announcement.say(text, how); }
         if let Some(mut request) = tx.window_frame.take() {
-            request.spring = (request.animate && !tx.commit.snaps() && !self.reduced_motion).then(|| tx.motion.map_or(motion::DEFAULT, MotionSource::spring));
+            request.spring = (request.animate && !tx.commit.snaps() && !self.reduced_motion).then(|| tx.motion.map_or(crate::tok::motion::DEFAULT, MotionSource::spring));
             self.host.window_frame = Some(self.host.window_frame.unwrap_or_default().merge(request));
         }
         crate::clipboard::flush_memory(self);

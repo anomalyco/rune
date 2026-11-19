@@ -24,7 +24,7 @@ fn mark_warned(key: String) -> bool {
     WARNED.lock().unwrap().insert(key)
 }
 
-pub(super) fn collapsed_scrolls(taffy: &LayoutEngine, nodes: &[Node]) {
+pub(in crate::runtime) fn collapsed_scrolls(taffy: &LayoutEngine, nodes: &[Node]) {
     let height = |i: usize| taffy.box_layout(nodes[i].taffy).h;
     let bottom = |i: usize| {
         let l = taffy.box_layout(nodes[i].taffy);
@@ -95,7 +95,7 @@ pub(super) fn collapsed_scrolls(taffy: &LayoutEngine, nodes: &[Node]) {
 /// Isolates layout warn-once tracking on the current thread for the duration of a test so
 /// warnings emitted by earlier or concurrent tests do not leak into assertions.
 #[cfg(test)]
-pub(super) struct WarningScope(Option<BTreeSet<String>>);
+pub(in crate::runtime) struct WarningScope(Option<BTreeSet<String>>);
 
 #[cfg(test)]
 impl Drop for WarningScope {
@@ -105,12 +105,12 @@ impl Drop for WarningScope {
 }
 
 #[cfg(test)]
-pub(super) fn scope() -> WarningScope {
+pub(in crate::runtime) fn scope() -> WarningScope {
     WarningScope(SCOPED_WARNED.with(|slot| slot.borrow_mut().replace(BTreeSet::new())))
 }
 
 #[cfg(test)]
-pub(super) fn warned_at(needle: &str) -> bool {
+pub(in crate::runtime) fn warned_at(needle: &str) -> bool {
     if let Some(found) = SCOPED_WARNED.with(|slot| slot.borrow().as_ref().map(|set| set.iter().any(|site| site.contains(needle)))) {
         return found;
     }

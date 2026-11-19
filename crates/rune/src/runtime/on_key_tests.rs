@@ -147,7 +147,7 @@ fn icon_rotation_springs_and_jumps_under_reduced_motion() {
                 .key("chevron")
                 .color(Color::WHITE)
                 .icon_rotation(if s.open { 0.0 } else { -std::f32::consts::FRAC_PI_2 })
-                .motion(motion::DEFAULT),
+                .motion(crate::tok::motion::DEFAULT),
         )
     }
     fn turn(rt: &Runtime<S>) -> f32 {

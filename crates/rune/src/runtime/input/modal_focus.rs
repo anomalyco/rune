@@ -96,7 +96,7 @@ impl ModalFocus {
 impl RuntimeCore {
     /// Feeds the modal focus machine what this commit shows: modals that went (innermost first),
     /// a modal that opened, and focus that left the top modal.
-    pub(super) fn sync_modals(&mut self, app: &mut dyn AppDriver) {
+    pub(in crate::runtime) fn sync_modals(&mut self, app: &mut dyn AppDriver) {
         let returned = std::mem::take(&mut self.kbd.focus_returned);
         // Exiting visuals are already inert, so a closing modal counts as gone.
         while let Some(top) = self.kbd.modal_focus.top().map(str::to_owned).filter(|p| self.node(p).is_none()) {

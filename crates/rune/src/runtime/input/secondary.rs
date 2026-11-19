@@ -6,7 +6,7 @@ impl RuntimeCore {
     /// The nearest element with `on_secondary_press` (or a link with `on_link_secondary`) at
     /// (x, y), else the selectable text there (its Copy menu): an app's context menu on a row
     /// wins over its text's.
-    pub(super) fn secondary_target(&self, x: f32, y: f32) -> Option<&str> {
+    pub(in crate::runtime) fn secondary_target(&self, x: f32, y: f32) -> Option<&str> {
         let id = self.hit.hits.iter().rev().find(|&&(id, r)| self.hit_contains(id, r, x, y))?.0;
         let mut index = *self.tree.node_index.get(&id)?;
         let mut text = None;
@@ -50,7 +50,7 @@ impl RuntimeCore {
 
     /// A middle or secondary press at (x, y), with no primary press held: what a primary press
     /// there would take shows pressed until the button comes up (`capture::Tint`).
-    pub(super) fn tint_down(&mut self, x: f32, y: f32, button: crate::PointerButton) {
+    pub(in crate::runtime) fn tint_down(&mut self, x: f32, y: f32, button: crate::PointerButton) {
         if self.pointer.press.held().is_some_and(|h| h.button == crate::PointerButton::Primary) { return; }
         let path = self.primary_target(x, y).filter(|&i| self.allowed(i) && !self.subtree_exiting(i)).map(|i| self.tree.nodes[i].path.clone());
         self.pointer.tint = path.map_or(capture::Tint::Up, |path| capture::Tint::Held { path, button });
@@ -128,7 +128,7 @@ impl RuntimeCore {
     /// menu. That is its focused link's `on_link_secondary`, else its own or its nearest
     /// ancestor's `on_secondary_press`, at the bottom-left of the focused link or element, where
     /// a menu opens below it as AppKit's and Windows' keyboard menus do.
-    pub(super) fn context_menu_key(&mut self, app: &mut dyn AppDriver, ev: &KeyEvent, tx: &mut Tx) -> bool {
+    pub(in crate::runtime) fn context_menu_key(&mut self, app: &mut dyn AppDriver, ev: &KeyEvent, tx: &mut Tx) -> bool {
         let m = ev.mods;
         let plain = !m.cmd && !m.ctrl && !m.alt && !m.logo;
         let menu_key = match ev.key {

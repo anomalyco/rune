@@ -1,7 +1,7 @@
 use super::*;
 use crate::el::ElFlags;
 
-pub(super) fn collect_virtual_inputs(el: &El, parent: &str, index: usize, inert: bool, inputs: &mut HashMap<String, Box<InputSpec>>) {
+pub(in crate::runtime) fn collect_virtual_inputs(el: &El, parent: &str, index: usize, inert: bool, inputs: &mut HashMap<String, Box<InputSpec>>) {
     // Most offscreen rows hold no focused field; find that out before building any paths.
     if !crate::memo::has_focused_input(el) {
         return;
@@ -26,11 +26,11 @@ pub(super) fn collect_virtual_inputs(el: &El, parent: &str, index: usize, inert:
 }
 
 impl RuntimeCore {
-    pub(super) fn measure(&mut self, app: &dyn ViewDriver, tx: &Tx) -> Measured {
+    pub(in crate::runtime) fn measure(&mut self, app: &dyn ViewDriver, tx: &Tx) -> Measured {
         self.measure_pass(app, tx, true)
     }
 
-    pub(super) fn measure_retry(&mut self, app: &dyn ViewDriver, tx: &Tx) -> Measured {
+    pub(in crate::runtime) fn measure_retry(&mut self, app: &dyn ViewDriver, tx: &Tx) -> Measured {
         let _blend = crate::theme::scope(self.paint.srgb_blend);
         let _bars = crate::platform::scroll_bars::scope(self.host.scroll_bars.state, self.host.scroll_bars.runtime_id);
         let selection = self.selection_by_path();
@@ -38,14 +38,14 @@ impl RuntimeCore {
     }
 
     /// `committing` when the result is applied, so the last commit's text layouts can go.
-    pub(super) fn measure_pass(&mut self, app: &dyn ViewDriver, tx: &Tx, committing: bool) -> Measured {
+    pub(in crate::runtime) fn measure_pass(&mut self, app: &dyn ViewDriver, tx: &Tx, committing: bool) -> Measured {
         let _blend = crate::theme::scope(self.paint.srgb_blend);
         let _bars = crate::platform::scroll_bars::scope(self.host.scroll_bars.state, self.host.scroll_bars.runtime_id);
         let selection = self.selection_by_path();
         Measured { selection, ..self.measurement(app, committing).finish(tx) }
     }
 
-    pub(super) fn measurement<'a>(&'a mut self, app: &'a dyn ViewDriver, committing: bool) -> Measurement<'a> {
+    pub(in crate::runtime) fn measurement<'a>(&'a mut self, app: &'a dyn ViewDriver, committing: bool) -> Measurement<'a> {
         let hold_windows = self.checking_live_only();
         Measurement {
             app,
@@ -97,7 +97,7 @@ impl RuntimeCore {
 }
 
 impl Measurement<'_> {
-    pub(super) fn node_id(&mut self, path: &str) -> NodeId {
+    pub(in crate::runtime) fn node_id(&mut self, path: &str) -> NodeId {
         if let Some(&id) = self.path_ids.get(path) { return id; }
         let id = NodeId(*self.next_id);
         *self.next_id += 1;
@@ -107,7 +107,7 @@ impl Measurement<'_> {
 
     /// Finishes all row measurements before scene/growth mutation. Newly measured estimates
     /// above the viewport adjust the scroll offset by exactly the same amount.
-    pub(super) fn measure_virtuals(&mut self, nodes: &[Node], settle: bool) -> bool {
+    pub(in crate::runtime) fn measure_virtuals(&mut self, nodes: &[Node], settle: bool) -> bool {
         let mut retry = false;
         for (path, v) in self.virtuals.iter_mut() {
             let Some((ci, _)) = nodes.iter().enumerate().find(|(_, n)| n.path == *path) else { continue };
@@ -148,7 +148,7 @@ impl Measurement<'_> {
     }
 
     /// Checks the view's keys and builds the virtual windows, index-built rows included.
-    pub(super) fn build_tree(&mut self, mut root: El, tx: &Tx, force_all: bool) -> El {
+    pub(in crate::runtime) fn build_tree(&mut self, mut root: El, tx: &Tx, force_all: bool) -> El {
         // Two siblings with one key would share a layout node, which Taffy panics on. Rename the
         // later ones so every build, debug or release, lays out; --tree still lists them.
         let duplicates = crate::input::key_diagnostics::repair(&mut root);
@@ -180,16 +180,16 @@ impl Measurement<'_> {
 
     /// What a memo scope hashes of the window's controls (`Cx::titlebar_inset`,
     /// `Cx::chrome_insets`), so memos that read them rebuild when they change.
-    pub(super) fn chrome_bits(&self) -> [u32; 4] {
+    pub(in crate::runtime) fn chrome_bits(&self) -> [u32; 4] {
         let [leading, trailing, height] = self.chrome.bits();
         [self.titlebar_inset.to_bits(), leading, trailing, height]
     }
 
-    pub(super) fn finish(self, tx: &Tx) -> Measured {
+    pub(in crate::runtime) fn finish(self, tx: &Tx) -> Measured {
         self.finish_from(tx, 0)
     }
 
-    pub(super) fn finish_from(mut self, tx: &Tx, mut passes: usize) -> Measured {
+    pub(in crate::runtime) fn finish_from(mut self, tx: &Tx, mut passes: usize) -> Measured {
         let (layout, nodes, memo_pending, memo_reused, taken_paths) = loop {
             passes += 1;
             self.pass = Pass::of(passes);
@@ -549,7 +549,7 @@ impl Measurement<'_> {
                 next_id: &mut *self.next_id,
                 foreground: self.defaults.foreground,
             };
-            let (root_id, _) = flatten_with_buf(root, None, &mut path_buf, 0, motion::DEFAULT, RowLayout::Free, true, &mut taffy, &mut nodes, scale, &mut memo_ctx);
+            let (root_id, _) = flatten_with_buf(root, None, &mut path_buf, 0, crate::tok::motion::DEFAULT, RowLayout::Free, true, &mut taffy, &mut nodes, scale, &mut memo_ctx);
             let (pending, reused, taken_paths) = (memo_ctx.pending, memo_ctx.reused, memo_ctx.taken_paths);
             path_buf.clear();
             self.memo.path_scratch = path_buf;
@@ -569,7 +569,7 @@ impl Measurement<'_> {
         (taffy, nodes, pending, reused, taken_paths)
     }
 
-    pub(super) fn populate_virtual_children(
+    pub(in crate::runtime) fn populate_virtual_children(
         &mut self,
         el: &mut El,
         path: &str,
@@ -678,7 +678,7 @@ impl Measurement<'_> {
 impl RuntimeCore {
     /// Records which row of each virtual list holds focus, by key, so the row is still built
     /// after it scrolls out. Walks the node tree, since a key may itself contain `/`.
-    pub(super) fn track_focused_rows(&mut self) {
+    pub(in crate::runtime) fn track_focused_rows(&mut self) {
         if self.commit.virtuals.is_empty() { return; }
         let focused = self.kbd.focus.path().and_then(|f| self.tree.nodes.iter().position(|n| n.path == f));
         for (path, v) in self.commit.virtuals.iter_mut() {
@@ -734,7 +734,7 @@ fn windowed_lists<'e>(el: &'e El, path: &str, scroll: Option<(&str, bool, f32)>,
 }
 
 /// A virtual list's window, picked before its element is expanded (`Measurement::window`).
-pub(super) struct Window {
+pub(in crate::runtime) struct Window {
     /// The list's keys are the ones it had.
     same: bool,
     /// Children renamed for a duplicate key: their index and new key.

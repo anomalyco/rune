@@ -2,7 +2,22 @@
 use super::*;
 
 mod prepare;
+pub(super) mod apply;
+pub(super) mod apply_scratch;
+mod device;
+pub(super) mod flatten;
+#[cfg(debug_assertions)]
+pub(super) mod layout_diagnostics;
+pub(super) mod measure;
+pub(crate) mod memo_reuse;
+pub(super) mod prune;
+#[cfg(test)]
+mod prune_tests;
+pub(super) mod relayout;
 pub(super) mod remount;
+pub(super) mod text_layout;
+pub(super) mod watch;
+pub(super) mod why;
 
 /// View commit, Taffy layout, memoization, virtual list windows and layout/visibility callback
 /// tracking owned by [`RuntimeCore`]. Ordered hot-first under `#[repr(C)]` so per-frame flags

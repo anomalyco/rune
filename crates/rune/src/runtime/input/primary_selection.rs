@@ -24,13 +24,13 @@ pub(crate) struct PrimarySelection {
 
 impl RuntimeCore {
     /// The primary button came up.
-    pub(super) fn primary_released(&mut self) {
+    pub(in crate::runtime) fn primary_released(&mut self) {
         self.edit.primary.pending = true;
     }
 
     /// After a frame's handlers, once the release's caret and selection landed: puts what's
     /// selected on the primary selection, if it changed.
-    pub(super) fn note_primary_selection(&mut self, app: &dyn ViewDriver) {
+    pub(in crate::runtime) fn note_primary_selection(&mut self, app: &dyn ViewDriver) {
         if !std::mem::take(&mut self.edit.primary.pending) { return; }
         let text = match self.focused_input() {
             Some(input) if input.edit.is_secure() => None,
@@ -46,7 +46,7 @@ impl RuntimeCore {
 
     /// A middle press at (x, y): on a text field that takes text, it focuses the field with its
     /// caret there and asks for the primary selection to paste. True when it did.
-    pub(super) fn primary_paste_down(&mut self, x: f32, y: f32) -> bool {
+    pub(in crate::runtime) fn primary_paste_down(&mut self, x: f32, y: f32) -> bool {
         let Some(i) = self.primary_target(x, y).filter(|&i| self.allowed(i) && !self.subtree_exiting(i)) else { return false };
         let takes = self.tree.nodes[i].input.as_ref().is_some_and(|input| input.access.is_some() && !input.edit.is_secure());
         if !takes { return false; }

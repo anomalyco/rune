@@ -5,7 +5,7 @@ use super::*;
 /// The glide's spring (`motion::GLIDE`) retargets each frame, so content growing under it
 /// extends the trip.
 /// A glide starts at most this many viewports above the bottom (a longer trip cuts first).
-pub(super) const GLIDE_REACH: f64 = 2.0;
+pub(in crate::runtime) const GLIDE_REACH: f64 = 2.0;
 /// Within this many points of the bottom a viewport counts as showing it.
 const AT_BOTTOM: f64 = 1.0;
 /// Slack starts closing once its stack has stopped growing for this long (seconds).
@@ -17,7 +17,7 @@ const SLACK_WAIT: f64 = 0.12;
 /// Without it, a send dips the rows: the composer gives its room back faster than the new
 /// row's capped growth takes it.
 #[derive(Clone, Copy, Debug, Default)]
-pub(super) struct Slack {
+pub(in crate::runtime) struct Slack {
     /// `h` is the slack in points, stepped toward 0 once closing.
     track: GrowTrack,
     phase: SlackPhase,
@@ -26,10 +26,10 @@ pub(super) struct Slack {
     /// The viewport's presented top and bottom last frame.
     edges: Option<[f32; 2]>,
     /// The window size at the last commit: a resize lands the slack.
-    pub(super) window: (f32, f32),
+    pub(in crate::runtime) window: (f32, f32),
     /// `Tx::follow_edge`: until the viewport's edges reach their layout, the rows ride them
     /// and the room they free adds no slack.
-    pub(super) follow: bool,
+    pub(in crate::runtime) follow: bool,
 }
 
 /// Whether the slack waits under the rows or closes on the growth spring.
@@ -50,12 +50,12 @@ impl Default for SlackPhase {
 const WAITED: SlackPhase = SlackPhase::Held { grew_at: f64::NEG_INFINITY };
 
 impl Slack {
-    pub(super) fn height(&self) -> f32 { self.track.h }
+    pub(in crate::runtime) fn height(&self) -> f32 { self.track.h }
 
-    pub(super) fn moving(&self) -> bool { self.track.h > 0.0 || self.stepped }
+    pub(in crate::runtime) fn moving(&self) -> bool { self.track.h > 0.0 || self.stepped }
 
     /// No slack, in a window of this size.
-    pub(super) fn landed(window: (f32, f32)) -> Slack { Slack { window, ..Slack::default() } }
+    pub(in crate::runtime) fn landed(window: (f32, f32)) -> Slack { Slack { window, ..Slack::default() } }
 
     /// Moves the phase on at `now` with `dt` of frame time, once `h` has this frame's growth
     /// and edges: a growing stack holds the slack, one quiet for `SLACK_WAIT` starts it closing,
@@ -87,7 +87,7 @@ impl Slack {
 
 /// Steps a glide toward the current bottom, or the offset `Tx::scroll_to` asked for while the
 /// content reaches it. Returns whether it is still moving.
-pub(super) fn glide(st: &mut ScrollState, dt: f32) -> bool {
+pub(in crate::runtime) fn glide(st: &mut ScrollState, dt: f32) -> bool {
     let ScrollMode::Glide { v, to: aim, .. } = st.mode else { return false };
     let to = aim.offset().map_or(st.max, |to| to.min(st.max));
     // Content shrinking past the glide's end lands it there, rather than its speed carrying
@@ -108,7 +108,7 @@ pub(super) fn glide(st: &mut ScrollState, dt: f32) -> bool {
 
 impl RuntimeCore {
     /// The scroll viewport `key` names (`Node::named`), or the nearest one containing it.
-    pub(super) fn scroll_viewport(&self, key: &str) -> Option<usize> {
+    pub(in crate::runtime) fn scroll_viewport(&self, key: &str) -> Option<usize> {
         let mut i = self.tree.nodes.iter().enumerate()
             .position(|(i, n)| n.named(key) && !self.subtree_exiting(i))?;
         loop {
@@ -117,7 +117,7 @@ impl RuntimeCore {
         }
     }
 
-    pub(super) fn scroll_to_bottom(&mut self, app: &mut dyn AppDriver, requests: Vec<(String, bool)>) {
+    pub(in crate::runtime) fn scroll_to_bottom(&mut self, app: &mut dyn AppDriver, requests: Vec<(String, bool)>) {
         // This frame's commit may have changed the content: measure the extent first.
         self.step_scroll(0.0);
         let mut targets = Vec::new();
@@ -158,7 +158,7 @@ impl RuntimeCore {
     }
 
     /// `Tx::scroll_page`: each viewport moves by its requested pages.
-    pub(super) fn scroll_pages(&mut self, app: &mut dyn AppDriver, requests: Vec<(String, i32)>) {
+    pub(in crate::runtime) fn scroll_pages(&mut self, app: &mut dyn AppDriver, requests: Vec<(String, i32)>) {
         // This frame's commit may have changed the content: measure the extent first.
         self.step_scroll(0.0);
         for (key, pages) in requests {
@@ -180,7 +180,7 @@ impl RuntimeCore {
     /// fitting: while they still end on the bottom (`justify_end`), or until the content's top
     /// would carry them above it, after which they ride the content's top. The offset goes
     /// negative while fitting rows sit low in a box that has not shrunk yet.
-    pub(super) fn stuck_offset(&self, i: usize, bottom: f32) -> Option<f64> {
+    pub(in crate::runtime) fn stuck_offset(&self, i: usize, bottom: f32) -> Option<f64> {
         let n = &self.tree.nodes[i];
         let st = self.scroll.scrolls.get(&n.id).filter(|st| st.pinned())?;
         if !n.scroll.is_some_and(|s| s.stick_bottom) { return None; }
@@ -211,20 +211,20 @@ impl RuntimeCore {
     }
 
     /// The offset that draws viewport `i`'s content bottom on its presented bottom `bottom`.
-    pub(super) fn bottom_offset(&self, i: usize, bottom: f32) -> Option<f64> {
+    pub(in crate::runtime) fn bottom_offset(&self, i: usize, bottom: f32) -> Option<f64> {
         let c = self.scroll_content(i)?;
         Some(self.scroll_overflow(i) + self.stuck_lag(i, c, bottom)?)
     }
 
     /// Scroll viewport `i`'s present direct children.
-    pub(super) fn scroll_children(&self, i: usize) -> impl Iterator<Item = usize> + '_ {
+    pub(in crate::runtime) fn scroll_children(&self, i: usize) -> impl Iterator<Item = usize> + '_ {
         (i + 1..self.tree.nodes.len())
             .take_while(move |&j| self.tree.nodes[j].parent >= Some(i))
             .filter(move |&j| self.tree.nodes[j].parent == Some(i) && !self.is_exiting(self.tree.nodes[j].id) && self.scene.contains(self.tree.nodes[j].id))
     }
 
     /// Scroll viewport `i`'s growth-stack child, or the child that supplies its content end.
-    pub(super) fn scroll_content(&self, i: usize) -> Option<usize> {
+    pub(in crate::runtime) fn scroll_content(&self, i: usize) -> Option<usize> {
         let view = self.tree.nodes[i].target;
         self.scroll_stack(i).or_else(|| {
             self.scroll_children(i).max_by(|&a, &b| {
@@ -238,7 +238,7 @@ impl RuntimeCore {
     }
 
     /// Scroll viewport `i`'s growth-stack child, if any.
-    pub(super) fn scroll_stack(&self, i: usize) -> Option<usize> {
+    pub(in crate::runtime) fn scroll_stack(&self, i: usize) -> Option<usize> {
         self.scroll_children(i).find(|&c| self.tree.nodes[c].growth.is_some())
     }
 
@@ -250,7 +250,7 @@ impl RuntimeCore {
     }
 
     /// Steps stick-to-bottom viewport `i`'s `Slack` after its offset. Returns whether any is left.
-    pub(super) fn step_slack(&mut self, i: usize, dt: f32) -> bool {
+    pub(in crate::runtime) fn step_slack(&mut self, i: usize, dt: f32) -> bool {
         let id = self.tree.nodes[i].id;
         if self.scroll.scrolls.get(&id).is_some_and(|st| !st.pinned() && !st.slack.moving()) {
             if let Some(st) = self.scroll.scrolls.get_mut(&id) { st.slack.edges = None; }
@@ -295,7 +295,7 @@ impl RuntimeCore {
 
     /// Queues `on_at_bottom` and `on_far_from_bottom` for viewports whose state changed this
     /// frame.
-    pub(super) fn report_at_bottom(&mut self) {
+    pub(in crate::runtime) fn report_at_bottom(&mut self) {
         for i in 0..self.tree.nodes.len() {
             let n = &self.tree.nodes[i];
             let Some(h) = n.handlers.get().filter(|h| h.on_at_bottom.is_some() || h.on_far_from_bottom.is_some()) else { continue };
@@ -988,7 +988,7 @@ mod tests {
         let mut rt = sending(3);
         let before = rects(&rt)["r38"][1];
         rt.update(|s, tx| {
-            tx.motion(motion::REFLOW);
+            tx.motion(crate::tok::motion::REFLOW);
             s.composer.as_mut().unwrap().clear();
             s.rows += 1;
         });
@@ -1003,7 +1003,7 @@ mod tests {
         let mut rt = sending(7);
         let before = rects(&rt)["r38"][1];
         rt.update(|s, tx| {
-            tx.motion(motion::REFLOW);
+            tx.motion(crate::tok::motion::REFLOW);
             s.composer.as_mut().unwrap().clear();
             s.rows += 1;
         });

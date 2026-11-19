@@ -12,7 +12,7 @@ use crate::el::Flow;
 impl RuntimeCore {
     /// Per node of the last build: neither it nor anything under it drew. Empty before the first
     /// build and after a commit, until the next one draws.
-    pub(super) fn drew_nothing(&self) -> Vec<bool> {
+    pub(in crate::runtime) fn drew_nothing(&self) -> Vec<bool> {
         if !self.tree.built || self.paint.seen.len() != self.tree.nodes.len() || self.paint.inh_scratch.len() != self.tree.nodes.len() {
             return Vec::new();
         }
@@ -24,7 +24,7 @@ impl RuntimeCore {
     /// How tall growth row `id` can be, in its own points, before its bottom passes the bottom
     /// of its clip (a scroll's viewport, the window), from where and how big it last drew
     /// (`El::fold_glide`); unbounded before it draws.
-    pub(super) fn fold_limit(&self, id: NodeId) -> f32 {
+    pub(in crate::runtime) fn fold_limit(&self, id: NodeId) -> f32 {
         if !self.tree.built || self.paint.drawn.len() != self.tree.nodes.len() { return f32::INFINITY; }
         let Some(i) = self.tree.nodes.iter().position(|n| n.id == id) else { return f32::INFINITY };
         let Some(h) = self.motion.grows.get(&id).map(|g| g.h).filter(|&h| h > 0.5) else { return f32::INFINITY };
@@ -37,12 +37,12 @@ impl RuntimeCore {
 
     /// Node `i` of the commit is out of sight before and after (`unseen_before_and_after`), so
     /// its entrance, colours and blur land. A matched element still flies to its match.
-    pub(super) fn enters_unseen(&self, nodes: &[Node], unseen: &[bool], i: usize) -> bool {
+    pub(in crate::runtime) fn enters_unseen(&self, nodes: &[Node], unseen: &[bool], i: usize) -> bool {
         unseen.get(i).copied().unwrap_or(false) && nodes[i].matched.is_none()
     }
 
     /// Ends the exits that drew nothing last frame. A flight paints outside its clips, so it stays.
-    pub(super) fn end_unseen_exits(&mut self) {
+    pub(in crate::runtime) fn end_unseen_exits(&mut self) {
         if !self.tree.built { return; }
         let mut hid: Option<Vec<bool>> = None;
         for i in 0..self.tree.nodes.len() {
@@ -60,7 +60,7 @@ impl RuntimeCore {
     /// Row `i` of the commit's `nodes`, kept by a change that replaced what the reader saw
     /// ([`crate::el::virtual_list::VirtualList::replaced_view`]) but drawn nowhere before, enters
     /// like the rows new to the view instead of appearing whole.
-    pub(super) fn reenter_unseen_row(&mut self, nodes: &[Node], i: usize, unseen: &HashSet<NodeId>) {
+    pub(in crate::runtime) fn reenter_unseen_row(&mut self, nodes: &[Node], i: usize, unseen: &HashSet<NodeId>) {
         if !unseen.contains(&nodes[i].id) { return; }
         let Some(p) = nodes[i].parent else { return };
         let Some(v) = self.commit.virtuals.get_mut(&nodes[p].path) else { return };
@@ -74,7 +74,7 @@ impl RuntimeCore {
     /// Its own fade starts a row at no opacity, so only where it drew counts, strictly: a row
     /// touching its viewport's edge shows nothing. Runs after each draw, since a list filling its
     /// window commits again on the frames that follow.
-    pub(super) fn land_unseen_entrances(&mut self) {
+    pub(in crate::runtime) fn land_unseen_entrances(&mut self) {
         if self.commit.virtuals.values().all(|v| v.entering.is_empty()) { return; }
         let s = self.env.scale;
         let (w, h) = self.viewport;
@@ -97,7 +97,7 @@ impl RuntimeCore {
     /// build (out of sight or transparent), and none of its swept path lands in sight in this
     /// layout (in the window, inside its clips, not transparent). Empty when nothing non-skipped
     /// qualifies.
-    pub(super) fn unseen_before_and_after(&self, nodes: &[Node], skip: &[memo_reuse::CleanApplySpan]) -> Vec<bool> {
+    pub(in crate::runtime) fn unseen_before_and_after(&self, nodes: &[Node], skip: &[memo_reuse::CleanApplySpan]) -> Vec<bool> {
         let seen: Vec<bool> = self.drew_nothing().into_iter().map(|nothing| !nothing).collect();
         // New nodes may mount out of sight however much drew.
         let mounts = nodes.len() > self.tree.nodes.len();

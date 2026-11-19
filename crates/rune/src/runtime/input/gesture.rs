@@ -9,7 +9,7 @@ use crate::{GesturePhase, MagnifyEvent, PointerButton, RotateEvent, WheelEvent};
 
 /// A trackpad gesture at a window point, queued for the handlers under it.
 #[derive(Clone, Copy, Debug)]
-pub(super) enum Gesture {
+pub(in crate::runtime) enum Gesture {
     Magnify(MagnifyEvent),
     Rotate(RotateEvent),
     SmartMagnify(f32, f32),
@@ -72,7 +72,7 @@ impl RuntimeCore {
     /// under the pointer until one takes it, else it scrolls. Each queued delta keeps its own
     /// gesture's turn and axis policy, so one queued before a newer gesture began still reaches
     /// the owner its own gesture picked.
-    pub(super) fn run_wheel(&mut self, app: &mut dyn AppDriver, gesture: Attempt, chain: Vec<String>, ev: WheelEvent, phased: bool, tx: &mut Tx) -> bool {
+    pub(in crate::runtime) fn run_wheel(&mut self, app: &mut dyn AppDriver, gesture: Attempt, chain: Vec<String>, ev: WheelEvent, phased: bool, tx: &mut Tx) -> bool {
         self.scroll.wheel_lock.sync_gesture(gesture);
         let mut taken = None;
         match self.scroll.wheel_lock.owner_of(gesture).cloned() {
@@ -136,7 +136,7 @@ impl RuntimeCore {
         if !chain.is_empty() { self.frame.queue.push(Action::Gesture(chain, gesture)); }
     }
 
-    pub(super) fn run_gesture(&mut self, app: &mut dyn AppDriver, chain: Vec<String>, gesture: Gesture, tx: &mut Tx) -> bool {
+    pub(in crate::runtime) fn run_gesture(&mut self, app: &mut dyn AppDriver, chain: Vec<String>, gesture: Gesture, tx: &mut Tx) -> bool {
         for path in chain {
             let taken = match gesture {
                 Gesture::Magnify(ev) => self.gesture_handler(&path, |g| g.magnify.clone()).map(|(i, f)| {
@@ -183,7 +183,7 @@ impl RuntimeCore {
     /// order; a row inside a list paints after the list, so it wins). Its ancestors are what
     /// Chromium chains a scroll through: a viewport that only lies beneath (the timeline under an
     /// open menu, a popover or a raised panel) is never one of them.
-    pub(super) fn chain_start(&self, x: f32, y: f32) -> Option<usize> {
+    pub(in crate::runtime) fn chain_start(&self, x: f32, y: f32) -> Option<usize> {
         self.hit.wheel_hits.iter().rev().find_map(|&(id, r)| {
             if !self.hit_contains(id, r, x, y) { return None; }
             let i = *self.tree.node_index.get(&id)?;
@@ -245,12 +245,12 @@ impl RuntimeCore {
 
     /// Element `i` opted in to `button` ([`El::pointer_buttons`]); every element takes the
     /// primary.
-    pub(super) fn takes_button(&self, i: usize, button: PointerButton) -> bool {
+    pub(in crate::runtime) fn takes_button(&self, i: usize, button: PointerButton) -> bool {
         button == PointerButton::Primary || self.tree.nodes[i].handlers.gestures.as_ref().is_some_and(|g| g.buttons & button.bit() != 0)
     }
 
     /// Element `i`'s `on_drag` hears a press of `button`.
-    pub(super) fn drags_with(&self, i: usize, button: PointerButton) -> bool {
+    pub(in crate::runtime) fn drags_with(&self, i: usize, button: PointerButton) -> bool {
         let n = &self.tree.nodes[i];
         n.handlers.on_drag.is_some() && !self.drags_out(n) && self.takes_button(i, button)
     }
@@ -295,7 +295,7 @@ impl RuntimeCore {
 
     /// Records a key press for [`Self::route_key_up`]: whether it belongs to an open IME
     /// composition, or which focused element should still hear its release if focus moves.
-    pub(super) fn note_key_down(&mut self, app: &mut dyn AppDriver, repeat: bool) {
+    pub(in crate::runtime) fn note_key_down(&mut self, app: &mut dyn AppDriver, repeat: bool) {
         let composing = self.composing(app);
         let focus = &self.kbd.focus;
         self.kbd.key_releases.down(composing, repeat, || focus.owned());
@@ -303,7 +303,7 @@ impl RuntimeCore {
 
     /// Suppresses key releases that belong to an IME composition (while preedit is open, or
     /// the release of the key that confirmed or cancelled it).
-    pub(super) fn eat_ime_key_up(&mut self, app: &mut dyn AppDriver) -> bool {
+    pub(in crate::runtime) fn eat_ime_key_up(&mut self, app: &mut dyn AppDriver) -> bool {
         let composing = self.composing(app);
         self.kbd.key_releases.eat(composing)
     }
@@ -311,7 +311,7 @@ impl RuntimeCore {
     /// A key release goes to the focused element and up through its ancestors, else to every
     /// element with a handler (deepest first), inside the open modal if there is one. If focus moved since the key went down, the element that had
     /// focus on the press (and its ancestors) hears the release first.
-    pub(super) fn route_key_up(&mut self, app: &mut dyn AppDriver, ev: &KeyEvent, tx: &mut Tx) -> bool {
+    pub(in crate::runtime) fn route_key_up(&mut self, app: &mut dyn AppDriver, ev: &KeyEvent, tx: &mut Tx) -> bool {
         if self.eat_ime_key_up(app) { return false; }
         tx.focused = self.focused_key();
         let pressed = self.kbd.key_releases.route().and_then(|p| self.live_index(&p));

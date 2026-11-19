@@ -11,25 +11,25 @@ use super::*;
 
 /// What tells a resize whether the last commit's tree still holds.
 #[derive(Default)]
-pub(super) struct Reuse {
+pub(in crate::runtime) struct Reuse {
     /// The scale the last commit built its view at.
-    pub(super) scale: f32,
+    pub(in crate::runtime) scale: f32,
     /// A layout read moved this frame, so the view runs to see it.
-    pub(super) read_moved: bool,
+    pub(in crate::runtime) read_moved: bool,
     /// The blend mode the last commit built its view in; theme colours resolve per mode.
-    pub(super) srgb: Option<bool>,
+    pub(in crate::runtime) srgb: Option<bool>,
 }
 
 impl Reuse {
     /// Records what the commit just applied was built with.
-    pub(super) fn built(&mut self, scale: f32, srgb: bool) {
+    pub(in crate::runtime) fn built(&mut self, scale: f32, srgb: bool) {
         self.scale = scale;
         self.srgb = Some(srgb);
     }
 }
 
 /// The root's size in a viewport; a window that fits its content takes its natural height.
-pub(super) fn root_size(viewport: (f32, f32), fit_height: bool) -> Size<Dimension> {
+pub(in crate::runtime) fn root_size(viewport: (f32, f32), fit_height: bool) -> Size<Dimension> {
     Size { width: length(viewport.0), height: if fit_height { auto() } else { length(viewport.1) } }
 }
 
@@ -37,7 +37,7 @@ pub(super) fn root_size(viewport: (f32, f32), fit_height: bool) -> Size<Dimensio
 /// `aspect_fit` elements and fitted anchored overlays, and pictures can change their aspect.
 /// Live bindings only own scene properties: moving the node retains their sources, sampled
 /// values and exact fill, while `apply` leaves their scene tracks alone.
-pub(super) fn reusable(n: &Node) -> bool {
+pub(in crate::runtime) fn reusable(n: &Node) -> bool {
     n.cold.get().is_none_or(|c| {
         c.aspect_fit.is_none() && c.above.as_ref().is_none_or(|a| !a.fit) && c.pixel_aspect.is_none()
     })
@@ -45,7 +45,7 @@ pub(super) fn reusable(n: &Node) -> bool {
 
 /// How a commit measures, decided once before it starts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum CommitKind {
+pub(in crate::runtime) enum CommitKind {
     /// Run the view and flatten what it returns.
     Rebuild,
     /// Only the window resized: lay the last commit's nodes out again at the new size.
@@ -57,7 +57,7 @@ pub(super) enum CommitKind {
 impl RuntimeCore {
     /// Which way this commit measures. Both shortcuts need everything the view reads to be as
     /// the last commit built it, checked here once for both.
-    pub(super) fn commit_kind(&self, tx: &Tx) -> CommitKind {
+    pub(in crate::runtime) fn commit_kind(&self, tx: &Tx) -> CommitKind {
         let unchanged = self.commit.state_unchanged && !tx.commit.lands() && !self.commit.reuse.read_moved
             && self.commit.reuse.scale == self.env.scale && self.commit.reuse.srgb == Some(self.paint.srgb_blend)
             && !self.tree.has_playground && !self.patch_pending()
@@ -73,7 +73,7 @@ impl RuntimeCore {
 
     /// Measures a commit: lays the last tree out again when only the viewport changed since it
     /// was built, remounts virtual rows alone when only their window moved, else runs the view.
-    pub(super) fn measure_commit(&mut self, app: &dyn ViewDriver, tx: &Tx) -> Measured {
+    pub(in crate::runtime) fn measure_commit(&mut self, app: &dyn ViewDriver, tx: &Tx) -> Measured {
         let kind = self.commit_kind(tx);
         if kind == CommitKind::Relayout {
             // The view keeps what it last read; `settle_layout_reads` and the caret check run it
@@ -228,7 +228,7 @@ impl Measurement<'_> {
     }
 
     /// Lays `nodes` out from `root_id` at the viewport, places them, and lays out their text.
-    pub(super) fn solve(&mut self, mut taffy: LayoutEngine, root_id: SlotId, mut nodes: Vec<Node>) -> (LayoutEngine, Vec<Node>) {
+    pub(in crate::runtime) fn solve(&mut self, mut taffy: LayoutEngine, root_id: SlotId, mut nodes: Vec<Node>) -> (LayoutEngine, Vec<Node>) {
         let scale = self.env.scale;
         let room = Size {
             width: AvailableSpace::Definite(self.viewport.0),
@@ -341,13 +341,13 @@ fn build_relayout_spans(
 }
 
 /// Lays `n`'s text out again at the width it was laid out at.
-pub(super) fn lay_out_text_in_place(text: &mut TextSystem, n: &mut Node, scale: f32) {
+pub(in crate::runtime) fn lay_out_text_in_place(text: &mut TextSystem, n: &mut Node, scale: f32) {
     let w = (n.local.w - n.inset[0] - n.inset[2]).max(0.0);
     lay_out_text(text, n, w, scale);
 }
 
 /// Lays `n`'s text out at its content width `w`.
-pub(super) fn lay_out_text(text: &mut TextSystem, n: &mut Node, w: f32, scale: f32) {
+pub(in crate::runtime) fn lay_out_text(text: &mut TextSystem, n: &mut Node, w: f32, scale: f32) {
     let Some(spec) = &n.text else { return };
     // A cell of a run draws from the run's layout (and keeps it cached) instead of its own.
     let run = spec.cold.advance_in.as_ref().map(|(run, at)| (text.run_layout(run, spec.style, scale), *at));

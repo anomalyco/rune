@@ -20,7 +20,7 @@ use crate::machine::Effects;
 use super::*;
 
 #[derive(Default)]
-pub(super) struct HelpState {
+pub(in crate::runtime) struct HelpState {
     state: Tip,
     /// The tooltip showing this frame: its text and box in points.
     tip: Option<(String, [f32; 4])>,
@@ -219,7 +219,7 @@ impl RuntimeCore {
     }
 
     /// A tooltip waits for a frame at or after its delay to draw, or fades in or out.
-    pub(super) fn tooltip_waiting(&self) -> bool {
+    pub(in crate::runtime) fn tooltip_waiting(&self) -> bool {
         matches!(self.pointer.help.state, Tip::Waiting { since, .. } if self.clock + 1e-6 < since + self.help_delays().open) || self.tooltip_fading()
     }
 
@@ -253,7 +253,7 @@ impl RuntimeCore {
 
     /// During `build`: node `i` has help and draws visible over `rect` (points, x0 y0 x1 y1),
     /// after the first `seq` hits.
-    pub(super) fn push_help_hit(&mut self, i: usize, rect: [f32; 4], seq: usize) {
+    pub(in crate::runtime) fn push_help_hit(&mut self, i: usize, rect: [f32; 4], seq: usize) {
         if rect[2] > rect[0] && rect[3] > rect[1] {
             self.hit.help_hits.push((self.tree.nodes[i].id, rect, seq, None));
         }
@@ -261,7 +261,7 @@ impl RuntimeCore {
 
     /// During `build`: the line boxes of node `i`'s links that have help, for border box
     /// `rect` and clipped to `clip` (points, x0 y0 x1 y1), after the first `seq` hits.
-    pub(super) fn push_link_help_hits(&mut self, i: usize, rect: [f32; 4], clip: [f32; 4], seq: usize) {
+    pub(in crate::runtime) fn push_link_help_hits(&mut self, i: usize, rect: [f32; 4], clip: [f32; 4], seq: usize) {
         let Some(t) = self.tree.nodes[i].text.as_ref() else { return };
         if !t.cold.links.iter().any(|l| l.help.is_some()) { return; }
         let id = self.tree.nodes[i].id;
@@ -280,10 +280,10 @@ impl RuntimeCore {
         }
     }
 
-    pub(super) fn clear_help_hits(&mut self) { self.hit.help_hits.clear(); }
+    pub(in crate::runtime) fn clear_help_hits(&mut self) { self.hit.help_hits.clear(); }
 
     /// A scroll or key: hide the tooltip until the pointer leaves its element.
-    pub(super) fn dismiss_help(&mut self) {
+    pub(in crate::runtime) fn dismiss_help(&mut self) {
         if self.pointer.help.state.target().is_some() { self.step_help(Event::Dismiss); }
     }
 
@@ -308,7 +308,7 @@ impl RuntimeCore {
 
     /// Whether moving the pointer to (x, y) changes the help element under it, so a host that
     /// skips frames for unchanged pixels still starts or ends a tooltip's wait.
-    pub(super) fn help_target_changes(&self, x: f32, y: f32) -> bool {
+    pub(in crate::runtime) fn help_target_changes(&self, x: f32, y: f32) -> bool {
         let target = self.pointer.help.state.target();
         if self.native_help() || self.hit.help_hits.is_empty() && target.is_none() { return false; }
         let at = self.help_at(x, y).map(|(i, k)| (self.tree.nodes[i].path.as_str(), k));
@@ -352,7 +352,7 @@ impl RuntimeCore {
     }
 
     /// After `build`'s hits: track the rest, show or hide the tooltip and draw it.
-    pub(super) fn update_help(&mut self) {
+    pub(in crate::runtime) fn update_help(&mut self) {
         self.pointer.help.regions.clear();
         if self.native_help() {
             // Nothing behind a modal, and only where nothing else is drawn over the element.

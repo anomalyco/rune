@@ -13,7 +13,7 @@ use super::*;
 const JITTER: f64 = 1.0 / 30.0;
 
 #[derive(Default)]
-pub(super) struct LoopClock {
+pub(in crate::runtime) struct LoopClock {
     /// App clock and presented animation time when the loops last caught up.
     last: Option<(f64, f64)>,
     /// App time (times the time scale) animation time hasn't seen yet.
@@ -24,14 +24,14 @@ pub(super) struct LoopClock {
 
 impl RuntimeCore {
     /// Before a frame's commits, which then step `dt` more.
-    pub(super) fn keep_loops_on_clock(&mut self, dt: f64) {
+    pub(in crate::runtime) fn keep_loops_on_clock(&mut self, dt: f64) {
         self.motion.loop_clock.lead = dt * f64::from(self.time_scale);
         self.catch_loops_up();
     }
 
     /// Gives running loops the app time animation time dropped since they last caught up.
     /// Commits call it too, so a loop a hidden wake starts isn't given time from before it.
-    pub(super) fn catch_loops_up(&mut self) {
+    pub(in crate::runtime) fn catch_loops_up(&mut self) {
         let k = f64::from(self.time_scale);
         let end = self.t + self.motion.loop_clock.lead;
         let c = &mut self.motion.loop_clock;
@@ -47,12 +47,12 @@ impl RuntimeCore {
     }
 
     /// Where a loop a commit starts at node time `t` begins.
-    pub(super) fn loop_start(&self, id: NodeId, t: f64) -> f64 {
+    pub(in crate::runtime) fn loop_start(&self, id: NodeId, t: f64) -> f64 {
         t + self.motion.loop_clock.lead * f64::from(self.scene.store().node_time_scale(id))
     }
 
     /// The frame's step: commits after it start their loops where they are.
-    pub(super) fn loops_stepped(&mut self) {
+    pub(in crate::runtime) fn loops_stepped(&mut self) {
         self.motion.loop_clock.lead = 0.0;
     }
 
@@ -60,7 +60,7 @@ impl RuntimeCore {
     /// pushing the products onto `scales`. `exiting` nodes drop their own factor, which the app
     /// can no longer change, and follow their parent's. A node whose clock changes keeps its
     /// place: the store rebases its tracks, and its reveal words and loop shift by the same amount.
-    pub(super) fn sync_time_scales(&mut self, nodes: &[Node], scales: &mut Vec<f32>, exiting: bool) {
+    pub(in crate::runtime) fn sync_time_scales(&mut self, nodes: &[Node], scales: &mut Vec<f32>, exiting: bool) {
         for n in &nodes[scales.len()..] {
             let own = if exiting { 1.0 } else { n.time_scale };
             let k = own * n.parent.and_then(|p| scales.get(p).copied()).unwrap_or(1.0);

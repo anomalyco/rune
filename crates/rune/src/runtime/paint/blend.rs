@@ -132,7 +132,7 @@ pub(crate) fn premul(c: Color, opacity: f32, srgb: bool) -> [f32; 4] {
 /// endpoint yields 0.99999994: half white would round to RGB 127 but alpha 128, darkening
 /// even white over white. Preserve the authored endpoint before the two painters take their
 /// byte steps. This isn't a near-white threshold or a change to gradient interpolation.
-pub(super) fn flat_base(c: Color, srgb: bool, translucent: bool) -> [f32; 4] {
+pub(in crate::runtime) fn flat_base(c: Color, srgb: bool, translucent: bool) -> [f32; 4] {
     let mut rgba = premul(c, 1.0, srgb);
     if srgb && translucent {
         for (channel, linear) in rgba[..3].iter_mut().zip([c.r, c.g, c.b]) {

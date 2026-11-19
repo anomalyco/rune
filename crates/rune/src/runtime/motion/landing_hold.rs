@@ -7,14 +7,14 @@ use super::*;
 /// The nodes the last commit held at their landing width, kept for the frame that draws them:
 /// motion checks take that frame's re-layout as designed.
 #[derive(Debug, Default)]
-pub(super) struct LandingHolds(HashSet<NodeId>);
+pub(in crate::runtime) struct LandingHolds(HashSet<NodeId>);
 
 impl LandingHolds {
-    pub(super) fn clear(&mut self) {
+    pub(in crate::runtime) fn clear(&mut self) {
         self.0.clear();
     }
 
-    pub(super) fn holds(&self, id: NodeId) -> bool {
+    pub(in crate::runtime) fn holds(&self, id: NodeId) -> bool {
         !self.0.is_empty() && self.0.contains(&id)
     }
 }
@@ -24,7 +24,7 @@ impl RuntimeCore {
     /// `El::hold_landing_width` element whose width changes, and returns each such element's
     /// index with how far it shifts so its anchor child stays where it was drawn. `held` stays
     /// empty when nothing holds.
-    pub(super) fn landing_holds(&mut self, nodes: &[Node], animated: bool, held: &mut Vec<bool>) -> Vec<(usize, f32)> {
+    pub(in crate::runtime) fn landing_holds(&mut self, nodes: &[Node], animated: bool, held: &mut Vec<bool>) -> Vec<(usize, f32)> {
         held.clear();
         let mut out = Vec::new();
         if !animated || self.reduced_motion {

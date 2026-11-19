@@ -56,7 +56,7 @@ impl RuntimeCore {
         }
     }
 
-    pub(super) fn run_file_dialog(&mut self, app: &mut dyn AppDriver, id: u64, result: FileDialogResult, one: &mut Tx) -> bool {
+    pub(in crate::runtime) fn run_file_dialog(&mut self, app: &mut dyn AppDriver, id: u64, result: FileDialogResult, one: &mut Tx) -> bool {
         let Some(i) = self.host.file_dialog_answers.iter().position(|(dialog, _)| *dialog == id) else { return false };
         let (_, f) = self.host.file_dialog_answers.remove(i);
         self.trace_event(format_args!(

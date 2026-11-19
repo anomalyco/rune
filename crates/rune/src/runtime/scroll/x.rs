@@ -31,11 +31,11 @@ const RUN_SLOP: f32 = 10.0;
 /// The wheel or trackpad gesture in progress, and who has it. Its phase carries when its last
 /// delta came and, once the platform ended it, when that was: one fact, in one place.
 #[derive(Debug, Default)]
-pub(super) struct WheelLock {
+pub(in crate::runtime) struct WheelLock {
     seq: Seq,
     /// The gesture deltas arriving now belong to: a new one whenever a gesture starts or the
     /// window loses the gesture.
-    pub(super) gesture: Attempt,
+    pub(in crate::runtime) gesture: Attempt,
     /// Who has the gesture's deltas: the arriving gesture's owner, or the previous gesture's
     /// while deltas of it still wait in the queue for `on_wheel` handlers.
     run: WheelRun,
@@ -141,7 +141,7 @@ impl WheelRun {
 
 /// Who has the gesture `WheelLock` runs.
 #[derive(Clone, Debug, Default, PartialEq)]
-pub(super) enum WheelOwner {
+pub(in crate::runtime) enum WheelOwner {
     /// Nobody yet: its first delta picks.
     #[default]
     Unpicked,
@@ -234,20 +234,20 @@ impl WheelPhase {
 
 impl WheelLock {
     /// Whether a delta at `now` that is whole lines (`whole`) is a notch: the run it belongs to decides.
-    pub(super) fn notched(&mut self, now: f64, whole: bool) -> bool { self.kind.step(now, whole) }
+    pub(in crate::runtime) fn notched(&mut self, now: f64, whole: bool) -> bool { self.kind.step(now, whole) }
 
     /// Who has the gesture arriving now: deltas of older gestures don't reach it.
-    pub(super) fn owner(&self) -> &WheelOwner { self.run.arriving() }
+    pub(in crate::runtime) fn owner(&self) -> &WheelOwner { self.run.arriving() }
 
     /// Who has `gesture`'s deltas: the arriving gesture's own, or an older gesture's while its
     /// queued deltas still run.
-    pub(super) fn owner_of(&self, gesture: Attempt) -> Option<&WheelOwner> {
+    pub(in crate::runtime) fn owner_of(&self, gesture: Attempt) -> Option<&WheelOwner> {
         if gesture == self.gesture { Some(self.run.arriving()) } else { self.run.waiting(gesture) }
     }
 
     /// Who has `gesture`'s deltas becomes `owner`, giving a gesture the lock doesn't hold a
     /// fresh start of its own beside the arriving one's.
-    pub(super) fn set_owner(&mut self, gesture: Attempt, owner: WheelOwner) {
+    pub(in crate::runtime) fn set_owner(&mut self, gesture: Attempt, owner: WheelOwner) {
         if gesture == self.gesture {
             *self.run.arriving_mut() = owner;
         } else {
@@ -257,18 +257,18 @@ impl WheelLock {
     }
 
     /// Whether the platform reports the phases of the gesture the lock runs.
-    pub(super) fn phased(&self) -> bool { self.phase.phased() }
+    pub(in crate::runtime) fn phased(&self) -> bool { self.phase.phased() }
 
     /// A delta of `gesture` runs: an owner the lock already holds for that gesture takes it, and
     /// any other queued gesture starts afresh, beside the arriving gesture's own owner.
-    pub(super) fn sync_gesture(&mut self, gesture: Attempt) {
+    pub(in crate::runtime) fn sync_gesture(&mut self, gesture: Attempt) {
         if gesture == self.gesture || self.run.waiting(gesture).is_some() { return; }
         let arriving = std::mem::take(self.run.arriving_mut());
         self.run = WheelRun::Waiting { gesture, owner: WheelOwner::Unpicked, arriving };
     }
 
     /// The gesture is the momentum of one that ended (`WheelEvent::momentum`).
-    pub(super) fn momentum(&self) -> bool { self.phase.momentum() }
+    pub(in crate::runtime) fn momentum(&self) -> bool { self.phase.momentum() }
 
     /// The next gesture starts, unphased. Only an owner whose gesture still has a delta waiting
     /// for `on_wheel` handlers keeps its place: `pending` is the gesture the oldest queued delta
@@ -320,7 +320,7 @@ impl WheelLock {
     }
 
     /// The viewport a vertical delta `dy` at (x, y) at `now` keeps to, when it continues the run.
-    pub(super) fn vertical_run(&self, now: f64, x: f32, y: f32, dy: f32) -> Option<NodeId> {
+    pub(in crate::runtime) fn vertical_run(&self, now: f64, x: f32, y: f32, dy: f32) -> Option<NodeId> {
         let run = self.vertical?;
         let continues = now - run.at <= RUN_IDLE && (x - run.x).hypot(y - run.y) < RUN_SLOP && (run.moved || (dy < 0.0) == run.down);
         continues.then_some(run.id)
@@ -328,7 +328,7 @@ impl WheelLock {
 
     /// A vertical delta `dy` at (x, y) at `now` scrolled viewport `id` (`moved`: it moved it);
     /// `continued`, as part of the run, or else starting one.
-    pub(super) fn ran_vertical(&mut self, id: NodeId, now: f64, x: f32, y: f32, dy: f32, moved: bool, continued: bool) {
+    pub(in crate::runtime) fn ran_vertical(&mut self, id: NodeId, now: f64, x: f32, y: f32, dy: f32, moved: bool, continued: bool) {
         match &mut self.vertical {
             Some(run) if continued => run.at = now,
             _ => self.vertical = Some(VerticalRun { id, at: now, x, y, down: dy < 0.0, moved }),
@@ -336,7 +336,7 @@ impl WheelLock {
     }
 
     /// No viewport takes the run: the next delta starts afresh.
-    pub(super) fn end_vertical(&mut self) { self.vertical = None; }
+    pub(in crate::runtime) fn end_vertical(&mut self) { self.vertical = None; }
 
     /// The platform began a gesture at `now`: its first delta picks the axis afresh, unless it
     /// is the momentum of one that just ended.
@@ -411,7 +411,7 @@ pub(crate) const SHIFT_TURNS_WHEEL: bool = !cfg!(target_os = "macos");
 
 impl ScrollState {
     /// The offset, velocity and limit on one axis.
-    pub(super) fn axis(&mut self, horizontal: bool) -> (&mut f64, f64) {
+    pub(in crate::runtime) fn axis(&mut self, horizontal: bool) -> (&mut f64, f64) {
         if horizontal { (&mut self.x.offset, self.x.max) } else { (&mut self.offset, self.max) }
     }
 }
@@ -432,7 +432,7 @@ impl RuntimeCore {
     /// A delta arrived: a gesture idle too long, or ended and not followed by its momentum,
     /// is over, and this delta starts the next. Without phases, a delta wholly on the other
     /// axis (Shift let go, a tilt, a second wheel) also starts a new gesture.
-    pub(super) fn wheel_delta_arrived(&mut self, dx: f32, dy: f32) {
+    pub(in crate::runtime) fn wheel_delta_arrived(&mut self, dx: f32, dy: f32) {
         self.drop_scroll_holds();
         let now = self.now_clock();
         let pending = self.wheel_pending();
@@ -441,7 +441,7 @@ impl RuntimeCore {
 
     /// The gesture the oldest wheel delta still waiting for `on_wheel` handlers belongs to: the
     /// only owner a new gesture can hand over to, since the queue runs in order.
-    pub(super) fn wheel_pending(&self) -> Option<Attempt> {
+    pub(in crate::runtime) fn wheel_pending(&self) -> Option<Attempt> {
         self.frame.queue.iter().find_map(|a| match a {
             Action::Wheel { gesture, .. } => Some(*gesture),
             _ => None,
@@ -450,14 +450,14 @@ impl RuntimeCore {
 
     /// Whether a wheel delta waits in the queue for `on_wheel` handlers: one of gesture `of`,
     /// or of any gesture.
-    pub(super) fn wheel_queued(&self, of: Option<Attempt>) -> bool {
+    pub(in crate::runtime) fn wheel_queued(&self, of: Option<Attempt>) -> bool {
         self.frame.queue.iter().any(|a| matches!(a, Action::Wheel { gesture: g, .. } if of.is_none_or(|of| *g == of)))
     }
 
     /// Scrolls by a delta no `on_wheel` handler took, on the axis the gesture locked to.
     /// `phased` is that delta's own gesture's policy, which a delta queued before a newer
     /// gesture began keeps.
-    pub(super) fn wheel_scroll_for(&mut self, gesture: Attempt, ev: crate::WheelEvent, phased: bool, start: crate::runtime::gesture_dispatch::WheelStart) {
+    pub(in crate::runtime) fn wheel_scroll_for(&mut self, gesture: Attempt, ev: crate::WheelEvent, phased: bool, start: crate::runtime::gesture_dispatch::WheelStart) {
         let (x, y, dx, dy) = (ev.x, ev.y, ev.dx, ev.dy);
         if dx == 0.0 && dy == 0.0 { return; }
         self.scroll.wheel_lock.sync_gesture(gesture);
@@ -496,7 +496,7 @@ impl RuntimeCore {
     }
 
     /// The window lost the pointer or focus: a gesture in progress won't report its end here.
-    pub(super) fn wheel_lost(&mut self) {
+    pub(in crate::runtime) fn wheel_lost(&mut self) {
         let pending = self.wheel_pending();
         self.scroll.wheel_lock.lost(pending);
     }
@@ -569,7 +569,7 @@ impl RuntimeCore {
     }
 
     /// Steps viewport `i`'s horizontal limit and momentum, as `step_scroll` does the vertical.
-    pub(super) fn step_scroll_x(&mut self, i: usize, dt: f32, catch_up: bool) -> bool {
+    pub(in crate::runtime) fn step_scroll_x(&mut self, i: usize, dt: f32, catch_up: bool) -> bool {
         let id = self.tree.nodes[i].id;
         let overflow = self.scroll_overflow_x(i);
         if let Some(active) = self.step_touch_scroll(id, overflow, dt, true) { return active; }
@@ -609,7 +609,7 @@ impl RuntimeCore {
 
     /// `Tx::scroll_into_view` on x: scrolls the nearest horizontal viewport around row `key`
     /// just far enough to show it, leaving its `El::scroll_margin`.
-    pub(super) fn reveal_row_x(&mut self, scope: Option<&str>, key: &str) {
+    pub(in crate::runtime) fn reveal_row_x(&mut self, scope: Option<&str>, key: &str) {
         let target = self.live_named(scope, key)
             .map(|i| (i, self.tree.nodes[i].target[0], self.tree.nodes[i].local.w))
             .or_else(|| {

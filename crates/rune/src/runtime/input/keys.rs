@@ -4,7 +4,7 @@ use super::*;
 impl RuntimeCore {
     /// Offer a logical key that already passed `held_gate` to the app, the focused
     /// input's handler, focus traversal and the focused editor, in that order.
-    pub(super) fn route_key(&mut self, app: &mut dyn AppDriver, ev: &KeyEvent, repeat: bool, one: &mut Tx) -> bool {
+    pub(in crate::runtime) fn route_key(&mut self, app: &mut dyn AppDriver, ev: &KeyEvent, repeat: bool, one: &mut Tx) -> bool {
         let physical_key = one.physical_key;
         one.by_keys = true;
         one.focused = self.focused_key();
@@ -103,7 +103,7 @@ impl RuntimeCore {
     /// the keys to the message list beside it. A view that overflows keeps them even at the edge
     /// a key moves toward, where it does nothing, as an NSTextView does; an app that wants
     /// another view paged there routes the key itself with `Tx::scroll_page`.
-    pub(super) fn page_scroll(&mut self, app: &dyn AppDriver, ev: &KeyEvent) -> bool {
+    pub(in crate::runtime) fn page_scroll(&mut self, app: &dyn AppDriver, ev: &KeyEvent) -> bool {
         use crate::Key::*;
         if ev.mods.cmd || ev.mods.alt || ev.mods.ctrl { return false; }
         // A focused field in a virtual row that scrolled out has no node: page its list.
@@ -146,12 +146,12 @@ impl RuntimeCore {
     }
 
     /// A focused scroll view that presses nothing passes Space on to scroll itself.
-    pub(super) fn scrolls_on_space(&self, i: usize) -> bool {
+    pub(in crate::runtime) fn scrolls_on_space(&self, i: usize) -> bool {
         self.tree.nodes[i].handlers.on_press.is_none() && self.pageable(i)
     }
 
     /// Whether node `i` is a live scroll view whose content overflows it.
-    pub(super) fn pageable(&self, i: usize) -> bool {
+    pub(in crate::runtime) fn pageable(&self, i: usize) -> bool {
         self.tree.nodes[i].scroll.is_some() && !self.subtree_exiting(i) && self.allowed(i)
             && self.scroll.scrolls.get(&self.tree.nodes[i].id).is_some_and(|st| st.max > 0.5)
     }
@@ -160,7 +160,7 @@ impl RuntimeCore {
     /// height. The hand moved it: any fling or glide stops, and a `stick_bottom` view that
     /// lands on its end follows it again.
     #[inline]
-    pub(super) fn page_to(&mut self, i: usize, to: impl FnOnce(f64, f64, f64) -> f64) -> bool {
+    pub(in crate::runtime) fn page_to(&mut self, i: usize, to: impl FnOnce(f64, f64, f64) -> f64) -> bool {
         let mut to = Some(to);
         self.page_to_dyn(i, &mut |offset, max, page| to.take().expect("page_to runs once")(offset, max, page))
     }
@@ -176,7 +176,7 @@ impl RuntimeCore {
         true
     }
 
-    pub(super) fn focused_layout(&mut self) -> Option<TextLayout> {
+    pub(in crate::runtime) fn focused_layout(&mut self) -> Option<TextLayout> {
         let path = self.kbd.focus.owned()?;
         let s = self.env.scale;
         let n = self.node(&path)?;
@@ -191,14 +191,14 @@ impl RuntimeCore {
     }
 
     #[inline]
-    pub(super) fn with_focused(&mut self, app: &mut dyn AppDriver, f: impl FnOnce(&mut crate::edit::TextEdit) -> EditOutcome, tx: &mut Tx) -> bool {
+    pub(in crate::runtime) fn with_focused(&mut self, app: &mut dyn AppDriver, f: impl FnOnce(&mut crate::edit::TextEdit) -> EditOutcome, tx: &mut Tx) -> bool {
         let mut f = Some(f);
         self.with_focused_state_dyn(app, &mut |state, access, _| f.take().expect("focused edit runs once")(access(state)), tx)
     }
 
     /// [`Self::with_focused`] for an edit that needs the app state (an app's paste hook).
     #[inline]
-    pub(super) fn with_focused_state(&mut self, app: &mut dyn AppDriver, f: impl FnOnce(crate::states::States<'_>, &crate::el::EditFn, &mut Tx) -> EditOutcome, tx: &mut Tx) -> bool {
+    pub(in crate::runtime) fn with_focused_state(&mut self, app: &mut dyn AppDriver, f: impl FnOnce(crate::states::States<'_>, &crate::el::EditFn, &mut Tx) -> EditOutcome, tx: &mut Tx) -> bool {
         let mut f = Some(f);
         self.with_focused_state_dyn(app, &mut |state, access, tx| f.take().expect("focused edit runs once")(state, access, tx), tx)
     }
@@ -256,7 +256,7 @@ impl RuntimeCore {
     }
 
     /// Whether the focused field has an input method composition (preedit) open.
-    pub(super) fn composing(&mut self, app: &mut dyn AppDriver) -> bool {
+    pub(in crate::runtime) fn composing(&mut self, app: &mut dyn AppDriver) -> bool {
         let Some(access) = self.focused_input().map(|i| i.access.clone()) else { return self.app_ime_composing(app) };
         match access {
             Some(access) => access(app.states()).preedit().is_some(),
@@ -264,13 +264,13 @@ impl RuntimeCore {
         }
     }
 
-    pub(super) fn node(&self, path: &str) -> Option<&Node> {
+    pub(in crate::runtime) fn node(&self, path: &str) -> Option<&Node> {
         self.tree.nodes.iter().enumerate().find(|(i, n)| n.path == path && !self.subtree_exiting(*i) && !self.subtree_unmounted(*i)).map(|(_, n)| n)
     }
 
     /// `El::on_key` handlers on the focused element and its ancestors, innermost first. A
     /// focused text field's keys stay its own.
-    pub(super) fn element_key(&mut self, app: &mut dyn AppDriver, ev: &KeyEvent, tx: &mut Tx) -> bool {
+    pub(in crate::runtime) fn element_key(&mut self, app: &mut dyn AppDriver, ev: &KeyEvent, tx: &mut Tx) -> bool {
         let Some(i) = self.focused_index() else { return false };
         if !self.can_focus(i) || self.focused_input().is_some() { return false; }
         let handlers: Vec<_> = std::iter::successors(Some(i), |&j| self.tree.nodes[j].parent)
@@ -280,14 +280,14 @@ impl RuntimeCore {
         handlers.into_iter().any(|f| Tx::took(f(app.states(), ev, tx), tx))
     }
 
-    pub(super) fn focused_input(&self) -> Option<&InputSpec> {
+    pub(in crate::runtime) fn focused_input(&self) -> Option<&InputSpec> {
         let path = self.kbd.focus.path()?;
         self.node(path).and_then(|n| n.input.as_deref()).or_else(|| self.commit.virtual_inputs.get(path).map(Box::as_ref))
     }
 
     /// What [`Tx::focused`] reports: the focused link's id, else the focused element's key,
     /// else its path's last segment (a field in a virtual row that scrolled out has no node).
-    pub(super) fn focused_key(&self) -> Option<String> {
+    pub(in crate::runtime) fn focused_key(&self) -> Option<String> {
         let path = self.kbd.focus.path()?;
         if let Some(id) = self.focused_index().and_then(|i| self.focused_link_id(i)) { return Some(id); }
         Some(self.focused_index().and_then(|i| self.tree.nodes[i].key.clone())
@@ -295,7 +295,7 @@ impl RuntimeCore {
     }
 
     /// The focused element's index. Unlike [`Runtime::node`], this finds it while it exits.
-    pub(super) fn focused_index(&self) -> Option<usize> {
+    pub(in crate::runtime) fn focused_index(&self) -> Option<usize> {
         let path = self.kbd.focus.path()?;
         self.tree.nodes.iter().position(|n| n.path == path)
     }
@@ -305,7 +305,7 @@ impl RuntimeCore {
     }
 
     /// [`Runtime::key`]; `stage` routes it to the open playground's stage, for `Play::press`.
-    pub(super) fn queue_key(&mut self, ev: KeyEvent, stage: bool) {
+    pub(in crate::runtime) fn queue_key(&mut self, ev: KeyEvent, stage: bool) {
         self.dismiss_help();
         // A key ends a middle-click autoscroll, and does nothing else.
         if self.autoscroll_key() { return; }
@@ -342,7 +342,7 @@ impl RuntimeCore {
         self.frame.queue.push(Action::Paste(content.untrusted(), None));
     }
 
-    pub(super) fn app_paste_handler(&self) -> Option<crate::el::PasteFn> {
+    pub(in crate::runtime) fn app_paste_handler(&self) -> Option<crate::el::PasteFn> {
         self.tree.nodes.get(self.active_modal().unwrap_or_else(|| self.app_root()))?.handlers.on_paste.clone()
     }
     pub(crate) fn accepts_paste(&self) -> bool {

@@ -111,11 +111,11 @@ fn without_a_spring_a_glide_runs_on_glide() {
         path
     };
     let glide = path(&|tx| tx.scroll_to("scroll", 0.0, 500.0));
-    assert_eq!(glide, path(&|tx| tx.scroll_to_with("scroll", 0.0, 500.0, motion::GLIDE)));
+    assert_eq!(glide, path(&|tx| tx.scroll_to_with("scroll", 0.0, 500.0, crate::tok::motion::GLIDE)));
     // The same path a spring on `GLIDE` steps from rest.
     let (mut d, mut v) = (-500.0f32, 0.0);
     for (f, y) in glide.iter().enumerate().take(30) {
-        (d, v) = motion::GLIDE.sample(d, v, 0.0, DT as f32);
+        (d, v) = crate::tok::motion::GLIDE.sample(d, v, 0.0, DT as f32);
         assert!((y - (500.0 + f64::from(d))).abs() < 1e-3, "frame {f}: {y} against {}", 500.0 + d);
     }
     assert_eq!(*glide.last().unwrap(), 500.0);

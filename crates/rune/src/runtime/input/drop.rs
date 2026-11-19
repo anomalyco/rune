@@ -119,7 +119,7 @@ impl RuntimeCore {
 
     /// Drops the drag's target and the hover callback it would hear `false` on, unheard: their
     /// elements went with the state they were built for.
-    pub(super) fn forget_drop_targets(&mut self) {
+    pub(in crate::runtime) fn forget_drop_targets(&mut self) {
         if let Some(over) = &mut self.pointer.file_drag.over { over.aimed = None; }
         self.pointer.file_drag.hovered = None;
     }
@@ -133,7 +133,7 @@ impl RuntimeCore {
     /// (`stale`: state changed this frame, or while the window was covered and built nothing)
     /// waits for this frame's build, once, so it lands on what is mounted and laid out now. The
     /// file steps after it wait too, to keep their order.
-    pub(super) fn hold_files(&mut self, queue: ActionQueue, stale: bool) -> ActionQueue {
+    pub(in crate::runtime) fn hold_files(&mut self, queue: ActionQueue, stale: bool) -> ActionQueue {
         let waited = std::mem::take(&mut self.pointer.file_drag.waited);
         let aims = |a: &Action| matches!(a, Action::Files(FileEvent::Hover(..) | FileEvent::Move | FileEvent::Drop(..)));
         if waited || !stale || !queue.iter().any(aims) { return queue; }
@@ -143,19 +143,19 @@ impl RuntimeCore {
     }
 
     /// The held file steps go first next frame.
-    pub(super) fn release_files(&mut self) {
+    pub(in crate::runtime) fn release_files(&mut self) {
         if self.pointer.file_drag.held.is_empty() { return; }
         self.pointer.file_drag.waited = true;
         self.frame.queue.prepend(std::mem::take(&mut self.pointer.file_drag.held));
     }
 
     /// File steps wait for the next frame (`hold_files`).
-    pub(super) fn files_held(&self) -> bool { self.pointer.file_drag.waited }
+    pub(in crate::runtime) fn files_held(&self) -> bool { self.pointer.file_drag.waited }
 
-    pub(super) fn clear_drop_hits(&mut self) { self.hit.drop_hits.clear(); }
+    pub(in crate::runtime) fn clear_drop_hits(&mut self) { self.hit.drop_hits.clear(); }
 
     /// During `build`: drop target `i` draws visible over `rect`, after the first `seq` hits.
-    pub(super) fn push_drop_hit(&mut self, i: usize, rect: [f32; 4], seq: usize) {
+    pub(in crate::runtime) fn push_drop_hit(&mut self, i: usize, rect: [f32; 4], seq: usize) {
         if rect[2] > rect[0] && rect[3] > rect[1] {
             self.hit.drop_hits.push((self.tree.nodes[i].id, rect, seq));
         }
@@ -260,7 +260,7 @@ impl RuntimeCore {
         ran
     }
 
-    pub(super) fn run_files(&mut self, app: &mut dyn AppDriver, event: FileEvent, tx: &mut Tx) -> bool {
+    pub(in crate::runtime) fn run_files(&mut self, app: &mut dyn AppDriver, event: FileEvent, tx: &mut Tx) -> bool {
         match event {
             FileEvent::Hover(paths, at) => self.hover_files(app, &paths, at, tx),
             FileEvent::Move => {

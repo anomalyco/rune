@@ -83,7 +83,7 @@ impl TextInputState {
 
 impl RuntimeCore {
     /// Any vertical shift from ancestor growth rows whose presented height has not settled to layout.
-    pub(super) fn stack_row_dy(&self, nodes: &[Node], i: usize) -> f32 {
+    pub(in crate::runtime) fn stack_row_dy(&self, nodes: &[Node], i: usize) -> f32 {
         let mut dy = 0.0;
         let applied = std::ptr::eq(nodes, self.tree.nodes.as_slice());
         for r in std::iter::successors(Some(i), |&p| nodes[p].parent.filter(|_| nodes[p].above.is_none())) {
@@ -110,7 +110,7 @@ impl RuntimeCore {
 
     /// Node `i`'s caret line `[x, y, w, h]` in window points at its laid-out place, after
     /// scrolling and sticky shifts, if it is a focused text field.
-    pub(super) fn caret_rect(&self, nodes: &[Node], i: usize) -> Option<[f32; 4]> {
+    pub(in crate::runtime) fn caret_rect(&self, nodes: &[Node], i: usize) -> Option<[f32; 4]> {
         let n = &nodes[i];
         let (inp, spec, laid) = (n.input.as_ref()?, n.text.as_ref()?, n.text_layout.as_ref()?);
         if !inp.edit.focused { return None; }
@@ -133,7 +133,7 @@ impl RuntimeCore {
     /// After an edit, scrolls the focused field's nearest scroll viewport on each axis just far
     /// enough to show the caret line, as a browser does for a textarea, leaving the viewport's
     /// `El::scroll_margin` like CSS `scroll-padding`.
-    pub(super) fn follow_caret(&mut self, app: &mut dyn AppDriver) {
+    pub(in crate::runtime) fn follow_caret(&mut self, app: &mut dyn AppDriver) {
         let Some(i) = self.focused_index() else { return };
         let Some(r) = self.caret_rect(&self.tree.nodes, i) else { return };
         let mut scrolled = false;
@@ -168,7 +168,7 @@ impl RuntimeCore {
 
     /// Refreshes the caret the next view sees from `nodes` (the current frame's when `None`).
     /// Returns whether it moved.
-    pub(super) fn caret_moved(&mut self, nodes: Option<&[Node]>) -> bool {
+    pub(in crate::runtime) fn caret_moved(&mut self, nodes: Option<&[Node]>) -> bool {
         let nodes = nodes.unwrap_or(&self.tree.nodes);
         let next = nodes.iter().position(|n| n.input.as_ref().is_some_and(|inp| inp.edit.focused))
             .and_then(|i| Some((i, self.caret_rect(nodes, i)?)));

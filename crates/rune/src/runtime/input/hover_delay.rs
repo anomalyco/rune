@@ -8,7 +8,7 @@ use super::*;
 /// Where a delayed element's report stands. An element with none heard no enter and waits for
 /// none.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) enum Delayed {
+pub(in crate::runtime) enum Delayed {
     /// The pointer is inside; the enter is reported at `due` (clock seconds).
     EnterDue { due: f64 },
     /// It heard the enter.
@@ -18,7 +18,7 @@ pub(super) enum Delayed {
 }
 
 #[derive(Debug, PartialEq)]
-pub(super) enum Event {
+pub(in crate::runtime) enum Event {
     /// Whether the pointer is inside it now; `may_enter` is false while a held press, or a
     /// press or blur the pointer hasn't moved since, keeps an enter from starting its wait.
     /// `delay` is its [enter, exit] delay in seconds.
@@ -33,14 +33,14 @@ pub(super) enum Event {
 }
 
 #[derive(Debug, PartialEq)]
-pub(super) enum Effect {
+pub(in crate::runtime) enum Effect {
     /// Its `on_hover_change` hears this.
     Report(bool),
     /// Wake at this clock time, when the wait ends.
     WakeAt(f64),
 }
 
-pub(super) fn step(state: &mut Option<Delayed>, event: Event) -> Effects<Effect> {
+pub(in crate::runtime) fn step(state: &mut Option<Delayed>, event: Event) -> Effects<Effect> {
     use Delayed::*;
     let shown = matches!(state, Some(Shown | LeaveDue { .. }));
     match event {
@@ -87,22 +87,22 @@ pub(super) fn step(state: &mut Option<Delayed>, event: Event) -> Effects<Effect>
 /// come due together report in the order they started, and shown hovers in the order they
 /// were shown.
 #[derive(Default)]
-pub(super) struct HoverDelays(Vec<(String, Delayed)>);
+pub(in crate::runtime) struct HoverDelays(Vec<(String, Delayed)>);
 
 impl HoverDelays {
-    pub(super) fn is_empty(&self) -> bool { self.0.is_empty() }
+    pub(in crate::runtime) fn is_empty(&self) -> bool { self.0.is_empty() }
 
-    pub(super) fn paths(&self) -> impl Iterator<Item = &str> { self.0.iter().map(|(p, _)| p.as_str()) }
+    pub(in crate::runtime) fn paths(&self) -> impl Iterator<Item = &str> { self.0.iter().map(|(p, _)| p.as_str()) }
 
     /// Some wait is running.
-    pub(super) fn waiting(&self) -> bool {
+    pub(in crate::runtime) fn waiting(&self) -> bool {
         self.0.iter().any(|(_, d)| matches!(d, Delayed::EnterDue { .. } | Delayed::LeaveDue { .. }))
     }
 
-    pub(super) fn clear(&mut self) { self.0.clear(); }
+    pub(in crate::runtime) fn clear(&mut self) { self.0.clear(); }
 
     /// Drops `path`'s report unheard. Returns whether it had heard the enter.
-    pub(super) fn forget(&mut self, path: &str) -> bool {
+    pub(in crate::runtime) fn forget(&mut self, path: &str) -> bool {
         let Some(i) = self.0.iter().position(|(p, _)| p == path) else { return false };
         matches!(self.0.remove(i).1, Delayed::Shown | Delayed::LeaveDue { .. })
     }
@@ -127,7 +127,7 @@ impl HoverDelays {
 
 impl RuntimeCore {
     /// Steps `path`'s delayed report and carries out what it asks.
-    pub(super) fn step_hover_delay(&mut self, path: &str, event: Event) {
+    pub(in crate::runtime) fn step_hover_delay(&mut self, path: &str, event: Event) {
         for effect in self.pointer.hover_delays.step(path, event) {
             match effect {
                 Effect::Report(inside) => self.frame.queue.push(Action::HoverChange(path.to_owned(), inside)),
@@ -137,7 +137,7 @@ impl RuntimeCore {
     }
 
     /// Starts or drops the waits of `hover_delays` elements whose inside changed.
-    pub(super) fn settle_hover_delays(&mut self) {
+    pub(in crate::runtime) fn settle_hover_delays(&mut self) {
         let mut paths: Vec<String> = self.pointer.hover_delays.paths().map(str::to_owned).collect();
         paths.extend(self.pointer.hover_within.iter().filter(|p| self.node(p).is_some_and(|n| n.handlers.hover_delay != [0.0; 2])).cloned());
         paths.sort();
@@ -158,7 +158,7 @@ impl RuntimeCore {
     }
 
     /// Reports the delayed hover changes due by this frame.
-    pub(super) fn fire_hover_delays(&mut self) {
+    pub(in crate::runtime) fn fire_hover_delays(&mut self) {
         if !self.pointer.hover_delays.waiting() { return; }
         let now = self.clock + 1e-6;
         let paths: Vec<String> = self.pointer.hover_delays.paths().map(str::to_owned).collect();
@@ -166,13 +166,13 @@ impl RuntimeCore {
     }
 
     /// A press stops the waits to report an enter.
-    pub(super) fn press_hover_delays(&mut self) {
+    pub(in crate::runtime) fn press_hover_delays(&mut self) {
         let paths: Vec<String> = self.pointer.hover_delays.paths().map(str::to_owned).collect();
         for path in paths { self.step_hover_delay(&path, Event::Pressed); }
     }
 
     /// The window lost focus: every shown hover hears its leave, and the waits stop.
-    pub(super) fn end_hover_delays(&mut self) {
+    pub(in crate::runtime) fn end_hover_delays(&mut self) {
         let paths: Vec<String> = self.pointer.hover_delays.paths().map(str::to_owned).collect();
         for path in paths { self.step_hover_delay(&path, Event::Ended); }
     }

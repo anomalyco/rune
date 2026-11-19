@@ -1,4 +1,5 @@
 use super::*;
+use super::prune::REVEALS_KEPT;
 use crate::{Env, GrowthSpec, ScrollSpec, col, el, text};
 
 #[test]

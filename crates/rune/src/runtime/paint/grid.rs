@@ -21,7 +21,7 @@ use crate::el::grid::{DrawnRow, Grid, GridRow, LaidRow};
 impl RuntimeCore {
     /// Paints node `i`'s grid inside its snapped box `r` (exact `r_exact`, device px edges).
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn paint_grid(&mut self, i: usize, g: &Grid, r: [f32; 4], r_exact: [f32; 4], clip: [f32; 4], fade: [f32; 4], o: f32, glyph_count: &mut usize) {
+    pub(in crate::runtime) fn paint_grid(&mut self, i: usize, g: &Grid, r: [f32; 4], r_exact: [f32; 4], clip: [f32; 4], fade: [f32; 4], o: f32, glyph_count: &mut usize) {
         let s = self.env.scale;
         let srgb = self.paint.srgb_blend;
         let flow = self.tree.nodes[i].flow;

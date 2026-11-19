@@ -82,7 +82,7 @@ impl FrameState {
 
 /// A resting window's timer poll, and the frame it asked for.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub(super) enum TimerWake {
+pub(in crate::runtime) enum TimerWake {
     /// No timer poll stands for a frame.
     #[default]
     Idle,
@@ -93,7 +93,7 @@ pub(super) enum TimerWake {
     Taken { polled_at: f64 },
 }
 
-pub(super) enum TimerWakeEvent {
+pub(in crate::runtime) enum TimerWakeEvent {
     /// A resting wake's poll ran `at` and asked for a frame.
     Asked { at: f64 },
     /// A frame polls; `due`: a deadline came due since the timer's poll, so it polls again.
@@ -108,7 +108,7 @@ pub(super) enum TimerWakeEvent {
 impl TimerWake {
     /// The state after `event`, and, for a frame, whether a timer's poll already stands for it;
     /// for a cancel, the poll time the poll's timers count from.
-    pub(super) fn step(self, event: TimerWakeEvent) -> (TimerWake, Option<f64>) {
+    pub(in crate::runtime) fn step(self, event: TimerWakeEvent) -> (TimerWake, Option<f64>) {
         match (self, event) {
             (_, TimerWakeEvent::Asked { at }) => (TimerWake::Asked { at }, None),
             (_, TimerWakeEvent::PollAlone) => (TimerWake::Idle, None),
@@ -121,13 +121,13 @@ impl TimerWake {
 
     /// At a frame's poll: whether a timer's poll already stands for it. A deadline that came
     /// due since (`due`) still gets this frame's poll.
-    pub(super) fn frame_polled(&mut self, due: bool) -> bool {
+    pub(in crate::runtime) fn frame_polled(&mut self, due: bool) -> bool {
         let (next, taken) = self.step(TimerWakeEvent::Frame { due });
         *self = next;
         taken.is_some()
     }
 
-    pub(super) fn polled_at(&self) -> Option<f64> {
+    pub(in crate::runtime) fn polled_at(&self) -> Option<f64> {
         match *self {
             TimerWake::Taken { polled_at } => Some(polled_at),
             _ => None,
@@ -225,18 +225,18 @@ impl RuntimeCore {
     }
 
     /// `rests`, apart from a loop's own wake (`paint_cycle_tick`).
-    pub(super) fn rests_except_loop(&self) -> bool {
+    pub(in crate::runtime) fn rests_except_loop(&self) -> bool {
         !self.animating && self.rests_but_motion()
     }
 
     /// Nothing waits for a frame but motion: no commit, input, held work, live value or timer
     /// due now (`loop_step` asks the motion apart).
-    pub(super) fn rests_but_motion(&self) -> bool {
+    pub(in crate::runtime) fn rests_but_motion(&self) -> bool {
         self.waiting_work().is_none()
     }
 
     /// What waits for a frame besides motion, if anything (`rests_but_motion`).
-    pub(super) fn waiting_work(&self) -> Option<&'static str> {
+    pub(in crate::runtime) fn waiting_work(&self) -> Option<&'static str> {
         #[cfg(feature = "hot")]
         if self.frame.hot.is_some() { return Some("live edit"); }
         if self.stale() { Some("a commit or input") }

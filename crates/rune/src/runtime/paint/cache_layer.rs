@@ -8,19 +8,19 @@ use crate::machine::Effects;
 mod tests;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) enum ScaleSettle {
+pub(in crate::runtime) enum ScaleSettle {
     Still(f32),
     Settling { scale: f32, since: f64 },
 }
 
 #[derive(Clone, Copy)]
-pub(super) struct AnotherFrame;
+pub(in crate::runtime) struct AnotherFrame;
 
 impl ScaleSettle {
     /// Paint samples the animation clock, not a wall-clock deadline. Continue to
     /// request frames during the interval, including when the clock is slowed.
     #[inline]
-    pub(super) fn step(&mut self, scale: f32, now: f64, reset: bool, epsilon: f32, poll: bool) -> Effects<AnotherFrame> {
+    pub(in crate::runtime) fn step(&mut self, scale: f32, now: f64, reset: bool, epsilon: f32, poll: bool) -> Effects<AnotherFrame> {
         let (seen, since) = match *self {
             Self::Still(seen) => (seen, f64::NEG_INFINITY),
             Self::Settling { scale, since } => (scale, since),
@@ -44,48 +44,48 @@ impl ScaleSettle {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(super) enum RasterPhase {
+pub(in crate::runtime) enum RasterPhase {
     Live,
     Raster { paint_hash: u64 },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) enum RasterPass {
+pub(in crate::runtime) enum RasterPass {
     Paint { glyph_start: usize },
     Elide { glyphs: usize },
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct NodeCache {
-    pub(super) signature: u64,
-    pub(super) raster_scale: f32,
-    pub(super) scale: ScaleSettle,
-    pub(super) env_scale: f32,
-    pub(super) phase: RasterPhase,
-    pub(super) rel_bounds: [f32; 4],
-    pub(super) glyphs: usize,
-    pub(super) commit_gen: u64,
+pub(in crate::runtime) struct NodeCache {
+    pub(in crate::runtime) signature: u64,
+    pub(in crate::runtime) raster_scale: f32,
+    pub(in crate::runtime) scale: ScaleSettle,
+    pub(in crate::runtime) env_scale: f32,
+    pub(in crate::runtime) phase: RasterPhase,
+    pub(in crate::runtime) rel_bounds: [f32; 4],
+    pub(in crate::runtime) glyphs: usize,
+    pub(in crate::runtime) commit_gen: u64,
 }
 
 #[derive(Clone, Copy)]
-pub(super) struct ActiveCache {
-    pub(super) node_index: usize,
-    pub(super) node_id: NodeId,
-    pub(super) instance_start: usize,
-    pub(super) origin: [f32; 2],
-    pub(super) size: [f32; 2],
-    pub(super) cur_scale: f32,
-    pub(super) scale: ScaleSettle,
-    pub(super) env_scale: f32,
+pub(in crate::runtime) struct ActiveCache {
+    pub(in crate::runtime) node_index: usize,
+    pub(in crate::runtime) node_id: NodeId,
+    pub(in crate::runtime) instance_start: usize,
+    pub(in crate::runtime) origin: [f32; 2],
+    pub(in crate::runtime) size: [f32; 2],
+    pub(in crate::runtime) cur_scale: f32,
+    pub(in crate::runtime) scale: ScaleSettle,
+    pub(in crate::runtime) env_scale: f32,
     /// Everything outside commits that paints the subtree: hover, press, links, an outside
     /// hover group and the window-wide state in `build`'s paint hash.
-    pub(super) paint_hash: u64,
-    pub(super) pass: RasterPass,
+    pub(in crate::runtime) paint_hash: u64,
+    pub(in crate::runtime) pass: RasterPass,
 }
 
 impl NodeCache {
     #[inline]
-    pub(super) fn committed_scale(&mut self, scale: f32, now: f64) -> Option<AnotherFrame> {
+    pub(in crate::runtime) fn committed_scale(&mut self, scale: f32, now: f64) -> Option<AnotherFrame> {
         if (scale - self.raster_scale).abs() > 1e-4
             && matches!(self.scale.step(scale, now, false, 1e-4, true), Effects::One(_))
         {
@@ -95,7 +95,7 @@ impl NodeCache {
     }
 
     #[inline]
-    pub(super) fn open(&self, eff_scale: f32, s: f32, settled: bool, now: f64, commit_gen: u64,
+    pub(in crate::runtime) fn open(&self, eff_scale: f32, s: f32, settled: bool, now: f64, commit_gen: u64,
         is_resident: bool, scale_motion: ScaleMotion, paint_hash: u64, check: impl FnOnce() -> bool,
         glyph_start: usize) -> (ScaleSettle, RasterPass, Option<AnotherFrame>) {
         let env_same = (s - self.env_scale).abs() <= 1e-4 && !settled;
@@ -119,7 +119,7 @@ impl NodeCache {
 }
 
 impl RuntimeCore {
-    pub(super) fn prepare_cache_layers(&mut self, sel_ranges: &[(usize, usize, usize)], mark_ranges: &[(usize, usize, usize)]) -> u64 {
+    pub(in crate::runtime) fn prepare_cache_layers(&mut self, sel_ranges: &[(usize, usize, usize)], mark_ranges: &[(usize, usize, usize)]) -> u64 {
         let (s, n_nodes) = (self.env.scale, self.tree.nodes.len());
         self.paint.cache_live_scratch.clear();
         self.paint.cache_check_scratch.clear();
@@ -226,7 +226,7 @@ impl RuntimeCore {
         paint_state_hash
     }
 
-    pub(super) fn close_cached_layer(
+    pub(in crate::runtime) fn close_cached_layer(
         &mut self,
         ac: ActiveCache,
         start: usize,

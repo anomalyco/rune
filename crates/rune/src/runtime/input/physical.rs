@@ -1,7 +1,7 @@
 use super::*;
 use crate::{PhysicalInput, PhysicalKeyCode};
 
-pub(super) struct Fallback { key: KeyEvent, base: Option<char>, unhandled: Option<Unhandled> }
+pub(in crate::runtime) struct Fallback { key: KeyEvent, base: Option<char>, unhandled: Option<Unhandled> }
 
 /// What a window does with a logical key no handler took: close or minimize as its title-bar
 /// button would, or run a menu item. A standard ⌘W or ⌘M item, or an app's item marked
@@ -20,7 +20,7 @@ impl std::fmt::Debug for Unhandled {
 /// Whether an activation key (Enter, Escape, Space) is held down: its physical code (native and
 /// physical input) or logical key (`Runtime::key`), and the focus its first press landed on.
 #[derive(Default)]
-pub(super) enum Activation {
+pub(in crate::runtime) enum Activation {
     #[default]
     Up,
     Held { physical: Option<PhysicalKeyCode>, key: Option<crate::Key>, focus: Option<String> },
@@ -102,7 +102,7 @@ impl RuntimeCore {
     }
     /// Remember an activation key's first press and the focus it landed on; true drops a
     /// repeat of that same key once focus has moved. Any other first press replaces it.
-    pub(super) fn held_gate(&mut self, physical: Option<PhysicalKeyCode>, key: Option<&crate::Key>, repeat: bool) -> bool {
+    pub(in crate::runtime) fn held_gate(&mut self, physical: Option<PhysicalKeyCode>, key: Option<&crate::Key>, repeat: bool) -> bool {
         use crate::{Key, PhysicalKeyCode as Code};
         if !repeat {
             // The OS keeps repeating a held key through modifier presses.
@@ -118,7 +118,7 @@ impl RuntimeCore {
         let same = match physical { Some(code) => *held == Some(code), None => held_key.as_ref() == key };
         same && focus.as_deref() != self.kbd.focus.path()
     }
-    pub(super) fn dispatch_physical(&mut self, app: &mut dyn AppDriver, event: PhysicalInput, fallback: Option<Fallback>, tx: &mut Tx) -> bool {
+    pub(in crate::runtime) fn dispatch_physical(&mut self, app: &mut dyn AppDriver, event: PhysicalInput, fallback: Option<Fallback>, tx: &mut Tx) -> bool {
         tx.by_keys = true;
         use crate::PhysicalKeyCode as Code;
         let is_mod = |c: Code| matches!(c, Code::ShiftLeft | Code::ShiftRight | Code::ControlLeft
@@ -211,7 +211,7 @@ impl RuntimeCore {
     }
     /// Focus moving off an element inside the window: its handler hears `FocusLost`, and
     /// modifier keys stay held.
-    pub(super) fn physical_focus_lost(&mut self, app: &mut dyn AppDriver) -> bool {
+    pub(in crate::runtime) fn physical_focus_lost(&mut self, app: &mut dyn AppDriver) -> bool {
         let mut tx = Tx::default();
         let changed = self.offer_physical(app, &PhysicalInput::FocusLost, &mut tx, &mut None);
         self.latch_requests(app, &mut tx);

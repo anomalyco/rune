@@ -14,7 +14,7 @@ pub(crate) enum AppComposition {
 
 impl AppComposition {
     /// Whether an app-level composition is open.
-    pub(super) fn composing(&self) -> bool {
+    pub(in crate::runtime) fn composing(&self) -> bool {
         matches!(self, AppComposition::Composing(_))
     }
 
@@ -41,20 +41,20 @@ impl AppComposition {
 }
 
 /// An `El::ime_cursor` element's drawn rect, device pixels, as the window's IME area in points.
-pub(super) fn area(r: [f32; 4], s: f32) -> [f32; 4] {
+pub(in crate::runtime) fn area(r: [f32; 4], s: f32) -> [f32; 4] {
     [r[0] / s, r[1] / s, (r[2] - r[0]) / s, (r[3] - r[1]) / s]
 }
 
 impl RuntimeCore {
     /// Whether the app's own editor currently holds an open composition.
-    pub(super) fn app_ime_composing(&self, app: &dyn AppDriver) -> bool {
+    pub(in crate::runtime) fn app_ime_composing(&self, app: &dyn AppDriver) -> bool {
         app.has_on_ime() && self.edit.app_ime_comp.composing()
     }
 
     /// An input method event goes to the focused text field, else to `App::on_ime`. A
     /// composition the app has open ends there even after a field took focus, and the input
     /// method turning on or off is only the app's to hear.
-    pub(super) fn run_ime(&mut self, app: &mut dyn AppDriver, ev: Ime, one: &mut Tx) -> bool {
+    pub(in crate::runtime) fn run_ime(&mut self, app: &mut dyn AppDriver, ev: Ime, one: &mut Tx) -> bool {
         let app_target = self.app_ime_composing(app) || matches!(ev, Ime::Enabled | Ime::Disabled) || self.focused_input().is_none();
         let active = self.composing(app) || matches!(&ev, Ime::Preedit(s, ..) | Ime::Commit(s) if !s.is_empty());
         let ran = if app_target { self.app_ime_event(app, &ev, one) } else { self.with_focused(app, |e| e.ime(&ev), one) };
@@ -65,7 +65,7 @@ impl RuntimeCore {
 
     /// `Runtime::finish_composition`: the focused field's composition becomes its text, or the
     /// app's editor hears its last preedit committed.
-    pub(super) fn finish_ime(&mut self, app: &mut dyn AppDriver, one: &mut Tx) -> bool {
+    pub(in crate::runtime) fn finish_ime(&mut self, app: &mut dyn AppDriver, one: &mut Tx) -> bool {
         if self.app_ime_composing(app) {
             let Some(text) = self.edit.app_ime_comp.take_composing() else { return false };
             return self.app_ime_event(app, &Ime::Commit(text), one);
@@ -75,7 +75,7 @@ impl RuntimeCore {
 
     /// The focused field's composition becomes its text, its change handler hearing it, before
     /// focus or the caret moves away from it.
-    pub(super) fn finish_field_composition(&mut self, app: &mut dyn AppDriver, one: &mut Tx) -> bool {
+    pub(in crate::runtime) fn finish_field_composition(&mut self, app: &mut dyn AppDriver, one: &mut Tx) -> bool {
         if !self.focused_input().is_some_and(|i| i.access.is_some()) || !self.composing(app) { return false; }
         let mut finished = false;
         self.with_focused(app, |e| { finished = e.finish_composition(); EditOutcome::default() }, one);

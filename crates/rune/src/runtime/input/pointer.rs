@@ -2,7 +2,7 @@
 use super::*;
 
 /// How far (points, per axis) a click may travel and still pair into a double click.
-pub(super) const CLICK_SLOP: f32 = 4.0;
+pub(in crate::runtime) const CLICK_SLOP: f32 = 4.0;
 
 impl RuntimeCore {
     pub(crate) fn pointer_move(&mut self, app: &dyn ViewDriver, x: f32, y: f32) { self.move_pointer(app, x, y, true); }
@@ -10,7 +10,7 @@ impl RuntimeCore {
     /// `drag_move` false keeps a held drag from getting a `Phase::Move`: a release at the
     /// point the drag last saw has nothing new to report, and its instant transaction would
     /// cut short whatever the press started (a tapped slider's knob mid-spring).
-    pub(super) fn move_pointer(&mut self, app: &dyn ViewDriver, x: f32, y: f32, drag_move: bool) {
+    pub(in crate::runtime) fn move_pointer(&mut self, app: &dyn ViewDriver, x: f32, y: f32, drag_move: bool) {
         let moved = self.pointer.pos != Some((x, y));
         if moved { self.pointer.hover_paused = false; self.release_hover_hold(); }
         self.pointer.pos = Some((x, y));
@@ -94,7 +94,7 @@ impl RuntimeCore {
     }
 
     /// (x, y) window points in desktop pixels (`Drag::screen_point`).
-    pub(super) fn screen_at(&self, x: f32, y: f32) -> Option<(i32, i32)> {
+    pub(in crate::runtime) fn screen_at(&self, x: f32, y: f32) -> Option<(i32, i32)> {
         let s = self.env.scale;
         self.host.window_pixels.map(|(px, py)| (px + (x * s).round() as i32, py + (y * s).round() as i32))
     }
@@ -124,7 +124,7 @@ impl RuntimeCore {
     /// End a held drag without a drop: its handler hears `Phase::Up` with [`Drag::cancelled`]
     /// and the release that follows does nothing. A press selecting text lets go where the
     /// selection stands, without a click. False when no drag is held.
-    pub(super) fn cancel_drag(&mut self) -> bool {
+    pub(in crate::runtime) fn cancel_drag(&mut self) -> bool {
         if self.cancel_drag_at(self.pointer.pos) { return true; }
         if !self.edit.selectable.phase.dragging() || !self.pointer.press.is_held() || self.edit.input_click.captured() { return false; }
         self.drop_press();
@@ -134,7 +134,7 @@ impl RuntimeCore {
     /// Lets go of the held press without a click: a cancel, a drag-out taking the pointer, a
     /// modal opening. Every press that ends this way, and every release, ends the selection
     /// drag it was making, and with it the list's edge scroll. Returns the press.
-    pub(super) fn drop_press(&mut self) -> Option<Box<capture::Held>> {
+    pub(in crate::runtime) fn drop_press(&mut self) -> Option<Box<capture::Held>> {
         self.select_step(selectable::phase::Event::Release);
         self.pointer.press.drop_held()
     }
@@ -166,7 +166,7 @@ impl RuntimeCore {
     /// The held press crossed the drag threshold on a `drag_out` element: ask the host for an
     /// OS drag and hand it the pointer, so nothing stays pressed or hovered after the drop.
     /// False when the element offers nothing this time and the press stays a press.
-    pub(super) fn start_drag_out(&mut self, app: &dyn ViewDriver, path: String) -> bool {
+    pub(in crate::runtime) fn start_drag_out(&mut self, app: &dyn ViewDriver, path: String) -> bool {
         let Some(held) = self.pointer.press.held_mut() else { return false };
         held.drag_out = None;
         let press = held.at;
@@ -189,14 +189,14 @@ impl RuntimeCore {
 
     /// A request no host took (headless tools, a cancelled press) ends as `Cancelled`, queued
     /// behind its start, so `on_drag_start` is always followed by `on_drag_end`.
-    pub(super) fn drop_drag_out_request(&mut self) {
+    pub(in crate::runtime) fn drop_drag_out_request(&mut self) {
         if let Some(start) = self.pointer.drag_out_request.take() {
             self.frame.queue.push(Action::DragEnd(start.path, crate::DragOutcome::Cancelled));
         }
     }
 
     /// A release outside the window, or after the pointer left during the press, ends the hover.
-    pub(super) fn leave_after_release(&mut self, left: bool) {
+    pub(in crate::runtime) fn leave_after_release(&mut self, left: bool) {
         if self.pointer_captured() { return; }
         if left || self.pointer.pos.is_some_and(|(x, y)| !self.in_viewport(x, y)) {
             self.pointer_leave();
@@ -209,7 +209,7 @@ impl RuntimeCore {
 
     /// A primary press at (x, y); `touch`: a finger's, which never runs `on_press` on the way
     /// down (`El::press_on_down` is a mouse's).
-    pub(super) fn press_down(&mut self, app: &mut dyn AppDriver, x: f32, y: f32, touch: bool) {
+    pub(in crate::runtime) fn press_down(&mut self, app: &mut dyn AppDriver, x: f32, y: f32, touch: bool) {
         // A press ends a middle-click autoscroll, and does nothing else.
         if self.autoscroll_press(crate::PointerButton::Primary) { self.pointer.pos = Some((x, y)); return; }
         if self.pointer.press.held().is_some_and(|h| h.button != crate::PointerButton::Primary) {
@@ -384,14 +384,14 @@ impl RuntimeCore {
         self.pointer.press.take_first();
     }
 
-    pub(super) fn release_capture(&mut self, app: &dyn ViewDriver, x: f32, y: f32) {
+    pub(in crate::runtime) fn release_capture(&mut self, app: &dyn ViewDriver, x: f32, y: f32) {
         // Hosts release at the last position they saw, which a leave doesn't move.
         let left = self.pointer.press.held().is_some_and(|h| h.left);
         self.release(app, x, y);
         self.leave_after_release(left);
     }
 
-    pub(super) fn release(&mut self, app: &dyn ViewDriver, x: f32, y: f32) {
+    pub(in crate::runtime) fn release(&mut self, app: &dyn ViewDriver, x: f32, y: f32) {
         // A release never starts a drag-out: the system session needs the button held.
         if let Some(held) = self.pointer.press.held_mut() { held.drag_out = None; }
         let moved = self.pointer.pos != Some((x, y));
@@ -495,7 +495,7 @@ impl RuntimeCore {
     }
 
     /// Whether node `i` is a live, reachable scroll viewport on the horizontal or vertical axis.
-    pub(super) fn is_scroll_viewport(&self, i: usize, horizontal: bool) -> bool {
+    pub(in crate::runtime) fn is_scroll_viewport(&self, i: usize, horizontal: bool) -> bool {
         let n = &self.tree.nodes[i];
         n.scroll.is_some() && n.scroll_axes.has(horizontal) && !self.subtree_exiting(i) && self.allowed(i)
     }
@@ -541,7 +541,7 @@ impl RuntimeCore {
     }
 
     /// The innermost vertical scroll viewport at (x, y).
-    pub(super) fn scroll_at(&self, x: f32, y: f32) -> Option<NodeId> {
+    pub(in crate::runtime) fn scroll_at(&self, x: f32, y: f32) -> Option<NodeId> {
         self.scroll_at_axis(x, y, false)
     }
 
@@ -550,12 +550,12 @@ impl RuntimeCore {
     /// One whose content fits on that axis is passed over for the one around it, as Chromium
     /// skips a scroller with nothing to scroll: a list of sections, each its own viewport as
     /// tall as its rows, scrolls from over any row.
-    pub(super) fn scroll_at_axis(&self, x: f32, y: f32, horizontal: bool) -> Option<NodeId> {
+    pub(in crate::runtime) fn scroll_at_axis(&self, x: f32, y: f32, horizontal: bool) -> Option<NodeId> {
         self.scroll_at_axis_from(x, y, horizontal, crate::runtime::gesture_dispatch::WheelStart::Unknown)
     }
 
     /// [`Self::scroll_at_axis`], with where its chain starts when the caller already found it.
-    pub(super) fn scroll_at_axis_from(&self, x: f32, y: f32, horizontal: bool, start: crate::runtime::gesture_dispatch::WheelStart) -> Option<NodeId> {
+    pub(in crate::runtime) fn scroll_at_axis_from(&self, x: f32, y: f32, horizontal: bool, start: crate::runtime::gesture_dispatch::WheelStart) -> Option<NodeId> {
         let at = match start { crate::runtime::gesture_dispatch::WheelStart::At(s) => s, crate::runtime::gesture_dispatch::WheelStart::Unknown => self.chain_start(x, y) };
         self.scroll_in_chain(at, horizontal, |st| if horizontal { st.x.max } else { st.max } > 0.0)
     }
@@ -566,7 +566,7 @@ impl RuntimeCore {
     /// passes the run to the one around it, so a short region inside a page never traps the wheel;
     /// a viewport that only lies beneath (the timeline under an open menu, with or without a list
     /// of its own, or under a raised panel) never takes it. A wheel's ease counts from where it heads.
-    pub(super) fn wheel_target(&self, x: f32, y: f32, dy: f32, start: crate::runtime::gesture_dispatch::WheelStart) -> Option<NodeId> {
+    pub(in crate::runtime) fn wheel_target(&self, x: f32, y: f32, dy: f32, start: crate::runtime::gesture_dispatch::WheelStart) -> Option<NodeId> {
         let at = match start { crate::runtime::gesture_dispatch::WheelStart::At(s) => s, crate::runtime::gesture_dispatch::WheelStart::Unknown => self.chain_start(x, y) };
         self.scroll_in_chain(at, false, |st| {
             let cur = st.mode.wheel().map_or(st.offset, |c| c.target());
@@ -582,7 +582,7 @@ impl RuntimeCore {
     }
 
     /// [`Self::wheel`], with where its chain starts when the caller already found it.
-    pub(super) fn wheel_from(&mut self, x: f32, y: f32, dy: f32, start: crate::runtime::gesture_dispatch::WheelStart) {
+    pub(in crate::runtime) fn wheel_from(&mut self, x: f32, y: f32, dy: f32, start: crate::runtime::gesture_dispatch::WheelStart) {
         self.release_hover_hold();
         self.drop_scroll_holds();
         self.dismiss_help();
@@ -614,7 +614,7 @@ impl RuntimeCore {
 
     /// Whether whole notches of a mouse wheel ease rather than jump: the app hasn't turned it off
     /// (`Self::set_wheel_glide`), and motion isn't reduced or settled.
-    pub(super) fn wheel_glides(&self) -> bool { self.scroll.wheel_glide && !self.reduced_motion && !self.settled }
+    pub(in crate::runtime) fn wheel_glides(&self) -> bool { self.scroll.wheel_glide && !self.reduced_motion && !self.settled }
 
     /// Whether whole notches of a mouse wheel that no [`El::on_wheel`] handler takes ease to
     /// where they send a scroll viewport, as the platform's browsers do (on by default; a notch
@@ -626,7 +626,7 @@ impl RuntimeCore {
     /// eases to where they send it as Chromium's does (`runtime/scroll/wheel.rs`), a notch that
     /// comes while it moves sending it on from where it is. A run of notches keeps to the viewport
     /// it began on, as `Self::wheel`'s deltas do. With reduced motion, it jumps.
-    pub(super) fn wheel_notch(&mut self, x: f32, y: f32, dy: f32, start: crate::runtime::gesture_dispatch::WheelStart) {
+    pub(in crate::runtime) fn wheel_notch(&mut self, x: f32, y: f32, dy: f32, start: crate::runtime::gesture_dispatch::WheelStart) {
         if !self.wheel_glides() {
             self.wheel_from(x, y, dy, start);
             return;
@@ -680,7 +680,7 @@ impl RuntimeCore {
     /// Scrolling viewport `id` under a held press inside it cancels the press, as a UIScrollView
     /// cancels its content's touches: the row lets go and the release doesn't press. A drag
     /// keeps its capture.
-    pub(super) fn scroll_cancels_press(&mut self, id: NodeId) {
+    pub(in crate::runtime) fn scroll_cancels_press(&mut self, id: NodeId) {
         let Some(path) = self.pointer.press.path() else { return };
         let Some(i) = self.tree.nodes.iter().position(|n| n.path == path) else { return };
         let inside = std::iter::successors(self.tree.nodes[i].parent, |&p| self.tree.nodes[p].parent).any(|p| self.tree.nodes[p].id == id);

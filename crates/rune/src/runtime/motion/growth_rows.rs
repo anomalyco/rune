@@ -9,7 +9,7 @@ impl RuntimeCore {
     }
 
     /// Fills `row_dy`, `row_h` and `row_mask` for this frame's nodes.
-    pub(super) fn place_growth_rows(&mut self) {
+    pub(in crate::runtime) fn place_growth_rows(&mut self) {
         let (s, n_nodes) = (self.env.scale, self.tree.nodes.len());
         self.paint.row_dy.clear();
         self.paint.row_dy.resize(n_nodes, 0.0);

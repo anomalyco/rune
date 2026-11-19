@@ -55,7 +55,7 @@ impl<S> Cx<S> {
 impl RuntimeCore {
     /// The marks the view declared, as (node, start, end) for each mounted text that still
     /// holds its marked bytes, in node order.
-    pub(super) fn mark_ranges(&self) -> Vec<(usize, usize, usize)> {
+    pub(in crate::runtime) fn mark_ranges(&self) -> Vec<(usize, usize, usize)> {
         if self.commit.defaults.marks.is_empty() { return Vec::new(); }
         let mut by_path: HashMap<&str, Vec<&TextMark>> = HashMap::default();
         for m in self.commit.defaults.marks.iter() { by_path.entry(m.path.as_str()).or_default().push(m); }
@@ -79,7 +79,7 @@ impl RuntimeCore {
 /// without the newline that may end it.
 /// `laid` maps content bytes to the layout's (an elided text's differ).
 #[allow(clippy::too_many_arguments)]
-pub(super) fn push_mark(out: &mut Vec<Instance>, flow: TextFlow<'_>, content: &str, (a, b): (usize, usize), laid: impl Fn(usize, usize) -> (usize, usize),
+pub(in crate::runtime) fn push_mark(out: &mut Vec<Instance>, flow: TextFlow<'_>, content: &str, (a, b): (usize, usize), laid: impl Fn(usize, usize) -> (usize, usize),
     origin: [f32; 2], k: f32, fill: [f32; 4], clip: [f32; 4], fade: [f32; 4]) {
     let Some(marked) = content.get(a..b) else { return };
     let mut at = a;
@@ -94,7 +94,7 @@ pub(super) fn push_mark(out: &mut Vec<Instance>, flow: TextFlow<'_>, content: &s
 
 /// A highlight's box from text at `origin` drawn `k` times its size, its edges on the device grid,
 /// as Chromium snaps a selection's rect: hard-edged wherever the text's origin falls.
-pub(super) fn pixel_rect(origin: [f32; 2], bb: parley::BoundingBox, k: f32) -> [f32; 4] {
+pub(in crate::runtime) fn pixel_rect(origin: [f32; 2], bb: parley::BoundingBox, k: f32) -> [f32; 4] {
     let [x0, y0, x1, y1] = [origin[0] + bb.x0 as f32 * k, origin[1] + bb.y0 as f32 * k, origin[0] + bb.x1 as f32 * k, origin[1] + bb.y1 as f32 * k].map(f32::round);
     [x0, y0, x1 - x0, y1 - y0]
 }

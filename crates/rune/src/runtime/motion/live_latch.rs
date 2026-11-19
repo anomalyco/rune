@@ -199,7 +199,7 @@ impl RuntimeCore {
         self.frame.live.pending()
     }
 
-    pub(super) fn subscribe_live(&mut self) {
+    pub(in crate::runtime) fn subscribe_live(&mut self) {
         for node in &mut self.tree.nodes {
             if let Some(cold) = node.cold.get_mut_if_some() {
                 for bound in &mut cold.live { bound.attach(&self.frame.live_clock, self.clock); }
@@ -236,9 +236,9 @@ impl RuntimeCore {
     /// Clear before this frame reads anything a source publishes (a picture's size for layout,
     /// a bound value): a concurrent publication either lands in this frame or keeps a wake for
     /// the next. Never clear after reading (lost wake race). Hidden hosts keep the wake for show.
-    pub(super) fn take_live_wake(&mut self) -> bool { self.frame.live.take() }
+    pub(in crate::runtime) fn take_live_wake(&mut self) -> bool { self.frame.live.take() }
 
-    pub(super) fn latch_live(&mut self, pending: bool) -> bool {
+    pub(in crate::runtime) fn latch_live(&mut self, pending: bool) -> bool {
         if !self.frame.live.latch_begin(pending, !self.frame.live_subscriptions.is_empty()) { return false; }
         let mut active = false;
         for node in &mut self.tree.nodes {

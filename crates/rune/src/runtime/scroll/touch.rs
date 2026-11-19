@@ -8,7 +8,7 @@ use crate::runtime::scroll_mode::{self as mode, Event as ModeEvent};
 /// What a touch holds: the viewport its finger went down on, one it pans, or one it let go
 /// that is still settling.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) enum TouchScroll {
+pub(in crate::runtime) enum TouchScroll {
     /// The finger is down on this viewport, before its pan picks an axis. `origin` is the
     /// offset it holds it at.
     Held { id: NodeId, origin: f64, horizontal: bool },
@@ -49,7 +49,7 @@ impl TouchScroll {
 
 /// What happens to a touch's pan.
 #[derive(Clone, Copy, Debug)]
-pub(super) enum TouchEvent {
+pub(in crate::runtime) enum TouchEvent {
     /// A finger went down: `across` is the horizontal viewport under it and `vertical` the
     /// vertical one, each with its current offset.
     Down { across: Option<(NodeId, f64)>, vertical: Option<(NodeId, f64)> },
@@ -67,7 +67,7 @@ pub(super) enum TouchEvent {
 
 /// What carrying out a transition does to the scroll viewports.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) enum TouchEffect {
+pub(in crate::runtime) enum TouchEffect {
     /// Stop this viewport's momentum.
     Halt(NodeId),
     /// Stop this viewport's horizontal momentum: a touch landed across it.
@@ -85,7 +85,7 @@ pub(super) enum TouchEffect {
 /// The pan's next state, and what to do to the viewports. A finger holds the viewport it
 /// went down on until its pan picks an axis, drags it from the offset it caught it at, then
 /// lets it coast until it comes to rest.
-pub(super) fn step(state: &mut Option<TouchScroll>, event: TouchEvent) -> Effects<TouchEffect> {
+pub(in crate::runtime) fn step(state: &mut Option<TouchScroll>, event: TouchEvent) -> Effects<TouchEffect> {
     match (*state, event) {
         (current, TouchEvent::Down { across, vertical }) => {
             let caught = matches!((current, across), (Some(t), Some((id, _))) if t.horizontal() && t.id() == id);
@@ -158,7 +158,7 @@ impl RuntimeCore {
     /// vertical one until the pan picks its axis (`touch_scroll_pan`). A horizontal one still
     /// settling from an earlier touch (momentum or its edge return) holds where the finger
     /// caught it instead.
-    pub(super) fn touch_scroll_start(&mut self, x: f32, y: f32) -> Option<NodeId> {
+    pub(in crate::runtime) fn touch_scroll_start(&mut self, x: f32, y: f32) -> Option<NodeId> {
         let across = self.scroll_at_axis(x, y, true).and_then(|id| self.scroll.scrolls.get(&id).map(|st| (id, st.x.offset)));
         let vertical = self.scroll_at(x, y);
         let held = vertical.and_then(|id| self.scroll.scrolls.get(&id).map(|st| (id, st.offset)));
@@ -169,7 +169,7 @@ impl RuntimeCore {
     /// The touch that went down at (x, y) started panning, mostly horizontally or not: a
     /// horizontal pan takes the innermost horizontal viewport there, and any other pan stays
     /// with the vertical one. Returns the viewport and whether it moves horizontally.
-    pub(super) fn touch_scroll_pan(&mut self, x: f32, y: f32, horizontal: bool, vertical: Option<NodeId>) -> (Option<NodeId>, bool) {
+    pub(in crate::runtime) fn touch_scroll_pan(&mut self, x: f32, y: f32, horizontal: bool, vertical: Option<NodeId>) -> (Option<NodeId>, bool) {
         let across = horizontal
             .then(|| self.scroll_at_axis(x, y, true))
             .flatten()
@@ -183,19 +183,19 @@ impl RuntimeCore {
     }
 
     /// The pan moved `d` points along its axis from where the touch went down.
-    pub(super) fn touch_scroll_move(&mut self, id: NodeId, d: f32) {
+    pub(in crate::runtime) fn touch_scroll_move(&mut self, id: NodeId, d: f32) {
         self.step_touch(TouchEvent::Move { id, d });
     }
 
     /// The touch lifted from viewport `id` (None when it held none) with `velocity` along its
     /// axis. Whatever it held lets go, a viewport it caught without panning included.
-    pub(super) fn touch_scroll_end(&mut self, id: Option<NodeId>, velocity: f32) {
+    pub(in crate::runtime) fn touch_scroll_end(&mut self, id: Option<NodeId>, velocity: f32) {
         self.step_touch(TouchEvent::Up { id, velocity });
     }
 
     /// Own the touched viewport's panned axis through momentum and its edge return. Other
     /// viewports use the native wheel path, including native clamping and stick-to-bottom.
-    pub(super) fn step_touch_scroll(&mut self, id: NodeId, overflow: f64, dt: f32, horizontal: bool) -> Option<bool> {
+    pub(in crate::runtime) fn step_touch_scroll(&mut self, id: NodeId, overflow: f64, dt: f32, horizontal: bool) -> Option<bool> {
         let effects = step(&mut self.pointer.touch.scroll, TouchEvent::Tick { id, horizontal, overflow, dt });
         self.apply_touch(effects)
     }

@@ -38,12 +38,12 @@ impl HitState {
 impl RuntimeCore {
     /// Node `i`'s edges as drawn this frame (points, x0 y0 x1 y1), or its layout box before
     /// it draws.
-    pub(super) fn drawn_edges(&self, i: usize) -> [f32; 4] {
+    pub(in crate::runtime) fn drawn_edges(&self, i: usize) -> [f32; 4] {
         self.paint.drawn.get(i).map_or(self.tree.nodes[i].target, |d| [d[0], d[1], d[0] + d[2], d[1] + d[3]])
     }
 
     /// Window point (x, y) as node `i`'s handlers see it.
-    pub(super) fn pointer_event(&self, i: usize, x: f32, y: f32) -> PointerEvent {
+    pub(in crate::runtime) fn pointer_event(&self, i: usize, x: f32, y: f32) -> PointerEvent {
         let [lx, ly] = self.to_local(i, x, y);
         PointerEvent { x: lx, y: ly, window_x: x, window_y: y }
     }
@@ -65,13 +65,13 @@ impl RuntimeCore {
     }
 
     /// The turn node `i` draws inside (`Inh::turn` is 1-based, 0 for none).
-    pub(super) fn turn_of(&self, i: usize) -> Option<Turn> {
+    pub(in crate::runtime) fn turn_of(&self, i: usize) -> Option<Turn> {
         self.paint.inh_scratch.get(i).and_then(|h| h.turn.checked_sub(1)).and_then(|k| self.paint.turn_scratch.get(k as usize)).copied()
     }
 
     /// Node `i`'s unturned border box (points, x0 y0 x1 y1) and window point (x, y) unturned into
     /// that layer's points.
-    pub(super) fn unturned_box_and_point(&self, i: usize, x: f32, y: f32) -> ([f32; 4], f32, f32) {
+    pub(in crate::runtime) fn unturned_box_and_point(&self, i: usize, x: f32, y: f32) -> ([f32; 4], f32, f32) {
         if let Some(t) = self.turn_of(i)
             && let Some(&(b, _)) = self.paint.unturned_drawn.get(i)
         {
@@ -83,7 +83,7 @@ impl RuntimeCore {
     }
 
     #[inline]
-    pub(super) fn hit_contains(&self, id: NodeId, r: [f32; 4], x: f32, y: f32) -> bool {
+    pub(in crate::runtime) fn hit_contains(&self, id: NodeId, r: [f32; 4], x: f32, y: f32) -> bool {
         if self.paint.turn_scratch.is_empty() {
             return contains(r, x, y);
         }
@@ -105,7 +105,7 @@ impl RuntimeCore {
         contains(r, ux, uy)
     }
 
-    pub(super) fn hit_screen_rect(&self, id: NodeId, r: [f32; 4]) -> [f32; 4] {
+    pub(in crate::runtime) fn hit_screen_rect(&self, id: NodeId, r: [f32; 4]) -> [f32; 4] {
         if self.paint.turn_scratch.is_empty() {
             return r;
         }
@@ -119,7 +119,7 @@ impl RuntimeCore {
         intersect(b, c)
     }
 
-    pub(super) fn node_contains(&self, i: usize, x: f32, y: f32) -> bool {
+    pub(in crate::runtime) fn node_contains(&self, i: usize, x: f32, y: f32) -> bool {
         if !self.paint.turn_scratch.is_empty()
             && let Some(turn_k) = self.paint.inh_scratch.get(i).map(|h| h.turn).filter(|&k| k != 0)
             && let Some(&t) = self.paint.turn_scratch.get(turn_k as usize - 1)
@@ -144,12 +144,12 @@ impl RuntimeCore {
         contains(shown, x, y)
     }
 
-    pub(super) fn screen_clip_of_parent(&self, parent: Option<usize>) -> [f32; 4] {
+    pub(in crate::runtime) fn screen_clip_of_parent(&self, parent: Option<usize>) -> [f32; 4] {
         screen_clip_of(parent, &self.paint.inh_scratch, &self.paint.turn_scratch)
     }
 
     /// Unmounted in this commit (an instant removal), though still listed until the next.
-    pub(super) fn subtree_unmounted(&self, mut i: usize) -> bool {
+    pub(in crate::runtime) fn subtree_unmounted(&self, mut i: usize) -> bool {
         loop {
             if !self.scene.contains(self.tree.nodes[i].id) { return true; }
             let Some(parent) = self.tree.nodes[i].parent else { return false };
@@ -157,13 +157,13 @@ impl RuntimeCore {
         }
     }
 
-    pub(super) fn is_exiting(&self, id: NodeId) -> bool {
+    pub(in crate::runtime) fn is_exiting(&self, id: NodeId) -> bool {
         matches!(self.scene.phase(id), Some(PresencePhase::Exiting { .. }))
     }
 
     /// The single reachable editor in a textbox. Only resolve descendants on presses;
     /// hover hit testing and cursor updates use the container's role directly.
-    pub(super) fn textbox_input(&self, i: usize) -> Option<usize> {
+    pub(in crate::runtime) fn textbox_input(&self, i: usize) -> Option<usize> {
         if self.tree.nodes[i].input.is_some() { return self.can_focus(i).then_some(i); }
         if self.tree.nodes[i].role != "textbox" { return None; }
         let mut inputs = (0..self.tree.nodes.len()).filter(|&j| {
@@ -176,7 +176,7 @@ impl RuntimeCore {
     }
 
     /// The topmost element under (x, y) that takes primary input, selectable text included.
-    pub(super) fn top_target(&self, x: f32, y: f32) -> Option<usize> {
+    pub(in crate::runtime) fn top_target(&self, x: f32, y: f32) -> Option<usize> {
         self.hit.hits.iter().rev().find_map(|&(id, r)| {
             if !self.hit_contains(id, r, x, y) { return None; }
             let i = *self.tree.node_index.get(&id)?;
@@ -192,7 +192,7 @@ impl RuntimeCore {
     /// nearest ancestor that handles them (a clickable or draggable row), unless the text has
     /// its own handlers or the point is on one of its links; selecting goes on beside that
     /// (`selectable_at`).
-    pub(super) fn primary_target(&self, x: f32, y: f32) -> Option<usize> {
+    pub(in crate::runtime) fn primary_target(&self, x: f32, y: f32) -> Option<usize> {
         let i = self.top_target(x, y)?;
         let n = &self.tree.nodes[i];
         if !self.is_selectable(i) || n.has_primary_handler() || self.link_at(i, x, y).is_some() { return Some(i); }
@@ -208,14 +208,14 @@ impl RuntimeCore {
 
     /// A focusable scroll region, which a press on plain content inside it focuses, as a web
     /// page focuses a `tabIndex` scroller.
-    pub(super) fn focuses_on_click(&self, i: usize) -> bool {
+    pub(in crate::runtime) fn focuses_on_click(&self, i: usize) -> bool {
         self.tree.nodes[i].scroll.is_some() && self.tree.nodes[i].focus.enabled
     }
 
     /// The focusable scroll region a press at (x, y) lands in beneath `layer`
     /// (`El::press_focuses_below`): the topmost element there outside the layer, or the nearest
     /// region holding it.
-    pub(super) fn scroll_region_below(&self, layer: usize, x: f32, y: f32) -> Option<usize> {
+    pub(in crate::runtime) fn scroll_region_below(&self, layer: usize, x: f32, y: f32) -> Option<usize> {
         let in_layer = |i: usize| std::iter::successors(Some(i), |&p| self.tree.nodes[p].parent).any(|p| p == layer);
         let under = self.hit.hits.iter().rev().find_map(|&(id, r)| {
             if !self.hit_contains(id, r, x, y) { return None; }
@@ -226,7 +226,7 @@ impl RuntimeCore {
     }
 
     /// The selectable text under (x, y), if it's the topmost thing there that takes input.
-    pub(super) fn selectable_at(&self, x: f32, y: f32) -> Option<usize> {
+    pub(in crate::runtime) fn selectable_at(&self, x: f32, y: f32) -> Option<usize> {
         self.top_target(x, y).filter(|&i| self.is_selectable(i))
     }
 
@@ -235,11 +235,11 @@ impl RuntimeCore {
         self.tree.nodes.iter().enumerate().position(|(i, n)| n.path == path && !self.subtree_exiting(i))
     }
 
-    pub(super) fn in_viewport(&self, x: f32, y: f32) -> bool {
+    pub(in crate::runtime) fn in_viewport(&self, x: f32, y: f32) -> bool {
         contains([0.0, 0.0, self.viewport.0, self.viewport.1], x, y)
     }
 
-    pub(super) fn register_node_hits(
+    pub(in crate::runtime) fn register_node_hits(
         &mut self,
         i: usize,
         pinh_clip: [f32; 4],

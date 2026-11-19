@@ -24,7 +24,7 @@ pub(crate) struct FieldMenu {
 impl RuntimeCore {
     /// Opens field `path`'s menu at window point `at`, pressed at window point `hit_at`, or from
     /// the keyboard (`None`).
-    pub(super) fn field_menu(&mut self, app: &mut dyn AppDriver, path: String, at: (f32, f32), hit_at: Option<(f32, f32)>, one: &mut Tx) -> bool {
+    pub(in crate::runtime) fn field_menu(&mut self, app: &mut dyn AppDriver, path: String, at: (f32, f32), hit_at: Option<(f32, f32)>, one: &mut Tx) -> bool {
         let Some(i) = self.live(&path) else { return false };
         let Some(input) = self.tree.nodes[i].input.as_deref() else { return false };
         let Some(access) = input.access.clone() else { return false };
@@ -114,7 +114,7 @@ impl RuntimeCore {
     }
 
     /// Does what `picked` in field menu `menu` asks, on its field.
-    pub(super) fn field_menu_pick(&mut self, app: &mut dyn AppDriver, menu: FieldMenu, picked: &str, one: &mut Tx) {
+    pub(in crate::runtime) fn field_menu_pick(&mut self, app: &mut dyn AppDriver, menu: FieldMenu, picked: &str, one: &mut Tx) {
         if self.kbd.focus.path() != Some(menu.path.as_str()) && self.live(&menu.path).is_some() {
             self.set_focus(app, Some(menu.path.clone()), false);
         }

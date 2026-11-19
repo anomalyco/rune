@@ -10,9 +10,7 @@ use super::*;
 use crate::a11y::roles;
 use crate::runtime::web_a11y::anchor_id;
 
-#[path = "export/css.rs"]
 mod css;
-#[path = "export/page.rs"]
 mod page;
 pub(crate) use page::page;
 
@@ -153,5 +151,4 @@ impl RuntimeCore {
 }
 
 #[cfg(test)]
-#[path = "export/tests.rs"]
 mod tests;

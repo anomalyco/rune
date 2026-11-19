@@ -6,14 +6,14 @@ use super::*;
 /// under its old path still shows its words (r349). One that never comes back would otherwise
 /// keep its entry, and its path, for the window's life, so only this many stay and the oldest
 /// leave.
-pub(super) const REVEALS_KEPT: usize = 64;
+pub(in crate::runtime) const REVEALS_KEPT: usize = 64;
 
 impl RuntimeCore {
     /// Forgets the ids of paths that left with nothing kept under their id, so a session that
     /// mounts many distinct keys (a long virtual list scrolled end to end) doesn't keep them all.
     /// A path whose id still holds scroll, growth or reveal state keeps it, so it comes back
     /// with that state as before.
-    pub(super) fn prune_path_ids(&mut self) {
+    pub(in crate::runtime) fn prune_path_ids(&mut self) {
         if self.tree.path_ids.len() <= self.tree.node_index.len() { return; }
         let Self { tree, scroll, motion, .. } = self;
         tree.path_ids.retain(|_, id| {
@@ -23,7 +23,7 @@ impl RuntimeCore {
 
     /// Recomputes node-derived presence flags in a single pass over `self.nodes`.
     /// Returns whether any node has a loop spec.
-    pub(super) fn refresh_node_flags(&mut self) -> bool {
+    pub(in crate::runtime) fn refresh_node_flags(&mut self) -> bool {
         let (mut dissolve, mut cache, mut pix, mut drawn_ly, mut key_up, mut sticky, mut raise, mut any_loop) =
             (false, false, false, false, false, false, false, false);
         let mut ordered = false;
@@ -85,7 +85,7 @@ impl RuntimeCore {
     /// Finished-exit pruning leaves `path_ids` reclamation to the next commit: `path_ids` cannot
     /// grow without a commit, and keeping a directly-unmounted path until a subsequent commit lets
     /// an immediate remount reclaim its id.
-    pub(super) fn prune_detached_tables(&mut self, prune_paths: bool) -> bool {
+    pub(in crate::runtime) fn prune_detached_tables(&mut self, prune_paths: bool) -> bool {
         let any_loop = self.refresh_node_flags();
         if !self.tree.has_cache {
             if !self.paint.node_caches.is_empty() { self.paint.node_caches.clear(); }
@@ -119,7 +119,7 @@ impl RuntimeCore {
         any_loop
     }
 
-    pub(super) fn prune_exited(&mut self) {
+    pub(in crate::runtime) fn prune_exited(&mut self) {
         // Fills last commit's spare buffer and keeps this one as the next spare: a few thousand
         // nodes would otherwise grow a fresh Vec, megabytes, on every frame a node exits.
         self.nodes_replaced();
@@ -157,6 +157,3 @@ impl RuntimeCore {
         }
     }
 }
-
-#[cfg(test)]
-mod prune_tests;

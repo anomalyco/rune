@@ -3,7 +3,7 @@
 use super::*;
 use crate::time::Instant;
 
-pub(super) enum Action {
+pub(in crate::runtime) enum Action {
     WindowFocus(bool),
     Physical(crate::PhysicalInput, Option<physical_dispatch::Fallback>),
     FocusControl(String),
@@ -68,19 +68,19 @@ pub(super) enum Action {
 /// A queued action and when the input that queued it arrived (`Tx::input_time`): the arrival
 /// time its host dispatched the input under (`input_time::scope`), none for what layout,
 /// timers, updates and polls queue.
-pub(super) struct Queued {
-    pub(super) action: Action,
-    pub(super) at: Option<Instant>,
-    pub(super) input: bool,
+pub(in crate::runtime) struct Queued {
+    pub(in crate::runtime) action: Action,
+    pub(in crate::runtime) at: Option<Instant>,
+    pub(in crate::runtime) input: bool,
 }
 
 /// The actions waiting for the next frame, in order, each with its input's arrival time.
 #[derive(Default)]
-pub(super) struct ActionQueue(Vec<Queued>);
+pub(in crate::runtime) struct ActionQueue(Vec<Queued>);
 
 impl ActionQueue {
     /// Queues `action` stamped with the input being dispatched now, if any.
-    pub(super) fn push(&mut self, action: Action) {
+    pub(in crate::runtime) fn push(&mut self, action: Action) {
         // A host can dispatch input without a timestamp. Layout and state observers, on the
         // other hand, don't become input just because they have a queued callback.
         let at = crate::input::time::current();
@@ -91,20 +91,20 @@ impl ActionQueue {
         self.0.push(Queued { action, at, input });
     }
     /// A stationary pointer was re-hit after layout; no pointer event asked for that hover.
-    pub(super) fn observe_since(&mut self, start: usize) {
+    pub(in crate::runtime) fn observe_since(&mut self, start: usize) {
         for q in &mut self.0[start..] { q.input = false; }
     }
     /// Queues an action again with its own stamp.
-    pub(super) fn push_queued(&mut self, queued: Queued) { self.0.push(queued); }
+    pub(in crate::runtime) fn push_queued(&mut self, queued: Queued) { self.0.push(queued); }
     /// Puts `queued` ahead of everything queued.
-    pub(super) fn prepend(&mut self, queued: Vec<Queued>) { self.0.splice(0..0, queued); }
-    pub(super) fn iter(&self) -> impl Iterator<Item = &Action> { self.0.iter().map(|q| &q.action) }
+    pub(in crate::runtime) fn prepend(&mut self, queued: Vec<Queued>) { self.0.splice(0..0, queued); }
+    pub(in crate::runtime) fn iter(&self) -> impl Iterator<Item = &Action> { self.0.iter().map(|q| &q.action) }
     /// Whether any of them came from the user's input (they carry its arrival time).
-    pub(super) fn has_input(&self) -> bool { self.0.iter().any(|q| q.at.is_some()) }
-    pub(super) fn len(&self) -> usize { self.0.len() }
-    pub(super) fn is_empty(&self) -> bool { self.0.is_empty() }
-    pub(super) fn retain(&mut self, mut keep: impl FnMut(&Action) -> bool) { self.0.retain(|q| keep(&q.action)); }
-    pub(super) fn remove(&mut self, index: usize) -> Action { self.0.remove(index).action }
+    pub(in crate::runtime) fn has_input(&self) -> bool { self.0.iter().any(|q| q.at.is_some()) }
+    pub(in crate::runtime) fn len(&self) -> usize { self.0.len() }
+    pub(in crate::runtime) fn is_empty(&self) -> bool { self.0.is_empty() }
+    pub(in crate::runtime) fn retain(&mut self, mut keep: impl FnMut(&Action) -> bool) { self.0.retain(|q| keep(&q.action)); }
+    pub(in crate::runtime) fn remove(&mut self, index: usize) -> Action { self.0.remove(index).action }
 }
 
 impl Extend<Action> for ActionQueue {
@@ -129,7 +129,7 @@ impl IntoIterator for ActionQueue {
 
 /// The handler an event goes to, when its `Tx::live_only` can keep the event from committing.
 /// Events Rune does its own work for (focus, editing, pastes, file drops) always commit.
-pub(super) fn live_only_handler(action: &Action) -> Option<&'static str> {
+pub(in crate::runtime) fn live_only_handler(action: &Action) -> Option<&'static str> {
     Some(match action {
         Action::WindowFocus(_) => "on_window_focus",
         Action::DrawnLayout(..) => "on_drawn_layout_tx",
@@ -159,7 +159,7 @@ pub(super) fn live_only_handler(action: &Action) -> Option<&'static str> {
 }
 
 #[cfg(debug_assertions)]
-pub(super) fn action_path(action: &Action) -> Option<&str> {
+pub(in crate::runtime) fn action_path(action: &Action) -> Option<&str> {
     match action {
         Action::PointerMove(path, _) | Action::DrawnLayout(path, ..) | Action::Layout(path, _) | Action::Hover(path) | Action::HoverChange(path, _) | Action::SelectionChange(path, _) | Action::Press(path, ..) | Action::DoublePress(path) | Action::MiddlePress(path)
         | Action::Link(path, ..) | Action::LinkSecondary(path, ..) | Action::SecondaryPress(path, _) | Action::Drag(path, ..) | Action::DragRepeat(path, ..) | Action::DragStart(path)
@@ -254,7 +254,7 @@ pub(crate) fn merge(tx: &mut Tx, one: Tx) {
 /// Slots the ends hosts reported since the last frame into this frame's actions. One OS drag
 /// runs at a time and hosts report ends in order, so each belongs to the oldest open drag: it
 /// runs before any later drag's start, and after its own start when both are queued.
-pub(super) fn order_drag_ends(queue: ActionQueue, ended: Vec<(String, crate::DragOutcome)>, open: &mut usize) -> ActionQueue {
+pub(in crate::runtime) fn order_drag_ends(queue: ActionQueue, ended: Vec<(String, crate::DragOutcome)>, open: &mut usize) -> ActionQueue {
     let mut ended = ended.into_iter().map(|(path, outcome)| Queued { action: Action::DragEnd(path, outcome), at: None, input: true });
     let mut out = Vec::with_capacity(queue.len() + ended.len());
     for queued in queue {
@@ -280,7 +280,7 @@ pub(super) fn order_drag_ends(queue: ActionQueue, ended: Vec<(String, crate::Dra
 
 impl RuntimeCore {
     /// Runs `action`'s handlers; debug builds warn when they block the main thread.
-    pub(super) fn run_action(&mut self, app: &mut dyn AppDriver, action: Action, tx: &mut Tx) -> bool {
+    pub(in crate::runtime) fn run_action(&mut self, app: &mut dyn AppDriver, action: Action, tx: &mut Tx) -> bool {
         #[cfg(debug_assertions)]
         let (name, path, at) = (handler_name(&action), stall_path(&action).map(str::to_owned), self.handler_location(&action));
         let stall = crate::tooling::perf_warn::Stall::start();

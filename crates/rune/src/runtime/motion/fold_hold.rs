@@ -15,7 +15,7 @@ impl RuntimeCore {
     /// Row `j` of the commit's `nodes`, a fold shutting to `to` points: how many of its points
     /// sit above the header held stuck in it, and that header's path, when it keeps no more
     /// than that header shows.
-    pub(super) fn fold_hidden_above(&self, nodes: &[Node], j: usize, to: f32) -> Option<(f32, String)> {
+    pub(in crate::runtime) fn fold_hidden_above(&self, nodes: &[Node], j: usize, to: f32) -> Option<(f32, String)> {
         if !self.scroll.requests.has_keeps() || !self.tree.built || self.scroll.stuck.len() != self.tree.nodes.len() { return None; }
         let row = &nodes[j].path;
         let within = |path: &str| path.starts_with(row.as_str()) && path.as_bytes().get(row.len()) == Some(&b'/');
@@ -32,7 +32,7 @@ impl RuntimeCore {
 
     /// The scroll viewport around growth stack `c` of the commit's `nodes` steps `cut` points
     /// back, as the folds in it dropped that much above what shows.
-    pub(super) fn scroll_by_cut(&mut self, nodes: &[Node], c: usize, cut: f32) {
+    pub(in crate::runtime) fn scroll_by_cut(&mut self, nodes: &[Node], c: usize, cut: f32) {
         let Some(s) = std::iter::successors(nodes[c].parent, |&p| nodes[p].parent)
             .find(|&p| nodes[p].scroll.is_some() && nodes[p].scroll_axes.y()) else { return };
         let Some(st) = self.scroll.scrolls.get_mut(&nodes[s].id) else { return };
@@ -47,7 +47,7 @@ impl RuntimeCore {
     /// meet the viewport's end, stop dead and leave the header to come down the rest on its own:
     /// instead each header comes down the share of the fold's travel the end can't take, so the
     /// bottom slides `slack` points over the whole shut, on the same spring.
-    pub(super) fn give_way(&mut self, nodes: &[Node], c: usize, held: &[(NodeId, f32)]) {
+    pub(in crate::runtime) fn give_way(&mut self, nodes: &[Node], c: usize, held: &[(NodeId, f32)]) {
         let Some(s) = std::iter::successors(nodes[c].parent, |&p| nodes[p].parent)
             .find(|&p| nodes[p].scroll.is_some() && nodes[p].scroll_axes.y()) else { return };
         let Some(st) = self.scroll.scrolls.get(&nodes[s].id) else { return };
@@ -63,7 +63,7 @@ impl RuntimeCore {
 
     /// Fold `row`, shutting under its held header with `GrowTrack::give`, shut `d` points
     /// further times its share: the hold on its header expects it that much lower.
-    pub(super) fn lower_hold(&mut self, row: NodeId, d: f32) {
+    pub(in crate::runtime) fn lower_hold(&mut self, row: NodeId, d: f32) {
         let Some(header) = self.motion.fold_headers.get(&row) else { return };
         for k in self.scroll.requests.keeps_mut().filter(|k| k.hold.as_ref().is_some_and(|h| h.path == *header)) {
             k.was += d;
@@ -74,7 +74,7 @@ impl RuntimeCore {
     /// brings it the last fraction of a point, rather than the two trading it back and forth.
     /// Short of that, a frame that shuts more than the end has left clamps the viewport at its
     /// end before the hold moves it back; the hold stays.
-    pub(super) fn end_takes_over(&mut self) {
+    pub(in crate::runtime) fn end_takes_over(&mut self) {
         if self.motion.fold_headers.is_empty() || !self.scroll.requests.has_keeps() { return; }
         let giving: Vec<&String> = self.motion.fold_headers.iter()
             .filter(|(id, _)| self.motion.grows.get(id).is_some_and(|g| g.give.is_some_and(|share| (g.h - g.target) * (1.0 - share) < 0.5)))
@@ -89,7 +89,7 @@ impl RuntimeCore {
     /// (`giving`), the holds on it, in it or above it let go, so it grows from its bottom with
     /// the end (or, short of it, the row below) held and its contents still, rather than pushing
     /// the end down and then snapping its header up as it lands.
-    pub(super) fn ride_from_end(&mut self, nodes: &[Node], c: usize, j: usize, giving: bool) {
+    pub(in crate::runtime) fn ride_from_end(&mut self, nodes: &[Node], c: usize, j: usize, giving: bool) {
         let Some(s) = std::iter::successors(nodes[c].parent, |&p| nodes[p].parent)
             .find(|&p| nodes[p].scroll.is_some() && nodes[p].scroll_axes.y()) else { return };
         let pinned = self.scroll.scrolls.get(&nodes[s].id).is_some_and(|st| st.pinned());
@@ -129,7 +129,7 @@ impl RuntimeCore {
     /// Fold `row` in growth stack `ci` landed whole with `r` points of its contents still drawn
     /// lifted: they come back above it, out of sight, so its viewport's offset steps `r` on and
     /// the holds on the fold or above it expect it that much higher.
-    pub(super) fn restore_above(&mut self, ci: usize, row: NodeId, r: f32) {
+    pub(in crate::runtime) fn restore_above(&mut self, ci: usize, row: NodeId, r: f32) {
         let Some(s) = self.viewport_of(ci) else { return };
         let (path, id) = (self.tree.nodes[s].path.clone(), self.tree.nodes[s].id);
         let Some(st) = self.scroll.scrolls.get_mut(&id) else { return };

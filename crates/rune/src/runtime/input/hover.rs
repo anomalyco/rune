@@ -9,7 +9,7 @@ use super::*;
 /// pointer to move. What leaves the tree or turns inert lets go at once, and presses are never
 /// held.
 #[derive(Default)]
-pub(super) struct HoverHold {
+pub(in crate::runtime) struct HoverHold {
     hold: Hold,
     /// Scratch for the hover tracks `update_interaction` would change.
     flips: Vec<Flip>,
@@ -29,10 +29,10 @@ enum Hold {
 
 impl HoverHold {
     /// The last pass held hover.
-    pub(super) fn held(&self) -> bool { self.hold == Hold::Held }
+    pub(in crate::runtime) fn held(&self) -> bool { self.hold == Hold::Held }
 
     /// Hover follows the pointer until layout settles.
-    pub(super) fn released(&self) -> bool { self.hold == Hold::Released }
+    pub(in crate::runtime) fn released(&self) -> bool { self.hold == Hold::Released }
 
     /// Notes whether this pass held hover. Released, nothing holds it.
     fn set_held(&mut self, held: bool) {
@@ -73,7 +73,7 @@ fn holds(outer: &str, inner: &str) -> bool {
 impl RuntimeCore {
     /// Hover under the pointer at (x, y): what's hovered and what it's inside. Returns whether
     /// moving layout holds hover this pass, for the `update_interaction` that follows.
-    pub(super) fn refresh_hover(&mut self, x: f32, y: f32) -> bool {
+    pub(in crate::runtime) fn refresh_hover(&mut self, x: f32, y: f32) -> bool {
         if self.pointer.hover_hold.released() && !self.layout_moving() { self.pointer.hover_hold.settled(); }
         let hovered = self.primary_target(x, y);
         let within = self.within_next();
@@ -85,7 +85,7 @@ impl RuntimeCore {
     }
 
     /// Queue `on_hover_change` for elements the pointer entered or left.
-    pub(super) fn refresh_hover_within(&mut self) {
+    pub(in crate::runtime) fn refresh_hover_within(&mut self) {
         let Some(within) = self.within_next() else { return };
         let hovered = self.pointer.pos.filter(|_| self.hover_may_hold()).and_then(|(x, y)| self.primary_target(x, y));
         let held = self.decide_hold(hovered, Some(&within), None);
@@ -186,7 +186,7 @@ impl RuntimeCore {
     /// Node `n` leaves the tree: if it heard the pointer enter, its `on_hover_change` still
     /// hears the leave, though the handler goes with the node before the action runs. A
     /// delayed element heard the enter only once shown; a pending one just stops waiting.
-    pub(super) fn hover_pruned(&mut self, n: &Node) {
+    pub(in crate::runtime) fn hover_pruned(&mut self, n: &Node) {
         let take = |list: &mut Vec<String>| list.iter().position(|p| *p == n.path).map(|at| list.remove(at)).is_some();
         let inside = take(&mut self.pointer.hover_within);
         let shown = self.pointer.hover_delays.forget(&n.path);
@@ -200,7 +200,7 @@ impl RuntimeCore {
 
     /// The pointer moved or pressed, or a hand scrolled: hover follows the pointer through the
     /// layout moving now, until it settles.
-    pub(super) fn release_hover_hold(&mut self) {
+    pub(in crate::runtime) fn release_hover_hold(&mut self) {
         let moving = !self.pointer.hover_hold.released() && self.layout_moving();
         self.pointer.hover_hold.release(moving);
     }
@@ -318,7 +318,7 @@ impl RuntimeCore {
 
     /// Retargets the hover, press and press-scale tracks. `held` is the hold `refresh_hover`
     /// just decided; without it (a commit's pass) this decides it.
-    pub(super) fn update_interaction(&mut self, held: Option<bool>) -> bool {
+    pub(in crate::runtime) fn update_interaction(&mut self, held: Option<bool>) -> bool {
         // Hit tests read last frame's drawn rects and clips by index. When a commit moved the
         // indices (a commit's focus pass runs before the frame is built again), they belong to
         // other elements until the build re-evaluates from fresh geometry.
@@ -362,13 +362,13 @@ impl RuntimeCore {
             let id = n.id;
             changed |= self.scene.store().target(id, P_PRESS).unwrap_or(0.0) != pressed as u8 as f32;
             if paint_tracks::ready_from_rest(&mut self.scene, id, P_PRESS, 0.0, pressed as u8 as f32) {
-                self.scene.animate(id, P_PRESS, pressed as u8 as f32, if pressed { motion::INSTANT } else { motion::SNAPPY });
+                self.scene.animate(id, P_PRESS, pressed as u8 as f32, if pressed { crate::tok::motion::INSTANT } else { crate::tok::motion::SNAPPY });
             }
             if let Some(k) = press_scale {
                 // Down follows the hand; the release springs back with a little life.
                 let down = down && !self.reduced_motion;
                 if paint_tracks::ready_from_rest(&mut self.scene, id, P_PRESS_SCALE, 1.0, if down { k } else { 1.0 }) {
-                    self.scene.animate(id, P_PRESS_SCALE, if down { k } else { 1.0 }, if down { motion::INSTANT } else { motion::POP });
+                    self.scene.animate(id, P_PRESS_SCALE, if down { k } else { 1.0 }, if down { crate::tok::motion::INSTANT } else { crate::tok::motion::POP });
                 }
             }
         }

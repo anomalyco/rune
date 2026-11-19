@@ -1,15 +1,12 @@
 //! Frame paint pass: `Scene` presented poses, clips, layers and text → GPU `Instance`s.
 use super::*;
 
-#[path = "build/layers.rs"]
 mod layers;
-#[path = "build/pose.rs"]
 mod pose;
-#[path = "build/primitives.rs"]
 mod primitives;
 
 impl RuntimeCore {
-    pub(super) fn build(&mut self) -> bool {
+    pub(in crate::runtime) fn build(&mut self) -> bool {
         let (_paint_time, _blend) = (crate::frame::profile::Scope::new(crate::frame::profile::Phase::Paint), crate::theme::scope(self.paint.srgb_blend));
         let s = self.env.scale;
         let snap_px = |v: f32| grid(v, s) * s;

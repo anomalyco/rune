@@ -224,7 +224,7 @@ impl RuntimeCore {
         if !jump && self.host.window_resting && (cfg!(target_os = "macos") || self.wall_start.is_none()) { self.host.fit.hold = FitHold::Asked; }
         let request = crate::window::frame::FrameRequest {
             size: Some((self.viewport.0, height)), animate: !jump,
-            spring: (!jump).then(|| tx.motion.map_or(motion::DEFAULT, MotionSource::spring)), center: false,
+            spring: (!jump).then(|| tx.motion.map_or(crate::tok::motion::DEFAULT, MotionSource::spring)), center: false,
         };
         self.host.window_frame = Some(self.host.window_frame.unwrap_or_default().merge(request));
     }

@@ -1,7 +1,7 @@
 //! Leaf content painting inside a box: vector shapes, images, icons and rich text.
 use super::*;
 
-pub(super) struct LeafBox {
+pub(in crate::runtime) struct LeafBox {
     pub r: [f32; 4],
     pub r_exact: [f32; 4],
     /// Where its exact box rests against where its snapped box rests (device px), its paint
@@ -42,7 +42,7 @@ fn on_grid(v: f32, c: f32) -> f32 {
 }
 
 impl RuntimeCore {
-    pub(super) fn paint_content(
+    pub(in crate::runtime) fn paint_content(
         &mut self,
         i: usize,
         b: LeafBox,
@@ -732,7 +732,7 @@ impl RuntimeCore {
 
     /// The rectangle a live or truncated text clips its glyphs to (edges, device pixels), its
     /// box, and whether it runs past that box; `None` for other text.
-    pub(super) fn text_clip(&self, i: usize, (r, r_exact): ([f32; 4], [f32; 4]), sc: f32, clip: [f32; 4]) -> Option<([f32; 4], [f32; 4], bool)> {
+    pub(in crate::runtime) fn text_clip(&self, i: usize, (r, r_exact): ([f32; 4], [f32; 4]), sc: f32, clip: [f32; 4]) -> Option<([f32; 4], [f32; 4], bool)> {
         let s = self.env.scale;
         let n = &self.tree.nodes[i];
         let (Some(spec), Some(layout)) = (&n.text, n.text_layout.as_ref().and_then(TextLayout::single)) else { return None };
@@ -759,7 +759,7 @@ impl RuntimeCore {
     }
 
     /// Text-only clipping leaves the box's fill/border and descendants untouched.
-    pub(super) fn clip_text_instances(
+    pub(in crate::runtime) fn clip_text_instances(
         &mut self,
         i: usize,
         first_instance: usize,
