@@ -8,11 +8,14 @@
 //! The scene is a pure function of the clock: each retarget happens at its scheduled time, not
 //! the frame's, so a frame at time t is the same picture at any frame rate, and the reference
 //! app, with the same seed, schedule and springs, draws the same picture. The view is rebuilt
-//! from state every frame, as the reference app rebuilds its scene.
+//! from state every frame, as the reference app rebuilds its scene, and the grid follows a
+//! resize like the reference app's `st_resize`: it fills the window below the bar, whose size the
+//! view reads from its root's laid-out size.
 
 use rune::{Color, Cx, El, Spring, TextStyle, Tx, el, text};
 
-/// The window's size in points; the grid fills it below a `TOP` point bar.
+/// The window's initial size in points; a resize moves the grid with it (see [`view`]). The
+/// windowless bench and the headless run lay out at this size.
 pub const SIZE: (f32, f32) = (1000.0, 720.0);
 pub const TOP: f32 = 28.0;
 const SEED: u64 = 20261118;
@@ -152,13 +155,16 @@ pub fn grid(n: usize, w: f32, h: f32) -> (usize, f32, f32) {
     (cols, w / cols as f32, h / rows as f32)
 }
 
-pub fn view(s: &State, _: &mut Cx<State>) -> El {
-    let (w, h) = SIZE;
+/// The grid fills the window below the bar: `Cx::layout_size` of the root, or `SIZE` before the
+/// first layout (the windowless bench), so a resize moves the cells exactly as the reference
+/// app's `st_resize` does.
+pub fn view(s: &State, cx: &mut Cx<State>) -> El {
+    let [w, h] = cx.layout_size("root").unwrap_or([SIZE.0, SIZE.1]);
     let (cols, gw, gh) = grid(s.n, w, h - TOP);
     let now = s.now;
     let (off, on, knob_c, well_c, num_c) = (c(58, 62, 70), c(48, 209, 88), c(245, 245, 247), c(30, 33, 38), c(155, 161, 170));
     let digits = TextStyle::new(gh * 0.26, 400.0);
-    let mut root = el().w_full().h_full().fill(c(16, 18, 22));
+    let mut root = el().key("root").w_full().h_full().fill(c(16, 18, 22));
     root.extend_children(s.cells.iter().enumerate().flat_map(|(i, cell)| {
         let x = (i % cols) as f32 * gw;
         let y = TOP + (i / cols) as f32 * gh;
