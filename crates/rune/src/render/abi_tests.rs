@@ -532,3 +532,254 @@ fn kind_runs_matches_reference_across_valid_none_and_out_of_bounds_spans() {
         assert_eq!(got, reference(&kinds, span.clone()), "span {span:?}");
     }
 }
+
+#[test]
+fn gpu_spring_opacity_folding_matches_cpu_across_all_kinds() {
+    use crate::gpu::springs::{Node, Track};
+
+    let (w, h) = (192u32, 128u32);
+    let mut atlas = crate::text::Atlas::new();
+    atlas.data.resize((crate::text::ATLAS_SIZE * crate::text::ATLAS_SIZE) as usize, 0);
+    for y in 0..16usize {
+        for x in 0..16usize {
+            atlas.data[y * crate::text::ATLAS_SIZE as usize + x] = ((x * 15 + y * 9) & 0xff) as u8;
+        }
+    }
+    atlas.dirty = Some((0, 16));
+
+    let mut images = crate::pixels::ImageAtlas::default();
+    let px = crate::Pixels::new();
+    px.set(
+        4,
+        4,
+        (0..16u8).flat_map(|i| [220, i.wrapping_mul(15), 80, 255]).collect(),
+    );
+    let placed = images.place(&px, [24.0, 24.0]).expect("place test image");
+
+    // Non-overlapping grid covering every primitive kind a GPU spring can drive.
+    let base_instances = vec![
+        // (8..44, 8..40): KIND_RECT, opaque fill + opaque border, rounded (checks border_over hide + shrink)
+        Instance {
+            rect: [8.0, 8.0, 36.0, 32.0],
+            radii: [8.0; 4],
+            fill: [0.15, 0.35, 0.85, 1.0],
+            border: [0.9, 0.12, 0.1, 1.0],
+            params: [4.0, KIND_RECT, 0.0, 1.0],
+            uv: [0.0; 4],
+            clip: NO_CLIP,
+            fade: [0; 4],
+        },
+        // (52..88, 8..40): KIND_RECT, translucent fill + translucent border (border.a = 0.6)
+        Instance {
+            rect: [52.0, 8.0, 36.0, 32.0],
+            radii: [6.0; 4],
+            fill: [0.12, 0.56, 0.24, 0.8],
+            border: [0.54, 0.06, 0.48, 0.6],
+            params: [4.0, KIND_RECT, 0.0, 1.0],
+            uv: [0.0; 4],
+            clip: NO_CLIP,
+            fade: [0; 4],
+        },
+        // (96..132, 8..40): KIND_RECT, pre-dimmed (o = 0.6) with per-side border widths
+        Instance {
+            rect: [96.0, 8.0, 36.0, 32.0],
+            radii: [4.0; 4],
+            fill: [0.12, 0.24, 0.48, 0.6],
+            border: [0.54, 0.42, 0.06, 0.6],
+            params: [5.0, KIND_RECT, 0.0, 0.6],
+            uv: [3.0, 5.0, 4.0, 2.0],
+            clip: NO_CLIP,
+            fade: [0; 4],
+        },
+        // (140..176, 8..40): KIND_GRADIENT with gradient border (bw = 4.0, border top -> uv bottom)
+        Instance {
+            rect: [140.0, 8.0, 36.0, 32.0],
+            radii: [6.0; 4],
+            fill: [0.1, 0.2, 0.7, 1.0],
+            border: [0.95, 0.2, 0.1, 1.0],
+            params: [4.0, KIND_GRADIENT, 0.0, 1.0],
+            uv: [0.1, 0.85, 0.3, 1.0],
+            clip: NO_CLIP,
+            fade: [0; 4],
+        },
+        // (8..44, 48..80): KIND_GRADIENT fill-only (bw = 0.0, fill top -> uv bottom)
+        Instance {
+            rect: [8.0, 48.0, 36.0, 32.0],
+            radii: [6.0; 4],
+            fill: [0.8, 0.2, 0.1, 1.0],
+            border: [0.0; 4],
+            params: [0.0, KIND_GRADIENT, 0.0, 1.0],
+            uv: [0.1, 0.3, 0.9, 1.0],
+            clip: NO_CLIP,
+            fade: [0; 4],
+        },
+        // (52..88, 48..80): KIND_SHADOW
+        Instance {
+            rect: [56.0, 52.0, 28.0, 24.0],
+            radii: [6.0; 4],
+            fill: [0.0, 0.0, 0.0, 0.6],
+            border: [0.0; 4],
+            params: [0.0, KIND_SHADOW, 4.0, 1.0],
+            uv: [0.0; 4],
+            clip: NO_CLIP,
+            fade: [0; 4],
+        },
+        // (96..132, 48..80): KIND_INSET
+        Instance {
+            rect: [96.0, 48.0, 36.0, 32.0],
+            radii: [6.0; 4],
+            fill: [0.05, 0.05, 0.15, 0.7],
+            border: [0.0; 4],
+            params: [2.0, KIND_INSET, 3.0, 1.0],
+            uv: [1.0, 2.0, 0.0, 0.0],
+            clip: NO_CLIP,
+            fade: [0; 4],
+        },
+        // (140..176, 48..80): KIND_DASHED
+        Instance {
+            rect: [140.0, 48.0, 36.0, 32.0],
+            radii: [6.0; 4],
+            fill: [0.9, 0.7, 0.1, 1.0],
+            border: [0.2, 0.8, 0.9, 1.0],
+            params: [3.0, KIND_DASHED, 0.0, 1.0],
+            uv: [6.0, 4.0, 0.0, 0.0],
+            clip: NO_CLIP,
+            fade: [0; 4],
+        },
+        // (8..44, 88..120): KIND_RADIAL
+        Instance {
+            rect: [8.0, 88.0, 36.0, 32.0],
+            radii: [6.0; 4],
+            fill: [0.9, 0.3, 0.2, 1.0],
+            border: [0.1, 0.4, 0.9, 0.8],
+            params: [0.0, KIND_RADIAL, 0.0, 1.0],
+            uv: [18.0, 16.0, 18.0, 16.0],
+            clip: NO_CLIP,
+            fade: [0; 4],
+        },
+        // (52..88, 88..120): KIND_SEGMENT + KIND_TRIANGLE
+        Instance {
+            rect: [52.0, 88.0, 36.0, 32.0],
+            radii: [56.0, 92.0, 84.0, 114.0],
+            fill: [0.95, 0.55, 0.15, 1.0],
+            border: [0.0; 4],
+            params: [2.5, KIND_SEGMENT, 1.0, 1.0],
+            uv: [0.0; 4],
+            clip: NO_CLIP,
+            fade: [0; 4],
+        },
+        Instance {
+            rect: [96.0, 88.0, 36.0, 32.0],
+            radii: [100.0, 116.0, 114.0, 92.0],
+            fill: [0.55, 0.3, 0.9, 0.9],
+            border: [0.0; 4],
+            params: [7.0, KIND_TRIANGLE, 0.0, 1.0],
+            uv: [128.0, 116.0, 0.0, 0.0],
+            clip: NO_CLIP,
+            fade: [0; 4],
+        },
+        // (140..156, 92..108): KIND_GLYPH + (160..184, 92..116): KIND_IMAGE
+        Instance {
+            rect: [140.0, 92.0, 16.0, 16.0],
+            radii: [0.0; 4],
+            fill: [0.95, 0.95, 0.85, 1.0],
+            border: [0.0; 4],
+            params: [0.0, KIND_GLYPH, 0.0, 1.45],
+            uv: [0.0, 0.0, 16.0, 16.0],
+            clip: NO_CLIP,
+            fade: [0; 4],
+        },
+        Instance {
+            rect: [160.0, 92.0, 24.0, 24.0],
+            radii: [4.0; 4],
+            fill: [0.0, 0.0, 0.0, 0.9],
+            border: [0.0; 4],
+            params: [placed.page as f32, KIND_IMAGE, 0.0, 1.0],
+            uv: placed.rect.map(|v| v as f32),
+            clip: NO_CLIP,
+            fade: [0; 4],
+        },
+    ];
+
+    let gpu = Gpu::headless();
+    let clear = [0.06, 0.08, 0.12, 1.0];
+
+    for alpha in [0.5f32, 0.25] {
+        // Canonical CPU opacity fold via `instance::end_layer`, applied to each primitive.
+        let cpu_folded: Vec<Instance> = base_instances
+            .iter()
+            .map(|&inst| {
+                let mut list = vec![
+                    Instance::begin_layer(inst.rect, NO_CLIP, LayerSpec { opacity: alpha, ..Default::default() }),
+                    inst,
+                ];
+                let mut marks = Vec::new();
+                end_layer(&mut list, &mut [], &mut marks, 0, 0);
+                assert_eq!(list.len(), 1, "single primitive must fold opacity directly");
+                list[0]
+            })
+            .collect();
+
+        for (format, srgb_blend) in [(OFFSCREEN_FORMAT, false), (wgpu::TextureFormat::Bgra8Unorm, true)] {
+            atlas.dirty = Some((0, 16));
+            let mut r_cpu = Renderer::new(&gpu.device, format);
+            r_cpu.set_srgb_blend(srgb_blend);
+            r_cpu.upload_images(&gpu.device, &gpu.queue, &mut images);
+            r_cpu.prepare(&gpu.device, &gpu.queue, &mut atlas, &cpu_folded, (w, h));
+            let t_cpu = Offscreen::with_format(&gpu.device, w, h, format);
+            let mut enc = gpu.device.create_command_encoder(&Default::default());
+            r_cpu.draw(&mut enc, &t_cpu.view, clear);
+            t_cpu.copy(&mut enc);
+            r_cpu.submit(&gpu.queue, enc);
+            let px_cpu = t_cpu.read(&gpu.device);
+
+            atlas.dirty = Some((0, 16));
+            let zero = Track::constant(0.0);
+            let node = Node { x: zero, y: zero, opacity: Track::constant(alpha) };
+            let ids = vec![0u32; base_instances.len()];
+            let mut r_spring = Renderer::with_springs(&gpu.device, format, &[node], &ids);
+            r_spring.set_srgb_blend(srgb_blend);
+            r_spring.upload_images(&gpu.device, &gpu.queue, &mut images);
+            r_spring.prepare(&gpu.device, &gpu.queue, &mut atlas, &base_instances, (w, h));
+            let t_spring = Offscreen::with_format(&gpu.device, w, h, format);
+            let mut enc = gpu.device.create_command_encoder(&Default::default());
+            r_spring.draw(&mut enc, &t_spring.view, clear);
+            t_spring.copy(&mut enc);
+            r_spring.submit(&gpu.queue, enc);
+            let px_spring = t_spring.read(&gpu.device);
+
+            let mut max_diff = 0u8;
+            let mut worst = None;
+            for y in 0..h {
+                for x in 0..w {
+                    let i = ((y * w + x) * 4) as usize;
+                    let a = [px_cpu[i], px_cpu[i + 1], px_cpu[i + 2], px_cpu[i + 3]];
+                    let b = [px_spring[i], px_spring[i + 1], px_spring[i + 2], px_spring[i + 3]];
+                    let d = (0..4).map(|k| a[k].abs_diff(b[k])).max().unwrap();
+                    if d > max_diff {
+                        max_diff = d;
+                        worst = Some((x, y, a, b));
+                    }
+                }
+            }
+            assert!(
+                max_diff <= 1,
+                "GPU spring opacity={alpha} format={format:?} drifted from CPU fold: max_diff={max_diff} worst={worst:?}"
+            );
+
+            if srgb_blend {
+                let half = cpu_boot::HalfRounding::of_vendor(gpu.adapter.get_info().vendor);
+                let scene = cpu_boot::Scene::new(&cpu_folded, &atlas, &images, (w, h), clear)
+                    .srgb_blend(true)
+                    .half_rounding(half);
+                let mut boot = vec![0u8; (w * h * 4) as usize];
+                cpu_boot::paint(&scene, &mut cpu_boot::Target::new(&mut boot, w, h), 1).expect("cpu_boot paints");
+                let d = cpu_boot::drift(
+                    cpu_boot::Pixels::bgra(&boot, w, h, w as usize * 4),
+                    cpu_boot::Pixels::bgra(&px_spring, w, h, w as usize * 4),
+                );
+                assert!(d.max <= 1, "GPU spring opacity={alpha} drifted from cpu_boot: {d:?}");
+            }
+        }
+    }
+}

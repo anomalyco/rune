@@ -252,7 +252,7 @@ impl Frame {
                                 continue;
                             }
                             let at = (y * width + x) as usize;
-                            let mut src = match turn {
+                            let src = match turn {
                                 Some((sn, cs, pivot)) => {
                                     let (qx, qy) = (x as f32 + 0.5 - pivot[0], y as f32 + 0.5 - pivot[1]);
                                     let (ux, uy) = (pivot[0] + cs * qx + sn * qy - 0.5, pivot[1] + cs * qy - sn * qx - 0.5);
@@ -262,7 +262,8 @@ impl Frame {
                                         if tx < 0.0 || ty < 0.0 || tx >= width as f32 || ty >= height as f32 {
                                             return [0.0; 4];
                                         }
-                                        layer_buf[(ty as u32 * width + tx as u32) as usize]
+                                        let c = layer_buf[(ty as u32 * width + tx as u32) as usize];
+                                        if layer_additive { c.map(|v| v.clamp(0.0, 1.0)) } else { c }
                                     };
                                     let (a, b) = (texel(bx, by), texel(bx + 1.0, by));
                                     let (c, d) = (texel(bx, by + 1.0), texel(bx + 1.0, by + 1.0));
@@ -272,11 +273,11 @@ impl Frame {
                                         top * (1.0 - fy) + bottom * fy
                                     })
                                 }
-                                None => layer_buf[at],
+                                None => {
+                                    let c = layer_buf[at];
+                                    if layer_additive { c.map(|v| v.clamp(0.0, 1.0)) } else { c }
+                                }
                             };
-                            if layer_additive {
-                                src = src.map(|c| c.clamp(0.0, 1.0));
-                            }
                             let col = src.map(|c| c * cov);
                             if col[3] <= 0.0 {
                                 continue;

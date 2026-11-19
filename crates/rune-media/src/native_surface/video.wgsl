@@ -34,6 +34,43 @@ fn convert(a: vec4<f32>, uv: vec2<f32>) -> vec4<f32> {
 fn sample_linear(uv: vec2<f32>) -> vec4<f32> {
     return convert(textureSampleLevel(plane0, filtering, uv, 0.0), textureSampleLevel(plane1, filtering, uv, 0.0).rg);
 }
+// Apple's continuous corner (crates/rune/src/shaders/clip.wgsl `sd_continuous` / `sd_rounded`).
+const CONTINUOUS_K: f32 = 1.52866483;
+fn sd_continuous(p: vec2<f32>, half: vec2<f32>, r: f32) -> f32 {
+    let e = CONTINUOUS_K * r;
+    let q = half - abs(p);
+    let v = vec2<f32>(e) - q;
+    if (v.x <= 0.0 || v.y <= 0.0) { return max(-q.x, -q.y); }
+    let u = atan2(v.y, v.x) * (4.0 / 3.14159265) - 1.0;
+    let u2 = u * u;
+    return length(v) - e * (1.14602295 + u2 * (-0.37573161 + u2 * (0.30796609 - 0.07724354 * u2)));
+}
+fn sd_rounded(p: vec2<f32>, half: vec2<f32>, radii: vec4<f32>) -> f32 {
+    var r = radii.x;
+    if (p.x > 0.0) {
+        r = select(radii.y, radii.z, p.y > 0.0);
+    } else {
+        r = select(radii.x, radii.w, p.y > 0.0);
+    }
+    if (r < 0.0) { return sd_continuous(p, half, min(-r, min(half.x, half.y))); }
+    r = min(r, min(half.x, half.y));
+    let q = abs(p) - half + vec2<f32>(r);
+    return min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0))) - r;
+}
+fn unpack_clip_radii(w: u32) -> vec4<f32> {
+    if (w == 0u) { return vec4<f32>(0.0); }
+    if ((w & 0x60000000u) != 0x60000000u) {
+        return vec4<f32>(bitcast<f32>(w));
+    }
+    let step = select(0.5, 2.0, (w & 0x10000000u) != 0u);
+    let sgn = select(1.0, -1.0, (w & 0x80000000u) != 0u);
+    return vec4<f32>(
+        f32(w & 0x7fu),
+        f32((w >> 7u) & 0x7fu),
+        f32((w >> 14u) & 0x7fu),
+        f32((w >> 21u) & 0x7fu),
+    ) * (step * sgn);
+}
 fn ramp(d: f32, width: f32) -> f32 {
     if width == 0.0 { return clamp(d + 0.5, 0.0, 1.0); }
     let x = clamp(d / abs(width), 0.0, 1.0);
@@ -69,12 +106,8 @@ fn ramp(d: f32, width: f32) -> f32 {
         }}
         col /= f32(taps.x * taps.y);
     }
-    let half = u.node.zw*0.5; let rel = p-u.node.xy-half;
-    var radius = select(u.radii.x, u.radii.y, rel.x > 0.0);
-    if rel.y > 0.0 { radius = select(u.radii.w, u.radii.z, rel.x > 0.0); }
-    radius = min(radius, min(half.x, half.y));
-    let q = abs(rel)-half+radius;
-    let distance = min(max(q.x,q.y),0.0)+length(max(q,vec2<f32>(0.0)))-radius;
+    let half = u.node.zw*0.5;
+    let distance = sd_rounded(p-u.node.xy-half, half, u.radii);
     let hard = vec4<f32>(p-u.clip.xy, u.clip.zw-p);
     let fade = vec4<f32>(unpack2x16float(u.fade.x), unpack2x16float(u.fade.y));
     let offset = unpack4x8unorm(u.fade.z);
@@ -91,37 +124,7 @@ fn ramp(d: f32, width: f32) -> f32 {
     var mask = 1.0;
     if u.fade.w != 0u {
         let h = (u.clip.zw-u.clip.xy)*0.5;
-        let rel = p-u.clip.xy-h;
-        var clip_radius = bitcast<f32>(u.fade.w);
-        if (u.fade.w & 0x60000000u) == 0x60000000u {
-            let step = select(0.5, 2.0, (u.fade.w & 0x10000000u) != 0u);
-            let sgn = select(1.0, -1.0, (u.fade.w & 0x80000000u) != 0u);
-            var q_shift = 0u;
-            if rel.x > 0.0 {
-                q_shift = select(7u, 14u, rel.y > 0.0);
-            } else {
-                q_shift = select(0u, 21u, rel.y > 0.0);
-            }
-            clip_radius = f32((u.fade.w >> q_shift) & 0x7fu) * step * sgn;
-        }
-        if clip_radius > 0.0 {
-            let r = min(clip_radius, min(h.x,h.y));
-            let q = abs(rel)-h+r;
-            let d = min(max(q.x,q.y),0.0)+length(max(q,vec2<f32>(0.0)))-r;
-            mask = clamp(0.5-d,0.0,1.0);
-        } else if clip_radius < 0.0 {
-            // Continuous corners, as `sd_continuous` in shader.wgsl.
-            let e = 1.52866483 * min(-clip_radius, min(h.x,h.y));
-            let q = h - abs(rel);
-            let v = vec2<f32>(e) - q;
-            var d = max(-q.x, -q.y);
-            if v.x > 0.0 && v.y > 0.0 {
-                let w = atan2(v.y, v.x) * (4.0 / 3.14159265) - 1.0;
-                let w2 = w * w;
-                d = length(v) - e * (1.14602295 + w2 * (-0.37573161 + w2 * (0.30796609 - 0.07724354 * w2)));
-            }
-            mask = clamp(0.5-d,0.0,1.0);
-        }
+        mask = clamp(0.5 - sd_rounded(p-u.clip.xy-h, h, unpack_clip_radii(u.fade.w)), 0.0, 1.0);
     }
     return col * (clamp(0.5-distance,0.0,1.0)*clip*mask*u.color.w);
 }

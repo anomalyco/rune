@@ -42,7 +42,19 @@ fn flags_of(p: Prim) -> u32 {
     return u32(p.mat.z + 0.5);
 }
 
-// Rune's rounded rect (crates/rune/src/shader.wgsl `sd_rounded`): radii tl, tr, br, bl, y down.
+// Rune's rounded rect (crates/rune/src/shaders/clip.wgsl `sd_continuous` / `sd_rounded`):
+// radii tl, tr, br, bl, y down; negative selects Apple's continuous corner.
+const CONTINUOUS_K: f32 = 1.52866483;
+fn sd_continuous(p: vec2<f32>, half: vec2<f32>, r: f32) -> f32 {
+    let e = CONTINUOUS_K * r;
+    let q = half - abs(p);
+    let v = vec2<f32>(e) - q;
+    if (v.x <= 0.0 || v.y <= 0.0) { return max(-q.x, -q.y); }
+    let u = atan2(v.y, v.x) * (4.0 / PI) - 1.0;
+    let u2 = u * u;
+    return length(v) - e * (1.14602295 + u2 * (-0.37573161 + u2 * (0.30796609 - 0.07724354 * u2)));
+}
+
 fn sd_rrect(p: vec2<f32>, half: vec2<f32>, radii: vec4<f32>) -> f32 {
     var r = radii.x;
     if (p.x > 0.0) {
@@ -50,6 +62,7 @@ fn sd_rrect(p: vec2<f32>, half: vec2<f32>, radii: vec4<f32>) -> f32 {
     } else {
         r = select(radii.x, radii.w, p.y > 0.0);
     }
+    if (r < 0.0) { return sd_continuous(p, half, min(-r, min(half.x, half.y))); }
     r = min(r, min(half.x, half.y));
     let q = abs(p) - half + vec2<f32>(r);
     return min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0))) - r;

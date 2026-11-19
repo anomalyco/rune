@@ -33,6 +33,8 @@ pub(crate) struct ComputeRaw {
     layout: Arc<LayoutRaw>,
     /// The storage bindings whose sizes the shader reads, in order.
     sized: Vec<naga::ResourceBinding>,
+    /// Byte lengths of each `var<workgroup>` parameter, rounded up to Metal's 16-byte alignment.
+    workgroup_memory: Box<[u32]>,
     workgroup: MTLSize,
 }
 send_sync!(ComputeRaw);
@@ -48,7 +50,16 @@ pub(super) fn create(shared: &Shared, desc: &wgpu::ComputePipelineDescriptor<'_>
     let cs = compile(shared, &stage, &layout.stages[COMPUTE], false).unwrap_or_else(|e| panic!("{label}: {e}"));
     let state = shared.device.newComputePipelineStateWithFunction_error(&cs.function).unwrap_or_else(|e| panic!("{label}: {}", e.localizedDescription()));
     let [x, y, z] = cs.workgroup.map(|n| n as usize);
-    ComputePipeline { raw: Arc::new(ComputeRaw { state, layout, sized: cs.sized, workgroup: MTLSize { width: x, height: y, depth: z } }) }
+    let workgroup_memory = cs.workgroup_memory.into_iter().map(|size| size.next_multiple_of(16)).collect();
+    ComputePipeline {
+        raw: Arc::new(ComputeRaw {
+            state,
+            layout,
+            sized: cs.sized,
+            workgroup_memory,
+            workgroup: MTLSize { width: x, height: y, depth: z },
+        }),
+    }
 }
 
 impl ComputePipelineInterface for ComputePipeline {
@@ -172,6 +183,11 @@ impl ComputePassInterface for MetalComputePass {
             self.immediates_dirty = true;
         }
         self.raw.setComputePipelineState(&next.state);
+        for (index, &size) in next.workgroup_memory.iter().enumerate() {
+            // SAFETY: `index` and 16-byte-aligned `size` match the `threadgroup` arguments Naga
+            // emitted for this compute function.
+            unsafe { self.raw.setThreadgroupMemoryLength_atIndex(size as usize, index) };
+        }
         self.sizes_dirty = true;
         self.keep.push(next.clone());
         self.pipeline = Some(next.clone());

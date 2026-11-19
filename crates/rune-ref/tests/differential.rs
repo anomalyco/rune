@@ -718,3 +718,74 @@ fn cpu_gpu_rounded_clip_on_primitive() {
         panic!("{e}");
     }
 }
+
+#[test]
+fn cpu_gpu_turned_plus_lighter_saturates_before_interpolation() {
+    use rune::render::{Blend, Instance, KIND_RECT, LayerSpec, NO_CLIP};
+    let mut gpu = GpuRenderer::default();
+    let make = |children: &[Instance]| -> Scene {
+        let mut scene = generate::scene(&[]);
+        scene.width = 48;
+        scene.height = 48;
+        scene.clear = [0.02, 0.04, 0.08, 1.0];
+        let open = Instance::begin_layer(
+            [12.0, 12.0, 24.0, 24.0],
+            NO_CLIP,
+            LayerSpec { opacity: 0.8, blend: Blend::PlusLighter, ..Default::default() },
+        )
+        .turned(0.4, [24.0, 24.0]);
+        let mut all = vec![open];
+        all.extend_from_slice(children);
+        all.push(Instance::end_layer());
+        scene.primitives = all
+            .iter()
+            .enumerate()
+            .map(|(i, inst)| Primitive::from_instance(inst, i as u32 + 1, format!("turned-add/{i}")))
+            .collect();
+        scene
+    };
+    let box_inst = |fill: [f32; 4]| Instance {
+        rect: [12.0, 12.0, 24.0, 24.0],
+        radii: [0.0; 4],
+        fill,
+        border: [0.0; 4],
+        params: [0.0, KIND_RECT, 0.0, 1.0],
+        uv: [0.0; 4],
+        clip: NO_CLIP,
+        fade: [0; 4],
+    };
+    // Two overlapping [0.8, 0.2, 0.0, 0.8] rects sum to [1.6, 0.4, 0.0, 1.6], which saturates to
+    // [1.0, 0.4, 0.0, 1.0]. Saturation must happen before the turned layer's bilinear sampling.
+    let single = make(&[box_inst([1.0, 0.4, 0.0, 1.0])]);
+    let doubled = make(&[box_inst([0.8, 0.2, 0.0, 0.8]), box_inst([0.8, 0.2, 0.0, 0.8])]);
+
+    let mut cpu_single = Frame::new(48, 48, true);
+    cpu_single.render(&single);
+    let mut cpu_doubled = Frame::new(48, 48, true);
+    cpu_doubled.render(&doubled);
+    let cpu_diff = compare(&doubled, &cpu_single, &cpu_doubled.rgba, 1);
+    assert_eq!(cpu_diff.outlier_pixels, 0, "rune-ref turned PlusLighter clamped after interpolation: {cpu_diff:?}");
+
+    let gpu_single = gpu.render(&single);
+    let gpu_doubled = gpu.render(&doubled);
+    let mut gpu_max = 0u8;
+    let mut gpu_worst = None;
+    for y in 0..48u32 {
+        for x in 0..48u32 {
+            let i = ((y * 48 + x) * 4) as usize;
+            let a = [gpu_single[i], gpu_single[i + 1], gpu_single[i + 2], gpu_single[i + 3]];
+            let b = [gpu_doubled[i], gpu_doubled[i + 1], gpu_doubled[i + 2], gpu_doubled[i + 3]];
+            let d = (0..4).map(|k| a[k].abs_diff(b[k])).max().unwrap();
+            if d > gpu_max {
+                gpu_max = d;
+                gpu_worst = Some((x, y, a, b));
+            }
+        }
+    }
+    assert!(gpu_max <= 1, "GPU turned PlusLighter clamped after interpolation: max={gpu_max} worst={gpu_worst:?}");
+
+    if let Err(e) = check(&mut gpu, &doubled, 2) {
+        save("turned-plus-lighter", &doubled);
+        panic!("{e}");
+    }
+}
