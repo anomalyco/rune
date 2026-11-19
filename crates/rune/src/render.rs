@@ -2,8 +2,6 @@
 
 use std::sync::{Arc, atomic::AtomicBool};
 
-use bytemuck::{Pod, Zeroable};
-
 use crate::pixels::ImageAtlas;
 use crate::text::{ATLAS_SIZE, Atlas};
 /// Rows the first glyph atlas page's texture starts with: a window that shows a few labels holds
@@ -37,6 +35,7 @@ pub use fill::FillDrift;
 mod first_use;
 pub(crate) mod gpu_events;
 mod gpu_loss;
+mod instance;
 pub(crate) mod layer_blur;
 mod layers;
 mod metallib;
@@ -53,6 +52,11 @@ mod variant;
 mod windfoil_metallib;
 pub use backdrop_blur::MAX_BACKDROP_BLURS;
 pub use first_use::{make_layer_blur, make_straight_alpha, precompiled_misses};
+pub(crate) use instance::{Globals, INSTANCE_WORDS, effect_mark, end_layer, pack_u64_f32, turned_bounds, unpack_u64_f32, word};
+pub use instance::{
+    Instance, KIND_BACKDROP_BLUR, KIND_DASHED, KIND_EFFECT, KIND_GLYPH, KIND_GRADIENT, KIND_IMAGE, KIND_INSET, KIND_LAYER, KIND_LAYER_END, KIND_RADIAL,
+    KIND_RECT, KIND_SEGMENT, KIND_SHADOW, KIND_TRIANGLE, Kind, NO_CLIP, pack_clip_radii, pack_fade, unpack_clip_radii, unpack_fade,
+};
 pub use layers::LayerStats;
 /// The kinds the frame pass has a pipeline of its own for (`regen_dxbc` compiles each).
 #[doc(hidden)]
@@ -64,57 +68,6 @@ pub const PINNED_KINDS: [u32; 3] = variant::PINNED;
 pub fn pinned_wgsl_blake3(kind: u32) -> Option<String> {
     variant::pinned_wgsl(kind).map(|wgsl| blake3::hash(wgsl.replace("\r\n", "\n").as_bytes()).to_hex().to_string())
 }
-
-/// Rounded rect in `fill` with a `params.x`-wide `border` ring drawn over it, as CSS paints a
-/// border over its background. `params.w` is the opacity the colours already carry (1 when not
-/// faded), so the ring hides the fill by `border.a / params.w`. Non-zero `uv` (with `uv.z >= 0`)
-/// gives per-side widths `[top, right, bottom, left]`; `params.x` is then the widest.
-pub const KIND_RECT: f32 = 0.0;
-pub const KIND_SHADOW: f32 = 1.0;
-pub const KIND_GLYPH: f32 = 2.0;
-/// Inset shadow inside a rounded rect: `params.x` spread, `params.z` sigma, `uv.xy` offset.
-pub const KIND_INSET: f32 = 3.0;
-/// Rounded rect with a vertical gradient: `fill` at the top, `uv` (premultiplied) at the bottom.
-/// With a border width in `params.x` it is a `KIND_RECT` whose ring runs from `border` to `uv`,
-/// over the fill, with the same `params.w`.
-pub const KIND_GRADIENT: f32 = 4.0;
-/// A stroke segment: `radii` = x0, y0, x1, y1; `params.x` half width, `params.z` 1 for round caps.
-pub const KIND_SEGMENT: f32 = 5.0;
-/// A filled triangle: `radii` = ax, ay, bx, by; `uv.xy` = cx, cy; `params.x` the antialiased-edge
-/// mask (a→b, b→c, c→a as bits 0, 1, 2; other edges are hard so neighbours meet without seams).
-pub const KIND_TRIANGLE: f32 = 6.0;
-/// An RGBA image (`El::pixels`): `uv.xy` its origin in the image atlas, `uv.zw` its size in
-/// texels, drawn scaled into `rect` with the element's corner `radii`; `fill.a` is the opacity.
-pub const KIND_IMAGE: f32 = 7.0;
-/// Balanced scope records in the painter stream. They occupy instance indices but are never
-/// rasterized as ordinary quads. Keep scopes intact when partitioning compositor lists.
-pub const KIND_LAYER: f32 = 8.0;
-pub const KIND_LAYER_END: f32 = 9.0;
-/// A dashed border ring (`El::border_dash`), `params.x` wide inside the rounded rect, drawn
-/// alone (the fill is its own instance, showing through the gaps). Its colour runs from `fill`
-/// at the top to `border` at the bottom; `uv.xyz` = dash, gap, phase in device pixels.
-pub const KIND_DASHED: f32 = 10.0;
-/// A radial (`uv.z > 0`: `uv` = `[cx, cy, rx, ry]` in rect-local device pixels) or angled linear
-/// (`uv.z == 0`: `uv.xy` = gradient vector per device pixel) stop segment from `fill` at `t0`
-/// (`params.x`) to `border` at `t1` (`params.w`), with `+ 2.0` marking an open interior stop edge.
-pub const KIND_RADIAL: f32 = 11.0;
-/// An effect slot (`El::effect`). It rasterizes no pixels but keeps its place in the painter
-/// stream, so `Renderer::draw_range_with` or `Renderer::draw_with` can hand the compositor the pass
-/// at exactly this point, inside the enclosing isolated layer if there is one. `rect` is the
-/// element, `clip`/`fade` (and the rounded-clip radius in `fade[3]`) its clip, `params.x` `1.0`
-/// when the slot requests a backdrop copy (`El::effect_backdrop(true)`), `params.z` the bleed past
-/// `rect` in device pixels and `params.w` the slot's scale in device pixels per point (`Env::scale`
-/// times any element or ancestor `scale` / `live_scale`). `fill[3]` is always 1: a faded slot is
-/// drawn in an isolated layer that applies its opacity. `border[0]` and `border[1]` hold the low
-/// and high 16 bits of its `El::effect` tag as exact floats (`EffectSite::mark`), and `uv` its
-/// `El::effect_data` payload, bit for bit (`EffectSite::data`).
-pub const KIND_EFFECT: f32 = 12.0;
-/// A backdrop blur (`El::backdrop_blur`). Like an effect slot it rasterizes nothing itself in
-/// the uber shader; the renderer stops there, copies and blurs what is below, and draws the blur
-/// inside `rect` with signed corner `radii`, cut by `clip`/`fade`, at opacity `fill[3]`.
-/// `params.x` is the blur's standard deviation in device pixels and `params.w` the scale in
-/// device pixels per point.
-pub const KIND_BACKDROP_BLUR: f32 = 13.0;
 
 pub use rune_core::Blend;
 
@@ -225,197 +178,6 @@ pub enum EffectPhase<'a, 'p> {
 /// closed if the slot requested a backdrop (`El::effect_backdrop(true)`), then with
 /// `EffectPhase::Draw(pass)` inside the open pass.
 pub type EffectBackdropHook<'h> = dyn FnMut(EffectPhase<'_, '_>, &EffectSite<'_>) + 'h;
-
-/// One instance, in device pixels.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Pod, Zeroable)]
-pub struct Instance {
-    pub rect: [f32; 4],
-    pub radii: [f32; 4],
-    pub fill: [f32; 4],
-    pub border: [f32; 4],
-    /// border width, kind, shadow sigma, glyph coverage exponent
-    pub params: [f32; 4],
-    pub uv: [f32; 4],
-    /// x0, y0, x1, y1
-    pub clip: [f32; 4],
-    /// Attribute 7 is Uint32x4; the instance ABI stays 128 bytes (8 × vec4).
-    /// [0] = pack2x16float(left, top), [1] = pack2x16float(right, bottom) widths; a negative
-    /// width ramps linearly, a positive one on smoothstep.
-    /// [2] = pack4x8unorm(clamp(inward origin→clip distance / width, 0, 1)), LTRB.
-    /// [3] = signed uniform f32 clip-radius bits or tagged mixed radii (`pack_clip_radii`).
-    /// The rounded rectangle is `clip`; fade widths never occupy this word.
-    /// Layer records may leave all four words zero. See `pack_fade`.
-    pub fade: [u32; 4],
-}
-
-const _: () = assert!(std::mem::size_of::<Instance>() == 128);
-
-pub fn pack_fade(width: [f32; 4], origin: [f32; 4], clip: [f32; 4]) -> [u32; 4] {
-    // A negative width is a linear ramp of that width (`El::clip_fade_linear`).
-    let halves = width.map(|w| half::f16::from_f32(w.clamp(-65504.0, 65504.0)).to_bits() as u32);
-    let mut offsets = 0;
-    for edge in 0..4 {
-        let distance = if edge < 2 { clip[edge] - origin[edge] } else { origin[edge] - clip[edge] };
-        let w = width[edge].abs();
-        let offset = if w > 0.0 { (distance / w).clamp(0.0, 1.0) } else { 0.0 };
-        offsets |= ((offset * 255.0 + 0.5) as u32) << (edge * 8);
-    }
-    [halves[0] | (halves[1] << 16), halves[2] | (halves[3] << 16), offsets, 0]
-}
-
-/// Decode widths and normalized origin offsets for tools inspecting the instance stream. A
-/// negative width is a linear ramp.
-pub fn unpack_fade(fade: [u32; 4]) -> ([f32; 4], [f32; 4]) {
-    (std::array::from_fn(|e| half::f16::from_bits((fade[e / 2] >> ((e % 2) * 16)) as u16).to_f32()),
-     std::array::from_fn(|e| ((fade[2] >> (e * 8)) & 255) as f32 / 255.0))
-}
-
-pub const NO_CLIP: [f32; 4] = [-1e6, -1e6, 1e6, 1e6];
-
-/// Pack per-corner signed clip radii `[tl, tr, br, bl]` (negative = continuous corners)
-/// into `Instance::fade[3]`, clamping each corner to half the shorter `clip` side.
-/// Uniform corners stay an exact IEEE-754 `f32`; mixed corners use the `0x6000_0000`
-/// high-exponent tag (`|r| >= 2^65` in IEEE-754) with 4 × 7-bit magnitudes.
-/// Mixed radii round to 0.5 px through 63.5 px, otherwise 2 px, saturating at 254 px.
-/// All nonzero radii must have the same sign (one curve style per clip). Uniform radii
-/// saturate just below the tag's exponent range, far beyond device-pixel coordinates.
-pub fn pack_clip_radii(clip: [f32; 4], radii: [f32; 4]) -> u32 {
-    let half = ((clip[2] - clip[0]).min(clip[3] - clip[1]) * 0.5).max(0.0);
-    let clamped = radii.map(|radius| {
-        let r = radius.abs().min(half).min(f32::from_bits(0x5fff_ffff));
-        if radius < 0.0 && r > 0.0 { -r } else { r }
-    });
-    if clamped[0] == clamped[1] && clamped[1] == clamped[2] && clamped[2] == clamped[3] {
-        return if clamped[0] == 0.0 { 0 } else { clamped[0].to_bits() };
-    }
-    let continuous = clamped.iter().any(|&r| r < 0.0);
-    let max_r = clamped.iter().fold(0.0f32, |m, r| m.max(r.abs()));
-    let coarse = max_r > 63.5;
-    let inv_step = if coarse { 0.5 } else { 2.0 };
-    let mut bits = 0x6000_0000u32
-        | if continuous { 0x8000_0000 } else { 0 }
-        | if coarse { 0x1000_0000 } else { 0 };
-    for (idx, r) in clamped.into_iter().enumerate() {
-        let q = (r.abs() * inv_step).round().clamp(0.0, 127.0) as u32;
-        bits |= q << (idx * 7);
-    }
-    bits
-}
-
-/// Decode `Instance::fade[3]` into four signed corner radii `[tl, tr, br, bl]`.
-pub fn unpack_clip_radii(w: u32) -> [f32; 4] {
-    if w == 0 {
-        return [0.0; 4];
-    }
-    if (w & 0x6000_0000) != 0x6000_0000 {
-        return [f32::from_bits(w); 4];
-    }
-    let step = if (w & 0x1000_0000) != 0 { 2.0 } else { 0.5 };
-    let sign = if (w & 0x8000_0000) != 0 { -1.0 } else { 1.0 };
-    std::array::from_fn(|idx| {
-        let q = (w >> (idx * 7)) & 0x7f;
-        if q == 0 { 0.0 } else { q as f32 * step * sign }
-    })
-}
-
-impl Instance {
-    /// Rounded clipping shares the packed fade ABI across primitives and layer composites.
-    /// A negative radius keeps its sign: continuous corners (`corner_extent`).
-    pub(crate) fn round_clip(&mut self, radius: f32) {
-        self.round_clip_corners([radius; 4]);
-    }
-
-    pub(crate) fn round_clip_corners(&mut self, radii: [f32; 4]) {
-        self.fade[3] = pack_clip_radii(self.clip, radii);
-    }
-
-    /// Begin an isolated scope. `bounds` is a device-pixel [x,y,w,h] content bound, including
-    /// native surfaces. Primitive bounds (including shadow support) expand it during prepare.
-    pub fn begin_layer(bounds: [f32; 4], clip: [f32; 4], spec: LayerSpec) -> Self {
-        let mut instance = Self { rect: bounds, clip, fill: [0.0, 0.0, 0.0, spec.opacity.clamp(0.0, 1.0)],
-            params: [if spec.blend == Blend::PlusLighter { 1.0 } else { 0.0 }, KIND_LAYER,
-                layer_blur::sigma(spec.blur), 0.0], ..Self::zeroed() };
-        instance.round_clip(spec.clip_radius);
-        instance
-    }
-
-    /// Turn this scope's composite `angle` radians clockwise about `pivot` (device pixels).
-    /// The contents draw upright; the layer's clip applies after the turn. Layer records keep
-    /// it in `border[1..4]` as `[angle, pivot.x, pivot.y]`.
-    pub fn turned(mut self, angle: f32, pivot: [f32; 2]) -> Self {
-        self.border = [0.0, angle, pivot[0], pivot[1]];
-        self
-    }
-
-    pub fn end_layer() -> Self {
-        Self { params: [0.0, KIND_LAYER_END, 0.0, 0.0], ..Self::zeroed() }
-    }
-}
-
-/// An effect slot's `El::effect` tag, from the two exact 16-bit floats in `border` (`KIND_EFFECT`).
-pub(crate) fn effect_mark(i: &Instance) -> u32 {
-    (i.border[0] as u32 & 0xFFFF) | (i.border[1] as u32 & 0xFFFF) << 16
-}
-
-/// Pack a 64-bit integer into four exact non-negative 16-bit integer floats (`0.0..=65535.0`).
-pub(crate) fn pack_u64_f32(v: u64) -> [f32; 4] {
-    [
-        (v & 0xFFFF) as f32,
-        ((v >> 16) & 0xFFFF) as f32,
-        ((v >> 32) & 0xFFFF) as f32,
-        ((v >> 48) & 0xFFFF) as f32,
-    ]
-}
-
-/// Unpack a 64-bit integer from [`pack_u64_f32`].
-pub(crate) fn unpack_u64_f32(a: [f32; 4]) -> u64 {
-    (a[0] as u64 & 0xFFFF)
-        | ((a[1] as u64 & 0xFFFF) << 16)
-        | ((a[2] as u64 & 0xFFFF) << 32)
-        | ((a[3] as u64 & 0xFFFF) << 48)
-}
-
-/// Close a runtime scope, folding empty/single-draw groups back into the direct path. Only the
-/// last one or two records move, so video insertions before this scope keep their indices.
-pub(crate) fn end_layer(instances: &mut Vec<Instance>, surfaces: &mut [crate::native_surface::SurfaceDraw], marks: &mut Vec<u32>, start: usize, surface_start: usize) {
-    let primitives = instances.len() - start - 1;
-    let videos = surfaces.len() - surface_start;
-    let scope = instances[start];
-    let unmasked = if primitives == 1 {
-        instances[start + 1].clip == NO_CLIP && instances[start + 1].fade == [0; 4]
-    } else if videos == 1 {
-        surfaces[surface_start].clip == NO_CLIP && surfaces[surface_start].fade == [0; 4]
-    } else { true };
-    let transfer_clip = scope.fade[3] == 0 && unmasked;
-    // A lone effect slot keeps a faded scope: the compositor's paint can't take the opacity.
-    let faded_effect = primitives == 1 && instances[start + 1].params[1] == KIND_EFFECT && scope.fill[3] != 1.0;
-    // A layer's `radii` hold its hole (`El::cutout_circle`), which only its composite can cut.
-    if !faded_effect && primitives + videos <= 1 && (primitives + videos == 0 || (scope.border[1] == 0.0 && scope.radii == [0.0; 4])) && scope.params[0] == 0.0 && scope.params[2] == 0.0 && scope.params[3] == 0.0
-        && (transfer_clip || (scope.clip == NO_CLIP && scope.fade == [0; 4])) {
-        let opacity = scope.fill[3];
-        if primitives == 1 {
-            let i = &mut instances[start + 1];
-            if transfer_clip { i.clip = scope.clip; i.fade = scope.fade; }
-            i.fill = i.fill.map(|v| v * opacity);
-            // A glyph's `border` holds no colour (an outline glyph's names its record).
-            if i.params[1] != KIND_GLYPH { i.border = i.border.map(|v| v * opacity); }
-            if i.params[1] == KIND_GRADIENT { i.uv = i.uv.map(|v| v * opacity); }
-            // A box's `params.w` is the opacity its colours carry (shader.wgsl `border_over`).
-            if i.params[1] == KIND_RECT || i.params[1] == KIND_GRADIENT { i.params[3] *= opacity; }
-        }
-        if videos == 1 {
-            if transfer_clip { surfaces[surface_start].clip = scope.clip; surfaces[surface_start].fade = scope.fade; }
-            surfaces[surface_start].opacity *= opacity;
-            surfaces[surface_start].before_instance -= 1;
-        }
-        instances.remove(start);
-        if marks.len() > start { marks.remove(start); }
-    } else {
-        instances.push(Instance::end_layer());
-        if let Some(&mark) = marks.get(start) { marks.push(mark); }
-    }
-}
 
 pub struct Gpu {
     pub instance: wgpu::Instance,
@@ -791,7 +553,7 @@ pub struct Renderer {
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pinned_building: Option<(wgpu::TextureFormat, std::sync::mpsc::Receiver<Vec<Option<wgpu::RenderPipeline>>>)>,
     /// Each instance's kind (`params[1]`), as batched: where a run of one kind starts and ends.
-    kinds: Vec<u8>,
+    kinds: Vec<Option<Kind>>,
     lcd_frame: bool,
     /// The window's wake, for work a frame starts on another thread (set_frame_wake).
     frame_wake: Option<std::sync::Arc<crate::live::Wake>>,
@@ -802,8 +564,7 @@ pub struct Renderer {
     /// Stable image pages; the initial bind group uses a 1×1 stand-in.
     images: Vec<Option<(wgpu::Texture, wgpu::BindGroup)>>,
     image_batches: Vec<(std::ops::Range<u32>, BatchBind)>,
-    instances: wgpu::Buffer,
-    capacity: usize,
+    instances: rune_staging::GrowBuffer,
     count: u32,
     springs: Option<crate::gpu::springs::Bindings>,
     spring_instances: usize,
@@ -963,7 +724,7 @@ impl Renderer {
         for (at, instance) in self.effects[first..].iter().take_while(|(at, _)| *at < range.end) {
             self.draw_instances(pass, format, cursor..*at + 1, target);
             cursor = *at + 1;
-            if instance.params[1] == KIND_BACKDROP_BLUR {
+            if instance.kind() == Some(Kind::BackdropBlur) {
                 self.draw_backdrop_blur(pass, format, *at, instance, target);
                 continue;
             }
@@ -1041,7 +802,10 @@ impl Renderer {
             };
             for run in kind_runs(&self.kinds, span) {
                 let kind = self.kinds[run.start as usize];
-                let pipeline = variant::PINNED.iter().position(|&k| k == u32::from(kind)).and_then(|at| pinned[at].as_ref()).unwrap_or(&self.pipeline);
+                let pipeline = kind
+                    .and_then(|k| variant::PINNED.iter().position(|&p| p == k.as_u32()))
+                    .and_then(|at| pinned[at].as_ref())
+                    .unwrap_or(&self.pipeline);
                 if !std::ptr::eq(pipeline, bound) { pass.set_pipeline(pipeline); bound = pipeline; }
                 pass.draw(0..4, run);
             }
@@ -1136,10 +900,9 @@ pub(crate) const CONTINUOUS_K: f32 = 1.528_664_8;
 pub struct Offscreen {
     texture: wgpu::Texture,
     pub view: wgpu::TextureView,
-    buffer: wgpu::Buffer,
+    readback: rune_staging::Readback,
     pub width: u32,
     pub height: u32,
-    padded_row: u32,
 }
 
 pub const OFFSCREEN_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
@@ -1161,56 +924,21 @@ impl Offscreen {
             view_formats: &[],
         });
         let view = texture.create_view(&Default::default());
-        let padded_row = (width * 4).div_ceil(256) * 256;
-        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("readback"),
-            size: (padded_row * height) as u64,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        Offscreen { texture, view, buffer, width, height, padded_row }
+        let readback = rune_staging::Readback::new(device, "readback", width, height, 4);
+        Offscreen { texture, view, readback, width, height }
     }
 
     pub fn copy(&self, encoder: &mut wgpu::CommandEncoder) {
-        self.copy_to(encoder, &self.buffer);
+        self.readback.copy_from(encoder, &self.texture);
     }
 
-    /// Bytes between rows in a readback buffer (`width * 4`, rounded up to wgpu's alignment).
-    pub(crate) fn padded_row(&self) -> u32 { self.padded_row }
-
-    /// Copies the target into `buffer`, which holds `padded_row() * height` bytes.
-    pub(crate) fn copy_to(&self, encoder: &mut wgpu::CommandEncoder, buffer: &wgpu::Buffer) {
-        encoder.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture: &self.texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyBufferInfo {
-                buffer,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(self.padded_row),
-                    rows_per_image: Some(self.height),
-                },
-            },
-            wgpu::Extent3d { width: self.width, height: self.height, depth_or_array_layers: 1 },
-        );
-    }
+    /// Underlying offscreen texture, for readback rings (`tooling::record`).
+    pub(crate) fn texture(&self) -> &wgpu::Texture { &self.texture }
 
     /// Tightly packed sRGB RGBA8 after `copy` was submitted.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn read(&self, device: &wgpu::Device) -> Vec<u8> {
-        let slice = self.buffer.slice(..);
-        slice.map_async(wgpu::MapMode::Read, |r| r.expect("map readback"));
-        device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
-        let out = {
-            let data = slice.get_mapped_range().expect("mapped range");
-            crate::tooling::record::unpad(&data, self.width, self.height, self.padded_row)
-        };
-        self.buffer.unmap();
-        out
+        self.readback.read(device)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -1232,6 +960,9 @@ pub fn write_png(path: &std::path::Path, width: u32, height: u32, rgba: &[u8]) -
     w.write_image_data(rgba).map_err(std::io::Error::other)?;
     Ok(())
 }
+
+#[cfg(test)]
+mod abi_tests;
 
 #[cfg(test)]
 mod backdrop_tests;
@@ -1450,20 +1181,27 @@ const MIN_RUN: usize = 8;
 
 /// Whether `span` splits into few enough runs of one kind to draw them with the pinned pipelines: one run,
 /// or at most `MAX_RUNS` of `MIN_RUN` instances or more on average.
-fn few_runs(kinds: &[u8], span: std::ops::Range<u32>) -> bool {
+fn few_runs(kinds: &[Option<Kind>], span: std::ops::Range<u32>) -> bool {
     let len = span.len();
     let runs = kind_runs(kinds, span).take(MAX_RUNS + 1).count();
     runs <= 1 || (runs <= MAX_RUNS && runs * MIN_RUN <= len)
 }
 
 /// `span` split into runs of instances of one kind (`kinds` by instance).
-fn kind_runs(kinds: &[u8], span: std::ops::Range<u32>) -> impl Iterator<Item = std::ops::Range<u32>> + '_ {
-    let mut at = span.start;
+fn kind_runs(kinds: &[Option<Kind>], span: std::ops::Range<u32>) -> impl Iterator<Item = std::ops::Range<u32>> + '_ {
+    let mut at = span.start as usize;
+    let end = span.end as usize;
+    let slice = &kinds[..end.min(kinds.len())];
     std::iter::from_fn(move || {
-        if at >= span.end { return None; }
-        let kind = kinds.get(at as usize).copied();
+        if at >= end { return None; }
         let start = at;
-        while at < span.end && kinds.get(at as usize).copied() == kind { at += 1; }
-        Some(start..at)
+        let Some(&first) = slice.get(at) else {
+            at = end;
+            return Some(start as u32..end as u32);
+        };
+        let mut cur = at + 1;
+        while let Some(&k) = slice.get(cur) && k == first { cur += 1; }
+        at = cur;
+        Some(start as u32..cur as u32)
     })
 }

@@ -295,7 +295,7 @@ fn gather<'a>(quads: impl Iterator<Item = &'a Instance>, size: (u32, u32)) -> Ve
     let union = |a: [i32; 4], b: [i32; 4]| if empty(&a) { b } else if empty(&b) { a } else { [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])] };
     let mut rects: Vec<[i32; 4]> = Vec::new();
     for q in quads {
-        let b = super::cpu_boot::bin::pixel_bounds(q, w, h);
+        let b = q.pixel_bounds(w, h);
         if empty(&b) { continue; }
         let mut b = [(b[0] - 2).max(0), (b[1] - 2).max(0), (b[2] + 2).min(w), (b[3] + 2).min(h)];
         while let Some(k) = rects.iter().position(|r| near(r, &b)) { b = union(b, rects.swap_remove(k)); }
@@ -314,7 +314,7 @@ type Units = Vec<(std::ops::Range<u32>, [i32; 4])>;
 
 fn units(instances: &[Instance], size: (u32, u32)) -> Result<Units, &'static str> {
     let (w, h) = (size.0 as i32, size.1 as i32);
-    let bounds = |i: &Instance| super::cpu_boot::bin::pixel_bounds(i, w, h);
+    let bounds = |i: &Instance| i.pixel_bounds(w, h);
     let empty = |b: &[i32; 4]| b[2] <= b[0] || b[3] <= b[1];
     let union = |a: [i32; 4], b: [i32; 4]| if empty(&a) { b } else if empty(&b) { a } else { [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])] };
     let mut units: Units = Vec::new();
@@ -322,14 +322,17 @@ fn units(instances: &[Instance], size: (u32, u32)) -> Result<Units, &'static str
     while n < instances.len() {
         let start = n;
         let mut b = bounds(&instances[n]);
-        if instances[n].params[1] == KIND_LAYER {
+        if instances[n].kind() == Some(Kind::Layer) {
             let mut depth = 1;
             while depth > 0 {
                 n += 1;
                 let i = instances.get(n).ok_or("open layer")?;
                 b = union(b, bounds(i));
-                if i.params[1] == KIND_LAYER { depth += 1; }
-                if i.params[1] == KIND_LAYER_END { depth -= 1; }
+                match i.kind() {
+                    Some(Kind::Layer) => depth += 1,
+                    Some(Kind::LayerEnd) => depth -= 1,
+                    _ => {}
+                }
             }
         }
         n += 1;
@@ -357,6 +360,6 @@ fn cull_runs(instances: &[Instance], units: &Units, rects: &[[i32; 4]], always: 
         }
         runs
     }).collect();
-    let layers = units.iter().any(|(u, _)| instances[u.start as usize].params[1] == KIND_LAYER && runs.iter().flatten().any(|r| r.start <= u.start && u.end <= r.end));
+    let layers = units.iter().any(|(u, _)| instances[u.start as usize].kind() == Some(Kind::Layer) && runs.iter().flatten().any(|r| r.start <= u.start && u.end <= r.end));
     (rects.iter().map(|r| [r[0] as u32, r[1] as u32, (r[2] - r[0]) as u32, (r[3] - r[1]) as u32]).collect(), runs, layers)
 }

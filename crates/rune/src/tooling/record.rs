@@ -13,7 +13,7 @@ use crate::render::Offscreen;
 pub(crate) const DEPTH: usize = 3;
 
 struct Slot {
-    buffer: wgpu::Buffer,
+    readback: rune_staging::Readback,
     ready: Arc<AtomicBool>,
 }
 
@@ -23,24 +23,15 @@ pub(crate) struct Readback<T> {
     next: usize,
     /// Copied frames, oldest first: slot, tag, and whether `map_async` was called.
     pending: VecDeque<(usize, T, bool)>,
-    width: u32,
-    height: u32,
-    padded_row: u32,
 }
 
 impl<T> Readback<T> {
     pub(crate) fn new(device: &wgpu::Device, target: &Offscreen, depth: usize) -> Self {
-        let padded_row = target.padded_row();
         let slots = (0..depth.max(1)).map(|_| Slot {
-            buffer: device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("readback ring"),
-                size: u64::from(padded_row) * u64::from(target.height),
-                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                mapped_at_creation: false,
-            }),
+            readback: rune_staging::Readback::new(device, "readback ring", target.width, target.height, 4),
             ready: Arc::new(AtomicBool::new(false)),
         }).collect();
-        Readback { slots, next: 0, pending: VecDeque::new(), width: target.width, height: target.height, padded_row }
+        Readback { slots, next: 0, pending: VecDeque::new() }
     }
 
     /// Frames that must finish before the next `copy` has a free buffer (waits for the oldest
@@ -59,7 +50,7 @@ impl<T> Readback<T> {
         assert!(self.pending.len() < self.slots.len(), "Readback::make_room first");
         let slot = self.next;
         self.next = (self.next + 1) % self.slots.len();
-        target.copy_to(encoder, &self.slots[slot].buffer);
+        self.slots[slot].readback.copy_from(encoder, target.texture());
         self.pending.push_back((slot, tag, false));
     }
 
@@ -68,7 +59,7 @@ impl<T> Readback<T> {
         for (slot, _, mapping) in self.pending.iter_mut().filter(|p| !p.2) {
             let ready = self.slots[*slot].ready.clone();
             ready.store(false, Ordering::Release);
-            self.slots[*slot].buffer.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+            self.slots[*slot].readback.buffer().slice(..).map_async(wgpu::MapMode::Read, move |r| {
                 r.expect("map readback");
                 ready.store(true, Ordering::Release);
             });
@@ -102,25 +93,15 @@ impl<T> Readback<T> {
             }
         }
         let (slot, tag, _) = self.pending.pop_front().unwrap();
-        let buffer = &self.slots[slot].buffer;
-        let pixels = {
-            let data = buffer.slice(..).get_mapped_range().expect("mapped range");
-            unpad(&data, self.width, self.height, self.padded_row)
-        };
-        buffer.unmap();
+        let pixels = self.slots[slot].readback.take_mapped();
         Some((tag, pixels))
     }
 }
 
 /// Rows of `width` RGBA pixels from a buffer whose rows are `padded_row` bytes apart.
+#[cfg(test)]
 pub(crate) fn unpad(data: &[u8], width: u32, height: u32, padded_row: u32) -> Vec<u8> {
-    let row = (width * 4) as usize;
-    let mut out = Vec::with_capacity(row * height as usize);
-    for y in 0..height as usize {
-        let start = y * padded_row as usize;
-        out.extend_from_slice(&data[start..start + row]);
-    }
-    out
+    rune_staging::unpad_rows(data, (width * 4) as usize, height, padded_row)
 }
 
 // -------------------------------------------------------------------------------------------

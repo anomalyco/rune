@@ -71,7 +71,13 @@ impl Tool {
         if let Some(log) = self.log.as_mut() { let _ = writeln!(log, "{out}"); }
         if !snap { return; }
         let mut kinds = [0u32; 16];
-        for i in &rt.instances { kinds[(i.params[1].max(0.0) as usize).min(15)] += 1; }
+        for i in &rt.instances {
+            let slot = match i.kind() {
+                Some(k) => k.as_u8() as usize,
+                None => (i.params[1].max(0.0) as usize).min(15),
+            };
+            kinds[slot] += 1;
+        }
         out["kinds"] = json!(kinds);
         let _ = std::fs::write(self.dir.join("draw.bin"), super::record::encode(&scene));
         // The frame's rows, tightly packed.

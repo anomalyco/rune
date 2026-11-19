@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use super::Scene;
 use super::shade::{Clip, has_sides, sides_inner};
 use crate::render::layers::is_scissor_clip;
-use crate::render::{Instance, KIND_BACKDROP_BLUR, KIND_DASHED, KIND_EFFECT, KIND_GLYPH, KIND_GRADIENT, KIND_LAYER, KIND_LAYER_END, KIND_RADIAL, KIND_RECT, KIND_SHADOW, MAX_BACKDROP_BLURS, NO_CLIP, corner_extent};
+use crate::render::{Instance, KIND_BACKDROP_BLUR, KIND_DASHED, KIND_EFFECT, KIND_GLYPH, KIND_GRADIENT, KIND_LAYER, KIND_LAYER_END, KIND_RADIAL, KIND_RECT, KIND_SHADOW, Kind, MAX_BACKDROP_BLURS, NO_CLIP, corner_extent};
 
 pub(super) const TILE_W: u32 = 64;
 /// `Bins::within` for an instance that draws straight into the window.
@@ -148,7 +148,7 @@ impl Bins {
             within[n] = stack.last().map_or(TOP, |s| s.1);
             if let Some(&p) = scope.get(&(n as u32)) {
                 let l = &layers[p as usize];
-                if scene.instances[n].params[1] == KIND_LAYER {
+                if scene.instances[n].kind() == Some(Kind::Layer) {
                     match l.show {
                         Show::Hidden => {
                             for b in &mut bounds[n..=l.end as usize] { *b = [0; 4]; }
@@ -254,38 +254,9 @@ impl Bins {
 
 /// The pixels whose centres lie in the quad the vertex shader draws for `i` (`base_vs`), within
 /// the reach of its clip and the target. Empty for what rasterises nothing.
+#[inline]
 pub(in crate::render) fn pixel_bounds(i: &Instance, w: i32, h: i32) -> [i32; 4] {
-    let kind = i.params[1];
-    if kind > 11.5 || kind == crate::render::KIND_LAYER_END { return [0; 4]; }
-    let grow = match kind as u32 {
-        1 => i.params[2] * 3.0 + 1.0,
-        2 => 0.0,
-        3 | 5..=9 => 1.0,
-        _ => 1.0 + i.params[2] * 2.0,
-    };
-    let mut rect = i.rect;
-    // A turned icon's quad turns about its centre: its bounds are the turned quad's.
-    if kind == KIND_GLYPH && i.params[0] != 0.0 {
-        let (sin, cos) = i.params[0].sin_cos();
-        let (w, h) = (cos.abs() * rect[2] + sin.abs() * rect[3], sin.abs() * rect[2] + cos.abs() * rect[3]);
-        rect = [rect[0] + (rect[2] - w) * 0.5 - 1.0, rect[1] + (rect[3] - h) * 0.5 - 1.0, w + 2.0, h + 2.0];
-    }
-    let mut lo = [rect[0] - grow, rect[1] - grow];
-    let mut hi = [lo[0] + rect[2] + 2.0 * grow, lo[1] + rect[3] + 2.0 * grow];
-    // A band of a big shadow or border ring draws only its window (runtime/bands.rs).
-    if kind < 1.5 && i.uv[2] < 0.0 {
-        lo = [lo[0].max(i.rect[0] + i.uv[0]), lo[1].max(i.rect[1] + i.uv[1])];
-        hi = [hi[0].min(i.rect[0] - i.uv[2]).max(lo[0]), hi[1].min(i.rect[1] + i.uv[3]).max(lo[1])];
-    }
-    // Centres in [lo, hi): the rasteriser's top-left rule.
-    let first = |v: f32| (v - 0.5).ceil();
-    let c = i.clip;
-    let x0 = first(lo[0]).max((c[0] - 0.5).floor()).max(0.0);
-    let y0 = first(lo[1]).max((c[1] - 0.5).floor()).max(0.0);
-    let x1 = first(hi[0]).min((c[2] + 0.5).ceil()).min(w as f32);
-    let y1 = first(hi[1]).min((c[3] + 0.5).ceil()).min(h as f32);
-    if !(x1 > x0 && y1 > y0) { return [0; 4]; }
-    [x0 as i32, y0 as i32, x1 as i32, y1 as i32]
+    i.pixel_bounds(w, h)
 }
 
 /// A rounded box and how far inside its edge a pixel centre must be to be whole: the region of
@@ -346,7 +317,7 @@ pub(super) fn clip_span(clip: &Clip, y: f32) -> (f32, f32) {
 /// The region a box kind paints in one colour, if it's opaque there: the interior of a
 /// `KIND_RECT` (inside its border, when it has one) whose colour there has alpha 1.
 pub(super) fn opaque_box(i: &Instance) -> Option<Solid> {
-    if i.params[1] != crate::render::KIND_RECT || i.fill[3] < 1.0 { return None; }
+    if i.kind() != Some(Kind::Rect) || i.fill[3] < 1.0 { return None; }
     interior(i)
 }
 
@@ -356,7 +327,7 @@ pub(super) fn interior(i: &Instance) -> Option<Solid> {
     let soft = i.params[2].max(0.5);
     let bw = i.params[0];
     if bw <= 0.0 { return Some(Solid { edges, radii: i.radii, inset: soft }); }
-    if i.params[1] == crate::render::KIND_RECT && has_sides(i) {
+    if i.kind() == Some(Kind::Rect) && has_sides(i) {
         // The per-side inner box is inside the outer one, which is whole wherever it is.
         let half = [i.rect[2] * 0.5, i.rect[3] * 0.5];
         let (c, ih, radii) = sides_inner(i, [i.rect[0] + half[0], i.rect[1] + half[1]], half);
