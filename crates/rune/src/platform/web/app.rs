@@ -1,0 +1,313 @@
+//! Non-generic boundary between the web host (`Browser`, `Running`) and the typed `App<S>`,
+//! `Runtime<S>`, `Shared<S>`, `Compositor<S>` and native menus.
+
+use std::sync::{Arc, atomic::Ordering};
+
+use wasm_bindgen::JsValue;
+
+use crate::app::{OnWindow, Shared, WindowRequests};
+use crate::compose::{Compositor, Frame};
+use crate::frame::clock::FrameClock;
+use crate::render::Renderer;
+use crate::runtime::{AppDriver, Runtime, RuntimeCore};
+use crate::time::Instant;
+use crate::{App, Env, Waker};
+
+/// Non-generic arguments passed to [`WebApp::render_compositor`], which constructs
+/// [`Frame<'_, S>`] in place.
+pub(super) struct CompositorFrame<'a> {
+    pub device: &'a wgpu::Device,
+    pub queue: &'a wgpu::Queue,
+    pub encoder: &'a mut wgpu::CommandEncoder,
+    pub target: &'a wgpu::TextureView,
+    pub format: wgpu::TextureFormat,
+    pub size: (u32, u32),
+    pub dt: f64,
+    pub update_ms: f64,
+    pub ui: &'a mut Renderer,
+}
+
+/// The non-generic lifecycle controls on [`Shared<S>`] that `Browser` uses before and after
+/// `Running` exists.
+pub(super) trait WebShared: 'static {
+    fn is_quitting(&self) -> bool;
+    fn set_quitting(&self);
+    fn connect(&self, wake: Waker);
+    fn set_window_error(&self, error: Option<String>);
+}
+
+impl<S: 'static> WebShared for Shared<S> {
+    fn is_quitting(&self) -> bool { self.quitting.load(Ordering::Acquire) }
+
+    fn set_quitting(&self) { self.quitting.store(true, Ordering::Release); }
+
+    fn connect(&self, wake: Waker) { Shared::connect(self, wake); }
+
+    fn set_window_error(&self, error: Option<String>) { *self.window_error.lock().unwrap() = error; }
+}
+
+/// What [`PendingApp::start`] produces once fonts (and any initial GPU) are ready.
+pub(super) struct StartedWebApp {
+    pub(super) app: Box<dyn WebApp>,
+    pub(super) shortcuts: crate::shortcuts::Guard,
+    pub(super) fonts: &'static [&'static [u8]],
+}
+
+type StartFn = Box<dyn FnOnce(Vec<Vec<u8>>, (f32, f32), Env, Waker) -> StartedWebApp>;
+
+/// Everything `Browser` holds of an `App<S>` before `start_app` constructs its `Runtime<S>`.
+pub(super) struct PendingApp {
+    pub(super) title: &'static str,
+    pub(super) size: (f32, f32),
+    pub(super) canvas_id: Option<String>,
+    pub(super) embedded: bool,
+    pub(super) document: bool,
+    pub(super) fit_height: bool,
+    pub(super) font_urls: Vec<String>,
+    pub(super) late_font_urls: Vec<String>,
+    pub(super) on_ready: Option<OnWindow>,
+    pub(super) same_tab_router: Option<Box<dyn Fn(&str) -> bool>>,
+    pub(super) compositor_features: wgpu::Features,
+    pub(super) shared: Arc<dyn WebShared>,
+    start: StartFn,
+}
+
+impl PendingApp {
+    pub(super) fn new<S: 'static>(mut app: App<S>) -> Result<Self, String> {
+        if !app.overlays.is_empty() || !app.windows.is_empty() {
+            return Err("web supports one canvas; overlays and multiple windows are unsupported".into());
+        }
+        if !app.open || app.on_window.is_some() {
+            return Err("web does not support windowless apps or native window hooks".into());
+        }
+        let document = app.web_document;
+        let embedded = app.web_inline() && !document;
+        let title = app.spec.title;
+        let size = app.spec.size;
+        let canvas_id = app.canvas_id.take();
+        let fit_height = app.fit_content_height;
+        let font_urls = std::mem::take(&mut app.font_urls);
+        let late_font_urls = std::mem::take(&mut app.late_font_urls);
+        let on_ready = app.on_ready.take();
+        let same_tab_router = app.same_tab_router.take();
+        let compositor_features = app.compositor.as_ref().map_or(wgpu::Features::empty(), |c| c.features());
+        let shared: Arc<dyn WebShared> = app.shared.clone();
+        let start: StartFn = Box::new(move |fonts, viewport, env, wake| {
+            for bytes in fonts { app.spec.fonts = crate::app::with_font(app.spec.fonts, bytes); }
+            let compositor = app.compositor.take();
+            let (playground, attach_playground) = (app.playground.take(), app.attach_playground);
+            let spec_fonts = app.spec.fonts;
+            let (spec, state, shared, runtime) = app.into_parts(None);
+            let mut rt = crate::tooling::runtime_for(&spec, state, viewport, env, wake.clone());
+            if let Some(attach) = attach_playground { attach(&mut rt, playground, &spec, None, None, true); }
+            rt.configure(runtime);
+            let menus = crate::native_menu::Guard::attach(&shared, false);
+            let shortcuts = crate::shortcuts::Guard::attach(&shared, wake, false, false);
+            StartedWebApp {
+                app: Box::new(TypedWebApp { rt, shared, compositor, _menus: menus }),
+                shortcuts,
+                fonts: spec_fonts,
+            }
+        });
+        Ok(Self {
+            title,
+            size,
+            canvas_id,
+            embedded,
+            document,
+            fit_height,
+            font_urls,
+            late_font_urls,
+            on_ready,
+            same_tab_router,
+            compositor_features,
+            shared,
+            start,
+        })
+    }
+
+    pub(super) fn start(self, fonts: Vec<Vec<u8>>, viewport: (f32, f32), env: Env, wake: Waker) -> StartedWebApp {
+        (self.start)(fonts, viewport, env, wake)
+    }
+}
+
+/// Everything the non-generic web host needs of its typed app state `S`.
+pub(super) trait WebApp {
+    fn rt(&self) -> &RuntimeCore;
+    fn rt_mut(&mut self) -> &mut RuntimeCore;
+    fn with_driver(&mut self, f: &mut dyn FnMut(&mut RuntimeCore, &mut dyn AppDriver));
+
+    fn drain_requests(&mut self, shortcuts: &crate::shortcuts::Guard) -> (WindowRequests, bool);
+    fn set_visible(&self, visible: bool);
+    fn has_compositor(&self) -> bool;
+    fn compositor_features(&self) -> wgpu::Features;
+    fn compositor_animating(&self) -> bool;
+    fn compositor_draws_own(&self) -> bool;
+    fn render_compositor(&mut self, args: CompositorFrame<'_>);
+    fn paste_event(&mut self, clipboard: &crate::clipboard::Client, content: crate::ClipboardContent, image: Option<&JsValue>);
+}
+
+impl dyn WebApp + '_ {
+    fn driver<R>(&mut self, f: impl FnOnce(&mut RuntimeCore, &mut dyn AppDriver) -> R) -> R {
+        let mut f = Some(f);
+        let mut out = None;
+        self.with_driver(&mut |core, app| {
+            out = Some(f.take().unwrap()(core, app));
+        });
+        out.unwrap()
+    }
+
+    pub(super) fn frame(&mut self, dt: f64) -> bool {
+        self.driver(|rt, app| rt.frame(app, dt))
+    }
+
+    pub(super) fn clock_advance(&mut self, clock: &mut FrameClock, at: Instant, compositing: bool) -> (bool, f64) {
+        self.driver(|rt, app| clock.advance_core(rt, app, at, compositing))
+    }
+
+    pub(super) fn content_height(&mut self) -> f32 {
+        self.driver(|rt, app| rt.content_height(app))
+    }
+
+    pub(super) fn copy_text(&mut self) -> Option<String> {
+        self.driver(|rt, app| rt.copy_text(app))
+    }
+
+    pub(super) fn window_focus(&mut self, focused: bool) {
+        self.driver(|rt, app| rt.window_focus(app, focused));
+    }
+
+    pub(super) fn resolve_popup(&mut self, picked: Option<&str>) -> Result<(), crate::PopupMenuError> {
+        self.driver(|rt, app| rt.resolve_popup(app, picked))
+    }
+
+    pub(super) fn pointer_move(&mut self, x: f32, y: f32) {
+        self.driver(|rt, app| rt.pointer_move(app, x, y));
+    }
+
+    pub(super) fn pointer_down(&mut self, x: f32, y: f32) {
+        self.driver(|rt, app| rt.pointer_down(app, x, y));
+    }
+
+    pub(super) fn pointer_up(&mut self, x: f32, y: f32) {
+        self.driver(|rt, app| rt.pointer_up(app, x, y));
+    }
+
+    pub(super) fn secondary_up(&mut self, x: f32, y: f32) {
+        self.driver(|rt, app| rt.secondary_up(app, x, y));
+    }
+
+    pub(super) fn button_down(&mut self, x: f32, y: f32, button: crate::PointerButton) {
+        self.driver(|rt, app| rt.button_down(app, x, y, button));
+    }
+
+    pub(super) fn button_up(&mut self, x: f32, y: f32, button: crate::PointerButton) {
+        self.driver(|rt, app| rt.button_up(app, x, y, button));
+    }
+
+    pub(super) fn key_up(&mut self, ev: crate::KeyEvent) -> bool {
+        self.driver(|rt, app| rt.key_up(app, ev))
+    }
+
+    pub(super) fn physical_with_fallback(&mut self, event: crate::PhysicalInput, key: Option<crate::KeyEvent>) -> bool {
+        self.driver(|rt, app| rt.physical_with_fallback(app, event, key))
+    }
+
+    pub(super) fn touch(&mut self, touch: &winit::event::Touch) {
+        self.driver(|rt, app| crate::window::touch_core(rt, app, touch));
+    }
+
+    pub(super) fn web_focus_field(&mut self) -> bool {
+        self.driver(|rt, app| rt.web_focus_field(app))
+    }
+
+    pub(super) fn web_edit_context(&mut self, mirror: &mut crate::runtime::web_runtime::Mirror) -> Option<bool> {
+        self.driver(|rt, app| rt.web_edit_context(app, mirror))
+    }
+
+    pub(super) fn web_key(&mut self, event: &serde_json::Value) -> bool {
+        self.driver(|rt, app| rt.web_key(app, event))
+    }
+
+    pub(super) fn web_edit(&mut self, event: &serde_json::Value) {
+        self.driver(|rt, app| rt.web_edit(app, event));
+    }
+}
+
+fn pasted_image_fn(handle: &JsValue) -> impl FnOnce() -> js_sys::Promise + '_ {
+    move || super::input::pasted_image_promise(handle)
+}
+
+/// The only per-state-type structure owned by a running web host.
+struct TypedWebApp<S: 'static> {
+    rt: Runtime<S>,
+    shared: Arc<Shared<S>>,
+    compositor: Option<Box<dyn Compositor<S>>>,
+    _menus: crate::native_menu::Guard<S>,
+}
+
+impl<S: 'static> WebApp for TypedWebApp<S> {
+    fn rt(&self) -> &RuntimeCore { self.rt.core() }
+
+    fn rt_mut(&mut self) -> &mut RuntimeCore { self.rt.core_mut() }
+
+    fn with_driver(&mut self, f: &mut dyn FnMut(&mut RuntimeCore, &mut dyn AppDriver)) {
+        let (core, mut driver) = self.rt.split_mut();
+        f(core, &mut driver);
+    }
+
+    fn drain_requests(&mut self, shortcuts: &crate::shortcuts::Guard) -> (WindowRequests, bool) {
+        let mut requests = self.shared.take();
+        let updates = std::mem::take(&mut requests.updates);
+        let window = requests.into_window();
+        if window.quit.is_some() {
+            return (window, false);
+        }
+        super::warn_native_window(&window);
+        let had_updates = !updates.is_empty();
+        let _receiving = shortcuts.receiving();
+        for update in updates {
+            self.rt.update_if(update);
+        }
+        (window, had_updates)
+    }
+
+    fn set_visible(&self, visible: bool) {
+        self.shared.visible.store(visible, Ordering::Release);
+    }
+
+    fn has_compositor(&self) -> bool { self.compositor.is_some() }
+
+    fn compositor_features(&self) -> wgpu::Features {
+        self.compositor.as_ref().map_or(wgpu::Features::empty(), |c| c.features())
+    }
+
+    fn compositor_animating(&self) -> bool {
+        self.compositor.as_ref().is_some_and(|c| c.animating())
+    }
+
+    fn compositor_draws_own(&self) -> bool {
+        self.compositor.as_ref().is_some_and(|c| c.draws_own())
+    }
+
+    fn render_compositor(&mut self, args: CompositorFrame<'_>) {
+        let Some(c) = self.compositor.as_mut() else { return };
+        let mut f = Frame {
+            device: args.device,
+            queue: args.queue,
+            encoder: args.encoder,
+            target: args.target,
+            format: args.format,
+            size: args.size,
+            dt: args.dt,
+            update_ms: args.update_ms,
+            rt: &mut self.rt,
+            ui: args.ui,
+        };
+        c.render(&mut f);
+    }
+
+    fn paste_event(&mut self, clipboard: &crate::clipboard::Client, content: crate::ClipboardContent, image: Option<&JsValue>) {
+        clipboard.paste_event(&mut self.rt, content, image.map(pasted_image_fn));
+    }
+}

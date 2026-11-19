@@ -1,13 +1,15 @@
 //! Single-threaded browser shell. GPU initialization yields to the browser; winit owns
 //! demand-driven rAF and its device-pixel-content-box ResizeObserver (with DPR fallback).
-use std::{cell::RefCell, rc::Rc, sync::{Arc, atomic::Ordering}, time::Duration};
+use std::{cell::RefCell, rc::Rc, sync::Arc, time::Duration};
 use wasm_bindgen::JsCast;
 use winit::{application::ApplicationHandler, event::WindowEvent, event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy},
     platform::web::{EventLoopExtWebSys, WindowAttributesExtWebSys, WindowExtWebSys}, window::{Window, WindowId}};
-use crate::{App, Runtime, Env, render::Gpu, time::Instant};
+use crate::{App, Env, render::Gpu, time::Instant};
 use super::web_math;
+use app::{PendingApp, WebApp, WebShared};
 use gpu::Draw;
 
+mod app;
 mod cpu_canvas;
 mod frame;
 mod full_faces;
@@ -94,12 +96,10 @@ fn cpu_first_asked() -> Option<String> {
 }
 
 pub(crate) fn run<S: 'static>(app: App<S>) -> Result<(), String> {
-    if !app.overlays.is_empty() || !app.windows.is_empty() {
-        return Err("web supports one canvas; overlays and multiple windows are unsupported".into());
-    }
-    if !app.open || app.on_window.is_some() {
-        return Err("web does not support windowless apps or native window hooks".into());
-    }
+    run_pending(PendingApp::new(app)?)
+}
+
+fn run_pending(app: PendingApp) -> Result<(), String> {
     console_error_panic_hook::set_once();
     segmenter::install();
     text_probe();
@@ -119,13 +119,13 @@ fn text_probe() {
     lines.forget();
 }
 
-fn quitting<S: 'static>(shared: &Arc<crate::app::Shared<S>>) -> Box<dyn Fn() -> bool> {
+fn quitting(shared: &Arc<dyn WebShared>) -> Box<dyn Fn() -> bool> {
     let shared = shared.clone();
-    Box::new(move || shared.quitting.load(Ordering::Acquire))
+    Box::new(move || shared.is_quitting())
 }
 
-fn spawn<S: 'static>(mut app: App<S>) -> Result<(), String> {
-    if app.shared.quitting.load(Ordering::Acquire) { return Ok(()); }
+fn spawn(mut app: PendingApp) -> Result<(), String> {
+    if app.shared.is_quitting() { return Ok(()); }
     let event_loop = EventLoop::<Wake>::with_user_event().build().map_err(|e| e.to_string())?;
     event_loop.set_control_flow(ControlFlow::Wait);
     let proxy = event_loop.create_proxy();
@@ -139,9 +139,16 @@ fn spawn<S: 'static>(mut app: App<S>) -> Result<(), String> {
     Ok(())
 }
 
-struct Browser<S: 'static> {
-    app: Option<App<S>>,
-    shared: Arc<crate::app::Shared<S>>,
+fn warn_native_window(requests: &crate::app::WindowRequests) {
+    if requests.window.as_ref().is_some_and(|r| !matches!(r, crate::app::WindowRequest::Open(_) | crate::app::WindowRequest::Show))
+        || requests.position.is_some() || requests.place.is_some() || requests.activation == Some(crate::app::Activation::Minimize) {
+        web_sys::console::warn_1(&"Native window management is ignored on web.".into());
+    }
+}
+
+struct Browser {
+    app: Option<PendingApp>,
+    shared: Arc<dyn WebShared>,
     proxy: EventLoopProxy<Wake>,
     window: Option<Arc<Window>>,
     /// Inline in the page at its parent's width, rather than covering the viewport.
@@ -158,7 +165,7 @@ struct Browser<S: 'static> {
     pending: Rc<RefCell<Option<Result<(Gpu, wgpu::Surface<'static>), String>>>>,
     /// The pipelines compiled ahead for that GPU (`pipelines::warm`), kept until its renderer is made.
     warmed: Rc<RefCell<Option<pipelines::Warmed>>>,
-    running: Rc<RefCell<Option<Running<S>>>>,
+    running: Rc<RefCell<Option<Running>>>,
     /// Why the browser lost the GPU device, until the page goes back to the CPU for it.
     lost: Rc<RefCell<Option<String>>>,
     /// The deadline the event loop was last told to wait for (`None`: none). winit schedules a
@@ -173,12 +180,10 @@ struct Browser<S: 'static> {
     gpu_asked: bool,
 }
 
-struct Running<S: 'static> {
+struct Running {
     draw: Draw,
-    rt: Runtime<S>,
-    shared: Arc<crate::app::Shared<S>>,
+    app: Box<dyn WebApp>,
     clock: crate::frame::clock::FrameClock,
-    compositor: Option<Box<dyn crate::Compositor<S>>>,
     suspended: bool,
     /// An input or app event can share a redraw with the animation timer. In that case the
     /// timer must not consume the redraw as a stand-alone paint.
@@ -199,17 +204,16 @@ struct Running<S: 'static> {
     /// The canvas's size in physical pixels: the CPU paints at it, the GPU's surface is it.
     size: (u32, u32),
     cursor: crate::cursor::os::OsCursor,
-    _menus: crate::native_menu::Guard<S>,
     shortcuts: crate::shortcuts::Guard,
     input: input::Bridge,
     clipboard: crate::clipboard::Client,
 }
 
-impl<S: 'static> Running<S> {
+impl Running {
     /// Ends the app: listeners off the page, then the GPU device, which the WebGPU backend
     /// doesn't destroy on drop.
     fn close(self) {
-        self.shared.visible.store(false, Ordering::Release);
+        self.app.set_visible(false);
         let device = self.draw.gpu().map(|side| side.gpu.device.clone());
         drop(self);
         if let Some(device) = device { device.destroy(); }
@@ -237,9 +241,9 @@ fn error(message: &str, target: Option<&web_sys::HtmlCanvasElement>, embedded: b
     }
 }
 
-impl<S: 'static> Browser<S> {
+impl Browser {
     fn end(&self, event_loop: &ActiveEventLoop) {
-        self.shared.quitting.store(true, Ordering::Release);
+        self.shared.set_quitting();
         event_loop.exit();
     }
 
@@ -256,7 +260,7 @@ impl<S: 'static> Browser<S> {
             match self.pending.borrow_mut().take() {
                 Some(Ok(gpu)) => Some(gpu),
                 Some(Err(e)) => {
-                    if let Some(app) = &self.app { *app.shared.window_error.lock().unwrap() = Some(e.clone()); }
+                    self.shared.set_window_error(Some(e.clone()));
                     error(&e, window.canvas().as_ref(), self.embedded, self.document);
                     self.end(event_loop);
                     return;
@@ -266,16 +270,11 @@ impl<S: 'static> Browser<S> {
         } else {
             None
         };
-        let mut app = self.app.take().expect("one canvas initialization");
-        for bytes in fonts { app.spec.fonts = crate::app::with_font(app.spec.fonts, bytes); }
-        let compositor = app.compositor.take();
-        let fit_height = app.fit_content_height;
-        let playground = app.playground.take();
-        let on_ready = app.on_ready.take();
-        let late_fonts = std::mem::take(&mut app.late_font_urls);
-        // A page brings its own fonts for its mirror; an app's are the page's (`page_fonts`).
-        let page_fonts = if self.document { &[][..] } else { app.spec.fonts };
-        let (spec, state, shared, runtime) = app.into_parts(None);
+        let mut pending = self.app.take().expect("one canvas initialization");
+        let fit_height = pending.fit_height;
+        let spec_size = pending.size;
+        let on_ready = pending.on_ready.take();
+        let late_fonts = std::mem::take(&mut pending.late_font_urls);
         let scale = window.scale_factor() as f32;
         let document = self.document;
         let max_dim = gpu.as_ref().map_or(frame::CPU_MAX_DIM, |(gpu, _)| gpu.device.limits().max_texture_dimension_2d.max(1));
@@ -293,44 +292,53 @@ impl<S: 'static> Browser<S> {
         // height, which its style stretches back over the screen: a 2× vertical stretch.
         let inner = window.inner_size();
         let css = window.canvas().map_or((0.0, 0.0), |c| (c.client_width().max(0) as f32, c.client_height().max(0) as f32));
-        let fixed = web_math::fix_canvas_size(css, (inner.width, inner.height), spec.size, scale, fit_height);
+        let fixed = web_math::fix_canvas_size(css, (inner.width, inner.height), spec_size, scale, fit_height);
         let mut size = winit::dpi::PhysicalSize::new(fixed.0, fixed.1);
         let dark = web_sys::window().and_then(|w| w.match_media("(prefers-color-scheme: dark)").ok().flatten()).is_some_and(|q| q.matches());
         let proxy = self.proxy.clone();
         let wake: crate::Waker = Arc::new(move || { let _ = proxy.send_event(Wake::App); });
-        let mut rt = crate::tooling::runtime_for(&spec, state, (size.width as f32 / scale, size.height as f32 / scale), Env::new(dark, scale), wake.clone());
-        crate::playground::attach(&mut rt, playground, &spec, None, None, true);
-        rt.configure(runtime);
+        let app::StartedWebApp { mut app, shortcuts, fonts: spec_fonts } = pending.start(
+            fonts,
+            (size.width as f32 / scale, size.height as f32 / scale),
+            Env::new(dark, scale),
+            wake.clone(),
+        );
+        // A page brings its own fonts for its mirror; an app's are the page's (`page_fonts`).
+        let page_fonts = if document { &[][..] } else { spec_fonts };
         if let Some((view, band)) = band {
+            let rt = app.rt_mut();
             rt.page_mode();
             rt.set_band(band, view);
             rt.set_viewport((size.width as f32 / scale, band), scale);
         } else if fit_height {
-            rt.fit_height = true;
             let w = (size.width as f32 / scale).max(1.0);
-            rt.set_viewport((w, spec.size.1), scale);
-            let h = rt.content_height();
-            rt.set_viewport((w, h), scale);
+            {
+                let rt = app.rt_mut();
+                rt.fit_height = true;
+                rt.set_viewport((w, spec_size.1), scale);
+            }
+            let h = app.content_height();
+            app.rt_mut().set_viewport((w, h), scale);
             size.height = (h * scale).round().max(1.0) as u32;
             if let Some(canvas) = window.canvas() {
                 let _ = canvas.style().set_property("height", &format!("{h}px"));
             }
         }
-        rt.set_os_drag(false);
         let now = Instant::now();
-        rt.wall_start = Some(now);
-        rt.open_urls_natively = true;
-        rt.record_events = false;
-        let menus = crate::native_menu::Guard::attach(&shared, false);
-        let shortcuts = crate::shortcuts::Guard::attach(&shared, wake.clone(), false, false);
+        {
+            let rt = app.rt_mut();
+            rt.set_os_drag(false);
+            rt.wall_start = Some(now);
+            rt.open_urls_natively = true;
+            rt.record_events = false;
+        }
         let mut clipboard = crate::clipboard::Client::default();
         clipboard.connect(wake);
-        shared.visible.store(true, Ordering::Release);
+        app.set_visible(true);
         let physical = (size.width.clamp(1, max_dim), size.height.clamp(1, max_dim));
         let draw = match gpu {
             Some((gpu, surface)) => {
-                let (lost, proxy) = (self.lost.clone(), self.proxy.clone());
-                match gpu::gpu_side(gpu, surface, physical, &mut rt, move |why| { *lost.borrow_mut() = Some(why); let _ = proxy.send_event(Wake::App); }) {
+                match gpu::gpu_side(gpu, surface, physical, app.rt_mut(), self.lost.clone(), self.proxy.clone()) {
                     Ok(side) => Draw::Gpu(side),
                     Err(e) => { error(&e, window.canvas().as_ref(), self.embedded, self.document); self.end(event_loop); return; }
                 }
@@ -343,28 +351,28 @@ impl<S: 'static> Browser<S> {
                     return;
                 };
                 // The first frame's glyphs queue fills for the CPU painter.
-                crate::render::cpu_boot::attach_text(&mut rt.text.atlas);
+                crate::render::cpu_boot::attach_text(&mut app.rt_mut().text.atlas);
                 Draw::Cpu { cpu, failed: self.start == Start::CpuOnly }
             }
         };
         let cursor = crate::cursor::os::OsCursor::new();
         let input = input::Bridge::new(&window.canvas().unwrap(), Rc::downgrade(&self.running), window.clone(),
             input::Mode { embedded: self.embedded, fit_height, document });
-        *self.running.borrow_mut() = Some(Running { draw, rt, shared, input, clipboard,
-            clock: crate::frame::clock::FrameClock::new(now), compositor, suspended: false, full_redraw: true, embedded: self.embedded,
+        *self.running.borrow_mut() = Some(Running { draw, app, input, clipboard,
+            clock: crate::frame::clock::FrameClock::new(now), suspended: false, full_redraw: true, embedded: self.embedded,
             document, presented: false, band: None, size: physical, on_ready, late_fonts, fonts: page_fonts,
-            cursor, _menus: menus, shortcuts });
+            cursor, shortcuts });
         crate::marks::mark("web.started");
         window.request_redraw();
     }
 }
 
-impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
+impl ApplicationHandler<Wake> for Browser {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() { return; }
         let app = self.app.as_ref().expect("app before canvas");
-        self.document = app.web_document;
-        self.embedded = app.web_inline() && !self.document;
+        self.document = app.document;
+        self.embedded = app.embedded;
         let existing = match &app.canvas_id {
             Some(id) => {
                 let Some(el) = web_sys::window().and_then(|w| w.document()).and_then(|d| d.get_element_by_id(id)) else {
@@ -388,7 +396,7 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
         // Not `active`: winit would focus the canvas before it's styled, and a browser scrolls a
         // focused element into view, so a page landed at its foot. The bridge focuses a
         // full-window canvas itself, without scrolling.
-        let mut attrs = Window::default_attributes().with_title(app.spec.title).with_prevent_default(false).with_active(false);
+        let mut attrs = Window::default_attributes().with_title(app.title).with_prevent_default(false).with_active(false);
         attrs = match &existing {
             Some(c) => attrs.with_canvas(Some(c.clone())).with_append(false),
             None => attrs.with_append(true),
@@ -410,11 +418,11 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
             canvas.style().set_css_text("position:absolute;left:0;top:0;width:100%;display:block;transform:translate3d(0,0,0);will-change:transform;pointer-events:auto;touch-action:pan-y pinch-zoom;outline:none;user-select:none;-webkit-user-select:none");
             if let Some(document) = web_sys::window().and_then(|w| w.document()) {
                 self.borrowed.viewport(&document);
-                document.set_title(app.spec.title);
+                document.set_title(app.title);
                 if let Some(body) = document.body() { let _ = body.style().set_property("margin", "0"); }
             }
         } else if self.embedded {
-            let touch = if app.fit_content_height { "pan-y" } else { "none" };
+            let touch = if app.fit_height { "pan-y" } else { "none" };
             canvas.style().set_css_text(&format!(
                 "display:block;width:100%;touch-action:{touch};outline:none;user-select:none;-webkit-user-select:none"
             ));
@@ -423,7 +431,7 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
             canvas.style().set_css_text("position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none;outline:none;user-select:none;-webkit-user-select:none");
             if let Some(document) = web_sys::window().and_then(|w| w.document()) {
                 self.borrowed.viewport(&document);
-                document.set_title(app.spec.title);
+                document.set_title(app.title);
                 if let Some(body) = document.body() {
                     let style = body.style();
                     for (name, value) in [("margin", "0"), ("overflow", "hidden"), ("overscroll-behavior", "none")] {
@@ -468,7 +476,7 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
     }
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: Wake) {
-        if self.shared.quitting.load(Ordering::Acquire) { self.end(event_loop); return; }
+        if self.shared.is_quitting() { self.end(event_loop); return; }
         if self.lost_device(event_loop) { return; }
         if self.window.is_none() { return; }
         match event {
@@ -483,17 +491,10 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
         if let Some(r) = &mut *self.running.borrow_mut() {
             r.full_redraw = true;
             r.shortcuts.drain();
-            r.clipboard.receive(&mut r.rt);
-            let requests = r.shared.take();
+            r.clipboard.receive_core(r.app.rt_mut());
+            let (requests, had_updates) = r.app.drain_requests(&r.shortcuts);
             if requests.quit.is_some() { self.end(event_loop); return; }
-            if requests.window.as_ref().is_some_and(|r| !matches!(r, crate::app::WindowRequest::Open(_) | crate::app::WindowRequest::Show))
-                || requests.position.is_some() || requests.place.is_some() || requests.activation == Some(crate::app::Activation::Minimize) {
-                web_sys::console::warn_1(&"Native window management is ignored on web.".into());
-            }
-            let had_updates = !requests.updates.is_empty();
-            let _receiving = r.shortcuts.receiving();
-            for update in requests.updates { r.rt.update_if(update); }
-            if !had_updates { r.rt.invalidate(); }
+            if !had_updates { r.app.rt_mut().invalidate(); }
             window.request_redraw();
         }
     }
@@ -516,7 +517,7 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
                 r.resize_surface(window, window.inner_size(), scale_factor as f32);
                 window.request_redraw();
             }
-            WindowEvent::ThemeChanged(theme) => { r.rt.set_system_dark(theme == winit::window::Theme::Dark); window.request_redraw(); }
+            WindowEvent::ThemeChanged(theme) => { r.app.rt_mut().set_system_dark(theme == winit::window::Theme::Dark); window.request_redraw(); }
             _ => {}
         }
     }
@@ -527,12 +528,13 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
         crate::task::pump();
         let Ok(running) = self.running.try_borrow() else { return };
         let Some(r) = &*running else { return };
-        let (flow, waiting) = match r.rt.wake_deadline() {
-            Some(deadline) if deadline <= r.rt.wall_start.unwrap().elapsed().as_secs_f64() => {
+        let rt = r.app.rt();
+        let (flow, waiting) = match rt.wake_deadline() {
+            Some(deadline) if deadline <= rt.wall_start.unwrap().elapsed().as_secs_f64() => {
                 if let Some(window) = &self.window { window.request_redraw(); }
                 (ControlFlow::Wait, None)
             }
-            Some(deadline) => (ControlFlow::WaitUntil(crate::time::for_winit(r.rt.wall_start.unwrap() + Duration::from_secs_f64(deadline.max(0.0)))), Some(deadline.to_bits())),
+            Some(deadline) => (ControlFlow::WaitUntil(crate::time::for_winit(rt.wall_start.unwrap() + Duration::from_secs_f64(deadline.max(0.0)))), Some(deadline.to_bits())),
             None => (ControlFlow::Wait, None),
         };
         drop(running);
@@ -549,7 +551,7 @@ impl<S: 'static> ApplicationHandler<Wake> for Browser<S> {
     }
 
     fn exiting(&mut self, _: &ActiveEventLoop) {
-        self.shared.quitting.store(true, Ordering::Release);
+        self.shared.set_quitting();
         let running = self.running.borrow_mut().take();
         if let Some(r) = running { r.close(); }
         self.warmed.borrow_mut().take();
