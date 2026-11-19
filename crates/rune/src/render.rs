@@ -426,6 +426,8 @@ pub struct Gpu {
     /// Windows' Modern Standby) can't configure a surface, and wgpu drops that error, so nothing
     /// else would report it. See `is_lost`.
     lost: Arc<AtomicBool>,
+    /// D3D12 removes a device before wgpu hears of it (`Gpu::is_lost`).
+    removal: rune_gpu::health::Removal,
 }
 
 /// The most views and buffers a device binds at once (`Limits::max_non_sampler_bindings`).
