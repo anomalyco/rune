@@ -116,25 +116,15 @@ pub const KIND_EFFECT: f32 = 12.0;
 /// device pixels per point.
 pub const KIND_BACKDROP_BLUR: f32 = 13.0;
 
-/// How a scope combines its contents. The completed scope still uses source-over on its parent
-/// unless that parent also requests additive composition.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Blend {
-    #[default]
-    SourceOver,
-    /// Premultiplied One/One addition, clamped when the isolated scope is composited.
-    PlusLighter,
-}
+pub use rune_core::Blend;
 
-impl Blend {
-    pub(crate) fn state(self) -> wgpu::BlendState {
-        match self {
-            Self::SourceOver => wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
-            Self::PlusLighter => {
-                let add = wgpu::BlendComponent { src_factor: wgpu::BlendFactor::One,
-                    dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add };
-                wgpu::BlendState { color: add, alpha: add }
-            }
+pub(crate) fn blend_state(blend: Blend) -> wgpu::BlendState {
+    match blend {
+        Blend::SourceOver => wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
+        Blend::PlusLighter => {
+            let add = wgpu::BlendComponent { src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add };
+            wgpu::BlendState { color: add, alpha: add }
         }
     }
 }
@@ -1248,6 +1238,10 @@ mod backdrop_tests;
 
 #[cfg(test)]
 mod image_tests;
+
+#[cfg(test)]
+#[path = "render/native_surface_tests.rs"]
+mod native_surface;
 
 #[cfg(test)]
 #[path = "render/warm_tests.rs"]

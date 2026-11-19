@@ -10,6 +10,9 @@ pub mod growth;
 pub mod latest;
 pub mod live;
 pub mod machine;
+#[cfg(target_vendor = "apple")]
+#[doc(hidden)]
+pub mod main_queue;
 pub mod marks;
 pub mod prefs;
 pub mod shape;
@@ -49,3 +52,13 @@ pub type HashMap<K, V> = rustc_hash::FxHashMap<K, V>;
 
 /// Fast non-cryptographic hash set (`FxHashSet`) for runtime node ids and paths.
 pub type HashSet<T> = rustc_hash::FxHashSet<T>;
+
+/// How a scope combines its contents. The completed scope still uses source-over on its parent
+/// unless that parent also requests additive composition.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Blend {
+    #[default]
+    SourceOver,
+    /// Premultiplied One/One addition, clamped when the isolated scope is composited.
+    PlusLighter,
+}

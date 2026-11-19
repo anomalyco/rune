@@ -266,7 +266,7 @@ impl BackdropBlur {
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
-                    blend: Some(Blend::SourceOver.state()),
+                    blend: Some(super::blend_state(Blend::SourceOver)),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),

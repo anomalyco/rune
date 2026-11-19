@@ -419,6 +419,7 @@ fn video_json(v: &crate::video::Snapshot) -> Value {
         PlayerState::Playing => ("playing", None),
         PlayerState::Ended => ("ended", None),
         PlayerState::Failed(e) => ("failed", Some(e.clone())),
+        _ => ("unknown", None),
     };
     let mut out = json!({
         "kind": match v.kind { crate::video::Kind::Video => "video", crate::video::Kind::Audio => "audio" },

@@ -3804,7 +3804,6 @@ dependencies = [
  "accesskit_unix",
  "accesskit_windows",
  "arboard",
- "ash",
  "blake3",
  "block2 0.5.1",
  "block2 0.6.2",
@@ -3824,17 +3823,13 @@ dependencies = [
  "objc2 0.5.3",
  "objc2 0.6.5",
  "objc2-app-kit 0.2.2",
- "objc2-av-foundation",
  "objc2-core-foundation",
  "objc2-core-graphics",
- "objc2-core-media",
  "objc2-core-text",
  "objc2-core-video",
  "objc2-foundation 0.2.2",
  "objc2-foundation 0.3.2",
- "objc2-io-surface",
  "objc2-metal 0.3.2",
- "opuscule",
  "parley",
  "parley_engine",
  "png 0.18.1",
@@ -3845,6 +3840,7 @@ dependencies = [
  "rune-core",
  "rune-gpu",
  "rune-image",
+ "rune-media",
  "rune-motion",
  "rune-spell",
  "rune-staging",
@@ -3856,7 +3852,6 @@ dependencies = [
  "skrifa",
  "subsecond",
  "swash",
- "symphonia",
  "taffy",
  "tiny-skia-path 0.11.4",
  "tokio",
@@ -4043,6 +4038,35 @@ version = "0.0.1"
 dependencies = [
  "objc2 0.5.3",
  "rune-notify",
+]
+
+[[package]]
+name = "rune-media"
+version = "0.0.1"
+dependencies = [
+ "ash",
+ "block2 0.6.2",
+ "bytemuck",
+ "libc",
+ "objc2 0.6.5",
+ "objc2-av-foundation",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "objc2-core-media",
+ "objc2-core-video",
+ "objc2-foundation 0.3.2",
+ "objc2-io-surface",
+ "objc2-metal 0.3.2",
+ "opuscule",
+ "pollster",
+ "rune-core",
+ "rune-gpu",
+ "rune-image",
+ "rune-staging",
+ "symphonia",
+ "wgpu",
+ "windows",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
