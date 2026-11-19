@@ -152,6 +152,34 @@ impl El {
         self.cold_mut().scroll_edges.anchor = true;
         self
     }
+    /// A wheel over this element turns the scroll viewport keyed `key` (or the nearest one
+    /// containing it) instead of starting on what is drawn here: an overlay scroll bar's track,
+    /// which draws over its viewport's edge but sits beside it in the tree, so a wheel there
+    /// would otherwise find no scroller above it. The viewport's wheel is then Chromium's, whose
+    /// scrollbar belongs to its scroller: it scrolls this viewport on the axis the wheel turned,
+    /// and chains on up from it when that one is at its end. A press or drag here still does
+    /// whatever this element's handlers do, and an [`El::on_wheel`] handler under the pointer still
+    /// hears the wheel first: this decides where a wheel the handlers leave scrolls, not who hears
+    /// it, and a handler on the named viewport itself doesn't, since the pointer is over this
+    /// element rather than the viewport.
+    ///
+    /// `key` names an element as [`Cx::layout`](crate::Cx::layout) does, here and in the other
+    /// scroll requests, and is resolved in this element's own place: looked up inside this element
+    /// itself, then inside its parent, then its parent's parent and so on, the first that holds
+    /// such an element wins. So two panes that key their viewports alike (a chat and a sidebar
+    /// both with `list`, or every wide markdown table, each keyed `scroll`) each take the wheel
+    /// over their own bar. Nothing keyed `key` leaves the wheel as it was.
+    #[cfg_attr(debug_assertions, track_caller)]
+    #[inline]
+    pub fn wheel_scrolls(mut self, key: impl Into<String>) -> Self {
+        self.set_wheel_scrolls(key);
+        self
+    }
+    /// [`El::wheel_scrolls`] in place.
+    pub fn set_wheel_scrolls(&mut self, key: impl Into<String>) -> &mut Self {
+        self.cold_mut().wheel_scrolls = Some(key.into().into_boxed_str());
+        self
+    }
 }
 
 /// How a scroll viewport's edges fade with the content hidden under them ([`El::scroll_fade`]).

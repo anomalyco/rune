@@ -40,12 +40,9 @@ pub(in crate::window) trait WindowApp {
     fn run_on_quit(&mut self) -> bool;
     fn run_on_rest(&mut self);
     fn queue_on_reopen(&mut self, has_visible_windows: bool) -> Option<Arc<AtomicBool>>;
-    fn claim_menus(&mut self);
-    fn drain_startup(&mut self, shortcuts: &crate::shortcuts::Guard);
-    fn drain_window(&mut self, shortcuts: &crate::shortcuts::Guard) -> (WindowRequests, bool, bool);
-    fn window_pending(&self) -> bool;
-    fn set_visible(&self, visible: bool);
-    fn set_window_error(&self, error: Option<String>);
+    fn drain_startup(&mut self, shortcuts: &crate::shortcuts::Guard, menus: &mut crate::native_menu::MenuGuard);
+    fn drain_window(&mut self, shortcuts: &crate::shortcuts::Guard, menus: &mut crate::native_menu::MenuGuard) -> (WindowRequests, bool, bool);
+    fn has_updates(&self) -> bool;
     fn has_compositor(&self) -> bool;
     fn compositor_features(&self) -> wgpu::Features;
     fn compositor_animating(&self) -> bool;
@@ -88,6 +85,10 @@ impl dyn WindowApp + '_ {
 
     pub(in crate::window) fn build_for_show(&mut self) -> bool {
         self.driver(|rt, app| rt.build_for_show(app))
+    }
+
+    pub(in crate::window) fn content_height(&mut self) -> f32 {
+        self.driver(|rt, app| rt.content_height(app))
     }
 
     pub(in crate::window) fn poll_hidden(&mut self) -> bool {
@@ -146,25 +147,27 @@ impl dyn WindowApp + '_ {
         self.driver(|rt, app| rt.button_up(app, x, y, button));
     }
 
-    pub(in crate::window) fn key_up(&mut self, ev: crate::KeyEvent) -> bool {
-        self.driver(|rt, app| rt.key_up(app, ev))
-    }
-
     pub(in crate::window) fn touch(&mut self, touch: &winit::event::Touch) {
         self.driver(|rt, app| crate::window::touch_core(rt, app, touch));
+    }
+
+    pub(in crate::window) fn modifiers(&mut self, mods: &mut winit::keyboard::ModifiersState, next: winit::keyboard::ModifiersState) -> bool {
+        self.driver(|rt, app| crate::input::host_events::modifiers(rt, app, mods, next))
+    }
+
+    pub(in crate::window) fn keyboard(
+        &mut self,
+        clipboard: &crate::clipboard::Client,
+        event: &winit::event::KeyEvent,
+        mods: winit::keyboard::ModifiersState,
+        unhandled: Option<crate::runtime::Unhandled>,
+    ) -> bool {
+        self.driver(|rt, app| crate::input::host_events::keyboard(rt, app, clipboard, event, mods, unhandled))
     }
 
     #[cfg(target_os = "macos")]
     pub(in crate::window) fn physical_with_fallback(&mut self, event: crate::PhysicalInput, key: Option<crate::KeyEvent>) -> bool {
         self.driver(|rt, app| rt.physical_with_fallback(app, event, key))
-    }
-
-    pub(in crate::window) fn physical_then(&mut self, event: crate::PhysicalInput, key: Option<crate::KeyEvent>, base: Option<char>, unhandled: Option<crate::runtime::Unhandled>) -> bool {
-        self.driver(|rt, app| rt.physical_then(app, event, key, base, unhandled))
-    }
-
-    pub(in crate::window) fn physical_observation(&mut self, event: crate::PhysicalInput) -> bool {
-        self.driver(|rt, app| rt.physical_observation(app, event))
     }
 }
 
@@ -172,7 +175,6 @@ impl dyn WindowApp + '_ {
 pub(super) struct TypedWindowApp<S: 'static> {
     pub(super) rt: Runtime<S>,
     pub(super) shared: Arc<Shared<S>>,
-    pub(super) menus: crate::native_menu::Guard<S>,
     pub(super) comp: Option<Box<dyn Compositor<S>>>,
     pub(super) on_frame_drawn: Option<OnFrameDrawn<S>>,
     pub(super) on_close: Option<fn(&mut S, &mut Tx)>,
@@ -233,33 +235,27 @@ impl<S: 'static> WindowApp for TypedWindowApp<S> {
         Some(handled)
     }
 
-    fn claim_menus(&mut self) { self.menus.claim(); }
-
-    fn drain_startup(&mut self, shortcuts: &crate::shortcuts::Guard) {
+    fn drain_startup(&mut self, shortcuts: &crate::shortcuts::Guard, menus: &mut crate::native_menu::MenuGuard) {
         super::events::startup_updates(&self.shared, shortcuts, |f| {
             self.rt.update_if(f);
-            self.menus.drain();
+            menus.drain();
         });
     }
 
-    fn drain_window(&mut self, shortcuts: &crate::shortcuts::Guard) -> (WindowRequests, bool, bool) {
+    fn drain_window(&mut self, shortcuts: &crate::shortcuts::Guard, menus: &mut crate::native_menu::MenuGuard) -> (WindowRequests, bool, bool) {
         shortcuts.drain();
-        self.menus.drain();
+        menus.drain();
         let (mut had_updates, mut updated) = (false, false);
         let _receiving = shortcuts.receiving();
         let requests = self.shared.drain_window(&mut self.rt, |changed| {
             had_updates = true;
             updated |= changed;
-            self.menus.drain();
+            menus.drain();
         });
         (requests, had_updates, updated)
     }
 
-    fn window_pending(&self) -> bool { self.shared.window_pending() }
-
-    fn set_visible(&self, visible: bool) { self.shared.visible.store(visible, Ordering::Release); }
-
-    fn set_window_error(&self, error: Option<String>) { *self.shared.window_error.lock().unwrap() = error; }
+    fn has_updates(&self) -> bool { self.shared.has_updates() }
 
     fn has_compositor(&self) -> bool { self.comp.is_some() }
 

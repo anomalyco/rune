@@ -160,7 +160,7 @@ impl<S: 'static> Runtime<S> {
     #[inline(always)]
     pub fn finish_composition(&mut self) { self.core_mut().finish_composition(); }
     #[inline(always)]
-    pub fn paste(&mut self, text: impl Into<String>) { self.core_mut().paste(text); }
+    pub fn paste(&mut self, text: impl Into<String>) { self.core_mut().paste(text.into()); }
     #[inline(always)]
     pub fn paste_content(&mut self, content: crate::ClipboardContent) { self.core_mut().paste_content(content); }
     #[inline(always)]

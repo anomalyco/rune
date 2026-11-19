@@ -6,8 +6,9 @@ use std::sync::{Arc, OnceLock};
 
 use crate::compose::{Compositor, Frame};
 use crate::frame::clock::FrameClock;
+use crate::platform::embed_frame::{self, FrameSummary};
 use crate::render::{Gpu, Renderer};
-use crate::runtime::{Env, Runtime, Waker};
+use crate::runtime::{Env, Runtime, RuntimeCore, Waker};
 use crate::time::Instant;
 use crate::tooling::{AppSpec, runtime_for};
 
@@ -45,19 +46,165 @@ pub struct EmbedFrame {
     pub cpu_us: u64,
 }
 
+impl From<FrameSummary> for EmbedFrame {
+    fn from(s: FrameSummary) -> Self {
+        Self {
+            drew: s.drew,
+            animating: s.animating,
+            wake_after_secs: s.wake_after_secs,
+            cpu_us: s.cpu_us,
+        }
+    }
+}
+
+struct PreparedEmbedFrame {
+    frame: wgpu::SurfaceTexture,
+    target: wgpu::TextureView,
+    encoder: wgpu::CommandEncoder,
+    size: (u32, u32),
+    format: wgpu::TextureFormat,
+}
+
+struct LayerHostCore {
+    gpu: Arc<Gpu>,
+    surface: wgpu::Surface<'static>,
+    config: wgpu::SurfaceConfiguration,
+    renderer: Renderer,
+    clock: FrameClock,
+    suspended: bool,
+}
+
+impl LayerHostCore {
+    unsafe fn new(layer: *mut c_void, viewport: (f32, f32), scale: f32) -> Result<(Self, (f32, f32), f32, Instant), String> {
+        if layer.is_null() {
+            return Err("null CAMetalLayer pointer".into());
+        }
+        let gpu = shared_gpu()?;
+        let surface = unsafe {
+            gpu.instance
+                .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::CoreAnimationLayer(layer))
+                .map_err(|e| format!("create_surface_unsafe: {e}"))?
+        };
+        let scale = scale.max(1.0);
+        let max_dim = gpu.device.limits().max_texture_dimension_2d.max(1);
+        let px_w = ((viewport.0.max(1.0) * scale).round() as u32).clamp(1, max_dim);
+        let px_h = ((viewport.1.max(1.0) * scale).round() as u32).clamp(1, max_dim);
+        let srgb_blend = true;
+        let (config, _) = crate::window::surface_config(&surface, &gpu.adapter, (px_w, px_h), srgb_blend)
+            .ok_or_else(|| "CAMetalLayer has no supported wgpu surface configuration".to_owned())?;
+        crate::window::configure(&surface, &gpu, &config)?;
+        let target_format = config.format.remove_srgb_suffix();
+        let mut renderer = Renderer::new(&gpu.device, target_format);
+        renderer.set_srgb_blend(true);
+        let size = (px_w as f32 / scale, px_h as f32 / scale);
+        let now = Instant::now();
+        let core = Self {
+            gpu,
+            surface,
+            config,
+            renderer,
+            clock: FrameClock::new(now),
+            suspended: viewport.0 <= 0.0 || viewport.1 <= 0.0,
+        };
+        Ok((core, size, scale, now))
+    }
+
+    fn configure_runtime(&mut self, rt: &mut RuntimeCore, now: Instant) {
+        rt.set_srgb_blend(true);
+        rt.set_os_drag(false);
+        rt.wall_start = Some(now);
+        rt.frame.record_events = false;
+        let target_format = if rt.srgb_blend() { self.config.format.remove_srgb_suffix() } else { self.config.format };
+        crate::window::rebuild_renderer_core(&self.gpu.device, &mut self.renderer, target_format, rt);
+    }
+
+    fn resize(&mut self, rt: &mut RuntimeCore, viewport: (f32, f32), scale: f32) {
+        if viewport.0 <= 0.0 || viewport.1 <= 0.0 {
+            self.suspended = true;
+            return;
+        }
+        self.suspended = false;
+        let scale = scale.max(1.0);
+        let max_dim = self.gpu.device.limits().max_texture_dimension_2d.max(1);
+        let px_w = ((viewport.0 * scale).round() as u32).clamp(1, max_dim);
+        let px_h = ((viewport.1 * scale).round() as u32).clamp(1, max_dim);
+        if self.config.width != px_w || self.config.height != px_h {
+            self.config.width = px_w;
+            self.config.height = px_h;
+            if let Err(error) = crate::window::configure(&self.surface, &self.gpu, &self.config) {
+                eprintln!("rune: embedded layer surface refused its new size: {error}");
+            }
+        }
+        rt.set_viewport((px_w as f32 / scale, px_h as f32 / scale), scale);
+    }
+
+    /// Acquires the next drawable, reconfiguring and retrying once on `Outdated`/`Lost`.
+    /// Returns `Err(retry_now)` when no drawable could be acquired.
+    fn acquire(&mut self) -> Result<wgpu::SurfaceTexture, bool> {
+        let mut retries = 1u8;
+        loop {
+            match self.surface.get_current_texture() {
+                wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => return Ok(f),
+                wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
+                    if let Err(error) = crate::window::configure(&self.surface, &self.gpu, &self.config) {
+                        eprintln!("rune: embedded layer surface refused reconfiguration: {error}");
+                        return Err(false);
+                    }
+                    if retries == 0 { return Err(true); }
+                    retries -= 1;
+                }
+                _ => return Err(false),
+            }
+        }
+    }
+
+    fn reblend(&mut self, rt: &mut RuntimeCore) -> bool {
+        let mut alpha = None;
+        crate::window::reblend_core(&self.surface, &self.gpu, &mut self.config, &mut self.renderer, &mut alpha, rt)
+    }
+
+    fn prepare_draw(&mut self, rt: &mut RuntimeCore, frame: wgpu::SurfaceTexture) -> PreparedEmbedFrame {
+        let target_format = if rt.srgb_blend() { self.config.format.remove_srgb_suffix() } else { self.config.format };
+        let target = frame.texture.create_view(&wgpu::TextureViewDescriptor {
+            format: (target_format != self.config.format).then_some(target_format),
+            ..Default::default()
+        });
+        let size = (self.config.width, self.config.height);
+        self.renderer.upload_images(&self.gpu.device, &self.gpu.queue, &mut rt.images);
+        self.renderer.build_surfaces(&self.gpu.device, &rt.surfaces, rt.live_notifier());
+        self.renderer.prepare_surfaces(&self.gpu.device, &self.gpu.queue, &rt.surfaces, size);
+        self.renderer.set_frame_wake(rt.live_wake());
+        let encoder = self.gpu.device.create_command_encoder(&Default::default());
+        PreparedEmbedFrame { frame, target, encoder, size, format: target_format }
+    }
+
+    fn draw_default(&mut self, rt: &mut RuntimeCore, prepared: &mut PreparedEmbedFrame) {
+        self.renderer.prepare_ui(
+            &self.gpu.device,
+            &self.gpu.queue,
+            &mut rt.text.atlas,
+            &rt.instances,
+            prepared.size,
+        );
+        self.renderer.draw(&mut prepared.encoder, &prepared.target, rt.clear_color());
+    }
+
+    fn finish_draw(&mut self, rt: &mut RuntimeCore, prepared: PreparedEmbedFrame, t0: Instant, animating: bool, comp_animating: bool) -> EmbedFrame {
+        self.renderer.submit(&self.gpu.queue, prepared.encoder);
+        self.gpu.queue.present(prepared.frame);
+        crate::render::gpu_events::presented();
+        embed_frame::post_present(&mut self.clock, rt, Instant::now(), t0, animating, comp_animating).into()
+    }
+}
+
 /// Drives one Rune [`Runtime`] and [`Renderer`] directly onto a `CAMetalLayer`.
 ///
 /// Pause display-link calls while the host app is backgrounded on iOS: Metal forbids drawable
 /// acquisition and command-buffer submission after `didEnterBackground`.
 pub struct LayerHost<S: 'static> {
-    gpu: Arc<Gpu>,
-    surface: wgpu::Surface<'static>,
-    config: wgpu::SurfaceConfiguration,
-    renderer: Renderer,
+    core: LayerHostCore,
     compositor: Option<Box<dyn Compositor<S>>>,
     rt: Runtime<S>,
-    clock: FrameClock,
-    suspended: bool,
 }
 
 impl<S: 'static> LayerHost<S> {
@@ -76,46 +223,10 @@ impl<S: 'static> LayerHost<S> {
         dark: bool,
         wake: Waker,
     ) -> Result<Self, String> {
-        if layer.is_null() {
-            return Err("null CAMetalLayer pointer".into());
-        }
-        let gpu = shared_gpu()?;
-        let surface = unsafe {
-            gpu.instance
-                .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::CoreAnimationLayer(layer))
-                .map_err(|e| format!("create_surface_unsafe: {e}"))?
-        };
-        let scale = scale.max(1.0);
-        let max_dim = gpu.device.limits().max_texture_dimension_2d.max(1);
-        let px_w = ((viewport.0.max(1.0) * scale).round() as u32).clamp(1, max_dim);
-        let px_h = ((viewport.1.max(1.0) * scale).round() as u32).clamp(1, max_dim);
-        let srgb_blend = true;
-        let (config, _) = crate::window::surface_config(&surface, &gpu.adapter, (px_w, px_h), srgb_blend)
-            .ok_or_else(|| "CAMetalLayer has no supported wgpu surface configuration".to_owned())?;
-        surface.configure(&gpu.device, &config);
-        let target_format = config.format.remove_srgb_suffix();
-        let mut renderer = Renderer::new(&gpu.device, target_format);
-        renderer.set_srgb_blend(true);
-
-        let w = px_w as f32 / scale;
-        let h = px_h as f32 / scale;
-        let mut rt = runtime_for(spec, state, (w, h), Env::new(dark, scale), wake);
-        rt.set_srgb_blend(true);
-        rt.set_os_drag(false);
-        let now = Instant::now();
-        rt.wall_start = Some(now);
-        rt.record_events = false;
-
-        Ok(Self {
-            gpu,
-            surface,
-            config,
-            renderer,
-            compositor: None,
-            rt,
-            clock: FrameClock::new(now),
-            suspended: viewport.0 <= 0.0 || viewport.1 <= 0.0,
-        })
+        let (mut core, size, scale, now) = unsafe { LayerHostCore::new(layer, viewport, scale) }?;
+        let mut rt = runtime_for(spec, state, size, Env::new(dark, scale), wake);
+        core.configure_runtime(rt.core_mut(), now);
+        Ok(Self { core, compositor: None, rt })
     }
 
     /// Attaches a custom [`Compositor`] (e.g. for [`El::effect`](crate::El::effect) shader passes)
@@ -137,95 +248,85 @@ impl<S: 'static> LayerHost<S> {
     /// Updates the viewport in points and display scale, reconfiguring the Metal swapchain only
     /// when its clamped device-pixel dimensions change.
     pub fn resize(&mut self, viewport: (f32, f32), scale: f32) {
-        if viewport.0 <= 0.0 || viewport.1 <= 0.0 {
-            self.suspended = true;
-            return;
-        }
-        self.suspended = false;
-        let scale = scale.max(1.0);
-        let max_dim = self.gpu.device.limits().max_texture_dimension_2d.max(1);
-        let px_w = ((viewport.0 * scale).round() as u32).clamp(1, max_dim);
-        let px_h = ((viewport.1 * scale).round() as u32).clamp(1, max_dim);
-        if self.config.width != px_w || self.config.height != px_h {
-            self.config.width = px_w;
-            self.config.height = px_h;
-            self.surface.configure(&self.gpu.device, &self.config);
-        }
-        self.rt.set_viewport((px_w as f32 / scale, px_h as f32 / scale), scale);
+        self.core.resize(self.rt.core_mut(), viewport, scale);
     }
 
-    /// Steps animations and layout to `Instant::now()` and presents one Metal frame.
+    /// Steps animations and layout to `Instant::now()` and presents one Metal frame, following
+    /// the same acquire → step → prepare → draw → submit/present → clock-presented order as the
+    /// desktop window host.
     pub fn frame(&mut self) -> EmbedFrame {
-        if self.suspended {
+        if self.core.suspended {
             return EmbedFrame::default();
         }
-        let t0 = Instant::now();
-        let (animating, dt) = self.clock.advance(&mut self.rt, t0, false);
-        let update_ms = t0.elapsed().as_secs_f64() * 1000.0;
-        crate::clipboard::flush_memory(self.rt.core_mut());
-        if self.rt.popup_menu().is_some() {
-            self.rt.cancel_popups();
-        }
-        self.rt.refuse_file_dialog("native file dialogs are unsupported in embedded views");
-
+        let _ = self.rt.core_mut().follow_font_families();
         let comp_animating = self.compositor.as_ref().is_some_and(|c| c.animating());
-        let frame = match self.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
-            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
-                self.surface.configure(&self.gpu.device, &self.config);
-                return EmbedFrame { animating: true, ..EmbedFrame::default() };
+        if self.core.renderer.srgb_blend() != self.rt.core().srgb_blend()
+            && !self.core.reblend(self.rt.core_mut())
+        {
+            let t0 = Instant::now();
+            let (rt, mut app) = self.rt.split_mut();
+            return embed_frame::missed_step(rt, &mut app, t0, comp_animating, false).into();
+        }
+        // Acquire before stepping so a drawable wait cannot age input and a failed acquire
+        // never advances the frame clock without presenting.
+        let frame = match self.core.acquire() {
+            Ok(frame) => frame,
+            Err(retry_now) => {
+                let t0 = Instant::now();
+                let (rt, mut app) = self.rt.split_mut();
+                return embed_frame::missed_step(rt, &mut app, t0, comp_animating, retry_now).into();
             }
-            _ => return EmbedFrame { animating: animating || comp_animating, ..EmbedFrame::default() },
         };
-
-        let target = frame.texture.create_view(&wgpu::TextureViewDescriptor {
-            format: Some(self.renderer.format()),
-            ..Default::default()
-        });
-        self.renderer.upload_images(&self.gpu.device, &self.gpu.queue, &mut self.rt.images);
-        let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
-        let size = (self.config.width, self.config.height);
-        let format = self.renderer.format();
+        let t0 = Instant::now();
+        let (animating, dt, update_ms) = {
+            let (rt, mut app) = self.rt.split_mut();
+            embed_frame::step_and_flush(&mut self.core.clock, rt, &mut app, t0, comp_animating)
+        };
+        // A handler switched blending (`Tx::set_srgb_blend`): re-acquire in the new format.
+        let frame = if self.core.renderer.srgb_blend() != self.rt.core().srgb_blend() {
+            drop(frame);
+            if !self.core.reblend(self.rt.core_mut()) {
+                return EmbedFrame {
+                    drew: false,
+                    animating: animating || comp_animating,
+                    wake_after_secs: embed_frame::wake_after_secs(self.rt.core()),
+                    cpu_us: t0.elapsed().as_micros() as u64,
+                };
+            }
+            match self.core.acquire() {
+                Ok(frame) => frame,
+                Err(retry_now) => {
+                    return EmbedFrame {
+                        drew: false,
+                        animating: retry_now || animating || comp_animating,
+                        wake_after_secs: embed_frame::wake_after_secs(self.rt.core()),
+                        cpu_us: t0.elapsed().as_micros() as u64,
+                    };
+                }
+            }
+        } else {
+            frame
+        };
+        let mut prepared = self.core.prepare_draw(self.rt.core_mut(), frame);
         if let Some(comp) = &mut self.compositor {
             let mut f = Frame {
-                device: &self.gpu.device,
-                queue: &self.gpu.queue,
-                encoder: &mut encoder,
-                target: &target,
-                format,
-                size,
+                device: &self.core.gpu.device,
+                queue: &self.core.gpu.queue,
+                encoder: &mut prepared.encoder,
+                target: &prepared.target,
+                format: prepared.format,
+                size: prepared.size,
                 dt,
                 update_ms,
                 rt: &mut self.rt,
-                ui: &mut self.renderer,
+                ui: &mut self.core.renderer,
             };
             comp.render(&mut f);
         } else {
-            self.renderer.prepare_ui(
-                &self.gpu.device,
-                &self.gpu.queue,
-                &mut self.rt.text.atlas,
-                &self.rt.instances,
-                size,
-            );
-            self.renderer.draw(&mut encoder, &target, self.rt.clear_color());
+            self.core.draw_default(self.rt.core_mut(), &mut prepared);
         }
-        self.renderer.submit(&self.gpu.queue, encoder);
-        self.gpu.queue.present(frame);
-
-        let cpu_us = t0.elapsed().as_micros() as u64;
-        let wake_after_secs = self.rt.wake_deadline().and_then(|d| {
-            let elapsed = self.rt.wall_start?.elapsed().as_secs_f64();
-            Some((d - elapsed).max(0.0))
-        });
         let comp_animating = self.compositor.as_ref().is_some_and(|c| c.animating());
-        let keep_ticking = animating || comp_animating || self.rt.has_pending_input() || self.rt.live_pending();
-        EmbedFrame {
-            drew: true,
-            animating: keep_ticking,
-            wake_after_secs,
-            cpu_us,
-        }
+        self.core.finish_draw(self.rt.core_mut(), prepared, t0, animating, comp_animating)
     }
 }
 

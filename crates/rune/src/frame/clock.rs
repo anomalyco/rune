@@ -15,7 +15,7 @@
 use crate::machine::Effects;
 use crate::time::Instant;
 use rune_motion::TrackId;
-#[cfg(any(test, feature = "hot", target_arch = "wasm32", target_vendor = "apple"))]
+#[cfg(test)]
 use crate::runtime::Runtime;
 use crate::runtime::{AppDriver, RuntimeCore};
 
@@ -60,10 +60,17 @@ pub(crate) fn split(gap: f64, running: bool) -> Step {
 /// (the hot loop). Without a wall clock, timers and poll still see the
 /// whole gap.
 #[cfg(any(test, feature = "hot"))]
-pub(crate) fn advance_by<S: 'static>(rt: &mut Runtime<S>, gap: f64) -> bool {
+pub(crate) fn advance_by_core(rt: &mut RuntimeCore, app: &mut dyn AppDriver, gap: f64) -> bool {
     let step = split(gap, rt.animating);
     rt.clock += (gap - step.total()).max(0.0);
-    rt.frame_split(step.catch_up, step.dt)
+    rt.frame_split(app, step.catch_up, step.dt)
+}
+
+#[cfg(test)]
+#[inline(always)]
+pub(crate) fn advance_by<S: 'static>(rt: &mut Runtime<S>, gap: f64) -> bool {
+    let (core, mut app) = rt.split_mut();
+    advance_by_core(core, &mut app, gap)
 }
 
 #[derive(Debug)]
@@ -156,7 +163,7 @@ impl FrameClock {
     /// Steps `rt` to the frame presented at `at`, in one runtime pass. `compositing`: a
     /// compositor's own animation was still running after the previous frame. Returns whether
     /// anything still animates and the seconds stepped.
-    #[cfg(any(test, target_arch = "wasm32", target_vendor = "apple"))]
+    #[cfg(test)]
     #[inline(always)]
     pub(crate) fn advance<S: 'static>(&mut self, rt: &mut Runtime<S>, at: Instant, compositing: bool) -> (bool, f64) {
         let (core, mut app) = rt.split_mut();
@@ -165,7 +172,7 @@ impl FrameClock {
 
     pub(crate) fn advance_core(&mut self, rt: &mut RuntimeCore, app: &mut dyn AppDriver, at: Instant, compositing: bool) -> (bool, f64) {
         let (step, starts) = self.begin(at, rt.animating || compositing);
-        rt.frame_target = Some(at);
+        rt.frame.frame_target = Some(at);
         let animating = rt.frame_split(app, step.catch_up, step.dt);
         starts.extend_from_slice(rt.scene.store().started());
         (animating, step.total())

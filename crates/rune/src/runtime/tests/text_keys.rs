@@ -10,7 +10,7 @@ fn keyed_view(_: &(), _: &mut Cx<()>) -> El {
 }
 
 fn spec<'a>(rt: &'a Runtime<()>, key: &str) -> &'a TextSpec {
-    rt.nodes.iter().find(|n| n.key.as_deref() == Some(key)).and_then(|n| n.text.as_ref()).unwrap()
+    rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some(key)).and_then(|n| n.text.as_ref()).unwrap()
 }
 
 /// Flatten hashes each text once; measuring and laying it out at every width reuse that key,

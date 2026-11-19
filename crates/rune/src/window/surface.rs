@@ -1,7 +1,7 @@
 //! Window GPU surface configuration, pacing, backoff, presentation tracking and platform handles.
 
 use crate::render::{Gpu, Renderer};
-use crate::runtime::{Runtime, RuntimeCore};
+use crate::runtime::RuntimeCore;
 
 pub(in crate::window) mod backoff;
 pub(in crate::window) mod configure;
@@ -109,9 +109,4 @@ pub(crate) fn rebuild_renderer_core(device: &wgpu::Device, renderer: &mut Render
     renderer.set_srgb_blend(rt.srgb_blend());
     // Before the first frame, so its glyph masks go to the GPU fill when the renderer has one.
     renderer.attach_text(&mut rt.text.atlas);
-}
-
-#[inline(always)]
-pub(crate) fn rebuild_renderer<S: 'static>(device: &wgpu::Device, renderer: &mut Renderer, target: wgpu::TextureFormat, rt: &mut Runtime<S>) {
-    rebuild_renderer_core(device, renderer, target, rt.core_mut());
 }

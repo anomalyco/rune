@@ -167,49 +167,49 @@ impl LiveLane {
 
 impl RuntimeCore {
     /// The window's live wake: another thread tells it to get the window's next frame drawn.
-    pub(crate) fn live_wake(&self) -> &Arc<crate::live::Wake> { self.live.waker() }
+    pub(crate) fn live_wake(&self) -> &Arc<crate::live::Wake> { self.frame.live.waker() }
 
     /// Install before the first frame. Live updates use this separate coalesced wake lane.
     pub(crate) fn set_live_waker(&mut self, waker: Waker) {
-        for sub in &self.live_subscriptions { sub.active.store(false, Ordering::Release); }
-        self.live_subscriptions.clear();
-        self.live.replace_waker(waker);
+        for sub in &self.frame.live_subscriptions { sub.active.store(false, Ordering::Release); }
+        self.frame.live_subscriptions.clear();
+        self.frame.live.replace_waker(waker);
         self.subscribe_live();
     }
 
     pub(crate) fn set_live_visible(&mut self, app: &mut dyn AppDriver, visible: bool) {
-        let changed = visible != self.live.visible();
-        self.live.set_visible(visible);
-        if !visible { self.loop_wake = None; }
+        let changed = visible != self.frame.live.visible();
+        self.frame.live.set_visible(visible);
+        if !visible { self.motion.loop_wake = None; }
         // The window's own setup shows and hides it before the first frame; the app hears the
         // changes after that (`App::on_visibility`).
-        if changed && self.commits > 0 && app.has_on_visibility() {
-            let mut one = self.begin_update(app);
-            crate::tooling::perf_warn::timed("an `update` closure", || app.on_visibility(visible, &mut one));
-            self.finish_update(app, one, true, false);
+        if changed && self.commit.commits > 0 && app.has_on_visibility() {
+            let (mut one, stall) = self.begin_update(app);
+            app.on_visibility(visible, &mut one);
+            self.finish_update(app, stall, one, true, false);
         }
     }
     /// What asks for this runtime's next frame as a live value does, from any thread.
     pub(crate) fn live_notifier(&self) -> impl FnOnce() + Send + 'static {
-        let wake = self.live.waker().clone();
+        let wake = self.frame.live.waker().clone();
         move || wake.notify()
     }
-    pub(crate) fn live_visible(&self) -> bool { self.live.visible() }
+    pub(crate) fn live_visible(&self) -> bool { self.frame.live.visible() }
     pub fn live_pending(&self) -> bool {
-        self.live.pending()
+        self.frame.live.pending()
     }
 
-    pub(super) fn subscribe_live(&mut self) {
-        for node in &mut self.nodes {
+    pub(in crate::runtime) fn subscribe_live(&mut self) {
+        for node in &mut self.tree.nodes {
             if let Some(cold) = node.cold.get_mut_if_some() {
-                for bound in &mut cold.live { bound.attach(&self.live_clock, self.clock); }
+                for bound in &mut cold.live { bound.attach(&self.frame.live_clock, self.clock); }
             }
         }
-        for sub in &self.live_subscriptions { sub.active.store(false, Ordering::Release); }
+        for sub in &self.frame.live_subscriptions { sub.active.store(false, Ordering::Release); }
         // Pixels only wake: each frame's build uploads their current image, so unlike bound
         // values they leave nothing to sample on a later visible frame.
         let mut sampled = false;
-        for node in &self.nodes {
+        for node in &self.tree.nodes {
             let text = node.text.as_ref().and_then(|t| t.cold.live.as_ref()).map(|t| &t.source);
             let pixels = node.vis.cold.get().and_then(|v| v.pixels.as_ref()).map(|p| &p.source);
             let has_live = node.cold.get().is_some_and(|c| !c.live.is_empty());
@@ -222,26 +222,26 @@ impl RuntimeCore {
             if !self.scene.contains(node.id) { continue; }
             sampled |= text.is_some() || has_live;
             for source in node.live.iter().map(|b| &b.source).chain(text).chain(pixels) {
-                if let Some(sub) = self.live_subscriptions.iter().find(|s| s.source_id == source.id()) {
+                if let Some(sub) = self.frame.live_subscriptions.iter().find(|s| s.source_id == source.id()) {
                     sub.active.store(true, Ordering::Release);
                 } else {
-                    self.live_subscriptions.push(source.subscribe(self.live.waker()));
+                    self.frame.live_subscriptions.push(source.subscribe(self.frame.live.waker()));
                 }
             }
         }
-        self.live_subscriptions.retain(|s| s.active.load(Ordering::Acquire));
-        self.live.subscribed(sampled);
+        self.frame.live_subscriptions.retain(|s| s.active.load(Ordering::Acquire));
+        self.frame.live.subscribed(sampled);
     }
 
     /// Clear before this frame reads anything a source publishes (a picture's size for layout,
     /// a bound value): a concurrent publication either lands in this frame or keeps a wake for
     /// the next. Never clear after reading (lost wake race). Hidden hosts keep the wake for show.
-    pub(super) fn take_live_wake(&mut self) -> bool { self.live.take() }
+    pub(in crate::runtime) fn take_live_wake(&mut self) -> bool { self.frame.live.take() }
 
-    pub(super) fn latch_live(&mut self, pending: bool) -> bool {
-        if !self.live.latch_begin(pending, !self.live_subscriptions.is_empty()) { return false; }
+    pub(in crate::runtime) fn latch_live(&mut self, pending: bool) -> bool {
+        if !self.frame.live.latch_begin(pending, !self.frame.live_subscriptions.is_empty()) { return false; }
         let mut active = false;
-        for node in &mut self.nodes {
+        for node in &mut self.tree.nodes {
             if let Some(spec) = &mut node.text
                 && let Some(live) = &spec.cold.live
             {
@@ -254,7 +254,7 @@ impl RuntimeCore {
             }
             let Some(cold) = node.cold.get_mut_if_some() else { continue };
             for bound in &mut cold.live {
-                let (op, active_now) = bound.read(&self.live_clock, self.clock);
+                let (op, active_now) = bound.read(&self.frame.live_clock, self.clock);
                 active |= active_now;
                 let Some(op) = op else { continue };
                 let (enter, leave) = (bound.spring, bound.rest_spring);
@@ -362,7 +362,7 @@ impl RuntimeCore {
                 }
             }
         }
-        self.live.latch_end(active)
+        self.frame.live.latch_end(active)
     }
 }
 

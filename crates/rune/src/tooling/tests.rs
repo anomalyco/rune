@@ -8,7 +8,7 @@ fn trace_annotations_from_hidden_poll_survive_idle_catch_up_once() {
         launch: "hidden".into(), width: 100.0, height: 100.0, hz: 60.0, scale: 1.0,
     });
     rt.scene.set_trace(Some(trace));
-    rt.trace_channels = Some(Default::default());
+    rt.frame.trace_channels = Some(Default::default());
     rt.poll = Some(|pending, _, tx| {
         if !std::mem::take(pending) { return false; }
         tx.trace_event("hidden:ready");
@@ -23,7 +23,7 @@ fn trace_annotations_from_hidden_poll_survive_idle_catch_up_once() {
     rt.frame_split(1.0, 0.0);
     rt.frame(0.02);
     assert_eq!(rt.events, ["hidden:ready"]);
-    assert_eq!(rt.trace_channels.as_ref().unwrap()["shell.width"], ("position", 40.0));
+    assert_eq!(rt.frame.trace_channels.as_ref().unwrap()["shell.width"], ("position", 40.0));
     rt.scene.take_trace().unwrap().flush().unwrap();
     let lines: Vec<Value> = buffer.contents().lines().map(|s| serde_json::from_str(s).unwrap()).collect();
     assert_eq!(lines.iter().filter(|line| line["ev"] == json!(["hidden:ready"])).count(), 1);
@@ -42,7 +42,7 @@ fn trace_annotations_reach_both_writers_once() {
         launch: "pill".into(), width: 100.0, height: 100.0, hz: 60.0, scale: 1.0,
     });
     rt.scene.set_trace(Some(trace));
-    rt.trace_channels = Some(Default::default());
+    rt.frame.trace_channels = Some(Default::default());
     let path = std::env::temp_dir().join(format!("rune-annotations-{}.jsonl", std::process::id()));
     {
         let mut trace = Trace::open(&path, rt.viewport, 60.0, 1.0);
@@ -936,16 +936,16 @@ fn the_window_title_starts_from_the_spec_and_follows_set_title() {
     let mut rt = runtime_for(&spec, 0, (100.0, 100.0), Env { scale: 1.0, system_dark: true }, std::sync::Arc::new(|| {}));
     rt.frame(0.0);
     assert_eq!(tree_json(&rt, 0.0)["title"], "Notes");
-    assert_eq!(rt.window_title.take_change(), None, "the window opens with the spec's title");
+    assert_eq!(rt.host.window_title.take_change(), None, "the window opens with the spec's title");
     let press = |rt: &mut Runtime<u32>, t| { rt.pointer_down(50.0, 50.0); rt.pointer_up(50.0, 50.0); rt.frame(t); };
     press(&mut rt, 0.1);
     assert_eq!(tree_json(&rt, 0.1)["title"], "Notes 1");
-    assert_eq!(rt.window_title.take_change(), Some("Notes 1"));
-    assert_eq!(rt.window_title.take_change(), None);
+    assert_eq!(rt.host.window_title.take_change(), Some("Notes 1"));
+    assert_eq!(rt.host.window_title.take_change(), None);
     rt.update(|_, tx| tx.set_title("Notes 1"));
-    assert_eq!(rt.window_title.take_change(), None, "the same title again is no change");
+    assert_eq!(rt.host.window_title.take_change(), None, "the same title again is no change");
     assert!(!rt.update_if(|_, tx| { tx.set_title("Draft"); false }), "the shell shows a title without a frame");
-    assert_eq!(rt.window_title.take_change(), Some("Draft"));
+    assert_eq!(rt.host.window_title.take_change(), Some("Draft"));
 }
 
 #[path = "playground_cli_tests.rs"]

@@ -3,7 +3,7 @@
 use super::*;
 use crate::time::Instant;
 
-pub(super) enum Action {
+pub(in crate::runtime) enum Action {
     WindowFocus(bool),
     Physical(crate::PhysicalInput, Option<physical_dispatch::Fallback>),
     FocusControl(String),
@@ -57,7 +57,7 @@ pub(super) enum Action {
     /// A `Tx::open_file` or `Tx::save_file` callback's id and the dialog's answer.
     FileDialog(u64, crate::file_dialog::FileDialogResult),
     Focus(String, f32, f32),
-    /// A text field's menu: the field, the window point it opens at, and where in the field a
+    /// A text field's menu: the field, the window point it opens at, and the window point where a
     /// press asked for it (none from the keyboard).
     FieldMenu(String, (f32, f32), Option<(f32, f32)>),
     Blur,
@@ -68,19 +68,19 @@ pub(super) enum Action {
 /// A queued action and when the input that queued it arrived (`Tx::input_time`): the arrival
 /// time its host dispatched the input under (`input_time::scope`), none for what layout,
 /// timers, updates and polls queue.
-pub(super) struct Queued {
-    pub(super) action: Action,
-    pub(super) at: Option<Instant>,
-    pub(super) input: bool,
+pub(in crate::runtime) struct Queued {
+    pub(in crate::runtime) action: Action,
+    pub(in crate::runtime) at: Option<Instant>,
+    pub(in crate::runtime) input: bool,
 }
 
 /// The actions waiting for the next frame, in order, each with its input's arrival time.
 #[derive(Default)]
-pub(super) struct ActionQueue(Vec<Queued>);
+pub(in crate::runtime) struct ActionQueue(Vec<Queued>);
 
 impl ActionQueue {
     /// Queues `action` stamped with the input being dispatched now, if any.
-    pub(super) fn push(&mut self, action: Action) {
+    pub(in crate::runtime) fn push(&mut self, action: Action) {
         // A host can dispatch input without a timestamp. Layout and state observers, on the
         // other hand, don't become input just because they have a queued callback.
         let at = crate::input::time::current();
@@ -91,20 +91,20 @@ impl ActionQueue {
         self.0.push(Queued { action, at, input });
     }
     /// A stationary pointer was re-hit after layout; no pointer event asked for that hover.
-    pub(super) fn observe_since(&mut self, start: usize) {
+    pub(in crate::runtime) fn observe_since(&mut self, start: usize) {
         for q in &mut self.0[start..] { q.input = false; }
     }
     /// Queues an action again with its own stamp.
-    pub(super) fn push_queued(&mut self, queued: Queued) { self.0.push(queued); }
+    pub(in crate::runtime) fn push_queued(&mut self, queued: Queued) { self.0.push(queued); }
     /// Puts `queued` ahead of everything queued.
-    pub(super) fn prepend(&mut self, queued: Vec<Queued>) { self.0.splice(0..0, queued); }
-    pub(super) fn iter(&self) -> impl Iterator<Item = &Action> { self.0.iter().map(|q| &q.action) }
+    pub(in crate::runtime) fn prepend(&mut self, queued: Vec<Queued>) { self.0.splice(0..0, queued); }
+    pub(in crate::runtime) fn iter(&self) -> impl Iterator<Item = &Action> { self.0.iter().map(|q| &q.action) }
     /// Whether any of them came from the user's input (they carry its arrival time).
-    pub(super) fn has_input(&self) -> bool { self.0.iter().any(|q| q.at.is_some()) }
-    pub(super) fn len(&self) -> usize { self.0.len() }
-    pub(super) fn is_empty(&self) -> bool { self.0.is_empty() }
-    pub(super) fn retain(&mut self, mut keep: impl FnMut(&Action) -> bool) { self.0.retain(|q| keep(&q.action)); }
-    pub(super) fn remove(&mut self, index: usize) -> Action { self.0.remove(index).action }
+    pub(in crate::runtime) fn has_input(&self) -> bool { self.0.iter().any(|q| q.at.is_some()) }
+    pub(in crate::runtime) fn len(&self) -> usize { self.0.len() }
+    pub(in crate::runtime) fn is_empty(&self) -> bool { self.0.is_empty() }
+    pub(in crate::runtime) fn retain(&mut self, mut keep: impl FnMut(&Action) -> bool) { self.0.retain(|q| keep(&q.action)); }
+    pub(in crate::runtime) fn remove(&mut self, index: usize) -> Action { self.0.remove(index).action }
 }
 
 impl Extend<Action> for ActionQueue {
@@ -129,7 +129,7 @@ impl IntoIterator for ActionQueue {
 
 /// The handler an event goes to, when its `Tx::live_only` can keep the event from committing.
 /// Events Rune does its own work for (focus, editing, pastes, file drops) always commit.
-pub(super) fn live_only_handler(action: &Action) -> Option<&'static str> {
+pub(in crate::runtime) fn live_only_handler(action: &Action) -> Option<&'static str> {
     Some(match action {
         Action::WindowFocus(_) => "on_window_focus",
         Action::DrawnLayout(..) => "on_drawn_layout_tx",
@@ -159,7 +159,7 @@ pub(super) fn live_only_handler(action: &Action) -> Option<&'static str> {
 }
 
 #[cfg(debug_assertions)]
-pub(super) fn action_path(action: &Action) -> Option<&str> {
+pub(in crate::runtime) fn action_path(action: &Action) -> Option<&str> {
     match action {
         Action::PointerMove(path, _) | Action::DrawnLayout(path, ..) | Action::Layout(path, _) | Action::Hover(path) | Action::HoverChange(path, _) | Action::SelectionChange(path, _) | Action::Press(path, ..) | Action::DoublePress(path) | Action::MiddlePress(path)
         | Action::Link(path, ..) | Action::LinkSecondary(path, ..) | Action::SecondaryPress(path, _) | Action::Drag(path, ..) | Action::DragRepeat(path, ..) | Action::DragStart(path)
@@ -254,7 +254,7 @@ pub(crate) fn merge(tx: &mut Tx, one: Tx) {
 /// Slots the ends hosts reported since the last frame into this frame's actions. One OS drag
 /// runs at a time and hosts report ends in order, so each belongs to the oldest open drag: it
 /// runs before any later drag's start, and after its own start when both are queued.
-pub(super) fn order_drag_ends(queue: ActionQueue, ended: Vec<(String, crate::DragOutcome)>, open: &mut usize) -> ActionQueue {
+pub(in crate::runtime) fn order_drag_ends(queue: ActionQueue, ended: Vec<(String, crate::DragOutcome)>, open: &mut usize) -> ActionQueue {
     let mut ended = ended.into_iter().map(|(path, outcome)| Queued { action: Action::DragEnd(path, outcome), at: None, input: true });
     let mut out = Vec::with_capacity(queue.len() + ended.len());
     for queued in queue {
@@ -280,7 +280,7 @@ pub(super) fn order_drag_ends(queue: ActionQueue, ended: Vec<(String, crate::Dra
 
 impl RuntimeCore {
     /// Runs `action`'s handlers; debug builds warn when they block the main thread.
-    pub(super) fn run_action(&mut self, app: &mut dyn AppDriver, action: Action, tx: &mut Tx) -> bool {
+    pub(in crate::runtime) fn run_action(&mut self, app: &mut dyn AppDriver, action: Action, tx: &mut Tx) -> bool {
         #[cfg(debug_assertions)]
         let (name, path, at) = (handler_name(&action), stall_path(&action).map(str::to_owned), self.handler_location(&action));
         let stall = crate::tooling::perf_warn::Stall::start();
@@ -288,7 +288,7 @@ impl RuntimeCore {
         let ran = self.dispatch_action(app, action, tx);
         if ran && let Some((note, started)) = timed { self.interaction_ran(note, started); }
         #[cfg(debug_assertions)]
-        if ran && name.starts_with("on_") { self.watch.meter.handler(name, path.as_deref(), at); }
+        if ran && name.starts_with("on_") { self.commit.watch.meter.handler(name, path.as_deref(), at); }
         #[cfg(debug_assertions)]
         stall.end(|| match path {
             Some(path) => (crate::tooling::perf_warn::handler_site(name, &path), format!("`{name}` on {path:?}")),
@@ -317,7 +317,7 @@ impl RuntimeCore {
     fn dispatch_action(&mut self, app: &mut dyn AppDriver, action: Action, tx: &mut Tx) -> bool {
         // A caret key or a press reads the field's layout where it lands: a long paste's
         // paragraphs still waiting there are shaped first. Typing at the caret needs none.
-        if !self.text_rows.is_empty() && reads_text_layout(&action) { self.fill_text_near(); }
+        if !self.paint.text_rows.is_empty() && reads_text_layout(&action) { self.fill_text_near(); }
         let mut one = self.transaction(app);
         // Debug builds name the element too, for the stale-view warning.
         #[cfg(debug_assertions)]
@@ -330,14 +330,14 @@ impl RuntimeCore {
         let repeat = matches!(action, Action::DragRepeat(..));
         let ran = match action {
             Action::WindowFocus(focused) => {
-                if !focused { self.held = physical_dispatch::Activation::Up; }
-                let Some(f) = self.nodes.get(self.app_root()).and_then(|n| n.handlers.on_window_focus.clone()) else { return false };
+                if !focused { self.kbd.held = physical_dispatch::Activation::Up; }
+                let Some(f) = self.tree.nodes.get(self.app_root()).and_then(|n| n.handlers.on_window_focus.clone()) else { return false };
                 f(app.states(), focused, &mut one);
                 true
             }
             Action::Physical(event, fallback) => {
                 // The window lost key focus (an internal focus move also notifies handlers).
-                if matches!(event, crate::PhysicalInput::FocusLost) { self.held = physical_dispatch::Activation::Up; }
+                if matches!(event, crate::PhysicalInput::FocusLost) { self.kbd.held = physical_dispatch::Activation::Up; }
                 let ran = self.dispatch_physical(app, event, fallback, tx);
                 let live_only = std::mem::take(&mut tx.live_only);
                 return if ran && live_only { self.skip_view("a key handler") } else { ran };
@@ -349,19 +349,19 @@ impl RuntimeCore {
             Action::HoverFocus(path) => match path {
                 Some(path) => {
                     self.set_focus(app, Some(path), false);
-                    self.focus.step(focus_machine::FocusEvent::Hover(true));
+                    self.kbd.focus.step(focus_machine::FocusEvent::Hover(true));
                     one.commit = one.commit.instant();
                     true
                 }
                 None => {
-                    let lit = self.focus.hovered();
-                    self.focus.step(focus_machine::FocusEvent::Hover(false));
+                    let lit = self.kbd.focus.hovered();
+                    self.kbd.focus.step(focus_machine::FocusEvent::Hover(false));
                     lit
                 }
             },
             Action::Dismiss(path) => {
                 let Some(f) = self.node(&path).and_then(|n| n.handlers.modal.as_ref().map(|m| m.dismiss.clone())) else { return false };
-                self.set_focus(app, None, self.focus.keyboard());
+                self.set_focus(app, None, self.kbd.focus.keyboard());
                 f(app.states(), &mut one);
                 true
             }
@@ -408,9 +408,9 @@ impl RuntimeCore {
                 true
             }
             Action::HoverChange(path, inside) => {
-                let gone = self.hover_gone.iter().position(|g| g.0 == path).map(|i| self.hover_gone.remove(i).1);
+                let gone = self.pointer.hover_gone.iter().position(|g| g.0 == path).map(|i| self.pointer.hover_gone.remove(i).1);
                 // A leave still reaches an element on its way out.
-                let exiting = || self.nodes.iter().find(|n| !inside && n.path == path).and_then(|n| n.handlers.on_hover_change.clone());
+                let exiting = || self.tree.nodes.iter().find(|n| !inside && n.path == path).and_then(|n| n.handlers.on_hover_change.clone());
                 let Some(f) = self.node(&path).and_then(|n| n.handlers.on_hover_change.clone()).or(gone).or_else(exiting) else { return false };
                 f(app.states(), inside, &mut one);
                 true
@@ -461,9 +461,9 @@ impl RuntimeCore {
                 }
                 one.button = button;
                 one.drag_repeat = repeat;
-                d.data = if d.phase == Phase::Down { 0.0 } else { self.drag_data };
+                d.data = if d.phase == Phase::Down { 0.0 } else { self.pointer.drag_data };
                 f(app.states(), &mut d, &mut one);
-                self.drag_data = d.data;
+                self.pointer.drag_data = d.data;
                 if let Some(after) = one.drag_repeat_after.take() {
                     self.arm_press_repeat(&path, after);
                 }
@@ -497,10 +497,10 @@ impl RuntimeCore {
             Action::Paste(content, target) => {
                 if target.is_some_and(|target| target != self.paste_target()) { return false; }
                 let hook = self.focused_input().and_then(|i| i.paste.clone());
-                let own_pills = if cfg!(not(target_arch = "wasm32")) || self.clipboard.is_some() {
+                let own_pills = if cfg!(not(target_arch = "wasm32")) || self.edit.clipboard.is_some() {
                     content.has_own_pills()
                 } else {
-                    self.pill_copy.as_ref().is_some_and(|(t, pills)| {
+                    self.edit.pill_copy.as_ref().is_some_and(|(t, pills)| {
                         t.as_str() == content.text()
                             && content.html().is_some_and(|h| {
                                 let frag = crate::TextEdit::from_html(h);
@@ -529,8 +529,8 @@ impl RuntimeCore {
                 } else { false }
             }
             Action::ClipboardRead(id, content) => {
-                let Some(i) = self.clipboard_reads.iter().position(|(read, _)| *read == id) else { return false };
-                let (_, f) = self.clipboard_reads.remove(i);
+                let Some(i) = self.edit.clipboard_reads.iter().position(|(read, _)| *read == id) else { return false };
+                let (_, f) = self.edit.clipboard_reads.remove(i);
                 f(app.states(), &content, &mut one);
                 true
             }
@@ -538,8 +538,8 @@ impl RuntimeCore {
             Action::Focus(path, x, y) => self.focus_input(app, path, x, y, &mut one),
             Action::FieldMenu(path, at, local) => self.field_menu(app, path, at, local, &mut one),
             Action::Blur => {
-                if self.focus.path().is_none() { return false; }
-                self.set_focus(app, None, self.focus.keyboard());
+                if self.kbd.focus.path().is_none() { return false; }
+                self.set_focus(app, None, self.kbd.focus.keyboard());
                 true
             }
             Action::A11y(path, act) => self.run_a11y(app, path, act, &mut one),

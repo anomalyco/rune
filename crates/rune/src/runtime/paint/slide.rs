@@ -115,8 +115,8 @@ impl RuntimeCore {
     /// Any other slide, and every slide elsewhere, snaps as before.
     pub(in crate::runtime) fn slide_glides(&self, i: usize) -> bool {
         if !cfg!(target_os = "windows") || self.reduced_motion { return false; }
-        let n = &self.nodes[i];
-        if !slides(n.looping.as_deref()) || !self.loops.contains_key(&n.id) { return false; }
+        let n = &self.tree.nodes[i];
+        if !slides(n.looping.as_deref()) || !self.motion.loops.contains_key(&n.id) { return false; }
         self.slide_pair(i) || n.parent.is_some_and(|p| p + 1 == i && self.slide_pair(p))
     }
 
@@ -125,16 +125,16 @@ impl RuntimeCore {
     /// before paint: a pair `slide_fits` then refuses (in a layer, over input, out of sight) still
     /// glides, drawn by ordinary frames, so its picture doesn't change with whether a step ran.
     pub(in crate::runtime) fn slide_pair(&self, i: usize) -> bool {
-        let n = &self.nodes[i];
-        let (counter, end) = (i + 1, subtree_end(&self.nodes, i));
-        n.vis.clip.is_some() && counter < end && subtree_end(&self.nodes, counter) == end
-            && sideways(n.looping.as_deref()) && sideways(self.nodes[counter].looping.as_deref())
-            && self.loops.contains_key(&n.id) && self.loops.contains_key(&self.nodes[counter].id)
+        let n = &self.tree.nodes[i];
+        let (counter, end) = (i + 1, subtree_end(&self.tree.nodes, i));
+        n.vis.clip.is_some() && counter < end && subtree_end(&self.tree.nodes, counter) == end
+            && sideways(n.looping.as_deref()) && sideways(self.tree.nodes[counter].looping.as_deref())
+            && self.motion.loops.contains_key(&n.id) && self.motion.loops.contains_key(&self.tree.nodes[counter].id)
     }
 
     /// Paint reached node `i`: a window whose subtree it has passed is complete.
     pub(super) fn slide_node_opens(&mut self, i: usize) {
-        let c = &mut self.paint_keep.cycles;
+        let c = &mut self.paint.keep.cycles;
         c.opened = (i, self.instances.len());
         // A subtree paints in one run, in tree order or the layers' (`update_layer_paint_order`),
         // as long as nothing in it is lifted or raised out to paint later.
@@ -150,11 +150,11 @@ impl RuntimeCore {
     pub(in crate::runtime) fn slide_anchor(&mut self, i: usize, rect: [f32; 4], exact: [f32; 4], r: [f32; 4], k: f32) -> [f32; 4] {
         if !self.slide_glides(i) || !self.slide_pair(i) { return r; }
         let s = self.env.scale;
-        let n = &self.nodes[i];
+        let n = &self.tree.nodes[i];
         let ow = self.scene.get(n.id, prop::OFFSET).unwrap_or(rune_motion::Vec2::ZERO);
         let ow = [ow.x, ow.y];
         let here = Anchor { node: n.id, rect, offset: ow, k, s, size: [grid(n.local.w, s), grid(n.local.h, s)], y: [r[1], r[3]] };
-        let c = &mut self.paint_keep.cycles;
+        let c = &mut self.paint.keep.cycles;
         let kept = c.anchors.iter().copied().find(|a| a.node == here.node && (a.k, a.s, a.size, a.y) == (here.k, here.s, here.size, here.y)
             && { let p = pose_rect(a, ow); [0, 2].iter().all(|&e| (p[e] - exact[e]).abs() <= 1.0 / 64.0 + 1e-4) });
         let a = kept.unwrap_or(here);
@@ -171,13 +171,13 @@ impl RuntimeCore {
         let vp = [0.0, 0.0, self.viewport.0 * s, self.viewport.1 * s];
         let (counter, end, f) = match self.slide_fits(i, r, outer[0], vp) {
             Ok(fits) => fits,
-            Err(why) => { self.paint_keep.cycles.missed = Some(why); return; }
+            Err(why) => { self.paint.keep.cycles.missed = Some(why); return; }
         };
-        let n = &self.nodes[i];
-        let off = |j: usize| self.scene.get(self.nodes[j].id, prop::OFFSET).unwrap_or(rune_motion::Vec2::ZERO);
+        let n = &self.tree.nodes[i];
+        let off = |j: usize| self.scene.get(self.tree.nodes[j].id, prop::OFFSET).unwrap_or(rune_motion::Vec2::ZERO);
         let (ow, oc) = (off(i), off(counter));
         // Posed from its anchor (`slide_anchor`, this paint's), else from this paint's own rect.
-        let (rect, offset, y) = match self.paint_keep.cycles.anchor { Some((j, a)) if j == i => (a.rect, a.offset, a.y), _ => (rect, [ow.x, ow.y], [r[1], r[3]]) };
+        let (rect, offset, y) = match self.paint.keep.cycles.anchor { Some((j, a)) if j == i => (a.rect, a.offset, a.y), _ => (rect, [ow.x, ow.y], [r[1], r[3]]) };
         let slide = Slide {
             window: i,
             counter,
@@ -198,7 +198,7 @@ impl RuntimeCore {
             glyphs: Vec::new(),
             checked: None,
         };
-        let c = &mut self.paint_keep.cycles;
+        let c = &mut self.paint.keep.cycles;
         c.open = Some(c.slides.len());
         c.slides.push(slide);
     }
@@ -208,27 +208,27 @@ impl RuntimeCore {
     /// blurs, sticks or moves on its own, and it shows. Its child, one past its subtree, and its
     /// fade widths; or why not.
     fn slide_fits(&self, i: usize, r: [f32; 4], clip: [f32; 4], vp: [f32; 4]) -> Result<(usize, usize, [f32; 4]), &'static str> {
-        let c = &self.paint_keep.cycles;
-        if !self.flying.is_empty() { return Err("a slide while something flies"); }
+        let c = &self.paint.keep.cycles;
+        if !self.motion.flying.is_empty() { return Err("a slide while something flies"); }
         if c.open.is_some() { return Err("a slide inside a slide"); }
         if c.opened != (i, self.instances.len()) { return Err("a slide that draws itself"); }
-        let n = &self.nodes[i];
-        let (counter, end) = (i + 1, subtree_end(&self.nodes, i));
+        let n = &self.tree.nodes[i];
+        let (counter, end) = (i + 1, subtree_end(&self.tree.nodes, i));
         let Some(f) = n.vis.clip else { return Err("a slide that doesn't clip") };
-        if counter >= end || subtree_end(&self.nodes, counter) != end || !slides(self.nodes[counter].looping.as_deref())
-            || !self.loops.contains_key(&self.nodes[counter].id) { return Err("a slide whose child doesn't slide back"); }
-        if !sideways(n.looping.as_deref()) || !sideways(self.nodes[counter].looping.as_deref()) { return Err("a slide up or down"); }
-        if n.scroll.is_some() || self.row_h[i] >= 0.0 || self.row_mask[i] >= 0.0 { return Err("a slide that scrolls or folds"); }
-        let parent = n.parent.map_or_else(|| self.root_inh(), |p| self.inh_scratch[p]);
+        if counter >= end || subtree_end(&self.tree.nodes, counter) != end || !slides(self.tree.nodes[counter].looping.as_deref())
+            || !self.motion.loops.contains_key(&self.tree.nodes[counter].id) { return Err("a slide whose child doesn't slide back"); }
+        if !sideways(n.looping.as_deref()) || !sideways(self.tree.nodes[counter].looping.as_deref()) { return Err("a slide up or down"); }
+        if n.scroll.is_some() || self.paint.row_h[i] >= 0.0 || self.paint.row_mask[i] >= 0.0 { return Err("a slide that scrolls or folds"); }
+        let parent = n.parent.map_or_else(|| self.root_inh(), |p| self.paint.inh_scratch[p]);
         if parent.in_cache || parent.skip_paint || parent.turn != 0 || parent.rounded.is_some() || parent.blur != 0.0 { return Err("a slide in a layer"); }
         let plain = (i..end).all(|j| {
-            let m = &self.nodes[j];
+            let m = &self.tree.nodes[j];
             m.handlers.get().is_none() && m.focus.get().is_none() && !m.vis_flags.hit() && m.input.is_none() && m.sticky.is_none()
                 && m.vis.effect.is_none() && m.help.is_none() && m.above.is_none() && m.matched.is_none() && !m.vis_flags.raise()
         });
         if !plain { return Err("a slide over input"); }
         let still = (i..end).all(|j| {
-            let m = &self.nodes[j];
+            let m = &self.tree.nodes[j];
             self.scene.presented(m.id).is_some_and(|p| p.blur == 0.0 && p.mask.is_none() && p.transform.rotate == 0.0)
                 && (j == i || (m.vis.clip.is_none() && m.scroll.is_none() && (j == counter || m.looping.is_none())))
         });
@@ -239,11 +239,11 @@ impl RuntimeCore {
 
     /// The open window's subtree is painted: its instances, and what each node under it showed.
     pub(super) fn close_slide(&mut self) {
-        let Some(k) = self.paint_keep.cycles.open.take() else { return };
+        let Some(k) = self.paint.keep.cycles.open.take() else { return };
         let s = self.env.scale;
         let len = self.instances.len();
-        let (drawn, seen) = (&self.drawn, &self.seen);
-        let sl = &mut self.paint_keep.cycles.slides[k];
+        let (drawn, seen) = (&self.paint.drawn, &self.paint.seen);
+        let sl = &mut self.paint.keep.cycles.slides[k];
         sl.instances.end = len;
         sl.shown = (sl.window + 1..sl.end)
             .map(|j| (drawn.get(j).map_or([0.0; 4], |d| [d[0] * s, d[1] * s, (d[0] + d[2]) * s, (d[1] + d[3]) * s]), seen.get(j).copied().unwrap_or(false)))
@@ -268,16 +268,16 @@ impl RuntimeCore {
     /// why a step can't draw one of them.
     pub(super) fn slide_poses(&mut self, t: f64) -> Result<Vec<Pose>, &'static str> {
         let at = |rt: &Self, j: usize| -> Option<[f32; 2]> {
-            let n = &rt.nodes[j];
+            let n = &rt.tree.nodes[j];
             let store = rt.scene.store();
             let time = store.node_time(n.id) + (t - rt.t) * f64::from(store.node_time_scale(n.id));
-            let [x, y] = rt.loops.get(&n.id)?.offset(time, rt.reduced_motion)?;
+            let [x, y] = rt.motion.loops.get(&n.id)?.offset(time, rt.reduced_motion)?;
             Some([x * n.local.w, y * n.local.h])
         };
-        let mut poses = Vec::with_capacity(self.paint_keep.cycles.slides.len());
-        for k in 0..self.paint_keep.cycles.slides.len() {
+        let mut poses = Vec::with_capacity(self.paint.keep.cycles.slides.len());
+        for k in 0..self.paint.keep.cycles.slides.len() {
             if !self.slide_checked(k) { return Err("a slide drew otherwise"); }
-            let sl = &self.paint_keep.cycles.slides[k];
+            let sl = &self.paint.keep.cycles.slides[k];
             let (ow, oc) = at(self, sl.window).zip(at(self, sl.counter)).ok_or("a slide stopped")?;
             // The content holds still only while the two offsets cancel as they did.
             if (ow[0] + oc[0] - sl.net[0]).abs() > 1e-3 || (ow[1] + oc[1] - sl.net[1]).abs() > 1e-3 { return Err("a slide's content moves"); }
@@ -289,7 +289,7 @@ impl RuntimeCore {
     /// Window `k`'s instances are what its record says: the pose it was painted at, the glyphs
     /// it drew, no layer. Asked once a paint.
     fn slide_checked(&mut self, k: usize) -> bool {
-        let sl = &self.paint_keep.cycles.slides[k];
+        let sl = &self.paint.keep.cycles.slides[k];
         if let Some(ok) = sl.checked { return ok; }
         let range = sl.instances.clone();
         let ok = range.end <= self.instances.len() && Self::slide_pose(sl, sl.painted).is_some_and(|(clip, fade)| {
@@ -297,13 +297,13 @@ impl RuntimeCore {
             here.iter().all(|q| q.clip == clip && q.fade == fade && q.params[1] != crate::render::KIND_LAYER && q.params[1] != crate::render::KIND_LAYER_END)
                 && here.iter().filter(|q| q.params[1] == KIND_GLYPH).count() == sl.glyphs.iter().filter(|g| g.1).count()
         });
-        self.paint_keep.cycles.slides[k].checked = Some(ok);
+        self.paint.keep.cycles.slides[k].checked = Some(ok);
         ok
     }
 
     /// Draws each window's instances at its pose; returns the instances it wrote.
     pub(super) fn apply_slides(&mut self, poses: &[Pose], patched: &mut Vec<u32>) {
-        for (sl, &(clip, fade)) in self.paint_keep.cycles.slides.iter().zip(poses) {
+        for (sl, &(clip, fade)) in self.paint.keep.cycles.slides.iter().zip(poses) {
             for at in sl.instances.clone() {
                 let q = &mut self.instances[at];
                 q.clip = clip;

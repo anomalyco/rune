@@ -6,7 +6,7 @@
 use crate::time::Instant;
 
 use super::bin::{Bins, TILE_H, TILE_W};
-use crate::render::{Instance, KIND_BACKDROP_BLUR, KIND_EFFECT, KIND_IMAGE, KIND_LAYER, KIND_LAYER_END};
+use crate::render::{INSTANCE_WORDS, Instance, Kind, word};
 use super::pool::Pool;
 use super::{NeedsGpu, Report, Scene, Target, damage, raster, scroll};
 
@@ -188,7 +188,7 @@ impl CpuPainter {
         self.changed.clear();
         for (n, (new, old)) in scene.instances.iter().zip(&prev.instances).enumerate() {
             let same = bytemuck::bytes_of(new) == bytemuck::bytes_of(old)
-                && !(new.params[1] == KIND_IMAGE && image_written(scene, new) && damage::instance(scene, &prev.bins, n) != self.each[n]);
+                && !(new.kind() == Some(Kind::Image) && image_written(scene, new) && damage::instance(scene, &prev.bins, n) != self.each[n]);
             if same { continue; }
             if self.changed.len() == RECOLOURED_MAX || !recolour(new, old) { return None; }
             self.changed.push(n as u32);
@@ -236,13 +236,21 @@ impl CpuPainter {
 /// `params.w` (an opacity, a text gamma), which no bin, bound or layer plan reads outside layers,
 /// and opaque exactly where it was (the occluders and the tiles it covers whole stay). Layer scopes and blurs (whose opacity plans a layer) don't count.
 fn recolour(new: &Instance, old: &Instance) -> bool {
-    let (a, b): (&[u32; 32], &[u32; 32]) = (bytemuck::cast_ref(new), bytemuck::cast_ref(old));
-    let kind = new.params[1];
-    let structural = kind == KIND_LAYER || kind == KIND_LAYER_END || kind == KIND_BACKDROP_BLUR || kind == KIND_EFFECT;
+    let (a, b): (&[u32; INSTANCE_WORDS], &[u32; INSTANCE_WORDS]) = (bytemuck::cast_ref(new), bytemuck::cast_ref(old));
     // The border is a colour only for boxes and gradients (a glyph's names its outline).
-    let border = matches!(kind as u32, 0 | 4 | 10 | 11);
-    let shading_w = matches!(kind as u32, 0 | 2);
-    !structural && (0..32).all(|k| (8..12).contains(&k) || ((12..16).contains(&k) && border) || (k == 19 && shading_w) || a[k] == b[k]) && super::bin::opaque_box(new) == super::bin::opaque_box(old)
+    let (border, shading_w) = match new.kind() {
+        Some(Kind::Layer | Kind::LayerEnd | Kind::BackdropBlur | Kind::Effect) | None => return false,
+        Some(Kind::Rect) => (true, true),
+        Some(Kind::Glyph) => (false, true),
+        Some(Kind::Gradient | Kind::Dashed | Kind::Radial) => (true, false),
+        Some(Kind::Shadow | Kind::Inset | Kind::Segment | Kind::Triangle | Kind::Image) => (false, false),
+    };
+    (0..INSTANCE_WORDS).all(|k| {
+        word::FILL.contains(&k)
+            || (word::BORDER.contains(&k) && border)
+            || (k == word::PARAMS_W && shading_w)
+            || a[k] == b[k]
+    }) && super::bin::opaque_box(new) == super::bin::opaque_box(old)
 }
 
 /// Whether rows `new` samples were written into its image page since the renderer last took it.

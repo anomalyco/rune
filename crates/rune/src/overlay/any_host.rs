@@ -8,7 +8,7 @@ impl OverlayCore {
     /// (`slot`).
     fn waits_for_slot(&self) -> bool {
         #[cfg(target_os = "windows")]
-        return self.surface.live().is_some_and(|l| matches!(l.slot, Slot::Waiting(_)));
+        return self.surface.live().is_some_and(|l| l.slot.waiting());
         #[cfg(not(target_os = "windows"))]
         false
     }
@@ -54,8 +54,8 @@ impl OverlayCore {
         {
             let rt = app.rt_mut();
             rt.set_live_waker(wake.clone());
-            rt.open_urls_natively = true;
-            rt.record_events = false;
+            rt.host.open_urls_natively = true;
+            rt.frame.record_events = false;
         }
         self.clipboard.connect(wake.clone());
         self.popup.connect(wake.clone());
@@ -70,8 +70,8 @@ impl OverlayCore {
         };
         // A live-edit patch re-runs the view like new data does, shown or hidden.
         #[cfg(feature = "hot")]
-        if crate::hot::enabled() && app.rt().hot.is_none() {
-            app.rt_mut().hot = Some(crate::hot::Session::connect(rerun()));
+        if crate::hot::enabled() && app.rt().frame.hot.is_none() {
+            app.rt_mut().frame.hot = Some(crate::hot::Session::connect(rerun()));
         }
         app.run_setup(rerun());
         // Requests made before the loop existed.
@@ -82,6 +82,7 @@ impl OverlayCore {
 impl AnyHost for OverlayHost {
     fn new_events(&mut self, _event_loop: &ActiveEventLoop, cause: StartCause) {
         self.core.meter.turn(matches!(cause, StartCause::ResumeTimeReached { .. } | StartCause::Poll), crate::frame::surface_stats::slept(cause));
+        self.core.turn_frame.step(frame::TurnEvent::NewEvents);
         #[cfg(target_os = "macos")]
         { self.core.occlusion_read = false; }
         if matches!(cause, StartCause::ResumeTimeReached { .. } | StartCause::Poll) {
@@ -107,7 +108,7 @@ impl AnyHost for OverlayHost {
             // The frame that waited for room in the swap chain draws now, after what changed
             // meanwhile. It waited from a turn `frame::turn` said had a frame to draw, and that
             // turn left `dirty` and `idle` as they were, so the gate still does.
-            if let Some(live) = self.core.surface.live_mut() && matches!(live.slot, Slot::Waiting(_)) {
+            if let Some(live) = self.core.surface.live_mut() && live.slot.waiting() {
                 live.slot.came_back();
             }
         }
@@ -150,6 +151,16 @@ impl AnyHost for OverlayHost {
             #[cfg(target_os = "macos")]
             if core.panel.as_ref().is_some_and(|p| p.is_key() != *focused) { return; }
             app.window_focus(*focused);
+            if !*focused {
+                core.control_click = false;
+                if core.options.keys == KeyPolicy::OnDemand
+                    && let Some(window) = core.surface.live().and_then(|l| l.backing.window())
+                {
+                    crate::platform::ime::cancel(window);
+                    window.set_ime_allowed(false);
+                    core.ime_allowed = false;
+                }
+            }
             app.rt_mut().ignore_minimize("an overlay");
             match app.rt_mut().shell_request.take() {
                 Some(crate::el::Shell::Close) => core.hide(app),
@@ -173,7 +184,19 @@ impl AnyHost for OverlayHost {
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         if matches!(event, WindowEvent::Moved(_) | WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. })
             && let Some(x11) = &core.x11 { x11.update_geometry(); }
+        use crate::input::host_events;
+        if matches!(event, WindowEvent::CursorMoved { .. } | WindowEvent::CursorLeft { .. } | WindowEvent::MouseInput { .. })
+            && (app.rt().touching() || host_events::touch_promoted()) { return; }
+        let input_enabled = core.options.input.resolved(core.interactive) != OverlayInput::None;
         match event {
+            WindowEvent::Moved(_) => {
+                if let Some(live) = core.surface.live() && let Some(w) = live.backing.window() {
+                    let scale = crate::window::backing_scale(w);
+                    if (scale - live.scale).abs() > f32::EPSILON && let Some(gpu) = core.gpu.clone() {
+                        core.rescale(app, &gpu, scale);
+                    }
+                }
+            }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 if let Some(gpu) = core.gpu.clone() {
                     core.rescale(app, &gpu, scale_factor as f32);
@@ -185,55 +208,95 @@ impl AnyHost for OverlayHost {
                 core.scroll_bars_changed(app.rt_mut(), crate::platform::scroll_bars::current());
                 core.dirty = true;
             }
-            WindowEvent::CursorMoved { position, .. } if core.options.input.resolved(core.interactive) != OverlayInput::None => {
-                let scale = core.surface.live().map_or(1.0, |l| l.scale);
-                let (x, y) = (position.x as f32 / scale, position.y as f32 / scale);
+            WindowEvent::CursorMoved { position, .. } if input_enabled => {
+                let input_scale = app.rt().input_scale();
+                let (x, y) = (position.x as f32 / input_scale, position.y as f32 / input_scale);
                 #[cfg(target_os = "macos")]
                 if let Some(pointer) = core.native_pointer() { return core.native_moved(app, &pointer, x, y); }
                 core.cursor_moved(app, x, y);
             }
-            WindowEvent::CursorLeft { .. } if core.options.input.resolved(core.interactive) != OverlayInput::None => {
+            WindowEvent::CursorLeft { .. } if input_enabled => {
                 app.rt_mut().pointer_leave();
                 core.dirty = true;
             }
-            WindowEvent::ModifiersChanged(m) => {
-                core.mods = m.state();
-                core.dirty |= app.physical_observation(crate::PhysicalInput::Modifiers(crate::window::map_mods(core.mods)));
-            }
-            WindowEvent::Focused(_) => {
-                app.rt_mut().set_system_reduced_motion(crate::platform::preferences::reduced_motion());
-                core.scroll_bars_changed(app.rt_mut(), crate::platform::scroll_bars::reread());
+            WindowEvent::MouseWheel { delta, phase, .. } if input_enabled => {
+                let scale = core.surface.live().map_or(1.0, |l| l.scale);
+                host_events::wheel(app.rt_mut(), delta, host_events::gesture_phase(phase), scale, core.mods);
                 core.dirty = true;
             }
-            WindowEvent::KeyboardInput { event, .. } if core.options.keys == KeyPolicy::OnDemand => {
-                let pressed = event.state.is_pressed();
-                let fallback = (pressed || app.rt().wants_key_up()).then(|| crate::window::map_key_event(&event, core.mods)).flatten();
-                if let winit::keyboard::PhysicalKey::Code(key) = event.physical_key {
-                    core.dirty |= app.physical_then(crate::PhysicalInput::Key {
-                        key, mods: crate::window::map_mods(core.mods), pressed, repeat: event.repeat,
-                    }, fallback, crate::window::key_base(&event), None);
-                } else if let Some(key) = fallback {
-                    if !pressed { core.dirty |= app.key_up(key); }
-                    else if event.repeat { app.rt_mut().repeat_key(key); } else { app.rt_mut().key(key); }
-                    core.dirty |= pressed;
+            WindowEvent::PinchGesture { delta, phase, .. } if input_enabled => {
+                core.dirty |= host_events::magnify(app.rt_mut(), delta, host_events::gesture_phase(phase));
+            }
+            WindowEvent::RotationGesture { delta, phase, .. } if input_enabled => {
+                core.dirty |= host_events::rotate(app.rt_mut(), delta, host_events::gesture_phase(phase));
+            }
+            WindowEvent::DoubleTapGesture { .. } if input_enabled => {
+                core.dirty |= host_events::smart_magnify(app.rt_mut());
+            }
+            WindowEvent::Touch(touch) if input_enabled => {
+                app.touch(&touch);
+                core.dirty = true;
+            }
+            WindowEvent::ModifiersChanged(m) => {
+                core.dirty |= app.modifiers(&mut core.mods, m.state());
+            }
+            WindowEvent::Focused(_) => {
+                host_events::refresh_focus_preferences(app.rt_mut(), None);
+                core.dirty = true;
+            }
+            WindowEvent::KeyboardInput { event, is_synthetic: false, .. } if core.options.keys == KeyPolicy::OnDemand => {
+                core.dirty |= app.keyboard(&core.clipboard, &event, core.mods);
+            }
+            WindowEvent::Ime(ime) if core.options.keys == KeyPolicy::OnDemand => {
+                if let Some(window) = core.surface.live().and_then(|l| l.backing.window()) {
+                    host_events::ime(app.rt_mut(), window, ime);
+                    core.dirty = true;
                 }
             }
             WindowEvent::MouseInput { state, button: winit::event::MouseButton::Left, .. } => {
+                let pressed = state.is_pressed();
+                if pressed {
+                    core.control_click = cfg!(target_os = "macos") && core.mods.control_key();
+                }
+                if core.control_click {
+                    if input_enabled && let Some((x, y)) = app.rt().pointer() {
+                        if pressed { app.rt_mut().secondary_down(x, y); } else { app.secondary_up(x, y); }
+                        core.dirty = true;
+                    }
+                    if !pressed { core.control_click = false; }
+                    core.apply_input(app.rt());
+                    return;
+                }
                 #[cfg(target_os = "macos")]
                 {
                     match core.native_pointer() {
-                        Some(pointer) => core.native_left(app, &pointer, state.is_pressed()),
-                        None => core.left_edge(app, None, state.is_pressed(), None),
+                        Some(pointer) => core.native_left(app, &pointer, pressed),
+                        None => core.left_edge(app, None, pressed, None),
                     }
-                    if !state.is_pressed() && let Some(panel) = &core.panel { panel.pointer_released(); }
+                    if !pressed && let Some(panel) = &core.panel { panel.pointer_released(); }
                 }
                 #[cfg(not(target_os = "macos"))]
-                if core.options.input.resolved(core.interactive) != OverlayInput::None {
+                if input_enabled {
                     #[cfg(target_os = "windows")]
-                    let point = core.native.as_ref().and_then(|p| p.take_click(state.is_pressed()));
+                    let point = core.native.as_ref().and_then(|p| p.take_click(pressed));
                     #[cfg(not(target_os = "windows"))]
                     let point: Option<(f32, f32)> = None;
-                    core.left_button(app, state.is_pressed(), point);
+                    core.left_button(app, pressed, point);
+                }
+                core.apply_input(app.rt());
+            }
+            WindowEvent::MouseInput { state, button: winit::event::MouseButton::Right, .. } if input_enabled => {
+                if let Some((x, y)) = app.rt().pointer() {
+                    if state.is_pressed() { app.rt_mut().secondary_down(x, y); } else { app.secondary_up(x, y); }
+                    core.dirty = true;
+                }
+                core.apply_input(app.rt());
+            }
+            WindowEvent::MouseInput { state, button, .. } if input_enabled => {
+                if let Some((x, y)) = app.rt().pointer() {
+                    let button = crate::window::pointer_button(button);
+                    if state.is_pressed() { app.button_down(x, y, button); } else { app.button_up(x, y, button); }
+                    core.dirty = true;
                 }
                 core.apply_input(app.rt());
             }

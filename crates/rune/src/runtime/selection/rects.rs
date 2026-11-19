@@ -50,7 +50,7 @@ impl RuntimeCore {
     /// The selection's line boxes laid out in the last commit's nodes.
     pub(super) fn selection_boxes(&self) -> Vec<[f32; 4]> {
         let mut out = Vec::new();
-        for (i, a, b) in self.selection_ranges() { self.text_boxes(&self.nodes, i, a, b, &mut out); }
+        for (i, a, b) in self.selection_ranges() { self.text_boxes(&self.tree.nodes, i, a, b, &mut out); }
         out
     }
 
@@ -58,7 +58,7 @@ impl RuntimeCore {
     /// runs: reusing a `memo` moves its nodes out of the last commit's, leaving placeholders
     /// the selection can't be found in.
     pub(crate) fn selection_by_path(&self) -> Vec<SelectedRange> {
-        self.selection_ranges().into_iter().map(|(i, a, b)| (self.nodes[i].path.clone(), a, b)).collect()
+        self.selection_ranges().into_iter().map(|(i, a, b)| (self.tree.nodes[i].path.clone(), a, b)).collect()
     }
 
     /// The line boxes of `ranges` laid out in a measure's `nodes`, found there by path.
@@ -91,7 +91,7 @@ impl RuntimeCore {
     /// Once a frame: the selection moved since the view last read it (a drag, a click, code,
     /// scrolling). That isn't layout feedback, so the view re-runs as for a state change.
     pub(super) fn selection_read_moved(&self) -> bool {
-        let seen = &self.layout_seen.rects;
+        let seen = &self.commit.layout_seen.rects;
         seen.contains_key(SELECTION) && boxes_moved(&seen.selection, &self.selection_boxes())
     }
 }

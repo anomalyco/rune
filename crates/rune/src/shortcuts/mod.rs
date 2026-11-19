@@ -21,7 +21,7 @@ mod x11_repeat;
 mod wayland;
 
 pub use parse::Shortcut;
-pub(crate) use service::{Hub, Guard};
+pub(crate) use service::{Guard, Hub, HubCore};
 use std::sync::Arc;
 
 /// An opaque registration, unique within this process. It is not an accelerator hash.

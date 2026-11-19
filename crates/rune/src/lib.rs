@@ -25,7 +25,6 @@ mod window;
 pub mod clipboard;
 pub mod compose;
 pub mod drag_out;
-pub mod edit;
 pub mod el;
 pub mod file_dialog;
 #[cfg(feature = "hot")]
@@ -279,6 +278,7 @@ pub use rune_core::theme;
 pub use rune_core::time;
 pub use rune_core::tok;
 pub use rune_core::tracked;
+pub use rune_edit as edit;
 pub use rune_image as image;
 pub use rune_media::native_surface;
 pub use rune_motion::Anim;

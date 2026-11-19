@@ -1,0 +1,1 @@
+- `ElementInfo::target` for an inline link or a text highlight inside `El::scale` is in layout coordinates, like every other element's; it was reported scaled. `rect` still follows the drawn scale.

@@ -51,6 +51,8 @@ pub(super) struct Compiled {
     pub(super) sized: Vec<naga::ResourceBinding>,
     /// Threads per workgroup, for a compute entry point.
     pub(super) workgroup: [u32; 3],
+    /// Byte size of each `var<workgroup>` global used by a compute entry point, in Naga's MSL parameter order.
+    pub(super) workgroup_memory: Vec<u32>,
 }
 
 /// One stage of a pipeline, as `compile` needs it.
@@ -74,6 +76,7 @@ pub(super) struct Msl {
     pub(super) function: String,
     pub(super) sized: Vec<naga::ResourceBinding>,
     pub(super) workgroup: [u32; 3],
+    pub(super) workgroup_memory: Vec<u32>,
 }
 
 #[link(name = "System")]
@@ -113,6 +116,9 @@ impl Ir {
         let (module, info) = self.parsed();
         (module, info)
     }
+
+    #[cfg(test)]
+    pub(super) fn was_parsed(&self) -> bool { self.parsed.get().is_some() }
 }
 
 /// BLAKE3 of `source` with each `\r\n` read as `\n`: a built-in shader's WGSL from a checkout
@@ -180,7 +186,7 @@ pub(super) fn compile(shared: &Shared, stage: &Stage<'_>, resources: &msl::Entry
             let library = shared.device.newLibraryWithSource_options_error(&NSString::from_str(&msl.source), Some(&compile))
                 .map_err(|e| format!("{}: Metal: {}", msl.function, e.localizedDescription()))?;
             let function = function(&library, &msl.function)?;
-            Ok(Compiled { function, sized: msl.sized, workgroup: msl.workgroup })
+            Ok(Compiled { function, sized: msl.sized, workgroup: msl.workgroup, workgroup_memory: msl.workgroup_memory })
         }
         ShaderModule::Library { library, entries } => {
             let library = library.as_ref().map_err(|e| format!("metallib: {e}"))?;
@@ -194,7 +200,7 @@ pub(super) fn compile(shared: &Shared, stage: &Stage<'_>, resources: &msl::Entry
                     _ => return Err(format!("no single {:?} entry point", stage.kind)),
                 },
             };
-            Ok(Compiled { function: function(library, name)?, sized: Vec::new(), workgroup: *workgroup })
+            Ok(Compiled { function: function(library, name)?, sized: Vec::new(), workgroup: *workgroup, workgroup_memory: Vec::new() })
         }
     }
 }
@@ -266,6 +272,20 @@ pub(super) fn translate(ir: &Ir, point: &Point<'_>, resources: &msl::EntryPointR
         .filter(|(_, g)| module.types[g.ty].inner.needs_host_buffer_byte_size(&module.types))
         .filter_map(|(_, g)| g.binding)
         .collect();
-    let workgroup = module.entry_points.iter().find(|e| e.stage == point.kind && e.name == name).map_or([1; 3], |e| e.workgroup_size);
-    Ok(Msl { source, function, sized, workgroup })
+    let ep_index = module.entry_points.iter().position(|e| e.stage == point.kind && e.name == name);
+    let workgroup = ep_index.map_or([1; 3], |i| module.entry_points[i].workgroup_size);
+    // Naga emits each used `var<workgroup>` global as a `threadgroup` kernel parameter in
+    // `module.global_variables` order (`naga` MSL writer), matching `wgpu-hal`'s `wg_memory_sizes`.
+    let workgroup_memory = if point.kind == naga::ShaderStage::Compute
+        && let Some(ep_index) = ep_index
+    {
+        let ep_info = info.get_entry_point(ep_index);
+        module.global_variables.iter()
+            .filter(|&(handle, var)| var.space == naga::AddressSpace::WorkGroup && !ep_info[handle].is_empty())
+            .map(|(_, var)| module.types[var.ty].inner.size(module.to_ctx()))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    Ok(Msl { source, function, sized, workgroup, workgroup_memory })
 }

@@ -3,25 +3,103 @@
 //! is re-measured in the same commit when an edit moves it.
 use super::*;
 
+/// Text selection, links, field click/scroll, caret, IME, spellcheck and clipboard state owned by
+/// [`RuntimeCore`].
+pub(crate) struct TextInputState {
+    /// The selection in `El::selectable` text.
+    pub(in crate::runtime) selectable: selectable::phase::TextSel,
+    /// `Tx::text_selection`'s snapshot, kept while neither a commit nor the selection changed.
+    pub(in crate::runtime) sel_snapshot: std::cell::RefCell<Option<selectable::Snapshot>>,
+    /// What each `El::on_selection_change` element (by path) last heard.
+    pub(in crate::runtime) sel_heard: selectable::Heard,
+    pub(in crate::runtime) links: links::LinkState,
+    /// Multi-click and drag selection state for `text_input`.
+    pub(in crate::runtime) input_click: input_click::InputClick,
+    /// Sideways scroll of focused single-line fields, in points, keyed by node path.
+    pub(in crate::runtime) input_scroll: HashMap<String, f32>,
+    /// The focused field's caret (path, window rect) the next view sees through `Cx::caret`.
+    pub(in crate::runtime) caret: Option<(String, [f32; 4])>,
+    /// The last view read the caret, so it re-runs when the caret moves.
+    pub(in crate::runtime) caret_watch: bool,
+    /// An edit ran this frame: keep the caret in its scroll viewport after the commit.
+    pub(in crate::runtime) caret_follow: bool,
+    /// The composition `App::on_ime` currently has open.
+    pub(crate) app_ime_comp: app_ime::AppComposition,
+    /// The `El::ime_cursor` that has the input method asks for Option as Alt (`El::ime_option_as_alt`).
+    pub(crate) ime_option_as_alt: bool,
+    /// The shell cancels native composition before enabling the new text focus.
+    pub(crate) ime_reset: bool,
+    /// The focused spellchecked field's word at the caret (`spell::pause`).
+    pub(in crate::runtime) spell_watch: Option<crate::spell::pause::Watch>,
+    /// Linux's primary selection (`runtime/input/primary_selection.rs`).
+    #[cfg(target_os = "linux")]
+    pub(crate) primary: primary_selection::PrimarySelection,
+    // Outer None: no read; inner None: app-level paste rather than a focused editor.
+    pub(crate) paste_request: Option<Option<String>>,
+    /// `Tx::read_clipboard` reads for the shell to start, by id.
+    pub(crate) read_requests: Vec<u64>,
+    /// Their callbacks, until the clipboard answers.
+    pub(in crate::runtime) clipboard_reads: Vec<(u64, crate::el::ReadFn)>,
+    /// The plain text and pill ranges of this runtime's last copy that held pills, for web
+    /// clipboard pastes where the OS worker does not own the pasteboard.
+    pub(in crate::runtime) pill_copy: Option<(zeroize::Zeroizing<String>, Vec<(std::ops::Range<usize>, String)>)>,
+    pub(in crate::runtime) next_clipboard_read: u64,
+    pub(crate) clear_secret_request: bool,
+    /// `Runtime::use_clipboard`: a test clipboard that replaces the OS one.
+    pub(crate) clipboard: Option<crate::clipboard::MemoryClipboard>,
+}
+
+impl TextInputState {
+    // Single-caller constructor for `RuntimeCore::new`; inlined so it stays in its caller's
+    // codegen unit instead of shifting partitioning and dropping inlining in the paint walk.
+    #[inline]
+    pub(in crate::runtime) fn new() -> Self {
+        Self {
+            selectable: Default::default(),
+            sel_snapshot: Default::default(),
+            sel_heard: Default::default(),
+            links: Default::default(),
+            input_click: Default::default(),
+            input_scroll: HashMap::default(),
+            caret: None,
+            caret_watch: false,
+            caret_follow: false,
+            app_ime_comp: Default::default(),
+            ime_option_as_alt: false,
+            ime_reset: false,
+            spell_watch: None,
+            #[cfg(target_os = "linux")]
+            primary: Default::default(),
+            paste_request: None,
+            read_requests: Vec::new(),
+            clipboard_reads: Vec::new(),
+            pill_copy: None,
+            next_clipboard_read: 0,
+            clear_secret_request: false,
+            clipboard: None,
+        }
+    }
+}
+
 impl RuntimeCore {
     /// Any vertical shift from ancestor growth rows whose presented height has not settled to layout.
-    pub(super) fn stack_row_dy(&self, nodes: &[Node], i: usize) -> f32 {
+    pub(in crate::runtime) fn stack_row_dy(&self, nodes: &[Node], i: usize) -> f32 {
         let mut dy = 0.0;
-        let applied = std::ptr::eq(nodes, self.nodes.as_slice());
+        let applied = std::ptr::eq(nodes, self.tree.nodes.as_slice());
         for r in std::iter::successors(Some(i), |&p| nodes[p].parent.filter(|_| nodes[p].above.is_none())) {
             let Some(c) = nodes[r].parent.filter(|&c| nodes[c].growth.is_some()) else { continue };
-            let Some(stack) = self.stacks.get(&nodes[c].id) else { continue };
+            let Some(stack) = self.motion.stacks.get(&nodes[c].id) else { continue };
             if applied && let Some(&top) = stack.tops.get(&nodes[r].id) {
                 let mut count = 0usize;
                 let before_r: f32 = stack.order.iter()
                     .take_while(|&&id| id != nodes[r].id)
-                    .filter_map(|id| self.grows.get(id))
+                    .filter_map(|id| self.motion.grows.get(id))
                     .map(|g| { count += 1; g.h })
                     .sum::<f32>() + stack.gap * count as f32;
                 dy += stack.pad_top + before_r - top;
             } else if stack.moving {
                 for j in (c + 1..r).filter(|&j| nodes[j].parent == Some(c)) {
-                    if let Some(g) = self.grows.get(&nodes[j].id) {
+                    if let Some(g) = self.motion.grows.get(&nodes[j].id) {
                         dy += g.h - nodes[j].local.h;
                     }
                 }
@@ -32,19 +110,19 @@ impl RuntimeCore {
 
     /// Node `i`'s caret line `[x, y, w, h]` in window points at its laid-out place, after
     /// scrolling and sticky shifts, if it is a focused text field.
-    pub(super) fn caret_rect(&self, nodes: &[Node], i: usize) -> Option<[f32; 4]> {
+    pub(in crate::runtime) fn caret_rect(&self, nodes: &[Node], i: usize) -> Option<[f32; 4]> {
         let n = &nodes[i];
         let (inp, spec, laid) = (n.input.as_ref()?, n.text.as_ref()?, n.text_layout.as_ref()?);
         if !inp.edit.focused { return None; }
         let layout = laid.view();
         let s = self.env.scale;
-        let t = sticky::anchored_target(nodes, &self.scrolls, i, self.viewport);
+        let t = sticky::anchored_target(nodes, &self.scroll.scrolls, i, self.viewport);
         let y = t[1] + self.stack_row_dy(nodes, i);
         let tw = text_width(layout.full_width()) / s;
         let (x0, x1) = (t[0] + n.inset[0], t[2] - n.inset[2]);
         let mut x = text_x(spec, x0, x1, tw, layout.flow());
         if inp.single_line && let Some(l) = laid.single() {
-            let prev = self.input_scroll.get(&n.path).copied().unwrap_or(0.0);
+            let prev = self.edit.input_scroll.get(&n.path).copied().unwrap_or(0.0);
             x -= single_line_offset(prev, inp, &spec.content, l, s, (x1 - x0) * s) / s;
         }
         let bb = layout.caret(caret_index(&inp.edit, &spec.content), inp.edit.affinity, 1.5 * s);
@@ -55,23 +133,23 @@ impl RuntimeCore {
     /// After an edit, scrolls the focused field's nearest scroll viewport on each axis just far
     /// enough to show the caret line, as a browser does for a textarea, leaving the viewport's
     /// `El::scroll_margin` like CSS `scroll-padding`.
-    pub(super) fn follow_caret(&mut self, app: &mut dyn AppDriver) {
+    pub(in crate::runtime) fn follow_caret(&mut self, app: &mut dyn AppDriver) {
         let Some(i) = self.focused_index() else { return };
-        let Some(r) = self.caret_rect(&self.nodes, i) else { return };
+        let Some(r) = self.caret_rect(&self.tree.nodes, i) else { return };
         let mut scrolled = false;
         for horizontal in [false, true] {
-            let Some(v) = std::iter::successors(Some(i), |&p| self.nodes[p].parent.filter(|_| self.nodes[p].above.is_none()))
+            let Some(v) = std::iter::successors(Some(i), |&p| self.tree.nodes[p].parent.filter(|_| self.tree.nodes[p].above.is_none()))
                 .skip(1)
-                .find(|&p| self.nodes[p].scroll.is_some() && self.nodes[p].scroll_axes.has(horizontal)) else { continue };
+                .find(|&p| self.tree.nodes[p].scroll.is_some() && self.tree.nodes[p].scroll_axes.has(horizontal)) else { continue };
             let a = usize::from(!horizontal);
-            let start = scroll_offsets(&self.scrolls, &self.nodes, v).fold(self.nodes[v].target[a], |p, o| p - o[a]);
-            let view = f64::from(self.nodes[v].target[a + 2] - self.nodes[v].target[a]);
+            let start = scroll_offsets(&self.scroll.scrolls, &self.tree.nodes, v).fold(self.tree.nodes[v].target[a], |p, o| p - o[a]);
+            let view = f64::from(self.tree.nodes[v].target[a + 2] - self.tree.nodes[v].target[a]);
             let (at, len) = (f64::from(r[a] - start), f64::from(r[a + 2]));
-            let margin = f64::from(self.nodes[v].scroll_edges.margin);
+            let margin = f64::from(self.tree.nodes[v].scroll_edges.margin);
             let delta = scroll_edge::reveal(0.0, at, len, view, margin);
             if delta == 0.0 { continue; }
-            let stick = self.nodes[v].scroll.is_some_and(|s| s.stick_bottom);
-            let Some(st) = self.scrolls.get_mut(&self.nodes[v].id) else { continue };
+            let stick = self.tree.nodes[v].scroll.is_some_and(|s| s.stick_bottom);
+            let Some(st) = self.scroll.scrolls.get_mut(&self.tree.nodes[v].id) else { continue };
             if horizontal {
                 st.x.offset = (st.x.offset + st.x.toward(-delta)).clamp(0.0, st.x.max);
                 st.x.motion = XMotion::Rest;
@@ -90,17 +168,17 @@ impl RuntimeCore {
 
     /// Refreshes the caret the next view sees from `nodes` (the current frame's when `None`).
     /// Returns whether it moved.
-    pub(super) fn caret_moved(&mut self, nodes: Option<&[Node]>) -> bool {
-        let nodes = nodes.unwrap_or(&self.nodes);
+    pub(in crate::runtime) fn caret_moved(&mut self, nodes: Option<&[Node]>) -> bool {
+        let nodes = nodes.unwrap_or(&self.tree.nodes);
         let next = nodes.iter().position(|n| n.input.as_ref().is_some_and(|inp| inp.edit.focused))
             .and_then(|i| Some((i, self.caret_rect(nodes, i)?)));
-        let same = match (&self.caret, next) {
+        let same = match (&self.edit.caret, next) {
             (Some((path, rect)), Some((i, r))) => *path == nodes[i].path && *rect == r,
             (None, None) => true,
             _ => false,
         };
         if same { return false; }
-        self.caret = next.map(|(i, r)| (nodes[i].path.clone(), r));
+        self.edit.caret = next.map(|(i, r)| (nodes[i].path.clone(), r));
         true
     }
 }
@@ -197,7 +275,7 @@ mod tests {
             let a = elements.iter().find(|e| e.key.as_deref() == Some("r0")).unwrap();
             let b = elements.iter().find(|e| e.key.as_deref() == Some("r1")).unwrap();
             assert_eq!(b.rect[1] - a.rect[1] - a.rect[3], 7.0, "virtualized={virtualized}");
-            assert!((rt.scrolls.values().next().unwrap().max - 2573.0).abs() < 0.01);
+            assert!((rt.scroll.scrolls.values().next().unwrap().max - 2573.0).abs() < 0.01);
             rt.update(|_, tx| tx.scroll_into_view("r99"));
             rt.frame(0.0);
             let end = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("r99")).unwrap();
@@ -218,13 +296,13 @@ mod tests {
         assert!(!rt.state[190].focused);
         rt.update(|s, _| s[180].focused = false);
         rt.frame(0.0);
-        assert!(rt.focus.path().is_none(), "explicitly blurred offscreen input stays blurred");
+        assert!(rt.kbd.focus.path().is_none(), "explicitly blurred offscreen input stays blurred");
         rt.update(|s, _| s[190].focused = true);
         rt.frame(0.0);
         assert!(rt.state[190].focused);
         rt.update(|s, _| { s.truncate(100); });
         rt.frame(0.0);
-        assert!(rt.focus.path().is_none(), "deleted offscreen input loses focus");
+        assert!(rt.kbd.focus.path().is_none(), "deleted offscreen input loses focus");
         rt.update(|s, tx| { s.extend(make_blocks(140, None)); tx.scroll_into_view("b190"); });
         rt.frame(0.0);
         assert!(!rt.state[190].focused, "reusing a deleted path must not restore focus");

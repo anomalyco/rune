@@ -8,8 +8,8 @@ use std::{sync::{Arc, Mutex, OnceLock, Weak, atomic::{AtomicU8, Ordering}, mpsc}
 use winit::window::Window;
 use zbus::{Connection, OwnedVariant, Proxy, Variant};
 
-const DEST: &str = "org.freedesktop.portal.Desktop";
-const PATH: &str = "/org/freedesktop/portal/desktop";
+use super::portal::{self, DEST, PATH};
+
 const INTERFACE: &str = "org.freedesktop.portal.Settings";
 const NAMESPACE: &str = "org.freedesktop.appearance";
 const KEY: &str = "color-scheme";
@@ -79,11 +79,17 @@ async fn watch(ready: mpsc::SyncSender<()>) {
         let portal = Proxy::new(&conn, DEST, PATH, INTERFACE).await.ok()?;
         // Subscribe first, so a change between the read and the subscription isn't lost.
         let changes = portal.receive_signal("SettingChanged").await.ok()?;
-        let value = match portal.call::<_, _, OwnedVariant>("ReadOne", &(NAMESPACE, KEY)).await {
-            Ok(v) => Some(v),
-            Err(_) => portal.call::<_, _, OwnedVariant>("Read", &(NAMESPACE, KEY)).await.ok(),
+        let (read_ok, unavailable) = match portal.call::<_, _, OwnedVariant>("ReadOne", &(NAMESPACE, KEY)).await {
+            Ok(v) => { store(&v); (true, false) }
+            Err(first) => match portal.call::<_, _, OwnedVariant>("Read", &(NAMESPACE, KEY)).await {
+                Ok(v) => { store(&v); (true, false) }
+                Err(second) => (false, portal::is_unavailable(&first) && portal::is_unavailable(&second)),
+            },
         };
-        if let Some(v) = value { store(&v); }
+        if !portal::should_watch_settings(read_ok, unavailable) {
+            let _ = conn.close().await;
+            return None;
+        }
         Some((conn, changes))
     }).await.ok().flatten();
     let _ = ready.send(());

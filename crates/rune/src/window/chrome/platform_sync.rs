@@ -1,5 +1,4 @@
-use winit::dpi::{LogicalPosition, LogicalSize};
-
+use crate::input::host_events;
 use crate::runtime::RuntimeCore;
 use crate::window::surface::Win;
 
@@ -9,26 +8,6 @@ pub(in crate::window) fn sync_platform_core(l: &mut Win, rt: &mut RuntimeCore, s
     ime: &mut bool, clipboard: &crate::clipboard::Client) {
     let focused = l.window.has_focus();
     secure_input.set(rt.has_secure_focus() && focused);
-    let ime_allowed = rt.ime_area.is_some() && !rt.has_secure_focus() && focused;
-    let reset = std::mem::take(&mut rt.ime_reset);
-    // Rune ended a composition itself (a blur, a click, a finished field): the input method
-    // drops its copy, so it doesn't come back in the next field.
-    if reset { crate::platform::ime::cancel(&l.window); }
-    if reset || ime_allowed != *ime {
-        l.window.set_ime_allowed(false);
-        l.window.set_ime_allowed(ime_allowed);
-        *ime = ime_allowed;
-    }
-    // A terminal's caret asks for Option as Alt (`El::ime_option_as_alt`): AppKit then hands the key
-    // under Option over as itself, not the character the layout composes with it.
-    #[cfg(target_os = "macos")]
-    {
-        use winit::platform::macos::{OptionAsAlt, WindowExtMacOS};
-        let want = if ime_allowed && rt.ime_option_as_alt { OptionAsAlt::Both } else { OptionAsAlt::None };
-        if l.window.option_as_alt() != want {
-            l.window.set_option_as_alt(want);
-        }
-    }
     l.apply_cursor_core(rt, focused);
     #[cfg(target_os = "macos")]
     if rt.zoom() == 1.0 {
@@ -42,14 +21,7 @@ pub(in crate::window) fn sync_platform_core(l: &mut Win, rt: &mut RuntimeCore, s
     #[cfg(target_os = "windows")]
     if focused { crate::platform::win32::dark_mode::menus(rt.backdrop_dark().unwrap_or(rt.env.system_dark)); }
     clipboard.flush_core(rt);
-    // The focused field's text, for the input method to convert again or read around the caret.
-    crate::platform::ime::sync(&l.window, if ime_allowed { rt.ime_text() } else { None });
-    if let Some(a) = rt.ime_area.map(|a| rt.to_window(a)) {
-        l.window.set_ime_cursor_area(
-            LogicalPosition::new(a[0] as f64, a[1] as f64),
-            LogicalSize::new(a[2] as f64, a[3] as f64),
-        );
-    }
+    host_events::sync_ime(&l.window, rt, ime, focused);
 }
 
 impl Win {

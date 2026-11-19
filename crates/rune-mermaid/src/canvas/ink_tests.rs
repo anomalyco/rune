@@ -131,3 +131,24 @@ fn hover_traces_light_in_opaque_ink_too() {
     assert!(strokes.clone().count() >= 3);
     assert!(strokes.into_iter().all(|a| a == 1.0));
 }
+
+#[test]
+fn srgb_enc_dec_match_clamped_reference_bit_for_bit() {
+    let ref_enc = |c: f32| {
+        let c = c.clamp(0.0, 1.0);
+        if c <= 0.003_130_8 { c * 12.92 } else { 1.055 * c.powf(1.0 / 2.4) - 0.055 }
+    };
+    let ref_dec = |c: f32| {
+        let c = c.clamp(0.0, 1.0);
+        if c <= 0.040_45 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+    };
+    for v in 0..=255u8 {
+        let x = v as f32 / 255.0;
+        assert_eq!(super::enc(x).to_bits(), ref_enc(x).to_bits(), "enc byte {v}");
+        assert_eq!(super::dec(x).to_bits(), ref_dec(x).to_bits(), "dec byte {v}");
+    }
+    for x in [-1.0, -0.01, -0.0, 0.0, 0.003_130_8, 0.040_45, 0.5, 1.0, 1.5] {
+        assert_eq!(super::enc(x).to_bits(), ref_enc(x).to_bits(), "enc {x}");
+        assert_eq!(super::dec(x).to_bits(), ref_dec(x).to_bits(), "dec {x}");
+    }
+}

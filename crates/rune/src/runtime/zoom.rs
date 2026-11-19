@@ -43,17 +43,17 @@ pub(crate) fn clamp(k: f32) -> f32 {
 impl RuntimeCore {
     /// The view's UI zoom ([`Cx::zoom`]), 1 unzoomed.
     pub fn zoom(&self) -> f32 {
-        self.zoom.k
+        self.host.zoom.k
     }
 
     /// The window's viewport in its own points, as the host last set it.
     pub fn window_viewport(&self) -> (f32, f32) {
-        self.zoom.window
+        self.host.zoom.window
     }
 
     /// The window's scale (device pixels per window point), as the host last set it.
     pub fn window_scale(&self) -> f32 {
-        self.zoom.window_scale
+        self.host.zoom.window_scale
     }
 
     /// Device pixels per view point: what a host divides a pointer's or touch's pixels by to
@@ -65,19 +65,19 @@ impl RuntimeCore {
     /// A rect in view points as window points, for what the host places by the window: the IME
     /// area, a menu, a drag image.
     pub fn to_window(&self, r: [f32; 4]) -> [f32; 4] {
-        r.map(|v| v * self.zoom.k)
+        r.map(|v| v * self.host.zoom.k)
     }
 
     /// The zoom the last view asked for: the viewport and scale follow it. False when it was
     /// already the zoom.
     pub(super) fn apply_zoom(&mut self, k: f32) -> bool {
         let k = clamp(k);
-        if k == self.zoom.k { return false; }
-        self.zoom.k = k;
-        let (viewport, scale) = self.zoom.view();
+        if k == self.host.zoom.k { return false; }
+        self.host.zoom.k = k;
+        let (viewport, scale) = self.host.zoom.view();
         self.change_viewport(viewport, scale);
         // The window's controls and the caption buttons it draws are in window points.
-        self.dirty = true;
+        self.commit.dirty = true;
         true
     }
 }

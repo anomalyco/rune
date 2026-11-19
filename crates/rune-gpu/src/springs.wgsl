@@ -58,15 +58,28 @@ fn vs_springs(input: In, @builtin(instance_index) instance: u32) -> Out {
     let offset = vec2<f32>(spring_sample(node.x, time).x, spring_sample(node.y, time).x);
     let alpha = clamp(spring_sample(node.opacity, time).x, 0.0, 1.0);
     var i = input;
+    let kind = i.params.y;
     // This spike translates geometry under a fixed screen-space clip. No text reflow or scaling.
     i.rect = vec4<f32>(i.rect.xy + offset, i.rect.zw);
     i.fill *= alpha;
-    i.border *= alpha;
-    if (i.params.y > 3.5 && i.params.y < 4.5) { i.uv *= alpha; }
+    // Match CPU opacity folding (`render/instance.rs` `end_layer`):
+    // - Rect (0) and Gradient (4) carry opacity in `params.w` for `border_over`.
+    // - Gradient (4) carries its bottom colour in `uv`.
+    // - Glyph (2) and Layer (8) store non-colour data in `border`.
+    if (kind < 0.5) {
+        i.border *= alpha;
+        i.params.w *= alpha;
+    } else if (kind > 3.5 && kind < 4.5) {
+        i.border *= alpha;
+        i.uv *= alpha;
+        i.params.w *= alpha;
+    } else if (!(kind > 1.5 && kind < 2.5) && !(kind > 7.5 && kind < 8.5)) {
+        i.border *= alpha;
+    }
     // Vector endpoints are screen-space geometry, unlike image/glyph atlas UVs.
-    if (i.params.y > 4.5 && i.params.y < 6.5) {
+    if (kind > 4.5 && kind < 6.5) {
         i.radii += vec4<f32>(offset, offset);
-        if (i.params.y > 5.5) { i.uv = vec4<f32>(i.uv.xy + offset, i.uv.zw); }
+        if (kind > 5.5) { i.uv = vec4<f32>(i.uv.xy + offset, i.uv.zw); }
     }
     return base_vs(i);
 }

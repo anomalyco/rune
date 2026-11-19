@@ -12,7 +12,7 @@ wgpu = { workspace = true, features = ["std", "parking_lot", "wgsl"] }
 bytemuck = { workspace = true }
 
 [target.'cfg(target_vendor = "apple")'.dependencies]
-wgpu = { workspace = true, features = ["metal"] }
+wgpu = { workspace = true, features = ["metal", "custom"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 wgpu = { workspace = true, features = ["dx12"] }
@@ -24,9 +24,7 @@ wgpu = { workspace = true, features = ["vulkan"] }
 wgpu = { workspace = true, features = ["webgpu"] }
 
 [dev-dependencies]
-# The examples' headless runs (`--snap`, `--trace`, ...) in release builds.
-rune = { workspace = true, features = ["keys-overlay"] }
-rune-ref = { workspace = true }
+rune = { workspace = true, default-features = true }
 ab_glyph = "0.2.32"
 png = { workspace = true }
 

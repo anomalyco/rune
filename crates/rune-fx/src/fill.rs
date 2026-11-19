@@ -473,6 +473,28 @@ mod tests {
     }
 
     #[test]
+    fn oklab_matches_canonical_for_non_negative_rgb_and_clamps_negative_lms() {
+        assert_eq!(0.412_221_46f32.to_bits(), 0.412_221_47f32.to_bits());
+        for v in 0..=255u8 {
+            let c = rune_motion::srgb_decode(v as f32 / 255.0);
+            for rgb in [[c, c, c], [c, 0.0, 0.0], [0.0, c, 0.0], [0.0, 0.0, c], [c, 1.0 - c, 0.5 * c]] {
+                let got = oklab(Rgb(rgb));
+                let canon = rune_motion::linear_to_oklab(rgb[0], rgb[1], rgb[2]);
+                assert_eq!(got.map(f32::to_bits), canon.map(f32::to_bits), "{rgb:?}");
+            }
+        }
+        for rgb in [[0.0, 0.0, 0.0], [2.5, 1.2, 0.4], [0.001, 0.999, 0.123]] {
+            let got = oklab(Rgb(rgb));
+            let canon = rune_motion::linear_to_oklab(rgb[0], rgb[1], rgb[2]);
+            assert_eq!(got.map(f32::to_bits), canon.map(f32::to_bits), "{rgb:?}");
+        }
+        // Negative inputs can make LMS negative before `cbrt`, where `pack::oklab` clamps LMS to 0.
+        let neg = [-0.5f32, 0.2, 0.1];
+        assert_ne!(oklab(Rgb(neg)), rune_motion::linear_to_oklab(neg[0], neg[1], neg[2]));
+        assert_ne!(oklab(Rgb(neg)), rune_motion::linear_to_oklab(neg[0].max(0.0), neg[1].max(0.0), neg[2].max(0.0)));
+    }
+
+    #[test]
     fn stops_keep_order_and_cap() {
         let s = Stops::hex(&[0xff0000, 0x00ff00, 0x0000ff]);
         assert_eq!(s.len(), 3);

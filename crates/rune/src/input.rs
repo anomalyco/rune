@@ -5,6 +5,7 @@ pub(crate) mod cursor;
 pub(crate) mod drop_pointer;
 #[cfg(target_os = "macos")]
 pub(crate) mod fn_key;
+pub(crate) mod host_events;
 pub(crate) mod key_diagnostics;
 pub(crate) mod key_table;
 pub(crate) mod keycaps;

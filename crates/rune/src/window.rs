@@ -51,7 +51,7 @@ pub(crate) use state::frame;
 pub(crate) use state::{Life, Minimize, MinimizeEvent, Sight};
 pub(crate) use surface::{
     Backoff, BackoffEffect, BackoffEvent, HiddenPace, Missed, Presented, TIMER_FRAME,
-    acquire_checked, configure, reblend_core, rebuild_renderer, rebuild_renderer_core,
+    acquire_checked, configure, reblend_core, rebuild_renderer_core,
     surface_config, timer_deadline_core, timer_wants_frame_core,
 };
 #[cfg(test)]
@@ -255,33 +255,29 @@ pub(crate) struct Start<'a> {
     overlays: &'a mut Vec<Box<dyn crate::overlay::PendingOverlay>>,
 }
 
-/// Starts one window's host, or renders it headless when its own arguments ask for that.
-pub(crate) fn start<S: 'static>(mut spec: WindowSpec<S>, handle: Option<WindowHandle>, keeps_loop: bool, mut inherited: Args, cx: Start<'_>) -> Option<Box<dyn AnyHost>> {
-    if inherited.native && !cx.traced {
-        inherited.trace = None;
-        inherited.frames = None;
+impl Start<'_> {
+    fn inherit_args(&self, mut inherited: Args) -> Args {
+        if inherited.native && !self.traced {
+            inherited.trace = None;
+            inherited.frames = None;
+        }
+        inherited
     }
-    let args = spec.app.resolve_args(inherited);
+}
+
+/// Starts one window's host, or renders it headless when its own arguments ask for that.
+pub(crate) fn start<S: 'static>(mut spec: WindowSpec<S>, handle: Option<WindowHandle>, keeps_loop: bool, inherited: Args, cx: Start<'_>) -> Option<Box<dyn AnyHost>> {
+    let args = spec.app.resolve_args(cx.inherit_args(inherited));
     #[cfg(not(any(feature = "tooling", debug_assertions)))]
     if args.headless() { crate::tooling::die(crate::tooling::WITHOUT_TOOLING); }
     #[cfg(any(feature = "tooling", debug_assertions))]
     if args.headless() {
-        if let Some((w, h)) = spec.options.physical_size {
-            let scale = args.scale.unwrap_or(2.0);
-            spec.app.spec.size = (w as f32 / scale, h as f32 / scale);
-        }
-        let transparent = spec.options.transparent;
-        spec.app.window_options = spec.options;
-        crate::tooling::headless_configured(spec.app, args, transparent);
+        let scale = args.scale.unwrap_or(2.0);
+        crate::tooling::headless_window_spec(spec.app, spec.options, args, scale);
         return None;
     }
-    crate::video::enable_playback();
-    cx.overlays.append(&mut spec.app.overlays);
-    let handle = handle.unwrap_or_else(|| WindowHandle::new(&spec.key));
     let open_urls = crate::open_url::incoming::listen(&spec.app);
-    let mut host = Host::new(spec, handle, args, cx.proxy, cx.slot, cx.gpu, cx.wayland);
-    (host.keeps_loop, host._open_urls) = (keeps_loop, open_urls);
-    Some(Box::new(host))
+    Some(Box::new(Host::new(spec, handle, args, cx, keeps_loop, open_urls)))
 }
 
 impl ApplicationHandler<WakeEvent> for Windows {
@@ -509,11 +505,4 @@ pub(crate) fn touch_core(rt: &mut RuntimeCore, app: &mut dyn AppDriver, touch: &
     };
     let time = START.get_or_init(crate::time::Instant::now).elapsed().as_secs_f64();
     rt.touch(app, touch.id, phase, touch.location.x as f32 / scale, touch.location.y as f32 / scale, time);
-}
-
-#[cfg(target_arch = "wasm32")]
-#[inline(always)]
-pub(crate) fn touch<S: 'static>(rt: &mut crate::Runtime<S>, touch: &winit::event::Touch) {
-    let (core, mut app) = rt.split_mut();
-    touch_core(core, &mut app, touch);
 }

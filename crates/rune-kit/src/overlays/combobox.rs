@@ -4,8 +4,9 @@
 use std::rc::Rc;
 use rune::machine::Effects;
 use rune::{El, TextEdit, Tx, col, el, icon, row};
+use super::popup_list::{PopupHandlers, PopupListCore};
 use crate::list_nav::{NavAction, NavPolicy, page_size};
-use crate::{Kit, Placement, Popover, PopupItem, PopupList, Select, SelectAppearance, TextInput};
+use crate::{Kit, Placement, Popover, PopupItem, Select, SelectAppearance, TextInput};
 
 #[derive(Clone, Debug)]
 pub struct ComboboxOption {
@@ -132,18 +133,125 @@ fn filtered(options: &[ComboboxOption], query: &str) -> Vec<usize> {
     matches.into_iter().map(|(i, _)| i).collect()
 }
 
+enum SearchKeyOutcome {
+    Ignored,
+    Handled,
+    Choose(String),
+}
+
+fn toggle_combobox(state: &mut ComboboxState, current: Option<&str>, key: &str, tx: &mut Tx) {
+    for effect in state.step(ComboboxEvent::Toggle { current }) {
+        match effect { ComboboxEffect::Reveal(id) => tx.scroll_into_view(format!("{key}-option-{id}")) }
+    }
+}
+
+fn on_search_change(state: &mut ComboboxState, options: &[ComboboxOption], key: &str, tx: &mut Tx) {
+    state.step(ComboboxEvent::Edited);
+    if let Some(i) = filtered(options, &state.search.text).into_iter().find(|i| !options[*i].disabled) {
+        tx.scroll_into_view(format!("{key}-option-{}", options[i].id));
+    }
+}
+
+fn handle_search_key(state: &mut ComboboxState, options: &[ComboboxOption], key: &str, page: usize, ev: &rune::KeyEvent, tx: &mut Tx) -> SearchKeyOutcome {
+    if state.search.preedit().is_some() { return SearchKeyOutcome::Ignored; }
+    let Some(action) = NavPolicy::search_list(state.search.text.is_empty()).decode(ev, page) else {
+        return SearchKeyOutcome::Ignored;
+    };
+    if action == NavAction::Escape {
+        if !tx.key_repeat() { state.close(); }
+        return SearchKeyOutcome::Handled;
+    }
+    let choices = filtered(options, &state.search.text);
+    let enabled: Vec<_> = choices.into_iter().filter(|i| !options[*i].disabled).collect();
+    let active = state.active_index(options, &enabled);
+    match action {
+        NavAction::Activate => {
+            if tx.key_repeat() { return SearchKeyOutcome::Handled; }
+            let selected = active.map(|i| options[i].id.clone());
+            state.close();
+            selected.map_or(SearchKeyOutcome::Handled, SearchKeyOutcome::Choose)
+        }
+        NavAction::Move { step, .. } => {
+            if !enabled.is_empty() {
+                let index = active.and_then(|i| enabled.iter().position(|v| *v == i));
+                let next = step.target(index, enabled.len(), true).unwrap();
+                let id = options[enabled[next]].id.clone();
+                for effect in state.step(ComboboxEvent::Highlight { id, reveal: true }) {
+                    match effect { ComboboxEffect::Reveal(id) => tx.scroll_into_view(format!("{key}-option-{id}")) }
+                }
+            }
+            SearchKeyOutcome::Handled
+        }
+        NavAction::Escape | NavAction::SelectAll => SearchKeyOutcome::Handled,
+    }
+}
+
+fn on_option_hover(state: &mut ComboboxState, options: &[ComboboxOption], choices: &[usize], i: usize) {
+    if let Some(&orig) = choices.get(i) {
+        state.step(ComboboxEvent::Highlight { id: options[orig].id.clone(), reveal: false });
+    }
+}
+
 type Access<S> = Rc<dyn for<'a> Fn(&'a mut S) -> &'a mut ComboboxState>;
 type Choose<S> = Rc<dyn Fn(&mut S, &str, &mut Tx)>;
 
-/// `Combobox::new("models", &s.combo, &options, |s: &mut App| &mut s.combo)`.
-/// Selection is app-controlled through `current` and `on_choose`; search/open/highlight
-/// state belongs to the supplied ComboboxState. Only mounted rows are laid out/shaped.
-pub struct Combobox<S> {
+trait ComboboxBind {
+    fn bind_trigger(&self, trigger: El, current: Option<String>, key: String) -> El;
+    fn bind_popover(&self, popover: Popover) -> Popover;
+    fn bind_field(&self, field: TextInput, options: Rc<Vec<ComboboxOption>>, key: String, page: usize) -> TextInput;
+    fn build_list(&self, list: PopupListCore, options: Rc<Vec<ComboboxOption>>, choices: Vec<usize>, k: &Kit) -> El;
+}
+
+struct ComboboxHandlers<S> {
+    access: Access<S>,
+    choose: Option<Choose<S>>,
+}
+
+impl<S: 'static> ComboboxBind for ComboboxHandlers<S> {
+    fn bind_trigger(&self, trigger: El, current: Option<String>, key: String) -> El {
+        let access = self.access.clone();
+        trigger.on_press_tx(move |s: &mut S, tx| toggle_combobox(access(s), current.as_deref(), &key, tx))
+    }
+
+    fn bind_popover(&self, popover: Popover) -> Popover {
+        let access = self.access.clone();
+        popover.on_close(move |s: &mut S| access(s).close())
+    }
+
+    fn bind_field(&self, field: TextInput, options: Rc<Vec<ComboboxOption>>, key: String, page: usize) -> TextInput {
+        let (edit_access, change_access, key_access) = (self.access.clone(), self.access.clone(), self.access.clone());
+        let (change_options, change_key, choose) = (options.clone(), key.clone(), self.choose.clone());
+        field
+            .on_edit(move |s: &mut S| &mut edit_access(s).search)
+            .on_change(move |s: &mut S, tx| on_search_change(change_access(s), &change_options, &change_key, tx))
+            .on_key(move |s: &mut S, ev, tx| match handle_search_key(key_access(s), &options, &key, page, ev, tx) {
+                SearchKeyOutcome::Ignored => false,
+                SearchKeyOutcome::Handled => true,
+                SearchKeyOutcome::Choose(selected) => {
+                    if let Some(choose) = &choose { choose(s, &selected, tx); }
+                    true
+                }
+            })
+    }
+
+    fn build_list(&self, list: PopupListCore, options: Rc<Vec<ComboboxOption>>, choices: Vec<usize>, k: &Kit) -> El {
+        let (hover_access, choose_access, choose) = (self.access.clone(), self.access.clone(), self.choose.clone());
+        let handlers: PopupHandlers<S> = PopupHandlers {
+            on_active: Some(Rc::new(move |s: &mut S, i| on_option_hover(hover_access(s), &options, &choices, i))),
+            on_choose: Some(Rc::new(move |s: &mut S, id: &str, tx: &mut Tx| {
+                choose_access(s).close();
+                if let Some(choose) = &choose { choose(s, id, tx); }
+            })),
+            on_close: None,
+        };
+        list.build_list(k, &handlers)
+    }
+}
+
+struct ComboboxCore {
     key: String,
     state: ComboboxState,
     options: Rc<Vec<ComboboxOption>>,
-    access: Access<S>,
-    choose: Option<Choose<S>>,
     current: Option<String>,
     placeholder: String,
     search_placeholder: String,
@@ -156,44 +264,29 @@ pub struct Combobox<S> {
     animate_filtering: bool,
     label: Option<String>,
 }
-impl<S: 'static> Combobox<S> {
-    pub fn new(key: impl Into<String>, state: &ComboboxState, options: &[ComboboxOption],
-        access: impl for<'a> Fn(&'a mut S) -> &'a mut ComboboxState + 'static) -> Self {
-        Self { key: key.into(), state: state.clone(), options: Rc::new(options.to_vec()), access: Rc::new(access),
-            choose: None, current: None, placeholder: String::new(), search_placeholder: "Search".into(),
-            empty: "No results".into(), width: 280.0, max_height: 192.0, placement: Placement::BottomStart,
-            trigger: None, disabled: false, animate_filtering: false, label: None }
+
+impl ComboboxCore {
+    fn new(key: String, state: &ComboboxState, options: &[ComboboxOption]) -> Self {
+        Self {
+            key,
+            state: state.clone(),
+            options: Rc::new(options.to_vec()),
+            current: None,
+            placeholder: String::new(),
+            search_placeholder: "Search".into(),
+            empty: "No results".into(),
+            width: 280.0,
+            max_height: 192.0,
+            placement: Placement::BottomStart,
+            trigger: None,
+            disabled: false,
+            animate_filtering: false,
+            label: None,
+        }
     }
-    /// The accessible name: what the choice is for ("Model"). The chosen option is read as its
-    /// value; without it the placeholder names the field.
-    pub fn label(mut self, text: impl Into<String>) -> Self { self.label = Some(text.into()); self }
-    pub fn current(mut self, id: Option<&str>) -> Self { self.current = id.map(str::to_owned); self }
-    pub fn placeholder(mut self, text: impl Into<String>) -> Self { self.placeholder = text.into(); self }
-    pub fn search_placeholder(mut self, text: impl Into<String>) -> Self { self.search_placeholder = text.into(); self }
-    pub fn empty_message(mut self, text: impl Into<String>) -> Self { self.empty = text.into(); self }
-    /// The popover's width, 280 by default; the trigger keeps its own.
-    pub fn width(mut self, width: f32) -> Self { self.width = width; self }
-    /// The tallest the result list grows, 192 by default. A window with less room below (or
-    /// above) the trigger shortens it further, and it scrolls.
-    pub fn max_height(mut self, height: f32) -> Self { self.max_height = height; self }
-    pub fn placement(mut self, placement: Placement) -> Self { self.placement = placement; self }
-    /// Replaces the default field trigger (the chosen label and a chevron) with any element;
-    /// pressing it opens and closes the popover.
-    pub fn trigger(mut self, trigger: El) -> Self { self.trigger = Some(trigger); self }
-    pub fn disabled(mut self, disabled: bool) -> Self { self.disabled = disabled; self }
-    /// Animate each keystroke's filtering: the popover springs to its new height and the
-    /// rows crossfade, as [`PopupList::animate_filtering`]. Off by default, so the rows and
-    /// the height a keystroke changes land in the same frame.
-    pub fn animate_filtering(mut self, animate: bool) -> Self { self.animate_filtering = animate; self }
-    pub fn on_choose(mut self, choose: impl Fn(&mut S, &str, &mut Tx) + 'static) -> Self {
-        self.choose = Some(Rc::new(choose)); self
-    }
-    pub fn build(self, k: &Kit, layer: &mut Vec<El>) -> El {
+
+    fn build(self, k: &Kit, layer: &mut Vec<El>, bind: &dyn ComboboxBind) -> El {
         let selected = self.options.iter().find(|o| Some(&o.id) == self.current.as_ref());
-        let access = self.access.clone();
-        let current = self.current.clone();
-        let key = self.key.clone();
-        let open_key = key.clone();
         let name = self.label.clone().unwrap_or_else(|| self.placeholder.clone());
         let mut trigger = match self.trigger {
             Some(trigger) => trigger,
@@ -203,27 +296,16 @@ impl<S: 'static> Combobox<S> {
                 .trigger(k),
         };
         if !self.disabled {
-            trigger = trigger.on_press_tx(move |s: &mut S, tx| {
-                for effect in access(s).step(ComboboxEvent::Toggle { current: current.as_deref() }) {
-                    match effect { ComboboxEffect::Reveal(id) => tx.scroll_into_view(format!("{open_key}-option-{id}")) }
-                }
-            });
+            trigger = bind.bind_trigger(trigger, self.current.clone(), self.key.clone());
         }
-        let mut popover = Popover::new(&self.key).trigger(trigger).label(name.clone()).placement(self.placement).padding(0.0)
-            .open(self.state.is_open() && !self.disabled);
-        let access = self.access.clone();
-        popover = popover.on_close(move |s: &mut S| access(s).close());
+        let popover = bind.bind_popover(
+            Popover::new(&self.key).trigger(trigger).label(name.clone()).placement(self.placement).padding(0.0)
+                .open(self.state.is_open() && !self.disabled),
+        );
         if !self.state.is_open() || self.disabled { return popover.build(k, layer); }
         let choices = filtered(&self.options, &self.state.search.text);
         let active = self.state.active_index(&self.options, &choices);
-        let access = self.access.clone();
-        let key_access = self.access.clone();
         let page = page_size(self.max_height, 28.0);
-        let options = self.options.clone();
-        let choose = self.choose.clone();
-        let change_access = self.access.clone();
-        let change_options = self.options.clone();
-        let change_key = self.key.clone();
         // The search field sits borderless over a divider: the open popover is its frame, and the
         // caret shows its focus.
         let mut field = TextInput::new(&self.state.search).plain().leading_icon(k.glyph.search).height(36.0)
@@ -231,50 +313,7 @@ impl<S: 'static> Combobox<S> {
             .active_descendant(active.map(|i| format!("{}-option-{}", self.key, self.options[i].id)));
         // Without it, an edit's commit is instant: the filtered rows and the height land with the text.
         if self.animate_filtering { field = field.animate_edit_layout(); }
-        let field = field
-            .on_edit(move |s: &mut S| &mut access(s).search)
-            .on_change(move |s: &mut S, tx| {
-                let state = change_access(s);
-                state.step(ComboboxEvent::Edited);
-                if let Some(i) = filtered(&change_options, &state.search.text).into_iter().find(|i| !change_options[*i].disabled) {
-                    tx.scroll_into_view(format!("{change_key}-option-{}", change_options[i].id));
-                }
-            })
-            .on_key(move |s: &mut S, ev, tx| {
-                let state = key_access(s);
-                if state.search.preedit().is_some() { return false; }
-                let Some(action) = NavPolicy::search_list(state.search.text.is_empty()).decode(ev, page) else {
-                    return false;
-                };
-                if action == NavAction::Escape {
-                    if !tx.key_repeat() { state.close(); }
-                    return true;
-                }
-                let choices = filtered(&options, &state.search.text);
-                let enabled: Vec<_> = choices.into_iter().filter(|i| !options[*i].disabled).collect();
-                let active = state.active_index(&options, &enabled);
-                match action {
-                    NavAction::Activate => {
-                        if tx.key_repeat() { return true; }
-                        let selected = active.map(|i| options[i].id.clone());
-                        state.close();
-                        if let (Some(selected), Some(choose)) = (selected, &choose) { choose(s, &selected, tx); }
-                        true
-                    }
-                    NavAction::Move { step, .. } => {
-                        if !enabled.is_empty() {
-                            let index = active.and_then(|i| enabled.iter().position(|v| *v == i));
-                            let next = step.target(index, enabled.len(), true).unwrap();
-                            let id = options[enabled[next]].id.clone();
-                            for effect in state.step(ComboboxEvent::Highlight { id, reveal: true }) {
-                                match effect { ComboboxEffect::Reveal(id) => tx.scroll_into_view(format!("{key}-option-{id}")) }
-                            }
-                        }
-                        true
-                    }
-                    NavAction::Escape | NavAction::SelectAll => true,
-                }
-            }).build(k).key("search");
+        let field = bind.bind_field(field, self.options.clone(), self.key.clone(), page).build(k).key("search");
         let active_pos = active.and_then(|orig| choices.iter().position(|&c| c == orig));
         let items: Vec<_> = choices.iter().map(|&i| {
             let option = &self.options[i];
@@ -284,34 +323,59 @@ impl<S: 'static> Combobox<S> {
                     .opacity(if self.current.as_deref() == Some(option.id.as_str()) { 1.0 } else { 0.0 }),
             )
         }).collect();
-        let hover_access = self.access.clone();
-        let hover_options = self.options.clone();
-        let hover_choices = choices;
-        let choose_access = self.access;
-        let choose = self.choose;
-        let list = PopupList::new(&self.key, "")
-            .label(name)
-            .max_height(self.max_height)
-            .items(items)
-            .active(active_pos)
-            .empty_message(self.empty)
-            .on_active(move |s: &mut S, i| {
-                if let Some(&orig) = hover_choices.get(i) {
-                    hover_access(s).step(ComboboxEvent::Highlight { id: hover_options[orig].id.clone(), reveal: false });
-                }
-            })
-            .on_choose(move |s: &mut S, id, tx| {
-                choose_access(s).close();
-                if let Some(choose) = &choose {
-                    choose(s, id, tx);
-                }
-            })
-            .build_list(k);
+        let mut list = PopupListCore::new(self.key, String::new());
+        list.label = Some(name);
+        list.max_height = self.max_height;
+        list.items = items;
+        list.active = active_pos;
+        list.empty = self.empty;
+        let list = bind.build_list(list, self.options, choices, k);
         let results = col().key("results").w_full().padding(4.0).shrink().min_h(0.0).child(list);
         let body = col().w(self.width).shrink().min_h(0.0)
             .child(row().key("header").w_full().px(4.0).child(field))
             .child(el().key("divider").w_full().h(1.0).fill(k.c.border_weak).a11y_hidden())
             .child(results);
         popover.child(body).build(k, layer)
+    }
+}
+
+/// `Combobox::new("models", &s.combo, &options, |s: &mut App| &mut s.combo)`.
+/// Selection is app-controlled through `current` and `on_choose`; search/open/highlight
+/// state belongs to the supplied ComboboxState. Only mounted rows are laid out/shaped.
+pub struct Combobox<S> {
+    core: ComboboxCore,
+    handlers: ComboboxHandlers<S>,
+}
+impl<S: 'static> Combobox<S> {
+    pub fn new(key: impl Into<String>, state: &ComboboxState, options: &[ComboboxOption],
+        access: impl for<'a> Fn(&'a mut S) -> &'a mut ComboboxState + 'static) -> Self {
+        Self { core: ComboboxCore::new(key.into(), state, options), handlers: ComboboxHandlers { access: Rc::new(access), choose: None } }
+    }
+    /// The accessible name: what the choice is for ("Model"). The chosen option is read as its
+    /// value; without it the placeholder names the field.
+    pub fn label(mut self, text: impl Into<String>) -> Self { self.core.label = Some(text.into()); self }
+    pub fn current(mut self, id: Option<&str>) -> Self { self.core.current = id.map(str::to_owned); self }
+    pub fn placeholder(mut self, text: impl Into<String>) -> Self { self.core.placeholder = text.into(); self }
+    pub fn search_placeholder(mut self, text: impl Into<String>) -> Self { self.core.search_placeholder = text.into(); self }
+    pub fn empty_message(mut self, text: impl Into<String>) -> Self { self.core.empty = text.into(); self }
+    /// The popover's width, 280 by default; the trigger keeps its own.
+    pub fn width(mut self, width: f32) -> Self { self.core.width = width; self }
+    /// The tallest the result list grows, 192 by default. A window with less room below (or
+    /// above) the trigger shortens it further, and it scrolls.
+    pub fn max_height(mut self, height: f32) -> Self { self.core.max_height = height; self }
+    pub fn placement(mut self, placement: Placement) -> Self { self.core.placement = placement; self }
+    /// Replaces the default field trigger (the chosen label and a chevron) with any element;
+    /// pressing it opens and closes the popover.
+    pub fn trigger(mut self, trigger: El) -> Self { self.core.trigger = Some(trigger); self }
+    pub fn disabled(mut self, disabled: bool) -> Self { self.core.disabled = disabled; self }
+    /// Animate each keystroke's filtering: the popover springs to its new height and the
+    /// rows crossfade, as [`PopupList::animate_filtering`]. Off by default, so the rows and
+    /// the height a keystroke changes land in the same frame.
+    pub fn animate_filtering(mut self, animate: bool) -> Self { self.core.animate_filtering = animate; self }
+    pub fn on_choose(mut self, choose: impl Fn(&mut S, &str, &mut Tx) + 'static) -> Self {
+        self.handlers.choose = Some(Rc::new(choose)); self
+    }
+    pub fn build(self, k: &Kit, layer: &mut Vec<El>) -> El {
+        self.core.build(k, layer, &self.handlers)
     }
 }

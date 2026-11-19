@@ -1,5 +1,7 @@
 // Browser text services and semantic DOM accessibility mirror.
+const MAC = /Mac|iP/.test(navigator.platform);
 const coarse = () => matchMedia('(pointer: coarse)').matches;
+export function isMac() { return MAC; }
 const high = n => n >= 0xd800 && n <= 0xdbff;
 const low = n => n >= 0xdc00 && n <= 0xdfff;
 function boundary(text, at, forward) {
@@ -27,7 +29,7 @@ function replacement(old, next, composition, caret) {
 }
 
 function browserShortcut(event) {
-    const chord = event.metaKey || event.ctrlKey;
+    const chord = (event.metaKey || event.ctrlKey) && !event.getModifierState?.('AltGraph');
     if (event.key === 'F5' || event.key === 'F12') return true;
     if (!chord) return false;
     const k = event.key.toLowerCase();
@@ -106,7 +108,7 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         document.body.append(a11y);
     }
     const h = { canvas, textarea, password, a11y, a11yNodes: new Map(), field: textarea, key: '', base: 0, value: '',
-        copyText: '', composing: false, composition: '', shift: false, listeners: [], syncing: false, disposed: false,
+        copyText: '', composing: false, composition: '', shift: false, modBits: 0, listeners: [], syncing: false, disposed: false,
         embedded, fitHeight, page, focused: false, presented: false, swapped: false, touchDown: false,
         lastScrollAt: 0, staticTimer: 0, scrollEls: new Map(), band };
     const send = event => {
@@ -119,6 +121,30 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         target.addEventListener(name, handler, options);
         h.listeners.push(() => target.removeEventListener(name, handler, options));
     };
+    const MOD_KEYS = ['Shift', 'Control', 'Alt', 'Meta', 'AltGraph'];
+    const ownsTarget = target => target === canvas || target === textarea || target === password || (target instanceof Node && a11y.contains(target));
+    const syncMods = event => {
+        const bits = (event.shiftKey ? 1 : 0) | (event.ctrlKey ? 2 : 0) | (event.altKey ? 4 : 0) | (event.metaKey ? 8 : 0);
+        if (bits === h.modBits) return;
+        h.modBits = bits;
+        send({ kind: 'mods', shift: !!(bits & 1), ctrl: !!(bits & 2), alt: !!(bits & 4), meta: !!(bits & 8) });
+    };
+    // Refresh modifiers from DOM events before winit's canvas listeners run: winit suppresses
+    // ModifiersChanged on pointer/wheel when the canvas lacks focus (e.g. while a text field is
+    // focused or in document mode) and emits KeyboardInput before ModifiersChanged.
+    for (const name of ['pointerdown', 'pointermove', 'pointerup', 'pointerover', 'pointerout', 'wheel', 'keydown']) {
+        listen(window, name, event => { if (ownsTarget(event.target)) syncMods(event); }, { capture: true, passive: true });
+    }
+    listen(window, 'keyup', event => {
+        if (ownsTarget(event.target) && !(event.target === canvas && MOD_KEYS.includes(event.key))) syncMods(event);
+    }, { capture: true, passive: true });
+    // Let winit deliver a modifier key's own release on the canvas before clearing its flag so
+    // on_physical_input handlers see the key-up first.
+    listen(window, 'keyup', event => {
+        if (event.target === canvas && MOD_KEYS.includes(event.key)) syncMods(event);
+    }, { passive: true });
+    listen(window, 'blur', () => { h.modBits = 0; });
+    listen(document, 'visibilitychange', () => { if (document.hidden) h.modBits = 0; });
     function changed(preedit = false) {
         const backward = textarea.selectionDirection === 'backward';
         send({ kind: preedit ? 'preedit' : 'edit', key: h.key, base: h.base, expected: h.value,
@@ -176,7 +202,8 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         listen(field, 'keydown', event => {
             h.shift = event.shiftKey;
             if (event.isComposing || h.composing || event.keyCode === 229) return;
-            const chord = event.metaKey || event.ctrlKey;
+            // On Windows European layouts AltGr sets both ctrlKey and altKey; let those characters type.
+            const chord = (event.metaKey || event.ctrlKey) && !event.getModifierState?.('AltGraph');
             const editing = ['Enter', 'Tab', 'Escape', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown'];
             if (field === password) editing.push('Backspace', 'Delete');
             if (!chord && !editing.includes(event.key)) return;
@@ -223,6 +250,17 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         if (file.type.startsWith('text/') || file.size < 1048576 && !file.type) send({ kind: 'paste', text: await file.text(), html: '', image: false });
     });
     listen(canvas, 'pointerdown', event => event.preventDefault(), { capture: true });
+    // winit's web backend ignores pointercancel for mouse/pen and does not listen to
+    // lostpointercapture; forward non-touch cancellations so held presses and drags never stick.
+    listen(canvas, 'pointercancel', event => {
+        if (event.pointerType !== 'touch') send({ kind: 'pointer_cancel', lost_capture: false });
+    }, { passive: true });
+    listen(canvas, 'lostpointercapture', event => {
+        if (event.pointerType !== 'touch') send({ kind: 'pointer_cancel', lost_capture: true });
+    }, { passive: true });
+    listen(a11y, 'pointerleave', event => {
+        if (event.pointerType !== 'touch' && event.relatedTarget !== canvas) send({ kind: 'leave' });
+    }, { passive: true });
     listen(canvas, 'keydown', event => {
         if (page && !h.focused && SCROLL_KEYS.includes(event.key) && !event.metaKey && !event.ctrlKey) return;
         if (!browserShortcut(event)) event.preventDefault();
@@ -237,20 +275,37 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         listen(window, 'touchcancel', () => { h.touchDown = false; deferStatic(h); }, { passive: true });
         // Mirrored text and links take the pointer from the canvas; hover still reaches Rune.
         listen(a11y, 'pointermove', event => {
-            if (event.pointerType === 'mouse') send({ kind: 'hover', x: event.clientX, y: event.clientY });
+            if (event.pointerType !== 'touch') send({ kind: 'hover', x: event.clientX, y: event.clientY });
         }, { passive: true });
         queueMicrotask(() => { if (!h.disposed) scrolled(); });
     }
+    // winit's web backend drops WheelEvent.DOM_DELTA_PAGE (deltaMode === 2); forward page
+    // deltas to Rune before checking wheelUsed / preventDefault.
+    const forwardPageWheel = event => {
+        if (event.deltaMode !== 2) return;
+        send({
+            kind: 'wheel_page',
+            dx: -event.deltaX,
+            dy: -event.deltaY,
+            shift: event.shiftKey,
+            ctrl: event.ctrlKey,
+            alt: event.altKey,
+            meta: event.metaKey,
+        });
+    };
     if (!fitHeight) {
         // Ctrl+wheel (a touchpad's pinch) is the browser's zoom unless Rune pinched something with
         // it: Rune hears the wheel first (winit's listener is older) and says so (`syncWheel`).
         listen(canvas, 'wheel', event => {
+            forwardPageWheel(event);
             const used = h.wheelUsed;
             h.wheelUsed = false;
             if (event.ctrlKey && !used) return;
             event.preventDefault();
         }, { passive: false });
         listen(document, 'gesturestart', event => event.preventDefault(), { passive: false });
+    } else {
+        listen(canvas, 'wheel', forwardPageWheel, { passive: true });
     }
     if (!page && !embedded) {
         // Printing prints what's on screen (the canvas, and the mirror's text over it, which the
@@ -268,32 +323,36 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         // A web link takes the pointer while it's over it, as a page's would: the status bar
         // shows where it goes, and middle-click, Ctrl+click and its own menu open it.
         listen(canvas, 'pointermove', event => {
-            if (event.pointerType !== 'mouse' || event.buttons) return;
+            if (event.pointerType === 'touch' || event.buttons) return;
             const a = linkAt(h, event.clientX, event.clientY);
             if (a && a !== h.hoverLink) armLink(h, a);
         }, { passive: true });
         // The pointer over a link (or anything else of the mirror's that took it) still hovers Rune.
         listen(a11y, 'pointermove', event => {
-            if (event.pointerType === 'mouse') send({ kind: 'hover', x: event.clientX, y: event.clientY });
+            if (event.pointerType !== 'touch') {
+                const r = canvas.getBoundingClientRect();
+                send({ kind: 'hover', x: event.clientX - r.left, y: event.clientY - r.top });
+            }
         }, { passive: true });
     }
-    // Right-click: Rune draws an element's own menu; anywhere else the browser opens its own over
-    // what a page would have there (the selection, a link, text, a text field), never the
-    // canvas's image menu; Shift+right-click always opens the browser's. Armed before the menu's
-    // event, which on Windows and Linux follows the release; macOS's follows the press, which
-    // Rune has just heard (`syncSecondary`).
+    // Right-click (and Ctrl+click on macOS): Rune draws an element's own menu; anywhere else the
+    // browser opens its own over what a page would have there (the selection, a link, text, a text
+    // field), never the canvas's image menu; Shift+right-click always opens the browser's. Armed
+    // before the menu's event, which on Windows and Linux follows the release; macOS's follows the
+    // press, which Rune has just heard (`syncSecondary`).
+    const isSecondaryPress = event => event.button === 2 || (MAC && event.button === 0 && event.ctrlKey);
     const armAt = event => {
-        if (event.button !== 2 || event.pointerType !== 'mouse' || event.target !== canvas) return;
+        if (!isSecondaryPress(event) || event.pointerType === 'touch' || event.target !== canvas) return;
         if (armMenu(h, event.clientX, event.clientY, event.shiftKey)) send({ kind: 'secondary_browser' });
     };
-    if (/Mac|iP/.test(navigator.platform)) listen(canvas, 'pointerdown', armAt);
+    if (MAC) listen(canvas, 'pointerdown', armAt);
     else listen(window, 'pointerup', armAt, { capture: true });
     listen(document, 'contextmenu', event => {
         if (h.menu === 'rune' || event.target === canvas) event.preventDefault();
         if (h.menu === 'rune') h.menu = '';
     }, { capture: true });
     for (const name of ['pointerdown', 'keydown', 'wheel']) {
-        listen(window, name, event => { if (name !== 'pointerdown' || event.button !== 2) disarmMenu(h); }, { capture: true, passive: true });
+        listen(window, name, event => { if (name !== 'pointerdown' || !isSecondaryPress(event)) disarmMenu(h); }, { capture: true, passive: true });
     }
     queueMicrotask(() => {
         if (!h.disposed && !embedded && !page && document.activeElement === document.body) canvas.focus({ preventScroll: true });
@@ -325,6 +384,12 @@ export function sync(h, key, text, base, anchor, focus, secure) {
         if (editing && document.activeElement !== h.field) activate(h);
     }
     h.syncing = false;
+}
+
+// Drops browser composition tracking after Rune finished/cancelled composition (e.g. on blur or hide).
+export function cancelIme(h) {
+    h.composing = false;
+    h.composition = '';
 }
 
 export function syncCopy(h, text) {

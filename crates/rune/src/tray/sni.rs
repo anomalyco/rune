@@ -38,7 +38,7 @@ fn properties(menu: &[TrayItem], id: i32) -> HashMap<String, OwnedVariant> {
     if id == ROOT { map.insert("children-display".into(), OwnedVariant::from(zbus::Str::from_static("submenu"))); return map; }
     match menu.get(id as usize - 1) {
         Some(TrayItem::Action { label, enabled, .. }) => {
-            map.insert("label".into(), OwnedVariant::from(zbus::Str::from(label.clone())));
+            map.insert("label".into(), OwnedVariant::from(zbus::Str::from(super::dbusmenu_label(label))));
             if !enabled { map.insert("enabled".into(), OwnedVariant::from(false)); }
         }
         Some(TrayItem::Separator) => { map.insert("type".into(), OwnedVariant::from(zbus::Str::from_static("separator"))); }
@@ -248,6 +248,9 @@ mod tests {
         assert!(properties(&menu, 2).contains_key("type"));
         assert!(properties(&menu, 3).contains_key("enabled"));
         assert!(properties(&menu, 9).is_empty());
+        let underscored = vec![TrayItem::action("open", "open_file")];
+        let props = properties(&underscored, 1);
+        assert_eq!(<&str>::try_from(props.get("label").unwrap()).ok(), Some("open__file"));
     }
 
     #[test]

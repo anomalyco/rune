@@ -94,6 +94,7 @@ impl Trace {
         *self.ids.entry(key.to_owned()).or_insert(next)
     }
 
+    #[cfg(test)]
     #[inline(always)]
     pub(crate) fn frame<S>(&mut self, rt: &mut Runtime<S>, t_ms: f64, cpu_ms: f64) {
         self.frame_timed_core(rt.core_mut(), t_ms, cpu_ms, FrameTiming::default());
@@ -239,7 +240,7 @@ impl Trace {
             "cpu_ms": cpu_ms, "scene_edges": edges, "position_error_px": position_error,
             "retarget_lanes": retarget.lanes, "velocity_error_pt_s": retarget.max_velocity_error,
             "animating": rt.animating,
-            "why": crate::runtime::AnimSource::names(if rt.animating { rt.anim_sources } else { 0 }),
+            "why": crate::runtime::AnimSource::names(if rt.animating { rt.motion.anim_sources } else { 0 }),
         });
         // What the motion store spent this frame on, by traced element id (or path when untraced).
         let touched = rt.touched_tracks();
@@ -269,7 +270,7 @@ impl Trace {
         if !cuts.is_empty() {
             line["ai"] = cuts.into();
         }
-        if let Some(channels) = &rt.trace_channels {
+        if let Some(channels) = &rt.frame.trace_channels {
             for (&name, &(kind, value)) in channels { self.channels.sample(name, kind, value); }
         }
         let mut line = line.to_string();
@@ -302,12 +303,13 @@ impl Drop for Trace {
     }
 }
 
+#[cfg(any(test, feature = "hot"))]
 #[inline(always)]
 pub(crate) fn tree_json<S>(rt: &Runtime<S>, real_t: f64) -> Value {
     tree_json_core(rt.core(), real_t)
 }
 
-fn tree_json_core(rt: &crate::runtime::RuntimeCore, real_t: f64) -> Value {
+pub(crate) fn tree_json_core(rt: &crate::runtime::RuntimeCore, real_t: f64) -> Value {
     let videos = rt.videos();
     let els: Vec<Value> = rt
         .elements()
@@ -395,7 +397,7 @@ fn tree_json_core(rt: &crate::runtime::RuntimeCore, real_t: f64) -> Value {
         "time_scale": rt.time_scale,
         "animating": rt.animating,
         "elements": els,
-        "warnings": rt.key_warnings.as_deref().unwrap_or_default(),
+        "warnings": rt.commit.key_warnings.as_deref().unwrap_or_default(),
     });
     if let Some(menu) = rt.popup_json() { tree["popupMenu"] = menu; }
     if let Some(dialog) = rt.file_dialog_json() { tree["fileDialog"] = dialog; }
@@ -405,7 +407,7 @@ fn tree_json_core(rt: &crate::runtime::RuntimeCore, real_t: f64) -> Value {
     if let Some((text, cursor)) = rt.focused_preedit() {
         tree["preedit"] = json!({ "text": text, "cursor": cursor.map(|(a, b)| [a, b]) });
     }
-    if let Some(title) = rt.window_title.current() { tree["title"] = title.into(); }
+    if let Some(title) = rt.host.window_title.current() { tree["title"] = title.into(); }
     if let Some((text, rect)) = rt.help_tooltip() { tree["tooltip"] = json!({ "text": text, "rect": rect.map(r2) }); }
     tree["accessibility"] = crate::a11y::dump::json(&rt.accessibility_tree(), false);
     tree

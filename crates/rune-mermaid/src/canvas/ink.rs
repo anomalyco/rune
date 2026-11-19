@@ -99,13 +99,11 @@ pub(crate) fn over(top: Color, bottom: Color) -> Color {
 }
 
 fn enc(c: f32) -> f32 {
-    let c = c.clamp(0.0, 1.0);
-    if c <= 0.003_130_8 { c * 12.92 } else { 1.055 * c.powf(1.0 / 2.4) - 0.055 }
+    rune::color::srgb_encode(c.clamp(0.0, 1.0))
 }
 
 fn dec(c: f32) -> f32 {
-    let c = c.clamp(0.0, 1.0);
-    if c <= 0.040_45 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+    rune::color::srgb_decode(c.clamp(0.0, 1.0))
 }
 
 fn bounds(points: &[[f32; 2]]) -> [f32; 4] {

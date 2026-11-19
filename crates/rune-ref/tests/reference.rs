@@ -184,6 +184,7 @@ fn layer(kind: f32, blur: f32) -> rune_ref::Primitive {
         fade: [0.0; 4],
         fade_origin: None,
         turn: None,
+        clip_radii: None,
     }
 }
 
@@ -208,4 +209,80 @@ fn validate_rejects_layers_it_cannot_render() {
     // Each nested scope holds a full-frame buffer while it renders, so nesting is bounded.
     let deep: Vec<_> = (0..1000).map(|_| layer(8.0, 0.0)).chain((0..1000).map(|_| layer(9.0, 0.0))).collect();
     assert!(with(deep).validate().is_err(), "unbounded nesting");
+}
+
+#[test]
+fn validate_accepts_continuous_corners_and_rejects_unimplemented_kinds() {
+    let base = generate::scene(&[]);
+    let mut rect = generate::scene(&[[0; 32]]).primitives.remove(0);
+    rect.params = [0.0, 0.0, 0.0, 1.0];
+    rect.rect = [4.0, 4.0, 24.0, 24.0];
+    rect.radii = [-6.0; 4];
+    rect.fill = [0.8, 0.2, 0.1, 1.0];
+    rect.border = [0.0; 4];
+    rect.clip = [2.0, 2.0, 30.0, 30.0];
+    rect.clip_radii = Some([-4.0, -4.0, 0.0, -4.0]);
+    Scene { primitives: vec![rect.clone()], ..base.clone() }.validate().unwrap();
+
+    // Mixed positive and negative clip radii cannot be packed and are rejected.
+    let mut mixed_sign_clip = rect.clone();
+    mixed_sign_clip.clip_radii = Some([-4.0, 4.0, 0.0, 0.0]);
+    assert!(Scene { primitives: vec![mixed_sign_clip], ..base.clone() }.validate().is_err());
+
+    // Kinds 5 (segment), 6 (triangle), 7 (image) and 13 (backdrop blur) are not implemented here.
+    for kind in [5.0, 6.0, 7.0, 13.0] {
+        let mut unsupported = rect.clone();
+        unsupported.params[1] = kind;
+        assert!(Scene { primitives: vec![unsupported], ..base.clone() }.validate().is_err(), "kind {kind} must be rejected");
+    }
+}
+
+#[test]
+fn plus_lighter_blends_additively_inside_saturates_and_composites_source_over() {
+    let mut scene = generate::scene(&[]);
+    scene.width = 16;
+    scene.height = 16;
+    scene.clear = [0.0, 0.0, 0.5, 1.0];
+    let mut open = layer(8.0, 0.0);
+    open.rect = [0.0, 0.0, 16.0, 16.0];
+    open.params[0] = 1.0; // PlusLighter
+    open.fill = [0.0, 0.0, 0.0, 0.5]; // 50% layer opacity
+    let mut child = generate::scene(&[[0; 32]]).primitives.remove(0);
+    child.rect = [0.0, 0.0, 16.0, 16.0];
+    child.radii = [0.0; 4];
+    child.params = [0.0, 0.0, 0.0, 1.0];
+    child.border = [0.0; 4];
+    child.clip = NO_CLIP;
+    child.fade = [0.0; 4];
+    child.fill = [0.6, 0.0, 0.0, 0.6];
+    // Two identical children sum to [1.2, 0, 0, 1.2], saturate to [1, 0, 0, 1], then multiply by
+    // opacity 0.5 -> [0.5, 0, 0, 0.5], composited source-over [0, 0, 0.5, 1] -> [0.5, 0, 0.25, 1].
+    scene.primitives = vec![open, child.clone(), child, layer(9.0, 0.0)];
+    let frame = render(&scene);
+    let px = &frame.rgba[(8 * 16 + 8) * 4..(8 * 16 + 8) * 4 + 4];
+    // srgb_encode(0.5) * 255 = 188, srgb_encode(0.25) * 255 = 137.
+    assert!(px[0].abs_diff(188) <= 1 && px[1] == 0 && px[2].abs_diff(137) <= 1 && px[3] == 255, "got {px:?}");
+}
+
+#[test]
+fn rounded_clip_clips_ordinary_primitive_corners() {
+    let mut scene = generate::scene(&[]);
+    scene.width = 32;
+    scene.height = 32;
+    scene.clear = [0.0, 0.0, 0.0, 1.0];
+    let mut rect = generate::scene(&[[0; 32]]).primitives.remove(0);
+    rect.rect = [0.0, 0.0, 32.0, 32.0];
+    rect.radii = [0.0; 4];
+    rect.fill = [1.0, 1.0, 1.0, 1.0];
+    rect.border = [0.0; 4];
+    rect.params = [0.0, 0.0, 0.0, 1.0];
+    rect.clip = [0.0, 0.0, 32.0, 32.0];
+    rect.fade = [0.0; 4];
+    rect.clip_radii = Some([12.0; 4]);
+    scene.primitives = vec![rect];
+    let frame = render(&scene);
+    let corner = &frame.rgba[0..4];
+    let center = &frame.rgba[(16 * 32 + 16) * 4..(16 * 32 + 16) * 4 + 4];
+    assert_eq!(corner, &[0, 0, 0, 255], "rounded clip must cut the corner");
+    assert_eq!(center, &[255, 255, 255, 255], "centre stays filled");
 }

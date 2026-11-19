@@ -14,7 +14,7 @@ fn a_page_lays_out_at_its_height_and_draws_the_band_it_is_scrolled_to() {
     rt.frame(0.0);
     assert_eq!(rt.page_height(), 1000.0, "the root keeps its natural height");
     assert_eq!(rt.viewport, (400.0, 200.0), "the window stays the band's size");
-    let button = rt.nodes.iter().position(|n| n.key.as_deref() == Some("button")).unwrap();
+    let button = rt.tree.nodes.iter().position(|n| n.key.as_deref() == Some("button")).unwrap();
     assert_eq!(rt.drawn_box(button)[1], 300.0);
 
     assert!(rt.set_page_scroll(250.4));
@@ -66,7 +66,7 @@ fn resizing_the_band_does_not_lay_the_page_out_again() {
     rt.frame(0.0);
     let scale = rt.env.scale;
     rt.set_viewport((400.0, 160.0), scale);
-    assert!(!rt.relayout, "a mobile toolbar collapsing only changes the band");
+    assert!(!rt.commit.relayout, "a mobile toolbar collapsing only changes the band");
     assert_eq!(rt.viewport, (400.0, 160.0));
     assert_eq!(rt.page_height(), 1000.0);
 }
@@ -155,6 +155,6 @@ fn a_window_that_is_not_a_page_has_no_band_to_move() {
     let mut rt = Runtime::new(0u32, tall, (400.0, 200.0), Env::default());
     rt.frame(0.0);
     assert!(!rt.set_band(600.0, 200.0) && !rt.set_page_scroll(250.0));
-    assert!(rt.page.is_none(), "the host's band and scroll don't make it one");
+    assert!(rt.host.page.is_none(), "the host's band and scroll don't make it one");
     assert_eq!((rt.page_offset(), rt.page_scroll_y(), rt.page_window()), (0.0, 0.0, (0.0, 200.0)));
 }

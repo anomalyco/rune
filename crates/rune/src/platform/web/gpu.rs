@@ -1,11 +1,11 @@
 //! WebGPU and WebGL2 backend setup, canvas surface configuration, GPU frame submission, and
 //! hand-over pixel readback.
 
-use std::{cell::Cell, rc::Rc, time::Duration};
+use std::{cell::{Cell, RefCell}, rc::Rc, time::Duration};
 use wasm_bindgen::JsCast;
 use winit::event_loop::EventLoopProxy;
-use crate::{Runtime, render::{Gpu, Renderer}, time::Instant};
-use super::{Wake, cpu_canvas, health};
+use crate::{render::{Gpu, Renderer}, runtime::RuntimeCore, time::Instant};
+use super::{Wake, app::{CompositorFrame, WebApp}, cpu_canvas, health};
 
 /// The GPU's side of the page: its device, the canvas's surface and Rune's renderer.
 pub(super) struct GpuSide {
@@ -91,14 +91,17 @@ pub(super) async fn gpu(canvas: web_sys::HtmlCanvasElement, features: wgpu::Feat
 }
 
 /// The GPU's side for a canvas of `size`: the surface configured, the renderer made, and the
-/// text system told its masks are the renderer's to fill from now on. `lost` runs if the device
-/// is lost.
-pub(super) fn gpu_side<S: 'static>(gpu: Gpu, surface: wgpu::Surface<'static>, size: (u32, u32), rt: &mut Runtime<S>, lost: impl Fn(String) + 'static) -> Result<GpuSide, String> {
+/// text system told its masks are the renderer's to fill from now on. `lost` records the reason
+/// and wakes `proxy` if the device is lost.
+pub(super) fn gpu_side(gpu: Gpu, surface: wgpu::Surface<'static>, size: (u32, u32), rt: &mut RuntimeCore, lost: Rc<RefCell<Option<String>>>, proxy: EventLoopProxy<Wake>) -> Result<GpuSide, String> {
     let Some((config, format)) = canvas_config(&gpu, &surface, size, rt.srgb_blend()) else {
         return Err("WebGPU canvas has no supported configuration".into());
     };
     surface.configure(&gpu.device, &config);
-    health::watch(&gpu.device, lost);
+    health::watch(&gpu.device, move |why| {
+        *lost.borrow_mut() = Some(why);
+        let _ = proxy.send_event(Wake::App);
+    });
     let mut renderer = Renderer::new(&gpu.device, format);
     renderer.set_srgb_blend(!format.is_srgb());
     renderer.attach_text(&mut rt.text.atlas);
@@ -132,40 +135,57 @@ pub(super) fn canvas_config(gpu: &Gpu, surface: &wgpu::Surface<'static>, size: (
 
 /// A frame drawn on the GPU from the runtime's instances, presented; `Err` when the canvas gave
 /// no texture to draw into.
-pub(super) fn gpu_frame<S: 'static>(side: &mut GpuSide, rt: &mut Runtime<S>, compositor: &mut Option<Box<dyn crate::Compositor<S>>>, now: Instant, dt: f64, readback: bool, tick: bool) -> Result<Option<Readback>, String> {
-    if !side.gl && side.renderer.srgb_blend() != rt.srgb_blend() {
-        let format = if rt.srgb_blend() { side.config.format.remove_srgb_suffix() } else { side.config.format.add_srgb_suffix() };
-        if format != side.config.format && !side.config.view_formats.contains(&format) {
-            side.config.view_formats.push(format);
-            side.surface.configure(&side.gpu.device, &side.config);
+pub(super) fn gpu_frame(side: &mut GpuSide, app: &mut dyn WebApp, now: Instant, dt: f64, readback: bool, tick: bool) -> Result<Option<Readback>, String> {
+    {
+        let rt = app.rt_mut();
+        if !side.gl && side.renderer.srgb_blend() != rt.srgb_blend() {
+            let format = if rt.srgb_blend() { side.config.format.remove_srgb_suffix() } else { side.config.format.add_srgb_suffix() };
+            if format != side.config.format && !side.config.view_formats.contains(&format) {
+                side.config.view_formats.push(format);
+                side.surface.configure(&side.gpu.device, &side.config);
+            }
+            crate::window::rebuild_renderer_core(&side.gpu.device, &mut side.renderer, format, rt);
         }
-        crate::window::rebuild_renderer(&side.gpu.device, &mut side.renderer, format, rt);
     }
     let frame = match side.surface.get_current_texture() {
         wgpu::CurrentSurfaceTexture::Success(frame) | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
         _ => return Err("WebGPU canvas acquisition failed".into()),
     };
-    side.renderer.upload_images(&side.gpu.device, &side.gpu.queue, &mut rt.images);
-    // A loop-only step (`runtime/paint/cycle.rs`) writes only the dots it changed, and redraws
-    // only where they are, into the last frame the renderer keeps, which is copied to the canvas.
-    let (paint, slots) = rt.cycle_paint();
     let size = (side.config.width, side.config.height);
-    let armed = tick && side.config.usage.contains(wgpu::TextureUsages::COPY_DST)
-        && side.renderer.arm_cycle(&side.gpu.device, &side.gpu.queue, paint, &rt.instances, &slots, rt.clear_color(), size, side.config.format).is_ok();
-    side.renderer.next_instances(paint, tick.then_some(slots));
+    let armed = {
+        let rt = app.rt_mut();
+        side.renderer.upload_images(&side.gpu.device, &side.gpu.queue, &mut rt.images);
+        // A loop-only step (`runtime/paint/cycle.rs`) writes only the dots it changed, and redraws
+        // only where they are, into the last frame the renderer keeps, which is copied to the canvas.
+        let (paint, slots) = rt.cycle_paint();
+        let armed = tick && side.config.usage.contains(wgpu::TextureUsages::COPY_DST)
+            && side.renderer.arm_cycle(&side.gpu.device, &side.gpu.queue, paint, &rt.instances, &slots, rt.clear_color(), size, side.config.format).is_ok();
+        side.renderer.next_instances(paint, tick.then_some(slots));
+        armed
+    };
     let mut encoder = side.gpu.device.create_command_encoder(&Default::default());
     if armed {
         // Rune's default frame (a compositor that drew its own would have kept this a whole one):
         // nothing draws into the canvas but the copy of the kept frame.
+        let rt = app.rt_mut();
         side.renderer.prepare_ui(&side.gpu.device, &side.gpu.queue, &mut rt.text.atlas, &rt.instances, size);
         side.renderer.draw_armed(&mut encoder, &frame.texture);
-    } else if let Some(compositor) = compositor {
+    } else if app.has_compositor() {
         let target = frame.texture.create_view(&wgpu::TextureViewDescriptor { format: Some(side.renderer.format()), ..Default::default() });
-        compositor.render(&mut crate::Frame { device: &side.gpu.device, queue: &side.gpu.queue, encoder: &mut encoder,
-            target: &target, format: side.renderer.format(), size: (side.config.width, side.config.height), dt,
-            update_ms: now.elapsed().as_secs_f64() * 1000.0, rt, ui: &mut side.renderer });
+        app.render_compositor(CompositorFrame {
+            device: &side.gpu.device,
+            queue: &side.gpu.queue,
+            encoder: &mut encoder,
+            target: &target,
+            format: side.renderer.format(),
+            size,
+            dt,
+            update_ms: now.elapsed().as_secs_f64() * 1000.0,
+            ui: &mut side.renderer,
+        });
     } else {
         let target = frame.texture.create_view(&wgpu::TextureViewDescriptor { format: Some(side.renderer.format()), ..Default::default() });
+        let rt = app.rt_mut();
         side.renderer.prepare_ui(&side.gpu.device, &side.gpu.queue, &mut rt.text.atlas, &rt.instances, size);
         side.renderer.draw(&mut encoder, &target, rt.clear_color());
     }

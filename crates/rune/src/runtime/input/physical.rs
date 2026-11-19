@@ -1,7 +1,7 @@
 use super::*;
 use crate::{PhysicalInput, PhysicalKeyCode};
 
-pub(super) struct Fallback { key: KeyEvent, base: Option<char>, unhandled: Option<Unhandled> }
+pub(in crate::runtime) struct Fallback { key: KeyEvent, base: Option<char>, unhandled: Option<Unhandled> }
 
 /// What a window does with a logical key no handler took: close or minimize as its title-bar
 /// button would, or run a menu item. A standard ⌘W or ⌘M item, or an app's item marked
@@ -20,7 +20,7 @@ impl std::fmt::Debug for Unhandled {
 /// Whether an activation key (Enter, Escape, Space) is held down: its physical code (native and
 /// physical input) or logical key (`Runtime::key`), and the focus its first press landed on.
 #[derive(Default)]
-pub(super) enum Activation {
+pub(in crate::runtime) enum Activation {
     #[default]
     Up,
     Held { physical: Option<PhysicalKeyCode>, key: Option<crate::Key>, focus: Option<String> },
@@ -33,7 +33,7 @@ impl RuntimeCore {
         self.observe_mods(&event);
         if self.cancel_drag_key(&event) { return; }
         if matches!(event, PhysicalInput::Key { pressed: true, .. }) && self.autoscroll_key() { return; }
-        self.queue.push(Action::Physical(event, None));
+        self.frame.queue.push(Action::Physical(event, None));
     }
 
     fn cancel_drag_key(&mut self, event: &PhysicalInput) -> bool {
@@ -44,10 +44,10 @@ impl RuntimeCore {
     /// queue the press itself skips. A key press hides a tooltip.
     fn observe_mods(&mut self, event: &PhysicalInput) {
         match event {
-            PhysicalInput::Modifiers(m) => { self.selectable.shift = m.shift; self.held_mods = *m; }
-            PhysicalInput::FocusLost => { self.selectable.shift = false; self.held_mods = Default::default(); self.dismiss_help(); }
-            PhysicalInput::Key { pressed: true, mods, .. } => { self.held_mods = *mods; self.dismiss_help(); }
-            PhysicalInput::Key { mods, .. } => self.held_mods = *mods,
+            PhysicalInput::Modifiers(m) => { self.edit.selectable.shift = m.shift; self.kbd.held_mods = *m; }
+            PhysicalInput::FocusLost => { self.edit.selectable.shift = false; self.kbd.held_mods = Default::default(); self.dismiss_help(); }
+            PhysicalInput::Key { pressed: true, mods, .. } => { self.kbd.held_mods = *mods; self.dismiss_help(); }
+            PhysicalInput::Key { mods, .. } => self.kbd.held_mods = *mods,
         }
     }
     /// Queue a key press with its physical code and logical key, as a native host sends them
@@ -71,38 +71,38 @@ impl RuntimeCore {
             return self.physical_observation(app, event);
         }
         if !matches!(event, PhysicalInput::Key { pressed: false, .. }) { self.dismiss_help(); }
-        self.queue.push(Action::Physical(event, key.map(|key| Fallback { key, base, unhandled })));
+        self.frame.queue.push(Action::Physical(event, key.map(|key| Fallback { key, base, unhandled })));
         true
     }
     /// Modifier/release events have no logical action. When input is already queued,
     /// its requested frame will process this observation in order after clicks/keys.
     /// At rest, only a consuming handler invalidates the view and requests a frame.
     pub(crate) fn physical_observation(&mut self, app: &mut dyn AppDriver, event: PhysicalInput) -> bool {
-        let busy = !self.queue.is_empty();
+        let busy = !self.frame.queue.is_empty();
         self.observe_mods(&event);
         // The release of a modifier key the app hears needs a frame, in order like a press.
         // So does one while state changed since the last frame (a covered window keeps it
         // changed until it uncovers): the focused handler is the new view's.
-        if self.modifier_pending(&event) || busy || self.dirty {
-            self.queue.push(Action::Physical(event, None));
+        if self.modifier_pending(&event) || busy || self.commit.dirty {
+            self.frame.queue.push(Action::Physical(event, None));
             return !busy;
         }
         let mut tx = Tx::default();
         let consumed = self.dispatch_physical(app, event, None, &mut tx);
         let live_only = std::mem::take(&mut tx.live_only);
         self.latch_requests(app, &mut tx);
-        merge(&mut self.pending, tx);
+        merge(&mut self.frame.pending, tx);
         if consumed && live_only {
-            self.live_only_skips += 1;
-            self.live.set();
+            self.frame.live_only_skips += 1;
+            self.frame.live.set();
         } else {
-            self.dirty |= consumed;
+            self.commit.dirty |= consumed;
         }
         consumed
     }
     /// Remember an activation key's first press and the focus it landed on; true drops a
     /// repeat of that same key once focus has moved. Any other first press replaces it.
-    pub(super) fn held_gate(&mut self, physical: Option<PhysicalKeyCode>, key: Option<&crate::Key>, repeat: bool) -> bool {
+    pub(in crate::runtime) fn held_gate(&mut self, physical: Option<PhysicalKeyCode>, key: Option<&crate::Key>, repeat: bool) -> bool {
         use crate::{Key, PhysicalKeyCode as Code};
         if !repeat {
             // The OS keeps repeating a held key through modifier presses.
@@ -111,14 +111,14 @@ impl RuntimeCore {
                 | Code::CapsLock | Code::Fn)) || key.is_some_and(|k| matches!(k, Key::Modifier { .. })) { return false; }
             let activation = physical.is_some_and(|c| matches!(c, Code::Enter | Code::NumpadEnter | Code::Escape | Code::Space))
                 || key.is_some_and(|k| matches!(k, Key::Enter | Key::Escape) || matches!(k, Key::Text(t) if t == " "));
-            self.held = if activation { Activation::Held { physical, key: key.cloned(), focus: self.focus.owned() } } else { Activation::Up };
+            self.kbd.held = if activation { Activation::Held { physical, key: key.cloned(), focus: self.kbd.focus.owned() } } else { Activation::Up };
             return false;
         }
-        let Activation::Held { physical: held, key: held_key, focus } = &self.held else { return false };
+        let Activation::Held { physical: held, key: held_key, focus } = &self.kbd.held else { return false };
         let same = match physical { Some(code) => *held == Some(code), None => held_key.as_ref() == key };
-        same && focus.as_deref() != self.focus.path()
+        same && focus.as_deref() != self.kbd.focus.path()
     }
-    pub(super) fn dispatch_physical(&mut self, app: &mut dyn AppDriver, event: PhysicalInput, fallback: Option<Fallback>, tx: &mut Tx) -> bool {
+    pub(in crate::runtime) fn dispatch_physical(&mut self, app: &mut dyn AppDriver, event: PhysicalInput, fallback: Option<Fallback>, tx: &mut Tx) -> bool {
         tx.by_keys = true;
         use crate::PhysicalKeyCode as Code;
         let is_mod = |c: Code| matches!(c, Code::ShiftLeft | Code::ShiftRight | Code::ControlLeft
@@ -130,13 +130,13 @@ impl RuntimeCore {
                 if !is_mod(key) { self.note_key_down(app, repeat); }
             }
             PhysicalInput::Key { key, pressed: false, .. } => {
-                if matches!(&self.held, Activation::Held { physical, .. } if *physical == Some(key)) { self.held = Activation::Up; }
+                if matches!(&self.kbd.held, Activation::Held { physical, .. } if *physical == Some(key)) { self.kbd.held = Activation::Up; }
                 if fallback.is_none() && !is_mod(key) && self.composing(app) {
-                    self.key_releases.composing_release();
+                    self.kbd.key_releases.composing_release();
                 }
             }
             PhysicalInput::FocusLost => {
-                self.key_releases.lost();
+                self.kbd.key_releases.lost();
             }
             PhysicalInput::Modifiers(_) => {}
         }
@@ -163,7 +163,7 @@ impl RuntimeCore {
                 if key.edit_command() == Some('v') && self.accepts_paste() {
                     // Capture the target in event order, before another queued click can
                     // change focus. An empty/image clipboard still consumes the command.
-                    self.paste_request = Some(self.paste_target());
+                    self.edit.paste_request = Some(self.paste_target());
                     false
                 } else {
                     let mut one = Tx { physical_key: code, key_base: base, ..self.transaction(app) };
@@ -191,17 +191,17 @@ impl RuntimeCore {
     }
     /// `App::on_modifiers`, when the held modifiers changed since it last heard them.
     fn dispatch_mods(&mut self, app: &mut dyn AppDriver, tx: &mut Tx, live: &mut Option<bool>) -> bool {
-        if !app.has_on_mods() || self.held_mods == self.mods_heard { return false; }
-        self.mods_heard = self.held_mods;
+        if !app.has_on_mods() || self.kbd.held_mods == self.kbd.mods_heard { return false; }
+        self.kbd.mods_heard = self.kbd.held_mods;
         let mut one = self.transaction(app);
-        if !app.on_mods(self.mods_heard, &mut one) { return false; }
+        if !app.on_mods(self.kbd.mods_heard, &mut one) { return false; }
         fold_live(live, true, &one);
         merge(tx, one);
         true
     }
     /// The focused element's `on_physical_input` handler; true if it consumed `event`.
     fn offer_physical(&mut self, app: &mut dyn AppDriver, event: &PhysicalInput, tx: &mut Tx, live: &mut Option<bool>) -> bool {
-        let Some(handler) = self.focus.path().and_then(|p| self.node(p))
+        let Some(handler) = self.kbd.focus.path().and_then(|p| self.node(p))
             .and_then(|n| n.focus.physical.clone()) else { return false };
         let mut one = Tx { key_repeat: matches!(event, PhysicalInput::Key { repeat: true, .. }), ..self.transaction(app) };
         let consumed = Tx::took(handler(app.states(), event, &mut one), &mut one);
@@ -211,11 +211,11 @@ impl RuntimeCore {
     }
     /// Focus moving off an element inside the window: its handler hears `FocusLost`, and
     /// modifier keys stay held.
-    pub(super) fn physical_focus_lost(&mut self, app: &mut dyn AppDriver) -> bool {
+    pub(in crate::runtime) fn physical_focus_lost(&mut self, app: &mut dyn AppDriver) -> bool {
         let mut tx = Tx::default();
         let changed = self.offer_physical(app, &PhysicalInput::FocusLost, &mut tx, &mut None);
         self.latch_requests(app, &mut tx);
-        merge(&mut self.pending, tx);
+        merge(&mut self.frame.pending, tx);
         changed
     }
 }
@@ -252,13 +252,13 @@ mod tests {
         rt.frame(0.0);
         assert_eq!((rt.state.physical, rt.state.logical, rt.state.dismissed), (2, 0, 0));
         assert_eq!(rt.state.edit.text, "");
-        assert!(rt.paste_request.is_none(), "capture must not read the clipboard");
+        assert!(rt.edit.paste_request.is_none(), "capture must not read the clipboard");
         rt.state.capture = false;
         let (x, y) = rt.find("edit").unwrap(); rt.pointer_down(x, y); rt.pointer_up(x, y);
         rt.physical_with_fallback(PhysicalInput::Key { key: PhysicalKeyCode::KeyV, mods, pressed: true, repeat: false },
             Some(KeyEvent { key: Key::Command('v'), mods }));
         rt.frame(0.0);
-        let target = rt.paste_request.take().expect("paste requested");
+        let target = rt.edit.paste_request.take().expect("paste requested");
         rt.paste_result(target, crate::ClipboardContent::new("paste"));
         rt.frame(0.0);
         assert_eq!(rt.state.edit.text, "paste");
@@ -276,7 +276,7 @@ mod tests {
         let release = PhysicalInput::Key { key: PhysicalKeyCode::ShiftLeft, mods: Mods::default(), pressed: false, repeat: false };
         for event in [modifiers, release] {
             assert!(!rt.physical_with_fallback(event, None));
-            assert!(rt.queue.is_empty() && !rt.dirty, "unused input must not schedule work");
+            assert!(rt.frame.queue.is_empty() && !rt.commit.dirty, "unused input must not schedule work");
         }
         click(&mut rt, "recorder");
         // The click already requested a frame. Do not deliver modifiers to the old
@@ -287,7 +287,7 @@ mod tests {
         assert_eq!(rt.state.physical, 1);
         for event in [modifiers, release] {
             assert!(rt.physical_with_fallback(event, None));
-            assert!(rt.dirty, "consumption must commit the handler's state changes");
+            assert!(rt.commit.dirty, "consumption must commit the handler's state changes");
             rt.frame(0.0);
         }
         assert_eq!(rt.state.physical, 3);
@@ -300,7 +300,7 @@ mod tests {
         let delivered = rt.state.physical; // FocusLost may notify the old recorder.
         assert!(!rt.physical_with_fallback(release, None));
         assert_eq!(rt.state.physical, delivered);
-        assert!(rt.queue.is_empty() && !rt.dirty);
+        assert!(rt.frame.queue.is_empty() && !rt.commit.dirty);
     }
 
     /// A modifier change while state changed since the last frame, as a covered window's does
@@ -353,12 +353,12 @@ mod tests {
         let mut rt = fields_runtime(false);
         key(&mut rt, PhysicalKeyCode::KeyV, Key::Command('v'));
         rt.frame(0.0);
-        assert!(rt.paste_request.is_none(), "no focused editor or paste handler: no clipboard read");
+        assert!(rt.edit.paste_request.is_none(), "no focused editor or paste handler: no clipboard read");
         assert_eq!(rt.state.app_keys, 1);
         click(&mut rt, "first");
         key(&mut rt, PhysicalKeyCode::KeyV, Key::Command('v'));
         rt.frame(0.0);
-        let first = rt.paste_request.take().unwrap();
+        let first = rt.edit.paste_request.take().unwrap();
         assert!(first.is_some());
         assert_eq!((rt.state.keys, rt.state.app_keys), (0, 1));
         // Image-only clipboard sends no reply. An empty text reply also never falls
@@ -369,7 +369,7 @@ mod tests {
         key(&mut rt, PhysicalKeyCode::KeyV, Key::Command('v'));
         click(&mut rt, "second");
         rt.frame(0.0);
-        let target = rt.paste_request.take().unwrap();
+        let target = rt.edit.paste_request.take().unwrap();
         assert_eq!(target, first, "target captured before the next click, not at worker flush");
         assert_ne!(target, rt.paste_target());
         rt.paste_result(target, crate::ClipboardContent::new("late"));
@@ -392,7 +392,7 @@ mod tests {
             assert_eq!(rt.copy_request.is_none(), secure);
             key(&mut rt, PhysicalKeyCode::KeyV, Key::Command('v'));
             rt.frame(0.0);
-            let target = rt.paste_request.take().unwrap();
+            let target = rt.edit.paste_request.take().unwrap();
             rt.paste_result(target, crate::ClipboardContent::new("replacement"));
             rt.frame(0.0);
             assert_eq!(rt.state.first.text, "replacement");
@@ -667,8 +667,8 @@ mod tests {
         rt.frame(0.0);
         key(&mut rt, PhysicalKeyCode::KeyV, Key::Command('v'));
         rt.frame(0.0);
-        assert_eq!(rt.paste_request, Some(None));
-        let target = rt.paste_request.take().unwrap();
+        assert_eq!(rt.edit.paste_request, Some(None));
+        let target = rt.edit.paste_request.take().unwrap();
         rt.paste_result(target, crate::ClipboardContent::new("app"));
         rt.frame(0.0);
         assert_eq!(rt.state, "app");

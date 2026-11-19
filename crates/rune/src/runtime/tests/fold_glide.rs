@@ -21,11 +21,11 @@ fn shut_secs(fold: bool) -> f32 {
     let mut rt = Runtime::new((true, fold), folded, (400.0, 900.0), Env::new(true, 2.0));
     rt.frame(0.0);
     rt.state.0 = false;
-    rt.dirty = true;
+    rt.commit.dirty = true;
     for k in 1..240 {
         rt.frame(1.0 / 120.0);
         if fold && k < 12 {
-            assert!(rt.row_mask.iter().any(|&m| m >= 0.0), "shutting, the row clips what it held");
+            assert!(rt.paint.row_mask.iter().any(|&m| m >= 0.0), "shutting, the row clips what it held");
         }
         let below = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("below")).unwrap();
         if (below.rect[1] - 140.0).abs() < 0.5 {
@@ -53,7 +53,7 @@ fn opening(zoom: f32) -> Vec<(f32, f32)> {
     rt.frame(0.0);
     rt.frame(1.0 / 120.0);
     rt.state.0 = true;
-    rt.dirty = true;
+    rt.commit.dirty = true;
     (0..60).map(|_| {
         rt.frame(1.0 / 120.0);
         let row = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("group")).unwrap();
@@ -80,7 +80,7 @@ fn a_fold_moves_only_what_shows_of_it() {
     rt.frame(0.0);
     rt.frame(1.0 / 120.0);
     rt.state = true;
-    rt.dirty = true;
+    rt.commit.dirty = true;
     let mut heights = Vec::new();
     for _ in 0..60 {
         rt.frame(1.0 / 120.0);
@@ -190,7 +190,7 @@ fn keep_on_screen_holds_a_stuck_header_while_its_fold_shuts() {
     let shown: Vec<f32> = after.iter().copied().skip_while(|&a| a >= 200.0).collect();
     assert!(shown.windows(2).all(|w| w[1] <= w[0] + 0.5), "the row below only rises once it shows: {after:?}");
     assert!(after[36] < 28.5, "it reaches the header on the fold's own spring: {after:?}");
-    assert!(*after.last().unwrap() == 28.0 && !rt.requests.has_keeps() && !rt.animating, "{after:?}");
+    assert!(*after.last().unwrap() == 28.0 && !rt.scroll.requests.has_keeps() && !rt.animating, "{after:?}");
 }
 
 /// A fold shutting from 600 pt feathers its moving bottom edge to its `fold_feather` depth,
@@ -204,10 +204,10 @@ fn a_fold_feathers_its_edge_shutting_too() {
     let mut rt = Runtime::new(true, folded, (400.0, 900.0), Env::new(true, 2.0));
     rt.frame(0.0);
     rt.update(|s, _| *s = false);
-    let group = |rt: &Runtime<bool>| rt.nodes.iter().position(|n| n.named("group")).unwrap();
+    let group = |rt: &Runtime<bool>| rt.tree.nodes.iter().position(|n| n.named("group")).unwrap();
     let masks: Vec<f32> = (0..60).map(|_| {
         rt.frame(1.0 / 120.0);
-        rt.row_mask[group(&rt)]
+        rt.paint.row_mask[group(&rt)]
     }).collect();
     let peak = masks.iter().copied().fold(0.0, f32::max);
     assert!((peak - 16.0).abs() < 1e-3, "shutting, the moving edge feathers {peak} pt deep: {masks:?}");
@@ -248,7 +248,7 @@ fn shut_from_stuck(after: f32, offset: f32) -> Vec<HashMap<String, f32>> {
             (["hdr", "before", "after"].contains(&k.as_str()) || (k.starts_with("step-") && shows)).then_some((k, e.rect[1]))
         }).collect()
     }).collect();
-    assert!(!rt.animating && !rt.requests.has_keeps());
+    assert!(!rt.animating && !rt.scroll.requests.has_keeps());
     frames
 }
 
@@ -312,7 +312,7 @@ fn a_long_fold_shut_from_its_stuck_header_at_the_end_is_one_motion() {
     for short in [130.0, 80.0, 40.0, 20.0, 8.0] {
         let mut rt = Runtime::new((true, 100.0), held_section, (300.0, 200.0), Env::new(true, 1.0));
         rt.frame(0.0);
-        let max = rt.scrolls.values().next().unwrap().max as f32;
+        let max = rt.scroll.scrolls.values().next().unwrap().max as f32;
         let offset = max - short;
         rt.update(|_, tx| tx.scroll_to_instant("scroll", 0.0, offset));
         for _ in 0..4 { rt.frame(1.0 / 120.0); }
@@ -453,7 +453,7 @@ fn after_removal(fold: bool, n: usize) -> Vec<f32> {
     let mut rt = Runtime::new((true, fold), view, (400.0, 600.0), Env::new(true, 2.0));
     rt.frame(0.0);
     rt.state.0 = false;
-    rt.dirty = true;
+    rt.commit.dirty = true;
     (0..n).map(|_| {
         rt.frame(1.0 / 120.0);
         rt.elements().into_iter().find(|e| e.key.as_deref() == Some("below")).unwrap().rect[1]
@@ -483,7 +483,7 @@ fn block(opening: bool, frames: usize) -> Vec<([f32; 3], f32)> {
     let mut rt = Runtime::new(!opening, view, (400.0, 600.0), Env::new(true, 2.0));
     rt.frame(0.0);
     rt.state = opening;
-    rt.dirty = true;
+    rt.commit.dirty = true;
     (0..frames).map(|_| {
         rt.frame(1.0 / 120.0);
         let els = rt.elements();

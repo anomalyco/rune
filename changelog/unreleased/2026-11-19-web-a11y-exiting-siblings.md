@@ -1,0 +1,1 @@
+- Web accessibility: while a child plays its exit animation, the elements after its container stay in the DOM mirror under their own parents. They vanished from it, or moved under that container, until the exit finished.

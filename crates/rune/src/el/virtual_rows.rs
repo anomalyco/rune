@@ -294,7 +294,7 @@ mod tests {
         let first = built();
         assert!(!first.is_empty() && first.len() < 60, "built {} rows", first.len());
         assert!(first.iter().all(|&i| i >= 4900), "pinned to the bottom, the tail builds: {first:?}");
-        assert!(rt.nodes.len() < 400, "{} nodes", rt.nodes.len());
+        assert!(rt.tree.nodes.len() < 400, "{} nodes", rt.tree.nodes.len());
         let (count, commits) = (first.len(), rt.stats.commits);
         for _ in 0..5 {
             rt.state.tick += 1;
@@ -466,34 +466,34 @@ mod tests {
         let mut rt = fixed(1000);
         rt.wheel(150.0, 250.0, -10_000.0);
         until_idle(&mut rt);
-        assert_eq!(rt.virtuals["#0/scroll/rows"].range, 180..230);
+        assert_eq!(rt.commit.virtuals["#0/scroll/rows"].range, 180..230);
         // Too small a step to move the window.
         rt.wheel(150.0, 250.0, -100.0);
         rt.frame(1.0 / 120.0);
-        assert_eq!(rt.virtuals["#0/scroll/rows"].range, 180..230);
+        assert_eq!(rt.commit.virtuals["#0/scroll/rows"].range, 180..230);
         built();
         // The first pass, at 10,100, leaves out rows 180 and 181. The rows it mounts collapse,
         // which moves the reader's row up and leaves the viewport short, so a retry mounts from
         // row 162 down, 180 and 181 among them.
         for h in &mut rt.state[182..232] { *h = 1; }
         commit(&mut rt);
-        let v = &rt.virtuals["#0/scroll/rows"];
+        let v = &rt.commit.virtuals["#0/scroll/rows"];
         assert_eq!(v.range.start, 162, "a retry isn't held to the per-frame budget");
         let now = built();
         assert!(!now.contains(&180) && !now.contains(&181), "their memos stay: {now:?}");
         assert!(now.len() < 120, "built {} rows", now.len());
-        assert!(!rt.virtual_culled.iter().any(|p| p.ends_with("/r180") || p.ends_with("/r181")), "{:?}", rt.virtual_culled);
+        assert!(!rt.commit.virtual_culled.iter().any(|p| p.ends_with("/r180") || p.ends_with("/r181")), "{:?}", rt.commit.virtual_culled);
     }
 
     #[test]
     fn an_idle_window_mounts_all_its_overscan() {
         let mut rt = fixed(1000);
-        assert_eq!(rt.virtuals["#0/scroll/rows"].range, 0..15, "the first commit mounts the viewport and half a viewport");
+        assert_eq!(rt.commit.virtuals["#0/scroll/rows"].range, 0..15, "the first commit mounts the viewport and half a viewport");
         until_idle(&mut rt);
-        assert_eq!(rt.virtuals["#0/scroll/rows"].range, 0..30, "then the full overscan");
+        assert_eq!(rt.commit.virtuals["#0/scroll/rows"].range, 0..30, "then the full overscan");
         rt.wheel(150.0, 250.0, -10_000.0);
         let frames = until_idle(&mut rt);
-        assert_eq!(rt.virtuals["#0/scroll/rows"].range, 180..230, "after {frames} frames");
+        assert_eq!(rt.commit.virtuals["#0/scroll/rows"].range, 180..230, "after {frames} frames");
         assert!(!rt.frame(1.0 / 120.0), "then it rests");
     }
 
@@ -552,7 +552,7 @@ mod tests {
             rt.frame(1.0 / 120.0);
             assert_covered(&rt, &format!("frame {frame}"));
         }
-        assert_eq!(rt.virtuals["#0/scroll/rows"].range, 0..14, "then rows until its edge is 1.75 viewports away");
+        assert_eq!(rt.commit.virtuals["#0/scroll/rows"].range, 0..14, "then rows until its edge is 1.75 viewports away");
         assert_eq!(built(), (8..14).collect::<Vec<_>>(), "building only rows new to it");
     }
 
@@ -574,7 +574,7 @@ mod tests {
         assert_covered(&rt, "first showing");
         assert_eq!(rt.elements().into_iter().find(|e| e.path == "#0/scroll").unwrap().rect[3], 430.0);
         assert_eq!(PASSES.get(), 2, "the estimate's pass and one retry");
-        assert!(rt.virtuals["#0/scroll/rows"].range.end < 20, "not every row");
+        assert!(rt.commit.virtuals["#0/scroll/rows"].range.end < 20, "not every row");
     }
 
     /// A window that fits its content has no height to bound its root: a results list opening
@@ -587,7 +587,7 @@ mod tests {
             col().w_full().child(el().key("search").w_full().h(56.0)).children(results)
         }
         let mut rt = Runtime::new(false, view, (300.0, 500.0), Env::new(true, 1.0));
-        rt.fit_height = true;
+        rt.host.fit_height = true;
         let height = rt.content_height();
         rt.set_viewport((300.0, height), 1.0);
         rt.frame(0.0);
@@ -596,7 +596,7 @@ mod tests {
         PASSES.set(0);
         rt.frame(1.0 / 120.0);
         assert_eq!(PASSES.get(), 1, "measured once");
-        assert_eq!(rt.virtuals["#0/scroll/rows"].range, 0..8, "350 points' rows and the overscan budget");
+        assert_eq!(rt.commit.virtuals["#0/scroll/rows"].range, 0..8, "350 points' rows and the overscan budget");
     }
 
     /// An out-of-flow popover isn't bounded by the 32-point header it hangs from, only by its
@@ -614,7 +614,7 @@ mod tests {
         PASSES.set(0);
         rt.frame(1.0 / 120.0);
         assert_eq!(PASSES.get(), 1, "measured once");
-        assert_eq!(rt.virtuals["#0/header/scroll/rows"].range, 0..8, "300 points' rows and the overscan budget");
+        assert_eq!(rt.commit.virtuals["#0/header/scroll/rows"].range, 0..8, "300 points' rows and the overscan budget");
     }
 
     /// Rows estimated short of their height: revealing the last on the first showing measures
@@ -657,9 +657,9 @@ mod tests {
                     |_: &usize, i| col().child(el().key("a").h(20.0)).child(el().key(if i == 1 { "a" } else { "b" }).h(20.0))))
         }
         let mut rt = Runtime::new(4, view, (200.0, 200.0), Env::new(true, 1.0));
-        rt.key_warnings = Some(Vec::new());
+        rt.commit.key_warnings = Some(Vec::new());
         rt.frame(0.0);
-        let warnings = rt.key_warnings.as_ref().unwrap();
+        let warnings = rt.commit.key_warnings.as_ref().unwrap();
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert!(warnings[0].contains("duplicate sibling key \"a\" under \"scroll/rows/r1\""), "{warnings:?}");
         let mut rt = Runtime::new(4, view, (200.0, 200.0), Env::new(true, 1.0));
@@ -680,12 +680,12 @@ mod tests {
         }
         for indexed in [true, false] {
             let mut rt = Runtime::new(indexed, view, (200.0, 200.0), Env::new(true, 1.0));
-            rt.key_warnings = Some(Vec::new());
+            rt.commit.key_warnings = Some(Vec::new());
             rt.frame(0.0);
             rt.frame(1.0);
             let keys: Vec<_> = rt.elements().into_iter().filter_map(|e| e.key).filter(|k| k.starts_with("dup")).collect();
             assert_eq!(keys, ["dup", "dup#dup1", "dup#dup2"], "indexed {indexed}");
-            let warnings = rt.key_warnings.as_ref().unwrap();
+            let warnings = rt.commit.key_warnings.as_ref().unwrap();
             assert!(warnings.iter().any(|w| w.contains("duplicate virtual row key \"dup\" under \"scroll/rows\"")), "{warnings:?}");
         }
     }
@@ -709,7 +709,7 @@ mod tests {
             let pic = rects.iter().find(|(p, _)| *p == format!("#0/scroll/rows/r{i}/pic")).expect("built").1;
             assert_eq!(pic, [0.0, i as f32 * 80.0, 160.0, 80.0], "r{i}");
         }
-        assert_eq!(rt.virtuals["#0/scroll/rows"].height("r3"), 80.0);
+        assert_eq!(rt.commit.virtuals["#0/scroll/rows"].height("r3"), 80.0);
     }
 
     #[test]
@@ -723,7 +723,7 @@ mod tests {
             rt.frame(1.0 / 120.0);
         }
         assert!(rt.find(&key).is_none(), "scrolled away, unbuilt");
-        let v = &rt.virtuals["#0/scroll/rows"];
+        let v = &rt.commit.virtuals["#0/scroll/rows"];
         assert_eq!(v.height(&key), measured, "its height stays measured");
         assert_eq!(v.height(&rt.state.keys[400]), 72.0, "a row never seen is estimated");
     }
@@ -840,12 +840,12 @@ mod tests {
         for _ in 0..6 {
             rt.frame(1.0 / 60.0);
         }
-        assert!(rt.nodes.iter().any(|n| n.path.ends_with("/r0/cell/txt")));
+        assert!(rt.tree.nodes.iter().any(|n| n.path.ends_with("/r0/cell/txt")));
         // Scroll far enough down that row 0 leaves the mounted overscan window.
         rt.wheel(150.0, 100.0, -2_000.0);
         rt.frame(1.0 / 60.0);
         assert!(
-            !rt.nodes.iter().any(|n| n.path.contains("/r0/")),
+            !rt.tree.nodes.iter().any(|n| n.path.contains("/r0/")),
             "culled row descendants are unmounted immediately, not left orphaned in nodes"
         );
     }
@@ -928,7 +928,7 @@ mod tests {
                     after = after.max(start.elapsed().as_secs_f64() * 1e3);
                 }
                 println!("{name} prepend 60 to 3700: {ms:6.2} ms, {} view runs ({:.2} ms), {} shaped, {} nodes; slowest frame after {after:.2} ms",
-                    VIEWS.get() - views, VIEW_NS.get() as f64 / 1e6, rt.text.shaped - shaped, rt.nodes.len());
+                    VIEWS.get() - views, VIEW_NS.get() as f64 / 1e6, rt.text.shaped - shaped, rt.tree.nodes.len());
             }
 
             // Reading up through history: which frames are slow, and do they shape?

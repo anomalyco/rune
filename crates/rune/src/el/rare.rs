@@ -32,6 +32,9 @@ pub(crate) struct ElCold {
     pub(crate) matched: Option<Rc<str>>,
     pub(crate) scroll: Option<ScrollSpec>,
     pub(crate) scroll_axes: ScrollAxes,
+    /// `El::wheel_scrolls`: the viewport a wheel over this element scrolls, in place of what it
+    /// starts on.
+    pub(crate) wheel_scrolls: Option<Box<str>>,
     pub(crate) sticky: Option<Box<Sticky>>,
     pub(crate) scroll_edges: ScrollEdges,
     pub(crate) growth: Option<Box<GrowthSpec>>,
@@ -82,6 +85,7 @@ impl Empty for ElCold {
         matched: None,
         scroll: None,
         scroll_axes: ScrollAxes::Y,
+        wheel_scrolls: None,
         sticky: None,
         scroll_edges: ScrollEdges { fade: 0.0, fade_style: crate::el::FadeStyle::SMOOTH, margin: 0.0, anchor: false },
         growth: None,

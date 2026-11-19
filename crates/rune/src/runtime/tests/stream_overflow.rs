@@ -13,10 +13,10 @@ fn masks(edge: StreamEdge) -> (Vec<f32>, Vec<f32>) {
     let mut rt = Runtime::new((false, edge), view, (400.0, 1400.0), Env::new(true, 2.0));
     rt.frame(0.0);
     rt.update(|s, _| s.0 = true);
-    let at = |rt: &Runtime<(bool, StreamEdge)>, k: &str| rt.nodes.iter().position(|n| n.named(k)).unwrap();
+    let at = |rt: &Runtime<(bool, StreamEdge)>, k: &str| rt.tree.nodes.iter().position(|n| n.named(k)).unwrap();
     (0..60).map(|_| {
         rt.frame(1.0 / 120.0);
-        (rt.row_mask[at(&rt, "reply")], rt.row_mask[at(&rt, "fold")])
+        (rt.paint.row_mask[at(&rt, "reply")], rt.paint.row_mask[at(&rt, "fold")])
     }).unzip()
 }
 

@@ -13,8 +13,7 @@ pub(super) struct FillPass {
     /// `projection` for each page height, copied in before each page's pass.
     projections: wgpu::Buffer,
     bind: wgpu::BindGroup,
-    instances: wgpu::Buffer,
-    capacity: usize,
+    instances: rune_staging::GrowBuffer,
 }
 
 /// What a fill pass binds besides its own buffers.
@@ -63,8 +62,15 @@ impl FillPass {
         }
         projections.unmap();
         let bind = Self::bind(device, &bindings, &projection);
-        let capacity = 64;
-        FillPass { pipeline, projection, projections, bind, instances: Renderer::instance_buffer(device, capacity), capacity }
+        let instances = rune_staging::GrowBuffer::new(
+            device,
+            "instances",
+            wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            std::mem::size_of::<Instance>(),
+            64,
+            0,
+        );
+        FillPass { pipeline, projection, projections, bind, instances }
     }
 
     fn bind(device: &wgpu::Device, b: &FillBindings<'_>, projection: &wgpu::Buffer) -> wgpu::BindGroup {
@@ -80,12 +86,9 @@ impl FillPass {
     /// instance range each page draws.
     fn stage(&mut self, device: &wgpu::Device, staging: &rune_staging::Staging, pages: &[(usize, Vec<QueuedFill>)]) -> Vec<(usize, std::ops::Range<u32>)> {
         let count: usize = pages.iter().map(|(_, f)| f.len()).sum();
-        if count > self.capacity {
-            self.capacity = count.next_power_of_two();
-            self.instances = Renderer::instance_buffer(device, self.capacity);
-        }
+        self.instances.ensure(device, count);
         let instances: Vec<Instance> = pages.iter().flat_map(|(_, fills)| fills.iter().map(instance)).collect();
-        staging.write_buffer(&self.instances, 0, bytemuck::cast_slice(&instances));
+        staging.write_buffer(self.instances.buffer(), 0, bytemuck::cast_slice(&instances));
         let mut first = 0u32;
         pages.iter().map(|(page, fills)| {
             let last = first + fills.len() as u32;

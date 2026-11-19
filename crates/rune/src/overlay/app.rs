@@ -109,21 +109,38 @@ impl dyn OverlayApp + '_ {
         self.driver(|rt, app| rt.pointer_release_lost(app, x, y));
     }
 
-    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
     pub(super) fn secondary_up(&mut self, x: f32, y: f32) {
         self.driver(|rt, app| rt.secondary_up(app, x, y));
     }
 
+    pub(super) fn button_down(&mut self, x: f32, y: f32, button: crate::PointerButton) {
+        self.driver(|rt, app| rt.button_down(app, x, y, button));
+    }
+
+    pub(super) fn button_up(&mut self, x: f32, y: f32, button: crate::PointerButton) {
+        self.driver(|rt, app| rt.button_up(app, x, y, button));
+    }
+
+    pub(super) fn touch(&mut self, touch: &winit::event::Touch) {
+        self.driver(|rt, app| crate::window::touch_core(rt, app, touch));
+    }
+
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
     pub(super) fn key_up(&mut self, key: crate::KeyEvent) -> bool {
         self.driver(|rt, app| rt.key_up(app, key))
     }
 
-    pub(super) fn physical_observation(&mut self, event: crate::PhysicalInput) -> bool {
-        self.driver(|rt, app| rt.physical_observation(app, event))
+    pub(super) fn modifiers(&mut self, mods: &mut winit::keyboard::ModifiersState, next: winit::keyboard::ModifiersState) -> bool {
+        self.driver(|rt, app| crate::input::host_events::modifiers(rt, app, mods, next))
     }
 
-    pub(super) fn physical_then(&mut self, event: crate::PhysicalInput, key: Option<crate::KeyEvent>, base: Option<char>, unhandled: Option<crate::runtime::Unhandled>) -> bool {
-        self.driver(|rt, app| rt.physical_then(app, event, key, base, unhandled))
+    pub(super) fn keyboard(
+        &mut self,
+        clipboard: &crate::clipboard::Client,
+        event: &winit::event::KeyEvent,
+        mods: winit::keyboard::ModifiersState,
+    ) -> bool {
+        self.driver(|rt, app| crate::input::host_events::keyboard(rt, app, clipboard, event, mods, None))
     }
 
     #[cfg(any(target_os = "macos", all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
@@ -375,6 +392,9 @@ impl<T: 'static> Overlay<T> {
     pub(super) fn left_button(&mut self, pressed: bool, point: Option<(f32, f32)>) { with_app!(self, |core, app| core.left_button(&mut app, pressed, point)) }
     pub(super) fn drag_ends_due(&mut self) { with_app!(self, |core, app| core.drag_ends_due(&mut app)) }
     pub(super) fn missed(&mut self, missed: crate::window::Missed, paced: bool, stepped: bool) { with_app!(self, |core, app| core.missed(&mut app, missed, paced, stepped)) }
+    pub(super) fn acquire_missed(&mut self, missed: crate::window::Missed, paced: bool, prewarm: bool, built: bool) {
+        with_app!(self, |core, app| core.acquire_missed(&mut app, missed, paced, prewarm, built))
+    }
     pub(super) fn apply_wake(&mut self, woken: bool, updates: Vec<Update<T>>) {
         let queued = !updates.is_empty();
         let mut updated = false;
