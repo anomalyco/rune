@@ -907,11 +907,20 @@ fn proof_pick_loads_which_drivers_ever() {
         size: u32,
     }
     type Callback = unsafe extern "system" fn(u32, *const Notification, *mut core::ffi::c_void);
-    #[link(name = "ntdll")]
+    // Not in the SDK's import library: found in ntdll at run time.
+    #[link(name = "kernel32")]
     unsafe extern "system" {
-        fn LdrRegisterDllNotification(flags: u32, callback: Callback, context: *mut core::ffi::c_void, cookie: *mut *mut core::ffi::c_void) -> i32;
-        fn LdrUnregisterDllNotification(cookie: *mut core::ffi::c_void) -> i32;
+        fn GetModuleHandleA(name: *const u8) -> *mut core::ffi::c_void;
+        fn GetProcAddress(module: *mut core::ffi::c_void, name: *const u8) -> *mut core::ffi::c_void;
     }
+    type Register = unsafe extern "system" fn(u32, Callback, *mut core::ffi::c_void, *mut *mut core::ffi::c_void) -> i32;
+    type Unregister = unsafe extern "system" fn(*mut core::ffi::c_void) -> i32;
+    let ntdll = unsafe { GetModuleHandleA(c"ntdll.dll".as_ptr().cast()) };
+    let register = unsafe { GetProcAddress(ntdll, c"LdrRegisterDllNotification".as_ptr().cast()) };
+    let unregister = unsafe { GetProcAddress(ntdll, c"LdrUnregisterDllNotification".as_ptr().cast()) };
+    assert!(!register.is_null() && !unregister.is_null(), "ntdll's loader notifications");
+    let register: Register = unsafe { std::mem::transmute(register) };
+    let unregister: Unregister = unsafe { std::mem::transmute(unregister) };
     static SEEN: Mutex<Vec<(std::time::Instant, bool, String)>> = Mutex::new(Vec::new());
     unsafe extern "system" fn heard(reason: u32, data: *const Notification, _: *mut core::ffi::c_void) {
         let name = unsafe {
@@ -923,7 +932,7 @@ fn proof_pick_loads_which_drivers_ever() {
         }
     }
     let mut cookie = std::ptr::null_mut();
-    assert_eq!(unsafe { LdrRegisterDllNotification(0, heard, std::ptr::null_mut(), &mut cookie) }, 0, "loader notifications");
+    assert_eq!(unsafe { register(0, heard, std::ptr::null_mut(), &mut cookie) }, 0, "loader notifications");
     let start = std::time::Instant::now();
     let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
     desc.backends = wgpu::Backends::DX12;
@@ -936,7 +945,7 @@ fn proof_pick_loads_which_drivers_ever() {
         let (device, _queue) = pollster::block_on(adapter.request_device(&Default::default())).expect("device");
         drop(device);
     }
-    unsafe { LdrUnregisterDllNotification(cookie) };
+    unsafe { unregister(cookie) };
     let drivers = regex_free_filter(&SEEN.lock().unwrap_or_else(|e| e.into_inner()), start);
     eprintln!("proof pick ever: pick took {} us; GPU driver loads and unloads (us from the start): {drivers:?}", after_pick.as_micros());
 
