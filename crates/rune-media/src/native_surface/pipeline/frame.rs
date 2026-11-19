@@ -21,6 +21,19 @@ struct Uniforms {
     orient: [f32; 4],
 }
 
+const _: () = {
+    assert!(std::mem::size_of::<Uniforms>() == 144);
+    assert!(std::mem::offset_of!(Uniforms, viewport) == 0);
+    assert!(std::mem::offset_of!(Uniforms, node) == 16);
+    assert!(std::mem::offset_of!(Uniforms, image) == 32);
+    assert!(std::mem::offset_of!(Uniforms, radii) == 48);
+    assert!(std::mem::offset_of!(Uniforms, clip) == 64);
+    assert!(std::mem::offset_of!(Uniforms, fade) == 80);
+    assert!(std::mem::offset_of!(Uniforms, color) == 96);
+    assert!(std::mem::offset_of!(Uniforms, sampling) == 112);
+    assert!(std::mem::offset_of!(Uniforms, orient) == 128);
+};
+
 /// Bind groups a draw keeps for textures it may show again (a video decoder's ring).
 const KEPT_BINDS: usize = 8;
 
@@ -461,4 +474,47 @@ fn bind_group(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, sampler: &w
             wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(sampler) },
         ],
     })
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod abi_tests {
+    use super::Uniforms;
+
+    #[test]
+    fn wgsl_video_uniforms_layout_matches_rust() {
+        use wgpu::naga::{TypeInner, front::wgsl, proc::Layouter, valid::{Capabilities, ValidationFlags, Validator}};
+
+        let source = include_str!("../video.wgsl");
+        let module = wgsl::parse_str(source).unwrap_or_else(|e| panic!("{}", e.emit_to_string(source)));
+        Validator::new(ValidationFlags::all(), Capabilities::default() | Capabilities::SHADER_FLOAT16_IN_FLOAT32)
+            .validate(&module)
+            .expect("validate video.wgsl");
+        let mut layouter = Layouter::default();
+        layouter.update(module.to_ctx()).expect("layout video.wgsl");
+
+        let (handle, ty) = module
+            .types
+            .iter()
+            .find(|(_, t)| t.name.as_deref() == Some("Uniforms"))
+            .expect("WGSL struct Uniforms not found");
+        assert_eq!(layouter[handle].size as usize, std::mem::size_of::<Uniforms>());
+        let TypeInner::Struct { members, span } = &ty.inner else { panic!("Uniforms is not a struct") };
+        assert_eq!(*span as usize, std::mem::size_of::<Uniforms>());
+        let expected: &[(&str, usize)] = &[
+            ("viewport", std::mem::offset_of!(Uniforms, viewport)),
+            ("node", std::mem::offset_of!(Uniforms, node)),
+            ("image", std::mem::offset_of!(Uniforms, image)),
+            ("radii", std::mem::offset_of!(Uniforms, radii)),
+            ("clip", std::mem::offset_of!(Uniforms, clip)),
+            ("fade", std::mem::offset_of!(Uniforms, fade)),
+            ("color", std::mem::offset_of!(Uniforms, color)),
+            ("sampling", std::mem::offset_of!(Uniforms, sampling)),
+            ("orient", std::mem::offset_of!(Uniforms, orient)),
+        ];
+        assert_eq!(members.len(), expected.len());
+        for (member, &(field, offset)) in members.iter().zip(expected) {
+            assert_eq!(member.name.as_deref(), Some(field), "Uniforms.{field} name");
+            assert_eq!(member.offset as usize, offset, "Uniforms.{field} offset");
+        }
+    }
 }

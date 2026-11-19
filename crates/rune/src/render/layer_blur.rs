@@ -8,11 +8,18 @@ const TAPS: usize = 128; // centre + ceil(3 * MAX_SIGMA / 2) pairs; padded for P
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
-struct Uniforms {
-    meta: [f32; 4], // used width, height, axis (0 horizontal), tap count
-    mapping: [f32; 4], // output->input scale xy
-    taps: [[f32; 4]; TAPS], // offset, weight; vec4 stride matches WGSL uniform arrays
+pub(super) struct Uniforms {
+    pub(super) meta: [f32; 4], // used width, height, axis (0 horizontal), tap count
+    pub(super) mapping: [f32; 4], // output->input scale xy
+    pub(super) taps: [[f32; 4]; TAPS], // offset, weight; vec4 stride matches WGSL uniform arrays
 }
+
+const _: () = {
+    assert!(std::mem::size_of::<Uniforms>() == 2080);
+    assert!(std::mem::offset_of!(Uniforms, meta) == 0);
+    assert!(std::mem::offset_of!(Uniforms, mapping) == 16);
+    assert!(std::mem::offset_of!(Uniforms, taps) == 32);
+};
 
 pub(super) struct Pipeline {
     pipelines: [wgpu::RenderPipeline; 5],

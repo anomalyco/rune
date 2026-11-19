@@ -1,0 +1,407 @@
+use std::mem::{offset_of, size_of};
+
+use bytemuck::Zeroable;
+
+use super::*;
+
+#[test]
+fn kind_enum_round_trips_and_rejects_invalid_floats() {
+    assert_eq!(size_of::<Option<Kind>>(), 1);
+    let all = [
+        (Kind::Rect, KIND_RECT, 0u8),
+        (Kind::Shadow, KIND_SHADOW, 1),
+        (Kind::Glyph, KIND_GLYPH, 2),
+        (Kind::Inset, KIND_INSET, 3),
+        (Kind::Gradient, KIND_GRADIENT, 4),
+        (Kind::Segment, KIND_SEGMENT, 5),
+        (Kind::Triangle, KIND_TRIANGLE, 6),
+        (Kind::Image, KIND_IMAGE, 7),
+        (Kind::Layer, KIND_LAYER, 8),
+        (Kind::LayerEnd, KIND_LAYER_END, 9),
+        (Kind::Dashed, KIND_DASHED, 10),
+        (Kind::Radial, KIND_RADIAL, 11),
+        (Kind::Effect, KIND_EFFECT, 12),
+        (Kind::BackdropBlur, KIND_BACKDROP_BLUR, 13),
+    ];
+    assert_eq!(all.len(), Kind::COUNT);
+    for (kind, constant, num) in all {
+        assert_eq!(kind.as_u8(), num);
+        assert_eq!(kind.as_u32(), u32::from(num));
+        assert_eq!(kind.as_f32(), constant);
+        assert_eq!(constant, f32::from(num));
+        assert_eq!(Kind::from_u8(num), Some(kind));
+        assert_eq!(Kind::from_f32(constant), Some(kind));
+        let mut inst = Instance::zeroed();
+        inst.params[1] = constant;
+        assert_eq!(inst.kind(), Some(kind));
+    }
+    assert_eq!(Kind::from_f32(-0.0), Some(Kind::Rect));
+    assert_eq!(Kind::from_u8(14), None);
+    for bad in [-1.0, -0.5, 0.5, 1.5, 8.5, 9.5, 11.5, 13.5, 14.0, 255.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        assert_eq!(Kind::from_f32(bad), None, "expected None for {bad:?}");
+    }
+}
+
+#[test]
+fn instance_word_indices_match_field_offsets() {
+    assert_eq!(INSTANCE_WORDS, 32);
+    assert_eq!(word::RECT * 4, offset_of!(Instance, rect));
+    assert_eq!(word::RECT_Y, 1);
+    assert_eq!(word::FILL, 8..12);
+    assert_eq!(word::FILL.start * 4, offset_of!(Instance, fill));
+    assert_eq!(word::BORDER, 12..16);
+    assert_eq!(word::BORDER.start * 4, offset_of!(Instance, border));
+    assert_eq!(word::PARAMS * 4, offset_of!(Instance, params));
+    assert_eq!(word::PARAMS_W, 19);
+    assert_eq!(word::CLIP * 4, offset_of!(Instance, clip));
+    assert_eq!(word::CLIP_Y0, 25);
+    assert_eq!(word::CLIP_Y1, 27);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn wgsl_uniform_and_storage_layouts_match_rust() {
+    use crate::gpu::springs;
+    use wgpu::naga::{Module, TypeInner, front::wgsl, proc::Layouter, valid::{Capabilities, ValidationFlags, Validator}};
+
+    let parse = |label: &str, source: &str| -> (Module, Layouter) {
+        let module = wgsl::parse_str(source).unwrap_or_else(|e| panic!("{label}: {}", e.emit_to_string(source)));
+        Validator::new(ValidationFlags::all(), Capabilities::default() | Capabilities::SHADER_FLOAT16_IN_FLOAT32)
+            .validate(&module)
+            .unwrap_or_else(|e| panic!("{label}: {e}"));
+        let mut layouter = Layouter::default();
+        layouter.update(module.to_ctx()).unwrap_or_else(|e| panic!("{label}: {e}"));
+        (module, layouter)
+    };
+
+    let check_struct = |label: &str, module: &Module, layouter: &Layouter, name: &str, size: usize, expected: &[(&str, usize)]| {
+        let (handle, ty) = module
+            .types
+            .iter()
+            .find(|(_, t)| t.name.as_deref() == Some(name))
+            .unwrap_or_else(|| panic!("{label}: WGSL struct {name} not found"));
+        assert_eq!(layouter[handle].size as usize, size, "{label} {name} size");
+        let TypeInner::Struct { members, span } = &ty.inner else { panic!("{label}: {name} is not a struct") };
+        assert_eq!(*span as usize, size, "{label} {name} span");
+        assert_eq!(members.len(), expected.len(), "{label} {name} member count");
+        for (member, &(field, offset)) in members.iter().zip(expected) {
+            assert_eq!(member.name.as_deref(), Some(field), "{label} {name}.{field} name");
+            assert_eq!(member.offset as usize, offset, "{label} {name}.{field} offset");
+        }
+    };
+
+    let globals_fields: &[(&str, usize)] = &[
+        ("viewport", offset_of!(Globals, viewport)),
+        ("pad", offset_of!(Globals, pad)),
+        ("flags", offset_of!(Globals, flags)),
+    ];
+    let level_fields: &[(&str, usize)] = &[
+        ("w", offset_of!(backdrop_blur::Level, w)),
+        ("region", offset_of!(backdrop_blur::Level, region)),
+        ("map", offset_of!(backdrop_blur::Level, map)),
+        ("place", offset_of!(backdrop_blur::Level, place)),
+    ];
+    let layer_blur_fields: &[(&str, usize)] = &[
+        ("config", offset_of!(layer_blur::Uniforms, meta)),
+        ("mapping", offset_of!(layer_blur::Uniforms, mapping)),
+        ("taps", offset_of!(layer_blur::Uniforms, taps)),
+    ];
+
+    let (classic, classic_layout) = parse("uber_wgsl::CLASSIC", uber_wgsl::CLASSIC);
+    check_struct("CLASSIC", &classic, &classic_layout, "Globals", size_of::<Globals>(), globals_fields);
+
+    // Also confirm Instance's vertex attributes agree with `struct In` locations and `offset_of!`.
+    let expected_attrs = [
+        (0u32, offset_of!(Instance, rect) as u64, wgpu::VertexFormat::Float32x4),
+        (1, offset_of!(Instance, radii) as u64, wgpu::VertexFormat::Float32x4),
+        (2, offset_of!(Instance, fill) as u64, wgpu::VertexFormat::Float32x4),
+        (3, offset_of!(Instance, border) as u64, wgpu::VertexFormat::Float32x4),
+        (4, offset_of!(Instance, params) as u64, wgpu::VertexFormat::Float32x4),
+        (5, offset_of!(Instance, uv) as u64, wgpu::VertexFormat::Float32x4),
+        (6, offset_of!(Instance, clip) as u64, wgpu::VertexFormat::Float32x4),
+        (7, offset_of!(Instance, fade) as u64, wgpu::VertexFormat::Uint32x4),
+    ];
+    let vlayout = metallib::uber_vertex_layout();
+    assert_eq!(vlayout.array_stride, size_of::<Instance>() as u64);
+    assert_eq!(vlayout.attributes.len(), expected_attrs.len());
+    for (attr, &(loc, off, fmt)) in vlayout.attributes.iter().zip(&expected_attrs) {
+        assert_eq!((attr.shader_location, attr.offset, attr.format), (loc, off, fmt));
+    }
+
+    let (windfoil, windfoil_layout) = parse("uber_wgsl::WINDFOIL", uber_wgsl::WINDFOIL);
+    check_struct("WINDFOIL", &windfoil, &windfoil_layout, "Globals", size_of::<Globals>(), globals_fields);
+
+    let (bd_blur, bd_blur_layout) = parse("backdrop_blur.wgsl", backdrop_blur::BLUR_WGSL);
+    check_struct("backdrop_blur.wgsl", &bd_blur, &bd_blur_layout, "Level", size_of::<backdrop_blur::Level>(), level_fields);
+
+    let composite_src = backdrop_blur::composite_wgsl();
+    let (bd_comp, bd_comp_layout) = parse("backdrop_composite.wgsl", &composite_src);
+    check_struct("backdrop_composite.wgsl", &bd_comp, &bd_comp_layout, "Globals", size_of::<Globals>(), globals_fields);
+    check_struct("backdrop_composite.wgsl", &bd_comp, &bd_comp_layout, "Level", size_of::<backdrop_blur::Level>(), level_fields);
+
+    let (lb, lb_layout) = parse("layer_blur.wgsl", layer_blur::WGSL);
+    check_struct("layer_blur.wgsl", &lb, &lb_layout, "Uniforms", size_of::<layer_blur::Uniforms>(), layer_blur_fields);
+
+    let springs_src = format!("{}\n{}", uber_wgsl::CLASSIC, springs::SHADER);
+    let (sp, sp_layout) = parse("CLASSIC+springs.wgsl", &springs_src);
+    check_struct("CLASSIC+springs.wgsl", &sp, &sp_layout, "Globals", size_of::<Globals>(), globals_fields);
+    check_struct(
+        "CLASSIC+springs.wgsl",
+        &sp,
+        &sp_layout,
+        "SpringNode",
+        size_of::<springs::Node>(),
+        &[
+            ("x", offset_of!(springs::Node, x)),
+            ("y", offset_of!(springs::Node, y)),
+            ("opacity", offset_of!(springs::Node, opacity)),
+        ],
+    );
+}
+
+/// Exact `shader.wgsl` `base_vs` quad corners -> pixel centres `[x0, y0, x1, y1)` inside clip & target.
+fn shader_exact_pixels(i: &Instance, w: i32, h: i32) -> [i32; 4] {
+    let kind = i.params[1];
+    if kind > 11.5 || kind == KIND_LAYER_END {
+        return [0; 4];
+    }
+    let mut grow = 1.0 + i.params[2] * 2.0;
+    if kind > 0.5 && kind < 1.5 {
+        grow = i.params[2] * 3.0 + 1.0;
+    } else if kind > 1.5 && kind < 2.5 {
+        grow = 0.0;
+    } else if (kind > 2.5 && kind < 3.5) || (kind > 4.5 && kind < 9.5) {
+        grow = 1.0;
+    }
+    let mut lo = [i.rect[0] - grow, i.rect[1] - grow];
+    let mut hi = [lo[0] + i.rect[2] + 2.0 * grow, lo[1] + i.rect[3] + 2.0 * grow];
+    if kind < 1.5 && i.uv[2] < 0.0 {
+        lo = [lo[0].max(i.rect[0] + i.uv[0]), lo[1].max(i.rect[1] + i.uv[1])];
+        hi = [hi[0].min(i.rect[0] - i.uv[2]).max(lo[0]), hi[1].min(i.rect[1] + i.uv[3]).max(lo[1])];
+    }
+    let mut min_x = f32::INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+    for vi in 0..4u32 {
+        let p = [if vi & 1 != 0 { hi[0] } else { lo[0] }, if vi >> 1 != 0 { hi[1] } else { lo[1] }];
+        let mut screen = p;
+        if kind > 1.5 && kind < 2.5 && i.params[0] != 0.0 {
+            let center = [i.rect[0] + i.rect[2] * 0.5, i.rect[1] + i.rect[3] * 0.5];
+            let q = [p[0] - center[0], p[1] - center[1]];
+            let (s, c) = i.params[0].sin_cos();
+            screen = [center[0] + c * q[0] - s * q[1], center[1] + s * q[0] + c * q[1]];
+        }
+        if kind > 7.5 && kind < 8.5 && i.border[1] != 0.0 {
+            let q = [p[0] - i.border[2], p[1] - i.border[3]];
+            let (s, c) = i.border[1].sin_cos();
+            screen = [i.border[2] + c * q[0] - s * q[1], i.border[3] + s * q[0] + c * q[1]];
+        }
+        min_x = min_x.min(screen[0]);
+        min_y = min_y.min(screen[1]);
+        max_x = max_x.max(screen[0]);
+        max_y = max_y.max(screen[1]);
+    }
+    let first = |v: f32| (v - 0.5).ceil();
+    let c = i.clip;
+    // Exact `clip_alpha > 0` reach for hard clip edges (`ramp(d, 0) = clamp(d + 0.5, 0, 1)`):
+    // pixel `x` has centre `x + 0.5`, so `(x + 0.5 - c0) + 0.5 > 0` <=> `x >= c0.floor()`,
+    // and `(c2 - (x + 0.5)) + 0.5 > 0` <=> `x < c2.ceil()`.
+    let x0 = first(min_x).max(c[0].floor()).max(0.0);
+    let y0 = first(min_y).max(c[1].floor()).max(0.0);
+    let x1 = first(max_x).min(c[2].ceil()).min(w as f32);
+    let y1 = first(max_y).min(c[3].ceil()).min(h as f32);
+    if !(x1 > x0 && y1 > y0) {
+        return [0; 4];
+    }
+    [x0 as i32, y0 as i32, x1 as i32, y1 as i32]
+}
+
+fn contains(outer: [i32; 4], inner: [i32; 4]) -> bool {
+    if inner[2] <= inner[0] || inner[3] <= inner[1] {
+        return true;
+    }
+    outer[2] > outer[0]
+        && outer[3] > outer[1]
+        && outer[0] <= inner[0]
+        && outer[1] <= inner[1]
+        && outer[2] >= inner[2]
+        && outer[3] >= inner[3]
+}
+
+fn area_i32(r: [i32; 4]) -> i64 {
+    i64::from((r[2] - r[0]).max(0)) * i64::from((r[3] - r[1]).max(0))
+}
+
+fn old_layer_bounds(i: &Instance) -> [f32; 4] {
+    let mut rect = i.rect;
+    if i.params[1] == KIND_GLYPH && i.params[0] != 0.0 {
+        let (sin, cos) = i.params[0].sin_cos();
+        let width = cos.abs() * rect[2] + sin.abs() * rect[3];
+        let height = sin.abs() * rect[2] + cos.abs() * rect[3];
+        rect = [rect[0] + (rect[2] - width) * 0.5, rect[1] + (rect[3] - height) * 0.5, width, height];
+    }
+    let grow = match i.params[1] {
+        KIND_GLYPH => 0.0,
+        KIND_SHADOW => i.params[2] * 3.0 + 1.0,
+        KIND_EFFECT => i.params[2] + 1.0,
+        KIND_RECT | KIND_GRADIENT | KIND_DASHED | KIND_RADIAL => 1.0 + i.params[2] * 2.0,
+        _ => 1.0,
+    };
+    [
+        (rect[0] - grow).max(i.clip[0]),
+        (rect[1] - grow).max(i.clip[1]),
+        (rect[0] + rect[2] + grow).min(i.clip[2]),
+        (rect[1] + rect[3] + grow).min(i.clip[3]),
+    ]
+}
+
+#[test]
+fn instance_bounds_contain_exact_drawn_pixels_across_all_kinds() {
+    let (w, h) = (256i32, 256i32);
+    let mut atlas = crate::text::Atlas::new();
+    atlas.data.resize((crate::text::ATLAS_SIZE * crate::text::ATLAS_SIZE) as usize, 0);
+    // Put a solid 16×16 glyph mask at (0, 0) on page 0 so CPU rasterization paints every glyph pixel.
+    for y in 0..16usize {
+        for x in 0..16usize {
+            atlas.data[y * crate::text::ATLAS_SIZE as usize + x] = 255;
+        }
+    }
+    let mut images = crate::pixels::ImageAtlas::default();
+    let px = crate::Pixels::new();
+    px.set(16, 16, vec![255u8; 16 * 16 * 4]);
+    let placed = images.place(&px, [16.0, 16.0]).expect("place test image");
+
+    let base = |kind: Kind, rect: [f32; 4]| Instance {
+        rect,
+        fill: [1.0, 0.4, 0.2, 1.0],
+        border: [0.2, 0.8, 1.0, 1.0],
+        params: [0.0, kind.as_f32(), 0.0, 1.0],
+        clip: NO_CLIP,
+        ..Instance::zeroed()
+    };
+
+    let mut cases: Vec<(&str, Instance, bool)> = vec![
+        // (name, instance, cpu_paintable)
+        ("rect_plain", base(Kind::Rect, [30.3, 40.7, 50.0, 30.0]), true),
+        ("rect_border_soft", Instance { params: [3.0, KIND_RECT, 2.0, 1.0], radii: [8.0; 4], ..base(Kind::Rect, [40.0, 40.0, 60.0, 40.0]) }, true),
+        ("rect_clipped", Instance { clip: [45.2, 48.6, 82.4, 70.1], ..base(Kind::Rect, [30.0, 40.0, 80.0, 50.0]) }, true),
+        // Banded border ring (top band via uv.z < 0).
+        ("rect_banded", Instance { params: [2.0, KIND_RECT, 0.0, 1.0], uv: [-1.0, -1.0, -101.0, 6.0], ..base(Kind::Rect, [50.0, 60.0, 100.0, 80.0]) }, true),
+        ("shadow_plain", Instance { params: [0.0, KIND_SHADOW, 6.0, 1.0], radii: [8.0; 4], ..base(Kind::Shadow, [60.0, 60.0, 80.0, 50.0]) }, true),
+        ("shadow_hole", Instance { params: [0.0, KIND_SHADOW, 5.0, 1.0], uv: [10.0, 10.0, 40.0, 20.0], ..base(Kind::Shadow, [60.0, 60.0, 80.0, 50.0]) }, true),
+        // Banded shadow (right strip via uv.z < 0).
+        ("shadow_banded", Instance { params: [0.0, KIND_SHADOW, 6.0, 1.0], uv: [90.0, -19.0, -119.0, 99.0], ..base(Kind::Shadow, [40.0, 50.0, 100.0, 80.0]) }, true),
+        ("glyph_upright", Instance { uv: [0.0, 0.0, 0.0, 0.0], ..base(Kind::Glyph, [70.0, 70.0, 16.0, 16.0]) }, true),
+        ("glyph_scaled", Instance { uv: [0.0, 0.0, 16.0, 16.0], ..base(Kind::Glyph, [70.2, 70.8, 32.0, 12.0]) }, true),
+        ("inset_sharp", Instance { params: [3.0, KIND_INSET, 0.0, 1.0], ..base(Kind::Inset, [50.0, 50.0, 60.0, 40.0]) }, true),
+        ("inset_blur", Instance { params: [2.0, KIND_INSET, 4.0, 1.0], uv: [2.0, 2.0, 0.0, 0.0], ..base(Kind::Inset, [50.0, 50.0, 60.0, 40.0]) }, true),
+        ("gradient_fill", Instance { uv: [0.1, 0.2, 0.9, 1.0], params: [0.0, KIND_GRADIENT, 1.5, 1.0], ..base(Kind::Gradient, [30.0, 30.0, 50.0, 50.0]) }, true),
+        ("segment_round", Instance { radii: [40.0, 40.0, 110.0, 85.0], params: [3.0, KIND_SEGMENT, 1.0, 1.0], ..base(Kind::Segment, [36.0, 36.0, 78.0, 53.0]) }, true),
+        ("triangle", Instance { radii: [50.0, 40.0, 120.0, 60.0], uv: [70.0, 110.0, 0.0, 0.0], params: [7.0, KIND_TRIANGLE, 0.0, 1.0], ..base(Kind::Triangle, [50.0, 40.0, 70.0, 70.0]) }, true),
+        ("image", Instance { params: [placed.page as f32, KIND_IMAGE, 0.0, 1.0], uv: [placed.rect[0] as f32, placed.rect[1] as f32, placed.rect[2] as f32, placed.rect[3] as f32], ..base(Kind::Image, [80.0, 80.0, 24.0, 24.0]) }, true),
+        ("dashed", Instance { params: [3.0, KIND_DASHED, 0.5, 1.0], uv: [6.0, 4.0, 0.0, 0.0], ..base(Kind::Dashed, [40.0, 40.0, 80.0, 60.0]) }, true),
+        ("radial", Instance { params: [0.0, KIND_RADIAL, 1.0, 1.0], uv: [40.0, 30.0, 40.0, 30.0], ..base(Kind::Radial, [40.0, 40.0, 80.0, 60.0]) }, true),
+        ("linear_angle", Instance { params: [0.0, KIND_RADIAL, 1.0, 1.0], uv: [0.01, 0.005, 0.0, 0.0], ..base(Kind::Radial, [40.0, 40.0, 80.0, 60.0]) }, true),
+        ("layer_plain", Instance::begin_layer([40.0, 50.0, 80.0, 60.0], NO_CLIP, LayerSpec::default()), false),
+        ("layer_turned", Instance::begin_layer([60.0, 60.0, 80.0, 40.0], NO_CLIP, LayerSpec::default()).turned(0.6, [100.0, 80.0]), false),
+        ("layer_end", Instance::end_layer(), false),
+        ("effect_bleed0", Instance { params: [0.0, KIND_EFFECT, 0.0, 1.0], ..base(Kind::Effect, [60.0, 60.0, 40.0, 30.0]) }, false),
+        ("effect_bleed16", Instance { params: [0.0, KIND_EFFECT, 16.0, 1.0], ..base(Kind::Effect, [60.0, 60.0, 40.0, 30.0]) }, false),
+        ("backdrop_blur", Instance { params: [12.0, KIND_BACKDROP_BLUR, 0.0, 1.0], ..base(Kind::BackdropBlur, [50.0, 50.0, 70.0, 50.0]) }, false),
+    ];
+
+    // Spread of rotated glyphs across angles and aspect ratios.
+    for &(label, rect, angle) in &[
+        ("glyph_rot_small", [80.0, 80.0, 40.0, 12.0], 0.05f32),
+        ("glyph_rot_15deg", [80.0, 80.0, 40.0, 12.0], 0.26),
+        ("glyph_rot_45deg", [80.0, 80.0, 40.0, 12.0], std::f32::consts::FRAC_PI_4),
+        ("glyph_rot_90deg", [80.0, 80.0, 40.0, 12.0], std::f32::consts::FRAC_PI_2),
+        ("glyph_rot_tall", [80.0, 80.0, 12.0, 40.0], 1.1),
+        ("glyph_rot_clipped", [80.0, 80.0, 40.0, 12.0], 0.4),
+    ] {
+        let mut inst = Instance { params: [angle, KIND_GLYPH, 0.0, 1.0], uv: [0.0, 0.0, 16.0, 16.0], ..base(Kind::Glyph, rect) };
+        if label == "glyph_rot_clipped" {
+            inst.clip = [85.0, 75.0, 115.0, 98.0];
+        }
+        cases.push((label, inst, true));
+    }
+
+    let mut tighter_layer_sites = Vec::new();
+
+    for (name, inst, paintable) in &cases {
+        let exact_vs = shader_exact_pixels(inst, w, h);
+        let pb = inst.pixel_bounds(w, h);
+        assert!(contains(pb, exact_vs), "{name}: pixel_bounds {pb:?} missed base_vs exact {exact_vs:?}");
+        assert_eq!(cpu_boot::bin::pixel_bounds(inst, w, h), pb, "{name}: bin::pixel_bounds delegates to Instance::pixel_bounds");
+
+        // Ground truth from actual CPU rasterized pixels.
+        let mut painted_box = [0i32; 4];
+        if *paintable {
+            let mut buf = vec![0u8; (w * h * 4) as usize];
+            let scene = cpu_boot::Scene::new(std::slice::from_ref(inst), &atlas, &images, (w as u32, h as u32), [0.0; 4]);
+            cpu_boot::paint(&scene, &mut cpu_boot::Target::new(&mut buf, w as u32, h as u32), 1)
+                .unwrap_or_else(|e| panic!("{name}: cpu_boot::paint failed: {e:?}"));
+            let (mut x0, mut y0, mut x1, mut y1) = (w, h, 0, 0);
+            for y in 0..h {
+                for x in 0..w {
+                    let at = ((y * w + x) * 4) as usize;
+                    if buf[at..at + 4] != [0, 0, 0, 0] {
+                        x0 = x0.min(x);
+                        y0 = y0.min(y);
+                        x1 = x1.max(x + 1);
+                        y1 = y1.max(y + 1);
+                    }
+                }
+            }
+            if x1 > x0 && y1 > y0 {
+                painted_box = [x0, y0, x1, y1];
+            }
+            assert!(contains(pb, painted_box), "{name}: pixel_bounds {pb:?} missed CPU-painted pixels {painted_box:?}");
+        }
+
+        // Layer bounds (non-scope records only, as `prepare_layers` calls it).
+        if !matches!(inst.kind(), Some(Kind::Layer | Kind::LayerEnd)) {
+            let lb = inst.layer_bounds();
+            let lb_px = [
+                lb[0].max(0.0).floor() as i32,
+                lb[1].max(0.0).floor() as i32,
+                lb[2].min(w as f32).ceil() as i32,
+                lb[3].min(h as f32).ceil() as i32,
+            ];
+            let target_exact = match inst.kind() {
+                Some(Kind::Effect) => {
+                    let g = inst.params[2] + 1.0;
+                    [(inst.rect[0] - g).max(inst.clip[0]).max(0.0).floor() as i32,
+                     (inst.rect[1] - g).max(inst.clip[1]).max(0.0).floor() as i32,
+                     (inst.rect[0] + inst.rect[2] + g).min(inst.clip[2]).min(w as f32).ceil() as i32,
+                     (inst.rect[1] + inst.rect[3] + g).min(inst.clip[3]).min(h as f32).ceil() as i32]
+                }
+                Some(Kind::BackdropBlur) => [
+                    (inst.rect[0] - 1.0).max(inst.clip[0]).max(0.0).floor() as i32,
+                    (inst.rect[1] - 1.0).max(inst.clip[1]).max(0.0).floor() as i32,
+                    (inst.rect[0] + inst.rect[2] + 1.0).min(inst.clip[2]).min(w as f32).ceil() as i32,
+                    (inst.rect[1] + inst.rect[3] + 1.0).min(inst.clip[3]).min(h as f32).ceil() as i32,
+                ],
+                _ => exact_vs,
+            };
+            assert!(contains(lb_px, target_exact), "{name}: layer_bounds {lb_px:?} missed exact {target_exact:?}");
+            assert!(contains(lb_px, painted_box), "{name}: layer_bounds {lb_px:?} missed CPU-painted {painted_box:?}");
+
+            let old_lb = old_layer_bounds(inst);
+            let old_px = [
+                old_lb[0].max(0.0).floor() as i32,
+                old_lb[1].max(0.0).floor() as i32,
+                old_lb[2].min(w as f32).ceil() as i32,
+                old_lb[3].min(h as f32).ceil() as i32,
+            ];
+            if area_i32(lb_px) < area_i32(old_px) {
+                assert!(contains(old_px, lb_px), "{name}: tighter layer_bounds must be subset of old");
+                tighter_layer_sites.push(*name);
+            }
+        }
+    }
+
+    assert!(tighter_layer_sites.contains(&"rect_banded"), "expected tighter layer bounds on banded rect: {tighter_layer_sites:?}");
+    assert!(tighter_layer_sites.contains(&"shadow_banded"), "expected tighter layer bounds on banded shadow: {tighter_layer_sites:?}");
+}
