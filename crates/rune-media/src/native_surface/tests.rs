@@ -313,10 +313,16 @@ fn completion_worker_preserves_cpu_gpu_overlap() {
     const BUDGET: Duration = Duration::from_millis(250);
     const PLANNED_MOST: Duration = Duration::from_millis(100);
     const CHUNKS_MOST: u32 = 512;
+    #[cfg(target_os = "windows")]
+    proof_crash::install();
+    let _m_end = proof_crash::Mark("the test's last local is gone");
     let gpu = Gpu::headless_wgpu();
+    let _m_gpu = proof_crash::Mark("the test Gpu (device, queue, adapter) drops next");
     let surface = NativeSurface::new();
     surface.push_bytes(synthetic(16, 16, 0), 1).unwrap();
+    let _m_surface = proof_crash::Mark("the NativeSurface drops next");
     let mut renderer = SurfaceRenderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    let _m_renderer = proof_crash::Mark("the SurfaceRenderer (completion worker) drops next");
     let shader = gpu.device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("overlap workload"),
         source: wgpu::ShaderSource::Wgsl(
@@ -1039,4 +1045,62 @@ fn proof_a_removed_device_with_work_in_flight_drops_in_bounded_time() {
     let t = Instant::now();
     drop(device);
     eprintln!("proof: device dropped in {} us; {} us after the removal", t.elapsed().as_micros(), removed_at.elapsed().as_micros());
+}
+
+/// PROOF ONLY, never merged: where a process dies after a removal (exit 5 on the farm, very
+/// likely 0xC0000005 cut to its low byte): the exception, its module, and which drop was next.
+mod proof_crash {
+    pub(super) struct Mark(pub(super) &'static str);
+    impl Drop for Mark {
+        fn drop(&mut self) {
+            eprintln!("proof crash: {} (thread {:?}, panicking {})", self.0, std::thread::current().name(), std::thread::panicking());
+        }
+    }
+
+    #[repr(C)]
+    struct ExceptionRecord {
+        code: u32,
+        flags: u32,
+        inner: *mut ExceptionRecord,
+        address: *mut core::ffi::c_void,
+        parameters: u32,
+        information: [usize; 15],
+    }
+    #[repr(C)]
+    struct ExceptionPointers {
+        record: *mut ExceptionRecord,
+        context: *mut core::ffi::c_void,
+    }
+    type Filter = unsafe extern "system" fn(*mut ExceptionPointers) -> i32;
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn SetUnhandledExceptionFilter(filter: Option<Filter>) -> Option<Filter>;
+        fn GetModuleHandleExW(flags: u32, name: *const core::ffi::c_void, module: *mut *mut core::ffi::c_void) -> i32;
+        fn GetModuleFileNameW(module: *mut core::ffi::c_void, name: *mut u16, size: u32) -> u32;
+    }
+
+    pub(super) fn install() {
+        unsafe { SetUnhandledExceptionFilter(Some(filter)) };
+        eprintln!("proof crash: unhandled-exception filter installed");
+    }
+
+    unsafe extern "system" fn filter(pointers: *mut ExceptionPointers) -> i32 {
+        let record = unsafe { &*(*pointers).record };
+        let mut module = core::ptr::null_mut();
+        // GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT
+        let found = unsafe { GetModuleHandleExW(0x4 | 0x2, record.address, &mut module) } != 0;
+        let mut name = [0u16; 260];
+        let len = if found { unsafe { GetModuleFileNameW(module, name.as_mut_ptr(), 260) } } else { 0 };
+        eprintln!(
+            "proof crash: exception {:#010x} at {:?} in {} +{:#x}; parameters {:?}; thread {:?}",
+            record.code,
+            record.address,
+            String::from_utf16_lossy(&name[..len as usize]),
+            (record.address as usize).wrapping_sub(module as usize),
+            &record.information[..(record.parameters as usize).min(15)],
+            std::thread::current().name()
+        );
+        eprintln!("proof crash: stack:\n{}", std::backtrace::Backtrace::force_capture());
+        0
+    }
 }
