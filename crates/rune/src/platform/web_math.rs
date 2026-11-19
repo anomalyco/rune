@@ -137,6 +137,39 @@ pub(crate) fn backend_order(has_navigator_gpu: bool, webgl_enabled: bool) -> &'s
     }
 }
 
+/// How the web host handles a lost GPU device or WebGL2 context.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LossAction {
+    /// Fall back to the CPU 2D canvas under the GPU canvas. `recoverable` is true for WebGL2
+    /// context loss, where a later `webglcontextrestored` hands back over to WebGL2.
+    FallbackToCpu { recoverable: bool },
+    /// Drop the lost GPU side and pause rendering until `webglcontextrestored` rebuilds it.
+    PauseForRestore,
+    /// Show the fatal GPU-lost message and exit the loop.
+    Fatal,
+}
+
+/// Decides how the web host responds when the GPU device or WebGL2 context is lost.
+///
+/// WebGPU loss preserves the existing policy: permanent CPU fallback on CPU-first pages and
+/// fatal on GPU-first pages. WebGL2 context loss is recoverable when `webglcontextrestored`
+/// fires: full-window pages (`!embedded && !document`) fall back to the CPU canvas immediately so
+/// they are never blank while waiting (or if restore never arrives), while inline and document
+/// pages pause in place until restore.
+pub(crate) fn loss_action(is_webgl: bool, gpu_first: bool, embedded: bool, document: bool) -> LossAction {
+    if is_webgl {
+        if !embedded && !document {
+            LossAction::FallbackToCpu { recoverable: true }
+        } else {
+            LossAction::PauseForRestore
+        }
+    } else if gpu_first {
+        LossAction::Fatal
+    } else {
+        LossAction::FallbackToCpu { recoverable: false }
+    }
+}
+
 #[cfg(test)]
 #[path = "web_math_tests.rs"]
 mod tests;

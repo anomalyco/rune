@@ -144,3 +144,17 @@ fn backend_order_skips_webgpu_when_navigator_gpu_is_absent() {
     assert_eq!(backend_order(false, true), &[WebBackend::WebGl2]);
     assert_eq!(backend_order(false, false), &[]);
 }
+
+#[test]
+fn webgl_context_loss_recovers_instead_of_terminating_the_app() {
+    // WebGL2 full-window (CPU-first or ?cpu-first=off): immediate CPU fallback, recoverable on restore.
+    assert_eq!(loss_action(true, false, false, false), LossAction::FallbackToCpu { recoverable: true });
+    assert_eq!(loss_action(true, true, false, false), LossAction::FallbackToCpu { recoverable: true });
+    // WebGL2 inline or document: pause until webglcontextrestored instead of showing a fatal overlay.
+    assert_eq!(loss_action(true, true, true, false), LossAction::PauseForRestore);
+    assert_eq!(loss_action(true, true, false, true), LossAction::PauseForRestore);
+    // WebGPU keeps its existing policy: permanent CPU fallback on CPU-first, fatal on GPU-first.
+    assert_eq!(loss_action(false, false, false, false), LossAction::FallbackToCpu { recoverable: false });
+    assert_eq!(loss_action(false, true, false, false), LossAction::Fatal);
+    assert_eq!(loss_action(false, true, true, false), LossAction::Fatal);
+}

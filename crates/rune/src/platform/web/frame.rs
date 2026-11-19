@@ -115,10 +115,12 @@ impl Browser {
     /// Draws a frame: the runtime steps, then the CPU paints it, the GPU draws it, or both while
     /// handing over.
     pub(super) fn redraw(&mut self, event_loop: &ActiveEventLoop) {
+        if self.lost_device(event_loop) { return; }
+        self.maybe_restore_webgl();
         self.hand_over_if_done();
         let mut running = self.running.borrow_mut();
         let (Some(window), Some(r)) = (&self.window, &mut *running) else { return };
-        if r.suspended || r.draw.waiting_for_gpu() { return; }
+        if r.suspended || r.draw.waiting_for_gpu() || matches!(r.draw, Draw::ContextLost) { return; }
         let now = Instant::now();
         let (commits, input) = {
             let rt = r.app.rt();
@@ -192,7 +194,7 @@ impl Browser {
                 window.pre_present_notify();
                 gpu::gpu_frame(side, &mut *r.app, now, dt, false, tick).map(|_| true)
             }
-            Draw::Moving => Ok(false),
+            Draw::ContextLost | Draw::Moving => Ok(false),
         };
         let drawn = match drawn {
             Ok(drawn) => drawn,

@@ -16,11 +16,29 @@ pub(super) struct GpuSide {
     pub(super) backend: wgpu::Backend,
 }
 
+/// A GPU device or WebGL2 context loss waiting for `Browser::lost_device` to handle.
+pub(super) enum Loss {
+    WebGpu(String),
+    WebGl(String),
+}
+
+impl Loss {
+    pub(super) fn is_webgl(&self) -> bool {
+        matches!(self, Loss::WebGl(_))
+    }
+
+    pub(super) fn reason(&self) -> &str {
+        match self {
+            Loss::WebGpu(why) | Loss::WebGl(why) => why,
+        }
+    }
+}
+
 /// Who draws the page's frames, and how far the GPU is (the native CPU-first window's
 /// `SurfaceMode`, with two canvases for its two surfaces).
 pub(super) enum Draw {
     /// The CPU paints into its canvas under the GPU's, which stays see-through and takes the
-    /// input. `failed`: the GPU won't come (no WebGPU, or it was lost), so this stays.
+    /// input. `failed`: the GPU won't come automatically (no WebGPU, or it was lost until restore).
     Cpu { cpu: cpu_canvas::CpuCanvas, failed: bool },
     /// The GPU is made and its canvas configured, still see-through. `built` turns true once
     /// the queue has answered a submit made after the renderer's pipelines, so the browser has
@@ -29,6 +47,9 @@ pub(super) enum Draw {
     /// the CPU's, which goes.
     HandingOver { cpu: cpu_canvas::CpuCanvas, side: GpuSide, built: Rc<Cell<bool>>, done: Option<Rc<Cell<bool>>>, since: Instant },
     Gpu(GpuSide),
+    /// WebGL2 context lost on a GPU-first inline or document page that cannot overlay a CPU
+    /// canvas; redraws pause until `webglcontextrestored` rebuilds `GpuSide`.
+    ContextLost,
     /// Only while one state is taken apart for the next: no frame sees it.
     Moving,
 }
@@ -37,14 +58,14 @@ impl Draw {
     pub(super) fn gpu(&self) -> Option<&GpuSide> {
         match self {
             Draw::HandingOver { side, .. } | Draw::Gpu(side) => Some(side),
-            Draw::Cpu { .. } | Draw::Moving => None,
+            Draw::Cpu { .. } | Draw::ContextLost | Draw::Moving => None,
         }
     }
 
     pub(super) fn gpu_mut(&mut self) -> Option<&mut GpuSide> {
         match self {
             Draw::HandingOver { side, .. } | Draw::Gpu(side) => Some(side),
-            Draw::Cpu { .. } | Draw::Moving => None,
+            Draw::Cpu { .. } | Draw::ContextLost | Draw::Moving => None,
         }
     }
 
@@ -137,19 +158,23 @@ pub(super) async fn gpu(canvas: web_sys::HtmlCanvasElement, features: wgpu::Feat
 /// The GPU's side for a canvas of `size`: the surface configured, the renderer made, and the
 /// text system told its masks are the renderer's to fill from now on. `lost` records the reason
 /// and wakes `proxy` if the device is lost.
-pub(super) fn gpu_side(gpu: Gpu, surface: wgpu::Surface<'static>, size: (u32, u32), rt: &mut RuntimeCore, lost: Rc<RefCell<Option<String>>>, proxy: EventLoopProxy<Wake>) -> Result<GpuSide, String> {
+pub(super) fn gpu_side(gpu: Gpu, surface: wgpu::Surface<'static>, size: (u32, u32), rt: &mut RuntimeCore, lost: Rc<RefCell<Option<Loss>>>, proxy: EventLoopProxy<Wake>) -> Result<GpuSide, String> {
     let Some((config, format)) = canvas_config(&gpu, &surface, size, rt.srgb_blend()) else {
         return Err("WebGPU canvas has no supported configuration".into());
     };
+    let backend = gpu.adapter.get_info().backend;
+    let is_gl = backend == wgpu::Backend::Gl;
     surface.configure(&gpu.device, &config);
     health::watch(&gpu.device, move |why| {
-        *lost.borrow_mut() = Some(why);
+        *lost.borrow_mut() = Some(if is_gl { Loss::WebGl(why) } else { Loss::WebGpu(why) });
         let _ = proxy.send_event(Wake::App);
     });
     let mut renderer = Renderer::new(&gpu.device, format);
     renderer.set_srgb_blend(!format.is_srgb());
     renderer.attach_text(&mut rt.text.atlas);
-    let backend = gpu.adapter.get_info().backend;
+    // Re-upload every placed glyph row and outline record on a fresh renderer (for example after
+    // a WebGL2 context restore, where a previous renderer had already cleared `atlas.dirty`).
+    rt.text.atlas.invalidate();
     Ok(GpuSide { gpu, surface, config, renderer, backend })
 }
 
