@@ -266,8 +266,13 @@ impl super::Device {
     /// by wgpu at the device's next submission, whose signal fails.
     fn reached(&self, fence: &super::Fence) -> Option<crate::FenceValue> {
         let value = unsafe { fence.raw.GetCompletedValue() };
-        if value == u64::MAX && unsafe { self.raw.GetDeviceRemovedReason() }.is_err() {
-            return None;
+        if value == u64::MAX {
+            // Never stored: read a moment before D3D12 reports the removal, it would stay
+            // "everything finished" for good.
+            if unsafe { self.raw.GetDeviceRemovedReason() }.is_err() {
+                return None;
+            }
+            return Some(fence.reached.load(core::sync::atomic::Ordering::Relaxed));
         }
         Some(fence.reached.fetch_max(value, core::sync::atomic::Ordering::Relaxed).max(value))
     }

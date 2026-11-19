@@ -1204,8 +1204,10 @@ impl Offscreen {
     /// Tightly packed sRGB RGBA8 after `copy` was submitted.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn read(&self, device: &wgpu::Device) -> Vec<u8> {
+        // A callback never panics: one that did while a failed wait unwinds (wgpu aborts the map
+        // then) would abort the process. A failed map shows as `get_mapped_range`'s error.
         let slice = self.buffer.slice(..);
-        slice.map_async(wgpu::MapMode::Read, |r| r.expect("map readback"));
+        slice.map_async(wgpu::MapMode::Read, |_| {});
         rune_gpu::health::poll(device, wgpu::PollType::wait_indefinitely()).expect("poll");
         let out = {
             let data = slice.get_mapped_range().expect("mapped range");
