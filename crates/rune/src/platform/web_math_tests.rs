@@ -51,3 +51,81 @@ fn other_windows_reconfigure_on_every_size_change() {
     // A window hidden to nothing keeps its surface until it has a size again.
     assert_eq!(should_reconfigure_surface((800, 600), (0, 0), false), ((800, 600), false));
 }
+
+#[test]
+fn webgl_picks_non_srgb_surface_format_directly_for_srgb_blend() {
+    use wgpu::{Backend, TextureFormat};
+    // wgpu-core sorts sRGB formats first, so WebGL2's default config prefers Rgba8UnormSrgb
+    // while advertising both Rgba8UnormSrgb and Rgba8Unorm.
+    let caps = [TextureFormat::Rgba8UnormSrgb, TextureFormat::Rgba8Unorm];
+    let srgb_on = select_surface_formats(TextureFormat::Rgba8UnormSrgb, &caps, Backend::Gl, true);
+    assert_eq!(srgb_on, SurfaceFormats {
+        surface: TextureFormat::Rgba8Unorm,
+        view_format: None,
+        render: TextureFormat::Rgba8Unorm,
+    });
+    assert!(srgb_on.srgb_blend());
+
+    // Switching back to linear blending (srgb_blend == false) selects Rgba8UnormSrgb directly.
+    let srgb_off = select_surface_formats(TextureFormat::Rgba8Unorm, &caps, Backend::Gl, false);
+    assert_eq!(srgb_off, SurfaceFormats {
+        surface: TextureFormat::Rgba8UnormSrgb,
+        view_format: None,
+        render: TextureFormat::Rgba8UnormSrgb,
+    });
+    assert!(!srgb_off.srgb_blend());
+}
+
+#[test]
+fn webgpu_uses_view_format_for_linear_blend_and_direct_for_srgb_blend() {
+    use wgpu::{Backend, TextureFormat};
+    let caps = [TextureFormat::Bgra8Unorm, TextureFormat::Rgba8Unorm];
+    let srgb_on = select_surface_formats(TextureFormat::Bgra8Unorm, &caps, Backend::BrowserWebGpu, true);
+    assert_eq!(srgb_on, SurfaceFormats {
+        surface: TextureFormat::Bgra8Unorm,
+        view_format: None,
+        render: TextureFormat::Bgra8Unorm,
+    });
+    assert!(srgb_on.srgb_blend());
+
+    let srgb_off = select_surface_formats(TextureFormat::Bgra8Unorm, &caps, Backend::BrowserWebGpu, false);
+    assert_eq!(srgb_off, SurfaceFormats {
+        surface: TextureFormat::Bgra8Unorm,
+        view_format: Some(TextureFormat::Bgra8UnormSrgb),
+        render: TextureFormat::Bgra8UnormSrgb,
+    });
+    assert!(!srgb_off.srgb_blend());
+}
+
+#[test]
+fn webgl_without_srgb_twin_keeps_supported_format_without_view_formats() {
+    use wgpu::{Backend, TextureFormat};
+    let caps = [TextureFormat::Rgba8Unorm];
+    let linear_asked = select_surface_formats(TextureFormat::Rgba8Unorm, &caps, Backend::Gl, false);
+    assert_eq!(linear_asked, SurfaceFormats {
+        surface: TextureFormat::Rgba8Unorm,
+        view_format: None,
+        render: TextureFormat::Rgba8Unorm,
+    });
+    assert!(linear_asked.srgb_blend());
+}
+
+#[test]
+fn webgl_surface_usage_never_adds_unsupported_copy_flags() {
+    use wgpu::{Backend, TextureUsages};
+    let render_only = TextureUsages::RENDER_ATTACHMENT;
+    assert_eq!(surface_usage(render_only, Backend::Gl, false), TextureUsages::RENDER_ATTACHMENT);
+    assert_eq!(surface_usage(render_only, Backend::Gl, true), TextureUsages::RENDER_ATTACHMENT);
+    assert_eq!(
+        surface_usage(render_only, Backend::BrowserWebGpu, false),
+        TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_DST,
+    );
+    assert_eq!(
+        surface_usage(render_only, Backend::BrowserWebGpu, true),
+        TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_DST | TextureUsages::COPY_SRC,
+    );
+    assert_eq!(
+        surface_usage(render_only | TextureUsages::COPY_SRC, Backend::Gl, false),
+        TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC,
+    );
+}

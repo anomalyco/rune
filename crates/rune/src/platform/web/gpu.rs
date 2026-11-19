@@ -13,8 +13,6 @@ pub(super) struct GpuSide {
     pub(super) surface: wgpu::Surface<'static>,
     pub(super) config: wgpu::SurfaceConfiguration,
     pub(super) renderer: Renderer,
-    /// The adapter is WebGL2's.
-    pub(super) gl: bool,
 }
 
 /// Who draws the page's frames, and how far the GPU is (the native CPU-first window's
@@ -105,32 +103,25 @@ pub(super) fn gpu_side(gpu: Gpu, surface: wgpu::Surface<'static>, size: (u32, u3
     let mut renderer = Renderer::new(&gpu.device, format);
     renderer.set_srgb_blend(!format.is_srgb());
     renderer.attach_text(&mut rt.text.atlas);
-    let gl = gpu.adapter.get_info().backend == wgpu::Backend::Gl;
-    Ok(GpuSide { gpu, surface, config, renderer, gl })
+    Ok(GpuSide { gpu, surface, config, renderer })
 }
 
 /// The canvas's configuration for `size`, and the format the renderer draws in: the canvas's,
-/// or its sRGB twin as a view format for the blend `srgb_blend` asks.
+/// or its sRGB twin directly (when supported, as on WebGL2) or as a view format (on WebGPU) for
+/// the blend `srgb_blend` asks.
 pub(super) fn canvas_config(gpu: &Gpu, surface: &wgpu::Surface<'static>, size: (u32, u32), srgb_blend: bool) -> Option<(wgpu::SurfaceConfiguration, wgpu::TextureFormat)> {
     let max_dim = gpu.device.limits().max_texture_dimension_2d.max(1);
     let mut config = surface.get_default_config(&gpu.adapter, size.0.clamp(1, max_dim), size.1.clamp(1, max_dim))?;
     config.present_mode = wgpu::PresentMode::Fifo;
     let caps = surface.get_capabilities(&gpu.adapter);
-    config.usage |= caps.usages & wgpu::TextureUsages::COPY_SRC;
-    // A WebGPU canvas can be copied into (wgpu names only its render use): a loop-only step's
-    // frame is the last one, kept, with its dots redrawn (`Renderer::arm_cycle`).
-    if gpu.adapter.get_info().backend == wgpu::Backend::BrowserWebGpu { config.usage |= wgpu::TextureUsages::COPY_DST; }
-    // A canvas can always be copied from; the hand-over's drift count needs that.
-    if drift_wanted() { config.usage |= wgpu::TextureUsages::COPY_SRC; }
-    let wanted = if srgb_blend { config.format.remove_srgb_suffix() } else { config.format.add_srgb_suffix() };
-    let is_gl = gpu.adapter.get_info().backend == wgpu::Backend::Gl;
-    let format = if wanted != config.format && !is_gl {
-        config.view_formats.push(wanted);
-        wanted
-    } else {
-        config.format
-    };
-    Some((config, format))
+    let backend = gpu.adapter.get_info().backend;
+    config.usage = super::web_math::surface_usage(caps.usages, backend, drift_wanted());
+    let chosen = super::web_math::select_surface_formats(config.format, &caps.formats, backend, srgb_blend);
+    config.format = chosen.surface;
+    if let Some(view) = chosen.view_format {
+        config.view_formats.push(view);
+    }
+    Some((config, chosen.render))
 }
 
 /// A frame drawn on the GPU from the runtime's instances, presented; `Err` when the canvas gave
@@ -138,13 +129,28 @@ pub(super) fn canvas_config(gpu: &Gpu, surface: &wgpu::Surface<'static>, size: (
 pub(super) fn gpu_frame(side: &mut GpuSide, app: &mut dyn WebApp, now: Instant, dt: f64, readback: bool, tick: bool) -> Result<Option<Readback>, String> {
     {
         let rt = app.rt_mut();
-        if !side.gl && side.renderer.srgb_blend() != rt.srgb_blend() {
-            let format = if rt.srgb_blend() { side.config.format.remove_srgb_suffix() } else { side.config.format.add_srgb_suffix() };
-            if format != side.config.format && !side.config.view_formats.contains(&format) {
-                side.config.view_formats.push(format);
+        if side.renderer.srgb_blend() != rt.srgb_blend() {
+            let caps = side.surface.get_capabilities(&side.gpu.adapter);
+            let backend = side.gpu.adapter.get_info().backend;
+            let chosen = super::web_math::select_surface_formats(side.config.format, &caps.formats, backend, rt.srgb_blend());
+            let mut reconfigure = side.config.format != chosen.surface;
+            side.config.format = chosen.surface;
+            if let Some(view) = chosen.view_format {
+                if !side.config.view_formats.contains(&view) {
+                    side.config.view_formats.push(view);
+                    reconfigure = true;
+                }
+            } else if !side.config.view_formats.is_empty() {
+                side.config.view_formats.clear();
+                reconfigure = true;
+            }
+            if reconfigure {
                 side.surface.configure(&side.gpu.device, &side.config);
             }
-            crate::window::rebuild_renderer_core(&side.gpu.device, &mut side.renderer, format, rt);
+            if side.renderer.format() != chosen.render {
+                crate::window::rebuild_renderer_core(&side.gpu.device, &mut side.renderer, chosen.render, rt);
+            }
+            side.renderer.set_srgb_blend(chosen.srgb_blend());
         }
     }
     let frame = match side.surface.get_current_texture() {
