@@ -94,18 +94,6 @@ impl RuntimeCore {
             kept_lists: Vec::new(),
         }
     }
-
-    /// Forgets the ids of paths that left with nothing kept under their id, so a session that
-    /// mounts many distinct keys (a long virtual list scrolled end to end) doesn't keep them all.
-    /// A path whose id still holds scroll, growth or reveal state keeps it, so it comes back
-    /// with that state as before.
-    pub(super) fn prune_path_ids(&mut self) {
-        if self.path_ids.len() <= self.node_index.len() { return; }
-        let Self { path_ids, node_index, scrolls, stacks, grows, reveals, .. } = self;
-        path_ids.retain(|_, id| {
-            node_index.contains_key(id) || scrolls.contains_key(id) || stacks.contains_key(id) || grows.contains_key(id) || reveals.contains_key(id)
-        });
-    }
 }
 
 impl Measurement<'_> {
