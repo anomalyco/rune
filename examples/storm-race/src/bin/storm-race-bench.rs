@@ -7,7 +7,9 @@
 //! apply), split from the View phase by the phases' CPU time. GPU encode and submit happen
 //! outside `Runtime::frame`; the headless run measures them. `share` lines are each phase's mean
 //! share of the frame's thread CPU (Commit nests Layout, and Layout nests Text, so they overlap).
-//! Build with `--profile perf --features frame-profile`.
+//! `rects,<tick>,<elements>,<digest>` lines land at three fixed warm ticks (40, 50, 58): the
+//! scene is a pure function of the clock, so two builds of Rune whose digests agree there lay
+//! out the same scene. Build with `--profile perf --features frame-profile`.
 
 use std::cell::Cell;
 
@@ -40,6 +42,23 @@ fn poll(s: &mut State, clock: f64, tx: &mut Tx) -> bool {
     changed
 }
 
+/// FNV-1a over every element's path and laid-out rect, with the element count beside it.
+fn rect_digest(rt: &Runtime<State>) -> (usize, u64) {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    let els = rt.elements();
+    for e in &els {
+        for b in e.path.as_bytes() {
+            h ^= *b as u64;
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        for f in e.rect {
+            h ^= f.to_bits() as u64;
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    (els.len(), h)
+}
+
 fn main() {
     assert!(!cfg!(debug_assertions), "build with --profile perf");
     let mut args = std::env::args().skip(1);
@@ -49,6 +68,7 @@ fn main() {
     let mut rt = Runtime::new(State::new(n), view, SIZE, Env::new(true, 2.0));
     rt.poll = Some(poll);
     let mut lines = Vec::new();
+    let mut digests = Vec::new();
     let mut phases = [0.0f64; 6];
     for tick in 0..60 + frames {
         rune::take_frame_phases();
@@ -70,9 +90,13 @@ fn main() {
         if tick >= 60 {
             for (k, ph) in phases.iter_mut().enumerate() { *ph += share(k); }
             lines.push(format!("{n},{},{poll_i},{view_i},{},{ns},{poll_a},0,{}", tick - 60, frame_i - view_i, a1 - a0 - poll_a));
+        } else if matches!(tick, 40 | 50 | 58) {
+            let (els, digest) = rect_digest(&rt);
+            digests.push(format!("rects,{tick},{els},{digest:016x}"));
         }
     }
     for l in &lines { println!("{l}") }
+    for l in &digests { println!("{l}") }
     for (k, ph) in ["view", "commit", "layout", "text", "paint", "apply"].iter().enumerate() {
         println!("share,{ph},{:.4}", phases[k] / frames.max(1) as f64);
     }
