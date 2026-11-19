@@ -569,7 +569,7 @@ pub(crate) fn run(windows: Vec<AnyWindowSpec>, selected: usize, args: Args, acce
     if let Some(video) = writer.finish().unwrap_or_else(|e| die(&e)) {
         eprintln!("rune: wrote {} ({frames_written} frames at {fps} fps)", video.display());
     }
-    gpu.device.poll(wgpu::PollType::wait_indefinitely()).ok();
+    rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely()).ok();
     if let Some(p) = &args.strip { crate::tooling::write_strip(p, &strip, (wp, hp), &crops_px, gap, args.cols); }
     let wall = wall.elapsed().as_secs_f64();
     let mean = cpu_ms.iter().sum::<f64>() / cpu_ms.len() as f64;

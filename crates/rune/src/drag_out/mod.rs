@@ -345,7 +345,9 @@ pub(crate) fn snapshot(gpu: &crate::render::Gpu, renderer: &crate::render::Rende
     renderer.draw(&mut enc, &view, clear);
     readback.copy_from_origin(&mut enc, &texture, wgpu::Origin3d { x, y, z: 0 });
     gpu.queue.submit([enc.finish()]);
-    let mut rgba = readback.try_read(&gpu.device)?;
+    readback.buffer().slice(..).map_async(wgpu::MapMode::Read, |_| {});
+    rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely()).ok()?;
+    let mut rgba = readback.try_take_mapped()?;
     to_straight_rgba(&mut rgba, bgra, format.is_srgb());
     let mut image = DragImage::rgba(w, h, &rgba)?.size(w as f32 / scale, h as f32 / scale);
     // The crop rounds out to whole pixels, so the image sits exactly over what was drawn.

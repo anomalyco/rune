@@ -160,7 +160,7 @@ fn gpu_fills_are_finite_at_extremes_degenerate_params_and_large_time() {
         );
         queue.submit([enc.finish()]);
         let slice = readback.slice(..);
-        slice.map_async(wgpu::MapMode::Read, |r| r.unwrap());
+        slice.map_async(wgpu::MapMode::Read, |_| {});
         device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
         let words: Vec<u16> = bytemuck::cast_slice(&slice.get_mapped_range().unwrap()).to_vec();
         readback.unmap();
@@ -283,7 +283,7 @@ fn render_at(w: u32, h: u32, scale: f32, srgb: bool, origin: [f32; 2], layers: &
     );
     queue.submit([enc.finish()]);
     let slice = readback.slice(..);
-    slice.map_async(wgpu::MapMode::Read, |r| r.unwrap());
+    slice.map_async(wgpu::MapMode::Read, |_| {});
     device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
     let words: Vec<u16> = bytemuck::cast_slice(&slice.get_mapped_range().unwrap()).to_vec();
     words.chunks(4).map(|p| std::array::from_fn(|c| f16(p[c]))).collect()
