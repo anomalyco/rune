@@ -36,6 +36,17 @@ mod tests {
             alpha.draw(&mut enc, &target.view);
             target.copy(&mut enc);
             gpu.queue.submit([enc.finish()]);
+            // PROOF ONLY, never merged (rune-proof: device-removal): on WARP only.
+            #[cfg(target_os = "windows")]
+            {
+                use ::windows::core::Interface;
+                let info = gpu.adapter.get_info();
+                assert!(info.device_type == wgpu::DeviceType::Cpu && info.name.contains("Microsoft Basic Render Driver"), "refusing to remove a device on {:?}", info.name);
+                let hal = unsafe { gpu.device.as_hal::<wgpu::hal::api::Dx12>() }.expect("a D3D12 device");
+                let device5: ::windows::Win32::Graphics::Direct3D12::ID3D12Device5 = hal.raw_device().cast().expect("ID3D12Device5");
+                unsafe { device5.RemoveDevice() };
+                eprintln!("proof: ID3D12Device5::RemoveDevice called on {:?}", info.name);
+            }
             let pixels = target.read(&gpu.device);
             let mut reference = [0_u8; 4];
             for i in 0..3 { reference[i] = (crate::color::srgb_encode(color[i]) * 255.0).round() as u8; }
