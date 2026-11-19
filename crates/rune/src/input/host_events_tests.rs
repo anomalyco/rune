@@ -328,7 +328,7 @@ fn keyboard_core_handles_unidentified_repeat_paste_fallback_and_release_gating()
     rt.pointer_down(fx, fy);
     rt.pointer_up(fx, fy);
     rt.frame(0.0);
-    let cmd = crate::Mods { cmd: true, ctrl: true, ..crate::Mods::default() };
+    let cmd = crate::Mods { cmd: true, ..crate::Mods::default() };
     let redraw = {
         let (core, mut app) = rt.split_mut();
         keyboard_core(core, &mut app, &client, KeyInput {
