@@ -884,3 +884,70 @@ fn proof_pick_loads_which_drivers() {
     eprintln!("proof pick: after the device: {:?}", loaded());
     drop(device);
 }
+
+/// PROOF ONLY, never merged: every DLL this process loads or unloads during a WARP pick by name
+/// and the device, from the loader's own notifications (`LdrRegisterDllNotification`), so a
+/// driver loaded for a moment and unloaded again is seen too. No work is submitted.
+#[cfg(target_os = "windows")]
+#[test]
+fn proof_pick_loads_which_drivers_ever() {
+    use std::sync::Mutex;
+    #[repr(C)]
+    struct UnicodeString {
+        length: u16,
+        maximum: u16,
+        buffer: *const u16,
+    }
+    #[repr(C)]
+    struct Notification {
+        flags: u32,
+        full: *const UnicodeString,
+        base: *const UnicodeString,
+        dll_base: *mut core::ffi::c_void,
+        size: u32,
+    }
+    type Callback = unsafe extern "system" fn(u32, *const Notification, *mut core::ffi::c_void);
+    #[link(name = "ntdll")]
+    unsafe extern "system" {
+        fn LdrRegisterDllNotification(flags: u32, callback: Callback, context: *mut core::ffi::c_void, cookie: *mut *mut core::ffi::c_void) -> i32;
+        fn LdrUnregisterDllNotification(cookie: *mut core::ffi::c_void) -> i32;
+    }
+    static SEEN: Mutex<Vec<(std::time::Instant, bool, String)>> = Mutex::new(Vec::new());
+    unsafe extern "system" fn heard(reason: u32, data: *const Notification, _: *mut core::ffi::c_void) {
+        let name = unsafe {
+            let base = &*(*data).base;
+            String::from_utf16_lossy(std::slice::from_raw_parts(base.buffer, base.length as usize / 2))
+        };
+        if let Ok(mut seen) = SEEN.lock() {
+            seen.push((std::time::Instant::now(), reason == 1, name));
+        }
+    }
+    let mut cookie = std::ptr::null_mut();
+    assert_eq!(unsafe { LdrRegisterDllNotification(0, heard, std::ptr::null_mut(), &mut cookie) }, 0, "loader notifications");
+    let start = std::time::Instant::now();
+    let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+    desc.backends = wgpu::Backends::DX12;
+    let instance = wgpu::Instance::new(desc);
+    let picked = rune_gpu::pick::pick(&instance, None, false);
+    let after_pick = start.elapsed();
+    let adapter = picked.as_ref().map(|p| p.adapter.clone());
+    eprintln!("proof pick ever: WGPU_ADAPTER_NAME={:?}; pick gave {:?}", std::env::var("WGPU_ADAPTER_NAME").ok(), adapter.as_ref().map(|a| a.get_info().name).map_err(|e| e.clone()));
+    if let Ok(adapter) = adapter {
+        let (device, _queue) = pollster::block_on(adapter.request_device(&Default::default())).expect("device");
+        drop(device);
+    }
+    unsafe { LdrUnregisterDllNotification(cookie) };
+    let drivers = regex_free_filter(&SEEN.lock().unwrap_or_else(|e| e.into_inner()), start);
+    eprintln!("proof pick ever: pick took {} us; GPU driver loads and unloads (us from the start): {drivers:?}", after_pick.as_micros());
+
+    fn regex_free_filter(seen: &[(std::time::Instant, bool, String)], start: std::time::Instant) -> Vec<String> {
+        let driver = |n: &str| {
+            let n = n.to_lowercase();
+            ["amd", "ati", "nvwgf", "nvldumd", "nvoglv", "igd", "d3d10warp", "d3d12", "dxgi"].iter().any(|p| n.starts_with(p))
+        };
+        seen.iter()
+            .filter(|(_, _, n)| driver(n))
+            .map(|(at, loaded, n)| format!("{} {n} at {}", if *loaded { "load" } else { "unload" }, at.saturating_duration_since(start).as_micros()))
+            .collect()
+    }
+}
