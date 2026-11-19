@@ -318,6 +318,7 @@ fn completion_worker_preserves_cpu_gpu_overlap() {
     let _m_end = proof_crash::Mark("the test's last local is gone");
     let gpu = Gpu::headless_wgpu();
     let _m_gpu = proof_crash::Mark("the test Gpu (device, queue, adapter) drops next");
+    let _m_wait = proof_crash::WaitIfRemoved(gpu.device.clone());
     let surface = NativeSurface::new();
     surface.push_bytes(synthetic(16, 16, 0), 1).unwrap();
     let _m_surface = proof_crash::Mark("the NativeSurface drops next");
@@ -1050,7 +1051,19 @@ fn proof_a_removed_device_with_work_in_flight_drops_in_bounded_time() {
 /// PROOF ONLY, never merged: where a process dies after a removal (exit 5 on the farm, very
 /// likely 0xC0000005 cut to its low byte): the exception, its module, and which drop was next.
 mod proof_crash {
-    pub(super) struct Mark(pub(super) &'static str);
+/// Before the test Gpu drops: once its device is removed, wait 1 s first (does WARP's own worker
+    /// still run the removed device's work when the last reference goes?).
+    pub(super) struct WaitIfRemoved(pub(super) wgpu::Device);
+    impl Drop for WaitIfRemoved {
+        fn drop(&mut self) {
+            if rune_gpu::health::removed(&self.0) {
+                eprintln!("proof crash: the device is removed; waiting 1 s before the test Gpu drops");
+                std::thread::sleep(std::time::Duration::from_secs(1));
+            }
+        }
+    }
+
+        pub(super) struct Mark(pub(super) &'static str);
     impl Drop for Mark {
         fn drop(&mut self) {
             eprintln!("proof crash: {} (thread {:?}, panicking {})", self.0, std::thread::current().name(), std::thread::panicking());
