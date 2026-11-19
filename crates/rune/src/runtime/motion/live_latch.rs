@@ -184,9 +184,9 @@ impl RuntimeCore {
         // The window's own setup shows and hides it before the first frame; the app hears the
         // changes after that (`App::on_visibility`).
         if changed && self.commits > 0 && app.has_on_visibility() {
-            let mut one = self.begin_update(app);
-            crate::tooling::perf_warn::timed("an `update` closure", || app.on_visibility(visible, &mut one));
-            self.finish_update(app, one, true, false);
+            let (mut one, stall) = self.begin_update(app);
+            app.on_visibility(visible, &mut one);
+            self.finish_update(app, stall, one, true, false);
         }
     }
     /// What asks for this runtime's next frame as a live value does, from any thread.

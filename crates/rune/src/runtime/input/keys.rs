@@ -159,7 +159,13 @@ impl RuntimeCore {
     /// Moves scroll view `i` to `to(offset, max, page)`, clamped, a page being 90% of its
     /// height. The hand moved it: any fling or glide stops, and a `stick_bottom` view that
     /// lands on its end follows it again.
+    #[inline]
     pub(super) fn page_to(&mut self, i: usize, to: impl FnOnce(f64, f64, f64) -> f64) -> bool {
+        let mut to = Some(to);
+        self.page_to_dyn(i, &mut |offset, max, page| to.take().expect("page_to runs once")(offset, max, page))
+    }
+
+    fn page_to_dyn(&mut self, i: usize, to: &mut dyn FnMut(f64, f64, f64) -> f64) -> bool {
         self.release_hover_hold();
         self.drop_scroll_holds();
         let (id, page, stick) = (self.nodes[i].id, f64::from(self.nodes[i].local.h * 0.9), self.nodes[i].scroll.is_some_and(|s| s.stick_bottom));
@@ -184,12 +190,25 @@ impl RuntimeCore {
         Some(TextLayout::Single(self.text.layout_for_spec(&spec.as_text_input(s, false), s, spec.wrap.then_some(w * s), line_alignment(&spec))))
     }
 
+    #[inline]
     pub(super) fn with_focused(&mut self, app: &mut dyn AppDriver, f: impl FnOnce(&mut crate::edit::TextEdit) -> EditOutcome, tx: &mut Tx) -> bool {
-        self.with_focused_state(app, |state, access, _| f(access(state)), tx)
+        let mut f = Some(f);
+        self.with_focused_state_dyn(app, &mut |state, access, _| f.take().expect("focused edit runs once")(access(state)), tx)
     }
 
     /// [`Self::with_focused`] for an edit that needs the app state (an app's paste hook).
+    #[inline]
     pub(super) fn with_focused_state(&mut self, app: &mut dyn AppDriver, f: impl FnOnce(crate::states::States<'_>, &crate::el::EditFn, &mut Tx) -> EditOutcome, tx: &mut Tx) -> bool {
+        let mut f = Some(f);
+        self.with_focused_state_dyn(app, &mut |state, access, tx| f.take().expect("focused edit runs once")(state, access, tx), tx)
+    }
+
+    fn with_focused_state_dyn(
+        &mut self,
+        app: &mut dyn AppDriver,
+        f: &mut dyn FnMut(crate::states::States<'_>, &crate::el::EditFn, &mut Tx) -> EditOutcome,
+        tx: &mut Tx,
+    ) -> bool {
         let Some(path) = self.focus.owned() else { return false };
         let Some((access, submit, change, animate_layout, single_line, secure, revealed_override)) =
             self.focused_input().map(|i| (i.access.clone(), i.submit.clone(), i.change.clone(), i.animate_layout, i.single_line, i.edit.is_secure(), i.revealed_override))
@@ -314,7 +333,7 @@ impl RuntimeCore {
         self.ime_reset = true;
     }
 
-    pub fn paste(&mut self, text: impl Into<String>) {
+    pub fn paste(&mut self, text: String) {
         self.queue.push(Action::Paste(crate::ClipboardContent::new(text), None));
     }
     /// [`Runtime::paste`] with several forms, as from another app's clipboard: its HTML is

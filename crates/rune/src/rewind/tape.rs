@@ -71,21 +71,27 @@ impl Tape {
     }
 
     /// One element as this frame presents it. `name` runs only the first time `node` is seen.
+    #[inline]
     pub(crate) fn sample(&mut self, node: u64, q: Q, name: impl FnOnce() -> String) {
         let id = match self.ids.get(&node) {
             Some(&id) => id,
-            None => {
-                let id = self.names.len() as u32;
-                let name = name();
-                self.name_bytes += name.len();
-                self.names.push(name);
-                self.ids.insert(node, id);
-                self.last.push([i32::MIN; FIELDS]);
-                self.seen.push(0);
-                self.base.push(None);
-                id
-            }
+            None => self.intern(node, name()),
         };
+        self.record_sample(id, q);
+    }
+
+    fn intern(&mut self, node: u64, name: String) -> u32 {
+        let id = self.names.len() as u32;
+        self.name_bytes += name.len();
+        self.names.push(name);
+        self.ids.insert(node, id);
+        self.last.push([i32::MIN; FIELDS]);
+        self.seen.push(0);
+        self.base.push(None);
+        id
+    }
+
+    fn record_sample(&mut self, id: u32, q: Q) {
         let i = id as usize;
         if self.seen[i] == self.serial { return; }
         // On screen last frame: sampled in the frame before this one.

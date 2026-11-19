@@ -307,7 +307,7 @@ pub(crate) fn tree_json<S>(rt: &Runtime<S>, real_t: f64) -> Value {
     tree_json_core(rt.core(), real_t)
 }
 
-fn tree_json_core(rt: &crate::runtime::RuntimeCore, real_t: f64) -> Value {
+pub(crate) fn tree_json_core(rt: &crate::runtime::RuntimeCore, real_t: f64) -> Value {
     let videos = rt.videos();
     let els: Vec<Value> = rt
         .elements()
