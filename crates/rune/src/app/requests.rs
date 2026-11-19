@@ -67,13 +67,13 @@ impl WindowRequests {
     }
 }
 
-#[cfg(any(test, target_arch = "wasm32"))]
+#[cfg(test)]
 pub(crate) struct Requests<S> {
     pub(crate) window_requests: WindowRequests,
     pub updates: Vec<Update<S>>,
 }
 
-#[cfg(any(test, target_arch = "wasm32"))]
+#[cfg(test)]
 impl<S> Default for Requests<S> {
     fn default() -> Self {
         Requests {
@@ -83,7 +83,7 @@ impl<S> Default for Requests<S> {
     }
 }
 
-#[cfg(any(test, target_arch = "wasm32"))]
+#[cfg(test)]
 impl<S> std::ops::Deref for Requests<S> {
     type Target = WindowRequests;
     fn deref(&self) -> &WindowRequests { &self.window_requests }
@@ -236,7 +236,7 @@ impl<S> std::ops::Deref for Shared<S> {
 }
 
 impl<S> Shared<S> {
-    #[cfg(any(test, target_arch = "wasm32"))]
+    #[cfg(test)]
     pub fn take(&self) -> Requests<S> {
         let updates = self.take_updates();
         let window_requests = self.core.take_window();

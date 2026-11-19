@@ -333,19 +333,6 @@ pub(crate) struct MenuGuard {
     id: u64,
 }
 
-#[cfg(target_arch = "wasm32")]
-pub(crate) struct Guard<S: 'static> {
-    _inner: MenuGuard,
-    _state: std::marker::PhantomData<fn() -> S>,
-}
-
-#[cfg(target_arch = "wasm32")]
-impl<S: 'static> Guard<S> {
-    pub(crate) fn attach(shared: &Arc<Shared<S>>, headless: bool) -> Self {
-        Self { _inner: MenuGuard::attach(shared, headless), _state: std::marker::PhantomData }
-    }
-}
-
 /// Where this guard's items stand: not in the bar yet, or the set it last put there.
 #[derive(Clone, Copy)]
 enum Placed {

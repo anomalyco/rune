@@ -10,7 +10,9 @@
 //! RTF-only clipboard (TextEdit, Notes, Pages) is converted to HTML there too.
 use std::hash::{BuildHasher, RandomState};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock, mpsc};
+use std::sync::{Arc, Mutex, MutexGuard, mpsc};
+#[cfg(any(test, not(target_arch = "wasm32")))]
+use std::sync::OnceLock;
 use std::time::Duration;
 use crate::time::Instant;
 use zeroize::Zeroizing;
