@@ -150,16 +150,17 @@ impl dyn WebApp + '_ {
         self.driver(|rt, app| rt.button_up(app, x, y, button));
     }
 
-    pub(super) fn key_up(&mut self, ev: crate::KeyEvent) -> bool {
-        self.driver(|rt, app| rt.key_up(app, ev))
-    }
-
     pub(super) fn sync_modifiers(&mut self, mods: &mut winit::keyboard::ModifiersState, next: winit::keyboard::ModifiersState) -> bool {
         self.driver(|rt, app| crate::input::host_events::sync_modifiers(rt, app, mods, next))
     }
 
-    pub(super) fn physical_with_fallback(&mut self, event: crate::PhysicalInput, key: Option<crate::KeyEvent>) -> bool {
-        self.driver(|rt, app| rt.physical_with_fallback(app, event, key))
+    pub(super) fn keyboard(
+        &mut self,
+        clipboard: &crate::clipboard::Client,
+        event: &winit::event::KeyEvent,
+        mods: winit::keyboard::ModifiersState,
+    ) -> bool {
+        self.driver(|rt, app| crate::input::host_events::keyboard(rt, app, clipboard, event, mods, None))
     }
 
     pub(super) fn touch(&mut self, touch: &winit::event::Touch) {

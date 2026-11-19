@@ -245,6 +245,23 @@ mod tests {
             (crate::Key::Function(24), Some(F24)),
         ]);
     }
+
+    #[test]
+    fn web_key_keeps_cmd_space_as_text_and_normalizes_non_ascii_chords() {
+        type Seen = Vec<(crate::Key, Option<crate::PhysicalKeyCode>)>;
+        fn view(_: &Seen, _: &mut Cx<Seen>) -> El { crate::el() }
+        let mut rt = Runtime::new(Seen::new(), view, (100.0, 100.0), Env::default());
+        rt.on_key = Some(|s, ev, tx| { s.push((ev.key.clone(), tx.physical_key())); true });
+        rt.frame(0.0);
+        rt.web_key(&json!({"kind":"key", "key":" ", "code":"Space", "ctrl":true}));
+        rt.frame(0.0);
+        rt.web_key(&json!({"kind":"key", "key":"м", "code":"KeyV", "ctrl":true}));
+        rt.frame(0.0);
+        assert_eq!(rt.state, [
+            (crate::Key::Text(" ".into()), Some(crate::PhysicalKeyCode::Space)),
+            (crate::Key::Command('v'), Some(crate::PhysicalKeyCode::KeyV)),
+        ]);
+    }
 }
 
 /// Reject offsets in the middle of a surrogate pair, rather than corrupting the Rust string.
@@ -317,12 +334,19 @@ impl RuntimeCore {
         let flag = |key: &str| event[key].as_bool().unwrap_or(false);
         let mods = crate::input::key_table::web_mods(flag("shift"), flag("ctrl"), flag("alt"), flag("meta"));
         let name = event["key"].as_str().unwrap_or_default();
+        let code = event["code"].as_str().filter(|c| !c.is_empty() && !c.contains('+'))
+            .and_then(|c| c.parse::<crate::Shortcut>().ok())
+            .map(|s| s.physical_key());
         let key = match crate::input::key_table::named_key_from_str(name) {
             Some(key) => key,
+            None if name == " " => crate::Key::Text(" ".into()),
             None if mods.cmd => {
                 let mut chars = name.chars();
                 match (chars.next(), chars.next()) {
-                    (Some(c), None) => crate::Key::Command(c.to_ascii_lowercase()),
+                    (Some(c), None) => {
+                        let c = if !c.is_ascii() { code.and_then(crate::shortcuts::us_char).unwrap_or(c) } else { c };
+                        crate::Key::Command(c.to_ascii_lowercase())
+                    }
                     _ => return false,
                 }
             }
@@ -331,9 +355,6 @@ impl RuntimeCore {
         let event_key = crate::KeyEvent { key, mods };
         let activate = event_key.key == crate::Key::Tab;
         let repeat = flag("repeat");
-        let code = event["code"].as_str().filter(|c| !c.is_empty() && !c.contains('+'))
-            .and_then(|c| c.parse::<crate::Shortcut>().ok())
-            .map(|s| s.physical_key());
         if let Some(key) = code {
             self.physical_with_fallback(app, crate::PhysicalInput::Key { key, mods, pressed: true, repeat }, Some(event_key));
         } else if repeat {

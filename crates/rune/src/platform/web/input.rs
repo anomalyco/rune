@@ -460,19 +460,14 @@ impl Running {
             WindowEvent::KeyboardInput { event, .. }
                 if self.input.document && event.logical_key == winit::keyboard::Key::Named(winit::keyboard::NamedKey::Tab) => return false,
             WindowEvent::KeyboardInput { event, is_synthetic: false, .. } => {
+                // Browsers expose no synchronous layout key_without_modifiers, so `Tx::key_base`
+                // stays `None` on web by design; physical US positions arrive in `physical_key`.
+                if !self.app.keyboard(&self.clipboard, event, self.input.mods) { return false; }
                 immediate = true;
-                let pressed = event.state == ElementState::Pressed;
-                let logical = (pressed || self.app.rt().wants_key_up()).then(|| crate::window::map_key_event(&event, self.input.mods)).flatten();
                 // Any key that puts Rune's focus in a field (Tab, or a shortcut such as the
                 // prompt's) hands the page's own field the browser's focus, so a screen reader is
                 // in a real text field with its text, not on the canvas's stand-in for it.
-                activate = pressed;
-                if let winit::keyboard::PhysicalKey::Code(key) = event.physical_key {
-                    self.app.physical_with_fallback(crate::PhysicalInput::Key { key, mods: crate::window::map_mods(self.input.mods),
-                        pressed: event.state == ElementState::Pressed, repeat: event.repeat }, logical);
-                } else if let Some(key) = logical {
-                    if pressed { self.app.rt_mut().key(key); } else { self.app.key_up(key); }
-                }
+                activate = event.state == ElementState::Pressed;
             }
             // On a canvas as tall as its content the browser takes vertical pans and cancels the
             // touch; taps and horizontal drags stay Rune's.

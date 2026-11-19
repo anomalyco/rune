@@ -29,7 +29,7 @@ function replacement(old, next, composition, caret) {
 }
 
 function browserShortcut(event) {
-    const chord = event.metaKey || event.ctrlKey;
+    const chord = (event.metaKey || event.ctrlKey) && !event.getModifierState?.('AltGraph');
     if (event.key === 'F5' || event.key === 'F12') return true;
     if (!chord) return false;
     const k = event.key.toLowerCase();
@@ -202,7 +202,8 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         listen(field, 'keydown', event => {
             h.shift = event.shiftKey;
             if (event.isComposing || h.composing || event.keyCode === 229) return;
-            const chord = event.metaKey || event.ctrlKey;
+            // On Windows European layouts AltGr sets both ctrlKey and altKey; let those characters type.
+            const chord = (event.metaKey || event.ctrlKey) && !event.getModifierState?.('AltGraph');
             const editing = ['Enter', 'Tab', 'Escape', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown'];
             if (field === password) editing.push('Backspace', 'Delete');
             if (!chord && !editing.includes(event.key)) return;

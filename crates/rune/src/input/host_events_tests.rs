@@ -242,3 +242,126 @@ fn sync_modifiers_observes_changes_updates_press_mods_and_deduplicates_repeats()
     assert_eq!(rt.state.click_mods.len(), 1);
     assert!(rt.state.click_mods[0].shift && rt.state.click_mods[0].ctrl);
 }
+
+#[test]
+fn keyboard_core_handles_unidentified_repeat_paste_fallback_and_release_gating() {
+    #[derive(Default)]
+    struct S {
+        edit: crate::TextEdit,
+        keys: Vec<(crate::Key, Option<crate::PhysicalKeyCode>, Option<char>, bool)>,
+        ups: Vec<crate::Key>,
+        listen_up: bool,
+    }
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        let root = crate::col().size(200.0, 100.0)
+            .child(crate::text_input(&s.edit, crate::TextStyle::new(14.0, 400.0))
+                .key("field").size(160.0, 40.0).on_edit(|s: &mut S| &mut s.edit));
+        if s.listen_up {
+            root.on_key_up(|s: &mut S, ev, _| { s.ups.push(ev.key.clone()); true })
+        } else {
+            root
+        }
+    }
+    let mut rt = Runtime::new(S::default(), view, (200.0, 100.0), Env::default());
+    let mem = crate::clipboard::memory();
+    mem.set_text("pasted");
+    rt.use_clipboard(&mem);
+    rt.on_key = Some(|s, ev, tx| {
+        s.keys.push((ev.key.clone(), tx.physical_key(), tx.key_base(), tx.key_repeat()));
+        true
+    });
+    rt.frame(0.0);
+
+    let client = crate::clipboard::Client::default();
+
+    // Unidentified physical key with repeat: true uses repeat_key (tx.key_repeat() == true).
+    let redraw = {
+        let (core, mut app) = rt.split_mut();
+        keyboard_core(core, &mut app, &client, KeyInput {
+            physical: None,
+            logical: Some(crate::KeyEvent { key: crate::Key::Down, mods: crate::Mods::default() }),
+            base: None,
+            mods: crate::Mods::default(),
+            pressed: true,
+            repeat: true,
+            unhandled: None,
+        })
+    };
+    assert!(redraw);
+    rt.frame(0.0);
+    assert_eq!(rt.state.keys, [(crate::Key::Down, None, None, true)]);
+
+    // Unhandled key release with no on_key_up returns false (no redraw).
+    let redraw = {
+        let (core, mut app) = rt.split_mut();
+        keyboard_core(core, &mut app, &client, KeyInput {
+            physical: Some(crate::PhysicalKeyCode::ArrowDown),
+            logical: None,
+            base: None,
+            mods: crate::Mods::default(),
+            pressed: false,
+            repeat: false,
+            unhandled: None,
+        })
+    };
+    assert!(!redraw);
+
+    // Physical key press delivers physical_key, key_base, and key_repeat.
+    let redraw = {
+        let (core, mut app) = rt.split_mut();
+        keyboard_core(core, &mut app, &client, KeyInput {
+            physical: Some(crate::PhysicalKeyCode::KeyA),
+            logical: Some(crate::KeyEvent { key: crate::Key::Text("A".into()), mods: crate::Mods { shift: true, ..Default::default() } }),
+            base: Some('a'),
+            mods: crate::Mods { shift: true, ..Default::default() },
+            pressed: true,
+            repeat: false,
+            unhandled: None,
+        })
+    };
+    assert!(redraw);
+    rt.frame(0.0);
+    assert_eq!(rt.state.keys.last(), Some(&(crate::Key::Text("A".into()), Some(crate::PhysicalKeyCode::KeyA), Some('a'), false)));
+
+    // Unidentified physical key Command('v') on a focused text field reads the clipboard instead of falling through.
+    let (fx, fy) = rt.find("field").unwrap();
+    rt.pointer_down(fx, fy);
+    rt.pointer_up(fx, fy);
+    rt.frame(0.0);
+    let cmd = crate::Mods { cmd: true, ctrl: true, ..crate::Mods::default() };
+    let redraw = {
+        let (core, mut app) = rt.split_mut();
+        keyboard_core(core, &mut app, &client, KeyInput {
+            physical: None,
+            logical: Some(crate::KeyEvent { key: crate::Key::Command('v'), mods: cmd }),
+            base: None,
+            mods: cmd,
+            pressed: true,
+            repeat: false,
+            unhandled: None,
+        })
+    };
+    assert!(redraw);
+    assert!(client.receive_core(rt.core_mut()));
+    rt.frame(0.0);
+    assert_eq!(rt.state.edit.text, "pasted");
+
+    // With an on_key_up listener, unidentified release delivers key_up and requests redraw.
+    rt.update(|s, _| s.listen_up = true);
+    rt.frame(0.0);
+    let redraw = {
+        let (core, mut app) = rt.split_mut();
+        keyboard_core(core, &mut app, &client, KeyInput {
+            physical: None,
+            logical: Some(crate::KeyEvent { key: crate::Key::Escape, mods: crate::Mods::default() }),
+            base: None,
+            mods: crate::Mods::default(),
+            pressed: false,
+            repeat: false,
+            unhandled: None,
+        })
+    };
+    assert!(redraw);
+    rt.frame(0.0);
+    assert_eq!(rt.state.ups, [crate::Key::Escape]);
+}

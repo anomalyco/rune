@@ -133,7 +133,6 @@ pub(crate) fn sync_modifiers(
 
 /// Translates a host-neutral key input into runtime physical/logical key calls, including
 /// clipboard paste read on non-physical fallback keys. Returns whether a redraw is needed.
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub(crate) fn keyboard_core(
     rt: &mut RuntimeCore,
     app: &mut dyn AppDriver,
@@ -169,7 +168,6 @@ pub(crate) fn keyboard_core(
 /// Translates a non-synthetic winit `KeyboardInput` into runtime physical/logical key calls,
 /// including clipboard paste read on non-physical fallback keys. Returns whether a redraw is
 /// needed.
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub(crate) fn keyboard(
     rt: &mut RuntimeCore,
     app: &mut dyn AppDriver,
