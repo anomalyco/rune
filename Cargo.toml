@@ -94,7 +94,8 @@ exclude = ["tools/rune-dev-guard", "vendor/accesskit_macos", "vendor/accesskit_w
 # the first compile rather than with the instance (Rune's uber shader is precompiled), and partial presents
 # (`Surface::set_present_rects`: `Present1` dirty rectangles on a sequential flip-model swap chain, for
 # `render::damaged`), and a removed D3D12 device's work left pending rather than read as finished
-# (`Device::reached`; Rune sees the removal through `rune_gpu::health::removed`). Re-made by
+# (`Device::reached`; Rune sees the removal through `rune_gpu::health::removed`), and debug builds timing
+# each submission against a budget (`dx12::Queue::watch_submissions`, `crates/rune-gpu/src/budget.rs`). Re-made by
 # `scripts/vendor-wgpu-hal.sh <version>` when wgpu is bumped. An app that builds Rune patches it too:
 # a dependency's `[patch]` doesn't apply to the workspace that depends on it.
 [patch.crates-io]

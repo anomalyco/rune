@@ -89,6 +89,8 @@ mod pipeline_desc;
 mod sampler;
 mod shader_compilation;
 mod suballocation;
+// Rune: debug builds time each submission (submission_watch).
+mod submission_watch;
 mod types;
 mod view;
 
@@ -113,6 +115,7 @@ use windows::{
 };
 
 use self::dcomp::DCompLib;
+pub use self::submission_watch::Report as SubmissionReport;
 use crate::auxil::{
     self,
     dxgi::{
@@ -821,6 +824,8 @@ pub struct Queue {
     idle_fence_value: AtomicU64,
     pending_waits: Mutex<Vec<(Direct3D12::ID3D12Fence, u64)>>,
     pending_signals: Mutex<Vec<(Direct3D12::ID3D12Fence, u64)>>,
+    /// Rune: debug builds' submission timing.
+    watch: submission_watch::Watch,
 }
 
 impl Queue {
@@ -1817,6 +1822,7 @@ impl crate::Queue for Queue {
 
         unsafe { self.raw.Signal(&signal_fence.raw, signal_value) }
             .into_device_result("Signal fence")?;
+        self.watch.submitted(&self.raw, &signal_fence.raw, signal_value);
 
         // Drain caller-staged signals after our own Signal so each
         // additional fence value publishes once the submit completes.
