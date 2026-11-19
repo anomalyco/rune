@@ -966,3 +966,179 @@ fn rotated_clip_buffers_draw_upright_like_its_poster_on(gpu: Gpu) {
         }
     }
 }
+
+/// PROOF ONLY, never merged (rune-proof: device-removal): removes this D3D12 device as a GPU
+/// reset does, and only on WARP, the software adapter: anything else ends the test first.
+#[cfg(target_os = "windows")]
+fn remove_device_for_proof(adapter: &wgpu::Adapter, device: &wgpu::Device) {
+    use ::windows::core::Interface;
+    let info = adapter.get_info();
+    assert!(
+        info.device_type == wgpu::DeviceType::Cpu && info.name.contains("Microsoft Basic Render Driver"),
+        "refusing to remove a device on {:?} ({:?}): proofs remove devices on WARP only",
+        info.name,
+        info.device_type
+    );
+    let hal = unsafe { device.as_hal::<wgpu::hal::api::Dx12>() }.expect("a D3D12 device");
+    let device5: ::windows::Win32::Graphics::Direct3D12::ID3D12Device5 = hal.raw_device().cast().expect("ID3D12Device5");
+    unsafe { device5.RemoveDevice() };
+    eprintln!("proof: ID3D12Device5::RemoveDevice called on {:?}", info.name);
+}
+
+/// PROOF ONLY, never merged: where a process dies after a removal (exit 5 on the farm, very
+/// likely 0xC0000005 cut to its low byte): the exception, its module, and which drop was next.
+mod proof_crash {
+    pub(super) struct Mark(pub(super) &'static str);
+    impl Drop for Mark {
+        fn drop(&mut self) {
+            eprintln!("proof crash: {} (thread {:?}, panicking {})", self.0, std::thread::current().name(), std::thread::panicking());
+        }
+    }
+
+    #[repr(C)]
+    struct ExceptionRecord {
+        code: u32,
+        flags: u32,
+        inner: *mut ExceptionRecord,
+        address: *mut core::ffi::c_void,
+        parameters: u32,
+        information: [usize; 15],
+    }
+    #[repr(C)]
+    struct ExceptionPointers {
+        record: *mut ExceptionRecord,
+        context: *mut core::ffi::c_void,
+    }
+    type Filter = unsafe extern "system" fn(*mut ExceptionPointers) -> i32;
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn SetUnhandledExceptionFilter(filter: Option<Filter>) -> Option<Filter>;
+        fn GetModuleHandleExW(flags: u32, name: *const core::ffi::c_void, module: *mut *mut core::ffi::c_void) -> i32;
+        fn GetModuleFileNameW(module: *mut core::ffi::c_void, name: *mut u16, size: u32) -> u32;
+    }
+
+    pub(super) fn install() {
+        unsafe { SetUnhandledExceptionFilter(Some(filter)) };
+        eprintln!("proof crash: unhandled-exception filter installed");
+    }
+
+    unsafe extern "system" fn filter(pointers: *mut ExceptionPointers) -> i32 {
+        let record = unsafe { &*(*pointers).record };
+        let mut module = core::ptr::null_mut();
+        // GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT
+        let found = unsafe { GetModuleHandleExW(0x4 | 0x2, record.address, &mut module) } != 0;
+        let mut name = [0u16; 260];
+        let len = if found { unsafe { GetModuleFileNameW(module, name.as_mut_ptr(), 260) } } else { 0 };
+        eprintln!(
+            "proof crash: exception {:#010x} at {:?} in {} +{:#x}; parameters {:?}; thread {:?}",
+            record.code,
+            record.address,
+            String::from_utf16_lossy(&name[..len as usize]),
+            (record.address as usize).wrapping_sub(module as usize),
+            &record.information[..(record.parameters as usize).min(15)],
+            std::thread::current().name()
+        );
+        eprintln!("proof crash: stack:\n{}", std::backtrace::Backtrace::force_capture());
+        0
+    }
+}
+
+/// PROOF ONLY, never merged (rune-proof: device-removal): a removed WARP device with about
+/// 80 ms of compute still queued, then its objects released in the order `arm` names, each step
+/// timed. Which release dies tells what WARP still uses after `RemoveDevice`.
+#[cfg(target_os = "windows")]
+fn proof_crash(arm: &str, wait_before_release: std::time::Duration) {
+    use std::time::Instant;
+    proof_crash::install();
+    let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+    desc.backends = wgpu::Backends::DX12;
+    let instance = wgpu::Instance::new(desc);
+    let pick = rune_gpu::pick::pick(&instance, None, false).expect("adapter");
+    let adapter = pick.adapter;
+    let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).expect("device");
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: None,
+        source: wgpu::ShaderSource::Wgsl(
+            "@group(0) @binding(0) var<storage, read_write> r: array<u32>;
+            @compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+                var x = id.x; for (var i = 0u; i < 256u; i++) { x = (x ^ (x >> 13u)) * 1664525u + 1013904223u; } r[id.x] = x; }"
+                .into(),
+        ),
+    });
+    let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor { label: None, layout: None, module: &shader, entry_point: Some("main"), compilation_options: Default::default(), cache: None });
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 65536 * 4, usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false });
+    let bind = device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &pipeline.get_bind_group_layout(0), entries: &[wgpu::BindGroupEntry { binding: 0, resource: buffer.as_entire_binding() }] });
+    let submit = |n: u32| {
+        for _ in 0..n {
+            let mut encoder = device.create_command_encoder(&Default::default());
+            {
+                let mut pass = encoder.begin_compute_pass(&Default::default());
+                pass.set_pipeline(&pipeline);
+                pass.set_bind_group(0, &bind, &[]);
+                pass.dispatch_workgroups(1024, 1, 1);
+            }
+            queue.submit([encoder.finish()]);
+        }
+    };
+    // One submission, timed alone, sizes the queue.
+    let t = Instant::now();
+    submit(1);
+    let _ = device.poll(wgpu::PollType::wait_indefinitely());
+    let one = t.elapsed();
+    let n = (std::time::Duration::from_millis(80).as_micros() / one.as_micros().max(1)).clamp(4, 400) as u32;
+    eprintln!("proof crash: arm {arm}: one submission took {} us; queueing {n}", one.as_micros());
+    submit(n);
+    remove_device_for_proof(&adapter, &device);
+    let removed = Instant::now();
+    let step = |what: &str| eprintln!("proof crash: arm {arm}: {what} at {} us after the removal", removed.elapsed().as_micros());
+    std::thread::sleep(wait_before_release);
+    step("waited; releasing the shader, pipeline, buffer and bind group");
+    drop((bind, buffer, pipeline, shader));
+    step("released them");
+    match arm {
+        "queue-first" => {
+            drop(queue);
+            step("queue released (wgpu-core frees the submissions' command buffers and resources here)");
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            step("1 s later; releasing the device");
+            drop(device);
+            step("device released");
+            drop(adapter);
+            step("adapter released (the last reference to the ID3D12Device)");
+        }
+        "device-first" => {
+            drop(device);
+            step("device handle released (wgpu-core's device lives on in the queue)");
+            drop(adapter);
+            step("adapter released");
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            step("1 s later; releasing the queue");
+            drop(queue);
+            step("queue released (submissions freed, then the device)");
+        }
+        _ => {
+            drop((adapter, device, queue));
+            step("adapter, device and queue released together");
+        }
+    }
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    step("still alive 500 ms after the last release");
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn proof_crash_queue_first() {
+    proof_crash("queue-first", std::time::Duration::ZERO);
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn proof_crash_device_first() {
+    proof_crash("device-first", std::time::Duration::ZERO);
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn proof_crash_together() {
+    proof_crash("together", std::time::Duration::ZERO);
+}
