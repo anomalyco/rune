@@ -1204,7 +1204,7 @@ impl Offscreen {
     pub fn read(&self, device: &wgpu::Device) -> Vec<u8> {
         let slice = self.buffer.slice(..);
         slice.map_async(wgpu::MapMode::Read, |r| r.expect("map readback"));
-        device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
+        rune_gpu::health::poll(&device, wgpu::PollType::wait_indefinitely()).expect("poll");
         let out = {
             let data = slice.get_mapped_range().expect("mapped range");
             crate::tooling::record::unpad(&data, self.width, self.height, self.padded_row)

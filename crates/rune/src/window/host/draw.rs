@@ -540,7 +540,7 @@ impl Host {
         // A swap chain made again on a handed-over window's visual takes over now (`cpu_frame`).
         #[cfg(target_os = "windows")]
         if matches!(l.native.mode, handover::SurfaceMode::Rebinding { .. }) {
-            let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+            let _ = rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely());
             if let handover::SurfaceMode::Rebinding { handover } = std::mem::take(&mut l.native.mode) {
                 if let Err(error) = handover.commit() { eprintln!("rune: the window's new swap chain couldn't take over: {error}"); }
                 l.native.mode = handover::SurfaceMode::Handed { handover };
@@ -583,7 +583,7 @@ impl Host {
         #[cfg(target_os = "macos")]
         if !FrameMove::moving(&self.frame_move) { l.present_with_transaction(false); }
         if !l.first_frame.ready()
-            && gpu.device.poll(wgpu::PollType::wait_indefinitely()).is_ok() {
+            && rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely()).is_ok() {
             l.first_frame.gpu_done();
             crate::marks::mark("frame.first.gpu_done");
             #[cfg(target_os = "windows")]
@@ -592,7 +592,7 @@ impl Host {
         // The window shows once the GPU has finished the frame it presents.
         #[cfg(target_os = "windows")]
         if l.native.cloak.held() {
-            let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+            let _ = rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely());
             l.native.cloak.lift(&l.window);
             crate::marks::mark("window.shown");
         }

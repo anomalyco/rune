@@ -227,7 +227,7 @@ impl Importer {
             .name("rune-dmabuf-read".into())
             .spawn(move || {
                 for (submission, f) in waits {
-                    let done = waiter.poll(wgpu::PollType::Wait { submission_index: Some(submission), timeout: Some(READ_TIMEOUT) });
+                    let done = rune_gpu::health::poll(&waiter, wgpu::PollType::Wait { submission_index: Some(submission), timeout: Some(READ_TIMEOUT) });
                     f(done.map(|_| ()).map_err(|e| format!("wait for the dmabuf copy: {e}")));
                 }
             })

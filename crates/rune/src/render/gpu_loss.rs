@@ -35,13 +35,10 @@ impl Gpu {
             // Before anything reads it: a lost device's surface can't be configured, and wgpu
             // reports that failure nowhere (`is_lost`).
             lost_by_callback.store(true, Ordering::Release);
+            // No panic here, in tests either: wgpu calls this inside its own work (a submission,
+            // a queue's drop) and a panic there could abort the process. A test fails at its
+            // next wait instead (`rune_gpu::health::poll` returns `Lost`).
             eprintln!("rune: the GPU device was lost ({reason:?}): {message}");
-            // A test whose device is lost (a GPU reset, a driver update) fails: whatever it read
-            // from the GPU since proves nothing. A device the test destroyed is its own doing.
-            #[cfg(test)]
-            if reason != wgpu::DeviceLostReason::Destroyed {
-                panic!("the GPU device was lost during a test ({reason:?}): {message}");
-            }
         });
         if draws_surfaces && !cfg!(test) { log_uncaptured(&device); }
         Gpu { instance, adapter, device, queue, lost }

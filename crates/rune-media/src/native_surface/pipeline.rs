@@ -197,12 +197,11 @@ impl SurfaceRenderer {
                 // Nonblocking poll releases wgpu's snatch lock before sleeping. A fence wait here
                 // would keep that read lock and serialize queue.present's write lock behind GPU work.
                 // Wakeups are coalesced; the final frame still completes after the window goes idle.
-                // A removed device's work never finishes: the worker stops rather than poll it forever.
+                // A lost device's work never finishes: the worker stops rather than poll it forever.
                 while receiver.recv().is_ok() {
                     loop {
-                        match poll_device.poll(wgpu::PollType::Poll) {
+                        match rune_gpu::health::poll(&poll_device, wgpu::PollType::Poll) {
                             Ok(wgpu::PollStatus::QueueEmpty) => break,
-                            Ok(_) if rune_gpu::health::removed(&poll_device) => return,
                             Ok(_) => std::thread::sleep(std::time::Duration::from_millis(1)),
                             Err(_) => return,
                         }

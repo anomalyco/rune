@@ -55,6 +55,48 @@ pub fn removed(device: &wgpu::Device) -> bool {
     }
 }
 
+/// Why `poll` gave no status.
+#[derive(Debug)]
+pub enum PollFailed {
+    /// The device is gone: nothing it was given will finish.
+    Lost,
+    /// The wait timed out, or named a submission the queue never had.
+    Wait(wgpu::PollError),
+}
+
+impl std::fmt::Display for PollFailed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PollFailed::Lost => f.write_str("the GPU device was lost"),
+            PollFailed::Wait(error) => write!(f, "{error}"),
+        }
+    }
+}
+
+/// `Device::poll`, every Rune wait on the GPU goes through: a lost or removed device is an
+/// error, never a wait that can't end and never a panic. wgpu 30 panics in `poll` once a fence
+/// read fails ("Error in Device::poll: Parent device is lost"): on Vulkan that is how a lost
+/// device shows. Until wgpu returns that as an error, the panic is caught here, and only that
+/// one (wgpu holds no lock when it panics there; a callback's panic during the poll goes on).
+/// On D3D12 the removal is asked first, so it never reaches wgpu's panic.
+pub fn poll(device: &wgpu::Device, kind: wgpu::PollType) -> Result<wgpu::PollStatus, PollFailed> {
+    if removed(device) {
+        return Err(PollFailed::Lost);
+    }
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| device.poll(kind))) {
+        Ok(Ok(status)) => Ok(status),
+        Ok(Err(_)) if removed(device) => Err(PollFailed::Lost),
+        Ok(Err(error)) => Err(PollFailed::Wait(error)),
+        Err(panic) => {
+            let message = panic.downcast_ref::<String>().map(String::as_str).or_else(|| panic.downcast_ref::<&str>().copied()).unwrap_or("");
+            if message.starts_with("Error in Device::poll") {
+                return Err(PollFailed::Lost);
+            }
+            std::panic::resume_unwind(panic)
+        }
+    }
+}
+
 #[cfg(test)]
 #[path = "health_tests.rs"]
 mod tests;

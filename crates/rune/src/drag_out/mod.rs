@@ -357,7 +357,7 @@ pub(crate) fn snapshot(gpu: &crate::render::Gpu, renderer: &crate::render::Rende
     gpu.queue.submit([enc.finish()]);
     let slice = buffer.slice(..);
     slice.map_async(wgpu::MapMode::Read, |_| {});
-    gpu.device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
+    rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely()).ok()?;
     let mut rgba = Vec::with_capacity((w * h * 4) as usize);
     {
         let data = slice.get_mapped_range().ok()?;

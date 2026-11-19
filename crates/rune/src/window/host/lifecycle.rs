@@ -557,7 +557,7 @@ impl Host {
             // polled: a poll costs the next two frames' submits 4-9 ms each on an Iris Xe.
             if all {
                 gpu.queue.submit(std::iter::empty());
-                let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+                let _ = rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely());
                 renderer.trim_uploads();
             }
         }

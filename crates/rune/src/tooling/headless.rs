@@ -412,7 +412,7 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
 
         if comp.is_some() {
             // Pace like a display link so a compositor's async readbacks (GPU timers) land between frames.
-            gpu.device.poll(wgpu::PollType::wait_indefinitely()).ok();
+            rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely()).ok();
         }
         if let Some(tr) = trace.as_mut() {
             tr.frame(&mut rt, real_t * 1000.0, ms);
@@ -455,7 +455,7 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
     if let Some(video) = writer.finish().unwrap_or_else(|e| die(&e)) {
         eprintln!("rune: wrote {} ({written} frames at {fps} fps)", video.display());
     }
-    gpu.device.poll(wgpu::PollType::wait_indefinitely()).ok();
+    rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely()).ok();
 
     if let Some(p) = &args.strip { write_strip(p, &strip, (wp, hp), &crops_px, gap, args.cols); }
     if let (Some(g), Some(p)) = (gate, &gate_out) {

@@ -76,7 +76,7 @@ impl Check {
         let (a, b) = (self.kept.slice(..), self.whole.slice(..));
         a.map_async(wgpu::MapMode::Read, |_| {});
         b.map_async(wgpu::MapMode::Read, |_| {});
-        if device.poll(wgpu::PollType::wait_indefinitely()).is_err() { return; }
+        if rune_gpu::health::poll(&device, wgpu::PollType::wait_indefinitely()).is_err() { return; }
         let (mut any, mut far, mut bounds) = (0u64, 0u64, [u32::MAX, u32::MAX, 0, 0]);
         {
             let (Ok(ka), Ok(wb)) = (a.get_mapped_range(), b.get_mapped_range()) else { self.kept.unmap(); self.whole.unmap(); return };
