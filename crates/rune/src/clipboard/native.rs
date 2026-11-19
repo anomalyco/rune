@@ -6,8 +6,6 @@ impl Client {
     pub(super) fn read_for(&self, purpose: Purpose) {
         let _ = worker().send(Request::Read { purpose, reply: self.sender.clone(), wake: self.wake.clone() });
     }
-    #[inline(always)]
-    pub fn flush<S: 'static>(&self, rt: &mut Runtime<S>) { self.flush_core(rt.core_mut()); }
     pub(crate) fn flush_core(&self, rt: &mut crate::runtime::RuntimeCore) {
         if rt.clipboard.is_some() { return flush_memory(rt); }
         #[cfg(target_os = "linux")]

@@ -1,5 +1,5 @@
 //! Device loss: the callback that tells Rune a device went away, and what a surface does about
-//! it (`window/create.rs::Host::reattach`). wgpu reports a dead device only through
+//! it (`window/host/create.rs::Host::reattach`). wgpu reports a dead device only through
 //! `Device::set_device_lost_callback`; `Surface::configure`'s `DeviceLost` is dropped, so a lost
 //! device would otherwise surface as a panic on the surface's next drawable.
 //!

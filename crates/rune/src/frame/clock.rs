@@ -15,7 +15,9 @@
 use crate::machine::Effects;
 use crate::time::Instant;
 use rune_motion::TrackId;
+#[cfg(any(test, feature = "hot", target_arch = "wasm32"))]
 use crate::runtime::Runtime;
+use crate::runtime::{AppDriver, RuntimeCore};
 
 /// The most a frame steps motion it starts. Its first frame shows one 120 Hz frame of movement,
 /// instead of repeating its start pose or jumping ahead by a late frame's gap or the time
@@ -154,10 +156,17 @@ impl FrameClock {
     /// Steps `rt` to the frame presented at `at`, in one runtime pass. `compositing`: a
     /// compositor's own animation was still running after the previous frame. Returns whether
     /// anything still animates and the seconds stepped.
+    #[cfg(any(test, target_arch = "wasm32"))]
+    #[inline(always)]
     pub(crate) fn advance<S: 'static>(&mut self, rt: &mut Runtime<S>, at: Instant, compositing: bool) -> (bool, f64) {
+        let (core, mut app) = rt.split_mut();
+        self.advance_core(core, &mut app, at, compositing)
+    }
+
+    pub(crate) fn advance_core(&mut self, rt: &mut RuntimeCore, app: &mut dyn AppDriver, at: Instant, compositing: bool) -> (bool, f64) {
         let (step, starts) = self.begin(at, rt.animating || compositing);
         rt.frame_target = Some(at);
-        let animating = rt.frame_split(step.catch_up, step.dt);
+        let animating = rt.frame_split(app, step.catch_up, step.dt);
         starts.extend_from_slice(rt.scene.store().started());
         (animating, step.total())
     }
@@ -165,7 +174,13 @@ impl FrameClock {
     /// The frame last stepped to finished at `done`. When that's past its target, the motion it
     /// started holds its first pose for the overrun, so the next frame moves it about a frame
     /// rather than by how late this one was. Motion already running keeps real time.
+    #[cfg(test)]
+    #[inline(always)]
     pub(crate) fn presented<S: 'static>(&mut self, rt: &mut Runtime<S>, done: Instant) {
+        self.presented_core(rt.core_mut(), done);
+    }
+
+    pub(crate) fn presented_core(&mut self, rt: &mut RuntimeCore, done: Instant) {
         if let Effects::One(Effect::Delay(late, starts)) = self.step(Event::Present(done)) {
             rt.scene.store_mut().delay(starts, late * f64::from(rt.time_scale));
         }

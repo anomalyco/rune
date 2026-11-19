@@ -22,9 +22,9 @@ fn present<T: 'static>(overlay: &mut Overlay<T>, at: Instant) {
 fn present_paced<T: 'static>(overlay: &mut Overlay<T>, at: Instant, paced: bool) {
     // These synthetic frames exercise animation, independent of the host's Reduce Motion setting.
     overlay.rt.set_system_reduced_motion(false);
-    let (animating, _) = step(&mut overlay.rt, &mut overlay.clock, &overlay.compositor, at, false);
+    let (animating, _) = overlay.step_frame(at, false);
     overlay.dirty = false;
-    overlay.idle = idle_after(&overlay.rt, animating, paced.then_some(at + FRAME));
+    overlay.idle = idle_after(overlay.rt.core(), animating, paced.then_some(at + FRAME));
 }
 
 /// An overlay whose poll asks for the next frame every time it runs, counting its polls.
@@ -387,7 +387,7 @@ fn overlay_hidden_commit_keeps_elapsed_motion_on_later_reveal() {
         let commit = overlay.clock.last() + Duration::from_secs(10);
         overlay.rt.state.enter = true;
         overlay.advance_at(commit); // Hidden turn 1 commits B; no show request yet.
-        assert_eq!(handle.shared.requests.lock().unwrap().visible(), None);
+        assert_eq!(handle.shared.core.requests.lock().unwrap().visible(), None);
         assert_eq!(overlay.rt.presented("box").unwrap().0[2], 12.0, "idle before B must not age B");
         assert!(!overlay.draw(), "hidden motion must not drive frames");
         assert_eq!(overlay.wake_deadline(), None);
@@ -437,7 +437,7 @@ fn overlay_hidden_retarget_samples_old_motion_before_committing_new_target() {
 
         // A visible reference ages B first and only then commits C. Compare the next
         // moving frame too: retargeting must preserve velocity, not just position.
-        let mut reference = Runtime::new(12.0, view, app.size, Env::default());
+        let mut reference = crate::runtime::Runtime::new(12.0, view, app.size, crate::runtime::Env::default());
         reference.time_scale = scale;
         reference.frame(0.0);
         reference.update(|width, _| *width = 20.0);
@@ -494,13 +494,13 @@ fn overlay_hidden_poll_can_show_and_animate_from_the_cached_pose() {
             // An app's original kick: a no-op update invalidates the prepared frame
             // before the hidden poll commits B and requests show.
             handle.update(|_, _| {});
-            let updates = std::mem::take(&mut handle.shared.requests.lock().unwrap().updates);
+            let updates = std::mem::take(&mut *handle.shared.updates.lock().unwrap());
             overlay.apply_wake(false, updates);
             assert!(overlay.dirty);
         } else {
             overlay.advance();
         }
-        assert_eq!(handle.shared.requests.lock().unwrap().visible(), Some(true));
+        assert_eq!(handle.shared.core.requests.lock().unwrap().visible(), Some(true));
         overlay.settle_before_reveal();
         overlay.refresh_for_reveal_at(Instant::now());
         if queued {
@@ -668,12 +668,12 @@ fn a_timer_frame_that_changes_nothing_on_screen_draws_nothing() {
 
     let at = start + Duration::from_millis(33);
     let polls = overlay.rt.state.polls;
-    assert_eq!(frame::quiet_step(&mut overlay.rt, &mut overlay.clock, presented, &config, at, Some(at + FRAME)), None);
+    assert_eq!(overlay.quiet_step_frame(presented, &config, at, Some(at + FRAME)), None);
     assert_eq!(overlay.rt.state.polls, polls + 1, "the timer's poll ran");
 
     overlay.rt.state.grow = true;
     let at = at + Duration::from_millis(33);
-    assert!(frame::quiet_step(&mut overlay.rt, &mut overlay.clock, presented, &config, at, Some(at + FRAME)).is_some(),
+    assert!(overlay.quiet_step_frame(presented, &config, at, Some(at + FRAME)).is_some(),
         "a poll that changes what's on screen draws");
 }
 

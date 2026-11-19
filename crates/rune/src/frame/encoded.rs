@@ -79,13 +79,10 @@ impl FrameEncoded {
     pub fn encode_ms(&self) -> Option<f64> { self.encode_ms }
 }
 
-/// A window's hooks and the count it numbers reports with. Without a hook every call is one
+/// A window's hook and the count it numbers reports with. Without a hook every call is one
 /// `Option` check and nothing else, so reporting never changes how the window draws.
-pub(crate) struct FrameReports<S: 'static>(Option<Reporter>, Option<OnFrameDrawn<S>>);
-
-impl<S: 'static> Default for FrameReports<S> {
-    fn default() -> Self { Self(None, None) }
-}
+#[derive(Default)]
+pub(crate) struct FrameReports(Option<Reporter>);
 
 struct Reporter {
     hook: OnFrameEncoded,
@@ -94,14 +91,9 @@ struct Reporter {
     refresh_hz: Option<f64>,
 }
 
-impl<S: 'static> FrameReports<S> {
+impl FrameReports {
     pub(crate) fn new(hook: Option<OnFrameEncoded>, window: Option<&str>) -> Self {
-        Self(hook.map(|hook| Reporter { hook, window: window.map(Rc::from), seq: 0, refresh_hz: None }), None)
-    }
-
-    pub(crate) fn inspecting(mut self, drawn: Option<OnFrameDrawn<S>>) -> Self {
-        self.1 = drawn;
-        self
+        Self(hook.map(|hook| Reporter { hook, window: window.map(Rc::from), seq: 0, refresh_hz: None }))
     }
 
     /// The time to report a `Drawn` frame at, taken only when there's a hook.
@@ -121,11 +113,6 @@ impl<S: 'static> FrameReports<S> {
         let Some(at) = at else { return };
         let encode_ms = (at.saturating_duration_since(started).as_secs_f64() * 1000.0 - update_ms).max(0.0);
         self.report(FrameOutcome::Drawn, at, presents_at, Some((started, update_ms, encode_ms)));
-    }
-
-    /// After a `Drawn` frame: `App::on_frame_drawn` reads the runtime as it presented.
-    pub(crate) fn inspect(&mut self, rt: &crate::Runtime<S>) {
-        if let Some(hook) = &mut self.1 { hook(rt); }
     }
 
     pub(crate) fn unchanged(&mut self, presents_at: Option<Instant>) {

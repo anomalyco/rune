@@ -13,6 +13,7 @@ use crate::popup_menu::Show;
 use crate::popup_menu::{PopupMenu, PopupMenuError};
 use crate::{MagnifyEvent, PhysicalInput, PointerButton, RotateEvent, WheelEvent};
 
+#[allow(dead_code)]
 impl<S: 'static> Runtime<S> {
     // ── Pointer & secondary ────────────────────────────────────────────────────────────────────
 

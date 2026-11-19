@@ -99,12 +99,13 @@ impl Trace {
         self.frame_timed_core(rt.core_mut(), t_ms, cpu_ms, FrameTiming::default());
     }
 
+    #[cfg(test)]
     #[inline(always)]
     pub(crate) fn frame_timed<S>(&mut self, rt: &mut Runtime<S>, t_ms: f64, cpu_ms: f64, timing: FrameTiming) {
         self.frame_timed_core(rt.core_mut(), t_ms, cpu_ms, timing);
     }
 
-    fn frame_timed_core(&mut self, rt: &mut crate::runtime::RuntimeCore, t_ms: f64, cpu_ms: f64, timing: FrameTiming) {
+    pub(crate) fn frame_timed_core(&mut self, rt: &mut crate::runtime::RuntimeCore, t_ms: f64, cpu_ms: f64, timing: FrameTiming) {
         let els = rt.elements();
         let settled = rt.settled;
         let mut metas = Vec::new();

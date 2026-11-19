@@ -74,7 +74,7 @@ pub(crate) fn headless_configured<S: 'static>(mut app: crate::app::App<S>, args:
     let (on_reopen, on_open_url) = (app.on_reopen, app.on_open_url);
     // A `--realtime` run stands in for a window, so it starts the app's live work as one does.
     let mut on_ready = app.on_ready.take().filter(|_| args.realtime);
-    let mut reports = crate::frame::encoded::FrameReports::<S>::new(app.on_frame_encoded.take(), Some("main"));
+    let mut reports = crate::frame::encoded::FrameReports::new(app.on_frame_encoded.take(), Some("main"));
     let source = read_script(&args);
     let script = source.as_ref().map(load_script).unwrap_or_default();
     let timeline = Timeline::of(&args, &script).unwrap_or_else(|e| die(&e));
