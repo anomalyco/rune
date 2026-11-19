@@ -447,6 +447,11 @@ fn run_headless(prep: HeadlessPrep, config: HeadlessConfig, app: &mut dyn Headle
         reports.drawn(reports.stamp(), None, frame_start, update_ms);
         app.rt_mut().interaction_presented(Instant::now(), None);
         if want_pixels { readback.submitted(); }
+        // PROOF ONLY (rune-proof: device-removal): `RUNE_PROOF_REMOVE=snap` removes the device
+        // with the snapshot's copy in flight.
+        if shot.snap && crate::tooling::proof_removal::asked("snap") {
+            crate::tooling::proof_removal::remove(&gpu, "with the snapshot's copy in flight");
+        }
         let ms = frame_start.elapsed().as_secs_f64() * 1000.0;
         #[cfg(feature = "frame-profile")]
         {
