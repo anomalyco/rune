@@ -1039,7 +1039,10 @@ fn proof_budget_work(gpu: &Gpu, ms: u32, wait_ms: u32) -> std::time::Duration {
         while heard.try_recv().is_err() {
             let _ = rune_gpu::health::poll(device, wgpu::PollType::Poll);
             std::thread::sleep(Duration::from_millis(1));
-            assert!(t.elapsed() < Duration::from_secs(20), "the proof's submission never finished");
+            if t.elapsed() > Duration::from_secs(5) {
+                let reason = unsafe { device.as_hal::<wgpu::hal::api::Dx12>() }.map(|d| format!("{:?}", unsafe { d.raw_device().GetDeviceRemovedReason() }));
+                panic!("the proof's submission never finished in 5 s; removed {}, reason {reason:?}", rune_gpu::health::removed(device));
+            }
         }
         if let Some(release) = release {
             let _ = release.join();
@@ -1088,4 +1091,39 @@ fn proof_budget_zz_a_later_test_inherits_nothing() {
     std::thread::sleep(std::time::Duration::from_millis(200));
     gpu.assert_alive();
     eprintln!("proof budget: the later test passed");
+}
+
+
+/// PROOF ONLY: an empty submission on WARP with no submission watch installed in this process
+/// (this test must run alone), then the same with the watch: does each finish?
+#[cfg(target_os = "windows")]
+#[test]
+fn proof_budget_without_the_watch() {
+    use std::time::{Duration, Instant};
+    let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+    desc.backends = wgpu::Backends::DX12;
+    let instance = wgpu::Instance::new(desc);
+    let adapter = rune_gpu::pick::pick(&instance, None, false).expect("adapter").adapter;
+    let info = adapter.get_info();
+    assert!(info.device_type == wgpu::DeviceType::Cpu, "WARP only: {:?}", info.name);
+    let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).expect("device");
+    for watched in [false, true] {
+        if watched {
+            rune_gpu::budget::watch();
+        }
+        let encoder = device.create_command_encoder(&Default::default());
+        let (done, heard) = std::sync::mpsc::channel();
+        queue.on_submitted_work_done(move || drop(done.send(())));
+        let t = Instant::now();
+        queue.submit([encoder.finish()]);
+        while heard.try_recv().is_err() {
+            let _ = device.poll(wgpu::PollType::Poll);
+            std::thread::sleep(Duration::from_millis(1));
+            if t.elapsed() > Duration::from_secs(5) {
+                let reason = unsafe { device.as_hal::<wgpu::hal::api::Dx12>() }.map(|d| format!("{:?}", unsafe { d.raw_device().GetDeviceRemovedReason() }));
+                panic!("watched {watched}: an empty submission never finished in 5 s; removed {}, reason {reason:?}", rune_gpu::health::removed(&device));
+            }
+        }
+        eprintln!("proof budget: watched {watched}: an empty submission finished in {} us", t.elapsed().as_micros());
+    }
 }
