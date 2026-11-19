@@ -504,7 +504,7 @@ pub(crate) fn run(windows: Vec<AnyWindowSpec>, selected: usize, args: Args, acce
             }
             if slots[i].as_ref().is_none_or(|s| s.px != px) { slots[i] = Some(Slot::new(&gpu.device, &comp, px, scale)); }
             let slot = slots[i].as_ref().unwrap();
-            m.render(&gpu, slot, px, step, update_ms);
+            m.render(&gpu, slot, px, step, update_ms, frame_start);
             let (ox, oy) = desk.origin_px(i);
             let (sigma, offset, opacity) = if key == Some(i) { KEY_SHADOW } else { SHADOW };
             slot.write(&gpu.queue, Uniform {
@@ -565,6 +565,7 @@ pub(crate) fn run(windows: Vec<AnyWindowSpec>, selected: usize, args: Args, acce
         }
     }
     for (shot, px) in readback.finish(&gpu.device) { deliver(shot, px); }
+    for m in &mut desk.members { m.flush_interaction(); }
     drop(deliver);
     if let Some(video) = writer.finish().unwrap_or_else(|e| die(&e)) {
         eprintln!("rune: wrote {} ({frames_written} frames at {fps} fps)", video.display());

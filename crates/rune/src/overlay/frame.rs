@@ -30,7 +30,7 @@ pub(super) struct OverlayRenderArgs<'a> {
 /// at the display's rate instead of the link stopping after each frame. Unpaced, the timer
 /// waits a frame in `wake_deadline` and never keeps the loop turning.
 pub(super) fn idle_after(rt: &RuntimeCore, animating: bool, next_tick: Option<Instant>) -> bool {
-    !(animating || rt.has_pending_input() || crate::window::timer_wants_frame_core(rt, next_tick))
+    !(animating || rt.stale() || rt.live_pending() || crate::window::timer_wants_frame_core(rt, next_tick))
 }
 
 /// `draw_frame`'s animation step, apart from the surface so tests can drive it.
@@ -200,6 +200,7 @@ pub(super) fn turn(gate: Gate, now: impl Fn() -> Instant) -> Turn {
 /// A resting overlay's timer frame, stepped before any drawable: `None` when it draws what
 /// `presented` shows and nothing asks for the next (`next_tick`: the display link's next tick,
 /// had it run), else the step's `(animating, dt)` to draw with.
+#[cfg(test)]
 pub(super) fn quiet_step(app: &mut dyn OverlayApp, clock: &mut FrameClock, presented: &Presented,
     config: &wgpu::SurfaceConfiguration, now: Instant, next_tick: Option<Instant>) -> Option<(bool, f64)> {
     let (animating, dt) = app.clock_advance(clock, now, false);
@@ -244,6 +245,7 @@ pub(super) fn render_frame(app: &mut dyn OverlayApp, f: OverlayRenderArgs<'_>) -
         f.ui.upload_images(f.device, f.queue, &mut rt.images);
         f.ui.build_surfaces(f.device, &rt.surfaces, rt.live_notifier());
         f.ui.prepare_surfaces(f.device, f.queue, &rt.surfaces, f.size);
+        f.ui.set_frame_wake(rt.live_wake());
     }
     if app.has_compositor() {
         app.render_compositor(f)

@@ -110,3 +110,157 @@ fn missed_step_runs_poll_without_advancing_frame_clock() {
     let stale_summary = post_present(&mut clock, rt.core_mut(), start, start, false, false);
     assert!(stale_summary.drew && stale_summary.animating, "stale runtime must request another frame");
 }
+
+#[derive(Default)]
+struct EmbedTestState {
+    polls: u32,
+    switch_blend: bool,
+    invalidate_on_poll: bool,
+}
+
+struct MockEmbedSurface {
+    rt: Runtime<EmbedTestState>,
+    clock: FrameClock,
+    suspended: bool,
+    renderer_srgb: bool,
+    reblend_succeeds: bool,
+    acquires: std::collections::VecDeque<Acquire<u32>>,
+    comp_animating: bool,
+    log: Vec<String>,
+}
+
+impl MockEmbedSurface {
+    fn new(start: Instant) -> Self {
+        fn view(_: &EmbedTestState, _: &mut Cx<EmbedTestState>) -> El { el().size(40.0, 20.0) }
+        fn poll(s: &mut EmbedTestState, _: f64, tx: &mut crate::Tx) -> bool {
+            s.polls += 1;
+            if std::mem::take(&mut s.switch_blend) {
+                tx.set_srgb_blend(false);
+            }
+            std::mem::take(&mut s.invalidate_on_poll)
+        }
+        let mut rt = Runtime::new(EmbedTestState::default(), view, (40.0, 20.0), Env::default());
+        rt.poll = Some(poll);
+        rt.wall_start = Some(start);
+        rt.set_srgb_blend(true);
+        Self {
+            rt,
+            clock: FrameClock::new(start),
+            suspended: false,
+            renderer_srgb: true,
+            reblend_succeeds: true,
+            acquires: std::collections::VecDeque::from([Acquire::Ready(1)]),
+            comp_animating: false,
+            log: Vec::new(),
+        }
+    }
+}
+
+impl EmbedSurface for MockEmbedSurface {
+    type Drawable = u32;
+    type Prepared = u32;
+
+    fn suspended(&self) -> bool { self.suspended }
+    fn renderer_srgb_blend(&self) -> bool { self.renderer_srgb }
+    fn rt_srgb_blend(&self) -> bool { self.rt.core().srgb_blend() }
+
+    fn reblend(&mut self) -> bool {
+        self.log.push(format!("reblend:{}", self.reblend_succeeds));
+        if self.reblend_succeeds {
+            self.renderer_srgb = self.rt.core().srgb_blend();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn acquire(&mut self) -> Acquire<u32> {
+        let got = self.acquires.pop_front().unwrap_or(Acquire::Ready(99));
+        self.log.push(match &got {
+            Acquire::Ready(id) => format!("acquire:ok:{id}"),
+            Acquire::Missed(m) => format!("acquire:missed:{m:?}"),
+        });
+        got
+    }
+
+    fn prepare(&mut self, drawable: u32) -> u32 {
+        self.log.push(format!("prepare:{drawable}"));
+        drawable
+    }
+
+    fn compositor_animating(&self) -> bool { self.comp_animating }
+
+    fn render(&mut self, prepared: &mut u32, _dt: f64, _update_ms: f64) -> bool {
+        self.log.push(format!("render:{prepared}"));
+        self.comp_animating
+    }
+
+    fn submit_and_present(&mut self, prepared: u32) -> Instant {
+        self.log.push(format!("present:{prepared}"));
+        Instant::now()
+    }
+
+    fn clock_and_rt_mut(&mut self) -> (&mut FrameClock, &mut RuntimeCore) {
+        (&mut self.clock, self.rt.core_mut())
+    }
+
+    fn with_driver<R>(&mut self, f: impl FnOnce(&mut FrameClock, &mut RuntimeCore, &mut dyn AppDriver) -> R) -> R {
+        self.log.push("step".into());
+        let (rt, mut app) = self.rt.split_mut();
+        f(&mut self.clock, rt, &mut app)
+    }
+}
+
+#[test]
+fn run_embed_frame_follows_shared_acquire_step_reblend_present_order() {
+    let start = Instant::now();
+    let mut surface = MockEmbedSurface::new(start);
+    surface.rt.state.switch_blend = true;
+    surface.acquires = std::collections::VecDeque::from([Acquire::Ready(1), Acquire::Ready(2)]);
+    let out = run_embed_frame(&mut surface);
+    assert!(out.drew);
+    assert_eq!(
+        surface.log,
+        ["acquire:ok:1", "step", "reblend:true", "acquire:ok:2", "prepare:2", "render:2", "present:2"]
+    );
+}
+
+#[test]
+fn run_embed_frame_suspended_touches_nothing() {
+    let start = Instant::now();
+    let mut surface = MockEmbedSurface::new(start);
+    surface.suspended = true;
+    let out = run_embed_frame(&mut surface);
+    assert_eq!(out, FrameSummary::default());
+    assert!(surface.log.is_empty());
+}
+
+#[test]
+fn run_embed_frame_post_step_reblend_miss_preserves_stale_and_live_pending_without_double_step() {
+    let start = Instant::now();
+    let mut surface = MockEmbedSurface::new(start);
+    surface.rt.state.switch_blend = true;
+    surface.reblend_succeeds = false;
+    surface.acquires = std::collections::VecDeque::from([Acquire::Ready(1)]);
+    // Run a frame where reblend fails after step while a pending input arrives before miss.
+    let out = run_embed_frame(&mut surface);
+    assert!(!out.drew);
+    assert_eq!(surface.rt.state.polls, 1, "post-step reblend failure must not step poll twice");
+
+    // Verify missed_after_step reports animating when rt.stale() or rt.has_pending_input() is true.
+    surface.rt.invalidate();
+    let stale_miss = missed_after_step(surface.rt.core(), start, false, false);
+    assert!(!stale_miss.drew && stale_miss.animating, "post-step miss must keep animating when rt.stale()");
+
+    // Verify re-acquire Outdated after a post-step blend switch requests an immediate retry tick
+    // without running poll a second time.
+    let mut surface2 = MockEmbedSurface::new(start);
+    surface2.rt.state.switch_blend = true;
+    surface2.reblend_succeeds = true;
+    surface2.acquires = std::collections::VecDeque::from([Acquire::Ready(1), Acquire::Missed(Missed::Outdated)]);
+    let out2 = run_embed_frame(&mut surface2);
+    assert!(!out2.drew);
+    assert!(out2.animating, "Outdated re-acquire after blend switch keeps ticking");
+    assert_eq!(surface2.rt.state.polls, 1, "post-step re-acquire miss must not step poll twice");
+}
+

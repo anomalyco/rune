@@ -352,6 +352,11 @@ impl Renderer {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn has_frame_wake(&self) -> bool {
+        self.frame_wake.is_some()
+    }
+
     /// The subpixel pipeline compiled from WGSL now, on this thread, for the tools that capture
     /// its HLSL (`regen_dxbc`): it bypasses the shipped bytecode.
     #[doc(hidden)]
