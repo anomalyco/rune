@@ -134,6 +134,13 @@ impl Host {
                 } else if n == 2 && let Some((gpu, _)) = self.gpu.as_ref() {
                     crate::tooling::proof_removal::remove(gpu, "before the window's frame 2");
                 }
+            } else if crate::tooling::proof_removal::asked("uiwait") {
+                if let Some(us) = crate::tooling::proof_removal::since() {
+                    eprintln!("proof: frame {n} starts {us} us after the removal; lost {}", self.gpu.as_ref().is_none_or(|(g, _)| g.is_lost()));
+                } else if n == 2 && let Some((gpu, _)) = self.gpu.as_ref() {
+                    crate::tooling::proof_removal::ui_wait(gpu);
+                }
+                if n < 8 && let Some(w) = self.win.as_ref() { w.request_redraw(); }
                 if n < 8 && let Some(w) = self.win.as_ref() { w.request_redraw(); }
             }
         }
