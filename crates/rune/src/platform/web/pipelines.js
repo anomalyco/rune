@@ -7,8 +7,12 @@
 // presents the CPU canvas's frames.
 
 // Whether this browser's WebGPU has an async pipeline compile, before there's a device.
+// Requires `navigator.gpu`: when WebGPU is disabled by flag, `GPUDevice` may still exist while
+// the page falls back to WebGL2 (which compiles pipelines synchronously).
 export function compilesAsync() {
-    return typeof globalThis.GPUDevice?.prototype?.createRenderPipelineAsync === 'function';
+    return typeof globalThis.navigator?.gpu === 'object'
+        && globalThis.navigator.gpu !== null
+        && typeof globalThis.GPUDevice?.prototype?.createRenderPipelineAsync === 'function';
 }
 
 // Whether `device` compiles pipelines asynchronously.
