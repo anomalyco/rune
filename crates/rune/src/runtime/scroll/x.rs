@@ -466,12 +466,12 @@ impl RuntimeCore {
         let horizontal = match self.wheel_lock.keeps_axis(gesture, dx, dy, phased) {
             Some(h) => h,
             None => {
-                let scroller = (dx.abs() > dy.abs()).then(|| self.scroll_at_axis(x, y, true)).flatten();
+                let scroller = (dx.abs() > dy.abs()).then(|| self.scroll_at_axis_from(x, y, true, start)).flatten();
                 self.wheel_lock.repick(gesture, scroller)
             }
         };
         if horizontal {
-            if dx != 0.0 { self.wheel_x(gesture, x, y, dx, ev.notch); }
+            if dx != 0.0 { self.wheel_x(gesture, x, y, dx, ev.notch, start); }
         } else if dy != 0.0 {
             if ev.notch { self.wheel_notch(x, y, dy, start) } else { self.wheel_from(x, y, dy, start) }
         }
@@ -504,15 +504,13 @@ impl RuntimeCore {
     /// Scrolls the horizontal viewport latched for `gesture` (or the innermost one at (x, y)) by
     /// `dx` points: 1:1, or for whole notches of a wheel eased there as the vertical axis does
     /// (`Self::wheel_notch`).
-    fn wheel_x(&mut self, gesture: Attempt, x: f32, y: f32, dx: f32, notch: bool) {
+    fn wheel_x(&mut self, gesture: Attempt, x: f32, y: f32, dx: f32, notch: bool, start: crate::runtime::gesture_dispatch::WheelStart) {
         self.release_hover_hold();
         self.dismiss_help();
         let latched = match self.wheel_lock.owner_of(gesture) { Some(WheelOwner::Horizontal(id)) => Some(*id), _ => None }.filter(|id| {
-            self.node_index.get(id).is_some_and(|&i| {
-                self.nodes[i].scroll.is_some() && self.nodes[i].scroll_axes.x() && !self.subtree_exiting(i) && self.allowed(i)
-            })
+            self.node_index.get(id).is_some_and(|&i| self.is_scroll_viewport(i, true))
         });
-        let Some(id) = latched.or_else(|| self.scroll_at_axis(x, y, true)) else { return };
+        let Some(id) = latched.or_else(|| self.scroll_at_axis_from(x, y, true, start)) else { return };
         let glides = notch && self.wheel_glides();
         let scale = f64::from(self.env.scale * self.zoom());
         let Some(st) = self.scrolls.get_mut(&id) else { return };
@@ -612,12 +610,12 @@ impl RuntimeCore {
     /// `Tx::scroll_into_view` on x: scrolls the nearest horizontal viewport around row `key`
     /// just far enough to show it, leaving its `El::scroll_margin`.
     pub(super) fn reveal_row_x(&mut self, scope: Option<&str>, key: &str) {
-        let target = self.nodes.iter().position(|n| {
-            n.named(key) && n.parent.is_none_or(|p| super::in_scope(&self.nodes[p].path, scope))
-        }).map(|i| (i, self.nodes[i].target[0], self.nodes[i].local.w)).or_else(|| {
-            let (i, [x0, _, x1, _]) = self.highlight_target_in(&self.nodes, scope, key)?;
-            Some((i, x0, (x1 - x0).max(0.0)))
-        });
+        let target = self.live_named(scope, key)
+            .map(|i| (i, self.nodes[i].target[0], self.nodes[i].local.w))
+            .or_else(|| {
+                let (i, [x0, _, x1, _]) = self.highlight_target_in(&self.nodes, scope, key)?;
+                (!self.subtree_exiting(i)).then_some((i, x0, (x1 - x0).max(0.0)))
+            });
         let Some((i, target_x, target_w)) = target else { return };
         let Some(v) = std::iter::successors(self.nodes[i].parent, |&p| self.nodes[p].parent)
             .find(|&p| self.nodes[p].scroll.is_some() && self.nodes[p].scroll_axes.x()) else { return };

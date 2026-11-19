@@ -157,7 +157,7 @@ impl RuntimeCore {
     /// scroll. True when it started.
     pub(super) fn autoscroll_down(&mut self, x: f32, y: f32) -> bool {
         if !ENABLED { return false; }
-        let views = (self.autoscroll_viewport(x, y, true), self.autoscroll_viewport(x, y, false));
+        let views = (self.scroll_at_axis(x, y, true), self.scroll_at_axis(x, y, false));
         if views == (None, None) { return false; }
         let now = self.now_clock();
         self.autoscroll_step(Event::Down { views, origin: (x, y), now })
@@ -207,14 +207,6 @@ impl RuntimeCore {
         let State::Active { views, origin, at, .. } = self.autoscroll.state else { return None };
         let v = velocity(views, origin, self.pointer.unwrap_or(at));
         Some(crate::el::Cursor::Image(crate::cursor::pan((views.0.is_some(), views.1.is_some()), v)))
-    }
-
-    /// The innermost viewport at (x, y) that can scroll on the horizontal axis or the vertical.
-    fn autoscroll_viewport(&self, x: f32, y: f32, horizontal: bool) -> Option<NodeId> {
-        self.nodes.iter().enumerate().rev()
-            .filter(|(i, n)| n.scroll.is_some() && n.scroll_axes.has(horizontal) && !self.subtree_exiting(*i) && self.allowed(*i) && self.node_contains(*i, x, y))
-            .find(|(_, n)| self.scrolls.get(&n.id).is_some_and(|st| if horizontal { st.x.max > 0.0 } else { st.max > 0.0 }))
-            .map(|(_, n)| n.id)
     }
 
     /// Scrolls `views` by `by` (horizontal, vertical) points, as the wheel does. True when one

@@ -249,14 +249,28 @@ impl RuntimeCore {
         j
     }
 
-    /// Every node's [`Self::subtree_end`], in one reverse pass: a node's children always come
-    /// after it, so each subtree's end is known before the parent that extends to it. Walking the
-    /// parent chain per node instead costs a page's depth per node on every mirror build.
+    /// Every live node's contiguous subtree end, in one pass. Exiting nodes sit after the live
+    /// tree with `parent` pointing back into it, so they must not stretch a live ancestor's span
+    /// past its later live siblings.
     fn subtree_ends(&self) -> Vec<usize> {
         let mut ends: Vec<usize> = (1..=self.nodes.len()).collect();
-        for i in (0..self.nodes.len()).rev() {
-            if let Some(p) = self.nodes[i].parent { ends[p] = ends[p].max(ends[i]); }
+        let mut open: Vec<usize> = Vec::new();
+        for (i, n) in self.nodes.iter().enumerate() {
+            if self.is_exiting(n.id) || !self.scene.contains(n.id) {
+                for done in open.drain(..) { ends[done] = i; }
+                continue;
+            }
+            while open.last().is_some_and(|&a| Some(a) != n.parent) {
+                let done = open.pop().unwrap();
+                ends[done] = i;
+            }
+            // A descendant of an exiting or unmounted node has no live parent on `open`; leave it
+            // unopened so it cannot pull later nodes into a span.
+            if n.parent.is_none() || open.last() == n.parent.as_ref() {
+                open.push(i);
+            }
         }
+        for done in open { ends[done] = self.nodes.len(); }
         ends
     }
 
@@ -349,13 +363,13 @@ impl RuntimeCore {
             // compositor's rate, with axis locking, momentum and text selection.
             if self.page.is_some() && n.scroll_axes == crate::el::ScrollAxes::X {
                 let rect = self.mirror_rect(i, 0.0);
-                let offset = self.scrolls.get(&n.id).map_or(0.0, |st| st.x.offset);
+                let shift = self.scrolls.get(&n.id).map_or(0.0, |st| st.x.shift());
                 let mut item = A11yItem::new("scroll_x", &n.path, rect);
                 item.tag = Some("div");
                 item.parent = parent;
                 out.push(item);
                 open.push((end, out.len() - 1));
-                scrollers.push((end, offset));
+                scrollers.push((end, shift));
                 last_flow_parent = None;
                 i += 1;
                 continue;

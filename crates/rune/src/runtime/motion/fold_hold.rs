@@ -66,8 +66,7 @@ impl RuntimeCore {
     pub(super) fn lower_hold(&mut self, row: NodeId, d: f32) {
         let Some(header) = self.fold_headers.get(&row) else { return };
         for k in self.requests.keeps_mut().filter(|k| k.hold.as_ref().is_some_and(|h| h.path == *header)) {
-            let scale = self.nodes.iter().position(|n| n.path == k.viewport).and_then(|s| self.drawn_scale.get(s).copied()).unwrap_or(1.0);
-            k.was += d * scale;
+            k.was += d;
         }
     }
 
@@ -104,10 +103,11 @@ impl RuntimeCore {
             && let Some(i) = self.nodes.iter().position(|n| n.id == below.id)
             && let Some(v) = self.nodes.iter().position(|n| n.id == nodes[s].id)
         {
+            let was = sticky::keep_y(&self.drawn, &self.drawn_scale, i, v);
             self.requests.step(requests::Event::Arrive(requests::Request::FoldAnchor(sticky::Keep {
                 path: below.path.clone(),
                 viewport: viewport.clone(),
-                was: self.drawn[i][1] - self.drawn[v][1],
+                was,
                 virtual_row: None,
                 hold: None,
             })));
@@ -131,14 +131,14 @@ impl RuntimeCore {
     /// the holds on the fold or above it expect it that much higher.
     pub(super) fn restore_above(&mut self, ci: usize, row: NodeId, r: f32) {
         let Some(s) = self.viewport_of(ci) else { return };
-        let (path, id, scale) = (self.nodes[s].path.clone(), self.nodes[s].id, self.drawn_scale.get(s).copied().unwrap_or(1.0));
+        let (path, id) = (self.nodes[s].path.clone(), self.nodes[s].id);
         let Some(st) = self.scrolls.get_mut(&id) else { return };
         if st.pinned() { return; }
         st.offset += f64::from(r);
         st.max = st.max.max(st.offset);
         let Some(&ri) = self.node_index.get(&row) else { return };
         for k in self.requests.keeps_mut().filter(|k| k.viewport == path) {
-            if self.nodes.iter().position(|n| n.path == k.path).is_some_and(|i| i <= ri) { k.was -= r * scale; }
+            if self.nodes.iter().position(|n| n.path == k.path).is_some_and(|i| i <= ri) { k.was -= r; }
         }
     }
 }

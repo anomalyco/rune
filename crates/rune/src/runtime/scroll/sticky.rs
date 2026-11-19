@@ -292,6 +292,12 @@ mod tests {
     }
 }
 
+/// Node `i`'s drawn top below viewport `s`'s top, in unscaled viewport points.
+pub(super) fn keep_y(drawn: &[[f32; 4]], drawn_scale: &[f32], i: usize, s: usize) -> f32 {
+    let scale = drawn_scale.get(s).copied().unwrap_or(1.0).max(1e-4);
+    (drawn[i][1] - drawn[s][1]) / scale
+}
+
 /// The nearest vertical scroll viewport around node `i` of `nodes`.
 fn vertical_viewport(nodes: &[Node], i: usize) -> Option<usize> {
     std::iter::successors(nodes[i].parent, |&p| nodes[p].parent)
@@ -324,7 +330,7 @@ pub(super) fn anchored_target(nodes: &[Node], scrolls: &HashMap<NodeId, ScrollSt
     let [mut dx, mut dy] = target_shift(nodes, scrolls, j);
     if let Some(anc) = std::iter::successors(Some(j), |&p| nodes[p].parent).find(|&p| nodes[p].above.is_some())
         && let Some(a) = &nodes[anc].above
-        && let Some(k) = nodes[..anc].iter().position(|n| n.key.as_ref() == Some(&a.key))
+        && let Some(k) = super::anchor_index(nodes, anc, a)
     {
         let at = anchored_target(nodes, scrolls, k, viewport);
         let (w, h) = (nodes[anc].target[2] - nodes[anc].target[0], nodes[anc].target[3] - nodes[anc].target[1]);
@@ -433,15 +439,11 @@ impl RuntimeCore {
         // The last frame's rects describe these nodes only until a commit replaces them.
         if !self.built || self.drawn.len() != self.nodes.len() { return; }
         for key in keys {
-            let found = (0..self.nodes.len()).find(|&i| {
-                let n = &self.nodes[i];
-                n.named(&key) && !self.subtree_exiting(i)
-            });
-            let Some(i) = found else { continue };
+            let Some(i) = self.live_named(None, &key) else { continue };
             let Some(s) = self.viewport_of(i) else { continue };
             let hold = self.stuck_header(i, s).map(|h| Hold {
                 path: self.nodes[h].path.clone(),
-                inset: (self.drawn[h][1] - self.drawn[s][1]) / self.drawn_scale[s].max(1e-4),
+                inset: keep_y(&self.drawn, &self.drawn_scale, h, s),
             });
             let virtual_row = std::iter::successors(Some(i), |&p| self.nodes[p].parent)
                 .take_while(|&p| p != s)
@@ -456,7 +458,7 @@ impl RuntimeCore {
             self.requests.step(requests::Event::Arrive(requests::Request::Capture(Keep {
                 path: self.nodes[i].path.clone(),
                 viewport: self.nodes[s].path.clone(),
-                was: self.drawn[i][1] - self.drawn[s][1],
+                was: keep_y(&self.drawn, &self.drawn_scale, i, s),
                 virtual_row,
                 hold,
             })));
@@ -601,7 +603,7 @@ impl RuntimeCore {
             let Some(s) = self.viewport_of(i).filter(|&s| self.nodes[s].path == k.viewport) else { continue };
             let scale = self.drawn_scale[s];
             if scale <= 1e-4 { continue; }
-            let delta = (self.drawn[i][1] - self.drawn[s][1] - k.was) / scale;
+            let delta = (self.drawn[i][1] - self.drawn[s][1]) / scale - k.was;
             if delta.abs() < 1.0 / 64.0 { continue; }
             let stick = self.nodes[s].scroll.is_some_and(|s| s.stick_bottom);
             let Some(st) = self.scrolls.get_mut(&self.nodes[s].id) else { continue };
@@ -660,7 +662,7 @@ impl RuntimeCore {
             let Some(i) = self.nodes.iter().position(|n| n.path == k.path) else { return requests::Shown::Unmounted };
             let Some(s) = vertical_viewport(&self.nodes, i) else { return requests::Shown::Loose };
             if !self.scrolls.get(&self.nodes[s].id).is_some_and(|st| st.pinned()) { return requests::Shown::Free; }
-            requests::Shown::Pinned(self.drawn[i][1] - self.drawn[s][1])
+            requests::Shown::Pinned(keep_y(&self.drawn, &self.drawn_scale, i, s))
         } });
         moved
     }
@@ -713,7 +715,7 @@ impl RuntimeCore {
         if !self.has_sticky || self.stuck.len() != self.nodes.len() || self.drawn.len() != self.nodes.len() { return Some(0.0) }
         let Some(s) = self.nodes.iter().position(|n| n.path == path) else { return Some(0.0) };
         let view = self.drawn[s];
-        let row = self.nodes.iter().position(|n| n.key.as_deref() == Some(key) || n.path == key);
+        let row = self.live_named(None, key);
         let holder = row.and_then(|r| std::iter::successors(Some(r), |&p| self.nodes[p].parent).take_while(|&p| p != s).find(|&p| self.stuck[p] != 0.0 && self.nodes[p].sticky.as_ref().is_none_or(|s| s.edge != Some(StickyEdge::Left))));
         if let (Some(r), Some(_)) = (row, holder) {
             let d = self.drawn[r];

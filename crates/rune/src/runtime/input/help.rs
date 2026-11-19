@@ -304,7 +304,7 @@ impl RuntimeCore {
         if self.subtree_exiting(h) { return None; }
         let over = self.hits.iter().enumerate().rev().find(|&(_, &(id, r))| self.hit_contains(id, r, x, y));
         let covered = over.is_some_and(|(k, (top, _))| {
-            k > seq && self.node_index.get(top).is_some_and(|&t| !std::iter::successors(Some(t), |&p| self.nodes[p].parent).any(|p| p == h))
+            k >= seq && self.node_index.get(top).is_some_and(|&t| !std::iter::successors(Some(t), |&p| self.nodes[p].parent).any(|p| p == h))
         });
         Some((h, link, self.allowed(h) && !covered))
     }

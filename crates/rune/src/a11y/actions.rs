@@ -169,7 +169,7 @@ impl RuntimeCore {
                 } else {
                     let r = self.drawn[i];
                     let (dx, dy) = if pages { (r[2] * 0.9, r[3] * 0.9) } else { (LINE, LINE) };
-                    let nx = st.x.offset as f32 + dx * x as f32;
+                    let nx = (st.x.offset + st.x.toward(-f64::from(dx) * f64::from(x))) as f32;
                     let ny = st.offset as f32 + dy * y as f32;
                     tx.scroll_to_instant(path, nx, ny);
                 }

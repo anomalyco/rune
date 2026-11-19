@@ -267,7 +267,7 @@ impl RuntimeCore {
     fn hovered_alone(&self) -> Option<usize> {
         let (x, y) = self.pointer?;
         (0..self.nodes.len())
-            .filter(|&i| self.nodes[i].vis.hover_alone && !self.is_exiting(self.nodes[i].id) && self.allowed(i) && self.node_contains(i, x, y))
+            .filter(|&i| self.nodes[i].vis.hover_alone && !self.subtree_exiting(i) && self.allowed(i) && self.node_contains(i, x, y))
             .max_by_key(|&i| self.nodes[i].path.len())
     }
 
@@ -284,7 +284,7 @@ impl RuntimeCore {
         (0..self.nodes.len())
             .filter_map(|i| {
                 let key = self.nodes[i].vis.hover_share.as_ref()?;
-                (!self.is_exiting(self.nodes[i].id) && self.allowed(i) && (self.node_contains(i, x, y) || self.keyboard_within(i))).then(|| key.clone())
+                (!self.subtree_exiting(i) && self.allowed(i) && (self.node_contains(i, x, y) || self.keyboard_within(i))).then(|| key.clone())
             })
             .collect()
     }
@@ -294,7 +294,7 @@ impl RuntimeCore {
     /// `shared`: the `hover_group_shared` keys the pointer is over.
     fn hover_flip(&self, i: usize, captured: Option<&str>, alone: Option<usize>, shared: &[Rc<str>]) -> Option<Flip> {
         let n = &self.nodes[i];
-        if !(n.vis.hover().a > 0.0 || n.vis_flags.hover_group()) || self.is_exiting(n.id) { return None; }
+        if !(n.vis.hover().a > 0.0 || n.vis_flags.hover_group()) || self.subtree_exiting(i) { return None; }
         let inside = self.pointer.is_some_and(|(x, y)| self.node_contains(i, x, y))
             || n.vis.hover_share.as_ref().is_some_and(|k| shared.contains(k))
             || (n.vis_flags.hover_group() && self.keyboard_within(i));
@@ -334,7 +334,7 @@ impl RuntimeCore {
             let n = &self.nodes[i];
             let press_scale = n.handlers.get().and_then(|h| h.press_scale);
             if n.vis.hover().a <= 0.0 && !n.vis_flags.hover_group() && !n.vis.tracks_press() && press_scale.is_none() { continue; }
-            if self.is_exiting(n.id) { continue; }
+            if self.subtree_exiting(i) { continue; }
             match self.hover_flip(i, captured, alone, &shared) {
                 Some(f) if f.changed => flips.push(f),
                 // Default hover animations inherit velocity and have no completion token.

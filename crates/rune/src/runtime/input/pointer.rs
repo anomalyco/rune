@@ -494,24 +494,44 @@ impl RuntimeCore {
         }
     }
 
+    /// Whether node `i` is a live, reachable scroll viewport on the horizontal or vertical axis.
+    pub(super) fn is_scroll_viewport(&self, i: usize, horizontal: bool) -> bool {
+        let n = &self.nodes[i];
+        n.scroll.is_some() && n.scroll_axes.has(horizontal) && !self.subtree_exiting(i) && self.allowed(i)
+    }
+
+    /// Walks up from `start` through ancestors to the first live, reachable scroll viewport on
+    /// `horizontal` whose scroll state satisfies `has_room`.
+    fn scroll_in_chain(&self, mut at: Option<usize>, horizontal: bool, has_room: impl Fn(&ScrollState) -> bool) -> Option<NodeId> {
+        while let Some(i) = at {
+            if self.is_scroll_viewport(i, horizontal)
+                && self.scrolls.get(&self.nodes[i].id).is_some_and(&has_room)
+            {
+                return Some(self.nodes[i].id);
+            }
+            at = self.nodes[i].parent;
+        }
+        None
+    }
+
     /// The innermost vertical scroll viewport at (x, y).
     pub(super) fn scroll_at(&self, x: f32, y: f32) -> Option<NodeId> {
         self.scroll_at_axis(x, y, false)
     }
 
-    /// The innermost scroll viewport at (x, y) that moves on the horizontal axis or the vertical.
+    /// The innermost scroll viewport at (x, y) that moves on the horizontal axis or the vertical,
+    /// walking up from [`Self::chain_start`] so raised/anchored overlays occlude viewports beneath.
     /// One whose content fits on that axis is passed over for the one around it, as Chromium
     /// skips a scroller with nothing to scroll: a list of sections, each its own viewport as
     /// tall as its rows, scrolls from over any row.
     pub(super) fn scroll_at_axis(&self, x: f32, y: f32, horizontal: bool) -> Option<NodeId> {
-        self.nodes
-            .iter()
-            .enumerate()
-            .rev()
-            .filter(|(i, n)| n.scroll.is_some() && n.scroll_axes.has(horizontal) && !self.subtree_exiting(*i) && self.allowed(*i))
-            .filter(|(_, n)| self.scrolls.get(&n.id).is_some_and(|st| if horizontal { st.x.max } else { st.max } > 0.0))
-            .find(|(i, _)| self.node_contains(*i, x, y))
-            .map(|(_, n)| n.id)
+        self.scroll_at_axis_from(x, y, horizontal, crate::runtime::gesture_dispatch::WheelStart::Unknown)
+    }
+
+    /// [`Self::scroll_at_axis`], with where its chain starts when the caller already found it.
+    pub(super) fn scroll_at_axis_from(&self, x: f32, y: f32, horizontal: bool, start: crate::runtime::gesture_dispatch::WheelStart) -> Option<NodeId> {
+        let at = match start { crate::runtime::gesture_dispatch::WheelStart::At(s) => s, crate::runtime::gesture_dispatch::WheelStart::Unknown => self.chain_start(x, y) };
+        self.scroll_in_chain(at, horizontal, |st| if horizontal { st.x.max } else { st.max } > 0.0)
     }
 
     /// The vertical viewport a delta `dy` at (x, y) starts a run on: from where a gesture there
@@ -521,20 +541,11 @@ impl RuntimeCore {
     /// a viewport that only lies beneath (the timeline under an open menu, with or without a list
     /// of its own, or under a raised panel) never takes it. A wheel's ease counts from where it heads.
     pub(super) fn wheel_target(&self, x: f32, y: f32, dy: f32, start: crate::runtime::gesture_dispatch::WheelStart) -> Option<NodeId> {
-        let viewport = |i: usize| {
-            let n = &self.nodes[i];
-            n.scroll.is_some() && n.scroll_axes.has(false) && !self.subtree_exiting(i) && self.allowed(i)
-        };
-        let room = |i: usize| self.scrolls.get(&self.nodes[i].id).is_some_and(|st| {
-            let at = st.mode.wheel().map_or(st.offset, |c| c.target());
-            if dy > 0.0 { at > 0.0 } else { at < st.max }
-        });
-        let mut at = match start { crate::runtime::gesture_dispatch::WheelStart::At(s) => s, crate::runtime::gesture_dispatch::WheelStart::Unknown => self.chain_start(x, y) };
-        while let Some(i) = at {
-            if viewport(i) && room(i) { return Some(self.nodes[i].id); }
-            at = self.nodes[i].parent;
-        }
-        None
+        let at = match start { crate::runtime::gesture_dispatch::WheelStart::At(s) => s, crate::runtime::gesture_dispatch::WheelStart::Unknown => self.chain_start(x, y) };
+        self.scroll_in_chain(at, false, |st| {
+            let cur = st.mode.wheel().map_or(st.offset, |c| c.target());
+            if dy > 0.0 { cur > 0.0 } else { cur < st.max }
+        })
     }
 
     /// Wheel or trackpad delta in points (positive `dy` moves content down, like a browser's
@@ -568,7 +579,7 @@ impl RuntimeCore {
     /// the run.
     fn wheel_run(&mut self, now: f64, x: f32, y: f32, dy: f32, start: crate::runtime::gesture_dispatch::WheelStart) -> Option<(NodeId, bool)> {
         let held = self.wheel_lock.vertical_run(now, x, y, dy).filter(|id| {
-            self.node_index.get(id).is_some_and(|&i| self.nodes[i].scroll.is_some() && !self.subtree_exiting(i) && self.allowed(i))
+            self.node_index.get(id).is_some_and(|&i| self.is_scroll_viewport(i, false))
         });
         let picked = held.map(|id| (id, true)).or_else(|| self.wheel_target(x, y, dy, start).map(|id| (id, false)));
         if picked.is_none() { self.wheel_lock.end_vertical(); }

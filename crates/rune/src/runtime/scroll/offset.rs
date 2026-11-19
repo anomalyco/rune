@@ -115,8 +115,8 @@ impl RuntimeCore {
     /// mounts it, and is placed again from its laid-out top once it has (`scroll_to_offsets`).
     fn anchor_offset(&self, key: &str, at: f32) -> Option<(usize, f64)> {
         let found = |scope: Option<&str>, key: &str| {
-            self.nodes.iter().enumerate()
-                .find_map(|(i, n)| (n.named(key) && n.parent.is_none_or(|p| in_scope(&self.nodes[p].path, scope)) && !self.subtree_exiting(i)).then_some((i, n.target[1])))
+            self.live_named(scope, key)
+                .map(|i| (i, self.nodes[i].target[1]))
                 .or_else(|| {
                     let (i, [_, y0, _, _]) = self.highlight_target_in(&self.nodes, scope, key)?;
                     (!self.subtree_exiting(i)).then_some((i, y0))

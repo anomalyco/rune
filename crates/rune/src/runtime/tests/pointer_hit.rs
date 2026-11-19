@@ -411,3 +411,25 @@ fn hover_change_spans_descendants_and_holds_through_a_press() {
     rt.frame(0.0);
     assert_eq!(rt.state.0, [true, false, true, false]);
 }
+
+#[test]
+fn interactive_overlay_immediately_after_non_interactive_help_suppresses_tooltip() {
+    fn view(_: &(), _: &mut Cx<()>) -> El {
+        col().size(200.0, 100.0)
+            .child(el().key("label").size(100.0, 40.0).help("Behind cover"))
+            .child(el().key("cover").absolute(0.0, 0.0).size(100.0, 40.0).on_press(|_: &mut ()| {}))
+            .child(el().key("own").absolute(100.0, 0.0).size(100.0, 40.0).help("Own tip").on_press(|_: &mut ()| {}))
+    }
+    let mut rt = Runtime::new((), view, (200.0, 100.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.pointer_move(50.0, 20.0);
+    rt.frame(0.0);
+    rt.frame(rt.help_delay + 0.1);
+    assert!(rt.help_tooltip().is_none(), "interactive cover at hit index == seq must suppress underlying tooltip");
+
+    // An interactive element with help of its own (at hit index == seq) still shows its tooltip.
+    rt.pointer_move(150.0, 20.0);
+    rt.frame(0.0);
+    rt.frame(rt.help_delay + 0.1);
+    assert!(rt.help_tooltip().is_some(), "uncovered interactive element still shows its own tooltip");
+}

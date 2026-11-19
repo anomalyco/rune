@@ -548,3 +548,95 @@ fn a_field_that_stops_following_its_press_keeps_the_press_until_release() {
     assert!(c.end_press());
     assert!(!c.captured() && !c.end_press(), "the release ends it once");
 }
+
+#[test]
+fn clicking_centered_end_aligned_rtl_and_multiline_inputs_hits_drawn_glyphs() {
+    struct AlignForm {
+        centered: TextEdit,
+        end: TextEdit,
+        rtl: TextEdit,
+        multi: TextEdit,
+    }
+    fn align_view(s: &AlignForm, _: &mut Cx<AlignForm>) -> El {
+        let st = style();
+        col().w_full().h_full().padding(10.0).gap(8.0)
+            .child(text_input(&s.centered, st).single_line().align(crate::Align::Center).px(8.0)
+                .key("centered").size(300.0, 32.0).on_edit(|s: &mut AlignForm| &mut s.centered))
+            .child(text_input(&s.end, st).single_line().align(crate::Align::End).px(8.0)
+                .key("end").size(300.0, 32.0).on_edit(|s: &mut AlignForm| &mut s.end))
+            .child(text_input(&s.rtl, st).single_line().dir(crate::Direction::Rtl).px(8.0)
+                .key("rtl").size(300.0, 32.0).on_edit(|s: &mut AlignForm| &mut s.rtl))
+            .child(text_input(&s.multi, st).px(8.0)
+                .key("multi").size(300.0, 80.0).on_edit(|s: &mut AlignForm| &mut s.multi))
+    }
+    let rtl_text = "مرحبا بالعالم";
+    let mut rt = Runtime::new(
+        AlignForm {
+            centered: TextEdit::new("ABCDEFGH"),
+            end: TextEdit::new("ABCDEFGH"),
+            rtl: TextEdit::new(rtl_text),
+            multi: TextEdit::new("Hello world\nSecond line"),
+        },
+        align_view,
+        (340.0, 260.0),
+        Env::new(true, 1.0),
+    );
+    rt.frame(0.0);
+
+    // Drawn window coordinates of byte `byte` inside field `key`, computed by the canonical paint rule.
+    let drawn_byte_pt = |rt: &Runtime<AlignForm>, key: &str, byte: usize| -> (f32, f32) {
+        let i = rt.nodes.iter().position(|n| n.key.as_deref() == Some(key)).unwrap();
+        let n = &rt.nodes[i];
+        let spec = n.text.as_ref().unwrap();
+        let flow = n.text_layout.as_ref().unwrap().view();
+        let s = rt.env.scale;
+        let rect = rt.drawn_box(i);
+        let [ox, oy] = links::origin(n, spec, flow, rect, s, 1.0);
+        let bb = flow.caret(byte, parley::Affinity::Downstream, 1.5 * s);
+        (ox + bb.x0 as f32 / s + 0.25, oy + ((bb.y0 + bb.y1) * 0.5) as f32 / s)
+    };
+
+    // Centered single-line input: click at byte 4.
+    let pt = drawn_byte_pt(&rt, "centered", 4);
+    rt.pointer_move(pt.0, pt.1);
+    rt.pointer_down(pt.0, pt.1);
+    rt.pointer_up(pt.0, pt.1);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.state.centered.focus, 4, "centered single-line click at drawn byte 4");
+
+    // Secondary click (field_menu) on centered input at byte 2 moves caret to byte 2.
+    let pt2 = drawn_byte_pt(&rt, "centered", 2);
+    rt.pointer_move(pt2.0, pt2.1);
+    rt.secondary_down(pt2.0, pt2.1);
+    rt.secondary_up(pt2.0, pt2.1);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.state.centered.focus, 2, "centered field_menu right-click at drawn byte 2");
+    let _ = rt.resolve_popup(None);
+
+    // End-aligned single-line input: click at byte 2.
+    let pt = drawn_byte_pt(&rt, "end", 2);
+    rt.pointer_move(pt.0, pt.1);
+    rt.pointer_down(pt.0, pt.1);
+    rt.pointer_up(pt.0, pt.1);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.state.end.focus, 2, "end-aligned single-line click at drawn byte 2");
+
+    // RTL single-line input: click at the byte boundary after "مرحبا " (right-aligned from x1).
+    let rtl_byte = "مرحبا ".len();
+    let pt = drawn_byte_pt(&rt, "rtl", rtl_byte);
+    rt.pointer_move(pt.0, pt.1);
+    rt.pointer_down(pt.0, pt.1);
+    rt.pointer_up(pt.0, pt.1);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.state.rtl.focus, rtl_byte, "RTL single-line click at drawn byte {rtl_byte}");
+
+    // Multi-line input ignores any single-line `input_scroll` entry for its path.
+    let multi_path = rt.nodes.iter().find(|n| n.key.as_deref() == Some("multi")).unwrap().path.clone();
+    rt.input_scroll.insert(multi_path, 150.0);
+    let pt = drawn_byte_pt(&rt, "multi", 2);
+    rt.pointer_move(pt.0, pt.1);
+    rt.pointer_down(pt.0, pt.1);
+    rt.pointer_up(pt.0, pt.1);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.state.multi.focus, 2, "multi-line input click must ignore single-line input_scroll");
+}

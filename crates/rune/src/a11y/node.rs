@@ -106,7 +106,7 @@ impl RuntimeCore {
         let handlers = n.handlers.get();
         (handlers.is_some_and(|h| h.on_press.is_some()), handlers.is_some_and(|h| h.on_secondary_press.is_some()),
             handlers.is_some_and(|h| h.modal.is_some()), handlers.is_some_and(|h| h.has_primary())).hash(&mut h);
-        (n.focus.selected, n.focus.step.is_some(), n.focus.default, self.in_focus_group(i)).hash(&mut h);
+        (n.focus.selected, n.focus.step.is_some(), n.focus.default, self.focus_group(i).is_some()).hash(&mut h);
         (self.allowed(i), self.can_focus(i), n.inert).hash(&mut h);
         if let Some(st) = self.scrolls.get(&n.id).filter(|_| n.scroll.is_some()) {
             [st.offset.to_bits(), st.max.to_bits(), st.x.offset.to_bits(), st.x.max.to_bits()].hash(&mut h);
@@ -217,7 +217,7 @@ impl RuntimeCore {
         }
         // An item of a group reports whether it's the selected one; elsewhere only a selected
         // item says so (a tree whose container keeps focus).
-        if roles::selectable_item(role) && (n.focus.selected || self.in_focus_group(i)) { node.set_selected(n.focus.selected); }
+        if roles::selectable_item(role) && (n.focus.selected || self.focus_group(i).is_some()) { node.set_selected(n.focus.selected); }
         let live = n.a11y.live.or_else(|| roles::default_live(n.role));
         match live {
             Some(crate::LiveRegion::Polite) => node.set_live(Live::Polite),
@@ -281,8 +281,10 @@ impl RuntimeCore {
         let key = self.nodes[i].a11y.more.as_deref()?.active.as_deref()?;
         // Its own rows first: a row id may also key something elsewhere.
         let inside = |j: &usize| std::iter::successors(self.nodes[*j].parent, |&p| self.nodes[p].parent).any(|p| p == i);
-        let own = (i + 1..self.nodes.len()).take_while(inside).find(|&j| self.nodes[j].named(key));
-        own.or_else(|| self.nodes.iter().position(|n| n.named(key))).filter(|&j| !self.subtree_exiting(j))
+        let own = (i + 1..self.nodes.len())
+            .take_while(inside)
+            .find(|&j| self.nodes[j].named(key) && !self.subtree_exiting(j));
+        own.or_else(|| self.live_named(None, key))
     }
 
     /// Debug builds: warns once per site about a control a screen reader would say only by its
@@ -318,8 +320,11 @@ impl RuntimeCore {
         let mut scope = self.nodes[i].parent;
         while let Some(s) = scope {
             let inside = |j: &usize| std::iter::successors(self.nodes[*j].parent, |&p| self.nodes[p].parent).any(|p| p == s);
-            if let Some(j) = (s + 1..self.nodes.len()).take_while(inside).find(|&j| j != i && self.nodes[j].named(key)) {
-                return (!self.subtree_exiting(j)).then_some(j);
+            if let Some(j) = (s + 1..self.nodes.len())
+                .take_while(inside)
+                .find(|&j| j != i && self.nodes[j].named(key) && !self.subtree_exiting(j))
+            {
+                return Some(j);
             }
             scope = self.nodes[s].parent;
         }
@@ -333,11 +338,6 @@ impl RuntimeCore {
         n.label.as_deref().filter(|l| !l.trim().is_empty()).map(str::to_owned)
             .or_else(|| n.text.as_deref().filter(|_| n.input.is_none()).map(|t| t.source_text().trim().to_owned()))
             .unwrap_or_else(|| self.a11y_content_name(j))
-    }
-
-    /// Whether node `i` is an item of a focus group: a list, tabs, a radio group.
-    fn in_focus_group(&self, i: usize) -> bool {
-        std::iter::successors(self.nodes[i].parent, |&p| self.nodes[p].parent).any(|p| self.nodes[p].focus.group)
     }
 
     /// The text inside node `i`, labels first, for a role a reader names from its content.
