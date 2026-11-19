@@ -435,8 +435,12 @@ impl RuntimeCore {
         tx.settle();
         self.settled |= tx.commit.lands();
         self.capture_keeps(tx);
-        self.commit_for(app, tx, *why | CommitWhy::SETTLE);
+        // `settle_all` marks the tree dirty too, and this commit carries that change.
+        self.commit_for(app, tx, *why | CommitWhy::SETTLE | CommitWhy::DIRTY);
         self.apply_keeps(app);
+        // Scroll requests queued before the input resolve under the settle, as the poll split's
+        // do, rather than gliding on the input's own animated commit.
+        self.finish_scroll_requests(app, tx, false);
         // The input below starts from the settled tree, as it would on any other frame.
         tx.commit = Commit::Animate;
         tx.unprompted = false;
@@ -447,7 +451,6 @@ impl RuntimeCore {
         tx.color_motion = None;
         tx.follow_edge = false;
         tx.unclipped_flights = false;
-        self.settled = false;
         *why = 0;
     }
 
