@@ -135,7 +135,7 @@ fn spawn(mut app: PendingApp) -> Result<(), String> {
     page::occupy(quitting(&shared), app.same_tab_router.take());
     event_loop.spawn_app(Browser { app: Some(app), shared, proxy, window: None, embedded: false, document: false, owns_canvas: true,
         borrowed: page::Borrowed::default(), start: Start::GpuFirst, fonts: Rc::default(), pending: Rc::default(), warmed: Rc::default(), running: Rc::default(),
-        lost: Rc::default(), waiting: None, first_at: None, drawn_at: None, gpu_asked: false });
+        lost: Rc::default(), webgl_watch: None, webgl_restored: Rc::default(), webgl_restoring: false, waiting: None, first_at: None, drawn_at: None, gpu_asked: false });
     Ok(())
 }
 
@@ -166,8 +166,14 @@ struct Browser {
     /// The pipelines compiled ahead for that GPU (`pipelines::warm`), kept until its renderer is made.
     warmed: Rc<RefCell<Option<pipelines::Warmed>>>,
     running: Rc<RefCell<Option<Running>>>,
-    /// Why the browser lost the GPU device, until the page goes back to the CPU for it.
-    lost: Rc<RefCell<Option<String>>>,
+    /// Why the browser lost the GPU device or WebGL2 context, until `lost_device` handles it.
+    lost: Rc<RefCell<Option<gpu::Loss>>>,
+    /// Active `webglcontextlost` / `webglcontextrestored` listeners once WebGL2 has run on the canvas.
+    webgl_watch: Option<health::WebglWatch>,
+    /// Set by `webglcontextrestored` until `maybe_restore_webgl` spawns a WebGL2 rebuild.
+    webgl_restored: Rc<std::cell::Cell<bool>>,
+    /// True while a WebGL2 rebuild after `webglcontextrestored` is in flight.
+    webgl_restoring: bool,
     /// The deadline the event loop was last told to wait for (`None`: none). winit schedules a
     /// browser task for each new control flow and aborts the last one's, so the same deadline
     /// isn't set again.
@@ -338,10 +344,14 @@ impl Browser {
         clipboard.connect(wake);
         self.shared.set_visible(true);
         let physical = (size.width.clamp(1, max_dim), size.height.clamp(1, max_dim));
+        let mut started_webgl = false;
         let draw = match gpu {
             Some((gpu, surface)) => {
                 match gpu::gpu_side(gpu, surface, physical, app.rt_mut(), self.lost.clone(), self.proxy.clone()) {
-                    Ok(side) => Draw::Gpu(side),
+                    Ok(side) => {
+                        started_webgl = side.backend == wgpu::Backend::Gl;
+                        Draw::Gpu(side)
+                    }
                     Err(e) => { error(&e, window.canvas().as_ref(), self.embedded, self.document); self.end(event_loop); return; }
                 }
             }
@@ -357,6 +367,7 @@ impl Browser {
                 Draw::Cpu { cpu, failed: self.start == Start::CpuOnly }
             }
         };
+        if started_webgl { self.ensure_webgl_watch(); }
         let cursor = crate::cursor::os::OsCursor::new();
         let input = input::Bridge::new(&window.canvas().unwrap(), Rc::downgrade(&self.running), window.clone(),
             input::Mode { embedded: self.embedded, fit_height, document });
@@ -481,6 +492,7 @@ impl ApplicationHandler<Wake> for Browser {
         if self.shared.quitting.load(Ordering::Acquire) { self.end(event_loop); return; }
         if self.lost_device(event_loop) { return; }
         if self.window.is_none() { return; }
+        self.maybe_restore_webgl();
         match event {
             Wake::Start | Wake::Ready => {
                 self.start_app(event_loop);
@@ -559,6 +571,7 @@ impl ApplicationHandler<Wake> for Browser {
 
     fn exiting(&mut self, _: &ActiveEventLoop) {
         self.shared.quitting.store(true, Ordering::Release);
+        self.webgl_watch = None;
         let running = self.running.borrow_mut().take();
         if let Some(r) = running { r.close(); }
         self.warmed.borrow_mut().take();

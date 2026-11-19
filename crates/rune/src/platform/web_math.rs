@@ -35,6 +35,141 @@ pub(crate) fn should_reconfigure_surface(current: (u32, u32), next: (u32, u32), 
     (next, true)
 }
 
+/// The surface format, optional `view_formats` entry, and render-target format for a web canvas.
+///
+/// Mirrors native `window::surface::surface_config`:
+/// - `srgb_blend == true`: wants a non-sRGB render target (`remove_srgb_suffix`) so the target
+///   writes and blends already sRGB-encoded values without encoding a second time.
+/// - `srgb_blend == false`: wants an `*Srgb` render target (`add_srgb_suffix`) so the target
+///   encodes linear shader outputs once on write.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SurfaceFormats {
+    pub surface: wgpu::TextureFormat,
+    pub view_format: Option<wgpu::TextureFormat>,
+    pub render: wgpu::TextureFormat,
+}
+
+impl SurfaceFormats {
+    /// Whether the renderer must encode sampled sRGB images in the shader (non-sRGB target).
+    pub(crate) fn srgb_blend(self) -> bool {
+        !self.render.is_srgb()
+    }
+}
+
+/// Chooses the canvas configuration format and render target format for `srgb_blend`.
+///
+/// Prefers configuring the surface directly in the wanted format when `supported` lists it
+/// (e.g. WebGL2 exposes both `Rgba8UnormSrgb` and `Rgba8Unorm`). Otherwise keeps `preferred`
+/// and exposes the wanted twin via `view_format` on backends that support view-format aliasing
+/// (WebGPU canvases configure only non-sRGB formats and accept sRGB view formats).
+pub(crate) fn select_surface_formats(
+    preferred: wgpu::TextureFormat,
+    supported: &[wgpu::TextureFormat],
+    backend: wgpu::Backend,
+    srgb_blend: bool,
+) -> SurfaceFormats {
+    let wanted = if srgb_blend {
+        preferred.remove_srgb_suffix()
+    } else {
+        preferred.add_srgb_suffix()
+    };
+    if wanted == preferred {
+        return SurfaceFormats { surface: preferred, view_format: None, render: preferred };
+    }
+    if supported.contains(&wanted) {
+        return SurfaceFormats { surface: wanted, view_format: None, render: wanted };
+    }
+    if backend != wgpu::Backend::Gl {
+        return SurfaceFormats { surface: preferred, view_format: Some(wanted), render: wanted };
+    }
+    SurfaceFormats { surface: preferred, view_format: None, render: preferred }
+}
+
+/// Surface texture usages for a web canvas.
+///
+/// WebGPU canvases accept `COPY_DST` (for retained loop-only frames) and `COPY_SRC` (for drift
+/// readback) even though wgpu's capabilities report only `RENDER_ATTACHMENT`. WebGL2 runs through
+/// `wgpu-core`, which rejects any usage absent from `caps_usages`.
+pub(crate) fn surface_usage(
+    caps_usages: wgpu::TextureUsages,
+    backend: wgpu::Backend,
+    drift: bool,
+) -> wgpu::TextureUsages {
+    let mut usage = wgpu::TextureUsages::RENDER_ATTACHMENT
+        | (caps_usages & wgpu::TextureUsages::COPY_SRC);
+    if backend == wgpu::Backend::BrowserWebGpu {
+        usage |= wgpu::TextureUsages::COPY_DST;
+        if drift {
+            usage |= wgpu::TextureUsages::COPY_SRC;
+        }
+    }
+    usage
+}
+
+/// Whether `backend` requires explicit `Device::poll` calls to deliver `on_submitted_work_done`
+/// and `map_async` callbacks. WebGPU delivers them from browser promises (and `Device::poll` is a
+/// no-op there); `wgpu-core`'s WebGL2 backend only fires them when polled.
+pub(crate) fn needs_device_poll(backend: wgpu::Backend) -> bool {
+    backend != wgpu::Backend::BrowserWebGpu
+}
+
+/// GPU backends the web host can attempt for a canvas.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WebBackend {
+    WebGpu,
+    WebGl2,
+}
+
+/// Backends to attempt in order, given whether `navigator.gpu` is exposed and whether the
+/// `webgl` cargo feature is enabled.
+///
+/// When `navigator.gpu` is absent (insecure origin, WebGPU disabled by flag while
+/// `canvas.getContext("webgpu")` still exists, or a browser without WebGPU), WebGPU is skipped
+/// so the canvas is never locked to a `"webgpu"` context before WebGL2 runs. When `navigator.gpu`
+/// is present, WebGPU probes for an adapter and device before creating a canvas surface, leaving
+/// the canvas free for WebGL2 if either fails.
+pub(crate) fn backend_order(has_navigator_gpu: bool, webgl_enabled: bool) -> &'static [WebBackend] {
+    match (has_navigator_gpu, webgl_enabled) {
+        (true, true) => &[WebBackend::WebGpu, WebBackend::WebGl2],
+        (true, false) => &[WebBackend::WebGpu],
+        (false, true) => &[WebBackend::WebGl2],
+        (false, false) => &[],
+    }
+}
+
+/// How the web host handles a lost GPU device or WebGL2 context.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LossAction {
+    /// Fall back to the CPU 2D canvas under the GPU canvas. `recoverable` is true for WebGL2
+    /// context loss, where a later `webglcontextrestored` hands back over to WebGL2.
+    FallbackToCpu { recoverable: bool },
+    /// Drop the lost GPU side and pause rendering until `webglcontextrestored` rebuilds it.
+    PauseForRestore,
+    /// Show the fatal GPU-lost message and exit the loop.
+    Fatal,
+}
+
+/// Decides how the web host responds when the GPU device or WebGL2 context is lost.
+///
+/// WebGPU loss preserves the existing policy: permanent CPU fallback on CPU-first pages and
+/// fatal on GPU-first pages. WebGL2 context loss is recoverable when `webglcontextrestored`
+/// fires: full-window pages (`!embedded && !document`) fall back to the CPU canvas immediately so
+/// they are never blank while waiting (or if restore never arrives), while inline and document
+/// pages pause in place until restore.
+pub(crate) fn loss_action(is_webgl: bool, gpu_first: bool, embedded: bool, document: bool) -> LossAction {
+    if is_webgl {
+        if !embedded && !document {
+            LossAction::FallbackToCpu { recoverable: true }
+        } else {
+            LossAction::PauseForRestore
+        }
+    } else if gpu_first {
+        LossAction::Fatal
+    } else {
+        LossAction::FallbackToCpu { recoverable: false }
+    }
+}
+
 #[cfg(test)]
 #[path = "web_math_tests.rs"]
 mod tests;

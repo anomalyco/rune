@@ -2,6 +2,12 @@
 // GPUInternalError into a panic (an `unreachable` trap that ends the app), so Rune never asks
 // wgpu for them on the web.
 
+// Whether `navigator.gpu` is exposed on this page (false on insecure origins or when WebGPU is
+// disabled by flag, even when `canvas.getContext('webgpu')` still returns a context).
+export function hasNavigatorGpu() {
+    return typeof globalThis.navigator?.gpu === 'object' && globalThis.navigator.gpu !== null;
+}
+
 // The adapter a device runs on, as far as the browser says: vendor, architecture, device and
 // description (each may be empty), whether it is a fallback adapter, and its texture limit.
 export function gpuSummary(device) {
@@ -39,4 +45,40 @@ export function popScopes(device) {
         const error = errors.find(Boolean);
         return error ? `${error.constructor?.name ?? 'GPUError'}: ${error.message}` : null;
     });
+}
+
+// Watches `canvas` for WebGL2 context loss and restore. Calls `event.preventDefault()` on loss
+// so the browser can restore the context, and caches the existing context handle once so
+// `webglWatchLost` checks `isContextLost()` without calling `getContext` on every frame.
+export function watchWebglContext(canvas, onLost, onRestored) {
+    let gl = canvas.getContext('webgl2');
+    let lost = !gl || gl.isContextLost();
+    const handleLost = (event) => {
+        event.preventDefault();
+        lost = true;
+        const detail = event.statusMessage ? `: ${event.statusMessage}` : '';
+        onLost(`WebGL2 context lost${detail}`);
+    };
+    const handleRestored = () => {
+        lost = false;
+        gl = canvas.getContext('webgl2');
+        onRestored();
+    };
+    canvas.addEventListener('webglcontextlost', handleLost);
+    canvas.addEventListener('webglcontextrestored', handleRestored);
+    return {
+        isLost() { return lost || !gl || gl.isContextLost(); },
+        dispose() {
+            canvas.removeEventListener('webglcontextlost', handleLost);
+            canvas.removeEventListener('webglcontextrestored', handleRestored);
+        },
+    };
+}
+
+export function webglWatchLost(handle) {
+    return !!handle?.isLost?.();
+}
+
+export function disposeWebglWatch(handle) {
+    handle?.dispose?.();
 }

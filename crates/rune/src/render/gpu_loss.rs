@@ -8,10 +8,13 @@
 //! loss through the command buffer's error instead.
 
 use super::Gpu;
-use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::Mutex;
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 
 /// The distinct messages `Gpu::made` has printed, bounded: an error inside the frame would
 /// otherwise print on every frame.
+#[cfg(not(target_arch = "wasm32"))]
 const PRINTED: usize = 16;
 
 impl Gpu {
@@ -38,9 +41,18 @@ impl Gpu {
             // No panic here, in tests either: wgpu calls this inside its own work (a submission,
             // a queue's drop) and a panic there could abort the process. A test fails at its
             // next wait instead (`rune_gpu::health::poll` returns `Lost`).
+            #[cfg(not(target_arch = "wasm32"))]
             eprintln!("rune: the GPU device was lost ({reason:?}): {message}");
+            #[cfg(target_arch = "wasm32")]
+            let _ = (reason, message);
         });
+        // On wasm32, `platform::web::health::watch` owns uncaptured error logging for both WebGPU
+        // (through JS, avoiding wgpu's panic on `GPUInternalError`) and WebGL2 (to `console.error`,
+        // where `eprintln!` is silent).
+        #[cfg(not(target_arch = "wasm32"))]
         if draws_surfaces && !cfg!(test) { log_uncaptured(&device); }
+        #[cfg(target_arch = "wasm32")]
+        let _ = draws_surfaces;
         // Debug builds report a submission that holds the GPU past `rune_gpu::budget::BUDGET`;
         // Rune's own tests (and `test-strict` builds) end there: their GPUs have no test to fail.
         if cfg!(debug_assertions) { rune_gpu::budget::watch(cfg!(test) || cfg!(feature = "test-strict")); }
@@ -57,6 +69,7 @@ impl Gpu {
 
 /// What `log_uncaptured` has printed: each distinct message once, up to `PRINTED`, then one
 /// line saying the rest are silent.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Default)]
 struct Printed {
     seen: Vec<String>,
@@ -66,6 +79,7 @@ struct Printed {
 /// Prints each uncaptured error once, up to `PRINTED` distinct messages, then one line saying
 /// further ones are not shown. A scoped error (a `push_error_scope`, as `window::configure`
 /// uses) still goes to its scope first; this is the fallback for errors nothing else caught.
+#[cfg(not(target_arch = "wasm32"))]
 fn log_uncaptured(device: &wgpu::Device) {
     let printed: Arc<Mutex<Printed>> = Arc::default();
     device.on_uncaptured_error(Arc::new(move |error: wgpu::Error| {
