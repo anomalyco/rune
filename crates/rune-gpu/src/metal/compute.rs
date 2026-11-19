@@ -8,9 +8,7 @@ use std::sync::atomic::Ordering;
 
 #[cfg(debug_assertions)]
 use objc2_foundation::NSString;
-#[cfg(debug_assertions)]
-use objc2_metal::{MTLComputePipelineDescriptor, MTLPipelineOption};
-use objc2_metal::{MTLCommandBuffer, MTLCommandEncoder, MTLComputeCommandEncoder, MTLComputePassDescriptor, MTLComputePipelineState, MTLDevice, MTLSize};
+use objc2_metal::{MTLCommandBuffer, MTLCommandEncoder, MTLComputeCommandEncoder, MTLComputePassDescriptor, MTLComputePipelineDescriptor, MTLComputePipelineState, MTLDevice, MTLPipelineOption, MTLSize};
 use objc2::rc::autoreleasepool;
 use parking_lot::Mutex;
 use wgpu::custom::*;
@@ -52,18 +50,12 @@ pub(super) fn create(shared: &Shared, desc: &wgpu::ComputePipelineDescriptor<'_>
     let stage = Stage { module: desc.module, entry: desc.entry_point, constants: desc.compilation_options.constants,
         kind: naga::ShaderStage::Compute };
     let cs = compile(shared, &stage, &layout.stages[COMPUTE], false).unwrap_or_else(|e| panic!("{label}: {e}"));
+    let d = MTLComputePipelineDescriptor::new();
+    d.setComputeFunction(Some(&cs.function));
     #[cfg(debug_assertions)]
-    let state = {
-        let d = MTLComputePipelineDescriptor::new();
-        d.setComputeFunction(Some(&cs.function));
-        if let Some(label) = desc.label { d.setLabel(Some(&NSString::from_str(label))); }
-        shared.device
-            .newComputePipelineStateWithDescriptor_options_reflection_error(&d, MTLPipelineOption::empty(), None)
-            .unwrap_or_else(|e| panic!("{label}: {}", e.localizedDescription()))
-    };
-    #[cfg(not(debug_assertions))]
+    if let Some(label) = desc.label { d.setLabel(Some(&NSString::from_str(label))); }
     let state = shared.device
-        .newComputePipelineStateWithFunction_error(&cs.function)
+        .newComputePipelineStateWithDescriptor_options_reflection_error(&d, MTLPipelineOption::empty(), None)
         .unwrap_or_else(|e| panic!("{label}: {}", e.localizedDescription()));
     let [x, y, z] = cs.workgroup.map(|n| n as usize);
     let workgroup_memory = cs.workgroup_memory.into_iter().map(|size| size.next_multiple_of(16)).collect();
