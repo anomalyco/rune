@@ -191,3 +191,54 @@ fn web_page_wheel_scales_by_viewport_zoom_and_respects_shift_without_double_swap
     );
     assert_eq!((dx_px, dy_px), (-40.0, 0.0));
 }
+
+#[test]
+fn sync_modifiers_observes_changes_updates_press_mods_and_deduplicates_repeats() {
+    #[derive(Default)]
+    struct S { physical: Vec<crate::Mods>, click_mods: Vec<crate::Mods> }
+    fn view(_: &S, _: &mut Cx<S>) -> El {
+        el().key("btn").size(100.0, 100.0).focusable(true)
+            .on_physical_input(|s: &mut S, ev, _| {
+                if let crate::PhysicalInput::Modifiers(m) = ev {
+                    s.physical.push(*m);
+                    return true;
+                }
+                false
+            })
+            .on_press_tx(|s: &mut S, tx| s.click_mods.push(tx.mods()))
+    }
+    let mut rt = Runtime::new(S::default(), view, (100.0, 100.0), Env::default());
+    rt.frame(0.0);
+    rt.update(|_, tx| tx.focus("btn", false));
+    rt.frame(0.0);
+
+    let mut mods = ModifiersState::empty();
+    let shift_ctrl = modifiers_from_flags(true, true, false, false);
+    assert_eq!(shift_ctrl, ModifiersState::SHIFT | ModifiersState::CONTROL);
+
+    let redraw = {
+        let (core, mut app) = rt.split_mut();
+        sync_modifiers(core, &mut app, &mut mods, shift_ctrl)
+    };
+    assert!(redraw);
+    rt.frame(0.0);
+    assert_eq!(rt.state.physical.len(), 1);
+    assert!(rt.state.physical[0].shift && rt.state.physical[0].ctrl);
+
+    // Repeating the same state (winit's ModifiersChanged after DOM capture) is a no-op.
+    let dup = {
+        let (core, mut app) = rt.split_mut();
+        sync_modifiers(core, &mut app, &mut mods, shift_ctrl)
+    };
+    assert!(!dup);
+    rt.frame(0.0);
+    assert_eq!(rt.state.physical.len(), 1);
+
+    // A click after modifier refresh sees the held modifiers via tx.mods().
+    rt.pointer_move(50.0, 50.0);
+    rt.pointer_down(50.0, 50.0);
+    rt.pointer_up(50.0, 50.0);
+    rt.frame(0.0);
+    assert_eq!(rt.state.click_mods.len(), 1);
+    assert!(rt.state.click_mods[0].shift && rt.state.click_mods[0].ctrl);
+}

@@ -108,7 +108,7 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         document.body.append(a11y);
     }
     const h = { canvas, textarea, password, a11y, a11yNodes: new Map(), field: textarea, key: '', base: 0, value: '',
-        copyText: '', composing: false, composition: '', shift: false, listeners: [], syncing: false, disposed: false,
+        copyText: '', composing: false, composition: '', shift: false, modBits: 0, listeners: [], syncing: false, disposed: false,
         embedded, fitHeight, page, focused: false, presented: false, swapped: false, touchDown: false,
         lastScrollAt: 0, staticTimer: 0, scrollEls: new Map(), band };
     const send = event => {
@@ -121,6 +121,30 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         target.addEventListener(name, handler, options);
         h.listeners.push(() => target.removeEventListener(name, handler, options));
     };
+    const MOD_KEYS = ['Shift', 'Control', 'Alt', 'Meta', 'AltGraph'];
+    const ownsTarget = target => target === canvas || target === textarea || target === password || (target instanceof Node && a11y.contains(target));
+    const syncMods = event => {
+        const bits = (event.shiftKey ? 1 : 0) | (event.ctrlKey ? 2 : 0) | (event.altKey ? 4 : 0) | (event.metaKey ? 8 : 0);
+        if (bits === h.modBits) return;
+        h.modBits = bits;
+        send({ kind: 'mods', shift: !!(bits & 1), ctrl: !!(bits & 2), alt: !!(bits & 4), meta: !!(bits & 8) });
+    };
+    // Refresh modifiers from DOM events before winit's canvas listeners run: winit suppresses
+    // ModifiersChanged on pointer/wheel when the canvas lacks focus (e.g. while a text field is
+    // focused or in document mode) and emits KeyboardInput before ModifiersChanged.
+    for (const name of ['pointerdown', 'pointermove', 'pointerup', 'pointerover', 'pointerout', 'wheel', 'keydown']) {
+        listen(window, name, event => { if (ownsTarget(event.target)) syncMods(event); }, { capture: true, passive: true });
+    }
+    listen(window, 'keyup', event => {
+        if (ownsTarget(event.target) && !(event.target === canvas && MOD_KEYS.includes(event.key))) syncMods(event);
+    }, { capture: true, passive: true });
+    // Let winit deliver a modifier key's own release on the canvas before clearing its flag so
+    // on_physical_input handlers see the key-up first.
+    listen(window, 'keyup', event => {
+        if (event.target === canvas && MOD_KEYS.includes(event.key)) syncMods(event);
+    }, { passive: true });
+    listen(window, 'blur', () => { h.modBits = 0; });
+    listen(document, 'visibilitychange', () => { if (document.hidden) h.modBits = 0; });
     function changed(preedit = false) {
         const backward = textarea.selectionDirection === 'backward';
         send({ kind: preedit ? 'preedit' : 'edit', key: h.key, base: h.base, expected: h.value,

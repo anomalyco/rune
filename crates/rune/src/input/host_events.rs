@@ -87,8 +87,18 @@ pub(crate) fn touch_promoted() -> bool {
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub(crate) fn touch_promoted() -> bool { false }
 
+/// Builds a `ModifiersState` from individual shift/ctrl/alt/meta flags.
+#[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
+pub(crate) fn modifiers_from_flags(shift: bool, ctrl: bool, alt: bool, meta: bool) -> ModifiersState {
+    let mut state = ModifiersState::empty();
+    if shift { state |= ModifiersState::SHIFT; }
+    if ctrl { state |= ModifiersState::CONTROL; }
+    if alt { state |= ModifiersState::ALT; }
+    if meta { state |= ModifiersState::SUPER; }
+    state
+}
+
 /// Notifies the runtime of the current modifier state; returns whether a redraw is needed.
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub(crate) fn modifiers_core(
     rt: &mut RuntimeCore,
     app: &mut dyn AppDriver,
@@ -98,7 +108,6 @@ pub(crate) fn modifiers_core(
 }
 
 /// Updates tracked modifiers and notifies the runtime; returns whether a redraw is needed.
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub(crate) fn modifiers(
     rt: &mut RuntimeCore,
     app: &mut dyn AppDriver,
@@ -107,6 +116,19 @@ pub(crate) fn modifiers(
 ) -> bool {
     *mods = next;
     modifiers_core(rt, app, map_mods(*mods))
+}
+
+/// Updates tracked modifiers and notifies the runtime only when `next` differs from `*mods`.
+/// Used where both DOM capture refresh and winit's `ModifiersChanged` report the same transition.
+#[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
+pub(crate) fn sync_modifiers(
+    rt: &mut RuntimeCore,
+    app: &mut dyn AppDriver,
+    mods: &mut ModifiersState,
+    next: ModifiersState,
+) -> bool {
+    if *mods == next { return false; }
+    modifiers(rt, app, mods, next)
 }
 
 /// Translates a host-neutral key input into runtime physical/logical key calls, including

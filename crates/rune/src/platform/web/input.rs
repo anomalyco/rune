@@ -213,6 +213,17 @@ impl Running {
     /// Handles one DOM event. Returns whether a frame must be drawn: a page's scroll only draws
     /// when it moves the band (the browser's compositor scrolls the pixels Rune already drew).
     pub(super) fn input_event(&mut self, event: &mut serde_json::Value, window: &Arc<Window>) -> bool {
+        if event["kind"].as_str() == Some("mods") {
+            let next = crate::input::host_events::modifiers_from_flags(
+                event["shift"].as_bool().unwrap_or(false),
+                event["ctrl"].as_bool().unwrap_or(false),
+                event["alt"].as_bool().unwrap_or(false),
+                event["meta"].as_bool().unwrap_or(false),
+            );
+            let redraw = self.app.sync_modifiers(&mut self.input.mods, next);
+            if redraw { self.full_redraw = true; }
+            return redraw;
+        }
         self.full_redraw = true;
         let mut activate = false;
         // What a person typed or pressed through the page's own elements is input too, for
@@ -377,7 +388,9 @@ impl Running {
         let mut activate = false;
         let mut immediate = false;
         match event {
-            WindowEvent::ModifiersChanged(mods) => { self.input.mods = mods.state(); return false; }
+            WindowEvent::ModifiersChanged(mods) => {
+                return self.app.sync_modifiers(&mut self.input.mods, mods.state());
+            }
             WindowEvent::CursorMoved { position, .. } if !self.app.rt().touching() => {
                 let (x, y) = crate::input::host_events::physical_point(self.app.rt(), position.x, position.y);
                 self.app.pointer_move(x, y);

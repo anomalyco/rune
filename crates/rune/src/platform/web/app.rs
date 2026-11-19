@@ -154,6 +154,10 @@ impl dyn WebApp + '_ {
         self.driver(|rt, app| rt.key_up(app, ev))
     }
 
+    pub(super) fn sync_modifiers(&mut self, mods: &mut winit::keyboard::ModifiersState, next: winit::keyboard::ModifiersState) -> bool {
+        self.driver(|rt, app| crate::input::host_events::sync_modifiers(rt, app, mods, next))
+    }
+
     pub(super) fn physical_with_fallback(&mut self, event: crate::PhysicalInput, key: Option<crate::KeyEvent>) -> bool {
         self.driver(|rt, app| rt.physical_with_fallback(app, event, key))
     }
