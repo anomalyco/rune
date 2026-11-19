@@ -25,6 +25,8 @@ metal-backend = [
     "dep:rune-staging",
     "dep:wgpu-naga-bridge",
 ]
+# Live GPU resource counters (`Device::get_internal_counters`) for the storage-swap buffer-count test.
+test-gpu-counters = ["wgpu/counters"]
 
 [dependencies]
 bytemuck = { workspace = true }
@@ -65,9 +67,6 @@ wayland-protocols = { version = "0.32", features = ["client", "staging"] }
 # wgpu's Vulkan backend everywhere but Windows (D3D12 above) and Apple (Metal above).
 [target.'cfg(all(not(target_vendor = "apple"), not(target_arch = "wasm32"), not(target_os = "windows")))'.dependencies]
 wgpu = { workspace = true, features = ["vulkan"] }
-
-[dev-dependencies]
-wgpu = { workspace = true, features = ["counters"] }
 
 [lints]
 workspace = true

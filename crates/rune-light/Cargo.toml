@@ -5,13 +5,17 @@ edition.workspace = true
 license.workspace = true
 description = "Real-time lighting for Rune UIs: SDF soft shadows, bevel normals, god rays and radiance-cascade GI over the frame's analytic primitives."
 
+[features]
+# Live GPU resource counters (`Device::get_internal_counters`) for the bind-group test and `frame_bench`.
+test-gpu-counters = ["wgpu/counters"]
+
 [dependencies]
 rune-staging = { workspace = true }
 wgpu = { workspace = true, features = ["std", "parking_lot", "wgsl"] }
 bytemuck = { workspace = true }
 
 [target.'cfg(target_vendor = "apple")'.dependencies]
-wgpu = { workspace = true, features = ["metal"] }
+wgpu = { workspace = true, features = ["metal", "custom"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 wgpu = { workspace = true, features = ["dx12"] }
@@ -23,13 +27,14 @@ wgpu = { workspace = true, features = ["vulkan"] }
 wgpu = { workspace = true, features = ["webgpu"] }
 
 [dev-dependencies]
-# The examples' headless runs (`--snap`, `--trace`, ...) in release builds.
-rune = { workspace = true, default-features = true, features = ["keys-overlay"] }
+rune = { workspace = true, default-features = true }
 rune-fx = { workspace = true }
 pollster = { workspace = true }
-# Live object counts for the bind group tests.
-wgpu = { workspace = true, features = ["counters"] }
 winit = { workspace = true, features = ["rwh_06", "x11", "wayland", "wayland-dlopen", "wayland-csd-adwaita-notitle"] }
+
+[[example]]
+name = "frame_bench"
+required-features = ["test-gpu-counters"]
 
 [lints]
 workspace = true

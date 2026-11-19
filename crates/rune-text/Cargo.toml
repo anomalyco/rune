@@ -6,7 +6,7 @@ license.workspace = true
 description = "GPU-free text shaping, layout, font discovery, glyph rasterization, outline filling, and icon rendering for Rune."
 
 [features]
-default = ["embedded-fonts", "svg"]
+default = ["embedded-fonts", "svg", "rune-image/default"]
 # Bundle Inter (Regular, Medium, SemiBold; on web also IBM Plex Mono) as the fonts text falls back
 # to when the app registers none. Disable when AppSpec::fonts supplies the app's own fonts to omit
 # the bytes (about 1.25 MB native).

@@ -7,7 +7,7 @@ publish = false
 
 [dependencies]
 rune = { workspace = true, default-features = true, features = ["keys-overlay"] }
-rune-kit = { workspace = true }
+rune-kit = { workspace = true, default-features = true }
 motion-bento-chaos = { path = "chaos" }
 
 [lints]

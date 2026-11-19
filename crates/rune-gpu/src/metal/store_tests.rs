@@ -18,11 +18,13 @@ fn read(device: &wgpu::Device, buffer: &wgpu::Buffer) -> Vec<u8> {
 /// Spares `buffer` holds and the swaps it made.
 fn swaps(buffer: &wgpu::Buffer) -> (usize, u64) { buffer.as_custom::<MetalBuffer>().unwrap().store.swaps() }
 
+#[cfg(feature = "test-gpu-counters")]
 fn live(device: &wgpu::Device) -> isize { device.get_internal_counters().hal.buffers.read() }
 
 /// Each frame writes parts of a buffer while the last frame's copy of it is recorded but not yet
 /// submitted, so every frame swaps storage: each copy still reads what was written before it,
 /// and once warm a frame makes no buffers.
+#[cfg(feature = "test-gpu-counters")]
 #[test]
 fn writes_while_the_gpu_reads_swap_storage_and_land_in_order() {
     use wgpu::BufferUsages as B;

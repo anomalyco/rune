@@ -7,7 +7,7 @@ publish = false
 description = "Renders the material stills on Rune's home page headless: liquid metal, glass and light."
 
 [dependencies]
-rune = { workspace = true, default-features = true, features = ["keys-overlay"] }
+rune = { workspace = true, default-features = true }
 rune-fx = { workspace = true }
 rune-light = { workspace = true }
 wgpu = { workspace = true, features = ["std", "parking_lot", "wgsl"] }

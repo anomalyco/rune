@@ -6,7 +6,7 @@ license.workspace = true
 description = "Video and audio playback, zero-copy native surfaces (IOSurface, D3D shared textures, Linux dmabufs), and audio recording for Rune."
 
 [features]
-default = ["metal-backend", "ogg-audio"]
+default = ["metal-backend", "ogg-audio", "rune-gpu/default"]
 # macOS and iOS: interoperate with Rune's native Metal backend (zero-copy CVPixelBuffer import).
 metal-backend = ["rune-gpu/metal-backend"]
 # macOS: play Ogg (Vorbis, Opus) and WebM/Matroska audio, which AVFoundation can't read, by
