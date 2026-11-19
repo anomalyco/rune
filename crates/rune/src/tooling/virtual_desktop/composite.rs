@@ -31,7 +31,22 @@ pub(super) struct Uniform {
     pub(super) _unused: [f32; 2],
 }
 
-const SHADER: &str = r#"
+const _: () = {
+    use std::mem::{offset_of, size_of};
+    assert!(size_of::<Uniform>() == 64);
+    assert!(offset_of!(Uniform, origin) == 0);
+    assert!(offset_of!(Uniform, size) == 8);
+    assert!(offset_of!(Uniform, out_size) == 16);
+    assert!(offset_of!(Uniform, shadow_offset) == 24);
+    assert!(offset_of!(Uniform, mask_size) == 32);
+    assert!(offset_of!(Uniform, radius) == 40);
+    assert!(offset_of!(Uniform, pad) == 44);
+    assert!(offset_of!(Uniform, sigma) == 48);
+    assert!(offset_of!(Uniform, opacity) == 52);
+    assert!(offset_of!(Uniform, _unused) == 56);
+};
+
+pub(super) const SHADER: &str = r#"
 struct W {
     origin: vec2<f32>,
     size: vec2<f32>,

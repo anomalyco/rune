@@ -243,3 +243,44 @@ fn virtual_desktop_window_scales_input_by_zoom_and_releases_keys_on_hide() {
     w.advance(0.0);
     assert_eq!(w.rt_mut::<S>().state.focus_lost, 1, "hiding a virtual desktop window must emit keys_lost");
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn uniform_layout_matches_wgsl() {
+    use std::mem::{offset_of, size_of};
+    use wgpu::naga::{TypeInner, front::wgsl, proc::Layouter, valid::{Capabilities, ValidationFlags, Validator}};
+    use super::composite::{SHADER, Uniform};
+
+    let module = wgsl::parse_str(SHADER).unwrap_or_else(|e| panic!("virtual_desktop: {}", e.emit_to_string(SHADER)));
+    Validator::new(ValidationFlags::all(), Capabilities::default())
+        .validate(&module)
+        .unwrap_or_else(|e| panic!("virtual_desktop: {e}"));
+    let mut layouter = Layouter::default();
+    layouter.update(module.to_ctx()).unwrap_or_else(|e| panic!("virtual_desktop: {e}"));
+
+    let (handle, ty) = module
+        .types
+        .iter()
+        .find(|(_, t)| t.name.as_deref() == Some("W"))
+        .expect("WGSL struct W not found");
+    assert_eq!(layouter[handle].size as usize, size_of::<Uniform>(), "W size");
+    let TypeInner::Struct { members, span } = &ty.inner else { panic!("W is not a struct") };
+    assert_eq!(*span as usize, size_of::<Uniform>(), "W span");
+    let expected: &[(&str, usize)] = &[
+        ("origin", offset_of!(Uniform, origin)),
+        ("size", offset_of!(Uniform, size)),
+        ("out_size", offset_of!(Uniform, out_size)),
+        ("shadow_offset", offset_of!(Uniform, shadow_offset)),
+        ("mask_size", offset_of!(Uniform, mask_size)),
+        ("radius", offset_of!(Uniform, radius)),
+        ("pad", offset_of!(Uniform, pad)),
+        ("sigma", offset_of!(Uniform, sigma)),
+        ("opacity", offset_of!(Uniform, opacity)),
+        ("unused", offset_of!(Uniform, _unused)),
+    ];
+    assert_eq!(members.len(), expected.len(), "W member count");
+    for (member, &(field, offset)) in members.iter().zip(expected) {
+        assert_eq!(member.name.as_deref(), Some(field), "W.{field} name");
+        assert_eq!(member.offset as usize, offset, "W.{field} offset");
+    }
+}

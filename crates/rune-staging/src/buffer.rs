@@ -147,13 +147,18 @@ impl Readback {
         (self.width * self.bytes_per_pixel) as usize
     }
 
-    /// Records a copy of `texture`'s mip 0 into this readback buffer.
+    /// Records a copy of `texture`'s mip 0 from `(0, 0, 0)` into this readback buffer.
     pub fn copy_from(&self, encoder: &mut wgpu::CommandEncoder, texture: &wgpu::Texture) {
+        self.copy_from_origin(encoder, texture, wgpu::Origin3d::ZERO);
+    }
+
+    /// Records a copy of `texture`'s mip 0 starting at `origin` into this readback buffer.
+    pub fn copy_from_origin(&self, encoder: &mut wgpu::CommandEncoder, texture: &wgpu::Texture, origin: wgpu::Origin3d) {
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
                 texture,
                 mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
+                origin,
                 aspect: wgpu::TextureAspect::All,
             },
             wgpu::TexelCopyBufferInfo {
@@ -168,14 +173,28 @@ impl Readback {
         );
     }
 
-    /// Unpads pixels out of an already-mapped buffer and unmaps it.
-    pub fn take_mapped(&self) -> Vec<u8> {
+    /// Unpads pixels out of an already-mapped buffer and unmaps it, returning `None` if the
+    /// buffer is not mapped.
+    pub fn try_take_mapped(&self) -> Option<Vec<u8>> {
         let out = {
-            let data = self.buffer.slice(..).get_mapped_range().expect("mapped range");
+            let data = self.buffer.slice(..).get_mapped_range().ok()?;
             unpad_rows(&data, self.row_bytes(), self.height, self.padded_row)
         };
         self.buffer.unmap();
-        out
+        Some(out)
+    }
+
+    /// Unpads pixels out of an already-mapped buffer and unmaps it.
+    pub fn take_mapped(&self) -> Vec<u8> {
+        self.try_take_mapped().expect("mapped range")
+    }
+
+    /// Blocks until `copy_from` finishes, maps the buffer, unpads rows, and unmaps.
+    /// Returns `None` if polling or mapping fails.
+    pub fn try_read(&self, device: &wgpu::Device) -> Option<Vec<u8>> {
+        self.buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+        device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
+        self.try_take_mapped()
     }
 
     /// Blocks until `copy_from` finishes, maps the buffer, unpads rows, and unmaps.

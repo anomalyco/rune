@@ -3903,7 +3903,6 @@ dependencies = [
  "png 0.18.1",
  "rune",
  "rune-motion",
- "rune-ref",
  "rune-staging",
  "wgpu",
 ]
@@ -4112,8 +4111,10 @@ dependencies = [
  "libm",
  "proptest",
  "rune",
+ "rune-fx",
  "serde",
  "serde_json",
+ "wgpu",
 ]
 
 [[package]]
