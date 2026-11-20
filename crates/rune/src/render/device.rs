@@ -61,6 +61,7 @@ impl Gpu {
         // new device on that adapter is the removed one again.
         crate::native_surface::release_removed_device();
         let pick = crate::gpu::pick::pick(&instance, surface, presented)?;
+        let named = pick.reason == crate::gpu::pick::Reason::EnvName;
         crate::marks::mark("gpu.adapter");
         if !crate::marks::noted("adapter") { crate::marks::note("adapter", Box::leak(pick.adapter.get_info().name.into_boxed_str())); }
         let adapter = match surface {
@@ -73,6 +74,8 @@ impl Gpu {
                 crate::native_surface::note_device(&device, surface.is_some() || presented);
                 Ok(Gpu::made(instance, adapter, device, queue, surface.is_some() || presented))
             }
+            // A named adapter (`WGPU_ADAPTER_NAME`) never falls through to another GPU.
+            Err(error) if named => Err(error),
             // A driver that can't make a device (a broken integrated GPU on a hybrid laptop)
             // leaves the window to the next adapter that presents to its surface.
             Err(error) => {
