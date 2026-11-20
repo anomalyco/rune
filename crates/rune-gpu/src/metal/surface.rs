@@ -2,6 +2,8 @@
 //! raw-window-metal as wgpu-hal's does: a sublayer of the view's layer that follows the view's
 //! bounds and the screen's scale as they change.
 
+#![allow(unsafe_code)]
+
 use std::sync::Arc;
 
 use objc2_core_foundation::CGSize;

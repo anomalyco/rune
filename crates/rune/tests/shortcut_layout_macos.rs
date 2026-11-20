@@ -5,6 +5,7 @@
 mod layout_macos;
 
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 mod tis {
     use std::ffi::{CString, c_void};
     #[link(name = "Carbon", kind = "framework")]
@@ -53,6 +54,7 @@ mod tis {
 }
 
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 fn main() {
     const CMD: u32 = 1 << 8;
     const SHIFT: u32 = 1 << 9;

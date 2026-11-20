@@ -6,6 +6,8 @@
 //! The queue is the decoder's only clock: it decodes while there's room, so a clip nobody
 //! draws fills it and sleeps, costing nothing until a frame takes a picture again.
 
+#![allow(unsafe_code)]
+
 use super::audio::{self, Output};
 use super::gpu::{self, Ring};
 use super::layer::Layer;

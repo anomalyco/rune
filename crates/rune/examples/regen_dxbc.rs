@@ -11,6 +11,8 @@
 //! the build also checks pinned fragments (`render/dxbc.rs` `PINNED_FRESH`) so one compiled from
 //! other WGSL, or beside another vertex stage, isn't used.
 
+#![allow(unsafe_code)]
+
 #[cfg(target_os = "windows")]
 fn main() {
     // The bytecode in the tree may match nothing now; make the pipeline from WGSL either way.

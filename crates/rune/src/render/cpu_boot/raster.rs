@@ -151,6 +151,7 @@ pub(super) fn f16(v: f32, r: HalfRounding) -> f32 {
 
 /// `f16` on four values at once: F16C's conversion where the CPU has it.
 #[inline]
+#[allow(unsafe_code)]
 pub(super) fn f16x4(v: [f32; 4], r: HalfRounding) -> [f32; 4] {
     #[cfg(target_arch = "x86_64")]
     if std::arch::is_x86_feature_detected!("f16c") {
@@ -162,6 +163,7 @@ pub(super) fn f16x4(v: [f32; 4], r: HalfRounding) -> [f32; 4] {
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "f16c")]
+#[allow(unsafe_code)]
 unsafe fn f16x4_f16c(v: [f32; 4], r: HalfRounding) -> [f32; 4] {
     use std::arch::x86_64::*;
     let mut out = [0.0f32; 4];
@@ -187,9 +189,11 @@ struct Surface {
 
 // SAFETY: `run` hands each tile to one thread; a thread writes only pixels of its tile, and the
 // target outlives the scope its threads run in.
+#[allow(unsafe_code)]
 unsafe impl Send for Surface {}
 // SAFETY: as above; `run` partitions the target into disjoint tiles across threads and joins
 // before the target borrow ends.
+#[allow(unsafe_code)]
 unsafe impl Sync for Surface {}
 
 impl Surface {
@@ -198,6 +202,7 @@ impl Surface {
 
     /// `n` pixels of row `y` from `x`, all inside the target and the caller's tile.
     #[inline]
+    #[allow(unsafe_code)]
     fn row(&mut self, x: u32, y: u32, n: u32) -> &mut [u8] {
         let at = self.at(x, y);
         let len = n as usize * 4;

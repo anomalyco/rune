@@ -3,6 +3,7 @@
 //! encoders, presents, completion handlers), counted by replacing those methods on the GPU's
 //! command buffer class.
 #![allow(dead_code)]
+#![allow(unsafe_code)]
 
 pub fn thread_cpu_ms() -> f64 {
     #[cfg(unix)]

@@ -13,6 +13,7 @@ use rune::{PhysicalKeyCode, Shortcut};
 fn main() {}
 
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 mod target {
     use objc2::{MainThreadOnly, define_class};
     use objc2_app_kit::NSMenuItem;
@@ -37,6 +38,7 @@ mod target {
 }
 
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 mod cg {
     use objc2::encode::{Encoding, RefEncode};
     use std::ffi::c_void;
@@ -54,6 +56,7 @@ mod cg {
 }
 
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 fn main() {
     use key_equivalent::{COMMAND, CONTROL, KeyEquivalent, OPTION, SHIFT, set_key_equivalent};
     use objc2::{ClassType, MainThreadMarker, msg_send, rc::Retained, runtime::AnyObject, sel};

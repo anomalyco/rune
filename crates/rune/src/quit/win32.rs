@@ -14,6 +14,8 @@
 //! from here would re-enter it, so the window runs no loop: it ends a tracking menu (the usual
 //! modal loop) and answers, and the hooks run as the handler returns, before `WM_ENDSESSION`.
 
+#![allow(unsafe_code)]
+
 use std::cell::RefCell;
 use std::time::Duration;
 

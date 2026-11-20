@@ -9,6 +9,8 @@
 //!
 //! cargo build --profile perf -p rune --example embed_cost --features metal-backend --target aarch64-apple-ios-sim
 
+#![allow(unsafe_code)]
+
 use rune::{AppSpec, Color, Cx, El, ScrollSpec, TextStyle, Tx, col, oklch, row, text};
 
 const SECTIONS: usize = 60;

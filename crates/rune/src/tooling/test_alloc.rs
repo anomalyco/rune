@@ -1,5 +1,8 @@
 //! The lib test binary's allocator: the system one, counting this thread's allocations and
 //! its live and peak bytes, so a test can assert what a call allocates.
+
+#![allow(unsafe_code)]
+
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 

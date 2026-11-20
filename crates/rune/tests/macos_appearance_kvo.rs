@@ -2,6 +2,8 @@
 //! calls `setStyleMask:` on app windows. Opens windows, so it only runs with RUNE_GUI_TESTS=1
 //! in a logged-in GUI session. Each case runs in a child process because the bug aborts.
 
+#![allow(unsafe_code)]
+
 #[cfg(not(target_os = "macos"))]
 fn main() {}
 

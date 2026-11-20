@@ -4,6 +4,7 @@ use super::*;
 impl RuntimeCore {
     pub(super) fn new(viewport: (f32, f32), env: Env, text: TextSystem) -> Self {
         crate::frame::profile::install_text_hook();
+        crate::tooling::perf_warn::warm();
         let mut scene = Scene::new();
         scene.set_pixel_scale(env.scale);
         crate::recorder::headless_reset();

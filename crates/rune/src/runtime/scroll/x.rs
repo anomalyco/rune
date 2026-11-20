@@ -382,6 +382,7 @@ pub(crate) const LINE_POINTS: f32 = if cfg!(target_os = "linux") { 120.0 } else 
 
 #[cfg(target_os = "windows")]
 impl RuntimeCore {
+    #[allow(unsafe_code)]
     pub(crate) fn windows_wheel_points(&self, delta: winit::event::MouseScrollDelta, shift: bool) -> f32 {
         use windows_sys::Win32::UI::WindowsAndMessaging::{SystemParametersInfoW, SPI_GETWHEELSCROLLCHARS, SPI_GETWHEELSCROLLLINES};
         let winit::event::MouseScrollDelta::LineDelta(x, y) = delta else { return 0.0 };

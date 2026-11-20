@@ -151,6 +151,7 @@ pub use simd128::F4;
 pub type F4 = Portable;
 
 #[cfg(target_arch = "x86_64")]
+#[allow(unsafe_code)]
 mod sse {
     use std::arch::x86_64::*;
     use std::ops::{Add, Div, Mul, Neg, Sub};

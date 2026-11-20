@@ -1,6 +1,8 @@
 //! Embedded `CAMetalLayer` host for UIKit, SwiftUI and AppKit views that own their own window
 //! and event loop (e.g. a `UIViewRepresentable` driven by `CADisplayLink` on iOS).
 
+#![allow(unsafe_code)]
+
 use std::ffi::c_void;
 use std::sync::{Arc, OnceLock};
 

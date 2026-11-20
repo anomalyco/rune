@@ -1,6 +1,8 @@
 //! Timestamp query sets: a counter sample buffer that passes sample into at their boundaries
 //! and `resolve_query_set` resolves into a buffer, as wgpu-hal does.
 
+#![allow(unsafe_code)]
+
 use std::sync::Arc;
 
 use objc2_foundation::NSString;

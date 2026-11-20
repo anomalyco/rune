@@ -1,6 +1,8 @@
 //! NSAccessibility for a window: AccessKit subclasses winit's content view at run time to
 //! answer for its children, focus and hit tests.
 
+#![allow(unsafe_code)]
+
 use objc2::runtime::{AnyClass, AnyObject};
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 

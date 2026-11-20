@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use crate::prelude::*;
 use crate::{
     BaselineLayoutStore, BaselineTaffyTree, BoxLayout, CompactCache, CompactStyle, LayoutStore, SlotId,

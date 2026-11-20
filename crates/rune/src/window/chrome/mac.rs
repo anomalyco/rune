@@ -1,6 +1,8 @@
 //! macOS titlebar behaviour: drag regions, the full-screen watch, the titlebar inset and the
 //! double-click action.
 
+#![allow(unsafe_code)]
+
 use objc2::runtime::{AnyClass, AnyObject, Bool, ClassBuilder, Sel};
 use objc2::{msg_send, sel, ClassType};
 use objc2_app_kit::{NSEvent, NSPanel, NSWindowButton, NSWindowStyleMask};

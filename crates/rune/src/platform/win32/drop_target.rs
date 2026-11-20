@@ -6,6 +6,8 @@
 //! macOS's do (`platform::macos::drop`): with the pointer's place in window points, drained each
 //! turn by `Host::flush_files`.
 
+#![allow(unsafe_code)]
+
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;

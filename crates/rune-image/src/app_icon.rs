@@ -1,5 +1,7 @@
 //! Platform app-bundle and file icon rasterization (`app_icon_rgba`).
 
+#![allow(unsafe_code)]
+
 use super::ImageError;
 
 #[cfg(target_os = "macos")]

@@ -21,6 +21,7 @@ use objc2::runtime::AnyObject;
 /// Runs `f` on the CAMetalLayer `surface` presents into, under wgpu-hal's lock on wgpu's Metal
 /// backend. `None` when the surface is on neither backend.
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 pub fn with_layer<R>(surface: &wgpu::Surface<'_>, f: impl FnOnce(&AnyObject) -> R) -> Option<R> {
     // SAFETY: the layer is only borrowed, under wgpu's lock.
     if let Some(hal) = unsafe { surface.as_hal::<wgpu::hal::api::Metal>() } {

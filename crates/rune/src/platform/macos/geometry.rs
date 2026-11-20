@@ -7,9 +7,11 @@ use objc2_foundation::{NSPoint, NSRect, NSSize};
 use super::ns_window;
 
 #[link(name = "CoreGraphics", kind = "framework")]
+#[allow(unsafe_code)]
 unsafe extern "C" { fn CGDisplayBounds(display: u32) -> NSRect; }
 
 /// CoreGraphics queries are thread-safe; snapshot the display before queuing a UI request.
+#[allow(unsafe_code)]
 pub(crate) fn pointer_display() -> Option<u32> {
     #[link(name = "CoreGraphics", kind = "framework")]
     unsafe extern "C" {
@@ -90,6 +92,7 @@ pub(crate) fn set_window_frame(window: &winit::window::Window, [x, y, w, h]: [f3
     if ns.frame() != rect { ns.setFrame_display(rect, false); }
 }
 
+#[allow(unsafe_code)]
 pub(crate) fn display_bounds(id: u32) -> [f64; 4] {
     // SAFETY: `CGDisplayBounds` is a pure CoreGraphics query accepting any `CGDirectDisplayID` (zero rect if invalid).
     let r = unsafe { CGDisplayBounds(id) };
@@ -100,6 +103,7 @@ pub(crate) fn overlay_rect(at: crate::overlay::Placement, options: &OverlayOptio
     overlay_rect_on(at, options, None)
 }
 
+#[allow(unsafe_code)]
 pub(super) fn screen_id(screen: &NSScreen) -> u32 {
     // SAFETY: `screen` is a live `NSScreen` on the main thread; `deviceDescription` returns an `NSDictionary`,
     // and messaging a possibly-nil `NSNumber` with `unsignedIntValue` returns 0 in ObjC.

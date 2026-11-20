@@ -29,6 +29,7 @@ fn event_loop_error(error: winit::error::EventLoopError) -> String {
 /// Whether this process can reach the window server. Over ssh to a Mac no one is logged in to,
 /// AppKit starts but never finishes launching, so the app would wait forever.
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 fn window_server_session() -> bool {
     use std::ffi::c_void;
     #[link(name = "CoreGraphics", kind = "framework")]
@@ -50,6 +51,7 @@ fn run_configured(_: Factory, _: Args, _: bool) -> Result<(), String> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+#[allow(unsafe_code)]
 fn run_configured(factory: Factory, args: Args, accessory: bool) -> Result<(), String> {
     let _ = accessory;
     // A relaunch goes on once the app it restarts has exited.

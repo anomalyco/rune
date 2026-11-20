@@ -166,7 +166,7 @@ fn marks_are_inert_events_that_times_can_name() {
 }
 
 /// Headless runs publish the process's `headless_run`, so tests that render one take turns.
-static HEADLESS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+pub(super) static HEADLESS: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[test]
 fn mark_names_win_over_offsets_and_offsets_must_be_complete() {

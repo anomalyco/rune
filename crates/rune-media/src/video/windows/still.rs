@@ -18,6 +18,7 @@ pub(crate) struct Still {
 }
 
 /// Opens `source` and reads its facts; for video, a reader for its pictures too.
+#[allow(unsafe_code)]
 pub(super) fn open(source: &MediaSource, kind: Kind) -> Result<(Option<Still>, Meta), String> {
     // SAFETY: COM on this thread for the reader; left initialised, as the thread may open more.
     unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.ok().ok();

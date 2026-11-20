@@ -6,6 +6,7 @@
 fn main() {}
 
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 fn main() {
     // Work after `run` returns below: the process tears down in order rather than ending at once.
     rune::orderly_exit();

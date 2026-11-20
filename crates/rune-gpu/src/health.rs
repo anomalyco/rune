@@ -52,13 +52,16 @@ pub struct Removal {
 struct RemovalFence(windows::Win32::Graphics::Direct3D12::ID3D12Fence);
 #[cfg(target_os = "windows")]
 // SAFETY: ID3D12Fence is free-threaded; it is only read.
+#[allow(unsafe_code)]
 unsafe impl Send for RemovalFence {}
 #[cfg(target_os = "windows")]
 // SAFETY: as for Send.
+#[allow(unsafe_code)]
 unsafe impl Sync for RemovalFence {}
 
 impl Removal {
     /// Watches `device`; on other backends, and if the fence can't be made, it never reads removed.
+    #[allow(unsafe_code)]
     pub fn watch(device: &wgpu::Device) -> Removal {
         #[cfg(target_os = "windows")]
         {
@@ -75,6 +78,7 @@ impl Removal {
         }
     }
 
+    #[allow(unsafe_code)]
     pub fn removed(&self) -> bool {
         #[cfg(target_os = "windows")]
         {

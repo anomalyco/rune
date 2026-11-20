@@ -9,6 +9,8 @@
 //!
 //! `dcomp.dll` loads here, when the GPU is ready, not at launch.
 
+#![allow(unsafe_code)]
+
 use windows::Win32::Graphics::DirectComposition::{IDCompositionDevice, IDCompositionTarget, IDCompositionVisual};
 use windows::core::{GUID, HRESULT, Interface};
 

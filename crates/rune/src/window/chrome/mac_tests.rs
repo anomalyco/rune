@@ -1,6 +1,7 @@
 use super::*;
 
 #[test]
+#[allow(unsafe_code)]
 fn drag_subclass_changes_only_the_selected_instance() {
     // NSObject exercises the Objective-C class operation without constructing a window
     // or requiring an AppKit event loop on the test thread.

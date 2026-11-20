@@ -119,6 +119,7 @@ fn shrank(size: usize) {
 }
 
 // SAFETY: every call goes straight to `inner`; the counters never touch the heap.
+#[allow(unsafe_code)]
 unsafe impl<A: GlobalAlloc> GlobalAlloc for Counting<A> {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         installed();
@@ -171,6 +172,7 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for Counting<A> {
 }
 
 /// Counts this thread's heap under `name` from now on (net bytes: allocated minus freed here).
+#[allow(unsafe_code)]
 pub fn tag_thread(name: &'static str) {
     let index = (1..TAGS)
         .find(|&i| {
@@ -208,6 +210,7 @@ pub struct Heap {
 }
 
 /// The counters, or `None` when [`Counting`] isn't the global allocator.
+#[allow(unsafe_code)]
 pub fn heap() -> Option<Heap> {
     if INSTALLED.load(Relaxed) == 0 {
         return None;

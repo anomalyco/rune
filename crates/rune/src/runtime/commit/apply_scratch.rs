@@ -24,6 +24,7 @@ pub(crate) struct ApplyScratch {
 
 /// Drops the un-moved `Node`s in `old_nodes` and returns the empty `Vec<Node>` allocation for the
 /// next commit's `flatten`, skipping `moved` memo spans whose placeholders own nothing.
+#[allow(unsafe_code)]
 pub(in crate::runtime) fn clear_old_nodes(
     mut old_nodes: Vec<Node>,
     reused: &[memo_reuse::ReusedSpan],

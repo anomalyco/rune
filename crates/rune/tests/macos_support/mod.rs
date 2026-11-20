@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+#![allow(unsafe_code)]
 
 use std::process::Command;
 use std::time::Duration;

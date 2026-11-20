@@ -103,6 +103,7 @@ fn worker() {
 /// Names the thread after its task, where a profiler or debugger reads it (Windows' thread
 /// description): `rune-task: <name>`.
 #[cfg(target_os = "windows")]
+#[allow(unsafe_code)]
 fn describe(name: &str) {
     use windows_sys::Win32::System::Threading::{GetCurrentThread, SetThreadDescription};
     let wide: Vec<u16> = format!("rune-task: {name}").encode_utf16().chain([0]).collect();

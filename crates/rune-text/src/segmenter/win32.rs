@@ -12,6 +12,8 @@
 //! character in Chinese and Japanese, the whole run in Thai): never a wait. The
 //! `segmenter-dictionaries` feature links ICU4X's word dictionaries instead.
 
+#![allow(unsafe_code)]
+
 use std::ffi::c_void;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};

@@ -9,6 +9,8 @@
 //! producer may write the texture again once the fence reaches the value. A frame replaced before
 //! it was drawn is never read and signals nothing: the next frame's higher value covers it.
 
+#![allow(unsafe_code)]
+
 use super::*;
 use ::windows::Win32::Foundation::{CloseHandle, GENERIC_ALL, HANDLE};
 use ::windows::Win32::Graphics::Direct3D12::{D3D12_RESOURCE_DIMENSION_TEXTURE2D, ID3D12Device, ID3D12Fence, ID3D12Resource};

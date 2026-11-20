@@ -12,6 +12,8 @@
 //! desktop, which several apps share) is never covered, so it keeps drawing for whoever reads
 //! its pixels.
 
+#![allow(unsafe_code)]
+
 use windows_sys::Win32::Foundation::{HWND, LPARAM, RECT, TRUE};
 use windows_sys::core::BOOL;
 use windows_sys::Win32::Graphics::Dwm::{DWM_CLOAKED_SHELL, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute};

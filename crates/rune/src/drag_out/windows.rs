@@ -15,6 +15,8 @@
 //! it with the drop description every Windows drag shows; a file drag without a picture gets
 //! the shell's own image of the files.
 
+#![allow(unsafe_code)]
+
 use std::cell::{Cell, RefCell};
 use std::sync::{OnceLock, atomic::{AtomicUsize, Ordering}};
 

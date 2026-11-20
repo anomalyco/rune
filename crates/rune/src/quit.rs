@@ -157,6 +157,7 @@ pub(crate) fn end_fast(last: fn()) -> ! {
 /// Ends this process now with exit code 0 (3 when `RUNE_LOOP_CHECK=2` found a differing picture,
 /// `render::pixel_check`): no destructors, no `atexit`, no DLL detach.
 #[cfg(not(target_arch = "wasm32"))]
+#[allow(unsafe_code)]
 fn end_process() -> ! {
     crate::marks::mark("quit.end");
     let code = if crate::render::loop_pixel_check_failed() { 3 } else { 0 };

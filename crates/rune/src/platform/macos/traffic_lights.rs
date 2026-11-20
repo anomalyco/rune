@@ -6,6 +6,8 @@
 //! the buttons' own superview each get a subclass, for that instance only, whose `-layout` runs
 //! AppKit's and then puts the buttons back.
 
+#![allow(unsafe_code)]
+
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 

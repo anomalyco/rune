@@ -165,6 +165,7 @@ impl crate::runtime::RuntimeCore {
 fn open(url: &str) -> Result<(), OpenUrlError> { crate::platform::web::open_url(url).map_err(OpenUrlError::Failed) }
 
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 fn open(url: &str) -> Result<(), OpenUrlError> {
     use objc2::{class, msg_send, rc::{Retained, autoreleasepool}};
     use objc2_foundation::{NSString, NSURL};
@@ -198,6 +199,7 @@ fn percent_encode_non_ascii(url: &str) -> std::borrow::Cow<'_, str> {
 }
 
 #[cfg(target_os = "windows")]
+#[allow(unsafe_code)]
 fn open(url: &str) -> Result<(), OpenUrlError> {
     use windows_sys::Win32::UI::{Shell::ShellExecuteW, WindowsAndMessaging::SW_SHOWNORMAL};
     let wide = |s: &str| s.encode_utf16().chain([0]).collect::<Vec<u16>>();

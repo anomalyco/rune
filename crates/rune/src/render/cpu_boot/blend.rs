@@ -4,6 +4,8 @@
 //! SSE2 at once; elsewhere the same operations run a channel at a time, in the same order, so
 //! both produce the same bits.
 
+#![allow(unsafe_code)]
+
 /// Adding 1.5 × 2²³ to a float in [0, 255] rounds it to an integer, ties to even, in the default
 /// rounding mode, and leaves that integer in the low mantissa bits.
 const MAGIC: f32 = 12_582_912.0;

@@ -4,6 +4,8 @@
 //! with RUNE_GUI_TESTS=1 in a logged-in GUI session. With RUNE_HELP_HOLD=<seconds> it keeps the
 //! tooltip up that long after printing `TOOLTIP`, for an outside screenshot.
 
+#![allow(unsafe_code)]
+
 #[cfg(not(target_os = "macos"))]
 fn main() {}
 

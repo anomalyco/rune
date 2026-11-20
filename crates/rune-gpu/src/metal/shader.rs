@@ -5,6 +5,8 @@
 //! (`create_shader_module_passthrough`) skips both: its functions are looked up by name, and
 //! must read no sizes buffer.
 
+#![allow(unsafe_code)]
+
 use std::ffi::c_void;
 use std::future::ready;
 use std::pin::Pin;

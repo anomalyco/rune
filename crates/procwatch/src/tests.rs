@@ -18,6 +18,7 @@ fn counts_this_threads_allocations_and_live_heap() {
 }
 
 #[test]
+#[allow(unsafe_code)]
 fn thread_bytes_count_requests_not_frees_on_this_thread_only() {
     use std::alloc::{GlobalAlloc, Layout};
     let allocator = alloc::Counting::system();
@@ -81,6 +82,7 @@ fn lines(events: &[Event]) -> String {
 }
 
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 fn thread_cpu_s() -> f64 {
     let mut t = libc::timespec { tv_sec: 0, tv_nsec: 0 };
     // SAFETY: fills `t`.

@@ -3,6 +3,9 @@
 //! run-loop block, after the handler returns: while it tracks, winit's observers (registered
 //! for the common modes, which include the tracking mode) keep delivering redraws, display
 //! ticks and wakes.
+
+#![allow(unsafe_code)]
+
 use std::{cell::{Cell, RefCell}, ffi::c_void, rc::Rc, sync::Arc};
 
 use block2::{Block, RcBlock};

@@ -32,6 +32,7 @@ pub fn stack_grow_count() -> u64 {
 
 #[cfg(windows)]
 #[inline]
+#[allow(unsafe_code)]
 fn reserve_fiber_stack_guarantee() {
     #[link(name = "kernel32")]
     unsafe extern "system" {

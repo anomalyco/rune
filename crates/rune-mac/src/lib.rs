@@ -12,6 +12,7 @@ pub use quiet::launch;
 /// Has AppKit save the app's window frame under `name` and put the next launch's window in the
 /// same place, so a rebuild's new window lands exactly over the old one. Call it every frame
 /// (from `poll`) until it returns true: the window doesn't exist during `setup`.
+#[allow(unsafe_code)]
 pub fn remember_frame(name: &str) -> bool {
     #[cfg(target_os = "macos")]
     // SAFETY: AppKit calls on the main thread (`poll`); `name` is NUL-terminated UTF-8 and every
@@ -38,6 +39,7 @@ pub fn remember_frame(name: &str) -> bool {
 
 /// The key window, else the main window; null with neither.
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 unsafe fn key_window() -> *mut objc2::runtime::AnyObject {
     use objc2::{class, msg_send, runtime::AnyObject};
     // SAFETY: called on the AppKit main thread; `sharedApplication`, `keyWindow`, and `mainWindow`
@@ -51,6 +53,7 @@ unsafe fn key_window() -> *mut objc2::runtime::AnyObject {
 
 /// Takes the app's key window into macOS full screen, or back out (the green button's
 /// ⌃⌘F). Headless, with no window, it does nothing.
+#[allow(unsafe_code)]
 pub fn toggle_full_screen() {
     #[cfg(target_os = "macos")]
     // SAFETY: AppKit main-thread call; `toggleFullScreen:` is only sent to a non-null `NSWindow *`
@@ -65,6 +68,7 @@ pub fn toggle_full_screen() {
 }
 
 /// Whether the app's key window is in macOS full screen.
+#[allow(unsafe_code)]
 pub fn is_full_screen() -> bool {
     #[cfg(target_os = "macos")]
     // SAFETY: AppKit main-thread call; `styleMask` is only sent to a non-null `NSWindow *` from
@@ -83,6 +87,7 @@ pub fn is_full_screen() -> bool {
 
 /// The size `remember_frame(name)` saved, in points, to open the window at. Applying the saved
 /// frame after the first layout resizes it, and the layout animates to the new size at launch.
+#[allow(unsafe_code)]
 pub fn saved_size(name: &str) -> Option<(f32, f32)> {
     #[cfg(target_os = "macos")]
     // SAFETY: `key` is NUL-terminated UTF-8; `NSUserDefaults` is thread-safe, `value` is checked

@@ -2,6 +2,8 @@
 //! `cargo run -p rune --example regen_dxbc` on Windows to rewrite all bytecode and hashes after
 //! the WGSL, the uber layout or wgpu changes.
 
+#![allow(unsafe_code)]
+
 use std::sync::{Mutex, OnceLock};
 
 /// HLSL wgpu-hal logged at debug level, with the thread that logged it.

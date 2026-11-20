@@ -17,6 +17,7 @@ const ABI_MATCHES: bool = super::variant::windfoil_abi_hash() == WINDFOIL_ABI_FN
 
 /// The Windfoil shader from the library for `device`'s backend and its pipeline, when the
 /// library matches Windfoil's WGSL and layout and the device takes it.
+#[allow(unsafe_code)]
 pub(super) fn load<T>(device: &wgpu::Device, make_pipeline: impl FnOnce(&super::dxbc::Shaders) -> T) -> Option<(wgpu::ShaderModule, T)> {
     #[cfg(feature = "metal-backend")]
     let native = crate::gpu::metal::raw_device(device).is_some();

@@ -95,6 +95,7 @@ pub(crate) fn wait_for_previous() {
 }
 
 #[cfg(target_os = "windows")]
+#[allow(unsafe_code)]
 fn wait(pid: u32) {
     use windows_sys::Win32::Foundation::CloseHandle;
     use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject};
@@ -112,6 +113,7 @@ fn wait(pid: u32) {
 /// terminated has its exit code at once, while its last threads and kernel objects can linger
 /// for seconds).
 #[cfg(target_os = "windows")]
+#[allow(unsafe_code)]
 pub(crate) fn alive(pid: u32) -> bool {
     use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE, WAIT_TIMEOUT};
     use windows_sys::Win32::System::Threading::{GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, WaitForSingleObject};
@@ -138,6 +140,7 @@ fn wait(pid: u32) {
 }
 
 #[cfg(all(unix, not(target_os = "linux")))]
+#[allow(unsafe_code)]
 fn alive(pid: u32) -> bool {
     // SAFETY: signal 0 only checks that the process exists.
     unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }

@@ -146,6 +146,7 @@ pub fn snapshot() -> Option<Snapshot> {
 /// Another process of this user (or this one), read through `proc_pid_rusage` and
 /// `proc_pidinfo`: no task port, so hardened apps can be read too.
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 pub fn snapshot_of(pid: i32) -> Option<Snapshot> {
     use std::mem::{MaybeUninit, size_of};
     let usage = rusage(pid)?;
@@ -219,6 +220,7 @@ pub fn usage() -> Usage {
 }
 
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 fn rusage(pid: i32) -> Option<libc::rusage_info_v4> {
     let mut usage = std::mem::MaybeUninit::<libc::rusage_info_v4>::zeroed();
     // SAFETY: a zeroed buffer of the size RUSAGE_INFO_V4 fills; read only on success.
@@ -234,6 +236,7 @@ fn rusage(pid: i32) -> Option<libc::rusage_info_v4> {
 /// returns a size with headroom; the second call returns what it filled. Either call
 /// returns 0 on failure, so 0 is `None`.
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 fn open_fds(pid: i32) -> Option<u32> {
     const PROC_PIDLISTFDS: i32 = 1;
     const FDINFO: usize = 8;
@@ -251,6 +254,7 @@ fn open_fds(pid: i32) -> Option<u32> {
 
 /// `rusage_info` times are mach ticks (nanoseconds on Intel, 125/3 ns on Apple silicon).
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 fn ticks_to_seconds() -> f64 {
     #[repr(C)]
     struct Timebase {

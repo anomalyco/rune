@@ -1,4 +1,7 @@
 //! CoreVideo ownership boundary. Decoder output must be complete and immutable before handoff.
+
+#![allow(unsafe_code)]
+
 use super::*;
 use objc2_core_foundation::{CFBoolean, CFDictionary, CFRetained, CFString, CFType};
 use objc2_core_video::*;

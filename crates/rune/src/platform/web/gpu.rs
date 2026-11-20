@@ -474,6 +474,7 @@ fn poll_until_done(device: wgpu::Device, flag: &Rc<Cell<bool>>, deadline: Instan
 /// one thread, from a promise.
 struct PageOnly<T>(T);
 // SAFETY: wasm32 without threads: there is one thread, and every callback runs on it.
+#[allow(unsafe_code)]
 unsafe impl<T> Send for PageOnly<T> {}
 
 /// How long the GPU's hand-over frame may take to finish before the page stays on the CPU.

@@ -131,6 +131,7 @@ fn web_css_names_the_png_at_2x_with_the_hot_spot_in_points() {
 /// its bitmap, and its hot spot is in points.
 #[cfg(target_os = "macos")]
 #[test]
+#[allow(unsafe_code)]
 fn a_macos_image_cursor_is_sized_in_points() {
     use objc2::rc::Retained;
     use objc2::runtime::AnyObject;

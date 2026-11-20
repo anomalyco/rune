@@ -4,6 +4,8 @@
 //! app's fonts lack goes to Windows' own fallback (`IDWriteFontFallback::MapCharacters`, what
 //! Edge and Notepad fall back with), which names the one font that covers it.
 
+#![allow(unsafe_code)]
+
 use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
 
