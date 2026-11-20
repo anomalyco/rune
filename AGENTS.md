@@ -19,6 +19,8 @@ A Rust GPU UI framework (wgpu, winit) for apps that feel like SwiftUI on iOS at 
 
 - `cargo test -p rune -p rune-mermaid -p rune-kit --features rune-kit/markdown,rune-kit/mermaid`
 - `cargo check --workspace --all-targets`
+- `bash scripts/check-local.sh` runs opt-in local checks (file sizes, folder shape, public-repo hygiene, `cargo check`, `cargo clippy --lib --bins`; supports `--wasm`, `--all`, `--tests`).
+- Cargo aliases in `.cargo/config.toml`: `cargo lint`, `cargo lint-all`, `cargo check-wasm`, `cargo check-webgl`, and `cargo test-fast`.
 - Tests that count GPU work or need wgpu's no-op backend are behind features so plain builds don't compile those backends: add `--features rune/test-gpu-counters,rune-gpu/test-gpu-counters` (and `rune/test-gpu-noop` on Linux) to run them. `rune-ref` and `rune-i18n` are not default members: test them with `-p`.
 - Tests run in debug. `--release` is incremental, for looking at an app. Benchmarks use `--profile perf`; the runtime bench scripts refuse other builds.
 - CI's macOS tests (`.github/workflows/macos-tests.yml`) run on a schedule and on `workflow_dispatch`, not per pull request or push: the owner's decision on 2026-11-12. Don't add those triggers back; run the workflow by hand when a change needs it.
