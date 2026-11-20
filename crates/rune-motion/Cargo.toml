@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 description = "Rune's animation runtime: analytic springs, retargetable tracks, presence, layout and matched-geometry animation, driven by a render thread."
 publish = false
+autotests = false
 
 [features]
 default = []
@@ -12,6 +13,12 @@ serde = ["dep:serde"]
 
 [dependencies]
 serde = { workspace = true, features = ["derive"], optional = true }
+
+[[test]]
+name = "integration"
+
+[[test]]
+name = "alloc"
 
 [lints]
 workspace = true

@@ -94,6 +94,7 @@ mod srgb_blend_runtime;
 mod stick_fit;
 mod stick_resize;
 mod sticky;
+mod sticky_paint;
 mod sticky_showing;
 mod text_case;
 mod theme_blend;

@@ -4,6 +4,7 @@ version = "0.0.1"
 edition.workspace = true
 license.workspace = true
 description = "Generic, themable components for Rune. Components read only semantic tokens (`Kit`); a theme crate supplies them."
+autotests = false
 
 [dependencies]
 rune = { workspace = true }
@@ -54,6 +55,12 @@ serde_json = { workspace = true }
 resvg = { workspace = true }
 # The fixture goldens render with the OpenCode theme's tokens and fonts (tests/mermaid/markdown_fixture.rs).
 rune-theme-opencode = { workspace = true }
+
+[[test]]
+name = "a11y"
+
+[[test]]
+name = "integration"
 
 [[test]]
 name = "markdown"
