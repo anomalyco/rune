@@ -738,7 +738,7 @@ impl RuntimeCore {
     }
 }
 
-#[path = "../virtual/selection.rs"]
+#[path = "../virtual_list/selection.rs"]
 pub(crate) mod virtual_selection;
 #[cfg(test)]
 #[path = "../virtual_selection_tests.rs"]

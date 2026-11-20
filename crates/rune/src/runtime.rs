@@ -94,21 +94,11 @@ mod system_settings;
 mod text_fill;
 mod turn;
 mod types;
+mod virtual_list;
 mod visible;
 mod web;
 mod window_requests;
 mod zoom;
-
-// `virtual` is a reserved keyword in Rust, so submodules under `runtime/virtual/` keep `#[path]`.
-#[path = "runtime/virtual/window.rs"]
-mod virtual_window;
-#[path = "runtime/virtual/fill.rs"]
-mod virtual_fill;
-#[path = "runtime/virtual/row_reorder.rs"]
-mod row_reorder;
-#[cfg(test)]
-#[path = "runtime/virtual/fill_resume_tests.rs"]
-mod fill_resume_tests;
 
 // `a11y/*` lives outside `runtime/` while sharing private `RuntimeCore` internals.
 #[path = "a11y/tree.rs"]
@@ -193,6 +183,8 @@ pub(crate) use selection::selectable;
 pub use selection::selectable::{SelectedText, SelectionChange, TextSelection};
 pub use selection::text_marks::TextMark;
 use selection::{caret, click as input_click, links, select_all, text_marks};
+
+use virtual_list::{fill as virtual_fill, row_reorder};
 
 pub(crate) use web::{a11y as web_a11y, export as web_export, page as web_page};
 #[cfg(any(test, target_arch = "wasm32"))]
