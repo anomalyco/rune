@@ -22,11 +22,13 @@ unsafe extern "C" fn cannot_move_window(_: &AnyObject, _: Sel) -> Bool {
 pub fn own_window_dragging(window: &Window) {
     let Some(view) = content_view(window) else { return };
     let Some(win) = view.window() else { return };
+    // SAFETY: `win` is a live `NSWindow` on the main thread; `isKindOfClass:` takes a `Class` and returns `BOOL`.
     let panel: Bool = unsafe { msg_send![&*win, isKindOfClass: NSPanel::class()] };
     let full_size = win.styleMask().contains(NSWindowStyleMask::FullSizeContentView);
     let borderless = !win.styleMask().contains(NSWindowStyleMask::Titled);
     let chrome = crate::Chrome { full_size_content: full_size, drag_regions: true, ..crate::Chrome::DEFAULT };
     if !super::uses_drag_regions(chrome, borderless, panel.as_bool()) { return; }
+    // SAFETY: `view` is a live winit content view on the main thread, as `scope_drag_regions` requires.
     unsafe { scope_drag_regions(&view) };
 }
 
@@ -69,6 +71,7 @@ impl FullScreenWatch {
         let flag = changed.clone();
         let block = block2::RcBlock::new(move |_: *mut AnyObject| {
             flag.set(true);
+            // SAFETY: notification observer runs on the main thread and `weak.load()` retains a live `NSView`.
             if let Some(view) = weak.load() { unsafe { view.setNeedsDisplay(true) }; }
         });
         let names = ["NSWindowDidEnterFullScreenNotification", "NSWindowDidExitFullScreenNotification"];
@@ -150,6 +153,7 @@ pub fn native_titlebar_band(window: &Window) -> f32 {
 }
 
 pub fn double_click_interval() -> f64 {
+    // SAFETY: `+[NSEvent doubleClickInterval]` is a read-only AppKit class method taking no pointers.
     unsafe { NSEvent::doubleClickInterval() }
 }
 

@@ -72,6 +72,7 @@ impl Backend for arboard::Clipboard {
     fn text(&mut self) -> Option<Zeroizing<String>> { self.get_text().ok().map(Zeroizing::new) }
     #[cfg(target_os = "macos")]
     fn content(&mut self, all: bool) -> Option<ClipboardContent> {
+        // SAFETY: `generalPasteboard` returns the live shared `NSPasteboard`, serialized on this worker.
         macos::read(&*unsafe { objc2_app_kit::NSPasteboard::generalPasteboard() }, all)
     }
     /// Text, HTML, and with `all` an image and files; RTF isn't read here. Windows and Linux
@@ -134,6 +135,7 @@ fn write(cb: &mut arboard::Clipboard, copy: &ClipboardWrite) -> Result<(), Strin
     let content = &copy.content;
     if copy.clear_after.is_none() && content.is_rich() {
         #[cfg(target_os = "macos")]
+        // SAFETY: `generalPasteboard` returns the live shared `NSPasteboard`, serialized on this worker.
         { return macos::write(&*unsafe { objc2_app_kit::NSPasteboard::generalPasteboard() }, content); }
         #[cfg(not(target_os = "macos"))]
         return write_one_form(cb, content);
@@ -175,8 +177,10 @@ fn write_text(cb: &mut arboard::Clipboard, copy: &ClipboardWrite) -> Result<(), 
 #[cfg(not(any(target_os = "ios", target_os = "android")))]
 fn revision() -> Option<u64> {
     #[cfg(target_os = "macos")]
+    // SAFETY: `generalPasteboard` returns the live shared `NSPasteboard` and `changeCount` reads its generation.
     { return Some(unsafe { objc2_app_kit::NSPasteboard::generalPasteboard().changeCount() } as u64); }
     #[cfg(target_os = "windows")]
+    // SAFETY: `GetClipboardSequenceNumber` takes no pointers and is safe to call from any thread.
     { return Some(unsafe { windows_sys::Win32::System::DataExchange::GetClipboardSequenceNumber() } as u64); }
     // Linux's portable clipboard API has no generation counter; compare the current text.
     #[allow(unreachable_code)]
@@ -192,6 +196,8 @@ fn windows_read_html() -> Option<String> {
     };
     use windows_sys::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
     const NAME: &[u16] = &[b'H' as u16, b'T' as u16, b'M' as u16, b'L' as u16, b' ' as u16, b'F' as u16, b'o' as u16, b'r' as u16, b'm' as u16, b'a' as u16, b't' as u16, 0];
+    // SAFETY: `NAME` is NUL-terminated; the clipboard is held open around `GetClipboardData` and
+    // closed before returning, and `ptr` is non-null and locked via `GlobalLock` for `size` bytes.
     unsafe {
         let format = RegisterClipboardFormatW(NAME.as_ptr());
         if format == 0 || IsClipboardFormatAvailable(format) == 0 { return None; }

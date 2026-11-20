@@ -102,6 +102,8 @@ impl Materials {
         if on && self.live_end.is_none()
             && let (Some(win), Some(metal)) = (crate::platform::macos::ns_window(window), metal_layer(surface))
         {
+            // SAFETY: `win` is a live retained `NSWindow` for this scope; casting its pointer to
+            // `AnyObject` reborrows the same Objective-C object on the main thread.
             let win = unsafe { &*objc2::rc::Retained::as_ptr(&win).cast::<AnyObject>() };
             self.live_end = watch_live_end(win, &metal, self.flag.clone());
         }

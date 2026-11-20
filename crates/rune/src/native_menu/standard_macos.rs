@@ -86,6 +86,7 @@ extern "C" fn action(this: *mut AnyObject, selector: Sel, _sender: *mut AnyObjec
     let Some(item) = standard::by_action(selector.name()) else { return };
     // SAFETY: AppKit sends menu actions on the main thread to a live WinitView.
     let view = unsafe { &*(this as *const NSView) };
+    // SAFETY: `view` is a live `WinitView` on the main thread, as `perform` requires.
     if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { perform(view, item) })).is_err() {
         eprintln!("rune: standard menu action panicked");
     }

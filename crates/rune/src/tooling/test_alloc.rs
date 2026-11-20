@@ -18,10 +18,19 @@ fn track(allocs: usize, bytes: isize) {
 }
 // SAFETY: forwards to the system allocator, counting calls and bytes on this thread.
 unsafe impl GlobalAlloc for Counting {
-    unsafe fn alloc(&self, l: Layout) -> *mut u8 { track(1, l.size() as isize); unsafe { System.alloc(l) } }
-    unsafe fn dealloc(&self, p: *mut u8, l: Layout) { track(0, -(l.size() as isize)); unsafe { System.dealloc(p, l) } }
+    unsafe fn alloc(&self, l: Layout) -> *mut u8 {
+        track(1, l.size() as isize);
+        // SAFETY: caller upholds `GlobalAlloc::alloc` preconditions (`l` has non-zero size).
+        unsafe { System.alloc(l) }
+    }
+    unsafe fn dealloc(&self, p: *mut u8, l: Layout) {
+        track(0, -(l.size() as isize));
+        // SAFETY: caller upholds `GlobalAlloc::dealloc` preconditions (`p` came from `alloc` with `l`).
+        unsafe { System.dealloc(p, l) }
+    }
     unsafe fn realloc(&self, p: *mut u8, l: Layout, n: usize) -> *mut u8 {
         track(1, n as isize - l.size() as isize);
+        // SAFETY: caller upholds `GlobalAlloc::realloc` preconditions (`p`/`l` live, `n` non-zero).
         unsafe { System.realloc(p, l, n) }
     }
 }
