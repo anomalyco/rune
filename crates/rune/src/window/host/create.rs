@@ -392,8 +392,12 @@ impl Host {
         // Unregister any swap-chain wait before dropping the surface, even if replacement fails.
         #[cfg(target_os = "windows")]
         { w.native.slot.reset(); w.native.damage.reset(); }
+        #[cfg(target_os = "windows")]
+        let proof_t0 = std::env::var_os("RUNE_PROOF_WINDOW_MIDFRAME").map(|_| std::time::Instant::now());
         drop(w.surface.take());
         self.gpu = None;
+        #[cfg(target_os = "windows")]
+        let proof_drop_us = proof_t0.map(|t| t.elapsed().as_micros());
         {
             let rt = self.app.rt_mut();
             rt.text.atlas.invalidate();
@@ -457,6 +461,16 @@ impl Host {
         }
         *self.gpu_pool.borrow_mut() = Arc::downgrade(&gpu);
         crate::render::surface_gpu(&gpu);
+        #[cfg(target_os = "windows")]
+        if let (Some(t0), Some(drop_us)) = (proof_t0, proof_drop_us) {
+            let info = gpu.adapter.get_info();
+            eprintln!("PROOF_REATTACH drop_us={drop_us} total_us={} adapter={:?}", t0.elapsed().as_micros(), info.name);
+            if info.device_type != wgpu::DeviceType::Cpu || !info.name.contains("Microsoft Basic Render Driver") {
+                eprintln!("PROOF_FAIL replacement adapter was not WARP: {:?}", info.name);
+                std::process::exit(4);
+            }
+            if let Some(w) = self.win.as_ref() { w.request_redraw(); }
+        }
         self.gpu = Some((gpu, renderer));
         Ok(())
     }

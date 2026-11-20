@@ -893,9 +893,40 @@ struct DrainInFlight {
     latest_tag: Vec<u32>,
 }
 
+/// PROOF ONLY counters (never merged).
+static PROOF_RECORD_COUNT: AtomicU64 = AtomicU64::new(0);
+static PROOF_WRAP_DONE_HITS: AtomicU64 = AtomicU64::new(0);
+static PROOF_WAIT_TIMEOUTS: AtomicU64 = AtomicU64::new(0);
+static PROOF_WAIT_STUCK_COUNT: AtomicU64 = AtomicU64::new(0);
+static PROOF_LAST_PRUNED_LEN: AtomicU64 = AtomicU64::new(0);
+
+pub fn proof_record_count() -> u64 {
+    PROOF_RECORD_COUNT.load(core::sync::atomic::Ordering::Relaxed)
+}
+
+pub fn proof_wrap_done_hits() -> u64 {
+    PROOF_WRAP_DONE_HITS.load(core::sync::atomic::Ordering::Relaxed)
+}
+
+pub fn proof_wait_timeouts() -> u64 {
+    PROOF_WAIT_TIMEOUTS.load(core::sync::atomic::Ordering::Relaxed)
+}
+
+pub fn proof_wait_stuck_count() -> u64 {
+    PROOF_WAIT_STUCK_COUNT.load(core::sync::atomic::Ordering::Relaxed)
+}
+
+pub fn proof_last_pruned_len() -> u64 {
+    PROOF_LAST_PRUNED_LEN.load(core::sync::atomic::Ordering::Relaxed)
+}
+
 impl DrainInFlight {
     fn is_done(&self, state: &DrainMarker, slot: u32, tag: u32) -> bool {
-        self.latest_tag[slot as usize] != tag || state.read(slot) == tag
+        if self.latest_tag[slot as usize] != tag {
+            PROOF_WRAP_DONE_HITS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+            return true;
+        }
+        state.read(slot) == tag
     }
 }
 
@@ -962,6 +993,7 @@ impl DrainTracker {
         let mode = Direct3D12::D3D12_WRITEBUFFERIMMEDIATE_MODE_MARKER_OUT;
         // SAFETY: `Dest` is 4-byte aligned in `state.resource` (`COPY_DEST`); `list2` is open.
         unsafe { list2.WriteBufferImmediate(1, &param, Some(&mode)) };
+        PROOF_RECORD_COUNT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         Some((slot, tag))
     }
 
@@ -987,6 +1019,10 @@ impl DrainTracker {
                 .pending
                 .retain(|&(slot, tag)| latest_tag[slot as usize] == tag && state.read(slot) != tag);
         }
+        PROOF_LAST_PRUNED_LEN.store(
+            in_flight.pending.len() as u64,
+            core::sync::atomic::Ordering::Relaxed,
+        );
         for cmd_buf in command_buffers {
             if let Some((slot, tag)) = cmd_buf.marker {
                 in_flight.latest_tag[slot as usize] = tag;
@@ -1015,6 +1051,7 @@ impl DrainTracker {
                 .pending
                 .retain(|&(slot, tag)| latest_tag[slot as usize] == tag && state.read(slot) != tag);
             if in_flight.pending.is_empty() {
+                PROOF_WAIT_STUCK_COUNT.store(0, core::sync::atomic::Ordering::Relaxed);
                 return;
             }
             mem::take(&mut in_flight.pending)
@@ -1025,6 +1062,7 @@ impl DrainTracker {
             let before = pending.len();
             pending.retain(|&(slot, tag)| state.read(slot) != tag);
             if pending.is_empty() {
+                PROOF_WAIT_STUCK_COUNT.store(0, core::sync::atomic::Ordering::Relaxed);
                 return;
             }
             let now = std::time::Instant::now();
@@ -1034,6 +1072,11 @@ impl DrainTracker {
             if now.duration_since(last_progress) >= DRAIN_STALL_TIMEOUT
                 || now.duration_since(started) >= DRAIN_TOTAL_TIMEOUT
             {
+                PROOF_WAIT_TIMEOUTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                PROOF_WAIT_STUCK_COUNT.store(
+                    pending.len() as u64,
+                    core::sync::atomic::Ordering::Relaxed,
+                );
                 return;
             }
             std::thread::sleep(core::time::Duration::from_millis(1));
