@@ -134,6 +134,22 @@ impl DynLib {
         unsafe { libloading::Library::new(filename) }.map(|inner| Self { inner })
     }
 
+    // Rune: load Windows system DLLs from System32 only, not the app directory or CWD.
+    unsafe fn new_system<P>(filename: P) -> Result<Self, libloading::Error>
+    where
+        P: AsRef<std::ffi::OsStr>,
+    {
+        unsafe {
+            libloading::os::windows::Library::load_with_flags(
+                filename,
+                libloading::os::windows::LOAD_LIBRARY_SEARCH_SYSTEM32,
+            )
+        }
+        .map(|inner| Self {
+            inner: inner.into(),
+        })
+    }
+
     unsafe fn get<T>(
         &self,
         symbol: &[u8],
@@ -164,7 +180,7 @@ pub enum CreateDeviceError {
 
 impl D3D12Lib {
     fn new() -> Result<Self, libloading::Error> {
-        unsafe { DynLib::new("d3d12.dll").map(|lib| Self { lib }) }
+        unsafe { DynLib::new_system("d3d12.dll").map(|lib| Self { lib }) }
     }
 
     fn create_device(
@@ -328,7 +344,7 @@ pub(super) struct DxgiLib {
 
 impl DxgiLib {
     pub fn new() -> Result<Self, libloading::Error> {
-        unsafe { DynLib::new("dxgi.dll").map(|lib| Self { lib }) }
+        unsafe { DynLib::new_system("dxgi.dll").map(|lib| Self { lib }) }
     }
 
     /// Will error with crate::DeviceError::Unexpected if DXGI 1.3 is not available.

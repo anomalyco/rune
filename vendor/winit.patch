@@ -564,3 +564,54 @@ index 1ef7a06..9cd83c4 100644
      }
  
      /// Try to resize the window when the user can do so.
+diff --git a/src/platform_impl/windows/dark_mode.rs b/src/platform_impl/windows/dark_mode.rs
+index 366e44c6..67c4fc53 100644
+--- a/src/platform_impl/windows/dark_mode.rs
++++ b/src/platform_impl/windows/dark_mode.rs
+@@ -5,7 +5,9 @@ use std::{ffi::c_void, ptr};
+ use crate::utils::Lazy;
+ use windows_sys::core::PCSTR;
+ use windows_sys::Win32::Foundation::{BOOL, HWND, NTSTATUS, S_OK};
+-use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryA};
++use windows_sys::Win32::System::LibraryLoader::{
++    GetProcAddress, LoadLibraryExA, LOAD_LIBRARY_SEARCH_SYSTEM32,
++};
+ use windows_sys::Win32::System::SystemInformation::OSVERSIONINFOW;
+ use windows_sys::Win32::UI::Accessibility::{HCF_HIGHCONTRASTON, HIGHCONTRASTA};
+ use windows_sys::Win32::UI::Controls::SetWindowTheme;
+@@ -138,7 +140,9 @@ fn should_apps_use_dark_mode() -> bool {
+             return None;
+         }
+ 
+-        let module = LoadLibraryA("uxtheme.dll\0".as_ptr().cast());
++        // Rune: load uxtheme.dll from System32 only, not the app directory or CWD.
++        let module =
++            LoadLibraryExA("uxtheme.dll\0".as_ptr().cast(), 0, LOAD_LIBRARY_SEARCH_SYSTEM32);
+ 
+         if module == 0 {
+             return None;
+diff --git a/src/platform_impl/windows/util.rs b/src/platform_impl/windows/util.rs
+index a3a7705d..c3980673 100644
+--- a/src/platform_impl/windows/util.rs
++++ b/src/platform_impl/windows/util.rs
+@@ -9,7 +9,9 @@ use crate::utils::Lazy;
+ use windows_sys::core::{HRESULT, PCWSTR};
+ use windows_sys::Win32::Foundation::{BOOL, HANDLE, HMODULE, HWND, POINT, RECT};
+ use windows_sys::Win32::Graphics::Gdi::{ClientToScreen, HMONITOR};
+-use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryA};
++use windows_sys::Win32::System::LibraryLoader::{
++    GetProcAddress, LoadLibraryExA, LOAD_LIBRARY_SEARCH_SYSTEM32,
++};
+ use windows_sys::Win32::System::SystemServices::IMAGE_DOS_HEADER;
+ use windows_sys::Win32::UI::HiDpi::{
+     DPI_AWARENESS_CONTEXT, MONITOR_DPI_TYPE, PROCESS_DPI_AWARENESS,
+@@ -195,7 +197,8 @@ pub(super) fn get_function_impl(library: &str, function: &str) -> Option<*const
+     assert_eq!(function.chars().last(), Some('\0'));
+ 
+     // Library names we will use are ASCII so we can use the A version to avoid string conversion.
+-    let module = unsafe { LoadLibraryA(library.as_ptr()) };
++    // Rune: load Windows system DLLs from System32 only, not the app directory or CWD.
++    let module = unsafe { LoadLibraryExA(library.as_ptr(), 0, LOAD_LIBRARY_SEARCH_SYSTEM32) };
+     if module == 0 {
+         return None;
+     }
