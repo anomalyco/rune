@@ -1,5 +1,7 @@
 //! Metal layer presentation and drawable visibility.
 
+#![allow(unsafe_code)]
+
 use objc2::msg_send;
 use objc2_app_kit::NSWindow;
 use super::ns_window;

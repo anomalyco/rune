@@ -134,6 +134,7 @@ impl Host {
             rt.set_native_help(true);
         }
         #[cfg(windows)]
+        #[allow(unsafe_code)]
         {
             // SAFETY: `GetDoubleClickTime` takes no arguments and reads the system setting.
             let ms = unsafe { windows_sys::Win32::UI::Input::KeyboardAndMouse::GetDoubleClickTime() };
@@ -376,6 +377,7 @@ impl Host {
     /// for presentation"). The same goes for a surface whose configuration a driver refused.
     /// The next frame draws with what this makes; `replace_lost_surface` gives the window up if
     /// this keeps failing.
+    #[allow(unsafe_code)]
     pub(in crate::window) fn reattach(&mut self) -> Result<(), String> {
         let Some(w) = self.win.as_mut() else { return Err("there is no window to draw into".into()) };
         let window = w.window.clone();
@@ -465,6 +467,7 @@ impl Host {
     /// a lost device. Premultiplied costs DWM a blend of every region the UI presents, so it lasts
     /// only while a layer shows. Ok(false) when there's nothing to do.
     #[cfg(target_os = "windows")]
+    #[allow(unsafe_code)]
     pub(in crate::window) fn rebind_alpha(&mut self, premultiplied: bool) -> Result<bool, String> {
         let Some((gpu, _)) = self.gpu.as_ref() else { return Ok(false) };
         let Some(w) = self.win.as_mut() else { return Ok(false) };

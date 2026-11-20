@@ -105,6 +105,7 @@ fn bundle_id() -> String {
 }
 
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 fn main_bundle_id() -> Option<String> {
     use objc2_foundation::NSString;
     use objc2::{class, msg_send, rc::Retained, runtime::AnyObject};
@@ -117,6 +118,7 @@ fn main_bundle_id() -> Option<String> {
 }
 
 /// Removes the file when the process exits through `exit`, as AppKit's Quit does.
+#[allow(unsafe_code)]
 fn on_exit() {
     #[cfg(unix)]
     {

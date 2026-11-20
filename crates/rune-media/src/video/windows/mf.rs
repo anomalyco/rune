@@ -3,6 +3,8 @@
 //! Windows N editions without the Media Feature Pack have no `mfplat.dll`: every clip then
 //! fails with a message saying so, and nothing else changes.
 
+#![allow(unsafe_code)]
+
 use super::super::{Kind, MediaSource};
 use crate::native_surface::{ByteFrame, ColorInfo, Format, Matrix, Orient, Transfer};
 use std::sync::OnceLock;

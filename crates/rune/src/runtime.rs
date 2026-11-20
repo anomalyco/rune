@@ -414,6 +414,7 @@ impl<S: 'static> Runtime<S> {
     }
 
     #[inline(always)]
+    #[allow(unsafe_code)]
     pub(crate) fn core(&self) -> &RuntimeCore {
         assert_prefix_layout::<S>();
         // SAFETY: `Runtime<S>` and `RuntimeCore` are `#[repr(C)]` with an identical field prefix
@@ -430,6 +431,7 @@ impl<S: 'static> Runtime<S> {
     /// (`std::mem::swap`, `std::mem::replace`, `*core = ...`), which would pair this
     /// `Runtime<S>`'s tail fields with another runtime's core.
     #[inline(always)]
+    #[allow(unsafe_code)]
     pub(crate) fn core_mut(&mut self) -> &mut RuntimeCore {
         assert_prefix_layout::<S>();
         // SAFETY: `Runtime<S>` and `RuntimeCore` are `#[repr(C)]` with an identical field prefix
@@ -441,6 +443,7 @@ impl<S: 'static> Runtime<S> {
     }
 
     #[inline(always)]
+    #[allow(unsafe_code)]
     pub(crate) fn split(&self) -> (&RuntimeCore, AppRef<'_, S>) {
         assert_prefix_layout::<S>();
         let ptr = std::ptr::from_ref(self);
@@ -464,6 +467,7 @@ impl<S: 'static> Runtime<S> {
     /// As with [`Self::core_mut`], mutate fields on the returned `&mut RuntimeCore` rather than
     /// replacing the whole value.
     #[inline(always)]
+    #[allow(unsafe_code)]
     pub(crate) fn split_mut(&mut self) -> (&mut RuntimeCore, AppRefMut<'_, S>) {
         assert_prefix_layout::<S>();
         let ptr = std::ptr::from_mut(self);

@@ -20,6 +20,7 @@ mod standard;
 fn main() {}
 
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 fn main() {
     use objc2::{MainThreadMarker, sel, rc::Retained};
     use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy, NSEventModifierFlags as Flags, NSMenu, NSMenuItem};

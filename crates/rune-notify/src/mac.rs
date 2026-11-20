@@ -5,6 +5,8 @@
 //! press comes back as the click, with the action and the words typed, without the app coming
 //! forward (the actions don't ask for the foreground).
 
+#![allow(unsafe_code)]
+
 use super::{Action, Click, Notification};
 use block2::{Block, RcBlock};
 use objc2::rc::Retained;

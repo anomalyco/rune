@@ -9,6 +9,9 @@
 //! The gate is read once per process, so compare runs with it off and on, alternated. Prints
 //! `METRIC scenario=.. metric=.. median=.. p95=..` over samples: `p50_ms` and `mean_ms`
 //! (wall time per frame, input included) and `allocations` per frame.
+
+#![allow(unsafe_code)]
+
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 

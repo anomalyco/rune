@@ -1,6 +1,8 @@
 //! A Metal surface whose window reports itself covered, with no window server needed: the layer's
 //! delegate stands in for the backing view, and is its own window.
 
+#![allow(unsafe_code)]
+
 use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
 use std::time::Duration;
 

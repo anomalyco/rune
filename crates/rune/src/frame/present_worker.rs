@@ -108,6 +108,7 @@ impl Drop for PresentWorker {
 
 /// Presents keep pace with the display only at the main thread's priority.
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 fn interactive() {
     const QOS_CLASS_USER_INTERACTIVE: u32 = 0x21;
     unsafe extern "C" {

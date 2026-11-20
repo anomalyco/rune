@@ -149,6 +149,7 @@ fn by_pci(pci: &str, adapters: &[(wgpu::AdapterInfo, bool)]) -> Option<usize> {
 /// adapter to describe it, the discrete GPU and WARP included: 1,050,000–1,110,000 µs on a
 /// two-GPU laptop, waking a discrete GPU the window never uses.
 #[cfg(target_os = "windows")]
+#[allow(unsafe_code)]
 mod dxgi {
     use super::{Pick, Reason};
     use windows::Win32::Graphics::Dxgi::{
@@ -273,6 +274,7 @@ pub fn find_display_vendor_soon() {
 /// The PCI vendor and device IDs of the GPUs driving a display on the desktop, the primary
 /// display's first.
 #[cfg(target_os = "windows")]
+#[allow(unsafe_code)]
 fn display_devices() -> Vec<(u32, u32)> {
     use windows_sys::Win32::Graphics::Gdi::{DISPLAY_DEVICE_ATTACHED_TO_DESKTOP, DISPLAY_DEVICE_PRIMARY_DEVICE, DISPLAY_DEVICEW, EnumDisplayDevicesW};
     let mut found = Vec::new();

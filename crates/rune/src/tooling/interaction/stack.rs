@@ -7,6 +7,7 @@
 //! Apple Silicon Macs only (their ABI keeps frame pointers in every frame); elsewhere a
 //! [`Target`] is never made and the watchdog doesn't start.
 #![cfg_attr(not(all(target_os = "macos", target_arch = "aarch64")), allow(dead_code))]
+#![allow(unsafe_code)]
 
 use std::sync::Arc;
 

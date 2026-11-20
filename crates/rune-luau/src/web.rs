@@ -12,6 +12,8 @@
 //! module in a call to them (its "command" mode), running them again on each call into the wasm;
 //! referencing them here makes it link them once, and [`init`] runs them before the first VM.
 
+#![allow(unsafe_code)]
+
 unsafe extern "C" {
     fn __wasm_call_ctors();
 }

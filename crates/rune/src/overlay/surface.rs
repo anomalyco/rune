@@ -148,6 +148,7 @@ impl Surface {
 
 impl OverlayCore {
     /// Creates the wgpu surface (and the GPU device, if this is the first surface).
+    #[allow(unsafe_code)]
     pub(super) fn attach(&mut self, app: &mut dyn OverlayApp, backing: Backing, scale: f32) -> Option<Live> {
         // First, before the surface binds the view (macOS may observe it).
         let a11y = self.shared.wake.lock().unwrap().clone().and_then(|wake| match &backing {

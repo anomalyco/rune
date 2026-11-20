@@ -12,6 +12,8 @@
 //! (`harness\perf\memory` in the workspace that measures OpenCode). Windows only; elsewhere the
 //! feature records nothing.
 
+#![allow(unsafe_code)]
+
 use std::cell::{Cell, UnsafeCell};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering::{Acquire, Relaxed, Release}};
 

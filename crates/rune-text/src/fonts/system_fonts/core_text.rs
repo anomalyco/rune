@@ -4,6 +4,8 @@
 //! what Safari and AppKit fall back with), which names the font that covers it; a family's
 //! files come from CoreText's descriptors for the family name.
 
+#![allow(unsafe_code)]
+
 use std::path::PathBuf;
 
 use objc2_core_foundation::{CFDictionary, CFRange, CFRetained, CFString, CFType, CFURL, CFURLPathStyle};

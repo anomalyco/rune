@@ -392,6 +392,7 @@ impl Renderer {
     /// frame should wait for. The general shader draws every kind until they arrive (`take_pinned`), the same picture.
     /// Anywhere else, or when the bytecode doesn't match, none: every kind draws with the one shader, as before.
     /// Never from WGSL, which takes FXC tens of seconds each.
+    #[allow(unsafe_code)]
     pub(super) fn start_pinned(&mut self, device: &wgpu::Device) {
         self.pinned = None;
         self.pinned_building = None;

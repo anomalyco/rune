@@ -1,3 +1,5 @@
+#![allow(unsafe_code)]
+
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
 use windows_sys::Win32::System::Threading::CreateEventW;
 

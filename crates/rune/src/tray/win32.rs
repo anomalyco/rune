@@ -1,6 +1,9 @@
 //! `Shell_NotifyIcon` on a message-only window that owns its thread and message loop. A left
 //! click activates; a right click opens a `TrackPopupMenu` menu. The icon comes back when
 //! Explorer restarts (`TaskbarCreated`).
+
+#![allow(unsafe_code)]
+
 use super::{Handler, TrayError, TrayEvent, TrayItem, TraySpec};
 use std::{ptr, sync::{Arc, Mutex, mpsc}, thread::JoinHandle};
 use windows_sys::Win32::{Foundation::*, System::LibraryLoader::GetModuleHandleW, UI::{Shell::*, WindowsAndMessaging::*}};

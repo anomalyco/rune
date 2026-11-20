@@ -17,6 +17,7 @@ fn items(enabled: bool, checked: bool) -> Vec<MenuItem<State>> {
         MenuItem::new("Dock Quick Panel", fired).id("dock").dock()]
 }
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 fn native_status() {
     use objc2::{MainThreadMarker, msg_send, sel};
     use objc2_app_kit::{NSApplication, NSMenu};

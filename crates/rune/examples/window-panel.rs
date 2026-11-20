@@ -27,6 +27,7 @@ fn app(name: &'static str) -> App<State> {
 }
 
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 fn inspect(s: &State) -> serde_json::Value {
     use objc2::{class, msg_send, runtime::AnyObject};
     use winit::raw_window_handle::RawWindowHandle;

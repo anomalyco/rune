@@ -279,6 +279,7 @@ impl std::fmt::Display for Summary {
 pub(crate) const SETTLE: Duration = Duration::from_millis(150);
 
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 pub(crate) mod metal {
     //! Present times from a CAMetalLayer. wgpu acquires and presents the drawable itself and
     //! exposes neither, so the traced window's layer becomes an instance of a subclass of its

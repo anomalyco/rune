@@ -4,6 +4,8 @@
 //! free one on the GPU, the copy signals a fence, and Rune's D3D12 device samples the texture in
 //! place (`native_surface::windows::DecodedPlanes`). Pictures never pass through the CPU.
 
+#![allow(unsafe_code)]
+
 use super::mf::{self, Picture};
 use crate::native_surface::windows::{DecodedPlanes, VideoFences, device_generation, presenting_device};
 use std::sync::{Arc, Mutex};

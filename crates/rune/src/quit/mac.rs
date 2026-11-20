@@ -5,6 +5,8 @@
 //! winit ends the loop and `Windows::exiting` runs every window's `App::on_quit`, then its
 //! `on_close`.
 
+#![allow(unsafe_code)]
+
 use std::cell::Cell;
 use std::ffi::{c_char, c_void};
 

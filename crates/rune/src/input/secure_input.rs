@@ -1,4 +1,7 @@
 //! One balanced native secure-input claim per focused, visible password window.
+
+#![allow(unsafe_code)]
+
 #[derive(Default)]
 pub(crate) struct SecureInput(bool);
 

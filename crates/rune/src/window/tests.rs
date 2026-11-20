@@ -565,6 +565,7 @@ fn noop_instance() -> wgpu::Instance {
 
 /// A GPU on wgpu's noop backend: its device takes anything and refuses every surface.
 #[cfg(all(target_os = "linux", feature = "test-gpu-noop"))]
+#[allow(unsafe_code)]
 fn noop_gpu(instance: &wgpu::Instance) -> (Gpu, wgpu::Surface<'static>) {
     use std::num::NonZeroU32;
     use std::ptr::NonNull;

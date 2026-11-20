@@ -1,3 +1,5 @@
+#![allow(unsafe_code)]
+
 use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
 
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};

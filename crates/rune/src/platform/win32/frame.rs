@@ -24,6 +24,8 @@
 //! (`WM_GETDPISCALEDSIZE`, which Windows' `WM_DPICHANGED` rect then follows) and
 //! `request_inner_size` are corrected here to the frame's borders.
 
+#![allow(unsafe_code)]
+
 use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::OnceLock;

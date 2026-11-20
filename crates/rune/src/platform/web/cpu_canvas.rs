@@ -135,6 +135,7 @@ impl CpuCanvas {
 }
 
 /// `bgra`'s pixels as R, G, B, A, into `out` (as long).
+#[allow(unsafe_code)]
 fn rgba(bgra: &[u8], out: &mut [u8]) {
     let swap = |v: u32| (v & 0xff00_ff00) | ((v >> 16) & 0xff) | ((v & 0xff) << 16);
     // Whole pixels as words where both sides line up (they do: rows start on whole pixels of

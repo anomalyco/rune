@@ -1,6 +1,8 @@
 //! A COM object that owns a font's bytes, so DirectWrite reads them in place: an in-memory
 //! font file reference holds it, and the last release drops the bytes.
 
+#![allow(unsafe_code)]
+
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicU32, Ordering};
 

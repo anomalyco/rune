@@ -6,6 +6,8 @@
 //! string's bytes) and calls `rune::memo::memo_with_hash`. On a hit Rune hands back the subtree
 //! it built before, and `build` is never called.
 
+#![allow(unsafe_code)]
+
 use std::hash::{Hash, Hasher};
 use std::os::raw::c_int;
 

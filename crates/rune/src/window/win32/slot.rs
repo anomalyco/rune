@@ -8,6 +8,8 @@
 //! meanwhile, and the frame is built from all of it. Nothing waits, and no thread runs, while the
 //! surface draws nothing.
 
+#![allow(unsafe_code)]
+
 use std::ffi::c_void;
 
 use windows_sys::Win32::Foundation::{CloseHandle, DUPLICATE_SAME_ACCESS, DuplicateHandle, HANDLE, INVALID_HANDLE_VALUE, WAIT_OBJECT_0};

@@ -1,5 +1,8 @@
 //! Main-thread AppKit adapter. Adds one optional selector to winit's existing delegate;
 //! never replaces the delegate or any existing method. The hook returns nil after teardown.
+
+#![allow(unsafe_code)]
+
 use super::{Description, Location, MenuError};
 use std::{cell::{Cell, RefCell}, ffi::{c_char, c_void}, sync::Arc};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel, rc::Retained,

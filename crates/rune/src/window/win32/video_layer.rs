@@ -267,6 +267,7 @@ impl VideoLayers {
 
 /// Puts the clip's visual at `at`, made from the layer's surface handle the first time, and waits
 /// for DWM to take it, so the frame that punches lands over it.
+#[allow(unsafe_code)]
 fn show(handover: Option<&Handover>, entry: &mut Entry, handle: Option<usize>, at: (i32, i32)) -> Result<(), String> {
     let handover = handover.ok_or("the window isn't on DirectComposition")?;
     let handle = handle.ok_or("the layer has no surface yet")?;

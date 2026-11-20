@@ -4,6 +4,8 @@
 //! first frame (`wtsapi32.dll` loads then, not with the process); the system posts
 //! `WM_WTSSESSION_CHANGE` only when the session changes, so it costs nothing while idle.
 
+#![allow(unsafe_code)]
+
 use windows_sys::Win32::Foundation::HWND;
 use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW};
 use windows_sys::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};

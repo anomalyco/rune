@@ -3,6 +3,9 @@
 //! swallowing the keys. AppKit consumes a
 //! key equivalent whose item is disabled (no responder implements its action), so without
 //! these methods ⌘C would never reach Rune's own text editing. Main thread only.
+
+#![allow(unsafe_code)]
+
 use super::{default_macos, standard::{self, KeyDown, Standard, ITEMS}};
 use crate::runtime::Unhandled;
 use std::{cell::Cell, ffi::{c_char, c_void}, sync::Arc};

@@ -325,6 +325,7 @@ pub(crate) struct Watch {
 }
 
 impl Watch {
+    #[allow(unsafe_code)]
     pub(crate) fn spawn(fd: RawFd, wake: Waker) -> Watch {
         let stop = Arc::new(AtomicBool::new(false));
         let turns = Arc::new((Mutex::new(0u64), Condvar::new()));
@@ -383,6 +384,7 @@ pub(crate) struct LayerSurface {
 
 impl LayerSurface {
     /// None when the display isn't Wayland or the compositor lacks layer-shell.
+    #[allow(unsafe_code)]
     pub fn new(display: RawDisplayHandle, namespace: &str, at: Placement, interactive: bool, options: &OverlayOptions, output_id: Option<u32>, wake: Option<Waker>) -> Option<LayerSurface> {
         let RawDisplayHandle::Wayland(display) = display else { return None };
         // SAFETY: winit owns this `wl_display` for the life of the event loop, which outlives

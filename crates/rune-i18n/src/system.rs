@@ -25,6 +25,7 @@ pub fn posix_languages(var: impl Fn(&str) -> Option<String>) -> Vec<String> {
 }
 
 #[cfg(target_os = "windows")]
+#[allow(unsafe_code)]
 fn platform() -> Vec<String> {
     use windows::Win32::Globalization::{GetUserPreferredUILanguages, MUI_LANGUAGE_NAME};
     use windows::core::PWSTR;

@@ -6,6 +6,8 @@
 //! 1.5 refresh periods) and percentiles, and it samples the process's CPU time and memory from
 //! procwatch.
 
+#![allow(unsafe_code)]
+
 use std::time::Instant;
 
 #[derive(Clone, Copy, Debug)]

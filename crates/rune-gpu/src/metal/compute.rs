@@ -2,6 +2,8 @@
 //! against the pipeline bound then, and the sizes buffer and immediates travel as inline bytes.
 //! A pass's timestamp writes sample at its start and end.
 
+#![allow(unsafe_code)]
+
 use std::ptr::NonNull;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;

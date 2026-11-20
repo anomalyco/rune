@@ -6,6 +6,7 @@ pub(crate) mod smoothing;
 /// (its own domain or the global one), as AppKit, SwiftUI and GPUI read it. A string counts as
 /// its number, as `NSUserDefaults` reads one.
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 pub(super) fn smoothing_allowed_by_user() -> bool {
     use objc2_core_foundation::{CFNumber, CFPreferencesCopyAppValue, CFString, kCFPreferencesCurrentApplication};
     // SAFETY: A constant CoreFoundation exports, valid for the life of the process.

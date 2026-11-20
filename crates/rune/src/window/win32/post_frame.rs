@@ -5,6 +5,8 @@
 //! thread for 30-50 ms, so a click or key that came as the first frame showed waited behind all of
 //! them. Between pieces winit takes what's in the queue, and the frame it asks for comes first.
 
+#![allow(unsafe_code)]
+
 use crate::window::host::Host;
 
 /// The window's own pieces still owed: the app's `on_ready`, then the window's hooks, then none.

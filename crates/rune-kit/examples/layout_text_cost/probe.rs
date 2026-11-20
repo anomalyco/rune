@@ -6,6 +6,9 @@
 //!
 //! Stack capture needs frame pointers and Mach thread calls: macOS on Apple silicon only.
 //! Elsewhere the probes count allocations and record nothing.
+
+#![allow(unsafe_code)]
+
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::{Cell, UnsafeCell};
 use std::collections::HashMap;

@@ -14,6 +14,7 @@ mod macos_support;
 fn main() { mac::main() }
 
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 mod mac {
     use std::process::Command;
     use std::sync::Mutex;

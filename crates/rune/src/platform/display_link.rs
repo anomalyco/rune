@@ -6,6 +6,7 @@
 //! NSScreen all still report 120 Hz. Submitting on every tick then fills the drawable queue
 //! with a few fast frames before backpressure settles it at 60 Hz, so pace at the cap instead.
 #![allow(deprecated)] // CVDisplayLink supports the same macOS versions as winit.
+#![allow(unsafe_code)]
 
 use std::ffi::c_void;
 use std::ptr::NonNull;

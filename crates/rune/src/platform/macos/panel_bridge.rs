@@ -7,6 +7,8 @@
 //! exact class. A subclass of it makes `-class` return nil. Objects Rune hasn't bridged, and
 //! calls off the main thread, fall through to AppKit.
 
+#![allow(unsafe_code)]
+
 use std::{cell::RefCell, collections::{HashMap, HashSet}, ffi::{c_char, c_void}, sync::{Mutex, OnceLock, atomic::{AtomicUsize, Ordering}}};
 use objc2::{msg_send, sel, runtime::{AnyClass, AnyObject, Bool, Sel}};
 use objc2_app_kit::{NSPanel, NSView, NSWindow};

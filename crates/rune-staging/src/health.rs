@@ -6,6 +6,7 @@
 /// pending, never finished (`vendor/wgpu-hal`, `Device::reached`), and wgpu hears of the
 /// removal only at the device's next submission. False on other backends, whose loss reaches
 /// wgpu's lost callback.
+#[allow(unsafe_code)]
 pub fn removed(device: &wgpu::Device) -> bool {
     #[cfg(target_os = "windows")]
     {

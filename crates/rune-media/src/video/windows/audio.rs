@@ -4,6 +4,8 @@
 //! heard, padding with silence or skipping ahead when the clock moved (a start, a seek, a stall,
 //! the device's own drift), so picture and sound stay together without either waiting.
 
+#![allow(unsafe_code)]
+
 use super::machine::Anchor;
 use super::mf::Sound;
 use std::collections::VecDeque;

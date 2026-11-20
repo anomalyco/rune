@@ -1,6 +1,9 @@
 //! The winit 0.30 app menu for an accessory app becoming a regular app, and the standard
 //! Edit and Window items. Creating a custom Rune menu uses the same root, so either
 //! installation order composes.
+
+#![allow(unsafe_code)]
+
 use std::{cell::RefCell, collections::HashSet};
 use super::standard::Equivalent;
 use crate::Label;

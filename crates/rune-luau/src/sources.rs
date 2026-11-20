@@ -57,6 +57,7 @@ impl Sources {
     /// # Safety
     /// `code` must be trusted output of this build's Luau compiler. Never pass downloaded bytes
     /// or files from a plugin directory: the VM expects compiler output, not untrusted bytecode.
+    #[allow(unsafe_code)]
     pub unsafe fn with_embedded(mut self, path: &str, code: &'static [u8], native: bool) -> Self {
         self.files.insert(normalize(path), Input::Embedded { code, native });
         self

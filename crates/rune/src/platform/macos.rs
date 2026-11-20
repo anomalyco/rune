@@ -35,51 +35,62 @@ use pointer::MouseMonitors;
 use presence::Presence;
 use surface::occlusion_hidden;
 
-struct PanelFlags { keys: bool, presence: Rc<Cell<Presence>>, constrain: bool }
+#[allow(unsafe_code)]
+mod overlay_panel {
+    use super::*;
 
-// Initialized nonactivating panel. No application activation call.
-define_class!(
-    #[unsafe(super(NSPanel, NSWindow, NSResponder, NSObject))]
-    #[name = "RuneOverlayPanel"]
-    #[ivars = PanelFlags]
-    struct OverlayPanel;
+    pub(super) struct PanelFlags {
+        pub(super) keys: bool,
+        pub(super) presence: Rc<Cell<Presence>>,
+        pub(super) constrain: bool,
+    }
 
-    impl OverlayPanel {
-        #[unsafe(method(canBecomeKeyWindow))]
-        fn can_become_key(&self) -> bool { self.ivars().keys }
-        #[unsafe(method(canBecomeMainWindow))]
-        fn can_become_main(&self) -> bool { false }
-        #[unsafe(method(occlusionState))]
-        fn occlusion_state(&self) -> usize {
-            // wgpu skips nextDrawable for occluded windows. Permit only the explicit
-            // alpha-zero prewarm acquisition and a fade in or out, which AppKit reports as
-            // occluded while its alpha is near zero; other visibility readbacks stay native.
-            if self.ivars().presence.get().draws_occluded() {
-                2
-            } else {
-                // SAFETY: `OverlayPanel` inherits from `NSPanel` (`MainThreadOnly`), whose `occlusionState` returns `NSWindowOcclusionState` (`usize`).
-                unsafe { msg_send![super(self), occlusionState] }
+    // Initialized nonactivating panel. No application activation call.
+    define_class!(
+        #[unsafe(super(NSPanel, NSWindow, NSResponder, NSObject))]
+        #[name = "RuneOverlayPanel"]
+        #[ivars = PanelFlags]
+        pub(super) struct OverlayPanel;
+
+        impl OverlayPanel {
+            #[unsafe(method(canBecomeKeyWindow))]
+            fn can_become_key(&self) -> bool { self.ivars().keys }
+            #[unsafe(method(canBecomeMainWindow))]
+            fn can_become_main(&self) -> bool { false }
+            #[unsafe(method(occlusionState))]
+            fn occlusion_state(&self) -> usize {
+                // wgpu skips nextDrawable for occluded windows. Permit only the explicit
+                // alpha-zero prewarm acquisition and a fade in or out, which AppKit reports as
+                // occluded while its alpha is near zero; other visibility readbacks stay native.
+                if self.ivars().presence.get().draws_occluded() {
+                    2
+                } else {
+                    // SAFETY: `OverlayPanel` inherits from `NSPanel` (`MainThreadOnly`), whose `occlusionState` returns `NSWindowOcclusionState` (`usize`).
+                    unsafe { msg_send![super(self), occlusionState] }
+                }
+            }
+            // AppKit keeps windows below the menu bar's level out from under it; an overlay goes
+            // exactly where it's placed at any level.
+            #[unsafe(method(constrainFrameRect:toScreen:))]
+            fn constrain_frame_rect(&self, frame: NSRect, screen: *mut NSScreen) -> NSRect {
+                // SAFETY: `OverlayPanel` inherits from `NSPanel` (`MainThreadOnly`); `frame` and `screen` match `constrainFrameRect:toScreen:`.
+                if self.ivars().constrain { unsafe { msg_send![super(self), constrainFrameRect: frame, toScreen: screen] } }
+                else { frame }
+            }
+            #[unsafe(method(sendEvent:))]
+            fn send_event(&self, event: &NSEvent) {
+                // Without its view the panel would swallow this click and every later one.
+                if crate::platform::macos::panel_bridge::reattach(self.as_super()) { eprintln!("rune: panel lost its view; reattached on input"); }
+                // SAFETY: `OverlayPanel` inherits from `NSPanel` (`MainThreadOnly`); `event` is the live `NSEvent` passed by AppKit.
+                unsafe { let _: () = msg_send![super(self), sendEvent: event]; }
             }
         }
-        // AppKit keeps windows below the menu bar's level out from under it; an overlay goes
-        // exactly where it's placed at any level.
-        #[unsafe(method(constrainFrameRect:toScreen:))]
-        fn constrain_frame_rect(&self, frame: NSRect, screen: *mut NSScreen) -> NSRect {
-            // SAFETY: `OverlayPanel` inherits from `NSPanel` (`MainThreadOnly`); `frame` and `screen` match `constrainFrameRect:toScreen:`.
-            if self.ivars().constrain { unsafe { msg_send![super(self), constrainFrameRect: frame, toScreen: screen] } }
-            else { frame }
-        }
-        #[unsafe(method(sendEvent:))]
-        fn send_event(&self, event: &NSEvent) {
-            // Without its view the panel would swallow this click and every later one.
-            if crate::platform::macos::panel_bridge::reattach(self.as_super()) { eprintln!("rune: panel lost its view; reattached on input"); }
-            // SAFETY: `OverlayPanel` inherits from `NSPanel` (`MainThreadOnly`); `event` is the live `NSEvent` passed by AppKit.
-            unsafe { let _: () = msg_send![super(self), sendEvent: event]; }
-        }
-    }
-);
+    );
+}
+use overlay_panel::{OverlayPanel, PanelFlags};
 
 /// Whether the user is dragging the window's edge.
+#[allow(unsafe_code)]
 pub(crate) fn in_live_resize(window: &winit::window::Window) -> bool {
     // SAFETY: a property read on the main thread.
     ns_window(window).is_some_and(|window| unsafe { msg_send![&*window, inLiveResize] })
@@ -95,6 +106,7 @@ pub(crate) fn set_dock_icon(visible: bool) {
 }
 
 /// winit's content view. Once a [`Panel`] adopts it, its window is the panel.
+#[allow(unsafe_code)]
 pub(crate) fn content_view(window: &winit::window::Window) -> Option<Retained<objc2_app_kit::NSView>> {
     use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
     let RawWindowHandle::AppKit(handle) = window.window_handle().ok()?.as_raw() else { return None };
@@ -111,6 +123,7 @@ pub(crate) fn configure_window(window: &winit::window::Window, options: &crate::
     if let Some(window) = ns_window(window) { configure_native(&window, options); }
 }
 
+#[allow(unsafe_code)]
 fn configure_native(window: &NSWindow, options: &crate::MacWindowOptions) {
     if let Some(shadow) = options.shadow { window.setHasShadow(shadow); }
     if let Some(level) = options.level { window.setLevel(level); }
@@ -127,6 +140,7 @@ fn configure_native(window: &NSWindow, options: &crate::MacWindowOptions) {
 /// Captures follow every change, but on recent macOS the `sharingType` getter and
 /// CGWindowList's sharing state can keep reporting none after the first switch back, so
 /// neither confirms a toggle.
+#[allow(unsafe_code)]
 fn set_sharing(window: &NSWindow, exclude: bool) {
     // SAFETY: every caller runs on the AppKit main thread.
     unsafe { let _: () = msg_send![window, setSharingType: if exclude { 0usize } else { 1usize }]; }
@@ -172,6 +186,7 @@ impl Panel {
         Some(panel)
     }
 
+    #[allow(unsafe_code)]
     fn adopt_kind(window: &winit::window::Window, at: crate::overlay::Placement, interactive: bool, options: &OverlayOptions, wake: Option<crate::Waker>, ordinary: bool) -> Option<Panel> {
         use objc2_app_kit::{NSBackingStoreType, NSColor, NSWindowCollectionBehavior, NSWindowStyleMask};
         let mtm = MainThreadMarker::new()?;
@@ -259,6 +274,7 @@ impl Panel {
     /// Reattaches winit's view if something outside Rune took it from the panel, here or in
     /// `sendEvent:`. Clicks recorded while it was gone were never delivered, so native capture
     /// starts over, and a press the runtime still holds is released where the pointer was.
+    #[allow(unsafe_code)]
     fn keep_view(&self) {
         // SAFETY: plain readbacks on the main thread; nothing is retained.
         let (content, window): (*const NSView, *const NSWindow) = unsafe {
@@ -317,6 +333,7 @@ thread_local! {
 
 /// `window`'s count for the Dock icon's badge, which is the app's: the sum over its windows, none
 /// at 0. Main thread.
+#[allow(unsafe_code)]
 pub(crate) fn dock_badge(window: &winit::window::Window, count: u32) {
     let Some(mtm) = MainThreadMarker::new() else { return };
     let total: u32 = BADGES.with_borrow_mut(|b| {

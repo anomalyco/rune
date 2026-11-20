@@ -254,7 +254,7 @@ opt-level = 3
 unsafe_op_in_unsafe_fn = "deny"
 unused_must_use = "deny"
 # shared-lints end
-unsafe_code = "allow" # shared: forbid; GPU and FFI code needs unsafe
+unsafe_code = "deny" # pure-Rust crates use #![forbid(unsafe_code)]; FFI/SIMD leaf modules opt in locally
 
 [workspace.lints.clippy]
 # shared-lints begin

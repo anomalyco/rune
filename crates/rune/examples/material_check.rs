@@ -3,6 +3,9 @@
 //! inserted material leaves the existing view in place, a prewarmed overlay has its glass
 //! before it shows, and a fading-in overlay reads as visible. Prints PASS/FAIL lines and exits
 //! nonzero on a failure.
+
+#![allow(unsafe_code)]
+
 #[cfg(not(target_os = "macos"))]
 fn main() { eprintln!("macOS only"); }
 

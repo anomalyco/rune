@@ -1,5 +1,8 @@
 //! The low-level mouse hook never runs on the rendering/event thread. Its message loop
 //! records positions and wakes interested overlays; window styles are changed by the owner.
+
+#![allow(unsafe_code)]
+
 use std::sync::{Arc, Mutex, OnceLock, atomic::{AtomicBool, Ordering}};
 use windows_sys::Win32::{Foundation::{LPARAM, LRESULT, POINT, RECT, WPARAM}, UI::WindowsAndMessaging::*};
 use crate::input::pointer_observer::Observer;

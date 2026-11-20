@@ -86,6 +86,7 @@ pub(in crate::window) fn step(state: &mut Rest, event: RestEvent) -> Effects<Res
 
 /// Whether the system says memory is low (Windows' low-memory resource notification).
 #[cfg(target_os = "windows")]
+#[allow(unsafe_code)]
 pub(in crate::window) fn low_memory() -> bool {
     use windows_sys::Win32::System::Memory::{CreateMemoryResourceNotification, LowMemoryResourceNotification, QueryMemoryResourceNotification};
     static EVENT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();

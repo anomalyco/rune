@@ -1,5 +1,7 @@
 //! Work for the main thread from anywhere: the main dispatch queue, which the event loop drains.
 
+#![allow(unsafe_code)]
+
 #[link(name = "System", kind = "dylib")]
 unsafe extern "C" {
     static _dispatch_main_q: u8;
