@@ -153,6 +153,14 @@ impl OverlayCore {
         if self.options.input.resolved(self.interactive) != OverlayInput::None { self.left_button(app, pressed, point); }
     }
 
+    /// Delivers clipboard replies or secret-copy changes from the worker. A shown overlay steps
+    /// them on its next drawn frame; a hidden or occluded one advances now.
+    pub(super) fn clipboard_due(&mut self, app: &mut dyn OverlayApp) {
+        if !self.clipboard.receive_core(app.rt_mut()) { return; }
+        self.dirty = true;
+        if self.frameless() { self.advance(app); }
+    }
+
     /// Delivers drag ends a host reported. An `on_drag_start` may have hidden the overlay;
     /// its `on_drag_end` still runs.
     pub(super) fn drag_ends_due(&mut self, app: &mut dyn OverlayApp) {
@@ -382,7 +390,7 @@ impl OverlayCore {
 
     /// Applies requests from other threads: updates, edge, show and hide.
     pub(super) fn sync(&mut self, app: &mut dyn OverlayApp, event_loop: &ActiveEventLoop) {
-        if self.clipboard.receive_core(app.rt_mut()) { self.dirty = true; self.advance(app); }
+        self.clipboard_due(app);
         if app.popup_answer(&mut self.popup) {
             self.dirty = true;
             if self.frameless() { self.advance(app); }
