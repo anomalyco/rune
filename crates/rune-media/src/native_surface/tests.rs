@@ -303,7 +303,11 @@ fn srgb(x: f32) -> u8 {
 /// time beyond that), so an adapter with a slow round trip (Metal on an Apple M4: 6,094 us for
 /// a 64th of the work) isn't taken for a slow GPU. An overestimate only queues less, and a
 /// timed attempt's own run lowers it for the next; an adapter is never refused for being slow,
-/// and nothing it measures can size one submission past `CHUNK`. Windows resets a
+/// and nothing it measures can size one submission past `CHUNK`. Before anything is known only
+/// `CHUNK / 64` is issued (about 1,400 us on that integrated GPU, round trip included, and 4,700
+/// to 6,700 us on WARP); each larger size, up by fours, only once four times the size below's
+/// whole time fits in `PLANNED_MOST`. An adapter too slow for that queues the smaller size, as
+/// WARP does. Windows resets a
 /// GPU whose one submission runs 2 s, and an AMD GPU preempts nothing smaller than a
 /// submission: 68.7 billion iterations in one submission ran past that on the same integrated
 /// GPU, and the reset's completion read as an overlap.
@@ -371,8 +375,11 @@ fn completion_worker_preserves_cpu_gpu_overlap() {
             ],
         })
     };
-    // The only two sizes a submission of this test has.
-    let (small, full) = (bind_for(CHUNK / 64), bind_for(CHUNK));
+    // A submission's sizes: `CHUNK / 64`, the only size issued before anything is known, then up
+    // by fours to `CHUNK`, each only when the one below predicts it fits (see the calibration).
+    let sizes = [CHUNK / 64, CHUNK / 16, CHUNK / 4, CHUNK];
+    let binds = sizes.map(bind_for);
+    let small = &binds[0];
     let submit = |bind: &wgpu::BindGroup| {
         let mut encoder = gpu.device.create_command_encoder(&Default::default());
         {
@@ -394,23 +401,31 @@ fn completion_worker_preserves_cpu_gpu_overlap() {
         started.elapsed()
     };
     // The first submission also pays for the pipeline's first use; it times nothing.
-    time(&small);
+    time(small);
     let name = gpu.adapter.get_info().name;
-    let floor = time(&small);
-    // A software adapter (WARP) runs the work on the CPU: there is no GPU to reset, and a full
-    // chunk could take seconds there, so it queues the small size.
+    let floor = time(small);
+    // Up by fours, while four times the last size's whole time (round trip and all, so an upper
+    // bound on the next size's time whatever the round trip is) fits in `PLANNED_MOST`. No
+    // submission is issued that a smaller one hasn't predicted fits. A software adapter (WARP)
+    // runs the work on the CPU, with no GPU to reset; it stays at the first size.
     let software = gpu.adapter.get_info().device_type == wgpu::DeviceType::Cpu;
-    let (chunk, size) = if software { (&small, CHUNK / 64) } else { (&full, CHUNK) };
-    let chunk_alone = time(chunk);
+    let mut step = (0, floor);
+    let mut steps = vec![floor.as_micros()];
+    while !software && step.0 + 1 < sizes.len() && step.1 * 4 <= PLANNED_MOST {
+        step = (step.0 + 1, time(&binds[step.0 + 1]));
+        steps.push(step.1.as_micros());
+    }
+    let (index, chunk_alone) = step;
+    let (chunk, size) = (&binds[index], sizes[index]);
     // A chunk queued behind others pays for its work, not for another round trip: what it took
-    // beyond the small submission's time, or all of it when it is the small size (WARP).
-    let mut per_chunk = if software { chunk_alone } else { chunk_alone.saturating_sub(floor).max(chunk_alone / 64) };
+    // beyond the first size's time, or all of it when it is the first size.
+    let mut per_chunk = if index == 0 { chunk_alone } else { chunk_alone.saturating_sub(floor).max(chunk_alone / 64) };
     let chunks_most = ((QUEUED_MOST.as_secs_f64() / chunk_alone.as_secs_f64().max(1e-6)) as u32).clamp(1, CHUNKS_MOST);
+    let why = if size == CHUNK { "the full chunk".to_string() } else if software { "a software adapter".to_string() } else { format!("{} us x 4 would pass {} us", chunk_alone.as_micros(), PLANNED_MOST.as_micros()) };
     eprintln!(
-        "overlap probe: on {name}, {} iterations took {} us; each queued submission is {} iterations and took {} us alone, {} us of it work; at most {chunks_most} queued",
-        u64::from(CHUNK / 64) * u64::from(INVOCATIONS),
-        floor.as_micros(),
-        u64::from(size) * u64::from(INVOCATIONS),
+        "overlap probe: on {name}, {} to {} iterations per invocation took {steps:?} us; queueing {size} per invocation ({why}), {} us alone, {} us of it work; at most {chunks_most} queued",
+        CHUNK / 64,
+        sizes[index],
         chunk_alone.as_micros(),
         per_chunk.as_micros()
     );
