@@ -57,7 +57,7 @@ fn frames(device: &wgpu::Device, queue: &wgpu::Queue) -> Vec<Vec<u16>> {
             );
             queue.submit([encoder.finish()]);
             let slice = readback.slice(..);
-            slice.map_async(wgpu::MapMode::Read, |r| r.unwrap());
+            slice.map_async(wgpu::MapMode::Read, |_| {});
             device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
             let words = bytemuck::cast_slice(&slice.get_mapped_range().unwrap()).to_vec();
             readback.unmap();

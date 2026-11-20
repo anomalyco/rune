@@ -437,7 +437,7 @@ fn verify(ctx: &mut Ctx) {
     );
     ctx.queue.submit([enc.finish()]);
     let slice = buf.slice(..);
-    slice.map_async(wgpu::MapMode::Read, |r| r.unwrap());
+    slice.map_async(wgpu::MapMode::Read, |_| {});
     ctx.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
     let data = slice.get_mapped_range().unwrap().to_vec();
     let gpu = |x: u32, y: u32| {

@@ -180,7 +180,7 @@ fn compositor_buffer_writes_land_in_order_and_reuse_staging() {
         let created = live_buffers(device) - buffers;
         renderer.submit(queue, encoder);
         let slice = readback.slice(..);
-        slice.map_async(wgpu::MapMode::Read, |r| r.expect("map readback"));
+        slice.map_async(wgpu::MapMode::Read, |_| {});
         device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
         let words: Vec<u32> = bytemuck::cast_slice(&slice.get_mapped_range().unwrap()).to_vec();
         readback.unmap();

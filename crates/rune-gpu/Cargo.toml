@@ -22,7 +22,6 @@ metal-backend = [
     "dep:objc2-quartz-core",
     "dep:parking_lot",
     "dep:raw-window-metal",
-    "dep:rune-staging",
     "dep:wgpu-naga-bridge",
 ]
 # Live GPU resource counters (`Device::get_internal_counters`) for the storage-swap buffer-count test.
@@ -31,6 +30,8 @@ test-gpu-counters = ["wgpu/counters"]
 [dependencies]
 bytemuck = { workspace = true }
 rune-motion = { workspace = true }
+# `health::poll` lives there, below every crate that waits on the GPU.
+rune-staging = { workspace = true }
 wgpu = { workspace = true, features = ["std", "parking_lot", "wgsl"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
@@ -49,7 +50,6 @@ objc2-metal = { workspace = true, optional = true, features = ["std", "MTLAlloca
 objc2-quartz-core = { version = "0.3.2", optional = true, default-features = false, features = ["std", "bitflags", "CALayer", "CAMetalLayer", "objc2-core-foundation", "objc2-core-graphics", "objc2-metal"] }
 parking_lot = { version = "0.12", optional = true }
 raw-window-metal = { version = "1.1", optional = true }
-rune-staging = { workspace = true, optional = true }
 wgpu-naga-bridge = { workspace = true, optional = true }
 # wgpu's Metal backend and `custom` backend (`metal-backend` plugs into it), on Apple targets alone:
 # off Apple, wgpu compiles neither `wgpu-hal/metal` nor `naga/msl-out`, and dispatches with no branch.
@@ -57,7 +57,7 @@ wgpu = { workspace = true, features = ["metal", "custom"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 wgpu = { workspace = true, features = ["dx12"] }
-windows = { workspace = true, features = ["Win32_Graphics_Dxgi"] }
+windows = { workspace = true, features = ["Win32_Graphics_Direct3D12", "Win32_Graphics_Dxgi"] }
 windows-sys = { workspace = true, features = ["Win32_Graphics_Gdi"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]

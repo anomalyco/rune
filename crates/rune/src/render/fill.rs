@@ -241,9 +241,11 @@ impl Renderer {
             let mut encoder = device.create_command_encoder(&Default::default());
             encoder.copy_texture_to_buffer(texture.as_image_copy(), wgpu::TexelCopyBufferInfo { buffer: &buffer, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(ATLAS_SIZE), rows_per_image: Some(rows) } }, wgpu::Extent3d { width: ATLAS_SIZE, height: rows, depth_or_array_layers: 1 });
             queue.submit([encoder.finish()]);
+            // A callback never panics: one that did while a failed wait unwinds (wgpu aborts the map
+            // then) would abort the process. A failed map shows as `get_mapped_range`'s error.
             let slice = buffer.slice(..);
-            slice.map_async(wgpu::MapMode::Read, |r| r.expect("map fill drift"));
-            device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
+            slice.map_async(wgpu::MapMode::Read, |_| {});
+            rune_gpu::health::poll(device, wgpu::PollType::wait_indefinitely()).expect("poll");
             let out = slice.get_mapped_range().expect("mapped").to_vec();
             buffer.unmap();
             out

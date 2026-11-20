@@ -356,7 +356,8 @@ impl NativeSurface {
     #[cfg(not(target_arch = "wasm32"))]
     fn report(&self, timing: FrameTiming) {
         let observer = {
-            let mut s = self.0.lock().unwrap();
+            // Called from wgpu's work-done callbacks, where a panic could abort the process.
+            let mut s = self.0.lock().unwrap_or_else(|e| e.into_inner());
             if timing.completed_at.is_some() {
                 s.completed += 1;
             } else {

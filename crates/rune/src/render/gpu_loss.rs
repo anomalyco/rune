@@ -38,6 +38,9 @@ impl Gpu {
             // Before anything reads it: a lost device's surface can't be configured, and wgpu
             // reports that failure nowhere (`is_lost`).
             lost_by_callback.store(true, Ordering::Release);
+            // No panic here, in tests either: wgpu calls this inside its own work (a submission,
+            // a queue's drop) and a panic there could abort the process. A test fails at its
+            // next wait instead (`rune_gpu::health::poll` returns `Lost`).
             #[cfg(not(target_arch = "wasm32"))]
             eprintln!("rune: the GPU device was lost ({reason:?}): {message}");
             #[cfg(target_arch = "wasm32")]
@@ -50,13 +53,15 @@ impl Gpu {
         if draws_surfaces && !cfg!(test) { log_uncaptured(&device); }
         #[cfg(target_arch = "wasm32")]
         let _ = draws_surfaces;
-        Gpu { instance, adapter, device, queue, lost }
+        let removal = rune_gpu::health::Removal::watch(&device);
+        Gpu { instance, adapter, device, queue, lost, removal }
     }
 
     /// Whether the device went away: a driver reset, a GPU removed, a resume from Modern Standby.
     /// Nothing can be drawn with it, and its surfaces can't be configured, so its owner makes a
     /// new GPU and surface instead (`Host::reattach`).
-    pub fn is_lost(&self) -> bool { self.lost.load(Ordering::Acquire) }
+    /// On D3D12 the device is asked too: wgpu hears of a removal only at the next submission.
+    pub fn is_lost(&self) -> bool { self.lost.load(Ordering::Acquire) || self.removal.removed() }
 }
 
 /// What `log_uncaptured` has printed: each distinct message once, up to `PRINTED`, then one
