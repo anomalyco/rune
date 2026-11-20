@@ -76,6 +76,16 @@ pub(super) fn device() -> Result<Arc<Device>, String> {
     Ok(device)
 }
 
+/// Drops the kept decoder device once Rune's device under it is removed: it holds that device.
+/// Decoders still holding their own reference let go as they see the loss (`lost_since`).
+pub(crate) fn release_removed_device() {
+    let mut slot = DEVICE.lock().unwrap();
+    // SAFETY: a plain query on a device this slot holds.
+    if slot.as_ref().is_some_and(|d| unsafe { d.d3d12.GetDeviceRemovedReason() }.is_err()) {
+        *slot = None;
+    }
+}
+
 /// Rune's device was replaced since `generation`, or the one it presents with is removed.
 pub(super) fn lost_since(generation: u64) -> bool {
     // SAFETY: a plain query on a live device.

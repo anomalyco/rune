@@ -52,6 +52,8 @@ use self::windows as backend;
 #[cfg(target_os = "windows")]
 #[doc(hidden)]
 pub use self::windows::LayerStatus;
+#[cfg(target_os = "windows")]
+pub(crate) use self::windows::release_removed_device;
 mod waker;
 
 use phases::{Effect, Event, Run, Stage, step};
