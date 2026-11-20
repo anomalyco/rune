@@ -88,7 +88,7 @@ pub(super) trait WebApp {
     fn compositor_features(&self) -> wgpu::Features;
     fn compositor_animating(&self) -> bool;
     fn compositor_draws_own(&self) -> bool;
-    fn render_compositor(&mut self, args: CompositorFrame<'_>);
+    fn render_compositor(&mut self, args: CompositorFrame<'_>) -> bool;
     fn paste_event(&mut self, clipboard: &crate::clipboard::Client, content: crate::ClipboardContent, image: Option<&JsValue>);
 }
 
@@ -104,6 +104,10 @@ impl dyn WebApp + '_ {
 
     pub(super) fn frame(&mut self, dt: f64) -> bool {
         self.driver(|rt, app| rt.frame(app, dt))
+    }
+
+    pub(super) fn covered_wake(&mut self) {
+        self.driver(|rt, app| { rt.covered_wake(app); });
     }
 
     pub(super) fn clock_advance(&mut self, clock: &mut FrameClock, at: Instant, compositing: bool) -> (bool, f64) {
@@ -267,8 +271,8 @@ impl<S: 'static> WebApp for TypedWebApp<S> {
         self.compositor.as_ref().is_some_and(|c| c.draws_own())
     }
 
-    fn render_compositor(&mut self, args: CompositorFrame<'_>) {
-        let Some(c) = self.compositor.as_mut() else { return };
+    fn render_compositor(&mut self, args: CompositorFrame<'_>) -> bool {
+        let Some(c) = self.compositor.as_mut() else { return false };
         let mut f = Frame {
             device: args.device,
             queue: args.queue,
@@ -282,6 +286,7 @@ impl<S: 'static> WebApp for TypedWebApp<S> {
             ui: args.ui,
         };
         c.render(&mut f);
+        c.animating()
     }
 
     fn paste_event(&mut self, clipboard: &crate::clipboard::Client, content: crate::ClipboardContent, image: Option<&JsValue>) {

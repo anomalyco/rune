@@ -1,8 +1,12 @@
 //! Per-frame redraw loop, document band sizing, canvas surface resize, and frame requests.
 
-use std::time::Duration;
-use winit::{event_loop::ActiveEventLoop, platform::web::WindowExtWebSys, window::Window};
+use std::{sync::Arc, time::Duration};
+use winit::{event_loop::{ActiveEventLoop, EventLoopProxy}, platform::web::WindowExtWebSys, window::Window};
+use crate::frame::clock::FrameClock;
+use crate::frame::host_step::{self, Acquire, FrameHost, Gate, PostStepCheck, ReacquireReason, RenderPrep, StepInfo};
+use crate::runtime::RuntimeCore;
 use crate::time::Instant;
+use crate::window::Missed;
 use super::{Browser, Running, Wake, after, error, full_faces, gpu::{self, Draw, FINISH_LIMIT}, handover::QUIET, large_viewport, page_fonts, pipelines, web_math};
 
 /// The overscan a page's canvas carries above and below the window, in CSS points: the distance
@@ -111,144 +115,338 @@ fn canvas_physical(canvas: &web_sys::HtmlCanvasElement, reported: winit::dpi::Ph
     winit::dpi::PhysicalSize::new(fix(reported.width, w), fix(reported.height, h))
 }
 
-impl Browser {
-    /// Draws a frame: the runtime steps, then the CPU paints it, the GPU draws it, or both while
-    /// handing over.
-    pub(super) fn redraw(&mut self, event_loop: &ActiveEventLoop) {
-        if self.lost_device(event_loop) { return; }
-        self.maybe_restore_webgl();
-        self.hand_over_if_done();
-        let mut running = self.running.borrow_mut();
-        let (Some(window), Some(r)) = (&self.window, &mut *running) else { return };
-        if r.suspended || r.draw.waiting_for_gpu() || matches!(r.draw, Draw::ContextLost) { return; }
+enum WebDrawable {
+    Cpu,
+    Gpu(wgpu::SurfaceTexture),
+}
+
+enum PreparedWeb {
+    Cpu,
+    HandingOver { gpu: Option<gpu::PreparedGpu> },
+    Gpu(gpu::PreparedGpu),
+}
+
+struct WebFrameHost<'a> {
+    r: &'a mut Running,
+    window: &'a Arc<Window>,
+    proxy: &'a EventLoopProxy<Wake>,
+    first_at: &'a mut Option<Instant>,
+    drawn_at: &'a mut Option<Instant>,
+    now: Option<Instant>,
+    commits: u64,
+    had_input: bool,
+    tick: bool,
+    reblend_tried: Option<bool>,
+    drawn: bool,
+    fatal_error: Option<String>,
+    should_end: bool,
+    try_gpu_came: bool,
+}
+
+impl FrameHost for WebFrameHost<'_> {
+    type Drawable = WebDrawable;
+    type Prepared = PreparedWeb;
+
+    fn gate(&mut self) -> Gate {
+        web_math::web_frame_gate(self.r.suspended, self.r.draw.kind())
+    }
+
+    fn needs_reblend(&self) -> bool {
+        matches!(&self.r.draw, Draw::Gpu(side) if side.renderer.srgb_blend() != self.r.app.rt().srgb_blend())
+    }
+
+    fn reblend(&mut self) -> bool {
+        let target = self.r.app.rt().srgb_blend();
+        self.reblend_tried = Some(target);
+        if let Draw::Gpu(side) = &mut self.r.draw {
+            gpu::reblend(side, self.r.app.rt_mut());
+        }
+        true
+    }
+
+    fn acquire(&mut self) -> Acquire<WebDrawable> {
+        match &mut self.r.draw {
+            Draw::Gpu(side) => match gpu::acquire_texture(side) {
+                Ok(frame) => Acquire::Ready(WebDrawable::Gpu(frame)),
+                Err(missed) => Acquire::Missed(missed),
+            },
+            Draw::Cpu { .. } | Draw::HandingOver { .. } => Acquire::Ready(WebDrawable::Cpu),
+            Draw::ContextLost | Draw::Moving => Acquire::Missed(Missed::Unconfigured),
+        }
+    }
+
+    fn step_runtime(&mut self) -> StepInfo {
         let now = Instant::now();
-        let (commits, input) = {
-            let rt = r.app.rt();
+        self.now = Some(now);
+        let (commits, had_input) = {
+            let rt = self.r.app.rt();
             (rt.stats.commits, rt.has_pending_input())
         };
-        let tick = !std::mem::take(&mut r.full_redraw) && matches!(&r.draw, Draw::Gpu(side) if !side.renderer.checking_gpu())
-            && !r.app.compositor_animating() && !r.app.compositor_draws_own() && r.app.rt_mut().paint_cycle_tick();
+        self.commits = commits;
+        self.had_input = had_input;
+        let tick = !std::mem::take(&mut self.r.full_redraw)
+            && matches!(&self.r.draw, Draw::Gpu(side) if !side.renderer.checking_gpu())
+            && !self.r.app.compositor_animating()
+            && !self.r.app.compositor_draws_own()
+            && self.r.app.rt_mut().paint_cycle_tick();
+        self.tick = tick;
         let (animating, dt) = if tick {
-            let dt = now.saturating_duration_since(r.clock.last()).as_secs_f64();
-            r.clock.hold(now);
+            let dt = now.saturating_duration_since(self.r.clock.last()).as_secs_f64();
+            self.r.clock.hold(now);
             (false, dt)
         } else {
-            let compositing = r.app.compositor_animating();
-            r.app.clock_advance(&mut r.clock, now, compositing)
+            let compositing = self.r.app.compositor_animating();
+            self.r.app.clock_advance(&mut self.r.clock, now, compositing)
         };
-        r.apply_frame_requests(window);
-        r.clipboard.flush_core(r.app.rt_mut());
+        StepInfo { runtime_animating: animating, animating, dt, update_ms: 0.0, presents_at: None }
+    }
+
+    fn post_step_check(&mut self, _info: &mut StepInfo) -> PostStepCheck {
+        if let Draw::Gpu(side) = &self.r.draw
+            && web_math::should_post_step_reblend(
+                side.renderer.srgb_blend(),
+                self.r.app.rt().srgb_blend(),
+                self.reblend_tried,
+            )
+        {
+            PostStepCheck::Reacquire(ReacquireReason::Reblend)
+        } else {
+            PostStepCheck::Keep
+        }
+    }
+
+    fn prepare_reacquire(&mut self, reason: ReacquireReason, _info: &mut StepInfo) -> bool {
+        match reason {
+            ReacquireReason::Reblend => self.reblend(),
+        }
+    }
+
+    fn on_missed(&mut self, missed: Missed, stepped: bool) {
+        match web_math::web_miss_action(missed) {
+            web_math::WebMissAction::Fatal => {
+                self.fatal_error = Some("WebGPU canvas acquisition failed".into());
+            }
+            web_math::WebMissAction::CoveredOnly => {
+                if !stepped {
+                    self.r.app.covered_wake();
+                    self.r.clipboard.flush_core(self.r.app.rt_mut());
+                }
+            }
+            web_math::WebMissAction::RetryNextFrame => {
+                if !stepped {
+                    self.r.app.covered_wake();
+                    self.r.clipboard.flush_core(self.r.app.rt_mut());
+                }
+                self.window.request_redraw();
+            }
+        }
+    }
+
+    fn sync_after_step(&mut self, info: &mut StepInfo) {
+        let now = self.now.unwrap_or_else(Instant::now);
+        info.update_ms = now.elapsed().as_secs_f64() * 1000.0;
+        self.r.apply_frame_requests(self.window);
+        self.r.clipboard.flush_core(self.r.app.rt_mut());
         // A menu asked for opens as the page's own elements (bridge.js `showMenu`), once the frame
         // that asked has laid out what it anchors to.
-        if !r.app.rt().popup_waits_for_layout() {
-            match r.app.rt_mut().take_popup() {
+        if !self.r.app.rt().popup_waits_for_layout() {
+            match self.r.app.rt_mut().take_popup() {
                 Some(Some(show)) => {
-                    let rt = r.app.rt();
-                    r.input.show_menu(&show, rt.backdrop_dark().unwrap_or(rt.env.system_dark));
+                    let rt = self.r.app.rt();
+                    self.r.input.show_menu(&show, rt.backdrop_dark().unwrap_or(rt.env.system_dark));
                 }
-                Some(None) => { let _ = r.app.resolve_popup(None); }
+                Some(None) => { let _ = self.r.app.resolve_popup(None); }
                 None => {}
             }
         }
-        r.app.rt_mut().refuse_file_dialog("native file dialogs are unsupported on web");
-        if !tick { r.sync_input(false); }
-        {
-            let rt = r.app.rt();
-            r.cursor.apply(window, rt.cursor(), rt.pointer().is_some());
-            if !rt.surfaces.is_empty() {
-                error("native video surfaces are unsupported on web", window.canvas().as_ref(), r.embedded, r.document);
-                drop(running);
-                self.end(event_loop);
-                return;
-            }
+        self.r.app.rt_mut().refuse_file_dialog("native file dialogs are unsupported on web");
+        if !self.tick { self.r.sync_input(false); }
+        let rt = self.r.app.rt();
+        self.r.cursor.apply(self.window, rt.cursor(), rt.pointer().is_some());
+        if !rt.surfaces.is_empty() {
+            self.fatal_error = Some("native video surfaces are unsupported on web".into());
         }
-        let size = r.size;
-        let drawn = match &mut r.draw {
+    }
+
+    fn prepare_render(&mut self, drawable: WebDrawable, _info: &mut StepInfo) -> RenderPrep<PreparedWeb> {
+        if self.fatal_error.is_some() {
+            return RenderPrep::Abort;
+        }
+        match (&mut self.r.draw, drawable) {
+            (Draw::Cpu { .. }, WebDrawable::Cpu) => RenderPrep::Ready(PreparedWeb::Cpu),
+            (Draw::HandingOver { side, built, .. }, WebDrawable::Cpu) => {
+                let gpu = if built.get() {
+                    let rt = self.r.app.rt_mut();
+                    gpu::reblend(side, rt);
+                    match gpu::acquire_texture(side) {
+                        Ok(frame) => Some(gpu::prepare_gpu_frame(side, rt, frame, gpu::drift_wanted(), false)),
+                        Err(missed) => {
+                            web_sys::console::warn_1(
+                                &format!("rune: the GPU's hand-over frame wasn't drawn ({missed:?})").into(),
+                            );
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
+                RenderPrep::Ready(PreparedWeb::HandingOver { gpu })
+            }
+            (Draw::Gpu(side), WebDrawable::Gpu(frame)) => {
+                let prepared = gpu::prepare_gpu_frame(side, self.r.app.rt_mut(), frame, false, self.tick);
+                RenderPrep::Ready(PreparedWeb::Gpu(prepared))
+            }
+            _ => RenderPrep::Abort,
+        }
+    }
+
+    fn render(&mut self, prepared: &mut PreparedWeb, info: &StepInfo) -> bool {
+        let size = self.r.size;
+        match (&mut self.r.draw, prepared) {
             // A frame only the GPU draws (`Scene::needs_gpu`) leaves the last one up.
-            Draw::Cpu { cpu, .. } => Ok(cpu.paint(r.app.rt_mut(), size).is_ok()),
-            Draw::HandingOver { cpu, side, built, done, since } => {
-                let painted = cpu.paint(r.app.rt_mut(), size).is_ok();
+            (Draw::Cpu { cpu, .. }, PreparedWeb::Cpu) => {
+                self.drawn = cpu.paint(self.r.app.rt_mut(), size).is_ok();
+                false
+            }
+            (Draw::HandingOver { cpu, side, .. }, PreparedWeb::HandingOver { gpu }) => {
+                self.drawn = cpu.paint(self.r.app.rt_mut(), size).is_ok();
                 // Both renderers draw this frame once the browser has compiled the GPU's
                 // pipelines; the GPU's canvas stays see-through until its frame is done.
-                if built.get() {
-                    match gpu::gpu_frame(side, &mut *r.app, now, dt, gpu::drift_wanted(), false) {
-                        // That frame made pipelines its draw needed and drew a fallback for each
-                        // while the browser checks it (the renderer hears the answers as it
-                        // draws): frames go on drawing into the see-through canvas, and the
-                        // first one drawn with every check answered is the hand-over frame.
-                        Ok(_) if side.renderer.checking_gpu() => crate::marks::mark("web.handover.warming"),
-                        Ok(copy) => {
-                            if let Some(copy) = copy { copy.count(cpu.pixels().to_vec()); }
-                            *done = Some(gpu::when_done(side, &self.proxy));
-                            *since = Instant::now();
-                            let proxy = self.proxy.clone();
-                            after(FINISH_LIMIT + Duration::from_millis(50), move || { let _ = proxy.send_event(Wake::App); });
-                            crate::marks::mark("web.handover.drawn");
-                        }
-                        Err(e) => web_sys::console::warn_1(&format!("rune: the GPU's hand-over frame wasn't drawn: {e}").into()),
+                match gpu.as_mut() {
+                    Some(prepared_gpu) => {
+                        gpu::encode_gpu_frame(side, &mut *self.r.app, prepared_gpu, info.dt, info.update_ms)
+                    }
+                    None => false,
+                }
+            }
+            (Draw::Gpu(side), PreparedWeb::Gpu(prepared_gpu)) => {
+                gpu::encode_gpu_frame(side, &mut *self.r.app, prepared_gpu, info.dt, info.update_ms)
+            }
+            _ => false,
+        }
+    }
+
+    fn submit_and_present(&mut self, prepared: PreparedWeb, _info: &StepInfo) -> Instant {
+        match (&mut self.r.draw, prepared) {
+            (Draw::Cpu { .. }, PreparedWeb::Cpu) => {}
+            (Draw::HandingOver { cpu, side, done, since, .. }, PreparedWeb::HandingOver { gpu }) => {
+                if let Some(prepared_gpu) = gpu {
+                    let copy = gpu::submit_gpu_frame(side, prepared_gpu, || {});
+                    // That frame made pipelines its draw needed and drew a fallback for each
+                    // while the browser checks it (the renderer hears the answers as it
+                    // draws): frames go on drawing into the see-through canvas, and the
+                    // first one drawn with every check answered is the hand-over frame.
+                    if side.renderer.checking_gpu() {
+                        crate::marks::mark("web.handover.warming");
+                    } else {
+                        if let Some(copy) = copy { copy.count(cpu.pixels().to_vec()); }
+                        *done = Some(gpu::when_done(side, self.proxy));
+                        *since = Instant::now();
+                        let proxy = self.proxy.clone();
+                        after(FINISH_LIMIT + Duration::from_millis(50), move || { let _ = proxy.send_event(Wake::App); });
+                        crate::marks::mark("web.handover.drawn");
                     }
                 }
-                Ok(painted)
             }
-            Draw::Gpu(side) => {
-                window.pre_present_notify();
-                gpu::gpu_frame(side, &mut *r.app, now, dt, false, tick).map(|_| true)
+            (Draw::Gpu(side), PreparedWeb::Gpu(prepared_gpu)) => {
+                let window = self.window;
+                let _ = gpu::submit_gpu_frame(side, prepared_gpu, || window.pre_present_notify());
+                self.drawn = true;
             }
-            Draw::ContextLost | Draw::Moving => Ok(false),
-        };
-        let drawn = match drawn {
-            Ok(drawn) => drawn,
-            Err(e) => {
-                error(&e, window.canvas().as_ref(), r.embedded, r.document);
-                drop(running);
-                self.end(event_loop);
-                return;
-            }
-        };
+            _ => {}
+        }
+        Instant::now()
+    }
+
+    fn present_targets(&mut self) -> (Option<&mut FrameClock>, &mut RuntimeCore) {
+        (Some(&mut self.r.clock), self.r.app.rt_mut())
+    }
+
+    fn settle(&mut self, submitted: Instant, info: &StepInfo) {
+        let now = self.now.unwrap_or(submitted);
         // In the same commit as the frame: the canvas moves to where this frame drew it.
-        r.sync_band(window);
+        self.r.sync_band(self.window);
         // Only an ambient loop's step (a frame its wake asked for, no commit, nothing else moving).
         let ambient = {
-            let rt = r.app.rt();
-            !input && !animating && rt.stats.commits == commits && rt.ambient.is_some()
+            let rt = self.r.app.rt();
+            !self.had_input && !info.runtime_animating && rt.stats.commits == self.commits && rt.ambient.is_some()
         };
-        if drawn && !ambient { self.drawn_at = Some(now); }
-        if drawn && !r.presented {
-            r.presented = true;
-            self.first_at = Some(now);
+        if self.drawn && !ambient { *self.drawn_at = Some(now); }
+        if self.drawn && !self.r.presented {
+            self.r.presented = true;
+            *self.first_at = Some(now);
             let proxy = self.proxy.clone();
             // A browser that compiles pipelines asynchronously is asked in the task after this
             // frame: nothing waits for quiet there (`maybe_start_gpu`).
             let first_look = if pipelines::browser_compiles_async() { Duration::ZERO } else { QUIET };
             after(first_look, move || { let _ = proxy.send_event(Wake::StartGpu); });
             crate::marks::mark("web.first.presented");
-            r.input.presented();
+            self.r.input.presented();
             // In a task of its own: a click or key that came with the first frame is handled
             // first, not after what the app starts once it shows (about 9 ms in OpenCode's).
-            if let Some(mut ready) = r.on_ready.take() { after(Duration::ZERO, move || ready(&crate::WindowHandle::new("main"))); }
-            page_fonts::share_later(r.fonts);
+            if let Some(mut ready) = self.r.on_ready.take() { after(Duration::ZERO, move || ready(&crate::WindowHandle::new("main"))); }
+            page_fonts::share_later(self.r.fonts);
             let proxy = self.proxy.clone();
-            full_faces::fetch(std::mem::take(&mut r.late_fonts), !r.document, move || { let _ = proxy.send_event(Wake::App); });
+            full_faces::fetch(std::mem::take(&mut self.r.late_fonts), !self.r.document, move || { let _ = proxy.send_event(Wake::App); });
         }
-        if r.app.rt_mut().shell_request.take().is_some() {
-            drop(running);
-            self.end(event_loop);
+        if self.r.app.rt_mut().shell_request.take().is_some() {
+            self.should_end = true;
             return;
         }
         // A frame that drew a fallback while the browser checks a pipeline is drawn again once it
         // answers, and so is a hand-over waiting on that check.
-        let checking = r.draw.gpu().is_some_and(|side| side.renderer.checking_gpu());
-        let handing = matches!(r.draw, Draw::HandingOver { done: None, .. });
+        let checking = self.r.draw.gpu().is_some_and(|side| side.renderer.checking_gpu());
+        let handing = matches!(self.r.draw, Draw::HandingOver { done: None, .. });
         let wants_frame = {
-            let rt = r.app.rt();
-            animating || rt.has_pending_input() || rt.live_pending() || r.app.compositor_animating() || checking
+            let rt = self.r.app.rt();
+            info.animating || rt.has_pending_input() || rt.live_pending() || self.r.app.compositor_animating() || checking
         };
         if wants_frame {
-            window.request_redraw();
+            self.window.request_redraw();
         }
-        let presented = r.presented;
-        drop(running);
+        self.try_gpu_came = self.r.presented && !handing;
+    }
+}
+
+impl Browser {
+    /// Draws a frame through the shared [`host_step::run`] frame sequencer: the runtime steps,
+    /// then the CPU paints it, the GPU draws it, or both while handing over.
+    pub(super) fn redraw(&mut self, event_loop: &ActiveEventLoop) {
+        if self.lost_device(event_loop) { return; }
+        self.maybe_restore_webgl();
+        self.hand_over_if_done();
+        let (fatal_error, should_end, try_gpu_came, embedded, document) = {
+            let mut running = self.running.borrow_mut();
+            let (Some(window), Some(r)) = (&self.window, &mut *running) else { return };
+            let mut host = WebFrameHost {
+                r,
+                window,
+                proxy: &self.proxy,
+                first_at: &mut self.first_at,
+                drawn_at: &mut self.drawn_at,
+                now: None,
+                commits: 0,
+                had_input: false,
+                tick: false,
+                reblend_tried: None,
+                drawn: false,
+                fatal_error: None,
+                should_end: false,
+                try_gpu_came: false,
+            };
+            host_step::run(&mut host);
+            (host.fatal_error, host.should_end, host.try_gpu_came, host.r.embedded, host.r.document)
+        };
+        if let Some(msg) = fatal_error {
+            error(&msg, self.window.as_ref().and_then(|w| w.canvas()).as_ref(), embedded, document);
+            self.end(event_loop);
+            return;
+        }
+        if should_end {
+            self.end(event_loop);
+            return;
+        }
         // A GPU that came before the first frame is taken up after it.
-        if presented && !handing { self.gpu_came(); }
+        if try_gpu_came { self.gpu_came(); }
     }
 }

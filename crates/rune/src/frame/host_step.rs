@@ -1,5 +1,5 @@
-//! Shared host frame sequencer: one definition of the order every native and tooling host
-//! drives a frame through.
+//! Shared host frame sequencer: one definition of the order every host (window, overlay, Apple
+//! layer, headless, virtual desktop, and web) drives a frame through.
 //!
 //! The sequence is governed by an explicit phase state machine ([`Phase`], [`Event`],
 //! [`Effect`], [`step`]) so every ordering invariant — acquiring a drawable before stepping on
@@ -26,8 +26,9 @@ pub(crate) enum Outcome {
     /// Acquisition, surface reconfiguration, or a forced miss ended the frame without presenting.
     Missed,
     /// Rendering could not prepare its target (e.g. a CPU-boot frame needs the GPU or lacked a
-    /// buffer) and deferred to the host's recovery path.
-    #[cfg(any(test, target_os = "windows"))]
+    /// buffer, or the web host rejected unsupported native surfaces) and deferred to the host's
+    /// recovery path.
+    #[cfg(any(test, target_os = "windows", target_arch = "wasm32"))]
     Aborted,
     /// A frame was drawn, submitted/presented, recorded on the clock and interaction tracker, and
     /// settled.
@@ -105,7 +106,7 @@ pub(crate) enum PostStepCheck {
 #[derive(Debug)]
 pub(crate) enum RenderPrep<P> {
     Ready(P),
-    #[cfg(any(test, target_os = "windows"))]
+    #[cfg(any(test, target_os = "windows", target_arch = "wasm32"))]
     Abort,
 }
 
@@ -176,7 +177,7 @@ pub(crate) enum Event {
     ReacquireMissed(Missed),
     Synced,
     Prepared,
-    #[cfg(any(test, target_os = "windows"))]
+    #[cfg(any(test, target_os = "windows", target_arch = "wasm32"))]
     PrepareAborted,
     Rendered,
     Presented,
@@ -304,7 +305,7 @@ pub(crate) fn step(phase: &mut Phase, event: Event) -> Effects<Effect> {
             *phase = Phase::Rendering;
             Effects::one(Effect::Render)
         }
-        #[cfg(any(test, target_os = "windows"))]
+        #[cfg(any(test, target_os = "windows", target_arch = "wasm32"))]
         (Phase::Preparing, Event::PrepareAborted) => {
             *phase = Phase::Done(Outcome::Aborted);
             Effects::none()
@@ -548,7 +549,7 @@ pub(crate) fn run<H: FrameHost>(host: &mut H) -> Outcome {
             let Effects::One(Effect::Render) = step(&mut phase, Event::Prepared) else { unreachable!() };
             prepared
         }
-        #[cfg(any(test, target_os = "windows"))]
+        #[cfg(any(test, target_os = "windows", target_arch = "wasm32"))]
         RenderPrep::Abort => {
             let Effects::None = step(&mut phase, Event::PrepareAborted) else { unreachable!() };
             return phase.outcome();

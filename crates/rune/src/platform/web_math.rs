@@ -170,6 +170,163 @@ pub(crate) fn loss_action(is_webgl: bool, gpu_first: bool, embedded: bool, docum
     }
 }
 
+/// Web draw state reduced to the facts `WebFrameHost::gate` needs to decide whether a frame runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WebDrawKind {
+    Cpu,
+    HandingOver { waiting_for_gpu: bool },
+    Gpu,
+    ContextLost,
+    Moving,
+}
+
+/// Decides whether a web frame proceeds into [`crate::frame::host_step::run`] or skips.
+pub(crate) fn web_frame_gate(suspended: bool, draw: WebDrawKind) -> crate::frame::host_step::Gate {
+    if suspended
+        || matches!(
+            draw,
+            WebDrawKind::HandingOver { waiting_for_gpu: true }
+                | WebDrawKind::ContextLost
+                | WebDrawKind::Moving
+        )
+    {
+        crate::frame::host_step::Gate::Skip
+    } else {
+        crate::frame::host_step::Gate::Draw
+    }
+}
+
+/// Outcome of one `wgpu::Surface::get_current_texture` call without the texture payload, so
+/// acquisition policy can be tested off `wasm32`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WebAcquireStatus {
+    Ready,
+    Timeout,
+    Occluded,
+    OutdatedOrLost,
+    Validation,
+}
+
+/// Action taken after `get_current_texture` returns [`WebAcquireStatus`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WebAcquireAction {
+    UseTexture,
+    ReconfigureAndRetry,
+    Miss(crate::window::Missed),
+}
+
+/// Maps a canvas texture acquisition status and remaining reconfigure retries to an action.
+///
+/// Transient `Timeout` and `Occluded` statuses return missed frames instead of terminating the
+/// app; `Outdated` and `Lost` reconfigure once before becoming fatal `Missed::Unconfigured`.
+pub(crate) fn web_acquire_action(status: WebAcquireStatus, retries_left: u8) -> WebAcquireAction {
+    use crate::window::Missed;
+    match status {
+        WebAcquireStatus::Ready => WebAcquireAction::UseTexture,
+        WebAcquireStatus::Timeout => WebAcquireAction::Miss(Missed::Timeout),
+        WebAcquireStatus::Occluded => WebAcquireAction::Miss(Missed::Occluded),
+        WebAcquireStatus::OutdatedOrLost if retries_left > 0 => WebAcquireAction::ReconfigureAndRetry,
+        WebAcquireStatus::OutdatedOrLost | WebAcquireStatus::Validation => {
+            WebAcquireAction::Miss(Missed::Unconfigured)
+        }
+    }
+}
+
+/// How the web host responds inside `FrameHost::on_missed`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WebMissAction {
+    /// Canvas acquisition failed fatally: report the error and end the event loop.
+    Fatal,
+    /// Surface is occluded: step covered work if unstepped, without requesting another rAF.
+    CoveredOnly,
+    /// Transient miss: step covered work if unstepped and request a redraw on the next rAF.
+    RetryNextFrame,
+}
+
+/// Classifies a missed web frame for `WebFrameHost::on_missed`.
+pub(crate) fn web_miss_action(missed: crate::window::Missed) -> WebMissAction {
+    use crate::window::Missed;
+    match missed {
+        Missed::Unconfigured => WebMissAction::Fatal,
+        Missed::Occluded => WebMissAction::CoveredOnly,
+        Missed::Timeout | Missed::Outdated => WebMissAction::RetryNextFrame,
+    }
+}
+
+/// Whether `WebFrameHost::post_step_check` should drop the acquired drawable and reblend.
+///
+/// Skips re-acquiring when this frame already tried reblending for `rt_srgb` (for example on a
+/// WebGL2 surface without an sRGB twin where the chosen format cannot match `rt_srgb`).
+pub(crate) fn should_post_step_reblend(
+    renderer_srgb: bool,
+    rt_srgb: bool,
+    reblend_tried: Option<bool>,
+) -> bool {
+    renderer_srgb != rt_srgb && reblend_tried != Some(rt_srgb)
+}
+
+/// How a browser represents `Element.scrollLeft` on a `direction: rtl` container.
+///
+/// Matches `detectRtlScrollType()` in `platform/web/bridge.js`:
+/// - `Negative` (CSSOM View standard: Chromium >= 85, Firefox, Safari >= 15.4): `0` at the right
+///   (start) edge, `-max` at the left (end) edge.
+/// - `Reverse` (legacy Edge/IE): `0` at the right (start) edge, `+max` at the left (end) edge.
+/// - `Default` (legacy Blink/WebKit): `+max` at the right (start) edge, `0` at the left (end) edge.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RtlScrollModel {
+    Negative,
+    Reverse,
+    Default,
+}
+
+/// Converts a DOM `Element.scrollLeft` reading into Rune's logical horizontal scroll offset
+/// (`0..=max_scroll`, measuring distance from the inline-start edge).
+pub(crate) fn scroll_x_from_dom(
+    scroll_left: f32,
+    max_scroll: f32,
+    rtl: bool,
+    model: RtlScrollModel,
+) -> f32 {
+    if !scroll_left.is_finite() || !max_scroll.is_finite() {
+        return 0.0;
+    }
+    let max = max_scroll.max(0.0);
+    let logical = if !rtl {
+        scroll_left
+    } else {
+        match model {
+            RtlScrollModel::Negative => -scroll_left,
+            RtlScrollModel::Reverse => scroll_left,
+            RtlScrollModel::Default => max - scroll_left,
+        }
+    };
+    logical.clamp(0.0, max)
+}
+
+/// Converts Rune's logical horizontal scroll offset (`0..=max_scroll`) into the DOM
+/// `Element.scrollLeft` value expected by the browser's RTL scroll model.
+pub(crate) fn scroll_x_to_dom(
+    offset: f32,
+    max_scroll: f32,
+    rtl: bool,
+    model: RtlScrollModel,
+) -> f32 {
+    if !offset.is_finite() || !max_scroll.is_finite() {
+        return 0.0;
+    }
+    let max = max_scroll.max(0.0);
+    let clamped = offset.clamp(0.0, max);
+    if !rtl {
+        clamped
+    } else {
+        match model {
+            RtlScrollModel::Negative => if clamped == 0.0 { 0.0 } else { -clamped },
+            RtlScrollModel::Reverse => clamped,
+            RtlScrollModel::Default => max - clamped,
+        }
+    }
+}
+
 #[cfg(test)]
 #[path = "web_math_tests.rs"]
 mod tests;

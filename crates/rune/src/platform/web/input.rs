@@ -14,7 +14,7 @@ extern "C" {
     #[wasm_bindgen(js_name = syncA11y)]
     fn sync_a11y(handle: &JsValue, json: &str);
     #[wasm_bindgen(js_name = syncScrollX)]
-    fn sync_scroll_x(handle: &JsValue, path: &str, x: f32);
+    fn sync_scroll_x(handle: &JsValue, path: &str, x: f32, rtl: bool);
     fn activate(handle: &JsValue);
     #[wasm_bindgen(js_name = syncPage)]
     fn sync_page(handle: &JsValue, height: f32, focused: bool);
@@ -72,8 +72,8 @@ pub(super) struct Bridge {
     document: bool,
     /// The page height and control focus the page last heard.
     page: Option<(f32, bool)>,
-    /// The horizontal offsets the mirror's containers were last set to.
-    scroll_x: Vec<(String, f32)>,
+    /// The horizontal offsets and RTL flags the mirror's containers were last set to.
+    scroll_x: Vec<(String, f32, bool)>,
     /// The IME area the page's text field was last put at.
     caret: Option<[f32; 4]>,
     /// When the mirror was last rebuilt, for the scroll throttle (`sync_input`).
@@ -197,10 +197,16 @@ impl Running {
             // A horizontal viewport Rune scrolled (a wheel or a key on desktop) moves the mirror's
             // container to match; one the browser scrolled already says where it is.
             let handle = &self.input.handle;
-            let next = rt.page_scroll_x();
-            for (path, x) in &next {
-                let known = self.input.scroll_x.iter().find(|(p, _)| p == path).map(|(_, x)| *x);
-                if known.is_none_or(|known| (known - x).abs() > 0.5) { sync_scroll_x(handle, path, *x); }
+            let mut nodes = rt.tree.nodes.iter();
+            let next: Vec<_> = rt.page_scroll_x().into_iter().map(|(path, x)| {
+                let rtl = nodes.find(|n| n.path == path).is_some_and(|n| n.flow == crate::el::Flow::Rtl);
+                (path, x, rtl)
+            }).collect();
+            for (path, x, rtl) in &next {
+                let known = self.input.scroll_x.iter().find(|(p, _, _)| p == path).map(|(_, x, rtl)| (*x, *rtl));
+                if known.is_none_or(|(kx, krtl)| (kx - x).abs() > 0.5 || krtl != *rtl) {
+                    sync_scroll_x(handle, path, *x, *rtl);
+                }
             }
             self.input.scroll_x = next;
         }

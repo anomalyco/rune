@@ -791,7 +791,7 @@ export function syncA11y(h, json) {
                 // container says it is.
                 el.addEventListener('scroll', () => {
                     const path = el._path;
-                    if (path && !h.disposed) h.send({ kind: 'scroll_x', path, x: el.scrollLeft });
+                    if (path && !h.disposed) h.send({ kind: 'scroll_x', path, x: readScrollX(el) });
                 }, { passive: true });
             }
             h.a11yNodes.set(key, el);
@@ -939,12 +939,82 @@ export function syncPage(h, height, focused) {
     if (h.band && h.band.style.height !== `${height}px`) h.band.style.height = `${height}px`;
 }
 
+// Detects how this browser represents `Element.scrollLeft` on a `direction: rtl` container:
+// - 'negative': 0 at the right (start) edge, -(scrollWidth - clientWidth) at the left (end) edge
+//   (CSSOM View standard: Chromium >= 85, Firefox, Safari >= 15.4).
+// - 'reverse':  0 at the right (start) edge, +(scrollWidth - clientWidth) at the left (end) edge
+//   (legacy Edge / IE).
+// - 'default':  +(scrollWidth - clientWidth) at the right (start) edge, 0 at the left (end) edge
+//   (legacy Blink / WebKit).
+let rtlScrollType = null;
+function detectRtlScrollType() {
+    if (rtlScrollType) return rtlScrollType;
+    const host = document.body ?? document.documentElement;
+    if (!host) return 'negative';
+    const outer = document.createElement('div');
+    outer.dir = 'rtl';
+    outer.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:40px;height:40px;overflow-x:scroll;overflow-y:hidden;scrollbar-width:none;visibility:hidden;pointer-events:none;';
+    const inner = document.createElement('div');
+    inner.style.cssText = 'width:80px;height:1px;';
+    outer.append(inner);
+    host.append(outer);
+    let type = 'negative';
+    if (outer.scrollWidth > outer.clientWidth) {
+        if (outer.scrollLeft > 0) {
+            type = 'default';
+        } else {
+            outer.scrollLeft = 1;
+            type = outer.scrollLeft === 0 ? 'negative' : 'reverse';
+        }
+        rtlScrollType = type;
+    }
+    outer.remove();
+    return type;
+}
+
+function isRtl(el) {
+    if (el.dir === 'rtl') return true;
+    if (el.dir === 'ltr') return false;
+    return getComputedStyle(el).direction === 'rtl';
+}
+
+// Normalizes `el.scrollLeft` into Rune's logical horizontal scroll offset (0 at the inline-start
+// edge, growing toward the inline-end edge up to `scrollWidth - clientWidth`).
+function readScrollX(el) {
+    const raw = el.scrollLeft;
+    if (!Number.isFinite(raw)) return 0;
+    const max = Math.max(0, el.scrollWidth - el.clientWidth);
+    if (!isRtl(el)) return Math.min(Math.max(raw, 0), max);
+    const type = detectRtlScrollType();
+    const logical = type === 'negative' ? -raw : type === 'default' ? max - raw : raw;
+    return Math.min(Math.max(logical, 0), max);
+}
+
+// Converts Rune's logical horizontal scroll offset (`0..=max`) into the DOM `scrollLeft` value
+// expected by `el`'s direction and browser RTL scroll model.
+function domScrollLeft(el, x) {
+    if (!Number.isFinite(x)) return 0;
+    const max = Math.max(0, el.scrollWidth - el.clientWidth);
+    const clamped = Math.min(Math.max(x, 0), max);
+    if (!isRtl(el)) return clamped;
+    const type = detectRtlScrollType();
+    if (type === 'negative') return clamped === 0 ? 0 : -clamped;
+    if (type === 'default') return max - clamped;
+    return clamped;
+}
+
 // A horizontal viewport Rune scrolled itself (a wheel, a key): move the mirror's container to
 // match, so the two stay the same text. The container's own scroll event echoes back the same
 // offset, which Rune ignores.
-export function syncScrollX(h, path, x) {
+export function syncScrollX(h, path, x, rtl) {
     const el = h.scrollEls.get(path);
-    if (el && Math.abs(el.scrollLeft - x) > 0.5) el.scrollLeft = x;
+    if (!el) return;
+    if (rtl !== undefined) {
+        const dir = rtl ? 'rtl' : 'ltr';
+        if (el.dir !== dir) el.dir = dir;
+    }
+    const target = domScrollLeft(el, x);
+    if (Math.abs(el.scrollLeft - target) > 0.5) el.scrollLeft = target;
 }
 
 // Rune's first frame is on screen: the canvas announces `runepresent`, and a page swaps its
