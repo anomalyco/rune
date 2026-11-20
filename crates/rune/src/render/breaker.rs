@@ -178,8 +178,10 @@ impl Renderer {
     }
 
     fn build_feature(&mut self, device: &wgpu::Device, feature: Feature) {
+        // `Rgba8Snorm` never allows `RENDER_ATTACHMENT`, so every pipeline fails validation
+        // regardless of blend state or passthrough bytecode.
         #[cfg(test)]
-        let format = if self.breakers.refuse == Some(feature) { wgpu::TextureFormat::Rgba32Uint } else { FORMAT };
+        let format = if self.breakers.refuse == Some(feature) { wgpu::TextureFormat::Rgba8Snorm } else { FORMAT };
         #[cfg(not(test))]
         let format = FORMAT;
         match feature {

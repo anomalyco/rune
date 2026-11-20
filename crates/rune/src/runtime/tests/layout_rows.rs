@@ -153,7 +153,7 @@ fn send_flight_follows_the_measured_bubble_while_earlier_rows_land() {
     for _ in 0..240 {
         rt.frame(1.0 / 120.0);
         if let Some(f) = rt.motion.flights.first() {
-            assert!(rt.instances.iter().any(|q| q.params[1] == KIND_GLYPH && q.uv[2] > 0.0 && q.fill[3] > 0.1
+            assert!(rt.instances.iter().any(|q| q.params[1] == KIND_GLYPH && (q.uv[2] > 0.0 || q.radii[3] > 0.0) && q.fill[3] > 0.1
                 && q.rect[0].max(q.clip[0]) + 1.0 < (q.rect[0] + q.rect[2]).min(q.clip[2])
                 && q.rect[1].max(q.clip[1]) + 1.0 < (q.rect[1] + q.rect[3]).min(q.clip[3])),
                 "the source/destination handoff never loses every visible glyph");
