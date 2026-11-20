@@ -87,7 +87,7 @@ impl RuntimeCore {
         for stack in self.motion.stacks.values_mut().filter(|s| !s.seams.is_empty()) {
             // Trailing to leading: a third face inherits the same boundary, not a new spring.
             for seam in stack.seams.iter_mut().rev() {
-                let indices = |f: Face| Some((*self.tree.node_index.get(&f.row)?, *self.tree.node_index.get(&f.ink)?));
+                let indices = |f: Face| Some((self.tree.index_of_id(f.row)?, self.tree.index_of_id(f.ink)?));
                 let (Some((a, i)), Some((b, j))) = (indices(seam.top), indices(seam.bottom)) else { continue };
                 if self.tree.nodes[i].local.h != seam.top.height || self.tree.nodes[j].local.h != seam.bottom.height {
                     continue;
@@ -108,7 +108,7 @@ impl RuntimeCore {
                         goal + (seam.from - goal) * left
                     }
                     Boundary::Opening { between } => {
-                        let Some(&k) = self.tree.node_index.get(&between) else { continue };
+                        let Some(k) = self.tree.index_of_id(between) else { continue };
                         let Some(y) = top(k, k, &self.paint.row_dy) else { continue };
                         let depth = self.tree.nodes[k].target[3] - self.tree.nodes[i].target[3];
                         let t = ((y + self.paint.row_h[k] - end) / depth.max(1.0)).clamp(0.0, 1.0);

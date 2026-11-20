@@ -399,14 +399,9 @@ impl RuntimeCore {
     fn mounted_row_hash(&self, list_path: &str, row_key: &str, g_path: &str) -> Option<u64> {
         let list_node = self.live(list_path)?;
         let row_path = format!("{list_path}/{row_key}");
-        let row_node = (list_node + 1..self.tree.nodes.len())
-            .find(|&j| self.tree.nodes[j].parent == Some(list_node) && self.tree.nodes[j].path == row_path)?;
-        let inside_row = |j: usize| {
-            j == row_node
-                || std::iter::successors(self.tree.nodes[j].parent, |&p| self.tree.nodes[p].parent).any(|p| p == row_node)
-        };
+        let row_node = self.tree.direct_child_by_path(list_node, self.tree.nodes.len(), &row_path)?;
         let mut hasher = rustc_hash::FxHasher::default();
-        for j in (row_node..self.tree.nodes.len()).take_while(|&j| inside_row(j)) {
+        for j in (row_node..self.tree.nodes.len()).take_while(|&j| self.tree.is_descendant(j, row_node)) {
             if self.is_selectable(j)
                 && !self.subtree_exiting(j)
                 && self.allowed(j)
@@ -427,10 +422,7 @@ impl RuntimeCore {
         if let Some((list_path, r0, r1)) = self.is_cross_row_virtual(first, last) {
             if let Some(g) = self.live(g_path) && let Some(ln) = self.live(&list_path) {
                 let (first_ord, last_ord) = (self.tree_order(first), self.tree_order(last));
-                let inside_list = |j: usize| {
-                    j == ln || std::iter::successors(self.tree.nodes[j].parent, |&p| self.tree.nodes[p].parent).any(|p| p == ln)
-                };
-                for j in (g + 1..self.tree.nodes.len()).filter(|&j| !inside_list(j) && self.member(j, g)) {
+                for j in (g + 1..self.tree.nodes.len()).filter(|&j| !self.tree.is_descendant(j, ln) && self.member(j, g)) {
                     let ord = self.tree_order(EndRef::Mounted(j));
                     if ord > first_ord && ord < last_ord {
                         (&self.tree.nodes[j].path, self.content_of(j)).hash(&mut hasher);

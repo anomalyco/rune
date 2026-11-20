@@ -463,7 +463,7 @@ fn run_headless(prep: HeadlessPrep, config: HeadlessConfig, app: &mut dyn Headle
         eprintln!("{s}");
     }
     // A headless run opens no links (`Tx::open_url`): say which its handlers asked for.
-    for url in app.rt_mut().take_url_requests() {
+    for url in app.rt_mut().host.take_url_requests() {
         eprintln!("rune: open_url {url} (headless: not opened)");
     }
     if !loop_checked { std::process::exit(3); }

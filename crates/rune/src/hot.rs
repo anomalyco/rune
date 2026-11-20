@@ -408,7 +408,7 @@ fn headless_core(
             encoder.write_header().unwrap().write_image_data(&pixels).expect("hot snapshot");
             std::fs::rename(temp, png).expect("publish hot snapshot");
             let mut tree = tree_json_core(core, core.clock);
-            tree["hot"] = json!({"generation": generation, "pid": std::process::id(), "state": state_addr, "request": command["id"], "pixels_ns": pixels_ns, "scrolls": core.hot_scrolls(), "motion": core.hot_motion()});
+            tree["hot"] = json!({"generation": generation, "pid": std::process::id(), "state": state_addr, "request": command["id"], "pixels_ns": pixels_ns, "scrolls": core.hot_scrolls(), "motion": core.tree.hot_motion(&core.scene)});
             atomic_write(&png.with_extension("json"), &serde_json::to_vec_pretty(&tree).unwrap());
             println!("rune-hot-pixels {}", tree["hot"]);
             use std::io::Write;

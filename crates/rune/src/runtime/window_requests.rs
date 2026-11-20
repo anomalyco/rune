@@ -13,9 +13,9 @@ pub(crate) struct HostState {
     pub(in crate::runtime) system_reduced_motion: bool,
     pub(in crate::runtime) system_accent: crate::SystemAccent,
     /// What [`Cx::system_contrast`] reports.
-    pub(crate) system_contrast: Option<crate::SystemContrast>,
+    pub(in crate::runtime) system_contrast: Option<crate::SystemContrast>,
     /// What [`Cx::system_increased_contrast`] reports.
-    pub(crate) system_increased_contrast: bool,
+    pub(in crate::runtime) system_increased_contrast: bool,
     pub(in crate::runtime) scroll_bars: system_settings::ScrollBarHost,
     pub(crate) native_overlay: bool,
     /// The window or overlay surface's frame counts, published by its host.
@@ -23,7 +23,7 @@ pub(crate) struct HostState {
     /// `App::dev_stats`.
     pub(crate) app_stats: Option<fn() -> String>,
     /// The window's content top-left in global screen points, as its host last saw it.
-    pub(in crate::runtime) window_origin: (f32, f32),
+    window_origin: (f32, f32),
     /// The window's content top-left in desktop pixels, as its host last saw it (`Drag::screen_point`).
     pub(in crate::runtime) window_pixels: Option<(i32, i32)>,
     pub(in crate::runtime) window_focused: Option<bool>,
@@ -42,22 +42,22 @@ pub(crate) struct HostState {
     /// after a show the same turn asked for (`window::Minimize`).
     pub(crate) minimize: crate::window::Minimize,
     /// Links handlers asked to open that this runtime left unopened (`Runtime::take_url_requests`).
-    pub(crate) url_requests: Vec<String>,
+    url_requests: Vec<String>,
     /// True when attached to a live window, overlay or web canvas, not a headless or scripted run.
     pub(crate) open_urls_natively: bool,
     /// Pop-up menus asked for (`Tx::popup_menu`) and not yet answered, oldest first.
-    pub(crate) popups: popup_dispatch::Popups,
+    pub(in crate::runtime) popups: popup_dispatch::Popups,
     /// The file dialog asked for (`Tx::open_file`, `Tx::save_file`) and not yet answered.
-    pub(crate) file_dialog: crate::file_dialog::DialogState,
+    pub(in crate::runtime) file_dialog: crate::file_dialog::DialogState,
     /// File dialog callbacks, by id, until their answer runs.
     pub(in crate::runtime) file_dialog_answers: Vec<(u64, crate::file_dialog::AnswerFn)>,
     pub(in crate::runtime) next_file_dialog: u64,
     /// `Tx::announce`'s last words, for the accessibility tree's live region.
     pub(crate) announcement: crate::a11y::Announcement,
     /// The accessibility tree, while an assistive client listens (`a11y/tree.rs`).
-    pub(crate) a11y: Option<Box<crate::a11y::tree::A11yTree>>,
+    pub(in crate::runtime) a11y: Option<Box<crate::a11y::tree::A11yTree>>,
     /// The band of a taller document the window draws (`App::web_document`).
-    pub(crate) page: Option<web_page::Page>,
+    pub(in crate::runtime) page: Option<web_page::Page>,
 }
 
 impl HostState {
@@ -96,6 +96,110 @@ impl HostState {
             a11y: None,
             page: None,
         }
+    }
+
+    #[inline]
+    pub(super) fn window_origin(&self) -> (f32, f32) {
+        self.window_origin
+    }
+
+    /// Updates the cached global screen origin; returns true when it changed.
+    #[inline]
+    pub(super) fn set_window_origin(&mut self, origin: (f32, f32)) -> bool {
+        if self.window_origin == origin { return false; }
+        self.window_origin = origin;
+        true
+    }
+
+    /// Takes the links handlers asked to open that this runtime didn't open: all of them in a
+    /// headless run or test, none in a window. Each was already checked.
+    #[inline]
+    pub(crate) fn take_url_requests(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.url_requests)
+    }
+
+    #[inline]
+    pub(crate) fn push_url_request(&mut self, url: String) {
+        self.url_requests.push(url);
+    }
+
+    #[inline]
+    pub(crate) fn a11y(&self) -> Option<&crate::a11y::tree::A11yTree> {
+        self.a11y.as_deref()
+    }
+
+    #[inline]
+    pub(crate) fn a11y_mut(&mut self) -> Option<&mut crate::a11y::tree::A11yTree> {
+        self.a11y.as_deref_mut()
+    }
+
+    #[inline]
+    pub(crate) fn a11y_or_insert(&mut self) -> &mut crate::a11y::tree::A11yTree {
+        self.a11y.get_or_insert_with(Default::default)
+    }
+
+    #[inline]
+    pub(crate) fn a11y_deactivate(&mut self) {
+        self.a11y = None;
+    }
+
+    #[cfg(test)]
+    #[inline]
+    pub(crate) fn popup_is_open(&self) -> bool {
+        self.popups.is_open()
+    }
+
+    #[inline]
+    pub(super) fn clear_titlebar(&mut self) {
+        self.titlebar.clear();
+    }
+
+    #[inline]
+    pub(crate) fn set_app_stats(&mut self, stats: Option<fn() -> String>) {
+        self.app_stats = stats;
+    }
+
+    /// Asks the window for the content's new height, on this commit's spring. The first
+    /// commit, a viewport change and `Tx::instant` jump.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn fit_window(
+        &mut self,
+        height: f32,
+        viewport: (f32, f32),
+        scale: f32,
+        reduced_motion: bool,
+        headless: bool,
+        tx: &Tx,
+        first: bool,
+    ) {
+        let height = height.ceil_to(scale).max(1.0);
+        if !self.fit.ask(height, viewport.1) { return; }
+        let jump = first || tx.commit.snaps() || tx.relayout || reduced_motion;
+        // Only a macOS window and headless runs move the frame on a spring.
+        if !jump && self.window_resting && (cfg!(target_os = "macos") || headless) { self.fit.hold = FitHold::Asked; }
+        let request = crate::window::frame::FrameRequest {
+            size: Some((viewport.0, height)), animate: !jump,
+            spring: (!jump).then(|| tx.motion.map_or(crate::tok::motion::DEFAULT, MotionSource::spring)), center: false,
+        };
+        self.window_frame = Some(self.window_frame.unwrap_or_default().merge(request));
+    }
+
+    #[inline]
+    pub(super) fn content_height_from(&self, view_height: f32) -> f32 {
+        (view_height * self.zoom.k).ceil_to(self.zoom.window_scale).max(1.0)
+    }
+
+    /// Someone resized a window that fits its content (not a page's band) to `height`: it
+    /// goes back to the content's height.
+    #[inline]
+    pub(super) fn fit_resized(&mut self, height: f32, current_height: f32) -> bool {
+        self.fit_height && self.page.is_none() && self.window_resting && self.fit.resized(height, current_height)
+    }
+
+    /// Whether this frame holds its motion for the window (see [`FitHold`]).
+    #[inline]
+    pub(super) fn fit_frame_holds(&mut self) -> bool {
+        self.fit.frame_holds()
     }
 }
 
@@ -216,17 +320,9 @@ impl FitWindow {
 impl RuntimeCore {
     /// Asks the window for the content's new height, on this commit's spring. The first
     /// commit, a viewport change and `Tx::instant` jump.
+    #[inline]
     pub(super) fn fit_window(&mut self, height: f32, tx: &Tx, first: bool) {
-        let height = height.ceil_to(self.env.scale).max(1.0);
-        if !self.host.fit.ask(height, self.viewport.1) { return; }
-        let jump = first || tx.commit.snaps() || tx.relayout || self.reduced_motion;
-        // Only a macOS window and headless runs move the frame on a spring.
-        if !jump && self.host.window_resting && (cfg!(target_os = "macos") || self.wall_start.is_none()) { self.host.fit.hold = FitHold::Asked; }
-        let request = crate::window::frame::FrameRequest {
-            size: Some((self.viewport.0, height)), animate: !jump,
-            spring: (!jump).then(|| tx.motion.map_or(crate::tok::motion::DEFAULT, MotionSource::spring)), center: false,
-        };
-        self.host.window_frame = Some(self.host.window_frame.unwrap_or_default().merge(request));
+        self.host.fit_window(height, self.viewport, self.env.scale, self.reduced_motion, self.wall_start.is_none(), tx, first);
     }
 
     /// The root's natural height at the current width, in window points (the view's times its
@@ -236,17 +332,21 @@ impl RuntimeCore {
         let measured = self.measure_pass(app, &Tx::default(), false);
         let height = measured.nodes.first().map_or(self.viewport.1, |root| root.local.h);
         self.discard_measured(measured);
-        (height * self.host.zoom.k).ceil_to(self.host.zoom.window_scale).max(1.0)
+        self.host.content_height_from(height)
     }
 
     /// Someone resized a window that fits its content (not a page's band) to `height`: it
     /// goes back to the content's height.
+    #[inline]
     pub(super) fn fit_resized(&mut self, height: f32) -> bool {
-        self.host.fit_height && self.host.page.is_none() && self.host.window_resting && self.host.fit.resized(height, self.viewport.1)
+        self.host.fit_resized(height, self.viewport.1)
     }
 
     /// Whether this frame holds its motion for the window (see [`FitHold`]).
-    pub(super) fn fit_frame_holds(&mut self) -> bool { self.host.fit.frame_holds() }
+    #[inline]
+    pub(super) fn fit_frame_holds(&mut self) -> bool {
+        self.host.fit_frame_holds()
+    }
 }
 
 #[cfg(test)]

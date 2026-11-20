@@ -190,6 +190,7 @@ use turn::{Turn, compose_turn, open_turned_layer, screen_clip_of};
 pub(crate) use types::{AnimSource, Node};
 pub use types::{FrameStats, TitlebarAction};
 use types::{AxisScroll, GlideTo, Inh, NodeCold, RowLayout, ScaleMotion, ScrollState, Stack, WidthHold, XMotion};
+pub(crate) use window_requests::HostState;
 
 #[cfg(test)]
 mod timer_wake_tests;
@@ -488,7 +489,7 @@ impl<S: 'static> Runtime<S> {
     /// Attaches a live playground to this runtime and keeps `has_playground` in sync.
     pub(crate) fn attach_playground(&mut self, live: crate::playground::Live<S>) {
         self.hooks.playground = Some(Box::new(live));
-        self.tree.has_playground = true;
+        self.tree.attach_playground();
     }
 }
 

@@ -568,7 +568,7 @@ pub struct FrameStats {
 pub(crate) struct TreeState {
     pub(crate) nodes: Vec<Node>,
     /// Some element is `El::sticky_top` or `El::sticky_bottom` (see `runtime/scroll/sticky.rs`).
-    pub(crate) has_sticky: bool,
+    pub(in crate::runtime) has_sticky: bool,
     pub(in crate::runtime) has_dissolve: bool,
     /// Some element is `El::raise`d: paint order isn't tree order.
     pub(in crate::runtime) has_raise: bool,
@@ -587,7 +587,7 @@ pub(crate) struct TreeState {
     pub(in crate::runtime) spare_nodes: Vec<Node>,
     pub(in crate::runtime) next_id: u64,
     /// The node index the app's view returned when the playground is attached.
-    pub(crate) app_root: usize,
+    app_root: usize,
     pub(in crate::runtime) path_ids: HashMap<String, NodeId>,
     /// Pictures whose image changed shape since the last commit, which lays them out at once.
     pub(in crate::runtime) aspect_snap: Vec<NodeId>,
@@ -596,7 +596,7 @@ pub(crate) struct TreeState {
     /// Whether this runtime has an attached playground (`hooks.playground.is_some()`).
     pub(crate) has_playground: bool,
     pub(in crate::runtime) exit_mask: exit_mask::Mask,
-    pub(in crate::runtime) key_index: key_index::KeyIndex,
+    key_index: key_index::KeyIndex,
 }
 
 impl TreeState {
@@ -626,6 +626,132 @@ impl TreeState {
             exit_mask: Default::default(),
             key_index: Default::default(),
         }
+    }
+
+    /// Whether any node in the tree is `El::sticky_top` or `El::sticky_bottom`.
+    #[inline]
+    pub(crate) fn has_sticky(&self) -> bool {
+        self.has_sticky
+    }
+
+    #[inline]
+    pub(super) fn has_drawn_layout(&self) -> bool {
+        self.has_drawn_layout
+    }
+
+    #[inline]
+    pub(super) fn is_built(&self) -> bool {
+        self.built
+    }
+
+    /// Marks this tree as hosting a live playground so [`Self::app_root`] tracks the story root.
+    #[inline]
+    pub(super) fn attach_playground(&mut self) {
+        self.has_playground = true;
+    }
+
+    /// The node the app's view returned: the first, or with the playground attached, the one
+    /// above its bar or on its stage. Root handlers (window focus, paste, file drops) are there.
+    #[inline]
+    pub(crate) fn app_root(&self) -> usize {
+        if self.has_playground { self.app_root } else { self.view_root() }
+    }
+
+    /// The node the view returned: the first, or the first inside the frame that holds the
+    /// Windows caption buttons over it (`titlebar::frame`).
+    #[inline]
+    fn view_root(&self) -> usize {
+        usize::from(self.nodes.first().is_some_and(|n| n.key.as_deref() == Some(crate::titlebar::FRAME_KEY)))
+    }
+
+    pub(super) fn find_app_root(&mut self) {
+        let view_root = self.view_root();
+        if !self.has_playground { self.app_root = view_root; return; }
+        // A scrolling stage holds the root in a margin.
+        let margin = |k: Option<&str>| k == Some("playground-margin");
+        let wraps = |k: &str| k == "playground-closed" || margin(Some(k)) || crate::playground::is_stage(k);
+        let nodes = &self.nodes;
+        self.app_root = nodes.iter().position(|n| !margin(n.key.as_deref()) && n.parent.is_some_and(|p| nodes[p].key.as_deref().is_some_and(wraps))).unwrap_or(view_root);
+    }
+
+    /// The kept key index, when `nodes` are the current nodes as of `commit`.
+    #[inline]
+    pub(super) fn key_index_for(&self, nodes: &[Node], commit: u64) -> Option<&key_index::KeyIndex> {
+        self.key_index.get(nodes, commit)
+    }
+
+    /// Prepares the key index for `self.nodes` as of `commit` when `lookups` warrants it.
+    #[inline]
+    pub(super) fn prepare_key_index(&mut self, commit: u64, lookups: usize) {
+        self.key_index.prepare(&self.nodes, commit, lookups);
+    }
+
+    /// `self.nodes` changed without a commit: kept per-node answers no longer hold.
+    #[inline]
+    pub(super) fn nodes_replaced(&mut self) {
+        self.key_index.forget();
+        self.exit_mask.forget();
+    }
+
+    #[inline]
+    pub(super) fn index_of_id(&self, id: NodeId) -> Option<usize> {
+        self.node_index.get(&id).copied()
+    }
+
+    #[inline]
+    pub(super) fn node_by_id(&self, id: NodeId) -> Option<&Node> {
+        self.nodes.get(*self.node_index.get(&id)?)
+    }
+
+    #[inline]
+    pub(super) fn id_of_path(&self, path: &str) -> Option<NodeId> {
+        self.path_ids.get(path).copied()
+    }
+
+    /// Current node index for `path`, verified against `self.nodes` so stale ids return `None`.
+    #[inline]
+    pub(super) fn index_of_path(&self, path: &str) -> Option<usize> {
+        self.path_ids.get(path).and_then(|id| self.node_index.get(id)).copied().filter(|&i| self.nodes.get(i).is_some_and(|n| n.path == path))
+    }
+
+    /// Whether node `i` is `ancestor` or a descendant of `ancestor`.
+    #[inline]
+    pub(super) fn is_descendant(&self, i: usize, ancestor: usize) -> bool {
+        std::iter::successors(Some(i), |&p| self.nodes[p].parent).any(|p| p == ancestor)
+    }
+
+    /// Whether node `i` or an ancestor has a key `is` takes.
+    #[inline]
+    pub(super) fn under(&self, i: usize, is: impl Fn(&str) -> bool) -> bool {
+        std::iter::successors(Some(i), |&j| self.nodes[j].parent).any(|j| self.nodes[j].key.as_deref().is_some_and(&is))
+    }
+
+    /// The path of the element keyed `key`.
+    #[inline]
+    pub(super) fn key_path(&self, key: &str) -> Option<String> {
+        self.nodes.iter().find(|n| n.key.as_deref() == Some(key)).map(|n| n.path.clone())
+    }
+
+    #[inline]
+    pub(super) fn index_of_key(&self, key: &str) -> Option<usize> {
+        self.nodes.iter().position(|n| n.key.as_deref() == Some(key))
+    }
+
+    #[inline]
+    pub(super) fn selects_index(&self, selector: &str) -> Option<usize> {
+        self.nodes.iter().position(|n| crate::flight::selects(selector, &n.path, n.key.as_deref()))
+    }
+
+    /// Index of the last node inside `root`'s contiguous pre-order subtree (`root` if leaf).
+    #[inline]
+    pub(super) fn subtree_end(&self, root: usize) -> usize {
+        (root + 1..self.nodes.len()).take_while(|&j| self.is_descendant(j, root)).last().unwrap_or(root)
+    }
+
+    /// Direct child of `parent` before `end` whose path equals `path`.
+    #[inline]
+    pub(super) fn direct_child_by_path(&self, parent: usize, end: usize, path: &str) -> Option<usize> {
+        (parent + 1..end).find(|&j| self.nodes[j].parent == Some(parent) && self.nodes[j].path == path)
     }
 }
 

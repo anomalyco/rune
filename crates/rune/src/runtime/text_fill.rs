@@ -12,6 +12,22 @@ pub(crate) fn visible_text_rows(spec: &crate::el::TextSpec, rest_y: f32, shown: 
     if tk > 1e-4 { (shown[0] - rest_y) / tk - pad..(shown[1] - rest_y) / tk + pad } else { f32::NEG_INFINITY..f32::INFINITY }
 }
 
+impl types::TreeState {
+    /// Whether any painted text still has unshaped paragraphs needing a background fill frame:
+    /// every waiting paragraph for an input field, or those within a viewport's height of the
+    /// painted clip for a read-only `by_line` block (whose off-screen lines stay compact runs).
+    pub(super) fn text_fill_due(&self, text_rows: &HashMap<NodeId, (f32, f32)>) -> bool {
+        text_rows.iter().any(|(&id, &(r0, r1))| {
+            let Some(n) = self.node_by_id(id) else { return false };
+            let Some(crate::text::TextLayout::Paragraphs(p)) = &n.text_layout else { return false };
+            if !p.waiting() { return false; }
+            if n.input.is_some() { return true; }
+            let reach = (r1 - r0).max(0.0) + 1.0;
+            p.paragraphs.iter().any(|q| !q.shaped && q.y + q.height >= r0 - reach && q.y <= r1 + reach)
+        })
+    }
+}
+
 impl RuntimeCore {
     /// Shapes waiting paragraphs of each field for up to [`BUDGET`], the rows it drew last
     /// first. True while some still wait, so another frame comes.
@@ -25,18 +41,9 @@ impl RuntimeCore {
         self.fill_text_within(std::time::Duration::MAX, Some(1.0));
     }
 
-    /// Whether any painted text still has unshaped paragraphs needing a background fill frame:
-    /// every waiting paragraph for an input field, or those within a viewport's height of the
-    /// painted clip for a read-only `by_line` block (whose off-screen lines stay compact runs).
+    #[inline]
     pub(super) fn text_fill_due(&self) -> bool {
-        self.paint.text_rows.iter().any(|(&id, &(r0, r1))| {
-            let Some(&i) = self.tree.node_index.get(&id) else { return false };
-            let Some(crate::text::TextLayout::Paragraphs(p)) = &self.tree.nodes[i].text_layout else { return false };
-            if !p.waiting() { return false; }
-            if self.tree.nodes[i].input.is_some() { return true; }
-            let reach = (r1 - r0).max(0.0) + 1.0;
-            p.paragraphs.iter().any(|q| !q.shaped && q.y + q.height >= r0 - reach && q.y <= r1 + reach)
-        })
+        self.tree.text_fill_due(&self.paint.text_rows)
     }
 
     /// Before painting a `by_line` node (`input.is_none()`): shapes any waiting lines inside its
@@ -110,11 +117,10 @@ impl RuntimeCore {
                 self.commit.dirty = true;
             }
         }
-        let nodes = &self.tree.nodes;
-        let idx = &self.tree.node_index;
-        self.paint.text_rows.retain(|id, _| {
-            idx.get(id)
-                .and_then(|&i| nodes[i].text_layout.as_ref())
+        let tree = &self.tree;
+        self.paint.text_rows.retain(|&id, _| {
+            tree.node_by_id(id)
+                .and_then(|n| n.text_layout.as_ref())
                 .is_some_and(|l| matches!(l, crate::text::TextLayout::Paragraphs(p) if p.waiting()))
         });
         more

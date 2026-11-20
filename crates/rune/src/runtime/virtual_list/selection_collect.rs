@@ -7,7 +7,17 @@ use super::{
 use crate::el::{SelectRequest, SelectionCopy};
 use crate::runtime::selectable::phase::{self, Selection};
 use crate::runtime::selectable::{CopyJoin, SelectedText, TextSelection, floor_boundary};
-use crate::runtime::{Node, RuntimeCore, ViewDriver};
+use crate::runtime::types::TreeState;
+use crate::runtime::{RuntimeCore, ViewDriver};
+
+impl TreeState {
+    /// Nearest `selection_copy` provider ancestor covering both `n0` and `n1`.
+    fn selection_copy_provider(&self, n0: usize, n1: usize) -> Option<(usize, SelectionCopy)> {
+        let p = std::iter::successors(Some(n0), |&p| self.nodes[p].parent)
+            .find(|&p| self.nodes[p].handlers.selection_copy.is_some() && self.is_descendant(n1, p))?;
+        Some((p, self.nodes[p].handlers.selection_copy.clone()?))
+    }
+}
 
 impl RuntimeCore {
     pub(crate) fn copy_virtual_text(&self, app: &dyn ViewDriver) -> Option<String> {
@@ -18,12 +28,7 @@ impl RuntimeCore {
             EndRef::Offscreen(vi, ti) => self.live(&self.offscreen_text(vi, ti).list_path),
         };
         let (n0, n1) = (node_for(h)?, node_for(f)?);
-        let around = |a: usize, j: usize| std::iter::successors(Some(j), |&p| self.tree.nodes[p].parent).any(|p| p == a);
-        let provider = std::iter::successors(Some(n0), |&p| self.tree.nodes[p].parent)
-            .find(|&p| self.tree.nodes[p].handlers.selection_copy.is_some() && around(p, n1));
-        if let Some(p) = provider
-            && let Some(copy_fn) = self.tree.nodes[p].handlers.selection_copy.clone()
-        {
+        if let Some((p, copy_fn)) = self.tree.selection_copy_provider(n0, n1) {
             let sel = self.collect_virtual_selection(app, Some(p))?;
             if let Some(text) = copy_fn(&sel) {
                 return Some(text);
@@ -152,9 +157,8 @@ impl RuntimeCore {
             .map(|e| e.list_path)
             .or_else(|| {
                 let g = self.live(g_path)?;
-                let inside = |j: usize| j == g || std::iter::successors(self.tree.nodes[j].parent, |&p| self.tree.nodes[p].parent).any(|p| p == g);
                 (g..self.tree.nodes.len())
-                    .take_while(|&j| inside(j))
+                    .take_while(|&j| self.tree.is_descendant(j, g))
                     .find_map(|j| self.commit.virtuals.contains_key(&self.tree.nodes[j].path).then(|| self.tree.nodes[j].path.clone()))
             })?;
         let list_node = self.live(&list_path)?;
@@ -182,8 +186,7 @@ impl RuntimeCore {
         };
 
         // 1. Mounted group members before `list_node`.
-        let inside_g = |j: usize| std::iter::successors(self.tree.nodes[j].parent, |&p| self.tree.nodes[p].parent).any(|p| p == g);
-        for j in (g + 1..list_node).filter(|&j| inside_g(j) && self.member(j, g)) {
+        for j in (g + 1..list_node).filter(|&j| self.tree.is_descendant(j, g) && self.member(j, g)) {
             if append_mounted(j, &mut out, &mut texts, &mut prev_mounted) {
                 hit_cap = true;
                 break;
@@ -199,19 +202,14 @@ impl RuntimeCore {
                 .filter(|e| e.list_path == list_path)
                 .map_or(v.keys.len() - 1, |e| e.row_index.min(v.keys.len() - 1));
 
-            let inside_list = |j: usize| std::iter::successors(self.tree.nodes[j].parent, |&p| self.tree.nodes[p].parent).any(|p| p == list_node);
-            let list_end = (list_node + 1..self.tree.nodes.len()).take_while(|&j| inside_list(j)).last().unwrap_or(list_node);
+            let list_end = self.tree.subtree_end(list_node);
 
             for r in row_start..=row_end {
                 if v.range.contains(&r) {
                     let row_path = format!("{list_path}/{}", v.keys[r]);
-                    let Some(row_node) = (list_node + 1..=list_end)
-                        .find(|&j| self.tree.nodes[j].parent == Some(list_node) && self.tree.nodes[j].path == row_path)
+                    let Some(row_node) = self.tree.direct_child_by_path(list_node, list_end + 1, &row_path)
                     else { continue };
-                    let inside_row = |j: usize| {
-                        j == row_node || std::iter::successors(self.tree.nodes[j].parent, |&p| self.tree.nodes[p].parent).any(|p| p == row_node)
-                    };
-                    for j in (row_node..=list_end).take_while(|&j| inside_row(j)).filter(|&j| self.member(j, g)) {
+                    for j in (row_node..=list_end).take_while(|&j| self.tree.is_descendant(j, row_node)).filter(|&j| self.member(j, g)) {
                         if append_mounted(j, &mut out, &mut texts, &mut prev_mounted) {
                             hit_cap = true;
                             break;
@@ -258,7 +256,7 @@ impl RuntimeCore {
 
             // 3. Mounted group members after the virtual list's subtree.
             if !hit_cap {
-                for j in (list_end + 1..self.tree.nodes.len()).take_while(|&j| inside_g(j)).filter(|&j| self.member(j, g)) {
+                for j in (list_end + 1..self.tree.nodes.len()).take_while(|&j| self.tree.is_descendant(j, g)).filter(|&j| self.member(j, g)) {
                     if append_mounted(j, &mut out, &mut texts, &mut prev_mounted) {
                         break;
                     }
@@ -273,11 +271,8 @@ impl RuntimeCore {
     /// Finds the first and last selectable texts inside mounted node `root` (including unbuilt rows
     /// of any virtual list under `root`), pinning offscreen end rows as needed.
     pub(crate) fn virtual_span_under(&mut self, app: &dyn ViewDriver, root: usize) -> Option<(EndRef, EndRef)> {
-        let inside = |nodes: &[Node], j: usize| {
-            j == root || std::iter::successors(nodes[j].parent, |&p| nodes[p].parent).any(|p| p == root)
-        };
         let list_path = (root..self.tree.nodes.len())
-            .take_while(|&j| inside(&self.tree.nodes, j))
+            .take_while(|&j| self.tree.is_descendant(j, root))
             .find_map(|j| {
                 self.commit.virtuals.get(&self.tree.nodes[j].path)
                     .filter(|v| !v.keys.is_empty())
@@ -292,7 +287,7 @@ impl RuntimeCore {
 
         // 1. Find the first selectable text under `root`.
         let first_before = (root..list_node)
-            .filter(|&j| inside(&self.tree.nodes, j) && self.is_selectable(j) && !self.subtree_exiting(j) && self.allowed(j))
+            .filter(|&j| self.tree.is_descendant(j, root) && self.is_selectable(j) && !self.subtree_exiting(j) && self.allowed(j))
             .find(|&j| match &g_path {
                 Some(gp) => self.group_of(j).is_some_and(|g| &self.tree.nodes[g].path == gp),
                 None => true,
@@ -310,7 +305,7 @@ impl RuntimeCore {
                 if range.contains(&r) {
                     let row_path = format!("{list_path}/{}", self.commit.virtuals[&list_path].keys[r]);
                     if let Some(j) = (list_node + 1..self.tree.nodes.len())
-                        .take_while(|&j| inside(&self.tree.nodes, j))
+                        .take_while(|&j| self.tree.is_descendant(j, root))
                         .filter(|&j| {
                             (self.tree.nodes[j].path == row_path
                                 || self.tree.nodes[j].path.strip_prefix(&row_path).is_some_and(|s| s.starts_with('/')))
@@ -349,10 +344,9 @@ impl RuntimeCore {
         };
 
         // 2. Find the last selectable text under `root` in `gp`.
-        let inside_list = |j: usize| std::iter::successors(self.tree.nodes[j].parent, |&p| self.tree.nodes[p].parent).any(|p| p == list_node);
-        let list_end = (list_node + 1..self.tree.nodes.len()).take_while(|&j| inside_list(j)).last().unwrap_or(list_node);
+        let list_end = self.tree.subtree_end(list_node);
         let last_after = (list_end + 1..self.tree.nodes.len())
-            .take_while(|&j| inside(&self.tree.nodes, j))
+            .take_while(|&j| self.tree.is_descendant(j, root))
             .filter(|&j| {
                 self.is_selectable(j) && !self.subtree_exiting(j) && self.allowed(j)
                     && self.group_of(j).is_some_and(|g| self.tree.nodes[g].path == gp)
@@ -434,8 +428,7 @@ impl RuntimeCore {
                         return;
                     }
                 }
-                let inside = |j: usize| j == i || std::iter::successors(self.tree.nodes[j].parent, |&p| self.tree.nodes[p].parent).any(|p| p == i);
-                let texts = || (i..self.tree.nodes.len()).take_while(|&j| inside(j))
+                let texts = || (i..self.tree.nodes.len()).take_while(|&j| self.tree.is_descendant(j, i))
                     .filter(|&j| self.is_selectable(j) && !self.subtree_exiting(j) && self.allowed(j));
                 let Some(first) = texts().next() else { return };
                 let last = match self.group_of(first) {

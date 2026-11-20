@@ -352,6 +352,20 @@ pub(crate) fn moved(a: Option<[f32; 4]>, b: Option<[f32; 4]>) -> bool {
     }
 }
 
+impl types::TreeState {
+    /// Node `i`'s unscrolled layout rect, under its own and its ancestors' static `El::scale`,
+    /// `El::origin` and `El::rotate`.
+    pub(super) fn static_layout(&self, i: usize) -> [f32; 4] {
+        let t = self.nodes[i].target;
+        let (k, turn) = std::iter::successors(Some(i), |&p| self.nodes[p].parent)
+            .fold((1.0_f32, 0.0_f32), |(k, a), p| {
+                let [ox, oy] = self.nodes[p].vis.origin.unwrap_or([0.5, 0.5]);
+                (k * self.nodes[p].static_scale, a + self.nodes[p].vis.rotate + (ox - 0.5) + (oy - 0.5))
+            });
+        [t[0] * k + turn, t[1] * k + turn, (t[2] - t[0]) * k, (t[3] - t[1]) * k]
+    }
+}
+
 impl RuntimeCore {
     /// Node `i`'s laid-out rect `[x, y, w, h]` in window points, after its viewports' scrolling.
     fn laid_out(&self, nodes: &[Node], i: usize) -> [f32; 4] {
@@ -387,18 +401,6 @@ impl RuntimeCore {
         [t[0] - dx, t[1] - dy, nodes[i].local.w, nodes[i].local.h]
     }
 
-    /// Node `i`'s unscrolled layout rect, under its own and its ancestors' static `El::scale`,
-    /// `El::origin` and `El::rotate`.
-    fn static_layout(&self, i: usize) -> [f32; 4] {
-        let t = self.tree.nodes[i].target;
-        let (k, turn) = std::iter::successors(Some(i), |&p| self.tree.nodes[p].parent)
-            .fold((1.0_f32, 0.0_f32), |(k, a), p| {
-                let [ox, oy] = self.tree.nodes[p].vis.origin.unwrap_or([0.5, 0.5]);
-                (k * self.tree.nodes[p].static_scale, a + self.tree.nodes[p].vis.rotate + (ox - 0.5) + (oy - 0.5))
-            });
-        [t[0] * k + turn, t[1] * k + turn, (t[2] - t[0]) * k, (t[3] - t[1]) * k]
-    }
-
     fn layout_of(&self, nodes: &[Node], index: Option<&KeyIndex>, key: &str) -> Option<[f32; 4]> {
         if key == SELECTION { return None; }
         let (key, scrolled) = key.strip_prefix(WINDOW).map_or((key, false), |key| (key, true));
@@ -431,8 +433,8 @@ impl RuntimeCore {
                 (nodes, own.as_ref())
             }
             None => {
-                self.tree.key_index.prepare(&self.tree.nodes, self.commit.commit_gen, reads.len());
-                (&self.tree.nodes[..], self.tree.key_index.get(&self.tree.nodes, self.commit.commit_gen))
+                self.tree.prepare_key_index(self.commit.commit_gen, reads.len());
+                (&self.tree.nodes[..], self.tree.key_index_for(&self.tree.nodes, self.commit.commit_gen))
             }
         };
         let now: Vec<Option<[f32; 4]>> = reads.iter().map(|r| self.layout_of(nodes, index, &r.key)).collect();
@@ -463,8 +465,8 @@ impl RuntimeCore {
     /// current rect, since it re-runs anyway.
     pub(super) fn refresh_layout_seen(&mut self) {
         if self.commit.layout_seen.rects.is_empty() { return; }
-        self.tree.key_index.prepare(&self.tree.nodes, self.commit.commit_gen, self.commit.layout_seen.rects.len());
-        let index = self.tree.key_index.get(&self.tree.nodes, self.commit.commit_gen);
+        self.tree.prepare_key_index(self.commit.commit_gen, self.commit.layout_seen.rects.len());
+        let index = self.tree.key_index_for(&self.tree.nodes, self.commit.commit_gen);
         let now: Vec<_> = self.commit.layout_seen.rects.keys().map(|k| self.layout_of(&self.tree.nodes, index, k)).collect();
         for (seen, rect) in self.commit.layout_seen.rects.values_mut().zip(now) { *seen = rect; }
         if self.commit.layout_seen.rects.contains_key(SELECTION) { self.commit.layout_seen.rects.selection = self.selection_boxes().into(); }
@@ -534,8 +536,7 @@ impl RuntimeCore {
     /// so the host draws a frame to deliver them. A window move is outside feedback, like a
     /// scroll, so it reopens layout feedback (see the module docs).
     pub(crate) fn set_window_origin(&mut self, origin: (f32, f32)) -> bool {
-        if self.host.window_origin == origin { return false; }
-        self.host.window_origin = origin;
+        if !self.host.set_window_origin(origin) { return false; }
         self.commit.feedback = self.commit.feedback.step(FeedbackEvent::Reopened);
         self.report_rects(false, true)
     }
@@ -545,7 +546,7 @@ impl RuntimeCore {
     /// layout feedback and falls quiet with the rest of it; one it doesn't (a live value) always
     /// reports, as scrolling reopens feedback. True when it queued any.
     pub(super) fn report_drawn(&mut self) -> bool {
-        if !self.tree.has_drawn_layout && self.commit.drawn_fired.is_empty() { return false; }
+        if !self.tree.has_drawn_layout() && self.commit.drawn_fired.is_empty() { return false; }
         let mut queued = false;
         let quiet = !self.layout_feedback_open();
         let last = std::mem::take(&mut self.commit.drawn_fired);
@@ -559,7 +560,7 @@ impl RuntimeCore {
                 if let Some(old) = last.get(&id) { fired.insert(id, *old); }
                 continue;
             }
-            let laid = self.static_layout(i);
+            let laid = self.tree.static_layout(i);
             let old = last.get(&id).copied();
             if !moved(old.map(|o| o.0), Some(drawn)) {
                 fired.insert(id, old.unwrap_or((drawn, laid)));
@@ -584,7 +585,7 @@ impl RuntimeCore {
     /// moves (scrolls, glides and springs included), with no handler and no commit. True when
     /// one this window binds changed, so the next frame shows what follows it.
     pub(super) fn write_drawn_rects(&mut self) -> bool {
-        if !self.tree.has_drawn_layout { return false; }
+        if !self.tree.has_drawn_layout() { return false; }
         let mut wrote = false;
         for (i, n) in self.tree.nodes.iter().enumerate() {
             let Some(live) = n.handlers.get().and_then(|h| h.drawn_rect.as_ref()) else { continue };
@@ -614,7 +615,7 @@ impl RuntimeCore {
     fn report_rects(&mut self, quiet: bool, screen: bool) -> bool {
         let last = std::mem::take(if screen { &mut self.commit.screen_fired } else { &mut self.commit.layout_fired });
         // On screen, the view's points are the window's over its zoom.
-        let ((ox, oy), k) = if screen { (self.host.window_origin, self.zoom()) } else { ((0.0, 0.0), 1.0) };
+        let ((ox, oy), k) = if screen { (self.host.window_origin(), self.host.zoom()) } else { ((0.0, 0.0), 1.0) };
         let mut fired = HashMap::with_capacity_and_hasher(last.len(), Default::default());
         let mut queued = false;
         for i in 0..self.tree.nodes.len() {

@@ -9,13 +9,59 @@ use crate::tooling::interaction::{self, Finished, Note, Slow};
 /// A keyed ancestor covering at least this share of the window is a page.
 const PAGE_AREA: f32 = 0.5;
 
+impl types::TreeState {
+    /// The innermost keyed element around node `i`, `i` included, that covers a page's share
+    /// of the window.
+    fn page_of(&self, mut i: usize, viewport: (f32, f32)) -> Option<usize> {
+        let area = (viewport.0 * viewport.1 * PAGE_AREA).max(1.0);
+        loop {
+            let n = &self.nodes[i];
+            let [x0, y0, x1, y1] = n.target;
+            if n.key.is_some() && (x1 - x0) * (y1 - y0) >= area { return Some(i); }
+            i = n.parent?;
+        }
+    }
+
+    /// The keyed subtrees with the most nodes the last commit rebuilt rather than reused from a
+    /// `memo`, largest first; each the most specific keyed element holding nearly all of its
+    /// count. Runs only for a slow interaction.
+    fn rebuilt_subtrees(&self, reused_spans: &[(usize, usize)], mut label: impl FnMut(&str) -> Arc<str>) -> Vec<(Arc<str>, usize)> {
+        let n = self.nodes.len();
+        let mut reused = vec![false; n];
+        for &(start, len) in reused_spans {
+            for r in reused.iter_mut().skip(start).take(len) { *r = true; }
+        }
+        let mut count = vec![0usize; n];
+        for i in (0..n).filter(|&i| !reused[i]) {
+            let mut at = Some(i);
+            while let Some(j) = at {
+                if self.nodes[j].key.is_some() { count[j] += 1; }
+                at = self.nodes[j].parent;
+            }
+        }
+        // The largest count among each keyed element's nearest keyed descendants.
+        let mut inner = vec![0usize; n];
+        for i in (0..n).filter(|&i| count[i] > 0 && self.nodes[i].key.is_some()) {
+            let mut at = self.nodes[i].parent;
+            while let Some(j) = at {
+                if self.nodes[j].key.is_some() { inner[j] = inner[j].max(count[i]); break; }
+                at = self.nodes[j].parent;
+            }
+        }
+        let mut top: Vec<usize> = (0..n).filter(|&i| count[i] > 0 && self.nodes[i].key.is_some() && (inner[i] as f64) < 0.9 * count[i] as f64).collect();
+        top.sort_by_key(|&i| Reverse(count[i]));
+        top.truncate(3);
+        top.into_iter().map(|i| (label(&self.nodes[i].path), count[i])).collect()
+    }
+}
+
 impl RuntimeCore {
     /// What `action` was, when timing is on and a person caused it; `None` for everything else
     /// (layout reports, timers, clipboard and dialog answers).
     pub(super) fn interaction_note(&mut self, action: &Action) -> Option<Note> {
         if !interaction::on() { return None; }
         let focused = self.kbd.focus.path();
-        let editing = || focused.and_then(|p| self.index_of(p)).is_some_and(|i| self.tree.nodes[i].input.is_some());
+        let editing = || focused.and_then(|p| self.tree.index_of_path(p)).is_some_and(|i| self.tree.nodes[i].input.is_some());
         let (name, rank, path): (&'static str, u8, Option<&str>) = match action {
             Action::Press(p, ..) => ("on_press", 3, Some(p)),
             Action::DoublePress(p) => ("on_double_press", 3, Some(p)),
@@ -38,8 +84,8 @@ impl RuntimeCore {
             Action::PointerMove(p, _) => ("on_pointer_move", 1, Some(p)),
             _ => return None,
         };
-        let at = path.and_then(|p| self.index_of(p));
-        let page = at.and_then(|i| self.page_of(i)).map(|i| self.tree.nodes[i].path.as_str());
+        let at = path.and_then(|p| self.tree.index_of_path(p));
+        let page = at.and_then(|i| self.tree.page_of(i, self.viewport)).map(|i| self.tree.nodes[i].path.as_str());
         let modal = self.active_modal().map(|i| self.tree.nodes[i].path.as_str());
         let names = &mut self.commit.watch.interaction.names;
         let control = match path {
@@ -50,22 +96,6 @@ impl RuntimeCore {
         let note = Note { route, control, action: name, rank };
         if self.commit.watch.interaction.breached(&note) { interaction::hurry(); }
         Some(note)
-    }
-
-    fn index_of(&self, path: &str) -> Option<usize> {
-        self.tree.path_ids.get(path).and_then(|id| self.tree.node_index.get(id)).copied().filter(|&i| self.tree.nodes.get(i).is_some_and(|n| n.path == path))
-    }
-
-    /// The innermost keyed element around node `i`, `i` included, that covers a page's share
-    /// of the window.
-    fn page_of(&self, mut i: usize) -> Option<usize> {
-        let area = (self.viewport.0 * self.viewport.1 * PAGE_AREA).max(1.0);
-        loop {
-            let n = &self.tree.nodes[i];
-            let [x0, y0, x1, y1] = n.target;
-            if n.key.is_some() && (x1 - x0) * (y1 - y0) >= area { return Some(i); }
-            i = n.parent?;
-        }
     }
 
     /// A frame starts.
@@ -114,8 +144,9 @@ impl RuntimeCore {
 
     fn interaction_finished(&mut self, f: Finished) {
         if f.slow {
-            let rebuilt = self.rebuilt_subtrees();
-            let reused = self.commit.watch.interaction.reused.iter().map(|r| r.1).sum();
+            let interaction = &mut self.commit.watch.interaction;
+            let rebuilt = self.tree.rebuilt_subtrees(&interaction.reused, |path| interaction.names.control(path).text);
+            let reused = interaction.reused.iter().map(|r| r.1).sum();
             let Finished { timed, built, phases, shaped, submitted, present, cause, .. } = f;
             interaction::send(Slow {
                 route: timed.note.route.text, control: timed.note.control.text, action: timed.note.action,
@@ -127,37 +158,5 @@ impl RuntimeCore {
         }
         self.commit.watch.interaction.reused.clear();
         self.commit.watch.interaction.roll(false);
-    }
-
-    /// The keyed subtrees with the most nodes the last commit rebuilt rather than reused from a
-    /// `memo`, largest first; each the most specific keyed element holding nearly all of its
-    /// count. Runs only for a slow interaction.
-    fn rebuilt_subtrees(&mut self) -> Vec<(Arc<str>, usize)> {
-        let n = self.tree.nodes.len();
-        let mut reused = vec![false; n];
-        for &(start, len) in &self.commit.watch.interaction.reused {
-            for r in reused.iter_mut().skip(start).take(len) { *r = true; }
-        }
-        let mut count = vec![0usize; n];
-        for i in (0..n).filter(|&i| !reused[i]) {
-            let mut at = Some(i);
-            while let Some(j) = at {
-                if self.tree.nodes[j].key.is_some() { count[j] += 1; }
-                at = self.tree.nodes[j].parent;
-            }
-        }
-        // The largest count among each keyed element's nearest keyed descendants.
-        let mut inner = vec![0usize; n];
-        for i in (0..n).filter(|&i| count[i] > 0 && self.tree.nodes[i].key.is_some()) {
-            let mut at = self.tree.nodes[i].parent;
-            while let Some(j) = at {
-                if self.tree.nodes[j].key.is_some() { inner[j] = inner[j].max(count[i]); break; }
-                at = self.tree.nodes[j].parent;
-            }
-        }
-        let mut top: Vec<usize> = (0..n).filter(|&i| count[i] > 0 && self.tree.nodes[i].key.is_some() && (inner[i] as f64) < 0.9 * count[i] as f64).collect();
-        top.sort_by_key(|&i| Reverse(count[i]));
-        top.truncate(3);
-        top.into_iter().map(|i| (self.commit.watch.interaction.names.control(&self.tree.nodes[i].path).text, count[i])).collect()
     }
 }
