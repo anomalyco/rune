@@ -134,39 +134,21 @@ impl Pose {
     pub fn moving(&self) -> bool { self.moving }
 }
 
-impl RuntimeCore {
+impl types::TreeState {
     /// Authored geometry goals, before scroll and spring sampling, in parent space.
     pub(crate) fn trace_goals(&self) -> impl Iterator<Item = (&str, [f32; 7])> {
-        self.tree.nodes.iter().map(|n| (n.path.as_str(), [n.local.x, n.local.y, n.local.w, n.local.h, n.vis.offset[0], n.vis.offset[1], n.static_scale]))
-    }
-
-    /// Tracks the last tick sampled, by element path and property name: what spent this
-    /// frame animating. Tracks of nodes no longer in the tree report their node id.
-    pub(crate) fn touched_tracks(&self) -> Vec<(String, &'static str, bool)> {
-        let store = self.scene.store();
-        let mut out: Vec<_> = store.touched_tracks().map(|(track, node, p)| {
-            let path = self.tree.node_index.get(&node).map_or_else(|| format!("node:{}", node.0), |&i| self.tree.nodes[i].path.clone());
-            (path, prop_name(p.0), store.is_active(track))
-        }).collect();
-        // A growth row's feathered edge (`GrowTrack::mask`) paints as it eases out, after its height
-        // has landed: it is a track of its own here.
-        out.extend(self.motion.grows.iter().filter(|(_, g)| g.mask > 0.01).filter_map(|(id, _)| {
-            self.tree.node_index.get(id).map(|&i| (self.tree.nodes[i].path.clone(), "mask", true))
-        }));
-        out.sort();
-        out.dedup();
-        out
+        self.nodes.iter().map(|n| (n.path.as_str(), [n.local.x, n.local.y, n.local.w, n.local.h, n.vis.offset[0], n.vis.offset[1], n.static_scale]))
     }
 
     /// Elements that draw nothing and hold nothing: no paint of their own, no text, no field,
     /// no focus, no children. Hit and hover zones, spacers. A trace flags them: nobody can see
     /// them come, go or move.
     pub(crate) fn blank_leaves(&self) -> HashSet<&str> {
-        let mut parents = vec![false; self.tree.nodes.len()];
-        for n in &self.tree.nodes {
+        let mut parents = vec![false; self.nodes.len()];
+        for n in &self.nodes {
             if let Some(p) = n.parent { parents[p] = true; }
         }
-        self.tree.nodes.iter().enumerate().filter(|&(i, n)| {
+        self.nodes.iter().enumerate().filter(|&(i, n)| {
             let v = &n.vis;
             !parents[i] && n.text.is_none() && n.input.is_none() && !n.focus.enabled && n.material.is_none()
                 && v.fill.a == 0.0 && (v.border_width() == 0.0 || v.border().a == 0.0 && v.border_bottom.is_none_or(|c| c.a == 0.0))
@@ -178,16 +160,36 @@ impl RuntimeCore {
 
     /// Video elements' playback state by element path, for `--tree`.
     pub(crate) fn videos(&self) -> HashMap<String, crate::video::Snapshot> {
-        self.tree.nodes.iter()
+        self.nodes.iter()
             .filter_map(|n| Some((n.path.clone(), n.vis.surface.as_ref()?.0.video()?.snapshot())))
             .collect()
     }
 
     /// Whether an element path contains secure text, hidden or revealed. Accessibility
-    /// adapters should use this alongside [`Self::elements`] to report protected content.
+    /// adapters should use this alongside [`Runtime::elements`] to report protected content.
     /// Unknown paths (including synthetic flight/link paths) return false.
-    pub fn element_is_secure(&self, path: &str) -> bool {
-        self.tree.nodes.iter().find(|n| n.path == path).is_some_and(Node::is_secure)
+    pub(crate) fn element_is_secure(&self, path: &str) -> bool {
+        self.nodes.iter().find(|n| n.path == path).is_some_and(Node::is_secure)
+    }
+}
+
+impl RuntimeCore {
+    /// Tracks the last tick sampled, by element path and property name: what spent this
+    /// frame animating. Tracks of nodes no longer in the tree report their node id.
+    pub(crate) fn touched_tracks(&self) -> Vec<(String, &'static str, bool)> {
+        let store = self.scene.store();
+        let mut out: Vec<_> = store.touched_tracks().map(|(track, node, p)| {
+            let path = self.tree.node_by_id(node).map_or_else(|| format!("node:{}", node.0), |n| n.path.clone());
+            (path, prop_name(p.0), store.is_active(track))
+        }).collect();
+        // A growth row's feathered edge (`GrowTrack::mask`) paints as it eases out, after its height
+        // has landed: it is a track of its own here.
+        out.extend(self.motion.grows.iter().filter(|(_, g)| g.mask > 0.01).filter_map(|(&id, _)| {
+            self.tree.node_by_id(id).map(|n| (n.path.clone(), "mask", true))
+        }));
+        out.sort();
+        out.dedup();
+        out
     }
 
     /// What a move of `v` points inside node `i` (a scroll viewport's offset) comes to in the
@@ -410,7 +412,7 @@ impl RuntimeCore {
     /// Drawn rect `[x, y, w, h]` in points and effective opacity (ancestors included) of the
     /// element keyed `key`, exiting or not, as of the last frame.
     pub fn presented(&self, key: &str) -> Option<([f32; 4], f32)> {
-        let i = self.tree.nodes.iter().position(|n| n.key.as_deref() == Some(key))?;
+        let i = self.tree.index_of_key(key)?;
         Some((*self.paint.drawn.get(i)?, self.paint.inh_scratch.get(i)?.opacity))
     }
 
@@ -461,14 +463,14 @@ impl RuntimeCore {
 
     fn element_at_within(&self, within: Option<&str>, x: f32, y: f32, pick: Pick) -> Option<Picked> {
         let scope = match within {
-            Some(key) => Some(self.tree.nodes.iter().position(|n| crate::flight::selects(key, &n.path, n.key.as_deref()))?),
+            Some(key) => Some(self.tree.selects_index(key)?),
             None => None,
         };
         let n = self.tree.nodes.len();
         let at = |k: usize| if self.paint.layer_paint_order.is_empty() { k } else { self.paint.layer_paint_order[k] };
         let count = if self.paint.layer_paint_order.is_empty() { n } else { self.paint.layer_paint_order.len() };
         (0..count).rev().map(at).find(|&i| {
-            scope.is_none_or(|scope| std::iter::successors(Some(i), |&p| self.tree.nodes[p].parent).any(|p| p == scope))
+            scope.is_none_or(|scope| self.tree.is_descendant(i, scope))
                 && self.pickable(i, x, y, pick)
         }).map(|i| Picked {
             path: self.tree.nodes[i].path.clone(),
@@ -486,7 +488,7 @@ impl RuntimeCore {
 
     /// [`Runtime::contains`] with options, as [`Runtime::element_at_with`].
     pub fn contains_with(&self, key: &str, x: f32, y: f32, pick: Pick) -> bool {
-        self.tree.nodes.iter().position(|n| crate::flight::selects(key, &n.path, n.key.as_deref())).is_some_and(|i| self.pickable(i, x, y, pick))
+        self.tree.selects_index(key).is_some_and(|i| self.pickable(i, x, y, pick))
     }
 
     fn pickable(&self, i: usize, x: f32, y: f32, pick: Pick) -> bool {
@@ -501,7 +503,7 @@ impl RuntimeCore {
     /// demand: nothing runs per frame for it. This is a driver/headless read: running view
     /// functions and handlers do not hold a `Runtime`.
     pub fn presented_pose(&self, key: &str) -> Option<Pose> {
-        let i = self.tree.nodes.iter().position(|n| crate::flight::selects(key, &n.path, n.key.as_deref()))?;
+        let i = self.tree.selects_index(key)?;
         let n = &self.tree.nodes[i];
         let store = self.scene.store();
         let shadows = n.vis.shadows.iter().enumerate().map(|(k, sh)| {
@@ -529,7 +531,7 @@ impl RuntimeCore {
     /// follow it, so they flip when the app changes theme itself).
     pub(crate) fn backdrop_dark(&self) -> Option<bool> {
         if self.transparent { return None; }
-        let n = self.tree.nodes.get(self.app_root())?;
+        let n = self.tree.nodes.get(self.tree.app_root())?;
         let c = self.color(n.id, P_FILL, n.vis.fill);
         (c.a > 0.5).then(|| 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b < 0.25)
     }

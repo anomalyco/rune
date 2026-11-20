@@ -86,7 +86,7 @@ impl crate::runtime::RuntimeCore {
         self.set_tab_visits_controls(tab_visits_controls);
         self.set_srgb_blend(srgb_blend);
         self.set_font_smoothing(font_smoothing);
-        self.host.app_stats = dev_stats;
+        self.host.set_app_stats(dev_stats);
     }
 }
 

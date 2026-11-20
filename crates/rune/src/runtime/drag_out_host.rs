@@ -7,7 +7,7 @@ impl RuntimeCore {
     /// session before returning from that move event.
     /// The drag to start, its rects and press in window points (the view's times its zoom).
     pub(crate) fn take_drag_out(&mut self) -> Option<crate::drag_out::DragOutStart> {
-        let k = self.zoom();
+        let k = self.host.zoom();
         self.pointer.drag_out_request.take().map(|s| crate::drag_out::DragOutStart {
             rect: s.rect.map(|v| v * k),
             bounds: s.bounds.map(|v| v * k),

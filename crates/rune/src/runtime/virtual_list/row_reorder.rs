@@ -77,18 +77,18 @@ impl RuntimeCore {
         let node = &nodes[i];
         if tx.commit != Commit::Unprompted || node.instant_changes || !tx.live_growth.iter().any(|(key, _)| node.named(key)) { return None; }
         let list = self.commit.virtuals.get(&node.path)?;
-        let scroll = self.tree.path_ids.get(&list.scroll_path)?;
-        if list.nested || list.replaced_view() || list.drawn.is_empty() || !self.scroll.scrolls.get(scroll)?.pinned() { return None; }
+        let scroll = self.tree.id_of_path(&list.scroll_path)?;
+        if list.nested || list.replaced_view() || list.drawn.is_empty() || !self.scroll.scrolls.get(&scroll)?.pinned() { return None; }
         // The list's own tail is the viewport's tail only if nothing extends below it.
         // A toolbar *after* the list may cover even its last overscanned rows.
         let parent = node.parent?;
-        if nodes[parent].id != *scroll || nodes[i + 1..].iter().take_while(|n| n.parent >= Some(parent))
+        if nodes[parent].id != scroll || nodes[i + 1..].iter().take_while(|n| n.parent >= Some(parent))
             .any(|n| n.parent == Some(parent) && n.target[3] > node.target[3]) { return None; }
         let range = list.visible_range(0.0, true);
         if (stack.viewport_height - list.viewport).abs() >= 1.0 / 64.0 {
             let (_, row, room) = tx.tail_rooms.iter().rev().find(|(key, _, _)| node.named(key))?;
             if !range.contains(&list.index_of(row)?) { return None; }
-            stack.handoff = self.tail_handoff(nodes, i, parent, row, room)?;
+            stack.handoff = self.tree.tail_handoff(&self.scene, &self.motion.grows, nodes, i, parent, row, room)?;
         }
         Some(range)
     }

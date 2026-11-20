@@ -7,24 +7,14 @@ use crate::playground::{FILTER, Moved, Nav, Region, Request};
 impl RuntimeCore {
     /// The node the app's view returned: the first, or with the playground attached, the one
     /// above its bar or on its stage. Root handlers (window focus, paste, file drops) are there.
+    #[inline]
     pub(super) fn app_root(&self) -> usize {
-        if self.tree.has_playground { self.tree.app_root } else { self.view_root() }
+        self.tree.app_root()
     }
 
-    /// The node the view returned: the first, or the first inside the frame that holds the
-    /// Windows caption buttons over it (`titlebar::frame`).
-    fn view_root(&self) -> usize {
-        usize::from(self.tree.nodes.first().is_some_and(|n| n.key.as_deref() == Some(crate::titlebar::FRAME_KEY)))
-    }
-
+    #[inline]
     pub(super) fn find_app_root(&mut self) {
-        let view_root = self.view_root();
-        if !self.tree.has_playground { self.tree.app_root = view_root; return; }
-        // A scrolling stage holds the root in a margin.
-        let margin = |k: Option<&str>| k == Some("playground-margin");
-        let wraps = |k: &str| k == "playground-closed" || margin(Some(k)) || crate::playground::is_stage(k);
-        let nodes = &self.tree.nodes;
-        self.tree.app_root = nodes.iter().position(|n| !margin(n.key.as_deref()) && n.parent.is_some_and(|p| nodes[p].key.as_deref().is_some_and(wraps))).unwrap_or(view_root);
+        self.tree.find_app_root();
     }
 
     /// Moves a Tx's playground requests to the runtime, for the next commit to apply before its
@@ -48,7 +38,7 @@ impl RuntimeCore {
             (playground.has_pending(), playground.pending_swaps_stage(), playground.pending_replays_only(), playground.is_open())
         };
         if !has_pending { return; }
-        let keep = replays_only && self.focused_index().is_some_and(|i| self.under(i, |k| k == "playground-side"));
+        let keep = replays_only && self.focused_index().is_some_and(|i| self.tree.under(i, |k| k == "playground-side"));
         if swaps && !keep && self.kbd.focus.path().is_some() { self.set_focus(app, None, false); }
         let clock = self.clock;
         if !app.playground_apply(clock) { return; }
@@ -74,15 +64,16 @@ impl RuntimeCore {
         self.pointer.hover_within.clear();
         self.pointer.hover_delays.clear();
         self.forget_drop_targets();
-        self.host.titlebar.clear();
+        self.host.clear_titlebar();
         self.pointer.press_clicks.clear();
         let Some(playground) = app.playground_mut() else { return };
         if was_open { self.time_scale = playground.app_time_scale(); } else { playground.set_app_time_scale(self.time_scale); }
     }
 
     /// Whether node `i` or an ancestor has a key `is` takes.
+    #[inline]
     pub(super) fn under(&self, i: usize, is: impl Fn(&str) -> bool) -> bool {
-        std::iter::successors(Some(i), |&j| self.tree.nodes[j].parent).any(|j| self.tree.nodes[j].key.as_deref().is_some_and(&is))
+        self.tree.under(i, is)
     }
 
     /// Keys nothing else took: Escape gives the keyboard back to the list from the stage, else
@@ -141,7 +132,7 @@ impl RuntimeCore {
                 true
             }
             Nav::Filter => {
-                let Some(path) = self.key_path(FILTER) else { return false };
+                let Some(path) = self.tree.key_path(FILTER) else { return false };
                 self.set_focus(app, Some(path), true);
                 true
             }
@@ -216,9 +207,9 @@ impl RuntimeCore {
         if app.playground().is_none_or(|p| p.saw_focus(self.kbd.focus.path())) { return; }
         let at = if self.kbd.focus.hovered() { None } else { self.focused_index() };
         let region = at.map(|i| {
-            if self.under(i, |k| k == "playground-side") {
+            if self.tree.under(i, |k| k == "playground-side") {
                 Region::Side
-            } else if self.under(i, crate::playground::is_stage) {
+            } else if self.tree.under(i, crate::playground::is_stage) {
                 Region::Stage
             } else {
                 Region::List
@@ -249,7 +240,7 @@ impl RuntimeCore {
     /// aside for it, and the keyboard goes back where the person left it.
     pub(super) fn route_stage_key(&mut self, app: &mut dyn AppDriver, ev: &KeyEvent, one: &mut Tx) -> bool {
         let Some(region) = app.playground().filter(|p| p.is_open()).map(|p| p.region()) else { return self.route_key(app, ev, false, one) };
-        let aside = self.focused_index().filter(|&i| !self.under(i, crate::playground::is_stage)).and_then(|_| self.kbd.focus.set_aside());
+        let aside = self.focused_index().filter(|&i| !self.tree.under(i, crate::playground::is_stage)).and_then(|_| self.kbd.focus.set_aside());
         if let Some(p) = app.playground_mut() {
             p.moved(Moved::Hold(Region::Stage));
             p.set_pressing(true);
@@ -273,11 +264,6 @@ impl RuntimeCore {
         took
     }
 
-    /// The path of the element keyed `key`.
-    fn key_path(&self, key: &str) -> Option<String> {
-        self.tree.nodes.iter().find(|n| n.key.as_deref() == Some(key)).map(|n| n.path.clone())
-    }
-
     /// The keyboard is on the open story's side controls that take keys (`Story::side_keys`),
     /// whose slot is focusable only then.
     fn on_side_keys(&self) -> bool {
@@ -293,6 +279,6 @@ impl RuntimeCore {
 
     /// The paths of the focusable controls in the playground's side column, in order.
     fn playground_side(&self) -> Vec<String> {
-        (0..self.tree.nodes.len()).filter(|&i| self.can_focus(i) && self.under(i, |k| k == "playground-side")).map(|i| self.tree.nodes[i].path.clone()).collect()
+        (0..self.tree.nodes.len()).filter(|&i| self.can_focus(i) && self.tree.under(i, |k| k == "playground-side")).map(|i| self.tree.nodes[i].path.clone()).collect()
     }
 }

@@ -117,7 +117,7 @@ impl Trace {
         // window rebases. Record the actual row surfaces, not that bookkeeping rectangle.
         let all = self.all;
         let traced = |e: &crate::runtime::ElementInfo| (all || e.key.is_some() || e.trace_name.is_some()) && !e.virtual_extent;
-        let blank = rt.blank_leaves();
+        let blank = rt.tree.blank_leaves();
         for e in els.iter().filter(|e| traced(e)) {
             let id = self.id(&e.path);
             let name = e.trace_name.unwrap_or(&e.path);
@@ -217,7 +217,7 @@ impl Trace {
         // A fresh destination ends a trajectory, even when it came from streamed data rather
         // than a key. Keep this separate from input: it never excuses a jump or lost velocity.
         let mut goals = Vec::new();
-        for (path, goal) in rt.trace_goals() {
+        for (path, goal) in rt.tree.trace_goals() {
             let Some(&id) = self.ids.get(path) else { continue };
             let q = goal.map(|v| (f64::from(v) * 10000.0).round() as i64);
             if let Some(old) = self.goals.insert(id, q) {
@@ -310,7 +310,7 @@ pub(crate) fn tree_json<S>(rt: &Runtime<S>, real_t: f64) -> Value {
 }
 
 pub(crate) fn tree_json_core(rt: &crate::runtime::RuntimeCore, real_t: f64) -> Value {
-    let videos = rt.videos();
+    let videos = rt.tree.videos();
     let els: Vec<Value> = rt
         .elements()
         .iter()
@@ -354,7 +354,7 @@ pub(crate) fn tree_json_core(rt: &crate::runtime::RuntimeCore, real_t: f64) -> V
             if e.item_selected {
                 v["itemSelected"] = true.into();
             }
-            if rt.element_is_secure(&e.path) {
+            if rt.tree.element_is_secure(&e.path) {
                 v["secure"] = true.into();
             }
             if e.rect.iter().zip(e.target.iter()).any(|(a, b)| (a - b).abs() > 0.01) {

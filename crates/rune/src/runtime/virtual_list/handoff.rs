@@ -9,16 +9,26 @@ pub(in crate::runtime) enum Handoff {
     Growing { row: NodeId, viewport: NodeId, frames: Vec<(NodeId, rune_motion::Rect, f32, f32)>, rows: Vec<(NodeId, f32, f32)> },
 }
 
-impl RuntimeCore {
-    pub(super) fn tail_handoff(&self, nodes: &[Node], stack: usize, viewport: usize, row: &str, room: &str) -> Option<Handoff> {
+impl types::TreeState {
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn tail_handoff(
+        &self,
+        scene: &Scene,
+        grows: &HashMap<NodeId, GrowTrack>,
+        nodes: &[Node],
+        stack: usize,
+        viewport: usize,
+        row: &str,
+        room: &str,
+    ) -> Option<Handoff> {
         let (r, panel) = nodes.iter().enumerate().find(|(_, n)| n.named(room))?;
         let view = &nodes[viewport];
-        let old = |id| self.tree.nodes.iter().find(|n| n.id == id);
+        let old = |id| self.nodes.iter().find(|n| n.id == id);
         let (a, b) = (old(view.id)?.target, old(panel.id)?.target);
         let close = |x: f32, y: f32| (x - y).abs() < 1.0 / 64.0;
         if panel.target[1] <= b[1] || !close(a[3], b[1]) || !close(view.target[3], panel.target[1])
             || !close(panel.target[3], b[3]) || a[..3] != view.target[..3] { return None; }
-        let row = nodes.iter().find(|n| n.parent == Some(stack) && n.key.as_deref() == Some(row) && !n.virtual_mount && !self.scene.contains(n.id))?;
+        let row = nodes.iter().find(|n| n.parent == Some(stack) && n.key.as_deref() == Some(row) && !n.virtual_mount && !scene.contains(n.id))?;
         let ancestors = |k| std::iter::successors(Some(k), |&j: &usize| nodes[j].parent);
         let mut chain: HashSet<usize> = ancestors(viewport).collect();
         chain.extend(ancestors(r));
@@ -26,14 +36,14 @@ impl RuntimeCore {
         let frames = nodes.iter().enumerate().filter(|(k,n)| chain.contains(k) || (r..end).contains(k)
             || (n.parent == panel.parent && old(n.id).is_some_and(|o| o.target == n.target)))
             .filter_map(|(_,n)| {
-                let was = self.scene.get(n.id, prop::FRAME)?;
+                let was = scene.get(n.id, prop::FRAME)?;
                 let (dy, dh) = (was.y - n.local.y, was.h - n.local.h);
                 (dy != 0.0 || dh != 0.0).then_some((n.id, n.local, dy, dh))
             }).collect();
         // A kept row can lose its footer to the arriving row. Tie that height to the same
         // progress too: independent whole-row springs land at different absolute tolerances.
         let rows = nodes.iter().filter(|n| n.parent == Some(stack) && n.whole && !n.streaming && n.id != row.id)
-            .filter_map(|n| { let from = self.motion.grows.get(&n.id)?.h;
+            .filter_map(|n| { let from = grows.get(&n.id)?.h;
                 (from != n.local.h).then_some((n.id, from, n.local.h)) }).collect();
         Some(Handoff::Growing { row: row.id, viewport: view.id, frames, rows })
     }
