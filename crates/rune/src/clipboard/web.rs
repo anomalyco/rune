@@ -49,7 +49,7 @@ impl Client {
         });
     }
     pub(crate) fn flush_core(&self, rt: &mut crate::runtime::RuntimeCore) {
-        if rt.edit.clipboard.is_some() { return flush_memory(rt); }
+        if rt.edit.has_clipboard() { return flush_memory(rt); }
         rt.edit.clear_secret_request = false;
         if let Some(copy) = rt.copy_request.take() {
             if copy.is_secret() {

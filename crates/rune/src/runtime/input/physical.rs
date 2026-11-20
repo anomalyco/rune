@@ -26,13 +26,46 @@ pub(in crate::runtime) enum Activation {
     Held { physical: Option<PhysicalKeyCode>, key: Option<crate::Key>, focus: Option<String> },
 }
 
+impl focus_machine::KeyboardState {
+    /// Remember an activation key's first press and the focus it landed on; true drops a
+    /// repeat of that same key once focus has moved. Any other first press replaces it.
+    pub(super) fn held_gate(&mut self, physical: Option<PhysicalKeyCode>, key: Option<&crate::Key>, repeat: bool) -> bool {
+        use crate::{Key, PhysicalKeyCode as Code};
+        if !repeat {
+            // The OS keeps repeating a held key through modifier presses.
+            if physical.is_some_and(|c| matches!(c, Code::ShiftLeft | Code::ShiftRight | Code::ControlLeft
+                | Code::ControlRight | Code::AltLeft | Code::AltRight | Code::SuperLeft | Code::SuperRight
+                | Code::CapsLock | Code::Fn)) || key.is_some_and(|k| matches!(k, Key::Modifier { .. })) { return false; }
+            let activation = physical.is_some_and(|c| matches!(c, Code::Enter | Code::NumpadEnter | Code::Escape | Code::Space))
+                || key.is_some_and(|k| matches!(k, Key::Enter | Key::Escape) || matches!(k, Key::Text(t) if t == " "));
+            self.held = if activation { Activation::Held { physical, key: key.cloned(), focus: self.focus.owned() } } else { Activation::Up };
+            return false;
+        }
+        let Activation::Held { physical: held, key: held_key, focus } = &self.held else { return false };
+        let same = match physical { Some(code) => *held == Some(code), None => held_key.as_ref() == key };
+        same && focus.as_deref() != self.focus.path()
+    }
+
+    #[inline]
+    pub(super) fn clear_held(&mut self) {
+        self.held = Activation::Up;
+    }
+
+    #[inline]
+    pub(super) fn release_held(&mut self, key: PhysicalKeyCode) {
+        if matches!(&self.held, Activation::Held { physical, .. } if *physical == Some(key)) {
+            self.held = Activation::Up;
+        }
+    }
+}
+
 impl RuntimeCore {
     /// Queue physical input without a logical fallback (also useful for headless drivers).
     /// A modifier key still gets its `Key::Modifier` when modifier keys are on.
     pub(crate) fn physical_input(&mut self, event: PhysicalInput) {
         self.observe_mods(&event);
         if self.cancel_drag_key(&event) { return; }
-        if matches!(event, PhysicalInput::Key { pressed: true, .. }) && self.autoscroll_key() { return; }
+        if matches!(event, PhysicalInput::Key { pressed: true, .. }) && self.pointer.autoscroll_key() { return; }
         self.frame.queue.push(Action::Physical(event, None));
     }
 
@@ -44,8 +77,8 @@ impl RuntimeCore {
     /// queue the press itself skips. A key press hides a tooltip.
     fn observe_mods(&mut self, event: &PhysicalInput) {
         match event {
-            PhysicalInput::Modifiers(m) => { self.edit.selectable.shift = m.shift; self.kbd.held_mods = *m; }
-            PhysicalInput::FocusLost => { self.edit.selectable.shift = false; self.kbd.held_mods = Default::default(); self.dismiss_help(); }
+            PhysicalInput::Modifiers(m) => { self.edit.set_shift(m.shift); self.kbd.held_mods = *m; }
+            PhysicalInput::FocusLost => { self.edit.set_shift(false); self.kbd.held_mods = Default::default(); self.dismiss_help(); }
             PhysicalInput::Key { pressed: true, mods, .. } => { self.kbd.held_mods = *mods; self.dismiss_help(); }
             PhysicalInput::Key { mods, .. } => self.kbd.held_mods = *mods,
         }
@@ -66,7 +99,7 @@ impl RuntimeCore {
     pub(crate) fn physical_then(&mut self, app: &mut dyn AppDriver, event: PhysicalInput, key: Option<KeyEvent>, base: Option<char>, unhandled: Option<Unhandled>) -> bool {
         if self.cancel_drag_key(&event) { return true; }
         // A key ends a middle-click autoscroll, and does nothing else.
-        if matches!(event, PhysicalInput::Key { pressed: true, .. }) && self.autoscroll_key() { return true; }
+        if matches!(event, PhysicalInput::Key { pressed: true, .. }) && self.pointer.autoscroll_key() { return true; }
         if key.is_none() && matches!(event, PhysicalInput::Modifiers(_) | PhysicalInput::Key { pressed: false, .. }) {
             return self.physical_observation(app, event);
         }
@@ -83,7 +116,7 @@ impl RuntimeCore {
         // The release of a modifier key the app hears needs a frame, in order like a press.
         // So does one while state changed since the last frame (a covered window keeps it
         // changed until it uncovers): the focused handler is the new view's.
-        if self.modifier_pending(&event) || busy || self.commit.dirty {
+        if self.kbd.modifier_pending(&event) || busy || self.commit.dirty {
             self.frame.queue.push(Action::Physical(event, None));
             return !busy;
         }
@@ -100,24 +133,6 @@ impl RuntimeCore {
         }
         consumed
     }
-    /// Remember an activation key's first press and the focus it landed on; true drops a
-    /// repeat of that same key once focus has moved. Any other first press replaces it.
-    pub(in crate::runtime) fn held_gate(&mut self, physical: Option<PhysicalKeyCode>, key: Option<&crate::Key>, repeat: bool) -> bool {
-        use crate::{Key, PhysicalKeyCode as Code};
-        if !repeat {
-            // The OS keeps repeating a held key through modifier presses.
-            if physical.is_some_and(|c| matches!(c, Code::ShiftLeft | Code::ShiftRight | Code::ControlLeft
-                | Code::ControlRight | Code::AltLeft | Code::AltRight | Code::SuperLeft | Code::SuperRight
-                | Code::CapsLock | Code::Fn)) || key.is_some_and(|k| matches!(k, Key::Modifier { .. })) { return false; }
-            let activation = physical.is_some_and(|c| matches!(c, Code::Enter | Code::NumpadEnter | Code::Escape | Code::Space))
-                || key.is_some_and(|k| matches!(k, Key::Enter | Key::Escape) || matches!(k, Key::Text(t) if t == " "));
-            self.kbd.held = if activation { Activation::Held { physical, key: key.cloned(), focus: self.kbd.focus.owned() } } else { Activation::Up };
-            return false;
-        }
-        let Activation::Held { physical: held, key: held_key, focus } = &self.kbd.held else { return false };
-        let same = match physical { Some(code) => *held == Some(code), None => held_key.as_ref() == key };
-        same && focus.as_deref() != self.kbd.focus.path()
-    }
     pub(in crate::runtime) fn dispatch_physical(&mut self, app: &mut dyn AppDriver, event: PhysicalInput, fallback: Option<Fallback>, tx: &mut Tx) -> bool {
         tx.by_keys = true;
         use crate::PhysicalKeyCode as Code;
@@ -126,17 +141,17 @@ impl RuntimeCore {
             | Code::CapsLock | Code::Fn);
         match event {
             PhysicalInput::Key { key, pressed: true, repeat, .. } => {
-                if self.held_gate(Some(key), fallback.as_ref().map(|f| &f.key.key), repeat) { return false; }
+                if self.kbd.held_gate(Some(key), fallback.as_ref().map(|f| &f.key.key), repeat) { return false; }
                 if !is_mod(key) { self.note_key_down(app, repeat); }
             }
             PhysicalInput::Key { key, pressed: false, .. } => {
-                if matches!(&self.kbd.held, Activation::Held { physical, .. } if *physical == Some(key)) { self.kbd.held = Activation::Up; }
+                self.kbd.release_held(key);
                 if fallback.is_none() && !is_mod(key) && self.composing(app) {
-                    self.kbd.key_releases.composing_release();
+                    self.kbd.composing_release();
                 }
             }
             PhysicalInput::FocusLost => {
-                self.kbd.key_releases.lost();
+                self.kbd.key_releases_lost();
             }
             PhysicalInput::Modifiers(_) => {}
         }
@@ -191,10 +206,10 @@ impl RuntimeCore {
     }
     /// `App::on_modifiers`, when the held modifiers changed since it last heard them.
     fn dispatch_mods(&mut self, app: &mut dyn AppDriver, tx: &mut Tx, live: &mut Option<bool>) -> bool {
-        if !app.has_on_mods() || self.kbd.held_mods == self.kbd.mods_heard { return false; }
-        self.kbd.mods_heard = self.kbd.held_mods;
+        if !app.has_on_mods() { return false; }
+        let Some(mods) = self.kbd.take_mods_changed() else { return false };
         let mut one = self.transaction(app);
-        if !app.on_mods(self.kbd.mods_heard, &mut one) { return false; }
+        if !app.on_mods(mods, &mut one) { return false; }
         fold_live(live, true, &one);
         merge(tx, one);
         true

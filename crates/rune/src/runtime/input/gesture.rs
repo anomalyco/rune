@@ -35,14 +35,16 @@ impl RuntimeCore {
         let moved = ev.dx != 0.0 || ev.dy != 0.0;
         if moved {
             self.dismiss_help();
-            self.wheel_delta_arrived(ev.dx, ev.dy);
+            let now = self.now_clock();
+            let pending = self.wheel_pending();
+            self.scroll.wheel_delta(now, ev.dx, ev.dy, pending);
         }
         // A notch or not is the run's to decide, not each delta's.
-        let ev = if moved { WheelEvent { notch: self.scroll.wheel_lock.notched(self.now_clock(), ev.notch), ..ev } } else { ev };
+        let ev = if moved { WheelEvent { notch: self.scroll.wheel_notched(self.now_clock(), ev.notch), ..ev } } else { ev };
         if moved || ev.phase != GesturePhase::Moved {
-            let ev = WheelEvent { momentum: self.scroll.wheel_lock.momentum(), ..ev };
-            let gesture = self.scroll.wheel_lock.gesture;
-            let phased = self.scroll.wheel_lock.phased();
+            let ev = WheelEvent { momentum: self.scroll.wheel_momentum(), ..ev };
+            let gesture = self.scroll.wheel_gesture();
+            let phased = self.scroll.wheel_phased();
             if let Some(start) = self.offer_wheel(gesture, ev) { self.wheel_scroll_for(gesture, ev, phased, start); }
         }
         if ev.phase == GesturePhase::Ended { self.wheel_ended(); }
@@ -51,10 +53,9 @@ impl RuntimeCore {
     /// Queues `ev` for the `on_wheel` handlers it may go to (None), or leaves it to scrolling now,
     /// with where its chain starts when that was already found on the way.
     fn offer_wheel(&mut self, gesture: Attempt, ev: WheelEvent) -> Option<WheelStart> {
-        let lock = &self.scroll.wheel_lock;
         // A delta queued this frame may yet be taken: later ones wait their turn behind it.
         let pending = self.wheel_queued(Some(gesture));
-        let (scrolls, handled) = match lock.owner() {
+        let (scrolls, handled) = match self.scroll.wheel_owner() {
             WheelOwner::Vertical | WheelOwner::Horizontal(_) => (true, false),
             WheelOwner::Handler(_) => (false, true),
             WheelOwner::Unpicked => (false, false),
@@ -63,7 +64,7 @@ impl RuntimeCore {
         let start = if handled { WheelStart::Unknown } else { WheelStart::At(self.chain_start(ev.x, ev.y)) };
         let chain = match start { WheelStart::At(s) => self.gesture_chain_from(s, |g| g.wheel.is_some(), true), WheelStart::Unknown => Vec::new() };
         if chain.is_empty() && !handled && !pending { return Some(start); }
-        let phased = lock.phased();
+        let phased = self.scroll.wheel_phased();
         self.frame.queue.push(Action::Wheel { gesture, chain, ev, phased });
         None
     }
@@ -73,17 +74,17 @@ impl RuntimeCore {
     /// gesture's turn and axis policy, so one queued before a newer gesture began still reaches
     /// the owner its own gesture picked.
     pub(in crate::runtime) fn run_wheel(&mut self, app: &mut dyn AppDriver, gesture: Attempt, chain: Vec<String>, ev: WheelEvent, phased: bool, tx: &mut Tx) -> bool {
-        self.scroll.wheel_lock.sync_gesture(gesture);
+        self.scroll.sync_wheel_gesture(gesture);
         let mut taken = None;
-        match self.scroll.wheel_lock.owner_of(gesture).cloned() {
+        match self.scroll.wheel_owner_of(gesture).cloned() {
             Some(WheelOwner::Handler(path)) => {
                 taken = self.call_wheel(app, &path, ev, tx);
-                if taken.is_none() { self.scroll.wheel_lock.set_owner(gesture, WheelOwner::Unpicked); }
+                if taken.is_none() { self.scroll.set_wheel_owner(gesture, WheelOwner::Unpicked); }
             }
             Some(WheelOwner::Unpicked) => {
                 for path in chain {
                     if self.call_wheel(app, &path, ev, tx) == Some(true) {
-                        self.scroll.wheel_lock.set_owner(gesture, WheelOwner::Handler(path));
+                        self.scroll.set_wheel_owner(gesture, WheelOwner::Handler(path));
                         taken = Some(true);
                         break;
                     }
@@ -184,7 +185,7 @@ impl RuntimeCore {
     /// Chromium chains a scroll through: a viewport that only lies beneath (the timeline under an
     /// open menu, a popover or a raised panel) is never one of them.
     pub(in crate::runtime) fn chain_start(&self, x: f32, y: f32) -> Option<usize> {
-        self.hit.wheel_hits.iter().rev().find_map(|&(id, r)| {
+        self.hit.find_wheel_hit(|id, r| {
             if !self.hit_contains(id, r, x, y) { return None; }
             let i = *self.tree.node_index.get(&id)?;
             (!self.subtree_exiting(i) && self.allowed(i)).then_some(i)
@@ -209,7 +210,7 @@ impl RuntimeCore {
             PointerButton::Secondary => return self.secondary_down(x, y),
             _ => {}
         }
-        if self.autoscroll_press(button) { self.pointer.pos = Some((x, y)); return; }
+        if self.pointer.autoscroll_press(button) { self.pointer.pos = Some((x, y)); return; }
         if self.pointer.press.is_held() { return; }
         self.pointer.pos = Some((x, y));
         if button == PointerButton::Middle { self.tint_down(x, y, button); }
@@ -217,7 +218,7 @@ impl RuntimeCore {
         #[cfg(target_os = "linux")]
         if button == PointerButton::Middle && self.primary_paste_down(x, y) { return; }
         self.dismiss_help();
-        let hit = self.hit.hits.iter().rev().find(|&&(id, r)| self.hit_contains(id, r, x, y)).and_then(|(id, _)| self.tree.node_index.get(id).copied());
+        let hit = self.hit.top_hit(|id, r| self.hit_contains(id, r, x, y)).and_then(|id| self.tree.node_index.get(&id).copied());
         let middle = button == PointerButton::Middle;
         let target = std::iter::successors(hit, |&i| self.tree.nodes[i].parent)
             .take_while(|&i| !self.subtree_exiting(i) && self.allowed(i))
@@ -238,7 +239,7 @@ impl RuntimeCore {
         let d = Drag { phase: Phase::Down, x: lx, y: ly, w: r[2] - r[0], h: r[3] - r[1], start_x: lx, start_y: ly, dx: 0.0, dy: 0.0, data: 0.0, clicks: 1, cancelled: false, window: [x, y], screen: self.screen_at(x, y) };
         let path = n.path.clone();
         if self.drags_with(i, button) { self.frame.queue.push(Action::Drag(path.clone(), d, button)); }
-        self.pointer.press_clicks.clear();
+        self.pointer.clear_press_clicks();
         let now = self.now_clock();
         self.pointer.press.hold(capture::Held::new(path, d, button, (x, y), now, false, None).on_link(link));
     }
@@ -263,8 +264,8 @@ impl RuntimeCore {
 
     /// A mouse button came up at (x, y): the release of [`Self::button_down`].
     pub(crate) fn button_up(&mut self, app: &dyn ViewDriver, x: f32, y: f32, button: PointerButton) {
-        self.pointer.tint.release(button);
-        if !matches!(button, PointerButton::Primary | PointerButton::Secondary) && self.autoscroll_release(button) { self.pointer.pos = Some((x, y)); return; }
+        self.pointer.release_tint(button);
+        if !matches!(button, PointerButton::Primary | PointerButton::Secondary) && self.pointer.autoscroll_release(button) { self.pointer.pos = Some((x, y)); return; }
         match button {
             PointerButton::Primary => self.pointer_up(app, x, y),
             PointerButton::Secondary => self.secondary_up(app, x, y),
@@ -297,15 +298,14 @@ impl RuntimeCore {
     /// composition, or which focused element should still hear its release if focus moves.
     pub(in crate::runtime) fn note_key_down(&mut self, app: &mut dyn AppDriver, repeat: bool) {
         let composing = self.composing(app);
-        let focus = &self.kbd.focus;
-        self.kbd.key_releases.down(composing, repeat, || focus.owned());
+        self.kbd.note_key_down(composing, repeat);
     }
 
     /// Suppresses key releases that belong to an IME composition (while preedit is open, or
     /// the release of the key that confirmed or cancelled it).
     pub(in crate::runtime) fn eat_ime_key_up(&mut self, app: &mut dyn AppDriver) -> bool {
         let composing = self.composing(app);
-        self.kbd.key_releases.eat(composing)
+        self.kbd.eat_ime_key_up(composing)
     }
 
     /// A key release goes to the focused element and up through its ancestors, else to every
@@ -314,7 +314,7 @@ impl RuntimeCore {
     pub(in crate::runtime) fn route_key_up(&mut self, app: &mut dyn AppDriver, ev: &KeyEvent, tx: &mut Tx) -> bool {
         if self.eat_ime_key_up(app) { return false; }
         tx.focused = self.focused_key();
-        let pressed = self.kbd.key_releases.route().and_then(|p| self.live_index(&p));
+        let pressed = self.kbd.route_key_release().and_then(|p| self.live_index(&p));
         let focused = self.kbd.focus.path().and_then(|p| self.live_index(p));
         let secure = [pressed, focused].into_iter().flatten()
             .any(|i| self.tree.nodes[i].input.as_ref().is_some_and(|input| input.edit.is_secure()));

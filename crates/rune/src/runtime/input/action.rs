@@ -333,14 +333,14 @@ impl RuntimeCore {
         let repeat = matches!(action, Action::DragRepeat(..));
         let ran = match action {
             Action::WindowFocus(focused) => {
-                if !focused { self.kbd.held = physical_dispatch::Activation::Up; }
+                if !focused { self.kbd.clear_held(); }
                 let Some(f) = self.tree.nodes.get(self.app_root()).and_then(|n| n.handlers.on_window_focus.clone()) else { return false };
                 f(app.states(), focused, &mut one);
                 true
             }
             Action::Physical(event, fallback) => {
                 // The window lost key focus (an internal focus move also notifies handlers).
-                if matches!(event, crate::PhysicalInput::FocusLost) { self.kbd.held = physical_dispatch::Activation::Up; }
+                if matches!(event, crate::PhysicalInput::FocusLost) { self.kbd.clear_held(); }
                 let ran = self.dispatch_physical(app, event, fallback, tx);
                 let live_only = std::mem::take(&mut tx.live_only);
                 return if ran && live_only { self.skip_view("a key handler") } else { ran };
@@ -411,7 +411,7 @@ impl RuntimeCore {
                 true
             }
             Action::HoverChange(path, inside) => {
-                let gone = self.pointer.hover_gone.iter().position(|g| g.0 == path).map(|i| self.pointer.hover_gone.remove(i).1);
+                let gone = self.pointer.take_hover_gone(&path);
                 // A leave still reaches an element on its way out.
                 let exiting = || self.tree.nodes.iter().find(|n| !inside && n.path == path).and_then(|n| n.handlers.on_hover_change.clone());
                 let Some(f) = self.node(&path).and_then(|n| n.handlers.on_hover_change.clone()).or(gone).or_else(exiting) else { return false };
@@ -464,9 +464,9 @@ impl RuntimeCore {
                 }
                 one.button = button;
                 one.drag_repeat = repeat;
-                d.data = if d.phase == Phase::Down { 0.0 } else { self.pointer.drag_data };
+                d.data = if d.phase == Phase::Down { 0.0 } else { self.pointer.drag_data() };
                 f(app.states(), &mut d, &mut one);
-                self.pointer.drag_data = d.data;
+                self.pointer.set_drag_data(d.data);
                 if let Some(after) = one.drag_repeat_after.take() {
                     self.arm_press_repeat(&path, after);
                 }
@@ -488,7 +488,7 @@ impl RuntimeCore {
             }
             Action::Files(event) => self.run_files(app, event, &mut one),
             Action::Key { ev, repeat, stage } => {
-                if self.held_gate(None, Some(&ev.key), repeat) { return false; }
+                if self.kbd.held_gate(None, Some(&ev.key), repeat) { return false; }
                 if ! matches!(ev.key, crate::Key::Modifier { .. }) { self.note_key_down(app, repeat); }
                 if stage { self.route_stage_key(app, &ev, &mut one) } else { self.route_key(app, &ev, repeat, &mut one) }
             }
@@ -500,17 +500,10 @@ impl RuntimeCore {
             Action::Paste(content, target) => {
                 if target.is_some_and(|target| target != self.paste_target()) { return false; }
                 let hook = self.focused_input().and_then(|i| i.paste.clone());
-                let own_pills = if cfg!(not(target_arch = "wasm32")) || self.edit.clipboard.is_some() {
+                let own_pills = if cfg!(not(target_arch = "wasm32")) || self.edit.has_clipboard() {
                     content.has_own_pills()
                 } else {
-                    self.edit.pill_copy.as_ref().is_some_and(|(t, pills)| {
-                        t.as_str() == content.text()
-                            && content.html().is_some_and(|h| {
-                                let frag = crate::TextEdit::from_html(h);
-                                frag.pills().count() == pills.len()
-                                    && frag.pills().zip(pills).all(|((r1, id1), (r2, id2))| r1 == *r2 && id1 == id2)
-                            })
-                    })
+                    content.html().is_some_and(|h| self.edit.has_pill_copy_matching(content.text(), h))
                 };
                 let into_field = |mut state: crate::states::States<'_>, access: &crate::el::EditFn, tx: &mut Tx| {
                     if hook.is_some_and(|hook| hook(state.reborrow(), &content, tx)) { return EditOutcome::default(); }
@@ -532,8 +525,7 @@ impl RuntimeCore {
                 } else { false }
             }
             Action::ClipboardRead(id, content) => {
-                let Some(i) = self.edit.clipboard_reads.iter().position(|(read, _)| *read == id) else { return false };
-                let (_, f) = self.edit.clipboard_reads.remove(i);
+                let Some(f) = self.edit.take_clipboard_read(id) else { return false };
                 f(app.states(), &content, &mut one);
                 true
             }

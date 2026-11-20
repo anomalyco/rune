@@ -213,6 +213,38 @@ pub(in crate::runtime) fn same_keyed_path(a: &str, b: &str) -> bool {
     ta == tb && ka.split('/').filter(|s| !s.starts_with('#')).eq(kb.split('/').filter(|s| !s.starts_with('#')))
 }
 
+impl caret::TextInputState {
+    /// With nothing selected the basis reads ends of 0: nothing that compares it can change its
+    /// answer, since any selection made since differs in its path.
+    pub(super) fn same_selection_basis(&self, commits: u64, from: &Basis) -> bool {
+        let phase = &self.selectable.phase;
+        let sel = phase.selection();
+        from.0 == commits
+            && from.1.as_deref() == sel.map(|s| s.path.as_str())
+            && from.2 == sel.map_or(0, |s| s.anchor)
+            && from.3 == sel.map_or(0, |s| s.focus)
+            && from.4.as_deref() == sel.and_then(|s| s.far.as_ref()).map(|f| f.path.as_str())
+            && from.5 == phase.dragging()
+    }
+
+    pub(super) fn selection_basis(&self, commits: u64) -> Basis {
+        let phase = &self.selectable.phase;
+        let sel = phase.selection();
+        (commits, sel.map(|s| s.path.clone()), sel.map_or(0, |s| s.anchor), sel.map_or(0, |s| s.focus),
+            sel.and_then(|s| s.far.as_ref()).map(|f| f.path.clone()), phase.dragging())
+    }
+
+    pub(super) fn cached_selection_snapshot(&self, commits: u64) -> Option<Option<Rc<TextSelection>>> {
+        let cache = self.sel_snapshot.borrow();
+        cache.as_ref().filter(|s| self.same_selection_basis(commits, &s.from)).map(|s| s.selection.clone())
+    }
+
+    pub(super) fn cache_selection_snapshot(&self, commits: u64, selection: Option<Rc<TextSelection>>) {
+        let from = self.selection_basis(commits);
+        *self.sel_snapshot.borrow_mut() = Some(Snapshot { from, selection });
+    }
+}
+
 impl RuntimeCore {
     pub(in crate::runtime) fn is_selectable(&self, i: usize) -> bool {
         let n = &self.tree.nodes[i];
@@ -359,43 +391,21 @@ impl RuntimeCore {
     /// [`Runtime::selection`] for a handler's `Tx`, kept until a commit or the selection changes.
     pub(in crate::runtime) fn selection_snapshot(&self, app: &dyn ViewDriver) -> Option<Rc<TextSelection>> {
         self.edit.selectable.phase.selection()?;
-        {
-            let cache = self.edit.sel_snapshot.borrow();
-            if let Some(s) = cache.as_ref().filter(|s| self.same_from(&s.from)) { return s.selection.clone(); }
+        if let Some(cached) = self.edit.cached_selection_snapshot(self.commit.commits) {
+            return cached;
         }
-        let from = self.selection_from();
         let selection = self.selection(app).map(Rc::new);
-        *self.edit.sel_snapshot.borrow_mut() = Some(Snapshot { from, selection: selection.clone() });
+        self.edit.cache_selection_snapshot(self.commit.commits, selection.clone());
         selection
-    }
-
-    /// With nothing selected the basis reads ends of 0: nothing that compares it can change its
-    /// answer, since any selection made since differs in its path.
-    fn same_from(&self, from: &Basis) -> bool {
-        let phase = &self.edit.selectable.phase;
-        let sel = phase.selection();
-        from.0 == self.commit.commits
-            && from.1.as_deref() == sel.map(|s| s.path.as_str())
-            && from.2 == sel.map_or(0, |s| s.anchor)
-            && from.3 == sel.map_or(0, |s| s.focus)
-            && from.4.as_deref() == sel.and_then(|s| s.far.as_ref()).map(|f| f.path.as_str())
-            && from.5 == phase.dragging()
-    }
-
-    fn selection_from(&self) -> Basis {
-        let phase = &self.edit.selectable.phase;
-        let sel = phase.selection();
-        (self.commit.commits, sel.map(|s| s.path.clone()), sel.map_or(0, |s| s.anchor), sel.map_or(0, |s| s.focus),
-            sel.and_then(|s| s.far.as_ref()).map(|f| f.path.clone()), phase.dragging())
     }
 
     /// The `El::on_selection_change` calls owed since the last check: each element whose part
     /// of the selection changed, started or cleared.
     pub(in crate::runtime) fn selection_changes(&mut self, app: &dyn ViewDriver) -> Vec<Action> {
-        if self.edit.sel_heard.from.as_ref().is_some_and(|f| self.same_from(f)) { return Vec::new(); }
+        if self.edit.sel_heard.from.as_ref().is_some_and(|f| self.edit.same_selection_basis(self.commit.commits, f)) { return Vec::new(); }
         // A release is heard by whoever holds the selection, though it didn't change.
         let released = self.edit.sel_heard.from.as_ref().is_some_and(|f| f.5 && !self.edit.selectable.phase.dragging());
-        self.edit.sel_heard.from = Some(self.selection_from());
+        self.edit.sel_heard.from = Some(self.edit.selection_basis(self.commit.commits));
         if self.edit.sel_heard.by_path.is_empty() && !self.tree.nodes.iter().any(|n| n.handlers.get().is_some_and(|h| h.on_selection_change.is_some())) {
             return Vec::new();
         }
@@ -527,7 +537,7 @@ impl RuntimeCore {
 
     /// The held press is selecting text by dragging, and has selected some.
     pub(in crate::runtime) fn selected_by_drag(&self) -> bool {
-        self.edit.selectable.phase.dragging() && self.pointer.press.held().is_some_and(|h| h.moved) && (!self.selection_ranges().is_empty() || self.has_nonempty_selection())
+        self.edit.selectable.phase.dragging() && self.pointer.press_held().is_some_and(|h| h.moved) && (!self.selection_ranges().is_empty() || self.has_nonempty_selection())
     }
 
     pub(in crate::runtime) fn clear_text_selection(&mut self) {
@@ -537,7 +547,7 @@ impl RuntimeCore {
     /// Steps the selection's phase and carries out what it asks for.
     pub(in crate::runtime) fn select_step(&mut self, event: phase::Event<'_>) {
         // Only the held press's own drag keeps the list scrolling at its edge.
-        if !matches!(event, phase::Event::Drag { .. }) { self.stop_edge_scroll(); }
+        if !matches!(event, phase::Event::Drag { .. }) { self.edit.stop_edge_scroll(); }
         let effects = phase::step(&mut self.edit.selectable.phase, event);
         self.carry_select(effects);
     }

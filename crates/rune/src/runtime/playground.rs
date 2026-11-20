@@ -54,18 +54,11 @@ impl RuntimeCore {
     fn leave_stage(&mut self, app: &mut dyn AppDriver, was_open: bool) {
         let exiting: Vec<_> = self.tree.nodes.iter().map(|n| n.id).filter(|&id| self.is_exiting(id)).collect();
         for id in exiting { self.scene.unmount(id); }
-        self.pointer.press = capture::Press::default();
-        self.pointer.secondary = capture::Secondary::Up;
         self.drop_drag_out_request();
         self.select_step(selectable::phase::Event::Release);
         self.edit.input_click.clear();
-        self.pointer.hovered = None;
-        self.pointer.hover_gone.clear();
-        self.pointer.hover_within.clear();
-        self.pointer.hover_delays.clear();
-        self.forget_drop_targets();
+        self.pointer.clear_for_stage();
         self.host.clear_titlebar();
-        self.pointer.press_clicks.clear();
         let Some(playground) = app.playground_mut() else { return };
         if was_open { self.time_scale = playground.app_time_scale(); } else { playground.set_app_time_scale(self.time_scale); }
     }

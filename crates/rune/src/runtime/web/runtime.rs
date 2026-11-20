@@ -222,7 +222,7 @@ impl RuntimeCore {
             }
             EditOutcome::default()
         }, &mut tx);
-        if composing_before || event["kind"] == "preedit" { self.kbd.key_releases.ime_took_key(); }
+        if composing_before || event["kind"] == "preedit" { self.kbd.ime_took_key(); }
         if changed { self.commit.dirty = true; }
         merge(&mut self.frame.pending, tx);
     }

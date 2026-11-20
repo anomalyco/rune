@@ -9,10 +9,10 @@ pub(crate) struct TextInputState {
     /// The selection in `El::selectable` text.
     pub(in crate::runtime) selectable: selectable::phase::TextSel,
     /// `Tx::text_selection`'s snapshot, kept while neither a commit nor the selection changed.
-    pub(in crate::runtime) sel_snapshot: std::cell::RefCell<Option<selectable::Snapshot>>,
+    pub(super) sel_snapshot: std::cell::RefCell<Option<selectable::Snapshot>>,
     /// What each `El::on_selection_change` element (by path) last heard.
     pub(in crate::runtime) sel_heard: selectable::Heard,
-    pub(in crate::runtime) links: links::LinkState,
+    pub(super) links: links::LinkState,
     /// Multi-click and drag selection state for `text_input`.
     pub(in crate::runtime) input_click: input_click::InputClick,
     /// Sideways scroll of focused single-line fields, in points, keyed by node path.
@@ -24,7 +24,7 @@ pub(crate) struct TextInputState {
     /// An edit ran this frame: keep the caret in its scroll viewport after the commit.
     pub(in crate::runtime) caret_follow: bool,
     /// The composition `App::on_ime` currently has open.
-    pub(crate) app_ime_comp: app_ime::AppComposition,
+    app_ime_comp: app_ime::AppComposition,
     /// The `El::ime_cursor` that has the input method asks for Option as Alt (`El::ime_option_as_alt`).
     pub(crate) ime_option_as_alt: bool,
     /// The shell cancels native composition before enabling the new text focus.
@@ -46,7 +46,7 @@ pub(crate) struct TextInputState {
     pub(in crate::runtime) next_clipboard_read: u64,
     pub(crate) clear_secret_request: bool,
     /// `Runtime::use_clipboard`: a test clipboard that replaces the OS one.
-    pub(crate) clipboard: Option<crate::clipboard::MemoryClipboard>,
+    clipboard: Option<crate::clipboard::MemoryClipboard>,
 }
 
 impl TextInputState {
@@ -78,6 +78,75 @@ impl TextInputState {
             clear_secret_request: false,
             clipboard: None,
         }
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn app_ime_composing(&self) -> bool {
+        self.app_ime_comp.composing()
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn step_app_ime(&mut self, ev: &Ime) {
+        self.app_ime_comp.step(ev);
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn take_app_ime_composing(&mut self) -> Option<String> {
+        self.app_ime_comp.take_composing()
+    }
+
+    #[inline]
+    pub(crate) fn clipboard(&self) -> Option<&crate::clipboard::MemoryClipboard> {
+        self.clipboard.as_ref()
+    }
+
+    #[inline]
+    pub(crate) fn has_clipboard(&self) -> bool {
+        self.clipboard.is_some()
+    }
+
+    #[inline]
+    pub(crate) fn set_clipboard(&mut self, clipboard: crate::clipboard::MemoryClipboard) {
+        self.clipboard = Some(clipboard);
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn single_line_scroll(&self, path: &str) -> f32 {
+        self.input_scroll.get(path).copied().unwrap_or(0.0)
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn set_caret_if_moved(&mut self, next: Option<(&str, [f32; 4])>) -> bool {
+        let same = match (&self.caret, next) {
+            (Some((path, rect)), Some((next_path, r))) => path.as_str() == next_path && *rect == r,
+            (None, None) => true,
+            _ => false,
+        };
+        if same { return false; }
+        self.caret = next.map(|(path, r)| (path.to_owned(), r));
+        true
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn take_clipboard_read(&mut self, id: u64) -> Option<crate::el::ReadFn> {
+        let i = self.clipboard_reads.iter().position(|(read, _)| *read == id)?;
+        Some(self.clipboard_reads.remove(i).1)
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn has_pill_copy_matching(&self, text: &str, html: &str) -> bool {
+        self.pill_copy.as_ref().is_some_and(|(t, pills)| {
+            t.as_str() == text && {
+                let frag = crate::TextEdit::from_html(html);
+                frag.pills().count() == pills.len()
+                    && frag.pills().zip(pills).all(|((r1, id1), (r2, id2))| r1 == *r2 && id1 == id2)
+            }
+        })
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn set_shift(&mut self, shift: bool) {
+        self.selectable.shift = shift;
     }
 }
 
@@ -122,7 +191,7 @@ impl RuntimeCore {
         let (x0, x1) = (t[0] + n.inset[0], t[2] - n.inset[2]);
         let mut x = text_x(spec, x0, x1, tw, layout.flow());
         if inp.single_line && let Some(l) = laid.single() {
-            let prev = self.edit.input_scroll.get(&n.path).copied().unwrap_or(0.0);
+            let prev = self.edit.single_line_scroll(&n.path);
             x -= single_line_offset(prev, inp, &spec.content, l, s, (x1 - x0) * s) / s;
         }
         let bb = layout.caret(caret_index(&inp.edit, &spec.content), inp.edit.affinity, 1.5 * s);
@@ -172,14 +241,8 @@ impl RuntimeCore {
         let nodes = nodes.unwrap_or(&self.tree.nodes);
         let next = nodes.iter().position(|n| n.input.as_ref().is_some_and(|inp| inp.edit.focused))
             .and_then(|i| Some((i, self.caret_rect(nodes, i)?)));
-        let same = match (&self.edit.caret, next) {
-            (Some((path, rect)), Some((i, r))) => *path == nodes[i].path && *rect == r,
-            (None, None) => true,
-            _ => false,
-        };
-        if same { return false; }
-        self.edit.caret = next.map(|(i, r)| (nodes[i].path.clone(), r));
-        true
+        let next = next.map(|(i, r)| (nodes[i].path.as_str(), r));
+        self.edit.set_caret_if_moved(next)
     }
 }
 

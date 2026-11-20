@@ -133,6 +133,55 @@ impl LinkFx {
     }
 }
 
+pub(in crate::runtime) fn link_count(n: &Node) -> usize {
+    n.text.as_ref().map_or(0, |t| t.cold.links.len())
+}
+
+impl caret::TextInputState {
+    /// Tab inside the focused text's links: moves to its next (or previous) link and returns
+    /// true, or false at its last (first) link so Tab leaves it.
+    #[inline]
+    pub(in crate::runtime) fn link_tab(&mut self, n: &Node, backward: bool) -> bool {
+        let count = link_count(n);
+        let Some(k) = self.links.focus.filter(|_| count > 0) else { return false };
+        let next = if backward { k.checked_sub(1) } else { Some(k + 1).filter(|&j| j < count) };
+        if next.is_some() { self.links.focus = next; }
+        next.is_some()
+    }
+
+    /// Tab focused node `n`: start at its first link, or its last going backward.
+    #[inline]
+    pub(in crate::runtime) fn enter_links(&mut self, n: &Node, backward: bool) {
+        let count = link_count(n);
+        self.links.focus = (count > 0).then(|| if backward { count - 1 } else { 0 });
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn blur_links(&mut self) {
+        self.links.focus = None;
+    }
+
+    /// The focused text's focused link, if any (it may not be in range for that text).
+    #[inline]
+    pub(in crate::runtime) fn link_focus(&self) -> Option<usize> { self.links.focus }
+
+    /// Focuses link `k` of the text about to take focus, as Tab into it does.
+    #[inline]
+    pub(in crate::runtime) fn set_link_focus(&mut self, k: usize) { self.links.focus = Some(k); }
+
+    /// Whether focused node `n` has a link focused, which takes Return.
+    #[inline]
+    pub(in crate::runtime) fn link_focused(&self, n: &Node) -> bool {
+        self.links.focus.is_some_and(|k| k < link_count(n))
+    }
+
+    /// The id of focused node `n`'s focused link, which tools list as its own element.
+    pub(in crate::runtime) fn focused_link_id(&self, n: &Node) -> Option<String> {
+        let k = self.links.focus?;
+        n.text.as_ref()?.cold.links.get(k).map(|l| l.id.clone())
+    }
+}
+
 impl RuntimeCore {
     /// Node `i`'s border box as drawn this frame (points, x0 y0 x1 y1).
     pub(crate) fn drawn_box(&self, i: usize) -> [f32; 4] {
@@ -186,7 +235,7 @@ impl RuntimeCore {
         let id = self.tree.nodes[i].id;
         for (_, r) in self.link_boxes(i, rect) {
             let c = [r[0].max(clipped[0]), r[1].max(clipped[1]), r[2].min(clipped[2]), r[3].min(clipped[3])];
-            if c[2] > c[0] && c[3] > c[1] { self.hit.hits.push((id, c)); }
+            if c[2] > c[0] && c[3] > c[1] { self.hit.push_hit(id, c); }
         }
         true
     }
@@ -196,8 +245,8 @@ impl RuntimeCore {
         let path = &self.tree.nodes[i].path;
         let hovered = self.pointer.pos.filter(|_| self.pointer.hovered.as_deref() == Some(path))
             .and_then(|(x, y)| self.link_at(i, x, y));
-        let pressed = self.pointer.press.held().filter(|h| h.path == *path && h.inside()).and_then(|h| h.link).filter(|&k| hovered == Some(k));
-        let focused = self.edit.links.focus.filter(|_| self.kbd.focus.keyboard() && self.kbd.focus.path() == Some(path));
+        let pressed = self.pointer.press_held().filter(|h| h.path == *path && h.inside()).and_then(|h| h.link).filter(|&k| hovered == Some(k));
+        let focused = self.edit.link_focus().filter(|_| self.kbd.focus.keyboard() && self.kbd.focus.path() == Some(path));
         (hovered, pressed, focused)
     }
 
@@ -271,52 +320,18 @@ impl RuntimeCore {
         })
     }
 
-    pub(in crate::runtime) fn link_count(&self, i: usize) -> usize {
-        self.tree.nodes[i].text.as_ref().map_or(0, |t| t.cold.links.len())
-    }
-
-    /// Tab inside the focused text's links: moves to its next (or previous) link and returns
-    /// true, or false at its last (first) link so Tab leaves it.
-    pub(in crate::runtime) fn link_tab(&mut self, backward: bool) -> bool {
-        let Some(i) = self.focused_index() else { return false };
-        let count = self.link_count(i);
-        let Some(k) = self.edit.links.focus.filter(|_| count > 0) else { return false };
-        let next = if backward { k.checked_sub(1) } else { Some(k + 1).filter(|&j| j < count) };
-        if next.is_some() { self.edit.links.focus = next; }
-        next.is_some()
-    }
-
-    /// Tab focused node `i`: start at its first link, or its last going backward.
-    pub(in crate::runtime) fn enter_links(&mut self, i: usize, backward: bool) {
-        let count = self.link_count(i);
-        self.edit.links.focus = (count > 0).then(|| if backward { count - 1 } else { 0 });
-    }
-
-    pub(in crate::runtime) fn blur_links(&mut self) {
-        self.edit.links.focus = None;
-    }
-
     /// The focused text's focused link, if any (it may not be in range for that text).
-    pub(crate) fn link_focus(&self) -> Option<usize> { self.edit.links.focus }
+    #[inline]
+    pub(crate) fn link_focus(&self) -> Option<usize> { self.edit.link_focus() }
 
     /// Focuses link `k` of the text about to take focus, as Tab into it does.
-    pub(crate) fn set_link_focus(&mut self, k: usize) { self.edit.links.focus = Some(k); }
-
-    /// Whether focused node `i` has a link focused, which takes Return.
-    pub(in crate::runtime) fn link_focused(&self, i: usize) -> bool {
-        self.edit.links.focus.is_some_and(|k| k < self.link_count(i))
-    }
-
-    /// The id of focused node `i`'s focused link, which tools list as its own element.
-    pub(in crate::runtime) fn focused_link_id(&self, i: usize) -> Option<String> {
-        let k = self.edit.links.focus?;
-        self.tree.nodes[i].text.as_ref()?.cold.links.get(k).map(|l| l.id.clone())
-    }
+    #[inline]
+    pub(crate) fn set_link_focus(&mut self, k: usize) { self.edit.set_link_focus(k); }
 
     /// The Menu key on focused node `i`'s focused link: its `on_link_secondary`, at the
     /// bottom-left of its first line box.
     pub(in crate::runtime) fn focused_link_menu(&mut self, app: &mut dyn AppDriver, i: usize, tx: &mut Tx) -> bool {
-        let Some(k) = self.edit.links.focus.filter(|&k| k < self.link_count(i)) else { return false };
+        let Some(k) = self.edit.link_focus().filter(|&k| k < link_count(&self.tree.nodes[i])) else { return false };
         if self.tree.nodes[i].text.as_ref().is_none_or(|t| t.cold.on_link_secondary.is_none()) { return false; }
         let Some((_, r)) = self.link_boxes(i, self.drawn_box(i)).into_iter().find(|(j, _)| *j == k) else { return false };
         let path = self.tree.nodes[i].path.clone();
@@ -326,7 +341,7 @@ impl RuntimeCore {
 
     /// Enter or Space on a focused link presses it.
     pub(in crate::runtime) fn link_key(&mut self, app: &mut dyn AppDriver, i: usize, tx: &mut Tx) -> bool {
-        let Some(k) = self.edit.links.focus.filter(|&k| k < self.link_count(i)) else { return false };
+        let Some(k) = self.edit.link_focus().filter(|&k| k < link_count(&self.tree.nodes[i])) else { return false };
         let path = self.tree.nodes[i].path.clone();
         self.press_link(app, &path, k, tx);
         true
@@ -343,7 +358,7 @@ impl RuntimeCore {
             elements[at].focused = false;
             elements[at].focus_visible = false;
             let (hovered, pressed, _) = self.link_states(i);
-            let focused = self.edit.links.focus.filter(|_| self.kbd.focus.path() == Some(&n.path));
+            let focused = self.edit.link_focus().filter(|_| self.kbd.focus.path() == Some(&n.path));
             let boxes = self.link_boxes(i, self.drawn_box(i));
             let targets = self.link_boxes_in(&self.tree.nodes, i, n.target, 1.0);
             let union = |k: usize, bs: &[(usize, [f32; 4])]| bs.iter().filter(|(j, _)| *j == k).fold(None, |u: Option<[f32; 4]>, (_, r)| {

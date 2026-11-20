@@ -7,7 +7,7 @@ impl Client {
         worker().send(Request::Read { purpose, reply: self.sender.clone(), wake: self.wake.clone() }).ok();
     }
     pub(crate) fn flush_core(&self, rt: &mut crate::runtime::RuntimeCore) {
-        if rt.edit.clipboard.is_some() { return flush_memory(rt); }
+        if rt.edit.has_clipboard() { return flush_memory(rt); }
         #[cfg(target_os = "linux")]
         self.flush_primary(rt);
         // Nothing to clear before the first write.

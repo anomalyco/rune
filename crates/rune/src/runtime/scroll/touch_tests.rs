@@ -30,9 +30,9 @@ fn a_touch_pan_moves_the_axis_its_first_direction_picks() {
 
     // A touch on the strip while it springs back past its left edge holds it there, until a
     // tap lets it go or a sideways pan carries on from where it was caught.
-    let held = |rt: &Runtime<()>| rt.pointer.touch.scroll.map(|t| (t.id(), t.horizontal(), !t.coasting(), t.origin()));
+    let held = |rt: &Runtime<()>| rt.pointer.touch_scroll().map(|t| (t.id(), t.horizontal(), !t.coasting(), t.origin()));
     rt.scroll.scrolls.get_mut(&strip).unwrap().x.offset = -20.0;
-    rt.pointer.touch.scroll = Some(TouchScroll::Coasting { id: strip, horizontal: true });
+    *rt.pointer.touch_scroll_mut() = Some(TouchScroll::Coasting { id: strip, horizontal: true });
     let vertical = rt.touch_scroll_start(150.0, 50.0);
     assert_eq!(held(&rt), Some((strip, true, true, Some(-20.0))), "caught, not handed to the page");
     rt.touch_scroll_end(vertical, 0.0);

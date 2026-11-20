@@ -2,12 +2,21 @@
 //! which element's menu it opens.
 use super::*;
 
+impl capture::PointerState {
+    /// The secondary press went to the browser's own menu: its release opens none of Rune's.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    #[inline]
+    pub(in crate::runtime) fn abandon_secondary(&mut self) {
+        self.clear_secondary();
+    }
+}
+
 impl RuntimeCore {
     /// The nearest element with `on_secondary_press` (or a link with `on_link_secondary`) at
     /// (x, y), else the selectable text there (its Copy menu): an app's context menu on a row
     /// wins over its text's.
     pub(in crate::runtime) fn secondary_target(&self, x: f32, y: f32) -> Option<&str> {
-        let id = self.hit.hits.iter().rev().find(|&&(id, r)| self.hit_contains(id, r, x, y))?.0;
+        let id = self.hit.top_hit(|id, r| self.hit_contains(id, r, x, y))?;
         let mut index = *self.tree.node_index.get(&id)?;
         let mut text = None;
         loop {
@@ -26,18 +35,18 @@ impl RuntimeCore {
     /// Capture a secondary gesture without activating primary actions or text selection.
     pub fn secondary_down(&mut self, x: f32, y: f32) {
         self.pointer.pos = Some((x, y));
-        if self.autoscroll_press(crate::PointerButton::Secondary) { return; }
+        if self.pointer.autoscroll_press(crate::PointerButton::Secondary) { return; }
         self.tint_down(x, y, crate::PointerButton::Secondary);
         self.release_hover_hold();
         self.kbd.focus.step(focus_machine::FocusEvent::Pointed);
         self.dismiss_help();
         let path = self.secondary_target(x, y).map(str::to_owned);
         let i = path.as_ref().and_then(|p| self.tree.nodes.iter().position(|n| n.path == *p));
-        self.pointer.secondary = match path {
+        self.pointer.set_secondary(match path {
             Some(path) => capture::Secondary::Held { path, link: i.and_then(|i| self.secondary_link_at(i, x, y)), left: false },
             None => capture::Secondary::Up,
-        };
-        self.secondary_region_down(x, y, self.pointer.secondary.is_held());
+        });
+        self.secondary_region_down(x, y, self.pointer.secondary_held());
         // Under `Cx::web_focus` a right-click focuses the control it's on, as Chromium's
         // mousedown does, so focus is back on it when its menu closes.
         if self.commit.defaults.web_focus
@@ -53,7 +62,7 @@ impl RuntimeCore {
     pub(in crate::runtime) fn tint_down(&mut self, x: f32, y: f32, button: crate::PointerButton) {
         if self.pointer.press.held().is_some_and(|h| h.button == crate::PointerButton::Primary) { return; }
         let path = self.primary_target(x, y).filter(|&i| self.allowed(i) && !self.subtree_exiting(i)).map(|i| self.tree.nodes[i].path.clone());
-        self.pointer.tint = path.map_or(capture::Tint::Up, |path| capture::Tint::Held { path, button });
+        self.pointer.set_tint(path.map_or(capture::Tint::Up, |path| capture::Tint::Held { path, button }));
     }
 
     /// What the secondary press being held is on, for a browser that shows its own context
@@ -61,7 +70,7 @@ impl RuntimeCore {
     /// a text field, `"text"` on selectable text alone, `""` on nothing of Rune's.
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     pub(crate) fn secondary_claim(&self) -> &'static str {
-        let capture::Secondary::Held { path, link, .. } = &self.pointer.secondary else { return "" };
+        let capture::Secondary::Held { path, link, .. } = self.pointer.secondary() else { return "" };
         let Some(n) = self.tree.nodes.iter().find(|n| n.path == *path) else { return "" };
         if link.is_some() || n.handlers.on_secondary_press.is_some() { return "app"; }
         // On a misspelled word, Rune's own field menu: it has the suggestions, the browser's
@@ -84,16 +93,17 @@ impl RuntimeCore {
 
     /// The secondary press went to the browser's own menu: its release opens none of Rune's.
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    #[inline]
     pub(crate) fn secondary_abandon(&mut self) {
-        self.pointer.secondary = capture::Secondary::Up;
+        self.pointer.abandon_secondary();
     }
 
     pub(crate) fn secondary_up(&mut self, app: &dyn ViewDriver, x: f32, y: f32) {
         self.pointer.pos = Some((x, y));
-        self.pointer.tint.release(crate::PointerButton::Secondary);
-        if self.autoscroll_release(crate::PointerButton::Secondary) { return; }
+        self.pointer.release_tint(crate::PointerButton::Secondary);
+        if self.pointer.autoscroll_release(crate::PointerButton::Secondary) { return; }
         self.secondary_region_up(x, y);
-        let (path, down_link, left) = match std::mem::take(&mut self.pointer.secondary) {
+        let (path, down_link, left) = match self.pointer.take_secondary() {
             capture::Secondary::Held { path, link, left } => (Some(path), link, left),
             capture::Secondary::Up => (None, None, false),
         };

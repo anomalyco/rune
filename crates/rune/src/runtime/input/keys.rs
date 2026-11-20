@@ -10,7 +10,7 @@ impl RuntimeCore {
         one.focused = self.focused_key();
         if matches!(ev.key, crate::Key::Modifier { .. }) { return !repeat && self.route_modifier(app, ev, one); }
         // Any other key while Ctrl and Shift are down makes them a shortcut, not a direction.
-        self.disarm_direction_chord();
+        self.kbd.disarm_direction_chord();
         one.key_repeat = repeat;
         let shown = self.kbd.focus.keyboard() || self.kbd.focus.hovered();
         if focus::navigates(ev) { self.kbd.focus.step(focus_machine::FocusEvent::Navigated); }
@@ -289,15 +289,15 @@ impl RuntimeCore {
     /// else its path's last segment (a field in a virtual row that scrolled out has no node).
     pub(in crate::runtime) fn focused_key(&self) -> Option<String> {
         let path = self.kbd.focus.path()?;
-        if let Some(id) = self.focused_index().and_then(|i| self.focused_link_id(i)) { return Some(id); }
+        if let Some(id) = self.focused_index().and_then(|i| self.edit.focused_link_id(&self.tree.nodes[i])) { return Some(id); }
         Some(self.focused_index().and_then(|i| self.tree.nodes[i].key.clone())
             .unwrap_or_else(|| path.rsplit('/').next().unwrap_or(path).to_owned()))
     }
 
     /// The focused element's index. Unlike [`Runtime::node`], this finds it while it exits.
+    #[inline]
     pub(crate) fn focused_index(&self) -> Option<usize> {
-        let path = self.kbd.focus.path()?;
-        self.tree.nodes.iter().position(|n| n.path == path)
+        self.kbd.focused_index(&self.tree.nodes)
     }
 
     pub fn key(&mut self, ev: KeyEvent) {
@@ -308,7 +308,7 @@ impl RuntimeCore {
     pub(in crate::runtime) fn queue_key(&mut self, ev: KeyEvent, stage: bool) {
         self.dismiss_help();
         // A key ends a middle-click autoscroll, and does nothing else.
-        if self.autoscroll_key() { return; }
+        if self.pointer.autoscroll_key() { return; }
         // Escape during a drag cancels it and goes no further.
         if ev.key == crate::Key::Escape && self.cancel_drag() { return; }
         self.frame.queue.push(Action::Key { ev, repeat: false, stage });
@@ -389,7 +389,8 @@ impl RuntimeCore {
         self.focused_input().is_some_and(|i| i.edit.is_secure())
     }
 
+    #[inline]
     pub fn has_focus(&self) -> bool {
-        self.kbd.focus.path().is_some()
+        self.kbd.has_focus()
     }
 }

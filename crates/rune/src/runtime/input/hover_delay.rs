@@ -125,17 +125,47 @@ impl HoverDelays {
     }
 }
 
-impl RuntimeCore {
-    /// Steps `path`'s delayed report and carries out what it asks.
-    pub(in crate::runtime) fn step_hover_delay(&mut self, path: &str, event: Event) {
-        for effect in self.pointer.hover_delays.step(path, event) {
+impl capture::PointerState {
+    /// Steps `path`'s delayed report, pushing any hover change to `queue` and returning a wake deadline.
+    pub(super) fn step_hover_delay(&mut self, path: &str, event: Event, queue: &mut ActionQueue) -> Option<f64> {
+        let mut wake = None;
+        for effect in self.hover_delays.step(path, event) {
             match effect {
-                Effect::Report(inside) => self.frame.queue.push(Action::HoverChange(path.to_owned(), inside)),
-                Effect::WakeAt(due) => self.schedule_wakes_from(due, [std::time::Duration::ZERO]),
+                Effect::Report(inside) => queue.push(Action::HoverChange(path.to_owned(), inside)),
+                Effect::WakeAt(due) => wake = Some(due),
             }
         }
+        wake
     }
 
+    /// Reports the delayed hover changes due by `now`.
+    pub(super) fn fire_hover_delays(&mut self, now: f64, queue: &mut ActionQueue) {
+        if !self.hover_delays.waiting() { return; }
+        let paths: Vec<String> = self.hover_delays.paths().map(str::to_owned).collect();
+        for path in paths { let _ = self.step_hover_delay(&path, Event::Due { now }, queue); }
+    }
+
+    /// A press stops the waits to report an enter.
+    #[inline]
+    pub(super) fn press_hover_delays(&mut self) {
+        self.hover_delays.0.retain_mut(|(_, d)| {
+            let mut state = Some(*d);
+            let _ = step(&mut state, Event::Pressed);
+            match state {
+                Some(next) => { *d = next; true }
+                None => false,
+            }
+        });
+    }
+
+    /// The window lost focus: every shown hover hears its leave, and the waits stop.
+    pub(super) fn end_hover_delays(&mut self, queue: &mut ActionQueue) {
+        let paths: Vec<String> = self.hover_delays.paths().map(str::to_owned).collect();
+        for path in paths { let _ = self.step_hover_delay(&path, Event::Ended, queue); }
+    }
+}
+
+impl RuntimeCore {
     /// Starts or drops the waits of `hover_delays` elements whose inside changed.
     pub(in crate::runtime) fn settle_hover_delays(&mut self) {
         let mut paths: Vec<String> = self.pointer.hover_delays.paths().map(str::to_owned).collect();
@@ -153,28 +183,22 @@ impl RuntimeCore {
                 Some(delay) => Event::Settle { inside: self.pointer.hover_within.contains(&path), may_enter, delay, now },
                 None => Event::Ended,
             };
-            self.step_hover_delay(&path, event);
+            if let Some(due) = self.pointer.step_hover_delay(&path, event, &mut self.frame.queue) {
+                self.schedule_wakes_from(due, [std::time::Duration::ZERO]);
+            }
         }
     }
 
     /// Reports the delayed hover changes due by this frame.
+    #[inline]
     pub(in crate::runtime) fn fire_hover_delays(&mut self) {
-        if !self.pointer.hover_delays.waiting() { return; }
-        let now = self.clock + 1e-6;
-        let paths: Vec<String> = self.pointer.hover_delays.paths().map(str::to_owned).collect();
-        for path in paths { self.step_hover_delay(&path, Event::Due { now }); }
-    }
-
-    /// A press stops the waits to report an enter.
-    pub(in crate::runtime) fn press_hover_delays(&mut self) {
-        let paths: Vec<String> = self.pointer.hover_delays.paths().map(str::to_owned).collect();
-        for path in paths { self.step_hover_delay(&path, Event::Pressed); }
+        self.pointer.fire_hover_delays(self.clock + 1e-6, &mut self.frame.queue);
     }
 
     /// The window lost focus: every shown hover hears its leave, and the waits stop.
+    #[inline]
     pub(in crate::runtime) fn end_hover_delays(&mut self) {
-        let paths: Vec<String> = self.pointer.hover_delays.paths().map(str::to_owned).collect();
-        for path in paths { self.step_hover_delay(&path, Event::Ended); }
+        self.pointer.end_hover_delays(&mut self.frame.queue);
     }
 }
 

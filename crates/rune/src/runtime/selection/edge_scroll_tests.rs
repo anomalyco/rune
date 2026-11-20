@@ -175,7 +175,7 @@ fn escape_stops_it_and_keeps_the_selection() {
             rt.pointer_move(150.0, BOTTOM + 200.0);
             for _ in 0..10 { rt.frame(1.0 / 120.0); }
             assert_eq!((offset(&rt), range(&rt)), (at, selected), "the list and the selection stay put");
-            assert!(!rt.pointer.press.is_held() && !rt.edit.selectable.phase.dragging());
+            assert!(!rt.pointer.pressing() && !rt.edit.selectable.phase.dragging());
         }
     }
 }
@@ -262,7 +262,7 @@ fn at_the_end_of_the_list_it_stops_asking_for_frames() {
     settle(&mut rt);
     assert_eq!(rt.wake_deadline(), None, "no wake while the pointer stays held at the end");
     assert!(!rt.frame(1.0 / 60.0), "an idle frame");
-    assert!(rt.pointer.press.is_held() && rt.edit.selectable.phase.dragging(), "still held");
+    assert!(rt.pointer.pressing() && rt.edit.selectable.phase.dragging(), "still held");
 }
 
 /// A list stuck to its bottom lets go of it while the edge scroll runs, however small each step
@@ -420,7 +420,7 @@ fn rows_arriving_at_the_end_a_held_drag_rests_at_set_it_going_again() {
         assert_eq!(range(&rt), (anchor, (ROWS + 19, LEN)), "virtual {}: the new rows selected", list.virtual_rows);
         assert_eq!(rt.wake_deadline(), None, "and rests again");
         assert!(!rt.frame(1.0 / 60.0), "an idle frame");
-        assert!(rt.pointer.press.is_held() && rt.edit.selectable.phase.dragging(), "still held");
+        assert!(rt.pointer.pressing() && rt.edit.selectable.phase.dragging(), "still held");
     }
 }
 
@@ -469,7 +469,7 @@ fn a_list_stuck_to_its_bottom_brings_new_rows_into_a_held_selection() {
     assert_eq!(range(&rt), (anchor, (ROWS + 19, LEN)), "the selection reaches the new last row");
     assert_eq!(rt.wake_deadline(), None, "and rests");
     assert!(!rt.frame(1.0 / 60.0), "an idle frame");
-    assert!(rt.pointer.press.is_held() && rt.edit.selectable.phase.dragging(), "still held");
+    assert!(rt.pointer.pressing() && rt.edit.selectable.phase.dragging(), "still held");
 }
 
 /// A list that shrinks while a held drag waits at its end ends the wait: rows appended after it
@@ -487,7 +487,7 @@ fn a_list_that_shrinks_under_a_resting_drag_ends_the_wait() {
     settle(&mut rt);
     assert_eq!((offset(&rt), range(&rt)), (at, selected), "the rows that arrive after it move nothing");
     assert_eq!(rt.wake_deadline(), None);
-    assert!(rt.pointer.press.is_held() && rt.edit.selectable.phase.dragging(), "still held");
+    assert!(rt.pointer.pressing() && rt.edit.selectable.phase.dragging(), "still held");
 }
 
 /// The edge scroll's letters, as the runtime feeds them: a pointer move, the frame for the step

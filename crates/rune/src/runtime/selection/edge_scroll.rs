@@ -203,6 +203,14 @@ impl EdgeScroll {
 /// Points a second for a pointer `past` points beyond the edge.
 fn speed(past: f32) -> f32 { (RATE * past.max(MIN_PAST)).min(MAX_SPEED) }
 
+impl caret::TextInputState {
+    /// The drag ended.
+    #[inline]
+    pub(in crate::runtime) fn stop_edge_scroll(&mut self) {
+        let _ = self.selectable.edge.step(Event::Stop);
+    }
+}
+
 impl RuntimeCore {
     /// The held pointer moved to height `y`: step while it's at or past an edge the selection's
     /// viewport can still scroll past, and stop when it isn't.
@@ -213,9 +221,6 @@ impl RuntimeCore {
         let effects = self.edit.selectable.edge.step(Event::Moved { now, edge });
         self.carry_edge_scroll(effects);
     }
-
-    /// The drag ended.
-    pub(in crate::runtime) fn stop_edge_scroll(&mut self) { let _ = self.edit.selectable.edge.step(Event::Stop); }
 
     /// Takes the step due by this frame.
     pub(in crate::runtime) fn fire_edge_scroll(&mut self) {
@@ -279,14 +284,14 @@ impl RuntimeCore {
         st.offset = (st.offset + by).clamp(0.0, st.max);
         st.moved();
         st.land(false);
-        if st.offset != before { self.scroll_cancels_press(id); }
+        if st.offset != before { self.pointer.scroll_cancels_press(&self.tree.nodes, id); }
     }
 
     /// Where height `y` is against the edges of the vertical viewport around the selection a
     /// held press is extending: at or past its top or bottom (as drawn, inside its clips and the
     /// window), how fast that scrolls, and how far it still can.
     fn edge_at(&self, y: f32) -> Option<Edge> {
-        if !self.edit.selectable.phase.dragging() || !self.pointer.press.is_held() { return None; }
+        if !self.edit.selectable.phase.dragging() || !self.pointer.pressing() { return None; }
         let holder = self.selection_holder()?;
         let i = std::iter::successors(Some(holder), |&p| self.tree.nodes[p].parent)
             .find(|&p| self.tree.nodes[p].scroll.is_some() && self.tree.nodes[p].scroll_axes.has(false))?;

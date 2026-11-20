@@ -168,7 +168,7 @@ impl Client {
     pub fn connect(&mut self, wake: Waker) { self.wake = wake; }
     pub(crate) fn read_core(&self, rt: &crate::runtime::RuntimeCore) {
         let purpose = Purpose::paste(rt, rt.paste_target());
-        if let Some(m) = &rt.edit.clipboard {
+        if let Some(m) = rt.edit.clipboard() {
             if let Some(reply) = m.answer(purpose) && self.sender.send(reply).is_ok() { (self.wake)(); }
             return;
         }
@@ -191,7 +191,7 @@ fn deliver(rt: &mut crate::runtime::RuntimeCore, reply: Reply) {
 /// Applies a runtime's clipboard requests to its memory clipboard, if it has one. Runs after
 /// every frame, so headless runtimes write too.
 pub(crate) fn flush_memory(rt: &mut crate::runtime::RuntimeCore) {
-    let Some(m) = rt.edit.clipboard.clone() else { return };
+    let Some(m) = rt.edit.clipboard().cloned() else { return };
     if std::mem::take(&mut rt.edit.clear_secret_request) { m.handle(Request::Clear(None)); }
     if let Some(copy) = rt.copy_request.take() {
         copy.bind(Route::Memory(m.clone()));
@@ -205,7 +205,8 @@ pub(crate) fn flush_memory(rt: &mut crate::runtime::RuntimeCore) {
 }
 
 impl crate::runtime::RuntimeCore {
-    pub(crate) fn use_clipboard(&mut self, clipboard: &MemoryClipboard) { self.edit.clipboard = Some(clipboard.clone()); }
+    #[inline]
+    pub(crate) fn use_clipboard(&mut self, clipboard: &MemoryClipboard) { self.edit.set_clipboard(clipboard.clone()); }
 }
 
 /// An in-memory clipboard for tests, shared by its clones and by every runtime given it with
