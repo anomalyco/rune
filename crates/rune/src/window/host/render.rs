@@ -356,6 +356,66 @@ pub(super) fn submit_and_present_window(
         return crate::time::now();
     };
     renderer.submit(&gpu.queue, prepared.encoder);
+    #[cfg(target_os = "windows")]
+    if std::env::var_os("RUNE_PROOF_WINDOW_MIDFRAME").is_some() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static FRAME_N: AtomicU32 = AtomicU32::new(0);
+        let n = FRAME_N.fetch_add(1, Ordering::Relaxed) + 1;
+        eprintln!("PROOF_FRAME n={n} adapter={:?}", gpu.adapter.get_info().name);
+        if n == 2 {
+            // Queue ~40 ms of compute on the window's queue so heavy work + frame 2 are in flight.
+            let info = gpu.adapter.get_info();
+            if info.device_type != wgpu::DeviceType::Cpu || !info.name.contains("Microsoft Basic Render Driver") {
+                eprintln!("PROOF_REFUSE non-WARP adapter {:?}", info.name);
+                std::process::exit(3);
+            }
+            let shader = gpu.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: None,
+                source: wgpu::ShaderSource::Wgsl(
+                    "@group(0) @binding(0) var<storage, read_write> r: array<u32>;
+                    @compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+                        var x = id.x; for (var i = 0u; i < 256u; i++) { x = (x ^ (x >> 13u)) * 1664525u + 1013904223u; } r[id.x] = x; }"
+                        .into(),
+                ),
+            });
+            let pipeline = gpu.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: None, layout: None, module: &shader, entry_point: Some("main"),
+                compilation_options: Default::default(), cache: None,
+            });
+            let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                label: None, size: 65536 * 4, usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false,
+            });
+            let bind = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None, layout: &pipeline.get_bind_group_layout(0),
+                entries: &[wgpu::BindGroupEntry { binding: 0, resource: buffer.as_entire_binding() }],
+            });
+            for _ in 0..8 {
+                let mut enc = gpu.device.create_command_encoder(&Default::default());
+                {
+                    let mut pass = enc.begin_compute_pass(&Default::default());
+                    pass.set_pipeline(&pipeline);
+                    pass.set_bind_group(0, &bind, &[]);
+                    pass.dispatch_workgroups(1024, 1, 1);
+                }
+                gpu.queue.submit([enc.finish()]);
+            }
+            // SAFETY: proof-only WARP removal (rune-proof: device-removal).
+            unsafe {
+                use windows::Win32::Graphics::Direct3D12::ID3D12Device5;
+                use windows::core::Interface;
+                let hal = gpu.device.as_hal::<wgpu::hal::api::Dx12>().expect("dx12");
+                let dev5: ID3D12Device5 = hal.raw_device().cast().expect("ID3D12Device5");
+                dev5.RemoveDevice();
+            }
+            eprintln!("PROOF_REMOVED mid-frame after frame 2 + 8 compute submissions");
+        }
+        if n < 10 {
+            l.request_redraw();
+        } else {
+            eprintln!("PROOF_WINDOW_OK frames={n}");
+            std::process::exit(0);
+        }
+    }
     profile.mark_submitted();
     crate::marks::mark_once(&FIRST_ENCODED, "frame.first.encoded");
     *encoded = host.frame_reports.stamp();
