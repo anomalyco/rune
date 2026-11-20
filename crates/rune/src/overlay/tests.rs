@@ -786,5 +786,63 @@ fn missed_frame_in_turn_prevents_second_step_in_same_turn() {
     assert_eq!(next, Turn::Draw);
 }
 
+#[test]
+fn overlay_idle_after_stays_awake_when_stale_or_live_pending() {
+    let value = crate::LiveText::new("a");
+    let v = value.clone();
+    fn view(value: &crate::LiveText, _: &mut Cx<crate::LiveText>) -> El {
+        crate::text("a").live_text(value)
+    }
+    let app = AppSpec::new("idle-stale", (80.0, 40.0), || crate::LiveText::new("a"), view);
+    let (mut overlay, _) = Overlay::new(OverlaySpec::new("idle-stale", app.size, view).options(Default::default()), v, &app);
+    overlay.rt.set_live_visible(true);
+    overlay.rt.frame(0.0);
+    assert!(idle_after(overlay.rt.core(), false, None), "resting overlay with no work goes idle");
+
+    // A compositor invalidating state during render leaves rt.stale() true.
+    overlay.rt.invalidate();
+    assert!(!idle_after(overlay.rt.core(), false, None), "stale overlay must stay awake to draw the invalidation");
+    overlay.rt.frame(0.0);
+    assert!(idle_after(overlay.rt.core(), false, None));
+
+    // A live value changing during render leaves rt.live_pending() true.
+    value.set("b");
+    assert!(overlay.rt.live_pending());
+    assert!(!idle_after(overlay.rt.core(), false, None), "live-pending overlay must stay awake to draw the new value");
+}
+
+#[test]
+fn overlay_render_registers_frame_wake_on_renderer() {
+    let Ok(gpu) = crate::render::Gpu::try_new(crate::render::Gpu::instance(), None) else { return };
+    let mut overlay = width_overlay("frame-wake");
+    overlay.rt.frame(0.0);
+    let renderer = crate::render::Renderer::new(&gpu.device, crate::render::OFFSCREEN_FORMAT);
+    overlay.core.gpu = Some(Arc::new(gpu));
+    overlay.core.renderer = Some(renderer);
+    overlay.warm_offscreen((40, 20));
+    assert!(
+        overlay.core.renderer.as_ref().unwrap().has_frame_wake(),
+        "overlay render must register rt.live_wake() on the renderer so off-thread pipelines wake resting overlays"
+    );
+}
+
+#[test]
+fn overlay_post_step_unconfigured_miss_flushes_clipboard_and_drops_requests() {
+    let mut overlay = width_overlay("reblend-miss");
+    overlay.presence = Presence::Shown { occluded: false };
+    overlay.rt.update(|_, tx| {
+        tx.copy("overlay-copy");
+        tx.close_window();
+        tx.minimize();
+    });
+    overlay.rt.frame(0.0);
+    // Simulate a post-step reblend or re-acquire Unconfigured failure routed through acquire_missed.
+    overlay.acquire_missed(crate::window::Missed::Unconfigured, false, false, true);
+    assert!(overlay.rt.copy_request.is_none(), "post-step Unconfigured miss must flush clipboard writes");
+    assert!(overlay.rt.shell_request.is_none(), "post-step Unconfigured miss must drop unsupported shell requests");
+    assert!(!overlay.rt.host.minimize.field(), "post-step Unconfigured miss must clear minimize requests");
+    assert!(!overlay.presence.shown(), "surface_refused hides the overlay");
+}
+
 
 include!("more_tests.rs");

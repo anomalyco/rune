@@ -10,12 +10,14 @@
 //!   (`x11/xwayland.rs`): an override-redirect ARGB window with an empty input shape. One that
 //!   takes the pointer does too when its host opts in (`OverlayOptions::xwayland_input`).
 //! - X11: an override-redirect notification window, with an empty input shape unless
-//!   interactive.
+//!   interactive. A `KeyPolicy::OnDemand` one sets the input focus itself on `request_keys` and
+//!   on a click.
 //! - macOS: winit's view moved into a non-activating `NSPanel` at status level on every space,
 //!   observing pointer movement even through transparent regions, ordered front without key
 //!   focus unless explicitly requested. Its window number is available for capture filters.
 //! - Windows: a topmost tool window with `WS_EX_NOACTIVATE` (plus `WS_EX_TRANSPARENT` and
-//!   `WS_EX_LAYERED` unless interactive), shown with `SW_SHOWNOACTIVATE`.
+//!   `WS_EX_LAYERED` unless interactive), shown with `SW_SHOWNOACTIVATE`. A `KeyPolicy::OnDemand`
+//!   one is made without `WS_EX_NOACTIVATE`, so a click or `request_keys` activates it.
 //! - With `release_gpu_when_hidden`, hidden means destroyed on Windows and macOS too.
 
 use std::cell::RefCell;
@@ -50,6 +52,7 @@ mod frame;
 use frame::{OverlayRenderArgs, idle_after, render_frame, step};
 #[path = "overlay/input.rs"]
 mod input;
+pub(crate) mod keys;
 #[path = "overlay/lifetime.rs"]
 mod lifetime;
 pub(crate) mod options;
@@ -229,7 +232,8 @@ impl<T: 'static> OverlayHandle<T> {
     #[inline(always)]
     pub fn set_display(&self, display: DisplayTarget) { self.shared.core.set_display(display); }
 
-    /// Request keyboard focus without application activation, where supported.
+    /// Request keyboard focus without application activation, for a shown `KeyPolicy::OnDemand`
+    /// overlay where `capabilities().nonactivating_keys` is `Supported` (see `KeyPolicy`).
     #[inline(always)]
     pub fn request_keys(&self) { self.shared.core.request_keys(); }
 

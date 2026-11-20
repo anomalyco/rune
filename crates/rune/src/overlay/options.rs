@@ -70,11 +70,20 @@ pub enum OverlayLevel {
     AboveOverlays,
 }
 
+/// Whether an overlay may take keyboard focus. `OverlayCapabilities::nonactivating_keys` says
+/// whether the backend it got can.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum KeyPolicy {
+    /// Never takes keys; a click neither focuses nor activates it.
     #[default]
     None,
-    /// Permit `OverlayHandle::request_keys`; showing alone never requests focus.
+    /// Permit `OverlayHandle::request_keys`, and a click on the overlay takes the keys too;
+    /// showing alone never requests focus. macOS: the panel becomes key without activating the
+    /// app. Wayland: layer-shell v4's on-demand keyboard interactivity; XWayland can't. X11: the
+    /// override-redirect window sets the input focus itself; when it hides, focus reverts to the
+    /// root window for the window manager to hand on. Windows: the window is made without
+    /// `WS_EX_NOACTIVATE`, and `request_keys` takes the foreground only when Windows lets this
+    /// process (it just had the user's input, or was given the right); a click always does.
     OnDemand,
 }
 

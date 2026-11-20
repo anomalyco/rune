@@ -2109,6 +2109,11 @@ of the primary display, centred or `inset` points from a side. Clicks pass throu
 - Windows: a topmost tool window with `WS_EX_NOACTIVATE` (plus `WS_EX_TRANSPARENT|WS_EX_LAYERED`
   unless interactive), shown with `SW_SHOWNOACTIVATE`; a bottom overlay sits above the taskbar
   (`platform/win32.rs`).
+- Keys: `OverlayOptions::keys: KeyPolicy::OnDemand` lets an overlay take the keyboard on
+  `OverlayHandle::request_keys` or a click, and `capabilities().nonactivating_keys` says whether
+  its backend can: the macOS panel becomes key, a layer-shell (v4) surface asks for keyboard
+  interactivity, an X11 window sets the input focus itself, and a Windows window is made without
+  `WS_EX_NOACTIVATE` and takes the foreground when Windows lets the process. XWayland can't.
 - Checked under headless sway (layer shell, and Xwayland for X11) and on macOS (panel level,
   bounds, hide and reshow). Windows builds are checked with `cargo xwin clippy` only.
 - `Tx::copy` works in overlays (a meeting capsule's Copy button).
