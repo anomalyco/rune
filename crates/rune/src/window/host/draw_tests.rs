@@ -57,6 +57,7 @@ struct MockWindowFrame {
     app: TypedWindowApp<State>,
     clock: FrameClock,
     clipboard: crate::clipboard::Client,
+    clipboard_memory: crate::clipboard::MemoryClipboard,
     reports: FrameReports,
     presented: Option<Presented>,
     backoff: Backoff,
@@ -92,10 +93,14 @@ impl MockWindowFrame {
             Some(Box::new(move |f| outcomes.borrow_mut().push(f.outcome()))),
             Some("main"),
         );
+        let clipboard_memory = crate::clipboard::memory();
+        let mut clipboard = crate::clipboard::Client::default();
+        clipboard.use_memory(&clipboard_memory);
         Self {
             app,
             clock: FrameClock::new(now),
-            clipboard: crate::clipboard::Client::default(),
+            clipboard,
+            clipboard_memory,
             reports,
             presented,
             backoff: Backoff::default(),
@@ -195,6 +200,11 @@ fn post_step_reblend_failure_runs_missed_frame_cleanup_without_double_stepping()
     assert!(host.backoff.deadline().is_some(), "failed reblend schedules retry backoff");
     assert_eq!(host.app.rt.state.polls, polls_before + 1, "post-step reblend failure must not step poll twice");
     assert!(host.app.rt.copy_request.is_none(), "clipboard request from the stepped frame must be flushed");
+    assert_eq!(
+        host.clipboard_memory.text().as_deref().map(String::as_str),
+        Some("copied-before-reblend-miss"),
+        "clipboard request from the stepped frame must reach the clipboard"
+    );
     assert_eq!(*outcomes.borrow(), [FrameOutcome::Skipped], "failed reblend reports a skipped frame");
 }
 
@@ -213,5 +223,10 @@ fn pre_step_reblend_failure_runs_covered_wake_once_and_schedules_backoff() {
     assert!(host.backoff.deadline().is_some(), "pre-step reblend failure schedules retry backoff");
     assert_eq!(host.app.rt.state.polls, polls_before + 1, "pre-step miss runs covered_wake once");
     assert!(host.app.rt.copy_request.is_none(), "clipboard request from covered_wake must be flushed");
+    assert_eq!(
+        host.clipboard_memory.text().as_deref().map(String::as_str),
+        Some("copied-before-reblend-miss"),
+        "clipboard request from covered_wake must reach the clipboard"
+    );
     assert_eq!(*outcomes.borrow(), [FrameOutcome::Skipped]);
 }
