@@ -807,3 +807,152 @@ fn gpu_spring_opacity_folding_matches_cpu_across_all_kinds() {
         }
     }
 }
+
+#[test]
+fn shader_consts_and_clip_radii_invariants() {
+    use super::instance::shader_consts as sc;
+
+    // Generated Kind discriminants and uber threshold match Rust's Kind enum.
+    assert_eq!(Kind::Rect.as_u8(), sc::KIND_RECT_U8);
+    assert_eq!(Kind::Shadow.as_u8(), sc::KIND_SHADOW_U8);
+    assert_eq!(Kind::Glyph.as_u8(), sc::KIND_GLYPH_U8);
+    assert_eq!(Kind::Inset.as_u8(), sc::KIND_INSET_U8);
+    assert_eq!(Kind::Gradient.as_u8(), sc::KIND_GRADIENT_U8);
+    assert_eq!(Kind::Segment.as_u8(), sc::KIND_SEGMENT_U8);
+    assert_eq!(Kind::Triangle.as_u8(), sc::KIND_TRIANGLE_U8);
+    assert_eq!(Kind::Image.as_u8(), sc::KIND_IMAGE_U8);
+    assert_eq!(Kind::Layer.as_u8(), sc::KIND_LAYER_U8);
+    assert_eq!(Kind::LayerEnd.as_u8(), sc::KIND_LAYER_END_U8);
+    assert_eq!(Kind::Dashed.as_u8(), sc::KIND_DASHED_U8);
+    assert_eq!(Kind::Radial.as_u8(), sc::KIND_RADIAL_U8);
+    assert!(Kind::Radial.as_f32() < sc::UBER_MAX_KIND_THRESHOLD);
+    assert!(Kind::Effect.as_f32() > sc::UBER_MAX_KIND_THRESHOLD);
+    assert!(Kind::BackdropBlur.as_f32() > sc::UBER_MAX_KIND_THRESHOLD);
+
+    // Analytic checks on WGSL math constants mirrored into Rust.
+    assert_eq!(CONTINUOUS_K.to_bits(), sc::CONTINUOUS_K.to_bits());
+    assert_eq!(sc::CONTINUOUS_PI.to_bits(), std::f32::consts::PI.to_bits());
+    let unit_g = |x: f32| (-0.5 * x * x).exp() / (2.0 * std::f32::consts::PI).sqrt();
+    let expected_shadow_inside = 3.0 * (unit_g(0.75) + unit_g(2.25));
+    assert!((sc::SHADOW_INSIDE - expected_shadow_inside).abs() < 1e-6);
+    assert_eq!(sc::OUTLINE_TEX_WIDTH, crate::text::outline::WIDTH);
+
+    // `variant::LCD_MEAN_EPSILON` matches the threshold literal in `variant::DUAL_ENTRY`.
+    let eps_start = variant::DUAL_ENTRY.find("mean < ").expect("DUAL_ENTRY mean threshold") + "mean < ".len();
+    let eps_end = eps_start + variant::DUAL_ENTRY[eps_start..].find(')').expect("DUAL_ENTRY threshold paren");
+    let dual_eps: f32 = variant::DUAL_ENTRY[eps_start..eps_end].trim().parse().expect("parse DUAL_ENTRY epsilon");
+    assert_eq!(dual_eps.to_bits(), variant::LCD_MEAN_EPSILON.to_bits());
+
+    // `pack_clip_radii` / `unpack_clip_radii` agree on fine, coarse, uniform and continuous corners.
+    let big = [0.0, 0.0, 1000.0, 1000.0];
+    let fine_max = sc::CLIP_RADII_LANE_MASK as f32 * sc::CLIP_RADII_FINE_STEP;
+    let coarse_max = sc::CLIP_RADII_LANE_MASK as f32 * sc::CLIP_RADII_COARSE_STEP;
+    for radii in [
+        [0.0; 4],
+        [12.0; 4],
+        [-18.5; 4],
+        [4.0, 8.5, 0.0, fine_max],
+        [-4.0, -8.5, 0.0, -fine_max],
+        [0.0, 64.0, 128.0, coarse_max],
+        [-2.0, -66.0, 0.0, -coarse_max],
+    ] {
+        let packed = pack_clip_radii(big, radii);
+        assert_eq!(unpack_clip_radii(packed), radii, "clip radii round-trip for {radii:?}");
+    }
+
+    // `crate::color::srgb_encode` agrees with `shader.wgsl`'s IEC 61966-2-1 transfer function.
+    for byte in 0..=255u8 {
+        let v = (byte as f32 / 255.0).clamp(0.0, 1.0);
+        let wgsl = if v <= 0.0031308 { v * 12.92 } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 };
+        assert!((crate::color::srgb_encode(v) - wgsl).abs() < 1e-6, "srgb_encode mismatch at {byte}");
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn wgsl_generated_constants_match_naga_ir() {
+    use super::instance::shader_consts as sc;
+    use wgpu::naga::{ArraySize, Binding, Expression, Handle, Literal, Module, TypeInner, UnaryOperator, front::wgsl};
+
+    let eval_f32 = |m: &Module, mut h: Handle<Expression>| -> f32 {
+        let mut neg = false;
+        loop {
+            match &m.global_expressions[h] {
+                Expression::Unary { op: UnaryOperator::Negate, expr } => { neg = !neg; h = *expr; }
+                Expression::Literal(Literal::F32(v)) => return if neg { -*v } else { *v },
+                Expression::Literal(Literal::AbstractFloat(v)) => return if neg { -(*v as f32) } else { *v as f32 },
+                other => panic!("unexpected f32 const expr: {other:?}"),
+            }
+        }
+    };
+    let eval_u32 = |m: &Module, h: Handle<Expression>| -> u32 {
+        match &m.global_expressions[h] {
+            Expression::Literal(Literal::U32(v)) => *v,
+            Expression::Literal(Literal::AbstractInt(v)) => u32::try_from(*v).unwrap(),
+            other => panic!("unexpected u32 const expr: {other:?}"),
+        }
+    };
+    let eval_bool = |m: &Module, h: Handle<Expression>| -> bool {
+        match &m.global_expressions[h] {
+            Expression::Literal(Literal::Bool(v)) => *v,
+            other => panic!("unexpected bool const expr: {other:?}"),
+        }
+    };
+    let const_expr = |m: &Module, name: &str| {
+        m.constants.iter().find(|(_, c)| c.name.as_deref() == Some(name))
+            .unwrap_or_else(|| panic!("WGSL const `{name}` not found")).1.init
+    };
+    let override_expr = |m: &Module, name: &str| {
+        m.overrides.iter().find(|(_, o)| o.name.as_deref() == Some(name))
+            .unwrap_or_else(|| panic!("WGSL override `{name}` not found")).1.init
+            .unwrap_or_else(|| panic!("WGSL override `{name}` has no default"))
+    };
+
+    let classic = wgsl::parse_str(uber_wgsl::CLASSIC).expect("parse CLASSIC");
+    assert_eq!(eval_f32(&classic, const_expr(&classic, "CONTINUOUS_K")).to_bits(), sc::CONTINUOUS_K.to_bits());
+    assert_eq!(eval_f32(&classic, const_expr(&classic, "SHADOW_INSIDE")).to_bits(), sc::SHADOW_INSIDE.to_bits());
+    assert_eq!(eval_f32(&classic, const_expr(&classic, "PINNED_KIND")).to_bits(), sc::PINNED_KIND.to_bits());
+
+    let windfoil = wgsl::parse_str(uber_wgsl::WINDFOIL).expect("parse WINDFOIL");
+    assert_eq!(eval_f32(&windfoil, const_expr(&windfoil, "OUTLINE_HINT_REACH")).to_bits(), sc::OUTLINE_HINT_REACH.to_bits());
+    assert_eq!(eval_bool(&windfoil, const_expr(&windfoil, "OUTLINE_SUBPIXEL")), sc::OUTLINE_SUBPIXEL);
+
+    // Every pinned variant and the dual-source variant resolve their substituted constants in Naga.
+    for &kind in &variant::PINNED {
+        let src = variant::pinned_wgsl(kind).expect("pinned_wgsl");
+        let m = wgsl::parse_str(&src).expect("parse pinned WGSL");
+        assert_eq!(eval_f32(&m, const_expr(&m, "PINNED_KIND")), kind as f32);
+    }
+    let dual = wgsl::parse_str(&variant::dual_wgsl().expect("dual_wgsl")).expect("parse dual WGSL");
+    assert!(eval_bool(&dual, const_expr(&dual, "OUTLINE_SUBPIXEL")));
+
+    // `layer_blur.wgsl` overrides and `Uniforms.taps` array length.
+    let lb = wgsl::parse_str(layer_blur::WGSL).expect("parse layer_blur.wgsl");
+    assert_eq!(eval_u32(&lb, override_expr(&lb, sc::LAYER_BLUR_OVERRIDE_MODE)), sc::LAYER_BLUR_MODE_BLUR);
+    assert!(!eval_bool(&lb, override_expr(&lb, sc::LAYER_BLUR_OVERRIDE_ADDITIVE)));
+    let (_, uniforms) = lb.types.iter().find(|(_, t)| t.name.as_deref() == Some("Uniforms")).expect("Uniforms");
+    let TypeInner::Struct { members, .. } = &uniforms.inner else { panic!("Uniforms is not a struct") };
+    let taps = members.iter().find(|m| m.name.as_deref() == Some("taps")).expect("Uniforms.taps");
+    let TypeInner::Array { size: ArraySize::Constant(n), .. } = lb.types[taps.ty].inner else { panic!("taps not fixed array") };
+    assert_eq!(n.get() as usize, sc::LAYER_BLUR_TAPS);
+
+    // Vertex input `@location(N)` bindings in Naga agree with `shader_consts` for uber and backdrop_composite.
+    let check_locs = |label: &str, m: &Module, expected: &[(&str, u32)]| {
+        let (_, ty) = m.types.iter().find(|(_, t)| t.name.as_deref() == Some("In")).unwrap_or_else(|| panic!("{label}: no In"));
+        let TypeInner::Struct { members, .. } = &ty.inner else { panic!("{label}: In not struct") };
+        for &(field, loc) in expected {
+            let member = members.iter().find(|m| m.name.as_deref() == Some(field)).unwrap_or_else(|| panic!("{label}: In.{field}"));
+            assert!(matches!(member.binding, Some(Binding::Location { location, .. }) if location == loc),
+                "{label}: In.{field} expected @location({loc}), got {:?}", member.binding);
+        }
+    };
+    check_locs("CLASSIC", &classic, &[
+        ("rect", sc::ATTR_RECT_LOC), ("radii", sc::ATTR_RADII_LOC), ("fill", sc::ATTR_FILL_LOC), ("border", sc::ATTR_BORDER_LOC),
+        ("params", sc::ATTR_PARAMS_LOC), ("uv", sc::ATTR_UV_LOC), ("clip", sc::ATTR_CLIP_LOC), ("fade", sc::ATTR_FADE_LOC),
+    ]);
+    let bc = wgsl::parse_str(&backdrop_blur::composite_wgsl()).expect("parse backdrop_composite.wgsl");
+    check_locs("backdrop_composite", &bc, &[
+        ("rect", sc::ATTR_RECT_LOC), ("radii", sc::ATTR_RADII_LOC), ("fill", sc::ATTR_FILL_LOC),
+        ("clip", sc::ATTR_CLIP_LOC), ("fade", sc::ATTR_FADE_LOC),
+    ]);
+}

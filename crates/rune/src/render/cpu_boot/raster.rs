@@ -18,6 +18,7 @@ use super::backdrop;
 use super::blend::{self, Src, q};
 use super::shade::{self, Clip};
 use super::{HalfRounding, Report, Scene, Target};
+use crate::render::instance::shader_consts;
 use crate::render::{Instance, Kind};
 
 const TILE_PX: usize = (TILE_W * TILE_H) as usize;
@@ -314,7 +315,7 @@ impl Painter<'_, '_> {
                 let solid = Solid {
                     edges: [i.rect[0], i.rect[1], i.rect[0] + i.rect[2], i.rect[1] + i.rect[3]],
                     radii: i.radii,
-                    inset: i.params[2].max(0.5),
+                    inset: i.params[2].max(shader_consts::SOFT_MIN),
                 };
                 self.shaded(i, Kind::Radial, r, &clip, Some(solid));
             }

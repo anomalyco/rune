@@ -8,8 +8,14 @@
 //! builds Windfoil the first time text asks for outlines. A Windfoil that can't be built leaves
 //! the renderer Classic for good (`Unavailable`), and text falls back to its other rasterisers.
 
+use super::instance::shader_consts;
 use super::*;
 use crate::machine::Effects;
+
+const _: () = {
+    assert!(shader_consts::PINNED_KIND < 0.0);
+    assert!(!shader_consts::OUTLINE_SUBPIXEL);
+};
 
 /// Windfoil's WGSL: shader.wgsl with outline.wgsl's glyph branch, joined when Rune builds
 /// (`build.rs`, render/uber_wgsl.rs).
@@ -18,8 +24,10 @@ pub(crate) fn windfoil_wgsl() -> &'static str {
 }
 
 /// Windfoil's fragment entry, which the subpixel variant renames for its own entry to call.
-const FS_ENTRY: &str = "@fragment\nfn fs(i: Out) -> @location(0) vec4<f32> {";
-const DUAL_ENTRY: &str = r#"
+const FS_ENTRY: &str = shader_consts::FS_ENTRY_DECL;
+/// Mean subpixel coverage floor below which dual-source text emits zero (`DUAL_ENTRY`).
+pub(super) const LCD_MEAN_EPSILON: f32 = 1.0e-5;
+pub(super) const DUAL_ENTRY: &str = r#"
 struct DualOut {
     @location(0) @blend_src(0) color: vec4<f32>,
     @location(0) @blend_src(1) blend: vec4<f32>,
@@ -48,7 +56,7 @@ fn fs(i: Out) -> DualOut {
 pub(crate) const PINNED: [u32; 3] = [Kind::Rect.as_u32(), Kind::Shadow.as_u32(), Kind::Glyph.as_u32()];
 
 /// shader.wgsl's marker for the kind a fragment draws: -1, every kind.
-const PINNED_OFF: &str = "const PINNED_KIND: f32 = -1.0;";
+const PINNED_OFF: &str = shader_consts::PINNED_KIND_OFF_DECL;
 
 /// Windfoil's WGSL with its fragment entry pinned to `kind` (shader.wgsl `fragment_kind`): the
 /// compiler drops every other kind's code. The vertex stage is unchanged.
@@ -58,11 +66,11 @@ pub(crate) fn pinned_wgsl(kind: u32) -> Option<String> {
 }
 
 /// outline.wgsl's switch for subpixel outline glyphs, off but in the subpixel variant.
-const SUBPIXEL_OFF: &str = "const OUTLINE_SUBPIXEL: bool = false;";
+const SUBPIXEL_OFF: &str = shader_consts::OUTLINE_SUBPIXEL_OFF_DECL;
 
 /// The subpixel variant's WGSL: Windfoil's, with subpixel outline coverage and its fragment
 /// entry blending by a second output. Only this variant pays for the three coverages.
-fn dual_wgsl() -> Option<String> {
+pub(super) fn dual_wgsl() -> Option<String> {
     let windfoil = windfoil_wgsl();
     let marked = windfoil.matches(FS_ENTRY).count() == 1 && windfoil.matches(SUBPIXEL_OFF).count() == 1;
     marked.then(|| {

@@ -621,13 +621,13 @@ impl Renderer {
 }
 
 /// How far a corner of radius `radius` reaches along each edge. Radii are signed: a negative
-/// radius draws Apple's continuous corner, whose curve starts 1.528 times the radius from the
-/// corner (`CONTINUOUS_K` in shader.wgsl).
+/// radius draws Apple's continuous corner, whose curve starts `CONTINUOUS_K` times the radius from
+/// the corner (`CONTINUOUS_K` in clip.wgsl).
 pub(crate) fn corner_extent(radius: f32) -> f32 {
     if radius < 0.0 { -radius * CONTINUOUS_K } else { radius }
 }
 
-pub(crate) const CONTINUOUS_K: f32 = 1.528_664_8;
+pub(crate) const CONTINUOUS_K: f32 = instance::shader_consts::CONTINUOUS_K;
 
 /// Frame-profile builds: `RUNE_PINNED` forcing the split on (`all`) or off (`off`), and the instances drawn
 /// unsplit and split since the last report (`report_pinned`).

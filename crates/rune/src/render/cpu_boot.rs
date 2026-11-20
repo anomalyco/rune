@@ -190,7 +190,7 @@ impl<'a> Scene<'a> {
             Some(Kind::BackdropBlur) if depth > 0 => Some(NeedsGpu::BackdropBlur),
             Some(Kind::Effect) if self.compositor => Some(NeedsGpu::Effect),
             // Slug's rays (coverage 1) have no CPU form; Windfoil's box does (outline::coverage).
-            Some(Kind::Glyph) if i.radii[3] > 0.0 && (self.outlines.is_none() || i.border[3] == 1.0) => Some(NeedsGpu::OutlineGlyph),
+            Some(Kind::Glyph) if i.radii[3] > 0.0 && (self.outlines.is_none() || i.border[3] == super::instance::shader_consts::OUTLINE_MODE_SLUG as f32) => Some(NeedsGpu::OutlineGlyph),
             Some(
                 Kind::Rect | Kind::Shadow | Kind::Glyph | Kind::Inset | Kind::Gradient
                 | Kind::Segment | Kind::Triangle | Kind::Image | Kind::Dashed | Kind::Radial
