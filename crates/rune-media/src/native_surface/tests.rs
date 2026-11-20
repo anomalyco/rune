@@ -298,8 +298,12 @@ fn srgb(x: f32) -> u8 {
 /// invocation (1.07 billion in all, about 30 ms on a Ryzen 9950X3D's integrated GPU), ahead of
 /// the submission with the surface's draw and the callback: a worker that waited on the
 /// submission it serves, or on all of them, holds the lock until every one is done. Nothing
-/// measured changes a submission's size; a timing decides only how many are queued, and an
-/// adapter too slow to run one inside `BUDGET` is refused before any is queued. Windows resets a
+/// measured changes a submission's size; a timing decides only how many are queued. The timing
+/// tells a submission's fixed round trip (a small submission's time) from its work (a full one's
+/// time beyond that), so an adapter with a slow round trip (Metal on an Apple M4: 6,094 us for
+/// a 64th of the work) isn't taken for a slow GPU. An overestimate only queues less, and a
+/// timed attempt's own run lowers it for the next; an adapter is never refused for being slow,
+/// and nothing it measures can size one submission past `CHUNK`. Windows resets a
 /// GPU whose one submission runs 2 s, and an AMD GPU preempts nothing smaller than a
 /// submission: 68.7 billion iterations in one submission ran past that on the same integrated
 /// GPU, and the reset's completion read as an overlap.
@@ -309,10 +313,11 @@ fn completion_worker_preserves_cpu_gpu_overlap() {
     use std::time::{Duration, Instant};
     const INVOCATIONS: u32 = 1024 * 64;
     const CHUNK: u32 = 16_384;
-    /// The longest one submission may run; the adapter must run a 64th of `CHUNK` in a 64th of it.
-    const BUDGET: Duration = Duration::from_millis(250);
     const PLANNED_MOST: Duration = Duration::from_millis(100);
     const CHUNKS_MOST: u32 = 512;
+    /// However cheap a chunk's work measures, no attempt queues chunks whose full submit-to-done
+    /// times add up past this.
+    const QUEUED_MOST: Duration = Duration::from_secs(2);
     let gpu = Gpu::headless_wgpu();
     let surface = NativeSurface::new();
     surface.push_bytes(synthetic(16, 16, 0), 1).unwrap();
@@ -396,20 +401,24 @@ fn completion_worker_preserves_cpu_gpu_overlap() {
     // chunk could take seconds there, so it queues the small size.
     let software = gpu.adapter.get_info().device_type == wgpu::DeviceType::Cpu;
     let (chunk, size) = if software { (&small, CHUNK / 64) } else { (&full, CHUNK) };
-    assert!(
-        floor <= BUDGET / 64 || software,
-        "{name} ran {} iterations in {} us: a submission of {CHUNK} per invocation could pass {} us, so this test queues none",
+    let chunk_alone = time(chunk);
+    // A chunk queued behind others pays for its work, not for another round trip: what it took
+    // beyond the small submission's time, or all of it when it is the small size (WARP).
+    let mut per_chunk = if software { chunk_alone } else { chunk_alone.saturating_sub(floor).max(chunk_alone / 64) };
+    let chunks_most = ((QUEUED_MOST.as_secs_f64() / chunk_alone.as_secs_f64().max(1e-6)) as u32).clamp(1, CHUNKS_MOST);
+    eprintln!(
+        "overlap probe: on {name}, {} iterations took {} us; each queued submission is {} iterations and took {} us alone, {} us of it work; at most {chunks_most} queued",
         u64::from(CHUNK / 64) * u64::from(INVOCATIONS),
         floor.as_micros(),
-        BUDGET.as_micros()
+        u64::from(size) * u64::from(INVOCATIONS),
+        chunk_alone.as_micros(),
+        per_chunk.as_micros()
     );
-    let mut per_chunk = time(chunk);
-    eprintln!("overlap probe: on {name}, {} iterations took {} us; each queued submission is {} iterations and took {} us", u64::from(CHUNK / 64) * u64::from(INVOCATIONS), floor.as_micros(), u64::from(size) * u64::from(INVOCATIONS), per_chunk.as_micros());
     let target = Offscreen::new(&gpu.device, 16, 16);
     let mut outcomes = Vec::new();
     for planned in [25, 50, 100, 100, 100].map(Duration::from_millis) {
         let planned = planned.min(PLANNED_MOST);
-        let chunks = (planned.as_secs_f64() / per_chunk.as_secs_f64().max(1e-6)).ceil().clamp(1.0, f64::from(CHUNKS_MOST)) as u32;
+        let chunks = (planned.as_secs_f64() / per_chunk.as_secs_f64().max(1e-6)).ceil().clamp(1.0, f64::from(chunks_most)) as u32;
         renderer.prepare(&gpu.device, &gpu.queue, &[draw(&surface, [0.0, 0.0, 16.0, 16.0])], (16, 16));
         let probe = gpu.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("present lock probe"),
@@ -461,7 +470,9 @@ fn completion_worker_preserves_cpu_gpu_overlap() {
         per_chunk = per_chunk.min((finished - submitted) / chunks);
         outcomes.push(outcome);
     }
-    panic!("the snatch write lock never returned while GPU work was pending: {outcomes:?}");
+    // Five attempts, none overlapping: either the write lock waited for the work every time (the
+    // fault this test is for), or the work never stayed pending long enough to tell.
+    panic!("on {name}, no attempt found the snatch write lock free while GPU work was pending: {outcomes:?}");
 }
 fn publish(s: &NativeSurface, b: ByteFrame, id: u64, native: bool) {
     #[cfg(target_os = "macos")]
