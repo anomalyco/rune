@@ -228,6 +228,22 @@ impl RuntimeCore {
             .find(|(_, r)| contains(*r, x, y)).map(|(k, _)| k)
     }
 
+    /// The id of the `Mark::Pill` in text field `i` under window point `(x, y)`, if any.
+    pub(in crate::runtime) fn input_pill_at(&self, i: usize, x: f32, y: f32) -> Option<String> {
+        let n = &self.tree.nodes[i];
+        let input = n.input.as_deref()?;
+        if input.edit.is_secure() || input.edit.preedit().is_some() { return None; }
+        let pills = input.edit.display_pills();
+        if pills.is_empty() { return None; }
+        let (rect, ux, uy) = self.unturned_box_and_point(i, x, y);
+        let z = self.paint.drawn_scale.get(i).copied().unwrap_or(1.0);
+        let scroll_x = if input.single_line { self.edit.input_scroll.get(&n.path).copied().unwrap_or(0.0) * z } else { 0.0 };
+        self.span_boxes(n, rect, z, pills.iter().map(|&(s, e, _)| (s, e)))
+            .into_iter()
+            .find(|(_, r)| contains([r[0] - scroll_x, r[1], r[2] - scroll_x, r[3]], ux, uy))
+            .map(|(k, _)| pills[k].2.to_owned())
+    }
+
     /// Hit rects for node `i`: only its links' boxes, clipped like `clipped`. False when it
     /// has no links, or is selectable (it takes its whole box).
     pub(in crate::runtime) fn push_link_hits(&mut self, i: usize, rect: [f32; 4], clipped: [f32; 4]) -> bool {

@@ -73,9 +73,14 @@ impl RuntimeCore {
         let capture::Secondary::Held { path, link, .. } = self.pointer.secondary() else { return "" };
         let Some(n) = self.tree.nodes.iter().find(|n| n.path == *path) else { return "" };
         if link.is_some() || n.handlers.on_secondary_press.is_some() { return "app"; }
-        // On a misspelled word, Rune's own field menu: it has the suggestions, the browser's
-        // can't (its checker never sees the field).
-        if n.input.as_ref().is_some_and(|i| i.access.is_some()) { return if self.on_misspelled_word(path) { "app" } else { "field" }; }
+        // On a misspelled word or a pill with a secondary handler, Rune's own menu wins over the browser's.
+        if let Some(input) = n.input.as_deref()
+            && input.access.is_some()
+        {
+            let on_pill = input.on_pill_secondary.is_some()
+                && self.pointer.pos.and_then(|(x, y)| self.live(path).and_then(|i| self.input_pill_at(i, x, y))).is_some();
+            return if on_pill || self.on_misspelled_word(path) { "app" } else { "field" };
+        }
         "text"
     }
 
