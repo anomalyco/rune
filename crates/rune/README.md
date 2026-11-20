@@ -1238,6 +1238,12 @@ activation/deactivation in order. It applies to regular windows and interactive
 overlays, independently of text-field focus. Headless tests inject the same events
 with `Runtime::window_focus(bool)`.
 
+`tx.window_visible()` says, in a handler or `poll`, whether the window is on screen: false
+while it's hidden, minimised, covered whole by other windows where the system says so, or its
+browser tab is hidden. Such a window draws no frames, but each change wakes `poll` once, so
+work no one sees (a live preview, a ticker) can pause there and resume when it shows;
+`App::on_visibility` hears the same changes.
+
 `Live<T>` is a cloneable, thread-safe latest-wins handle (`f32`, `[f32; 2]`,
 `[f32; 4]`, `Color`). Call `set(value)` from a producer thread; Rune coalesces a
 wake for each visible subscribed window. Equal values and hidden windows do not

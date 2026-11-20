@@ -288,7 +288,7 @@ impl<S: 'static> App<S> {
     /// where the system says so) and come back, with whether it shows now, as a web page's
     /// `visibilitychange` hears `document.hidden` change: for work that should wait while no
     /// one can see it, such as a notification's timer. Called once per change after the first
-    /// frame. Native windows only.
+    /// frame; a poll reads the same with [`Tx::window_visible`].
     pub fn on_visibility(mut self, f: fn(&mut S, bool, &mut Tx)) -> Self {
         self.runtime.on_visibility = Some(f);
         self
