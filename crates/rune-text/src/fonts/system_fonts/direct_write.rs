@@ -110,7 +110,10 @@ fn mapped_files(chars: &[char], locale: Option<&str>, whole_family: bool) -> Vec
             }
             // SAFETY: the mapped font's family and its face references, read only.
             if whole_family && let Some(family) = font.and_then(|f| unsafe { f.GetFontFamily() }.ok()).and_then(|f| f.cast::<IDWriteFontFamily1>().ok()) {
+                // SAFETY: `family` is a valid `IDWriteFontFamily1` returned by DirectWrite.
                 for i in 0..unsafe { family.GetFontCount() } {
+                    // SAFETY: `i` is below `family.GetFontCount()`, and `path_of` reads only the
+                    // reference key owned by `r`'s font file.
                     if let Some(path) = unsafe { family.GetFontFaceReference(i) }.ok().and_then(|r| unsafe { path_of(&r) })
                         && !out.contains(&path)
                     {

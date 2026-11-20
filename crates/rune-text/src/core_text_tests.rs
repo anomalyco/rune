@@ -30,6 +30,8 @@ unsafe extern "C" {
 }
 
 unsafe fn dictionary(keys: &[Ref], values: &[Ref]) -> Ref {
+    // SAFETY: Callers pass equal-length slices of valid CFType pointers, and CoreFoundation
+    // retains keys and values using the standard CFType callbacks.
     unsafe {
         CFDictionaryCreate(std::ptr::null(), keys.as_ptr(), values.as_ptr(), keys.len() as isize,
             &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks)
@@ -43,11 +45,14 @@ fn system_font(size: f32, weight: f32) -> Ref {
 }
 
 fn number(v: f64) -> Ref {
+    // SAFETY: `v` is a live `f64` matching `kCFNumberFloat64Type` (6) and is copied by CoreFoundation.
     unsafe { CFNumberCreate(std::ptr::null(), 6, (&v as *const f64).cast()) }
 }
 
 /// The system UI font at `size` points with `opsz` set through its variation axes.
 fn system_font_opsz(size: f32, weight: f32, opsz: f32) -> Ref {
+    // SAFETY: `tag` passes a live `i32` for `kCFNumberSInt32Type` (3), `dictionary` receives
+    // equal-length slices of valid CFType handles, and null parameters use CoreText defaults.
     unsafe {
         let base = CTFontCreateUIFontForLanguage(2, size as f64, std::ptr::null());
         let tag = |t: &[u8; 4]| { let v = i32::from_be_bytes(*t); CFNumberCreate(std::ptr::null(), 3, (&v as *const i32).cast()) };
@@ -60,6 +65,8 @@ fn system_font_opsz(size: f32, weight: f32, opsz: f32) -> Ref {
 /// The regular system UI font at `size` points with Core Text's optical size attribute
 /// (`kCTFontOpticalSizeAttribute`, by its string value so older systems still load the tests).
 fn system_font_optical(size: f32, optical: f32) -> Ref {
+    // SAFETY: `key` is a valid UTF-8 byte slice of length `key.len()`, `dictionary` receives
+    // equal-length slices of valid CFType handles, and null parameters use CoreText defaults.
     unsafe {
         let base = CTFontCreateUIFontForLanguage(2, size as f64, std::ptr::null());
         let key = b"NSCTFontOpticalSizeAttribute";
@@ -71,6 +78,9 @@ fn system_font_optical(size: f32, optical: f32) -> Ref {
 
 /// Core Text's typographic width of `text` in `font`, in points.
 fn core_text_width(text: &str, font: Ref) -> f64 {
+    // SAFETY: `text` is valid UTF-8 for `text.len()` bytes, `font` is a live `CTFontRef`,
+    // `dictionary` receives equal-length slices of valid CFType handles, and each owned
+    // CoreFoundation object created here is released once before returning.
     unsafe {
         let string = CFStringCreateWithBytes(std::ptr::null(), text.as_ptr(), text.len() as isize, 0x0800_0100, 0);
         let attributed = CFAttributedStringCreate(std::ptr::null(), string, dictionary(&[kCTFontAttributeName], &[font]));
@@ -130,6 +140,7 @@ fn system_font_advances_match_core_text_at_every_scale() {
                     if text == example { row[0] = ct; row[i + 1] = rune; }
                 }
             }
+            // SAFETY: `font` is an owned `CTFontRef` from `system_font` and is released once.
             unsafe { CFRelease(font) };
             println!("{size:>5} {weight:>4} | {:>8.2} {:>8.2} {:>8.2} {:>8.2} | {:>+27.3} {:>+6.3} {:>+6.3}",
                 row[0], row[1], row[2], row[3], per_glyph[0], per_glyph[1], per_glyph[2]);
@@ -142,6 +153,8 @@ fn system_font_advances_match_core_text_at_every_scale() {
 /// AppKit's `monospacedSystemFont(ofSize:weight:)`, autoreleased.
 fn monospaced_system_font(size: f32, weight: f64) -> Ref {
     let font: *mut objc2::runtime::AnyObject =
+        // SAFETY: `+[NSFont monospacedSystemFontOfSize:weight:]` takes two `CGFloat` (`f64`)
+        // arguments and returns an autoreleased `NSFont*` (toll-free bridged to `CTFontRef`).
         unsafe { objc2::msg_send![objc2::class!(NSFont), monospacedSystemFontOfSize: size as f64, weight: weight] };
     font as Ref
 }
@@ -289,7 +302,12 @@ fn explicit_optical_size_picks_the_trak_entry() {
     // HarfRust tracks by a different amount at each device size; all of it comes off.
     assert_scale_free(widths(&mut ts, text, &[], style.features("'trak' 0")), "untracked");
     let [plain, optical, axis] = [system_font(14.0, 400.0), system_font_optical(28.0, 14.0), system_font_opsz(28.0, 400.0, 14.0)]
-        .map(|font| { let width = core_text_width(text, font) as f32; unsafe { CFRelease(font) }; width });
+        .map(|font| {
+            let width = core_text_width(text, font) as f32;
+            // SAFETY: `font` is an owned `CTFontRef` created above and is released once.
+            unsafe { CFRelease(font) };
+            width
+        });
     assert!((optical - 2.0 * plain).abs() < 0.01, "Core Text: optical size 14 at 28 pt {optical} vs 14 pt scaled {}", 2.0 * plain);
     let opsz_axis = TextStyle::new(28.0, 400.0).family(family).variations("'opsz' 14");
     for scale in [1.0, 2.0] {
