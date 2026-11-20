@@ -73,6 +73,7 @@ impl Collapsible {
                 .disabled(!enabled)
                 .w_full()
                 .h(32.0)
+                .radius(4.0)
                 .center_y()
                 .child(
                     row()
@@ -83,7 +84,7 @@ impl Collapsible {
                         .a11y_hidden(),
                 ),
             2.0,
-            0.0,
+            2.0,
         );
         let trigger = self.acts.apply(trigger, enabled);
         let mut root = col().role("group").w_full().radius(k.radius.md).child(trigger);

@@ -259,9 +259,10 @@ impl Select {
             SelectAppearance::Inline => {
                 let font = TextStyle { line_height: 16.0, ..k.ty.ui_medium };
                 let hover = self.state == State::Hover || self.open;
-                // `outline: none` (select.css:193-205): the inline trigger shows no ring.
-                let t = trigger
-                    .no_focus_ring()
+                // select.css: the inline trigger takes the default ring, 2 out, while closed
+                // (opencode#64909).
+                let t = if self.open { trigger.no_focus_ring() } else { k.focus_ring_state(trigger, 2.0, 2.0, self.state == State::Focus) };
+                let t = t
                     .h(24.0)
                     .pl(8.0)
                     .pr(4.0)

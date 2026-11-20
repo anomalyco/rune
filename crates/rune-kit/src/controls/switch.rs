@@ -92,7 +92,7 @@ impl Switch {
             (false, false) => self.compact_control(k),
         };
         let control = k.disabled_dim(control, disabled && !self.standard);
-        let control = k.focus_ring_state(control, 2.0, 1.0, self.state == State::Focus && !self.standard);
+        let control = k.focus_ring_state(control, 2.0, 2.0, self.state == State::Focus);
         // The switch's label, description and on state say what its text and track show.
         let mut root = row().role("switch").checked(self.checked).gap(8.0).center_y();
         if let Some(l) = &self.label {
