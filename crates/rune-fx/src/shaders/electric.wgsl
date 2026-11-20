@@ -31,9 +31,8 @@ fn fork_col(i: Inst, heat: f32) -> vec3f {
     return mix(mix(i.c2.rgb, i.c0.rgb, smoothstep(0.0, 0.5, heat)), i.c1.rgb, smoothstep(0.6, 1.0, heat));
 }
 
-fn shade(in: VOut) -> vec4f {
-    let i = insts[in.id];
-    let c = ctx(i, in.px);
+fn shade(i: Inst, px: vec2f) -> vec4f {
+    let c = ctx(i, px);
     let w = max(i.p0.w, c.aa * 0.7);
     let inten = i.p1.x;
     let gr = max(i.p1.y, 1e-3);
@@ -162,5 +161,5 @@ fn shade(in: VOut) -> vec4f {
     let occl = select(1.0, i.p2.w, effective_blend_mode(i) == 0u);
     let rgb = (i.c1.rgb * core * 1.3 + i.c0.rgb * halo * 0.75 + fork_hot) * inten;
     let a = (core * 0.7 + halo * occl + lum(fork_hot) * 0.5) * inten;
-    return finish(vec4f(rgb, a), in.px);
+    return finish(vec4f(rgb, a), px);
 }
