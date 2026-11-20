@@ -526,9 +526,12 @@ impl RuntimeCore {
         // `Tx::blur` says nothing has focus: it hands nothing on, unlike Escape or a deleted row.
         if self.kbd.focus.path().is_none() && !self.kbd.focus.handoff() { return None; }
         let Some(at) = self.tree.nodes.iter().position(|n| n.path == gone) else {
-            // An offscreen field had no layout node. Only a moved node lost its path.
+            // An offscreen field had no layout node. Only a moved node lost its path, or one whose
+            // rebuilt replacement took it over: a control rebuilt disabled (Send as its prompt
+            // sends) still has to hand focus on, which `fallback_in_new` does from the new tree.
             let old = self.tree.nodes.get(*self.tree.node_index.get(self.tree.path_ids.get(gone)?)?)?;
-            if !old.is_moved_stub() { return None; }
+            let disabled_here = nodes.iter().any(|n| n.path == gone && !self.can_take_focus(n));
+            if !old.is_moved_stub() && !disabled_here { return None; }
             return self.fallback_in_new(gone, nodes);
         };
         // The control that held it is still in the tree, even when a model cleared its flag or a
