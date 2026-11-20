@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use super::Scene;
 use super::bin::{Bins, Show, Solid, TILE_H, TILE_W, covers, cut, interior};
 use super::shade::{Clip, has_sides};
+use crate::render::instance::shader_consts;
 use crate::render::{INSTANCE_WORDS, Instance, Kind, word};
 
 /// What the last frame drew, kept for the next frame's comparison.
@@ -195,12 +196,12 @@ fn rows_alike(i: &Instance, r: [f32; 4]) -> bool {
     let reach = i.radii.iter().fold(0.0f32, |m, v| m.max(v.abs()));
     let alike = match i.kind() {
         // `sd_rounded` there is `|x| - half width`, or deep inside past the border's reach.
-        Some(Kind::Rect) => !has_sides(i) && middle(reach + 4.0 * (i.params[0].max(0.0) + i.params[2].max(0.5)) + 4.0),
+        Some(Kind::Rect) => !has_sides(i) && middle(reach + 4.0 * (i.params[0].max(0.0) + i.params[2].max(shader_consts::SOFT_MIN)) + 4.0),
         // `shadow_row`'s samples and its interior test are the same on every row there.
         Some(Kind::Shadow) => i.uv[2] <= 0.0 && {
             let half = [i.rect[2] * 0.5, i.rect[3] * 0.5];
             let corner = i.radii[0].abs().min(half[0].min(half[1]));
-            middle(corner + 6.0 * i.params[2].max(0.01) + 1.0)
+            middle(corner + shader_consts::SHADOW_INSIDE_SIGMA * i.params[2].max(shader_consts::SHADOW_MIN_SIGMA) + 1.0)
         },
         Some(
             Kind::Glyph | Kind::Inset | Kind::Gradient | Kind::Segment | Kind::Triangle

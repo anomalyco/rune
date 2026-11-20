@@ -1,6 +1,8 @@
 use super::Painter;
 use super::super::shade::Clip;
 use crate::render::Instance;
+use crate::render::instance::shader_consts;
+use crate::render::variant::LCD_MEAN_EPSILON;
 
 /// `pow(cov / 255, e)` for each coverage byte, per exponent: Skia's text gamma keys a handful of
 /// exponents by the text's luminance, and a frame's text alternates between them (syntax colours),
@@ -40,7 +42,7 @@ impl Painter<'_, '_> {
         let turn = i.params[0];
         let rotated = turn != 0.0;
         let filtered = i.uv[2] > 0.0 || rotated;
-        let lcd = i.radii[0] > 0.5 && !filtered;
+        let lcd = i.radii[0] > shader_consts::FLAG_ON_THRESHOLD && !filtered;
         // Subpixel text blends by channel over the window; inside layers it draws grayscale.
         let by_channel = lcd && self.scene.lcd && self.depth == 0;
         let (sin, cos) = turn.sin_cos();
@@ -75,14 +77,14 @@ impl Painter<'_, '_> {
                 let px = x as f32 + 0.5;
                 let alpha = || if px >= whole.0 && px <= whole.1 { 1.0 } else { clip.alpha([px, py]) };
                 if lcd {
-                    let tx = i.uv[0] as i32 + (px - i.rect[0]).floor() as i32 * 3;
+                    let tx = i.uv[0] as i32 + (px - i.rect[0]).floor() as i32 * shader_consts::OUTLINE_SUBPIXEL_STRIDE as i32;
                     let c3 = [load(tx, ty), load(tx + 1, ty), load(tx + 2, ty)];
                     if c3 == [0; 3] { continue; }
                     count += 1;
                     let a = alpha();
-                    let mean = ((c3[0] as f32 + c3[1] as f32 + c3[2] as f32) / 3.0 / 255.0).powf(e);
+                    let mean = ((c3[0] as f32 + c3[1] as f32 + c3[2] as f32) / shader_consts::OUTLINE_SUBPIXEL_STRIDE / 255.0).powf(e);
                     if by_channel {
-                        if mean < 1.0e-5 { continue; }
+                        if mean < LCD_MEAN_EPSILON { continue; }
                         let kc = c3.map(|v| self.pow.tables[table].1[v as usize]);
                         let f = i.fill.map(|v| v * a);
                         self.surface.blend_lcd(x, y, [f[0] * kc[0], f[1] * kc[1], f[2] * kc[2], f[3] * mean], kc.map(|v| f[3] * v));
@@ -129,9 +131,9 @@ impl Painter<'_, '_> {
         let z = i.radii[3];
         let (rec, hint, radius, mode) = (i.border[0] as u32, i.border[1] as u32, i.border[2], (i.border[3] + 0.5) as u32);
         let hw = 0.5 / z;
-        let across = if mode == 3 { 3.0 } else { 1.0 };
+        let across = if mode == shader_consts::OUTLINE_MODE_SUBPIXEL_MASK { shader_consts::OUTLINE_SUBPIXEL_STRIDE } else { 1.0 };
         let e = i.params[3];
-        let rgb = mode == 2 && self.scene.lcd && self.depth == 0;
+        let rgb = mode == shader_consts::OUTLINE_MODE_RGB && self.scene.lcd && self.depth == 0;
         let cover = |local: [f32; 2]| crate::text::outline::coverage(store, rec, hint, local, i.radii[2], radius, hw);
         let segs = self.segments(r, None, clip);
         let mut k = 0;
@@ -144,10 +146,10 @@ impl Painter<'_, '_> {
                 let local = [(px - i.radii[0]) / across / z, (i.radii[1] - py) / z];
                 let a = if px >= whole.0 && px <= whole.1 { 1.0 } else { clip.alpha([px, py]) };
                 if rgb {
-                    let third = 2.0 * hw / 3.0;
+                    let third = 2.0 * hw / shader_consts::OUTLINE_SUBPIXEL_STRIDE;
                     let c3 = [cover([local[0] - third, local[1]]), cover(local), cover([local[0] + third, local[1]])];
-                    let mean = ((c3[0] + c3[1] + c3[2]) / 3.0).powf(e);
-                    if mean < 1.0e-5 { continue; }
+                    let mean = ((c3[0] + c3[1] + c3[2]) / shader_consts::OUTLINE_SUBPIXEL_STRIDE).powf(e);
+                    if mean < LCD_MEAN_EPSILON { continue; }
                     let kc = c3.map(|v| v.powf(e));
                     let f = i.fill.map(|v| v * a);
                     self.surface.blend_lcd(x, y, [f[0] * kc[0], f[1] * kc[1], f[2] * kc[2], f[3] * mean], kc.map(|v| f[3] * v));

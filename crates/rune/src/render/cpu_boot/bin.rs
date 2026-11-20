@@ -6,6 +6,7 @@ use std::collections::HashMap;
 
 use super::Scene;
 use super::shade::{Clip, has_sides, sides_inner};
+use crate::render::instance::shader_consts;
 use crate::render::layers::is_scissor_clip;
 use crate::render::{Instance, Kind, MAX_BACKDROP_BLURS, NO_CLIP, corner_extent};
 
@@ -85,7 +86,7 @@ pub(in crate::render) fn plan_layers(instances: &[Instance], viewport: (u32, u32
             let opacity = i.fill[3].clamp(0.0, 1.0);
             let hidden = opacity == 0.0 || parent.is_some_and(|p| plans[p].show == Show::Hidden);
             let cache = i.params[3] == 1.0;
-            let additive = i.params[0] == 1.0;
+            let additive = i.params[0] == shader_consts::LAYER_ADDITIVE_PARAM;
             let additive_parent = parent.is_some_and(|p| plans[p].additive);
             let hole = if cache { [0.0; 4] } else { i.radii };
             let flat = !cache && opacity == 1.0 && !additive && !additive_parent && i.fade[3] == 0
@@ -323,7 +324,7 @@ pub(super) fn opaque_box(i: &Instance) -> Option<Solid> {
 /// Where a `KIND_RECT` or `KIND_GRADIENT` paints its fill whole, over nothing of its border.
 pub(super) fn interior(i: &Instance) -> Option<Solid> {
     let edges = [i.rect[0], i.rect[1], i.rect[0] + i.rect[2], i.rect[1] + i.rect[3]];
-    let soft = i.params[2].max(0.5);
+    let soft = i.params[2].max(shader_consts::SOFT_MIN);
     let bw = i.params[0];
     if bw <= 0.0 { return Some(Solid { edges, radii: i.radii, inset: soft }); }
     if i.kind() == Some(Kind::Rect) && has_sides(i) {

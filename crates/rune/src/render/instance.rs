@@ -7,6 +7,11 @@ use bytemuck::{Pod, Zeroable};
 
 use super::{Blend, LayerSpec, layer_blur};
 
+/// Constants and ABI parameters parsed directly from `crates/rune/src/shaders/*.wgsl` by `build.rs`.
+pub(crate) mod shader_consts {
+    include!(concat!(env!("OUT_DIR"), "/shader_consts.rs"));
+}
+
 /// Primitive kind stored in [`Instance::params`]`[1]`.
 ///
 /// The `KIND_*` float constants derive from these discriminants so every Rust consumer shares one
@@ -15,36 +20,43 @@ use super::{Blend, LayerSpec, layer_blur};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Kind {
     /// Rounded rect in `fill` with a `params.x`-wide `border` ring over it (`KIND_RECT`).
-    Rect = 0,
+    Rect = shader_consts::KIND_RECT_U8,
     /// Analytic Gaussian rounded-rect shadow (`KIND_SHADOW`).
-    Shadow = 1,
+    Shadow = shader_consts::KIND_SHADOW_U8,
     /// Glyph-atlas or outline text (`KIND_GLYPH`).
-    Glyph = 2,
+    Glyph = shader_consts::KIND_GLYPH_U8,
     /// Inset shadow inside a rounded rect (`KIND_INSET`).
-    Inset = 3,
+    Inset = shader_consts::KIND_INSET_U8,
     /// Rounded rect or border with a vertical gradient (`KIND_GRADIENT`).
-    Gradient = 4,
+    Gradient = shader_consts::KIND_GRADIENT_U8,
     /// Antialiased stroke segment (`KIND_SEGMENT`).
-    Segment = 5,
+    Segment = shader_consts::KIND_SEGMENT_U8,
     /// Filled triangle (`KIND_TRIANGLE`).
-    Triangle = 6,
+    Triangle = shader_consts::KIND_TRIANGLE_U8,
     /// RGBA image from the image atlas (`KIND_IMAGE`).
-    Image = 7,
+    Image = shader_consts::KIND_IMAGE_U8,
     /// Isolated layer scope open / composite quad (`KIND_LAYER`).
-    Layer = 8,
+    Layer = shader_consts::KIND_LAYER_U8,
     /// Isolated layer scope close (`KIND_LAYER_END`).
-    LayerEnd = 9,
+    LayerEnd = shader_consts::KIND_LAYER_END_U8,
     /// Dashed border ring (`KIND_DASHED`).
-    Dashed = 10,
+    Dashed = shader_consts::KIND_DASHED_U8,
     /// Radial or angled linear gradient stop segment (`KIND_RADIAL`).
-    Radial = 11,
+    Radial = shader_consts::KIND_RADIAL_U8,
     /// Compositor effect slot (`KIND_EFFECT`).
     Effect = 12,
     /// In-window backdrop blur (`KIND_BACKDROP_BLUR`).
     BackdropBlur = 13,
 }
 
-const _: () = assert!(size_of::<Option<Kind>>() == 1);
+const _: () = {
+    assert!(size_of::<Option<Kind>>() == 1);
+    assert!(Kind::Radial.as_f32() < shader_consts::UBER_MAX_KIND_THRESHOLD);
+    assert!(Kind::Effect.as_f32() > shader_consts::UBER_MAX_KIND_THRESHOLD);
+    assert!(Kind::BackdropBlur.as_f32() > shader_consts::UBER_MAX_KIND_THRESHOLD);
+    assert!(shader_consts::OUTLINE_TEX_WIDTH == crate::text::outline::WIDTH);
+    assert!(shader_consts::OUTLINE_HINT_REACH > 0.0);
+};
 
 impl Kind {
     /// Number of defined primitive kinds.
@@ -68,18 +80,18 @@ impl Kind {
     #[inline]
     pub const fn from_u8(v: u8) -> Option<Kind> {
         match v {
-            0 => Some(Kind::Rect),
-            1 => Some(Kind::Shadow),
-            2 => Some(Kind::Glyph),
-            3 => Some(Kind::Inset),
-            4 => Some(Kind::Gradient),
-            5 => Some(Kind::Segment),
-            6 => Some(Kind::Triangle),
-            7 => Some(Kind::Image),
-            8 => Some(Kind::Layer),
-            9 => Some(Kind::LayerEnd),
-            10 => Some(Kind::Dashed),
-            11 => Some(Kind::Radial),
+            shader_consts::KIND_RECT_U8 => Some(Kind::Rect),
+            shader_consts::KIND_SHADOW_U8 => Some(Kind::Shadow),
+            shader_consts::KIND_GLYPH_U8 => Some(Kind::Glyph),
+            shader_consts::KIND_INSET_U8 => Some(Kind::Inset),
+            shader_consts::KIND_GRADIENT_U8 => Some(Kind::Gradient),
+            shader_consts::KIND_SEGMENT_U8 => Some(Kind::Segment),
+            shader_consts::KIND_TRIANGLE_U8 => Some(Kind::Triangle),
+            shader_consts::KIND_IMAGE_U8 => Some(Kind::Image),
+            shader_consts::KIND_LAYER_U8 => Some(Kind::Layer),
+            shader_consts::KIND_LAYER_END_U8 => Some(Kind::LayerEnd),
+            shader_consts::KIND_DASHED_U8 => Some(Kind::Dashed),
+            shader_consts::KIND_RADIAL_U8 => Some(Kind::Radial),
             12 => Some(Kind::Effect),
             13 => Some(Kind::BackdropBlur),
             _ => None,
@@ -243,18 +255,18 @@ pub(crate) mod word {
     use std::mem::{offset_of, size_of};
     use std::ops::Range;
 
-    use super::{Instance, word_of};
+    use super::{Instance, shader_consts, word_of};
 
     const _: () = {
-        assert!(size_of::<Instance>() == 128);
-        assert!(offset_of!(Instance, rect).is_multiple_of(4));
-        assert!(offset_of!(Instance, radii).is_multiple_of(4));
-        assert!(offset_of!(Instance, fill).is_multiple_of(4));
-        assert!(offset_of!(Instance, border).is_multiple_of(4));
-        assert!(offset_of!(Instance, params).is_multiple_of(4));
-        assert!(offset_of!(Instance, uv).is_multiple_of(4));
-        assert!(offset_of!(Instance, clip).is_multiple_of(4));
-        assert!(offset_of!(Instance, fade).is_multiple_of(4));
+        assert!(size_of::<Instance>() == shader_consts::UBER_ATTR_COUNT * 16);
+        assert!(word_of(offset_of!(Instance, rect)) == shader_consts::ATTR_RECT_LOC as usize * 4);
+        assert!(word_of(offset_of!(Instance, radii)) == shader_consts::ATTR_RADII_LOC as usize * 4);
+        assert!(word_of(offset_of!(Instance, fill)) == shader_consts::ATTR_FILL_LOC as usize * 4);
+        assert!(word_of(offset_of!(Instance, border)) == shader_consts::ATTR_BORDER_LOC as usize * 4);
+        assert!(word_of(offset_of!(Instance, params)) == shader_consts::ATTR_PARAMS_LOC as usize * 4);
+        assert!(word_of(offset_of!(Instance, uv)) == shader_consts::ATTR_UV_LOC as usize * 4);
+        assert!(word_of(offset_of!(Instance, clip)) == shader_consts::ATTR_CLIP_LOC as usize * 4);
+        assert!(word_of(offset_of!(Instance, fade)) == shader_consts::ATTR_FADE_LOC as usize * 4);
     };
 
     pub(crate) const RECT: usize = word_of(offset_of!(Instance, rect));
@@ -298,9 +310,14 @@ pub const NO_CLIP: [f32; 4] = [-1e6, -1e6, 1e6, 1e6];
 /// All nonzero radii must have the same sign (one curve style per clip). Uniform radii
 /// saturate just below the tag's exponent range, far beyond device-pixel coordinates.
 pub fn pack_clip_radii(clip: [f32; 4], radii: [f32; 4]) -> u32 {
+    const UNIFORM_MAX: f32 = f32::from_bits(shader_consts::CLIP_RADII_MIXED_TAG - 1);
+    const LANE_MAX: f32 = shader_consts::CLIP_RADII_LANE_MASK as f32;
+    const FINE_MAX: f32 = LANE_MAX * shader_consts::CLIP_RADII_FINE_STEP;
+    const INV_COARSE: f32 = 1.0 / shader_consts::CLIP_RADII_COARSE_STEP;
+    const INV_FINE: f32 = 1.0 / shader_consts::CLIP_RADII_FINE_STEP;
     let half = ((clip[2] - clip[0]).min(clip[3] - clip[1]) * 0.5).max(0.0);
     let clamped = radii.map(|radius| {
-        let r = radius.abs().min(half).min(f32::from_bits(0x5fff_ffff));
+        let r = radius.abs().min(half).min(UNIFORM_MAX);
         if radius < 0.0 && r > 0.0 { -r } else { r }
     });
     if clamped[0] == clamped[1] && clamped[1] == clamped[2] && clamped[2] == clamped[3] {
@@ -308,14 +325,14 @@ pub fn pack_clip_radii(clip: [f32; 4], radii: [f32; 4]) -> u32 {
     }
     let continuous = clamped.iter().any(|&r| r < 0.0);
     let max_r = clamped.iter().fold(0.0f32, |m, r| m.max(r.abs()));
-    let coarse = max_r > 63.5;
-    let inv_step = if coarse { 0.5 } else { 2.0 };
-    let mut bits = 0x6000_0000u32
-        | if continuous { 0x8000_0000 } else { 0 }
-        | if coarse { 0x1000_0000 } else { 0 };
+    let coarse = max_r > FINE_MAX;
+    let inv_step = if coarse { INV_COARSE } else { INV_FINE };
+    let mut bits = shader_consts::CLIP_RADII_MIXED_TAG
+        | if continuous { shader_consts::CLIP_RADII_CONTINUOUS_BIT } else { 0 }
+        | if coarse { shader_consts::CLIP_RADII_COARSE_BIT } else { 0 };
     for (idx, r) in clamped.into_iter().enumerate() {
-        let q = (r.abs() * inv_step).round().clamp(0.0, 127.0) as u32;
-        bits |= q << (idx * 7);
+        let q = (r.abs() * inv_step).round().clamp(0.0, LANE_MAX) as u32;
+        bits |= q << (idx as u32 * shader_consts::CLIP_RADII_LANE_BITS);
     }
     bits
 }
@@ -325,13 +342,17 @@ pub fn unpack_clip_radii(w: u32) -> [f32; 4] {
     if w == 0 {
         return [0.0; 4];
     }
-    if (w & 0x6000_0000) != 0x6000_0000 {
+    if (w & shader_consts::CLIP_RADII_MIXED_TAG) != shader_consts::CLIP_RADII_MIXED_TAG {
         return [f32::from_bits(w); 4];
     }
-    let step = if (w & 0x1000_0000) != 0 { 2.0 } else { 0.5 };
-    let sign = if (w & 0x8000_0000) != 0 { -1.0 } else { 1.0 };
+    let step = if (w & shader_consts::CLIP_RADII_COARSE_BIT) != 0 {
+        shader_consts::CLIP_RADII_COARSE_STEP
+    } else {
+        shader_consts::CLIP_RADII_FINE_STEP
+    };
+    let sign = if (w & shader_consts::CLIP_RADII_CONTINUOUS_BIT) != 0 { -1.0 } else { 1.0 };
     std::array::from_fn(|idx| {
-        let q = (w >> (idx * 7)) & 0x7f;
+        let q = (w >> (idx as u32 * shader_consts::CLIP_RADII_LANE_BITS)) & shader_consts::CLIP_RADII_LANE_MASK;
         if q == 0 { 0.0 } else { q as f32 * step * sign }
     })
 }
@@ -370,18 +391,18 @@ const fn kind_index_nonzero(bits: u32) -> usize {
     }
 }
 
-/// Bit-exact integer predicate for `f32::from_bits(bits) > 11.5` (positive finite floats `> 11.5`
-/// and `+inf`; false for negatives, `<= 11.5`, and `NaN`). Keeps `bounds_core` purely in integer
-/// registers with no XMM-to-GPR transfer.
+/// Bit-exact integer predicate for `f32::from_bits(bits) > UBER_MAX_KIND_THRESHOLD` (positive
+/// finite floats above the threshold and `+inf`; false for negatives, `<=` threshold, and `NaN`).
+/// Keeps `bounds_core` purely in integer registers with no XMM-to-GPR transfer.
 #[inline(always)]
-const fn bits_gt_11_5(bits: u32) -> bool {
-    const LIMIT: u32 = 11.5f32.to_bits();
+const fn bits_gt_uber_max(bits: u32) -> bool {
+    const LIMIT: u32 = shader_consts::UBER_MAX_KIND_THRESHOLD.to_bits();
     const INF: u32 = f32::INFINITY.to_bits();
     bits > LIMIT && bits <= INF
 }
 
 /// Bitmask of `Kind` indices (`0..=Kind::COUNT`) that draw no uber-shader quad (`quad_bounds` is
-/// `None`, except `KIND_NONE` which only skips when `params[1] > 11.5`).
+/// `None`, except `KIND_NONE` which only skips when `params[1] > UBER_MAX_KIND_THRESHOLD`).
 const NO_UBER_QUAD_MASK: u32 =
     (1 << Kind::LayerEnd.as_u8()) | (1 << Kind::Effect.as_u8()) | (1 << Kind::BackdropBlur.as_u8());
 
@@ -394,13 +415,15 @@ enum GrowMode {
 
 const fn grow_spec(kind: Option<Kind>, mode: GrowMode) -> (f32, f32) {
     match (mode, kind) {
-        (GrowMode::Layer | GrowMode::Damage, Some(Kind::Effect)) => (1.0, 1.0),
-        (GrowMode::Layer, Some(Kind::BackdropBlur) | None) => (1.0, 0.0),
-        (GrowMode::Damage, Some(Kind::BackdropBlur)) => (1.0, 0.0),
-        (_, Some(Kind::Shadow)) => (1.0, 3.0),
-        (_, Some(Kind::Glyph)) => (0.0, 0.0),
-        (_, Some(Kind::Inset | Kind::Segment | Kind::Triangle | Kind::Image | Kind::Layer)) => (1.0, 0.0),
-        (_, Some(Kind::Rect | Kind::Gradient | Kind::Dashed | Kind::Radial) | None) => (1.0, 2.0),
+        (GrowMode::Layer | GrowMode::Damage, Some(Kind::Effect)) => (shader_consts::GROW_FLAT, 1.0),
+        (GrowMode::Layer, Some(Kind::BackdropBlur) | None) => (shader_consts::BACKDROP_COMPOSITE_GROW, 0.0),
+        (GrowMode::Damage, Some(Kind::BackdropBlur)) => (shader_consts::BACKDROP_COMPOSITE_GROW, 0.0),
+        (_, Some(Kind::Shadow)) => (shader_consts::GROW_SHADOW_PAD, shader_consts::GROW_SHADOW_SIGMA),
+        (_, Some(Kind::Glyph)) => (shader_consts::GROW_GLYPH, 0.0),
+        (_, Some(Kind::Inset | Kind::Segment | Kind::Triangle | Kind::Image | Kind::Layer)) => (shader_consts::GROW_FLAT, 0.0),
+        (_, Some(Kind::Rect | Kind::Gradient | Kind::Dashed | Kind::Radial) | None) => {
+            (shader_consts::GROW_RECT_PAD, shader_consts::GROW_RECT_SOFT)
+        }
         (_, Some(Kind::LayerEnd | Kind::Effect | Kind::BackdropBlur)) => (0.0, 0.0),
     }
 }
@@ -488,7 +511,7 @@ impl Instance {
         // Fast path for the two dominant kinds (`Rect` and `Glyph`): pure integer tests, no LUT
         // load, no `uv` load for glyphs, and zero extra kind checks.
         if (bits & 0x7FFF_FFFF) == 0 {
-            let grow = 1.0 + self.params[2] * 2.0;
+            let grow = shader_consts::GROW_RECT_PAD + self.params[2] * shader_consts::GROW_RECT_SOFT;
             let lo0 = self.rect[0] - grow;
             let lo1 = self.rect[1] - grow;
             let (hi0, hi1) = if DAMAGE {
@@ -515,7 +538,7 @@ impl Instance {
         let slot = bits.wrapping_sub(ONE).rotate_left(12);
         let k = if slot < 30 {
             KIND_SLOT_LUT[slot as usize] as usize
-        } else if bits_gt_11_5(bits) {
+        } else if bits_gt_uber_max(bits) {
             return None;
         } else {
             KIND_NONE
@@ -589,7 +612,7 @@ impl Instance {
             return (x0.max(self.clip[0]), y0.max(self.clip[1]), x1.min(self.clip[2]), y1.min(self.clip[3]));
         }
         if (bits & 0x7FFF_FFFF) == 0 {
-            let grow = 1.0 + self.params[2] * 2.0;
+            let grow = shader_consts::GROW_RECT_PAD + self.params[2] * shader_consts::GROW_RECT_SOFT;
             let lo0 = self.rect[0] - grow;
             let lo1 = self.rect[1] - grow;
             let hi0 = self.rect[0] + self.rect[2] + grow;
@@ -663,7 +686,7 @@ impl Instance {
     /// native surfaces. Primitive bounds (including shadow support) expand it during prepare.
     pub fn begin_layer(bounds: [f32; 4], clip: [f32; 4], spec: LayerSpec) -> Self {
         let mut instance = Self { rect: bounds, clip, fill: [0.0, 0.0, 0.0, spec.opacity.clamp(0.0, 1.0)],
-            params: [if spec.blend == Blend::PlusLighter { 1.0 } else { 0.0 }, KIND_LAYER,
+            params: [if spec.blend == Blend::PlusLighter { shader_consts::LAYER_ADDITIVE_PARAM } else { 0.0 }, KIND_LAYER,
                 layer_blur::sigma(spec.blur), 0.0], ..Self::zeroed() };
         instance.round_clip(spec.clip_radius);
         instance
