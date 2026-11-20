@@ -844,5 +844,102 @@ fn overlay_post_step_unconfigured_miss_flushes_clipboard_and_drops_requests() {
     assert!(!overlay.presence.shown(), "surface_refused hides the overlay");
 }
 
+#[test]
+fn clipboard_receive_marks_shown_overlay_dirty_without_advancing_and_advances_frameless() {
+    #[derive(Default)]
+    struct State {
+        polls: u32,
+        pasted: Vec<String>,
+    }
+    fn view(s: &State, _: &mut Cx<State>) -> El {
+        crate::el()
+            .on_paste(|s: &mut State, text, _| s.pasted.push(text.to_owned()))
+            .child(crate::text(s.pasted.len().to_string()).key("count"))
+    }
+    fn poll(s: &mut State, _: f64, _: &mut Tx) -> bool {
+        s.polls += 1;
+        false
+    }
+    let app_spec = AppSpec { poll: Some(poll), ..AppSpec::new("clipboard-sync", (100.0, 40.0), State::default, view) };
+    let (overlay, _) = Overlay::new(
+        OverlaySpec::new("clipboard-sync", app_spec.size, view).options(Default::default()),
+        State::default(),
+        &app_spec,
+    );
+    let Overlay { mut core, rt, compositor, setup, shared } = overlay;
+    let mut app = app::TypedOverlayApp { rt, compositor, setup, shared };
+    let clipboard = crate::clipboard::memory();
+    app.rt.use_clipboard(&clipboard);
+    app.rt.wall_start = None;
+    app.rt.frame(0.0);
+
+    // No pending clipboard reply leaves a clean shown overlay untouched.
+    core.presence = Presence::Shown { occluded: false };
+    core.dirty = false;
+    core.idle = true;
+    let (polls_before, commits_before) = (app.rt.state.polls, app.rt.stats.commits);
+    core.clipboard_due(&mut app);
+    assert!(!core.dirty);
+    assert_eq!((app.rt.state.polls, app.rt.stats.commits), (polls_before, commits_before));
+
+    // Shown (non-frameless): receiving a clipboard reply marks dirty and leaves stepping to draw.
+    clipboard.set_text("shown");
+    core.clipboard.read_core(app.rt.core());
+    core.clipboard_due(&mut app);
+    assert!(core.dirty, "shown overlay must be marked dirty for the next frame draw");
+    assert!(app.rt.has_pending_input(), "clipboard reply must wait for the drawn frame");
+    assert_eq!(app.rt.state.polls, polls_before, "shown overlay must not step poll outside draw");
+    assert_eq!(app.rt.stats.commits, commits_before, "shown overlay must not commit outside draw");
+    assert!(app.rt.state.pasted.is_empty(), "paste handler must run in the drawn frame, not sync");
+    app.rt.frame(0.0);
+    assert!(!app.rt.has_pending_input());
+    assert_eq!(app.rt.state.polls, polls_before + 1, "drawn frame steps poll once");
+    assert_eq!(app.rt.state.pasted, ["shown"]);
+
+    // Fading out (still drawing, non-frameless): also leaves stepping to draw.
+    core.presence = Presence::FadingOut {
+        until: Instant::now() + Duration::from_secs(1),
+        length: Duration::from_secs(1),
+        occluded: false,
+    };
+    assert!(!core.frameless());
+    core.dirty = false;
+    let (polls_before, commits_before) = (app.rt.state.polls, app.rt.stats.commits);
+    clipboard.set_text("fading");
+    core.clipboard.read_core(app.rt.core());
+    core.clipboard_due(&mut app);
+    assert!(core.dirty);
+    assert!(app.rt.has_pending_input(), "fading overlay still draws frames and must not advance in sync");
+    assert_eq!((app.rt.state.polls, app.rt.stats.commits), (polls_before, commits_before));
+    app.rt.frame(0.0);
+    assert_eq!(app.rt.state.pasted, ["shown", "fading"]);
+
+    // Hidden (frameless): advances immediately so the clipboard reply is delivered without a frame.
+    core.presence = Presence::default();
+    assert!(core.frameless());
+    core.dirty = false;
+    let polls_before = app.rt.state.polls;
+    clipboard.set_text("hidden");
+    core.clipboard.read_core(app.rt.core());
+    core.clipboard_due(&mut app);
+    assert!(core.dirty);
+    assert!(!app.rt.has_pending_input(), "hidden overlay must drain the clipboard reply immediately");
+    assert_eq!(app.rt.state.polls, polls_before + 1, "hidden overlay advances once");
+    assert_eq!(app.rt.state.pasted, ["shown", "fading", "hidden"]);
+
+    // Shown but occluded (frameless): advances immediately since no frame will draw while covered.
+    core.presence = Presence::Shown { occluded: true };
+    assert!(core.frameless());
+    core.dirty = false;
+    let polls_before = app.rt.state.polls;
+    clipboard.set_text("occluded");
+    core.clipboard.read_core(app.rt.core());
+    core.clipboard_due(&mut app);
+    assert!(core.dirty);
+    assert!(!app.rt.has_pending_input(), "occluded overlay must drain the clipboard reply immediately");
+    assert_eq!(app.rt.state.polls, polls_before + 1, "occluded overlay advances once");
+    assert_eq!(app.rt.state.pasted, ["shown", "fading", "hidden", "occluded"]);
+}
+
 
 include!("more_tests.rs");
