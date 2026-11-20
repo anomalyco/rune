@@ -398,7 +398,8 @@ fn clipped_single_draw_fades_do_not_allocate_targets() {
             renderer.prepare_surfaces(&gpu.device, &gpu.queue, &rt.surfaces, (64, 48));
             assert_eq!(renderer.layer_stats().targets, 0, "mode={mode} video={video}");
             let out = pixels(&gpu, &renderer, &target);
-            assert_eq!(out[(24 * 64 + 32) * 4 + 3], 128);
+            // 0.5 * 255 = 127.5 is a rounding tie: D3D12 allows either neighbour (NVIDIA gives 127).
+            assert!(out[(24 * 64 + 32) * 4 + 3].abs_diff(128) <= 1, "mode={mode} video={video}");
             assert_eq!(out[(24 * 64 + 4) * 4 + 3], 0);
             if mode == 1 { assert!(out[(24 * 64 + 8) * 4 + 3] < 32); }
             frames.push(out);
