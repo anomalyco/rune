@@ -92,7 +92,7 @@ mod suballocation;
 mod types;
 mod view;
 
-use alloc::{borrow::ToOwned as _, string::String, sync::Arc, vec::Vec};
+use alloc::{borrow::ToOwned as _, collections::VecDeque, string::String, sync::Arc, vec::Vec};
 use core::{ffi, fmt, mem, ops::Deref, sync::atomic::AtomicU64};
 
 use arrayvec::ArrayVec;
@@ -768,6 +768,222 @@ struct Idler {
     fence: Direct3D12::ID3D12Fence,
 }
 
+/// Rune: GPU-written drain markers so releasing a removed device waits for any queued command
+/// lists the driver/WARP is still executing. After `RemoveDevice`, D3D12 sets every fence to
+/// `u64::MAX` and rejects `Queue::Signal`, so fences can no longer tell when in-flight lists
+/// have finished; releasing allocators or resources before then crashes on WARP (0xC0000005).
+/// Each command list records a `WriteBufferImmediate(MARKER_OUT)` into a persistently mapped
+/// readback buffer before `Close()`. On removal, `wait_after_removal` waits until all submitted
+/// markers land, bounded by stall and total timeouts for hardware drivers that abort the queue.
+const DRAIN_MARKER_SLOTS: usize = 16_384;
+const DRAIN_STALL_TIMEOUT: core::time::Duration = core::time::Duration::from_millis(250);
+const DRAIN_TOTAL_TIMEOUT: core::time::Duration = core::time::Duration::from_millis(1_000);
+
+struct DrainMarker {
+    resource: Direct3D12::ID3D12Resource,
+    mapped: core::ptr::NonNull<core::sync::atomic::AtomicU32>,
+    gpu_va: u64,
+    next_tag: core::sync::atomic::AtomicU32,
+}
+
+// SAFETY: `mapped` points to `DRAIN_MARKER_SLOTS` aligned `AtomicU32`s inside `resource`'s
+// persistently mapped readback buffer and is never dereferenced after `Drop` unmaps it.
+unsafe impl Send for DrainMarker {}
+// SAFETY: all concurrent access to `mapped` is through atomic loads and GPU DMA writes.
+unsafe impl Sync for DrainMarker {}
+
+impl Drop for DrainMarker {
+    fn drop(&mut self) {
+        // SAFETY: subresource 0 was mapped in `DrainMarker::new`.
+        unsafe { self.resource.Unmap(0, None) };
+    }
+}
+
+impl DrainMarker {
+    fn new(device: &Direct3D12::ID3D12Device) -> Option<Self> {
+        let mut options3 = Direct3D12::D3D12_FEATURE_DATA_D3D12_OPTIONS3::default();
+        // SAFETY: `options3` matches `D3D12_FEATURE_D3D12_OPTIONS3` in type and byte size.
+        let supported = unsafe {
+            device.CheckFeatureSupport(
+                Direct3D12::D3D12_FEATURE_D3D12_OPTIONS3,
+                <*mut _>::cast(&mut options3),
+                size_of_val(&options3) as u32,
+            )
+        }
+        .is_ok()
+            && (options3.WriteBufferImmediateSupportFlags.0
+                & Direct3D12::D3D12_COMMAND_LIST_SUPPORT_FLAG_DIRECT.0)
+                != 0;
+        if !supported {
+            return None;
+        }
+        let heap = Direct3D12::D3D12_HEAP_PROPERTIES {
+            Type: Direct3D12::D3D12_HEAP_TYPE_READBACK,
+            ..Default::default()
+        };
+        let desc = Direct3D12::D3D12_RESOURCE_DESC {
+            Dimension: Direct3D12::D3D12_RESOURCE_DIMENSION_BUFFER,
+            Alignment: 0,
+            Width: (DRAIN_MARKER_SLOTS * size_of::<u32>()) as u64,
+            Height: 1,
+            DepthOrArraySize: 1,
+            MipLevels: 1,
+            Format: Dxgi::Common::DXGI_FORMAT_UNKNOWN,
+            SampleDesc: Dxgi::Common::DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Layout: Direct3D12::D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+            Flags: Direct3D12::D3D12_RESOURCE_FLAG_NONE,
+        };
+        let mut resource = None::<Direct3D12::ID3D12Resource>;
+        // SAFETY: valid readback buffer descriptor permanently in `COPY_DEST`.
+        unsafe {
+            device.CreateCommittedResource(
+                &heap,
+                Direct3D12::D3D12_HEAP_FLAG_NONE,
+                &desc,
+                Direct3D12::D3D12_RESOURCE_STATE_COPY_DEST,
+                None,
+                &mut resource,
+            )
+        }
+        .ok()?;
+        let resource = resource?;
+        let mut raw_ptr = core::ptr::null_mut();
+        // SAFETY: readback buffer supports persistent CPU mapping on subresource 0.
+        unsafe { resource.Map(0, None, Some(&mut raw_ptr)) }.ok()?;
+        let mapped = core::ptr::NonNull::new(raw_ptr.cast::<core::sync::atomic::AtomicU32>())?;
+        // SAFETY: `resource` holds `DRAIN_MARKER_SLOTS` `u32` words; 0 never matches a tag.
+        unsafe { core::ptr::write_bytes(raw_ptr, 0, DRAIN_MARKER_SLOTS * size_of::<u32>()) };
+        // SAFETY: committed buffer has a valid GPU virtual address for its lifetime.
+        let gpu_va = unsafe { resource.GetGPUVirtualAddress() };
+        Some(Self {
+            resource,
+            mapped,
+            gpu_va,
+            next_tag: core::sync::atomic::AtomicU32::new(1),
+        })
+    }
+
+    fn read(&self, slot: u32) -> u32 {
+        debug_assert!((slot as usize) < DRAIN_MARKER_SLOTS);
+        // SAFETY: `slot` is masked to `< DRAIN_MARKER_SLOTS` inside the mapped buffer.
+        unsafe {
+            (&*self.mapped.as_ptr().add(slot as usize))
+                .load(core::sync::atomic::Ordering::Acquire)
+        }
+    }
+}
+
+pub(super) struct DrainTracker {
+    marker: Option<DrainMarker>,
+    in_flight: Mutex<VecDeque<(u32, u32)>>,
+    drain_gate: Mutex<()>,
+    removed: core::sync::atomic::AtomicBool,
+}
+
+impl DrainTracker {
+    pub(super) fn new(device: &Direct3D12::ID3D12Device) -> Self {
+        Self {
+            marker: DrainMarker::new(device),
+            in_flight: Mutex::new(VecDeque::new()),
+            drain_gate: Mutex::new(()),
+            removed: core::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    pub(super) fn mark_removed(&self) {
+        self.removed.store(true, core::sync::atomic::Ordering::Release);
+    }
+
+    pub(super) fn is_removed(&self) -> bool {
+        self.removed.load(core::sync::atomic::Ordering::Acquire)
+    }
+
+    pub(super) fn record(&self, list: &Direct3D12::ID3D12GraphicsCommandList) -> Option<(u32, u32)> {
+        let state = self.marker.as_ref()?;
+        let list2: Direct3D12::ID3D12GraphicsCommandList2 = list.cast().ok()?;
+        let tag = loop {
+            let v = state.next_tag.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+            if v != 0 {
+                break v;
+            }
+        };
+        let slot = tag & (DRAIN_MARKER_SLOTS as u32 - 1);
+        let param = Direct3D12::D3D12_WRITEBUFFERIMMEDIATE_PARAMETER {
+            Dest: state.gpu_va + u64::from(slot) * 4,
+            Value: tag,
+        };
+        let mode = Direct3D12::D3D12_WRITEBUFFERIMMEDIATE_MODE_MARKER_OUT;
+        // SAFETY: `Dest` is 4-byte aligned in `state.resource` (`COPY_DEST`); `list2` is open.
+        unsafe { list2.WriteBufferImmediate(1, &param, Some(&mode)) };
+        Some((slot, tag))
+    }
+
+    pub(super) fn track_submitted(&self, command_buffers: &[&CommandBuffer]) {
+        let Some(state) = self.marker.as_ref() else {
+            return;
+        };
+        let mut in_flight = self.in_flight.lock();
+        while let Some(&(slot, tag)) = in_flight.front() {
+            if state.read(slot) == tag {
+                in_flight.pop_front();
+            } else {
+                break;
+            }
+        }
+        if in_flight.len() > 64 {
+            in_flight.retain(|&(slot, tag)| state.read(slot) != tag);
+        }
+        for cmd_buf in command_buffers {
+            if let Some(marker) = cmd_buf.marker {
+                in_flight.push_back(marker);
+            }
+        }
+    }
+
+    pub(super) fn wait_after_removal(&self) {
+        let Some(state) = self.marker.as_ref() else {
+            return;
+        };
+        let _gate = self.drain_gate.lock();
+        let mut pending = {
+            let mut in_flight = self.in_flight.lock();
+            in_flight.retain(|&(slot, tag)| state.read(slot) != tag);
+            if in_flight.is_empty() {
+                return;
+            }
+            mem::take(&mut *in_flight)
+        };
+        let started = std::time::Instant::now();
+        let mut last_progress = started;
+        loop {
+            {
+                let mut in_flight = self.in_flight.lock();
+                if !in_flight.is_empty() {
+                    pending.append(&mut in_flight);
+                }
+            }
+            let before = pending.len();
+            pending.retain(|&(slot, tag)| state.read(slot) != tag);
+            if pending.is_empty() {
+                return;
+            }
+            let now = std::time::Instant::now();
+            if pending.len() < before {
+                last_progress = now;
+            }
+            if now.duration_since(last_progress) >= DRAIN_STALL_TIMEOUT
+                || now.duration_since(started) >= DRAIN_TOTAL_TIMEOUT
+            {
+                return;
+            }
+            std::thread::sleep(core::time::Duration::from_millis(1));
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct CommandSignatures {
     draw: Direct3D12::ID3D12CommandSignature,
@@ -783,6 +999,7 @@ struct DeviceShared {
     heap_views: descriptor::GeneralHeap,
     sampler_heap: sampler::SamplerHeap,
     private_caps: PrivateCapabilities,
+    drain: Arc<DrainTracker>,
 }
 
 unsafe impl Send for DeviceShared {}
@@ -837,6 +1054,7 @@ pub struct Queue {
     idle_fence_value: AtomicU64,
     pending_waits: Mutex<Vec<(Direct3D12::ID3D12Fence, u64)>>,
     pending_signals: Mutex<Vec<(Direct3D12::ID3D12Fence, u64)>>,
+    drain: Arc<DrainTracker>,
 }
 
 impl Queue {
@@ -1045,6 +1263,7 @@ impl fmt::Debug for CommandEncoder {
 #[derive(Debug)]
 pub struct CommandBuffer {
     raw: Direct3D12::ID3D12GraphicsCommandList,
+    marker: Option<(u32, u32)>,
 }
 
 impl crate::DynCommandBuffer for CommandBuffer {}
@@ -1800,6 +2019,14 @@ impl crate::Surface for Surface {
     }
 }
 
+impl Queue {
+    fn device_removed(&self) -> bool {
+        let mut device: Option<Direct3D12::ID3D12Device> = None;
+        unsafe { self.raw.GetDevice(&mut device) }.is_ok()
+            && device.is_some_and(|device| unsafe { device.GetDeviceRemovedReason() }.is_err())
+    }
+}
+
 impl crate::Queue for Queue {
     type A = Api;
 
@@ -1809,6 +2036,13 @@ impl crate::Queue for Queue {
         _surface_textures: &[&Texture],
         (signal_fence, signal_value): (&Fence, crate::FenceValue),
     ) -> Result<(), crate::DeviceError> {
+        // Rune: if the device is already removed, skip `ExecuteCommandLists` and don't record
+        // drain markers that the runtime will ignore.
+        if unsafe { self.idle_fence.GetCompletedValue() } == u64::MAX && self.device_removed() {
+            self.drain.mark_removed();
+            return Err(crate::DeviceError::Lost);
+        }
+
         let mut temp_lists = self.temp_lists.lock();
         temp_lists.clear();
         for cmd_buf in command_buffers {
@@ -1822,8 +2056,19 @@ impl crate::Queue for Queue {
         {
             let mut waits = self.pending_waits.lock();
             for (fence, value) in waits.drain(..) {
-                unsafe { self.raw.Wait(&fence, value) }.into_device_result("Wait pending fence")?;
+                if let Err(err) =
+                    unsafe { self.raw.Wait(&fence, value) }.into_device_result("Wait pending fence")
+                {
+                    if matches!(err, crate::DeviceError::Lost) {
+                        self.drain.mark_removed();
+                    }
+                    return Err(err);
+                }
             }
+        }
+
+        if !command_buffers.is_empty() {
+            self.drain.track_submitted(command_buffers);
         }
 
         {
@@ -1831,16 +2076,28 @@ impl crate::Queue for Queue {
             unsafe { self.raw.ExecuteCommandLists(&temp_lists) }
         }
 
-        unsafe { self.raw.Signal(&signal_fence.raw, signal_value) }
-            .into_device_result("Signal fence")?;
+        if let Err(err) =
+            unsafe { self.raw.Signal(&signal_fence.raw, signal_value) }.into_device_result("Signal fence")
+        {
+            if matches!(err, crate::DeviceError::Lost) {
+                self.drain.mark_removed();
+            }
+            return Err(err);
+        }
 
         // Drain caller-staged signals after our own Signal so each
         // additional fence value publishes once the submit completes.
         {
             let mut signals = self.pending_signals.lock();
             for (fence, value) in signals.drain(..) {
-                unsafe { self.raw.Signal(&fence, value) }
-                    .into_device_result("Signal pending fence")?;
+                if let Err(err) = unsafe { self.raw.Signal(&fence, value) }
+                    .into_device_result("Signal pending fence")
+                {
+                    if matches!(err, crate::DeviceError::Lost) {
+                        self.drain.mark_removed();
+                    }
+                    return Err(err);
+                }
             }
         }
 
@@ -1896,26 +2153,50 @@ impl crate::Queue for Queue {
     }
 
     unsafe fn wait_for_idle(&self) -> Result<(), crate::DeviceError> {
+        let on_removed = || {
+            self.drain.mark_removed();
+            self.drain.wait_after_removal();
+            Err(crate::DeviceError::Lost)
+        };
+        if unsafe { self.idle_fence.GetCompletedValue() } == u64::MAX && self.device_removed() {
+            return on_removed();
+        }
         let value = self
             .idle_fence_value
             .fetch_add(1, core::sync::atomic::Ordering::Relaxed)
             + 1;
-        unsafe { self.raw.Signal(&self.idle_fence, value) }
-            .into_device_result("Signal idle fence")?;
-        unsafe {
+        if let Err(err) = unsafe { self.raw.Signal(&self.idle_fence, value) }
+            .into_device_result("Signal idle fence")
+        {
+            if matches!(err, crate::DeviceError::Lost) {
+                return on_removed();
+            }
+            return Err(err);
+        }
+        if let Err(err) = unsafe {
             self.idle_fence
                 .SetEventOnCompletion(value, self.idle_event.0)
         }
-        .into_device_result("SetEventOnCompletion")?;
-        // Rune: a removed device's work never finishes, so the wait asks after the device every
-        // 100 ms instead of waiting forever (wgpu-core waits here when it drops the queue).
-        while unsafe { Threading::WaitForSingleObject(self.idle_event.0, 100) } == Foundation::WAIT_TIMEOUT {
-            let mut device: Option<Direct3D12::ID3D12Device> = None;
-            let removed = unsafe { self.raw.GetDevice(&mut device) }.is_ok()
-                && device.is_some_and(|device| unsafe { device.GetDeviceRemovedReason() }.is_err());
-            if removed {
-                return Err(crate::DeviceError::Lost);
+        .into_device_result("SetEventOnCompletion")
+        {
+            if matches!(err, crate::DeviceError::Lost) {
+                return on_removed();
             }
+            return Err(err);
+        }
+        // Rune: a removed device's work never finishes through fences, so the wait asks after
+        // the device every 100 ms instead of waiting forever (wgpu-core waits here when it drops
+        // the queue), and drains queued command lists through GPU-written markers before
+        // returning so wgpu-core doesn't free resources while the driver is still executing them.
+        while unsafe { Threading::WaitForSingleObject(self.idle_event.0, 100) }
+            == Foundation::WAIT_TIMEOUT
+        {
+            if self.device_removed() {
+                return on_removed();
+            }
+        }
+        if unsafe { self.idle_fence.GetCompletedValue() } == u64::MAX && self.device_removed() {
+            return on_removed();
         }
         Ok(())
     }

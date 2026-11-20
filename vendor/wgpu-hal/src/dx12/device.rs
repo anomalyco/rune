@@ -179,6 +179,7 @@ impl super::Device {
             )?,
             sampler_heap: super::sampler::SamplerHeap::new(&raw, &private_caps)?,
             private_caps,
+            drain: Arc::new(super::DrainTracker::new(&raw)),
         };
 
         let mut rtv_pool =
@@ -270,6 +271,7 @@ impl super::Device {
             // Never stored: read a moment before D3D12 reports the removal, it would stay
             // "everything finished" for good.
             if unsafe { self.raw.GetDeviceRemovedReason() }.is_err() {
+                self.shared.drain.mark_removed();
                 return None;
             }
             return Some(fence.reached.load(core::sync::atomic::Ordering::Relaxed));
@@ -281,19 +283,45 @@ impl super::Device {
     //
     // Once this method completes, the surface is able to be resized or deleted.
     pub(super) unsafe fn wait_for_present_queue_idle(&self) -> Result<(), crate::DeviceError> {
+        let on_removed = || {
+            self.shared.drain.mark_removed();
+            self.shared.drain.wait_after_removal();
+            Err(crate::DeviceError::Lost)
+        };
         let cur_value = unsafe { self.idler.fence.GetCompletedValue() };
         if cur_value == !0 {
-            return Err(crate::DeviceError::Lost);
+            return on_removed();
         }
 
         let event = Event::create(false, false)?;
 
         let value = cur_value + 1;
-        unsafe { self.present_queue.Signal(&self.idler.fence, value) }
-            .into_device_result("Signal")?;
-        let hr = unsafe { self.idler.fence.SetEventOnCompletion(value, event.0) };
-        hr.into_device_result("Set event")?;
-        unsafe { Threading::WaitForSingleObject(event.0, Threading::INFINITE) };
+        if let Err(err) = unsafe { self.present_queue.Signal(&self.idler.fence, value) }
+            .into_device_result("Signal")
+        {
+            if matches!(err, crate::DeviceError::Lost) {
+                return on_removed();
+            }
+            return Err(err);
+        }
+        if let Err(err) = unsafe { self.idler.fence.SetEventOnCompletion(value, event.0) }
+            .into_device_result("Set event")
+        {
+            if matches!(err, crate::DeviceError::Lost) {
+                return on_removed();
+            }
+            return Err(err);
+        }
+        while unsafe { Threading::WaitForSingleObject(event.0, 100) } == Foundation::WAIT_TIMEOUT {
+            if unsafe { self.raw.GetDeviceRemovedReason() }.is_err() {
+                return on_removed();
+            }
+        }
+        if unsafe { self.idler.fence.GetCompletedValue() } == !0
+            && unsafe { self.raw.GetDeviceRemovedReason() }.is_err()
+        {
+            return on_removed();
+        }
         Ok(())
     }
 

@@ -436,13 +436,20 @@ impl crate::CommandEncoder for super::CommandEncoder {
     }
     unsafe fn end_encoding(&mut self) -> Result<super::CommandBuffer, crate::DeviceError> {
         let raw = self.list.take().unwrap();
+        let marker = self.shared.drain.record(&raw);
         unsafe { raw.Close() }.into_device_result("GraphicsCommandList::close")?;
-        Ok(super::CommandBuffer { raw })
+        Ok(super::CommandBuffer { raw, marker })
     }
     unsafe fn reset_all<I: Iterator<Item = super::CommandBuffer>>(&mut self, command_buffers: I) {
         self.intermediate_copy_bufs.clear();
         for cmd_buf in command_buffers {
             self.free_lists.push(cmd_buf.raw);
+        }
+        // Rune: never reset a command allocator on a removed device; no new commands will ever
+        // be recorded on it, and a timed-out drain on a removed device could still have the
+        // driver unwinding a list recorded in this allocator.
+        if self.shared.drain.is_removed() {
+            return;
         }
         if let Err(e) = unsafe { self.allocator.Reset() } {
             log::error!("ID3D12CommandAllocator::Reset() failed with {e}");
