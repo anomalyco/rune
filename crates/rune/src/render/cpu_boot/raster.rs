@@ -188,6 +188,8 @@ struct Surface {
 // SAFETY: `run` hands each tile to one thread; a thread writes only pixels of its tile, and the
 // target outlives the scope its threads run in.
 unsafe impl Send for Surface {}
+// SAFETY: as above; `run` partitions the target into disjoint tiles across threads and joins
+// before the target borrow ends.
 unsafe impl Sync for Surface {}
 
 impl Surface {

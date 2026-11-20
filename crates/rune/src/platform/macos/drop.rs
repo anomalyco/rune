@@ -210,6 +210,7 @@ fn url_stem(url: &str) -> Option<String> {
 /// Writes an item's image to `dir`, as PNG when it's TIFF.
 unsafe fn write_image(item: &NSPasteboardItem, kind: &str, ext: &str, dir: &Path) -> Option<PathBuf> {
     let data = item.dataForType(&NSString::from_str(kind))?;
+    // SAFETY: `data` is retained for the duration of this function and is not mutated while borrowed.
     let bytes = unsafe { data.as_bytes_unchecked() };
     let png;
     let bytes = if kind == "public.tiff" {
@@ -222,6 +223,7 @@ unsafe fn write_image(item: &NSPasteboardItem, kind: &str, ext: &str, dir: &Path
 
 /// The drag's position in `view`, in points from its top-left.
 unsafe fn location(view: &NSView, info: &AnyObject) -> (f32, f32) {
+    // SAFETY: `info` is a live `NSDraggingInfo` from AppKit on the main thread; `-draggingLocation` returns `NSPoint`.
     let p: NSPoint = unsafe { msg_send![info, draggingLocation] };
     let p = view.convertPoint_fromView(p, None);
     let y = if view.isFlipped() { p.y } else { view.bounds().size.height - p.y };
@@ -235,33 +237,46 @@ unsafe fn view(this: &AnyObject) -> &NSView {
     unsafe { &*(this as *const AnyObject).cast::<NSView>() }
 }
 
-unsafe fn pasteboard(info: &AnyObject) -> Retained<NSPasteboard> { unsafe { msg_send![info, draggingPasteboard] } }
+unsafe fn pasteboard(info: &AnyObject) -> Retained<NSPasteboard> {
+    // SAFETY: `info` is a live `NSDraggingInfo` from AppKit on the main thread; `-draggingPasteboard` returns a non-null `NSPasteboard`.
+    unsafe { msg_send![info, draggingPasteboard] }
+}
 
 /// A drag entered or moved: Enter when it starts to be taken, then Move.
 unsafe fn update(this: &AnyObject, info: &AnyObject) -> usize {
-    autoreleasepool(|_| unsafe {
-        let key = key(this);
-        let mask: usize = msg_send![info, draggingSourceOperationMask];
-        let op = operation(mask);
-        let at = location(view(this), info);
-        if op == 0 {
-            if over(key) { push(key, FileStep::Leave); }
-            return 0;
+    autoreleasepool(|_| {
+        // SAFETY: called on the main thread from AppKit drag destination callbacks; `this` is this
+        // subclassed `NSView`, `info` is a live `NSDraggingInfo`, and the selectors match `NSDraggingInfo`.
+        unsafe {
+            let key = key(this);
+            let mask: usize = msg_send![info, draggingSourceOperationMask];
+            let op = operation(mask);
+            let at = location(view(this), info);
+            if op == 0 {
+                if over(key) { push(key, FileStep::Leave); }
+                return 0;
+            }
+            if over(key) {
+                push(key, FileStep::Move(at));
+                return op;
+            }
+            let paths: Vec<PathBuf> = items(&pasteboard(info)).iter().map(|(_, item)| item.hover_path()).collect();
+            if paths.is_empty() { return 0; }
+            push(key, FileStep::Enter(paths, Some(at)));
+            op
         }
-        if over(key) {
-            push(key, FileStep::Move(at));
-            return op;
-        }
-        let paths: Vec<PathBuf> = items(&pasteboard(info)).iter().map(|(_, item)| item.hover_path()).collect();
-        if paths.is_empty() { return 0; }
-        push(key, FileStep::Enter(paths, Some(at)));
-        op
     })
 }
 
-unsafe extern "C" fn entered(this: &AnyObject, _: Sel, info: &AnyObject) -> usize { unsafe { update(this, info) } }
+unsafe extern "C" fn entered(this: &AnyObject, _: Sel, info: &AnyObject) -> usize {
+    // SAFETY: AppKit invokes `-draggingEntered:` on the main thread with this subclassed `NSView` and a live `NSDraggingInfo`.
+    unsafe { update(this, info) }
+}
 
-unsafe extern "C" fn updated(this: &AnyObject, _: Sel, info: &AnyObject) -> usize { unsafe { update(this, info) } }
+unsafe extern "C" fn updated(this: &AnyObject, _: Sel, info: &AnyObject) -> usize {
+    // SAFETY: AppKit invokes `-draggingUpdated:` on the main thread with this subclassed `NSView` and a live `NSDraggingInfo`.
+    unsafe { update(this, info) }
+}
 
 unsafe extern "C" fn exited(this: &AnyObject, _: Sel, _info: *mut AnyObject) {
     if over(key(this)) { push(key(this), FileStep::Leave); }
@@ -273,38 +288,46 @@ unsafe extern "C" fn prepare(this: &AnyObject, _: Sel, _info: &AnyObject) -> Boo
 /// have written them, all in one `FileStep::Drop`.
 unsafe extern "C" fn perform(this: &AnyObject, _: Sel, info: &AnyObject) -> Bool {
     let key = key(this);
-    autoreleasepool(|_| unsafe {
-        let at = location(view(this), info);
-        let pb = pasteboard(info);
-        let items = items(&pb);
-        let mut dir = None;
-        let mut paths = Vec::new();
-        let mut promised = false;
-        for (item, found) in &items {
-            match found {
-                Item::File(path) => paths.push(path.clone()),
-                Item::Image(kind, ext) => {
-                    if dir.is_none() { dir = drop_dir(); }
-                    if let Some(path) = dir.as_deref().and_then(|d| write_image(item, kind, ext, d)) { paths.push(path); }
+    autoreleasepool(|_| {
+        // SAFETY: AppKit invokes `-performDragOperation:` on the main thread with this subclassed
+        // `NSView` and a live `NSDraggingInfo`.
+        unsafe {
+            let at = location(view(this), info);
+            let pb = pasteboard(info);
+            let items = items(&pb);
+            let mut dir = None;
+            let mut paths = Vec::new();
+            let mut promised = false;
+            for (item, found) in &items {
+                match found {
+                    Item::File(path) => paths.push(path.clone()),
+                    Item::Image(kind, ext) => {
+                        if dir.is_none() { dir = drop_dir(); }
+                        if let Some(path) = dir.as_deref().and_then(|d| write_image(item, kind, ext, d)) { paths.push(path); }
+                    }
+                    Item::Promise(_) => promised = true,
                 }
-                Item::Promise(_) => promised = true,
             }
+            if promised && let Some(dir) = dir.or_else(drop_dir) && receive(key, &pb, &dir, paths.clone(), at) {
+                return Bool::YES;
+            }
+            if paths.is_empty() {
+                push(key, FileStep::Leave);
+                return Bool::NO;
+            }
+            push(key, FileStep::Drop(paths, Some(at)));
+            Bool::YES
         }
-        if promised && let Some(dir) = dir.or_else(drop_dir) && receive(key, &pb, &dir, paths.clone(), at) {
-            return Bool::YES;
-        }
-        if paths.is_empty() {
-            push(key, FileStep::Leave);
-            return Bool::NO;
-        }
-        push(key, FileStep::Drop(paths, Some(at)));
-        Bool::YES
     })
 }
 
 /// Asks each promise's source to write its files into `dir`. Once all have answered, `paths`
 /// and the promised files drop at `at`.
 unsafe fn receive(key: usize, pb: &NSPasteboard, dir: &Path, paths: Vec<PathBuf>, at: (f32, f32)) -> bool {
+    // SAFETY: called on the main thread with a live `NSPasteboard`; Objective-C selectors match
+    // `NSPasteboard`/`NSFilePromiseReceiver`/`NSOperationQueue`, `keep` retains each receiver
+    // until its reader block finishes (where AppKit passes a live `NSURL` when `error` is null),
+    // and `deliver` hops back to `mainQueue` before touching thread-local state.
     unsafe {
         let classes = NSArray::from_retained_slice(&[Retained::<AnyObject>::retain(class!(NSFilePromiseReceiver) as *const AnyClass as *mut AnyObject).unwrap()]);
         let Some(receivers): Option<Retained<NSArray<AnyObject>>> = msg_send![pb, readObjectsForClasses: &*classes, options: &*NSDictionary::<NSString, AnyObject>::new()]

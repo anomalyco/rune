@@ -131,8 +131,8 @@ pub(super) fn composite_row_by(row: &mut [u8], src: &[[f32; 4]], opacity: f32) {
 #[cfg(target_arch = "x86_64")]
 unsafe fn over4(row: &mut [u8], src: &[[f32; 4]], opacity: f32) {
     use std::arch::x86_64::*;
-    // SAFETY (whole body): SSE2 is baseline on x86-64; every load and store is inside `row`
-    // (16 bytes a step) and `src` (four texels a step).
+    // SAFETY: SSE2 is baseline on x86-64; every load and store is inside `row` (16 bytes a step)
+    // and `src` (four texels a step).
     unsafe {
         let (lo, hi, magic, one) = (_mm_setzero_ps(), _mm_set1_ps(255.0), _mm_set1_ps(MAGIC), _mm_set1_ps(1.0));
         let k = _mm_set1_ps(opacity);
