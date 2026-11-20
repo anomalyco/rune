@@ -126,7 +126,7 @@ fn paint(k: &Kit, e: El, s: Skin, state: State, interactive: bool) -> El {
     let e = k.focus_ring_state(
         e.focusable(interactive && state != State::Disabled),
         2.0,
-        2.5,
+        2.0,
         state == State::Focus && interactive,
     );
     let mut e = k.elevate(k.surface_state(e, state, s.fill, s.hover, s.pressed, interactive), &s.shadows);

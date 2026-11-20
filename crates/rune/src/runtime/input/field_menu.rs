@@ -27,6 +27,12 @@ impl RuntimeCore {
     pub(in crate::runtime) fn field_menu(&mut self, app: &mut dyn AppDriver, path: String, at: (f32, f32), hit_at: Option<(f32, f32)>, one: &mut Tx) -> bool {
         let Some(i) = self.live(&path) else { return false };
         let Some(input) = self.tree.nodes[i].input.as_deref() else { return false };
+        if let (Some(f), Some((hx, hy))) = (input.on_pill_secondary.clone(), hit_at)
+            && let Some(pill_id) = self.input_pill_at(i, hx, hy)
+            && f(app.states(), &pill_id, crate::PointerPress { x: at.0, y: at.1 }, one)
+        {
+            return true;
+        }
         let Some(access) = input.access.clone() else { return false };
         let (single, secure) = (input.single_line, input.edit.is_secure());
         let spell = input.spellcheck && !secure;

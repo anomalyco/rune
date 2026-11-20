@@ -368,6 +368,8 @@ impl TextInput {
                 .self_center()
                 .center()
                 .radius(radius)
+                // Inside, clear of the field's edge it sits on (`text-input.css`, opencode#64909).
+                .focus_ring(2.0, -2.0, c.border_focus)
                 .child(icon(glyph, 16.0).color(c.icon_muted))
                 .disabled(disabled);
             if self.clear {

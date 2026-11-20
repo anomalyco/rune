@@ -269,6 +269,10 @@ impl Builder {
         }
     }
 
+    pub(super) fn in_link(&self) -> bool {
+        self.inline.as_ref().is_some_and(|(_, _, open, _)| open.iter().any(|o| o.style == Style::Link))
+    }
+
     /// Closes the innermost container into its parent.
     pub(super) fn pop_container(&mut self) {
         self.flush_inline();
