@@ -57,6 +57,9 @@ impl Gpu {
     #[cfg(not(target_arch = "wasm32"))]
     fn try_picked(instance: wgpu::Instance, surface: Option<&wgpu::Surface<'_>>, wanted: wgpu::Features, translucent: bool, presented: bool) -> Result<Gpu, String> {
         let _serial = GPU_INIT.lock().unwrap_or_else(|e| e.into_inner());
+        // D3D12 keeps one device per adapter in a process: while a removed one is still held, a
+        // new device on that adapter is the removed one again.
+        crate::native_surface::release_removed_device();
         let pick = crate::gpu::pick::pick(&instance, surface, presented)?;
         crate::marks::mark("gpu.adapter");
         if !crate::marks::noted("adapter") { crate::marks::note("adapter", Box::leak(pick.adapter.get_info().name.into_boxed_str())); }

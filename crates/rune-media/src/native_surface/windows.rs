@@ -82,6 +82,16 @@ pub(crate) fn presenting_device() -> Option<ID3D12Device> {
     DEVICE.lock().unwrap().clone()
 }
 
+/// Forgets the last window's device once it is removed. Decoders opening a clip then wait for
+/// the next one (`presenting_device` is None until a window notes it).
+pub(crate) fn release_removed_device() {
+    let mut device = DEVICE.lock().unwrap();
+    // SAFETY: a plain query on a device this slot holds.
+    if device.as_ref().is_some_and(|d| unsafe { d.GetDeviceRemovedReason() }.is_err()) {
+        *device = None;
+    }
+}
+
 /// Counts the windows' D3D12 devices Rune made: it moves when one replaces a lost one, so what
 /// was opened on the old device (a decoder's textures and fences) is opened again.
 static GENERATION: AtomicU64 = AtomicU64::new(0);
