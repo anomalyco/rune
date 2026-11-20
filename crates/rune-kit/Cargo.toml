@@ -47,7 +47,8 @@ name = "layout_text_cost"
 required-features = ["markdown", "frame-profile"]
 
 [dev-dependencies]
-rune = { workspace = true, default-features = true }
+# A GPU submission over Rune's budget fails the test whose `Gpu` it was (`test-strict`).
+rune = { workspace = true, default-features = true, features = ["test-strict"] }
 procwatch = { workspace = true }
 # The accessibility tree tests read and write `Runtime::accessibility_json` (tests/a11y).
 serde_json = { workspace = true }

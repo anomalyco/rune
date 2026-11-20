@@ -53,8 +53,12 @@ impl Gpu {
         if draws_surfaces && !cfg!(test) { log_uncaptured(&device); }
         #[cfg(target_arch = "wasm32")]
         let _ = draws_surfaces;
+        // Debug builds report a submission that holds the GPU past `rune_gpu::budget::BUDGET`; in
+        // Rune's own tests (and `test-strict` builds) the test that owns this GPU fails when it drops.
+        rune_gpu::budget::watch();
+        let budget = rune_gpu::budget::Strict::new(&queue, cfg!(test) || cfg!(feature = "test-strict"));
         let removal = rune_gpu::health::Removal::watch(&device);
-        Gpu { instance, adapter, device, queue, lost, removal }
+        Gpu { instance, adapter, device, queue, lost, removal, _budget: budget }
     }
 
     /// Whether the device went away: a driver reset, a GPU removed, a resume from Modern Standby.

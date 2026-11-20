@@ -89,6 +89,9 @@ mod pipeline_desc;
 mod sampler;
 mod shader_compilation;
 mod suballocation;
+// Rune: debug builds time each submission (submission_watch); release builds compile none of it.
+#[cfg(debug_assertions)]
+mod submission_watch;
 mod types;
 mod view;
 
@@ -837,6 +840,9 @@ pub struct Queue {
     idle_fence_value: AtomicU64,
     pending_waits: Mutex<Vec<(Direct3D12::ID3D12Fence, u64)>>,
     pending_signals: Mutex<Vec<(Direct3D12::ID3D12Fence, u64)>>,
+    /// Rune: debug builds' submission timing.
+    #[cfg(debug_assertions)]
+    watch: submission_watch::Watch,
 }
 
 impl Queue {
@@ -881,6 +887,33 @@ impl Queue {
     }
 }
 
+/// Rune: what `Queue::watch_submissions`' hook hears of a submission that held the GPU past the
+/// budget: the queue's serial (`Queue::submission_watch_serial`), the submission's fence value,
+/// how long it held the GPU (until it was done, or until now while it still runs), and whether it
+/// still runs.
+pub type SubmissionReport = fn(queue: u64, value: u64, held: core::time::Duration, running: bool);
+
+impl Queue {
+    /// Rune: from now on, in debug builds, every D3D12 queue's submissions are timed on the GPU
+    /// and each one that holds it past `budget` goes to `report`, from a thread of the queue's
+    /// own: once while it still runs, or once when it's done. The first call sets the hook. In
+    /// release builds it does nothing.
+    pub fn watch_submissions(budget: core::time::Duration, report: SubmissionReport) {
+        #[cfg(debug_assertions)]
+        let _ = submission_watch::HOOK.set((budget, report));
+        #[cfg(not(debug_assertions))]
+        let _ = (budget, report);
+    }
+
+    /// Rune: this queue's number in `watch_submissions`' reports, unique in the process; 0 in
+    /// release builds.
+    pub fn submission_watch_serial(&self) -> u64 {
+        #[cfg(debug_assertions)]
+        return self.watch.serial;
+        #[cfg(not(debug_assertions))]
+        0
+    }
+}
 unsafe impl Send for Queue {}
 unsafe impl Sync for Queue {}
 
@@ -1826,6 +1859,15 @@ impl crate::Queue for Queue {
             }
         }
 
+        // Rune: debug builds run a timed submission between two timestamp lists of their own.
+        #[cfg(debug_assertions)]
+        let timed = self.watch.before(&self.raw, &signal_fence.raw);
+        #[cfg(debug_assertions)]
+        if let Some(timed) = &timed {
+            temp_lists.insert(0, Some(timed.begin.clone()));
+            temp_lists.push(Some(timed.end.clone()));
+        }
+
         {
             profiling::scope!("ID3D12CommandQueue::ExecuteCommandLists");
             unsafe { self.raw.ExecuteCommandLists(&temp_lists) }
@@ -1833,6 +1875,10 @@ impl crate::Queue for Queue {
 
         unsafe { self.raw.Signal(&signal_fence.raw, signal_value) }
             .into_device_result("Signal fence")?;
+        #[cfg(debug_assertions)]
+        if let Some(timed) = timed {
+            self.watch.after(timed, signal_value);
+        }
 
         // Drain caller-staged signals after our own Signal so each
         // additional fence value publishes once the submit completes.

@@ -15,6 +15,9 @@ pub struct Gpu {
     pub(super) lost: Arc<AtomicBool>,
     /// D3D12 removes a device before wgpu hears of it (`Gpu::is_lost`).
     pub(super) removal: rune_gpu::health::Removal,
+    /// Last, so it drops after the rest: in Rune's tests and `test-strict` builds it fails the
+    /// test whose GPU had a submission over `rune_gpu::budget::BUDGET`.
+    pub(super) _budget: rune_gpu::budget::Strict,
 }
 
 /// The most views and buffers a device binds at once (`Limits::max_non_sampler_bindings`).

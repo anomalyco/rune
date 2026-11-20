@@ -25,7 +25,8 @@ wgpu = { workspace = true, features = ["vulkan"] }
 wgpu = { workspace = true, features = ["webgpu"] }
 
 [dev-dependencies]
-rune = { workspace = true, default-features = true }
+# A GPU submission over Rune's budget fails the test whose `Gpu` it was (`test-strict`).
+rune = { workspace = true, default-features = true, features = ["test-strict"] }
 ab_glyph = "0.2.32"
 png = { workspace = true }
 

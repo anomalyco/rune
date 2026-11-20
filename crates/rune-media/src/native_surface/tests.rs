@@ -26,6 +26,8 @@ impl Drop for Gpu {
         if !std::thread::panicking() {
             self.assert_alive();
         }
+        // A later test's queue never inherits this one's overrun.
+        rune_gpu::budget::forget(&self.queue);
     }
 }
 
@@ -53,6 +55,7 @@ impl Gpu {
             ..Default::default()
         }))
         .expect("request GPU device");
+        rune_gpu::budget::watch();
         let lost = Arc::new(std::sync::Mutex::new(None));
         let heard = lost.clone();
         device.set_device_lost_callback(move |reason, message| {
@@ -70,13 +73,17 @@ impl Gpu {
         }
     }
 
-    /// Fails the test if its device was lost.
+    /// Fails the test if its device was lost, or one of its submissions held the GPU past
+    /// `rune_gpu::budget::BUDGET`.
     pub(super) fn assert_alive(&self) {
         if rune_gpu::health::removed(&self.device) {
             panic!("the GPU device was removed during this test, on {}: nothing it read from the GPU since counts", self.adapter.get_info().name);
         }
         if let Some(why) = self.lost.lock().unwrap_or_else(|e| e.into_inner()).clone() {
             panic!("the GPU device was lost during this test ({why}), on {}: nothing it read from the GPU since counts", self.adapter.get_info().name);
+        }
+        if let Some(overrun) = rune_gpu::budget::overrun(&self.queue) {
+            panic!("{overrun}, on {}", self.adapter.get_info().name);
         }
     }
 
