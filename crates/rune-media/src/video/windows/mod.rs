@@ -93,7 +93,7 @@ pub(crate) fn layer(shared: &Arc<Shared>, ask: Option<(u32, u32)>) -> LayerStatu
     status
 }
 
-// The reader in `still` stays on the headless thread that made it, under the Shared mutex.
+// SAFETY: the reader in `still` stays on the headless thread that made it, under the Shared mutex.
 unsafe impl Send for Native {}
 
 impl Drop for Native {

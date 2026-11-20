@@ -42,6 +42,7 @@ fn read(now: Instant) -> Option<Grid> {
     static TIMING: std::sync::OnceLock<Option<GetTiming>> = std::sync::OnceLock::new();
     // SAFETY: dwmapi's documented entry point at its documented signature.
     let get = (*TIMING.get_or_init(|| unsafe { super::mf::symbol(super::mf::system_library("dwmapi.dll")?, c"DwmGetCompositionTimingInfo") }))?;
+    // SAFETY: `DWM_TIMING_INFO` is a plain Win32 C struct where all-zero bytes are valid.
     let mut info: DWM_TIMING_INFO = unsafe { std::mem::zeroed() };
     info.cbSize = size_of::<DWM_TIMING_INFO>() as u32;
     let (mut qpc, mut frequency) = (0i64, 0i64);

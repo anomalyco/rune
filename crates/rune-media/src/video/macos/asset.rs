@@ -59,6 +59,7 @@ fn url(source: &MediaSource) -> Result<Retained<NSURL>, String> {
 fn asset(source: &MediaSource, headers: &[(String, String)]) -> Result<Retained<AVURLAsset>, String> {
     let url = url(source)?;
     if headers.is_empty() {
+        // SAFETY: `url` is a live `NSURL` and `URLAssetWithURL_options` accepts `None` for options.
         return Ok(unsafe { AVURLAsset::URLAssetWithURL_options(&url, None) });
     }
     let names: Vec<_> = headers.iter().map(|(name, _)| NSString::from_str(name)).collect();
@@ -68,6 +69,7 @@ fn asset(source: &MediaSource, headers: &[(String, String)]) -> Result<Retained<
     let key = NSString::from_str("AVURLAssetHTTPHeaderFieldsKey");
     let fields: &AnyObject = &fields;
     let options = NSDictionary::<NSString, AnyObject>::from_slices(&[&*key], &[fields]);
+    // SAFETY: `url` is a live `NSURL` and `options` is a live `NSDictionary` of HTTP header fields.
     Ok(unsafe { AVURLAsset::URLAssetWithURL_options(&url, Some(&options)) })
 }
 
@@ -153,10 +155,12 @@ fn fetch(source: &MediaSource, headers: &[(String, String)]) -> Result<Vec<u8>, 
 }
 
 pub(super) fn seconds(t: CMTime) -> f64 {
+    // SAFETY: `CMTimeGetSeconds` accepts any `CMTime` value and returns non-finite for invalid times.
     let s = unsafe { t.seconds() };
     if s.is_finite() { s } else { 0.0 }
 }
 pub(super) fn cm(seconds: f64) -> CMTime {
+    // SAFETY: `CMTimeMakeWithSeconds` accepts any `f64` and a positive timescale (`600_000`).
     unsafe { CMTime::with_seconds(seconds, 600_000) }
 }
 pub(super) fn zero() -> CMTime {
@@ -166,24 +170,35 @@ pub(super) fn zero() -> CMTime {
 /// Blocks until the asset's tracks load (a network fetch for URLs).
 #[allow(deprecated)] // The synchronous loaders are what a worker or headless run wants.
 fn meta(asset: &AVURLAsset, kind: Kind) -> Result<Meta, String> {
-    let duration = || seconds(unsafe { asset.duration() });
+    let duration = || {
+        // SAFETY: `asset` is a live `AVURLAsset` queried synchronously on a worker or headless thread.
+        seconds(unsafe { asset.duration() })
+    };
     if kind == Kind::Audio {
+        // SAFETY: `AVMediaTypeAudio` is an immutable static AVFoundation string constant.
         let audio = unsafe { AVMediaTypeAudio }.ok_or("AVMediaTypeAudio unavailable")?;
+        // SAFETY: `asset` is a live `AVURLAsset` and `audio` is the static `AVMediaTypeAudio` constant.
         if unsafe { asset.tracksWithMediaType(audio) }.firstObject().is_none() {
             return Err("no playable audio track (unreachable, or a format AVFoundation can't read)".into());
         }
         return Ok(Meta { duration: duration(), size: None, frame: 1.0 / 30.0, sound: true });
     }
+    // SAFETY: `AVMediaTypeVideo` is an immutable static AVFoundation string constant.
     let video = unsafe { AVMediaTypeVideo }.ok_or("AVMediaTypeVideo unavailable")?;
+    // SAFETY: `asset` is a live `AVURLAsset` and `video` is the static `AVMediaTypeVideo` constant.
     let tracks = unsafe { asset.tracksWithMediaType(video) };
     let Some(track) = tracks.firstObject() else {
         return Err("no playable video track".into());
     };
+    // SAFETY: `track` is a live `AVAssetTrack` retained from `tracks.firstObject()`.
     let size = unsafe { track.naturalSize() };
+    // SAFETY: `track` is a live `AVAssetTrack` retained from `tracks.firstObject()`.
     let t = unsafe { track.preferredTransform() };
     let w = (size.width * t.a + size.height * t.c).abs().round();
     let h = (size.width * t.b + size.height * t.d).abs().round();
+    // SAFETY: `track` is a live `AVAssetTrack` retained from `tracks.firstObject()`.
     let min = seconds(unsafe { track.minFrameDuration() });
+    // SAFETY: `track` is a live `AVAssetTrack` retained from `tracks.firstObject()`.
     let nominal = unsafe { track.nominalFrameRate() } as f64;
     let frame = if min > 0.0 { min } else if nominal > 0.0 { 1.0 / nominal } else { 1.0 / 30.0 };
     if w < 1.0 || h < 1.0 {
@@ -195,21 +210,30 @@ fn meta(asset: &AVURLAsset, kind: Kind) -> Result<Meta, String> {
 /// Whether the asset has a sound track. Blocks until its tracks load.
 #[allow(deprecated)] // As `meta`: the synchronous loader.
 pub(super) fn has_sound(asset: &AVAsset) -> bool {
-    unsafe { AVMediaTypeAudio }.is_some_and(|audio| unsafe { asset.tracksWithMediaType(audio) }.firstObject().is_some())
+    // SAFETY: `AVMediaTypeAudio` is an immutable static AVFoundation string constant.
+    unsafe { AVMediaTypeAudio }.is_some_and(|audio| {
+        // SAFETY: `asset` is a live `AVAsset` and `audio` is the static `AVMediaTypeAudio` constant.
+        unsafe { asset.tracksWithMediaType(audio) }.firstObject().is_some()
+    })
 }
 
 /// How the first video track's buffers turn upright. Blocks until tracks load; free once an
 /// item using the asset is ready to play.
 #[allow(deprecated)]
 pub(super) fn orient(asset: &AVAsset) -> Orient {
+    // SAFETY: `AVMediaTypeVideo` is an immutable static AVFoundation string constant.
     let Some(video) = (unsafe { AVMediaTypeVideo }) else { return Orient::UP };
+    // SAFETY: `asset` is a live `AVAsset` and `video` is the static `AVMediaTypeVideo` constant.
     let Some(track) = unsafe { asset.tracksWithMediaType(video) }.firstObject() else { return Orient::UP };
+    // SAFETY: `track` is a live `AVAssetTrack` retained from `tracksWithMediaType`.
     let t = unsafe { track.preferredTransform() };
     Orient::from_transform(t.a, t.b, t.c, t.d)
 }
 
 pub(super) fn generator(asset: &AVURLAsset, max: Option<f64>) -> Retained<AVAssetImageGenerator> {
+    // SAFETY: `asset` is a live `AVURLAsset`.
     let g = unsafe { AVAssetImageGenerator::assetImageGeneratorWithAsset(asset) };
+    // SAFETY: `g` is a newly created, uniquely owned `AVAssetImageGenerator` not yet decoding.
     unsafe {
         g.setAppliesPreferredTrackTransform(true);
         g.setRequestedTimeToleranceBefore(zero());
@@ -223,6 +247,7 @@ pub(super) fn generator(asset: &AVURLAsset, max: Option<f64>) -> Retained<AVAsse
 
 #[allow(deprecated)] // copyCGImageAtTime is the synchronous form.
 pub(super) fn image(generator: &AVAssetImageGenerator, at: f64) -> Result<ByteFrame, String> {
+    // SAFETY: `generator` is a live `AVAssetImageGenerator` and null `actualTime` is permitted by AVFoundation.
     let image = unsafe { generator.copyCGImageAtTime_actualTime_error(cm(at), std::ptr::null_mut()) }
         .map_err(|e| e.localizedDescription().to_string())?;
     bgra(&image)
@@ -235,8 +260,10 @@ fn bgra(image: &CGImage) -> Result<ByteFrame, String> {
         return Err("decoded an empty frame".into());
     }
     let mut bytes = vec![0u8; w * h * 4];
+    // SAFETY: `kCGColorSpaceSRGB` is an immutable static CoreGraphics color space name constant.
     let space = CGColorSpace::with_name(Some(unsafe { kCGColorSpaceSRGB }));
     let info = CGImageAlphaInfo::PremultipliedFirst.0 | CGImageByteOrderInfo::Order32Little.0;
+    // SAFETY: `bytes` has length `w * h * 4` matching 8 bpc BGRA with stride `w * 4`, and outlives `context`.
     let context = unsafe { CGBitmapContextCreate(bytes.as_mut_ptr().cast(), w, h, 8, w * 4, space.as_deref(), info) }
         .ok_or("CGBitmapContextCreate failed")?;
     CGContext::draw_image(Some(&context), CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(w as f64, h as f64)), Some(image));
@@ -272,6 +299,7 @@ pub(in crate::video) fn decode(native: &mut Native, source: &MediaSource, header
 pub(crate) fn test_frames(source: &MediaSource, at: f64) -> Result<(ByteFrame, ByteFrame, Orient), String> {
     let asset = asset(source, &[])?;
     let raw = generator(&asset, None);
+    // SAFETY: `raw` is a newly created, uniquely owned `AVAssetImageGenerator` not yet decoding.
     unsafe { raw.setAppliesPreferredTrackTransform(false) };
     Ok((image(&generator(&asset, None), at)?, image(&raw, at)?, orient(&asset)))
 }

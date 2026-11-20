@@ -181,16 +181,28 @@ mod dxgi {
         // SAFETY: a DXGI factory and its adapters, asked for their descriptions.
         let factory = unsafe { CreateDXGIFactory1::<IDXGIFactory1>() }.ok()?;
         let hardware: Vec<(IDXGIAdapter1, DXGI_ADAPTER_DESC1)> = (0..)
-            .map_while(|i| unsafe { factory.EnumAdapters1(i) }.ok())
-            .filter_map(|a| unsafe { a.GetDesc1() }.ok().map(|d| (a, d)))
+            .map_while(|i| {
+                // SAFETY: `factory` is a live `IDXGIFactory1`; out-of-range `i` returns `DXGI_ERROR_NOT_FOUND`.
+                unsafe { factory.EnumAdapters1(i) }.ok()
+            })
+            .filter_map(|a| {
+                // SAFETY: `a` is a live `IDXGIAdapter1` returned by `EnumAdapters1`.
+                unsafe { a.GetDesc1() }.ok().map(|d| (a, d))
+            })
             .filter(|(_, d)| d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 == 0)
             .collect();
         let count = hardware.len();
         let by_preference = |preference: DXGI_GPU_PREFERENCE| -> Option<IDXGIAdapter1> {
             let factory6 = factory.cast::<IDXGIFactory6>().ok()?;
-            // SAFETY: as above; the first hardware adapter in DXGI's order for `preference`.
-            (0..).map_while(|i| unsafe { factory6.EnumAdapterByGpuPreference::<IDXGIAdapter1>(i, preference) }.ok())
-                .find(|a| unsafe { a.GetDesc1() }.is_ok_and(|d| d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 == 0))
+            (0..)
+                .map_while(|i| {
+                    // SAFETY: `factory6` is a live `IDXGIFactory6`; out-of-range `i` returns `DXGI_ERROR_NOT_FOUND`.
+                    unsafe { factory6.EnumAdapterByGpuPreference::<IDXGIAdapter1>(i, preference) }.ok()
+                })
+                .find(|a| {
+                    // SAFETY: `a` is a live `IDXGIAdapter1` returned by `EnumAdapterByGpuPreference`.
+                    unsafe { a.GetDesc1() }.is_ok_and(|d| d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 == 0)
+                })
         };
         let name = |d: &DXGI_ADAPTER_DESC1| {
             let len = d.Description.iter().position(|&c| c == 0).unwrap_or(d.Description.len());
@@ -212,9 +224,9 @@ mod dxgi {
         } else {
             (by_preference(DXGI_GPU_PREFERENCE_MINIMUM_POWER).or_else(|| hardware.first().map(|h| h.0.clone()))?, Reason::LowPower)
         };
-        // SAFETY: `adapter` comes from a DXGI factory in this process, as `expose_adapter` asks;
-        // the exposed adapter is handed to the instance it was exposed from.
+        // SAFETY: `adapter` comes from a DXGI factory in this process, as `expose_adapter` asks.
         let exposed = unsafe { hal.expose_adapter(&adapter) }?;
+        // SAFETY: `exposed` was exposed from this same DX12 `instance`'s HAL.
         let adapter = unsafe { instance.create_adapter_from_hal(exposed) };
         if surface.is_some_and(|s| !adapter.is_surface_supported(s)) {
             return None;
@@ -265,6 +277,7 @@ fn display_devices() -> Vec<(u32, u32)> {
     use windows_sys::Win32::Graphics::Gdi::{DISPLAY_DEVICE_ATTACHED_TO_DESKTOP, DISPLAY_DEVICE_PRIMARY_DEVICE, DISPLAY_DEVICEW, EnumDisplayDevicesW};
     let mut found = Vec::new();
     for index in 0.. {
+        // SAFETY: `DISPLAY_DEVICEW` is a plain Win32 C struct where all-zero bytes are valid.
         let mut device = DISPLAY_DEVICEW { cb: std::mem::size_of::<DISPLAY_DEVICEW>() as u32, ..unsafe { std::mem::zeroed() } };
         // SAFETY: `device` is a DISPLAY_DEVICEW with `cb` set, as the call requires.
         if unsafe { EnumDisplayDevicesW(std::ptr::null(), index, &mut device, 0) } == 0 { break; }

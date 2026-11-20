@@ -48,7 +48,7 @@ pub(crate) struct Native {
 pub(super) type Decoded = Arc<std::sync::OnceLock<Result<Option<super::foreign::Wav>, String>>>;
 #[cfg(not(feature = "ogg-audio"))]
 pub(super) type Decoded = ();
-// The generator is only used under the Shared mutex. Player objects are created, used and
+// SAFETY: the generator is only used under the Shared mutex. Player objects are created, used and
 // released on the main thread: pulls and audio ticks run there and `Player`'s drop hops to it.
 unsafe impl Send for Native {}
 
@@ -83,15 +83,18 @@ impl Drop for Player {
     fn drop(&mut self) {
         let Some(objects) = self.objects.take() else { return };
         if MainThreadMarker::new().is_some() {
+            // SAFETY: on the main thread (checked above) and `objects.player` is a live `AVPlayer`.
             unsafe { objects.player.pause() };
             return;
         }
         // The last handle went away on another thread: release on the main queue.
         struct Release(Objects);
+        // SAFETY: `Release` only transfers `Objects` into `on_main` so `AVPlayer` is paused and dropped on the main thread.
         unsafe impl Send for Release {}
         let release = Release(objects);
         on_main(move || {
             let release = release; // Whole, so the closure is Send.
+            // SAFETY: dispatched onto the main queue where `AVPlayer` is owned, and `release.0.player` is live.
             unsafe { release.0.player.pause() };
         });
     }
@@ -261,6 +264,7 @@ pub(super) fn live_time(shared: &Shared, live: bool) -> Option<f64> {
     }
     let native = shared.native.try_lock().ok()?;
     let p = native.player.as_ref()?;
+    // SAFETY: on the main thread (checked above) under `shared.native` lock; `player` is a live `AVPlayer`.
     let time = asset::seconds(unsafe { p.objects.as_ref()?.player.currentTime() });
     let c = shared.ctl.lock().unwrap();
     c.playing().then(|| c.duration.map_or(time, |d| time.clamp(0.0, d)))

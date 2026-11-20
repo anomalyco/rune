@@ -8,9 +8,10 @@ use std::ptr::{NonNull, null_mut};
 /// A retained, immutable CVPixelBuffer, normally supplied by VideoToolbox's output callback.
 #[derive(Clone)]
 pub struct PixelBuffer(CFRetained<CVPixelBuffer>);
-// CoreVideo retain/release and read-only buffer access are thread safe. Construction requires
+// SAFETY: CoreVideo retain/release and read-only buffer access are thread-safe. Construction requires
 // the caller to prohibit mutations, including through aliases, until the last owner is released.
 unsafe impl Send for PixelBuffer {}
+// SAFETY: CoreVideo retain/release and read-only pixel/attachment access are thread-safe while immutable.
 unsafe impl Sync for PixelBuffer {}
 impl PixelBuffer {
     /// Retain a borrowed CVPixelBufferRef (does not consume the caller's retain).
@@ -20,6 +21,7 @@ impl PixelBuffer {
     /// and attachments must not be modified until every clone and GPU use has been released.
     pub unsafe fn from_raw(raw: *mut std::ffi::c_void) -> Result<Self, String> {
         let ptr = NonNull::new(raw.cast::<CVPixelBuffer>()).ok_or("null CVPixelBuffer")?;
+        // SAFETY: caller guarantees `raw` is a live, immutable `CVPixelBufferRef`; `retain` takes an owned reference.
         Ok(Self(unsafe { CFRetained::retain(ptr) }))
     }
     /// Wrap an IOSurface without copying. The new CVPixelBuffer retains the surface.
@@ -33,15 +35,18 @@ impl PixelBuffer {
         }
         let mut out = null_mut();
         check(
+            // SAFETY: caller guarantees `raw` is a non-null live `IOSurfaceRef`, and `out` is a valid out-pointer.
             unsafe { CVPixelBufferCreateWithIOSurface(None, &*raw.cast(), None, NonNull::from(&mut out)) },
             "CVPixelBufferCreateWithIOSurface",
         )?;
+        // SAFETY: `CVPixelBufferCreateWithIOSurface` succeeded and transferred ownership of a retained `CVPixelBuffer` in `out`.
         let buffer = Self(unsafe { CFRetained::from_raw(NonNull::new(out).ok_or("null pixel buffer")?) });
         buffer.set_color(color);
         buffer.info()?;
         Ok(buffer)
     }
     fn set_color(&self, color: ColorInfo) {
+        // SAFETY: `self.0` is a live owned `CVPixelBuffer` and the CoreVideo attachment keys and values are static `CFString` constants.
         unsafe {
             self.0.set_attachment(
                 kCVImageBufferYCbCrMatrixKey,
@@ -83,6 +88,7 @@ impl PixelBuffer {
         }
         // An absent matrix follows the common SD/HD convention; explicit unsupported colour
         // metadata is rejected instead of silently treating HDR/2020 as SDR/709.
+        // SAFETY: `b` is a live `CVPixelBuffer` and `kCVImageBufferYCbCrMatrixKey` is a static `CFString` constant.
         let matrix = unsafe { b.attachment(kCVImageBufferYCbCrMatrixKey, null_mut()) };
         let matrix = match matrix {
             None => {
@@ -92,10 +98,13 @@ impl PixelBuffer {
                     Matrix::Bt709
                 }
             }
+            // SAFETY: `kCVImageBufferYCbCrMatrix_ITU_R_601_4` is an immutable static `CFString` constant.
             Some(v) if unsafe { cf_equal(&v, kCVImageBufferYCbCrMatrix_ITU_R_601_4) } => Matrix::Bt601,
+            // SAFETY: `kCVImageBufferYCbCrMatrix_ITU_R_709_2` is an immutable static `CFString` constant.
             Some(v) if unsafe { cf_equal(&v, kCVImageBufferYCbCrMatrix_ITU_R_709_2) } => Matrix::Bt709,
             _ => return Err("unsupported YCbCr matrix; use BT.601 or BT.709".into()),
         };
+        // SAFETY: `b` is a live `CVPixelBuffer` and `kCVImageBufferTransferFunctionKey` is a static `CFString` constant.
         let transfer = unsafe { b.attachment(kCVImageBufferTransferFunctionKey, null_mut()) };
         let transfer = match transfer {
             None => {
@@ -105,7 +114,9 @@ impl PixelBuffer {
                     Transfer::Bt709
                 }
             }
+            // SAFETY: `kCVImageBufferTransferFunction_sRGB` is an immutable static `CFString` constant.
             Some(v) if unsafe { cf_equal(&v, kCVImageBufferTransferFunction_sRGB) } => Transfer::Srgb,
+            // SAFETY: `kCVImageBufferTransferFunction_ITU_R_709_2` is an immutable static `CFString` constant.
             Some(v) if unsafe { cf_equal(&v, kCVImageBufferTransferFunction_ITU_R_709_2) } => Transfer::Bt709,
             _ => return Err("unsupported transfer function; use sRGB or BT.709 (HDR is not supported)".into()),
         };
@@ -130,6 +141,7 @@ impl PixelBuffer {
             return Err("invalid plane length".into());
         }
         let empty = CFDictionary::<CFString, CFType>::from_slices(&[], &[]);
+        // SAFETY: `kCVPixelBufferIOSurfacePropertiesKey` and `kCVPixelBufferMetalCompatibilityKey` are immutable static `CFString` constants.
         let attrs = unsafe {
             CFDictionary::<CFString, CFType>::from_slices(
                 &[kCVPixelBufferIOSurfacePropertiesKey, kCVPixelBufferMetalCompatibilityKey],
@@ -142,10 +154,13 @@ impl PixelBuffer {
             Format::Nv12Full => kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
         };
         let mut raw = null_mut();
-        let status =
-            unsafe { CVPixelBufferCreate(None, w, h, format, Some(attrs.as_opaque()), NonNull::from(&mut raw)) };
+        // SAFETY: `w`, `h`, and `attrs` are valid, and `raw` is a valid aligned out-pointer.
+        let status = unsafe { CVPixelBufferCreate(None, w, h, format, Some(attrs.as_opaque()), NonNull::from(&mut raw)) };
         check(status, "CVPixelBufferCreate")?;
+        // SAFETY: `CVPixelBufferCreate` returned 0 and transferred ownership of a retained `CVPixelBuffer` in `raw`.
         let buffer = Self(unsafe { CFRetained::from_raw(NonNull::new(raw).ok_or("null created pixel buffer")?) });
+        // SAFETY: `buffer` is uniquely owned and locked for CPU writes; `frame.planes` lengths match `w`/`h` (checked above)
+        // and each row fits within the plane's stride.
         unsafe {
             check(CVPixelBufferLockBaseAddress(&buffer.0, CVPixelBufferLockFlags(0)), "lock synthetic buffer")?;
             for plane in 0..if nv12 { 2 } else { 1 } {
@@ -192,7 +207,9 @@ struct PlaneOwner {
     #[cfg(test)]
     live_planes: Arc<std::sync::atomic::AtomicUsize>,
 }
+// SAFETY: `CVMetalTexture` and `PixelBuffer` retain/release are thread-safe and the backing pixels are immutable.
 unsafe impl Send for PlaneOwner {}
+// SAFETY: `PlaneOwner` holds only immutable CoreVideo handles and an atomic counter.
 unsafe impl Sync for PlaneOwner {}
 impl Drop for PlaneOwner {
     fn drop(&mut self) {
@@ -204,8 +221,10 @@ impl Importer {
     pub fn new(device: &wgpu::Device) -> Result<Self, String> {
         let mut raw = null_mut();
         let mut create = |metal: &objc2::runtime::ProtocolObject<dyn objc2_metal::MTLDevice>| {
+            // SAFETY: `metal` is a live `MTLDevice` and `raw` is a valid out-pointer.
             check(unsafe { CVMetalTextureCache::create(None, None, metal, None, NonNull::from(&mut raw)) }, "CVMetalTextureCacheCreate")
         };
+        // SAFETY: only borrows the underlying `MTLDevice` to create the `CVMetalTextureCache`; no HAL state is mutated.
         let native = if let Some(metal) = unsafe { device.as_hal::<wgpu::hal::api::Metal>() } {
             create(metal.raw_device())?;
             false
@@ -222,8 +241,10 @@ impl Importer {
                 true
             }
         };
+        // SAFETY: `CVMetalTextureCache::create` returned 0 and transferred ownership of a retained `CVMetalTextureCache` in `raw`.
+        let cache = unsafe { CFRetained::from_raw(NonNull::new(raw).ok_or("null texture cache")?) };
         Ok(Self {
-            cache: unsafe { CFRetained::from_raw(NonNull::new(raw).ok_or("null texture cache")?) },
+            cache,
             device: device.clone(),
             native,
             #[cfg(test)]
@@ -237,6 +258,7 @@ impl Importer {
         let plane = |index: usize, width: u32, height: u32, metal_format, format| -> Result<wgpu::Texture, String> {
             let mut raw = null_mut();
             check(
+                // SAFETY: `self.cache` and `buffer.0` are live, `width`/`height`/`index` match `buffer.info()`, and `raw` is a valid out-pointer.
                 unsafe {
                     CVMetalTextureCache::create_texture_from_image(
                         None,
@@ -252,6 +274,7 @@ impl Importer {
                 },
                 "CVMetalTextureCacheCreateTextureFromImage (buffer must be IOSurface-backed)",
             )?;
+            // SAFETY: `create_texture_from_image` returned 0 and transferred ownership of a retained `CVMetalTexture` in `raw`.
             let cv = unsafe { CFRetained::from_raw(NonNull::new(raw).ok_or("null CVMetalTexture")?) };
             let texture = CVMetalTextureGetTexture(&cv).ok_or("null MTLTexture")?;
             let owner = PlaneOwner {
@@ -267,6 +290,8 @@ impl Importer {
             if self.native {
                 return Ok(rune_gpu::metal::texture_from_raw(texture, &desc, std::sync::Arc::new(owner)));
             }
+            // SAFETY: `texture` comes from this Metal device's `CVMetalTextureCache` with matching format/dimensions,
+            // and `owner` keeps the `CVMetalTexture` and `PixelBuffer` alive until dropped.
             let hal = unsafe {
                 wgpu::hal::metal::Device::texture_from_raw(
                     texture,
@@ -278,7 +303,7 @@ impl Importer {
                     Some(Box::new(move || drop(owner))),
                 )
             };
-            // The raw texture comes from this device's CV cache and exactly matches this descriptor.
+            // SAFETY: the raw texture comes from this device's CV cache and exactly matches `desc`.
             Ok(unsafe {
                 self.device.create_texture_from_hal::<wgpu::hal::api::Metal>(hal, &desc, wgpu::TextureUses::RESOURCE)
             })
