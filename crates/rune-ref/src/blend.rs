@@ -25,7 +25,7 @@ pub fn composite(mode: Separable, src: [f32; 4], dst: [f32; 4]) -> [f32; 4] {
                 let d = if b <= 0.25 {
                     ((16.0 * b - 12.0) * b + 4.0) * b
                 } else {
-                    libm::sqrtf(b)
+                    libm::sqrtf(b.max(0.0))
                 };
                 b + (2.0 * s - 1.0) * (d - b)
             }

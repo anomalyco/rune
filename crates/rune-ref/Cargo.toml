@@ -39,6 +39,9 @@ name = "differential"
 name = "fx_blend"
 
 [[test]]
+name = "parity"
+
+[[test]]
 name = "reference"
 
 [lints]
