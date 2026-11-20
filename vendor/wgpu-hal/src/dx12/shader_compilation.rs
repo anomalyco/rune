@@ -167,7 +167,7 @@ impl FxcLib {
 
     fn new_dynamic() -> Result<Self, GetContainerError> {
         unsafe {
-            let lib = crate::dx12::DynLib::new(Self::PATH)
+            let lib = crate::dx12::DynLib::new_system(Self::PATH)
                 .map_err(|e| GetContainerError::FailedToLoad(FxcLib::PATH, e))?;
             let d3dcompile_fn: D3DCompileFn = *lib.get::<D3DCompileFn>(c"D3DCompile".to_bytes())?;
 

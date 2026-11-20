@@ -9,7 +9,9 @@ use crate::utils::Lazy;
 use windows_sys::core::{HRESULT, PCWSTR};
 use windows_sys::Win32::Foundation::{BOOL, HANDLE, HMODULE, HWND, POINT, RECT};
 use windows_sys::Win32::Graphics::Gdi::{ClientToScreen, HMONITOR};
-use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryA};
+use windows_sys::Win32::System::LibraryLoader::{
+    GetProcAddress, LoadLibraryExA, LOAD_LIBRARY_SEARCH_SYSTEM32,
+};
 use windows_sys::Win32::System::SystemServices::IMAGE_DOS_HEADER;
 use windows_sys::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT, MONITOR_DPI_TYPE, PROCESS_DPI_AWARENESS,
@@ -195,7 +197,8 @@ pub(super) fn get_function_impl(library: &str, function: &str) -> Option<*const 
     assert_eq!(function.chars().last(), Some('\0'));
 
     // Library names we will use are ASCII so we can use the A version to avoid string conversion.
-    let module = unsafe { LoadLibraryA(library.as_ptr()) };
+    // Rune: load Windows system DLLs from System32 only, not the app directory or CWD.
+    let module = unsafe { LoadLibraryExA(library.as_ptr(), 0, LOAD_LIBRARY_SEARCH_SYSTEM32) };
     if module == 0 {
         return None;
     }
