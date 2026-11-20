@@ -70,7 +70,14 @@ fn frames(device: &wgpu::Device, queue: &wgpu::Queue) -> Vec<Vec<u16>> {
 fn simulated_fire_matches_wgpus_frame_for_frame() {
     let gpu = Gpu::headless();
     let got = frames(&gpu.device, &gpu.queue);
-    let wgpu = Gpu::new(wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle()), None);
+    let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+    if cfg!(target_os = "windows") {
+        // Match Gpu::headless()'s DX12 + FXC configuration; FXC and DXC round differently across
+        // the 72-step warmup, and wgpu's default descriptor also loads Vulkan/dxcompiler.dll.
+        desc.backends = wgpu::Backends::DX12;
+        desc.backend_options.dx12.shader_compiler = wgpu::Dx12Compiler::Fxc;
+    }
+    let wgpu = Gpu::new(wgpu::Instance::new(desc), None);
     let want = frames(&wgpu.device, &wgpu.queue);
     for (n, (got, want)) in got.iter().zip(&want).enumerate() {
         assert!(got.iter().all(|w| w & 0x7c00 != 0x7c00), "frame {n} is finite");

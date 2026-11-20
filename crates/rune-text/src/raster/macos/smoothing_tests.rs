@@ -247,6 +247,8 @@ fn masks_match_coregraphics_within_three_levels() {
 #[test]
 fn text_system_keys_glyphs_by_ink() {
     let mut ts = crate::TextSystem::default();
+    // Select the CoreGraphics rasterizer; off macOS the default is WindfoilChromium.
+    ts.set_font_smoothing(crate::FontSmoothing::On);
     ts.set_apple_pipeline(ApplePipeline::SMOOTHED);
     let style = rune_core::tok::TextStyle::new(16.0, 400.0);
     let mut dark = Vec::new();
@@ -267,6 +269,8 @@ fn text_system_keys_glyphs_by_ink() {
 #[test]
 fn pipelines_never_share_masks() {
     let mut ts = crate::TextSystem::default();
+    // Select the CoreGraphics rasterizer; off macOS the default is WindfoilChromium.
+    ts.set_font_smoothing(crate::FontSmoothing::On);
     let style = rune_core::tok::TextStyle::new(16.0, 400.0);
     let mut seen = Vec::new();
     for pipeline in [ApplePipeline::SMOOTHED, ApplePipeline::UNSMOOTHED, ApplePipeline { flatten: false, ..ApplePipeline::UNSMOOTHED }] {

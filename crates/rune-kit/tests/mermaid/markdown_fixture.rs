@@ -146,6 +146,7 @@ fn check_ext(name: &str, ext: &str, actual: String) {
         return;
     }
     let want = std::fs::read_to_string(&golden).unwrap_or_else(|_| panic!("missing golden {name}; run with RUNE_BLESS=1"));
+    let want = want.replace("\r\n", "\n");
     if want != actual {
         let fresh = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}.{ext}"));
         std::fs::write(&fresh, &actual).unwrap();
