@@ -120,8 +120,9 @@ fn push_usize(buf: &mut String, mut n: usize) {
         digits[i] = b'0' + (n % 10) as u8;
         n /= 10;
     }
-    // SAFETY: `digits[i..]` contains ASCII `'0'..='9'`.
-    buf.push_str(unsafe { std::str::from_utf8_unchecked(&digits[i..]) });
+    if let Ok(s) = std::str::from_utf8(&digits[i..]) {
+        buf.push_str(s);
+    }
 }
 
 fn push_segment(path: &mut String, key: Option<&str>, index: usize) {

@@ -81,10 +81,10 @@ impl RuntimeCore {
             let reads = self.commit.layout_seen.reads.clone();
             let caret_read = self.edit.caret_watch;
             let selection = self.selection_by_path();
-            let mut m = self.measurement(app, true);
+            let (mut m, text) = self.measurement(app, true);
             m.layout_reads = reads;
             m.caret_read = caret_read;
-            return match m.relayout() {
+            return match m.relayout(text) {
                 Some(measured) => Measured { selection, ..measured },
                 None => {
                     self.refresh_layout_seen();
@@ -98,10 +98,10 @@ impl RuntimeCore {
             let reads = self.commit.layout_seen.reads.clone();
             let caret_read = self.edit.caret_watch;
             let selection = self.selection_by_path();
-            let mut m = self.measurement(app, true);
+            let (mut m, text) = self.measurement(app, true);
             m.layout_reads = reads;
             m.caret_read = caret_read;
-            return match m.remount_virtuals() {
+            return match m.remount_virtuals(text) {
                 commit::remount::RemountOutcome::Measured(measured) => Measured { selection, ..measured },
                 commit::remount::RemountOutcome::Retry => {
                     self.refresh_layout_seen();
@@ -121,7 +121,7 @@ impl RuntimeCore {
 impl Measurement<'_> {
     /// Lays the last commit's nodes out again at the viewport, in its layout tree. None when a
     /// virtual list's window has to move, which only the view can build.
-    fn relayout(mut self) -> Option<Measured> {
+    fn relayout(mut self, text: &mut TextSystem) -> Option<Measured> {
         self.anchor_virtuals();
         let len = self.nodes.len();
         let mut taffy = std::mem::replace(self.layout, LayoutEngine::with_capacity(0));
@@ -162,7 +162,7 @@ impl Measurement<'_> {
                 std::iter::successors(n.parent, |&p| nodes[p].parent).map(|p| nodes[p].taffy),
             );
         }
-        let (layout, mut nodes) = self.solve(taffy, root, nodes);
+        let (layout, mut nodes) = self.solve(text, taffy, root, nodes);
         if self.measure_virtuals(&nodes, false) || self.windows_move() {
             memo_reuse::restore_moved_nodes(self.nodes, &mut nodes, &reused, &[]);
             reused.clear();
@@ -228,7 +228,7 @@ impl Measurement<'_> {
     }
 
     /// Lays `nodes` out from `root_id` at the viewport, places them, and lays out their text.
-    pub(in crate::runtime) fn solve(&mut self, mut taffy: LayoutEngine, root_id: SlotId, mut nodes: Vec<Node>) -> (LayoutEngine, Vec<Node>) {
+    pub(in crate::runtime) fn solve(&mut self, text: &mut TextSystem, mut taffy: LayoutEngine, root_id: SlotId, mut nodes: Vec<Node>) -> (LayoutEngine, Vec<Node>) {
         let scale = self.env.scale;
         let room = Size {
             width: AvailableSpace::Definite(self.viewport.0),
@@ -236,7 +236,7 @@ impl Measurement<'_> {
         };
         {
             let _layout_time = crate::frame::profile::Scope::new(crate::frame::profile::Phase::Layout);
-            compute_layout(&mut taffy, root_id, room, &nodes, &mut self.text, scale);
+            compute_layout(&mut taffy, root_id, room, &nodes, text, scale);
             // `aspect_fit` elements laid out filling their room; fix each at the largest box
             // at its ratio inside it and lay out again, so siblings and alignment follow.
             let mut refit = false;
@@ -251,7 +251,7 @@ impl Measurement<'_> {
                     refit = true;
                 }
             }
-            if refit { compute_layout(&mut taffy, root_id, room, &nodes, &mut self.text, scale); }
+            if refit { compute_layout(&mut taffy, root_id, room, &nodes, text, scale); }
         }
         self.stats.layout_nodes = nodes.len();
         #[cfg(debug_assertions)]
@@ -259,12 +259,12 @@ impl Measurement<'_> {
 
         self.place(&taffy, &mut nodes);
         if self.fit_anchored(&mut taffy, &nodes) {
-            compute_layout(&mut taffy, root_id, room, &nodes, &mut self.text, scale);
+            compute_layout(&mut taffy, root_id, room, &nodes, text, scale);
             self.place(&taffy, &mut nodes);
         }
         for n in nodes.iter_mut().filter(|n| n.text.is_some()) {
             let w = (taffy.box_layout(n.taffy).w - n.inset[0] - n.inset[2]).max(0.0);
-            lay_out_text(&mut self.text, n, w, scale);
+            lay_out_text(text, n, w, scale);
         }
 
         (taffy, nodes)

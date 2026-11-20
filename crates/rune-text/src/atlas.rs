@@ -290,6 +290,11 @@ impl Atlas {
 
     #[doc(hidden)]
     pub fn new() -> Self {
+        Atlas { outlines: Default::default(), ..Self::empty() }
+    }
+
+    /// An unallocated placeholder atlas, for [`TextSystem::empty`].
+    pub(crate) fn empty() -> Self {
         Atlas {
             // Made with the first mask (`alloc`).
             data: Vec::new(),
@@ -305,7 +310,7 @@ impl Atlas {
             lcd_wanted: false,
             fills: Vec::new(),
             icons: HashMap::new(),
-            outlines: Default::default(),
+            outlines: super::outline::OutlineStore::empty(),
         }
     }
 

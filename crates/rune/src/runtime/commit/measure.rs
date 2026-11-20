@@ -34,7 +34,8 @@ impl RuntimeCore {
         let _blend = crate::theme::scope(self.paint.srgb_blend());
         let _bars = crate::platform::scroll_bars::scope(self.host.scroll_bars.state, self.host.scroll_bars.runtime_id);
         let selection = self.selection_by_path();
-        Measured { selection, ..self.measurement(app, true).finish_from(tx, 1) }
+        let (m, text) = self.measurement(app, true);
+        Measured { selection, ..m.finish_from(text, tx, 1) }
     }
 
     /// `committing` when the result is applied, so the last commit's text layouts can go.
@@ -42,12 +43,13 @@ impl RuntimeCore {
         let _blend = crate::theme::scope(self.paint.srgb_blend());
         let _bars = crate::platform::scroll_bars::scope(self.host.scroll_bars.state, self.host.scroll_bars.runtime_id);
         let selection = self.selection_by_path();
-        Measured { selection, ..self.measurement(app, committing).finish(tx) }
+        let (m, text) = self.measurement(app, committing);
+        Measured { selection, ..m.finish(text, tx) }
     }
 
-    pub(in crate::runtime) fn measurement<'a>(&'a mut self, app: &'a dyn ViewDriver, committing: bool) -> Measurement<'a> {
+    pub(in crate::runtime) fn measurement<'a>(&'a mut self, app: &'a dyn ViewDriver, committing: bool) -> (Measurement<'a>, &'a mut TextSystem) {
         let hold_windows = self.checking_live_only();
-        Measurement {
+        let m = Measurement {
             app,
             env: self.env,
             viewport: self.viewport,
@@ -74,7 +76,6 @@ impl RuntimeCore {
             nodes: &mut self.tree.nodes,
             committing,
             spare_nodes: &mut self.tree.spare_nodes,
-            text: &mut self.text,
             layout: &mut self.commit.layout,
             node_index: &mut self.tree.node_index,
             path_ids: &mut self.tree.path_ids,
@@ -92,7 +93,8 @@ impl RuntimeCore {
             hold_windows,
             windowed: HashMap::default(),
             kept_lists: Vec::new(),
-        }
+        };
+        (m, &mut self.text)
     }
 }
 
@@ -185,11 +187,11 @@ impl Measurement<'_> {
         [self.titlebar_inset.to_bits(), leading, trailing, height]
     }
 
-    pub(in crate::runtime) fn finish(self, tx: &Tx) -> Measured {
-        self.finish_from(tx, 0)
+    pub(in crate::runtime) fn finish(self, text: &mut TextSystem, tx: &Tx) -> Measured {
+        self.finish_from(text, tx, 0)
     }
 
-    pub(in crate::runtime) fn finish_from(mut self, tx: &Tx, mut passes: usize) -> Measured {
+    pub(in crate::runtime) fn finish_from(mut self, text: &mut TextSystem, tx: &Tx, mut passes: usize) -> Measured {
         let (layout, nodes, memo_pending, memo_reused, taken_paths) = loop {
             passes += 1;
             self.pass = Pass::of(passes);
@@ -198,7 +200,7 @@ impl Measurement<'_> {
             self.windowed.clear();
             // Degenerate zero-height runs fall back to a full measurement instead of
             // an unbounded retry loop. Normal transcripts need one pass.
-            let (layout, mut nodes, pending, mut reused, mut taken) = self.measure_view(tx, self.pass.forced());
+            let (layout, mut nodes, pending, mut reused, mut taken) = self.measure_view(text, tx, self.pass.forced());
             if !self.measure_virtuals(&nodes, tx.commit.lands()) { break (layout, nodes, pending, reused, taken); }
             memo_reuse::restore_moved_nodes(self.nodes, &mut nodes, &reused, &taken);
             nodes.clear();
@@ -445,7 +447,7 @@ impl Measurement<'_> {
         self.kept_lists.extend(quiet);
         true
     }
-    fn measure_view(&mut self, tx: &Tx, force_all: bool) -> (LayoutEngine, Vec<Node>, Vec<memo_reuse::PendingFlat>, Vec<memo_reuse::ReusedSpan>, Vec<(u32, u32)>) {
+    fn measure_view(&mut self, text: &mut TextSystem, tx: &Tx, force_all: bool) -> (LayoutEngine, Vec<Node>, Vec<memo_reuse::PendingFlat>, Vec<memo_reuse::ReusedSpan>, Vec<(u32, u32)>) {
         let scale = self.env.scale;
         let fresh_cx = |this: &Self| cx::CxCore {
             env: this.env,
@@ -473,10 +475,8 @@ impl Measurement<'_> {
         let memo = crate::memo::enter(std::mem::take(self.memo), self.env, self.system_accent, self.system_reduced_motion, crate::theme::blends_srgb(), self.chrome_bits(), cx.caret.clone(), cx.layout.clone());
         let view_time = crate::frame::profile::Scope::new(crate::frame::profile::Phase::View);
         // The view and the rows it builds measure text with the window's own text system.
-        let text: *mut TextSystem = &mut *self.text;
         #[cfg(not(feature = "hot"))]
-        // SAFETY: nothing here uses `self.text` until `lend` returns.
-        let (mut root, cx) = crate::text::lend(unsafe { &mut *text }, || {
+        let (mut root, cx) = crate::text::lend(&mut *text, || {
             let (root, cx) = self.root_view(cx);
             (self.build_tree(root, tx, force_all), cx)
         });
@@ -484,8 +484,7 @@ impl Measurement<'_> {
         // falls back like one in the view.
         #[cfg(feature = "hot")]
         let (mut root, cx, memo) = {
-            // SAFETY: as above.
-            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| crate::text::lend(unsafe { &mut *text }, || {
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| crate::text::lend(&mut *text, || {
                 let (root, cx) = self.root_view(cx);
                 (self.build_tree(root, tx, force_all), cx)
             }))) {
@@ -563,9 +562,9 @@ impl Measurement<'_> {
                 n.virtual_mount = quiet;
             }
         }
-        if self.committing { release_kept_layouts(self.nodes, &mut nodes, &taffy, self.text, &reused); }
+        if self.committing { release_kept_layouts(self.nodes, &mut nodes, &taffy, text, &reused); }
         taffy.finish_flatten();
-        let (taffy, nodes) = self.solve(taffy, root_id, nodes);
+        let (taffy, nodes) = self.solve(text, taffy, root_id, nodes);
         (taffy, nodes, pending, reused, taken_paths)
     }
 
