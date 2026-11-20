@@ -12,8 +12,8 @@ impl timer_wake::FrameState {
     }
 
     /// After a frame built its instances.
+    #[cfg(debug_assertions)]
     #[inline(always)]
-    #[cfg_attr(not(debug_assertions), allow(unused_variables))]
     #[allow(clippy::too_many_arguments)]
     pub(in crate::runtime) fn idle_frame_ends(
         &mut self,
@@ -29,18 +29,15 @@ impl timer_wake::FrameState {
         opaque: bool,
         title: Option<&str>,
     ) {
-        #[cfg(debug_assertions)]
-        {
-            use std::hash::{Hash, Hasher};
-            let mut key = std::collections::hash_map::DefaultHasher::new();
-            (clear.map(f32::to_bits), viewport.0.to_bits(), viewport.1.to_bits(), scale.to_bits()).hash(&mut key);
-            (srgb_blend, transparent, image_copies).hash(&mut key);
-            let drawn = crate::tooling::perf_warn::Drawn {
-                instances: bytemuck::cast_slice(instances),
-                key: key.finish(),
-                opaque,
-            };
-            self.idle_meter.ends(clock, animating, drawn, || title.map(str::to_owned));
-        }
+        use std::hash::{Hash, Hasher};
+        let mut key = std::collections::hash_map::DefaultHasher::new();
+        (clear.map(f32::to_bits), viewport.0.to_bits(), viewport.1.to_bits(), scale.to_bits()).hash(&mut key);
+        (srgb_blend, transparent, image_copies).hash(&mut key);
+        let drawn = crate::tooling::perf_warn::Drawn {
+            instances: bytemuck::cast_slice(instances),
+            key: key.finish(),
+            opaque,
+        };
+        self.idle_meter.ends(clock, animating, drawn, || title.map(str::to_owned));
     }
 }

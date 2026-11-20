@@ -418,10 +418,13 @@ impl RuntimeCore {
         if self.time_scale <= 0.0 { self.motion.set_anim_sources(0); }
         if filling { self.motion.add_anim_sources(AnimSource::VIRTUAL_FILL); }
         self.animating = (animating && self.time_scale > 0.0) || filling;
-        let clear = self.clear_color();
-        let opaque = !self.surfaces.is_empty() || !self.paint.materials().is_empty() || self.paint.videos_active();
-        let title = self.host.window_title.current();
-        self.frame.idle_frame_ends(self.clock, self.animating, clear, self.viewport, self.env.scale, self.paint.srgb_blend(), self.transparent, self.images.copies, &self.instances, opaque, title);
+        #[cfg(debug_assertions)]
+        {
+            let clear = self.clear_color();
+            let opaque = !self.surfaces.is_empty() || !self.paint.materials().is_empty() || self.paint.videos_active();
+            let title = self.host.window_title.current();
+            self.frame.idle_frame_ends(self.clock, self.animating, clear, self.viewport, self.env.scale, self.paint.srgb_blend(), self.transparent, self.images.copies, &self.instances, opaque, title);
+        }
         self.interaction_built();
         if !open_urls.is_empty() { self.open_urls(open_urls); }
         self.animating
