@@ -184,6 +184,7 @@ impl RuntimeCore {
                     || self.sticky_of(i).is_some()
                     || n.above.is_some()
                     || (!self.reduced_motion && self.motion.loop_active(n.id, store.node_time(n.id)))
+                    || (!self.reduced_motion && n.vis.icon.is_some_and(|(ic, _)| self.text.is_animated_icon(ic)))
                     || self.motion.grows.get(&n.id).is_some_and(|g| g.moving())
                     || self.scroll.scrolls.get(&n.id).is_some_and(|st| st.slack.height() > 0.0)
                     || self.motion.reveal_fading(n.id)

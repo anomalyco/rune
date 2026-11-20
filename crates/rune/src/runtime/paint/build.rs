@@ -40,6 +40,7 @@ impl RuntimeCore {
         self.motion.reset_loops_active();
         self.paint.scale_frame = None;
         self.paint.videos_active = false;
+        self.paint.animated_icons = false;
         let now = crate::time::now();
         let video_clock = match self.wall_start {
             None => crate::video::Clock::Virtual(self.clock),

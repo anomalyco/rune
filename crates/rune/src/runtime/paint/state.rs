@@ -19,6 +19,8 @@ pub(crate) struct PaintState {
     pub(super) native_materials: bool,
     /// A drawn video is playing or seeking: keep drawing frames.
     pub(super) videos_active: bool,
+    /// A drawn animated SVG icon is advancing: keep drawing frames.
+    pub(super) animated_icons: bool,
     /// Frame requested by scale settling or pixel snapping in the last paint.
     pub(super) scale_frame: Option<AnotherFrame>,
     /// Per node index this frame: presented row top dy, row height override, and bottom feather mask.
@@ -85,6 +87,7 @@ impl PaintState {
             srgb_blend: false,
             native_materials: false,
             videos_active: false,
+            animated_icons: false,
             scale_frame: None,
             row_dy: Vec::new(),
             row_h: Vec::new(),
@@ -145,6 +148,11 @@ impl PaintState {
     #[inline]
     pub(in crate::runtime) fn videos_active(&self) -> bool {
         self.videos_active
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn animated_icons(&self) -> bool {
+        self.animated_icons
     }
 
     #[inline]

@@ -187,7 +187,32 @@ impl RuntimeCore {
             // the sub-pixel path below.
             let resting = cover.is_none() && scale_motion == ScaleMotion::Still && !gliding && turn == 0.0 && (sc - 1.0).abs() < 1e-5;
             let exact = w_exact.min(h_exact);
-            if resting && exact > 1e-4 && !self.text.is_color_icon(ic) {
+            if !self.reduced_motion && drawn > 1e-4 && self.text.is_animated_icon(ic) {
+                let (canvas, scale_side, at, draw_side) = if resting && exact > 1e-4 {
+                    let canvas = (exact - 1.0 / 64.0).ceil().max(1.0) as u32;
+                    let at = [on_grid(r_exact[0] + (w_exact - exact) * 0.5, contain[0]), on_grid(r_exact[1] + (h_exact - exact) * 0.5, contain[1])];
+                    (canvas, exact, at, canvas as f32)
+                } else {
+                    (px, drawn, pos, drawn)
+                };
+                if let Some((pixels, active)) = self.text.animated_icon(ic, (canvas, scale_side), color, n.vis.icon_one_color, facing, self.t) {
+                    if active {
+                        self.paint.animated_icons = true;
+                    }
+                    if let Some(image) = self.images.place(pixels, [draw_side, draw_side]) {
+                        self.instances.push(Instance {
+                            rect: [at[0], at[1], draw_side, draw_side],
+                            radii: [0.0; 4],
+                            fill: [0.0, 0.0, 0.0, premul(color, o, srgb)[3]],
+                            border: [0.0; 4],
+                            params: [image.page as f32, KIND_IMAGE, image.premultiplied as u8 as f32, 1.0],
+                            uv: image.rect.map(|v| v as f32),
+                            clip,
+                            fade: crate::render::pack_fade(fade, clip, clip),
+                        });
+                    }
+                }
+            } else if resting && exact > 1e-4 && !self.text.is_color_icon(ic) {
                 let canvas = (exact - 1.0 / 64.0).ceil().max(1.0) as u32;
                 let at = [on_grid(r_exact[0] + (w_exact - exact) * 0.5, contain[0]), on_grid(r_exact[1] + (h_exact - exact) * 0.5, contain[1])];
                 if let Some(q) = self.text.icon_quad_sized(ic, (canvas, exact), at, facing) {

@@ -1,0 +1,1 @@
+- Icons: support SMIL SVG animation elements (`<animate>`, `<animateTransform>`, `<set>`) on `Icon`, advancing on the runtime clock without resetting across view rebuilds and holding on the first frame under reduced motion.

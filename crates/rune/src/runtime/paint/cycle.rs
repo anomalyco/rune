@@ -146,7 +146,8 @@ impl RuntimeCore {
             let other = [(AnimSource::TRACKS, "motion: a track"), (AnimSource::GROWTH, "motion: growth"), (AnimSource::SCROLL, "motion: a scroll"),
                 (AnimSource::REVEAL, "motion: a reveal"), (AnimSource::LIVE, "motion: a live value"), (AnimSource::TEXT_FILL, "motion: text filling"),
                 (AnimSource::VIRTUAL_FILL, "motion: a list filling"), (AnimSource::SCALE_SETTLE, "motion: a scale settling"),
-                (AnimSource::VIDEO, "motion: a video"), (AnimSource::TEXT_FLIGHT, "motion: a text flight")];
+                (AnimSource::VIDEO, "motion: a video"), (AnimSource::TEXT_FLIGHT, "motion: a text flight"),
+                (AnimSource::ICON_ANIM, "motion: an animated icon")];
             return Err(other.iter().find(|(bit, _)| self.motion.anim_sources & bit != 0).map_or("motion: unknown", |o| o.1));
         }
         if !self.animating && !due { return Err("no loop due"); }

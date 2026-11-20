@@ -116,6 +116,7 @@ impl RuntimeCore {
         animating |= source(self.motion.loops_active(), AnimSource::LOOP);
         animating |= source(self.paint.scale_settling(), AnimSource::SCALE_SETTLE);
         animating |= source(self.paint.videos_active(), AnimSource::VIDEO);
+        animating |= source(self.paint.animated_icons(), AnimSource::ICON_ANIM);
         let flights_active = self.paint.draw_text_flights(
             self.motion.flights_mut(), &self.tree.nodes, &self.scene, &mut self.text, &mut self.images,
             &mut self.instances, self.env.scale, self.t, self.reduced_motion, self.viewport,

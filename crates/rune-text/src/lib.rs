@@ -210,6 +210,7 @@ use fonts::system_fonts::{CJK_FONT_FILES, system_font_files};
 use fonts::system_fonts::{LoadedFiles, family_list, load_installed, load_system_mono, named_list, names_system_mono, register_cjk_fallbacks};
 use fonts::trak::{Trak, Traks, font_trak};
 use fonts::{fallback, families, system_fonts, system_weight};
+use icon::anim::AnimatedIcons;
 use icon::color::ColorIcons;
 use icon::rasterize_icon;
 use layout::cache::{Cache, Entry};
@@ -309,6 +310,7 @@ pub struct TextSystem {
     /// change the cache's next write must carry.
     color_placed: u64,
     color_icons: ColorIcons,
+    animated_icons: AnimatedIcons,
     /// Layouts shaped, a running count (shaping work counter for perf gates).
     pub shaped: u32,
     /// Layouts re-broken at a new width from an earlier shaping, a running count.
@@ -452,6 +454,7 @@ impl TextSystem {
             color_bytes: 0,
             color_placed: 0,
             color_icons: ColorIcons::default(),
+            animated_icons: AnimatedIcons::default(),
             shaped: 0,
             rebroken: 0,
             cluster_scratch: Vec::new(),
@@ -684,6 +687,7 @@ impl TextSystem {
         }
         for c in self.color_glyphs.values_mut() { c.used = false; }
         self.color_icons.begin_frame();
+        self.animated_icons.begin_frame();
         wake
     }
 
@@ -691,6 +695,28 @@ impl TextSystem {
     pub fn measure(&mut self, text: &str, style: TextStyle, scale: f32) -> (f32, f32) {
         let l = self.layout_rich(text, &[], style, scale, None);
         (crate::text_width(l.full_width()) / scale, layout_height(&l, style, scale) / scale)
+    }
+
+    /// Whether `icon` contains SMIL SVG animation elements (`<animate>`, `<animateTransform>`, `<set>`).
+    #[doc(hidden)]
+    pub fn is_animated_icon(&mut self, icon: &'static Icon) -> bool {
+        self.animated_icons.is_animated(icon)
+    }
+
+    /// Rasterizes animated `icon` at time `t` seconds into its reused [`rune_image::pixels::Pixels`] handle.
+    /// Returns the frame and whether the animation continues past `t`.
+    #[doc(hidden)]
+    pub fn animated_icon(
+        &mut self,
+        icon: &'static Icon,
+        sized: (u32, f32),
+        color: Color,
+        one: bool,
+        facing: Facing,
+        t: f64,
+    ) -> Option<(&rune_image::pixels::Pixels, bool)> {
+        let is_color = self.is_color_icon(icon);
+        self.animated_icons.frame(icon, sized, color, one, is_color, facing, t)
     }
 
     /// The atlas quad for `icon` at `px` device pixels square, top-left at `origin`.

@@ -4,6 +4,7 @@
 //! `defs`, `clipPath`, `mask` and the like hold doesn't paint.
 
 mod aaa;
+pub(crate) mod anim;
 mod area;
 pub(crate) mod color;
 mod convex;
@@ -93,14 +94,27 @@ fn num(el: &str, name: &str) -> f32 {
     attr(el, name).and_then(|v| v.trim_end_matches("px").parse().ok()).unwrap_or(0.0)
 }
 
+fn num_ov(el: &str, ov: Option<&anim::Overrides>, name: &str, kind: anim::AttrKind) -> f32 {
+    ov.and_then(|o| o.get(kind)).unwrap_or_else(|| num(el, name))
+}
+
 /// SVG path data for one icon element, in viewBox units.
-fn element_path(el: &str) -> Option<String> {
+fn element_path(el: &str, ov: Option<&anim::Overrides>) -> Option<String> {
+    use anim::AttrKind;
     let tag = el.trim_start_matches('<').split_whitespace().next()?;
     Some(match tag {
         "path" => attr(el, "d")?.to_owned(),
         "rect" => {
-            let (x, y, w, h) = (num(el, "x"), num(el, "y"), num(el, "width"), num(el, "height"));
-            let r = num(el, "rx").min(w / 2.0).min(h / 2.0);
+            let (x, y, w, h) = (
+                num_ov(el, ov, "x", AttrKind::X),
+                num_ov(el, ov, "y", AttrKind::Y),
+                num_ov(el, ov, "width", AttrKind::Width),
+                num_ov(el, ov, "height", AttrKind::Height),
+            );
+            if w <= 0.0 || h <= 0.0 {
+                return None;
+            }
+            let r = num_ov(el, ov, "rx", AttrKind::Rx).min(w / 2.0).min(h / 2.0);
             if r <= 0.0 {
                 format!("M{x} {y}h{w}v{h}h{}Z", -w)
             } else {
@@ -119,8 +133,16 @@ fn element_path(el: &str) -> Option<String> {
             }
         }
         "circle" | "ellipse" => {
-            let (cx, cy) = (num(el, "cx"), num(el, "cy"));
-            let (rx, ry) = if tag == "circle" { (num(el, "r"), num(el, "r")) } else { (num(el, "rx"), num(el, "ry")) };
+            let (cx, cy) = (num_ov(el, ov, "cx", AttrKind::Cx), num_ov(el, ov, "cy", AttrKind::Cy));
+            let (rx, ry) = if tag == "circle" {
+                let r = num_ov(el, ov, "r", AttrKind::R);
+                (r, r)
+            } else {
+                (num_ov(el, ov, "rx", AttrKind::Rx), num_ov(el, ov, "ry", AttrKind::Ry))
+            };
+            if rx <= 0.0 || ry <= 0.0 {
+                return None;
+            }
             format!(
                 "M{} {cy}a{rx} {ry} 0 1 0 {} 0a{rx} {ry} 0 1 0 {} 0Z",
                 cx - rx,
@@ -128,7 +150,13 @@ fn element_path(el: &str) -> Option<String> {
                 -2.0 * rx
             )
         }
-        "line" => format!("M{} {}L{} {}", num(el, "x1"), num(el, "y1"), num(el, "x2"), num(el, "y2")),
+        "line" => format!(
+            "M{} {}L{} {}",
+            num_ov(el, ov, "x1", AttrKind::X1),
+            num_ov(el, ov, "y1", AttrKind::Y1),
+            num_ov(el, ov, "x2", AttrKind::X2),
+            num_ov(el, ov, "y2", AttrKind::Y2),
+        ),
         "polyline" | "polygon" => {
             let p = numbers(attr(el, "points")?);
             let mut d: String =
@@ -144,15 +172,34 @@ fn element_path(el: &str) -> Option<String> {
 
 /// An element Blink draws as the shape it is rather than as a path: a circle or ellipse
 /// (`drawOval`), or a rect (`drawRect`, or `addRRect` with round corners), in viewBox units.
-fn element_shape(el: &str) -> Option<area::Shape<'static>> {
+fn element_shape(el: &str, ov: Option<&anim::Overrides>) -> Option<area::Shape<'static>> {
+    use anim::AttrKind;
     let tag = el.trim_start_matches('<').split_whitespace().next()?;
     match tag {
-        "circle" => Some(area::Shape::Oval { center: Point::new(num(el, "cx"), num(el, "cy")), radii: Point::new(num(el, "r"), num(el, "r")) }),
-        "ellipse" => Some(area::Shape::Oval { center: Point::new(num(el, "cx"), num(el, "cy")), radii: Point::new(num(el, "rx"), num(el, "ry")) }),
+        "circle" => {
+            let r = num_ov(el, ov, "r", AttrKind::R);
+            (r > 0.0).then(|| area::Shape::Oval { center: Point::new(num_ov(el, ov, "cx", AttrKind::Cx), num_ov(el, ov, "cy", AttrKind::Cy)), radii: Point::new(r, r) })
+        }
+        "ellipse" => {
+            let (rx, ry) = (num_ov(el, ov, "rx", AttrKind::Rx), num_ov(el, ov, "ry", AttrKind::Ry));
+            (rx > 0.0 && ry > 0.0).then(|| area::Shape::Oval { center: Point::new(num_ov(el, ov, "cx", AttrKind::Cx), num_ov(el, ov, "cy", AttrKind::Cy)), radii: Point::new(rx, ry) })
+        }
         "rect" => {
-            let (x, y, w, h) = (num(el, "x"), num(el, "y"), num(el, "width"), num(el, "height"));
-            let r = num(el, "rx").min(w / 2.0).min(h / 2.0);
-            let ry = attr(el, "ry").map_or(r, |_| num(el, "ry").min(h / 2.0));
+            let (x, y, w, h) = (
+                num_ov(el, ov, "x", AttrKind::X),
+                num_ov(el, ov, "y", AttrKind::Y),
+                num_ov(el, ov, "width", AttrKind::Width),
+                num_ov(el, ov, "height", AttrKind::Height),
+            );
+            if w <= 0.0 || h <= 0.0 {
+                return None;
+            }
+            let r = num_ov(el, ov, "rx", AttrKind::Rx).min(w / 2.0).min(h / 2.0);
+            let ry = if ov.and_then(|o| o.get(AttrKind::Ry)).is_some() || attr(el, "ry").is_some() {
+                num_ov(el, ov, "ry", AttrKind::Ry).min(h / 2.0)
+            } else {
+                r
+            };
             (r == 0.0 || ry == r).then(|| area::Shape::Rounded { lo: Point::new(x, y), hi: Point::new(x + w, y + h), r: r.max(0.0) })
         }
         _ => None,
@@ -230,8 +277,15 @@ pub fn icon_coverage_placed(icon: &Icon, px: u32, origin: [f32; 2]) -> Vec<u8> {
 }
 
 /// `icon`'s coverage drawn `size` device pixels across, from the top-left of a `px` × `px`
-/// canvas placed at `origin`.
+/// canvas placed at `origin`. When `icon` carries SMIL animations, samples its `t = 0` frame.
 fn icon_coverage_at(icon: &Icon, px: u32, size: f32, origin: Point) -> Vec<u8> {
+    let plan = anim::parse(icon.body);
+    icon_coverage_with_plan(icon, px, size, origin, plan.as_ref().map(|p| (p, 0.0)))
+}
+
+/// `icon`'s coverage drawn `size` device pixels across, sampling `anim` overrides when present.
+fn icon_coverage_with_plan(icon: &Icon, px: u32, size: f32, origin: Point, anim: Option<(&anim::Plan, f64)>) -> Vec<u8> {
+    use anim::AttrKind;
     let s = size / icon.view;
     let mut acc = vec![0u8; (px * px) as usize];
     // Each open group with an `opacity`: what it holds so far, and that opacity.
@@ -239,7 +293,7 @@ fn icon_coverage_at(icon: &Icon, px: u32, size: f32, origin: Point) -> Vec<u8> {
     let mut buf = vec![0u8; (px * px) as usize];
     let root = Scope { ctm: Transform::scale(s, s), paints: true, group: None, layer: false };
     let mut scopes: Vec<Scope> = Vec::new();
-    for raw in icon.body.split('>') {
+    for (idx, raw) in icon.body.split('>').enumerate() {
         let el = raw.trim();
         if el.is_empty() || el.starts_with("<!") || el.starts_with("<?") {
             continue;
@@ -255,11 +309,16 @@ fn icon_coverage_at(icon: &Icon, px: u32, size: f32, origin: Point) -> Vec<u8> {
         let tag = el.trim_start_matches('<').split_whitespace().next().unwrap_or("").trim_end_matches('/');
         let open = !el.ends_with('/');
         let up = scopes.last().unwrap_or(&root);
-        let ctm = attr(el, "transform").map_or(up.ctm, |t| then(transform(t), up.ctm));
+        let ov = anim.and_then(|(plan, t)| plan.sample_element(idx, t));
+        let local_ctm = match ov.as_ref() {
+            Some(o) => o.apply_transform(attr(el, "transform")),
+            None => attr(el, "transform").map(transform),
+        };
+        let ctm = local_ctm.map_or(up.ctm, |t| then(t, up.ctm));
         let paints = up.paints && attr(el, "display") != Some("none") && !NON_RENDERING.contains(&tag);
         if tag == "g" || tag == "a" || tag == "svg" {
             if open {
-                let alpha = opacity(attr(el, "opacity"));
+                let alpha = ov.as_ref().and_then(|o| o.get(AttrKind::Opacity)).map_or_else(|| opacity(attr(el, "opacity")), |v| v.clamp(0.0, 1.0));
                 let layer = paints && alpha < 1.0;
                 if layer {
                     layers.push((vec![0u8; (px * px) as usize], alpha));
@@ -274,7 +333,11 @@ fn icon_coverage_at(icon: &Icon, px: u32, size: f32, origin: Point) -> Vec<u8> {
         if !paints {
             continue;
         }
-        let Some(d) = element_path(el) else { continue };
+        let whole = ov.as_ref().and_then(|o| o.get(AttrKind::Opacity)).map_or_else(|| opacity(attr(el, "opacity")), |v| v.clamp(0.0, 1.0));
+        if whole <= 0.0 {
+            continue;
+        }
+        let Some(d) = element_path(el, ov.as_ref()) else { continue };
         // Skia's elements: an arc stays the conics Blink's `SkPath::arcTo` makes.
         let d = convex::parse(&d);
         // The element's own attribute, else the innermost group's that sets it.
@@ -285,11 +348,13 @@ fn icon_coverage_at(icon: &Icon, px: u32, size: f32, origin: Point) -> Vec<u8> {
         };
         let stroke = get("stroke").is_some_and(|v| v != "none");
         let fill = get("fill").map_or(!stroke, |v| v != "none");
-        let whole = opacity(attr(el, "opacity"));
         let into = layers.last_mut().map_or(&mut acc, |l| &mut l.0);
-        let shape = element_shape(el).unwrap_or(area::Shape::Path(d.as_slice()));
+        let shape = element_shape(el, ov.as_ref()).unwrap_or(area::Shape::Path(d.as_slice()));
         // With the op Chromium's GPU raster picks for the shape (`area`).
         let mut paint = |pen: Option<&area::Pen>, fill: Fill, alpha: f32| {
+            if alpha <= 0.0 {
+                return;
+            }
             match area::op(&shape, ctm, pen) {
                 area::Op::Hairline(width) => {
                     let placed = Transform { x: ctm.x + origin.x, y: ctm.y + origin.y, ..ctm };
@@ -309,10 +374,14 @@ fn icon_coverage_at(icon: &Icon, px: u32, size: f32, origin: Point) -> Vec<u8> {
         };
         if fill {
             let rule = if get("fill-rule") == Some("evenodd") { Fill::EvenOdd } else { Fill::NonZero };
-            paint(None, rule, whole * opacity(get("fill-opacity")));
+            let fill_alpha = ov.as_ref().and_then(|o| o.get(AttrKind::FillOpacity)).map_or_else(|| opacity(get("fill-opacity")), |v| v.clamp(0.0, 1.0));
+            paint(None, rule, whole * fill_alpha);
         }
         if stroke {
-            let w = get("stroke-width").and_then(|v| v.trim_end_matches("px").parse().ok()).unwrap_or(1.0f32);
+            let w = ov
+                .as_ref()
+                .and_then(|o| o.get(AttrKind::StrokeWidth))
+                .unwrap_or_else(|| get("stroke-width").and_then(|v| v.trim_end_matches("px").parse().ok()).unwrap_or(1.0f32));
             let cap = match get("stroke-linecap") {
                 Some("round") => Cap::Round,
                 Some("square") => Cap::Square,
@@ -326,7 +395,8 @@ fn icon_coverage_at(icon: &Icon, px: u32, size: f32, origin: Point) -> Vec<u8> {
             let miter_limit = get("stroke-miterlimit").and_then(|v| v.parse().ok()).unwrap_or(4.0);
             // The transform scales the width with the geometry.
             let pen = area::Pen { width: w, cap, join, miter_limit };
-            paint(Some(&pen), Fill::NonZero, whole * opacity(get("stroke-opacity")));
+            let stroke_alpha = ov.as_ref().and_then(|o| o.get(AttrKind::StrokeOpacity)).map_or_else(|| opacity(get("stroke-opacity")), |v| v.clamp(0.0, 1.0));
+            paint(Some(&pen), Fill::NonZero, whole * stroke_alpha);
         }
     }
     // A group left open still ends at the body's end.
