@@ -4,6 +4,7 @@ version = "0.0.1"
 edition.workspace = true
 license.workspace = true
 description = "Rune's special-effects layers: glow, pulses, electricity, fire, motion blur, distortion."
+autotests = false
 
 [dependencies]
 rune-motion = { workspace = true }
@@ -27,6 +28,9 @@ wgpu = { workspace = true, features = ["webgpu"] }
 rune = { workspace = true, default-features = true }
 ab_glyph = "0.2.32"
 png = { workspace = true }
+
+[[test]]
+name = "integration"
 
 [lints]
 workspace = true

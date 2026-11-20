@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 description = "Message catalogs for Rune apps: keys checked at compile time, catalogs generated from JSON at build time, CLDR plurals, numbers and lists, and the system's preferred languages."
 publish = false
+autotests = false
 
 [features]
 default = []
@@ -32,6 +33,9 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["std
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = { workspace = true }
 web-sys = { workspace = true, features = ["Navigator", "Window"] }
+
+[[test]]
+name = "locale"
 
 [lints]
 workspace = true
