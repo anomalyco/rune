@@ -92,6 +92,7 @@ pub(crate) fn set_window_frame(window: &winit::window::Window, [x, y, w, h]: [f3
 }
 
 pub(crate) fn display_bounds(id: u32) -> [f64; 4] {
+    // SAFETY: `CGDisplayBounds` is a pure CoreGraphics query accepting any `CGDirectDisplayID` (zero rect if invalid).
     let r = unsafe { CGDisplayBounds(id) };
     [r.origin.x, r.origin.y, r.size.width, r.size.height]
 }
@@ -101,6 +102,8 @@ pub(crate) fn overlay_rect(at: crate::overlay::Placement, options: &OverlayOptio
 }
 
 pub(super) fn screen_id(screen: &NSScreen) -> u32 {
+    // SAFETY: `screen` is a live `NSScreen` on the main thread; `deviceDescription` returns an `NSDictionary`,
+    // and messaging a possibly-nil `NSNumber` with `unsignedIntValue` returns 0 in ObjC.
     unsafe {
         let description: *mut objc2::runtime::AnyObject = msg_send![screen, deviceDescription];
         let key = objc2_foundation::NSString::from_str("NSScreenNumber");
@@ -121,8 +124,8 @@ fn contains_appkit_rect(r: NSRect, pointer: NSPoint) -> bool {
 pub(super) fn overlay_rect_on(at: crate::overlay::Placement, options: &OverlayOptions, previous: Option<u32>) -> Option<NSRect> {
     use winit::platform::macos::MonitorHandleExtMacOS;
     let mtm = MainThreadMarker::new()?;
-    // SAFETY: AppKit screen and pointer queries on the event thread.
     let screens = NSScreen::screens(mtm);
+    // SAFETY: `mtm` proves AppKit main-thread execution for `NSEvent::mouseLocation`.
     let pointer = unsafe { NSEvent::mouseLocation() };
     let screen = screens.iter().find(|screen| match &options.display {
         DisplayTarget::UnderPointer => {

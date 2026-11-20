@@ -168,6 +168,7 @@ fn for_each_own_thread(mut f: impl FnMut(windows_sys::Win32::Foundation::HANDLE)
         // SAFETY: this process's pseudo-handle and the last thread handle it returned (or none);
         // each handle it returns is closed once the next is taken.
         let status = unsafe { next(GetCurrentProcess(), prev, THREAD_QUERY_LIMITED_INFORMATION | THREAD_SET_INFORMATION, 0, 0, &mut thread) };
+        // SAFETY: `prev` is a non-null thread handle returned by the prior `NtGetNextThread` call and is closed once here.
         if !prev.is_null() { unsafe { CloseHandle(prev) }; }
         if status < 0 || thread.is_null() { return; }
         f(thread);
@@ -200,6 +201,7 @@ pub(crate) fn drop_paint(window: &winit::window::Window) {
 
 pub(crate) fn pointer_position() -> Option<(i32, i32)> {
     let mut p = POINT { x: 0, y: 0 };
+    // SAFETY: `p` is a valid, aligned local `POINT` out-parameter.
     (unsafe { GetCursorPos(&mut p) } != 0).then_some((p.x, p.y))
 }
 
@@ -219,6 +221,7 @@ struct Input {
 impl Input {
     fn track(&self) -> bool { self.input.get() == OverlayInput::Regions || self.follow.get() }
     fn local(&self, mut point: POINT) -> (f32, f32) {
+        // SAFETY: `self.hwnd` is a live window owned by this thread and `point` is a valid local `POINT`.
         unsafe { windows_sys::Win32::Graphics::Gdi::ScreenToClient(self.hwnd, &mut point); }
         (point.x as f32 / self.scale.get(), point.y as f32 / self.scale.get())
     }
@@ -233,6 +236,7 @@ impl Input {
         if !self.visible.get() { return; }
         let local = self.local(point);
         {
+            // SAFETY: `self.hwnd` is a live window owned by this thread; `GWL_EXSTYLE` toggles `WS_EX_TRANSPARENT`.
             unsafe {
                 let style = GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE) as u32;
                 let next = if self.hit(local) { style & !WS_EX_TRANSPARENT } else { style | WS_EX_TRANSPARENT };
@@ -278,6 +282,7 @@ unsafe extern "system" fn subclass(hwnd: HWND, message: u32, wparam: WPARAM, lpa
         WM_CAPTURECHANGED => input.captured.set(false),
         _ => {}
     }
+    // SAFETY: forwards the unhandled message to the next procedure in this window's subclass chain.
     unsafe { DefSubclassProc(hwnd, message, wparam, lparam) }
 }
 
@@ -296,6 +301,7 @@ impl OverlayWindow {
         let mode = options.input.resolved(interactive);
         overlay_styles(hwnd, mode, options.keys)?;
         let exclusion = if options.exclude_from_capture {
+            // SAFETY: `hwnd` is a live window owned by this thread; `WDA_EXCLUDEFROMCAPTURE` is a valid display affinity flag.
             if unsafe { SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE) } != 0 { OverlaySupport::Requested } else { OverlaySupport::Failed }
         } else { OverlaySupport::Unknown };
         let input = Rc::new(Input { hwnd, regions: RefCell::default(), scale: Cell::new(window.scale_factor() as f32), clicks: RefCell::default(), captured: Cell::new(false), visible: Cell::new(false), input: Cell::new(mode), follow: Cell::new(options.follow_pointer), level: options.level, fading: Cell::new(false) });
@@ -303,6 +309,7 @@ impl OverlayWindow {
         // SAFETY: `data` is reclaimed exactly once, either by `Drop` or by `WM_NCDESTROY`,
         // whichever succeeds in removing the subclass.
         if unsafe { SetWindowSubclass(hwnd, Some(subclass), 0x52554e45, data as usize) } == 0 {
+            // SAFETY: `SetWindowSubclass` failed, so no subclass took ownership of `data`; reclaim the `Rc` created by `into_raw` above.
             unsafe { drop(Rc::from_raw(data)); }
             return Err(format!("SetWindowSubclass failed: {}", last_error()));
         }
@@ -311,6 +318,7 @@ impl OverlayWindow {
     pub fn capture_exclusion(&self) -> OverlaySupport { self.exclusion }
     pub fn set_capture_exclusion(&mut self, exclude: bool) -> OverlaySupport {
         let affinity = if exclude { WDA_EXCLUDEFROMCAPTURE } else { WDA_NONE };
+        // SAFETY: `self.input.hwnd` is a live window owned by this thread and `affinity` is a valid `WDA_*` constant.
         let applied = unsafe { SetWindowDisplayAffinity(self.input.hwnd, affinity) } != 0;
         self.exclusion = match (exclude, applied) { (true, true) => OverlaySupport::Requested, (true, false) => OverlaySupport::Failed, (false, _) => OverlaySupport::Unknown };
         self.exclusion

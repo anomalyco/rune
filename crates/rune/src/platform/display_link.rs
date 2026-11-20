@@ -61,9 +61,10 @@ unsafe extern "C" { fn CGDisplayIsBuiltin(display: u32) -> u32; }
 fn low_power_caps(display: Option<u32>) -> bool {
     use objc2_foundation::{NSObjectProtocol, NSProcessInfo};
     let info = NSProcessInfo::processInfo();
-    // SAFETY: CGDisplayIsBuiltin accepts any display ID; the selector is checked first (macOS 12+).
+    // SAFETY: `CGDisplayIsBuiltin` accepts any `CGDirectDisplayID`.
     display.is_some_and(|display| unsafe { CGDisplayIsBuiltin(display) } != 0)
         && info.respondsToSelector(objc2::sel!(isLowPowerModeEnabled))
+        // SAFETY: `info` is the live `NSProcessInfo` singleton and `respondsToSelector` above verified availability (macOS 12+).
         && unsafe { info.isLowPowerModeEnabled() }
 }
 
@@ -113,6 +114,7 @@ impl DisplayLink {
         }
         if CREATE_FAILED.swap(false, Ordering::Relaxed) { eprintln!("display link created once a display woke"); }
         *LAST_FAILURE.lock().unwrap() = None;
+        // SAFETY: `create_with_active_cg_displays` succeeded (`status == 0`), so non-null `raw` is a +1 retained `CVDisplayLink` per the Create Rule.
         let link = unsafe { CFRetained::from_raw(NonNull::new(raw)?) };
         let mut callback = Box::new(Callback {
             target: AtomicU64::new(0),
@@ -120,6 +122,7 @@ impl DisplayLink {
             wake,
             host_frequency: CVGetHostClockFrequency(),
         });
+        // SAFETY: `tick` matches `CVDisplayLinkOutputCallback`, and `callback` stays at a stable heap address until `DisplayLink::drop` stops the link.
         let status = unsafe { link.set_output_callback(Some(tick), (&mut *callback as *mut Callback).cast()) };
         if status != 0 { eprintln!("display link callback failed: {status}"); return None; }
         let mut pacing = Self { link, callback, last_present: None, last_target: None, display: None, capped: false, running: false };

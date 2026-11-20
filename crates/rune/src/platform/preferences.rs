@@ -35,6 +35,8 @@ pub(crate) fn reduced_motion() -> bool {
     { return factor == 0.0; }
     // Optional GNOME GSettings, with schema lookup before constructing settings (missing
     // schemas otherwise abort GLib). No subprocess or required GNOME dependency.
+    // SAFETY: `gnome_animations` dynamically resolves GIO symbols, checks every pointer for null,
+    // and releases each GLib object before returning.
     unsafe { gnome_animations().is_some_and(|enabled| !enabled) }
 }
 
@@ -133,8 +135,8 @@ pub(crate) fn contrast() -> Option<SystemContrast> {
     // SAFETY: SPI_GETHIGHCONTRAST fills a HIGHCONTRASTW whose size it is told.
     let read = unsafe { SystemParametersInfoW(SPI_GETHIGHCONTRAST, hc.cbSize, (&mut hc as *mut HIGHCONTRASTW).cast(), 0) } != 0;
     if !read || hc.dwFlags & HCF_HIGHCONTRASTON == 0 { return None; }
-    // SAFETY: GetSysColor reads a colour index; the indices are Win32's constants.
     let sys = |index: i32| {
+        // SAFETY: `GetSysColor` is a read-only Win32 query; callers pass standard `COLOR_*` indices.
         let c = unsafe { GetSysColor(index) };
         let d = |v: u32| crate::color::srgb_decode((v & 0xff) as f32 / 255.0);
         crate::Color { r: d(c), g: d(c >> 8), b: d(c >> 16), a: 1.0 }
