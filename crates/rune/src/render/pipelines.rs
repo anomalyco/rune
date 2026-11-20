@@ -1,10 +1,19 @@
 //! Building the renderer and its uber pipelines: the pipeline for each target format and blend,
 //! the sampled textures the CPU fills, and the bind group the uber shader reads.
 
-use super::{ATLAS_START_ROWS, Blend, CLIP_WGSL, Globals, Instance, Renderer, dxbc, metallib, variant};
+use super::{ATLAS_START_ROWS, Blend, CLIP_WGSL, Globals, Instance, Renderer, dxbc, metallib, variant, warmup::WarmRenderer};
 
 impl Renderer {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn new_warm(device: &wgpu::Device, format: wgpu::TextureFormat) -> WarmRenderer {
+        Self::create_warm(device, format, None, cfg!(target_os = "macos"))
+    }
+
     pub(super) fn create(device: &wgpu::Device, format: wgpu::TextureFormat, properties: Option<(&[crate::gpu::springs::Node], &[u32])>, classic: bool) -> Renderer {
+        Self::from_warm(Self::create_warm(device, format, properties, classic))
+    }
+
+    fn create_warm(device: &wgpu::Device, format: wgpu::TextureFormat, properties: Option<(&[crate::gpu::springs::Node], &[u32])>, classic: bool) -> WarmRenderer {
         let spring_shader = if properties.is_some() {
             let source = format!("{CLIP_WGSL}\n{}\n{}", include_str!("../shaders/shader.wgsl"), crate::gpu::springs::SHADER);
             Some(device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -63,8 +72,7 @@ impl Renderer {
         );
         let spring_instances = properties.map_or(0, |(_, ids)| ids.len());
         let springs = properties.map(|(nodes, ids)| crate::gpu::springs::Bindings::new(device, spring_layout.as_ref().unwrap(), nodes, ids));
-        Renderer {
-            surfaces: None,
+        WarmRenderer {
             surfaces_building: None,
             pipeline,
             format,

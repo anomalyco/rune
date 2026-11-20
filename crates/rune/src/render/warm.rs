@@ -5,7 +5,7 @@
 //! renderer here too (`park`), for `PARKED` rather than `LINGER`: an overlay shown for each
 //! dictation takes the same device every time instead of making one per show (hex#1268).
 
-use super::{Gpu, Renderer};
+use super::{Gpu, Renderer, warmup::WarmRenderer};
 use std::sync::{Arc, Condvar, Mutex, Weak};
 use std::time::Duration;
 
@@ -21,10 +21,7 @@ pub(crate) const PARKED: Duration = Duration::from_secs(5 * 60);
 /// `srgb_blend` drops the sRGB suffix); a surface in another one rebuilds the pipeline.
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8Unorm;
 
-struct Warmed(Gpu, Renderer);
-// SAFETY: wgpu's objects are `Send`. The one part of a `Renderer` that isn't, the native
-// surface renderer, is made on first use: a new renderer has none (asserted where it's made).
-unsafe impl Send for Warmed {}
+struct Warmed(Gpu, WarmRenderer);
 
 #[derive(Default)]
 enum State {
@@ -117,7 +114,7 @@ fn wait_for_surface(mut state: std::sync::MutexGuard<'_, State>) {
 pub(crate) fn park(gpu: Gpu, renderer: Renderer, linger: Duration) {
     if gpu.is_lost() { return; }
     rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely()).ok();
-    if renderer.surfaces.is_some() { return; }
+    let Some(renderer) = renderer.into_warm() else { return };
     let mut state = lock(&SLOT.state);
     if !matches!(*state, State::Idle) { return; }
     *state = State::Ready { warmed: Warmed(gpu, renderer), until: crate::time::now() + linger };
@@ -132,8 +129,7 @@ pub(crate) fn park(gpu: Gpu, renderer: Renderer, linger: Duration) {
 fn make(features: wgpu::Features) -> Option<Warmed> {
     super::gpu_events::starting();
     let gpu = Gpu::try_for_display(Gpu::instance_for(features), features).ok()?;
-    let renderer = Renderer::new(&gpu.device, FORMAT);
-    assert!(renderer.surfaces.is_none(), "a new renderer has no native surface renderer");
+    let renderer = Renderer::new_warm(&gpu.device, FORMAT);
     let target = super::Offscreen::with_format(&gpu.device, 8, 8, FORMAT);
     let mut encoder = gpu.device.create_command_encoder(&Default::default());
     drop(encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -160,7 +156,7 @@ pub(super) fn take() -> Option<(Gpu, Renderer)> {
     let State::Ready { warmed: Warmed(gpu, renderer), .. } = std::mem::take(&mut *state) else { return None };
     SLOT.changed.notify_all();
     if gpu.is_lost() { return None; }
-    Some((gpu, renderer))
+    Some((gpu, Renderer::from_warm(renderer)))
 }
 
 /// `prewarm_gpu` is macOS's; elsewhere the surface decides the adapter.
