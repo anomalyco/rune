@@ -48,7 +48,7 @@ impl RuntimeCore {
             let up = n.parent.is_some_and(|p| if p < i { exiting[p] } else { self.subtree_exiting(p) });
             exiting.push(up || self.is_exiting(n.id));
         }
-        self.tree.exit_mask = Mask::Fresh { exiting, commit: self.commit.commit_gen };
+        self.tree.exit_mask = Mask::Fresh { exiting, commit: self.commit.commit_gen() };
     }
 
     pub(in crate::runtime) fn end_exit_mask(&mut self) {
@@ -56,7 +56,7 @@ impl RuntimeCore {
     }
 
     pub(crate) fn subtree_exiting(&self, mut i: usize) -> bool {
-        if let Some(exiting) = self.tree.exit_mask.get(i, self.tree.nodes.len(), self.commit.commit_gen) {
+        if let Some(exiting) = self.tree.exit_mask.get(i, self.tree.nodes.len(), self.commit.commit_gen()) {
             return exiting;
         }
         loop {

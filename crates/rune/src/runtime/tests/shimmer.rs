@@ -263,7 +263,7 @@ fn window(rt: &mut Runtime<Shimmer>, secs: f64, events: &mut Vec<(f64, Ev)>, wor
         rt.invalidate();
         rt.frame_split(step.catch_up, step.dt);
         // A copy mounted mid-pass waits at its start for the next pass, while the window runs.
-        let waiting = |key: &str| rt.tree.nodes.iter().find(|n| n.path.ends_with(key)).and_then(|n| rt.motion.loops.get(&n.id))
+        let waiting = |key: &str| rt.tree.nodes.iter().find(|n| n.path.ends_with(key)).and_then(|n| rt.motion.loop_track(n.id))
             .is_some_and(|l| l.pending_start(rt.t).is_some());
         if waiting("/sheen") != waiting("/lit") { continue; }
         if let Some((a, b)) = loop_offsets(rt) && (a + b).abs() > worst.0.abs() { worst.0 = a + b; }

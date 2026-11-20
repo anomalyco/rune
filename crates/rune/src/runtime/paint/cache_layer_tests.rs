@@ -129,7 +129,7 @@ fn every_paint_cache_walk_matches_dev() {
             rt.tree.nodes[i].static_scale = scale;
             rt.t = now;
             rt.settled = settled;
-            rt.commit.commit_gen = generation;
+            rt.commit.set_commit_gen(generation);
             rt.build();
             let expected_frame = old.paint(scale, now, generation, settled, resident);
             assert_eq!(rt.paint.scale_frame.is_some(), expected_frame, "{event:?} at {now}");
@@ -161,12 +161,13 @@ fn a_scale_that_overflows_at_two_x_stops_asking_for_frames() {
     let id = rt.tree.nodes[i].id;
     assert!(rt.paint.node_caches.contains_key(&id), "a cached raster to reuse");
     rt.tree.nodes[i].static_scale = f32::MAX;
-    let (mut now, mut generation, mut frames) = (1.0, rt.commit.commit_gen, 0);
+    let (mut now, mut generation, mut frames) = (1.0, rt.commit.commit_gen(), 0);
     // A drag commits every frame.
     while now < 1.5 {
         now += 1.0 / 60.0;
         generation += 1;
-        (rt.t, rt.commit.commit_gen) = (now, generation);
+        rt.t = now;
+        rt.commit.set_commit_gen(generation);
         rt.build();
         if rt.paint.scale_frame.is_none() { break; }
         frames += 1;
@@ -175,7 +176,8 @@ fn a_scale_that_overflows_at_two_x_stops_asking_for_frames() {
     for _ in 0..5 {
         now += 1.0 / 60.0;
         generation += 1;
-        (rt.t, rt.commit.commit_gen) = (now, generation);
+        rt.t = now;
+        rt.commit.set_commit_gen(generation);
         rt.build();
         assert!(rt.paint.scale_frame.is_none(), "and stay stopped");
     }

@@ -107,20 +107,31 @@ impl RuntimeCore {
         }
         kids_fade
     }
+}
 
+impl crate::runtime::tracks::MotionState {
     #[inline(always)]
-    pub(super) fn lift_flight_inh(&mut self, node_id: NodeId, node_parent: Option<usize>, pinh: &mut Inh) {
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn lift_flight_inh(
+        &mut self,
+        paint: &paint_state::PaintState,
+        scene: &Scene,
+        commit_gen: u64,
+        node_id: NodeId,
+        node_parent: Option<usize>,
+        pinh: &mut Inh,
+    ) {
         // Keep the destination's clips (consumed ones included) and offsets. Drop its
         // ancestors' opacity, scale and blur: an entering parent's fade or scale would
         // otherwise hide the flight or jump it off the rect it was seen at. The scales
         // holding still above that parent (an app-wide zoom) stay, so it flies at the size
         // it lands at. Inside another flight, also drop that flight's cover offset and clip.
-        let [clip, fade, fade_origin] = if self.motion.launches.flying(node_id) {
+        let [clip, fade, fade_origin] = if self.launches().flying(node_id) {
             // A launch leaves where its clips don't reach.
             [crate::render::NO_CLIP, [0.0; 4], pinh.fade_origin]
         } else {
             pinh.outer.unwrap_or_else(|| {
-                let clip = if pinh.turn != 0 { self.screen_clip_of_parent(node_parent) } else { pinh.clip };
+                let clip = if pinh.turn != 0 { screen_clip_of(node_parent, &paint.inh_scratch, &paint.turn_scratch) } else { pinh.clip };
                 [clip, pinh.fade, pinh.fade_origin]
             })
         };
@@ -129,34 +140,37 @@ impl RuntimeCore {
             paint_fade_origin: fade_origin, rounded: None, scale, anchor, anchor_to, blur: 0.0,
             dx: pinh.dx - pinh.cover[0], dy: pinh.dy - pinh.cover[1], cover: [0.0; 2], outer: None,
             scale_motion: ScaleMotion::Still, in_cache: false, skip_paint: false, turn: 0, snap: pixel_snap::Inherit { layer: 0, parent: None, ..pinh.snap }, ..*pinh };
-        let fix = self.motion.launches.offset_fix(&self.scene, node_id, [pinh.dx, pinh.dy], self.commit.commit_gen);
+        let fix = self.launches_mut().offset_fix(scene, node_id, [pinh.dx, pinh.dy], commit_gen);
         (pinh.dx, pinh.dy) = (pinh.dx + fix[0], pinh.dy + fix[1]);
     }
 
     #[inline(always)]
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn schedule_loop_wake(
         &mut self,
+        paint: &mut paint_state::PaintState,
+        scene: &Scene,
+        clock: f64,
+        time_scale: f32,
         node_id: NodeId,
         lnow: f64,
         now: f64,
         ambient: &mut Option<f32>,
     ) {
-        if let Some(track) = self.motion.loops.get(&node_id) {
-            let node_k = self.scene.store().node_time_scale(node_id) as f64;
+        if let Some(track) = self.loop_track(node_id).copied() {
+            let node_k = scene.store().node_time_scale(node_id) as f64;
             if let Some(dt) = track.frame_interval().filter(|_| track.active(lnow)) {
                 *ambient = Some(ambient.map_or(dt as f32, |a| a.min(dt as f32)));
-                let wake = self.clock + dt;
-                if self.motion.loop_wake.is_none_or(|w| wake < w.0) {
-                    self.motion.loop_wake = Some((wake, now + dt * self.time_scale as f64));
-                }
-            } else if self.time_scale > 0.0 && node_k > 0.0 {
-                self.motion.loops_active |= track.active(lnow);
+                let wake = clock + dt;
+                self.arm_loop_wake(wake, now + dt * time_scale as f64);
+            } else if time_scale > 0.0 && node_k > 0.0 {
+                self.mark_loops_active(track.active(lnow));
             }
-            if self.time_scale > 0.0 && node_k > 0.0 && let Some(start) = track.pending_start(lnow) {
+            if time_scale > 0.0 && node_k > 0.0 && let Some(start) = track.pending_start(lnow) {
                 let window_start = now + (start - lnow) / node_k;
-                self.paint.keep.cycles.other_deadline();
-                let wake = self.clock + (window_start - now) / self.time_scale as f64;
-                if self.motion.loop_wake.is_none_or(|w| wake < w.0) { self.motion.loop_wake = Some((wake, window_start)); }
+                paint.note_cycle_other_deadline();
+                let wake = clock + (window_start - now) / time_scale as f64;
+                self.arm_loop_wake(wake, window_start);
             }
         }
     }

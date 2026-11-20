@@ -183,12 +183,12 @@ impl RuntimeCore {
                     // Sticky and anchored descendants move within a raster without motion tracks.
                     || self.sticky_of(i).is_some()
                     || n.above.is_some()
-                    || (!self.reduced_motion && self.motion.loops.get(&n.id).is_some_and(|l| l.active(store.node_time(n.id))))
+                    || (!self.reduced_motion && self.motion.loop_active(n.id, store.node_time(n.id)))
                     || self.motion.grows.get(&n.id).is_some_and(|g| g.moving())
                     || self.scroll.scrolls.get(&n.id).is_some_and(|st| st.slack.height() > 0.0)
-                    || self.motion.reveals.get(&n.id).is_some_and(|r| r.fading())
+                    || self.motion.reveal_fading(n.id)
                     || self.subtree_exiting(i)
-                    || (!self.motion.flights.is_empty() && self.motion.flights.iter().any(|f| f.departs(&n.path, n.key.as_deref()) || f.lands(&n.path, n.key.as_deref())))
+                    || (!self.motion.flights().is_empty() && self.motion.flights().iter().any(|f| f.departs(&n.path, n.key.as_deref()) || f.lands(&n.path, n.key.as_deref())))
                     || n.vis.effect.is_some()
                     // A publication can replace texels without moving the atlas slot, so
                     // identical image primitives do not imply identical raster contents.
@@ -225,20 +225,30 @@ impl RuntimeCore {
         }
         paint_state_hash
     }
+}
 
+impl state::PaintState {
+    #[allow(clippy::too_many_arguments)]
     pub(in crate::runtime) fn close_cached_layer(
         &mut self,
+        nodes: &[Node],
+        instances: &mut Vec<Instance>,
+        surfaces: &mut [crate::native_surface::SurfaceDraw],
+        marks: &mut Vec<u32>,
+        track_marks: bool,
+        text: &mut TextSystem,
+        commit_gen: u64,
         ac: ActiveCache,
         start: usize,
         surface_start: usize,
         glyph_count: &mut usize,
     ) {
         use std::hash::Hasher;
-        let layer_grow = (3.0 * crate::render::layer_blur::sigma(self.instances[start].params[2])).ceil();
+        let layer_grow = (3.0 * crate::render::layer_blur::sigma(instances[start].params[2])).ceil();
         let glyph_start = match ac.pass {
             RasterPass::Paint { glyph_start } => glyph_start,
             RasterPass::Elide { glyphs } => {
-                let entry = self.paint.node_caches.get_mut(&ac.node_id).expect("elided cache entry");
+                let entry = self.node_caches.get_mut(&ac.node_id).expect("elided cache entry");
                 entry.scale = ac.scale;
                 let k = if (ac.cur_scale - entry.raster_scale).abs() <= 1e-4 {
                     1.0
@@ -250,18 +260,18 @@ impl RuntimeCore {
                 let b2 = (ac.origin[0] + entry.rel_bounds[2] * k).ceil();
                 let b3 = (ac.origin[1] + entry.rel_bounds[3] * k).ceil();
                 let sig = entry.signature;
-                self.seal_cache_marker(start, [b0, b1, (b2 - b0).max(0.0), (b3 - b1).max(0.0)], ac.node_id, sig);
+                Self::seal_cache_marker(instances, marks, track_marks, start, [b0, b1, (b2 - b0).max(0.0), (b3 - b1).max(0.0)], ac.node_id, sig);
                 *glyph_count += glyphs;
                 return;
             }
         };
 
-        if self.instances.len() == start + 1 && self.surfaces.len() == surface_start {
-            self.instances.pop();
-            if self.track_marks {
-                self.marks.truncate(self.instances.len());
+        if instances.len() == start + 1 && surfaces.len() == surface_start {
+            instances.pop();
+            if track_marks {
+                marks.truncate(instances.len());
             }
-            self.evict_cache(ac.node_id);
+            self.evict_cache(text, ac.node_id);
             return;
         }
 
@@ -269,12 +279,12 @@ impl RuntimeCore {
         let mut h = rune_motion::Fx::default();
         h.write_u64(ac.node_id.0);
         // Blur is baked into the target, unlike opacity and clipping on the composite.
-        h.write_u32(self.instances[start].params[2].to_bits());
-        h.write_u8(self.paint.srgb_blend as u8 | (self.text.smoothing as u8) << 1);
+        h.write_u32(instances[start].params[2].to_bits());
+        h.write_u8(self.srgb_blend as u8 | (text.smoothing as u8) << 1);
         h.write_u32(ac.cur_scale.to_bits());
         h.write_u32(ac.size[0].to_bits());
         h.write_u32(ac.size[1].to_bits());
-        if let Some(key) = self.tree.nodes[ac.node_index].vis.cache_key {
+        if let Some(key) = nodes[ac.node_index].vis.cache_key {
             h.write_u8(1);
             h.write_u64(key);
         } else {
@@ -282,7 +292,7 @@ impl RuntimeCore {
         }
         let q = |v: f32| (v * 64.0).round() as i64;
         let mut turn_stack: Vec<Option<Turn>> = Vec::new();
-        for inst in &self.instances[start + 1..] {
+        for inst in &instances[start + 1..] {
             if inst.params[1] == crate::render::KIND_LAYER_END {
                 turn_stack.pop();
             } else {
@@ -364,16 +374,16 @@ impl RuntimeCore {
         let bw = (b2 - b0).max(0.0);
         let bh = (b3 - b1).max(0.0);
         if bw > 4096.0 || bh > 4096.0 {
-            self.evict_cache(ac.node_id);
-            crate::render::end_layer(&mut self.instances, &mut self.surfaces, &mut self.marks, start, surface_start);
+            self.evict_cache(text, ac.node_id);
+            crate::render::end_layer(instances, surfaces, marks, start, surface_start);
             return;
         }
         let mut sig = h.finish();
         if sig == 0 { sig = 1; }
         let rel_bounds = [b0 - ac.origin[0], b1 - ac.origin[1], b2 - ac.origin[0], b3 - ac.origin[1]];
         let glyphs = *glyph_count - glyph_start;
-        let is_resident = self.text.atlas.resident_caches.get(&ac.node_id.0) == Some(&sig);
-        self.paint.node_caches.insert(ac.node_id, NodeCache {
+        let is_resident = text.atlas.resident_caches.get(&ac.node_id.0) == Some(&sig);
+        self.node_caches.insert(ac.node_id, NodeCache {
             signature: sig,
             raster_scale: ac.cur_scale,
             scale: ac.scale,
@@ -381,31 +391,31 @@ impl RuntimeCore {
             phase: RasterPhase::Raster { paint_hash: ac.paint_hash },
             rel_bounds,
             glyphs,
-            commit_gen: self.commit.commit_gen,
+            commit_gen,
         });
-        if is_resident && self.surfaces.len() == surface_start {
-            self.instances.truncate(start + 1);
+        if is_resident && surfaces.len() == surface_start {
+            instances.truncate(start + 1);
         }
-        self.seal_cache_marker(start, [b0, b1, bw, bh], ac.node_id, sig);
+        Self::seal_cache_marker(instances, marks, track_marks, start, [b0, b1, bw, bh], ac.node_id, sig);
     }
 
     /// Finishes a cached layer's marker at `rect`, naming its cache entry and signature, and
     /// closes the layer.
-    fn seal_cache_marker(&mut self, start: usize, rect: [f32; 4], id: NodeId, sig: u64) {
-        let marker = &mut self.instances[start];
+    fn seal_cache_marker(instances: &mut Vec<Instance>, marks: &mut Vec<u32>, track_marks: bool, start: usize, rect: [f32; 4], id: NodeId, sig: u64) {
+        let marker = &mut instances[start];
         marker.rect = rect;
         marker.params[3] = 1.0;
         marker.radii = crate::render::pack_u64_f32(id.0);
         marker.uv = crate::render::pack_u64_f32(sig);
-        self.instances.push(Instance::end_layer());
-        if self.track_marks {
-            let mark = self.marks.get(start).copied().unwrap_or(0);
-            self.marks.resize(self.instances.len(), mark);
+        instances.push(Instance::end_layer());
+        if track_marks {
+            let mark = marks.get(start).copied().unwrap_or(0);
+            marks.resize(instances.len(), mark);
         }
     }
 
-    fn evict_cache(&mut self, id: NodeId) {
-        self.paint.node_caches.remove(&id);
-        self.text.atlas.resident_caches.remove(&id.0);
+    fn evict_cache(&mut self, text: &mut TextSystem, id: NodeId) {
+        self.node_caches.remove(&id);
+        text.atlas.resident_caches.remove(&id.0);
     }
 }

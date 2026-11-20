@@ -147,7 +147,7 @@ fn transcript(sticky: &bool, _: &mut Cx<bool>) -> El {
 
 /// Resizes by the full path: the view runs, as it did before resizes reused the tree.
 fn full_resize<S>(rt: &mut Runtime<S>, size: (f32, f32)) -> u32 {
-    rt.commit.reuse.scale = f32::NAN;
+    rt.commit.set_reuse_scale(f32::NAN);
     views(|| {
         rt.set_viewport(size, 2.0);
         rt.frame(1.0 / 120.0);
@@ -405,7 +405,7 @@ fn a_resize_moves_nodes_keeps_inputs_and_restores_on_virtual_window_fallback() {
     for &(w, h) in &[(760.0, 600.0), (700.0, 600.0), (420.0, 1200.0), (780.0, 600.0)] {
         rt.set_viewport((w, h), 2.0);
         rt.frame(1.0 / 120.0);
-        full.commit.reuse.scale = f32::NAN;
+        full.commit.set_reuse_scale(f32::NAN);
         full.set_viewport((w, h), 2.0);
         full.frame(1.0 / 120.0);
         assert_eq!(shown(&rt), shown(&full), "at {w}x{h}");
@@ -420,25 +420,25 @@ fn a_commit_picks_its_kind_once_from_what_changed() {
     use crate::runtime::relayout::CommitKind;
     let mut rt = scrolled_transcript(false);
     let (tx, settle) = (Tx::default(), Tx { commit: Commit::SettleAnimated, ..Tx::default() });
-    rt.commit.state_unchanged = true;
+    rt.commit.set_state_unchanged(true);
     assert_eq!(rt.commit_kind(&tx), CommitKind::Remount);
     rt.commit.relayout = true;
     assert_eq!(rt.commit_kind(&tx), CommitKind::Relayout, "a resize never remounts");
     for relayout in [true, false] {
         rt.commit.relayout = relayout;
         assert_eq!(rt.commit_kind(&settle), CommitKind::Rebuild);
-        rt.commit.reuse.read_moved = true;
+        rt.commit.set_read_moved(true);
         assert_eq!(rt.commit_kind(&tx), CommitKind::Rebuild, "a read moved");
-        rt.commit.reuse.read_moved = false;
-        rt.commit.reuse.scale = f32::NAN;
+        rt.commit.set_read_moved(false);
+        rt.commit.set_reuse_scale(f32::NAN);
         assert_eq!(rt.commit_kind(&tx), CommitKind::Rebuild, "a new scale");
-        rt.commit.reuse.scale = rt.env.scale;
-        rt.commit.state_unchanged = false;
+        rt.commit.set_reuse_scale(rt.env.scale);
+        rt.commit.set_state_unchanged(false);
         assert_eq!(rt.commit_kind(&tx), CommitKind::Rebuild, "the state changed");
-        rt.commit.state_unchanged = true;
+        rt.commit.set_state_unchanged(true);
     }
     let mut plain = Runtime::new(0, paragraphs, (700.0, 600.0), Env::new(true, 2.0));
     plain.frame(0.0);
-    plain.commit.state_unchanged = true;
+    plain.commit.set_state_unchanged(true);
     assert_eq!(plain.commit_kind(&tx), CommitKind::Rebuild, "no virtual rows to remount");
 }

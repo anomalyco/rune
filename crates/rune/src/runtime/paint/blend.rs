@@ -12,14 +12,13 @@ impl RuntimeCore {
     /// headless snapshot) then draws with `Renderer::set_srgb_blend(true)` into a non-sRGB
     /// target (`format.remove_srgb_suffix()`), cleared to `clear_color()`.
     pub fn set_srgb_blend(&mut self, enabled: bool) {
-        if self.paint.srgb_blend != enabled {
-            self.paint.srgb_blend = enabled;
+        if self.paint.set_srgb_blend(enabled) {
             self.commit.dirty = true;
         }
     }
 
     pub fn srgb_blend(&self) -> bool {
-        self.paint.srgb_blend
+        self.paint.srgb_blend()
     }
 
     /// Rasterise and place glyphs in `mode` from the next frame, as `App::font_smoothing` does

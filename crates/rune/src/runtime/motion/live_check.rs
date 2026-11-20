@@ -27,7 +27,7 @@ impl RuntimeCore {
     /// Always empty in release builds.
     pub fn live_only_warnings(&self) -> &[String] {
         #[cfg(debug_assertions)]
-        { &self.frame.live_only_warnings }
+        { self.frame.live_only_warnings() }
         #[cfg(not(debug_assertions))]
         { &[] }
     }
@@ -37,7 +37,7 @@ impl RuntimeCore {
     /// second after the last commit by committing anyway (true) and comparing what it built.
     pub(in crate::runtime) fn skip_view(&mut self, label: impl std::fmt::Display) -> bool {
         #[cfg(debug_assertions)]
-        if self.frame.live_only_check && self.clock - self.commit.last_commit_clock >= LIVE_ONLY_CHECK {
+        if self.frame.live_only_check && self.clock - self.commit.last_commit_clock() >= LIVE_ONLY_CHECK {
             if self.frame.live_check.is_none() { self.frame.live_check = Some((label.to_string(), self.view_print())); }
             self.frame.live_checks += 1;
             self.frame.live.set();

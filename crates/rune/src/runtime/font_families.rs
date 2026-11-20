@@ -32,7 +32,7 @@ impl RuntimeCore {
         if !(self.text.follow_full_faces() || chosen) {
             return false;
         }
-        self.commit.memo.clear();
+        self.commit.clear_memo();
         self.commit.layout.mark_all_dirty();
         self.commit.dirty = true;
         self.commit.relayout = true;

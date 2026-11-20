@@ -546,7 +546,7 @@ impl Host {
             let rt = self.app.rt_mut();
             rt.text.rest();
             rt.images.rest();
-            if let Some(rewind) = rt.rewind() { rewind.rest(); }
+            if let Some(rewind) = rt.motion.rewind() { rewind.rest(); }
         }
         self.app.run_on_rest();
         if let Some((gpu, renderer)) = &mut self.gpu {

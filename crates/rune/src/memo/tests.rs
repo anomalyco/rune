@@ -61,7 +61,7 @@ fn an_unchanged_version_reuses_the_subtree_and_a_new_version_or_theme_builds() {
     rt.set_viewport((200.0, 200.0), 2.0);
     rt.frame(1.0 / 60.0);
     assert_eq!(BUILDS.get(), 4, "a scale change builds");
-    rt.commit.memo.clear();
+    rt.commit.clear_memo();
     commit(&mut rt);
     assert_eq!(BUILDS.get(), 5, "a cleared cache (hot patch, tunables) builds");
     assert!(rt.elements().iter().any(|e| e.key.as_deref() == Some("button")), "tools see reused nodes");
@@ -368,17 +368,17 @@ fn cached_unkeyed_siblings_keep_index_paths_and_leave_no_key_warnings() {
     }
     BUILDS.set(0);
     let mut rt = Runtime::new(0u32, view, (200.0, 200.0), Env::new(true, 1.0));
-    rt.commit.key_warnings = Some(Vec::new());
+    rt.commit.enable_key_warnings();
     rt.frame(0.0);
     assert_eq!(BUILDS.get(), 3);
-    assert!(rt.commit.key_warnings.as_ref().unwrap().is_empty(), "{:?}", rt.commit.key_warnings);
+    assert!(rt.commit.key_warnings().unwrap().is_empty(), "{:?}", rt.commit.key_warnings());
     let paths: Vec<_> = rt.elements().into_iter().map(|e| e.path).collect();
     assert_eq!(paths, vec!["#0", "#0/#0", "#0/#1", "#0/named"]);
 
     rt.update(|t, _| *t += 1);
     rt.frame(1.0 / 120.0);
     assert_eq!(BUILDS.get(), 3, "reused all three cached subtrees");
-    assert!(rt.commit.key_warnings.as_ref().unwrap().is_empty());
+    assert!(rt.commit.key_warnings().unwrap().is_empty());
 }
 
 /// `cargo test -p rune --profile perf --lib memo_build_time -- --ignored --nocapture`

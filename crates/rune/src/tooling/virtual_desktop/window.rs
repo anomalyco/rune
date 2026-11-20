@@ -322,7 +322,7 @@ impl Window {
             rt.transparent = options.transparent;
             rt.host.fit_height = fit_height;
             rt.track_marks = has_comp;
-            if key_warnings { rt.commit.key_warnings = Some(Vec::new()); }
+            if key_warnings { rt.commit.enable_key_warnings(); }
         }
         let mut reports = FrameReports::new(on_frame_encoded, Some(&key));
         reports.set_refresh(Some(fps));
@@ -474,7 +474,7 @@ impl Member for Window {
 
     fn trace_on(&mut self) {
         let rt = self.app.rt_mut();
-        rt.frame.trace_channels = Some(Default::default());
+        rt.frame.enable_trace_channels(true);
         rt.scene.store_mut().audit_retargets(true);
     }
 

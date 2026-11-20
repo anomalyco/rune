@@ -13,10 +13,10 @@ impl RuntimeCore {
     /// Per node of the last build: neither it nor anything under it drew. Empty before the first
     /// build and after a commit, until the next one draws.
     pub(in crate::runtime) fn drew_nothing(&self) -> Vec<bool> {
-        if !self.tree.built || self.paint.seen.len() != self.tree.nodes.len() || self.paint.inh_scratch.len() != self.tree.nodes.len() {
+        if !self.tree.built || self.paint.seen().len() != self.tree.nodes.len() || self.paint.inh_scratch.len() != self.tree.nodes.len() {
             return Vec::new();
         }
-        let mut seen = self.paint.seen.clone();
+        let mut seen = self.paint.seen().to_vec();
         mark_ancestors(&self.tree.nodes, &mut seen);
         seen.iter().zip(&self.paint.inh_scratch).map(|(&seen, h)| !seen || h.opacity < 1.0 / 512.0).collect()
     }
@@ -48,7 +48,7 @@ impl RuntimeCore {
         for i in 0..self.tree.nodes.len() {
             let id = self.tree.nodes[i].id;
             let faded = self.paint.inh_scratch.get(i).is_some_and(|h| h.opacity < 1.0 / 512.0);
-            if (!faded && self.paint.seen.get(i).is_none_or(|&s| s)) || !self.is_exiting(id) || self.motion.flying.iter().any(|f| f.0 == id) {
+            if (!faded && self.paint.was_seen(i, true)) || !self.is_exiting(id) || self.motion.flying.iter().any(|f| f.0 == id) {
                 continue;
             }
             if hid.get_or_insert_with(|| self.drew_nothing()).get(i).copied().unwrap_or(false) {

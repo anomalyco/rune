@@ -99,8 +99,8 @@ fn debug_builds_warn_when_a_live_only_handler_changed_what_the_view_reads() {
     rt.frame(0.5);
     rt.key(KeyEvent { key: Key::Right, mods: Mods::default() });
     rt.frame(1.0 / 120.0);
-    assert_eq!(rt.frame.live_only_warnings.len(), 1, "{:?}", rt.frame.live_only_warnings);
-    assert!(rt.frame.live_only_warnings[0].contains("on_key"), "{}", rt.frame.live_only_warnings[0]);
+    assert_eq!(rt.frame.live_only_warnings().len(), 1, "{:?}", rt.frame.live_only_warnings());
+    assert!(rt.frame.live_only_warnings()[0].contains("on_key"), "{}", rt.frame.live_only_warnings()[0]);
 
     // Used as meant, the check commits and stays quiet; events between checks skip the view.
     let mut rt = app(false);
@@ -110,8 +110,8 @@ fn debug_builds_warn_when_a_live_only_handler_changed_what_the_view_reads() {
         rt.key_up(KeyEvent { key: Key::Right, mods: Mods::default() });
         rt.frame(1.0 / 120.0);
     }
-    assert!(rt.frame.live_only_warnings.is_empty(), "{:?}", rt.frame.live_only_warnings);
-    assert_eq!((rt.stats.commits - before, rt.frame.live_checks, rt.frame.live_only_skips), (1, 1, 9));
+    assert!(rt.frame.live_only_warnings().is_empty(), "{:?}", rt.frame.live_only_warnings());
+    assert_eq!((rt.stats.commits - before, rt.frame.live_checks(), rt.frame.live_only_skips), (1, 1, 9));
 }
 
 #[test]
@@ -124,8 +124,8 @@ fn the_check_ignores_a_change_another_event_made_in_the_same_frame() {
     rt.pointer_down(x, y);
     rt.pointer_up(x, y);
     rt.frame(1.0 / 120.0);
-    assert_eq!((rt.state.count, rt.frame.live_checks), (1, 1));
-    assert!(rt.frame.live_only_warnings.is_empty(), "{:?}", rt.frame.live_only_warnings);
+    assert_eq!((rt.state.count, rt.frame.live_checks()), (1, 1));
+    assert!(rt.frame.live_only_warnings().is_empty(), "{:?}", rt.frame.live_only_warnings());
 }
 
 #[test]
@@ -209,7 +209,7 @@ fn debug_check_does_not_blame_live_only_for_layout_feedback_before_a_key() {
     rt.key_up(KeyEvent { key: Key::Right, mods: Mods::default() });
     rt.key(KeyEvent { key: Key::Left, mods: Mods::default() });
     rt.frame(0.0);
-    assert!(rt.frame.live_only_warnings.is_empty(), "{:?}", rt.frame.live_only_warnings);
+    assert!(rt.frame.live_only_warnings().is_empty(), "{:?}", rt.frame.live_only_warnings());
 }
 
 #[test]
@@ -287,16 +287,16 @@ fn a_commit_records_why_for_the_frame_log() {
         let mut rt = app(false);
         rt.check_live_only(false);
         rt.frame(0.0);
-        rt.commit.commit_why = 0;
+        rt.commit.clear_commit_why();
         rt.key_up(KeyEvent { key: Key::Right, mods: Mods::default() });
         rt.frame(0.0);
-        assert_eq!(rt.commit.commit_why, 0, "a live-only key commits nothing");
+        assert_eq!(rt.commit.commit_why(), 0, "a live-only key commits nothing");
         if source == 0 { rt.poll = Some(|s, _, _| { s.count += 1; true }); }
         if source == 1 {
             let (x, y) = rt.find("camera").unwrap();
             rt.pointer_down(x, y); rt.pointer_up(x, y);
         }
         rt.frame(0.0);
-        assert_eq!(rt.commit.commit_why & want, want, "source {source}: {:?}", CommitWhy::names(rt.commit.commit_why));
+        assert_eq!(rt.commit.commit_why() & want, want, "source {source}: {:?}", CommitWhy::names(rt.commit.commit_why()));
     }
 }

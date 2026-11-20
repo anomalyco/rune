@@ -1,26 +1,34 @@
 //! Text flights drawn as an overlay of glyph instances, from their source text to their landed text.
 use super::*;
 
-impl RuntimeCore {
+impl state::PaintState {
     /// All destination rectangles below come from this frame's completed growth/scroll build.
     /// The overlay only writes draw instances, never layout or app state.
-    pub(in crate::runtime) fn draw_text_flights(&mut self) -> bool {
-        let s = self.env.scale;
-        let srgb = self.paint.srgb_blend;
-        let now = self.t;
-        let reduced = self.reduced_motion;
-        let viewport = [0.0, 0.0, self.viewport.0, self.viewport.1];
-        let nodes = &self.tree.nodes;
-        let scene = &self.scene;
-        self.motion.flights.retain(|f| nodes.iter().any(|n| f.lands(&n.path, n.key.as_deref())
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::runtime) fn draw_text_flights(
+        &mut self,
+        flights: &mut Vec<TextFlight>,
+        nodes: &[Node],
+        scene: &Scene,
+        text: &mut TextSystem,
+        images: &mut crate::pixels::ImageAtlas,
+        instances: &mut Vec<Instance>,
+        s: f32,
+        now: f64,
+        reduced: bool,
+        viewport: (f32, f32),
+    ) -> bool {
+        let srgb = self.srgb_blend;
+        let viewport = [0.0, 0.0, viewport.0, viewport.1];
+        flights.retain(|f| nodes.iter().any(|n| f.lands(&n.path, n.key.as_deref())
             && !matches!(scene.phase(n.id), Some(PresencePhase::Exiting { .. }))));
         let mut done = Vec::new();
-        for (fi, f) in self.motion.flights.iter_mut().enumerate() {
+        for (fi, f) in flights.iter_mut().enumerate() {
             let Some((i, n)) = nodes.iter().enumerate().find(|(_, n)| f.lands(&n.path, n.key.as_deref())) else { continue };
             let (Some(spec), Some(layout)) = (&n.text, n.text_layout.as_ref().and_then(TextLayout::single)) else { done.push(fi); continue };
             // Both ends are measured by their laid-out text, so a destination box wider than its
             // text (a body stretched across a column) doesn't scale the flight.
-            let (target, origin) = text_extent(n, spec, TextFlow::Single(layout), self.paint.drawn[i], s);
+            let (target, origin) = text_extent(n, spec, TextFlow::Single(layout), self.drawn[i], s);
             if f.measure(target, now, reduced) { done.push(fi); }
             // Land sub-quantum size residuals before snapping both edges. Otherwise a settled
             // height can alternate by one quantum while its still-moving top crosses the grid.
@@ -31,7 +39,7 @@ impl RuntimeCore {
             f.presented = MRect::new(edges[0], edges[1], edges[2] - edges[0], edges[3] - edges[1]);
             let p = f.progress(now, reduced);
             let (source_alpha, target_alpha) = f.alphas(target, now, reduced);
-            let actual_clip = screen_clip_of(n.parent, &self.paint.inh_scratch, &self.paint.turn_scratch).map(|v| v / s);
+            let actual_clip = screen_clip_of(n.parent, &self.inh_scratch, &self.turn_scratch).map(|v| v / s);
             let actual_clip = [actual_clip[0].max(0.0), actual_clip[1].max(0.0), actual_clip[2].min(viewport[2]), actual_clip[3].min(viewport[3])];
             let current = f.presented;
             let zoom = current.w / f.source.w;
@@ -47,27 +55,27 @@ impl RuntimeCore {
             f.clip = if reduced { actual_clip } else { clip };
             f.source_alpha = source_alpha;
             f.target_alpha = target_alpha;
-            let final_fade = n.parent.and_then(|p| self.paint.inh_scratch.get(p)).map_or([0.0; 4], |h| h.fade.map(|v| v / s));
+            let final_fade = n.parent.and_then(|p| self.inh_scratch.get(p)).map_or([0.0; 4], |h| h.fade.map(|v| v / s));
             let fade = [0.0; 4];
             if source_alpha > 0.0 {
                 let source_rect = if reduced { f.source } else { current };
                 let source_clip = if reduced { f.source_clip } else { clip };
                 for q in &f.glyphs {
-                    self.instances.push(transformed(*q, f.source, source_rect, f.scale, source_alpha, source_clip, fade));
+                    instances.push(transformed(*q, f.source, source_rect, f.scale, source_alpha, source_clip, fade));
                 }
             }
-            self.paint.glyph_scratch.clear();
-            self.text.set_glyph_inks(spec.color, &[]);
-            self.text.set_emit(self.text.moving_emit());
-            self.text.glyphs_for_layout(layout, s, [origin[0] * s, origin[1] * s], false, &mut self.paint.glyph_scratch);
-            self.text.set_emit(crate::text::outline::Emit::Atlas);
-            for q in &self.paint.glyph_scratch {
-                let Some(q) = glyph_or_image(q, &self.text, &mut self.images, premul(spec.color, 1.0, srgb), NO_CLIP, [0.0; 4]) else { continue };
-                self.instances.push(transformed(q, target, current, s, target_alpha,
+            self.glyph_scratch.clear();
+            text.set_glyph_inks(spec.color, &[]);
+            text.set_emit(text.moving_emit());
+            text.glyphs_for_layout(layout, s, [origin[0] * s, origin[1] * s], false, &mut self.glyph_scratch);
+            text.set_emit(crate::text::outline::Emit::Atlas);
+            for q in &self.glyph_scratch {
+                let Some(q) = glyph_or_image(q, text, images, premul(spec.color, 1.0, srgb), NO_CLIP, [0.0; 4]) else { continue };
+                instances.push(transformed(q, target, current, s, target_alpha,
                     if reduced { actual_clip } else { clip }, if reduced { final_fade } else { fade }));
             }
         }
-        for i in done.into_iter().rev() { self.motion.flights.remove(i); }
-        !self.motion.flights.is_empty()
+        for i in done.into_iter().rev() { flights.remove(i); }
+        !flights.is_empty()
     }
 }

@@ -103,7 +103,7 @@ fn scrolling_virtual_rows_without_memo_skips_view_and_keeps_mounted_rows() {
 
         // Force full view on the reference runtime and check exact visible parity.
         let fc0 = full.stats.commits;
-        full.commit.reuse.scale = f32::NAN;
+        full.commit.set_reuse_scale(f32::NAN);
         full.wheel(400.0, 200.0, -90.0);
         full.frame(1.0 / 120.0);
         if full.stats.commits > fc0 {
@@ -294,9 +294,9 @@ fn virtual_remount_keeps_view_and_mounted_row_memos_and_evicts_culled_ones() {
     assert!(rebuilt.is_empty(), "mounted row memos survived partial commits, got {rebuilt:?}");
     // And culled early rows (`0..mounted.start`) were evicted rather than accumulating in MemoCache.
     assert!(
-        rt.commit.memo.len() <= rt.commit.virtuals["#0/scroll/rows"].range.len() + 2,
+        rt.commit.memo_len() <= rt.commit.virtuals["#0/scroll/rows"].range.len() + 2,
         "culled row memos evicted: memo len {}, mounted {:?}",
-        rt.commit.memo.len(),
+        rt.commit.memo_len(),
         rt.commit.virtuals["#0/scroll/rows"].range
     );
 

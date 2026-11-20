@@ -221,7 +221,7 @@ pub(super) fn rests(app: &dyn OverlayApp, runtime_idle: bool, dirty: bool) -> bo
 pub(super) fn rest(app: &mut dyn OverlayApp, clock: &mut FrameClock, frame_time: Instant) -> (bool, f64) {
     let elapsed = clock.frame_step(frame_time, app.compositor_animating()).total();
     let rt = app.rt_mut();
-    rt.frame.frame_target = Some(frame_time);
+    rt.frame.set_frame_target(frame_time);
     rt.clock = rt.wall_start.map_or(rt.clock + elapsed, |t0| t0.elapsed().as_secs_f64());
     rt.t += elapsed * rt.time_scale as f64;
     rt.scene.set_time(rt.t);
@@ -283,7 +283,7 @@ pub(super) fn submit_and_present(live: &mut Live, renderer: &Renderer, gpu: &Gpu
             }
         }
         renderer.submit(&gpu.queue, encoder);
-        live.materials.present(&rt.paint.materials, rt.env.scale, || gpu.queue.present(frame));
+        live.materials.present(rt.paint.materials(), rt.env.scale, || gpu.queue.present(frame));
     }
     #[cfg(not(target_os = "macos"))]
     {

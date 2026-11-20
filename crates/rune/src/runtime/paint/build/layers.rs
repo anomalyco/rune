@@ -33,49 +33,67 @@ fn strip_round_mask(clip: &mut [f32; 4], round: &mut Option<([f32; 4], [f32; 4])
     }
 }
 
-impl RuntimeCore {
+impl paint_state::PaintState {
     // Phases of `build`'s single paint loop; keep them inlined into it.
     #[inline(always)]
-    pub(super) fn prepare_dissolve(&mut self) {
-        let n_nodes = self.tree.nodes.len();
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn prepare_dissolve(
+        &mut self,
+        tree: &types::TreeState,
+        scene: &Scene,
+        motion: &crate::runtime::tracks::MotionState,
+        clock: f64,
+        reduced_motion: bool,
+        focus_keyboard: bool,
+        focus_path: Option<&str>,
+    ) {
+        let n_nodes = tree.nodes.len();
         // One linear pass, including retained exits, Live opacity, presence and loops. Reuse
         // inherited scratch for hover groups so activation samples exactly the paint values.
-        self.paint.dissolve_scratch.clear();
-        if self.tree.has_dissolve { self.paint.dissolve_scratch.resize(n_nodes, false); }
-        for index in 0..if self.tree.has_dissolve { n_nodes } else { 0 } {
-            let i = self.paint.layer_paint_order.get(index).copied().unwrap_or(index);
-            let n = &self.tree.nodes[i];
-            let inherited_group = n.parent.map_or(0.0, |p| self.paint.inh_scratch[p].group);
-            self.paint.inh_scratch[i].group = if n.vis.hover().a > 0.0 || n.vis_flags.hover_group() {
-                self.scene.get(n.id, P_HOVER).unwrap_or(0.0).clamp(0.0, 1.0)
+        self.dissolve_scratch.clear();
+        if tree.has_dissolve { self.dissolve_scratch.resize(n_nodes, false); }
+        for index in 0..if tree.has_dissolve { n_nodes } else { 0 } {
+            let i = self.layer_paint_order.get(index).copied().unwrap_or(index);
+            let n = &tree.nodes[i];
+            let inherited_group = n.parent.map_or(0.0, |p| self.inh_scratch[p].group);
+            self.inh_scratch[i].group = if n.vis.hover().a > 0.0 || n.vis_flags.hover_group() {
+                scene.get(n.id, P_HOVER).unwrap_or(0.0).clamp(0.0, 1.0)
             } else { inherited_group };
-            let Some(parent) = n.parent.filter(|&p| self.tree.nodes[p].vis_flags.blend() == crate::render::Blend::PlusLighter) else { continue };
-            let Some(p) = self.scene.presented(n.id) else { continue };
+            let Some(parent) = n.parent.filter(|&p| tree.nodes[p].vis_flags.blend() == crate::render::Blend::PlusLighter) else { continue };
+            let Some(p) = scene.presented(n.id) else { continue };
             let mut opacity = p.opacity * n.vis.layer_opacity;
-            opacity *= self.group_factor(n, inherited_group);
-            if fades(n.looping.as_deref().copied()) && let Some(track) = self.motion.loops.get(&n.id) {
-                opacity *= track.sample_at(self.scene.store().node_time(n.id), self.clock, self.reduced_motion);
+            opacity *= group_factor(scene, focus_keyboard, focus_path, n, inherited_group);
+            if fades(n.looping.as_deref().copied()) && let Some(track) = motion.loop_track(n.id) {
+                opacity *= track.sample_at(scene.store().node_time(n.id), clock, reduced_motion);
             }
-            self.paint.dissolve_scratch[parent] |= opacity > 0.001 && opacity < 1.0;
+            self.dissolve_scratch[parent] |= opacity > 0.001 && opacity < 1.0;
         }
     }
 
     #[inline(always)]
-    pub(super) fn needs_tree_order(&self, flying: bool) -> bool {
+    pub(super) fn needs_tree_order(&self, tree: &types::TreeState, scene: &Scene, flying: bool) -> bool {
         // Exiting descendants are appended to storage. Bring them back into their subtree
         // only when isolation requires it; the ordinary painter stream stays byte-identical.
         // Matched flights paint last (see `update_layer_paint_order`).
-        ((flying || self.tree.has_sticky || self.tree.has_raise || self.tree.has_paint_order) && !self.paint.layer_paint_order.is_empty()) || self.paint.layer_paint_order.windows(2).any(|pair| {
-            let n = &self.tree.nodes[pair[0]];
-            self.tree.nodes[pair[1]].parent == Some(pair[0]) && ((self.tree.has_dissolve && self.paint.dissolve_scratch[pair[0]]) || n.vis_flags.cache() || n.vis.clip_radius.is_some() || n.vis.group_opacity.is_some() || n.group_fade
+        ((flying || tree.has_sticky || tree.has_raise || tree.has_paint_order) && !self.layer_paint_order.is_empty()) || self.layer_paint_order.windows(2).any(|pair| {
+            let n = &tree.nodes[pair[0]];
+            tree.nodes[pair[1]].parent == Some(pair[0]) && ((tree.has_dissolve && self.dissolve_scratch[pair[0]]) || n.vis_flags.cache() || n.vis.clip_radius.is_some() || n.vis.group_opacity.is_some() || n.group_fade
                 || n.vis.layer_opacity < 1.0 || fades(n.looping.as_deref().copied())
-                || self.scene.presented(n.id).is_some_and(|p| (p.opacity > 0.0 && p.opacity < 1.0) || p.blur > 0.0 || p.transform.rotate.abs() > 1e-6))
+                || scene.presented(n.id).is_some_and(|p| (p.opacity > 0.0 && p.opacity < 1.0) || p.blur > 0.0 || p.transform.rotate.abs() > 1e-6))
         })
     }
 
     #[inline]
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn close_all_layers(
         &mut self,
+        nodes: &[Node],
+        instances: &mut Vec<Instance>,
+        surfaces: &mut [crate::native_surface::SurfaceDraw],
+        marks: &mut Vec<u32>,
+        track_marks: bool,
+        text: &mut TextSystem,
+        commit_gen: u64,
         layers: &mut Vec<(usize, usize, usize)>,
         active_cache: &mut Option<ActiveCache>,
         glyph_count: &mut usize,
@@ -83,16 +101,24 @@ impl RuntimeCore {
         while let Some((_, start, surface_start)) = layers.pop() {
             if active_cache.is_some_and(|ac| ac.instance_start == start) {
                 let ac = active_cache.take().unwrap();
-                self.close_cached_layer(ac, start, surface_start, glyph_count);
+                self.close_cached_layer(nodes, instances, surfaces, marks, track_marks, text, commit_gen, ac, start, surface_start, glyph_count);
             } else {
-                crate::render::end_layer(&mut self.instances, &mut self.surfaces, &mut self.marks, start, surface_start);
+                crate::render::end_layer(instances, surfaces, marks, start, surface_start);
             }
         }
     }
 
     #[inline(always)]
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn close_layers_to_parent(
         &mut self,
+        nodes: &[Node],
+        instances: &mut Vec<Instance>,
+        surfaces: &mut [crate::native_surface::SurfaceDraw],
+        marks: &mut Vec<u32>,
+        track_marks: bool,
+        text: &mut TextSystem,
+        commit_gen: u64,
         node_parent: Option<usize>,
         layers: &mut Vec<(usize, usize, usize)>,
         active_cache: &mut Option<ActiveCache>,
@@ -100,21 +126,26 @@ impl RuntimeCore {
     ) {
         while let Some(&(ancestor, start, surface_start)) = layers.last() {
             let mut parent = node_parent;
-            while parent.is_some_and(|p| p != ancestor) { parent = self.tree.nodes[parent.unwrap()].parent; }
+            while parent.is_some_and(|p| p != ancestor) { parent = nodes[parent.unwrap()].parent; }
             if parent == Some(ancestor) { break; }
             if active_cache.is_some_and(|ac| ac.instance_start == start) {
                 let ac = active_cache.take().unwrap();
-                self.close_cached_layer(ac, start, surface_start, glyph_count);
+                self.close_cached_layer(nodes, instances, surfaces, marks, track_marks, text, commit_gen, ac, start, surface_start, glyph_count);
             } else {
-                crate::render::end_layer(&mut self.instances, &mut self.surfaces, &mut self.marks, start, surface_start);
+                crate::render::end_layer(instances, surfaces, marks, start, surface_start);
             }
             layers.pop();
         }
     }
 
     #[inline(always)]
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn reopen_raised_layers(
-        &mut self,
+        &self,
+        nodes: &[Node],
+        scene: &Scene,
+        instances: &mut Vec<Instance>,
+        surfaces_len: usize,
         node_parent: Option<usize>,
         pinh: &mut Inh,
         layers: &mut Vec<(usize, usize, usize)>,
@@ -134,37 +165,40 @@ impl RuntimeCore {
         let mut parent = node_parent;
         while let Some(p) = parent {
             chain.push(p);
-            parent = self.tree.nodes[p].parent;
+            parent = nodes[p].parent;
         }
         for &p in chain.iter().rev() {
-            let ancestor = &self.tree.nodes[p];
-            let k = self.paint.inh_scratch[p].turn;
-            if k != 0 && ancestor.parent.map_or(0, |pp| self.paint.inh_scratch[pp].turn) != k {
-                let t = self.paint.turn_scratch[k as usize - 1];
-                let start = self.instances.len();
+            let ancestor = &nodes[p];
+            let k = self.inh_scratch[p].turn;
+            if k != 0 && ancestor.parent.map_or(0, |pp| self.inh_scratch[pp].turn) != k {
+                let t = self.turn_scratch[k as usize - 1];
+                let start = instances.len();
                 let marker = Instance::begin_layer(t.rect, t.outer_clip, Default::default()).turned(t.angle, t.pivot);
-                self.instances.push(marker);
-                layers.push((p, start, self.surfaces.len()));
+                instances.push(marker);
+                layers.push((p, start, surfaces_len));
             }
             if let Some(radius) = ancestor.vis.clip_radius {
-                let [x, y, w, h] = self.paint.unturned_drawn.get(p).filter(|_| k != 0)
-                    .map_or_else(|| self.paint.drawn[p].map(|v| v * s), |&(b, _)| [b[0] * s, b[1] * s, (b[2] - b[0]) * s, (b[3] - b[1]) * s]);
+                let [x, y, w, h] = self.unturned_drawn.get(p).filter(|_| k != 0)
+                    .map_or_else(|| self.drawn[p].map(|v| v * s), |&(b, _)| [b[0] * s, b[1] * s, (b[2] - b[0]) * s, (b[3] - b[1]) * s]);
                 let radii = ancestor.vis.clip_corners.unwrap_or_else(|| {
                     if ancestor.vis.radii() != [0.0; 4] {
-                        self.scene.presented(ancestor.id).map_or(ancestor.vis.radii(), |p| p.radius.0)
+                        scene.presented(ancestor.id).map_or(ancestor.vis.radii(), |p| p.radius.0)
                     } else { [radius; 4] }
                 }).map(|radius| {
-                    let radius = (radius.max(0.0) * self.paint.inh_scratch[p].scale * s).min(w.min(h) * 0.5);
+                    let radius = (radius.max(0.0) * self.inh_scratch[p].scale * s).min(w.min(h) * 0.5);
                     if ancestor.vis_flags.continuous_corners() { -radius } else { radius }
                 });
-                let start = self.instances.len();
+                let start = instances.len();
                 let mut marker = Instance::begin_layer([x, y, w, h], [x, y, x + w, y + h], Default::default());
                 marker.round_clip_corners(radii);
-                self.instances.push(marker);
-                layers.push((p, start, self.surfaces.len()));
+                instances.push(marker);
+                layers.push((p, start, surfaces_len));
             }
         }
     }
+}
+
+impl RuntimeCore {
 
     #[inline(always)]
     #[allow(clippy::too_many_arguments)]
@@ -217,7 +251,7 @@ impl RuntimeCore {
         // new raster on each commit. Live-only transforms still composite the old raster.
         let mut committed_scale_moving = false;
         if n.vis_flags.cache() && let Some(entry) = self.paint.node_caches.get_mut(&n.id)
-            && entry.commit_gen != self.commit.commit_gen
+            && entry.commit_gen != self.commit.commit_gen()
             && let Some(frame) = entry.committed_scale(sc * s, now)
         {
             committed_scale_moving = true;
@@ -385,7 +419,7 @@ impl RuntimeCore {
                 let (scale, pass, frame) =
                     if let Some(entry) = self.paint.node_caches.get(&n.id) {
                         let is_resident = self.text.atlas.resident_caches.get(&n.id.0) == Some(&entry.signature);
-                        entry.open(eff_scale, s, self.settled, now, self.commit.commit_gen, is_resident,
+                        entry.open(eff_scale, s, self.settled, now, self.commit.commit_gen(), is_resident,
                             scale_motion, paint_hash, || self.paint.cache_check_scratch[i], glyph_count)
                     } else {
                         (ScaleSettle::Still(eff_scale), RasterPass::Paint { glyph_start: glyph_count }, None)

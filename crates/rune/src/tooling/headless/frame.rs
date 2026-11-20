@@ -310,7 +310,7 @@ impl<F: FnMut(Shot, Vec<u8>)> FrameHost for HeadlessFrame<'_, '_, F> {
                 events: self.fp_events,
                 allocations: procwatch::alloc::thread_allocations() - self.fp_alloc0,
                 commits: rt.stats.commits - self.fp_commits0,
-                why: std::mem::take(&mut rt.commit.commit_why),
+                why: rt.commit.take_commit_why(),
                 shaped: rt.stats.shaped,
                 animating: info.animating,
                 cpu_ms: self.fp_cpu0.map(|start| crate::frame::profile::cpu_ms().unwrap() - start),

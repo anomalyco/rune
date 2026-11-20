@@ -147,7 +147,7 @@ fn app_try_run_snaps_the_selected_secondary_window_at_its_own_size() {
 fn a_pending_patch_keeps_a_window_stale_until_a_frame_rebuilds_it() {
     let hub: &'static Hub = Box::leak(Box::default());
     let mut rt = crate::Runtime::new(0u8, |_: &u8, _: &mut Cx<u8>| el().size(10.0, 10.0), (100.0, 100.0), Env::new(true, 1.0));
-    rt.frame.hot = Some(Session::join(hub, Arc::new(|| {})));
+    rt.frame.set_hot(Session::join(hub, Arc::new(|| {})));
     rt.frame(0.0);
     assert!(!rt.needs_commit() && !rt.stale());
     hub.patched();

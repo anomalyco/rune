@@ -19,9 +19,9 @@ fn duplicate_sibling_keys_keep_the_first_and_lay_out_without_a_panic() {
 #[test]
 fn duplicate_sibling_keys_tooling_reports_and_lays_out() {
     let mut rt = Runtime::new((), duplicate_view, (100.0, 100.0), Env::new(true, 1.0));
-    rt.commit.key_warnings = Some(Vec::new());
+    rt.commit.enable_key_warnings();
     rt.frame(0.0);
-    assert_eq!(rt.commit.key_warnings.as_ref().unwrap().len(), 1);
+    assert_eq!(rt.commit.key_warnings().unwrap().len(), 1);
     assert_eq!(rt.tree.nodes.len(), 3);
     assert_eq!(rt.tree.nodes[0].local.w, 100.0);
 }
@@ -146,13 +146,13 @@ fn send_flight_follows_the_measured_bubble_while_earlier_rows_land() {
     rt.frame(1.0 / 120.0);
     rt.key(KeyEvent { key: crate::edit::Key::Enter, mods: Default::default() });
     rt.frame(1.0 / 120.0);
-    assert_eq!(rt.motion.flights.len(), 1);
-    assert!(!rt.motion.flights[0].glyphs.is_empty(), "the visible composer glyphs survive clearing the model");
-    let mut previous_target = rt.motion.flights[0].destination;
+    assert_eq!(rt.motion.flights().len(), 1);
+    assert!(!rt.motion.flights()[0].glyphs.is_empty(), "the visible composer glyphs survive clearing the model");
+    let mut previous_target = rt.motion.flights()[0].destination;
     let mut retargets = 0;
     for _ in 0..240 {
         rt.frame(1.0 / 120.0);
-        if let Some(f) = rt.motion.flights.first() {
+        if let Some(f) = rt.motion.flights().first() {
             assert!(rt.instances.iter().any(|q| q.params[1] == KIND_GLYPH && (q.uv[2] > 0.0 || q.radii[3] > 0.0) && q.fill[3] > 0.1
                 && q.rect[0].max(q.clip[0]) + 1.0 < (q.rect[0] + q.rect[2]).min(q.clip[2])
                 && q.rect[1].max(q.clip[1]) + 1.0 < (q.rect[1] + q.rect[3]).min(q.clip[3])),
@@ -164,7 +164,7 @@ fn send_flight_follows_the_measured_bubble_while_earlier_rows_land() {
         }
     }
     assert!(retargets > 3, "earlier row growth actually moved the destination");
-    assert!(rt.motion.flights.is_empty(), "flight lands and releases the captured glyphs");
+    assert!(rt.motion.flights().is_empty(), "flight lands and releases the captured glyphs");
     assert!(!rt.animating);
 }
 

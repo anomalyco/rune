@@ -28,31 +28,31 @@ pub(crate) struct CommitState {
     pub(in crate::runtime) relayout: bool,
     /// Every viewport change since the last commit came from the window's own resize
     /// animation (`step_viewport`), not the user or the system.
-    pub(in crate::runtime) viewport_stepped: bool,
-    pub(in crate::runtime) settle: bool,
+    viewport_stepped: bool,
+    settle: bool,
     /// True when the commit in flight is for scroll/layout only (`self.state` wasn't mutated).
-    pub(in crate::runtime) state_unchanged: bool,
+    state_unchanged: bool,
     /// Why this frame committed, as [`commit_why::CommitWhy`] bits, until the frame log takes them.
-    pub(crate) commit_why: u16,
+    commit_why: u16,
     pub(crate) commits: u64,
-    pub(in crate::runtime) commit_gen: u64,
+    commit_gen: u64,
     /// The memo pass the current commit's first view build was. Memos none of its builds used
     /// go once it applies.
-    pub(in crate::runtime) memo_since: u64,
+    memo_since: u64,
     /// The clock at the last commit.
-    pub(in crate::runtime) last_commit_clock: f64,
+    last_commit_clock: f64,
     /// The last view's `Cx::foreground` and `Cx::focus_ring`, for rows built after it and the
     /// rings painted until the next.
     pub(in crate::runtime) defaults: cx::ViewDefaults,
-    pub(in crate::runtime) reuse: relayout::Reuse,
+    reuse: relayout::Reuse,
     pub(in crate::runtime) layout: LayoutEngine,
-    pub(crate) memo: crate::memo::MemoCache,
-    pub(in crate::runtime) apply_scratch: apply_scratch::ApplyScratch,
+    memo: crate::memo::MemoCache,
+    apply_scratch: apply_scratch::ApplyScratch,
     pub(in crate::runtime) watch: crate::tooling::perf_warn::Watch,
     /// Opt-in tooling checks. None keeps release commits free of key traversal/allocation.
-    pub(crate) key_warnings: Option<Vec<String>>,
+    key_warnings: Option<Vec<String>>,
     pub(crate) virtuals: HashMap<String, crate::el::virtual_list::VirtualList>,
-    pub(crate) virtual_culled: HashSet<String>,
+    virtual_culled: HashSet<String>,
     /// Fresh view accessors for focused text fields omitted by virtualization.
     pub(in crate::runtime) virtual_inputs: HashMap<String, Box<InputSpec>>,
     /// Whether an index-built list still fills its overscan, and for how many frames.
@@ -60,15 +60,15 @@ pub(crate) struct CommitState {
     /// Keys the last view read with `Cx::layout` or `Cx::layout_size`, and what each resolved to.
     pub(in crate::runtime) layout_seen: layout_read::LayoutSeen,
     /// Rect last sent to each element's `El::on_layout`.
-    pub(in crate::runtime) layout_fired: HashMap<NodeId, [f32; 4]>,
+    layout_fired: HashMap<NodeId, [f32; 4]>,
     /// Rect last sent to each element's `El::on_screen_layout`.
-    pub(in crate::runtime) screen_fired: HashMap<NodeId, [f32; 4]>,
+    screen_fired: HashMap<NodeId, [f32; 4]>,
     /// (Drawn rect, laid-out rect) last sent to each element's `El::on_drawn_layout`.
-    pub(in crate::runtime) drawn_fired: HashMap<NodeId, ([f32; 4], [f32; 4])>,
+    drawn_fired: HashMap<NodeId, ([f32; 4], [f32; 4])>,
     /// Whether each element with `El::on_visible` was last on screen.
-    pub(in crate::runtime) visible_fired: HashMap<NodeId, bool>,
+    visible_fired: HashMap<NodeId, bool>,
     /// Whether layout feedback may still cause a commit (see `layout_read`).
-    pub(in crate::runtime) feedback: layout_read::Feedback,
+    feedback: layout_read::Feedback,
 }
 
 impl CommitState {
@@ -105,6 +105,197 @@ impl CommitState {
             feedback: Default::default(),
             last_commit_clock: f64::NEG_INFINITY,
         }
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn is_viewport_stepped(&self) -> bool {
+        self.viewport_stepped
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn set_viewport_stepped(&mut self, stepped: bool) {
+        self.viewport_stepped = stepped;
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn is_settling(&self) -> bool {
+        self.settle
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn request_settle(&mut self) {
+        self.settle = true;
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn set_state_unchanged(&mut self, unchanged: bool) {
+        self.state_unchanged = unchanged;
+    }
+
+    #[inline]
+    pub(crate) fn take_commit_why(&mut self) -> u16 {
+        std::mem::take(&mut self.commit_why)
+    }
+
+    #[inline]
+    pub(crate) fn clear_commit_why(&mut self) {
+        self.commit_why = 0;
+    }
+
+    #[cfg(test)]
+    #[inline]
+    pub(in crate::runtime) fn commit_why(&self) -> u16 {
+        self.commit_why
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn commit_gen(&self) -> u64 {
+        self.commit_gen
+    }
+
+    #[cfg(test)]
+    #[inline]
+    pub(in crate::runtime) fn set_commit_gen(&mut self, generation: u64) {
+        self.commit_gen = generation;
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn last_commit_clock(&self) -> f64 {
+        self.last_commit_clock
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn set_read_moved(&mut self, moved: bool) {
+        self.reuse.read_moved = moved;
+    }
+
+    #[cfg(test)]
+    #[inline]
+    pub(in crate::runtime) fn set_reuse_scale(&mut self, scale: f32) {
+        self.reuse.scale = scale;
+    }
+
+    #[inline]
+    pub(crate) fn clear_memo(&mut self) {
+        self.memo.clear();
+    }
+
+    #[inline]
+    pub(crate) fn evict_memo_prefix(&mut self, prefix: &str) {
+        self.memo.evict_prefix(prefix);
+    }
+
+    #[cfg(test)]
+    #[inline]
+    pub(in crate::runtime) fn memo_builds(&self) -> usize {
+        self.memo.builds
+    }
+
+    #[cfg(test)]
+    #[inline]
+    pub(in crate::runtime) fn memo_len(&self) -> usize {
+        self.memo.len()
+    }
+
+    #[inline]
+    pub(crate) fn enable_key_warnings(&mut self) {
+        self.key_warnings = Some(Vec::new());
+    }
+
+    #[inline]
+    pub(crate) fn key_warnings(&self) -> Option<&[String]> {
+        self.key_warnings.as_deref()
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn push_key_warning(&mut self, msg: impl FnOnce() -> String) {
+        if let Some(warnings) = self.key_warnings.as_mut() {
+            warnings.push(msg());
+        }
+    }
+
+    #[cfg(test)]
+    #[inline]
+    pub(crate) fn virtuals(&self) -> &HashMap<String, crate::el::virtual_list::VirtualList> {
+        &self.virtuals
+    }
+
+    #[cfg(test)]
+    #[inline]
+    pub(crate) fn virtual_culled(&self) -> &HashSet<String> {
+        &self.virtual_culled
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn take_layout_fired(&mut self, screen: bool) -> HashMap<NodeId, [f32; 4]> {
+        std::mem::take(if screen { &mut self.screen_fired } else { &mut self.layout_fired })
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn set_layout_fired(&mut self, screen: bool, fired: HashMap<NodeId, [f32; 4]>) {
+        *(if screen { &mut self.screen_fired } else { &mut self.layout_fired }) = fired;
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn drawn_fired_empty(&self) -> bool {
+        self.drawn_fired.is_empty()
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn take_drawn_fired(&mut self) -> HashMap<NodeId, ([f32; 4], [f32; 4])> {
+        std::mem::take(&mut self.drawn_fired)
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn set_drawn_fired(&mut self, fired: HashMap<NodeId, ([f32; 4], [f32; 4])>) {
+        self.drawn_fired = fired;
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn visible_fired_empty(&self) -> bool {
+        self.visible_fired.is_empty()
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn take_visible_fired(&mut self) -> HashMap<NodeId, bool> {
+        std::mem::take(&mut self.visible_fired)
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn set_visible_fired(&mut self, seen: HashMap<NodeId, bool>) {
+        self.visible_fired = seen;
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn feedback_open(&self) -> bool {
+        self.feedback.open()
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn step_feedback(&mut self, event: layout_read::FeedbackEvent) {
+        self.feedback = self.feedback.step(event);
+    }
+
+    /// Restores any nodes moved out of `old_nodes` and recycles `measured`'s buffers before a
+    /// commit pass re-measures.
+    pub(in crate::runtime) fn discard_measured(
+        &mut self,
+        old_nodes: &mut [Node],
+        spare_nodes: &mut Vec<Node>,
+        mut measured: Measured,
+    ) {
+        memo_reuse::restore_moved_nodes(old_nodes, &mut measured.nodes, &measured.memo_reused, &measured.taken_paths);
+        measured.nodes.clear();
+        *spare_nodes = measured.nodes;
+        if let Some(mut pending) = measured.memo_flattened {
+            pending.clear();
+            self.memo.pending_scratch = pending;
+        }
+        measured.memo_reused.clear();
+        self.memo.reused_scratch = measured.memo_reused;
+        measured.taken_paths.clear();
+        self.memo.taken_paths_scratch = measured.taken_paths;
+        self.layout = measured.layout;
     }
 }
 
@@ -277,21 +468,18 @@ impl RuntimeCore {
         budget.end(self.commit.watch.cause);
     }
 
+    /// A frame's commit for `why` (`CommitWhy` bits).
+    pub(in crate::runtime) fn commit_for(&mut self, app: &mut dyn AppDriver, tx: &Tx, why: u16) {
+        self.commit.begin_watch(why);
+        self.commit(app, tx);
+        self.commit.end_watch();
+    }
+
     /// Restores any nodes moved out of `self.nodes` and recycles `measured`'s buffers before a
     /// commit pass re-measures.
-    pub(super) fn discard_measured(&mut self, mut measured: Measured) {
-        memo_reuse::restore_moved_nodes(&mut self.tree.nodes, &mut measured.nodes, &measured.memo_reused, &measured.taken_paths);
-        measured.nodes.clear();
-        self.tree.spare_nodes = measured.nodes;
-        if let Some(mut pending) = measured.memo_flattened {
-            pending.clear();
-            self.commit.memo.pending_scratch = pending;
-        }
-        measured.memo_reused.clear();
-        self.commit.memo.reused_scratch = measured.memo_reused;
-        measured.taken_paths.clear();
-        self.commit.memo.taken_paths_scratch = measured.taken_paths;
-        self.commit.layout = measured.layout;
+    #[inline]
+    pub(super) fn discard_measured(&mut self, measured: Measured) {
+        self.commit.discard_measured(&mut self.tree.nodes, &mut self.tree.spare_nodes, measured);
     }
 }
 

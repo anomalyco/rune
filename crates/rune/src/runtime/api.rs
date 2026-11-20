@@ -317,7 +317,7 @@ impl<S: 'static> Runtime<S> {
     #[inline(always)]
     pub fn element_path(&self, id: NodeId) -> Option<(&str, Option<&str>)> { self.core().element_path(id) }
     #[inline(always)]
-    pub fn rewind(&self) -> Option<&crate::rewind::Rewind> { self.core().rewind() }
+    pub fn rewind(&self) -> Option<&crate::rewind::Rewind> { self.core().motion.rewind() }
 
     #[inline(always)]
     pub(crate) fn poll_hidden(&mut self) -> bool {
@@ -544,7 +544,10 @@ impl<S: 'static> Runtime<S> {
 
     #[cfg(test)]
     #[inline(always)]
-    pub(super) fn capture_text_flight(&mut self, source: String, target: String) { self.core_mut().capture_text_flight(source, target); }
+    pub(super) fn capture_text_flight(&mut self, source: String, target: String) {
+        let c = self.core_mut();
+        c.motion.capture_text_flight(&c.tree.nodes, &mut c.paint, &mut c.text, c.env.scale, c.viewport, c.t, source, target);
+    }
 
     #[cfg(test)]
     #[inline(always)]
@@ -600,7 +603,10 @@ impl<S: 'static> Runtime<S> {
 
     #[cfg(test)]
     #[inline(always)]
-    pub(crate) fn record_rewind(&mut self) { self.core_mut().record_rewind(); }
+    pub(crate) fn record_rewind(&mut self) {
+        let c = self.core();
+        c.motion.record_rewind(c.clock, c.viewport, &c.tree.nodes, &c.paint);
+    }
 
     #[cfg(test)]
     #[inline(always)]

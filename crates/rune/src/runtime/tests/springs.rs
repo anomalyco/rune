@@ -11,8 +11,8 @@ fn dissolve_prepass_only_runs_for_trees_with_dissolve_nodes() {
     for enabled in [false, true, false] {
         rt.state = enabled; rt.invalidate(); rt.frame(0.0);
         assert_eq!(rt.tree.has_dissolve, enabled);
-        assert_eq!(rt.paint.dissolve_scratch.is_empty(), !enabled);
-        if enabled { assert!(rt.paint.dissolve_scratch[0]); }
+        assert_eq!(rt.paint.dissolve_scratch().is_empty(), !enabled);
+        if enabled { assert!(rt.paint.dissolve_scratch()[0]); }
     }
 }
 
@@ -23,10 +23,10 @@ fn a_child_too_faint_to_paint_does_not_isolate_its_dissolve_parent() {
     }
     let mut rt = Runtime::new(0.0005, view, (64.0, 32.0), Env::new(true, 1.0));
     rt.frame(0.0);
-    assert!(!rt.paint.dissolve_scratch[0]);
+    assert!(!rt.paint.dissolve_scratch()[0]);
     rt.state = 0.5; rt.invalidate();
     for _ in 0..60 { rt.frame(1.0 / 60.0); }
-    assert!(rt.paint.dissolve_scratch[0]);
+    assert!(rt.paint.dissolve_scratch()[0]);
 }
 
 #[test]
@@ -198,12 +198,12 @@ fn a_duplicate_matched_id_matches_the_last_one_and_warns() {
             .child(el().key("b").matched("tile").size(10.0, 10.0))
     }
     let mut rt = Runtime::new((), view, (100.0, 100.0), Env::new(true, 1.0));
-    rt.commit.key_warnings = Some(Vec::new());
+    rt.commit.enable_key_warnings();
     rt.frame(0.0);
-    let warnings = rt.commit.key_warnings.as_ref().unwrap();
+    let warnings = rt.commit.key_warnings().unwrap();
     assert!(warnings.len() == 1 && warnings[0].contains("duplicate matched id \"tile\""), "{warnings:?}");
     let b = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("b")).unwrap().id;
-    assert_eq!(rt.motion.matched.iter().map(|m| m.1).collect::<Vec<_>>(), [b]);
+    assert_eq!(rt.motion.matched_ids(), [b]);
 }
 
 #[test]

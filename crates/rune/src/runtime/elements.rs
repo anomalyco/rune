@@ -216,7 +216,7 @@ impl RuntimeCore {
         let animating = |id: NodeId| store.is_animating(id, prop::FRAME) || store.is_animating(id, prop::TRAVEL)
             || store.is_animating(id, prop::PRESENCE) || store.is_animating(id, prop::OFFSET) || store.is_animating(id, prop::SCALE) || store.is_animating(id, P_PRESS_SCALE)
             || store.is_animating(id, P_SCALE) || store.is_animating(id, prop::ROTATION) || paint_pose_springing(store, id)
-            || (!self.reduced_motion && self.motion.loops.get(&id).is_some_and(|l| l.active(store.node_time(id))));
+            || (!self.reduced_motion && self.motion.loop_active(id, store.node_time(id)));
         let sel_ranges = self.selection_ranges();
         let mut elements: Vec<_> = self.tree.nodes
             .iter()
@@ -224,7 +224,7 @@ impl RuntimeCore {
             .filter_map(|(i, n)| {
                 let p = self.scene.presented(n.id)?;
                 let exiting = self.subtree_exiting(i);
-                let flight = self.motion.flights.iter().find(|f| f.lands(&n.path, n.key.as_deref()));
+                let flight = self.motion.flights().iter().find(|f| f.lands(&n.path, n.key.as_deref()));
                 let mut moving = flight.is_some() || animating(n.id) || self.motion.grows.get(&n.id).is_some_and(|g| g.moving());
                 let drawn = self.paint.drawn.get(i).copied().unwrap_or([p.rect.x, p.rect.y, p.rect.w, p.rect.h]);
                 // A flight carries the destination's laid-out text, which can be narrower than
@@ -236,19 +236,19 @@ impl RuntimeCore {
                     [c.x + (drawn[0] - d.x) * zx, c.y + (drawn[1] - d.y) * zy, drawn[2] * zx, drawn[3] * zy]
                 });
                 let s = self.env.scale;
-                let clip = if self.motion.launches.flying(n.id) { NO_CLIP } else {
+                let clip = if self.motion.launches().flying(n.id) { NO_CLIP } else {
                     flight.map_or_else(|| self.screen_clip_of_parent(n.parent), |f| f.clip.map(|v| v * s))
                 };
                 let (x0, y0) = (rect[0].max(clip[0] / s), rect[1].max(clip[1] / s));
                 let (x1, y1) = ((rect[0] + rect[2]).min(clip[2] / s), (rect[1] + rect[3]).min(clip[3] / s));
                 let visible = [x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0)];
-                let revealing = flight.is_some() || self.motion.reveals.get(&n.id).is_some_and(|r| r.fading());
+                let revealing = flight.is_some() || self.motion.reveal_fading(n.id);
                 let mut in_growing_row = false;
                 let mut scrolling = false;
                 let mut scrolled = [0.0; 2];
                 let mut live_intent = intent(n);
                 // Held at its landing width this frame: its re-layout is the design.
-                if self.motion.landing_holds.holds(n.id) {
+                if self.motion.holds_landing(n.id) {
                     live_intent |= 1 | 2;
                 }
                 // A group_opacity swap under an instant hover group is a deliberate cut (Beta's
@@ -280,7 +280,7 @@ impl RuntimeCore {
                     // and takes on the scroll's only as it lands.
                     let id = self.tree.nodes[j].id;
                     let parent = self.tree.nodes[j].parent;
-                    let fix = self.motion.launches.carried(&self.scene, id);
+                    let fix = self.motion.launches().carried(&self.scene, id);
                     if fix != [0.0; 2] {
                         let k = parent.and_then(|p| self.paint.inh_scratch.get(p)).map_or(1.0, |h| h.still.0);
                         scrolled = [scrolled[0] - fix[0] * k, scrolled[1] - fix[1] * k];
@@ -302,7 +302,7 @@ impl RuntimeCore {
                 Some(ElementInfo {
                     trace_name: n.trace_name,
                     trace_namespace: n.trace_namespace,
-                    loop_phase: self.motion.loops.get(&n.id).map(|l| {
+                    loop_phase: self.motion.loop_track(n.id).map(|l| {
                         if self.reduced_motion && !matches!(n.looping.as_ref().map(|s| s.kind), Some(rune_motion::LoopKind::Sequence(_))) { 0.0 }
                         else { l.phase(self.scene.store().node_time(n.id)) }
                     }),
@@ -357,7 +357,7 @@ impl RuntimeCore {
                 })
             })
             .collect();
-        for f in &self.motion.flights {
+        for f in self.motion.flights() {
             let r = if self.reduced_motion { f.source } else { f.presented };
             let c = if self.reduced_motion { f.source_clip } else { f.clip };
             let path = format!("flight-source/{}", f.target_key);
@@ -467,8 +467,9 @@ impl RuntimeCore {
             None => None,
         };
         let n = self.tree.nodes.len();
-        let at = |k: usize| if self.paint.layer_paint_order.is_empty() { k } else { self.paint.layer_paint_order[k] };
-        let count = if self.paint.layer_paint_order.is_empty() { n } else { self.paint.layer_paint_order.len() };
+        let order = self.paint.layer_paint_order();
+        let at = |k: usize| if order.is_empty() { k } else { order[k] };
+        let count = if order.is_empty() { n } else { order.len() };
         (0..count).rev().map(at).find(|&i| {
             scope.is_none_or(|scope| self.tree.is_descendant(i, scope))
                 && self.pickable(i, x, y, pick)
@@ -517,7 +518,7 @@ impl RuntimeCore {
             || std::iter::successors(Some(i), |&p| step_up(&self.tree.nodes, p)).any(|p| {
                 let id = self.tree.nodes[p].id;
                 paint_pose_springing(store, id)
-                    || (!self.reduced_motion && self.motion.loops.get(&id).is_some_and(|l| l.active(store.node_time(id))))
+                    || (!self.reduced_motion && self.motion.loop_active(id, store.node_time(id)))
             });
         Some(Pose {
             rotation: self.scene.get(n.id, prop::ROTATION).unwrap_or(n.vis.rotate),
