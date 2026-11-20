@@ -10,11 +10,14 @@ use crate::video::foreign;
 use crate::video::{Kind, MediaSource, Meta};
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
-use objc2_av_foundation::{AVAsset, AVAssetImageGenerator, AVMediaTypeAudio, AVMediaTypeVideo, AVURLAsset};
+use objc2_av_foundation::{
+    AVAsset, AVAssetImageGenerator, AVAssetReferenceRestrictions, AVMediaTypeAudio, AVMediaTypeVideo, AVURLAsset,
+    AVURLAssetReferenceRestrictionsKey, AVURLAssetShouldSupportAliasDataReferencesKey,
+};
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use objc2_core_graphics::{CGBitmapContextCreate, CGColorSpace, CGContext, CGImage, CGImageAlphaInfo, CGImageByteOrderInfo, kCGColorSpaceSRGB};
 use objc2_core_media::{CMTime, CMTimeFlags};
-use objc2_foundation::{NSDictionary, NSString, NSURL};
+use objc2_foundation::{NSDictionary, NSNumber, NSString, NSURL};
 
 /// The source's lowercase extension, if any.
 pub(in crate::video) fn extension(source: &MediaSource) -> Option<String> {
@@ -48,18 +51,58 @@ pub(super) fn unsupported_format(source: &MediaSource, kind: Kind) -> Option<Str
 fn url(source: &MediaSource) -> Result<Retained<NSURL>, String> {
     match source {
         MediaSource::File(path) => {
-            if !path.exists() {
-                return Err(format!("no such file: {}", path.display()));
+            let meta = std::fs::metadata(path).map_err(|e| match e.kind() {
+                std::io::ErrorKind::NotFound => format!("no such file: {}", path.display()),
+                _ => format!("can't open {}: {e}", path.display()),
+            })?;
+            if !meta.is_file() {
+                return Err(format!("not a file: {}", path.display()));
             }
             let path = std::path::absolute(path).unwrap_or_else(|_| path.clone());
             Ok(NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy())))
         }
-        MediaSource::Url(url) => NSURL::URLWithString(&NSString::from_str(url)).ok_or_else(|| format!("invalid URL: {url}")),
+        MediaSource::Url(url) => {
+            let parsed = NSURL::URLWithString(&NSString::from_str(url)).ok_or_else(|| format!("invalid URL: {url}"))?;
+            if parsed.isFileURL()
+                && let Some(host) = parsed.host()
+            {
+                let host = host.to_string();
+                if !host.is_empty() && !host.eq_ignore_ascii_case("localhost") {
+                    return Err(format!("unsupported file URL host: {url}"));
+                }
+            }
+            Ok(parsed)
+        }
     }
+}
+
+/// Opens a local `file:` URL with `ForbidAll` reference restrictions so only media data stored
+/// inside the container file itself is allowed. Apple's default (`ForbidLocalReferenceToRemote`)
+/// leaves `ForbidLocalReferenceToLocal` off, allowing external QuickTime `dref` references to
+/// read other local files.
+fn local_asset(url: &NSURL) -> Retained<AVURLAsset> {
+    let restrictions = NSNumber::new_usize(AVAssetReferenceRestrictions::ForbidAll.0);
+    let aliases = NSNumber::new_bool(false);
+    let restrictions: &AnyObject = &restrictions;
+    let aliases: &AnyObject = &aliases;
+    // SAFETY: `AVURLAssetReferenceRestrictionsKey` (macOS 10.7+) and
+    // `AVURLAssetShouldSupportAliasDataReferencesKey` (macOS 10.10+) are immutable static
+    // AVFoundation string constants, and the values are live `NSNumber` objects.
+    let options = unsafe {
+        NSDictionary::<NSString, AnyObject>::from_slices(
+            &[AVURLAssetReferenceRestrictionsKey, AVURLAssetShouldSupportAliasDataReferencesKey],
+            &[restrictions, aliases],
+        )
+    };
+    // SAFETY: `url` is a live `NSURL` and `options` is a live `NSDictionary` of AVURLAsset options.
+    unsafe { AVURLAsset::URLAssetWithURL_options(url, Some(&options)) }
 }
 
 fn asset(source: &MediaSource, headers: &[(String, String)]) -> Result<Retained<AVURLAsset>, String> {
     let url = url(source)?;
+    if matches!(source, MediaSource::File(_)) || url.isFileURL() {
+        return Ok(local_asset(&url));
+    }
     if headers.is_empty() {
         // SAFETY: `url` is a live `NSURL` and `URLAssetWithURL_options` accepts `None` for options.
         return Ok(unsafe { AVURLAsset::URLAssetWithURL_options(&url, None) });

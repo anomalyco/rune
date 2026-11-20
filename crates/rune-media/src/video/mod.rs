@@ -160,6 +160,12 @@ pub(crate) fn headless_clock() -> Option<f64> {
 }
 
 /// Where media comes from. Strings containing `://` are URLs; anything else is a file path.
+///
+/// Local file sources ([`MediaSource::File`] and `file:` URLs) open strictly as self-contained
+/// local media files: macOS forbids external references (`AVAssetReferenceRestrictions::ForbidAll`),
+/// and Windows requires a plain local disk path with a direct media container extension and
+/// resolves it from a local byte stream without wildcard handler fallback. Network `http(s)://`
+/// URLs keep URL resolution unchanged.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MediaSource {
     File(PathBuf),
