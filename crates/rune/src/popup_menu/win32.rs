@@ -18,11 +18,11 @@ use windows_sys::Win32::Graphics::Gdi::{ClientToScreen, ScreenToClient};
 use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
 use windows_sys::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CreatePopupMenu, DestroyMenu, EndMenu, GWL_EXSTYLE, GetClientRect, GetCursorPos, GetForegroundWindow,
-    GetWindowLongPtrW, HMENU, IsWindow, IsWindowVisible, KillTimer, MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING,
-    PostMessageW, RegisterWindowMessageW, SetForegroundWindow, SetTimer, TPM_LAYOUTRTL, TPM_LEFTALIGN, TPM_NONOTIFY,
-    TPM_RETURNCMD, TPM_RIGHTALIGN, TPM_RIGHTBUTTON, TPM_TOPALIGN, TPM_VERTICAL, TPMPARAMS, TRACK_POPUP_MENU_FLAGS,
-    TrackPopupMenuEx, WM_NCDESTROY, WM_NULL, WS_EX_NOACTIVATE, WindowFromPoint,
+    AppendMenuW, CreatePopupMenu, DestroyMenu, EndMenu, GetClientRect, GetCursorPos, GetForegroundWindow, HMENU,
+    IsWindow, IsWindowVisible, KillTimer, MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, PostMessageW,
+    RegisterWindowMessageW, SetForegroundWindow, SetTimer, TPM_LAYOUTRTL, TPM_LEFTALIGN, TPM_NONOTIFY, TPM_RETURNCMD,
+    TPM_RIGHTALIGN, TPM_RIGHTBUTTON, TPM_TOPALIGN, TPM_VERTICAL, TPMPARAMS, TRACK_POPUP_MENU_FLAGS, TrackPopupMenuEx,
+    WM_NCDESTROY, WM_NULL, WindowFromPoint,
 };
 use winit::window::Window;
 
@@ -228,8 +228,8 @@ fn track(hwnd: HWND, pending: &Pending, pointer: &mut Option<(f32, f32)>) -> Opt
         let menu = build(&pending.show.menu, &mut ids)?;
         let (x, y, params) = placement(hwnd, &pending.show);
         // A menu closes on a click elsewhere, and gets the keyboard, only while its owner is
-        // the foreground window. A window that never activates (an overlay) takes the
-        // foreground for its menu, and hands it back after.
+        // the foreground window. An overlay takes the foreground for its menu, and hands it back
+        // after (`hands_back`).
         let previous = GetForegroundWindow();
         if previous != hwnd { SetForegroundWindow(hwnd); }
         let flags = TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON | TPM_TOPALIGN | layout()
@@ -243,8 +243,7 @@ fn track(hwnd: HWND, pending: &Pending, pointer: &mut Option<(f32, f32)>) -> Opt
         if IsWindow(hwnd) != 0 {
             // The menu's loop lets go of the foreground state once the owner gets a message.
             PostMessageW(hwnd, WM_NULL, 0, 0);
-            let overlay = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32 & WS_EX_NOACTIVATE != 0;
-            if overlay && !previous.is_null() && previous != hwnd && GetForegroundWindow() == hwnd {
+            if hands_back(crate::platform::win32::is_overlay(hwnd), previous, hwnd, GetForegroundWindow()) {
                 SetForegroundWindow(previous);
             }
             // winit sends no pointer move until the pointer leaves the pixel it's on.
@@ -252,6 +251,13 @@ fn track(hwnd: HWND, pending: &Pending, pointer: &mut Option<(f32, f32)>) -> Opt
         }
         usize::try_from(command).ok()?.checked_sub(1).and_then(|i| ids.get(i)).cloned()
     }
+}
+
+/// Whether the menu's `owner` gives the foreground back to `previous` once the menu closes: an
+/// overlay, whatever its `KeyPolicy`, that took the foreground only for the menu and still has
+/// it. One that had the foreground before (an `OnDemand` overlay the user clicked) keeps it.
+fn hands_back(overlay: bool, previous: HWND, owner: HWND, foreground: HWND) -> bool {
+    overlay && !previous.is_null() && previous != owner && foreground == owner
 }
 
 /// Where the pointer is over `hwnd`'s content, in points, unless another window covers it.

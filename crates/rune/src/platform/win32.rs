@@ -288,12 +288,13 @@ pub(crate) struct OverlayWindow {
     input: Rc<Input>,
     observing: bool,
     exclusion: OverlaySupport,
+    keys: crate::KeyPolicy,
 }
 impl OverlayWindow {
     pub fn new(window: &winit::window::Window, interactive: bool, options: &OverlayOptions, wake: Option<crate::Waker>) -> Result<Self, String> {
         let hwnd = hwnd(window).ok_or("the overlay window has no Win32 handle")?;
         let mode = options.input.resolved(interactive);
-        overlay_styles(hwnd, mode)?;
+        overlay_styles(hwnd, mode, options.keys)?;
         let exclusion = if options.exclude_from_capture {
             if unsafe { SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE) } != 0 { OverlaySupport::Requested } else { OverlaySupport::Failed }
         } else { OverlaySupport::Unknown };
@@ -305,7 +306,7 @@ impl OverlayWindow {
             unsafe { drop(Rc::from_raw(data)); }
             return Err(format!("SetWindowSubclass failed: {}", last_error()));
         }
-        Ok(Self { input, observing: false, exclusion, watch: None, wake })
+        Ok(Self { input, observing: false, exclusion, watch: None, wake, keys: options.keys })
     }
     pub fn capture_exclusion(&self) -> OverlaySupport { self.exclusion }
     pub fn set_capture_exclusion(&mut self, exclude: bool) -> OverlaySupport {
@@ -355,7 +356,7 @@ impl OverlayWindow {
         let hwnd = self.input.hwnd;
         // Opaque again, after any fade-out.
         self.input.fading.set(false);
-        overlay_styles(hwnd, self.input.input.get())?;
+        overlay_styles(hwnd, self.input.input.get(), self.keys)?;
         // SAFETY: Win32 calls on a live window owned by this thread.
         let visible = unsafe {
             ShowWindow(hwnd, SW_SHOWNOACTIVATE);
@@ -377,6 +378,13 @@ impl OverlayWindow {
         self.observing = true;
         if let Some((x, y)) = pointer_position() { self.input.observe(POINT { x, y }); }
         Ok(())
+    }
+    /// Gives the shown window the foreground and the keys, for `request_keys`, when Windows lets
+    /// this process take the foreground (it just had the user's input, or was given the right);
+    /// otherwise the window stays as it is and takes the keys when clicked. False when its policy
+    /// takes no keys or this process may not take the foreground.
+    pub fn request_keys(&self) -> bool {
+        self.input.visible.get() && crate::overlay::keys::can_take_keys(self.keys) && cloak::take_foreground(self.input.hwnd)
     }
     /// Keeps the shown window up at `alpha` (255 opaque) while it fades out, taking no clicks.
     pub fn fade(&self, alpha: u8) {
@@ -411,17 +419,19 @@ impl Drop for OverlayWindow {
     }
 }
 
-/// A layered, topmost tool window that never activates; unless `mode` takes every click, every
-/// click goes through (`Input::observe` lifts that over input regions). Windows composes a
+/// A layered, topmost tool window that never activates, unless its policy takes keys
+/// (`KeyPolicy::OnDemand`: a click or `request_keys` activates it); unless `mode` takes every
+/// click, every click goes through (`Input::observe` lifts that over input regions). Windows composes a
 /// layered window, its DirectComposition content included, only once it has layered
 /// attributes: without them it stays invisible however often it is shown (#510 in Hex).
 /// Opaque attributes leave the content's own alpha as the only transparency.
-fn overlay_styles(hwnd: HWND, mode: OverlayInput) -> Result<(), String> {
+fn overlay_styles(hwnd: HWND, mode: OverlayInput, keys: crate::KeyPolicy) -> Result<(), String> {
     let through = if mode == OverlayInput::All { 0 } else { WS_EX_TRANSPARENT };
+    let no_activate = if crate::overlay::keys::can_take_keys(keys) { 0 } else { WS_EX_NOACTIVATE };
     // SAFETY: style changes on a live window owned by this thread.
     unsafe {
         let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
-        let next = style | WS_EX_LAYERED | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | through;
+        let next = style | WS_EX_LAYERED | no_activate | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | through;
         if next != style { SetWindowLongPtrW(hwnd, GWL_EXSTYLE, next as isize); }
         if SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA) == 0 {
             return Err(format!("SetLayeredWindowAttributes failed: {}", last_error()));
@@ -434,6 +444,11 @@ fn last_error() -> String {
     // SAFETY: reads this thread's last Win32 error.
     let code = unsafe { windows_sys::Win32::Foundation::GetLastError() };
     format!("Win32 error {code}")
+}
+
+/// Whether `hwnd` is a shown overlay's window, whatever its `KeyPolicy`.
+pub(crate) fn is_overlay(hwnd: HWND) -> bool {
+    INPUTS.with(|inputs| inputs.borrow().iter().any(|input| input.hwnd == hwnd))
 }
 
 /// Keeps shown overlays above one another by level.

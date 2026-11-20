@@ -1,126 +1,11 @@
 //! Frame loop, clocks, wake deadlines, request latching and motion/paint-order stepping.
 use super::*;
 
+mod latch;
+mod motion;
+mod wakes;
+
 impl RuntimeCore {
-    /// frame-profile: the paths of drawn nodes whose loop is running, which wake the window.
-    #[cfg(feature = "frame-profile")]
-    pub(crate) fn fp_loops(&self) -> Vec<String> {
-        self.tree.nodes.iter().enumerate()
-            .filter(|(i, n)| n.looping.is_some() && self.paint.seen.get(*i).copied().unwrap_or(false) && self.motion.loops.contains_key(&n.id))
-            .map(|(_, n)| n.path.clone()).collect()
-    }
-
-    /// Whether a drawn node's loop runs (a spinner): what a window shows would fall behind it
-    /// while the window draws nothing.
-    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-    pub(crate) fn loops_shown(&self) -> bool {
-        self.tree.nodes.iter().enumerate().any(|(i, n)| n.looping.is_some() && self.paint.seen.get(i).copied().unwrap_or(false) && self.motion.loops.contains_key(&n.id))
-    }
-
-    /// Clock seconds now: the wall clock in a window (input arrives between frames), the
-    /// virtual clock headless.
-    pub(super) fn now_clock(&self) -> f64 {
-        self.wall_start.map_or(self.clock, |t| t.elapsed().as_secs_f64())
-    }
-
-    /// The window's size in its points and its scale. The view lays out in them over its zoom
-    /// ([`Cx::zoom`]), at the scale times the zoom.
-    pub fn set_viewport(&mut self, viewport: (f32, f32), scale: f32) {
-        (self.host.zoom.window, self.host.zoom.window_scale) = (viewport, scale);
-        let (viewport, scale) = self.host.zoom.view();
-        if self.fit_resized(viewport.1) {
-            self.commit.relayout = true;
-            self.commit.viewport_stepped = false;
-        }
-        if self.change_viewport(viewport, scale) { self.commit.viewport_stepped = false; }
-    }
-
-    /// The viewport one frame of the window's own resize animation moved it to. Unlike a
-    /// user's resize it doesn't land running motion: content at rest follows the window and
-    /// springs keep going.
-    pub(crate) fn step_viewport(&mut self, viewport: (f32, f32), scale: f32) {
-        (self.host.zoom.window, self.host.zoom.window_scale) = (viewport, scale);
-        let (viewport, scale) = self.host.zoom.view();
-        let fresh = !self.commit.relayout;
-        if self.change_viewport(viewport, scale) && fresh { self.commit.viewport_stepped = true; }
-    }
-
-    /// Whether the change needs a layout.
-    pub(super) fn change_viewport(&mut self, viewport: (f32, f32), scale: f32) -> bool {
-        // A window that fits its content lays out the same at any height: its own resize
-        // mustn't cut short the layout springs it is following.
-        if self.host.fit_height && viewport.0 == self.viewport.0 && scale == self.env.scale {
-            self.viewport = viewport;
-            return false;
-        }
-        let changed = viewport != self.viewport || scale != self.env.scale;
-        if changed {
-            if scale != self.env.scale { self.motion.flights.clear(); }
-            self.viewport = viewport;
-            self.env.scale = scale;
-            self.scene.set_pixel_scale(scale);
-            self.commit.relayout = true;
-        }
-        changed
-    }
-
-    /// Queue a native focus transition. Repeated notifications do not repeat the callback.
-    /// Losing focus is also `keys_lost`.
-    pub(crate) fn window_focus(&mut self, app: &mut dyn AppDriver, focused: bool) {
-        // Every focus gain, even one a hide without blur left unreported.
-        if focused { self.kbd.keys_lost = false; }
-        if self.host.window_focused != Some(focused) {
-            // Refocused, the pointer where it was hovers again; blurred, it waits for a move.
-            if focused && self.host.window_focused == Some(false) { self.pointer.hover_paused = false; }
-            // A selection takes its active or inactive pair (`El::selection_style`): a focused
-            // field's, or a selectable text's.
-            if self.host.window_focused.is_some()
-                && (self.focused_input().is_some_and(|i| i.selection_style.is_some()) || self.text_selection().is_some_and(|(_, r)| !r.is_empty()))
-            {
-                self.commit.dirty = true;
-            }
-            self.host.window_focused = Some(focused);
-            if app.has_on_focus() {
-                let (mut one, stall) = self.begin_update(app);
-                app.on_focus(focused, &mut one);
-                self.finish_update(app, stall, one, true, false);
-            }
-            // Deliver the cancelled Up before FocusLost can commit a view that removes its
-            // grip (or the focus callback clears the app's drag state).
-            if !focused {
-                self.cancel_pointer();
-                self.kbd.held = physical_dispatch::Activation::Up;
-            }
-            if self.commit.commits == 0 || self.commit.dirty || self.tree.nodes.get(self.app_root()).is_some_and(|n| n.handlers.on_window_focus.is_some()) {
-                self.frame.queue.push(Action::WindowFocus(focused));
-            }
-            if !focused {
-                self.finish_composition();
-                self.keys_lost();
-                // Losing the window ends hover, rather than waiting out an exit grace. A window
-                // that isn't key still hears the pointer, so its next move starts the wait again.
-                self.end_hover_delays();
-                self.pointer.hover_paused = true;
-            }
-        }
-        if !focused { self.edit.input_click.clear(); self.wheel_lost(); }
-    }
-
-    /// The window gets no more keys: it lost focus or hid, which may never report a blur. The
-    /// focused physical handler hears `FocusLost` and held modifier keys are released, once
-    /// until the window has focus again. A hidden host steps `hidden_timer_frame` while
-    /// `keys_queued` to deliver them.
-    pub(crate) fn keys_lost(&mut self) {
-        if std::mem::replace(&mut self.kbd.keys_lost, true) { return; }
-        self.physical_input(crate::PhysicalInput::FocusLost);
-    }
-
-    /// Keyboard input, a focus change, a file drag step or a file dialog answer is queued for the
-    /// next frame.
-    pub(crate) fn keys_queued(&self) -> bool {
-        self.frame.queue.iter().any(|a| matches!(a, Action::Physical(..) | Action::Key { .. } | Action::KeyUp(_) | Action::WindowFocus(_) | Action::Files(_) | Action::FileDialog(..)))
-    }
-
     /// The last committed frame is out of date: state changed (an update, poll or handler), or
     /// one asked for a scroll or text flight that waits for the next frame.
     pub(crate) fn needs_commit(&self) -> bool {
@@ -143,220 +28,6 @@ impl RuntimeCore {
     /// Marks app state changed outside a handler (the next frame re-runs the view).
     pub fn invalidate(&mut self) {
         self.commit.dirty = true;
-    }
-
-    /// Starts an [`Runtime::update`] transaction with the clock reading now and begins its
-    /// stall timer right before the app callback runs.
-    pub(super) fn begin_update(&self, app: &dyn ViewDriver) -> (Tx, crate::tooling::perf_warn::Stall) {
-        // Its wakes count from now (`schedule_pending_wakes`), so its clock reads now too.
-        let one = Tx { clock: self.now_clock(), ..self.transaction(app) };
-        (one, crate::tooling::perf_warn::Stall::start())
-    }
-
-    /// Finishes an [`Runtime::update`] / `update_if` / `update_if_ordered` call after its
-    /// closure ran against `app.state`.
-    pub(super) fn finish_update(
-        &mut self,
-        app: &mut dyn AppDriver,
-        stall: crate::tooling::perf_warn::Stall,
-        mut one: Tx,
-        changed: bool,
-        ordered: bool,
-    ) -> (bool, Option<std::num::NonZeroU64>) {
-        stall.end_named("an `update` closure");
-        let stale = changed || one.frame_work() || one.window_frame.is_some() || one.srgb_blend.is_some_and(|b| b != self.paint.srgb_blend) || one.font_smoothing.is_some_and(|m| m != self.text.font_smoothing())
-            || self.changes_families(&one)
-            || (one.blur && self.kbd.focus.path().is_some());
-        let minimize = if ordered {
-            let asked = one.minimize_order;
-            self.run_pick_reads(app, &mut one);
-            let survived = if asked.is_some() && one.minimize_order == asked { one.minimize_order.take() } else { None };
-            self.latch_after_picks(app, &mut one);
-            survived
-        } else {
-            self.latch_requests(app, &mut one);
-            None
-        };
-        merge(&mut self.frame.pending, one);
-        self.commit.dirty |= changed;
-        (stale, minimize)
-    }
-
-    /// Takes a `Tx::minimize` that `what` can't carry out, saying so in debug builds.
-    pub(crate) fn ignore_minimize(&mut self, what: &str) {
-        let field = self.host.minimize.field();
-        self.minimize_step(crate::window::MinimizeEvent::Lost);
-        if field && cfg!(debug_assertions) {
-            eprintln!("rune: minimize ignored: {what} can't minimize");
-        }
-    }
-
-    /// Latches a Tx's shell and clipboard requests for the shell, so `update`, a hidden poll
-    /// and `on_close` reach the clipboard without a frame, and applies clipboard requests to a
-    /// memory clipboard at once. A secret clear drops an earlier secret copy not yet written.
-    pub(super) fn latch_requests(&mut self, app: &mut dyn AppDriver, tx: &mut Tx) {
-        self.run_pick_reads(app, tx);
-        self.latch_after_picks(app, tx);
-    }
-
-    /// [`Self::latch_requests`] once the pick callbacks have run.
-    fn latch_after_picks(&mut self, app: &mut dyn AppDriver, tx: &mut Tx) {
-        self.shell_request = self.shell_request.max(tx.shell.take());
-        if tx.minimize_order.take().is_some() { self.minimize_step(crate::window::MinimizeEvent::Asked); }
-        self.host.titlebar.toggle_maximized |= std::mem::take(&mut tx.toggle_maximized);
-        self.host.titlebar.toggle_full_screen |= std::mem::take(&mut tx.toggle_full_screen);
-        for ev in std::mem::take(&mut tx.keys) { self.key(ev); }
-        self.latch_playground(app, tx);
-        for prefix in std::mem::take(&mut tx.evict_memos) { self.invalidate_memos_by_prefix(&prefix); }
-        if !tx.open_urls.is_empty() { self.open_urls(std::mem::take(&mut tx.open_urls)); }
-        if std::mem::take(&mut tx.clear_secret) {
-            if self.copy_request.as_ref().is_some_and(crate::ClipboardWrite::is_secret) { self.copy_request = None; }
-            self.edit.clear_secret_request = true;
-            self.edit.pill_copy = None;
-        }
-        if let Some(copy) = tx.copy.take() {
-            self.edit.pill_copy = (!copy.is_secret())
-                .then(|| copy.content().html())
-                .flatten()
-                .filter(|h| h.contains("<span data-pill="))
-                .map(|h| {
-                    let frag = crate::TextEdit::from_html(h);
-                    (
-                        zeroize::Zeroizing::new(copy.content().text().to_owned()),
-                        frag.pills().map(|(r, id)| (r, id.to_owned())).collect::<Vec<_>>(),
-                    )
-                })
-                .filter(|(_, pills)| !pills.is_empty());
-            self.copy_request = Some(copy);
-        }
-        if std::mem::take(&mut tx.paste) { self.edit.paste_request = Some(self.paste_target()); }
-        for read in tx.clipboard_reads.drain(..).filter_map(|read| read.take()) {
-            self.edit.next_clipboard_read += 1;
-            self.edit.clipboard_reads.push((self.edit.next_clipboard_read, read));
-            self.edit.read_requests.push(self.edit.next_clipboard_read);
-        }
-        self.host.popups.extend(tx.popups.drain(..).filter_map(|call| call.take()));
-        for request in tx.file_dialogs.drain(..).filter_map(|call| call.take()) {
-            self.request_file_dialog(request);
-        }
-        if let Some(mode) = tx.font_smoothing.take() { self.set_font_smoothing(mode); }
-        if let Some((sans, mono)) = tx.font_families.take() { self.set_font_families(&sans, &mono); }
-        if let Some(srgb) = tx.srgb_blend.take() { self.set_srgb_blend(srgb); }
-        if let Some(rewind) = tx.rewind.take() { self.motion.rewind = rewind; }
-        if std::mem::take(&mut tx.blur) {
-            if self.kbd.focus.path().is_some() {
-                self.set_focus(app, None, self.kbd.focus.keyboard());
-                self.commit.dirty = true;
-            }
-            // An explicit blur is not the temporary pointer-down blur of a scrim, and nothing
-            // hands focus on from it: only a control the user blurred and then left does.
-            self.kbd.focus.step(focus_machine::FocusEvent::Dropped);
-            self.kbd.focus.step(focus_machine::FocusEvent::Settled);
-        }
-        if let Some(request) = tx.focus_to.take() {
-            self.kbd.focus_request = Some(request);
-            self.commit.dirty = true;
-        }
-        if let Some(title) = tx.title.take() { self.host.window_title.set(title); }
-        if let Some((text, how)) = tx.announce.take() { self.host.announcement.say(text, how); }
-        if let Some(mut request) = tx.window_frame.take() {
-            request.spring = (request.animate && !tx.commit.snaps() && !self.reduced_motion).then(|| tx.motion.map_or(crate::tok::motion::DEFAULT, MotionSource::spring));
-            self.host.window_frame = Some(self.host.window_frame.unwrap_or_default().merge(request));
-        }
-        crate::clipboard::flush_memory(self);
-    }
-
-    /// Host time on the logical clock.
-    pub(super) fn wall_clock(&self) -> Option<f64> {
-        #[cfg(test)]
-        if let Some(clock) = &self.frame.test_clock { return Some(clock.now()); }
-        self.wall_start.map(|t0| t0.elapsed().as_secs_f64())
-    }
-
-    /// Schedules the `wake_after`s that updates left for a frame, counting from now, when no
-    /// frame or hidden poll comes to. The clock stays at the last poll, so the frame-interval
-    /// floor on timers (`window::timer_deadline`) still counts from that poll.
-    pub(crate) fn schedule_pending_wakes(&mut self) {
-        let wakes = std::mem::take(&mut self.frame.pending.wakes);
-        self.schedule_wakes_from(self.now_clock(), wakes);
-    }
-
-    /// Sorted, de-duplicated deadlines on the logical clock.
-    pub(super) fn schedule_wakes(&mut self, wakes: impl IntoIterator<Item = std::time::Duration>) {
-        self.schedule_wakes_from(self.clock, wakes);
-    }
-
-    /// Wakes for a frame once the clock reaches `due`, as [`Tx::wake_at`] asks from a handler (a
-    /// deadline already past wakes the next frame), for the runtime's own timers.
-    #[cfg_attr(feature = "frame-profile", track_caller)]
-    pub(super) fn wake_at(&mut self, due: f64) {
-        #[cfg(feature = "frame-profile")]
-        crate::frame::live_log::waker(std::panic::Location::caller(), std::time::Duration::from_secs_f64((due - self.clock).max(0.0)));
-        self.schedule_wakes_from(due, [std::time::Duration::ZERO]);
-    }
-
-    pub(super) fn schedule_wakes_from(&mut self, now: f64, wakes: impl IntoIterator<Item = std::time::Duration>) {
-        for delay in wakes {
-            let deadline = now + delay.as_secs_f64();
-            if let Err(index) = self.frame.wake_deadlines.binary_search_by(|t| t.total_cmp(&deadline)) {
-                self.frame.wake_deadlines.insert(index, deadline);
-            }
-        }
-    }
-
-    pub fn tracing(&self) -> bool { self.frame.trace_channels.is_some() || self.scene.tracing() }
-
-    pub(super) fn transaction(&self, app: &dyn ViewDriver) -> Tx {
-        Tx { trace: self.tracing().then(crate::el::TraceCalls::default), mods: self.kbd.held_mods, selection: self.selection_snapshot(app),
-            input_time: crate::input::time::current(), clock: self.clock, focus_visible: self.kbd.focus.keyboard(), focused: self.focused_key(), assistive: self.host.a11y.is_some() || cfg!(target_arch = "wasm32"), ..Tx::default() }
-    }
-
-    /// A scalar from the actual draw path (e.g. `shell.width`). Values hold until resampled.
-    /// Call before the tooling writer records the frame; scene traces sample in `frame`.
-    pub fn trace_channel(&mut self, name: &'static str, kind: &'static str, value: f32) {
-        if let Some(channels) = &mut self.frame.trace_channels { channels.insert(name, (kind, value)); }
-        if let Some(trace) = self.scene.trace_mut() { trace.channel(name, kind, value); }
-    }
-
-    /// Queues an app marker once for each attached writer. Formatting is skipped when off.
-    #[inline]
-    pub fn trace_event(&mut self, event: impl std::fmt::Display) {
-        self.trace_event_dyn(&event);
-    }
-
-    pub(crate) fn trace_event_dyn(&mut self, event: &dyn std::fmt::Display) {
-        if self.frame.trace_channels.is_some() { event_log::push(&mut self.events, event.to_string()); }
-        if let Some(trace) = self.scene.trace_mut() { trace.event(event); }
-    }
-
-    /// Next requested wake on the unscaled app clock. None lets the shell sleep indefinitely.
-    pub fn wake_deadline(&self) -> Option<f64> {
-        self.logical_wake_deadline()
-    }
-
-    /// The native window or overlay's frame counts; `None` headless.
-    pub fn surface_stats(&self) -> Option<crate::SurfaceStats> {
-        self.host.surface_stats.as_deref().map(crate::frame::surface_stats::read)
-    }
-
-    /// When `poll` last ran, on `wake_deadline`'s clock.
-    pub(crate) fn polled_at(&self) -> f64 {
-        self.frame.timer_wake.polled_at().unwrap_or(self.clock)
-    }
-
-    pub(super) fn logical_wake_deadline(&self) -> Option<f64> {
-        self.frame.wake_deadlines.first().copied().into_iter().chain(self.motion.loop_wake.map(|w| w.0)).min_by(f64::total_cmp)
-    }
-
-    /// The next due timer of `poll`'s, on `wake_deadline`'s clock.
-    pub(crate) fn poll_wake_deadline(&self) -> Option<f64> {
-        self.frame.wake_deadlines.first().copied()
-    }
-
-    /// The next frame motion asks for at its own cadence (a loop's next step, a video's next
-    /// picture), on `wake_deadline`'s clock.
-    pub(crate) fn motion_wake_deadline(&self) -> Option<f64> {
-        self.motion.loop_wake.map(|w| w.0)
     }
 
     /// Lands every track before the next frame: growth, reveals and follow-the-end (guarantee 8,
@@ -548,6 +219,13 @@ impl RuntimeCore {
         let ended: Vec<_> = self.pointer.drag_ends.borrow_mut().drain(..).collect();
         let queue = order_drag_ends(std::mem::take(&mut self.frame.queue), ended, &mut self.pointer.drags_open);
         let queue = self.hold_files(queue, ran || self.commit.dirty);
+        // A host settle (an uncover, a restore, a shown window) lands the tree the frame began
+        // with, before this frame's input runs. The input's own commit below then animates, so
+        // a dialog the first press closes still plays its exit.
+        if self.commit.settle && queue.has_input_action() {
+            self.settle_before_input(app, &mut tx, &mut why);
+            ran = false;
+        }
         // Something besides a checked live-only event wants this frame's commit, so a change
         // it makes isn't the live-only handler's.
         #[cfg(debug_assertions)]
@@ -746,138 +424,34 @@ impl RuntimeCore {
         self.animating
     }
 
-    /// Wakes when a delayed start at animation time `at` comes due, on the loops' wake: the
-    /// frame then runs at exactly that time, however long the host slept. A hidden window
-    /// sleeps through it; showing it settles.
-    fn wake_for_motion(&mut self, at: f64) {
-        self.paint.keep.cycles.other_deadline();
-        if !self.frame.live.visible() || self.time_scale <= 0.0 { return; }
-        let wake = self.clock + (at - self.t).max(0.0) / self.time_scale as f64;
-        if self.motion.loop_wake.is_none_or(|w| wake < w.0) { self.motion.loop_wake = Some((wake, at)); }
-    }
-
-    /// Wakes for one frame at clock time `due` and draws nothing before it, as a delayed start
-    /// does: an instant scroll's hover hold asks for the frame it lets go on this way, so a
-    /// resting window draws no frame while the hold waits.
-    pub(super) fn wake_for_clock(&mut self, due: f64) {
-        let at = self.t + (due - self.clock).max(0.0) * self.time_scale as f64;
-        self.wake_for_motion(at);
-    }
-
-    pub(super) fn catch_up_motion(&mut self, dt: f64) {
-        let step = dt * self.time_scale as f64;
-        self.t += step;
-        self.scene.set_time(self.t);
-        self.motion.caught_up += step as f32;
-        self.step_growth(step as f32);
-        self.step_scroll_by(step as f32, true);
-    }
-
-    pub(super) fn step_motion(&mut self, app: &dyn ViewDriver, dt: f64, instant_scroll: bool) -> bool {
-        self.loops_stepped();
-        let step = dt * self.time_scale as f64;
-        self.motion.slack_dt = std::mem::take(&mut self.motion.caught_up) + step as f32;
-        self.frame.last_dt = step;
-        self.t += step;
-        self.scene.set_time(self.t);
-        if self.scene.tracing() {
-            for node in &self.tree.nodes {
-                self.scene.trace_name(node.id, node.trace_name);
-                self.scene.trace_namespace(node.id, node.trace_namespace);
-            }
-        }
-        for (id, track) in &self.motion.loops {
-            if let Some([x, y]) = track.offset(self.scene.store().node_time(*id), self.reduced_motion)
-                && let Some(n) = self.tree.node_index.get(id).map(|&i| &self.tree.nodes[i])
-            {
-                let offset = rune_motion::Vec2::new(x * n.local.w, y * n.local.h);
-                if self.scene.get(*id, prop::OFFSET) != Some(offset) {
-                    self.scene.set(*id, prop::OFFSET, offset);
-                }
-            }
-        }
-        self.end_unseen_exits();
-        let out = self.scene.frame();
-        let (mut animating, exited) = (out.animating, !out.exited.is_empty());
-        self.paint.keep.frame += 1;
-        // Tracks that only wait for a delayed start (`El::enter_delay`, a delayed `Anim`)
-        // draw nothing new until it: sleep, and wake for it after the build.
-        let mut waits = if animating { self.scene.store().waiting_until() } else { None };
-        if waits.is_some() { animating = false; }
-        let mut sources = if animating { AnimSource::TRACKS } else { 0 };
-        if exited {
-            self.prune_exited();
-        }
-        self.land_group_fades();
-        if !self.motion.flying.is_empty() {
-            let scene = &self.scene;
-            let before = self.motion.flying.len();
-            // Screen travel ends once it lands and no ancestor still moves. An exiting flight
-            // stays lifted until it's gone.
-            self.motion.flying.retain(|(id, _)| scene.store().has(*id, prop::TRAVEL)
-                || matches!(scene.phase(*id), Some(PresencePhase::Exiting { .. })));
-            if self.motion.flying.len() != before {
-                self.motion.launches.keep(&self.motion.flying);
-                self.update_layer_paint_order();
-            }
-        }
-        let mut source = |on: bool, bit: u16| { if on { sources |= bit; } on };
-        animating |= source(self.step_growth(step as f32), AnimSource::GROWTH);
-        animating |= source(self.step_scroll(step as f32), AnimSource::SCROLL);
-        // A hold draws nothing while it waits: its wake asks for the one frame that ends it.
-        let hold_wake = self.step_nudges();
-        for stack in self.motion.stacks.values_mut() { stack.grown = 0.0; }
-        animating |= source(self.reveals_active(), AnimSource::REVEAL);
-        // Values set from `on_scroll_offset` show in the frame that scrolled.
-        if self.tell_scroll_offsets(instant_scroll) {
-            let took = self.take_live_wake();
-            let live = self.latch_live(took);
-            if live { sources |= AnimSource::LIVE; }
-            let running = self.scene.store().running();
-            waits = running.then(|| self.scene.store().waiting_until()).flatten();
-            if running && waits.is_none() { sources |= AnimSource::TRACKS; } else { sources &= !AnimSource::TRACKS; }
-            animating = sources != 0;
-            self.scene.present();
-        }
-        self.paint.keep.moved.extend(self.scene.changed().iter().map(|p| p.node));
-        if self.fill_text() { animating = true; sources |= AnimSource::TEXT_FILL; }
-        let mut source = |on: bool, bit: u16| { if on { sources |= bit; } on };
-        self.begin_exit_mask();
-        animating |= self.build();
-        // Compensate drawn motion, leaving unrelated layout and growth springs alone.
-        for _ in 0..3 {
-            if !self.follow_keeps() { break; }
-            animating |= self.build();
-        }
-        self.finish_keeps();
-        animating |= self.write_drawn_rects();
-        // A selection's edge scroll stepped: it follows the pointer over this layout, and shows.
-        if self.laid_edge_scroll(app) { animating |= self.build(); }
-        self.report_at_bottom();
-        animating |= self.report_visible_rows();
-        self.report_layout();
-        // A report waits for the next frame: draw one to deliver it.
-        animating |= self.report_drawn() | self.report_visible();
-        self.end_exit_mask();
-        self.record_rewind();
-        animating |= source(self.motion.loops_active, AnimSource::LOOP);
-        animating |= source(self.paint.scale_frame.is_some() || self.paint.pixel_snap.easing(), AnimSource::SCALE_SETTLE);
-        animating |= source(self.paint.videos_active, AnimSource::VIDEO);
-        animating |= source(self.draw_text_flights(), AnimSource::TEXT_FLIGHT);
-        animating |= source(self.text_fill_due(), AnimSource::TEXT_FILL);
-        if !animating && raster_check::on() {
-            self.check_resting_raster();
-        }
-        if let Some(at) = waits { self.wake_for_motion(at); }
-        // An instant scroll's hold draws nothing until it ends: wake for the one frame that
-        // resolves hover then, taken from the state each frame so a re-arm moves it on.
-        if let Some(due) = hold_wake { self.wake_for_clock(due); }
-        self.images.end_frame();
-        if self.track_marks {
-            self.marks.resize(self.instances.len(), 0);
-        }
-        self.motion.anim_sources = sources;
-        animating
+    /// Lands a host settle for the tree as it stands before this frame's input, then lets the
+    /// input's own commit animate what it changes. `apply` clears the settle latch as this
+    /// commit applies it: the settle is spent here, so nothing is deferred or dropped.
+    fn settle_before_input(&mut self, app: &mut dyn AppDriver, tx: &mut Tx, why: &mut u16) {
+        let links = std::mem::take(&mut tx.open_urls);
+        self.latch_requests(app, tx);
+        tx.open_urls = links;
+        self.capture_flights(tx);
+        tx.settle();
+        self.settled |= tx.commit.lands();
+        self.capture_keeps(tx);
+        // `settle_all` marks the tree dirty too, and this commit carries that change.
+        self.commit_for(app, tx, *why | CommitWhy::SETTLE | CommitWhy::DIRTY);
+        self.apply_keeps(app);
+        // Scroll requests queued before the input resolve under the settle, as the poll split's
+        // do, rather than gliding on the input's own animated commit.
+        self.finish_scroll_requests(app, tx, false);
+        // The input below starts from the settled tree, as it would on any other frame.
+        tx.commit = Commit::Animate;
+        tx.unprompted = false;
+        tx.asked_motion = false;
+        tx.live_growth.clear();
+        tx.tail_rooms.clear();
+        tx.motion = None;
+        tx.color_motion = None;
+        tx.follow_edge = false;
+        tx.unclipped_flights = false;
+        *why = 0;
     }
 
     /// A picture sizing a side from its image changed shape (decoded, or a stream resized).
@@ -893,58 +467,5 @@ impl RuntimeCore {
             }
         }
         !self.tree.aspect_snap.is_empty()
-    }
-
-    /// Subtree (preorder) paint order, then each flying element's subtree on top. A sticky
-    /// element paints after its normal siblings (and before overlay siblings), so it covers the
-    /// rows it's stuck over.
-    pub(super) fn update_layer_paint_order(&mut self) {
-        let n = self.tree.nodes.len();
-        let mut first = vec![n; n + 1];
-        let mut next = vec![n; n];
-        // Siblings paint by `El::paint_order`, then (with sticky elements about) sticky ones over
-        // the rows they're stuck over and anchored overlays and modals over both.
-        let rank = |i: usize| {
-            let nd = &self.tree.nodes[i];
-            let place = if !self.tree.has_sticky { 0 }
-                else if nd.above.is_some() || nd.handlers.modal.is_some() { 2 }
-                else if self.sticky_of(i).is_some() { 1 }
-                else { 0 };
-            (nd.vis.paint_order, place)
-        };
-        if self.tree.has_sticky || self.tree.has_paint_order {
-            let mut ranks: Vec<_> = (0..n).map(|i| (rank(i), i)).collect();
-            ranks.sort_unstable();
-            for &(_, i) in ranks.iter().rev() {
-                let parent = self.tree.nodes[i].parent.map_or(0, |p| p + 1);
-                next[i] = first[parent]; first[parent] = i;
-            }
-        } else {
-            for i in (0..n).rev() {
-                let parent = self.tree.nodes[i].parent.map_or(0, |p| p + 1);
-                next[i] = first[parent]; first[parent] = i;
-            }
-        }
-        let mut lifted: Vec<usize> = self.motion.flying.iter().filter_map(|(id, _)| self.tree.node_index.get(id).copied()).collect();
-        if self.tree.has_raise { lifted.extend((0..n).filter(|&i| self.tree.nodes[i].vis_flags.raise())); }
-        lifted.sort_unstable();
-        lifted.dedup();
-        self.paint.layer_paint_order.clear();
-        for top in std::iter::once(None).chain(lifted.iter().map(|&r| Some(r))) {
-            let mut i = top.unwrap_or(first[0]);
-            while i < n {
-                // A flying subtree paints in its own pass, not where the tree reaches it.
-                if top == Some(i) || lifted.binary_search(&i).is_err() {
-                    self.paint.layer_paint_order.push(i);
-                    if first[i + 1] < n { i = first[i + 1]; continue; }
-                }
-                loop {
-                    if top == Some(i) { i = n; break; }
-                    if next[i] < n { i = next[i]; break; }
-                    match self.tree.nodes[i].parent { Some(parent) => i = parent, None => { i = n; break; } }
-                }
-            }
-        }
-        if self.paint.layer_paint_order.iter().copied().eq(0..n) { self.paint.layer_paint_order.clear(); }
     }
 }

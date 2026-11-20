@@ -4,6 +4,9 @@ use std::collections::hash_map::Entry;
 
 use super::*;
 
+mod exits;
+mod growth;
+
 impl RuntimeCore {
     /// The mutation phase cannot accept an El or an unfinished measurement pass.
     pub(in crate::runtime) fn apply(&mut self, app: &mut dyn AppDriver, measured: Measured, tx: &Tx) {
@@ -100,212 +103,13 @@ impl RuntimeCore {
             self.tree.nodes.iter().zip(&drew_nothing).filter(|&(_, &u)| u).map(|(n, _)| n.id).collect()
         };
 
-        // Growth stacks: rows of a stack that existed before grow; a new stack mounts settled.
         let mut live_by_id = HashMap::default();
-        for c in 0..nodes.len() {
-            if nodes[c].cold.get().is_none_or(|nd| nd.growth.is_none()) { continue }
-            let cid = nodes[c].id;
-            let instant = instant || nodes[c].instant_changes;
-            let cut = cut || nodes[c].instant_changes;
-            // A reader away from the tail is anchored using measured row heights. Land those
-            // heights with the anchor correction, unless `keep_on_screen` or `scroll_into_view`
-            // is driving this viewport across the commit. A reveal left from an earlier commit
-            // keeps only rows already growing on their spring: new rows land, or under a parent
-            // whose size springs too, the two springs carry them past their slots.
-            // So does a reveal in this commit for rows new to the stack: rows inserted above an
-            // anchored first row and revealed at once land whole instead of growing from zero.
-            let revealing = self.commit.virtuals.get(&nodes[c].path)
-                .is_some_and(|v| self.scroll.requests.reveals().any(|r| r.viewport == v.scroll_path));
-            let revealed_now = self.commit.virtuals.get(&nodes[c].path).is_some_and(|v| {
-                tx.scroll_to.iter().any(|r| {
-                    nodes.iter().enumerate().find(|(_, n)| n.named(&r.key)
-                        && n.parent.is_none_or(|p| in_scope(&nodes[p].path, r.scope.as_deref())))
-                        .is_some_and(|(i, _)| {
-                            std::iter::successors(nodes[i].parent, |&p| nodes[p].parent)
-                                .find(|&p| nodes[p].scroll.is_some() && nodes[p].scroll_axes.y())
-                                .is_some_and(|p| nodes[p].path == v.scroll_path)
-                        })
-                })
-            });
-            let reader = self.commit.virtuals.get(&nodes[c].path)
-                .filter(|v| !self.scroll.requests.keeps().any(|k| k.viewport == v.scroll_path))
-                .and_then(|v| self.tree.path_ids.get(&v.scroll_path))
-                .and_then(|id| self.scroll.scrolls.get(id)).is_some_and(|s| !s.pinned());
-            let reading = reader && !revealed_now;
-            scratch.rows.clear();
-            scratch.rows.extend((c + 1..nodes.len()).filter(|&j| nodes[j].parent == Some(c)));
-            let rows = &scratch.rows;
-            let existed = self.motion.stacks.contains_key(&cid) && !tx.commit.lands();
-            let mut stack = self.motion.stacks.remove(&cid).unwrap_or_default();
-            scratch.new_ids.clear();
-            scratch.new_ids.extend(rows.iter().map(|&j| nodes[j].id));
-            let new_ids = &scratch.new_ids;
-            scratch.new_set.clear();
-            scratch.new_set.extend(new_ids.iter().copied());
-            let new_set = &scratch.new_set;
-            // Merge: keep leaving rows where they stood. In a virtual list, a row that drew
-            // nothing, or any row when the change keeps none the reader could see (a filter),
-            // leaves no space to close: the list's anchor already holds what shows (`set_keys`),
-            // and the space would only push the rows the change brings in down, out of view.
-            let list = self.commit.virtuals.get(&nodes[c].path);
-            let is_virtual = list.is_some();
-            let replaced = list.is_some_and(crate::el::virtual_list::VirtualList::replaced_view);
-            let (mut opened, mut shut) = (Vec::new(), Vec::new());
-            let mut order = std::mem::take(&mut scratch.order);
-            order.clear();
-            order.reserve(new_ids.len() + 4);
-            let mut ni = 0;
-            for &old in &stack.order {
-                if new_set.contains(&old) {
-                    while ni < new_ids.len() && new_ids[ni] != old {
-                        if !order.contains(&new_ids[ni]) {
-                            order.push(new_ids[ni]);
-                        }
-                        ni += 1;
-                    }
-                    if !order.contains(&old) {
-                        order.push(old);
-                    }
-                    ni += 1;
-                } else if let Some(g) = self.motion.grows.get(&old).filter(|g| g.h > 0.01) && existed && !cut && !replaced && !(is_virtual && unseen_ids.contains(&old)) {
-                    // A row fades in place before its space closes, except a fold, which shuts
-                    // at once on its own spring under its feather, as it would fold shut in place.
-                    let hold = if g.glide().is_some() { 0.0 } else { 0.15 };
-                    if g.glide().is_some() && !stack.closing.contains_key(&old) { shut.push(old); }
-                    stack.closing.entry(old).or_insert(now + hold);
-                    order.push(old);
-                } else {
-                    self.motion.grows.remove(&old);
-                    stack.closing.remove(&old);
-                }
-            }
-            for &id in &new_ids[ni.min(new_ids.len())..] {
-                if !order.contains(&id) {
-                    order.push(id);
-                }
-            }
-            let ctop = nodes[c].target[1];
-            let width = nodes[c].local.w;
-            let revealing_moving = revealing && rows.iter().any(|&j| {
-                let id = nodes[j].id;
-                self.motion.grows.get(&id).is_some_and(|g| g.moving()) || stack.pending_heights.contains_key(&id)
-            });
-            // A person resizing the window holds the content: rewrapped rows land in the frame,
-            // so a pinned tail stays where it is instead of sliding back after the drag. A
-            // streaming row still waits for the width to settle, then eases. A stack held at its
-            // landing width (`El::hold_landing_width`) lands its rewrapped rows the same way.
-            let resized = existed && (stack.window != self.viewport || held.get(c).copied().unwrap_or(false));
-            stack.window = self.viewport;
-            if first || !existed || tx.commit.lands() || self.reduced_motion || (reading && !revealing_moving) {
-                stack.width_hold = WidthHold::Off;
-                stack.pending_heights.clear();
-            } else if (width - stack.width).abs() > 0.25 {
-                stack.width_hold = WidthHold::rewrap(now);
-            }
-            let live_rows = if existed && !first && !resized && !concealing && !self.reduced_motion && !tx.live_growth.is_empty() && !stack.width_hold.defers(now) {
-                self.live_tail(&nodes, c, tx, &mut stack)
-            } else { None };
-            stack.viewport_height = list.map_or(0.0, |v| v.viewport);
-            stack.width = width;
-            stack.pending_heights.retain(|id, _| new_set.contains(id));
-            stack.gap = crate::el::virtual_list::gap_y(taffy.style(nodes[c].taffy));
-            // With every row gone, the leaving rows still stand below the stack's top padding.
-            let pad_top = rows.first().map_or(stack.pad_top, |&j| nodes[j].target[1] - ctop);
-            stack.pad_bottom = rows.last().map_or(nodes[c].target[3] - ctop - pad_top, |&j| nodes[c].target[3] - nodes[j].target[3]);
-            stack.pad_top = pad_top;
-            let (mut hidden_cut, mut reopened, mut held) = (0.0, Vec::new(), Vec::new());
-            for &j in rows {
-                let id = nodes[j].id;
-                let mut h = nodes[j].target[3] - nodes[j].target[1];
-                stack.closing.remove(&id);
-                stack.tops.insert(id, nodes[j].target[1] - ctop);
-                let streaming = nodes[j].streaming;
-                let whole = nodes[j].whole && !streaming;
-                let g_moving = self.motion.grows.get(&id).is_some_and(|g| g.moving()) || stack.pending_heights.contains_key(&id);
-                let entering = revealed_now && reader && !self.motion.grows.contains_key(&id);
-                let row_reading = (reading && !(revealing && g_moving)) || entering;
-                let live = !row_reading && live_rows.as_ref().is_some_and(|range| {
-                    nodes[j].key.as_deref().and_then(|key| list?.index_of(key)).is_some_and(|index| range.contains(&index))
-                });
-                if streaming && existed && !tx.commit.lands() && !first && !self.reduced_motion && !row_reading {
-                    // Measure the final wrapped text before mutating the growth track. Targets
-                    // retain full layout height; only the presented stack extent lags the fill.
-                    let mut end = j + 1;
-                    while end < nodes.len() && nodes[end].parent.is_some_and(|p| p >= j) { end += 1; }
-                    if let Some(n) = nodes[j..end].iter().rev().find(|n| n.text.as_ref().is_some_and(|t| t.wrap && t.reveal >= 0.0))
-                        && let Some(laid) = &n.text_layout
-                    {
-                        let width = (n.target[2] - n.target[0] - n.inset[0] - n.inset[2]) * scale;
-                        h = (h - laid.view().stream_height_lag(width, scale)).max(0.0);
-                    }
-                }
-                let (duration, glide) = (tx.motion.map_or(0.0, |m| m.spring().duration * 1.15), nodes[j].glide.map(|s| (s, self.fold_limit(id))));
-                let hidden = if glide.is_some() { self.fold_hidden_above(&nodes, j, h) } else { None };
-                if existed && !cut && !nodes[j].virtual_mount && nodes[j].glide.is_some() && !self.motion.grows.contains_key(&id) { opened.push(id); }
-                let g = self.motion.grows.entry(id).or_insert_with(|| {
-                    if existed && (!cut || live) && !nodes[j].virtual_mount { GrowTrack::settled(0.0).with_duration(duration) } else { GrowTrack::settled(h) }
-                });
-                g.set_kind(streaming, whole, glide);
-                let snap_change = ((instant && !live) || resized) && !streaming && (h - g.target).abs() > 1e-4;
-                if tx.commit.lands() || !existed || first || self.reduced_motion || snap_change || row_reading {
-                    *g = g.restarted(h);
-                    stack.pending_heights.remove(&id);
-                    stack.slides.land(id);
-                } else {
-                    // Only a width/scale rewrap may shrink an active streaming row, including
-                    // when fresh text arrives in the same frame as the resize.
-                    let t = if streaming && !self.commit.relayout && stack.width_hold.may_shrink(now) { h.max(g.h.min(g.target)) } else { h };
-                    if stack.width_hold.defers(now) {
-                        stack.pending_heights.insert(id, t);
-                    } else {
-                        stack.pending_heights.remove(&id);
-                        if (t - g.target).abs() > 1e-4 { g.duration = duration; g.linear_edge = live; }
-                        let shutting = t < g.target - 1e-4;
-                        // A fold opening again while its contents draw lifted, or opening from
-                        // rest (not one mounting): `ride_from_end` grows it from its bottom where
-                        // its viewport follows its end, and leaves the rest alone.
-                        if t > g.target + 1e-4 && (g.lift() > 0.0 || (g.glide().is_some() && g.target > 1e-4)) { reopened.push((j, g.give.is_some())); }
-                        let before = g.h;
-                        g.retarget(t);
-                        if let Some((above, header)) = hidden.filter(|_| shutting && g.shutting_fold()) {
-                            held.push((id, before - g.h));
-                            hidden_cut += g.hide_above(above);
-                            self.motion.fold_headers.insert(id, header);
-                        }
-                    }
-                }
-            }
-            if !tx.commit.lands() && !first && !self.reduced_motion { self.link_growth_runs(&mut stack, &order, &opened, &shut); } else { stack.runs.clear(); }
-            if hidden_cut > 0.0 { self.scroll_by_cut(&nodes, c, hidden_cut); }
-            if !held.is_empty() { self.give_way(&nodes, c, &std::mem::take(&mut held)); }
-            for (j, giving) in reopened.drain(..) { self.ride_from_end(&nodes, c, j, giving); }
-            if let Some(&last) = rows.last()
-                && !self.scene.contains(nodes[last].id)
-                && let Some(s) = std::iter::successors(nodes[c].parent, |&p| nodes[p].parent)
-                    .find(|&p| nodes[p].scroll.is_some() && nodes[p].scroll_axes.y())
-            {
-                self.scroll.requests.step(requests::Event::NewTail { viewport: &nodes[s].path, key: &nodes[last].path });
-            }
-            stack.growing = !stack.pending_heights.is_empty()
-                || order.iter().any(|r| self.motion.grows.get(r).is_some_and(|g| g.target > g.h + 1.0 / 128.0));
-            stack.moving = stack.growing
-                || order.iter().any(|r| self.motion.grows.get(r).is_some_and(|g| g.moving()));
-            // Order holds the rows this commit brought and the ones still closing; no others.
-            stack.tops.retain(|id, _| new_set.contains(id) || stack.closing.contains_key(id));
-            let animates = existed && (!instant || live_rows.is_some()) && !tx.relayout && !self.reduced_motion;
-            stack.reorder.measure(animates, &stack.order, &order, stack.gap, |id| self.motion.grows.get(&id).map(|g| g.h));
-            if first || self.reduced_motion || concealing || resized || reader || nodes[c].instant_changes || tx.commit.lands() || (stack.order != order && live_rows.is_none()) { stack.seams.clear(); }
-            if let Some(range) = live_rows && let Some(v) = self.commit.virtuals.get(&nodes[c].path) && stack.order != order {
-                self.join_live_rows(&mut stack, &nodes, rows, v, &range);
-                let ink = tx.live_growth.iter().any(|(key, ink)| *ink && nodes[c].named(key));
-                live_by_id.extend(rows.iter().enumerate().filter_map(|(k, &j)| {
-                    let moves = |&n: &usize| stack.reorder.jump(nodes[n].id) != 0.0;
-                    let joins = ink && (rows.get(k.wrapping_sub(1)).is_some_and(moves) || rows.get(k + 1).is_some_and(moves));
-                    self.live_row(&nodes[j], &stack.reorder, ink, joins, v, &range)
-                }));
-            }
-            scratch.order = std::mem::replace(&mut stack.order, order);
-            self.motion.stacks.insert(cid, stack);
+        // Growth stacks: rows of a stack that existed before grow; a new stack mounts settled.
+        if let Some(start) = nodes.iter().position(|n| n.cold.get().is_some_and(|nd| nd.growth.is_some())) {
+            self.apply_growth_stacks(
+                start, &nodes, &taffy, tx, &mut scratch, &held, &unseen_ids,
+                first, concealing, instant, cut, now, scale, &mut live_by_id,
+            );
         }
 
         // Put nodes on their subtree's clock before this commit animates them.
@@ -730,120 +534,13 @@ impl RuntimeCore {
         // Removed nodes stay mounted in `Scene` until their exit transition settles at opacity 0.
         let present_len = nodes.len();
         let mut old_nodes = std::mem::take(&mut self.tree.nodes);
-        // A node reused from the last commit keeps its bindings' latches, which a commit that
-        // lands drops as a rebuilt node's are (below).
-        if tx.commit.lands() {
-            for n in nodes.iter_mut().filter(|n| n.cold.get().is_some_and(|c| !c.live.is_empty())) {
-                if let Some(cold) = n.cold.get_mut_if_some() { cold.live.iter_mut().for_each(|b| b.seen = None); }
-            }
-        }
-        for old in &old_nodes {
-            if old.cold.get().is_none_or(|c| c.live.is_empty()) { continue; }
-            if let Some(&i) = self.tree.node_index.get(&old.id) {
-                let mut kept = paint_tracks::LiveColors::default();
-                if let Some(cold) = nodes[i].cold.get_mut_if_some() {
-                    for bound in &mut cold.live {
-                        if let Some(previous) = old.live.iter().find(|b| b.property == bound.property && Arc::ptr_eq(&b.source, &bound.source)) {
-                            bound.seen = if tx.commit.lands() { None } else { previous.seen };
-                            kept.add(bound.property);
-                        }
-                    }
-                }
-                // A kept colour binding keeps the colour it last latched until it publishes again.
-                kept.carry(old, &mut nodes[i]);
-                // Removing a binding restores the normal property, including transform defaults.
-                for previous in &old.live {
-                    if !nodes[i].live.iter().any(|b| b.property == previous.property) {
-                        match previous.property {
-                            crate::live::Property::Offset => self.scene.set(old.id, prop::OFFSET, rune_motion::Vec2::ZERO),
-                            crate::live::Property::Scale => self.scene.set(old.id, prop::SCALE, 1.0),
-                            crate::live::Property::Trim => { self.scene.store_mut().remove(old.id, P_TRIM); }
-                            _ => {}
-                        }
-                    }
-                }
-            }
-        }
+        self.carry_live_bindings(&mut nodes, &old_nodes, tx);
         if !any_gone {
             old_nodes = apply_scratch::clear_old_nodes(old_nodes, &memo_reused, &mut scratch.moved_spans);
         } else {
-            scratch.old_ids.clear();
-            scratch.old_ids.extend(old_nodes.iter().map(|n| n.id));
-            let old_ids = &scratch.old_ids;
-            // Only the nodes that left are moved out; the rest drop where they are.
-            for (oi, mut old) in old_nodes.drain(..).enumerate() {
-                if old.is_moved_stub() {
-                    std::mem::forget(old);
-                    continue;
-                }
-                if self.tree.node_index.contains_key(&old.id) {
-                    continue;
-                }
-                if !self.scene.contains(old.id) {
-                    self.hover_pruned(&old);
-                    continue;
-                }
-                let old_parent_id = old.parent.and_then(|p| old_ids.get(p).copied());
-                let parent_remained_present =
-                    old_parent_id.is_none_or(|pid| self.tree.node_index.get(&pid).is_some_and(|&i| i < present_len));
-                if parent_remained_present {
-                    let instant = instant || (old.instant_changes && old_parent_id.and_then(|pid| self.tree.node_index.get(&pid)).is_some_and(|&p| nodes[p].instant_changes));
-                    let rides_parent = old_parent_id.is_some_and(|p| exit_parents.contains(&p));
-                    if tx.commit.lands() || ((instant || tx.unprompted) && !rides_parent && !self.is_exiting(old.id)) || drew_nothing.get(oi).copied().unwrap_or(false) {
-                        self.scene.unmount(old.id);
-                    } else {
-                        if let Some(t) = old_parent_id.and_then(|pid| self.tree.node_index.get(&pid)).and_then(|&p| nodes[p].vis.child_exit.as_deref().copied()) {
-                            self.scene.set_transition(old.id, t);
-                        }
-                        self.scene.remove(old.id);
-                    }
-                } else if !tx.commit.lands() && self.motion.flying.iter().any(|f| f.0 == old.id) {
-                    // A flight paints outside its ancestors, so it can't fade with an exiting one.
-                    self.scene.remove(old.id);
-                }
-                old.parent = old_parent_id.and_then(|pid| self.tree.node_index.get(&pid).copied());
-                if let Some(cold) = old.cold.get_mut_if_some() { cold.live.clear(); }
-                // Exit visuals outlive their model. Never call an accessor captured by
-                // a deleted row while normalizing a later focus change.
-                if let Some(input) = &mut old.input {
-                    let was_revealed = input.edit.masking() == crate::edit::Masking::Shown;
-                    input.access = None;
-                    input.key = None;
-                    input.change = None;
-                    input.edit.focused = false;
-                    input.edit.cancel_composition();
-                    input.edit.conceal();
-                    if was_revealed && let Some(spec) = &mut old.text {
-                        spec.replace_content(input.edit.display().0);
-                        if input.edit.is_hidden_multiline() { spec.wrap = false; }
-                        let scale = self.env.scale;
-                        let w = (old.local.w - old.inset[0] - old.inset[2]).max(0.0);
-                        let wrap = spec.wrap.then_some(w * scale);
-                        old.text_layout = Some(TextLayout::Single(self.text.layout_for_spec(&spec.as_text_input(scale, false), scale, wrap, line_alignment(spec))));
-                        old.elided = None;
-                    }
-                } else if let Some(spec) = &mut old.text
-                    && spec.redacted
-                    && spec.cold.secure_revealed
-                {
-                    spec.conceal();
-                    let scale = self.env.scale;
-                    let w = (old.local.w - old.inset[0] - old.inset[2]).max(0.0);
-                    let wrap = spec.wrap.then_some(w * scale);
-                    let mut layout = self.text.layout_for_spec(&spec.as_text_input(scale, false), scale, wrap, line_alignment(spec));
-                    let mut elided = None;
-                    if spec.truncate && layout.full_width() > w * scale + 0.5 {
-                        let (cut, e) = truncated(&mut self.text, spec, scale, w * scale);
-                        (layout, elided) = (cut, Some(e));
-                    }
-                    old.text_layout = Some(TextLayout::Single(layout));
-                    old.elided = elided;
-                }
-                // A resize that laid the tree out again took the text layouts before the view ran.
-                if old.text_layout.is_none() { relayout::lay_out_text_in_place(&mut self.text, &mut old, self.env.scale); }
-                self.tree.node_index.insert(old.id, nodes.len());
-                nodes.push(old);
-            }
+            self.retire_removed_nodes(
+                &mut nodes, &mut old_nodes, present_len, tx, instant, &drew_nothing, &exit_parents, &mut scratch,
+            );
         }
         self.tree.spare_nodes = old_nodes;
 

@@ -38,6 +38,7 @@ mod secure_text;
 mod selection_edge_walk;
 mod selection_phase;
 mod selection_phase_virtual;
+mod settle_input;
 mod shimmer;
 mod springs;
 mod stream_overflow;

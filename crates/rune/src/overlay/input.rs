@@ -479,5 +479,11 @@ impl OverlayCore {
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         if requests.request_keys && self.presence.shown() && self.options.keys == KeyPolicy::OnDemand
             && let Some(Live { backing: Backing::Layer(layer), .. }) = self.surface.live() { layer.request_keys(); }
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        if requests.request_keys && self.presence.shown() && self.options.keys == KeyPolicy::OnDemand
+            && let Some(x11) = &self.x11 { x11.request_keys(); }
+        #[cfg(target_os = "windows")]
+        if requests.request_keys && self.presence.shown() && self.options.keys == KeyPolicy::OnDemand
+            && let Some(native) = &self.native { native.request_keys(); }
     }
 }
