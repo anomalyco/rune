@@ -122,6 +122,7 @@ fn shrank(size: usize) {
 unsafe impl<A: GlobalAlloc> GlobalAlloc for Counting<A> {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         installed();
+        // SAFETY: forwards the caller's `GlobalAlloc::alloc` contract and valid `layout` to `inner`.
         let p = unsafe { self.inner.alloc(layout) };
         if !p.is_null() {
             counted(layout.size());
@@ -134,6 +135,7 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for Counting<A> {
 
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
         installed();
+        // SAFETY: forwards the caller's `GlobalAlloc::alloc_zeroed` contract and valid `layout` to `inner`.
         let p = unsafe { self.inner.alloc_zeroed(layout) };
         if !p.is_null() {
             counted(layout.size());
@@ -147,6 +149,7 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for Counting<A> {
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         #[cfg(feature = "alloc-sites")]
         sites::freed(ptr);
+        // SAFETY: caller guarantees `ptr` was allocated by `inner` with `layout` and is no longer used.
         unsafe { self.inner.dealloc(ptr, layout) };
         shrank(layout.size());
     }
@@ -154,6 +157,7 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for Counting<A> {
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
         #[cfg(feature = "alloc-sites")]
         sites::freed(ptr);
+        // SAFETY: caller guarantees `ptr` was allocated by `inner` with `layout` and `new_size` meets `GlobalAlloc::realloc`.
         let p = unsafe { self.inner.realloc(ptr, layout, new_size) };
         if !p.is_null() {
             counted(new_size);
@@ -181,6 +185,7 @@ pub fn tag_thread(name: &'static str) {
                 Err(other) => {
                     // SAFETY: `fresh` was never shared.
                     drop(unsafe { Box::from_raw(fresh) });
+                    // SAFETY: `other` was loaded with Acquire from `TAG_NAMES[i]`, which only stores leaked `&'static str` boxes.
                     unsafe { *other == name }
                 }
             }

@@ -221,8 +221,14 @@ impl BufferInterface for MetalBuffer {
 
 impl BufferMappedRangeInterface for MappedRange {
     fn len(&self) -> usize { self.len }
-    unsafe fn read_slice(&self) -> &[u8] { unsafe { std::slice::from_raw_parts(self.at.as_ptr(), self.len) } }
+    unsafe fn read_slice(&self) -> &[u8] {
+        // SAFETY: `self.at..self.at + self.len` was bounds-checked against the shared `MTLBuffer`
+        // in `BufferRaw::range`, and the caller guarantees the buffer stays mapped with no concurrent writes.
+        unsafe { std::slice::from_raw_parts(self.at.as_ptr(), self.len) }
+    }
     unsafe fn write_slice(&mut self) -> wgpu::WriteOnly<'_, [u8]> {
+        // SAFETY: `self.at..self.at + self.len` was bounds-checked against the shared `MTLBuffer`
+        // in `BufferRaw::range`, and the caller guarantees exclusive mutable access while mapped.
         unsafe { std::slice::from_raw_parts_mut(self.at.as_ptr(), self.len) }.into()
     }
 }
