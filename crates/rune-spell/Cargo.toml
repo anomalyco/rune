@@ -10,8 +10,8 @@ rune-core = { workspace = true }
 rustc-hash = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-objc2-app-kit = { version = "0.2.2", features = ["NSSpellChecker"] }
-objc2-foundation = { version = "0.2.2", features = ["NSArray", "NSEnumerator", "NSObject", "NSRange", "NSString"] }
+objc2-app-kit = { workspace = true, features = ["std", "NSSpellChecker"] }
+objc2-foundation = { workspace = true, features = ["std", "NSArray", "NSEnumerator", "NSObject", "NSRange", "NSString"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { workspace = true, features = ["Win32_Foundation", "Win32_Globalization", "Win32_System_Com"] }

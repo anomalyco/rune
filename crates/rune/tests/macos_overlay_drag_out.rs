@@ -25,7 +25,7 @@ fn main() { mac::main() }
 mod mac {
     use std::sync::{Mutex, atomic::{AtomicUsize, Ordering}};
     use std::time::Duration;
-    use objc2::{class, msg_send, msg_send_id, rc::Retained, runtime::{AnyObject, Bool}};
+    use objc2::{class, msg_send, rc::Retained, runtime::{AnyObject, Bool}};
     use objc2_foundation::{NSArray, NSPoint, NSRect, NSString};
     use rune::*;
     use crate::macos_support::{can_post_events, drag_pasteboard, on_main, release_real_button, wait, warp};
@@ -82,17 +82,17 @@ mod mac {
     fn panel(number: u32) -> Option<(isize, usize, bool, NSRect)> {
         unsafe {
             let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
-            let windows: Retained<NSArray<AnyObject>> = msg_send_id![app, windows];
-            windows.iter().find(|w| { let n: isize = msg_send![*w, windowNumber]; n == number as isize }).map(|w| {
-                let key: Bool = msg_send![w, isKeyWindow];
-                (msg_send![w, level], msg_send![w, styleMask], key.as_bool(), msg_send![w, frame])
+            let windows: Retained<NSArray<AnyObject>> = msg_send![app, windows];
+            windows.iter().find(|w| { let n: isize = msg_send![&**w, windowNumber]; n == number as isize }).map(|w| {
+                let key: Bool = msg_send![&*w, isKeyWindow];
+                (msg_send![&*w, level], msg_send![&*w, styleMask], key.as_bool(), msg_send![&*w, frame])
             })
         }
     }
 
     fn primary_height() -> f64 {
         unsafe {
-            let screens: Retained<NSArray<AnyObject>> = msg_send_id![class!(NSScreen), screens];
+            let screens: Retained<NSArray<AnyObject>> = msg_send![class!(NSScreen), screens];
             let frame: NSRect = msg_send![&*screens.iter().next().expect("a screen"), frame];
             frame.size.height
         }

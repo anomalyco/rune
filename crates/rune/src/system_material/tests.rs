@@ -178,7 +178,7 @@ fn a_live_resize_keeps_transactions_on_until_it_ends() {
 #[cfg(target_os = "macos")]
 #[test]
 fn live_resize_end_notification_turns_off_transactions_unless_materials_or_move_need_them() {
-    use objc2_video::{msg_send, rc::Retained, runtime::{AnyClass, AnyObject, Bool}};
+    use objc2::{msg_send, rc::Retained, runtime::{AnyClass, AnyObject, Bool}};
     use std::{cell::Cell, rc::Rc};
     let (window, layer): (Retained<AnyObject>, Retained<AnyObject>) = unsafe {
         (msg_send![AnyClass::get(c"NSObject").unwrap(), new], msg_send![AnyClass::get(c"CAMetalLayer").expect("QuartzCore"), new])
@@ -188,7 +188,7 @@ fn live_resize_end_notification_turns_off_transactions_unless_materials_or_move_
     let sync = || -> bool { unsafe { let b: Bool = msg_send![&*layer, presentsWithTransaction]; b.as_bool() } };
     let post_end = || unsafe {
         let center: Retained<AnyObject> = msg_send![AnyClass::get(c"NSNotificationCenter").unwrap(), defaultCenter];
-        let name = objc2_foundation_video::NSString::from_str("NSWindowDidEndLiveResizeNotification");
+        let name = objc2_foundation::NSString::from_str("NSWindowDidEndLiveResizeNotification");
         let _: () = msg_send![&*center, postNotificationName: &*name, object: &*window];
     };
     let mut f = flag.get();

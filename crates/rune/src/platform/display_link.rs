@@ -64,8 +64,7 @@ fn low_power_caps(display: Option<u32>) -> bool {
     // SAFETY: `CGDisplayIsBuiltin` accepts any `CGDirectDisplayID`.
     display.is_some_and(|display| unsafe { CGDisplayIsBuiltin(display) } != 0)
         && info.respondsToSelector(objc2::sel!(isLowPowerModeEnabled))
-        // SAFETY: `info` is the live `NSProcessInfo` singleton and `respondsToSelector` above verified availability (macOS 12+).
-        && unsafe { info.isLowPowerModeEnabled() }
+        && info.isLowPowerModeEnabled()
 }
 
 unsafe extern "C-unwind" fn tick(

@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use objc2::rc::{Retained, autoreleasepool};
 use objc2::runtime::{AnyClass, AnyObject, Bool, ClassBuilder, Sel};
-use objc2::{class, msg_send, msg_send_id, sel};
+use objc2::{class, msg_send, sel};
 use objc2_app_kit::{NSPasteboard, NSPasteboardItem, NSView};
 use objc2_foundation::{NSArray, NSDictionary, NSError, NSPoint, NSString, NSURL};
 
@@ -66,8 +66,8 @@ pub(crate) fn install(window: &winit::window::Window) {
     // SAFETY: main thread (windows are created there), on winit's live content view.
     unsafe {
         let base = view.class();
-        if !base.name().contains("RuneDrops_") {
-            let name = format!("RuneDrops_{}", base.name());
+        if !base.name().to_string_lossy().contains("RuneDrops_") {
+            let Ok(name) = std::ffi::CString::new(format!("RuneDrops_{}", base.name().to_string_lossy())) else { return };
             let class = match ClassBuilder::new(&name, base) {
                 Some(mut b) => {
                     b.add_method(sel!(draggingEntered:), entered as unsafe extern "C" fn(_, _, _) -> _);
@@ -82,7 +82,7 @@ pub(crate) fn install(window: &winit::window::Window) {
             // Only this instance's class changes, to a subclass without ivars.
             AnyObject::set_class(&view, class);
         }
-        view.registerForDraggedTypes(&NSArray::from_vec(registered_types()));
+        view.registerForDraggedTypes(&NSArray::from_retained_slice(&registered_types()));
     }
 }
 
@@ -120,8 +120,8 @@ fn registered_types() -> Vec<Retained<NSString>> {
 fn promise_types() -> Vec<Retained<NSString>> {
     // SAFETY: a class method returning an array of strings.
     unsafe {
-        let types: Retained<NSArray<NSString>> = msg_send_id![class!(NSFilePromiseReceiver), readableDraggedTypes];
-        types.to_vec_retained()
+        let types: Retained<NSArray<NSString>> = msg_send![class!(NSFilePromiseReceiver), readableDraggedTypes];
+        types.to_vec()
     }
 }
 
@@ -136,15 +136,15 @@ fn operation(mask: usize) -> usize {
 /// What each item of `pb` gives a drop, in order. An item that gives nothing is left out.
 unsafe fn items(pb: &NSPasteboard) -> Vec<(Retained<NSPasteboardItem>, Item)> {
     let promises: Vec<String> = promise_types().iter().map(|t| t.to_string()).collect();
-    let Some(list) = (unsafe { pb.pasteboardItems() }) else { return Vec::new() };
-    list.to_vec_retained().into_iter().filter_map(|item| {
-        let types: Vec<String> = unsafe { item.types() }.iter().map(|t| t.to_string()).collect();
+    let Some(list) = pb.pasteboardItems() else { return Vec::new() };
+    list.to_vec().into_iter().filter_map(|item| {
+        let types: Vec<String> = item.types().iter().map(|t| t.to_string()).collect();
         let has = |t: &str| types.iter().any(|x| x == t);
         let found = if has(FILE_URL) {
-            let url = unsafe { item.stringForType(&NSString::from_str(FILE_URL)) }?;
+            let url = item.stringForType(&NSString::from_str(FILE_URL))?;
             file_path(&url).map(Item::File)
         } else if types.iter().any(|t| promises.contains(t)) {
-            let uti = unsafe { item.stringForType(&NSString::from_str(PROMISED_TYPE)) }.map(|s| s.to_string());
+            let uti = item.stringForType(&NSString::from_str(PROMISED_TYPE)).map(|s| s.to_string());
             Some(Item::Promise(uti.as_deref().and_then(extension)))
         } else {
             IMAGES.iter().find(|(t, _)| has(t)).map(|&(t, ext)| Item::Image(t, ext))
@@ -155,12 +155,9 @@ unsafe fn items(pb: &NSPasteboard) -> Vec<(Retained<NSPasteboardItem>, Item)> {
 
 /// The path of a `file://` URL, resolving the file-reference form (`file:///.file/id=…`).
 pub(crate) fn file_path(url: &NSString) -> Option<PathBuf> {
-    // SAFETY: Foundation URL calls with live strings.
-    unsafe {
-        let url = NSURL::URLWithString(url)?;
-        let url = url.filePathURL()?;
-        Some(PathBuf::from(url.path()?.to_string()))
-    }
+    let url = NSURL::URLWithString(url)?;
+    let url = url.filePathURL()?;
+    Some(PathBuf::from(url.path()?.to_string()))
 }
 
 /// A file extension for a few common types a promise names.
@@ -197,8 +194,7 @@ fn free_name(dir: &Path, stem: &str, ext: &str) -> PathBuf {
 
 /// The name an image takes from the URL it came from, if the item has one (a browser's image).
 fn image_stem(item: &NSPasteboardItem) -> String {
-    // SAFETY: reading a string from a live pasteboard item.
-    let url = unsafe { item.stringForType(&NSString::from_str("public.url")) }.map(|u| u.to_string());
+    let url = item.stringForType(&NSString::from_str("public.url")).map(|u| u.to_string());
     url.as_deref().and_then(url_stem).unwrap_or_else(|| "Image".into())
 }
 
@@ -213,8 +209,8 @@ fn url_stem(url: &str) -> Option<String> {
 
 /// Writes an item's image to `dir`, as PNG when it's TIFF.
 unsafe fn write_image(item: &NSPasteboardItem, kind: &str, ext: &str, dir: &Path) -> Option<PathBuf> {
-    let data = unsafe { item.dataForType(&NSString::from_str(kind)) }?;
-    let bytes = data.bytes();
+    let data = item.dataForType(&NSString::from_str(kind))?;
+    let bytes = unsafe { data.as_bytes_unchecked() };
     let png;
     let bytes = if kind == "public.tiff" {
         png = crate::clipboard::tiff_to_png(bytes)?;
@@ -239,7 +235,7 @@ unsafe fn view(this: &AnyObject) -> &NSView {
     unsafe { &*(this as *const AnyObject).cast::<NSView>() }
 }
 
-unsafe fn pasteboard(info: &AnyObject) -> Retained<NSPasteboard> { unsafe { msg_send_id![info, draggingPasteboard] } }
+unsafe fn pasteboard(info: &AnyObject) -> Retained<NSPasteboard> { unsafe { msg_send![info, draggingPasteboard] } }
 
 /// A drag entered or moved: Enter when it starts to be taken, then Move.
 unsafe fn update(this: &AnyObject, info: &AnyObject) -> usize {
@@ -310,17 +306,17 @@ unsafe extern "C" fn perform(this: &AnyObject, _: Sel, info: &AnyObject) -> Bool
 /// and the promised files drop at `at`.
 unsafe fn receive(key: usize, pb: &NSPasteboard, dir: &Path, paths: Vec<PathBuf>, at: (f32, f32)) -> bool {
     unsafe {
-        let classes = NSArray::from_vec(vec![Retained::<AnyObject>::retain(class!(NSFilePromiseReceiver) as *const AnyClass as *mut AnyObject).unwrap()]);
-        let Some(receivers): Option<Retained<NSArray<AnyObject>>> = msg_send_id![pb, readObjectsForClasses: &*classes, options: &*NSDictionary::<NSString, AnyObject>::new()]
+        let classes = NSArray::from_retained_slice(&[Retained::<AnyObject>::retain(class!(NSFilePromiseReceiver) as *const AnyClass as *mut AnyObject).unwrap()]);
+        let Some(receivers): Option<Retained<NSArray<AnyObject>>> = msg_send![pb, readObjectsForClasses: &*classes, options: &*NSDictionary::<NSString, AnyObject>::new()]
         else { return false };
-        let receivers = receivers.to_vec_retained();
+        let receivers = receivers.to_vec();
         let files: usize = receivers.iter().map(|r| {
-            let types: Retained<NSArray<NSString>> = msg_send_id![r, fileTypes];
+            let types: Retained<NSArray<NSString>> = msg_send![r, fileTypes];
             types.count().max(1)
         }).sum();
         if files == 0 { return false; }
         // The sources write off the main thread; the drop is queued back on it.
-        let queue: Retained<AnyObject> = msg_send_id![class!(NSOperationQueue), new];
+        let queue: Retained<AnyObject> = msg_send![class!(NSOperationQueue), new];
         let pending = Arc::new(Mutex::new((files, paths)));
         let destination = NSURL::fileURLWithPath_isDirectory(&NSString::from_str(&dir.to_string_lossy()), true);
         for receiver in &receivers {
@@ -339,7 +335,7 @@ unsafe fn receive(key: usize, pb: &NSPasteboard, dir: &Path, paths: Vec<PathBuf>
                 let deliver = block2::RcBlock::new(move || {
                     if paths.is_empty() { push(key, FileStep::Leave) } else { push(key, FileStep::Drop(paths.clone(), Some(at))) }
                 });
-                let main: Retained<AnyObject> = msg_send_id![class!(NSOperationQueue), mainQueue];
+                let main: Retained<AnyObject> = msg_send![class!(NSOperationQueue), mainQueue];
                 let _: () = msg_send![&main, addOperationWithBlock: &*deliver];
             });
             let _: () = msg_send![receiver, receivePromisedFilesAtDestination: &*destination, options: &*NSDictionary::<NSString, AnyObject>::new(),

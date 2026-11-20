@@ -29,7 +29,7 @@ image = { workspace = true, features = ["png", "jpeg", "gif", "webp", "bmp", "ic
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { workspace = true }
-objc2-foundation = { version = "0.2.2", features = ["NSGeometry", "NSObject", "NSString"] }
+objc2-foundation = { workspace = true, features = ["std", "NSGeometry", "NSObject", "NSString", "objc2-core-foundation"] }
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 png = { workspace = true }

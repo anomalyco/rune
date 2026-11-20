@@ -336,11 +336,8 @@ impl Presenter {
         self.showing = None;
         #[cfg(all(feature = "native-file-dialog", target_os = "macos"))]
         if let Some(window) = self.sheet_parent.take() {
-            // SAFETY: the host's (main) thread; `window` is a live `Retained<NSWindow>`.
-            unsafe {
-                if let Some(sheet) = window.attachedSheet() {
-                    window.endSheet(&sheet);
-                }
+            if let Some(sheet) = window.attachedSheet() {
+                window.endSheet(&sheet);
             }
         }
     }

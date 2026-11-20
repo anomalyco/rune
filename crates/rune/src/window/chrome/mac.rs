@@ -36,8 +36,8 @@ pub fn own_window_dragging(window: &Window) {
 /// methods and deallocation. Registered classes live for the process lifetime.
 unsafe fn scope_drag_regions(view: &AnyObject) {
     let base = view.class();
-    if base.name().starts_with("RuneDragRegions_") { return; }
-    let name = format!("RuneDragRegions_{}", base.name());
+    if base.name().to_bytes().starts_with(b"RuneDragRegions_") { return; }
+    let Ok(name) = std::ffi::CString::new(format!("RuneDragRegions_{}", base.name().to_string_lossy())) else { return };
     let class = match ClassBuilder::new(&name, base) {
         Some(mut builder) => {
             // SAFETY: the signature matches -[NSView mouseDownCanMoveWindow].
@@ -66,20 +66,19 @@ impl FullScreenWatch {
         let changed = std::rc::Rc::new(std::cell::Cell::new(false));
         let none = || Self { observers: Vec::new(), changed: changed.clone() };
         let (Some(win), Some(view)) = (ns_window(window), content_view(window)) else { return none() };
-        let Some(center) = AnyClass::get("NSNotificationCenter") else { return none() };
+        let Some(center) = AnyClass::get(c"NSNotificationCenter") else { return none() };
         let weak = Weak::from_retained(&view);
         let flag = changed.clone();
         let block = block2::RcBlock::new(move |_: *mut AnyObject| {
             flag.set(true);
-            // SAFETY: notification observer runs on the main thread and `weak.load()` retains a live `NSView`.
-            if let Some(view) = weak.load() { unsafe { view.setNeedsDisplay(true) }; }
+            if let Some(view) = weak.load() { view.setNeedsDisplay(true); }
         });
         let names = ["NSWindowDidEnterFullScreenNotification", "NSWindowDidExitFullScreenNotification"];
         // SAFETY: main thread; the block outlives the observers, which `Drop` removes.
         let observers = names.into_iter().filter_map(|name| unsafe {
-            let center: Retained<AnyObject> = objc2::msg_send_id![center, defaultCenter];
+            let center: Retained<AnyObject> = msg_send![center, defaultCenter];
             let name = NSString::from_str(name);
-            let token: Option<Retained<NSObject>> = objc2::msg_send_id![&*center, addObserverForName: &*name, object: &*win,
+            let token: Option<Retained<NSObject>> = msg_send![&*center, addObserverForName: &*name, object: &*win,
                 queue: std::ptr::null::<AnyObject>(), usingBlock: &*block];
             token
         }).collect();
@@ -94,11 +93,11 @@ impl FullScreenWatch {
 
 impl Drop for FullScreenWatch {
     fn drop(&mut self) {
-        let Some(center) = AnyClass::get("NSNotificationCenter") else { return };
+        let Some(center) = AnyClass::get(c"NSNotificationCenter") else { return };
         for token in &self.observers {
             // SAFETY: removes an observer this watch added.
             unsafe {
-                let center: objc2::rc::Retained<AnyObject> = objc2::msg_send_id![center, defaultCenter];
+                let center: objc2::rc::Retained<AnyObject> = msg_send![center, defaultCenter];
                 let _: () = msg_send![&*center, removeObserver: &**token];
             }
         }
@@ -109,9 +108,8 @@ impl Drop for FullScreenWatch {
 /// (`traffic_lights::place`).
 pub fn traffic_lights_right(window: &Window) -> bool {
     let Some(win) = ns_window(window) else { return false };
-    let Some(close) = win.standardWindowButton(NSWindowButton::NSWindowCloseButton) else { return false };
-    // SAFETY: AppKit's own button, on the main thread.
-    let r = unsafe { close.convertRect_toView(close.bounds(), None) };
+    let Some(close) = win.standardWindowButton(NSWindowButton::CloseButton) else { return false };
+    let r = close.convertRect_toView(close.bounds(), None);
     r.origin.x > win.frame().size.width * 0.5
 }
 
@@ -125,12 +123,9 @@ pub fn titlebar_inset(window: &Window) -> f32 {
     if mask.contains(NSWindowStyleMask::FullScreen) || !mask.contains(NSWindowStyleMask::FullSizeContentView) {
         return 0.0;
     }
-    let Some(zoom) = win.standardWindowButton(NSWindowButton::NSWindowZoomButton) else { return 0.0 };
-    // SAFETY: AppKit's own button, on the main thread.
-    let r = unsafe {
-        if zoom.isHiddenOrHasHiddenAncestor() { return 0.0; }
-        zoom.convertRect_toView(zoom.bounds(), None)
-    };
+    let Some(zoom) = win.standardWindowButton(NSWindowButton::ZoomButton) else { return 0.0 };
+    if zoom.isHiddenOrHasHiddenAncestor() { return 0.0; }
+    let r = zoom.convertRect_toView(zoom.bounds(), None);
     if traffic_lights_right(window) {
         return (win.frame().size.width - r.origin.x) as f32;
     }
@@ -146,21 +141,18 @@ pub fn native_titlebar_band(window: &Window) -> f32 {
     if !mask.contains(NSWindowStyleMask::Titled | NSWindowStyleMask::FullSizeContentView) || mask.contains(NSWindowStyleMask::FullScreen) {
         return 0.0;
     }
-    if content_view(window).is_some_and(|v| v.class().name().starts_with("RuneDragRegions_")) { return 0.0; }
-    // SAFETY: reading the window's geometry on the main thread.
-    let content = unsafe { win.contentLayoutRect() };
+    if content_view(window).is_some_and(|v| v.class().name().to_bytes().starts_with(b"RuneDragRegions_")) { return 0.0; }
+    let content = win.contentLayoutRect();
     (win.frame().size.height - content.size.height).max(0.0) as f32
 }
 
 pub fn double_click_interval() -> f64 {
-    // SAFETY: `+[NSEvent doubleClickInterval]` is a read-only AppKit class method taking no pointers.
-    unsafe { NSEvent::doubleClickInterval() }
+    NSEvent::doubleClickInterval()
 }
 
 /// System Settings › Desktop & Dock › "Double-click a window's title bar to".
 pub fn titlebar_double_click(window: &Window) {
-    // SAFETY: reading a user default on the main thread.
-    let action = unsafe { NSUserDefaults::standardUserDefaults().stringForKey(&NSString::from_str("AppleActionOnDoubleClick")) };
+    let action = NSUserDefaults::standardUserDefaults().stringForKey(&NSString::from_str("AppleActionOnDoubleClick"));
     match action.map(|s| s.to_string()).as_deref() {
         Some("Minimize") => window.set_minimized(true),
         Some("None") => {}

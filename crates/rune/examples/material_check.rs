@@ -12,9 +12,9 @@ fn main() { mac::run(); }
 #[cfg(target_os = "macos")]
 mod mac {
     use objc2::runtime::AnyObject;
-    use objc2::{msg_send, msg_send_id, rc::Retained};
+    use objc2::{MainThreadMarker, msg_send, rc::Retained};
     use objc2_app_kit::{NSApplication, NSView, NSWindow};
-    use objc2_foundation::{MainThreadMarker, NSArray, NSString};
+    use objc2_foundation::{NSArray, NSString};
     use rune::{App, AppHandle, AppSpec, Cx, DisplayTarget, El, KeyPolicy, OverlayInput, OverlayOptions, OverlayPlacement,
         OverlaySpec, RunOptions, SystemMaterial, WindowOptions, WindowSpec, el};
     use std::sync::Mutex;
@@ -45,7 +45,7 @@ mod mac {
 
     fn class_name(o: &AnyObject) -> String {
         // SAFETY: -class and -description on a live object.
-        unsafe { let c: *const AnyObject = msg_send![o, class]; let n: Retained<NSString> = msg_send_id![c, description]; n.to_string() }
+        unsafe { let c: *const AnyObject = msg_send![o, class]; let n: Retained<NSString> = msg_send![c, description]; n.to_string() }
     }
 
     /// The overlay panel `width` wide, or else the main window.
@@ -56,7 +56,7 @@ mod mac {
             Some(width) => wide(w, width) && class_name(w) == "RuneOverlayPanel",
             None => !wide(w, PREWARMED) && !wide(w, FADING) && w.isVisible(),
         };
-        windows.iter().find(|w| pick(w)).map(objc2::ClassType::retain)
+        windows.iter().find(|w| pick(w))
     }
 
     /// The material views under `window`'s content view: (class, pointer, alpha).
@@ -64,10 +64,10 @@ mod mac {
         fn walk(v: &NSView, out: &mut Vec<(String, usize, f64)>) {
             let name = class_name(v);
             if name.contains("GlassEffect") || name.contains("VisualEffect") {
-                out.push((name, v as *const NSView as usize, unsafe { v.alphaValue() }));
+                out.push((name, v as *const NSView as usize, v.alphaValue()));
                 return;
             }
-            for s in unsafe { v.subviews() }.iter() { walk(&s, out); }
+            for s in v.subviews().iter() { walk(&s, out); }
         }
         let mut out = Vec::new();
         if let Some(v) = window.contentView() { walk(&v, &mut out); }
@@ -82,10 +82,10 @@ mod mac {
     fn transactions(window: &NSWindow) -> Option<bool> {
         fn find(layer: &AnyObject) -> Option<bool> {
             if class_name(layer).contains("MetalLayer") { return Some(unsafe { msg_send![layer, presentsWithTransaction] }); }
-            let subs: Option<Retained<NSArray<AnyObject>>> = unsafe { msg_send_id![layer, sublayers] };
+            let subs: Option<Retained<NSArray<AnyObject>>> = unsafe { msg_send![layer, sublayers] };
             subs?.iter().find_map(|l| find(&l))
         }
-        let layer: Option<Retained<AnyObject>> = unsafe { msg_send_id![&*window.contentView()?, layer] };
+        let layer: Option<Retained<AnyObject>> = unsafe { msg_send![&*window.contentView()?, layer] };
         find(&*layer?)
     }
 

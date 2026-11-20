@@ -7,14 +7,14 @@
 use std::path::PathBuf;
 use objc2::rc::{Retained, autoreleasepool};
 use objc2::runtime::{AnyObject, ProtocolObject};
-use objc2::ClassType;
+use objc2::AnyThread;
 use objc2_app_kit::{
-    NSAttributedStringDocumentFormats, NSBitmapImageFileType, NSBitmapImageRep, NSCharacterEncodingDocumentAttribute,
-    NSDocumentTypeDocumentAttribute, NSHTMLTextDocumentType, NSPasteboard, NSPasteboardItem, NSPasteboardTypeFileURL, NSPasteboardTypeHTML,
-    NSPasteboardTypePNG, NSPasteboardTypeRTF, NSPasteboardTypeString, NSPasteboardTypeTIFF,
+    NSAttributedStringAppKitDocumentFormats, NSAttributedStringDocumentFormats, NSBitmapImageFileType, NSBitmapImageRep,
+    NSCharacterEncodingDocumentAttribute, NSDocumentTypeDocumentAttribute, NSHTMLTextDocumentType, NSPasteboard, NSPasteboardItem,
+    NSPasteboardTypeFileURL, NSPasteboardTypeHTML, NSPasteboardTypePNG, NSPasteboardTypeRTF, NSPasteboardTypeString, NSPasteboardTypeTIFF,
 };
 use objc2_foundation::{
-    NSArray, NSAttributedString, NSCopying, NSData, NSDictionary, NSNumber, NSRange, NSString, NSURL, NSUTF8StringEncoding,
+    NSArray, NSAttributedString, NSData, NSDictionary, NSNumber, NSRange, NSString, NSURL, NSUTF8StringEncoding,
 };
 use zeroize::Zeroizing;
 use super::{ClipboardContent, ClipboardImage, MAX_IMAGE_BYTES};
@@ -55,7 +55,8 @@ pub(super) fn write(pb: &NSPasteboard, content: &ClipboardContent) -> Result<(),
             if !url.is_some_and(|url| item.setString_forType(&url, NSPasteboardTypeFileURL)) { return Err(refused("file")); }
         }
         pb.clearContents();
-        let objects = NSArray::from_vec(items.into_iter().map(ProtocolObject::from_retained).collect());
+        let objects: Vec<_> = items.into_iter().map(ProtocolObject::from_retained).collect();
+        let objects = NSArray::from_retained_slice(&objects);
         if !pb.writeObjects(&objects) { return Err(refused("content")); }
         Ok(())
     })
@@ -71,7 +72,7 @@ pub(super) fn read(pb: &NSPasteboard, all: bool) -> Option<ClipboardContent> {
         let html = pb.stringForType(NSPasteboardTypeHTML).map(|s| s.to_string()).filter(|h| !h.is_empty() && h.len() <= MAX_RICH_BYTES);
         let rtf = pb.dataForType(NSPasteboardTypeRTF)
             .filter(|d| !d.is_empty() && d.len() <= MAX_RICH_BYTES)
-            .map(|d| Zeroizing::new(d.bytes().to_vec()));
+            .map(|d| Zeroizing::new(d.to_vec()));
         let image = if all { read_image(pb) } else { None };
         let files = if all { read_files(pb) } else { Vec::new() };
         if text.is_none() && html.is_none() && rtf.is_none() && image.is_none() && files.is_empty() { return None; }
@@ -86,16 +87,14 @@ pub(super) fn read(pb: &NSPasteboard, all: bool) -> Option<ClipboardContent> {
 
 /// The path of each pasteboard item's file URL, in order.
 fn read_files(pb: &NSPasteboard) -> Vec<PathBuf> {
-    // SAFETY: `pb` is a live `NSPasteboard`; `pasteboardItems` returns a retained array or `None`.
-    let Some(items) = (unsafe { pb.pasteboardItems() }) else { return Vec::new() };
+    let Some(items) = pb.pasteboardItems() else { return Vec::new() };
     // SAFETY: each `item` is a live `NSPasteboardItem` from `items` and `NSPasteboardTypeFileURL` is an immutable AppKit static.
     items.iter().filter_map(|item| unsafe { item.stringForType(NSPasteboardTypeFileURL) }.and_then(|url| crate::platform::macos::drop::file_path(&url))).collect()
 }
 
 /// TIFF for PNG bytes, through `NSBitmapImageRep`.
 fn png_to_tiff(png: &[u8]) -> Option<Retained<NSData>> {
-    // SAFETY: `NSData::with_bytes` copies `png` into a valid `NSData`, and `NSBitmapImageRep` handles arbitrary bytes safely.
-    unsafe { NSBitmapImageRep::imageRepWithData(&NSData::with_bytes(png))?.TIFFRepresentation() }
+    NSBitmapImageRep::imageRepWithData(&NSData::with_bytes(png))?.TIFFRepresentation()
 }
 
 const MAX_TIFF_BYTES: usize = 8 * MAX_IMAGE_BYTES;
@@ -105,12 +104,12 @@ fn read_image(pb: &NSPasteboard) -> Option<ClipboardImage> {
     let fits = |d: &Retained<NSData>| !d.is_empty() && d.len() <= MAX_IMAGE_BYTES;
     // SAFETY: `pb` is a live `NSPasteboard` and the PNG/TIFF type constants are immutable AppKit statics.
     unsafe {
-        if let Some(png) = pb.dataForType(NSPasteboardTypePNG).filter(fits).and_then(|d| ClipboardImage::from_png(d.bytes())) {
+        if let Some(png) = pb.dataForType(NSPasteboardTypePNG).filter(fits).and_then(|d| ClipboardImage::from_png(d.as_bytes_unchecked())) {
             return Some(png);
         }
         // TIFF is uncompressed more often than not: allow it more room than the PNG it becomes.
         let tiff = pb.dataForType(NSPasteboardTypeTIFF).filter(|d| !d.is_empty() && d.len() <= MAX_TIFF_BYTES)?;
-        tiff_to_png(tiff.bytes())
+        tiff_to_png(tiff.as_bytes_unchecked())
     }
 }
 
@@ -129,7 +128,7 @@ pub(crate) fn tiff_to_png(tiff: &[u8]) -> Option<ClipboardImage> {
         }
         let png = rep.representationUsingType_properties(NSBitmapImageFileType::PNG, &NSDictionary::new())?;
         if png.len() > MAX_IMAGE_BYTES { return None; }
-        ClipboardImage::from_png(png.bytes())
+        ClipboardImage::from_png(png.as_bytes_unchecked())
     })
 }
 
@@ -185,12 +184,13 @@ pub(super) fn rtf_to_html(rtf: &[u8]) -> Option<String> {
     // is `0..string.length()`, and `autoreleasepool` bounds autoreleased temporaries.
     autoreleasepool(|_| unsafe {
         let string = NSAttributedString::initWithRTF_documentAttributes(NSAttributedString::alloc(), &NSData::with_bytes(rtf), None)?;
-        let html_type: Retained<AnyObject> = Retained::cast(NSHTMLTextDocumentType.copy());
-        let utf8: Retained<AnyObject> = Retained::cast(NSNumber::new_usize(NSUTF8StringEncoding));
-        let attributes = NSDictionary::from_id_slice(&[NSDocumentTypeDocumentAttribute, NSCharacterEncodingDocumentAttribute], &[html_type, utf8]);
+        let html_type: &AnyObject = NSHTMLTextDocumentType;
+        let utf8 = NSNumber::new_usize(NSUTF8StringEncoding);
+        let utf8: &AnyObject = &utf8;
+        let attributes = NSDictionary::from_slices(&[NSDocumentTypeDocumentAttribute, NSCharacterEncodingDocumentAttribute], &[html_type, utf8]);
         let data = string.dataFromRange_documentAttributes_error(NSRange::new(0, string.length()), &attributes).ok()?;
         if data.len() > MAX_RICH_BYTES { return None; }
-        String::from_utf8(data.bytes().to_vec()).ok()
+        String::from_utf8(data.to_vec()).ok()
     })
 }
 
@@ -228,15 +228,14 @@ mod tests {
     /// build machine's SSH session).
     #[test]
     fn every_form_round_trips_in_one_change() {
+        use objc2::ClassType;
         // SAFETY: `+[NSPasteboard pasteboardWithUniqueName]` takes no arguments and returns an owned or nil `NSPasteboard`.
-        let pb: Option<Retained<NSPasteboard>> = unsafe { objc2::msg_send_id![NSPasteboard::class(), pasteboardWithUniqueName] };
+        let pb: Option<Retained<NSPasteboard>> = unsafe { objc2::msg_send![NSPasteboard::class(), pasteboardWithUniqueName] };
         let Some(pb) = pb else { return eprintln!("no pasteboard server; skipped") };
-        // SAFETY: `pb` is a live retained `NSPasteboard`.
-        let before = unsafe { pb.changeCount() };
+        let before = pb.changeCount();
         let content = ClipboardContent::new("Hi there").with_html("<b>Hi</b> there").with_rtf(RTF);
         write(&pb, &content).unwrap();
-        // SAFETY: `pb` is a live retained `NSPasteboard`.
-        assert_eq!(unsafe { pb.changeCount() }, before + 1);
+        assert_eq!(pb.changeCount(), before + 1);
         let back = read(&pb, true).unwrap();
         assert_eq!(back.text(), "Hi there");
         assert!(back.html().unwrap().ends_with("<b>Hi</b> there"));
@@ -275,27 +274,25 @@ mod tests {
     /// one item each, with every other form on the first.
     #[test]
     fn images_and_files_are_written_for_other_apps() {
+        use objc2::ClassType;
         // SAFETY: `+[NSPasteboard pasteboardWithUniqueName]` takes no arguments and returns an owned or nil `NSPasteboard`.
-        let pb: Option<Retained<NSPasteboard>> = unsafe { objc2::msg_send_id![NSPasteboard::class(), pasteboardWithUniqueName] };
+        let pb: Option<Retained<NSPasteboard>> = unsafe { objc2::msg_send![NSPasteboard::class(), pasteboardWithUniqueName] };
         let Some(pb) = pb else { return eprintln!("no pasteboard server; skipped") };
-        // SAFETY: `pb` is a live retained `NSPasteboard`.
-        let before = unsafe { pb.changeCount() };
+        let before = pb.changeCount();
         let image = ClipboardImage::from_png(png_2x3()).unwrap();
         write(&pb, &ClipboardContent::default().with_image(image.clone())).unwrap();
-        // SAFETY: `pb` is a live retained `NSPasteboard`.
-        assert_eq!(unsafe { pb.changeCount() }, before + 1);
+        assert_eq!(pb.changeCount(), before + 1);
         // SAFETY: `pb` is a live retained `NSPasteboard` and the pasteboard type constants are immutable AppKit statics.
         unsafe {
-            assert_eq!(pb.dataForType(NSPasteboardTypePNG).map(|d| d.bytes().to_vec()), Some(png_2x3()));
-            assert_eq!(pb.dataForType(NSPasteboardTypeTIFF).and_then(|d| tiff_to_png(d.bytes())).map(|i| i.size()), Some((2, 3)));
+            assert_eq!(pb.dataForType(NSPasteboardTypePNG).map(|d| d.to_vec()), Some(png_2x3()));
+            assert_eq!(pb.dataForType(NSPasteboardTypeTIFF).and_then(|d| tiff_to_png(d.as_bytes_unchecked())).map(|i| i.size()), Some((2, 3)));
             assert!(pb.stringForType(NSPasteboardTypeString).is_none(), "an empty text isn't written beside the image");
         }
         assert_eq!(read(&pb, true).unwrap(), ClipboardContent::default().with_image(image), "the image pastes back as is");
 
         let files = [PathBuf::from("/fixtures/a.txt"), PathBuf::from("/fixtures/b c.png")];
         write(&pb, &ClipboardContent::new("a.txt b c.png").with_html("<b>files</b>").with_files(files.clone())).unwrap();
-        // SAFETY: `pb` is a live retained `NSPasteboard`.
-        let items = unsafe { pb.pasteboardItems() }.unwrap();
+        let items = pb.pasteboardItems().unwrap();
         assert_eq!(items.count(), 2, "one item per file");
         // SAFETY: `items.count() == 2` was asserted above, so index 1 is in bounds, and `NSPasteboardTypeFileURL` is an immutable static.
         let url = unsafe { items.objectAtIndex(1).stringForType(NSPasteboardTypeFileURL) }.unwrap().to_string();
@@ -314,7 +311,7 @@ mod tests {
         crate::drag_out::encode_png(2, 3, &rgba).unwrap()
     }
 
-    fn tiff_of(png: &[u8]) -> Vec<u8> { png_to_tiff(png).unwrap().bytes().to_vec() }
+    fn tiff_of(png: &[u8]) -> Vec<u8> { png_to_tiff(png).unwrap().to_vec() }
 
     #[test]
     fn tiff_becomes_png_off_the_main_thread() {

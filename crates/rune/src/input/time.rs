@@ -71,12 +71,12 @@ pub(crate) fn arrived(event: &winit::event::WindowEvent) -> Option<Scope> {
 
 #[cfg(target_os = "macos")]
 fn native(kind: Kind) -> Option<Instant> {
+    use objc2::MainThreadMarker;
     use objc2_app_kit::{NSApplication, NSEventType as T};
-    use objc2_foundation::{MainThreadMarker, NSProcessInfo};
+    use objc2_foundation::NSProcessInfo;
     let mtm = MainThreadMarker::new()?;
     let event = NSApplication::sharedApplication(mtm).currentEvent()?;
-    // SAFETY: reading the current event's properties on the main thread.
-    let (ty, timestamp) = unsafe { (event.r#type(), event.timestamp()) };
+    let (ty, timestamp) = (event.r#type(), event.timestamp());
     let matches = match kind {
         Kind::Key => matches!(ty, T::KeyDown | T::KeyUp | T::FlagsChanged),
         Kind::Mouse => matches!(ty, T::LeftMouseDown | T::LeftMouseUp | T::RightMouseDown | T::RightMouseUp
@@ -87,8 +87,8 @@ fn native(kind: Kind) -> Option<Instant> {
         Kind::Rotate => ty == T::Rotate,
         Kind::SmartMagnify => ty == T::SmartMagnify,
     };
-    // SAFETY: as above. The uptime is read after the event, so never before its timestamp.
-    matches.then(|| since_boot(Instant::now(), unsafe { NSProcessInfo::processInfo().systemUptime() }, timestamp))
+    // The uptime is read after the event, so never before its timestamp.
+    matches.then(|| since_boot(Instant::now(), NSProcessInfo::processInfo().systemUptime(), timestamp))
 }
 
 #[cfg(not(target_os = "macos"))]

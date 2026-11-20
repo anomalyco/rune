@@ -43,9 +43,9 @@ wgpu = { workspace = true, features = ["webgpu"] }
 [target.'cfg(target_vendor = "apple")'.dependencies]
 blake3 = { workspace = true, optional = true }
 libc = { workspace = true, optional = true }
-objc2 = "0.6"
+objc2 = { workspace = true }
 objc2-core-foundation = { workspace = true, optional = true, features = ["std", "CFCGTypes", "objc2"] }
-objc2-foundation = { version = "0.3", optional = true, default-features = false, features = ["std", "NSArray", "NSError", "NSObject", "NSRange", "NSString"] }
+objc2-foundation = { workspace = true, optional = true, features = ["std", "NSArray", "NSError", "NSObject", "NSRange", "NSString"] }
 objc2-metal = { workspace = true, optional = true, features = ["std", "MTLAllocation", "MTLArgument", "MTLBlitCommandEncoder", "MTLBuffer", "MTLCommandBuffer", "MTLCommandEncoder", "MTLCommandQueue", "MTLComputeCommandEncoder", "MTLComputePass", "MTLComputePipeline", "MTLCounters", "MTLDepthStencil", "MTLDevice", "MTLDrawable", "MTLEvent", "MTLLibrary", "MTLPixelFormat", "MTLRenderCommandEncoder", "MTLRenderPass", "MTLRenderPipeline", "MTLResource", "MTLSampler", "MTLTexture", "MTLTypes", "MTLVertexDescriptor"] }
 objc2-quartz-core = { version = "0.3.2", optional = true, default-features = false, features = ["std", "bitflags", "CALayer", "CAMetalLayer", "objc2-core-foundation", "objc2-core-graphics", "objc2-metal"] }
 parking_lot = { version = "0.12", optional = true }

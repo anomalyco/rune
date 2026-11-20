@@ -289,9 +289,9 @@ pub(crate) mod metal {
 
     use super::{Presented, Source};
     use objc2_metal::MTLDrawable;
-    use objc2_video::rc::Retained;
-    use objc2_video::runtime::{AnyClass, AnyObject, ClassBuilder, ProtocolObject, Sel};
-    use objc2_video::{Message, msg_send, sel};
+    use objc2::rc::Retained;
+    use objc2::runtime::{AnyClass, AnyObject, ClassBuilder, ProtocolObject, Sel};
+    use objc2::{Message, msg_send, sel};
     use std::ptr::NonNull;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::ffi::CString;
@@ -381,7 +381,7 @@ pub(crate) mod metal {
         if let (Some((_, log)), Some(raw)) = (hooked, NonNull::new(drawable)) {
             let seq = log.next.fetch_add(1, Ordering::Relaxed) + 1;
             log.acquired.store(seq, Ordering::Release);
-            let handler = block2_metal::RcBlock::new(move |d: NonNull<ProtocolObject<dyn MTLDrawable>>| {
+            let handler = block2::RcBlock::new(move |d: NonNull<ProtocolObject<dyn MTLDrawable>>| {
                 // SAFETY: Metal passes the presented drawable for the handler's duration.
                 let at = unsafe { d.as_ref() }.presentedTime();
                 if !log.untraced { log.presented.lock().unwrap().push((seq, at)); }
@@ -394,7 +394,7 @@ pub(crate) mod metal {
             // Metal copies the block.
             unsafe {
                 let drawable = raw.cast::<ProtocolObject<dyn MTLDrawable>>().as_ref();
-                drawable.addPresentedHandler(block2_metal::RcBlock::as_ptr(&handler));
+                drawable.addPresentedHandler(block2::RcBlock::as_ptr(&handler));
             }
         }
         drawable

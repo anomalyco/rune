@@ -21,7 +21,7 @@ mod mac {
     use std::process::Command;
     use std::sync::Mutex;
     use std::time::{Duration, Instant};
-    use objc2::{class, msg_send, msg_send_id, rc::Retained, runtime::{AnyObject, Bool}};
+    use objc2::{class, msg_send, rc::Retained, runtime::{AnyObject, Bool}};
     use objc2_foundation::{NSArray, NSPoint, NSSize};
     use rune::*;
     use crate::macos_support::{activate_helper, app_active, frontmost_pid, on_main, wait, warp};
@@ -48,10 +48,10 @@ mod mac {
     fn panel(number: u32) -> Option<(bool, bool)> {
         unsafe {
             let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
-            let windows: Retained<NSArray<AnyObject>> = msg_send_id![app, windows];
-            windows.iter().find(|w| { let n: isize = msg_send![*w, windowNumber]; n == number as isize }).map(|w| {
-                let key: Bool = msg_send![w, isKeyWindow];
-                let ignores: Bool = msg_send![w, ignoresMouseEvents];
+            let windows: Retained<NSArray<AnyObject>> = msg_send![app, windows];
+            windows.iter().find(|w| { let n: isize = msg_send![&**w, windowNumber]; n == number as isize }).map(|w| {
+                let key: Bool = msg_send![&*w, isKeyWindow];
+                let ignores: Bool = msg_send![&*w, ignoresMouseEvents];
                 (key.as_bool(), ignores.as_bool())
             })
         }
@@ -142,7 +142,7 @@ mod mac {
     fn ordered_in(number: u32) -> bool {
         unsafe {
             let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
-            let windows: Retained<NSArray<AnyObject>> = msg_send_id![app, windows];
+            let windows: Retained<NSArray<AnyObject>> = msg_send![app, windows];
             windows.iter().any(|w| {
                 let n: isize = msg_send![&*w, windowNumber];
                 let visible: Bool = msg_send![&*w, isVisible];

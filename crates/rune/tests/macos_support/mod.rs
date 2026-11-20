@@ -2,7 +2,7 @@
 
 use std::process::Command;
 use std::time::{Duration, Instant};
-use objc2::{class, msg_send, msg_send_id, rc::Retained, runtime::{AnyObject, Bool}};
+use objc2::{class, msg_send, rc::Retained, runtime::{AnyObject, Bool}};
 use objc2_foundation::{NSArray, NSPoint, NSString};
 use rune::AppHandle;
 
@@ -68,9 +68,9 @@ pub fn drag_pasteboard() -> (Option<String>, Option<String>) {
     unsafe {
         let name = NSString::from_str("Apple CFPasteboard drag");
         let board: *mut AnyObject = msg_send![class!(NSPasteboard), pasteboardWithName: &*name];
-        let url: Option<Retained<NSString>> = msg_send_id![board, stringForType: &*NSString::from_str("public.file-url")];
+        let url: Option<Retained<NSString>> = msg_send![board, stringForType: &*NSString::from_str("public.file-url")];
         let names: Option<Retained<NSArray<NSString>>> =
-            msg_send_id![board, propertyListForType: &*NSString::from_str("NSFilenamesPboardType")];
+            msg_send![board, propertyListForType: &*NSString::from_str("NSFilenamesPboardType")];
         (url.map(|u| u.to_string()), names.and_then(|n| n.iter().next().map(|s| s.to_string())))
     }
 }

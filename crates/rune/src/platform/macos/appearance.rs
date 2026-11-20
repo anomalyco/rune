@@ -32,7 +32,7 @@ static LAST_APPEARANCE: u8 = 0;
 #[doc(hidden)]
 pub fn install() {
     if ORIGINAL.load(Ordering::Relaxed) != 0 { return; }
-    let (Some(delegate), Some(object)) = (AnyClass::get("WinitWindowDelegate"), AnyClass::get("NSObject")) else { return };
+    let (Some(delegate), Some(object)) = (AnyClass::get(c"WinitWindowDelegate"), AnyClass::get(c"NSObject")) else { return };
     let selector = sel!(observeValueForKeyPath:ofObject:change:context:);
     // SAFETY: called on the main thread after winit registers `WinitWindowDelegate`; `delegate` and `object`
     // are valid classes, `ORIGINAL` is stored before swapping the IMP, and `observe` matches the KVO selector ABI.
@@ -46,7 +46,7 @@ pub fn install() {
 }
 
 unsafe fn appearance(value: *mut AnyObject) -> bool {
-    let Some(class) = AnyClass::get("NSAppearance") else { return false };
+    let Some(class) = AnyClass::get(c"NSAppearance") else { return false };
     // SAFETY: `value` is checked non-null and caller guarantees it is a valid ObjC object; `class` is `NSAppearance`.
     !value.is_null() && unsafe { msg_send![value, isKindOfClass: class] }
 }

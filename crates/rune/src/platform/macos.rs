@@ -1,8 +1,7 @@
 //! AppKit activation policy, overlay windows, and visibility without activation.
 
 use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
-use objc2_foundation::MainThreadMarker;
-use objc2::{ClassType, DeclaredClass, declare_class, msg_send, msg_send_id, mutability};
+use objc2::{ClassType, DefinedClass, MainThreadMarker, define_class, msg_send};
 use objc2::rc::Retained;
 use objc2_app_kit::{NSEvent, NSPanel, NSWindow, NSResponder, NSScreen, NSView};
 use objc2_foundation::{NSObject, NSPoint, NSRect, NSSize};
@@ -39,21 +38,18 @@ use surface::occlusion_hidden;
 struct PanelFlags { keys: bool, presence: Rc<Cell<Presence>>, constrain: bool }
 
 // Initialized nonactivating panel. No application activation call.
-declare_class!(
+define_class!(
+    #[unsafe(super(NSPanel, NSWindow, NSResponder, NSObject))]
+    #[name = "RuneOverlayPanel"]
+    #[ivars = PanelFlags]
     struct OverlayPanel;
-    unsafe impl ClassType for OverlayPanel {
-        #[inherits(NSWindow, NSResponder, NSObject)]
-        type Super = NSPanel;
-        type Mutability = mutability::MainThreadOnly;
-        const NAME: &'static str = "RuneOverlayPanel";
-    }
-    impl DeclaredClass for OverlayPanel { type Ivars = PanelFlags; }
-    unsafe impl OverlayPanel {
-        #[method(canBecomeKeyWindow)]
+
+    impl OverlayPanel {
+        #[unsafe(method(canBecomeKeyWindow))]
         fn can_become_key(&self) -> bool { self.ivars().keys }
-        #[method(canBecomeMainWindow)]
+        #[unsafe(method(canBecomeMainWindow))]
         fn can_become_main(&self) -> bool { false }
-        #[method(occlusionState)]
+        #[unsafe(method(occlusionState))]
         fn occlusion_state(&self) -> usize {
             // wgpu skips nextDrawable for occluded windows. Permit only the explicit
             // alpha-zero prewarm acquisition and a fade in or out, which AppKit reports as
@@ -64,13 +60,13 @@ declare_class!(
         }
         // AppKit keeps windows below the menu bar's level out from under it; an overlay goes
         // exactly where it's placed at any level.
-        #[method(constrainFrameRect:toScreen:)]
+        #[unsafe(method(constrainFrameRect:toScreen:))]
         fn constrain_frame_rect(&self, frame: NSRect, screen: *mut NSScreen) -> NSRect {
             // SAFETY: `OverlayPanel` inherits from `NSPanel` (`MainThreadOnly`); `frame` and `screen` match `constrainFrameRect:toScreen:`.
             if self.ivars().constrain { unsafe { msg_send![super(self), constrainFrameRect: frame, toScreen: screen] } }
             else { frame }
         }
-        #[method(sendEvent:)]
+        #[unsafe(method(sendEvent:))]
         fn send_event(&self, event: &NSEvent) {
             // Without its view the panel would swallow this click and every later one.
             if crate::platform::macos::panel_bridge::reattach(self.as_super()) { eprintln!("rune: panel lost its view; reattached on input"); }
@@ -136,8 +132,7 @@ fn set_sharing(window: &NSWindow, exclude: bool) {
 /// Orders a window front without making it key or activating the app.
 pub(crate) fn show_without_focus(window: &winit::window::Window) {
     let Some(w) = ns_window(window) else { return };
-    // SAFETY: an AppKit call on the main thread.
-    unsafe { w.orderFrontRegardless() };
+    w.orderFrontRegardless();
 }
 
 /// An overlay's non-activating panel. winit's content view (with the Metal layer wgpu draws
@@ -186,12 +181,12 @@ impl Panel {
         // SAFETY: `mtm` proves main-thread execution; `OverlayPanel` inherits from `NSPanel`, so
         // `initWithContentRect:styleMask:backing:defer:` and the upcast to `NSPanel` are valid.
         let panel = unsafe {
-            let panel: Retained<OverlayPanel> = msg_send_id![super(mtm.alloc().set_ivars(PanelFlags { keys: options.keys == KeyPolicy::OnDemand, presence: presence.clone(), constrain: ordinary })),
+            let panel: Retained<OverlayPanel> = msg_send![super(mtm.alloc().set_ivars(PanelFlags { keys: options.keys == KeyPolicy::OnDemand, presence: presence.clone(), constrain: ordinary })),
                 initWithContentRect: rect,
                 styleMask: style | NSWindowStyleMask::NonactivatingPanel,
-                backing: NSBackingStoreType::NSBackingStoreBuffered,
+                backing: NSBackingStoreType::Buffered,
                 defer: false];
-            Retained::cast::<NSPanel>(panel)
+            panel.into_super()
         };
         // SAFETY: `panel` is a live retained `NSPanel` configured on the AppKit main thread (`mtm` checked above).
         unsafe {
@@ -216,25 +211,20 @@ impl Panel {
             panel.setTitle(&ns_window.title());
             panel.setLevel(3);
             panel.setHasShadow(ns_window.hasShadow());
-            // SAFETY: both retained windows are owned on the AppKit main thread.
-            unsafe {
-                panel.setContentMinSize(ns_window.contentMinSize());
-                panel.setContentMaxSize(ns_window.contentMaxSize());
-            }
+            panel.setContentMinSize(ns_window.contentMinSize());
+            panel.setContentMaxSize(ns_window.contentMaxSize());
             panel.setFrame_display(ns_window.frame(), false);
         }
         panel.setOpaque(false);
         panel.setIgnoresMouseEvents(options.input.resolved(interactive) != OverlayInput::All);
         panel.setAcceptsMouseMovedEvents(true);
         if options.prewarm {
-            // SAFETY: `panel` is a live retained `NSPanel` on the AppKit main thread (`mtm` checked above).
-            unsafe { panel.setAlphaValue(0.0); }
+            panel.setAlphaValue(0.0);
             panel.setIgnoresMouseEvents(true);
         }
         // defer:NO creates the WindowServer identity while hidden. Never publish a sentinel
         // (-1/0) cast to CGWindowID as a successful native creation.
-        // SAFETY: `panel` is a live retained `NSPanel` on the AppKit main thread (`mtm` checked above).
-        if unsafe { panel.windowNumber() } <= 0 { return None; }
+        if panel.windowNumber() <= 0 { return None; }
         ns_window.setContentView(None);
         panel.setContentView(Some(&view));
         let pointer = Rc::new(PointerState::new(options.input.resolved(interactive), options.follow_pointer));
@@ -245,8 +235,7 @@ impl Panel {
             ns_window.setContentView(Some(&view));
             return None;
         }
-        // SAFETY: `ns_window` is a live retained `NSWindow` on the AppKit main thread (`mtm` checked above).
-        panel.setDelegate(unsafe { ns_window.delegate() }.as_deref());
+        panel.setDelegate(ns_window.delegate().as_deref());
         Some(Panel { bridge, monitors: RefCell::new(None), pointer, options: options.clone(), follow_pointer: Cell::new(options.follow_pointer), pointer_poll: Cell::new(None), presence, wake, panel, window: ns_window, view })
     }
 
@@ -294,18 +283,14 @@ impl Panel {
         (RawDisplayHandle::AppKit(AppKitDisplayHandle::new()), RawWindowHandle::AppKit(AppKitWindowHandle::new(view)))
     }
 
-    pub fn window_number(&self) -> u32 {
-        // SAFETY: `self.panel` is a live retained `NSPanel` accessed on the AppKit main thread.
-        unsafe { self.panel.windowNumber() as u32 }
-    }
+    pub fn window_number(&self) -> u32 { self.panel.windowNumber() as u32 }
     pub fn capture_exclusion(&self) -> OverlaySupport {
         if self.presence.get().requested() { OverlaySupport::Requested } else { OverlaySupport::Unknown }
     }
     pub fn request_keys(&self) {
         if self.options.keys == KeyPolicy::OnDemand {
             self.panel.makeFirstResponder(Some(&self.view));
-            // SAFETY: `self.panel` is a live retained `NSPanel` accessed on the AppKit main thread.
-            unsafe { self.panel.makeKeyWindow(); }
+            self.panel.makeKeyWindow();
         }
     }
     pub fn is_key(&self) -> bool { self.panel.isKeyWindow() }

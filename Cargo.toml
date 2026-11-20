@@ -176,16 +176,18 @@ rune-theme-opencode = { path = "themes/opencode" }
 
 # Shared external crates.
 blake3 = "1"
-block2 = "0.5"
+block2 = "0.6"
 bytemuck = { version = "1.25", features = ["derive"] }
 half = "2"
 image = { version = "0.25", default-features = false }
 js-sys = "0.3"
 libc = "0.2"
-objc2 = "0.5.2"
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false }
 objc2-core-foundation = { version = "0.3", default-features = false }
 objc2-core-graphics = { version = "0.3", default-features = false }
 objc2-core-video = { version = "0.3", default-features = false }
+objc2-foundation = { version = "0.3", default-features = false }
 objc2-metal = { version = "0.3", default-features = false }
 parley = { version = "0.12", default-features = false }
 parley_engine = { version = "0.12", default-features = false }

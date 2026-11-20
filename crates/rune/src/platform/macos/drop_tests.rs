@@ -8,13 +8,13 @@ fn pasteboard_available() -> bool {
     static AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *AVAILABLE.get_or_init(|| {
         let probe = std::panic::catch_unwind(|| unsafe {
-            let pb: Option<Retained<NSPasteboard>> = msg_send_id![class!(NSPasteboard), pasteboardWithUniqueName];
+            let pb: Option<Retained<NSPasteboard>> = msg_send![class!(NSPasteboard), pasteboardWithUniqueName];
             let Some(pb) = pb else { return false };
             pb.clearContents();
             let item = NSPasteboardItem::new();
             let kind = NSString::from_str("public.utf8-plain-text");
             let ok = item.setString_forType(&NSString::from_str("probe"), &kind)
-                && pb.writeObjects(&NSArray::from_vec(vec![objc2::runtime::ProtocolObject::from_retained(item)]))
+                && pb.writeObjects(&NSArray::from_retained_slice(&[objc2::runtime::ProtocolObject::from_retained(item)]))
                 && pb.stringForType(&kind).is_some_and(|s| s.to_string() == "probe");
             let () = msg_send![&*pb, releaseGlobally];
             ok
@@ -40,19 +40,17 @@ impl std::ops::Deref for Board {
 /// A private pasteboard holding `items`, or None without a pasteboard.
 fn board(items: &[&[(&str, &[u8])]]) -> Option<Board> {
     if !pasteboard_available() { return None; }
-    unsafe {
-        let pb = Board(NSPasteboard::pasteboardWithUniqueName());
-        pb.clearContents();
-        let items: Vec<Retained<NSPasteboardItem>> = items.iter().map(|types| {
-            let item = NSPasteboardItem::new();
-            for (t, data) in *types { item.setData_forType(&NSData::with_bytes(data), &NSString::from_str(t)); }
-            item
-        }).collect();
-        let objects: Vec<Retained<objc2::runtime::ProtocolObject<dyn objc2_app_kit::NSPasteboardWriting>>> =
-            items.into_iter().map(|i| objc2::runtime::ProtocolObject::from_retained(i)).collect();
-        assert!(pb.writeObjects(&NSArray::from_vec(objects)));
-        Some(pb)
-    }
+    let pb = Board(NSPasteboard::pasteboardWithUniqueName());
+    pb.clearContents();
+    let items: Vec<Retained<NSPasteboardItem>> = items.iter().map(|types| {
+        let item = NSPasteboardItem::new();
+        for (t, data) in *types { item.setData_forType(&NSData::with_bytes(data), &NSString::from_str(t)); }
+        item
+    }).collect();
+    let objects: Vec<Retained<objc2::runtime::ProtocolObject<dyn objc2_app_kit::NSPasteboardWriting>>> =
+        items.into_iter().map(|i| objc2::runtime::ProtocolObject::from_retained(i)).collect();
+    assert!(pb.writeObjects(&NSArray::from_retained_slice(&objects)));
+    Some(pb)
 }
 
 fn png() -> Vec<u8> {

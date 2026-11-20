@@ -61,10 +61,9 @@ pub(crate) use mac::{accessory, front, install, unhide};
 mod mac {
     use std::cell::{Cell, RefCell};
     use std::ffi::{c_char, c_void};
-    use objc2::{msg_send, sel};
+    use objc2::{MainThreadMarker, msg_send, sel};
     use objc2::runtime::{AnyClass, AnyObject, Bool, Sel};
     use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
-    use objc2_foundation::MainThreadMarker;
 
     thread_local! {
         /// Sends the reopen to Rune's loop; false once the loop is gone.
@@ -119,16 +118,14 @@ mod mac {
     /// The app has no Dock icon now (`App::accessory`, `AppHandle::set_dock_icon(false)`).
     pub(crate) fn accessory() -> bool {
         let Some(mtm) = MainThreadMarker::new() else { return false };
-        // SAFETY: reading the activation policy on the main thread.
-        unsafe { NSApplication::sharedApplication(mtm).activationPolicy() != NSApplicationActivationPolicy::Regular }
+        NSApplication::sharedApplication(mtm).activationPolicy() != NSApplicationActivationPolicy::Regular
     }
 
     /// Unhides the app if it is hidden (⌘H, Hide Others), which also activates it.
     pub(crate) fn unhide() {
         let Some(mtm) = MainThreadMarker::new() else { return };
         let app = NSApplication::sharedApplication(mtm);
-        // SAFETY: AppKit calls on the main thread.
-        unsafe { if app.isHidden() { app.unhide(None); } }
+        if app.isHidden() { app.unhide(None); }
     }
 
     /// Activates the app with `window` key and in front. Unlike winit's `focus_window`, this

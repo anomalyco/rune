@@ -18,9 +18,9 @@ fn main() { mac::run(); }
 #[cfg(target_os = "macos")]
 mod mac {
     use objc2_core_foundation::{CGPoint, CGRect, CGSize};
-    use objc2_video::rc::{Retained, autoreleasepool};
-    use objc2_video::runtime::{AnyClass, AnyObject, Bool, ClassBuilder, Sel};
-    use objc2_video::{msg_send, sel};
+    use objc2::rc::{Retained, autoreleasepool};
+    use objc2::runtime::{AnyClass, AnyObject, Bool, ClassBuilder, Sel};
+    use objc2::{msg_send, sel};
     use rune::*;
     use std::sync::{Mutex, OnceLock};
     use std::time::{Duration, Instant};
@@ -105,7 +105,7 @@ mod mac {
     /// observers run in the order they were added, so Rune has handled the change by then.
     fn watch_resizes(window: &AnyObject, view: &AnyObject) {
         let (w, v) = (window as *const AnyObject as usize, view as *const AnyObject as usize);
-        let block = block2_metal::RcBlock::new(move |_: *mut AnyObject| {
+        let block = block2::RcBlock::new(move |_: *mut AnyObject| {
             // SAFETY: the window and its view outlive the run; reads on the main thread.
             unsafe {
                 let (window, view) = (&*(w as *const AnyObject), &*(v as *const AnyObject));
@@ -119,7 +119,7 @@ mod mac {
         // SAFETY: main thread; the center copies the block and the token lives for the run.
         unsafe {
             let center: Retained<AnyObject> = msg_send![AnyClass::get(c"NSNotificationCenter").unwrap(), defaultCenter];
-            let name = objc2_foundation_video::NSString::from_str("NSViewFrameDidChangeNotification");
+            let name = objc2_foundation::NSString::from_str("NSViewFrameDidChangeNotification");
             let token: Option<Retained<AnyObject>> = msg_send![&*center, addObserverForName: &*name,
                 object: view, queue: std::ptr::null::<AnyObject>(), usingBlock: &*block];
             std::mem::forget(token);

@@ -106,8 +106,8 @@ fn bundle_id() -> String {
 
 #[cfg(target_os = "macos")]
 fn main_bundle_id() -> Option<String> {
-    use objc2_foundation_video::NSString;
-    use objc2_video::{class, msg_send, rc::Retained, runtime::AnyObject};
+    use objc2_foundation::NSString;
+    use objc2::{class, msg_send, rc::Retained, runtime::AnyObject};
     // SAFETY: NSBundle reads, which are thread-safe.
     unsafe {
         let bundle: Option<Retained<AnyObject>> = msg_send![class!(NSBundle), mainBundle];

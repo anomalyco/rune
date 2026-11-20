@@ -446,7 +446,7 @@ impl MenuGuard {
         });
         // The app's labels may have changed with its language since the menus were made.
         #[cfg(target_os = "macos")]
-        if !headless && let Some(mtm) = objc2_foundation::MainThreadMarker::new() {
+        if !headless && let Some(mtm) = objc2::MainThreadMarker::new() {
             default_macos::relabel(&objc2_app_kit::NSApplication::sharedApplication(mtm));
         }
         self.placed = Placed::Synced(revision);

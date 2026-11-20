@@ -19,7 +19,7 @@ fn main() { mac::main() }
 mod mac {
     use std::sync::{Mutex, atomic::{AtomicUsize, Ordering}};
     use std::time::Duration;
-    use objc2::{class, msg_send, msg_send_id, rc::Retained, runtime::{AnyObject, Bool}};
+    use objc2::{class, msg_send, rc::Retained, runtime::{AnyObject, Bool}};
     use objc2_foundation::{NSArray, NSPoint, NSRect};
     use rune::*;
     use crate::macos_support::{can_post_events, drag_pasteboard, on_main, release_real_button, wait};
@@ -40,10 +40,10 @@ mod mac {
     fn post(events: &[(usize, f64, f64)]) {
         unsafe {
             let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
-            let windows: Retained<NSArray<AnyObject>> = msg_send_id![app, windows];
-            let window = windows.iter().find(|w| { let v: Bool = msg_send![*w, isVisible]; v.as_bool() }).expect("a visible window");
-            let number: isize = msg_send![window, windowNumber];
-            let content: NSRect = msg_send![window, contentLayoutRect];
+            let windows: Retained<NSArray<AnyObject>> = msg_send![app, windows];
+            let window = windows.iter().find(|w| { let v: Bool = msg_send![&**w, isVisible]; v.as_bool() }).expect("a visible window");
+            let number: isize = msg_send![&*window, windowNumber];
+            let content: NSRect = msg_send![&*window, contentLayoutRect];
             let info: *mut AnyObject = msg_send![class!(NSProcessInfo), processInfo];
             let now: f64 = msg_send![info, systemUptime];
             for &(kind, x, y) in events {
