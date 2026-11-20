@@ -580,9 +580,27 @@ impl RuntimeCore {
     /// stub (a region kept from an earlier commit, a virtual row): the nearest container of it in
     /// the new tree takes focus when it can (a diff line whose comment box closed), else its first
     /// control.
+    /// A control still here that can't take focus any more (disabled while focused, inside a
+    /// region kept from an earlier commit) hands it on as [`Self::focus_fallback`] does: the next
+    /// control after it in its nearest container that has one, else the one before, else that
+    /// container.
     fn fallback_in_new(&self, gone: &str, nodes: &[Node]) -> Option<String> {
-        if self.active_modal().is_some() || nodes.iter().any(|n| n.path == gone) { return None; }
+        if self.active_modal().is_some() { return None; }
         let can = |j: usize| node_shown(nodes, j) && self.can_take_focus(&nodes[j]);
+        if let Some(at) = nodes.iter().position(|n| n.path == gone) {
+            if self.can_take_focus(&nodes[at]) { return None; }
+            let mut p = gone;
+            while let Some(k) = p.rfind('/') {
+                p = &p[..k];
+                let Some(c) = nodes.iter().position(|n| n.path == p) else { continue };
+                let inside = |m: usize| nodes[m].path.len() > p.len() && nodes[m].path.starts_with(p) && nodes[m].path.as_bytes()[p.len()] == b'/';
+                let end = (c + 1..nodes.len()).find(|&m| !inside(m)).unwrap_or(nodes.len());
+                if let Some(m) = (at + 1..end).find(|&m| can(m)).or_else(|| (c + 1..at).rev().find(|&m| can(m))).or_else(|| can(c).then_some(c)) {
+                    return Some(nodes[m].path.clone());
+                }
+            }
+            return None;
+        }
         let mut p = gone;
         while let Some(k) = p.rfind('/') {
             p = &p[..k];
