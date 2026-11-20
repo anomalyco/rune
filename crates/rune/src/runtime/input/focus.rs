@@ -537,9 +537,10 @@ impl RuntimeCore {
     /// - **It wasn't** (an item of a roving group, a control out of the Tab order): the next control
     ///   after it that can take focus, else the one before, else the container, as a native list
     ///   hands its selection to the neighbour.
-    /// Elements out of the Tab order count (a roving list's other rows take focus by arrows). Focus otherwise fell to
-    /// nothing: a screen reader went back to the window and Tab started over at its top. A
-    /// modal's own focus is left to the modal machine, which returns it where it was.
+    ///
+    /// Without a rescue focus fell to nothing: a screen reader went back to the window and Tab
+    /// started over at its top. A modal's own focus is left to the modal machine, which returns
+    /// it where it was.
     fn focus_fallback(&self, nodes: &[Node]) -> Option<String> {
         // A field that Escape blurred and that then closed (a comment box cancelled, gone once
         // its exit ends) counts as focused: the keyboard was on it, and nothing took focus since.
