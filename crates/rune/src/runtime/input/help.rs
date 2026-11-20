@@ -362,11 +362,9 @@ impl RuntimeCore {
     fn help_over(&self) -> (Over, Option<usize>) {
         let target = |i: usize, link| Target { path: self.tree.nodes[i].path.clone(), link };
         // A tooltip held open shows first (a Copy button's "Copied").
-        let forced = self.hit.help_hits().iter().find_map(|&(id, _, _, link)| {
-            let i = *self.tree.node_index.get(&id)?;
-            self.tree.nodes[i].cold.get().is_some_and(|c| c.help_open).then_some((i, link))
-        });
-        if let Some((i, link)) = forced { return (Over::Forced(target(i, link)), Some(i)); }
+        // Noted as the frame's help hits were pushed (`HitState::help_held`): no walk, and no
+        // lookup at all when nothing is held open, as almost always.
+        if let Some(i) = self.hit.help_held.and_then(|id| self.tree.node_index.get(&id).copied()) { return (Over::Forced(target(i, None)), Some(i)); }
         let (over, under) = self.pointer_help_over();
         // With the pointer on no help element, the one the keyboard focused shows its own.
         if matches!(over, Over::Nothing | Over::Away) && self.help_look().on_focus && self.kbd.focus.keyboard()
