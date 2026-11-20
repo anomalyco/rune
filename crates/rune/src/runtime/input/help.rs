@@ -76,6 +76,10 @@ enum Over {
     Help(Target),
     /// A help element, under a popup or modal that the pointer can't reach it through.
     Covered(Target),
+    /// The help element the keyboard focused, with the pointer on no other (`HelpLook::on_focus`).
+    Focused(Target),
+    /// A help element held open (`El::help_open`), whatever the pointer does.
+    Forced(Target),
 }
 
 #[derive(Debug, PartialEq)]
@@ -108,6 +112,10 @@ fn step(tip: &mut Tip, event: Event, delays: Delays) -> Effects<Effect> {
     let effects = match over {
         // A menu the element opened took the pointer: the tooltip stays hidden over it after.
         Over::Away if matches!(tip, Tip::Suppressed { .. }) => Effects::none(),
+        Over::Forced(at) if matches!(tip, Tip::Open { target, .. } if *target == at) => Effects::none(),
+        Over::Forced(at) => open_now(tip, at, now),
+        Over::Focused(at) if tip.target() == Some(&at) => Effects::none(),
+        Over::Focused(at) => open_now(tip, at, now),
         Over::Covered(at) if tip.target() == Some(&at) => suppress(tip),
         Over::Help(at) if tip.target() == Some(&at) => Effects::none(),
         Over::Help(at) => leave(tip, Some(at), now, delays),
@@ -139,6 +147,13 @@ fn leave(tip: &mut Tip, at: Option<Target>, now: f64, delays: Delays) -> Effects
         None if warm => std::mem::take(tip),
         None => Tip::Idle,
     };
+    effects
+}
+
+/// `at`'s tooltip shows now, with no wait: the one open closes.
+fn open_now(tip: &mut Tip, at: Target, now: f64) -> Effects<Effect> {
+    let effects = if matches!(tip, Tip::Open { .. }) { Effects::one(Effect::FadeOut) } else { Effects::none() };
+    *tip = Tip::Open { target: at, since: now };
     effects
 }
 
@@ -345,6 +360,24 @@ impl RuntimeCore {
 
     /// What the pointer is over for the tooltip, and the node of a help element it reaches.
     fn help_over(&self) -> (Over, Option<usize>) {
+        let target = |i: usize, link| Target { path: self.tree.nodes[i].path.clone(), link };
+        // A tooltip held open shows first (a Copy button's "Copied").
+        // Noted as the frame's help hits were pushed (`HitState::help_held`): no walk, and no
+        // lookup at all when nothing is held open, as almost always.
+        if let Some(i) = self.hit.help_held.and_then(|id| self.tree.node_index.get(&id).copied()) { return (Over::Forced(target(i, None)), Some(i)); }
+        let (over, under) = self.pointer_help_over();
+        // With the pointer on no help element, the one the keyboard focused shows its own.
+        if matches!(over, Over::Nothing | Over::Away) && self.help_look().on_focus && self.kbd.focus.keyboard()
+            && let Some(i) = self.focused_index()
+            && self.tree.nodes[i].help.is_some() && self.allowed(i) && !self.subtree_exiting(i)
+        {
+            return (Over::Focused(target(i, None)), Some(i));
+        }
+        (over, under)
+    }
+
+    /// What the pointer is over for the tooltip.
+    fn pointer_help_over(&self) -> (Over, Option<usize>) {
         // A menu is up or about to open and has the pointer: the element it came from keeps
         // its tooltip hidden.
         if !self.host.popups.is_empty() { return (self.pointer.help.state.target().cloned().map_or(Over::Away, Over::Covered), None); }
