@@ -184,6 +184,19 @@ impl RuntimeCore {
                     || self.sticky_of(i).is_some()
                     || n.above.is_some()
                     || (!self.reduced_motion && self.motion.loop_active(n.id, store.node_time(n.id)))
+                    || (!self.reduced_motion
+                        && self.text.has_animated_icons()
+                        && (n.vis.icon.is_some_and(|(ic, _)| {
+                            let mount_t = self.paint.icon_mount_time(n.id, ic as *const crate::text::Icon as usize, self.t);
+                            self.text.icon_anim_live(ic, self.t, mount_t)
+                        }) || n.text.as_ref().is_some_and(|t| {
+                            t.cold.pills.iter().any(|p| {
+                                p.icon.is_some_and(|ic| {
+                                    let mount_t = self.paint.icon_mount_time(n.id, ic as *const crate::text::Icon as usize, self.t);
+                                    self.text.icon_anim_live(ic, self.t, mount_t)
+                                })
+                            })
+                        })))
                     || self.motion.grows.get(&n.id).is_some_and(|g| g.moving())
                     || self.scroll.scrolls.get(&n.id).is_some_and(|st| st.slack.height() > 0.0)
                     || self.motion.reveal_fading(n.id)

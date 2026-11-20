@@ -46,8 +46,11 @@ pub(super) fn fill(path: &Path, rule: Rule, w: usize, h: usize, out: &mut [u8]) 
     // leaves the cover inside it as it was. Rows `iw` apart with a spare byte before the first
     // and after the last, as Skia's mask is: a write a pixel past a row's end lands on the next
     // row's first.
-    let (iw, ih) = (ir[2] - ir[0], ir[3] - ir[1]);
-    let mut mask = Mask { w: iw as usize, left: ir[0], top: ir[1], data: vec![0u8; (iw * ih + 2) as usize] };
+    let (iw, ih) = (ir[2].saturating_sub(ir[0]), ir[3].saturating_sub(ir[1]));
+    if iw <= 0 || ih <= 0 || iw > 2048 || ih > 2048 || (iw as u64) * (ih as u64) > 1024 * 1024 {
+        return;
+    }
+    let mut mask = Mask { w: iw as usize, left: ir[0], top: ir[1], data: vec![0u8; (iw as usize * ih as usize) + 2] };
     sort_and_link(&mut edges);
     let skip_intersect = path.points().len() > (ch * 2) as usize;
     walk_edges(&mut edges, rule, &mut mask, ir[1], ir[3], ir[0] << 16, ir[2] << 16, skip_intersect);

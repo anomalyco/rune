@@ -555,7 +555,7 @@ impl RuntimeCore {
 }
 
 #[path = "cycle.rs"]
-mod cycle;
+pub(super) mod cycle;
 #[path = "slide.rs"]
 mod slide;
 
