@@ -217,7 +217,8 @@ impl Builder {
                 Fence::Diff => (None, true),
             };
             let coloured = if closed || line_ended { code.len() } else { code.rfind('\n').unwrap_or(0) };
-            self.sources.push(Source { lang, len: code.len(), coloured, open: !closed });
+            let (max_line, max_cols, max_ascii) = longest_line_stats(code);
+            self.sources.push(Source { lang, len: code.len(), coloured, open: !closed, max_line, max_cols, max_ascii });
         }
         self.push(block, BlockMap::Code(map));
     }
@@ -354,6 +355,60 @@ fn code_block(text: String, fence: &Fence) -> Block {
         Fence::Diff => Block::Diff(text),
         Fence::Mermaid(_) => Block::Mermaid(text),
     }
+}
+
+/// Scans `code` once at parse time to find its widest line by 4-column tab stops.
+/// Fast byte path for ASCII; non-ASCII characters count as 2 columns so wide CJK/emoji lines are
+/// surfaced for exact measurement.
+pub(in crate::markdown) fn longest_line_stats(code: &str) -> (Range<usize>, u32, bool) {
+    let bytes = code.as_bytes();
+    let mut best_range = 0..0;
+    let mut best_cols = 0u32;
+    let mut best_ascii = true;
+    let mut start = 0usize;
+    while start <= bytes.len() {
+        let mut end = start;
+        let mut cols = 0u32;
+        let mut ascii = true;
+        while end < bytes.len() {
+            let b = bytes[end];
+            if b == b'\n' {
+                break;
+            }
+            if b == b'\r' {
+                end += 1;
+                continue;
+            }
+            if b == b'\t' {
+                cols += 4 - (cols % 4);
+                end += 1;
+            } else if (0x20..0x7f).contains(&b) {
+                cols += 1;
+                end += 1;
+            } else {
+                ascii = false;
+                if b < 0x80 {
+                    cols += 1;
+                    end += 1;
+                } else {
+                    let ch = code[end..].chars().next().unwrap_or('\u{fffd}');
+                    cols += 2;
+                    end += ch.len_utf8();
+                }
+            }
+        }
+        let line_end = if end > start && bytes[end - 1] == b'\r' { end - 1 } else { end };
+        if cols > best_cols {
+            best_cols = cols;
+            best_range = start..line_end;
+            best_ascii = ascii;
+        }
+        if end >= bytes.len() {
+            break;
+        }
+        start = end + 1;
+    }
+    (best_range, best_cols, best_ascii)
 }
 
 /// Builds a single plain [`Block::Para`] and [`BlockMap::DeepTail`] covering `src[range]`,

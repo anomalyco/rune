@@ -460,18 +460,27 @@ impl Renderer {
                 let n = self.next_source.get();
                 self.next_source.set(n + 1);
                 let source = self.sources.get(n).filter(|src| src.len == code.len());
-                match &self.code_frame {
+                let wrapped = self.wraps_code(n, code);
+                match self.code_frame.as_ref().and_then(|w| w.frame.as_ref()) {
                     Some(f) => {
-                        let card = match self.settled_code_card_digest(code, source, code_map) {
+                        let card = match self.settled_code_card_digest(code, source, code_map, wrapped) {
                             Some(digest) => rune::memo::cached(digest, || {
                                 memo::note_block_build();
-                                self.code(code, source, code_map).key("card")
+                                self.code(code, source, code_map, wrapped).key("card")
                             }),
-                            None => self.code(code, source, code_map).key("card"),
+                            None => self.code(code, source, code_map, wrapped).key("card"),
                         };
-                        f(card, &CodeFrame { index: n, source: code, language: source.and_then(|s| s.lang.as_deref()), open: source.is_some_and(|s| s.open) })
+                        let overflows = self.code_overflows(code, source);
+                        f(card, &CodeFrame { index: n, source: code, language: source.and_then(|s| s.lang.as_deref()), open: source.is_some_and(|s| s.open), wrapped, overflows })
                     }
-                    None => self.code(code, source, code_map),
+                    None if self.code_frame.is_some() => match self.settled_code_card_digest(code, source, code_map, wrapped) {
+                        Some(digest) => rune::memo::cached(digest, || {
+                            memo::note_block_build();
+                            self.code(code, source, code_map, wrapped)
+                        }),
+                        None => self.code(code, source, code_map, wrapped),
+                    },
+                    None => self.code(code, source, code_map, wrapped),
                 }
             }
             Block::Diff(src) => self.diff(src, code_map),

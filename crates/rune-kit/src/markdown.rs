@@ -163,7 +163,12 @@ pub struct Table {
 type TaskWire = Rc<dyn Fn(El, Rc<str>, usize, bool) -> El>;
 #[cfg(feature = "mermaid")]
 type FrameWire = Rc<dyn Fn(El, &DiagramFrame<'_>) -> El>;
-type CodeWire = Rc<dyn Fn(El, &CodeFrame<'_>) -> El>;
+type CodeFrameFn = Rc<dyn Fn(El, &CodeFrame<'_>) -> El>;
+type CodeWrapFn = Rc<dyn Fn(usize, &str) -> bool>;
+pub(super) struct CodeWire {
+    pub(super) frame: Option<CodeFrameFn>,
+    pub(super) wrap: Option<CodeWrapFn>,
+}
 type QuoteWire = Rc<dyn Fn(El, &QuoteFrame<'_>) -> El>;
 
 /// A block quote [`Markdown::quote_frame`] is wrapping.
@@ -186,6 +191,11 @@ pub struct CodeFrame<'a> {
     pub language: Option<&'a str>,
     /// The fence is still arriving.
     pub open: bool,
+    /// Whether this block currently wraps long lines instead of scrolling sideways.
+    pub wrapped: bool,
+    /// Whether at least one unwrapped line exceeds this block's inner width (`MarkdownStyle::text_width`
+    /// less surrounding list/quote indents and block padding). Always `false` when `text_width` is unset.
+    pub overflows: bool,
 }
 
 /// A diagram [`Markdown::diagram_frame`] is wrapping.
@@ -222,11 +232,13 @@ pub struct Markdown {
     selectable: bool,
     copy_source: bool,
     scroll_wide: bool,
+    wrap_code: Option<bool>,
     tentative: Option<rune::Direction>,
     highlighter: Highlighter,
     #[cfg(feature = "mermaid")]
     diagram_frame: Option<FrameWire>,
-    code_frame: Option<CodeWire>,
+    code_frame: Option<CodeFrameFn>,
+    code_wrap: Option<CodeWrapFn>,
     quote_frame: Option<QuoteWire>,
     link_favicon: Option<link_icon::FaviconWire>,
     images: Option<image::ImageWire>,
@@ -241,9 +253,9 @@ thread_local! {
 impl Markdown {
     pub fn new(src: impl Into<String>) -> Markdown {
         Markdown { src: src.into(), style: None, block_keys: Vec::new(), highlights: Vec::new(), autolink: true, reveal: -1.0, streaming: false, on_link: None, on_link_secondary: None, link_look: None, link_help: None, link_ring: None, code_link: None,
-            on_task: None, tasks_read_only: false, selectable: false, copy_source: false, scroll_wide: false, tentative: None, highlighter: Highlighter::builtin(),
+            on_task: None, tasks_read_only: false, selectable: false, copy_source: false, scroll_wide: false, wrap_code: None, tentative: None, highlighter: Highlighter::builtin(),
             #[cfg(feature = "mermaid")]
-            diagram_frame: None, code_frame: None, quote_frame: None, link_favicon: None, images: None, on_image: None }
+            diagram_frame: None, code_frame: None, code_wrap: None, quote_frame: None, link_favicon: None, images: None, on_image: None }
     }
     /// Highlight UTF-8 byte ranges of the Markdown source string (see [`find`]).
     ///
@@ -405,6 +417,22 @@ impl Markdown {
         self
     }
 
+    /// Overrides [`MarkdownStyle::wrap_code`] for this Markdown block (`true` wraps long code
+    /// lines instead of scrolling sideways, keeping `El::by_line`, Find highlights and
+    /// screen-reader line runs).
+    pub fn wrap_code(mut self, wrap: bool) -> Self {
+        self.wrap_code = Some(wrap);
+        self
+    }
+
+    /// Per-block override for code-block wrapping: called with `(block_index, source)` and returns
+    /// whether that block wraps long lines (overriding [`MarkdownStyle::wrap_code`] and
+    /// [`Self::wrap_code`]).
+    pub fn code_wrap(mut self, f: impl Fn(usize, &str) -> bool + 'static) -> Self {
+        self.code_wrap = Some(Rc::new(f));
+        self
+    }
+
     /// Draws `f(quote, frame)` in place of each block quote, so an app can put its own controls
     /// on it (a button that copies the whole quote). Quotes inside a quote come here too.
     ///
@@ -456,6 +484,7 @@ impl Markdown {
             && !(self.selectable && self.copy_source)
             && self.highlighter.is_builtin()
             && self.code_frame.is_none()
+            && self.code_wrap.is_none()
             && self.quote_frame.is_none()
             && self.link_favicon.is_none()
             && self.images.is_none()
@@ -472,6 +501,7 @@ impl Markdown {
                 self.tasks_read_only,
                 self.selectable,
                 self.scroll_wide,
+                self.wrap_code,
                 self.tentative,
             ));
             return rune::memo::cached(h, || self.render_uncached(style));
@@ -497,12 +527,18 @@ impl Markdown {
         };
         let dirs = bidi::Dirs::new(&blocks);
         let root_dir = dirs.of_slice(&blocks).or(self.tentative);
-        let r = Renderer { s: style.clone(), highlights: self.highlights, reveal: self.reveal, streaming: self.streaming, on_link: self.on_link, on_link_secondary: self.on_link_secondary, link_look: self.link_look, link_help: self.link_help, link_ring: self.link_ring, code_link: self.code_link,
+        let mut s = style.clone();
+        if let Some(wrap) = self.wrap_code {
+            s.wrap_code = wrap;
+        }
+        let code_frame = (self.code_frame.is_some() || self.code_wrap.is_some())
+            .then(|| CodeWire { frame: self.code_frame, wrap: self.code_wrap });
+        let r = Renderer { s, highlights: self.highlights, reveal: self.reveal, streaming: self.streaming, on_link: self.on_link, on_link_secondary: self.on_link_secondary, link_look: self.link_look, link_help: self.link_help, link_ring: self.link_ring, code_link: self.code_link,
             on_task: self.on_task, tasks_read_only: self.tasks_read_only, selectable: self.selectable, scroll_wide: self.scroll_wide, tentative: self.tentative,
             highlighter: self.highlighter, sources, next_source: Cell::new(0), tasks, next_task: Cell::new(0),
             current_block_key: RefCell::new("b0".into()),
             #[cfg(feature = "mermaid")]
-            diagram_frame: self.diagram_frame, code_frame: self.code_frame, quote_frame: self.quote_frame, link_favicon: self.link_favicon, images: self.images, on_image: self.on_image, flow: Cell::default() };
+            diagram_frame: self.diagram_frame, code_frame, quote_frame: self.quote_frame, link_favicon: self.link_favicon, images: self.images, on_image: self.on_image, flow: Cell::default() };
         // The document reads the way its first words do; until any arrive, the way it was asked.
         let root = memo::with_renderer(&r, || {
             bidi::directed(r.blocks_with_dirs(&blocks, Some(&meta), &maps, &keys, true, &dirs), root_dir).selection_group(self.selectable)

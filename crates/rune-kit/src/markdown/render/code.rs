@@ -2,7 +2,46 @@
 //! deeply nested plain tails.
 
 use super::super::*;
-use super::Renderer;
+use super::{Renderer, hash_of};
+
+thread_local! {
+    static MONO_COL: RefCell<std::collections::HashMap<u64, f32>> = RefCell::new(std::collections::HashMap::new());
+}
+
+/// Width in points of one ASCII column in monospace `font`, cached per `(font, font_epoch)`.
+fn mono_col_width(font: TextStyle) -> f32 {
+    let key = hash_of((font, rune::text::font_epoch()));
+    if let Some(w) = MONO_COL.with_borrow(|m| m.get(&key).copied()) {
+        return w;
+    }
+    let w = (rune::text::measure(&"0".repeat(64), &[], font, None).0 / 64.0).max(1.0);
+    MONO_COL.with_borrow_mut(|m| {
+        if m.len() >= 64 {
+            m.clear();
+        }
+        m.insert(key, w);
+    });
+    w
+}
+
+fn expand_tabs(line: &str) -> std::borrow::Cow<'_, str> {
+    if !line.contains('\t') {
+        return std::borrow::Cow::Borrowed(line);
+    }
+    let mut out = String::with_capacity(line.len() + 16);
+    let mut col = 0usize;
+    for ch in line.chars() {
+        if ch == '\t' {
+            let pad = 4 - (col % 4);
+            out.extend(std::iter::repeat_n(' ', pad));
+            col += pad;
+        } else {
+            out.push(ch);
+            col += 1;
+        }
+    }
+    std::borrow::Cow::Owned(out)
+}
 
 /// Shell languages, which [`MarkdownStyle::shell_code`] styles apart (`markdown.tsx`'s list).
 const SHELLS: [&str; 7] = ["bash", "sh", "shell", "zsh", "fish", "console", "terminal"];
@@ -49,7 +88,51 @@ fn tabbed(code: &str, mut spans: Vec<Span>, mut highlights: Vec<TextHighlight>, 
 }
 
 impl Renderer {
-    pub(in crate::markdown) fn code(&self, code: &str, source: Option<&Source>, map: Option<&SpanMap>) -> El {
+    pub(in crate::markdown) fn wraps_code(&self, index: usize, code: &str) -> bool {
+        match self.code_frame.as_ref().and_then(|w| w.wrap.as_ref()) {
+            Some(f) => f(index, code),
+            None => self.s.wrap_code,
+        }
+    }
+
+    /// Whether at least one unwrapped line of `code` exceeds this block's inner width (`text_width`
+    /// less surrounding list/quote `inset`, block padding and 0.5 pt border each side). Uses the
+    /// parse-cached longest-line stats (`O(1)` float multiply on the ASCII monospace fast path,
+    /// falling back to `rune::text::measure` only near the boundary or for non-ASCII/non-mono).
+    pub(in crate::markdown) fn code_overflows(&self, code: &str, source: Option<&Source>) -> bool {
+        let Some(text_w) = self.s.text_width else { return false };
+        let avail = text_w - self.flow.get().inset - 2.0 * self.s.code_block_pad[0] - 1.0;
+        if avail <= 0.0 || code.is_empty() {
+            return false;
+        }
+        let owned_stats;
+        let (max_line, max_cols, max_ascii) = match source {
+            Some(src) => (&src.max_line, src.max_cols, src.max_ascii),
+            None => {
+                owned_stats = super::super::parser::longest_line_stats(code);
+                (&owned_stats.0, owned_stats.1, owned_stats.2)
+            }
+        };
+        if max_cols == 0 {
+            return false;
+        }
+        let font = self.s.code_block;
+        if max_ascii && matches!(font.family, Family::Mono | Family::SystemMono) {
+            let col_w = mono_col_width(font);
+            let est = max_cols as f32 * col_w;
+            if est > avail + col_w {
+                return true;
+            }
+            if est < avail - col_w {
+                return false;
+            }
+        }
+        let Some(line) = code.get(max_line.clone()) else { return false };
+        let shown = expand_tabs(line);
+        !shown.is_empty() && rune::text::measure(&shown, &[], font, None).0 > avail
+    }
+
+    pub(in crate::markdown) fn code(&self, code: &str, source: Option<&Source>, map: Option<&SpanMap>, wrapped: bool) -> El {
         let s = &self.s;
         let highlights = self.text_highlights_for(code, map);
         let shell = s.shell.filter(|_| source.and_then(|src| src.lang.as_deref()).is_some_and(|l| SHELLS.iter().any(|sh| l.eq_ignore_ascii_case(sh))));
@@ -60,11 +143,13 @@ impl Renderer {
             None => (s.code_block_fill, s.code_block_border, s.code_text.unwrap_or(s.text)),
         };
         let spans = if shell.is_some() { Vec::new() } else { self.syntax_spans(code, source) };
-        let body = self.with_reveal(tabbed(code, spans, highlights, s.code_block).font(s.code_block).color(ink).by_line()).copy_breaks(2, 2);
+        let body = tabbed(code, spans, highlights, s.code_block).font(s.code_block).color(ink).by_line();
+        let body = if wrapped { body.wrap_anywhere().wrap_greedy() } else { body };
+        let body = self.with_reveal(body).copy_breaks(2, 2);
         // `.highlights`' `border: 0.5px` takes its device pixel each side, inside which the padding sits.
         // Code reads left to right in any document, as `markdown.css` isolates it.
         let frame = col().role("code").dir(rune::Direction::Ltr).w_full().radius(6.0).fill(fill).border(0.5, border).border_layout();
-        if self.scroll_wide {
+        if self.scroll_wide && !wrapped {
             // The text sizes to its longest line inside the viewport, which scrolls under the
             // padding so lines run to the frame's edge.
             let viewport = col().key("scroll").w_full().scroll_x();
@@ -154,10 +239,10 @@ impl Renderer {
             if open && self.streaming && crate::mermaid::may_draw(lines) {
                 return holder();
             }
-            col().w_full().child(self.code(src, source, map).key("source"))
+            col().w_full().child(self.code(src, source, map, false).key("source"))
         }
         #[cfg(not(feature = "mermaid"))]
-        self.code(src, source, map)
+        self.code(src, source, map, false)
     }
 
     pub(super) fn deep_tail(&self, inl: &Inline, lines: usize, map: &SpanMap) -> El {

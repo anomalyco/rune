@@ -1,0 +1,1 @@
+- `Markdown` supports native code-block soft wrapping (`MarkdownStyle::wrap_code`, `Markdown::wrap_code`, `Markdown::code_wrap`) with `El::by_line` line-by-line shaping, screen-reader line runs, `#1130` settled-card memoisation, Find highlights, and parse-cached `CodeFrame::overflows` / `CodeFrame::wrapped`; `rune-theme-opencode` adds `icons::TEXT_WRAP`.

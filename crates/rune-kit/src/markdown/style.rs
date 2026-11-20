@@ -70,6 +70,9 @@ pub struct MarkdownStyle {
     pub(super) text_width: Option<f32>,
     /// How far a wide code block's sides fade while it scrolls sideways.
     pub(super) wide_fade: f32,
+    /// Wrap long lines in code blocks instead of scrolling sideways (`white-space: pre-wrap;
+    /// overflow-wrap: anywhere`), while keeping per-line layout and screen-reader line runs.
+    pub(super) wrap_code: bool,
     /// The icon before a link to a web page: its size and gap (`None`: no icon).
     pub(super) link_icon: Option<[f32; 2]>,
     pub(super) diff_add: Color,
@@ -216,6 +219,7 @@ impl MarkdownStyle {
             table_bar: None,
             text_width: None,
             wide_fade: 12.0,
+            wrap_code: false,
             link_icon: None,
             diff_add: tint(c.layer_01, c.success.icon, if k.dark { 0.11 } else { 0.14 }),
             diff_remove: tint(c.layer_01, c.danger.icon, if k.dark { 0.11 } else { 0.14 }),
@@ -428,6 +432,13 @@ impl MarkdownStyle {
         self.wide_fade = if points.is_finite() { points.max(0.0) } else { 0.0 };
         self
     }
+    /// Wraps long lines in fenced code blocks (`white-space: pre-wrap; overflow-wrap: anywhere`)
+    /// instead of scrolling them sideways (`false` by default). Wrapped blocks keep per-line
+    /// shaping (`El::by_line`), syntax highlighting, Find highlights and screen-reader line runs.
+    pub fn wrap_code(mut self, wrap: bool) -> Self {
+        self.wrap_code = wrap;
+        self
+    }
     /// The space above and below a code block, a diff and a diagram (12 and 24 points by
     /// default). Like the other blocks' margins, it collapses with the space a neighbour wants,
     /// taking the larger.
@@ -619,6 +630,7 @@ impl std::hash::Hash for MarkdownStyle {
             table_bar,
             text_width,
             wide_fade,
+            wrap_code,
             link_icon,
             diff_add,
             diff_remove,
@@ -647,7 +659,7 @@ impl std::hash::Hash for MarkdownStyle {
         (table_outline, table_rule, table_head_fill, table_head_text, table_head_rule, table_head_weight.map(f32_bits), table_tabular, table_font).hash(state);
         ([f32_bits(table_pad[0]), f32_bits(table_pad[1])], table_flush_left, table_head_pad.map(|p| p.map(f32_bits)), table_full_width, table_margin.map(f32_bits), code_margin.map(f32_bits)).hash(state);
         table_frame.map(|TableFrame { fill, ring, pad }| (fill, ring, f32_bits(pad))).hash(state);
-        (table_bar, text_width.map(f32_bits), f32_bits(wide_fade), link_icon.map(|l| l.map(f32_bits))).hash(state);
+        (table_bar, text_width.map(f32_bits), f32_bits(wide_fade), wrap_code, link_icon.map(|l| l.map(f32_bits))).hash(state);
         match table_body {
             None => 0u8.hash(state),
             Some(TableBody { fill, radius, shadows }) => {

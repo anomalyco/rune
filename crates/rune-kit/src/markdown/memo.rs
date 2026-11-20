@@ -546,10 +546,10 @@ impl Renderer {
         Some(h.finish128())
     }
 
-    pub(super) fn settled_code_card_digest(&self, code: &str, source: Option<&Source>, map: Option<&SpanMap>) -> Option<(u64, u64)> {
+    pub(super) fn settled_code_card_digest(&self, code: &str, source: Option<&Source>, map: Option<&SpanMap>, wrapped: bool) -> Option<(u64, u64)> {
         if !self.highlighter.is_builtin() || source.is_some_and(|s| s.open) { return None; }
         let mut h = PairHasher::new();
-        (3u8, self.base_hash(), code).hash(&mut h);
+        (3u8, self.base_hash(), wrapped, code).hash(&mut h);
         match source {
             Some(s) => (1u8, &s.lang, s.len, s.coloured, s.open).hash(&mut h),
             None => 0u8.hash(&mut h),
