@@ -157,18 +157,34 @@ pub(crate) struct Client {
     wake: Waker,
     /// A secret copy's state changed on the worker: run a frame so the app's poll sees it.
     changed: Arc<AtomicBool>,
+    #[cfg(test)]
+    memory: Option<MemoryClipboard>,
 }
 impl Default for Client {
     fn default() -> Self {
         let (sender, replies) = mpsc::channel();
-        Self { sender, replies, wake: std::sync::Arc::new(|| {}), changed: Arc::default() }
+        Self {
+            sender,
+            replies,
+            wake: std::sync::Arc::new(|| {}),
+            changed: Arc::default(),
+            #[cfg(test)]
+            memory: None,
+        }
     }
 }
 impl Client {
     pub fn connect(&mut self, wake: Waker) { self.wake = wake; }
+    /// Routes this client's flushes and reads to `clipboard` instead of the OS worker, without
+    /// attaching it to the runtime (so `latch_requests` leaves requests queued until `flush_core`).
+    #[cfg(test)]
+    pub(crate) fn use_memory(&mut self, clipboard: &MemoryClipboard) { self.memory = Some(clipboard.clone()); }
     pub(crate) fn read_core(&self, rt: &crate::runtime::RuntimeCore) {
         let purpose = Purpose::paste(rt, rt.paste_target());
-        if let Some(m) = rt.edit.clipboard() {
+        let mem = rt.edit.clipboard();
+        #[cfg(test)]
+        let mem = mem.or(self.memory.as_ref());
+        if let Some(m) = mem {
             if let Some(reply) = m.answer(purpose) && self.sender.send(reply).is_ok() { (self.wake)(); }
             return;
         }
@@ -192,6 +208,10 @@ fn deliver(rt: &mut crate::runtime::RuntimeCore, reply: Reply) {
 /// every frame, so headless runtimes write too.
 pub(crate) fn flush_memory(rt: &mut crate::runtime::RuntimeCore) {
     let Some(m) = rt.edit.clipboard().cloned() else { return };
+    flush_to_memory(rt, &m);
+}
+
+fn flush_to_memory(rt: &mut crate::runtime::RuntimeCore, m: &MemoryClipboard) {
     if std::mem::take(&mut rt.edit.clear_secret_request) { m.handle(Request::Clear(None)); }
     if let Some(copy) = rt.copy_request.take() {
         copy.bind(Route::Memory(m.clone()));

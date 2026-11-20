@@ -50,6 +50,8 @@ impl Client {
     }
     pub(crate) fn flush_core(&self, rt: &mut crate::runtime::RuntimeCore) {
         if rt.edit.has_clipboard() { return flush_memory(rt); }
+        #[cfg(test)]
+        if let Some(m) = &self.memory { return flush_to_memory(rt, m); }
         rt.edit.clear_secret_request = false;
         if let Some(copy) = rt.copy_request.take() {
             if copy.is_secret() {
