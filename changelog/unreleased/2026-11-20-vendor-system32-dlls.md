@@ -1,0 +1,1 @@
+- Windows: vendored `winit` and `wgpu-hal` now load Windows system DLLs (`uxtheme.dll`, `user32.dll`, `shcore.dll`, `ntdll.dll`, `d3d12.dll`, `dxgi.dll`, `dcomp.dll`, `d3dcompiler_47.dll`, `opengl32.dll`) with `LOAD_LIBRARY_SEARCH_SYSTEM32` instead of the default DLL search order.
