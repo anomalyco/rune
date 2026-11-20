@@ -9,6 +9,8 @@
 //! run. A button Explorer makes again (it restarted) announces itself with
 //! `TaskbarButtonCreated`; each window's subclass hears it and sends its state again.
 
+#![allow(unsafe_code)]
+
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::OnceLock;

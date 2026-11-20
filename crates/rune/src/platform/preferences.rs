@@ -2,6 +2,8 @@
 //! (appearance also on each redraw, which a change asks for).
 //! Headless runtimes use their explicit Env instead.
 
+#![allow(unsafe_code)]
+
 #[cfg(target_os = "macos")]
 pub(crate) fn reduced_motion() -> bool {
     use objc2::{class, msg_send};

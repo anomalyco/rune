@@ -145,6 +145,7 @@ fn rebuild20(n: usize) -> (Stat, Option<Stat>) {
 /// The thread's cycle count (`QueryThreadCycleTime`), and its rate, measured against the clock.
 mod cpu {
     #[cfg(windows)]
+    #[allow(unsafe_code)]
     pub fn cycles() -> Option<u64> {
         unsafe extern "system" {
             fn GetCurrentThread() -> isize;

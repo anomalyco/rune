@@ -91,6 +91,7 @@ fn spec() -> AppSpec<State> {
 
 /// Optional local control socket for bounded native lifecycle/presentation probes.
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 fn native_probe(pill: OverlayHandle<State>, app: rune::AppHandle<State>) {
     use std::io::{BufRead, BufReader, Write};
     use std::os::unix::net::UnixListener;

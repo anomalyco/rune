@@ -3,6 +3,8 @@
 //! to another display and its restored frame with it, which reading the window's frame while it
 //! is restored can never see.
 
+#![allow(unsafe_code)]
+
 use windows_sys::Win32::Graphics::Gdi::{GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromRect};
 use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
 use windows_sys::Win32::UI::WindowsAndMessaging::{GWL_EXSTYLE, GetWindowLongPtrW, GetWindowPlacement, WINDOWPLACEMENT, WS_EX_TOOLWINDOW};

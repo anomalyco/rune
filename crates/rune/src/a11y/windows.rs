@@ -2,6 +2,8 @@
 //! AccessKit's own subclassing adapter must exist before the window first shows; Rune's windows
 //! open shown, so this subclasses with `SetWindowSubclass` instead, which works at any time.
 
+#![allow(unsafe_code)]
+
 use std::cell::RefCell;
 use std::rc::Rc;
 

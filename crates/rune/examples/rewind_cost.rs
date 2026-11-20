@@ -10,6 +10,9 @@
 //! `METRIC scenario=.. rewind=off|on metric=.. median=..` over samples: `p50_ms` and `p99_ms`
 //! (wall time per frame, input included) and `allocations` per frame, then the bytes a recorder
 //! holds after 60 s of streaming at 60 Hz.
+
+#![allow(unsafe_code)]
+
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 

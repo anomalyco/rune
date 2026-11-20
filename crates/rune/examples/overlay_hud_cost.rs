@@ -33,6 +33,7 @@ struct Counting;
 static ALLOCS: AtomicU64 = AtomicU64::new(0);
 
 // SAFETY: forwards to the system allocator, counting calls.
+#[allow(unsafe_code)]
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         ALLOCS.fetch_add(1, Ordering::Relaxed);

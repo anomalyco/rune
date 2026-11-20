@@ -2,6 +2,8 @@
 //! for the refresh a frame will show at, rather than the moment the frame was built, so the
 //! wobble in when frames are built never shows a picture twice or skips one.
 
+#![allow(unsafe_code)]
+
 use rune_core::time::Instant;
 use std::sync::Mutex;
 use std::time::Duration;

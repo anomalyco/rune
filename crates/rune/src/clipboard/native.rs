@@ -173,6 +173,7 @@ fn write_text(cb: &mut arboard::Clipboard, copy: &ClipboardWrite) -> Result<(), 
 }
 
 #[cfg(not(any(target_os = "ios", target_os = "android")))]
+#[allow(unsafe_code)]
 fn revision() -> Option<u64> {
     #[cfg(target_os = "macos")]
     { return Some(objc2_app_kit::NSPasteboard::generalPasteboard().changeCount() as u64); }
@@ -187,6 +188,7 @@ fn revision() -> Option<u64> {
 /// Reads Windows `CF_HTML` (`HTML Format`) directly so `-1` offsets and `<!--StartFragment-->`
 /// markers from other apps work instead of failing `clipboard-win`'s unsigned offset parser.
 #[cfg(target_os = "windows")]
+#[allow(unsafe_code)]
 fn windows_read_html() -> Option<String> {
     use windows_sys::Win32::System::DataExchange::{
         CloseClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard, RegisterClipboardFormatW,

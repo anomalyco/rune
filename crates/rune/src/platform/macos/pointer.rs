@@ -32,6 +32,7 @@ impl PointerState {
         Self { input: Cell::new(input), follow: Cell::new(follow), ..Default::default() }
     }
 
+    #[allow(unsafe_code)]
     fn trace(&self, panel: &NSPanel, source: &str, event: Option<&NSEvent>) {
         static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         if !*ENABLED.get_or_init(|| std::env::var_os("RUNE_OVERLAY_TRACE_INPUT").is_some()) { return; }
@@ -124,6 +125,7 @@ impl PointerState {
     fn wanted(&self) -> bool {
         self.input.get() != OverlayInput::None || self.follow.get() || self.captured() || self.cursor.get().is_some()
     }
+    #[allow(unsafe_code)]
     pub(super) fn observe(&self, panel: &NSPanel, wake: Option<&crate::Waker>) {
         let pointer = NSEvent::mouseLocation();
         // SAFETY: class property read on `NSEvent` on AppKit's main thread; returns a bitmask (`usize`).
@@ -148,6 +150,7 @@ impl PointerState {
 pub(super) struct MouseMonitors { tokens: Vec<Retained<NSObject>> }
 
 impl Drop for MouseMonitors {
+    #[allow(unsafe_code)]
     fn drop(&mut self) {
         for token in &self.tokens {
             // SAFETY: each token was returned by NSEvent and is removed exactly once on main.
@@ -224,6 +227,7 @@ impl Panel {
             || self.pointer.cursor.get().is_some()
     }
 
+    #[allow(unsafe_code)]
     fn start_monitors(&self) {
         if self.monitors.borrow().is_some() || !self.needs_monitors() { return; }
         // Monitors wake the loop; position/button state is sampled there. A local down

@@ -11,6 +11,8 @@
 //! reachable there, so each answer comes from what it published, and each finding waits for it
 //! in a cell, taken in order before the preedit it belongs to.
 
+#![allow(unsafe_code)]
+
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ops::Range;

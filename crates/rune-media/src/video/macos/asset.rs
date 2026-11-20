@@ -1,6 +1,8 @@
 //! AVFoundation asset opening, metadata, foreign audio decoding (`ogg-audio`), `CMTime` helpers
 //! and still-frame decoding through `AVAssetImageGenerator`.
 
+#![allow(unsafe_code)]
+
 use super::{Decoded, Native};
 use crate::native_surface::{ByteFrame, ColorInfo, Format, Orient};
 #[cfg(feature = "ogg-audio")]

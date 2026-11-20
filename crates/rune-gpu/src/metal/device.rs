@@ -1,5 +1,7 @@
 //! The device: what it shares with its queue, and the resources it makes.
 
+#![allow(unsafe_code)]
+
 use std::future::ready;
 use std::pin::Pin;
 use std::sync::{Arc, OnceLock};

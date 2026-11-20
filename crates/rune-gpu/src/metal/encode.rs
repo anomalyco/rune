@@ -1,6 +1,8 @@
 //! The command encoder: one `MTLCommandBuffer` with unretained references, blit copies between
 //! passes, and the list of what it used, which the queue keeps alive until the buffer completes.
 
+#![allow(unsafe_code)]
+
 use std::any::Any;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;

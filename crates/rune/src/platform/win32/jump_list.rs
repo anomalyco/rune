@@ -2,6 +2,8 @@
 //! a thread of its own: made on the first list, asleep on its channel in between, its own COM
 //! apartment. Each entry is a shell link to this executable with the entry's argument.
 
+#![allow(unsafe_code)]
+
 use std::collections::HashSet;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Mutex, OnceLock};

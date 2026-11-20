@@ -1,5 +1,7 @@
 //! `AVPlayer` + `AVPlayerItemVideoOutput` construction and the `turn::Port` adapter (`Av`).
 
+#![allow(unsafe_code)]
+
 use super::{Decoded, Native, Objects, Player, asset, park};
 use crate::native_surface::macos::PixelBuffer;
 use crate::native_surface::{ByteFrame, NativeSurface};

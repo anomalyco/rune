@@ -344,6 +344,7 @@ pub(super) fn render_window_frame(
     comp_animating
 }
 
+#[allow(unsafe_code)]
 pub(super) fn submit_and_present_window(
     host: &mut Host,
     prepared: PreparedWindowFrame,

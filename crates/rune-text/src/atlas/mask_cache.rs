@@ -155,6 +155,7 @@ pub fn save_with(sink: fn(Vec<u8>)) {
 
 /// This build's identity: the link time stamp the running image's PE header carries, which every
 /// link of other code changes. None where there's no such stamp, and the cache stays off.
+#[allow(unsafe_code)]
 pub fn build_stamp() -> Option<u64> {
     #[cfg(target_os = "windows")]
     {

@@ -1,5 +1,7 @@
 //! Buffers, textures, views and samplers.
 
+#![allow(unsafe_code)]
+
 use std::ops::Range;
 use std::ptr::NonNull;
 use std::sync::Arc;

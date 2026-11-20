@@ -6,6 +6,8 @@
 //! gamma lifts its faintest into dots above and below round letters. The faces load from the
 //! same bytes Parley shapes with, at the run's variation coordinates.
 
+#![allow(unsafe_code)]
+
 use std::collections::HashMap;
 
 use swash::FontRef;

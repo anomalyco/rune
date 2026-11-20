@@ -1,3 +1,5 @@
+#![allow(unsafe_code)]
+
 use super::*;
 use objc2_foundation::NSData;
 

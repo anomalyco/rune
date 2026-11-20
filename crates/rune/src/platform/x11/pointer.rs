@@ -1,4 +1,7 @@
 //! XI2 raw motion on a private connection. Idle overlays have no polling deadline.
+
+#![allow(unsafe_code)]
+
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use x11rb::{connection::Connection, protocol::{Event, xinput::{ConnectionExt as _, Device, EventMask, XIEventMask}, randr::ConnectionExt as _, xproto::ConnectionExt as _}, rust_connection::RustConnection};
 

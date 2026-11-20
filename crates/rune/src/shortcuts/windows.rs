@@ -1,4 +1,7 @@
 //! A message-only window receives WM_HOTKEY inside winit's event-loop thread.
+
+#![allow(unsafe_code)]
+
 use super::{Backend, Shortcut, ShortcutError, ShortcutId, Sink, native_status, parse::*};
 use std::{cell::RefCell, collections::HashMap, ptr};
 use winit::platform::scancode::PhysicalKeyExtScancode;

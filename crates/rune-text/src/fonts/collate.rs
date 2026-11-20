@@ -15,6 +15,7 @@ pub fn compare_names(a: &str, b: &str) -> Ordering {
 }
 
 #[cfg(windows)]
+#[allow(unsafe_code)]
 fn collate(a: &str, b: &str) -> Ordering {
     use std::cell::RefCell;
 
@@ -56,6 +57,7 @@ fn collate(a: &str, b: &str) -> Ordering {
 }
 
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 fn collate(a: &str, b: &str) -> Ordering {
     use std::cell::RefCell;
 

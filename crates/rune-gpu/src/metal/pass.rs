@@ -2,6 +2,8 @@
 //! groups set before their pipeline land at the right slots; a pipeline with another layout
 //! rebinds every group. The sizes buffer and immediates travel as inline bytes.
 
+#![allow(unsafe_code)]
+
 use std::ops::Range;
 use std::ptr::NonNull;
 use std::sync::Arc;

@@ -145,8 +145,10 @@ macro_rules! send_sync {
     ($($t:ty),*) => { $(
         // SAFETY: Metal devices, queues, resources and events are thread-safe; command buffers,
         // encoders and drawables are used by one thread at a time, as wgpu's handles are.
+        #[allow(unsafe_code)]
         unsafe impl Send for $t {}
         // SAFETY: as above; shared Metal objects are thread-safe and single-thread handles follow wgpu's contract.
+        #[allow(unsafe_code)]
         unsafe impl Sync for $t {}
     )* };
 }
@@ -165,6 +167,7 @@ struct MetalInstance;
 
 impl InstanceInterface for MetalInstance {
     fn new(_: wgpu::InstanceDescriptor) -> Self { MetalInstance }
+    #[allow(unsafe_code)]
     unsafe fn create_surface(&self, target: wgpu::SurfaceTargetUnsafe) -> Result<DispatchSurface, wgpu::CreateSurfaceError> {
         // SAFETY: caller upholds `InstanceInterface::create_surface`'s contract that `target` names a live layer or view.
         Ok(unsafe { surface::create(target) })

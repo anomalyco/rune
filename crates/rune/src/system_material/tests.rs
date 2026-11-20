@@ -1,3 +1,5 @@
+#![allow(unsafe_code)]
+
 use super::*;
 use crate::render::{Gpu, Instance, KIND_RECT, KIND_SHADOW, NO_CLIP, Offscreen, Renderer};
 use crate::{Color, Cx, El, Env, Runtime, el};

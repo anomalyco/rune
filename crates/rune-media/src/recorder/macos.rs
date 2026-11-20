@@ -2,6 +2,9 @@
 //! input, so Rune never touches samples. The thread creates, drives and releases the recorder;
 //! nothing about it needs the main thread. AVCaptureDevice reports and asks for microphone
 //! access. CoreAudio's default input device is watched for changes.
+
+#![allow(unsafe_code)]
+
 use super::meter::Meter;
 use super::{MicPermission, Options, RecordFormat, Recorder, Shared};
 use objc2::rc::{Allocated, Retained, autoreleasepool};

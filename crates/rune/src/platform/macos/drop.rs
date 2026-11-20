@@ -5,6 +5,9 @@
 //! promise is received into a temporary folder and image data is written there as a file, so a
 //! drop still reaches `El::on_drop_files` as paths. AppKit says where the drag is at every step,
 //! so the host needn't sample the pointer.
+
+#![allow(unsafe_code)]
+
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

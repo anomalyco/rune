@@ -4,6 +4,9 @@
 //! don't need the main thread (its HTML *reader* does, and isn't used). A TIFF image (what
 //! most Mac apps copy) is converted to PNG there too, by `NSBitmapImageRep`, and a copied PNG
 //! to TIFF.
+
+#![allow(unsafe_code)]
+
 use std::path::PathBuf;
 use objc2::rc::{Retained, autoreleasepool};
 use objc2::runtime::{AnyObject, ProtocolObject};

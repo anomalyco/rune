@@ -70,6 +70,7 @@ pub(crate) fn watch() {
 }
 
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 mod mac {
     use super::SystemAccent;
     use crate::Color;

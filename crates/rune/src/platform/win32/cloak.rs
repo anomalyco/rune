@@ -8,6 +8,8 @@
 //! thread's text services (TSF), about 7,500 µs on the UI thread, and that would come before the
 //! frame. It shows without activating and activates as the cloak lifts, once its frame is up.
 
+#![allow(unsafe_code)]
+
 use std::cell::Cell;
 use std::time::Instant;
 

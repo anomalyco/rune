@@ -23,6 +23,7 @@ fn reply_error(e: ReplyError) -> ShortcutError {
 }
 
 impl Native {
+    #[allow(unsafe_code)]
     pub(super) fn new(sink: Sink) -> Result<Self, ShortcutError> {
         let (connection, _) = x11rb::connect(None).map_err(|_| ShortcutError::Unsupported)?;
         let connection = Arc::new(connection);

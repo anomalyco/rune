@@ -257,6 +257,7 @@ fn uber_metallib(device: &wgpu::Device) -> &'static [u8] {
 const ABI_MATCHES: bool = uber_abi_hash() == UBER_ABI_FNV64;
 
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 fn try_uber_metallib<T>(
     device: &wgpu::Device,
     metallib: &[u8],

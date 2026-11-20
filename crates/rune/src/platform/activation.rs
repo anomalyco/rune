@@ -47,6 +47,7 @@ pub(crate) struct Activator {
 
 impl Activator {
     /// None off Wayland or when the compositor lacks `xdg_activation_v1`.
+    #[allow(unsafe_code)]
     pub fn new(window: &Window) -> Option<Activator> {
         let (RawDisplayHandle::Wayland(display), RawWindowHandle::Wayland(handle)) = (
             window.display_handle().ok()?.as_raw(),

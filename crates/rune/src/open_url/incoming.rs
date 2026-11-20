@@ -222,6 +222,7 @@ mod platform {
 }
 
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 mod mac {
     use std::ffi::c_void;
     use std::sync::OnceLock;

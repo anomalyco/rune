@@ -1,4 +1,7 @@
 //! Carbon hotkeys do not require Accessibility or Input Monitoring permission.
+
+#![allow(unsafe_code)]
+
 use super::{Backend, Shortcut, ShortcutError, ShortcutId, Sink, native_status, parse::*};
 use objc2_core_foundation::{CFArray, CFBoolean, CFDictionary, CFNumber, CFPreferencesCopyAppValue, CFRetained, CFString, CFType};
 use std::{cell::RefCell, collections::HashMap, ffi::c_void, ptr};

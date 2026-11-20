@@ -154,4 +154,5 @@ impl Drop for WebglWatch {
 
 struct PageOnly<T>(T);
 // SAFETY: wasm32 without threads: there is one thread, and every callback runs on it.
+#[allow(unsafe_code)]
 unsafe impl<T> Send for PageOnly<T> {}

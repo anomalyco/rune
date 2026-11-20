@@ -11,6 +11,9 @@
 //! minimum width, so `Show::positioned` and `Show::min_width` don't apply. Keyboard navigation
 //! (arrows, Enter, Esc, first letters, submenus), screen-edge flipping and dismissal by a click
 //! outside are the system's. Menus are light or dark as the window's content is (`scheme`).
+
+#![allow(unsafe_code)]
+
 use std::{cell::{Cell, RefCell}, rc::Rc, sync::{Arc, OnceLock, atomic::{AtomicUsize, Ordering}}};
 
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};

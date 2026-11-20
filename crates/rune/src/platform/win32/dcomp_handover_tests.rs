@@ -1,3 +1,5 @@
+#![allow(unsafe_code)]
+
 use std::path::PathBuf;
 
 use windows_sys::Win32::Foundation::FreeLibrary;

@@ -101,6 +101,7 @@ pub(in crate::window) struct Prepared {
 
 // SAFETY: wgpu's objects are `Send`; a new `Renderer` has no native surface renderer (the one
 // part that isn't), and `Handover` is used by one thread at a time.
+#[allow(unsafe_code)]
 unsafe impl Send for Prepared {}
 
 impl SurfaceMode {
@@ -426,6 +427,7 @@ impl Win {
 }
 
 /// Runs the GPU thread at normal priority (`RAISE_AFTER`).
+#[allow(unsafe_code)]
 fn raise_priority(thread: &std::thread::JoinHandle<()>) {
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::System::Threading::{SetThreadPriority, THREAD_PRIORITY_NORMAL};
@@ -437,6 +439,7 @@ static FIRST_GPU: AtomicBool = AtomicBool::new(false);
 
 /// On the GPU thread: the device (the one `warm_gpu` made, if it did), the renderer, the
 /// uncommitted visual and a swap chain on it, configured for `size`.
+#[allow(unsafe_code)]
 fn prepare(hwnd: isize, size: (u32, u32), srgb: bool, features: wgpu::Features, latest: &Mutex<Vec<crate::render::Instance>>) -> Result<Prepared, String> {
     let handover = Handover::new(hwnd)?;
     let visual = handover.visual();
@@ -520,6 +523,7 @@ fn count_drift(gpu: Arc<Gpu>, readback: Readback, mut dib: Dib) {
     if let Err(error) = spawned { eprintln!("rune: could not count the hand-over's drift: {error}"); }
 }
 
+#[allow(unsafe_code)]
 fn lower_priority() {
     use windows_sys::Win32::System::Threading::{GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL};
     // SAFETY: this thread's pseudo-handle.

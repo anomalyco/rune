@@ -168,6 +168,7 @@ pub(crate) fn gesture_phase(phase: TouchPhase) -> crate::GesturePhase {
 /// Whether the mouse message being handled is one Windows synthesized from a touch or pen
 /// (`GetMessageExtraInfo` carries `MI_WP_SIGNATURE`).
 #[cfg(target_os = "windows")]
+#[allow(unsafe_code)]
 pub(crate) fn touch_promoted() -> bool {
     const MI_WP_SIGNATURE: u32 = 0xFF51_5700;
     // SAFETY: reads the calling thread's current message info; no pointers involved.

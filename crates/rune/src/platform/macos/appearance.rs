@@ -5,6 +5,8 @@
 //! Wrap winit's observer once per process: nil transitions are held back, and the last real
 //! appearance stands in for a nil old value, so real changes still reach winit's `ThemeChanged`.
 
+#![allow(unsafe_code)]
+
 use std::{ffi::c_void, sync::atomic::{AtomicUsize, Ordering}};
 use objc2::{msg_send, sel, runtime::{AnyClass, AnyObject, Sel}};
 use objc2_foundation::ns_string;

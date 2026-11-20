@@ -377,12 +377,13 @@ mod tests {
             lend(&mut inner, || {
                 let _ = measure("Inner normal", &[], style, None);
             });
-            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 lend(&mut inner, || {
                     let _ = measure("Inner panic", &[], style, None);
                     panic!("inner boom");
                 });
             }));
+            assert!(caught.is_err());
             let _ = measure("Outer after", &[], style, None);
         });
 

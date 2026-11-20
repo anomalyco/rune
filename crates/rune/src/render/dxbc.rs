@@ -211,6 +211,7 @@ fn load<T>(device: &wgpu::Device, (vertex, fragment): (&'static [u8], &'static [
 /// `make_pipelines`, when this is a DX12 device that takes bytecode and `fresh` says it's this
 /// build's; `None` (so the caller does `otherwise`, which a refusal names) when not, or when the driver refuses it.
 #[cfg(target_os = "windows")]
+#[allow(unsafe_code)]
 fn load_modules<T>(device: &wgpu::Device, blobs: &[(&'static [u8], &'static str)], what: &str, fresh: impl FnOnce() -> bool, otherwise: &str,
     make_pipelines: impl FnOnce(&[wgpu::ShaderModule]) -> T) -> Option<T> {
     if device.adapter_info().backend != wgpu::Backend::Dx12 || !device.features().contains(wgpu::Features::PASSTHROUGH_SHADERS) || !enabled() {

@@ -21,6 +21,7 @@ use std::cell::Cell;
 use std::sync::Arc;
 
 #[link(name = "QuartzCore", kind = "framework")]
+#[allow(unsafe_code)]
 unsafe extern "C" {
     static kCACornerCurveContinuous: &'static AnyObject;
     static kCACornerCurveCircular: &'static AnyObject;
@@ -28,6 +29,7 @@ unsafe extern "C" {
 
 /// Rounds the window's content layer when the options ask for it and the window is
 /// transparent and borderless. Runs on each native creation, after wgpu adds its layer.
+#[allow(unsafe_code)]
 pub(crate) fn apply_corners(window: &winit::window::Window, options: &crate::MacWindowOptions, transparent: bool, borderless: bool) {
     let Some(radius) = options.corner_radius.filter(|_| transparent && borderless) else { return };
     let Some(view) = crate::platform::macos::content_view(window) else { return };

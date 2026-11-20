@@ -271,6 +271,7 @@ fn immediates_match_wgpus_pixel_for_pixel() {
 }
 
 #[test]
+#[allow(unsafe_code)]
 fn a_frame_is_one_command_buffer_and_writes_land() {
     let (device, queue) = gpu();
     let target = texture(&device, wgpu::TextureFormat::Bgra8UnormSrgb, (64, 64), wgpu::TextureUsages::RENDER_ATTACHMENT);

@@ -6,6 +6,8 @@
 //! `onPress`), text (`size`, `weight`, `color`) and list props (`count`, `renderRow`); colours are
 //! palette names or `ui.hex(...)`.
 
+#![allow(unsafe_code)]
+
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_int};
 use std::rc::Rc;

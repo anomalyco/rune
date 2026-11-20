@@ -396,6 +396,7 @@ impl Source {
     }
     // Append-only immutable list: no reclamation can race a publisher. One cell per
     // source/runtime pair (not per view rebuild); all cells reclaimed with the source.
+    #[allow(unsafe_code)]
     pub fn subscribe(&self, wake: &Arc<Wake>) -> Arc<Subscription> {
         let mut head = self.listeners.load(Ordering::Acquire);
         let mut p = head;
@@ -421,6 +422,7 @@ impl Source {
             }
         }
     }
+    #[allow(unsafe_code)]
     pub fn notify(&self) {
         let mut p = self.listeners.load(Ordering::Acquire);
         while !p.is_null() {
@@ -434,6 +436,7 @@ impl Source {
     pub fn id(&self) -> u64 { self.id }
 }
 impl Drop for Source {
+    #[allow(unsafe_code)]
     fn drop(&mut self) {
         let mut p = *self.listeners.get_mut();
         while !p.is_null() {
