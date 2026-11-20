@@ -236,105 +236,109 @@ pub(crate) fn compile(body: &str, view: f32) -> Option<CompiledAnim> {
                 }
                 let in_hidden = stack.last().is_some_and(|e| e.skip_subtree);
                 if in_hidden || NON_RENDERING.contains(&tag) {
-                    if !self_closing {
-                        stack.push(StackEntry { tag, node_id: None, pushed_group: false, skip_subtree: true, base_geom: None, base_paint: None, base_opacity: 1.0 });
+                        if !self_closing {
+                            stack.push(StackEntry { tag, node_id: None, pushed_group: false, skip_subtree: true, base_geom: None, base_paint: None, base_opacity: 1.0, has_transform: false });
+                        }
+                        continue;
                     }
-                    continue;
-                }
-                match tag {
-                    "g" | "a" | "svg" => {
-                        let node_id = next_node_id;
-                        next_node_id = next_node_id.checked_add(1)?;
-                        let opacity = find_attr(&attrs, "opacity").and_then(parse_opacity_opt).unwrap_or(1.0);
-                        let display_none = find_attr(&attrs, "display").is_some_and(|v| v.trim() == "none");
-                        if opacity < 1.0 {
-                            opacity_layers += 1;
-                            if opacity_layers > MAX_LAYERS {
+                    match tag {
+                        "g" | "a" | "svg" => {
+                            let node_id = next_node_id;
+                            next_node_id = next_node_id.checked_add(1)?;
+                            let opacity = find_attr(&attrs, "opacity").and_then(parse_opacity_opt).unwrap_or(1.0);
+                            let display_none = find_attr(&attrs, "display").is_some_and(|v| v.trim() == "none");
+                            if opacity < 1.0 {
+                                opacity_layers += 1;
+                                if opacity_layers > MAX_LAYERS {
+                                    return None;
+                                }
+                            }
+                            let tr_attr = find_attr(&attrs, "transform");
+                            let tr = match tr_attr {
+                                Some(raw) => parse_transform_bounded(raw)?,
+                                None => Transform::IDENTITY,
+                            };
+                            let paint = PaintProps::from_attrs(&attrs);
+                            if !self_closing {
+                                ops.push(Op::PushGroup { node_id, transform: tr, opacity, display_none, paint, has_opacity_anim: false });
+                                stack.push(StackEntry {
+                                    tag,
+                                    node_id: Some(node_id),
+                                    pushed_group: true,
+                                    skip_subtree: false,
+                                    base_geom: None,
+                                    base_paint: Some(paint),
+                                    base_opacity: opacity,
+                                    has_transform: tr_attr.is_some(),
+                                });
+                            }
+                        }
+                        "circle" | "ellipse" | "rect" | "line" | "path" | "polyline" | "polygon" => {
+                            shapes += 1;
+                            if shapes > MAX_SHAPES {
                                 return None;
                             }
-                        }
-                        let tr = match find_attr(&attrs, "transform") {
-                            Some(raw) => parse_transform_bounded(raw)?,
-                            None => Transform::IDENTITY,
-                        };
-                        let paint = PaintProps::from_attrs(&attrs);
-                        if !self_closing {
-                            ops.push(Op::PushGroup { node_id, transform: tr, opacity, display_none, paint, has_opacity_anim: false });
-                            stack.push(StackEntry {
-                                tag,
-                                node_id: Some(node_id),
-                                pushed_group: true,
-                                skip_subtree: false,
-                                base_geom: None,
-                                base_paint: Some(paint),
-                                base_opacity: opacity,
-                            });
-                        }
-                    }
-                    "circle" | "ellipse" | "rect" | "line" | "path" | "polyline" | "polygon" => {
-                        shapes += 1;
-                        if shapes > MAX_SHAPES {
-                            return None;
-                        }
-                        let geom = parse_geom(tag, &attrs)?;
-                        let node_id = next_node_id;
-                        next_node_id = next_node_id.checked_add(1)?;
-                        let opacity = find_attr(&attrs, "opacity").and_then(parse_opacity_opt).unwrap_or(1.0);
-                        let display_none = find_attr(&attrs, "display").is_some_and(|v| v.trim() == "none");
-                        let tr = match find_attr(&attrs, "transform") {
-                            Some(raw) => parse_transform_bounded(raw)?,
-                            None => Transform::IDENTITY,
-                        };
-                        let paint = PaintProps::from_attrs(&attrs);
-                        ops.push(Op::DrawShape { node_id, geom: geom.clone(), transform: tr, opacity, display_none, paint });
-                        if !self_closing {
-                            stack.push(StackEntry {
-                                tag,
-                                node_id: Some(node_id),
-                                pushed_group: false,
-                                skip_subtree: false,
-                                base_geom: Some(geom),
-                                base_paint: Some(paint),
-                                base_opacity: opacity,
-                            });
-                        }
-                    }
-                    "animate" | "animateTransform" | "set" => {
-                        if let Some(parent) = stack.last()
-                            && let Some(target) = parent.node_id
-                            && tracks.len() < MAX_ANIMATIONS
-                            && let Some(track) = parse_track(tag, &attrs, target, parent)
-                        {
-                            if track.attr == AttrKind::Opacity && parent.pushed_group {
-                                // A group whose opacity is animated may drop below 1.0 at runtime:
-                                // count it against MAX_LAYERS now and mark the PushGroup op.
-                                if parent.base_opacity >= 1.0 {
-                                    opacity_layers += 1;
-                                    if opacity_layers > MAX_LAYERS {
-                                        return None;
-                                    }
-                                }
-                                for op in ops.iter_mut().rev() {
-                                    if let Op::PushGroup { node_id, has_opacity_anim, .. } = op
-                                        && *node_id == target
-                                    {
-                                        *has_opacity_anim = true;
-                                        break;
-                                    }
-                                }
+                            let geom = parse_geom(tag, &attrs)?;
+                            let node_id = next_node_id;
+                            next_node_id = next_node_id.checked_add(1)?;
+                            let opacity = find_attr(&attrs, "opacity").and_then(parse_opacity_opt).unwrap_or(1.0);
+                            let display_none = find_attr(&attrs, "display").is_some_and(|v| v.trim() == "none");
+                            let tr_attr = find_attr(&attrs, "transform");
+                            let tr = match tr_attr {
+                                Some(raw) => parse_transform_bounded(raw)?,
+                                None => Transform::IDENTITY,
+                            };
+                            let paint = PaintProps::from_attrs(&attrs);
+                            ops.push(Op::DrawShape { node_id, geom: geom.clone(), transform: tr, opacity, display_none, paint });
+                            if !self_closing {
+                                stack.push(StackEntry {
+                                    tag,
+                                    node_id: Some(node_id),
+                                    pushed_group: false,
+                                    skip_subtree: false,
+                                    base_geom: Some(geom),
+                                    base_paint: Some(paint),
+                                    base_opacity: opacity,
+                                    has_transform: tr_attr.is_some(),
+                                });
                             }
-                            tracks.push(track);
                         }
-                        if !self_closing {
-                            stack.push(StackEntry { tag, node_id: None, pushed_group: false, skip_subtree: true, base_geom: None, base_paint: None, base_opacity: 1.0 });
+                        "animate" | "animateTransform" | "set" => {
+                            if let Some(parent) = stack.last()
+                                && let Some(target) = parent.node_id
+                                && tracks.len() < MAX_ANIMATIONS
+                                && let Some(track) = parse_track(tag, &attrs, target, &stack)
+                            {
+                                if track.attr == AttrKind::Opacity && parent.pushed_group {
+                                    // A group whose opacity is animated may drop below 1.0 at runtime:
+                                    // count it against MAX_LAYERS now and mark the PushGroup op.
+                                    if parent.base_opacity >= 1.0 {
+                                        opacity_layers += 1;
+                                        if opacity_layers > MAX_LAYERS {
+                                            return None;
+                                        }
+                                    }
+                                    for op in ops.iter_mut().rev() {
+                                        if let Op::PushGroup { node_id, has_opacity_anim, .. } = op
+                                            && *node_id == target
+                                        {
+                                            *has_opacity_anim = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                                tracks.push(track);
+                            }
+                            if !self_closing {
+                                stack.push(StackEntry { tag, node_id: None, pushed_group: false, skip_subtree: true, base_geom: None, base_paint: None, base_opacity: 1.0, has_transform: false });
+                            }
+                        }
+                        _ => {
+                            if !self_closing {
+                                stack.push(StackEntry { tag, node_id: None, pushed_group: false, skip_subtree: true, base_geom: None, base_paint: None, base_opacity: 1.0, has_transform: false });
+                            }
                         }
                     }
-                    _ => {
-                        if !self_closing {
-                            stack.push(StackEntry { tag, node_id: None, pushed_group: false, skip_subtree: true, base_geom: None, base_paint: None, base_opacity: 1.0 });
-                        }
-                    }
-                }
             }
         }
     }
@@ -354,6 +358,7 @@ struct StackEntry<'a> {
     base_geom: Option<BaseGeom>,
     base_paint: Option<PaintProps>,
     base_opacity: f32,
+    has_transform: bool,
 }
 
 fn parse_geom(tag: &str, attrs: &[(&str, &str)]) -> Option<BaseGeom> {
@@ -389,6 +394,19 @@ fn parse_geom(tag: &str, attrs: &[(&str, &str)]) -> Option<BaseGeom> {
             if parsed.len() > MAX_PATH_COMMANDS * 4 {
                 return None;
             }
+            let pt_ok = |v: convex::V| v.x.is_finite() && v.y.is_finite() && v.x.abs() <= MAX_COORD && v.y.abs() <= MAX_COORD;
+            for el in &parsed {
+                let ok = match *el {
+                    convex::El::Move(a) | convex::El::Line(a) => pt_ok(a),
+                    convex::El::Quad(a, b) => pt_ok(a) && pt_ok(b),
+                    convex::El::Cubic(a, b, c) => pt_ok(a) && pt_ok(b) && pt_ok(c),
+                    convex::El::Conic(a, b, w) => pt_ok(a) && pt_ok(b) && w.is_finite() && w > 0.0 && w <= 1024.0,
+                    convex::El::Close => true,
+                };
+                if !ok {
+                    return None;
+                }
+            }
             Some(BaseGeom::Path(parsed))
         }
         "polyline" | "polygon" => {
@@ -414,12 +432,16 @@ fn parse_geom(tag: &str, attrs: &[(&str, &str)]) -> Option<BaseGeom> {
     }
 }
 
-fn base_attr_value(parent: &StackEntry<'_>, attr: AttrKind) -> Option<f32> {
+fn base_attr_value(stack: &[StackEntry<'_>], attr: AttrKind) -> Option<f32> {
+    let parent = stack.last()?;
+    let inherited = |get: fn(PaintProps) -> Option<f32>, default: f32| {
+        stack.iter().rev().filter_map(|e| e.base_paint).find_map(get).unwrap_or(default)
+    };
     match attr {
         AttrKind::Opacity => Some(parent.base_opacity),
-        AttrKind::FillOpacity => Some(parent.base_paint.and_then(|p| p.fill_opacity).unwrap_or(1.0)),
-        AttrKind::StrokeOpacity => Some(parent.base_paint.and_then(|p| p.stroke_opacity).unwrap_or(1.0)),
-        AttrKind::StrokeWidth => Some(parent.base_paint.and_then(|p| p.stroke_width).unwrap_or(1.0)),
+        AttrKind::FillOpacity => Some(inherited(|p| p.fill_opacity, 1.0)),
+        AttrKind::StrokeOpacity => Some(inherited(|p| p.stroke_opacity, 1.0)),
+        AttrKind::StrokeWidth => Some(inherited(|p| p.stroke_width, 1.0)),
         AttrKind::R => match parent.base_geom {
             Some(BaseGeom::Circle { r, .. }) => Some(r),
             _ => None,
@@ -478,7 +500,8 @@ fn base_attr_value(parent: &StackEntry<'_>, attr: AttrKind) -> Option<f32> {
     }
 }
 
-fn parse_track(tag: &str, attrs: &[(&str, &str)], target: u16, parent: &StackEntry<'_>) -> Option<Track> {
+fn parse_track(tag: &str, attrs: &[(&str, &str)], target: u16, stack: &[StackEntry<'_>]) -> Option<Track> {
+    let parent = stack.last()?;
     let attr_name = find_attr(attrs, "attributeName")?.trim();
     let is_set = tag == "set";
     let attr = if tag == "animateTransform" {
@@ -572,9 +595,9 @@ fn parse_track(tag: &str, attrs: &[(&str, &str)], target: u16, parent: &StackEnt
     let additive_sum = !is_set && find_attr(attrs, "additive").map(str::trim) == Some("sum");
 
     let mut values = Vec::new();
-    let mut from_by_additive = false;
+    let mut extra_additive = false;
     if is_set {
-        let v = parse_key_val(find_attr(attrs, "to")?, attr)?;
+        let v = parse_key_val(find_attr(attrs, "to")?, attr, false)?;
         values.push(v);
     } else if let Some(raw_vals) = find_attr(attrs, "values") {
         let mut raw_parts = 0usize;
@@ -590,7 +613,7 @@ fn parse_track(tag: &str, attrs: &[(&str, &str)], target: u16, parent: &StackEnt
             if values.len() >= MAX_KEYFRAMES {
                 return None;
             }
-            values.push(parse_key_val(t, attr)?);
+            values.push(parse_key_val(t, attr, additive_sum)?);
         }
     } else {
         let from_raw = find_attr(attrs, "from");
@@ -598,31 +621,43 @@ fn parse_track(tag: &str, attrs: &[(&str, &str)], target: u16, parent: &StackEnt
         let by_raw = find_attr(attrs, "by");
         match (from_raw, to_raw, by_raw) {
             (Some(f), Some(t), _) => {
-                values.push(parse_key_val(f, attr)?);
-                values.push(parse_key_val(t, attr)?);
+                values.push(parse_key_val(f, attr, additive_sum)?);
+                values.push(parse_key_val(t, attr, additive_sum)?);
             }
             (Some(f), None, Some(b)) => {
-                let fv = parse_key_val(f, attr)?;
-                let bv = parse_key_val(b, attr)?;
+                let fv = parse_key_val(f, attr, additive_sum)?;
+                let bv = parse_key_val(b, attr, true)?;
                 let len = fv.len.max(bv.len);
                 let tv = KeyVal {
                     v: [fv.v[0] + bv.v[0], fv.v[1] + bv.v[1], fv.v[2] + bv.v[2]],
                     len,
                 };
                 values.push(fv);
-                values.push(clamp_key_val(tv, attr));
+                values.push(clamp_key_val(tv, attr, additive_sum));
             }
             (None, Some(t), _) => {
-                let base = default_base_key_val(parent, attr)?;
+                let base = default_base_key_val(stack, attr)?;
                 values.push(base);
-                values.push(parse_key_val(t, attr)?);
+                values.push(parse_key_val(t, attr, false)?);
+                // On a transform with an existing static base transform, `to`-only interpolates
+                // relative to the underlying transform rather than discarding it.
+                if matches!(attr, AttrKind::Transform(_)) && parent.has_transform {
+                    extra_additive = true;
+                }
             }
             (None, None, Some(b)) => {
-                // SMIL `by`-only animation: additive from 0 -> by.
-                let bv = parse_key_val(b, attr)?;
-                values.push(KeyVal { v: [0.0; 3], len: bv.len });
-                values.push(bv);
-                from_by_additive = true;
+                // SMIL `by`-only animation is implicitly additive (`additive="sum"`):
+                // for `scale`, identity is `(1, 1)` so `by` interpolates `(1, 1) -> (1 + bx, 1 + by)`;
+                // for all other attributes, identity is `0` so `by` interpolates `0 -> by` (signed!).
+                let bv = parse_key_val(b, attr, true)?;
+                if matches!(attr, AttrKind::Transform(TransformKind::Scale)) {
+                    values.push(KeyVal { v: [1.0, 1.0, 0.0], len: 2 });
+                    values.push(clamp_key_val(KeyVal { v: [1.0 + bv.v[0], 1.0 + bv.v[1], 0.0], len: 2 }, attr, false));
+                } else {
+                    values.push(KeyVal { v: [0.0; 3], len: bv.len });
+                    values.push(bv);
+                }
+                extra_additive = true;
             }
             _ => return None,
         }
@@ -673,7 +708,7 @@ fn parse_track(tag: &str, attrs: &[(&str, &str)], target: u16, parent: &StackEnt
         dur,
         repeat,
         freeze,
-        additive_sum: additive_sum || from_by_additive,
+        additive_sum: additive_sum || extra_additive,
         is_set,
         calc_mode,
         values,
@@ -682,13 +717,13 @@ fn parse_track(tag: &str, attrs: &[(&str, &str)], target: u16, parent: &StackEnt
     })
 }
 
-fn default_base_key_val(parent: &StackEntry<'_>, attr: AttrKind) -> Option<KeyVal> {
+fn default_base_key_val(stack: &[StackEntry<'_>], attr: AttrKind) -> Option<KeyVal> {
     match attr {
         AttrKind::Transform(TransformKind::Scale) => Some(KeyVal { v: [1.0, 1.0, 0.0], len: 2 }),
         AttrKind::Transform(TransformKind::Translate) => Some(KeyVal { v: [0.0, 0.0, 0.0], len: 2 }),
         AttrKind::Transform(TransformKind::Rotate) => Some(KeyVal { v: [0.0, 0.0, 0.0], len: 3 }),
         AttrKind::Transform(TransformKind::SkewX | TransformKind::SkewY) => Some(KeyVal::scalar(0.0)),
-        _ => Some(KeyVal::scalar(base_attr_value(parent, attr)?)),
+        _ => Some(KeyVal::scalar(base_attr_value(stack, attr)?)),
     }
 }
 
@@ -718,7 +753,7 @@ fn paced_key_times(values: &[KeyVal]) -> Vec<f32> {
     dists.iter().map(|&d| (d / total).clamp(0.0, 1.0)).collect()
 }
 
-fn parse_key_val(raw: &str, attr: AttrKind) -> Option<KeyVal> {
+fn parse_key_val(raw: &str, attr: AttrKind, is_delta: bool) -> Option<KeyVal> {
     let nums = parse_small_numbers::<3>(raw)?;
     if nums.is_empty() {
         return None;
@@ -734,19 +769,19 @@ fn parse_key_val(raw: &str, attr: AttrKind) -> Option<KeyVal> {
         v[1] = v[0];
         len = 2;
     }
-    Some(clamp_key_val(KeyVal { v, len }, attr))
+    Some(clamp_key_val(KeyVal { v, len }, attr, is_delta))
 }
 
-fn clamp_key_val(mut kv: KeyVal, attr: AttrKind) -> KeyVal {
+fn clamp_key_val(mut kv: KeyVal, attr: AttrKind, is_delta: bool) -> KeyVal {
     match attr {
         AttrKind::Opacity | AttrKind::FillOpacity | AttrKind::StrokeOpacity => {
-            kv.v[0] = kv.v[0].clamp(0.0, 1.0);
+            kv.v[0] = if is_delta { kv.v[0].clamp(-1.0, 1.0) } else { kv.v[0].clamp(0.0, 1.0) };
         }
         AttrKind::StrokeWidth => {
-            kv.v[0] = kv.v[0].clamp(0.0, MAX_STROKE_WIDTH);
+            kv.v[0] = if is_delta { kv.v[0].clamp(-MAX_STROKE_WIDTH, MAX_STROKE_WIDTH) } else { kv.v[0].clamp(0.0, MAX_STROKE_WIDTH) };
         }
         AttrKind::R | AttrKind::Rx | AttrKind::Ry | AttrKind::Width | AttrKind::Height => {
-            kv.v[0] = kv.v[0].clamp(0.0, MAX_COORD);
+            kv.v[0] = if is_delta { kv.v[0].clamp(-MAX_COORD, MAX_COORD) } else { kv.v[0].clamp(0.0, MAX_COORD) };
         }
         AttrKind::Cx | AttrKind::Cy | AttrKind::X | AttrKind::Y | AttrKind::X1 | AttrKind::Y1 | AttrKind::X2 | AttrKind::Y2 => {
             kv.v[0] = kv.v[0].clamp(-MAX_COORD, MAX_COORD);
@@ -852,6 +887,9 @@ fn parse_clock(raw: &str) -> Option<f32> {
     } else {
         (1.0f32, t)
     };
+    if body.starts_with(['+', '-']) {
+        return None;
+    }
     let mag = if body.contains(':') {
         let mut parts = body.split(':');
         let a = parts.next()?;
@@ -940,6 +978,9 @@ fn parse_transform_bounded(raw: &str) -> Option<Transform> {
             _ => return None,
         };
         m = super::super::then(t, m);
+        if !super::local_ctm_is_safe(m) {
+            return None;
+        }
         rest = tail.trim().trim_start_matches(',').trim();
     }
     Some(m)

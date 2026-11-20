@@ -234,6 +234,15 @@ pub fn icon_coverage_placed(icon: &Icon, px: u32, origin: [f32; 2]) -> Vec<u8> {
     icon_coverage_at(icon, px, px as f32, Point::new(origin[0], origin[1]))
 }
 
+/// Hard finiteness and magnitude bound on a composed device-space transform so nested scales or
+/// translations can never overflow fixed-point rasterization or `PathStroker`.
+pub(super) fn ctm_is_safe(ctm: Transform) -> bool {
+    let vals = [ctm.xx, ctm.xy, ctm.yx, ctm.yy, ctm.x, ctm.y];
+    vals.iter().all(|v| v.is_finite())
+        && ctm.xx.abs().max(ctm.xy.abs()).max(ctm.yx.abs()).max(ctm.yy.abs()) <= 4096.0
+        && ctm.x.abs().max(ctm.y.abs()) <= 65_536.0
+}
+
 /// Paints one monochrome shape into `into` (via scratch `buf`) with Chromium's Ganesh/AAA op
 /// selection. Shared by both static icons and compiled animated icons.
 #[allow(clippy::too_many_arguments)]
@@ -248,7 +257,7 @@ fn paint_shape(
     buf: &mut [u8],
     into: &mut [u8],
 ) {
-    if alpha <= 0.0 {
+    if alpha <= 0.0 || !ctm_is_safe(ctm) {
         return;
     }
     match area::op(shape, ctm, pen) {
@@ -271,20 +280,24 @@ fn paint_shape(
 
 /// `icon`'s coverage drawn `size` device pixels across, from the top-left of a `px` × `px`
 /// canvas placed at `origin`. For animated monochrome icons (e.g. under reduced motion), renders
-/// the exact `t = 0` resting frame via [`anim::AnimatedIcons::render_rest_coverage`].
+/// the exact `t = 0` resting frame via [`anim::AnimatedIcons::render_rest_coverage`]; if an
+/// animated icon fails hostile-input compilation it returns empty coverage rather than falling
+/// back to the static parser.
 fn icon_coverage_at(icon: &Icon, px: u32, size: f32, origin: Point) -> Vec<u8> {
-    if anim::may_be_animated(icon.body)
-        && let Some(cov) = anim::AnimatedIcons::render_rest_coverage(icon, px, size, origin)
-    {
-        return cov;
+    let mut acc = vec![0u8; (px as usize).saturating_mul(px as usize)];
+    if px == 0 || icon.body.len() > 256 * 1024 || !icon.view.is_finite() || icon.view <= 0.0 || icon.view > anim::parse::MAX_VIEW_DIM {
+        return acc;
+    }
+    if icon.body.contains("<animate") || icon.body.contains("<set") {
+        return anim::AnimatedIcons::render_rest_coverage(icon, px, size, origin).unwrap_or(acc);
     }
     let s = size / icon.view;
-    let mut acc = vec![0u8; (px * px) as usize];
     // Each open group with an `opacity`: what it holds so far, and that opacity.
     let mut layers: Vec<(Vec<u8>, f32)> = Vec::new();
     let mut buf = vec![0u8; (px * px) as usize];
     let root = Scope { ctm: Transform::scale(s, s), paints: true, group: None, layer: false };
     let mut scopes: Vec<Scope> = Vec::new();
+    let mut elements = 0usize;
     for raw in icon.body.split('>') {
         let el = raw.trim();
         if el.is_empty() || el.starts_with("<!") || el.starts_with("<?") {
@@ -298,11 +311,15 @@ fn icon_coverage_at(icon: &Icon, px: u32, size: f32, origin: Point) -> Vec<u8> {
             }
             continue;
         }
+        elements += 1;
+        if elements > 1024 || scopes.len() >= 64 {
+            break;
+        }
         let tag = el.trim_start_matches('<').split_whitespace().next().unwrap_or("").trim_end_matches('/');
         let open = !el.ends_with('/');
         let up = scopes.last().unwrap_or(&root);
         let ctm = attr(el, "transform").map_or(up.ctm, |t| then(transform(t), up.ctm));
-        let paints = up.paints && attr(el, "display") != Some("none") && !NON_RENDERING.contains(&tag);
+        let paints = up.paints && ctm_is_safe(ctm) && attr(el, "display") != Some("none") && !NON_RENDERING.contains(&tag);
         if tag == "g" || tag == "a" || tag == "svg" {
             if open {
                 let alpha = opacity(attr(el, "opacity"));
@@ -321,6 +338,9 @@ fn icon_coverage_at(icon: &Icon, px: u32, size: f32, origin: Point) -> Vec<u8> {
             continue;
         }
         let Some(d) = element_path(el) else { continue };
+        if d.len() > 128 * 1024 {
+            continue;
+        }
         // Skia's elements: an arc stays the conics Blink's `SkPath::arcTo` makes.
         let d = convex::parse(&d);
         // The element's own attribute, else the innermost group's that sets it.

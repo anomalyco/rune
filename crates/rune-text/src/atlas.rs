@@ -139,12 +139,12 @@ pub struct AtlasPage {
 }
 
 impl AtlasPage {
-    pub(super) fn new(age: u64) -> Self {
+    pub(super) fn new(age: u64, epoch: u64) -> Self {
         AtlasPage {
             data: vec![0; (ATLAS_SIZE * ATLAS_SIZE) as usize],
             dirty: None,
             shelf: Shelf::new(age),
-            epoch: 1,
+            epoch,
         }
     }
 }
@@ -223,6 +223,9 @@ pub struct Atlas {
     pub(crate) rasterized: u64,
     shelf: Shelf,
     page0_gen: u64,
+    /// Monotonic atlas-wide page generation counter so popped and recreated overflow pages never
+    /// collide with stale reusable slot handles (`SlotEntry`).
+    next_page_gen: u64,
     pub(super) clock: u64,
     pub(super) map: GlyphMap<Residency>,
     /// Text draws subpixel masks this frame: the renderer blends by channel
@@ -309,6 +312,7 @@ impl Atlas {
             rasterized: 0,
             shelf: Shelf::new(1),
             page0_gen: 1,
+            next_page_gen: 2,
             clock: 1,
             map: GlyphMap::default(),
             lcd: false,
@@ -335,6 +339,12 @@ impl Atlas {
         }
     }
 
+    fn alloc_page_gen(&mut self) -> u64 {
+        let id = self.next_page_gen;
+        self.next_page_gen = self.next_page_gen.wrapping_add(1).max(1);
+        id
+    }
+
     pub(super) fn evict_page(&mut self, page: usize) {
         let p16 = page as u16;
         self.map.retain(|_, v| v.mask().is_none_or(|g| g.page != p16));
@@ -343,14 +353,15 @@ impl Atlas {
         self.clock += 1;
         self.resets += 1;
         let age = self.clock;
+        let next_gen = self.alloc_page_gen();
         if page == 0 {
             self.dirty = None;
             self.shelf.reset(age);
-            self.page0_gen = self.page0_gen.wrapping_add(1);
+            self.page0_gen = next_gen;
         } else if let Some(p) = self.pages.get_mut(page - 1) {
             p.dirty = None;
             p.shelf.reset(age);
-            p.epoch = p.epoch.wrapping_add(1);
+            p.epoch = next_gen;
         }
     }
 
@@ -456,7 +467,8 @@ impl Atlas {
         }
         if total < MAX_OVERFLOW_PAGES {
             self.clock += 1;
-            let mut page = AtlasPage::new(self.clock);
+            let epoch = self.alloc_page_gen();
+            let mut page = AtlasPage::new(self.clock, epoch);
             let (x, y) = page.shelf.alloc(w, h).unwrap();
             self.pages.push(page);
             return Some((self.pages.len(), x, y));
@@ -508,6 +520,17 @@ impl Atlas {
         self.write_bordered_unchecked(slot, px, cov);
         self.rasterized += 1;
         Some((slot, epoch))
+    }
+
+    /// Returns whether `slot`'s row band still has un-uploaded pixels pending on `slot.page`.
+    pub(super) fn slot_dirty(&self, slot: AtlasGlyph) -> bool {
+        let dirty = if slot.page == 0 {
+            self.dirty
+        } else {
+            self.pages.get(slot.page as usize - 1).and_then(|p| p.dirty)
+        };
+        let (y0, y1) = (slot.y.saturating_sub(1), slot.y.saturating_add(slot.h + 1));
+        dirty.is_some_and(|(d0, d1)| d0 < y1 && d1 > y0)
     }
 
     /// Rewrites an existing `(px + 2) × (px + 2)` bordered icon slot in place if its page has not

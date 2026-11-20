@@ -953,7 +953,21 @@ fn paint_animated_icon(
         crate::text::AnimState::Finished => {}
     }
     let inst = icon_inst(&anim.quad, at, draw_side, turn, premul(color, o, srgb), clip, fade);
+    let slot_index = instances.len();
     if paint.paint_rank.is_some() && inst.uv[2] > 0.0 { paint.icon_aprons.push(apron_key(&inst)); }
+    if !matches!(anim.state, crate::text::AnimState::Finished) {
+        paint.keep.cycles.record_icon(super::keep::cycle::IconSlot {
+            at: slot_index,
+            node_id,
+            ic,
+            sized,
+            origin: at,
+            draw_side,
+            turn,
+            facing,
+            rect: inst.rect,
+        });
+    }
     instances.push(inst);
     true
 }

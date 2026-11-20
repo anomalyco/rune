@@ -388,7 +388,9 @@ impl FrameHost for WindowFrame<'_> {
         let step = if self.state.only_loops { loop_step(&mut self.host.clock, self.host.app.rt_mut(), at) } else { Err("") };
         let (animating, dt) = match step {
             Ok((patched, dt)) => {
-                self.state.looped = Some(patched);
+                if !patched.is_empty() {
+                    self.state.looped = Some(patched);
+                }
                 (self.host.app.rt().animating, dt)
             }
             Err(why) => {
@@ -481,7 +483,9 @@ impl FrameHost for WindowFrame<'_> {
             self.host.clock.hold(frame_time);
             (self.host.app.frame(0.0), 0.0)
         } else if let Ok((patched, dt)) = stepped {
-            self.state.looped = Some(patched);
+            if !patched.is_empty() {
+                self.state.looped = Some(patched);
+            }
             (self.host.app.rt().animating, dt)
         } else {
             let compositing = self.host.app.compositor_animating();

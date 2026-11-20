@@ -29,6 +29,20 @@ pub(crate) use parse::{compile, may_be_animated};
 const MAX_CACHED_PLANS: usize = 256;
 /// CPU byte budget for cached last-frame coverage buffers (`last_cov`) before frame-boundary eviction.
 const COVERAGE_BUDGET: usize = 2 * 1024 * 1024;
+/// Maximum cadence for animated monochrome SVG icons (matches Rune's `Cycle` spinner at 30 Hz).
+/// Combined with next-pixel-change probing so wakes fire only when quantized coverage bytes differ.
+const ICON_ANIM_STEP: f64 = 1.0 / 30.0;
+/// Maximum forward probes per frame when scanning for the next quantized pixel change (12 × 33.3 ms = 0.4 s).
+const MAX_PIXEL_PROBES: usize = 12;
+
+/// User-space composed transform safety bound (enforced inside `parse_transform_bounded` and
+/// `resolve_transform` before multiplying by device scale `size / view`).
+pub(super) fn local_ctm_is_safe(m: Transform) -> bool {
+    let vals = [m.xx, m.xy, m.yx, m.yy, m.x, m.y];
+    vals.iter().all(|v| v.is_finite())
+        && m.xx.abs().max(m.xy.abs()).max(m.yx.abs()).max(m.yy.abs()) <= MAX_SCALE
+        && m.x.abs().max(m.y.abs()) <= MAX_COORD
+}
 
 type FxMap<K, V> = HashMap<K, V, BuildHasherDefault<rune_motion::Fx>>;
 
@@ -36,10 +50,12 @@ type FxMap<K, V> = HashMap<K, V, BuildHasherDefault<rune_motion::Fx>>;
 #[doc(hidden)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum AnimState {
-    /// At least one track is actively interpolating right now: keep advancing frames.
+    /// At least one track is actively interpolating right now (internal; `frame_quad` paces
+    /// moving tracks into [`Self::WaitingUntil`] at the next quantized pixel change).
     Moving,
-    /// All active tracks are on flat holds (`begin > t`, flat keyframe segment, discrete plateau,
-    /// or timed `<set>`): sleep and wake once at the returned runtime timestamp (seconds).
+    /// Sleep and wake once at the returned runtime timestamp (seconds) — either for the next
+    /// quantized pixel change during active motion (at <= 30 Hz) or after a flat hold / `begin`
+    /// wait / discrete plateau / timed `<set>`.
     WaitingUntil(f64),
     /// All finite tracks have finished (or `<set>` without `dur` has already applied): stop
     /// scheduling frames and re-enable `El::cache` / `PaintKeep`.
@@ -52,6 +68,9 @@ pub enum AnimState {
 pub struct AnimatedQuad {
     pub quad: GlyphQuad,
     pub state: AnimState,
+    /// True when this call wrote/flipped the atlas slot; false when quantized pixels matched the
+    /// already-displayed slot (allowing `loop_step` / `is_unchanged` to skip presenting).
+    pub changed: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -66,6 +85,7 @@ struct SlotEntry {
     slots: [Option<(AtlasGlyph, u64)>; 2],
     cur: u8,
     last_cov: Vec<u8>,
+    last_t: f64,
     last_sample_t: f64,
     last_state: AnimState,
     used: bool,
@@ -78,9 +98,11 @@ pub(crate) struct AnimatedIcons {
     cov_bytes: usize,
     /// Reusable per-frame scratch buffers (zero heap allocation in steady state).
     scratch_cov: Vec<u8>,
+    scratch_probe_cov: Vec<u8>,
     scratch_buf: Vec<u8>,
     scratch_layers: Vec<(Vec<u8>, f32)>,
     scratch_overrides: Vec<NodeOverrides>,
+    scratch_scopes: Vec<RenderScope>,
     has_any: bool,
 }
 
@@ -134,7 +156,8 @@ impl AnimatedIcons {
         let mut buf = vec![0u8; len];
         let mut layers = Vec::new();
         let mut ov = Vec::new();
-        plan.render_into(px, size, origin, 0.0, 0.0, &mut cov, &mut buf, &mut layers, &mut ov);
+        let mut scopes = Vec::with_capacity(parse::MAX_DEPTH);
+        plan.render_into(px, size, origin, 0.0, 0.0, &mut cov, &mut buf, &mut layers, &mut ov, &mut scopes);
         Some(cov)
     }
 
@@ -164,22 +187,32 @@ impl AnimatedIcons {
         let snapped_size = px as f32 - short as f32 / 64.0;
         let key = SlotKey { icon_ptr, px_packed, scope };
 
-        // Same frame / timestamp deduplication (e.g. multiple instances of the same icon).
+        // Same timestamp, active hold/paced interval, or finished finite animation: reuse the
+        // current atlas slot with zero re-rasterization or probing.
         if let Some(entry) = self.slots.get_mut(&key)
-            && (entry.last_sample_t - sample_t).abs() <= 1e-9
             && let Some((slot, epoch)) = entry.slots[entry.cur as usize]
             && atlas.page_gen(slot.page) == epoch
         {
-            entry.used = true;
-            atlas.touch(slot.page, slot.w * slot.h);
-            return Some(AnimatedQuad { quad: make_quad(slot, origin, px), state: entry.last_state });
+            let same_ts = (entry.last_sample_t - sample_t).abs() <= 1e-9;
+            let still_waiting = sample_t >= entry.last_sample_t
+                && t >= entry.last_t
+                && match entry.last_state {
+                    AnimState::Finished => true,
+                    AnimState::WaitingUntil(wake) => t + 1e-6 < wake,
+                    AnimState::Moving => false,
+                };
+            if same_ts || still_waiting {
+                entry.used = true;
+                atlas.touch(slot.page, slot.w * slot.h);
+                return Some(AnimatedQuad { quad: make_quad(slot, origin, px), state: entry.last_state, changed: false });
+            }
         }
 
         // Evaluate compiled AST directly into reusable scratch coverage (zero XML parse, zero clone).
         let needed = (px as usize).checked_mul(px as usize)?;
         self.scratch_cov.resize(needed, 0);
         self.scratch_buf.resize(needed, 0);
-        let state = plan.render_into(
+        let raw_state = plan.render_into(
             px,
             snapped_size,
             Point::new(0.0, 0.0),
@@ -189,13 +222,61 @@ impl AnimatedIcons {
             &mut self.scratch_buf,
             &mut self.scratch_layers,
             &mut self.scratch_overrides,
+            &mut self.scratch_scopes,
         );
         if facing == Facing::Mirrored {
             self.scratch_cov.chunks_exact_mut(px as usize).for_each(<[u8]>::reverse);
         }
 
+        // Pace `Moving` through `WaitingUntil` at <= 30 Hz, probing ahead so the next wake lands
+        // on a timestamp where quantized coverage bytes actually differ from `scratch_cov`.
+        let state = match raw_state {
+            AnimState::Moving => {
+                self.scratch_probe_cov.resize(needed, 0);
+                let mut chosen = AnimState::WaitingUntil(t + MAX_PIXEL_PROBES as f64 * ICON_ANIM_STEP);
+                for k in 1..=MAX_PIXEL_PROBES {
+                    let dt = k as f64 * ICON_ANIM_STEP;
+                    let pt = sample_t + dt;
+                    let rt = t + dt;
+                    let ps = plan.render_into(
+                        px,
+                        snapped_size,
+                        Point::new(0.0, 0.0),
+                        pt,
+                        rt,
+                        &mut self.scratch_probe_cov,
+                        &mut self.scratch_buf,
+                        &mut self.scratch_layers,
+                        &mut self.scratch_overrides,
+                        &mut self.scratch_scopes,
+                    );
+                    if facing == Facing::Mirrored {
+                        self.scratch_probe_cov.chunks_exact_mut(px as usize).for_each(<[u8]>::reverse);
+                    }
+                    if self.scratch_probe_cov.as_slice() != self.scratch_cov.as_slice() {
+                        chosen = AnimState::WaitingUntil(rt);
+                        break;
+                    }
+                    match ps {
+                        AnimState::Finished => {
+                            chosen = AnimState::Finished;
+                            break;
+                        }
+                        AnimState::WaitingUntil(w) => {
+                            chosen = AnimState::WaitingUntil(w);
+                            break;
+                        }
+                        AnimState::Moving => {}
+                    }
+                }
+                chosen
+            }
+            other => other,
+        };
+
         if let Some(entry) = self.slots.get_mut(&key) {
             entry.used = true;
+            entry.last_t = t;
             entry.last_sample_t = sample_t;
             entry.last_state = state;
             let cur_slot = entry.slots[entry.cur as usize];
@@ -206,11 +287,18 @@ impl AnimatedIcons {
                 && entry.last_cov.as_slice() == self.scratch_cov.as_slice()
             {
                 atlas.touch(slot.page, slot.w * slot.h);
-                return Some(AnimatedQuad { quad: make_quad(slot, origin, px), state });
+                return Some(AnimatedQuad { quad: make_quad(slot, origin, px), state, changed: false });
             }
             // Write into the OTHER slot of the double-buffered pair so UV flips and Windows
-            // `Damage::plan` sees ONLY this icon's `KIND_GLYPH` instance change.
-            let next_idx = if valid_cur.is_some() { 1 - entry.cur as usize } else { 0 };
+            // `Damage::plan` / `arm_loop` sees ONLY this icon's `KIND_GLYPH` instance change.
+            // If `valid_cur` is still pending upload (the previous frame missed its drawable),
+            // overwrite `entry.cur` in place so we never overwrite the on-screen slot or flip UV
+            // back to match the last presented instance.
+            let next_idx = match valid_cur {
+                Some((s, _)) if atlas.slot_dirty(s) => entry.cur as usize,
+                Some(_) => 1 - entry.cur as usize,
+                None => 0,
+            };
             let placed = match entry.slots[next_idx] {
                 Some((slot, epoch)) if atlas.write_bordered(slot, epoch, px, &self.scratch_cov) => Some((slot, epoch)),
                 _ => {
@@ -225,7 +313,7 @@ impl AnimatedIcons {
                 entry.last_cov.resize(self.scratch_cov.len(), 0);
             }
             entry.last_cov.copy_from_slice(&self.scratch_cov);
-            return Some(AnimatedQuad { quad: make_quad(placed.0, origin, px), state });
+            return Some(AnimatedQuad { quad: make_quad(placed.0, origin, px), state, changed: true });
         }
 
         // First allocation for this (icon, size, facing, scope): only commit budget after `put_bordered` succeeds.
@@ -238,12 +326,13 @@ impl AnimatedIcons {
                 slots: [Some(first), None],
                 cur: 0,
                 last_cov,
+                last_t: t,
                 last_sample_t: sample_t,
                 last_state: state,
                 used: true,
             },
         );
-        Some(AnimatedQuad { quad: make_quad(first.0, origin, px), state })
+        Some(AnimatedQuad { quad: make_quad(first.0, origin, px), state, changed: true })
     }
 }
 
@@ -305,15 +394,18 @@ impl NodeOverrides {
         }
     }
 
-    fn resolve_transform(&self, base: Transform) -> Transform {
+    fn resolve_transform(&self, base: Transform) -> Option<Transform> {
         if self.transforms.is_empty() {
-            return base;
+            return Some(base);
         }
-        let mut cur = if self.transforms[0].1 { base } else { Transform::IDENTITY };
-        for &(tr, _) in &self.transforms {
-            cur = then(tr, cur);
+        let mut cur = base;
+        for &(tr, sum) in &self.transforms {
+            cur = if sum { then(tr, cur) } else { tr };
+            if !local_ctm_is_safe(cur) {
+                return None;
+            }
         }
-        cur
+        Some(cur)
     }
 }
 
@@ -362,9 +454,11 @@ impl CompiledAnim {
         buf: &mut [u8],
         layers: &mut Vec<(Vec<u8>, f32)>,
         overrides: &mut Vec<NodeOverrides>,
+        scope_stack: &mut Vec<RenderScope>,
     ) -> AnimState {
         acc.fill(0);
         layers.clear();
+        scope_stack.clear();
         if overrides.len() < self.node_count {
             overrides.resize_with(self.node_count, NodeOverrides::default);
         }
@@ -391,26 +485,30 @@ impl CompiledAnim {
 
         let s = size / self.view;
         let root_paint = ResolvedPaint::default();
-        let mut scope_stack: Vec<RenderScope> = Vec::with_capacity(parse::MAX_DEPTH);
         let root_ctm = Transform::scale(s, s);
 
         for op in &self.ops {
             match op {
-                Op::PushGroup { node_id, transform, opacity, display_none, paint, has_opacity_anim } => {
+                Op::PushGroup { node_id, transform, opacity, display_none, paint, .. } => {
                     let up_ctm = scope_stack.last().map_or(root_ctm, |sc| sc.ctm);
                     let up_paints = scope_stack.last().is_none_or(|sc| sc.paints);
                     let up_paint = scope_stack.last().map_or(root_paint, |sc| sc.paint);
                     let ov = &overrides[*node_id as usize];
-                    let local_ctm = ov.resolve_transform(*transform);
-                    let ctm = then(local_ctm, up_ctm);
-                    let paints = up_paints && !*display_none;
+                    let (ctm, ctm_ok) = match ov.resolve_transform(*transform) {
+                        Some(local_ctm) => {
+                            let composed = then(local_ctm, up_ctm);
+                            (composed, super::ctm_is_safe(composed))
+                        }
+                        None => (up_ctm, false),
+                    };
                     let alpha = ov.resolve(AttrKind::Opacity, *opacity).clamp(0.0, 1.0);
+                    let paints = up_paints && ctm_ok && !*display_none && alpha > 0.0;
                     let next_paint = up_paint.inherit(*paint, ov);
-                    let layer = paints && (alpha < 1.0 || (*has_opacity_anim && alpha < 1.0)) && layers.len() < MAX_LAYERS;
+                    let layer = paints && alpha < 1.0 && layers.len() < MAX_LAYERS;
                     if layer {
                         layers.push((vec![0u8; acc.len()], alpha));
                     }
-                    scope_stack.push(RenderScope { ctm, paints: paints && alpha > 0.0, paint: next_paint, layer });
+                    scope_stack.push(RenderScope { ctm, paints, paint: next_paint, layer });
                 }
                 Op::PopGroup => {
                     if scope_stack.pop().is_some_and(|sc| sc.layer)
@@ -430,7 +528,11 @@ impl CompiledAnim {
                     if whole <= 0.0 {
                         continue;
                     }
-                    let ctm = then(ov.resolve_transform(*transform), up_ctm);
+                    let Some(local_ctm) = ov.resolve_transform(*transform) else { continue };
+                    let ctm = then(local_ctm, up_ctm);
+                    if !super::ctm_is_safe(ctm) {
+                        continue;
+                    }
                     let up_paint = scope_stack.last().map_or(root_paint, |sc| sc.paint);
                     let resolved = up_paint.inherit(*paint, ov);
                     let into = layers.last_mut().map_or(&mut *acc, |l| &mut l.0);
@@ -486,14 +588,14 @@ impl Default for ResolvedPaint {
 impl ResolvedPaint {
     fn inherit(self, props: PaintProps, ov: &NodeOverrides) -> Self {
         let stroke_width = ov
-            .resolve_opt(AttrKind::StrokeWidth, props.stroke_width)
-            .map_or(self.stroke_width, |v| v.clamp(0.0, MAX_STROKE_WIDTH));
+            .resolve(AttrKind::StrokeWidth, props.stroke_width.unwrap_or(self.stroke_width))
+            .clamp(0.0, MAX_STROKE_WIDTH);
         let fill_opacity = ov
-            .resolve_opt(AttrKind::FillOpacity, props.fill_opacity)
-            .map_or(self.fill_opacity, |v| v.clamp(0.0, 1.0));
+            .resolve(AttrKind::FillOpacity, props.fill_opacity.unwrap_or(self.fill_opacity))
+            .clamp(0.0, 1.0);
         let stroke_opacity = ov
-            .resolve_opt(AttrKind::StrokeOpacity, props.stroke_opacity)
-            .map_or(self.stroke_opacity, |v| v.clamp(0.0, 1.0));
+            .resolve(AttrKind::StrokeOpacity, props.stroke_opacity.unwrap_or(self.stroke_opacity))
+            .clamp(0.0, 1.0);
         Self {
             fill: props.fill.or(self.fill),
             stroke: props.stroke.unwrap_or(self.stroke),

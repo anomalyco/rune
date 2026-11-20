@@ -28,6 +28,14 @@ impl RuntimeCore {
         self.motion.arm_loop_wake(wake, at);
     }
 
+    /// Wakes for a paced animated SVG icon without marking `cycles.mixed`, so icon-only wakes take
+    /// the zero-paint-walk `loop_step` / `arm_loop` fast path.
+    fn wake_for_icon_anim(&mut self, at: f64) {
+        if !self.frame.live.visible() || self.time_scale <= 0.0 { return; }
+        let wake = self.clock + (at - self.t).max(0.0) / self.time_scale as f64;
+        self.motion.arm_loop_wake(wake, at);
+    }
+
     /// Wakes for one frame at clock time `due` and draws nothing before it, as a delayed start
     /// does: an instant scroll's hover hold asks for the frame it lets go on this way, so a
     /// resting window draws no frame while the hold waits.
@@ -128,7 +136,7 @@ impl RuntimeCore {
             self.check_resting_raster();
         }
         if let Some(at) = waits { self.wake_for_motion(at); }
-        if let Some(at) = self.paint.icon_anim_wake() { self.wake_for_motion(at); }
+        if let Some(at) = self.paint.icon_anim_wake() { self.wake_for_icon_anim(at); }
         // An instant scroll's hold draws nothing until it ends: wake for the one frame that
         // resolves hover then, taken from the state each frame so a re-arm moves it on.
         if let Some(due) = hold_wake { self.wake_for_clock(due); }

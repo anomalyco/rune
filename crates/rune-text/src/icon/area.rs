@@ -285,9 +285,15 @@ fn inside_quad(quad: &[Point; 4], q: Point) -> f32 {
 /// curves approximated for the device scale, then mapped to device pixels).
 pub(super) fn render_aaa(shape: &Shape<'_>, pen: Option<&Pen>, fill: Fill, ctm: Transform, origin: Point, px: u32, out: &mut [u8]) {
     out.iter_mut().for_each(|b| *b = 0);
+    if !super::ctm_is_safe(ctm) {
+        return;
+    }
     let shape_in = shape;
     let ts = tiny_skia_path::Transform::from_row(ctm.xx, ctm.xy, ctm.yx, ctm.yy, ctm.x, ctm.y);
     let res = tiny_skia_path::PathStroker::compute_resolution_scale(&ts);
+    if !res.is_finite() || res <= 0.0 || res > 256.0 {
+        return;
+    }
     let Some(user) = skia_path(shape, 0.25 / res) else { return };
     let shape = match pen {
         Some(p) => {
