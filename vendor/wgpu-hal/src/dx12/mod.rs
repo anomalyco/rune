@@ -885,7 +885,11 @@ impl DrainMarker {
     /// comparison stays valid across slot reuse and `u32` wrap-around up to 2^31 lists).
     fn is_done(&self, slot: u32, tag: u32) -> bool {
         let observed = self.read(slot);
-        observed != 0 && (observed.wrapping_sub(tag) as i32) >= 0
+        let done = observed != 0 && (observed.wrapping_sub(tag) as i32) >= 0;
+        if done && observed != tag {
+            PROOF_WRAP_DONE_HITS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        }
+        done
     }
 }
 
@@ -894,6 +898,33 @@ pub(super) struct DrainTracker {
     in_flight: Mutex<VecDeque<(u32, u32)>>,
     drain_gate: Mutex<()>,
     removed: core::sync::atomic::AtomicBool,
+}
+
+/// PROOF ONLY counters (never merged).
+static PROOF_RECORD_COUNT: AtomicU64 = AtomicU64::new(0);
+static PROOF_WRAP_DONE_HITS: AtomicU64 = AtomicU64::new(0);
+static PROOF_WAIT_TIMEOUTS: AtomicU64 = AtomicU64::new(0);
+static PROOF_WAIT_STUCK_COUNT: AtomicU64 = AtomicU64::new(0);
+static PROOF_LAST_PRUNED_LEN: AtomicU64 = AtomicU64::new(0);
+
+pub fn proof_record_count() -> u64 {
+    PROOF_RECORD_COUNT.load(core::sync::atomic::Ordering::Relaxed)
+}
+
+pub fn proof_wrap_done_hits() -> u64 {
+    PROOF_WRAP_DONE_HITS.load(core::sync::atomic::Ordering::Relaxed)
+}
+
+pub fn proof_wait_timeouts() -> u64 {
+    PROOF_WAIT_TIMEOUTS.load(core::sync::atomic::Ordering::Relaxed)
+}
+
+pub fn proof_wait_stuck_count() -> u64 {
+    PROOF_WAIT_STUCK_COUNT.load(core::sync::atomic::Ordering::Relaxed)
+}
+
+pub fn proof_last_pruned_len() -> u64 {
+    PROOF_LAST_PRUNED_LEN.load(core::sync::atomic::Ordering::Relaxed)
 }
 
 impl DrainTracker {
@@ -943,6 +974,7 @@ impl DrainTracker {
         let mode = Direct3D12::D3D12_WRITEBUFFERIMMEDIATE_MODE_MARKER_OUT;
         // SAFETY: `Dest` is 4-byte aligned in `state.resource` (`COPY_DEST`); `list2` is open.
         unsafe { list2.WriteBufferImmediate(1, &param, Some(&mode)) };
+        PROOF_RECORD_COUNT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         Some((slot, tag))
     }
 
@@ -964,6 +996,7 @@ impl DrainTracker {
         if in_flight.len() > 64 {
             in_flight.retain(|&(slot, tag)| !state.is_done(slot, tag));
         }
+        PROOF_LAST_PRUNED_LEN.store(in_flight.len() as u64, core::sync::atomic::Ordering::Relaxed);
         for cmd_buf in command_buffers {
             if let Some(marker) = cmd_buf.marker {
                 in_flight.push_back(marker);
@@ -985,6 +1018,7 @@ impl DrainTracker {
             self.removed.store(true, core::sync::atomic::Ordering::Release);
             in_flight.retain(|&(slot, tag)| !state.is_done(slot, tag));
             if in_flight.is_empty() {
+                PROOF_WAIT_STUCK_COUNT.store(0, core::sync::atomic::Ordering::Relaxed);
                 return;
             }
             mem::take(&mut *in_flight)
@@ -995,6 +1029,7 @@ impl DrainTracker {
             let before = pending.len();
             pending.retain(|&(slot, tag)| !state.is_done(slot, tag));
             if pending.is_empty() {
+                PROOF_WAIT_STUCK_COUNT.store(0, core::sync::atomic::Ordering::Relaxed);
                 return;
             }
             let now = std::time::Instant::now();
@@ -1004,6 +1039,8 @@ impl DrainTracker {
             if now.duration_since(last_progress) >= DRAIN_STALL_TIMEOUT
                 || now.duration_since(started) >= DRAIN_TOTAL_TIMEOUT
             {
+                PROOF_WAIT_TIMEOUTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                PROOF_WAIT_STUCK_COUNT.store(pending.len() as u64, core::sync::atomic::Ordering::Relaxed);
                 return;
             }
             std::thread::sleep(core::time::Duration::from_millis(1));

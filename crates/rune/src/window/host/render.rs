@@ -355,13 +355,25 @@ pub(super) fn submit_and_present_window(
     let (Some(l), Some((gpu, renderer))) = (host.win.as_mut(), host.gpu.as_mut()) else {
         return crate::time::now();
     };
+    #[cfg(target_os = "windows")]
+    let proof_rec_before = std::env::var_os("RUNE_PROOF_WINDOW_MIDFRAME")
+        .map(|_| wgpu::hal::dx12::proof_record_count());
     renderer.submit(&gpu.queue, prepared.encoder);
     #[cfg(target_os = "windows")]
     if std::env::var_os("RUNE_PROOF_WINDOW_MIDFRAME").is_some() {
-        use std::sync::atomic::{AtomicU32, Ordering};
+        use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
         static FRAME_N: AtomicU32 = AtomicU32::new(0);
+        static PREV_REC: AtomicU64 = AtomicU64::new(0);
         let n = FRAME_N.fetch_add(1, Ordering::Relaxed) + 1;
-        eprintln!("PROOF_FRAME n={n} adapter={:?}", gpu.adapter.get_info().name);
+        let rec_now = wgpu::hal::dx12::proof_record_count();
+        let rec_prev = PREV_REC.swap(rec_now, Ordering::Relaxed);
+        let rec_submit = proof_rec_before.map_or(0, |b| rec_now.saturating_sub(b));
+        eprintln!(
+            "PROOF_FRAME n={n} adapter={:?} hal_lists_frame={} hal_lists_in_submit={} total_hal_lists={rec_now}",
+            gpu.adapter.get_info().name,
+            rec_now.saturating_sub(rec_prev),
+            rec_submit,
+        );
         if n == 2 {
             // Queue ~40 ms of compute on the window's queue so heavy work + frame 2 are in flight.
             let info = gpu.adapter.get_info();
