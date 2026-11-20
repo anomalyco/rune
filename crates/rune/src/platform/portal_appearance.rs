@@ -3,10 +3,10 @@
 //! app set one, so hosts ask here before falling back to dark. A worker thread reads the setting
 //! once and follows `SettingChanged`; a change asks every window to redraw, which rereads it.
 
-use futures_util::StreamExt;
+use futures_lite::StreamExt;
 use std::{sync::{Arc, Mutex, OnceLock, Weak, atomic::{AtomicU8, Ordering}, mpsc}, time::Duration};
 use winit::window::Window;
-use zbus::{Connection, OwnedVariant, Proxy, Variant};
+use zbus::{Connection, Proxy, zvariant::{OwnedValue, Value}};
 
 use super::portal::{self, DEST, PATH};
 
@@ -47,15 +47,15 @@ fn scheme_dark(scheme: u32) -> Option<bool> {
 }
 
 /// `color-scheme` as a `u32`. Portals answer `v`, and `Read` (before `ReadOne`) wraps it twice.
-fn scheme(value: &Variant<'_>) -> Option<u32> {
+fn scheme(value: &Value<'_>) -> Option<u32> {
     match value {
-        Variant::U32(x) => Some(*x),
-        Variant::Variant(inner) => scheme(inner),
+        Value::U32(x) => Some(*x),
+        Value::Value(inner) => scheme(inner),
         _ => None,
     }
 }
 
-fn store(value: &Variant<'_>) {
+fn store(value: &Value<'_>) {
     let Some(scheme) = scheme(value) else { return };
     let scheme = if scheme <= 2 { scheme as u8 } else { 0 };
     if SCHEME.swap(scheme, Ordering::Relaxed) == scheme { return; }
@@ -67,21 +67,20 @@ fn store(value: &Variant<'_>) {
 fn start() {
     let (ready, first) = mpsc::sync_channel(1);
     let worker = std::thread::Builder::new().name("rune-appearance-portal".into()).spawn(move || {
-        let Ok(runtime) = tokio::runtime::Builder::new_current_thread().enable_all().build() else { return };
-        runtime.block_on(watch(ready));
+        async_io::block_on(watch(ready));
     });
     if worker.is_ok() { let _ = first.recv_timeout(FIRST_ANSWER); }
 }
 
 async fn watch(ready: mpsc::SyncSender<()>) {
-    let setup = tokio::time::timeout(RPC_TIMEOUT, async {
+    let setup = portal::timeout(RPC_TIMEOUT, async {
         let conn = Connection::session().await.ok()?;
         let portal = Proxy::new(&conn, DEST, PATH, INTERFACE).await.ok()?;
         // Subscribe first, so a change between the read and the subscription isn't lost.
         let changes = portal.receive_signal("SettingChanged").await.ok()?;
-        let (read_ok, unavailable) = match portal.call::<_, _, OwnedVariant>("ReadOne", &(NAMESPACE, KEY)).await {
+        let (read_ok, unavailable) = match portal.call::<_, _, OwnedValue>("ReadOne", &(NAMESPACE, KEY)).await {
             Ok(v) => { store(&v); (true, false) }
-            Err(first) => match portal.call::<_, _, OwnedVariant>("Read", &(NAMESPACE, KEY)).await {
+            Err(first) => match portal.call::<_, _, OwnedValue>("Read", &(NAMESPACE, KEY)).await {
                 Ok(v) => { store(&v); (true, false) }
                 Err(second) => (false, portal::is_unavailable(&first) && portal::is_unavailable(&second)),
             },
@@ -91,11 +90,11 @@ async fn watch(ready: mpsc::SyncSender<()>) {
             return None;
         }
         Some((conn, changes))
-    }).await.ok().flatten();
+    }).await.flatten();
     let _ = ready.send(());
     let Some((_conn, mut changes)) = setup else { return };
     while let Some(message) = changes.next().await {
-        if let Ok((namespace, key, value)) = message.body().deserialize::<(String, String, OwnedVariant)>()
+        if let Ok((namespace, key, value)) = message.body().deserialize::<(String, String, OwnedValue)>()
             && namespace == NAMESPACE && key == KEY
         {
             store(&value);
