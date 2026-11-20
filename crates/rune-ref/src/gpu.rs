@@ -33,7 +33,10 @@ impl From<&Primitive> for Instance {
     fn from(p: &Primitive) -> Self {
         let mut instance = Self {
             rect: p.rect,
-            radii: p.radii,
+            // `Scene` carries one grayscale R8 glyph atlas and no outline store; clear legacy
+            // non-zero `radii` and `params[2]` on glyphs so Windfoil never routes them to
+            // `outline_glyph`, `lcd_mask`, or secondary atlas pages.
+            radii: if p.params[1] == 2.0 { [0.0; 4] } else { p.radii },
             fill: p.fill,
             border: if p.params[1] == 8.0 {
                 let [a, x, y] = p.turn.unwrap_or([0.0; 3]);
@@ -41,7 +44,7 @@ impl From<&Primitive> for Instance {
             } else {
                 p.border
             },
-            params: p.params,
+            params: if p.params[1] == 2.0 { [p.params[0], p.params[1], 0.0, p.params[3]] } else { p.params },
             uv: p.uv,
             clip: p.clip,
             fade: rune::render::pack_fade(p.fade, p.fade_origin.unwrap_or(p.clip), p.clip),
