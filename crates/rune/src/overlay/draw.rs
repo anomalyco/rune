@@ -623,7 +623,7 @@ impl OverlayCore {
             let _prewarm = panel.prewarm();
             self.dirty = true;
             self.draw_frame(app, true);
-            if let Some(gpu) = &self.gpu { let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely()); }
+            if let Some(gpu) = &self.gpu { let _ = rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely()); }
             return;
         }
         let Some(live) = self.surface.live() else { return };
@@ -645,6 +645,6 @@ impl OverlayCore {
             dt: 0.0, update_ms: 0.0, ui: renderer,
         });
         renderer.submit(&gpu.queue, enc);
-        let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+        let _ = rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely());
     }
 }

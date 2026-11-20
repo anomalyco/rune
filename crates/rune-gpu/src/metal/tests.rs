@@ -41,7 +41,7 @@ fn copy_out(encoder: &mut wgpu::CommandEncoder, from: &wgpu::Texture, to: &wgpu:
 
 fn read(device: &wgpu::Device, buffer: &wgpu::Buffer) -> Vec<u8> {
     let slice = buffer.slice(..);
-    slice.map_async(wgpu::MapMode::Read, |r| r.expect("map readback"));
+    slice.map_async(wgpu::MapMode::Read, |_| {});
     device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
     let out = slice.get_mapped_range().unwrap().to_vec();
     buffer.unmap();
@@ -305,7 +305,7 @@ fn a_map_waits_for_the_work_before_it() {
     let index = queue.submit([encoder.finish()]);
     let mapped = Arc::new(AtomicBool::new(false));
     let flag = mapped.clone();
-    out.slice(..).map_async(wgpu::MapMode::Read, move |r| { r.unwrap(); flag.store(true, Ordering::SeqCst) });
+    out.slice(..).map_async(wgpu::MapMode::Read, move |r| { if r.is_ok() { flag.store(true, Ordering::SeqCst) } });
     assert!(!mapped.load(Ordering::SeqCst), "callbacks wait for a poll after their work");
     device.poll(wgpu::PollType::Wait { submission_index: Some(index), timeout: None }).unwrap();
     assert!(mapped.load(Ordering::SeqCst), "the callback runs once the work completed");

@@ -730,8 +730,10 @@ impl LightRenderer {
     pub fn read_timings(&self, device: &wgpu::Device) -> Option<Timings> {
         let (_, _, read) = self.query.as_ref()?;
         let slice = read.slice(..);
-        slice.map_async(wgpu::MapMode::Read, |r| r.expect("map timestamps"));
-        device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
+        // A map that failed (a lost device) shows as `get_mapped_range`'s error below; a lost or
+        // removed device reads as no timings.
+        slice.map_async(wgpu::MapMode::Read, |_| {});
+        rune_staging::health::poll(device, wgpu::PollType::wait_indefinitely()).ok()?;
         let ticks: Vec<u64> = {
             let data = slice.get_mapped_range().ok()?;
             bytemuck::cast_slice(&data).to_vec()

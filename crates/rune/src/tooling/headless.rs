@@ -418,7 +418,7 @@ fn run_headless(prep: HeadlessPrep, config: HeadlessConfig, app: &mut dyn Headle
     if let Some(video) = writer.finish().unwrap_or_else(|e| die(&e)) {
         eprintln!("rune: wrote {} ({written} frames at {fps} fps)", video.display());
     }
-    gpu.device.poll(wgpu::PollType::wait_indefinitely()).ok();
+    rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely()).ok();
 
     if let Some(p) = &args.strip { write_strip(p, &strip, (wp, hp), &crops_px, gap, args.cols); }
     if let (Some(g), Some(p)) = (state.gate, &gate_out) {

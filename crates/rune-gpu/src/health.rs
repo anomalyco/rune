@@ -37,6 +37,55 @@ impl ErrorLog {
     }
 }
 
+pub use rune_staging::health::{PollFailed, poll, removed};
+
+/// `removed` for one device, cheap enough to ask every frame: `removed` costs about 200 ns a
+/// call on D3D12 (`GetDeviceRemovedReason` is most of it), while this reads a fence of its own,
+/// never signalled, which D3D12 sets to `u64::MAX` when it removes the device.
+pub struct Removal {
+    #[cfg(target_os = "windows")]
+    fence: Option<RemovalFence>,
+}
+
+/// D3D12 fences are free-threaded.
+#[cfg(target_os = "windows")]
+struct RemovalFence(windows::Win32::Graphics::Direct3D12::ID3D12Fence);
+#[cfg(target_os = "windows")]
+// SAFETY: ID3D12Fence is free-threaded; it is only read.
+unsafe impl Send for RemovalFence {}
+#[cfg(target_os = "windows")]
+// SAFETY: as for Send.
+unsafe impl Sync for RemovalFence {}
+
+impl Removal {
+    /// Watches `device`; on other backends, and if the fence can't be made, it never reads removed.
+    pub fn watch(device: &wgpu::Device) -> Removal {
+        #[cfg(target_os = "windows")]
+        {
+            // SAFETY: a fence made on the device's D3D12 interface, only ever read.
+            let fence = unsafe { device.as_hal::<wgpu::hal::api::Dx12>() }
+                .and_then(|d| unsafe { d.raw_device().CreateFence(0, windows::Win32::Graphics::Direct3D12::D3D12_FENCE_FLAG_NONE) }.ok())
+                .map(RemovalFence);
+            Removal { fence }
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = device;
+            Removal {}
+        }
+    }
+
+    pub fn removed(&self) -> bool {
+        #[cfg(target_os = "windows")]
+        {
+            // SAFETY: a plain read of a live fence.
+            self.fence.as_ref().is_some_and(|f| unsafe { f.0.GetCompletedValue() } == u64::MAX)
+        }
+        #[cfg(not(target_os = "windows"))]
+        false
+    }
+}
+
 #[cfg(test)]
 #[path = "health_tests.rs"]
 mod tests;

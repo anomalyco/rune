@@ -510,7 +510,7 @@ fn timings() -> String {
             enc.copy_buffer_to_buffer(&qbuf, 0, &rbuf, 0, 128);
             ctx.queue.submit([enc.finish()]);
             let sl = rbuf.slice(..128);
-            sl.map_async(wgpu::MapMode::Read, |r| r.unwrap());
+            sl.map_async(wgpu::MapMode::Read, |_| {});
             ctx.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
             {
                 let d = sl.get_mapped_range().unwrap();

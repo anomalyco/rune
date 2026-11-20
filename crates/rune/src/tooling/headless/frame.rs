@@ -322,7 +322,7 @@ impl<F: FnMut(Shot, Vec<u8>)> FrameHost for HeadlessFrame<'_, '_, F> {
         }
         if s.has_comp {
             // Pace like a display link so a compositor's async readbacks (GPU timers) land between frames.
-            s.gpu.device.poll(wgpu::PollType::wait_indefinitely()).ok();
+            rune_gpu::health::poll(&s.gpu.device, wgpu::PollType::wait_indefinitely()).ok();
         }
         if let Some(tr) = s.trace.as_mut() {
             tr.frame_timed_core(self.app.rt_mut(), self.real_t * 1000.0, ms, FrameTiming::default());

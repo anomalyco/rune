@@ -20,7 +20,7 @@ pub(crate) fn configure(surface: &wgpu::Surface, gpu: &Gpu, config: &wgpu::Surfa
     // next maintains itself, at the soonest a poll. Without this, a device destroyed before it
     // reported itself configures nothing while `is_lost` still reads false, and the drawable
     // its surface is asked for panics.
-    gpu.device.poll(wgpu::PollType::Poll).ok();
+    rune_gpu::health::poll(&gpu.device, wgpu::PollType::Poll).ok();
     let error = pollster::block_on(internal.pop()).or(pollster::block_on(validation.pop()));
     if gpu.is_lost() { return Err(lost_device(config)); }
     match error {
