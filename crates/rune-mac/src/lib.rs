@@ -14,6 +14,8 @@ pub use quiet::launch;
 /// (from `poll`) until it returns true: the window doesn't exist during `setup`.
 pub fn remember_frame(name: &str) -> bool {
     #[cfg(target_os = "macos")]
+    // SAFETY: AppKit calls on the main thread (`poll`); `name` is NUL-terminated UTF-8 and every
+    // `objectAtIndex:` index is `< count`.
     unsafe {
         use objc2::{class, msg_send, runtime::AnyObject};
         let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
@@ -38,6 +40,8 @@ pub fn remember_frame(name: &str) -> bool {
 #[cfg(target_os = "macos")]
 unsafe fn key_window() -> *mut objc2::runtime::AnyObject {
     use objc2::{class, msg_send, runtime::AnyObject};
+    // SAFETY: called on the AppKit main thread; `sharedApplication`, `keyWindow`, and `mainWindow`
+    // are standard AppKit selectors returning an `NSWindow *` or null.
     unsafe {
         let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
         let w: *mut AnyObject = msg_send![app, keyWindow];
@@ -49,6 +53,8 @@ unsafe fn key_window() -> *mut objc2::runtime::AnyObject {
 /// ⌃⌘F). Headless, with no window, it does nothing.
 pub fn toggle_full_screen() {
     #[cfg(target_os = "macos")]
+    // SAFETY: AppKit main-thread call; `toggleFullScreen:` is only sent to a non-null `NSWindow *`
+    // from `key_window()`, with a null sender.
     unsafe {
         use objc2::{msg_send, runtime::AnyObject};
         let w = key_window();
@@ -61,6 +67,8 @@ pub fn toggle_full_screen() {
 /// Whether the app's key window is in macOS full screen.
 pub fn is_full_screen() -> bool {
     #[cfg(target_os = "macos")]
+    // SAFETY: AppKit main-thread call; `styleMask` is only sent to a non-null `NSWindow *` from
+    // `key_window()`.
     unsafe {
         use objc2::msg_send;
         let w = key_window();
@@ -77,6 +85,8 @@ pub fn is_full_screen() -> bool {
 /// frame after the first layout resizes it, and the layout animates to the new size at launch.
 pub fn saved_size(name: &str) -> Option<(f32, f32)> {
     #[cfg(target_os = "macos")]
+    // SAFETY: `key` is NUL-terminated UTF-8; `NSUserDefaults` is thread-safe, `value` is checked
+    // non-null, and `UTF8String` returns a NUL-terminated C string alive for `value`.
     unsafe {
         use objc2::{class, msg_send, runtime::AnyObject};
         let key = std::ffi::CString::new(format!("NSWindow Frame {name}")).ok()?;

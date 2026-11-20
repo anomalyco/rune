@@ -44,16 +44,22 @@ fn windows_icon(path: &std::path::Path, px: u32) -> Result<(u32, u32, Vec<u8>), 
     buffer[..wide.len()].copy_from_slice(&wide);
     let side = px.min(256) as i32;
     let mut icon: HICON = std::ptr::null_mut();
+    // SAFETY: `buffer` is NUL-terminated within MAX_PATH and `&mut icon` holds the 1 requested handle.
     let extracted = unsafe { PrivateExtractIconsW(buffer.as_ptr(), 0, side, side, &mut icon, std::ptr::null_mut(), 1, 0) };
     if extracted == 0 || extracted == u32::MAX || icon.is_null() { return Err(err("no icon")); }
+    // SAFETY: `ICONINFO` is a plain Win32 C struct whose all-zero representation is valid.
     let mut info: ICONINFO = unsafe { std::mem::zeroed() };
+    // SAFETY: `icon` is a live `HICON` from `PrivateExtractIconsW` and `&mut info` is writable; any returned bitmaps are deleted below.
     if unsafe { GetIconInfo(icon, &mut info) } == 0 {
+        // SAFETY: `icon` is owned by this function and unused after returning.
         unsafe { DestroyIcon(icon) };
         return Err(err("unreadable icon"));
     }
     let result = (|| {
         if info.hbmColor.is_null() { return Err(err("monochrome icon")); }
+        // SAFETY: `BITMAP` is a plain Win32 C struct whose all-zero representation is valid.
         let mut bitmap: BITMAP = unsafe { std::mem::zeroed() };
+        // SAFETY: `info.hbmColor` is a live non-null `HBITMAP` and `&raw mut bitmap` holds `size_of::<BITMAP>()` writable bytes.
         if unsafe { GetObjectW(info.hbmColor, std::mem::size_of::<BITMAP>() as i32, (&raw mut bitmap).cast()) } == 0 {
             return Err(err("unreadable icon bitmap"));
         }
@@ -67,13 +73,18 @@ fn windows_icon(path: &std::path::Path, px: u32) -> Result<(u32, u32, Vec<u8>), 
                 biPlanes: 1,
                 biBitCount: 32,
                 biCompression: BI_RGB,
+                // SAFETY: `BITMAPINFOHEADER` is a plain Win32 C struct whose remaining fields are valid when zeroed.
                 ..unsafe { std::mem::zeroed() }
             },
+            // SAFETY: `BITMAPINFO` is a plain Win32 C struct whose remaining color-table field is valid when zeroed.
             ..unsafe { std::mem::zeroed() }
         };
         let mut pixels = vec![0u8; w as usize * h as usize * 4];
+        // SAFETY: passing null creates a screen-compatible memory DC (or null on failure), deleted below.
         let dc = unsafe { CreateCompatibleDC(std::ptr::null_mut()) };
+        // SAFETY: `info.hbmColor` is a live `w`×`h` bitmap, `pixels` holds `w * h * 4` writable bytes for the 32-bpp `header`, and a null `dc` returns 0.
         let rows = unsafe { GetDIBits(dc, info.hbmColor, 0, h as u32, pixels.as_mut_ptr().cast(), &mut header, DIB_RGB_COLORS) };
+        // SAFETY: `dc` came from `CreateCompatibleDC` above and is not used afterwards.
         unsafe { DeleteDC(dc) };
         if rows == 0 { return Err(err("unreadable icon pixels")); }
         // BGRA with straight alpha; icons without an alpha channel leave it zero and draw opaque.
@@ -84,6 +95,7 @@ fn windows_icon(path: &std::path::Path, px: u32) -> Result<(u32, u32, Vec<u8>), 
         }
         Ok((w as u32, h as u32, pixels))
     })();
+    // SAFETY: `hbmColor` and `hbmMask` (when non-null) were created by `GetIconInfo`, and `icon` by `PrivateExtractIconsW`; none are used again.
     unsafe {
         if !info.hbmColor.is_null() { DeleteObject(info.hbmColor); }
         if !info.hbmMask.is_null() { DeleteObject(info.hbmMask); }
@@ -173,6 +185,9 @@ fn macos_icon(path: &std::path::Path, px: u32) -> Result<(u32, u32, Vec<u8>), Im
     use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
     let path = path.to_str().ok_or_else(|| ImageError("app icon path is not UTF-8".into()))?;
     let workspace = macos_class(c"NSWorkspace")?;
+    // SAFETY: AppKit `NSWorkspace`, `NSImage`, and offscreen bitmap drawing run inside this
+    // autorelease pool (`macos_bitmap`'s precondition); `small` is a `px`×`px` RGBA8 bitmap whose
+    // `bitmapData` is non-null with `stride >= side * 4`, so every row slice is in bounds.
     objc2::rc::autoreleasepool(|_| unsafe {
         let workspace: *mut AnyObject = msg_send![workspace, sharedWorkspace];
         let icon: *mut AnyObject = msg_send![workspace, iconForFile: &*NSString::from_str(path)];
