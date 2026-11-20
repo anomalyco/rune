@@ -993,3 +993,400 @@ fn rotated_clip_buffers_draw_upright_like_its_poster_on(gpu: Gpu) {
         }
     }
 }
+
+/// PROOF ONLY, never merged: measures the steady-state CPU and GPU cost of `DrainTracker::record`,
+/// `Queue::submit`'s marker tracking, and `DrainMarker::new` on a healthy D3D12 device (RTX).
+#[cfg(target_os = "windows")]
+#[test]
+fn proof_marker_cost() {
+    use ::windows::Win32::Graphics::{Direct3D12 as d3d, Dxgi};
+    use ::windows::core::Interface;
+    use std::collections::VecDeque;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::time::Instant;
+
+    let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+    desc.backends = wgpu::Backends::DX12;
+    let instance = wgpu::Instance::new(desc);
+    let pick = rune_gpu::pick::pick(&instance, None, false).expect("adapter");
+    let info = pick.adapter.get_info();
+    eprintln!("marker cost: adapter {:?} ({:?})", info.name, info.device_type);
+    let (device, queue) = pollster::block_on(pick.adapter.request_device(&wgpu::DeviceDescriptor {
+        required_features: pick.adapter.features() & wgpu::Features::TIMESTAMP_QUERY,
+        ..Default::default()
+    }))
+    .expect("device");
+
+    // SAFETY: reading raw D3D12 device and queue handles from wgpu-hal.
+    let raw_device = unsafe { device.as_hal::<wgpu::hal::api::Dx12>() }.expect("dx12").raw_device().clone();
+    let raw_queue = unsafe { queue.as_hal::<wgpu::hal::api::Dx12>() }.expect("dx12").as_raw().clone();
+
+    let report = |label: &str, mut samples: Vec<f64>| {
+        samples.sort_by(f64::total_cmp);
+        let n = samples.len();
+        eprintln!(
+            "marker cost: {label}: median {:.1} ns, p10 {:.1}, p90 {:.1}, p99 {:.1} ns (n={n})",
+            samples[n / 2],
+            samples[n / 10],
+            samples[n * 9 / 10],
+            samples[n * 99 / 100],
+        );
+    };
+
+    // 1. Device-init cost: DrainMarker::new (OPTIONS3 check + 64 KiB readback resource + Map + zero + GetGPUVA).
+    let mut init_samples = Vec::with_capacity(50);
+    for _ in 0..50 {
+        let t = Instant::now();
+        let mut options3 = d3d::D3D12_FEATURE_DATA_D3D12_OPTIONS3::default();
+        // SAFETY: valid CheckFeatureSupport call.
+        let ok = unsafe {
+            raw_device.CheckFeatureSupport(
+                d3d::D3D12_FEATURE_D3D12_OPTIONS3,
+                <*mut _>::cast(&mut options3),
+                std::mem::size_of_val(&options3) as u32,
+            )
+        }
+        .is_ok();
+        assert!(ok && (options3.WriteBufferImmediateSupportFlags.0 & d3d::D3D12_COMMAND_LIST_SUPPORT_FLAG_DIRECT.0) != 0);
+        let heap = d3d::D3D12_HEAP_PROPERTIES { Type: d3d::D3D12_HEAP_TYPE_READBACK, ..Default::default() };
+        let rdesc = d3d::D3D12_RESOURCE_DESC {
+            Dimension: d3d::D3D12_RESOURCE_DIMENSION_BUFFER,
+            Alignment: 0,
+            Width: 65536,
+            Height: 1,
+            DepthOrArraySize: 1,
+            MipLevels: 1,
+            Format: Dxgi::Common::DXGI_FORMAT_UNKNOWN,
+            SampleDesc: Dxgi::Common::DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+            Layout: d3d::D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+            Flags: d3d::D3D12_RESOURCE_FLAG_NONE,
+        };
+        let mut res = None::<d3d::ID3D12Resource>;
+        // SAFETY: valid readback buffer creation.
+        unsafe { raw_device.CreateCommittedResource(&heap, d3d::D3D12_HEAP_FLAG_NONE, &rdesc, d3d::D3D12_RESOURCE_STATE_COPY_DEST, None, &mut res) }.expect("res");
+        let res = res.expect("res");
+        let mut ptr = std::ptr::null_mut();
+        // SAFETY: map/zero/unmap readback resource.
+        unsafe {
+            res.Map(0, None, Some(&mut ptr)).expect("map");
+            std::ptr::write_bytes(ptr, 0, 65536);
+            std::hint::black_box(res.GetGPUVirtualAddress());
+        }
+        init_samples.push(t.elapsed().as_nanos() as f64);
+        // SAFETY: unmap before drop.
+        unsafe { res.Unmap(0, None) };
+    }
+    report("DrainMarker::new (once per device)", init_samples);
+
+    // Prepare one persistent readback marker buffer and command allocator/list for per-list benchmarks.
+    let heap = d3d::D3D12_HEAP_PROPERTIES { Type: d3d::D3D12_HEAP_TYPE_READBACK, ..Default::default() };
+    let rdesc = d3d::D3D12_RESOURCE_DESC {
+        Dimension: d3d::D3D12_RESOURCE_DIMENSION_BUFFER,
+        Alignment: 0,
+        Width: 65536,
+        Height: 1,
+        DepthOrArraySize: 1,
+        MipLevels: 1,
+        Format: Dxgi::Common::DXGI_FORMAT_UNKNOWN,
+        SampleDesc: Dxgi::Common::DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+        Layout: d3d::D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+        Flags: d3d::D3D12_RESOURCE_FLAG_NONE,
+    };
+    let mut marker_res = None::<d3d::ID3D12Resource>;
+    // SAFETY: valid readback buffer.
+    unsafe { raw_device.CreateCommittedResource(&heap, d3d::D3D12_HEAP_FLAG_NONE, &rdesc, d3d::D3D12_RESOURCE_STATE_COPY_DEST, None, &mut marker_res) }.expect("marker");
+    let marker_res = marker_res.expect("marker");
+    let mut mapped = std::ptr::null_mut();
+    // SAFETY: map readback buffer.
+    unsafe {
+        marker_res.Map(0, None, Some(&mut mapped)).expect("map");
+        std::ptr::write_bytes(mapped, 0, 65536);
+    }
+    let mapped_atoms = mapped.cast::<AtomicU32>();
+    // SAFETY: committed resource VA.
+    let gpu_va = unsafe { marker_res.GetGPUVirtualAddress() };
+    let next_tag = AtomicU32::new(1);
+
+    // SAFETY: create allocator and list.
+    let alloc: d3d::ID3D12CommandAllocator = unsafe { raw_device.CreateCommandAllocator(d3d::D3D12_COMMAND_LIST_TYPE_DIRECT) }.expect("alloc");
+    let list: d3d::ID3D12GraphicsCommandList = unsafe { raw_device.CreateCommandList(0, d3d::D3D12_COMMAND_LIST_TYPE_DIRECT, &alloc, None) }.expect("list");
+    // SAFETY: close list before reset loop.
+    unsafe { list.Close() }.expect("close");
+
+    // 2. Paired ABBA per-list cost: Reset + [no marker | record (QI+WBI) | WBI alone (cached list2)] + Close.
+    let batches = 200usize;
+    let per_batch = 200u32;
+    let mut plain_ns = Vec::with_capacity(batches);
+    let mut qi_wbi_ns = Vec::with_capacity(batches);
+    let mut wbi_only_ns = Vec::with_capacity(batches);
+    let list2_cached: d3d::ID3D12GraphicsCommandList2 = list.cast().expect("list2");
+
+    // Warm up.
+    for _ in 0..20 {
+        // SAFETY: reset allocator and list.
+        unsafe {
+            alloc.Reset().expect("reset alloc");
+            for _ in 0..per_batch {
+                list.Reset(&alloc, None).expect("reset list");
+                let l2: d3d::ID3D12GraphicsCommandList2 = list.cast().expect("cast");
+                let param = d3d::D3D12_WRITEBUFFERIMMEDIATE_PARAMETER { Dest: gpu_va, Value: 1 };
+                let mode = d3d::D3D12_WRITEBUFFERIMMEDIATE_MODE_MARKER_OUT;
+                l2.WriteBufferImmediate(1, &param, Some(&mode));
+                list.Close().expect("close");
+            }
+        }
+    }
+
+    for round in 0..batches {
+        let order = match round % 3 {
+            0 => [0, 1, 2],
+            1 => [1, 2, 0],
+            _ => [2, 0, 1],
+        };
+        for arm in order {
+            // SAFETY: allocator reset between batches.
+            unsafe { alloc.Reset().expect("reset alloc") };
+            let t = Instant::now();
+            match arm {
+                0 => {
+                    for _ in 0..per_batch {
+                        // SAFETY: open + close list with no marker.
+                        unsafe {
+                            list.Reset(&alloc, None).expect("reset");
+                            list.Close().expect("close");
+                        }
+                    }
+                    plain_ns.push(t.elapsed().as_nanos() as f64 / f64::from(per_batch));
+                }
+                1 => {
+                    for _ in 0..per_batch {
+                        // SAFETY: open + QI + WriteBufferImmediate(MARKER_OUT) + close.
+                        unsafe {
+                            list.Reset(&alloc, None).expect("reset");
+                            let l2: d3d::ID3D12GraphicsCommandList2 = list.cast().expect("cast");
+                            let tag = loop {
+                                let v = next_tag.fetch_add(1, Ordering::Relaxed);
+                                if v != 0 { break v; }
+                            };
+                            let slot = tag & 16_383;
+                            let param = d3d::D3D12_WRITEBUFFERIMMEDIATE_PARAMETER { Dest: gpu_va + u64::from(slot) * 4, Value: tag };
+                            let mode = d3d::D3D12_WRITEBUFFERIMMEDIATE_MODE_MARKER_OUT;
+                            l2.WriteBufferImmediate(1, &param, Some(&mode));
+                            list.Close().expect("close");
+                        }
+                    }
+                    qi_wbi_ns.push(t.elapsed().as_nanos() as f64 / f64::from(per_batch));
+                }
+                _ => {
+                    for _ in 0..per_batch {
+                        // SAFETY: open + cached list2 WriteBufferImmediate(MARKER_OUT) + close.
+                        unsafe {
+                            list.Reset(&alloc, None).expect("reset");
+                            let tag = loop {
+                                let v = next_tag.fetch_add(1, Ordering::Relaxed);
+                                if v != 0 { break v; }
+                            };
+                            let slot = tag & 16_383;
+                            let param = d3d::D3D12_WRITEBUFFERIMMEDIATE_PARAMETER { Dest: gpu_va + u64::from(slot) * 4, Value: tag };
+                            let mode = d3d::D3D12_WRITEBUFFERIMMEDIATE_MODE_MARKER_OUT;
+                            list2_cached.WriteBufferImmediate(1, &param, Some(&mode));
+                            list.Close().expect("close");
+                        }
+                    }
+                    wbi_only_ns.push(t.elapsed().as_nanos() as f64 / f64::from(per_batch));
+                }
+            }
+        }
+    }
+    let delta_qi_wbi: Vec<f64> = qi_wbi_ns.iter().zip(&plain_ns).map(|(a, b)| a - b).collect();
+    let delta_wbi_only: Vec<f64> = wbi_only_ns.iter().zip(&plain_ns).map(|(a, b)| a - b).collect();
+    report("Reset+Close plain", plain_ns);
+    report("Reset+QI+WBI+Close", qi_wbi_ns);
+    report("Reset+WBI(cached)+Close", wbi_only_ns);
+    report("DELTA DrainTracker::record (QI+WBI)", delta_qi_wbi);
+    report("DELTA WBI alone (no QI)", delta_wbi_only);
+
+    // 3. Isolated QueryInterface cost + isolated WriteBufferImmediate cost (many ops inside one open list).
+    let mut qi_isolated = Vec::with_capacity(200);
+    let mut wbi_isolated = Vec::with_capacity(200);
+    for _ in 0..200 {
+        let t = Instant::now();
+        for _ in 0..1000u32 {
+            let l2: d3d::ID3D12GraphicsCommandList2 = list.cast().expect("cast");
+            std::hint::black_box(l2);
+        }
+        qi_isolated.push(t.elapsed().as_nanos() as f64 / 1000.0);
+
+        // SAFETY: record 1000 WriteBufferImmediate calls into one open list.
+        unsafe {
+            alloc.Reset().expect("reset alloc");
+            list.Reset(&alloc, None).expect("reset");
+        }
+        let t = Instant::now();
+        for _ in 0..1000u32 {
+            let tag = next_tag.fetch_add(1, Ordering::Relaxed).max(1);
+            let slot = tag & 16_383;
+            let param = d3d::D3D12_WRITEBUFFERIMMEDIATE_PARAMETER { Dest: gpu_va + u64::from(slot) * 4, Value: tag };
+            let mode = d3d::D3D12_WRITEBUFFERIMMEDIATE_MODE_MARKER_OUT;
+            // SAFETY: open list2, valid dest.
+            unsafe { list2_cached.WriteBufferImmediate(1, &param, Some(&mode)) };
+        }
+        wbi_isolated.push(t.elapsed().as_nanos() as f64 / 1000.0);
+        // SAFETY: close list.
+        unsafe { list.Close().expect("close") };
+    }
+    report("isolated QueryInterface (list.cast::<List2>())", qi_isolated);
+    report("isolated WriteBufferImmediate(MARKER_OUT)", wbi_isolated);
+
+    // 4. Queue::submit additions: idle_fence.GetCompletedValue() + Mutex prune/push.
+    // SAFETY: create idle fence.
+    let idle_fence: d3d::ID3D12Fence = unsafe { raw_device.CreateFence(0, d3d::D3D12_FENCE_FLAG_NONE) }.expect("fence");
+    let in_flight = Mutex::new(VecDeque::<(u32, u32)>::new());
+    let mut submit_add_ns = Vec::with_capacity(500);
+    for _ in 0..500 {
+        let t = Instant::now();
+        for i in 1..=1000u32 {
+            // SAFETY: query completed value on live fence.
+            let removed = unsafe { idle_fence.GetCompletedValue() } == u64::MAX;
+            std::hint::black_box(removed);
+            let slot = i & 16_383;
+            // Simulate already-completed front item by pre-writing slot.
+            // SAFETY: within 16384 mapped atoms.
+            unsafe { (*mapped_atoms.add(slot as usize)).store(i, Ordering::Relaxed) };
+            let mut q = in_flight.lock().unwrap();
+            while let Some(&(s, tag)) = q.front() {
+                // SAFETY: within 16384 mapped atoms.
+                if unsafe { (*mapped_atoms.add(s as usize)).load(Ordering::Acquire) } == tag {
+                    q.pop_front();
+                } else {
+                    break;
+                }
+            }
+            q.push_back((slot, i));
+        }
+        submit_add_ns.push(t.elapsed().as_nanos() as f64 / 1000.0);
+    }
+    report("Queue::submit addition (GetCompletedValue + track_submitted)", submit_add_ns);
+
+    // 5. GPU-side cost of WriteBufferImmediate(MARKER_OUT) on RTX: 64 small compute dispatches in 64 lists,
+    //    timed with GPU timestamp query heap before first and after last list, paired ABBA (plain vs MARKER_OUT).
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: None,
+        source: wgpu::ShaderSource::Wgsl(
+            "@group(0) @binding(0) var<storage, read_write> r: array<u32>;
+            @compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+                r[id.x] = id.x * 3u + 1u; }"
+                .into(),
+        ),
+    });
+    let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: None, layout: None, module: &shader, entry_point: Some("main"),
+        compilation_options: Default::default(), cache: None,
+    });
+    let buf = device.create_buffer(&wgpu::BufferDescriptor {
+        label: None, size: 4096, usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false,
+    });
+    let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: None, layout: &pipeline.get_bind_group_layout(0),
+        entries: &[wgpu::BindGroupEntry { binding: 0, resource: buf.as_entire_binding() }],
+    });
+    // Build a raw query heap + readback buffer to measure GPU ticks on the RTX directly.
+    let freq = unsafe { raw_queue.GetTimestampFrequency() }.expect("freq") as f64;
+    let ns_per_tick = 1_000_000_000.0 / freq;
+    let mut qh = None::<d3d::ID3D12QueryHeap>;
+    // SAFETY: timestamp query heap of 2 queries.
+    unsafe {
+        raw_device.CreateQueryHeap(
+            &d3d::D3D12_QUERY_HEAP_DESC { Type: d3d::D3D12_QUERY_HEAP_TYPE_TIMESTAMP, Count: 2, NodeMask: 0 },
+            &mut qh,
+        )
+    }
+    .expect("qh");
+    let qh = qh.expect("qh");
+    let mut ts_res = None::<d3d::ID3D12Resource>;
+    let ts_desc = d3d::D3D12_RESOURCE_DESC { Width: 256, ..rdesc };
+    // SAFETY: 256-byte readback buffer for 2 u64 timestamps.
+    unsafe { raw_device.CreateCommittedResource(&heap, d3d::D3D12_HEAP_FLAG_NONE, &ts_desc, d3d::D3D12_RESOURCE_STATE_COPY_DEST, None, &mut ts_res) }.expect("ts");
+    let ts_res = ts_res.expect("ts");
+    let mut ts_ptr = std::ptr::null_mut();
+    // SAFETY: map timestamp readback buffer.
+    unsafe { ts_res.Map(0, None, Some(&mut ts_ptr)) }.expect("ts map");
+
+    // Pre-record two closed command lists: one empty + timestamp, and one with 64 WBI(MARKER_OUT) in between.
+    let alloc_a: d3d::ID3D12CommandAllocator = unsafe { raw_device.CreateCommandAllocator(d3d::D3D12_COMMAND_LIST_TYPE_DIRECT) }.expect("aa");
+    let list_plain: d3d::ID3D12GraphicsCommandList2 = unsafe { raw_device.CreateCommandList(0, d3d::D3D12_COMMAND_LIST_TYPE_DIRECT, &alloc_a, None) }.expect("lp");
+    // SAFETY: record start/end timestamps with no WBI.
+    unsafe {
+        list_plain.EndQuery(&qh, d3d::D3D12_QUERY_TYPE_TIMESTAMP, 0);
+        list_plain.EndQuery(&qh, d3d::D3D12_QUERY_TYPE_TIMESTAMP, 1);
+        list_plain.ResolveQueryData(&qh, d3d::D3D12_QUERY_TYPE_TIMESTAMP, 0, 2, &ts_res, 0);
+        list_plain.Close().expect("close");
+    }
+    let list_wbi: d3d::ID3D12GraphicsCommandList2 = unsafe { raw_device.CreateCommandList(0, d3d::D3D12_COMMAND_LIST_TYPE_DIRECT, &alloc_a, None) }.expect("lw");
+    // SAFETY: record start timestamp, 64 WBI(MARKER_OUT), end timestamp.
+    unsafe {
+        list_wbi.EndQuery(&qh, d3d::D3D12_QUERY_TYPE_TIMESTAMP, 0);
+        for k in 1..=64u32 {
+            let param = d3d::D3D12_WRITEBUFFERIMMEDIATE_PARAMETER { Dest: gpu_va + u64::from(k) * 4, Value: k };
+            let mode = d3d::D3D12_WRITEBUFFERIMMEDIATE_MODE_MARKER_OUT;
+            list_wbi.WriteBufferImmediate(1, &param, Some(&mode));
+        }
+        list_wbi.EndQuery(&qh, d3d::D3D12_QUERY_TYPE_TIMESTAMP, 1);
+        list_wbi.ResolveQueryData(&qh, d3d::D3D12_QUERY_TYPE_TIMESTAMP, 0, 2, &ts_res, 0);
+        list_wbi.Close().expect("close");
+    }
+    let lp_raw: d3d::ID3D12CommandList = list_plain.cast().expect("cast");
+    let lw_raw: d3d::ID3D12CommandList = list_wbi.cast().expect("cast");
+    let wait_fence = |val: u64| {
+        // SAFETY: signal and wait on idle_fence.
+        unsafe {
+            raw_queue.Signal(&idle_fence, val).expect("sig");
+            while idle_fence.GetCompletedValue() < val {
+                std::hint::spin_loop();
+            }
+        }
+    };
+    let mut fval = 1u64;
+    let mut gpu_plain = Vec::with_capacity(200);
+    let mut gpu_wbi64 = Vec::with_capacity(200);
+    for round in 0..220 {
+        for arm in if round % 2 == 0 { [0, 1] } else { [1, 0] } {
+            let cl = if arm == 0 { lp_raw.clone() } else { lw_raw.clone() };
+            // SAFETY: execute closed list and wait.
+            unsafe { raw_queue.ExecuteCommandLists(&[Some(cl)]) };
+            fval += 1;
+            wait_fence(fval);
+            // SAFETY: read 2 u64 timestamps from mapped readback buffer.
+            let t0 = unsafe { ts_ptr.cast::<u64>().read_volatile() };
+            let t1 = unsafe { ts_ptr.cast::<u64>().add(1).read_volatile() };
+            if round >= 20 {
+                let ns = (t1.saturating_sub(t0) as f64) * ns_per_tick;
+                if arm == 0 { gpu_plain.push(ns); } else { gpu_wbi64.push(ns); }
+            }
+        }
+    }
+    let gpu_per_wbi: Vec<f64> = gpu_wbi64.iter().zip(&gpu_plain).map(|(a, b)| (a - b) / 64.0).collect();
+    report("GPU timestamps empty list (ns)", gpu_plain);
+    report("GPU timestamps 64x WBI(MARKER_OUT) (ns)", gpu_wbi64);
+    report("GPU DELTA per WBI(MARKER_OUT) (ns)", gpu_per_wbi);
+
+    // Keep wgpu objects alive until after raw GPU tests.
+    let mut enc = device.create_command_encoder(&Default::default());
+    {
+        let mut pass = enc.begin_compute_pass(&Default::default());
+        pass.set_pipeline(&pipeline);
+        pass.set_bind_group(0, &bind, &[]);
+        pass.dispatch_workgroups(1, 1, 1);
+    }
+    queue.submit([enc.finish()]);
+    let _ = rune_gpu::health::poll(&device, wgpu::PollType::wait_indefinitely());
+
+    // SAFETY: unmap before drop.
+    unsafe {
+        ts_res.Unmap(0, None);
+        marker_res.Unmap(0, None);
+    }
+    drop((lp_raw, lw_raw, list_plain, list_wbi, alloc_a, qh, ts_res, idle_fence, list2_cached, list, alloc, marker_res));
+    drop((bind, buf, pipeline, shader, raw_queue, raw_device, queue, device));
+}

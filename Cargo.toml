@@ -251,6 +251,13 @@ opt-level = 3
 [profile.rune-hot.package.fdeflate]
 opt-level = 3
 
+# PROOF ONLY: optimize wgpu-hal and rune-media for marker-cost measurement.
+[profile.test.package.wgpu-hal]
+opt-level = 3
+
+[profile.test.package.rune-media]
+opt-level = 3
+
 [workspace.lints.rust]
 # shared-lints begin
 unsafe_op_in_unsafe_fn = "deny"
