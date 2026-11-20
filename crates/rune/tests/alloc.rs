@@ -1,3 +1,4 @@
+#![allow(unsafe_code)]
 //! Count the whole runtime frame, not only the spring evaluator. No GPU/driver allocations.
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;

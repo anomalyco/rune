@@ -2,6 +2,8 @@
 //! Windows reads `QueryPerformanceCounter` and `QueryThreadCycleTime`, never `GetThreadTimes`,
 //! which moves in 15.6 ms ticks.
 
+#![allow(unsafe_code)]
+
 /// Nanoseconds on the host's monotonic clock: Windows `QueryPerformanceCounter` scaled with
 /// 128-bit math, `mach_absolute_time` through its timebase, else `CLOCK_MONOTONIC`.
 #[cfg(not(target_arch = "wasm32"))]

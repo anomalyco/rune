@@ -1,6 +1,8 @@
 //! Render pipelines: each stage compiled against the layout, vertex buffers described at the
 //! top buffer slots (vertex buffer `i` at 30 - i), and the color targets' formats and blending.
 
+#![allow(unsafe_code)]
+
 use std::sync::Arc;
 
 #[cfg(debug_assertions)]

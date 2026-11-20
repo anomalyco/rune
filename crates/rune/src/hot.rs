@@ -208,6 +208,7 @@ fn hub() -> &'static Hub {
     hub
 }
 
+#[allow(unsafe_code)]
 fn connect() {
     // dioxus-devtools reads the same variables and connects silently, or not at all.
     let var = rune_core::env::var;

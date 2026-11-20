@@ -21,6 +21,7 @@ pub(crate) fn wait_ms() -> Option<f64> {
 
 /// Whether the machine has no core to spare: the 1-minute load average is at or above the core
 /// count. Read at most every few seconds. Always false where there's no load average.
+#[allow(unsafe_code)]
 pub(crate) fn overloaded() -> bool {
     #[cfg(unix)]
     {

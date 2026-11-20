@@ -3,6 +3,8 @@
 //! stops that script without touching the rest of the app. The check reads the clock every 256
 //! safepoints, which keeps it off the profile of ordinary code.
 
+#![allow(unsafe_code)]
+
 use std::cell::Cell;
 use std::os::raw::c_int;
 use std::time::Duration;

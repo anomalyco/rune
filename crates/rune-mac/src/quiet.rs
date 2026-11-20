@@ -3,6 +3,8 @@
 //! app's workspace. `scripts/mac-app` launches with `MAC_APP_QUIET` set when
 //! the app wasn't in front, and `launch` keeps the app from activating while it starts.
 
+#![allow(unsafe_code)]
+
 const VAR: &str = "MAC_APP_QUIET";
 
 /// Call first thing in `main`, before the event loop.

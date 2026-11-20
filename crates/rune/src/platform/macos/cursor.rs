@@ -1,6 +1,8 @@
 //! AppKit cursors set directly: for overlays, which are rarely the key window, and for image
 //! cursors, which winit would size in pixels (twice too big on Retina).
 
+#![allow(unsafe_code)]
+
 use std::cell::RefCell;
 #[cfg(feature = "macos-background-cursor")]
 use std::cell::Cell;

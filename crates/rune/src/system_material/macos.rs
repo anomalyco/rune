@@ -8,6 +8,8 @@
 //! frame, corner radius and alpha inside it, so the WindowServer composites the material, the
 //! shadow around it and the content on top from the same commit.
 
+#![allow(unsafe_code)]
+
 use super::{assign, MaterialDraw, Mode, PresentFlag, SystemMaterial, MAX_NATIVE_MATERIALS};
 use rune_motion::NodeId;
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};

@@ -10,6 +10,8 @@
 //!
 //! The move or size loop is also when a resize draws its frame at once (`in_size_move`).
 
+#![allow(unsafe_code)]
+
 use std::cell::RefCell;
 
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};

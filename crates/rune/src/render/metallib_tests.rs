@@ -206,6 +206,7 @@ fn uber_shader_loads_precompiled_metallib_and_falls_back_cleanly() {
 
 #[cfg(all(target_os = "macos", feature = "metal-backend"))]
 #[test]
+#[allow(unsafe_code)]
 fn native_backend_loads_its_metallib_and_falls_back_cleanly() {
     use super::super::{Gpu, OFFSCREEN_FORMAT, Renderer};
 

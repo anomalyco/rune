@@ -219,7 +219,7 @@ impl Wav {
 
 impl Drop for Wav {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
+        std::fs::remove_file(&self.0).ok();
     }
 }
 
@@ -230,7 +230,7 @@ fn sweep(dir: &Path) {
     for entry in entries.flatten() {
         let old = entry.metadata().and_then(|m| m.modified()).is_ok_and(|t| t.elapsed().is_ok_and(|age| age > day));
         if old {
-            let _ = std::fs::remove_file(entry.path());
+            std::fs::remove_file(entry.path()).ok();
         }
     }
 }

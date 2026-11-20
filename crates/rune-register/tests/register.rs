@@ -1,3 +1,5 @@
+#![allow(unsafe_code)]
+
 use rune_register::{collect, register, slice};
 
 #[derive(Clone, Copy, Debug, PartialEq)]

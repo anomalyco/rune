@@ -60,7 +60,7 @@ impl LocalTime {
 /// The OS time zone's offset east of UTC, in seconds, at `secs` since the Unix epoch.
 #[cfg(unix)]
 // `time_t` is 32 bits on some targets.
-#[allow(clippy::useless_conversion, clippy::unnecessary_fallible_conversions)]
+#[allow(clippy::useless_conversion, clippy::unnecessary_fallible_conversions, unsafe_code)]
 fn offset_at(secs: i64) -> Option<i32> {
     let secs = libc::time_t::try_from(secs).ok()?;
     // SAFETY: `libc::tm` is a plain C struct where all-zero bytes are valid.
@@ -75,6 +75,7 @@ fn offset_at(secs: i64) -> Option<i32> {
 /// time zone carries the zone's yearly daylight saving rules, so a past or future instant gets
 /// the offset of its own year.
 #[cfg(windows)]
+#[allow(unsafe_code)]
 fn offset_at(secs: i64) -> Option<i32> {
     use windows_sys::Win32::Foundation::{FILETIME, SYSTEMTIME};
     use windows_sys::Win32::System::Time::{

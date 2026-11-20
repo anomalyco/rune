@@ -3,6 +3,8 @@
 //! `ModifiersState` has no Fn flag. A local event monitor sees the flagsChanged AppKit sends
 //! the key window, and the host feeds it to the runtime as `PhysicalKeyCode::Fn`.
 
+#![allow(unsafe_code)]
+
 use objc2::rc::Retained;
 use objc2::{ClassType, msg_send};
 use objc2_app_kit::{NSEvent, NSView, NSWindow};

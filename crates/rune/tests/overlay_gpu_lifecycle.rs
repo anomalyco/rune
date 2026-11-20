@@ -56,6 +56,7 @@ mod lazy {
     }
 
     #[cfg(target_os = "windows")]
+    #[allow(unsafe_code)]
     fn private_mb() -> f64 {
         #[repr(C)]
         #[derive(Default)]

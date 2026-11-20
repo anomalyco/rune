@@ -8,6 +8,8 @@
 //! out as an overlay plane); `CreateSwapChainForComposition` refuses NV12. The window wraps the
 //! handle in a surface of its own DirectComposition device (`handle`).
 
+#![allow(unsafe_code)]
+
 use super::gpu::Device;
 use super::mf::{self, Picture};
 use crate::native_surface::{Format, Matrix, Orient};

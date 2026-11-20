@@ -72,6 +72,7 @@ fn socket_path(id: &str) -> Option<PathBuf> {
 }
 
 /// `<temp>/rune-<uid>`, made 0700; none when it's someone else's or others may write to it.
+#[allow(unsafe_code)]
 fn own_temp_dir() -> Option<PathBuf> {
     // SAFETY: getuid has no preconditions and can't fail.
     let uid = unsafe { libc::getuid() };

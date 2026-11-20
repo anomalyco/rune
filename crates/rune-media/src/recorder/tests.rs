@@ -568,6 +568,7 @@ fn wav_files_parse_formats_and_reject_others() {
 /// it, so nothing is captured and no permission prompt appears.
 #[cfg(target_os = "macos")]
 #[test]
+#[allow(unsafe_code)]
 fn the_macos_recorder_builds_without_capturing() {
     use objc2::msg_send;
     use objc2::runtime::Bool;

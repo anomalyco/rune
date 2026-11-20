@@ -8,6 +8,8 @@
 //! it's made once at the largest size the window is likely to reach (its display's), with one row
 //! length: a resize then repaints only what moved and touches no new memory.
 
+#![allow(unsafe_code)]
+
 use windows_sys::Win32::Foundation::HWND;
 use windows_sys::Win32::Graphics::Gdi::{
     BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BitBlt, CreateCompatibleDC, CreateDIBSection, DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDC, HBITMAP,

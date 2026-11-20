@@ -1,6 +1,9 @@
 //! `NSDraggingSource` for [`super::begin`]. The session starts inside winit's `mouseDragged:`
 //! (which dispatches `CursorMoved` synchronously), so `NSApp.currentEvent` is the drag event.
 //! Pasteboard types follow what Finder and System Settings' privacy lists accept for a file.
+
+#![allow(unsafe_code)]
+
 use super::{DragImage, DragItem, DragOperation, DragOutStart, DragOutcome, path_text};
 use std::cell::{Cell, RefCell};
 use objc2::{AnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, rc::Retained, sel,

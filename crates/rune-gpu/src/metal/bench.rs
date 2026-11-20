@@ -1,6 +1,8 @@
 //! What `wgpu::custom` costs on top of the Metal calls it makes. The `metal_dispatch`
 //! example runs it, in the perf profile (Rune's unit tests need debug assertions).
 
+#![allow(unsafe_code)]
+
 use objc2_metal::{MTLClearColor, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue, MTLLoadAction, MTLRenderPassDescriptor, MTLStoreAction};
 
 use super::resource::{MetalBuffer, MetalTexture};

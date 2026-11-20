@@ -142,6 +142,7 @@ fn a_handler_that_cant_install_listens_to_nothing() {
 
 #[cfg(target_os = "macos")]
 #[test]
+#[allow(unsafe_code)]
 fn the_url_is_the_events_direct_object() {
     use objc2::rc::autoreleasepool;
     use objc2::runtime::AnyObject;

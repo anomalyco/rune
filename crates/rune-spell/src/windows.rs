@@ -1,5 +1,8 @@
 //! Windows' spell checking API: one checker per chosen dictionary (`super::languages`), made on
 //! each thread that checks and made again when the choice changes.
+
+#![allow(unsafe_code)]
+
 use std::cell::RefCell;
 
 use windows::Win32::Globalization::{

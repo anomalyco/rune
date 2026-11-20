@@ -120,6 +120,7 @@ pub(super) fn view<X: 'static>(view: impl Fn(&X, &mut Cx<X>) -> El + 'static) ->
     Box::new(move |x, cx| hot_view(&view, x, cx))
 }
 
+#[allow(unsafe_code)]
 fn hot_view<X: 'static, F: Fn(&X, &mut Cx<X>) -> El + 'static>(view: &F, state: &X, cx: &mut Cx<X>) -> El {
     #[cfg(feature = "hot")]
     if !crate::hot::originals_only() {

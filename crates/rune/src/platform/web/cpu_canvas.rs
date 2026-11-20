@@ -135,20 +135,17 @@ impl CpuCanvas {
 }
 
 /// `bgra`'s pixels as R, G, B, A, into `out` (as long).
+#[allow(unsafe_code)]
 fn rgba(bgra: &[u8], out: &mut [u8]) {
     let swap = |v: u32| (v & 0xff00_ff00) | ((v >> 16) & 0xff) | ((v & 0xff) << 16);
     // Whole pixels as words where both sides line up (they do: rows start on whole pixels of
     // buffers the allocator aligns).
-    // SAFETY: any bit pattern is a valid u32 and u8; `align_to` keeps the parts it can't align.
-    let (dh, dm, dt) = unsafe { out.align_to_mut::<u32>() };
-    // SAFETY: any bit pattern is a valid u32 and u8; `align_to` keeps the parts it can't align.
-    let (sh, sm, st) = unsafe { bgra.align_to::<u32>() };
-    if !(dh.is_empty() && sh.is_empty() && dt.is_empty() && st.is_empty()) {
+    let (Ok(dm), Ok(sm)) = (bytemuck::try_cast_slice_mut::<u8, u32>(out), bytemuck::try_cast_slice::<u8, u32>(bgra)) else {
         for (d, s) in out.chunks_exact_mut(4).zip(bgra.chunks_exact(4)) {
             d.copy_from_slice(&[s[2], s[1], s[0], s[3]]);
         }
         return;
-    }
+    };
     #[cfg(target_feature = "simd128")]
     {
         use core::arch::wasm32::{i8x16, u8x16_swizzle, v128, v128_load, v128_store};

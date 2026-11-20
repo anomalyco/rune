@@ -1,4 +1,7 @@
 //! The producer supplies its buffer; replacing and staging a warm stream allocates nothing.
+
+#![allow(unsafe_code)]
+
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 

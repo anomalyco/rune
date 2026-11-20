@@ -67,6 +67,7 @@ fn rejoin_spaces(panel: &NSPanel) {
 
 /// Animates the panel's alpha to `alpha`, replacing any fade in flight. Over a length, its
 /// completion reports back under the fence; with none, it lands at once.
+#[allow(unsafe_code)]
 fn fade(panel: &Retained<NSPanel>, presence: &Rc<Cell<Presence>>, alpha: f64, over: Option<(Duration, Attempt)>) {
     use objc2::runtime::{AnyClass, AnyObject};
     // SAFETY: AppKit calls on the main thread; the completion handler runs there too.

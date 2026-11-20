@@ -4,6 +4,8 @@
 //! menu through AppKit instead. Opens a window, so it only runs with RUNE_GUI_TESTS=1 in a
 //! logged-in GUI session.
 
+#![allow(unsafe_code)]
+
 #[cfg(not(target_os = "macos"))]
 fn main() {}
 

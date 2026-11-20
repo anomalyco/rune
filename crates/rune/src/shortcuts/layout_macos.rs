@@ -1,4 +1,7 @@
 //! Translate only display labels. The input source is borrowed for one call and never changed.
+
+#![allow(unsafe_code)]
+
 use std::ffi::c_void;
 
 #[link(name = "Carbon", kind = "framework")]

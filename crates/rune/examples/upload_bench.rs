@@ -33,6 +33,7 @@ fn scene(frame: usize, scroll: bool) -> Vec<Instance> {
 }
 
 /// Instructions the process has retired, in thousands (0 off macOS).
+#[allow(unsafe_code)]
 fn kinstr() -> f64 {
     #[cfg(target_os = "macos")]
     // SAFETY: proc_pid_rusage fills the rusage_info_v4 it is handed for RUSAGE_INFO_V4.

@@ -9,6 +9,8 @@
 //! that posted it still runs. That is the documented way for an app without a package to be
 //! started from its toasts without a COM activator. `click_from_url` reads the link back.
 
+#![allow(unsafe_code)]
+
 use std::sync::Mutex;
 
 use windows::Data::Xml::Dom::XmlDocument;

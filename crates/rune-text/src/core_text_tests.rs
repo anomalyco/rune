@@ -1,6 +1,8 @@
 //! Rune's advances against Core Text's for the macOS system font. Core Text applies the font's
 //! `trak` table at the point size, so text matches AppKit's width at every display scale.
 
+#![allow(unsafe_code)]
+
 use std::ffi::c_void;
 
 use super::*;

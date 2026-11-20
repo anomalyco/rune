@@ -6,6 +6,8 @@
 //! gets it back. Opens windows, so it only runs with RUNE_GUI_TESTS=1 in a
 //! logged-in GUI session. Clicks are synthesized with `postEvent:`; the real pointer never moves.
 
+#![allow(unsafe_code)]
+
 #[cfg(not(target_os = "macos"))]
 fn main() {}
 

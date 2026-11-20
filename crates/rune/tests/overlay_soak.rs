@@ -46,6 +46,7 @@ fn hide<T>(name: &str, overlay: &OverlayHandle<T>) {
 }
 
 #[cfg(target_os = "windows")]
+#[allow(unsafe_code)]
 fn memory_mb() -> f64 {
     #[repr(C)]
     #[derive(Default)]

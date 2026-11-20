@@ -1,5 +1,7 @@
 //! The steady-state frame allocates nothing: proven with a counting global allocator.
 
+#![allow(unsafe_code)]
+
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 

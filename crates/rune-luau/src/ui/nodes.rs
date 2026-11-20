@@ -1,5 +1,7 @@
 //! The `ui.*` constructors, and host nodes an app adds to them.
 
+#![allow(unsafe_code)]
+
 use std::os::raw::c_int;
 use std::rc::Rc;
 

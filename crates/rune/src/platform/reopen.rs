@@ -58,6 +58,7 @@ pub(crate) fn appkit_handles(sent: bool, appkit_sees_visible: bool) -> bool { !s
 pub(crate) use mac::{accessory, front, install, unhide};
 
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 mod mac {
     use std::cell::{Cell, RefCell};
     use std::ffi::{c_char, c_void};

@@ -331,6 +331,7 @@ impl Drop for Shared {
 pub(crate) struct MetalQueue(pub(super) Arc<Shared>);
 
 impl QueueInterface for MetalQueue {
+    #[allow(unsafe_code)]
     fn write_buffer(&self, buffer: &DispatchBuffer, offset: wgpu::BufferAddress, data: &[u8]) {
         if data.is_empty() { return }
         let store = &buffer.as_custom::<MetalBuffer>().expect("a Metal buffer").store;

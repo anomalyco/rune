@@ -152,6 +152,7 @@ pub(crate) fn watch() {
 }
 
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 mod mac {
     use super::{SystemScrollBars, parse_show_scroll_bars};
     use objc2::{MainThreadMarker, class, msg_send, rc::Retained, runtime::{AnyObject, Bool}};

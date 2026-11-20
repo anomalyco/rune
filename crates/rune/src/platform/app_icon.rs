@@ -113,6 +113,7 @@ fn decode(bytes: &[u8]) -> Option<objc2::rc::Retained<objc2_app_kit::NSImage>> {
 }
 
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 fn apply() {
     let Some(mtm) = objc2::MainThreadMarker::new() else { return };
     let Some(bytes) = PENDING.lock().unwrap_or_else(|e| e.into_inner()).take() else { return };

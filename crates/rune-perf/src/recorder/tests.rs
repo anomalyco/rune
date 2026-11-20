@@ -19,6 +19,7 @@ fn report_path_has_zero_allocations_and_overflow_is_bounded() {
 
 #[test]
 #[ignore = "manual paired optimized component benchmark"]
+#[allow(unsafe_code)]
 fn instrumentation_overhead() {
     const N: usize = 200_000;
     fn allocations(a: &impl GlobalAlloc) -> f64 {

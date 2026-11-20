@@ -5,6 +5,8 @@
 //! RUNE_GUI_TESTS=1 in a desktop session (a locked one works: nothing here needs a frame on
 //! screen).
 
+#![allow(unsafe_code)]
+
 #[cfg(not(target_os = "windows"))]
 fn main() {}
 

@@ -50,6 +50,7 @@ pub(super) type Decoded = Arc<std::sync::OnceLock<Result<Option<super::foreign::
 pub(super) type Decoded = ();
 // SAFETY: the generator is only used under the Shared mutex. Player objects are created, used and
 // released on the main thread: pulls and audio ticks run there and `Player`'s drop hops to it.
+#[allow(unsafe_code)]
 unsafe impl Send for Native {}
 
 #[derive(Default)]
@@ -80,6 +81,7 @@ impl Player {
 }
 
 impl Drop for Player {
+    #[allow(unsafe_code)]
     fn drop(&mut self) {
         let Some(objects) = self.objects.take() else { return };
         if MainThreadMarker::new().is_some() {
@@ -258,6 +260,7 @@ pub(super) fn apply(shared: &Arc<Shared>) {
 
 /// Audio, on the main thread: what a live player (`Control::live`) reports now, while it plays.
 /// `live`: the player's own position is the one to read (`Control::live`).
+#[allow(unsafe_code)]
 pub(super) fn live_time(shared: &Shared, live: bool) -> Option<f64> {
     if !live || shared.kind != Kind::Audio || MainThreadMarker::new().is_none() {
         return None;
