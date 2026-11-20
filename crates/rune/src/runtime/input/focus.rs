@@ -554,9 +554,10 @@ impl RuntimeCore {
     ///   else the container itself when it is one, then the same in the next container out; only
     ///   when no container out to the root has a Tab stop left does focus go to any control. A
     ///   keyboard user lands where Tab would go, as OpenCode Desktop's focus rescue does
-    ///   (opencode#64909), not on a control Tab never reaches. A roving group counts as one Tab
-    ///   stop: focus that was in one (on an item, or on a control inside one, a tab's Close button)
-    ///   may go to another of its items, the next tab rather than the next tab's Close button.
+    ///   (opencode#64909), not on a control Tab never reaches.
+    /// - **Before either:** focus that was in a roving group (on an item, or on a control inside one,
+    ///   a tab's Close button) goes to another of that group's items, the next, else the previous:
+    ///   the next tab, not the next tab's Close button.
     /// - **It wasn't** (an item of a roving group, a control out of the Tab order): the next control
     ///   after it that can take focus, else the one before, else the container, as a native list
     ///   hands its selection to the neighbour.
@@ -622,12 +623,13 @@ impl RuntimeCore {
         // The container itself counts after its children, when it takes focus (a list row whose
         // comment box closed under it).
         // Focus that was in a roving group (on an item, or on a control inside one: a tab's Close
-        // button) may go to another item of that group: the group is one Tab stop, and its items
-        // are where the keys move inside it (the next tab, not the next tab's Close button).
+        // button) goes first to another item of that group, where the keys move inside it (the
+        // next tab, not the next tab's Close button).
         let home = self.roving_home_in(&self.tree.nodes, at).and_then(at_new);
-        let tab = |i: usize| survivor(i).filter(|&j| self.tab_stop_in(nodes, j) || (home.is_some() && self.group_in(nodes, j) == home));
+        let item = |i: usize| survivor(i).filter(|&j| home.is_some() && self.group_in(nodes, j) == home);
+        let tab = |i: usize| survivor(i).filter(|&j| self.tab_stop_in(nodes, j));
         let lost_tab_stop = self.tree.nodes[at].focus.order >= 0 && self.focus_group(at).is_none();
-        rescue(lost_tab_stop, at, &scopes, &tab, &survivor).map(|j| nodes[j].path.clone())
+        rescue(lost_tab_stop, at, &scopes, &item, &tab, &survivor).map(|j| nodes[j].path.clone())
     }
     /// [`Self::focus_fallback`] when the old tree holds the part that had focus only as a moved
     /// stub (a region kept from an earlier commit, a virtual row): the nearest container of it in
@@ -652,8 +654,9 @@ impl RuntimeCore {
             }
             let any = |m: usize| can(m).then_some(m);
             let home = self.roving_home_in(nodes, at);
-            let tab = |m: usize| (can(m) && (self.tab_stop_in(nodes, m) || (home.is_some() && self.group_in(nodes, m) == home))).then_some(m);
-            return rescue(self.tab_stop_in(nodes, at), at, &scopes, &tab, &any).map(|m| nodes[m].path.clone());
+            let item = |m: usize| (can(m) && home.is_some() && self.group_in(nodes, m) == home).then_some(m);
+            let tab = |m: usize| (can(m) && self.tab_stop_in(nodes, m)).then_some(m);
+            return rescue(self.tab_stop_in(nodes, at), at, &scopes, &item, &tab, &any).map(|m| nodes[m].path.clone());
         }
         let mut p = gone;
         while let Some(k) = p.rfind('/') {
@@ -865,12 +868,13 @@ impl RuntimeCore {
 /// descendants' span (indices in document order; `at` lost focus). In each container, the next
 /// control after `at` and then the one before, then the container itself. A Tab stop that lost
 /// focus is handed only to Tab stops (`tab`) while any container out to the root has one; only
-/// then to any control (`any`). Anything else hands focus to any control.
-fn rescue(lost_tab_stop: bool, at: usize, scopes: &[(usize, usize)], tab: &dyn Fn(usize) -> Option<usize>, any: &dyn Fn(usize) -> Option<usize>) -> Option<usize> {
+/// then to any control (`any`). Anything else hands focus to any control. Focus that was in a
+/// roving group goes first to another of that group's items (`item`), whatever it was.
+fn rescue(lost_tab_stop: bool, at: usize, scopes: &[(usize, usize)], item: &dyn Fn(usize) -> Option<usize>, tab: &dyn Fn(usize) -> Option<usize>, any: &dyn Fn(usize) -> Option<usize>) -> Option<usize> {
     let pass = |ok: &dyn Fn(usize) -> Option<usize>| scopes.iter().find_map(|&(s, end)| {
         (at + 1..end).find_map(ok).or_else(|| (s + 1..at).rev().find_map(ok)).or_else(|| ok(s))
     });
-    if lost_tab_stop { pass(tab).or_else(|| pass(any)) } else { pass(any) }
+    pass(item).or_else(|| if lost_tab_stop { pass(tab).or_else(|| pass(any)) } else { pass(any) })
 }
 
 #[cfg(test)]
