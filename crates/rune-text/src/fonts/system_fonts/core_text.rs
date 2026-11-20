@@ -34,6 +34,7 @@ fn family_paths(name: &str) -> Vec<PathBuf> {
         let stem = format!("SFNS{}", rest.replace(' ', ""));
         // SAFETY: the system UI font, read for its file only.
         let ui = unsafe { CTFont::new_ui_font_for_language(CTFontUIFontType::System, 0.0, None) };
+        // SAFETY: `f` is a live `CTFont` from above and `kCTFontURLAttribute` is CoreText's constant URL attribute key.
         let Some(dir) = ui.and_then(|f| path_of(unsafe { f.attribute(kCTFontURLAttribute) })).and_then(|p| p.parent().map(PathBuf::from)) else { return Vec::new() };
         return [format!("{stem}.ttf"), format!("{stem}Italic.ttf")].into_iter().map(|f| dir.join(f)).filter(|p| p.exists()).collect();
     }
