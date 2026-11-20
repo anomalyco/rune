@@ -894,19 +894,48 @@ pub(super) struct DrainTracker {
     in_flight: Mutex<VecDeque<(u32, u32)>>,
     drain_gate: Mutex<()>,
     removed: core::sync::atomic::AtomicBool,
+    proof_recorded: AtomicU64,
+    proof_adapter: String,
+}
+
+impl Drop for DrainTracker {
+    fn drop(&mut self) {
+        eprintln!(
+            "PROOF_DRAIN_TRACKER_DROP adapter={:?} has_marker={} recorded={}",
+            self.proof_adapter,
+            self.marker.is_some(),
+            self.proof_recorded.load(core::sync::atomic::Ordering::Relaxed),
+        );
+    }
 }
 
 impl DrainTracker {
     pub(super) fn new(adapter: &DxgiAdapter, device: &Direct3D12::ID3D12Device) -> Self {
         // SAFETY: querying static adapter flags on a live DXGI adapter.
-        let software = unsafe { adapter.GetDesc1() }.is_ok_and(|desc| {
-            Dxgi::DXGI_ADAPTER_FLAG(desc.Flags as i32).contains(Dxgi::DXGI_ADAPTER_FLAG_SOFTWARE)
+        let desc = unsafe { adapter.GetDesc1() }.ok();
+        let software = desc.as_ref().is_some_and(|d| {
+            Dxgi::DXGI_ADAPTER_FLAG(d.Flags as i32).contains(Dxgi::DXGI_ADAPTER_FLAG_SOFTWARE)
         });
+        let adapter_name = desc.as_ref().map_or_else(
+            || String::from("<unknown>"),
+            |d| {
+                let end = d.Description.iter().position(|&c| c == 0).unwrap_or(d.Description.len());
+                String::from_utf16_lossy(&d.Description[..end])
+            },
+        );
+        let marker = if software { DrainMarker::new(device) } else { None };
+        eprintln!(
+            "PROOF_DRAIN_TRACKER_NEW adapter={:?} software={software} has_marker={}",
+            adapter_name,
+            marker.is_some(),
+        );
         Self {
-            marker: if software { DrainMarker::new(device) } else { None },
+            marker,
             in_flight: Mutex::new(VecDeque::new()),
             drain_gate: Mutex::new(()),
             removed: core::sync::atomic::AtomicBool::new(false),
+            proof_recorded: AtomicU64::new(0),
+            proof_adapter: adapter_name,
         }
     }
 
@@ -943,6 +972,7 @@ impl DrainTracker {
         let mode = Direct3D12::D3D12_WRITEBUFFERIMMEDIATE_MODE_MARKER_OUT;
         // SAFETY: `Dest` is 4-byte aligned in `state.resource` (`COPY_DEST`); `list2` is open.
         unsafe { list2.WriteBufferImmediate(1, &param, Some(&mode)) };
+        self.proof_recorded.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         Some((slot, tag))
     }
 
