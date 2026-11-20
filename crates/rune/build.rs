@@ -491,7 +491,7 @@ fn parse_shader_consts(src: &WgslSources<'_>) -> ParsedShaderConsts {
     let shadow_fs = capture_once(shader_path, "fs shadow branch", &fs, "else if (kind < {}) { let sigma = max(i.params.z, {});");
     assert_eq!(parse_f32(shader_path, "fs shadow threshold", shadow_fs[0]).0, f32::from(kind_shadow) + 0.5);
     let (_, shadow_min_sigma_lit) = parse_f32(shader_path, "SHADOW_MIN_SIGMA", shadow_fs[1]);
-    let hi_branch = capture_once(shader_path, "fs high kinds", &fs, "else if (kind > {}) { let d = sd_rounded(i.p - center, half, i.radii); if (kind > {}) {");
+    let hi_branch = capture_once(shader_path, "fs high kinds", &fs, "else if (kind > {}) { let d = sd_rounded(screen - center, half, i.radii); if (kind > {}) {");
     let image_lo = parse_f32(shader_path, "fs image lo", hi_branch[0]).0;
     let radial_lo = parse_f32(shader_path, "fs radial lo", hi_branch[1]).0;
     let kind_image = unique_kind_in(shader_path, "KIND_IMAGE", image_lo, f32::from(kind_layer) - 0.5);
