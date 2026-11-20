@@ -141,6 +141,7 @@ fn rgba(bgra: &[u8], out: &mut [u8]) {
     // buffers the allocator aligns).
     // SAFETY: any bit pattern is a valid u32 and u8; `align_to` keeps the parts it can't align.
     let (dh, dm, dt) = unsafe { out.align_to_mut::<u32>() };
+    // SAFETY: any bit pattern is a valid u32 and u8; `align_to` keeps the parts it can't align.
     let (sh, sm, st) = unsafe { bgra.align_to::<u32>() };
     if !(dh.is_empty() && sh.is_empty() && dt.is_empty() && st.is_empty()) {
         for (d, s) in out.chunks_exact_mut(4).zip(bgra.chunks_exact(4)) {

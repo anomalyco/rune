@@ -80,6 +80,8 @@ impl Adapter {
         // whichever succeeds in removing the subclass.
         let ok = unsafe { SetWindowSubclass(hwnd as _, Some(subclass), SUBCLASS_ID, data as usize) };
         if ok == 0 {
+            // SAFETY: `SetWindowSubclass` failed so the subclass never took ownership of `data`;
+            // reclaim the `Rc` ref created by `Rc::into_raw` above.
             unsafe { drop(Rc::from_raw(data)); }
             return None;
         }
