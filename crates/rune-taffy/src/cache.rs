@@ -6,6 +6,8 @@
 //! fields (`oof_candidates`, non-zero top/left overflow, `baselines.last`, collapsible margins)
 //! only when needed.
 
+#![forbid(unsafe_code)]
+
 use taffy::geometry::{Point, Rect, Size};
 use taffy::style::AvailableSpace;
 use taffy::tree::{

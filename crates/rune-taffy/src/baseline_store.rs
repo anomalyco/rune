@@ -2,6 +2,7 @@
 //! for `--features baseline-taffy` parity checks and A/B benchmarks (`taffy::Style` has no
 //! `whole_rows` bit, so `whole_rows` columns lay out without rounding under this feature).
 #![allow(clippy::unwrap_used)]
+#![forbid(unsafe_code)]
 
 use std::collections::HashMap;
 
