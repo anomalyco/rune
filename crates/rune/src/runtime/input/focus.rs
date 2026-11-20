@@ -532,8 +532,10 @@ impl RuntimeCore {
             return self.fallback_in_new(gone, nodes);
         };
         // The control that held it is still in the tree, even when a model cleared its flag or a
-        // commit hid it: nothing takes its keyboard.
-        if nodes.iter().any(|n| n.path == gone) { return None; }
+        // commit hid it: nothing takes its keyboard. One that can't hold focus any more (disabled
+        // while focused, as a Send button is while its prompt sends) hands it on as if it had left,
+        // as OpenCode Desktop's focus rescue does (opencode#64909); focus never falls to the window.
+        if nodes.iter().any(|n| n.path == gone && self.can_take_focus(n)) { return None; }
         if self.kbd.focus.path().is_none() && self.tree.nodes[at].input.is_none() { return None; }
         if self.active_modal().is_some_and(|m| at >= m && self.modal_member(at)) { return None; }
         let new: rustc_hash::FxHashMap<&str, usize> = nodes.iter().enumerate().map(|(j, n)| (n.path.as_str(), j)).collect();
