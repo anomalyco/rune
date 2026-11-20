@@ -62,7 +62,7 @@ pub(in crate::runtime) enum Action {
     FieldMenu(String, (f32, f32), Option<(f32, f32)>),
     Blur,
     /// What assistive technology asked of an element (`a11y/actions.rs`).
-    A11y(String, A11yAct),
+    A11y(String, crate::a11y::actions::A11yAct),
 }
 
 /// A queued action and when the input that queued it arrived (`Tx::input_time`): the arrival
@@ -560,6 +560,22 @@ impl RuntimeCore {
             return self.skip_view(label);
         }
         ran
+    }
+
+    pub(crate) fn queue_a11y(&mut self, path: String, act: crate::a11y::actions::A11yAct) {
+        self.frame.queue.push(Action::A11y(path, act));
+    }
+    pub(crate) fn queue_a11y_press(&mut self, path: String) {
+        self.frame.queue.push(Action::Press(path, crate::PointerButton::Primary, false));
+    }
+    pub(crate) fn queue_a11y_secondary_press(&mut self, path: String, ev: PointerEvent) {
+        self.frame.queue.push(Action::SecondaryPress(path, ev));
+    }
+    pub(crate) fn queue_a11y_link(&mut self, path: String, link: usize) {
+        self.frame.queue.push(Action::Link(path, link, crate::PointerButton::Primary));
+    }
+    pub(crate) fn queue_a11y_link_secondary(&mut self, path: String, link: usize, ev: PointerEvent) {
+        self.frame.queue.push(Action::LinkSecondary(path, link, ev));
     }
 }
 

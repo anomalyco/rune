@@ -191,7 +191,7 @@ impl RuntimeCore {
     }
 
     #[inline]
-    pub(in crate::runtime) fn with_focused(&mut self, app: &mut dyn AppDriver, f: impl FnOnce(&mut crate::edit::TextEdit) -> EditOutcome, tx: &mut Tx) -> bool {
+    pub(crate) fn with_focused(&mut self, app: &mut dyn AppDriver, f: impl FnOnce(&mut crate::edit::TextEdit) -> EditOutcome, tx: &mut Tx) -> bool {
         let mut f = Some(f);
         self.with_focused_state_dyn(app, &mut |state, access, _| f.take().expect("focused edit runs once")(access(state)), tx)
     }
@@ -264,7 +264,7 @@ impl RuntimeCore {
         }
     }
 
-    pub(in crate::runtime) fn node(&self, path: &str) -> Option<&Node> {
+    pub(crate) fn node(&self, path: &str) -> Option<&Node> {
         self.tree.nodes.iter().enumerate().find(|(i, n)| n.path == path && !self.subtree_exiting(*i) && !self.subtree_unmounted(*i)).map(|(_, n)| n)
     }
 
@@ -295,7 +295,7 @@ impl RuntimeCore {
     }
 
     /// The focused element's index. Unlike [`Runtime::node`], this finds it while it exits.
-    pub(in crate::runtime) fn focused_index(&self) -> Option<usize> {
+    pub(crate) fn focused_index(&self) -> Option<usize> {
         let path = self.kbd.focus.path()?;
         self.tree.nodes.iter().position(|n| n.path == path)
     }

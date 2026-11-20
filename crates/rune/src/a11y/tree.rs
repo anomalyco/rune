@@ -9,30 +9,31 @@
 //! node, not every row under it.
 
 use accesskit::{Affine, Node as AkNode, NodeId as AkId, Rect as AkRect, Role, TreeId, TreeInfo, TreeUpdate};
+use rune_motion::NodeId;
 
-use super::*;
+use crate::runtime::{HashMap, RuntimeCore};
 
 /// The window or overlay itself.
-pub(crate) const ROOT: AkId = AkId(1);
+pub(super) const ROOT: AkId = AkId(1);
 /// The help tooltip Rune draws, when one shows.
 const TOOLTIP: AkId = AkId(2);
 /// `Tx::announce`'s live region.
 const ANNOUNCER: AkId = AkId(3);
 /// Bits under an element's id for the nodes it owns: its text's lines and links.
 const SUB: u32 = 16;
-pub(crate) const LINK_BASE: u64 = 0x8000;
-pub(crate) const LINES_BOX_CLASS: &str = "\x1frune-lines";
-pub(crate) const LINE_CLASS: &str = "\x1frune-line";
+pub(super) const LINK_BASE: u64 = 0x8000;
+pub(super) const LINES_BOX_CLASS: &str = "\x1frune-lines";
+pub(super) const LINE_CLASS: &str = "\x1frune-line";
 
-pub(crate) fn element_id(id: NodeId) -> AkId { AkId(id.0 << SUB) }
-pub(crate) fn line_id(id: NodeId, line: usize) -> AkId { AkId((id.0 << SUB) | (1 + line as u64).min(LINK_BASE - 2)) }
-pub(crate) fn lines_box_id(id: NodeId) -> AkId { AkId((id.0 << SUB) | (LINK_BASE - 1)) }
-pub(crate) fn drawn_line_id(id: NodeId, line: usize) -> AkId { AkId((id.0 << SUB) | (1 + line as u64).min(LINK_BASE - 2)) }
-pub(crate) fn link_id(id: NodeId, k: usize) -> AkId { AkId((id.0 << SUB) | (LINK_BASE + k as u64).min((1 << SUB) - 1)) }
+pub(super) fn element_id(id: NodeId) -> AkId { AkId(id.0 << SUB) }
+pub(super) fn line_id(id: NodeId, line: usize) -> AkId { AkId((id.0 << SUB) | (1 + line as u64).min(LINK_BASE - 2)) }
+pub(super) fn lines_box_id(id: NodeId) -> AkId { AkId((id.0 << SUB) | (LINK_BASE - 1)) }
+pub(super) fn drawn_line_id(id: NodeId, line: usize) -> AkId { AkId((id.0 << SUB) | (1 + line as u64).min(LINK_BASE - 2)) }
+pub(super) fn link_id(id: NodeId, k: usize) -> AkId { AkId((id.0 << SUB) | (LINK_BASE + k as u64).min((1 << SUB) - 1)) }
 /// The runtime node an AccessKit id names, and which of its own nodes: 0 the element, a line
 /// `1..LINK_BASE`, a link from `LINK_BASE`.
-pub(crate) fn split_id(id: AkId) -> (NodeId, u64) { (NodeId(id.0 >> SUB), id.0 & ((1 << SUB) - 1)) }
-pub(crate) fn sub_link(sub: u64) -> Option<usize> { (sub >= LINK_BASE).then(|| (sub - LINK_BASE) as usize) }
+pub(super) fn split_id(id: AkId) -> (NodeId, u64) { (NodeId(id.0 >> SUB), id.0 & ((1 << SUB) - 1)) }
+pub(super) fn sub_link(sub: u64) -> Option<usize> { (sub >= LINK_BASE).then(|| (sub - LINK_BASE) as usize) }
 
 /// What a tree update read last time: when none of it moved, nothing it builds can have.
 #[derive(Clone, PartialEq, Default)]

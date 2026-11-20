@@ -55,7 +55,7 @@ impl RuntimeCore {
         self.tree.exit_mask.forget();
     }
 
-    pub(in crate::runtime) fn subtree_exiting(&self, mut i: usize) -> bool {
+    pub(crate) fn subtree_exiting(&self, mut i: usize) -> bool {
         if let Some(exiting) = self.tree.exit_mask.get(i, self.tree.nodes.len(), self.commit.commit_gen) {
             return exiting;
         }

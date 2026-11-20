@@ -49,7 +49,7 @@ pub(in crate::runtime) fn single_line_offset(prev: f32, inp: &crate::el::InputSp
 }
 
 /// The display byte index the caret sits at, inside any IME preedit.
-pub(in crate::runtime) fn caret_index(e: &crate::edit::TextEdit, content: &str) -> usize {
+pub(crate) fn caret_index(e: &crate::edit::TextEdit, content: &str) -> usize {
     match e.preedit() {
         Some((p, Some((_, c)))) => (e.range().0 + c.min(p.len())).min(content.len()),
         Some((p, None)) => (e.range().0 + p.len()).min(content.len()),
@@ -109,8 +109,8 @@ impl Node {
 /// Selections and links stay in content bytes and map through this onto the drawn layout.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Elision {
-    pub(in crate::runtime) head: usize,
-    pub(in crate::runtime) tail: usize,
+    pub(crate) head: usize,
+    pub(crate) tail: usize,
 }
 
 impl Elision {

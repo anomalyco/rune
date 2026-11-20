@@ -9,7 +9,7 @@ use super::*;
 
 /// Where a scroll viewport drew its content's vertical offset last frame.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub(in crate::runtime) enum PixelHold {
+pub(crate) enum PixelHold {
     /// Nothing drawn yet.
     #[default]
     Unseen,
@@ -21,7 +21,7 @@ pub(in crate::runtime) enum PixelHold {
 
 impl PixelHold {
     /// The vertical offset the last frame drew at, in points.
-    pub(in crate::runtime) fn y(self) -> f32 {
+    pub(crate) fn y(self) -> f32 {
         match self {
             PixelHold::Unseen => 0.0,
             PixelHold::Stepping { drawn, .. } | PixelHold::Holding { drawn, .. } => drawn,

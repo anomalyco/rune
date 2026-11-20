@@ -100,22 +100,8 @@ mod web;
 mod window_requests;
 mod zoom;
 
-// `a11y/*` lives outside `runtime/` while sharing private `RuntimeCore` internals.
-#[path = "a11y/tree.rs"]
-pub(crate) mod a11y_tree;
-#[path = "a11y/node.rs"]
-mod a11y_node;
-#[path = "a11y/text.rs"]
-mod a11y_text;
-#[path = "a11y/actions.rs"]
-mod a11y_actions;
-use a11y_actions::A11yAct;
-#[cfg(test)]
-#[path = "a11y/tests.rs"]
-mod a11y_tests;
-
 pub(crate) use commit::memo_reuse;
-pub(crate) use commit::text_layout::text_width;
+pub(crate) use commit::text_layout::{caret_index, text_width};
 pub(crate) use commit::why::CommitWhy;
 #[cfg(all(test, debug_assertions))]
 use commit::layout_diagnostics;
@@ -179,6 +165,7 @@ use scroll::{
 use scroll::drawn::PixelHold;
 use scroll::mode::ScrollMode;
 
+pub(crate) use selection::links::origin as text_origin;
 pub(crate) use selection::selectable;
 pub use selection::selectable::{SelectedText, SelectionChange, TextSelection};
 pub use selection::text_marks::TextMark;
@@ -370,7 +357,7 @@ runtime_core_fields! {
     /// Render-side growth stacks, reveals, flights, loops and rewind capture.
     pub(crate) motion: tracks::MotionState,
     /// Scroll viewports, wheel axis locking, scroll requests and sticky headers.
-    scroll: requests::ScrollTables,
+    pub(crate) scroll: requests::ScrollTables,
     pub scene: Scene,
     /// Action queue, pending `Tx`, wake deadlines, live latch, tracing and hot reload.
     pub(crate) frame: timer_wake::FrameState,
@@ -379,7 +366,7 @@ runtime_core_fields! {
     /// Pointer position, capture, hover/tooltip tracking, touch, autoscroll and file/OS drags.
     pointer: capture::PointerState,
     /// Keyboard focus, modal focus/scope, type-select, held keys and modifier tracking.
-    kbd: focus_machine::KeyboardState,
+    pub(crate) kbd: focus_machine::KeyboardState,
 
     pub surfaces: Vec<crate::native_surface::SurfaceDraw>,
     /// RGBA images elements show (`El::pixels`), uploaded by the renderer.

@@ -1,7 +1,7 @@
 //! Accessibility on the OS side: each window and overlay gets an AccessKit platform adapter
 //! (UI Automation on Windows, NSAccessibility on macOS, AT-SPI on Linux). The adapter's
 //! handlers run wherever the OS calls them; they only queue what they heard and wake the host,
-//! whose thread then activates the runtime's tree (`runtime/a11y/tree.rs`), runs the actions
+//! whose thread then activates the runtime's tree (`a11y/tree.rs`), runs the actions
 //! and sends tree updates. Until a client asks, the runtime builds nothing.
 #![cfg_attr(not(all(feature = "accessibility", any(target_os = "windows", target_os = "macos", target_os = "linux"))), allow(dead_code))]
 
@@ -11,8 +11,14 @@ use accesskit::{ActionHandler, ActionRequest, ActivationHandler, DeactivationHan
 
 use crate::runtime::Runtime;
 
+pub(crate) mod actions;
 pub(crate) mod dump;
+mod node;
 pub(crate) mod roles;
+#[cfg(test)]
+mod tests;
+mod text;
+pub(crate) mod tree;
 
 #[cfg(all(feature = "accessibility", target_os = "macos"))]
 mod macos;
@@ -282,7 +288,7 @@ impl Adapter {
     /// adapter existed asks again.
     pub(crate) fn notify_structure(&self) {
         #[cfg(all(feature = "accessibility", target_os = "windows"))]
-        self.inner.notify(crate::runtime::a11y_tree::Changes { structure: true, moved: false });
+        self.inner.notify(tree::Changes { structure: true, moved: false });
     }
 
     /// Sends the tree's changes since the last update, when a client listens.

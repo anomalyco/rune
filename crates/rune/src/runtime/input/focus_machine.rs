@@ -218,12 +218,12 @@ impl TypeSelect {
 /// [`crate::runtime::RuntimeCore`]. Ordered hot-first under `#[repr(C)]` so `modal_scope`
 /// (checked per interactive node in `register_node_hits`) sits at offset 0.
 #[repr(C)]
-pub(in crate::runtime) struct KeyboardState {
+pub(crate) struct KeyboardState {
     /// The innermost open modal this commit shows and what input may reach inside it, worked
     /// out from the nodes at each commit; none while no modal shows.
     pub(in crate::runtime) modal_scope: Option<crate::runtime::focus::ModalScope>,
     /// What has focus, how it shows and where Tab starts (`runtime/input/focus_machine.rs`).
-    pub(in crate::runtime) focus: FocusState,
+    pub(crate) focus: FocusState,
     /// Type-select's typed prefix and when its last key arrived (`now_clock`).
     pub(in crate::runtime) type_select: TypeSelect,
     /// The activation key (Enter, Escape, Space) held down and the focus it was first pressed

@@ -55,7 +55,7 @@ pub(crate) struct HostState {
     /// `Tx::announce`'s last words, for the accessibility tree's live region.
     pub(crate) announcement: crate::a11y::Announcement,
     /// The accessibility tree, while an assistive client listens (`a11y/tree.rs`).
-    pub(in crate::runtime) a11y: Option<Box<a11y_tree::A11yTree>>,
+    pub(crate) a11y: Option<Box<crate::a11y::tree::A11yTree>>,
     /// The band of a taller document the window draws (`App::web_document`).
     pub(crate) page: Option<web_page::Page>,
 }

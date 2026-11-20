@@ -5,10 +5,10 @@ use std::hash::{Hash, Hasher};
 
 use accesskit::{Action as Ak, Affine, Live, Node as AkNode, Role, Toggled};
 
-use super::*;
-use super::a11y_tree::{Walk, hash_str, mix, rect};
-use crate::a11y::roles::{self, RoleCtx};
+use super::roles::{self, RoleCtx};
+use super::tree::{Walk, element_id, hash_str, mix, rect};
 use crate::el::Checked;
+use crate::runtime::RuntimeCore;
 
 /// Text named from an element's content stops here.
 const NAME_MAX: usize = 400;
@@ -197,7 +197,7 @@ impl RuntimeCore {
                 Some(false) => node.set_sort_direction(accesskit::SortDirection::Descending),
                 None => {}
             }
-            if let Some(j) = self.a11y_active_descendant(i) { node.set_active_descendant(super::a11y_tree::element_id(self.tree.nodes[j].id)); }
+            if let Some(j) = self.a11y_active_descendant(i) { node.set_active_descendant(element_id(self.tree.nodes[j].id)); }
             if m.busy { node.set_busy(); }
         }
         if let Some(v) = more.and_then(|m| m.value.as_deref()) { node.set_value(v); }

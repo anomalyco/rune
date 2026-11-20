@@ -146,7 +146,7 @@ fn actions_run_the_same_handlers_as_pointer_and_keys() {
 #[test]
 fn focus_moves_through_the_tree() {
     let mut rt = form_rt();
-    assert_eq!(rt.accessibility_tree().focus, super::a11y_tree::ROOT);
+    assert_eq!(rt.accessibility_tree().focus, super::tree::ROOT);
     let focus = request(&rt, "save", Ak::Focus, None);
     assert!(rt.a11y_action(&focus));
     rt.frame(0.0);
@@ -320,7 +320,7 @@ fn an_empty_field_answers_as_a_short_one() {
     rt.frame(0.0);
     let tree = rt.accessibility_tree();
     // Parley shapes an empty text as one space; the field still has no visual lines box.
-    assert!(!tree.nodes.iter().any(|(_, n)| n.class_name() == Some(super::a11y_tree::LINES_BOX_CLASS)));
+    assert!(!tree.nodes.iter().any(|(_, n)| n.class_name() == Some(super::tree::LINES_BOX_CLASS)));
     #[cfg(target_os = "linux")]
     assert_selections_on_runs(&tree);
     // The first character typed moves the caret from the empty field into its run.
@@ -408,7 +408,7 @@ fn big(s: &Big, _: &mut Cx<Big>) -> El {
 #[test]
 #[ignore]
 fn a11y_cost() {
-    super::a11y_tree::CHECK_SENT.set(false);
+    super::tree::CHECK_SENT.set(false);
     let median = |mut v: Vec<f64>| { v.sort_by(f64::total_cmp); v[v.len() / 2] };
     let mut rt = Runtime::new(Big { on: vec![false; 2000] }, big, (800.0, 600.0), Env::new(true, 2.0));
     rt.frame(0.0);
@@ -533,7 +533,7 @@ fn scaled_text_and_long_field_lines_use_drawn_scale_and_invalidate() {
         .and_then(|(_, n)| n.bounds())
         .map(|b| (b.y1 - b.y0) as f32)
         .expect("drawn long-field line at 1x");
-    let mut walk = crate::runtime::a11y_tree::Walk::default();
+    let mut walk = super::tree::Walk::default();
     walk.clip_y = [0.0, 400.0];
     let print1 = rt.core().a11y_lines_box_print(i, &walk);
 
